@@ -103,6 +103,7 @@ public sealed class ObjectStorageOptionsValidatorTests
         ValidateOptionsResult result = _validator.Validate(null, options);
 
         await Assert.That(result.Failed).IsTrue();
-        await Assert.That(result.Failures.Count()).IsEqualTo(3);
+        await Assert.That(result.Failures).IsNotNull();
+        await Assert.That(result.Failures!.Count()).IsEqualTo(3);
     }
 }

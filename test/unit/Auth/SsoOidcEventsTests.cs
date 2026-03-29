@@ -227,11 +227,12 @@ public sealed class SsoOidcEventsTests
 
         IHttpClientFactory httpClientFactory = Substitute.For<IHttpClientFactory>();
 
-        InvalidOperationException ex = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+        InvalidOperationException? ex = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
         {
             await SsoOidcEvents.FetchDiscoveryDocumentAsync(config, httpClientFactory, CancellationToken.None);
         });
 
-        await Assert.That(ex.Message).Contains("disallowed");
+        await Assert.That(ex).IsNotNull();
+        await Assert.That(ex!.Message).Contains("disallowed");
     }
 }

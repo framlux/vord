@@ -196,13 +196,14 @@ public class RedisRateLimiterTests
     [Test]
     public async Task Constructor_NullRedis_ThrowsArgumentNullException()
     {
-        ArgumentNullException ex = await Assert.ThrowsAsync<ArgumentNullException>(() =>
+        ArgumentNullException? ex = await Assert.ThrowsAsync<ArgumentNullException>(() =>
         {
             RedisFixedWindowRateLimiter _ = new(null!, "ratelimit:test", 10, TimeSpan.FromMinutes(1));
 
             return Task.CompletedTask;
         });
 
-        await Assert.That(ex.ParamName).IsEqualTo("redis");
+        await Assert.That(ex).IsNotNull();
+        await Assert.That(ex!.ParamName).IsEqualTo("redis");
     }
 }

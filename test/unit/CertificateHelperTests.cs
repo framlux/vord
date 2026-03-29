@@ -222,13 +222,14 @@ public sealed class CertificateHelperTests
     {
         // Path.GetDirectoryName("justfilename.pfx") returns "" (not null), causing
         // Directory.CreateDirectory("") to throw ArgumentException
-        Exception thrown = await Assert.ThrowsAsync<Exception>(() =>
+        Exception? thrown = await Assert.ThrowsAsync<Exception>(() =>
         {
             CertificateHelper.CreateServerCertificateIfNecessary("justfilename.pfx");
 
             return Task.CompletedTask;
         });
 
+        await Assert.That(thrown).IsNotNull();
         await Assert.That(thrown is ArgumentException || thrown is ArgumentOutOfRangeException).IsTrue();
     }
 

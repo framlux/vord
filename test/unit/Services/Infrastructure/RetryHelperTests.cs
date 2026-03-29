@@ -76,7 +76,7 @@ public sealed class RetryHelperTests
     {
         InvalidOperationException exception = new("permanent failure");
 
-        InvalidOperationException thrown = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
+        InvalidOperationException? thrown = await Assert.ThrowsAsync<InvalidOperationException>(async () =>
         {
             await RetryHelper.ExecuteWithRetryAsync(
                 () => throw exception,
@@ -84,7 +84,8 @@ public sealed class RetryHelperTests
                 baseDelayMs: 1);
         });
 
-        await Assert.That(thrown.Message).IsEqualTo("permanent failure");
+        await Assert.That(thrown).IsNotNull();
+        await Assert.That(thrown!.Message).IsEqualTo("permanent failure");
     }
 
     [Test]

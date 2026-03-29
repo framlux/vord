@@ -37,14 +37,15 @@ public sealed class ObjectStorageServiceTests
     {
         ILogger<ObjectStorageService> logger = Substitute.For<ILogger<ObjectStorageService>>();
 
-        ArgumentNullException ex = await Assert.ThrowsAsync<ArgumentNullException>(() =>
+        ArgumentNullException? ex = await Assert.ThrowsAsync<ArgumentNullException>(() =>
         {
             ObjectStorageService _ = new(null!, logger);
 
             return Task.CompletedTask;
         });
 
-        await Assert.That(ex.ParamName).IsEqualTo("objectStorageOptions");
+        await Assert.That(ex).IsNotNull();
+        await Assert.That(ex!.ParamName).IsEqualTo("objectStorageOptions");
     }
 
     [Test]
@@ -52,14 +53,15 @@ public sealed class ObjectStorageServiceTests
     {
         IOptions<ObjectStorageOptions> options = BuildOptions();
 
-        ArgumentNullException ex = await Assert.ThrowsAsync<ArgumentNullException>(() =>
+        ArgumentNullException? ex = await Assert.ThrowsAsync<ArgumentNullException>(() =>
         {
             ObjectStorageService _ = new(options, null!);
 
             return Task.CompletedTask;
         });
 
-        await Assert.That(ex.ParamName).IsEqualTo("logger");
+        await Assert.That(ex).IsNotNull();
+        await Assert.That(ex!.ParamName).IsEqualTo("logger");
     }
 
     [Test]
