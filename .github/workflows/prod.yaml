@@ -119,11 +119,12 @@ jobs:
         working-directory: src/agent
 
       - name: Tar Go agents
+        working-directory: src/agent
         run: |
-          tar -czf ./publish/vord-agent-linux-amd64.tar.gz -C ./src/agent/publish vord-agent-linux-amd64
-          tar -czf ./publish/vord-agent-linux-arm64.tar.gz -C ./src/agent/publish vord-agent-linux-arm64
-          tar -czf ./publish/vord-agent-linux-386.tar.gz -C ./src/agent/publish vord-agent-linux-386
-          tar -czf ./publish/vord-agent-linux-arm.tar.gz -C ./src/agent/publish vord-agent-linux-arm
+          tar -czf ./publish/vord-agent-linux-amd64.tar.gz -C ./publish vord-agent-linux-amd64
+          tar -czf ./publish/vord-agent-linux-arm64.tar.gz -C ./publish vord-agent-linux-arm64
+          tar -czf ./publish/vord-agent-linux-386.tar.gz -C ./publish vord-agent-linux-386
+          tar -czf ./publish/vord-agent-linux-arm.tar.gz -C ./publish vord-agent-linux-arm
 
       - name: Package deb/rpm with nfpm
         working-directory: src/agent
@@ -148,7 +149,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: vord-agent-tarballs
-          path: ./publish/vord-agent-linux-*.tar.gz
+          path: ./src/agent/publish/vord-agent-linux-*.tar.gz
 
       - name: Archive packages
         uses: actions/upload-artifact@v4
