@@ -29,6 +29,9 @@ tab_width = 4
 # CA1848: LoggerMessage delegates - requires major refactoring of all logging calls
 dotnet_diagnostic.CA1848.severity = none
 
+# CA1873: Logging argument evaluation - low value, standard logging patterns are fine
+dotnet_diagnostic.CA1873.severity = none
+
 # CA1305/CA1304/CA1311/CA1310: Culture-aware string formatting - int.ToString() and string operations
 # are used in non-user-facing contexts where invariant culture is implicit
 dotnet_diagnostic.CA1305.severity = none
