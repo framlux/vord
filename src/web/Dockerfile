@@ -1,0 +1,21 @@
+FROM node:22-alpine AS build
+RUN corepack enable && corepack prepare pnpm@latest --activate
+WORKDIR /app
+COPY package.json pnpm-lock.yaml ./
+RUN pnpm install --frozen-lockfile
+COPY . .
+RUN pnpm run build
+
+FROM node:22-alpine
+RUN corepack enable && corepack prepare pnpm@latest --activate
+WORKDIR /app
+COPY --from=build /app/build ./build
+COPY --from=build /app/package.json ./
+COPY --from=build /app/pnpm-lock.yaml ./
+RUN pnpm install --frozen-lockfile --prod
+
+ENV PORT=5254
+ENV NODE_ENV=production
+EXPOSE 5254
+
+CMD ["node", "build"]

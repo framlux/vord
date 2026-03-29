@@ -1,0 +1,27 @@
+[Unit]
+Description=Vord Agent - Machine Telemetry Collector
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/vord-agent
+EnvironmentFile=-/etc/framlux/vord-agent.env
+Restart=on-failure
+RestartSec=10
+StartLimitBurst=5
+StartLimitIntervalSec=300
+TimeoutStopSec=30
+MemoryMax=512M
+CPUQuota=50%
+StateDirectory=vord-agent
+
+ProtectSystem=full
+ProtectHome=true
+PrivateTmp=true
+NoNewPrivileges=true
+ProtectKernelTunables=true
+ProtectControlGroups=true
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>Framlux.Vord.MigrationRunner</RootNamespace>
+    <AssemblyName>Framlux.Vord.MigrationRunner</AssemblyName>
+    <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
+    <Version>1.3.5</Version>
+    <ServerGarbageCollection>true</ServerGarbageCollection>
+    <ContainerRegistry>ghcr.io</ContainerRegistry>
+    <ContainerRepository>framlux/vord/migration_runner</ContainerRepository>
+    <ContainerRuntimeIdentifier>linux-x64</ContainerRuntimeIdentifier>
+    <ContainerImageTags>$(Version);latest</ContainerImageTags>
+    <UserSecretsId>0325c6e7-aef4-4248-abc1-69e7cc79fef9</UserSecretsId>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ContainerEnvironmentVariable Include="ASPNETCORE_ENVIRONMENT" Value="Production" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\database\database.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="FluentMigrator.Runner" Version="7.2.0" />
+    <PackageReference Include="FluentMigrator.Runner.Postgres" Version="7.2.0" />
+    <PackageReference Include="Npgsql" Version="10.0.1" />
+  </ItemGroup>
+</Project>

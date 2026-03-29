@@ -1,0 +1,4 @@
+{
+    "dotnet.defaultSolution": "machine-info.slnx",
+    "dotnet.automaticallyCreateSolutionInWorkspace": false
+}

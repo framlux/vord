@@ -1,0 +1,138 @@
+// Copyright (c) 2026 Framlux LLC
+// Licensed under the Functional Source License, Version 1.1, ALv2 Future License
+// See LICENSE for details.
+
+using Framlux.FleetManagement.Database.Cache;
+using Framlux.FleetManagement.Database.Enums;
+using Framlux.FleetManagement.Database.Models;
+using Framlux.FleetManagement.Server.Services.Infrastructure;
+
+namespace Framlux.FleetManagement.Server.Services.Commands;
+
+/// <summary>
+/// Implementation of remote command management.
+/// </summary>
+public sealed class RemoteCommandService : IRemoteCommandService
+{
+    private static readonly HashSet<string> AllowedCommandTypes = new(StringComparer.OrdinalIgnoreCase)
+    {
+        "reboot",
+        "kill_process",
+        "kill_session",
+        "check_updates",
+        "install_updates",
+    };
+
+    private readonly IDatabaseCache _cache;
+    private readonly ILogger<RemoteCommandService> _logger;
+
+    /// <summary>
+    /// Initializes a new instance of the <see cref="RemoteCommandService"/> class.
+    /// </summary>
+    /// <param name="cache">The database caching layer</param>
+    /// <param name="logger">The logger</param>
+    public RemoteCommandService(IDatabaseCache cache, ILogger<RemoteCommandService> logger)
+    {
+        _cache = cache ?? throw new ArgumentNullException(nameof(cache));
+        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+    }
+
+    /// <inheritdoc/>
+    public async Task<ServiceResult<RemoteCommand>> SubmitCommandAsync(RemoteCommand command, CancellationToken cancellationToken = default)
+    {
+        // Validate command type against allowlist.
+        if (AllowedCommandTypes.Contains(command.CommandType) == false)
+        {
+            return ServiceResult<RemoteCommand>.Error(400, default!);
+        }
+
+        // Verify the signing key exists, belongs to the correct tenant, and is not revoked.
+        UserSigningKey? signingKey = await _cache.GetSigningKeyByIdAsync(command.SigningKeyId, cancellationToken);
+        if ((signingKey is null) || (signingKey.TenantId != command.TenantId))
+        {
+            return ServiceResult<RemoteCommand>.Error(400, default!);
+        }
+
+        if (signingKey.RevokedAt is not null)
+        {
+            return ServiceResult<RemoteCommand>.Error(400, default!);
+        }
+
+        if (signingKey.UserId != command.UserId)
+        {
+            return ServiceResult<RemoteCommand>.Error(403, default!);
+        }
+
+        // Verify Ed25519 signature.
+        byte[] publicKeyBytes = Convert.FromBase64String(signingKey.PublicKey);
+        byte[] signatureBytes = Convert.FromBase64String(command.Signature);
+        byte[] payloadBytes = System.Text.Encoding.UTF8.GetBytes(command.CanonicalPayload);
+
+        NSec.Cryptography.SignatureAlgorithm algorithm = NSec.Cryptography.SignatureAlgorithm.Ed25519;
+        NSec.Cryptography.PublicKey publicKey = NSec.Cryptography.PublicKey.Import(algorithm, publicKeyBytes, NSec.Cryptography.KeyBlobFormat.RawPublicKey);
+        if (algorithm.Verify(publicKey, payloadBytes, signatureBytes) == false)
+        {
+            return ServiceResult<RemoteCommand>.Error(400, default!);
+        }
+
+        // Validate target machine belongs to user's tenant.
+        Machine? machine = await _cache.GetMachineAsync(command.MachineId, command.TenantId, cancellationToken);
+        if (machine is null)
+        {
+            return ServiceResult<RemoteCommand>.Error(400, default!);
+        }
+
+        // Check for duplicate command ID.
+        RemoteCommand? existing = await _cache.GetRemoteCommandByCommandIdAsync(command.CommandId, cancellationToken);
+        if (existing is not null)
+        {
+            return ServiceResult<RemoteCommand>.Error(409, default!);
+        }
+
+        // Check nonce uniqueness.
+        bool nonceUsed = await _cache.IsNonceUsedAsync(command.Nonce, cancellationToken);
+        if (nonceUsed)
+        {
+            return ServiceResult<RemoteCommand>.Error(409, default!);
+        }
+
+        command.Status = RemoteCommandStatus.Pending;
+        command.CreatedAt = DateTimeOffset.UtcNow;
+
+        RemoteCommand created = await _cache.CreateRemoteCommandAsync(command, cancellationToken);
+
+        await _cache.InsertAuditLogAsync(new AuditLogEntry
+        {
+            TenantId = command.TenantId,
+            UserId = command.UserId,
+            MachineId = command.MachineId,
+            Action = AuditAction.RemoteCommandSent,
+            ResourceType = AuditResourceType.RemoteCommand,
+            ResourceId = created.Id.ToString(),
+            Timestamp = DateTimeOffset.UtcNow,
+        }, cancellationToken);
+
+        _logger.LogInformation("Remote command {CommandId} submitted: type={CommandType}, machine={MachineId}, user={UserId}",
+            command.CommandId, command.CommandType, command.MachineId, command.UserId);
+
+        return ServiceResult<RemoteCommand>.Ok(created);
+    }
+
+    /// <inheritdoc/>
+    public async Task<List<RemoteCommand>> GetCommandHistoryAsync(long machineId, int tenantId, int page, int pageSize, CancellationToken cancellationToken = default)
+    {
+        return await _cache.GetCommandsForMachineAsync(machineId, tenantId, page, pageSize, cancellationToken);
+    }
+
+    /// <inheritdoc/>
+    public async Task<ServiceResult<RemoteCommand>> GetCommandDetailAsync(long id, int tenantId, CancellationToken cancellationToken = default)
+    {
+        RemoteCommand? command = await _cache.GetRemoteCommandByIdAsync(id, tenantId, cancellationToken);
+        if (command is null)
+        {
+            return ServiceResult<RemoteCommand>.NotFound();
+        }
+
+        return ServiceResult<RemoteCommand>.Ok(command);
+    }
+}

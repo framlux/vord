@@ -1,0 +1,112 @@
+// Copyright (c) 2026 Framlux LLC
+// Licensed under the MIT License
+// See LICENSE for details.
+
+syntax = "proto3";
+
+option csharp_namespace = "Framlux.FleetManagement.Grpc.AgentConfiguration";
+option go_package = "github.com/framlux/vord/internal/proto/agent";
+
+package agent;
+
+service Configuration {
+    rpc GetConfiguration (GetConfigurationRequest) returns (GetConfigurationResponse);
+    rpc AgentPing (AgentPingRequest) returns (AgentPingResponse);
+    rpc GetPendingCommands (GetPendingCommandsRequest) returns (GetPendingCommandsResponse);
+    rpc AcknowledgeCommand (AcknowledgeCommandRequest) returns (AcknowledgeCommandResponse);
+}
+
+message GetConfigurationRequest {
+    int64 machine_id = 1;
+}
+
+message GetConfigurationResponse {
+    TimingConfiguration time_config = 1;
+    // Version identifier so agents can detect stale configs without full comparison.
+    int64 config_version = 2;
+    // Active signing keys for the machine's tenant, used to verify remote command signatures.
+    repeated TrustedSigningKey signing_keys = 3;
+    // Monotonic counter incremented on key registration/revocation; agents skip sync if unchanged.
+    int64 signing_key_version = 4;
+    // The tenant ID this machine belongs to, so the agent can verify command ownership.
+    int32 tenant_id = 5;
+}
+
+message TrustedSigningKey {
+    int32 key_id = 1;
+    int32 user_id = 2;
+    bytes public_key = 3;
+}
+
+message TimingConfiguration {
+    int32 heartbeat_time_in_seconds = 1;
+    int32 configuration_refresh_time_in_seconds = 2;
+    // Dedicated polling interval for remote command checks (default: 30s).
+    int32 command_poll_time_in_seconds = 3;
+}
+
+message AgentPingRequest {
+    int64 machine_id = 1;
+}
+
+message AgentPingResponse {
+    bool success = 1;
+}
+
+message GetPendingCommandsRequest {
+    int64 machine_id = 1;
+}
+
+message GetPendingCommandsResponse {
+    repeated AgentCommand commands = 1;
+}
+
+message AgentCommand {
+    string id = 1;
+    string type = 2;
+    map<string, string> params = 3;
+    // The exact canonical JSON payload that was signed by the user.
+    string canonical_payload = 4;
+    // Ed25519 signature over canonical_payload.
+    bytes signature = 5;
+    // The signing key ID used for signature verification lookup.
+    int32 signing_key_id = 6;
+    // Timestamp from the signed payload (ISO 8601).
+    string timestamp = 7;
+    // Expiry time from the signed payload (ISO 8601).
+    string expires_at = 8;
+    // Unique nonce for replay prevention.
+    string nonce = 9;
+    // User who issued the command.
+    int32 user_id = 10;
+    // Tenant the command belongs to.
+    int32 tenant_id = 11;
+    // Target machine ID for ownership verification.
+    int64 machine_id = 12;
+}
+
+message AcknowledgeCommandRequest {
+    string command_id = 1;
+    int64 machine_id = 2;
+    CommandResult result = 3;
+}
+
+message CommandResult {
+    bool success = 1;
+    int32 exit_code = 2;
+    string stdout = 3;
+    string stderr = 4;
+    string message = 5;
+    // Distinguishes immediate results from delayed/destructive commands.
+    ResultType result_type = 6;
+}
+
+enum ResultType {
+    COMPLETED = 0;
+    INITIATED = 1;
+    REJECTED = 2;
+}
+
+message AcknowledgeCommandResponse {
+    bool success = 1;
+}

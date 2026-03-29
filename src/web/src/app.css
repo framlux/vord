@@ -1,0 +1,50 @@
+@import 'tailwindcss';
+@import '@skeletonlabs/skeleton';
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --font-sans: 'DM Sans', ui-sans-serif, system-ui, sans-serif;
+
+  --color-primary-50: #ECFDF5;
+  --color-primary-100: #D1FAE5;
+  --color-primary-200: #A7F3D0;
+  --color-primary-300: #6EE7B7;
+  --color-primary-400: #34D399;
+  --color-primary-500: #10B981;
+  --color-primary-600: #059669;
+  --color-primary-700: #047857;
+  --color-primary-800: #065F46;
+  --color-primary-900: #064E3B;
+
+  --color-surface-50: #FAFAFA;
+  --color-surface-100: #F4F4F5;
+  --color-surface-200: #E4E4E7;
+  --color-surface-300: #D1D1D6;
+  --color-surface-400: #A0A0AB;
+  --color-surface-500: #6E6E77;
+  --color-surface-600: #52525C;
+  --color-surface-700: #252B3A;
+  --color-surface-800: #161922;
+  --color-surface-900: #0A0D14;
+
+  --color-success-500: #00BC7D;
+  --color-warning-500: #FBBF24;
+  --color-error-500: #FF6467;
+}
+
+html {
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Page transition */
+@keyframes fade-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.animate-fade-in {
+  animation: fade-in 0.2s ease-out both;
+}

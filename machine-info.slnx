@@ -1,0 +1,8 @@
+<Solution>
+  <Project Path="test/unit/unit.csproj" />
+  <Project Path="test/functional/functional.csproj" />
+  <Project Path="src/database/database.csproj" />
+  <Project Path="src/grpc/grpc.csproj" />
+  <Project Path="src/migrationRunner/migrationRunner.csproj" />
+  <Project Path="src/server/server.csproj" />
+</Solution>

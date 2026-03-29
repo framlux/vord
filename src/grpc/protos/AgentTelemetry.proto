@@ -1,0 +1,251 @@
+// Copyright (c) 2026 Framlux LLC
+// Licensed under the MIT License
+// See LICENSE for details.
+
+syntax = "proto3";
+
+import "google/protobuf/timestamp.proto";
+
+option csharp_namespace = "Framlux.FleetManagement.Grpc.AgentTelemetry";
+option go_package = "github.com/framlux/vord/internal/proto/agent";
+
+package agent;
+
+// Telemetry ingestion service for streaming or submitting batched telemetry.
+service Telemetry {
+  rpc StreamTelemetry (stream TelemetryEnvelope) returns (stream TelemetryAck);
+  rpc SubmitTelemetry (TelemetryEnvelope) returns (TelemetryAck);
+}
+
+message TelemetryEnvelope {
+  string batch_id = 1;
+  google.protobuf.Timestamp agent_timestamp = 2;
+  repeated TelemetryItem items = 3;
+}
+
+message TelemetryItem {
+  string event_id = 1;
+  TelemetryTypes type = 2;
+  google.protobuf.Timestamp collected_at = 3;
+
+  oneof payload {
+    SystemInfoRecord system_info = 10;
+    OsVersionRecord os_version = 11;
+    CpuInfoRecord cpu_info = 12;
+    MemoryInfoRecord memory_info = 13;
+    DiskInfoRecord disk_info = 14;
+    CpuUtilizationRecord cpu_utilization = 15;
+    MemoryUtilizationRecord memory_utilization = 16;
+    DiskUtilizationRecord disk_utilization = 17;
+    SshSessionRecord ssh_session = 18;
+    HardwareHealthRecord hardware_health = 19;
+    PackageUpdatesRecord package_updates = 20;
+    ServiceStatusRecord service_status = 21;
+  }
+}
+
+message TelemetryAck {
+  string batch_id = 1;
+  repeated string acknowledged_event_ids = 2;
+  bool success = 3;
+  string error_message = 4;
+}
+
+enum TelemetryTypes {
+    TELEMETRY_UNKNOWN = 0;
+    SYSTEM_INFO_TYPE = 1;
+    OS_VERSION_TYPE = 2;
+    CPU_INFO_TYPE = 3;
+    MEMORY_INFO_TYPE = 4;
+    DISK_INFO_TYPE = 5;
+    CPU_UTILIZATION_TYPE = 6;
+    MEMORY_UTILIZATION_TYPE = 7;
+    DISK_UTILIZATION_TYPE = 8;
+    SSH_SESSION_TYPE = 9;
+    HARDWARE_HEALTH_TYPE = 10;
+    PACKAGE_UPDATES_TYPE = 11;
+    SERVICE_STATUS_TYPE = 12;
+}
+
+message SystemInfoRecord {
+    string hostname = 1;
+    string uuid = 2;
+    string cpu_type = 3;
+    string cpu_subtype = 4;
+    string cpu_brand = 5;
+    int32 cpu_physical_cores = 6;
+    int32 cpu_logical_cores = 7;
+    string cpu_microcode = 8;
+    int64 physical_memory = 9;
+    string hardware_vendor = 10;
+    string hardware_model = 11;
+    string hardware_version = 12;
+    string hardware_serial = 13;
+    string board_vendor = 14;
+    string board_model = 15;
+    string board_version = 16;
+    string board_serial = 17;
+    string computer_name = 18;
+    string local_hostname = 19;
+    string emulated_cpu_type = 20;
+    int64 uptime_seconds = 21;
+    string bios_version = 22;
+    repeated string ip_addresses = 23;
+}
+
+message OsVersionRecord {
+    string name = 1;
+    string version = 2;
+    int32 major = 3;
+    int32 minor = 4;
+    int32 patch = 5;
+    string build = 6;
+    string platform = 7;
+    string codename = 8;
+    string arch = 9;
+    string extra = 10;
+    google.protobuf.Timestamp install_date = 11;
+    string revision = 12;
+}
+
+message CpuInfoRecord {
+    string device_id = 1;
+    string model = 2;
+    string manufacturer = 3;
+    string processor_type = 4;
+    int32 cpu_status = 5;
+    string number_of_cores = 6;
+    int32 logical_processors = 7;
+    string address_width = 8;
+    int32 current_clock_speed = 9;
+    int32 max_clock_speed = 10;
+    string socket_designation = 11;
+    string availability = 12;
+    int32 load_percentage = 13;
+    int32 number_of_efficiency_cores = 14;
+    int32 number_of_performance_cores = 15;
+}
+
+message MemoryInfoRecord {
+    int64 memory_total = 1;
+    int64 memory_free = 2;
+    int64 memory_available = 3;
+    int64 swap_total = 4;
+    int64 swap_free = 5;
+}
+
+message DiskInfoRecord {
+    repeated DiskInfoEntry disks = 1;
+}
+
+message DiskInfoEntry {
+    string device = 1;
+    string mount_point = 2;
+    string fs_type = 3;
+    int64 total_bytes = 4;
+    int64 used_bytes = 5;
+    int64 available_bytes = 6;
+    double percent_used = 7;
+}
+
+message CpuUtilizationRecord {
+    int32 cpu_usage_percent = 1;
+    int32 user_time = 2;
+    int32 system_time = 3;
+    int32 nice_time = 4;
+    int32 idle_time = 5;
+    int32 iowait_time = 6;
+    int32 irq_time = 7;
+    int32 softirq_time = 8;
+    int32 steal_time = 9;
+}
+
+message MemoryUtilizationRecord {
+    int64 memory_total = 1;
+    int64 memory_free = 2;
+    int64 memory_used = 3;
+    int32 memory_usage_percent = 4;
+}
+
+message DiskUtilizationRecord {
+    repeated DiskUtilizationEntry disks = 1;
+}
+
+message DiskUtilizationEntry {
+    string device = 1;
+    string path = 2;
+    int64 blocks_size = 3;
+    int64 blocks = 4;
+    int64 blocks_free = 5;
+    int64 blocks_available = 6;
+    int64 blocks_used = 7;
+    int32 usage_percent = 8;
+}
+
+message HardwareHealthRecord {
+    repeated FanReading fans = 1;
+    repeated PowerSupplyReading power_supplies = 2;
+    repeated TemperatureReading temperatures = 3;
+    repeated DiskSmartReading disk_smart = 4;
+    string bmc_firmware_version = 5;
+}
+
+message FanReading {
+    string name = 1;
+    int32 rpm = 2;
+    string status = 3;
+}
+
+message PowerSupplyReading {
+    string name = 1;
+    int32 watts = 2;
+    string status = 3;
+}
+
+message TemperatureReading {
+    string name = 1;
+    double celsius = 2;
+    string status = 3;
+}
+
+message DiskSmartReading {
+    string device = 1;
+    string model = 2;
+    string health_status = 3;
+    int32 temperature_celsius = 4;
+    int32 wearout_percent = 5;
+    int64 power_on_hours = 6;
+}
+
+message PackageUpdatesRecord {
+    string package_manager = 1;
+    repeated PackageUpdate updates = 2;
+}
+
+message PackageUpdate {
+    string name = 1;
+    string current_version = 2;
+    string available_version = 3;
+    bool is_security_update = 4;
+}
+
+message ServiceStatusRecord {
+    repeated ServiceEntry services = 1;
+}
+
+message ServiceEntry {
+    string unit = 1;
+    string load_state = 2;
+    string active_state = 3;
+    string sub_state = 4;
+    string description = 5;
+}
+
+message SshSessionRecord {
+    string user = 1;
+    string source_ip = 2;
+    int32 source_port = 3;
+    string action = 4;
+    string auth_method = 5;
+    string timestamp = 6;
+}

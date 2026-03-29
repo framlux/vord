@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" fill="none">
+  <defs>
+    <linearGradient id="brand" x1="128" y1="48" x2="128" y2="208" gradientUnits="userSpaceOnUse">
+      <stop offset="0%" stop-color="#6EE7B7"/>
+      <stop offset="100%" stop-color="#10B981"/>
+    </linearGradient>
+  </defs>
+
+  <!-- V formation path -->
+  <path d="M52 72 L128 196 L204 72"
+        stroke="url(#brand)" stroke-width="18"
+        stroke-linecap="round" stroke-linejoin="round"/>
+
+  <!-- Fleet nodes with status cores -->
+  <circle cx="52" cy="72" r="22" fill="url(#brand)"/>
+  <circle cx="52" cy="72" r="8" fill="#090C13"/>
+
+  <circle cx="204" cy="72" r="22" fill="url(#brand)"/>
+  <circle cx="204" cy="72" r="8" fill="#090C13"/>
+
+  <circle cx="128" cy="196" r="22" fill="url(#brand)"/>
+  <circle cx="128" cy="196" r="8" fill="#090C13"/>
+</svg>

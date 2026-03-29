@@ -1,0 +1,795 @@
+// Copyright (c) 2026 Framlux LLC
+// Licensed under the Functional Source License, Version 1.1, ALv2 Future License
+// See LICENSE for details.
+
+using Framlux.FleetManagement.Database.Enums;
+using Framlux.FleetManagement.Database.Models;
+using Framlux.FleetManagement.Database;
+using Framlux.FleetManagement.Server.Services.Alerts;
+using Framlux.FleetManagement.Server.Services.Billing;
+using Framlux.FleetManagement.Server.Services.Infrastructure;
+using Framlux.FleetManagement.Test.Infrastructure;
+using LinqToDB.Async;
+using LinqToDB;
+using Microsoft.Extensions.Logging;
+using NSubstitute;
+using StackExchange.Redis;
+
+namespace Framlux.FleetManagement.Test.Services;
+
+/// <summary>
+/// Tests for <see cref="AlertEvaluationService"/> internal logic.
+/// </summary>
+public sealed class AlertEvaluationServiceTests
+{
+    // --- EvaluateCondition Tests ---
+
+    [Test]
+    public async Task EvaluateCondition_GreaterThan_AboveThreshold_ReturnsTrue()
+    {
+        bool result = AlertEvaluationService.EvaluateCondition(81m, AlertOperator.GreaterThan, 80m);
+
+        await Assert.That(result).IsEqualTo(true);
+    }
+
+    [Test]
+    public async Task EvaluateCondition_GreaterThan_AtThreshold_ReturnsFalse()
+    {
+        bool result = AlertEvaluationService.EvaluateCondition(80m, AlertOperator.GreaterThan, 80m);
+
+        await Assert.That(result).IsEqualTo(false);
+    }
+
+    [Test]
+    public async Task EvaluateCondition_GreaterThan_BelowThreshold_ReturnsFalse()
+    {
+        bool result = AlertEvaluationService.EvaluateCondition(79m, AlertOperator.GreaterThan, 80m);
+
+        await Assert.That(result).IsEqualTo(false);
+    }
+
+    [Test]
+    public async Task EvaluateCondition_LessThan_BelowThreshold_ReturnsTrue()
+    {
+        bool result = AlertEvaluationService.EvaluateCondition(19m, AlertOperator.LessThan, 20m);
+
+        await Assert.That(result).IsEqualTo(true);
+    }
+
+    [Test]
+    public async Task EvaluateCondition_LessThan_AtThreshold_ReturnsFalse()
+    {
+        bool result = AlertEvaluationService.EvaluateCondition(20m, AlertOperator.LessThan, 20m);
+
+        await Assert.That(result).IsEqualTo(false);
+    }
+
+    [Test]
+    public async Task EvaluateCondition_LessThan_AboveThreshold_ReturnsFalse()
+    {
+        bool result = AlertEvaluationService.EvaluateCondition(21m, AlertOperator.LessThan, 20m);
+
+        await Assert.That(result).IsEqualTo(false);
+    }
+
+    [Test]
+    public async Task EvaluateCondition_Equals_MatchesThreshold_ReturnsTrue()
+    {
+        bool result = AlertEvaluationService.EvaluateCondition(50m, AlertOperator.Equals, 50m);
+
+        await Assert.That(result).IsEqualTo(true);
+    }
+
+    [Test]
+    public async Task EvaluateCondition_Equals_DoesNotMatch_ReturnsFalse()
+    {
+        bool result = AlertEvaluationService.EvaluateCondition(49m, AlertOperator.Equals, 50m);
+
+        await Assert.That(result).IsEqualTo(false);
+    }
+
+    [Test]
+    public async Task EvaluateCondition_UnknownOperator_ReturnsFalse()
+    {
+        bool result = AlertEvaluationService.EvaluateCondition(80m, (AlertOperator)99, 80m);
+
+        await Assert.That(result).IsEqualTo(false);
+    }
+
+    [Test]
+    public async Task EvaluateCondition_ZeroThreshold_HandlesCorrectly()
+    {
+        bool result = AlertEvaluationService.EvaluateCondition(1m, AlertOperator.GreaterThan, 0m);
+
+        await Assert.That(result).IsEqualTo(true);
+    }
+
+    [Test]
+    public async Task EvaluateCondition_NegativeValues_HandlesCorrectly()
+    {
+        bool result = AlertEvaluationService.EvaluateCondition(-5m, AlertOperator.LessThan, 0m);
+
+        await Assert.That(result).IsEqualTo(true);
+    }
+
+    [Test]
+    public async Task EvaluateCondition_DecimalPrecision_ComparesCorrectly()
+    {
+        bool result = AlertEvaluationService.EvaluateCondition(80.01m, AlertOperator.GreaterThan, 80.00m);
+
+        await Assert.That(result).IsEqualTo(true);
+    }
+
+    // --- GetMetricValue Tests ---
+
+    [Test]
+    public async Task GetMetricValue_CpuUsage_ReturnsCpuPercent()
+    {
+        MachineState state = new() { MachineId = 1, CpuUsagePercent = 75, LastTelemetryAt = DateTimeOffset.UtcNow };
+
+        decimal? result = AlertEvaluationService.GetMetricValue(AlertMetric.CpuUsage, state);
+
+        await Assert.That(result).IsEqualTo(75m);
+    }
+
+    [Test]
+    public async Task GetMetricValue_CpuUsage_NullValue_ReturnsNull()
+    {
+        MachineState state = new() { MachineId = 1, CpuUsagePercent = null, LastTelemetryAt = DateTimeOffset.UtcNow };
+
+        decimal? result = AlertEvaluationService.GetMetricValue(AlertMetric.CpuUsage, state);
+
+        await Assert.That(result).IsNull();
+    }
+
+    [Test]
+    public async Task GetMetricValue_MemoryUsage_ReturnsMemoryPercent()
+    {
+        MachineState state = new() { MachineId = 1, MemoryUsagePercent = 60, LastTelemetryAt = DateTimeOffset.UtcNow };
+
+        decimal? result = AlertEvaluationService.GetMetricValue(AlertMetric.MemoryUsage, state);
+
+        await Assert.That(result).IsEqualTo(60m);
+    }
+
+    [Test]
+    public async Task GetMetricValue_MemoryUsage_NullValue_ReturnsNull()
+    {
+        MachineState state = new() { MachineId = 1, MemoryUsagePercent = null, LastTelemetryAt = DateTimeOffset.UtcNow };
+
+        decimal? result = AlertEvaluationService.GetMetricValue(AlertMetric.MemoryUsage, state);
+
+        await Assert.That(result).IsNull();
+    }
+
+    [Test]
+    public async Task GetMetricValue_FailedServices_ReturnsCount()
+    {
+        MachineState state = new() { MachineId = 1, FailedServices = 3, LastTelemetryAt = DateTimeOffset.UtcNow };
+
+        decimal? result = AlertEvaluationService.GetMetricValue(AlertMetric.FailedServices, state);
+
+        await Assert.That(result).IsEqualTo(3m);
+    }
+
+    [Test]
+    public async Task GetMetricValue_FailedServices_NullValue_ReturnsNull()
+    {
+        MachineState state = new() { MachineId = 1, FailedServices = null, LastTelemetryAt = DateTimeOffset.UtcNow };
+
+        decimal? result = AlertEvaluationService.GetMetricValue(AlertMetric.FailedServices, state);
+
+        await Assert.That(result).IsNull();
+    }
+
+    [Test]
+    public async Task GetMetricValue_SecurityUpdates_ReturnsCount()
+    {
+        MachineState state = new() { MachineId = 1, SecurityUpdates = 5, LastTelemetryAt = DateTimeOffset.UtcNow };
+
+        decimal? result = AlertEvaluationService.GetMetricValue(AlertMetric.SecurityUpdates, state);
+
+        await Assert.That(result).IsEqualTo(5m);
+    }
+
+    [Test]
+    public async Task GetMetricValue_SecurityUpdates_NullValue_ReturnsNull()
+    {
+        MachineState state = new() { MachineId = 1, SecurityUpdates = null, LastTelemetryAt = DateTimeOffset.UtcNow };
+
+        decimal? result = AlertEvaluationService.GetMetricValue(AlertMetric.SecurityUpdates, state);
+
+        await Assert.That(result).IsNull();
+    }
+
+    [Test]
+    public async Task GetMetricValue_MachineOffline_ReturnsNull()
+    {
+        MachineState state = new() { MachineId = 1, LastTelemetryAt = DateTimeOffset.UtcNow };
+
+        decimal? result = AlertEvaluationService.GetMetricValue(AlertMetric.MachineOffline, state);
+
+        await Assert.That(result).IsNull();
+    }
+
+    [Test]
+    public async Task GetMetricValue_UnknownMetric_ReturnsNull()
+    {
+        MachineState state = new() { MachineId = 1, LastTelemetryAt = DateTimeOffset.UtcNow };
+
+        decimal? result = AlertEvaluationService.GetMetricValue((AlertMetric)99, state);
+
+        await Assert.That(result).IsNull();
+    }
+
+    // --- GetMaxDiskUsage Tests ---
+
+    [Test]
+    public async Task GetMaxDiskUsage_NullDiskUsages_ReturnsNull()
+    {
+        MachineState state = new() { MachineId = 1, DiskUsages = null, LastTelemetryAt = DateTimeOffset.UtcNow };
+
+        decimal? result = AlertEvaluationService.GetMaxDiskUsage(state);
+
+        await Assert.That(result).IsNull();
+    }
+
+    [Test]
+    public async Task GetMaxDiskUsage_EmptyDiskUsages_ReturnsNull()
+    {
+        MachineState state = new() { MachineId = 1, DiskUsages = "", LastTelemetryAt = DateTimeOffset.UtcNow };
+
+        decimal? result = AlertEvaluationService.GetMaxDiskUsage(state);
+
+        await Assert.That(result).IsNull();
+    }
+
+    [Test]
+    public async Task GetMaxDiskUsage_ValidJson_ReturnsMaxUsage()
+    {
+        MachineState state = new()
+        {
+            MachineId = 1,
+            DiskUsages = """[{"usagePercent": 85}, {"usagePercent": 60}, {"usagePercent": 72}]""",
+            LastTelemetryAt = DateTimeOffset.UtcNow,
+        };
+
+        decimal? result = AlertEvaluationService.GetMaxDiskUsage(state);
+
+        await Assert.That(result).IsEqualTo(85m);
+    }
+
+    [Test]
+    public async Task GetMaxDiskUsage_SingleDisk_ReturnsThatValue()
+    {
+        MachineState state = new()
+        {
+            MachineId = 1,
+            DiskUsages = """[{"usagePercent": 42}]""",
+            LastTelemetryAt = DateTimeOffset.UtcNow,
+        };
+
+        decimal? result = AlertEvaluationService.GetMaxDiskUsage(state);
+
+        await Assert.That(result).IsEqualTo(42m);
+    }
+
+    [Test]
+    public async Task GetMaxDiskUsage_AllZeroUsage_ReturnsNull()
+    {
+        MachineState state = new()
+        {
+            MachineId = 1,
+            DiskUsages = """[{"usagePercent": 0}, {"usagePercent": 0}]""",
+            LastTelemetryAt = DateTimeOffset.UtcNow,
+        };
+
+        decimal? result = AlertEvaluationService.GetMaxDiskUsage(state);
+
+        await Assert.That(result).IsNull();
+    }
+
+    [Test]
+    public async Task GetMaxDiskUsage_MalformedJson_ReturnsNull()
+    {
+        MachineState state = new()
+        {
+            MachineId = 1,
+            DiskUsages = "not valid json {{",
+            LastTelemetryAt = DateTimeOffset.UtcNow,
+        };
+
+        decimal? result = AlertEvaluationService.GetMaxDiskUsage(state);
+
+        await Assert.That(result).IsNull();
+    }
+
+    // --- GetDiskHealthValue Tests ---
+
+    [Test]
+    public async Task GetDiskHealthValue_NullHardwareHealth_ReturnsNull()
+    {
+        MachineState state = new() { MachineId = 1, HardwareHealth = null, LastTelemetryAt = DateTimeOffset.UtcNow };
+
+        decimal? result = AlertEvaluationService.GetDiskHealthValue(state);
+
+        await Assert.That(result).IsNull();
+    }
+
+    [Test]
+    public async Task GetDiskHealthValue_EmptyHardwareHealth_ReturnsNull()
+    {
+        MachineState state = new() { MachineId = 1, HardwareHealth = "", LastTelemetryAt = DateTimeOffset.UtcNow };
+
+        decimal? result = AlertEvaluationService.GetDiskHealthValue(state);
+
+        await Assert.That(result).IsNull();
+    }
+
+    [Test]
+    public async Task GetDiskHealthValue_AllPassed_ReturnsZero()
+    {
+        MachineState state = new()
+        {
+            MachineId = 1,
+            HardwareHealth = """{"diskSmart": [{"healthStatus": "PASSED"}, {"healthStatus": "PASSED"}]}""",
+            LastTelemetryAt = DateTimeOffset.UtcNow,
+        };
+
+        decimal? result = AlertEvaluationService.GetDiskHealthValue(state);
+
+        await Assert.That(result).IsEqualTo(0m);
+    }
+
+    [Test]
+    public async Task GetDiskHealthValue_AllOk_ReturnsZero()
+    {
+        MachineState state = new()
+        {
+            MachineId = 1,
+            HardwareHealth = """{"diskSmart": [{"healthStatus": "OK"}]}""",
+            LastTelemetryAt = DateTimeOffset.UtcNow,
+        };
+
+        decimal? result = AlertEvaluationService.GetDiskHealthValue(state);
+
+        await Assert.That(result).IsEqualTo(0m);
+    }
+
+    [Test]
+    public async Task GetDiskHealthValue_OneUnhealthy_ReturnsOne()
+    {
+        MachineState state = new()
+        {
+            MachineId = 1,
+            HardwareHealth = """{"diskSmart": [{"healthStatus": "PASSED"}, {"healthStatus": "FAILING"}]}""",
+            LastTelemetryAt = DateTimeOffset.UtcNow,
+        };
+
+        decimal? result = AlertEvaluationService.GetDiskHealthValue(state);
+
+        await Assert.That(result).IsEqualTo(1m);
+    }
+
+    [Test]
+    public async Task GetDiskHealthValue_NoDiskSmartProperty_ReturnsZero()
+    {
+        MachineState state = new()
+        {
+            MachineId = 1,
+            HardwareHealth = """{"temperatures": [42]}""",
+            LastTelemetryAt = DateTimeOffset.UtcNow,
+        };
+
+        decimal? result = AlertEvaluationService.GetDiskHealthValue(state);
+
+        await Assert.That(result).IsEqualTo(0m);
+    }
+
+    [Test]
+    public async Task GetDiskHealthValue_MalformedJson_ReturnsNull()
+    {
+        MachineState state = new()
+        {
+            MachineId = 1,
+            HardwareHealth = "not valid json",
+            LastTelemetryAt = DateTimeOffset.UtcNow,
+        };
+
+        decimal? result = AlertEvaluationService.GetDiskHealthValue(state);
+
+        await Assert.That(result).IsNull();
+    }
+
+    [Test]
+    public async Task GetDiskHealthValue_CaseInsensitiveHealthCheck()
+    {
+        MachineState state = new()
+        {
+            MachineId = 1,
+            HardwareHealth = """{"diskSmart": [{"healthStatus": "passed"}]}""",
+            LastTelemetryAt = DateTimeOffset.UtcNow,
+        };
+
+        decimal? result = AlertEvaluationService.GetDiskHealthValue(state);
+
+        await Assert.That(result).IsEqualTo(0m);
+    }
+
+    // --- EvaluateRuleForMachineAsync Tests ---
+
+    private static (AlertEvaluationService Service, DatabaseContext Db, IDatabase RedisDb, IAlertDeliveryService Delivery) CreateServiceWithDb()
+    {
+        TestDatabaseFactory dbFactory = new();
+        DatabaseContext db = dbFactory.Context;
+
+        ISubscriptionService subscriptionService = Substitute.For<ISubscriptionService>();
+        TestServiceScopeFactory scopeFactory = new(db, new Dictionary<Type, object>
+        {
+            { typeof(ISubscriptionService), subscriptionService }
+        });
+
+        IDistributedLock distributedLock = Substitute.For<IDistributedLock>();
+        IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
+        IDatabase redisDb = Substitute.For<IDatabase>();
+        redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(redisDb);
+        IAlertDeliveryService deliveryService = Substitute.For<IAlertDeliveryService>();
+        ILogger<AlertEvaluationService> logger = Substitute.For<ILogger<AlertEvaluationService>>();
+
+        AlertEvaluationService service = new(scopeFactory, distributedLock, redis, deliveryService, logger);
+
+        return (service, db, redisDb, deliveryService);
+    }
+
+    [Test]
+    public async Task EvaluateRuleForMachineAsync_ThresholdExceeded_NoDuration_CreatesAlertEvent()
+    {
+        (AlertEvaluationService service, DatabaseContext db, IDatabase redisDb, IAlertDeliveryService delivery) = CreateServiceWithDb();
+
+        Tenant tenant = TestDataBuilder.BuildTenant();
+        tenant.Id = await db.InsertWithInt32IdentityAsync(tenant);
+
+        Machine machine = TestDataBuilder.BuildMachine(tenantId: tenant.Id);
+        machine.Id = await db.InsertWithInt64IdentityAsync(machine);
+
+        AlertRule rule = TestDataBuilder.BuildAlertRule(tenantId: tenant.Id, metric: AlertMetric.CpuUsage, threshold: 80m, durationMinutes: 0);
+        rule.Id = await db.InsertWithInt32IdentityAsync(rule);
+
+        MachineState state = new() { MachineId = machine.Id, CpuUsagePercent = 90, LastTelemetryAt = DateTimeOffset.UtcNow };
+
+        await service.EvaluateRuleForMachineAsync(db, rule, state, CancellationToken.None);
+
+        List<AlertEvent> events = await db.AlertEvents.Where(e => e.AlertRuleId == rule.Id).ToListAsync();
+        await Assert.That(events.Count).IsEqualTo(1);
+        await Assert.That(events[0].Status).IsEqualTo(AlertEventStatus.Triggered);
+        await Assert.That(events[0].MachineId).IsEqualTo(machine.Id);
+    }
+
+    [Test]
+    public async Task EvaluateRuleForMachineAsync_ThresholdExceeded_ActiveEventExists_NoNewEvent()
+    {
+        (AlertEvaluationService service, DatabaseContext db, IDatabase redisDb, IAlertDeliveryService delivery) = CreateServiceWithDb();
+
+        Tenant tenant = TestDataBuilder.BuildTenant();
+        tenant.Id = await db.InsertWithInt32IdentityAsync(tenant);
+
+        Machine machine = TestDataBuilder.BuildMachine(tenantId: tenant.Id);
+        machine.Id = await db.InsertWithInt64IdentityAsync(machine);
+
+        AlertRule rule = TestDataBuilder.BuildAlertRule(tenantId: tenant.Id, metric: AlertMetric.CpuUsage, threshold: 80m, durationMinutes: 0);
+        rule.Id = await db.InsertWithInt32IdentityAsync(rule);
+
+        // Seed an existing active alert event for this rule+machine.
+        AlertEvent existingEvent = TestDataBuilder.BuildAlertEvent(alertRuleId: rule.Id, tenantId: tenant.Id, machineId: machine.Id, status: AlertEventStatus.Triggered);
+        existingEvent.Id = await db.InsertWithInt64IdentityAsync(existingEvent);
+
+        MachineState state = new() { MachineId = machine.Id, CpuUsagePercent = 95, LastTelemetryAt = DateTimeOffset.UtcNow };
+
+        await service.EvaluateRuleForMachineAsync(db, rule, state, CancellationToken.None);
+
+        // Should still be just the one existing event.
+        int eventCount = await db.AlertEvents.Where(e => e.AlertRuleId == rule.Id).CountAsync();
+        await Assert.That(eventCount).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task EvaluateRuleForMachineAsync_ConditionNotMet_ClearsRedisTrackingKey()
+    {
+        (AlertEvaluationService service, DatabaseContext db, IDatabase redisDb, IAlertDeliveryService delivery) = CreateServiceWithDb();
+
+        AlertRule rule = TestDataBuilder.BuildAlertRule(metric: AlertMetric.CpuUsage, threshold: 80m, durationMinutes: 5);
+        rule.Id = 1;
+
+        MachineState state = new() { MachineId = 1, CpuUsagePercent = 50, LastTelemetryAt = DateTimeOffset.UtcNow };
+
+        await service.EvaluateRuleForMachineAsync(db, rule, state, CancellationToken.None);
+
+        // Should delete the Redis condition tracking key.
+        await redisDb.Received().KeyDeleteAsync($"alert:condition:{rule.Id}:{state.MachineId}");
+    }
+
+    [Test]
+    public async Task EvaluateRuleForMachineAsync_DurationRequired_FirstOccurrence_StartsTrackingOnly()
+    {
+        (AlertEvaluationService service, DatabaseContext db, IDatabase redisDb, IAlertDeliveryService delivery) = CreateServiceWithDb();
+
+        Tenant tenant = TestDataBuilder.BuildTenant();
+        tenant.Id = await db.InsertWithInt32IdentityAsync(tenant);
+
+        AlertRule rule = TestDataBuilder.BuildAlertRule(tenantId: tenant.Id, metric: AlertMetric.CpuUsage, threshold: 80m, durationMinutes: 5);
+        rule.Id = await db.InsertWithInt32IdentityAsync(rule);
+
+        // Redis returns null for the condition key (first occurrence).
+        string conditionKey = $"alert:condition:{rule.Id}:1";
+        redisDb.StringGetAsync(conditionKey).Returns((RedisValue)RedisValue.Null);
+
+        MachineState state = new() { MachineId = 1, CpuUsagePercent = 90, LastTelemetryAt = DateTimeOffset.UtcNow };
+
+        await service.EvaluateRuleForMachineAsync(db, rule, state, CancellationToken.None);
+
+        // Should set the start time in Redis but NOT create an alert event.
+        await redisDb.Received().StringSetAsync(conditionKey, Arg.Any<RedisValue>(), Arg.Any<TimeSpan?>());
+        int eventCount = await db.AlertEvents.Where(e => e.AlertRuleId == rule.Id).CountAsync();
+        await Assert.That(eventCount).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task EvaluateRuleForMachineAsync_DurationRequired_NotYetElapsed_DoesNotFire()
+    {
+        (AlertEvaluationService service, DatabaseContext db, IDatabase redisDb, IAlertDeliveryService delivery) = CreateServiceWithDb();
+
+        Tenant tenant = TestDataBuilder.BuildTenant();
+        tenant.Id = await db.InsertWithInt32IdentityAsync(tenant);
+
+        AlertRule rule = TestDataBuilder.BuildAlertRule(tenantId: tenant.Id, metric: AlertMetric.CpuUsage, threshold: 80m, durationMinutes: 5);
+        rule.Id = await db.InsertWithInt32IdentityAsync(rule);
+
+        // Redis returns a timestamp from 2 minutes ago (not yet past 5-minute duration).
+        string conditionKey = $"alert:condition:{rule.Id}:1";
+        string twoMinutesAgo = DateTimeOffset.UtcNow.AddMinutes(-2).ToString("o");
+        redisDb.StringGetAsync(conditionKey).Returns((RedisValue)twoMinutesAgo);
+
+        MachineState state = new() { MachineId = 1, CpuUsagePercent = 90, LastTelemetryAt = DateTimeOffset.UtcNow };
+
+        await service.EvaluateRuleForMachineAsync(db, rule, state, CancellationToken.None);
+
+        // Should NOT create an alert event.
+        int eventCount = await db.AlertEvents.Where(e => e.AlertRuleId == rule.Id).CountAsync();
+        await Assert.That(eventCount).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task EvaluateRuleForMachineAsync_DurationRequired_Elapsed_CreatesAlert()
+    {
+        (AlertEvaluationService service, DatabaseContext db, IDatabase redisDb, IAlertDeliveryService delivery) = CreateServiceWithDb();
+
+        Tenant tenant = TestDataBuilder.BuildTenant();
+        tenant.Id = await db.InsertWithInt32IdentityAsync(tenant);
+
+        Machine machine = TestDataBuilder.BuildMachine(tenantId: tenant.Id);
+        machine.Id = await db.InsertWithInt64IdentityAsync(machine);
+
+        AlertRule rule = TestDataBuilder.BuildAlertRule(tenantId: tenant.Id, metric: AlertMetric.CpuUsage, threshold: 80m, durationMinutes: 5);
+        rule.Id = await db.InsertWithInt32IdentityAsync(rule);
+
+        // Redis returns a timestamp from 10 minutes ago (past the 5-minute duration).
+        string conditionKey = $"alert:condition:{rule.Id}:{machine.Id}";
+        string tenMinutesAgo = DateTimeOffset.UtcNow.AddMinutes(-10).ToString("o");
+        redisDb.StringGetAsync(conditionKey).Returns((RedisValue)tenMinutesAgo);
+
+        MachineState state = new() { MachineId = machine.Id, CpuUsagePercent = 90, LastTelemetryAt = DateTimeOffset.UtcNow };
+
+        await service.EvaluateRuleForMachineAsync(db, rule, state, CancellationToken.None);
+
+        List<AlertEvent> events = await db.AlertEvents.Where(e => e.AlertRuleId == rule.Id).ToListAsync();
+        await Assert.That(events.Count).IsEqualTo(1);
+        await Assert.That(events[0].Status).IsEqualTo(AlertEventStatus.Triggered);
+    }
+
+    [Test]
+    public async Task EvaluateRuleForMachineAsync_MetricNull_ReturnsWithoutEvaluation()
+    {
+        (AlertEvaluationService service, DatabaseContext db, IDatabase redisDb, IAlertDeliveryService delivery) = CreateServiceWithDb();
+
+        AlertRule rule = TestDataBuilder.BuildAlertRule(metric: AlertMetric.MachineOffline, threshold: 1m);
+        rule.Id = 1;
+
+        MachineState state = new() { MachineId = 1, LastTelemetryAt = DateTimeOffset.UtcNow };
+
+        await service.EvaluateRuleForMachineAsync(db, rule, state, CancellationToken.None);
+
+        // MachineOffline returns null metric, so no Redis or DB interaction.
+        await redisDb.DidNotReceive().KeyDeleteAsync(Arg.Any<RedisKey>());
+        int eventCount = await db.AlertEvents.CountAsync();
+        await Assert.That(eventCount).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task EvaluateRuleForMachineAsync_AlertCreated_CallsDeliveryService()
+    {
+        (AlertEvaluationService service, DatabaseContext db, IDatabase redisDb, IAlertDeliveryService delivery) = CreateServiceWithDb();
+
+        Tenant tenant = TestDataBuilder.BuildTenant();
+        tenant.Id = await db.InsertWithInt32IdentityAsync(tenant);
+
+        Machine machine = TestDataBuilder.BuildMachine(tenantId: tenant.Id);
+        machine.Id = await db.InsertWithInt64IdentityAsync(machine);
+
+        AlertRule rule = TestDataBuilder.BuildAlertRule(tenantId: tenant.Id, metric: AlertMetric.CpuUsage, threshold: 80m, durationMinutes: 0);
+        rule.Id = await db.InsertWithInt32IdentityAsync(rule);
+
+        MachineState state = new() { MachineId = machine.Id, CpuUsagePercent = 95, LastTelemetryAt = DateTimeOffset.UtcNow };
+
+        await service.EvaluateRuleForMachineAsync(db, rule, state, CancellationToken.None);
+
+        await delivery.Received(1).DeliverAsync(Arg.Any<AlertEvent>(), Arg.Is<AlertRule>(r => r.Id == rule.Id), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task EvaluateRuleForMachineAsync_ZeroDuration_FiresImmediately()
+    {
+        (AlertEvaluationService service, DatabaseContext db, IDatabase redisDb, IAlertDeliveryService delivery) = CreateServiceWithDb();
+
+        Tenant tenant = TestDataBuilder.BuildTenant();
+        tenant.Id = await db.InsertWithInt32IdentityAsync(tenant);
+
+        Machine machine = TestDataBuilder.BuildMachine(tenantId: tenant.Id);
+        machine.Id = await db.InsertWithInt64IdentityAsync(machine);
+
+        AlertRule rule = TestDataBuilder.BuildAlertRule(tenantId: tenant.Id, metric: AlertMetric.MemoryUsage, threshold: 50m, durationMinutes: 0);
+        rule.Id = await db.InsertWithInt32IdentityAsync(rule);
+
+        MachineState state = new() { MachineId = machine.Id, MemoryUsagePercent = 75, LastTelemetryAt = DateTimeOffset.UtcNow };
+
+        await service.EvaluateRuleForMachineAsync(db, rule, state, CancellationToken.None);
+
+        // Zero duration means fire immediately on first occurrence.
+        int eventCount = await db.AlertEvents.Where(e => e.AlertRuleId == rule.Id).CountAsync();
+        await Assert.That(eventCount).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task EvaluateRuleForMachineAsync_DurationRequired_MalformedRedisTimestamp_FallsThroughToAlertCreation()
+    {
+        (AlertEvaluationService service, DatabaseContext db, IDatabase redisDb, IAlertDeliveryService delivery) = CreateServiceWithDb();
+
+        Tenant tenant = TestDataBuilder.BuildTenant();
+        tenant.Id = await db.InsertWithInt32IdentityAsync(tenant);
+
+        Machine machine = TestDataBuilder.BuildMachine(tenantId: tenant.Id);
+        machine.Id = await db.InsertWithInt64IdentityAsync(machine);
+
+        AlertRule rule = TestDataBuilder.BuildAlertRule(tenantId: tenant.Id, metric: AlertMetric.CpuUsage, threshold: 80m, durationMinutes: 5);
+        rule.Id = await db.InsertWithInt32IdentityAsync(rule);
+
+        // Redis returns corrupted timestamp data — TryParse fails, falls through the
+        // duration guard (no early return on parse failure), and creates an alert.
+        string conditionKey = $"alert:condition:{rule.Id}:{machine.Id}";
+        redisDb.StringGetAsync(conditionKey).Returns((RedisValue)"not-a-valid-date");
+
+        MachineState state = new() { MachineId = machine.Id, CpuUsagePercent = 90, LastTelemetryAt = DateTimeOffset.UtcNow };
+
+        await service.EvaluateRuleForMachineAsync(db, rule, state, CancellationToken.None);
+
+        // Malformed timestamp causes the duration check to be skipped, so the alert fires.
+        int eventCount = await db.AlertEvents.Where(e => e.AlertRuleId == rule.Id).CountAsync();
+        await Assert.That(eventCount).IsEqualTo(1);
+    }
+
+    // --- EvaluateAllRulesAsync Tests ---
+
+    [Test]
+    public async Task EvaluateAllRulesAsync_NoEnabledRules_ReturnsEarly()
+    {
+        (AlertEvaluationService service, DatabaseContext db, IDatabase redisDb, IAlertDeliveryService delivery) = CreateServiceWithDb();
+
+        // No rules seeded — should return immediately.
+        await service.EvaluateAllRulesAsync(CancellationToken.None);
+
+        await delivery.DidNotReceive().DeliverAsync(Arg.Any<AlertEvent>(), Arg.Any<AlertRule>(), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task EvaluateAllRulesAsync_FreeTierTenant_SkipsRules()
+    {
+        (AlertEvaluationService service, DatabaseContext db, IDatabase redisDb, IAlertDeliveryService delivery) = CreateServiceWithDb();
+
+        Tenant tenant = TestDataBuilder.BuildTenant();
+        tenant.Id = await db.InsertWithInt32IdentityAsync(tenant);
+
+        TenantSubscription freeSub = TestDataBuilder.BuildSubscription(tenantId: tenant.Id, tier: SubscriptionTier.Free, status: SubscriptionStatus.Active);
+        await db.InsertWithInt32IdentityAsync(freeSub);
+
+        // Get the ISubscriptionService from the scope factory to configure it.
+        using Microsoft.Extensions.DependencyInjection.IServiceScope scope = ((TestServiceScopeFactory)typeof(AlertEvaluationService)
+            .GetField("_scopeFactory", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+            .GetValue(service)!).CreateScope();
+        ISubscriptionService subService = scope.ServiceProvider.GetService(typeof(ISubscriptionService)) as ISubscriptionService
+            ?? throw new InvalidOperationException("ISubscriptionService not found");
+        subService.GetSubscriptionForTenantAsync(tenant.Id, Arg.Any<CancellationToken>()).Returns(freeSub);
+
+        AlertRule rule = TestDataBuilder.BuildAlertRule(tenantId: tenant.Id, metric: AlertMetric.CpuUsage, threshold: 80m);
+        rule.Id = await db.InsertWithInt32IdentityAsync(rule);
+
+        Machine machine = TestDataBuilder.BuildMachine(tenantId: tenant.Id);
+        machine.Id = await db.InsertWithInt64IdentityAsync(machine);
+
+        MachineState machineState = TestDataBuilder.BuildMachineState(machineId: machine.Id, cpuPercent: 95);
+        await db.InsertAsync(machineState);
+
+        await service.EvaluateAllRulesAsync(CancellationToken.None);
+
+        // Free tier should be skipped — no alerts created.
+        int eventCount = await db.AlertEvents.CountAsync();
+        await Assert.That(eventCount).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task EvaluateAllRulesAsync_NullSubscription_SkipsTenant()
+    {
+        (AlertEvaluationService service, DatabaseContext db, IDatabase redisDb, IAlertDeliveryService delivery) = CreateServiceWithDb();
+
+        Tenant tenant = TestDataBuilder.BuildTenant();
+        tenant.Id = await db.InsertWithInt32IdentityAsync(tenant);
+
+        // Configure subscription service to return null.
+        using Microsoft.Extensions.DependencyInjection.IServiceScope scope = ((TestServiceScopeFactory)typeof(AlertEvaluationService)
+            .GetField("_scopeFactory", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+            .GetValue(service)!).CreateScope();
+        ISubscriptionService subService = scope.ServiceProvider.GetService(typeof(ISubscriptionService)) as ISubscriptionService
+            ?? throw new InvalidOperationException("ISubscriptionService not found");
+        subService.GetSubscriptionForTenantAsync(tenant.Id, Arg.Any<CancellationToken>()).Returns((TenantSubscription?)null);
+
+        AlertRule rule = TestDataBuilder.BuildAlertRule(tenantId: tenant.Id, metric: AlertMetric.CpuUsage, threshold: 80m);
+        rule.Id = await db.InsertWithInt32IdentityAsync(rule);
+
+        await service.EvaluateAllRulesAsync(CancellationToken.None);
+
+        // Null subscription should be skipped.
+        int eventCount = await db.AlertEvents.CountAsync();
+        await Assert.That(eventCount).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task EvaluateAllRulesAsync_InactiveSubscription_SkipsTenant()
+    {
+        (AlertEvaluationService service, DatabaseContext db, IDatabase redisDb, IAlertDeliveryService delivery) = CreateServiceWithDb();
+
+        Tenant tenant = TestDataBuilder.BuildTenant();
+        tenant.Id = await db.InsertWithInt32IdentityAsync(tenant);
+
+        TenantSubscription canceledSub = TestDataBuilder.BuildSubscription(tenantId: tenant.Id, tier: SubscriptionTier.Pro, status: SubscriptionStatus.Canceled);
+
+        using Microsoft.Extensions.DependencyInjection.IServiceScope scope = ((TestServiceScopeFactory)typeof(AlertEvaluationService)
+            .GetField("_scopeFactory", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+            .GetValue(service)!).CreateScope();
+        ISubscriptionService subService = scope.ServiceProvider.GetService(typeof(ISubscriptionService)) as ISubscriptionService
+            ?? throw new InvalidOperationException("ISubscriptionService not found");
+        subService.GetSubscriptionForTenantAsync(tenant.Id, Arg.Any<CancellationToken>()).Returns(canceledSub);
+
+        AlertRule rule = TestDataBuilder.BuildAlertRule(tenantId: tenant.Id, metric: AlertMetric.CpuUsage, threshold: 80m);
+        rule.Id = await db.InsertWithInt32IdentityAsync(rule);
+
+        await service.EvaluateAllRulesAsync(CancellationToken.None);
+
+        int eventCount = await db.AlertEvents.CountAsync();
+        await Assert.That(eventCount).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task EvaluateAllRulesAsync_DisabledRules_NotEvaluated()
+    {
+        (AlertEvaluationService service, DatabaseContext db, IDatabase redisDb, IAlertDeliveryService delivery) = CreateServiceWithDb();
+
+        Tenant tenant = TestDataBuilder.BuildTenant();
+        tenant.Id = await db.InsertWithInt32IdentityAsync(tenant);
+
+        // Only disabled rules — should return early with no evaluation.
+        AlertRule disabledRule = TestDataBuilder.BuildAlertRule(tenantId: tenant.Id, metric: AlertMetric.CpuUsage, threshold: 80m, isEnabled: false);
+        disabledRule.Id = await db.InsertWithInt32IdentityAsync(disabledRule);
+
+        await service.EvaluateAllRulesAsync(CancellationToken.None);
+
+        await delivery.DidNotReceive().DeliverAsync(Arg.Any<AlertEvent>(), Arg.Any<AlertRule>(), Arg.Any<CancellationToken>());
+    }
+}

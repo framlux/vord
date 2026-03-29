@@ -1,0 +1,48 @@
+name: CI • Build, Test
+
+on:
+  push:
+    branches:
+      - main
+
+env:
+  SOLUTION: machine-info.slnx
+
+jobs:
+  build-test-package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 10.0.x
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version: 'stable'
+
+      - name: Build (Release)
+        run: dotnet build "$SOLUTION" -c Release
+
+      - name: Run unit tests
+        run: dotnet run --project test/unit/unit.csproj -c Release --no-build
+
+      - name: Run functional tests
+        run: dotnet run --project test/functional/functional.csproj -c Release --no-build
+
+      - name: Build Go agent
+        run: go build ./...
+        working-directory: src/agent
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - name: Install web dependencies
+        run: pnpm install
+        working-directory: src/web
+
+      - name: Build web
+        run: pnpm build
+        working-directory: src/web

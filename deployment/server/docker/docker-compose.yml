@@ -1,0 +1,129 @@
+# Vord Fleet — self-hosted Docker Compose deployment
+# Copy .env.example to .env and fill in all values before running.
+# Usage: docker compose up -d
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+      POSTGRES_DB: ${DB_NAME}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - vord-fleet
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - vord-fleet
+
+  migration-runner:
+    image: ghcr.io/framlux/vord/migration_runner:${IMAGE_TAG:-latest}
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      Database__HOSTNAME: postgres
+      Database__USER: ${DB_USER}
+      Database__PASSWORD: ${DB_PASSWORD}
+      Database__DB: ${DB_NAME}
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/readyz || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 60
+      start_period: 10s
+    networks:
+      - vord-fleet
+
+  api-server:
+    image: ghcr.io/framlux/vord/api-server:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migration-runner:
+        condition: service_healthy
+    ports:
+      - "${API_HTTP_PORT:-12233}:12233"
+      - "${API_GRPC_PORT:-12234}:12234"
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      ASPNETCORE_FORWARDEDHEADERS_ENABLED: "true"
+      Database__HOSTNAME: postgres
+      Database__USER: ${DB_USER}
+      Database__PASSWORD: ${DB_PASSWORD}
+      Database__DB: ${DB_NAME}
+      Redis__ConnectionString: redis:6379
+      Cors__Origins__0: ${CORS_ORIGIN:-https://vordfleet.dev}
+      App__BaseUrl: ${APP_BASE_URL:-https://vordfleet.dev}
+      Authentication__GitHub__ClientId: ${GITHUB_CLIENT_ID}
+      Authentication__GitHub__ClientSecret: ${GITHUB_CLIENT_SECRET}
+      Authentication__Google__ClientId: ${GOOGLE_CLIENT_ID}
+      Authentication__Google__ClientSecret: ${GOOGLE_CLIENT_SECRET}
+      Authentication__Microsoft__ClientId: ${MICROSOFT_CLIENT_ID}
+      Authentication__Microsoft__ClientSecret: ${MICROSOFT_CLIENT_SECRET}
+      Authentication__Oidc__Authority: ${OIDC_AUTHORITY:-}
+      Authentication__Oidc__ClientId: ${OIDC_CLIENT_ID:-}
+      Authentication__Oidc__ClientSecret: ${OIDC_CLIENT_SECRET:-}
+      Authentication__Oidc__MetadataAddress: ${OIDC_METADATA_ADDRESS:-}
+      Subscription__FreeTierMachineLimit: ${FREE_TIER_MACHINE_LIMIT:-3}
+      Subscription__FreeTierRetentionDays: ${FREE_TIER_RETENTION_DAYS:-1}
+      Billing__Enabled: "${Billing__Enabled:-false}"
+      Resend__ApiKey: ${RESEND_API_KEY:-}
+      Resend__FromEmail: ${RESEND_FROM_EMAIL:-}
+      # Auth__CookieDomain: "${AUTH_COOKIE_DOMAIN:-}"  # Uncomment if using a custom domain
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:12233/readyz || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    networks:
+      - vord-fleet
+
+  web:
+    image: ghcr.io/framlux/vord/web:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    depends_on:
+      api-server:
+        condition: service_healthy
+    ports:
+      - "${WEB_PORT:-5254}:5254"
+    environment:
+      API_BASE_URL: http://api-server:12233
+      PORT: "5254"
+      NODE_ENV: production
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:5254/healthz || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - vord-fleet
+
+volumes:
+  pgdata:
+
+networks:
+  vord-fleet:
+    driver: bridge

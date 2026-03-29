@@ -1,0 +1,268 @@
+// Copyright (c) 2026 Framlux LLC
+// Licensed under the Functional Source License, Version 1.1, ALv2 Future License
+// See LICENSE for details.
+
+using FastEndpoints;
+using Framlux.FleetManagement.Database.Cache;
+using Framlux.FleetManagement.Database.Enums;
+using Framlux.FleetManagement.Database.Models;
+using Framlux.FleetManagement.Server.Auth;
+using Framlux.FleetManagement.Server.Options;
+using Framlux.FleetManagement.Server.Services.Billing;
+using Framlux.FleetManagement.Server.Services.Infrastructure;
+using Microsoft.Extensions.Options;
+
+namespace Framlux.FleetManagement.Server.Endpoints.Web.Billing;
+
+/// <summary>
+/// Request for downgrading a subscription.
+/// </summary>
+public sealed class DowngradeSubscriptionRequest
+{
+    /// <summary>The target tier to downgrade to ("free" or "pro").</summary>
+    public string TargetTier { get; set; } = string.Empty;
+}
+
+/// <summary>
+/// Response for downgrade subscription request.
+/// </summary>
+public sealed class DowngradeSubscriptionResponse
+{
+    /// <summary>Whether the downgrade was initiated successfully.</summary>
+    public bool Success { get; set; }
+
+    /// <summary>Message describing the result.</summary>
+    public string Message { get; set; } = string.Empty;
+}
+
+/// <summary>
+/// Downgrades the tenant's subscription to a lower tier.
+/// Team to Pro is an immediate price swap. Any downgrade to Free takes effect at period end.
+/// </summary>
+public sealed class DowngradeSubscriptionEndpoint : Endpoint<DowngradeSubscriptionRequest, ApiResponse<DowngradeSubscriptionResponse>>
+{
+    private readonly IBillingStatus _billingStatus;
+    private readonly IDatabaseCache _databaseCache;
+    private readonly ISubscriptionService _subscriptionService;
+    private readonly IBillingApiClient _billingApiClient;
+    private readonly IDowngradeGuardService _downgradeGuardService;
+    private readonly IDowngradeCleanupService _downgradeCleanupService;
+    private readonly SubscriptionOptions _subscriptionOptions;
+    private readonly ILogger<DowngradeSubscriptionEndpoint> _logger;
+
+    /// <summary>
+    /// Creates a new instance of the <see cref="DowngradeSubscriptionEndpoint"/> class.
+    /// </summary>
+    public DowngradeSubscriptionEndpoint(
+        IBillingStatus billingStatus,
+        IDatabaseCache databaseCache,
+        ISubscriptionService subscriptionService,
+        IBillingApiClient billingApiClient,
+        IDowngradeGuardService downgradeGuardService,
+        IDowngradeCleanupService downgradeCleanupService,
+        IOptions<SubscriptionOptions> subscriptionOptions,
+        ILogger<DowngradeSubscriptionEndpoint> logger)
+    {
+        _billingStatus = billingStatus;
+        _databaseCache = databaseCache;
+        _subscriptionService = subscriptionService;
+        _billingApiClient = billingApiClient;
+        _downgradeGuardService = downgradeGuardService;
+        _downgradeCleanupService = downgradeCleanupService;
+        _subscriptionOptions = subscriptionOptions.Value;
+        _logger = logger;
+    }
+
+    /// <inheritdoc/>
+    public override void Configure()
+    {
+        Post("/billing/downgrade");
+        Policies("TenantAdmin");
+        Version(1);
+    }
+
+    /// <inheritdoc/>
+    public override async Task HandleAsync(DowngradeSubscriptionRequest req, CancellationToken ct)
+    {
+        if (_billingStatus.IsEnabled == false)
+        {
+            await Send.NotFoundAsync(ct);
+
+            return;
+        }
+
+        int? tenantId = TenantClaimHelper.GetTenantIdFromClaims(User, HttpContext);
+        if (tenantId is null)
+        {
+            HttpContext.Response.StatusCode = 401;
+            await HttpContext.Response.WriteAsJsonAsync(
+                ApiResponse<DowngradeSubscriptionResponse>.Error("Unauthorized"), ct);
+
+            return;
+        }
+
+        TenantSubscription? subscription = await _subscriptionService.GetSubscriptionForTenantAsync(tenantId.Value, ct);
+        if (subscription is null)
+        {
+            await Send.NotFoundAsync(ct);
+
+            return;
+        }
+
+        if (subscription.Status == SubscriptionStatus.Canceled)
+        {
+            await SendErrorResponse(400, "Cannot downgrade a canceled subscription.", ct);
+
+            return;
+        }
+
+        // Parse and validate the target tier
+        string targetTierStr = req.TargetTier?.ToLowerInvariant() ?? string.Empty;
+        if ((string.Equals(targetTierStr, "free", StringComparison.Ordinal) == false) &&
+            (string.Equals(targetTierStr, "pro", StringComparison.Ordinal) == false))
+        {
+            await SendErrorResponse(400, "Target tier must be 'free' or 'pro'.", ct);
+
+            return;
+        }
+
+        // Validate the downgrade path
+        SubscriptionTier currentTier = subscription.Tier;
+        bool isDowngradeToFree = string.Equals(targetTierStr, "free", StringComparison.Ordinal);
+        bool isDowngradeToPro = string.Equals(targetTierStr, "pro", StringComparison.Ordinal);
+
+        if (currentTier == SubscriptionTier.Free)
+        {
+            await SendErrorResponse(400, "Already on the Free tier. Cannot downgrade further.", ct);
+
+            return;
+        }
+
+        if ((currentTier == SubscriptionTier.Pro) && isDowngradeToPro)
+        {
+            await SendErrorResponse(400, "Already on the Pro tier.", ct);
+
+            return;
+        }
+
+        // OIDC lockout guard for downgrades from Team
+        if (currentTier == SubscriptionTier.Team)
+        {
+            bool canDowngrade = await _downgradeGuardService.CanDowngradeFromTeamAsync(tenantId.Value, ct);
+            if (canDowngrade == false)
+            {
+                await SendErrorResponse(400,
+                    "Cannot downgrade: at least one Tenant Admin must log in with a social provider (GitHub, Google, or Microsoft) before downgrading from Team tier.",
+                    ct);
+
+                return;
+            }
+        }
+
+        // Team -> Pro: immediate price swap
+        if ((currentTier == SubscriptionTier.Team) && isDowngradeToPro)
+        {
+            await HandleTeamToProDowngradeAsync(tenantId.Value, ct);
+
+            return;
+        }
+
+        // Any -> Free: cancel at period end with DowngradeToFree pending action
+        if (isDowngradeToFree)
+        {
+            await HandleDowngradeToFreeAsync(tenantId.Value, ct);
+
+            return;
+        }
+
+        await SendErrorResponse(400, "Invalid downgrade path.", ct);
+    }
+
+    private async Task HandleTeamToProDowngradeAsync(int tenantId, CancellationToken ct)
+    {
+        // Proactively update local subscription to avoid stale data before webhook arrives
+        await _databaseCache.DowngradeSubscriptionToProAsync(tenantId, ct);
+
+        // Clean up Team-only resources
+        await _downgradeCleanupService.CleanupForProTierAsync(tenantId, ct);
+
+        await _databaseCache.InsertAuditLogAsync(AuditHelper.Create(
+            tenantId, null, null,
+            AuditAction.SubscriptionDowngradeRequested, AuditResourceType.Subscription,
+            tenantId.ToString(), "Immediate downgrade from Team to Pro", null), ct);
+
+        // Swap the Stripe price (best effort, webhook will also fire)
+        Tenant? tenant = await _databaseCache.GetTenantByIdAsync(tenantId, ct);
+        if (tenant is not null)
+        {
+            try
+            {
+                await _billingApiClient.SwapSubscriptionPriceAsync(tenant.ExternalId, "pro", ct);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex,
+                    "Failed to swap Stripe price for tenant {TenantId} during Team->Pro downgrade",
+                    tenantId);
+            }
+        }
+
+        await Send.OkAsync(ApiResponse<DowngradeSubscriptionResponse>.Ok(new DowngradeSubscriptionResponse
+        {
+            Success = true,
+            Message = "Subscription has been downgraded to Pro."
+        }), cancellation: ct);
+    }
+
+    private async Task HandleDowngradeToFreeAsync(int tenantId, CancellationToken ct)
+    {
+        // Check that current machine count does not exceed Free tier limit
+        int machineCount = await _subscriptionService.GetMachineCountForTenantAsync(tenantId, ct);
+        int freeTierLimit = _subscriptionOptions.FreeTierMachineLimit;
+        if (machineCount > freeTierLimit)
+        {
+            await SendErrorResponse(400,
+                $"Cannot downgrade to Free: you have {machineCount} active machines but the Free tier allows {freeTierLimit}. Please remove machines before downgrading.",
+                ct);
+
+            return;
+        }
+
+        // Record the downgrade intent in the local database first
+        await _databaseCache.SetCancelAtPeriodEndAsync(tenantId, true, PendingSubscriptionAction.DowngradeToFree, ct);
+
+        await _databaseCache.InsertAuditLogAsync(AuditHelper.Create(
+            tenantId, null, null,
+            AuditAction.SubscriptionDowngradeRequested, AuditResourceType.Subscription,
+            tenantId.ToString(), "Downgrade to Free at period end", null), ct);
+
+        // Cancel the Stripe subscription at period end (best effort)
+        Tenant? tenant = await _databaseCache.GetTenantByIdAsync(tenantId, ct);
+        if (tenant is not null)
+        {
+            try
+            {
+                await _billingApiClient.CancelSubscriptionAsync(tenant.ExternalId, ct);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex,
+                    "Failed to cancel Stripe subscription for tenant {TenantId} during downgrade to Free, reconciliation will retry",
+                    tenantId);
+            }
+        }
+
+        await Send.OkAsync(ApiResponse<DowngradeSubscriptionResponse>.Ok(new DowngradeSubscriptionResponse
+        {
+            Success = true,
+            Message = "Subscription will be downgraded to Free at the end of the current billing period."
+        }), cancellation: ct);
+    }
+
+    private async Task SendErrorResponse(int statusCode, string message, CancellationToken ct)
+    {
+        HttpContext.Response.StatusCode = statusCode;
+        await HttpContext.Response.WriteAsJsonAsync(
+            ApiResponse<DowngradeSubscriptionResponse>.Error(message), ct);
+    }
+}

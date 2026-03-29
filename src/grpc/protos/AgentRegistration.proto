@@ -1,0 +1,67 @@
+// Copyright (c) 2026 Framlux LLC
+// Licensed under the MIT License
+// See LICENSE for details.
+
+syntax = "proto3";
+
+option csharp_namespace = "Framlux.FleetManagement.Grpc.AgentRegistration";
+option go_package = "github.com/framlux/vord/internal/proto/agent";
+
+package agent;
+
+service Registration {
+  rpc GetRegistrationStatus (SystemRegistrationStatusRequest) returns (SystemRegistrationStatusResponse);
+  rpc RegisterSystem (RegisterSystemRequest) returns (RegisterSystemResponse);
+}
+
+enum RegistrationStatus {
+    UNKNOWN_REGISTRATION = 0;
+    REGISTRATION_ACTIVE = 1;
+}
+
+enum MachineType {
+    UNKNOWN_TYPE = 0;
+    DESKTOP_TYPE = 1;
+    LAPTOP_TYPE = 2;
+    BARE_METAL_SERVER_TYPE = 3;
+    VIRTUAL_MACHINE_TYPE = 4;
+}
+
+enum OperatingSystemType {
+    UNKNOWN_OS = 0;
+    WINDOWS_OS = 1;
+    MAC_OS = 2;
+    UBUNTU_OS = 3;
+    FEDORA_OS = 4;
+    REDHAT_OS = 5;
+}
+
+message SystemRegistrationStatusRequest {
+    string serial_number = 1;
+    string system_id = 2;
+    string registration_token = 3;
+}
+
+message SystemRegistrationStatusResponse {
+    RegistrationStatus status = 1;
+    int64 machine_id = 2;
+    string api_key = 3;
+    string error_message = 4;
+}
+
+message RegisterSystemRequest {
+    string hostname = 1;
+    string serial_number = 2;
+    string system_id = 3;
+    string asset_tag = 4;
+    MachineType machine_type = 5;
+    OperatingSystemType os = 6;
+    string os_version = 7;
+    string registration_token = 8;
+}
+
+message RegisterSystemResponse {
+    int64 machine_id = 1;
+    string api_key = 2;
+    string error_message = 3;
+}

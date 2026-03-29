@@ -1,0 +1,63 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>Framlux.Vord.Server</RootNamespace>
+    <AssemblyName>Framlux.Vord.Server</AssemblyName>
+    <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
+    <Version>1.3.5</Version>
+    <ServerGarbageCollection>true</ServerGarbageCollection>
+    <SelfContained>true</SelfContained>
+    <ServerGarbageCollection>true</ServerGarbageCollection>
+    <ContainerRegistry>ghcr.io</ContainerRegistry>
+    <ContainerRepository>framlux/vord/api-server</ContainerRepository>
+    <ContainerRuntimeIdentifier>linux-x64</ContainerRuntimeIdentifier>
+    <ContainerImageTags>$(Version);latest</ContainerImageTags>
+    <UserSecretsId>0325c6e7-aef4-4248-abc1-69e7cc79fef9</UserSecretsId>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <InternalsVisibleTo Include="unit" />
+    <InternalsVisibleTo Include="functional" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ContainerEnvironmentVariable Include="ASPNETCORE_ENVIRONMENT" Value="Production" />
+    <ContainerPort Include="12233" Type="tcp" />
+    <ContainerPort Include="12234" Type="tcp" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\database\database.csproj" />
+    <ProjectReference Include="..\grpc\grpc.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="CloudNative.CloudEvents" Version="2.8.0" />
+    <PackageReference Include="CloudNative.CloudEvents.SystemTextJson" Version="2.8.0" />
+    <PackageReference Include="FastEndpoints" Version="7.1.1" />
+    <PackageReference Include="FastEndpoints.Security" Version="7.1.1" />
+    <PackageReference Include="linq2db" Version="6.1.0" />
+    <PackageReference Include="linq2db.Extensions" Version="6.1.0" />
+    <PackageReference Include="linq2db.PostgreSQL" Version="6.1.0" />
+    <PackageReference Include="AspNet.Security.OAuth.GitHub" Version="10.0.0" />
+    <PackageReference Include="Microsoft.AspNetCore.Authentication.Google" Version="10.0.1" />
+    <PackageReference Include="Microsoft.AspNetCore.Authentication.MicrosoftAccount" Version="10.0.1" />
+    <PackageReference Include="Microsoft.AspNetCore.Authentication.OpenIdConnect" Version="10.0.1" />
+<PackageReference Include="Npgsql" Version="10.0.1" />
+    <PackageReference Include="Npgsql.DependencyInjection" Version="10.0.1" />
+    <PackageReference Include="NSec.Cryptography" Version="25.4.0" />
+    <PackageReference Include="Serilog.AspNetCore" Version="9.0.0" />
+    <PackageReference Include="Serilog.Formatting.Compact" Version="3.0.0" />
+    <PackageReference Include="AspNetCore.HealthChecks.NpgSql" Version="9.0.0" />
+    <PackageReference Include="AspNetCore.HealthChecks.Redis" Version="9.0.0" />
+    <PackageReference Include="Microsoft.AspNetCore.DataProtection.StackExchangeRedis" Version="10.0.1" />
+    <PackageReference Include="AWSSDK.S3" Version="3.7.412.3" />
+    <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.0" />
+    <PackageReference Include="Framlux.Vord.BillingGrpc" Version="1.1.0" />
+    <PackageReference Include="StackExchange.Redis" Version="2.8.47" />
+  </ItemGroup>
+
+</Project>

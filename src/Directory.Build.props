@@ -1,0 +1,24 @@
+<Project>
+  <PropertyGroup>
+    <!-- Generate XML documentation files for IntelliSense and documentation tools -->
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
+
+    <!-- Enforce .editorconfig code style rules (IDExxxx) during build, not just in IDE -->
+    <EnforceCodeStyleInBuild>true</EnforceCodeStyleInBuild>
+
+    <!-- Enable recommended set of built-in CA code quality analyzers -->
+    <AnalysisLevel>latest-recommended</AnalysisLevel>
+
+    <!-- Treat all warnings as errors to enforce clean code in both local dev and CI -->
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+  </PropertyGroup>
+  
+  <!-- Disable XML documentation requirements for projects with auto-generated code -->
+  <PropertyGroup Condition="'$(MSBuildProjectName)' == 'grpc' Or '$(MSBuildProjectName)' == 'billingGrpc' Or $(MSBuildProjectName.Contains('thriftgen'))">
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <EnforceCodeStyleInBuild>false</EnforceCodeStyleInBuild>
+    <AnalysisLevel>none</AnalysisLevel>
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <NoWarn>$(NoWarn);CS1591</NoWarn>
+  </PropertyGroup>
+</Project>

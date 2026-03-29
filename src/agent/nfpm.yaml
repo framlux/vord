@@ -1,0 +1,33 @@
+name: vord-agent
+arch: ${GOARCH}
+version: ${VERSION}
+maintainer: Framlux <info@framlux.com>
+description: Vord Agent - Machine telemetry collector and control plane agent
+vendor: Framlux
+homepage: https://github.com/framlux/machine-info
+license: Proprietary
+
+contents:
+  - src: ./publish/vord-agent-linux-${GOARCH}
+    dst: /usr/local/bin/vord-agent
+    file_info:
+      mode: 0755
+
+  - src: ./vord-agent.service
+    dst: /usr/lib/systemd/system/vord-agent.service
+    file_info:
+      mode: 0644
+
+  - dst: /etc/framlux
+    type: dir
+    file_info:
+      mode: 0755
+
+  - dst: /var/lib/vord-agent
+    type: dir
+    file_info:
+      mode: 0755
+
+scripts:
+  postinstall: ./packaging/postinstall.sh
+  preremove: ./packaging/preremove.sh

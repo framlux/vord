@@ -1,0 +1,343 @@
+// Copyright (c) 2026 Framlux LLC
+// Licensed under the Functional Source License, Version 1.1, ALv2 Future License
+// See LICENSE for details.
+
+using Framlux.FleetManagement.Database.Models;
+using Framlux.FleetManagement.Server.Endpoints.Web.Tenants;
+using Framlux.FleetManagement.Server.Endpoints.Web;
+using Framlux.FleetManagement.Server.Services.Handlers;
+using Framlux.FleetManagement.Server.Services.Infrastructure;
+using Framlux.FleetManagement.Test.Infrastructure;
+using LinqToDB.Async;
+using LinqToDB;
+
+namespace Framlux.FleetManagement.Test.Services.Handlers;
+
+/// <summary>
+/// Tests for <see cref="RegistrationTokenHandler"/>.
+/// </summary>
+public class RegistrationTokenHandlerTests
+{
+    // ========== Constructor tests ==========
+
+    [Test]
+    public async Task Constructor_NullDatabaseContext_ThrowsArgumentNullException()
+    {
+        await Assert.That(() =>
+            new RegistrationTokenHandler(null!))
+            .Throws<ArgumentNullException>();
+    }
+
+    // ========== CreateAsync null name tests ==========
+
+    [Test]
+    public async Task CreateAsync_NullName_Returns400()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        RegistrationTokenHandler handler = new(dbFactory.Context);
+
+        ServiceResult<RegistrationTokenDto> result = await handler.CreateAsync(1, 1, null!, 30, 10, CancellationToken.None);
+
+        await Assert.That(result.StatusCode).IsEqualTo(400);
+    }
+
+    // ========== CreateAsync tests ==========
+
+    [Test]
+    public async Task CreateAsync_EmptyName_Returns400()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        RegistrationTokenHandler handler = new(dbFactory.Context);
+
+        ServiceResult<RegistrationTokenDto> result = await handler.CreateAsync(1, 1, "", 30, 10, CancellationToken.None);
+
+        await Assert.That(result.StatusCode).IsEqualTo(400);
+    }
+
+    [Test]
+    public async Task CreateAsync_ExpiryTooLow_Returns400()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        RegistrationTokenHandler handler = new(dbFactory.Context);
+
+        ServiceResult<RegistrationTokenDto> result = await handler.CreateAsync(1, 1, "Token", 0, 10, CancellationToken.None);
+
+        await Assert.That(result.StatusCode).IsEqualTo(400);
+    }
+
+    [Test]
+    public async Task CreateAsync_ExpiryTooHigh_Returns400()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        RegistrationTokenHandler handler = new(dbFactory.Context);
+
+        ServiceResult<RegistrationTokenDto> result = await handler.CreateAsync(1, 1, "Token", 366, 10, CancellationToken.None);
+
+        await Assert.That(result.StatusCode).IsEqualTo(400);
+    }
+
+    [Test]
+    public async Task CreateAsync_MaxUsesTooLow_Returns400()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        RegistrationTokenHandler handler = new(dbFactory.Context);
+
+        ServiceResult<RegistrationTokenDto> result = await handler.CreateAsync(1, 1, "Token", 30, 0, CancellationToken.None);
+
+        await Assert.That(result.StatusCode).IsEqualTo(400);
+    }
+
+    [Test]
+    public async Task CreateAsync_MaxUsesTooHigh_Returns400()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        RegistrationTokenHandler handler = new(dbFactory.Context);
+
+        ServiceResult<RegistrationTokenDto> result = await handler.CreateAsync(1, 1, "Token", 30, 10001, CancellationToken.None);
+
+        await Assert.That(result.StatusCode).IsEqualTo(400);
+    }
+
+    [Test]
+    public async Task CreateAsync_ValidRequest_ReturnsTokenWithPlaintext()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        RegistrationTokenHandler handler = new(dbFactory.Context);
+
+        ServiceResult<RegistrationTokenDto> result = await handler.CreateAsync(1, 1, "My Token", 30, 10, CancellationToken.None);
+
+        await Assert.That(result.IsSuccess).IsEqualTo(true);
+        await Assert.That(result.Data!.Name).IsEqualTo("My Token");
+        await Assert.That(result.Data!.Token).IsNotNull();
+        await Assert.That(string.IsNullOrEmpty(result.Data!.Token)).IsEqualTo(false);
+        await Assert.That(result.Data!.MaxUses).IsEqualTo(10);
+        await Assert.That(result.Data!.IsRevoked).IsEqualTo(false);
+    }
+
+    [Test]
+    public async Task CreateAsync_ValidRequest_InsertsTokenInDatabase()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        RegistrationTokenHandler handler = new(dbFactory.Context);
+
+        await handler.CreateAsync(1, 1, "DB Token", 30, 10, CancellationToken.None);
+
+        List<RegistrationToken> tokens = await dbFactory.Context.RegistrationTokens.ToListAsync();
+        await Assert.That(tokens.Count).IsEqualTo(1);
+        await Assert.That(tokens[0].Name).IsEqualTo("DB Token");
+        await Assert.That(tokens[0].TenantId).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task CreateAsync_ValidRequest_TokenHashDiffersFromPlaintext()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        RegistrationTokenHandler handler = new(dbFactory.Context);
+
+        ServiceResult<RegistrationTokenDto> result = await handler.CreateAsync(1, 1, "Hash Token", 30, 10, CancellationToken.None);
+
+        RegistrationToken? dbToken = await dbFactory.Context.RegistrationTokens.FirstOrDefaultAsync();
+        await Assert.That(dbToken).IsNotNull();
+        await Assert.That(dbToken!.TokenHash).IsNotEqualTo(result.Data!.Token);
+    }
+
+    // ========== RevokeAsync tests ==========
+
+    [Test]
+    public async Task RevokeAsync_TokenNotFound_ReturnsNotFound()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        RegistrationTokenHandler handler = new(dbFactory.Context);
+
+        ServiceResult<object> result = await handler.RevokeAsync(999, 1, CancellationToken.None);
+
+        await Assert.That(result.IsNotFound).IsEqualTo(true);
+    }
+
+    [Test]
+    public async Task RevokeAsync_WrongTenant_ReturnsNotFound()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        RegistrationToken token = new()
+        {
+            TenantId = 2,
+            TokenHash = "hash-123",
+            Name = "Wrong Tenant Token",
+            ExpiresAt = DateTimeOffset.UtcNow.AddDays(30),
+            MaxUses = 10,
+            UsedCount = 0,
+            CreatedByUserId = 1,
+            CreatedAt = DateTimeOffset.UtcNow,
+            IsRevoked = false,
+        };
+        token.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(token);
+
+        RegistrationTokenHandler handler = new(dbFactory.Context);
+
+        ServiceResult<object> result = await handler.RevokeAsync(token.Id, 1, CancellationToken.None);
+
+        await Assert.That(result.IsNotFound).IsEqualTo(true);
+    }
+
+    [Test]
+    public async Task RevokeAsync_AlreadyRevoked_ReturnsNotFound()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        RegistrationToken token = new()
+        {
+            TenantId = 1,
+            TokenHash = "hash-revoked",
+            Name = "Revoked Token",
+            ExpiresAt = DateTimeOffset.UtcNow.AddDays(30),
+            MaxUses = 10,
+            UsedCount = 0,
+            CreatedByUserId = 1,
+            CreatedAt = DateTimeOffset.UtcNow,
+            IsRevoked = true,
+            RevokedAt = DateTimeOffset.UtcNow,
+        };
+        token.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(token);
+
+        RegistrationTokenHandler handler = new(dbFactory.Context);
+
+        ServiceResult<object> result = await handler.RevokeAsync(token.Id, 1, CancellationToken.None);
+
+        await Assert.That(result.IsNotFound).IsEqualTo(true);
+    }
+
+    [Test]
+    public async Task RevokeAsync_ValidToken_SetsRevokedFlag()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        RegistrationToken token = new()
+        {
+            TenantId = 1,
+            TokenHash = "hash-valid",
+            Name = "Valid Token",
+            ExpiresAt = DateTimeOffset.UtcNow.AddDays(30),
+            MaxUses = 10,
+            UsedCount = 0,
+            CreatedByUserId = 1,
+            CreatedAt = DateTimeOffset.UtcNow,
+            IsRevoked = false,
+        };
+        token.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(token);
+
+        RegistrationTokenHandler handler = new(dbFactory.Context);
+
+        ServiceResult<object> result = await handler.RevokeAsync(token.Id, 1, CancellationToken.None);
+
+        await Assert.That(result.IsSuccess).IsEqualTo(true);
+
+        RegistrationToken? revoked = await dbFactory.Context.RegistrationTokens.FirstOrDefaultAsync(t => t.Id == token.Id);
+        await Assert.That(revoked!.IsRevoked).IsEqualTo(true);
+        await Assert.That(revoked.RevokedAt.HasValue).IsEqualTo(true);
+    }
+
+    // ========== ListAsync tests ==========
+
+    [Test]
+    public async Task ListAsync_NoTokens_ReturnsEmptyPage()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        RegistrationTokenHandler handler = new(dbFactory.Context);
+
+        ServiceResult<PaginatedResponse<RegistrationTokenDto>> result = await handler.ListAsync(1, 1, 25, CancellationToken.None);
+
+        await Assert.That(result.IsSuccess).IsEqualTo(true);
+        await Assert.That(result.Data!.Items.Count).IsEqualTo(0);
+        await Assert.That(result.Data!.TotalCount).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task ListAsync_WithTokens_ReturnsPaginatedResults()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        for (int i = 0; i < 5; i++)
+        {
+            RegistrationToken token = new()
+            {
+                TenantId = 1,
+                TokenHash = $"hash-{i}",
+                Name = $"Token {i}",
+                ExpiresAt = DateTimeOffset.UtcNow.AddDays(30),
+                MaxUses = 10,
+                UsedCount = 0,
+                CreatedByUserId = 1,
+                CreatedAt = DateTimeOffset.UtcNow.AddMinutes(-i),
+                IsRevoked = false,
+            };
+            await dbFactory.Context.InsertWithInt64IdentityAsync(token);
+        }
+
+        RegistrationTokenHandler handler = new(dbFactory.Context);
+
+        ServiceResult<PaginatedResponse<RegistrationTokenDto>> result = await handler.ListAsync(1, 1, 2, CancellationToken.None);
+
+        await Assert.That(result.IsSuccess).IsEqualTo(true);
+        await Assert.That(result.Data!.TotalCount).IsEqualTo(5);
+        await Assert.That(result.Data!.Items.Count).IsEqualTo(2);
+        await Assert.That(result.Data!.Page).IsEqualTo(1);
+        await Assert.That(result.Data!.PageSize).IsEqualTo(2);
+    }
+
+    [Test]
+    public async Task ListAsync_PageBeyondResults_ReturnsEmptyItems()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        for (int i = 0; i < 3; i++)
+        {
+            RegistrationToken token = new()
+            {
+                TenantId = 1,
+                TokenHash = $"hash-beyond-{i}",
+                Name = $"Token Beyond {i}",
+                ExpiresAt = DateTimeOffset.UtcNow.AddDays(30),
+                MaxUses = 10,
+                UsedCount = 0,
+                CreatedByUserId = 1,
+                CreatedAt = DateTimeOffset.UtcNow.AddMinutes(-i),
+                IsRevoked = false,
+            };
+            await dbFactory.Context.InsertWithInt64IdentityAsync(token);
+        }
+
+        RegistrationTokenHandler handler = new(dbFactory.Context);
+
+        ServiceResult<PaginatedResponse<RegistrationTokenDto>> result = await handler.ListAsync(1, 5, 2, CancellationToken.None);
+
+        await Assert.That(result.IsSuccess).IsEqualTo(true);
+        await Assert.That(result.Data!.Items.Count).IsEqualTo(0);
+        await Assert.That(result.Data!.TotalCount).IsEqualTo(3);
+    }
+
+    [Test]
+    public async Task ListAsync_ExactlyFillsPage_HasCorrectTotalCount()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        for (int i = 0; i < 2; i++)
+        {
+            RegistrationToken token = new()
+            {
+                TenantId = 1,
+                TokenHash = $"hash-exact-{i}",
+                Name = $"Token Exact {i}",
+                ExpiresAt = DateTimeOffset.UtcNow.AddDays(30),
+                MaxUses = 10,
+                UsedCount = 0,
+                CreatedByUserId = 1,
+                CreatedAt = DateTimeOffset.UtcNow.AddMinutes(-i),
+                IsRevoked = false,
+            };
+            await dbFactory.Context.InsertWithInt64IdentityAsync(token);
+        }
+
+        RegistrationTokenHandler handler = new(dbFactory.Context);
+
+        ServiceResult<PaginatedResponse<RegistrationTokenDto>> result = await handler.ListAsync(1, 1, 2, CancellationToken.None);
+
+        await Assert.That(result.IsSuccess).IsEqualTo(true);
+        await Assert.That(result.Data!.Items.Count).IsEqualTo(2);
+        await Assert.That(result.Data!.TotalCount).IsEqualTo(2);
+    }
+}
