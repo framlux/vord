@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file. See [versionize](https://github.com/versionize/versionize) for commit guidelines.
 
+<a name="1.4.3"></a>
+## [1.4.3](https://www.github.com/framlux/vord/releases/tag/v1.4.3) (2026-03-29)
+
+### Bug Fixes
+
+* Fixing broken api-server production configuration ([25f6d8f](https://www.github.com/framlux/vord/commit/25f6d8fd1721ab561c3d0d5a06ba4382847f684e))
+
 <a name="1.4.2"></a>
 ## [1.4.2](https://www.github.com/framlux/vord/releases/tag/v1.4.2) (2026-03-29)
 
