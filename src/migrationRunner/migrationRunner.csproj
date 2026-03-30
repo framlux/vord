@@ -9,6 +9,7 @@
     <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
     <Version>1.4.1</Version>
     <ServerGarbageCollection>true</ServerGarbageCollection>
+    <SelfContained>true</SelfContained>
     <ContainerRegistry>ghcr.io</ContainerRegistry>
     <ContainerRepository>framlux/vord/migration_runner</ContainerRepository>
     <ContainerRuntimeIdentifier>linux-x64</ContainerRuntimeIdentifier>
