@@ -468,6 +468,8 @@ if (billingOpts.Enabled)
 {
     app.MapGrpcService<BillingGatewayService>()
         .AllowAnonymous();
+    app.MapGrpcService<FleetAdminService>()
+        .AllowAnonymous();
 }
 
 // Graceful shutdown: allow in-flight requests to complete during Kubernetes rolling updates.
