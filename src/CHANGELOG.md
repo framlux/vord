@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file. See [versionize](https://github.com/versionize/versionize) for commit guidelines.
 
+<a name="1.4.4"></a>
+## [1.4.4](https://www.github.com/framlux/vord/releases/tag/v1.4.4) (2026-03-30)
+
+### Bug Fixes
+
+* Fixing missing billing gRPC API service ([2fa24d6](https://www.github.com/framlux/vord/commit/2fa24d6d6cbbce20e26a837a326889af82de1458))
+
 <a name="1.4.3"></a>
 ## [1.4.3](https://www.github.com/framlux/vord/releases/tag/v1.4.3) (2026-03-29)
 
