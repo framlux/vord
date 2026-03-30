@@ -23,22 +23,23 @@ public sealed class FleetAdminServiceTests
     // ========== Billing Disabled Tests ==========
 
     [Test]
-    public async Task FleetAdmin_BillingDisabled_ReturnsNonSuccessHttpStatus()
+    public async Task FleetAdmin_BillingDisabled_ServiceNotMapped()
     {
         using BillingDisabledTestFactory factory = new();
         HttpClient httpClient = factory.CreateClient();
 
-        // gRPC endpoints use HTTP POST to /package.Service/Method
+        // Send a raw HTTP POST to the gRPC endpoint path to verify the service is not mapped
         HttpRequestMessage request = new HttpRequestMessage(HttpMethod.Post, "/billing.FleetAdmin/ListUsers");
-        request.Content = new ByteArrayContent(Array.Empty<byte>());
+        request.Content = new ByteArrayContent(System.Array.Empty<byte>());
         request.Content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/grpc");
-        request.Version = new Version(2, 0);
+        request.Version = new System.Version(2, 0);
 
-        HttpResponseMessage response = await httpClient.SendAsync(request);
+        System.Net.HttpStatusCode successCode = System.Net.HttpStatusCode.OK;
+        System.Net.Http.HttpResponseMessage response = await httpClient.SendAsync(request);
 
-        // When billing is disabled, the gRPC service is not mapped so the request falls
-        // through to the default auth middleware which returns 401 Unauthorized
-        await Assert.That(response.IsSuccessStatusCode).IsEqualTo(false);
+        // When billing is disabled the gRPC service is not mapped, so the request falls through
+        // to the default auth middleware which returns a non-success status
+        await Assert.That(response.StatusCode == successCode).IsEqualTo(false);
     }
 
     // ========== Authentication Tests ==========
