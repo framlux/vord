@@ -133,9 +133,11 @@ jobs:
 
           for arch in amd64 arm64 386 arm; do
             export GOARCH="$arch"
-            nfpm pkg --packager deb --target "./publish/vord-agent-${arch}.deb"
-            nfpm pkg --packager rpm --target "./publish/vord-agent-${arch}.rpm"
+            envsubst < nfpm.yaml > nfpm.resolved.yaml
+            nfpm pkg --config nfpm.resolved.yaml --packager deb --target "./publish/vord-agent-${arch}.deb"
+            nfpm pkg --config nfpm.resolved.yaml --packager rpm --target "./publish/vord-agent-${arch}.rpm"
           done
+          rm -f nfpm.resolved.yaml
 
       - name: Upload packages to Gemfury
         working-directory: src/agent
