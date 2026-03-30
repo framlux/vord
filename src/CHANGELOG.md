@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file. See [versionize](https://github.com/versionize/versionize) for commit guidelines.
 
+<a name="1.4.2"></a>
+## [1.4.2](https://www.github.com/framlux/vord/releases/tag/v1.4.2) (2026-03-29)
+
+### Bug Fixes
+
+* Fixing agent publishing ([a818ddb](https://www.github.com/framlux/vord/commit/a818ddb4dff68cbc95338a83b7dae36121d0e440))
+* Fixing broken migration that blocks k3s deployment ([feb97e0](https://www.github.com/framlux/vord/commit/feb97e057e5a40e6d9515493d2ce63fcb837c5a9))
+* Fixing broken UI production build and warnings on C# tests ([79e1c37](https://www.github.com/framlux/vord/commit/79e1c37ed781c8f570c94c5dac45addf824a98be))
+* Fixing CD Go agent tar step ([a115a1e](https://www.github.com/framlux/vord/commit/a115a1ee008f267368124563bc792221333d734c))
+* Fixing Migration Runner container self-contained ([deb9870](https://www.github.com/framlux/vord/commit/deb9870f9c99756bc00053b6484de26c88a001be))
+
 <a name="1.4.1"></a>
 ## [1.4.1](https://www.github.com/framlux/vord/releases/tag/v1.4.1) (2026-03-29)
 
