@@ -5,9 +5,9 @@
 namespace Framlux.FleetManagement.MigrationRunner.Services;
 
 /// <summary>
-/// Hosted service that executes database migrations during application startup.
+/// Background service that executes database migrations after the web server starts listening.
 /// </summary>
-public sealed class MigrationHostedService : IHostedService
+public sealed class MigrationHostedService : BackgroundService
 {
     private readonly IDbMigrator _migrator;
     private readonly MigrationState _state;
@@ -27,12 +27,14 @@ public sealed class MigrationHostedService : IHostedService
     }
 
     /// <inheritdoc/>
-    public async Task StartAsync(CancellationToken cancellationToken)
+    protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         _log.LogInformation("MigrationHostedService starting.");
         try
         {
-            await _migrator.RunAsync(cancellationToken);
+            // Run on the thread pool so the synchronous MigrateUp() call does not
+            // block the startup pipeline (Kestrel must begin listening first).
+            await Task.Run(() => _migrator.RunAsync(stoppingToken), stoppingToken);
             _state.MarkSuccess();
             _log.LogInformation("Database migrations succeeded.");
         }
@@ -41,13 +43,5 @@ public sealed class MigrationHostedService : IHostedService
             _log.LogError(ex, "Database migrations failed.");
             _state.MarkFailure(ex);
         }
-    }
-
-    /// <inheritdoc/>
-    public Task StopAsync(CancellationToken cancellationToken)
-    {
-        _log.LogInformation("MigrationHostedService stopping.");
-
-        return Task.CompletedTask;
     }
 }
