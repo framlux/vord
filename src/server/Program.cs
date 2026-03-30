@@ -45,9 +45,10 @@ builder.WebHost.ConfigureKestrel(options =>
 {
     options.Limits.MaxRequestBodySize = 1 * 1024 * 1024; // 1 MB
 });
+string environment = builder.Environment.EnvironmentName;
 builder.Configuration
     .AddJsonFile("appsettings.json", optional: false, reloadOnChange: true)
-    .AddJsonFile("appsettings.Development.json", optional: true, reloadOnChange: true)
+    .AddJsonFile($"appsettings.{environment}.json", optional: true, reloadOnChange: true)
     .AddEnvironmentVariables()
     .AddUserSecrets<Program>();
 
