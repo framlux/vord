@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file. See [versionize](https://github.com/versionize/versionize) for commit guidelines.
 
+<a name="1.5.1"></a>
+## [1.5.1](https://www.github.com/framlux/vord/releases/tag/v1.5.1) (2026-03-31)
+
+### Bug Fixes
+
+* Fixing multi-tenant authZ bug where we would not set the tenant cookie ([8736db0](https://www.github.com/framlux/vord/commit/8736db024aa3615e46d2d9ea09217aa1e71c706a))
+
 <a name="1.5.0"></a>
 ## [1.5.0](https://www.github.com/framlux/vord/releases/tag/v1.5.0) (2026-03-31)
 
