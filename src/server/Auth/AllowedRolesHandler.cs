@@ -49,8 +49,14 @@ public sealed class AllowedRolesHandler : AuthorizationHandler<AllowedRolesRequi
             return Task.CompletedTask;
         }
 
-        // Determine the active tenant from the vord_tenant cookie
-        int? activeTenantId = GetActiveTenantId();
+        // Determine the active tenant from the vord_tenant cookie, falling back to role claims
+        HttpContext? httpContext = _httpContextAccessor.HttpContext;
+        if (httpContext is null)
+        {
+            return Task.CompletedTask;
+        }
+
+        int? activeTenantId = TenantClaimHelper.GetTenantIdFromClaims(context.User, httpContext);
         if (activeTenantId is null)
         {
             return Task.CompletedTask;
@@ -94,22 +100,5 @@ public sealed class AllowedRolesHandler : AuthorizationHandler<AllowedRolesRequi
         }
 
         return Task.CompletedTask;
-    }
-
-    private int? GetActiveTenantId()
-    {
-        HttpContext? httpContext = _httpContextAccessor.HttpContext;
-        if (httpContext is null)
-        {
-            return null;
-        }
-
-        string? cookieValue = httpContext.Request.Cookies["vord_tenant"];
-        if (string.IsNullOrEmpty(cookieValue) == false && int.TryParse(cookieValue, out int tenantId))
-        {
-            return tenantId;
-        }
-
-        return null;
     }
 }

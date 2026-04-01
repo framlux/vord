@@ -48,6 +48,16 @@ export const handle: Handle = async ({ event, resolve }) => {
 				const user = await client.getMe();
 				event.locals.user = user;
 				cacheSet(cacheKey, user, SESSION_TTL_MS);
+
+				// Auto-set vord_tenant cookie if missing but user has a tenant
+				if (!tenantCookie && user.activeTenantId) {
+					event.cookies.set('vord_tenant', String(user.activeTenantId), {
+						path: '/',
+						httpOnly: true,
+						sameSite: 'lax',
+						secure: true
+					});
+				}
 			} catch {
 				event.locals.user = null;
 				sessionCache.delete(cacheKey);

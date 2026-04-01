@@ -74,8 +74,10 @@ public class AllowedRolesHandlerTests
     }
 
     [Test]
-    public async Task CorrectRole_WithWrongTenantCookie_Fails()
+    public async Task CorrectRole_WithInvalidTenantCookie_FallsBackToRoleClaim_Succeeds()
     {
+        // Cookie points to tenant 99 which the user doesn't belong to;
+        // TenantClaimHelper falls back to first role claim (tenant 5)
         AllowedRolesHandler handler = new(CreateAccessor("99"));
         AllowedRolesRequirement requirement = new(UserAccountRoles.TenantAdmin);
         ClaimsIdentity identity = new(
@@ -86,11 +88,11 @@ public class AllowedRolesHandlerTests
 
         await handler.HandleAsync(context);
 
-        await Assert.That(context.HasSucceeded).IsEqualTo(false);
+        await Assert.That(context.HasSucceeded).IsEqualTo(true);
     }
 
     [Test]
-    public async Task CorrectRole_WithNoTenantCookie_Fails()
+    public async Task CorrectRole_WithNoTenantCookie_FallsBackToRoleClaim_Succeeds()
     {
         AllowedRolesHandler handler = new(CreateAccessor());
         AllowedRolesRequirement requirement = new(UserAccountRoles.TenantAdmin);
@@ -102,7 +104,42 @@ public class AllowedRolesHandlerTests
 
         await handler.HandleAsync(context);
 
+        await Assert.That(context.HasSucceeded).IsEqualTo(true);
+    }
+
+    [Test]
+    public async Task NoTenantCookie_NoRoleClaims_Fails()
+    {
+        AllowedRolesHandler handler = new(CreateAccessor());
+        AllowedRolesRequirement requirement = new(UserAccountRoles.TenantAdmin);
+        ClaimsIdentity identity = new(
+            authenticationType: "test");
+        ClaimsPrincipal user = new(identity);
+        AuthorizationHandlerContext context = BuildContext(requirement, user);
+
+        await handler.HandleAsync(context);
+
         await Assert.That(context.HasSucceeded).IsEqualTo(false);
+    }
+
+    [Test]
+    public async Task NoTenantCookie_MultipleRoles_UsesFirstTenant()
+    {
+        AllowedRolesHandler handler = new(CreateAccessor());
+        AllowedRolesRequirement requirement = new(UserAccountRoles.Viewer);
+        ClaimsIdentity identity = new(
+            [
+                new Claim(ClaimTypes.Role, "1:3"),
+                new Claim(ClaimTypes.Role, "2:1")
+            ],
+            authenticationType: "test");
+        ClaimsPrincipal user = new(identity);
+        AuthorizationHandlerContext context = BuildContext(requirement, user);
+
+        await handler.HandleAsync(context);
+
+        // Falls back to first role claim (tenant 1, role Viewer=3), which matches the requirement
+        await Assert.That(context.HasSucceeded).IsEqualTo(true);
     }
 
     [Test]
