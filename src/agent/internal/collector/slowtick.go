@@ -17,34 +17,34 @@ import (
 
 	"github.com/framlux/vord/internal/db"
 	"github.com/framlux/vord/internal/id"
+	"github.com/framlux/vord/internal/state"
 )
 
-const (
-	slowTickInterval   = 15 * time.Minute
-	hourlyTickInterval = 4 // every 4th slow tick = 1 hour
-)
+const hourlyTickInterval = 4 // every 4th slow tick = 1 hour
 
 // SlowTick groups the low-frequency collectors (MemoryInfo, DiskInfo, and
 // hourly SystemInfo, OsVersion, CpuInfo) into a single goroutine. It reads
 // /proc files once per tick and passes the data to all parsers.
 type SlowTick struct {
-	store    *db.Store
-	tickNum  int
+	store   *db.Store
+	rs      *state.RuntimeState
+	tickNum int
 }
 
 // NewSlowTick creates a new SlowTick.
-func NewSlowTick(store *db.Store) *SlowTick {
-	return &SlowTick{store: store}
+func NewSlowTick(store *db.Store, rs *state.RuntimeState) *SlowTick {
+	return &SlowTick{store: store, rs: rs}
 }
 
 // Run starts the slow tick loop. It blocks until ctx is cancelled.
 func (st *SlowTick) Run(ctx context.Context) {
-	slog.Info("starting slow tick", "interval", slowTickInterval)
+	interval := st.rs.TelemetryCollectSlowInterval()
+	slog.Info("starting slow tick", "interval", interval)
 
 	// Run immediately on startup (tick 0 is an hourly tick).
 	st.tick(ctx)
 
-	ticker := time.NewTicker(slowTickInterval)
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
 	for {
@@ -55,6 +55,12 @@ func (st *SlowTick) Run(ctx context.Context) {
 			return
 		case <-ticker.C:
 			st.tick(ctx)
+
+			if newInterval := st.rs.TelemetryCollectSlowInterval(); newInterval != interval {
+				slog.Info("slow tick interval changed", "old", interval, "new", newInterval)
+				interval = newInterval
+				ticker.Reset(interval)
+			}
 		}
 	}
 }

@@ -21,6 +21,11 @@ public sealed class ServiceResult<T>
     public T? Data { get; init; }
 
     /// <summary>
+    /// An optional error message describing what went wrong.
+    /// </summary>
+    public string? ErrorMessage { get; init; }
+
+    /// <summary>
     /// Whether the result represents a not-found outcome.
     /// </summary>
     public bool IsNotFound => StatusCode == 404;
@@ -47,4 +52,10 @@ public sealed class ServiceResult<T>
     /// </summary>
     public static ServiceResult<T> Error(int statusCode, T data) =>
         new() { StatusCode = statusCode, Data = data };
+
+    /// <summary>
+    /// Creates a validation error result with a message.
+    /// </summary>
+    public static ServiceResult<T> BadRequest(string errorMessage) =>
+        new() { StatusCode = 400, Data = default, ErrorMessage = errorMessage };
 }

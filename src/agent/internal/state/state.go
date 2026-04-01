@@ -14,23 +14,31 @@ import (
 type RuntimeState struct {
 	mu sync.RWMutex
 
-	machineID             int64
-	tenantID              int32
-	hostname              string
-	isRegistered          bool
-	serialNumber          string
-	apiKey                string
-	configRefreshInterval time.Duration
-	pingInterval          time.Duration
-	commandPollInterval   time.Duration
+	machineID                    int64
+	tenantID                     int32
+	hostname                     string
+	isRegistered                 bool
+	serialNumber                 string
+	apiKey                       string
+	configRefreshInterval        time.Duration
+	pingInterval                 time.Duration
+	commandPollInterval          time.Duration
+	telemetryCollectFastInterval time.Duration
+	telemetryCollectSlowInterval time.Duration
+	telemetrySendFastInterval    time.Duration
+	telemetrySendSlowInterval    time.Duration
 }
 
 // New creates a new RuntimeState with default values.
 func New() *RuntimeState {
 	return &RuntimeState{
-		configRefreshInterval: 5 * time.Minute,
-		pingInterval:          60 * time.Second,
-		commandPollInterval:   30 * time.Second,
+		configRefreshInterval:        5 * time.Minute,
+		pingInterval:                 60 * time.Second,
+		commandPollInterval:          30 * time.Second,
+		telemetryCollectFastInterval: 30 * time.Second,
+		telemetryCollectSlowInterval: 15 * time.Minute,
+		telemetrySendFastInterval:    15 * time.Second,
+		telemetrySendSlowInterval:    5 * time.Minute,
 	}
 }
 
@@ -160,4 +168,64 @@ func (s *RuntimeState) SetCommandPollInterval(d time.Duration) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.commandPollInterval = d
+}
+
+// TelemetryCollectFastInterval returns the interval between fast telemetry collection ticks.
+func (s *RuntimeState) TelemetryCollectFastInterval() time.Duration {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	return s.telemetryCollectFastInterval
+}
+
+// SetTelemetryCollectFastInterval sets the interval between fast telemetry collection ticks.
+func (s *RuntimeState) SetTelemetryCollectFastInterval(d time.Duration) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.telemetryCollectFastInterval = d
+}
+
+// TelemetryCollectSlowInterval returns the interval between slow telemetry collection ticks.
+func (s *RuntimeState) TelemetryCollectSlowInterval() time.Duration {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	return s.telemetryCollectSlowInterval
+}
+
+// SetTelemetryCollectSlowInterval sets the interval between slow telemetry collection ticks.
+func (s *RuntimeState) SetTelemetryCollectSlowInterval(d time.Duration) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.telemetryCollectSlowInterval = d
+}
+
+// TelemetrySendFastInterval returns the interval between fast telemetry send cycles.
+func (s *RuntimeState) TelemetrySendFastInterval() time.Duration {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	return s.telemetrySendFastInterval
+}
+
+// SetTelemetrySendFastInterval sets the interval between fast telemetry send cycles.
+func (s *RuntimeState) SetTelemetrySendFastInterval(d time.Duration) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.telemetrySendFastInterval = d
+}
+
+// TelemetrySendSlowInterval returns the interval between slow telemetry send cycles.
+func (s *RuntimeState) TelemetrySendSlowInterval() time.Duration {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	return s.telemetrySendSlowInterval
+}
+
+// SetTelemetrySendSlowInterval sets the interval between slow telemetry send cycles.
+func (s *RuntimeState) SetTelemetrySendSlowInterval(d time.Duration) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.telemetrySendSlowInterval = d
 }

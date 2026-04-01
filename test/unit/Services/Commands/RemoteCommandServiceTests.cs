@@ -19,8 +19,15 @@ namespace Framlux.FleetManagement.Test.Services;
 /// </summary>
 public sealed class RemoteCommandServiceTests
 {
-    private readonly IDatabaseCache _cache = Substitute.For<IDatabaseCache>();
+    private readonly IDatabaseCache _cache;
     private readonly ILogger<RemoteCommandService> _logger = Substitute.For<ILogger<RemoteCommandService>>();
+
+    public RemoteCommandServiceTests()
+    {
+        _cache = Substitute.For<IDatabaseCache>();
+        IDatabaseTransaction mockTransaction = Substitute.For<IDatabaseTransaction>();
+        _cache.BeginTransactionAsync(Arg.Any<CancellationToken>()).Returns(mockTransaction);
+    }
 
     private RemoteCommandService CreateService() => new(_cache, _logger);
 

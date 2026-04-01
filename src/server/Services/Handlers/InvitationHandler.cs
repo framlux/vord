@@ -8,6 +8,7 @@ using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Server.Services.Billing;
 using Framlux.FleetManagement.Server.Services.Infrastructure;
 using Framlux.FleetManagement.Server.Services.Notifications;
+using Framlux.FleetManagement.Server.Services.Security;
 using System.Security.Cryptography;
 using System.Text;
 
@@ -21,6 +22,7 @@ public sealed class InvitationHandler : IInvitationHandler
     private readonly IDatabaseCache _databaseCache;
     private readonly IEmailService _emailService;
     private readonly ISubscriptionService _subscriptionService;
+    private readonly IRoleCacheInvalidator _roleCacheInvalidator;
 
     /// <summary>
     /// Creates a new instance of the <see cref="InvitationHandler"/> class.
@@ -28,11 +30,13 @@ public sealed class InvitationHandler : IInvitationHandler
     public InvitationHandler(
         IDatabaseCache databaseCache,
         IEmailService emailService,
-        ISubscriptionService subscriptionService)
+        ISubscriptionService subscriptionService,
+        IRoleCacheInvalidator roleCacheInvalidator)
     {
         _databaseCache = databaseCache;
         _emailService = emailService;
         _subscriptionService = subscriptionService;
+        _roleCacheInvalidator = roleCacheInvalidator;
     }
 
     /// <inheritdoc/>
@@ -96,6 +100,8 @@ public sealed class InvitationHandler : IInvitationHandler
         string tokenHash = HashToken(token);
         DateTimeOffset now = DateTimeOffset.UtcNow;
 
+        using IDatabaseTransaction transaction = await _databaseCache.BeginTransactionAsync(ct);
+
         TenantInvitation invitation = await _databaseCache.CreateInvitationAsync(new TenantInvitation
         {
             TenantId = tenantId.Value,
@@ -108,17 +114,19 @@ public sealed class InvitationHandler : IInvitationHandler
             ExpiresAt = now.AddDays(7),
         }, ct);
 
+        await _databaseCache.InsertAuditLogAsync(AuditHelper.Create(
+            tenantId, userId, null,
+            AuditAction.MemberInvited, AuditResourceType.Invitation,
+            invitation.Id.ToString(), new { invitation.Email, Role = assignedRole.ToString() }, null), ct);
+
+        await transaction.CommitAsync(ct);
+
         string acceptUrl = $"{baseUrl}/invitations/accept?token={token}";
 
         Tenant? tenant = await _databaseCache.GetTenantByIdAsync(tenantId.Value, ct);
         string tenantName = tenant?.Name ?? "your organization";
 
         await _emailService.SendInvitationEmailAsync(normalizedEmail, tenantName, "A team member", acceptUrl, ct);
-
-        await _databaseCache.InsertAuditLogAsync(AuditHelper.Create(
-            tenantId, userId, null,
-            AuditAction.MemberInvited, AuditResourceType.Invitation,
-            invitation.Id.ToString(), new { invitation.Email, Role = assignedRole.ToString() }, null), ct);
 
         return ServiceResult<InvitationCreateResult>.Ok(new InvitationCreateResult
         {
@@ -180,6 +188,8 @@ public sealed class InvitationHandler : IInvitationHandler
         DateTimeOffset now = DateTimeOffset.UtcNow;
         bool personalTenantProvisioned = false;
 
+        using IDatabaseTransaction transaction = await _databaseCache.BeginTransactionAsync(ct);
+
         if (existingRoles.Any() == false)
         {
             Tenant personalTenant = await _databaseCache.CreateTenantAsync(new Tenant
@@ -192,6 +202,8 @@ public sealed class InvitationHandler : IInvitationHandler
                 LogoUrl = string.Empty,
             }, ct);
 
+            // ProvisionFreeSubscriptionAsync uses a separate DB scope so it commits independently,
+            // but if it fails the exception will roll back this transaction via the using block
             await _subscriptionService.ProvisionFreeSubscriptionAsync(personalTenant.Id, ct);
 
             await _databaseCache.CreateUserTenantRoleAsync(new UserTenantRole
@@ -223,6 +235,11 @@ public sealed class InvitationHandler : IInvitationHandler
             invitation.TenantId, userId, null,
             AuditAction.MemberInvitationAccepted, AuditResourceType.Invitation,
             invitation.Id.ToString(), new { invitation.Email }, null), ct);
+
+        await transaction.CommitAsync(ct);
+
+        // Invalidate the cached role claims after the transaction commits
+        await _roleCacheInvalidator.InvalidateAsync(userId, ct);
 
         return ServiceResult<InvitationAcceptResult>.Ok(new InvitationAcceptResult
         {
@@ -257,12 +274,16 @@ public sealed class InvitationHandler : IInvitationHandler
                 new InvitationRevokeResult { ErrorMessage = "Only pending invitations can be revoked" });
         }
 
+        using IDatabaseTransaction transaction = await _databaseCache.BeginTransactionAsync(ct);
+
         await _databaseCache.RevokeInvitationAsync(invitationId, ct);
 
         await _databaseCache.InsertAuditLogAsync(AuditHelper.Create(
             tenantId, null, null,
             AuditAction.MemberInvitationRevoked, AuditResourceType.Invitation,
             invitationId.ToString(), new { invitation.Email }, null), ct);
+
+        await transaction.CommitAsync(ct);
 
         return ServiceResult<InvitationRevokeResult>.Ok(new InvitationRevokeResult());
     }

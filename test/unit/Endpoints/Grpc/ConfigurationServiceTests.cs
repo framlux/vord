@@ -58,9 +58,9 @@ public sealed class ConfigurationServiceTests
         GetConfigurationResponse response = await service.GetConfiguration(
             new GetConfigurationRequest { MachineId = 1 }, context);
 
-        // Default heartbeat = 300 seconds (5 min), default config refresh = 21600 seconds (6 hours).
+        // Default heartbeat = 300 seconds (5 min), default config refresh = 900 seconds (15 min).
         await Assert.That(response.TimeConfig.HeartbeatTimeInSeconds).IsEqualTo(300);
-        await Assert.That(response.TimeConfig.ConfigurationRefreshTimeInSeconds).IsEqualTo(21600);
+        await Assert.That(response.TimeConfig.ConfigurationRefreshTimeInSeconds).IsEqualTo(900);
     }
 
     [Test]

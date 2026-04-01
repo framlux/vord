@@ -6,6 +6,7 @@ using Framlux.FleetManagement.Database;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Server.Options;
+using Framlux.FleetManagement.Server.Services.Handlers;
 using Framlux.Vord.BillingGrpc;
 using Google.Protobuf.WellKnownTypes;
 using Grpc.Core;
@@ -380,12 +381,17 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
 
         foreach (ServerConfigurationSettings setting in settings)
         {
+            AdminHandler.SettingBounds.TryGetValue(setting.Key, out (int Min, int Max) bounds);
+
             response.Settings.Add(new ServerSetting
             {
                 Key = (int)setting.Key,
                 KeyName = setting.Key.ToString(),
                 Value = setting.Value,
-                Version = setting.Version
+                Version = setting.Version,
+                Description = AdminHandler.SettingDescriptions.GetValueOrDefault(setting.Key, string.Empty),
+                Min = bounds.Min,
+                Max = bounds.Max,
             });
         }
 

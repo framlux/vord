@@ -21,6 +21,14 @@ public interface IAdminHandler
     Task<ServiceResult<List<SettingEntry>>> GetSettingsAsync(CancellationToken ct);
 
     /// <summary>
+    /// Updates one or more server configuration settings.
+    /// </summary>
+    /// <param name="updates">The settings to update.</param>
+    /// <param name="ct">A cancellation token.</param>
+    /// <returns>A service result containing the full updated list of settings.</returns>
+    Task<ServiceResult<List<SettingEntry>>> UpdateSettingsAsync(List<SettingUpdateEntry> updates, CancellationToken ct);
+
+    /// <summary>
     /// Returns all user accounts with their tenant roles.
     /// </summary>
     /// <param name="ct">A cancellation token.</param>

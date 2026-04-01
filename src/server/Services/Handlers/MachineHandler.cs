@@ -13,6 +13,7 @@ using Framlux.FleetManagement.Server.Services.Machines;
 using Framlux.FleetManagement.Server.Services.ServerConfiguration;
 using LinqToDB;
 using LinqToDB.Async;
+using LinqToDB.Data;
 
 namespace Framlux.FleetManagement.Server.Services.Handlers;
 
@@ -52,6 +53,8 @@ public sealed class MachineHandler : IMachineHandler
             return ServiceResult<ApiResponse<object>>.NotFound();
         }
 
+        using DataConnectionTransaction transaction = await _db.BeginTransactionAsync(ct);
+
         int updated = await _db.Machines
             .Where(m => m.Id == machineId && m.TenantId == tenantId.Value && m.IsDeleted == false)
             .Set(m => m.IsDeleted, true)
@@ -68,6 +71,8 @@ public sealed class MachineHandler : IMachineHandler
             tenantId, userId, machineId,
             AuditAction.MachineDeleted, AuditResourceType.Machine,
             machineId.ToString(), null, null), token: ct);
+
+        await transaction.CommitAsync(ct);
 
         // Sync the machine quantity with Stripe after deletion (fire-and-forget)
         try

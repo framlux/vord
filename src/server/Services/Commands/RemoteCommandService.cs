@@ -99,6 +99,8 @@ public sealed class RemoteCommandService : IRemoteCommandService
         command.Status = RemoteCommandStatus.Pending;
         command.CreatedAt = DateTimeOffset.UtcNow;
 
+        using IDatabaseTransaction transaction = await _cache.BeginTransactionAsync(cancellationToken);
+
         RemoteCommand created = await _cache.CreateRemoteCommandAsync(command, cancellationToken);
 
         await _cache.InsertAuditLogAsync(new AuditLogEntry
@@ -111,6 +113,8 @@ public sealed class RemoteCommandService : IRemoteCommandService
             ResourceId = created.Id.ToString(),
             Timestamp = DateTimeOffset.UtcNow,
         }, cancellationToken);
+
+        await transaction.CommitAsync(cancellationToken);
 
         _logger.LogInformation("Remote command {CommandId} submitted: type={CommandType}, machine={MachineId}, user={UserId}",
             command.CommandId, command.CommandType, command.MachineId, command.UserId);

@@ -21,6 +21,7 @@ import (
 	"github.com/framlux/vord/internal/db"
 	"github.com/framlux/vord/internal/id"
 	pb "github.com/framlux/vord/internal/proto/agent"
+	"github.com/framlux/vord/internal/state"
 )
 
 // FastTypes are instability/security signals sent every 15s.
@@ -44,8 +45,6 @@ var SlowTypes = []db.TelemetryType{
 }
 
 const (
-	fastInterval   = 15 * time.Second
-	slowInterval   = 5 * time.Minute
 	maxBatchSize   = 50
 	maxBackoff     = 60 * time.Second
 	initialBackoff = 1 * time.Second
@@ -61,16 +60,18 @@ type tierStream struct {
 type Sender struct {
 	store   *db.Store
 	client  pb.TelemetryClient
+	rs      *state.RuntimeState
 	logger  *slog.Logger
 
 	streams map[string]*tierStream
 }
 
 // New creates a new Sender.
-func New(store *db.Store, client pb.TelemetryClient) *Sender {
+func New(store *db.Store, client pb.TelemetryClient, rs *state.RuntimeState) *Sender {
 	return &Sender{
 		store:  store,
 		client: client,
+		rs:     rs,
 		logger: slog.Default().With("component", "sender"),
 		streams: map[string]*tierStream{
 			"fast": {},
@@ -100,7 +101,7 @@ func (s *Sender) Run(ctx context.Context) {
 				)
 			}
 		}()
-		s.runTier(ctx, "fast", FastTypes, fastInterval)
+		s.runTier(ctx, "fast", FastTypes, s.rs.TelemetrySendFastInterval, s.rs.TelemetrySendFastInterval())
 	}()
 
 	go func() {
@@ -114,13 +115,15 @@ func (s *Sender) Run(ctx context.Context) {
 				)
 			}
 		}()
-		s.runTier(ctx, "slow", SlowTypes, slowInterval)
+		s.runTier(ctx, "slow", SlowTypes, s.rs.TelemetrySendSlowInterval, s.rs.TelemetrySendSlowInterval())
 	}()
 
 	wg.Wait()
 }
 
-func (s *Sender) runTier(ctx context.Context, tier string, types []db.TelemetryType, interval time.Duration) {
+func (s *Sender) runTier(ctx context.Context, tier string, types []db.TelemetryType, getInterval func() time.Duration, initialInterval time.Duration) {
+	interval := initialInterval
+
 	// Do an initial send immediately.
 	s.sendBatch(ctx, tier, types)
 
@@ -158,6 +161,12 @@ func (s *Sender) runTier(ctx context.Context, tier string, types []db.TelemetryT
 			return
 		case <-ticker.C:
 			s.sendBatch(ctx, tier, types)
+
+			if newInterval := getInterval(); newInterval != interval {
+				s.logger.Info("send interval changed", "tier", tier, "old", interval, "new", newInterval)
+				interval = newInterval
+				ticker.Reset(interval)
+			}
 		}
 	}
 }

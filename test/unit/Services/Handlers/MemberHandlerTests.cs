@@ -9,6 +9,7 @@ using Framlux.FleetManagement.Server.Endpoints.Web;
 using Framlux.FleetManagement.Server.Services.Billing;
 using Framlux.FleetManagement.Server.Services.Handlers;
 using Framlux.FleetManagement.Server.Services.Infrastructure;
+using Framlux.FleetManagement.Server.Services.Security;
 using NSubstitute;
 
 namespace Framlux.FleetManagement.Test.Services.Handlers;
@@ -23,7 +24,7 @@ public class MemberHandlerTests
     {
         IDatabaseCache cache = Substitute.For<IDatabaseCache>();
         ISubscriptionService subService = Substitute.For<ISubscriptionService>();
-        MemberHandler handler = new(cache, subService);
+        MemberHandler handler = new(cache, subService, Substitute.For<IRoleCacheInvalidator>());
 
         ServiceResult<ApiResponse<object>> result = await handler.RemoveAsync(2, null, 1, CancellationToken.None);
 
@@ -36,7 +37,7 @@ public class MemberHandlerTests
     {
         IDatabaseCache cache = Substitute.For<IDatabaseCache>();
         ISubscriptionService subService = Substitute.For<ISubscriptionService>();
-        MemberHandler handler = new(cache, subService);
+        MemberHandler handler = new(cache, subService, Substitute.For<IRoleCacheInvalidator>());
 
         ServiceResult<ApiResponse<object>> result = await handler.RemoveAsync(5, 1, 5, CancellationToken.None);
 
@@ -50,7 +51,7 @@ public class MemberHandlerTests
         IDatabaseCache cache = Substitute.For<IDatabaseCache>();
         cache.DisableUserTenantRoleAsync(2, 1, 1, Arg.Any<CancellationToken>()).Returns(false);
         ISubscriptionService subService = Substitute.For<ISubscriptionService>();
-        MemberHandler handler = new(cache, subService);
+        MemberHandler handler = new(cache, subService, Substitute.For<IRoleCacheInvalidator>());
 
         ServiceResult<ApiResponse<object>> result = await handler.RemoveAsync(2, 1, 1, CancellationToken.None);
 
@@ -61,9 +62,11 @@ public class MemberHandlerTests
     public async Task RemoveAsync_Success_Returns200()
     {
         IDatabaseCache cache = Substitute.For<IDatabaseCache>();
+        IDatabaseTransaction mockTransaction = Substitute.For<IDatabaseTransaction>();
+        cache.BeginTransactionAsync(Arg.Any<CancellationToken>()).Returns(mockTransaction);
         cache.DisableUserTenantRoleAsync(2, 1, 1, Arg.Any<CancellationToken>()).Returns(true);
         ISubscriptionService subService = Substitute.For<ISubscriptionService>();
-        MemberHandler handler = new(cache, subService);
+        MemberHandler handler = new(cache, subService, Substitute.For<IRoleCacheInvalidator>());
 
         ServiceResult<ApiResponse<object>> result = await handler.RemoveAsync(2, 1, 1, CancellationToken.None);
 
@@ -78,7 +81,7 @@ public class MemberHandlerTests
     {
         IDatabaseCache cache = Substitute.For<IDatabaseCache>();
         ISubscriptionService subService = Substitute.For<ISubscriptionService>();
-        MemberHandler handler = new(cache, subService);
+        MemberHandler handler = new(cache, subService, Substitute.For<IRoleCacheInvalidator>());
 
         ServiceResult<ApiResponse<object>> result = await handler.ChangeRoleAsync(2, null, 1, "Viewer", CancellationToken.None);
 
@@ -92,7 +95,7 @@ public class MemberHandlerTests
         IDatabaseCache cache = Substitute.For<IDatabaseCache>();
         ISubscriptionService subService = Substitute.For<ISubscriptionService>();
         subService.GetSubscriptionForTenantAsync(1, Arg.Any<CancellationToken>()).Returns((TenantSubscription?)null);
-        MemberHandler handler = new(cache, subService);
+        MemberHandler handler = new(cache, subService, Substitute.For<IRoleCacheInvalidator>());
 
         ServiceResult<ApiResponse<object>> result = await handler.ChangeRoleAsync(2, 1, 1, "Viewer", CancellationToken.None);
 
@@ -110,7 +113,7 @@ public class MemberHandlerTests
             Id = 1, TenantId = 1, Tier = SubscriptionTier.Pro, Status = SubscriptionStatus.Active,
             MachineLimit = null, RetentionDays = 30, CreatedAt = DateTimeOffset.UtcNow, UpdatedAt = DateTimeOffset.UtcNow,
         });
-        MemberHandler handler = new(cache, subService);
+        MemberHandler handler = new(cache, subService, Substitute.For<IRoleCacheInvalidator>());
 
         ServiceResult<ApiResponse<object>> result = await handler.ChangeRoleAsync(2, 1, 1, "Viewer", CancellationToken.None);
 
@@ -128,7 +131,7 @@ public class MemberHandlerTests
             Id = 1, TenantId = 1, Tier = SubscriptionTier.Team, Status = SubscriptionStatus.Active,
             MachineLimit = null, RetentionDays = 365, CreatedAt = DateTimeOffset.UtcNow, UpdatedAt = DateTimeOffset.UtcNow,
         });
-        MemberHandler handler = new(cache, subService);
+        MemberHandler handler = new(cache, subService, Substitute.For<IRoleCacheInvalidator>());
 
         ServiceResult<ApiResponse<object>> result = await handler.ChangeRoleAsync(2, 1, 1, "NotARealRole", CancellationToken.None);
 
@@ -146,7 +149,7 @@ public class MemberHandlerTests
             Id = 1, TenantId = 1, Tier = SubscriptionTier.Team, Status = SubscriptionStatus.Active,
             MachineLimit = null, RetentionDays = 365, CreatedAt = DateTimeOffset.UtcNow, UpdatedAt = DateTimeOffset.UtcNow,
         });
-        MemberHandler handler = new(cache, subService);
+        MemberHandler handler = new(cache, subService, Substitute.For<IRoleCacheInvalidator>());
 
         ServiceResult<ApiResponse<object>> result = await handler.ChangeRoleAsync(5, 1, 5, "Viewer", CancellationToken.None);
 
@@ -158,6 +161,8 @@ public class MemberHandlerTests
     public async Task ChangeRoleAsync_TeamTier_Success_AssignsNewRole()
     {
         IDatabaseCache cache = Substitute.For<IDatabaseCache>();
+        IDatabaseTransaction mockTransaction = Substitute.For<IDatabaseTransaction>();
+        cache.BeginTransactionAsync(Arg.Any<CancellationToken>()).Returns(mockTransaction);
         cache.DisableUserTenantRoleAsync(2, 1, 1, Arg.Any<CancellationToken>()).Returns(true);
         ISubscriptionService subService = Substitute.For<ISubscriptionService>();
         subService.GetSubscriptionForTenantAsync(1, Arg.Any<CancellationToken>()).Returns(new TenantSubscription
@@ -165,7 +170,7 @@ public class MemberHandlerTests
             Id = 1, TenantId = 1, Tier = SubscriptionTier.Team, Status = SubscriptionStatus.Active,
             MachineLimit = null, RetentionDays = 365, CreatedAt = DateTimeOffset.UtcNow, UpdatedAt = DateTimeOffset.UtcNow,
         });
-        MemberHandler handler = new(cache, subService);
+        MemberHandler handler = new(cache, subService, Substitute.For<IRoleCacheInvalidator>());
 
         ServiceResult<ApiResponse<object>> result = await handler.ChangeRoleAsync(2, 1, 1, "Viewer", CancellationToken.None);
 
@@ -186,7 +191,7 @@ public class MemberHandlerTests
             Id = 1, TenantId = 1, Tier = SubscriptionTier.Team, Status = SubscriptionStatus.Active,
             MachineLimit = null, RetentionDays = 365, CreatedAt = DateTimeOffset.UtcNow, UpdatedAt = DateTimeOffset.UtcNow,
         });
-        MemberHandler handler = new(cache, subService);
+        MemberHandler handler = new(cache, subService, Substitute.For<IRoleCacheInvalidator>());
 
         ServiceResult<ApiResponse<object>> result = await handler.ChangeRoleAsync(2, 1, 1, "Viewer", CancellationToken.None);
 

@@ -10,6 +10,7 @@ using Framlux.FleetManagement.Server.Services.DataExport;
 using Framlux.FleetManagement.Server.Services.Infrastructure;
 using LinqToDB.Async;
 using LinqToDB;
+using LinqToDB.Data;
 using Microsoft.Data.Sqlite;
 
 namespace Framlux.FleetManagement.Server.Services.Handlers;
@@ -87,12 +88,16 @@ public sealed class DataExportHandler : IDataExportHandler
             DownloadToken = Guid.NewGuid().ToString("N")
         };
 
+        using DataConnectionTransaction transaction = await _db.BeginTransactionAsync(ct);
+
         job.Id = await _db.InsertWithInt32IdentityAsync(job, token: ct);
 
         await _db.InsertAsync(AuditHelper.Create(
             tenantId, requestedByUserId, null,
             AuditAction.DataExportRequested, AuditResourceType.DataExport,
             job.Id.ToString(), null, null), token: ct);
+
+        await transaction.CommitAsync(ct);
 
         _logger.LogInformation("Created data export job {JobId} for tenant {TenantId}", job.Id, tenantId);
 

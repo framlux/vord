@@ -12,6 +12,7 @@ using Framlux.FleetManagement.Server.Endpoints.Web.Tenants;
 using Framlux.FleetManagement.Server.Services.Infrastructure;
 using LinqToDB;
 using LinqToDB.Async;
+using LinqToDB.Data;
 
 namespace Framlux.FleetManagement.Server.Services.Handlers;
 
@@ -66,12 +67,16 @@ public sealed class RegistrationTokenHandler : IRegistrationTokenHandler
             IsRevoked = false,
         };
 
+        using DataConnectionTransaction transaction = await _db.BeginTransactionAsync(ct);
+
         token.Id = await _db.InsertWithInt64IdentityAsync(token, token: ct);
 
         await _db.InsertAsync(AuditHelper.Create(
             tenantId, userId, null,
             AuditAction.RegistrationTokenCreated, AuditResourceType.RegistrationToken,
             token.Id.ToString(), new { token.Name, token.MaxUses, ExpiresInDays = expiresInDays }, null), token: ct);
+
+        await transaction.CommitAsync(ct);
 
         RegistrationTokenDto dto = new()
         {
@@ -92,6 +97,8 @@ public sealed class RegistrationTokenHandler : IRegistrationTokenHandler
     public async Task<ServiceResult<object>> RevokeAsync(long tokenId, int tenantId, CancellationToken ct)
     {
 
+        using DataConnectionTransaction transaction = await _db.BeginTransactionAsync(ct);
+
         int updated = await _db.RegistrationTokens
             .Where(t => t.Id == tokenId && t.TenantId == tenantId && t.IsRevoked == false)
             .Set(t => t.IsRevoked, true)
@@ -107,6 +114,8 @@ public sealed class RegistrationTokenHandler : IRegistrationTokenHandler
             tenantId, null, null,
             AuditAction.RegistrationTokenRevoked, AuditResourceType.RegistrationToken,
             tokenId.ToString(), null, null), token: ct);
+
+        await transaction.CommitAsync(ct);
 
         return ServiceResult<object>.Ok(new { });
     }

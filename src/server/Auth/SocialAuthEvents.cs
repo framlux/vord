@@ -72,7 +72,14 @@ public static class SocialAuthEvents
         UserAccount? user = await dbCache.GetUserByExternalIdAsync(uniqueId, ct);
         if (user is null)
         {
-            // Auto-create user account (SaaS mode — always enabled)
+            // Check whether self-signup is enabled before auto-creating a new account
+            IServerSettingsCache settingsCache = httpContext.RequestServices.GetRequiredService<IServerSettingsCache>();
+            string? allowSignup = await settingsCache.GetSettingAsync(ServerConfigurationSettingKeys.AllowUserSignup, ct);
+            if (string.Equals(allowSignup, "false", StringComparison.OrdinalIgnoreCase))
+            {
+                return false;
+            }
+
             user = await dbCache.CreateUserAccountAsync(new UserAccount
             {
                 CreatedAt = DateTimeOffset.UtcNow,

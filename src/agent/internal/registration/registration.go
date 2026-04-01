@@ -221,16 +221,28 @@ func (m *Manager) FetchConfiguration(ctx context.Context) error {
 		return fmt.Errorf("GetConfiguration RPC: %w", err)
 	}
 
-	// Apply timing config with minimum bounds to prevent server-supplied DoS.
+	// Apply timing config with bounds to prevent server-supplied DoS or misconfiguration.
 	if tc := resp.TimeConfig; tc != nil {
-		if tc.HeartbeatTimeInSeconds >= 10 {
+		if (tc.HeartbeatTimeInSeconds >= 10) && (tc.HeartbeatTimeInSeconds <= 600) {
 			m.state.SetPingInterval(time.Duration(tc.HeartbeatTimeInSeconds) * time.Second)
 		}
-		if tc.ConfigurationRefreshTimeInSeconds >= 30 {
+		if (tc.ConfigurationRefreshTimeInSeconds >= 60) && (tc.ConfigurationRefreshTimeInSeconds <= 86400) {
 			m.state.SetConfigRefreshInterval(time.Duration(tc.ConfigurationRefreshTimeInSeconds) * time.Second)
 		}
-		if tc.CommandPollTimeInSeconds >= 10 {
+		if (tc.CommandPollTimeInSeconds >= 10) && (tc.CommandPollTimeInSeconds <= 300) {
 			m.state.SetCommandPollInterval(time.Duration(tc.CommandPollTimeInSeconds) * time.Second)
+		}
+		if (tc.TelemetryCollectFastSeconds >= 10) && (tc.TelemetryCollectFastSeconds <= 300) {
+			m.state.SetTelemetryCollectFastInterval(time.Duration(tc.TelemetryCollectFastSeconds) * time.Second)
+		}
+		if (tc.TelemetryCollectSlowSeconds >= 60) && (tc.TelemetryCollectSlowSeconds <= 3600) {
+			m.state.SetTelemetryCollectSlowInterval(time.Duration(tc.TelemetryCollectSlowSeconds) * time.Second)
+		}
+		if (tc.TelemetrySendFastSeconds >= 5) && (tc.TelemetrySendFastSeconds <= 120) {
+			m.state.SetTelemetrySendFastInterval(time.Duration(tc.TelemetrySendFastSeconds) * time.Second)
+		}
+		if (tc.TelemetrySendSlowSeconds >= 30) && (tc.TelemetrySendSlowSeconds <= 1800) {
+			m.state.SetTelemetrySendSlowInterval(time.Duration(tc.TelemetrySendSlowSeconds) * time.Second)
 		}
 	}
 

@@ -4,7 +4,6 @@
 
 using Framlux.FleetManagement.Database.Models;
 using LinqToDB;
-using LinqToDB.Data;
 using Microsoft.Extensions.Logging;
 
 namespace Framlux.FleetManagement.Database.Cache;
@@ -28,9 +27,11 @@ public partial class DatabaseCache : IDatabaseCache
     }
 
     /// <inheritdoc/>
-    public async Task<DataConnectionTransaction> BeginTransactionAsync(CancellationToken cancellationToken)
+    public async Task<IDatabaseTransaction> BeginTransactionAsync(CancellationToken cancellationToken)
     {
-        return await _db.BeginTransactionAsync(cancellationToken);
+        LinqToDB.Data.DataConnectionTransaction inner = await _db.BeginTransactionAsync(cancellationToken);
+
+        return new DatabaseTransaction(inner);
     }
 
     /// <inheritdoc/>

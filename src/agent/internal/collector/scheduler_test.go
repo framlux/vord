@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/framlux/vord/internal/db"
+	"github.com/framlux/vord/internal/state"
 )
 
 // --- Fake collector for testing ---
@@ -55,7 +56,7 @@ func TestRunOnce_ExecutesAllCollectors(t *testing.T) {
 	registry.Register(c2)
 	registry.Register(c3)
 
-	scheduler := NewScheduler(registry, store)
+	scheduler := NewScheduler(registry, store, state.New())
 	scheduler.RunOnce(context.Background())
 
 	if c1.collectCount.Load() != 1 {
@@ -83,7 +84,7 @@ func TestSafeExecuteCollector_PanicRecovery(t *testing.T) {
 	}
 
 	registry.Register(panicker)
-	scheduler := NewScheduler(registry, store)
+	scheduler := NewScheduler(registry, store, state.New())
 
 	// safeExecuteCollector should recover from the panic without crashing.
 	defer func() {
@@ -115,7 +116,7 @@ func TestSafeExecuteCollector_ErrorIsolation(t *testing.T) {
 	registry.Register(failing)
 	registry.Register(succeeding)
 
-	scheduler := NewScheduler(registry, store)
+	scheduler := NewScheduler(registry, store, state.New())
 	scheduler.RunOnce(context.Background())
 
 	// Both should be called regardless of the error in 'failing'.
@@ -148,7 +149,7 @@ func TestRunOnce_EmptyRegistry(t *testing.T) {
 	store := newTestStore(t)
 	registry := NewRegistry()
 
-	scheduler := NewScheduler(registry, store)
+	scheduler := NewScheduler(registry, store, state.New())
 
 	// Should not panic with empty registry.
 	scheduler.RunOnce(context.Background())

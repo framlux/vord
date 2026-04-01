@@ -4,7 +4,6 @@
 
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
-using LinqToDB.Data;
 
 namespace Framlux.FleetManagement.Database.Cache;
 
@@ -18,7 +17,7 @@ public interface IDatabaseCache
     /// </summary>
     /// <param name="cancellationToken">Token used to cancel async calls</param>
     /// <returns>Returns a transaction that must be committed or disposed</returns>
-    Task<DataConnectionTransaction> BeginTransactionAsync(CancellationToken cancellationToken = default);
+    Task<IDatabaseTransaction> BeginTransactionAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Inserts an audit log entry into the database.

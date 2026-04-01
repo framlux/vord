@@ -7,6 +7,7 @@ using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Server.Services.Billing;
 using Framlux.FleetManagement.Server.Services.Infrastructure;
+using Framlux.FleetManagement.Server.Services.Security;
 
 namespace Framlux.FleetManagement.Server.Services.Handlers;
 
@@ -17,16 +18,22 @@ public sealed class OnboardingHandler : IOnboardingHandler
 {
     private readonly IDatabaseCache _databaseCache;
     private readonly ISubscriptionService _subscriptionService;
+    private readonly IRoleCacheInvalidator _roleCacheInvalidator;
 
     /// <summary>
     /// Creates a new instance of the <see cref="OnboardingHandler"/> class.
     /// </summary>
     /// <param name="databaseCache">The database cache service.</param>
     /// <param name="subscriptionService">The subscription service.</param>
-    public OnboardingHandler(IDatabaseCache databaseCache, ISubscriptionService subscriptionService)
+    /// <param name="roleCacheInvalidator">The role cache invalidator.</param>
+    public OnboardingHandler(
+        IDatabaseCache databaseCache,
+        ISubscriptionService subscriptionService,
+        IRoleCacheInvalidator roleCacheInvalidator)
     {
         _databaseCache = databaseCache;
         _subscriptionService = subscriptionService;
+        _roleCacheInvalidator = roleCacheInvalidator;
     }
 
     /// <inheritdoc/>
@@ -68,6 +75,8 @@ public sealed class OnboardingHandler : IOnboardingHandler
 
         // Create tenant (unique constraint on name catches races)
         Tenant tenant;
+        using IDatabaseTransaction transaction = await _databaseCache.BeginTransactionAsync(ct);
+
         try
         {
             tenant = await _databaseCache.CreateTenantAsync(new Tenant
@@ -85,7 +94,8 @@ public sealed class OnboardingHandler : IOnboardingHandler
             return ServiceResult<OnboardingResult>.Error(409, new OnboardingResult { ErrorMessage = "An organization with this name already exists" });
         }
 
-        // Create Free subscription (Pro gets activated after Stripe checkout completes)
+        // ProvisionFreeSubscriptionAsync uses a separate DB scope so it commits independently,
+        // but if it fails the exception will roll back this transaction via the using block
         await _subscriptionService.ProvisionFreeSubscriptionAsync(tenant.Id, ct);
 
         // Assign the creating user as TenantAdmin
@@ -104,6 +114,11 @@ public sealed class OnboardingHandler : IOnboardingHandler
             tenant.Id, userId, null,
             AuditAction.TenantCreated, AuditResourceType.Tenant,
             tenant.Id.ToString(), new { tenant.Name }, null), ct);
+
+        await transaction.CommitAsync(ct);
+
+        // Invalidate the cached role claims after the transaction commits
+        await _roleCacheInvalidator.InvalidateAsync(userId, ct);
 
         return ServiceResult<OnboardingResult>.Ok(new OnboardingResult { TenantId = tenant.Id });
     }

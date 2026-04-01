@@ -16,26 +16,27 @@ import (
 
 	"github.com/framlux/vord/internal/db"
 	"github.com/framlux/vord/internal/id"
+	"github.com/framlux/vord/internal/state"
 )
-
-const fastTickInterval = 30 * time.Second
 
 // FastTick groups the high-frequency collectors (CpuUsage, MemUsage, DiskUsage)
 // into a single goroutine that reads /proc files once per tick and passes the
 // data to all parsers.
 type FastTick struct {
 	store     *db.Store
+	rs        *state.RuntimeState
 	prevTicks *cpuTicks
 }
 
 // NewFastTick creates a new FastTick.
-func NewFastTick(store *db.Store) *FastTick {
-	return &FastTick{store: store}
+func NewFastTick(store *db.Store, rs *state.RuntimeState) *FastTick {
+	return &FastTick{store: store, rs: rs}
 }
 
 // Run starts the fast tick loop. It blocks until ctx is cancelled.
 func (ft *FastTick) Run(ctx context.Context) {
-	slog.Info("starting fast tick", "interval", fastTickInterval)
+	interval := ft.rs.TelemetryCollectFastInterval()
+	slog.Info("starting fast tick", "interval", interval)
 
 	// Load persisted CPU ticks for crash recovery.
 	ft.loadPersistedCpuTicks()
@@ -43,7 +44,7 @@ func (ft *FastTick) Run(ctx context.Context) {
 	// Run immediately on startup.
 	ft.tick(ctx)
 
-	ticker := time.NewTicker(fastTickInterval)
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
 	for {
@@ -54,6 +55,12 @@ func (ft *FastTick) Run(ctx context.Context) {
 			return
 		case <-ticker.C:
 			ft.tick(ctx)
+
+			if newInterval := ft.rs.TelemetryCollectFastInterval(); newInterval != interval {
+				slog.Info("fast tick interval changed", "old", interval, "new", newInterval)
+				interval = newInterval
+				ticker.Reset(interval)
+			}
 		}
 	}
 }

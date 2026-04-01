@@ -68,6 +68,8 @@ public sealed class SigningKeyService : ISigningKeyService
             CreatedAt = DateTimeOffset.UtcNow,
         };
 
+        using IDatabaseTransaction transaction = await _cache.BeginTransactionAsync(cancellationToken);
+
         UserSigningKey created = await _cache.CreateSigningKeyAsync(key, cancellationToken);
 
         await _cache.InsertAuditLogAsync(new AuditLogEntry
@@ -79,6 +81,8 @@ public sealed class SigningKeyService : ISigningKeyService
             ResourceId = created.Id.ToString(),
             Timestamp = DateTimeOffset.UtcNow,
         }, cancellationToken);
+
+        await transaction.CommitAsync(cancellationToken);
 
         _logger.LogInformation("Signing key {KeyId} registered for user {UserId} in tenant {TenantId}",
             created.Id, userId, tenantId);
@@ -112,6 +116,8 @@ public sealed class SigningKeyService : ISigningKeyService
             return ServiceResult<bool>.Error(403, false);
         }
 
+        using IDatabaseTransaction transaction = await _cache.BeginTransactionAsync(cancellationToken);
+
         await _cache.RevokeSigningKeyAsync(keyId, userId, cancellationToken);
 
         await _cache.InsertAuditLogAsync(new AuditLogEntry
@@ -123,6 +129,8 @@ public sealed class SigningKeyService : ISigningKeyService
             ResourceId = keyId.ToString(),
             Timestamp = DateTimeOffset.UtcNow,
         }, cancellationToken);
+
+        await transaction.CommitAsync(cancellationToken);
 
         _logger.LogInformation("Signing key {KeyId} revoked by user {UserId} in tenant {TenantId}",
             keyId, userId, tenantId);

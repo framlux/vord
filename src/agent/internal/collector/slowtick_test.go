@@ -10,11 +10,12 @@ import (
 	"testing"
 
 	"github.com/framlux/vord/internal/db"
+	"github.com/framlux/vord/internal/state"
 )
 
 func TestSlowTickCollectMemoryInfo(t *testing.T) {
 	store := newTestStore(t)
-	st := NewSlowTick(store)
+	st := NewSlowTick(store, state.New())
 
 	st.collectMemoryInfo(fixtureSlowMeminfo, nil)
 
@@ -43,7 +44,7 @@ func TestSlowTickCollectMemoryInfo(t *testing.T) {
 
 func TestSlowTickSubIntervalLogic(t *testing.T) {
 	store := newTestStore(t)
-	st := NewSlowTick(store)
+	st := NewSlowTick(store, state.New())
 
 	// Tick 0 is hourly (0 % 4 == 0).
 	if st.tickNum%hourlyTickInterval != 0 {
@@ -67,7 +68,7 @@ func TestSlowTickSubIntervalLogic(t *testing.T) {
 
 func TestSlowTickHourlyCollectorsRunOnStartup(t *testing.T) {
 	store := newTestStore(t)
-	st := NewSlowTick(store)
+	st := NewSlowTick(store, state.New())
 
 	// tickNum starts at 0, which is hourly.
 	if st.tickNum != 0 {
@@ -82,7 +83,7 @@ func TestSlowTickHourlyCollectorsRunOnStartup(t *testing.T) {
 
 func TestSlowTickGarbageDataNoPanic(t *testing.T) {
 	store := newTestStore(t)
-	st := NewSlowTick(store)
+	st := NewSlowTick(store, state.New())
 
 	defer func() {
 		if r := recover(); r != nil {
@@ -97,7 +98,7 @@ func TestSlowTickGarbageDataNoPanic(t *testing.T) {
 
 func TestSlowTickCollectCpuInfo(t *testing.T) {
 	store := newTestStore(t)
-	st := NewSlowTick(store)
+	st := NewSlowTick(store, state.New())
 
 	st.collectCpuInfo(fixtureSlowCpuinfo, nil)
 
@@ -123,7 +124,7 @@ func TestSlowTickCollectCpuInfo(t *testing.T) {
 
 func TestSlowTickCollectMemoryInfoReadError(t *testing.T) {
 	store := newTestStore(t)
-	st := NewSlowTick(store)
+	st := NewSlowTick(store, state.New())
 
 	// Should not panic on read error, just log and skip.
 	st.collectMemoryInfo("", errorString("simulated error"))
@@ -175,7 +176,7 @@ func TestSlowTickCollectDiskInfo_PopulatesAllFields(t *testing.T) {
 // Intent: Read error → no telemetry enqueued, no panic.
 func TestSlowTickCollectDiskInfo_ReadError(t *testing.T) {
 	store := newTestStore(t)
-	st := NewSlowTick(store)
+	st := NewSlowTick(store, state.New())
 
 	st.collectDiskInfo(nil, "", errorString("simulated read error"))
 
@@ -264,7 +265,7 @@ func TestSlowTickCollectSystemInfo_ParseHelpers(t *testing.T) {
 // Exercises collectSystemInfo which calls os.Hostname, readDMI, etc.
 func TestSlowTickSafeCollectSystemInfo_ValidData(t *testing.T) {
 	store := newTestStore(t)
-	st := NewSlowTick(store)
+	st := NewSlowTick(store, state.New())
 
 	defer func() {
 		if r := recover(); r != nil {
@@ -306,7 +307,7 @@ func TestSlowTickSafeCollectSystemInfo_ValidData(t *testing.T) {
 // Intent: safeCollectSystemInfo handles read errors without panic.
 func TestSlowTickSafeCollectSystemInfo_ReadErrors(t *testing.T) {
 	store := newTestStore(t)
-	st := NewSlowTick(store)
+	st := NewSlowTick(store, state.New())
 
 	defer func() {
 		if r := recover(); r != nil {
@@ -332,7 +333,7 @@ func TestSlowTickSafeCollectSystemInfo_ReadErrors(t *testing.T) {
 // Intent: safeCollectOsVersion with valid data produces telemetry with parsed os-release fields.
 func TestSlowTickSafeCollectOsVersion_ValidData(t *testing.T) {
 	store := newTestStore(t)
-	st := NewSlowTick(store)
+	st := NewSlowTick(store, state.New())
 
 	defer func() {
 		if r := recover(); r != nil {
@@ -388,7 +389,7 @@ BUILD_ID=
 // Intent: safeCollectOsVersion with read error still produces telemetry (empty/default values).
 func TestSlowTickSafeCollectOsVersion_ReadError(t *testing.T) {
 	store := newTestStore(t)
-	st := NewSlowTick(store)
+	st := NewSlowTick(store, state.New())
 
 	defer func() {
 		if r := recover(); r != nil {
@@ -411,7 +412,7 @@ func TestSlowTickSafeCollectOsVersion_ReadError(t *testing.T) {
 // Intent: safeCollectSystemInfo and safeCollectOsVersion with garbage data produce no panic.
 func TestSlowTickSafeCollectHourly_GarbageData(t *testing.T) {
 	store := newTestStore(t)
-	st := NewSlowTick(store)
+	st := NewSlowTick(store, state.New())
 
 	defer func() {
 		if r := recover(); r != nil {

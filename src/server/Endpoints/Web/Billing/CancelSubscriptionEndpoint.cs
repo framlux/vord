@@ -114,12 +114,16 @@ public sealed class CancelSubscriptionEndpoint : EndpointWithoutRequest<ApiRespo
         // Free tier cancellation takes effect immediately since there is no Stripe subscription
         if (subscription.Tier == SubscriptionTier.Free)
         {
+            using IDatabaseTransaction freeTransaction = await _databaseCache.BeginTransactionAsync(ct);
+
             await _databaseCache.DeactivateSubscriptionAsync(tenantId.Value, ct);
 
             await _databaseCache.InsertAuditLogAsync(AuditHelper.Create(
                 tenantId.Value, null, null,
                 AuditAction.SubscriptionCancelRequested, AuditResourceType.Subscription,
                 tenantId.Value.ToString(), "Free tier account canceled immediately", null), ct);
+
+            await freeTransaction.CommitAsync(ct);
 
             await Send.OkAsync(ApiResponse<CancelSubscriptionResponse>.Ok(new CancelSubscriptionResponse
             {
@@ -130,6 +134,8 @@ public sealed class CancelSubscriptionEndpoint : EndpointWithoutRequest<ApiRespo
             return;
         }
 
+        using IDatabaseTransaction paidTransaction = await _databaseCache.BeginTransactionAsync(ct);
+
         // For paid tiers, record the cancellation intent in the local database first
         await _databaseCache.SetCancelAtPeriodEndAsync(tenantId.Value, true, PendingSubscriptionAction.CancelAccount, ct);
 
@@ -137,6 +143,8 @@ public sealed class CancelSubscriptionEndpoint : EndpointWithoutRequest<ApiRespo
             tenantId.Value, null, null,
             AuditAction.SubscriptionCancelRequested, AuditResourceType.Subscription,
             tenantId.Value.ToString(), null, null), ct);
+
+        await paidTransaction.CommitAsync(ct);
 
         // Attempt to cancel with Stripe via the billing API (best effort)
         Tenant? tenant = await _databaseCache.GetTenantByIdAsync(tenantId.Value, ct);

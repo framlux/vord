@@ -128,7 +128,7 @@ func main() {
 	var wg sync.WaitGroup
 
 	// Start scheduler in background.
-	scheduler := collector.NewScheduler(registry, store)
+	scheduler := collector.NewScheduler(registry, store, runtimeState)
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -165,7 +165,7 @@ func main() {
 	}
 
 	// Start telemetry sender in background.
-	telemetrySender := sender.New(store, grpcClient.Telemetry)
+	telemetrySender := sender.New(store, grpcClient.Telemetry, runtimeState)
 	wg.Add(1)
 	go func() {
 		defer wg.Done()

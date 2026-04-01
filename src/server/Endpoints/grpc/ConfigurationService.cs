@@ -57,8 +57,11 @@ public sealed class ConfigurationService : Configuration.ConfigurationBase
 
         int heartbeatSeconds = await _configService.GetAgentHeartbeatSecondsAsync(context.CancellationToken);
         int configRefreshSeconds = await _configService.GetAgentConfigRefreshSecondsAsync(context.CancellationToken);
-
         int commandPollSeconds = await _configService.GetAgentCommandPollSecondsAsync(context.CancellationToken);
+        int telemetryCollectFastSeconds = await _configService.GetTelemetryCollectFastSecondsAsync(context.CancellationToken);
+        int telemetryCollectSlowSeconds = await _configService.GetTelemetryCollectSlowSecondsAsync(context.CancellationToken);
+        int telemetrySendFastSeconds = await _configService.GetTelemetrySendFastSecondsAsync(context.CancellationToken);
+        int telemetrySendSlowSeconds = await _configService.GetTelemetrySendSlowSecondsAsync(context.CancellationToken);
 
         // Include tenant ID so the agent can verify command ownership.
         int tenantId = ExtractTenantIdFromClaims(context);
@@ -70,6 +73,10 @@ public sealed class ConfigurationService : Configuration.ConfigurationBase
                 ConfigurationRefreshTimeInSeconds = configRefreshSeconds,
                 HeartbeatTimeInSeconds = heartbeatSeconds,
                 CommandPollTimeInSeconds = commandPollSeconds,
+                TelemetryCollectFastSeconds = telemetryCollectFastSeconds,
+                TelemetryCollectSlowSeconds = telemetryCollectSlowSeconds,
+                TelemetrySendFastSeconds = telemetrySendFastSeconds,
+                TelemetrySendSlowSeconds = telemetrySendSlowSeconds,
             },
             TenantId = tenantId,
         };

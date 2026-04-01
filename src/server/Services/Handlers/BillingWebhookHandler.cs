@@ -39,12 +39,16 @@ public sealed class BillingWebhookHandler : IBillingWebhookHandler
     /// <inheritdoc/>
     public async Task HandleCheckoutCompletedAsync(int tenantId, SubscriptionTier tier, CancellationToken ct)
     {
+        using IDatabaseTransaction transaction = await _databaseCache.BeginTransactionAsync(ct);
+
         await _databaseCache.UpdateSubscriptionOnCheckoutAsync(tenantId, tier, ct);
 
         await _databaseCache.InsertAuditLogAsync(AuditHelper.Create(
             tenantId, null, null,
             AuditAction.SubscriptionUpgraded, AuditResourceType.Subscription,
             tenantId.ToString(), null, null), ct);
+
+        await transaction.CommitAsync(ct);
 
         await ProvisionDefaultAlertRulesAsync(tenantId, ct);
     }
@@ -138,35 +142,55 @@ public sealed class BillingWebhookHandler : IBillingWebhookHandler
         switch (pendingAction)
         {
             case PendingSubscriptionAction.DowngradeToFree:
+            {
+                using IDatabaseTransaction transaction = await _databaseCache.BeginTransactionAsync(ct);
+
                 await _databaseCache.RevertSubscriptionToFreeAsync(tenantId, _subscriptionOptions.FreeTierMachineLimit, _subscriptionOptions.FreeTierRetentionDays, ct);
-                await _downgradeCleanupService.CleanupForFreeTierAsync(tenantId, ct);
                 await _databaseCache.InsertAuditLogAsync(AuditHelper.Create(
                     tenantId, null, null,
                     AuditAction.SubscriptionDowngraded, AuditResourceType.Subscription,
                     tenantId.ToString(), "Downgraded to Free tier", null), ct);
 
+                await transaction.CommitAsync(ct);
+
+                await _downgradeCleanupService.CleanupForFreeTierAsync(tenantId, ct);
+
                 break;
+            }
 
             case PendingSubscriptionAction.DowngradeToPro:
+            {
+                using IDatabaseTransaction transaction = await _databaseCache.BeginTransactionAsync(ct);
+
                 await _databaseCache.DowngradeSubscriptionToProAsync(tenantId, ct);
-                await _downgradeCleanupService.CleanupForProTierAsync(tenantId, ct);
                 await _databaseCache.InsertAuditLogAsync(AuditHelper.Create(
                     tenantId, null, null,
                     AuditAction.SubscriptionDowngraded, AuditResourceType.Subscription,
                     tenantId.ToString(), "Downgraded to Pro tier", null), ct);
 
+                await transaction.CommitAsync(ct);
+
+                await _downgradeCleanupService.CleanupForProTierAsync(tenantId, ct);
+
                 break;
+            }
 
             case PendingSubscriptionAction.CancelAccount:
             case PendingSubscriptionAction.None:
             default:
+            {
+                using IDatabaseTransaction transaction = await _databaseCache.BeginTransactionAsync(ct);
+
                 await _databaseCache.DeactivateSubscriptionAsync(tenantId, ct);
                 await _databaseCache.InsertAuditLogAsync(AuditHelper.Create(
                     tenantId, null, null,
                     AuditAction.SubscriptionCanceled, AuditResourceType.Subscription,
                     tenantId.ToString(), null, null), ct);
 
+                await transaction.CommitAsync(ct);
+
                 break;
+            }
         }
     }
 
@@ -179,22 +203,30 @@ public sealed class BillingWebhookHandler : IBillingWebhookHandler
     /// <inheritdoc/>
     public async Task HandlePaymentSucceededAsync(int tenantId, CancellationToken ct)
     {
+        using IDatabaseTransaction transaction = await _databaseCache.BeginTransactionAsync(ct);
+
         await _databaseCache.SetSubscriptionActiveAsync(tenantId, ct);
 
         await _databaseCache.InsertAuditLogAsync(AuditHelper.Create(
             tenantId, null, null,
             AuditAction.SubscriptionUpgraded, AuditResourceType.Subscription,
             tenantId.ToString(), "Payment recovered, subscription reactivated", null), ct);
+
+        await transaction.CommitAsync(ct);
     }
 
     /// <inheritdoc/>
     public async Task HandleDowngradeToProAsync(int tenantId, CancellationToken ct)
     {
+        using IDatabaseTransaction transaction = await _databaseCache.BeginTransactionAsync(ct);
+
         await _databaseCache.DowngradeSubscriptionToProAsync(tenantId, ct);
 
         await _databaseCache.InsertAuditLogAsync(AuditHelper.Create(
             tenantId, null, null,
             AuditAction.SubscriptionDowngraded, AuditResourceType.Subscription,
             tenantId.ToString(), "Downgraded from Team to Pro", null), ct);
+
+        await transaction.CommitAsync(ct);
     }
 }

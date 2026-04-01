@@ -56,7 +56,7 @@
     <PackageReference Include="Microsoft.AspNetCore.DataProtection.StackExchangeRedis" Version="10.0.1" />
     <PackageReference Include="AWSSDK.S3" Version="3.7.412.3" />
     <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.0" />
-    <PackageReference Include="Framlux.Vord.BillingGrpc" Version="1.2.1" />
+    <PackageReference Include="Framlux.Vord.BillingGrpc" Version="1.4.0" />
     <PackageReference Include="StackExchange.Redis" Version="2.8.47" />
   </ItemGroup>
 

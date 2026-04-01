@@ -2,6 +2,7 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
+using Framlux.FleetManagement.Database.Cache;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Server.Endpoints.Web.Admin;
@@ -11,6 +12,8 @@ using Framlux.FleetManagement.Server.Services.Infrastructure;
 using Framlux.FleetManagement.Test.Infrastructure;
 using LinqToDB.Async;
 using LinqToDB;
+using NSubstitute;
+using StackExchange.Redis;
 
 namespace Framlux.FleetManagement.Test.Services.Handlers;
 
@@ -22,10 +25,35 @@ public class AdminHandlerTests
     // ========== Constructor tests ==========
 
     [Test]
-    public async Task Constructor_NullScopeFactory_ThrowsArgumentNullException()
+    public async Task Constructor_NullDatabaseContext_ThrowsArgumentNullException()
     {
+        IServerSettingsCache cache = Substitute.For<IServerSettingsCache>();
+        IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
+
         await Assert.That(() =>
-            new AdminHandler(null!))
+            new AdminHandler(null!, cache, redis))
+            .Throws<ArgumentNullException>();
+    }
+
+    [Test]
+    public async Task Constructor_NullSettingsCache_ThrowsArgumentNullException()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
+
+        await Assert.That(() =>
+            new AdminHandler(dbFactory.Context, null!, redis))
+            .Throws<ArgumentNullException>();
+    }
+
+    [Test]
+    public async Task Constructor_NullRedis_ThrowsArgumentNullException()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        IServerSettingsCache cache = Substitute.For<IServerSettingsCache>();
+
+        await Assert.That(() =>
+            new AdminHandler(dbFactory.Context, cache, null!))
             .Throws<ArgumentNullException>();
     }
 
@@ -35,7 +63,7 @@ public class AdminHandlerTests
     public async Task GetSettingsAsync_NoSettings_ReturnsEmptyList()
     {
         using TestDatabaseFactory dbFactory = new();
-        AdminHandler handler = new(dbFactory.Context);
+        AdminHandler handler = CreateHandler(dbFactory);
 
         ServiceResult<List<SettingEntry>> result = await handler.GetSettingsAsync(CancellationToken.None);
 
@@ -60,7 +88,7 @@ public class AdminHandlerTests
             Version = 1,
         });
 
-        AdminHandler handler = new(dbFactory.Context);
+        AdminHandler handler = CreateHandler(dbFactory);
 
         ServiceResult<List<SettingEntry>> result = await handler.GetSettingsAsync(CancellationToken.None);
 
@@ -70,13 +98,367 @@ public class AdminHandlerTests
         await Assert.That(result.Data!.Any(e => e.Key == (int)ServerConfigurationSettingKeys.OnlineThresholdSeconds && e.Value == "600")).IsEqualTo(true);
     }
 
+    [Test]
+    public async Task GetSettingsAsync_WithSettings_IncludesNameAndDescription()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        await dbFactory.Context.InsertAsync(new ServerConfigurationSettings
+        {
+            Key = ServerConfigurationSettingKeys.AgentHeartbeatSeconds,
+            Value = "300",
+            Version = 1,
+        });
+
+        AdminHandler handler = CreateHandler(dbFactory);
+
+        ServiceResult<List<SettingEntry>> result = await handler.GetSettingsAsync(CancellationToken.None);
+
+        await Assert.That(result.IsSuccess).IsEqualTo(true);
+        SettingEntry entry = result.Data![0];
+        await Assert.That(entry.Name).IsEqualTo("AgentHeartbeatSeconds");
+        await Assert.That(entry.Description).IsNotEmpty();
+    }
+
+    // ========== UpdateSettingsAsync tests ==========
+
+    [Test]
+    public async Task UpdateSettingsAsync_ValidUpdate_UpdatesExistingRow()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        IServerSettingsCache cache = Substitute.For<IServerSettingsCache>();
+        IConnectionMultiplexer redis = CreateFakeRedis();
+        await dbFactory.Context.InsertAsync(new ServerConfigurationSettings
+        {
+            Key = ServerConfigurationSettingKeys.AgentHeartbeatSeconds,
+            Value = "300",
+            Version = 1,
+        });
+
+        AdminHandler handler = new(dbFactory.Context, cache, redis);
+        List<SettingUpdateEntry> updates = [new() { Key = 1, Value = "600" }];
+
+        ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, CancellationToken.None);
+
+        await Assert.That(result.IsSuccess).IsEqualTo(true);
+        await Assert.That(result.Data!.First(e => e.Key == 1).Value).IsEqualTo("600");
+        cache.Received(1).InvalidateCache();
+    }
+
+    [Test]
+    public async Task UpdateSettingsAsync_ValidUpdate_InsertsNewRow()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        IServerSettingsCache cache = Substitute.For<IServerSettingsCache>();
+        IConnectionMultiplexer redis = CreateFakeRedis();
+
+        AdminHandler handler = new(dbFactory.Context, cache, redis);
+        List<SettingUpdateEntry> updates = [new() { Key = 1, Value = "500" }];
+
+        ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, CancellationToken.None);
+
+        await Assert.That(result.IsSuccess).IsEqualTo(true);
+        await Assert.That(result.Data!.Count).IsEqualTo(1);
+        await Assert.That(result.Data!.First(e => e.Key == 1).Value).IsEqualTo("500");
+    }
+
+    [Test]
+    public async Task UpdateSettingsAsync_InvalidKey_ReturnsBadRequest()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        AdminHandler handler = CreateHandler(dbFactory);
+        List<SettingUpdateEntry> updates = [new() { Key = 999, Value = "100" }];
+
+        ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, CancellationToken.None);
+
+        await Assert.That(result.IsSuccess).IsEqualTo(false);
+        await Assert.That(result.StatusCode).IsEqualTo(400);
+        await Assert.That(result.ErrorMessage).IsNotNull();
+    }
+
+    [Test]
+    public async Task UpdateSettingsAsync_NoneKey_ReturnsBadRequest()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        AdminHandler handler = CreateHandler(dbFactory);
+        List<SettingUpdateEntry> updates = [new() { Key = 0, Value = "100" }];
+
+        ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, CancellationToken.None);
+
+        await Assert.That(result.IsSuccess).IsEqualTo(false);
+        await Assert.That(result.StatusCode).IsEqualTo(400);
+    }
+
+    [Test]
+    public async Task UpdateSettingsAsync_EmptyValue_ReturnsBadRequest()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        AdminHandler handler = CreateHandler(dbFactory);
+        List<SettingUpdateEntry> updates = [new() { Key = 1, Value = "" }];
+
+        ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, CancellationToken.None);
+
+        await Assert.That(result.IsSuccess).IsEqualTo(false);
+        await Assert.That(result.StatusCode).IsEqualTo(400);
+    }
+
+    [Test]
+    public async Task UpdateSettingsAsync_NegativeIntValue_ReturnsBadRequest()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        AdminHandler handler = CreateHandler(dbFactory);
+        List<SettingUpdateEntry> updates = [new() { Key = 1, Value = "-5" }];
+
+        ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, CancellationToken.None);
+
+        await Assert.That(result.IsSuccess).IsEqualTo(false);
+        await Assert.That(result.StatusCode).IsEqualTo(400);
+    }
+
+    [Test]
+    public async Task UpdateSettingsAsync_NonNumericIntSetting_ReturnsBadRequest()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        AdminHandler handler = CreateHandler(dbFactory);
+        List<SettingUpdateEntry> updates = [new() { Key = 1, Value = "abc" }];
+
+        ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, CancellationToken.None);
+
+        await Assert.That(result.IsSuccess).IsEqualTo(false);
+        await Assert.That(result.StatusCode).IsEqualTo(400);
+    }
+
+    [Test]
+    public async Task UpdateSettingsAsync_AllowUserSignup_AcceptsTrue()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        IServerSettingsCache cache = Substitute.For<IServerSettingsCache>();
+        IConnectionMultiplexer redis = CreateFakeRedis();
+
+        AdminHandler handler = new(dbFactory.Context, cache, redis);
+        List<SettingUpdateEntry> updates = [new() { Key = 8, Value = "true" }];
+
+        ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, CancellationToken.None);
+
+        await Assert.That(result.IsSuccess).IsEqualTo(true);
+    }
+
+    [Test]
+    public async Task UpdateSettingsAsync_AllowUserSignup_AcceptsFalse()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        IServerSettingsCache cache = Substitute.For<IServerSettingsCache>();
+        IConnectionMultiplexer redis = CreateFakeRedis();
+
+        AdminHandler handler = new(dbFactory.Context, cache, redis);
+        List<SettingUpdateEntry> updates = [new() { Key = 8, Value = "false" }];
+
+        ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, CancellationToken.None);
+
+        await Assert.That(result.IsSuccess).IsEqualTo(true);
+    }
+
+    [Test]
+    public async Task UpdateSettingsAsync_AllowUserSignup_RejectsInvalidValue()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        AdminHandler handler = CreateHandler(dbFactory);
+        List<SettingUpdateEntry> updates = [new() { Key = 8, Value = "maybe" }];
+
+        ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, CancellationToken.None);
+
+        await Assert.That(result.IsSuccess).IsEqualTo(false);
+        await Assert.That(result.StatusCode).IsEqualTo(400);
+    }
+
+    [Test]
+    public async Task UpdateSettingsAsync_EmptyList_ReturnsCurrentSettings()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        IServerSettingsCache cache = Substitute.For<IServerSettingsCache>();
+        IConnectionMultiplexer redis = CreateFakeRedis();
+
+        AdminHandler handler = new(dbFactory.Context, cache, redis);
+        List<SettingUpdateEntry> updates = [];
+
+        ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, CancellationToken.None);
+
+        await Assert.That(result.IsSuccess).IsEqualTo(true);
+    }
+
+    [Test]
+    public async Task UpdateSettingsAsync_ValidUpdate_DeletesRedisKey()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        IServerSettingsCache cache = Substitute.For<IServerSettingsCache>();
+        IConnectionMultiplexer redis = CreateFakeRedis();
+        IDatabase redisDb = redis.GetDatabase();
+
+        AdminHandler handler = new(dbFactory.Context, cache, redis);
+        List<SettingUpdateEntry> updates = [new() { Key = 1, Value = "600" }];
+
+        await handler.UpdateSettingsAsync(updates, CancellationToken.None);
+
+        await redisDb.Received(1).KeyDeleteAsync(
+            Arg.Is<RedisKey>(k => k.ToString() == "config:AgentHeartbeatSeconds"),
+            Arg.Any<CommandFlags>());
+    }
+
+    [Test]
+    public async Task UpdateSettingsAsync_ValidUpdate_IncrementsVersion()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        IServerSettingsCache cache = Substitute.For<IServerSettingsCache>();
+        IConnectionMultiplexer redis = CreateFakeRedis();
+        await dbFactory.Context.InsertAsync(new ServerConfigurationSettings
+        {
+            Key = ServerConfigurationSettingKeys.AgentHeartbeatSeconds,
+            Value = "300",
+            Version = 1,
+        });
+
+        AdminHandler handler = new(dbFactory.Context, cache, redis);
+        List<SettingUpdateEntry> updates = [new() { Key = 1, Value = "600" }];
+
+        await handler.UpdateSettingsAsync(updates, CancellationToken.None);
+
+        ServerConfigurationSettings? updated = await dbFactory.Context.ServerConfigurationSettings
+            .FirstOrDefaultAsync(s => s.Key == ServerConfigurationSettingKeys.AgentHeartbeatSeconds);
+        await Assert.That(updated).IsNotNull();
+        await Assert.That(updated!.Version).IsEqualTo(2);
+    }
+
+    // ========== Bounds validation tests ==========
+
+    [Test]
+    public async Task UpdateSettingsAsync_HeartbeatBelowMin_ReturnsBadRequest()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        AdminHandler handler = CreateHandler(dbFactory);
+        List<SettingUpdateEntry> updates = [new() { Key = 1, Value = "5" }];
+
+        ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, CancellationToken.None);
+
+        await Assert.That(result.IsSuccess).IsEqualTo(false);
+        await Assert.That(result.StatusCode).IsEqualTo(400);
+        await Assert.That(result.ErrorMessage).Contains("between 10 and 600");
+    }
+
+    [Test]
+    public async Task UpdateSettingsAsync_HeartbeatAboveMax_ReturnsBadRequest()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        AdminHandler handler = CreateHandler(dbFactory);
+        List<SettingUpdateEntry> updates = [new() { Key = 1, Value = "1000" }];
+
+        ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, CancellationToken.None);
+
+        await Assert.That(result.IsSuccess).IsEqualTo(false);
+        await Assert.That(result.StatusCode).IsEqualTo(400);
+        await Assert.That(result.ErrorMessage).Contains("between 10 and 600");
+    }
+
+    [Test]
+    public async Task UpdateSettingsAsync_HeartbeatAtExactMin_Succeeds()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        IServerSettingsCache cache = Substitute.For<IServerSettingsCache>();
+        IConnectionMultiplexer redis = CreateFakeRedis();
+
+        AdminHandler handler = new(dbFactory.Context, cache, redis);
+        List<SettingUpdateEntry> updates = [new() { Key = 1, Value = "10" }];
+
+        ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, CancellationToken.None);
+
+        await Assert.That(result.IsSuccess).IsEqualTo(true);
+    }
+
+    [Test]
+    public async Task UpdateSettingsAsync_HeartbeatAtExactMax_Succeeds()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        IServerSettingsCache cache = Substitute.For<IServerSettingsCache>();
+        IConnectionMultiplexer redis = CreateFakeRedis();
+
+        AdminHandler handler = new(dbFactory.Context, cache, redis);
+        List<SettingUpdateEntry> updates = [new() { Key = 1, Value = "600" }];
+
+        ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, CancellationToken.None);
+
+        await Assert.That(result.IsSuccess).IsEqualTo(true);
+    }
+
+    [Test]
+    public async Task UpdateSettingsAsync_TelemetryCollectFastBelowMin_ReturnsBadRequest()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        AdminHandler handler = CreateHandler(dbFactory);
+        List<SettingUpdateEntry> updates = [new() { Key = 9, Value = "3" }];
+
+        ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, CancellationToken.None);
+
+        await Assert.That(result.IsSuccess).IsEqualTo(false);
+        await Assert.That(result.StatusCode).IsEqualTo(400);
+        await Assert.That(result.ErrorMessage).Contains("between 10 and 300");
+    }
+
+    [Test]
+    public async Task UpdateSettingsAsync_TelemetrySendFastAboveMax_ReturnsBadRequest()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        AdminHandler handler = CreateHandler(dbFactory);
+        List<SettingUpdateEntry> updates = [new() { Key = 11, Value = "200" }];
+
+        ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, CancellationToken.None);
+
+        await Assert.That(result.IsSuccess).IsEqualTo(false);
+        await Assert.That(result.StatusCode).IsEqualTo(400);
+        await Assert.That(result.ErrorMessage).Contains("between 5 and 120");
+    }
+
+    [Test]
+    public async Task UpdateSettingsAsync_TelemetrySettingsValidRange_Succeeds()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        IServerSettingsCache cache = Substitute.For<IServerSettingsCache>();
+        IConnectionMultiplexer redis = CreateFakeRedis();
+
+        AdminHandler handler = new(dbFactory.Context, cache, redis);
+        List<SettingUpdateEntry> updates =
+        [
+            new() { Key = 9, Value = "60" },
+            new() { Key = 10, Value = "1800" },
+            new() { Key = 11, Value = "10" },
+            new() { Key = 12, Value = "600" },
+        ];
+
+        ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, CancellationToken.None);
+
+        await Assert.That(result.IsSuccess).IsEqualTo(true);
+        await Assert.That(result.Data!.Count).IsEqualTo(4);
+    }
+
+    [Test]
+    public async Task UpdateSettingsAsync_UnboundedSettingAcceptsLargeValue()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        IServerSettingsCache cache = Substitute.For<IServerSettingsCache>();
+        IConnectionMultiplexer redis = CreateFakeRedis();
+
+        AdminHandler handler = new(dbFactory.Context, cache, redis);
+        List<SettingUpdateEntry> updates = [new() { Key = 4, Value = "365" }];
+
+        ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, CancellationToken.None);
+
+        await Assert.That(result.IsSuccess).IsEqualTo(true);
+    }
+
     // ========== GetAllUsersAsync tests ==========
 
     [Test]
     public async Task GetAllUsersAsync_NoUsers_ReturnsEmptyList()
     {
         using TestDatabaseFactory dbFactory = new();
-        AdminHandler handler = new(dbFactory.Context);
+        AdminHandler handler = CreateHandler(dbFactory);
 
         ServiceResult<List<UserAccountDto>> result = await handler.GetAllUsersAsync(CancellationToken.None);
 
@@ -93,7 +475,7 @@ public class AdminHandlerTests
         user1.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(user1);
         user2.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(user2);
 
-        AdminHandler handler = new(dbFactory.Context);
+        AdminHandler handler = CreateHandler(dbFactory);
 
         ServiceResult<List<UserAccountDto>> result = await handler.GetAllUsersAsync(CancellationToken.None);
 
@@ -117,7 +499,7 @@ public class AdminHandlerTests
             role: UserAccountRoles.TenantAdmin);
         await dbFactory.Context.InsertAsync(role);
 
-        AdminHandler handler = new(dbFactory.Context);
+        AdminHandler handler = CreateHandler(dbFactory);
 
         ServiceResult<List<UserAccountDto>> result = await handler.GetAllUsersAsync(CancellationToken.None);
 
@@ -150,12 +532,31 @@ public class AdminHandlerTests
         inactiveRole.IsActive = false;
         await dbFactory.Context.InsertAsync(inactiveRole);
 
-        AdminHandler handler = new(dbFactory.Context);
+        AdminHandler handler = CreateHandler(dbFactory);
 
         ServiceResult<List<UserAccountDto>> result = await handler.GetAllUsersAsync(CancellationToken.None);
 
         await Assert.That(result.IsSuccess).IsEqualTo(true);
         await Assert.That(result.Data![0].Tenants.Count).IsEqualTo(1);
         await Assert.That(result.Data![0].Tenants[0].Role).IsEqualTo(((int)UserAccountRoles.Viewer).ToString());
+    }
+
+    // ========== Helper methods ==========
+
+    private static AdminHandler CreateHandler(TestDatabaseFactory dbFactory)
+    {
+        IServerSettingsCache cache = Substitute.For<IServerSettingsCache>();
+        IConnectionMultiplexer redis = CreateFakeRedis();
+
+        return new AdminHandler(dbFactory.Context, cache, redis);
+    }
+
+    private static IConnectionMultiplexer CreateFakeRedis()
+    {
+        IDatabase db = Substitute.For<IDatabase>();
+        IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
+        redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(db);
+
+        return redis;
     }
 }

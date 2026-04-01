@@ -8,6 +8,7 @@ using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Server.Endpoints.Web;
 using Framlux.FleetManagement.Server.Services.Billing;
 using Framlux.FleetManagement.Server.Services.Infrastructure;
+using Framlux.FleetManagement.Server.Services.Security;
 
 namespace Framlux.FleetManagement.Server.Services.Handlers;
 
@@ -18,16 +19,22 @@ public sealed class MemberHandler : IMemberHandler
 {
     private readonly IDatabaseCache _databaseCache;
     private readonly ISubscriptionService _subscriptionService;
+    private readonly IRoleCacheInvalidator _roleCacheInvalidator;
 
     /// <summary>
     /// Creates a new instance of the <see cref="MemberHandler"/> class.
     /// </summary>
     /// <param name="databaseCache">The database cache service.</param>
     /// <param name="subscriptionService">The subscription service.</param>
-    public MemberHandler(IDatabaseCache databaseCache, ISubscriptionService subscriptionService)
+    /// <param name="roleCacheInvalidator">The role cache invalidator.</param>
+    public MemberHandler(
+        IDatabaseCache databaseCache,
+        ISubscriptionService subscriptionService,
+        IRoleCacheInvalidator roleCacheInvalidator)
     {
         _databaseCache = databaseCache;
         _subscriptionService = subscriptionService;
+        _roleCacheInvalidator = roleCacheInvalidator;
     }
 
     /// <inheritdoc/>
@@ -43,6 +50,8 @@ public sealed class MemberHandler : IMemberHandler
             return ServiceResult<ApiResponse<object>>.Error(400, ApiResponse<object>.Error("You cannot remove yourself from the organization"));
         }
 
+        using IDatabaseTransaction transaction = await _databaseCache.BeginTransactionAsync(ct);
+
         bool removed = await _databaseCache.DisableUserTenantRoleAsync(targetUserId, tenantId.Value, currentUserId, ct);
         if (removed == false)
         {
@@ -53,6 +62,11 @@ public sealed class MemberHandler : IMemberHandler
             tenantId, currentUserId, null,
             AuditAction.MemberRemoved, AuditResourceType.User,
             targetUserId.ToString(), null, null), ct);
+
+        await transaction.CommitAsync(ct);
+
+        // Invalidate the removed user's cached role claims after the transaction commits
+        await _roleCacheInvalidator.InvalidateAsync(targetUserId, ct);
 
         return ServiceResult<ApiResponse<object>>.Ok(ApiResponse<object>.Ok(new { }, "Member removed"));
     }
@@ -81,6 +95,8 @@ public sealed class MemberHandler : IMemberHandler
             return ServiceResult<ApiResponse<object>>.Error(400, ApiResponse<object>.Error("You cannot change your own role"));
         }
 
+        using IDatabaseTransaction transaction = await _databaseCache.BeginTransactionAsync(ct);
+
         bool disabled = await _databaseCache.DisableUserTenantRoleAsync(targetUserId, tenantId.Value, currentUserId, ct);
         if (disabled == false)
         {
@@ -101,6 +117,11 @@ public sealed class MemberHandler : IMemberHandler
             tenantId, currentUserId, null,
             AuditAction.MemberRoleChanged, AuditResourceType.User,
             targetUserId.ToString(), new { NewRole = newRole }, null), ct);
+
+        await transaction.CommitAsync(ct);
+
+        // Invalidate the target user's cached role claims after the transaction commits
+        await _roleCacheInvalidator.InvalidateAsync(targetUserId, ct);
 
         return ServiceResult<ApiResponse<object>>.Ok(ApiResponse<object>.Ok(new { }, "Member role updated"));
     }

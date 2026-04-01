@@ -180,16 +180,20 @@ public sealed class DowngradeSubscriptionEndpoint : Endpoint<DowngradeSubscripti
 
     private async Task HandleTeamToProDowngradeAsync(int tenantId, CancellationToken ct)
     {
+        using IDatabaseTransaction transaction = await _databaseCache.BeginTransactionAsync(ct);
+
         // Proactively update local subscription to avoid stale data before webhook arrives
         await _databaseCache.DowngradeSubscriptionToProAsync(tenantId, ct);
-
-        // Clean up Team-only resources
-        await _downgradeCleanupService.CleanupForProTierAsync(tenantId, ct);
 
         await _databaseCache.InsertAuditLogAsync(AuditHelper.Create(
             tenantId, null, null,
             AuditAction.SubscriptionDowngradeRequested, AuditResourceType.Subscription,
             tenantId.ToString(), "Immediate downgrade from Team to Pro", null), ct);
+
+        await transaction.CommitAsync(ct);
+
+        // Clean up Team-only resources after the transaction commits
+        await _downgradeCleanupService.CleanupForProTierAsync(tenantId, ct);
 
         // Swap the Stripe price (best effort, webhook will also fire)
         Tenant? tenant = await _databaseCache.GetTenantByIdAsync(tenantId, ct);
@@ -228,6 +232,8 @@ public sealed class DowngradeSubscriptionEndpoint : Endpoint<DowngradeSubscripti
             return;
         }
 
+        using IDatabaseTransaction transaction = await _databaseCache.BeginTransactionAsync(ct);
+
         // Record the downgrade intent in the local database first
         await _databaseCache.SetCancelAtPeriodEndAsync(tenantId, true, PendingSubscriptionAction.DowngradeToFree, ct);
 
@@ -235,6 +241,8 @@ public sealed class DowngradeSubscriptionEndpoint : Endpoint<DowngradeSubscripti
             tenantId, null, null,
             AuditAction.SubscriptionDowngradeRequested, AuditResourceType.Subscription,
             tenantId.ToString(), "Downgrade to Free at period end", null), ct);
+
+        await transaction.CommitAsync(ct);
 
         // Cancel the Stripe subscription at period end (best effort)
         Tenant? tenant = await _databaseCache.GetTenantByIdAsync(tenantId, ct);

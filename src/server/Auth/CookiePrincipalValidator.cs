@@ -20,6 +20,11 @@ namespace Framlux.FleetManagement.Server.Auth;
 /// </summary>
 public sealed class CookiePrincipalValidator : CookieAuthenticationEvents
 {
+    /// <summary>
+    /// Redis key prefix for cached user role claims. Full key is "{Prefix}{userId}".
+    /// </summary>
+    public const string RoleCacheKeyPrefix = "user:roles:";
+
     private static readonly TimeSpan CacheTtl = TimeSpan.FromMinutes(5);
 
     private readonly IConnectionMultiplexer _redis;
@@ -132,7 +137,7 @@ public sealed class CookiePrincipalValidator : CookieAuthenticationEvents
         string externalId,
         IDatabase redisDb)
     {
-        string cacheKey = $"user:roles:{userId}";
+        string cacheKey = $"{RoleCacheKeyPrefix}{userId}";
         RedisValue cached = await redisDb.StringGetAsync(cacheKey);
 
         // Build the expected role string from the database (or cache)

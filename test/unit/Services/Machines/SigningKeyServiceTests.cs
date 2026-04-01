@@ -18,8 +18,15 @@ namespace Framlux.FleetManagement.Test.Services;
 /// </summary>
 public sealed class SigningKeyServiceTests
 {
-    private readonly IDatabaseCache _cache = Substitute.For<IDatabaseCache>();
+    private readonly IDatabaseCache _cache;
     private readonly ILogger<SigningKeyService> _logger = Substitute.For<ILogger<SigningKeyService>>();
+
+    public SigningKeyServiceTests()
+    {
+        _cache = Substitute.For<IDatabaseCache>();
+        IDatabaseTransaction mockTransaction = Substitute.For<IDatabaseTransaction>();
+        _cache.BeginTransactionAsync(Arg.Any<CancellationToken>()).Returns(mockTransaction);
+    }
 
     private SigningKeyService CreateService() => new(_cache, _logger);
 

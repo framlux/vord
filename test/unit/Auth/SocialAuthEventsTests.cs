@@ -20,9 +20,11 @@ public sealed class SocialAuthEventsTests
     private static (DefaultHttpContext HttpContext, IDatabaseCache DbCache) CreateTestContext()
     {
         IDatabaseCache dbCache = Substitute.For<IDatabaseCache>();
+        IServerSettingsCache settingsCache = Substitute.For<IServerSettingsCache>();
 
         ServiceCollection services = new();
         services.AddSingleton(dbCache);
+        services.AddSingleton(settingsCache);
         ServiceProvider provider = services.BuildServiceProvider();
 
         DefaultHttpContext httpContext = new()

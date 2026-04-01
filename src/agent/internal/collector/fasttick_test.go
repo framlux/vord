@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/framlux/vord/internal/db"
+	"github.com/framlux/vord/internal/state"
 )
 
 func newTestStore(t *testing.T) *db.Store {
@@ -25,7 +26,7 @@ func newTestStore(t *testing.T) *db.Store {
 
 func TestFastTickCollectMemUsage(t *testing.T) {
 	store := newTestStore(t)
-	ft := NewFastTick(store)
+	ft := NewFastTick(store, state.New())
 
 	ft.collectMemUsage(fixtureFastMeminfo, nil)
 
@@ -54,7 +55,7 @@ func TestFastTickCollectMemUsage(t *testing.T) {
 
 func TestFastTickCollectCpuUsageDelta(t *testing.T) {
 	store := newTestStore(t)
-	ft := NewFastTick(store)
+	ft := NewFastTick(store, state.New())
 
 	// First call: no previous state, should not produce telemetry.
 	ft.collectCpuUsage(fixtureProcStat1, nil)
@@ -101,7 +102,7 @@ func TestFastTickCollectCpuUsageWithPersistedState(t *testing.T) {
 		t.Fatalf("failed to save collector state: %v", err)
 	}
 
-	ft := NewFastTick(store)
+	ft := NewFastTick(store, state.New())
 	ft.loadPersistedCpuTicks()
 
 	if ft.prevTicks == nil {
@@ -125,7 +126,7 @@ func TestFastTickCollectCpuUsageWithPersistedState(t *testing.T) {
 
 func TestFastTickErrorIsolation(t *testing.T) {
 	store := newTestStore(t)
-	ft := NewFastTick(store)
+	ft := NewFastTick(store, state.New())
 
 	// Simulate /proc/stat failure but valid /proc/meminfo and /proc/mounts.
 	ft.collectCpuUsage("", errForTest)
@@ -146,7 +147,7 @@ func TestFastTickErrorIsolation(t *testing.T) {
 
 func TestFastTickGarbageDataNoPanic(t *testing.T) {
 	store := newTestStore(t)
-	ft := NewFastTick(store)
+	ft := NewFastTick(store, state.New())
 
 	// Verify tick does not panic when all files are garbage.
 	defer func() {
@@ -169,7 +170,7 @@ func TestFastTickCorruptedPersistedState(t *testing.T) {
 		t.Fatalf("failed to save collector state: %v", err)
 	}
 
-	ft := NewFastTick(store)
+	ft := NewFastTick(store, state.New())
 	ft.loadPersistedCpuTicks()
 
 	// Should not panic and should treat as cold start.
@@ -182,7 +183,7 @@ func TestFastTickCorruptedPersistedState(t *testing.T) {
 // telemetry from the non-panicking collectors.
 func TestFastTickSafeCollectRecovery(t *testing.T) {
 	store := newTestStore(t)
-	ft := NewFastTick(store)
+	ft := NewFastTick(store, state.New())
 
 	// CPU usage on first call stores prevTicks but does not enqueue telemetry.
 	ft.safeCollectCpuUsage(fixtureProcStat1, nil)
@@ -231,7 +232,7 @@ procs_blocked 0
 // Intent: Zero-delta between ticks → 0% usage (not division by zero).
 func TestFastTickCollectCpuUsage_ZeroDelta(t *testing.T) {
 	store := newTestStore(t)
-	ft := NewFastTick(store)
+	ft := NewFastTick(store, state.New())
 
 	// Set previous ticks identical to current — zero delta.
 	identical := cpuTicks{User: 100, Nice: 0, System: 50, Idle: 850, Iowait: 0, Irq: 0, Softirq: 0, Steal: 0}
@@ -254,7 +255,7 @@ func TestFastTickCollectCpuUsage_ZeroDelta(t *testing.T) {
 // Intent: After collectCpuUsage, prevTicks is saved to DB for crash recovery.
 func TestFastTickPersistsCpuTicks(t *testing.T) {
 	store := newTestStore(t)
-	ft := NewFastTick(store)
+	ft := NewFastTick(store, state.New())
 
 	// First call sets prevTicks but doesn't enqueue telemetry.
 	ft.collectCpuUsage(fixtureProcStat1, nil)
@@ -275,7 +276,7 @@ func TestFastTickPersistsCpuTicks(t *testing.T) {
 // Intent: Disk usage collection filters out pseudo-FS mount points (proc, sysfs, tmpfs).
 func TestFastTickCollectDiskUsage_NoPseudoFS(t *testing.T) {
 	store := newTestStore(t)
-	ft := NewFastTick(store)
+	ft := NewFastTick(store, state.New())
 
 	// Data with only pseudo-FS entries — should produce no disk usage.
 	pseudoOnly := "proc /proc proc rw 0 0\nsysfs /sys sysfs rw 0 0\ntmpfs /tmp tmpfs rw 0 0\n"

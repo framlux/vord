@@ -337,6 +337,15 @@ export class ApiClient {
 		return this.unwrap(resp);
 	}
 
+	async updateAdminSettings(
+		settings: { key: number; value: string }[]
+	): Promise<ServerSettingsDto> {
+		const resp = await this.put<ApiResponse<ServerSettingsDto>>('/api/v1/admin/settings', {
+			settings
+		});
+		return this.unwrap(resp);
+	}
+
 	// Invitations
 	async getInvitations(): Promise<InvitationListDto[]> {
 		const resp = await this.get<ApiResponse<InvitationListDto[]>>('/api/v1/invitations');

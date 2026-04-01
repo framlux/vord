@@ -469,6 +469,216 @@ func TestFetchConfiguration_ValidConfig(t *testing.T) {
 	}
 }
 
+// Intent: Heartbeat above upper bound (600s) is rejected.
+func TestFetchConfiguration_EnforcesMaxHeartbeat(t *testing.T) {
+	store := newTestStore(t)
+	runtimeState := state.New()
+	runtimeState.SetMachineID(1)
+
+	cfgClient := &mockConfigurationClient{
+		getConfigFunc: func(ctx context.Context, in *pb.GetConfigurationRequest, opts ...grpc.CallOption) (*pb.GetConfigurationResponse, error) {
+			return &pb.GetConfigurationResponse{
+				TimeConfig: &pb.TimingConfiguration{
+					HeartbeatTimeInSeconds: 1000, // > 600, should be rejected
+				},
+			}, nil
+		},
+	}
+	regClient := &mockRegistrationClient{}
+
+	mgr := newTestManager(regClient, cfgClient, store, runtimeState, "token")
+
+	err := mgr.FetchConfiguration(context.Background())
+	if err != nil {
+		t.Fatalf("FetchConfiguration: %v", err)
+	}
+
+	if runtimeState.PingInterval() != 60*time.Second {
+		t.Errorf("expected PingInterval=60s (default, since 1000 > 600), got %v", runtimeState.PingInterval())
+	}
+}
+
+// Intent: Config refresh above upper bound (86400s) is rejected.
+func TestFetchConfiguration_EnforcesMaxConfigRefresh(t *testing.T) {
+	store := newTestStore(t)
+	runtimeState := state.New()
+	runtimeState.SetMachineID(1)
+
+	cfgClient := &mockConfigurationClient{
+		getConfigFunc: func(ctx context.Context, in *pb.GetConfigurationRequest, opts ...grpc.CallOption) (*pb.GetConfigurationResponse, error) {
+			return &pb.GetConfigurationResponse{
+				TimeConfig: &pb.TimingConfiguration{
+					ConfigurationRefreshTimeInSeconds: 100000, // > 86400, should be rejected
+				},
+			}, nil
+		},
+	}
+	regClient := &mockRegistrationClient{}
+
+	mgr := newTestManager(regClient, cfgClient, store, runtimeState, "token")
+
+	err := mgr.FetchConfiguration(context.Background())
+	if err != nil {
+		t.Fatalf("FetchConfiguration: %v", err)
+	}
+
+	if runtimeState.ConfigRefreshInterval() != 5*time.Minute {
+		t.Errorf("expected ConfigRefreshInterval=5m (default, since 100000 > 86400), got %v", runtimeState.ConfigRefreshInterval())
+	}
+}
+
+// Intent: Telemetry collect fast below minimum (10s) is rejected.
+func TestFetchConfiguration_EnforcesMinTelemetryCollectFast(t *testing.T) {
+	store := newTestStore(t)
+	runtimeState := state.New()
+	runtimeState.SetMachineID(1)
+
+	cfgClient := &mockConfigurationClient{
+		getConfigFunc: func(ctx context.Context, in *pb.GetConfigurationRequest, opts ...grpc.CallOption) (*pb.GetConfigurationResponse, error) {
+			return &pb.GetConfigurationResponse{
+				TimeConfig: &pb.TimingConfiguration{
+					TelemetryCollectFastSeconds: 5, // < 10, should be rejected
+				},
+			}, nil
+		},
+	}
+	regClient := &mockRegistrationClient{}
+
+	mgr := newTestManager(regClient, cfgClient, store, runtimeState, "token")
+
+	err := mgr.FetchConfiguration(context.Background())
+	if err != nil {
+		t.Fatalf("FetchConfiguration: %v", err)
+	}
+
+	if runtimeState.TelemetryCollectFastInterval() != 30*time.Second {
+		t.Errorf("expected TelemetryCollectFastInterval=30s (default), got %v", runtimeState.TelemetryCollectFastInterval())
+	}
+}
+
+// Intent: Telemetry collect fast above max (300s) is rejected.
+func TestFetchConfiguration_EnforcesMaxTelemetryCollectFast(t *testing.T) {
+	store := newTestStore(t)
+	runtimeState := state.New()
+	runtimeState.SetMachineID(1)
+
+	cfgClient := &mockConfigurationClient{
+		getConfigFunc: func(ctx context.Context, in *pb.GetConfigurationRequest, opts ...grpc.CallOption) (*pb.GetConfigurationResponse, error) {
+			return &pb.GetConfigurationResponse{
+				TimeConfig: &pb.TimingConfiguration{
+					TelemetryCollectFastSeconds: 500, // > 300, should be rejected
+				},
+			}, nil
+		},
+	}
+	regClient := &mockRegistrationClient{}
+
+	mgr := newTestManager(regClient, cfgClient, store, runtimeState, "token")
+
+	err := mgr.FetchConfiguration(context.Background())
+	if err != nil {
+		t.Fatalf("FetchConfiguration: %v", err)
+	}
+
+	if runtimeState.TelemetryCollectFastInterval() != 30*time.Second {
+		t.Errorf("expected TelemetryCollectFastInterval=30s (default), got %v", runtimeState.TelemetryCollectFastInterval())
+	}
+}
+
+// Intent: Valid telemetry timing values are applied correctly.
+func TestFetchConfiguration_ValidTelemetryConfig(t *testing.T) {
+	store := newTestStore(t)
+	runtimeState := state.New()
+	runtimeState.SetMachineID(1)
+
+	cfgClient := &mockConfigurationClient{
+		getConfigFunc: func(ctx context.Context, in *pb.GetConfigurationRequest, opts ...grpc.CallOption) (*pb.GetConfigurationResponse, error) {
+			return &pb.GetConfigurationResponse{
+				TimeConfig: &pb.TimingConfiguration{
+					TelemetryCollectFastSeconds: 60,
+					TelemetryCollectSlowSeconds: 1800,
+					TelemetrySendFastSeconds:    10,
+					TelemetrySendSlowSeconds:    600,
+				},
+			}, nil
+		},
+	}
+	regClient := &mockRegistrationClient{}
+
+	mgr := newTestManager(regClient, cfgClient, store, runtimeState, "token")
+
+	err := mgr.FetchConfiguration(context.Background())
+	if err != nil {
+		t.Fatalf("FetchConfiguration: %v", err)
+	}
+
+	if runtimeState.TelemetryCollectFastInterval() != 60*time.Second {
+		t.Errorf("expected TelemetryCollectFastInterval=60s, got %v", runtimeState.TelemetryCollectFastInterval())
+	}
+	if runtimeState.TelemetryCollectSlowInterval() != 1800*time.Second {
+		t.Errorf("expected TelemetryCollectSlowInterval=1800s, got %v", runtimeState.TelemetryCollectSlowInterval())
+	}
+	if runtimeState.TelemetrySendFastInterval() != 10*time.Second {
+		t.Errorf("expected TelemetrySendFastInterval=10s, got %v", runtimeState.TelemetrySendFastInterval())
+	}
+	if runtimeState.TelemetrySendSlowInterval() != 600*time.Second {
+		t.Errorf("expected TelemetrySendSlowInterval=600s, got %v", runtimeState.TelemetrySendSlowInterval())
+	}
+}
+
+// Intent: Boundary values (exact min and max) are accepted.
+func TestFetchConfiguration_TelemetryBoundaryValues(t *testing.T) {
+	store := newTestStore(t)
+	runtimeState := state.New()
+	runtimeState.SetMachineID(1)
+
+	cfgClient := &mockConfigurationClient{
+		getConfigFunc: func(ctx context.Context, in *pb.GetConfigurationRequest, opts ...grpc.CallOption) (*pb.GetConfigurationResponse, error) {
+			return &pb.GetConfigurationResponse{
+				TimeConfig: &pb.TimingConfiguration{
+					HeartbeatTimeInSeconds:            10,    // exact min
+					ConfigurationRefreshTimeInSeconds: 86400, // exact max
+					CommandPollTimeInSeconds:          300,   // exact max
+					TelemetryCollectFastSeconds:       10,    // exact min
+					TelemetryCollectSlowSeconds:       3600,  // exact max
+					TelemetrySendFastSeconds:          5,     // exact min
+					TelemetrySendSlowSeconds:          1800,  // exact max
+				},
+			}, nil
+		},
+	}
+	regClient := &mockRegistrationClient{}
+
+	mgr := newTestManager(regClient, cfgClient, store, runtimeState, "token")
+
+	err := mgr.FetchConfiguration(context.Background())
+	if err != nil {
+		t.Fatalf("FetchConfiguration: %v", err)
+	}
+
+	if runtimeState.PingInterval() != 10*time.Second {
+		t.Errorf("expected PingInterval=10s (exact min), got %v", runtimeState.PingInterval())
+	}
+	if runtimeState.ConfigRefreshInterval() != 86400*time.Second {
+		t.Errorf("expected ConfigRefreshInterval=86400s (exact max), got %v", runtimeState.ConfigRefreshInterval())
+	}
+	if runtimeState.CommandPollInterval() != 300*time.Second {
+		t.Errorf("expected CommandPollInterval=300s (exact max), got %v", runtimeState.CommandPollInterval())
+	}
+	if runtimeState.TelemetryCollectFastInterval() != 10*time.Second {
+		t.Errorf("expected TelemetryCollectFastInterval=10s (exact min), got %v", runtimeState.TelemetryCollectFastInterval())
+	}
+	if runtimeState.TelemetryCollectSlowInterval() != 3600*time.Second {
+		t.Errorf("expected TelemetryCollectSlowInterval=3600s (exact max), got %v", runtimeState.TelemetryCollectSlowInterval())
+	}
+	if runtimeState.TelemetrySendFastInterval() != 5*time.Second {
+		t.Errorf("expected TelemetrySendFastInterval=5s (exact min), got %v", runtimeState.TelemetrySendFastInterval())
+	}
+	if runtimeState.TelemetrySendSlowInterval() != 1800*time.Second {
+		t.Errorf("expected TelemetrySendSlowInterval=1800s (exact max), got %v", runtimeState.TelemetrySendSlowInterval())
+	}
+}
+
 // --- Ping tests ---
 
 // Intent: Ping before registration (machineID=0) returns error.

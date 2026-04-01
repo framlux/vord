@@ -16,12 +16,16 @@ namespace Framlux.FleetManagement.Server.Services.ServerConfiguration;
 public sealed class ServerConfigurationService
 {
     private const int DefaultAgentHeartbeatSeconds = 300;
-    private const int DefaultAgentConfigRefreshSeconds = 21600;
+    private const int DefaultAgentConfigRefreshSeconds = 900;
     private const int DefaultOnlineThresholdSeconds = 300;
     private const int DefaultCertificateExpiryWarningDays = 30;
     private const int DefaultTelemetryCleanupGraceDays = 7;
     private const int DefaultDeduplicationTtlSeconds = 300;
     private const int DefaultAgentCommandPollSeconds = 30;
+    private const int DefaultTelemetryCollectFastSeconds = 30;
+    private const int DefaultTelemetryCollectSlowSeconds = 900;
+    private const int DefaultTelemetrySendFastSeconds = 15;
+    private const int DefaultTelemetrySendSlowSeconds = 300;
     private static readonly TimeSpan CacheTtl = TimeSpan.FromMinutes(5);
 
     private readonly IServerSettingsCache _cache;
@@ -98,6 +102,38 @@ public sealed class ServerConfigurationService
     public async Task<int> GetAgentCommandPollSecondsAsync(CancellationToken ct = default)
     {
         return await GetIntSettingAsync(ServerConfigurationSettingKeys.AgentCommandPollSeconds, DefaultAgentCommandPollSeconds, ct);
+    }
+
+    /// <summary>
+    /// Gets the fast telemetry collection interval in seconds.
+    /// </summary>
+    public async Task<int> GetTelemetryCollectFastSecondsAsync(CancellationToken ct = default)
+    {
+        return await GetIntSettingAsync(ServerConfigurationSettingKeys.TelemetryCollectFastSeconds, DefaultTelemetryCollectFastSeconds, ct);
+    }
+
+    /// <summary>
+    /// Gets the slow telemetry collection interval in seconds.
+    /// </summary>
+    public async Task<int> GetTelemetryCollectSlowSecondsAsync(CancellationToken ct = default)
+    {
+        return await GetIntSettingAsync(ServerConfigurationSettingKeys.TelemetryCollectSlowSeconds, DefaultTelemetryCollectSlowSeconds, ct);
+    }
+
+    /// <summary>
+    /// Gets the fast telemetry send interval in seconds.
+    /// </summary>
+    public async Task<int> GetTelemetrySendFastSecondsAsync(CancellationToken ct = default)
+    {
+        return await GetIntSettingAsync(ServerConfigurationSettingKeys.TelemetrySendFastSeconds, DefaultTelemetrySendFastSeconds, ct);
+    }
+
+    /// <summary>
+    /// Gets the slow telemetry send interval in seconds.
+    /// </summary>
+    public async Task<int> GetTelemetrySendSlowSecondsAsync(CancellationToken ct = default)
+    {
+        return await GetIntSettingAsync(ServerConfigurationSettingKeys.TelemetrySendSlowSeconds, DefaultTelemetrySendSlowSeconds, ct);
     }
 
     private async Task<int> GetIntSettingAsync(ServerConfigurationSettingKeys key, int defaultValue, CancellationToken ct)

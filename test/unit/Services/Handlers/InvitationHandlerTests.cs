@@ -9,6 +9,7 @@ using Framlux.FleetManagement.Server.Services.Billing;
 using Framlux.FleetManagement.Server.Services.Handlers;
 using Framlux.FleetManagement.Server.Services.Infrastructure;
 using Framlux.FleetManagement.Server.Services.Notifications;
+using Framlux.FleetManagement.Server.Services.Security;
 using NSubstitute;
 
 namespace Framlux.FleetManagement.Test.Services.Handlers;
@@ -20,7 +21,11 @@ public class InvitationHandlerTests
 {
     private static IDatabaseCache CreateMockCache()
     {
-        return Substitute.For<IDatabaseCache>();
+        IDatabaseCache cache = Substitute.For<IDatabaseCache>();
+        IDatabaseTransaction mockTransaction = Substitute.For<IDatabaseTransaction>();
+        cache.BeginTransactionAsync(Arg.Any<CancellationToken>()).Returns(mockTransaction);
+
+        return cache;
     }
 
     private static IEmailService CreateMockEmailService()
@@ -48,7 +53,7 @@ public class InvitationHandlerTests
     [Test]
     public async Task CreateAsync_InvalidEmail_Returns400()
     {
-        InvitationHandler handler = new(CreateMockCache(), CreateMockEmailService(), CreateMockSubService());
+        InvitationHandler handler = new(CreateMockCache(), CreateMockEmailService(), CreateMockSubService(), Substitute.For<IRoleCacheInvalidator>());
 
         ServiceResult<InvitationCreateResult> result = await handler.CreateAsync("notanemail", null, 1, 1, "https://app.test", CancellationToken.None);
 
@@ -59,7 +64,7 @@ public class InvitationHandlerTests
     [Test]
     public async Task CreateAsync_EmptyEmail_Returns400()
     {
-        InvitationHandler handler = new(CreateMockCache(), CreateMockEmailService(), CreateMockSubService());
+        InvitationHandler handler = new(CreateMockCache(), CreateMockEmailService(), CreateMockSubService(), Substitute.For<IRoleCacheInvalidator>());
 
         ServiceResult<InvitationCreateResult> result = await handler.CreateAsync("", null, 1, 1, "https://app.test", CancellationToken.None);
 
@@ -69,7 +74,7 @@ public class InvitationHandlerTests
     [Test]
     public async Task CreateAsync_NullTenantId_Returns401()
     {
-        InvitationHandler handler = new(CreateMockCache(), CreateMockEmailService(), CreateMockSubService());
+        InvitationHandler handler = new(CreateMockCache(), CreateMockEmailService(), CreateMockSubService(), Substitute.For<IRoleCacheInvalidator>());
 
         ServiceResult<InvitationCreateResult> result = await handler.CreateAsync("user@example.com", null, null, 1, "https://app.test", CancellationToken.None);
 
@@ -79,7 +84,7 @@ public class InvitationHandlerTests
     [Test]
     public async Task CreateAsync_FreeTierSubscription_Returns402()
     {
-        InvitationHandler handler = new(CreateMockCache(), CreateMockEmailService(), CreateMockSubService(SubscriptionTier.Free));
+        InvitationHandler handler = new(CreateMockCache(), CreateMockEmailService(), CreateMockSubService(SubscriptionTier.Free), Substitute.For<IRoleCacheInvalidator>());
 
         ServiceResult<InvitationCreateResult> result = await handler.CreateAsync("user@example.com", null, 1, 1, "https://app.test", CancellationToken.None);
 
@@ -93,7 +98,7 @@ public class InvitationHandlerTests
         IDatabaseCache cache = CreateMockCache();
         cache.GetPendingInvitationByEmailAndTenantAsync("user@example.com", 1, Arg.Any<CancellationToken>())
             .Returns(new TenantInvitation { Id = 1, Email = "user@example.com", TenantId = 1, TokenHash = "abc", Role = UserAccountRoles.Viewer, Status = InvitationStatus.Pending, InvitedByUserId = 1, CreatedAt = DateTimeOffset.UtcNow, ExpiresAt = DateTimeOffset.UtcNow.AddDays(7) });
-        InvitationHandler handler = new(cache, CreateMockEmailService(), CreateMockSubService());
+        InvitationHandler handler = new(cache, CreateMockEmailService(), CreateMockSubService(), Substitute.For<IRoleCacheInvalidator>());
 
         ServiceResult<InvitationCreateResult> result = await handler.CreateAsync("user@example.com", null, 1, 1, "https://app.test", CancellationToken.None);
 
@@ -111,7 +116,7 @@ public class InvitationHandlerTests
         {
             new() { UserId = 5, User = memberUser, AssignedTenantId = 1, Role = UserAccountRoles.Viewer, AssignedByUserId = 1, AssignedAt = DateTimeOffset.UtcNow, IsActive = true }
         });
-        InvitationHandler handler = new(cache, CreateMockEmailService(), CreateMockSubService());
+        InvitationHandler handler = new(cache, CreateMockEmailService(), CreateMockSubService(), Substitute.For<IRoleCacheInvalidator>());
 
         ServiceResult<InvitationCreateResult> result = await handler.CreateAsync("user@example.com", null, 1, 1, "https://app.test", CancellationToken.None);
 
@@ -137,7 +142,7 @@ public class InvitationHandlerTests
         {
             Id = 1, Name = "Test Org", ExternalId = "ext-1", CreatedAt = DateTimeOffset.UtcNow, CreatedByUserId = 1, IsActive = true, LogoUrl = ""
         });
-        InvitationHandler handler = new(cache, emailService, CreateMockSubService());
+        InvitationHandler handler = new(cache, emailService, CreateMockSubService(), Substitute.For<IRoleCacheInvalidator>());
 
         ServiceResult<InvitationCreateResult> result = await handler.CreateAsync("newuser@example.com", null, 1, 1, "https://app.test", CancellationToken.None);
 
@@ -165,7 +170,7 @@ public class InvitationHandlerTests
         {
             Id = 1, Name = "Test Org", ExternalId = "ext-1", CreatedAt = DateTimeOffset.UtcNow, CreatedByUserId = 1, IsActive = true, LogoUrl = ""
         });
-        InvitationHandler handler = new(cache, emailService, CreateMockSubService());
+        InvitationHandler handler = new(cache, emailService, CreateMockSubService(), Substitute.For<IRoleCacheInvalidator>());
 
         await handler.CreateAsync("newuser@example.com", null, 1, 1, "https://app.test", CancellationToken.None);
 
@@ -191,7 +196,7 @@ public class InvitationHandlerTests
         {
             Id = 1, Name = "Test Org", ExternalId = "ext-1", CreatedAt = DateTimeOffset.UtcNow, CreatedByUserId = 1, IsActive = true, LogoUrl = ""
         });
-        InvitationHandler handler = new(cache, CreateMockEmailService(), CreateMockSubService(SubscriptionTier.Pro));
+        InvitationHandler handler = new(cache, CreateMockEmailService(), CreateMockSubService(SubscriptionTier.Pro), Substitute.For<IRoleCacheInvalidator>());
 
         await handler.CreateAsync("newuser@example.com", "Viewer", 1, 1, "https://app.test", CancellationToken.None);
 
@@ -217,7 +222,7 @@ public class InvitationHandlerTests
         {
             Id = 1, Name = "Test Org", ExternalId = "ext-1", CreatedAt = DateTimeOffset.UtcNow, CreatedByUserId = 1, IsActive = true, LogoUrl = ""
         });
-        InvitationHandler handler = new(cache, CreateMockEmailService(), CreateMockSubService(SubscriptionTier.Team));
+        InvitationHandler handler = new(cache, CreateMockEmailService(), CreateMockSubService(SubscriptionTier.Team), Substitute.For<IRoleCacheInvalidator>());
 
         await handler.CreateAsync("newuser@example.com", "Viewer", 1, 1, "https://app.test", CancellationToken.None);
 
@@ -243,7 +248,7 @@ public class InvitationHandlerTests
         {
             Id = 1, Name = "Test Org", ExternalId = "ext-1", CreatedAt = DateTimeOffset.UtcNow, CreatedByUserId = 1, IsActive = true, LogoUrl = ""
         });
-        InvitationHandler handler = new(cache, CreateMockEmailService(), CreateMockSubService(SubscriptionTier.Pro));
+        InvitationHandler handler = new(cache, CreateMockEmailService(), CreateMockSubService(SubscriptionTier.Pro), Substitute.For<IRoleCacheInvalidator>());
 
         await handler.CreateAsync("newuser@example.com", null, 1, 1, "https://app.test", CancellationToken.None);
 
@@ -269,7 +274,7 @@ public class InvitationHandlerTests
         {
             Id = 1, Name = "Test Org", ExternalId = "ext-1", CreatedAt = DateTimeOffset.UtcNow, CreatedByUserId = 1, IsActive = true, LogoUrl = ""
         });
-        InvitationHandler handler = new(cache, CreateMockEmailService(), CreateMockSubService(SubscriptionTier.Team));
+        InvitationHandler handler = new(cache, CreateMockEmailService(), CreateMockSubService(SubscriptionTier.Team), Substitute.For<IRoleCacheInvalidator>());
 
         await handler.CreateAsync("newuser@example.com", null, 1, 1, "https://app.test", CancellationToken.None);
 
@@ -285,7 +290,7 @@ public class InvitationHandlerTests
     {
         IDatabaseCache cache = CreateMockCache();
         cache.GetInvitationByTokenAsync("badtoken", Arg.Any<CancellationToken>()).Returns((TenantInvitation?)null);
-        InvitationHandler handler = new(cache, CreateMockEmailService(), CreateMockSubService());
+        InvitationHandler handler = new(cache, CreateMockEmailService(), CreateMockSubService(), Substitute.For<IRoleCacheInvalidator>());
 
         ServiceResult<InvitationAcceptResult> result = await handler.AcceptAsync("badtoken", "user@test.com", 1, "ext-1", CancellationToken.None);
 
@@ -301,7 +306,7 @@ public class InvitationHandlerTests
             Id = 1, TenantId = 1, Email = "user@test.com", TokenHash = "token", Role = UserAccountRoles.Viewer, Status = InvitationStatus.Accepted,
             InvitedByUserId = 1, CreatedAt = DateTimeOffset.UtcNow, ExpiresAt = DateTimeOffset.UtcNow.AddDays(7)
         });
-        InvitationHandler handler = new(cache, CreateMockEmailService(), CreateMockSubService());
+        InvitationHandler handler = new(cache, CreateMockEmailService(), CreateMockSubService(), Substitute.For<IRoleCacheInvalidator>());
 
         ServiceResult<InvitationAcceptResult> result = await handler.AcceptAsync("token", "user@test.com", 1, "ext-1", CancellationToken.None);
 
@@ -318,7 +323,7 @@ public class InvitationHandlerTests
             Id = 1, TenantId = 1, Email = "user@test.com", TokenHash = "token", Role = UserAccountRoles.Viewer, Status = InvitationStatus.Pending,
             InvitedByUserId = 1, CreatedAt = DateTimeOffset.UtcNow.AddDays(-8), ExpiresAt = DateTimeOffset.UtcNow.AddDays(-1)
         });
-        InvitationHandler handler = new(cache, CreateMockEmailService(), CreateMockSubService());
+        InvitationHandler handler = new(cache, CreateMockEmailService(), CreateMockSubService(), Substitute.For<IRoleCacheInvalidator>());
 
         ServiceResult<InvitationAcceptResult> result = await handler.AcceptAsync("token", "user@test.com", 1, "ext-1", CancellationToken.None);
 
@@ -335,7 +340,7 @@ public class InvitationHandlerTests
             Id = 1, TenantId = 1, Email = "invited@test.com", TokenHash = "token", Role = UserAccountRoles.Viewer, Status = InvitationStatus.Pending,
             InvitedByUserId = 1, CreatedAt = DateTimeOffset.UtcNow, ExpiresAt = DateTimeOffset.UtcNow.AddDays(7)
         });
-        InvitationHandler handler = new(cache, CreateMockEmailService(), CreateMockSubService());
+        InvitationHandler handler = new(cache, CreateMockEmailService(), CreateMockSubService(), Substitute.For<IRoleCacheInvalidator>());
 
         ServiceResult<InvitationAcceptResult> result = await handler.AcceptAsync("token", "wrong@test.com", 1, "ext-1", CancellationToken.None);
 
@@ -352,7 +357,7 @@ public class InvitationHandlerTests
             Id = 1, TenantId = 1, Email = "user@test.com", TokenHash = "token", Role = UserAccountRoles.Viewer, Status = InvitationStatus.Pending,
             InvitedByUserId = 1, CreatedAt = DateTimeOffset.UtcNow, ExpiresAt = DateTimeOffset.UtcNow.AddDays(7)
         });
-        InvitationHandler handler = new(cache, CreateMockEmailService(), CreateMockSubService());
+        InvitationHandler handler = new(cache, CreateMockEmailService(), CreateMockSubService(), Substitute.For<IRoleCacheInvalidator>());
 
         ServiceResult<InvitationAcceptResult> result = await handler.AcceptAsync("token", "user@test.com", 0, "ext-1", CancellationToken.None);
 
@@ -372,7 +377,7 @@ public class InvitationHandlerTests
         {
             new() { UserId = 1, AssignedTenantId = 5, Role = UserAccountRoles.Viewer, AssignedByUserId = 1, AssignedAt = DateTimeOffset.UtcNow, IsActive = true }
         });
-        InvitationHandler handler = new(cache, CreateMockEmailService(), CreateMockSubService());
+        InvitationHandler handler = new(cache, CreateMockEmailService(), CreateMockSubService(), Substitute.For<IRoleCacheInvalidator>());
 
         ServiceResult<InvitationAcceptResult> result = await handler.AcceptAsync("token", "user@test.com", 1, "ext-1", CancellationToken.None);
 
@@ -403,7 +408,7 @@ public class InvitationHandlerTests
             Id = 1, TenantId = 99, Tier = SubscriptionTier.Free, Status = SubscriptionStatus.Active,
             RetentionDays = 1, CreatedAt = DateTimeOffset.UtcNow, UpdatedAt = DateTimeOffset.UtcNow,
         });
-        InvitationHandler handler = new(cache, CreateMockEmailService(), subService);
+        InvitationHandler handler = new(cache, CreateMockEmailService(), subService, Substitute.For<IRoleCacheInvalidator>());
 
         ServiceResult<InvitationAcceptResult> result = await handler.AcceptAsync("token", "user@test.com", 1, "ext-1", CancellationToken.None);
 
@@ -435,7 +440,7 @@ public class InvitationHandlerTests
             Id = 1, TenantId = 99, Tier = SubscriptionTier.Free, Status = SubscriptionStatus.Active,
             RetentionDays = 1, CreatedAt = DateTimeOffset.UtcNow, UpdatedAt = DateTimeOffset.UtcNow,
         });
-        InvitationHandler handler = new(cache, CreateMockEmailService(), subService);
+        InvitationHandler handler = new(cache, CreateMockEmailService(), subService, Substitute.For<IRoleCacheInvalidator>());
 
         await handler.AcceptAsync("token", "user@test.com", 1, "ext-1", CancellationToken.None);
 
@@ -456,7 +461,7 @@ public class InvitationHandlerTests
         {
             new() { UserId = 1, AssignedTenantId = 10, Role = UserAccountRoles.TenantAdmin, AssignedByUserId = 1, AssignedAt = DateTimeOffset.UtcNow, IsActive = true }
         });
-        InvitationHandler handler = new(cache, CreateMockEmailService(), CreateMockSubService());
+        InvitationHandler handler = new(cache, CreateMockEmailService(), CreateMockSubService(), Substitute.For<IRoleCacheInvalidator>());
 
         ServiceResult<InvitationAcceptResult> result = await handler.AcceptAsync("token", "user@test.com", 1, "ext-1", CancellationToken.None);
 
@@ -477,7 +482,7 @@ public class InvitationHandlerTests
         {
             new() { UserId = 1, AssignedTenantId = 10, Role = UserAccountRoles.TenantAdmin, AssignedByUserId = 1, AssignedAt = DateTimeOffset.UtcNow, IsActive = true }
         });
-        InvitationHandler handler = new(cache, CreateMockEmailService(), CreateMockSubService());
+        InvitationHandler handler = new(cache, CreateMockEmailService(), CreateMockSubService(), Substitute.For<IRoleCacheInvalidator>());
 
         await handler.AcceptAsync("token", "user@test.com", 1, "ext-1", CancellationToken.None);
 
@@ -490,7 +495,7 @@ public class InvitationHandlerTests
     [Test]
     public async Task RevokeAsync_NullTenantId_Returns401()
     {
-        InvitationHandler handler = new(CreateMockCache(), CreateMockEmailService(), CreateMockSubService());
+        InvitationHandler handler = new(CreateMockCache(), CreateMockEmailService(), CreateMockSubService(), Substitute.For<IRoleCacheInvalidator>());
 
         ServiceResult<InvitationRevokeResult> result = await handler.RevokeAsync(1, null, CancellationToken.None);
 
@@ -502,7 +507,7 @@ public class InvitationHandlerTests
     {
         IDatabaseCache cache = CreateMockCache();
         cache.GetInvitationsForTenantAsync(1, Arg.Any<CancellationToken>()).Returns(Enumerable.Empty<TenantInvitation>());
-        InvitationHandler handler = new(cache, CreateMockEmailService(), CreateMockSubService());
+        InvitationHandler handler = new(cache, CreateMockEmailService(), CreateMockSubService(), Substitute.For<IRoleCacheInvalidator>());
 
         ServiceResult<InvitationRevokeResult> result = await handler.RevokeAsync(99, 1, CancellationToken.None);
 
@@ -517,7 +522,7 @@ public class InvitationHandlerTests
         {
             new() { Id = 1, TenantId = 1, Email = "user@test.com", TokenHash = "abc", Role = UserAccountRoles.Viewer, Status = InvitationStatus.Accepted, InvitedByUserId = 1, CreatedAt = DateTimeOffset.UtcNow, ExpiresAt = DateTimeOffset.UtcNow.AddDays(7) }
         });
-        InvitationHandler handler = new(cache, CreateMockEmailService(), CreateMockSubService());
+        InvitationHandler handler = new(cache, CreateMockEmailService(), CreateMockSubService(), Substitute.For<IRoleCacheInvalidator>());
 
         ServiceResult<InvitationRevokeResult> result = await handler.RevokeAsync(1, 1, CancellationToken.None);
 
@@ -533,7 +538,7 @@ public class InvitationHandlerTests
         {
             new() { Id = 1, TenantId = 1, Email = "user@test.com", TokenHash = "abc", Role = UserAccountRoles.Viewer, Status = InvitationStatus.Pending, InvitedByUserId = 1, CreatedAt = DateTimeOffset.UtcNow, ExpiresAt = DateTimeOffset.UtcNow.AddDays(7) }
         });
-        InvitationHandler handler = new(cache, CreateMockEmailService(), CreateMockSubService());
+        InvitationHandler handler = new(cache, CreateMockEmailService(), CreateMockSubService(), Substitute.For<IRoleCacheInvalidator>());
 
         ServiceResult<InvitationRevokeResult> result = await handler.RevokeAsync(1, 1, CancellationToken.None);
 
@@ -548,7 +553,7 @@ public class InvitationHandlerTests
         {
             new() { Id = 1, TenantId = 1, Email = "user@test.com", TokenHash = "abc", Role = UserAccountRoles.Viewer, Status = InvitationStatus.Pending, InvitedByUserId = 1, CreatedAt = DateTimeOffset.UtcNow, ExpiresAt = DateTimeOffset.UtcNow.AddDays(7) }
         });
-        InvitationHandler handler = new(cache, CreateMockEmailService(), CreateMockSubService());
+        InvitationHandler handler = new(cache, CreateMockEmailService(), CreateMockSubService(), Substitute.For<IRoleCacheInvalidator>());
 
         await handler.RevokeAsync(1, 1, CancellationToken.None);
 
@@ -560,7 +565,7 @@ public class InvitationHandlerTests
     [Test]
     public async Task ResendAsync_NullTenantId_Returns401()
     {
-        InvitationHandler handler = new(CreateMockCache(), CreateMockEmailService(), CreateMockSubService());
+        InvitationHandler handler = new(CreateMockCache(), CreateMockEmailService(), CreateMockSubService(), Substitute.For<IRoleCacheInvalidator>());
 
         ServiceResult<InvitationResendResult> result = await handler.ResendAsync(1, null, 1, "inviter@test.com", "https://app.test", CancellationToken.None);
 
@@ -572,7 +577,7 @@ public class InvitationHandlerTests
     {
         IDatabaseCache cache = CreateMockCache();
         cache.GetInvitationsForTenantAsync(1, Arg.Any<CancellationToken>()).Returns(Enumerable.Empty<TenantInvitation>());
-        InvitationHandler handler = new(cache, CreateMockEmailService(), CreateMockSubService());
+        InvitationHandler handler = new(cache, CreateMockEmailService(), CreateMockSubService(), Substitute.For<IRoleCacheInvalidator>());
 
         ServiceResult<InvitationResendResult> result = await handler.ResendAsync(99, 1, 1, "inviter@test.com", "https://app.test", CancellationToken.None);
 
@@ -587,7 +592,7 @@ public class InvitationHandlerTests
         {
             new() { Id = 1, TenantId = 1, Email = "user@test.com", TokenHash = "abc", Role = UserAccountRoles.Viewer, Status = InvitationStatus.Revoked, InvitedByUserId = 1, CreatedAt = DateTimeOffset.UtcNow, ExpiresAt = DateTimeOffset.UtcNow.AddDays(7) }
         });
-        InvitationHandler handler = new(cache, CreateMockEmailService(), CreateMockSubService());
+        InvitationHandler handler = new(cache, CreateMockEmailService(), CreateMockSubService(), Substitute.For<IRoleCacheInvalidator>());
 
         ServiceResult<InvitationResendResult> result = await handler.ResendAsync(1, 1, 1, "inviter@test.com", "https://app.test", CancellationToken.None);
 
@@ -614,7 +619,7 @@ public class InvitationHandlerTests
         {
             Id = 1, Name = "Test Org", ExternalId = "ext-1", CreatedAt = DateTimeOffset.UtcNow, CreatedByUserId = 1, IsActive = true, LogoUrl = ""
         });
-        InvitationHandler handler = new(cache, emailService, CreateMockSubService());
+        InvitationHandler handler = new(cache, emailService, CreateMockSubService(), Substitute.For<IRoleCacheInvalidator>());
 
         ServiceResult<InvitationResendResult> result = await handler.ResendAsync(1, 1, 1, "inviter@test.com", "https://app.test", CancellationToken.None);
 
@@ -643,7 +648,7 @@ public class InvitationHandlerTests
         {
             Id = 1, Name = "Test Org", ExternalId = "ext-1", CreatedAt = DateTimeOffset.UtcNow, CreatedByUserId = 1, IsActive = true, LogoUrl = ""
         });
-        InvitationHandler handler = new(cache, emailService, CreateMockSubService());
+        InvitationHandler handler = new(cache, emailService, CreateMockSubService(), Substitute.For<IRoleCacheInvalidator>());
 
         await handler.ResendAsync(1, 1, 1, "inviter@test.com", "https://app.test", CancellationToken.None);
 

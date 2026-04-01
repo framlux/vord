@@ -148,7 +148,7 @@ public class ServerConfigurationServiceTests
     // ========== GetAgentConfigRefreshSecondsAsync tests ==========
 
     [Test]
-    public async Task GetAgentConfigRefreshSecondsAsync_Default_Returns21600()
+    public async Task GetAgentConfigRefreshSecondsAsync_Default_Returns900()
     {
         (ServerConfigurationService service, IServerSettingsCache _, IDatabase redisDb) = CreateService();
         redisDb.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
@@ -156,7 +156,7 @@ public class ServerConfigurationServiceTests
 
         int result = await service.GetAgentConfigRefreshSecondsAsync(CancellationToken.None);
 
-        await Assert.That(result).IsEqualTo(21600);
+        await Assert.That(result).IsEqualTo(900);
     }
 
     // ========== GetOnlineThresholdAsync tests ==========

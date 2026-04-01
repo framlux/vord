@@ -323,7 +323,11 @@ export interface ServerSettingsDto {
 
 export interface SettingEntry {
 	key: number;
+	name: string;
+	description: string;
 	value: string;
+	min: number | null;
+	max: number | null;
 }
 
 export enum SubscriptionTier {

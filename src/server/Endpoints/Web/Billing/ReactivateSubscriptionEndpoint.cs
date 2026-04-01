@@ -101,6 +101,8 @@ public sealed class ReactivateSubscriptionEndpoint : EndpointWithoutRequest<ApiR
             return;
         }
 
+        using IDatabaseTransaction transaction = await _databaseCache.BeginTransactionAsync(ct);
+
         // Reactivate by reverting to Free tier with Active status
         await _databaseCache.RevertSubscriptionToFreeAsync(tenantId.Value, _subscriptionOptions.FreeTierMachineLimit, _subscriptionOptions.FreeTierRetentionDays, ct);
 
@@ -108,6 +110,8 @@ public sealed class ReactivateSubscriptionEndpoint : EndpointWithoutRequest<ApiR
             tenantId.Value, null, null,
             AuditAction.SubscriptionUpgraded, AuditResourceType.Subscription,
             tenantId.Value.ToString(), "Account reactivated to Free tier from canceled state", null), ct);
+
+        await transaction.CommitAsync(ct);
 
         _logger.LogInformation(
             "Subscription reactivated to Free tier for tenant {TenantId}",

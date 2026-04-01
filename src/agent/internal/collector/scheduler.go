@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/framlux/vord/internal/db"
+	"github.com/framlux/vord/internal/state"
 )
 
 // Scheduler runs registered collectors on their configured intervals,
@@ -24,12 +25,12 @@ type Scheduler struct {
 }
 
 // NewScheduler creates a new Scheduler.
-func NewScheduler(registry *Registry, store *db.Store) *Scheduler {
+func NewScheduler(registry *Registry, store *db.Store, rs *state.RuntimeState) *Scheduler {
 	return &Scheduler{
 		registry: registry,
 		store:    store,
-		fastTick: NewFastTick(store),
-		slowTick: NewSlowTick(store),
+		fastTick: NewFastTick(store, rs),
+		slowTick: NewSlowTick(store, rs),
 	}
 }
 

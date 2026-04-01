@@ -313,6 +313,7 @@ builder.Services.AddSingleton<ISubscriptionService, SubscriptionService>();
 builder.Services.AddScoped<IDowngradeGuardService, DowngradeGuardService>();
 builder.Services.AddScoped<IDowngradeCleanupService, DowngradeCleanupService>();
 builder.Services.AddSingleton<IOidcSecretProtector, OidcSecretProtector>();
+builder.Services.AddSingleton<IRoleCacheInvalidator, RoleCacheInvalidator>();
 builder.Services.AddHttpClient<IEmailService, ResendEmailService>();
 
 // Handler services for extracted endpoint business logic (scoped to share DatabaseContext)
