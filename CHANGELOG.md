@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file. See [versionize](https://github.com/versionize/versionize) for commit guidelines.
 
+<a name="1.5.2"></a>
+## [1.5.2](https://www.github.com/framlux/vord/releases/tag/v1.5.2) (2026-04-02)
+
+### Bug Fixes
+
+* Fixing broken API contracts and incorrect navigation highlighting ([696fb6a](https://www.github.com/framlux/vord/commit/696fb6a7e45b344f1402509dff9f43e88c270fd1))
+
 <a name="1.5.1"></a>
 ## [1.5.1](https://www.github.com/framlux/vord/releases/tag/v1.5.1) (2026-03-31)
 
