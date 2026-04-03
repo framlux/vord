@@ -31,6 +31,10 @@
 	let mobileMenuOpen = $state(false);
 
 	function isActive(path: string): boolean {
+		if (path === '/machines' || path === '/settings') {
+			return page.url.pathname === path;
+		}
+
 		return page.url.pathname.startsWith(path);
 	}
 

@@ -278,9 +278,9 @@ export class ApiClient {
 
 	// Registration Tokens
 	async getRegistrationTokens(): Promise<RegistrationTokenDto[]> {
-		const resp = await this.get<ApiResponse<RegistrationTokenDto[]>>('/api/v1/tenants/registration-tokens');
+		const resp = await this.get<ApiResponse<PaginatedResponse<RegistrationTokenDto>>>('/api/v1/tenants/registration-tokens');
 
-		return this.unwrap(resp);
+		return this.unwrap(resp).items;
 	}
 
 	async createRegistrationToken(req: CreateRegistrationTokenRequest): Promise<RegistrationTokenDto> {
