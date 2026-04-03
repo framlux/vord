@@ -45,24 +45,6 @@ public sealed class RegistrationToken
     public required string Name { get; set; }
 
     /// <summary>
-    /// The date and time when the token expires.
-    /// </summary>
-    [Column("ExpiresAt"), NotNull]
-    public required DateTimeOffset ExpiresAt { get; set; }
-
-    /// <summary>
-    /// The maximum number of times this token can be used.
-    /// </summary>
-    [Column("MaxUses"), NotNull]
-    public required int MaxUses { get; set; }
-
-    /// <summary>
-    /// The number of times this token has been used.
-    /// </summary>
-    [Column("UsedCount"), NotNull]
-    public required int UsedCount { get; set; }
-
-    /// <summary>
     /// The user who created this token.
     /// </summary>
     [Column("CreatedByUserId"), NotNull]

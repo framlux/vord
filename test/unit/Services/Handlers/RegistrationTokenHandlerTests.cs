@@ -36,7 +36,7 @@ public class RegistrationTokenHandlerTests
         using TestDatabaseFactory dbFactory = new();
         RegistrationTokenHandler handler = new(dbFactory.Context);
 
-        ServiceResult<RegistrationTokenDto> result = await handler.CreateAsync(1, 1, null!, 30, 10, CancellationToken.None);
+        ServiceResult<RegistrationTokenDto> result = await handler.CreateAsync(1, 1, null!, CancellationToken.None);
 
         await Assert.That(result.StatusCode).IsEqualTo(400);
     }
@@ -49,51 +49,7 @@ public class RegistrationTokenHandlerTests
         using TestDatabaseFactory dbFactory = new();
         RegistrationTokenHandler handler = new(dbFactory.Context);
 
-        ServiceResult<RegistrationTokenDto> result = await handler.CreateAsync(1, 1, "", 30, 10, CancellationToken.None);
-
-        await Assert.That(result.StatusCode).IsEqualTo(400);
-    }
-
-    [Test]
-    public async Task CreateAsync_ExpiryTooLow_Returns400()
-    {
-        using TestDatabaseFactory dbFactory = new();
-        RegistrationTokenHandler handler = new(dbFactory.Context);
-
-        ServiceResult<RegistrationTokenDto> result = await handler.CreateAsync(1, 1, "Token", 0, 10, CancellationToken.None);
-
-        await Assert.That(result.StatusCode).IsEqualTo(400);
-    }
-
-    [Test]
-    public async Task CreateAsync_ExpiryTooHigh_Returns400()
-    {
-        using TestDatabaseFactory dbFactory = new();
-        RegistrationTokenHandler handler = new(dbFactory.Context);
-
-        ServiceResult<RegistrationTokenDto> result = await handler.CreateAsync(1, 1, "Token", 366, 10, CancellationToken.None);
-
-        await Assert.That(result.StatusCode).IsEqualTo(400);
-    }
-
-    [Test]
-    public async Task CreateAsync_MaxUsesTooLow_Returns400()
-    {
-        using TestDatabaseFactory dbFactory = new();
-        RegistrationTokenHandler handler = new(dbFactory.Context);
-
-        ServiceResult<RegistrationTokenDto> result = await handler.CreateAsync(1, 1, "Token", 30, 0, CancellationToken.None);
-
-        await Assert.That(result.StatusCode).IsEqualTo(400);
-    }
-
-    [Test]
-    public async Task CreateAsync_MaxUsesTooHigh_Returns400()
-    {
-        using TestDatabaseFactory dbFactory = new();
-        RegistrationTokenHandler handler = new(dbFactory.Context);
-
-        ServiceResult<RegistrationTokenDto> result = await handler.CreateAsync(1, 1, "Token", 30, 10001, CancellationToken.None);
+        ServiceResult<RegistrationTokenDto> result = await handler.CreateAsync(1, 1, "", CancellationToken.None);
 
         await Assert.That(result.StatusCode).IsEqualTo(400);
     }
@@ -104,13 +60,12 @@ public class RegistrationTokenHandlerTests
         using TestDatabaseFactory dbFactory = new();
         RegistrationTokenHandler handler = new(dbFactory.Context);
 
-        ServiceResult<RegistrationTokenDto> result = await handler.CreateAsync(1, 1, "My Token", 30, 10, CancellationToken.None);
+        ServiceResult<RegistrationTokenDto> result = await handler.CreateAsync(1, 1, "My Token", CancellationToken.None);
 
         await Assert.That(result.IsSuccess).IsEqualTo(true);
         await Assert.That(result.Data!.Name).IsEqualTo("My Token");
         await Assert.That(result.Data!.Token).IsNotNull();
         await Assert.That(string.IsNullOrEmpty(result.Data!.Token)).IsEqualTo(false);
-        await Assert.That(result.Data!.MaxUses).IsEqualTo(10);
         await Assert.That(result.Data!.IsRevoked).IsEqualTo(false);
     }
 
@@ -120,7 +75,7 @@ public class RegistrationTokenHandlerTests
         using TestDatabaseFactory dbFactory = new();
         RegistrationTokenHandler handler = new(dbFactory.Context);
 
-        await handler.CreateAsync(1, 1, "DB Token", 30, 10, CancellationToken.None);
+        await handler.CreateAsync(1, 1, "DB Token", CancellationToken.None);
 
         List<RegistrationToken> tokens = await dbFactory.Context.RegistrationTokens.ToListAsync();
         await Assert.That(tokens.Count).IsEqualTo(1);
@@ -134,7 +89,7 @@ public class RegistrationTokenHandlerTests
         using TestDatabaseFactory dbFactory = new();
         RegistrationTokenHandler handler = new(dbFactory.Context);
 
-        ServiceResult<RegistrationTokenDto> result = await handler.CreateAsync(1, 1, "Hash Token", 30, 10, CancellationToken.None);
+        ServiceResult<RegistrationTokenDto> result = await handler.CreateAsync(1, 1, "Hash Token", CancellationToken.None);
 
         RegistrationToken? dbToken = await dbFactory.Context.RegistrationTokens.FirstOrDefaultAsync();
         await Assert.That(dbToken).IsNotNull();
@@ -163,9 +118,6 @@ public class RegistrationTokenHandlerTests
             TenantId = 2,
             TokenHash = "hash-123",
             Name = "Wrong Tenant Token",
-            ExpiresAt = DateTimeOffset.UtcNow.AddDays(30),
-            MaxUses = 10,
-            UsedCount = 0,
             CreatedByUserId = 1,
             CreatedAt = DateTimeOffset.UtcNow,
             IsRevoked = false,
@@ -188,9 +140,6 @@ public class RegistrationTokenHandlerTests
             TenantId = 1,
             TokenHash = "hash-revoked",
             Name = "Revoked Token",
-            ExpiresAt = DateTimeOffset.UtcNow.AddDays(30),
-            MaxUses = 10,
-            UsedCount = 0,
             CreatedByUserId = 1,
             CreatedAt = DateTimeOffset.UtcNow,
             IsRevoked = true,
@@ -214,9 +163,6 @@ public class RegistrationTokenHandlerTests
             TenantId = 1,
             TokenHash = "hash-valid",
             Name = "Valid Token",
-            ExpiresAt = DateTimeOffset.UtcNow.AddDays(30),
-            MaxUses = 10,
-            UsedCount = 0,
             CreatedByUserId = 1,
             CreatedAt = DateTimeOffset.UtcNow,
             IsRevoked = false,
@@ -260,9 +206,6 @@ public class RegistrationTokenHandlerTests
                 TenantId = 1,
                 TokenHash = $"hash-{i}",
                 Name = $"Token {i}",
-                ExpiresAt = DateTimeOffset.UtcNow.AddDays(30),
-                MaxUses = 10,
-                UsedCount = 0,
                 CreatedByUserId = 1,
                 CreatedAt = DateTimeOffset.UtcNow.AddMinutes(-i),
                 IsRevoked = false,
@@ -292,9 +235,6 @@ public class RegistrationTokenHandlerTests
                 TenantId = 1,
                 TokenHash = $"hash-beyond-{i}",
                 Name = $"Token Beyond {i}",
-                ExpiresAt = DateTimeOffset.UtcNow.AddDays(30),
-                MaxUses = 10,
-                UsedCount = 0,
                 CreatedByUserId = 1,
                 CreatedAt = DateTimeOffset.UtcNow.AddMinutes(-i),
                 IsRevoked = false,
@@ -322,9 +262,6 @@ public class RegistrationTokenHandlerTests
                 TenantId = 1,
                 TokenHash = $"hash-exact-{i}",
                 Name = $"Token Exact {i}",
-                ExpiresAt = DateTimeOffset.UtcNow.AddDays(30),
-                MaxUses = 10,
-                UsedCount = 0,
                 CreatedByUserId = 1,
                 CreatedAt = DateTimeOffset.UtcNow.AddMinutes(-i),
                 IsRevoked = false,

@@ -212,7 +212,7 @@ public sealed class SqliteSqlDialect : ISqlDialect
             .Take(50)
             .ToList();
 
-        string sessionsJson = JsonSerializer.Serialize(sorted);
+        string sessionsJson = JsonSerializer.Serialize(sorted, JsonDefaults.SnakeCase);
 
         string sql = """
             INSERT INTO "MachineState" ("MachineId", "SshSessions", "SshSessionsAt", "LastTelemetryAt", "HealthStatus")

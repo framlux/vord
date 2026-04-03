@@ -15,10 +15,6 @@ namespace Framlux.FleetManagement.Server.Services.Infrastructure;
 /// </summary>
 public static class HealthComputer
 {
-    private static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower
-    };
 
     /// <summary>
     /// Computes the health status for a machine based on its state and online status.
@@ -102,7 +98,7 @@ public static class HealthComputer
     {
         try
         {
-            return JsonSerializer.Deserialize<T>(json, JsonOptions);
+            return JsonSerializer.Deserialize<T>(json, JsonDefaults.SnakeCase);
         }
         catch
         {

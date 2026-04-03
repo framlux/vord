@@ -6,6 +6,7 @@ using System.Net.Http.Headers;
 using System.Text.Json;
 using System.Text;
 using Framlux.FleetManagement.Server.Options;
+using Framlux.FleetManagement.Server.Services.Infrastructure;
 using Microsoft.Extensions.Options;
 
 namespace Framlux.FleetManagement.Server.Services.Notifications;
@@ -73,7 +74,7 @@ public sealed class ResendEmailService : IEmailService
 
         try
         {
-            string json = JsonSerializer.Serialize(payload);
+            string json = JsonSerializer.Serialize(payload, JsonDefaults.CamelCase);
             using HttpRequestMessage request = new(HttpMethod.Post, "https://api.resend.com/emails");
             request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
             request.Content = new StringContent(json, Encoding.UTF8, "application/json");

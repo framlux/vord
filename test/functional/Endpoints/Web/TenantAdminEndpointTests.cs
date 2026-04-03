@@ -35,8 +35,6 @@ public sealed class TenantAdminEndpointTests
         HttpResponseMessage response = await client.PostAsJsonAsync("/api/v1/tenants/registration-tokens", new
         {
             Name = "Test Token",
-            ExpiresInDays = 30,
-            MaxUses = 10
         });
 
         await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
@@ -64,9 +62,6 @@ public sealed class TenantAdminEndpointTests
             TenantId = tenantId,
             TokenHash = "hash-revoke-test",
             Name = "Revoke Me",
-            ExpiresAt = DateTimeOffset.UtcNow.AddDays(30),
-            MaxUses = 10,
-            UsedCount = 0,
             CreatedByUserId = 1,
             CreatedAt = DateTimeOffset.UtcNow,
             IsRevoked = false,

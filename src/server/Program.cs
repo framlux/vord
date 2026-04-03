@@ -439,6 +439,7 @@ app.UseAuthentication()
     .UseAuthorization()
     .UseFastEndpoints(options =>
     {
+        options.Serializer.Options.Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping;
         options.Versioning.PrependToRoute = true;
         options.Versioning.DefaultVersion = 1;
         options.Versioning.Prefix = "api/v";

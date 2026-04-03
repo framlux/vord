@@ -2,9 +2,9 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
+using System.Text.Json;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
-using System.Text.Json;
 
 namespace Framlux.FleetManagement.Server.Services.Infrastructure;
 
@@ -13,12 +13,6 @@ namespace Framlux.FleetManagement.Server.Services.Infrastructure;
 /// </summary>
 public static class AuditHelper
 {
-    private static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull,
-    };
-
     /// <summary>
     /// Creates a new audit log entry.
     /// </summary>
@@ -48,7 +42,7 @@ public static class AuditHelper
             Action = action,
             ResourceType = resourceType,
             ResourceId = resourceId,
-            Details = details is not null ? JsonSerializer.Serialize(details, JsonOptions) : null,
+            Details = details is not null ? JsonSerializer.Serialize(details, JsonDefaults.CamelCase) : null,
             IpAddress = ipAddress,
             Timestamp = DateTimeOffset.UtcNow,
         };

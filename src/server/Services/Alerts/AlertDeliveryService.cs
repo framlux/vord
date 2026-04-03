@@ -7,8 +7,9 @@ using Framlux.FleetManagement.Database;
 using LinqToDB.Async;
 using LinqToDB;
 using System.Security.Cryptography;
-using System.Text.Json;
 using System.Text;
+using System.Text.Json;
+using Framlux.FleetManagement.Server.Services.Infrastructure;
 
 namespace Framlux.FleetManagement.Server.Services.Alerts;
 
@@ -70,7 +71,7 @@ public sealed class AlertDeliveryService : IAlertDeliveryService
                     machineId = alertEvent.MachineId,
                     triggeredAt = alertEvent.TriggeredAt,
                     details = alertEvent.Details,
-                });
+                }, JsonDefaults.CamelCase);
 
                 byte[] signatureBytes = HMACSHA256.HashData(
                     Encoding.UTF8.GetBytes(webhook.Secret),

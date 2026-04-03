@@ -48,7 +48,7 @@ public sealed class CreateRegistrationTokenEndpoint : Endpoint<CreateRegistratio
         int userId = int.TryParse(userIdStr, out int uid) ? uid : 0;
 
         ServiceResult<RegistrationTokenDto> result = await _handler.CreateAsync(
-            tenantId.Value, userId, req.Name, req.ExpiresInDays, req.MaxUses, ct);
+            tenantId.Value, userId, req.Name, ct);
 
         if (result.IsSuccess == false)
         {

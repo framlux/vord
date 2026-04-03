@@ -2,6 +2,7 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
+using System.Text.RegularExpressions;
 using Framlux.FleetManagement.Database.Cache;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database;
@@ -15,8 +16,18 @@ namespace Framlux.FleetManagement.Server.Services.Handlers;
 /// <summary>
 /// Handles tenant management operations.
 /// </summary>
-public sealed class TenantHandler : ITenantHandler
+public sealed partial class TenantHandler : ITenantHandler
 {
+    private const int MinNameLength = 5;
+    private const int MaxNameLength = 100;
+
+    /// <summary>
+    /// Matches characters that are not allowed in tenant names.
+    /// Blocks HTML/injection characters and ASCII control characters.
+    /// </summary>
+    [GeneratedRegex("""[<>"'`\\/{}\|\x00-\x1F]""", RegexOptions.None, matchTimeoutMilliseconds: 100)]
+    private static partial Regex BlockedCharactersRegex();
+
     private readonly IDatabaseCache _databaseCache;
     private readonly DatabaseContext _db;
     private readonly ILogger<TenantHandler> _logger;
@@ -39,6 +50,18 @@ public sealed class TenantHandler : ITenantHandler
     public async Task<ServiceResult<TenantDto>> CreateAsync(string name, string logoUrl, int userId, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(name))
+        {
+            return ServiceResult<TenantDto>.Error(400, default!);
+        }
+
+        name = name.Trim();
+
+        if ((name.Length < MinNameLength) || (name.Length > MaxNameLength))
+        {
+            return ServiceResult<TenantDto>.Error(400, default!);
+        }
+
+        if (BlockedCharactersRegex().IsMatch(name))
         {
             return ServiceResult<TenantDto>.Error(400, default!);
         }

@@ -8,6 +8,7 @@ using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Grpc.AgentTelemetry;
 using Framlux.FleetManagement.Server.Auth;
 using Framlux.FleetManagement.Server.Services.Billing;
+using Framlux.FleetManagement.Server.Services.Infrastructure;
 using Framlux.FleetManagement.Server.Services.Machines;
 using Framlux.FleetManagement.Server.Services.Telemetry;
 using Grpc.Core;
@@ -24,10 +25,6 @@ namespace Framlux.FleetManagement.Server.Endpoints.Grpc;
 [Authorize(ApiKeyAuthenticationHandler.SchemeName)]
 public sealed class TelemetryService : Telemetry.TelemetryBase
 {
-    private static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower
-    };
 
     /// <summary>
     /// PostgreSQL error code for unique constraint violation.
@@ -300,7 +297,7 @@ public sealed class TelemetryService : Telemetry.TelemetryBase
         };
 
         return payload is not null
-            ? JsonSerializer.Serialize(payload, JsonOptions)
+            ? JsonSerializer.Serialize(payload, JsonDefaults.SnakeCase)
             : "{}";
     }
 

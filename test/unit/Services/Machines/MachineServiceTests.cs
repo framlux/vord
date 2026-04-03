@@ -8,7 +8,6 @@ using Framlux.FleetManagement.Grpc.AgentRegistration;
 using Framlux.FleetManagement.Server.Services.Billing;
 using Framlux.FleetManagement.Server.Services.Machines;
 using Framlux.FleetManagement.Test.Infrastructure;
-using LinqToDB.Async;
 using LinqToDB;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Logging;
@@ -31,16 +30,13 @@ public class MachineServiceTests
         return Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(token)));
     }
 
-    private static async Task<RegistrationToken> SeedValidRegistrationToken(TestDatabaseFactory dbFactory, int tenantId = 1, int maxUses = 100)
+    private static async Task<RegistrationToken> SeedValidRegistrationToken(TestDatabaseFactory dbFactory, int tenantId = 1)
     {
         RegistrationToken token = new()
         {
             TenantId = tenantId,
             TokenHash = ComputeTokenHash(TestTokenValue),
             Name = "Test Token",
-            ExpiresAt = DateTimeOffset.UtcNow.AddDays(30),
-            MaxUses = maxUses,
-            UsedCount = 0,
             CreatedByUserId = 1,
             CreatedAt = DateTimeOffset.UtcNow,
             IsRevoked = false,
@@ -269,78 +265,6 @@ public class MachineServiceTests
     }
 
     [Test]
-    public async Task RegisterSystem_ExpiredToken_ReturnsError()
-    {
-        using TestDatabaseFactory dbFactory = new();
-        RegistrationToken token = await SeedValidRegistrationToken(dbFactory);
-        await dbFactory.Context.RegistrationTokens
-            .Where(t => t.Id == token.Id)
-            .Set(t => t.ExpiresAt, DateTimeOffset.UtcNow.AddDays(-1))
-            .UpdateAsync();
-
-        IDatabaseCache dbCache = Substitute.For<IDatabaseCache>();
-        TestServiceScopeFactory scopeFactory = CreateScopeFactory(dbFactory, dbCache);
-        ILogger<MachineService> logger = new NullLogger<MachineService>();
-        IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
-        redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(Substitute.For<IDatabase>());
-        IBillingApiClient billingApiClient = Substitute.For<IBillingApiClient>();
-        MachineService service = new(scopeFactory, logger, redis, billingApiClient);
-
-        RegisterSystemRequest request = new()
-        {
-            SerialNumber = "SN-TEST",
-            SystemId = "SID-TEST",
-            Hostname = "test-host",
-            MachineType = Grpc.AgentRegistration.MachineType.BareMetalServerType,
-            Os = OperatingSystemType.UbuntuOs,
-            RegistrationToken = TestTokenValue,
-        };
-
-        (long? machineId, string? apiKey, string errorMessage) result =
-            await service.RegisterSystemAsync(request, CancellationToken.None);
-
-        await Assert.That(result.machineId).IsNull();
-        await Assert.That(result.apiKey).IsNull();
-        await Assert.That(result.errorMessage).IsEqualTo("Registration token has expired");
-    }
-
-    [Test]
-    public async Task RegisterSystem_ExhaustedToken_ReturnsError()
-    {
-        using TestDatabaseFactory dbFactory = new();
-        RegistrationToken token = await SeedValidRegistrationToken(dbFactory, maxUses: 1);
-        await dbFactory.Context.RegistrationTokens
-            .Where(t => t.Id == token.Id)
-            .Set(t => t.UsedCount, 1)
-            .UpdateAsync();
-
-        IDatabaseCache dbCache = Substitute.For<IDatabaseCache>();
-        TestServiceScopeFactory scopeFactory = CreateScopeFactory(dbFactory, dbCache);
-        ILogger<MachineService> logger = new NullLogger<MachineService>();
-        IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
-        redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(Substitute.For<IDatabase>());
-        IBillingApiClient billingApiClient = Substitute.For<IBillingApiClient>();
-        MachineService service = new(scopeFactory, logger, redis, billingApiClient);
-
-        RegisterSystemRequest request = new()
-        {
-            SerialNumber = "SN-TEST",
-            SystemId = "SID-TEST",
-            Hostname = "test-host",
-            MachineType = Grpc.AgentRegistration.MachineType.BareMetalServerType,
-            Os = OperatingSystemType.UbuntuOs,
-            RegistrationToken = TestTokenValue,
-        };
-
-        (long? machineId, string? apiKey, string errorMessage) result =
-            await service.RegisterSystemAsync(request, CancellationToken.None);
-
-        await Assert.That(result.machineId).IsNull();
-        await Assert.That(result.apiKey).IsNull();
-        await Assert.That(result.errorMessage).IsEqualTo("Registration token usage limit exceeded");
-    }
-
-    [Test]
     public async Task RegisterSystem_ValidToken_ReturnsMachineIdAndApiKey()
     {
         using TestDatabaseFactory dbFactory = new();
@@ -379,47 +303,6 @@ public class MachineServiceTests
         await Assert.That(result.machineId).IsEqualTo(100L);
         await Assert.That(result.apiKey).IsEqualTo("plaintext-api-key-123");
         await Assert.That(result.errorMessage).IsEqualTo(string.Empty);
-    }
-
-    [Test]
-    public async Task RegisterSystem_ValidToken_IncrementsTokenUsageCount()
-    {
-        using TestDatabaseFactory dbFactory = new();
-        RegistrationToken token = await SeedValidRegistrationToken(dbFactory, tenantId: 5);
-
-        IDatabaseCache dbCache = Substitute.For<IDatabaseCache>();
-        dbCache.DoesMachineExistAsync(
-            Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
-            .Returns(false);
-
-        Machine createdMachine = TestDataBuilder.BuildMachine(tenantId: 5, registrationTokenId: token.Id);
-        createdMachine.Id = 100;
-        dbCache.CreateMachineWithKeyAsync(Arg.Any<Machine>(), Arg.Any<int?>(), Arg.Any<CancellationToken>())
-            .Returns((createdMachine, "plaintext-api-key-123"));
-
-        TestServiceScopeFactory scopeFactory = CreateScopeFactory(dbFactory, dbCache);
-        ILogger<MachineService> logger = new NullLogger<MachineService>();
-        IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
-        redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(Substitute.For<IDatabase>());
-        IBillingApiClient billingApiClient = Substitute.For<IBillingApiClient>();
-        MachineService service = new(scopeFactory, logger, redis, billingApiClient);
-
-        RegisterSystemRequest request = new()
-        {
-            SerialNumber = "SN-TEST",
-            SystemId = "SID-TEST",
-            Hostname = "test-host",
-            MachineType = Grpc.AgentRegistration.MachineType.BareMetalServerType,
-            Os = OperatingSystemType.UbuntuOs,
-            RegistrationToken = TestTokenValue,
-        };
-
-        await service.RegisterSystemAsync(request, CancellationToken.None);
-
-        RegistrationToken? updatedToken = await dbFactory.Context.RegistrationTokens
-            .FirstOrDefaultAsync(t => t.Id == token.Id);
-        await Assert.That(updatedToken).IsNotNull();
-        await Assert.That(updatedToken!.UsedCount).IsEqualTo(1);
     }
 
     [Test]

@@ -2,8 +2,8 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
-using Microsoft.Extensions.Diagnostics.HealthChecks;
 using System.Text.Json;
+using Microsoft.Extensions.Diagnostics.HealthChecks;
 
 namespace Framlux.FleetManagement.Server.Services.Infrastructure;
 
@@ -12,19 +12,13 @@ namespace Framlux.FleetManagement.Server.Services.Infrastructure;
 /// </summary>
 public static class HealthCheckResponseWriter
 {
-    private static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        PropertyNamingPolicy = JsonNamingPolicy.CamelCase,
-        WriteIndented = false
-    };
-
     /// <summary>
     /// Writes a minimal health check response (liveness probe).
     /// </summary>
     public static async Task WriteMinimal(HttpContext context, HealthReport report)
     {
         context.Response.ContentType = "application/json";
-        string json = JsonSerializer.Serialize(new { status = report.Status.ToString() }, JsonOptions);
+        string json = JsonSerializer.Serialize(new { status = report.Status.ToString() }, JsonDefaults.CamelCase);
         await context.Response.WriteAsync(json);
     }
 
@@ -53,7 +47,7 @@ public static class HealthCheckResponseWriter
             entries
         };
 
-        string json = JsonSerializer.Serialize(result, JsonOptions);
+        string json = JsonSerializer.Serialize(result, JsonDefaults.CamelCase);
         await context.Response.WriteAsync(json);
     }
 }

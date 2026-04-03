@@ -47,7 +47,8 @@
 	let showCancelConfirm = $state(false);
 	let showDowngradeToFreeConfirm = $state(false);
 	let showDowngradeToProConfirm = $state(false);
-	let machineCount = $state(1);
+	let machineCountInput = $state(1);
+	let machineCount = $derived(Math.max(1, Math.min(10000, machineCountInput || 1)));
 
 	function getTierBadgeClasses(tier: string): string {
 		if (tier === 'Pro') {
@@ -868,7 +869,7 @@
 					type="number"
 					min="1"
 					max="10000"
-					bind:value={machineCount}
+					bind:value={machineCountInput}
 					class="mt-1 w-32 rounded-lg border border-surface-300 bg-surface-50 px-3 py-2 text-sm text-surface-900 dark:border-surface-600 dark:bg-surface-700 dark:text-surface-100"
 				/>
 			</div>

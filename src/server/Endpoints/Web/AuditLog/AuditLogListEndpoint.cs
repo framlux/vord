@@ -72,7 +72,8 @@ public sealed class AuditLogListEndpoint : Endpoint<AuditLogListRequest, ApiResp
         if (tenantId is null)
         {
             HttpContext.Response.StatusCode = 401;
-            await Send.OkAsync(ApiResponse<PaginatedResponse<AuditLogEntryDto>>.Error("Unauthorized"), cancellation: ct);
+            await HttpContext.Response.WriteAsJsonAsync(
+                ApiResponse<PaginatedResponse<AuditLogEntryDto>>.Error("Unauthorized"), ct);
 
             return;
         }
@@ -81,7 +82,8 @@ public sealed class AuditLogListEndpoint : Endpoint<AuditLogListRequest, ApiResp
         if ((subscription is null) || (subscription.Tier != SubscriptionTier.Team))
         {
             HttpContext.Response.StatusCode = 403;
-            await Send.OkAsync(ApiResponse<PaginatedResponse<AuditLogEntryDto>>.Error("Audit log requires a Team subscription"), cancellation: ct);
+            await HttpContext.Response.WriteAsJsonAsync(
+                ApiResponse<PaginatedResponse<AuditLogEntryDto>>.Error("Audit log requires a Team subscription"), ct);
 
             return;
         }

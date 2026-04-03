@@ -98,6 +98,130 @@ public class TenantHandlerTests
     }
 
     [Test]
+    public async Task CreateAsync_NameTooShort_Returns400()
+    {
+        IDatabaseCache cache = Substitute.For<IDatabaseCache>();
+        using TestDatabaseFactory dbFactory = new();
+        ILogger<TenantHandler> logger = Substitute.For<ILogger<TenantHandler>>();
+        TenantHandler handler = new(cache, dbFactory.Context, logger);
+
+        ServiceResult<TenantDto> result = await handler.CreateAsync("Abcd", "https://logo.png", 1, CancellationToken.None);
+
+        await Assert.That(result.StatusCode).IsEqualTo(400);
+    }
+
+    [Test]
+    public async Task CreateAsync_NameTooLong_Returns400()
+    {
+        IDatabaseCache cache = Substitute.For<IDatabaseCache>();
+        using TestDatabaseFactory dbFactory = new();
+        ILogger<TenantHandler> logger = Substitute.For<ILogger<TenantHandler>>();
+        TenantHandler handler = new(cache, dbFactory.Context, logger);
+
+        string longName = new('A', 101);
+        ServiceResult<TenantDto> result = await handler.CreateAsync(longName, "https://logo.png", 1, CancellationToken.None);
+
+        await Assert.That(result.StatusCode).IsEqualTo(400);
+    }
+
+    [Test]
+    public async Task CreateAsync_NameWithHtmlTags_Returns400()
+    {
+        IDatabaseCache cache = Substitute.For<IDatabaseCache>();
+        using TestDatabaseFactory dbFactory = new();
+        ILogger<TenantHandler> logger = Substitute.For<ILogger<TenantHandler>>();
+        TenantHandler handler = new(cache, dbFactory.Context, logger);
+
+        ServiceResult<TenantDto> result = await handler.CreateAsync("<script>alert</script>", "https://logo.png", 1, CancellationToken.None);
+
+        await Assert.That(result.StatusCode).IsEqualTo(400);
+    }
+
+    [Test]
+    public async Task CreateAsync_NameWithControlChars_Returns400()
+    {
+        IDatabaseCache cache = Substitute.For<IDatabaseCache>();
+        using TestDatabaseFactory dbFactory = new();
+        ILogger<TenantHandler> logger = Substitute.For<ILogger<TenantHandler>>();
+        TenantHandler handler = new(cache, dbFactory.Context, logger);
+
+        ServiceResult<TenantDto> result = await handler.CreateAsync("Test\x00Corp", "https://logo.png", 1, CancellationToken.None);
+
+        await Assert.That(result.StatusCode).IsEqualTo(400);
+    }
+
+    [Test]
+    public async Task CreateAsync_NameWithBackslash_Returns400()
+    {
+        IDatabaseCache cache = Substitute.For<IDatabaseCache>();
+        using TestDatabaseFactory dbFactory = new();
+        ILogger<TenantHandler> logger = Substitute.For<ILogger<TenantHandler>>();
+        TenantHandler handler = new(cache, dbFactory.Context, logger);
+
+        ServiceResult<TenantDto> result = await handler.CreateAsync("Test\\Corp", "https://logo.png", 1, CancellationToken.None);
+
+        await Assert.That(result.StatusCode).IsEqualTo(400);
+    }
+
+    [Test]
+    public async Task CreateAsync_UnicodeJapaneseName_Succeeds()
+    {
+        IDatabaseCache cache = Substitute.For<IDatabaseCache>();
+        cache.GetTenantByNameAsync("テスト組織です", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<Tenant?>(null));
+        Tenant createdTenant = TestDataBuilder.BuildTenant(name: "テスト組織です");
+        createdTenant.Id = 50;
+        cache.CreateTenantAsync(Arg.Any<Tenant>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(createdTenant));
+        using TestDatabaseFactory dbFactory = new();
+        ILogger<TenantHandler> logger = Substitute.For<ILogger<TenantHandler>>();
+        TenantHandler handler = new(cache, dbFactory.Context, logger);
+
+        ServiceResult<TenantDto> result = await handler.CreateAsync("テスト組織です", "https://logo.png", 1, CancellationToken.None);
+
+        await Assert.That(result.IsSuccess).IsEqualTo(true);
+    }
+
+    [Test]
+    public async Task CreateAsync_NameWithLeadingTrailingWhitespace_IsTrimmed()
+    {
+        IDatabaseCache cache = Substitute.For<IDatabaseCache>();
+        cache.GetTenantByNameAsync("Trimmed Corp", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<Tenant?>(null));
+        Tenant createdTenant = TestDataBuilder.BuildTenant(name: "Trimmed Corp");
+        createdTenant.Id = 51;
+        cache.CreateTenantAsync(Arg.Any<Tenant>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(createdTenant));
+        using TestDatabaseFactory dbFactory = new();
+        ILogger<TenantHandler> logger = Substitute.For<ILogger<TenantHandler>>();
+        TenantHandler handler = new(cache, dbFactory.Context, logger);
+
+        ServiceResult<TenantDto> result = await handler.CreateAsync("  Trimmed Corp  ", "https://logo.png", 1, CancellationToken.None);
+
+        await Assert.That(result.IsSuccess).IsEqualTo(true);
+        await cache.Received(1).GetTenantByNameAsync("Trimmed Corp", Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task CreateAsync_NameWithValidSpecialChars_Succeeds()
+    {
+        IDatabaseCache cache = Substitute.For<IDatabaseCache>();
+        cache.GetTenantByNameAsync("Acme & Co. - HQ_1", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<Tenant?>(null));
+        Tenant createdTenant = TestDataBuilder.BuildTenant(name: "Acme & Co. - HQ_1");
+        createdTenant.Id = 52;
+        cache.CreateTenantAsync(Arg.Any<Tenant>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(createdTenant));
+        using TestDatabaseFactory dbFactory = new();
+        ILogger<TenantHandler> logger = Substitute.For<ILogger<TenantHandler>>();
+        TenantHandler handler = new(cache, dbFactory.Context, logger);
+
+        ServiceResult<TenantDto> result = await handler.CreateAsync("Acme & Co. - HQ_1", "https://logo.png", 1, CancellationToken.None);
+
+        await Assert.That(result.IsSuccess).IsEqualTo(true);
+    }
+
+    [Test]
     public async Task CreateAsync_DuplicateName_Returns409()
     {
         IDatabaseCache cache = Substitute.For<IDatabaseCache>();

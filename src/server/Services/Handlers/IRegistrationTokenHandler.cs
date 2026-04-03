@@ -19,11 +19,9 @@ public interface IRegistrationTokenHandler
     /// <param name="tenantId">The tenant ID.</param>
     /// <param name="userId">The creating user ID.</param>
     /// <param name="name">The friendly name for the token.</param>
-    /// <param name="expiresInDays">Days until expiry.</param>
-    /// <param name="maxUses">Maximum number of uses.</param>
     /// <param name="ct">A cancellation token.</param>
     /// <returns>A service result containing the created token DTO (with plaintext token).</returns>
-    Task<ServiceResult<RegistrationTokenDto>> CreateAsync(int tenantId, int userId, string name, int expiresInDays, int maxUses, CancellationToken ct);
+    Task<ServiceResult<RegistrationTokenDto>> CreateAsync(int tenantId, int userId, string name, CancellationToken ct);
 
     /// <summary>
     /// Revokes a registration token.

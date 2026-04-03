@@ -21,10 +21,6 @@ namespace Framlux.FleetManagement.Server.Services.Machines;
 /// </summary>
 public sealed class MachineStateService : IMachineStateService
 {
-    private static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower
-    };
 
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly IMachinePingService _pingService;
@@ -241,7 +237,7 @@ public sealed class MachineStateService : IMachineStateService
 
                 if (state.DiskUsages is not null)
                 {
-                    List<DiskUsageEntryDto>? disks = JsonSerializer.Deserialize<List<DiskUsageEntryDto>>(state.DiskUsages, JsonOptions);
+                    List<DiskUsageEntryDto>? disks = JsonSerializer.Deserialize<List<DiskUsageEntryDto>>(state.DiskUsages, JsonDefaults.SnakeCase);
                     if (disks is { Count: > 0 })
                     {
                         dto.MaxDiskUsagePercent = disks.Max(d => d.UsagePercent);
@@ -250,7 +246,7 @@ public sealed class MachineStateService : IMachineStateService
 
                 if (state.HardwareHealth is not null)
                 {
-                    HardwareHealthPayload? hw = JsonSerializer.Deserialize<HardwareHealthPayload>(state.HardwareHealth, JsonOptions);
+                    HardwareHealthPayload? hw = JsonSerializer.Deserialize<HardwareHealthPayload>(state.HardwareHealth, JsonDefaults.SnakeCase);
                     if (hw is not null)
                     {
                         dto.HasDiskHealthIssue = hw.DiskSmart.Exists(d =>
@@ -351,7 +347,7 @@ public sealed class MachineStateService : IMachineStateService
             .Take(20)
             .ToListAsync(ct)
             .ContinueWith(task => task.Result
-                .Select(t => JsonSerializer.Deserialize<SshSessionPayload>(t.Payload, JsonOptions))
+                .Select(t => JsonSerializer.Deserialize<SshSessionPayload>(t.Payload, JsonDefaults.SnakeCase))
                 .Where(s => s is not null)
                 .Select(s => s!)
                 .ToList(), ct);
@@ -404,7 +400,7 @@ public sealed class MachineStateService : IMachineStateService
 
         try
         {
-            return JsonSerializer.Deserialize<T>(row.Payload, JsonOptions);
+            return JsonSerializer.Deserialize<T>(row.Payload, JsonDefaults.SnakeCase);
         }
         catch
         {

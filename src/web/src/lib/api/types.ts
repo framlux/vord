@@ -440,17 +440,12 @@ export interface RegistrationTokenDto {
 	id: number;
 	name: string;
 	token: string | null;
-	expiresAt: string;
-	maxUses: number;
-	usedCount: number;
 	createdAt: string;
 	isRevoked: boolean;
 }
 
 export interface CreateRegistrationTokenRequest {
 	name: string;
-	expiresInDays: number;
-	maxUses: number;
 }
 
 // Fleet SSH Sessions

@@ -18,15 +18,6 @@ public sealed class RegistrationTokenDto
     /// <summary>The plaintext token (only returned on creation).</summary>
     public string? Token { get; set; }
 
-    /// <summary>When the token expires.</summary>
-    public DateTimeOffset ExpiresAt { get; set; }
-
-    /// <summary>Maximum uses allowed.</summary>
-    public int MaxUses { get; set; }
-
-    /// <summary>Current usage count.</summary>
-    public int UsedCount { get; set; }
-
     /// <summary>When the token was created.</summary>
     public DateTimeOffset CreatedAt { get; set; }
 

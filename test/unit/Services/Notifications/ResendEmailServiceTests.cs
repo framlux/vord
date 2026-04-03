@@ -2,6 +2,7 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
+using System.Text.Json;
 using Framlux.FleetManagement.Server.Options;
 using Framlux.FleetManagement.Server.Services.Notifications;
 using Framlux.FleetManagement.Test.Infrastructure;
@@ -174,10 +175,13 @@ public sealed class ResendEmailServiceTests
 
         string? body = handler.Requests[0].Body;
         await Assert.That(body).IsNotNull();
-        // The raw script tag should be HTML-encoded in the body.
-        // JSON serialization encodes & as \u0026, so the encoded form appears as \u0026lt;script\u0026gt;
-        await Assert.That(body!.Contains("<script>alert")).IsEqualTo(false);
-        // Verify the HTML entity encoding is present (the \u0026 is JSON-encoded &)
-        await Assert.That(body).Contains("\\u0026lt;script\\u0026gt;");
+
+        using JsonDocument doc = JsonDocument.Parse(body!);
+        string htmlField = doc.RootElement.GetProperty("html").GetString()!;
+
+        // The HTML body must not contain raw script tags from user input
+        await Assert.That(htmlField.Contains("<script>alert")).IsEqualTo(false);
+        // The HTML body must contain the HTML-encoded form of the tenant name
+        await Assert.That(htmlField).Contains("&lt;script&gt;");
     }
 }

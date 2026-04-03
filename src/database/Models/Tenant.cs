@@ -28,7 +28,7 @@ public sealed class Tenant
     /// <summary>
     /// The name of the tenant
     /// </summary>
-    [Column(Name = "Name"), NotNull]
+    [Column(Name = "Name"), NotNull, System.ComponentModel.DataAnnotations.MaxLength(100)]
     public required string Name { get; set; }
 
     /// <summary>

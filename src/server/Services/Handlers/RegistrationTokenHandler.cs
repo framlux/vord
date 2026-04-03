@@ -34,19 +34,9 @@ public sealed class RegistrationTokenHandler : IRegistrationTokenHandler
     }
 
     /// <inheritdoc/>
-    public async Task<ServiceResult<RegistrationTokenDto>> CreateAsync(int tenantId, int userId, string name, int expiresInDays, int maxUses, CancellationToken ct)
+    public async Task<ServiceResult<RegistrationTokenDto>> CreateAsync(int tenantId, int userId, string name, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(name))
-        {
-            return ServiceResult<RegistrationTokenDto>.Error(400, default!);
-        }
-
-        if ((expiresInDays < 1) || (expiresInDays > 365))
-        {
-            return ServiceResult<RegistrationTokenDto>.Error(400, default!);
-        }
-
-        if ((maxUses < 1) || (maxUses > 10000))
         {
             return ServiceResult<RegistrationTokenDto>.Error(400, default!);
         }
@@ -59,9 +49,6 @@ public sealed class RegistrationTokenHandler : IRegistrationTokenHandler
             TenantId = tenantId,
             TokenHash = tokenHash,
             Name = name.Trim(),
-            ExpiresAt = DateTimeOffset.UtcNow.AddDays(expiresInDays),
-            MaxUses = maxUses,
-            UsedCount = 0,
             CreatedByUserId = userId,
             CreatedAt = DateTimeOffset.UtcNow,
             IsRevoked = false,
@@ -74,7 +61,7 @@ public sealed class RegistrationTokenHandler : IRegistrationTokenHandler
         await _db.InsertAsync(AuditHelper.Create(
             tenantId, userId, null,
             AuditAction.RegistrationTokenCreated, AuditResourceType.RegistrationToken,
-            token.Id.ToString(), new { token.Name, token.MaxUses, ExpiresInDays = expiresInDays }, null), token: ct);
+            token.Id.ToString(), new { token.Name }, null), token: ct);
 
         await transaction.CommitAsync(ct);
 
@@ -83,9 +70,6 @@ public sealed class RegistrationTokenHandler : IRegistrationTokenHandler
             Id = token.Id,
             Name = token.Name,
             Token = plaintextToken,
-            ExpiresAt = token.ExpiresAt,
-            MaxUses = token.MaxUses,
-            UsedCount = token.UsedCount,
             CreatedAt = token.CreatedAt,
             IsRevoked = token.IsRevoked,
         };
@@ -148,9 +132,6 @@ public sealed class RegistrationTokenHandler : IRegistrationTokenHandler
         {
             Id = t.Id,
             Name = t.Name,
-            ExpiresAt = t.ExpiresAt,
-            MaxUses = t.MaxUses,
-            UsedCount = t.UsedCount,
             CreatedAt = t.CreatedAt,
             IsRevoked = t.IsRevoked,
         }).ToList();

@@ -11,10 +11,25 @@
 	let loading = $state(false);
 	let error = $state('');
 
+	const blockedCharsPattern = /[<>"'`\\/{}\|\x00-\x1F]/;
+
 	async function handleSubmit(e: SubmitEvent) {
 		e.preventDefault();
-		if (organizationName.trim() === '') {
+		const trimmed = organizationName.trim();
+		if (trimmed === '') {
 			error = 'Organization name is required';
+
+			return;
+		}
+
+		if (trimmed.length < 5) {
+			error = 'Organization name must be at least 5 characters';
+
+			return;
+		}
+
+		if (blockedCharsPattern.test(trimmed)) {
+			error = 'Organization name contains invalid characters';
 
 			return;
 		}
@@ -70,7 +85,8 @@
 						type="text"
 						bind:value={organizationName}
 						placeholder="My Company"
-						maxlength="100"
+						minlength="5"
+					maxlength="100"
 						class="mt-1 w-full rounded-lg border border-surface-300 bg-surface-50 px-4 py-2.5 text-sm text-surface-900 placeholder-surface-400 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-surface-600 dark:bg-surface-700 dark:text-surface-100 dark:placeholder-surface-500"
 					/>
 				</div>

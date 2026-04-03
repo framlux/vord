@@ -143,20 +143,6 @@ public sealed class MachineService : IMachineService
             return (null, null, "Registration token has been revoked");
         }
 
-        if (token.ExpiresAt < DateTimeOffset.UtcNow)
-        {
-            _logger.LogWarning("Registration attempt with expired token {TokenId}", token.Id);
-
-            return (null, null, "Registration token has expired");
-        }
-
-        if (token.UsedCount >= token.MaxUses)
-        {
-            _logger.LogWarning("Registration attempt with exhausted token {TokenId}", token.Id);
-
-            return (null, null, "Registration token usage limit exceeded");
-        }
-
         IDatabaseCache db = scope.ServiceProvider.GetRequiredService<IDatabaseCache>();
 
         // Normalize case-sensitive fields to lowercase for consistent index usage.
@@ -168,17 +154,6 @@ public sealed class MachineService : IMachineService
         if (machineExists)
         {
             return (null, null, "Machine already exists");
-        }
-
-        // Atomically increment usage count
-        int updated = await dbContext.RegistrationTokens
-            .Where(t => t.Id == token.Id && t.UsedCount < t.MaxUses && t.IsRevoked == false)
-            .Set(t => t.UsedCount, t => t.UsedCount + 1)
-            .UpdateAsync(cancellationToken);
-
-        if (updated == 0)
-        {
-            return (null, null, "Registration token usage limit exceeded");
         }
 
         // Check subscription machine limit

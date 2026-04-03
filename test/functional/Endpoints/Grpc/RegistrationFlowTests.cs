@@ -88,53 +88,6 @@ public sealed class RegistrationFlowTests
     }
 
     [Test]
-    public async Task RegisterSystem_ExpiredToken_ReturnsError()
-    {
-        // Arrange
-        using FunctionalTestFactory factory = new();
-        using DatabaseContext db = factory.CreateDbContext();
-
-        int tenantId = await SeedTenant(db);
-        await SeedActiveSubscription(db, tenantId);
-
-        string tokenPlaintext = "expired-token-value";
-        string tokenHash = ComputeHash(tokenPlaintext);
-        RegistrationToken expiredToken = new()
-        {
-            TenantId = tenantId,
-            TokenHash = tokenHash,
-            Name = "Expired Token",
-            ExpiresAt = DateTimeOffset.UtcNow.AddDays(-1),
-            MaxUses = 10,
-            UsedCount = 0,
-            CreatedByUserId = 0,
-            CreatedAt = DateTimeOffset.UtcNow.AddDays(-30),
-            IsRevoked = false
-        };
-        await db.InsertAsync(expiredToken);
-
-        using GrpcChannel channel = CreateChannel(factory);
-        Registration.RegistrationClient client = new(channel);
-
-        RegisterSystemRequest request = new()
-        {
-            Hostname = "test-host-3",
-            SerialNumber = "sn-expired-001",
-            SystemId = "sys-expired-001",
-            RegistrationToken = tokenPlaintext,
-            MachineType = MachineType.BareMetalServerType,
-            Os = OperatingSystemType.UbuntuOs
-        };
-
-        // Act
-        RegisterSystemResponse response = await client.RegisterSystemAsync(request);
-
-        // Assert
-        await Assert.That(response.MachineId).IsEqualTo(0);
-        await Assert.That(response.ErrorMessage).Contains("expired");
-    }
-
-    [Test]
     public async Task RegisterSystem_RevokedToken_ReturnsError()
     {
         // Arrange
@@ -151,9 +104,6 @@ public sealed class RegistrationFlowTests
             TenantId = tenantId,
             TokenHash = tokenHash,
             Name = "Revoked Token",
-            ExpiresAt = DateTimeOffset.UtcNow.AddDays(30),
-            MaxUses = 10,
-            UsedCount = 0,
             CreatedByUserId = 0,
             CreatedAt = DateTimeOffset.UtcNow,
             IsRevoked = true,
@@ -369,9 +319,6 @@ public sealed class RegistrationFlowTests
             TenantId = tenantId,
             TokenHash = tokenHash,
             Name = "Test Token",
-            ExpiresAt = DateTimeOffset.UtcNow.AddDays(30),
-            MaxUses = 100,
-            UsedCount = 0,
             CreatedByUserId = 0,
             CreatedAt = DateTimeOffset.UtcNow,
             IsRevoked = false

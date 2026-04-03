@@ -863,9 +863,6 @@ public sealed class FleetAdminServiceTests
             TenantId = tenantId,
             CreatedByUserId = 0,
             CreatedAt = DateTimeOffset.UtcNow,
-            ExpiresAt = DateTimeOffset.UtcNow.AddDays(30),
-            MaxUses = 100,
-            UsedCount = 0,
             IsRevoked = false
         };
         long tokenId = (long)await db.InsertWithIdentityAsync(token);

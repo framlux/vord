@@ -183,7 +183,7 @@ public sealed class AlertEvaluationService : BackgroundService
             MachineId = state.MachineId,
             Severity = rule.Severity,
             Message = $"{rule.Name}: {rule.Metric} is {currentValue.Value} (threshold: {rule.Operator} {rule.Threshold})",
-            Details = JsonSerializer.Serialize(new { metric = rule.Metric.ToString(), currentValue, threshold = rule.Threshold }),
+            Details = JsonSerializer.Serialize(new { metric = rule.Metric.ToString(), currentValue, threshold = rule.Threshold }, JsonDefaults.CamelCase),
             Status = AlertEventStatus.Triggered,
             TriggeredAt = DateTimeOffset.UtcNow,
         };

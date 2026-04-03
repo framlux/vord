@@ -19,10 +19,6 @@ namespace Framlux.FleetManagement.Server.Services.Machines;
 /// </summary>
 public sealed class MachineStateUpdater : IMachineStateUpdater
 {
-    private static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower
-    };
 
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly ILogger<MachineStateUpdater> _logger;
@@ -107,7 +103,7 @@ public sealed class MachineStateUpdater : IMachineStateUpdater
         }
 
         string? ipJson = info.IpAddresses.Count > 0
-            ? JsonSerializer.Serialize(info.IpAddresses)
+            ? JsonSerializer.Serialize(info.IpAddresses, JsonDefaults.SnakeCase)
             : null;
 
         await db.ExecuteAsync(
@@ -321,7 +317,7 @@ public sealed class MachineStateUpdater : IMachineStateUpdater
     {
         try
         {
-            return JsonSerializer.Deserialize<T>(json, JsonOptions);
+            return JsonSerializer.Deserialize<T>(json, JsonDefaults.SnakeCase);
         }
         catch (JsonException ex)
         {

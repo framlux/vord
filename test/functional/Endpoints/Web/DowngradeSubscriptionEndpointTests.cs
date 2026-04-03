@@ -329,9 +329,6 @@ public sealed class DowngradeSubscriptionEndpointTests
             TenantId = tenantId,
             TokenHash = Guid.NewGuid().ToString("N"),
             Name = "Downgrade Test Token",
-            ExpiresAt = DateTimeOffset.UtcNow.AddDays(30),
-            MaxUses = 100,
-            UsedCount = 0,
             CreatedByUserId = 0,
             CreatedAt = DateTimeOffset.UtcNow,
             IsRevoked = false
