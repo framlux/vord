@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file. See [versionize](https://github.com/versionize/versionize) for commit guidelines.
 
+<a name="1.5.3"></a>
+## [1.5.3](https://www.github.com/framlux/vord/releases/tag/v1.5.3) (2026-04-02)
+
+### Bug Fixes
+
+* Fixing JSON serialization to standardize and fixing tenant names to remove special character injection ([6cd6b69](https://www.github.com/framlux/vord/commit/6cd6b69ea4876ce526bee9b926ccd33c1e776b2e))
+
 <a name="1.5.2"></a>
 ## [1.5.2](https://www.github.com/framlux/vord/releases/tag/v1.5.2) (2026-04-02)
 
