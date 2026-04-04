@@ -186,6 +186,9 @@ public sealed class MachineService : IMachineService
             return (null, null, "Machine limit exceeded");
         }
 
+        // Pre-create the MachineState row so all subsequent telemetry writes are pure UPDATEs.
+        await dbContext.InsertAsync(new MachineState { MachineId = createdMachine.Id }, token: cancellationToken);
+
         // Cache the plaintext key in Redis for recovery via GetRegistrationStatus
         IDatabase redisDb = _redis.GetDatabase();
         string cacheKey = $"pending_api_key:{createdMachine.Id}";

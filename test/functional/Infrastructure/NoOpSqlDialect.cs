@@ -15,6 +15,21 @@ namespace Framlux.FleetManagement.FunctionalTest.Infrastructure;
 internal sealed class NoOpSqlDialect : ISqlDialect
 {
     /// <inheritdoc/>
+    public string UpdateLastPing => string.Empty;
+
+    /// <inheritdoc/>
+    public string RecomputeHealthStatus => string.Empty;
+
+    /// <inheritdoc/>
+    public string RecomputeAllHealthStatuses => string.Empty;
+
+    /// <inheritdoc/>
+    public bool SupportsJsonbFilters => false;
+
+    /// <inheritdoc/>
+    public bool SupportsJsonbSort => false;
+
+    /// <inheritdoc/>
     public string UpsertSystemInfo => string.Empty;
 
     /// <inheritdoc/>

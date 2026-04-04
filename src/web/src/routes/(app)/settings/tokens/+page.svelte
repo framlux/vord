@@ -6,7 +6,9 @@
 	import { invalidateAll } from '$app/navigation';
 	import { ApiClient } from '$lib/api/client';
 	import type { RegistrationTokenDto } from '$lib/api/types';
-	import { Copy, XCircle, Check, Plus } from 'lucide-svelte';
+	import { Copy, XCircle, Check, Plus, Terminal } from 'lucide-svelte';
+	import InstallScriptModal from '$lib/components/InstallScriptModal.svelte';
+	import PageHeader from '$lib/components/PageHeader.svelte';
 
 	let { data } = $props();
 
@@ -17,6 +19,7 @@
 	let createLoading = $state(false);
 	let newToken = $state<RegistrationTokenDto | null>(null);
 	let copied = $state(false);
+	let showInstallScript = $state(false);
 
 	const client = new ApiClient('');
 
@@ -71,11 +74,8 @@
 	const inactiveTokens = $derived(tokens.filter(t => t.isRevoked));
 </script>
 
-<div class="mx-auto max-w-4xl">
-	<h1 class="text-2xl font-bold text-surface-900 dark:text-surface-50">Registration Tokens</h1>
-	<p class="mt-1 text-sm text-surface-500">
-		Manage tokens used to register machines with your organization. Deploy a token to a machine to allow it to auto-enroll.
-	</p>
+<div class="mx-auto max-w-4xl space-y-6">
+	<PageHeader title="Registration Tokens" description="Manage tokens used to register machines with your organization. Deploy a token to a machine to allow it to auto-enroll." />
 
 	<!-- Create token form -->
 	<div class="mt-8 rounded-lg border border-surface-200 bg-surface-50 p-6 dark:border-surface-700 dark:bg-surface-800">
@@ -129,6 +129,14 @@
 						<Copy size={14} />
 						{copied ? 'Copied' : 'Copy'}
 					</button>
+					<button
+						onclick={() => showInstallScript = true}
+						class="inline-flex items-center gap-1 rounded px-3 py-2 text-xs font-medium text-primary-700 hover:bg-primary-100 dark:text-primary-300 dark:hover:bg-primary-800/30"
+						title="Generate a ready-to-run install script with this token"
+					>
+						<Terminal size={14} />
+						Install Script
+					</button>
 				</div>
 			</div>
 		{/if}
@@ -137,7 +145,7 @@
 	<!-- Active tokens -->
 	<div class="mt-8 rounded-lg border border-surface-200 bg-surface-50 dark:border-surface-700 dark:bg-surface-800">
 		<div class="border-b border-surface-200 px-6 py-4 dark:border-surface-700">
-			<h2 class="text-lg font-semibold text-surface-900 dark:text-surface-50">Active Tokens</h2>
+			<h2 class="text-lg font-semibold text-surface-900 dark:text-surface-50">Active Tokens <span class="text-xs font-normal text-surface-400">({activeTokens.length})</span></h2>
 		</div>
 		{#if activeTokens.length === 0}
 			<p class="px-6 py-8 text-center text-sm text-surface-500">No active registration tokens.</p>
@@ -153,7 +161,7 @@
 						</div>
 						<button
 							onclick={() => revokeToken(token.id)}
-							class="inline-flex items-center gap-1 rounded px-2 py-1 text-xs text-surface-500 hover:bg-surface-100 hover:text-red-600 dark:hover:bg-surface-700 dark:hover:text-red-400"
+							class="inline-flex items-center gap-1 rounded-md border border-surface-200 px-2.5 py-1 text-xs text-surface-500 hover:bg-surface-100 hover:text-red-600 dark:border-surface-700 dark:hover:bg-surface-700 dark:hover:text-red-400"
 							title="Revoke token"
 						>
 							<XCircle size={14} />
@@ -169,7 +177,7 @@
 	{#if inactiveTokens.length > 0}
 		<div class="mt-8 rounded-lg border border-surface-200 bg-surface-50 dark:border-surface-700 dark:bg-surface-800">
 			<div class="border-b border-surface-200 px-6 py-4 dark:border-surface-700">
-				<h2 class="text-lg font-semibold text-surface-900 dark:text-surface-50">Revoked Tokens</h2>
+				<h2 class="text-lg font-semibold text-surface-900 dark:text-surface-50">Revoked Tokens <span class="text-xs font-normal text-surface-400">({inactiveTokens.length})</span></h2>
 			</div>
 			<div class="divide-y divide-surface-100 dark:divide-surface-700">
 				{#each inactiveTokens as token (token.id)}
@@ -189,3 +197,9 @@
 		</div>
 	{/if}
 </div>
+
+<InstallScriptModal
+	open={showInstallScript}
+	token={newToken?.token ?? ''}
+	onclose={() => showInstallScript = false}
+/>

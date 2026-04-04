@@ -34,12 +34,11 @@ public sealed class FleetAdminServiceTests
         request.Content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/grpc");
         request.Version = new System.Version(2, 0);
 
-        System.Net.HttpStatusCode successCode = System.Net.HttpStatusCode.OK;
         System.Net.Http.HttpResponseMessage response = await httpClient.SendAsync(request);
 
         // When billing is disabled the gRPC service is not mapped, so the request falls through
         // to the default auth middleware which returns a non-success status
-        await Assert.That(response.StatusCode == successCode).IsEqualTo(false);
+        await Assert.That(response.IsSuccessStatusCode).IsEqualTo(false);
     }
 
     // ========== Authentication Tests ==========

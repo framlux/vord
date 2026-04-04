@@ -11,7 +11,7 @@
 	import Pagination from '$lib/components/Pagination.svelte';
 	import EmptyState from '$lib/components/EmptyState.svelte';
 	import { goto, invalidateAll } from '$app/navigation';
-	import { Search, Monitor } from 'lucide-svelte';
+	import { Search, ChevronRight } from 'lucide-svelte';
 
 	let { data } = $props();
 
@@ -174,6 +174,11 @@
 		<div
 			class="overflow-hidden rounded-xl border border-surface-200 bg-surface-50 dark:border-surface-700 dark:bg-surface-800"
 		>
+			<div class="flex items-center justify-between border-b border-surface-200 px-4 py-3 dark:border-surface-700">
+				<span class="text-sm font-medium text-surface-600 dark:text-surface-300">
+					Machines <span class="font-normal text-surface-400">({machines.totalCount})</span>
+				</span>
+			</div>
 			<div class="overflow-x-auto">
 				<table class="w-full text-left text-sm">
 					<thead>
@@ -214,12 +219,13 @@
 							>
 								Last Ping
 							</th>
+							<th scope="col" class="w-8"></th>
 						</tr>
 					</thead>
 					<tbody class="divide-y divide-surface-100 dark:divide-surface-700">
-						{#each machines.items as machine (machine.id)}
+						{#each machines.items as machine, i (machine.id)}
 							<tr
-								class="transition hover:bg-surface-50 dark:hover:bg-surface-700/50"
+								class="group transition hover:bg-surface-50 dark:hover:bg-surface-700/50 {machine.isOnline ? 'border-l-2 border-l-green-500' : 'border-l-2 border-l-gray-300 dark:border-l-gray-600'} {i % 2 === 1 ? 'bg-surface-100/50 dark:bg-surface-800/30' : ''}"
 							>
 								<td class="px-6 py-4">
 									<a
@@ -268,6 +274,7 @@
 								>
 									{formatRelativeTime(machine.lastPing)}
 								</td>
+								<td class="px-2 py-3"><a href="/machines/{machine.id}"><ChevronRight class="h-4 w-4 text-surface-300 opacity-0 transition-opacity group-hover:opacity-100" /></a></td>
 							</tr>
 						{/each}
 					</tbody>

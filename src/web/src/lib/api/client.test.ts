@@ -640,7 +640,7 @@ describe('ApiClient', () => {
 
         it('should GET /api/v1/tenants/registration-tokens and return tokens array', async () => {
             const tokens = [{ id: 1, name: 'Token 1', token: 'tok-123', expiresAt: '', maxUses: 10, usedCount: 0, createdAt: '', isRevoked: false }];
-            mockSuccess(tokens);
+            mockSuccess({ items: tokens, page: 1, pageSize: 25, totalCount: 1 });
             const result = await client.getRegistrationTokens();
             expect(result).toEqual(tokens);
             expect(result).toHaveLength(1);

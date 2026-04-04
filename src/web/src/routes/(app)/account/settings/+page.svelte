@@ -6,13 +6,14 @@
 	import type { UserDto } from '$lib/api/types';
 	import ThemeToggle from '$lib/components/ThemeToggle.svelte';
 	import { ArrowLeft, Info } from 'lucide-svelte';
+	import PageHeader from '$lib/components/PageHeader.svelte';
 
 	let { data } = $props();
 
 	const user: UserDto | null = $derived(data.user);
 </script>
 
-<div class="space-y-8">
+<div class="space-y-6">
 	<!-- Page Header -->
 	<div>
 		<a
@@ -22,10 +23,7 @@
 			<ArrowLeft class="h-4 w-4" />
 			Back to Account
 		</a>
-		<h1 class="text-3xl font-bold text-surface-900 dark:text-surface-50">Account Settings</h1>
-		<p class="mt-1 text-surface-500 dark:text-surface-400">
-			View your account details and preferences.
-		</p>
+		<PageHeader title="Account Settings" description="View your account details and preferences." />
 	</div>
 
 	{#if user}
@@ -33,9 +31,9 @@
 		<div
 			class="rounded-xl border border-surface-200 bg-surface-50 p-6 dark:border-surface-700 dark:bg-surface-800"
 		>
-			<h3 class="mb-4 text-lg font-semibold text-surface-900 dark:text-surface-50">
+			<h2 class="mb-4 text-lg font-semibold text-surface-900 dark:text-surface-50">
 				Account Information
-			</h3>
+			</h2>
 			<div class="space-y-4">
 				<div>
 					<span class="block text-sm font-medium text-surface-500 dark:text-surface-400">
@@ -70,9 +68,9 @@
 		<div
 			class="rounded-xl border border-surface-200 bg-surface-50 p-6 dark:border-surface-700 dark:bg-surface-800"
 		>
-			<h3 class="mb-4 text-lg font-semibold text-surface-900 dark:text-surface-50">
+			<h2 class="mb-4 text-lg font-semibold text-surface-900 dark:text-surface-50">
 				Theme Preference
-			</h3>
+			</h2>
 			<div class="flex items-center justify-between">
 				<div>
 					<p class="font-medium text-surface-900 dark:text-surface-100">Appearance</p>

@@ -7,6 +7,7 @@
 	import { ScrollText, ChevronLeft, ChevronRight, AlertCircle } from 'lucide-svelte';
 	import { goto } from '$app/navigation';
 	import { page as pageStore } from '$app/state';
+	import PageHeader from '$lib/components/PageHeader.svelte';
 
 	let { data } = $props();
 
@@ -84,12 +85,7 @@
 
 <div class="space-y-6">
 	<!-- Page Header -->
-	<div>
-		<h1 class="text-3xl font-bold text-surface-900 dark:text-surface-50">Audit Log</h1>
-		<p class="mt-1 text-surface-500 dark:text-surface-400">
-			View a record of all actions performed in your organization.
-		</p>
-	</div>
+	<PageHeader title="Audit Log" description="View a record of all actions performed in your organization." />
 
 	{#if auditLog === null}
 		<div
@@ -154,6 +150,11 @@
 		<div
 			class="overflow-hidden rounded-xl border border-surface-200 bg-surface-50 dark:border-surface-700 dark:bg-surface-800"
 		>
+			<div class="flex items-center justify-between border-b border-surface-200 px-4 py-3 dark:border-surface-700">
+				<span class="text-sm font-medium text-surface-600 dark:text-surface-300">
+					Audit Log <span class="font-normal text-surface-400">({auditLog.totalCount})</span>
+				</span>
+			</div>
 			<div class="overflow-x-auto">
 				<table class="w-full text-sm">
 					<thead>
@@ -174,8 +175,8 @@
 								</td>
 							</tr>
 						{:else}
-							{#each auditLog.items as entry}
-								<tr class="hover:bg-surface-50 dark:hover:bg-surface-800/50">
+							{#each auditLog.items as entry, i}
+								<tr class="hover:bg-surface-50 dark:hover:bg-surface-800/50 {i % 2 === 1 ? 'bg-surface-100/50 dark:bg-surface-800/30' : ''}">
 									<td class="whitespace-nowrap px-4 py-3 text-surface-900 dark:text-surface-100">
 										{formatTimestamp(entry.timestamp)}
 									</td>

@@ -7,6 +7,7 @@
 		LayoutDashboard,
 		Monitor,
 		Terminal,
+		Search,
 		Settings,
 		Shield,
 		Menu,
@@ -15,7 +16,9 @@
 		Key,
 		CreditCard,
 		ScrollText,
-		Bell
+		Bell,
+		ChevronDown,
+		ChevronRight
 	} from 'lucide-svelte';
 	import ThemeToggle from './ThemeToggle.svelte';
 	import TenantSwitcher from './TenantSwitcher.svelte';
@@ -29,6 +32,15 @@
 	let { user, children }: { user: UserDto; children: Snippet } = $props();
 
 	let mobileMenuOpen = $state(false);
+	let settingsExpanded = $state(page.url.pathname.startsWith('/settings'));
+
+	function isExactMatch(path: string): boolean {
+		return page.url.pathname === path;
+	}
+
+	function isChildActive(parentPath: string): boolean {
+		return page.url.pathname.startsWith(parentPath) && page.url.pathname !== parentPath;
+	}
 
 	function isActive(path: string): boolean {
 		if (path === '/machines' || path === '/settings') {
@@ -44,7 +56,117 @@
 				? 'border-l-2 border-primary-500 bg-primary-500/10 text-primary-600 dark:text-primary-400'
 				: 'border-l-2 border-transparent text-surface-600 hover:bg-surface-100 hover:text-surface-900 dark:text-surface-400 dark:hover:bg-surface-800 dark:hover:text-surface-200'
 		}`;
+
+	const parentLinkClass = (parentPath: string) => {
+		if (isExactMatch(parentPath)) {
+			return 'flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-all border-l-2 border-primary-500 bg-primary-500/10 text-primary-600 dark:text-primary-400';
+		}
+		if (isChildActive(parentPath)) {
+			return 'flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-all border-l-2 border-primary-500/40 bg-primary-500/5 text-primary-600 dark:text-primary-400';
+		}
+
+		return 'flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-all border-l-2 border-transparent text-surface-600 hover:bg-surface-100 hover:text-surface-900 dark:text-surface-400 dark:hover:bg-surface-800 dark:hover:text-surface-200';
+	};
+
+	const childLinkClass = (path: string) =>
+		`flex items-center gap-3 rounded-lg py-1.5 pl-9 pr-3 text-sm font-medium transition-all ${
+			isActive(path)
+				? 'text-primary-600 dark:text-primary-400'
+				: 'text-surface-500 hover:text-surface-900 dark:text-surface-400 dark:hover:text-surface-200'
+		}`;
+
+	function toggleSettings(e: MouseEvent) {
+		e.preventDefault();
+		e.stopPropagation();
+		settingsExpanded = !settingsExpanded;
+	}
 </script>
+
+{#snippet navLinks(onNavigate: (() => void) | undefined)}
+	<!-- FLEET -->
+	<p class="px-4 pb-1 text-[10px] font-semibold uppercase tracking-widest text-surface-400 dark:text-surface-500">Fleet</p>
+
+	<a href="/dashboard" class={navLinkClass('/dashboard')} onclick={onNavigate}>
+		<LayoutDashboard size={18} />
+		Dashboard
+	</a>
+	<a href="/machines" class={parentLinkClass('/machines')} onclick={onNavigate}>
+		<Monitor size={18} />
+		Machines
+	</a>
+	<div class="relative ml-[21px] border-l border-surface-200 dark:border-surface-700">
+		<a href="/machines/search" class={childLinkClass('/machines/search')} onclick={onNavigate}>
+			<Search size={14} />
+			Search
+		</a>
+		<a href="/machines/ssh-sessions" class={childLinkClass('/machines/ssh-sessions')} onclick={onNavigate}>
+			<Terminal size={14} />
+			SSH Sessions
+		</a>
+	</div>
+
+	{#if canAdminTenant(user)}
+		<hr class="mx-4 my-3 border-surface-200 dark:border-surface-700" />
+		<p class="px-4 pb-1 text-[10px] font-semibold uppercase tracking-widest text-surface-400 dark:text-surface-500">Organization</p>
+
+		<div class="flex items-center">
+			<a href="/settings" class="{parentLinkClass('/settings')} flex-1" onclick={onNavigate}>
+				<Settings size={18} />
+				Settings
+			</a>
+			<button
+				onclick={toggleSettings}
+				class="mr-2 rounded p-1 text-surface-400 hover:bg-surface-100 hover:text-surface-600 dark:hover:bg-surface-700 dark:hover:text-surface-300"
+				aria-label={settingsExpanded ? 'Collapse settings' : 'Expand settings'}
+			>
+				{#if settingsExpanded}
+					<ChevronDown size={14} />
+				{:else}
+					<ChevronRight size={14} />
+				{/if}
+			</button>
+		</div>
+
+		{#if settingsExpanded}
+			<div class="relative ml-[21px] border-l border-surface-200 dark:border-surface-700">
+				<a href="/settings/members" class={childLinkClass('/settings/members')} onclick={onNavigate}>
+					<Users size={14} />
+					Members
+				</a>
+				<a href="/settings/tokens" class={childLinkClass('/settings/tokens')} onclick={onNavigate}>
+					<Key size={14} />
+					Tokens
+				</a>
+				<a href="/settings/signing-keys" class={childLinkClass('/settings/signing-keys')} onclick={onNavigate}>
+					<Shield size={14} />
+					Signing Keys
+				</a>
+				<a href="/settings/billing" class={childLinkClass('/settings/billing')} onclick={onNavigate}>
+					<CreditCard size={14} />
+					Billing
+				</a>
+				<a href="/settings/audit-log" class={childLinkClass('/settings/audit-log')} onclick={onNavigate}>
+					<ScrollText size={14} />
+					Audit Log
+				</a>
+				<a href="/settings/alerts" class={childLinkClass('/settings/alerts')} onclick={onNavigate}>
+					<Bell size={14} />
+					Alerts
+				</a>
+			</div>
+		{/if}
+	{/if}
+
+	{#if isGlobalAdmin(user)}
+		<hr class="mx-4 my-3 border-surface-200 dark:border-surface-700" />
+		<p class="px-4 pb-1 text-[10px] font-semibold uppercase tracking-widest text-surface-400 dark:text-surface-500">System</p>
+
+		<a href="/admin" class={navLinkClass('/admin')} onclick={onNavigate}>
+			<Shield size={18} />
+			Admin
+		</a>
+	{/if}
+{/snippet}
 
 <div class="flex h-screen bg-surface-50 dark:bg-surface-900">
 	<!-- Sidebar (desktop) -->
@@ -63,57 +185,8 @@
 				</div>
 				<span class="text-lg font-bold text-surface-900 dark:text-surface-50">VordFleet</span>
 			</div>
-			<nav class="flex-1 space-y-1 overflow-y-auto p-4">
-				<a href="/dashboard" class={navLinkClass('/dashboard')}>
-					<LayoutDashboard size={18} />
-					Dashboard
-				</a>
-				<a href="/machines" class={navLinkClass('/machines')}>
-					<Monitor size={18} />
-					Machines
-				</a>
-				<a href="/machines/ssh-sessions" class={navLinkClass('/machines/ssh-sessions')}>
-					<Terminal size={18} />
-					SSH Sessions
-				</a>
-
-				{#if canAdminTenant(user)}
-					<a href="/settings" class={navLinkClass('/settings')}>
-						<Settings size={18} />
-						Settings
-					</a>
-					<a href="/settings/members" class={navLinkClass('/settings/members')}>
-						<Users size={18} />
-						Members
-					</a>
-					<a href="/settings/tokens" class={navLinkClass('/settings/tokens')}>
-						<Key size={18} />
-						Registration Tokens
-					</a>
-					<a href="/settings/signing-keys" class={navLinkClass('/settings/signing-keys')}>
-						<Shield size={18} />
-						Signing Keys
-					</a>
-					<a href="/settings/billing" class={navLinkClass('/settings/billing')}>
-						<CreditCard size={18} />
-						Billing
-					</a>
-					<a href="/settings/audit-log" class={navLinkClass('/settings/audit-log')}>
-						<ScrollText size={18} />
-						Audit Log
-					</a>
-					<a href="/settings/alerts" class={navLinkClass('/settings/alerts')}>
-						<Bell size={18} />
-						Alerts
-					</a>
-				{/if}
-
-				{#if isGlobalAdmin(user)}
-					<a href="/admin" class={navLinkClass('/admin')}>
-						<Shield size={18} />
-						Admin
-					</a>
-				{/if}
+			<nav class="flex-1 space-y-1 overflow-y-auto p-4 pt-5">
+				{@render navLinks(undefined)}
 			</nav>
 		</div>
 	</aside>
@@ -138,44 +211,8 @@
 						<X size={20} />
 					</button>
 				</div>
-				<nav class="space-y-1 p-4">
-					<a href="/dashboard" class={navLinkClass('/dashboard')} onclick={() => (mobileMenuOpen = false)}>
-						<LayoutDashboard size={18} /> Dashboard
-					</a>
-					<a href="/machines" class={navLinkClass('/machines')} onclick={() => (mobileMenuOpen = false)}>
-						<Monitor size={18} /> Machines
-					</a>
-					<a href="/machines/ssh-sessions" class={navLinkClass('/machines/ssh-sessions')} onclick={() => (mobileMenuOpen = false)}>
-						<Terminal size={18} /> SSH Sessions
-					</a>
-					{#if canAdminTenant(user)}
-						<a href="/settings" class={navLinkClass('/settings')} onclick={() => (mobileMenuOpen = false)}>
-							<Settings size={18} /> Settings
-						</a>
-						<a href="/settings/members" class={navLinkClass('/settings/members')} onclick={() => (mobileMenuOpen = false)}>
-							<Users size={18} /> Members
-						</a>
-						<a href="/settings/tokens" class={navLinkClass('/settings/tokens')} onclick={() => (mobileMenuOpen = false)}>
-							<Key size={18} /> Registration Tokens
-						</a>
-						<a href="/settings/signing-keys" class={navLinkClass('/settings/signing-keys')} onclick={() => (mobileMenuOpen = false)}>
-							<Shield size={18} /> Signing Keys
-						</a>
-						<a href="/settings/billing" class={navLinkClass('/settings/billing')} onclick={() => (mobileMenuOpen = false)}>
-							<CreditCard size={18} /> Billing
-						</a>
-						<a href="/settings/audit-log" class={navLinkClass('/settings/audit-log')} onclick={() => (mobileMenuOpen = false)}>
-							<ScrollText size={18} /> Audit Log
-						</a>
-						<a href="/settings/alerts" class={navLinkClass('/settings/alerts')} onclick={() => (mobileMenuOpen = false)}>
-							<Bell size={18} /> Alerts
-						</a>
-					{/if}
-					{#if isGlobalAdmin(user)}
-						<a href="/admin" class={navLinkClass('/admin')} onclick={() => (mobileMenuOpen = false)}>
-							<Shield size={18} /> Admin
-						</a>
-					{/if}
+				<nav class="space-y-1 p-4 pt-5">
+					{@render navLinks(() => (mobileMenuOpen = false))}
 				</nav>
 			</aside>
 		</div>

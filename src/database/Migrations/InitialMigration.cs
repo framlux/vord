@@ -246,7 +246,8 @@ public sealed class InitialMigration : Migration
             .WithColumn("HardwareHealthAt").AsDateTimeOffset().Nullable()
             .WithColumn("PackageUpdatesAt").AsDateTimeOffset().Nullable()
             .WithColumn("ServiceStatusAt").AsDateTimeOffset().Nullable()
-            .WithColumn("LastTelemetryAt").AsDateTimeOffset().Nullable();
+            .WithColumn("LastTelemetryAt").AsDateTimeOffset().Nullable()
+            .WithColumn("LastPingAt").AsDateTimeOffset().Nullable();
 
         // Upgrade JSON columns to JSONB on PostgreSQL for indexing and query performance
         IfDatabase("Postgres").Execute.Sql("""
@@ -322,6 +323,15 @@ public sealed class InitialMigration : Migration
             @"CREATE INDEX ""IX_Machines_TenantId_Active""
               ON ""Machines"" (""TenantId"")
               WHERE ""IsDeleted"" = 0");
+
+        // MachineState indexes for SQL-level fleet queries.
+        Create.Index("IX_MachineState_HealthStatus")
+            .OnTable(TableNames.MachineState)
+            .OnColumn("HealthStatus").Ascending();
+
+        Create.Index("IX_MachineState_LastPingAt")
+            .OnTable(TableNames.MachineState)
+            .OnColumn("LastPingAt").Descending();
 
         Create.Table(TableNames.AuditLog)
             .WithColumn("Id").AsInt64().PrimaryKey().Identity().NotNullable()

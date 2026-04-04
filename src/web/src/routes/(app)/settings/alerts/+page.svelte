@@ -8,6 +8,7 @@
 	import { enhance } from '$app/forms';
 	import { goto } from '$app/navigation';
 	import { page as pageStore } from '$app/state';
+	import PageHeader from '$lib/components/PageHeader.svelte';
 
 	let { data } = $props();
 
@@ -72,12 +73,7 @@
 </script>
 
 <div class="space-y-6">
-	<div>
-		<h1 class="text-3xl font-bold text-surface-900 dark:text-surface-50">Alerts</h1>
-		<p class="mt-1 text-surface-500 dark:text-surface-400">
-			Manage alert rules, view alert events, and configure webhook delivery.
-		</p>
-	</div>
+	<PageHeader title="Alerts" description="Manage alert rules, view alert events, and configure webhook delivery." />
 
 	{#if rules === null}
 		<div class="flex items-center gap-3 rounded-xl border border-amber-200 bg-amber-50 p-6 dark:border-amber-800 dark:bg-amber-900/20">
@@ -221,8 +217,8 @@
 										</td>
 									</tr>
 								{:else}
-									{#each rules as rule}
-										<tr class="hover:bg-surface-50 dark:hover:bg-surface-800/50">
+									{#each rules as rule, i}
+										<tr class="{i % 2 === 1 ? 'bg-surface-100/50 dark:bg-surface-800/30' : ''} hover:bg-surface-50 dark:hover:bg-surface-800/50">
 											<td class="px-4 py-3">
 												<div class="font-medium text-surface-900 dark:text-surface-100">{rule.name}</div>
 												{#if rule.description}
@@ -357,8 +353,8 @@
 										</td>
 									</tr>
 								{:else}
-									{#each events.items as event}
-										<tr class="hover:bg-surface-50 dark:hover:bg-surface-800/50">
+									{#each events.items as event, i}
+										<tr class="{i % 2 === 1 ? 'bg-surface-100/50 dark:bg-surface-800/30' : ''} hover:bg-surface-50 dark:hover:bg-surface-800/50">
 											<td class="whitespace-nowrap px-4 py-3 text-surface-900 dark:text-surface-100">
 												{formatTimestamp(event.triggeredAt)}
 											</td>
@@ -471,8 +467,8 @@
 										</td>
 									</tr>
 								{:else}
-									{#each webhooks as webhook}
-										<tr class="hover:bg-surface-50 dark:hover:bg-surface-800/50">
+									{#each webhooks as webhook, i}
+										<tr class="{i % 2 === 1 ? 'bg-surface-100/50 dark:bg-surface-800/30' : ''} hover:bg-surface-50 dark:hover:bg-surface-800/50">
 											<td class="px-4 py-3 font-medium text-surface-900 dark:text-surface-100">{webhook.name}</td>
 											<td class="max-w-xs truncate px-4 py-3 text-surface-600 dark:text-surface-400" title={webhook.url}>{webhook.url}</td>
 											<td class="px-4 py-3">

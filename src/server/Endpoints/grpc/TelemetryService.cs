@@ -47,7 +47,7 @@ public sealed class TelemetryService : Telemetry.TelemetryBase
     private static readonly TimeSpan MaxStreamDuration = TimeSpan.FromMinutes(5);
 
     private readonly IServiceScopeFactory _scopeFactory;
-    private readonly IMachineStateUpdater _stateUpdater;
+    private readonly IMachineStateQueueService _stateQueue;
     private readonly ITelemetryDeduplicationService _dedupService;
     private readonly ISubscriptionService _subscriptionService;
     private readonly ILogger<TelemetryService> _logger;
@@ -57,13 +57,13 @@ public sealed class TelemetryService : Telemetry.TelemetryBase
     /// </summary>
     public TelemetryService(
         IServiceScopeFactory scopeFactory,
-        IMachineStateUpdater stateUpdater,
+        IMachineStateQueueService stateQueue,
         ITelemetryDeduplicationService dedupService,
         ISubscriptionService subscriptionService,
         ILogger<TelemetryService> logger)
     {
         _scopeFactory = scopeFactory;
-        _stateUpdater = stateUpdater;
+        _stateQueue = stateQueue;
         _dedupService = dedupService;
         _subscriptionService = subscriptionService;
         _logger = logger;
@@ -244,10 +244,27 @@ public sealed class TelemetryService : Telemetry.TelemetryBase
                     }
                 }
 
-                // MachineState UPSERTs must remain per-item (different SQL per type).
-                foreach ((TelemetryItem item, short telemetryType, string payload) in newItems)
+                // Publish state updates to Redis Stream for async batch processing.
+                // If Redis is unavailable, the reconciliation service will catch up later.
+                try
                 {
-                    await _stateUpdater.UpdateAsync(machineId, telemetryType, payload, receivedAt, ct);
+                    List<StateUpdateMessage> stateUpdates = newItems.Select(n => new StateUpdateMessage
+                    {
+                        TelemetryType = n.Type,
+                        Payload = n.Payload,
+                        ReceivedAt = receivedAt,
+                    }).ToList();
+                    await _stateQueue.PublishAsync(machineId, stateUpdates, ct);
+                }
+                catch (Exception stateEx)
+                {
+                    _logger.LogWarning(stateEx,
+                        "Failed to publish state update for machine {MachineId} batch {BatchId}. Reconciliation service will catch up.",
+                        machineId, envelope.BatchId);
+                }
+
+                foreach ((TelemetryItem item, short _, string _) in newItems)
+                {
                     acknowledgedIds.Add(item.EventId);
                 }
             }

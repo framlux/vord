@@ -83,21 +83,28 @@ public sealed class PostgresSqlDialectTests
     }
 
     [Test]
-    public async Task AllUpsertSqlProperties_ContainStaleDataWhereGuard()
+    public async Task AllUpsertSqlProperties_ContainPerTypeStaleDataWhereGuard()
     {
-        string guard = """WHERE @ts >= "MachineState"."LastTelemetryAt" OR "MachineState"."LastTelemetryAt" IS NULL""";
-
-        List<string> allSql = new()
+        // Each UPSERT guards against its own per-type timestamp column, not the shared LastTelemetryAt.
+        Dictionary<string, string> sqlWithExpectedGuard = new()
         {
-            _dialect.UpsertSystemInfo, _dialect.UpsertOsVersion, _dialect.UpsertCpuInfo,
-            _dialect.UpsertMemoryInfo, _dialect.UpsertDiskInfo, _dialect.UpsertCpuUsage,
-            _dialect.UpsertMemoryUsage, _dialect.UpsertDiskUsage, _dialect.UpsertHardwareHealth,
-            _dialect.UpsertPackageUpdates, _dialect.UpsertServiceStatus, _dialect.UpsertLastTelemetry
+            { _dialect.UpsertSystemInfo, "\"SystemInfoAt\" IS NULL" },
+            { _dialect.UpsertOsVersion, "\"OsVersionAt\" IS NULL" },
+            { _dialect.UpsertCpuInfo, "\"CpuInfoAt\" IS NULL" },
+            { _dialect.UpsertMemoryInfo, "\"MemoryInfoAt\" IS NULL" },
+            { _dialect.UpsertDiskInfo, "\"DiskInfoAt\" IS NULL" },
+            { _dialect.UpsertCpuUsage, "\"CpuUsageAt\" IS NULL" },
+            { _dialect.UpsertMemoryUsage, "\"MemoryUsageAt\" IS NULL" },
+            { _dialect.UpsertDiskUsage, "\"DiskUsageAt\" IS NULL" },
+            { _dialect.UpsertHardwareHealth, "\"HardwareHealthAt\" IS NULL" },
+            { _dialect.UpsertPackageUpdates, "\"PackageUpdatesAt\" IS NULL" },
+            { _dialect.UpsertServiceStatus, "\"ServiceStatusAt\" IS NULL" },
+            { _dialect.UpsertLastTelemetry, "\"LastTelemetryAt\" IS NULL" },
         };
 
-        foreach (string sql in allSql)
+        foreach (KeyValuePair<string, string> entry in sqlWithExpectedGuard)
         {
-            await Assert.That(sql).Contains(guard);
+            await Assert.That(entry.Key).Contains(entry.Value);
         }
     }
 

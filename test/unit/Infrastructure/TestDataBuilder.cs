@@ -295,7 +295,8 @@ public static class TestDataBuilder
         long machineId = 1,
         int? cpuPercent = null,
         int? memoryPercent = null,
-        short healthStatus = 0)
+        short healthStatus = 0,
+        DateTimeOffset? lastPingAt = null)
     {
         return new MachineState
         {
@@ -304,6 +305,7 @@ public static class TestDataBuilder
             CpuUsagePercent = cpuPercent,
             MemoryUsagePercent = memoryPercent,
             HealthStatus = healthStatus,
+            LastPingAt = lastPingAt,
             LastTelemetryAt = DateTimeOffset.UtcNow
         };
     }

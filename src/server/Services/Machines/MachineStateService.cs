@@ -21,7 +21,6 @@ namespace Framlux.FleetManagement.Server.Services.Machines;
 /// </summary>
 public sealed class MachineStateService : IMachineStateService
 {
-
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly IMachinePingService _pingService;
     private readonly ServerConfigurationService _configService;
@@ -71,9 +70,10 @@ public sealed class MachineStateService : IMachineStateService
 
         using IServiceScope scope = _scopeFactory.CreateScope();
         DatabaseContext db = scope.ServiceProvider.GetRequiredService<DatabaseContext>();
+        TimeSpan onlineThreshold = await _configService.GetOnlineThresholdAsync(ct);
 
-        // Step 1: Load scalar-only projections (no JSONB columns) for all machines.
-        List<MachineScalarRow> scalarRows = await (
+        // Step 1: SQL-level summary aggregation using pre-computed HealthStatus.
+        IQueryable<MachineScalarRow> baseQuery =
             from m in db.Machines
             join s in db.MachineStates on m.Id equals s.MachineId into stateJoin
             from s in stateJoin.DefaultIfEmpty()
@@ -91,136 +91,109 @@ public sealed class MachineStateService : IMachineStateService
                 StateSecurityUpdates = s != null ? s.SecurityUpdates : (int?)null,
                 StateFailedServices = s != null ? s.FailedServices : (int?)null,
                 StateTotalServices = s != null ? s.TotalServices : (int?)null,
-            }
+                StateHealthStatus = s != null ? s.HealthStatus : (short)3,
+                StateLastPingAt = s != null ? s.LastPingAt : (DateTimeOffset?)null,
+            };
+
+        // Summary stats via SQL GROUP BY — no need to load all rows.
+        List<HealthCountRow> healthCounts = await (
+            from r in baseQuery
+            group r by r.StateHealthStatus into g
+            select new HealthCountRow { HealthStatus = g.Key, Count = g.Count() }
         ).ToListAsync(ct);
 
-        List<long> machineIds = scalarRows.Select(r => r.Id).ToList();
-        TimeSpan onlineThreshold = await _configService.GetOnlineThresholdAsync(ct);
-        Dictionary<long, bool> onlineMap = await _pingService.AreOnlineAsync(machineIds, onlineThreshold);
-        Dictionary<long, DateTimeOffset?> lastPingMap = await _pingService.GetLastPingsAsync(machineIds);
+        int totalSecurityUpdates = await baseQuery.SumAsync(r => r.StateSecurityUpdates ?? 0, ct);
 
-        // Step 2: Build lightweight DTOs using scalar columns only.
-        // Health is approximated from scalar metrics (CPU, memory, failed services).
-        List<FleetMachineDto> allDtos = [];
-        int onlineCount = 0;
-        int warningCount = 0;
-        int criticalCount = 0;
-        int totalSecurityUpdates = 0;
-
-        foreach (MachineScalarRow row in scalarRows)
-        {
-            bool isOnline = onlineMap.GetValueOrDefault(row.Id, false);
-            DateTimeOffset? lastPing = lastPingMap.GetValueOrDefault(row.Id);
-
-            MachineHealthStatus health = ComputeScalarHealth(
-                isOnline, row.StateCpuUsagePercent, row.StateMemoryUsagePercent, row.StateFailedServices);
-
-            if (isOnline)
-            {
-                onlineCount++;
-            }
-
-            if (health == MachineHealthStatus.Warning)
-            {
-                warningCount++;
-            }
-
-            if (health == MachineHealthStatus.Critical)
-            {
-                criticalCount++;
-            }
-
-            totalSecurityUpdates += row.StateSecurityUpdates ?? 0;
-
-            allDtos.Add(new FleetMachineDto
-            {
-                Id = row.Id,
-                Name = row.Name,
-                Hostname = row.StateHostname,
-                IpAddress = ParseFirstIp(row.StateIpAddresses),
-                HardwareModel = row.StateHardwareModel,
-                HealthStatus = health,
-                CpuUsagePercent = row.StateCpuUsagePercent,
-                MemoryUsagePercent = row.StateMemoryUsagePercent,
-                IsOnline = isOnline,
-                LastPing = lastPing,
-                PendingUpdates = row.StatePendingUpdates ?? 0,
-                SecurityUpdates = row.StateSecurityUpdates ?? 0,
-                FailedServices = row.StateFailedServices ?? 0,
-                TotalServices = row.StateTotalServices ?? 0,
-            });
-        }
+        int totalMachines = healthCounts.Sum(h => h.Count);
+        int healthyCount = healthCounts.Where(h => h.HealthStatus == 0).Sum(h => h.Count);
+        int warningCount = healthCounts.Where(h => h.HealthStatus == 1).Sum(h => h.Count);
+        int criticalCount = healthCounts.Where(h => h.HealthStatus == 2).Sum(h => h.Count);
+        int offlineCount = healthCounts.Where(h => h.HealthStatus == 3).Sum(h => h.Count);
 
         FleetSummaryDto summary = new()
         {
-            TotalMachines = scalarRows.Count,
-            OnlineMachines = onlineCount,
-            OfflineCount = scalarRows.Count - onlineCount,
+            TotalMachines = totalMachines,
+            OnlineMachines = totalMachines - offlineCount,
+            OfflineCount = offlineCount,
             WarningCount = warningCount,
             CriticalCount = criticalCount,
             SecurityUpdates = totalSecurityUpdates,
         };
 
-        // Step 3: Apply filters.
-        IEnumerable<FleetMachineDto> filtered = allDtos;
+        // Step 2: SQL-level filtering.
+        IQueryable<MachineScalarRow> filteredQuery = baseQuery;
 
         if (string.IsNullOrWhiteSpace(statusFilter) == false)
         {
-            MachineHealthStatus? targetStatus = statusFilter.ToLowerInvariant() switch
+            short? targetStatus = statusFilter.ToLowerInvariant() switch
             {
-                "healthy" => MachineHealthStatus.Healthy,
-                "warning" => MachineHealthStatus.Warning,
-                "critical" => MachineHealthStatus.Critical,
-                "offline" => MachineHealthStatus.Offline,
+                "healthy" => 0,
+                "warning" => 1,
+                "critical" => 2,
+                "offline" => 3,
                 _ => null
             };
 
             if (targetStatus.HasValue)
             {
-                filtered = filtered.Where(m => m.HealthStatus == targetStatus.Value);
+                filteredQuery = filteredQuery.Where(r => r.StateHealthStatus == targetStatus.Value);
             }
         }
 
         if (string.IsNullOrWhiteSpace(search) == false)
         {
             string q = search.ToLowerInvariant();
-            filtered = filtered.Where(m =>
-                m.Name.ToLowerInvariant().Contains(q) ||
-                (m.Hostname?.ToLowerInvariant().Contains(q) ?? false) ||
-                (m.IpAddress?.ToLowerInvariant().Contains(q) ?? false) ||
-                (m.HardwareModel?.ToLowerInvariant().Contains(q) ?? false));
+            filteredQuery = filteredQuery.Where(r =>
+                r.Name.ToLower().Contains(q) ||
+                (r.StateHostname != null && r.StateHostname.ToLower().Contains(q)) ||
+                (r.StateHardwareModel != null && r.StateHardwareModel.ToLower().Contains(q)));
         }
 
-        // Step 4: Sort.
+        // Step 3: SQL-level count, sort, and paginate.
+        int totalCount = await filteredQuery.CountAsync(ct);
+
         bool desc = string.Equals(sortDir, "desc", StringComparison.OrdinalIgnoreCase);
-        List<FleetMachineDto> sortedList = sortBy?.ToLowerInvariant() switch
+        IQueryable<MachineScalarRow> sortedQuery = sortBy.ToLowerInvariant() switch
         {
             "status" => desc
-                ? filtered.OrderByDescending(m => m.HealthStatus).ToList()
-                : filtered.OrderBy(m => m.HealthStatus).ToList(),
+                ? filteredQuery.OrderByDescending(r => r.StateHealthStatus)
+                : filteredQuery.OrderBy(r => r.StateHealthStatus),
             "cpu" => desc
-                ? filtered.OrderByDescending(m => m.CpuUsagePercent ?? 0).ToList()
-                : filtered.OrderBy(m => m.CpuUsagePercent ?? 0).ToList(),
+                ? filteredQuery.OrderByDescending(r => r.StateCpuUsagePercent ?? 0)
+                : filteredQuery.OrderBy(r => r.StateCpuUsagePercent ?? 0),
             "memory" => desc
-                ? filtered.OrderByDescending(m => m.MemoryUsagePercent ?? 0).ToList()
-                : filtered.OrderBy(m => m.MemoryUsagePercent ?? 0).ToList(),
-            "disk" => desc
-                ? filtered.OrderByDescending(m => m.MaxDiskUsagePercent ?? 0).ToList()
-                : filtered.OrderBy(m => m.MaxDiskUsagePercent ?? 0).ToList(),
+                ? filteredQuery.OrderByDescending(r => r.StateMemoryUsagePercent ?? 0)
+                : filteredQuery.OrderBy(r => r.StateMemoryUsagePercent ?? 0),
             _ => desc
-                ? filtered.OrderByDescending(m => m.Name).ToList()
-                : filtered.OrderBy(m => m.Name).ToList(),
+                ? filteredQuery.OrderByDescending(r => r.Name)
+                : filteredQuery.OrderBy(r => r.Name),
         };
 
-        int totalCount = sortedList.Count;
-
-        // Step 5: Paginate.
-        List<FleetMachineDto> pagedDtos = sortedList
+        List<MachineScalarRow> pagedRows = await sortedQuery
             .Skip((page - 1) * pageSize)
             .Take(pageSize)
-            .ToList();
+            .ToListAsync(ct);
 
-        // Step 6: Enrich the paged subset with JSONB data (disk/hardware) for accurate display.
+        // Step 4: Build DTOs from paged subset only.
+        List<FleetMachineDto> pagedDtos = pagedRows.Select(row => new FleetMachineDto
+        {
+            Id = row.Id,
+            Name = row.Name,
+            Hostname = row.StateHostname,
+            IpAddress = ParseFirstIp(row.StateIpAddresses),
+            HardwareModel = row.StateHardwareModel,
+            HealthStatus = (MachineHealthStatus)row.StateHealthStatus,
+            CpuUsagePercent = row.StateCpuUsagePercent,
+            MemoryUsagePercent = row.StateMemoryUsagePercent,
+            IsOnline = row.StateHealthStatus != 3,
+            LastPing = row.StateLastPingAt,
+            PendingUpdates = row.StatePendingUpdates ?? 0,
+            SecurityUpdates = row.StateSecurityUpdates ?? 0,
+            FailedServices = row.StateFailedServices ?? 0,
+            TotalServices = row.StateTotalServices ?? 0,
+        }).ToList();
+
+        // Step 5: Enrich the paged subset with JSONB data (disk/hardware) for accurate display.
         List<long> pagedIds = pagedDtos.Select(m => m.Id).ToList();
         if (pagedIds.Count > 0)
         {
@@ -256,9 +229,6 @@ public sealed class MachineStateService : IMachineStateService
                                 string.Equals(p.Status, "ok", StringComparison.OrdinalIgnoreCase) == false);
                     }
                 }
-
-                // Recompute health with full data for paged machines.
-                dto.HealthStatus = HealthComputer.Compute(state, dto.IsOnline);
             }
         }
 
@@ -270,30 +240,6 @@ public sealed class MachineStateService : IMachineStateService
             PageSize = pageSize,
             TotalCount = totalCount,
         };
-    }
-
-    /// <summary>
-    /// Computes health from scalar metrics only (no JSONB deserialization).
-    /// Used for summary aggregation across all machines.
-    /// </summary>
-    private static MachineHealthStatus ComputeScalarHealth(bool isOnline, int? cpuPercent, int? memPercent, int? failedServices)
-    {
-        if (isOnline == false)
-        {
-            return MachineHealthStatus.Offline;
-        }
-
-        if ((cpuPercent >= 95) || (memPercent >= 95) || (failedServices > 0))
-        {
-            return MachineHealthStatus.Critical;
-        }
-
-        if ((cpuPercent >= 80) || (memPercent >= 80))
-        {
-            return MachineHealthStatus.Warning;
-        }
-
-        return MachineHealthStatus.Healthy;
     }
 
     /// <inheritdoc/>
@@ -444,4 +390,15 @@ file sealed class MachineScalarRow
     public int? StateSecurityUpdates { get; init; }
     public int? StateFailedServices { get; init; }
     public int? StateTotalServices { get; init; }
+    public short StateHealthStatus { get; init; }
+    public DateTimeOffset? StateLastPingAt { get; init; }
+}
+
+/// <summary>
+/// Projection for SQL GROUP BY health status aggregation.
+/// </summary>
+file sealed class HealthCountRow
+{
+    public short HealthStatus { get; init; }
+    public int Count { get; init; }
 }

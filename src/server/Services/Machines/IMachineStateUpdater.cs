@@ -5,7 +5,8 @@
 namespace Framlux.FleetManagement.Server.Services.Machines;
 
 /// <summary>
-/// Event-driven updater that performs per-type partial UPSERTs on MachineState.
+/// Updates MachineState rows from telemetry data. Supports both single-item updates
+/// (legacy/fallback) and batched updates for the queue-based consumer.
 /// </summary>
 public interface IMachineStateUpdater
 {
@@ -14,4 +15,13 @@ public interface IMachineStateUpdater
     /// Only touches the columns relevant to that telemetry type.
     /// </summary>
     Task UpdateAsync(long machineId, short telemetryType, string payload, DateTimeOffset receivedAt, CancellationToken ct);
+
+    /// <summary>
+    /// Applies coalesced state updates for multiple machines. Groups updates by telemetry type
+    /// and issues batch UPDATE statements to minimize database round-trips.
+    /// Called by the <see cref="MachineStateConsumerService"/> after reading from Redis Streams.
+    /// </summary>
+    /// <param name="updatesByMachine">Updates grouped by machine ID.</param>
+    /// <param name="ct">Cancellation token.</param>
+    Task UpdateBatchAsync(Dictionary<long, List<StateUpdateMessage>> updatesByMachine, CancellationToken ct);
 }

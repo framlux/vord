@@ -11,7 +11,7 @@
 	let userRegistration = $state(false);
 </script>
 
-<div class="space-y-8">
+<div class="space-y-6">
 	<!-- Page Header -->
 	<div>
 		<a

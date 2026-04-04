@@ -276,4 +276,11 @@ public sealed class MachineState
     /// </summary>
     [Column("LastTelemetryAt"), Nullable]
     public DateTimeOffset? LastTelemetryAt { get; set; }
+
+    /// <summary>
+    /// When the machine last sent a ping (heartbeat). Updated by the ping service.
+    /// Used for SQL-level online/offline filtering without requiring Redis lookups.
+    /// </summary>
+    [Column("LastPingAt"), Nullable]
+    public DateTimeOffset? LastPingAt { get; set; }
 }

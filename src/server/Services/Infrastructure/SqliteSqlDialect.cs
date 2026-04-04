@@ -8,10 +8,57 @@ namespace Framlux.FleetManagement.Server.Services.Infrastructure;
 
 /// <summary>
 /// SQLite-specific SQL for MachineState upserts using INSERT OR REPLACE semantics and MAX() instead of GREATEST().
-/// Each DO UPDATE SET includes a WHERE guard to prevent stale data from overwriting newer data.
+/// Each DO UPDATE SET includes a per-type WHERE guard to prevent stale data from overwriting
+/// newer data of the same type. LastTelemetryAt is always advanced via MAX() but is not
+/// used as a guard — each type guards against its own timestamp column.
 /// </summary>
 public sealed class SqliteSqlDialect : ISqlDialect
 {
+    /// <inheritdoc/>
+    public string UpdateLastPing => """
+        UPDATE "MachineState" SET "LastPingAt" = @ts
+        WHERE "MachineId" = @machineId
+        """;
+
+    /// <inheritdoc/>
+    public string RecomputeHealthStatus => """
+        UPDATE "MachineState" SET "HealthStatus" = CASE
+            WHEN "LastPingAt" IS NULL
+                OR "LastPingAt" < datetime('now', '-' || @onlineThresholdSeconds || ' seconds')
+                THEN 3
+            WHEN "CpuUsagePercent" >= 95 OR "MemoryUsagePercent" >= 95
+                THEN 2
+            WHEN COALESCE("FailedServices", 0) > 0
+                THEN 2
+            WHEN "CpuUsagePercent" >= 80 OR "MemoryUsagePercent" >= 80
+                THEN 1
+            ELSE 0
+        END
+        WHERE "MachineId" = @machineId
+        """;
+
+    /// <inheritdoc/>
+    public string RecomputeAllHealthStatuses => """
+        UPDATE "MachineState" SET "HealthStatus" = CASE
+            WHEN "LastPingAt" IS NULL
+                OR "LastPingAt" < datetime('now', '-' || @onlineThresholdSeconds || ' seconds')
+                THEN 3
+            WHEN "CpuUsagePercent" >= 95 OR "MemoryUsagePercent" >= 95
+                THEN 2
+            WHEN COALESCE("FailedServices", 0) > 0
+                THEN 2
+            WHEN "CpuUsagePercent" >= 80 OR "MemoryUsagePercent" >= 80
+                THEN 1
+            ELSE 0
+        END
+        """;
+
+    /// <inheritdoc/>
+    public bool SupportsJsonbFilters => false;
+
+    /// <inheritdoc/>
+    public bool SupportsJsonbSort => false;
+
     /// <inheritdoc/>
     public string UpsertSystemInfo => """
         INSERT INTO "MachineState" ("MachineId", "Hostname", "HardwareVendor", "HardwareModel", "HardwareSerial",
@@ -33,7 +80,7 @@ public sealed class SqliteSqlDialect : ISqlDialect
             "IpAddresses" = excluded."IpAddresses",
             "SystemInfoAt" = excluded."SystemInfoAt",
             "LastTelemetryAt" = MAX("MachineState"."LastTelemetryAt", excluded."LastTelemetryAt")
-        WHERE @ts >= "MachineState"."LastTelemetryAt" OR "MachineState"."LastTelemetryAt" IS NULL
+        WHERE @ts >= "MachineState"."SystemInfoAt" OR "MachineState"."SystemInfoAt" IS NULL
         """;
 
     /// <inheritdoc/>
@@ -46,7 +93,7 @@ public sealed class SqliteSqlDialect : ISqlDialect
             "Kernel" = excluded."Kernel",
             "OsVersionAt" = excluded."OsVersionAt",
             "LastTelemetryAt" = MAX("MachineState"."LastTelemetryAt", excluded."LastTelemetryAt")
-        WHERE @ts >= "MachineState"."LastTelemetryAt" OR "MachineState"."LastTelemetryAt" IS NULL
+        WHERE @ts >= "MachineState"."OsVersionAt" OR "MachineState"."OsVersionAt" IS NULL
         """;
 
     /// <inheritdoc/>
@@ -59,7 +106,7 @@ public sealed class SqliteSqlDialect : ISqlDialect
             "CpuLogicalCpus" = excluded."CpuLogicalCpus",
             "CpuInfoAt" = excluded."CpuInfoAt",
             "LastTelemetryAt" = MAX("MachineState"."LastTelemetryAt", excluded."LastTelemetryAt")
-        WHERE @ts >= "MachineState"."LastTelemetryAt" OR "MachineState"."LastTelemetryAt" IS NULL
+        WHERE @ts >= "MachineState"."CpuInfoAt" OR "MachineState"."CpuInfoAt" IS NULL
         """;
 
     /// <inheritdoc/>
@@ -71,7 +118,7 @@ public sealed class SqliteSqlDialect : ISqlDialect
             "SwapFreeBytes" = excluded."SwapFreeBytes",
             "MemoryInfoAt" = excluded."MemoryInfoAt",
             "LastTelemetryAt" = MAX("MachineState"."LastTelemetryAt", excluded."LastTelemetryAt")
-        WHERE @ts >= "MachineState"."LastTelemetryAt" OR "MachineState"."LastTelemetryAt" IS NULL
+        WHERE @ts >= "MachineState"."MemoryInfoAt" OR "MachineState"."MemoryInfoAt" IS NULL
         """;
 
     /// <inheritdoc/>
@@ -82,7 +129,7 @@ public sealed class SqliteSqlDialect : ISqlDialect
             "DiskInfos" = excluded."DiskInfos",
             "DiskInfoAt" = excluded."DiskInfoAt",
             "LastTelemetryAt" = MAX("MachineState"."LastTelemetryAt", excluded."LastTelemetryAt")
-        WHERE @ts >= "MachineState"."LastTelemetryAt" OR "MachineState"."LastTelemetryAt" IS NULL
+        WHERE @ts >= "MachineState"."DiskInfoAt" OR "MachineState"."DiskInfoAt" IS NULL
         """;
 
     /// <inheritdoc/>
@@ -93,7 +140,7 @@ public sealed class SqliteSqlDialect : ISqlDialect
             "CpuUsagePercent" = excluded."CpuUsagePercent",
             "CpuUsageAt" = excluded."CpuUsageAt",
             "LastTelemetryAt" = MAX("MachineState"."LastTelemetryAt", excluded."LastTelemetryAt")
-        WHERE @ts >= "MachineState"."LastTelemetryAt" OR "MachineState"."LastTelemetryAt" IS NULL
+        WHERE @ts >= "MachineState"."CpuUsageAt" OR "MachineState"."CpuUsageAt" IS NULL
         """;
 
     /// <inheritdoc/>
@@ -105,7 +152,7 @@ public sealed class SqliteSqlDialect : ISqlDialect
             "MemoryUsagePercent" = excluded."MemoryUsagePercent",
             "MemoryUsageAt" = excluded."MemoryUsageAt",
             "LastTelemetryAt" = MAX("MachineState"."LastTelemetryAt", excluded."LastTelemetryAt")
-        WHERE @ts >= "MachineState"."LastTelemetryAt" OR "MachineState"."LastTelemetryAt" IS NULL
+        WHERE @ts >= "MachineState"."MemoryUsageAt" OR "MachineState"."MemoryUsageAt" IS NULL
         """;
 
     /// <inheritdoc/>
@@ -116,7 +163,7 @@ public sealed class SqliteSqlDialect : ISqlDialect
             "DiskUsages" = excluded."DiskUsages",
             "DiskUsageAt" = excluded."DiskUsageAt",
             "LastTelemetryAt" = MAX("MachineState"."LastTelemetryAt", excluded."LastTelemetryAt")
-        WHERE @ts >= "MachineState"."LastTelemetryAt" OR "MachineState"."LastTelemetryAt" IS NULL
+        WHERE @ts >= "MachineState"."DiskUsageAt" OR "MachineState"."DiskUsageAt" IS NULL
         """;
 
     /// <inheritdoc/>
@@ -127,7 +174,7 @@ public sealed class SqliteSqlDialect : ISqlDialect
             "HardwareHealth" = excluded."HardwareHealth",
             "HardwareHealthAt" = excluded."HardwareHealthAt",
             "LastTelemetryAt" = MAX("MachineState"."LastTelemetryAt", excluded."LastTelemetryAt")
-        WHERE @ts >= "MachineState"."LastTelemetryAt" OR "MachineState"."LastTelemetryAt" IS NULL
+        WHERE @ts >= "MachineState"."HardwareHealthAt" OR "MachineState"."HardwareHealthAt" IS NULL
         """;
 
     /// <inheritdoc/>
@@ -139,7 +186,7 @@ public sealed class SqliteSqlDialect : ISqlDialect
             "SecurityUpdates" = excluded."SecurityUpdates",
             "PackageUpdatesAt" = excluded."PackageUpdatesAt",
             "LastTelemetryAt" = MAX("MachineState"."LastTelemetryAt", excluded."LastTelemetryAt")
-        WHERE @ts >= "MachineState"."LastTelemetryAt" OR "MachineState"."LastTelemetryAt" IS NULL
+        WHERE @ts >= "MachineState"."PackageUpdatesAt" OR "MachineState"."PackageUpdatesAt" IS NULL
         """;
 
     /// <inheritdoc/>
@@ -151,7 +198,7 @@ public sealed class SqliteSqlDialect : ISqlDialect
             "FailedServices" = excluded."FailedServices",
             "ServiceStatusAt" = excluded."ServiceStatusAt",
             "LastTelemetryAt" = MAX("MachineState"."LastTelemetryAt", excluded."LastTelemetryAt")
-        WHERE @ts >= "MachineState"."LastTelemetryAt" OR "MachineState"."LastTelemetryAt" IS NULL
+        WHERE @ts >= "MachineState"."ServiceStatusAt" OR "MachineState"."ServiceStatusAt" IS NULL
         """;
 
     /// <inheritdoc/>
@@ -166,7 +213,7 @@ public sealed class SqliteSqlDialect : ISqlDialect
     /// <inheritdoc/>
     public (string Sql, string SessionsValue) BuildUpsertSshSessions(string? existingSessions, string newPayload)
     {
-        // SQLite doesn't have jsonb array functions, so we merge the arrays in C#
+        // SQLite doesn't have jsonb array functions, so we merge the arrays in C#.
         List<JsonElement> merged = new();
 
         if (string.IsNullOrEmpty(existingSessions) == false)
@@ -184,7 +231,7 @@ public sealed class SqliteSqlDialect : ISqlDialect
             }
             catch
             {
-                // Ignore malformed existing data
+                // Ignore malformed existing data.
             }
         }
 
@@ -195,10 +242,10 @@ public sealed class SqliteSqlDialect : ISqlDialect
         }
         catch
         {
-            // Ignore malformed new payload
+            // Ignore malformed new payload.
         }
 
-        // Sort by timestamp descending, cap at 50
+        // Sort by timestamp descending, cap at 50.
         List<JsonElement> sorted = merged
             .OrderByDescending(e =>
             {
@@ -221,7 +268,7 @@ public sealed class SqliteSqlDialect : ISqlDialect
                 "SshSessions" = @sshJson,
                 "SshSessionsAt" = excluded."SshSessionsAt",
                 "LastTelemetryAt" = MAX("MachineState"."LastTelemetryAt", excluded."LastTelemetryAt")
-            WHERE @ts >= "MachineState"."LastTelemetryAt" OR "MachineState"."LastTelemetryAt" IS NULL
+            WHERE @ts >= "MachineState"."SshSessionsAt" OR "MachineState"."SshSessionsAt" IS NULL
             """;
 
         return (sql, sessionsJson);

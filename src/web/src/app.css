@@ -48,3 +48,57 @@ html {
 .animate-fade-in {
   animation: fade-in 0.2s ease-out both;
 }
+
+/* Machine detail page animations */
+@keyframes machine-ring-draw {
+  from { stroke-dashoffset: 600; }
+}
+
+@keyframes machine-glow-pulse {
+  0%, 100% { opacity: 0.1; }
+  50% { opacity: 0.25; }
+}
+
+@keyframes machine-circuit-dash {
+  to { stroke-dashoffset: -8; }
+}
+
+@keyframes machine-led-blink {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.4; }
+}
+
+@keyframes machine-gauge-fill {
+  from { stroke-dashoffset: 116; }
+}
+
+.machine-ring-draw {
+  animation: machine-ring-draw 1.2s ease-out both;
+}
+
+.machine-glow-pulse {
+  animation: machine-glow-pulse 3s ease-in-out infinite;
+}
+
+.machine-circuit-dash {
+  animation: machine-circuit-dash 2s linear infinite;
+}
+
+.machine-led-pulse {
+  animation: machine-led-blink 2s ease-in-out infinite;
+}
+
+.machine-gauge-fill {
+  animation: machine-gauge-fill 0.8s ease-out both;
+  animation-delay: 0.3s;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .machine-ring-draw,
+  .machine-glow-pulse,
+  .machine-circuit-dash,
+  .machine-led-pulse,
+  .machine-gauge-fill {
+    animation: none;
+  }
+}

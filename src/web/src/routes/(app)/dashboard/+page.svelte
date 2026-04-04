@@ -6,21 +6,19 @@
 	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
 	import type { PaginatedFleetOverviewDto, FleetMachineDto } from '$lib/api/types';
+	import { MachineHealthStatus } from '$lib/api/types';
 	import { ApiClient, ApiError } from '$lib/api/client';
 	import { formatNumber, formatRelativeTime } from '$lib/utils/format';
 	import HealthBadge from '$lib/components/HealthBadge.svelte';
 	import ProgressBar from '$lib/components/ProgressBar.svelte';
+	import PageHeader from '$lib/components/PageHeader.svelte';
 	import MachineDetailPanel from '$lib/components/MachineDetailPanel.svelte';
 	import Pagination from '$lib/components/Pagination.svelte';
 	import {
-		Monitor,
-		Wifi,
-		WifiOff,
-		AlertTriangle,
-		AlertOctagon,
 		Shield,
 		Search,
-		ArrowUpDown
+		ArrowUpDown,
+		ChevronRight
 	} from 'lucide-svelte';
 
 	let { data } = $props();
@@ -87,6 +85,32 @@
 	const POLL_FAILURE_THRESHOLD = 3;
 	const showPollWarning = $derived(pollFailures >= POLL_FAILURE_THRESHOLD);
 
+	// Fleet health donut chart computations
+	const donutTotal = $derived(fleet.summary.totalMachines || 1);
+	const healthyCount = $derived(Math.max(0, fleet.summary.onlineMachines - fleet.summary.warningCount - fleet.summary.criticalCount));
+	const healthyPct = $derived((healthyCount / donutTotal) * 100);
+	const warningPct = $derived((fleet.summary.warningCount / donutTotal) * 100);
+	const criticalPct = $derived((fleet.summary.criticalCount / donutTotal) * 100);
+	const offlinePct = $derived((fleet.summary.offlineCount / donutTotal) * 100);
+	const donutGradient = $derived(
+		`conic-gradient(#10b981 0% ${healthyPct}%, #f59e0b ${healthyPct}% ${healthyPct + warningPct}%, #ef4444 ${healthyPct + warningPct}% ${healthyPct + warningPct + criticalPct}%, #9ca3af ${healthyPct + warningPct + criticalPct}% 100%)`
+	);
+
+	function healthBorderClass(status: MachineHealthStatus): string {
+		switch (status) {
+			case MachineHealthStatus.Healthy:
+				return 'border-l-2 border-l-green-500';
+			case MachineHealthStatus.Warning:
+				return 'border-l-2 border-l-amber-500';
+			case MachineHealthStatus.Critical:
+				return 'border-l-2 border-l-red-500';
+			case MachineHealthStatus.Offline:
+				return 'border-l-2 border-l-gray-300 dark:border-l-gray-600';
+			default:
+				return 'border-l-2 border-l-transparent';
+		}
+	}
+
 	// Detail panel
 	let selectedMachineId = $state<number | null>(null);
 
@@ -140,112 +164,61 @@
 	{/if}
 
 	<!-- Page Header -->
-	<div>
-		<h1 class="text-3xl font-bold text-surface-900 dark:text-surface-50">Dashboard</h1>
-		<p class="mt-1 text-surface-500 dark:text-surface-400">Fleet overview and machine health.</p>
-	</div>
+	<PageHeader title="Dashboard" description="Fleet overview and machine health." />
 
-	<!-- Summary Cards -->
-	<div class="grid grid-cols-2 gap-4 lg:grid-cols-3 xl:grid-cols-6">
-		<!-- Total Machines -->
-		<div
-			class="rounded-xl border border-surface-200 bg-surface-50 p-4 dark:border-surface-700 dark:bg-surface-800"
-		>
-			<div class="flex items-center gap-3">
-				<div class="flex h-10 w-10 items-center justify-center rounded-full bg-primary-500/10">
-					<Monitor class="h-5 w-5 text-primary-500" />
-				</div>
-				<div>
-					<p class="text-xs text-surface-500 dark:text-surface-400">Total</p>
-					<p class="text-xl font-bold text-surface-900 dark:text-surface-50">
-						{formatNumber(fleet.summary.totalMachines)}
-					</p>
+	<!-- Fleet Health Summary -->
+	<div class="rounded-xl border border-surface-200 bg-surface-50 p-6 dark:border-surface-700 dark:bg-surface-800">
+		<div class="flex flex-col items-center gap-8 sm:flex-row">
+			<!-- Donut Chart -->
+			<div class="relative h-28 w-28 flex-shrink-0 rounded-full" style="background: {donutGradient}">
+				<div class="absolute inset-3 flex items-center justify-center rounded-full bg-surface-50 dark:bg-surface-800">
+					<div class="text-center">
+						<p class="text-2xl font-bold text-surface-900 dark:text-surface-50">{formatNumber(fleet.summary.totalMachines)}</p>
+						<p class="text-[10px] text-surface-400">machines</p>
+					</div>
 				</div>
 			</div>
-		</div>
 
-		<!-- Online -->
-		<div
-			class="rounded-xl border border-surface-200 bg-surface-50 p-4 dark:border-surface-700 dark:bg-surface-800"
-		>
-			<div class="flex items-center gap-3">
-				<div class="flex h-10 w-10 items-center justify-center rounded-full bg-green-500/10">
-					<Wifi class="h-5 w-5 text-green-500" />
+			<!-- Legend -->
+			<div class="flex-1">
+				<div class="grid grid-cols-2 gap-x-8 gap-y-2 lg:grid-cols-4">
+					<div class="flex items-center gap-2.5">
+						<span class="h-2.5 w-2.5 flex-shrink-0 rounded-full bg-green-500"></span>
+						<div>
+							<p class="text-sm font-semibold text-surface-900 dark:text-surface-50">{formatNumber(healthyCount)}</p>
+							<p class="text-xs text-surface-400">Healthy ({Math.round(healthyPct)}%)</p>
+						</div>
+					</div>
+					<div class="flex items-center gap-2.5">
+						<span class="h-2.5 w-2.5 flex-shrink-0 rounded-full bg-amber-500"></span>
+						<div>
+							<p class="text-sm font-semibold text-surface-900 dark:text-surface-50">{formatNumber(fleet.summary.warningCount)}</p>
+							<p class="text-xs text-surface-400">Warning ({Math.round(warningPct)}%)</p>
+						</div>
+					</div>
+					<div class="flex items-center gap-2.5">
+						<span class="h-2.5 w-2.5 flex-shrink-0 rounded-full bg-red-500"></span>
+						<div>
+							<p class="text-sm font-semibold text-surface-900 dark:text-surface-50">{formatNumber(fleet.summary.criticalCount)}</p>
+							<p class="text-xs text-surface-400">Critical ({Math.round(criticalPct)}%)</p>
+						</div>
+					</div>
+					<div class="flex items-center gap-2.5">
+						<span class="h-2.5 w-2.5 flex-shrink-0 rounded-full bg-gray-400"></span>
+						<div>
+							<p class="text-sm font-semibold text-surface-900 dark:text-surface-50">{formatNumber(fleet.summary.offlineCount)}</p>
+							<p class="text-xs text-surface-400">Offline ({Math.round(offlinePct)}%)</p>
+						</div>
+					</div>
 				</div>
-				<div>
-					<p class="text-xs text-surface-500 dark:text-surface-400">Online</p>
-					<p class="text-xl font-bold text-surface-900 dark:text-surface-50">
-						{formatNumber(fleet.summary.onlineMachines)}
-					</p>
-				</div>
-			</div>
-		</div>
-
-		<!-- Offline -->
-		<div
-			class="rounded-xl border border-surface-200 bg-surface-50 p-4 dark:border-surface-700 dark:bg-surface-800"
-		>
-			<div class="flex items-center gap-3">
-				<div class="flex h-10 w-10 items-center justify-center rounded-full bg-gray-500/10">
-					<WifiOff class="h-5 w-5 text-gray-500" />
-				</div>
-				<div>
-					<p class="text-xs text-surface-500 dark:text-surface-400">Offline</p>
-					<p class="text-xl font-bold text-surface-900 dark:text-surface-50">
-						{formatNumber(fleet.summary.offlineCount)}
-					</p>
-				</div>
-			</div>
-		</div>
-
-		<!-- Warning -->
-		<div
-			class="rounded-xl border border-surface-200 bg-surface-50 p-4 dark:border-surface-700 dark:bg-surface-800"
-		>
-			<div class="flex items-center gap-3">
-				<div class="flex h-10 w-10 items-center justify-center rounded-full bg-amber-500/10">
-					<AlertTriangle class="h-5 w-5 text-amber-500" />
-				</div>
-				<div>
-					<p class="text-xs text-surface-500 dark:text-surface-400">Warning</p>
-					<p class="text-xl font-bold text-surface-900 dark:text-surface-50">
-						{formatNumber(fleet.summary.warningCount)}
-					</p>
-				</div>
-			</div>
-		</div>
-
-		<!-- Critical -->
-		<div
-			class="rounded-xl border border-surface-200 bg-surface-50 p-4 dark:border-surface-700 dark:bg-surface-800"
-		>
-			<div class="flex items-center gap-3">
-				<div class="flex h-10 w-10 items-center justify-center rounded-full bg-red-500/10">
-					<AlertOctagon class="h-5 w-5 text-red-500" />
-				</div>
-				<div>
-					<p class="text-xs text-surface-500 dark:text-surface-400">Critical</p>
-					<p class="text-xl font-bold text-surface-900 dark:text-surface-50">
-						{formatNumber(fleet.summary.criticalCount)}
-					</p>
-				</div>
-			</div>
-		</div>
-
-		<!-- Security Updates -->
-		<div
-			class="rounded-xl border border-surface-200 bg-surface-50 p-4 dark:border-surface-700 dark:bg-surface-800"
-		>
-			<div class="flex items-center gap-3">
-				<div class="flex h-10 w-10 items-center justify-center rounded-full bg-amber-500/10">
-					<Shield class="h-5 w-5 text-amber-500" />
-				</div>
-				<div>
-					<p class="text-xs text-surface-500 dark:text-surface-400">Sec. Updates</p>
-					<p class="text-xl font-bold text-surface-900 dark:text-surface-50">
-						{formatNumber(fleet.summary.securityUpdates)}
-					</p>
-				</div>
+				{#if fleet.summary.securityUpdates > 0}
+					<div class="mt-4 flex items-center gap-2 border-t border-surface-200 pt-3 dark:border-surface-700">
+						<Shield class="h-4 w-4 text-amber-500" />
+						<span class="text-sm text-surface-600 dark:text-surface-400">
+							<span class="font-semibold text-surface-900 dark:text-surface-50">{formatNumber(fleet.summary.securityUpdates)}</span> security updates pending
+						</span>
+					</div>
+				{/if}
 			</div>
 		</div>
 	</div>
@@ -283,6 +256,11 @@
 	<div
 		class="overflow-hidden rounded-xl border border-surface-200 bg-surface-50 dark:border-surface-700 dark:bg-surface-800"
 	>
+		<div class="flex items-center justify-between border-b border-surface-200 px-4 py-3 dark:border-surface-700">
+			<span class="text-sm font-medium text-surface-600 dark:text-surface-300">
+				Fleet Machines <span class="font-normal text-surface-400">({fleet.totalCount})</span>
+			</span>
+		</div>
 		<div class="overflow-x-auto">
 			<table class="w-full text-left text-sm">
 				<thead class="border-b border-surface-200 bg-surface-50 dark:border-surface-700 dark:bg-surface-800/50">
@@ -348,12 +326,13 @@
 						<th scope="col" class="px-4 py-3 font-medium text-surface-600 dark:text-surface-400"
 							>Last Seen</th
 						>
+						<th scope="col" class="w-8"></th>
 					</tr>
 				</thead>
 				<tbody class="divide-y divide-surface-100 dark:divide-surface-800">
-					{#each fleet.machines as machine (machine.id)}
+					{#each fleet.machines as machine, i (machine.id)}
 						<tr
-							class="cursor-pointer transition hover:bg-surface-50 dark:hover:bg-surface-800/80"
+							class="group cursor-pointer transition {healthBorderClass(machine.healthStatus)} {i % 2 === 1 ? 'bg-surface-100/50 dark:bg-surface-800/30' : ''} hover:bg-surface-100 dark:hover:bg-surface-700/50"
 							onclick={() => openDetail(machine)}
 						>
 							<td class="px-4 py-3">
@@ -431,11 +410,14 @@
 							<td class="px-4 py-3 text-xs text-surface-500 dark:text-surface-400">
 								{formatRelativeTime(machine.lastPing)}
 							</td>
+							<td class="px-2 py-3">
+								<ChevronRight class="h-4 w-4 text-surface-300 opacity-0 transition-opacity group-hover:opacity-100" />
+							</td>
 						</tr>
 					{:else}
 						<tr>
 							<td
-								colspan="7"
+								colspan="8"
 								class="px-4 py-12 text-center text-surface-400 dark:text-surface-500"
 							>
 								{searchQuery || statusFilter !== 'all'

@@ -18,6 +18,7 @@
     UserMinus,
     Check,
   } from "lucide-svelte";
+  import PageHeader from '$lib/components/PageHeader.svelte';
 
   let { data } = $props();
 
@@ -134,13 +135,8 @@
   );
 </script>
 
-<div class="mx-auto max-w-4xl">
-  <h1 class="text-2xl font-bold text-surface-900 dark:text-surface-50">
-    Team Members
-  </h1>
-  <p class="mt-1 text-sm text-surface-500">
-    Manage your organization's team members and invitations.
-  </p>
+<div class="mx-auto max-w-4xl space-y-6">
+  <PageHeader title="Team Members" description="Manage your organization's team members and invitations." />
 
   <!-- Invite form -->
   <div
@@ -253,7 +249,7 @@
   >
     <div class="border-b border-surface-200 px-6 py-4 dark:border-surface-700">
       <h2 class="text-lg font-semibold text-surface-900 dark:text-surface-50">
-        Active Members
+        Active Members <span class="text-xs font-normal text-surface-400">({members.length})</span>
       </h2>
     </div>
     {#if members.length === 0}
@@ -315,7 +311,7 @@
                 {:else}
                   <button
                     onclick={() => (confirmRemoveUserId = member.userId)}
-                    class="inline-flex items-center gap-1 rounded px-2 py-1 text-xs text-surface-500 hover:bg-surface-100 hover:text-red-600 dark:hover:bg-surface-700 dark:hover:text-red-400"
+                    class="inline-flex items-center gap-1 rounded-md border border-surface-200 px-2.5 py-1 text-xs text-surface-500 hover:bg-surface-100 hover:text-red-600 dark:border-surface-700 dark:hover:bg-surface-700 dark:hover:text-red-400"
                     title="Remove member"
                   >
                     <UserMinus size={14} />
@@ -341,7 +337,7 @@
         class="border-b border-surface-200 px-6 py-4 dark:border-surface-700"
       >
         <h2 class="text-lg font-semibold text-surface-900 dark:text-surface-50">
-          Pending Invitations
+          Pending Invitations <span class="text-xs font-normal text-surface-400">({pendingInvitations.length})</span>
         </h2>
       </div>
       <div class="divide-y divide-surface-100 dark:divide-surface-700">
@@ -366,7 +362,7 @@
             <div class="flex items-center gap-2">
               <button
                 onclick={() => resendInvitation(inv.id)}
-                class="inline-flex items-center gap-1 rounded px-2 py-1 text-xs text-surface-500 hover:bg-surface-100 dark:hover:bg-surface-700"
+                class="inline-flex items-center gap-1 rounded-md border border-surface-200 px-2.5 py-1 text-xs text-surface-500 hover:bg-surface-100 dark:border-surface-700 dark:hover:bg-surface-700"
                 title="Resend invitation"
               >
                 <RefreshCw size={14} />
@@ -374,7 +370,7 @@
               </button>
               <button
                 onclick={() => revokeInvitation(inv.id)}
-                class="inline-flex items-center gap-1 rounded px-2 py-1 text-xs text-surface-500 hover:bg-surface-100 hover:text-red-600 dark:hover:bg-surface-700 dark:hover:text-red-400"
+                class="inline-flex items-center gap-1 rounded-md border border-surface-200 px-2.5 py-1 text-xs text-surface-500 hover:bg-surface-100 hover:text-red-600 dark:border-surface-700 dark:hover:bg-surface-700 dark:hover:text-red-400"
                 title="Revoke invitation"
               >
                 <XCircle size={14} />
@@ -396,7 +392,7 @@
         class="border-b border-surface-200 px-6 py-4 dark:border-surface-700"
       >
         <h2 class="text-lg font-semibold text-surface-900 dark:text-surface-50">
-          Past Invitations
+          Past Invitations <span class="text-xs font-normal text-surface-400">({pastInvitations.length})</span>
         </h2>
       </div>
       <div class="divide-y divide-surface-100 dark:divide-surface-700">

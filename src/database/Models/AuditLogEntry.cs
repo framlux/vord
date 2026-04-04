@@ -85,4 +85,10 @@ public sealed class AuditLogEntry
     /// </summary>
     [Column("Timestamp"), NotNull]
     public required DateTimeOffset Timestamp { get; set; }
+
+    /// <summary>
+    /// When this record was soft-deleted for retention cleanup.
+    /// </summary>
+    [Column("DeletedAt"), Nullable]
+    public DateTimeOffset? DeletedAt { get; set; }
 }

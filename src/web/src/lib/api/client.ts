@@ -39,7 +39,9 @@ import type {
 	SendCommandRequest,
 	UpcomingInvoiceDto,
 	InvoiceDto,
-	UsagePointDto
+	UsagePointDto,
+	MachineSearchParams,
+	FleetMachineDto
 } from './types';
 import { buildQueryString } from '$lib/utils/query';
 
@@ -232,6 +234,14 @@ export class ApiClient {
 		const qs = buildQueryString(params ?? {});
 		const resp = await this.get<ApiResponse<PaginatedResponse<MachineDto>>>(
 			`/api/v1/machines${qs ? `?${qs}` : ''}`
+		);
+		return this.unwrap(resp);
+	}
+
+	async searchMachines(params: MachineSearchParams): Promise<PaginatedResponse<FleetMachineDto>> {
+		const qs = buildQueryString(params);
+		const resp = await this.get<ApiResponse<PaginatedResponse<FleetMachineDto>>>(
+			`/api/v1/machines/search${qs ? `?${qs}` : ''}`
 		);
 		return this.unwrap(resp);
 	}

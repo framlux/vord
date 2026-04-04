@@ -140,7 +140,7 @@
 	);
 </script>
 
-<div class="space-y-8">
+<div class="space-y-6">
 	<!-- Page Header -->
 	<div>
 		<h1 class="text-3xl font-bold text-surface-900 dark:text-surface-50">Settings</h1>

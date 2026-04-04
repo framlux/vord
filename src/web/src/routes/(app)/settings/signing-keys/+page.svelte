@@ -8,6 +8,7 @@
 	import type { SigningKeyDto, SigningKeyListResponse } from '$lib/api/types';
 	import { generateKeyPair, autoLabel } from '$lib/crypto/signing';
 	import { Key, XCircle, Plus, Shield, AlertTriangle } from 'lucide-svelte';
+	import PageHeader from '$lib/components/PageHeader.svelte';
 
 	let { data } = $props();
 
@@ -73,12 +74,8 @@
 	const atLimit = $derived(signingKeys.activeCount >= signingKeys.maxKeys);
 </script>
 
-<div class="mx-auto max-w-4xl">
-	<h1 class="text-2xl font-bold text-surface-900 dark:text-surface-50">Signing Keys</h1>
-	<p class="mt-1 text-sm text-surface-500">
-		Ed25519 signing keys authorize remote commands sent to your machines. Private keys never leave
-		your browser.
-	</p>
+<div class="mx-auto max-w-4xl space-y-6">
+	<PageHeader title="Signing Keys" description="Ed25519 signing keys authorize remote commands sent to your machines. Private keys never leave your browser." />
 
 	<!-- Generate key section -->
 	<div
@@ -146,7 +143,7 @@
 		class="mt-8 rounded-lg border border-surface-200 bg-surface-50 dark:border-surface-700 dark:bg-surface-800"
 	>
 		<div class="flex items-center justify-between border-b border-surface-200 px-6 py-4 dark:border-surface-700">
-			<h2 class="text-lg font-semibold text-surface-900 dark:text-surface-50">Active Keys</h2>
+			<h2 class="text-lg font-semibold text-surface-900 dark:text-surface-50">Active Keys <span class="text-xs font-normal text-surface-400">({activeKeys.length})</span></h2>
 			<span class="text-xs text-surface-500"
 				>{signingKeys.activeCount}/{signingKeys.maxKeys} used</span
 			>
@@ -173,7 +170,7 @@
 						</div>
 						<button
 							onclick={() => revokeKey(key.id)}
-							class="inline-flex items-center gap-1 rounded px-2 py-1 text-xs text-surface-500 hover:bg-surface-100 hover:text-red-600 dark:hover:bg-surface-700 dark:hover:text-red-400"
+							class="inline-flex items-center gap-1 rounded-md border border-surface-200 px-2.5 py-1 text-xs text-surface-500 hover:bg-surface-100 hover:text-red-600 dark:border-surface-700 dark:hover:bg-surface-700 dark:hover:text-red-400"
 							title="Revoke key"
 						>
 							<XCircle size={14} />
@@ -195,7 +192,7 @@
 			class="mt-8 rounded-lg border border-surface-200 bg-surface-50 dark:border-surface-700 dark:bg-surface-800"
 		>
 			<div class="border-b border-surface-200 px-6 py-4 dark:border-surface-700">
-				<h2 class="text-lg font-semibold text-surface-900 dark:text-surface-50">Revoked Keys</h2>
+				<h2 class="text-lg font-semibold text-surface-900 dark:text-surface-50">Revoked Keys <span class="text-xs font-normal text-surface-400">({revokedKeys.length})</span></h2>
 			</div>
 			<div class="divide-y divide-surface-100 dark:divide-surface-700">
 				{#each revokedKeys as key (key.id)}

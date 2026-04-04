@@ -14,12 +14,15 @@
 		CommandDto,
 		SigningKeyDto
 	} from '$lib/api/types';
-	import { OperatingSystem, MachineType } from '$lib/api/types';
+	import { MachineHealthStatus } from '$lib/api/types';
 	import { ApiClient } from '$lib/api/client';
 	import { formatDate, formatDateTime, formatRelativeTime } from '$lib/utils/format';
-	import { getOsName, getTypeName } from '$lib/utils/enums';
+	import { getOsName } from '$lib/utils/enums';
 	import EmptyState from '$lib/components/EmptyState.svelte';
-	import { ArrowLeft, Terminal } from 'lucide-svelte';
+	import HealthBadge from '$lib/components/HealthBadge.svelte';
+	import MachineHero from '$lib/components/machine/MachineHero.svelte';
+	import VitalsBar from '$lib/components/machine/VitalsBar.svelte';
+	import { Terminal } from 'lucide-svelte';
 	import {
 		generateNonce,
 		buildCanonicalPayload,
@@ -52,6 +55,22 @@
 		return updates;
 	});
 
+	// Vitals derived values
+	const cpuPercent = $derived(machineDetail?.cpuUsage?.cpuUsagePercent ?? null);
+	const memoryPercent = $derived(machineDetail?.memoryUsage?.memoryUsagePercent ?? null);
+	const maxDiskPercent = $derived(() => {
+		const disks = machineDetail?.diskUsages?.disks;
+		if (disks === undefined || disks === null || disks.length === 0) return null;
+
+		return Math.max(...disks.map(d => d.usagePercent));
+	});
+	const diskTooltip = $derived(() => {
+		const disks = machineDetail?.diskUsages?.disks;
+		if (disks === undefined || disks === null || disks.length === 0) return undefined;
+
+		return disks.map(d => `${d.path}: ${Math.round(d.usagePercent)}%`).join('\n');
+	});
+
 	onMount(() => {
 		const api = new ApiClient('');
 		const interval = setInterval(async () => {
@@ -62,6 +81,7 @@
 				pollFailures += 1;
 			}
 		}, 15_000);
+
 		return () => clearInterval(interval);
 	});
 
@@ -275,6 +295,7 @@
 					'bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400'
 			};
 		}
+
 		return {
 			label: 'Active',
 			classes:
@@ -294,44 +315,16 @@
 		</div>
 	{/if}
 
-	<!-- Back Link & Header -->
-	<div>
-		<a
-			href="/machines"
-			class="mb-4 inline-flex items-center gap-1.5 text-sm text-surface-500 transition hover:text-primary-500 dark:text-surface-400 dark:hover:text-primary-400"
-		>
-			<ArrowLeft size={16} />
-			Back to Machines
-		</a>
+	<!-- Header -->
+	<MachineHero {machine} detail={machineDetail} {isOnline} {lastPing} />
 
-		<div class="flex items-center gap-3">
-			<h1 class="text-3xl font-bold text-surface-900 dark:text-surface-50">
-				{machine.name}
-			</h1>
-			{#if isOnline}
-				<span
-					class="inline-flex items-center gap-1.5 rounded-full bg-green-100 px-2.5 py-0.5 text-xs font-medium text-green-800 dark:bg-green-900/30 dark:text-green-400"
-					aria-label="Status: Online"
-				>
-					<span class="h-2 w-2 rounded-full bg-green-500" aria-hidden="true"></span>
-					Online
-				</span>
-			{:else}
-				<span
-					class="inline-flex items-center gap-1.5 rounded-full bg-surface-100 px-2.5 py-0.5 text-xs font-medium text-surface-600 dark:bg-surface-700 dark:text-surface-400"
-					aria-label="Status: Offline"
-				>
-					<span class="h-2 w-2 rounded-full bg-surface-400 dark:bg-surface-500" aria-hidden="true"></span>
-					Offline
-				</span>
-			{/if}
-			{#if lastPing}
-				<span class="text-xs text-surface-400 dark:text-surface-500">
-					Last ping: {formatRelativeTime(lastPing)}
-				</span>
-			{/if}
-		</div>
-	</div>
+	<!-- Vitals -->
+	<VitalsBar
+		cpuPercent={cpuPercent}
+		memoryPercent={memoryPercent}
+		maxDiskPercent={maxDiskPercent()}
+		diskDetails={diskTooltip()}
+	/>
 
 	<!-- Tabs -->
 	<div class="border-b border-surface-200 dark:border-surface-700">
@@ -350,61 +343,196 @@
 	</div>
 
 	<!-- Tab Content -->
+	<div>
 	{#if activeTab === 'overview'}
-		<div
-			class="rounded-xl border border-surface-200 bg-surface-50 p-6 dark:border-surface-700 dark:bg-surface-800"
-		>
-			<div class="grid grid-cols-1 gap-6 sm:grid-cols-2">
-				<div>
-					<p class="text-sm text-surface-500 dark:text-surface-400">Hostname</p>
-					<p class="mt-1 font-medium text-surface-900 dark:text-surface-100">
-						{machine.hostname}
-					</p>
+		<div class="grid grid-cols-1 gap-4 lg:grid-cols-2">
+			<!-- Identity Card -->
+			<div class="rounded-xl border border-surface-200 bg-surface-50 p-5 dark:border-surface-700 dark:bg-surface-800">
+				<h3 class="mb-4 text-xs font-semibold uppercase tracking-wider text-surface-400 dark:text-surface-500">Identity</h3>
+				<div class="space-y-3">
+					<div class="flex justify-between">
+						<span class="text-sm text-surface-500 dark:text-surface-400">Name</span>
+						<span class="text-sm font-medium text-surface-900 dark:text-surface-100">{machine.name}</span>
+					</div>
+					<div class="flex justify-between">
+						<span class="text-sm text-surface-500 dark:text-surface-400">Hostname</span>
+						<span class="font-mono text-sm text-surface-900 dark:text-surface-100">{machine.hostname}</span>
+					</div>
+					<div class="flex justify-between">
+						<span class="text-sm text-surface-500 dark:text-surface-400">Serial Number</span>
+						<span class="font-mono text-sm text-surface-900 dark:text-surface-100">{machine.serialNumber}</span>
+					</div>
+					<div class="flex justify-between">
+						<span class="text-sm text-surface-500 dark:text-surface-400">Asset Tag</span>
+						<span class="text-sm text-surface-900 dark:text-surface-100">{machine.assetTag ?? '---'}</span>
+					</div>
+					<div class="flex justify-between">
+						<span class="text-sm text-surface-500 dark:text-surface-400">Description</span>
+						<span class="max-w-48 text-right text-sm text-surface-900 dark:text-surface-100">{machine.description ?? '---'}</span>
+					</div>
 				</div>
-				<div>
-					<p class="text-sm text-surface-500 dark:text-surface-400">Operating System</p>
-					<p class="mt-1 font-medium text-surface-900 dark:text-surface-100">
-						{getOsName(machine.operatingSystem)}
-					</p>
+			</div>
+
+			<!-- Network & OS Card -->
+			<div class="rounded-xl border border-surface-200 bg-surface-50 p-5 dark:border-surface-700 dark:bg-surface-800">
+				<h3 class="mb-4 text-xs font-semibold uppercase tracking-wider text-surface-400 dark:text-surface-500">Network & OS</h3>
+				<div class="space-y-3">
+					<div class="flex justify-between">
+						<span class="text-sm text-surface-500 dark:text-surface-400">Operating System</span>
+						<span class="text-sm font-medium text-surface-900 dark:text-surface-100">{getOsName(machine.operatingSystem)}</span>
+					</div>
+					{#if machineDetail?.osVersion}
+						<div class="flex justify-between">
+							<span class="text-sm text-surface-500 dark:text-surface-400">OS Version</span>
+							<span class="font-mono text-sm text-surface-900 dark:text-surface-100">{machineDetail.osVersion.version}</span>
+						</div>
+						<div class="flex justify-between">
+							<span class="text-sm text-surface-500 dark:text-surface-400">Kernel</span>
+							<span class="font-mono text-sm text-surface-900 dark:text-surface-100">{machineDetail.osVersion.build || '---'}</span>
+						</div>
+						<div class="flex justify-between">
+							<span class="text-sm text-surface-500 dark:text-surface-400">Arch</span>
+							<span class="font-mono text-sm text-surface-900 dark:text-surface-100">{machineDetail.osVersion.arch}</span>
+						</div>
+					{/if}
+					{#if machineDetail?.systemInfo?.ipAddresses && machineDetail.systemInfo.ipAddresses.length > 0}
+						<div>
+							<span class="text-sm text-surface-500 dark:text-surface-400">IP Addresses</span>
+							<div class="mt-1.5 flex flex-wrap gap-1.5">
+								{#each machineDetail.systemInfo.ipAddresses as ip}
+									<span class="rounded bg-surface-100 px-2 py-0.5 font-mono text-xs text-surface-700 dark:bg-surface-700 dark:text-surface-300">
+										{ip}
+									</span>
+								{/each}
+							</div>
+						</div>
+					{/if}
 				</div>
-				<div>
-					<p class="text-sm text-surface-500 dark:text-surface-400">Type</p>
-					<p class="mt-1 font-medium text-surface-900 dark:text-surface-100">
-						{getTypeName(machine.machineType)}
-					</p>
+			</div>
+
+			<!-- Uptime & Timing Card -->
+			<div class="rounded-xl border border-surface-200 bg-surface-50 p-5 dark:border-surface-700 dark:bg-surface-800">
+				<h3 class="mb-4 text-xs font-semibold uppercase tracking-wider text-surface-400 dark:text-surface-500">Timing</h3>
+				<div class="space-y-3">
+					{#if machineDetail?.systemInfo}
+						<div class="flex justify-between">
+							<span class="text-sm text-surface-500 dark:text-surface-400">Uptime</span>
+							<span class="text-sm font-medium text-surface-900 dark:text-surface-100">{formatUptime(machineDetail.systemInfo.uptimeSeconds)}</span>
+						</div>
+					{/if}
+					<div class="flex justify-between">
+						<span class="text-sm text-surface-500 dark:text-surface-400">Registered</span>
+						<span class="text-sm text-surface-900 dark:text-surface-100">{formatDate(machine.registeredOn)}</span>
+					</div>
+					{#if lastPing}
+						<div class="flex justify-between">
+							<span class="text-sm text-surface-500 dark:text-surface-400">Last Seen</span>
+							<span class="text-sm text-surface-900 dark:text-surface-100">{formatRelativeTime(lastPing)}</span>
+						</div>
+					{/if}
+					{#if machineDetail?.telemetryLastUpdated}
+						<div class="flex justify-between">
+							<span class="text-sm text-surface-500 dark:text-surface-400">Last Telemetry</span>
+							<span class="text-sm text-surface-900 dark:text-surface-100">{formatRelativeTime(machineDetail.telemetryLastUpdated)}</span>
+						</div>
+					{/if}
 				</div>
-				<div>
-					<p class="text-sm text-surface-500 dark:text-surface-400">Serial Number</p>
-					<p class="mt-1 font-medium text-surface-900 dark:text-surface-100">
-						{machine.serialNumber}
-					</p>
-				</div>
-				<div>
-					<p class="text-sm text-surface-500 dark:text-surface-400">Location</p>
-					<p class="mt-1 font-medium text-surface-900 dark:text-surface-100">
-						{machine.location ?? '---'}
-					</p>
-				</div>
-				<div>
-					<p class="text-sm text-surface-500 dark:text-surface-400">Asset Tag</p>
-					<p class="mt-1 font-medium text-surface-900 dark:text-surface-100">
-						{machine.assetTag ?? '---'}
-					</p>
-				</div>
-				<div>
-					<p class="text-sm text-surface-500 dark:text-surface-400">Description</p>
-					<p class="mt-1 font-medium text-surface-900 dark:text-surface-100">
-						{machine.description ?? '---'}
-					</p>
-				</div>
-				<div>
-					<p class="text-sm text-surface-500 dark:text-surface-400">Registered On</p>
-					<p class="mt-1 font-medium text-surface-900 dark:text-surface-100">
-						{formatDate(machine.registeredOn)}
-					</p>
+			</div>
+
+			<!-- Health Summary Card -->
+			<div class="rounded-xl border border-surface-200 bg-surface-50 p-5 dark:border-surface-700 dark:bg-surface-800">
+				<h3 class="mb-4 text-xs font-semibold uppercase tracking-wider text-surface-400 dark:text-surface-500">Health</h3>
+				<div class="space-y-3">
+					<div class="flex items-center justify-between">
+						<span class="text-sm text-surface-500 dark:text-surface-400">Status</span>
+						<HealthBadge status={machineDetail?.healthStatus ?? MachineHealthStatus.Offline} />
+					</div>
+					{#if machineDetail}
+						<div class="flex justify-between">
+							<span class="text-sm text-surface-500 dark:text-surface-400">Services</span>
+							<span class="text-sm text-surface-900 dark:text-surface-100">
+								{#if machineDetail.failedServices.length > 0}
+									<span class="font-medium text-red-600 dark:text-red-400">{machineDetail.failedServices.length} failed</span>
+									/ {machineDetail.totalServices}
+								{:else}
+									{machineDetail.totalServices} running
+								{/if}
+							</span>
+						</div>
+						{#if machineDetail.packageUpdates}
+							<div class="flex justify-between">
+								<span class="text-sm text-surface-500 dark:text-surface-400">Pending Updates</span>
+								<span class="text-sm text-surface-900 dark:text-surface-100">{machineDetail.packageUpdates.updates.length}</span>
+							</div>
+							{@const securityCount = machineDetail.packageUpdates.updates.filter(u => u.isSecurityUpdate).length}
+							{#if securityCount > 0}
+								<div class="flex justify-between">
+									<span class="text-sm text-surface-500 dark:text-surface-400">Security Updates</span>
+									<span class="text-sm font-medium text-red-600 dark:text-red-400">{securityCount}</span>
+								</div>
+							{/if}
+						{/if}
+					{/if}
 				</div>
 			</div>
 		</div>
+
+		<!-- Failed Services (if any) -->
+		{#if machineDetail && machineDetail.failedServices.length > 0}
+			<div class="mt-4 rounded-xl border border-red-200 bg-red-50/50 p-5 dark:border-red-900/30 dark:bg-red-900/10">
+				<h3 class="mb-3 text-sm font-semibold text-red-800 dark:text-red-400">Failed Services</h3>
+				<div class="overflow-x-auto">
+					<table class="w-full text-left text-sm">
+						<thead>
+							<tr class="border-b border-red-200 dark:border-red-900/30">
+								<th class="pb-2 pr-4 text-xs font-semibold uppercase tracking-wider text-red-600 dark:text-red-400">Unit</th>
+								<th class="pb-2 pr-4 text-xs font-semibold uppercase tracking-wider text-red-600 dark:text-red-400">State</th>
+								<th class="pb-2 text-xs font-semibold uppercase tracking-wider text-red-600 dark:text-red-400">Description</th>
+							</tr>
+						</thead>
+						<tbody class="divide-y divide-red-100 dark:divide-red-900/20">
+							{#each machineDetail.failedServices as svc}
+								<tr>
+									<td class="py-2 pr-4 font-mono text-xs text-red-700 dark:text-red-300">{svc.unit}</td>
+									<td class="py-2 pr-4 text-xs text-red-600 dark:text-red-400">{svc.activeState}/{svc.subState}</td>
+									<td class="py-2 text-xs text-red-600 dark:text-red-400">{svc.description}</td>
+								</tr>
+							{/each}
+						</tbody>
+					</table>
+				</div>
+			</div>
+		{/if}
+
+		<!-- Recent SSH Sessions (if any) -->
+		{#if machineDetail && machineDetail.recentSshSessions.length > 0}
+			<div class="mt-4 rounded-xl border border-surface-200 bg-surface-50 p-5 dark:border-surface-700 dark:bg-surface-800">
+				<h3 class="mb-3 text-xs font-semibold uppercase tracking-wider text-surface-400 dark:text-surface-500">Recent SSH Sessions</h3>
+				<div class="overflow-x-auto">
+					<table class="w-full text-left text-sm">
+						<thead>
+							<tr class="border-b border-surface-200 dark:border-surface-700">
+								<th class="pb-2 pr-4 text-xs font-semibold uppercase tracking-wider text-surface-500 dark:text-surface-400">User</th>
+								<th class="pb-2 pr-4 text-xs font-semibold uppercase tracking-wider text-surface-500 dark:text-surface-400">Source</th>
+								<th class="pb-2 pr-4 text-xs font-semibold uppercase tracking-wider text-surface-500 dark:text-surface-400">Action</th>
+								<th class="pb-2 text-xs font-semibold uppercase tracking-wider text-surface-500 dark:text-surface-400">When</th>
+							</tr>
+						</thead>
+						<tbody class="divide-y divide-surface-100 dark:divide-surface-700">
+							{#each machineDetail.recentSshSessions as session}
+								<tr>
+									<td class="py-2 pr-4 font-mono text-xs text-surface-700 dark:text-surface-300">{session.user}</td>
+									<td class="py-2 pr-4 font-mono text-xs text-surface-600 dark:text-surface-400">{session.sourceIp}</td>
+									<td class="py-2 pr-4 text-xs text-surface-600 dark:text-surface-400">{session.action}</td>
+									<td class="py-2 text-xs text-surface-500 dark:text-surface-400">{formatRelativeTime(session.timestamp)}</td>
+								</tr>
+							{/each}
+						</tbody>
+					</table>
+				</div>
+			</div>
+		{/if}
+
 	{:else if activeTab === 'telemetry'}
 		{#if telemetryLatest.length === 0}
 			<EmptyState
@@ -534,6 +662,42 @@
 						{/if}
 					</div>
 				</div>
+
+				<!-- Disk Usage -->
+				{#if machineDetail.diskUsages && machineDetail.diskUsages.disks.length > 0}
+					<div class="rounded-xl border border-surface-200 bg-surface-50 p-6 dark:border-surface-700 dark:bg-surface-800">
+						<h3 class="mb-4 text-base font-semibold text-surface-900 dark:text-surface-50">Disk Usage</h3>
+						<div class="overflow-x-auto">
+							<table class="w-full text-left text-sm">
+								<thead>
+									<tr class="border-b border-surface-200 dark:border-surface-700">
+										<th class="pb-2 pr-4 text-xs font-semibold uppercase tracking-wider text-surface-500 dark:text-surface-400">Mount</th>
+										<th class="pb-2 pr-4 text-xs font-semibold uppercase tracking-wider text-surface-500 dark:text-surface-400">Device</th>
+										<th class="pb-2 pr-4 text-xs font-semibold uppercase tracking-wider text-surface-500 dark:text-surface-400">Usage</th>
+										<th class="pb-2 text-xs font-semibold uppercase tracking-wider text-surface-500 dark:text-surface-400">%</th>
+									</tr>
+								</thead>
+								<tbody class="divide-y divide-surface-100 dark:divide-surface-700">
+									{#each machineDetail.diskUsages.disks as disk}
+										<tr class="hover:bg-surface-50 dark:hover:bg-surface-700/50">
+											<td class="py-3 pr-4 font-mono text-xs text-surface-700 dark:text-surface-300">{disk.path}</td>
+											<td class="py-3 pr-4 font-mono text-xs text-surface-600 dark:text-surface-400">{disk.device}</td>
+											<td class="py-3 pr-4">
+												<div class="h-2 w-24 overflow-hidden rounded-full bg-surface-200 dark:bg-surface-700">
+													<div
+														class="h-full rounded-full transition-all {disk.usagePercent >= 95 ? 'bg-red-500' : disk.usagePercent >= 80 ? 'bg-amber-500' : 'bg-green-500'}"
+														style="width: {Math.min(disk.usagePercent, 100)}%"
+													></div>
+												</div>
+											</td>
+											<td class="py-3 text-sm font-medium text-surface-700 dark:text-surface-300">{Math.round(disk.usagePercent)}%</td>
+										</tr>
+									{/each}
+								</tbody>
+							</table>
+						</div>
+					</div>
+				{/if}
 
 				<!-- Hardware Health -->
 				{#if machineDetail.hardwareHealth !== null}
@@ -828,7 +992,7 @@
 						<select
 							id="cmd-type"
 							bind:value={commandType}
-							class="mt-1 w-full rounded-lg border border-surface-300 bg-surface-50 px-4 py-2 text-sm text-surface-900 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-surface-600 dark:bg-surface-700 dark:text-surface-50"
+							class="mt-1 w-full rounded-lg border border-surface-300 bg-white px-4 py-2 text-sm text-surface-900 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-surface-600 dark:bg-surface-700 dark:text-surface-50"
 						>
 							{#each commandTypes as ct}
 								<option value={ct.value}>{ct.label}</option>
@@ -840,7 +1004,7 @@
 						<select
 							id="signing-key"
 							bind:value={selectedLocalKeyId}
-							class="mt-1 w-full rounded-lg border border-surface-300 bg-surface-50 px-4 py-2 text-sm text-surface-900 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-surface-600 dark:bg-surface-700 dark:text-surface-50"
+							class="mt-1 w-full rounded-lg border border-surface-300 bg-white px-4 py-2 text-sm text-surface-900 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-surface-600 dark:bg-surface-700 dark:text-surface-50"
 						>
 							{#each localKeys as lk}
 								<option value={lk.id}>{lk.label}</option>
@@ -866,7 +1030,7 @@
 		</div>
 
 		<!-- Command History -->
-		<div class="rounded-lg border border-surface-200 bg-surface-50 dark:border-surface-700 dark:bg-surface-800">
+		<div class="mt-4 rounded-lg border border-surface-200 bg-surface-50 dark:border-surface-700 dark:bg-surface-800">
 			<div class="border-b border-surface-200 px-6 py-4 dark:border-surface-700">
 				<h3 class="text-lg font-semibold text-surface-900 dark:text-surface-50">Command History</h3>
 			</div>
@@ -914,4 +1078,5 @@
 			{/if}
 		</div>
 	{/if}
+	</div>
 </div>

@@ -586,3 +586,28 @@ export interface AuditLogEntryDto {
 	timestamp: string;
 }
 
+// Machine Search
+export interface MachineSearchParams {
+	page?: number;
+	pageSize?: number;
+	search?: string;
+	healthStatus?: string;
+	os?: string;
+	type?: string;
+	cpuMin?: number;
+	cpuMax?: number;
+	memoryMin?: number;
+	memoryMax?: number;
+	diskMin?: number;
+	diskMax?: number;
+	pendingUpdatesMin?: number;
+	securityUpdatesMin?: number;
+	failedServicesMin?: number;
+	hasDiskHealthIssue?: boolean;
+	hasHardwareIssue?: boolean;
+	lastSeenAfter?: string;
+	lastSeenBefore?: string;
+	sortBy?: string;
+	sortDir?: string;
+}
+

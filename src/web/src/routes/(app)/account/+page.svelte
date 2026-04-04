@@ -6,20 +6,16 @@
 	import type { UserDto } from '$lib/api/types';
 	import { formatDate } from '$lib/utils/format';
 	import { User, Settings, Bell, ArrowRight } from 'lucide-svelte';
+	import PageHeader from '$lib/components/PageHeader.svelte';
 
 	let { data } = $props();
 
 	const user: UserDto | null = $derived(data.user);
 </script>
 
-<div class="space-y-8">
+<div class="space-y-6">
 	<!-- Page Header -->
-	<div>
-		<h1 class="text-3xl font-bold text-surface-900 dark:text-surface-50">Account</h1>
-		<p class="mt-1 text-surface-500 dark:text-surface-400">
-			Your account information and preferences.
-		</p>
-	</div>
+	<PageHeader title="Account" description="Your account information and preferences." />
 
 	{#if user}
 		<!-- User Info Card -->

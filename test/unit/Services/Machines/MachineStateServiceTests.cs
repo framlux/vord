@@ -113,6 +113,10 @@ public class MachineStateServiceTests
         Machine machine = TestDataBuilder.BuildMachine(tenantId: 1);
         machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
 
+        // Pre-computed HealthStatus=0 (Healthy) means the machine is online.
+        MachineState state = TestDataBuilder.BuildMachineState(machineId: machine.Id, healthStatus: 0);
+        await dbFactory.Context.InsertAsync(state);
+
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
         MachineStateService service = new(scopeFactory, CreateMockPingService(online: true), CreateConfigService());
 
@@ -145,7 +149,7 @@ public class MachineStateServiceTests
         using TestDatabaseFactory dbFactory = new();
         Machine machine = TestDataBuilder.BuildMachine(tenantId: 1);
         machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
-        MachineState state = TestDataBuilder.BuildMachineState(machineId: machine.Id, cpuPercent: 96);
+        MachineState state = TestDataBuilder.BuildMachineState(machineId: machine.Id, cpuPercent: 96, healthStatus: 2);
         await dbFactory.Context.InsertAsync(state);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
@@ -163,7 +167,7 @@ public class MachineStateServiceTests
         using TestDatabaseFactory dbFactory = new();
         Machine machine = TestDataBuilder.BuildMachine(tenantId: 1);
         machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
-        MachineState state = TestDataBuilder.BuildMachineState(machineId: machine.Id, cpuPercent: 50, memoryPercent: 85);
+        MachineState state = TestDataBuilder.BuildMachineState(machineId: machine.Id, cpuPercent: 50, memoryPercent: 85, healthStatus: 1);
         await dbFactory.Context.InsertAsync(state);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);

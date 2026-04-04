@@ -45,6 +45,35 @@ public interface ISqlDialect
     /// <summary>SQL for upserting only LastTelemetryAt (unknown type fallback).</summary>
     string UpsertLastTelemetry { get; }
 
+    /// <summary>SQL for updating LastPingAt on a MachineState row.</summary>
+    string UpdateLastPing { get; }
+
+    /// <summary>
+    /// SQL for recomputing the HealthStatus column from scalar metrics on MachineState.
+    /// Called after batch updates to keep HealthStatus current for SQL-level fleet queries.
+    /// Uses parameter @machineId and @onlineThresholdSeconds.
+    /// </summary>
+    string RecomputeHealthStatus { get; }
+
+    /// <summary>
+    /// SQL for bulk-recomputing HealthStatus for all machines whose status may be stale.
+    /// Used by the periodic health recomputation service to keep fleet overview counts accurate.
+    /// Uses parameter @onlineThresholdSeconds.
+    /// </summary>
+    string RecomputeAllHealthStatuses { get; }
+
+    /// <summary>
+    /// Whether this dialect supports JSONB filter expressions in LINQ queries (PostgreSQL only).
+    /// When false, JSONB-based filters (disk usage ranges, hardware issues) must be evaluated in memory.
+    /// </summary>
+    bool SupportsJsonbFilters { get; }
+
+    /// <summary>
+    /// Whether this dialect supports JSONB sort expressions (e.g., sorting by max disk usage).
+    /// When false, sort-by-disk requires the full-scan in-memory path.
+    /// </summary>
+    bool SupportsJsonbSort { get; }
+
     /// <summary>
     /// Builds the SQL for upserting SSH sessions (type=9).
     /// SSH sessions require special handling because PostgreSQL uses jsonb array functions

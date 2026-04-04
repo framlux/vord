@@ -18,4 +18,10 @@ public sealed class NoOpMachineStateUpdater : IMachineStateUpdater
     {
         return Task.CompletedTask;
     }
+
+    /// <inheritdoc/>
+    public Task UpdateBatchAsync(Dictionary<long, List<StateUpdateMessage>> updatesByMachine, CancellationToken ct)
+    {
+        return Task.CompletedTask;
+    }
 }

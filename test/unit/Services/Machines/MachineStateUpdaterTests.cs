@@ -4,9 +4,11 @@
 
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database;
+using Framlux.FleetManagement.Database.Cache;
 using Framlux.FleetManagement.Server.Endpoints.Web.Models.Telemetry;
 using Framlux.FleetManagement.Server.Services.Infrastructure;
 using Framlux.FleetManagement.Server.Services.Machines;
+using Framlux.FleetManagement.Server.Services.ServerConfiguration;
 using Framlux.FleetManagement.Server.Services.Telemetry;
 using Framlux.FleetManagement.Test.Infrastructure;
 using LinqToDB.Async;
@@ -15,6 +17,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Logging;
 using NSubstitute;
+using StackExchange.Redis;
 
 namespace Framlux.FleetManagement.Test.Services;
 
@@ -28,8 +31,11 @@ public class MachineStateUpdaterTests
         IServiceScopeFactory scopeFactory = Substitute.For<IServiceScopeFactory>();
         ILogger<MachineStateUpdater> logger = new NullLogger<MachineStateUpdater>();
         ISqlDialect dialect = Substitute.For<ISqlDialect>();
+        IServerSettingsCache settingsCache = Substitute.For<IServerSettingsCache>();
+        IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
+        ServerConfigurationService configService = new(settingsCache, redis);
 
-        return new MachineStateUpdater(scopeFactory, logger, dialect);
+        return new MachineStateUpdater(scopeFactory, logger, dialect, configService);
     }
 
     [Test]
@@ -179,7 +185,10 @@ public class MachineStateUpdaterTests
         ILogger<MachineStateUpdater> logger = new NullLogger<MachineStateUpdater>();
         ISqlDialect dialect = Substitute.For<ISqlDialect>();
         dialect.UpsertLastTelemetry.Returns("SELECT 1");
-        MachineStateUpdater updater = new(scopeFactory, logger, dialect);
+        IServerSettingsCache settingsCache = Substitute.For<IServerSettingsCache>();
+        IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
+        ServerConfigurationService configService = new(settingsCache, redis);
+        MachineStateUpdater updater = new(scopeFactory, logger, dialect, configService);
 
         // Type 99 is unknown, should fall through to UpsertLastTelemetry.
         // The DB execution will fail (no DatabaseContext registered), and the
@@ -267,7 +276,10 @@ public class MachineStateUpdaterTests
         // GetRequiredService<DatabaseContext>() will throw because nothing is registered
         ILogger<MachineStateUpdater> logger = Substitute.For<ILogger<MachineStateUpdater>>();
         ISqlDialect dialect = Substitute.For<ISqlDialect>();
-        MachineStateUpdater updater = new(scopeFactory, logger, dialect);
+        IServerSettingsCache settingsCache = Substitute.For<IServerSettingsCache>();
+        IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
+        ServerConfigurationService configService = new(settingsCache, redis);
+        MachineStateUpdater updater = new(scopeFactory, logger, dialect, configService);
 
         // Valid JSON so Deserialize succeeds, but ExecuteAsync will fail due to missing DB
         string validJson = """{"hostname":"test","cpu_brand":"Intel","cpu_physical_cores":4,"physical_memory":8000000000,"ip_addresses":[]}""";
@@ -300,7 +312,10 @@ public class MachineStateUpdaterTests
         ILogger<MachineStateUpdater> logger = new NullLogger<MachineStateUpdater>();
         ISqlDialect dialect = Substitute.For<ISqlDialect>();
         dialect.UpsertDiskUsage.Returns("SELECT 1");
-        MachineStateUpdater updater = new(scopeFactory, logger, dialect);
+        IServerSettingsCache settingsCache = Substitute.For<IServerSettingsCache>();
+        IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
+        ServerConfigurationService configService = new(settingsCache, redis);
+        MachineStateUpdater updater = new(scopeFactory, logger, dialect, configService);
 
         await Assert.That(async () =>
             await updater.UpdateAsync(1, TelemetryTypeIds.DiskUsage, "invalid", DateTimeOffset.UtcNow, CancellationToken.None)
@@ -727,7 +742,10 @@ public class MachineStateUpdaterTests
         ILogger<MachineStateUpdater> logger = new NullLogger<MachineStateUpdater>();
         ISqlDialect dialect = Substitute.For<ISqlDialect>();
 
-        MachineStateUpdater updater = new(scopeFactory, logger, dialect);
+        IServerSettingsCache settingsCache = Substitute.For<IServerSettingsCache>();
+        IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
+        ServerConfigurationService configService = new(settingsCache, redis);
+        MachineStateUpdater updater = new(scopeFactory, logger, dialect, configService);
 
         return (updater, dbFactory);
     }
@@ -740,7 +758,10 @@ public class MachineStateUpdaterTests
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
         ILogger<MachineStateUpdater> logger = new NullLogger<MachineStateUpdater>();
         SqliteSqlDialect dialect = new();
-        MachineStateUpdater updater = new(scopeFactory, logger, dialect);
+        IServerSettingsCache settingsCache = Substitute.For<IServerSettingsCache>();
+        IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
+        ServerConfigurationService configService = new(settingsCache, redis);
+        MachineStateUpdater updater = new(scopeFactory, logger, dialect, configService);
 
         return updater;
     }

@@ -6,6 +6,7 @@ using System.Text.Json;
 using Framlux.FleetManagement.Database;
 using Framlux.FleetManagement.Server.Endpoints.Web.Models.Telemetry;
 using Framlux.FleetManagement.Server.Services.Infrastructure;
+using Framlux.FleetManagement.Server.Services.ServerConfiguration;
 using Framlux.FleetManagement.Server.Services.Telemetry;
 using LinqToDB;
 using LinqToDB.Async;
@@ -14,24 +15,30 @@ using LinqToDB.Data;
 namespace Framlux.FleetManagement.Server.Services.Machines;
 
 /// <summary>
-/// Performs lock-free per-type partial UPSERTs on MachineState via the configured SQL dialect.
-/// Health status is computed at read time by <see cref="HealthComputer"/>.
+/// Applies per-type partial updates on MachineState via the configured SQL dialect.
+/// Supports both single-item updates (legacy) and batched updates from the queue consumer.
+/// After applying updates, recomputes HealthStatus for affected machines.
 /// </summary>
 public sealed class MachineStateUpdater : IMachineStateUpdater
 {
-
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly ILogger<MachineStateUpdater> _logger;
     private readonly ISqlDialect _dialect;
+    private readonly ServerConfigurationService _configService;
 
     /// <summary>
     /// Creates a new instance of the <see cref="MachineStateUpdater"/> class.
     /// </summary>
-    public MachineStateUpdater(IServiceScopeFactory scopeFactory, ILogger<MachineStateUpdater> logger, ISqlDialect dialect)
+    public MachineStateUpdater(
+        IServiceScopeFactory scopeFactory,
+        ILogger<MachineStateUpdater> logger,
+        ISqlDialect dialect,
+        ServerConfigurationService configService)
     {
-        _scopeFactory = scopeFactory;
-        _logger = logger;
-        _dialect = dialect;
+        _scopeFactory = scopeFactory ?? throw new ArgumentNullException(nameof(scopeFactory));
+        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        _dialect = dialect ?? throw new ArgumentNullException(nameof(dialect));
+        _configService = configService ?? throw new ArgumentNullException(nameof(configService));
     }
 
     /// <inheritdoc/>
@@ -39,58 +46,136 @@ public sealed class MachineStateUpdater : IMachineStateUpdater
     {
         try
         {
-            // Create scope once for the entire update operation.
             using IServiceScope scope = _scopeFactory.CreateScope();
             DatabaseContext db = scope.ServiceProvider.GetRequiredService<DatabaseContext>();
 
-            switch (telemetryType)
-            {
-                case TelemetryTypeIds.SystemInfo:
-                    await UpsertSystemInfoAsync(db, machineId, payload, receivedAt, ct);
-                    break;
-                case TelemetryTypeIds.OsVersion:
-                    await UpsertOsVersionAsync(db, machineId, payload, receivedAt, ct);
-                    break;
-                case TelemetryTypeIds.CpuInfo:
-                    await UpsertCpuInfoAsync(db, machineId, payload, receivedAt, ct);
-                    break;
-                case TelemetryTypeIds.MemoryInfo:
-                    await UpsertMemoryInfoAsync(db, machineId, payload, receivedAt, ct);
-                    break;
-                case TelemetryTypeIds.DiskInfo:
-                    await UpsertDiskInfoAsync(db, machineId, payload, receivedAt, ct);
-                    break;
-                case TelemetryTypeIds.CpuUsage:
-                    await UpsertCpuUsageAsync(db, machineId, payload, receivedAt, ct);
-                    break;
-                case TelemetryTypeIds.MemoryUsage:
-                    await UpsertMemoryUsageAsync(db, machineId, payload, receivedAt, ct);
-                    break;
-                case TelemetryTypeIds.DiskUsage:
-                    await UpsertDiskUsageAsync(db, machineId, payload, receivedAt, ct);
-                    break;
-                case TelemetryTypeIds.SshSessions:
-                    await UpsertSshSessionsAsync(db, machineId, payload, receivedAt, ct);
-                    break;
-                case TelemetryTypeIds.HardwareHealth:
-                    await UpsertHardwareHealthAsync(db, machineId, payload, receivedAt, ct);
-                    break;
-                case TelemetryTypeIds.PackageUpdates:
-                    await UpsertPackageUpdatesAsync(db, machineId, payload, receivedAt, ct);
-                    break;
-                case TelemetryTypeIds.ServiceStatus:
-                    await UpsertServiceStatusAsync(db, machineId, payload, receivedAt, ct);
-                    break;
-                default:
-                    await UpsertLastTelemetryAsync(db, machineId, receivedAt, ct);
-                    break;
-            }
+            await ApplyUpdateAsync(db, machineId, telemetryType, payload, receivedAt, ct);
+
+            // Recompute HealthStatus after the update, consistent with UpdateBatchAsync.
+            TimeSpan onlineThreshold = await _configService.GetOnlineThresholdAsync(ct);
+            await db.ExecuteAsync(
+                _dialect.RecomputeHealthStatus,
+                ct,
+                new DataParameter("machineId", machineId),
+                new DataParameter("onlineThresholdSeconds", (int)onlineThreshold.TotalSeconds));
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to update MachineState for machine {MachineId} type {Type}", machineId, telemetryType);
 
             throw;
+        }
+    }
+
+    /// <inheritdoc/>
+    public async Task UpdateBatchAsync(Dictionary<long, List<StateUpdateMessage>> updatesByMachine, CancellationToken ct)
+    {
+        if (updatesByMachine.Count == 0)
+        {
+
+            return;
+        }
+
+        using IServiceScope scope = _scopeFactory.CreateScope();
+        DatabaseContext db = scope.ServiceProvider.GetRequiredService<DatabaseContext>();
+
+        // Wrap the entire batch in a transaction so partial failures roll back cleanly.
+        using DataConnectionTransaction tx = await db.BeginTransactionAsync(ct);
+
+        // Process all machines within a single transaction for atomicity.
+        foreach (KeyValuePair<long, List<StateUpdateMessage>> entry in updatesByMachine)
+        {
+            long machineId = entry.Key;
+
+            // Take only the latest update per type for this machine (coalesce duplicates).
+            Dictionary<short, StateUpdateMessage> latestByType = [];
+            foreach (StateUpdateMessage msg in entry.Value)
+            {
+                if (latestByType.TryGetValue(msg.TelemetryType, out StateUpdateMessage? existing) == false ||
+                    msg.ReceivedAt >= existing.ReceivedAt)
+                {
+                    latestByType[msg.TelemetryType] = msg;
+                }
+            }
+
+            foreach (KeyValuePair<short, StateUpdateMessage> typeEntry in latestByType)
+            {
+                try
+                {
+                    await ApplyUpdateAsync(db, machineId, typeEntry.Key, typeEntry.Value.Payload, typeEntry.Value.ReceivedAt, ct);
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Failed to update MachineState for machine {MachineId} type {Type} in batch",
+                        machineId, typeEntry.Key);
+                }
+            }
+        }
+
+        // Recompute HealthStatus for all affected machines after type-specific updates.
+        TimeSpan onlineThreshold = await _configService.GetOnlineThresholdAsync(ct);
+        foreach (long machineId in updatesByMachine.Keys)
+        {
+            try
+            {
+                await db.ExecuteAsync(
+                    _dialect.RecomputeHealthStatus,
+                    ct,
+                    new DataParameter("machineId", machineId),
+                    new DataParameter("onlineThresholdSeconds", (int)onlineThreshold.TotalSeconds));
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to recompute HealthStatus for machine {MachineId}", machineId);
+            }
+        }
+
+        await tx.CommitAsync(ct);
+    }
+
+    private async Task ApplyUpdateAsync(DatabaseContext db, long machineId, short telemetryType, string payload, DateTimeOffset receivedAt, CancellationToken ct)
+    {
+        switch (telemetryType)
+        {
+            case TelemetryTypeIds.SystemInfo:
+                await UpsertSystemInfoAsync(db, machineId, payload, receivedAt, ct);
+                break;
+            case TelemetryTypeIds.OsVersion:
+                await UpsertOsVersionAsync(db, machineId, payload, receivedAt, ct);
+                break;
+            case TelemetryTypeIds.CpuInfo:
+                await UpsertCpuInfoAsync(db, machineId, payload, receivedAt, ct);
+                break;
+            case TelemetryTypeIds.MemoryInfo:
+                await UpsertMemoryInfoAsync(db, machineId, payload, receivedAt, ct);
+                break;
+            case TelemetryTypeIds.DiskInfo:
+                await UpsertDiskInfoAsync(db, machineId, payload, receivedAt, ct);
+                break;
+            case TelemetryTypeIds.CpuUsage:
+                await UpsertCpuUsageAsync(db, machineId, payload, receivedAt, ct);
+                break;
+            case TelemetryTypeIds.MemoryUsage:
+                await UpsertMemoryUsageAsync(db, machineId, payload, receivedAt, ct);
+                break;
+            case TelemetryTypeIds.DiskUsage:
+                await UpsertDiskUsageAsync(db, machineId, payload, receivedAt, ct);
+                break;
+            case TelemetryTypeIds.SshSessions:
+                await UpsertSshSessionsAsync(db, machineId, payload, receivedAt, ct);
+                break;
+            case TelemetryTypeIds.HardwareHealth:
+                await UpsertHardwareHealthAsync(db, machineId, payload, receivedAt, ct);
+                break;
+            case TelemetryTypeIds.PackageUpdates:
+                await UpsertPackageUpdatesAsync(db, machineId, payload, receivedAt, ct);
+                break;
+            case TelemetryTypeIds.ServiceStatus:
+                await UpsertServiceStatusAsync(db, machineId, payload, receivedAt, ct);
+                break;
+            default:
+                await UpsertLastTelemetryAsync(db, machineId, receivedAt, ct);
+                break;
         }
     }
 
