@@ -128,6 +128,27 @@ public partial class DatabaseCache : IDatabaseCache
     }
 
     /// <inheritdoc/>
+    public async Task<TenantSubscription> CreateTenantSubscriptionAsync(TenantSubscription subscription, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(subscription);
+
+        try
+        {
+            _logger.LogDebug("Creating subscription for tenant {TenantId}", subscription.TenantId);
+            int newId = await _db.InsertWithInt32IdentityAsync(subscription, token: cancellationToken);
+            subscription.Id = newId;
+            _logger.LogInformation("Successfully created subscription {SubscriptionId} for tenant {TenantId}", newId, subscription.TenantId);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to create subscription for tenant {TenantId}", subscription.TenantId);
+            throw;
+        }
+
+        return subscription;
+    }
+
+    /// <inheritdoc/>
     public async Task CreateUserTenantRoleAsync(UserTenantRole role, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(role);

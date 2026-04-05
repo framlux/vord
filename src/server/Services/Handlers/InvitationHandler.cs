@@ -5,10 +5,12 @@
 using Framlux.FleetManagement.Database.Cache;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
+using Framlux.FleetManagement.Server.Options;
 using Framlux.FleetManagement.Server.Services.Billing;
 using Framlux.FleetManagement.Server.Services.Infrastructure;
 using Framlux.FleetManagement.Server.Services.Notifications;
 using Framlux.FleetManagement.Server.Services.Security;
+using Microsoft.Extensions.Options;
 using System.Security.Cryptography;
 using System.Text;
 
@@ -22,6 +24,7 @@ public sealed class InvitationHandler : IInvitationHandler
     private readonly IDatabaseCache _databaseCache;
     private readonly IEmailService _emailService;
     private readonly ISubscriptionService _subscriptionService;
+    private readonly SubscriptionOptions _subscriptionOptions;
     private readonly IRoleCacheInvalidator _roleCacheInvalidator;
 
     /// <summary>
@@ -31,11 +34,13 @@ public sealed class InvitationHandler : IInvitationHandler
         IDatabaseCache databaseCache,
         IEmailService emailService,
         ISubscriptionService subscriptionService,
+        IOptions<SubscriptionOptions> subscriptionOptions,
         IRoleCacheInvalidator roleCacheInvalidator)
     {
         _databaseCache = databaseCache;
         _emailService = emailService;
         _subscriptionService = subscriptionService;
+        _subscriptionOptions = subscriptionOptions.Value;
         _roleCacheInvalidator = roleCacheInvalidator;
     }
 
@@ -202,9 +207,18 @@ public sealed class InvitationHandler : IInvitationHandler
                 LogoUrl = string.Empty,
             }, ct);
 
-            // ProvisionFreeSubscriptionAsync uses a separate DB scope so it commits independently,
-            // but if it fails the exception will roll back this transaction via the using block
-            await _subscriptionService.ProvisionFreeSubscriptionAsync(personalTenant.Id, ct);
+            // Create the free subscription within the same transaction so the FK on TenantId
+            // can see the uncommitted Tenant row.
+            await _databaseCache.CreateTenantSubscriptionAsync(new TenantSubscription
+            {
+                TenantId = personalTenant.Id,
+                Tier = SubscriptionTier.Free,
+                Status = SubscriptionStatus.Active,
+                MachineLimit = _subscriptionOptions.FreeTierMachineLimit,
+                RetentionDays = _subscriptionOptions.FreeTierRetentionDays,
+                CreatedAt = now,
+                UpdatedAt = now,
+            }, ct);
 
             await _databaseCache.CreateUserTenantRoleAsync(new UserTenantRole
             {

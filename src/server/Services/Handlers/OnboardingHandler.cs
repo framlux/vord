@@ -5,9 +5,10 @@
 using Framlux.FleetManagement.Database.Cache;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
-using Framlux.FleetManagement.Server.Services.Billing;
+using Framlux.FleetManagement.Server.Options;
 using Framlux.FleetManagement.Server.Services.Infrastructure;
 using Framlux.FleetManagement.Server.Services.Security;
+using Microsoft.Extensions.Options;
 
 namespace Framlux.FleetManagement.Server.Services.Handlers;
 
@@ -17,22 +18,22 @@ namespace Framlux.FleetManagement.Server.Services.Handlers;
 public sealed class OnboardingHandler : IOnboardingHandler
 {
     private readonly IDatabaseCache _databaseCache;
-    private readonly ISubscriptionService _subscriptionService;
+    private readonly SubscriptionOptions _subscriptionOptions;
     private readonly IRoleCacheInvalidator _roleCacheInvalidator;
 
     /// <summary>
     /// Creates a new instance of the <see cref="OnboardingHandler"/> class.
     /// </summary>
     /// <param name="databaseCache">The database cache service.</param>
-    /// <param name="subscriptionService">The subscription service.</param>
+    /// <param name="subscriptionOptions">The subscription tier configuration.</param>
     /// <param name="roleCacheInvalidator">The role cache invalidator.</param>
     public OnboardingHandler(
         IDatabaseCache databaseCache,
-        ISubscriptionService subscriptionService,
+        IOptions<SubscriptionOptions> subscriptionOptions,
         IRoleCacheInvalidator roleCacheInvalidator)
     {
         _databaseCache = databaseCache;
-        _subscriptionService = subscriptionService;
+        _subscriptionOptions = subscriptionOptions.Value;
         _roleCacheInvalidator = roleCacheInvalidator;
     }
 
@@ -94,12 +95,22 @@ public sealed class OnboardingHandler : IOnboardingHandler
             return ServiceResult<OnboardingResult>.Error(409, new OnboardingResult { ErrorMessage = "An organization with this name already exists" });
         }
 
-        // ProvisionFreeSubscriptionAsync uses a separate DB scope so it commits independently,
-        // but if it fails the exception will roll back this transaction via the using block
-        await _subscriptionService.ProvisionFreeSubscriptionAsync(tenant.Id, ct);
+        // Create the free subscription within the same transaction so the FK on TenantId
+        // can see the uncommitted Tenant row.
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        TenantSubscription subscription = new()
+        {
+            TenantId = tenant.Id,
+            Tier = SubscriptionTier.Free,
+            Status = SubscriptionStatus.Active,
+            MachineLimit = _subscriptionOptions.FreeTierMachineLimit,
+            RetentionDays = _subscriptionOptions.FreeTierRetentionDays,
+            CreatedAt = now,
+            UpdatedAt = now,
+        };
+        await _databaseCache.CreateTenantSubscriptionAsync(subscription, ct);
 
         // Assign the creating user as TenantAdmin
-        DateTimeOffset now = DateTimeOffset.UtcNow;
         await _databaseCache.CreateUserTenantRoleAsync(new UserTenantRole
         {
             UserId = userId,

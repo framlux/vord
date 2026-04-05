@@ -102,6 +102,14 @@ public interface IDatabaseCache
     Task<Tenant> CreateTenantAsync(Tenant tenant, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Creates a new tenant subscription in the database using the shared scoped connection.
+    /// </summary>
+    /// <param name="subscription">The subscription to create</param>
+    /// <param name="cancellationToken">The token used to cancel async tasks</param>
+    /// <returns>Returns the created subscription with ID</returns>
+    Task<TenantSubscription> CreateTenantSubscriptionAsync(TenantSubscription subscription, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Checks if an active (non-deleted) machine exists based on the serial number, system ID, or asset tag number
     /// </summary>
     /// <param name="serialNumber">The serial number of the machine</param>
