@@ -9,7 +9,7 @@ namespace Framlux.FleetManagement.Database.Migrations;
 /// <summary>
 /// Initial database migration that creates core tables for machine management and user accounts.
 /// </summary>
-[MigrationVersion(2025, 09, 13, 2)]
+[MigrationVersion(2026, 04, 05, 2)]
 public sealed class InitialMigration2 : Migration
 {
     /// <summary>

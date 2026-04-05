@@ -353,6 +353,7 @@ builder.Services.AddHostedService<AlertEvaluationService>();
 builder.Services.AddHostedService<CommandExpiryBackgroundService>();
 builder.Services.AddHostedService<MachineStateStreamingService>();
 builder.Services.AddHostedService<HealthSweepService>();
+builder.Services.AddHostedService<PartitionManagementService>();
 
 // Billing configuration: explicit opt-in via Billing:Enabled flag
 builder.Services.AddSingleton<IBillingStatus, BillingStatus>();

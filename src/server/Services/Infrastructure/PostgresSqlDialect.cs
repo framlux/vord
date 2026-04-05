@@ -11,6 +11,9 @@ namespace Framlux.FleetManagement.Server.Services.Infrastructure;
 public sealed class PostgresSqlDialect : ISqlDialect
 {
     /// <inheritdoc/>
+    public bool SupportsPartitioning => true;
+
+    /// <inheritdoc/>
     public bool SupportsJsonbFilters => true;
 
     /// <inheritdoc/>

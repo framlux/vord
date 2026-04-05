@@ -13,6 +13,9 @@ namespace Framlux.FleetManagement.FunctionalTest.Infrastructure;
 internal sealed class NoOpSqlDialect : ISqlDialect
 {
     /// <inheritdoc/>
+    public bool SupportsPartitioning => false;
+
+    /// <inheritdoc/>
     public bool SupportsJsonbFilters => false;
 
     /// <inheritdoc/>

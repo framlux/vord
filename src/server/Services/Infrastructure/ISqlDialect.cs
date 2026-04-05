@@ -10,6 +10,12 @@ namespace Framlux.FleetManagement.Server.Services.Infrastructure;
 public interface ISqlDialect
 {
     /// <summary>
+    /// Whether this dialect supports native table partitioning (PostgreSQL PARTITION BY RANGE).
+    /// When false, partitioned tables are treated as standard tables.
+    /// </summary>
+    bool SupportsPartitioning { get; }
+
+    /// <summary>
     /// Whether this dialect supports JSONB filter expressions in LINQ queries (PostgreSQL only).
     /// When false, JSONB-based filters (disk usage ranges, hardware issues) must be evaluated in memory.
     /// </summary>

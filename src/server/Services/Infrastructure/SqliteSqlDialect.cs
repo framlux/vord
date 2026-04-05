@@ -12,6 +12,9 @@ namespace Framlux.FleetManagement.Server.Services.Infrastructure;
 public sealed class SqliteSqlDialect : ISqlDialect
 {
     /// <inheritdoc/>
+    public bool SupportsPartitioning => false;
+
+    /// <inheritdoc/>
     public bool SupportsJsonbFilters => false;
 
     /// <inheritdoc/>
