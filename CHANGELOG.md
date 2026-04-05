@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file. See [versionize](https://github.com/versionize/versionize) for commit guidelines.
 
+<a name="2.0.1"></a>
+## [2.0.1](https://www.github.com/framlux/vord/releases/tag/v2.0.1) (2026-04-05)
+
+### Bug Fixes
+
+* Fixing incorrect IfDatabase key in migration schema ([4b2eb7a](https://www.github.com/framlux/vord/commit/4b2eb7ae2e4c5369b9ae22ab18671bf387c76039))
+
 <a name="2.0.0"></a>
 ## [2.0.0](https://www.github.com/framlux/vord/releases/tag/v2.0.0) (2026-04-05)
 
