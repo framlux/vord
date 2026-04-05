@@ -50,9 +50,14 @@ public sealed class DatabaseContext(DataOptions<DatabaseContext> options) : Data
     public ITable<MachineCertificate> MachineCertificates => this.GetTable<MachineCertificate>();
 
     /// <summary>
-    /// Represents the collection of machine state cache records in the database.
+    /// Represents the collection of machine state summary records for fleet-level queries.
     /// </summary>
-    public ITable<MachineState> MachineStates => this.GetTable<MachineState>();
+    public ITable<MachineStateSummary> MachineStateSummaries => this.GetTable<MachineStateSummary>();
+
+    /// <summary>
+    /// Represents the collection of machine state detail records for single-machine views.
+    /// </summary>
+    public ITable<MachineStateDetail> MachineStateDetails => this.GetTable<MachineStateDetail>();
 
     /// <summary>
     /// Represents the collection of tenant subscriptions in the database.

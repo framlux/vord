@@ -3,6 +3,7 @@
 // See LICENSE for details.
 
 using Framlux.FleetManagement.Database;
+using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Server.Services.Infrastructure;
 using LinqToDB;
@@ -20,6 +21,7 @@ public sealed class DataRetentionService : BackgroundService
     private static readonly TimeSpan InitialDelay = TimeSpan.FromHours(1);
     private static readonly TimeSpan RunInterval = TimeSpan.FromHours(24);
     private static readonly TimeSpan LockTtl = TimeSpan.FromHours(2);
+    private const int BatchSize = 10_000;
     private const string LockKey = "lock:data-retention";
 
     private readonly IServiceScopeFactory _scopeFactory;
@@ -73,6 +75,9 @@ public sealed class DataRetentionService : BackgroundService
         DatabaseContext db = scope.ServiceProvider.GetRequiredService<DatabaseContext>();
 
         List<TenantSubscription> subscriptions = await db.TenantSubscriptions
+            .Where(s => (s.Status == SubscriptionStatus.Active) ||
+                        (s.Status == SubscriptionStatus.Canceled) ||
+                        (s.Status == SubscriptionStatus.PastDue))
             .ToListAsync(ct);
 
         int totalAlertEvents = 0;
@@ -83,26 +88,41 @@ public sealed class DataRetentionService : BackgroundService
         {
             DateTimeOffset cutoff = DateTimeOffset.UtcNow.AddDays(-subscription.RetentionDays);
 
-            int alertEvents = await db.AlertEvents
-                .Where(e => e.TenantId == subscription.TenantId &&
-                    e.TriggeredAt < cutoff &&
-                    e.DeletedAt == null)
-                .Set(e => e.DeletedAt, DateTimeOffset.UtcNow)
-                .UpdateAsync(ct);
+            int alertEvents = await SoftDeleteInBatchesAsync(
+                db.AlertEvents
+                    .Where(e => e.TenantId == subscription.TenantId &&
+                        e.TriggeredAt < cutoff &&
+                        e.DeletedAt == null)
+                    .Select(e => e.Id),
+                ids => db.AlertEvents
+                    .Where(e => ids.Contains(e.Id))
+                    .Set(e => e.DeletedAt, DateTimeOffset.UtcNow)
+                    .UpdateAsync(ct),
+                ct);
 
-            int auditEntries = await db.AuditLog
-                .Where(e => e.TenantId == subscription.TenantId &&
-                    e.Timestamp < cutoff &&
-                    e.DeletedAt == null)
-                .Set(e => e.DeletedAt, DateTimeOffset.UtcNow)
-                .UpdateAsync(ct);
+            int auditEntries = await SoftDeleteInBatchesAsync(
+                db.AuditLog
+                    .Where(e => e.TenantId == subscription.TenantId &&
+                        e.Timestamp < cutoff &&
+                        e.DeletedAt == null)
+                    .Select(e => e.Id),
+                ids => db.AuditLog
+                    .Where(e => ids.Contains(e.Id))
+                    .Set(e => e.DeletedAt, DateTimeOffset.UtcNow)
+                    .UpdateAsync(ct),
+                ct);
 
-            int remoteCommands = await db.RemoteCommands
-                .Where(c => c.TenantId == subscription.TenantId &&
-                    c.CreatedAt < cutoff &&
-                    c.DeletedAt == null)
-                .Set(c => c.DeletedAt, DateTimeOffset.UtcNow)
-                .UpdateAsync(ct);
+            int remoteCommands = await SoftDeleteInBatchesAsync(
+                db.RemoteCommands
+                    .Where(c => c.TenantId == subscription.TenantId &&
+                        c.CreatedAt < cutoff &&
+                        c.DeletedAt == null)
+                    .Select(c => c.Id),
+                ids => db.RemoteCommands
+                    .Where(c => ids.Contains(c.Id))
+                    .Set(c => c.DeletedAt, DateTimeOffset.UtcNow)
+                    .UpdateAsync(ct),
+                ct);
 
             if ((alertEvents > 0) || (auditEntries > 0) || (remoteCommands > 0))
             {
@@ -119,5 +139,40 @@ public sealed class DataRetentionService : BackgroundService
         _logger.LogInformation(
             "Data retention complete: soft-deleted {AlertEvents} alerts, {AuditEntries} audit entries, {RemoteCommands} commands",
             totalAlertEvents, totalAuditEntries, totalRemoteCommands);
+    }
+
+    /// <summary>
+    /// Soft-deletes rows in batches to avoid holding write locks for large updates.
+    /// </summary>
+    private static async Task<int> SoftDeleteInBatchesAsync(
+        IQueryable<long> idQuery,
+        Func<List<long>, Task<int>> updateFunc,
+        CancellationToken ct)
+    {
+        int totalUpdated = 0;
+
+        while (ct.IsCancellationRequested == false)
+        {
+            List<long> idsToUpdate = await idQuery
+                .Take(BatchSize)
+                .ToListAsync(ct);
+
+            if (idsToUpdate.Count == 0)
+            {
+                break;
+            }
+
+            int updated = await updateFunc(idsToUpdate);
+            totalUpdated += updated;
+
+            if (updated < BatchSize)
+            {
+                break;
+            }
+
+            await Task.Delay(TimeSpan.FromMilliseconds(100), ct);
+        }
+
+        return totalUpdated;
     }
 }

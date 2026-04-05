@@ -78,4 +78,10 @@ public enum ServerConfigurationSettingKeys : int
     /// Controls how often the agent transmits low-frequency data to the server.
     /// </summary>
     TelemetrySendSlowSeconds = 12,
+
+    /// <summary>
+    /// High-water mark (MachineTelemetry.Id) for the streaming state service.
+    /// Used to track which telemetry rows have been processed into the summary tables.
+    /// </summary>
+    StreamingHighWaterMark = 13,
 }

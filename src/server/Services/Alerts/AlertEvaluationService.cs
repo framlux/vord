@@ -26,7 +26,7 @@ public sealed class AlertEvaluationService : BackgroundService
     private readonly ILogger<AlertEvaluationService> _logger;
 
     private static readonly TimeSpan EvaluationInterval = TimeSpan.FromSeconds(60);
-    private static readonly TimeSpan LockTtl = TimeSpan.FromSeconds(55);
+    private static readonly TimeSpan LockTtl = TimeSpan.FromMinutes(5);
 
     /// <summary>
     /// Creates a new instance of the <see cref="AlertEvaluationService"/> class.
@@ -107,13 +107,13 @@ public sealed class AlertEvaluationService : BackgroundService
                 continue;
             }
 
-            List<MachineState> machineStates = await db.MachineStates
+            List<MachineStateSummary> machineStates = await db.MachineStateSummaries
                 .Where(s => db.Machines.Any(m => m.Id == s.MachineId && m.TenantId == tenantId && m.IsDeleted == false))
                 .ToListAsync(ct);
 
             foreach (AlertRule rule in tenantRules)
             {
-                foreach (MachineState state in machineStates)
+                foreach (MachineStateSummary state in machineStates)
                 {
                     await EvaluateRuleForMachineAsync(db, rule, state, ct);
                 }
@@ -121,7 +121,7 @@ public sealed class AlertEvaluationService : BackgroundService
         }
     }
 
-    internal async Task EvaluateRuleForMachineAsync(DatabaseContext db, AlertRule rule, MachineState state, CancellationToken ct)
+    internal async Task EvaluateRuleForMachineAsync(DatabaseContext db, AlertRule rule, MachineStateSummary state, CancellationToken ct)
     {
         decimal? currentValue = GetMetricValue(rule.Metric, state);
         if (currentValue is null)
@@ -194,7 +194,7 @@ public sealed class AlertEvaluationService : BackgroundService
         await _deliveryService.DeliverAsync(alertEvent, rule, ct);
     }
 
-    internal static decimal? GetMetricValue(AlertMetric metric, MachineState state)
+    internal static decimal? GetMetricValue(AlertMetric metric, MachineStateSummary state)
     {
         return metric switch
         {
@@ -209,69 +209,24 @@ public sealed class AlertEvaluationService : BackgroundService
         };
     }
 
-    internal static decimal? GetMaxDiskUsage(MachineState state)
+    internal static decimal? GetMaxDiskUsage(MachineStateSummary state)
     {
-        if (string.IsNullOrEmpty(state.DiskUsages))
+        if (state.MaxDiskUsagePercent.HasValue == false)
         {
             return null;
         }
 
-        try
-        {
-            using JsonDocument doc = JsonDocument.Parse(state.DiskUsages);
-            decimal maxUsage = 0;
-            foreach (JsonElement disk in doc.RootElement.EnumerateArray())
-            {
-                if (disk.TryGetProperty("usagePercent", out JsonElement usageProp) &&
-                    usageProp.TryGetDecimal(out decimal usage))
-                {
-                    if (usage > maxUsage)
-                    {
-                        maxUsage = usage;
-                    }
-                }
-            }
-
-            return maxUsage > 0 ? maxUsage : null;
-        }
-        catch
-        {
-            return null;
-        }
+        return (decimal)state.MaxDiskUsagePercent.Value;
     }
 
-    internal static decimal? GetDiskHealthValue(MachineState state)
+    internal static decimal? GetDiskHealthValue(MachineStateSummary state)
     {
-        if (string.IsNullOrEmpty(state.HardwareHealth))
+        if (state.HasDiskHealthIssue.HasValue == false)
         {
             return null;
         }
 
-        try
-        {
-            using JsonDocument doc = JsonDocument.Parse(state.HardwareHealth);
-            if (doc.RootElement.TryGetProperty("diskSmart", out JsonElement smartProp))
-            {
-                foreach (JsonElement disk in smartProp.EnumerateArray())
-                {
-                    if (disk.TryGetProperty("healthStatus", out JsonElement healthProp))
-                    {
-                        string health = healthProp.GetString() ?? string.Empty;
-                        if (string.Equals(health, "PASSED", StringComparison.OrdinalIgnoreCase) == false &&
-                            string.Equals(health, "OK", StringComparison.OrdinalIgnoreCase) == false)
-                        {
-                            return 1; // Unhealthy
-                        }
-                    }
-                }
-            }
-
-            return 0; // All healthy
-        }
-        catch
-        {
-            return null;
-        }
+        return state.HasDiskHealthIssue.Value ? 1 : 0;
     }
 
     internal static bool EvaluateCondition(decimal value, AlertOperator op, decimal threshold)

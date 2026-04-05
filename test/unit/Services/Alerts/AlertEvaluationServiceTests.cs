@@ -125,7 +125,7 @@ public sealed class AlertEvaluationServiceTests
     [Test]
     public async Task GetMetricValue_CpuUsage_ReturnsCpuPercent()
     {
-        MachineState state = new() { MachineId = 1, CpuUsagePercent = 75, LastTelemetryAt = DateTimeOffset.UtcNow };
+        MachineStateSummary state = new() { MachineId = 1, CpuUsagePercent = 75, LastSeenAt = DateTimeOffset.UtcNow };
 
         decimal? result = AlertEvaluationService.GetMetricValue(AlertMetric.CpuUsage, state);
 
@@ -135,7 +135,7 @@ public sealed class AlertEvaluationServiceTests
     [Test]
     public async Task GetMetricValue_CpuUsage_NullValue_ReturnsNull()
     {
-        MachineState state = new() { MachineId = 1, CpuUsagePercent = null, LastTelemetryAt = DateTimeOffset.UtcNow };
+        MachineStateSummary state = new() { MachineId = 1, CpuUsagePercent = null, LastSeenAt = DateTimeOffset.UtcNow };
 
         decimal? result = AlertEvaluationService.GetMetricValue(AlertMetric.CpuUsage, state);
 
@@ -145,7 +145,7 @@ public sealed class AlertEvaluationServiceTests
     [Test]
     public async Task GetMetricValue_MemoryUsage_ReturnsMemoryPercent()
     {
-        MachineState state = new() { MachineId = 1, MemoryUsagePercent = 60, LastTelemetryAt = DateTimeOffset.UtcNow };
+        MachineStateSummary state = new() { MachineId = 1, MemoryUsagePercent = 60, LastSeenAt = DateTimeOffset.UtcNow };
 
         decimal? result = AlertEvaluationService.GetMetricValue(AlertMetric.MemoryUsage, state);
 
@@ -155,7 +155,7 @@ public sealed class AlertEvaluationServiceTests
     [Test]
     public async Task GetMetricValue_MemoryUsage_NullValue_ReturnsNull()
     {
-        MachineState state = new() { MachineId = 1, MemoryUsagePercent = null, LastTelemetryAt = DateTimeOffset.UtcNow };
+        MachineStateSummary state = new() { MachineId = 1, MemoryUsagePercent = null, LastSeenAt = DateTimeOffset.UtcNow };
 
         decimal? result = AlertEvaluationService.GetMetricValue(AlertMetric.MemoryUsage, state);
 
@@ -165,7 +165,7 @@ public sealed class AlertEvaluationServiceTests
     [Test]
     public async Task GetMetricValue_FailedServices_ReturnsCount()
     {
-        MachineState state = new() { MachineId = 1, FailedServices = 3, LastTelemetryAt = DateTimeOffset.UtcNow };
+        MachineStateSummary state = new() { MachineId = 1, FailedServices = 3, LastSeenAt = DateTimeOffset.UtcNow };
 
         decimal? result = AlertEvaluationService.GetMetricValue(AlertMetric.FailedServices, state);
 
@@ -175,7 +175,7 @@ public sealed class AlertEvaluationServiceTests
     [Test]
     public async Task GetMetricValue_FailedServices_NullValue_ReturnsNull()
     {
-        MachineState state = new() { MachineId = 1, FailedServices = null, LastTelemetryAt = DateTimeOffset.UtcNow };
+        MachineStateSummary state = new() { MachineId = 1, FailedServices = null, LastSeenAt = DateTimeOffset.UtcNow };
 
         decimal? result = AlertEvaluationService.GetMetricValue(AlertMetric.FailedServices, state);
 
@@ -185,7 +185,7 @@ public sealed class AlertEvaluationServiceTests
     [Test]
     public async Task GetMetricValue_SecurityUpdates_ReturnsCount()
     {
-        MachineState state = new() { MachineId = 1, SecurityUpdates = 5, LastTelemetryAt = DateTimeOffset.UtcNow };
+        MachineStateSummary state = new() { MachineId = 1, SecurityUpdates = 5, LastSeenAt = DateTimeOffset.UtcNow };
 
         decimal? result = AlertEvaluationService.GetMetricValue(AlertMetric.SecurityUpdates, state);
 
@@ -195,7 +195,7 @@ public sealed class AlertEvaluationServiceTests
     [Test]
     public async Task GetMetricValue_SecurityUpdates_NullValue_ReturnsNull()
     {
-        MachineState state = new() { MachineId = 1, SecurityUpdates = null, LastTelemetryAt = DateTimeOffset.UtcNow };
+        MachineStateSummary state = new() { MachineId = 1, SecurityUpdates = null, LastSeenAt = DateTimeOffset.UtcNow };
 
         decimal? result = AlertEvaluationService.GetMetricValue(AlertMetric.SecurityUpdates, state);
 
@@ -205,7 +205,7 @@ public sealed class AlertEvaluationServiceTests
     [Test]
     public async Task GetMetricValue_MachineOffline_ReturnsNull()
     {
-        MachineState state = new() { MachineId = 1, LastTelemetryAt = DateTimeOffset.UtcNow };
+        MachineStateSummary state = new() { MachineId = 1, LastSeenAt = DateTimeOffset.UtcNow };
 
         decimal? result = AlertEvaluationService.GetMetricValue(AlertMetric.MachineOffline, state);
 
@@ -215,7 +215,7 @@ public sealed class AlertEvaluationServiceTests
     [Test]
     public async Task GetMetricValue_UnknownMetric_ReturnsNull()
     {
-        MachineState state = new() { MachineId = 1, LastTelemetryAt = DateTimeOffset.UtcNow };
+        MachineStateSummary state = new() { MachineId = 1, LastSeenAt = DateTimeOffset.UtcNow };
 
         decimal? result = AlertEvaluationService.GetMetricValue((AlertMetric)99, state);
 
@@ -225,9 +225,9 @@ public sealed class AlertEvaluationServiceTests
     // --- GetMaxDiskUsage Tests ---
 
     [Test]
-    public async Task GetMaxDiskUsage_NullDiskUsages_ReturnsNull()
+    public async Task GetMaxDiskUsage_NullMaxDiskUsagePercent_ReturnsNull()
     {
-        MachineState state = new() { MachineId = 1, DiskUsages = null, LastTelemetryAt = DateTimeOffset.UtcNow };
+        MachineStateSummary state = new() { MachineId = 1, MaxDiskUsagePercent = null, LastSeenAt = DateTimeOffset.UtcNow };
 
         decimal? result = AlertEvaluationService.GetMaxDiskUsage(state);
 
@@ -235,23 +235,13 @@ public sealed class AlertEvaluationServiceTests
     }
 
     [Test]
-    public async Task GetMaxDiskUsage_EmptyDiskUsages_ReturnsNull()
+    public async Task GetMaxDiskUsage_HasValue_ReturnsDecimal()
     {
-        MachineState state = new() { MachineId = 1, DiskUsages = "", LastTelemetryAt = DateTimeOffset.UtcNow };
-
-        decimal? result = AlertEvaluationService.GetMaxDiskUsage(state);
-
-        await Assert.That(result).IsNull();
-    }
-
-    [Test]
-    public async Task GetMaxDiskUsage_ValidJson_ReturnsMaxUsage()
-    {
-        MachineState state = new()
+        MachineStateSummary state = new()
         {
             MachineId = 1,
-            DiskUsages = """[{"usagePercent": 85}, {"usagePercent": 60}, {"usagePercent": 72}]""",
-            LastTelemetryAt = DateTimeOffset.UtcNow,
+            MaxDiskUsagePercent = 85,
+            LastSeenAt = DateTimeOffset.UtcNow,
         };
 
         decimal? result = AlertEvaluationService.GetMaxDiskUsage(state);
@@ -260,56 +250,26 @@ public sealed class AlertEvaluationServiceTests
     }
 
     [Test]
-    public async Task GetMaxDiskUsage_SingleDisk_ReturnsThatValue()
+    public async Task GetMaxDiskUsage_ZeroValue_ReturnsZero()
     {
-        MachineState state = new()
+        MachineStateSummary state = new()
         {
             MachineId = 1,
-            DiskUsages = """[{"usagePercent": 42}]""",
-            LastTelemetryAt = DateTimeOffset.UtcNow,
+            MaxDiskUsagePercent = 0,
+            LastSeenAt = DateTimeOffset.UtcNow,
         };
 
         decimal? result = AlertEvaluationService.GetMaxDiskUsage(state);
 
-        await Assert.That(result).IsEqualTo(42m);
-    }
-
-    [Test]
-    public async Task GetMaxDiskUsage_AllZeroUsage_ReturnsNull()
-    {
-        MachineState state = new()
-        {
-            MachineId = 1,
-            DiskUsages = """[{"usagePercent": 0}, {"usagePercent": 0}]""",
-            LastTelemetryAt = DateTimeOffset.UtcNow,
-        };
-
-        decimal? result = AlertEvaluationService.GetMaxDiskUsage(state);
-
-        await Assert.That(result).IsNull();
-    }
-
-    [Test]
-    public async Task GetMaxDiskUsage_MalformedJson_ReturnsNull()
-    {
-        MachineState state = new()
-        {
-            MachineId = 1,
-            DiskUsages = "not valid json {{",
-            LastTelemetryAt = DateTimeOffset.UtcNow,
-        };
-
-        decimal? result = AlertEvaluationService.GetMaxDiskUsage(state);
-
-        await Assert.That(result).IsNull();
+        await Assert.That(result).IsEqualTo(0m);
     }
 
     // --- GetDiskHealthValue Tests ---
 
     [Test]
-    public async Task GetDiskHealthValue_NullHardwareHealth_ReturnsNull()
+    public async Task GetDiskHealthValue_NullHasDiskHealthIssue_ReturnsNull()
     {
-        MachineState state = new() { MachineId = 1, HardwareHealth = null, LastTelemetryAt = DateTimeOffset.UtcNow };
+        MachineStateSummary state = new() { MachineId = 1, HasDiskHealthIssue = null, LastSeenAt = DateTimeOffset.UtcNow };
 
         decimal? result = AlertEvaluationService.GetDiskHealthValue(state);
 
@@ -317,23 +277,13 @@ public sealed class AlertEvaluationServiceTests
     }
 
     [Test]
-    public async Task GetDiskHealthValue_EmptyHardwareHealth_ReturnsNull()
+    public async Task GetDiskHealthValue_NoDiskHealthIssue_ReturnsZero()
     {
-        MachineState state = new() { MachineId = 1, HardwareHealth = "", LastTelemetryAt = DateTimeOffset.UtcNow };
-
-        decimal? result = AlertEvaluationService.GetDiskHealthValue(state);
-
-        await Assert.That(result).IsNull();
-    }
-
-    [Test]
-    public async Task GetDiskHealthValue_AllPassed_ReturnsZero()
-    {
-        MachineState state = new()
+        MachineStateSummary state = new()
         {
             MachineId = 1,
-            HardwareHealth = """{"diskSmart": [{"healthStatus": "PASSED"}, {"healthStatus": "PASSED"}]}""",
-            LastTelemetryAt = DateTimeOffset.UtcNow,
+            HasDiskHealthIssue = false,
+            LastSeenAt = DateTimeOffset.UtcNow,
         };
 
         decimal? result = AlertEvaluationService.GetDiskHealthValue(state);
@@ -342,78 +292,18 @@ public sealed class AlertEvaluationServiceTests
     }
 
     [Test]
-    public async Task GetDiskHealthValue_AllOk_ReturnsZero()
+    public async Task GetDiskHealthValue_HasDiskHealthIssue_ReturnsOne()
     {
-        MachineState state = new()
+        MachineStateSummary state = new()
         {
             MachineId = 1,
-            HardwareHealth = """{"diskSmart": [{"healthStatus": "OK"}]}""",
-            LastTelemetryAt = DateTimeOffset.UtcNow,
-        };
-
-        decimal? result = AlertEvaluationService.GetDiskHealthValue(state);
-
-        await Assert.That(result).IsEqualTo(0m);
-    }
-
-    [Test]
-    public async Task GetDiskHealthValue_OneUnhealthy_ReturnsOne()
-    {
-        MachineState state = new()
-        {
-            MachineId = 1,
-            HardwareHealth = """{"diskSmart": [{"healthStatus": "PASSED"}, {"healthStatus": "FAILING"}]}""",
-            LastTelemetryAt = DateTimeOffset.UtcNow,
+            HasDiskHealthIssue = true,
+            LastSeenAt = DateTimeOffset.UtcNow,
         };
 
         decimal? result = AlertEvaluationService.GetDiskHealthValue(state);
 
         await Assert.That(result).IsEqualTo(1m);
-    }
-
-    [Test]
-    public async Task GetDiskHealthValue_NoDiskSmartProperty_ReturnsZero()
-    {
-        MachineState state = new()
-        {
-            MachineId = 1,
-            HardwareHealth = """{"temperatures": [42]}""",
-            LastTelemetryAt = DateTimeOffset.UtcNow,
-        };
-
-        decimal? result = AlertEvaluationService.GetDiskHealthValue(state);
-
-        await Assert.That(result).IsEqualTo(0m);
-    }
-
-    [Test]
-    public async Task GetDiskHealthValue_MalformedJson_ReturnsNull()
-    {
-        MachineState state = new()
-        {
-            MachineId = 1,
-            HardwareHealth = "not valid json",
-            LastTelemetryAt = DateTimeOffset.UtcNow,
-        };
-
-        decimal? result = AlertEvaluationService.GetDiskHealthValue(state);
-
-        await Assert.That(result).IsNull();
-    }
-
-    [Test]
-    public async Task GetDiskHealthValue_CaseInsensitiveHealthCheck()
-    {
-        MachineState state = new()
-        {
-            MachineId = 1,
-            HardwareHealth = """{"diskSmart": [{"healthStatus": "passed"}]}""",
-            LastTelemetryAt = DateTimeOffset.UtcNow,
-        };
-
-        decimal? result = AlertEvaluationService.GetDiskHealthValue(state);
-
-        await Assert.That(result).IsEqualTo(0m);
     }
 
     // --- EvaluateRuleForMachineAsync Tests ---
@@ -455,7 +345,7 @@ public sealed class AlertEvaluationServiceTests
         AlertRule rule = TestDataBuilder.BuildAlertRule(tenantId: tenant.Id, metric: AlertMetric.CpuUsage, threshold: 80m, durationMinutes: 0);
         rule.Id = await db.InsertWithInt32IdentityAsync(rule);
 
-        MachineState state = new() { MachineId = machine.Id, CpuUsagePercent = 90, LastTelemetryAt = DateTimeOffset.UtcNow };
+        MachineStateSummary state = new() { MachineId = machine.Id, CpuUsagePercent = 90, LastSeenAt = DateTimeOffset.UtcNow };
 
         await service.EvaluateRuleForMachineAsync(db, rule, state, CancellationToken.None);
 
@@ -483,7 +373,7 @@ public sealed class AlertEvaluationServiceTests
         AlertEvent existingEvent = TestDataBuilder.BuildAlertEvent(alertRuleId: rule.Id, tenantId: tenant.Id, machineId: machine.Id, status: AlertEventStatus.Triggered);
         existingEvent.Id = await db.InsertWithInt64IdentityAsync(existingEvent);
 
-        MachineState state = new() { MachineId = machine.Id, CpuUsagePercent = 95, LastTelemetryAt = DateTimeOffset.UtcNow };
+        MachineStateSummary state = new() { MachineId = machine.Id, CpuUsagePercent = 95, LastSeenAt = DateTimeOffset.UtcNow };
 
         await service.EvaluateRuleForMachineAsync(db, rule, state, CancellationToken.None);
 
@@ -500,7 +390,7 @@ public sealed class AlertEvaluationServiceTests
         AlertRule rule = TestDataBuilder.BuildAlertRule(metric: AlertMetric.CpuUsage, threshold: 80m, durationMinutes: 5);
         rule.Id = 1;
 
-        MachineState state = new() { MachineId = 1, CpuUsagePercent = 50, LastTelemetryAt = DateTimeOffset.UtcNow };
+        MachineStateSummary state = new() { MachineId = 1, CpuUsagePercent = 50, LastSeenAt = DateTimeOffset.UtcNow };
 
         await service.EvaluateRuleForMachineAsync(db, rule, state, CancellationToken.None);
 
@@ -523,7 +413,7 @@ public sealed class AlertEvaluationServiceTests
         string conditionKey = $"alert:condition:{rule.Id}:1";
         redisDb.StringGetAsync(conditionKey).Returns((RedisValue)RedisValue.Null);
 
-        MachineState state = new() { MachineId = 1, CpuUsagePercent = 90, LastTelemetryAt = DateTimeOffset.UtcNow };
+        MachineStateSummary state = new() { MachineId = 1, CpuUsagePercent = 90, LastSeenAt = DateTimeOffset.UtcNow };
 
         await service.EvaluateRuleForMachineAsync(db, rule, state, CancellationToken.None);
 
@@ -549,7 +439,7 @@ public sealed class AlertEvaluationServiceTests
         string twoMinutesAgo = DateTimeOffset.UtcNow.AddMinutes(-2).ToString("o");
         redisDb.StringGetAsync(conditionKey).Returns((RedisValue)twoMinutesAgo);
 
-        MachineState state = new() { MachineId = 1, CpuUsagePercent = 90, LastTelemetryAt = DateTimeOffset.UtcNow };
+        MachineStateSummary state = new() { MachineId = 1, CpuUsagePercent = 90, LastSeenAt = DateTimeOffset.UtcNow };
 
         await service.EvaluateRuleForMachineAsync(db, rule, state, CancellationToken.None);
 
@@ -577,7 +467,7 @@ public sealed class AlertEvaluationServiceTests
         string tenMinutesAgo = DateTimeOffset.UtcNow.AddMinutes(-10).ToString("o");
         redisDb.StringGetAsync(conditionKey).Returns((RedisValue)tenMinutesAgo);
 
-        MachineState state = new() { MachineId = machine.Id, CpuUsagePercent = 90, LastTelemetryAt = DateTimeOffset.UtcNow };
+        MachineStateSummary state = new() { MachineId = machine.Id, CpuUsagePercent = 90, LastSeenAt = DateTimeOffset.UtcNow };
 
         await service.EvaluateRuleForMachineAsync(db, rule, state, CancellationToken.None);
 
@@ -594,7 +484,7 @@ public sealed class AlertEvaluationServiceTests
         AlertRule rule = TestDataBuilder.BuildAlertRule(metric: AlertMetric.MachineOffline, threshold: 1m);
         rule.Id = 1;
 
-        MachineState state = new() { MachineId = 1, LastTelemetryAt = DateTimeOffset.UtcNow };
+        MachineStateSummary state = new() { MachineId = 1, LastSeenAt = DateTimeOffset.UtcNow };
 
         await service.EvaluateRuleForMachineAsync(db, rule, state, CancellationToken.None);
 
@@ -618,7 +508,7 @@ public sealed class AlertEvaluationServiceTests
         AlertRule rule = TestDataBuilder.BuildAlertRule(tenantId: tenant.Id, metric: AlertMetric.CpuUsage, threshold: 80m, durationMinutes: 0);
         rule.Id = await db.InsertWithInt32IdentityAsync(rule);
 
-        MachineState state = new() { MachineId = machine.Id, CpuUsagePercent = 95, LastTelemetryAt = DateTimeOffset.UtcNow };
+        MachineStateSummary state = new() { MachineId = machine.Id, CpuUsagePercent = 95, LastSeenAt = DateTimeOffset.UtcNow };
 
         await service.EvaluateRuleForMachineAsync(db, rule, state, CancellationToken.None);
 
@@ -639,7 +529,7 @@ public sealed class AlertEvaluationServiceTests
         AlertRule rule = TestDataBuilder.BuildAlertRule(tenantId: tenant.Id, metric: AlertMetric.MemoryUsage, threshold: 50m, durationMinutes: 0);
         rule.Id = await db.InsertWithInt32IdentityAsync(rule);
 
-        MachineState state = new() { MachineId = machine.Id, MemoryUsagePercent = 75, LastTelemetryAt = DateTimeOffset.UtcNow };
+        MachineStateSummary state = new() { MachineId = machine.Id, MemoryUsagePercent = 75, LastSeenAt = DateTimeOffset.UtcNow };
 
         await service.EvaluateRuleForMachineAsync(db, rule, state, CancellationToken.None);
 
@@ -667,7 +557,7 @@ public sealed class AlertEvaluationServiceTests
         string conditionKey = $"alert:condition:{rule.Id}:{machine.Id}";
         redisDb.StringGetAsync(conditionKey).Returns((RedisValue)"not-a-valid-date");
 
-        MachineState state = new() { MachineId = machine.Id, CpuUsagePercent = 90, LastTelemetryAt = DateTimeOffset.UtcNow };
+        MachineStateSummary state = new() { MachineId = machine.Id, CpuUsagePercent = 90, LastSeenAt = DateTimeOffset.UtcNow };
 
         await service.EvaluateRuleForMachineAsync(db, rule, state, CancellationToken.None);
 
@@ -714,7 +604,7 @@ public sealed class AlertEvaluationServiceTests
         Machine machine = TestDataBuilder.BuildMachine(tenantId: tenant.Id);
         machine.Id = await db.InsertWithInt64IdentityAsync(machine);
 
-        MachineState machineState = TestDataBuilder.BuildMachineState(machineId: machine.Id, cpuPercent: 95);
+        MachineStateSummary machineState = TestDataBuilder.BuildMachineStateSummary(machineId: machine.Id, cpuPercent: 95);
         await db.InsertAsync(machineState);
 
         await service.EvaluateAllRulesAsync(CancellationToken.None);

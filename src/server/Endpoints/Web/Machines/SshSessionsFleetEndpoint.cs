@@ -8,6 +8,7 @@ using Framlux.FleetManagement.Database;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Server.Auth;
 using Framlux.FleetManagement.Server.Endpoints.Web.Models.Telemetry;
+using Framlux.FleetManagement.Server.Services.Telemetry;
 using LinqToDB;
 using LinqToDB.Async;
 
@@ -97,48 +98,59 @@ public sealed class SshSessionsFleetEndpoint : Endpoint<FleetSshSessionsRequest,
         int page = req.Page < 1 ? 1 : req.Page;
         int pageSize = (req.PageSize < 1) || (req.PageSize > 100) ? 50 : req.PageSize;
 
-        // Get machines with SSH session data
-        List<MachineSessionRow> machinesWithSessions = await (
-            from m in _db.Machines
-            join s in _db.MachineStates on m.Id equals s.MachineId
-            where m.TenantId == tenantId.Value &&
-                  m.IsDeleted == false &&
-                  s.SshSessions != null
-            select new MachineSessionRow { Id = m.Id, Name = m.Name, SshSessions = s.SshSessions }
-        ).ToListAsync(ct);
+        // Build a lookup of machine names for tenant machines.
+        Dictionary<long, string> machineNames = await _db.Machines
+            .Where(m => m.TenantId == tenantId.Value && m.IsDeleted == false)
+            .ToDictionaryAsync(m => m.Id, m => m.Name, ct);
+
+        if (machineNames.Count == 0)
+        {
+            await Send.OkAsync(ApiResponse<PaginatedResponse<FleetSshSessionDto>>.Ok(new PaginatedResponse<FleetSshSessionDto>
+            {
+                Items = [],
+                Page = page,
+                PageSize = pageSize,
+                TotalCount = 0,
+            }), cancellation: ct);
+
+            return;
+        }
+
+        // Query SSH session telemetry rows for all tenant machines.
+        List<long> machineIds = machineNames.Keys.ToList();
+        List<MachineTelemetry> telemetryRows = await _db.MachineTelemetry
+            .Where(t => machineIds.Contains(t.MachineId) &&
+                        t.TelemetryType == TelemetryTypeIds.SshSessions &&
+                        t.DeletedAt == null)
+            .OrderByDescending(t => t.ReceivedAt)
+            .ToListAsync(ct);
 
         JsonSerializerOptions jsonOptions = new() { PropertyNameCaseInsensitive = true };
 
         List<FleetSshSessionDto> allSessions = [];
 
-        foreach (MachineSessionRow machine in machinesWithSessions)
+        foreach (MachineTelemetry row in telemetryRows)
         {
-            if (string.IsNullOrEmpty(machine.SshSessions))
-            {
-                continue;
-            }
+            string machineName = machineNames.GetValueOrDefault(row.MachineId, string.Empty);
 
             try
             {
-                List<SshSessionPayload>? sessions = JsonSerializer.Deserialize<List<SshSessionPayload>>(machine.SshSessions, jsonOptions);
-                if (sessions is null)
+                SshSessionPayload? session = JsonSerializer.Deserialize<SshSessionPayload>(row.Payload, jsonOptions);
+                if (session is null)
                 {
                     continue;
                 }
 
-                foreach (SshSessionPayload session in sessions)
+                allSessions.Add(new FleetSshSessionDto
                 {
-                    allSessions.Add(new FleetSshSessionDto
-                    {
-                        MachineId = machine.Id,
-                        MachineName = machine.Name,
-                        User = session.User,
-                        SourceIp = session.SourceIp,
-                        Action = session.Action,
-                        AuthMethod = session.AuthMethod,
-                        Timestamp = session.Timestamp,
-                    });
-                }
+                    MachineId = row.MachineId,
+                    MachineName = machineName,
+                    User = session.User,
+                    SourceIp = session.SourceIp,
+                    Action = session.Action,
+                    AuthMethod = session.AuthMethod,
+                    Timestamp = session.Timestamp,
+                });
             }
             catch
             {
@@ -180,12 +192,3 @@ public sealed class SshSessionsFleetEndpoint : Endpoint<FleetSshSessionsRequest,
     }
 }
 
-/// <summary>
-/// Lightweight projection for machine SSH session queries.
-/// </summary>
-file sealed class MachineSessionRow
-{
-    public long Id { get; init; }
-    public string Name { get; init; } = string.Empty;
-    public string? SshSessions { get; init; }
-}

@@ -17,7 +17,7 @@ using LinqToDB.Async;
 namespace Framlux.FleetManagement.Server.Services.Machines;
 
 /// <summary>
-/// Reads MachineState cache and maps to fleet/detail DTOs.
+/// Reads MachineStateSummary cache and maps to fleet/detail DTOs.
 /// </summary>
 public sealed class MachineStateService : IMachineStateService
 {
@@ -75,7 +75,7 @@ public sealed class MachineStateService : IMachineStateService
         // Step 1: SQL-level summary aggregation using pre-computed HealthStatus.
         IQueryable<MachineScalarRow> baseQuery =
             from m in db.Machines
-            join s in db.MachineStates on m.Id equals s.MachineId into stateJoin
+            join s in db.MachineStateSummaries on m.Id equals s.MachineId into stateJoin
             from s in stateJoin.DefaultIfEmpty()
             where m.TenantId == tenantId.Value && m.IsDeleted == false
             select new MachineScalarRow
@@ -92,7 +92,7 @@ public sealed class MachineStateService : IMachineStateService
                 StateFailedServices = s != null ? s.FailedServices : (int?)null,
                 StateTotalServices = s != null ? s.TotalServices : (int?)null,
                 StateHealthStatus = s != null ? s.HealthStatus : (short)3,
-                StateLastPingAt = s != null ? s.LastPingAt : (DateTimeOffset?)null,
+                StateLastPingAt = s != null ? s.LastSeenAt : (DateTimeOffset?)null,
             };
 
         // Summary stats via SQL GROUP BY — no need to load all rows.
@@ -197,38 +197,20 @@ public sealed class MachineStateService : IMachineStateService
         List<long> pagedIds = pagedDtos.Select(m => m.Id).ToList();
         if (pagedIds.Count > 0)
         {
-            Dictionary<long, MachineState> pagedStates = await db.MachineStates
+            Dictionary<long, MachineStateSummary> pagedStates = await db.MachineStateSummaries
                 .Where(s => pagedIds.Contains(s.MachineId))
                 .ToDictionaryAsync(s => s.MachineId, ct);
 
             foreach (FleetMachineDto dto in pagedDtos)
             {
-                if (pagedStates.TryGetValue(dto.Id, out MachineState? state) == false)
+                if (pagedStates.TryGetValue(dto.Id, out MachineStateSummary? state) == false)
                 {
                     continue;
                 }
 
-                if (state.DiskUsages is not null)
-                {
-                    List<DiskUsageEntryDto>? disks = JsonSerializer.Deserialize<List<DiskUsageEntryDto>>(state.DiskUsages, JsonDefaults.SnakeCase);
-                    if (disks is { Count: > 0 })
-                    {
-                        dto.MaxDiskUsagePercent = disks.Max(d => d.UsagePercent);
-                    }
-                }
-
-                if (state.HardwareHealth is not null)
-                {
-                    HardwareHealthPayload? hw = JsonSerializer.Deserialize<HardwareHealthPayload>(state.HardwareHealth, JsonDefaults.SnakeCase);
-                    if (hw is not null)
-                    {
-                        dto.HasDiskHealthIssue = hw.DiskSmart.Exists(d =>
-                            string.Equals(d.HealthStatus, "FAILED", StringComparison.OrdinalIgnoreCase));
-                        dto.HasHardwareIssue = hw.Fans.Exists(f => f.Rpm == 0) ||
-                            hw.PowerSupplies.Exists(p =>
-                                string.Equals(p.Status, "ok", StringComparison.OrdinalIgnoreCase) == false);
-                    }
-                }
+                dto.MaxDiskUsagePercent = state.MaxDiskUsagePercent;
+                dto.HasDiskHealthIssue = state.HasDiskHealthIssue ?? false;
+                dto.HasHardwareIssue = state.HasHardwareIssue ?? false;
             }
         }
 
@@ -262,7 +244,7 @@ public sealed class MachineStateService : IMachineStateService
             return null;
         }
 
-        MachineState? state = await db.MachineStates
+        MachineStateSummary? state = await db.MachineStateSummaries
             .Where(s => s.MachineId == machineId)
             .FirstOrDefaultAsync(ct);
 
@@ -320,7 +302,7 @@ public sealed class MachineStateService : IMachineStateService
             FailedServices = failedServices,
             TotalServices = services?.Services.Count ?? 0,
             RecentSshSessions = sshSessions,
-            TelemetryLastUpdated = state?.LastTelemetryAt,
+            TelemetryLastUpdated = state?.LastSeenAt,
         };
     }
 

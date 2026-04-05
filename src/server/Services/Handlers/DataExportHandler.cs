@@ -397,7 +397,7 @@ public sealed class DataExportHandler : IDataExportHandler
     private async Task ExportMachineStateAsync(
         SqliteConnection sqlite, List<long> machineIds, CancellationToken ct)
     {
-        List<MachineState> states = await _db.MachineStates
+        List<MachineStateSummary> states = await _db.MachineStateSummaries
             .Where(s => machineIds.Contains(s.MachineId))
             .ToListAsync(ct);
 
@@ -405,78 +405,47 @@ public sealed class DataExportHandler : IDataExportHandler
         using SqliteCommand cmd = sqlite.CreateCommand();
         cmd.Transaction = tx;
         cmd.CommandText = """
-            INSERT INTO MachineState (
-                MachineId, Hostname, HardwareVendor, HardwareModel, HardwareSerial,
-                CpuBrand, CpuCores, MemoryTotalBytes, UptimeSeconds, BiosVersion,
-                IpAddresses, OsName, OsVersion, Kernel, CpuUsagePercent,
-                MemoryUsedBytes, MemoryUsagePercent, DiskUsages, HardwareHealth,
-                CpuType, CpuPhysicalCpus, CpuLogicalCpus, SwapTotalBytes, SwapFreeBytes,
-                DiskInfos, SshSessions, PendingUpdates, SecurityUpdates,
-                TotalServices, FailedServices, HealthStatus,
-                SystemInfoAt, OsVersionAt, CpuUsageAt, MemoryUsageAt, DiskUsageAt,
-                HardwareHealthAt, PackageUpdatesAt, ServiceStatusAt, CpuInfoAt,
-                MemoryInfoAt, DiskInfoAt, SshSessionsAt, LastTelemetryAt
+            INSERT INTO MachineStateSummary (
+                MachineId, TenantId, Name, OperatingSystem, MachineType,
+                Hostname, HardwareModel, IpAddresses,
+                OsName, OsVersion, CpuUsagePercent, MemoryUsagePercent,
+                MaxDiskUsagePercent, PendingUpdates, SecurityUpdates,
+                TotalServices, FailedServices, HasDiskHealthIssue,
+                HasHardwareIssue, HealthStatus, LastSeenAt
             ) VALUES (
-                $MachineId, $Hostname, $HardwareVendor, $HardwareModel, $HardwareSerial,
-                $CpuBrand, $CpuCores, $MemoryTotalBytes, $UptimeSeconds, $BiosVersion,
-                $IpAddresses, $OsName, $OsVersion, $Kernel, $CpuUsagePercent,
-                $MemoryUsedBytes, $MemoryUsagePercent, $DiskUsages, $HardwareHealth,
-                $CpuType, $CpuPhysicalCpus, $CpuLogicalCpus, $SwapTotalBytes, $SwapFreeBytes,
-                $DiskInfos, $SshSessions, $PendingUpdates, $SecurityUpdates,
-                $TotalServices, $FailedServices, $HealthStatus,
-                $SystemInfoAt, $OsVersionAt, $CpuUsageAt, $MemoryUsageAt, $DiskUsageAt,
-                $HardwareHealthAt, $PackageUpdatesAt, $ServiceStatusAt, $CpuInfoAt,
-                $MemoryInfoAt, $DiskInfoAt, $SshSessionsAt, $LastTelemetryAt
+                $MachineId, $TenantId, $Name, $OperatingSystem, $MachineType,
+                $Hostname, $HardwareModel, $IpAddresses,
+                $OsName, $OsVersion, $CpuUsagePercent, $MemoryUsagePercent,
+                $MaxDiskUsagePercent, $PendingUpdates, $SecurityUpdates,
+                $TotalServices, $FailedServices, $HasDiskHealthIssue,
+                $HasHardwareIssue, $HealthStatus, $LastSeenAt
             )
             """;
 
-        foreach (MachineState s in states)
+        foreach (MachineStateSummary s in states)
         {
             cmd.Parameters.Clear();
             cmd.Parameters.AddWithValue("$MachineId", s.MachineId);
+            cmd.Parameters.AddWithValue("$TenantId", s.TenantId);
+            cmd.Parameters.AddWithValue("$Name", s.Name);
+            cmd.Parameters.AddWithValue("$OperatingSystem", s.OperatingSystem);
+            cmd.Parameters.AddWithValue("$MachineType", s.MachineType);
             cmd.Parameters.AddWithValue("$Hostname", (object?)s.Hostname ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("$HardwareVendor", (object?)s.HardwareVendor ?? DBNull.Value);
             cmd.Parameters.AddWithValue("$HardwareModel", (object?)s.HardwareModel ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("$HardwareSerial", (object?)s.HardwareSerial ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("$CpuBrand", (object?)s.CpuBrand ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("$CpuCores", (object?)s.CpuCores ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("$MemoryTotalBytes", (object?)s.MemoryTotalBytes ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("$UptimeSeconds", (object?)s.UptimeSeconds ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("$BiosVersion", (object?)s.BiosVersion ?? DBNull.Value);
             cmd.Parameters.AddWithValue("$IpAddresses", (object?)s.IpAddresses ?? DBNull.Value);
             cmd.Parameters.AddWithValue("$OsName", (object?)s.OsName ?? DBNull.Value);
             cmd.Parameters.AddWithValue("$OsVersion", (object?)s.OsVersion ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("$Kernel", (object?)s.Kernel ?? DBNull.Value);
             cmd.Parameters.AddWithValue("$CpuUsagePercent", (object?)s.CpuUsagePercent ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("$MemoryUsedBytes", (object?)s.MemoryUsedBytes ?? DBNull.Value);
             cmd.Parameters.AddWithValue("$MemoryUsagePercent", (object?)s.MemoryUsagePercent ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("$DiskUsages", (object?)s.DiskUsages ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("$HardwareHealth", (object?)s.HardwareHealth ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("$CpuType", (object?)s.CpuType ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("$CpuPhysicalCpus", (object?)s.CpuPhysicalCpus ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("$CpuLogicalCpus", (object?)s.CpuLogicalCpus ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("$SwapTotalBytes", (object?)s.SwapTotalBytes ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("$SwapFreeBytes", (object?)s.SwapFreeBytes ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("$DiskInfos", (object?)s.DiskInfos ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("$SshSessions", (object?)s.SshSessions ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("$MaxDiskUsagePercent", (object?)s.MaxDiskUsagePercent ?? DBNull.Value);
             cmd.Parameters.AddWithValue("$PendingUpdates", (object?)s.PendingUpdates ?? DBNull.Value);
             cmd.Parameters.AddWithValue("$SecurityUpdates", (object?)s.SecurityUpdates ?? DBNull.Value);
             cmd.Parameters.AddWithValue("$TotalServices", (object?)s.TotalServices ?? DBNull.Value);
             cmd.Parameters.AddWithValue("$FailedServices", (object?)s.FailedServices ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("$HasDiskHealthIssue", (object?)s.HasDiskHealthIssue ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("$HasHardwareIssue", (object?)s.HasHardwareIssue ?? DBNull.Value);
             cmd.Parameters.AddWithValue("$HealthStatus", s.HealthStatus);
-            cmd.Parameters.AddWithValue("$SystemInfoAt", (object?)s.SystemInfoAt?.ToString("o") ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("$OsVersionAt", (object?)s.OsVersionAt?.ToString("o") ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("$CpuUsageAt", (object?)s.CpuUsageAt?.ToString("o") ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("$MemoryUsageAt", (object?)s.MemoryUsageAt?.ToString("o") ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("$DiskUsageAt", (object?)s.DiskUsageAt?.ToString("o") ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("$HardwareHealthAt", (object?)s.HardwareHealthAt?.ToString("o") ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("$PackageUpdatesAt", (object?)s.PackageUpdatesAt?.ToString("o") ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("$ServiceStatusAt", (object?)s.ServiceStatusAt?.ToString("o") ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("$CpuInfoAt", (object?)s.CpuInfoAt?.ToString("o") ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("$MemoryInfoAt", (object?)s.MemoryInfoAt?.ToString("o") ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("$DiskInfoAt", (object?)s.DiskInfoAt?.ToString("o") ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("$SshSessionsAt", (object?)s.SshSessionsAt?.ToString("o") ?? DBNull.Value);
-            cmd.Parameters.AddWithValue("$LastTelemetryAt", (object?)s.LastTelemetryAt?.ToString("o") ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("$LastSeenAt", (object?)s.LastSeenAt?.ToString("o") ?? DBNull.Value);
 
             await cmd.ExecuteNonQueryAsync(ct);
         }

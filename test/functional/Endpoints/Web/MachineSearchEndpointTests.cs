@@ -69,24 +69,29 @@ public sealed class MachineSearchEndpointTests
         return machine.Id;
     }
 
-    private static async Task SeedMachineState(
+    private static async Task SeedMachineStateSummary(
         DatabaseContext db,
         long machineId,
+        int tenantId,
         int? cpuPercent = null,
         int? memoryPercent = null,
         int? pendingUpdates = null,
         int? failedServices = null)
     {
-        MachineState state = new()
+        MachineStateSummary state = new()
         {
             MachineId = machineId,
+            TenantId = tenantId,
+            Name = $"host-{machineId}",
+            OperatingSystem = 0,
+            MachineType = 0,
             Hostname = $"host-{machineId}",
             CpuUsagePercent = cpuPercent,
             MemoryUsagePercent = memoryPercent,
             PendingUpdates = pendingUpdates,
             FailedServices = failedServices,
             HealthStatus = 0,
-            LastTelemetryAt = DateTimeOffset.UtcNow
+            LastSeenAt = DateTimeOffset.UtcNow
         };
         await db.InsertAsync(state);
     }
@@ -207,9 +212,9 @@ public sealed class MachineSearchEndpointTests
         using DatabaseContext db = factory.CreateDbContext();
         int tenantId = await SeedTenantWithSubscription(db);
         long lowId = await SeedMachine(db, tenantId, "low-cpu");
-        await SeedMachineState(db, lowId, cpuPercent: 20);
+        await SeedMachineStateSummary(db, lowId, tenantId, cpuPercent: 20);
         long highId = await SeedMachine(db, tenantId, "high-cpu");
-        await SeedMachineState(db, highId, cpuPercent: 85);
+        await SeedMachineStateSummary(db, highId, tenantId, cpuPercent: 85);
 
         HttpClient client = BuildAuthenticatedClient(factory, tenantId);
 
@@ -256,7 +261,7 @@ public sealed class MachineSearchEndpointTests
         using DatabaseContext db = factory.CreateDbContext();
         int tenantId = await SeedTenantWithSubscription(db);
         long machineId = await SeedMachine(db, tenantId, "field-test-machine");
-        await SeedMachineState(db, machineId, cpuPercent: 50, memoryPercent: 60);
+        await SeedMachineStateSummary(db, machineId, tenantId, cpuPercent: 50, memoryPercent: 60);
 
         HttpClient client = BuildAuthenticatedClient(factory, tenantId);
 

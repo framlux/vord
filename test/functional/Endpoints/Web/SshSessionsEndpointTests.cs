@@ -84,14 +84,61 @@ public sealed class SshSessionsEndpointTests
         };
         machine.Id = await db.InsertWithInt64IdentityAsync(machine);
 
-        MachineState state = new()
+        MachineStateSummary state = new()
         {
             MachineId = machine.Id,
+            TenantId = tenantId,
+            Name = machineName,
+            OperatingSystem = (byte)OperatingSystems.Ubuntu,
+            MachineType = (byte)MachineTypes.BareMetalServer,
             Hostname = machineName,
-            SshSessions = sshSessionsJson,
-            LastTelemetryAt = DateTimeOffset.UtcNow,
+            HealthStatus = 0,
+            LastSeenAt = DateTimeOffset.UtcNow,
         };
         await db.InsertAsync(state);
+
+        MachineStateDetail detail = new()
+        {
+            MachineId = machine.Id,
+        };
+        await db.InsertAsync(detail);
+
+        // Seed SSH sessions as MachineTelemetry rows (TelemetryType = 9).
+        if (string.IsNullOrEmpty(sshSessionsJson) == false)
+        {
+            try
+            {
+                using System.Text.Json.JsonDocument doc = System.Text.Json.JsonDocument.Parse(sshSessionsJson);
+                if (doc.RootElement.ValueKind == System.Text.Json.JsonValueKind.Array)
+                {
+                    foreach (System.Text.Json.JsonElement session in doc.RootElement.EnumerateArray())
+                    {
+                        MachineTelemetry telemetry = new()
+                        {
+                            MachineId = machine.Id,
+                            TenantId = tenantId,
+                            TelemetryType = 9,
+                            Payload = session.GetRawText(),
+                            ReceivedAt = DateTimeOffset.UtcNow,
+                        };
+                        await db.InsertWithInt64IdentityAsync(telemetry);
+                    }
+                }
+            }
+            catch (System.Text.Json.JsonException)
+            {
+                // For malformed JSON tests: insert the raw string as a single telemetry row.
+                MachineTelemetry telemetry = new()
+                {
+                    MachineId = machine.Id,
+                    TenantId = tenantId,
+                    TelemetryType = 9,
+                    Payload = sshSessionsJson,
+                    ReceivedAt = DateTimeOffset.UtcNow,
+                };
+                await db.InsertWithInt64IdentityAsync(telemetry);
+            }
+        }
 
         return machine.Id;
     }
@@ -266,7 +313,7 @@ public sealed class SshSessionsEndpointTests
         using DatabaseContext db = factory.CreateDbContext();
         (int tenantId, int userId) = await SeedSshEnvironment(db);
 
-        // Machine with null SSH sessions won't have a matching MachineState.SshSessions != null
+        // Machine with no SSH sessions in state summary should be excluded from SSH results.
         Machine machine = new()
         {
             TenantId = tenantId,
@@ -282,12 +329,16 @@ public sealed class SshSessionsEndpointTests
         };
         machine.Id = await db.InsertWithInt64IdentityAsync(machine);
 
-        MachineState state = new()
+        MachineStateSummary state = new()
         {
             MachineId = machine.Id,
+            TenantId = tenantId,
+            Name = "null-ssh-machine",
+            OperatingSystem = (byte)OperatingSystems.Ubuntu,
+            MachineType = (byte)MachineTypes.BareMetalServer,
             Hostname = "null-ssh-machine",
-            SshSessions = null,
-            LastTelemetryAt = DateTimeOffset.UtcNow,
+            HealthStatus = 0,
+            LastSeenAt = DateTimeOffset.UtcNow,
         };
         await db.InsertAsync(state);
 

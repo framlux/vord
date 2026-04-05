@@ -200,7 +200,7 @@ public class DataExportHandlerTests
     {
         using TestDatabaseFactory dbFactory = new();
         long machineId = await SeedMachine(dbFactory, tenantId: 1);
-        MachineState state = TestDataBuilder.BuildMachineState(machineId: machineId, cpuPercent: 42);
+        MachineStateSummary state = TestDataBuilder.BuildMachineStateSummary(machineId: machineId, cpuPercent: 42);
         await dbFactory.Context.InsertAsync(state);
 
         CaptureObjectStorageService capture = new();
@@ -214,7 +214,7 @@ public class DataExportHandlerTests
             using SqliteConnection sqlite = new($"Data Source={capture.LastCapturedPath}");
             await sqlite.OpenAsync();
 
-            using SqliteCommand cmd = new("SELECT CpuUsagePercent FROM MachineState WHERE MachineId = @mid", sqlite);
+            using SqliteCommand cmd = new("SELECT CpuUsagePercent FROM MachineStateSummary WHERE MachineId = @mid", sqlite);
             cmd.Parameters.AddWithValue("@mid", machineId);
             object? cpuObj = await cmd.ExecuteScalarAsync();
 

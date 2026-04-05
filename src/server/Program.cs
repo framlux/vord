@@ -17,9 +17,9 @@ using Framlux.FleetManagement.Server.Services.Handlers;
 using Framlux.FleetManagement.Server.Services.Infrastructure;
 using Framlux.FleetManagement.Server.Services.Machines;
 using Framlux.FleetManagement.Server.Services.Notifications;
+using Framlux.FleetManagement.Server.Services.Retention;
 using Framlux.FleetManagement.Server.Services.Security;
 using Framlux.FleetManagement.Server.Services.ServerConfiguration;
-using Framlux.FleetManagement.Server.Services.Retention;
 using Framlux.FleetManagement.Server.Services.Telemetry;
 using Framlux.Vord.BillingGrpc;
 using LinqToDB;
@@ -307,12 +307,7 @@ builder.Services.AddSingleton<IMachineService, MachineService>()
                 .AddSingleton<ICertificateService, CertificateService>()
                 .AddSingleton<IMachineStateService, MachineStateService>()
                 .AddSingleton<IMachineSearchService, MachineSearchService>()
-                .AddSingleton<IMachineStateUpdater, MachineStateUpdater>()
-                .AddSingleton<IMachineStateQueueService, MachineStateQueueService>()
                 .AddSingleton<ISqlDialect, PostgresSqlDialect>();
-builder.Services.AddHostedService<MachineStateConsumerService>();
-builder.Services.AddHostedService<HealthRecomputationService>();
-builder.Services.AddHostedService<MachineStateReconciliationService>();
 
 builder.Services.AddSingleton<ServerConfigurationService>();
 builder.Services.AddSingleton<ISubscriptionService, SubscriptionService>();
@@ -356,6 +351,8 @@ builder.Services.AddHostedService<DataRetentionService>();
 builder.Services.AddHostedService<DataCleanupService>();
 builder.Services.AddHostedService<AlertEvaluationService>();
 builder.Services.AddHostedService<CommandExpiryBackgroundService>();
+builder.Services.AddHostedService<MachineStateStreamingService>();
+builder.Services.AddHostedService<HealthSweepService>();
 
 // Billing configuration: explicit opt-in via Billing:Enabled flag
 builder.Services.AddSingleton<IBillingStatus, BillingStatus>();

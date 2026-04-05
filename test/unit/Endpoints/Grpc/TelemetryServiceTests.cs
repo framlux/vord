@@ -26,7 +26,6 @@ namespace Framlux.FleetManagement.Test.Endpoints.Grpc;
 /// </summary>
 public sealed class TelemetryServiceTests
 {
-    private readonly IMachineStateQueueService _stateQueue = Substitute.For<IMachineStateQueueService>();
     private readonly ITelemetryDeduplicationService _dedupService;
     private readonly ISubscriptionService _subscriptionService;
     private readonly ILogger<TelemetryService> _logger = Substitute.For<ILogger<TelemetryService>>();
@@ -96,7 +95,7 @@ public sealed class TelemetryServiceTests
 
     private TelemetryService CreateService(IServiceScopeFactory scopeFactory)
     {
-        return new TelemetryService(scopeFactory, _stateQueue, _dedupService, _subscriptionService, _logger);
+        return new TelemetryService(scopeFactory, _dedupService, _subscriptionService, _logger);
     }
 
     [Test]
@@ -226,10 +225,6 @@ public sealed class TelemetryServiceTests
 
         await service.SubmitTelemetry(envelope, context);
 
-        await _stateQueue.Received(1).PublishAsync(
-            100,
-            Arg.Any<IReadOnlyList<StateUpdateMessage>>(),
-            Arg.Any<CancellationToken>());
     }
 
     [Test]
@@ -248,7 +243,7 @@ public sealed class TelemetryServiceTests
                 return ids.ToDictionary(id => id, _ => false);
             });
 
-        TelemetryService service = new(scopeFactory, _stateQueue, dupDedupService, _subscriptionService, _logger);
+        TelemetryService service = new(scopeFactory, dupDedupService, _subscriptionService, _logger);
         ServerCallContext context = CreateAuthenticatedContext(200);
 
         TelemetryEnvelope envelope = new()
@@ -353,7 +348,7 @@ public sealed class TelemetryServiceTests
                 UpdatedAt = DateTimeOffset.UtcNow,
             });
 
-        TelemetryService service = new(scopeFactory, _stateQueue, _dedupService, inactiveSubService, _logger);
+        TelemetryService service = new(scopeFactory, _dedupService, inactiveSubService, _logger);
         ServerCallContext context = CreateAuthenticatedContext(100);
 
         TelemetryEnvelope envelope = new() { BatchId = "batch-inactive" };

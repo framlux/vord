@@ -5,13 +5,9 @@
 using System.Text.Json;
 using Framlux.FleetManagement.Database;
 using Framlux.FleetManagement.Database.Enums;
-using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Server.Endpoints.Web;
 using Framlux.FleetManagement.Server.Endpoints.Web.Models.Machines;
-using Framlux.FleetManagement.Server.Endpoints.Web.Models.Telemetry;
-using Framlux.FleetManagement.Server.Services.Infrastructure;
 using Framlux.FleetManagement.Server.Services.ServerConfiguration;
-using Framlux.FleetManagement.Server.Services.Telemetry;
 using LinqToDB;
 using LinqToDB.Async;
 
@@ -29,7 +25,6 @@ public sealed class MachineSearchService : IMachineSearchService
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly IMachinePingService _pingService;
     private readonly ServerConfigurationService _configService;
-    private readonly ISqlDialect _dialect;
 
     /// <summary>
     /// Creates a new instance of the <see cref="MachineSearchService"/> class.
@@ -37,13 +32,11 @@ public sealed class MachineSearchService : IMachineSearchService
     public MachineSearchService(
         IServiceScopeFactory scopeFactory,
         IMachinePingService pingService,
-        ServerConfigurationService configService,
-        ISqlDialect dialect)
+        ServerConfigurationService configService)
     {
         _scopeFactory = scopeFactory;
         _pingService = pingService;
         _configService = configService;
-        _dialect = dialect;
     }
 
     /// <inheritdoc/>
@@ -79,32 +72,14 @@ public sealed class MachineSearchService : IMachineSearchService
 
     /// <summary>
     /// Returns true when the criteria include filters or sort options that cannot be
-    /// pushed to SQL on the current database dialect. Health status and last seen filters
-    /// now use pre-computed database columns and no longer require a full scan.
+    /// pushed to SQL on the current database dialect. With pre-computed scalar columns
+    /// on MachineStateSummary, all common filters are now handled at the SQL level.
     /// </summary>
-    private bool RequiresFullScan(MachineSearchCriteria criteria)
+    private static bool RequiresFullScan(MachineSearchCriteria criteria)
     {
-        // Disk and hardware issue filters require JSONB. On PostgreSQL these are
-        // pushed to SQL via Sql.Expression; on SQLite they require in-memory filtering.
-        if (_dialect.SupportsJsonbFilters == false)
-        {
-            if (criteria.HasDiskHealthIssue.HasValue || criteria.HasHardwareIssue.HasValue)
-            {
-                return true;
-            }
-
-            if (criteria.DiskMin.HasValue || criteria.DiskMax.HasValue)
-            {
-                return true;
-            }
-        }
-
-        // Sorting by disk requires JSONB lateral join; only available on PostgreSQL.
-        string sortLower = criteria.SortBy?.ToLowerInvariant() ?? "name";
-        if ((sortLower == "disk") && (_dialect.SupportsJsonbSort == false))
-        {
-            return true;
-        }
+        // All filters and sorts now use pre-computed scalar columns and can be
+        // handled at the SQL level on all dialects.
+        _ = criteria;
 
         return false;
     }
@@ -271,12 +246,12 @@ public sealed class MachineSearchService : IMachineSearchService
         return dtos;
     }
 
-    private IQueryable<SearchScalarRow> BuildBaseQuery(
+    private static IQueryable<SearchScalarRow> BuildBaseQuery(
         DatabaseContext db, int tenantId, MachineSearchCriteria criteria)
     {
         IQueryable<SearchScalarRow> query =
             from m in db.Machines
-            join s in db.MachineStates on m.Id equals s.MachineId into stateJoin
+            join s in db.MachineStateSummaries on m.Id equals s.MachineId into stateJoin
             from s in stateJoin.DefaultIfEmpty()
             where m.TenantId == tenantId && m.IsDeleted == false
             select new SearchScalarRow
@@ -294,10 +269,11 @@ public sealed class MachineSearchService : IMachineSearchService
                 StateSecurityUpdates = s != null ? s.SecurityUpdates : (int?)null,
                 StateFailedServices = s != null ? s.FailedServices : (int?)null,
                 StateTotalServices = s != null ? s.TotalServices : (int?)null,
-                StateDiskUsages = s != null ? s.DiskUsages : null,
-                StateHardwareHealth = s != null ? s.HardwareHealth : null,
+                StateMaxDiskUsagePercent = s != null ? s.MaxDiskUsagePercent : (int?)null,
+                StateHasDiskHealthIssue = s != null ? s.HasDiskHealthIssue : (bool?)null,
+                StateHasHardwareIssue = s != null ? s.HasHardwareIssue : (bool?)null,
                 StateHealthStatus = s != null ? s.HealthStatus : (short?)null,
-                StateLastPingAt = s != null ? s.LastPingAt : (DateTimeOffset?)null,
+                StateLastPingAt = s != null ? s.LastSeenAt : (DateTimeOffset?)null,
             };
 
         // Apply SQL-level text search filter.
@@ -369,44 +345,29 @@ public sealed class MachineSearchService : IMachineSearchService
             query = query.Where(r => r.StateFailedServices != null && r.StateFailedServices >= failedMin);
         }
 
-        // Apply JSONB filters via custom SQL expressions (PostgreSQL only).
-        if (_dialect.SupportsJsonbFilters)
+        // Apply disk and hardware filters using pre-computed scalar columns.
+        if (criteria.DiskMin.HasValue)
         {
-            if (criteria.DiskMin.HasValue)
-            {
-                int diskMin = criteria.DiskMin.Value;
-                query = query.Where(r => JsonbFilterExpressions.HasDiskUsageAbove(r.StateDiskUsages, diskMin));
-            }
+            int diskMin = criteria.DiskMin.Value;
+            query = query.Where(r => r.StateMaxDiskUsagePercent != null && r.StateMaxDiskUsagePercent >= diskMin);
+        }
 
-            if (criteria.DiskMax.HasValue)
-            {
-                int diskMax = criteria.DiskMax.Value;
-                query = query.Where(r => JsonbFilterExpressions.AllDiskUsageAtOrBelow(r.StateDiskUsages, diskMax));
-            }
+        if (criteria.DiskMax.HasValue)
+        {
+            int diskMax = criteria.DiskMax.Value;
+            query = query.Where(r => r.StateMaxDiskUsagePercent != null && r.StateMaxDiskUsagePercent <= diskMax);
+        }
 
-            if (criteria.HasDiskHealthIssue.HasValue)
-            {
-                if (criteria.HasDiskHealthIssue.Value == true)
-                {
-                    query = query.Where(r => JsonbFilterExpressions.HasFailedDiskSmart(r.StateHardwareHealth));
-                }
-                else
-                {
-                    query = query.Where(r => JsonbFilterExpressions.AllDiskSmartHealthy(r.StateHardwareHealth));
-                }
-            }
+        if (criteria.HasDiskHealthIssue.HasValue)
+        {
+            bool hasDiskIssue = criteria.HasDiskHealthIssue.Value;
+            query = query.Where(r => r.StateHasDiskHealthIssue != null && r.StateHasDiskHealthIssue == hasDiskIssue);
+        }
 
-            if (criteria.HasHardwareIssue.HasValue)
-            {
-                if (criteria.HasHardwareIssue.Value == true)
-                {
-                    query = query.Where(r => JsonbFilterExpressions.HasHardwareIssue(r.StateHardwareHealth));
-                }
-                else
-                {
-                    query = query.Where(r => JsonbFilterExpressions.NoHardwareIssues(r.StateHardwareHealth));
-                }
-            }
+        if (criteria.HasHardwareIssue.HasValue)
+        {
+            bool hasHwIssue = criteria.HasHardwareIssue.Value;
+            query = query.Where(r => r.StateHasHardwareIssue != null && r.StateHasHardwareIssue == hasHwIssue);
         }
 
         // Apply SQL-level health status filter using the pre-computed HealthStatus column.
@@ -457,8 +418,8 @@ public sealed class MachineSearchService : IMachineSearchService
                 ? query.OrderByDescending(r => r.StateMemoryUsagePercent ?? 0)
                 : query.OrderBy(r => r.StateMemoryUsagePercent ?? 0),
             "disk" => desc
-                ? query.OrderByDescending(r => JsonbFilterExpressions.MaxDiskUsagePercent(r.StateDiskUsages))
-                : query.OrderBy(r => JsonbFilterExpressions.MaxDiskUsagePercent(r.StateDiskUsages)),
+                ? query.OrderByDescending(r => r.StateMaxDiskUsagePercent ?? 0)
+                : query.OrderBy(r => r.StateMaxDiskUsagePercent ?? 0),
             _ => desc
                 ? query.OrderByDescending(r => r.Name)
                 : query.OrderBy(r => r.Name),
@@ -569,9 +530,8 @@ public sealed class MachineSearchService : IMachineSearchService
     }
 
     /// <summary>
-    /// Enriches DTOs with JSONB data (disk usage, hardware health) using the already-loaded
-    /// scalar row projections. Avoids a second database query by deserializing directly
-    /// from the SearchScalarRow's StateDiskUsages and StateHardwareHealth strings.
+    /// Enriches DTOs with pre-computed scalar fields (disk usage, hardware health) from the
+    /// already-loaded scalar row projections and recomputes health status accordingly.
     /// </summary>
     private static void EnrichWithJsonbData(
         List<FleetMachineDto> dtos,
@@ -587,31 +547,11 @@ public sealed class MachineSearchService : IMachineSearchService
                 continue;
             }
 
-            if (row.StateDiskUsages is not null)
-            {
-                List<DiskUsageEntryDto>? disks = JsonSerializer.Deserialize<List<DiskUsageEntryDto>>(
-                    row.StateDiskUsages, JsonDefaults.SnakeCase);
-                if (disks is { Count: > 0 })
-                {
-                    dto.MaxDiskUsagePercent = disks.Max(d => d.UsagePercent);
-                }
-            }
+            dto.MaxDiskUsagePercent = row.StateMaxDiskUsagePercent;
+            dto.HasDiskHealthIssue = row.StateHasDiskHealthIssue ?? false;
+            dto.HasHardwareIssue = row.StateHasHardwareIssue ?? false;
 
-            if (row.StateHardwareHealth is not null)
-            {
-                HardwareHealthPayload? hw = JsonSerializer.Deserialize<HardwareHealthPayload>(
-                    row.StateHardwareHealth, JsonDefaults.SnakeCase);
-                if (hw is not null)
-                {
-                    dto.HasDiskHealthIssue = hw.DiskSmart.Exists(d =>
-                        string.Equals(d.HealthStatus, "FAILED", StringComparison.OrdinalIgnoreCase));
-                    dto.HasHardwareIssue = hw.Fans.Exists(f => f.Rpm == 0) ||
-                        hw.PowerSupplies.Exists(p =>
-                            string.Equals(p.Status, "ok", StringComparison.OrdinalIgnoreCase) == false);
-                }
-            }
-
-            // Recompute health with full JSONB data for enriched machines.
+            // Recompute health with the full set of scalar fields.
             bool isOnline = onlineMap.GetValueOrDefault(dto.Id, false);
             dto.HealthStatus = ComputeEnrichedHealth(isOnline, row, dto);
         }

@@ -23,38 +23,41 @@ internal sealed class SearchScalarRow
     /// <summary>Machine type enum value.</summary>
     public MachineTypes MachineType { get; init; }
 
-    /// <summary>Hostname from MachineState.</summary>
+    /// <summary>Hostname from MachineStateSummary.</summary>
     public string? StateHostname { get; init; }
 
-    /// <summary>IP addresses JSON from MachineState.</summary>
+    /// <summary>IP addresses JSON from MachineStateSummary.</summary>
     public string? StateIpAddresses { get; init; }
 
-    /// <summary>Hardware model from MachineState.</summary>
+    /// <summary>Hardware model from MachineStateSummary.</summary>
     public string? StateHardwareModel { get; init; }
 
-    /// <summary>CPU usage percentage from MachineState.</summary>
+    /// <summary>CPU usage percentage from MachineStateSummary.</summary>
     public int? StateCpuUsagePercent { get; init; }
 
-    /// <summary>Memory usage percentage from MachineState.</summary>
+    /// <summary>Memory usage percentage from MachineStateSummary.</summary>
     public int? StateMemoryUsagePercent { get; init; }
 
-    /// <summary>Pending updates count from MachineState.</summary>
+    /// <summary>Pending updates count from MachineStateSummary.</summary>
     public int? StatePendingUpdates { get; init; }
 
-    /// <summary>Security updates count from MachineState.</summary>
+    /// <summary>Security updates count from MachineStateSummary.</summary>
     public int? StateSecurityUpdates { get; init; }
 
-    /// <summary>Failed services count from MachineState.</summary>
+    /// <summary>Failed services count from MachineStateSummary.</summary>
     public int? StateFailedServices { get; init; }
 
-    /// <summary>Total services count from MachineState.</summary>
+    /// <summary>Total services count from MachineStateSummary.</summary>
     public int? StateTotalServices { get; init; }
 
-    /// <summary>DiskUsages JSONB from MachineState. Used for JSONB filter expressions on PostgreSQL.</summary>
-    public string? StateDiskUsages { get; init; }
+    /// <summary>Maximum disk usage percentage from MachineStateSummary.</summary>
+    public int? StateMaxDiskUsagePercent { get; init; }
 
-    /// <summary>HardwareHealth JSONB from MachineState. Used for JSONB filter expressions on PostgreSQL.</summary>
-    public string? StateHardwareHealth { get; init; }
+    /// <summary>Whether any disk has a SMART health failure from MachineStateSummary.</summary>
+    public bool? StateHasDiskHealthIssue { get; init; }
+
+    /// <summary>Whether any hardware component has an issue from MachineStateSummary.</summary>
+    public bool? StateHasHardwareIssue { get; init; }
 
     /// <summary>Pre-computed health status from the database (0=Healthy, 1=Warning, 2=Critical, 3=Offline).</summary>
     public short? StateHealthStatus { get; init; }

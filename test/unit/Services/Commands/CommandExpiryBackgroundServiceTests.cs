@@ -4,9 +4,11 @@
 
 using Framlux.FleetManagement.Database.Cache;
 using Framlux.FleetManagement.Server.Services.Commands;
+using Framlux.FleetManagement.Server.Services.Infrastructure;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using NSubstitute;
+using StackExchange.Redis;
 
 namespace Framlux.FleetManagement.Test.Services;
 
@@ -38,9 +40,13 @@ public sealed class CommandExpiryBackgroundServiceTests
         IServiceScopeFactory scopeFactory = Substitute.For<IServiceScopeFactory>();
         scopeFactory.CreateScope().Returns(scope);
 
+        IDistributedLock distributedLock = Substitute.For<IDistributedLock>();
+        distributedLock.TryAcquireAsync(Arg.Any<string>(), Arg.Any<TimeSpan>())
+            .Returns(Task.FromResult<LockHandle?>(new LockHandle(Substitute.For<IDatabase>(), "test-key", "test-value")));
+
         ILogger<CommandExpiryBackgroundService> logger = Substitute.For<ILogger<CommandExpiryBackgroundService>>();
 
-        CommandExpiryBackgroundService service = new(scopeFactory, logger);
+        CommandExpiryBackgroundService service = new(scopeFactory, distributedLock, logger);
 
         await service.StartAsync(cts.Token);
         await workDone.Task;
@@ -73,9 +79,13 @@ public sealed class CommandExpiryBackgroundServiceTests
         IServiceScopeFactory scopeFactory = Substitute.For<IServiceScopeFactory>();
         scopeFactory.CreateScope().Returns(scope);
 
+        IDistributedLock distributedLock = Substitute.For<IDistributedLock>();
+        distributedLock.TryAcquireAsync(Arg.Any<string>(), Arg.Any<TimeSpan>())
+            .Returns(Task.FromResult<LockHandle?>(new LockHandle(Substitute.For<IDatabase>(), "test-key", "test-value")));
+
         ILogger<CommandExpiryBackgroundService> logger = Substitute.For<ILogger<CommandExpiryBackgroundService>>();
 
-        CommandExpiryBackgroundService service = new(scopeFactory, logger);
+        CommandExpiryBackgroundService service = new(scopeFactory, distributedLock, logger);
 
         await service.StartAsync(cts.Token);
         await workDone.Task;

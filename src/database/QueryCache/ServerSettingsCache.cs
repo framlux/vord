@@ -18,12 +18,12 @@ namespace Framlux.FleetManagement.Database.Cache;
 /// </summary>
 public sealed class ServerSettingsCache : IServerSettingsCache
 {
-    private static readonly TimeSpan SettingsCacheTtl = TimeSpan.FromMinutes(5);
+    private static readonly long SettingsCacheTtlTicks = TimeSpan.FromMinutes(5).Ticks;
 
     private readonly ConcurrentDictionary<ServerConfigurationSettingKeys, ServerConfigurationSettings> _cache = [];
     private readonly IServiceScopeFactory _serviceScopeFactory;
     private readonly ILogger<ServerSettingsCache> _logger;
-    private DateTimeOffset _cacheRefreshedAt = DateTimeOffset.MinValue;
+    private long _cacheRefreshedAtTicks = DateTimeOffset.MinValue.Ticks;
 
     /// <summary>
     /// Creates a new instance of the <see cref="ServerSettingsCache"/> class.
@@ -40,11 +40,12 @@ public sealed class ServerSettingsCache : IServerSettingsCache
     public async Task<string?> GetSettingAsync(ServerConfigurationSettingKeys key, CancellationToken cancellationToken)
     {
         // Expire the settings cache after the TTL so DB changes propagate without restart.
-        // Capture timestamp once to avoid TOCTOU race between check and clear.
-        DateTimeOffset now = DateTimeOffset.UtcNow;
-        if (now - _cacheRefreshedAt > SettingsCacheTtl)
+        // Uses Interlocked.CompareExchange to avoid TOCTOU race between check and clear.
+        long nowTicks = DateTimeOffset.UtcNow.Ticks;
+        long lastRefreshTicks = Interlocked.Read(ref _cacheRefreshedAtTicks);
+        if (((nowTicks - lastRefreshTicks) > SettingsCacheTtlTicks) &&
+            (Interlocked.CompareExchange(ref _cacheRefreshedAtTicks, nowTicks, lastRefreshTicks) == lastRefreshTicks))
         {
-            _cacheRefreshedAt = now;
             _cache.Clear();
         }
 
@@ -75,9 +76,48 @@ public sealed class ServerSettingsCache : IServerSettingsCache
     }
 
     /// <inheritdoc/>
+    public async Task SetSettingAsync(ServerConfigurationSettingKeys key, string value, CancellationToken cancellationToken)
+    {
+        using IServiceScope scope = _serviceScopeFactory.CreateScope();
+        DatabaseContext dbContext = scope.ServiceProvider.GetRequiredService<DatabaseContext>();
+
+        ServerConfigurationSettings? existing = await dbContext.ServerConfigurationSettings
+            .Where(s => s.Key == key)
+            .OrderByDescending(s => s.Version)
+            .FirstOrDefaultAsync(cancellationToken);
+
+        if (existing is null)
+        {
+            await dbContext.InsertAsync(new ServerConfigurationSettings
+            {
+                Key = key,
+                Value = value,
+                Version = 1,
+            }, token: cancellationToken);
+        }
+        else
+        {
+            await dbContext.ServerConfigurationSettings
+                .Where(s => s.Id == existing.Id)
+                .Set(s => s.Value, value)
+                .Set(s => s.Version, existing.Version + 1)
+                .UpdateAsync(cancellationToken);
+        }
+
+        // Update the in-memory cache entry.
+        ServerConfigurationSettings cached = new ServerConfigurationSettings
+        {
+            Key = key,
+            Value = value,
+            Version = (existing?.Version ?? 0) + 1,
+        };
+        _cache.AddOrUpdate(key, cached, (_, _) => cached);
+    }
+
+    /// <inheritdoc/>
     public void InvalidateCache()
     {
         _cache.Clear();
-        _cacheRefreshedAt = DateTimeOffset.MinValue;
+        Interlocked.Exchange(ref _cacheRefreshedAtTicks, DateTimeOffset.MinValue.Ticks);
     }
 }

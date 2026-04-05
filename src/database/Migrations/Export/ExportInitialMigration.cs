@@ -31,52 +31,51 @@ public sealed class ExportInitialMigration : Migration
             .WithColumn("OperatingSystem").AsByte().NotNullable()
             .WithColumn("RegisteredOn").AsString().NotNullable();
 
-        Create.Table("MachineState")
+        Create.Table("MachineStateSummary")
             .WithColumn("MachineId").AsInt64().PrimaryKey().NotNullable()
-                .ForeignKey("FK_MachineState_Machines", "Machines", "Id")
+                .ForeignKey("FK_MachineStateSummary_Machines", "Machines", "Id")
+            .WithColumn("TenantId").AsInt32().NotNullable()
+            .WithColumn("Name").AsString(250).NotNullable()
+            .WithColumn("OperatingSystem").AsByte().NotNullable()
+            .WithColumn("MachineType").AsByte().NotNullable()
             .WithColumn("Hostname").AsString(255).Nullable()
-            .WithColumn("HardwareVendor").AsString(255).Nullable()
             .WithColumn("HardwareModel").AsString(255).Nullable()
+            .WithColumn("IpAddresses").AsString().Nullable()
+            .WithColumn("OsName").AsString(255).Nullable()
+            .WithColumn("OsVersion").AsString(64).Nullable()
+            .WithColumn("CpuUsagePercent").AsInt32().Nullable()
+            .WithColumn("MemoryUsagePercent").AsInt32().Nullable()
+            .WithColumn("MaxDiskUsagePercent").AsInt32().Nullable()
+            .WithColumn("PendingUpdates").AsInt32().Nullable()
+            .WithColumn("SecurityUpdates").AsInt32().Nullable()
+            .WithColumn("FailedServices").AsInt32().Nullable()
+            .WithColumn("TotalServices").AsInt32().Nullable()
+            .WithColumn("HasDiskHealthIssue").AsBoolean().Nullable()
+            .WithColumn("HasHardwareIssue").AsBoolean().Nullable()
+            .WithColumn("HealthStatus").AsInt16().NotNullable().WithDefaultValue(0)
+            .WithColumn("LastSeenAt").AsString().Nullable();
+
+        Create.Table("MachineStateDetail")
+            .WithColumn("MachineId").AsInt64().PrimaryKey().NotNullable()
+                .ForeignKey("FK_MachineStateDetail_Machines", "Machines", "Id")
+            .WithColumn("HardwareVendor").AsString(255).Nullable()
             .WithColumn("HardwareSerial").AsString(255).Nullable()
             .WithColumn("CpuBrand").AsString(255).Nullable()
             .WithColumn("CpuCores").AsInt32().Nullable()
             .WithColumn("MemoryTotalBytes").AsInt64().Nullable()
             .WithColumn("UptimeSeconds").AsInt64().Nullable()
             .WithColumn("BiosVersion").AsString(64).Nullable()
-            .WithColumn("IpAddresses").AsString().Nullable()
-            .WithColumn("OsName").AsString(255).Nullable()
-            .WithColumn("OsVersion").AsString(64).Nullable()
             .WithColumn("Kernel").AsString(255).Nullable()
-            .WithColumn("CpuUsagePercent").AsInt32().Nullable()
-            .WithColumn("MemoryUsedBytes").AsInt64().Nullable()
-            .WithColumn("MemoryUsagePercent").AsInt32().Nullable()
-            .WithColumn("DiskUsages").AsString().Nullable()
-            .WithColumn("HardwareHealth").AsString().Nullable()
             .WithColumn("CpuType").AsString(64).Nullable()
             .WithColumn("CpuPhysicalCpus").AsInt32().Nullable()
             .WithColumn("CpuLogicalCpus").AsInt32().Nullable()
             .WithColumn("SwapTotalBytes").AsInt64().Nullable()
             .WithColumn("SwapFreeBytes").AsInt64().Nullable()
+            .WithColumn("MemoryUsedBytes").AsInt64().Nullable()
             .WithColumn("DiskInfos").AsString().Nullable()
+            .WithColumn("DiskUsages").AsString().Nullable()
             .WithColumn("SshSessions").AsString().Nullable()
-            .WithColumn("PendingUpdates").AsInt32().Nullable()
-            .WithColumn("SecurityUpdates").AsInt32().Nullable()
-            .WithColumn("TotalServices").AsInt32().Nullable()
-            .WithColumn("FailedServices").AsInt32().Nullable()
-            .WithColumn("HealthStatus").AsInt16().NotNullable().WithDefaultValue(0)
-            .WithColumn("SystemInfoAt").AsString().Nullable()
-            .WithColumn("OsVersionAt").AsString().Nullable()
-            .WithColumn("CpuUsageAt").AsString().Nullable()
-            .WithColumn("MemoryUsageAt").AsString().Nullable()
-            .WithColumn("DiskUsageAt").AsString().Nullable()
-            .WithColumn("HardwareHealthAt").AsString().Nullable()
-            .WithColumn("PackageUpdatesAt").AsString().Nullable()
-            .WithColumn("ServiceStatusAt").AsString().Nullable()
-            .WithColumn("CpuInfoAt").AsString().Nullable()
-            .WithColumn("MemoryInfoAt").AsString().Nullable()
-            .WithColumn("DiskInfoAt").AsString().Nullable()
-            .WithColumn("SshSessionsAt").AsString().Nullable()
-            .WithColumn("LastTelemetryAt").AsString().Nullable();
+            .WithColumn("HardwareHealth").AsString().Nullable();
 
         Create.Table("MachineTelemetry")
             .WithColumn("Id").AsInt64().PrimaryKey().NotNullable()
@@ -112,7 +111,8 @@ public sealed class ExportInitialMigration : Migration
     {
         Delete.Table("ExportMetadata");
         Delete.Table("MachineTelemetry");
-        Delete.Table("MachineState");
+        Delete.Table("MachineStateDetail");
+        Delete.Table("MachineStateSummary");
         Delete.Table("Machines");
     }
 }

@@ -8,7 +8,7 @@ using Framlux.FleetManagement.Server.Endpoints.Web.Models.Machines;
 namespace Framlux.FleetManagement.Server.Services.Machines;
 
 /// <summary>
-/// Service for reading MachineState and mapping to fleet/detail DTOs.
+/// Service for reading MachineStateSummary and mapping to fleet/detail DTOs.
 /// </summary>
 public interface IMachineStateService
 {

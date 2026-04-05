@@ -186,8 +186,21 @@ public sealed class MachineService : IMachineService
             return (null, null, "Machine limit exceeded");
         }
 
-        // Pre-create the MachineState row so all subsequent telemetry writes are pure UPDATEs.
-        await dbContext.InsertAsync(new MachineState { MachineId = createdMachine.Id }, token: cancellationToken);
+        // Pre-create summary and detail rows so all subsequent telemetry writes are pure UPDATEs.
+        await dbContext.InsertAsync(new MachineStateSummary
+        {
+            MachineId = createdMachine.Id,
+            TenantId = token.TenantId,
+            Name = machine.Name,
+            OperatingSystem = (byte)machine.OperatingSystem,
+            MachineType = (byte)machine.MachineType,
+            HealthStatus = 0,
+        }, token: cancellationToken);
+
+        await dbContext.InsertAsync(new MachineStateDetail
+        {
+            MachineId = createdMachine.Id,
+        }, token: cancellationToken);
 
         // Cache the plaintext key in Redis for recovery via GetRegistrationStatus
         IDatabase redisDb = _redis.GetDatabase();

@@ -6,6 +6,7 @@ using Framlux.FleetManagement.Database.Cache;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Server.Options;
+using Framlux.FleetManagement.Server.Services.Infrastructure;
 using Microsoft.Extensions.Options;
 
 namespace Framlux.FleetManagement.Server.Services.Billing;
@@ -18,10 +19,13 @@ namespace Framlux.FleetManagement.Server.Services.Billing;
 public sealed class StripeSyncService : BackgroundService
 {
     private static readonly TimeSpan SyncInterval = TimeSpan.FromMinutes(5);
+    private static readonly TimeSpan LockTtl = TimeSpan.FromMinutes(8);
+    private const string LockKey = "lock:stripe-sync";
 
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly IBillingApiClient _billingApiClient;
     private readonly BillingOptions _billingOptions;
+    private readonly IDistributedLock _distributedLock;
     private readonly ILogger<StripeSyncService> _logger;
 
     /// <summary>
@@ -31,11 +35,13 @@ public sealed class StripeSyncService : BackgroundService
         IServiceScopeFactory scopeFactory,
         IBillingApiClient billingApiClient,
         IOptions<BillingOptions> billingOptions,
+        IDistributedLock distributedLock,
         ILogger<StripeSyncService> logger)
     {
         _scopeFactory = scopeFactory;
         _billingApiClient = billingApiClient;
         _billingOptions = billingOptions.Value;
+        _distributedLock = distributedLock;
         _logger = logger;
     }
 
@@ -46,7 +52,15 @@ public sealed class StripeSyncService : BackgroundService
         {
             try
             {
-                await RunSyncCycleAsync(stoppingToken);
+                await using LockHandle? lockHandle = await _distributedLock.TryAcquireAsync(LockKey, LockTtl);
+                if (lockHandle is null)
+                {
+                    _logger.LogDebug("Stripe sync: another instance holds the lock, skipping this cycle");
+                }
+                else
+                {
+                    await RunSyncCycleAsync(stoppingToken);
+                }
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {

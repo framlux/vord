@@ -20,6 +20,16 @@ public interface IServerSettingsCache
     Task<string?> GetSettingAsync(ServerConfigurationSettingKeys key, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Upserts a server configuration setting by key. Inserts a new row if no row exists
+    /// for the key, or updates the existing row's value and increments the version.
+    /// Also updates the in-memory cache.
+    /// </summary>
+    /// <param name="key">The configuration setting key to set.</param>
+    /// <param name="value">The value to store.</param>
+    /// <param name="cancellationToken">Token used to cancel async calls.</param>
+    Task SetSettingAsync(ServerConfigurationSettingKeys key, string value, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Invalidates the in-memory settings cache, forcing the next read to hit the database.
     /// </summary>
     void InvalidateCache();

@@ -72,7 +72,7 @@ public class MachineSearchServiceTests
     {
         using TestDatabaseFactory dbFactory = new();
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, CreateMockPingService(), CreateConfigService(), CreateSqliteDialect());
+        MachineSearchService service = new(scopeFactory, CreateMockPingService(), CreateConfigService());
 
         PaginatedResponse<FleetMachineDto> result = await service.SearchAsync(
             DefaultCriteria(), null, CancellationToken.None);
@@ -86,7 +86,7 @@ public class MachineSearchServiceTests
     {
         using TestDatabaseFactory dbFactory = new();
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, CreateMockPingService(), CreateConfigService(), CreateSqliteDialect());
+        MachineSearchService service = new(scopeFactory, CreateMockPingService(), CreateConfigService());
 
         PaginatedResponse<FleetMachineDto> result = await service.SearchAsync(
             DefaultCriteria(), 1, CancellationToken.None);
@@ -107,7 +107,7 @@ public class MachineSearchServiceTests
         machine2.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine2);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, CreateMockPingService(), CreateConfigService(), CreateSqliteDialect());
+        MachineSearchService service = new(scopeFactory, CreateMockPingService(), CreateConfigService());
 
         PaginatedResponse<FleetMachineDto> result = await service.SearchAsync(
             DefaultCriteria(), 1, CancellationToken.None);
@@ -127,7 +127,7 @@ public class MachineSearchServiceTests
         deleted.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(deleted);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, CreateMockPingService(), CreateConfigService(), CreateSqliteDialect());
+        MachineSearchService service = new(scopeFactory, CreateMockPingService(), CreateConfigService());
 
         PaginatedResponse<FleetMachineDto> result = await service.SearchAsync(
             DefaultCriteria(), 1, CancellationToken.None);
@@ -145,7 +145,7 @@ public class MachineSearchServiceTests
         tenant2Machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(tenant2Machine);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, CreateMockPingService(), CreateConfigService(), CreateSqliteDialect());
+        MachineSearchService service = new(scopeFactory, CreateMockPingService(), CreateConfigService());
 
         PaginatedResponse<FleetMachineDto> result = await service.SearchAsync(
             DefaultCriteria(), 1, CancellationToken.None);
@@ -165,7 +165,7 @@ public class MachineSearchServiceTests
         dbServer.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(dbServer);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, CreateMockPingService(), CreateConfigService(), CreateSqliteDialect());
+        MachineSearchService service = new(scopeFactory, CreateMockPingService(), CreateConfigService());
 
         MachineSearchCriteria criteria = DefaultCriteria();
         criteria.Search = "web";
@@ -185,7 +185,7 @@ public class MachineSearchServiceTests
         machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, CreateMockPingService(), CreateConfigService(), CreateSqliteDialect());
+        MachineSearchService service = new(scopeFactory, CreateMockPingService(), CreateConfigService());
 
         MachineSearchCriteria criteria = DefaultCriteria();
         criteria.Search = "production";
@@ -210,7 +210,7 @@ public class MachineSearchServiceTests
         windows.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(windows);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, CreateMockPingService(), CreateConfigService(), CreateSqliteDialect());
+        MachineSearchService service = new(scopeFactory, CreateMockPingService(), CreateConfigService());
 
         MachineSearchCriteria criteria = DefaultCriteria();
         criteria.Os = "Ubuntu";
@@ -229,16 +229,16 @@ public class MachineSearchServiceTests
         using TestDatabaseFactory dbFactory = new();
         Machine lowCpu = TestDataBuilder.BuildMachine(tenantId: 1, hostname: "low-cpu");
         lowCpu.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(lowCpu);
-        MachineState lowState = TestDataBuilder.BuildMachineState(machineId: lowCpu.Id, cpuPercent: 20);
+        MachineStateSummary lowState = TestDataBuilder.BuildMachineStateSummary(machineId: lowCpu.Id, cpuPercent: 20);
         await dbFactory.Context.InsertAsync(lowState);
 
         Machine highCpu = TestDataBuilder.BuildMachine(tenantId: 1, hostname: "high-cpu");
         highCpu.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(highCpu);
-        MachineState highState = TestDataBuilder.BuildMachineState(machineId: highCpu.Id, cpuPercent: 85);
+        MachineStateSummary highState = TestDataBuilder.BuildMachineStateSummary(machineId: highCpu.Id, cpuPercent: 85);
         await dbFactory.Context.InsertAsync(highState);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, CreateMockPingService(), CreateConfigService(), CreateSqliteDialect());
+        MachineSearchService service = new(scopeFactory, CreateMockPingService(), CreateConfigService());
 
         MachineSearchCriteria criteria = DefaultCriteria();
         criteria.CpuMin = 80;
@@ -256,16 +256,16 @@ public class MachineSearchServiceTests
         using TestDatabaseFactory dbFactory = new();
         Machine lowCpu = TestDataBuilder.BuildMachine(tenantId: 1, hostname: "low-cpu");
         lowCpu.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(lowCpu);
-        MachineState lowState = TestDataBuilder.BuildMachineState(machineId: lowCpu.Id, cpuPercent: 20);
+        MachineStateSummary lowState = TestDataBuilder.BuildMachineStateSummary(machineId: lowCpu.Id, cpuPercent: 20);
         await dbFactory.Context.InsertAsync(lowState);
 
         Machine highCpu = TestDataBuilder.BuildMachine(tenantId: 1, hostname: "high-cpu");
         highCpu.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(highCpu);
-        MachineState highState = TestDataBuilder.BuildMachineState(machineId: highCpu.Id, cpuPercent: 85);
+        MachineStateSummary highState = TestDataBuilder.BuildMachineStateSummary(machineId: highCpu.Id, cpuPercent: 85);
         await dbFactory.Context.InsertAsync(highState);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, CreateMockPingService(), CreateConfigService(), CreateSqliteDialect());
+        MachineSearchService service = new(scopeFactory, CreateMockPingService(), CreateConfigService());
 
         MachineSearchCriteria criteria = DefaultCriteria();
         criteria.CpuMax = 50;
@@ -285,16 +285,16 @@ public class MachineSearchServiceTests
         using TestDatabaseFactory dbFactory = new();
         Machine lowMem = TestDataBuilder.BuildMachine(tenantId: 1, hostname: "low-mem");
         lowMem.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(lowMem);
-        MachineState lowState = TestDataBuilder.BuildMachineState(machineId: lowMem.Id, memoryPercent: 30);
+        MachineStateSummary lowState = TestDataBuilder.BuildMachineStateSummary(machineId: lowMem.Id, memoryPercent: 30);
         await dbFactory.Context.InsertAsync(lowState);
 
         Machine highMem = TestDataBuilder.BuildMachine(tenantId: 1, hostname: "high-mem");
         highMem.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(highMem);
-        MachineState highState = TestDataBuilder.BuildMachineState(machineId: highMem.Id, memoryPercent: 90);
+        MachineStateSummary highState = TestDataBuilder.BuildMachineStateSummary(machineId: highMem.Id, memoryPercent: 90);
         await dbFactory.Context.InsertAsync(highState);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, CreateMockPingService(), CreateConfigService(), CreateSqliteDialect());
+        MachineSearchService service = new(scopeFactory, CreateMockPingService(), CreateConfigService());
 
         MachineSearchCriteria criteria = DefaultCriteria();
         criteria.MemoryMin = 50;
@@ -315,18 +315,18 @@ public class MachineSearchServiceTests
         using TestDatabaseFactory dbFactory = new();
         Machine noUpdates = TestDataBuilder.BuildMachine(tenantId: 1, hostname: "no-updates");
         noUpdates.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(noUpdates);
-        MachineState noUpdateState = TestDataBuilder.BuildMachineState(machineId: noUpdates.Id);
+        MachineStateSummary noUpdateState = TestDataBuilder.BuildMachineStateSummary(machineId: noUpdates.Id);
         noUpdateState.PendingUpdates = 0;
         await dbFactory.Context.InsertAsync(noUpdateState);
 
         Machine manyUpdates = TestDataBuilder.BuildMachine(tenantId: 1, hostname: "many-updates");
         manyUpdates.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(manyUpdates);
-        MachineState manyUpdateState = TestDataBuilder.BuildMachineState(machineId: manyUpdates.Id);
+        MachineStateSummary manyUpdateState = TestDataBuilder.BuildMachineStateSummary(machineId: manyUpdates.Id);
         manyUpdateState.PendingUpdates = 15;
         await dbFactory.Context.InsertAsync(manyUpdateState);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, CreateMockPingService(), CreateConfigService(), CreateSqliteDialect());
+        MachineSearchService service = new(scopeFactory, CreateMockPingService(), CreateConfigService());
 
         MachineSearchCriteria criteria = DefaultCriteria();
         criteria.PendingUpdatesMin = 10;
@@ -344,18 +344,18 @@ public class MachineSearchServiceTests
         using TestDatabaseFactory dbFactory = new();
         Machine healthy = TestDataBuilder.BuildMachine(tenantId: 1, hostname: "healthy-services");
         healthy.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(healthy);
-        MachineState healthyState = TestDataBuilder.BuildMachineState(machineId: healthy.Id);
+        MachineStateSummary healthyState = TestDataBuilder.BuildMachineStateSummary(machineId: healthy.Id);
         healthyState.FailedServices = 0;
         await dbFactory.Context.InsertAsync(healthyState);
 
         Machine failing = TestDataBuilder.BuildMachine(tenantId: 1, hostname: "failing-services");
         failing.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(failing);
-        MachineState failingState = TestDataBuilder.BuildMachineState(machineId: failing.Id);
+        MachineStateSummary failingState = TestDataBuilder.BuildMachineStateSummary(machineId: failing.Id);
         failingState.FailedServices = 3;
         await dbFactory.Context.InsertAsync(failingState);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, CreateMockPingService(), CreateConfigService(), CreateSqliteDialect());
+        MachineSearchService service = new(scopeFactory, CreateMockPingService(), CreateConfigService());
 
         MachineSearchCriteria criteria = DefaultCriteria();
         criteria.FailedServicesMin = 1;
@@ -376,12 +376,12 @@ public class MachineSearchServiceTests
         Machine machine = TestDataBuilder.BuildMachine(tenantId: 1);
         machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
 
-        // Seed MachineState with Offline health status so the SQL filter matches.
-        MachineState state = TestDataBuilder.BuildMachineState(machineId: machine.Id, healthStatus: 3);
+        // Seed MachineStateSummary with Offline health status so the SQL filter matches.
+        MachineStateSummary state = TestDataBuilder.BuildMachineStateSummary(machineId: machine.Id, healthStatus: 3);
         await dbFactory.Context.InsertAsync(state);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, CreateMockPingService(online: false), CreateConfigService(), CreateSqliteDialect());
+        MachineSearchService service = new(scopeFactory, CreateMockPingService(online: false), CreateConfigService());
 
         MachineSearchCriteria criteria = DefaultCriteria();
         criteria.HealthStatus = "offline";
@@ -400,12 +400,12 @@ public class MachineSearchServiceTests
         Machine machine = TestDataBuilder.BuildMachine(tenantId: 1);
         machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
 
-        // Seed MachineState with Offline health status.
-        MachineState state = TestDataBuilder.BuildMachineState(machineId: machine.Id, healthStatus: 3);
+        // Seed MachineStateSummary with Offline health status.
+        MachineStateSummary state = TestDataBuilder.BuildMachineStateSummary(machineId: machine.Id, healthStatus: 3);
         await dbFactory.Context.InsertAsync(state);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, CreateMockPingService(online: false), CreateConfigService(), CreateSqliteDialect());
+        MachineSearchService service = new(scopeFactory, CreateMockPingService(online: false), CreateConfigService());
 
         MachineSearchCriteria criteria = DefaultCriteria();
         criteria.HealthStatus = "healthy,warning";
@@ -427,7 +427,7 @@ public class MachineSearchServiceTests
         machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, CreateMockPingService(), CreateConfigService(), CreateSqliteDialect());
+        MachineSearchService service = new(scopeFactory, CreateMockPingService(), CreateConfigService());
 
         MachineSearchCriteria criteria = DefaultCriteria();
         criteria.Page = -1;
@@ -447,7 +447,7 @@ public class MachineSearchServiceTests
         machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, CreateMockPingService(), CreateConfigService(), CreateSqliteDialect());
+        MachineSearchService service = new(scopeFactory, CreateMockPingService(), CreateConfigService());
 
         MachineSearchCriteria criteria = DefaultCriteria();
         criteria.PageSize = 200;
@@ -466,7 +466,7 @@ public class MachineSearchServiceTests
         machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, CreateMockPingService(), CreateConfigService(), CreateSqliteDialect());
+        MachineSearchService service = new(scopeFactory, CreateMockPingService(), CreateConfigService());
 
         MachineSearchCriteria criteria = DefaultCriteria();
         criteria.Page = 100;
@@ -490,7 +490,7 @@ public class MachineSearchServiceTests
         zulu.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(zulu);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, CreateMockPingService(), CreateConfigService(), CreateSqliteDialect());
+        MachineSearchService service = new(scopeFactory, CreateMockPingService(), CreateConfigService());
 
         MachineSearchCriteria criteria = DefaultCriteria();
         criteria.SortBy = "name";
@@ -513,7 +513,7 @@ public class MachineSearchServiceTests
         zulu.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(zulu);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, CreateMockPingService(), CreateConfigService(), CreateSqliteDialect());
+        MachineSearchService service = new(scopeFactory, CreateMockPingService(), CreateConfigService());
 
         MachineSearchCriteria criteria = DefaultCriteria();
         criteria.SortBy = "name";
@@ -535,23 +535,23 @@ public class MachineSearchServiceTests
         Machine match = TestDataBuilder.BuildMachine(tenantId: 1, hostname: "web-ubuntu");
         match.OperatingSystem = OperatingSystems.Ubuntu;
         match.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(match);
-        MachineState matchState = TestDataBuilder.BuildMachineState(machineId: match.Id, cpuPercent: 85);
+        MachineStateSummary matchState = TestDataBuilder.BuildMachineStateSummary(machineId: match.Id, cpuPercent: 85);
         await dbFactory.Context.InsertAsync(matchState);
 
         Machine noMatch1 = TestDataBuilder.BuildMachine(tenantId: 1, hostname: "web-windows");
         noMatch1.OperatingSystem = OperatingSystems.Windows;
         noMatch1.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(noMatch1);
-        MachineState noMatch1State = TestDataBuilder.BuildMachineState(machineId: noMatch1.Id, cpuPercent: 90);
+        MachineStateSummary noMatch1State = TestDataBuilder.BuildMachineStateSummary(machineId: noMatch1.Id, cpuPercent: 90);
         await dbFactory.Context.InsertAsync(noMatch1State);
 
         Machine noMatch2 = TestDataBuilder.BuildMachine(tenantId: 1, hostname: "db-ubuntu");
         noMatch2.OperatingSystem = OperatingSystems.Ubuntu;
         noMatch2.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(noMatch2);
-        MachineState noMatch2State = TestDataBuilder.BuildMachineState(machineId: noMatch2.Id, cpuPercent: 10);
+        MachineStateSummary noMatch2State = TestDataBuilder.BuildMachineStateSummary(machineId: noMatch2.Id, cpuPercent: 10);
         await dbFactory.Context.InsertAsync(noMatch2State);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, CreateMockPingService(), CreateConfigService(), CreateSqliteDialect());
+        MachineSearchService service = new(scopeFactory, CreateMockPingService(), CreateConfigService());
 
         MachineSearchCriteria criteria = DefaultCriteria();
         criteria.Search = "web";
@@ -575,7 +575,7 @@ public class MachineSearchServiceTests
         machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, CreateMockPingService(), CreateConfigService(), CreateSqliteDialect());
+        MachineSearchService service = new(scopeFactory, CreateMockPingService(), CreateConfigService());
 
         MachineSearchCriteria criteria = DefaultCriteria();
         criteria.Os = "NotAnOS";
@@ -600,7 +600,7 @@ public class MachineSearchServiceTests
         laptop.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(laptop);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, CreateMockPingService(), CreateConfigService(), CreateSqliteDialect());
+        MachineSearchService service = new(scopeFactory, CreateMockPingService(), CreateConfigService());
 
         MachineSearchCriteria criteria = DefaultCriteria();
         criteria.Type = "Laptop";
@@ -627,7 +627,7 @@ public class MachineSearchServiceTests
         }
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, CreateMockPingService(), CreateConfigService(), CreateSqliteDialect());
+        MachineSearchService service = new(scopeFactory, CreateMockPingService(), CreateConfigService());
 
         MachineSearchCriteria criteria = DefaultCriteria();
         criteria.PageSize = 2;
@@ -647,16 +647,16 @@ public class MachineSearchServiceTests
         using TestDatabaseFactory dbFactory = new();
         Machine low = TestDataBuilder.BuildMachine(tenantId: 1, hostname: "low-cpu");
         low.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(low);
-        MachineState lowState = TestDataBuilder.BuildMachineState(machineId: low.Id, cpuPercent: 10);
+        MachineStateSummary lowState = TestDataBuilder.BuildMachineStateSummary(machineId: low.Id, cpuPercent: 10);
         await dbFactory.Context.InsertAsync(lowState);
 
         Machine high = TestDataBuilder.BuildMachine(tenantId: 1, hostname: "high-cpu");
         high.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(high);
-        MachineState highState = TestDataBuilder.BuildMachineState(machineId: high.Id, cpuPercent: 90);
+        MachineStateSummary highState = TestDataBuilder.BuildMachineStateSummary(machineId: high.Id, cpuPercent: 90);
         await dbFactory.Context.InsertAsync(highState);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, CreateMockPingService(), CreateConfigService(), CreateSqliteDialect());
+        MachineSearchService service = new(scopeFactory, CreateMockPingService(), CreateConfigService());
 
         MachineSearchCriteria criteria = DefaultCriteria();
         criteria.SortBy = "cpu";
@@ -683,12 +683,12 @@ public class MachineSearchServiceTests
             machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
 
             // Seed each machine with Offline health status in the database.
-            MachineState state = TestDataBuilder.BuildMachineState(machineId: machine.Id, healthStatus: 3);
+            MachineStateSummary state = TestDataBuilder.BuildMachineStateSummary(machineId: machine.Id, healthStatus: 3);
             await dbFactory.Context.InsertAsync(state);
         }
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, CreateMockPingService(online: false), CreateConfigService(), CreateSqliteDialect());
+        MachineSearchService service = new(scopeFactory, CreateMockPingService(online: false), CreateConfigService());
 
         MachineSearchCriteria criteria = DefaultCriteria();
         criteria.HealthStatus = "offline";
@@ -710,11 +710,11 @@ public class MachineSearchServiceTests
         Machine machine = TestDataBuilder.BuildMachine(tenantId: 1);
         machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
 
-        MachineState state = TestDataBuilder.BuildMachineState(machineId: machine.Id, healthStatus: 0);
+        MachineStateSummary state = TestDataBuilder.BuildMachineStateSummary(machineId: machine.Id, healthStatus: 0);
         await dbFactory.Context.InsertAsync(state);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, CreateMockPingService(online: true), CreateConfigService(), CreateSqliteDialect());
+        MachineSearchService service = new(scopeFactory, CreateMockPingService(online: true), CreateConfigService());
 
         MachineSearchCriteria criteria = DefaultCriteria();
         criteria.SortBy = "status";
@@ -735,18 +735,18 @@ public class MachineSearchServiceTests
         using TestDatabaseFactory dbFactory = new();
         Machine noSecUpdates = TestDataBuilder.BuildMachine(tenantId: 1, hostname: "no-sec-updates");
         noSecUpdates.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(noSecUpdates);
-        MachineState noSecState = TestDataBuilder.BuildMachineState(machineId: noSecUpdates.Id);
+        MachineStateSummary noSecState = TestDataBuilder.BuildMachineStateSummary(machineId: noSecUpdates.Id);
         noSecState.SecurityUpdates = 0;
         await dbFactory.Context.InsertAsync(noSecState);
 
         Machine withSecUpdates = TestDataBuilder.BuildMachine(tenantId: 1, hostname: "with-sec-updates");
         withSecUpdates.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(withSecUpdates);
-        MachineState withSecState = TestDataBuilder.BuildMachineState(machineId: withSecUpdates.Id);
+        MachineStateSummary withSecState = TestDataBuilder.BuildMachineStateSummary(machineId: withSecUpdates.Id);
         withSecState.SecurityUpdates = 8;
         await dbFactory.Context.InsertAsync(withSecState);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, CreateMockPingService(), CreateConfigService(), CreateSqliteDialect());
+        MachineSearchService service = new(scopeFactory, CreateMockPingService(), CreateConfigService());
 
         MachineSearchCriteria criteria = DefaultCriteria();
         criteria.SecurityUpdatesMin = 5;
@@ -767,16 +767,16 @@ public class MachineSearchServiceTests
         using TestDatabaseFactory dbFactory = new();
         Machine lowMem = TestDataBuilder.BuildMachine(tenantId: 1, hostname: "low-mem");
         lowMem.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(lowMem);
-        MachineState lowState = TestDataBuilder.BuildMachineState(machineId: lowMem.Id, memoryPercent: 15);
+        MachineStateSummary lowState = TestDataBuilder.BuildMachineStateSummary(machineId: lowMem.Id, memoryPercent: 15);
         await dbFactory.Context.InsertAsync(lowState);
 
         Machine highMem = TestDataBuilder.BuildMachine(tenantId: 1, hostname: "high-mem");
         highMem.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(highMem);
-        MachineState highState = TestDataBuilder.BuildMachineState(machineId: highMem.Id, memoryPercent: 75);
+        MachineStateSummary highState = TestDataBuilder.BuildMachineStateSummary(machineId: highMem.Id, memoryPercent: 75);
         await dbFactory.Context.InsertAsync(highState);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, CreateMockPingService(), CreateConfigService(), CreateSqliteDialect());
+        MachineSearchService service = new(scopeFactory, CreateMockPingService(), CreateConfigService());
 
         MachineSearchCriteria criteria = DefaultCriteria();
         criteria.SortBy = "memory";
@@ -799,20 +799,20 @@ public class MachineSearchServiceTests
         using TestDatabaseFactory dbFactory = new();
         Machine healthyDisk = TestDataBuilder.BuildMachine(tenantId: 1, hostname: "healthy-disk");
         healthyDisk.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(healthyDisk);
-        MachineState healthyState = TestDataBuilder.BuildMachineState(machineId: healthyDisk.Id);
-        healthyState.HardwareHealth = """{"fans":[],"power_supplies":[],"temperatures":[],"disk_smart":[{"device":"/dev/sda","model":"SSD","health_status":"PASSED","temperature_celsius":30,"wearout_percent":10,"power_on_hours":1000}],"bmc_firmware_version":""}""";
+        MachineStateSummary healthyState = TestDataBuilder.BuildMachineStateSummary(machineId: healthyDisk.Id);
+        healthyState.HasDiskHealthIssue = false;
         await dbFactory.Context.InsertAsync(healthyState);
 
         Machine failedDisk = TestDataBuilder.BuildMachine(tenantId: 1, hostname: "failed-disk");
         failedDisk.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(failedDisk);
-        MachineState failedState = TestDataBuilder.BuildMachineState(machineId: failedDisk.Id);
-        failedState.HardwareHealth = """{"fans":[],"power_supplies":[],"temperatures":[],"disk_smart":[{"device":"/dev/sdb","model":"HDD","health_status":"FAILED","temperature_celsius":55,"wearout_percent":95,"power_on_hours":50000}],"bmc_firmware_version":""}""";
+        MachineStateSummary failedState = TestDataBuilder.BuildMachineStateSummary(machineId: failedDisk.Id);
+        failedState.HasDiskHealthIssue = true;
         await dbFactory.Context.InsertAsync(failedState);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
         // SQLite dialect forces the full-scan path for JSONB filters, which exercises
         // the in-memory ApplyPostEnrichmentFilters path for this filter.
-        MachineSearchService service = new(scopeFactory, CreateMockPingService(), CreateConfigService(), CreateSqliteDialect());
+        MachineSearchService service = new(scopeFactory, CreateMockPingService(), CreateConfigService());
 
         MachineSearchCriteria criteria = DefaultCriteria();
         criteria.HasDiskHealthIssue = false;
@@ -834,21 +834,21 @@ public class MachineSearchServiceTests
         using TestDatabaseFactory dbFactory = new();
         Machine goodHardware = TestDataBuilder.BuildMachine(tenantId: 1, hostname: "good-hardware");
         goodHardware.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(goodHardware);
-        MachineState goodState = TestDataBuilder.BuildMachineState(machineId: goodHardware.Id);
-        goodState.HardwareHealth = """{"fans":[{"name":"Fan0","rpm":1200}],"power_supplies":[{"name":"PSU0","status":"ok"}],"temperatures":[],"disk_smart":[],"bmc_firmware_version":""}""";
+        MachineStateSummary goodState = TestDataBuilder.BuildMachineStateSummary(machineId: goodHardware.Id);
+        goodState.HasHardwareIssue = false;
         await dbFactory.Context.InsertAsync(goodState);
 
         Machine badHardware = TestDataBuilder.BuildMachine(tenantId: 1, hostname: "bad-hardware");
         badHardware.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(badHardware);
-        MachineState badState = TestDataBuilder.BuildMachineState(machineId: badHardware.Id);
-        // Fan with RPM=0 signals a failed fan, triggering HasHardwareIssue=true.
-        badState.HardwareHealth = """{"fans":[{"name":"Fan0","rpm":0}],"power_supplies":[{"name":"PSU0","status":"ok"}],"temperatures":[],"disk_smart":[],"bmc_firmware_version":""}""";
+        MachineStateSummary badState = TestDataBuilder.BuildMachineStateSummary(machineId: badHardware.Id);
+        // Pre-computed flag indicating a hardware issue (e.g., fan failure or PSU fault).
+        badState.HasHardwareIssue = true;
         await dbFactory.Context.InsertAsync(badState);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
         // SQLite dialect forces the full-scan path for JSONB filters, exercising
         // the in-memory ApplyPostEnrichmentFilters path for this filter.
-        MachineSearchService service = new(scopeFactory, CreateMockPingService(), CreateConfigService(), CreateSqliteDialect());
+        MachineSearchService service = new(scopeFactory, CreateMockPingService(), CreateConfigService());
 
         MachineSearchCriteria criteria = DefaultCriteria();
         criteria.HasHardwareIssue = false;
@@ -868,18 +868,18 @@ public class MachineSearchServiceTests
         using TestDatabaseFactory dbFactory = new();
         Machine recentMachine = TestDataBuilder.BuildMachine(tenantId: 1, hostname: "recent");
         recentMachine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(recentMachine);
-        MachineState recentState = TestDataBuilder.BuildMachineState(
-            machineId: recentMachine.Id, lastPingAt: DateTimeOffset.UtcNow);
+        MachineStateSummary recentState = TestDataBuilder.BuildMachineStateSummary(
+            machineId: recentMachine.Id, lastSeenAt: DateTimeOffset.UtcNow);
         await dbFactory.Context.InsertAsync(recentState);
 
         Machine staleMachine = TestDataBuilder.BuildMachine(tenantId: 1, hostname: "stale");
         staleMachine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(staleMachine);
-        MachineState staleState = TestDataBuilder.BuildMachineState(
-            machineId: staleMachine.Id, lastPingAt: DateTimeOffset.UtcNow.AddHours(-3));
+        MachineStateSummary staleState = TestDataBuilder.BuildMachineStateSummary(
+            machineId: staleMachine.Id, lastSeenAt: DateTimeOffset.UtcNow.AddHours(-3));
         await dbFactory.Context.InsertAsync(staleState);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, CreateMockPingService(), CreateConfigService(), CreateSqliteDialect());
+        MachineSearchService service = new(scopeFactory, CreateMockPingService(), CreateConfigService());
 
         MachineSearchCriteria criteria = DefaultCriteria();
         criteria.LastSeenAfter = DateTimeOffset.UtcNow.AddHours(-1);
@@ -897,18 +897,18 @@ public class MachineSearchServiceTests
         using TestDatabaseFactory dbFactory = new();
         Machine recentMachine = TestDataBuilder.BuildMachine(tenantId: 1, hostname: "recent");
         recentMachine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(recentMachine);
-        MachineState recentState = TestDataBuilder.BuildMachineState(
-            machineId: recentMachine.Id, lastPingAt: DateTimeOffset.UtcNow);
+        MachineStateSummary recentState = TestDataBuilder.BuildMachineStateSummary(
+            machineId: recentMachine.Id, lastSeenAt: DateTimeOffset.UtcNow);
         await dbFactory.Context.InsertAsync(recentState);
 
         Machine staleMachine = TestDataBuilder.BuildMachine(tenantId: 1, hostname: "stale");
         staleMachine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(staleMachine);
-        MachineState staleState = TestDataBuilder.BuildMachineState(
-            machineId: staleMachine.Id, lastPingAt: DateTimeOffset.UtcNow.AddHours(-3));
+        MachineStateSummary staleState = TestDataBuilder.BuildMachineStateSummary(
+            machineId: staleMachine.Id, lastSeenAt: DateTimeOffset.UtcNow.AddHours(-3));
         await dbFactory.Context.InsertAsync(staleState);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, CreateMockPingService(), CreateConfigService(), CreateSqliteDialect());
+        MachineSearchService service = new(scopeFactory, CreateMockPingService(), CreateConfigService());
 
         MachineSearchCriteria criteria = DefaultCriteria();
         criteria.LastSeenBefore = DateTimeOffset.UtcNow.AddHours(-2);
@@ -926,11 +926,11 @@ public class MachineSearchServiceTests
         using TestDatabaseFactory dbFactory = new();
         Machine noPingMachine = TestDataBuilder.BuildMachine(tenantId: 1, hostname: "never-pinged");
         noPingMachine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(noPingMachine);
-        MachineState noPingState = TestDataBuilder.BuildMachineState(machineId: noPingMachine.Id);
+        MachineStateSummary noPingState = TestDataBuilder.BuildMachineStateSummary(machineId: noPingMachine.Id);
         await dbFactory.Context.InsertAsync(noPingState);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, CreateMockPingService(), CreateConfigService(), CreateSqliteDialect());
+        MachineSearchService service = new(scopeFactory, CreateMockPingService(), CreateConfigService());
 
         MachineSearchCriteria criteria = DefaultCriteria();
         criteria.LastSeenAfter = DateTimeOffset.UtcNow.AddHours(-1);
@@ -953,21 +953,21 @@ public class MachineSearchServiceTests
 
         Machine healthy = TestDataBuilder.BuildMachine(tenantId: 1, hostname: "healthy-host");
         healthy.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(healthy);
-        MachineState healthyState = TestDataBuilder.BuildMachineState(machineId: healthy.Id, healthStatus: 0);
+        MachineStateSummary healthyState = TestDataBuilder.BuildMachineStateSummary(machineId: healthy.Id, healthStatus: 0);
         await dbFactory.Context.InsertAsync(healthyState);
 
         Machine critical = TestDataBuilder.BuildMachine(tenantId: 1, hostname: "critical-host");
         critical.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(critical);
-        MachineState criticalState = TestDataBuilder.BuildMachineState(machineId: critical.Id, healthStatus: 2);
+        MachineStateSummary criticalState = TestDataBuilder.BuildMachineStateSummary(machineId: critical.Id, healthStatus: 2);
         await dbFactory.Context.InsertAsync(criticalState);
 
         Machine offline = TestDataBuilder.BuildMachine(tenantId: 1, hostname: "offline-host");
         offline.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(offline);
-        MachineState offlineState = TestDataBuilder.BuildMachineState(machineId: offline.Id, healthStatus: 3);
+        MachineStateSummary offlineState = TestDataBuilder.BuildMachineStateSummary(machineId: offline.Id, healthStatus: 3);
         await dbFactory.Context.InsertAsync(offlineState);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, CreateMockPingService(), CreateConfigService(), CreateSqliteDialect());
+        MachineSearchService service = new(scopeFactory, CreateMockPingService(), CreateConfigService());
 
         MachineSearchCriteria criteria = DefaultCriteria();
         criteria.SortBy = "status";
@@ -989,16 +989,16 @@ public class MachineSearchServiceTests
 
         Machine healthy = TestDataBuilder.BuildMachine(tenantId: 1, hostname: "healthy-host");
         healthy.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(healthy);
-        MachineState healthyState = TestDataBuilder.BuildMachineState(machineId: healthy.Id, healthStatus: 0);
+        MachineStateSummary healthyState = TestDataBuilder.BuildMachineStateSummary(machineId: healthy.Id, healthStatus: 0);
         await dbFactory.Context.InsertAsync(healthyState);
 
         Machine offline = TestDataBuilder.BuildMachine(tenantId: 1, hostname: "offline-host");
         offline.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(offline);
-        MachineState offlineState = TestDataBuilder.BuildMachineState(machineId: offline.Id, healthStatus: 3);
+        MachineStateSummary offlineState = TestDataBuilder.BuildMachineStateSummary(machineId: offline.Id, healthStatus: 3);
         await dbFactory.Context.InsertAsync(offlineState);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, CreateMockPingService(), CreateConfigService(), CreateSqliteDialect());
+        MachineSearchService service = new(scopeFactory, CreateMockPingService(), CreateConfigService());
 
         MachineSearchCriteria criteria = DefaultCriteria();
         criteria.SortBy = "status";
@@ -1021,21 +1021,21 @@ public class MachineSearchServiceTests
 
         Machine healthyMatch = TestDataBuilder.BuildMachine(tenantId: 1, hostname: "web-server");
         healthyMatch.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(healthyMatch);
-        MachineState healthyState = TestDataBuilder.BuildMachineState(machineId: healthyMatch.Id, healthStatus: 0);
+        MachineStateSummary healthyState = TestDataBuilder.BuildMachineStateSummary(machineId: healthyMatch.Id, healthStatus: 0);
         await dbFactory.Context.InsertAsync(healthyState);
 
         Machine offlineMatch = TestDataBuilder.BuildMachine(tenantId: 1, hostname: "web-cache");
         offlineMatch.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(offlineMatch);
-        MachineState offlineState = TestDataBuilder.BuildMachineState(machineId: offlineMatch.Id, healthStatus: 3);
+        MachineStateSummary offlineState = TestDataBuilder.BuildMachineStateSummary(machineId: offlineMatch.Id, healthStatus: 3);
         await dbFactory.Context.InsertAsync(offlineState);
 
         Machine healthyNoMatch = TestDataBuilder.BuildMachine(tenantId: 1, hostname: "db-primary");
         healthyNoMatch.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(healthyNoMatch);
-        MachineState healthyNoState = TestDataBuilder.BuildMachineState(machineId: healthyNoMatch.Id, healthStatus: 0);
+        MachineStateSummary healthyNoState = TestDataBuilder.BuildMachineStateSummary(machineId: healthyNoMatch.Id, healthStatus: 0);
         await dbFactory.Context.InsertAsync(healthyNoState);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, CreateMockPingService(), CreateConfigService(), CreateSqliteDialect());
+        MachineSearchService service = new(scopeFactory, CreateMockPingService(), CreateConfigService());
 
         MachineSearchCriteria criteria = DefaultCriteria();
         criteria.HealthStatus = "healthy";

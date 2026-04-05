@@ -8,11 +8,13 @@ using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Server.Options;
 using Framlux.FleetManagement.Server.Services.Billing;
 using Framlux.FleetManagement.Server.Services.Handlers;
+using Framlux.FleetManagement.Server.Services.Infrastructure;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using NSubstitute;
 using NSubstitute.ExceptionExtensions;
+using StackExchange.Redis;
 
 namespace Framlux.FleetManagement.Test.Services;
 
@@ -54,7 +56,11 @@ public sealed class StripeSyncServiceTests
             StripeTeamPriceId = teamPriceId
         });
 
-        StripeSyncService service = new(scopeFactory, billingClient, billingOptions, logger);
+        IDistributedLock distributedLock = Substitute.For<IDistributedLock>();
+        distributedLock.TryAcquireAsync(Arg.Any<string>(), Arg.Any<TimeSpan>())
+            .Returns(Task.FromResult<LockHandle?>(new LockHandle(Substitute.For<IDatabase>(), "test-key", "test-value")));
+
+        StripeSyncService service = new(scopeFactory, billingClient, billingOptions, distributedLock, logger);
 
         return (service, dbCache, billingClient, webhookHandler, subscriptionService, logger);
     }

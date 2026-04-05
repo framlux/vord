@@ -16,7 +16,7 @@ public class HealthComputationTests
     [Test]
     public async Task Offline_WhenNotOnline()
     {
-        MachineState state = new() { MachineId = 1, CpuUsagePercent = 10, MemoryUsagePercent = 10 };
+        MachineStateSummary state = new() { MachineId = 1, CpuUsagePercent = 10, MemoryUsagePercent = 10 };
 
         MachineHealthStatus result = HealthComputer.Compute(state, isOnline: false);
 
@@ -26,7 +26,7 @@ public class HealthComputationTests
     [Test]
     public async Task Critical_WhenCpuOver95()
     {
-        MachineState state = new() { MachineId = 1, CpuUsagePercent = 96, MemoryUsagePercent = 10 };
+        MachineStateSummary state = new() { MachineId = 1, CpuUsagePercent = 96, MemoryUsagePercent = 10 };
 
         MachineHealthStatus result = HealthComputer.Compute(state, isOnline: true);
 
@@ -36,7 +36,7 @@ public class HealthComputationTests
     [Test]
     public async Task Critical_WhenMemoryOver95()
     {
-        MachineState state = new() { MachineId = 1, CpuUsagePercent = 10, MemoryUsagePercent = 96 };
+        MachineStateSummary state = new() { MachineId = 1, CpuUsagePercent = 10, MemoryUsagePercent = 96 };
 
         MachineHealthStatus result = HealthComputer.Compute(state, isOnline: true);
 
@@ -46,7 +46,7 @@ public class HealthComputationTests
     [Test]
     public async Task Warning_WhenCpuOver80()
     {
-        MachineState state = new() { MachineId = 1, CpuUsagePercent = 85, MemoryUsagePercent = 50 };
+        MachineStateSummary state = new() { MachineId = 1, CpuUsagePercent = 85, MemoryUsagePercent = 50 };
 
         MachineHealthStatus result = HealthComputer.Compute(state, isOnline: true);
 
@@ -56,7 +56,7 @@ public class HealthComputationTests
     [Test]
     public async Task Warning_WhenMemoryOver80()
     {
-        MachineState state = new() { MachineId = 1, CpuUsagePercent = 50, MemoryUsagePercent = 85 };
+        MachineStateSummary state = new() { MachineId = 1, CpuUsagePercent = 50, MemoryUsagePercent = 85 };
 
         MachineHealthStatus result = HealthComputer.Compute(state, isOnline: true);
 
@@ -66,7 +66,7 @@ public class HealthComputationTests
     [Test]
     public async Task Healthy_WhenNominal()
     {
-        MachineState state = new() { MachineId = 1, CpuUsagePercent = 30, MemoryUsagePercent = 45 };
+        MachineStateSummary state = new() { MachineId = 1, CpuUsagePercent = 30, MemoryUsagePercent = 45 };
 
         MachineHealthStatus result = HealthComputer.Compute(state, isOnline: true);
 
@@ -76,7 +76,7 @@ public class HealthComputationTests
     [Test]
     public async Task Critical_WhenFailedServices()
     {
-        MachineState state = new() { MachineId = 1, CpuUsagePercent = 10, MemoryUsagePercent = 10, FailedServices = 2 };
+        MachineStateSummary state = new() { MachineId = 1, CpuUsagePercent = 10, MemoryUsagePercent = 10, FailedServices = 2 };
 
         MachineHealthStatus result = HealthComputer.Compute(state, isOnline: true);
 
@@ -86,7 +86,7 @@ public class HealthComputationTests
     [Test]
     public async Task Healthy_WhenNullMetrics()
     {
-        MachineState state = new() { MachineId = 1 };
+        MachineStateSummary state = new() { MachineId = 1 };
 
         MachineHealthStatus result = HealthComputer.Compute(state, isOnline: true);
 

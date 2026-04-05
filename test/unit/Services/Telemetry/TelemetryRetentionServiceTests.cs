@@ -38,6 +38,7 @@ public sealed class TelemetryRetentionServiceTests
         await dbFactory.Context.InsertAsync(new MachineTelemetry
         {
             MachineId = machine.Id,
+            TenantId = 1,
             TelemetryType = 1,
             Payload = "{}",
             ReceivedAt = DateTimeOffset.UtcNow.AddDays(-10),
@@ -47,6 +48,7 @@ public sealed class TelemetryRetentionServiceTests
         await dbFactory.Context.InsertAsync(new MachineTelemetry
         {
             MachineId = machine.Id,
+            TenantId = 1,
             TelemetryType = 1,
             Payload = "{}",
             ReceivedAt = DateTimeOffset.UtcNow.AddDays(-1),
@@ -133,6 +135,7 @@ public sealed class TelemetryRetentionServiceTests
         await dbFactory.Context.InsertAsync(new MachineTelemetry
         {
             MachineId = machine1.Id,
+            TenantId = 1,
             TelemetryType = 1,
             Payload = "{}",
             ReceivedAt = DateTimeOffset.UtcNow.AddDays(-5),
@@ -142,6 +145,7 @@ public sealed class TelemetryRetentionServiceTests
         await dbFactory.Context.InsertAsync(new MachineTelemetry
         {
             MachineId = machine2.Id,
+            TenantId = 2,
             TelemetryType = 1,
             Payload = "{}",
             ReceivedAt = DateTimeOffset.UtcNow.AddDays(-5),
@@ -208,6 +212,7 @@ public sealed class TelemetryRetentionServiceTests
         await dbFactory.Context.InsertAsync(new MachineTelemetry
         {
             MachineId = machine.Id,
+            TenantId = 1,
             TelemetryType = 1,
             Payload = "{}",
             ReceivedAt = DateTimeOffset.UtcNow.AddHours(-6),
@@ -217,6 +222,7 @@ public sealed class TelemetryRetentionServiceTests
         await dbFactory.Context.InsertAsync(new MachineTelemetry
         {
             MachineId = machine.Id,
+            TenantId = 1,
             TelemetryType = 2,
             Payload = "{}",
             ReceivedAt = DateTimeOffset.UtcNow.AddHours(-12),
@@ -256,6 +262,7 @@ public sealed class TelemetryRetentionServiceTests
         await dbFactory.Context.InsertAsync(new MachineTelemetry
         {
             MachineId = machine.Id,
+            TenantId = 1,
             TelemetryType = 1,
             Payload = "{}",
             ReceivedAt = DateTimeOffset.UtcNow.AddDays(-10),
@@ -303,6 +310,7 @@ public sealed class TelemetryRetentionServiceTests
         await dbFactory.Context.InsertAsync(new MachineTelemetry
         {
             MachineId = machine1.Id,
+            TenantId = 1,
             TelemetryType = 1,
             Payload = "{}",
             ReceivedAt = DateTimeOffset.UtcNow.AddDays(-5),
@@ -312,6 +320,7 @@ public sealed class TelemetryRetentionServiceTests
         await dbFactory.Context.InsertAsync(new MachineTelemetry
         {
             MachineId = machine2.Id,
+            TenantId = 2,
             TelemetryType = 1,
             Payload = "{}",
             ReceivedAt = DateTimeOffset.UtcNow.AddDays(-5),
@@ -352,6 +361,7 @@ public sealed class TelemetryRetentionServiceTests
         await dbFactory.Context.InsertAsync(new MachineTelemetry
         {
             MachineId = machine.Id,
+            TenantId = 1,
             TelemetryType = 1,
             Payload = "{}",
             ReceivedAt = DateTimeOffset.UtcNow.AddDays(-10),
@@ -407,6 +417,7 @@ public sealed class TelemetryRetentionServiceTests
         await dbFactory.Context.InsertAsync(new MachineTelemetry
         {
             MachineId = machine.Id,
+            TenantId = 1,
             TelemetryType = 1,
             Payload = "{}",
             ReceivedAt = DateTimeOffset.UtcNow.AddMinutes(-1),

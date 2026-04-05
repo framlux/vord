@@ -21,10 +21,8 @@ public class RedisMachinePingServiceTests
         IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
         IDatabase redisDb = Substitute.For<IDatabase>();
         redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(redisDb);
-        IServiceScopeFactory scopeFactory = Substitute.For<IServiceScopeFactory>();
-        ISqlDialect dialect = Substitute.For<ISqlDialect>();
         NullLogger<RedisMachinePingService> logger = new();
-        RedisMachinePingService service = new(redis, scopeFactory, dialect, logger);
+        RedisMachinePingService service = new(redis, logger);
 
         return (service, redisDb);
     }
@@ -227,10 +225,8 @@ public class RedisMachinePingServiceTests
         IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
         IDatabase redisDb = Substitute.For<IDatabase>();
         redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(redisDb);
-        IServiceScopeFactory scopeFactory = Substitute.For<IServiceScopeFactory>();
-        ISqlDialect dialect = Substitute.For<ISqlDialect>();
         NullLogger<RedisMachinePingService> logger = new();
-        RedisMachinePingService service = new(redis, scopeFactory, dialect, logger);
+        RedisMachinePingService service = new(redis, logger);
 
         IBatch batch = Substitute.For<IBatch>();
         redisDb.CreateBatch(Arg.Any<object>()).Returns(batch);
@@ -274,10 +270,8 @@ public class RedisMachinePingServiceTests
         IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
         IDatabase redisDb = Substitute.For<IDatabase>();
         redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(redisDb);
-        IServiceScopeFactory scopeFactory = Substitute.For<IServiceScopeFactory>();
-        ISqlDialect dialect = Substitute.For<ISqlDialect>();
         NullLogger<RedisMachinePingService> logger = new();
-        RedisMachinePingService service = new(redis, scopeFactory, dialect, logger);
+        RedisMachinePingService service = new(redis, logger);
 
         IBatch batch = Substitute.For<IBatch>();
         redisDb.CreateBatch(Arg.Any<object>()).Returns(batch);
@@ -308,10 +302,8 @@ public class RedisMachinePingServiceTests
         IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
         IDatabase redisDb = Substitute.For<IDatabase>();
         redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(redisDb);
-        IServiceScopeFactory scopeFactory = Substitute.For<IServiceScopeFactory>();
-        ISqlDialect dialect = Substitute.For<ISqlDialect>();
         NullLogger<RedisMachinePingService> logger = new();
-        RedisMachinePingService service = new(redis, scopeFactory, dialect, logger);
+        RedisMachinePingService service = new(redis, logger);
 
         IBatch batch = Substitute.For<IBatch>();
         redisDb.CreateBatch(Arg.Any<object>()).Returns(batch);
@@ -327,10 +319,8 @@ public class RedisMachinePingServiceTests
         IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
         IDatabase redisDb = Substitute.For<IDatabase>();
         redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(redisDb);
-        IServiceScopeFactory scopeFactory = Substitute.For<IServiceScopeFactory>();
-        ISqlDialect dialect = Substitute.For<ISqlDialect>();
         NullLogger<RedisMachinePingService> logger = new();
-        RedisMachinePingService service = new(redis, scopeFactory, dialect, logger);
+        RedisMachinePingService service = new(redis, logger);
 
         IBatch batch = Substitute.For<IBatch>();
         redisDb.CreateBatch(Arg.Any<object>()).Returns(batch);

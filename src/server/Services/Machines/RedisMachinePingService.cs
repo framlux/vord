@@ -2,24 +2,20 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
-using Framlux.FleetManagement.Database;
 using Framlux.FleetManagement.Server.Services.Infrastructure;
-using LinqToDB.Data;
 using StackExchange.Redis;
 
 namespace Framlux.FleetManagement.Server.Services.Machines;
 
 /// <summary>
 /// Redis-backed implementation of <see cref="IMachinePingService"/> using sorted sets.
-/// Also updates MachineState.LastPingAt for SQL-level online/offline filtering.
+/// LastSeenAt on MachineStateSummary is updated by the streaming worker, not here.
 /// </summary>
 public sealed class RedisMachinePingService : IMachinePingService
 {
     private static readonly TimeSpan RetentionWindow = TimeSpan.FromDays(7);
 
     private readonly IConnectionMultiplexer _redis;
-    private readonly IServiceScopeFactory _scopeFactory;
-    private readonly ISqlDialect _dialect;
     private readonly ILogger<RedisMachinePingService> _logger;
 
     /// <summary>
@@ -27,13 +23,9 @@ public sealed class RedisMachinePingService : IMachinePingService
     /// </summary>
     public RedisMachinePingService(
         IConnectionMultiplexer redis,
-        IServiceScopeFactory scopeFactory,
-        ISqlDialect dialect,
         ILogger<RedisMachinePingService> logger)
     {
         _redis = redis ?? throw new ArgumentNullException(nameof(redis));
-        _scopeFactory = scopeFactory ?? throw new ArgumentNullException(nameof(scopeFactory));
-        _dialect = dialect ?? throw new ArgumentNullException(nameof(dialect));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -53,23 +45,6 @@ public sealed class RedisMachinePingService : IMachinePingService
             double cutoffMs = now.Subtract(RetentionWindow).ToUnixTimeMilliseconds();
             await db.SortedSetRemoveRangeByScoreAsync(key, double.NegativeInfinity, cutoffMs);
         }, logger: _logger, operationName: "RecordPing");
-
-        // Also update MachineState.LastPingAt for SQL-level online/offline filtering.
-        try
-        {
-            using IServiceScope scope = _scopeFactory.CreateScope();
-            DatabaseContext db = scope.ServiceProvider.GetRequiredService<DatabaseContext>();
-            await db.ExecuteAsync(
-                _dialect.UpdateLastPing,
-                CancellationToken.None,
-                new DataParameter("machineId", machineId),
-                new DataParameter("ts", now));
-        }
-        catch (Exception ex)
-        {
-            // Best effort — Redis is the authoritative ping store, MachineState is for query optimization.
-            _logger.LogWarning(ex, "Failed to update MachineState.LastPingAt for machine {MachineId}", machineId);
-        }
     }
 
     /// <inheritdoc/>

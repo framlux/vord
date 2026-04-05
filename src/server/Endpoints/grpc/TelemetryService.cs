@@ -47,7 +47,6 @@ public sealed class TelemetryService : Telemetry.TelemetryBase
     private static readonly TimeSpan MaxStreamDuration = TimeSpan.FromMinutes(5);
 
     private readonly IServiceScopeFactory _scopeFactory;
-    private readonly IMachineStateQueueService _stateQueue;
     private readonly ITelemetryDeduplicationService _dedupService;
     private readonly ISubscriptionService _subscriptionService;
     private readonly ILogger<TelemetryService> _logger;
@@ -57,13 +56,11 @@ public sealed class TelemetryService : Telemetry.TelemetryBase
     /// </summary>
     public TelemetryService(
         IServiceScopeFactory scopeFactory,
-        IMachineStateQueueService stateQueue,
         ITelemetryDeduplicationService dedupService,
         ISubscriptionService subscriptionService,
         ILogger<TelemetryService> logger)
     {
         _scopeFactory = scopeFactory;
-        _stateQueue = stateQueue;
         _dedupService = dedupService;
         _subscriptionService = subscriptionService;
         _logger = logger;
@@ -86,6 +83,8 @@ public sealed class TelemetryService : Telemetry.TelemetryBase
 
             return;
         }
+
+        int tenantId = ExtractTenantId(context);
 
         if (await IsSubscriptionActiveAsync(context, context.CancellationToken) == false)
         {
@@ -112,7 +111,7 @@ public sealed class TelemetryService : Telemetry.TelemetryBase
                     break;
                 }
 
-                TelemetryAck ack = await ProcessEnvelopeAsync(machineId, envelope, linkedCts.Token);
+                TelemetryAck ack = await ProcessEnvelopeAsync(machineId, tenantId, envelope, linkedCts.Token);
                 await responseStream.WriteAsync(ack, linkedCts.Token);
             }
         }
@@ -130,6 +129,7 @@ public sealed class TelemetryService : Telemetry.TelemetryBase
     public override async Task<TelemetryAck> SubmitTelemetry(TelemetryEnvelope request, ServerCallContext context)
     {
         long machineId = ExtractMachineId(context);
+        int tenantId = ExtractTenantId(context);
         if (machineId <= 0)
         {
             string message = machineId == -1 ? "Machine ID mismatch between API key and header" : "Could not determine machine identity";
@@ -152,11 +152,12 @@ public sealed class TelemetryService : Telemetry.TelemetryBase
             };
         }
 
-        return await ProcessEnvelopeAsync(machineId, request, context.CancellationToken);
+        return await ProcessEnvelopeAsync(machineId, tenantId, request, context.CancellationToken);
     }
 
     private async Task<TelemetryAck> ProcessEnvelopeAsync(
         long machineId,
+        int tenantId,
         TelemetryEnvelope envelope,
         CancellationToken ct)
     {
@@ -216,6 +217,7 @@ public sealed class TelemetryService : Telemetry.TelemetryBase
                 List<MachineTelemetry> rows = newItems.Select(n => new MachineTelemetry
                 {
                     MachineId = machineId,
+                    TenantId = tenantId,
                     TelemetryType = n.Type,
                     Payload = n.Payload,
                     ReceivedAt = receivedAt,
@@ -242,25 +244,6 @@ public sealed class TelemetryService : Telemetry.TelemetryBase
                             _logger.LogDebug("Skipping duplicate telemetry event {EventId}", row.SourceEventId);
                         }
                     }
-                }
-
-                // Publish state updates to Redis Stream for async batch processing.
-                // If Redis is unavailable, the reconciliation service will catch up later.
-                try
-                {
-                    List<StateUpdateMessage> stateUpdates = newItems.Select(n => new StateUpdateMessage
-                    {
-                        TelemetryType = n.Type,
-                        Payload = n.Payload,
-                        ReceivedAt = receivedAt,
-                    }).ToList();
-                    await _stateQueue.PublishAsync(machineId, stateUpdates, ct);
-                }
-                catch (Exception stateEx)
-                {
-                    _logger.LogWarning(stateEx,
-                        "Failed to publish state update for machine {MachineId} batch {BatchId}. Reconciliation service will catch up.",
-                        machineId, envelope.BatchId);
                 }
 
                 foreach ((TelemetryItem item, short _, string _) in newItems)
@@ -329,6 +312,17 @@ public sealed class TelemetryService : Telemetry.TelemetryBase
         Database.Models.TenantSubscription? subscription = await _subscriptionService.GetSubscriptionForTenantAsync(tenantId, ct);
 
         return subscription is not null && subscription.Status == Database.Enums.SubscriptionStatus.Active;
+    }
+
+    private static int ExtractTenantId(ServerCallContext context)
+    {
+        System.Security.Claims.Claim? tenantIdClaim = context.GetHttpContext().User.FindFirst("TenantId");
+        if ((tenantIdClaim is not null) && int.TryParse(tenantIdClaim.Value, out int tenantId))
+        {
+            return tenantId;
+        }
+
+        return 0;
     }
 
     private long ExtractMachineId(ServerCallContext context)

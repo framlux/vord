@@ -10,8 +10,6 @@ namespace Framlux.FleetManagement.Server.Services.Infrastructure;
 /// </summary>
 public static class RetryHelper
 {
-    private static readonly Random Jitter = new();
-
     /// <summary>
     /// Executes an async action with retry on transient failures.
     /// Uses exponential backoff with jitter: base delay * 2^attempt + random jitter.
@@ -44,7 +42,7 @@ public static class RetryHelper
             }
             catch (Exception ex) when (attempt < maxRetries)
             {
-                int delayMs = (baseDelayMs * (1 << attempt)) + Jitter.Next(0, 100);
+                int delayMs = (baseDelayMs * (1 << attempt)) + Random.Shared.Next(0, 100);
                 logger?.LogWarning(ex, "Transient failure in {Operation}, retrying in {Delay}ms (attempt {Attempt}/{MaxRetries})",
                     operationName, delayMs, attempt + 1, maxRetries);
                 await Task.Delay(delayMs, ct);
@@ -83,7 +81,7 @@ public static class RetryHelper
             }
             catch (Exception ex) when (attempt < maxRetries)
             {
-                int delayMs = (baseDelayMs * (1 << attempt)) + Jitter.Next(0, 100);
+                int delayMs = (baseDelayMs * (1 << attempt)) + Random.Shared.Next(0, 100);
                 logger?.LogWarning(ex, "Transient failure in {Operation}, retrying in {Delay}ms (attempt {Attempt}/{MaxRetries})",
                     operationName, delayMs, attempt + 1, maxRetries);
                 await Task.Delay(delayMs, ct);

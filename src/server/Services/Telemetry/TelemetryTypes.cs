@@ -6,7 +6,7 @@ namespace Framlux.FleetManagement.Server.Services.Telemetry;
 
 /// <summary>
 /// Telemetry type identifiers matching the Go agent's db/models.go constants.
-/// Used in <see cref="Machines.MachineStateUpdater"/> and telemetry processing to avoid magic numbers.
+/// Used in <see cref="Machines.MachineStateStreamingService"/> and telemetry processing to avoid magic numbers.
 /// </summary>
 public static class TelemetryTypeIds
 {

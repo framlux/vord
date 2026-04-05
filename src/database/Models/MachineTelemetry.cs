@@ -27,6 +27,12 @@ public sealed class MachineTelemetry
     public required long MachineId { get; set; }
 
     /// <summary>
+    /// The tenant that owns the machine. Denormalized for retention queries and partition readiness.
+    /// </summary>
+    [Column("TenantId"), NotNull]
+    public required int TenantId { get; set; }
+
+    /// <summary>
     /// The type of telemetry data (maps to TelemetryQueueItemTypes).
     /// </summary>
     [Column("TelemetryType"), NotNull]

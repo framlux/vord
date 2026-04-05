@@ -159,12 +159,14 @@ public static class TestDataBuilder
     /// </summary>
     public static MachineTelemetry BuildMachineTelemetry(
         long machineId = 1,
+        int tenantId = 1,
         short telemetryType = 1,
         string? payload = null)
     {
         return new MachineTelemetry
         {
             MachineId = machineId,
+            TenantId = tenantId,
             TelemetryType = telemetryType,
             Payload = payload ?? """{"cpu": 42}""",
             ReceivedAt = DateTimeOffset.UtcNow,
@@ -289,24 +291,29 @@ public static class TestDataBuilder
     }
 
     /// <summary>
-    /// Builds a <see cref="MachineState"/> with sensible defaults.
+    /// Builds a <see cref="MachineStateSummary"/> with sensible defaults.
     /// </summary>
-    public static MachineState BuildMachineState(
+    public static MachineStateSummary BuildMachineStateSummary(
         long machineId = 1,
+        int tenantId = 1,
+        string? name = null,
         int? cpuPercent = null,
         int? memoryPercent = null,
         short healthStatus = 0,
-        DateTimeOffset? lastPingAt = null)
+        DateTimeOffset? lastSeenAt = null)
     {
-        return new MachineState
+        return new MachineStateSummary
         {
             MachineId = machineId,
+            TenantId = tenantId,
+            Name = name ?? $"machine-{machineId}",
+            OperatingSystem = 0,
+            MachineType = 0,
             Hostname = $"host-{machineId}",
             CpuUsagePercent = cpuPercent,
             MemoryUsagePercent = memoryPercent,
             HealthStatus = healthStatus,
-            LastPingAt = lastPingAt,
-            LastTelemetryAt = DateTimeOffset.UtcNow
+            LastSeenAt = lastSeenAt,
         };
     }
 

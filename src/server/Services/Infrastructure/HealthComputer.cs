@@ -4,41 +4,32 @@
 
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Server.Endpoints.Web.Models.Machines;
-using Framlux.FleetManagement.Server.Endpoints.Web.Models.Telemetry;
-using System.Text.Json;
 
 namespace Framlux.FleetManagement.Server.Services.Infrastructure;
 
 /// <summary>
-/// Computes machine health status from MachineState metrics.
+/// Computes machine health status from MachineStateSummary pre-computed scalars.
 /// Extracted for testability.
 /// </summary>
 public static class HealthComputer
 {
 
     /// <summary>
-    /// Computes the health status for a machine based on its state and online status.
+    /// Computes the health status for a machine based on its summary state and online status.
+    /// Uses pre-computed scalar fields (MaxDiskUsagePercent, HasDiskHealthIssue, HasHardwareIssue)
+    /// instead of parsing JSONB columns.
     /// </summary>
-    /// <param name="state">The current machine state containing metrics.</param>
+    /// <param name="state">The current machine state summary containing pre-computed metrics.</param>
     /// <param name="isOnline">Whether the machine is currently online.</param>
     /// <returns>The computed health status.</returns>
-    public static MachineHealthStatus Compute(MachineState state, bool isOnline)
+    public static MachineHealthStatus Compute(MachineStateSummary state, bool isOnline)
     {
         if (isOnline == false)
         {
             return MachineHealthStatus.Offline;
         }
 
-        // Deserialize JSON columns once for both critical and warning checks.
-        List<DiskUsageEntryDto>? disks = state.DiskUsages is not null
-            ? TryDeserializeJson<List<DiskUsageEntryDto>>(state.DiskUsages)
-            : null;
-
-        HardwareHealthPayload? hw = state.HardwareHealth is not null
-            ? TryDeserializeJson<HardwareHealthPayload>(state.HardwareHealth)
-            : null;
-
-        // Critical checks.
+        // Critical checks using pre-computed scalar fields.
         if ((state.CpuUsagePercent >= 95) || (state.MemoryUsagePercent >= 95))
         {
             return MachineHealthStatus.Critical;
@@ -49,27 +40,19 @@ public static class HealthComputer
             return MachineHealthStatus.Critical;
         }
 
-        if (disks?.Exists(d => d.UsagePercent >= 95) == true)
+        if (state.MaxDiskUsagePercent >= 95)
         {
             return MachineHealthStatus.Critical;
         }
 
-        if (hw is not null)
+        if (state.HasDiskHealthIssue == true)
         {
-            if (hw.DiskSmart.Exists(d => string.Equals(d.HealthStatus, "FAILED", StringComparison.OrdinalIgnoreCase)))
-            {
-                return MachineHealthStatus.Critical;
-            }
+            return MachineHealthStatus.Critical;
+        }
 
-            if (hw.Fans.Exists(f => f.Rpm == 0))
-            {
-                return MachineHealthStatus.Critical;
-            }
-
-            if (hw.PowerSupplies.Exists(p => string.Equals(p.Status, "ok", StringComparison.OrdinalIgnoreCase) == false))
-            {
-                return MachineHealthStatus.Critical;
-            }
+        if (state.HasHardwareIssue == true)
+        {
+            return MachineHealthStatus.Critical;
         }
 
         // Warning checks.
@@ -78,31 +61,11 @@ public static class HealthComputer
             return MachineHealthStatus.Warning;
         }
 
-        if (disks?.Exists(d => d.UsagePercent >= 80) == true)
+        if (state.MaxDiskUsagePercent >= 80)
         {
             return MachineHealthStatus.Warning;
         }
 
-        if (hw is not null)
-        {
-            if (hw.DiskSmart.Exists(d => (d.WearoutPercent > 80) || (d.TemperatureCelsius >= 55)))
-            {
-                return MachineHealthStatus.Warning;
-            }
-        }
-
         return MachineHealthStatus.Healthy;
-    }
-
-    private static T? TryDeserializeJson<T>(string json) where T : class
-    {
-        try
-        {
-            return JsonSerializer.Deserialize<T>(json, JsonDefaults.SnakeCase);
-        }
-        catch
-        {
-            return null;
-        }
     }
 }

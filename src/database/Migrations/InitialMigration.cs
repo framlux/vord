@@ -69,6 +69,7 @@ public sealed class InitialMigration : Migration
             "CREATE UNIQUE INDEX \"IX_Tenants_Name\" ON \"Tenants\" (\"Name\" COLLATE NOCASE)");
 
         Create.Table(TableNames.UserTenantRoles)
+            .WithColumn("Id").AsInt32().PrimaryKey().Identity().NotNullable()
             .WithColumn("UserId").AsInt32().NotNullable().ForeignKey(TableNames.Users, "Id")
             .WithColumn("AssignedTenantId").AsInt32().NotNullable().ForeignKey(TableNames.Tenants, "Id")
             .WithColumn("Role").AsInt32().NotNullable()
@@ -78,12 +79,15 @@ public sealed class InitialMigration : Migration
             .WithColumn("DisabledByUserId").AsInt32().Nullable().ForeignKey(TableNames.Users, "Id")
             .WithColumn("DisabledAt").AsDateTimeOffset().Nullable();
 
-        // SQLite does not support ALTER TABLE ADD CONSTRAINT for primary keys.
-        // On SQLite, the table works without the explicit composite PK constraint.
-        IfDatabase("Postgres")
-            .Create.PrimaryKey("PK_UserTenantRoles")
-            .OnTable(TableNames.UserTenantRoles)
-            .Columns("UserId", "AssignedTenantId");
+        // Ensure only one active role per user-tenant pair while preserving role change history.
+        IfDatabase("Postgres").Execute.Sql(
+            @"CREATE UNIQUE INDEX ""IX_UserTenantRoles_Active""
+              ON ""UserTenantRoles"" (""UserId"", ""AssignedTenantId"")
+              WHERE ""IsActive"" = true");
+        IfDatabase("SQLite").Execute.Sql(
+            @"CREATE UNIQUE INDEX ""IX_UserTenantRoles_Active""
+              ON ""UserTenantRoles"" (""UserId"", ""AssignedTenantId"")
+              WHERE ""IsActive"" = 1");
 
         Create.Table(TableNames.Machines)
             .WithColumn("Id").AsInt64().PrimaryKey().Identity().NotNullable()
@@ -149,6 +153,7 @@ public sealed class InitialMigration : Migration
         Create.Table(TableNames.MachineTelemetry)
             .WithColumn("Id").AsInt64().PrimaryKey().Identity().NotNullable()
             .WithColumn("MachineId").AsInt64().NotNullable().ForeignKey(TableNames.Machines, "Id").Indexed()
+            .WithColumn("TenantId").AsInt32().NotNullable().ForeignKey(TableNames.Tenants, "Id")
             .WithColumn("TelemetryType").AsInt16().NotNullable().Indexed()
             .WithColumn("Payload").AsString().NotNullable()
             .WithColumn("ReceivedAt").AsDateTimeOffset().NotNullable().Indexed()
@@ -174,86 +179,95 @@ public sealed class InitialMigration : Migration
             .OnColumn("Email").Ascending()
             .OnColumn("TenantId").Ascending();
 
-        Create.Table(TableNames.MachineState)
+        // Slim summary table for fleet-level queries (search, overview, dashboard, alerts).
+        // Row INSERT'd at machine registration; pure UPDATEs thereafter by the streaming worker.
+        Create.Table(TableNames.MachineStateSummary)
             .WithColumn("MachineId").AsInt64().PrimaryKey().NotNullable().ForeignKey(TableNames.Machines, "Id")
-
-            // SystemInfo (type=1)
+            .WithColumn("TenantId").AsInt32().NotNullable().ForeignKey(TableNames.Tenants, "Id")
+            .WithColumn("Name").AsString(250).NotNullable()
+            .WithColumn("OperatingSystem").AsByte().NotNullable()
+            .WithColumn("MachineType").AsByte().NotNullable()
             .WithColumn("Hostname").AsString(255).Nullable()
-            .WithColumn("HardwareVendor").AsString(255).Nullable()
             .WithColumn("HardwareModel").AsString(255).Nullable()
+            .WithColumn("IpAddresses").AsString().Nullable()
+            .WithColumn("OsName").AsString(255).Nullable()
+            .WithColumn("OsVersion").AsString(64).Nullable()
+            .WithColumn("CpuUsagePercent").AsInt32().Nullable()
+            .WithColumn("MemoryUsagePercent").AsInt32().Nullable()
+            .WithColumn("MaxDiskUsagePercent").AsInt32().Nullable()
+            .WithColumn("PendingUpdates").AsInt32().Nullable()
+            .WithColumn("SecurityUpdates").AsInt32().Nullable()
+            .WithColumn("FailedServices").AsInt32().Nullable()
+            .WithColumn("TotalServices").AsInt32().Nullable()
+            .WithColumn("HasDiskHealthIssue").AsBoolean().Nullable()
+            .WithColumn("HasHardwareIssue").AsBoolean().Nullable()
+            .WithColumn("HealthStatus").AsInt16().NotNullable().WithDefaultValue(0)
+            .WithColumn("LastSeenAt").AsDateTimeOffset().Nullable();
+
+        IfDatabase("Postgres").Execute.Sql("""
+            ALTER TABLE "MachineStateSummary" ALTER COLUMN "IpAddresses" TYPE jsonb USING "IpAddresses"::jsonb;
+        """);
+
+        Create.Index("IX_Summary_TenantId_HealthStatus")
+            .OnTable(TableNames.MachineStateSummary)
+            .OnColumn("TenantId").Ascending()
+            .OnColumn("HealthStatus").Ascending();
+
+        Create.Index("IX_Summary_LastSeenAt")
+            .OnTable(TableNames.MachineStateSummary)
+            .OnColumn("LastSeenAt").Descending();
+
+        Create.Index("IX_Summary_CpuUsagePercent")
+            .OnTable(TableNames.MachineStateSummary)
+            .OnColumn("CpuUsagePercent").Ascending();
+
+        Create.Index("IX_Summary_MemoryUsagePercent")
+            .OnTable(TableNames.MachineStateSummary)
+            .OnColumn("MemoryUsagePercent").Ascending();
+
+        Create.Index("IX_Summary_MaxDiskUsagePercent")
+            .OnTable(TableNames.MachineStateSummary)
+            .OnColumn("MaxDiskUsagePercent").Ascending();
+
+        Create.Index("IX_Summary_PendingUpdates")
+            .OnTable(TableNames.MachineStateSummary)
+            .OnColumn("PendingUpdates").Ascending();
+
+        Create.Index("IX_Summary_SecurityUpdates")
+            .OnTable(TableNames.MachineStateSummary)
+            .OnColumn("SecurityUpdates").Ascending();
+
+        Create.Index("IX_Summary_FailedServices")
+            .OnTable(TableNames.MachineStateSummary)
+            .OnColumn("FailedServices").Ascending();
+
+        // Cold detail table for single-machine views. No secondary indexes.
+        Create.Table(TableNames.MachineStateDetail)
+            .WithColumn("MachineId").AsInt64().PrimaryKey().NotNullable().ForeignKey(TableNames.Machines, "Id")
+            .WithColumn("HardwareVendor").AsString(255).Nullable()
             .WithColumn("HardwareSerial").AsString(255).Nullable()
             .WithColumn("CpuBrand").AsString(255).Nullable()
             .WithColumn("CpuCores").AsInt32().Nullable()
             .WithColumn("MemoryTotalBytes").AsInt64().Nullable()
             .WithColumn("UptimeSeconds").AsInt64().Nullable()
             .WithColumn("BiosVersion").AsString(64).Nullable()
-            .WithColumn("IpAddresses").AsString().Nullable()
-
-            // OsVersion (type=2)
-            .WithColumn("OsName").AsString(255).Nullable()
-            .WithColumn("OsVersion").AsString(64).Nullable()
             .WithColumn("Kernel").AsString(255).Nullable()
-
-            // CpuInfo (type=3)
             .WithColumn("CpuType").AsString(64).Nullable()
             .WithColumn("CpuPhysicalCpus").AsInt32().Nullable()
             .WithColumn("CpuLogicalCpus").AsInt32().Nullable()
-            .WithColumn("CpuInfoAt").AsDateTimeOffset().Nullable()
-
-            // MemoryInfo (type=4)
             .WithColumn("SwapTotalBytes").AsInt64().Nullable()
             .WithColumn("SwapFreeBytes").AsInt64().Nullable()
-            .WithColumn("MemoryInfoAt").AsDateTimeOffset().Nullable()
-
-            // DiskInfo (type=5)
-            .WithColumn("DiskInfos").AsString().Nullable()
-            .WithColumn("DiskInfoAt").AsDateTimeOffset().Nullable()
-
-            // CpuUsage (type=6)
-            .WithColumn("CpuUsagePercent").AsInt32().Nullable()
-
-            // MemoryUsage (type=7)
             .WithColumn("MemoryUsedBytes").AsInt64().Nullable()
-            .WithColumn("MemoryUsagePercent").AsInt32().Nullable()
-
-            // DiskUsage (type=8)
+            .WithColumn("DiskInfos").AsString().Nullable()
             .WithColumn("DiskUsages").AsString().Nullable()
-
-            // SSH sessions (type=9)
             .WithColumn("SshSessions").AsString().Nullable()
-            .WithColumn("SshSessionsAt").AsDateTimeOffset().Nullable()
+            .WithColumn("HardwareHealth").AsString().Nullable();
 
-            // HardwareHealth (type=10)
-            .WithColumn("HardwareHealth").AsString().Nullable()
-
-            // PackageUpdates (type=11)
-            .WithColumn("PendingUpdates").AsInt32().Nullable()
-            .WithColumn("SecurityUpdates").AsInt32().Nullable()
-
-            // ServiceStatus (type=12)
-            .WithColumn("TotalServices").AsInt32().Nullable()
-            .WithColumn("FailedServices").AsInt32().Nullable()
-
-            // Computed health
-            .WithColumn("HealthStatus").AsInt16().NotNullable().WithDefaultValue(0)
-
-            // Per-type timestamps
-            .WithColumn("SystemInfoAt").AsDateTimeOffset().Nullable()
-            .WithColumn("OsVersionAt").AsDateTimeOffset().Nullable()
-            .WithColumn("CpuUsageAt").AsDateTimeOffset().Nullable()
-            .WithColumn("MemoryUsageAt").AsDateTimeOffset().Nullable()
-            .WithColumn("DiskUsageAt").AsDateTimeOffset().Nullable()
-            .WithColumn("HardwareHealthAt").AsDateTimeOffset().Nullable()
-            .WithColumn("PackageUpdatesAt").AsDateTimeOffset().Nullable()
-            .WithColumn("ServiceStatusAt").AsDateTimeOffset().Nullable()
-            .WithColumn("LastTelemetryAt").AsDateTimeOffset().Nullable()
-            .WithColumn("LastPingAt").AsDateTimeOffset().Nullable();
-
-        // Upgrade JSON columns to JSONB on PostgreSQL for indexing and query performance
         IfDatabase("Postgres").Execute.Sql("""
-            ALTER TABLE "MachineState" ALTER COLUMN "IpAddresses" TYPE jsonb USING "IpAddresses"::jsonb;
-            ALTER TABLE "MachineState" ALTER COLUMN "DiskUsages" TYPE jsonb USING "DiskUsages"::jsonb;
-            ALTER TABLE "MachineState" ALTER COLUMN "HardwareHealth" TYPE jsonb USING "HardwareHealth"::jsonb;
+            ALTER TABLE "MachineStateDetail" ALTER COLUMN "DiskInfos" TYPE jsonb USING "DiskInfos"::jsonb;
+            ALTER TABLE "MachineStateDetail" ALTER COLUMN "DiskUsages" TYPE jsonb USING "DiskUsages"::jsonb;
+            ALTER TABLE "MachineStateDetail" ALTER COLUMN "SshSessions" TYPE jsonb USING "SshSessions"::jsonb;
+            ALTER TABLE "MachineStateDetail" ALTER COLUMN "HardwareHealth" TYPE jsonb USING "HardwareHealth"::jsonb;
         """);
 
         Create.Table(TableNames.RegistrationTokens)
@@ -278,11 +292,11 @@ public sealed class InitialMigration : Migration
             .OnColumn("TelemetryType").Ascending()
             .OnColumn("ReceivedAt").Descending();
 
-        // Upgrade JSON columns to JSONB on PostgreSQL
-        IfDatabase("Postgres").Execute.Sql("""
-            ALTER TABLE "MachineState" ALTER COLUMN "DiskInfos" TYPE jsonb USING "DiskInfos"::jsonb;
-            ALTER TABLE "MachineState" ALTER COLUMN "SshSessions" TYPE jsonb USING "SshSessions"::jsonb;
-        """);
+        // Index on MachineTelemetry for tenant-scoped retention queries.
+        Create.Index("IX_MachineTelemetry_TenantId_ReceivedAt")
+            .OnTable(TableNames.MachineTelemetry)
+            .OnColumn("TenantId").Ascending()
+            .OnColumn("ReceivedAt").Descending();
 
         // Unique partial index on SourceEventId for dedup safety net.
         IfDatabase("Postgres").Execute.Sql(
@@ -323,15 +337,6 @@ public sealed class InitialMigration : Migration
             @"CREATE INDEX ""IX_Machines_TenantId_Active""
               ON ""Machines"" (""TenantId"")
               WHERE ""IsDeleted"" = 0");
-
-        // MachineState indexes for SQL-level fleet queries.
-        Create.Index("IX_MachineState_HealthStatus")
-            .OnTable(TableNames.MachineState)
-            .OnColumn("HealthStatus").Ascending();
-
-        Create.Index("IX_MachineState_LastPingAt")
-            .OnTable(TableNames.MachineState)
-            .OnColumn("LastPingAt").Descending();
 
         Create.Table(TableNames.AuditLog)
             .WithColumn("Id").AsInt64().PrimaryKey().Identity().NotNullable()
@@ -390,6 +395,13 @@ public sealed class InitialMigration : Migration
             .OnTable(TableNames.AlertEvents)
             .OnColumn("TenantId").Ascending()
             .OnColumn("TriggeredAt").Descending();
+
+        // Composite index for efficient dedup checks during alert evaluation.
+        Create.Index("IX_AlertEvents_RuleId_MachineId_Status")
+            .OnTable(TableNames.AlertEvents)
+            .OnColumn("AlertRuleId").Ascending()
+            .OnColumn("MachineId").Ascending()
+            .OnColumn("Status").Ascending();
 
         // Upgrade Details to JSONB on PostgreSQL
         IfDatabase("Postgres").Execute.Sql("""
@@ -496,7 +508,8 @@ public sealed class InitialMigration : Migration
         Delete.Table(TableNames.AlertRules);
         Delete.Table(TableNames.AuditLog);
         Delete.Table(TableNames.RegistrationTokens);
-        Delete.Table(TableNames.MachineState);
+        Delete.Table(TableNames.MachineStateDetail);
+        Delete.Table(TableNames.MachineStateSummary);
         Delete.Table(TableNames.TenantInvitations);
         Delete.Table(TableNames.MachineTelemetry);
         Delete.Table(TableNames.TenantOidcConfigurations);

@@ -38,6 +38,7 @@ public sealed class TelemetryCleanupServiceTests
         await dbFactory.Context.InsertAsync(new MachineTelemetry
         {
             MachineId = 1,
+            TenantId = 1,
             TelemetryType = 1,
             Payload = "{}",
             ReceivedAt = DateTimeOffset.UtcNow.AddDays(-20),
@@ -49,6 +50,7 @@ public sealed class TelemetryCleanupServiceTests
         await dbFactory.Context.InsertAsync(new MachineTelemetry
         {
             MachineId = 1,
+            TenantId = 1,
             TelemetryType = 1,
             Payload = "{}",
             ReceivedAt = DateTimeOffset.UtcNow.AddDays(-5),
@@ -60,6 +62,7 @@ public sealed class TelemetryCleanupServiceTests
         await dbFactory.Context.InsertAsync(new MachineTelemetry
         {
             MachineId = 1,
+            TenantId = 1,
             TelemetryType = 1,
             Payload = "{}",
             ReceivedAt = DateTimeOffset.UtcNow,
@@ -95,6 +98,7 @@ public sealed class TelemetryCleanupServiceTests
         await dbFactory.Context.InsertAsync(new MachineTelemetry
         {
             MachineId = 1,
+            TenantId = 1,
             TelemetryType = 1,
             Payload = "{}",
             ReceivedAt = DateTimeOffset.UtcNow.AddDays(-3),
@@ -105,6 +109,7 @@ public sealed class TelemetryCleanupServiceTests
         await dbFactory.Context.InsertAsync(new MachineTelemetry
         {
             MachineId = 1,
+            TenantId = 1,
             TelemetryType = 2,
             Payload = "{}",
             ReceivedAt = DateTimeOffset.UtcNow.AddDays(-2),
@@ -160,6 +165,7 @@ public sealed class TelemetryCleanupServiceTests
         await dbFactory.Context.InsertAsync(new MachineTelemetry
         {
             MachineId = 1,
+            TenantId = 1,
             TelemetryType = 1,
             Payload = "{}",
             ReceivedAt = DateTimeOffset.UtcNow.AddDays(-30),
@@ -171,6 +177,7 @@ public sealed class TelemetryCleanupServiceTests
         await dbFactory.Context.InsertAsync(new MachineTelemetry
         {
             MachineId = 1,
+            TenantId = 1,
             TelemetryType = 1,
             Payload = "{}",
             ReceivedAt = DateTimeOffset.UtcNow.AddDays(-5),
@@ -182,6 +189,7 @@ public sealed class TelemetryCleanupServiceTests
         await dbFactory.Context.InsertAsync(new MachineTelemetry
         {
             MachineId = 1,
+            TenantId = 1,
             TelemetryType = 1,
             Payload = "{}",
             ReceivedAt = DateTimeOffset.UtcNow,
@@ -217,6 +225,7 @@ public sealed class TelemetryCleanupServiceTests
         await dbFactory.Context.InsertAsync(new MachineTelemetry
         {
             MachineId = 1,
+            TenantId = 1,
             TelemetryType = 1,
             Payload = "{}",
             ReceivedAt = DateTimeOffset.UtcNow.AddDays(-30),
@@ -266,6 +275,7 @@ public sealed class TelemetryCleanupServiceTests
             await dbFactory.Context.InsertAsync(new MachineTelemetry
             {
                 MachineId = 1,
+                TenantId = 1,
                 TelemetryType = 1,
                 Payload = "{}",
                 ReceivedAt = DateTimeOffset.UtcNow.AddDays(-30),
@@ -278,6 +288,7 @@ public sealed class TelemetryCleanupServiceTests
         await dbFactory.Context.InsertAsync(new MachineTelemetry
         {
             MachineId = 1,
+            TenantId = 1,
             TelemetryType = 1,
             Payload = "{}",
             ReceivedAt = DateTimeOffset.UtcNow,
@@ -312,6 +323,7 @@ public sealed class TelemetryCleanupServiceTests
             await dbFactory.Context.InsertAsync(new MachineTelemetry
             {
                 MachineId = 1,
+                TenantId = 1,
                 TelemetryType = 1,
                 Payload = "{}",
                 ReceivedAt = DateTimeOffset.UtcNow.AddDays(-30),

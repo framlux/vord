@@ -14,6 +14,13 @@ namespace Framlux.FleetManagement.Database.Models;
 public sealed class UserTenantRole
 {
     /// <summary>
+    /// Surrogate primary key for the role assignment.
+    /// </summary>
+    [PrimaryKey, Identity]
+    [Column(Name = "Id"), NotNull]
+    public int Id { get; set; }
+
+    /// <summary>
     /// The unique identifier for the user
     /// </summary>
     [Column(Name = "UserId"), NotNull]

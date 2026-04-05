@@ -122,6 +122,7 @@ public sealed class ViewOnlyEndpointTests
             MachineTelemetry t = new()
             {
                 MachineId = machineId,
+                TenantId = tenantId,
                 TelemetryType = 1,
                 Payload = $"{{\"cpu\": {i}}}",
                 ReceivedAt = DateTimeOffset.UtcNow.AddMinutes(-i),
@@ -135,6 +136,7 @@ public sealed class ViewOnlyEndpointTests
             MachineTelemetry t = new()
             {
                 MachineId = machineId,
+                TenantId = tenantId,
                 TelemetryType = 2,
                 Payload = $"{{\"mem\": {i}}}",
                 ReceivedAt = DateTimeOffset.UtcNow.AddMinutes(-i),
@@ -172,6 +174,7 @@ public sealed class ViewOnlyEndpointTests
             MachineTelemetry t = new()
             {
                 MachineId = machineId,
+                TenantId = tenantId,
                 TelemetryType = 1,
                 Payload = $"{{\"cpu\": {10 + i}}}",
                 ReceivedAt = DateTimeOffset.UtcNow.AddMinutes(-i),
@@ -185,6 +188,7 @@ public sealed class ViewOnlyEndpointTests
             MachineTelemetry t = new()
             {
                 MachineId = machineId,
+                TenantId = tenantId,
                 TelemetryType = 2,
                 Payload = $"{{\"mem\": {20 + i}}}",
                 ReceivedAt = DateTimeOffset.UtcNow.AddMinutes(-i),

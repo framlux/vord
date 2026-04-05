@@ -9,6 +9,7 @@ using Framlux.FleetManagement.Database.Migrations;
 using Framlux.FleetManagement.Database;
 using Framlux.FleetManagement.Server.Auth;
 using Framlux.FleetManagement.Server.Services.Billing;
+using Framlux.FleetManagement.Server.Services.Commands;
 using Framlux.FleetManagement.Server.Services.DataExport;
 using Framlux.FleetManagement.Server.Services.Infrastructure;
 using Framlux.FleetManagement.Server.Services.Machines;
@@ -141,11 +142,7 @@ public class FunctionalTestFactory : WebApplicationFactory<Program>
             services.RemoveAll<ITelemetryDeduplicationService>();
             services.AddSingleton<ITelemetryDeduplicationService, InMemoryTelemetryDeduplicationService>();
 
-            // Replace PostgreSQL-specific state updater with no-op (uses raw SQL incompatible with SQLite)
-            services.RemoveAll<IMachineStateUpdater>();
-            services.AddSingleton<IMachineStateUpdater, NoOpMachineStateUpdater>();
-
-            // Replace PostgreSQL-specific SQL dialect (not needed with no-op state updater, but prevents DI resolution errors)
+            // Replace PostgreSQL-specific SQL dialect with SQLite-compatible version for tests
             services.RemoveAll<ISqlDialect>();
             services.AddSingleton<ISqlDialect, NoOpSqlDialect>();
 
@@ -163,6 +160,9 @@ public class FunctionalTestFactory : WebApplicationFactory<Program>
             RemoveHostedService<TelemetryCleanupService>(services);
             RemoveHostedService<DataExportBackgroundService>(services);
             RemoveHostedService<StripeSyncService>(services);
+            RemoveHostedService<MachineStateStreamingService>(services);
+            RemoveHostedService<HealthSweepService>(services);
+            RemoveHostedService<CommandExpiryBackgroundService>(services);
 
             // Replace object storage with a fake for tests
             services.RemoveAll<IObjectStorageService>();

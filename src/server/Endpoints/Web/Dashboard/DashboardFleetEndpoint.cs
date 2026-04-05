@@ -10,7 +10,7 @@ using Framlux.FleetManagement.Server.Services.Machines;
 namespace Framlux.FleetManagement.Server.Endpoints.Web.Dashboard;
 
 /// <summary>
-/// Returns the fleet overview with summary and paginated per-machine state from the MachineState cache.
+/// Returns the fleet overview with summary and paginated per-machine state from the MachineStateSummary cache.
 /// </summary>
 public sealed class DashboardFleetEndpoint : EndpointWithoutRequest<ApiResponse<PaginatedFleetOverviewDto>>
 {
