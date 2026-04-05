@@ -2,6 +2,19 @@
 
 All notable changes to this project will be documented in this file. See [versionize](https://github.com/versionize/versionize) for commit guidelines.
 
+<a name="2.0.0"></a>
+## [2.0.0](https://www.github.com/framlux/vord/releases/tag/v2.0.0) (2026-04-05)
+
+### Features
+
+* adding machine search, removing full table scans for search, and fixing missing data retention ([9ce9b55](https://www.github.com/framlux/vord/commit/9ce9b5598060feed263d1d04c91e95bd011a8beb))
+* Removing upserts and moving hot-path to insert-only ([42b5d37](https://www.github.com/framlux/vord/commit/42b5d37c1a93cf756336ecefe61d1cdfe170cdca))
+* Unifying DB migrations (with better partitioning) before customers join ([100a0cd](https://www.github.com/framlux/vord/commit/100a0cd5e388d11f00ddbd8ea54b4f6c9b0aa0fb))
+
+### Breaking Changes
+
+* Unifying DB migrations (with better partitioning) before customers join ([100a0cd](https://www.github.com/framlux/vord/commit/100a0cd5e388d11f00ddbd8ea54b4f6c9b0aa0fb))
+
 <a name="1.5.3"></a>
 ## [1.5.3](https://www.github.com/framlux/vord/releases/tag/v1.5.3) (2026-04-02)
 
