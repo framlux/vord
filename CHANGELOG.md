@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file. See [versionize](https://github.com/versionize/versionize) for commit guidelines.
 
+<a name="2.0.2"></a>
+## [2.0.2](https://www.github.com/framlux/vord/releases/tag/v2.0.2) (2026-04-05)
+
+### Bug Fixes
+
+* Fixing broken DB inserts that violated FK constraints ([b4019e8](https://www.github.com/framlux/vord/commit/b4019e8972b71587206da2d1a089ed2298b9a43f))
+
 <a name="2.0.1"></a>
 ## [2.0.1](https://www.github.com/framlux/vord/releases/tag/v2.0.1) (2026-04-05)
 
