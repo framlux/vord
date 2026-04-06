@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file. See [versionize](https://github.com/versionize/versionize) for commit guidelines.
 
+<a name="2.0.3"></a>
+## [2.0.3](https://www.github.com/framlux/vord/releases/tag/v2.0.3) (2026-04-05)
+
+### Bug Fixes
+
+* Fixing broken DB audit log Linq2Db type ([c6f9833](https://www.github.com/framlux/vord/commit/c6f9833221f4c84dcf99fa4078020061b1dc127d))
+
 <a name="2.0.2"></a>
 ## [2.0.2](https://www.github.com/framlux/vord/releases/tag/v2.0.2) (2026-04-05)
 
