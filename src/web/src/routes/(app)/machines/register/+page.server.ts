@@ -5,10 +5,10 @@
 import { redirect } from '@sveltejs/kit';
 import type { PageServerLoad } from './$types';
 import { createServerApiClient } from '$lib/api/server';
-import { canAdminTenant } from '$lib/utils/roles';
+import { canAdminMachines } from '$lib/utils/roles';
 
 export const load: PageServerLoad = async ({ locals, cookies, fetch }) => {
-	if (!locals.user || !canAdminTenant(locals.user)) {
+	if (!locals.user || !canAdminMachines(locals.user)) {
 		redirect(302, '/dashboard');
 	}
 

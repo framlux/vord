@@ -120,7 +120,7 @@ fi
 printf "Enter your registration token: "
 read -r REGISTRATION_TOKEN
 if [ -z "${REGISTRATION_TOKEN}" ]; then
-    error "Registration token is required. You can find it in the Vord Fleet dashboard under Tenant Settings."
+    error "Registration token is required. You can find it in the Vord Fleet dashboard under Machines > Register."
     exit 1
 fi
 

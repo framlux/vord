@@ -28,7 +28,7 @@ public sealed class RevokeRegistrationTokenEndpoint : EndpointWithoutRequest<Api
     public override void Configure()
     {
         Delete("/tenants/registration-tokens/{id}");
-        Policies("TenantAdmin");
+        Policies("MachineAdmin");
         Version(1);
     }
 

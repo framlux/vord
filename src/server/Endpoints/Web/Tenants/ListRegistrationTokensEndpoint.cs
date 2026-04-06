@@ -28,7 +28,7 @@ public sealed class ListRegistrationTokensEndpoint : EndpointWithoutRequest<ApiR
     public override void Configure()
     {
         Get("/tenants/registration-tokens");
-        Policies("TenantAdmin");
+        Policies("MachineAdmin");
         Version(1);
     }
 

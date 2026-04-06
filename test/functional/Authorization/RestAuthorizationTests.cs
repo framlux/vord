@@ -121,7 +121,6 @@ public sealed class RestAuthorizationTests
 
         string[] tenantAdminRoutes =
         [
-            "/api/v1/tenants/registration-tokens",
             "/api/v1/users",
         ];
 
