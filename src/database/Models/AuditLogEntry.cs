@@ -71,7 +71,7 @@ public sealed class AuditLogEntry
     /// <summary>
     /// Additional JSON details about the action.
     /// </summary>
-    [Column("Details"), Nullable]
+    [Column("Details", DbType = "jsonb"), Nullable]
     public string? Details { get; set; }
 
     /// <summary>
