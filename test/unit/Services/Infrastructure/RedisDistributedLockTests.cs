@@ -54,18 +54,29 @@ public class RedisDistributedLockTests
     }
 
     /// <summary>
-    /// Verifies that disposing a lock handle releases the lock via Lua script.
+    /// Verifies that disposing a lock handle releases the lock via Lua script
+    /// with the correct key and owner token arguments.
     /// </summary>
     [Test]
     public async Task DisposeAsync_ReleasesLock()
     {
         (RedisDistributedLock lockService, IDatabase db) = CreateLockService();
-        db.StringSetAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<TimeSpan?>(), Arg.Any<When>())
+
+        RedisValue capturedToken = RedisValue.Null;
+        db.StringSetAsync(
+                Arg.Any<RedisKey>(),
+                Arg.Do<RedisValue>(v => capturedToken = v),
+                Arg.Any<TimeSpan?>(),
+                Arg.Any<When>())
             .Returns(true);
 
         LockHandle? handle = await lockService.TryAcquireAsync("test-lock", TimeSpan.FromSeconds(30));
         await handle!.DisposeAsync();
 
-        await db.Received(1).ScriptEvaluateAsync(Arg.Any<string>(), Arg.Any<RedisKey[]>(), Arg.Any<RedisValue[]>(), Arg.Any<CommandFlags>());
+        await db.Received(1).ScriptEvaluateAsync(
+            Arg.Any<string>(),
+            Arg.Is<RedisKey[]>(keys => keys.Length == 1 && keys[0] == (RedisKey)"test-lock"),
+            Arg.Is<RedisValue[]>(vals => vals.Length == 1 && vals[0] == capturedToken),
+            Arg.Any<CommandFlags>());
     }
 }

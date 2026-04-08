@@ -32,7 +32,7 @@ public sealed class TenantAdminEndpointTests
             .WithActiveTenant(tenantId)
             .Build();
 
-        HttpResponseMessage response = await client.PostAsJsonAsync("/api/v1/tenants/registration-tokens", new
+        HttpResponseMessage response = await client.PostAsJsonAsync("/api/v1/machines/registration-tokens", new
         {
             Name = "Test Token",
         });
@@ -74,7 +74,7 @@ public sealed class TenantAdminEndpointTests
             .WithActiveTenant(tenantId)
             .Build();
 
-        HttpResponseMessage response = await client.DeleteAsync($"/api/v1/tenants/registration-tokens/{token.Id}");
+        HttpResponseMessage response = await client.DeleteAsync($"/api/v1/machines/registration-tokens/{token.Id}");
 
         await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
 

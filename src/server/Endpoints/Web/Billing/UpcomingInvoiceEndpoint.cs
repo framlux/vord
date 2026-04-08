@@ -19,7 +19,7 @@ public sealed class UpcomingInvoiceDto
     public bool HasInvoice { get; set; }
 
     /// <summary>Total amount due in cents.</summary>
-    public int AmountDueCents { get; set; }
+    public long AmountDueCents { get; set; }
 
     /// <summary>Three-letter currency code.</summary>
     public string Currency { get; set; } = "usd";
@@ -34,7 +34,7 @@ public sealed class UpcomingInvoiceDto
     public DateTimeOffset? NextPaymentAttempt { get; set; }
 
     /// <summary>Per-unit amount in cents.</summary>
-    public int UnitAmountCents { get; set; }
+    public long UnitAmountCents { get; set; }
 
     /// <summary>Individual line items on the invoice.</summary>
     public List<LineItemDto> Lines { get; set; } = [];
@@ -49,10 +49,10 @@ public sealed class LineItemDto
     public string Description { get; set; } = string.Empty;
 
     /// <summary>Amount in cents.</summary>
-    public int AmountCents { get; set; }
+    public long AmountCents { get; set; }
 
     /// <summary>Number of units.</summary>
-    public int Quantity { get; set; }
+    public long Quantity { get; set; }
 
     /// <summary>Line item period start.</summary>
     public DateTimeOffset? PeriodStart { get; set; }

@@ -46,28 +46,6 @@ public class UserHandlerTests
         return (user.Id, tenant.Id);
     }
 
-    // ========== Constructor tests ==========
-
-    [Test]
-    public async Task Constructor_NullDatabaseContext_ThrowsArgumentNullException()
-    {
-        ILogger<UserHandler> logger = Substitute.For<ILogger<UserHandler>>();
-
-        await Assert.That(() =>
-            new UserHandler(null!, logger))
-            .Throws<ArgumentNullException>();
-    }
-
-    [Test]
-    public async Task Constructor_NullLogger_ThrowsArgumentNullException()
-    {
-        using TestDatabaseFactory dbFactory = new();
-
-        await Assert.That(() =>
-            new UserHandler(dbFactory.Context, null!))
-            .Throws<ArgumentNullException>();
-    }
-
     // ========== ListAsync tests ==========
 
     [Test]

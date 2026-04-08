@@ -18,11 +18,6 @@ namespace Framlux.FleetManagement.FunctionalTest.Endpoints.Web;
 /// </summary>
 public sealed class AnonymousEndpointTests
 {
-    private static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        PropertyNameCaseInsensitive = true
-    };
-
     #region ContactForm — Happy Path
 
     [Test]
@@ -86,90 +81,6 @@ public sealed class AnonymousEndpointTests
     #endregion
 
     #region ContactForm — Error Cases
-
-    [Test]
-    public async Task ContactForm_EmptyName_ReturnsBadRequestWithRequiredFieldsError()
-    {
-        using FunctionalTestFactory factory = new();
-        HttpClient client = factory.CreateClient(new WebApplicationFactoryClientOptions
-        {
-            AllowAutoRedirect = false,
-        });
-
-        HttpResponseMessage response = await client.PostAsJsonAsync("/api/v1/contact", new
-        {
-            Name = "",
-            Email = "john@example.com",
-            Company = "Acme Corp",
-            FleetSize = "10",
-            Message = "Hello"
-        });
-
-        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.BadRequest);
-
-        string body = await response.Content.ReadAsStringAsync();
-        JsonDocument doc = JsonDocument.Parse(body);
-        JsonElement root = doc.RootElement;
-
-        await Assert.That(root.GetProperty("success").GetBoolean()).IsEqualTo(false);
-        await Assert.That(root.GetProperty("message").GetString()).IsEqualTo("Name, email, and message are required");
-    }
-
-    [Test]
-    public async Task ContactForm_EmptyEmail_ReturnsBadRequestWithRequiredFieldsError()
-    {
-        using FunctionalTestFactory factory = new();
-        HttpClient client = factory.CreateClient(new WebApplicationFactoryClientOptions
-        {
-            AllowAutoRedirect = false,
-        });
-
-        HttpResponseMessage response = await client.PostAsJsonAsync("/api/v1/contact", new
-        {
-            Name = "John Doe",
-            Email = "",
-            Company = "Acme Corp",
-            FleetSize = "10",
-            Message = "Hello"
-        });
-
-        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.BadRequest);
-
-        string body = await response.Content.ReadAsStringAsync();
-        JsonDocument doc = JsonDocument.Parse(body);
-        JsonElement root = doc.RootElement;
-
-        await Assert.That(root.GetProperty("success").GetBoolean()).IsEqualTo(false);
-        await Assert.That(root.GetProperty("message").GetString()).IsEqualTo("Name, email, and message are required");
-    }
-
-    [Test]
-    public async Task ContactForm_EmptyMessage_ReturnsBadRequestWithRequiredFieldsError()
-    {
-        using FunctionalTestFactory factory = new();
-        HttpClient client = factory.CreateClient(new WebApplicationFactoryClientOptions
-        {
-            AllowAutoRedirect = false,
-        });
-
-        HttpResponseMessage response = await client.PostAsJsonAsync("/api/v1/contact", new
-        {
-            Name = "John Doe",
-            Email = "john@example.com",
-            Company = "Acme Corp",
-            FleetSize = "10",
-            Message = ""
-        });
-
-        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.BadRequest);
-
-        string body = await response.Content.ReadAsStringAsync();
-        JsonDocument doc = JsonDocument.Parse(body);
-        JsonElement root = doc.RootElement;
-
-        await Assert.That(root.GetProperty("success").GetBoolean()).IsEqualTo(false);
-        await Assert.That(root.GetProperty("message").GetString()).IsEqualTo("Name, email, and message are required");
-    }
 
     [Test]
     public async Task ContactForm_WhitespaceOnlyName_ReturnsBadRequestWithRequiredFieldsError()

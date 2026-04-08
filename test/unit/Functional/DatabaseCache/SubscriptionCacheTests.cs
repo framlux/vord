@@ -105,7 +105,7 @@ public class SubscriptionCacheTests
     }
 
     [Test]
-    public async Task UpdateSubscription_ChangeTier_PersistsUpdate()
+    public async Task GetSubscriptionForTenantAsync_AfterDirectDbUpdate_ReturnsUpdatedTier()
     {
         using TestDatabaseFactory dbFactory = new();
 

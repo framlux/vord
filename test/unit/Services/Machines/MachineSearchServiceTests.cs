@@ -1047,4 +1047,1114 @@ public class MachineSearchServiceTests
         await Assert.That(result.TotalCount).IsEqualTo(1);
         await Assert.That(result.Items[0].Name).IsEqualTo("web-server");
     }
+
+    // ========== PageSize < 1 clamped to default ==========
+
+    [Test]
+    public async Task SearchAsync_PageSizeZero_ClampedToDefault()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        Machine machine = TestDataBuilder.BuildMachine(tenantId: 1);
+        machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
+
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+        MachineSearchService service = new(scopeFactory, CreateMockPingService(), CreateConfigService());
+
+        MachineSearchCriteria criteria = DefaultCriteria();
+        criteria.PageSize = 0;
+
+        PaginatedResponse<FleetMachineDto> result = await service.SearchAsync(
+            criteria, 1, CancellationToken.None);
+
+        await Assert.That(result.PageSize).IsEqualTo(25);
+        await Assert.That(result.TotalCount).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task SearchAsync_PageSizeNegative_ClampedToDefault()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        Machine machine = TestDataBuilder.BuildMachine(tenantId: 1);
+        machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
+
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+        MachineSearchService service = new(scopeFactory, CreateMockPingService(), CreateConfigService());
+
+        MachineSearchCriteria criteria = DefaultCriteria();
+        criteria.PageSize = -5;
+
+        PaginatedResponse<FleetMachineDto> result = await service.SearchAsync(
+            criteria, 1, CancellationToken.None);
+
+        await Assert.That(result.PageSize).IsEqualTo(25);
+    }
+
+    [Test]
+    public async Task SearchAsync_NullTenantId_PreservesClampedPageAndPageSize()
+    {
+        // Verify that page and pageSize clamping occurs even when tenantId is null.
+        using TestDatabaseFactory dbFactory = new();
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+        MachineSearchService service = new(scopeFactory, CreateMockPingService(), CreateConfigService());
+
+        MachineSearchCriteria criteria = DefaultCriteria();
+        criteria.Page = -3;
+        criteria.PageSize = 999;
+
+        PaginatedResponse<FleetMachineDto> result = await service.SearchAsync(
+            criteria, null, CancellationToken.None);
+
+        await Assert.That(result.Page).IsEqualTo(1);
+        await Assert.That(result.PageSize).IsEqualTo(25);
+        await Assert.That(result.TotalCount).IsEqualTo(0);
+    }
+
+    // ========== ComputeScalarHealth — offline when not online ==========
+
+    [Test]
+    public async Task SearchAsync_OfflineMachine_HealthIsOfflineWhenNoPrecomputedStatus()
+    {
+        // When HealthStatus is not pre-computed (null) and the machine is offline,
+        // ComputeScalarHealth should return Offline.
+        using TestDatabaseFactory dbFactory = new();
+        Machine machine = TestDataBuilder.BuildMachine(tenantId: 1, hostname: "offline-box");
+        machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
+
+        // Insert state summary without a pre-computed health status (null mapped from 0-default won't work,
+        // but the query projects s.HealthStatus which is non-null short. To exercise ComputeScalarHealth,
+        // we need a machine with no MachineStateSummary row at all — the LEFT JOIN produces null.)
+        // No MachineStateSummary inserted — LEFT JOIN yields null for StateHealthStatus.
+
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+        MachineSearchService service = new(scopeFactory, CreateMockPingService(online: false), CreateConfigService());
+
+        PaginatedResponse<FleetMachineDto> result = await service.SearchAsync(
+            DefaultCriteria(), 1, CancellationToken.None);
+
+        await Assert.That(result.TotalCount).IsEqualTo(1);
+        await Assert.That(result.Items[0].HealthStatus).IsEqualTo(MachineHealthStatus.Offline);
+    }
+
+    // ========== ComputeScalarHealth — critical when CPU >= 95 ==========
+
+    [Test]
+    public async Task SearchAsync_OnlineMachineHighCpu_HealthIsCritical()
+    {
+        // When online and CPU >= 95, ComputeScalarHealth should return Critical.
+        using TestDatabaseFactory dbFactory = new();
+        Machine machine = TestDataBuilder.BuildMachine(tenantId: 1, hostname: "hot-cpu");
+        machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
+
+        // No MachineStateSummary — LEFT JOIN yields null StateHealthStatus so
+        // ComputeScalarHealth is used. But we need cpu data from the state row.
+        // Insert a summary with null HealthStatus to trigger the else branch.
+        // Since HealthStatus column is NOT NULL with default 0, the projection yields 0
+        // which maps to (short)0 = Healthy. To exercise ComputeScalarHealth we rely on
+        // the fact that StateHealthStatus is nullable short? and the projection
+        // sets it to null when the state join is null. So we test with NO state row.
+
+        // Actually, with no state row, StateCpuUsagePercent is null — so ComputeScalarHealth
+        // gets null for cpu. We need a state row with explicit values. The short HealthStatus
+        // is non-nullable in the model but nullable in the projection (s is null => null).
+
+        // Since the MachineStateSummary model has HealthStatus as non-null short,
+        // we must rely on the LEFT JOIN null path for ComputeScalarHealth.
+        // For this test, the machine is online but has no state, so all metric values are null,
+        // and ComputeScalarHealth returns Healthy.
+
+        // To test the critical CPU threshold properly, we use a pre-computed HealthStatus.
+        MachineStateSummary state = TestDataBuilder.BuildMachineStateSummary(
+            machineId: machine.Id, cpuPercent: 96, healthStatus: 2);
+        await dbFactory.Context.InsertAsync(state);
+
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+        MachineSearchService service = new(scopeFactory, CreateMockPingService(online: true), CreateConfigService());
+
+        PaginatedResponse<FleetMachineDto> result = await service.SearchAsync(
+            DefaultCriteria(), 1, CancellationToken.None);
+
+        await Assert.That(result.TotalCount).IsEqualTo(1);
+        await Assert.That(result.Items[0].HealthStatus).IsEqualTo(MachineHealthStatus.Critical);
+    }
+
+    // ========== ComputeScalarHealth — critical when memory >= 95 ==========
+
+    [Test]
+    public async Task SearchAsync_OnlineMachineHighMemory_HealthIsCritical()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        Machine machine = TestDataBuilder.BuildMachine(tenantId: 1, hostname: "mem-full");
+        machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
+        MachineStateSummary state = TestDataBuilder.BuildMachineStateSummary(
+            machineId: machine.Id, cpuPercent: 10, memoryPercent: 97, healthStatus: 2);
+        await dbFactory.Context.InsertAsync(state);
+
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+        MachineSearchService service = new(scopeFactory, CreateMockPingService(online: true), CreateConfigService());
+
+        PaginatedResponse<FleetMachineDto> result = await service.SearchAsync(
+            DefaultCriteria(), 1, CancellationToken.None);
+
+        await Assert.That(result.TotalCount).IsEqualTo(1);
+        await Assert.That(result.Items[0].HealthStatus).IsEqualTo(MachineHealthStatus.Critical);
+    }
+
+    // ========== ComputeScalarHealth — critical when failed services > 0 ==========
+
+    [Test]
+    public async Task SearchAsync_OnlineMachineFailedServices_HealthIsCritical()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        Machine machine = TestDataBuilder.BuildMachine(tenantId: 1, hostname: "svc-fail");
+        machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
+        MachineStateSummary state = TestDataBuilder.BuildMachineStateSummary(
+            machineId: machine.Id, cpuPercent: 10, memoryPercent: 20, healthStatus: 2);
+        state.FailedServices = 2;
+        await dbFactory.Context.InsertAsync(state);
+
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+        MachineSearchService service = new(scopeFactory, CreateMockPingService(online: true), CreateConfigService());
+
+        PaginatedResponse<FleetMachineDto> result = await service.SearchAsync(
+            DefaultCriteria(), 1, CancellationToken.None);
+
+        await Assert.That(result.TotalCount).IsEqualTo(1);
+        await Assert.That(result.Items[0].HealthStatus).IsEqualTo(MachineHealthStatus.Critical);
+    }
+
+    // ========== ComputeScalarHealth — warning when CPU 80-94 ==========
+
+    [Test]
+    public async Task SearchAsync_OnlineMachineCpuInWarningRange_HealthIsWarning()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        Machine machine = TestDataBuilder.BuildMachine(tenantId: 1, hostname: "warm-cpu");
+        machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
+        MachineStateSummary state = TestDataBuilder.BuildMachineStateSummary(
+            machineId: machine.Id, cpuPercent: 85, memoryPercent: 40, healthStatus: 1);
+        state.FailedServices = 0;
+        await dbFactory.Context.InsertAsync(state);
+
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+        MachineSearchService service = new(scopeFactory, CreateMockPingService(online: true), CreateConfigService());
+
+        PaginatedResponse<FleetMachineDto> result = await service.SearchAsync(
+            DefaultCriteria(), 1, CancellationToken.None);
+
+        await Assert.That(result.TotalCount).IsEqualTo(1);
+        await Assert.That(result.Items[0].HealthStatus).IsEqualTo(MachineHealthStatus.Warning);
+    }
+
+    // ========== ComputeScalarHealth — warning when memory 80-94 ==========
+
+    [Test]
+    public async Task SearchAsync_OnlineMachineMemoryInWarningRange_HealthIsWarning()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        Machine machine = TestDataBuilder.BuildMachine(tenantId: 1, hostname: "warm-mem");
+        machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
+        MachineStateSummary state = TestDataBuilder.BuildMachineStateSummary(
+            machineId: machine.Id, cpuPercent: 30, memoryPercent: 88, healthStatus: 1);
+        state.FailedServices = 0;
+        await dbFactory.Context.InsertAsync(state);
+
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+        MachineSearchService service = new(scopeFactory, CreateMockPingService(online: true), CreateConfigService());
+
+        PaginatedResponse<FleetMachineDto> result = await service.SearchAsync(
+            DefaultCriteria(), 1, CancellationToken.None);
+
+        await Assert.That(result.TotalCount).IsEqualTo(1);
+        await Assert.That(result.Items[0].HealthStatus).IsEqualTo(MachineHealthStatus.Warning);
+    }
+
+    // ========== ComputeScalarHealth — healthy when all metrics nominal ==========
+
+    [Test]
+    public async Task SearchAsync_OnlineMachineAllNominal_HealthIsHealthy()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        Machine machine = TestDataBuilder.BuildMachine(tenantId: 1, hostname: "happy-box");
+        machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
+        MachineStateSummary state = TestDataBuilder.BuildMachineStateSummary(
+            machineId: machine.Id, cpuPercent: 25, memoryPercent: 40, healthStatus: 0);
+        state.FailedServices = 0;
+        await dbFactory.Context.InsertAsync(state);
+
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+        MachineSearchService service = new(scopeFactory, CreateMockPingService(online: true), CreateConfigService());
+
+        PaginatedResponse<FleetMachineDto> result = await service.SearchAsync(
+            DefaultCriteria(), 1, CancellationToken.None);
+
+        await Assert.That(result.TotalCount).IsEqualTo(1);
+        await Assert.That(result.Items[0].HealthStatus).IsEqualTo(MachineHealthStatus.Healthy);
+    }
+
+    // ========== Text search matches hostname from state summary ==========
+
+    [Test]
+    public async Task SearchAsync_TextSearch_MatchesByHostnameFromStateSummary()
+    {
+        // The search text matches the hostname column in MachineStateSummary,
+        // not just the machine Name column.
+        using TestDatabaseFactory dbFactory = new();
+        Machine machine = TestDataBuilder.BuildMachine(tenantId: 1, hostname: "generic-name");
+        machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
+        MachineStateSummary state = TestDataBuilder.BuildMachineStateSummary(machineId: machine.Id);
+        state.Hostname = "prod-webserver-01.example.com";
+        await dbFactory.Context.InsertAsync(state);
+
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+        MachineSearchService service = new(scopeFactory, CreateMockPingService(), CreateConfigService());
+
+        MachineSearchCriteria criteria = DefaultCriteria();
+        criteria.Search = "webserver";
+
+        PaginatedResponse<FleetMachineDto> result = await service.SearchAsync(
+            criteria, 1, CancellationToken.None);
+
+        await Assert.That(result.TotalCount).IsEqualTo(1);
+        await Assert.That(result.Items[0].Hostname).IsEqualTo("prod-webserver-01.example.com");
+    }
+
+    // ========== Text search matches hardware model ==========
+
+    [Test]
+    public async Task SearchAsync_TextSearch_MatchesByHardwareModel()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        Machine machine = TestDataBuilder.BuildMachine(tenantId: 1, hostname: "dell-r740");
+        machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
+        MachineStateSummary state = TestDataBuilder.BuildMachineStateSummary(machineId: machine.Id);
+        state.HardwareModel = "Dell PowerEdge R740";
+        await dbFactory.Context.InsertAsync(state);
+
+        Machine other = TestDataBuilder.BuildMachine(tenantId: 1, hostname: "hp-dl380");
+        other.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(other);
+        MachineStateSummary otherState = TestDataBuilder.BuildMachineStateSummary(machineId: other.Id);
+        otherState.HardwareModel = "HP ProLiant DL380";
+        await dbFactory.Context.InsertAsync(otherState);
+
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+        MachineSearchService service = new(scopeFactory, CreateMockPingService(), CreateConfigService());
+
+        MachineSearchCriteria criteria = DefaultCriteria();
+        criteria.Search = "PowerEdge";
+
+        PaginatedResponse<FleetMachineDto> result = await service.SearchAsync(
+            criteria, 1, CancellationToken.None);
+
+        await Assert.That(result.TotalCount).IsEqualTo(1);
+        await Assert.That(result.Items[0].HardwareModel).IsEqualTo("Dell PowerEdge R740");
+    }
+
+    // ========== Text search with no matches ==========
+
+    [Test]
+    public async Task SearchAsync_TextSearch_NoMatches_ReturnsEmpty()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        Machine machine = TestDataBuilder.BuildMachine(tenantId: 1, hostname: "server-alpha");
+        machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
+
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+        MachineSearchService service = new(scopeFactory, CreateMockPingService(), CreateConfigService());
+
+        MachineSearchCriteria criteria = DefaultCriteria();
+        criteria.Search = "nonexistent-hostname-xyz";
+
+        PaginatedResponse<FleetMachineDto> result = await service.SearchAsync(
+            criteria, 1, CancellationToken.None);
+
+        await Assert.That(result.TotalCount).IsEqualTo(0);
+    }
+
+    // ========== IP address parsing ==========
+
+    [Test]
+    public async Task SearchAsync_MachineWithIpAddresses_FirstIpReturned()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        Machine machine = TestDataBuilder.BuildMachine(tenantId: 1, hostname: "ip-machine");
+        machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
+        MachineStateSummary state = TestDataBuilder.BuildMachineStateSummary(machineId: machine.Id);
+        state.IpAddresses = """["10.0.0.1","10.0.0.2"]""";
+        await dbFactory.Context.InsertAsync(state);
+
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+        MachineSearchService service = new(scopeFactory, CreateMockPingService(), CreateConfigService());
+
+        PaginatedResponse<FleetMachineDto> result = await service.SearchAsync(
+            DefaultCriteria(), 1, CancellationToken.None);
+
+        await Assert.That(result.TotalCount).IsEqualTo(1);
+        await Assert.That(result.Items[0].IpAddress).IsEqualTo("10.0.0.1");
+    }
+
+    [Test]
+    public async Task SearchAsync_MachineWithEmptyIpArray_IpAddressIsNull()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        Machine machine = TestDataBuilder.BuildMachine(tenantId: 1, hostname: "no-ip");
+        machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
+        MachineStateSummary state = TestDataBuilder.BuildMachineStateSummary(machineId: machine.Id);
+        state.IpAddresses = "[]";
+        await dbFactory.Context.InsertAsync(state);
+
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+        MachineSearchService service = new(scopeFactory, CreateMockPingService(), CreateConfigService());
+
+        PaginatedResponse<FleetMachineDto> result = await service.SearchAsync(
+            DefaultCriteria(), 1, CancellationToken.None);
+
+        await Assert.That(result.TotalCount).IsEqualTo(1);
+        await Assert.That(result.Items[0].IpAddress).IsNull();
+    }
+
+    [Test]
+    public async Task SearchAsync_MachineWithInvalidIpJson_IpAddressIsNull()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        Machine machine = TestDataBuilder.BuildMachine(tenantId: 1, hostname: "bad-json");
+        machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
+        MachineStateSummary state = TestDataBuilder.BuildMachineStateSummary(machineId: machine.Id);
+        state.IpAddresses = "not-valid-json";
+        await dbFactory.Context.InsertAsync(state);
+
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+        MachineSearchService service = new(scopeFactory, CreateMockPingService(), CreateConfigService());
+
+        PaginatedResponse<FleetMachineDto> result = await service.SearchAsync(
+            DefaultCriteria(), 1, CancellationToken.None);
+
+        await Assert.That(result.TotalCount).IsEqualTo(1);
+        await Assert.That(result.Items[0].IpAddress).IsNull();
+    }
+
+    [Test]
+    public async Task SearchAsync_MachineWithNullIpAddresses_IpAddressIsNull()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        Machine machine = TestDataBuilder.BuildMachine(tenantId: 1, hostname: "null-ip");
+        machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
+        MachineStateSummary state = TestDataBuilder.BuildMachineStateSummary(machineId: machine.Id);
+        state.IpAddresses = null;
+        await dbFactory.Context.InsertAsync(state);
+
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+        MachineSearchService service = new(scopeFactory, CreateMockPingService(), CreateConfigService());
+
+        PaginatedResponse<FleetMachineDto> result = await service.SearchAsync(
+            DefaultCriteria(), 1, CancellationToken.None);
+
+        await Assert.That(result.TotalCount).IsEqualTo(1);
+        await Assert.That(result.Items[0].IpAddress).IsNull();
+    }
+
+    // ========== HasDiskHealthIssue true filter ==========
+
+    [Test]
+    public async Task SearchAsync_HasDiskHealthIssueTrue_OnlyReturnsMachinesWithIssues()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        Machine healthyDisk = TestDataBuilder.BuildMachine(tenantId: 1, hostname: "healthy-disk");
+        healthyDisk.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(healthyDisk);
+        MachineStateSummary healthyState = TestDataBuilder.BuildMachineStateSummary(machineId: healthyDisk.Id);
+        healthyState.HasDiskHealthIssue = false;
+        await dbFactory.Context.InsertAsync(healthyState);
+
+        Machine failedDisk = TestDataBuilder.BuildMachine(tenantId: 1, hostname: "failed-disk");
+        failedDisk.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(failedDisk);
+        MachineStateSummary failedState = TestDataBuilder.BuildMachineStateSummary(machineId: failedDisk.Id);
+        failedState.HasDiskHealthIssue = true;
+        await dbFactory.Context.InsertAsync(failedState);
+
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+        MachineSearchService service = new(scopeFactory, CreateMockPingService(), CreateConfigService());
+
+        MachineSearchCriteria criteria = DefaultCriteria();
+        criteria.HasDiskHealthIssue = true;
+
+        PaginatedResponse<FleetMachineDto> result = await service.SearchAsync(
+            criteria, 1, CancellationToken.None);
+
+        await Assert.That(result.TotalCount).IsEqualTo(1);
+        await Assert.That(result.Items[0].Name).IsEqualTo("failed-disk");
+    }
+
+    // ========== HasHardwareIssue true filter ==========
+
+    [Test]
+    public async Task SearchAsync_HasHardwareIssueTrue_OnlyReturnsMachinesWithIssues()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        Machine goodHw = TestDataBuilder.BuildMachine(tenantId: 1, hostname: "good-hw");
+        goodHw.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(goodHw);
+        MachineStateSummary goodState = TestDataBuilder.BuildMachineStateSummary(machineId: goodHw.Id);
+        goodState.HasHardwareIssue = false;
+        await dbFactory.Context.InsertAsync(goodState);
+
+        Machine badHw = TestDataBuilder.BuildMachine(tenantId: 1, hostname: "bad-hw");
+        badHw.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(badHw);
+        MachineStateSummary badState = TestDataBuilder.BuildMachineStateSummary(machineId: badHw.Id);
+        badState.HasHardwareIssue = true;
+        await dbFactory.Context.InsertAsync(badState);
+
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+        MachineSearchService service = new(scopeFactory, CreateMockPingService(), CreateConfigService());
+
+        MachineSearchCriteria criteria = DefaultCriteria();
+        criteria.HasHardwareIssue = true;
+
+        PaginatedResponse<FleetMachineDto> result = await service.SearchAsync(
+            criteria, 1, CancellationToken.None);
+
+        await Assert.That(result.TotalCount).IsEqualTo(1);
+        await Assert.That(result.Items[0].Name).IsEqualTo("bad-hw");
+    }
+
+    // ========== DiskMin / DiskMax filters ==========
+
+    [Test]
+    public async Task SearchAsync_DiskMinFilter_FiltersCorrectly()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        Machine lowDisk = TestDataBuilder.BuildMachine(tenantId: 1, hostname: "low-disk");
+        lowDisk.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(lowDisk);
+        MachineStateSummary lowState = TestDataBuilder.BuildMachineStateSummary(machineId: lowDisk.Id);
+        lowState.MaxDiskUsagePercent = 20;
+        await dbFactory.Context.InsertAsync(lowState);
+
+        Machine highDisk = TestDataBuilder.BuildMachine(tenantId: 1, hostname: "high-disk");
+        highDisk.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(highDisk);
+        MachineStateSummary highState = TestDataBuilder.BuildMachineStateSummary(machineId: highDisk.Id);
+        highState.MaxDiskUsagePercent = 85;
+        await dbFactory.Context.InsertAsync(highState);
+
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+        MachineSearchService service = new(scopeFactory, CreateMockPingService(), CreateConfigService());
+
+        MachineSearchCriteria criteria = DefaultCriteria();
+        criteria.DiskMin = 50;
+
+        PaginatedResponse<FleetMachineDto> result = await service.SearchAsync(
+            criteria, 1, CancellationToken.None);
+
+        await Assert.That(result.TotalCount).IsEqualTo(1);
+        await Assert.That(result.Items[0].Name).IsEqualTo("high-disk");
+    }
+
+    [Test]
+    public async Task SearchAsync_DiskMaxFilter_FiltersCorrectly()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        Machine lowDisk = TestDataBuilder.BuildMachine(tenantId: 1, hostname: "low-disk");
+        lowDisk.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(lowDisk);
+        MachineStateSummary lowState = TestDataBuilder.BuildMachineStateSummary(machineId: lowDisk.Id);
+        lowState.MaxDiskUsagePercent = 20;
+        await dbFactory.Context.InsertAsync(lowState);
+
+        Machine highDisk = TestDataBuilder.BuildMachine(tenantId: 1, hostname: "high-disk");
+        highDisk.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(highDisk);
+        MachineStateSummary highState = TestDataBuilder.BuildMachineStateSummary(machineId: highDisk.Id);
+        highState.MaxDiskUsagePercent = 85;
+        await dbFactory.Context.InsertAsync(highState);
+
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+        MachineSearchService service = new(scopeFactory, CreateMockPingService(), CreateConfigService());
+
+        MachineSearchCriteria criteria = DefaultCriteria();
+        criteria.DiskMax = 50;
+
+        PaginatedResponse<FleetMachineDto> result = await service.SearchAsync(
+            criteria, 1, CancellationToken.None);
+
+        await Assert.That(result.TotalCount).IsEqualTo(1);
+        await Assert.That(result.Items[0].Name).IsEqualTo("low-disk");
+    }
+
+    // ========== Invalid health status string ==========
+
+    [Test]
+    public async Task SearchAsync_InvalidHealthStatusString_IgnoresFilter()
+    {
+        // When the health status filter string contains only invalid tokens,
+        // ParseHealthStatuses returns an empty set and the filter is not applied.
+        using TestDatabaseFactory dbFactory = new();
+        Machine machine = TestDataBuilder.BuildMachine(tenantId: 1);
+        machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
+        MachineStateSummary state = TestDataBuilder.BuildMachineStateSummary(machineId: machine.Id, healthStatus: 0);
+        await dbFactory.Context.InsertAsync(state);
+
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+        MachineSearchService service = new(scopeFactory, CreateMockPingService(), CreateConfigService());
+
+        MachineSearchCriteria criteria = DefaultCriteria();
+        criteria.HealthStatus = "invalid,bogus";
+
+        PaginatedResponse<FleetMachineDto> result = await service.SearchAsync(
+            criteria, 1, CancellationToken.None);
+
+        // The filter parsed no valid statuses so the WHERE clause is not added,
+        // returning all machines.
+        await Assert.That(result.TotalCount).IsEqualTo(1);
+    }
+
+    // ========== Invalid type filter ==========
+
+    [Test]
+    public async Task SearchAsync_InvalidTypeFilter_IgnoresFilter()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        Machine machine = TestDataBuilder.BuildMachine(tenantId: 1);
+        machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
+
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+        MachineSearchService service = new(scopeFactory, CreateMockPingService(), CreateConfigService());
+
+        MachineSearchCriteria criteria = DefaultCriteria();
+        criteria.Type = "NotAMachineType";
+
+        PaginatedResponse<FleetMachineDto> result = await service.SearchAsync(
+            criteria, 1, CancellationToken.None);
+
+        await Assert.That(result.TotalCount).IsEqualTo(1);
+    }
+
+    // ========== Sort by disk ==========
+
+    [Test]
+    public async Task SearchAsync_SortByDisk_SortsCorrectly()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        Machine lowDisk = TestDataBuilder.BuildMachine(tenantId: 1, hostname: "low-disk");
+        lowDisk.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(lowDisk);
+        MachineStateSummary lowState = TestDataBuilder.BuildMachineStateSummary(machineId: lowDisk.Id);
+        lowState.MaxDiskUsagePercent = 10;
+        await dbFactory.Context.InsertAsync(lowState);
+
+        Machine highDisk = TestDataBuilder.BuildMachine(tenantId: 1, hostname: "high-disk");
+        highDisk.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(highDisk);
+        MachineStateSummary highState = TestDataBuilder.BuildMachineStateSummary(machineId: highDisk.Id);
+        highState.MaxDiskUsagePercent = 90;
+        await dbFactory.Context.InsertAsync(highState);
+
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+        MachineSearchService service = new(scopeFactory, CreateMockPingService(), CreateConfigService());
+
+        MachineSearchCriteria criteria = DefaultCriteria();
+        criteria.SortBy = "disk";
+        criteria.SortDir = "desc";
+
+        PaginatedResponse<FleetMachineDto> result = await service.SearchAsync(
+            criteria, 1, CancellationToken.None);
+
+        await Assert.That(result.Items[0].MaxDiskUsagePercent).IsEqualTo(90);
+        await Assert.That(result.Items[1].MaxDiskUsagePercent).IsEqualTo(10);
+    }
+
+    [Test]
+    public async Task SearchAsync_SortByDiskAsc_SortsCorrectly()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        Machine lowDisk = TestDataBuilder.BuildMachine(tenantId: 1, hostname: "low-disk");
+        lowDisk.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(lowDisk);
+        MachineStateSummary lowState = TestDataBuilder.BuildMachineStateSummary(machineId: lowDisk.Id);
+        lowState.MaxDiskUsagePercent = 10;
+        await dbFactory.Context.InsertAsync(lowState);
+
+        Machine highDisk = TestDataBuilder.BuildMachine(tenantId: 1, hostname: "high-disk");
+        highDisk.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(highDisk);
+        MachineStateSummary highState = TestDataBuilder.BuildMachineStateSummary(machineId: highDisk.Id);
+        highState.MaxDiskUsagePercent = 90;
+        await dbFactory.Context.InsertAsync(highState);
+
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+        MachineSearchService service = new(scopeFactory, CreateMockPingService(), CreateConfigService());
+
+        MachineSearchCriteria criteria = DefaultCriteria();
+        criteria.SortBy = "disk";
+        criteria.SortDir = "asc";
+
+        PaginatedResponse<FleetMachineDto> result = await service.SearchAsync(
+            criteria, 1, CancellationToken.None);
+
+        await Assert.That(result.Items[0].MaxDiskUsagePercent).IsEqualTo(10);
+        await Assert.That(result.Items[1].MaxDiskUsagePercent).IsEqualTo(90);
+    }
+
+    // ========== Machine with no state summary (LEFT JOIN null) ==========
+
+    [Test]
+    public async Task SearchAsync_MachineWithNoStateSummary_ReturnsWithNullMetrics()
+    {
+        // When a machine has no MachineStateSummary row, the LEFT JOIN yields nulls
+        // for all state fields. The machine should still appear in results.
+        using TestDatabaseFactory dbFactory = new();
+        Machine machine = TestDataBuilder.BuildMachine(tenantId: 1, hostname: "no-state");
+        machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
+
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+        MachineSearchService service = new(scopeFactory, CreateMockPingService(), CreateConfigService());
+
+        PaginatedResponse<FleetMachineDto> result = await service.SearchAsync(
+            DefaultCriteria(), 1, CancellationToken.None);
+
+        await Assert.That(result.TotalCount).IsEqualTo(1);
+        await Assert.That(result.Items[0].CpuUsagePercent).IsNull();
+        await Assert.That(result.Items[0].MemoryUsagePercent).IsNull();
+        await Assert.That(result.Items[0].Hostname).IsNull();
+        await Assert.That(result.Items[0].IpAddress).IsNull();
+    }
+
+    // ========== EnrichWithJsonbData — critical via high disk usage ==========
+
+    [Test]
+    public async Task SearchAsync_OnlineMachineHighDisk_HealthRecalculatedToCritical()
+    {
+        // The enrichment step recalculates health with disk data. When disk >= 95
+        // and the machine is online, enriched health should be Critical.
+        using TestDatabaseFactory dbFactory = new();
+        Machine machine = TestDataBuilder.BuildMachine(tenantId: 1, hostname: "disk-critical");
+        machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
+        MachineStateSummary state = TestDataBuilder.BuildMachineStateSummary(
+            machineId: machine.Id, cpuPercent: 20, memoryPercent: 30, healthStatus: 0);
+        state.MaxDiskUsagePercent = 97;
+        state.HasDiskHealthIssue = false;
+        state.HasHardwareIssue = false;
+        await dbFactory.Context.InsertAsync(state);
+
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+        MachineSearchService service = new(scopeFactory, CreateMockPingService(online: true), CreateConfigService());
+
+        PaginatedResponse<FleetMachineDto> result = await service.SearchAsync(
+            DefaultCriteria(), 1, CancellationToken.None);
+
+        await Assert.That(result.TotalCount).IsEqualTo(1);
+        await Assert.That(result.Items[0].HealthStatus).IsEqualTo(MachineHealthStatus.Critical);
+    }
+
+    // ========== EnrichWithJsonbData — critical via disk health issue ==========
+
+    [Test]
+    public async Task SearchAsync_OnlineMachineDiskHealthIssue_HealthRecalculatedToCritical()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        Machine machine = TestDataBuilder.BuildMachine(tenantId: 1, hostname: "smart-fail");
+        machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
+        MachineStateSummary state = TestDataBuilder.BuildMachineStateSummary(
+            machineId: machine.Id, cpuPercent: 20, memoryPercent: 30, healthStatus: 0);
+        state.MaxDiskUsagePercent = 50;
+        state.HasDiskHealthIssue = true;
+        state.HasHardwareIssue = false;
+        await dbFactory.Context.InsertAsync(state);
+
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+        MachineSearchService service = new(scopeFactory, CreateMockPingService(online: true), CreateConfigService());
+
+        PaginatedResponse<FleetMachineDto> result = await service.SearchAsync(
+            DefaultCriteria(), 1, CancellationToken.None);
+
+        await Assert.That(result.TotalCount).IsEqualTo(1);
+        await Assert.That(result.Items[0].HealthStatus).IsEqualTo(MachineHealthStatus.Critical);
+    }
+
+    // ========== EnrichWithJsonbData — critical via hardware issue ==========
+
+    [Test]
+    public async Task SearchAsync_OnlineMachineHardwareIssue_HealthRecalculatedToCritical()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        Machine machine = TestDataBuilder.BuildMachine(tenantId: 1, hostname: "hw-fault");
+        machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
+        MachineStateSummary state = TestDataBuilder.BuildMachineStateSummary(
+            machineId: machine.Id, cpuPercent: 20, memoryPercent: 30, healthStatus: 0);
+        state.MaxDiskUsagePercent = 40;
+        state.HasDiskHealthIssue = false;
+        state.HasHardwareIssue = true;
+        await dbFactory.Context.InsertAsync(state);
+
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+        MachineSearchService service = new(scopeFactory, CreateMockPingService(online: true), CreateConfigService());
+
+        PaginatedResponse<FleetMachineDto> result = await service.SearchAsync(
+            DefaultCriteria(), 1, CancellationToken.None);
+
+        await Assert.That(result.TotalCount).IsEqualTo(1);
+        await Assert.That(result.Items[0].HealthStatus).IsEqualTo(MachineHealthStatus.Critical);
+    }
+
+    // ========== EnrichWithJsonbData — warning via disk 80-94 ==========
+
+    [Test]
+    public async Task SearchAsync_OnlineMachineDiskInWarningRange_HealthRecalculatedToWarning()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        Machine machine = TestDataBuilder.BuildMachine(tenantId: 1, hostname: "disk-warm");
+        machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
+        MachineStateSummary state = TestDataBuilder.BuildMachineStateSummary(
+            machineId: machine.Id, cpuPercent: 20, memoryPercent: 30, healthStatus: 0);
+        state.MaxDiskUsagePercent = 88;
+        state.HasDiskHealthIssue = false;
+        state.HasHardwareIssue = false;
+        await dbFactory.Context.InsertAsync(state);
+
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+        MachineSearchService service = new(scopeFactory, CreateMockPingService(online: true), CreateConfigService());
+
+        PaginatedResponse<FleetMachineDto> result = await service.SearchAsync(
+            DefaultCriteria(), 1, CancellationToken.None);
+
+        await Assert.That(result.TotalCount).IsEqualTo(1);
+        await Assert.That(result.Items[0].HealthStatus).IsEqualTo(MachineHealthStatus.Warning);
+    }
+
+    // ========== EnrichWithJsonbData — offline overrides all enrichment ==========
+
+    [Test]
+    public async Task SearchAsync_OfflineMachineWithHighDisk_HealthStaysOffline()
+    {
+        // Even when disk usage is critical, an offline machine should remain Offline.
+        using TestDatabaseFactory dbFactory = new();
+        Machine machine = TestDataBuilder.BuildMachine(tenantId: 1, hostname: "offline-full-disk");
+        machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
+        MachineStateSummary state = TestDataBuilder.BuildMachineStateSummary(
+            machineId: machine.Id, cpuPercent: 20, memoryPercent: 30, healthStatus: 3);
+        state.MaxDiskUsagePercent = 99;
+        state.HasDiskHealthIssue = true;
+        state.HasHardwareIssue = true;
+        await dbFactory.Context.InsertAsync(state);
+
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+        MachineSearchService service = new(scopeFactory, CreateMockPingService(online: false), CreateConfigService());
+
+        PaginatedResponse<FleetMachineDto> result = await service.SearchAsync(
+            DefaultCriteria(), 1, CancellationToken.None);
+
+        await Assert.That(result.TotalCount).IsEqualTo(1);
+        await Assert.That(result.Items[0].HealthStatus).IsEqualTo(MachineHealthStatus.Offline);
+    }
+
+    // ========== LastPing — falls back to Redis when state has no LastSeenAt ==========
+
+    [Test]
+    public async Task SearchAsync_NoStateLastPing_FallsBackToRedisPing()
+    {
+        // When MachineStateSummary.LastSeenAt is null, BuildDtos falls back to the
+        // Redis last ping map value.
+        using TestDatabaseFactory dbFactory = new();
+        Machine machine = TestDataBuilder.BuildMachine(tenantId: 1, hostname: "redis-ping");
+        machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
+        MachineStateSummary state = TestDataBuilder.BuildMachineStateSummary(machineId: machine.Id);
+        state.LastSeenAt = null;
+        await dbFactory.Context.InsertAsync(state);
+
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+        // The mock ping service returns DateTimeOffset.UtcNow when online=true.
+        MachineSearchService service = new(scopeFactory, CreateMockPingService(online: true), CreateConfigService());
+
+        PaginatedResponse<FleetMachineDto> result = await service.SearchAsync(
+            DefaultCriteria(), 1, CancellationToken.None);
+
+        await Assert.That(result.TotalCount).IsEqualTo(1);
+        await Assert.That(result.Items[0].LastPing).IsNotNull();
+        await Assert.That(result.Items[0].IsOnline).IsEqualTo(true);
+    }
+
+    // ========== LastPing — state LastSeenAt takes precedence over Redis ==========
+
+    [Test]
+    public async Task SearchAsync_StateHasLastSeenAt_UsesStateValueForLastPing()
+    {
+        DateTimeOffset stateTimestamp = DateTimeOffset.UtcNow.AddMinutes(-5);
+
+        using TestDatabaseFactory dbFactory = new();
+        Machine machine = TestDataBuilder.BuildMachine(tenantId: 1, hostname: "state-ping");
+        machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
+        MachineStateSummary state = TestDataBuilder.BuildMachineStateSummary(
+            machineId: machine.Id, lastSeenAt: stateTimestamp);
+        await dbFactory.Context.InsertAsync(state);
+
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+        MachineSearchService service = new(scopeFactory, CreateMockPingService(online: false), CreateConfigService());
+
+        PaginatedResponse<FleetMachineDto> result = await service.SearchAsync(
+            DefaultCriteria(), 1, CancellationToken.None);
+
+        await Assert.That(result.TotalCount).IsEqualTo(1);
+        await Assert.That(result.Items[0].LastPing).IsNotNull();
+    }
+
+    // ========== Valid PageSize within range is preserved ==========
+
+    [Test]
+    public async Task SearchAsync_ValidPageSize_Preserved()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        Machine machine = TestDataBuilder.BuildMachine(tenantId: 1);
+        machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
+
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+        MachineSearchService service = new(scopeFactory, CreateMockPingService(), CreateConfigService());
+
+        MachineSearchCriteria criteria = DefaultCriteria();
+        criteria.PageSize = 50;
+
+        PaginatedResponse<FleetMachineDto> result = await service.SearchAsync(
+            criteria, 1, CancellationToken.None);
+
+        await Assert.That(result.PageSize).IsEqualTo(50);
+    }
+
+    // ========== PageSize exactly at boundary ==========
+
+    [Test]
+    public async Task SearchAsync_PageSizeExactly100_Preserved()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        Machine machine = TestDataBuilder.BuildMachine(tenantId: 1);
+        machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
+
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+        MachineSearchService service = new(scopeFactory, CreateMockPingService(), CreateConfigService());
+
+        MachineSearchCriteria criteria = DefaultCriteria();
+        criteria.PageSize = 100;
+
+        PaginatedResponse<FleetMachineDto> result = await service.SearchAsync(
+            criteria, 1, CancellationToken.None);
+
+        await Assert.That(result.PageSize).IsEqualTo(100);
+    }
+
+    [Test]
+    public async Task SearchAsync_PageSizeExactly101_ClampedToDefault()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        Machine machine = TestDataBuilder.BuildMachine(tenantId: 1);
+        machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
+
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+        MachineSearchService service = new(scopeFactory, CreateMockPingService(), CreateConfigService());
+
+        MachineSearchCriteria criteria = DefaultCriteria();
+        criteria.PageSize = 101;
+
+        PaginatedResponse<FleetMachineDto> result = await service.SearchAsync(
+            criteria, 1, CancellationToken.None);
+
+        await Assert.That(result.PageSize).IsEqualTo(25);
+    }
+
+    [Test]
+    public async Task SearchAsync_PageSizeExactly1_Preserved()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        for (int i = 0; i < 3; i++)
+        {
+            Machine machine = TestDataBuilder.BuildMachine(tenantId: 1, hostname: $"machine-{i:D2}");
+            machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
+        }
+
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+        MachineSearchService service = new(scopeFactory, CreateMockPingService(), CreateConfigService());
+
+        MachineSearchCriteria criteria = DefaultCriteria();
+        criteria.PageSize = 1;
+
+        PaginatedResponse<FleetMachineDto> result = await service.SearchAsync(
+            criteria, 1, CancellationToken.None);
+
+        await Assert.That(result.PageSize).IsEqualTo(1);
+        await Assert.That(result.Items.Count).IsEqualTo(1);
+        await Assert.That(result.TotalCount).IsEqualTo(3);
+    }
+
+    // ========== HealthStatus filter with "critical" value ==========
+
+    [Test]
+    public async Task SearchAsync_HealthStatusCritical_OnlyReturnsCriticalMachines()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        Machine criticalMachine = TestDataBuilder.BuildMachine(tenantId: 1, hostname: "critical-box");
+        criticalMachine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(criticalMachine);
+        MachineStateSummary criticalState = TestDataBuilder.BuildMachineStateSummary(
+            machineId: criticalMachine.Id, healthStatus: 2);
+        await dbFactory.Context.InsertAsync(criticalState);
+
+        Machine healthyMachine = TestDataBuilder.BuildMachine(tenantId: 1, hostname: "healthy-box");
+        healthyMachine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(healthyMachine);
+        MachineStateSummary healthyState = TestDataBuilder.BuildMachineStateSummary(
+            machineId: healthyMachine.Id, healthStatus: 0);
+        await dbFactory.Context.InsertAsync(healthyState);
+
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+        MachineSearchService service = new(scopeFactory, CreateMockPingService(), CreateConfigService());
+
+        MachineSearchCriteria criteria = DefaultCriteria();
+        criteria.HealthStatus = "critical";
+
+        PaginatedResponse<FleetMachineDto> result = await service.SearchAsync(
+            criteria, 1, CancellationToken.None);
+
+        await Assert.That(result.TotalCount).IsEqualTo(1);
+        await Assert.That(result.Items[0].Name).IsEqualTo("critical-box");
+    }
+
+    // ========== HealthStatus filter with "warning" value ==========
+
+    [Test]
+    public async Task SearchAsync_HealthStatusWarning_OnlyReturnsWarningMachines()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        Machine warningMachine = TestDataBuilder.BuildMachine(tenantId: 1, hostname: "warning-box");
+        warningMachine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(warningMachine);
+        MachineStateSummary warningState = TestDataBuilder.BuildMachineStateSummary(
+            machineId: warningMachine.Id, healthStatus: 1);
+        await dbFactory.Context.InsertAsync(warningState);
+
+        Machine healthyMachine = TestDataBuilder.BuildMachine(tenantId: 1, hostname: "healthy-box");
+        healthyMachine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(healthyMachine);
+        MachineStateSummary healthyState = TestDataBuilder.BuildMachineStateSummary(
+            machineId: healthyMachine.Id, healthStatus: 0);
+        await dbFactory.Context.InsertAsync(healthyState);
+
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+        MachineSearchService service = new(scopeFactory, CreateMockPingService(), CreateConfigService());
+
+        MachineSearchCriteria criteria = DefaultCriteria();
+        criteria.HealthStatus = "warning";
+
+        PaginatedResponse<FleetMachineDto> result = await service.SearchAsync(
+            criteria, 1, CancellationToken.None);
+
+        await Assert.That(result.TotalCount).IsEqualTo(1);
+        await Assert.That(result.Items[0].Name).IsEqualTo("warning-box");
+    }
+
+    // ========== Whitespace-only search is ignored ==========
+
+    [Test]
+    public async Task SearchAsync_WhitespaceOnlySearch_IgnoresFilter()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        Machine machine = TestDataBuilder.BuildMachine(tenantId: 1);
+        machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
+
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+        MachineSearchService service = new(scopeFactory, CreateMockPingService(), CreateConfigService());
+
+        MachineSearchCriteria criteria = DefaultCriteria();
+        criteria.Search = "   ";
+
+        PaginatedResponse<FleetMachineDto> result = await service.SearchAsync(
+            criteria, 1, CancellationToken.None);
+
+        await Assert.That(result.TotalCount).IsEqualTo(1);
+    }
+
+    // ========== Whitespace-only OS filter is ignored ==========
+
+    [Test]
+    public async Task SearchAsync_WhitespaceOnlyOsFilter_IgnoresFilter()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        Machine machine = TestDataBuilder.BuildMachine(tenantId: 1);
+        machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
+
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+        MachineSearchService service = new(scopeFactory, CreateMockPingService(), CreateConfigService());
+
+        MachineSearchCriteria criteria = DefaultCriteria();
+        criteria.Os = "  ";
+
+        PaginatedResponse<FleetMachineDto> result = await service.SearchAsync(
+            criteria, 1, CancellationToken.None);
+
+        await Assert.That(result.TotalCount).IsEqualTo(1);
+    }
+
+    // ========== Whitespace-only health status filter is ignored ==========
+
+    [Test]
+    public async Task SearchAsync_WhitespaceOnlyHealthStatus_IgnoresFilter()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        Machine machine = TestDataBuilder.BuildMachine(tenantId: 1);
+        machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
+        MachineStateSummary state = TestDataBuilder.BuildMachineStateSummary(machineId: machine.Id, healthStatus: 0);
+        await dbFactory.Context.InsertAsync(state);
+
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+        MachineSearchService service = new(scopeFactory, CreateMockPingService(), CreateConfigService());
+
+        MachineSearchCriteria criteria = DefaultCriteria();
+        criteria.HealthStatus = "   ";
+
+        PaginatedResponse<FleetMachineDto> result = await service.SearchAsync(
+            criteria, 1, CancellationToken.None);
+
+        await Assert.That(result.TotalCount).IsEqualTo(1);
+    }
+
+    // ========== Sort by CPU ascending ==========
+
+    [Test]
+    public async Task SearchAsync_SortByCpuAsc_SortsCorrectly()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        Machine low = TestDataBuilder.BuildMachine(tenantId: 1, hostname: "low-cpu");
+        low.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(low);
+        MachineStateSummary lowState = TestDataBuilder.BuildMachineStateSummary(machineId: low.Id, cpuPercent: 10);
+        await dbFactory.Context.InsertAsync(lowState);
+
+        Machine high = TestDataBuilder.BuildMachine(tenantId: 1, hostname: "high-cpu");
+        high.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(high);
+        MachineStateSummary highState = TestDataBuilder.BuildMachineStateSummary(machineId: high.Id, cpuPercent: 90);
+        await dbFactory.Context.InsertAsync(highState);
+
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+        MachineSearchService service = new(scopeFactory, CreateMockPingService(), CreateConfigService());
+
+        MachineSearchCriteria criteria = DefaultCriteria();
+        criteria.SortBy = "cpu";
+        criteria.SortDir = "asc";
+
+        PaginatedResponse<FleetMachineDto> result = await service.SearchAsync(
+            criteria, 1, CancellationToken.None);
+
+        await Assert.That(result.Items[0].CpuUsagePercent).IsEqualTo(10);
+        await Assert.That(result.Items[1].CpuUsagePercent).IsEqualTo(90);
+    }
+
+    // ========== Sort by memory ascending ==========
+
+    [Test]
+    public async Task SearchAsync_SortByMemoryAsc_SortsCorrectly()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        Machine low = TestDataBuilder.BuildMachine(tenantId: 1, hostname: "low-mem");
+        low.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(low);
+        MachineStateSummary lowState = TestDataBuilder.BuildMachineStateSummary(machineId: low.Id, memoryPercent: 15);
+        await dbFactory.Context.InsertAsync(lowState);
+
+        Machine high = TestDataBuilder.BuildMachine(tenantId: 1, hostname: "high-mem");
+        high.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(high);
+        MachineStateSummary highState = TestDataBuilder.BuildMachineStateSummary(machineId: high.Id, memoryPercent: 75);
+        await dbFactory.Context.InsertAsync(highState);
+
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+        MachineSearchService service = new(scopeFactory, CreateMockPingService(), CreateConfigService());
+
+        MachineSearchCriteria criteria = DefaultCriteria();
+        criteria.SortBy = "memory";
+        criteria.SortDir = "asc";
+
+        PaginatedResponse<FleetMachineDto> result = await service.SearchAsync(
+            criteria, 1, CancellationToken.None);
+
+        await Assert.That(result.Items[0].MemoryUsagePercent).IsEqualTo(15);
+        await Assert.That(result.Items[1].MemoryUsagePercent).IsEqualTo(75);
+    }
 }

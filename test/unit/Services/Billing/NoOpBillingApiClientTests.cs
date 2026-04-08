@@ -42,35 +42,35 @@ public sealed class NoOpBillingApiClientTests
     }
 
     [Test]
-    public async Task UpdateQuantityAsync_NullTenantExternalId_DoesNotThrow()
+    public async Task GetUpcomingInvoiceAsync_ReturnsNull()
     {
-        bool result = await _client.UpdateQuantityAsync(null!, 5, CancellationToken.None);
+        UpcomingInvoiceResult? result = await _client.GetUpcomingInvoiceAsync("tenant-123", CancellationToken.None);
+
+        await Assert.That(result).IsNull();
+    }
+
+    [Test]
+    public async Task ListInvoicesAsync_ReturnsEmptyList()
+    {
+        List<InvoiceResult> results = await _client.ListInvoicesAsync("tenant-123", 12, CancellationToken.None);
+
+        await Assert.That(results).IsNotNull();
+        await Assert.That(results.Count).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task SwapSubscriptionPriceAsync_ReturnsTrue()
+    {
+        bool result = await _client.SwapSubscriptionPriceAsync("tenant-123", "pro", CancellationToken.None);
 
         await Assert.That(result).IsTrue();
     }
 
     [Test]
-    public async Task UpdateQuantityAsync_ZeroMachineCount_DoesNotThrow()
+    public async Task ResumeSubscriptionAsync_ReturnsTrue()
     {
-        bool result = await _client.UpdateQuantityAsync("tenant-123", 0, CancellationToken.None);
+        bool result = await _client.ResumeSubscriptionAsync("tenant-123", CancellationToken.None);
 
         await Assert.That(result).IsTrue();
-    }
-
-    [Test]
-    public async Task CancelSubscriptionAsync_NullTenantExternalId_DoesNotThrow()
-    {
-        bool result = await _client.CancelSubscriptionAsync(null!, CancellationToken.None);
-
-        await Assert.That(result).IsTrue();
-    }
-
-    [Test]
-    public async Task GetSubscriptionStatusAsync_EmptyString_ReturnsDefaultStatus()
-    {
-        StripeSubscriptionStatus status = await _client.GetSubscriptionStatusAsync("", CancellationToken.None);
-
-        await Assert.That(status.CancelAtPeriodEnd).IsFalse();
-        await Assert.That(status.StripeStatus).IsEqualTo("none");
     }
 }

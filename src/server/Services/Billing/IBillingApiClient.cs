@@ -66,12 +66,12 @@ public interface IBillingApiClient
 /// Upcoming invoice data from Stripe.
 /// </summary>
 public sealed record UpcomingInvoiceResult(
-    int AmountDueCents,
+    long AmountDueCents,
     string Currency,
     DateTimeOffset? PeriodStart,
     DateTimeOffset? PeriodEnd,
     DateTimeOffset? NextPaymentAttempt,
-    int UnitAmountCents,
+    long UnitAmountCents,
     List<InvoiceLineItemResult> Lines);
 
 /// <summary>
@@ -79,8 +79,8 @@ public sealed record UpcomingInvoiceResult(
 /// </summary>
 public sealed record InvoiceLineItemResult(
     string Description,
-    int AmountCents,
-    int Quantity,
+    long AmountCents,
+    long Quantity,
     DateTimeOffset? PeriodStart,
     DateTimeOffset? PeriodEnd,
     bool Proration);
@@ -90,7 +90,7 @@ public sealed record InvoiceLineItemResult(
 /// </summary>
 public sealed record InvoiceResult(
     string Id,
-    int AmountCents,
+    long AmountCents,
     string Currency,
     string Status,
     DateTimeOffset Created,

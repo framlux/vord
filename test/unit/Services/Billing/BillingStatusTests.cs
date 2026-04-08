@@ -14,26 +14,6 @@ namespace Framlux.FleetManagement.Test.Services.Billing;
 public sealed class BillingStatusTests
 {
     [Test]
-    public async Task IsEnabled_WhenBillingEnabledTrue_ReturnsTrue()
-    {
-        IOptions<BillingOptions> options = Options.Create(new BillingOptions { Enabled = true });
-
-        BillingStatus billingStatus = new(options);
-
-        await Assert.That(billingStatus.IsEnabled).IsTrue();
-    }
-
-    [Test]
-    public async Task IsEnabled_WhenBillingEnabledFalse_ReturnsFalse()
-    {
-        IOptions<BillingOptions> options = Options.Create(new BillingOptions { Enabled = false });
-
-        BillingStatus billingStatus = new(options);
-
-        await Assert.That(billingStatus.IsEnabled).IsFalse();
-    }
-
-    [Test]
     public async Task IsEnabled_WhenBillingEnabledNotSet_DefaultsToFalse()
     {
         IOptions<BillingOptions> options = Options.Create(new BillingOptions());

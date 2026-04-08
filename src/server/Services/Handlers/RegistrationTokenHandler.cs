@@ -8,7 +8,7 @@ using Framlux.FleetManagement.Database;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Server.Endpoints.Web;
-using Framlux.FleetManagement.Server.Endpoints.Web.Tenants;
+using Framlux.FleetManagement.Server.Endpoints.Web.Machines;
 using Framlux.FleetManagement.Server.Services.Infrastructure;
 using LinqToDB;
 using LinqToDB.Async;
@@ -78,9 +78,8 @@ public sealed class RegistrationTokenHandler : IRegistrationTokenHandler
     }
 
     /// <inheritdoc/>
-    public async Task<ServiceResult<object>> RevokeAsync(long tokenId, int tenantId, CancellationToken ct)
+    public async Task<ServiceResult<object>> RevokeAsync(long tokenId, int tenantId, int userId, CancellationToken ct)
     {
-
         using DataConnectionTransaction transaction = await _db.BeginTransactionAsync(ct);
 
         int updated = await _db.RegistrationTokens
@@ -95,7 +94,7 @@ public sealed class RegistrationTokenHandler : IRegistrationTokenHandler
         }
 
         await _db.InsertAsync(AuditHelper.Create(
-            tenantId, null, null,
+            tenantId, userId, null,
             AuditAction.RegistrationTokenRevoked, AuditResourceType.RegistrationToken,
             tokenId.ToString(), null, null), token: ct);
 

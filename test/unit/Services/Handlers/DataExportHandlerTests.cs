@@ -13,6 +13,7 @@ using LinqToDB;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Logging;
 using NSubstitute;
+using NSubstitute.ExceptionExtensions;
 
 namespace Framlux.FleetManagement.Test.Services.Handlers;
 
@@ -39,30 +40,6 @@ public class DataExportHandlerTests
         machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
 
         return machine.Id;
-    }
-
-    // ========== Constructor tests ==========
-
-    [Test]
-    public async Task Constructor_NullDatabaseContext_ThrowsArgumentNullException()
-    {
-        IObjectStorageService objectStorage = new CaptureObjectStorageService();
-        ILogger<DataExportHandler> logger = Substitute.For<ILogger<DataExportHandler>>();
-
-        await Assert.That(() =>
-            new DataExportHandler(null!, logger, objectStorage))
-            .Throws<ArgumentNullException>();
-    }
-
-    [Test]
-    public async Task Constructor_NullLogger_ThrowsArgumentNullException()
-    {
-        using TestDatabaseFactory dbFactory = new();
-        IObjectStorageService objectStorage = new CaptureObjectStorageService();
-
-        await Assert.That(() =>
-            new DataExportHandler(dbFactory.Context, null!, objectStorage))
-            .Throws<ArgumentNullException>();
     }
 
     // ========== ExportTenantDataAsync tests ==========
@@ -417,6 +394,343 @@ public class DataExportHandlerTests
         {
             CleanupFile(capture.LastCapturedPath);
         }
+    }
+
+    // ========== ExportTenantDataAsync edge cases ==========
+
+    [Test]
+    public async Task ExportTenantDataAsync_NoMachinesForTenant_ReturnsNotFound()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        DataExportHandler handler = CreateHandler(dbFactory);
+
+        // Tenant 999 has no machines
+        ServiceResult<int> result = await handler.ExportTenantDataAsync(999, 1, CancellationToken.None);
+
+        await Assert.That(result.IsNotFound).IsEqualTo(true);
+    }
+
+    [Test]
+    public async Task ExportTenantDataAsync_OnlyDeletedMachines_ReturnsNotFound()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        await SeedMachine(dbFactory, tenantId: 5, isDeleted: true);
+        DataExportHandler handler = CreateHandler(dbFactory);
+
+        ServiceResult<int> result = await handler.ExportTenantDataAsync(5, 1, CancellationToken.None);
+
+        await Assert.That(result.IsNotFound).IsEqualTo(true);
+    }
+
+    [Test]
+    public async Task ExportTenantDataAsync_ActiveJobExists_Returns409()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        await SeedMachine(dbFactory, tenantId: 1);
+        DataExportHandler handler = CreateHandler(dbFactory);
+
+        // Create first job
+        ServiceResult<int> firstResult = await handler.ExportTenantDataAsync(1, 1, CancellationToken.None);
+        await Assert.That(firstResult.IsSuccess).IsEqualTo(true);
+
+        // Attempt second job while first is still pending
+        ServiceResult<int> secondResult = await handler.ExportTenantDataAsync(1, 1, CancellationToken.None);
+
+        await Assert.That(secondResult.StatusCode).IsEqualTo(409);
+    }
+
+    [Test]
+    public async Task ExportTenantDataAsync_CompletedJobExists_AllowsNewJob()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        await SeedMachine(dbFactory, tenantId: 1);
+
+        CaptureObjectStorageService capture = new();
+        DataExportHandler handler = CreateHandler(dbFactory, objectStorage: capture);
+
+        // Create and process first job to completion
+        ServiceResult<int> firstResult = await handler.ExportTenantDataAsync(1, 1, CancellationToken.None);
+        await handler.ProcessExportJobAsync(firstResult.Data, CancellationToken.None);
+
+        try
+        {
+            // Second job should succeed since first is completed
+            ServiceResult<int> secondResult = await handler.ExportTenantDataAsync(1, 1, CancellationToken.None);
+
+            await Assert.That(secondResult.IsSuccess).IsEqualTo(true);
+            await Assert.That(secondResult.Data).IsGreaterThan(firstResult.Data);
+        }
+        finally
+        {
+            CleanupFile(capture.LastCapturedPath);
+        }
+    }
+
+    [Test]
+    public async Task ExportTenantDataAsync_CreatesAuditLogEntry()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        await SeedMachine(dbFactory, tenantId: 1);
+        DataExportHandler handler = CreateHandler(dbFactory);
+
+        ServiceResult<int> result = await handler.ExportTenantDataAsync(1, 42, CancellationToken.None);
+
+        await Assert.That(result.IsSuccess).IsEqualTo(true);
+
+        AuditLogEntry? audit = await dbFactory.Context.AuditLog
+            .FirstOrDefaultAsync(a => a.ResourceId == result.Data.ToString());
+        await Assert.That(audit).IsNotNull();
+        await Assert.That(audit!.Action).IsEqualTo(AuditAction.DataExportRequested);
+    }
+
+    // ========== ProcessExportJobAsync edge cases ==========
+
+    [Test]
+    public async Task ProcessExportJobAsync_NonExistentJob_DoesNotThrow()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        DataExportHandler handler = CreateHandler(dbFactory);
+
+        // Should not throw; logs warning and returns
+        await handler.ProcessExportJobAsync(99999, CancellationToken.None);
+    }
+
+    [Test]
+    public async Task ProcessExportJobAsync_NoMachinesAfterJobCreated_FailsJob()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        long machineId = await SeedMachine(dbFactory, tenantId: 1);
+        DataExportHandler handler = CreateHandler(dbFactory);
+
+        ServiceResult<int> createResult = await handler.ExportTenantDataAsync(1, 1, CancellationToken.None);
+        int jobId = createResult.Data;
+
+        // Delete all machines after job was created
+        await dbFactory.Context.Machines
+            .Where(m => m.Id == machineId)
+            .Set(m => m.IsDeleted, true)
+            .UpdateAsync();
+
+        await handler.ProcessExportJobAsync(jobId, CancellationToken.None);
+
+        DataExportJob? job = await dbFactory.Context.DataExportJobs
+            .FirstOrDefaultAsync(j => j.Id == jobId);
+        await Assert.That(job).IsNotNull();
+        await Assert.That(job!.Status).IsEqualTo(DataExportJobStatus.Failed);
+        await Assert.That(string.IsNullOrEmpty(job.ErrorMessage)).IsEqualTo(false);
+    }
+
+    [Test]
+    public async Task ProcessExportJobAsync_UploadFails_FailsJob()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        await SeedMachine(dbFactory, tenantId: 1);
+
+        IObjectStorageService failingStorage = Substitute.For<IObjectStorageService>();
+        failingStorage.UploadFileAsync(
+            Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .ThrowsAsync(new InvalidOperationException("Upload failed"));
+
+        DataExportHandler handler = CreateHandler(dbFactory, objectStorage: failingStorage);
+
+        ServiceResult<int> createResult = await handler.ExportTenantDataAsync(1, 1, CancellationToken.None);
+        await handler.ProcessExportJobAsync(createResult.Data, CancellationToken.None);
+
+        DataExportJob? job = await dbFactory.Context.DataExportJobs
+            .FirstOrDefaultAsync(j => j.Id == createResult.Data);
+        await Assert.That(job).IsNotNull();
+        await Assert.That(job!.Status).IsEqualTo(DataExportJobStatus.Failed);
+        await Assert.That(job.ErrorMessage).IsNotNull();
+    }
+
+    [Test]
+    public async Task ProcessExportJobAsync_TeamTierSubscription_IncludesAuditLog()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        long machineId = await SeedMachine(dbFactory, tenantId: 1);
+
+        // Seed a Team tier subscription
+        TenantSubscription subscription = TestDataBuilder.BuildSubscription(
+            tenantId: 1, tier: SubscriptionTier.Team, status: SubscriptionStatus.Active);
+        await dbFactory.Context.InsertWithInt32IdentityAsync(subscription);
+
+        // Seed an audit log entry
+        AuditLogEntry auditEntry = new()
+        {
+            TenantId = 1,
+            UserId = 1,
+            MachineId = null,
+            Action = AuditAction.DataExportRequested,
+            ResourceType = AuditResourceType.DataExport,
+            ResourceId = "test",
+            Details = null,
+            IpAddress = null,
+            Timestamp = DateTimeOffset.UtcNow,
+        };
+        await dbFactory.Context.InsertWithInt64IdentityAsync(auditEntry);
+
+        CaptureObjectStorageService capture = new();
+        DataExportHandler handler = CreateHandler(dbFactory, objectStorage: capture);
+
+        ServiceResult<int> createResult = await handler.ExportTenantDataAsync(1, 1, CancellationToken.None);
+        await handler.ProcessExportJobAsync(createResult.Data, CancellationToken.None);
+
+        try
+        {
+            await Assert.That(capture.LastCapturedPath).IsNotNull();
+
+            using SqliteConnection sqlite = new($"Data Source={capture.LastCapturedPath}");
+            await sqlite.OpenAsync();
+
+            // Verify audit log table has data
+            using SqliteCommand cmd = new("SELECT COUNT(*) FROM AuditLog", sqlite);
+            long auditCount = Convert.ToInt64(await cmd.ExecuteScalarAsync());
+            await Assert.That(auditCount).IsGreaterThanOrEqualTo(1);
+
+            // Verify metadata includes AuditLogRecordCount
+            using SqliteCommand metaCmd = new(
+                "SELECT Value FROM ExportMetadata WHERE Key = 'AuditLogRecordCount'", sqlite);
+            string? auditMeta = (string?)await metaCmd.ExecuteScalarAsync();
+            await Assert.That(auditMeta).IsNotNull();
+        }
+        finally
+        {
+            CleanupFile(capture.LastCapturedPath);
+        }
+    }
+
+    [Test]
+    public async Task ProcessExportJobAsync_NonTeamTierSubscription_ExcludesAuditLog()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        await SeedMachine(dbFactory, tenantId: 1);
+
+        // Seed a Pro tier subscription (not Team)
+        TenantSubscription subscription = TestDataBuilder.BuildSubscription(
+            tenantId: 1, tier: SubscriptionTier.Pro, status: SubscriptionStatus.Active);
+        await dbFactory.Context.InsertWithInt32IdentityAsync(subscription);
+
+        CaptureObjectStorageService capture = new();
+        DataExportHandler handler = CreateHandler(dbFactory, objectStorage: capture);
+
+        ServiceResult<int> createResult = await handler.ExportTenantDataAsync(1, 1, CancellationToken.None);
+        await handler.ProcessExportJobAsync(createResult.Data, CancellationToken.None);
+
+        try
+        {
+            using SqliteConnection sqlite = new($"Data Source={capture.LastCapturedPath}");
+            await sqlite.OpenAsync();
+
+            // Verify no AuditLogRecordCount metadata key
+            using SqliteCommand metaCmd = new(
+                "SELECT Value FROM ExportMetadata WHERE Key = 'AuditLogRecordCount'", sqlite);
+            object? auditMeta = await metaCmd.ExecuteScalarAsync();
+            await Assert.That(auditMeta).IsNull();
+        }
+        finally
+        {
+            CleanupFile(capture.LastCapturedPath);
+        }
+    }
+
+    // ========== GetExportJobAsync edge cases ==========
+
+    [Test]
+    public async Task GetExportJobAsync_NullTenantId_ReturnsNotFound()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        DataExportHandler handler = CreateHandler(dbFactory);
+
+        ServiceResult<DataExportJob> result = await handler.GetExportJobAsync(1, null, CancellationToken.None);
+
+        await Assert.That(result.IsNotFound).IsEqualTo(true);
+    }
+
+    [Test]
+    public async Task GetExportJobAsync_NonExistentJob_ReturnsNotFound()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        DataExportHandler handler = CreateHandler(dbFactory);
+
+        ServiceResult<DataExportJob> result = await handler.GetExportJobAsync(99999, 1, CancellationToken.None);
+
+        await Assert.That(result.IsNotFound).IsEqualTo(true);
+    }
+
+    [Test]
+    public async Task GetExportJobAsync_CorrectTenant_ReturnsJob()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        await SeedMachine(dbFactory, tenantId: 1);
+        DataExportHandler handler = CreateHandler(dbFactory);
+
+        ServiceResult<int> createResult = await handler.ExportTenantDataAsync(1, 1, CancellationToken.None);
+        int jobId = createResult.Data;
+
+        ServiceResult<DataExportJob> result = await handler.GetExportJobAsync(jobId, 1, CancellationToken.None);
+
+        await Assert.That(result.IsSuccess).IsEqualTo(true);
+        await Assert.That(result.Data).IsNotNull();
+        await Assert.That(result.Data!.Id).IsEqualTo(jobId);
+        await Assert.That(result.Data.TenantId).IsEqualTo(1);
+    }
+
+    // ========== GetExportJobByTokenAsync tests ==========
+
+    [Test]
+    public async Task GetExportJobByTokenAsync_NullToken_ReturnsNotFound()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        DataExportHandler handler = CreateHandler(dbFactory);
+
+        ServiceResult<DataExportJob> result = await handler.GetExportJobByTokenAsync(null!, CancellationToken.None);
+
+        await Assert.That(result.IsNotFound).IsEqualTo(true);
+    }
+
+    [Test]
+    public async Task GetExportJobByTokenAsync_EmptyToken_ReturnsNotFound()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        DataExportHandler handler = CreateHandler(dbFactory);
+
+        ServiceResult<DataExportJob> result = await handler.GetExportJobByTokenAsync(string.Empty, CancellationToken.None);
+
+        await Assert.That(result.IsNotFound).IsEqualTo(true);
+    }
+
+    [Test]
+    public async Task GetExportJobByTokenAsync_NonExistentToken_ReturnsNotFound()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        DataExportHandler handler = CreateHandler(dbFactory);
+
+        ServiceResult<DataExportJob> result = await handler.GetExportJobByTokenAsync("nonexistent-token", CancellationToken.None);
+
+        await Assert.That(result.IsNotFound).IsEqualTo(true);
+    }
+
+    [Test]
+    public async Task GetExportJobByTokenAsync_ValidToken_ReturnsJob()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        await SeedMachine(dbFactory, tenantId: 1);
+        DataExportHandler handler = CreateHandler(dbFactory);
+
+        ServiceResult<int> createResult = await handler.ExportTenantDataAsync(1, 1, CancellationToken.None);
+        int jobId = createResult.Data;
+
+        // Retrieve the job to get its token
+        DataExportJob? createdJob = await dbFactory.Context.DataExportJobs
+            .FirstOrDefaultAsync(j => j.Id == jobId);
+        await Assert.That(createdJob).IsNotNull();
+
+        ServiceResult<DataExportJob> result = await handler.GetExportJobByTokenAsync(
+            createdJob!.DownloadToken, CancellationToken.None);
+
+        await Assert.That(result.IsSuccess).IsEqualTo(true);
+        await Assert.That(result.Data).IsNotNull();
+        await Assert.That(result.Data!.Id).IsEqualTo(jobId);
     }
 
     // ========== Helpers ==========

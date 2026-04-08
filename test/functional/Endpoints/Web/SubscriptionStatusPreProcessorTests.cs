@@ -140,7 +140,7 @@ public sealed class SubscriptionStatusPreProcessorTests
         (int tenantId, int userId) = await SeedTenantWithStatus(db, SubscriptionStatus.Canceled);
         HttpClient client = BuildClient(factory, tenantId, userId);
 
-        HttpResponseMessage response = await client.DeleteAsync("/api/v1/tenants/registration-tokens/99999");
+        HttpResponseMessage response = await client.DeleteAsync("/api/v1/machines/registration-tokens/99999");
 
         await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.Forbidden);
     }
@@ -206,7 +206,7 @@ public sealed class SubscriptionStatusPreProcessorTests
     // --- Active and PastDue subscriptions pass through ---
 
     [Test]
-    public async Task Post_ActiveSubscription_Returns200()
+    public async Task Get_ActiveSubscription_Returns200()
     {
         using FunctionalTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
@@ -219,7 +219,7 @@ public sealed class SubscriptionStatusPreProcessorTests
     }
 
     [Test]
-    public async Task Post_PastDueSubscription_NotBlocked()
+    public async Task Get_PastDueSubscription_NotBlocked()
     {
         using FunctionalTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();

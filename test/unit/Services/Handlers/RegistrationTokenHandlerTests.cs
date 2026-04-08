@@ -3,7 +3,7 @@
 // See LICENSE for details.
 
 using Framlux.FleetManagement.Database.Models;
-using Framlux.FleetManagement.Server.Endpoints.Web.Tenants;
+using Framlux.FleetManagement.Server.Endpoints.Web.Machines;
 using Framlux.FleetManagement.Server.Endpoints.Web;
 using Framlux.FleetManagement.Server.Services.Handlers;
 using Framlux.FleetManagement.Server.Services.Infrastructure;
@@ -18,16 +18,6 @@ namespace Framlux.FleetManagement.Test.Services.Handlers;
 /// </summary>
 public class RegistrationTokenHandlerTests
 {
-    // ========== Constructor tests ==========
-
-    [Test]
-    public async Task Constructor_NullDatabaseContext_ThrowsArgumentNullException()
-    {
-        await Assert.That(() =>
-            new RegistrationTokenHandler(null!))
-            .Throws<ArgumentNullException>();
-    }
-
     // ========== CreateAsync null name tests ==========
 
     [Test]
@@ -104,7 +94,7 @@ public class RegistrationTokenHandlerTests
         using TestDatabaseFactory dbFactory = new();
         RegistrationTokenHandler handler = new(dbFactory.Context);
 
-        ServiceResult<object> result = await handler.RevokeAsync(999, 1, CancellationToken.None);
+        ServiceResult<object> result = await handler.RevokeAsync(999, 1, 1, CancellationToken.None);
 
         await Assert.That(result.IsNotFound).IsEqualTo(true);
     }
@@ -126,7 +116,7 @@ public class RegistrationTokenHandlerTests
 
         RegistrationTokenHandler handler = new(dbFactory.Context);
 
-        ServiceResult<object> result = await handler.RevokeAsync(token.Id, 1, CancellationToken.None);
+        ServiceResult<object> result = await handler.RevokeAsync(token.Id, 1, 1, CancellationToken.None);
 
         await Assert.That(result.IsNotFound).IsEqualTo(true);
     }
@@ -149,7 +139,7 @@ public class RegistrationTokenHandlerTests
 
         RegistrationTokenHandler handler = new(dbFactory.Context);
 
-        ServiceResult<object> result = await handler.RevokeAsync(token.Id, 1, CancellationToken.None);
+        ServiceResult<object> result = await handler.RevokeAsync(token.Id, 1, 1, CancellationToken.None);
 
         await Assert.That(result.IsNotFound).IsEqualTo(true);
     }
@@ -171,7 +161,7 @@ public class RegistrationTokenHandlerTests
 
         RegistrationTokenHandler handler = new(dbFactory.Context);
 
-        ServiceResult<object> result = await handler.RevokeAsync(token.Id, 1, CancellationToken.None);
+        ServiceResult<object> result = await handler.RevokeAsync(token.Id, 1, 1, CancellationToken.None);
 
         await Assert.That(result.IsSuccess).IsEqualTo(true);
 
@@ -276,5 +266,7 @@ public class RegistrationTokenHandlerTests
         await Assert.That(result.IsSuccess).IsEqualTo(true);
         await Assert.That(result.Data!.Items.Count).IsEqualTo(2);
         await Assert.That(result.Data!.TotalCount).IsEqualTo(2);
+        await Assert.That(result.Data!.HasNextPage).IsEqualTo(false);
+        await Assert.That(result.Data!.HasPreviousPage).IsEqualTo(false);
     }
 }

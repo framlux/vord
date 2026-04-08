@@ -555,6 +555,37 @@ public sealed class SocialAuthEventsTests
             u.AuthProvider == Database.Enums.AuthProviderType.Microsoft));
     }
 
+    // --- Signup disabled blocks new user ---
+
+    [Test]
+    public async Task PopulateUserClaimsAsync_SignupDisabled_BlocksNewUser()
+    {
+        IDatabaseCache dbCache = Substitute.For<IDatabaseCache>();
+        IServerSettingsCache settingsCache = Substitute.For<IServerSettingsCache>();
+        settingsCache.GetSettingAsync(Database.Enums.ServerConfigurationSettingKeys.AllowUserSignup, Arg.Any<CancellationToken>())
+            .Returns("false");
+
+        ServiceCollection services = new();
+        services.AddSingleton(dbCache);
+        services.AddSingleton(settingsCache);
+        ServiceProvider provider = services.BuildServiceProvider();
+
+        DefaultHttpContext httpContext = new()
+        {
+            RequestServices = provider
+        };
+
+        ClaimsIdentity identity = CreateIdentity(nameIdentifier: "ext-new-blocked", email: "blocked@example.com");
+
+        dbCache.GetUserByExternalIdAsync("ext-new-blocked", Arg.Any<CancellationToken>())
+            .Returns((UserAccount?)null);
+
+        bool result = await SocialAuthEvents.PopulateUserClaimsAsync(identity, httpContext, CancellationToken.None);
+
+        await Assert.That(result).IsFalse();
+        await dbCache.DidNotReceive().CreateUserAccountAsync(Arg.Any<UserAccount>());
+    }
+
     // --- Global admin false sets iga to False ---
 
     [Test]

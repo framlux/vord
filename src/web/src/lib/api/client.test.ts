@@ -638,7 +638,7 @@ describe('ApiClient', () => {
             expect(result).toHaveLength(1);
         });
 
-        it('should GET /api/v1/tenants/registration-tokens and return tokens array', async () => {
+        it('should GET /api/v1/machines/registration-tokens and return tokens array', async () => {
             const tokens = [{ id: 1, name: 'Token 1', token: 'tok-123', expiresAt: '', maxUses: 10, usedCount: 0, createdAt: '', isRevoked: false }];
             mockSuccess({ items: tokens, page: 1, pageSize: 25, totalCount: 1 });
             const result = await client.getRegistrationTokens();
@@ -646,14 +646,14 @@ describe('ApiClient', () => {
             expect(result).toHaveLength(1);
         });
 
-        it('should POST to /api/v1/tenants/registration-tokens for createRegistrationToken', async () => {
+        it('should POST to /api/v1/machines/registration-tokens for createRegistrationToken', async () => {
             const req = { name: 'Token 1', expiresInDays: 30, maxUses: 10 };
             const tokenData = { id: 1, name: 'Token 1', token: 'tok-123', expiresAt: '', maxUses: 10, usedCount: 0, createdAt: '', isRevoked: false };
             mockSuccess(tokenData);
             const result = await client.createRegistrationToken(req);
             expect(result).toEqual(tokenData);
             expect(fetchFn).toHaveBeenCalledWith(
-                'http://localhost:12233/api/v1/tenants/registration-tokens',
+                'http://localhost:12233/api/v1/machines/registration-tokens',
                 expect.objectContaining({
                     method: 'POST',
                     body: JSON.stringify(req)
@@ -661,11 +661,11 @@ describe('ApiClient', () => {
             );
         });
 
-        it('should DELETE /api/v1/tenants/registration-tokens/{id} for revokeRegistrationToken', async () => {
+        it('should DELETE /api/v1/machines/registration-tokens/{id} for revokeRegistrationToken', async () => {
             mockSuccess({});
             await client.revokeRegistrationToken(8);
             expect(fetchFn).toHaveBeenCalledWith(
-                'http://localhost:12233/api/v1/tenants/registration-tokens/8',
+                'http://localhost:12233/api/v1/machines/registration-tokens/8',
                 expect.objectContaining({ method: 'DELETE' })
             );
         });

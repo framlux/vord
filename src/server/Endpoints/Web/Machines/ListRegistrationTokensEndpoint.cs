@@ -7,7 +7,7 @@ using Framlux.FleetManagement.Server.Auth;
 using Framlux.FleetManagement.Server.Services.Handlers;
 using Framlux.FleetManagement.Server.Services.Infrastructure;
 
-namespace Framlux.FleetManagement.Server.Endpoints.Web.Tenants;
+namespace Framlux.FleetManagement.Server.Endpoints.Web.Machines;
 
 /// <summary>
 /// Lists registration tokens for the tenant (paginated).
@@ -27,7 +27,7 @@ public sealed class ListRegistrationTokensEndpoint : EndpointWithoutRequest<ApiR
     /// <inheritdoc/>
     public override void Configure()
     {
-        Get("/tenants/registration-tokens");
+        Get("/machines/registration-tokens");
         Policies("MachineAdmin");
         Version(1);
     }
@@ -47,6 +47,15 @@ public sealed class ListRegistrationTokensEndpoint : EndpointWithoutRequest<ApiR
         int pageSize = Math.Clamp(Query<int?>("pageSize", isRequired: false) ?? 25, 1, 100);
 
         ServiceResult<PaginatedResponse<RegistrationTokenDto>> result = await _handler.ListAsync(tenantId.Value, page, pageSize, ct);
+
+        if (result.IsSuccess == false)
+        {
+            HttpContext.Response.StatusCode = result.StatusCode;
+            await HttpContext.Response.WriteAsJsonAsync(
+                ApiResponse<PaginatedResponse<RegistrationTokenDto>>.Error("Failed to retrieve tokens"), ct);
+
+            return;
+        }
 
         await Send.OkAsync(ApiResponse<PaginatedResponse<RegistrationTokenDto>>.Ok(result.Data!), cancellation: ct);
     }

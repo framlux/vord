@@ -297,7 +297,7 @@ public sealed class CrossTenantIsolationTests
             .WithActiveTenant(tenant1Id)
             .Build();
 
-        HttpResponseMessage response = await client.GetAsync("/api/v1/tenants/registration-tokens");
+        HttpResponseMessage response = await client.GetAsync("/api/v1/machines/registration-tokens");
 
         await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
 

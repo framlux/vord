@@ -223,15 +223,53 @@ public class SsrfSafeSocketsHttpHandlerTests
         await Assert.That(result).IsEqualTo(false);
     }
 
-    // --- Handler factory creates a usable handler ---
+    // --- Boundary tests for 172.16-31 range ---
 
     [Test]
-    public async Task Create_ReturnsHandlerWithConnectCallback()
+    public async Task PrivateRange172_16_Boundary_IsBlocked()
     {
-        using System.Net.Http.SocketsHttpHandler handler = SsrfSafeSocketsHttpHandler.Create();
-        bool hasCallback = handler.ConnectCallback is not null;
+        // Start of 172.16.0.0/12 range
+        bool result = SsrfSafeSocketsHttpHandler.IsPrivateOrReservedIp(IPAddress.Parse("172.16.0.1"));
 
-        await Assert.That(hasCallback).IsEqualTo(true);
+        await Assert.That(result).IsEqualTo(true);
+    }
+
+    [Test]
+    public async Task PrivateRange172_31_Boundary_IsBlocked()
+    {
+        // End of 172.16.0.0/12 range
+        bool result = SsrfSafeSocketsHttpHandler.IsPrivateOrReservedIp(IPAddress.Parse("172.31.255.254"));
+
+        await Assert.That(result).IsEqualTo(true);
+    }
+
+    [Test]
+    public async Task NonPrivate172_15_IsAllowed()
+    {
+        // Just below the private range
+        bool result = SsrfSafeSocketsHttpHandler.IsPrivateOrReservedIp(IPAddress.Parse("172.15.255.254"));
+
+        await Assert.That(result).IsEqualTo(false);
+    }
+
+    [Test]
+    public async Task NonPrivate172_32_IsAllowed()
+    {
+        // Just above the private range
+        bool result = SsrfSafeSocketsHttpHandler.IsPrivateOrReservedIp(IPAddress.Parse("172.32.0.1"));
+
+        await Assert.That(result).IsEqualTo(false);
+    }
+
+    // --- IPv6 link-local second byte boundary ---
+
+    [Test]
+    public async Task Ipv6LinkLocal_FeBf_IsBlocked()
+    {
+        // fe80::/10 includes fe80:: through febf::
+        bool result = SsrfSafeSocketsHttpHandler.IsPrivateOrReservedIp(IPAddress.Parse("febf::1"));
+
+        await Assert.That(result).IsEqualTo(true);
     }
 
     // --- ConnectAsync callback integration via HttpClient ---

@@ -19,7 +19,7 @@ public sealed class InvoiceDto
     public string Id { get; set; } = string.Empty;
 
     /// <summary>Total amount in cents.</summary>
-    public int AmountCents { get; set; }
+    public long AmountCents { get; set; }
 
     /// <summary>Three-letter currency code.</summary>
     public string Currency { get; set; } = "usd";

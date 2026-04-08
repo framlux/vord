@@ -19,11 +19,6 @@ namespace Framlux.FleetManagement.FunctionalTest.Endpoints.Web;
 /// </summary>
 public sealed class AuthenticatedEndpointTests
 {
-    private static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        PropertyNameCaseInsensitive = true
-    };
-
     [Test]
     public async Task AuthMe_ValidUser_ReturnsUserWithTenantDetails()
     {
@@ -389,9 +384,8 @@ public sealed class AuthenticatedEndpointTests
             OrganizationName = ""
         });
 
-        // The endpoint should reject empty organization names with an error status
-        bool isErrorStatus = (int)response.StatusCode >= 400;
-        await Assert.That(isErrorStatus).IsEqualTo(true);
+        // The endpoint should reject empty organization names with a 400 Bad Request
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.BadRequest);
     }
 
     [Test]

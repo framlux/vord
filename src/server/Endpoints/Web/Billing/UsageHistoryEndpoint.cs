@@ -23,7 +23,7 @@ public sealed class UsagePointDto
     public int MachineCount { get; set; }
 
     /// <summary>Invoice amount in cents for this month.</summary>
-    public int InvoiceAmountCents { get; set; }
+    public long InvoiceAmountCents { get; set; }
 }
 
 /// <summary>
@@ -88,7 +88,7 @@ public sealed class UsageHistoryEndpoint : EndpointWithoutRequest<ApiResponse<Li
             tenant.ExternalId, months, ct);
 
         // Build a map of month -> invoice amount
-        Dictionary<string, int> invoiceByMonth = [];
+        Dictionary<string, long> invoiceByMonth = [];
         foreach (InvoiceResult inv in invoices)
         {
             if (inv.PeriodStart.HasValue)
@@ -112,7 +112,7 @@ public sealed class UsageHistoryEndpoint : EndpointWithoutRequest<ApiResponse<Li
                 tenantId.Value, monthEnd, ct);
 
             string monthKey = monthEnd.ToString("yyyy-MM");
-            invoiceByMonth.TryGetValue(monthKey, out int invoiceAmount);
+            invoiceByMonth.TryGetValue(monthKey, out long invoiceAmount);
 
             points.Add(new UsagePointDto
             {

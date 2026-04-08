@@ -2,14 +2,15 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
+using Framlux.FleetManagement.Database;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Server.Services.Infrastructure;
 using Framlux.FleetManagement.Server.Services.Telemetry;
 using Framlux.FleetManagement.Test.Infrastructure;
-using LinqToDB.Async;
 using LinqToDB;
-using Microsoft.Extensions.Logging.Abstractions;
+using LinqToDB.Async;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
 using StackExchange.Redis;
 
@@ -439,5 +440,88 @@ public sealed class TelemetryRetentionServiceTests
         List<MachineTelemetry> active = await dbFactory.Context.MachineTelemetry
             .Where(t => t.DeletedAt == null).ToListAsync();
         await Assert.That(active.Count).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task PurgeOldTelemetry_PositiveDeleted_LogsPerTenant()
+    {
+        using TestDatabaseFactory dbFactory = new();
+
+        TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 1, retentionDays: 1);
+        sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
+
+        Machine machine = TestDataBuilder.BuildMachine(tenantId: 1);
+        machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
+
+        // Insert old telemetry that will trigger the per-tenant logging branch
+        await dbFactory.Context.InsertAsync(new MachineTelemetry
+        {
+            MachineId = machine.Id,
+            TenantId = 1,
+            TelemetryType = 1,
+            Payload = "{}",
+            ReceivedAt = DateTimeOffset.UtcNow.AddDays(-5),
+            SourceEventId = "old-event-for-log"
+        });
+
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+        ILogger<TelemetryRetentionService> logger = Substitute.For<ILogger<TelemetryRetentionService>>();
+        IDistributedLock distributedLock = Substitute.For<IDistributedLock>();
+        distributedLock.TryAcquireAsync(Arg.Any<string>(), Arg.Any<TimeSpan>())
+            .Returns(Task.FromResult<LockHandle?>(new LockHandle(Substitute.For<IDatabase>(), "test-key", "test-value")));
+        TelemetryRetentionService service = new(scopeFactory, distributedLock, logger);
+
+        System.Reflection.MethodInfo? method = typeof(TelemetryRetentionService)
+            .GetMethod("PurgeOldTelemetryAsync", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+        await (Task)method!.Invoke(service, [CancellationToken.None])!;
+
+        // Should have two Information logs: one per-tenant and one summary
+        logger.Received(2).Log(
+            LogLevel.Information,
+            Arg.Any<EventId>(),
+            Arg.Any<object>(),
+            Arg.Any<Exception>(),
+            Arg.Any<Func<object, Exception?, string>>());
+    }
+
+    [Test]
+    public async Task PurgeOldTelemetry_SubscriptionWithNoExpiredTelemetry_LogsZeroTotal()
+    {
+        using TestDatabaseFactory dbFactory = new();
+
+        // Create a subscription but insert no telemetry at all
+        TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 1, retentionDays: 7);
+        sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
+
+        Machine machine = TestDataBuilder.BuildMachine(tenantId: 1);
+        machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
+
+        // Insert only recent telemetry within retention
+        await dbFactory.Context.InsertAsync(new MachineTelemetry
+        {
+            MachineId = machine.Id,
+            TenantId = 1,
+            TelemetryType = 1,
+            Payload = "{}",
+            ReceivedAt = DateTimeOffset.UtcNow.AddHours(-1),
+            SourceEventId = "very-recent"
+        });
+
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+        ILogger<TelemetryRetentionService> logger = Substitute.For<ILogger<TelemetryRetentionService>>();
+        IDistributedLock distributedLock = Substitute.For<IDistributedLock>();
+        distributedLock.TryAcquireAsync(Arg.Any<string>(), Arg.Any<TimeSpan>())
+            .Returns(Task.FromResult<LockHandle?>(new LockHandle(Substitute.For<IDatabase>(), "test-key", "test-value")));
+        TelemetryRetentionService service = new(scopeFactory, distributedLock, logger);
+
+        System.Reflection.MethodInfo? method = typeof(TelemetryRetentionService)
+            .GetMethod("PurgeOldTelemetryAsync", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+        await (Task)method!.Invoke(service, [CancellationToken.None])!;
+
+        // Nothing should have been soft-deleted; the per-tenant log should not fire but the summary should
+        List<MachineTelemetry> active = await dbFactory.Context.MachineTelemetry
+            .Where(t => t.DeletedAt == null).ToListAsync();
+        await Assert.That(active.Count).IsEqualTo(1);
+        await Assert.That(active[0].SourceEventId).IsEqualTo("very-recent");
     }
 }

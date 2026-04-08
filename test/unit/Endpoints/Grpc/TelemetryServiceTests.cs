@@ -120,7 +120,33 @@ public sealed class TelemetryServiceTests
         TelemetryAck ack = await service.SubmitTelemetry(envelope, context);
 
         await Assert.That(ack.Success).IsEqualTo(false);
-        await Assert.That(ack.ErrorMessage).IsNotEqualTo(string.Empty);
+        await Assert.That(ack.ErrorMessage).IsEqualTo("Could not determine machine identity");
+    }
+
+    [Test]
+    public async Task SubmitTelemetry_NoMachineIdClaim_DoesNotInsertTelemetry()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+        TelemetryService service = CreateService(scopeFactory);
+        ServerCallContext context = CreateUnauthenticatedContext();
+
+        TelemetryEnvelope envelope = new()
+        {
+            BatchId = "batch-no-auth",
+        };
+        envelope.Items.Add(new TelemetryItem
+        {
+            EventId = "event-no-auth",
+            Type = TelemetryTypes.CpuUtilizationType,
+            CpuUtilization = new CpuUtilizationRecord { CpuUsagePercent = 50 }
+        });
+
+        await service.SubmitTelemetry(envelope, context);
+
+        List<MachineTelemetry> telemetry = await dbFactory.Context.MachineTelemetry.ToListAsync();
+
+        await Assert.That(telemetry.Count).IsEqualTo(0);
     }
 
     [Test]
@@ -205,26 +231,31 @@ public sealed class TelemetryServiceTests
     }
 
     [Test]
-    public async Task SubmitTelemetry_ValidRequest_CallsStateUpdater()
+    public async Task SubmitTelemetry_ValidRequest_StoresTelemetryWithCorrectTenantAndEventId()
     {
         using TestDatabaseFactory dbFactory = new();
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
         TelemetryService service = CreateService(scopeFactory);
-        ServerCallContext context = CreateAuthenticatedContext(100);
+        ServerCallContext context = CreateAuthenticatedContext(100, tenantId: 5);
 
         TelemetryEnvelope envelope = new()
         {
-            BatchId = "batch-3",
+            BatchId = "batch-state",
         };
         envelope.Items.Add(new TelemetryItem
         {
-            EventId = "event-3",
+            EventId = "event-state-1",
             Type = TelemetryTypes.CpuUtilizationType,
-            CpuUtilization = new CpuUtilizationRecord { CpuUsagePercent =75 }
+            CpuUtilization = new CpuUtilizationRecord { CpuUsagePercent = 75 }
         });
 
-        await service.SubmitTelemetry(envelope, context);
+        TelemetryAck ack = await service.SubmitTelemetry(envelope, context);
 
+        List<MachineTelemetry> telemetry = await dbFactory.Context.MachineTelemetry.ToListAsync();
+        await Assert.That(ack.Success).IsEqualTo(true);
+        await Assert.That(telemetry.Count).IsEqualTo(1);
+        await Assert.That(telemetry[0].TenantId).IsEqualTo(5);
+        await Assert.That(telemetry[0].SourceEventId).IsEqualTo("event-state-1");
     }
 
     [Test]
@@ -362,7 +393,12 @@ public sealed class TelemetryServiceTests
         TelemetryAck ack = await service.SubmitTelemetry(envelope, context);
 
         await Assert.That(ack.Success).IsEqualTo(false);
-        await Assert.That(ack.ErrorMessage).IsNotEqualTo(string.Empty);
+        await Assert.That(ack.ErrorMessage).IsEqualTo("Tenant subscription is not active");
+
+        // No telemetry rows should be inserted when subscription is inactive
+        List<MachineTelemetry> telemetry = await dbFactory.Context.MachineTelemetry.ToListAsync();
+
+        await Assert.That(telemetry.Count).IsEqualTo(0);
     }
 
     [Test]
@@ -387,7 +423,7 @@ public sealed class TelemetryServiceTests
         TelemetryAck ack = await service.SubmitTelemetry(envelope, context);
 
         await Assert.That(ack.Success).IsEqualTo(false);
-        await Assert.That(ack.ErrorMessage).IsNotEqualTo(string.Empty);
+        await Assert.That(ack.ErrorMessage).Contains("exceeds maximum item count");
     }
 
     [Test]

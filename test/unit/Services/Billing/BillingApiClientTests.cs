@@ -357,4 +357,151 @@ public sealed class BillingApiClientTests
             Arg.Any<Exception>(),
             Arg.Any<Func<object, Exception?, string>>());
     }
+
+    // ========== GetUpcomingInvoice tests ==========
+
+    [Test]
+    public async Task GetUpcomingInvoiceAsync_NoInvoice_ReturnsNull()
+    {
+        (BillingApiClient client, BillingManagement.BillingManagementClient grpc, ILogger<BillingApiClient> _) = CreateSut();
+
+        GetUpcomingInvoiceResponse response = new() { HasInvoice = false };
+        grpc.GetUpcomingInvoiceAsync(
+                Arg.Any<GetUpcomingInvoiceRequest>(), Arg.Any<Metadata>(), Arg.Any<DateTime?>(), Arg.Any<CancellationToken>())
+            .Returns(CreateAsyncCall(response));
+
+        UpcomingInvoiceResult? result = await client.GetUpcomingInvoiceAsync("tenant-ext-1", CancellationToken.None);
+
+        await Assert.That(result).IsNull();
+    }
+
+    [Test]
+    public async Task GetUpcomingInvoiceAsync_GrpcException_ReturnsNull()
+    {
+        (BillingApiClient client, BillingManagement.BillingManagementClient grpc, ILogger<BillingApiClient> logger) = CreateSut();
+
+        grpc.GetUpcomingInvoiceAsync(
+                Arg.Any<GetUpcomingInvoiceRequest>(), Arg.Any<Metadata>(), Arg.Any<DateTime?>(), Arg.Any<CancellationToken>())
+            .Returns(CreateFaultedCall<GetUpcomingInvoiceResponse>(new RpcException(new Status(StatusCode.Unavailable, "service unavailable"))));
+
+        UpcomingInvoiceResult? result = await client.GetUpcomingInvoiceAsync("tenant-ext-1", CancellationToken.None);
+
+        await Assert.That(result).IsNull();
+        logger.Received().Log(
+            LogLevel.Error,
+            Arg.Any<EventId>(),
+            Arg.Any<object>(),
+            Arg.Any<Exception>(),
+            Arg.Any<Func<object, Exception?, string>>());
+    }
+
+    [Test]
+    public async Task GetUpcomingInvoiceAsync_HasInvoice_MapsAllFields()
+    {
+        (BillingApiClient client, BillingManagement.BillingManagementClient grpc, ILogger<BillingApiClient> _) = CreateSut();
+
+        GetUpcomingInvoiceResponse response = new()
+        {
+            HasInvoice = true,
+            AmountDueCents = 5000,
+            Currency = "usd",
+            UnitAmountCents = 1000,
+        };
+        grpc.GetUpcomingInvoiceAsync(
+                Arg.Any<GetUpcomingInvoiceRequest>(), Arg.Any<Metadata>(), Arg.Any<DateTime?>(), Arg.Any<CancellationToken>())
+            .Returns(CreateAsyncCall(response));
+
+        UpcomingInvoiceResult? result = await client.GetUpcomingInvoiceAsync("tenant-ext-1", CancellationToken.None);
+
+        await Assert.That(result).IsNotNull();
+        await Assert.That(result!.AmountDueCents).IsEqualTo(5000);
+        await Assert.That(result.Currency).IsEqualTo("usd");
+        await Assert.That(result.UnitAmountCents).IsEqualTo(1000);
+    }
+
+    // ========== ListInvoices tests ==========
+
+    [Test]
+    public async Task ListInvoicesAsync_GrpcException_ReturnsEmptyList()
+    {
+        (BillingApiClient client, BillingManagement.BillingManagementClient grpc, ILogger<BillingApiClient> logger) = CreateSut();
+
+        grpc.ListInvoicesAsync(
+                Arg.Any<ListInvoicesRequest>(), Arg.Any<Metadata>(), Arg.Any<DateTime?>(), Arg.Any<CancellationToken>())
+            .Returns(CreateFaultedCall<ListInvoicesResponse>(new RpcException(new Status(StatusCode.Unavailable, "service unavailable"))));
+
+        List<InvoiceResult> result = await client.ListInvoicesAsync("tenant-ext-1", 12, CancellationToken.None);
+
+        await Assert.That(result).IsNotNull();
+        await Assert.That(result.Count).IsEqualTo(0);
+        logger.Received().Log(
+            LogLevel.Error,
+            Arg.Any<EventId>(),
+            Arg.Any<object>(),
+            Arg.Any<Exception>(),
+            Arg.Any<Func<object, Exception?, string>>());
+    }
+
+    [Test]
+    public async Task ListInvoicesAsync_EmptyList_ReturnsEmptyList()
+    {
+        (BillingApiClient client, BillingManagement.BillingManagementClient grpc, ILogger<BillingApiClient> _) = CreateSut();
+
+        ListInvoicesResponse response = new();
+        grpc.ListInvoicesAsync(
+                Arg.Any<ListInvoicesRequest>(), Arg.Any<Metadata>(), Arg.Any<DateTime?>(), Arg.Any<CancellationToken>())
+            .Returns(CreateAsyncCall(response));
+
+        List<InvoiceResult> result = await client.ListInvoicesAsync("tenant-ext-1", 12, CancellationToken.None);
+
+        await Assert.That(result).IsNotNull();
+        await Assert.That(result.Count).IsEqualTo(0);
+    }
+
+    // ========== SwapSubscriptionPrice exception tests ==========
+
+    [Test]
+    public async Task SwapSubscriptionPriceAsync_GrpcException_ReturnsFalse()
+    {
+        (BillingApiClient client, BillingManagement.BillingManagementClient grpc, ILogger<BillingApiClient> logger) = CreateSut();
+
+        grpc.SwapSubscriptionPriceAsync(
+                Arg.Any<SwapSubscriptionPriceRequest>(), Arg.Any<Metadata>(), Arg.Any<DateTime?>(), Arg.Any<CancellationToken>())
+            .Returns(CreateFaultedCall<SwapSubscriptionPriceResponse>(new RpcException(new Status(StatusCode.Internal, "server error"))));
+
+        bool result = await client.SwapSubscriptionPriceAsync("tenant-ext-1", "pro", CancellationToken.None);
+
+        await Assert.That(result).IsFalse();
+    }
+
+    [Test]
+    public async Task SwapSubscriptionPriceAsync_SuccessResponseFalse_ReturnsFalse()
+    {
+        (BillingApiClient client, BillingManagement.BillingManagementClient grpc, ILogger<BillingApiClient> logger) = CreateSut();
+
+        SwapSubscriptionPriceResponse response = new() { Success = false, Message = "Price not found" };
+        grpc.SwapSubscriptionPriceAsync(
+                Arg.Any<SwapSubscriptionPriceRequest>(), Arg.Any<Metadata>(), Arg.Any<DateTime?>(), Arg.Any<CancellationToken>())
+            .Returns(CreateAsyncCall(response));
+
+        bool result = await client.SwapSubscriptionPriceAsync("tenant-ext-1", "enterprise", CancellationToken.None);
+
+        await Assert.That(result).IsFalse();
+    }
+
+    // ========== ResumeSubscription exception tests ==========
+
+    [Test]
+    public async Task ResumeSubscriptionAsync_GrpcException_ReturnsFalse()
+    {
+        (BillingApiClient client, BillingManagement.BillingManagementClient grpc, ILogger<BillingApiClient> logger) = CreateSut();
+
+        grpc.ResumeSubscriptionAsync(
+                Arg.Any<ResumeSubscriptionRequest>(), Arg.Any<Metadata>(), Arg.Any<DateTime?>(), Arg.Any<CancellationToken>())
+            .Returns(CreateFaultedCall<ResumeSubscriptionResponse>(new RpcException(new Status(StatusCode.Internal, "server error"))));
+
+        bool result = await client.ResumeSubscriptionAsync("tenant-ext-1", CancellationToken.None);
+
+        await Assert.That(result).IsFalse();
+    }
 }

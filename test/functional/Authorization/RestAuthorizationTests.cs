@@ -2,6 +2,7 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
+using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.FunctionalTest.Infrastructure;
 using Microsoft.AspNetCore.Mvc.Testing;
 using System.Net;
@@ -74,13 +75,13 @@ public sealed class RestAuthorizationTests
         using FunctionalTestFactory factory = new();
         HttpClient client = new AuthenticatedClientBuilder(factory)
             .WithUserId(1)
-            .WithRole(1, 3) // Viewer
+            .WithRole(1, (int)UserAccountRoles.Viewer)
             .WithActiveTenant(1)
             .Build();
 
         string[] tenantAdminRoutes =
         [
-            "/api/v1/tenants/registration-tokens",
+            "/api/v1/machines/registration-tokens",
             "/api/v1/users",
         ];
 
@@ -115,7 +116,7 @@ public sealed class RestAuthorizationTests
         using FunctionalTestFactory factory = new();
         HttpClient client = new AuthenticatedClientBuilder(factory)
             .WithUserId(2)
-            .WithRole(1, 2) // MachineAdmin (cannot access TenantAdmin endpoints)
+            .WithRole(1, (int)UserAccountRoles.MachineAdmin)
             .WithActiveTenant(1)
             .Build();
 
@@ -155,7 +156,7 @@ public sealed class RestAuthorizationTests
         using FunctionalTestFactory factory = new();
         HttpClient client = new AuthenticatedClientBuilder(factory)
             .WithUserId(3)
-            .WithRole(1, 1) // TenantAdmin
+            .WithRole(1, (int)UserAccountRoles.TenantAdmin)
             .WithActiveTenant(1)
             .Build();
 
@@ -197,7 +198,7 @@ public sealed class RestAuthorizationTests
         HttpClient client = new AuthenticatedClientBuilder(factory)
             .WithUserId(10)
             .AsGlobalAdmin()
-            .WithRole(1, 1) // TenantAdmin
+            .WithRole(1, (int)UserAccountRoles.TenantAdmin)
             .WithActiveTenant(1)
             .Build();
 

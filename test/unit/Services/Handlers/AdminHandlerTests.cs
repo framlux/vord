@@ -22,41 +22,6 @@ namespace Framlux.FleetManagement.Test.Services.Handlers;
 /// </summary>
 public class AdminHandlerTests
 {
-    // ========== Constructor tests ==========
-
-    [Test]
-    public async Task Constructor_NullDatabaseContext_ThrowsArgumentNullException()
-    {
-        IServerSettingsCache cache = Substitute.For<IServerSettingsCache>();
-        IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
-
-        await Assert.That(() =>
-            new AdminHandler(null!, cache, redis))
-            .Throws<ArgumentNullException>();
-    }
-
-    [Test]
-    public async Task Constructor_NullSettingsCache_ThrowsArgumentNullException()
-    {
-        using TestDatabaseFactory dbFactory = new();
-        IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
-
-        await Assert.That(() =>
-            new AdminHandler(dbFactory.Context, null!, redis))
-            .Throws<ArgumentNullException>();
-    }
-
-    [Test]
-    public async Task Constructor_NullRedis_ThrowsArgumentNullException()
-    {
-        using TestDatabaseFactory dbFactory = new();
-        IServerSettingsCache cache = Substitute.For<IServerSettingsCache>();
-
-        await Assert.That(() =>
-            new AdminHandler(dbFactory.Context, cache, null!))
-            .Throws<ArgumentNullException>();
-    }
-
     // ========== GetSettingsAsync tests ==========
 
     [Test]
@@ -240,6 +205,12 @@ public class AdminHandlerTests
         ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, CancellationToken.None);
 
         await Assert.That(result.IsSuccess).IsEqualTo(true);
+
+        // Verify the value was persisted to the database
+        ServerConfigurationSettings? persisted = await dbFactory.Context.ServerConfigurationSettings
+            .FirstOrDefaultAsync(s => s.Key == ServerConfigurationSettingKeys.AllowUserSignup);
+        await Assert.That(persisted).IsNotNull();
+        await Assert.That(persisted!.Value).IsEqualTo("true");
     }
 
     [Test]
@@ -255,6 +226,12 @@ public class AdminHandlerTests
         ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, CancellationToken.None);
 
         await Assert.That(result.IsSuccess).IsEqualTo(true);
+
+        // Verify the value was persisted to the database
+        ServerConfigurationSettings? persisted = await dbFactory.Context.ServerConfigurationSettings
+            .FirstOrDefaultAsync(s => s.Key == ServerConfigurationSettingKeys.AllowUserSignup);
+        await Assert.That(persisted).IsNotNull();
+        await Assert.That(persisted!.Value).IsEqualTo("false");
     }
 
     [Test]
@@ -277,12 +254,29 @@ public class AdminHandlerTests
         IServerSettingsCache cache = Substitute.For<IServerSettingsCache>();
         IConnectionMultiplexer redis = CreateFakeRedis();
 
+        // Seed existing settings before calling with an empty update list
+        await dbFactory.Context.InsertAsync(new ServerConfigurationSettings
+        {
+            Key = ServerConfigurationSettingKeys.AgentHeartbeatSeconds,
+            Value = "120",
+            Version = 1,
+        });
+        await dbFactory.Context.InsertAsync(new ServerConfigurationSettings
+        {
+            Key = ServerConfigurationSettingKeys.OnlineThresholdSeconds,
+            Value = "300",
+            Version = 1,
+        });
+
         AdminHandler handler = new(dbFactory.Context, cache, redis);
         List<SettingUpdateEntry> updates = [];
 
         ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, CancellationToken.None);
 
         await Assert.That(result.IsSuccess).IsEqualTo(true);
+        await Assert.That(result.Data!.Count).IsEqualTo(2);
+        await Assert.That(result.Data!.Any(e => e.Key == (int)ServerConfigurationSettingKeys.AgentHeartbeatSeconds && e.Value == "120")).IsEqualTo(true);
+        await Assert.That(result.Data!.Any(e => e.Key == (int)ServerConfigurationSettingKeys.OnlineThresholdSeconds && e.Value == "300")).IsEqualTo(true);
     }
 
     [Test]

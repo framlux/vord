@@ -222,4 +222,168 @@ public class CertificateServiceTests
         await Assert.That(updated).IsNotNull();
         await Assert.That(updated!.RevokedAt.HasValue).IsEqualTo(true);
     }
+
+    // ========== Constructor null-guard tests ==========
+
+    [Test]
+    public async Task Constructor_NullServiceScopeFactory_ThrowsArgumentNullException()
+    {
+        IOptions<CertificateOptions> options = Options.Create(new CertificateOptions
+        {
+            RootCertPath = "/nonexistent/path.pfx"
+        });
+        ILogger<CertificateService> logger = new NullLogger<CertificateService>();
+
+        await Assert.That(() =>
+            new CertificateService(null!, options, logger))
+            .Throws<ArgumentNullException>();
+    }
+
+    [Test]
+    public async Task Constructor_NullLogger_ThrowsArgumentNullException()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+        IOptions<CertificateOptions> options = Options.Create(new CertificateOptions
+        {
+            RootCertPath = "/nonexistent/path.pfx"
+        });
+
+        await Assert.That(() =>
+            new CertificateService(scopeFactory, options, null!))
+            .Throws<ArgumentNullException>();
+    }
+
+    // ========== IsCertificateValidAsync edge cases ==========
+
+    [Test]
+    public async Task IsCertificateValidAsync_EmptyString_ReturnsFalse()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        CertificateService service = CreateService(dbFactory);
+
+        bool result = await service.IsCertificateValidAsync(string.Empty, CancellationToken.None);
+
+        await Assert.That(result).IsEqualTo(false);
+    }
+
+    [Test]
+    public async Task IsCertificateValidAsync_CertExpiringExactlyNow_ReturnsFalse()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        CertificateService service = CreateService(dbFactory);
+        // Generate a certificate that expired just moments ago
+        (string pem, string thumbprint) = GenerateTestCertificate(
+            notBefore: DateTimeOffset.UtcNow.AddDays(-2),
+            notAfter: DateTimeOffset.UtcNow.AddDays(-1));
+
+        await dbFactory.Context.InsertAsync(new MachineCertificate
+        {
+            MachineId = 1,
+            Thumbprint = thumbprint,
+            IssuedAt = DateTimeOffset.UtcNow.AddDays(-2),
+            ExpiresAt = DateTimeOffset.UtcNow.AddSeconds(-1),
+        });
+
+        bool result = await service.IsCertificateValidAsync(pem, CancellationToken.None);
+
+        await Assert.That(result).IsEqualTo(false);
+    }
+
+    // ========== RevokeCertificateAsync edge cases ==========
+
+    [Test]
+    public async Task RevokeCertificateAsync_EmptyString_ReturnsFalse()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        CertificateService service = CreateService(dbFactory);
+
+        bool result = await service.RevokeCertificateAsync(string.Empty, CancellationToken.None);
+
+        await Assert.That(result).IsEqualTo(false);
+    }
+
+    [Test]
+    public async Task RevokeCertificateAsync_ActiveCert_RevokedAtIsRecent()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        CertificateService service = CreateService(dbFactory);
+        (string pem, string thumbprint) = GenerateTestCertificate();
+
+        await dbFactory.Context.InsertAsync(new MachineCertificate
+        {
+            MachineId = 1,
+            Thumbprint = thumbprint,
+            IssuedAt = DateTimeOffset.UtcNow.AddDays(-30),
+            ExpiresAt = DateTimeOffset.UtcNow.AddDays(335),
+        });
+
+        DateTimeOffset beforeRevoke = DateTimeOffset.UtcNow;
+        bool result = await service.RevokeCertificateAsync(pem, CancellationToken.None);
+
+        await Assert.That(result).IsEqualTo(true);
+
+        MachineCertificate? updated = await dbFactory.Context.MachineCertificates
+            .FirstOrDefaultAsync(c => c.Thumbprint == thumbprint);
+        await Assert.That(updated).IsNotNull();
+        await Assert.That(updated!.RevokedAt.HasValue).IsEqualTo(true);
+        // RevokedAt should be set to approximately now
+        await Assert.That(updated.RevokedAt!.Value >= beforeRevoke.AddSeconds(-5)).IsEqualTo(true);
+    }
+
+    [Test]
+    public async Task RevokeCertificateAsync_RevokedCert_RemainsRevoked()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        CertificateService service = CreateService(dbFactory);
+        (string pem, string thumbprint) = GenerateTestCertificate();
+
+        DateTimeOffset originalRevokedAt = DateTimeOffset.UtcNow.AddDays(-5);
+        await dbFactory.Context.InsertAsync(new MachineCertificate
+        {
+            MachineId = 1,
+            Thumbprint = thumbprint,
+            IssuedAt = DateTimeOffset.UtcNow.AddDays(-30),
+            ExpiresAt = DateTimeOffset.UtcNow.AddDays(335),
+            RevokedAt = originalRevokedAt,
+        });
+
+        bool result = await service.RevokeCertificateAsync(pem, CancellationToken.None);
+
+        await Assert.That(result).IsEqualTo(false);
+
+        // Verify the original revocation timestamp is unchanged
+        MachineCertificate? unchanged = await dbFactory.Context.MachineCertificates
+            .FirstOrDefaultAsync(c => c.Thumbprint == thumbprint);
+        await Assert.That(unchanged).IsNotNull();
+        await Assert.That(unchanged!.RevokedAt.HasValue).IsEqualTo(true);
+    }
+
+    [Test]
+    public async Task IsCertificateValidAsync_ValidCert_ThenRevoke_ThenValidateFails()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        CertificateService service = CreateService(dbFactory);
+        (string pem, string thumbprint) = GenerateTestCertificate();
+
+        await dbFactory.Context.InsertAsync(new MachineCertificate
+        {
+            MachineId = 1,
+            Thumbprint = thumbprint,
+            IssuedAt = DateTimeOffset.UtcNow.AddDays(-30),
+            ExpiresAt = DateTimeOffset.UtcNow.AddDays(335),
+        });
+
+        // First validate succeeds
+        bool validBefore = await service.IsCertificateValidAsync(pem, CancellationToken.None);
+        await Assert.That(validBefore).IsEqualTo(true);
+
+        // Revoke
+        bool revoked = await service.RevokeCertificateAsync(pem, CancellationToken.None);
+        await Assert.That(revoked).IsEqualTo(true);
+
+        // Now validate fails
+        bool validAfter = await service.IsCertificateValidAsync(pem, CancellationToken.None);
+        await Assert.That(validAfter).IsEqualTo(false);
+    }
 }

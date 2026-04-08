@@ -66,9 +66,15 @@ public class DashboardHandlerTests
     }
 
     [Test]
-    public async Task GetSummaryAsync_PendingApprovals_AlwaysZero()
+    public async Task GetSummaryAsync_PendingApprovals_ReturnsZero_FeatureNotYetImplemented()
     {
+        // Pending approvals are not yet implemented in the dashboard summary.
+        // This test documents that the field always returns zero until the approval
+        // workflow feature is built.
         using TestDatabaseFactory dbFactory = new();
+
+        Machine m1 = TestDataBuilder.BuildMachine(tenantId: 1);
+        m1.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(m1);
 
         InMemoryMachinePingService pingService = new();
         ServerConfigurationService configService = new(Substitute.For<IServerSettingsCache>(), Substitute.For<IConnectionMultiplexer>());

@@ -2,7 +2,7 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
-using Framlux.FleetManagement.Server.Endpoints.Web.Tenants;
+using Framlux.FleetManagement.Server.Endpoints.Web.Machines;
 using Framlux.FleetManagement.Server.Endpoints.Web;
 using Framlux.FleetManagement.Server.Services.Infrastructure;
 
@@ -28,9 +28,10 @@ public interface IRegistrationTokenHandler
     /// </summary>
     /// <param name="tokenId">The token ID to revoke.</param>
     /// <param name="tenantId">The tenant ID for scoping.</param>
+    /// <param name="userId">The ID of the user performing the revocation.</param>
     /// <param name="ct">A cancellation token.</param>
     /// <returns>A service result.</returns>
-    Task<ServiceResult<object>> RevokeAsync(long tokenId, int tenantId, CancellationToken ct);
+    Task<ServiceResult<object>> RevokeAsync(long tokenId, int tenantId, int userId, CancellationToken ct);
 
     /// <summary>
     /// Lists registration tokens for a tenant (paginated).

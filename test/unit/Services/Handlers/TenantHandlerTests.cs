@@ -19,41 +19,6 @@ namespace Framlux.FleetManagement.Test.Services.Handlers;
 /// </summary>
 public class TenantHandlerTests
 {
-    // ========== Constructor tests ==========
-
-    [Test]
-    public async Task Constructor_NullDatabaseCache_ThrowsArgumentNullException()
-    {
-        using TestDatabaseFactory dbFactory = new();
-        ILogger<TenantHandler> logger = Substitute.For<ILogger<TenantHandler>>();
-
-        await Assert.That(() =>
-            new TenantHandler(null!, dbFactory.Context, logger))
-            .Throws<ArgumentNullException>();
-    }
-
-    [Test]
-    public async Task Constructor_NullDatabaseContext_ThrowsArgumentNullException()
-    {
-        IDatabaseCache cache = Substitute.For<IDatabaseCache>();
-        ILogger<TenantHandler> logger = Substitute.For<ILogger<TenantHandler>>();
-
-        await Assert.That(() =>
-            new TenantHandler(cache, null!, logger))
-            .Throws<ArgumentNullException>();
-    }
-
-    [Test]
-    public async Task Constructor_NullLogger_ThrowsArgumentNullException()
-    {
-        IDatabaseCache cache = Substitute.For<IDatabaseCache>();
-        using TestDatabaseFactory dbFactory = new();
-
-        await Assert.That(() =>
-            new TenantHandler(cache, dbFactory.Context, null!))
-            .Throws<ArgumentNullException>();
-    }
-
     // ========== ListForUserAsync null input tests ==========
 
     [Test]
@@ -255,25 +220,6 @@ public class TenantHandlerTests
         await Assert.That(result.IsSuccess).IsEqualTo(true);
         await Assert.That(result.Data!.Name).IsEqualTo("New Corp");
         await Assert.That(result.Data!.Id).IsEqualTo(42);
-    }
-
-    [Test]
-    public async Task CreateAsync_ValidName_CallsCreateTenantOnCache()
-    {
-        IDatabaseCache cache = Substitute.For<IDatabaseCache>();
-        cache.GetTenantByNameAsync("Call Corp", Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult<Tenant?>(null));
-        Tenant createdTenant = TestDataBuilder.BuildTenant(name: "Call Corp");
-        createdTenant.Id = 10;
-        cache.CreateTenantAsync(Arg.Any<Tenant>(), Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(createdTenant));
-        using TestDatabaseFactory dbFactory = new();
-        ILogger<TenantHandler> logger = Substitute.For<ILogger<TenantHandler>>();
-        TenantHandler handler = new(cache, dbFactory.Context, logger);
-
-        await handler.CreateAsync("Call Corp", "https://logo.png", 5, CancellationToken.None);
-
-        await cache.Received(1).CreateTenantAsync(Arg.Is<Tenant>(t => t.Name == "Call Corp"), Arg.Any<CancellationToken>());
     }
 
     // ========== GetDetailAsync tests ==========

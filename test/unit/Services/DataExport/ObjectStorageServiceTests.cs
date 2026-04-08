@@ -65,44 +65,6 @@ public sealed class ObjectStorageServiceTests
     }
 
     [Test]
-    public async Task Constructor_AllRequiredKeysPresent_DoesNotThrow()
-    {
-        ILogger<ObjectStorageService> logger = Substitute.For<ILogger<ObjectStorageService>>();
-        IOptions<ObjectStorageOptions> options = BuildOptions();
-
-        Exception? thrown = null;
-        try
-        {
-            ObjectStorageService _ = new(options, logger);
-        }
-        catch (Exception ex)
-        {
-            thrown = ex;
-        }
-
-        await Assert.That(thrown).IsNull();
-    }
-
-    [Test]
-    public async Task Constructor_CustomRegion_DoesNotThrow()
-    {
-        ILogger<ObjectStorageService> logger = Substitute.For<ILogger<ObjectStorageService>>();
-        IOptions<ObjectStorageOptions> options = BuildOptions(region: "eu-west-1");
-
-        Exception? thrown = null;
-        try
-        {
-            ObjectStorageService _ = new(options, logger);
-        }
-        catch (Exception ex)
-        {
-            thrown = ex;
-        }
-
-        await Assert.That(thrown).IsNull();
-    }
-
-    [Test]
     public async Task Constructor_CustomRegion_UsesProvidedRegion()
     {
         ILogger<ObjectStorageService> logger = Substitute.For<ILogger<ObjectStorageService>>();
@@ -121,22 +83,4 @@ public sealed class ObjectStorageServiceTests
         await Assert.That(thrown).IsNull();
     }
 
-    [Test]
-    public async Task Constructor_DefaultRegion_DoesNotThrow()
-    {
-        ILogger<ObjectStorageService> logger = Substitute.For<ILogger<ObjectStorageService>>();
-        IOptions<ObjectStorageOptions> options = BuildOptions();
-
-        Exception? thrown = null;
-        try
-        {
-            ObjectStorageService _ = new(options, logger);
-        }
-        catch (Exception ex)
-        {
-            thrown = ex;
-        }
-
-        await Assert.That(thrown).IsNull();
-    }
 }

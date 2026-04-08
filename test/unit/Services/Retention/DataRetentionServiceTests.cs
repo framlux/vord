@@ -308,4 +308,157 @@ public sealed class DataRetentionServiceTests
         await Assert.That(all.Count).IsEqualTo(1);
         await Assert.That(all[0].DeletedAt).IsNull();
     }
+
+    [Test]
+    public async Task PurgeOldData_LockNotAcquired_SkipsProcessing()
+    {
+        using TestDatabaseFactory dbFactory = new();
+
+        TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 1, retentionDays: 1);
+        sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
+
+        // Insert an old audit entry that would normally be soft-deleted
+        await dbFactory.Context.InsertAsync(new AuditLogEntry
+        {
+            TenantId = 1,
+            Action = AuditAction.UserLogin,
+            ResourceType = AuditResourceType.User,
+            Timestamp = DateTimeOffset.UtcNow.AddDays(-10)
+        });
+
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+        ILogger<DataRetentionService> logger = new NullLogger<DataRetentionService>();
+        IDistributedLock distributedLock = Substitute.For<IDistributedLock>();
+
+        // Lock not acquired — returns null
+        distributedLock.TryAcquireAsync(Arg.Any<string>(), Arg.Any<TimeSpan>())
+            .Returns(Task.FromResult<LockHandle?>(null));
+        DataRetentionService service = new(scopeFactory, distributedLock, logger);
+
+        System.Reflection.MethodInfo? executeMethod = typeof(DataRetentionService)
+            .GetMethod("ExecuteAsync", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+
+        using CancellationTokenSource cts = new();
+        cts.CancelAfter(TimeSpan.FromMilliseconds(100));
+
+        try
+        {
+            await (Task)executeMethod!.Invoke(service, [cts.Token])!;
+        }
+        catch (OperationCanceledException)
+        {
+            // Expected — the service loop exits via cancellation
+        }
+
+        // Audit entry should remain because lock was not acquired
+        List<AuditLogEntry> remaining = await dbFactory.Context.AuditLog.ToListAsync();
+        await Assert.That(remaining.Count).IsEqualTo(1);
+        await Assert.That(remaining[0].DeletedAt).IsNull();
+    }
+
+    [Test]
+    public async Task PurgeOldData_MultipleDataTypes_AllSoftDeleted()
+    {
+        using TestDatabaseFactory dbFactory = new();
+
+        TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 1, retentionDays: 7);
+        sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
+
+        Machine machine = TestDataBuilder.BuildMachine(tenantId: 1);
+        machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
+
+        AlertRule rule = TestDataBuilder.BuildAlertRule(tenantId: 1);
+        rule.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(rule);
+
+        UserAccount user = TestDataBuilder.BuildUser();
+        user.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(user);
+
+        UserSigningKey key = TestDataBuilder.BuildSigningKey(userId: user.Id, tenantId: 1);
+        key.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(key);
+
+        // Insert old data in all three tables
+        await dbFactory.Context.InsertAsync(new AlertEvent
+        {
+            AlertRuleId = rule.Id,
+            TenantId = 1,
+            MachineId = machine.Id,
+            Severity = AlertSeverity.Warning,
+            Message = "Old alert",
+            Status = AlertEventStatus.Resolved,
+            TriggeredAt = DateTimeOffset.UtcNow.AddDays(-10)
+        });
+
+        await dbFactory.Context.InsertAsync(new AuditLogEntry
+        {
+            TenantId = 1,
+            Action = AuditAction.UserLogin,
+            ResourceType = AuditResourceType.User,
+            Timestamp = DateTimeOffset.UtcNow.AddDays(-10)
+        });
+
+        await dbFactory.Context.InsertAsync(new RemoteCommand
+        {
+            CommandId = Guid.NewGuid().ToString(),
+            TenantId = 1,
+            MachineId = machine.Id,
+            UserId = user.Id,
+            SigningKeyId = key.Id,
+            CommandType = "reboot",
+            Nonce = "nonce-old",
+            Signature = "sig-old",
+            CanonicalPayload = "{}",
+            Timestamp = DateTimeOffset.UtcNow.AddDays(-10),
+            ExpiresAt = DateTimeOffset.UtcNow.AddDays(-9),
+            Status = RemoteCommandStatus.Expired,
+            CreatedAt = DateTimeOffset.UtcNow.AddDays(-10)
+        });
+
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+        DataRetentionService service = CreateService(scopeFactory);
+        await InvokePurgeAsync(service);
+
+        // All three should be soft-deleted
+        List<AlertEvent> softDeletedAlerts = await dbFactory.Context.AlertEvents
+            .Where(e => e.DeletedAt != null).ToListAsync();
+        await Assert.That(softDeletedAlerts.Count).IsEqualTo(1);
+
+        List<AuditLogEntry> softDeletedAudit = await dbFactory.Context.AuditLog
+            .Where(e => e.DeletedAt != null).ToListAsync();
+        await Assert.That(softDeletedAudit.Count).IsEqualTo(1);
+
+        List<RemoteCommand> softDeletedCommands = await dbFactory.Context.RemoteCommands
+            .Where(c => c.DeletedAt != null).ToListAsync();
+        await Assert.That(softDeletedCommands.Count).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task PurgeOldData_OnlyActiveAndCanceledAndPastDueSubscriptions_Processed()
+    {
+        using TestDatabaseFactory dbFactory = new();
+
+        // Create a subscription with None status — should not be queried
+        TenantSubscription noneSub = TestDataBuilder.BuildSubscription(
+            tenantId: 1,
+            retentionDays: 1,
+            status: SubscriptionStatus.None);
+        noneSub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(noneSub);
+
+        // Insert an old audit entry for that tenant
+        await dbFactory.Context.InsertAsync(new AuditLogEntry
+        {
+            TenantId = 1,
+            Action = AuditAction.UserLogin,
+            ResourceType = AuditResourceType.User,
+            Timestamp = DateTimeOffset.UtcNow.AddDays(-10)
+        });
+
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+        DataRetentionService service = CreateService(scopeFactory);
+        await InvokePurgeAsync(service);
+
+        // The audit entry should remain unchanged because None-status subscriptions are not processed
+        List<AuditLogEntry> all = await dbFactory.Context.AuditLog.ToListAsync();
+        await Assert.That(all.Count).IsEqualTo(1);
+        await Assert.That(all[0].DeletedAt).IsNull();
+    }
 }

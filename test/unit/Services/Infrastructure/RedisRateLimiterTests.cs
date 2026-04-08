@@ -191,6 +191,41 @@ public class RedisRateLimiterTests
     }
 
     /// <summary>
+    /// Verifies that after window expiry, Redis INCR returns 1 (key expired), resetting the count.
+    /// </summary>
+    [Test]
+    public async Task IsAllowedAsync_WindowExpired_ResetsCount()
+    {
+        (RedisFixedWindowRateLimiter limiter, IDatabase db) = CreateLimiter(permitLimit: 2);
+
+        // Simulate window expiry: Redis INCR returns 1 because the key expired
+        db.StringIncrementAsync(Arg.Any<RedisKey>(), Arg.Any<long>(), Arg.Any<CommandFlags>())
+            .Returns(1L);
+
+        bool result = await limiter.IsAllowedAsync("127.0.0.1");
+
+        // After window expiry, the counter resets and the request is allowed
+        await Assert.That(result).IsEqualTo(true);
+        // And TTL is set again (count == 1)
+        await db.Received(1).KeyExpireAsync(Arg.Any<RedisKey>(), Arg.Any<TimeSpan?>(), Arg.Any<ExpireWhen>(), Arg.Any<CommandFlags>());
+    }
+
+    /// <summary>
+    /// Verifies that AcquireAsyncCore returns rejected lease when over limit.
+    /// </summary>
+    [Test]
+    public async Task AcquireAsyncCore_OverLimit_ReturnsRejectedLease()
+    {
+        (RedisFixedWindowRateLimiter limiter, IDatabase db) = CreateLimiter(permitLimit: 1);
+        db.StringIncrementAsync(Arg.Any<RedisKey>(), Arg.Any<long>(), Arg.Any<CommandFlags>())
+            .Returns(2L);
+
+        System.Threading.RateLimiting.RateLimitLease lease = await limiter.AcquireAsync();
+
+        await Assert.That(lease.IsAcquired).IsEqualTo(false);
+    }
+
+    /// <summary>
     /// Verifies that constructor rejects null Redis connection.
     /// </summary>
     [Test]
@@ -205,5 +240,114 @@ public class RedisRateLimiterTests
 
         await Assert.That(ex).IsNotNull();
         await Assert.That(ex!.ParamName).IsEqualTo("redis");
+    }
+
+    // ========== RedisPartitionedRateLimiter tests ==========
+
+    private static (RedisPartitionedRateLimiter partitioned, IDatabase db) CreatePartitionedLimiter(
+        int permitLimit = 10,
+        string partitionKey = "192.168.1.1")
+    {
+        IDatabase db = Substitute.For<IDatabase>();
+        IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
+        redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(db);
+        RedisFixedWindowRateLimiter inner = new(redis, "ratelimit:test", permitLimit, TimeSpan.FromMinutes(1));
+        RedisPartitionedRateLimiter partitioned = new(inner, partitionKey);
+
+        return (partitioned, db);
+    }
+
+    /// <summary>
+    /// Verifies that AttemptAcquireCore on the partitioned limiter returns a failed lease.
+    /// </summary>
+    [Test]
+    public async Task Partitioned_AttemptAcquireCore_ReturnsFailedLease()
+    {
+        (RedisPartitionedRateLimiter partitioned, IDatabase _) = CreatePartitionedLimiter();
+
+        System.Threading.RateLimiting.RateLimitLease lease = partitioned.AttemptAcquire();
+
+        await Assert.That(lease.IsAcquired).IsEqualTo(false);
+    }
+
+    /// <summary>
+    /// Verifies that AcquireAsyncCore on the partitioned limiter delegates to the inner limiter
+    /// and returns an acquired lease when under the limit.
+    /// </summary>
+    [Test]
+    public async Task Partitioned_AcquireAsyncCore_UnderLimit_ReturnsAcquiredLease()
+    {
+        (RedisPartitionedRateLimiter partitioned, IDatabase db) = CreatePartitionedLimiter(permitLimit: 10, partitionKey: "10.0.0.1");
+        db.StringIncrementAsync(Arg.Any<RedisKey>(), Arg.Any<long>(), Arg.Any<CommandFlags>())
+            .Returns(1L);
+
+        System.Threading.RateLimiting.RateLimitLease lease = await partitioned.AcquireAsync();
+
+        await Assert.That(lease.IsAcquired).IsEqualTo(true);
+    }
+
+    /// <summary>
+    /// Verifies that AcquireAsyncCore on the partitioned limiter returns a rejected lease
+    /// when the underlying limiter is over its limit.
+    /// </summary>
+    [Test]
+    public async Task Partitioned_AcquireAsyncCore_OverLimit_ReturnsRejectedLease()
+    {
+        (RedisPartitionedRateLimiter partitioned, IDatabase db) = CreatePartitionedLimiter(permitLimit: 5, partitionKey: "10.0.0.1");
+        db.StringIncrementAsync(Arg.Any<RedisKey>(), Arg.Any<long>(), Arg.Any<CommandFlags>())
+            .Returns(6L);
+
+        System.Threading.RateLimiting.RateLimitLease lease = await partitioned.AcquireAsync();
+
+        await Assert.That(lease.IsAcquired).IsEqualTo(false);
+    }
+
+    /// <summary>
+    /// Verifies that the partitioned limiter passes the correct partition key to the inner limiter,
+    /// resulting in the key being embedded in the Redis key.
+    /// </summary>
+    [Test]
+    public async Task Partitioned_AcquireAsyncCore_UsesPartitionKeyInRedisKey()
+    {
+        string expectedPartitionKey = "custom-partition-key";
+        (RedisPartitionedRateLimiter partitioned, IDatabase db) = CreatePartitionedLimiter(
+            permitLimit: 10,
+            partitionKey: expectedPartitionKey);
+
+        RedisKey? capturedKey = null;
+        db.StringIncrementAsync(Arg.Do<RedisKey>(k => capturedKey = k), Arg.Any<long>(), Arg.Any<CommandFlags>())
+            .Returns(1L);
+
+        await partitioned.AcquireAsync();
+
+        await Assert.That(capturedKey).IsNotNull();
+        await Assert.That(capturedKey.ToString()!.Contains(expectedPartitionKey)).IsEqualTo(true);
+    }
+
+    /// <summary>
+    /// Verifies that after the window expires (simulated by Redis returning count 1 again),
+    /// the partitioned limiter allows requests again and the expiry is re-set.
+    /// </summary>
+    [Test]
+    public async Task Partitioned_WindowExpiry_NewRequestSucceeds()
+    {
+        (RedisPartitionedRateLimiter partitioned, IDatabase db) = CreatePartitionedLimiter(permitLimit: 1, partitionKey: "10.0.0.1");
+
+        // First call: at limit (count == 1, limit == 1) — allowed
+        db.StringIncrementAsync(Arg.Any<RedisKey>(), Arg.Any<long>(), Arg.Any<CommandFlags>())
+            .Returns(1L);
+
+        System.Threading.RateLimiting.RateLimitLease firstLease = await partitioned.AcquireAsync();
+        await Assert.That(firstLease.IsAcquired).IsEqualTo(true);
+
+        // Simulate window expiry: Redis key expired, INCR returns 1 again
+        db.StringIncrementAsync(Arg.Any<RedisKey>(), Arg.Any<long>(), Arg.Any<CommandFlags>())
+            .Returns(1L);
+
+        System.Threading.RateLimiting.RateLimitLease secondLease = await partitioned.AcquireAsync();
+        await Assert.That(secondLease.IsAcquired).IsEqualTo(true);
+
+        // Expiry should have been set twice (once per window start)
+        await db.Received(2).KeyExpireAsync(Arg.Any<RedisKey>(), Arg.Any<TimeSpan?>(), Arg.Any<ExpireWhen>(), Arg.Any<CommandFlags>());
     }
 }

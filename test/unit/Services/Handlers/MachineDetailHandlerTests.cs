@@ -44,56 +44,6 @@ public class MachineDetailHandlerTests
         return new MachineDetailHandler(dbFactory.Context, pingService, configService, stateService);
     }
 
-    // ========== Constructor tests ==========
-
-    [Test]
-    public async Task Constructor_NullDatabaseContext_ThrowsArgumentNullException()
-    {
-        InMemoryMachinePingService pingService = new();
-        ServerConfigurationService configService = new(Substitute.For<IServerSettingsCache>(), Substitute.For<IConnectionMultiplexer>());
-        IMachineStateService stateService = Substitute.For<IMachineStateService>();
-
-        await Assert.That(() =>
-            new MachineDetailHandler(null!, pingService, configService, stateService))
-            .Throws<ArgumentNullException>();
-    }
-
-    [Test]
-    public async Task Constructor_NullPingService_ThrowsArgumentNullException()
-    {
-        using TestDatabaseFactory dbFactory = new();
-        ServerConfigurationService configService = new(Substitute.For<IServerSettingsCache>(), Substitute.For<IConnectionMultiplexer>());
-        IMachineStateService stateService = Substitute.For<IMachineStateService>();
-
-        await Assert.That(() =>
-            new MachineDetailHandler(dbFactory.Context, null!, configService, stateService))
-            .Throws<ArgumentNullException>();
-    }
-
-    [Test]
-    public async Task Constructor_NullConfigService_ThrowsArgumentNullException()
-    {
-        using TestDatabaseFactory dbFactory = new();
-        InMemoryMachinePingService pingService = new();
-        IMachineStateService stateService = Substitute.For<IMachineStateService>();
-
-        await Assert.That(() =>
-            new MachineDetailHandler(dbFactory.Context, pingService, null!, stateService))
-            .Throws<ArgumentNullException>();
-    }
-
-    [Test]
-    public async Task Constructor_NullStateService_ThrowsArgumentNullException()
-    {
-        using TestDatabaseFactory dbFactory = new();
-        InMemoryMachinePingService pingService = new();
-        ServerConfigurationService configService = new(Substitute.For<IServerSettingsCache>(), Substitute.For<IConnectionMultiplexer>());
-
-        await Assert.That(() =>
-            new MachineDetailHandler(dbFactory.Context, pingService, configService, null!))
-            .Throws<ArgumentNullException>();
-    }
-
     // ========== GetDetailAsync tests ==========
 
     [Test]

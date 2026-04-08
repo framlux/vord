@@ -173,12 +173,12 @@ public sealed class PartitionManagementService : BackgroundService
             "Partition management: expired partition cleanup complete (cutoff: {Cutoff})", cutoff);
     }
 
-    private static string BuildPartitionName(string tableName, int year, int month)
+    internal static string BuildPartitionName(string tableName, int year, int month)
     {
         return $"{tableName.ToLowerInvariant()}_y{year}m{month:D2}";
     }
 
-    private static string BuildCreatePartitionSql(string tableName, int year, int month)
+    internal static string BuildCreatePartitionSql(string tableName, int year, int month)
     {
         int nextYear = month == 12 ? year + 1 : year;
         int nextMonth = month == 12 ? 1 : month + 1;

@@ -154,7 +154,7 @@ public class MachineHandlerTests
     }
 
     [Test]
-    public async Task ListAsync_Pagination_SecondPageReturnsCorrectItems()
+    public async Task ListAsync_Pagination_LastPageReturnsRemainingItems()
     {
         using TestDatabaseFactory dbFactory = new();
         for (int i = 0; i < 5; i++)
@@ -163,15 +163,16 @@ public class MachineHandlerTests
         }
         MachineHandler handler = CreateHandler(dbFactory);
 
-        ServiceResult<PaginatedResponse<MachineDto>> result = await handler.ListAsync(2, 2, 1, null, null, null, null, "name", "asc", CancellationToken.None);
+        // Request the last page (page 3 of 3 with page size 2) to verify off-by-one boundary
+        ServiceResult<PaginatedResponse<MachineDto>> result = await handler.ListAsync(3, 2, 1, null, null, null, null, "name", "asc", CancellationToken.None);
 
         await Assert.That(result.Data!.TotalCount).IsEqualTo(5);
-        await Assert.That(result.Data!.Items.Count).IsEqualTo(2);
-        await Assert.That(result.Data!.Page).IsEqualTo(2);
-        await Assert.That(result.Data!.HasNextPage).IsEqualTo(true);
+        await Assert.That(result.Data!.Items.Count).IsEqualTo(1);
+        await Assert.That(result.Data!.Page).IsEqualTo(3);
+        await Assert.That(result.Data!.TotalPages).IsEqualTo(3);
+        await Assert.That(result.Data!.HasNextPage).IsEqualTo(false);
         await Assert.That(result.Data!.HasPreviousPage).IsEqualTo(true);
-        await Assert.That(result.Data!.Items[0].Name).IsEqualTo("machine-02");
-        await Assert.That(result.Data!.Items[1].Name).IsEqualTo("machine-03");
+        await Assert.That(result.Data!.Items[0].Name).IsEqualTo("machine-04");
     }
 
     [Test]
@@ -241,17 +242,19 @@ public class MachineHandlerTests
     }
 
     [Test]
-    public async Task ListAsync_SearchFilter_SpecialCharacters_DoesNotThrow()
+    public async Task ListAsync_SearchFilter_UnderscoreTreatedAsLiteral_MatchesOnlyUnderscoreNames()
     {
         using TestDatabaseFactory dbFactory = new();
-        await SeedMachine(dbFactory, hostname: "web-server_01.prod");
+        await SeedMachine(dbFactory, hostname: "server_01");
+        await SeedMachine(dbFactory, hostname: "server-01");
         MachineHandler handler = CreateHandler(dbFactory);
 
-        ServiceResult<PaginatedResponse<MachineDto>> result = await handler.ListAsync(1, 25, 1, "server_01", null, null, null, "name", "asc", CancellationToken.None);
+        ServiceResult<PaginatedResponse<MachineDto>> result = await handler.ListAsync(1, 25, 1, "_01", null, null, null, "name", "asc", CancellationToken.None);
 
         await Assert.That(result.IsSuccess).IsEqualTo(true);
         await Assert.That(result.Data!.Items.Count).IsEqualTo(1);
-        await Assert.That(result.Data!.Items[0].Name).IsEqualTo("web-server_01.prod");
+        await Assert.That(result.Data!.TotalCount).IsEqualTo(1);
+        await Assert.That(result.Data!.Items[0].Name).IsEqualTo("server_01");
     }
 
     [Test]

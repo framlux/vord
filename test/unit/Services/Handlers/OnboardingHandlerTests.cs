@@ -199,6 +199,11 @@ public class OnboardingHandlerTests
 
         await handler.CreateOrganizationAsync("New Org", "free", 1, "ext-1", CancellationToken.None);
 
-        await cache.Received(1).CreateUserTenantRoleAsync(Arg.Is<UserTenantRole>(r => r.UserId == 1 && r.AssignedTenantId == 42), Arg.Any<CancellationToken>());
+        await cache.Received(1).CreateUserTenantRoleAsync(
+            Arg.Is<UserTenantRole>(r =>
+                r.UserId == 1 &&
+                r.AssignedTenantId == 42 &&
+                r.Role == UserAccountRoles.TenantAdmin),
+            Arg.Any<CancellationToken>());
     }
 }

@@ -19,11 +19,6 @@ namespace Framlux.FleetManagement.FunctionalTest.Endpoints.Web;
 /// </summary>
 public sealed class InvitationEndpointTests
 {
-    private static readonly JsonSerializerOptions JsonOptions = new()
-    {
-        PropertyNameCaseInsensitive = true,
-    };
-
     private static async Task<(int TenantId, int UserId)> SeedInvitationEnvironment(
         DatabaseContext db,
         SubscriptionTier tier = SubscriptionTier.Pro)
@@ -678,6 +673,119 @@ public sealed class InvitationEndpointTests
 
         string message = root.GetProperty("message").GetString() ?? string.Empty;
         await Assert.That(message).Contains("Only pending invitations can be resent");
+    }
+
+    // --- InvitationAcceptEndpoint Tests ---
+
+    [Test]
+    public async Task AcceptInvitation_ValidInvitation_DatabaseStateUpdated()
+    {
+        // The accept endpoint's happy path triggers SignInAsync to re-issue the cookie,
+        // which the test auth handler doesn't support. We verify that the handler logic
+        // (invitation status change and UserTenantRole creation) works correctly by
+        // confirming the DB state after the attempt.
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int adminUserId) = await SeedInvitationEnvironment(db);
+
+        // Create a different user who will accept the invitation
+        UserAccount acceptingUser = new()
+        {
+            ExternalId = $"ext-acceptor-{Guid.NewGuid():N}",
+            Username = "acceptor@example.com",
+            CreatedAt = DateTimeOffset.UtcNow,
+            CreatedByUserId = 0,
+            IsActive = true,
+            IsSystem = false,
+            IsGlobalAdmin = false,
+        };
+        acceptingUser.Id = await db.InsertWithInt32IdentityAsync(acceptingUser);
+
+        string rawToken = $"valid-accept-token-{Guid.NewGuid():N}";
+        TenantInvitation invitation = new()
+        {
+            TenantId = tenantId,
+            Email = "acceptor@example.com",
+            TokenHash = HashToken(rawToken),
+            Role = UserAccountRoles.Viewer,
+            Status = InvitationStatus.Pending,
+            InvitedByUserId = adminUserId,
+            CreatedAt = DateTimeOffset.UtcNow,
+            ExpiresAt = DateTimeOffset.UtcNow.AddDays(7),
+        };
+        invitation.Id = await db.InsertWithInt32IdentityAsync(invitation);
+
+        HttpClient client = new AuthenticatedClientBuilder(factory)
+            .WithUserId(acceptingUser.Id)
+            .WithEmail("acceptor@example.com")
+            .WithExternalId(acceptingUser.ExternalId)
+            .Build();
+
+        // The request may return 500 due to SignInAsync limitation in test infrastructure,
+        // but the handler logic (DB writes) should still have executed.
+        await client.PostAsync($"/api/v1/invitations/{rawToken}/accept", null);
+
+        // Verify the invitation status changed to Accepted
+        TenantInvitation? updatedInvitation = await db.TenantInvitations
+            .Where(i => i.Id == invitation.Id)
+            .FirstOrDefaultAsync();
+
+        await Assert.That(updatedInvitation).IsNotNull();
+        await Assert.That(updatedInvitation!.Status).IsEqualTo(InvitationStatus.Accepted);
+
+        // Verify UserTenantRole was created
+        UserTenantRole? tenantRole = await db.UserTenantRoles
+            .Where(r => r.UserId == acceptingUser.Id && r.AssignedTenantId == tenantId)
+            .FirstOrDefaultAsync();
+
+        await Assert.That(tenantRole).IsNotNull();
+        await Assert.That(tenantRole!.Role).IsEqualTo(UserAccountRoles.Viewer);
+    }
+
+    [Test]
+    public async Task AcceptInvitation_EmailMismatch_Returns403()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int adminUserId) = await SeedInvitationEnvironment(db);
+
+        UserAccount wrongUser = new()
+        {
+            ExternalId = $"ext-wrong-{Guid.NewGuid():N}",
+            Username = "wronguser@example.com",
+            CreatedAt = DateTimeOffset.UtcNow,
+            CreatedByUserId = 0,
+            IsActive = true,
+            IsSystem = false,
+            IsGlobalAdmin = false,
+        };
+        wrongUser.Id = await db.InsertWithInt32IdentityAsync(wrongUser);
+
+        string rawToken = $"mismatch-token-{Guid.NewGuid():N}";
+        TenantInvitation invitation = new()
+        {
+            TenantId = tenantId,
+            Email = "correct@example.com",
+            TokenHash = HashToken(rawToken),
+            Role = UserAccountRoles.Viewer,
+            Status = InvitationStatus.Pending,
+            InvitedByUserId = adminUserId,
+            CreatedAt = DateTimeOffset.UtcNow,
+            ExpiresAt = DateTimeOffset.UtcNow.AddDays(7),
+        };
+        await db.InsertWithInt32IdentityAsync(invitation);
+
+        HttpClient client = new AuthenticatedClientBuilder(factory)
+            .WithUserId(wrongUser.Id)
+            .WithEmail("wronguser@example.com")
+            .WithExternalId(wrongUser.ExternalId)
+            .Build();
+
+        HttpResponseMessage response = await client.PostAsync($"/api/v1/invitations/{rawToken}/accept", null);
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.Forbidden);
+        string body = await response.Content.ReadAsStringAsync();
+        await Assert.That(body).Contains("does not match");
     }
 
     // --- InvitationAcceptEndpoint Error Path Tests ---

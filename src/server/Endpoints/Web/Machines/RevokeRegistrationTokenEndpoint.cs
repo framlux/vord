@@ -2,12 +2,13 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
+using System.Security.Claims;
 using FastEndpoints;
 using Framlux.FleetManagement.Server.Auth;
 using Framlux.FleetManagement.Server.Services.Handlers;
 using Framlux.FleetManagement.Server.Services.Infrastructure;
 
-namespace Framlux.FleetManagement.Server.Endpoints.Web.Tenants;
+namespace Framlux.FleetManagement.Server.Endpoints.Web.Machines;
 
 /// <summary>
 /// Revokes a registration token.
@@ -27,7 +28,7 @@ public sealed class RevokeRegistrationTokenEndpoint : EndpointWithoutRequest<Api
     /// <inheritdoc/>
     public override void Configure()
     {
-        Delete("/tenants/registration-tokens/{id}");
+        Delete("/machines/registration-tokens/{id}");
         Policies("MachineAdmin");
         Version(1);
     }
@@ -45,7 +46,10 @@ public sealed class RevokeRegistrationTokenEndpoint : EndpointWithoutRequest<Api
             return;
         }
 
-        ServiceResult<object> result = await _handler.RevokeAsync(tokenId, tenantId.Value, ct);
+        string? userIdStr = User.FindFirstValue(ClaimTypes.Actor);
+        int userId = int.TryParse(userIdStr, out int uid) ? uid : 0;
+
+        ServiceResult<object> result = await _handler.RevokeAsync(tokenId, tenantId.Value, userId, ct);
 
         if (result.IsNotFound)
         {

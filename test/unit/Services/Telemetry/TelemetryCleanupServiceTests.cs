@@ -2,6 +2,7 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
+using Framlux.FleetManagement.Database;
 using Framlux.FleetManagement.Database.Cache;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
@@ -9,10 +10,10 @@ using Framlux.FleetManagement.Server.Services.Infrastructure;
 using Framlux.FleetManagement.Server.Services.ServerConfiguration;
 using Framlux.FleetManagement.Server.Services.Telemetry;
 using Framlux.FleetManagement.Test.Infrastructure;
-using LinqToDB.Async;
 using LinqToDB;
-using Microsoft.Extensions.Logging.Abstractions;
+using LinqToDB.Async;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
 using StackExchange.Redis;
 
@@ -346,5 +347,129 @@ public sealed class TelemetryCleanupServiceTests
         // All 3 records should be permanently deleted in a single batch
         List<MachineTelemetry> remaining = await dbFactory.Context.MachineTelemetry.ToListAsync();
         await Assert.That(remaining.Count).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task CleanupSoftDeletedRows_NothingToDelete_NoLogMessage()
+    {
+        using TestDatabaseFactory dbFactory = new();
+
+        // Insert only active (non-deleted) records — nothing past grace period
+        await dbFactory.Context.InsertAsync(new MachineTelemetry
+        {
+            MachineId = 1,
+            TenantId = 1,
+            TelemetryType = 1,
+            Payload = "{}",
+            ReceivedAt = DateTimeOffset.UtcNow,
+            SourceEventId = "active-only"
+        });
+
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+        ILogger<TelemetryCleanupService> logger = Substitute.For<ILogger<TelemetryCleanupService>>();
+        IDistributedLock distributedLock = Substitute.For<IDistributedLock>();
+        distributedLock.TryAcquireAsync(Arg.Any<string>(), Arg.Any<TimeSpan>())
+            .Returns(Task.FromResult<LockHandle?>(new LockHandle(Substitute.For<IDatabase>(), "test-key", "test-value")));
+        TelemetryCleanupService service = new(scopeFactory, CreateConfigService(), distributedLock, logger);
+
+        System.Reflection.MethodInfo? method = typeof(TelemetryCleanupService)
+            .GetMethod("CleanupSoftDeletedRowsAsync", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+        await (Task)method!.Invoke(service, [CancellationToken.None])!;
+
+        // No Information log should fire because totalDeleted is 0
+        logger.DidNotReceive().Log(
+            LogLevel.Information,
+            Arg.Any<EventId>(),
+            Arg.Any<object>(),
+            Arg.Any<Exception>(),
+            Arg.Any<Func<object, Exception?, string>>());
+
+        // Active record should remain
+        List<MachineTelemetry> remaining = await dbFactory.Context.MachineTelemetry.ToListAsync();
+        await Assert.That(remaining.Count).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task CleanupSoftDeletedRows_PositiveDeleted_LogsInformation()
+    {
+        using TestDatabaseFactory dbFactory = new();
+
+        // Insert a soft-deleted record older than grace period to trigger logging
+        await dbFactory.Context.InsertAsync(new MachineTelemetry
+        {
+            MachineId = 1,
+            TenantId = 1,
+            TelemetryType = 1,
+            Payload = "{}",
+            ReceivedAt = DateTimeOffset.UtcNow.AddDays(-30),
+            SourceEventId = "old-deleted-for-log",
+            DeletedAt = DateTimeOffset.UtcNow.AddDays(-14)
+        });
+
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+        ILogger<TelemetryCleanupService> logger = Substitute.For<ILogger<TelemetryCleanupService>>();
+        IDistributedLock distributedLock = Substitute.For<IDistributedLock>();
+        distributedLock.TryAcquireAsync(Arg.Any<string>(), Arg.Any<TimeSpan>())
+            .Returns(Task.FromResult<LockHandle?>(new LockHandle(Substitute.For<IDatabase>(), "test-key", "test-value")));
+        TelemetryCleanupService service = new(scopeFactory, CreateConfigService(), distributedLock, logger);
+
+        System.Reflection.MethodInfo? method = typeof(TelemetryCleanupService)
+            .GetMethod("CleanupSoftDeletedRowsAsync", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+        await (Task)method!.Invoke(service, [CancellationToken.None])!;
+
+        // Information log should fire because totalDeleted > 0
+        logger.Received().Log(
+            LogLevel.Information,
+            Arg.Any<EventId>(),
+            Arg.Any<object>(),
+            Arg.Any<Exception>(),
+            Arg.Any<Func<object, Exception?, string>>());
+    }
+
+    [Test]
+    public async Task CleanupSoftDeletedRows_CancellationDuringBatch_StopsProcessing()
+    {
+        using TestDatabaseFactory dbFactory = new();
+
+        // Insert a soft-deleted record past grace period
+        await dbFactory.Context.InsertAsync(new MachineTelemetry
+        {
+            MachineId = 1,
+            TenantId = 1,
+            TelemetryType = 1,
+            Payload = "{}",
+            ReceivedAt = DateTimeOffset.UtcNow.AddDays(-30),
+            SourceEventId = "cancel-test",
+            DeletedAt = DateTimeOffset.UtcNow.AddDays(-14)
+        });
+
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+        ILogger<TelemetryCleanupService> logger = new NullLogger<TelemetryCleanupService>();
+        IDistributedLock distributedLock = Substitute.For<IDistributedLock>();
+        distributedLock.TryAcquireAsync(Arg.Any<string>(), Arg.Any<TimeSpan>())
+            .Returns(Task.FromResult<LockHandle?>(new LockHandle(Substitute.For<IDatabase>(), "test-key", "test-value")));
+        TelemetryCleanupService service = new(scopeFactory, CreateConfigService(), distributedLock, logger);
+
+        System.Reflection.MethodInfo? method = typeof(TelemetryCleanupService)
+            .GetMethod("CleanupSoftDeletedRowsAsync", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance);
+
+        // Pass an already-cancelled token to test the cancellation check in the while loop
+        using CancellationTokenSource cts = new();
+        await cts.CancelAsync();
+
+        try
+        {
+            await (Task)method!.Invoke(service, [cts.Token])!;
+        }
+        catch (OperationCanceledException)
+        {
+            // Expected — cancellation during batch processing
+        }
+
+        // The already-cancelled token prevents the while loop from executing,
+        // so the soft-deleted record should remain in the database.
+        List<MachineTelemetry> remaining = await dbFactory.Context.MachineTelemetry.ToListAsync();
+        await Assert.That(remaining.Count).IsEqualTo(1);
+        await Assert.That(remaining[0].SourceEventId).IsEqualTo("cancel-test");
     }
 }

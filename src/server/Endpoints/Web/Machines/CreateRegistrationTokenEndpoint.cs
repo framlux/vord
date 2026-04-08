@@ -8,7 +8,7 @@ using Framlux.FleetManagement.Server.Auth;
 using Framlux.FleetManagement.Server.Services.Handlers;
 using Framlux.FleetManagement.Server.Services.Infrastructure;
 
-namespace Framlux.FleetManagement.Server.Endpoints.Web.Tenants;
+namespace Framlux.FleetManagement.Server.Endpoints.Web.Machines;
 
 /// <summary>
 /// Creates a new registration token for the tenant.
@@ -28,7 +28,7 @@ public sealed class CreateRegistrationTokenEndpoint : Endpoint<CreateRegistratio
     /// <inheritdoc/>
     public override void Configure()
     {
-        Post("/tenants/registration-tokens");
+        Post("/machines/registration-tokens");
         Policies("MachineAdmin");
         Version(1);
     }
@@ -53,7 +53,7 @@ public sealed class CreateRegistrationTokenEndpoint : Endpoint<CreateRegistratio
         if (result.IsSuccess == false)
         {
             HttpContext.Response.StatusCode = result.StatusCode;
-            await Send.OkAsync(ApiResponse<RegistrationTokenDto>.Error("Validation failed"), cancellation: ct);
+            await HttpContext.Response.WriteAsJsonAsync(ApiResponse<RegistrationTokenDto>.Error("Validation failed"), ct);
 
             return;
         }

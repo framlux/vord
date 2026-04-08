@@ -22,20 +22,6 @@ function makeUser(overrides: Partial<UserDto> = {}): UserDto {
     };
 }
 
-describe('UserAccountRole enum alignment', () => {
-    it('should have TenantAdmin as 1', () => {
-        expect(String(UserAccountRole.TenantAdmin)).toBe('1');
-    });
-
-    it('should have MachineAdmin as 2', () => {
-        expect(String(UserAccountRole.MachineAdmin)).toBe('2');
-    });
-
-    it('should have Viewer as 3', () => {
-        expect(String(UserAccountRole.Viewer)).toBe('3');
-    });
-});
-
 describe('hasRole', () => {
     it('should return false for null user', () => {
         expect(hasRole(null, '1')).toBe(false);

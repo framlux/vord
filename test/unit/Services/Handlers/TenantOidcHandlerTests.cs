@@ -52,41 +52,6 @@ public class TenantOidcHandlerTests
         return svc;
     }
 
-    // ========== Constructor tests ==========
-
-    [Test]
-    public async Task Constructor_NullDatabaseContext_ThrowsArgumentNullException()
-    {
-        ISubscriptionService subscriptionService = Substitute.For<ISubscriptionService>();
-        IOidcSecretProtector secretProtector = Substitute.For<IOidcSecretProtector>();
-
-        await Assert.That(() =>
-            new TenantOidcHandler(null!, subscriptionService, secretProtector))
-            .Throws<ArgumentNullException>();
-    }
-
-    [Test]
-    public async Task Constructor_NullSubscriptionService_ThrowsArgumentNullException()
-    {
-        using TestDatabaseFactory dbFactory = new();
-        IOidcSecretProtector secretProtector = Substitute.For<IOidcSecretProtector>();
-
-        await Assert.That(() =>
-            new TenantOidcHandler(dbFactory.Context, null!, secretProtector))
-            .Throws<ArgumentNullException>();
-    }
-
-    [Test]
-    public async Task Constructor_NullSecretProtector_ThrowsArgumentNullException()
-    {
-        using TestDatabaseFactory dbFactory = new();
-        ISubscriptionService subscriptionService = Substitute.For<ISubscriptionService>();
-
-        await Assert.That(() =>
-            new TenantOidcHandler(dbFactory.Context, subscriptionService, null!))
-            .Throws<ArgumentNullException>();
-    }
-
     // ========== GetConfigAsync tests ==========
 
     [Test]

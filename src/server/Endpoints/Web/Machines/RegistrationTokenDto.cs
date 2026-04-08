@@ -2,7 +2,7 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
-namespace Framlux.FleetManagement.Server.Endpoints.Web.Tenants;
+namespace Framlux.FleetManagement.Server.Endpoints.Web.Machines;
 
 /// <summary>
 /// DTO for a registration token response.

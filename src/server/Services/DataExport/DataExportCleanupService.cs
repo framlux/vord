@@ -67,7 +67,7 @@ public sealed class DataExportCleanupService : BackgroundService
         }
     }
 
-    private async Task CleanupExpiredExportsAsync(CancellationToken ct)
+    internal async Task CleanupExpiredExportsAsync(CancellationToken ct)
     {
         using IServiceScope scope = _scopeFactory.CreateScope();
         DatabaseContext db = scope.ServiceProvider.GetRequiredService<DatabaseContext>();
