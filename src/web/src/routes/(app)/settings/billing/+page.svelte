@@ -147,6 +147,8 @@
 	}
 </script>
 
+<svelte:head><title>Billing - Vord</title></svelte:head>
+
 <div class="space-y-6">
 	<!-- Page Header -->
 	<div>

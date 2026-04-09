@@ -51,12 +51,21 @@
 	}
 </script>
 
+<svelte:head><title>Query Console - Vord</title></svelte:head>
+
 <div class="space-y-6">
 	<!-- Page Header -->
 	<div>
 		<h1 class="text-3xl font-bold text-surface-900 dark:text-surface-50">OSQuery Console</h1>
 		<p class="mt-1 text-surface-500 dark:text-surface-400">
 			Execute OSQuery SQL queries against managed machines.
+		</p>
+	</div>
+
+	<!-- Coming Soon Banner -->
+	<div class="mb-6 rounded-lg border border-amber-200 bg-amber-50 p-4 dark:border-amber-800 dark:bg-amber-900/20">
+		<p class="text-sm text-amber-800 dark:text-amber-300">
+			Query execution will be available in a future update. This page is a preview of upcoming functionality.
 		</p>
 	</div>
 
@@ -105,7 +114,7 @@
 		<div class="flex items-center gap-3">
 			<button
 				onclick={executeQuery}
-				disabled={!selectedMachineId || !queryText.trim() || isExecuting}
+				disabled
 				class="inline-flex items-center gap-2 rounded-lg bg-primary-500 px-4 py-2 text-sm font-medium text-white transition hover:bg-primary-600 disabled:cursor-not-allowed disabled:opacity-50"
 			>
 				<Play size={16} />

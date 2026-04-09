@@ -152,6 +152,8 @@
 	});
 </script>
 
+<svelte:head><title>Dashboard - Vord</title></svelte:head>
+
 <div class="space-y-6">
 	<!-- Poll failure warning -->
 	{#if showPollWarning}
@@ -232,6 +234,7 @@
 			<input
 				type="text"
 				placeholder="Search machines..."
+				aria-label="Search machines"
 				bind:value={searchQuery}
 				oninput={onSearchInput}
 				class="w-full rounded-lg border border-surface-200 bg-surface-50 py-2 pl-10 pr-4 text-sm text-surface-900 placeholder-surface-400 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-surface-700 dark:bg-surface-800 dark:text-surface-100 dark:placeholder-surface-500 sm:w-72"
@@ -241,6 +244,7 @@
 			<select
 				bind:value={statusFilter}
 				onchange={onStatusChange}
+				aria-label="Filter by status"
 				class="rounded-lg border border-surface-200 bg-surface-50 px-3 py-2 text-sm text-surface-700 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-surface-700 dark:bg-surface-800 dark:text-surface-300"
 			>
 				<option value="all">All Status</option>

@@ -26,7 +26,7 @@
 	const ringArcLength = $derived(ringCircumference * 0.75);
 	const ringGap = $derived(ringCircumference * 0.25);
 
-	const filterId = $derived(`glow-${Math.random().toString(36).slice(2, 8)}`);
+	const filterId = `glow-${Math.random().toString(36).slice(2, 8)}`;
 </script>
 
 <svg

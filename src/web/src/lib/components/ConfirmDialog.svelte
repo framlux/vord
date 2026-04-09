@@ -30,6 +30,12 @@
 	};
 </script>
 
+<svelte:window onkeydown={(e) => {
+	if (open && e.key === 'Escape') {
+		oncancel?.();
+	}
+}} />
+
 {#if open}
 	<div class="fixed inset-0 z-50 flex items-center justify-center bg-black/50" role="presentation">
 		<div

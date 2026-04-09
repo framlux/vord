@@ -9,6 +9,8 @@
     import { Copy, XCircle, Check, Plus, Terminal } from 'lucide-svelte';
     import InstallScriptModal from '$lib/components/InstallScriptModal.svelte';
     import PageHeader from '$lib/components/PageHeader.svelte';
+    import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
+    import { formatDate } from '$lib/utils/format';
 
     let { data } = $props();
 
@@ -20,6 +22,7 @@
     let newToken = $state<RegistrationTokenDto | null>(null);
     let copied = $state(false);
     let showInstallScript = $state(false);
+    let revokeTokenConfirm = $state<{ open: boolean; id: number | null }>({ open: false, id: null });
 
     const client = new ApiClient('');
 
@@ -62,17 +65,11 @@
         setTimeout(() => (copied = false), 2000);
     }
 
-    function formatDate(dateStr: string): string {
-        return new Date(dateStr).toLocaleDateString('en-US', {
-            month: 'short',
-            day: 'numeric',
-            year: 'numeric'
-        });
-    }
-
     const activeTokens = $derived(tokens.filter(t => t.isRevoked === false));
     const inactiveTokens = $derived(tokens.filter(t => t.isRevoked));
 </script>
+
+<svelte:head><title>Register Machine - Vord</title></svelte:head>
 
 <div class="mx-auto max-w-4xl space-y-6">
     <PageHeader title="Registration Tokens" description="Manage tokens used to register machines with your organization. Deploy a token to a machine to allow it to auto-enroll." />
@@ -160,7 +157,7 @@
                             </p>
                         </div>
                         <button
-                            onclick={() => revokeToken(token.id)}
+                            onclick={() => revokeTokenConfirm = { open: true, id: token.id }}
                             class="inline-flex items-center gap-1 rounded-md border border-surface-200 px-2.5 py-1 text-xs text-surface-500 hover:bg-surface-100 hover:text-red-600 dark:border-surface-700 dark:hover:bg-surface-700 dark:hover:text-red-400"
                             title="Revoke token"
                         >
@@ -197,6 +194,21 @@
         </div>
     {/if}
 </div>
+
+<ConfirmDialog
+    open={revokeTokenConfirm.open}
+    title="Revoke Registration Token"
+    message="Are you sure you want to revoke this registration token? Machines using this token will no longer be able to register."
+    confirmLabel="Revoke"
+    variant="danger"
+    onconfirm={() => {
+        if (revokeTokenConfirm.id !== null) {
+            revokeToken(revokeTokenConfirm.id);
+        }
+        revokeTokenConfirm = { open: false, id: null };
+    }}
+    oncancel={() => revokeTokenConfirm = { open: false, id: null }}
+/>
 
 <InstallScriptModal
     open={showInstallScript}

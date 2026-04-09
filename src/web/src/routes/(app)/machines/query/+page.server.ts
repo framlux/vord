@@ -4,10 +4,15 @@
 
 import { createServerApiClient } from '$lib/api/server';
 import { ApiError } from '$lib/api/client';
+import { canAdminMachines } from '$lib/utils/roles';
 import { redirect, error } from '@sveltejs/kit';
 import type { PageServerLoad } from './$types';
 
-export const load: PageServerLoad = async ({ fetch, cookies }) => {
+export const load: PageServerLoad = async ({ fetch, cookies, locals }) => {
+	if (locals.user === null || canAdminMachines(locals.user) === false) {
+		error(403, 'Access denied');
+	}
+
 	const api = createServerApiClient(fetch, cookies.get('vord_auth'), cookies.get('vord_tenant'));
 	try {
 		const machinesResp = await api.getMachines({ pageSize: 100 });

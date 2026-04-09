@@ -3,8 +3,10 @@
      See LICENSE for details. -->
 
 <script lang="ts">
+	import { onMount } from 'svelte';
 	import type { TenantDto, SubscriptionDto } from '$lib/api/types';
 	import { Building2, Download, Check, AlertCircle, Loader2, CreditCard } from 'lucide-svelte';
+	import { formatBytes } from '$lib/utils/format';
 
 	let { data } = $props();
 
@@ -52,13 +54,6 @@
 	let pollTimer = $state<ReturnType<typeof setInterval> | null>(null);
 	let fileSizeBytes = $state<number | null>(null);
 
-	function formatFileSize(bytes: number): string {
-		if (bytes < 1024) return `${bytes} B`;
-		if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-
-		return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-	}
-
 	async function handleExport() {
 		isRequesting = true;
 		exportError = null;
@@ -99,7 +94,7 @@
 		}
 
 		pollTimer = setInterval(async () => {
-			if (null == exportJobId) return;
+			if (exportJobId === null) return;
 
 			try {
 				const response = await fetch(`/settings/export?jobId=${exportJobId}`);
@@ -135,10 +130,18 @@
 		}
 	}
 
+	onMount(() => {
+		return () => {
+			stopPolling();
+		};
+	});
+
 	const isExporting = $derived(
 		exportStatus === 'Pending' || exportStatus === 'Processing' || isRequesting
 	);
 </script>
+
+<svelte:head><title>Settings - Vord</title></svelte:head>
 
 <div class="space-y-6">
 	<!-- Page Header -->
@@ -203,11 +206,11 @@
 				</div>
 				<div>
 					<p class="text-xs text-surface-500 dark:text-surface-400">Machine Limit</p>
-					<p class="mt-1 text-sm font-medium text-surface-900 dark:text-surface-100">5 machines</p>
+					<p class="mt-1 text-sm font-medium text-surface-900 dark:text-surface-100">3 machines</p>
 				</div>
 				<div>
 					<p class="text-xs text-surface-500 dark:text-surface-400">Data Retention</p>
-					<p class="mt-1 text-sm font-medium text-surface-900 dark:text-surface-100">7 day(s)</p>
+					<p class="mt-1 text-sm font-medium text-surface-900 dark:text-surface-100">1 day(s)</p>
 				</div>
 			</div>
 		{:else}
@@ -288,7 +291,7 @@
 			>
 				<Check class="h-4 w-4 flex-shrink-0" />
 				<span>
-					Download ready{fileSizeBytes ? ` (${formatFileSize(fileSizeBytes)})` : ''} —
+					Download ready{fileSizeBytes ? ` (${formatBytes(fileSizeBytes)})` : ''} —
 					<a
 						href={downloadUrl}
 						class="font-medium underline"

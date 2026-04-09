@@ -7,8 +7,10 @@
 	import { Bell, AlertCircle, ChevronLeft, ChevronRight, Plus, Trash2, Check, Webhook } from 'lucide-svelte';
 	import { enhance } from '$app/forms';
 	import { goto } from '$app/navigation';
-	import { page as pageStore } from '$app/state';
+	import { page as pageState } from '$app/state';
 	import PageHeader from '$lib/components/PageHeader.svelte';
+	import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
+	import { formatDateTime } from '$lib/utils/format';
 
 	let { data } = $props();
 
@@ -21,6 +23,8 @@
 	let showCreateRule = $state(false);
 	let showCreateWebhook = $state(false);
 	let editingRuleId = $state<number | null>(null);
+	let deleteRuleConfirm = $state<{ open: boolean; id: number | null }>({ open: false, id: null });
+	let deleteWebhookConfirm = $state<{ open: boolean; id: number | null }>({ open: false, id: null });
 
 	// svelte-ignore state_referenced_locally
 	let statusFilter = $state(filters.status ?? '');
@@ -39,16 +43,6 @@
 		Resolved: 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400'
 	};
 
-	function formatTimestamp(ts: string): string {
-		return new Date(ts).toLocaleString('en-US', {
-			month: 'short',
-			day: 'numeric',
-			year: 'numeric',
-			hour: '2-digit',
-			minute: '2-digit'
-		});
-	}
-
 	function applyEventFilters() {
 		const params = new URLSearchParams();
 		if (statusFilter) params.set('status', statusFilter);
@@ -65,12 +59,14 @@
 	}
 
 	function goToPage(p: number) {
-		const params = new URLSearchParams(pageStore.url.searchParams);
+		const params = new URLSearchParams(pageState.url.searchParams);
 		params.set('page', String(p));
 
 		goto(`/settings/alerts?${params.toString()}`);
 	}
 </script>
+
+<svelte:head><title>Alerts - Vord</title></svelte:head>
 
 <div class="space-y-6">
 	<PageHeader title="Alerts" description="Manage alert rules, view alert events, and configure webhook delivery." />
@@ -280,12 +276,9 @@
 													{:else}
 														<button onclick={() => (editingRuleId = rule.id)} class="text-xs text-primary-600 hover:underline dark:text-primary-400">Edit</button>
 														{#if rule.isCustom}
-															<form method="POST" action="?/deleteRule" use:enhance>
-																<input type="hidden" name="id" value={rule.id} />
-																<button type="submit" class="rounded p-1 text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-900/20">
-																	<Trash2 class="h-4 w-4" />
-																</button>
-															</form>
+															<button type="button" onclick={() => deleteRuleConfirm = { open: true, id: rule.id }} class="rounded p-1 text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-900/20">
+																<Trash2 class="h-4 w-4" />
+															</button>
 														{/if}
 													{/if}
 												</div>
@@ -356,7 +349,7 @@
 									{#each events.items as event, i}
 										<tr class="{i % 2 === 1 ? 'bg-surface-100/50 dark:bg-surface-800/30' : ''} hover:bg-surface-50 dark:hover:bg-surface-800/50">
 											<td class="whitespace-nowrap px-4 py-3 text-surface-900 dark:text-surface-100">
-												{formatTimestamp(event.triggeredAt)}
+												{formatDateTime(event.triggeredAt)}
 											</td>
 											<td class="px-4 py-3 text-surface-600 dark:text-surface-400">{event.ruleName}</td>
 											<td class="px-4 py-3 text-surface-600 dark:text-surface-400">#{event.machineId}</td>
@@ -478,14 +471,11 @@
 													<span class="inline-flex items-center rounded-full bg-surface-100 px-2.5 py-0.5 text-xs font-medium text-surface-500 dark:bg-surface-700 dark:text-surface-400">Disabled</span>
 												{/if}
 											</td>
-											<td class="whitespace-nowrap px-4 py-3 text-surface-500 dark:text-surface-400">{formatTimestamp(webhook.createdAt)}</td>
+											<td class="whitespace-nowrap px-4 py-3 text-surface-500 dark:text-surface-400">{formatDateTime(webhook.createdAt)}</td>
 											<td class="px-4 py-3">
-												<form method="POST" action="?/deleteWebhook" use:enhance>
-													<input type="hidden" name="id" value={webhook.id} />
-													<button type="submit" class="rounded p-1 text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-900/20">
-														<Trash2 class="h-4 w-4" />
-													</button>
-												</form>
+												<button type="button" onclick={() => deleteWebhookConfirm = { open: true, id: webhook.id }} class="rounded p-1 text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-900/20">
+													<Trash2 class="h-4 w-4" />
+												</button>
 											</td>
 										</tr>
 									{/each}
@@ -498,3 +488,53 @@
 		{/if}
 	{/if}
 </div>
+
+<ConfirmDialog
+	open={deleteRuleConfirm.open}
+	title="Delete Alert Rule"
+	message="Are you sure you want to delete this alert rule? This cannot be undone."
+	confirmLabel="Delete"
+	variant="danger"
+	onconfirm={() => {
+		if (deleteRuleConfirm.id !== null) {
+			const form = document.createElement('form');
+			form.method = 'POST';
+			form.action = '?/deleteRule';
+			const input = document.createElement('input');
+			input.type = 'hidden';
+			input.name = 'id';
+			input.value = String(deleteRuleConfirm.id);
+			form.appendChild(input);
+			document.body.appendChild(form);
+			form.requestSubmit();
+			document.body.removeChild(form);
+		}
+		deleteRuleConfirm = { open: false, id: null };
+	}}
+	oncancel={() => deleteRuleConfirm = { open: false, id: null }}
+/>
+
+<ConfirmDialog
+	open={deleteWebhookConfirm.open}
+	title="Delete Webhook"
+	message="Are you sure you want to delete this webhook endpoint? This cannot be undone."
+	confirmLabel="Delete"
+	variant="danger"
+	onconfirm={() => {
+		if (deleteWebhookConfirm.id !== null) {
+			const form = document.createElement('form');
+			form.method = 'POST';
+			form.action = '?/deleteWebhook';
+			const input = document.createElement('input');
+			input.type = 'hidden';
+			input.name = 'id';
+			input.value = String(deleteWebhookConfirm.id);
+			form.appendChild(input);
+			document.body.appendChild(form);
+			form.requestSubmit();
+			document.body.removeChild(form);
+		}
+		deleteWebhookConfirm = { open: false, id: null };
+	}}
+	oncancel={() => deleteWebhookConfirm = { open: false, id: null }}
+/>

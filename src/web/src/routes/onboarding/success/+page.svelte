@@ -8,6 +8,8 @@
 	let { data } = $props();
 </script>
 
+<svelte:head><title>Welcome - Vord</title></svelte:head>
+
 <PublicShell user={data.user}>
 	<div class="flex min-h-[60vh] items-center justify-center py-12">
 		<div class="w-full max-w-lg rounded-xl border border-surface-200 bg-surface-50 p-8 text-center dark:border-surface-700 dark:bg-surface-800">

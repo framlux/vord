@@ -16,7 +16,7 @@
 	} from '$lib/api/types';
 	import { MachineHealthStatus } from '$lib/api/types';
 	import { ApiClient } from '$lib/api/client';
-	import { formatDate, formatDateTime, formatRelativeTime } from '$lib/utils/format';
+	import { formatDate, formatDateTime, formatRelativeTime, formatBytes, formatUptime } from '$lib/utils/format';
 	import { getOsName } from '$lib/utils/enums';
 	import EmptyState from '$lib/components/EmptyState.svelte';
 	import HealthBadge from '$lib/components/HealthBadge.svelte';
@@ -46,7 +46,7 @@
 
 	let showSecurityOnly = $state(false);
 
-	const filteredPackages = $derived(() => {
+	const filteredPackages = $derived.by(() => {
 		const updates = machineDetail?.packageUpdates?.updates ?? [];
 		if (showSecurityOnly) {
 			return updates.filter(p => p.isSecurityUpdate);
@@ -58,13 +58,13 @@
 	// Vitals derived values
 	const cpuPercent = $derived(machineDetail?.cpuUsage?.cpuUsagePercent ?? null);
 	const memoryPercent = $derived(machineDetail?.memoryUsage?.memoryUsagePercent ?? null);
-	const maxDiskPercent = $derived(() => {
+	const maxDiskPercent = $derived.by(() => {
 		const disks = machineDetail?.diskUsages?.disks;
 		if (disks === undefined || disks === null || disks.length === 0) return null;
 
 		return Math.max(...disks.map(d => d.usagePercent));
 	});
-	const diskTooltip = $derived(() => {
+	const diskTooltip = $derived.by(() => {
 		const disks = machineDetail?.diskUsages?.disks;
 		if (disks === undefined || disks === null || disks.length === 0) return undefined;
 
@@ -257,27 +257,6 @@
 		}
 	});
 
-	function formatUptime(seconds: number): string {
-		const days = Math.floor(seconds / 86400);
-		const hours = Math.floor((seconds % 86400) / 3600);
-		const minutes = Math.floor((seconds % 3600) / 60);
-		const parts: string[] = [];
-		if (days > 0) parts.push(`${days}d`);
-		if (hours > 0) parts.push(`${hours}h`);
-		if (minutes > 0) parts.push(`${minutes}m`);
-
-		return parts.length > 0 ? parts.join(' ') : '< 1m';
-	}
-
-	function formatBytes(bytes: number): string {
-		if (bytes < 1024) return `${bytes} B`;
-		if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-		if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-		if (bytes < 1024 * 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
-
-		return `${(bytes / (1024 * 1024 * 1024 * 1024)).toFixed(1)} TB`;
-	}
-
 	function getCertificateStatus(cert: MachineCertificateDto): { label: string; classes: string } {
 		if (cert.revokedAt) {
 			return {
@@ -304,6 +283,8 @@
 	}
 </script>
 
+<svelte:head><title>Machine Detail - Vord</title></svelte:head>
+
 <div class="space-y-6">
 	<!-- Poll failure warning -->
 	{#if showPollWarning}
@@ -322,8 +303,8 @@
 	<VitalsBar
 		cpuPercent={cpuPercent}
 		memoryPercent={memoryPercent}
-		maxDiskPercent={maxDiskPercent()}
-		diskDetails={diskTooltip()}
+		maxDiskPercent={maxDiskPercent}
+		diskDetails={diskTooltip}
 	/>
 
 	<!-- Tabs -->
@@ -844,7 +825,7 @@
 						Security updates only
 					</label>
 				</div>
-				{#if filteredPackages().length === 0}
+				{#if filteredPackages.length === 0}
 					<EmptyState
 						title="No packages"
 						description={showSecurityOnly ? 'No security updates pending.' : 'No package updates available.'}
@@ -862,7 +843,7 @@
 									</tr>
 								</thead>
 								<tbody class="divide-y divide-surface-100 dark:divide-surface-700">
-									{#each filteredPackages() as pkg}
+									{#each filteredPackages as pkg}
 										<tr class="transition hover:bg-surface-50 dark:hover:bg-surface-700/50">
 											<td class="px-6 py-3 font-medium text-surface-900 dark:text-surface-100">{pkg.name}</td>
 											<td class="px-6 py-3 font-mono text-xs text-surface-600 dark:text-surface-400">{pkg.currentVersion}</td>

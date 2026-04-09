@@ -93,6 +93,8 @@
     }
 </script>
 
+<svelte:head><title>Machines - Vord</title></svelte:head>
+
 <div class="space-y-6">
     <!-- Poll failure warning -->
     {#if showPollWarning}
@@ -127,6 +129,7 @@
             <input
                 type="text"
                 placeholder="Search machines..."
+                aria-label="Search machines"
                 bind:value={searchValue}
                 onkeydown={handleSearchKeydown}
                 onblur={handleSearch}
@@ -138,6 +141,7 @@
         <select
             value={filters.os}
             onchange={(e) => updateFilters({ os: e.currentTarget.value })}
+            aria-label="Filter by operating system"
             class="rounded-lg border border-surface-200 bg-surface-50 px-3 py-2 text-sm text-surface-900 transition focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-surface-600 dark:bg-surface-700 dark:text-surface-100"
         >
             {#each osOptions as opt}
@@ -149,6 +153,7 @@
         <select
             value={filters.type}
             onchange={(e) => updateFilters({ type: e.currentTarget.value })}
+            aria-label="Filter by machine type"
             class="rounded-lg border border-surface-200 bg-surface-50 px-3 py-2 text-sm text-surface-900 transition focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-surface-600 dark:bg-surface-700 dark:text-surface-100"
         >
             {#each typeOptions as opt}
@@ -160,6 +165,7 @@
         <select
             value={filters.status}
             onchange={(e) => updateFilters({ status: e.currentTarget.value })}
+            aria-label="Filter by status"
             class="rounded-lg border border-surface-200 bg-surface-50 px-3 py-2 text-sm text-surface-900 transition focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-surface-600 dark:bg-surface-700 dark:text-surface-100"
         >
             {#each statusOptions as opt}

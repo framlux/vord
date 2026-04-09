@@ -331,11 +331,13 @@ public sealed class InvitationHandler : IInvitationHandler
                 new InvitationResendResult { ErrorMessage = "Only pending invitations can be resent" });
         }
 
-        await _databaseCache.RevokeInvitationAsync(invitationId, ct);
-
         string token = RandomNumberGenerator.GetHexString(64, true);
         string tokenHash = HashToken(token);
         DateTimeOffset now = DateTimeOffset.UtcNow;
+
+        using IDatabaseTransaction transaction = await _databaseCache.BeginTransactionAsync(ct);
+
+        await _databaseCache.RevokeInvitationAsync(invitationId, ct);
 
         TenantInvitation newInvitation = await _databaseCache.CreateInvitationAsync(new TenantInvitation
         {
@@ -348,6 +350,8 @@ public sealed class InvitationHandler : IInvitationHandler
             CreatedAt = now,
             ExpiresAt = now.AddDays(7),
         }, ct);
+
+        await transaction.CommitAsync(ct);
 
         string acceptUrl = $"{baseUrl}/invitations/accept?token={token}";
 

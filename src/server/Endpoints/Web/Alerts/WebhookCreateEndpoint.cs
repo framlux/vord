@@ -61,6 +61,22 @@ public sealed class WebhookCreateEndpoint : Endpoint<CreateWebhookRequest, ApiRe
             return;
         }
 
+        if (string.IsNullOrWhiteSpace(req.Name) || string.IsNullOrWhiteSpace(req.Url))
+        {
+            HttpContext.Response.StatusCode = 400;
+            await HttpContext.Response.WriteAsJsonAsync(ApiResponse<WebhookEndpointDto>.Error("Name and URL are required"), ct);
+
+            return;
+        }
+
+        if (SsoOidcEvents.IsUrlSafe(req.Url) == false)
+        {
+            HttpContext.Response.StatusCode = 400;
+            await HttpContext.Response.WriteAsJsonAsync(ApiResponse<WebhookEndpointDto>.Error("Webhook URL must be HTTPS and must not point to a private or reserved address"), ct);
+
+            return;
+        }
+
         string? userIdStr = User.FindFirstValue(ClaimTypes.Actor);
         int userId = int.TryParse(userIdStr, out int uid) ? uid : 0;
 

@@ -78,7 +78,7 @@ public sealed class AlertDeliveryService : IAlertDeliveryService
                     Encoding.UTF8.GetBytes(payload));
                 string signature = Convert.ToHexStringLower(signatureBytes);
 
-                HttpClient client = _httpClientFactory.CreateClient();
+                HttpClient client = _httpClientFactory.CreateClient("WebhookDelivery");
                 HttpRequestMessage request = new(HttpMethod.Post, webhook.Url);
                 request.Content = new StringContent(payload, Encoding.UTF8, "application/json");
                 request.Headers.Add("X-Vord-Signature", signature);

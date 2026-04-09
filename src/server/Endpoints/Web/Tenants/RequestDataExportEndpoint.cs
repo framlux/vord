@@ -82,7 +82,8 @@ public sealed class RequestDataExportEndpoint : EndpointWithoutRequest<RequestDa
         if (result.StatusCode == 409)
         {
             HttpContext.Response.StatusCode = 409;
-            await Send.OkAsync(new RequestDataExportResponse { JobId = 0, Status = "AlreadyInProgress" }, cancellation: ct);
+            await HttpContext.Response.WriteAsJsonAsync(
+                new RequestDataExportResponse { JobId = 0, Status = "AlreadyInProgress" }, ct);
 
             return;
         }

@@ -6,7 +6,7 @@
 	import type { PaginatedResponse, AuditLogEntryDto } from '$lib/api/types';
 	import { ScrollText, ChevronLeft, ChevronRight, AlertCircle } from 'lucide-svelte';
 	import { goto } from '$app/navigation';
-	import { page as pageStore } from '$app/state';
+	import { page as pageState } from '$app/state';
 	import PageHeader from '$lib/components/PageHeader.svelte';
 
 	let { data } = $props();
@@ -76,12 +76,14 @@
 	}
 
 	function goToPage(p: number) {
-		const params = new URLSearchParams(pageStore.url.searchParams);
+		const params = new URLSearchParams(pageState.url.searchParams);
 		params.set('page', String(p));
 
 		goto(`/settings/audit-log?${params.toString()}`);
 	}
 </script>
+
+<svelte:head><title>Audit Log - Vord</title></svelte:head>
 
 <div class="space-y-6">
 	<!-- Page Header -->

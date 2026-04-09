@@ -9,7 +9,7 @@ import { redirect, error } from '@sveltejs/kit';
 import type { PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ fetch, cookies, locals }) => {
-	if (!locals.user || !canAdminTenant(locals.user)) {
+	if (locals.user === null || canAdminTenant(locals.user) === false) {
 		error(403, 'Access denied');
 	}
 

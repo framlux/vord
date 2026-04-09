@@ -21,17 +21,17 @@ namespace Framlux.FleetManagement.Server.Services.Handlers;
 public sealed class BillingWebhookHandler : IBillingWebhookHandler
 {
     private readonly IDatabaseCache _databaseCache;
-    private readonly DatabaseContext _db;
+    private readonly IServiceScopeFactory _scopeFactory;
     private readonly IDowngradeCleanupService _downgradeCleanupService;
     private readonly SubscriptionOptions _subscriptionOptions;
 
     /// <summary>
     /// Creates a new instance of the <see cref="BillingWebhookHandler"/> class.
     /// </summary>
-    public BillingWebhookHandler(IDatabaseCache databaseCache, DatabaseContext db, IDowngradeCleanupService downgradeCleanupService, IOptions<SubscriptionOptions> subscriptionOptions)
+    public BillingWebhookHandler(IDatabaseCache databaseCache, IServiceScopeFactory scopeFactory, IDowngradeCleanupService downgradeCleanupService, IOptions<SubscriptionOptions> subscriptionOptions)
     {
         _databaseCache = databaseCache;
-        _db = db;
+        _scopeFactory = scopeFactory;
         _downgradeCleanupService = downgradeCleanupService;
         _subscriptionOptions = subscriptionOptions.Value;
     }
@@ -55,8 +55,11 @@ public sealed class BillingWebhookHandler : IBillingWebhookHandler
 
     private async Task ProvisionDefaultAlertRulesAsync(int tenantId, CancellationToken ct)
     {
+        using IServiceScope scope = _scopeFactory.CreateScope();
+        DatabaseContext db = scope.ServiceProvider.GetRequiredService<DatabaseContext>();
+
         // Check if default rules already exist for this tenant
-        bool hasRules = await _db.AlertRules
+        bool hasRules = await db.AlertRules
             .AnyAsync(r => r.TenantId == tenantId && r.IsCustom == false, ct);
 
         if (hasRules)
@@ -123,7 +126,7 @@ public sealed class BillingWebhookHandler : IBillingWebhookHandler
 
         foreach (AlertRule rule in defaults)
         {
-            await _db.InsertAsync(rule, token: ct);
+            await db.InsertAsync(rule, token: ct);
         }
     }
 

@@ -4,19 +4,19 @@
 
 import { createServerApiClient } from '$lib/api/server';
 import { ApiError } from '$lib/api/client';
+import { parsePaginationParams } from '$lib/utils/pagination';
 import { canAdminTenant } from '$lib/utils/roles';
 import { redirect, error } from '@sveltejs/kit';
 import type { PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ fetch, cookies, locals, url }) => {
-	if (!locals.user || !canAdminTenant(locals.user)) {
+	if (locals.user === null || canAdminTenant(locals.user) === false) {
 		error(403, 'Access denied');
 	}
 
 	const api = createServerApiClient(fetch, cookies.get('vord_auth'), cookies.get('vord_tenant'));
 
-	const page = parseInt(url.searchParams.get('page') ?? '1');
-	const pageSize = parseInt(url.searchParams.get('pageSize') ?? '25');
+	const { page, pageSize } = parsePaginationParams(url);
 	const action = url.searchParams.get('action') ?? undefined;
 	const from = url.searchParams.get('from') ?? undefined;
 	const to = url.searchParams.get('to') ?? undefined;

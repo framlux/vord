@@ -24,14 +24,26 @@ public class RedisRateLimiterTests
     }
 
     /// <summary>
+    /// Helper to set up ScriptEvaluateAsync mock to return the given count.
+    /// </summary>
+    private static void MockScriptResult(IDatabase db, long returnCount)
+    {
+        db.ScriptEvaluateAsync(
+            Arg.Any<string>(),
+            Arg.Any<RedisKey[]>(),
+            Arg.Any<RedisValue[]>(),
+            Arg.Any<CommandFlags>())
+            .Returns(RedisResult.Create((RedisValue)returnCount));
+    }
+
+    /// <summary>
     /// Verifies that a request under the permit limit is allowed.
     /// </summary>
     [Test]
     public async Task IsAllowedAsync_UnderLimit_ReturnsTrue()
     {
         (RedisFixedWindowRateLimiter limiter, IDatabase db) = CreateLimiter(permitLimit: 10);
-        db.StringIncrementAsync(Arg.Any<RedisKey>(), Arg.Any<long>(), Arg.Any<CommandFlags>())
-            .Returns(1L);
+        MockScriptResult(db, 1L);
 
         bool result = await limiter.IsAllowedAsync("127.0.0.1");
 
@@ -45,8 +57,7 @@ public class RedisRateLimiterTests
     public async Task IsAllowedAsync_OverLimit_ReturnsFalse()
     {
         (RedisFixedWindowRateLimiter limiter, IDatabase db) = CreateLimiter(permitLimit: 10);
-        db.StringIncrementAsync(Arg.Any<RedisKey>(), Arg.Any<long>(), Arg.Any<CommandFlags>())
-            .Returns(11L);
+        MockScriptResult(db, 11L);
 
         bool result = await limiter.IsAllowedAsync("127.0.0.1");
 
@@ -54,33 +65,21 @@ public class RedisRateLimiterTests
     }
 
     /// <summary>
-    /// Verifies that the first increment sets a key expiry.
+    /// Verifies that the Lua script is called with the correct key and expiry argument.
     /// </summary>
     [Test]
-    public async Task IsAllowedAsync_FirstIncrement_SetsExpiry()
+    public async Task IsAllowedAsync_CallsScriptWithCorrectArguments()
     {
         (RedisFixedWindowRateLimiter limiter, IDatabase db) = CreateLimiter(permitLimit: 10);
-        db.StringIncrementAsync(Arg.Any<RedisKey>(), Arg.Any<long>(), Arg.Any<CommandFlags>())
-            .Returns(1L);
+        MockScriptResult(db, 1L);
 
         await limiter.IsAllowedAsync("127.0.0.1");
 
-        await db.Received(1).KeyExpireAsync(Arg.Any<RedisKey>(), Arg.Any<TimeSpan?>(), Arg.Any<ExpireWhen>(), Arg.Any<CommandFlags>());
-    }
-
-    /// <summary>
-    /// Verifies that subsequent increments do not reset the key expiry.
-    /// </summary>
-    [Test]
-    public async Task IsAllowedAsync_SubsequentIncrement_DoesNotSetExpiry()
-    {
-        (RedisFixedWindowRateLimiter limiter, IDatabase db) = CreateLimiter(permitLimit: 10);
-        db.StringIncrementAsync(Arg.Any<RedisKey>(), Arg.Any<long>(), Arg.Any<CommandFlags>())
-            .Returns(2L);
-
-        await limiter.IsAllowedAsync("127.0.0.1");
-
-        await db.DidNotReceive().KeyExpireAsync(Arg.Any<RedisKey>(), Arg.Any<TimeSpan?>(), Arg.Any<ExpireWhen>(), Arg.Any<CommandFlags>());
+        await db.Received(1).ScriptEvaluateAsync(
+            Arg.Any<string>(),
+            Arg.Is<RedisKey[]>(keys => keys.Length == 1),
+            Arg.Is<RedisValue[]>(vals => vals.Length == 1),
+            Arg.Any<CommandFlags>());
     }
 
     // ========== Boundary/edge-case tests ==========
@@ -89,8 +88,7 @@ public class RedisRateLimiterTests
     public async Task IsAllowedAsync_ExactlyAtLimit_ReturnsTrue()
     {
         (RedisFixedWindowRateLimiter limiter, IDatabase db) = CreateLimiter(permitLimit: 10);
-        db.StringIncrementAsync(Arg.Any<RedisKey>(), Arg.Any<long>(), Arg.Any<CommandFlags>())
-            .Returns(10L);
+        MockScriptResult(db, 10L);
 
         bool result = await limiter.IsAllowedAsync("127.0.0.1");
 
@@ -102,8 +100,7 @@ public class RedisRateLimiterTests
     public async Task IsAllowedAsync_ExactlyOneOverLimit_ReturnsFalse()
     {
         (RedisFixedWindowRateLimiter limiter, IDatabase db) = CreateLimiter(permitLimit: 10);
-        db.StringIncrementAsync(Arg.Any<RedisKey>(), Arg.Any<long>(), Arg.Any<CommandFlags>())
-            .Returns(11L);
+        MockScriptResult(db, 11L);
 
         bool result = await limiter.IsAllowedAsync("127.0.0.1");
 
@@ -126,8 +123,7 @@ public class RedisRateLimiterTests
     public async Task AcquireAsyncCore_UnderLimit_ReturnsAcquiredLease()
     {
         (RedisFixedWindowRateLimiter limiter, IDatabase db) = CreateLimiter(permitLimit: 10);
-        db.StringIncrementAsync(Arg.Any<RedisKey>(), Arg.Any<long>(), Arg.Any<CommandFlags>())
-            .Returns(1L);
+        MockScriptResult(db, 1L);
 
         System.Threading.RateLimiting.RateLimitLease lease = await limiter.AcquireAsync();
 
@@ -143,8 +139,8 @@ public class RedisRateLimiterTests
     public async Task IsAllowedAsync_RedisConnectionFailure_PropagatesException()
     {
         (RedisFixedWindowRateLimiter limiter, IDatabase db) = CreateLimiter(permitLimit: 10);
-        db.StringIncrementAsync(Arg.Any<RedisKey>(), Arg.Any<long>(), Arg.Any<CommandFlags>())
-            .Returns<long>(_ => throw new RedisConnectionException(ConnectionFailureType.UnableToConnect, "Connection refused"));
+        db.ScriptEvaluateAsync(Arg.Any<string>(), Arg.Any<RedisKey[]>(), Arg.Any<RedisValue[]>(), Arg.Any<CommandFlags>())
+            .Returns<RedisResult>(_ => throw new RedisConnectionException(ConnectionFailureType.UnableToConnect, "Connection refused"));
 
         await Assert.ThrowsAsync<RedisConnectionException>(async () =>
         {
@@ -160,15 +156,15 @@ public class RedisRateLimiterTests
     {
         (RedisFixedWindowRateLimiter limiter, IDatabase db) = CreateLimiter(permitLimit: 10);
 
-        List<RedisKey> capturedKeys = new();
-        db.StringIncrementAsync(Arg.Do<RedisKey>(k => capturedKeys.Add(k)), Arg.Any<long>(), Arg.Any<CommandFlags>())
-            .Returns(1L);
+        List<RedisKey[]> capturedKeys = new();
+        db.ScriptEvaluateAsync(Arg.Any<string>(), Arg.Do<RedisKey[]>(k => capturedKeys.Add(k)), Arg.Any<RedisValue[]>(), Arg.Any<CommandFlags>())
+            .Returns(RedisResult.Create((RedisValue)1L));
 
         await limiter.IsAllowedAsync("192.168.1.1");
         await limiter.IsAllowedAsync("192.168.1.2");
 
         await Assert.That(capturedKeys.Count).IsEqualTo(2);
-        await Assert.That(capturedKeys[0].ToString()).IsNotEqualTo(capturedKeys[1].ToString());
+        await Assert.That(capturedKeys[0][0].ToString()).IsNotEqualTo(capturedKeys[1][0].ToString());
     }
 
     /// <summary>
@@ -180,8 +176,8 @@ public class RedisRateLimiterTests
         (RedisFixedWindowRateLimiter limiter, IDatabase db) = CreateLimiter(permitLimit: 1);
 
         long callCount = 0;
-        db.StringIncrementAsync(Arg.Any<RedisKey>(), Arg.Any<long>(), Arg.Any<CommandFlags>())
-            .Returns(_ => ++callCount);
+        db.ScriptEvaluateAsync(Arg.Any<string>(), Arg.Any<RedisKey[]>(), Arg.Any<RedisValue[]>(), Arg.Any<CommandFlags>())
+            .Returns(_ => RedisResult.Create((RedisValue)(++callCount)));
 
         bool firstResult = await limiter.IsAllowedAsync("127.0.0.1");
         bool secondResult = await limiter.IsAllowedAsync("127.0.0.1");
@@ -198,16 +194,16 @@ public class RedisRateLimiterTests
     {
         (RedisFixedWindowRateLimiter limiter, IDatabase db) = CreateLimiter(permitLimit: 2);
 
-        // Simulate window expiry: Redis INCR returns 1 because the key expired
-        db.StringIncrementAsync(Arg.Any<RedisKey>(), Arg.Any<long>(), Arg.Any<CommandFlags>())
-            .Returns(1L);
+        // Simulate window expiry: Lua script returns 1 because the key expired and was re-created
+        MockScriptResult(db, 1L);
 
         bool result = await limiter.IsAllowedAsync("127.0.0.1");
 
         // After window expiry, the counter resets and the request is allowed
         await Assert.That(result).IsEqualTo(true);
-        // And TTL is set again (count == 1)
-        await db.Received(1).KeyExpireAsync(Arg.Any<RedisKey>(), Arg.Any<TimeSpan?>(), Arg.Any<ExpireWhen>(), Arg.Any<CommandFlags>());
+        // The Lua script handles EXPIRE atomically, so ScriptEvaluateAsync is called once
+        await db.Received(1).ScriptEvaluateAsync(
+            Arg.Any<string>(), Arg.Any<RedisKey[]>(), Arg.Any<RedisValue[]>(), Arg.Any<CommandFlags>());
     }
 
     /// <summary>
@@ -217,8 +213,7 @@ public class RedisRateLimiterTests
     public async Task AcquireAsyncCore_OverLimit_ReturnsRejectedLease()
     {
         (RedisFixedWindowRateLimiter limiter, IDatabase db) = CreateLimiter(permitLimit: 1);
-        db.StringIncrementAsync(Arg.Any<RedisKey>(), Arg.Any<long>(), Arg.Any<CommandFlags>())
-            .Returns(2L);
+        MockScriptResult(db, 2L);
 
         System.Threading.RateLimiting.RateLimitLease lease = await limiter.AcquireAsync();
 
@@ -278,8 +273,7 @@ public class RedisRateLimiterTests
     public async Task Partitioned_AcquireAsyncCore_UnderLimit_ReturnsAcquiredLease()
     {
         (RedisPartitionedRateLimiter partitioned, IDatabase db) = CreatePartitionedLimiter(permitLimit: 10, partitionKey: "10.0.0.1");
-        db.StringIncrementAsync(Arg.Any<RedisKey>(), Arg.Any<long>(), Arg.Any<CommandFlags>())
-            .Returns(1L);
+        MockScriptResult(db, 1L);
 
         System.Threading.RateLimiting.RateLimitLease lease = await partitioned.AcquireAsync();
 
@@ -294,8 +288,7 @@ public class RedisRateLimiterTests
     public async Task Partitioned_AcquireAsyncCore_OverLimit_ReturnsRejectedLease()
     {
         (RedisPartitionedRateLimiter partitioned, IDatabase db) = CreatePartitionedLimiter(permitLimit: 5, partitionKey: "10.0.0.1");
-        db.StringIncrementAsync(Arg.Any<RedisKey>(), Arg.Any<long>(), Arg.Any<CommandFlags>())
-            .Returns(6L);
+        MockScriptResult(db, 6L);
 
         System.Threading.RateLimiting.RateLimitLease lease = await partitioned.AcquireAsync();
 
@@ -314,40 +307,36 @@ public class RedisRateLimiterTests
             permitLimit: 10,
             partitionKey: expectedPartitionKey);
 
-        RedisKey? capturedKey = null;
-        db.StringIncrementAsync(Arg.Do<RedisKey>(k => capturedKey = k), Arg.Any<long>(), Arg.Any<CommandFlags>())
-            .Returns(1L);
+        RedisKey[]? capturedKeys = null;
+        db.ScriptEvaluateAsync(Arg.Any<string>(), Arg.Do<RedisKey[]>(k => capturedKeys = k), Arg.Any<RedisValue[]>(), Arg.Any<CommandFlags>())
+            .Returns(RedisResult.Create((RedisValue)1L));
 
         await partitioned.AcquireAsync();
 
-        await Assert.That(capturedKey).IsNotNull();
-        await Assert.That(capturedKey.ToString()!.Contains(expectedPartitionKey)).IsEqualTo(true);
+        await Assert.That(capturedKeys).IsNotNull();
+        await Assert.That(capturedKeys![0].ToString().Contains(expectedPartitionKey)).IsEqualTo(true);
     }
 
     /// <summary>
     /// Verifies that after the window expires (simulated by Redis returning count 1 again),
-    /// the partitioned limiter allows requests again and the expiry is re-set.
+    /// the partitioned limiter allows requests again.
     /// </summary>
     [Test]
     public async Task Partitioned_WindowExpiry_NewRequestSucceeds()
     {
         (RedisPartitionedRateLimiter partitioned, IDatabase db) = CreatePartitionedLimiter(permitLimit: 1, partitionKey: "10.0.0.1");
 
-        // First call: at limit (count == 1, limit == 1) — allowed
-        db.StringIncrementAsync(Arg.Any<RedisKey>(), Arg.Any<long>(), Arg.Any<CommandFlags>())
-            .Returns(1L);
+        // Both calls return count 1 (simulating window expiry between calls)
+        MockScriptResult(db, 1L);
 
         System.Threading.RateLimiting.RateLimitLease firstLease = await partitioned.AcquireAsync();
         await Assert.That(firstLease.IsAcquired).IsEqualTo(true);
 
-        // Simulate window expiry: Redis key expired, INCR returns 1 again
-        db.StringIncrementAsync(Arg.Any<RedisKey>(), Arg.Any<long>(), Arg.Any<CommandFlags>())
-            .Returns(1L);
-
         System.Threading.RateLimiting.RateLimitLease secondLease = await partitioned.AcquireAsync();
         await Assert.That(secondLease.IsAcquired).IsEqualTo(true);
 
-        // Expiry should have been set twice (once per window start)
-        await db.Received(2).KeyExpireAsync(Arg.Any<RedisKey>(), Arg.Any<TimeSpan?>(), Arg.Any<ExpireWhen>(), Arg.Any<CommandFlags>());
+        // The Lua script handles EXPIRE atomically, so ScriptEvaluateAsync is called twice
+        await db.Received(2).ScriptEvaluateAsync(
+            Arg.Any<string>(), Arg.Any<RedisKey[]>(), Arg.Any<RedisValue[]>(), Arg.Any<CommandFlags>());
     }
 }

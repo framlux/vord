@@ -32,7 +32,11 @@ export const load: PageServerLoad = async ({ fetch, cookies }) => {
 };
 
 export const actions: Actions = {
-	updateSettings: async ({ fetch, cookies, request }) => {
+	updateSettings: async ({ fetch, cookies, request, locals }) => {
+		if (locals.user === null || locals.user.isGlobalAdmin === false) {
+			return fail(403, { message: 'Access denied' });
+		}
+
 		const api = createServerApiClient(
 			fetch,
 			cookies.get('vord_auth'),

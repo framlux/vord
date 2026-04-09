@@ -8,7 +8,7 @@ import { createServerApiClient } from '$lib/api/server';
 import { canAdminTenant } from '$lib/utils/roles';
 
 export const load: PageServerLoad = async ({ locals, cookies, fetch }) => {
-	if (!locals.user || !canAdminTenant(locals.user)) {
+	if (locals.user === null || canAdminTenant(locals.user) === false) {
 		redirect(302, '/dashboard');
 	}
 
@@ -17,7 +17,7 @@ export const load: PageServerLoad = async ({ locals, cookies, fetch }) => {
 	const [invitations, members, subscription] = await Promise.all([
 		client.getInvitations(),
 		client.getMembers(),
-		client.getSubscription()
+		client.getSubscription().catch(() => null)
 	]);
 
 	return {

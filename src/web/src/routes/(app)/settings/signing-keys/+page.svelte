@@ -9,6 +9,7 @@
 	import { generateKeyPair, autoLabel } from '$lib/crypto/signing';
 	import { Key, XCircle, Plus, Shield, AlertTriangle } from 'lucide-svelte';
 	import PageHeader from '$lib/components/PageHeader.svelte';
+	import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
 
 	let { data } = $props();
 
@@ -18,6 +19,7 @@
 	let createError = $state('');
 	let createLoading = $state(false);
 	let revokeError = $state('');
+	let revokeKeyConfirm = $state<{ open: boolean; id: number | null }>({ open: false, id: null });
 
 	const client = new ApiClient('');
 
@@ -73,6 +75,8 @@
 	const revokedKeys = $derived(signingKeys.keys.filter((k) => k.revokedAt));
 	const atLimit = $derived(signingKeys.activeCount >= signingKeys.maxKeys);
 </script>
+
+<svelte:head><title>Signing Keys - Vord</title></svelte:head>
 
 <div class="mx-auto max-w-4xl space-y-6">
 	<PageHeader title="Signing Keys" description="Ed25519 signing keys authorize remote commands sent to your machines. Private keys never leave your browser." />
@@ -169,7 +173,7 @@
 							</div>
 						</div>
 						<button
-							onclick={() => revokeKey(key.id)}
+							onclick={() => revokeKeyConfirm = { open: true, id: key.id }}
 							class="inline-flex items-center gap-1 rounded-md border border-surface-200 px-2.5 py-1 text-xs text-surface-500 hover:bg-surface-100 hover:text-red-600 dark:border-surface-700 dark:hover:bg-surface-700 dark:hover:text-red-400"
 							title="Revoke key"
 						>
@@ -220,3 +224,18 @@
 		</div>
 	{/if}
 </div>
+
+<ConfirmDialog
+	open={revokeKeyConfirm.open}
+	title="Revoke Signing Key"
+	message="Are you sure you want to revoke this signing key? Machines using this key will no longer be able to receive remote commands."
+	confirmLabel="Revoke"
+	variant="danger"
+	onconfirm={() => {
+		if (revokeKeyConfirm.id !== null) {
+			revokeKey(revokeKeyConfirm.id);
+		}
+		revokeKeyConfirm = { open: false, id: null };
+	}}
+	oncancel={() => revokeKeyConfirm = { open: false, id: null }}
+/>

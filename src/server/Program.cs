@@ -144,6 +144,8 @@ builder.Services.AddHttpClient("OidcDiscovery")
     .ConfigurePrimaryHttpMessageHandler(() => SsrfSafeSocketsHttpHandler.Create());
 builder.Services.AddHttpClient("OidcTokenExchange")
     .ConfigurePrimaryHttpMessageHandler(() => SsrfSafeSocketsHttpHandler.Create());
+builder.Services.AddHttpClient("WebhookDelivery")
+    .ConfigurePrimaryHttpMessageHandler(() => SsrfSafeSocketsHttpHandler.Create());
 
 // Dual authentication: API key for agents, cookie + social OAuth for web users
 builder.Services.AddAuthentication(options =>

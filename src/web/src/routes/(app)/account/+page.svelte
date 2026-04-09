@@ -13,6 +13,8 @@
 	const user: UserDto | null = $derived(data.user);
 </script>
 
+<svelte:head><title>Account - Vord</title></svelte:head>
+
 <div class="space-y-6">
 	<!-- Page Header -->
 	<PageHeader title="Account" description="Your account information and preferences." />

@@ -12,6 +12,7 @@ using LinqToDB.Async;
 using LinqToDB;
 using LinqToDB.Data;
 using Microsoft.Data.Sqlite;
+using System.Security.Cryptography;
 
 namespace Framlux.FleetManagement.Server.Services.Handlers;
 
@@ -85,7 +86,7 @@ public sealed class DataExportHandler : IDataExportHandler
             RequestedAt = now,
             ObjectKey = "",
             ExpiresAt = now.AddDays(7),
-            DownloadToken = Guid.NewGuid().ToString("N")
+            DownloadToken = RandomNumberGenerator.GetHexString(64, true)
         };
 
         using DataConnectionTransaction transaction = await _db.BeginTransactionAsync(ct);

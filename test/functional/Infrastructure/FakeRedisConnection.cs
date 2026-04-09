@@ -74,6 +74,11 @@ public static class FakeRedisConnection
         db.KeyExpireAsync(Arg.Any<RedisKey>(), Arg.Any<TimeSpan?>(), Arg.Any<ExpireWhen>(), Arg.Any<CommandFlags>())
             .Returns(true);
 
+        // ScriptEvaluateAsync — used by RedisFixedWindowRateLimiter for atomic INCR + EXPIRE.
+        // Always returns count 1 so rate limiting never blocks in functional tests.
+        db.ScriptEvaluateAsync(Arg.Any<string>(), Arg.Any<RedisKey[]>(), Arg.Any<RedisValue[]>(), Arg.Any<CommandFlags>())
+            .Returns(RedisResult.Create((RedisValue)1L));
+
         IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
         redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(db);
         redis.IsConnected.Returns(true);

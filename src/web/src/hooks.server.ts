@@ -32,13 +32,22 @@ function cacheSet(key: string, user: App.Locals['user'], ttlMs: number) {
 	sessionCache.set(key, { user, expiresAt: Date.now() + ttlMs });
 }
 
+export function purgeSession(authCookie: string, tenantCookie?: string): void {
+	const cacheKey = tenantCookie ? `${authCookie}\0${tenantCookie}` : authCookie;
+	sessionCache.delete(cacheKey);
+	// Also purge the key without tenant in case it exists
+	if (tenantCookie) {
+		sessionCache.delete(authCookie);
+	}
+}
+
 export const handle: Handle = async ({ event, resolve }) => {
 	const cookie = event.cookies.get('vord_auth');
 	event.locals.user = null;
 
 	if (cookie) {
 		const tenantCookie = event.cookies.get('vord_tenant');
-		const cacheKey = tenantCookie ? `${cookie}:${tenantCookie}` : cookie;
+		const cacheKey = tenantCookie ? `${cookie}\0${tenantCookie}` : cookie;
 		const cached = sessionCache.get(cacheKey);
 		if (cached && cached.expiresAt > Date.now()) {
 			event.locals.user = cached.user;

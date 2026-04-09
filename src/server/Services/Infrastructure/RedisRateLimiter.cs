@@ -60,7 +60,20 @@ public sealed class RedisFixedWindowRateLimiter : RateLimiter
     }
 
     /// <summary>
+    /// Lua script that atomically increments and sets expiry in a single round-trip.
+    /// Returns the new count after increment.
+    /// </summary>
+    private const string IncrWithExpiryScript = """
+        local count = redis.call("INCR", KEYS[1])
+        if count == 1 then
+            redis.call("EXPIRE", KEYS[1], ARGV[1])
+        end
+        return count
+        """;
+
+    /// <summary>
     /// Checks whether a request from the given partition key is allowed.
+    /// Uses an atomic Lua script for INCR + EXPIRE to prevent race conditions.
     /// </summary>
     /// <param name="partitionKey">The partition key (e.g. IP address).</param>
     /// <returns>True if the request is allowed; false if rate limited.</returns>
@@ -72,13 +85,12 @@ public sealed class RedisFixedWindowRateLimiter : RateLimiter
         long windowId = DateTimeOffset.UtcNow.ToUnixTimeSeconds() / (long)_window.TotalSeconds;
         string key = $"{_keyPrefix}:{partitionKey}:{windowId}";
 
-        long currentCount = await db.StringIncrementAsync(key);
-
-        // Set expiry on first increment
-        if (currentCount == 1)
-        {
-            await db.KeyExpireAsync(key, _window.Add(TimeSpan.FromSeconds(1)));
-        }
+        int expirySeconds = (int)_window.TotalSeconds + 1;
+        RedisResult result = await db.ScriptEvaluateAsync(
+            IncrWithExpiryScript,
+            [(RedisKey)key],
+            [(RedisValue)expirySeconds]);
+        long currentCount = (long)result;
 
         return currentCount <= _permitLimit;
     }

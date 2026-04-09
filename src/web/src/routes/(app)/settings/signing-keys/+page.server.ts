@@ -8,7 +8,7 @@ import { createServerApiClient } from '$lib/api/server';
 import { canAdminMachines } from '$lib/utils/roles';
 
 export const load: PageServerLoad = async ({ locals, cookies, fetch }) => {
-	if (!locals.user || !canAdminMachines(locals.user)) {
+	if (locals.user === null || canAdminMachines(locals.user) === false) {
 		redirect(302, '/dashboard');
 	}
 

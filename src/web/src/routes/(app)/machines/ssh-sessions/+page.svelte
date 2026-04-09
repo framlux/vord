@@ -6,7 +6,7 @@
 	import type { PaginatedResponse, FleetSshSessionDto } from '$lib/api/types';
 	import { Terminal, ChevronLeft, ChevronRight, Search } from 'lucide-svelte';
 	import { goto } from '$app/navigation';
-	import { page as pageStore } from '$app/state';
+	import { page as pageState } from '$app/state';
 	import PageHeader from '$lib/components/PageHeader.svelte';
 
 	let { data } = $props();
@@ -50,7 +50,7 @@
 	}
 
 	function goToPage(p: number) {
-		const params = new URLSearchParams(pageStore.url.searchParams);
+		const params = new URLSearchParams(pageState.url.searchParams);
 		params.set('page', String(p));
 
 		goto(`/machines/ssh-sessions?${params.toString()}`);
@@ -62,6 +62,8 @@
 		}
 	}
 </script>
+
+<svelte:head><title>SSH Sessions - Vord</title></svelte:head>
 
 <div class="space-y-6">
 	<PageHeader title="SSH Sessions" description="Fleet-wide SSH session activity across all machines." />

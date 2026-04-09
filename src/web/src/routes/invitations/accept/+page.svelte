@@ -51,6 +51,8 @@
 	}
 </script>
 
+<svelte:head><title>Accept Invitation - Vord</title></svelte:head>
+
 <PublicShell user={user}>
 	<div class="flex min-h-screen items-center justify-center px-4">
 		<div class="w-full max-w-md rounded-xl border border-surface-200 bg-surface-50 p-8 shadow-sm dark:border-surface-700 dark:bg-surface-800">

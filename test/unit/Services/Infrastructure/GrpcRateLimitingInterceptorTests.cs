@@ -52,8 +52,8 @@ public class GrpcRateLimitingInterceptorTests
     public async Task UnaryServerHandler_UnderLimit_CallsContinuation()
     {
         (GrpcRateLimitingInterceptor interceptor, IDatabase db) = CreateInterceptor();
-        db.StringIncrementAsync(Arg.Any<RedisKey>(), Arg.Any<long>(), Arg.Any<CommandFlags>())
-            .Returns(1L);
+        db.ScriptEvaluateAsync(Arg.Any<string>(), Arg.Any<RedisKey[]>(), Arg.Any<RedisValue[]>(), Arg.Any<CommandFlags>())
+            .Returns(RedisResult.Create((RedisValue)1L));
         ServerCallContext context = CreateTestContext();
         bool continuationCalled = false;
         UnaryServerMethod<string, string> continuation = (req, ctx) =>
@@ -76,8 +76,8 @@ public class GrpcRateLimitingInterceptorTests
     public async Task UnaryServerHandler_OverLimit_ThrowsResourceExhausted()
     {
         (GrpcRateLimitingInterceptor interceptor, IDatabase db) = CreateInterceptor();
-        db.StringIncrementAsync(Arg.Any<RedisKey>(), Arg.Any<long>(), Arg.Any<CommandFlags>())
-            .Returns(101L);
+        db.ScriptEvaluateAsync(Arg.Any<string>(), Arg.Any<RedisKey[]>(), Arg.Any<RedisValue[]>(), Arg.Any<CommandFlags>())
+            .Returns(RedisResult.Create((RedisValue)101L));
         ServerCallContext context = CreateTestContext();
         UnaryServerMethod<string, string> continuation = (req, ctx) => Task.FromResult("response");
 
@@ -101,8 +101,8 @@ public class GrpcRateLimitingInterceptorTests
     public async Task ServerStreamingServerHandler_UnderLimit_CallsContinuation()
     {
         (GrpcRateLimitingInterceptor interceptor, IDatabase db) = CreateInterceptor();
-        db.StringIncrementAsync(Arg.Any<RedisKey>(), Arg.Any<long>(), Arg.Any<CommandFlags>())
-            .Returns(1L);
+        db.ScriptEvaluateAsync(Arg.Any<string>(), Arg.Any<RedisKey[]>(), Arg.Any<RedisValue[]>(), Arg.Any<CommandFlags>())
+            .Returns(RedisResult.Create((RedisValue)1L));
         ServerCallContext context = CreateTestContext();
         bool continuationCalled = false;
         IServerStreamWriter<string> responseStream = Substitute.For<IServerStreamWriter<string>>();
@@ -122,8 +122,8 @@ public class GrpcRateLimitingInterceptorTests
     public async Task ServerStreamingServerHandler_OverLimit_ThrowsResourceExhausted()
     {
         (GrpcRateLimitingInterceptor interceptor, IDatabase db) = CreateInterceptor();
-        db.StringIncrementAsync(Arg.Any<RedisKey>(), Arg.Any<long>(), Arg.Any<CommandFlags>())
-            .Returns(101L);
+        db.ScriptEvaluateAsync(Arg.Any<string>(), Arg.Any<RedisKey[]>(), Arg.Any<RedisValue[]>(), Arg.Any<CommandFlags>())
+            .Returns(RedisResult.Create((RedisValue)101L));
         ServerCallContext context = CreateTestContext();
         IServerStreamWriter<string> responseStream = Substitute.For<IServerStreamWriter<string>>();
         ServerStreamingServerMethod<string, string> continuation = (req, stream, ctx) => Task.CompletedTask;
@@ -148,8 +148,8 @@ public class GrpcRateLimitingInterceptorTests
     public async Task ClientStreamingServerHandler_UnderLimit_CallsContinuation()
     {
         (GrpcRateLimitingInterceptor interceptor, IDatabase db) = CreateInterceptor();
-        db.StringIncrementAsync(Arg.Any<RedisKey>(), Arg.Any<long>(), Arg.Any<CommandFlags>())
-            .Returns(1L);
+        db.ScriptEvaluateAsync(Arg.Any<string>(), Arg.Any<RedisKey[]>(), Arg.Any<RedisValue[]>(), Arg.Any<CommandFlags>())
+            .Returns(RedisResult.Create((RedisValue)1L));
         ServerCallContext context = CreateTestContext();
         bool continuationCalled = false;
         IAsyncStreamReader<string> requestStream = Substitute.For<IAsyncStreamReader<string>>();
@@ -170,8 +170,8 @@ public class GrpcRateLimitingInterceptorTests
     public async Task ClientStreamingServerHandler_OverLimit_ThrowsResourceExhausted()
     {
         (GrpcRateLimitingInterceptor interceptor, IDatabase db) = CreateInterceptor();
-        db.StringIncrementAsync(Arg.Any<RedisKey>(), Arg.Any<long>(), Arg.Any<CommandFlags>())
-            .Returns(101L);
+        db.ScriptEvaluateAsync(Arg.Any<string>(), Arg.Any<RedisKey[]>(), Arg.Any<RedisValue[]>(), Arg.Any<CommandFlags>())
+            .Returns(RedisResult.Create((RedisValue)101L));
         ServerCallContext context = CreateTestContext();
         IAsyncStreamReader<string> requestStream = Substitute.For<IAsyncStreamReader<string>>();
         ClientStreamingServerMethod<string, string> continuation = (stream, ctx) => Task.FromResult("response");
@@ -196,8 +196,8 @@ public class GrpcRateLimitingInterceptorTests
     public async Task DuplexStreamingServerHandler_UnderLimit_CallsContinuation()
     {
         (GrpcRateLimitingInterceptor interceptor, IDatabase db) = CreateInterceptor();
-        db.StringIncrementAsync(Arg.Any<RedisKey>(), Arg.Any<long>(), Arg.Any<CommandFlags>())
-            .Returns(1L);
+        db.ScriptEvaluateAsync(Arg.Any<string>(), Arg.Any<RedisKey[]>(), Arg.Any<RedisValue[]>(), Arg.Any<CommandFlags>())
+            .Returns(RedisResult.Create((RedisValue)1L));
         ServerCallContext context = CreateTestContext();
         bool continuationCalled = false;
         IAsyncStreamReader<string> requestStream = Substitute.For<IAsyncStreamReader<string>>();
@@ -218,8 +218,8 @@ public class GrpcRateLimitingInterceptorTests
     public async Task DuplexStreamingServerHandler_OverLimit_ThrowsResourceExhausted()
     {
         (GrpcRateLimitingInterceptor interceptor, IDatabase db) = CreateInterceptor();
-        db.StringIncrementAsync(Arg.Any<RedisKey>(), Arg.Any<long>(), Arg.Any<CommandFlags>())
-            .Returns(101L);
+        db.ScriptEvaluateAsync(Arg.Any<string>(), Arg.Any<RedisKey[]>(), Arg.Any<RedisValue[]>(), Arg.Any<CommandFlags>())
+            .Returns(RedisResult.Create((RedisValue)101L));
         ServerCallContext context = CreateTestContext();
         IAsyncStreamReader<string> requestStream = Substitute.For<IAsyncStreamReader<string>>();
         IServerStreamWriter<string> responseStream = Substitute.For<IServerStreamWriter<string>>();
@@ -245,8 +245,8 @@ public class GrpcRateLimitingInterceptorTests
     public async Task UnaryServerHandler_Ipv6Peer_ExtractsCorrectly()
     {
         (GrpcRateLimitingInterceptor interceptor, IDatabase db) = CreateInterceptor();
-        db.StringIncrementAsync(Arg.Any<RedisKey>(), Arg.Any<long>(), Arg.Any<CommandFlags>())
-            .Returns(1L);
+        db.ScriptEvaluateAsync(Arg.Any<string>(), Arg.Any<RedisKey[]>(), Arg.Any<RedisValue[]>(), Arg.Any<CommandFlags>())
+            .Returns(RedisResult.Create((RedisValue)1L));
 
         ServerCallContext context = TestServerCallContext.Create(
             method: "TestMethod",

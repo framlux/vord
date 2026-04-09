@@ -10,7 +10,7 @@ import type { PageServerLoad, Actions } from './$types';
 import { env } from '$env/dynamic/public';
 
 export const load: PageServerLoad = async ({ fetch, cookies, locals }) => {
-	if (!locals.user || !canAdminTenant(locals.user)) {
+	if (locals.user === null || canAdminTenant(locals.user) === false) {
 		error(403, 'Access denied');
 	}
 
@@ -45,7 +45,11 @@ export const load: PageServerLoad = async ({ fetch, cookies, locals }) => {
 };
 
 export const actions: Actions = {
-	checkout: async ({ fetch, cookies, request }) => {
+	checkout: async ({ fetch, cookies, request, locals }) => {
+		if (locals.user === null || canAdminTenant(locals.user) === false) {
+			return fail(403, { message: 'Access denied' });
+		}
+
 		const billingUrl = env.PUBLIC_BILLING_URL;
 		if (!billingUrl) return fail(500, { message: 'Billing service not configured' });
 
@@ -53,53 +57,91 @@ export const actions: Actions = {
 		const tier = (formData.get('tier') as string) || 'pro';
 
 		const authCookie = cookies.get('vord_auth');
+		if (authCookie === undefined) return fail(401, { message: 'Not authenticated' });
+
 		const tenantCookie = cookies.get('vord_tenant');
+		const cookieParts = [`vord_auth=${authCookie}`];
+		if (tenantCookie !== undefined) {
+			cookieParts.push(`vord_tenant=${tenantCookie}`);
+		}
 
 		const response = await fetch(`${billingUrl}/api/v1/checkout`, {
 			method: 'POST',
 			headers: {
 				'Content-Type': 'application/json',
-				Cookie: `vord_auth=${authCookie}; vord_tenant=${tenantCookie}`
+				Cookie: cookieParts.join('; ')
 			},
 			body: JSON.stringify({ tier })
 		});
 
-		if (!response.ok) return fail(response.status, { message: 'Failed to create checkout session' });
+		if (response.ok === false) return fail(response.status, { message: 'Failed to create checkout session' });
 
 		const data = await response.json();
 		if (data.checkoutUrl) {
-			redirect(303, data.checkoutUrl);
+			try {
+				const checkoutUrlObj = new URL(data.checkoutUrl);
+				if (checkoutUrlObj.hostname.endsWith('.stripe.com')) {
+					redirect(303, data.checkoutUrl);
+				}
+			} catch {
+				// Invalid URL
+			}
+
+			return fail(400, { message: 'Invalid checkout URL received' });
 		}
 
 		return fail(500, { message: 'No checkout URL received' });
 	},
 
-	portal: async ({ fetch, cookies }) => {
+	portal: async ({ fetch, cookies, locals }) => {
+		if (locals.user === null || canAdminTenant(locals.user) === false) {
+			return fail(403, { message: 'Access denied' });
+		}
+
 		const billingUrl = env.PUBLIC_BILLING_URL;
 		if (!billingUrl) return fail(500, { message: 'Billing service not configured' });
 
 		const authCookie = cookies.get('vord_auth');
+		if (authCookie === undefined) return fail(401, { message: 'Not authenticated' });
+
 		const tenantCookie = cookies.get('vord_tenant');
+		const cookieParts = [`vord_auth=${authCookie}`];
+		if (tenantCookie !== undefined) {
+			cookieParts.push(`vord_tenant=${tenantCookie}`);
+		}
 
 		const response = await fetch(`${billingUrl}/api/v1/portal`, {
 			method: 'POST',
 			headers: {
 				'Content-Type': 'application/json',
-				Cookie: `vord_auth=${authCookie}; vord_tenant=${tenantCookie}`
+				Cookie: cookieParts.join('; ')
 			}
 		});
 
-		if (!response.ok) return fail(response.status, { message: 'Failed to create portal session' });
+		if (response.ok === false) return fail(response.status, { message: 'Failed to create portal session' });
 
 		const data = await response.json();
 		if (data.portalUrl) {
-			redirect(303, data.portalUrl);
+			try {
+				const portalUrlObj = new URL(data.portalUrl);
+				if (portalUrlObj.hostname.endsWith('.stripe.com')) {
+					redirect(303, data.portalUrl);
+				}
+			} catch {
+				// Invalid URL
+			}
+
+			return fail(400, { message: 'Invalid portal URL received' });
 		}
 
 		return fail(500, { message: 'No portal URL received' });
 	},
 
-	cancel: async ({ fetch, cookies }) => {
+	cancel: async ({ fetch, cookies, locals }) => {
+		if (locals.user === null || canAdminTenant(locals.user) === false) {
+			return fail(403, { message: 'Access denied' });
+		}
+
 		const api = createServerApiClient(
 			fetch,
 			cookies.get('vord_auth'),
@@ -117,7 +159,11 @@ export const actions: Actions = {
 		}
 	},
 
-	downgrade: async ({ fetch, cookies, request }) => {
+	downgrade: async ({ fetch, cookies, request, locals }) => {
+		if (locals.user === null || canAdminTenant(locals.user) === false) {
+			return fail(403, { message: 'Access denied' });
+		}
+
 		const api = createServerApiClient(
 			fetch,
 			cookies.get('vord_auth'),
@@ -138,7 +184,11 @@ export const actions: Actions = {
 		}
 	},
 
-	resume: async ({ fetch, cookies }) => {
+	resume: async ({ fetch, cookies, locals }) => {
+		if (locals.user === null || canAdminTenant(locals.user) === false) {
+			return fail(403, { message: 'Access denied' });
+		}
+
 		const api = createServerApiClient(
 			fetch,
 			cookies.get('vord_auth'),
@@ -156,7 +206,11 @@ export const actions: Actions = {
 		}
 	},
 
-	reactivate: async ({ fetch, cookies }) => {
+	reactivate: async ({ fetch, cookies, locals }) => {
+		if (locals.user === null || canAdminTenant(locals.user) === false) {
+			return fail(403, { message: 'Access denied' });
+		}
+
 		const api = createServerApiClient(
 			fetch,
 			cookies.get('vord_auth'),

@@ -19,14 +19,16 @@
     Check,
   } from "lucide-svelte";
   import PageHeader from '$lib/components/PageHeader.svelte';
+  import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
+  import { formatDate } from '$lib/utils/format';
 
   let { data } = $props();
 
   let invitations: InvitationListDto[] = $derived(data.invitations);
   let members: MemberDto[] = $derived(data.members);
-  let subscription: SubscriptionDto = $derived(data.subscription);
-  const isFreeTier = $derived(subscription.tier === "Free");
-  const isTeamTier = $derived(subscription.tier === "Team");
+  let subscription: SubscriptionDto | null = $derived(data.subscription);
+  const isFreeTier = $derived(subscription === null || subscription.tier === "Free");
+  const isTeamTier = $derived(subscription !== null && subscription.tier === "Team");
 
   let inviteEmail = $state("");
   let inviteRole = $state("Viewer");
@@ -35,6 +37,7 @@
   let inviteLoading = $state(false);
   let copiedUrl = $state("");
   let confirmRemoveUserId = $state<number | null>(null);
+  let revokeInviteConfirm = $state<{ open: boolean; id: number | null }>({ open: false, id: null });
 
   const client = new ApiClient("");
 
@@ -113,14 +116,6 @@
     navigator.clipboard.writeText(text);
   }
 
-  function formatDate(dateStr: string): string {
-    return new Date(dateStr).toLocaleDateString("en-US", {
-      month: "short",
-      day: "numeric",
-      year: "numeric",
-    });
-  }
-
   function isExpired(expiresAt: string): boolean {
     return new Date(expiresAt) < new Date();
   }
@@ -134,6 +129,8 @@
     ),
   );
 </script>
+
+<svelte:head><title>Team Members - Vord</title></svelte:head>
 
 <div class="mx-auto max-w-4xl space-y-6">
   <PageHeader title="Team Members" description="Manage your organization's team members and invitations." />
@@ -278,7 +275,7 @@
                     onchange={(e) =>
                       changeMemberRole(
                         member.userId,
-                        (e.target as HTMLSelectElement).value,
+                        (e.currentTarget as HTMLSelectElement).value,
                       )}
                     class="rounded-lg border border-surface-300 bg-surface-50 px-2 py-1 text-xs text-surface-900 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-surface-600 dark:bg-surface-700 dark:text-surface-50"
                   >
@@ -369,7 +366,7 @@
                 Resend
               </button>
               <button
-                onclick={() => revokeInvitation(inv.id)}
+                onclick={() => revokeInviteConfirm = { open: true, id: inv.id }}
                 class="inline-flex items-center gap-1 rounded-md border border-surface-200 px-2.5 py-1 text-xs text-surface-500 hover:bg-surface-100 hover:text-red-600 dark:border-surface-700 dark:hover:bg-surface-700 dark:hover:text-red-400"
                 title="Revoke invitation"
               >
@@ -422,3 +419,18 @@
     </div>
   {/if}
 </div>
+
+<ConfirmDialog
+  open={revokeInviteConfirm.open}
+  title="Revoke Invitation"
+  message="Are you sure you want to revoke this invitation? The recipient will no longer be able to join your organization."
+  confirmLabel="Revoke"
+  variant="danger"
+  onconfirm={() => {
+    if (revokeInviteConfirm.id !== null) {
+      revokeInvitation(revokeInviteConfirm.id);
+    }
+    revokeInviteConfirm = { open: false, id: null };
+  }}
+  oncancel={() => revokeInviteConfirm = { open: false, id: null }}
+/>

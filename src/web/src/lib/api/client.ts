@@ -239,7 +239,7 @@ export class ApiClient {
 	}
 
 	async searchMachines(params: MachineSearchParams): Promise<PaginatedResponse<FleetMachineDto>> {
-		const qs = buildQueryString(params);
+		const qs = buildQueryString(params as Record<string, unknown>);
 		const resp = await this.get<ApiResponse<PaginatedResponse<FleetMachineDto>>>(
 			`/api/v1/machines/search${qs ? `?${qs}` : ''}`
 		);

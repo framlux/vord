@@ -24,7 +24,9 @@
 	const POLL_FAILURE_THRESHOLD = 3;
 	const showPollWarning = $derived(pollFailures >= POLL_FAILURE_THRESHOLD);
 
-	const results: PaginatedResponse<FleetMachineDto> = $derived(data.results);
+	let liveData = $state<PaginatedResponse<FleetMachineDto> | null>(null);
+
+	const results: PaginatedResponse<FleetMachineDto> = $derived(liveData ?? data.results);
 	const filters: MachineSearchParams = $derived(data.filters);
 
 	// svelte-ignore state_referenced_locally
@@ -36,7 +38,8 @@
 		const api = new ApiClient('');
 		const interval = setInterval(async () => {
 			try {
-				await api.searchMachines({ ...filters, sortBy: sortKey, sortDir });
+				const freshData = await api.searchMachines({ ...filters, sortBy: sortKey, sortDir });
+				liveData = freshData;
 				pollFailures = 0;
 			} catch (err) {
 				pollFailures += 1;
@@ -135,6 +138,8 @@
 		return chips;
 	}
 </script>
+
+<svelte:head><title>Search - Vord</title></svelte:head>
 
 <div class="space-y-6">
 	<!-- Poll failure warning -->

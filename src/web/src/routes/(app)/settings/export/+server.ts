@@ -58,6 +58,10 @@ export const GET = async ({ fetch, cookies, locals, url }: RequestEvent) => {
 		error(400, 'Missing jobId parameter');
 	}
 
+	if (/^\d+$/.test(jobId) === false) {
+		error(400, 'Invalid jobId format');
+	}
+
 	const response = await fetch(`${API_BASE}/api/v1/tenants/export/${jobId}`, {
 		headers: {
 			...buildCookieHeader(cookies)

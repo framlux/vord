@@ -4,19 +4,19 @@
 
 import { createServerApiClient } from '$lib/api/server';
 import { ApiError } from '$lib/api/client';
+import { parsePaginationParams } from '$lib/utils/pagination';
 import { canAdminTenant } from '$lib/utils/roles';
-import { redirect, error } from '@sveltejs/kit';
+import { redirect, error, fail } from '@sveltejs/kit';
 import type { PageServerLoad, Actions } from './$types';
 
 export const load: PageServerLoad = async ({ fetch, cookies, locals, url }) => {
-	if (!locals.user || !canAdminTenant(locals.user)) {
+	if (locals.user === null || canAdminTenant(locals.user) === false) {
 		error(403, 'Access denied');
 	}
 
 	const api = createServerApiClient(fetch, cookies.get('vord_auth'), cookies.get('vord_tenant'));
 
-	const page = parseInt(url.searchParams.get('page') ?? '1');
-	const pageSize = parseInt(url.searchParams.get('pageSize') ?? '25');
+	const { page, pageSize } = parsePaginationParams(url);
 	const status = url.searchParams.get('status') ?? undefined;
 	const severity = url.searchParams.get('severity') ?? undefined;
 
@@ -38,83 +38,155 @@ export const load: PageServerLoad = async ({ fetch, cookies, locals, url }) => {
 };
 
 export const actions: Actions = {
-	createRule: async ({ fetch, cookies, request }) => {
+	createRule: async ({ fetch, cookies, request, locals }) => {
+		if (locals.user === null || canAdminTenant(locals.user) === false) {
+			return fail(403, { message: 'Access denied' });
+		}
+
 		const api = createServerApiClient(fetch, cookies.get('vord_auth'), cookies.get('vord_tenant'));
 		const data = await request.formData();
 
-		await api.createAlertRule({
-			name: data.get('name') as string,
-			description: (data.get('description') as string) || undefined,
-			metric: data.get('metric') as string,
-			operator: data.get('operator') as string,
-			threshold: parseFloat(data.get('threshold') as string),
-			durationMinutes: parseInt(data.get('durationMinutes') as string) || 0,
-			severity: data.get('severity') as string,
-			notifyEmail: data.get('notifyEmail') === 'on',
-			notifyWebhook: data.get('notifyWebhook') === 'on'
-		});
+		try {
+			await api.createAlertRule({
+				name: data.get('name') as string,
+				description: (data.get('description') as string) || undefined,
+				metric: data.get('metric') as string,
+				operator: data.get('operator') as string,
+				threshold: parseFloat(data.get('threshold') as string),
+				durationMinutes: parseInt(data.get('durationMinutes') as string) || 0,
+				severity: data.get('severity') as string,
+				notifyEmail: data.get('notifyEmail') === 'on',
+				notifyWebhook: data.get('notifyWebhook') === 'on'
+			});
 
-		return { success: true };
+			return { success: true };
+		} catch (e) {
+			if (e instanceof ApiError) {
+				return fail(e.status, { message: e.message });
+			}
+
+			return fail(500, { message: 'Failed to create alert rule' });
+		}
 	},
 
-	updateRule: async ({ fetch, cookies, request }) => {
+	updateRule: async ({ fetch, cookies, request, locals }) => {
+		if (locals.user === null || canAdminTenant(locals.user) === false) {
+			return fail(403, { message: 'Access denied' });
+		}
+
 		const api = createServerApiClient(fetch, cookies.get('vord_auth'), cookies.get('vord_tenant'));
 		const data = await request.formData();
 		const id = parseInt(data.get('id') as string);
 
-		await api.updateAlertRule(id, {
-			name: data.get('name') as string,
-			description: (data.get('description') as string) || undefined,
-			threshold: parseFloat(data.get('threshold') as string),
-			durationMinutes: parseInt(data.get('durationMinutes') as string) || 0,
-			severity: data.get('severity') as string,
-			isEnabled: data.get('isEnabled') === 'on',
-			notifyEmail: data.get('notifyEmail') === 'on',
-			notifyWebhook: data.get('notifyWebhook') === 'on'
-		});
+		try {
+			await api.updateAlertRule(id, {
+				name: data.get('name') as string,
+				description: (data.get('description') as string) || undefined,
+				threshold: parseFloat(data.get('threshold') as string),
+				durationMinutes: parseInt(data.get('durationMinutes') as string) || 0,
+				severity: data.get('severity') as string,
+				isEnabled: data.get('isEnabled') === 'on',
+				notifyEmail: data.get('notifyEmail') === 'on',
+				notifyWebhook: data.get('notifyWebhook') === 'on'
+			});
 
-		return { success: true };
+			return { success: true };
+		} catch (e) {
+			if (e instanceof ApiError) {
+				return fail(e.status, { message: e.message });
+			}
+
+			return fail(500, { message: 'Failed to update alert rule' });
+		}
 	},
 
-	deleteRule: async ({ fetch, cookies, request }) => {
+	deleteRule: async ({ fetch, cookies, request, locals }) => {
+		if (locals.user === null || canAdminTenant(locals.user) === false) {
+			return fail(403, { message: 'Access denied' });
+		}
+
 		const api = createServerApiClient(fetch, cookies.get('vord_auth'), cookies.get('vord_tenant'));
 		const data = await request.formData();
 		const id = parseInt(data.get('id') as string);
 
-		await api.deleteAlertRule(id);
+		try {
+			await api.deleteAlertRule(id);
 
-		return { success: true };
+			return { success: true };
+		} catch (e) {
+			if (e instanceof ApiError) {
+				return fail(e.status, { message: e.message });
+			}
+
+			return fail(500, { message: 'Failed to delete alert rule' });
+		}
 	},
 
-	acknowledgeEvent: async ({ fetch, cookies, request }) => {
+	acknowledgeEvent: async ({ fetch, cookies, request, locals }) => {
+		if (locals.user === null || canAdminTenant(locals.user) === false) {
+			return fail(403, { message: 'Access denied' });
+		}
+
 		const api = createServerApiClient(fetch, cookies.get('vord_auth'), cookies.get('vord_tenant'));
 		const data = await request.formData();
 		const id = parseInt(data.get('id') as string);
 
-		await api.acknowledgeAlertEvent(id);
+		try {
+			await api.acknowledgeAlertEvent(id);
 
-		return { success: true };
+			return { success: true };
+		} catch (e) {
+			if (e instanceof ApiError) {
+				return fail(e.status, { message: e.message });
+			}
+
+			return fail(500, { message: 'Failed to acknowledge alert event' });
+		}
 	},
 
-	createWebhook: async ({ fetch, cookies, request }) => {
+	createWebhook: async ({ fetch, cookies, request, locals }) => {
+		if (locals.user === null || canAdminTenant(locals.user) === false) {
+			return fail(403, { message: 'Access denied' });
+		}
+
 		const api = createServerApiClient(fetch, cookies.get('vord_auth'), cookies.get('vord_tenant'));
 		const data = await request.formData();
 
-		await api.createWebhook({
-			name: data.get('name') as string,
-			url: data.get('url') as string
-		});
+		try {
+			await api.createWebhook({
+				name: data.get('name') as string,
+				url: data.get('url') as string
+			});
 
-		return { success: true };
+			return { success: true };
+		} catch (e) {
+			if (e instanceof ApiError) {
+				return fail(e.status, { message: e.message });
+			}
+
+			return fail(500, { message: 'Failed to create webhook' });
+		}
 	},
 
-	deleteWebhook: async ({ fetch, cookies, request }) => {
+	deleteWebhook: async ({ fetch, cookies, request, locals }) => {
+		if (locals.user === null || canAdminTenant(locals.user) === false) {
+			return fail(403, { message: 'Access denied' });
+		}
+
 		const api = createServerApiClient(fetch, cookies.get('vord_auth'), cookies.get('vord_tenant'));
 		const data = await request.formData();
 		const id = parseInt(data.get('id') as string);
 
-		await api.deleteWebhook(id);
+		try {
+			await api.deleteWebhook(id);
 
-		return { success: true };
+			return { success: true };
+		} catch (e) {
+			if (e instanceof ApiError) {
+				return fail(e.status, { message: e.message });
+			}
+
+			return fail(500, { message: 'Failed to delete webhook' });
+		}
 	}
 };

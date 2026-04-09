@@ -11,6 +11,8 @@
 	let userRegistration = $state(false);
 </script>
 
+<svelte:head><title>Notifications - Vord</title></svelte:head>
+
 <div class="space-y-6">
 	<!-- Page Header -->
 	<div>
@@ -26,6 +28,13 @@
 		</h1>
 		<p class="mt-1 text-surface-500 dark:text-surface-400">
 			Choose which notifications you would like to receive.
+		</p>
+	</div>
+
+	<!-- Coming Soon Banner -->
+	<div class="mb-6 rounded-lg border border-amber-200 bg-amber-50 p-4 dark:border-amber-800 dark:bg-amber-900/20">
+		<p class="text-sm text-amber-800 dark:text-amber-300">
+			Notification preferences will be available in a future update. Settings shown below are not yet active.
 		</p>
 	</div>
 
@@ -48,6 +57,7 @@
 					<input
 						type="checkbox"
 						bind:checked={newMachineRegistered}
+						disabled
 						class="peer sr-only"
 					/>
 					<div
@@ -70,6 +80,7 @@
 					<input
 						type="checkbox"
 						bind:checked={machineApprovalRequired}
+						disabled
 						class="peer sr-only"
 					/>
 					<div
@@ -92,6 +103,7 @@
 					<input
 						type="checkbox"
 						bind:checked={certificateExpiring}
+						disabled
 						class="peer sr-only"
 					/>
 					<div
@@ -114,6 +126,7 @@
 					<input
 						type="checkbox"
 						bind:checked={userRegistration}
+						disabled
 						class="peer sr-only"
 					/>
 					<div
