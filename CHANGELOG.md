@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file. See [versionize](https://github.com/versionize/versionize) for commit guidelines.
 
+<a name="2.1.0"></a>
+## [2.1.0](https://www.github.com/framlux/vord/releases/tag/v2.1.0) (2026-04-09)
+
+### Features
+
+* Adding more unit and functional tests ([be8925d](https://www.github.com/framlux/vord/commit/be8925dfc37fc18da05c8b13b82cc9e39cd62ea1))
+
+### Bug Fixes
+
+* Fixing security issues found via Claude security audit ([15345ea](https://www.github.com/framlux/vord/commit/15345ea806c7ead30fb911fb34d615655fb036c5))
+
 <a name="2.0.4"></a>
 ## [2.0.4](https://www.github.com/framlux/vord/releases/tag/v2.0.4) (2026-04-06)
 
