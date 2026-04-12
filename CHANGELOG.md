@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file. See [versionize](https://github.com/versionize/versionize) for commit guidelines.
 
+<a name="2.1.1"></a>
+## [2.1.1](https://www.github.com/framlux/vord/releases/tag/v2.1.1) (2026-04-12)
+
+### Bug Fixes
+
+* Fixing mismatched jsonb column declarations and SSH script for machine install ([89b17c7](https://www.github.com/framlux/vord/commit/89b17c7711834d90cfdea3e2cafd3a68a05f5158))
+
 <a name="2.1.0"></a>
 ## [2.1.0](https://www.github.com/framlux/vord/releases/tag/v2.1.0) (2026-04-09)
 
