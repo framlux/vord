@@ -19,22 +19,26 @@ import (
 
 	"github.com/framlux/vord/internal/db"
 	"github.com/framlux/vord/internal/id"
+	"github.com/framlux/vord/internal/state"
 )
 
 // SSHSessionsCollector monitors SSH connections via journalctl or auth.log.
 type SSHSessionsCollector struct {
 	hasJournalctl bool
+	rs            *state.RuntimeState
 }
 
 // NewSSHSessionsCollector creates a new SSHSessionsCollector.
-func NewSSHSessionsCollector() *SSHSessionsCollector {
+func NewSSHSessionsCollector(rs *state.RuntimeState) *SSHSessionsCollector {
 	_, err := exec.LookPath("journalctl")
 
-	return &SSHSessionsCollector{hasJournalctl: err == nil}
+	return &SSHSessionsCollector{hasJournalctl: err == nil, rs: rs}
 }
 
-func (c *SSHSessionsCollector) Name() string              { return "ssh_sessions" }
-func (c *SSHSessionsCollector) DefaultInterval() time.Duration { return 10 * time.Second }
+func (c *SSHSessionsCollector) Name() string { return "ssh_sessions" }
+func (c *SSHSessionsCollector) DefaultInterval() time.Duration {
+	return c.rs.TelemetryCollectFastInterval()
+}
 
 var (
 	reAccepted    = regexp.MustCompile(`Accepted (\S+) for (\S+) from ([\d.:a-fA-F]+) port (\d+)`)

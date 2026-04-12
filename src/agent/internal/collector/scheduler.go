@@ -92,7 +92,7 @@ func (s *Scheduler) Run(ctx context.Context) {
 
 func (s *Scheduler) runCollector(ctx context.Context, c Collector, interval time.Duration) {
 	name := c.Name()
-	slog.Info("starting collector", "name", name, "interval", interval)
+	slog.Info("starting collector", "name", name, "interval", interval.String())
 
 	// Run immediately on startup.
 	s.safeExecuteCollector(ctx, c)

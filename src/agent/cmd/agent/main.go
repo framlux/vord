@@ -120,7 +120,7 @@ func main() {
 	// DiskUsage, MemoryInfo, DiskInfo, SystemInfo, OsVersion, CpuInfo) are
 	// handled by FastTick and SlowTick inside the scheduler.
 	registry := collector.NewRegistry()
-	registry.Register(collector.NewSSHSessionsCollector())
+	registry.Register(collector.NewSSHSessionsCollector(runtimeState))
 	registry.Register(collector.NewHwHealthCollector())
 	registry.Register(collector.NewPackagesCollector())
 	registry.Register(collector.NewServicesCollector())
@@ -305,7 +305,7 @@ func runHeartbeat(ctx context.Context, reg *registration.Manager, runtimeState *
 			}
 
 			if newInterval := runtimeState.PingInterval(); newInterval != interval {
-				slog.Info("heartbeat interval changed", "old", interval, "new", newInterval)
+				slog.Info("heartbeat interval changed", "old", interval.String(), "new", newInterval.String())
 				interval = newInterval
 				ticker.Reset(interval)
 			}
@@ -330,7 +330,7 @@ func runConfigRefresh(ctx context.Context, reg *registration.Manager, runtimeSta
 			}
 
 			if newInterval := runtimeState.ConfigRefreshInterval(); newInterval != interval {
-				slog.Info("config refresh interval changed", "old", interval, "new", newInterval)
+				slog.Info("config refresh interval changed", "old", interval.String(), "new", newInterval.String())
 				interval = newInterval
 				ticker.Reset(interval)
 			}

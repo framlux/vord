@@ -36,7 +36,7 @@ func NewFastTick(store *db.Store, rs *state.RuntimeState) *FastTick {
 // Run starts the fast tick loop. It blocks until ctx is cancelled.
 func (ft *FastTick) Run(ctx context.Context) {
 	interval := ft.rs.TelemetryCollectFastInterval()
-	slog.Info("starting fast tick", "interval", interval)
+	slog.Info("starting fast tick", "interval", interval.String())
 
 	// Load persisted CPU ticks for crash recovery.
 	ft.loadPersistedCpuTicks()
@@ -57,7 +57,7 @@ func (ft *FastTick) Run(ctx context.Context) {
 			ft.tick(ctx)
 
 			if newInterval := ft.rs.TelemetryCollectFastInterval(); newInterval != interval {
-				slog.Info("fast tick interval changed", "old", interval, "new", newInterval)
+				slog.Info("fast tick interval changed", "old", interval.String(), "new", newInterval.String())
 				interval = newInterval
 				ticker.Reset(interval)
 			}

@@ -163,7 +163,7 @@ func (s *Sender) runTier(ctx context.Context, tier string, types []db.TelemetryT
 			s.sendBatch(ctx, tier, types)
 
 			if newInterval := getInterval(); newInterval != interval {
-				s.logger.Info("send interval changed", "tier", tier, "old", interval, "new", newInterval)
+				s.logger.Info("send interval changed", "tier", tier, "old", interval.String(), "new", newInterval.String())
 				interval = newInterval
 				ticker.Reset(interval)
 			}

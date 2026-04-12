@@ -39,7 +39,7 @@ func NewSlowTick(store *db.Store, rs *state.RuntimeState) *SlowTick {
 // Run starts the slow tick loop. It blocks until ctx is cancelled.
 func (st *SlowTick) Run(ctx context.Context) {
 	interval := st.rs.TelemetryCollectSlowInterval()
-	slog.Info("starting slow tick", "interval", interval)
+	slog.Info("starting slow tick", "interval", interval.String())
 
 	// Run immediately on startup (tick 0 is an hourly tick).
 	st.tick(ctx)
@@ -57,7 +57,7 @@ func (st *SlowTick) Run(ctx context.Context) {
 			st.tick(ctx)
 
 			if newInterval := st.rs.TelemetryCollectSlowInterval(); newInterval != interval {
-				slog.Info("slow tick interval changed", "old", interval, "new", newInterval)
+				slog.Info("slow tick interval changed", "old", interval.String(), "new", newInterval.String())
 				interval = newInterval
 				ticker.Reset(interval)
 			}

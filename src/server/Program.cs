@@ -437,8 +437,20 @@ if (app.Environment.IsDevelopment() == false)
 // Request ID correlation for distributed tracing.
 app.UseMiddleware<RequestIdMiddleware>();
 
-// Serilog structured request logging
-app.UseSerilogRequestLogging();
+// Serilog structured request logging — suppress health check noise
+app.UseSerilogRequestLogging(options =>
+{
+    options.GetLevel = (httpContext, elapsed, ex) =>
+    {
+        if (httpContext.Request.Path.StartsWithSegments("/healthz") ||
+            httpContext.Request.Path.StartsWithSegments("/readyz"))
+        {
+            return Serilog.Events.LogEventLevel.Verbose;
+        }
+
+        return Serilog.Events.LogEventLevel.Information;
+    };
+});
 
 app.UseForwardedHeaders();
 app.UseCors();

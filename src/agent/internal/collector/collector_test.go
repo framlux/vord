@@ -7,6 +7,8 @@ package collector
 import (
 	"testing"
 	"time"
+
+	"github.com/framlux/vord/internal/state"
 )
 
 func TestNewRegistry(t *testing.T) {
@@ -41,7 +43,7 @@ func TestRegistryRegister(t *testing.T) {
 func TestRegistryMultipleCollectors(t *testing.T) {
 	r := NewRegistry()
 
-	r.Register(NewSSHSessionsCollector())
+	r.Register(NewSSHSessionsCollector(state.New()))
 	r.Register(NewHwHealthCollector())
 	r.Register(NewPackagesCollector())
 	r.Register(NewServicesCollector())
@@ -66,7 +68,7 @@ func TestCollectorNames(t *testing.T) {
 		collector Collector
 		wantName  string
 	}{
-		{NewSSHSessionsCollector(), "ssh_sessions"},
+		{NewSSHSessionsCollector(state.New()), "ssh_sessions"},
 		{NewHwHealthCollector(), "hardware_health"},
 		{NewPackagesCollector(), "package_updates"},
 		{NewServicesCollector(), "service_status"},
@@ -87,7 +89,7 @@ func TestCollectorDefaultIntervals(t *testing.T) {
 		collector    Collector
 		wantExact    time.Duration
 	}{
-		{NewSSHSessionsCollector(), 10 * time.Second},
+		{NewSSHSessionsCollector(state.New()), 30 * time.Second},
 		{NewHwHealthCollector(), 5 * time.Minute},
 		{NewPackagesCollector(), 6 * time.Hour},
 		{NewServicesCollector(), 60 * time.Second},
