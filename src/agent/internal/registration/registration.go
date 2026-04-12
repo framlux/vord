@@ -136,6 +136,45 @@ func (m *Manager) register(ctx context.Context) error {
 		"os", osType,
 	)
 
+	// Check if this machine is already registered on the server (re-install scenario).
+	if m.registrationToken != "" {
+		statusResp, statusErr := m.registration.GetRegistrationStatus(ctx, &pb.SystemRegistrationStatusRequest{
+			SerialNumber:      serialNumber,
+			SystemId:          systemID,
+			RegistrationToken: m.registrationToken,
+			NeedsApiKey:       true,
+		})
+		if (statusErr == nil) && (statusResp.Status == pb.RegistrationStatus_REGISTRATION_ACTIVE) && (statusResp.MachineId > 0) {
+			slog.Info("machine already registered on server, recovering", "machine_id", statusResp.MachineId)
+
+			m.state.SetMachineID(statusResp.MachineId)
+			m.state.SetRegistered(true)
+
+			if err := m.store.SetConfig("machine_id", strconv.FormatInt(statusResp.MachineId, 10)); err != nil {
+				return fmt.Errorf("storing recovered machine_id: %w", err)
+			}
+			if err := m.store.SetConfig("serial_number", serialNumber); err != nil {
+				return fmt.Errorf("storing serial_number: %w", err)
+			}
+			if err := m.store.SetConfig("registration_token", m.registrationToken); err != nil {
+				return fmt.Errorf("storing registration_token: %w", err)
+			}
+
+			if apiKey := statusResp.GetApiKey(); apiKey != "" {
+				m.state.SetApiKey(apiKey)
+				if err := m.store.SetConfig("api_key", apiKey); err != nil {
+					return fmt.Errorf("storing recovered api_key: %w", err)
+				}
+			} else {
+				slog.Warn("recovered machine_id but no api_key available from server")
+			}
+
+			slog.Info("registration recovery complete", "machine_id", statusResp.MachineId)
+
+			return nil
+		}
+	}
+
 	resp, err := m.registration.RegisterSystem(ctx, &pb.RegisterSystemRequest{
 		Hostname:          hostname,
 		SerialNumber:      serialNumber,
@@ -190,6 +229,7 @@ func (m *Manager) recoverApiKey(ctx context.Context, serialNumber string) error 
 		SerialNumber:      serialNumber,
 		SystemId:          systemID,
 		RegistrationToken: m.registrationToken,
+		NeedsApiKey:       true,
 	})
 	if err != nil {
 		return fmt.Errorf("GetRegistrationStatus RPC: %w", err)
@@ -265,6 +305,15 @@ func (m *Manager) FetchConfiguration(ctx context.Context) error {
 			slog.Warn("failed to sync signing keys", "error", err)
 		} else {
 			slog.Debug("synced signing keys", "count", len(keys))
+		}
+	}
+
+	// Dynamic API key rotation: if the server provides a new key, swap to it.
+	if newApiKey := resp.GetApiKey(); newApiKey != "" {
+		slog.Info("server issued rotated API key, applying")
+		m.state.SetApiKey(newApiKey)
+		if err := m.store.SetConfig("api_key", newApiKey); err != nil {
+			slog.Warn("failed to persist rotated api_key", "error", err)
 		}
 	}
 

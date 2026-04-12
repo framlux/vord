@@ -189,6 +189,7 @@ type SystemRegistrationStatusRequest struct {
 	SerialNumber      string                 `protobuf:"bytes,1,opt,name=serial_number,json=serialNumber,proto3" json:"serial_number,omitempty"`
 	SystemId          string                 `protobuf:"bytes,2,opt,name=system_id,json=systemId,proto3" json:"system_id,omitempty"`
 	RegistrationToken string                 `protobuf:"bytes,3,opt,name=registration_token,json=registrationToken,proto3" json:"registration_token,omitempty"`
+	NeedsApiKey       bool                   `protobuf:"varint,4,opt,name=needs_api_key,json=needsApiKey,proto3" json:"needs_api_key,omitempty"`
 	unknownFields     protoimpl.UnknownFields
 	sizeCache         protoimpl.SizeCache
 }
@@ -242,6 +243,13 @@ func (x *SystemRegistrationStatusRequest) GetRegistrationToken() string {
 		return x.RegistrationToken
 	}
 	return ""
+}
+
+func (x *SystemRegistrationStatusRequest) GetNeedsApiKey() bool {
+	if x != nil {
+		return x.NeedsApiKey
+	}
+	return false
 }
 
 type SystemRegistrationStatusResponse struct {
@@ -476,11 +484,12 @@ var File_AgentRegistration_proto protoreflect.FileDescriptor
 
 const file_AgentRegistration_proto_rawDesc = "" +
 	"\n" +
-	"\x17AgentRegistration.proto\x12\x05agent\"\x92\x01\n" +
+	"\x17AgentRegistration.proto\x12\x05agent\"\xb6\x01\n" +
 	"\x1fSystemRegistrationStatusRequest\x12#\n" +
 	"\rserial_number\x18\x01 \x01(\tR\fserialNumber\x12\x1b\n" +
 	"\tsystem_id\x18\x02 \x01(\tR\bsystemId\x12-\n" +
-	"\x12registration_token\x18\x03 \x01(\tR\x11registrationToken\"\xb2\x01\n" +
+	"\x12registration_token\x18\x03 \x01(\tR\x11registrationToken\x12\"\n" +
+	"\rneeds_api_key\x18\x04 \x01(\bR\vneedsApiKey\"\xb2\x01\n" +
 	" SystemRegistrationStatusResponse\x121\n" +
 	"\x06status\x18\x01 \x01(\x0e2\x19.agent.RegistrationStatusR\x06status\x12\x1d\n" +
 	"\n" +

@@ -68,7 +68,7 @@ public class MachineServiceTests
         MachineService service = new(scopeFactory, logger, redis, billingApiClient);
 
         (RegistrationStatus status, long? id, string? apiKey) result =
-            await service.GetRegistrationStatusAsync("UNKNOWN-SN", "UNKNOWN-SID", "", CancellationToken.None);
+            await service.GetRegistrationStatusAsync("UNKNOWN-SN", "UNKNOWN-SID", "", true, CancellationToken.None);
 
         await Assert.That(result.status).IsEqualTo(RegistrationStatus.UnknownRegistration);
         await Assert.That(result.id).IsNull();
@@ -88,7 +88,7 @@ public class MachineServiceTests
         MachineService service = new(scopeFactory, logger, redis, billingApiClient);
 
         (RegistrationStatus status, long? id, string? apiKey) result =
-            await service.GetRegistrationStatusAsync("NON-EXISTENT-SN", "NON-EXISTENT-SID", TestTokenValue, CancellationToken.None);
+            await service.GetRegistrationStatusAsync("NON-EXISTENT-SN", "NON-EXISTENT-SID", TestTokenValue, true, CancellationToken.None);
 
         await Assert.That(result.status).IsEqualTo(RegistrationStatus.UnknownRegistration);
         await Assert.That(result.id).IsNull();
@@ -116,7 +116,7 @@ public class MachineServiceTests
         MachineService service = new(scopeFactory, logger, redis, billingApiClient);
 
         (RegistrationStatus status, long? id, string? apiKey) result =
-            await service.GetRegistrationStatusAsync(machine.SerialNumber, machine.SystemId, TestTokenValue, CancellationToken.None);
+            await service.GetRegistrationStatusAsync(machine.SerialNumber, machine.SystemId, TestTokenValue, true, CancellationToken.None);
 
         await Assert.That(result.status).IsEqualTo(RegistrationStatus.RegistrationActive);
         await Assert.That(result.id).IsEqualTo(machine.Id);
@@ -140,7 +140,7 @@ public class MachineServiceTests
         MachineService service = new(scopeFactory, logger, redis, billingApiClient);
 
         (RegistrationStatus status, long? id, string? apiKey) result =
-            await service.GetRegistrationStatusAsync(machine.SerialNumber, machine.SystemId, TestTokenValue, CancellationToken.None);
+            await service.GetRegistrationStatusAsync(machine.SerialNumber, machine.SystemId, TestTokenValue, false, CancellationToken.None);
 
         await Assert.That(result.status).IsEqualTo(RegistrationStatus.RegistrationActive);
         await Assert.That(result.id).IsEqualTo(machine.Id);
@@ -159,10 +159,105 @@ public class MachineServiceTests
         MachineService service = new(scopeFactory, logger, redis, billingApiClient);
 
         (RegistrationStatus status, long? id, string? apiKey) result =
-            await service.GetRegistrationStatusAsync("SN-001", "SID-001", "invalid-token", CancellationToken.None);
+            await service.GetRegistrationStatusAsync("SN-001", "SID-001", "invalid-token", true, CancellationToken.None);
 
         await Assert.That(result.status).IsEqualTo(RegistrationStatus.UnknownRegistration);
         await Assert.That(result.id).IsNull();
+    }
+
+    [Test]
+    public async Task GetRegistrationStatus_NeedsApiKey_CacheExpired_ReissuesNewKey()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        RegistrationToken token = await SeedValidRegistrationToken(dbFactory);
+
+        Machine machine = TestDataBuilder.BuildMachine(tenantId: token.TenantId, registrationTokenId: token.Id);
+        machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
+
+        IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
+        IDatabase redisDb = Substitute.For<IDatabase>();
+        redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(redisDb);
+        redisDb.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
+            .Returns(Task.FromResult<RedisValue>(RedisValue.Null));
+
+        IDatabaseCache dbCache = Substitute.For<IDatabaseCache>();
+        dbCache.ReissueApiKeyAsync(machine.Id, Arg.Any<CancellationToken>())
+            .Returns("reissued-plaintext-key");
+
+        TestServiceScopeFactory scopeFactory = CreateScopeFactory(dbFactory, dbCache);
+        ILogger<MachineService> logger = new NullLogger<MachineService>();
+        IBillingApiClient billingApiClient = Substitute.For<IBillingApiClient>();
+        MachineService service = new(scopeFactory, logger, redis, billingApiClient);
+
+        (RegistrationStatus status, long? id, string? apiKey) result =
+            await service.GetRegistrationStatusAsync(machine.SerialNumber, machine.SystemId, TestTokenValue, true, CancellationToken.None);
+
+        await Assert.That(result.status).IsEqualTo(RegistrationStatus.RegistrationActive);
+        await Assert.That(result.id).IsEqualTo(machine.Id);
+        await Assert.That(result.apiKey).IsEqualTo("reissued-plaintext-key");
+        await dbCache.Received(1).ReissueApiKeyAsync(machine.Id, Arg.Any<CancellationToken>());
+        await redisDb.Received(1).StringSetAsync(
+            Arg.Any<RedisKey>(),
+            Arg.Is<RedisValue>(v => v == "reissued-plaintext-key"),
+            Arg.Any<TimeSpan>(),
+            Arg.Any<bool>(),
+            Arg.Any<When>(),
+            Arg.Any<CommandFlags>());
+    }
+
+    [Test]
+    public async Task GetRegistrationStatus_NeedsApiKeyFalse_NoCachedKey_ReturnsNullKey()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        RegistrationToken token = await SeedValidRegistrationToken(dbFactory);
+
+        Machine machine = TestDataBuilder.BuildMachine(tenantId: token.TenantId, registrationTokenId: token.Id);
+        machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
+
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+        ILogger<MachineService> logger = new NullLogger<MachineService>();
+        IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
+        IDatabase redisDb = Substitute.For<IDatabase>();
+        redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(redisDb);
+        redisDb.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
+            .Returns(Task.FromResult<RedisValue>(RedisValue.Null));
+        IBillingApiClient billingApiClient = Substitute.For<IBillingApiClient>();
+        MachineService service = new(scopeFactory, logger, redis, billingApiClient);
+
+        (RegistrationStatus status, long? id, string? apiKey) result =
+            await service.GetRegistrationStatusAsync(machine.SerialNumber, machine.SystemId, TestTokenValue, false, CancellationToken.None);
+
+        await Assert.That(result.status).IsEqualTo(RegistrationStatus.RegistrationActive);
+        await Assert.That(result.id).IsEqualTo(machine.Id);
+        await Assert.That(result.apiKey).IsNull();
+    }
+
+    [Test]
+    public async Task GetRegistrationStatus_RevokedToken_NeedsApiKey_ReturnsUnknown()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        RegistrationToken token = await SeedValidRegistrationToken(dbFactory);
+        await dbFactory.Context.RegistrationTokens
+            .Where(t => t.Id == token.Id)
+            .Set(t => t.IsRevoked, true)
+            .Set(t => t.RevokedAt, DateTimeOffset.UtcNow)
+            .UpdateAsync();
+
+        Machine machine = TestDataBuilder.BuildMachine(tenantId: token.TenantId, registrationTokenId: token.Id);
+        machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
+
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+        ILogger<MachineService> logger = new NullLogger<MachineService>();
+        IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
+        redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(Substitute.For<IDatabase>());
+        IBillingApiClient billingApiClient = Substitute.For<IBillingApiClient>();
+        MachineService service = new(scopeFactory, logger, redis, billingApiClient);
+
+        (RegistrationStatus status, long? id, string? apiKey) result =
+            await service.GetRegistrationStatusAsync(machine.SerialNumber, machine.SystemId, TestTokenValue, true, CancellationToken.None);
+
+        await Assert.That(result.status).IsEqualTo(RegistrationStatus.UnknownRegistration);
+        await Assert.That(result.apiKey).IsNull();
     }
 
     // ========== RegisterSystem - Token Validation tests ==========

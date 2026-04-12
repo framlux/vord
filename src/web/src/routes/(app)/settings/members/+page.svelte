@@ -163,7 +163,6 @@
       </div>
       <form
         class="mt-4 flex gap-3 opacity-50 pointer-events-none"
-        aria-disabled="true"
       >
         <input
           type="email"

@@ -154,6 +154,9 @@ func TestEnsureRegistered_MissingApiKey(t *testing.T) {
 	regClient := &mockRegistrationClient{
 		statusFunc: func(ctx context.Context, in *pb.SystemRegistrationStatusRequest, opts ...grpc.CallOption) (*pb.SystemRegistrationStatusResponse, error) {
 			statusCalled = true
+			if in.NeedsApiKey == false {
+				t.Error("expected NeedsApiKey=true for API key recovery")
+			}
 
 			return &pb.SystemRegistrationStatusResponse{ApiKey: "recovered-key-123"}, nil
 		},
@@ -361,6 +364,197 @@ func TestEnsureRegistered_ServerRejectsRegistration(t *testing.T) {
 	}
 	if runtimeState.IsRegistered() {
 		t.Error("expected IsRegistered=false after server rejection")
+	}
+}
+
+// --- Re-registration recovery tests ---
+
+// Intent: Agent has no local state but machine exists on server → recovers via GetRegistrationStatus
+// instead of failing with "Machine already exists".
+func TestEnsureRegistered_ReinstallRecovery(t *testing.T) {
+	store := newTestStore(t)
+	runtimeState := state.New()
+
+	// No machine_id or api_key in store — simulates fresh agent install on a previously-registered machine.
+
+	statusCalled := false
+	registerCalled := false
+	regClient := &mockRegistrationClient{
+		statusFunc: func(ctx context.Context, in *pb.SystemRegistrationStatusRequest, opts ...grpc.CallOption) (*pb.SystemRegistrationStatusResponse, error) {
+			statusCalled = true
+			if in.RegistrationToken != "my-token" {
+				t.Errorf("expected RegistrationToken=%q, got %q", "my-token", in.RegistrationToken)
+			}
+			if in.NeedsApiKey == false {
+				t.Error("expected NeedsApiKey=true for reinstall recovery")
+			}
+
+			return &pb.SystemRegistrationStatusResponse{
+				Status:    pb.RegistrationStatus_REGISTRATION_ACTIVE,
+				MachineId: 77,
+				ApiKey:    "recovered-api-key",
+			}, nil
+		},
+		registerFunc: func(ctx context.Context, in *pb.RegisterSystemRequest, opts ...grpc.CallOption) (*pb.RegisterSystemResponse, error) {
+			registerCalled = true
+
+			return nil, fmt.Errorf("should not be called")
+		},
+	}
+	cfgClient := &mockConfigurationClient{}
+
+	mgr := newTestManager(regClient, cfgClient, store, runtimeState, "my-token")
+
+	err := mgr.EnsureRegistered(context.Background())
+	if err != nil {
+		t.Fatalf("EnsureRegistered: %v", err)
+	}
+
+	if statusCalled == false {
+		t.Error("expected GetRegistrationStatus to be called for re-install recovery")
+	}
+	if registerCalled {
+		t.Error("expected RegisterSystem NOT to be called when recovery succeeds")
+	}
+	if runtimeState.MachineID() != 77 {
+		t.Errorf("expected MachineID=77, got %d", runtimeState.MachineID())
+	}
+	if runtimeState.IsRegistered() == false {
+		t.Error("expected IsRegistered=true")
+	}
+	if runtimeState.ApiKey() != "recovered-api-key" {
+		t.Errorf("expected ApiKey=%q, got %q", "recovered-api-key", runtimeState.ApiKey())
+	}
+
+	// Verify state persisted to DB.
+	storedID, err := store.GetConfig("machine_id")
+	if err != nil {
+		t.Fatalf("GetConfig machine_id: %v", err)
+	}
+	if storedID != "77" {
+		t.Errorf("expected stored machine_id=%q, got %q", "77", storedID)
+	}
+
+	storedKey, err := store.GetConfig("api_key")
+	if err != nil {
+		t.Fatalf("GetConfig api_key: %v", err)
+	}
+	if storedKey != "recovered-api-key" {
+		t.Errorf("expected stored api_key=%q, got %q", "recovered-api-key", storedKey)
+	}
+}
+
+// Intent: GetRegistrationStatus returns UNKNOWN → falls through to RegisterSystem normally.
+func TestEnsureRegistered_RecoveryMiss_FallsToRegister(t *testing.T) {
+	store := newTestStore(t)
+	runtimeState := state.New()
+
+	statusCalled := false
+	registerCalled := false
+	regClient := &mockRegistrationClient{
+		statusFunc: func(ctx context.Context, in *pb.SystemRegistrationStatusRequest, opts ...grpc.CallOption) (*pb.SystemRegistrationStatusResponse, error) {
+			statusCalled = true
+
+			return &pb.SystemRegistrationStatusResponse{
+				Status: pb.RegistrationStatus_UNKNOWN_REGISTRATION,
+			}, nil
+		},
+		registerFunc: func(ctx context.Context, in *pb.RegisterSystemRequest, opts ...grpc.CallOption) (*pb.RegisterSystemResponse, error) {
+			registerCalled = true
+
+			return &pb.RegisterSystemResponse{
+				MachineId: 99,
+				ApiKey:    "fresh-key",
+			}, nil
+		},
+	}
+	cfgClient := &mockConfigurationClient{}
+
+	mgr := newTestManager(regClient, cfgClient, store, runtimeState, "my-token")
+
+	err := mgr.EnsureRegistered(context.Background())
+	if err != nil {
+		t.Fatalf("EnsureRegistered: %v", err)
+	}
+
+	if statusCalled == false {
+		t.Error("expected GetRegistrationStatus to be called first")
+	}
+	if registerCalled == false {
+		t.Error("expected RegisterSystem to be called after status miss")
+	}
+	if runtimeState.MachineID() != 99 {
+		t.Errorf("expected MachineID=99, got %d", runtimeState.MachineID())
+	}
+}
+
+// Intent: GetRegistrationStatus RPC fails → falls through to RegisterSystem gracefully.
+func TestEnsureRegistered_RecoveryRPCError_FallsToRegister(t *testing.T) {
+	store := newTestStore(t)
+	runtimeState := state.New()
+
+	registerCalled := false
+	regClient := &mockRegistrationClient{
+		statusFunc: func(ctx context.Context, in *pb.SystemRegistrationStatusRequest, opts ...grpc.CallOption) (*pb.SystemRegistrationStatusResponse, error) {
+			return nil, fmt.Errorf("network timeout")
+		},
+		registerFunc: func(ctx context.Context, in *pb.RegisterSystemRequest, opts ...grpc.CallOption) (*pb.RegisterSystemResponse, error) {
+			registerCalled = true
+
+			return &pb.RegisterSystemResponse{
+				MachineId: 50,
+				ApiKey:    "new-key",
+			}, nil
+		},
+	}
+	cfgClient := &mockConfigurationClient{}
+
+	mgr := newTestManager(regClient, cfgClient, store, runtimeState, "my-token")
+
+	err := mgr.EnsureRegistered(context.Background())
+	if err != nil {
+		t.Fatalf("EnsureRegistered: %v", err)
+	}
+
+	if registerCalled == false {
+		t.Error("expected RegisterSystem to be called after GetRegistrationStatus failure")
+	}
+	if runtimeState.MachineID() != 50 {
+		t.Errorf("expected MachineID=50, got %d", runtimeState.MachineID())
+	}
+}
+
+// Intent: Recovery returns machine_id but no api_key → machine_id is stored, api_key remains empty.
+func TestEnsureRegistered_RecoveryNoApiKey(t *testing.T) {
+	store := newTestStore(t)
+	runtimeState := state.New()
+
+	regClient := &mockRegistrationClient{
+		statusFunc: func(ctx context.Context, in *pb.SystemRegistrationStatusRequest, opts ...grpc.CallOption) (*pb.SystemRegistrationStatusResponse, error) {
+			return &pb.SystemRegistrationStatusResponse{
+				Status:    pb.RegistrationStatus_REGISTRATION_ACTIVE,
+				MachineId: 77,
+				ApiKey:    "", // API key cache expired on server
+			}, nil
+		},
+	}
+	cfgClient := &mockConfigurationClient{}
+
+	mgr := newTestManager(regClient, cfgClient, store, runtimeState, "my-token")
+
+	err := mgr.EnsureRegistered(context.Background())
+	if err != nil {
+		t.Fatalf("EnsureRegistered: %v", err)
+	}
+
+	if runtimeState.MachineID() != 77 {
+		t.Errorf("expected MachineID=77, got %d", runtimeState.MachineID())
+	}
+	if runtimeState.IsRegistered() == false {
+		t.Error("expected IsRegistered=true")
+	}
+	if runtimeState.ApiKey() != "" {
+		t.Errorf("expected empty ApiKey, got %q", runtimeState.ApiKey())
 	}
 }
 
@@ -812,5 +1006,88 @@ func TestReadMachineIDSerial_EmptyFile(t *testing.T) {
 
 	if result != "" {
 		t.Errorf("expected empty string for empty file, got %q", result)
+	}
+}
+
+// --- Dynamic API key rotation tests ---
+
+// Intent: Server includes a rotated API key in config response → agent updates state and store.
+func TestFetchConfiguration_RotatesApiKey(t *testing.T) {
+	store := newTestStore(t)
+	runtimeState := state.New()
+	runtimeState.SetMachineID(1)
+
+	// Pre-populate with an existing key.
+	if err := store.SetConfig("api_key", "old-key"); err != nil {
+		t.Fatalf("SetConfig api_key: %v", err)
+	}
+	runtimeState.SetApiKey("old-key")
+
+	cfgClient := &mockConfigurationClient{
+		getConfigFunc: func(ctx context.Context, in *pb.GetConfigurationRequest, opts ...grpc.CallOption) (*pb.GetConfigurationResponse, error) {
+			return &pb.GetConfigurationResponse{
+				TimeConfig: &pb.TimingConfiguration{
+					HeartbeatTimeInSeconds:            30,
+					ConfigurationRefreshTimeInSeconds: 300,
+				},
+				ApiKey: "rotated-key-456",
+			}, nil
+		},
+	}
+	regClient := &mockRegistrationClient{}
+
+	mgr := newTestManager(regClient, cfgClient, store, runtimeState, "token")
+
+	err := mgr.FetchConfiguration(context.Background())
+	if err != nil {
+		t.Fatalf("FetchConfiguration: %v", err)
+	}
+
+	if runtimeState.ApiKey() != "rotated-key-456" {
+		t.Errorf("expected ApiKey=%q after rotation, got %q", "rotated-key-456", runtimeState.ApiKey())
+	}
+
+	storedKey, err := store.GetConfig("api_key")
+	if err != nil {
+		t.Fatalf("GetConfig api_key: %v", err)
+	}
+	if storedKey != "rotated-key-456" {
+		t.Errorf("expected stored api_key=%q, got %q", "rotated-key-456", storedKey)
+	}
+}
+
+// Intent: Server returns empty api_key in config → agent keeps existing key unchanged.
+func TestFetchConfiguration_EmptyApiKey_NoRotation(t *testing.T) {
+	store := newTestStore(t)
+	runtimeState := state.New()
+	runtimeState.SetMachineID(1)
+
+	if err := store.SetConfig("api_key", "existing-key"); err != nil {
+		t.Fatalf("SetConfig api_key: %v", err)
+	}
+	runtimeState.SetApiKey("existing-key")
+
+	cfgClient := &mockConfigurationClient{
+		getConfigFunc: func(ctx context.Context, in *pb.GetConfigurationRequest, opts ...grpc.CallOption) (*pb.GetConfigurationResponse, error) {
+			return &pb.GetConfigurationResponse{
+				TimeConfig: &pb.TimingConfiguration{
+					HeartbeatTimeInSeconds:            30,
+					ConfigurationRefreshTimeInSeconds: 300,
+				},
+				// ApiKey intentionally empty — no rotation.
+			}, nil
+		},
+	}
+	regClient := &mockRegistrationClient{}
+
+	mgr := newTestManager(regClient, cfgClient, store, runtimeState, "token")
+
+	err := mgr.FetchConfiguration(context.Background())
+	if err != nil {
+		t.Fatalf("FetchConfiguration: %v", err)
+	}
+
+	if runtimeState.ApiKey() != "existing-key" {
+		t.Errorf("expected ApiKey=%q unchanged, got %q", "existing-key", runtimeState.ApiKey())
 	}
 }

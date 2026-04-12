@@ -58,7 +58,7 @@ public sealed class RegistrationService : Registration.RegistrationBase
 
         try
         {
-            (status, machineId, apiKey) = await _machineService.GetRegistrationStatusAsync(request.SerialNumber, request.SystemId, request.RegistrationToken, context.CancellationToken);
+            (status, machineId, apiKey) = await _machineService.GetRegistrationStatusAsync(request.SerialNumber, request.SystemId, request.RegistrationToken, request.NeedsApiKey, context.CancellationToken);
         }
         catch (Exception ex)
         {

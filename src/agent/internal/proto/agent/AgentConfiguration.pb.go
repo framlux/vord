@@ -128,7 +128,9 @@ type GetConfigurationResponse struct {
 	// Monotonic counter incremented on key registration/revocation; agents skip sync if unchanged.
 	SigningKeyVersion int64 `protobuf:"varint,4,opt,name=signing_key_version,json=signingKeyVersion,proto3" json:"signing_key_version,omitempty"`
 	// The tenant ID this machine belongs to, so the agent can verify command ownership.
-	TenantId      int32 `protobuf:"varint,5,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
+	TenantId int32 `protobuf:"varint,5,opt,name=tenant_id,json=tenantId,proto3" json:"tenant_id,omitempty"`
+	// Rotated API key. Non-empty when the server has re-issued this machine's credential.
+	ApiKey        string `protobuf:"bytes,6,opt,name=api_key,json=apiKey,proto3" json:"api_key,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -196,6 +198,13 @@ func (x *GetConfigurationResponse) GetTenantId() int32 {
 		return x.TenantId
 	}
 	return 0
+}
+
+func (x *GetConfigurationResponse) GetApiKey() string {
+	if x != nil {
+		return x.ApiKey
+	}
+	return ""
 }
 
 type TrustedSigningKey struct {
@@ -868,14 +877,15 @@ const file_AgentConfiguration_proto_rawDesc = "" +
 	"\x18AgentConfiguration.proto\x12\x05agent\"8\n" +
 	"\x17GetConfigurationRequest\x12\x1d\n" +
 	"\n" +
-	"machine_id\x18\x01 \x01(\x03R\tmachineId\"\x88\x02\n" +
+	"machine_id\x18\x01 \x01(\x03R\tmachineId\"\xa1\x02\n" +
 	"\x18GetConfigurationResponse\x12;\n" +
 	"\vtime_config\x18\x01 \x01(\v2\x1a.agent.TimingConfigurationR\n" +
 	"timeConfig\x12%\n" +
 	"\x0econfig_version\x18\x02 \x01(\x03R\rconfigVersion\x12;\n" +
 	"\fsigning_keys\x18\x03 \x03(\v2\x18.agent.TrustedSigningKeyR\vsigningKeys\x12.\n" +
 	"\x13signing_key_version\x18\x04 \x01(\x03R\x11signingKeyVersion\x12\x1b\n" +
-	"\ttenant_id\x18\x05 \x01(\x05R\btenantId\"b\n" +
+	"\ttenant_id\x18\x05 \x01(\x05R\btenantId\x12\x17\n" +
+	"\aapi_key\x18\x06 \x01(\tR\x06apiKey\"b\n" +
 	"\x11TrustedSigningKey\x12\x15\n" +
 	"\x06key_id\x18\x01 \x01(\x05R\x05keyId\x12\x17\n" +
 	"\auser_id\x18\x02 \x01(\x05R\x06userId\x12\x1d\n" +

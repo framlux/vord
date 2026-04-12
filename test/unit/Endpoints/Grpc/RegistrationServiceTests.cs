@@ -83,7 +83,7 @@ public sealed class RegistrationServiceTests
     [Test]
     public async Task GetRegistrationStatus_ValidRequest_ReturnsServiceResult()
     {
-        _machineService.GetRegistrationStatusAsync("SN-001", "SYS-001", "test-token", Arg.Any<CancellationToken>())
+        _machineService.GetRegistrationStatusAsync("SN-001", "SYS-001", "test-token", Arg.Any<bool>(), Arg.Any<CancellationToken>())
             .Returns((RegistrationStatus.RegistrationActive, (long?)42, "test-api-key"));
 
         RegistrationService service = CreateService();
@@ -107,7 +107,7 @@ public sealed class RegistrationServiceTests
     [Test]
     public async Task GetRegistrationStatus_ServiceThrows_ReturnsInternalError()
     {
-        _machineService.GetRegistrationStatusAsync("SN-001", "SYS-001", "test-token", Arg.Any<CancellationToken>())
+        _machineService.GetRegistrationStatusAsync("SN-001", "SYS-001", "test-token", Arg.Any<bool>(), Arg.Any<CancellationToken>())
             .Throws(new InvalidOperationException("Database error"));
 
         RegistrationService service = CreateService();
@@ -148,7 +148,7 @@ public sealed class RegistrationServiceTests
     [Test]
     public async Task GetRegistrationStatus_NullMachineId_ReturnsZeroMachineId()
     {
-        _machineService.GetRegistrationStatusAsync("SN-001", "SYS-001", "test-token", Arg.Any<CancellationToken>())
+        _machineService.GetRegistrationStatusAsync("SN-001", "SYS-001", "test-token", Arg.Any<bool>(), Arg.Any<CancellationToken>())
             .Returns((RegistrationStatus.UnknownRegistration, (long?)null, (string?)null));
 
         RegistrationService service = CreateService();

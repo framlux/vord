@@ -30,6 +30,8 @@ message GetConfigurationResponse {
     int64 signing_key_version = 4;
     // The tenant ID this machine belongs to, so the agent can verify command ownership.
     int32 tenant_id = 5;
+    // Rotated API key. Non-empty when the server has re-issued this machine's credential.
+    string api_key = 6;
 }
 
 message TrustedSigningKey {

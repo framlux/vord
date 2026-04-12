@@ -46,7 +46,7 @@ public sealed class MachineService : IMachineService
     }
 
     /// <inheritdoc/>
-    public async Task<(RegistrationStatus status, long? id, string? apiKey)> GetRegistrationStatusAsync(string serialNumber, string systemId, string registrationToken, CancellationToken cancellationToken)
+    public async Task<(RegistrationStatus status, long? id, string? apiKey)> GetRegistrationStatusAsync(string serialNumber, string systemId, string registrationToken, bool needsApiKey, CancellationToken cancellationToken)
     {
         if (string.IsNullOrEmpty(registrationToken))
         {
@@ -67,6 +67,13 @@ public sealed class MachineService : IMachineService
             return (RegistrationStatus.UnknownRegistration, null, null);
         }
 
+        if (token.IsRevoked)
+        {
+            _logger.LogWarning("GetRegistrationStatus: token {TokenId} is revoked", token.Id);
+
+            return (RegistrationStatus.UnknownRegistration, null, null);
+        }
+
         // Normalize to match how data is stored (lowercase).
         string normalizedSerial = serialNumber.ToLowerInvariant();
         string normalizedSystemId = systemId.ToLowerInvariant();
@@ -83,7 +90,13 @@ public sealed class MachineService : IMachineService
             return (RegistrationStatus.UnknownRegistration, null, null);
         }
 
-        // One-time key delivery: use atomic DB update to prevent concurrent delivery
+        // If the caller does not need an API key, return status only.
+        if (needsApiKey == false)
+        {
+            return (RegistrationStatus.RegistrationActive, machine.Id, null);
+        }
+
+        // Try to deliver the cached plaintext key first (one-time delivery from initial registration).
         IDatabase redisDb = _redis.GetDatabase();
         string cacheKey = $"pending_api_key:{machine.Id}";
         string? plaintextKey = null;
@@ -106,6 +119,24 @@ public sealed class MachineService : IMachineService
             else
             {
                 _logger.LogWarning("Concurrent API key delivery attempt for machine {MachineId}", machine.Id);
+            }
+        }
+
+        // If no cached key was available, re-issue a new one.
+        if (plaintextKey is null)
+        {
+            IDatabaseCache dbCache = scope.ServiceProvider.GetRequiredService<IDatabaseCache>();
+            plaintextKey = await dbCache.ReissueApiKeyAsync(machine.Id, cancellationToken);
+
+            if (plaintextKey is not null)
+            {
+                // Cache for retry resilience and mark as delivered.
+                await redisDb.StringSetAsync(cacheKey, plaintextKey, ApiKeyCacheTtl);
+                await db.Machines
+                    .Where(m => m.Id == machine.Id)
+                    .Set(m => m.KeyDeliveredAt, DateTimeOffset.UtcNow)
+                    .UpdateAsync(cancellationToken);
+                _logger.LogInformation("API key re-issued for machine {MachineId} in tenant {TenantId}", machine.Id, token.TenantId);
             }
         }
 

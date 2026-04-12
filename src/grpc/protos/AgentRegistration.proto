@@ -40,6 +40,7 @@ message SystemRegistrationStatusRequest {
     string serial_number = 1;
     string system_id = 2;
     string registration_token = 3;
+    bool needs_api_key = 4;
 }
 
 message SystemRegistrationStatusResponse {

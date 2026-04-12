@@ -92,6 +92,39 @@ public partial class DatabaseCache : IDatabaseCache
     }
 
     /// <inheritdoc/>
+    public async Task<string?> ReissueApiKeyAsync(long machineId, CancellationToken cancellationToken)
+    {
+        string plaintextApiKey = RandomNumberGenerator.GetHexString(64, true);
+        string apiKeyHash = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(plaintextApiKey)));
+
+        try
+        {
+            _logger.LogInformation("Re-issuing API key for Machine {MachineId}", machineId);
+            int updated = await _db.Machines
+                .Where(m => (m.Id == machineId) && (m.IsDeleted == false))
+                .Set(m => m.ApiKeyHash, apiKeyHash)
+                .Set(m => m.KeyDeliveredAt, (DateTimeOffset?)null)
+                .UpdateAsync(cancellationToken);
+
+            if (updated == 0)
+            {
+                _logger.LogWarning("Re-issue failed: Machine {MachineId} not found or deleted", machineId);
+
+                return null;
+            }
+
+            _logger.LogInformation("API key re-issued for Machine {MachineId}", machineId);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to re-issue API key for Machine {MachineId}", machineId);
+            throw;
+        }
+
+        return plaintextApiKey;
+    }
+
+    /// <inheritdoc/>
     public async Task<Machine?> GetMachineAsync(long machineId, int tenantId, CancellationToken cancellationToken)
     {
         Machine? machine;

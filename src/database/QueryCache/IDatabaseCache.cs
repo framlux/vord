@@ -130,6 +130,15 @@ public interface IDatabaseCache
     Task<(Machine? machine, string? plaintextApiKey)> CreateMachineWithKeyAsync(Machine machine, int? machineLimit = null, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Generates a new API key for an existing machine, replacing the old one.
+    /// Updates ApiKeyHash and resets KeyDeliveredAt to null atomically.
+    /// </summary>
+    /// <param name="machineId">The ID of the machine to re-key</param>
+    /// <param name="cancellationToken">Token used to cancel async calls</param>
+    /// <returns>Returns the new plaintext API key, or null if the machine was not found</returns>
+    Task<string?> ReissueApiKeyAsync(long machineId, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Checks if an approved machine exists, and is active, with the given ID within a tenant
     /// </summary>
     /// <param name="machineId">The ID to use as a lookup</param>

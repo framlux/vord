@@ -3,13 +3,14 @@
      See LICENSE for details. -->
 
 <script lang="ts">
+	import { untrack } from 'svelte';
 	import type { MachineDetailDto } from '$lib/api/types';
 	import { ApiClient } from '$lib/api/client';
 	import HealthBadge from './HealthBadge.svelte';
 	import ProgressBar from './ProgressBar.svelte';
 	import { formatBytes, formatUptime, formatRelativeTime, formatDateTime } from '$lib/utils/format';
 	import { TEMP_WARNING_CELSIUS, TEMP_CRITICAL_CELSIUS } from '$lib/utils/constants';
-	import { X } from 'lucide-svelte';
+	import { X, Clock } from 'lucide-svelte';
 
 	let {
 		machineId,
@@ -19,13 +20,13 @@
 	let detail = $state<MachineDetailDto | null>(null);
 	let loading = $state(false);
 	let error = $state<string | null>(null);
-	let requestId = $state(0);
+	let requestId = 0;
 
 	const api = new ApiClient('');
 
 	$effect(() => {
 		if (machineId !== null) {
-			loadDetail(machineId);
+			untrack(() => loadDetail(machineId!));
 		} else {
 			detail = null;
 		}
@@ -116,6 +117,18 @@
 			</div>
 
 			<div class="space-y-6 p-6">
+				{#if detail.telemetryLastUpdated === null || detail.telemetryLastUpdated === undefined}
+					<div class="flex items-start gap-3 rounded-lg border border-amber-300 bg-amber-50 p-4 dark:border-amber-700 dark:bg-amber-950/40">
+						<Clock class="mt-0.5 h-5 w-5 shrink-0 text-amber-500" />
+						<div>
+							<p class="text-sm font-medium text-amber-800 dark:text-amber-300">Waiting for telemetry</p>
+							<p class="mt-0.5 text-xs text-amber-700 dark:text-amber-400">
+								This machine has not reported any telemetry data yet. Data will appear here once the agent begins sending reports.
+							</p>
+						</div>
+					</div>
+				{/if}
+
 				<!-- Quick Stats -->
 				<div class="grid grid-cols-3 gap-4">
 					<div class="rounded-lg border border-surface-200 p-3 dark:border-surface-700">
