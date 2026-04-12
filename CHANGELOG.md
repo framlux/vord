@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file. See [versionize](https://github.com/versionize/versionize) for commit guidelines.
 
+<a name="2.1.3"></a>
+## [2.1.3](https://www.github.com/framlux/vord/releases/tag/v2.1.3) (2026-04-12)
+
+### Bug Fixes
+
+* Reducing log spam from API, fixing SSH telemetry config to server driven ([dbb5f75](https://www.github.com/framlux/vord/commit/dbb5f759564218bbc26e5c9120a8d952ccd790cd))
+
 <a name="2.1.2"></a>
 ## [2.1.2](https://www.github.com/framlux/vord/releases/tag/v2.1.2) (2026-04-12)
 
