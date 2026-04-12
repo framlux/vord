@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file. See [versionize](https://github.com/versionize/versionize) for commit guidelines.
 
+<a name="2.1.2"></a>
+## [2.1.2](https://www.github.com/framlux/vord/releases/tag/v2.1.2) (2026-04-12)
+
+### Bug Fixes
+
+* Fixing broken machine API key flow; fixing broken UI when no telemetry exists ([6b4f2ea](https://www.github.com/framlux/vord/commit/6b4f2ea0d53122bfc1913d655128b8fbd4cee8a2))
+
 <a name="2.1.1"></a>
 ## [2.1.1](https://www.github.com/framlux/vord/releases/tag/v2.1.1) (2026-04-12)
 
