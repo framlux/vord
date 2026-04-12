@@ -9,7 +9,7 @@
 	let {
 		open = false,
 		token = '',
-		serverAddress = 'grpc.vordfleet.dev',
+		serverAddress = 'grpc.app.vordfleet.dev',
 		onclose
 	}: {
 		open?: boolean;

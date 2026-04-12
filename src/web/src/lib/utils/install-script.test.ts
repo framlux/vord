@@ -11,6 +11,13 @@ describe('generateInstallScript', () => {
         expect(script.startsWith('#!/usr/bin/env bash')).toBe(true);
     });
 
+    it('should include PATH normalization for minimal environments', () => {
+        const script = generateInstallScript('test-token');
+        expect(script).toContain(
+            'export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:${PATH}"'
+        );
+    });
+
     it('should contain the provided token value', () => {
         const script = generateInstallScript('my-secret-token-abc');
         expect(script).toContain('REGISTRATION_TOKEN="my-secret-token-abc"');
@@ -23,7 +30,7 @@ describe('generateInstallScript', () => {
 
     it('should use default server address when not provided', () => {
         const script = generateInstallScript('token');
-        expect(script).toContain('SERVER_ADDRESS="grpc.vordfleet.dev"');
+        expect(script).toContain('SERVER_ADDRESS="grpc.app.vordfleet.dev"');
     });
 
     it('should use default port when not provided', () => {
@@ -32,7 +39,7 @@ describe('generateInstallScript', () => {
     });
 
     it('should use custom port when provided', () => {
-        const script = generateInstallScript('token', 'grpc.vordfleet.dev', 12234);
+        const script = generateInstallScript('token', 'grpc.app.vordfleet.dev', 12234);
         expect(script).toContain('server_port = 12234');
     });
 

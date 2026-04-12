@@ -43,7 +43,7 @@ public sealed class AlertEvent
     public required string Message { get; set; }
 
     /// <summary>Additional JSON details about the event.</summary>
-    [Column("Details", DbType = "jsonb"), Nullable]
+    [Column("Details", DataType = LinqToDB.DataType.BinaryJson), Nullable]
     public string? Details { get; set; }
 
     /// <summary>The status of this event.</summary>

@@ -153,7 +153,7 @@ describe('InstallScriptModal', () => {
             }
         });
         const codeBlock = screen.getByRole('dialog').querySelector('code');
-        expect(codeBlock?.textContent).toContain('grpc.vordfleet.dev');
+        expect(codeBlock?.textContent).toContain('grpc.app.vordfleet.dev');
     });
 
     it('should include a custom server address when provided', () => {

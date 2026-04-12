@@ -108,24 +108,24 @@ public sealed class MachineStateDetail
     /// <summary>
     /// JSONB array of disk info entries from DiskInfo telemetry.
     /// </summary>
-    [Column("DiskInfos"), Nullable]
+    [Column("DiskInfos", DataType = LinqToDB.DataType.BinaryJson), Nullable]
     public string? DiskInfos { get; set; }
 
     /// <summary>
     /// JSONB array of disk usage entries from DiskUsage telemetry.
     /// </summary>
-    [Column("DiskUsages"), Nullable]
+    [Column("DiskUsages", DataType = LinqToDB.DataType.BinaryJson), Nullable]
     public string? DiskUsages { get; set; }
 
     /// <summary>
     /// JSONB array of SSH session events.
     /// </summary>
-    [Column("SshSessions"), Nullable]
+    [Column("SshSessions", DataType = LinqToDB.DataType.BinaryJson), Nullable]
     public string? SshSessions { get; set; }
 
     /// <summary>
     /// JSONB object with structured hardware health from HardwareHealth telemetry.
     /// </summary>
-    [Column("HardwareHealth"), Nullable]
+    [Column("HardwareHealth", DataType = LinqToDB.DataType.BinaryJson), Nullable]
     public string? HardwareHealth { get; set; }
 }

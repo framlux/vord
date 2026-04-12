@@ -60,7 +60,7 @@ public sealed class MachineStateSummary
     /// <summary>
     /// JSON array of IP addresses from SystemInfo telemetry.
     /// </summary>
-    [Column("IpAddresses"), Nullable]
+    [Column("IpAddresses", DataType = LinqToDB.DataType.BinaryJson), Nullable]
     public string? IpAddresses { get; set; }
 
     /// <summary>

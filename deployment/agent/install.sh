@@ -5,8 +5,13 @@
 #
 # Vord Agent installer — automates repo setup, package install, and configuration.
 # Usage: curl -fsSL https://get.vordfleet.dev/install.sh | sudo bash
+# Or non-interactive:
+#   VORD_SERVER_ADDRESS=grpc.app.vordfleet.dev VORD_REGISTRATION_TOKEN=xxx \
+#     curl -fsSL https://get.vordfleet.dev/install.sh | sudo bash
 
 set -euo pipefail
+
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:${PATH}"
 
 GPG_KEY_URL="https://apt.fury.io/framlux/gpg.key"
 APT_REPO_URL="https://packages.framlux.io/apt/"
@@ -14,7 +19,7 @@ YUM_REPO_URL="https://packages.framlux.io/yum/"
 PACKAGE_NAME="vord-agent"
 CONFIG_DIR="/etc/framlux"
 CONFIG_FILE="${CONFIG_DIR}/vord-agent.toml"
-DEFAULT_SERVER="grpc.vordfleet.dev"
+DEFAULT_SERVER="grpc.app.vordfleet.dev"
 DEFAULT_PORT=443
 
 # --- Helpers ---
@@ -57,12 +62,7 @@ info "Detected package manager: ${PKG_MANAGER}"
 info "Importing Framlux GPG key..."
 
 if [ "${PKG_MANAGER}" = "apt" ]; then
-    if command -v gpg >/dev/null 2>&1; then
-        curl -fsSL "${GPG_KEY_URL}" | gpg --dearmor -o /usr/share/keyrings/framlux-archive-keyring.gpg
-    else
-        error "gpg is required but not installed. Install it with: apt-get install gnupg"
-        exit 1
-    fi
+    curl -fsSL "${GPG_KEY_URL}" | apt-key add -
 else
     rpm --import "${GPG_KEY_URL}"
 fi
@@ -73,7 +73,7 @@ info "Adding Framlux package repository..."
 
 if [ "${PKG_MANAGER}" = "apt" ]; then
     cat > /etc/apt/sources.list.d/framlux.list <<EOF
-deb [signed-by=/usr/share/keyrings/framlux-archive-keyring.gpg] ${APT_REPO_URL} * *
+deb ${APT_REPO_URL} * *
 EOF
 else
     cat > /etc/yum.repos.d/framlux.repo <<EOF
@@ -108,20 +108,26 @@ fi
 
 success "${PACKAGE_NAME} installed successfully."
 
-# --- Interactive Prompts ---
+# --- Configuration (env vars or interactive prompts) ---
 
-printf "\n"
-printf "Enter the server address [%s]: " "${DEFAULT_SERVER}"
-read -r SERVER_ADDRESS
+SERVER_ADDRESS="${VORD_SERVER_ADDRESS:-}"
 if [ -z "${SERVER_ADDRESS}" ]; then
-    SERVER_ADDRESS="${DEFAULT_SERVER}"
+    printf "\n" > /dev/tty
+    printf "Enter the server address [%s]: " "${DEFAULT_SERVER}" > /dev/tty
+    read -r SERVER_ADDRESS < /dev/tty
+    if [ -z "${SERVER_ADDRESS}" ]; then
+        SERVER_ADDRESS="${DEFAULT_SERVER}"
+    fi
 fi
 
-printf "Enter your registration token: "
-read -r REGISTRATION_TOKEN
+REGISTRATION_TOKEN="${VORD_REGISTRATION_TOKEN:-}"
 if [ -z "${REGISTRATION_TOKEN}" ]; then
-    error "Registration token is required. You can find it in the Vord Fleet dashboard under Machines > Register."
-    exit 1
+    printf "Enter your registration token: " > /dev/tty
+    read -r REGISTRATION_TOKEN < /dev/tty
+    if [ -z "${REGISTRATION_TOKEN}" ]; then
+        error "Registration token is required. You can find it in the Vord Fleet dashboard under Machines > Register."
+        exit 1
+    fi
 fi
 
 # --- Write Configuration ---
@@ -136,6 +142,12 @@ use_tls = true
 registration_token = "${REGISTRATION_TOKEN}"
 EOF
 chmod 0600 "${CONFIG_FILE}"
+
+# --- Create Data Directory ---
+
+info "Creating data directory..."
+mkdir -p /var/lib/vord-agent
+chmod 0750 /var/lib/vord-agent
 
 # --- Enable and Start the Agent ---
 

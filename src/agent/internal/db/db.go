@@ -31,6 +31,14 @@ func Open(dbPath string) (*sql.DB, error) {
 
 	conn.SetMaxOpenConns(1)
 
+	// Force the driver to create the database file by pinging. sql.Open is lazy
+	// and does not actually open or create the file until the first operation.
+	if err := conn.Ping(); err != nil {
+		conn.Close()
+
+		return nil, fmt.Errorf("verifying database connection: %w", err)
+	}
+
 	// Restrict database file to owner-only access (0600). The agent runs as root,
 	// so this ensures the API key stored in agent_config is only readable by root.
 	if dbPath != ":memory:" {

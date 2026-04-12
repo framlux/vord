@@ -21,7 +21,7 @@ function shellEscape(value: string): string {
  */
 export function generateInstallScript(
     token: string,
-    serverAddress: string = 'grpc.vordfleet.dev',
+    serverAddress: string = 'grpc.app.vordfleet.dev',
     serverPort: number = 443
 ): string {
     const escapedToken = shellEscape(token);
@@ -37,6 +37,8 @@ export function generateInstallScript(
 # Usage: sudo bash install.sh
 
 set -euo pipefail
+
+export PATH="/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:\${PATH}"
 
 GPG_KEY_URL="https://apt.fury.io/framlux/gpg.key"
 APT_REPO_URL="https://packages.framlux.io/apt/"
@@ -85,12 +87,7 @@ info "Detected package manager: \${PKG_MANAGER}"
 info "Importing Framlux GPG key..."
 
 if [ "\${PKG_MANAGER}" = "apt" ]; then
-    if command -v gpg >/dev/null 2>&1; then
-        curl -fsSL "\${GPG_KEY_URL}" | gpg --dearmor -o /usr/share/keyrings/framlux-archive-keyring.gpg
-    else
-        error "gpg is required but not installed. Install it with: apt-get install gnupg"
-        exit 1
-    fi
+    curl -fsSL "\${GPG_KEY_URL}" | apt-key add -
 else
     rpm --import "\${GPG_KEY_URL}"
 fi
@@ -101,7 +98,7 @@ info "Adding Framlux package repository..."
 
 if [ "\${PKG_MANAGER}" = "apt" ]; then
     cat > /etc/apt/sources.list.d/framlux.list <<EOF
-deb [signed-by=/usr/share/keyrings/framlux-archive-keyring.gpg] \${APT_REPO_URL} * *
+deb \${APT_REPO_URL} * *
 EOF
 else
     cat > /etc/yum.repos.d/framlux.repo <<EOF
@@ -153,6 +150,12 @@ use_tls = true
 registration_token = "\${REGISTRATION_TOKEN}"
 EOF
 chmod 0600 "\${CONFIG_FILE}"
+
+# --- Create Data Directory ---
+
+info "Creating data directory..."
+mkdir -p /var/lib/vord-agent
+chmod 0750 /var/lib/vord-agent
 
 # --- Enable and Start the Agent ---
 
