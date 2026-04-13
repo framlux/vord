@@ -116,8 +116,9 @@ public sealed class MachineStateStreamingService : BackgroundService
             using IServiceScope scope = _scopeFactory.CreateScope();
             DatabaseContext db = scope.ServiceProvider.GetRequiredService<DatabaseContext>();
 
+            DateTimeOffset streamingWindow = DateTimeOffset.UtcNow.AddDays(-2);
             List<MachineTelemetry> batch = await db.MachineTelemetry
-                .Where(t => t.Id > _highWaterMark)
+                .Where(t => t.Id > _highWaterMark && t.ReceivedAt > streamingWindow)
                 .OrderBy(t => t.Id)
                 .Take(BatchSize)
                 .ToListAsync(ct);
@@ -339,7 +340,7 @@ public sealed class MachineStateStreamingService : BackgroundService
         using JsonDocument doc = JsonDocument.Parse(payload);
         JsonElement root = doc.RootElement;
 
-        int? cpuPercent = root.TryGetProperty("cpu_percent", out JsonElement cp) ? cp.GetInt32() : null;
+        int? cpuPercent = root.TryGetProperty("cpu_usage_percent", out JsonElement cp) ? cp.GetInt32() : null;
 
         await db.MachineStateSummaries
             .Where(s => s.MachineId == machineId)
@@ -353,8 +354,8 @@ public sealed class MachineStateStreamingService : BackgroundService
         using JsonDocument doc = JsonDocument.Parse(payload);
         JsonElement root = doc.RootElement;
 
-        long? memUsed = root.TryGetProperty("memory_used_bytes", out JsonElement mu) ? mu.GetInt64() : null;
-        int? memPercent = root.TryGetProperty("memory_percent", out JsonElement mp) ? mp.GetInt32() : null;
+        long? memUsed = root.TryGetProperty("memory_used", out JsonElement mu) ? mu.GetInt64() : null;
+        int? memPercent = root.TryGetProperty("memory_usage_percent", out JsonElement mp) ? mp.GetInt32() : null;
 
         await db.MachineStateSummaries
             .Where(s => s.MachineId == machineId)
@@ -456,17 +457,31 @@ public sealed class MachineStateStreamingService : BackgroundService
         try
         {
             using JsonDocument doc = JsonDocument.Parse(diskUsagesJson);
-            if (doc.RootElement.ValueKind == JsonValueKind.Array)
+            JsonElement root = doc.RootElement;
+
+            // The payload is serialized from DiskUtilizationRecord which wraps disks in a "disks" property.
+            JsonElement disksElement;
+            if (root.ValueKind == JsonValueKind.Array)
             {
-                foreach (JsonElement disk in doc.RootElement.EnumerateArray())
+                disksElement = root;
+            }
+            else if (root.TryGetProperty("disks", out JsonElement d) && (d.ValueKind == JsonValueKind.Array))
+            {
+                disksElement = d;
+            }
+            else
+            {
+                return maxUsage;
+            }
+
+            foreach (JsonElement disk in disksElement.EnumerateArray())
+            {
+                if (disk.TryGetProperty("usage_percent", out JsonElement up))
                 {
-                    if (disk.TryGetProperty("usage_percent", out JsonElement up))
+                    int usage = up.GetInt32();
+                    if (usage > maxUsage)
                     {
-                        int usage = up.GetInt32();
-                        if (usage > maxUsage)
-                        {
-                            maxUsage = usage;
-                        }
+                        maxUsage = usage;
                     }
                 }
             }

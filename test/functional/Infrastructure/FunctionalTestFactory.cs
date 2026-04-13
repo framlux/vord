@@ -156,8 +156,6 @@ public class FunctionalTestFactory : WebApplicationFactory<Program>
             });
 
             // Remove hosted services that depend on Redis, distributed locking, or billing gRPC
-            RemoveHostedService<TelemetryRetentionService>(services);
-            RemoveHostedService<TelemetryCleanupService>(services);
             RemoveHostedService<DataExportBackgroundService>(services);
             RemoveHostedService<StripeSyncService>(services);
             RemoveHostedService<MachineStateStreamingService>(services);

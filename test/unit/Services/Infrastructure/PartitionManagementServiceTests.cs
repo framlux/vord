@@ -3,11 +3,7 @@
 // See LICENSE for details.
 
 using Framlux.FleetManagement.Database;
-using Framlux.FleetManagement.Database.Cache;
-using Framlux.FleetManagement.Database.Enums;
-using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Server.Services.Infrastructure;
-using Framlux.FleetManagement.Server.Services.ServerConfiguration;
 using Framlux.FleetManagement.Test.Infrastructure;
 using LinqToDB;
 using Microsoft.Extensions.DependencyInjection;
@@ -22,89 +18,82 @@ namespace Framlux.FleetManagement.Test.Services.Infrastructure;
 /// </summary>
 public class PartitionManagementServiceTests
 {
-    private static ServerConfigurationService CreateConfigService()
-    {
-        IServerSettingsCache cache = Substitute.For<IServerSettingsCache>();
-        cache.GetSettingAsync(Arg.Any<ServerConfigurationSettingKeys>(), Arg.Any<CancellationToken>())
-            .Returns((string?)null);
-
-        IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
-        IDatabase redisDb = Substitute.For<IDatabase>();
-        redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(redisDb);
-        redisDb.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
-            .Returns(Task.FromResult<RedisValue>(RedisValue.Null));
-
-        return new ServerConfigurationService(cache, redis);
-    }
-
     // ========== BuildPartitionName ==========
 
     [Test]
-    public async Task BuildPartitionName_NormalMonth_CorrectFormat()
+    public async Task BuildPartitionName_SpecificDate_CorrectFormat()
     {
-        string result = PartitionManagementService.BuildPartitionName("MachineTelemetry", 2026, 3);
+        DateOnly date = new(2026, 3, 15);
+        string result = PartitionManagementService.BuildPartitionName("MachineTelemetry", date);
 
-        await Assert.That(result).IsEqualTo("machinetelemetry_y2026m03");
+        await Assert.That(result).IsEqualTo("machinetelemetry_d20260315");
     }
 
     [Test]
-    public async Task BuildPartitionName_SingleDigitMonth_ZeroPadded()
+    public async Task BuildPartitionName_SingleDigitMonthAndDay_ZeroPadded()
     {
-        string result = PartitionManagementService.BuildPartitionName("AuditLog", 2026, 1);
+        DateOnly date = new(2026, 1, 5);
+        string result = PartitionManagementService.BuildPartitionName("AuditLog", date);
 
-        await Assert.That(result).IsEqualTo("auditlog_y2026m01");
+        await Assert.That(result).IsEqualTo("auditlog_d20260105");
     }
 
     [Test]
-    public async Task BuildPartitionName_December_CorrectFormat()
+    public async Task BuildPartitionName_December31_CorrectFormat()
     {
-        string result = PartitionManagementService.BuildPartitionName("MachineTelemetry", 2026, 12);
+        DateOnly date = new(2026, 12, 31);
+        string result = PartitionManagementService.BuildPartitionName("MachineTelemetry", date);
 
-        await Assert.That(result).IsEqualTo("machinetelemetry_y2026m12");
+        await Assert.That(result).IsEqualTo("machinetelemetry_d20261231");
     }
 
     [Test]
     public async Task BuildPartitionName_UpperCaseTable_LowercaseOutput()
     {
-        string result = PartitionManagementService.BuildPartitionName("TELEMETRY", 2026, 5);
+        DateOnly date = new(2026, 5, 10);
+        string result = PartitionManagementService.BuildPartitionName("TELEMETRY", date);
 
-        await Assert.That(result).IsEqualTo("telemetry_y2026m05");
+        await Assert.That(result).IsEqualTo("telemetry_d20260510");
     }
 
     // ========== BuildCreatePartitionSql ==========
 
     [Test]
-    public async Task BuildCreatePartitionSql_NormalMonth_CorrectFromAndToRange()
+    public async Task BuildCreatePartitionSql_NormalDate_CorrectFromAndToRange()
     {
-        string sql = PartitionManagementService.BuildCreatePartitionSql("MachineTelemetry", 2026, 3);
+        DateOnly date = new(2026, 3, 15);
+        string sql = PartitionManagementService.BuildCreatePartitionSql("MachineTelemetry", date);
 
-        await Assert.That(sql).Contains("FROM ('2026-03-01')");
+        await Assert.That(sql).Contains("FROM ('2026-03-15')");
+        await Assert.That(sql).Contains("TO ('2026-03-16')");
+        await Assert.That(sql).Contains("machinetelemetry_d20260315");
+    }
+
+    [Test]
+    public async Task BuildCreatePartitionSql_EndOfMonth_RollsToNextMonth()
+    {
+        DateOnly date = new(2026, 3, 31);
+        string sql = PartitionManagementService.BuildCreatePartitionSql("MachineTelemetry", date);
+
+        await Assert.That(sql).Contains("FROM ('2026-03-31')");
         await Assert.That(sql).Contains("TO ('2026-04-01')");
-        await Assert.That(sql).Contains("machinetelemetry_y2026m03");
     }
 
     [Test]
-    public async Task BuildCreatePartitionSql_DecemberRollover_UsesNextYear()
+    public async Task BuildCreatePartitionSql_December31_RollsToNextYear()
     {
-        string sql = PartitionManagementService.BuildCreatePartitionSql("MachineTelemetry", 2026, 12);
+        DateOnly date = new(2026, 12, 31);
+        string sql = PartitionManagementService.BuildCreatePartitionSql("MachineTelemetry", date);
 
-        await Assert.That(sql).Contains("FROM ('2026-12-01')");
+        await Assert.That(sql).Contains("FROM ('2026-12-31')");
         await Assert.That(sql).Contains("TO ('2027-01-01')");
-    }
-
-    [Test]
-    public async Task BuildCreatePartitionSql_January_CorrectRange()
-    {
-        string sql = PartitionManagementService.BuildCreatePartitionSql("AuditLog", 2027, 1);
-
-        await Assert.That(sql).Contains("FROM ('2027-01-01')");
-        await Assert.That(sql).Contains("TO ('2027-02-01')");
     }
 
     [Test]
     public async Task BuildCreatePartitionSql_ContainsCreateTableIfNotExists()
     {
-        string sql = PartitionManagementService.BuildCreatePartitionSql("MachineTelemetry", 2026, 6);
+        DateOnly date = new(2026, 6, 15);
+        string sql = PartitionManagementService.BuildCreatePartitionSql("MachineTelemetry", date);
 
         await Assert.That(sql).Contains("CREATE TABLE IF NOT EXISTS");
         await Assert.That(sql).Contains("PARTITION OF");
@@ -124,7 +113,7 @@ public class PartitionManagementServiceTests
         IDistributedLock distributedLock = Substitute.For<IDistributedLock>();
 
         PartitionManagementService service = new(
-            scopeFactory, dialect, CreateConfigService(), distributedLock,
+            scopeFactory, dialect, distributedLock,
             Substitute.For<ILogger<PartitionManagementService>>());
 
         using CancellationTokenSource cts = new(TimeSpan.FromMilliseconds(100));
@@ -168,7 +157,7 @@ public class PartitionManagementServiceTests
         ILogger<PartitionManagementService> logger = Substitute.For<ILogger<PartitionManagementService>>();
 
         PartitionManagementService service = new(
-            scopeFactory, dialect, CreateConfigService(), distributedLock, logger);
+            scopeFactory, dialect, distributedLock, logger);
 
         using CancellationTokenSource cts = new();
         await service.StartAsync(cts.Token);
@@ -192,7 +181,7 @@ public class PartitionManagementServiceTests
         dialect.SupportsPartitioning.Returns(false);
 
         PartitionManagementService service = new(
-            scopeFactory, dialect, CreateConfigService(),
+            scopeFactory, dialect,
             Substitute.For<IDistributedLock>(),
             Substitute.For<ILogger<PartitionManagementService>>());
 
@@ -263,7 +252,7 @@ public class PartitionManagementServiceTests
         ILogger<PartitionManagementService> logger = Substitute.For<ILogger<PartitionManagementService>>();
 
         PartitionManagementService service = new(
-            scopeFactory, dialect, CreateConfigService(), distributedLock, logger);
+            scopeFactory, dialect, distributedLock, logger);
 
         using CancellationTokenSource cts = new();
         await service.StartAsync(cts.Token);
@@ -277,5 +266,83 @@ public class PartitionManagementServiceTests
         // The service should have completed without error — no exceptions thrown
         // and the lock was acquired successfully
         await distributedLock.Received().TryAcquireAsync(Arg.Any<string>(), Arg.Any<TimeSpan>());
+    }
+
+    // ========== BuildPartitionName with leap year Feb 29 ==========
+
+    [Test]
+    public async Task BuildPartitionName_LeapYearFeb29_CorrectFormat()
+    {
+        // 2028 is a leap year; Feb 29 must be handled correctly
+        DateOnly date = new(2028, 2, 29);
+        string result = PartitionManagementService.BuildPartitionName("MachineTelemetry", date);
+
+        await Assert.That(result).IsEqualTo("machinetelemetry_d20280229");
+    }
+
+    // ========== BuildCreatePartitionSql for Feb 28 non-leap year rolls to March ==========
+
+    [Test]
+    public async Task BuildCreatePartitionSql_Feb28NonLeapYear_RollsToMarch1()
+    {
+        // In a non-leap year, the day after Feb 28 is March 1
+        DateOnly date = new(2027, 2, 28);
+        string sql = PartitionManagementService.BuildCreatePartitionSql("MachineTelemetry", date);
+
+        await Assert.That(sql).Contains("FROM ('2027-02-28')");
+        await Assert.That(sql).Contains("TO ('2027-03-01')");
+    }
+
+    // ========== BuildCreatePartitionSql for Feb 29 leap year rolls to March 1 ==========
+
+    [Test]
+    public async Task BuildCreatePartitionSql_LeapYearFeb29_RollsToMarch1()
+    {
+        // In a leap year, Feb 29 + 1 day = March 1
+        DateOnly date = new(2028, 2, 29);
+        string sql = PartitionManagementService.BuildCreatePartitionSql("MachineTelemetry", date);
+
+        await Assert.That(sql).Contains("FROM ('2028-02-29')");
+        await Assert.That(sql).Contains("TO ('2028-03-01')");
+    }
+
+    // ========== BuildPartitionName at origin date ==========
+
+    [Test]
+    public async Task BuildPartitionName_OriginDate_ProducesExpectedFormat()
+    {
+        // If all data is recent and the cutoff equals the origin date, the partition
+        // name for that date must still be well-formed so the drop loop can compare
+        // against it without error.
+        DateOnly originDate = new(2026, 1, 1);
+        string result = PartitionManagementService.BuildPartitionName("MachineTelemetry", originDate);
+
+        await Assert.That(result).IsEqualTo("machinetelemetry_d20260101");
+    }
+
+    [Test]
+    public async Task BuildCreatePartitionSql_OriginDate_ProducesValidSql()
+    {
+        // The origin date must produce valid partition SQL with correct FROM/TO boundaries.
+        DateOnly originDate = new(2026, 1, 1);
+        string sql = PartitionManagementService.BuildCreatePartitionSql("MachineTelemetry", originDate);
+
+        await Assert.That(sql).Contains("FROM ('2026-01-01')");
+        await Assert.That(sql).Contains("TO ('2026-01-02')");
+        await Assert.That(sql).Contains("machinetelemetry_d20260101");
+        await Assert.That(sql).Contains("CREATE TABLE IF NOT EXISTS");
+    }
+
+    // ========== BuildCreatePartitionSql at year boundary (Jan 1) ==========
+
+    [Test]
+    public async Task BuildCreatePartitionSql_January1_NextDayIsJanuary2NotYearRollover()
+    {
+        // Verify that January 1 increments to January 2, not some year-boundary edge case.
+        DateOnly date = new(2026, 1, 1);
+        string sql = PartitionManagementService.BuildCreatePartitionSql("MachineTelemetry", date);
+
+        await Assert.That(sql).Contains("FROM ('2026-01-01')");
+        await Assert.That(sql).Contains("TO ('2026-01-02')");
     }
 }

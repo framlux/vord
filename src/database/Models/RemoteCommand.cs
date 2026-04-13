@@ -164,10 +164,4 @@ public sealed class RemoteCommand
     /// </summary>
     [Column(Name = "ResultMessage"), Nullable]
     public string? ResultMessage { get; set; }
-
-    /// <summary>
-    /// When this record was soft-deleted for retention cleanup.
-    /// </summary>
-    [Column(Name = "DeletedAt"), Nullable]
-    public DateTimeOffset? DeletedAt { get; set; }
 }

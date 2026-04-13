@@ -270,7 +270,7 @@ public sealed class MachineStateService : IMachineStateService
 
         // Recent SSH sessions (last 20).
         List<SshSessionPayload> sshSessions = await db.MachineTelemetry
-            .Where(t => t.MachineId == machineId && t.TelemetryType == TelemetryTypeIds.SshSessions && t.DeletedAt == null)
+            .Where(t => t.MachineId == machineId && t.TelemetryType == TelemetryTypeIds.SshSessions)
             .OrderByDescending(t => t.ReceivedAt)
             .Take(20)
             .ToListAsync(ct)
@@ -309,9 +309,10 @@ public sealed class MachineStateService : IMachineStateService
     private static async Task<Dictionary<short, MachineTelemetry>> GetLatestTelemetryByType(
         DatabaseContext db, long machineId, CancellationToken ct)
     {
-        // Uses the composite index IX_MachineTelemetry_Active (partial index excluding soft-deleted rows).
+        // Limit scan to the last 7 days of partitions; older data is still in MachineStateSummary cache.
+        DateTimeOffset recencyCutoff = DateTimeOffset.UtcNow.AddDays(-7);
         List<MachineTelemetry> latest = await db.MachineTelemetry
-            .Where(t => t.MachineId == machineId && t.DeletedAt == null)
+            .Where(t => t.MachineId == machineId && t.ReceivedAt > recencyCutoff)
             .GroupBy(t => t.TelemetryType)
             .Select(g => g.OrderByDescending(t => t.ReceivedAt).First())
             .ToListAsync(ct);

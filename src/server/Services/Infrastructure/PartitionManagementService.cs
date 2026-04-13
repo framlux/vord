@@ -3,7 +3,6 @@
 // See LICENSE for details.
 
 using Framlux.FleetManagement.Database;
-using Framlux.FleetManagement.Server.Services.ServerConfiguration;
 using LinqToDB;
 using LinqToDB.Async;
 using LinqToDB.Data;
@@ -11,9 +10,9 @@ using LinqToDB.Data;
 namespace Framlux.FleetManagement.Server.Services.Infrastructure;
 
 /// <summary>
-/// Background service that manages monthly range partitions for time-series tables on PostgreSQL.
+/// Background service that manages daily range partitions for time-series tables on PostgreSQL.
 /// Creates future partitions ahead of time and drops partitions that exceed the maximum
-/// retention period across all tenants plus a configurable grace period.
+/// retention period across all tenants plus a buffer period.
 /// This service is a no-op on SQLite.
 /// </summary>
 public sealed class PartitionManagementService : BackgroundService
@@ -22,17 +21,17 @@ public sealed class PartitionManagementService : BackgroundService
     private static readonly TimeSpan RunInterval = TimeSpan.FromHours(24);
     private static readonly TimeSpan LockTtl = TimeSpan.FromMinutes(30);
     private const string LockKey = "lock:partition-management";
-    private const int MonthsAhead = 3;
+    private const int DaysAhead = 7;
+    private const int DropBufferDays = 7;
 
     /// <summary>
-    /// The earliest year from which partitions may exist. Partitions prior to this are never checked.
+    /// The earliest date from which partitions may exist. Partitions prior to this are never checked.
     /// Matches the initial migration's partition range.
     /// </summary>
-    private const int PartitionOriginYear = 2026;
+    private static readonly DateOnly PartitionOriginDate = new(2026, 1, 1);
 
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly ISqlDialect _sqlDialect;
-    private readonly ServerConfigurationService _configService;
     private readonly IDistributedLock _distributedLock;
     private readonly ILogger<PartitionManagementService> _logger;
 
@@ -42,13 +41,11 @@ public sealed class PartitionManagementService : BackgroundService
     public PartitionManagementService(
         IServiceScopeFactory scopeFactory,
         ISqlDialect sqlDialect,
-        ServerConfigurationService configService,
         IDistributedLock distributedLock,
         ILogger<PartitionManagementService> logger)
     {
         _scopeFactory = scopeFactory;
         _sqlDialect = sqlDialect;
-        _configService = configService;
         _distributedLock = distributedLock;
         _logger = logger;
     }
@@ -104,10 +101,10 @@ public sealed class PartitionManagementService : BackgroundService
 
         foreach (PartitionedTableConfig.PartitionedTable table in PartitionedTableConfig.Tables)
         {
-            for (int offset = 0; offset <= MonthsAhead; offset++)
+            for (int offset = 0; offset <= DaysAhead; offset++)
             {
-                DateTimeOffset target = now.AddMonths(offset);
-                string sql = BuildCreatePartitionSql(table.TableName, target.Year, target.Month);
+                DateOnly target = DateOnly.FromDateTime(now.AddDays(offset).UtcDateTime);
+                string sql = BuildCreatePartitionSql(table.TableName, target);
 
                 try
                 {
@@ -116,9 +113,8 @@ public sealed class PartitionManagementService : BackgroundService
                 }
                 catch (Exception ex)
                 {
-                    // Partition may already exist or overlap with an existing range.
-                    _logger.LogDebug(ex, "Partition management: could not create partition for {Table} ({Year}-{Month:D2})",
-                        table.TableName, target.Year, target.Month);
+                    _logger.LogDebug(ex, "Partition management: could not create partition for {Table} ({Date})",
+                        table.TableName, target);
                 }
             }
         }
@@ -131,7 +127,7 @@ public sealed class PartitionManagementService : BackgroundService
 
     private async Task DropExpiredPartitionsAsync(DatabaseContext db, CancellationToken ct)
     {
-        // Determine the oldest date we need to keep: max retention across all tenants + grace period.
+        // Determine the oldest date we need to keep: max retention across all tenants + buffer days.
         int? maxRetentionDays = await db.TenantSubscriptions
             .MaxAsync(s => (int?)s.RetentionDays, ct);
 
@@ -140,20 +136,22 @@ public sealed class PartitionManagementService : BackgroundService
             return;
         }
 
-        TimeSpan gracePeriod = await _configService.GetTelemetryCleanupGracePeriodAsync(ct);
-        DateTimeOffset cutoff = DateTimeOffset.UtcNow
-            .AddDays(-maxRetentionDays.Value)
-            .Subtract(gracePeriod);
+        DateOnly cutoff = DateOnly.FromDateTime(
+            DateTimeOffset.UtcNow
+                .AddDays(-maxRetentionDays.Value)
+                .AddDays(-DropBufferDays)
+                .UtcDateTime);
 
-        // Walk from the partition origin up through the cutoff month and issue DROP TABLE IF EXISTS.
+        // Walk from the partition origin and drop partitions whose day is before the cutoff.
+        // Each daily partition covers exactly [date, date+1), so it is safe to drop when date < cutoff.
         // Non-existent partitions are silently skipped by the IF EXISTS clause.
         foreach (PartitionedTableConfig.PartitionedTable table in PartitionedTableConfig.Tables)
         {
-            DateTimeOffset cursor = new(PartitionOriginYear, 1, 1, 0, 0, 0, TimeSpan.Zero);
+            DateOnly cursor = PartitionOriginDate;
 
             while (cursor < cutoff)
             {
-                string partitionName = BuildPartitionName(table.TableName, cursor.Year, cursor.Month);
+                string partitionName = BuildPartitionName(table.TableName, cursor);
                 string dropSql = $@"DROP TABLE IF EXISTS ""{partitionName}""";
 
                 try
@@ -165,7 +163,7 @@ public sealed class PartitionManagementService : BackgroundService
                     _logger.LogWarning(ex, "Partition management: could not drop partition {Partition}", partitionName);
                 }
 
-                cursor = cursor.AddMonths(1);
+                cursor = cursor.AddDays(1);
             }
         }
 
@@ -173,20 +171,25 @@ public sealed class PartitionManagementService : BackgroundService
             "Partition management: expired partition cleanup complete (cutoff: {Cutoff})", cutoff);
     }
 
-    internal static string BuildPartitionName(string tableName, int year, int month)
+    /// <summary>
+    /// Builds the partition table name for a given date.
+    /// </summary>
+    internal static string BuildPartitionName(string tableName, DateOnly date)
     {
-        return $"{tableName.ToLowerInvariant()}_y{year}m{month:D2}";
+        return $"{tableName.ToLowerInvariant()}_d{date:yyyyMMdd}";
     }
 
-    internal static string BuildCreatePartitionSql(string tableName, int year, int month)
+    /// <summary>
+    /// Builds the SQL statement to create a daily partition for the given table and date.
+    /// </summary>
+    internal static string BuildCreatePartitionSql(string tableName, DateOnly date)
     {
-        int nextYear = month == 12 ? year + 1 : year;
-        int nextMonth = month == 12 ? 1 : month + 1;
-        string partitionName = BuildPartitionName(tableName, year, month);
+        string partitionName = BuildPartitionName(tableName, date);
+        DateOnly nextDay = date.AddDays(1);
 
         return $"""
             CREATE TABLE IF NOT EXISTS "{partitionName}" PARTITION OF "{tableName}"
-            FOR VALUES FROM ('{year}-{month:D2}-01') TO ('{nextYear}-{nextMonth:D2}-01')
+            FOR VALUES FROM ('{date:yyyy-MM-dd}') TO ('{nextDay:yyyy-MM-dd}')
             """;
     }
 }

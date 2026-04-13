@@ -10,7 +10,7 @@ namespace Framlux.FleetManagement.Database.Migrations;
 /// <summary>
 /// Initial database migration that creates core tables for machine management, user accounts,
 /// telemetry, alerts, audit logging, and remote commands. Time-series tables are range-partitioned
-/// by month on PostgreSQL for efficient data retention and archival.
+/// by day on PostgreSQL for efficient data retention and archival.
 /// </summary>
 [MigrationVersion(2026, 04, 05, 1)]
 public sealed class InitialMigration : Migration
@@ -173,8 +173,7 @@ public sealed class InitialMigration : Migration
             .WithColumn("TelemetryType").AsInt16().NotNullable()
             .WithColumn("Payload").AsString().NotNullable()
             .WithColumn("ReceivedAt").AsDateTimeOffset().NotNullable()
-            .WithColumn("SourceEventId").AsString(64).Nullable()
-            .WithColumn("DeletedAt").AsDateTimeOffset().Nullable();
+            .WithColumn("SourceEventId").AsString(64).Nullable();
 
         IfDatabase("PostgreSQL").Execute.Sql("""
             CREATE TABLE "MachineTelemetry" (
@@ -185,7 +184,6 @@ public sealed class InitialMigration : Migration
                 "Payload" TEXT NOT NULL,
                 "ReceivedAt" TIMESTAMPTZ NOT NULL,
                 "SourceEventId" VARCHAR(64),
-                "DeletedAt" TIMESTAMPTZ,
                 PRIMARY KEY ("Id", "ReceivedAt")
             ) PARTITION BY RANGE ("ReceivedAt")
         """);
@@ -226,26 +224,6 @@ public sealed class InitialMigration : Migration
             @"CREATE UNIQUE INDEX ""IX_MachineTelemetry_SourceEventId""
               ON ""MachineTelemetry"" (""SourceEventId"")
               WHERE ""SourceEventId"" IS NOT NULL");
-
-        // Partial index for active telemetry queries (excludes soft-deleted rows).
-        IfDatabase("PostgreSQL").Execute.Sql(
-            @"CREATE INDEX ""IX_MachineTelemetry_Active""
-              ON ""MachineTelemetry"" (""MachineId"", ""TelemetryType"", ""ReceivedAt"" DESC)
-              WHERE ""DeletedAt"" IS NULL");
-        IfDatabase("SQLite").Execute.Sql(
-            @"CREATE INDEX ""IX_MachineTelemetry_Active""
-              ON ""MachineTelemetry"" (""MachineId"", ""TelemetryType"", ""ReceivedAt"" DESC)
-              WHERE ""DeletedAt"" IS NULL");
-
-        // Index on DeletedAt for efficient cleanup queries.
-        IfDatabase("PostgreSQL").Execute.Sql(
-            @"CREATE INDEX ""IX_MachineTelemetry_DeletedAt""
-              ON ""MachineTelemetry"" (""DeletedAt"")
-              WHERE ""DeletedAt"" IS NOT NULL");
-        IfDatabase("SQLite").Execute.Sql(
-            @"CREATE INDEX ""IX_MachineTelemetry_DeletedAt""
-              ON ""MachineTelemetry"" (""DeletedAt"")
-              WHERE ""DeletedAt"" IS NOT NULL");
 
         Create.Table(TableNames.TenantInvitations)
             .WithColumn("Id").AsInt32().PrimaryKey().Identity()
@@ -390,8 +368,7 @@ public sealed class InitialMigration : Migration
             .WithColumn("ResourceId").AsString(255).Nullable()
             .WithColumn("Details").AsString().Nullable()
             .WithColumn("IpAddress").AsString(45).Nullable()
-            .WithColumn("Timestamp").AsDateTimeOffset().NotNullable()
-            .WithColumn("DeletedAt").AsDateTimeOffset().Nullable();
+            .WithColumn("Timestamp").AsDateTimeOffset().NotNullable();
 
         IfDatabase("PostgreSQL").Execute.Sql("""
             CREATE TABLE "AuditLog" (
@@ -405,7 +382,6 @@ public sealed class InitialMigration : Migration
                 "Details" JSONB,
                 "IpAddress" VARCHAR(45),
                 "Timestamp" TIMESTAMPTZ NOT NULL,
-                "DeletedAt" TIMESTAMPTZ,
                 PRIMARY KEY ("Id", "Timestamp")
             ) PARTITION BY RANGE ("Timestamp")
         """);
@@ -414,11 +390,6 @@ public sealed class InitialMigration : Migration
             .OnTable(TableNames.AuditLog)
             .OnColumn("TenantId").Ascending()
             .OnColumn("Timestamp").Descending();
-
-        Create.Index("IX_AuditLog_TenantId_DeletedAt")
-            .OnTable(TableNames.AuditLog)
-            .OnColumn("TenantId").Ascending()
-            .OnColumn("DeletedAt").Ascending();
 
         Create.Table(TableNames.AlertRules)
             .WithColumn("Id").AsInt32().PrimaryKey().Identity().NotNullable()
@@ -450,8 +421,7 @@ public sealed class InitialMigration : Migration
             .WithColumn("Status").AsInt16().NotNullable()
             .WithColumn("TriggeredAt").AsDateTimeOffset().NotNullable()
             .WithColumn("AcknowledgedAt").AsDateTimeOffset().Nullable()
-            .WithColumn("ResolvedAt").AsDateTimeOffset().Nullable()
-            .WithColumn("DeletedAt").AsDateTimeOffset().Nullable();
+            .WithColumn("ResolvedAt").AsDateTimeOffset().Nullable();
 
         IfDatabase("PostgreSQL").Execute.Sql("""
             CREATE TABLE "AlertEvents" (
@@ -466,7 +436,6 @@ public sealed class InitialMigration : Migration
                 "TriggeredAt" TIMESTAMPTZ NOT NULL,
                 "AcknowledgedAt" TIMESTAMPTZ,
                 "ResolvedAt" TIMESTAMPTZ,
-                "DeletedAt" TIMESTAMPTZ,
                 PRIMARY KEY ("Id", "TriggeredAt")
             ) PARTITION BY RANGE ("TriggeredAt")
         """);
@@ -482,11 +451,6 @@ public sealed class InitialMigration : Migration
             .OnColumn("AlertRuleId").Ascending()
             .OnColumn("MachineId").Ascending()
             .OnColumn("Status").Ascending();
-
-        Create.Index("IX_AlertEvents_TenantId_DeletedAt")
-            .OnTable(TableNames.AlertEvents)
-            .OnColumn("TenantId").Ascending()
-            .OnColumn("DeletedAt").Ascending();
 
         Create.Table(TableNames.WebhookEndpoints)
             .WithColumn("Id").AsInt32().PrimaryKey().Identity().NotNullable()
@@ -549,8 +513,7 @@ public sealed class InitialMigration : Migration
             .WithColumn("ExitCode").AsInt32().Nullable()
             .WithColumn("Stdout").AsString().Nullable()
             .WithColumn("Stderr").AsString().Nullable()
-            .WithColumn("ResultMessage").AsString().Nullable()
-            .WithColumn("DeletedAt").AsDateTimeOffset().Nullable();
+            .WithColumn("ResultMessage").AsString().Nullable();
 
         IfDatabase("PostgreSQL").Execute.Sql("""
             CREATE TABLE "RemoteCommands" (
@@ -575,7 +538,6 @@ public sealed class InitialMigration : Migration
                 "Stdout" TEXT,
                 "Stderr" TEXT,
                 "ResultMessage" TEXT,
-                "DeletedAt" TIMESTAMPTZ,
                 PRIMARY KEY ("Id", "CreatedAt")
             ) PARTITION BY RANGE ("CreatedAt")
         """);
@@ -590,11 +552,6 @@ public sealed class InitialMigration : Migration
             .OnColumn("TenantId").Ascending()
             .OnColumn("CreatedAt").Descending();
 
-        Create.Index("IX_RemoteCommands_TenantId_DeletedAt")
-            .OnTable(TableNames.RemoteCommands)
-            .OnColumn("TenantId").Ascending()
-            .OnColumn("DeletedAt").Ascending();
-
         // Unique index on CommandId. On Postgres the partition key must be included.
         IfDatabase("PostgreSQL").Execute.Sql(
             @"CREATE UNIQUE INDEX ""IX_RemoteCommands_CommandId""
@@ -606,11 +563,11 @@ public sealed class InitialMigration : Migration
         // Upgrade Params to JSONB on PostgreSQL for the SQLite RemoteCommands path.
         // (The Postgres partitioned table already defines Params as JSONB.)
 
-        // Create initial monthly partitions and default partitions for all partitioned tables.
-        CreateInitialPartitions(TableNames.MachineTelemetry);
-        CreateInitialPartitions(TableNames.AuditLog);
-        CreateInitialPartitions(TableNames.AlertEvents);
-        CreateInitialPartitions(TableNames.RemoteCommands);
+        // Create initial daily partitions and default partitions for all partitioned tables.
+        CreateInitialDailyPartitions(TableNames.MachineTelemetry);
+        CreateInitialDailyPartitions(TableNames.AuditLog);
+        CreateInitialDailyPartitions(TableNames.AlertEvents);
+        CreateInitialDailyPartitions(TableNames.RemoteCommands);
     }
 
     /// <summary>
@@ -620,10 +577,6 @@ public sealed class InitialMigration : Migration
     {
         IfDatabase("PostgreSQL").Execute.Sql(@"DROP INDEX IF EXISTS ""IX_Machines_TenantId_Active""");
         IfDatabase("SQLite").Execute.Sql(@"DROP INDEX IF EXISTS ""IX_Machines_TenantId_Active""");
-        IfDatabase("PostgreSQL").Execute.Sql(@"DROP INDEX IF EXISTS ""IX_MachineTelemetry_DeletedAt""");
-        IfDatabase("SQLite").Execute.Sql(@"DROP INDEX IF EXISTS ""IX_MachineTelemetry_DeletedAt""");
-        IfDatabase("PostgreSQL").Execute.Sql(@"DROP INDEX IF EXISTS ""IX_MachineTelemetry_Active""");
-        IfDatabase("SQLite").Execute.Sql(@"DROP INDEX IF EXISTS ""IX_MachineTelemetry_Active""");
         IfDatabase("PostgreSQL").Execute.Sql(@"DROP INDEX IF EXISTS ""IX_MachineTelemetry_SourceEventId""");
         IfDatabase("SQLite").Execute.Sql(@"DROP INDEX IF EXISTS ""IX_MachineTelemetry_SourceEventId""");
         IfDatabase("PostgreSQL").Execute.Sql(@"DROP INDEX IF EXISTS ""IX_RemoteCommands_CommandId""");
@@ -652,25 +605,23 @@ public sealed class InitialMigration : Migration
     }
 
     /// <summary>
-    /// Creates monthly partitions for 2026-01 through 2027-12 plus a default partition
+    /// Creates daily partitions for 2026-01-01 through 2027-12-31 plus a default partition
     /// on PostgreSQL. On SQLite this is a no-op since partitioning is not supported.
     /// </summary>
-    private void CreateInitialPartitions(string tableName)
+    private void CreateInitialDailyPartitions(string tableName)
     {
         string lowerName = tableName.ToLowerInvariant();
+        DateOnly start = new DateOnly(2026, 1, 1);
+        DateOnly end = new DateOnly(2027, 12, 31);
 
-        for (int year = 2026; year <= 2027; year++)
+        for (DateOnly day = start; day <= end; day = day.AddDays(1))
         {
-            for (int month = 1; month <= 12; month++)
-            {
-                int nextYear = month == 12 ? year + 1 : year;
-                int nextMonth = month == 12 ? 1 : month + 1;
-                string partitionName = $"{lowerName}_y{year}m{month:D2}";
+            DateOnly nextDay = day.AddDays(1);
+            string partitionName = $"{lowerName}_d{day:yyyyMMdd}";
 
-                IfDatabase("PostgreSQL").Execute.Sql(
-                    $@"CREATE TABLE ""{partitionName}"" PARTITION OF ""{tableName}""
-                       FOR VALUES FROM ('{year}-{month:D2}-01') TO ('{nextYear}-{nextMonth:D2}-01')");
-            }
+            IfDatabase("PostgreSQL").Execute.Sql(
+                $@"CREATE TABLE ""{partitionName}"" PARTITION OF ""{tableName}""
+                       FOR VALUES FROM ('{day:yyyy}-{day:MM}-{day:dd}') TO ('{nextDay:yyyy}-{nextDay:MM}-{nextDay:dd}')");
         }
 
         IfDatabase("PostgreSQL").Execute.Sql(

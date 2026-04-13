@@ -480,7 +480,6 @@ public sealed class DataExportHandler : IDataExportHandler
             long capturedLastId = lastId;
             List<MachineTelemetry> batch = await _db.MachineTelemetry
                 .Where(t => machineIds.Contains(t.MachineId) &&
-                            t.DeletedAt == null &&
                             t.Id > capturedLastId)
                 .OrderBy(t => t.Id)
                 .Take(BatchSize)

@@ -55,11 +55,4 @@ public sealed class MachineTelemetry
     /// </summary>
     [Column("SourceEventId"), MaxLength(64)]
     public string? SourceEventId { get; set; }
-
-    /// <summary>
-    /// When the telemetry record was soft-deleted by the retention service.
-    /// Null means the record is active.
-    /// </summary>
-    [Column("DeletedAt")]
-    public DateTimeOffset? DeletedAt { get; set; }
 }

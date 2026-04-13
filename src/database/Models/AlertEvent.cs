@@ -61,8 +61,4 @@ public sealed class AlertEvent
     /// <summary>When the alert was resolved, if applicable.</summary>
     [Column("ResolvedAt"), Nullable]
     public DateTimeOffset? ResolvedAt { get; set; }
-
-    /// <summary>When this record was soft-deleted for retention cleanup.</summary>
-    [Column("DeletedAt"), Nullable]
-    public DateTimeOffset? DeletedAt { get; set; }
 }

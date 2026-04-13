@@ -171,7 +171,6 @@ public static class TestDataBuilder
             Payload = payload ?? """{"cpu": 42}""",
             ReceivedAt = DateTimeOffset.UtcNow,
             SourceEventId = Guid.NewGuid().ToString("N"),
-            DeletedAt = null
         };
     }
 

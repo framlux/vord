@@ -35,11 +35,6 @@ public enum ServerConfigurationSettingKeys : int
     CertificateExpiryWarningDays = 4,
 
     /// <summary>
-    /// Grace period in days before permanently deleting soft-deleted telemetry (default: 7).
-    /// </summary>
-    TelemetryCleanupGraceDays = 5,
-
-    /// <summary>
     /// Deduplication TTL in seconds for telemetry event IDs (default: 300).
     /// </summary>
     DeduplicationTtlSeconds = 6,

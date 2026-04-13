@@ -306,26 +306,6 @@ public class MachineDetailHandlerTests
         await Assert.That(result.Data!.Items.All(d => d.TelemetryType == 1)).IsEqualTo(true);
     }
 
-    [Test]
-    public async Task GetTelemetryAsync_ExcludesSoftDeletedTelemetry()
-    {
-        using TestDatabaseFactory dbFactory = new();
-        long machineId = await SeedMachine(dbFactory);
-        MachineTelemetry active = TestDataBuilder.BuildMachineTelemetry(machineId: machineId);
-        MachineTelemetry deleted = TestDataBuilder.BuildMachineTelemetry(machineId: machineId);
-        deleted.DeletedAt = DateTimeOffset.UtcNow;
-        await dbFactory.Context.InsertWithInt64IdentityAsync(active);
-        await dbFactory.Context.InsertWithInt64IdentityAsync(deleted);
-
-        MachineDetailHandler handler = CreateHandler(dbFactory);
-
-        ServiceResult<PaginatedResponse<MachineTelemetryDto>> result =
-            await handler.GetTelemetryAsync(machineId, 1, 1, 25, null, CancellationToken.None);
-
-        await Assert.That(result.IsSuccess).IsEqualTo(true);
-        await Assert.That(result.Data!.TotalCount).IsEqualTo(1);
-    }
-
     // ========== GetLatestTelemetryAsync tests ==========
 
     [Test]
@@ -470,5 +450,56 @@ public class MachineDetailHandlerTests
         await Assert.That(type2Result).IsNotNull();
         await Assert.That(type1Result!.Id).IsEqualTo(newestType1Id);
         await Assert.That(type2Result!.Id).IsEqualTo(newestType2Id);
+    }
+
+    // ========== GetLatestTelemetryAsync with stale telemetry ==========
+
+    [Test]
+    public async Task GetLatestTelemetryAsync_AllTelemetryOlderThanRecencyCutoff_ReturnsEmptyList()
+    {
+        // A machine that hasn't reported in 8 days should return an empty list
+        // because the 7-day recency cutoff excludes all old telemetry. This is the
+        // fallback scenario where cached state tables provide data instead.
+        using TestDatabaseFactory dbFactory = new();
+        long machineId = await SeedMachine(dbFactory);
+
+        MachineTelemetry oldTelemetry = TestDataBuilder.BuildMachineTelemetry(machineId: machineId, telemetryType: 1);
+        oldTelemetry.ReceivedAt = DateTimeOffset.UtcNow.AddDays(-8);
+        await dbFactory.Context.InsertWithInt64IdentityAsync(oldTelemetry);
+
+        MachineDetailHandler handler = CreateHandler(dbFactory);
+
+        ServiceResult<List<MachineTelemetryDto>> result =
+            await handler.GetLatestTelemetryAsync(machineId, 1, CancellationToken.None);
+
+        await Assert.That(result.IsSuccess).IsEqualTo(true);
+        await Assert.That(result.Data!.Count).IsEqualTo(0);
+    }
+
+    // ========== GetTelemetryAsync returns all telemetry without DeletedAt filtering ==========
+
+    [Test]
+    public async Task GetTelemetryAsync_AllRowsReturned_NoDeletedAtFiltering()
+    {
+        // After removing DeletedAt, ALL non-expired telemetry should be returned.
+        // This test verifies that no hidden filtering silently drops rows.
+        using TestDatabaseFactory dbFactory = new();
+        long machineId = await SeedMachine(dbFactory);
+
+        for (int i = 0; i < 3; i++)
+        {
+            MachineTelemetry t = TestDataBuilder.BuildMachineTelemetry(machineId: machineId, telemetryType: 1);
+            t.ReceivedAt = DateTimeOffset.UtcNow.AddMinutes(-i);
+            await dbFactory.Context.InsertWithInt64IdentityAsync(t);
+        }
+
+        MachineDetailHandler handler = CreateHandler(dbFactory);
+
+        ServiceResult<PaginatedResponse<MachineTelemetryDto>> result =
+            await handler.GetTelemetryAsync(machineId, 1, 1, 25, null, CancellationToken.None);
+
+        await Assert.That(result.IsSuccess).IsEqualTo(true);
+        await Assert.That(result.Data!.TotalCount).IsEqualTo(3);
+        await Assert.That(result.Data!.Items.Count).IsEqualTo(3);
     }
 }

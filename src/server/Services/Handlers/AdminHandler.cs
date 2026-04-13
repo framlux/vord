@@ -26,7 +26,6 @@ public sealed class AdminHandler : IAdminHandler
         [ServerConfigurationSettingKeys.AgentConfigRefreshSeconds] = "How often agents refresh their configuration from the server, in seconds (60-86400).",
         [ServerConfigurationSettingKeys.OnlineThresholdSeconds] = "Maximum seconds since last heartbeat before a machine is considered offline.",
         [ServerConfigurationSettingKeys.CertificateExpiryWarningDays] = "Number of days before certificate expiry to show a warning.",
-        [ServerConfigurationSettingKeys.TelemetryCleanupGraceDays] = "Grace period in days before permanently deleting soft-deleted telemetry.",
         [ServerConfigurationSettingKeys.DeduplicationTtlSeconds] = "Time-to-live in seconds for telemetry event deduplication.",
         [ServerConfigurationSettingKeys.AgentCommandPollSeconds] = "How often agents poll the server for pending commands, in seconds (10-300).",
         [ServerConfigurationSettingKeys.AllowUserSignup] = "Whether new users are allowed to self-register via social login.",

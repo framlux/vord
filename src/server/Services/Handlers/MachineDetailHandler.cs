@@ -153,7 +153,7 @@ public sealed class MachineDetailHandler : IMachineDetailHandler
         }
 
         IQueryable<MachineTelemetry> query = _db.MachineTelemetry
-            .Where(t => t.MachineId == machineId && t.DeletedAt == null);
+            .Where(t => t.MachineId == machineId);
 
         if (typeFilter.HasValue)
         {
@@ -203,8 +203,9 @@ public sealed class MachineDetailHandler : IMachineDetailHandler
             return ServiceResult<List<MachineTelemetryDto>>.NotFound();
         }
 
+        DateTimeOffset recencyCutoff = DateTimeOffset.UtcNow.AddDays(-7);
         List<MachineTelemetry> latestRecords = await _db.MachineTelemetry
-            .Where(t => t.MachineId == machineId && t.DeletedAt == null)
+            .Where(t => t.MachineId == machineId && t.ReceivedAt > recencyCutoff)
             .GroupBy(t => t.TelemetryType)
             .Select(g => g.OrderByDescending(t => t.ReceivedAt).First())
             .ToListAsync(ct);

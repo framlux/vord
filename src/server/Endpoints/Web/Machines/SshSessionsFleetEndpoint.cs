@@ -120,8 +120,7 @@ public sealed class SshSessionsFleetEndpoint : Endpoint<FleetSshSessionsRequest,
         List<long> machineIds = machineNames.Keys.ToList();
         List<MachineTelemetry> telemetryRows = await _db.MachineTelemetry
             .Where(t => machineIds.Contains(t.MachineId) &&
-                        t.TelemetryType == TelemetryTypeIds.SshSessions &&
-                        t.DeletedAt == null)
+                        t.TelemetryType == TelemetryTypeIds.SshSessions)
             .OrderByDescending(t => t.ReceivedAt)
             .ToListAsync(ct);
 

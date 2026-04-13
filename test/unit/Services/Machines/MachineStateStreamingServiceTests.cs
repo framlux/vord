@@ -224,7 +224,7 @@ public class MachineStateStreamingServiceTests
         TestServiceScopeFactory scopeFactory = new(db);
         MachineStateStreamingService service = CreateService(scopeFactory);
 
-        string payload = """{"cpu_percent":73}""";
+        string payload = """{"cpu_usage_percent":73}""";
         MachineTelemetry row = BuildRow(machineId, TelemetryTypeIds.CpuUsage, payload);
 
         await service.ProcessTelemetryRowAsync(db, row, CancellationToken.None);
@@ -250,7 +250,7 @@ public class MachineStateStreamingServiceTests
         TestServiceScopeFactory scopeFactory = new(db);
         MachineStateStreamingService service = CreateService(scopeFactory);
 
-        string payload = """{"memory_used_bytes":12884901888,"memory_percent":75}""";
+        string payload = """{"memory_used":12884901888,"memory_usage_percent":75}""";
         MachineTelemetry row = BuildRow(machineId, TelemetryTypeIds.MemoryUsage, payload);
 
         await service.ProcessTelemetryRowAsync(db, row, CancellationToken.None);
@@ -665,7 +665,7 @@ public class MachineStateStreamingServiceTests
         TestServiceScopeFactory scopeFactory = new(db);
         MachineStateStreamingService service = CreateService(scopeFactory);
 
-        string payload = """{"cpu_percent":50}""";
+        string payload = """{"cpu_usage_percent":50}""";
         MachineTelemetry row = BuildRow(machineId, TelemetryTypeIds.CpuUsage, payload);
 
         // Should not throw even though machine doesn't exist in summary/detail tables
@@ -691,7 +691,7 @@ public class MachineStateStreamingServiceTests
         TestServiceScopeFactory scopeFactory = new(db);
         MachineStateStreamingService service = CreateService(scopeFactory);
 
-        string payload = """{"cpu_percent":60}""";
+        string payload = """{"cpu_usage_percent":60}""";
         MachineTelemetry row = BuildRow(machineId, TelemetryTypeIds.CpuUsage, payload);
 
         // Process the same row twice
@@ -733,7 +733,7 @@ public class MachineStateStreamingServiceTests
             scopeFactory, settingsCache: settingsCache, distributedLock: distributedLock);
 
         // Seed a telemetry row at Id=42001 to verify HWM was loaded
-        MachineTelemetry telemetry = TestDataBuilder.BuildMachineTelemetry(machineId: 1, telemetryType: TelemetryTypeIds.CpuUsage, payload: """{"cpu_percent":50}""");
+        MachineTelemetry telemetry = TestDataBuilder.BuildMachineTelemetry(machineId: 1, telemetryType: TelemetryTypeIds.CpuUsage, payload: """{"cpu_usage_percent":50}""");
         telemetry.Id = 42001;
         await dbFactory.Context.InsertAsync(telemetry);
 
@@ -812,7 +812,7 @@ public class MachineStateStreamingServiceTests
 
         // First row has bad payload (will throw), second row is valid
         MachineTelemetry badRow = BuildRow(machineId, TelemetryTypeIds.CpuUsage, "INVALID_JSON", id: 1);
-        MachineTelemetry goodRow = BuildRow(machineId, TelemetryTypeIds.CpuUsage, """{"cpu_percent":55}""", id: 2);
+        MachineTelemetry goodRow = BuildRow(machineId, TelemetryTypeIds.CpuUsage, """{"cpu_usage_percent":55}""", id: 2);
 
         // Process bad row - should throw
         try
@@ -1052,5 +1052,92 @@ public class MachineStateStreamingServiceTests
             Substitute.For<IServerSettingsCache>(),
             null!))
             .Throws<ArgumentNullException>();
+    }
+
+    // ========== ProcessTelemetryRow_MalformedJsonPayload_ThrowsJsonException ==========
+
+    [Test]
+    public async Task ProcessTelemetryRow_MalformedJsonPayload_ThrowsJsonException()
+    {
+        // A corrupted telemetry row must not silently succeed. ProcessTelemetryRowAsync
+        // should throw a JsonException, which the caller (StreamLoopAsync) catches and
+        // logs before continuing to the next row.
+        using TestDatabaseFactory dbFactory = new();
+        DatabaseContext db = dbFactory.Context;
+        long machineId = 200;
+        await SeedSummaryAndDetail(db, machineId);
+
+        TestServiceScopeFactory scopeFactory = new(db);
+        MachineStateStreamingService service = CreateService(scopeFactory);
+
+        MachineTelemetry row = BuildRow(machineId, TelemetryTypeIds.CpuUsage, "not-valid-json{{{");
+
+        await Assert.That(async () => await service.ProcessTelemetryRowAsync(db, row, CancellationToken.None))
+            .Throws<System.Text.Json.JsonException>();
+    }
+
+    // ========== ProcessTelemetryRow_CpuUsageZero_StoresZeroNotNull ==========
+
+    [Test]
+    public async Task ProcessTelemetryRow_CpuUsageZero_StoresZeroNotNull()
+    {
+        // Protobuf default for int32 is 0. When cpu_usage_percent is explicitly 0 in
+        // the JSON payload, the streaming service must store 0 in the summary table,
+        // not null. This catches bugs where zero is treated as a missing/default value.
+        using TestDatabaseFactory dbFactory = new();
+        DatabaseContext db = dbFactory.Context;
+        long machineId = 201;
+        await SeedSummaryAndDetail(db, machineId);
+
+        TestServiceScopeFactory scopeFactory = new(db);
+        MachineStateStreamingService service = CreateService(scopeFactory);
+
+        string payload = """{"cpu_usage_percent":0}""";
+        MachineTelemetry row = BuildRow(machineId, TelemetryTypeIds.CpuUsage, payload);
+
+        await service.ProcessTelemetryRowAsync(db, row, CancellationToken.None);
+
+        MachineStateSummary? summary = await db.MachineStateSummaries
+            .Where(s => s.MachineId == machineId)
+            .FirstOrDefaultAsync();
+
+        await Assert.That(summary).IsNotNull();
+        await Assert.That(summary!.CpuUsagePercent).IsEqualTo(0);
+    }
+
+    // ========== ProcessTelemetryRow_FarFutureUnknownType_SilentlySkipped ==========
+
+    [Test]
+    public async Task ProcessTelemetryRow_FarFutureUnknownType_SilentlySkipped()
+    {
+        // New telemetry types added in future agent versions should not crash the
+        // streaming service. A type well outside the current range must be handled
+        // gracefully with no exceptions and no state table modifications.
+        using TestDatabaseFactory dbFactory = new();
+        DatabaseContext db = dbFactory.Context;
+        long machineId = 202;
+        await SeedSummaryAndDetail(db, machineId);
+
+        TestServiceScopeFactory scopeFactory = new(db);
+        MachineStateStreamingService service = CreateService(scopeFactory);
+
+        MachineTelemetry row = BuildRow(machineId, 9999, """{"future":"data"}""");
+
+        // Must not throw
+        await service.ProcessTelemetryRowAsync(db, row, CancellationToken.None);
+
+        // Summary and detail rows must remain unchanged
+        MachineStateSummary? summary = await db.MachineStateSummaries
+            .Where(s => s.MachineId == machineId)
+            .FirstOrDefaultAsync();
+
+        await Assert.That(summary).IsNotNull();
+        await Assert.That(summary!.LastSeenAt).IsNull();
+
+        MachineStateDetail? detail = await db.MachineStateDetails
+            .Where(d => d.MachineId == machineId)
+            .FirstOrDefaultAsync();
+
+        await Assert.That(detail).IsNotNull();
     }
 }

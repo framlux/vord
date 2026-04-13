@@ -238,41 +238,6 @@ public class DataExportHandlerTests
     }
 
     [Test]
-    public async Task ProcessExportJobAsync_SoftDeletedTelemetry_ExcludedFromExport()
-    {
-        using TestDatabaseFactory dbFactory = new();
-        long machineId = await SeedMachine(dbFactory, tenantId: 1);
-
-        MachineTelemetry active = TestDataBuilder.BuildMachineTelemetry(machineId: machineId);
-        await dbFactory.Context.InsertWithInt64IdentityAsync(active);
-
-        MachineTelemetry deleted = TestDataBuilder.BuildMachineTelemetry(machineId: machineId);
-        deleted.DeletedAt = DateTimeOffset.UtcNow;
-        await dbFactory.Context.InsertWithInt64IdentityAsync(deleted);
-
-        CaptureObjectStorageService capture = new();
-        DataExportHandler handler = CreateHandler(dbFactory, objectStorage: capture);
-
-        ServiceResult<int> createResult = await handler.ExportTenantDataAsync(1, 1, CancellationToken.None);
-        await handler.ProcessExportJobAsync(createResult.Data, CancellationToken.None);
-
-        try
-        {
-            using SqliteConnection sqlite = new($"Data Source={capture.LastCapturedPath}");
-            await sqlite.OpenAsync();
-
-            using SqliteCommand cmd = new("SELECT COUNT(*) FROM MachineTelemetry", sqlite);
-            long telemetryCount = Convert.ToInt64(await cmd.ExecuteScalarAsync());
-
-            await Assert.That(telemetryCount).IsEqualTo(1);
-        }
-        finally
-        {
-            CleanupFile(capture.LastCapturedPath);
-        }
-    }
-
-    [Test]
     public async Task ProcessExportJobAsync_MultipleTelemetryTypes_AllExported()
     {
         using TestDatabaseFactory dbFactory = new();

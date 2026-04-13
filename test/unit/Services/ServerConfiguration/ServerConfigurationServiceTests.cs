@@ -199,32 +199,6 @@ public class ServerConfigurationServiceTests
         await Assert.That(result).IsEqualTo(30);
     }
 
-    // ========== GetTelemetryCleanupGracePeriodAsync tests ==========
-
-    [Test]
-    public async Task GetTelemetryCleanupGracePeriodAsync_Default_Returns7Days()
-    {
-        (ServerConfigurationService service, IServerSettingsCache _, IDatabase redisDb) = CreateService();
-        redisDb.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
-            .Returns(Task.FromResult<RedisValue>(RedisValue.Null));
-
-        TimeSpan result = await service.GetTelemetryCleanupGracePeriodAsync(CancellationToken.None);
-
-        await Assert.That(result).IsEqualTo(TimeSpan.FromDays(7));
-    }
-
-    [Test]
-    public async Task GetTelemetryCleanupGracePeriodAsync_CustomValue_ReturnsAsDays()
-    {
-        (ServerConfigurationService service, IServerSettingsCache _, IDatabase redisDb) = CreateService();
-        redisDb.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
-            .Returns(Task.FromResult<RedisValue>("14"));
-
-        TimeSpan result = await service.GetTelemetryCleanupGracePeriodAsync(CancellationToken.None);
-
-        await Assert.That(result).IsEqualTo(TimeSpan.FromDays(14));
-    }
-
     // ========== GetDeduplicationTtlAsync tests ==========
 
     [Test]

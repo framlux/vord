@@ -19,7 +19,6 @@ public sealed class ServerConfigurationService
     private const int DefaultAgentConfigRefreshSeconds = 900;
     private const int DefaultOnlineThresholdSeconds = 300;
     private const int DefaultCertificateExpiryWarningDays = 30;
-    private const int DefaultTelemetryCleanupGraceDays = 7;
     private const int DefaultDeduplicationTtlSeconds = 300;
     private const int DefaultAgentCommandPollSeconds = 30;
     private const int DefaultTelemetryCollectFastSeconds = 30;
@@ -74,16 +73,6 @@ public sealed class ServerConfigurationService
     public async Task<int> GetCertificateExpiryWarningDaysAsync(CancellationToken ct = default)
     {
         return await GetIntSettingAsync(ServerConfigurationSettingKeys.CertificateExpiryWarningDays, DefaultCertificateExpiryWarningDays, ct);
-    }
-
-    /// <summary>
-    /// Gets the telemetry cleanup grace period as a TimeSpan.
-    /// </summary>
-    public async Task<TimeSpan> GetTelemetryCleanupGracePeriodAsync(CancellationToken ct = default)
-    {
-        int days = await GetIntSettingAsync(ServerConfigurationSettingKeys.TelemetryCleanupGraceDays, DefaultTelemetryCleanupGraceDays, ct);
-
-        return TimeSpan.FromDays(days);
     }
 
     /// <summary>

@@ -17,7 +17,6 @@ using Framlux.FleetManagement.Server.Services.Handlers;
 using Framlux.FleetManagement.Server.Services.Infrastructure;
 using Framlux.FleetManagement.Server.Services.Machines;
 using Framlux.FleetManagement.Server.Services.Notifications;
-using Framlux.FleetManagement.Server.Services.Retention;
 using Framlux.FleetManagement.Server.Services.Security;
 using Framlux.FleetManagement.Server.Services.ServerConfiguration;
 using Framlux.FleetManagement.Server.Services.Telemetry;
@@ -347,10 +346,6 @@ else
 }
 
 builder.Services.AddSingleton<IAlertDeliveryService, AlertDeliveryService>();
-builder.Services.AddHostedService<TelemetryRetentionService>();
-builder.Services.AddHostedService<TelemetryCleanupService>();
-builder.Services.AddHostedService<DataRetentionService>();
-builder.Services.AddHostedService<DataCleanupService>();
 builder.Services.AddHostedService<AlertEvaluationService>();
 builder.Services.AddHostedService<CommandExpiryBackgroundService>();
 builder.Services.AddHostedService<MachineStateStreamingService>();
