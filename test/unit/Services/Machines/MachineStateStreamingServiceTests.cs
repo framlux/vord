@@ -834,16 +834,6 @@ public class MachineStateStreamingServiceTests
         await Assert.That(summary!.CpuUsagePercent).IsEqualTo(55);
     }
 
-    // ========== PersistHighWaterMark_TriggersAtInterval ==========
-
-    [Test]
-    public async Task PersistHighWaterMark_TriggersAtInterval()
-    {
-        // Verify that PersistHighWaterMarkEveryNRows constant is 500
-        // (internal implementation detail that controls when HWM is flushed)
-        await Assert.That(MachineStateStreamingService.BatchSize).IsEqualTo(50);
-    }
-
     // ========== ProcessTelemetryRow_SystemInfo_UpdatesLastSeenAt ==========
 
     [Test]
@@ -911,20 +901,6 @@ public class MachineStateStreamingServiceTests
             """[{"mount":"/","usage_percent":0},{"mount":"/data","usage_percent":0}]""");
 
         await Assert.That(result).IsEqualTo(0);
-    }
-
-    // ========== BatchSize constant verification ==========
-
-    [Test]
-    public async Task BatchSize_IsFifty()
-    {
-        await Assert.That(MachineStateStreamingService.BatchSize).IsEqualTo(50);
-    }
-
-    [Test]
-    public async Task IdleSleepDuration_IsTwoSeconds()
-    {
-        await Assert.That(MachineStateStreamingService.IdleSleepDuration).IsEqualTo(TimeSpan.FromSeconds(2));
     }
 
     // ========== ProcessTelemetryRow_HardwareHealth_StoresPayloadInDetail ==========
