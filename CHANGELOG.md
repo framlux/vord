@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file. See [versionize](https://github.com/versionize/versionize) for commit guidelines.
 
+<a name="2.2.0"></a>
+## [2.2.0](https://www.github.com/framlux/vord/releases/tag/v2.2.0) (2026-04-12)
+
+### Features
+
+* MOving from monthly postgres partitions to daily for better DB performance ([b096ad8](https://www.github.com/framlux/vord/commit/b096ad86d126261c44a936d57938560445f90b51))
+
 <a name="2.1.3"></a>
 ## [2.1.3](https://www.github.com/framlux/vord/releases/tag/v2.1.3) (2026-04-12)
 

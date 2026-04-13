@@ -7,7 +7,7 @@
     <RootNamespace>Framlux.Vord.Database</RootNamespace>
     <AssemblyName>Framlux.Vord.Database</AssemblyName>
     <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
-    <Version>2.1.3</Version>
+    <Version>2.2.0</Version>
   </PropertyGroup>
 
   <ItemGroup>
