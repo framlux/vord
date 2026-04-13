@@ -432,7 +432,7 @@
 						<div class="flex justify-between">
 							<span class="text-sm text-surface-500 dark:text-surface-400">Services</span>
 							<span class="text-sm text-surface-900 dark:text-surface-100">
-								{#if machineDetail.failedServices.length > 0}
+								{#if (machineDetail.failedServices?.length ?? 0) > 0}
 									<span class="font-medium text-red-600 dark:text-red-400">{machineDetail.failedServices.length} failed</span>
 									/ {machineDetail.totalServices}
 								{:else}
@@ -443,9 +443,9 @@
 						{#if machineDetail.packageUpdates}
 							<div class="flex justify-between">
 								<span class="text-sm text-surface-500 dark:text-surface-400">Pending Updates</span>
-								<span class="text-sm text-surface-900 dark:text-surface-100">{machineDetail.packageUpdates.updates.length}</span>
+								<span class="text-sm text-surface-900 dark:text-surface-100">{machineDetail.packageUpdates.updates?.length ?? 0}</span>
 							</div>
-							{@const securityCount = machineDetail.packageUpdates.updates.filter(u => u.isSecurityUpdate).length}
+							{@const securityCount = (machineDetail.packageUpdates.updates ?? []).filter(u => u.isSecurityUpdate).length}
 							{#if securityCount > 0}
 								<div class="flex justify-between">
 									<span class="text-sm text-surface-500 dark:text-surface-400">Security Updates</span>
@@ -459,7 +459,7 @@
 		</div>
 
 		<!-- Failed Services (if any) -->
-		{#if machineDetail && machineDetail.failedServices.length > 0}
+		{#if machineDetail && (machineDetail.failedServices?.length ?? 0) > 0}
 			<div class="mt-4 rounded-xl border border-red-200 bg-red-50/50 p-5 dark:border-red-900/30 dark:bg-red-900/10">
 				<h3 class="mb-3 text-sm font-semibold text-red-800 dark:text-red-400">Failed Services</h3>
 				<div class="overflow-x-auto">
@@ -472,7 +472,7 @@
 							</tr>
 						</thead>
 						<tbody class="divide-y divide-red-100 dark:divide-red-900/20">
-							{#each machineDetail.failedServices as svc}
+							{#each (machineDetail.failedServices ?? []) as svc}
 								<tr>
 									<td class="py-2 pr-4 font-mono text-xs text-red-700 dark:text-red-300">{svc.unit}</td>
 									<td class="py-2 pr-4 text-xs text-red-600 dark:text-red-400">{svc.activeState}/{svc.subState}</td>
@@ -486,7 +486,7 @@
 		{/if}
 
 		<!-- Recent SSH Sessions (if any) -->
-		{#if machineDetail && machineDetail.recentSshSessions.length > 0}
+		{#if machineDetail && (machineDetail.recentSshSessions?.length ?? 0) > 0}
 			<div class="mt-4 rounded-xl border border-surface-200 bg-surface-50 p-5 dark:border-surface-700 dark:bg-surface-800">
 				<h3 class="mb-3 text-xs font-semibold uppercase tracking-wider text-surface-400 dark:text-surface-500">Recent SSH Sessions</h3>
 				<div class="overflow-x-auto">
@@ -500,7 +500,7 @@
 							</tr>
 						</thead>
 						<tbody class="divide-y divide-surface-100 dark:divide-surface-700">
-							{#each machineDetail.recentSshSessions as session}
+							{#each (machineDetail.recentSshSessions ?? []) as session}
 								<tr>
 									<td class="py-2 pr-4 font-mono text-xs text-surface-700 dark:text-surface-300">{session.user}</td>
 									<td class="py-2 pr-4 font-mono text-xs text-surface-600 dark:text-surface-400">{session.sourceIp}</td>
@@ -629,11 +629,11 @@
 								{formatUptime(machineDetail.systemInfo.uptimeSeconds)}
 							</p>
 						</div>
-						{#if machineDetail.systemInfo.ipAddresses.length > 0}
+						{#if (machineDetail.systemInfo.ipAddresses?.length ?? 0) > 0}
 							<div class="sm:col-span-2">
 								<p class="text-xs text-surface-500 dark:text-surface-400">IP Addresses</p>
 								<div class="mt-1 flex flex-wrap gap-2">
-									{#each machineDetail.systemInfo.ipAddresses as ip}
+									{#each (machineDetail.systemInfo.ipAddresses ?? []) as ip}
 										<span class="rounded bg-surface-100 px-2 py-0.5 font-mono text-xs text-surface-700 dark:bg-surface-700 dark:text-surface-300">
 											{ip}
 										</span>
@@ -645,7 +645,7 @@
 				</div>
 
 				<!-- Disk Usage -->
-				{#if machineDetail.diskUsages && machineDetail.diskUsages.disks.length > 0}
+				{#if machineDetail.diskUsages && (machineDetail.diskUsages.disks?.length ?? 0) > 0}
 					<div class="rounded-xl border border-surface-200 bg-surface-50 p-6 dark:border-surface-700 dark:bg-surface-800">
 						<h3 class="mb-4 text-base font-semibold text-surface-900 dark:text-surface-50">Disk Usage</h3>
 						<div class="overflow-x-auto">
@@ -659,7 +659,7 @@
 									</tr>
 								</thead>
 								<tbody class="divide-y divide-surface-100 dark:divide-surface-700">
-									{#each machineDetail.diskUsages.disks as disk}
+									{#each (machineDetail.diskUsages?.disks ?? []) as disk}
 										<tr class="hover:bg-surface-50 dark:hover:bg-surface-700/50">
 											<td class="py-3 pr-4 font-mono text-xs text-surface-700 dark:text-surface-300">{disk.path}</td>
 											<td class="py-3 pr-4 font-mono text-xs text-surface-600 dark:text-surface-400">{disk.device}</td>
@@ -684,7 +684,7 @@
 				{#if machineDetail.hardwareHealth !== null}
 					<div class="space-y-4">
 						<!-- Disk SMART -->
-						{#if machineDetail.hardwareHealth.diskSmart.length > 0}
+						{#if (machineDetail.hardwareHealth.diskSmart?.length ?? 0) > 0}
 							<div class="rounded-xl border border-surface-200 bg-surface-50 p-6 dark:border-surface-700 dark:bg-surface-800">
 								<h3 class="mb-4 text-base font-semibold text-surface-900 dark:text-surface-50">Disk SMART</h3>
 								<div class="overflow-x-auto">
@@ -700,7 +700,7 @@
 											</tr>
 										</thead>
 										<tbody class="divide-y divide-surface-100 dark:divide-surface-700">
-											{#each machineDetail.hardwareHealth.diskSmart as disk}
+											{#each (machineDetail.hardwareHealth.diskSmart ?? []) as disk}
 												<tr class="hover:bg-surface-50 dark:hover:bg-surface-700/50">
 													<td class="py-3 pr-4 font-mono text-xs text-surface-700 dark:text-surface-300">{disk.device}</td>
 													<td class="py-3 pr-4 text-surface-700 dark:text-surface-300">{disk.model}</td>
@@ -721,7 +721,7 @@
 						{/if}
 
 						<!-- Fans -->
-						{#if machineDetail.hardwareHealth.fans.length > 0}
+						{#if (machineDetail.hardwareHealth.fans?.length ?? 0) > 0}
 							<div class="rounded-xl border border-surface-200 bg-surface-50 p-6 dark:border-surface-700 dark:bg-surface-800">
 								<h3 class="mb-4 text-base font-semibold text-surface-900 dark:text-surface-50">Fans</h3>
 								<div class="overflow-x-auto">
@@ -734,7 +734,7 @@
 											</tr>
 										</thead>
 										<tbody class="divide-y divide-surface-100 dark:divide-surface-700">
-											{#each machineDetail.hardwareHealth.fans as fan}
+											{#each (machineDetail.hardwareHealth.fans ?? []) as fan}
 												<tr class="hover:bg-surface-50 dark:hover:bg-surface-700/50">
 													<td class="py-3 pr-4 text-surface-700 dark:text-surface-300">{fan.name}</td>
 													<td class="py-3 pr-4 text-surface-700 dark:text-surface-300">{fan.rpm.toLocaleString()}</td>
@@ -748,7 +748,7 @@
 						{/if}
 
 						<!-- Power Supplies -->
-						{#if machineDetail.hardwareHealth.powerSupplies.length > 0}
+						{#if (machineDetail.hardwareHealth.powerSupplies?.length ?? 0) > 0}
 							<div class="rounded-xl border border-surface-200 bg-surface-50 p-6 dark:border-surface-700 dark:bg-surface-800">
 								<h3 class="mb-4 text-base font-semibold text-surface-900 dark:text-surface-50">Power Supplies</h3>
 								<div class="overflow-x-auto">
@@ -761,7 +761,7 @@
 											</tr>
 										</thead>
 										<tbody class="divide-y divide-surface-100 dark:divide-surface-700">
-											{#each machineDetail.hardwareHealth.powerSupplies as psu}
+											{#each (machineDetail.hardwareHealth.powerSupplies ?? []) as psu}
 												<tr class="hover:bg-surface-50 dark:hover:bg-surface-700/50">
 													<td class="py-3 pr-4 text-surface-700 dark:text-surface-300">{psu.name}</td>
 													<td class="py-3 pr-4 text-surface-700 dark:text-surface-300">{psu.watts} W</td>
@@ -775,7 +775,7 @@
 						{/if}
 
 						<!-- Temperatures -->
-						{#if machineDetail.hardwareHealth.temperatures.length > 0}
+						{#if (machineDetail.hardwareHealth.temperatures?.length ?? 0) > 0}
 							<div class="rounded-xl border border-surface-200 bg-surface-50 p-6 dark:border-surface-700 dark:bg-surface-800">
 								<h3 class="mb-4 text-base font-semibold text-surface-900 dark:text-surface-50">Temperatures</h3>
 								<div class="overflow-x-auto">
@@ -788,7 +788,7 @@
 											</tr>
 										</thead>
 										<tbody class="divide-y divide-surface-100 dark:divide-surface-700">
-											{#each machineDetail.hardwareHealth.temperatures as temp}
+											{#each (machineDetail.hardwareHealth.temperatures ?? []) as temp}
 												<tr class="hover:bg-surface-50 dark:hover:bg-surface-700/50">
 													<td class="py-3 pr-4 text-surface-700 dark:text-surface-300">{temp.name}</td>
 													<td class="py-3 pr-4 text-surface-700 dark:text-surface-300">{temp.celsius}°C</td>
