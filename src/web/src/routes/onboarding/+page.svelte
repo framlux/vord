@@ -55,6 +55,9 @@
 				return;
 			}
 
+			// Purge the in-memory session cache so the full-page redirect fetches fresh user data
+			await fetch('/api/session/purge', { method: 'POST', credentials: 'include' });
+
 			// Full page reload to refresh the session cache with new tenant roles
 			window.location.href = '/onboarding/success';
 		} catch {

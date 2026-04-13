@@ -2,8 +2,6 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
-using System.Text.Json.Serialization;
-
 namespace Framlux.FleetManagement.Server.Endpoints.Web.Models.Telemetry;
 
 /// <summary>
@@ -12,6 +10,5 @@ namespace Framlux.FleetManagement.Server.Endpoints.Web.Models.Telemetry;
 public sealed class DiskInfoPayload
 {
     /// <summary>List of disk info entries per mount.</summary>
-    [JsonPropertyName("disks")]
     public List<DiskInfoEntryDto> Disks { get; set; } = [];
 }

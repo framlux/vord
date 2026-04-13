@@ -2,8 +2,6 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
-using System.Text.Json.Serialization;
-
 namespace Framlux.FleetManagement.Server.Endpoints.Web.Models.Telemetry;
 
 /// <summary>
@@ -12,6 +10,5 @@ namespace Framlux.FleetManagement.Server.Endpoints.Web.Models.Telemetry;
 public sealed class ServiceStatusPayload
 {
     /// <summary>List of systemd services.</summary>
-    [JsonPropertyName("services")]
     public List<ServiceEntryDto> Services { get; set; } = [];
 }

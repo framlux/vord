@@ -2,8 +2,6 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
-using System.Text.Json.Serialization;
-
 namespace Framlux.FleetManagement.Server.Endpoints.Web.Models.Telemetry;
 
 /// <summary>
@@ -12,10 +10,8 @@ namespace Framlux.FleetManagement.Server.Endpoints.Web.Models.Telemetry;
 public sealed class PackageUpdatesPayload
 {
     /// <summary>Package manager name.</summary>
-    [JsonPropertyName("package_manager")]
     public string PackageManager { get; set; } = "";
 
     /// <summary>List of available updates.</summary>
-    [JsonPropertyName("updates")]
     public List<PackageUpdateDto> Updates { get; set; } = [];
 }
