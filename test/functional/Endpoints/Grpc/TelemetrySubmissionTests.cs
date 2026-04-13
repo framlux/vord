@@ -42,6 +42,7 @@ public sealed class TelemetrySubmissionTests
         TelemetryEnvelope envelope = new()
         {
             BatchId = batchId,
+            AgentTimestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
             Items =
             {
                 new TelemetryItem
@@ -90,6 +91,7 @@ public sealed class TelemetrySubmissionTests
         TelemetryEnvelope envelope = new()
         {
             BatchId = batchId,
+            AgentTimestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
             Items =
             {
                 new TelemetryItem
@@ -130,6 +132,7 @@ public sealed class TelemetrySubmissionTests
         TelemetryEnvelope envelope = new()
         {
             BatchId = batchId,
+            AgentTimestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
             Items =
             {
                 new TelemetryItem
@@ -169,6 +172,7 @@ public sealed class TelemetrySubmissionTests
         TelemetryEnvelope envelope = new()
         {
             BatchId = batchId,
+            AgentTimestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
             Items =
             {
                 new TelemetryItem
@@ -201,6 +205,7 @@ public sealed class TelemetrySubmissionTests
         TelemetryEnvelope envelope = new()
         {
             BatchId = Guid.NewGuid().ToString("N"),
+            AgentTimestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
             Items =
             {
                 new TelemetryItem
@@ -252,6 +257,7 @@ public sealed class TelemetrySubmissionTests
         TelemetryEnvelope envelope = new()
         {
             BatchId = batchId,
+            AgentTimestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
             Items =
             {
                 new TelemetryItem
@@ -294,6 +300,7 @@ public sealed class TelemetrySubmissionTests
         TelemetryEnvelope envelope = new()
         {
             BatchId = batchId,
+            AgentTimestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
             Items =
             {
                 new TelemetryItem
@@ -369,6 +376,7 @@ public sealed class TelemetrySubmissionTests
         TelemetryEnvelope envelope = new()
         {
             BatchId = batchId,
+            AgentTimestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
         };
 
         // Add 501 items (max is 500)
@@ -389,6 +397,170 @@ public sealed class TelemetrySubmissionTests
         await Assert.That(ack.Success).IsFalse();
         await Assert.That(ack.BatchId).IsEqualTo(batchId);
         await Assert.That(ack.ErrorMessage).IsEqualTo("Envelope exceeds maximum item count of 500");
+    }
+
+    [Test]
+    public async Task SubmitTelemetry_AgentClockSkewedForward_RejectsWithClockSkewError()
+    {
+        // Intent: A machine whose clock is 10 minutes ahead of server time sends
+        // unreliable timestamps. The server must reject the envelope.
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+
+        string apiKey = "telemetry-clock-ahead-key";
+        (long machineId, int tenantId) = await SeedMachineWithSubscription(db, apiKey);
+
+        using GrpcChannel channel = CreateChannel(factory);
+        Telemetry.TelemetryClient client = new(channel);
+
+        Metadata headers = new() { { "x-api-key", apiKey } };
+        string batchId = Guid.NewGuid().ToString("N");
+
+        TelemetryEnvelope envelope = new()
+        {
+            BatchId = batchId,
+            AgentTimestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(
+                DateTimeOffset.UtcNow.AddMinutes(10)),
+            Items =
+            {
+                new TelemetryItem
+                {
+                    EventId = Guid.NewGuid().ToString("N"),
+                    Type = TelemetryTypes.CpuUtilizationType,
+                    CpuUtilization = new CpuUtilizationRecord { CpuUsagePercent = 50 }
+                }
+            }
+        };
+
+        TelemetryAck ack = await client.SubmitTelemetryAsync(envelope, headers: headers);
+
+        await Assert.That(ack.Success).IsFalse();
+        await Assert.That(ack.ErrorMessage).Contains("clock skew");
+
+        // Verify nothing was persisted
+        int count = await db.MachineTelemetry
+            .Where(t => t.MachineId == machineId)
+            .CountAsync();
+        await Assert.That(count).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task SubmitTelemetry_AgentClockSkewedBackward_RejectsWithClockSkewError()
+    {
+        // Intent: A machine whose clock is 10 minutes behind server time.
+        // Same rejection as forward skew — both directions are unreliable.
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+
+        string apiKey = "telemetry-clock-behind-key";
+        (long machineId, int tenantId) = await SeedMachineWithSubscription(db, apiKey);
+
+        using GrpcChannel channel = CreateChannel(factory);
+        Telemetry.TelemetryClient client = new(channel);
+
+        Metadata headers = new() { { "x-api-key", apiKey } };
+        string batchId = Guid.NewGuid().ToString("N");
+
+        TelemetryEnvelope envelope = new()
+        {
+            BatchId = batchId,
+            AgentTimestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(
+                DateTimeOffset.UtcNow.AddMinutes(-10)),
+            Items =
+            {
+                new TelemetryItem
+                {
+                    EventId = Guid.NewGuid().ToString("N"),
+                    Type = TelemetryTypes.CpuUtilizationType,
+                    CpuUtilization = new CpuUtilizationRecord { CpuUsagePercent = 50 }
+                }
+            }
+        };
+
+        TelemetryAck ack = await client.SubmitTelemetryAsync(envelope, headers: headers);
+
+        await Assert.That(ack.Success).IsFalse();
+        await Assert.That(ack.ErrorMessage).Contains("clock skew");
+    }
+
+    [Test]
+    public async Task SubmitTelemetry_AgentClockWithinSkewLimit_Succeeds()
+    {
+        // Intent: A machine with minor clock drift (2 minutes) should be accepted.
+        // This is within the ±5 minute tolerance.
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+
+        string apiKey = "telemetry-clock-ok-key";
+        (long machineId, int tenantId) = await SeedMachineWithSubscription(db, apiKey);
+
+        using GrpcChannel channel = CreateChannel(factory);
+        Telemetry.TelemetryClient client = new(channel);
+
+        Metadata headers = new() { { "x-api-key", apiKey } };
+
+        TelemetryEnvelope envelope = new()
+        {
+            BatchId = Guid.NewGuid().ToString("N"),
+            AgentTimestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(
+                DateTimeOffset.UtcNow.AddMinutes(2)),
+            Items =
+            {
+                new TelemetryItem
+                {
+                    EventId = Guid.NewGuid().ToString("N"),
+                    Type = TelemetryTypes.CpuUtilizationType,
+                    CpuUtilization = new CpuUtilizationRecord { CpuUsagePercent = 30 }
+                }
+            }
+        };
+
+        TelemetryAck ack = await client.SubmitTelemetryAsync(envelope, headers: headers);
+
+        await Assert.That(ack.Success).IsTrue();
+    }
+
+    [Test]
+    public async Task SubmitTelemetry_NoAgentTimestamp_RejectsWithMissingTimestampError()
+    {
+        // Intent: Every envelope must include agent_timestamp so the server can
+        // validate clock accuracy. Missing timestamps are rejected.
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+
+        string apiKey = "telemetry-no-timestamp-key";
+        (long machineId, int tenantId) = await SeedMachineWithSubscription(db, apiKey);
+
+        using GrpcChannel channel = CreateChannel(factory);
+        Telemetry.TelemetryClient client = new(channel);
+
+        Metadata headers = new() { { "x-api-key", apiKey } };
+
+        TelemetryEnvelope envelope = new()
+        {
+            BatchId = Guid.NewGuid().ToString("N"),
+            // No AgentTimestamp set
+            Items =
+            {
+                new TelemetryItem
+                {
+                    EventId = Guid.NewGuid().ToString("N"),
+                    Type = TelemetryTypes.CpuUtilizationType,
+                    CpuUtilization = new CpuUtilizationRecord { CpuUsagePercent = 20 }
+                }
+            }
+        };
+
+        TelemetryAck ack = await client.SubmitTelemetryAsync(envelope, headers: headers);
+
+        await Assert.That(ack.Success).IsFalse();
+        await Assert.That(ack.ErrorMessage).IsEqualTo("agent_timestamp is required");
+
+        // Verify nothing was persisted
+        int count = await db.MachineTelemetry
+            .Where(t => t.MachineId == machineId)
+            .CountAsync();
+        await Assert.That(count).IsEqualTo(0);
     }
 
     private static GrpcChannel CreateChannel(FunctionalTestFactory factory)

@@ -46,6 +46,13 @@ public sealed class TelemetryService : Telemetry.TelemetryBase
     /// </summary>
     private static readonly TimeSpan MaxStreamDuration = TimeSpan.FromMinutes(5);
 
+    /// <summary>
+    /// Maximum allowed clock skew between the agent's timestamp and server time.
+    /// Envelopes with an agent_timestamp outside this window are rejected — the
+    /// agent's clock is too far off to produce meaningful telemetry.
+    /// </summary>
+    private static readonly TimeSpan MaxClockSkew = TimeSpan.FromMinutes(5);
+
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly ITelemetryDeduplicationService _dedupService;
     private readonly ISubscriptionService _subscriptionService;
@@ -163,6 +170,39 @@ public sealed class TelemetryService : Telemetry.TelemetryBase
     {
         List<string> acknowledgedIds = [];
         DateTimeOffset receivedAt = DateTimeOffset.UtcNow;
+
+        // Reject envelopes without a timestamp or with clocks too far from server time.
+        // A missing or skewed agent_timestamp means collected_at values are unreliable,
+        // producing misleading telemetry that would pollute dashboards.
+        if (envelope.AgentTimestamp is null)
+        {
+            _logger.LogWarning(
+                "Envelope {BatchId} from machine {MachineId} rejected: missing agent_timestamp",
+                envelope.BatchId, machineId);
+
+            return new TelemetryAck
+            {
+                BatchId = envelope.BatchId,
+                Success = false,
+                ErrorMessage = "agent_timestamp is required"
+            };
+        }
+
+        DateTimeOffset agentTime = envelope.AgentTimestamp.ToDateTimeOffset();
+        TimeSpan skew = (agentTime - receivedAt).Duration();
+        if (skew > MaxClockSkew)
+        {
+            _logger.LogWarning(
+                "Envelope {BatchId} from machine {MachineId} rejected: agent clock skew {Skew} exceeds limit of {Max}",
+                envelope.BatchId, machineId, skew, MaxClockSkew);
+
+            return new TelemetryAck
+            {
+                BatchId = envelope.BatchId,
+                Success = false,
+                ErrorMessage = $"Agent clock skew ({skew.TotalSeconds:F0}s) exceeds maximum allowed ({MaxClockSkew.TotalSeconds:F0}s)"
+            };
+        }
 
         if (envelope.Items.Count > MaxItemsPerEnvelope)
         {

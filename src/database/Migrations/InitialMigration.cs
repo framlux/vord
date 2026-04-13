@@ -605,23 +605,25 @@ public sealed class InitialMigration : Migration
     }
 
     /// <summary>
-    /// Creates daily partitions for 2026-01-01 through 2027-12-31 plus a default partition
-    /// on PostgreSQL. On SQLite this is a no-op since partitioning is not supported.
+    /// Creates a small bootstrap set of daily partitions (today + 7 days ahead) plus a
+    /// default partition on PostgreSQL. The PartitionManagementService takes over on
+    /// startup and creates future partitions going forward. On SQLite this is a no-op
+    /// since partitioning is not supported.
     /// </summary>
     private void CreateInitialDailyPartitions(string tableName)
     {
         string lowerName = tableName.ToLowerInvariant();
-        DateOnly start = new DateOnly(2026, 1, 1);
-        DateOnly end = new DateOnly(2027, 12, 31);
+        DateOnly today = DateOnly.FromDateTime(DateTime.UtcNow);
 
-        for (DateOnly day = start; day <= end; day = day.AddDays(1))
+        for (int offset = 0; offset <= 7; offset++)
         {
+            DateOnly day = today.AddDays(offset);
             DateOnly nextDay = day.AddDays(1);
             string partitionName = $"{lowerName}_d{day:yyyyMMdd}";
 
             IfDatabase("PostgreSQL").Execute.Sql(
                 $@"CREATE TABLE ""{partitionName}"" PARTITION OF ""{tableName}""
-                       FOR VALUES FROM ('{day:yyyy}-{day:MM}-{day:dd}') TO ('{nextDay:yyyy}-{nextDay:MM}-{nextDay:dd}')");
+                       FOR VALUES FROM ('{day:yyyy-MM-dd}') TO ('{nextDay:yyyy-MM-dd}')");
         }
 
         IfDatabase("PostgreSQL").Execute.Sql(

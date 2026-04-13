@@ -108,7 +108,8 @@ public sealed class TelemetryServiceTests
 
         TelemetryEnvelope envelope = new()
         {
-            BatchId = "batch-1",
+            AgentTimestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            BatchId ="batch-1",
         };
         envelope.Items.Add(new TelemetryItem
         {
@@ -133,7 +134,8 @@ public sealed class TelemetryServiceTests
 
         TelemetryEnvelope envelope = new()
         {
-            BatchId = "batch-no-auth",
+            AgentTimestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            BatchId ="batch-no-auth",
         };
         envelope.Items.Add(new TelemetryItem
         {
@@ -161,7 +163,8 @@ public sealed class TelemetryServiceTests
 
         TelemetryEnvelope envelope = new()
         {
-            BatchId = "batch-2",
+            AgentTimestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            BatchId ="batch-2",
         };
         envelope.Items.Add(new TelemetryItem
         {
@@ -186,7 +189,8 @@ public sealed class TelemetryServiceTests
 
         TelemetryEnvelope envelope = new()
         {
-            BatchId = "batch-3",
+            AgentTimestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            BatchId ="batch-3",
         };
         envelope.Items.Add(new TelemetryItem
         {
@@ -213,7 +217,8 @@ public sealed class TelemetryServiceTests
 
         TelemetryEnvelope envelope = new()
         {
-            BatchId = "batch-3",
+            AgentTimestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            BatchId ="batch-3",
         };
         envelope.Items.Add(new TelemetryItem
         {
@@ -240,7 +245,8 @@ public sealed class TelemetryServiceTests
 
         TelemetryEnvelope envelope = new()
         {
-            BatchId = "batch-state",
+            AgentTimestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            BatchId ="batch-state",
         };
         envelope.Items.Add(new TelemetryItem
         {
@@ -279,7 +285,8 @@ public sealed class TelemetryServiceTests
 
         TelemetryEnvelope envelope = new()
         {
-            BatchId = "batch-4",
+            AgentTimestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            BatchId ="batch-4",
         };
         envelope.Items.Add(new TelemetryItem
         {
@@ -311,7 +318,8 @@ public sealed class TelemetryServiceTests
 
         TelemetryEnvelope envelope = new()
         {
-            BatchId = "batch-5",
+            AgentTimestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            BatchId ="batch-5",
         };
         envelope.Items.Add(new TelemetryItem
         {
@@ -336,7 +344,8 @@ public sealed class TelemetryServiceTests
 
         TelemetryEnvelope envelope = new()
         {
-            BatchId = "batch-6",
+            AgentTimestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            BatchId ="batch-6",
         };
         envelope.Items.Add(new TelemetryItem
         {
@@ -382,7 +391,7 @@ public sealed class TelemetryServiceTests
         TelemetryService service = new(scopeFactory, _dedupService, inactiveSubService, _logger);
         ServerCallContext context = CreateAuthenticatedContext(100);
 
-        TelemetryEnvelope envelope = new() { BatchId = "batch-inactive" };
+        TelemetryEnvelope envelope = new() { AgentTimestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow), BatchId ="batch-inactive" };
         envelope.Items.Add(new TelemetryItem
         {
             EventId = "event-inactive",
@@ -409,7 +418,7 @@ public sealed class TelemetryServiceTests
         TelemetryService service = CreateService(scopeFactory);
         ServerCallContext context = CreateAuthenticatedContext(100);
 
-        TelemetryEnvelope envelope = new() { BatchId = "batch-overflow" };
+        TelemetryEnvelope envelope = new() { AgentTimestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow), BatchId ="batch-overflow" };
         for (int i = 0; i < 501; i++)
         {
             envelope.Items.Add(new TelemetryItem
@@ -434,7 +443,7 @@ public sealed class TelemetryServiceTests
         TelemetryService service = CreateService(scopeFactory);
         ServerCallContext context = CreateAuthenticatedContext(100);
 
-        TelemetryEnvelope envelope = new() { BatchId = "batch-empty" };
+        TelemetryEnvelope envelope = new() { AgentTimestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow), BatchId ="batch-empty" };
 
         TelemetryAck ack = await service.SubmitTelemetry(envelope, context);
 

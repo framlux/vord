@@ -48,6 +48,7 @@ public sealed class TelemetryPipelineTests
         TelemetryEnvelope envelope = new()
         {
             BatchId = Guid.NewGuid().ToString("N"),
+            AgentTimestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
             Items =
             {
                 new TelemetryItem
@@ -97,6 +98,7 @@ public sealed class TelemetryPipelineTests
         TelemetryEnvelope envelope = new()
         {
             BatchId = Guid.NewGuid().ToString("N"),
+            AgentTimestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
             Items =
             {
                 new TelemetryItem
@@ -156,6 +158,7 @@ public sealed class TelemetryPipelineTests
         TelemetryEnvelope envelope = new()
         {
             BatchId = Guid.NewGuid().ToString("N"),
+            AgentTimestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
             Items =
             {
                 new TelemetryItem
@@ -229,6 +232,7 @@ public sealed class TelemetryPipelineTests
         TelemetryEnvelope envelope = new()
         {
             BatchId = Guid.NewGuid().ToString("N"),
+            AgentTimestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
             Items =
             {
                 new TelemetryItem
@@ -407,6 +411,7 @@ public sealed class TelemetryPipelineTests
         TelemetryEnvelope envelope = new()
         {
             BatchId = Guid.NewGuid().ToString("N"),
+            AgentTimestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
             Items =
             {
                 new TelemetryItem
@@ -473,6 +478,7 @@ public sealed class TelemetryPipelineTests
         TelemetryEnvelope envelope = new()
         {
             BatchId = Guid.NewGuid().ToString("N"),
+            AgentTimestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
             Items =
             {
                 new TelemetryItem
@@ -532,6 +538,7 @@ public sealed class TelemetryPipelineTests
         TelemetryEnvelope envelope = new()
         {
             BatchId = Guid.NewGuid().ToString("N"),
+            AgentTimestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
             Items =
             {
                 new TelemetryItem
@@ -580,7 +587,8 @@ public sealed class TelemetryPipelineTests
 
         TelemetryEnvelope envelope = new()
         {
-            BatchId = Guid.NewGuid().ToString("N")
+            BatchId = Guid.NewGuid().ToString("N"),
+            AgentTimestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
             // No items added intentionally
         };
 
@@ -622,6 +630,7 @@ public sealed class TelemetryPipelineTests
         TelemetryEnvelope envelope = new()
         {
             BatchId = Guid.NewGuid().ToString("N"),
+            AgentTimestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
             Items =
             {
                 new TelemetryItem
