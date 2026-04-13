@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file. See [versionize](https://github.com/versionize/versionize) for commit guidelines.
 
+<a name="2.2.2"></a>
+## [2.2.2](https://www.github.com/framlux/vord/releases/tag/v2.2.2) (2026-04-13)
+
+### Bug Fixes
+
+* Fixing broken JSON serializing casing ([f6d9976](https://www.github.com/framlux/vord/commit/f6d99764c63d08e136e67f0183995b9666f2668f))
+* Fixing missing null-guards on machine details page ([d54917c](https://www.github.com/framlux/vord/commit/d54917c36e48a78b5937796142cace79fc32034a))
+
 <a name="2.2.1"></a>
 ## [2.2.1](https://www.github.com/framlux/vord/releases/tag/v2.2.1) (2026-04-12)
 
