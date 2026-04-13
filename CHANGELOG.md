@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file. See [versionize](https://github.com/versionize/versionize) for commit guidelines.
 
+<a name="2.2.1"></a>
+## [2.2.1](https://www.github.com/framlux/vord/releases/tag/v2.2.1) (2026-04-12)
+
+### Bug Fixes
+
+* Fixing broken partitioning algorithm and ensuring we only take in valid telemetry ([6e2d8cb](https://www.github.com/framlux/vord/commit/6e2d8cb27fcd67ed296b99c100baeb09c66e15b4))
+* Removing 2 tests that were tautologies ([3dbb0ba](https://www.github.com/framlux/vord/commit/3dbb0baecd28b3a3c40ae202338dabbfdbc05cef))
+
 <a name="2.2.0"></a>
 ## [2.2.0](https://www.github.com/framlux/vord/releases/tag/v2.2.0) (2026-04-12)
 
