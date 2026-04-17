@@ -6,6 +6,7 @@ using Framlux.FleetManagement.Database.Cache;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Server.Services.Infrastructure;
+using Framlux.FleetManagement.Server.Services.Machines;
 
 namespace Framlux.FleetManagement.Server.Services.Commands;
 
@@ -14,6 +15,8 @@ namespace Framlux.FleetManagement.Server.Services.Commands;
 /// </summary>
 public sealed class RemoteCommandService : IRemoteCommandService
 {
+    private const ulong CapabilityRemoteCommands = 1UL;
+
     private static readonly HashSet<string> AllowedCommandTypes = new(StringComparer.OrdinalIgnoreCase)
     {
         "reboot",
@@ -24,16 +27,19 @@ public sealed class RemoteCommandService : IRemoteCommandService
     };
 
     private readonly IDatabaseCache _cache;
+    private readonly IMachinePingService _pingService;
     private readonly ILogger<RemoteCommandService> _logger;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="RemoteCommandService"/> class.
     /// </summary>
     /// <param name="cache">The database caching layer</param>
+    /// <param name="pingService">The machine ping and capabilities service</param>
     /// <param name="logger">The logger</param>
-    public RemoteCommandService(IDatabaseCache cache, ILogger<RemoteCommandService> logger)
+    public RemoteCommandService(IDatabaseCache cache, IMachinePingService pingService, ILogger<RemoteCommandService> logger)
     {
         _cache = cache ?? throw new ArgumentNullException(nameof(cache));
+        _pingService = pingService ?? throw new ArgumentNullException(nameof(pingService));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -78,6 +84,13 @@ public sealed class RemoteCommandService : IRemoteCommandService
         // Validate target machine belongs to user's tenant.
         Machine? machine = await _cache.GetMachineAsync(command.MachineId, command.TenantId, cancellationToken);
         if (machine is null)
+        {
+            return ServiceResult<RemoteCommand>.Error(400, default!);
+        }
+
+        // Reject commands when the agent has not reported the remote commands capability.
+        ulong capabilities = await _pingService.GetAgentCapabilitiesAsync(command.MachineId);
+        if ((capabilities & CapabilityRemoteCommands) == 0)
         {
             return ServiceResult<RemoteCommand>.Error(400, default!);
         }

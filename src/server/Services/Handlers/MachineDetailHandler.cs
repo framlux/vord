@@ -19,6 +19,8 @@ namespace Framlux.FleetManagement.Server.Services.Handlers;
 /// </summary>
 public sealed class MachineDetailHandler : IMachineDetailHandler
 {
+    private const ulong CapabilityRemoteCommands = 1UL;
+
     private readonly DatabaseContext _db;
     private readonly IMachinePingService _pingService;
     private readonly ServerConfigurationService _configService;
@@ -63,6 +65,7 @@ public sealed class MachineDetailHandler : IMachineDetailHandler
         TimeSpan onlineThreshold = await _configService.GetOnlineThresholdAsync(ct);
         bool isOnline = await _pingService.IsOnlineAsync(machine.Id, onlineThreshold);
         DateTimeOffset? lastPing = await _pingService.GetLastPingAsync(machine.Id);
+        ulong capabilities = await _pingService.GetAgentCapabilitiesAsync(machine.Id);
 
         MachineDto dto = new()
         {
@@ -79,6 +82,7 @@ public sealed class MachineDetailHandler : IMachineDetailHandler
             LastPing = lastPing,
             RegisteredOn = machine.RegisteredOn,
             IsDeleted = machine.IsDeleted,
+            CommandsEnabled = (capabilities & CapabilityRemoteCommands) != 0,
         };
 
         return ServiceResult<MachineDto>.Ok(dto);
@@ -115,11 +119,13 @@ public sealed class MachineDetailHandler : IMachineDetailHandler
         TimeSpan onlineThreshold = await _configService.GetOnlineThresholdAsync(ct);
         bool isOnline = await _pingService.IsOnlineAsync(machineId, onlineThreshold);
         DateTimeOffset? lastPing = await _pingService.GetLastPingAsync(machineId);
+        ulong capabilities = await _pingService.GetAgentCapabilitiesAsync(machineId);
 
         MachineStatusDto dto = new()
         {
             IsOnline = isOnline,
             LastPing = lastPing,
+            CommandsEnabled = (capabilities & CapabilityRemoteCommands) != 0,
         };
 
         return ServiceResult<MachineStatusDto>.Ok(dto);

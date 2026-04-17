@@ -97,11 +97,13 @@ export interface MachineDto {
 	lastPing: string | null;
 	registeredOn: string;
 	isDeleted: boolean;
+	commandsEnabled: boolean;
 }
 
 export interface MachineStatusDto {
 	isOnline: boolean;
 	lastPing: string | null;
+	commandsEnabled: boolean;
 }
 
 // Dashboard (legacy)

@@ -1091,3 +1091,71 @@ func TestFetchConfiguration_EmptyApiKey_NoRotation(t *testing.T) {
 		t.Errorf("expected ApiKey=%q unchanged, got %q", "existing-key", runtimeState.ApiKey())
 	}
 }
+
+// Intent: FetchConfiguration sends the agent capabilities bitmask to the server.
+func TestFetchConfiguration_SendsAgentCapabilities(t *testing.T) {
+	store := newTestStore(t)
+	runtimeState := state.New()
+	runtimeState.SetMachineID(42)
+	runtimeState.SetAgentCapabilities(1) // bit 0 = remote commands
+
+	var receivedCapabilities uint64
+	cfgClient := &mockConfigurationClient{
+		getConfigFunc: func(ctx context.Context, in *pb.GetConfigurationRequest, opts ...grpc.CallOption) (*pb.GetConfigurationResponse, error) {
+			receivedCapabilities = in.AgentCapabilities
+
+			return &pb.GetConfigurationResponse{
+				TimeConfig: &pb.TimingConfiguration{
+					HeartbeatTimeInSeconds:            30,
+					ConfigurationRefreshTimeInSeconds: 300,
+				},
+			}, nil
+		},
+	}
+	regClient := &mockRegistrationClient{}
+
+	mgr := newTestManager(regClient, cfgClient, store, runtimeState, "token")
+
+	err := mgr.FetchConfiguration(context.Background())
+	if err != nil {
+		t.Fatalf("FetchConfiguration: %v", err)
+	}
+
+	if receivedCapabilities != 1 {
+		t.Errorf("expected AgentCapabilities=1, got %d", receivedCapabilities)
+	}
+}
+
+// Intent: FetchConfiguration sends zero capabilities when none are set.
+func TestFetchConfiguration_SendsZeroCapabilitiesWhenDisabled(t *testing.T) {
+	store := newTestStore(t)
+	runtimeState := state.New()
+	runtimeState.SetMachineID(42)
+	// No capabilities set — default is 0.
+
+	var receivedCapabilities uint64
+	cfgClient := &mockConfigurationClient{
+		getConfigFunc: func(ctx context.Context, in *pb.GetConfigurationRequest, opts ...grpc.CallOption) (*pb.GetConfigurationResponse, error) {
+			receivedCapabilities = in.AgentCapabilities
+
+			return &pb.GetConfigurationResponse{
+				TimeConfig: &pb.TimingConfiguration{
+					HeartbeatTimeInSeconds:            30,
+					ConfigurationRefreshTimeInSeconds: 300,
+				},
+			}, nil
+		},
+	}
+	regClient := &mockRegistrationClient{}
+
+	mgr := newTestManager(regClient, cfgClient, store, runtimeState, "token")
+
+	err := mgr.FetchConfiguration(context.Background())
+	if err != nil {
+		t.Fatalf("FetchConfiguration: %v", err)
+	}
+
+	if receivedCapabilities != 0 {
+		t.Errorf("expected AgentCapabilities=0, got %d", receivedCapabilities)
+	}
+}

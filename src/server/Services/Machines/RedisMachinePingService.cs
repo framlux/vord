@@ -142,8 +142,70 @@ public sealed class RedisMachinePingService : IMachinePingService
         return result;
     }
 
+    /// <inheritdoc/>
+    public async Task SetAgentCapabilitiesAsync(long machineId, ulong capabilities)
+    {
+        await RetryHelper.ExecuteWithRetryAsync(async () =>
+        {
+            IDatabase db = _redis.GetDatabase();
+            string key = GetCapabilitiesKey(machineId);
+            await db.StringSetAsync(key, capabilities.ToString(), RetentionWindow);
+        }, logger: _logger, operationName: "SetAgentCapabilities");
+    }
+
+    /// <inheritdoc/>
+    public async Task<ulong> GetAgentCapabilitiesAsync(long machineId)
+    {
+        IDatabase db = _redis.GetDatabase();
+        RedisValue value = await db.StringGetAsync(GetCapabilitiesKey(machineId));
+        if (value.IsNullOrEmpty)
+        {
+            return 0;
+        }
+
+        return ulong.TryParse((string?)value, out ulong result) ? result : 0;
+    }
+
+    /// <inheritdoc/>
+    public async Task<Dictionary<long, ulong>> GetAgentCapabilitiesBatchAsync(IEnumerable<long> machineIds)
+    {
+        IDatabase db = _redis.GetDatabase();
+        IBatch batch = db.CreateBatch();
+
+        List<(long Id, Task<RedisValue> Task)> pending = [];
+        foreach (long machineId in machineIds)
+        {
+            string key = GetCapabilitiesKey(machineId);
+            Task<RedisValue> task = batch.StringGetAsync(key);
+            pending.Add((machineId, task));
+        }
+
+        batch.Execute();
+        await Task.WhenAll(pending.Select(p => p.Task));
+
+        Dictionary<long, ulong> result = new(pending.Count);
+        foreach ((long id, Task<RedisValue> task) in pending)
+        {
+            RedisValue value = task.Result;
+            ulong capabilities = 0;
+            if ((value.IsNullOrEmpty == false) && ulong.TryParse((string?)value, out ulong parsed))
+            {
+                capabilities = parsed;
+            }
+
+            result[id] = capabilities;
+        }
+
+        return result;
+    }
+
     private static string GetKey(long machineId)
     {
         return $"machine:ping:{machineId}";
+    }
+
+    private static string GetCapabilitiesKey(long machineId)
+    {
+        return $"machine:caps:{machineId}";
     }
 }

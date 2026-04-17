@@ -78,6 +78,13 @@ func main() {
 	// Initialize state.
 	runtimeState := state.New()
 
+	// Build agent capabilities bitmask from configuration.
+	var capabilities uint64
+	if cfg.AllowRemoteCommands {
+		capabilities |= 1 // bit 0 = remote commands enabled
+	}
+	runtimeState.SetAgentCapabilities(capabilities)
+
 	// Set up gRPC client.
 	grpcClient, err := grpcclient.New(cfg.GRPCTarget(), runtimeState, cfg.UseTLS)
 	if err != nil {

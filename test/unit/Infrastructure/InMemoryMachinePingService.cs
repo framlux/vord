@@ -13,6 +13,7 @@ namespace Framlux.FleetManagement.Test.Infrastructure;
 public sealed class InMemoryMachinePingService : IMachinePingService
 {
     private readonly ConcurrentDictionary<long, List<DateTimeOffset>> _pings = new();
+    private readonly ConcurrentDictionary<long, ulong> _capabilities = new();
 
     /// <inheritdoc/>
     public Task RecordPingAsync(long machineId)
@@ -88,6 +89,35 @@ public sealed class InMemoryMachinePingService : IMachinePingService
                 lastPing = pings[^1];
             }
             result[machineId] = lastPing;
+        }
+
+        return Task.FromResult(result);
+    }
+
+    /// <inheritdoc/>
+    public Task SetAgentCapabilitiesAsync(long machineId, ulong capabilities)
+    {
+        _capabilities[machineId] = capabilities;
+
+        return Task.CompletedTask;
+    }
+
+    /// <inheritdoc/>
+    public Task<ulong> GetAgentCapabilitiesAsync(long machineId)
+    {
+        _capabilities.TryGetValue(machineId, out ulong capabilities);
+
+        return Task.FromResult(capabilities);
+    }
+
+    /// <inheritdoc/>
+    public Task<Dictionary<long, ulong>> GetAgentCapabilitiesBatchAsync(IEnumerable<long> machineIds)
+    {
+        Dictionary<long, ulong> result = new();
+        foreach (long machineId in machineIds)
+        {
+            _capabilities.TryGetValue(machineId, out ulong caps);
+            result[machineId] = caps;
         }
 
         return Task.FromResult(result);

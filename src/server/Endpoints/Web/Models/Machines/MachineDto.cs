@@ -75,4 +75,9 @@ public sealed class MachineDto
     /// Whether the machine has been soft-deleted.
     /// </summary>
     public bool IsDeleted { get; set; }
+
+    /// <summary>
+    /// Whether the agent on this machine accepts remote commands.
+    /// </summary>
+    public bool CommandsEnabled { get; set; }
 }

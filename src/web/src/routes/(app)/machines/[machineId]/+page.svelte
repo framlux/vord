@@ -36,6 +36,7 @@
 	const machine: MachineDto = $derived(data.machine);
 	const isOnline = $derived(liveStatus?.isOnline ?? machine.isOnline);
 	const lastPing = $derived(liveStatus?.lastPing ?? machine.lastPing);
+	const commandsEnabled = $derived(liveStatus?.commandsEnabled ?? machine.commandsEnabled);
 	const telemetryLatest: MachineTelemetryDto[] = $derived(data.telemetryLatest);
 	const certificates: MachineCertificateDto[] = $derived(data.certificates);
 	const machineDetail: MachineDetailDto | null = $derived(data.machineDetail);
@@ -957,7 +958,15 @@
 				Commands are signed with your Ed25519 key and verified by the agent.
 			</p>
 
-			{#if localKeys.length === 0}
+			{#if commandsEnabled === false}
+				<div class="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 dark:border-amber-700 dark:bg-amber-900/20">
+					<p class="text-sm text-amber-700 dark:text-amber-300">
+						Remote commands are disabled on this machine. The agent must be configured with
+						<code class="rounded bg-amber-100 px-1 py-0.5 font-mono text-xs dark:bg-amber-800/40">allow_remote_commands = true</code>
+						to accept commands.
+					</p>
+				</div>
+			{:else if localKeys.length === 0}
 				<div class="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 dark:border-amber-700 dark:bg-amber-900/20">
 					<p class="text-sm text-amber-700 dark:text-amber-300">
 						No signing keys found on this device.

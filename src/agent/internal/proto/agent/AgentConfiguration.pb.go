@@ -75,10 +75,12 @@ func (ResultType) EnumDescriptor() ([]byte, []int) {
 }
 
 type GetConfigurationRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	MachineId     int64                  `protobuf:"varint,1,opt,name=machine_id,json=machineId,proto3" json:"machine_id,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state     protoimpl.MessageState `protogen:"open.v1"`
+	MachineId int64                  `protobuf:"varint,1,opt,name=machine_id,json=machineId,proto3" json:"machine_id,omitempty"`
+	// Bitwise agent capabilities: bit 0 = remote commands enabled.
+	AgentCapabilities uint64 `protobuf:"varint,2,opt,name=agent_capabilities,json=agentCapabilities,proto3" json:"agent_capabilities,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *GetConfigurationRequest) Reset() {
@@ -114,6 +116,13 @@ func (*GetConfigurationRequest) Descriptor() ([]byte, []int) {
 func (x *GetConfigurationRequest) GetMachineId() int64 {
 	if x != nil {
 		return x.MachineId
+	}
+	return 0
+}
+
+func (x *GetConfigurationRequest) GetAgentCapabilities() uint64 {
+	if x != nil {
+		return x.AgentCapabilities
 	}
 	return 0
 }
@@ -874,10 +883,11 @@ var File_AgentConfiguration_proto protoreflect.FileDescriptor
 
 const file_AgentConfiguration_proto_rawDesc = "" +
 	"\n" +
-	"\x18AgentConfiguration.proto\x12\x05agent\"8\n" +
+	"\x18AgentConfiguration.proto\x12\x05agent\"g\n" +
 	"\x17GetConfigurationRequest\x12\x1d\n" +
 	"\n" +
-	"machine_id\x18\x01 \x01(\x03R\tmachineId\"\xa1\x02\n" +
+	"machine_id\x18\x01 \x01(\x03R\tmachineId\x12-\n" +
+	"\x12agent_capabilities\x18\x02 \x01(\x04R\x11agentCapabilities\"\xa1\x02\n" +
 	"\x18GetConfigurationResponse\x12;\n" +
 	"\vtime_config\x18\x01 \x01(\v2\x1a.agent.TimingConfigurationR\n" +
 	"timeConfig\x12%\n" +

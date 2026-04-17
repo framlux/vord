@@ -27,6 +27,7 @@ type RuntimeState struct {
 	telemetryCollectSlowInterval time.Duration
 	telemetrySendFastInterval    time.Duration
 	telemetrySendSlowInterval    time.Duration
+	agentCapabilities            uint64
 }
 
 // New creates a new RuntimeState with default values.
@@ -228,4 +229,19 @@ func (s *RuntimeState) SetTelemetrySendSlowInterval(d time.Duration) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.telemetrySendSlowInterval = d
+}
+
+// AgentCapabilities returns the bitwise agent capabilities mask.
+func (s *RuntimeState) AgentCapabilities() uint64 {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	return s.agentCapabilities
+}
+
+// SetAgentCapabilities sets the bitwise agent capabilities mask.
+func (s *RuntimeState) SetAgentCapabilities(c uint64) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.agentCapabilities = c
 }

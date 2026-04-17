@@ -18,6 +18,8 @@ service Configuration {
 
 message GetConfigurationRequest {
     int64 machine_id = 1;
+    // Bitwise agent capabilities: bit 0 = remote commands enabled.
+    uint64 agent_capabilities = 2;
 }
 
 message GetConfigurationResponse {

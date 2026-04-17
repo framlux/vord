@@ -18,4 +18,9 @@ public sealed class MachineStatusDto
     /// The last time the machine sent a ping.
     /// </summary>
     public DateTimeOffset? LastPing { get; set; }
+
+    /// <summary>
+    /// Whether the agent on this machine accepts remote commands.
+    /// </summary>
+    public bool CommandsEnabled { get; set; }
 }

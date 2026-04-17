@@ -255,7 +255,8 @@ func (m *Manager) FetchConfiguration(ctx context.Context) error {
 	}
 
 	resp, err := m.configuration.GetConfiguration(ctx, &pb.GetConfigurationRequest{
-		MachineId: machineID,
+		MachineId:         machineID,
+		AgentCapabilities: m.state.AgentCapabilities(),
 	})
 	if err != nil {
 		return fmt.Errorf("GetConfiguration RPC: %w", err)

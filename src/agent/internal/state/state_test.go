@@ -167,4 +167,26 @@ func TestZeroValueSafety(t *testing.T) {
 	if s.PingInterval() != 0 {
 		t.Errorf("expected PingInterval=0 on zero-value, got %v", s.PingInterval())
 	}
+	if s.AgentCapabilities() != 0 {
+		t.Errorf("expected AgentCapabilities=0 on zero-value, got %d", s.AgentCapabilities())
+	}
+}
+
+// Intent: AgentCapabilities round-trips through Set/Get.
+func TestAgentCapabilities_SetGet(t *testing.T) {
+	s := New()
+
+	if s.AgentCapabilities() != 0 {
+		t.Errorf("expected default AgentCapabilities=0, got %d", s.AgentCapabilities())
+	}
+
+	s.SetAgentCapabilities(1)
+	if s.AgentCapabilities() != 1 {
+		t.Errorf("expected AgentCapabilities=1 after set, got %d", s.AgentCapabilities())
+	}
+
+	s.SetAgentCapabilities(0)
+	if s.AgentCapabilities() != 0 {
+		t.Errorf("expected AgentCapabilities=0 after reset, got %d", s.AgentCapabilities())
+	}
 }

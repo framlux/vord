@@ -94,6 +94,10 @@ public sealed class ConfigurationService : Configuration.ConfigurationBase
             }
         }
 
+        // Store the agent's reported capabilities so the UI can reflect them.
+        long machineId = claimMachineId > 0 ? claimMachineId : request.MachineId;
+        await _pingService.SetAgentCapabilitiesAsync(machineId, request.AgentCapabilities);
+
         return response;
     }
 

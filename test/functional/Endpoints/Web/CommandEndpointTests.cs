@@ -6,8 +6,10 @@ using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database;
 using Framlux.FleetManagement.FunctionalTest.Infrastructure;
+using Framlux.FleetManagement.Server.Services.Machines;
 using LinqToDB.Async;
 using LinqToDB;
+using Microsoft.Extensions.DependencyInjection;
 using System.Net.Http.Json;
 using System.Net;
 using System.Text.Json;
@@ -117,6 +119,12 @@ public sealed class CommandEndpointTests
         return (tenant.Id, user.Id, machine.Id, signingKey.Id, privateKey);
     }
 
+    private static async Task EnableCommandsCapability(FunctionalTestFactory factory, long machineId)
+    {
+        IMachinePingService pingService = factory.Services.GetRequiredService<IMachinePingService>();
+        await pingService.SetAgentCapabilitiesAsync(machineId, 1UL);
+    }
+
     private static object BuildCommandRequest(long machineId, int signingKeyId, NSec.Cryptography.Key privateKey, string? commandId = null)
     {
         NSec.Cryptography.SignatureAlgorithm algorithm = NSec.Cryptography.SignatureAlgorithm.Ed25519;
@@ -146,6 +154,7 @@ public sealed class CommandEndpointTests
         using FunctionalTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
         (int tenantId, int userId, long machineId, int signingKeyId, NSec.Cryptography.Key privateKey) = await SeedFullEnvironment(db);
+        await EnableCommandsCapability(factory, machineId);
 
         HttpClient client = new AuthenticatedClientBuilder(factory)
             .WithUserId(userId)
@@ -180,6 +189,7 @@ public sealed class CommandEndpointTests
         using FunctionalTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
         (int tenantId, int userId, long machineId, int signingKeyId, NSec.Cryptography.Key privateKey) = await SeedFullEnvironment(db);
+        await EnableCommandsCapability(factory, machineId);
 
         HttpClient client = new AuthenticatedClientBuilder(factory)
             .WithUserId(userId)
@@ -213,6 +223,7 @@ public sealed class CommandEndpointTests
         using FunctionalTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
         (int tenantId, int userId, long machineId, int signingKeyId, NSec.Cryptography.Key privateKey) = await SeedFullEnvironment(db);
+        await EnableCommandsCapability(factory, machineId);
 
         HttpClient client = new AuthenticatedClientBuilder(factory)
             .WithUserId(userId)
@@ -312,6 +323,7 @@ public sealed class CommandEndpointTests
         using FunctionalTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
         (int tenantId, int userId, long machineId, int signingKeyId, NSec.Cryptography.Key privateKey) = await SeedFullEnvironment(db);
+        await EnableCommandsCapability(factory, machineId);
 
         HttpClient client = new AuthenticatedClientBuilder(factory)
             .WithUserId(userId)

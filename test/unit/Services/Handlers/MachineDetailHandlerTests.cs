@@ -502,4 +502,64 @@ public class MachineDetailHandlerTests
         await Assert.That(result.Data!.TotalCount).IsEqualTo(3);
         await Assert.That(result.Data!.Items.Count).IsEqualTo(3);
     }
+
+    // ========== CommandsEnabled from agent capabilities ==========
+
+    [Test]
+    public async Task GetDetailAsync_NoCapabilities_CommandsEnabledIsFalse()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        long machineId = await SeedMachine(dbFactory);
+        MachineDetailHandler handler = CreateHandler(dbFactory);
+
+        ServiceResult<MachineDto> result = await handler.GetDetailAsync(machineId, 1, CancellationToken.None);
+
+        await Assert.That(result.IsSuccess).IsEqualTo(true);
+        await Assert.That(result.Data!.CommandsEnabled).IsEqualTo(false);
+    }
+
+    [Test]
+    public async Task GetDetailAsync_RemoteCommandsCapabilitySet_CommandsEnabledIsTrue()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        long machineId = await SeedMachine(dbFactory);
+        InMemoryMachinePingService pingService = new();
+        await pingService.SetAgentCapabilitiesAsync(machineId, 1UL);
+
+        MachineDetailHandler handler = CreateHandler(dbFactory, pingService: pingService);
+
+        ServiceResult<MachineDto> result = await handler.GetDetailAsync(machineId, 1, CancellationToken.None);
+
+        await Assert.That(result.IsSuccess).IsEqualTo(true);
+        await Assert.That(result.Data!.CommandsEnabled).IsEqualTo(true);
+    }
+
+    [Test]
+    public async Task GetStatusAsync_NoCapabilities_CommandsEnabledIsFalse()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        long machineId = await SeedMachine(dbFactory);
+        MachineDetailHandler handler = CreateHandler(dbFactory);
+
+        ServiceResult<MachineStatusDto> result = await handler.GetStatusAsync(machineId, 1, CancellationToken.None);
+
+        await Assert.That(result.IsSuccess).IsEqualTo(true);
+        await Assert.That(result.Data!.CommandsEnabled).IsEqualTo(false);
+    }
+
+    [Test]
+    public async Task GetStatusAsync_RemoteCommandsCapabilitySet_CommandsEnabledIsTrue()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        long machineId = await SeedMachine(dbFactory);
+        InMemoryMachinePingService pingService = new();
+        await pingService.SetAgentCapabilitiesAsync(machineId, 1UL);
+
+        MachineDetailHandler handler = CreateHandler(dbFactory, pingService: pingService);
+
+        ServiceResult<MachineStatusDto> result = await handler.GetStatusAsync(machineId, 1, CancellationToken.None);
+
+        await Assert.That(result.IsSuccess).IsEqualTo(true);
+        await Assert.That(result.Data!.CommandsEnabled).IsEqualTo(true);
+    }
 }
