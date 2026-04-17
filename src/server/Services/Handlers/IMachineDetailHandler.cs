@@ -30,16 +30,6 @@ public interface IMachineDetailHandler
     Task<ServiceResult<MachineStatusDto>> GetStatusAsync(long machineId, int? tenantId, CancellationToken ct);
 
     /// <summary>
-    /// Gets paginated telemetry records for a machine.
-    /// </summary>
-    Task<ServiceResult<PaginatedResponse<MachineTelemetryDto>>> GetTelemetryAsync(long machineId, int? tenantId, int page, int pageSize, short? typeFilter, CancellationToken ct);
-
-    /// <summary>
-    /// Gets the latest telemetry record per type for a machine.
-    /// </summary>
-    Task<ServiceResult<List<MachineTelemetryDto>>> GetLatestTelemetryAsync(long machineId, int? tenantId, CancellationToken ct);
-
-    /// <summary>
     /// Gets paginated certificates for a machine.
     /// </summary>
     Task<ServiceResult<PaginatedResponse<MachineCertificateDto>>> GetCertificatesAsync(long machineId, int? tenantId, int page, int pageSize, CancellationToken ct);

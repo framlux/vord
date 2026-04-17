@@ -13,9 +13,8 @@ export const load: PageServerLoad = async ({ fetch, cookies, params }) => {
 	if (isNaN(id)) error(404, 'Machine not found');
 
 	try {
-		const [machine, telemetryLatest, certificates] = await Promise.all([
+		const [machine, certificates] = await Promise.all([
 			api.getMachine(id),
-			api.getMachineTelemetryLatest(id),
 			api.getMachineCertificates(id)
 		]);
 
@@ -24,7 +23,7 @@ export const load: PageServerLoad = async ({ fetch, cookies, params }) => {
 			machineDetail = await api.getMachineDetail(id);
 		} catch { /* Detail may not be available yet */ }
 
-		return { machine, telemetryLatest, certificates, machineDetail };
+		return { machine, certificates, machineDetail };
 	} catch (e) {
 		if (e instanceof ApiError) {
 			if (e.status === 401) redirect(302, '/auth/login');

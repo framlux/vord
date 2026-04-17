@@ -300,14 +300,6 @@ export interface SshSessionDto {
 	timestamp: string;
 }
 
-// Telemetry
-export interface MachineTelemetryDto {
-	id: number;
-	telemetryType: number;
-	payload: string;
-	receivedAt: string;
-}
-
 // Certificates
 export interface MachineCertificateDto {
 	id: number;

@@ -8,7 +8,6 @@
 	import type {
 		MachineDto,
 		MachineStatusDto,
-		MachineTelemetryDto,
 		MachineCertificateDto,
 		MachineDetailDto,
 		CommandDto,
@@ -37,7 +36,6 @@
 	const isOnline = $derived(liveStatus?.isOnline ?? machine.isOnline);
 	const lastPing = $derived(liveStatus?.lastPing ?? machine.lastPing);
 	const commandsEnabled = $derived(liveStatus?.commandsEnabled ?? machine.commandsEnabled);
-	const telemetryLatest: MachineTelemetryDto[] = $derived(data.telemetryLatest);
 	const certificates: MachineCertificateDto[] = $derived(data.certificates);
 	const machineDetail: MachineDetailDto | null = $derived(data.machineDetail);
 
@@ -86,13 +84,12 @@
 		return () => clearInterval(interval);
 	});
 
-	let activeTab = $state<'overview' | 'telemetry' | 'certificates' | 'hardware' | 'packages' | 'commands'>('overview');
+	let activeTab = $state<'overview' | 'certificates' | 'hardware' | 'packages' | 'commands'>('overview');
 
 	const tabs = [
 		{ id: 'overview' as const, label: 'Overview' },
 		{ id: 'hardware' as const, label: 'Hardware' },
-		{ id: 'packages' as const, label: 'Packages' },
-		{ id: 'telemetry' as const, label: 'Telemetry' },
+		{ id: 'packages' as const, label: 'Updates' },
 		{ id: 'certificates' as const, label: 'Certificates' },
 		{ id: 'commands' as const, label: 'Commands' }
 	];
@@ -515,64 +512,6 @@
 			</div>
 		{/if}
 
-	{:else if activeTab === 'telemetry'}
-		{#if telemetryLatest.length === 0}
-			<EmptyState
-				title="No telemetry data"
-				description="Telemetry data will appear here once the agent reports in."
-			/>
-		{:else}
-			<div
-				class="overflow-hidden rounded-xl border border-surface-200 bg-surface-50 dark:border-surface-700 dark:bg-surface-800"
-			>
-				<div class="overflow-x-auto">
-					<table class="w-full text-left text-sm">
-						<thead>
-							<tr class="border-b border-surface-200 dark:border-surface-700">
-								<th
-									scope="col"
-									class="px-6 py-3 text-xs font-semibold uppercase tracking-wider text-surface-500 dark:text-surface-400"
-								>
-									Type
-								</th>
-								<th
-									scope="col"
-									class="px-6 py-3 text-xs font-semibold uppercase tracking-wider text-surface-500 dark:text-surface-400"
-								>
-									Payload
-								</th>
-								<th
-									scope="col"
-									class="px-6 py-3 text-xs font-semibold uppercase tracking-wider text-surface-500 dark:text-surface-400"
-								>
-									Received At
-								</th>
-							</tr>
-						</thead>
-						<tbody class="divide-y divide-surface-100 dark:divide-surface-700">
-							{#each telemetryLatest as entry}
-								<tr class="transition hover:bg-surface-50 dark:hover:bg-surface-700/50">
-									<td class="px-6 py-4 text-surface-700 dark:text-surface-300">
-										{String(entry.telemetryType)}
-									</td>
-									<td
-										class="max-w-md px-6 py-4 font-mono text-xs text-surface-600 dark:text-surface-400"
-										title={entry.payload}
-									>
-										{entry.payload.length > 100
-											? entry.payload.slice(0, 100) + '...'
-											: entry.payload}
-									</td>
-									<td class="px-6 py-4 text-surface-500 dark:text-surface-400">
-										{formatDateTime(entry.receivedAt)}
-									</td>
-								</tr>
-							{/each}
-						</tbody>
-					</table>
-				</div>
-			</div>
-		{/if}
 	{:else if activeTab === 'hardware'}
 		{#if machineDetail === null || machineDetail.systemInfo === null}
 			<EmptyState
@@ -808,8 +747,8 @@
 	{:else if activeTab === 'packages'}
 		{#if machineDetail === null || machineDetail.packageUpdates === null}
 			<EmptyState
-				title="No package data"
-				description="Package update information will appear here once the agent reports in."
+				title="No update data"
+				description="Update information will appear here once the agent reports in."
 			/>
 		{:else}
 			<div class="space-y-4">
@@ -828,8 +767,8 @@
 				</div>
 				{#if filteredPackages.length === 0}
 					<EmptyState
-						title="No packages"
-						description={showSecurityOnly ? 'No security updates pending.' : 'No package updates available.'}
+						title="No updates"
+						description={showSecurityOnly ? 'No security updates pending.' : 'No updates available.'}
 					/>
 				{:else}
 					<div class="overflow-hidden rounded-xl border border-surface-200 bg-surface-50 dark:border-surface-700 dark:bg-surface-800">

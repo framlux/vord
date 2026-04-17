@@ -12,7 +12,6 @@ import type {
 	MachineDetailDto,
 	MachineDto,
 	MachineStatusDto,
-	MachineTelemetryDto,
 	MachineCertificateDto,
 	UserAccountDto,
 	TenantDto,
@@ -253,24 +252,6 @@ export class ApiClient {
 
 	async getMachineStatus(id: number): Promise<MachineStatusDto> {
 		const resp = await this.get<ApiResponse<MachineStatusDto>>(`/api/v1/machines/${id}/status`);
-		return this.unwrap(resp);
-	}
-
-	async getMachineTelemetry(
-		id: number,
-		params?: { page?: number; pageSize?: number; type?: number }
-	): Promise<PaginatedResponse<MachineTelemetryDto>> {
-		const qs = buildQueryString(params ?? {});
-		const resp = await this.get<ApiResponse<PaginatedResponse<MachineTelemetryDto>>>(
-			`/api/v1/machines/${id}/telemetry${qs ? `?${qs}` : ''}`
-		);
-		return this.unwrap(resp);
-	}
-
-	async getMachineTelemetryLatest(id: number): Promise<MachineTelemetryDto[]> {
-		const resp = await this.get<ApiResponse<MachineTelemetryDto[]>>(
-			`/api/v1/machines/${id}/telemetry/latest`
-		);
 		return this.unwrap(resp);
 	}
 

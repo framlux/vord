@@ -610,26 +610,6 @@ describe('ApiClient', () => {
             expect(result).toEqual(statusData);
         });
 
-        it('should GET /api/v1/machines/{id}/telemetry with parsed query params', async () => {
-            const telData = { items: [], page: 1, pageSize: 25, totalCount: 0, totalPages: 0, hasNextPage: false, hasPreviousPage: false };
-            mockSuccess(telData);
-            const result = await client.getMachineTelemetry(5, { page: 1, type: 2 });
-
-            const calledUrl = new URL(fetchFn.mock.calls[0][0] as string);
-            expect(calledUrl.pathname).toBe('/api/v1/machines/5/telemetry');
-            expect(calledUrl.searchParams.get('page')).toBe('1');
-            expect(calledUrl.searchParams.get('type')).toBe('2');
-            expect(result).toEqual(telData);
-        });
-
-        it('should GET /api/v1/machines/{id}/telemetry/latest and return telemetry array', async () => {
-            const telemetry = [{ id: 1, telemetryType: 3, payload: '{}', receivedAt: '2026-03-15T10:00:00Z' }];
-            mockSuccess(telemetry);
-            const result = await client.getMachineTelemetryLatest(4);
-            expect(result).toEqual(telemetry);
-            expect(result).toHaveLength(1);
-        });
-
         it('should GET /api/v1/machines/{id}/certificates and return certificates array', async () => {
             const certs = [{ id: 1, thumbprint: 'abc', issuedAt: '', expiresAt: '', revokedAt: null, isActive: true }];
             mockSuccess(certs);
