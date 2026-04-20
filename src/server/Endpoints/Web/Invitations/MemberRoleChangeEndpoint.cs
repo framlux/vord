@@ -2,7 +2,6 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
-using System.Security.Claims;
 using FastEndpoints;
 using Framlux.FleetManagement.Server.Auth;
 using Framlux.FleetManagement.Server.Services.Handlers;
@@ -56,10 +55,17 @@ public sealed class MemberRoleChangeEndpoint : Endpoint<MemberRoleChangeRequest,
     {
         int? tenantId = TenantClaimHelper.GetTenantIdFromClaims(User, HttpContext);
 
-        string? userIdStr = User.FindFirstValue(ClaimTypes.Actor);
-        int currentUserId = int.TryParse(userIdStr, out int uid) ? uid : 0;
+        int? currentUserId = TenantClaimHelper.GetUserIdFromClaims(User);
+        if (currentUserId is null)
+        {
+            HttpContext.Response.StatusCode = 401;
+            await HttpContext.Response.WriteAsJsonAsync(
+                ApiResponse<object>.Error("Unable to identify user"), ct);
 
-        ServiceResult<ApiResponse<object>> result = await _handler.ChangeRoleAsync(req.UserId, tenantId, currentUserId, req.Role, ct);
+            return;
+        }
+
+        ServiceResult<ApiResponse<object>> result = await _handler.ChangeRoleAsync(req.UserId, tenantId, currentUserId.Value, req.Role, ct);
 
         if (result.IsNotFound)
         {
@@ -76,7 +82,7 @@ public sealed class MemberRoleChangeEndpoint : Endpoint<MemberRoleChangeRequest,
             return;
         }
 
-        _logger.LogInformation("Role of user {TargetUserId} changed in tenant {TenantId} by user {CurrentUserId} to {NewRole}", req.UserId, tenantId, currentUserId, req.Role);
+        _logger.LogInformation("Role of user {TargetUserId} changed in tenant {TenantId} by user {CurrentUserId} to {NewRole}", req.UserId, tenantId, currentUserId.Value, req.Role);
 
         await Send.OkAsync(result.Data!, cancellation: ct);
     }

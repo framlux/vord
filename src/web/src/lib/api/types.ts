@@ -111,7 +111,6 @@ export interface DashboardSummaryDto {
 	totalMachines: number;
 	onlineMachines: number;
 	pendingApprovals: number;
-	expiringCertificates: number;
 }
 
 // Fleet overview
@@ -298,16 +297,6 @@ export interface SshSessionDto {
 	action: string;
 	authMethod: string;
 	timestamp: string;
-}
-
-// Certificates
-export interface MachineCertificateDto {
-	id: number;
-	thumbprint: string;
-	issuedAt: string;
-	expiresAt: string;
-	revokedAt: string | null;
-	isActive: boolean;
 }
 
 // Admin
@@ -515,6 +504,19 @@ export interface UpdateAlertRuleRequest {
 export interface CreateWebhookRequest {
 	name: string;
 	url: string;
+}
+
+// Machine Authorized Keys
+export interface MachineAuthorizedKeyDto {
+	id: number;
+	signingKeyId: number;
+	label: string;
+	fingerprint: string;
+	ownerUsername: string;
+	authorizedAt: string;
+	authorizedByUsername: string;
+	revokedAt: string | null;
+	isActive: boolean;
 }
 
 // Signing Keys

@@ -13,6 +13,7 @@ internal static class TableNames
     public const string UserTenantRoles = "UserTenantRoles";
     public const string MachineTelemetry = "MachineTelemetry";
     public const string MachineCertificates = "MachineCertificates";
+    public const string MachineAuthorizedKeys = "MachineAuthorizedKeys";
     public const string MachineStateSummary = "MachineStateSummary";
     public const string MachineStateDetail = "MachineStateDetail";
     public const string TenantSubscriptions = "TenantSubscriptions";

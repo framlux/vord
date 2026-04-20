@@ -37,6 +37,10 @@ public enum AuditAction : short
     SubscriptionDowngraded = 41,
     /// <summary>A subscription was canceled.</summary>
     SubscriptionCanceled = 42,
+    /// <summary>A subscription cancellation was requested.</summary>
+    SubscriptionCancelRequested = 43,
+    /// <summary>A subscription downgrade was requested.</summary>
+    SubscriptionDowngradeRequested = 44,
     /// <summary>A registration token was created.</summary>
     RegistrationTokenCreated = 50,
     /// <summary>A registration token was revoked.</summary>
@@ -53,8 +57,8 @@ public enum AuditAction : short
     RemoteCommandExecuted = 81,
     /// <summary>A remote command execution failed.</summary>
     RemoteCommandFailed = 82,
-    /// <summary>A subscription cancellation was requested.</summary>
-    SubscriptionCancelRequested = 43,
-    /// <summary>A subscription downgrade was requested.</summary>
-    SubscriptionDowngradeRequested = 44
+    /// <summary>A signing key was authorized for a machine.</summary>
+    MachineKeyAuthorized = 90,
+    /// <summary>A signing key authorization was revoked for a machine.</summary>
+    MachineKeyRevoked = 91,
 }

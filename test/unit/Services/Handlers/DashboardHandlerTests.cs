@@ -34,7 +34,6 @@ public class DashboardHandlerTests
         await Assert.That(result.Data!.TotalMachines).IsEqualTo(0);
         await Assert.That(result.Data!.OnlineMachines).IsEqualTo(0);
         await Assert.That(result.Data!.PendingApprovals).IsEqualTo(0);
-        await Assert.That(result.Data!.ExpiringCertificates).IsEqualTo(0);
     }
 
     [Test]
@@ -85,58 +84,4 @@ public class DashboardHandlerTests
         await Assert.That(result.Data!.PendingApprovals).IsEqualTo(0);
     }
 
-    [Test]
-    public async Task GetSummaryAsync_WithExpiringCerts_CountsExpiringOnly()
-    {
-        using TestDatabaseFactory dbFactory = new();
-
-        // Create a machine to attach certificates to
-        Machine m1 = TestDataBuilder.BuildMachine(tenantId: 1);
-        m1.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(m1);
-
-        // Expiring cert (within 30 days)
-        await dbFactory.Context.InsertAsync(new MachineCertificate
-        {
-            MachineId = m1.Id,
-            Thumbprint = "expiring-cert",
-            IssuedAt = DateTimeOffset.UtcNow.AddDays(-330),
-            ExpiresAt = DateTimeOffset.UtcNow.AddDays(15),
-        });
-
-        // Already expired cert (should not count)
-        await dbFactory.Context.InsertAsync(new MachineCertificate
-        {
-            MachineId = m1.Id,
-            Thumbprint = "expired-cert",
-            IssuedAt = DateTimeOffset.UtcNow.AddDays(-400),
-            ExpiresAt = DateTimeOffset.UtcNow.AddDays(-5),
-        });
-
-        // Far future cert (should not count)
-        await dbFactory.Context.InsertAsync(new MachineCertificate
-        {
-            MachineId = m1.Id,
-            Thumbprint = "future-cert",
-            IssuedAt = DateTimeOffset.UtcNow,
-            ExpiresAt = DateTimeOffset.UtcNow.AddDays(365),
-        });
-
-        // Revoked cert (should not count)
-        await dbFactory.Context.InsertAsync(new MachineCertificate
-        {
-            MachineId = m1.Id,
-            Thumbprint = "revoked-cert",
-            IssuedAt = DateTimeOffset.UtcNow.AddDays(-330),
-            ExpiresAt = DateTimeOffset.UtcNow.AddDays(15),
-            RevokedAt = DateTimeOffset.UtcNow.AddDays(-1),
-        });
-
-        InMemoryMachinePingService pingService = new();
-        ServerConfigurationService configService = new(Substitute.For<IServerSettingsCache>(), Substitute.For<IConnectionMultiplexer>());
-        DashboardHandler handler = new(dbFactory.Context, pingService, configService);
-
-        ServiceResult<DashboardSummaryDto> result = await handler.GetSummaryAsync(1, CancellationToken.None);
-
-        await Assert.That(result.Data!.ExpiringCertificates).IsEqualTo(1);
-    }
 }

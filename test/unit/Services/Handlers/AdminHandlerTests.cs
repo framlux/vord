@@ -439,7 +439,7 @@ public class AdminHandlerTests
         IConnectionMultiplexer redis = CreateFakeRedis();
 
         AdminHandler handler = new(dbFactory.Context, cache, redis);
-        List<SettingUpdateEntry> updates = [new() { Key = 4, Value = "365" }];
+        List<SettingUpdateEntry> updates = [new() { Key = 3, Value = "3600" }];
 
         ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, CancellationToken.None);
 

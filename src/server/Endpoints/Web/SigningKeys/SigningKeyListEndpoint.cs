@@ -2,7 +2,6 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
-using System.Security.Claims;
 using FastEndpoints;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Server.Auth;
@@ -65,10 +64,17 @@ public sealed class SigningKeyListEndpoint : EndpointWithoutRequest<ApiResponse<
             return;
         }
 
-        string? userIdStr = User.FindFirstValue(ClaimTypes.Actor);
-        int userId = int.TryParse(userIdStr, out int uid) ? uid : 0;
+        int? userId = TenantClaimHelper.GetUserIdFromClaims(User);
+        if (userId is null)
+        {
+            HttpContext.Response.StatusCode = 401;
+            await HttpContext.Response.WriteAsJsonAsync(
+                ApiResponse<SigningKeyListResponse>.Error("Unable to identify user"), ct);
 
-        List<UserSigningKey> keys = await _signingKeyService.ListKeysAsync(userId, tenantId.Value, ct);
+            return;
+        }
+
+        List<UserSigningKey> keys = await _signingKeyService.ListKeysAsync(userId.Value, tenantId.Value, ct);
         int activeCount = keys.Count(k => k.RevokedAt is null);
 
         SigningKeyListResponse response = new()

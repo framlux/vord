@@ -14,7 +14,7 @@ using LinqToDB.Async;
 namespace Framlux.FleetManagement.FunctionalTest.Endpoints.Web;
 
 /// <summary>
-/// Functional tests for machine management endpoints (delete, detail, certificates, status).
+/// Functional tests for machine management endpoints (delete, detail, status).
 /// </summary>
 public sealed class MachineManagementEndpointTests
 {
@@ -302,77 +302,6 @@ public sealed class MachineManagementEndpointTests
         bool isClientError = (response.StatusCode == HttpStatusCode.BadRequest) ||
                              (response.StatusCode == HttpStatusCode.NotFound);
         await Assert.That(isClientError).IsEqualTo(true);
-    }
-
-    [Test]
-    public async Task MachineCertificates_OwnTenant_ReturnsCertificateFields()
-    {
-        using FunctionalTestFactory factory = new();
-        using DatabaseContext db = factory.CreateDbContext();
-        (int tenantId, int userId, long machineId, string _) = await SeedEnvironment(db);
-
-        string thumbprint = $"thumb-{Guid.NewGuid():N}";
-        DateTimeOffset issuedAt = DateTimeOffset.UtcNow.AddDays(-30);
-        DateTimeOffset expiresAt = DateTimeOffset.UtcNow.AddDays(335);
-
-        // Seed a certificate.
-        await db.InsertAsync(new MachineCertificate
-        {
-            MachineId = machineId,
-            Thumbprint = thumbprint,
-            IssuedAt = issuedAt,
-            ExpiresAt = expiresAt,
-        });
-
-        HttpClient client = new AuthenticatedClientBuilder(factory)
-            .WithUserId(userId)
-            .WithRole(tenantId, (int)UserAccountRoles.Viewer)
-            .WithActiveTenant(tenantId)
-            .Build();
-
-        HttpResponseMessage response = await client.GetAsync($"/api/v1/machines/{machineId}/certificates");
-
-        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
-
-        string body = await response.Content.ReadAsStringAsync();
-        using JsonDocument doc = JsonDocument.Parse(body);
-        JsonElement root = doc.RootElement;
-
-        bool success = root.GetProperty("success").GetBoolean();
-        await Assert.That(success).IsEqualTo(true);
-
-        JsonElement data = root.GetProperty("data");
-        int totalCount = data.GetProperty("totalCount").GetInt32();
-        await Assert.That(totalCount).IsEqualTo(1);
-
-        JsonElement items = data.GetProperty("items");
-        int itemCount = items.GetArrayLength();
-        await Assert.That(itemCount).IsEqualTo(1);
-
-        JsonElement cert = items[0];
-        string returnedThumbprint = cert.GetProperty("thumbprint").GetString()!;
-        await Assert.That(returnedThumbprint).IsEqualTo(thumbprint);
-
-        bool isActive = cert.GetProperty("isActive").GetBoolean();
-        await Assert.That(isActive).IsEqualTo(true);
-    }
-
-    [Test]
-    public async Task MachineCertificates_InvalidMachineId_Returns404()
-    {
-        using FunctionalTestFactory factory = new();
-        using DatabaseContext db = factory.CreateDbContext();
-        (int tenantId, int userId, long _, string _) = await SeedEnvironment(db);
-
-        HttpClient client = new AuthenticatedClientBuilder(factory)
-            .WithUserId(userId)
-            .WithRole(tenantId, (int)UserAccountRoles.Viewer)
-            .WithActiveTenant(tenantId)
-            .Build();
-
-        HttpResponseMessage response = await client.GetAsync("/api/v1/machines/99999/certificates");
-
-        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.NotFound);
     }
 
     [Test]

@@ -13,17 +13,19 @@ export const load: PageServerLoad = async ({ fetch, cookies, params }) => {
 	if (isNaN(id)) error(404, 'Machine not found');
 
 	try {
-		const [machine, certificates] = await Promise.all([
-			api.getMachine(id),
-			api.getMachineCertificates(id)
-		]);
+		const machine = await api.getMachine(id);
 
 		let machineDetail = null;
 		try {
 			machineDetail = await api.getMachineDetail(id);
 		} catch { /* Detail may not be available yet */ }
 
-		return { machine, certificates, machineDetail };
+		let authorizedKeys = null;
+		try {
+			authorizedKeys = await api.getMachineAuthorizedKeys(id);
+		} catch { /* Authorized keys may not be available */ }
+
+		return { machine, machineDetail, authorizedKeys };
 	} catch (e) {
 		if (e instanceof ApiError) {
 			if (e.status === 401) redirect(302, '/auth/login');

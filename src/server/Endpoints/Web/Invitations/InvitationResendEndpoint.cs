@@ -47,14 +47,23 @@ public sealed class InvitationResendEndpoint : EndpointWithoutRequest<ApiRespons
     {
         int invitationId = Route<int>("id");
         int? tenantId = TenantClaimHelper.GetTenantIdFromClaims(User, HttpContext);
-        string? userIdStr = User.FindFirstValue(ClaimTypes.Actor);
-        int userId = int.TryParse(userIdStr, out int uid) ? uid : 0;
+
+        int? userId = TenantClaimHelper.GetUserIdFromClaims(User);
+        if (userId is null)
+        {
+            HttpContext.Response.StatusCode = 401;
+            await HttpContext.Response.WriteAsJsonAsync(
+                ApiResponse<InvitationResponse>.Error("Unable to identify user"), ct);
+
+            return;
+        }
+
         string inviterEmail = User.FindFirstValue(ClaimTypes.Email) ?? "A team member";
         string baseUrl = string.IsNullOrEmpty(_appOptions.BaseUrl) == false
             ? _appOptions.BaseUrl
             : $"{HttpContext.Request.Scheme}://{HttpContext.Request.Host}";
 
-        ServiceResult<InvitationResendResult> result = await _handler.ResendAsync(invitationId, tenantId, userId, inviterEmail, baseUrl, ct);
+        ServiceResult<InvitationResendResult> result = await _handler.ResendAsync(invitationId, tenantId, userId.Value, inviterEmail, baseUrl, ct);
 
         if (result.IsNotFound)
         {

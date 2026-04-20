@@ -49,22 +49,11 @@ public sealed class DashboardHandler : IDashboardHandler
         Dictionary<long, bool> onlineMap = await _pingService.AreOnlineAsync(machineIds, onlineThreshold);
         int onlineCount = onlineMap.Count(kvp => kvp.Value);
 
-        int certWarningDays = await _configService.GetCertificateExpiryWarningDaysAsync(ct);
-        DateTimeOffset expiryThreshold = DateTimeOffset.UtcNow.AddDays(certWarningDays);
-        int expiringCerts = await (
-            from c in _db.MachineCertificates
-            join m in _db.Machines on c.MachineId equals m.Id
-            where m.TenantId == tenantId.Value && m.IsDeleted == false &&
-                c.RevokedAt == null && c.ExpiresAt <= expiryThreshold && c.ExpiresAt > DateTimeOffset.UtcNow
-            select c
-        ).CountAsync(ct);
-
         DashboardSummaryDto dto = new()
         {
             TotalMachines = machines.Count,
             OnlineMachines = onlineCount,
             PendingApprovals = 0,
-            ExpiringCertificates = expiringCerts,
         };
 
         return ServiceResult<DashboardSummaryDto>.Ok(dto);

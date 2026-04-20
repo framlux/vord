@@ -67,10 +67,18 @@ public sealed class RequestDataExportEndpoint : EndpointWithoutRequest<RequestDa
         }
 
         int? tenantId = TenantClaimHelper.GetTenantIdFromClaims(User, HttpContext);
-        string? userIdStr = User.FindFirst("uid")?.Value;
-        int userId = int.TryParse(userIdStr, out int uid) ? uid : 0;
 
-        ServiceResult<int> result = await _handler.ExportTenantDataAsync(tenantId, userId, ct);
+        int? userId = TenantClaimHelper.GetUserIdFromClaims(User);
+        if (userId is null)
+        {
+            HttpContext.Response.StatusCode = 401;
+            await HttpContext.Response.WriteAsJsonAsync(
+                ApiResponse<RequestDataExportResponse>.Error("Unable to identify user"), ct);
+
+            return;
+        }
+
+        ServiceResult<int> result = await _handler.ExportTenantDataAsync(tenantId, userId.Value, ct);
 
         if (result.IsNotFound)
         {

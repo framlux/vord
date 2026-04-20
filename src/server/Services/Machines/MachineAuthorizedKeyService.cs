@@ -1,0 +1,209 @@
+// Copyright (c) 2026 Framlux LLC
+// Licensed under the Functional Source License, Version 1.1, ALv2 Future License
+// See LICENSE for details.
+
+using Framlux.FleetManagement.Database;
+using Framlux.FleetManagement.Database.Cache;
+using Framlux.FleetManagement.Database.Enums;
+using Framlux.FleetManagement.Database.Models;
+using Framlux.FleetManagement.Server.Endpoints.Web.Models.Machines;
+using Framlux.FleetManagement.Server.Services.Infrastructure;
+using LinqToDB;
+using LinqToDB.Async;
+
+namespace Framlux.FleetManagement.Server.Services.Machines;
+
+/// <summary>
+/// Implementation of per-machine signing key authorization management.
+/// </summary>
+public sealed class MachineAuthorizedKeyService : IMachineAuthorizedKeyService
+{
+    private readonly DatabaseContext _db;
+    private readonly IDatabaseCache _cache;
+    private readonly ILogger<MachineAuthorizedKeyService> _logger;
+
+    /// <summary>
+    /// Initializes a new instance of the <see cref="MachineAuthorizedKeyService"/> class.
+    /// </summary>
+    /// <param name="db">The database context</param>
+    /// <param name="cache">The database caching layer</param>
+    /// <param name="logger">The logger</param>
+    public MachineAuthorizedKeyService(DatabaseContext db, IDatabaseCache cache, ILogger<MachineAuthorizedKeyService> logger)
+    {
+        _db = db ?? throw new ArgumentNullException(nameof(db));
+        _cache = cache ?? throw new ArgumentNullException(nameof(cache));
+        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+    }
+
+    /// <inheritdoc/>
+    public async Task<ServiceResult<MachineAuthorizedKey>> AuthorizeKeyAsync(long machineId, int signingKeyId, int userId, int tenantId, CancellationToken cancellationToken = default)
+    {
+        if (tenantId <= 0)
+        {
+            return ServiceResult<MachineAuthorizedKey>.NotFound();
+        }
+
+        // Verify the machine exists, belongs to the tenant, and is not deleted.
+        Machine? machine = await _cache.GetMachineAsync(machineId, tenantId, cancellationToken);
+        if (machine is null)
+        {
+            return ServiceResult<MachineAuthorizedKey>.NotFound();
+        }
+
+        // Verify the signing key exists and belongs to the tenant.
+        UserSigningKey? signingKey = await _cache.GetSigningKeyByIdAsync(signingKeyId, cancellationToken);
+        if ((signingKey is null) || (signingKey.TenantId != tenantId))
+        {
+            return ServiceResult<MachineAuthorizedKey>.NotFound();
+        }
+
+        // A revoked signing key cannot be authorized for a machine.
+        if (signingKey.RevokedAt is not null)
+        {
+            return ServiceResult<MachineAuthorizedKey>.BadRequest("Cannot authorize a revoked signing key");
+        }
+
+        // Check if the signing key is already actively authorized for this machine.
+        bool alreadyAuthorized = await _cache.IsKeyAuthorizedForMachineAsync(signingKeyId, machineId, cancellationToken);
+        if (alreadyAuthorized)
+        {
+            return ServiceResult<MachineAuthorizedKey>.Conflict("Signing key is already authorized for this machine");
+        }
+
+        // Check if a previously-revoked authorization exists for this machine-key pair.
+        // If so, re-activate it instead of inserting a new row (unique constraint on MachineId+SigningKeyId).
+        MachineAuthorizedKey? existingRevoked = await _db.MachineAuthorizedKeys
+            .FirstOrDefaultAsync(a => (a.MachineId == machineId) &&
+                                      (a.SigningKeyId == signingKeyId) &&
+                                      (a.TenantId == tenantId) &&
+                                      (a.RevokedAt != null), cancellationToken);
+
+        using IDatabaseTransaction transaction = await _cache.BeginTransactionAsync(cancellationToken);
+
+        MachineAuthorizedKey result;
+        if (existingRevoked is not null)
+        {
+            // Re-activate the existing revoked authorization.
+            DateTimeOffset now = DateTimeOffset.UtcNow;
+            await _db.MachineAuthorizedKeys
+                .Where(a => a.Id == existingRevoked.Id)
+                .Set(a => a.RevokedAt, (DateTimeOffset?)null)
+                .Set(a => a.RevokedByUserId, (int?)null)
+                .Set(a => a.AuthorizedAt, now)
+                .Set(a => a.AuthorizedByUserId, userId)
+                .UpdateAsync(cancellationToken);
+
+            existingRevoked.RevokedAt = null;
+            existingRevoked.RevokedByUserId = null;
+            existingRevoked.AuthorizedAt = now;
+            existingRevoked.AuthorizedByUserId = userId;
+            result = existingRevoked;
+        }
+        else
+        {
+            // First-time authorization — insert a new row.
+            MachineAuthorizedKey authorization = new()
+            {
+                MachineId = machineId,
+                SigningKeyId = signingKeyId,
+                TenantId = tenantId,
+                AuthorizedAt = DateTimeOffset.UtcNow,
+                AuthorizedByUserId = userId,
+            };
+            result = await _cache.CreateMachineAuthorizationAsync(authorization, cancellationToken);
+        }
+
+        await _cache.InsertAuditLogAsync(new AuditLogEntry
+        {
+            TenantId = tenantId,
+            UserId = userId,
+            MachineId = machineId,
+            Action = AuditAction.MachineKeyAuthorized,
+            ResourceType = AuditResourceType.MachineAuthorizedKey,
+            ResourceId = result.Id.ToString(),
+            Timestamp = DateTimeOffset.UtcNow,
+        }, cancellationToken);
+
+        await transaction.CommitAsync(cancellationToken);
+
+        _logger.LogInformation(
+            "Signing key {SigningKeyId} authorized for machine {MachineId} by user {UserId} in tenant {TenantId}",
+            signingKeyId, machineId, userId, tenantId);
+
+        return ServiceResult<MachineAuthorizedKey>.Ok(result);
+    }
+
+    /// <inheritdoc/>
+    public async Task<ServiceResult<bool>> RevokeAuthorizationAsync(long machineId, int signingKeyId, int userId, int tenantId, CancellationToken cancellationToken = default)
+    {
+        // Find the active authorization record for this machine and signing key.
+        MachineAuthorizedKey? authorization = await _db.MachineAuthorizedKeys
+            .FirstOrDefaultAsync(a => (a.MachineId == machineId) &&
+                                      (a.SigningKeyId == signingKeyId) &&
+                                      (a.TenantId == tenantId) &&
+                                      (a.RevokedAt == null), cancellationToken);
+
+        if (authorization is null)
+        {
+            return ServiceResult<bool>.NotFound();
+        }
+
+        using IDatabaseTransaction transaction = await _cache.BeginTransactionAsync(cancellationToken);
+
+        await _cache.RevokeMachineAuthorizationAsync(machineId, signingKeyId, userId, cancellationToken);
+
+        await _cache.InsertAuditLogAsync(new AuditLogEntry
+        {
+            TenantId = tenantId,
+            UserId = userId,
+            MachineId = machineId,
+            Action = AuditAction.MachineKeyRevoked,
+            ResourceType = AuditResourceType.MachineAuthorizedKey,
+            ResourceId = authorization.Id.ToString(),
+            Timestamp = DateTimeOffset.UtcNow,
+        }, cancellationToken);
+
+        await transaction.CommitAsync(cancellationToken);
+
+        _logger.LogInformation(
+            "Signing key {SigningKeyId} authorization revoked for machine {MachineId} by user {UserId} in tenant {TenantId}",
+            signingKeyId, machineId, userId, tenantId);
+
+        return ServiceResult<bool>.Ok(true);
+    }
+
+    /// <inheritdoc/>
+    public async Task<ServiceResult<List<MachineAuthorizedKeyDto>>> ListAuthorizedKeysAsync(long machineId, int tenantId, CancellationToken cancellationToken = default)
+    {
+        // Verify the machine exists in the tenant.
+        Machine? machine = await _cache.GetMachineAsync(machineId, tenantId, cancellationToken);
+        if (machine is null)
+        {
+            return ServiceResult<List<MachineAuthorizedKeyDto>>.NotFound();
+        }
+
+        // Query authorizations with joined signing key and user data for display.
+        List<MachineAuthorizedKeyDto> dtos = await (
+            from a in _db.MachineAuthorizedKeys
+            join k in _db.UserSigningKeys on a.SigningKeyId equals k.Id
+            join owner in _db.UserAccounts on k.UserId equals owner.Id
+            join authorizer in _db.UserAccounts on a.AuthorizedByUserId equals authorizer.Id
+            where (a.MachineId == machineId) && (a.TenantId == tenantId)
+            orderby a.AuthorizedAt descending
+            select new MachineAuthorizedKeyDto
+            {
+                Id = a.Id,
+                SigningKeyId = a.SigningKeyId,
+                Label = k.Label,
+                Fingerprint = k.PublicKeyFingerprint,
+                OwnerUsername = owner.Username,
+                AuthorizedAt = a.AuthorizedAt,
+                AuthorizedByUsername = authorizer.Username,
+                RevokedAt = a.RevokedAt,
+                IsActive = a.RevokedAt == null,
+            }
+        ).ToListAsync(cancellationToken);
+
+        return ServiceResult<List<MachineAuthorizedKeyDto>>.Ok(dtos);
+    }
+}

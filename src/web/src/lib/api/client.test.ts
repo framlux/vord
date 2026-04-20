@@ -107,7 +107,6 @@ describe('ApiClient', () => {
                 totalMachines: 10,
                 onlineMachines: 7,
                 pendingApprovals: 2,
-                expiringCertificates: 1
             };
             const response: ApiResponse<DashboardSummaryDto> = {
                 success: true,
@@ -610,14 +609,6 @@ describe('ApiClient', () => {
             expect(result).toEqual(statusData);
         });
 
-        it('should GET /api/v1/machines/{id}/certificates and return certificates array', async () => {
-            const certs = [{ id: 1, thumbprint: 'abc', issuedAt: '', expiresAt: '', revokedAt: null, isActive: true }];
-            mockSuccess(certs);
-            const result = await client.getMachineCertificates(4);
-            expect(result).toEqual(certs);
-            expect(result).toHaveLength(1);
-        });
-
         it('should GET /api/v1/machines/registration-tokens and return tokens array', async () => {
             const tokens = [{ id: 1, name: 'Token 1', token: 'tok-123', expiresAt: '', maxUses: 10, usedCount: 0, createdAt: '', isRevoked: false }];
             mockSuccess({ items: tokens, page: 1, pageSize: 25, totalCount: 1 });
@@ -748,6 +739,40 @@ describe('ApiClient', () => {
             expect(fetchFn).toHaveBeenCalledWith(
                 'http://localhost:12233/api/v1/members/12/remove',
                 expect.objectContaining({ method: 'POST' })
+            );
+        });
+
+        it('should GET /api/v1/machines/{id}/authorized-keys and return keys array', async () => {
+            const keys = [{ id: 1, signingKeyId: 5, label: 'Test', fingerprint: 'abc', ownerUsername: 'user', authorizedAt: '', authorizedByUsername: 'admin', revokedAt: null, isActive: true }];
+            mockSuccess(keys);
+            const result = await client.getMachineAuthorizedKeys(7);
+            expect(result).toEqual(keys);
+            expect(fetchFn).toHaveBeenCalledWith(
+                'http://localhost:12233/api/v1/machines/7/authorized-keys',
+                expect.objectContaining({ method: 'GET' })
+            );
+        });
+
+        it('should POST /api/v1/machines/{id}/authorized-keys and return authorized key', async () => {
+            const key = { id: 1, signingKeyId: 5, label: 'Test', fingerprint: 'abc', ownerUsername: 'user', authorizedAt: '', authorizedByUsername: 'admin', revokedAt: null, isActive: true };
+            mockSuccess(key);
+            const result = await client.authorizeMachineKey(7, 5);
+            expect(result).toEqual(key);
+            expect(fetchFn).toHaveBeenCalledWith(
+                'http://localhost:12233/api/v1/machines/7/authorized-keys',
+                expect.objectContaining({
+                    method: 'POST',
+                    body: JSON.stringify({ signingKeyId: 5 })
+                })
+            );
+        });
+
+        it('should DELETE /api/v1/machines/{id}/authorized-keys/{keyId}', async () => {
+            mockSuccess(true);
+            await client.revokeMachineKeyAuthorization(7, 5);
+            expect(fetchFn).toHaveBeenCalledWith(
+                'http://localhost:12233/api/v1/machines/7/authorized-keys/5',
+                expect.objectContaining({ method: 'DELETE' })
             );
         });
 

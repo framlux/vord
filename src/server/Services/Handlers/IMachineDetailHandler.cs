@@ -3,7 +3,6 @@
 // See LICENSE for details.
 
 using Framlux.FleetManagement.Server.Endpoints.Web.Models.Machines;
-using Framlux.FleetManagement.Server.Endpoints.Web;
 using Framlux.FleetManagement.Server.Services.Infrastructure;
 using Framlux.FleetManagement.Server.Services.Machines;
 
@@ -28,9 +27,4 @@ public interface IMachineDetailHandler
     /// Gets the online/offline status for a machine.
     /// </summary>
     Task<ServiceResult<MachineStatusDto>> GetStatusAsync(long machineId, int? tenantId, CancellationToken ct);
-
-    /// <summary>
-    /// Gets paginated certificates for a machine.
-    /// </summary>
-    Task<ServiceResult<PaginatedResponse<MachineCertificateDto>>> GetCertificatesAsync(long machineId, int? tenantId, int page, int pageSize, CancellationToken ct);
 }

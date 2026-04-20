@@ -49,7 +49,7 @@ public sealed class TenantOidcHandler : ITenantOidcHandler
         TenantSubscription? subscription = await _subscriptionService.GetSubscriptionForTenantAsync(tenantId, ct);
         if ((subscription is null) || (subscription.Tier != SubscriptionTier.Team))
         {
-            return ServiceResult<TenantOidcConfigDto>.Error(403, default!);
+            return ServiceResult<TenantOidcConfigDto>.Forbidden("Custom OIDC configuration requires a Team tier subscription");
         }
 
         TenantOidcConfiguration? config = await _db.TenantOidcConfigurations
@@ -85,18 +85,18 @@ public sealed class TenantOidcHandler : ITenantOidcHandler
         TenantSubscription? subscription = await _subscriptionService.GetSubscriptionForTenantAsync(tenantId, ct);
         if ((subscription is null) || (subscription.Tier != SubscriptionTier.Team))
         {
-            return ServiceResult<TenantOidcConfigDto>.Error(403, default!);
+            return ServiceResult<TenantOidcConfigDto>.Forbidden("Custom OIDC configuration requires a Team tier subscription");
         }
 
         // Validate Authority URL to prevent SSRF
         if (string.IsNullOrWhiteSpace(request.Authority) || await SsoOidcEvents.IsUrlSafeAsync(request.Authority) == false)
         {
-            return ServiceResult<TenantOidcConfigDto>.Error(400, default!);
+            return ServiceResult<TenantOidcConfigDto>.BadRequest("Authority URL is missing or not a valid, safe URL");
         }
 
         if (string.IsNullOrEmpty(request.MetadataAddress) == false && await SsoOidcEvents.IsUrlSafeAsync(request.MetadataAddress) == false)
         {
-            return ServiceResult<TenantOidcConfigDto>.Error(400, default!);
+            return ServiceResult<TenantOidcConfigDto>.BadRequest("Metadata address is not a valid, safe URL");
         }
 
         string normalizedDomain = (request.EmailDomain ?? string.Empty).Trim().ToLowerInvariant().TrimStart('@');

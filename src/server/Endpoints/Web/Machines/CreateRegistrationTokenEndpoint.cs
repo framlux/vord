@@ -2,7 +2,6 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
-using System.Security.Claims;
 using FastEndpoints;
 using Framlux.FleetManagement.Server.Auth;
 using Framlux.FleetManagement.Server.Services.Handlers;
@@ -44,11 +43,18 @@ public sealed class CreateRegistrationTokenEndpoint : Endpoint<CreateRegistratio
             return;
         }
 
-        string? userIdStr = User.FindFirstValue(ClaimTypes.Actor);
-        int userId = int.TryParse(userIdStr, out int uid) ? uid : 0;
+        int? userId = TenantClaimHelper.GetUserIdFromClaims(User);
+        if (userId is null)
+        {
+            HttpContext.Response.StatusCode = 401;
+            await HttpContext.Response.WriteAsJsonAsync(
+                ApiResponse<RegistrationTokenDto>.Error("Unable to identify user"), ct);
+
+            return;
+        }
 
         ServiceResult<RegistrationTokenDto> result = await _handler.CreateAsync(
-            tenantId.Value, userId, req.Name, ct);
+            tenantId.Value, userId.Value, req.Name, ct);
 
         if (result.IsSuccess == false)
         {

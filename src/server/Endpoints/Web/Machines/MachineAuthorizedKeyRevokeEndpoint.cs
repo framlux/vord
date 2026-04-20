@@ -2,33 +2,32 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
-using System.Security.Claims;
 using FastEndpoints;
 using Framlux.FleetManagement.Server.Auth;
 using Framlux.FleetManagement.Server.Services.Infrastructure;
 using Framlux.FleetManagement.Server.Services.Machines;
 
-namespace Framlux.FleetManagement.Server.Endpoints.Web.SigningKeys;
+namespace Framlux.FleetManagement.Server.Endpoints.Web.Machines;
 
 /// <summary>
-/// Revokes a signing key by ID.
+/// Revokes a signing key authorization for a specific machine.
 /// </summary>
-public sealed class SigningKeyRevokeEndpoint : EndpointWithoutRequest<ApiResponse<bool>>
+public sealed class MachineAuthorizedKeyRevokeEndpoint : EndpointWithoutRequest<ApiResponse<bool>>
 {
-    private readonly ISigningKeyService _signingKeyService;
+    private readonly IMachineAuthorizedKeyService _authorizedKeyService;
 
     /// <summary>
-    /// Creates a new instance of the <see cref="SigningKeyRevokeEndpoint"/> class.
+    /// Creates a new instance of the <see cref="MachineAuthorizedKeyRevokeEndpoint"/> class.
     /// </summary>
-    public SigningKeyRevokeEndpoint(ISigningKeyService signingKeyService)
+    public MachineAuthorizedKeyRevokeEndpoint(IMachineAuthorizedKeyService authorizedKeyService)
     {
-        _signingKeyService = signingKeyService;
+        _authorizedKeyService = authorizedKeyService;
     }
 
     /// <inheritdoc/>
     public override void Configure()
     {
-        Delete("/signing-keys/{id}");
+        Delete("/machines/{machineId}/authorized-keys/{keyId:int}");
         Policies("MachineAdmin");
         Version(1);
     }
@@ -36,7 +35,8 @@ public sealed class SigningKeyRevokeEndpoint : EndpointWithoutRequest<ApiRespons
     /// <inheritdoc/>
     public override async Task HandleAsync(CancellationToken ct)
     {
-        int keyId = Route<int>("id");
+        long machineId = Route<long>("machineId");
+        int keyId = Route<int>("keyId");
 
         int? tenantId = TenantClaimHelper.GetTenantIdFromClaims(User, HttpContext);
         if (tenantId is null)
@@ -56,13 +56,8 @@ public sealed class SigningKeyRevokeEndpoint : EndpointWithoutRequest<ApiRespons
             return;
         }
 
-        // Check if the user is a TenantAdmin or GlobalAdmin for permission to revoke others' keys.
-        bool isAdmin = User.HasClaim("iga", true.ToString());
-        bool isTenantAdmin = User.FindAll(ClaimTypes.Role)
-            .Any(c => c.Value.EndsWith(":1")); // :1 = TenantAdmin role
-
-        ServiceResult<bool> result = await _signingKeyService.RevokeKeyAsync(
-            keyId, userId.Value, tenantId.Value, isAdmin || isTenantAdmin, ct);
+        ServiceResult<bool> result = await _authorizedKeyService.RevokeAuthorizationAsync(
+            machineId, keyId, userId.Value, tenantId.Value, ct);
 
         if (result.IsNotFound)
         {
@@ -74,11 +69,12 @@ public sealed class SigningKeyRevokeEndpoint : EndpointWithoutRequest<ApiRespons
         if (result.IsSuccess == false)
         {
             HttpContext.Response.StatusCode = result.StatusCode;
-            await Send.OkAsync(ApiResponse<bool>.Error("Cannot revoke this key"), cancellation: ct);
+            await HttpContext.Response.WriteAsJsonAsync(
+                ApiResponse<bool>.Error(result.ErrorMessage ?? "Revocation failed"), ct);
 
             return;
         }
 
-        await Send.OkAsync(ApiResponse<bool>.Ok(true, "Key revoked"), cancellation: ct);
+        await Send.OkAsync(ApiResponse<bool>.Ok(true, "Authorization revoked"), cancellation: ct);
     }
 }

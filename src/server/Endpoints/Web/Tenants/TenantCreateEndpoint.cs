@@ -2,8 +2,8 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
-using System.Security.Claims;
 using FastEndpoints;
+using Framlux.FleetManagement.Server.Auth;
 using Framlux.FleetManagement.Server.Endpoints.Web.Models.Tenants;
 using Framlux.FleetManagement.Server.Services.Handlers;
 using Framlux.FleetManagement.Server.Services.Infrastructure;
@@ -52,10 +52,17 @@ public sealed class TenantCreateEndpoint : Endpoint<CreateTenantRequest, ApiResp
     /// <inheritdoc/>
     public override async Task HandleAsync(CreateTenantRequest req, CancellationToken ct)
     {
-        string? userIdStr = User.FindFirstValue(ClaimTypes.Actor);
-        int userId = int.TryParse(userIdStr, out int uid) ? uid : 0;
+        int? userId = TenantClaimHelper.GetUserIdFromClaims(User);
+        if (userId is null)
+        {
+            HttpContext.Response.StatusCode = 401;
+            await HttpContext.Response.WriteAsJsonAsync(
+                ApiResponse<TenantDto>.Error("Unable to identify user"), ct);
 
-        ServiceResult<TenantDto> result = await _handler.CreateAsync(req.Name, req.LogoUrl, userId, ct);
+            return;
+        }
+
+        ServiceResult<TenantDto> result = await _handler.CreateAsync(req.Name, req.LogoUrl, userId.Value, ct);
 
         if (result.IsSuccess == false)
         {

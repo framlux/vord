@@ -185,20 +185,6 @@ public class ServerConfigurationServiceTests
         await Assert.That(result).IsEqualTo(TimeSpan.FromSeconds(600));
     }
 
-    // ========== GetCertificateExpiryWarningDaysAsync tests ==========
-
-    [Test]
-    public async Task GetCertificateExpiryWarningDaysAsync_Default_Returns30()
-    {
-        (ServerConfigurationService service, IServerSettingsCache _, IDatabase redisDb) = CreateService();
-        redisDb.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
-            .Returns(Task.FromResult<RedisValue>(RedisValue.Null));
-
-        int result = await service.GetCertificateExpiryWarningDaysAsync(CancellationToken.None);
-
-        await Assert.That(result).IsEqualTo(30);
-    }
-
     // ========== GetDeduplicationTtlAsync tests ==========
 
     [Test]

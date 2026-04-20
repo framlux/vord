@@ -8,8 +8,8 @@
 	import type {
 		MachineDto,
 		MachineStatusDto,
-		MachineCertificateDto,
 		MachineDetailDto,
+		MachineAuthorizedKeyDto,
 		CommandDto,
 		SigningKeyDto
 	} from '$lib/api/types';
@@ -36,8 +36,34 @@
 	const isOnline = $derived(liveStatus?.isOnline ?? machine.isOnline);
 	const lastPing = $derived(liveStatus?.lastPing ?? machine.lastPing);
 	const commandsEnabled = $derived(liveStatus?.commandsEnabled ?? machine.commandsEnabled);
-	const certificates: MachineCertificateDto[] = $derived(data.certificates);
 	const machineDetail: MachineDetailDto | null = $derived(data.machineDetail);
+	let authorizedKeys = $state<MachineAuthorizedKeyDto[]>(data.authorizedKeys ?? []);
+
+	// Authorized keys tab state
+	let tenantSigningKeys = $state<SigningKeyDto[]>([]);
+	let selectedKeyToAuthorize = $state<number | null>(null);
+	let authorizeError = $state('');
+	let authorizingInProgress = $state(false);
+	let revokingKeyId = $state<number | null>(null);
+
+	// Filter local keys to only those whose server signing key is authorized for this machine
+	const authorizedLocalKeys = $derived.by(() => {
+		const activeAuthorizedFingerprints = new Set(
+			authorizedKeys
+				.filter((ak) => ak.isActive)
+				.map((ak) => ak.fingerprint)
+		);
+		const activeServerKeyFingerprints = new Map(
+			serverSigningKeys.map((sk) => [sk.publicKey, sk.fingerprint])
+		);
+
+		return localKeys.filter((lk) => {
+			const fingerprint = activeServerKeyFingerprints.get(lk.publicKeyBase64);
+			if (fingerprint === undefined) return false;
+
+			return activeAuthorizedFingerprints.has(fingerprint);
+		});
+	});
 
 	let pollFailures = $state(0);
 	const POLL_FAILURE_THRESHOLD = 3;
@@ -84,13 +110,13 @@
 		return () => clearInterval(interval);
 	});
 
-	let activeTab = $state<'overview' | 'certificates' | 'hardware' | 'packages' | 'commands'>('overview');
+	let activeTab = $state<'overview' | 'hardware' | 'packages' | 'authorized-keys' | 'commands'>('overview');
 
 	const tabs = [
 		{ id: 'overview' as const, label: 'Overview' },
 		{ id: 'hardware' as const, label: 'Hardware' },
 		{ id: 'packages' as const, label: 'Updates' },
-		{ id: 'certificates' as const, label: 'Certificates' },
+		{ id: 'authorized-keys' as const, label: 'Authorized Keys' },
 		{ id: 'commands' as const, label: 'Commands' }
 	];
 
@@ -245,40 +271,90 @@
 		}
 	}
 
+	// Authorized keys helpers
+	async function loadTenantSigningKeys() {
+		try {
+			const api = new ApiClient('');
+			const resp = await api.getSigningKeys();
+			tenantSigningKeys = resp.keys.filter((k) => k.revokedAt === null);
+		} catch {
+			tenantSigningKeys = [];
+		}
+	}
+
+	async function loadAuthorizedKeys() {
+		try {
+			const api = new ApiClient('');
+			authorizedKeys = await api.getMachineAuthorizedKeys(machine.id);
+		} catch {
+			authorizedKeys = [];
+		}
+	}
+
+	const availableKeysToAuthorize = $derived.by(() => {
+		const activeAuthorizedKeyIds = new Set(
+			authorizedKeys
+				.filter((ak) => ak.isActive)
+				.map((ak) => ak.signingKeyId)
+		);
+
+		return tenantSigningKeys.filter((sk) => activeAuthorizedKeyIds.has(sk.id) === false);
+	});
+
+	async function authorizeKey() {
+		authorizeError = '';
+		if (selectedKeyToAuthorize === null) {
+			authorizeError = 'Please select a signing key to authorize.';
+
+			return;
+		}
+
+		authorizingInProgress = true;
+		try {
+			const api = new ApiClient('');
+			await api.authorizeMachineKey(machine.id, selectedKeyToAuthorize);
+			selectedKeyToAuthorize = null;
+			await loadAuthorizedKeys();
+		} catch (err: unknown) {
+			authorizeError = err instanceof Error ? err.message : 'Failed to authorize key';
+		} finally {
+			authorizingInProgress = false;
+		}
+	}
+
+	async function revokeAuthorization(keyId: number) {
+		revokingKeyId = keyId;
+		try {
+			const api = new ApiClient('');
+			await api.revokeMachineKeyAuthorization(machine.id, keyId);
+			await loadAuthorizedKeys();
+		} catch {
+			// Revoke failed silently; user can retry
+		} finally {
+			revokingKeyId = null;
+		}
+	}
+
+	$effect(() => {
+		if (activeTab === 'authorized-keys') {
+			untrack(() => {
+				loadTenantSigningKeys();
+				loadAuthorizedKeys();
+			});
+		}
+	});
+
 	$effect(() => {
 		if (activeTab === 'commands') {
 			untrack(() => {
 				loadCommands();
 				loadLocalKeys();
 				loadServerSigningKeys();
+				loadAuthorizedKeys();
 			});
 		}
 	});
 
-	function getCertificateStatus(cert: MachineCertificateDto): { label: string; classes: string } {
-		if (cert.revokedAt) {
-			return {
-				label: 'Revoked',
-				classes:
-					'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400'
-			};
-		}
-		const now = new Date();
-		const expires = new Date(cert.expiresAt);
-		if (expires < now) {
-			return {
-				label: 'Expired',
-				classes:
-					'bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400'
-			};
-		}
-
-		return {
-			label: 'Active',
-			classes:
-				'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400'
-		};
-	}
 </script>
 
 <svelte:head><title>Machine Detail - Vord</title></svelte:head>
@@ -804,88 +880,102 @@
 				{/if}
 			</div>
 		{/if}
-	{:else if activeTab === 'certificates'}
-		{#if certificates.length === 0}
-			<EmptyState
-				title="No certificates"
-				description="Certificate information will appear here once certificates are issued."
-			/>
-		{:else}
-			<div
-				class="overflow-hidden rounded-xl border border-surface-200 bg-surface-50 dark:border-surface-700 dark:bg-surface-800"
-			>
-				<div class="overflow-x-auto">
-					<table class="w-full text-left text-sm">
-						<thead>
-							<tr class="border-b border-surface-200 dark:border-surface-700">
-								<th
-									scope="col"
-									class="px-6 py-3 text-xs font-semibold uppercase tracking-wider text-surface-500 dark:text-surface-400"
-								>
-									Thumbprint
-								</th>
-								<th
-									scope="col"
-									class="px-6 py-3 text-xs font-semibold uppercase tracking-wider text-surface-500 dark:text-surface-400"
-								>
-									Issued At
-								</th>
-								<th
-									scope="col"
-									class="px-6 py-3 text-xs font-semibold uppercase tracking-wider text-surface-500 dark:text-surface-400"
-								>
-									Expires At
-								</th>
-								<th
-									scope="col"
-									class="px-6 py-3 text-xs font-semibold uppercase tracking-wider text-surface-500 dark:text-surface-400"
-								>
-									Revoked At
-								</th>
-								<th
-									scope="col"
-									class="px-6 py-3 text-xs font-semibold uppercase tracking-wider text-surface-500 dark:text-surface-400"
-								>
-									Status
-								</th>
-							</tr>
-						</thead>
-						<tbody class="divide-y divide-surface-100 dark:divide-surface-700">
-							{#each certificates as cert}
-								{@const status = getCertificateStatus(cert)}
-								<tr class="transition hover:bg-surface-50 dark:hover:bg-surface-700/50">
-									<td
-										class="px-6 py-4 font-mono text-xs text-surface-700 dark:text-surface-300"
-										title={cert.thumbprint}
-									>
-										{cert.thumbprint.length > 20
-											? cert.thumbprint.slice(0, 20) + '...'
-											: cert.thumbprint}
-									</td>
-									<td class="px-6 py-4 text-surface-700 dark:text-surface-300">
-										{formatDateTime(cert.issuedAt)}
-									</td>
-									<td class="px-6 py-4 text-surface-700 dark:text-surface-300">
-										{formatDateTime(cert.expiresAt)}
-									</td>
-									<td class="px-6 py-4 text-surface-500 dark:text-surface-400">
-										{formatDateTime(cert.revokedAt)}
-									</td>
-									<td class="px-6 py-4">
-										<span
-											class="inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium {status.classes}"
-											aria-label="Certificate status: {status.label}"
-										>
-											{status.label}
-										</span>
-									</td>
-								</tr>
-							{/each}
-						</tbody>
-					</table>
+	{:else if activeTab === 'authorized-keys'}
+		<div class="space-y-4">
+			<p class="text-sm text-surface-500 dark:text-surface-400">
+				Signing keys authorized to send remote commands to this machine. Only MachineAdmin or higher can manage authorized keys.
+			</p>
+
+			<!-- Authorize form -->
+			<div class="flex items-end gap-3">
+				<div class="flex-1">
+					<label for="authorize-key" class="block text-xs font-medium text-surface-600 dark:text-surface-400">Signing Key</label>
+					<select
+						id="authorize-key"
+						bind:value={selectedKeyToAuthorize}
+						class="mt-1 w-full rounded-lg border border-surface-300 bg-white px-4 py-2 text-sm text-surface-900 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-surface-600 dark:bg-surface-700 dark:text-surface-50"
+					>
+						<option value={null}>Select a key...</option>
+						{#each availableKeysToAuthorize as sk}
+							<option value={sk.id}>{sk.label} ({sk.fingerprint.slice(0, 16)}...)</option>
+						{/each}
+					</select>
 				</div>
+				<button
+					onclick={authorizeKey}
+					disabled={authorizingInProgress || selectedKeyToAuthorize === null}
+					class="inline-flex items-center gap-2 rounded-lg bg-primary-500 px-4 py-2 text-sm font-medium text-white transition hover:bg-primary-600 disabled:opacity-50"
+				>
+					{authorizingInProgress ? 'Authorizing...' : 'Authorize'}
+				</button>
 			</div>
-		{/if}
+			{#if authorizeError}
+				<p class="text-sm text-red-600 dark:text-red-400">{authorizeError}</p>
+			{/if}
+
+			<!-- Authorized keys table -->
+			{#if authorizedKeys.length === 0}
+				<EmptyState
+					title="No authorized keys"
+					description="No signing keys have been authorized for this machine. Authorize a signing key to enable remote commands."
+				/>
+			{:else}
+				<div class="overflow-hidden rounded-xl border border-surface-200 bg-surface-50 dark:border-surface-700 dark:bg-surface-800">
+					<div class="overflow-x-auto">
+						<table class="w-full text-left text-sm">
+							<thead>
+								<tr class="border-b border-surface-200 dark:border-surface-700">
+									<th class="px-6 py-3 text-xs font-semibold uppercase tracking-wider text-surface-500 dark:text-surface-400">Label</th>
+									<th class="px-6 py-3 text-xs font-semibold uppercase tracking-wider text-surface-500 dark:text-surface-400">Fingerprint</th>
+									<th class="px-6 py-3 text-xs font-semibold uppercase tracking-wider text-surface-500 dark:text-surface-400">Owner</th>
+									<th class="px-6 py-3 text-xs font-semibold uppercase tracking-wider text-surface-500 dark:text-surface-400">Authorized By</th>
+									<th class="px-6 py-3 text-xs font-semibold uppercase tracking-wider text-surface-500 dark:text-surface-400">Authorized At</th>
+									<th class="px-6 py-3 text-xs font-semibold uppercase tracking-wider text-surface-500 dark:text-surface-400">Status</th>
+									<th class="px-6 py-3 text-xs font-semibold uppercase tracking-wider text-surface-500 dark:text-surface-400">Actions</th>
+								</tr>
+							</thead>
+							<tbody class="divide-y divide-surface-100 dark:divide-surface-700">
+								{#each authorizedKeys as ak (ak.id)}
+									<tr class="transition hover:bg-surface-50 dark:hover:bg-surface-700/50">
+										<td class="px-6 py-3 font-medium text-surface-900 dark:text-surface-100">{ak.label}</td>
+										<td class="px-6 py-3 font-mono text-xs text-surface-600 dark:text-surface-400" title={ak.fingerprint}>
+											{ak.fingerprint.slice(0, 16)}...
+										</td>
+										<td class="px-6 py-3 text-surface-600 dark:text-surface-400">{ak.ownerUsername}</td>
+										<td class="px-6 py-3 text-surface-600 dark:text-surface-400">{ak.authorizedByUsername}</td>
+										<td class="px-6 py-3 text-surface-500 dark:text-surface-400">{formatDateTime(ak.authorizedAt)}</td>
+										<td class="px-6 py-3">
+											{#if ak.isActive}
+												<span class="inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400">
+													Active
+												</span>
+											{:else}
+												<span class="inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400">
+													Revoked
+												</span>
+											{/if}
+										</td>
+										<td class="px-6 py-3">
+											{#if ak.isActive}
+												<button
+													onclick={() => revokeAuthorization(ak.id)}
+													disabled={revokingKeyId === ak.id}
+													class="text-sm font-medium text-red-600 hover:text-red-700 disabled:opacity-50 dark:text-red-400 dark:hover:text-red-300"
+												>
+													{revokingKeyId === ak.id ? 'Revoking...' : 'Revoke'}
+												</button>
+											{:else}
+												<span class="text-sm text-surface-400">---</span>
+											{/if}
+										</td>
+									</tr>
+								{/each}
+							</tbody>
+						</table>
+					</div>
+				</div>
+			{/if}
+		</div>
 	{:else if activeTab === 'commands'}
 		<!-- Send Command Form -->
 		<div class="rounded-lg border border-surface-200 bg-surface-50 p-6 dark:border-surface-700 dark:bg-surface-800">
@@ -914,6 +1004,12 @@
 						</a> first.
 					</p>
 				</div>
+			{:else if localKeys.length > 0 && authorizedLocalKeys.length === 0}
+				<div class="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 dark:border-amber-700 dark:bg-amber-900/20">
+					<p class="text-sm text-amber-700 dark:text-amber-300">
+						Your signing keys are not authorized for this machine. Go to the Authorized Keys tab to authorize a key.
+					</p>
+				</div>
 			{:else}
 				<div class="mt-4 flex items-end gap-3">
 					<div class="w-48">
@@ -935,7 +1031,7 @@
 							bind:value={selectedLocalKeyId}
 							class="mt-1 w-full rounded-lg border border-surface-300 bg-white px-4 py-2 text-sm text-surface-900 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-surface-600 dark:bg-surface-700 dark:text-surface-50"
 						>
-							{#each localKeys as lk}
+							{#each authorizedLocalKeys as lk}
 								<option value={lk.id}>{lk.label}</option>
 							{/each}
 						</select>

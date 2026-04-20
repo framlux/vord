@@ -56,6 +56,22 @@ public static class TenantClaimHelper
     }
 
     /// <summary>
+    /// Extracts the user ID from the Actor claim.
+    /// </summary>
+    /// <param name="user">The claims principal.</param>
+    /// <returns>Returns the user ID if found and valid; otherwise, null.</returns>
+    public static int? GetUserIdFromClaims(ClaimsPrincipal user)
+    {
+        string? userIdStr = user.FindFirst(ClaimTypes.Actor)?.Value;
+        if (string.IsNullOrEmpty(userIdStr) == false && int.TryParse(userIdStr, out int userId) && userId > 0)
+        {
+            return userId;
+        }
+
+        return null;
+    }
+
+    /// <summary>
     /// Extracts the tenant ID from the user's role claims (without cookie support).
     /// Role claims are stored as "{tenantId}:{roleId}".
     /// </summary>

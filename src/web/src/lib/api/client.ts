@@ -12,7 +12,6 @@ import type {
 	MachineDetailDto,
 	MachineDto,
 	MachineStatusDto,
-	MachineCertificateDto,
 	UserAccountDto,
 	TenantDto,
 	ServerSettingsDto,
@@ -31,6 +30,7 @@ import type {
 	CreateAlertRuleRequest,
 	UpdateAlertRuleRequest,
 	CreateWebhookRequest,
+	MachineAuthorizedKeyDto,
 	SigningKeyDto,
 	SigningKeyListResponse,
 	RegisterSigningKeyRequest,
@@ -255,15 +255,33 @@ export class ApiClient {
 		return this.unwrap(resp);
 	}
 
-	async getMachineCertificates(id: number): Promise<MachineCertificateDto[]> {
-		const resp = await this.get<ApiResponse<MachineCertificateDto[]>>(
-			`/api/v1/machines/${id}/certificates`
+	async deleteMachine(id: number): Promise<void> {
+		const resp = await this.del<ApiResponse<object>>(`/api/v1/machines/${id}`);
+		this.unwrap(resp);
+	}
+
+	// Machine Authorized Keys
+	async getMachineAuthorizedKeys(machineId: number): Promise<MachineAuthorizedKeyDto[]> {
+		const resp = await this.get<ApiResponse<MachineAuthorizedKeyDto[]>>(
+			`/api/v1/machines/${machineId}/authorized-keys`
 		);
+
 		return this.unwrap(resp);
 	}
 
-	async deleteMachine(id: number): Promise<void> {
-		const resp = await this.del<ApiResponse<object>>(`/api/v1/machines/${id}`);
+	async authorizeMachineKey(machineId: number, signingKeyId: number): Promise<MachineAuthorizedKeyDto> {
+		const resp = await this.post<ApiResponse<MachineAuthorizedKeyDto>>(
+			`/api/v1/machines/${machineId}/authorized-keys`,
+			{ signingKeyId }
+		);
+
+		return this.unwrap(resp);
+	}
+
+	async revokeMachineKeyAuthorization(machineId: number, keyId: number): Promise<void> {
+		const resp = await this.del<ApiResponse<boolean>>(
+			`/api/v1/machines/${machineId}/authorized-keys/${keyId}`
+		);
 		this.unwrap(resp);
 	}
 

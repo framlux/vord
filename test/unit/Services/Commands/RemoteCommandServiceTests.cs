@@ -120,6 +120,8 @@ public sealed class RemoteCommandServiceTests
                 RegisteredOn = DateTimeOffset.UtcNow,
                 IsDeleted = false,
             });
+        _cache.IsKeyAuthorizedForMachineAsync(Arg.Any<int>(), Arg.Any<long>(), Arg.Any<CancellationToken>())
+            .Returns(true);
         _cache.GetRemoteCommandByCommandIdAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns((RemoteCommand?)null);
         _cache.IsNonceUsedAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
@@ -397,6 +399,9 @@ public sealed class RemoteCommandServiceTests
                 RegisteredOn = DateTimeOffset.UtcNow,
                 IsDeleted = false,
             });
+
+        _cache.IsKeyAuthorizedForMachineAsync(Arg.Any<int>(), Arg.Any<long>(), Arg.Any<CancellationToken>())
+            .Returns(true);
 
         // No capabilities set — machine has never reported or commands are disabled.
         RemoteCommand command = BuildSignedCommand(privateKey);

@@ -7,7 +7,6 @@
 
 	let newMachineRegistered = $state(true);
 	let machineApprovalRequired = $state(true);
-	let certificateExpiring = $state(false);
 	let userRegistration = $state(false);
 </script>
 
@@ -89,29 +88,7 @@
 				</label>
 			</div>
 
-			<!-- Certificate Expiring -->
-			<div class="flex items-center justify-between py-4 first:pt-0 last:pb-0">
-				<div>
-					<p class="font-medium text-surface-900 dark:text-surface-100">
-						Certificate Expiring
-					</p>
-					<p class="text-sm text-surface-500 dark:text-surface-400">
-						Get notified when a machine certificate is about to expire.
-					</p>
-				</div>
-				<label class="relative inline-flex cursor-pointer items-center">
-					<input
-						type="checkbox"
-						bind:checked={certificateExpiring}
-						disabled
-						class="peer sr-only"
-					/>
-					<div
-						class="h-6 w-10 rounded-full bg-surface-300 after:absolute after:left-[2px] after:top-[2px] after:h-5 after:w-5 after:rounded-full after:bg-surface-50 after:transition-all after:content-[''] peer-checked:bg-primary-500 peer-checked:after:translate-x-4 dark:bg-surface-600 dark:after:bg-surface-200"
-					></div>
-				</label>
-			</div>
-
+	
 			<!-- User Registration -->
 			<div class="flex items-center justify-between py-4 first:pt-0 last:pb-0">
 				<div>

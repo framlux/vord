@@ -5,7 +5,7 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import { ApiClient } from '$lib/api/client';
-	import { AlertTriangle, CheckCircle, XCircle, Clock } from 'lucide-svelte';
+	import { AlertTriangle, CircleCheck, XCircle, Clock } from 'lucide-svelte';
 	import PublicShell from '$lib/components/PublicShell.svelte';
 
 	let { data } = $props();
@@ -67,7 +67,7 @@
 				</div>
 			{:else if accepted}
 				<div class="text-center">
-					<CheckCircle size={48} class="mx-auto text-green-500" />
+					<CircleCheck size={48} class="mx-auto text-green-500" />
 					<h1 class="mt-4 text-xl font-bold text-surface-900 dark:text-surface-50">Welcome!</h1>
 					<p class="mt-2 text-sm text-surface-500">You've joined <strong>{invitation.tenantName}</strong>. Redirecting to dashboard...</p>
 				</div>

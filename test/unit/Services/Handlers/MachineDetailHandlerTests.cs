@@ -5,7 +5,6 @@
 using Framlux.FleetManagement.Database.Cache;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Server.Endpoints.Web.Models.Machines;
-using Framlux.FleetManagement.Server.Endpoints.Web;
 using Framlux.FleetManagement.Server.Services.Handlers;
 using Framlux.FleetManagement.Server.Services.Infrastructure;
 using Framlux.FleetManagement.Server.Services.Machines;
@@ -219,68 +218,6 @@ public class MachineDetailHandlerTests
 
         await Assert.That(result.IsSuccess).IsEqualTo(true);
         await Assert.That(result.Data!.IsOnline).IsEqualTo(true);
-    }
-
-    // ========== GetCertificatesAsync tests ==========
-
-    [Test]
-    public async Task GetCertificatesAsync_NullTenantId_ReturnsNotFound()
-    {
-        using TestDatabaseFactory dbFactory = new();
-        MachineDetailHandler handler = CreateHandler(dbFactory);
-
-        ServiceResult<PaginatedResponse<MachineCertificateDto>> result =
-            await handler.GetCertificatesAsync(1, null, 1, 25, CancellationToken.None);
-
-        await Assert.That(result.IsNotFound).IsEqualTo(true);
-    }
-
-    [Test]
-    public async Task GetCertificatesAsync_MachineNotFound_ReturnsNotFound()
-    {
-        using TestDatabaseFactory dbFactory = new();
-        MachineDetailHandler handler = CreateHandler(dbFactory);
-
-        ServiceResult<PaginatedResponse<MachineCertificateDto>> result =
-            await handler.GetCertificatesAsync(999, 1, 1, 25, CancellationToken.None);
-
-        await Assert.That(result.IsNotFound).IsEqualTo(true);
-    }
-
-    [Test]
-    public async Task GetCertificatesAsync_NoCertificates_ReturnsEmptyPage()
-    {
-        using TestDatabaseFactory dbFactory = new();
-        long machineId = await SeedMachine(dbFactory);
-        MachineDetailHandler handler = CreateHandler(dbFactory);
-
-        ServiceResult<PaginatedResponse<MachineCertificateDto>> result =
-            await handler.GetCertificatesAsync(machineId, 1, 1, 25, CancellationToken.None);
-
-        await Assert.That(result.IsSuccess).IsEqualTo(true);
-        await Assert.That(result.Data!.TotalCount).IsEqualTo(0);
-        await Assert.That(result.Data!.Items.Count).IsEqualTo(0);
-    }
-
-    [Test]
-    public async Task GetCertificatesAsync_WithCertificates_ReturnsPaginated()
-    {
-        using TestDatabaseFactory dbFactory = new();
-        long machineId = await SeedMachine(dbFactory);
-        for (int i = 0; i < 3; i++)
-        {
-            MachineCertificate cert = TestDataBuilder.BuildMachineCertificate(machineId: machineId);
-            await dbFactory.Context.InsertWithInt64IdentityAsync(cert);
-        }
-
-        MachineDetailHandler handler = CreateHandler(dbFactory);
-
-        ServiceResult<PaginatedResponse<MachineCertificateDto>> result =
-            await handler.GetCertificatesAsync(machineId, 1, 1, 2, CancellationToken.None);
-
-        await Assert.That(result.IsSuccess).IsEqualTo(true);
-        await Assert.That(result.Data!.TotalCount).IsEqualTo(3);
-        await Assert.That(result.Data!.Items.Count).IsEqualTo(2);
     }
 
     // ========== CommandsEnabled from agent capabilities ==========

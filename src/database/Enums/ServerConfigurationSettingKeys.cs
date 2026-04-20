@@ -30,11 +30,6 @@ public enum ServerConfigurationSettingKeys : int
     OnlineThresholdSeconds = 3,
 
     /// <summary>
-    /// Number of days before certificate expiry to show a warning (default: 30).
-    /// </summary>
-    CertificateExpiryWarningDays = 4,
-
-    /// <summary>
     /// Deduplication TTL in seconds for telemetry event IDs (default: 300).
     /// </summary>
     DeduplicationTtlSeconds = 6,

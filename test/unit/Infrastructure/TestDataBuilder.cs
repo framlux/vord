@@ -175,27 +175,6 @@ public static class TestDataBuilder
     }
 
     /// <summary>
-    /// Builds a <see cref="MachineCertificate"/> with sensible defaults.
-    /// </summary>
-    public static MachineCertificate BuildMachineCertificate(
-        long machineId = 1,
-        DateTimeOffset? issuedAt = null,
-        DateTimeOffset? expiresAt = null,
-        DateTimeOffset? revokedAt = null)
-    {
-        int n = Interlocked.Increment(ref _machineCounter);
-
-        return new MachineCertificate
-        {
-            MachineId = machineId,
-            Thumbprint = $"thumbprint-{n:D8}",
-            IssuedAt = issuedAt ?? DateTimeOffset.UtcNow.AddDays(-30),
-            ExpiresAt = expiresAt ?? DateTimeOffset.UtcNow.AddDays(335),
-            RevokedAt = revokedAt
-        };
-    }
-
-    /// <summary>
     /// Builds a <see cref="TenantOidcConfiguration"/> with sensible defaults.
     /// </summary>
     public static TenantOidcConfiguration BuildTenantOidcConfiguration(
@@ -401,6 +380,25 @@ public static class TestDataBuilder
             IsEnabled = isEnabled,
             CreatedByUserId = createdByUserId,
             CreatedAt = DateTimeOffset.UtcNow,
+        };
+    }
+
+    /// <summary>
+    /// Builds a <see cref="MachineAuthorizedKey"/> with sensible defaults.
+    /// </summary>
+    public static MachineAuthorizedKey BuildMachineAuthorizedKey(
+        long machineId = 1,
+        int signingKeyId = 1,
+        int tenantId = 1,
+        int authorizedByUserId = 1)
+    {
+        return new MachineAuthorizedKey
+        {
+            MachineId = machineId,
+            SigningKeyId = signingKeyId,
+            TenantId = tenantId,
+            AuthorizedAt = DateTimeOffset.UtcNow,
+            AuthorizedByUserId = authorizedByUserId,
         };
     }
 }

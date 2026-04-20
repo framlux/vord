@@ -49,64 +49,90 @@ public sealed class RemoteCommandService : IRemoteCommandService
         // Validate command type against allowlist.
         if (AllowedCommandTypes.Contains(command.CommandType) == false)
         {
-            return ServiceResult<RemoteCommand>.Error(400, default!);
+            return ServiceResult<RemoteCommand>.BadRequest("Invalid command type");
         }
 
         // Verify the signing key exists, belongs to the correct tenant, and is not revoked.
         UserSigningKey? signingKey = await _cache.GetSigningKeyByIdAsync(command.SigningKeyId, cancellationToken);
         if ((signingKey is null) || (signingKey.TenantId != command.TenantId))
         {
-            return ServiceResult<RemoteCommand>.Error(400, default!);
+            return ServiceResult<RemoteCommand>.BadRequest("Signing key not found or does not belong to tenant");
         }
 
         if (signingKey.RevokedAt is not null)
         {
-            return ServiceResult<RemoteCommand>.Error(400, default!);
+            return ServiceResult<RemoteCommand>.BadRequest("Signing key has been revoked");
         }
 
         if (signingKey.UserId != command.UserId)
         {
-            return ServiceResult<RemoteCommand>.Error(403, default!);
+            return ServiceResult<RemoteCommand>.Forbidden("Signing key does not belong to the authenticated user");
         }
 
         // Verify Ed25519 signature.
-        byte[] publicKeyBytes = Convert.FromBase64String(signingKey.PublicKey);
-        byte[] signatureBytes = Convert.FromBase64String(command.Signature);
+        byte[] publicKeyBytes;
+        byte[] signatureBytes;
+        try
+        {
+            publicKeyBytes = Convert.FromBase64String(signingKey.PublicKey);
+            signatureBytes = Convert.FromBase64String(command.Signature);
+        }
+        catch (FormatException)
+        {
+            return ServiceResult<RemoteCommand>.BadRequest("Invalid base64 encoding in key or signature");
+        }
+
         byte[] payloadBytes = System.Text.Encoding.UTF8.GetBytes(command.CanonicalPayload);
 
         NSec.Cryptography.SignatureAlgorithm algorithm = NSec.Cryptography.SignatureAlgorithm.Ed25519;
-        NSec.Cryptography.PublicKey publicKey = NSec.Cryptography.PublicKey.Import(algorithm, publicKeyBytes, NSec.Cryptography.KeyBlobFormat.RawPublicKey);
+        NSec.Cryptography.PublicKey publicKey;
+        try
+        {
+            publicKey = NSec.Cryptography.PublicKey.Import(algorithm, publicKeyBytes, NSec.Cryptography.KeyBlobFormat.RawPublicKey);
+        }
+        catch (Exception)
+        {
+            return ServiceResult<RemoteCommand>.BadRequest("Invalid public key format");
+        }
+
         if (algorithm.Verify(publicKey, payloadBytes, signatureBytes) == false)
         {
-            return ServiceResult<RemoteCommand>.Error(400, default!);
+            return ServiceResult<RemoteCommand>.BadRequest("Signature verification failed");
         }
 
         // Validate target machine belongs to user's tenant.
         Machine? machine = await _cache.GetMachineAsync(command.MachineId, command.TenantId, cancellationToken);
         if (machine is null)
         {
-            return ServiceResult<RemoteCommand>.Error(400, default!);
+            return ServiceResult<RemoteCommand>.BadRequest("Target machine not found or does not belong to tenant");
+        }
+
+        // Verify the signing key is authorized for this specific machine.
+        bool isAuthorized = await _cache.IsKeyAuthorizedForMachineAsync(command.SigningKeyId, command.MachineId, cancellationToken);
+        if (isAuthorized == false)
+        {
+            return ServiceResult<RemoteCommand>.Forbidden("Signing key is not authorized for this machine");
         }
 
         // Reject commands when the agent has not reported the remote commands capability.
         ulong capabilities = await _pingService.GetAgentCapabilitiesAsync(command.MachineId);
         if ((capabilities & CapabilityRemoteCommands) == 0)
         {
-            return ServiceResult<RemoteCommand>.Error(400, default!);
+            return ServiceResult<RemoteCommand>.BadRequest("Remote commands are not enabled on this machine");
         }
 
         // Check for duplicate command ID.
         RemoteCommand? existing = await _cache.GetRemoteCommandByCommandIdAsync(command.CommandId, cancellationToken);
         if (existing is not null)
         {
-            return ServiceResult<RemoteCommand>.Error(409, default!);
+            return ServiceResult<RemoteCommand>.Conflict("Duplicate command ID");
         }
 
         // Check nonce uniqueness.
         bool nonceUsed = await _cache.IsNonceUsedAsync(command.Nonce, cancellationToken);
         if (nonceUsed)
         {
-            return ServiceResult<RemoteCommand>.Error(409, default!);
+            return ServiceResult<RemoteCommand>.Conflict("Nonce already used");
         }
 
         command.Status = RemoteCommandStatus.Pending;

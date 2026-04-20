@@ -2,7 +2,6 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
-using System.Security.Claims;
 using FastEndpoints;
 using Framlux.FleetManagement.Database;
 using Framlux.FleetManagement.Database.Enums;
@@ -93,8 +92,15 @@ public sealed class AlertRuleCreateEndpoint : Endpoint<CreateAlertRuleRequest, A
             return;
         }
 
-        string? userIdStr = User.FindFirstValue(ClaimTypes.Actor);
-        int userId = int.TryParse(userIdStr, out int uid) ? uid : 0;
+        int? userId = TenantClaimHelper.GetUserIdFromClaims(User);
+        if (userId is null)
+        {
+            HttpContext.Response.StatusCode = 401;
+            await HttpContext.Response.WriteAsJsonAsync(
+                ApiResponse<AlertRuleDto>.Error("Unable to identify user"), ct);
+
+            return;
+        }
 
         DateTimeOffset now = DateTimeOffset.UtcNow;
         AlertRule rule = new()
@@ -111,7 +117,7 @@ public sealed class AlertRuleCreateEndpoint : Endpoint<CreateAlertRuleRequest, A
             NotifyEmail = req.NotifyEmail,
             NotifyWebhook = req.NotifyWebhook,
             IsCustom = true,
-            CreatedByUserId = userId,
+            CreatedByUserId = userId.Value,
             CreatedAt = now,
             UpdatedAt = now,
         };

@@ -4,7 +4,6 @@
 
 using Framlux.FleetManagement.Database;
 using Framlux.FleetManagement.Database.Models;
-using Framlux.FleetManagement.Server.Endpoints.Web;
 using Framlux.FleetManagement.Server.Endpoints.Web.Models.Machines;
 using Framlux.FleetManagement.Server.Services.Infrastructure;
 using Framlux.FleetManagement.Server.Services.Machines;
@@ -129,64 +128,5 @@ public sealed class MachineDetailHandler : IMachineDetailHandler
         };
 
         return ServiceResult<MachineStatusDto>.Ok(dto);
-    }
-
-    /// <inheritdoc/>
-    public async Task<ServiceResult<PaginatedResponse<MachineCertificateDto>>> GetCertificatesAsync(
-        long machineId, int? tenantId, int page, int pageSize, CancellationToken ct)
-    {
-        if (tenantId is null)
-        {
-            return ServiceResult<PaginatedResponse<MachineCertificateDto>>.NotFound();
-        }
-
-        if (page < 1)
-        {
-            page = 1;
-        }
-
-        if ((pageSize < 1) || (pageSize > 100))
-        {
-            pageSize = 25;
-        }
-
-        bool machineExists = await _db.Machines
-            .AnyAsync(m => m.Id == machineId && m.TenantId == tenantId.Value && m.IsDeleted == false, ct);
-
-        if (machineExists == false)
-        {
-            return ServiceResult<PaginatedResponse<MachineCertificateDto>>.NotFound();
-        }
-
-        IQueryable<MachineCertificate> query = _db.MachineCertificates
-            .Where(c => c.MachineId == machineId)
-            .OrderByDescending(c => c.IssuedAt);
-
-        int totalCount = await query.CountAsync(ct);
-
-        List<MachineCertificate> certs = await query
-            .Skip((page - 1) * pageSize)
-            .Take(pageSize)
-            .ToListAsync(ct);
-
-        List<MachineCertificateDto> dtos = certs.Select(c => new MachineCertificateDto
-        {
-            Id = c.Id,
-            Thumbprint = c.Thumbprint,
-            IssuedAt = c.IssuedAt,
-            ExpiresAt = c.ExpiresAt,
-            RevokedAt = c.RevokedAt,
-            IsActive = c.RevokedAt == null && c.ExpiresAt > DateTimeOffset.UtcNow,
-        }).ToList();
-
-        PaginatedResponse<MachineCertificateDto> result = new()
-        {
-            Items = dtos,
-            Page = page,
-            PageSize = pageSize,
-            TotalCount = totalCount,
-        };
-
-        return ServiceResult<PaginatedResponse<MachineCertificateDto>>.Ok(result);
     }
 }

@@ -31,7 +31,7 @@ public sealed class ConfigurationServiceTests
     {
         IServerSettingsCache resolvedSettingsCache = settingsCache ?? Substitute.For<IServerSettingsCache>();
         IDatabaseCache resolvedDbCache = dbCache ?? Substitute.For<IDatabaseCache>();
-        resolvedDbCache.GetActiveSigningKeysForTenantAsync(Arg.Any<int>(), Arg.Any<CancellationToken>())
+        resolvedDbCache.GetActiveSigningKeysForMachineAsync(Arg.Any<long>(), Arg.Any<CancellationToken>())
             .Returns(new List<Database.Models.UserSigningKey>());
         ServerConfigurationService configService = new(resolvedSettingsCache, Substitute.For<IConnectionMultiplexer>());
 
@@ -231,7 +231,7 @@ public sealed class ConfigurationServiceTests
     public async Task GetPendingCommands_WithData_ConvertsToProtoAndMarksDelivered()
     {
         IDatabaseCache dbCache = Substitute.For<IDatabaseCache>();
-        dbCache.GetActiveSigningKeysForTenantAsync(Arg.Any<int>(), Arg.Any<CancellationToken>())
+        dbCache.GetActiveSigningKeysForMachineAsync(Arg.Any<long>(), Arg.Any<CancellationToken>())
             .Returns(new List<Database.Models.UserSigningKey>());
 
         Database.Models.RemoteCommand pendingCmd = new()
@@ -279,7 +279,7 @@ public sealed class ConfigurationServiceTests
     public async Task AcknowledgeCommand_Failure_MapsFailed()
     {
         IDatabaseCache dbCache = Substitute.For<IDatabaseCache>();
-        dbCache.GetActiveSigningKeysForTenantAsync(Arg.Any<int>(), Arg.Any<CancellationToken>())
+        dbCache.GetActiveSigningKeysForMachineAsync(Arg.Any<long>(), Arg.Any<CancellationToken>())
             .Returns(new List<Database.Models.UserSigningKey>());
         dbCache.UpdateRemoteCommandStatusAsync(
             Arg.Any<string>(), Arg.Any<long>(), Arg.Any<Database.Enums.RemoteCommandStatus>(),
@@ -309,7 +309,7 @@ public sealed class ConfigurationServiceTests
     public async Task AcknowledgeCommand_Rejected_MapsRejected()
     {
         IDatabaseCache dbCache = Substitute.For<IDatabaseCache>();
-        dbCache.GetActiveSigningKeysForTenantAsync(Arg.Any<int>(), Arg.Any<CancellationToken>())
+        dbCache.GetActiveSigningKeysForMachineAsync(Arg.Any<long>(), Arg.Any<CancellationToken>())
             .Returns(new List<Database.Models.UserSigningKey>());
         dbCache.UpdateRemoteCommandStatusAsync(
             Arg.Any<string>(), Arg.Any<long>(), Arg.Any<Database.Enums.RemoteCommandStatus>(),
@@ -339,7 +339,7 @@ public sealed class ConfigurationServiceTests
     public async Task AcknowledgeCommand_NullResult_MapsFailed()
     {
         IDatabaseCache dbCache = Substitute.For<IDatabaseCache>();
-        dbCache.GetActiveSigningKeysForTenantAsync(Arg.Any<int>(), Arg.Any<CancellationToken>())
+        dbCache.GetActiveSigningKeysForMachineAsync(Arg.Any<long>(), Arg.Any<CancellationToken>())
             .Returns(new List<Database.Models.UserSigningKey>());
         dbCache.UpdateRemoteCommandStatusAsync(
             Arg.Any<string>(), Arg.Any<long>(), Arg.Any<Database.Enums.RemoteCommandStatus>(),

@@ -357,13 +357,51 @@ public interface IDatabaseCache
     /// <returns>Returns an awaitable Task</returns>
     Task RevokeSigningKeyAsync(int keyId, int revokedByUserId, CancellationToken cancellationToken = default);
 
+    // --- Machine Authorized Keys ---
+
     /// <summary>
-    /// Gets all active (non-revoked) signing keys for a tenant.
+    /// Creates a new machine authorization record in the database.
     /// </summary>
-    /// <param name="tenantId">The tenant ID</param>
+    /// <param name="key">The machine authorization to create</param>
     /// <param name="cancellationToken">Token used to cancel async calls</param>
-    /// <returns>Returns a list of active signing keys for the tenant</returns>
-    Task<List<UserSigningKey>> GetActiveSigningKeysForTenantAsync(int tenantId, CancellationToken cancellationToken = default);
+    /// <returns>Returns the created authorization record with generated ID</returns>
+    Task<MachineAuthorizedKey> CreateMachineAuthorizationAsync(MachineAuthorizedKey key, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Gets all authorized key records for a machine, including active and revoked.
+    /// </summary>
+    /// <param name="machineId">The machine ID</param>
+    /// <param name="cancellationToken">Token used to cancel async calls</param>
+    /// <returns>Returns a list of authorization records ordered by AuthorizedAt descending</returns>
+    Task<List<MachineAuthorizedKey>> GetAuthorizedKeysForMachineAsync(long machineId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Gets active signing keys that are authorized for a specific machine.
+    /// Only returns keys where both the authorization and the signing key are not revoked.
+    /// </summary>
+    /// <param name="machineId">The machine ID</param>
+    /// <param name="cancellationToken">Token used to cancel async calls</param>
+    /// <returns>Returns a list of active signing keys authorized for the machine</returns>
+    Task<List<UserSigningKey>> GetActiveSigningKeysForMachineAsync(long machineId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Checks if a signing key has an active authorization for a machine.
+    /// </summary>
+    /// <param name="signingKeyId">The signing key ID</param>
+    /// <param name="machineId">The machine ID</param>
+    /// <param name="cancellationToken">Token used to cancel async calls</param>
+    /// <returns>Returns true if an active authorization exists; otherwise, false</returns>
+    Task<bool> IsKeyAuthorizedForMachineAsync(int signingKeyId, long machineId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Revokes a machine authorization by setting RevokedAt and RevokedByUserId on the active record.
+    /// </summary>
+    /// <param name="machineId">The machine ID</param>
+    /// <param name="signingKeyId">The signing key ID</param>
+    /// <param name="revokedByUserId">The user performing the revocation</param>
+    /// <param name="cancellationToken">Token used to cancel async calls</param>
+    /// <returns>Returns an awaitable Task</returns>
+    Task RevokeMachineAuthorizationAsync(long machineId, int signingKeyId, int revokedByUserId, CancellationToken cancellationToken = default);
 
     // --- Remote Commands ---
 

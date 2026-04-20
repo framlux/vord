@@ -38,7 +38,7 @@ public sealed class RegistrationTokenHandler : IRegistrationTokenHandler
     {
         if (string.IsNullOrWhiteSpace(name))
         {
-            return ServiceResult<RegistrationTokenDto>.Error(400, default!);
+            return ServiceResult<RegistrationTokenDto>.BadRequest("Registration token name is required");
         }
 
         string plaintextToken = GenerateToken();

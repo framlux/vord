@@ -93,9 +93,6 @@ builder.Services.AddOptions<AppOptions>()
 builder.Services.AddOptions<AuthCookieOptions>()
     .Bind(builder.Configuration.GetSection("Auth"));
 
-builder.Services.AddOptions<CertificateOptions>()
-    .Bind(builder.Configuration.GetSection("Certificates"));
-
 builder.Services.AddOptions<InternalApiOptions>()
     .Bind(builder.Configuration.GetSection("InternalApi"));
 
@@ -305,7 +302,6 @@ builder.Services.AddScoped<IDatabaseCache, DatabaseCache>();
 builder.Services.AddSingleton<IServerSettingsCache, ServerSettingsCache>();
 
 builder.Services.AddSingleton<IMachineService, MachineService>()
-                .AddSingleton<ICertificateService, CertificateService>()
                 .AddSingleton<IMachineStateService, MachineStateService>()
                 .AddSingleton<IMachineSearchService, MachineSearchService>()
                 .AddSingleton<ISqlDialect, PostgresSqlDialect>();
@@ -333,6 +329,7 @@ builder.Services.AddScoped<IMachineDetailHandler, MachineDetailHandler>();
 builder.Services.AddScoped<ITenantOidcHandler, TenantOidcHandler>();
 builder.Services.AddScoped<IDataExportHandler, DataExportHandler>();
 builder.Services.AddScoped<ISigningKeyService, SigningKeyService>();
+builder.Services.AddScoped<IMachineAuthorizedKeyService, MachineAuthorizedKeyService>();
 builder.Services.AddScoped<IRemoteCommandService, RemoteCommandService>();
 if (string.IsNullOrEmpty(objectStorageOpts.BucketName) == false)
 {

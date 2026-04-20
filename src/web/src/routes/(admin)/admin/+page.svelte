@@ -11,7 +11,7 @@
 	} from '$lib/api/types';
 	import { formatDate } from '$lib/utils/format';
 	import { enhance } from '$app/forms';
-	import { Users, Building2, Settings, Save, CheckCircle, Clock, Activity, Server, Shield } from 'lucide-svelte';
+	import { Users, Building2, Settings, Save, CircleCheck, Clock, Activity, Server, Shield } from 'lucide-svelte';
 
 	let { data, form } = $props();
 
@@ -73,8 +73,6 @@
 		HEARTBEAT: 1,
 		CONFIG_REFRESH: 2,
 		ONLINE_THRESHOLD: 3,
-		CERT_EXPIRY: 4,
-		TELEMETRY_CLEANUP: 5,
 		DEDUP_TTL: 6,
 		COMMAND_POLL: 7,
 		ALLOW_SIGNUP: 8,
@@ -94,7 +92,7 @@
 		{ title: 'Agent Timing', icon: Clock, keys: [KEYS.HEARTBEAT, KEYS.CONFIG_REFRESH, KEYS.COMMAND_POLL] },
 		{ title: 'Telemetry Collection', icon: Activity, keys: [KEYS.COLLECT_FAST, KEYS.COLLECT_SLOW] },
 		{ title: 'Telemetry Transmission', icon: Activity, keys: [KEYS.SEND_FAST, KEYS.SEND_SLOW] },
-		{ title: 'Server Settings', icon: Server, keys: [KEYS.ONLINE_THRESHOLD, KEYS.CERT_EXPIRY, KEYS.TELEMETRY_CLEANUP, KEYS.DEDUP_TTL] },
+		{ title: 'Server Settings', icon: Server, keys: [KEYS.ONLINE_THRESHOLD, KEYS.DEDUP_TTL] },
 		{ title: 'Access Control', icon: Shield, keys: [KEYS.ALLOW_SIGNUP] },
 	];
 
@@ -108,8 +106,6 @@
 		[KEYS.SEND_FAST]: 'Fast Send Interval',
 		[KEYS.SEND_SLOW]: 'Slow Send Interval',
 		[KEYS.ONLINE_THRESHOLD]: 'Online Threshold',
-		[KEYS.CERT_EXPIRY]: 'Certificate Expiry Warning',
-		[KEYS.TELEMETRY_CLEANUP]: 'Telemetry Cleanup Grace Period',
 		[KEYS.DEDUP_TTL]: 'Deduplication TTL',
 		[KEYS.ALLOW_SIGNUP]: 'Allow User Signup',
 	};
@@ -123,8 +119,6 @@
 		[KEYS.SEND_FAST]: 'seconds',
 		[KEYS.SEND_SLOW]: 'seconds',
 		[KEYS.ONLINE_THRESHOLD]: 'seconds',
-		[KEYS.CERT_EXPIRY]: 'days',
-		[KEYS.TELEMETRY_CLEANUP]: 'days',
 		[KEYS.DEDUP_TTL]: 'seconds',
 	};
 </script>
@@ -375,7 +369,7 @@
 				<div
 					class="mb-4 flex items-center gap-2 rounded-lg border border-green-200 bg-green-50 p-4 text-sm text-green-800 dark:border-green-800 dark:bg-green-900/20 dark:text-green-400"
 				>
-					<CheckCircle class="h-4 w-4" />
+					<CircleCheck class="h-4 w-4" />
 					Settings saved successfully.
 				</div>
 			{/if}

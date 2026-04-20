@@ -45,11 +45,6 @@ public sealed class DatabaseContext(DataOptions<DatabaseContext> options) : Data
     public ITable<MachineTelemetry> MachineTelemetry => this.GetTable<MachineTelemetry>();
 
     /// <summary>
-    /// Represents the collection of machine certificate records in the database.
-    /// </summary>
-    public ITable<MachineCertificate> MachineCertificates => this.GetTable<MachineCertificate>();
-
-    /// <summary>
     /// Represents the collection of machine state summary records for fleet-level queries.
     /// </summary>
     public ITable<MachineStateSummary> MachineStateSummaries => this.GetTable<MachineStateSummary>();
@@ -113,4 +108,9 @@ public sealed class DatabaseContext(DataOptions<DatabaseContext> options) : Data
     /// Represents the collection of remote commands sent to machines.
     /// </summary>
     public ITable<RemoteCommand> RemoteCommands => this.GetTable<RemoteCommand>();
+
+    /// <summary>
+    /// Represents the collection of machine authorized key records in the database.
+    /// </summary>
+    public ITable<MachineAuthorizedKey> MachineAuthorizedKeys => this.GetTable<MachineAuthorizedKey>();
 }

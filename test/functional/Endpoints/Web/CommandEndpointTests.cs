@@ -116,6 +116,17 @@ public sealed class CommandEndpointTests
         };
         signingKey.Id = await db.InsertWithInt32IdentityAsync(signingKey);
 
+        // Authorize the signing key for the machine so remote commands are permitted.
+        MachineAuthorizedKey authorization = new()
+        {
+            MachineId = machine.Id,
+            SigningKeyId = signingKey.Id,
+            TenantId = tenant.Id,
+            AuthorizedAt = DateTimeOffset.UtcNow,
+            AuthorizedByUserId = user.Id,
+        };
+        await db.InsertWithInt32IdentityAsync(authorization);
+
         return (tenant.Id, user.Id, machine.Id, signingKey.Id, privateKey);
     }
 

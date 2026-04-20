@@ -51,25 +51,25 @@ public sealed partial class TenantHandler : ITenantHandler
     {
         if (string.IsNullOrWhiteSpace(name))
         {
-            return ServiceResult<TenantDto>.Error(400, default!);
+            return ServiceResult<TenantDto>.BadRequest("Tenant name is required");
         }
 
         name = name.Trim();
 
         if ((name.Length < MinNameLength) || (name.Length > MaxNameLength))
         {
-            return ServiceResult<TenantDto>.Error(400, default!);
+            return ServiceResult<TenantDto>.BadRequest("Tenant name must be between 5 and 100 characters");
         }
 
         if (BlockedCharactersRegex().IsMatch(name))
         {
-            return ServiceResult<TenantDto>.Error(400, default!);
+            return ServiceResult<TenantDto>.BadRequest("Tenant name contains characters that are not allowed");
         }
 
         Tenant? existing = await _databaseCache.GetTenantByNameAsync(name, ct);
         if (existing is not null)
         {
-            return ServiceResult<TenantDto>.Error(409, default!);
+            return ServiceResult<TenantDto>.Conflict("A tenant with this name already exists");
         }
 
         Tenant tenant = await _databaseCache.CreateTenantAsync(new Tenant

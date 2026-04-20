@@ -26,5 +26,7 @@ public enum AuditResourceType : short
     /// <summary>A signing key.</summary>
     SigningKey = 8,
     /// <summary>A remote command.</summary>
-    RemoteCommand = 9
+    RemoteCommand = 9,
+    /// <summary>A machine authorized key.</summary>
+    MachineAuthorizedKey = 10,
 }

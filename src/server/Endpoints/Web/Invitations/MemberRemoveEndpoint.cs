@@ -2,7 +2,6 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
-using System.Security.Claims;
 using FastEndpoints;
 using Framlux.FleetManagement.Server.Auth;
 using Framlux.FleetManagement.Server.Services.Handlers;
@@ -41,10 +40,17 @@ public sealed class MemberRemoveEndpoint : EndpointWithoutRequest<ApiResponse<ob
         int targetUserId = Route<int>("userId");
         int? tenantId = TenantClaimHelper.GetTenantIdFromClaims(User, HttpContext);
 
-        string? userIdStr = User.FindFirstValue(ClaimTypes.Actor);
-        int currentUserId = int.TryParse(userIdStr, out int uid) ? uid : 0;
+        int? currentUserId = TenantClaimHelper.GetUserIdFromClaims(User);
+        if (currentUserId is null)
+        {
+            HttpContext.Response.StatusCode = 401;
+            await HttpContext.Response.WriteAsJsonAsync(
+                ApiResponse<object>.Error("Unable to identify user"), ct);
 
-        ServiceResult<ApiResponse<object>> result = await _handler.RemoveAsync(targetUserId, tenantId, currentUserId, ct);
+            return;
+        }
+
+        ServiceResult<ApiResponse<object>> result = await _handler.RemoveAsync(targetUserId, tenantId, currentUserId.Value, ct);
 
         if (result.IsNotFound)
         {
@@ -61,7 +67,7 @@ public sealed class MemberRemoveEndpoint : EndpointWithoutRequest<ApiResponse<ob
             return;
         }
 
-        _logger.LogInformation("User {TargetUserId} removed from tenant {TenantId} by user {CurrentUserId}", targetUserId, tenantId, currentUserId);
+        _logger.LogInformation("User {TargetUserId} removed from tenant {TenantId} by user {CurrentUserId}", targetUserId, tenantId, currentUserId.Value);
 
         await Send.OkAsync(result.Data!, cancellation: ct);
     }

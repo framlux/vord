@@ -58,4 +58,16 @@ public sealed class ServiceResult<T>
     /// </summary>
     public static ServiceResult<T> BadRequest(string errorMessage) =>
         new() { StatusCode = 400, Data = default, ErrorMessage = errorMessage };
+
+    /// <summary>
+    /// Creates a forbidden result with a message.
+    /// </summary>
+    public static ServiceResult<T> Forbidden(string errorMessage) =>
+        new() { StatusCode = 403, Data = default, ErrorMessage = errorMessage };
+
+    /// <summary>
+    /// Creates a conflict result with a message.
+    /// </summary>
+    public static ServiceResult<T> Conflict(string errorMessage) =>
+        new() { StatusCode = 409, Data = default, ErrorMessage = errorMessage };
 }

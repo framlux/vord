@@ -2,7 +2,6 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
-using System.Security.Claims;
 using FastEndpoints;
 using Framlux.FleetManagement.Server.Auth;
 using Framlux.FleetManagement.Server.Options;
@@ -98,13 +97,22 @@ public sealed class InvitationCreateEndpoint : Endpoint<CreateInvitationRequest,
     public override async Task HandleAsync(CreateInvitationRequest req, CancellationToken ct)
     {
         int? tenantId = TenantClaimHelper.GetTenantIdFromClaims(User, HttpContext);
-        string? userIdStr = User.FindFirstValue(ClaimTypes.Actor);
-        int userId = int.TryParse(userIdStr, out int uid) ? uid : 0;
+
+        int? userId = TenantClaimHelper.GetUserIdFromClaims(User);
+        if (userId is null)
+        {
+            HttpContext.Response.StatusCode = 401;
+            await HttpContext.Response.WriteAsJsonAsync(
+                ApiResponse<InvitationResponse>.Error("Unable to identify user"), ct);
+
+            return;
+        }
+
         string baseUrl = string.IsNullOrEmpty(_appOptions.BaseUrl) == false
             ? _appOptions.BaseUrl
             : $"{HttpContext.Request.Scheme}://{HttpContext.Request.Host}";
 
-        ServiceResult<InvitationCreateResult> result = await _handler.CreateAsync(req.Email, req.Role, tenantId, userId, baseUrl, ct);
+        ServiceResult<InvitationCreateResult> result = await _handler.CreateAsync(req.Email, req.Role, tenantId, userId.Value, baseUrl, ct);
 
         if (result.IsSuccess == false)
         {
@@ -114,7 +122,7 @@ public sealed class InvitationCreateEndpoint : Endpoint<CreateInvitationRequest,
             return;
         }
 
-        _logger.LogInformation("Invitation created for email {Email} in tenant {TenantId} by user {UserId}", req.Email, tenantId, userId);
+        _logger.LogInformation("Invitation created for email {Email} in tenant {TenantId} by user {UserId}", req.Email, tenantId, userId.Value);
 
         InvitationResponse response = new()
         {

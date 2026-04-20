@@ -2,7 +2,6 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
-using System.Security.Claims;
 using FastEndpoints;
 using Framlux.FleetManagement.Server.Auth;
 using Framlux.FleetManagement.Server.Services.Handlers;
@@ -37,11 +36,19 @@ public sealed class MachineDeleteEndpoint : EndpointWithoutRequest<ApiResponse<o
     public override async Task HandleAsync(CancellationToken ct)
     {
         long machineId = Route<long>("id");
-        string? userIdStr = User.FindFirstValue(ClaimTypes.Actor);
-        int userId = int.TryParse(userIdStr, out int uid) ? uid : 0;
         int? tenantId = TenantClaimHelper.GetTenantIdFromClaims(User, HttpContext);
 
-        ServiceResult<ApiResponse<object>> result = await _handler.DeleteAsync(machineId, tenantId, userId, ct);
+        int? userId = TenantClaimHelper.GetUserIdFromClaims(User);
+        if (userId is null)
+        {
+            HttpContext.Response.StatusCode = 401;
+            await HttpContext.Response.WriteAsJsonAsync(
+                ApiResponse<object>.Error("Unable to identify user"), ct);
+
+            return;
+        }
+
+        ServiceResult<ApiResponse<object>> result = await _handler.DeleteAsync(machineId, tenantId, userId.Value, ct);
 
         if (result.IsNotFound)
         {

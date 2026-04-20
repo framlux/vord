@@ -40,19 +40,19 @@ public sealed class SigningKeyService : ISigningKeyService
         }
         catch (FormatException)
         {
-            return ServiceResult<UserSigningKey>.Error(400, default!);
+            return ServiceResult<UserSigningKey>.BadRequest("Public key must be valid base64-encoded data");
         }
 
         if (publicKeyBytes.Length != 32)
         {
-            return ServiceResult<UserSigningKey>.Error(400, default!);
+            return ServiceResult<UserSigningKey>.BadRequest("Public key must be exactly 32 bytes for Ed25519");
         }
 
         // Enforce max active keys per user per tenant.
         int activeCount = await _cache.GetActiveSigningKeyCountAsync(userId, tenantId, cancellationToken);
         if (activeCount >= ISigningKeyService.MaxActiveKeysPerUser)
         {
-            return ServiceResult<UserSigningKey>.Error(409, default!);
+            return ServiceResult<UserSigningKey>.Conflict("Maximum number of active signing keys per user has been reached");
         }
 
         // Compute SHA-256 fingerprint of the public key.

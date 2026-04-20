@@ -23,9 +23,4 @@ public sealed class DashboardSummaryDto
     /// Number of machines pending approval.
     /// </summary>
     public int PendingApprovals { get; set; }
-
-    /// <summary>
-    /// Number of certificates expiring within 30 days.
-    /// </summary>
-    public int ExpiringCertificates { get; set; }
 }
