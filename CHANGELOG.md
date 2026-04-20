@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file. See [versionize](https://github.com/versionize/versionize) for commit guidelines.
 
+<a name="2.3.1"></a>
+## [2.3.1](https://www.github.com/framlux/vord/releases/tag/v2.3.1) (2026-04-19)
+
+### Bug Fixes
+
+* Fixing race condition in functional test initialization ([22b6c84](https://www.github.com/framlux/vord/commit/22b6c8461db13959c6b7aa66b34a086a8ee44621))
+
 <a name="2.3.0"></a>
 ## [2.3.0](https://www.github.com/framlux/vord/releases/tag/v2.3.0) (2026-04-19)
 
