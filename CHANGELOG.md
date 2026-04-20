@@ -2,6 +2,18 @@
 
 All notable changes to this project will be documented in this file. See [versionize](https://github.com/versionize/versionize) for commit guidelines.
 
+<a name="2.3.0"></a>
+## [2.3.0](https://www.github.com/framlux/vord/releases/tag/v2.3.0) (2026-04-19)
+
+### Features
+
+* Adding agent capabilities flag to turn UI on or off based on agent configuration ([55eff8f](https://www.github.com/framlux/vord/commit/55eff8f9624f0e94096983a19836423da1af61c3))
+* Removing old Certificates for API keys and updating Remote Command certs ([f7da694](https://www.github.com/framlux/vord/commit/f7da69439efa2a22c69e8b3cf5df2e7edd30f46d))
+
+### Bug Fixes
+
+* Removing debug UI Telemetry tab and corresponding APIs ([73a6c44](https://www.github.com/framlux/vord/commit/73a6c44bdb256ed0c39c3435be42a222c10e5d54))
+
 <a name="2.2.2"></a>
 ## [2.2.2](https://www.github.com/framlux/vord/releases/tag/v2.2.2) (2026-04-13)
 
