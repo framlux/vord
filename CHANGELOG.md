@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file. See [versionize](https://github.com/versionize/versionize) for commit guidelines.
 
+<a name="2.5.0"></a>
+## [2.5.0](https://www.github.com/framlux/vord/releases/tag/v2.5.0) (2026-04-21)
+
+### Features
+
+* Adding edit for machine Name, Description, and Location ([c3d55f5](https://www.github.com/framlux/vord/commit/c3d55f557d4599a39316b4499a8c04f7d52b74a1))
+
+### Bug Fixes
+
+* bumping C# package versions ([c078f16](https://www.github.com/framlux/vord/commit/c078f166e4ad9af2b9878a6b38f2a2c0a7b61c4f))
+
 <a name="2.4.0"></a>
 ## [2.4.0](https://www.github.com/framlux/vord/releases/tag/v2.4.0) (2026-04-21)
 
