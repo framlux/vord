@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file. See [versionize](https://github.com/versionize/versionize) for commit guidelines.
 
+<a name="2.4.0"></a>
+## [2.4.0](https://www.github.com/framlux/vord/releases/tag/v2.4.0) (2026-04-21)
+
+### Features
+
+* Upgrading the navigation to be more clear and usable ([aaa9a20](https://www.github.com/framlux/vord/commit/aaa9a20ffad11fd92aa7ffb03cd58f48968210b8))
+
 <a name="2.3.1"></a>
 ## [2.3.1](https://www.github.com/framlux/vord/releases/tag/v2.3.1) (2026-04-19)
 
