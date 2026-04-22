@@ -5,7 +5,7 @@
 <script lang="ts">
 	import { goto } from '$app/navigation';
 	import { ApiClient } from '$lib/api/client';
-	import { AlertTriangle, CircleCheck, XCircle, Clock } from 'lucide-svelte';
+	import { TriangleAlert, CircleCheck, CircleX, Clock } from 'lucide-svelte';
 	import PublicShell from '$lib/components/PublicShell.svelte';
 
 	let { data } = $props();
@@ -58,7 +58,7 @@
 		<div class="w-full max-w-md rounded-xl border border-surface-200 bg-surface-50 p-8 shadow-sm dark:border-surface-700 dark:bg-surface-800">
 			{#if invitation === null}
 				<div class="text-center">
-					<XCircle size={48} class="mx-auto text-red-500" />
+					<CircleX size={48} class="mx-auto text-red-500" />
 					<h1 class="mt-4 text-xl font-bold text-surface-900 dark:text-surface-50">Invitation Not Found</h1>
 					<p class="mt-2 text-sm text-surface-500">This invitation link is invalid or has been removed.</p>
 					<a href="/dashboard" class="mt-6 inline-block rounded-lg bg-primary-500 px-6 py-2 text-sm font-medium text-white hover:bg-primary-600">
@@ -104,12 +104,12 @@
 					</div>
 				{:else if invitation.status !== 'Pending'}
 					<div class="mt-4 flex items-center gap-2 rounded-lg bg-surface-100 px-4 py-3 dark:bg-surface-700">
-						<XCircle size={16} class="text-surface-500" />
+						<CircleX size={16} class="text-surface-500" />
 						<span class="text-sm text-surface-600 dark:text-surface-400">This invitation has been {invitation.status.toLowerCase()}.</span>
 					</div>
 				{:else if emailMatch === false}
 					<div class="mt-4 flex items-center gap-2 rounded-lg bg-red-50 px-4 py-3 dark:bg-red-900/20">
-						<AlertTriangle size={16} class="text-red-600 dark:text-red-400" />
+						<TriangleAlert size={16} class="text-red-600 dark:text-red-400" />
 						<span class="text-sm text-red-700 dark:text-red-300">Your email doesn't match. Sign in with <strong>{invitation.email}</strong> to accept.</span>
 					</div>
 				{/if}

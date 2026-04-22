@@ -4,7 +4,7 @@
 
 <script lang="ts">
 	import type { AlertRuleDto, AlertEventDto, WebhookEndpointDto, PaginatedResponse } from '$lib/api/types';
-	import { Bell, AlertCircle, ChevronLeft, ChevronRight, Plus, Trash2, Check, Webhook } from 'lucide-svelte';
+	import { Bell, CircleAlert, ChevronLeft, ChevronRight, Plus, Trash2, Check, Webhook } from 'lucide-svelte';
 	import { enhance } from '$app/forms';
 	import { goto } from '$app/navigation';
 	import { page as pageState } from '$app/state';
@@ -73,7 +73,7 @@
 
 	{#if rules === null}
 		<div class="flex items-center gap-3 rounded-xl border border-amber-200 bg-amber-50 p-6 dark:border-amber-800 dark:bg-amber-900/20">
-			<AlertCircle class="h-5 w-5 text-amber-600 dark:text-amber-400" />
+			<CircleAlert class="h-5 w-5 text-amber-600 dark:text-amber-400" />
 			<p class="text-sm text-amber-700 dark:text-amber-300">
 				Alerting is available on Pro and Team plans. Upgrade your subscription to access this feature.
 			</p>

@@ -9,7 +9,7 @@
 </script>
 
 {#if data.user}
-	<AppShell user={data.user}>
+	<AppShell user={data.user} subscription={data.subscription}>
 		{@render children()}
 	</AppShell>
 {/if}

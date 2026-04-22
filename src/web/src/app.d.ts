@@ -2,7 +2,7 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
-import type { UserDto } from '$lib/api/types';
+import type { UserDto, SubscriptionDto } from '$lib/api/types';
 
 declare global {
 	namespace App {
@@ -11,6 +11,7 @@ declare global {
 		}
 		interface PageData {
 			user: UserDto | null;
+			subscription?: SubscriptionDto | null;
 		}
 	}
 }

@@ -6,7 +6,7 @@
     import { invalidateAll } from '$app/navigation';
     import { ApiClient } from '$lib/api/client';
     import type { RegistrationTokenDto } from '$lib/api/types';
-    import { Copy, XCircle, Check, Plus, Terminal } from 'lucide-svelte';
+    import { Copy, CircleX, Check, Plus, Terminal } from 'lucide-svelte';
     import InstallScriptModal from '$lib/components/InstallScriptModal.svelte';
     import PageHeader from '$lib/components/PageHeader.svelte';
     import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
@@ -161,7 +161,7 @@
                             class="inline-flex items-center gap-1 rounded-md border border-surface-200 px-2.5 py-1 text-xs text-surface-500 hover:bg-surface-100 hover:text-red-600 dark:border-surface-700 dark:hover:bg-surface-700 dark:hover:text-red-400"
                             title="Revoke token"
                         >
-                            <XCircle size={14} />
+                            <CircleX size={14} />
                             Revoke
                         </button>
                     </div>

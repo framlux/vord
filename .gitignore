@@ -11,6 +11,7 @@
 *.sln.docstates
 *.DS_Store
 *.out
+.superpowers/
 
 src/certs/
 

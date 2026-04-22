@@ -4,7 +4,7 @@
 
 <script lang="ts">
 	import type { SubscriptionDto, UpcomingInvoiceDto, InvoiceDto, UsagePointDto } from '$lib/api/types';
-	import { CreditCard, ArrowUpCircle, ArrowDownCircle, ExternalLink, AlertCircle, XCircle, RotateCcw, Calculator, Receipt, TrendingUp, Download, ChevronDown } from 'lucide-svelte';
+	import { CreditCard, CircleArrowUp, CircleArrowDown, ExternalLink, CircleAlert, CircleX, RotateCcw, Calculator, Receipt, TrendingUp, Download, ChevronDown } from 'lucide-svelte';
 
 	let { data, form } = $props();
 
@@ -175,7 +175,7 @@
 	{#if isPastDue}
 		<div class="rounded-xl border border-amber-300 bg-amber-50 p-4 dark:border-amber-700 dark:bg-amber-900/20">
 			<div class="flex items-start gap-3">
-				<AlertCircle class="mt-0.5 h-5 w-5 text-amber-600 dark:text-amber-400" />
+				<CircleAlert class="mt-0.5 h-5 w-5 text-amber-600 dark:text-amber-400" />
 				<div class="flex-1">
 					<h3 class="font-semibold text-amber-800 dark:text-amber-200">Payment Past Due</h3>
 					<p class="mt-1 text-sm text-amber-700 dark:text-amber-300">
@@ -201,9 +201,9 @@
 		<div class="rounded-xl border p-4 {isCanceling ? 'border-red-300 bg-red-50 dark:border-red-700 dark:bg-red-900/20' : 'border-amber-300 bg-amber-50 dark:border-amber-700 dark:bg-amber-900/20'}">
 			<div class="flex items-start gap-3">
 				{#if isCanceling}
-					<XCircle class="mt-0.5 h-5 w-5 text-red-600 dark:text-red-400" />
+					<CircleX class="mt-0.5 h-5 w-5 text-red-600 dark:text-red-400" />
 				{:else}
-					<ArrowDownCircle class="mt-0.5 h-5 w-5 text-amber-600 dark:text-amber-400" />
+					<CircleArrowDown class="mt-0.5 h-5 w-5 text-amber-600 dark:text-amber-400" />
 				{/if}
 				<div class="flex-1">
 					<h3 class="font-semibold {isCanceling ? 'text-red-800 dark:text-red-200' : 'text-amber-800 dark:text-amber-200'}">
@@ -236,7 +236,7 @@
 	{#if isCanceled}
 		<div class="rounded-xl border border-red-300 bg-red-50 p-4 dark:border-red-700 dark:bg-red-900/20">
 			<div class="flex items-start gap-3">
-				<XCircle class="mt-0.5 h-5 w-5 text-red-600 dark:text-red-400" />
+				<CircleX class="mt-0.5 h-5 w-5 text-red-600 dark:text-red-400" />
 				<div class="flex-1">
 					<h3 class="font-semibold text-red-800 dark:text-red-200">Your account is canceled</h3>
 					<p class="mt-1 text-sm text-red-700 dark:text-red-300">
@@ -260,7 +260,7 @@
 									type="submit"
 									class="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-5 py-2.5 text-sm font-medium text-white transition-colors hover:bg-blue-700 dark:bg-blue-500 dark:hover:bg-blue-600"
 								>
-									<ArrowUpCircle class="h-4 w-4" />
+									<CircleArrowUp class="h-4 w-4" />
 									Reactivate with Pro
 								</button>
 							</form>
@@ -270,7 +270,7 @@
 									type="submit"
 									class="inline-flex items-center gap-2 rounded-lg bg-purple-600 px-5 py-2.5 text-sm font-medium text-white transition-colors hover:bg-purple-700 dark:bg-purple-500 dark:hover:bg-purple-600"
 								>
-									<ArrowUpCircle class="h-4 w-4" />
+									<CircleArrowUp class="h-4 w-4" />
 									Reactivate with Team
 								</button>
 							</form>
@@ -376,7 +376,7 @@
 				<div class="space-y-6">
 					<div class="flex items-start gap-4">
 						<div class="rounded-lg bg-blue-100 p-3 dark:bg-blue-900/30">
-							<ArrowUpCircle class="h-6 w-6 text-blue-600 dark:text-blue-400" />
+							<CircleArrowUp class="h-6 w-6 text-blue-600 dark:text-blue-400" />
 						</div>
 						<div class="flex-1">
 							<h3 class="text-lg font-semibold text-surface-900 dark:text-surface-50">
@@ -392,7 +392,7 @@
 										type="submit"
 										class="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-5 py-2.5 text-sm font-medium text-white transition-colors hover:bg-blue-700 dark:bg-blue-500 dark:hover:bg-blue-600"
 									>
-										<ArrowUpCircle class="h-4 w-4" />
+										<CircleArrowUp class="h-4 w-4" />
 										Upgrade to Pro — $3/host/mo
 									</button>
 								</form>
@@ -402,7 +402,7 @@
 										type="submit"
 										class="inline-flex items-center gap-2 rounded-lg bg-purple-600 px-5 py-2.5 text-sm font-medium text-white transition-colors hover:bg-purple-700 dark:bg-purple-500 dark:hover:bg-purple-600"
 									>
-										<ArrowUpCircle class="h-4 w-4" />
+										<CircleArrowUp class="h-4 w-4" />
 										Upgrade to Team — $5/host/mo
 									</button>
 								</form>
@@ -482,7 +482,7 @@
 											type="submit"
 											class="inline-flex items-center gap-2 rounded-lg bg-purple-600 px-5 py-2.5 text-sm font-medium text-white transition-colors hover:bg-purple-700 dark:bg-purple-500 dark:hover:bg-purple-600"
 										>
-											<ArrowUpCircle class="h-4 w-4" />
+											<CircleArrowUp class="h-4 w-4" />
 											Upgrade to Team
 										</button>
 									</form>
@@ -504,7 +504,7 @@
 											onclick={() => showDowngradeToProConfirm = true}
 											class="inline-flex items-center gap-2 text-sm text-amber-600 transition-colors hover:text-amber-700 dark:text-amber-400 dark:hover:text-amber-300"
 										>
-											<ArrowDownCircle class="h-4 w-4" />
+											<CircleArrowDown class="h-4 w-4" />
 											Downgrade to Pro
 										</button>
 									{:else}
@@ -550,7 +550,7 @@
 										onclick={() => showDowngradeToFreeConfirm = true}
 										class="inline-flex items-center gap-2 text-sm text-amber-600 transition-colors hover:text-amber-700 dark:text-amber-400 dark:hover:text-amber-300"
 									>
-										<ArrowDownCircle class="h-4 w-4" />
+										<CircleArrowDown class="h-4 w-4" />
 										Downgrade to Free
 									</button>
 								{:else}

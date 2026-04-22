@@ -45,13 +45,10 @@ namespace Framlux.FleetManagement.FunctionalTest.Infrastructure;
 /// </summary>
 public class FunctionalTestFactory : WebApplicationFactory<Program>
 {
-    // FastEndpoints stores JsonSerializerOptions in a static field and modifies TypeInfoResolver
-    // during UseFastEndpoints. When multiple WebApplicationFactory instances start concurrently,
-    // the first serialization locks the options, causing subsequent startups to fail with
-    // "This JsonSerializerOptions instance is read-only". We pre-initialize the options once
-    // so all subsequent factory startups find them already configured.
-    private static readonly object InitLock = new();
-    private static bool _fastEndpointsInitialized;
+    // FastEndpoints modifies a static JsonSerializerOptions during UseFastEndpoints.
+    // Only the first factory startup needs to complete before others can proceed safely.
+    private static readonly object FirstHostLock = new();
+    private static volatile bool _firstHostCreated;
 
     private readonly SqliteConnection _dbConnection;
     private string? _internalApiKey;
@@ -119,18 +116,17 @@ public class FunctionalTestFactory : WebApplicationFactory<Program>
     /// <inheritdoc/>
     protected override IHost CreateHost(IHostBuilder builder)
     {
-        // Ensure the first WebApplicationFactory startup (which initializes FastEndpoints'
-        // static JsonSerializerOptions) completes before allowing parallel startups.
-        // After the first successful init, subsequent factories can start freely because
-        // UseFastEndpoints detects TypeInfoResolver is already set and skips modification.
-        if (_fastEndpointsInitialized == false)
+        if (_firstHostCreated == false)
         {
-            lock (InitLock)
+            lock (FirstHostLock)
             {
-                IHost host = base.CreateHost(builder);
-                _fastEndpointsInitialized = true;
+                if (_firstHostCreated == false)
+                {
+                    IHost host = base.CreateHost(builder);
+                    _firstHostCreated = true;
 
-                return host;
+                    return host;
+                }
             }
         }
 

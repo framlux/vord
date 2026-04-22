@@ -5,7 +5,7 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import type { TenantDto, SubscriptionDto } from '$lib/api/types';
-	import { Building2, Download, Check, AlertCircle, Loader2, CreditCard } from 'lucide-svelte';
+	import { Building2, Download, Check, CircleAlert, LoaderCircle, CreditCard } from 'lucide-svelte';
 	import { formatBytes } from '$lib/utils/format';
 
 	let { data } = $props();
@@ -273,7 +273,7 @@
 			<div
 				class="mb-4 flex items-center gap-2 rounded-lg bg-red-50 p-3 text-sm text-red-700 dark:bg-red-900/20 dark:text-red-400"
 			>
-				<AlertCircle class="h-4 w-4 flex-shrink-0" />
+				<CircleAlert class="h-4 w-4 flex-shrink-0" />
 				{exportError}
 			</div>
 		{/if}
@@ -281,7 +281,7 @@
 			<div
 				class="mb-4 flex items-center gap-2 rounded-lg bg-blue-50 p-3 text-sm text-blue-700 dark:bg-blue-900/20 dark:text-blue-400"
 			>
-				<Loader2 class="h-4 w-4 flex-shrink-0 animate-spin" />
+				<LoaderCircle class="h-4 w-4 flex-shrink-0 animate-spin" />
 				Preparing your export...
 			</div>
 		{/if}
@@ -309,7 +309,7 @@
 			class="inline-flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-primary-700 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-primary-500 dark:hover:bg-primary-600"
 		>
 			{#if isExporting}
-				<Loader2 class="h-4 w-4 animate-spin" />
+				<LoaderCircle class="h-4 w-4 animate-spin" />
 				Exporting...
 			{:else}
 				<Download class="h-4 w-4" />

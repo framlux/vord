@@ -7,7 +7,7 @@
 	import { ApiClient } from '$lib/api/client';
 	import type { SigningKeyDto, SigningKeyListResponse } from '$lib/api/types';
 	import { generateKeyPair, autoLabel } from '$lib/crypto/signing';
-	import { Key, XCircle, Plus, Shield, AlertTriangle } from 'lucide-svelte';
+	import { Key, CircleX, Plus, Shield, TriangleAlert } from 'lucide-svelte';
 	import PageHeader from '$lib/components/PageHeader.svelte';
 	import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
 
@@ -98,7 +98,7 @@
 			<div
 				class="mt-4 flex items-center gap-2 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 dark:border-amber-700 dark:bg-amber-900/20"
 			>
-				<AlertTriangle size={16} class="text-amber-600 dark:text-amber-400" />
+				<TriangleAlert size={16} class="text-amber-600 dark:text-amber-400" />
 				<span class="text-sm text-amber-700 dark:text-amber-300">
 					Maximum of {signingKeys.maxKeys} active keys reached. Revoke an existing key to register
 					a new one.
@@ -177,7 +177,7 @@
 							class="inline-flex items-center gap-1 rounded-md border border-surface-200 px-2.5 py-1 text-xs text-surface-500 hover:bg-surface-100 hover:text-red-600 dark:border-surface-700 dark:hover:bg-surface-700 dark:hover:text-red-400"
 							title="Revoke key"
 						>
-							<XCircle size={14} />
+							<CircleX size={14} />
 							Revoke
 						</button>
 					</div>

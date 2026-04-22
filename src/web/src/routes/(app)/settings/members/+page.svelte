@@ -14,7 +14,7 @@
     Mail,
     Copy,
     RefreshCw,
-    XCircle,
+    CircleX,
     UserMinus,
     Check,
   } from "lucide-svelte";
@@ -369,7 +369,7 @@
                 class="inline-flex items-center gap-1 rounded-md border border-surface-200 px-2.5 py-1 text-xs text-surface-500 hover:bg-surface-100 hover:text-red-600 dark:border-surface-700 dark:hover:bg-surface-700 dark:hover:text-red-400"
                 title="Revoke invitation"
               >
-                <XCircle size={14} />
+                <CircleX size={14} />
                 Revoke
               </button>
             </div>

@@ -1,3 +1,7 @@
+/* Copyright (c) 2026 Framlux LLC
+   Licensed under the Functional Source License, Version 1.1, ALv2 Future License
+   See LICENSE for details. */
+
 @import 'tailwindcss';
 @import '@skeletonlabs/skeleton';
 
@@ -49,6 +53,26 @@ html {
   animation: fade-in 0.2s ease-out both;
 }
 
+/* Mobile nav slide-in */
+@keyframes slide-in-left {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(0); }
+}
+
+.animate-slide-in-left {
+  animation: slide-in-left 0.2s ease-out both;
+}
+
+/* Mobile overlay backdrop fade */
+@keyframes fade-in-overlay {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.animate-fade-overlay {
+  animation: fade-in-overlay 0.15s ease-out both;
+}
+
 /* Machine detail page animations */
 @keyframes machine-ring-draw {
   from { stroke-dashoffset: 600; }
@@ -98,7 +122,9 @@ html {
   .machine-glow-pulse,
   .machine-circuit-dash,
   .machine-led-pulse,
-  .machine-gauge-fill {
+  .machine-gauge-fill,
+  .animate-slide-in-left,
+  .animate-fade-overlay {
     animation: none;
   }
 }

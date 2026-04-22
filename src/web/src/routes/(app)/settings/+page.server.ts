@@ -16,12 +16,8 @@ export const load: PageServerLoad = async ({ fetch, cookies, locals }) => {
 	const api = createServerApiClient(fetch, cookies.get('vord_auth'), cookies.get('vord_tenant'));
 	try {
 		const tenants = await api.getTenants();
-		let subscription = null;
-		try {
-			subscription = await api.getSubscription();
-		} catch { /* Free tier has no subscription record */ }
 
-		return { tenants, subscription };
+		return { tenants };
 	} catch (e) {
 		if (e instanceof ApiError) {
 			if (e.status === 401) redirect(302, '/auth/login');

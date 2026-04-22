@@ -21,7 +21,7 @@
 	import HealthBadge from '$lib/components/HealthBadge.svelte';
 	import MachineHero from '$lib/components/machine/MachineHero.svelte';
 	import VitalsBar from '$lib/components/machine/VitalsBar.svelte';
-	import { Terminal } from 'lucide-svelte';
+	import { CircleAlert, Terminal } from 'lucide-svelte';
 	import {
 		generateNonce,
 		buildCanonicalPayload,
@@ -37,6 +37,8 @@
 	const lastPing = $derived(liveStatus?.lastPing ?? machine.lastPing);
 	const commandsEnabled = $derived(liveStatus?.commandsEnabled ?? machine.commandsEnabled);
 	const machineDetail: MachineDetailDto | null = $derived(data.machineDetail);
+	const isTeamTier = $derived(data.subscription !== null && data.subscription.tier === 'Team');
+	// svelte-ignore state_referenced_locally
 	let authorizedKeys = $state<MachineAuthorizedKeyDto[]>(data.authorizedKeys ?? []);
 
 	// Authorized keys tab state
@@ -881,102 +883,119 @@
 			</div>
 		{/if}
 	{:else if activeTab === 'authorized-keys'}
-		<div class="space-y-4">
-			<p class="text-sm text-surface-500 dark:text-surface-400">
-				Signing keys authorized to send remote commands to this machine. Only MachineAdmin or higher can manage authorized keys.
-			</p>
-
-			<!-- Authorize form -->
-			<div class="flex items-end gap-3">
-				<div class="flex-1">
-					<label for="authorize-key" class="block text-xs font-medium text-surface-600 dark:text-surface-400">Signing Key</label>
-					<select
-						id="authorize-key"
-						bind:value={selectedKeyToAuthorize}
-						class="mt-1 w-full rounded-lg border border-surface-300 bg-white px-4 py-2 text-sm text-surface-900 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-surface-600 dark:bg-surface-700 dark:text-surface-50"
-					>
-						<option value={null}>Select a key...</option>
-						{#each availableKeysToAuthorize as sk}
-							<option value={sk.id}>{sk.label} ({sk.fingerprint.slice(0, 16)}...)</option>
-						{/each}
-					</select>
-				</div>
-				<button
-					onclick={authorizeKey}
-					disabled={authorizingInProgress || selectedKeyToAuthorize === null}
-					class="inline-flex items-center gap-2 rounded-lg bg-primary-500 px-4 py-2 text-sm font-medium text-white transition hover:bg-primary-600 disabled:opacity-50"
-				>
-					{authorizingInProgress ? 'Authorizing...' : 'Authorize'}
-				</button>
+		{#if isTeamTier === false}
+			<div class="flex items-center gap-3 rounded-xl border border-amber-200 bg-amber-50 p-6 dark:border-amber-800 dark:bg-amber-900/20">
+				<CircleAlert class="h-5 w-5 text-amber-600 dark:text-amber-400" />
+				<p class="text-sm text-amber-700 dark:text-amber-300">
+					Remote commands require a Team subscription. <a href="/settings/billing" class="underline hover:text-amber-800 dark:hover:text-amber-200">Upgrade your subscription</a> to access this feature.
+				</p>
 			</div>
-			{#if authorizeError}
-				<p class="text-sm text-red-600 dark:text-red-400">{authorizeError}</p>
-			{/if}
+		{:else}
+			<div class="space-y-4">
+				<p class="text-sm text-surface-500 dark:text-surface-400">
+					Signing keys authorized to send remote commands to this machine. Only MachineAdmin or higher can manage authorized keys.
+				</p>
 
-			<!-- Authorized keys table -->
-			{#if authorizedKeys.length === 0}
-				<EmptyState
-					title="No authorized keys"
-					description="No signing keys have been authorized for this machine. Authorize a signing key to enable remote commands."
-				/>
-			{:else}
-				<div class="overflow-hidden rounded-xl border border-surface-200 bg-surface-50 dark:border-surface-700 dark:bg-surface-800">
-					<div class="overflow-x-auto">
-						<table class="w-full text-left text-sm">
-							<thead>
-								<tr class="border-b border-surface-200 dark:border-surface-700">
-									<th class="px-6 py-3 text-xs font-semibold uppercase tracking-wider text-surface-500 dark:text-surface-400">Label</th>
-									<th class="px-6 py-3 text-xs font-semibold uppercase tracking-wider text-surface-500 dark:text-surface-400">Fingerprint</th>
-									<th class="px-6 py-3 text-xs font-semibold uppercase tracking-wider text-surface-500 dark:text-surface-400">Owner</th>
-									<th class="px-6 py-3 text-xs font-semibold uppercase tracking-wider text-surface-500 dark:text-surface-400">Authorized By</th>
-									<th class="px-6 py-3 text-xs font-semibold uppercase tracking-wider text-surface-500 dark:text-surface-400">Authorized At</th>
-									<th class="px-6 py-3 text-xs font-semibold uppercase tracking-wider text-surface-500 dark:text-surface-400">Status</th>
-									<th class="px-6 py-3 text-xs font-semibold uppercase tracking-wider text-surface-500 dark:text-surface-400">Actions</th>
-								</tr>
-							</thead>
-							<tbody class="divide-y divide-surface-100 dark:divide-surface-700">
-								{#each authorizedKeys as ak (ak.id)}
-									<tr class="transition hover:bg-surface-50 dark:hover:bg-surface-700/50">
-										<td class="px-6 py-3 font-medium text-surface-900 dark:text-surface-100">{ak.label}</td>
-										<td class="px-6 py-3 font-mono text-xs text-surface-600 dark:text-surface-400" title={ak.fingerprint}>
-											{ak.fingerprint.slice(0, 16)}...
-										</td>
-										<td class="px-6 py-3 text-surface-600 dark:text-surface-400">{ak.ownerUsername}</td>
-										<td class="px-6 py-3 text-surface-600 dark:text-surface-400">{ak.authorizedByUsername}</td>
-										<td class="px-6 py-3 text-surface-500 dark:text-surface-400">{formatDateTime(ak.authorizedAt)}</td>
-										<td class="px-6 py-3">
-											{#if ak.isActive}
-												<span class="inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400">
-													Active
-												</span>
-											{:else}
-												<span class="inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400">
-													Revoked
-												</span>
-											{/if}
-										</td>
-										<td class="px-6 py-3">
-											{#if ak.isActive}
-												<button
-													onclick={() => revokeAuthorization(ak.id)}
-													disabled={revokingKeyId === ak.id}
-													class="text-sm font-medium text-red-600 hover:text-red-700 disabled:opacity-50 dark:text-red-400 dark:hover:text-red-300"
-												>
-													{revokingKeyId === ak.id ? 'Revoking...' : 'Revoke'}
-												</button>
-											{:else}
-												<span class="text-sm text-surface-400">---</span>
-											{/if}
-										</td>
-									</tr>
-								{/each}
-							</tbody>
-						</table>
+				<!-- Authorize form -->
+				<div class="flex items-end gap-3">
+					<div class="flex-1">
+						<label for="authorize-key" class="block text-xs font-medium text-surface-600 dark:text-surface-400">Signing Key</label>
+						<select
+							id="authorize-key"
+							bind:value={selectedKeyToAuthorize}
+							class="mt-1 w-full rounded-lg border border-surface-300 bg-white px-4 py-2 text-sm text-surface-900 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-surface-600 dark:bg-surface-700 dark:text-surface-50"
+						>
+							<option value={null}>Select a key...</option>
+							{#each availableKeysToAuthorize as sk}
+								<option value={sk.id}>{sk.label} ({sk.fingerprint.slice(0, 16)}...)</option>
+							{/each}
+						</select>
 					</div>
+					<button
+						onclick={authorizeKey}
+						disabled={authorizingInProgress || selectedKeyToAuthorize === null}
+						class="inline-flex items-center gap-2 rounded-lg bg-primary-500 px-4 py-2 text-sm font-medium text-white transition hover:bg-primary-600 disabled:opacity-50"
+					>
+						{authorizingInProgress ? 'Authorizing...' : 'Authorize'}
+					</button>
 				</div>
-			{/if}
-		</div>
+				{#if authorizeError}
+					<p class="text-sm text-red-600 dark:text-red-400">{authorizeError}</p>
+				{/if}
+
+				<!-- Authorized keys table -->
+				{#if authorizedKeys.length === 0}
+					<EmptyState
+						title="No authorized keys"
+						description="No signing keys have been authorized for this machine. Authorize a signing key to enable remote commands."
+					/>
+				{:else}
+					<div class="overflow-hidden rounded-xl border border-surface-200 bg-surface-50 dark:border-surface-700 dark:bg-surface-800">
+						<div class="overflow-x-auto">
+							<table class="w-full text-left text-sm">
+								<thead>
+									<tr class="border-b border-surface-200 dark:border-surface-700">
+										<th class="px-6 py-3 text-xs font-semibold uppercase tracking-wider text-surface-500 dark:text-surface-400">Label</th>
+										<th class="px-6 py-3 text-xs font-semibold uppercase tracking-wider text-surface-500 dark:text-surface-400">Fingerprint</th>
+										<th class="px-6 py-3 text-xs font-semibold uppercase tracking-wider text-surface-500 dark:text-surface-400">Owner</th>
+										<th class="px-6 py-3 text-xs font-semibold uppercase tracking-wider text-surface-500 dark:text-surface-400">Authorized By</th>
+										<th class="px-6 py-3 text-xs font-semibold uppercase tracking-wider text-surface-500 dark:text-surface-400">Authorized At</th>
+										<th class="px-6 py-3 text-xs font-semibold uppercase tracking-wider text-surface-500 dark:text-surface-400">Status</th>
+										<th class="px-6 py-3 text-xs font-semibold uppercase tracking-wider text-surface-500 dark:text-surface-400">Actions</th>
+									</tr>
+								</thead>
+								<tbody class="divide-y divide-surface-100 dark:divide-surface-700">
+									{#each authorizedKeys as ak (ak.id)}
+										<tr class="transition hover:bg-surface-50 dark:hover:bg-surface-700/50">
+											<td class="px-6 py-3 font-medium text-surface-900 dark:text-surface-100">{ak.label}</td>
+											<td class="px-6 py-3 font-mono text-xs text-surface-600 dark:text-surface-400" title={ak.fingerprint}>
+												{ak.fingerprint.slice(0, 16)}...
+											</td>
+											<td class="px-6 py-3 text-surface-600 dark:text-surface-400">{ak.ownerUsername}</td>
+											<td class="px-6 py-3 text-surface-600 dark:text-surface-400">{ak.authorizedByUsername}</td>
+											<td class="px-6 py-3 text-surface-500 dark:text-surface-400">{formatDateTime(ak.authorizedAt)}</td>
+											<td class="px-6 py-3">
+												{#if ak.isActive}
+													<span class="inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400">
+														Active
+													</span>
+												{:else}
+													<span class="inline-flex rounded-full px-2.5 py-0.5 text-xs font-medium bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400">
+														Revoked
+													</span>
+												{/if}
+											</td>
+											<td class="px-6 py-3">
+												{#if ak.isActive}
+													<button
+														onclick={() => revokeAuthorization(ak.id)}
+														disabled={revokingKeyId === ak.id}
+														class="text-sm font-medium text-red-600 hover:text-red-700 disabled:opacity-50 dark:text-red-400 dark:hover:text-red-300"
+													>
+														{revokingKeyId === ak.id ? 'Revoking...' : 'Revoke'}
+													</button>
+												{:else}
+													<span class="text-sm text-surface-400">---</span>
+												{/if}
+											</td>
+										</tr>
+									{/each}
+								</tbody>
+							</table>
+						</div>
+					</div>
+				{/if}
+			</div>
+		{/if}
 	{:else if activeTab === 'commands'}
+		{#if isTeamTier === false}
+			<div class="flex items-center gap-3 rounded-xl border border-amber-200 bg-amber-50 p-6 dark:border-amber-800 dark:bg-amber-900/20">
+				<CircleAlert class="h-5 w-5 text-amber-600 dark:text-amber-400" />
+				<p class="text-sm text-amber-700 dark:text-amber-300">
+					Remote commands require a Team subscription. <a href="/settings/billing" class="underline hover:text-amber-800 dark:hover:text-amber-200">Upgrade your subscription</a> to access this feature.
+				</p>
+			</div>
+		{:else}
 		<!-- Send Command Form -->
 		<div class="rounded-lg border border-surface-200 bg-surface-50 p-6 dark:border-surface-700 dark:bg-surface-800">
 			<div class="flex items-center gap-2">
@@ -1102,6 +1121,7 @@
 				</div>
 			{/if}
 		</div>
+		{/if}
 	{/if}
 	</div>
 </div>

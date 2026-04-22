@@ -14,16 +14,14 @@ export const load: PageServerLoad = async ({ locals, cookies, fetch }) => {
 
 	const client = createServerApiClient(fetch, cookies.get('vord_auth'), cookies.get('vord_tenant'));
 
-	const [invitations, members, subscription] = await Promise.all([
+	const [invitations, members] = await Promise.all([
 		client.getInvitations(),
-		client.getMembers(),
-		client.getSubscription().catch(() => null)
+		client.getMembers()
 	]);
 
 	return {
 		invitations,
 		members,
-		subscription,
 		user: locals.user
 	};
 };

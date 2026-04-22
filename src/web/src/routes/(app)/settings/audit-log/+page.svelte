@@ -4,7 +4,7 @@
 
 <script lang="ts">
 	import type { PaginatedResponse, AuditLogEntryDto } from '$lib/api/types';
-	import { ScrollText, ChevronLeft, ChevronRight, AlertCircle } from 'lucide-svelte';
+	import { ScrollText, ChevronLeft, ChevronRight, CircleAlert } from 'lucide-svelte';
 	import { goto } from '$app/navigation';
 	import { page as pageState } from '$app/state';
 	import PageHeader from '$lib/components/PageHeader.svelte';
@@ -93,7 +93,7 @@
 		<div
 			class="flex items-center gap-3 rounded-xl border border-amber-200 bg-amber-50 p-6 dark:border-amber-800 dark:bg-amber-900/20"
 		>
-			<AlertCircle class="h-5 w-5 text-amber-600 dark:text-amber-400" />
+			<CircleAlert class="h-5 w-5 text-amber-600 dark:text-amber-400" />
 			<p class="text-sm text-amber-700 dark:text-amber-300">
 				The audit log is available on the Team plan. Upgrade your subscription to access this feature.
 			</p>

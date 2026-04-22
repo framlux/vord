@@ -16,11 +16,6 @@ export const load: PageServerLoad = async ({ fetch, cookies, locals }) => {
 
 	const api = createServerApiClient(fetch, cookies.get('vord_auth'), cookies.get('vord_tenant'));
 	try {
-		let subscription = null;
-		try {
-			subscription = await api.getSubscription();
-		} catch { /* Free tier may not have a record */ }
-
 		// Fetch billing data in parallel
 		const [upcomingInvoice, invoices, usageHistory] = await Promise.all([
 			api.getUpcomingInvoice().catch(() => null),
@@ -29,7 +24,6 @@ export const load: PageServerLoad = async ({ fetch, cookies, locals }) => {
 		]);
 
 		return {
-			subscription,
 			upcomingInvoice,
 			invoices,
 			usageHistory,

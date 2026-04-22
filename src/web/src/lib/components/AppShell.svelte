@@ -11,36 +11,48 @@
         Settings,
         Shield,
         Menu,
-        X,
         Users,
         Key,
         CreditCard,
         ScrollText,
         Bell,
-        ChevronDown,
-        ChevronRight
+        LogOut
     } from 'lucide-svelte';
     import ThemeToggle from './ThemeToggle.svelte';
-    import TenantSwitcher from './TenantSwitcher.svelte';
-    import UserMenu from './UserMenu.svelte';
+    import OrgSwitcher from './OrgSwitcher.svelte';
     import { page } from '$app/state';
     import { canAdminMachines, canAdminTenant, isGlobalAdmin } from '$lib/utils/roles';
-    import type { UserDto } from '$lib/api/types';
+    import type { UserDto, SubscriptionDto } from '$lib/api/types';
 
     import type { Snippet } from 'svelte';
 
-    let { user, children }: { user: UserDto; children: Snippet } = $props();
+    let { user, subscription = null, children }: {
+        user: UserDto;
+        subscription?: SubscriptionDto | null;
+        children?: Snippet;
+    } = $props();
 
     let mobileMenuOpen = $state(false);
-    let settingsExpanded = $state(page.url.pathname.startsWith('/settings'));
+    let userMenuOpen = $state(false);
 
-    function isExactMatch(path: string): boolean {
-        return page.url.pathname === path;
+    type NavTab = 'fleet' | 'settings' | 'admin';
+
+    function deriveTab(pathname: string): NavTab {
+        if (pathname.startsWith('/admin')) {
+            return 'admin';
+        }
+        if (pathname.startsWith('/settings')) {
+            return 'settings';
+        }
+
+        return 'fleet';
     }
 
-    function isChildActive(parentPath: string): boolean {
-        return page.url.pathname.startsWith(parentPath) && page.url.pathname !== parentPath;
-    }
+    let activeTab = $derived(deriveTab(page.url.pathname));
+
+    let showSettingsTab = $derived(canAdminTenant(user));
+    let showAdminTab = $derived(isGlobalAdmin(user));
+    let showTabBar = $derived(showSettingsTab || showAdminTab);
 
     function isActive(path: string): boolean {
         if (path === '/machines' || path === '/settings') {
@@ -50,200 +62,245 @@
         return page.url.pathname.startsWith(path);
     }
 
-    const navLinkClass = (path: string) =>
-        `flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-all ${
+    const navItemClass = (path: string) =>
+        `flex items-center gap-2.5 rounded-md px-2.5 py-1.5 text-[13px] font-medium transition-colors ${
             isActive(path)
-                ? 'border-l-2 border-primary-500 bg-primary-500/10 text-primary-600 dark:text-primary-400'
-                : 'border-l-2 border-transparent text-surface-600 hover:bg-surface-100 hover:text-surface-900 dark:text-surface-400 dark:hover:bg-surface-800 dark:hover:text-surface-200'
+                ? 'bg-primary-500/10 text-primary-600 dark:text-primary-400'
+                : 'text-surface-600 hover:bg-surface-100 hover:text-surface-900 dark:text-surface-400 dark:hover:bg-surface-800 dark:hover:text-surface-200'
         }`;
 
-    const parentLinkClass = (parentPath: string) => {
-        if (isExactMatch(parentPath)) {
-            return 'flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-all border-l-2 border-primary-500 bg-primary-500/10 text-primary-600 dark:text-primary-400';
+    function getUserInitial(): string {
+        if (user.name && user.name.length > 0) {
+            return user.name[0].toUpperCase();
         }
-        if (isChildActive(parentPath)) {
-            return 'flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-all border-l-2 border-primary-500/40 bg-primary-500/5 text-primary-600 dark:text-primary-400';
+        if (user.email && user.email.length > 0) {
+            return user.email[0].toUpperCase();
         }
 
-        return 'flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-all border-l-2 border-transparent text-surface-600 hover:bg-surface-100 hover:text-surface-900 dark:text-surface-400 dark:hover:bg-surface-800 dark:hover:text-surface-200';
-    };
+        return '?';
+    }
 
-    const childLinkClass = (path: string) =>
-        `flex items-center gap-3 rounded-lg py-1.5 pl-9 pr-3 text-sm font-medium transition-all ${
-            isActive(path)
-                ? 'text-primary-600 dark:text-primary-400'
-                : 'text-surface-500 hover:text-surface-900 dark:text-surface-400 dark:hover:text-surface-200'
-        }`;
-
-    function toggleSettings(e: MouseEvent) {
-        e.preventDefault();
-        e.stopPropagation();
-        settingsExpanded = !settingsExpanded;
+    function handleUserMenuClickOutside(event: MouseEvent) {
+        const target = event.target as HTMLElement;
+        if (!target.closest('.user-menu-footer')) {
+            userMenuOpen = false;
+        }
     }
 </script>
 
-{#snippet navLinks(onNavigate: (() => void) | undefined)}
-    <!-- FLEET -->
-    <p class="px-4 pb-1 text-[10px] font-semibold uppercase tracking-widest text-surface-400 dark:text-surface-500">Fleet</p>
+<svelte:window onclick={handleUserMenuClickOutside} />
 
-    <a href="/dashboard" class={navLinkClass('/dashboard')} onclick={onNavigate}>
-        <LayoutDashboard size={18} />
-        Dashboard
-    </a>
-    <a href="/machines" class={parentLinkClass('/machines')} onclick={onNavigate}>
-        <Monitor size={18} />
-        Machines
-    </a>
-    <div class="relative ml-[21px] border-l border-surface-200 dark:border-surface-700">
-        {#if canAdminMachines(user)}
-            <a href="/machines/register" class={childLinkClass('/machines/register')} onclick={onNavigate}>
-                <Key size={14} />
-                Register
-            </a>
-        {/if}
-        <a href="/machines/search" class={childLinkClass('/machines/search')} onclick={onNavigate}>
-            <Search size={14} />
-            Search
-        </a>
-        <a href="/machines/ssh-sessions" class={childLinkClass('/machines/ssh-sessions')} onclick={onNavigate}>
-            <Terminal size={14} />
-            SSH Sessions
-        </a>
+{#snippet sidebarContent(onNavigate: (() => void) | undefined)}
+    <!-- Logo -->
+    <div class="flex h-14 items-center gap-2.5 border-b border-surface-200 px-4 dark:border-surface-700">
+        <div class="flex h-7 w-7 items-center justify-center rounded-lg bg-primary-500/10">
+            <svg class="h-4 w-4 text-primary-500" viewBox="0 0 24 24" fill="none">
+                <path d="M4.5 6 L12 19 L19.5 6" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
+                <circle cx="4.5" cy="6" r="2.5" fill="currentColor"/>
+                <circle cx="19.5" cy="6" r="2.5" fill="currentColor"/>
+                <circle cx="12" cy="19" r="2.5" fill="currentColor"/>
+            </svg>
+        </div>
+        <span class="text-base font-bold text-surface-900 dark:text-surface-50">VordFleet</span>
     </div>
 
-    {#if canAdminTenant(user)}
-        <hr class="mx-4 my-3 border-surface-200 dark:border-surface-700" />
-        <p class="px-4 pb-1 text-[10px] font-semibold uppercase tracking-widest text-surface-400 dark:text-surface-500">Organization</p>
+    <!-- Org Switcher -->
+    <OrgSwitcher {user} {subscription} />
 
-        <div class="flex items-center">
-            <a href="/settings" class="{parentLinkClass('/settings')} flex-1" onclick={onNavigate}>
-                <Settings size={18} />
-                Settings
-            </a>
-            <button
-                onclick={toggleSettings}
-                class="mr-2 rounded p-1 text-surface-400 hover:bg-surface-100 hover:text-surface-600 dark:hover:bg-surface-700 dark:hover:text-surface-300"
-                aria-label={settingsExpanded ? 'Collapse settings' : 'Expand settings'}
+    <!-- Tab bar -->
+    {#if showTabBar}
+        <div class="flex gap-1 border-b border-surface-200 px-3 pt-2 dark:border-surface-700">
+            <a
+                href="/dashboard"
+                class="flex-1 border-b-2 pb-1.5 pt-1 text-center text-[11px] font-semibold no-underline transition-colors {activeTab === 'fleet' ? 'border-primary-500 text-primary-500' : 'border-transparent text-surface-400 hover:text-surface-600 dark:hover:text-surface-300'}"
+                onclick={onNavigate}
             >
-                {#if settingsExpanded}
-                    <ChevronDown size={14} />
-                {:else}
-                    <ChevronRight size={14} />
-                {/if}
+                Fleet
+            </a>
+            {#if showSettingsTab}
+                <a
+                    href="/settings"
+                    class="flex-1 border-b-2 pb-1.5 pt-1 text-center text-[11px] font-semibold no-underline transition-colors {activeTab === 'settings' ? 'border-primary-500 text-primary-500' : 'border-transparent text-surface-400 hover:text-surface-600 dark:hover:text-surface-300'}"
+                    onclick={onNavigate}
+                >
+                    Settings
+                </a>
+            {/if}
+            {#if showAdminTab}
+                <a
+                    href="/admin"
+                    class="flex-1 border-b-2 pb-1.5 pt-1 text-center text-[11px] font-semibold no-underline transition-colors {activeTab === 'admin' ? 'border-primary-500 text-primary-500' : 'border-transparent text-surface-400 hover:text-surface-600 dark:hover:text-surface-300'}"
+                    onclick={onNavigate}
+                >
+                    Admin
+                </a>
+            {/if}
+        </div>
+    {/if}
+
+    <!-- Tab content -->
+    <nav class="flex-1 overflow-y-auto px-3 py-3">
+        {#if activeTab === 'fleet'}
+            <a href="/dashboard" class={navItemClass('/dashboard')} onclick={onNavigate}>
+                <LayoutDashboard size={16} />
+                Dashboard
+            </a>
+            <a href="/machines" class={navItemClass('/machines')} onclick={onNavigate}>
+                <Monitor size={16} />
+                Machines
+            </a>
+            {#if canAdminMachines(user)}
+                <a href="/machines/register" class={navItemClass('/machines/register')} onclick={onNavigate}>
+                    <Key size={16} />
+                    Register
+                </a>
+            {/if}
+            <a href="/machines/search" class={navItemClass('/machines/search')} onclick={onNavigate}>
+                <Search size={16} />
+                Search
+            </a>
+            <a href="/machines/ssh-sessions" class={navItemClass('/machines/ssh-sessions')} onclick={onNavigate}>
+                <Terminal size={16} />
+                SSH Sessions
+            </a>
+        {:else if activeTab === 'settings'}
+            <a href="/settings" class={navItemClass('/settings')} onclick={onNavigate}>
+                <Settings size={16} />
+                General
+            </a>
+            <a href="/settings/members" class={navItemClass('/settings/members')} onclick={onNavigate}>
+                <Users size={16} />
+                Members
+            </a>
+            <a href="/settings/signing-keys" class={navItemClass('/settings/signing-keys')} onclick={onNavigate}>
+                <Shield size={16} />
+                Signing Keys
+            </a>
+            <hr class="my-2 border-surface-200 dark:border-surface-700" />
+            <a href="/settings/billing" class={navItemClass('/settings/billing')} onclick={onNavigate}>
+                <CreditCard size={16} />
+                Billing
+            </a>
+            <hr class="my-2 border-surface-200 dark:border-surface-700" />
+            <a href="/settings/audit-log" class={navItemClass('/settings/audit-log')} onclick={onNavigate}>
+                <ScrollText size={16} />
+                Audit Log
+            </a>
+            <a href="/settings/alerts" class={navItemClass('/settings/alerts')} onclick={onNavigate}>
+                <Bell size={16} />
+                Alerts
+            </a>
+        {:else if activeTab === 'admin'}
+            <a href="/admin" class={navItemClass('/admin')} onclick={onNavigate}>
+                <Shield size={16} />
+                System Overview
+            </a>
+        {/if}
+    </nav>
+
+    <!-- User footer -->
+    <div class="user-menu-footer relative border-t border-surface-200 px-3 py-2.5 dark:border-surface-700">
+        <div class="flex items-center gap-2">
+            <button
+                onclick={() => { userMenuOpen = !userMenuOpen; }}
+                class="flex min-w-0 flex-1 items-center gap-2 rounded-md p-1 transition-colors hover:bg-surface-100 dark:hover:bg-surface-800"
+                aria-label="User menu"
+                aria-expanded={userMenuOpen}
+            >
+                <div class="flex h-7 w-7 flex-shrink-0 items-center justify-center rounded-full bg-primary-500 text-xs font-semibold text-white">
+                    {getUserInitial()}
+                </div>
+                <div class="min-w-0 flex-1 text-left">
+                    <div class="truncate text-[12px] font-medium text-surface-800 dark:text-surface-200">
+                        {user.name || user.email}
+                    </div>
+                </div>
             </button>
+            <ThemeToggle />
         </div>
 
-        {#if settingsExpanded}
-            <div class="relative ml-[21px] border-l border-surface-200 dark:border-surface-700">
-                <a href="/settings/members" class={childLinkClass('/settings/members')} onclick={onNavigate}>
-                    <Users size={14} />
-                    Members
-                </a>
-                <a href="/settings/signing-keys" class={childLinkClass('/settings/signing-keys')} onclick={onNavigate}>
-                    <Shield size={14} />
-                    Signing Keys
-                </a>
-                <a href="/settings/billing" class={childLinkClass('/settings/billing')} onclick={onNavigate}>
-                    <CreditCard size={14} />
-                    Billing
-                </a>
-                <a href="/settings/audit-log" class={childLinkClass('/settings/audit-log')} onclick={onNavigate}>
-                    <ScrollText size={14} />
-                    Audit Log
-                </a>
-                <a href="/settings/alerts" class={childLinkClass('/settings/alerts')} onclick={onNavigate}>
-                    <Bell size={14} />
-                    Alerts
-                </a>
+        {#if userMenuOpen}
+            <div class="absolute bottom-full left-2 right-2 z-50 mb-1 rounded-lg border border-surface-200 bg-surface-50 shadow-lg dark:border-surface-700 dark:bg-surface-800">
+                <div class="border-b border-surface-200 px-3 py-2.5 dark:border-surface-700">
+                    <p class="text-[13px] font-medium text-surface-900 dark:text-surface-50">
+                        {user.name || 'User'}
+                    </p>
+                    <p class="truncate text-[11px] text-surface-500">{user.email}</p>
+                </div>
+                <div class="py-1">
+                    <a
+                        href="/account/settings"
+                        onclick={() => { userMenuOpen = false; if (onNavigate) onNavigate(); }}
+                        class="flex items-center gap-2.5 px-3 py-1.5 text-[13px] text-surface-700 transition-colors hover:bg-surface-100 dark:text-surface-300 dark:hover:bg-surface-700"
+                    >
+                        <Settings size={14} />
+                        Account Settings
+                    </a>
+                    <a
+                        href="/account/notifications"
+                        onclick={() => { userMenuOpen = false; if (onNavigate) onNavigate(); }}
+                        class="flex items-center gap-2.5 px-3 py-1.5 text-[13px] text-surface-700 transition-colors hover:bg-surface-100 dark:text-surface-300 dark:hover:bg-surface-700"
+                    >
+                        <Bell size={14} />
+                        Notifications
+                    </a>
+                </div>
+                <div class="border-t border-surface-200 py-1 dark:border-surface-700">
+                    <a
+                        href="/auth/logout"
+                        onclick={() => { userMenuOpen = false; if (onNavigate) onNavigate(); }}
+                        class="flex items-center gap-2.5 px-3 py-1.5 text-[13px] text-surface-700 transition-colors hover:bg-surface-100 dark:text-surface-300 dark:hover:bg-surface-700"
+                    >
+                        <LogOut size={14} />
+                        Log out
+                    </a>
+                </div>
             </div>
         {/if}
-    {/if}
-
-    {#if isGlobalAdmin(user)}
-        <hr class="mx-4 my-3 border-surface-200 dark:border-surface-700" />
-        <p class="px-4 pb-1 text-[10px] font-semibold uppercase tracking-widest text-surface-400 dark:text-surface-500">System</p>
-
-        <a href="/admin" class={navLinkClass('/admin')} onclick={onNavigate}>
-            <Shield size={18} />
-            Admin
-        </a>
-    {/if}
+    </div>
 {/snippet}
 
 <div class="flex h-screen bg-surface-50 dark:bg-surface-900">
     <!-- Sidebar (desktop) -->
     <aside
-        class="hidden w-64 flex-shrink-0 border-r border-surface-200 bg-surface-50/80 backdrop-blur-xl dark:border-surface-700 dark:bg-surface-800/80 lg:block"
+        class="hidden w-56 flex-shrink-0 flex-col border-r border-surface-200 bg-surface-50/80 backdrop-blur-xl dark:border-surface-700 dark:bg-surface-800/80 lg:flex"
     >
-        <div class="flex h-full flex-col">
-            <div class="flex h-16 items-center gap-2.5 border-b border-surface-200 px-6 dark:border-surface-700">
-                <div class="flex h-7 w-7 items-center justify-center rounded-lg bg-primary-500/10">
-                    <svg class="h-4 w-4 text-primary-500" viewBox="0 0 24 24" fill="none">
-                        <path d="M4.5 6 L12 19 L19.5 6" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
-                        <circle cx="4.5" cy="6" r="2.5" fill="currentColor"/>
-                        <circle cx="19.5" cy="6" r="2.5" fill="currentColor"/>
-                        <circle cx="12" cy="19" r="2.5" fill="currentColor"/>
-                    </svg>
-                </div>
-                <span class="text-lg font-bold text-surface-900 dark:text-surface-50">VordFleet</span>
-            </div>
-            <nav class="flex-1 space-y-1 overflow-y-auto p-4 pt-5">
-                {@render navLinks(undefined)}
-            </nav>
-        </div>
+        {@render sidebarContent(undefined)}
     </aside>
 
     <!-- Mobile overlay -->
     {#if mobileMenuOpen}
-        <div class="fixed inset-0 z-40 bg-black/50 lg:hidden" role="presentation">
-            <aside class="absolute left-0 top-0 h-full w-64 bg-surface-50 dark:bg-surface-800">
-                <div class="flex h-16 items-center justify-between border-b border-surface-200 px-6 dark:border-surface-700">
-                    <div class="flex items-center gap-2.5">
-                        <div class="flex h-7 w-7 items-center justify-center rounded-lg bg-primary-500/10">
-                            <svg class="h-4 w-4 text-primary-500" viewBox="0 0 24 24" fill="none">
-                                <path d="M4.5 6 L12 19 L19.5 6" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"/>
-                                <circle cx="4.5" cy="6" r="2.5" fill="currentColor"/>
-                                <circle cx="19.5" cy="6" r="2.5" fill="currentColor"/>
-                                <circle cx="12" cy="19" r="2.5" fill="currentColor"/>
-                            </svg>
-                        </div>
-                        <span class="text-lg font-bold text-surface-900 dark:text-surface-50">VordFleet</span>
-                    </div>
-                    <button onclick={() => (mobileMenuOpen = false)} class="text-surface-500" aria-label="Close navigation menu">
-                        <X size={20} />
-                    </button>
-                </div>
-                <nav class="space-y-1 p-4 pt-5">
-                    {@render navLinks(() => (mobileMenuOpen = false))}
-                </nav>
+        <!-- svelte-ignore a11y_no_static_element_interactions -->
+        <div
+            class="animate-fade-overlay fixed inset-0 z-40 bg-black/50 lg:hidden"
+            role="presentation"
+            onclick={(e) => { if (e.target === e.currentTarget) mobileMenuOpen = false; }}
+        >
+            <aside
+                class="animate-slide-in-left absolute left-0 top-0 flex h-full w-56 flex-col bg-surface-50 dark:bg-surface-800"
+            >
+                {@render sidebarContent(() => { mobileMenuOpen = false; })}
             </aside>
         </div>
     {/if}
 
     <!-- Main content -->
     <div class="flex flex-1 flex-col overflow-hidden">
-        <!-- Top bar -->
-        <header class="flex h-16 items-center justify-between border-b border-surface-200 bg-surface-50/80 px-6 backdrop-blur-xl dark:border-surface-700 dark:bg-surface-800/80">
+        <!-- Mobile top bar -->
+        <header class="flex h-12 items-center gap-3 border-b border-surface-200 px-4 dark:border-surface-700 lg:hidden">
             <button
                 onclick={() => (mobileMenuOpen = !mobileMenuOpen)}
-                class="rounded-lg p-2 text-surface-500 hover:bg-surface-100 dark:hover:bg-surface-700 lg:hidden"
+                class="rounded-md p-1.5 text-surface-500 hover:bg-surface-100 dark:hover:bg-surface-700"
                 aria-label="Open navigation menu"
             >
                 <Menu size={20} />
             </button>
-
-            <div class="flex-1"></div>
-
-            <div class="flex items-center gap-3">
-                <TenantSwitcher {user} />
-                <ThemeToggle />
-                <UserMenu {user} />
-            </div>
+            <span class="text-sm font-semibold text-surface-900 dark:text-surface-50">VordFleet</span>
         </header>
 
         <!-- Page content -->
         <main class="animate-fade-in flex-1 overflow-y-auto p-6">
-            {@render children()}
+            {@render children?.()}
         </main>
     </div>
 </div>
