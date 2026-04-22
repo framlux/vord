@@ -26,8 +26,8 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="FluentMigrator.Runner" Version="7.2.0" />
-    <PackageReference Include="FluentMigrator.Runner.Postgres" Version="7.2.0" />
-    <PackageReference Include="Npgsql" Version="10.0.1" />
+    <PackageReference Include="FluentMigrator.Runner" Version="8.0.1" />
+    <PackageReference Include="FluentMigrator.Runner.Postgres" Version="8.0.1" />
+    <PackageReference Include="Npgsql" Version="10.0.2" />
   </ItemGroup>
 </Project>
