@@ -101,6 +101,83 @@ public sealed class MachineHandler : IMachineHandler
     }
 
     /// <inheritdoc/>
+    public async Task<ServiceResult<ApiResponse<MachineDto>>> UpdateAsync(
+        long machineId,
+        int? tenantId,
+        int userId,
+        string name,
+        string? description,
+        string? location,
+        CancellationToken ct)
+    {
+        if (tenantId is null)
+        {
+            return ServiceResult<ApiResponse<MachineDto>>.NotFound();
+        }
+
+        string trimmedName = name.Trim();
+        if (string.IsNullOrWhiteSpace(trimmedName))
+        {
+            return ServiceResult<ApiResponse<MachineDto>>.BadRequest("Name is required.");
+        }
+
+        if (trimmedName.Length > 250)
+        {
+            return ServiceResult<ApiResponse<MachineDto>>.BadRequest("Name must be 250 characters or fewer.");
+        }
+
+        if (location is not null && location.Length > 250)
+        {
+            return ServiceResult<ApiResponse<MachineDto>>.BadRequest("Location must be 250 characters or fewer.");
+        }
+
+        Machine? machine = await _db.Machines
+            .FirstOrDefaultAsync(m => m.Id == machineId && m.TenantId == tenantId.Value && m.IsDeleted == false, ct);
+
+        if (machine is null)
+        {
+            return ServiceResult<ApiResponse<MachineDto>>.NotFound();
+        }
+
+        using DataConnectionTransaction transaction = await _db.BeginTransactionAsync(ct);
+
+        await _db.Machines
+            .Where(m => m.Id == machineId)
+            .Set(m => m.Name, trimmedName)
+            .Set(m => m.Description, description)
+            .Set(m => m.Location, location)
+            .UpdateAsync(ct);
+
+        await _db.MachineStateSummaries
+            .Where(s => s.MachineId == machineId)
+            .Set(s => s.Name, trimmedName)
+            .UpdateAsync(ct);
+
+        await _db.InsertAsync(AuditHelper.Create(
+            tenantId, userId, machineId,
+            AuditAction.MachineUpdated, AuditResourceType.Machine,
+            machineId.ToString(), new { Name = trimmedName, Description = description, Location = location }, null), token: ct);
+
+        await transaction.CommitAsync(ct);
+
+        machine.Name = trimmedName;
+        machine.Description = description;
+        machine.Location = location;
+
+        TimeSpan onlineThreshold = await _configService.GetOnlineThresholdAsync(ct);
+        bool isOnline = await _pingService.IsOnlineAsync(machine.Id, onlineThreshold);
+        DateTimeOffset? lastPing = await _pingService.GetLastPingAsync(machine.Id);
+
+        MachineStateSummary? summary = await _db.MachineStateSummaries
+            .FirstOrDefaultAsync(s => s.MachineId == machineId, ct);
+
+        MachineDto dto = BuildMachineDto(machine, isOnline, lastPing, summary?.Hostname);
+
+        return ServiceResult<ApiResponse<MachineDto>>.Ok(
+            ApiResponse<MachineDto>.Ok(dto, "Machine updated successfully"));
+    }
+
+    /// <inheritdoc/>
     public async Task<ServiceResult<PaginatedResponse<MachineDto>>> ListAsync(
         int page,
         int pageSize,
@@ -184,10 +261,14 @@ public sealed class MachineHandler : IMachineHandler
                 .Take(pageSize)
                 .ToList();
 
+            List<long> pagedIds = paged.Select(m => m.Id).ToList();
+            Dictionary<long, string?> hostnameMap = await LoadHostnameMapAsync(pagedIds, ct);
+
             List<MachineDto> dtos = paged.Select(machine => BuildMachineDto(
                 machine,
                 onlineMap.GetValueOrDefault(machine.Id, false),
-                lastPingMap.GetValueOrDefault(machine.Id))).ToList();
+                lastPingMap.GetValueOrDefault(machine.Id),
+                hostnameMap.GetValueOrDefault(machine.Id))).ToList();
 
             PaginatedResponse<MachineDto> response = new()
             {
@@ -227,10 +308,13 @@ public sealed class MachineHandler : IMachineHandler
             Dictionary<long, bool> onlineMap = await _pingService.AreOnlineAsync(machineIds, onlineThreshold);
             Dictionary<long, DateTimeOffset?> lastPingMap = await _pingService.GetLastPingsAsync(machineIds);
 
+            Dictionary<long, string?> hostnameMap = await LoadHostnameMapAsync(machineIds, ct);
+
             List<MachineDto> dtos = machines.Select(machine => BuildMachineDto(
                 machine,
                 onlineMap.GetValueOrDefault(machine.Id, false),
-                lastPingMap.GetValueOrDefault(machine.Id))).ToList();
+                lastPingMap.GetValueOrDefault(machine.Id),
+                hostnameMap.GetValueOrDefault(machine.Id))).ToList();
 
             PaginatedResponse<MachineDto> response = new()
             {
@@ -244,7 +328,7 @@ public sealed class MachineHandler : IMachineHandler
         }
     }
 
-    private static MachineDto BuildMachineDto(Machine machine, bool isOnline, DateTimeOffset? lastPing)
+    private static MachineDto BuildMachineDto(Machine machine, bool isOnline, DateTimeOffset? lastPing, string? telemetryHostname = null)
     {
         return new MachineDto
         {
@@ -252,7 +336,7 @@ public sealed class MachineHandler : IMachineHandler
             Name = machine.Name,
             Description = machine.Description,
             Location = machine.Location,
-            Hostname = machine.Name,
+            Hostname = telemetryHostname ?? machine.Name,
             OperatingSystem = machine.OperatingSystem,
             MachineType = machine.MachineType,
             SerialNumber = machine.SerialNumber,
@@ -262,6 +346,18 @@ public sealed class MachineHandler : IMachineHandler
             RegisteredOn = machine.RegisteredOn,
             IsDeleted = machine.IsDeleted,
         };
+    }
+
+    private async Task<Dictionary<long, string?>> LoadHostnameMapAsync(List<long> machineIds, CancellationToken ct)
+    {
+        if (machineIds.Count == 0)
+        {
+            return new Dictionary<long, string?>();
+        }
+
+        return await _db.MachineStateSummaries
+            .Where(s => machineIds.Contains(s.MachineId))
+            .ToDictionaryAsync(s => s.MachineId, s => s.Hostname, ct);
     }
 
     private static List<Machine> ApplySort(List<Machine> machines, string sortBy, string sortDir)

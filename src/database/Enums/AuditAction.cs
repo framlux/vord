@@ -27,6 +27,8 @@ public enum AuditAction : short
     MachineRegistered = 20,
     /// <summary>A machine was deleted.</summary>
     MachineDeleted = 21,
+    /// <summary>A machine's metadata was updated.</summary>
+    MachineUpdated = 22,
     /// <summary>A tenant was created.</summary>
     TenantCreated = 30,
     /// <summary>Tenant settings were changed.</summary>

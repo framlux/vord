@@ -66,13 +66,16 @@ public sealed class MachineDetailHandler : IMachineDetailHandler
         DateTimeOffset? lastPing = await _pingService.GetLastPingAsync(machine.Id);
         ulong capabilities = await _pingService.GetAgentCapabilitiesAsync(machine.Id);
 
+        MachineStateSummary? summary = await _db.MachineStateSummaries
+            .FirstOrDefaultAsync(s => s.MachineId == machine.Id, ct);
+
         MachineDto dto = new()
         {
             Id = machine.Id,
             Name = machine.Name,
             Description = machine.Description,
             Location = machine.Location,
-            Hostname = machine.Name,
+            Hostname = summary?.Hostname ?? machine.Name,
             OperatingSystem = machine.OperatingSystem,
             MachineType = machine.MachineType,
             SerialNumber = machine.SerialNumber,

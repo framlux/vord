@@ -21,7 +21,9 @@
 	import HealthBadge from '$lib/components/HealthBadge.svelte';
 	import MachineHero from '$lib/components/machine/MachineHero.svelte';
 	import VitalsBar from '$lib/components/machine/VitalsBar.svelte';
-	import { CircleAlert, Terminal } from 'lucide-svelte';
+	import { CircleAlert, Terminal, Pencil } from 'lucide-svelte';
+	import { invalidateAll } from '$app/navigation';
+	import { canAdminMachines } from '$lib/utils/roles';
 	import {
 		generateNonce,
 		buildCanonicalPayload,
@@ -70,6 +72,50 @@
 	let pollFailures = $state(0);
 	const POLL_FAILURE_THRESHOLD = 3;
 	const showPollWarning = $derived(pollFailures >= POLL_FAILURE_THRESHOLD);
+
+	// Inline editing state for Identity card
+	let editing = $state(false);
+	let editName = $state('');
+	let editDescription = $state('');
+	let editLocation = $state('');
+	let saving = $state(false);
+	let saveError = $state('');
+
+	function startEdit() {
+		editName = machine.name;
+		editDescription = machine.description ?? '';
+		editLocation = machine.location ?? '';
+		saveError = '';
+		editing = true;
+	}
+
+	function cancelEdit() {
+		editing = false;
+		saveError = '';
+	}
+
+	async function saveEdit() {
+		saving = true;
+		saveError = '';
+		try {
+			const api = new ApiClient('');
+			await api.updateMachine(machine.id, {
+				name: editName,
+				description: editDescription || null,
+				location: editLocation || null
+			});
+			editing = false;
+			await invalidateAll();
+		} catch (e: unknown) {
+			if (e instanceof Error) {
+				saveError = e.message;
+			} else {
+				saveError = 'Failed to update machine';
+			}
+		} finally {
+			saving = false;
+		}
+	}
 
 	let showSecurityOnly = $state(false);
 
@@ -405,12 +451,37 @@
 		<div class="grid grid-cols-1 gap-4 lg:grid-cols-2">
 			<!-- Identity Card -->
 			<div class="rounded-xl border border-surface-200 bg-surface-50 p-5 dark:border-surface-700 dark:bg-surface-800">
-				<h3 class="mb-4 text-xs font-semibold uppercase tracking-wider text-surface-400 dark:text-surface-500">Identity</h3>
+				<div class="mb-4 flex items-center justify-between">
+					<h3 class="text-xs font-semibold uppercase tracking-wider text-surface-400 dark:text-surface-500">Identity</h3>
+					{#if canAdminMachines(data.user) && (editing === false)}
+						<button
+							onclick={startEdit}
+							class="rounded p-1 text-surface-400 transition hover:bg-surface-200 hover:text-surface-600 dark:hover:bg-surface-700 dark:hover:text-surface-300"
+							title="Edit machine details"
+						>
+							<Pencil size={14} />
+						</button>
+					{/if}
+				</div>
 				<div class="space-y-3">
-					<div class="flex justify-between">
-						<span class="text-sm text-surface-500 dark:text-surface-400">Name</span>
-						<span class="text-sm font-medium text-surface-900 dark:text-surface-100">{machine.name}</span>
-					</div>
+					{#if editing}
+						<div>
+							<label for="edit-name" class="mb-1 block text-sm text-surface-500 dark:text-surface-400">Name</label>
+							<input
+								id="edit-name"
+								type="text"
+								bind:value={editName}
+								maxlength={250}
+								required
+								class="w-full rounded-md border border-surface-300 bg-white px-3 py-1.5 text-sm text-surface-900 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-surface-600 dark:bg-surface-700 dark:text-surface-100"
+							/>
+						</div>
+					{:else}
+						<div class="flex justify-between">
+							<span class="text-sm text-surface-500 dark:text-surface-400">Name</span>
+							<span class="text-sm font-medium text-surface-900 dark:text-surface-100">{machine.name}</span>
+						</div>
+					{/if}
 					<div class="flex justify-between">
 						<span class="text-sm text-surface-500 dark:text-surface-400">Hostname</span>
 						<span class="font-mono text-sm text-surface-900 dark:text-surface-100">{machine.hostname}</span>
@@ -423,10 +494,55 @@
 						<span class="text-sm text-surface-500 dark:text-surface-400">Asset Tag</span>
 						<span class="text-sm text-surface-900 dark:text-surface-100">{machine.assetTag ?? '---'}</span>
 					</div>
-					<div class="flex justify-between">
-						<span class="text-sm text-surface-500 dark:text-surface-400">Description</span>
-						<span class="max-w-48 text-right text-sm text-surface-900 dark:text-surface-100">{machine.description ?? '---'}</span>
-					</div>
+					{#if editing}
+						<div>
+							<label for="edit-location" class="mb-1 block text-sm text-surface-500 dark:text-surface-400">Location</label>
+							<input
+								id="edit-location"
+								type="text"
+								bind:value={editLocation}
+								maxlength={250}
+								class="w-full rounded-md border border-surface-300 bg-white px-3 py-1.5 text-sm text-surface-900 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-surface-600 dark:bg-surface-700 dark:text-surface-100"
+							/>
+						</div>
+						<div>
+							<label for="edit-description" class="mb-1 block text-sm text-surface-500 dark:text-surface-400">Description</label>
+							<textarea
+								id="edit-description"
+								bind:value={editDescription}
+								rows={3}
+								class="w-full rounded-md border border-surface-300 bg-white px-3 py-1.5 text-sm text-surface-900 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-surface-600 dark:bg-surface-700 dark:text-surface-100"
+							></textarea>
+						</div>
+						{#if saveError}
+							<p class="text-sm text-red-600 dark:text-red-400">{saveError}</p>
+						{/if}
+						<div class="flex justify-end gap-2 pt-1">
+							<button
+								onclick={cancelEdit}
+								disabled={saving}
+								class="rounded-md border border-surface-300 px-3 py-1.5 text-sm text-surface-700 transition hover:bg-surface-100 dark:border-surface-600 dark:text-surface-300 dark:hover:bg-surface-700"
+							>
+								Cancel
+							</button>
+							<button
+								onclick={saveEdit}
+								disabled={saving || (editName.trim().length === 0)}
+								class="rounded-md bg-primary-500 px-3 py-1.5 text-sm font-medium text-white transition hover:bg-primary-600 disabled:opacity-50"
+							>
+								{saving ? 'Saving...' : 'Save'}
+							</button>
+						</div>
+					{:else}
+						<div class="flex justify-between">
+							<span class="text-sm text-surface-500 dark:text-surface-400">Location</span>
+							<span class="text-sm text-surface-900 dark:text-surface-100">{machine.location ?? '---'}</span>
+						</div>
+						<div class="flex justify-between">
+							<span class="text-sm text-surface-500 dark:text-surface-400">Description</span>
+							<span class="max-w-48 text-right text-sm text-surface-900 dark:text-surface-100">{machine.description ?? '---'}</span>
+						</div>
+					{/if}
 				</div>
 			</div>
 

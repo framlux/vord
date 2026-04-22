@@ -418,7 +418,7 @@ public sealed class AlertEvaluationServiceTests
         await service.EvaluateRuleForMachineAsync(db, rule, state, CancellationToken.None);
 
         // Should set the start time in Redis but NOT create an alert event.
-        await redisDb.Received().StringSetAsync(conditionKey, Arg.Any<RedisValue>(), Arg.Any<TimeSpan?>());
+        await redisDb.Received().StringSetAsync(conditionKey, Arg.Any<RedisValue>(), Arg.Is<Expiration>(e => e.Equals(new Expiration(TimeSpan.FromMinutes(10)))));
         int eventCount = await db.AlertEvents.Where(e => e.AlertRuleId == rule.Id).CountAsync();
         await Assert.That(eventCount).IsEqualTo(0);
     }

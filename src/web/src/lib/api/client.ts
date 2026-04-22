@@ -40,7 +40,8 @@ import type {
 	InvoiceDto,
 	UsagePointDto,
 	MachineSearchParams,
-	FleetMachineDto
+	FleetMachineDto,
+	UpdateMachineRequest
 } from './types';
 import { buildQueryString } from '$lib/utils/query';
 
@@ -115,6 +116,10 @@ export class ApiClient {
 
 	private async put<T>(path: string, body?: unknown): Promise<T> {
 		return this.request<T>('PUT', path, body);
+	}
+
+	private async patch<T>(path: string, body?: unknown): Promise<T> {
+		return this.request<T>('PATCH', path, body);
 	}
 
 	private async del<T>(path: string): Promise<T> {
@@ -258,6 +263,12 @@ export class ApiClient {
 	async deleteMachine(id: number): Promise<void> {
 		const resp = await this.del<ApiResponse<object>>(`/api/v1/machines/${id}`);
 		this.unwrap(resp);
+	}
+
+	async updateMachine(id: number, data: UpdateMachineRequest): Promise<MachineDto> {
+		const resp = await this.patch<ApiResponse<MachineDto>>(`/api/v1/machines/${id}`, data);
+
+		return this.unwrap(resp);
 	}
 
 	// Machine Authorized Keys

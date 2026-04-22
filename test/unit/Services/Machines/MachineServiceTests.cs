@@ -199,10 +199,7 @@ public class MachineServiceTests
         await redisDb.Received(1).StringSetAsync(
             Arg.Any<RedisKey>(),
             Arg.Is<RedisValue>(v => v == "reissued-plaintext-key"),
-            Arg.Any<TimeSpan>(),
-            Arg.Any<bool>(),
-            Arg.Any<When>(),
-            Arg.Any<CommandFlags>());
+            Arg.Is<Expiration>(e => e.Equals(new Expiration(TimeSpan.FromHours(24)))));
     }
 
     [Test]

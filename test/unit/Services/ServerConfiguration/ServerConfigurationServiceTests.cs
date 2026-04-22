@@ -69,10 +69,7 @@ public class ServerConfigurationServiceTests
         await redisDb.Received(1).StringSetAsync(
             Arg.Any<RedisKey>(),
             Arg.Is<RedisValue>(v => v == "900"),
-            Arg.Is<TimeSpan>(t => t == TimeSpan.FromMinutes(5)),
-            Arg.Any<bool>(),
-            Arg.Any<When>(),
-            Arg.Any<CommandFlags>());
+            Arg.Is<Expiration>(e => e.Equals(new Expiration(TimeSpan.FromMinutes(5)))));
     }
 
     [Test]

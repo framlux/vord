@@ -506,6 +506,13 @@ export interface CreateWebhookRequest {
 	url: string;
 }
 
+// Machine Update
+export interface UpdateMachineRequest {
+	name: string;
+	description?: string | null;
+	location?: string | null;
+}
+
 // Machine Authorized Keys
 export interface MachineAuthorizedKeyDto {
 	id: number;
