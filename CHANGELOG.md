@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file. See [versionize](https://github.com/versionize/versionize) for commit guidelines.
 
+<a name="2.5.1"></a>
+## [2.5.1](https://www.github.com/framlux/vord/releases/tag/v2.5.1) (2026-04-22)
+
+### Bug Fixes
+
+* Fixing missed machine name updates ([c6b5d8e](https://www.github.com/framlux/vord/commit/c6b5d8e3bce5099c9878824f73b7b6b29af72565))
+
 <a name="2.5.0"></a>
 ## [2.5.0](https://www.github.com/framlux/vord/releases/tag/v2.5.0) (2026-04-21)
 
