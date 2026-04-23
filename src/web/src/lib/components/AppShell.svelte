@@ -16,6 +16,7 @@
         CreditCard,
         ScrollText,
         Bell,
+        CircleHelp,
         LogOut
     } from 'lucide-svelte';
     import ThemeToggle from './ThemeToggle.svelte';
@@ -243,6 +244,16 @@
                     >
                         <Bell size={14} />
                         Notifications
+                    </a>
+                    <a
+                        href="https://vordfleet.dev/support"
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        onclick={() => { userMenuOpen = false; }}
+                        class="flex items-center gap-2.5 px-3 py-1.5 text-[13px] text-surface-700 transition-colors hover:bg-surface-100 dark:text-surface-300 dark:hover:bg-surface-700"
+                    >
+                        <CircleHelp size={14} />
+                        Support
                     </a>
                 </div>
                 <div class="border-t border-surface-200 py-1 dark:border-surface-700">
