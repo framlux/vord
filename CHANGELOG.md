@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file. See [versionize](https://github.com/versionize/versionize) for commit guidelines.
 
+<a name="2.6.0"></a>
+## [2.6.0](https://www.github.com/framlux/vord/releases/tag/v2.6.0) (2026-04-22)
+
+### Features
+
+* Adding links to the support page ([87877b0](https://www.github.com/framlux/vord/commit/87877b00015275490cd9690d84f516bba28c2fad))
+
 <a name="2.5.1"></a>
 ## [2.5.1](https://www.github.com/framlux/vord/releases/tag/v2.5.1) (2026-04-22)
 
