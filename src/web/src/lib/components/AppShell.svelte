@@ -248,7 +248,8 @@
                     <a
                         href="https://vordfleet.dev/support"
                         target="_blank"
-                        rel="noopener noreferrer"
+                        rel="external noopener noreferrer"
+                        data-sveltekit-preload-data="off"
                         onclick={() => { userMenuOpen = false; }}
                         class="flex items-center gap-2.5 px-3 py-1.5 text-[13px] text-surface-700 transition-colors hover:bg-surface-100 dark:text-surface-300 dark:hover:bg-surface-700"
                     >

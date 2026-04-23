@@ -51,7 +51,7 @@
 	<footer class="border-t border-surface-200 py-8 dark:border-surface-700">
 		<div class="mx-auto flex max-w-7xl flex-col items-center gap-2 px-6 text-sm text-surface-500">
 			<div class="flex gap-4">
-				<a href="https://vordfleet.dev/support" target="_blank" rel="noopener noreferrer" class="hover:text-surface-700 dark:hover:text-surface-300">Support</a>
+				<a href="https://vordfleet.dev/support" target="_blank" rel="external noopener noreferrer" data-sveltekit-preload-data="off" class="hover:text-surface-700 dark:hover:text-surface-300">Support</a>
 				<a href="/terms" class="hover:text-surface-700 dark:hover:text-surface-300">Terms of Service</a>
 				<a href="/privacy" class="hover:text-surface-700 dark:hover:text-surface-300">Privacy Policy</a>
 			</div>
