@@ -88,7 +88,7 @@
 			>
 				<option value={null}>Select a machine...</option>
 				{#each machines as machine}
-					<option value={machine.id}>{machine.name} ({machine.hostname})</option>
+					<option value={machine.id}>{machine.name}{#if machine.hostname && machine.hostname !== machine.name} ({machine.hostname}){/if}</option>
 				{/each}
 			</select>
 		</div>

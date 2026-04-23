@@ -91,8 +91,13 @@
 			>
 				<div class="min-w-0">
 					<h2 class="truncate text-lg font-bold text-surface-900 dark:text-surface-50">
-						{detail.hostname ?? detail.name}
+						{detail.name}
 					</h2>
+					{#if detail.hostname && detail.hostname !== detail.name}
+						<p class="mt-0.5 font-mono text-sm text-surface-500 dark:text-surface-400">
+							{detail.hostname}
+						</p>
+					{/if}
 					{#if detail.systemInfo?.ipAddresses?.length}
 						<p class="mt-0.5 text-sm text-surface-500 dark:text-surface-400">
 							{detail.systemInfo.ipAddresses[0]}

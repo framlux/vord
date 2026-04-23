@@ -245,9 +245,15 @@
 								<td class="px-4 py-3">
 									<a href="/machines/{machine.id}" class="block">
 										<p class="font-medium text-primary-500 hover:text-primary-600 hover:underline dark:text-primary-400 dark:hover:text-primary-300">
-											{machine.hostname ?? machine.name}
+											{machine.name}
 										</p>
 										<p class="text-xs text-surface-400 dark:text-surface-500">
+											{#if machine.hostname && machine.hostname !== machine.name}
+												<span class="font-mono">{machine.hostname}</span>
+												{#if machine.ipAddress || machine.hardwareModel}
+													{' — '}
+												{/if}
+											{/if}
 											{machine.ipAddress ?? ''}
 											{#if machine.hardwareModel}
 												{machine.ipAddress ? ' — ' : ''}{machine.hardwareModel}

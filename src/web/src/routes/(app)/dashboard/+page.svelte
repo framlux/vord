@@ -342,9 +342,15 @@
 							<td class="px-4 py-3">
 								<div>
 									<p class="font-medium text-surface-900 dark:text-surface-100">
-										{machine.hostname ?? machine.name}
+										{machine.name}
 									</p>
 									<p class="text-xs text-surface-400 dark:text-surface-500">
+										{#if machine.hostname && machine.hostname !== machine.name}
+											<span class="font-mono">{machine.hostname}</span>
+											{#if machine.ipAddress || machine.hardwareModel}
+												{' — '}
+											{/if}
+										{/if}
 										{machine.ipAddress ?? ''}
 										{#if machine.hardwareModel}
 											{machine.ipAddress ? ' — ' : ''}{machine.hardwareModel}
