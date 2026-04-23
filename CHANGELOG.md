@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file. See [versionize](https://github.com/versionize/versionize) for commit guidelines.
 
+<a name="2.6.3"></a>
+## [2.6.3](https://www.github.com/framlux/vord/releases/tag/v2.6.3) (2026-04-22)
+
+### Bug Fixes
+
+* Fixing broken CD build spec ([7814ca5](https://www.github.com/framlux/vord/commit/7814ca541adf73ed5205ac43de6e2d0213689efb))
+
 <a name="2.6.2"></a>
 ## [2.6.2](https://www.github.com/framlux/vord/releases/tag/v2.6.2) (2026-04-22)
 
