@@ -77,7 +77,11 @@ jobs:
         run: pnpm install
         working-directory: src/web
 
-      - name: Check web
+      - name: Type-check web
+        run: pnpm check
+        working-directory: src/web
+
+      - name: Build web
         run: pnpm build
         working-directory: src/web
 

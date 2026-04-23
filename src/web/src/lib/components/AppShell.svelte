@@ -16,7 +16,7 @@
         CreditCard,
         ScrollText,
         Bell,
-        CircleHelp,
+        CircleQuestionMark,
         LogOut
     } from 'lucide-svelte';
     import ThemeToggle from './ThemeToggle.svelte';
@@ -253,7 +253,7 @@
                         onclick={() => { userMenuOpen = false; }}
                         class="flex items-center gap-2.5 px-3 py-1.5 text-[13px] text-surface-700 transition-colors hover:bg-surface-100 dark:text-surface-300 dark:hover:bg-surface-700"
                     >
-                        <CircleHelp size={14} />
+                        <CircleQuestionMark size={14} />
                         Support
                     </a>
                 </div>
