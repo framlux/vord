@@ -78,7 +78,7 @@ jobs:
         working-directory: src/web
 
       - name: Type-check web
-        run: pnpm check
+        run: npx svelte-kit sync && pnpm check
         working-directory: src/web
 
       - name: Build web
