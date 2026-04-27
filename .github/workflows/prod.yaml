@@ -90,6 +90,7 @@ jobs:
         with:
           context: src/web
           push: true
+          provenance: false
           tags: |
             ghcr.io/framlux/vord/web:${{ env.VERSION }}
             ghcr.io/framlux/vord/web:latest

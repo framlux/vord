@@ -290,8 +290,10 @@ type TimingConfiguration struct {
 	TelemetrySendFastSeconds int32 `protobuf:"varint,6,opt,name=telemetry_send_fast_seconds,json=telemetrySendFastSeconds,proto3" json:"telemetry_send_fast_seconds,omitempty"`
 	// Slow telemetry send interval in seconds (default: 300, range: 30-1800).
 	TelemetrySendSlowSeconds int32 `protobuf:"varint,7,opt,name=telemetry_send_slow_seconds,json=telemetrySendSlowSeconds,proto3" json:"telemetry_send_slow_seconds,omitempty"`
-	unknownFields            protoimpl.UnknownFields
-	sizeCache                protoimpl.SizeCache
+	// Service status collection interval in seconds (default: 3600, range: 60-86400).
+	ServiceStatusSeconds int32 `protobuf:"varint,8,opt,name=service_status_seconds,json=serviceStatusSeconds,proto3" json:"service_status_seconds,omitempty"`
+	unknownFields        protoimpl.UnknownFields
+	sizeCache            protoimpl.SizeCache
 }
 
 func (x *TimingConfiguration) Reset() {
@@ -369,6 +371,13 @@ func (x *TimingConfiguration) GetTelemetrySendFastSeconds() int32 {
 func (x *TimingConfiguration) GetTelemetrySendSlowSeconds() int32 {
 	if x != nil {
 		return x.TelemetrySendSlowSeconds
+	}
+	return 0
+}
+
+func (x *TimingConfiguration) GetServiceStatusSeconds() int32 {
+	if x != nil {
+		return x.ServiceStatusSeconds
 	}
 	return 0
 }
@@ -900,7 +909,7 @@ const file_AgentConfiguration_proto_rawDesc = "" +
 	"\x06key_id\x18\x01 \x01(\x05R\x05keyId\x12\x17\n" +
 	"\auser_id\x18\x02 \x01(\x05R\x06userId\x12\x1d\n" +
 	"\n" +
-	"public_key\x18\x03 \x01(\fR\tpublicKey\"\xea\x03\n" +
+	"public_key\x18\x03 \x01(\fR\tpublicKey\"\xa0\x04\n" +
 	"\x13TimingConfiguration\x129\n" +
 	"\x19heartbeat_time_in_seconds\x18\x01 \x01(\x05R\x16heartbeatTimeInSeconds\x12P\n" +
 	"%configuration_refresh_time_in_seconds\x18\x02 \x01(\x05R!configurationRefreshTimeInSeconds\x12>\n" +
@@ -908,7 +917,8 @@ const file_AgentConfiguration_proto_rawDesc = "" +
 	"\x1etelemetry_collect_fast_seconds\x18\x04 \x01(\x05R\x1btelemetryCollectFastSeconds\x12C\n" +
 	"\x1etelemetry_collect_slow_seconds\x18\x05 \x01(\x05R\x1btelemetryCollectSlowSeconds\x12=\n" +
 	"\x1btelemetry_send_fast_seconds\x18\x06 \x01(\x05R\x18telemetrySendFastSeconds\x12=\n" +
-	"\x1btelemetry_send_slow_seconds\x18\a \x01(\x05R\x18telemetrySendSlowSeconds\"1\n" +
+	"\x1btelemetry_send_slow_seconds\x18\a \x01(\x05R\x18telemetrySendSlowSeconds\x124\n" +
+	"\x16service_status_seconds\x18\b \x01(\x05R\x14serviceStatusSeconds\"1\n" +
 	"\x10AgentPingRequest\x12\x1d\n" +
 	"\n" +
 	"machine_id\x18\x01 \x01(\x03R\tmachineId\"-\n" +

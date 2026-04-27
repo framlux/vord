@@ -3,9 +3,11 @@
 // See LICENSE for details.
 
 using Framlux.FleetManagement.Database;
+using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Server.Services.Infrastructure;
 using Framlux.FleetManagement.Test.Infrastructure;
 using LinqToDB;
+using LinqToDB.Data;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using NSubstitute;
@@ -344,5 +346,127 @@ public class PartitionManagementServiceTests
 
         await Assert.That(sql).Contains("FROM ('2026-01-01')");
         await Assert.That(sql).Contains("TO ('2026-01-02')");
+    }
+
+    // ========== DropExpiredPartitionsAsync behavioral tests ==========
+
+    [Test]
+    public async Task DropExpiredPartitions_DropsOldPartitions_KeepsRecentOnes()
+    {
+        // Arrange: create a database with a Free-tier subscription (1-day retention)
+        using TestDatabaseFactory dbFactory = new();
+        DatabaseContext db = dbFactory.Context;
+
+        await db.InsertAsync(TestDataBuilder.BuildSubscription(
+            tenantId: 1,
+            tier: SubscriptionTier.Free,
+            retentionDays: 1));
+
+        // Create fake partition tables at specific dates.
+        // With RetentionDays=1 and DropBufferDays=2, the cutoff is today - 3.
+        // Partitions before the cutoff should be dropped; partitions at or after should survive.
+        DateOnly today = DateOnly.FromDateTime(DateTimeOffset.UtcNow.UtcDateTime);
+        int retentionPlusBuffer = 1 + PartitionManagementService.DropBufferDays;
+
+        DateOnly oldDate = new(2026, 1, 15);
+        DateOnly justOutsideWindow = today.AddDays(-(retentionPlusBuffer + 1));
+        DateOnly justInsideWindow = today.AddDays(-retentionPlusBuffer + 1);
+        DateOnly todayDate = today;
+
+        string oldPartition = PartitionManagementService.BuildPartitionName("MachineTelemetry", oldDate);
+        string outsidePartition = PartitionManagementService.BuildPartitionName("MachineTelemetry", justOutsideWindow);
+        string insidePartition = PartitionManagementService.BuildPartitionName("MachineTelemetry", justInsideWindow);
+        string todayPartition = PartitionManagementService.BuildPartitionName("MachineTelemetry", todayDate);
+
+        // Create real SQLite tables named as partitions (DROP TABLE IF EXISTS works on SQLite)
+        await db.ExecuteAsync($"CREATE TABLE \"{oldPartition}\" (id INTEGER)", CancellationToken.None);
+        await db.ExecuteAsync($"CREATE TABLE \"{outsidePartition}\" (id INTEGER)", CancellationToken.None);
+        await db.ExecuteAsync($"CREATE TABLE \"{insidePartition}\" (id INTEGER)", CancellationToken.None);
+        await db.ExecuteAsync($"CREATE TABLE \"{todayPartition}\" (id INTEGER)", CancellationToken.None);
+
+        PartitionManagementService service = new(
+            new TestServiceScopeFactory(db),
+            Substitute.For<ISqlDialect>(),
+            Substitute.For<IDistributedLock>(),
+            Substitute.For<ILogger<PartitionManagementService>>());
+
+        // Act
+        await service.DropExpiredPartitionsAsync(db, CancellationToken.None);
+
+        // Assert: query sqlite_master for surviving tables
+        List<string> survivingTables = (await db.QueryToListAsync<string>(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'machinetelemetry_d%'",
+            CancellationToken.None)).ToList();
+
+        await Assert.That(survivingTables).DoesNotContain(oldPartition);
+        await Assert.That(survivingTables).DoesNotContain(outsidePartition);
+        await Assert.That(survivingTables).Contains(insidePartition);
+        await Assert.That(survivingTables).Contains(todayPartition);
+    }
+
+    [Test]
+    public async Task DropExpiredPartitions_NoSubscriptions_DoesNotDropAnything()
+    {
+        // When there are no subscriptions, maxRetentionDays is null — no partitions should be dropped
+        using TestDatabaseFactory dbFactory = new();
+        DatabaseContext db = dbFactory.Context;
+
+        string partitionName = PartitionManagementService.BuildPartitionName("MachineTelemetry", new DateOnly(2026, 1, 1));
+        await db.ExecuteAsync($"CREATE TABLE \"{partitionName}\" (id INTEGER)", CancellationToken.None);
+
+        PartitionManagementService service = new(
+            new TestServiceScopeFactory(db),
+            Substitute.For<ISqlDialect>(),
+            Substitute.For<IDistributedLock>(),
+            Substitute.For<ILogger<PartitionManagementService>>());
+
+        await service.DropExpiredPartitionsAsync(db, CancellationToken.None);
+
+        List<string> survivingTables = (await db.QueryToListAsync<string>(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'machinetelemetry_d%'",
+            CancellationToken.None)).ToList();
+
+        await Assert.That(survivingTables).Contains(partitionName);
+    }
+
+    [Test]
+    public async Task DropExpiredPartitions_HigherRetention_KeepsMorePartitions()
+    {
+        // Pro tier with 30-day retention should keep partitions within 30 + DropBufferDays
+        using TestDatabaseFactory dbFactory = new();
+        DatabaseContext db = dbFactory.Context;
+
+        await db.InsertAsync(TestDataBuilder.BuildSubscription(
+            tenantId: 1,
+            tier: SubscriptionTier.Pro,
+            retentionDays: 30));
+
+        DateOnly today = DateOnly.FromDateTime(DateTimeOffset.UtcNow.UtcDateTime);
+        int retentionPlusBuffer = 30 + PartitionManagementService.DropBufferDays;
+
+        // A partition 20 days old should survive with 30-day retention
+        DateOnly recentDate = today.AddDays(-20);
+        string recentPartition = PartitionManagementService.BuildPartitionName("MachineTelemetry", recentDate);
+        await db.ExecuteAsync($"CREATE TABLE \"{recentPartition}\" (id INTEGER)", CancellationToken.None);
+
+        // A partition beyond retention + buffer should be dropped
+        DateOnly expiredDate = today.AddDays(-(retentionPlusBuffer + 5));
+        string expiredPartition = PartitionManagementService.BuildPartitionName("MachineTelemetry", expiredDate);
+        await db.ExecuteAsync($"CREATE TABLE \"{expiredPartition}\" (id INTEGER)", CancellationToken.None);
+
+        PartitionManagementService service = new(
+            new TestServiceScopeFactory(db),
+            Substitute.For<ISqlDialect>(),
+            Substitute.For<IDistributedLock>(),
+            Substitute.For<ILogger<PartitionManagementService>>());
+
+        await service.DropExpiredPartitionsAsync(db, CancellationToken.None);
+
+        List<string> survivingTables = (await db.QueryToListAsync<string>(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name LIKE 'machinetelemetry_d%'",
+            CancellationToken.None)).ToList();
+
+        await Assert.That(survivingTables).Contains(recentPartition);
+        await Assert.That(survivingTables).DoesNotContain(expiredPartition);
     }
 }

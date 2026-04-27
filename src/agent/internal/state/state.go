@@ -27,6 +27,7 @@ type RuntimeState struct {
 	telemetryCollectSlowInterval time.Duration
 	telemetrySendFastInterval    time.Duration
 	telemetrySendSlowInterval    time.Duration
+	serviceStatusInterval        time.Duration
 	agentCapabilities            uint64
 }
 
@@ -36,10 +37,11 @@ func New() *RuntimeState {
 		configRefreshInterval:        5 * time.Minute,
 		pingInterval:                 60 * time.Second,
 		commandPollInterval:          30 * time.Second,
-		telemetryCollectFastInterval: 30 * time.Second,
+		telemetryCollectFastInterval: 60 * time.Second,
 		telemetryCollectSlowInterval: 15 * time.Minute,
 		telemetrySendFastInterval:    15 * time.Second,
 		telemetrySendSlowInterval:    5 * time.Minute,
+		serviceStatusInterval:        1 * time.Hour,
 	}
 }
 
@@ -229,6 +231,21 @@ func (s *RuntimeState) SetTelemetrySendSlowInterval(d time.Duration) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.telemetrySendSlowInterval = d
+}
+
+// ServiceStatusInterval returns the interval between service status collection runs.
+func (s *RuntimeState) ServiceStatusInterval() time.Duration {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	return s.serviceStatusInterval
+}
+
+// SetServiceStatusInterval sets the interval between service status collection runs.
+func (s *RuntimeState) SetServiceStatusInterval(d time.Duration) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.serviceStatusInterval = d
 }
 
 // AgentCapabilities returns the bitwise agent capabilities mask.

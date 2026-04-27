@@ -25,8 +25,8 @@ func TestNewRegistry(t *testing.T) {
 func TestRegistryRegister(t *testing.T) {
 	r := NewRegistry()
 
-	// ServicesCollector uses its DefaultInterval (60s).
-	c := NewServicesCollector()
+	// ServicesCollector reads its DefaultInterval from RuntimeState (default 1h).
+	c := NewServicesCollector(state.New())
 	r.Register(c)
 
 	if len(r.entries) != 1 {
@@ -35,8 +35,8 @@ func TestRegistryRegister(t *testing.T) {
 	if r.entries[0].collector.Name() != "service_status" {
 		t.Errorf("entry name = %q, want 'service_status'", r.entries[0].collector.Name())
 	}
-	if r.entries[0].interval != 60*time.Second {
-		t.Errorf("entry interval = %v, want 60s", r.entries[0].interval)
+	if r.entries[0].interval != 1*time.Hour {
+		t.Errorf("entry interval = %v, want 1h0m0s", r.entries[0].interval)
 	}
 }
 
@@ -46,7 +46,7 @@ func TestRegistryMultipleCollectors(t *testing.T) {
 	r.Register(NewSSHSessionsCollector(state.New()))
 	r.Register(NewHwHealthCollector())
 	r.Register(NewPackagesCollector())
-	r.Register(NewServicesCollector())
+	r.Register(NewServicesCollector(state.New()))
 
 	if len(r.entries) != 4 {
 		t.Fatalf("registry has %d entries, want 4", len(r.entries))
@@ -71,7 +71,7 @@ func TestCollectorNames(t *testing.T) {
 		{NewSSHSessionsCollector(state.New()), "ssh_sessions"},
 		{NewHwHealthCollector(), "hardware_health"},
 		{NewPackagesCollector(), "package_updates"},
-		{NewServicesCollector(), "service_status"},
+		{NewServicesCollector(state.New()), "service_status"},
 	}
 
 	for _, tt := range tests {
@@ -89,10 +89,10 @@ func TestCollectorDefaultIntervals(t *testing.T) {
 		collector    Collector
 		wantExact    time.Duration
 	}{
-		{NewSSHSessionsCollector(state.New()), 30 * time.Second},
+		{NewSSHSessionsCollector(state.New()), 60 * time.Second},
 		{NewHwHealthCollector(), 5 * time.Minute},
 		{NewPackagesCollector(), 6 * time.Hour},
-		{NewServicesCollector(), 60 * time.Second},
+		{NewServicesCollector(state.New()), 1 * time.Hour},
 	}
 
 	for _, tt := range tests {

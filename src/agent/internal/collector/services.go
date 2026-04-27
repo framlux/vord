@@ -16,22 +16,24 @@ import (
 
 	"github.com/framlux/vord/internal/db"
 	"github.com/framlux/vord/internal/id"
+	"github.com/framlux/vord/internal/state"
 )
 
 // ServicesCollector collects systemd service status.
 type ServicesCollector struct {
 	hasSystemctl bool
+	rs           *state.RuntimeState
 }
 
 // NewServicesCollector creates a new ServicesCollector.
-func NewServicesCollector() *ServicesCollector {
+func NewServicesCollector(rs *state.RuntimeState) *ServicesCollector {
 	_, err := exec.LookPath("systemctl")
 
-	return &ServicesCollector{hasSystemctl: err == nil}
+	return &ServicesCollector{hasSystemctl: err == nil, rs: rs}
 }
 
-func (c *ServicesCollector) Name() string              { return "service_status" }
-func (c *ServicesCollector) DefaultInterval() time.Duration { return 60 * time.Second }
+func (c *ServicesCollector) Name() string                   { return "service_status" }
+func (c *ServicesCollector) DefaultInterval() time.Duration { return c.rs.ServiceStatusInterval() }
 
 type serviceEntry struct {
 	Unit        string `json:"unit"`

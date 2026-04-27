@@ -32,6 +32,7 @@ public sealed class AdminHandler : IAdminHandler
         [ServerConfigurationSettingKeys.TelemetryCollectSlowSeconds] = "How often agents collect static system information, in seconds (60-3600).",
         [ServerConfigurationSettingKeys.TelemetrySendFastSeconds] = "How often agents transmit high-frequency metrics to the server, in seconds (5-120).",
         [ServerConfigurationSettingKeys.TelemetrySendSlowSeconds] = "How often agents transmit low-frequency data to the server, in seconds (30-1800).",
+        [ServerConfigurationSettingKeys.ServiceStatusSeconds] = "How often agents collect systemd service status, in seconds (60-86400).",
     };
 
     internal static readonly Dictionary<ServerConfigurationSettingKeys, (int Min, int Max)> SettingBounds = new()
@@ -43,6 +44,7 @@ public sealed class AdminHandler : IAdminHandler
         [ServerConfigurationSettingKeys.TelemetryCollectSlowSeconds] = (60, 3600),
         [ServerConfigurationSettingKeys.TelemetrySendFastSeconds] = (5, 120),
         [ServerConfigurationSettingKeys.TelemetrySendSlowSeconds] = (30, 1800),
+        [ServerConfigurationSettingKeys.ServiceStatusSeconds] = (60, 86400),
     };
 
     private readonly DatabaseContext _db;

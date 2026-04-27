@@ -285,6 +285,9 @@ func (m *Manager) FetchConfiguration(ctx context.Context) error {
 		if (tc.TelemetrySendSlowSeconds >= 30) && (tc.TelemetrySendSlowSeconds <= 1800) {
 			m.state.SetTelemetrySendSlowInterval(time.Duration(tc.TelemetrySendSlowSeconds) * time.Second)
 		}
+		if (tc.ServiceStatusSeconds >= 60) && (tc.ServiceStatusSeconds <= 86400) {
+			m.state.SetServiceStatusInterval(time.Duration(tc.ServiceStatusSeconds) * time.Second)
+		}
 	}
 
 	// Store tenant ID so the agent can verify command ownership.

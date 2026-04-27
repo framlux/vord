@@ -36,10 +36,11 @@ public sealed class InitialMigration : Migration
             .Row(new { Key = 6, Value = "300", Version = 1 })
             .Row(new { Key = 7, Value = "30", Version = 1 })
             .Row(new { Key = 8, Value = "true", Version = 1 })
-            .Row(new { Key = 9, Value = "30", Version = 1 })
+            .Row(new { Key = 9, Value = "60", Version = 1 })
             .Row(new { Key = 10, Value = "900", Version = 1 })
             .Row(new { Key = 11, Value = "15", Version = 1 })
-            .Row(new { Key = 12, Value = "300", Version = 1 });
+            .Row(new { Key = 12, Value = "300", Version = 1 })
+            .Row(new { Key = 14, Value = "3600", Version = 1 });
 
         Create.Table(TableNames.Users)
             .WithColumn("Id").AsInt32().PrimaryKey().Identity().NotNullable()

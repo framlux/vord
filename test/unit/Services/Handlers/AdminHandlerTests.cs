@@ -446,6 +446,126 @@ public class AdminHandlerTests
         await Assert.That(result.IsSuccess).IsEqualTo(true);
     }
 
+    // ========== ServiceStatus metadata tests ==========
+
+    [Test]
+    public async Task SettingDescriptions_ContainsServiceStatusKey()
+    {
+        bool hasKey = AdminHandler.SettingDescriptions.ContainsKey(ServerConfigurationSettingKeys.ServiceStatusSeconds);
+
+        await Assert.That(hasKey).IsEqualTo(true);
+        await Assert.That(AdminHandler.SettingDescriptions[ServerConfigurationSettingKeys.ServiceStatusSeconds]).IsNotEmpty();
+    }
+
+    [Test]
+    public async Task SettingBounds_ServiceStatus_Min60_Max86400()
+    {
+        bool hasKey = AdminHandler.SettingBounds.ContainsKey(ServerConfigurationSettingKeys.ServiceStatusSeconds);
+
+        await Assert.That(hasKey).IsEqualTo(true);
+
+        (int min, int max) = AdminHandler.SettingBounds[ServerConfigurationSettingKeys.ServiceStatusSeconds];
+        await Assert.That(min).IsEqualTo(60);
+        await Assert.That(max).IsEqualTo(86400);
+    }
+
+    [Test]
+    public async Task UpdateSettingsAsync_ServiceStatusBelowMin_ReturnsBadRequest()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        AdminHandler handler = CreateHandler(dbFactory);
+        List<SettingUpdateEntry> updates = [new() { Key = 14, Value = "30" }];
+
+        ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, CancellationToken.None);
+
+        await Assert.That(result.IsSuccess).IsEqualTo(false);
+        await Assert.That(result.StatusCode).IsEqualTo(400);
+        await Assert.That(result.ErrorMessage).Contains("between 60 and 86400");
+    }
+
+    [Test]
+    public async Task UpdateSettingsAsync_ServiceStatusAboveMax_ReturnsBadRequest()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        AdminHandler handler = CreateHandler(dbFactory);
+        List<SettingUpdateEntry> updates = [new() { Key = 14, Value = "100000" }];
+
+        ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, CancellationToken.None);
+
+        await Assert.That(result.IsSuccess).IsEqualTo(false);
+        await Assert.That(result.StatusCode).IsEqualTo(400);
+        await Assert.That(result.ErrorMessage).Contains("between 60 and 86400");
+    }
+
+    [Test]
+    public async Task UpdateSettingsAsync_ServiceStatusAtExactMin_Succeeds()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        IServerSettingsCache cache = Substitute.For<IServerSettingsCache>();
+        IConnectionMultiplexer redis = CreateFakeRedis();
+
+        AdminHandler handler = new(dbFactory.Context, cache, redis);
+        List<SettingUpdateEntry> updates = [new() { Key = 14, Value = "60" }];
+
+        ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, CancellationToken.None);
+
+        await Assert.That(result.IsSuccess).IsEqualTo(true);
+    }
+
+    [Test]
+    public async Task UpdateSettingsAsync_ServiceStatusAtExactMax_Succeeds()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        IServerSettingsCache cache = Substitute.For<IServerSettingsCache>();
+        IConnectionMultiplexer redis = CreateFakeRedis();
+
+        AdminHandler handler = new(dbFactory.Context, cache, redis);
+        List<SettingUpdateEntry> updates = [new() { Key = 14, Value = "86400" }];
+
+        ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, CancellationToken.None);
+
+        await Assert.That(result.IsSuccess).IsEqualTo(true);
+    }
+
+    [Test]
+    public async Task UpdateSettingsAsync_ServiceStatusValidMidRange_Succeeds()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        IServerSettingsCache cache = Substitute.For<IServerSettingsCache>();
+        IConnectionMultiplexer redis = CreateFakeRedis();
+
+        AdminHandler handler = new(dbFactory.Context, cache, redis);
+        List<SettingUpdateEntry> updates = [new() { Key = 14, Value = "3600" }];
+
+        ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, CancellationToken.None);
+
+        await Assert.That(result.IsSuccess).IsEqualTo(true);
+        await Assert.That(result.Data!.First(e => e.Key == 14).Value).IsEqualTo("3600");
+    }
+
+    [Test]
+    public async Task GetSettingsAsync_WithServiceStatusSetting_IncludesDescriptionAndBounds()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        await dbFactory.Context.InsertAsync(new ServerConfigurationSettings
+        {
+            Key = ServerConfigurationSettingKeys.ServiceStatusSeconds,
+            Value = "3600",
+            Version = 1,
+        });
+
+        AdminHandler handler = CreateHandler(dbFactory);
+
+        ServiceResult<List<SettingEntry>> result = await handler.GetSettingsAsync(CancellationToken.None);
+
+        await Assert.That(result.IsSuccess).IsEqualTo(true);
+        SettingEntry entry = result.Data!.First(e => e.Key == 14);
+        await Assert.That(entry.Name).IsEqualTo("ServiceStatusSeconds");
+        await Assert.That(entry.Description).IsNotEmpty();
+        await Assert.That(entry.Min).IsEqualTo(60);
+        await Assert.That(entry.Max).IsEqualTo(86400);
+    }
+
     // ========== GetAllUsersAsync tests ==========
 
     [Test]

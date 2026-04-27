@@ -29,8 +29,9 @@ type Registry struct {
 }
 
 type entry struct {
-	collector Collector
-	interval  time.Duration
+	collector   Collector
+	interval    time.Duration
+	getInterval func() time.Duration
 }
 
 // NewRegistry creates an empty collector registry.
@@ -43,6 +44,16 @@ func (r *Registry) Register(c Collector) {
 	r.entries = append(r.entries, entry{
 		collector: c,
 		interval:  c.DefaultInterval(),
+	})
+}
+
+// RegisterDynamic adds a collector with a dynamic interval function that is
+// checked after each tick, allowing runtime interval changes without restart.
+func (r *Registry) RegisterDynamic(c Collector, getInterval func() time.Duration) {
+	r.entries = append(r.entries, entry{
+		collector:   c,
+		interval:    c.DefaultInterval(),
+		getInterval: getInterval,
 	})
 }
 

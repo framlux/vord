@@ -172,6 +172,47 @@ func TestZeroValueSafety(t *testing.T) {
 	}
 }
 
+// Intent: ServiceStatusInterval default must be 1 hour to match the documented collection cadence.
+func TestServiceStatusInterval_DefaultIsOneHour(t *testing.T) {
+	s := New()
+
+	if s.ServiceStatusInterval() != 1*time.Hour {
+		t.Errorf("expected ServiceStatusInterval=1h, got %v", s.ServiceStatusInterval())
+	}
+}
+
+// Intent: SetServiceStatusInterval must round-trip through the getter so callers
+// observe the new value immediately after setting it.
+func TestSetServiceStatusInterval_GetReturnsNewValue(t *testing.T) {
+	s := New()
+	s.SetServiceStatusInterval(5 * time.Minute)
+
+	if s.ServiceStatusInterval() != 5*time.Minute {
+		t.Errorf("expected ServiceStatusInterval=5m after set, got %v", s.ServiceStatusInterval())
+	}
+}
+
+// Intent: Concurrent reads and writes to ServiceStatusInterval must not race.
+// This test is designed to fail under -race if the mutex protection is missing.
+func TestServiceStatusInterval_ConcurrentAccess_NoRace(t *testing.T) {
+	s := New()
+	var wg sync.WaitGroup
+
+	for i := 0; i < 100; i++ {
+		wg.Add(2)
+		go func(n int) {
+			defer wg.Done()
+			s.SetServiceStatusInterval(time.Duration(n) * time.Minute)
+		}(i)
+		go func() {
+			defer wg.Done()
+			_ = s.ServiceStatusInterval()
+		}()
+	}
+
+	wg.Wait()
+}
+
 // Intent: AgentCapabilities round-trips through Set/Get.
 func TestAgentCapabilities_SetGet(t *testing.T) {
 	s := New()

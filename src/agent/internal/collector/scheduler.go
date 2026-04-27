@@ -72,7 +72,7 @@ func (s *Scheduler) Run(ctx context.Context) {
 	// Start independent collector goroutines.
 	for _, e := range s.registry.entries {
 		wg.Add(1)
-		go func(c Collector, interval time.Duration) {
+		go func(c Collector, interval time.Duration, getInterval func() time.Duration) {
 			defer wg.Done()
 			defer func() {
 				if r := recover(); r != nil {
@@ -83,14 +83,14 @@ func (s *Scheduler) Run(ctx context.Context) {
 					)
 				}
 			}()
-			s.runCollector(ctx, c, interval)
-		}(e.collector, e.interval)
+			s.runCollector(ctx, c, interval, getInterval)
+		}(e.collector, e.interval, e.getInterval)
 	}
 
 	wg.Wait()
 }
 
-func (s *Scheduler) runCollector(ctx context.Context, c Collector, interval time.Duration) {
+func (s *Scheduler) runCollector(ctx context.Context, c Collector, interval time.Duration, getInterval func() time.Duration) {
 	name := c.Name()
 	slog.Info("starting collector", "name", name, "interval", interval.String())
 
@@ -108,6 +108,14 @@ func (s *Scheduler) runCollector(ctx context.Context, c Collector, interval time
 			return
 		case <-ticker.C:
 			s.safeExecuteCollector(ctx, c)
+
+			if getInterval != nil {
+				if newInterval := getInterval(); newInterval != interval {
+					slog.Info("collector interval changed", "name", name, "old", interval.String(), "new", newInterval.String())
+					interval = newInterval
+					ticker.Reset(interval)
+				}
+			}
 		}
 	}
 }

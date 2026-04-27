@@ -745,8 +745,8 @@ func TestFetchConfiguration_EnforcesMinTelemetryCollectFast(t *testing.T) {
 		t.Fatalf("FetchConfiguration: %v", err)
 	}
 
-	if runtimeState.TelemetryCollectFastInterval() != 30*time.Second {
-		t.Errorf("expected TelemetryCollectFastInterval=30s (default), got %v", runtimeState.TelemetryCollectFastInterval())
+	if runtimeState.TelemetryCollectFastInterval() != 60*time.Second {
+		t.Errorf("expected TelemetryCollectFastInterval=60s (default), got %v", runtimeState.TelemetryCollectFastInterval())
 	}
 }
 
@@ -774,8 +774,8 @@ func TestFetchConfiguration_EnforcesMaxTelemetryCollectFast(t *testing.T) {
 		t.Fatalf("FetchConfiguration: %v", err)
 	}
 
-	if runtimeState.TelemetryCollectFastInterval() != 30*time.Second {
-		t.Errorf("expected TelemetryCollectFastInterval=30s (default), got %v", runtimeState.TelemetryCollectFastInterval())
+	if runtimeState.TelemetryCollectFastInterval() != 60*time.Second {
+		t.Errorf("expected TelemetryCollectFastInterval=60s (default), got %v", runtimeState.TelemetryCollectFastInterval())
 	}
 }
 
@@ -1159,3 +1159,244 @@ func TestFetchConfiguration_SendsZeroCapabilitiesWhenDisabled(t *testing.T) {
 		t.Errorf("expected AgentCapabilities=0, got %d", receivedCapabilities)
 	}
 }
+
+// --- ServiceStatusSeconds bounds-checking tests ---
+
+// Intent: A valid ServiceStatusSeconds value (3600, mid-range) is applied to RuntimeState.
+func TestFetchConfiguration_ServiceStatusSeconds_ValidRange_Applied(t *testing.T) {
+	store := newTestStore(t)
+	runtimeState := state.New()
+	runtimeState.SetMachineID(1)
+
+	cfgClient := &mockConfigurationClient{
+		getConfigFunc: func(ctx context.Context, in *pb.GetConfigurationRequest, opts ...grpc.CallOption) (*pb.GetConfigurationResponse, error) {
+			return &pb.GetConfigurationResponse{
+				TimeConfig: &pb.TimingConfiguration{
+					ServiceStatusSeconds: 3600,
+				},
+			}, nil
+		},
+	}
+	regClient := &mockRegistrationClient{}
+
+	mgr := newTestManager(regClient, cfgClient, store, runtimeState, "token")
+
+	err := mgr.FetchConfiguration(context.Background())
+	if err != nil {
+		t.Fatalf("FetchConfiguration: %v", err)
+	}
+
+	if runtimeState.ServiceStatusInterval() != 3600*time.Second {
+		t.Errorf("expected ServiceStatusInterval=3600s, got %v", runtimeState.ServiceStatusInterval())
+	}
+}
+
+// Intent: ServiceStatusSeconds at the exact minimum boundary (60) is accepted.
+func TestFetchConfiguration_ServiceStatusSeconds_MinBoundary_Applied(t *testing.T) {
+	store := newTestStore(t)
+	runtimeState := state.New()
+	runtimeState.SetMachineID(1)
+
+	cfgClient := &mockConfigurationClient{
+		getConfigFunc: func(ctx context.Context, in *pb.GetConfigurationRequest, opts ...grpc.CallOption) (*pb.GetConfigurationResponse, error) {
+			return &pb.GetConfigurationResponse{
+				TimeConfig: &pb.TimingConfiguration{
+					ServiceStatusSeconds: 60,
+				},
+			}, nil
+		},
+	}
+	regClient := &mockRegistrationClient{}
+
+	mgr := newTestManager(regClient, cfgClient, store, runtimeState, "token")
+
+	err := mgr.FetchConfiguration(context.Background())
+	if err != nil {
+		t.Fatalf("FetchConfiguration: %v", err)
+	}
+
+	if runtimeState.ServiceStatusInterval() != 60*time.Second {
+		t.Errorf("expected ServiceStatusInterval=60s (exact min), got %v", runtimeState.ServiceStatusInterval())
+	}
+}
+
+// Intent: ServiceStatusSeconds at the exact maximum boundary (86400) is accepted.
+func TestFetchConfiguration_ServiceStatusSeconds_MaxBoundary_Applied(t *testing.T) {
+	store := newTestStore(t)
+	runtimeState := state.New()
+	runtimeState.SetMachineID(1)
+
+	cfgClient := &mockConfigurationClient{
+		getConfigFunc: func(ctx context.Context, in *pb.GetConfigurationRequest, opts ...grpc.CallOption) (*pb.GetConfigurationResponse, error) {
+			return &pb.GetConfigurationResponse{
+				TimeConfig: &pb.TimingConfiguration{
+					ServiceStatusSeconds: 86400,
+				},
+			}, nil
+		},
+	}
+	regClient := &mockRegistrationClient{}
+
+	mgr := newTestManager(regClient, cfgClient, store, runtimeState, "token")
+
+	err := mgr.FetchConfiguration(context.Background())
+	if err != nil {
+		t.Fatalf("FetchConfiguration: %v", err)
+	}
+
+	if runtimeState.ServiceStatusInterval() != 86400*time.Second {
+		t.Errorf("expected ServiceStatusInterval=86400s (exact max), got %v", runtimeState.ServiceStatusInterval())
+	}
+}
+
+// Intent: ServiceStatusSeconds one below the minimum (59) is rejected, leaving the default unchanged.
+func TestFetchConfiguration_ServiceStatusSeconds_BelowMin_Ignored(t *testing.T) {
+	store := newTestStore(t)
+	runtimeState := state.New()
+	runtimeState.SetMachineID(1)
+
+	cfgClient := &mockConfigurationClient{
+		getConfigFunc: func(ctx context.Context, in *pb.GetConfigurationRequest, opts ...grpc.CallOption) (*pb.GetConfigurationResponse, error) {
+			return &pb.GetConfigurationResponse{
+				TimeConfig: &pb.TimingConfiguration{
+					ServiceStatusSeconds: 59,
+				},
+			}, nil
+		},
+	}
+	regClient := &mockRegistrationClient{}
+
+	mgr := newTestManager(regClient, cfgClient, store, runtimeState, "token")
+
+	err := mgr.FetchConfiguration(context.Background())
+	if err != nil {
+		t.Fatalf("FetchConfiguration: %v", err)
+	}
+
+	// Default is 1 hour; 59 is below the 60s minimum so it must be rejected.
+	if runtimeState.ServiceStatusInterval() != 1*time.Hour {
+		t.Errorf("expected ServiceStatusInterval=1h (default, since 59 < 60), got %v", runtimeState.ServiceStatusInterval())
+	}
+}
+
+// Intent: ServiceStatusSeconds one above the maximum (86401) is rejected, leaving the default unchanged.
+func TestFetchConfiguration_ServiceStatusSeconds_AboveMax_Ignored(t *testing.T) {
+	store := newTestStore(t)
+	runtimeState := state.New()
+	runtimeState.SetMachineID(1)
+
+	cfgClient := &mockConfigurationClient{
+		getConfigFunc: func(ctx context.Context, in *pb.GetConfigurationRequest, opts ...grpc.CallOption) (*pb.GetConfigurationResponse, error) {
+			return &pb.GetConfigurationResponse{
+				TimeConfig: &pb.TimingConfiguration{
+					ServiceStatusSeconds: 86401,
+				},
+			}, nil
+		},
+	}
+	regClient := &mockRegistrationClient{}
+
+	mgr := newTestManager(regClient, cfgClient, store, runtimeState, "token")
+
+	err := mgr.FetchConfiguration(context.Background())
+	if err != nil {
+		t.Fatalf("FetchConfiguration: %v", err)
+	}
+
+	if runtimeState.ServiceStatusInterval() != 1*time.Hour {
+		t.Errorf("expected ServiceStatusInterval=1h (default, since 86401 > 86400), got %v", runtimeState.ServiceStatusInterval())
+	}
+}
+
+// Intent: ServiceStatusSeconds=0 (proto3 default for unset int32 fields) is rejected,
+// so an empty server response does not accidentally zero out the interval.
+func TestFetchConfiguration_ServiceStatusSeconds_Zero_Ignored(t *testing.T) {
+	store := newTestStore(t)
+	runtimeState := state.New()
+	runtimeState.SetMachineID(1)
+
+	cfgClient := &mockConfigurationClient{
+		getConfigFunc: func(ctx context.Context, in *pb.GetConfigurationRequest, opts ...grpc.CallOption) (*pb.GetConfigurationResponse, error) {
+			return &pb.GetConfigurationResponse{
+				TimeConfig: &pb.TimingConfiguration{
+					ServiceStatusSeconds: 0,
+				},
+			}, nil
+		},
+	}
+	regClient := &mockRegistrationClient{}
+
+	mgr := newTestManager(regClient, cfgClient, store, runtimeState, "token")
+
+	err := mgr.FetchConfiguration(context.Background())
+	if err != nil {
+		t.Fatalf("FetchConfiguration: %v", err)
+	}
+
+	if runtimeState.ServiceStatusInterval() != 1*time.Hour {
+		t.Errorf("expected ServiceStatusInterval=1h (default, since 0 < 60), got %v", runtimeState.ServiceStatusInterval())
+	}
+}
+
+// Intent: ServiceStatusSeconds=-1 (negative value) is rejected so a malicious or
+// buggy server cannot cause a negative ticker interval.
+func TestFetchConfiguration_ServiceStatusSeconds_Negative_Ignored(t *testing.T) {
+	store := newTestStore(t)
+	runtimeState := state.New()
+	runtimeState.SetMachineID(1)
+
+	cfgClient := &mockConfigurationClient{
+		getConfigFunc: func(ctx context.Context, in *pb.GetConfigurationRequest, opts ...grpc.CallOption) (*pb.GetConfigurationResponse, error) {
+			return &pb.GetConfigurationResponse{
+				TimeConfig: &pb.TimingConfiguration{
+					ServiceStatusSeconds: -1,
+				},
+			}, nil
+		},
+	}
+	regClient := &mockRegistrationClient{}
+
+	mgr := newTestManager(regClient, cfgClient, store, runtimeState, "token")
+
+	err := mgr.FetchConfiguration(context.Background())
+	if err != nil {
+		t.Fatalf("FetchConfiguration: %v", err)
+	}
+
+	if runtimeState.ServiceStatusInterval() != 1*time.Hour {
+		t.Errorf("expected ServiceStatusInterval=1h (default, since -1 < 60), got %v", runtimeState.ServiceStatusInterval())
+	}
+}
+
+// Intent: A nil TimeConfig in the response must not cause a panic — the agent
+// should gracefully skip timing updates when the field is absent.
+func TestFetchConfiguration_NilTimeConfig_DoesNotPanic(t *testing.T) {
+	store := newTestStore(t)
+	runtimeState := state.New()
+	runtimeState.SetMachineID(1)
+
+	cfgClient := &mockConfigurationClient{
+		getConfigFunc: func(ctx context.Context, in *pb.GetConfigurationRequest, opts ...grpc.CallOption) (*pb.GetConfigurationResponse, error) {
+			return &pb.GetConfigurationResponse{
+				TimeConfig: nil,
+			}, nil
+		},
+	}
+	regClient := &mockRegistrationClient{}
+
+	mgr := newTestManager(regClient, cfgClient, store, runtimeState, "token")
+
+	err := mgr.FetchConfiguration(context.Background())
+	if err != nil {
+		t.Fatalf("FetchConfiguration: %v", err)
+	}
+
+	// All intervals should remain at their defaults.
+	if runtimeState.ServiceStatusInterval() != 1*time.Hour {
+		t.Errorf("expected ServiceStatusInterval=1h (default), got %v", runtimeState.ServiceStatusInterval())
+	}
+	if runtimeState.PingInterval() != 60*time.Second {
+		t.Errorf("expected PingInterval=60s (default), got %v", runtimeState.PingInterval())
+	}
+}
+

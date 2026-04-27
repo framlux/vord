@@ -22,7 +22,7 @@ public sealed class PartitionManagementService : BackgroundService
     private static readonly TimeSpan LockTtl = TimeSpan.FromMinutes(30);
     private const string LockKey = "lock:partition-management";
     private const int DaysAhead = 7;
-    private const int DropBufferDays = 7;
+    internal const int DropBufferDays = 2;
 
     /// <summary>
     /// The earliest date from which partitions may exist. Partitions prior to this are never checked.
@@ -125,7 +125,7 @@ public sealed class PartitionManagementService : BackgroundService
         }
     }
 
-    private async Task DropExpiredPartitionsAsync(DatabaseContext db, CancellationToken ct)
+    internal async Task DropExpiredPartitionsAsync(DatabaseContext db, CancellationToken ct)
     {
         // Determine the oldest date we need to keep: max retention across all tenants + buffer days.
         int? maxRetentionDays = await db.TenantSubscriptions

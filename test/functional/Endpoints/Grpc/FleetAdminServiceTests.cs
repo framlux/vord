@@ -475,6 +475,35 @@ public sealed class FleetAdminServiceTests
         await Assert.That(heartbeat.Key).IsEqualTo((int)ServerConfigurationSettingKeys.AgentHeartbeatSeconds);
     }
 
+    [Test]
+    public async Task GetServerSettings_IncludesServiceStatusSetting()
+    {
+        using FunctionalTestFactory factory = new();
+        factory.WithInternalApiKey("test-key");
+        using DatabaseContext db = factory.CreateDbContext();
+
+        await SeedServerSetting(db, ServerConfigurationSettingKeys.ServiceStatusSeconds, "3600");
+
+        using GrpcChannel channel = CreateChannel(factory);
+        FleetAdmin.FleetAdminClient client = new(channel);
+
+        GetServerSettingsResponse response = await client.GetServerSettingsAsync(
+            new GetServerSettingsRequest(), Headers("test-key"));
+
+        ServerSetting? serviceStatus = null;
+        foreach (ServerSetting s in response.Settings)
+        {
+            if (s.Key == (int)ServerConfigurationSettingKeys.ServiceStatusSeconds)
+            {
+                serviceStatus = s;
+            }
+        }
+
+        await Assert.That(serviceStatus).IsNotNull();
+        await Assert.That(serviceStatus!.Value).IsEqualTo("3600");
+        await Assert.That(serviceStatus.KeyName).IsEqualTo("ServiceStatusSeconds");
+    }
+
     // ========== UpdateServerSetting Tests ==========
 
     [Test]
@@ -506,6 +535,58 @@ public sealed class FleetAdminServiceTests
         await Assert.That(updated).IsNotNull();
         await Assert.That(updated!.Value).IsEqualTo("45");
         await Assert.That(updated.Version).IsEqualTo(2);
+    }
+
+    [Test]
+    public async Task UpdateServerSetting_ServiceStatus_ValidValue_Succeeds()
+    {
+        using FunctionalTestFactory factory = new();
+        factory.WithInternalApiKey("test-key");
+        using DatabaseContext db = factory.CreateDbContext();
+
+        await SeedServerSetting(db, ServerConfigurationSettingKeys.ServiceStatusSeconds, "3600");
+
+        using GrpcChannel channel = CreateChannel(factory);
+        FleetAdmin.FleetAdminClient client = new(channel);
+
+        UpdateServerSettingResponse response = await client.UpdateServerSettingAsync(
+            new UpdateServerSettingRequest
+            {
+                Key = (int)ServerConfigurationSettingKeys.ServiceStatusSeconds,
+                Value = "1800"
+            },
+            Headers("test-key"));
+
+        await Assert.That(response.Success).IsEqualTo(true);
+
+        ServerConfigurationSettings? updated = await db.ServerConfigurationSettings
+            .Where(s => s.Key == ServerConfigurationSettingKeys.ServiceStatusSeconds)
+            .FirstOrDefaultAsync();
+
+        await Assert.That(updated).IsNotNull();
+        await Assert.That(updated!.Value).IsEqualTo("1800");
+        await Assert.That(updated.Version).IsEqualTo(2);
+    }
+
+    [Test]
+    public async Task UpdateServerSetting_ServiceStatus_NonexistentRow_ReturnsNotFound()
+    {
+        using FunctionalTestFactory factory = new();
+        factory.WithInternalApiKey("test-key");
+        using GrpcChannel channel = CreateChannel(factory);
+        FleetAdmin.FleetAdminClient client = new(channel);
+
+        // No seed row for ServiceStatusSeconds -- the update targets a row that does not exist
+        UpdateServerSettingResponse response = await client.UpdateServerSettingAsync(
+            new UpdateServerSettingRequest
+            {
+                Key = (int)ServerConfigurationSettingKeys.ServiceStatusSeconds,
+                Value = "1800"
+            },
+            Headers("test-key"));
+
+        // The FleetAdmin gRPC endpoint returns success=false when the row is not found
+        await Assert.That(response.Success).IsEqualTo(false);
     }
 
     [Test]

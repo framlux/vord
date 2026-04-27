@@ -154,3 +154,84 @@ func TestRunOnce_EmptyRegistry(t *testing.T) {
 	// Should not panic with empty registry.
 	scheduler.RunOnce(context.Background())
 }
+
+// --- RegisterDynamic tests ---
+
+// Intent: RegisterDynamic stores the getInterval function in the entry so the
+// scheduler can check for interval changes at runtime.
+func TestRegisterDynamic_StoresGetInterval(t *testing.T) {
+	registry := NewRegistry()
+
+	c := &fakeCollector{name: "dynamic_c", interval: time.Second}
+	called := false
+	getInterval := func() time.Duration {
+		called = true
+
+		return 2 * time.Second
+	}
+
+	registry.RegisterDynamic(c, getInterval)
+
+	if len(registry.entries) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(registry.entries))
+	}
+	if registry.entries[0].getInterval == nil {
+		t.Fatal("expected getInterval to be non-nil for dynamic registration")
+	}
+
+	// Invoke the stored function to confirm it is the one we passed.
+	result := registry.entries[0].getInterval()
+	if called == false {
+		t.Error("expected getInterval function to be invoked")
+	}
+	if result != 2*time.Second {
+		t.Errorf("expected getInterval to return 2s, got %v", result)
+	}
+}
+
+// Intent: The legacy Register() method must leave getInterval nil so the scheduler
+// treats the collector as fixed-interval and never attempts dynamic resets.
+func TestRegister_Legacy_SetsNilGetInterval(t *testing.T) {
+	registry := NewRegistry()
+
+	c := &fakeCollector{name: "static_c", interval: time.Second}
+	registry.Register(c)
+
+	if len(registry.entries) != 1 {
+		t.Fatalf("expected 1 entry, got %d", len(registry.entries))
+	}
+	if registry.entries[0].getInterval != nil {
+		t.Error("expected getInterval=nil for legacy Register(), but it was non-nil")
+	}
+}
+
+// Intent: A dynamically registered collector picks up interval changes at runtime.
+// We verify this by running the scheduler briefly and observing that the collector
+// executes more than once when given a very short interval.
+func TestRegisterDynamic_RunCollector_RespectsIntervalChange(t *testing.T) {
+	store := newTestStore(t)
+	registry := NewRegistry()
+
+	c := &fakeCollector{name: "dynamic_runner", interval: 50 * time.Millisecond}
+
+	currentInterval := 50 * time.Millisecond
+	getInterval := func() time.Duration {
+		return currentInterval
+	}
+
+	registry.RegisterDynamic(c, getInterval)
+
+	scheduler := NewScheduler(registry, store, state.New())
+
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
+	defer cancel()
+
+	scheduler.Run(ctx)
+
+	// The collector should have been called at least twice: once on startup + at least one tick.
+	count := c.collectCount.Load()
+	if count < 2 {
+		t.Errorf("expected dynamic collector to run at least 2 times, got %d", count)
+	}
+}
+

@@ -130,7 +130,7 @@ func main() {
 	registry.Register(collector.NewSSHSessionsCollector(runtimeState))
 	registry.Register(collector.NewHwHealthCollector())
 	registry.Register(collector.NewPackagesCollector())
-	registry.Register(collector.NewServicesCollector())
+	registry.RegisterDynamic(collector.NewServicesCollector(runtimeState), runtimeState.ServiceStatusInterval)
 
 	var wg sync.WaitGroup
 

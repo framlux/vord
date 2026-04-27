@@ -83,6 +83,35 @@ public sealed class ConfigurationServiceTests
     }
 
     [Test]
+    public async Task GetConfiguration_NoDbSettings_ReturnsDefaultServiceStatusSeconds()
+    {
+        ConfigurationService service = CreateService();
+        ServerCallContext context = CreateAuthenticatedContext(1);
+
+        GetConfigurationResponse response = await service.GetConfiguration(
+            new GetConfigurationRequest { MachineId = 1 }, context);
+
+        // Default service status = 3600 seconds (1 hour).
+        await Assert.That(response.TimeConfig.ServiceStatusSeconds).IsEqualTo(3600);
+    }
+
+    [Test]
+    public async Task GetConfiguration_WithServiceStatusSetting_ReturnsConfiguredValue()
+    {
+        IServerSettingsCache settingsCache = Substitute.For<IServerSettingsCache>();
+        settingsCache.GetSettingAsync(ServerConfigurationSettingKeys.ServiceStatusSeconds, Arg.Any<CancellationToken>())
+            .Returns("1800");
+
+        ConfigurationService service = CreateService(settingsCache: settingsCache);
+        ServerCallContext context = CreateAuthenticatedContext(1);
+
+        GetConfigurationResponse response = await service.GetConfiguration(
+            new GetConfigurationRequest { MachineId = 1 }, context);
+
+        await Assert.That(response.TimeConfig.ServiceStatusSeconds).IsEqualTo(1800);
+    }
+
+    [Test]
     public async Task GetConfiguration_MismatchedMachineId_ThrowsPermissionDenied()
     {
         ConfigurationService service = CreateService();

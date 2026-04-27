@@ -74,4 +74,10 @@ public enum ServerConfigurationSettingKeys : int
     /// Used to track which telemetry rows have been processed into the summary tables.
     /// </summary>
     StreamingHighWaterMark = 13,
+
+    /// <summary>
+    /// Service status collection interval in seconds (default: 3600, range: 60-86400).
+    /// Controls how often agents collect systemd service status.
+    /// </summary>
+    ServiceStatusSeconds = 14,
 }

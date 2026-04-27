@@ -55,6 +55,8 @@ message TimingConfiguration {
     int32 telemetry_send_fast_seconds = 6;
     // Slow telemetry send interval in seconds (default: 300, range: 30-1800).
     int32 telemetry_send_slow_seconds = 7;
+    // Service status collection interval in seconds (default: 3600, range: 60-86400).
+    int32 service_status_seconds = 8;
 }
 
 message AgentPingRequest {

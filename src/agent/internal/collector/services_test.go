@@ -6,6 +6,9 @@ package collector
 
 import (
 	"testing"
+	"time"
+
+	"github.com/framlux/vord/internal/state"
 )
 
 // Intent: Standard systemctl output with multiple services is parsed correctly.
@@ -112,3 +115,38 @@ func TestParseSystemctlListUnits_DescriptionAssembly(t *testing.T) {
 		t.Errorf("Description = %q, want %q", services[0].Description, "Docker Application Container Engine")
 	}
 }
+
+// --- ServicesCollector RuntimeState-backed interval tests ---
+
+// Intent: ServicesCollector.DefaultInterval() returns the value from RuntimeState,
+// so operators can change the service status cadence without restarting the agent.
+func TestServicesCollector_DefaultInterval_ReturnsRuntimeStateValue(t *testing.T) {
+	rs := state.New()
+	rs.SetServiceStatusInterval(5 * time.Minute)
+
+	collector := NewServicesCollector(rs)
+
+	if collector.DefaultInterval() != 5*time.Minute {
+		t.Errorf("expected DefaultInterval=5m, got %v", collector.DefaultInterval())
+	}
+}
+
+// Intent: After the RuntimeState interval is updated, the collector's DefaultInterval()
+// reflects the change immediately, proving it reads live state rather than caching.
+func TestServicesCollector_DefaultInterval_AfterRuntimeUpdate_ReturnsNewValue(t *testing.T) {
+	rs := state.New()
+	collector := NewServicesCollector(rs)
+
+	// Verify initial default from New() is 1 hour.
+	if collector.DefaultInterval() != 1*time.Hour {
+		t.Errorf("expected initial DefaultInterval=1h, got %v", collector.DefaultInterval())
+	}
+
+	// Update the runtime state after the collector was created.
+	rs.SetServiceStatusInterval(10 * time.Minute)
+
+	if collector.DefaultInterval() != 10*time.Minute {
+		t.Errorf("expected DefaultInterval=10m after runtime update, got %v", collector.DefaultInterval())
+	}
+}
+

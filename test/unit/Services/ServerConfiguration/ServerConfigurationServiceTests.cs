@@ -195,4 +195,106 @@ public class ServerConfigurationServiceTests
 
         await Assert.That(result).IsEqualTo(TimeSpan.FromSeconds(300));
     }
+
+    // ========== GetServiceStatusSecondsAsync tests ==========
+
+    [Test]
+    public async Task GetServiceStatusSecondsAsync_NoSetting_ReturnsDefault3600()
+    {
+        (ServerConfigurationService service, IServerSettingsCache cache, IDatabase redisDb) = CreateService();
+        redisDb.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
+            .Returns(Task.FromResult<RedisValue>(RedisValue.Null));
+        cache.GetSettingAsync(ServerConfigurationSettingKeys.ServiceStatusSeconds, Arg.Any<CancellationToken>())
+            .Returns((string?)null);
+
+        int result = await service.GetServiceStatusSecondsAsync(CancellationToken.None);
+
+        await Assert.That(result).IsEqualTo(3600);
+    }
+
+    [Test]
+    public async Task GetServiceStatusSecondsAsync_ValidSetting_ReturnsValue()
+    {
+        (ServerConfigurationService service, IServerSettingsCache cache, IDatabase redisDb) = CreateService();
+        redisDb.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
+            .Returns(Task.FromResult<RedisValue>(RedisValue.Null));
+        cache.GetSettingAsync(ServerConfigurationSettingKeys.ServiceStatusSeconds, Arg.Any<CancellationToken>())
+            .Returns("1800");
+
+        int result = await service.GetServiceStatusSecondsAsync(CancellationToken.None);
+
+        await Assert.That(result).IsEqualTo(1800);
+    }
+
+    [Test]
+    public async Task GetServiceStatusSecondsAsync_InvalidSetting_Zero_ReturnsDefault()
+    {
+        (ServerConfigurationService service, IServerSettingsCache cache, IDatabase redisDb) = CreateService();
+        redisDb.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
+            .Returns(Task.FromResult<RedisValue>(RedisValue.Null));
+        cache.GetSettingAsync(ServerConfigurationSettingKeys.ServiceStatusSeconds, Arg.Any<CancellationToken>())
+            .Returns("0");
+
+        int result = await service.GetServiceStatusSecondsAsync(CancellationToken.None);
+
+        await Assert.That(result).IsEqualTo(3600);
+    }
+
+    [Test]
+    public async Task GetServiceStatusSecondsAsync_InvalidSetting_Negative_ReturnsDefault()
+    {
+        (ServerConfigurationService service, IServerSettingsCache cache, IDatabase redisDb) = CreateService();
+        redisDb.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
+            .Returns(Task.FromResult<RedisValue>(RedisValue.Null));
+        cache.GetSettingAsync(ServerConfigurationSettingKeys.ServiceStatusSeconds, Arg.Any<CancellationToken>())
+            .Returns("-1");
+
+        int result = await service.GetServiceStatusSecondsAsync(CancellationToken.None);
+
+        await Assert.That(result).IsEqualTo(3600);
+    }
+
+    [Test]
+    public async Task GetServiceStatusSecondsAsync_InvalidSetting_NonNumeric_ReturnsDefault()
+    {
+        (ServerConfigurationService service, IServerSettingsCache cache, IDatabase redisDb) = CreateService();
+        redisDb.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
+            .Returns(Task.FromResult<RedisValue>(RedisValue.Null));
+        cache.GetSettingAsync(ServerConfigurationSettingKeys.ServiceStatusSeconds, Arg.Any<CancellationToken>())
+            .Returns("abc");
+
+        int result = await service.GetServiceStatusSecondsAsync(CancellationToken.None);
+
+        await Assert.That(result).IsEqualTo(3600);
+    }
+
+    [Test]
+    public async Task GetServiceStatusSecondsAsync_RedisCacheHit_ReturnsCachedValue()
+    {
+        (ServerConfigurationService service, IServerSettingsCache cache, IDatabase redisDb) = CreateService();
+        redisDb.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
+            .Returns(Task.FromResult<RedisValue>("7200"));
+
+        int result = await service.GetServiceStatusSecondsAsync(CancellationToken.None);
+
+        await Assert.That(result).IsEqualTo(7200);
+        await cache.DidNotReceive().GetSettingAsync(Arg.Any<ServerConfigurationSettingKeys>(), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task GetServiceStatusSecondsAsync_RedisMiss_DbHit_CachesInRedis()
+    {
+        (ServerConfigurationService service, IServerSettingsCache cache, IDatabase redisDb) = CreateService();
+        redisDb.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
+            .Returns(Task.FromResult<RedisValue>(RedisValue.Null));
+        cache.GetSettingAsync(ServerConfigurationSettingKeys.ServiceStatusSeconds, Arg.Any<CancellationToken>())
+            .Returns("1800");
+
+        await service.GetServiceStatusSecondsAsync(CancellationToken.None);
+
+        await redisDb.Received(1).StringSetAsync(
+            Arg.Any<RedisKey>(),
+            Arg.Is<RedisValue>(v => v == "1800"),
+            Arg.Is<Expiration>(e => e.Equals(new Expiration(TimeSpan.FromMinutes(5)))));
+    }
 }

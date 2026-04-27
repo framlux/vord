@@ -67,6 +67,7 @@ public sealed class ConfigurationService : Configuration.ConfigurationBase
         int telemetryCollectSlowSeconds = await _configService.GetTelemetryCollectSlowSecondsAsync(context.CancellationToken);
         int telemetrySendFastSeconds = await _configService.GetTelemetrySendFastSecondsAsync(context.CancellationToken);
         int telemetrySendSlowSeconds = await _configService.GetTelemetrySendSlowSecondsAsync(context.CancellationToken);
+        int serviceStatusSeconds = await _configService.GetServiceStatusSecondsAsync(context.CancellationToken);
 
         // Include tenant ID so the agent can verify command ownership.
         int tenantId = ExtractTenantIdFromClaims(context);
@@ -82,6 +83,7 @@ public sealed class ConfigurationService : Configuration.ConfigurationBase
                 TelemetryCollectSlowSeconds = telemetryCollectSlowSeconds,
                 TelemetrySendFastSeconds = telemetrySendFastSeconds,
                 TelemetrySendSlowSeconds = telemetrySendSlowSeconds,
+                ServiceStatusSeconds = serviceStatusSeconds,
             },
             TenantId = tenantId,
         };
