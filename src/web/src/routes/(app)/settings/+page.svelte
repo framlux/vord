@@ -271,6 +271,7 @@
 		</p>
 		{#if exportError}
 			<div
+				role="alert"
 				class="mb-4 flex items-center gap-2 rounded-lg bg-red-50 p-3 text-sm text-red-700 dark:bg-red-900/20 dark:text-red-400"
 			>
 				<CircleAlert class="h-4 w-4 flex-shrink-0" />
@@ -279,6 +280,7 @@
 		{/if}
 		{#if exportStatus === 'Pending' || exportStatus === 'Processing'}
 			<div
+				role="alert"
 				class="mb-4 flex items-center gap-2 rounded-lg bg-blue-50 p-3 text-sm text-blue-700 dark:bg-blue-900/20 dark:text-blue-400"
 			>
 				<LoaderCircle class="h-4 w-4 flex-shrink-0 animate-spin" />
@@ -287,6 +289,7 @@
 		{/if}
 		{#if downloadUrl}
 			<div
+				role="alert"
 				class="mb-4 flex items-center gap-2 rounded-lg bg-green-50 p-3 text-sm text-green-700 dark:bg-green-900/20 dark:text-green-400"
 			>
 				<Check class="h-4 w-4 flex-shrink-0" />

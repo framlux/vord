@@ -64,6 +64,30 @@
 
 		goto(`/settings/alerts?${params.toString()}`);
 	}
+
+	const tabOrder: Array<'rules' | 'events' | 'webhooks'> = ['rules', 'events', 'webhooks'];
+
+	function handleTabKeydown(event: KeyboardEvent) {
+		const currentIndex = tabOrder.indexOf(activeTab);
+		let newIndex = currentIndex;
+
+		if (event.key === 'ArrowRight') {
+			newIndex = (currentIndex + 1) % tabOrder.length;
+		} else if (event.key === 'ArrowLeft') {
+			newIndex = (currentIndex - 1 + tabOrder.length) % tabOrder.length;
+		} else {
+			return;
+		}
+
+		event.preventDefault();
+		activeTab = tabOrder[newIndex];
+
+		const tabId = `tab-${tabOrder[newIndex]}`;
+		const tabElement = document.getElementById(tabId);
+		if (tabElement) {
+			tabElement.focus();
+		}
+	}
 </script>
 
 <svelte:head><title>Alerts - Vord</title></svelte:head>
@@ -80,9 +104,15 @@
 		</div>
 	{:else}
 		<!-- Tabs -->
-		<div class="flex gap-1 rounded-lg border border-surface-200 bg-surface-100 p-1 dark:border-surface-700 dark:bg-surface-800">
+		<div role="tablist" class="flex gap-1 rounded-lg border border-surface-200 bg-surface-100 p-1 dark:border-surface-700 dark:bg-surface-800">
 			<button
+				id="tab-rules"
+				role="tab"
+				aria-selected={activeTab === 'rules'}
+				aria-controls="tabpanel-rules"
+				tabindex={activeTab === 'rules' ? 0 : -1}
 				onclick={() => (activeTab = 'rules')}
+				onkeydown={handleTabKeydown}
 				class="flex-1 rounded-md px-4 py-2 text-sm font-medium transition-colors {activeTab === 'rules'
 					? 'bg-surface-50 text-surface-900 shadow dark:bg-surface-700 dark:text-surface-100'
 					: 'text-surface-500 hover:text-surface-700 dark:text-surface-400 dark:hover:text-surface-200'}"
@@ -90,7 +120,13 @@
 				Alert Rules ({rules.length})
 			</button>
 			<button
+				id="tab-events"
+				role="tab"
+				aria-selected={activeTab === 'events'}
+				aria-controls="tabpanel-events"
+				tabindex={activeTab === 'events' ? 0 : -1}
 				onclick={() => (activeTab = 'events')}
+				onkeydown={handleTabKeydown}
 				class="flex-1 rounded-md px-4 py-2 text-sm font-medium transition-colors {activeTab === 'events'
 					? 'bg-surface-50 text-surface-900 shadow dark:bg-surface-700 dark:text-surface-100'
 					: 'text-surface-500 hover:text-surface-700 dark:text-surface-400 dark:hover:text-surface-200'}"
@@ -98,7 +134,13 @@
 				Alert Events {events ? `(${events.totalCount})` : ''}
 			</button>
 			<button
+				id="tab-webhooks"
+				role="tab"
+				aria-selected={activeTab === 'webhooks'}
+				aria-controls="tabpanel-webhooks"
+				tabindex={activeTab === 'webhooks' ? 0 : -1}
 				onclick={() => (activeTab = 'webhooks')}
+				onkeydown={handleTabKeydown}
 				class="flex-1 rounded-md px-4 py-2 text-sm font-medium transition-colors {activeTab === 'webhooks'
 					? 'bg-surface-50 text-surface-900 shadow dark:bg-surface-700 dark:text-surface-100'
 					: 'text-surface-500 hover:text-surface-700 dark:text-surface-400 dark:hover:text-surface-200'}"
@@ -109,7 +151,7 @@
 
 		<!-- Alert Rules Tab -->
 		{#if activeTab === 'rules'}
-			<div class="space-y-4">
+			<div id="tabpanel-rules" role="tabpanel" aria-labelledby="tab-rules" class="space-y-4">
 				<div class="flex items-center justify-between">
 					<h2 class="text-lg font-semibold text-surface-900 dark:text-surface-50">Alert Rules</h2>
 					<button
@@ -195,13 +237,13 @@
 						<table class="w-full text-sm">
 							<thead>
 								<tr class="border-b border-surface-200 bg-surface-50 dark:border-surface-700 dark:bg-surface-800/50">
-									<th class="px-4 py-3 text-left font-medium text-surface-500 dark:text-surface-400">Name</th>
-									<th class="px-4 py-3 text-left font-medium text-surface-500 dark:text-surface-400">Metric</th>
-									<th class="px-4 py-3 text-left font-medium text-surface-500 dark:text-surface-400">Condition</th>
-									<th class="px-4 py-3 text-left font-medium text-surface-500 dark:text-surface-400">Severity</th>
-									<th class="px-4 py-3 text-left font-medium text-surface-500 dark:text-surface-400">Status</th>
-									<th class="px-4 py-3 text-left font-medium text-surface-500 dark:text-surface-400">Notify</th>
-									<th class="px-4 py-3 text-left font-medium text-surface-500 dark:text-surface-400">Actions</th>
+									<th scope="col" class="px-4 py-3 text-left font-medium text-surface-500 dark:text-surface-400">Name</th>
+									<th scope="col" class="px-4 py-3 text-left font-medium text-surface-500 dark:text-surface-400">Metric</th>
+									<th scope="col" class="px-4 py-3 text-left font-medium text-surface-500 dark:text-surface-400">Condition</th>
+									<th scope="col" class="px-4 py-3 text-left font-medium text-surface-500 dark:text-surface-400">Severity</th>
+									<th scope="col" class="px-4 py-3 text-left font-medium text-surface-500 dark:text-surface-400">Status</th>
+									<th scope="col" class="px-4 py-3 text-left font-medium text-surface-500 dark:text-surface-400">Notify</th>
+									<th scope="col" class="px-4 py-3 text-left font-medium text-surface-500 dark:text-surface-400">Actions</th>
 								</tr>
 							</thead>
 							<tbody class="divide-y divide-surface-100 dark:divide-surface-700">
@@ -295,7 +337,7 @@
 
 		<!-- Alert Events Tab -->
 		{#if activeTab === 'events' && events}
-			<div class="space-y-4">
+			<div id="tabpanel-events" role="tabpanel" aria-labelledby="tab-events" class="space-y-4">
 				<h2 class="text-lg font-semibold text-surface-900 dark:text-surface-50">Alert Events</h2>
 
 				<!-- Event Filters -->
@@ -328,13 +370,13 @@
 						<table class="w-full text-sm">
 							<thead>
 								<tr class="border-b border-surface-200 bg-surface-50 dark:border-surface-700 dark:bg-surface-800/50">
-									<th class="px-4 py-3 text-left font-medium text-surface-500 dark:text-surface-400">Triggered</th>
-									<th class="px-4 py-3 text-left font-medium text-surface-500 dark:text-surface-400">Rule</th>
-									<th class="px-4 py-3 text-left font-medium text-surface-500 dark:text-surface-400">Machine</th>
-									<th class="px-4 py-3 text-left font-medium text-surface-500 dark:text-surface-400">Severity</th>
-									<th class="px-4 py-3 text-left font-medium text-surface-500 dark:text-surface-400">Status</th>
-									<th class="px-4 py-3 text-left font-medium text-surface-500 dark:text-surface-400">Message</th>
-									<th class="px-4 py-3 text-left font-medium text-surface-500 dark:text-surface-400">Actions</th>
+									<th scope="col" class="px-4 py-3 text-left font-medium text-surface-500 dark:text-surface-400">Triggered</th>
+									<th scope="col" class="px-4 py-3 text-left font-medium text-surface-500 dark:text-surface-400">Rule</th>
+									<th scope="col" class="px-4 py-3 text-left font-medium text-surface-500 dark:text-surface-400">Machine</th>
+									<th scope="col" class="px-4 py-3 text-left font-medium text-surface-500 dark:text-surface-400">Severity</th>
+									<th scope="col" class="px-4 py-3 text-left font-medium text-surface-500 dark:text-surface-400">Status</th>
+									<th scope="col" class="px-4 py-3 text-left font-medium text-surface-500 dark:text-surface-400">Message</th>
+									<th scope="col" class="px-4 py-3 text-left font-medium text-surface-500 dark:text-surface-400">Actions</th>
 								</tr>
 							</thead>
 							<tbody class="divide-y divide-surface-100 dark:divide-surface-700">
@@ -405,7 +447,7 @@
 
 		<!-- Webhooks Tab -->
 		{#if activeTab === 'webhooks' && webhooks}
-			<div class="space-y-4">
+			<div id="tabpanel-webhooks" role="tabpanel" aria-labelledby="tab-webhooks" class="space-y-4">
 				<div class="flex items-center justify-between">
 					<h2 class="text-lg font-semibold text-surface-900 dark:text-surface-50">Webhook Endpoints</h2>
 					<button
@@ -444,11 +486,11 @@
 						<table class="w-full text-sm">
 							<thead>
 								<tr class="border-b border-surface-200 bg-surface-50 dark:border-surface-700 dark:bg-surface-800/50">
-									<th class="px-4 py-3 text-left font-medium text-surface-500 dark:text-surface-400">Name</th>
-									<th class="px-4 py-3 text-left font-medium text-surface-500 dark:text-surface-400">URL</th>
-									<th class="px-4 py-3 text-left font-medium text-surface-500 dark:text-surface-400">Status</th>
-									<th class="px-4 py-3 text-left font-medium text-surface-500 dark:text-surface-400">Created</th>
-									<th class="px-4 py-3 text-left font-medium text-surface-500 dark:text-surface-400">Actions</th>
+									<th scope="col" class="px-4 py-3 text-left font-medium text-surface-500 dark:text-surface-400">Name</th>
+									<th scope="col" class="px-4 py-3 text-left font-medium text-surface-500 dark:text-surface-400">URL</th>
+									<th scope="col" class="px-4 py-3 text-left font-medium text-surface-500 dark:text-surface-400">Status</th>
+									<th scope="col" class="px-4 py-3 text-left font-medium text-surface-500 dark:text-surface-400">Created</th>
+									<th scope="col" class="px-4 py-3 text-left font-medium text-surface-500 dark:text-surface-400">Actions</th>
 								</tr>
 							</thead>
 							<tbody class="divide-y divide-surface-100 dark:divide-surface-700">

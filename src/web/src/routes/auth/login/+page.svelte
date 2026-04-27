@@ -87,7 +87,9 @@
 			<div class="mt-6 border-t border-surface-200 pt-6 dark:border-surface-700">
 				<p class="mb-3 text-center text-sm text-surface-500">Or sign in with your organization's SSO</p>
 				<form onsubmit={handleEmailSso} class="space-y-3">
+					<label for="email" class="sr-only">Email address</label>
 					<input
+						id="email"
 						type="email"
 						bind:value={email}
 						placeholder="you@company.com"

@@ -130,7 +130,22 @@
 
 	// Vitals derived values
 	const cpuPercent = $derived(machineDetail?.cpuUsage?.cpuUsagePercent ?? null);
+	const cpuTooltip = $derived.by(() => {
+		const sysInfo = machineDetail?.systemInfo;
+		if (sysInfo === undefined || sysInfo === null) return undefined;
+
+		return `${sysInfo.cpuBrand}\n${sysInfo.cpuPhysicalCores} physical / ${sysInfo.cpuLogicalCores} logical cores`;
+	});
 	const memoryPercent = $derived(machineDetail?.memoryUsage?.memoryUsagePercent ?? null);
+	const memoryTooltip = $derived.by(() => {
+		const mem = machineDetail?.memoryUsage;
+		if (mem === undefined || mem === null) return undefined;
+
+		const used = formatBytes(mem.memoryUsed);
+		const total = formatBytes(mem.memoryTotal);
+
+		return `${used} / ${total}`;
+	});
 	const maxDiskPercent = $derived.by(() => {
 		const disks = machineDetail?.diskUsages?.disks;
 		if (disks === undefined || disks === null || disks.length === 0) return null;
@@ -141,7 +156,14 @@
 		const disks = machineDetail?.diskUsages?.disks;
 		if (disks === undefined || disks === null || disks.length === 0) return undefined;
 
-		return disks.map(d => `${d.path}: ${Math.round(d.usagePercent)}%`).join('\n');
+		return disks
+			.map((d) => {
+				const used = formatBytes(d.blocksUsed * d.blocksSize);
+				const total = formatBytes(d.blocks * d.blocksSize);
+
+				return `${d.path}: ${Math.round(d.usagePercent)}% (${used} / ${total})`;
+			})
+			.join('\n');
 	});
 
 	onMount(() => {
@@ -167,6 +189,28 @@
 		{ id: 'authorized-keys' as const, label: 'Authorized Keys' },
 		{ id: 'commands' as const, label: 'Commands' }
 	];
+
+	function handleTabKeydown(event: KeyboardEvent) {
+		const currentIndex = tabs.findIndex((t) => t.id === activeTab);
+		let newIndex = currentIndex;
+
+		if (event.key === 'ArrowRight') {
+			newIndex = (currentIndex + 1) % tabs.length;
+		} else if (event.key === 'ArrowLeft') {
+			newIndex = (currentIndex - 1 + tabs.length) % tabs.length;
+		} else if (event.key === 'Home') {
+			newIndex = 0;
+		} else if (event.key === 'End') {
+			newIndex = tabs.length - 1;
+		} else {
+			return;
+		}
+
+		event.preventDefault();
+		activeTab = tabs[newIndex].id;
+		const tabEl = document.getElementById(`tab-${tabs[newIndex].id}`);
+		tabEl?.focus();
+	}
 
 	// Commands tab state
 	let commands = $state<CommandDto[]>([]);
@@ -424,18 +468,26 @@
 	<!-- Vitals -->
 	<VitalsBar
 		cpuPercent={cpuPercent}
+		cpuDetails={cpuTooltip}
 		memoryPercent={memoryPercent}
+		memoryDetails={memoryTooltip}
 		maxDiskPercent={maxDiskPercent}
 		diskDetails={diskTooltip}
 	/>
 
 	<!-- Tabs -->
-	<div class="border-b border-surface-200 dark:border-surface-700">
-		<nav class="-mb-px flex gap-6">
+	<div class="overflow-x-auto border-b border-surface-200 dark:border-surface-700">
+		<!-- svelte-ignore a11y_no_noninteractive_element_to_interactive_role -->
+		<nav class="-mb-px flex gap-6" role="tablist" aria-label="Machine details" aria-orientation="horizontal" onkeydown={handleTabKeydown}>
 			{#each tabs as tab}
 				<button
+					id="tab-{tab.id}"
+					role="tab"
+					aria-selected={activeTab === tab.id}
+					aria-controls="tabpanel-{tab.id}"
+					tabindex={activeTab === tab.id ? 0 : -1}
 					onclick={() => (activeTab = tab.id)}
-					class="border-b-2 px-1 py-3 text-sm font-medium transition {activeTab === tab.id
+					class="whitespace-nowrap border-b-2 px-1 py-3 text-sm font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-surface-900 {activeTab === tab.id
 						? 'border-primary-500 text-primary-500'
 						: 'border-transparent text-surface-500 hover:border-surface-300 hover:text-surface-700 dark:text-surface-400 dark:hover:text-surface-200'}"
 				>
@@ -446,11 +498,11 @@
 	</div>
 
 	<!-- Tab Content -->
-	<div>
+	<div id="tabpanel-{activeTab}" role="tabpanel" aria-labelledby="tab-{activeTab}" tabindex="0">
 	{#if activeTab === 'overview'}
-		<div class="grid grid-cols-1 gap-4 lg:grid-cols-2">
+		<div class="grid grid-cols-1 gap-4 md:grid-cols-2">
 			<!-- Identity Card -->
-			<div class="rounded-xl border border-surface-200 bg-surface-50 p-5 dark:border-surface-700 dark:bg-surface-800">
+			<div class="rounded-xl border border-surface-200 bg-surface-50 p-4 sm:p-5 dark:border-surface-700 dark:bg-surface-800">
 				<div class="mb-4 flex items-center justify-between">
 					<h3 class="text-xs font-semibold uppercase tracking-wider text-surface-400 dark:text-surface-500">Identity</h3>
 					{#if canAdminMachines(data.user) && (editing === false)}
@@ -547,7 +599,7 @@
 			</div>
 
 			<!-- Network & OS Card -->
-			<div class="rounded-xl border border-surface-200 bg-surface-50 p-5 dark:border-surface-700 dark:bg-surface-800">
+			<div class="rounded-xl border border-surface-200 bg-surface-50 p-4 sm:p-5 dark:border-surface-700 dark:bg-surface-800">
 				<h3 class="mb-4 text-xs font-semibold uppercase tracking-wider text-surface-400 dark:text-surface-500">Network & OS</h3>
 				<div class="space-y-3">
 					<div class="flex justify-between">
@@ -584,7 +636,7 @@
 			</div>
 
 			<!-- Uptime & Timing Card -->
-			<div class="rounded-xl border border-surface-200 bg-surface-50 p-5 dark:border-surface-700 dark:bg-surface-800">
+			<div class="rounded-xl border border-surface-200 bg-surface-50 p-4 sm:p-5 dark:border-surface-700 dark:bg-surface-800">
 				<h3 class="mb-4 text-xs font-semibold uppercase tracking-wider text-surface-400 dark:text-surface-500">Timing</h3>
 				<div class="space-y-3">
 					{#if machineDetail?.systemInfo}
@@ -613,7 +665,7 @@
 			</div>
 
 			<!-- Health Summary Card -->
-			<div class="rounded-xl border border-surface-200 bg-surface-50 p-5 dark:border-surface-700 dark:bg-surface-800">
+			<div class="rounded-xl border border-surface-200 bg-surface-50 p-4 sm:p-5 dark:border-surface-700 dark:bg-surface-800">
 				<h3 class="mb-4 text-xs font-semibold uppercase tracking-wider text-surface-400 dark:text-surface-500">Health</h3>
 				<div class="space-y-3">
 					<div class="flex items-center justify-between">
@@ -658,9 +710,9 @@
 					<table class="w-full text-left text-sm">
 						<thead>
 							<tr class="border-b border-red-200 dark:border-red-900/30">
-								<th class="pb-2 pr-4 text-xs font-semibold uppercase tracking-wider text-red-600 dark:text-red-400">Unit</th>
-								<th class="pb-2 pr-4 text-xs font-semibold uppercase tracking-wider text-red-600 dark:text-red-400">State</th>
-								<th class="pb-2 text-xs font-semibold uppercase tracking-wider text-red-600 dark:text-red-400">Description</th>
+								<th scope="col" class="pb-2 pr-4 text-xs font-semibold uppercase tracking-wider text-red-600 dark:text-red-400">Unit</th>
+								<th scope="col" class="pb-2 pr-4 text-xs font-semibold uppercase tracking-wider text-red-600 dark:text-red-400">State</th>
+								<th scope="col" class="pb-2 text-xs font-semibold uppercase tracking-wider text-red-600 dark:text-red-400">Description</th>
 							</tr>
 						</thead>
 						<tbody class="divide-y divide-red-100 dark:divide-red-900/20">
@@ -679,16 +731,17 @@
 
 		<!-- Recent SSH Sessions (if any) -->
 		{#if machineDetail && (machineDetail.recentSshSessions?.length ?? 0) > 0}
-			<div class="mt-4 rounded-xl border border-surface-200 bg-surface-50 p-5 dark:border-surface-700 dark:bg-surface-800">
+			<div class="mt-4 rounded-xl border border-surface-200 bg-surface-50 p-4 sm:p-5 dark:border-surface-700 dark:bg-surface-800">
 				<h3 class="mb-3 text-xs font-semibold uppercase tracking-wider text-surface-400 dark:text-surface-500">Recent SSH Sessions</h3>
 				<div class="overflow-x-auto">
 					<table class="w-full text-left text-sm">
 						<thead>
 							<tr class="border-b border-surface-200 dark:border-surface-700">
-								<th class="pb-2 pr-4 text-xs font-semibold uppercase tracking-wider text-surface-500 dark:text-surface-400">User</th>
-								<th class="pb-2 pr-4 text-xs font-semibold uppercase tracking-wider text-surface-500 dark:text-surface-400">Source</th>
-								<th class="pb-2 pr-4 text-xs font-semibold uppercase tracking-wider text-surface-500 dark:text-surface-400">Action</th>
-								<th class="pb-2 text-xs font-semibold uppercase tracking-wider text-surface-500 dark:text-surface-400">When</th>
+								<th scope="col" class="pb-2 pr-4 text-xs font-semibold uppercase tracking-wider text-surface-500 dark:text-surface-400">User</th>
+								<th scope="col" class="pb-2 pr-4 text-xs font-semibold uppercase tracking-wider text-surface-500 dark:text-surface-400">Source</th>
+								<th scope="col" class="pb-2 pr-4 text-xs font-semibold uppercase tracking-wider text-surface-500 dark:text-surface-400">Method</th>
+								<th scope="col" class="pb-2 pr-4 text-xs font-semibold uppercase tracking-wider text-surface-500 dark:text-surface-400">Action</th>
+								<th scope="col" class="pb-2 text-xs font-semibold uppercase tracking-wider text-surface-500 dark:text-surface-400">When</th>
 							</tr>
 						</thead>
 						<tbody class="divide-y divide-surface-100 dark:divide-surface-700">
@@ -696,6 +749,7 @@
 								<tr>
 									<td class="py-2 pr-4 font-mono text-xs text-surface-700 dark:text-surface-300">{session.user}</td>
 									<td class="py-2 pr-4 font-mono text-xs text-surface-600 dark:text-surface-400">{session.sourceIp}</td>
+									<td class="py-2 pr-4 text-xs text-surface-600 dark:text-surface-400">{session.authMethod || '---'}</td>
 									<td class="py-2 pr-4 text-xs text-surface-600 dark:text-surface-400">{session.action}</td>
 									<td class="py-2 text-xs text-surface-500 dark:text-surface-400">{formatRelativeTime(session.timestamp)}</td>
 								</tr>
@@ -730,8 +784,17 @@
 						<div>
 							<p class="text-xs text-surface-500 dark:text-surface-400">Memory</p>
 							<p class="mt-1 text-sm font-medium text-surface-900 dark:text-surface-100">
-								{formatBytes(machineDetail.systemInfo.physicalMemory)}
+								{#if machineDetail.memoryUsage}
+									{formatBytes(machineDetail.memoryUsage.memoryUsed)} / {formatBytes(machineDetail.memoryUsage.memoryTotal)}
+								{:else}
+									{formatBytes(machineDetail.systemInfo.physicalMemory)}
+								{/if}
 							</p>
+							{#if machineDetail.memoryUsage}
+								<p class="text-xs text-surface-500 dark:text-surface-400">
+									{machineDetail.memoryUsage.memoryUsagePercent}% used
+								</p>
+							{/if}
 						</div>
 						<div>
 							<p class="text-xs text-surface-500 dark:text-surface-400">Hardware Vendor</p>
@@ -757,6 +820,14 @@
 								{machineDetail.systemInfo.biosVersion || '---'}
 							</p>
 						</div>
+						{#if machineDetail.hardwareHealth?.bmcFirmwareVersion}
+							<div>
+								<p class="text-xs text-surface-500 dark:text-surface-400">BMC Firmware</p>
+								<p class="mt-1 text-sm font-medium text-surface-900 dark:text-surface-100">
+									{machineDetail.hardwareHealth.bmcFirmwareVersion}
+								</p>
+							</div>
+						{/if}
 						<div>
 							<p class="text-xs text-surface-500 dark:text-surface-400">Uptime</p>
 							<p class="mt-1 text-sm font-medium text-surface-900 dark:text-surface-100">
@@ -786,10 +857,11 @@
 							<table class="w-full text-left text-sm">
 								<thead>
 									<tr class="border-b border-surface-200 dark:border-surface-700">
-										<th class="pb-2 pr-4 text-xs font-semibold uppercase tracking-wider text-surface-500 dark:text-surface-400">Mount</th>
-										<th class="pb-2 pr-4 text-xs font-semibold uppercase tracking-wider text-surface-500 dark:text-surface-400">Device</th>
-										<th class="pb-2 pr-4 text-xs font-semibold uppercase tracking-wider text-surface-500 dark:text-surface-400">Usage</th>
-										<th class="pb-2 text-xs font-semibold uppercase tracking-wider text-surface-500 dark:text-surface-400">%</th>
+										<th scope="col" class="pb-2 pr-4 text-xs font-semibold uppercase tracking-wider text-surface-500 dark:text-surface-400">Mount</th>
+										<th scope="col" class="pb-2 pr-4 text-xs font-semibold uppercase tracking-wider text-surface-500 dark:text-surface-400">Device</th>
+										<th scope="col" class="pb-2 pr-4 text-xs font-semibold uppercase tracking-wider text-surface-500 dark:text-surface-400">Usage</th>
+										<th scope="col" class="pb-2 pr-4 text-xs font-semibold uppercase tracking-wider text-surface-500 dark:text-surface-400">%</th>
+										<th scope="col" class="pb-2 text-xs font-semibold uppercase tracking-wider text-surface-500 dark:text-surface-400">Size</th>
 									</tr>
 								</thead>
 								<tbody class="divide-y divide-surface-100 dark:divide-surface-700">
@@ -805,7 +877,8 @@
 													></div>
 												</div>
 											</td>
-											<td class="py-3 text-sm font-medium text-surface-700 dark:text-surface-300">{Math.round(disk.usagePercent)}%</td>
+											<td class="py-3 pr-4 text-sm font-medium text-surface-700 dark:text-surface-300">{Math.round(disk.usagePercent)}%</td>
+											<td class="py-3 text-xs text-surface-600 dark:text-surface-400">{formatBytes(disk.blocksUsed * disk.blocksSize)} / {formatBytes(disk.blocks * disk.blocksSize)}</td>
 										</tr>
 									{/each}
 								</tbody>
@@ -825,12 +898,12 @@
 									<table class="w-full text-left text-sm">
 										<thead>
 											<tr class="border-b border-surface-200 dark:border-surface-700">
-												<th class="pb-2 pr-4 text-xs font-semibold uppercase tracking-wider text-surface-500 dark:text-surface-400">Device</th>
-												<th class="pb-2 pr-4 text-xs font-semibold uppercase tracking-wider text-surface-500 dark:text-surface-400">Model</th>
-												<th class="pb-2 pr-4 text-xs font-semibold uppercase tracking-wider text-surface-500 dark:text-surface-400">Health</th>
-												<th class="pb-2 pr-4 text-xs font-semibold uppercase tracking-wider text-surface-500 dark:text-surface-400">Temp</th>
-												<th class="pb-2 pr-4 text-xs font-semibold uppercase tracking-wider text-surface-500 dark:text-surface-400">Wearout</th>
-												<th class="pb-2 text-xs font-semibold uppercase tracking-wider text-surface-500 dark:text-surface-400">Power-On Hours</th>
+												<th scope="col" class="pb-2 pr-4 text-xs font-semibold uppercase tracking-wider text-surface-500 dark:text-surface-400">Device</th>
+												<th scope="col" class="pb-2 pr-4 text-xs font-semibold uppercase tracking-wider text-surface-500 dark:text-surface-400">Model</th>
+												<th scope="col" class="pb-2 pr-4 text-xs font-semibold uppercase tracking-wider text-surface-500 dark:text-surface-400">Health</th>
+												<th scope="col" class="pb-2 pr-4 text-xs font-semibold uppercase tracking-wider text-surface-500 dark:text-surface-400">Temp</th>
+												<th scope="col" class="pb-2 pr-4 text-xs font-semibold uppercase tracking-wider text-surface-500 dark:text-surface-400">Wearout</th>
+												<th scope="col" class="pb-2 text-xs font-semibold uppercase tracking-wider text-surface-500 dark:text-surface-400">Power-On Hours</th>
 											</tr>
 										</thead>
 										<tbody class="divide-y divide-surface-100 dark:divide-surface-700">
@@ -862,9 +935,9 @@
 									<table class="w-full text-left text-sm">
 										<thead>
 											<tr class="border-b border-surface-200 dark:border-surface-700">
-												<th class="pb-2 pr-4 text-xs font-semibold uppercase tracking-wider text-surface-500 dark:text-surface-400">Name</th>
-												<th class="pb-2 pr-4 text-xs font-semibold uppercase tracking-wider text-surface-500 dark:text-surface-400">RPM</th>
-												<th class="pb-2 text-xs font-semibold uppercase tracking-wider text-surface-500 dark:text-surface-400">Status</th>
+												<th scope="col" class="pb-2 pr-4 text-xs font-semibold uppercase tracking-wider text-surface-500 dark:text-surface-400">Name</th>
+												<th scope="col" class="pb-2 pr-4 text-xs font-semibold uppercase tracking-wider text-surface-500 dark:text-surface-400">RPM</th>
+												<th scope="col" class="pb-2 text-xs font-semibold uppercase tracking-wider text-surface-500 dark:text-surface-400">Status</th>
 											</tr>
 										</thead>
 										<tbody class="divide-y divide-surface-100 dark:divide-surface-700">
@@ -889,9 +962,9 @@
 									<table class="w-full text-left text-sm">
 										<thead>
 											<tr class="border-b border-surface-200 dark:border-surface-700">
-												<th class="pb-2 pr-4 text-xs font-semibold uppercase tracking-wider text-surface-500 dark:text-surface-400">Name</th>
-												<th class="pb-2 pr-4 text-xs font-semibold uppercase tracking-wider text-surface-500 dark:text-surface-400">Watts</th>
-												<th class="pb-2 text-xs font-semibold uppercase tracking-wider text-surface-500 dark:text-surface-400">Status</th>
+												<th scope="col" class="pb-2 pr-4 text-xs font-semibold uppercase tracking-wider text-surface-500 dark:text-surface-400">Name</th>
+												<th scope="col" class="pb-2 pr-4 text-xs font-semibold uppercase tracking-wider text-surface-500 dark:text-surface-400">Watts</th>
+												<th scope="col" class="pb-2 text-xs font-semibold uppercase tracking-wider text-surface-500 dark:text-surface-400">Status</th>
 											</tr>
 										</thead>
 										<tbody class="divide-y divide-surface-100 dark:divide-surface-700">
@@ -916,9 +989,9 @@
 									<table class="w-full text-left text-sm">
 										<thead>
 											<tr class="border-b border-surface-200 dark:border-surface-700">
-												<th class="pb-2 pr-4 text-xs font-semibold uppercase tracking-wider text-surface-500 dark:text-surface-400">Name</th>
-												<th class="pb-2 pr-4 text-xs font-semibold uppercase tracking-wider text-surface-500 dark:text-surface-400">Celsius</th>
-												<th class="pb-2 text-xs font-semibold uppercase tracking-wider text-surface-500 dark:text-surface-400">Status</th>
+												<th scope="col" class="pb-2 pr-4 text-xs font-semibold uppercase tracking-wider text-surface-500 dark:text-surface-400">Name</th>
+												<th scope="col" class="pb-2 pr-4 text-xs font-semibold uppercase tracking-wider text-surface-500 dark:text-surface-400">Celsius</th>
+												<th scope="col" class="pb-2 text-xs font-semibold uppercase tracking-wider text-surface-500 dark:text-surface-400">Status</th>
 											</tr>
 										</thead>
 										<tbody class="divide-y divide-surface-100 dark:divide-surface-700">
@@ -970,10 +1043,10 @@
 							<table class="w-full text-left text-sm">
 								<thead>
 									<tr class="border-b border-surface-200 dark:border-surface-700">
-										<th class="px-6 py-3 text-xs font-semibold uppercase tracking-wider text-surface-500 dark:text-surface-400">Package</th>
-										<th class="px-6 py-3 text-xs font-semibold uppercase tracking-wider text-surface-500 dark:text-surface-400">Current Version</th>
-										<th class="px-6 py-3 text-xs font-semibold uppercase tracking-wider text-surface-500 dark:text-surface-400">Available Version</th>
-										<th class="px-6 py-3 text-xs font-semibold uppercase tracking-wider text-surface-500 dark:text-surface-400">Security</th>
+										<th scope="col" class="px-6 py-3 text-xs font-semibold uppercase tracking-wider text-surface-500 dark:text-surface-400">Package</th>
+										<th scope="col" class="px-6 py-3 text-xs font-semibold uppercase tracking-wider text-surface-500 dark:text-surface-400">Current Version</th>
+										<th scope="col" class="px-6 py-3 text-xs font-semibold uppercase tracking-wider text-surface-500 dark:text-surface-400">Available Version</th>
+										<th scope="col" class="px-6 py-3 text-xs font-semibold uppercase tracking-wider text-surface-500 dark:text-surface-400">Security</th>
 									</tr>
 								</thead>
 								<tbody class="divide-y divide-surface-100 dark:divide-surface-700">
@@ -1000,7 +1073,7 @@
 		{/if}
 	{:else if activeTab === 'authorized-keys'}
 		{#if isTeamTier === false}
-			<div class="flex items-center gap-3 rounded-xl border border-amber-200 bg-amber-50 p-6 dark:border-amber-800 dark:bg-amber-900/20">
+			<div class="flex items-center gap-3 rounded-xl border border-amber-200 bg-amber-50 p-6 dark:border-amber-800 dark:bg-amber-900/20" role="alert">
 				<CircleAlert class="h-5 w-5 text-amber-600 dark:text-amber-400" />
 				<p class="text-sm text-amber-700 dark:text-amber-300">
 					Remote commands require a Team subscription. <a href="/settings/billing" class="underline hover:text-amber-800 dark:hover:text-amber-200">Upgrade your subscription</a> to access this feature.
@@ -1036,7 +1109,7 @@
 					</button>
 				</div>
 				{#if authorizeError}
-					<p class="text-sm text-red-600 dark:text-red-400">{authorizeError}</p>
+					<p class="text-sm text-red-600 dark:text-red-400" role="alert">{authorizeError}</p>
 				{/if}
 
 				<!-- Authorized keys table -->
@@ -1051,13 +1124,13 @@
 							<table class="w-full text-left text-sm">
 								<thead>
 									<tr class="border-b border-surface-200 dark:border-surface-700">
-										<th class="px-6 py-3 text-xs font-semibold uppercase tracking-wider text-surface-500 dark:text-surface-400">Label</th>
-										<th class="px-6 py-3 text-xs font-semibold uppercase tracking-wider text-surface-500 dark:text-surface-400">Fingerprint</th>
-										<th class="px-6 py-3 text-xs font-semibold uppercase tracking-wider text-surface-500 dark:text-surface-400">Owner</th>
-										<th class="px-6 py-3 text-xs font-semibold uppercase tracking-wider text-surface-500 dark:text-surface-400">Authorized By</th>
-										<th class="px-6 py-3 text-xs font-semibold uppercase tracking-wider text-surface-500 dark:text-surface-400">Authorized At</th>
-										<th class="px-6 py-3 text-xs font-semibold uppercase tracking-wider text-surface-500 dark:text-surface-400">Status</th>
-										<th class="px-6 py-3 text-xs font-semibold uppercase tracking-wider text-surface-500 dark:text-surface-400">Actions</th>
+										<th scope="col" class="px-6 py-3 text-xs font-semibold uppercase tracking-wider text-surface-500 dark:text-surface-400">Label</th>
+										<th scope="col" class="px-6 py-3 text-xs font-semibold uppercase tracking-wider text-surface-500 dark:text-surface-400">Fingerprint</th>
+										<th scope="col" class="px-6 py-3 text-xs font-semibold uppercase tracking-wider text-surface-500 dark:text-surface-400">Owner</th>
+										<th scope="col" class="px-6 py-3 text-xs font-semibold uppercase tracking-wider text-surface-500 dark:text-surface-400">Authorized By</th>
+										<th scope="col" class="px-6 py-3 text-xs font-semibold uppercase tracking-wider text-surface-500 dark:text-surface-400">Authorized At</th>
+										<th scope="col" class="px-6 py-3 text-xs font-semibold uppercase tracking-wider text-surface-500 dark:text-surface-400">Status</th>
+										<th scope="col" class="px-6 py-3 text-xs font-semibold uppercase tracking-wider text-surface-500 dark:text-surface-400">Actions</th>
 									</tr>
 								</thead>
 								<tbody class="divide-y divide-surface-100 dark:divide-surface-700">
@@ -1105,7 +1178,7 @@
 		{/if}
 	{:else if activeTab === 'commands'}
 		{#if isTeamTier === false}
-			<div class="flex items-center gap-3 rounded-xl border border-amber-200 bg-amber-50 p-6 dark:border-amber-800 dark:bg-amber-900/20">
+			<div class="flex items-center gap-3 rounded-xl border border-amber-200 bg-amber-50 p-6 dark:border-amber-800 dark:bg-amber-900/20" role="alert">
 				<CircleAlert class="h-5 w-5 text-amber-600 dark:text-amber-400" />
 				<p class="text-sm text-amber-700 dark:text-amber-300">
 					Remote commands require a Team subscription. <a href="/settings/billing" class="underline hover:text-amber-800 dark:hover:text-amber-200">Upgrade your subscription</a> to access this feature.
@@ -1123,7 +1196,7 @@
 			</p>
 
 			{#if commandsEnabled === false}
-				<div class="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 dark:border-amber-700 dark:bg-amber-900/20">
+				<div class="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 dark:border-amber-700 dark:bg-amber-900/20" role="alert">
 					<p class="text-sm text-amber-700 dark:text-amber-300">
 						Remote commands are disabled on this machine. The agent must be configured with
 						<code class="rounded bg-amber-100 px-1 py-0.5 font-mono text-xs dark:bg-amber-800/40">allow_remote_commands = true</code>
@@ -1131,7 +1204,7 @@
 					</p>
 				</div>
 			{:else if localKeys.length === 0}
-				<div class="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 dark:border-amber-700 dark:bg-amber-900/20">
+				<div class="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 dark:border-amber-700 dark:bg-amber-900/20" role="alert">
 					<p class="text-sm text-amber-700 dark:text-amber-300">
 						No signing keys found on this device.
 						<a href="/settings/signing-keys" class="underline hover:text-amber-800 dark:hover:text-amber-200">
@@ -1140,7 +1213,7 @@
 					</p>
 				</div>
 			{:else if localKeys.length > 0 && authorizedLocalKeys.length === 0}
-				<div class="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 dark:border-amber-700 dark:bg-amber-900/20">
+				<div class="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 dark:border-amber-700 dark:bg-amber-900/20" role="alert">
 					<p class="text-sm text-amber-700 dark:text-amber-300">
 						Your signing keys are not authorized for this machine. Go to the Authorized Keys tab to authorize a key.
 					</p>
@@ -1182,10 +1255,10 @@
 			{/if}
 
 			{#if commandError}
-				<p class="mt-3 text-sm text-red-600 dark:text-red-400">{commandError}</p>
+				<p class="mt-3 text-sm text-red-600 dark:text-red-400" role="alert">{commandError}</p>
 			{/if}
 			{#if commandSuccess}
-				<p class="mt-3 text-sm text-green-600 dark:text-green-400">{commandSuccess}</p>
+				<p class="mt-3 text-sm text-green-600 dark:text-green-400" role="status">{commandSuccess}</p>
 			{/if}
 		</div>
 
@@ -1203,10 +1276,10 @@
 					<table class="w-full text-left text-sm">
 						<thead class="bg-surface-50 text-xs uppercase text-surface-500 dark:bg-surface-900">
 							<tr>
-								<th class="px-6 py-3">Type</th>
-								<th class="px-6 py-3">Status</th>
-								<th class="px-6 py-3">Sent</th>
-								<th class="px-6 py-3">Result</th>
+								<th scope="col" class="px-6 py-3">Type</th>
+								<th scope="col" class="px-6 py-3">Status</th>
+								<th scope="col" class="px-6 py-3">Sent</th>
+								<th scope="col" class="px-6 py-3">Result</th>
 							</tr>
 						</thead>
 						<tbody class="divide-y divide-surface-100 dark:divide-surface-700">

@@ -5,14 +5,13 @@
 <script lang="ts">
 	import { onMount } from 'svelte';
 	import { goto } from '$app/navigation';
-	import type { PaginatedFleetOverviewDto, FleetMachineDto } from '$lib/api/types';
+	import type { PaginatedFleetOverviewDto } from '$lib/api/types';
 	import { MachineHealthStatus } from '$lib/api/types';
 	import { ApiClient, ApiError } from '$lib/api/client';
 	import { formatNumber, formatRelativeTime } from '$lib/utils/format';
 	import HealthBadge from '$lib/components/HealthBadge.svelte';
 	import ProgressBar from '$lib/components/ProgressBar.svelte';
 	import PageHeader from '$lib/components/PageHeader.svelte';
-	import MachineDetailPanel from '$lib/components/MachineDetailPanel.svelte';
 	import Pagination from '$lib/components/Pagination.svelte';
 	import {
 		Shield,
@@ -96,6 +95,17 @@
 		`conic-gradient(#10b981 0% ${healthyPct}%, #f59e0b ${healthyPct}% ${healthyPct + warningPct}%, #ef4444 ${healthyPct + warningPct}% ${healthyPct + warningPct + criticalPct}%, #9ca3af ${healthyPct + warningPct + criticalPct}% 100%)`
 	);
 
+	const donutAriaLabel = $derived(
+		`Fleet health: ${healthyCount} healthy, ${fleet.summary.warningCount} warning, ${fleet.summary.criticalCount} critical, ${fleet.summary.offlineCount} offline`
+	);
+
+	function handleRowKeydown(event: KeyboardEvent, machineId: number) {
+		if (event.key === 'Enter' || event.key === ' ') {
+			event.preventDefault();
+			goto(`/machines/${machineId}`);
+		}
+	}
+
 	function healthBorderClass(status: MachineHealthStatus): string {
 		switch (status) {
 			case MachineHealthStatus.Healthy:
@@ -109,17 +119,6 @@
 			default:
 				return 'border-l-2 border-l-transparent';
 		}
-	}
-
-	// Detail panel
-	let selectedMachineId = $state<number | null>(null);
-
-	function openDetail(machine: FleetMachineDto) {
-		selectedMachineId = machine.id;
-	}
-
-	function closeDetail() {
-		selectedMachineId = null;
 	}
 
 	// Polling — respects current filters/page.
@@ -172,7 +171,7 @@
 	<div class="rounded-xl border border-surface-200 bg-surface-50 p-6 dark:border-surface-700 dark:bg-surface-800">
 		<div class="flex flex-col items-center gap-8 sm:flex-row">
 			<!-- Donut Chart -->
-			<div class="relative h-28 w-28 flex-shrink-0 rounded-full" style="background: {donutGradient}">
+			<div class="relative h-28 w-28 flex-shrink-0 rounded-full" style="background: {donutGradient}" role="img" aria-label={donutAriaLabel}>
 				<div class="absolute inset-3 flex items-center justify-center rounded-full bg-surface-50 dark:bg-surface-800">
 					<div class="text-center">
 						<p class="text-2xl font-bold text-surface-900 dark:text-surface-50">{formatNumber(fleet.summary.totalMachines)}</p>
@@ -273,10 +272,11 @@
 							<button
 								class="flex items-center gap-1 font-medium text-surface-600 hover:text-surface-900 dark:text-surface-400 dark:hover:text-surface-200"
 								onclick={() => toggleSort('name')}
+								aria-label="Sort by machine name, {sortKey === 'name' ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'unsorted'}"
 							>
 								Machine
 								{#if sortKey === 'name'}
-									<ArrowUpDown class="h-3.5 w-3.5" />
+									<ArrowUpDown class="h-3.5 w-3.5" aria-hidden="true" />
 								{/if}
 							</button>
 						</th>
@@ -284,10 +284,11 @@
 							<button
 								class="flex items-center gap-1 font-medium text-surface-600 hover:text-surface-900 dark:text-surface-400 dark:hover:text-surface-200"
 								onclick={() => toggleSort('status')}
+								aria-label="Sort by status, {sortKey === 'status' ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'unsorted'}"
 							>
 								Status
 								{#if sortKey === 'status'}
-									<ArrowUpDown class="h-3.5 w-3.5" />
+									<ArrowUpDown class="h-3.5 w-3.5" aria-hidden="true" />
 								{/if}
 							</button>
 						</th>
@@ -295,10 +296,11 @@
 							<button
 								class="flex items-center gap-1 font-medium text-surface-600 hover:text-surface-900 dark:text-surface-400 dark:hover:text-surface-200"
 								onclick={() => toggleSort('cpu')}
+								aria-label="Sort by CPU usage, {sortKey === 'cpu' ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'unsorted'}"
 							>
 								CPU
 								{#if sortKey === 'cpu'}
-									<ArrowUpDown class="h-3.5 w-3.5" />
+									<ArrowUpDown class="h-3.5 w-3.5" aria-hidden="true" />
 								{/if}
 							</button>
 						</th>
@@ -306,10 +308,11 @@
 							<button
 								class="flex items-center gap-1 font-medium text-surface-600 hover:text-surface-900 dark:text-surface-400 dark:hover:text-surface-200"
 								onclick={() => toggleSort('memory')}
+								aria-label="Sort by memory usage, {sortKey === 'memory' ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'unsorted'}"
 							>
 								Memory
 								{#if sortKey === 'memory'}
-									<ArrowUpDown class="h-3.5 w-3.5" />
+									<ArrowUpDown class="h-3.5 w-3.5" aria-hidden="true" />
 								{/if}
 							</button>
 						</th>
@@ -317,10 +320,11 @@
 							<button
 								class="flex items-center gap-1 font-medium text-surface-600 hover:text-surface-900 dark:text-surface-400 dark:hover:text-surface-200"
 								onclick={() => toggleSort('disk')}
+								aria-label="Sort by disk usage, {sortKey === 'disk' ? (sortDir === 'asc' ? 'ascending' : 'descending') : 'unsorted'}"
 							>
 								Disk
 								{#if sortKey === 'disk'}
-									<ArrowUpDown class="h-3.5 w-3.5" />
+									<ArrowUpDown class="h-3.5 w-3.5" aria-hidden="true" />
 								{/if}
 							</button>
 						</th>
@@ -336,8 +340,12 @@
 				<tbody class="divide-y divide-surface-100 dark:divide-surface-800">
 					{#each fleet.machines as machine, i (machine.id)}
 						<tr
-							class="group cursor-pointer transition {healthBorderClass(machine.healthStatus)} {i % 2 === 1 ? 'bg-surface-100/50 dark:bg-surface-800/30' : ''} hover:bg-surface-100 dark:hover:bg-surface-700/50"
-							onclick={() => openDetail(machine)}
+							class="group cursor-pointer transition {healthBorderClass(machine.healthStatus)} {i % 2 === 1 ? 'bg-surface-100/50 dark:bg-surface-800/30' : ''} hover:bg-surface-100 dark:hover:bg-surface-700/50 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary-500"
+							tabindex="0"
+							role="link"
+							aria-label="View details for {machine.name}"
+							onclick={() => goto(`/machines/${machine.id}`)}
+							onkeydown={(e) => handleRowKeydown(e, machine.id)}
 						>
 							<td class="px-4 py-3">
 								<div>
@@ -450,6 +458,3 @@
 		/>
 	</div>
 </div>
-
-<!-- Detail Panel -->
-<MachineDetailPanel machineId={selectedMachineId} onclose={closeDetail} />

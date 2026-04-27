@@ -140,7 +140,7 @@
     {/if}
 
     <!-- Tab content -->
-    <nav class="flex-1 overflow-y-auto px-3 py-3">
+    <nav class="flex-1 overflow-y-auto px-3 py-3" aria-label="Main navigation">
         {#if activeTab === 'fleet'}
             <a href="/dashboard" class={navItemClass('/dashboard')} onclick={onNavigate}>
                 <LayoutDashboard size={16} />
@@ -272,6 +272,9 @@
     </div>
 {/snippet}
 
+<a href="#main-content" class="sr-only focus:not-sr-only focus:fixed focus:left-4 focus:top-4 focus:z-50 focus:rounded-md focus:bg-primary-500 focus:px-4 focus:py-2 focus:text-white focus:shadow-lg">
+    Skip to content
+</a>
 <div class="flex h-screen bg-surface-50 dark:bg-surface-900">
     <!-- Sidebar (desktop) -->
     <aside
@@ -311,7 +314,7 @@
         </header>
 
         <!-- Page content -->
-        <main class="animate-fade-in flex-1 overflow-y-auto p-6">
+        <main id="main-content" class="animate-fade-in flex-1 overflow-y-auto p-4 md:p-6">
             {@render children?.()}
         </main>
     </div>

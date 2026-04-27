@@ -288,16 +288,16 @@
 								<td class="px-4 py-3">
 									<div class="flex items-center gap-2">
 										{#if machine.hasDiskHealthIssue}
-											<span class="rounded-full bg-red-100 px-2 py-0.5 text-[10px] font-medium text-red-700 dark:bg-red-900/30 dark:text-red-400">Disk</span>
+											<span class="rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-700 dark:bg-red-900/30 dark:text-red-400">Disk</span>
 										{/if}
 										{#if machine.hasHardwareIssue}
-											<span class="rounded-full bg-red-100 px-2 py-0.5 text-[10px] font-medium text-red-700 dark:bg-red-900/30 dark:text-red-400">HW</span>
+											<span class="rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-700 dark:bg-red-900/30 dark:text-red-400">HW</span>
 										{/if}
 										{#if machine.pendingUpdates > 0}
-											<span class="rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-medium text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">{machine.pendingUpdates} updates</span>
+											<span class="rounded-full bg-amber-100 px-2 py-0.5 text-xs font-medium text-amber-700 dark:bg-amber-900/30 dark:text-amber-400">{machine.pendingUpdates} updates</span>
 										{/if}
 										{#if machine.failedServices > 0}
-											<span class="rounded-full bg-red-100 px-2 py-0.5 text-[10px] font-medium text-red-700 dark:bg-red-900/30 dark:text-red-400">{machine.failedServices} failed</span>
+											<span class="rounded-full bg-red-100 px-2 py-0.5 text-xs font-medium text-red-700 dark:bg-red-900/30 dark:text-red-400">{machine.failedServices} failed</span>
 										{/if}
 										{#if machine.hasDiskHealthIssue === false && machine.hasHardwareIssue === false && machine.pendingUpdates === 0 && machine.failedServices === 0}
 											<span class="text-xs text-surface-400">—</span>

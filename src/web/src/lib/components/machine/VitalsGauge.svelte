@@ -3,7 +3,7 @@
      See LICENSE for details. -->
 
 <script lang="ts">
-	import { getVitalColor } from '$lib/utils/health-colors';
+	import { getVitalColor, getVitalSeverity } from '$lib/utils/health-colors';
 
 	let {
 		value,
@@ -16,6 +16,12 @@
 	} = $props();
 
 	const displayValue = $derived(value !== null ? Math.round(value) : null);
+	const severity = $derived(displayValue !== null ? getVitalSeverity(displayValue) : 'unknown');
+	const ariaLabel = $derived(
+		displayValue !== null
+			? `${label}: ${displayValue}${unit}, ${severity}`
+			: `${label}: no data`
+	);
 
 	const svgSize = 80;
 	const strokeWidth = 6;
@@ -27,9 +33,9 @@
 	const arcColor = $derived(displayValue !== null ? getVitalColor(displayValue) : '#6E6E77');
 </script>
 
-<div class="flex flex-col items-center gap-1">
+<div class="flex flex-col items-center gap-1" role="meter" aria-label={ariaLabel} aria-valuenow={displayValue ?? undefined} aria-valuemin={0} aria-valuemax={100}>
 	<div class="relative">
-		<svg width={svgSize} height={svgSize / 2 + strokeWidth} viewBox="0 0 {svgSize} {svgSize / 2 + strokeWidth}" fill="none">
+		<svg width={svgSize} height={svgSize / 2 + strokeWidth} viewBox="0 0 {svgSize} {svgSize / 2 + strokeWidth}" fill="none" aria-hidden="true">
 			<!-- Track -->
 			<path
 				d="M {strokeWidth / 2} {svgSize / 2} A {radius} {radius} 0 0 1 {svgSize - strokeWidth / 2} {svgSize / 2}"

@@ -175,6 +175,7 @@
 						<button
 							onclick={() => revokeKeyConfirm = { open: true, id: key.id }}
 							class="inline-flex items-center gap-1 rounded-md border border-surface-200 px-2.5 py-1 text-xs text-surface-500 hover:bg-surface-100 hover:text-red-600 dark:border-surface-700 dark:hover:bg-surface-700 dark:hover:text-red-400"
+							aria-label="Revoke signing key"
 							title="Revoke key"
 						>
 							<CircleX size={14} />

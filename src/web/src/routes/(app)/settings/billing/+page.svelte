@@ -711,11 +711,11 @@
 				<table class="w-full text-left text-sm">
 					<thead>
 						<tr class="border-b border-surface-200 dark:border-surface-700">
-							<th class="pb-3 pr-4 font-medium text-surface-500">Date</th>
-							<th class="pb-3 pr-4 font-medium text-surface-500">Period</th>
-							<th class="pb-3 pr-4 font-medium text-surface-500">Amount</th>
-							<th class="pb-3 pr-4 font-medium text-surface-500">Status</th>
-							<th class="pb-3 font-medium text-surface-500"></th>
+							<th scope="col" class="pb-3 pr-4 font-medium text-surface-500">Date</th>
+							<th scope="col" class="pb-3 pr-4 font-medium text-surface-500">Period</th>
+							<th scope="col" class="pb-3 pr-4 font-medium text-surface-500">Amount</th>
+							<th scope="col" class="pb-3 pr-4 font-medium text-surface-500">Status</th>
+							<th scope="col" class="pb-3 font-medium text-surface-500"></th>
 						</tr>
 					</thead>
 					<tbody class="divide-y divide-surface-100 dark:divide-surface-700">
@@ -805,10 +805,10 @@
 			<table class="w-full text-sm">
 				<thead>
 					<tr class="border-b border-surface-200 dark:border-surface-700">
-						<th class="py-3 pr-4 text-left font-medium text-surface-500 dark:text-surface-400">Feature</th>
-						<th class="px-4 py-3 text-center font-medium text-surface-500 dark:text-surface-400">Free</th>
-						<th class="px-4 py-3 text-center font-medium text-blue-600 dark:text-blue-400">Pro</th>
-						<th class="px-4 py-3 text-center font-medium text-purple-600 dark:text-purple-400">Team</th>
+						<th scope="col" class="py-3 pr-4 text-left font-medium text-surface-500 dark:text-surface-400">Feature</th>
+						<th scope="col" class="px-4 py-3 text-center font-medium text-surface-500 dark:text-surface-400">Free</th>
+						<th scope="col" class="px-4 py-3 text-center font-medium text-blue-600 dark:text-blue-400">Pro</th>
+						<th scope="col" class="px-4 py-3 text-center font-medium text-purple-600 dark:text-purple-400">Team</th>
 					</tr>
 				</thead>
 				<tbody class="divide-y divide-surface-100 dark:divide-surface-700">

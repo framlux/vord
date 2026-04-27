@@ -24,7 +24,7 @@
 				</div>
 				<span class="text-xl font-bold text-surface-900 dark:text-surface-50">VordFleet</span>
 			</a>
-			<nav class="flex items-center gap-4">
+			<nav aria-label="Main navigation" class="flex items-center gap-4">
 				{#if user}
 					<a
 						href="/dashboard"

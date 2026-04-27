@@ -21,8 +21,8 @@
 	);
 </script>
 
-<div class="flex items-center gap-2">
-	<div class="h-2 flex-1 overflow-hidden rounded-full bg-surface-200 dark:bg-surface-700">
+<div class="flex items-center gap-2" role="progressbar" aria-valuenow={percent} aria-valuemin={0} aria-valuemax={100} aria-label="{label || `${percent}%`}">
+	<div class="h-2 flex-1 overflow-hidden rounded-full bg-surface-200 dark:bg-surface-700" aria-hidden="true">
 		<div
 			class="h-full rounded-full transition-all {colorClass}"
 			style="width: {percent}%"

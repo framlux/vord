@@ -70,3 +70,12 @@ export function getVitalColor(percent: number): string {
 
 	return '#10B981';
 }
+
+/// Returns a human-readable severity label for screen readers.
+export function getVitalSeverity(percent: number): string {
+	if (percent >= 95) return 'critical';
+	if (percent >= 80) return 'warning';
+
+	return 'normal';
+}
+

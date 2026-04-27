@@ -103,11 +103,11 @@
         </form>
 
         {#if createError}
-            <p class="mt-3 text-sm text-red-600 dark:text-red-400">{createError}</p>
+            <p role="alert" class="mt-3 text-sm text-red-600 dark:text-red-400">{createError}</p>
         {/if}
 
         {#if newToken?.token}
-            <div class="mt-4 rounded-lg border border-green-200 bg-green-50 p-4 dark:border-green-800 dark:bg-green-900/20">
+            <div role="alert" class="mt-4 rounded-lg border border-green-200 bg-green-50 p-4 dark:border-green-800 dark:bg-green-900/20">
                 <div class="flex items-center gap-2">
                     <Check size={16} class="text-green-600 dark:text-green-400" />
                     <span class="text-sm font-medium text-green-700 dark:text-green-300">Token created successfully</span>
@@ -121,6 +121,7 @@
                     </code>
                     <button
                         onclick={() => copyToClipboard(newToken?.token ?? '')}
+                        aria-label="Copy registration token"
                         class="inline-flex items-center gap-1 rounded px-3 py-2 text-xs font-medium text-green-700 hover:bg-green-100 dark:text-green-300 dark:hover:bg-green-800/30"
                     >
                         <Copy size={14} />
@@ -128,6 +129,7 @@
                     </button>
                     <button
                         onclick={() => showInstallScript = true}
+                        aria-label="Generate install script"
                         class="inline-flex items-center gap-1 rounded px-3 py-2 text-xs font-medium text-primary-700 hover:bg-primary-100 dark:text-primary-300 dark:hover:bg-primary-800/30"
                         title="Generate a ready-to-run install script with this token"
                     >

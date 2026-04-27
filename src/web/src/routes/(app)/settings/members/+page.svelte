@@ -185,16 +185,20 @@
           e.preventDefault();
           sendInvitation();
         }}
-        class="mt-4 flex gap-3"
+        class="mt-4 flex flex-wrap gap-3"
       >
+        <label for="invite-email" class="sr-only">Email address</label>
         <input
+          id="invite-email"
           type="email"
           bind:value={inviteEmail}
           placeholder="colleague@company.com"
           class="flex-1 rounded-lg border border-surface-300 bg-surface-50 px-4 py-2 text-sm text-surface-900 placeholder:text-surface-400 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-surface-600 dark:bg-surface-700 dark:text-surface-50"
         />
         {#if isTeamTier}
+          <label for="invite-role" class="sr-only">Role</label>
           <select
+            id="invite-role"
             bind:value={inviteRole}
             class="rounded-lg border border-surface-300 bg-surface-50 px-3 py-2 text-sm text-surface-900 focus:border-primary-500 focus:outline-none focus:ring-1 focus:ring-primary-500 dark:border-surface-600 dark:bg-surface-700 dark:text-surface-50"
           >
@@ -215,11 +219,12 @@
     {/if}
 
     {#if inviteError}
-      <p class="mt-3 text-sm text-red-600 dark:text-red-400">{inviteError}</p>
+      <p role="alert" class="mt-3 text-sm text-red-600 dark:text-red-400">{inviteError}</p>
     {/if}
 
     {#if inviteSuccess}
       <div
+        role="alert"
         class="mt-3 flex items-center gap-2 rounded-lg bg-green-50 px-4 py-3 dark:bg-green-900/20"
       >
         <Check size={16} class="text-green-600 dark:text-green-400" />
@@ -229,6 +234,7 @@
         {#if copiedUrl}
           <button
             onclick={() => copyToClipboard(copiedUrl)}
+            aria-label="Copy invitation link"
             class="ml-auto inline-flex items-center gap-1 rounded px-2 py-1 text-xs text-green-700 hover:bg-green-100 dark:text-green-300 dark:hover:bg-green-800/30"
           >
             <Copy size={12} />
@@ -358,6 +364,7 @@
             <div class="flex items-center gap-2">
               <button
                 onclick={() => resendInvitation(inv.id)}
+                aria-label="Resend invitation"
                 class="inline-flex items-center gap-1 rounded-md border border-surface-200 px-2.5 py-1 text-xs text-surface-500 hover:bg-surface-100 dark:border-surface-700 dark:hover:bg-surface-700"
                 title="Resend invitation"
               >
@@ -366,6 +373,7 @@
               </button>
               <button
                 onclick={() => revokeInviteConfirm = { open: true, id: inv.id }}
+                aria-label="Revoke invitation"
                 class="inline-flex items-center gap-1 rounded-md border border-surface-200 px-2.5 py-1 text-xs text-surface-500 hover:bg-surface-100 hover:text-red-600 dark:border-surface-700 dark:hover:bg-surface-700 dark:hover:text-red-400"
                 title="Revoke invitation"
               >
