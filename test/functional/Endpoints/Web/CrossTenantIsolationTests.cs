@@ -47,7 +47,7 @@ public sealed class CrossTenantIsolationTests
         JsonElement root = doc.RootElement;
 
         bool success = root.GetProperty("success").GetBoolean();
-        await Assert.That(success).IsEqualTo(true);
+        await Assert.That(success).IsTrue();
 
         JsonElement data = root.GetProperty("data");
         int totalCount = data.GetProperty("totalCount").GetInt32();
@@ -67,14 +67,14 @@ public sealed class CrossTenantIsolationTests
 
         // Verify tenant 1 machines are present
         bool containsTenant1Web = machineNames.Contains("tenant1-web");
-        await Assert.That(containsTenant1Web).IsEqualTo(true);
+        await Assert.That(containsTenant1Web).IsTrue();
 
         bool containsTenant1Db = machineNames.Contains("tenant1-db");
-        await Assert.That(containsTenant1Db).IsEqualTo(true);
+        await Assert.That(containsTenant1Db).IsTrue();
 
         // Verify tenant 2 machines are NOT present (isolation check)
         bool containsTenant2Web = machineNames.Contains("tenant2-web");
-        await Assert.That(containsTenant2Web).IsEqualTo(false);
+        await Assert.That(containsTenant2Web).IsFalse();
     }
 
     [Test]
@@ -100,7 +100,7 @@ public sealed class CrossTenantIsolationTests
         // Verify the response does not leak any machine data from the other tenant
         string body = await response.Content.ReadAsStringAsync();
         bool containsMachineName = body.Contains("secret-machine");
-        await Assert.That(containsMachineName).IsEqualTo(false);
+        await Assert.That(containsMachineName).IsFalse();
     }
 
     [Test]
@@ -151,7 +151,7 @@ public sealed class CrossTenantIsolationTests
         // Verify the machine was NOT deleted in the database
         Machine? machine = await db.Machines.Where(m => m.Id == tenant2MachineId).FirstOrDefaultAsync();
         await Assert.That(machine).IsNotNull();
-        await Assert.That(machine!.IsDeleted).IsEqualTo(false);
+        await Assert.That(machine!.IsDeleted).IsFalse();
     }
 
     [Test]
@@ -177,7 +177,7 @@ public sealed class CrossTenantIsolationTests
         JsonElement root = doc.RootElement;
 
         bool success = root.GetProperty("success").GetBoolean();
-        await Assert.That(success).IsEqualTo(false);
+        await Assert.That(success).IsFalse();
 
         string message = root.GetProperty("message").GetString()!;
         await Assert.That(message).Contains("You do not have access to this tenant");
@@ -212,7 +212,7 @@ public sealed class CrossTenantIsolationTests
         JsonElement root = doc.RootElement;
 
         bool success = root.GetProperty("success").GetBoolean();
-        await Assert.That(success).IsEqualTo(true);
+        await Assert.That(success).IsTrue();
 
         JsonElement data = root.GetProperty("data");
         int totalMachines = data.GetProperty("totalMachines").GetInt32();
@@ -220,7 +220,7 @@ public sealed class CrossTenantIsolationTests
 
         // Verify the count does NOT include tenant 2's 3 machines
         bool countsAreIsolated = totalMachines < 5;
-        await Assert.That(countsAreIsolated).IsEqualTo(true);
+        await Assert.That(countsAreIsolated).IsTrue();
     }
 
     [Test]
@@ -306,7 +306,7 @@ public sealed class CrossTenantIsolationTests
         JsonElement root = doc.RootElement;
 
         bool success = root.GetProperty("success").GetBoolean();
-        await Assert.That(success).IsEqualTo(true);
+        await Assert.That(success).IsTrue();
 
         JsonElement data = root.GetProperty("data");
         int totalCount = data.GetProperty("totalCount").GetInt32();
@@ -314,7 +314,7 @@ public sealed class CrossTenantIsolationTests
 
         // Verify tenant 2 token name does not leak into the response
         bool containsTenant2Token = body.Contains("Tenant2 Token");
-        await Assert.That(containsTenant2Token).IsEqualTo(false);
+        await Assert.That(containsTenant2Token).IsFalse();
     }
 
     private static async Task<int> SeedTenantWithSubscription(DatabaseContext db, string name)

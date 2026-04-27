@@ -30,7 +30,7 @@ public class DashboardHandlerTests
 
         ServiceResult<DashboardSummaryDto> result = await handler.GetSummaryAsync(1, CancellationToken.None);
 
-        await Assert.That(result.IsSuccess).IsEqualTo(true);
+        await Assert.That(result.IsSuccess).IsTrue();
         await Assert.That(result.Data!.TotalMachines).IsEqualTo(0);
         await Assert.That(result.Data!.OnlineMachines).IsEqualTo(0);
         await Assert.That(result.Data!.PendingApprovals).IsEqualTo(0);

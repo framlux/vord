@@ -153,7 +153,7 @@ public class InvitationHandlerTests
 
         ServiceResult<InvitationCreateResult> result = await handler.CreateAsync("newuser@example.com", null, 1, 1, "https://app.test", CancellationToken.None);
 
-        await Assert.That(result.IsSuccess).IsEqualTo(true);
+        await Assert.That(result.IsSuccess).IsTrue();
         await Assert.That(result.Data!.Id).IsEqualTo(10);
         await Assert.That(result.Data!.Email).IsEqualTo("newuser@example.com");
         await Assert.That(result.Data!.AcceptUrl).Contains("token=");
@@ -301,7 +301,7 @@ public class InvitationHandlerTests
 
         ServiceResult<InvitationAcceptResult> result = await handler.AcceptAsync("badtoken", "user@test.com", 1, "ext-1", CancellationToken.None);
 
-        await Assert.That(result.IsNotFound).IsEqualTo(true);
+        await Assert.That(result.IsNotFound).IsTrue();
     }
 
     [Test]
@@ -420,9 +420,9 @@ public class InvitationHandlerTests
 
         ServiceResult<InvitationAcceptResult> result = await handler.AcceptAsync("token", "user@test.com", 1, "ext-1", CancellationToken.None);
 
-        await Assert.That(result.IsSuccess).IsEqualTo(true);
+        await Assert.That(result.IsSuccess).IsTrue();
         await Assert.That(result.Data!.TenantId).IsEqualTo(5);
-        await Assert.That(result.Data!.PersonalTenantProvisioned).IsEqualTo(true);
+        await Assert.That(result.Data!.PersonalTenantProvisioned).IsTrue();
     }
 
     [Test]
@@ -510,8 +510,8 @@ public class InvitationHandlerTests
 
         ServiceResult<InvitationAcceptResult> result = await handler.AcceptAsync("token", "user@test.com", 1, "ext-1", CancellationToken.None);
 
-        await Assert.That(result.IsSuccess).IsEqualTo(true);
-        await Assert.That(result.Data!.PersonalTenantProvisioned).IsEqualTo(false);
+        await Assert.That(result.IsSuccess).IsTrue();
+        await Assert.That(result.Data!.PersonalTenantProvisioned).IsFalse();
     }
 
     [Test]
@@ -556,7 +556,7 @@ public class InvitationHandlerTests
 
         ServiceResult<InvitationRevokeResult> result = await handler.RevokeAsync(99, 1, CancellationToken.None);
 
-        await Assert.That(result.IsNotFound).IsEqualTo(true);
+        await Assert.That(result.IsNotFound).IsTrue();
     }
 
     [Test]
@@ -587,7 +587,7 @@ public class InvitationHandlerTests
 
         ServiceResult<InvitationRevokeResult> result = await handler.RevokeAsync(1, 1, CancellationToken.None);
 
-        await Assert.That(result.IsSuccess).IsEqualTo(true);
+        await Assert.That(result.IsSuccess).IsTrue();
     }
 
     [Test]
@@ -626,7 +626,7 @@ public class InvitationHandlerTests
 
         ServiceResult<InvitationResendResult> result = await handler.ResendAsync(99, 1, 1, "inviter@test.com", "https://app.test", CancellationToken.None);
 
-        await Assert.That(result.IsNotFound).IsEqualTo(true);
+        await Assert.That(result.IsNotFound).IsTrue();
     }
 
     [Test]
@@ -668,7 +668,7 @@ public class InvitationHandlerTests
 
         ServiceResult<InvitationResendResult> result = await handler.ResendAsync(1, 1, 1, "inviter@test.com", "https://app.test", CancellationToken.None);
 
-        await Assert.That(result.IsSuccess).IsEqualTo(true);
+        await Assert.That(result.IsSuccess).IsTrue();
         await Assert.That(result.Data!.Id).IsEqualTo(20);
         await Assert.That(result.Data!.Email).IsEqualTo("user@test.com");
     }

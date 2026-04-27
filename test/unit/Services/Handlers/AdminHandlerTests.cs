@@ -32,7 +32,7 @@ public class AdminHandlerTests
 
         ServiceResult<List<SettingEntry>> result = await handler.GetSettingsAsync(CancellationToken.None);
 
-        await Assert.That(result.IsSuccess).IsEqualTo(true);
+        await Assert.That(result.IsSuccess).IsTrue();
         await Assert.That(result.Data!.Count).IsEqualTo(0);
     }
 
@@ -57,10 +57,10 @@ public class AdminHandlerTests
 
         ServiceResult<List<SettingEntry>> result = await handler.GetSettingsAsync(CancellationToken.None);
 
-        await Assert.That(result.IsSuccess).IsEqualTo(true);
+        await Assert.That(result.IsSuccess).IsTrue();
         await Assert.That(result.Data!.Count).IsEqualTo(2);
-        await Assert.That(result.Data!.Any(e => e.Key == (int)ServerConfigurationSettingKeys.AgentHeartbeatSeconds && e.Value == "300")).IsEqualTo(true);
-        await Assert.That(result.Data!.Any(e => e.Key == (int)ServerConfigurationSettingKeys.OnlineThresholdSeconds && e.Value == "600")).IsEqualTo(true);
+        await Assert.That(result.Data!.Any(e => e.Key == (int)ServerConfigurationSettingKeys.AgentHeartbeatSeconds && e.Value == "300")).IsTrue();
+        await Assert.That(result.Data!.Any(e => e.Key == (int)ServerConfigurationSettingKeys.OnlineThresholdSeconds && e.Value == "600")).IsTrue();
     }
 
     [Test]
@@ -78,7 +78,7 @@ public class AdminHandlerTests
 
         ServiceResult<List<SettingEntry>> result = await handler.GetSettingsAsync(CancellationToken.None);
 
-        await Assert.That(result.IsSuccess).IsEqualTo(true);
+        await Assert.That(result.IsSuccess).IsTrue();
         SettingEntry entry = result.Data![0];
         await Assert.That(entry.Name).IsEqualTo("AgentHeartbeatSeconds");
         await Assert.That(entry.Description).IsNotEmpty();
@@ -104,7 +104,7 @@ public class AdminHandlerTests
 
         ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, CancellationToken.None);
 
-        await Assert.That(result.IsSuccess).IsEqualTo(true);
+        await Assert.That(result.IsSuccess).IsTrue();
         await Assert.That(result.Data!.First(e => e.Key == 1).Value).IsEqualTo("600");
         cache.Received(1).InvalidateCache();
     }
@@ -121,7 +121,7 @@ public class AdminHandlerTests
 
         ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, CancellationToken.None);
 
-        await Assert.That(result.IsSuccess).IsEqualTo(true);
+        await Assert.That(result.IsSuccess).IsTrue();
         await Assert.That(result.Data!.Count).IsEqualTo(1);
         await Assert.That(result.Data!.First(e => e.Key == 1).Value).IsEqualTo("500");
     }
@@ -135,7 +135,7 @@ public class AdminHandlerTests
 
         ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, CancellationToken.None);
 
-        await Assert.That(result.IsSuccess).IsEqualTo(false);
+        await Assert.That(result.IsSuccess).IsFalse();
         await Assert.That(result.StatusCode).IsEqualTo(400);
         await Assert.That(result.ErrorMessage).IsNotNull();
     }
@@ -149,7 +149,7 @@ public class AdminHandlerTests
 
         ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, CancellationToken.None);
 
-        await Assert.That(result.IsSuccess).IsEqualTo(false);
+        await Assert.That(result.IsSuccess).IsFalse();
         await Assert.That(result.StatusCode).IsEqualTo(400);
     }
 
@@ -162,7 +162,7 @@ public class AdminHandlerTests
 
         ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, CancellationToken.None);
 
-        await Assert.That(result.IsSuccess).IsEqualTo(false);
+        await Assert.That(result.IsSuccess).IsFalse();
         await Assert.That(result.StatusCode).IsEqualTo(400);
     }
 
@@ -175,7 +175,7 @@ public class AdminHandlerTests
 
         ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, CancellationToken.None);
 
-        await Assert.That(result.IsSuccess).IsEqualTo(false);
+        await Assert.That(result.IsSuccess).IsFalse();
         await Assert.That(result.StatusCode).IsEqualTo(400);
     }
 
@@ -188,7 +188,7 @@ public class AdminHandlerTests
 
         ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, CancellationToken.None);
 
-        await Assert.That(result.IsSuccess).IsEqualTo(false);
+        await Assert.That(result.IsSuccess).IsFalse();
         await Assert.That(result.StatusCode).IsEqualTo(400);
     }
 
@@ -204,7 +204,7 @@ public class AdminHandlerTests
 
         ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, CancellationToken.None);
 
-        await Assert.That(result.IsSuccess).IsEqualTo(true);
+        await Assert.That(result.IsSuccess).IsTrue();
 
         // Verify the value was persisted to the database
         ServerConfigurationSettings? persisted = await dbFactory.Context.ServerConfigurationSettings
@@ -225,7 +225,7 @@ public class AdminHandlerTests
 
         ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, CancellationToken.None);
 
-        await Assert.That(result.IsSuccess).IsEqualTo(true);
+        await Assert.That(result.IsSuccess).IsTrue();
 
         // Verify the value was persisted to the database
         ServerConfigurationSettings? persisted = await dbFactory.Context.ServerConfigurationSettings
@@ -243,7 +243,7 @@ public class AdminHandlerTests
 
         ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, CancellationToken.None);
 
-        await Assert.That(result.IsSuccess).IsEqualTo(false);
+        await Assert.That(result.IsSuccess).IsFalse();
         await Assert.That(result.StatusCode).IsEqualTo(400);
     }
 
@@ -273,10 +273,10 @@ public class AdminHandlerTests
 
         ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, CancellationToken.None);
 
-        await Assert.That(result.IsSuccess).IsEqualTo(true);
+        await Assert.That(result.IsSuccess).IsTrue();
         await Assert.That(result.Data!.Count).IsEqualTo(2);
-        await Assert.That(result.Data!.Any(e => e.Key == (int)ServerConfigurationSettingKeys.AgentHeartbeatSeconds && e.Value == "120")).IsEqualTo(true);
-        await Assert.That(result.Data!.Any(e => e.Key == (int)ServerConfigurationSettingKeys.OnlineThresholdSeconds && e.Value == "300")).IsEqualTo(true);
+        await Assert.That(result.Data!.Any(e => e.Key == (int)ServerConfigurationSettingKeys.AgentHeartbeatSeconds && e.Value == "120")).IsTrue();
+        await Assert.That(result.Data!.Any(e => e.Key == (int)ServerConfigurationSettingKeys.OnlineThresholdSeconds && e.Value == "300")).IsTrue();
     }
 
     [Test]
@@ -332,7 +332,7 @@ public class AdminHandlerTests
 
         ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, CancellationToken.None);
 
-        await Assert.That(result.IsSuccess).IsEqualTo(false);
+        await Assert.That(result.IsSuccess).IsFalse();
         await Assert.That(result.StatusCode).IsEqualTo(400);
         await Assert.That(result.ErrorMessage).Contains("between 10 and 600");
     }
@@ -346,7 +346,7 @@ public class AdminHandlerTests
 
         ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, CancellationToken.None);
 
-        await Assert.That(result.IsSuccess).IsEqualTo(false);
+        await Assert.That(result.IsSuccess).IsFalse();
         await Assert.That(result.StatusCode).IsEqualTo(400);
         await Assert.That(result.ErrorMessage).Contains("between 10 and 600");
     }
@@ -363,7 +363,7 @@ public class AdminHandlerTests
 
         ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, CancellationToken.None);
 
-        await Assert.That(result.IsSuccess).IsEqualTo(true);
+        await Assert.That(result.IsSuccess).IsTrue();
     }
 
     [Test]
@@ -378,7 +378,7 @@ public class AdminHandlerTests
 
         ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, CancellationToken.None);
 
-        await Assert.That(result.IsSuccess).IsEqualTo(true);
+        await Assert.That(result.IsSuccess).IsTrue();
     }
 
     [Test]
@@ -390,7 +390,7 @@ public class AdminHandlerTests
 
         ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, CancellationToken.None);
 
-        await Assert.That(result.IsSuccess).IsEqualTo(false);
+        await Assert.That(result.IsSuccess).IsFalse();
         await Assert.That(result.StatusCode).IsEqualTo(400);
         await Assert.That(result.ErrorMessage).Contains("between 10 and 300");
     }
@@ -404,7 +404,7 @@ public class AdminHandlerTests
 
         ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, CancellationToken.None);
 
-        await Assert.That(result.IsSuccess).IsEqualTo(false);
+        await Assert.That(result.IsSuccess).IsFalse();
         await Assert.That(result.StatusCode).IsEqualTo(400);
         await Assert.That(result.ErrorMessage).Contains("between 5 and 120");
     }
@@ -427,7 +427,7 @@ public class AdminHandlerTests
 
         ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, CancellationToken.None);
 
-        await Assert.That(result.IsSuccess).IsEqualTo(true);
+        await Assert.That(result.IsSuccess).IsTrue();
         await Assert.That(result.Data!.Count).IsEqualTo(4);
     }
 
@@ -443,7 +443,7 @@ public class AdminHandlerTests
 
         ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, CancellationToken.None);
 
-        await Assert.That(result.IsSuccess).IsEqualTo(true);
+        await Assert.That(result.IsSuccess).IsTrue();
     }
 
     // ========== ServiceStatus metadata tests ==========
@@ -453,7 +453,7 @@ public class AdminHandlerTests
     {
         bool hasKey = AdminHandler.SettingDescriptions.ContainsKey(ServerConfigurationSettingKeys.ServiceStatusSeconds);
 
-        await Assert.That(hasKey).IsEqualTo(true);
+        await Assert.That(hasKey).IsTrue();
         await Assert.That(AdminHandler.SettingDescriptions[ServerConfigurationSettingKeys.ServiceStatusSeconds]).IsNotEmpty();
     }
 
@@ -462,7 +462,7 @@ public class AdminHandlerTests
     {
         bool hasKey = AdminHandler.SettingBounds.ContainsKey(ServerConfigurationSettingKeys.ServiceStatusSeconds);
 
-        await Assert.That(hasKey).IsEqualTo(true);
+        await Assert.That(hasKey).IsTrue();
 
         (int min, int max) = AdminHandler.SettingBounds[ServerConfigurationSettingKeys.ServiceStatusSeconds];
         await Assert.That(min).IsEqualTo(60);
@@ -478,7 +478,7 @@ public class AdminHandlerTests
 
         ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, CancellationToken.None);
 
-        await Assert.That(result.IsSuccess).IsEqualTo(false);
+        await Assert.That(result.IsSuccess).IsFalse();
         await Assert.That(result.StatusCode).IsEqualTo(400);
         await Assert.That(result.ErrorMessage).Contains("between 60 and 86400");
     }
@@ -492,7 +492,7 @@ public class AdminHandlerTests
 
         ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, CancellationToken.None);
 
-        await Assert.That(result.IsSuccess).IsEqualTo(false);
+        await Assert.That(result.IsSuccess).IsFalse();
         await Assert.That(result.StatusCode).IsEqualTo(400);
         await Assert.That(result.ErrorMessage).Contains("between 60 and 86400");
     }
@@ -509,7 +509,7 @@ public class AdminHandlerTests
 
         ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, CancellationToken.None);
 
-        await Assert.That(result.IsSuccess).IsEqualTo(true);
+        await Assert.That(result.IsSuccess).IsTrue();
     }
 
     [Test]
@@ -524,7 +524,7 @@ public class AdminHandlerTests
 
         ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, CancellationToken.None);
 
-        await Assert.That(result.IsSuccess).IsEqualTo(true);
+        await Assert.That(result.IsSuccess).IsTrue();
     }
 
     [Test]
@@ -539,7 +539,7 @@ public class AdminHandlerTests
 
         ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, CancellationToken.None);
 
-        await Assert.That(result.IsSuccess).IsEqualTo(true);
+        await Assert.That(result.IsSuccess).IsTrue();
         await Assert.That(result.Data!.First(e => e.Key == 14).Value).IsEqualTo("3600");
     }
 
@@ -558,7 +558,7 @@ public class AdminHandlerTests
 
         ServiceResult<List<SettingEntry>> result = await handler.GetSettingsAsync(CancellationToken.None);
 
-        await Assert.That(result.IsSuccess).IsEqualTo(true);
+        await Assert.That(result.IsSuccess).IsTrue();
         SettingEntry entry = result.Data!.First(e => e.Key == 14);
         await Assert.That(entry.Name).IsEqualTo("ServiceStatusSeconds");
         await Assert.That(entry.Description).IsNotEmpty();
@@ -576,7 +576,7 @@ public class AdminHandlerTests
 
         ServiceResult<List<UserAccountDto>> result = await handler.GetAllUsersAsync(CancellationToken.None);
 
-        await Assert.That(result.IsSuccess).IsEqualTo(true);
+        await Assert.That(result.IsSuccess).IsTrue();
         await Assert.That(result.Data!.Count).IsEqualTo(0);
     }
 
@@ -593,7 +593,7 @@ public class AdminHandlerTests
 
         ServiceResult<List<UserAccountDto>> result = await handler.GetAllUsersAsync(CancellationToken.None);
 
-        await Assert.That(result.IsSuccess).IsEqualTo(true);
+        await Assert.That(result.IsSuccess).IsTrue();
         await Assert.That(result.Data!.Count).IsEqualTo(2);
     }
 
@@ -617,7 +617,7 @@ public class AdminHandlerTests
 
         ServiceResult<List<UserAccountDto>> result = await handler.GetAllUsersAsync(CancellationToken.None);
 
-        await Assert.That(result.IsSuccess).IsEqualTo(true);
+        await Assert.That(result.IsSuccess).IsTrue();
         await Assert.That(result.Data!.Count).IsEqualTo(1);
         await Assert.That(result.Data![0].Tenants.Count).IsEqualTo(1);
         await Assert.That(result.Data![0].Tenants[0].TenantId).IsEqualTo(tenant.Id);
@@ -650,7 +650,7 @@ public class AdminHandlerTests
 
         ServiceResult<List<UserAccountDto>> result = await handler.GetAllUsersAsync(CancellationToken.None);
 
-        await Assert.That(result.IsSuccess).IsEqualTo(true);
+        await Assert.That(result.IsSuccess).IsTrue();
         await Assert.That(result.Data![0].Tenants.Count).IsEqualTo(1);
         await Assert.That(result.Data![0].Tenants[0].Role).IsEqualTo(((int)UserAccountRoles.Viewer).ToString());
     }

@@ -66,7 +66,7 @@ public class BillingWebhookHandlerTests
             .FirstOrDefaultAsync(s => s.TenantId == 1);
         await Assert.That(updated).IsNotNull();
         // SQLite stores DateTimeOffset as TEXT, compare by rough equality
-        await Assert.That(updated!.CurrentPeriodEnd.HasValue).IsEqualTo(true);
+        await Assert.That(updated!.CurrentPeriodEnd.HasValue).IsTrue();
         TimeSpan difference = (updated.CurrentPeriodEnd!.Value - newPeriodEnd).Duration();
         await Assert.That(difference.TotalSeconds).IsLessThan(2);
     }
@@ -89,7 +89,7 @@ public class BillingWebhookHandlerTests
         await Assert.That(updated).IsNotNull();
         await Assert.That(updated!.Status).IsEqualTo(SubscriptionStatus.Canceled);
         await Assert.That(updated.Tier).IsEqualTo(SubscriptionTier.Pro);
-        await Assert.That(updated.CancelAtPeriodEnd).IsEqualTo(false);
+        await Assert.That(updated.CancelAtPeriodEnd).IsFalse();
         await Assert.That(updated.PendingAction).IsEqualTo(PendingSubscriptionAction.None);
     }
 
@@ -111,7 +111,7 @@ public class BillingWebhookHandlerTests
             .FirstOrDefaultAsync(s => s.TenantId == 1);
         await Assert.That(updated).IsNotNull();
         await Assert.That(updated!.Status).IsEqualTo(SubscriptionStatus.Canceled);
-        await Assert.That(updated.CancelAtPeriodEnd).IsEqualTo(false);
+        await Assert.That(updated.CancelAtPeriodEnd).IsFalse();
         await Assert.That(updated.PendingAction).IsEqualTo(PendingSubscriptionAction.None);
     }
 
@@ -263,9 +263,9 @@ public class BillingWebhookHandlerTests
             .Where(r => r.TenantId == 1)
             .ToListAsync();
         await Assert.That(rules.Count).IsEqualTo(3);
-        await Assert.That(rules.All(r => r.IsCustom == false)).IsEqualTo(true);
-        await Assert.That(rules.All(r => r.IsEnabled == true)).IsEqualTo(true);
-        await Assert.That(rules.All(r => r.CreatedByUserId == 1)).IsEqualTo(true);
+        await Assert.That(rules.All(r => r.IsCustom == false)).IsTrue();
+        await Assert.That(rules.All(r => r.IsEnabled == true)).IsTrue();
+        await Assert.That(rules.All(r => r.CreatedByUserId == 1)).IsTrue();
     }
 
     [Test]

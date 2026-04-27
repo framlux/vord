@@ -61,7 +61,7 @@ public class MachineHandlerTests
 
         ServiceResult<ApiResponse<object>> result = await handler.DeleteAsync(999, 1, 1, CancellationToken.None);
 
-        await Assert.That(result.IsNotFound).IsEqualTo(true);
+        await Assert.That(result.IsNotFound).IsTrue();
     }
 
     [Test]
@@ -73,7 +73,7 @@ public class MachineHandlerTests
 
         ServiceResult<ApiResponse<object>> result = await handler.DeleteAsync(machineId, 1, 1, CancellationToken.None);
 
-        await Assert.That(result.IsNotFound).IsEqualTo(true);
+        await Assert.That(result.IsNotFound).IsTrue();
     }
 
     [Test]
@@ -85,13 +85,13 @@ public class MachineHandlerTests
 
         ServiceResult<ApiResponse<object>> result = await handler.DeleteAsync(machineId, 1, 5, CancellationToken.None);
 
-        await Assert.That(result.IsSuccess).IsEqualTo(true);
+        await Assert.That(result.IsSuccess).IsTrue();
 
         Machine? deleted = await dbFactory.Context.Machines.FirstOrDefaultAsync(m => m.Id == machineId);
         await Assert.That(deleted).IsNotNull();
-        await Assert.That(deleted!.IsDeleted).IsEqualTo(true);
+        await Assert.That(deleted!.IsDeleted).IsTrue();
         await Assert.That(deleted.DeletedByUserId).IsEqualTo(5);
-        await Assert.That(deleted.DeletedOn.HasValue).IsEqualTo(true);
+        await Assert.That(deleted.DeletedOn.HasValue).IsTrue();
     }
 
     // ========== ListAsync tests ==========
@@ -104,13 +104,13 @@ public class MachineHandlerTests
 
         ServiceResult<PaginatedResponse<MachineDto>> result = await handler.ListAsync(1, 25, 1, null, null, null, null, "name", "asc", CancellationToken.None);
 
-        await Assert.That(result.IsSuccess).IsEqualTo(true);
+        await Assert.That(result.IsSuccess).IsTrue();
         await Assert.That(result.Data!.Items.Count).IsEqualTo(0);
         await Assert.That(result.Data!.TotalCount).IsEqualTo(0);
         await Assert.That(result.Data!.Page).IsEqualTo(1);
         await Assert.That(result.Data!.PageSize).IsEqualTo(25);
-        await Assert.That(result.Data!.HasNextPage).IsEqualTo(false);
-        await Assert.That(result.Data!.HasPreviousPage).IsEqualTo(false);
+        await Assert.That(result.Data!.HasNextPage).IsFalse();
+        await Assert.That(result.Data!.HasPreviousPage).IsFalse();
     }
 
     [Test]
@@ -126,7 +126,7 @@ public class MachineHandlerTests
         await Assert.That(result.Data!.TotalCount).IsEqualTo(1);
         await Assert.That(result.Data!.Items.Count).IsEqualTo(1);
         await Assert.That(result.Data!.Items[0].Name).IsEqualTo("active-host");
-        await Assert.That(result.Data!.Items[0].IsDeleted).IsEqualTo(false);
+        await Assert.That(result.Data!.Items[0].IsDeleted).IsFalse();
     }
 
     [Test]
@@ -146,8 +146,8 @@ public class MachineHandlerTests
         await Assert.That(result.Data!.Page).IsEqualTo(1);
         await Assert.That(result.Data!.PageSize).IsEqualTo(2);
         await Assert.That(result.Data!.TotalPages).IsEqualTo(3);
-        await Assert.That(result.Data!.HasNextPage).IsEqualTo(true);
-        await Assert.That(result.Data!.HasPreviousPage).IsEqualTo(false);
+        await Assert.That(result.Data!.HasNextPage).IsTrue();
+        await Assert.That(result.Data!.HasPreviousPage).IsFalse();
         // Verify first page returns first two items sorted by name ascending
         await Assert.That(result.Data!.Items[0].Name).IsEqualTo("machine-00");
         await Assert.That(result.Data!.Items[1].Name).IsEqualTo("machine-01");
@@ -170,8 +170,8 @@ public class MachineHandlerTests
         await Assert.That(result.Data!.Items.Count).IsEqualTo(1);
         await Assert.That(result.Data!.Page).IsEqualTo(3);
         await Assert.That(result.Data!.TotalPages).IsEqualTo(3);
-        await Assert.That(result.Data!.HasNextPage).IsEqualTo(false);
-        await Assert.That(result.Data!.HasPreviousPage).IsEqualTo(true);
+        await Assert.That(result.Data!.HasNextPage).IsFalse();
+        await Assert.That(result.Data!.HasPreviousPage).IsTrue();
         await Assert.That(result.Data!.Items[0].Name).IsEqualTo("machine-04");
     }
 
@@ -185,7 +185,7 @@ public class MachineHandlerTests
 
         ServiceResult<PaginatedResponse<MachineDto>> result = await handler.ListAsync(100, 25, 1, null, null, null, null, "name", "asc", CancellationToken.None);
 
-        await Assert.That(result.IsSuccess).IsEqualTo(true);
+        await Assert.That(result.IsSuccess).IsTrue();
         await Assert.That(result.Data!.TotalCount).IsEqualTo(2);
         await Assert.That(result.Data!.Items.Count).IsEqualTo(0);
         await Assert.That(result.Data!.Page).IsEqualTo(100);
@@ -202,7 +202,7 @@ public class MachineHandlerTests
 
         ServiceResult<PaginatedResponse<MachineDto>> result = await handler.ListAsync(1, 25, 1, "webserver", null, null, null, "name", "asc", CancellationToken.None);
 
-        await Assert.That(result.IsSuccess).IsEqualTo(true);
+        await Assert.That(result.IsSuccess).IsTrue();
         await Assert.That(result.Data!.Items.Count).IsEqualTo(1);
         await Assert.That(result.Data!.TotalCount).IsEqualTo(1);
         await Assert.That(result.Data!.Items[0].Name).IsEqualTo("webserver-prod");
@@ -218,7 +218,7 @@ public class MachineHandlerTests
 
         ServiceResult<PaginatedResponse<MachineDto>> result = await handler.ListAsync(1, 25, 1, "webserver", null, null, null, "name", "asc", CancellationToken.None);
 
-        await Assert.That(result.IsSuccess).IsEqualTo(true);
+        await Assert.That(result.IsSuccess).IsTrue();
         await Assert.That(result.Data!.Items.Count).IsEqualTo(1);
         await Assert.That(result.Data!.TotalCount).IsEqualTo(1);
         await Assert.That(result.Data!.Items[0].Name).IsEqualTo("WebServer-Prod");
@@ -234,7 +234,7 @@ public class MachineHandlerTests
 
         ServiceResult<PaginatedResponse<MachineDto>> result = await handler.ListAsync(1, 25, 1, "nonexistent", null, null, null, "name", "asc", CancellationToken.None);
 
-        await Assert.That(result.IsSuccess).IsEqualTo(true);
+        await Assert.That(result.IsSuccess).IsTrue();
         await Assert.That(result.Data!.Items.Count).IsEqualTo(0);
         await Assert.That(result.Data!.TotalCount).IsEqualTo(0);
         await Assert.That(result.Data!.Page).IsEqualTo(1);
@@ -251,7 +251,7 @@ public class MachineHandlerTests
 
         ServiceResult<PaginatedResponse<MachineDto>> result = await handler.ListAsync(1, 25, 1, "_01", null, null, null, "name", "asc", CancellationToken.None);
 
-        await Assert.That(result.IsSuccess).IsEqualTo(true);
+        await Assert.That(result.IsSuccess).IsTrue();
         await Assert.That(result.Data!.Items.Count).IsEqualTo(1);
         await Assert.That(result.Data!.TotalCount).IsEqualTo(1);
         await Assert.That(result.Data!.Items[0].Name).IsEqualTo("server_01");
@@ -268,11 +268,11 @@ public class MachineHandlerTests
 
         ServiceResult<PaginatedResponse<MachineDto>> result = await handler.ListAsync(1, 25, 1, "web", null, null, null, "name", "asc", CancellationToken.None);
 
-        await Assert.That(result.IsSuccess).IsEqualTo(true);
+        await Assert.That(result.IsSuccess).IsTrue();
         await Assert.That(result.Data!.Items.Count).IsEqualTo(2);
         await Assert.That(result.Data!.TotalCount).IsEqualTo(2);
         // Verify all returned items contain the search term
-        await Assert.That(result.Data!.Items.All(m => m.Name.Contains("web", StringComparison.OrdinalIgnoreCase))).IsEqualTo(true);
+        await Assert.That(result.Data!.Items.All(m => m.Name.Contains("web", StringComparison.OrdinalIgnoreCase))).IsTrue();
         // Verify sorted order
         await Assert.That(result.Data!.Items[0].Name).IsEqualTo("web-prod-01");
         await Assert.That(result.Data!.Items[1].Name).IsEqualTo("web-prod-02");
@@ -383,10 +383,10 @@ public class MachineHandlerTests
 
         ServiceResult<PaginatedResponse<MachineDto>> result = await handler.ListAsync(1, 25, 1, null, null, null, "online", "name", "asc", CancellationToken.None);
 
-        await Assert.That(result.IsSuccess).IsEqualTo(true);
+        await Assert.That(result.IsSuccess).IsTrue();
         await Assert.That(result.Data!.Items.Count).IsEqualTo(1);
         await Assert.That(result.Data!.Items[0].Name).IsEqualTo("online-host");
-        await Assert.That(result.Data!.Items[0].IsOnline).IsEqualTo(true);
+        await Assert.That(result.Data!.Items[0].IsOnline).IsTrue();
         await Assert.That(result.Data!.TotalCount).IsEqualTo(1);
     }
 
@@ -404,10 +404,10 @@ public class MachineHandlerTests
 
         ServiceResult<PaginatedResponse<MachineDto>> result = await handler.ListAsync(1, 25, 1, null, null, null, "offline", "name", "asc", CancellationToken.None);
 
-        await Assert.That(result.IsSuccess).IsEqualTo(true);
+        await Assert.That(result.IsSuccess).IsTrue();
         await Assert.That(result.Data!.Items.Count).IsEqualTo(1);
         await Assert.That(result.Data!.Items[0].Name).IsEqualTo("offline-host");
-        await Assert.That(result.Data!.Items[0].IsOnline).IsEqualTo(false);
+        await Assert.That(result.Data!.Items[0].IsOnline).IsFalse();
         await Assert.That(result.Data!.TotalCount).IsEqualTo(1);
     }
 
@@ -426,8 +426,8 @@ public class MachineHandlerTests
         await Assert.That(dto.Name).IsEqualTo("details-host");
         await Assert.That(dto.MachineType).IsEqualTo(MachineTypes.VirtualMachine);
         await Assert.That(dto.OperatingSystem).IsEqualTo(OperatingSystems.Fedora);
-        await Assert.That(dto.IsDeleted).IsEqualTo(false);
-        await Assert.That(dto.IsOnline).IsEqualTo(false);
+        await Assert.That(dto.IsDeleted).IsFalse();
+        await Assert.That(dto.IsOnline).IsFalse();
     }
 
     [Test]
@@ -441,7 +441,7 @@ public class MachineHandlerTests
 
         ServiceResult<PaginatedResponse<MachineDto>> result = await handler.ListAsync(1, 25, 1, "web", "Ubuntu", null, null, "name", "asc", CancellationToken.None);
 
-        await Assert.That(result.IsSuccess).IsEqualTo(true);
+        await Assert.That(result.IsSuccess).IsTrue();
         await Assert.That(result.Data!.Items.Count).IsEqualTo(1);
         await Assert.That(result.Data!.TotalCount).IsEqualTo(1);
         await Assert.That(result.Data!.Items[0].Name).IsEqualTo("web-ubuntu");
@@ -459,7 +459,7 @@ public class MachineHandlerTests
 
         ServiceResult<PaginatedResponse<MachineDto>> result = await handler.ListAsync(1, 25, 1, null, null, "VirtualMachine", null, "name", "asc", CancellationToken.None);
 
-        await Assert.That(result.IsSuccess).IsEqualTo(true);
+        await Assert.That(result.IsSuccess).IsTrue();
         await Assert.That(result.Data!.Items.Count).IsEqualTo(1);
         await Assert.That(result.Data!.TotalCount).IsEqualTo(1);
         await Assert.That(result.Data!.Items[0].Name).IsEqualTo("vm-host");
@@ -476,7 +476,7 @@ public class MachineHandlerTests
 
         ServiceResult<PaginatedResponse<MachineDto>> result = await handler.ListAsync(1, 25, 1, null, "Fedora", null, null, "name", "asc", CancellationToken.None);
 
-        await Assert.That(result.IsSuccess).IsEqualTo(true);
+        await Assert.That(result.IsSuccess).IsTrue();
         await Assert.That(result.Data!.Items.Count).IsEqualTo(1);
         await Assert.That(result.Data!.TotalCount).IsEqualTo(1);
         await Assert.That(result.Data!.Items[0].Name).IsEqualTo("fedora-host");
@@ -494,7 +494,7 @@ public class MachineHandlerTests
 
         ServiceResult<PaginatedResponse<MachineDto>> result = await handler.ListAsync(1, 25, 1, "web", null, "VirtualMachine", null, "name", "asc", CancellationToken.None);
 
-        await Assert.That(result.IsSuccess).IsEqualTo(true);
+        await Assert.That(result.IsSuccess).IsTrue();
         await Assert.That(result.Data!.Items.Count).IsEqualTo(1);
         await Assert.That(result.Data!.TotalCount).IsEqualTo(1);
         await Assert.That(result.Data!.Items[0].Name).IsEqualTo("web-vm");
@@ -511,7 +511,7 @@ public class MachineHandlerTests
         // An invalid OS filter string that does not parse to the enum should be ignored
         ServiceResult<PaginatedResponse<MachineDto>> result = await handler.ListAsync(1, 25, 1, null, "InvalidOS", null, null, "name", "asc", CancellationToken.None);
 
-        await Assert.That(result.IsSuccess).IsEqualTo(true);
+        await Assert.That(result.IsSuccess).IsTrue();
         await Assert.That(result.Data!.Items.Count).IsEqualTo(2);
         await Assert.That(result.Data!.TotalCount).IsEqualTo(2);
     }
@@ -527,7 +527,7 @@ public class MachineHandlerTests
         // An invalid type filter string that does not parse to the enum should be ignored
         ServiceResult<PaginatedResponse<MachineDto>> result = await handler.ListAsync(1, 25, 1, null, null, "InvalidType", null, "name", "asc", CancellationToken.None);
 
-        await Assert.That(result.IsSuccess).IsEqualTo(true);
+        await Assert.That(result.IsSuccess).IsTrue();
         await Assert.That(result.Data!.Items.Count).IsEqualTo(2);
         await Assert.That(result.Data!.TotalCount).IsEqualTo(2);
     }
@@ -544,12 +544,12 @@ public class MachineHandlerTests
         // Attempt to delete tenant 2's machine using tenant 1's context
         ServiceResult<ApiResponse<object>> result = await handler.DeleteAsync(machineId, 1, 1, CancellationToken.None);
 
-        await Assert.That(result.IsNotFound).IsEqualTo(true);
+        await Assert.That(result.IsNotFound).IsTrue();
 
         // Verify machine was not deleted
         Machine? machine = await dbFactory.Context.Machines.FirstOrDefaultAsync(m => m.Id == machineId);
         await Assert.That(machine).IsNotNull();
-        await Assert.That(machine!.IsDeleted).IsEqualTo(false);
+        await Assert.That(machine!.IsDeleted).IsFalse();
     }
 
     [Test]
@@ -561,7 +561,7 @@ public class MachineHandlerTests
 
         ServiceResult<ApiResponse<object>> result = await handler.DeleteAsync(machineId, null, 1, CancellationToken.None);
 
-        await Assert.That(result.IsNotFound).IsEqualTo(true);
+        await Assert.That(result.IsNotFound).IsTrue();
     }
 
     [Test]
@@ -574,7 +574,7 @@ public class MachineHandlerTests
         // List machines for tenant 1 should not see tenant 2's machines
         ServiceResult<PaginatedResponse<MachineDto>> result = await handler.ListAsync(1, 25, 1, null, null, null, null, "name", "asc", CancellationToken.None);
 
-        await Assert.That(result.IsSuccess).IsEqualTo(true);
+        await Assert.That(result.IsSuccess).IsTrue();
         await Assert.That(result.Data!.TotalCount).IsEqualTo(0);
         await Assert.That(result.Data!.Items.Count).IsEqualTo(0);
     }
@@ -590,7 +590,7 @@ public class MachineHandlerTests
 
         ServiceResult<PaginatedResponse<MachineDto>> result = await handler.ListAsync(1, 25, 1, null, null, null, null, "name", "asc", CancellationToken.None);
 
-        await Assert.That(result.IsSuccess).IsEqualTo(true);
+        await Assert.That(result.IsSuccess).IsTrue();
         await Assert.That(result.Data!.TotalCount).IsEqualTo(2);
         await Assert.That(result.Data!.Items.Count).IsEqualTo(2);
         // Verify both returned items belong to tenant 1 by checking expected names
@@ -607,7 +607,7 @@ public class MachineHandlerTests
 
         ServiceResult<PaginatedResponse<MachineDto>> result = await handler.ListAsync(1, 25, null, null, null, null, null, "name", "asc", CancellationToken.None);
 
-        await Assert.That(result.IsSuccess).IsEqualTo(true);
+        await Assert.That(result.IsSuccess).IsTrue();
         await Assert.That(result.Data!.TotalCount).IsEqualTo(0);
         await Assert.That(result.Data!.Items.Count).IsEqualTo(0);
         await Assert.That(result.Data!.Page).IsEqualTo(1);

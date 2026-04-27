@@ -39,7 +39,7 @@ public sealed class TelemetryDeduplicationServiceTests
 
         bool result = await service.TryMarkSeenAsync("new-event-1");
 
-        await Assert.That(result).IsEqualTo(true);
+        await Assert.That(result).IsTrue();
     }
 
     [Test]
@@ -60,7 +60,7 @@ public sealed class TelemetryDeduplicationServiceTests
 
         bool result = await service.TryMarkSeenAsync("dup-event-1");
 
-        await Assert.That(result).IsEqualTo(false);
+        await Assert.That(result).IsFalse();
     }
 
     [Test]
@@ -144,8 +144,8 @@ public sealed class TelemetryDeduplicationServiceTests
         Dictionary<string, bool> result = await service.TryMarkSeenBatchAsync(["event-a", "event-b"]);
 
         await Assert.That(result.Count).IsEqualTo(2);
-        await Assert.That(result["event-a"]).IsEqualTo(true);
-        await Assert.That(result["event-b"]).IsEqualTo(false);
+        await Assert.That(result["event-a"]).IsTrue();
+        await Assert.That(result["event-b"]).IsFalse();
     }
 
     [Test]
@@ -183,7 +183,7 @@ public sealed class TelemetryDeduplicationServiceTests
         bool result = await service.TryMarkSeenAsync("");
 
         // Empty string event ID is treated as a valid key.
-        await Assert.That(result).IsEqualTo(true);
+        await Assert.That(result).IsTrue();
         await db.Received(1).StringSetAsync(
             Arg.Is<RedisKey>(k => k.ToString() == "telemetry:dedup:"),
             Arg.Any<RedisValue>(),

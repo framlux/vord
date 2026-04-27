@@ -38,7 +38,7 @@ public sealed class FleetAdminServiceTests
 
         // When billing is disabled the gRPC service is not mapped, so the request falls through
         // to the default auth middleware which returns a non-success status
-        await Assert.That(response.IsSuccessStatusCode).IsEqualTo(false);
+        await Assert.That(response.IsSuccessStatusCode).IsFalse();
     }
 
     // ========== Authentication Tests ==========
@@ -526,7 +526,7 @@ public sealed class FleetAdminServiceTests
             },
             Headers("test-key"));
 
-        await Assert.That(response.Success).IsEqualTo(true);
+        await Assert.That(response.Success).IsTrue();
 
         ServerConfigurationSettings? updated = await db.ServerConfigurationSettings
             .Where(s => s.Key == ServerConfigurationSettingKeys.AgentHeartbeatSeconds)
@@ -557,7 +557,7 @@ public sealed class FleetAdminServiceTests
             },
             Headers("test-key"));
 
-        await Assert.That(response.Success).IsEqualTo(true);
+        await Assert.That(response.Success).IsTrue();
 
         ServerConfigurationSettings? updated = await db.ServerConfigurationSettings
             .Where(s => s.Key == ServerConfigurationSettingKeys.ServiceStatusSeconds)
@@ -586,7 +586,7 @@ public sealed class FleetAdminServiceTests
             Headers("test-key"));
 
         // The FleetAdmin gRPC endpoint returns success=false when the row is not found
-        await Assert.That(response.Success).IsEqualTo(false);
+        await Assert.That(response.Success).IsFalse();
     }
 
     [Test]
@@ -639,7 +639,7 @@ public sealed class FleetAdminServiceTests
             },
             Headers("test-key"));
 
-        await Assert.That(response.Success).IsEqualTo(true);
+        await Assert.That(response.Success).IsTrue();
 
         TenantSubscription? updated = await db.TenantSubscriptions
             .Where(s => s.TenantId == tenantId)
@@ -743,7 +743,7 @@ public sealed class FleetAdminServiceTests
             },
             Headers("test-key"));
 
-        await Assert.That(response.Success).IsEqualTo(true);
+        await Assert.That(response.Success).IsTrue();
 
         TenantOidcConfiguration? config = await db.TenantOidcConfigurations
             .Where(c => c.TenantId == tenantId)
@@ -753,7 +753,7 @@ public sealed class FleetAdminServiceTests
         await Assert.That(config!.Authority).IsEqualTo("https://idp.example.com");
         await Assert.That(config.ClientId).IsEqualTo("client-123");
         await Assert.That(config.EmailDomain).IsEqualTo("example.com");
-        await Assert.That(config.IsEnabled).IsEqualTo(true);
+        await Assert.That(config.IsEnabled).IsTrue();
     }
 
     [Test]
@@ -795,7 +795,7 @@ public sealed class FleetAdminServiceTests
             },
             Headers("test-key"));
 
-        await Assert.That(response.Success).IsEqualTo(true);
+        await Assert.That(response.Success).IsTrue();
 
         TenantOidcConfiguration? config = await db.TenantOidcConfigurations
             .Where(c => c.TenantId == tenantId)
@@ -804,7 +804,7 @@ public sealed class FleetAdminServiceTests
         await Assert.That(config).IsNotNull();
         await Assert.That(config!.Authority).IsEqualTo("https://new-idp.example.com");
         await Assert.That(config.ClientId).IsEqualTo("new-client");
-        await Assert.That(config.IsEnabled).IsEqualTo(true);
+        await Assert.That(config.IsEnabled).IsTrue();
     }
 
     [Test]

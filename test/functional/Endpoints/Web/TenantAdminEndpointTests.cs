@@ -46,7 +46,7 @@ public sealed class TenantAdminEndpointTests
         // Verify hash in DB differs from plaintext
         RegistrationToken? dbToken = await db.RegistrationTokens.FirstOrDefaultAsync();
         await Assert.That(dbToken).IsNotNull();
-        await Assert.That(body.Contains(dbToken!.TokenHash)).IsEqualTo(false);
+        await Assert.That(body.Contains(dbToken!.TokenHash)).IsFalse();
     }
 
     [Test]
@@ -79,8 +79,8 @@ public sealed class TenantAdminEndpointTests
         await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
 
         RegistrationToken? revoked = await db.RegistrationTokens.FirstOrDefaultAsync(t => t.Id == token.Id);
-        await Assert.That(revoked!.IsRevoked).IsEqualTo(true);
-        await Assert.That(revoked.RevokedAt.HasValue).IsEqualTo(true);
+        await Assert.That(revoked!.IsRevoked).IsTrue();
+        await Assert.That(revoked.RevokedAt.HasValue).IsTrue();
     }
 
     [Test]

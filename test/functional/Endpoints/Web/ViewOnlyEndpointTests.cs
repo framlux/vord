@@ -78,7 +78,7 @@ public sealed class ViewOnlyEndpointTests
         string body = await response.Content.ReadAsStringAsync();
         await Assert.That(body).Contains("\"totalCount\":1");
         await Assert.That(body).Contains("active-host");
-        await Assert.That(body.Contains("deleted-host")).IsEqualTo(false);
+        await Assert.That(body.Contains("deleted-host")).IsFalse();
     }
 
     [Test]
@@ -185,7 +185,7 @@ public sealed class ViewOnlyEndpointTests
         await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.NotFound);
 
         string body = await response.Content.ReadAsStringAsync();
-        await Assert.That(body.Contains("\"success\":true")).IsEqualTo(false);
+        await Assert.That(body.Contains("\"success\":true")).IsFalse();
     }
 
     private static async Task<int> SeedTenantWithSubscription(

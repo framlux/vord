@@ -81,7 +81,7 @@ public class MachineHandlerUpdateTests
         ServiceResult<ApiResponse<MachineDto>> result = await handler.UpdateAsync(
             machineId, 1, 1, "updated-name", "new description", "new location", CancellationToken.None);
 
-        await Assert.That(result.IsSuccess).IsEqualTo(true);
+        await Assert.That(result.IsSuccess).IsTrue();
         await Assert.That(result.StatusCode).IsEqualTo(200);
         await Assert.That(result.Data).IsNotNull();
 
@@ -104,7 +104,7 @@ public class MachineHandlerUpdateTests
         ServiceResult<ApiResponse<MachineDto>> result = await handler.UpdateAsync(
             machineId, 1, 1, "synced-name", null, null, CancellationToken.None);
 
-        await Assert.That(result.IsSuccess).IsEqualTo(true);
+        await Assert.That(result.IsSuccess).IsTrue();
 
         MachineStateSummary? summary = await dbFactory.Context.MachineStateSummaries
             .FirstOrDefaultAsync(s => s.MachineId == machineId);
@@ -124,7 +124,7 @@ public class MachineHandlerUpdateTests
         ServiceResult<ApiResponse<MachineDto>> result = await handler.UpdateAsync(
             machineId, null, 1, "some-name", null, null, CancellationToken.None);
 
-        await Assert.That(result.IsNotFound).IsEqualTo(true);
+        await Assert.That(result.IsNotFound).IsTrue();
         await Assert.That(result.StatusCode).IsEqualTo(404);
     }
 
@@ -140,7 +140,7 @@ public class MachineHandlerUpdateTests
 
         await Assert.That(result.StatusCode).IsEqualTo(400);
         await Assert.That(result.ErrorMessage).IsNotNull();
-        await Assert.That(string.IsNullOrEmpty(result.ErrorMessage)).IsEqualTo(false);
+        await Assert.That(string.IsNullOrEmpty(result.ErrorMessage)).IsFalse();
     }
 
     [Test]
@@ -155,7 +155,7 @@ public class MachineHandlerUpdateTests
 
         await Assert.That(result.StatusCode).IsEqualTo(400);
         await Assert.That(result.ErrorMessage).IsNotNull();
-        await Assert.That(string.IsNullOrEmpty(result.ErrorMessage)).IsEqualTo(false);
+        await Assert.That(string.IsNullOrEmpty(result.ErrorMessage)).IsFalse();
     }
 
     [Test]
@@ -171,7 +171,7 @@ public class MachineHandlerUpdateTests
 
         await Assert.That(result.StatusCode).IsEqualTo(400);
         await Assert.That(result.ErrorMessage).IsNotNull();
-        await Assert.That(string.IsNullOrEmpty(result.ErrorMessage)).IsEqualTo(false);
+        await Assert.That(string.IsNullOrEmpty(result.ErrorMessage)).IsFalse();
     }
 
     [Test]
@@ -187,7 +187,7 @@ public class MachineHandlerUpdateTests
 
         await Assert.That(result.StatusCode).IsEqualTo(400);
         await Assert.That(result.ErrorMessage).IsNotNull();
-        await Assert.That(string.IsNullOrEmpty(result.ErrorMessage)).IsEqualTo(false);
+        await Assert.That(string.IsNullOrEmpty(result.ErrorMessage)).IsFalse();
     }
 
     [Test]
@@ -199,7 +199,7 @@ public class MachineHandlerUpdateTests
         ServiceResult<ApiResponse<MachineDto>> result = await handler.UpdateAsync(
             999, 1, 1, "some-name", null, null, CancellationToken.None);
 
-        await Assert.That(result.IsNotFound).IsEqualTo(true);
+        await Assert.That(result.IsNotFound).IsTrue();
         await Assert.That(result.StatusCode).IsEqualTo(404);
     }
 
@@ -213,7 +213,7 @@ public class MachineHandlerUpdateTests
         ServiceResult<ApiResponse<MachineDto>> result = await handler.UpdateAsync(
             machineId, 1, 1, "some-name", null, null, CancellationToken.None);
 
-        await Assert.That(result.IsNotFound).IsEqualTo(true);
+        await Assert.That(result.IsNotFound).IsTrue();
         await Assert.That(result.StatusCode).IsEqualTo(404);
     }
 
@@ -236,7 +236,7 @@ public class MachineHandlerUpdateTests
         ServiceResult<ApiResponse<MachineDto>> result = await handler.UpdateAsync(
             machineId, 1, 1, "desc-machine", null, null, CancellationToken.None);
 
-        await Assert.That(result.IsSuccess).IsEqualTo(true);
+        await Assert.That(result.IsSuccess).IsTrue();
 
         Machine? updated = await dbFactory.Context.Machines
             .FirstOrDefaultAsync(m => m.Id == machineId);
@@ -261,7 +261,7 @@ public class MachineHandlerUpdateTests
         ServiceResult<ApiResponse<MachineDto>> result = await handler.UpdateAsync(
             machineId, 1, 1, "loc-machine", null, null, CancellationToken.None);
 
-        await Assert.That(result.IsSuccess).IsEqualTo(true);
+        await Assert.That(result.IsSuccess).IsTrue();
 
         Machine? updated = await dbFactory.Context.Machines
             .FirstOrDefaultAsync(m => m.Id == machineId);
@@ -279,7 +279,7 @@ public class MachineHandlerUpdateTests
         ServiceResult<ApiResponse<MachineDto>> result = await handler.UpdateAsync(
             machineId, 1, 1, " hello ", null, null, CancellationToken.None);
 
-        await Assert.That(result.IsSuccess).IsEqualTo(true);
+        await Assert.That(result.IsSuccess).IsTrue();
         await Assert.That(result.Data).IsNotNull();
         await Assert.That(result.Data!.Data).IsNotNull();
         await Assert.That(result.Data!.Data!.Name).IsEqualTo("hello");

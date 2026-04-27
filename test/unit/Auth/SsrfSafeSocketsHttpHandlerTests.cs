@@ -22,7 +22,7 @@ public class SsrfSafeSocketsHttpHandlerTests
     {
         bool result = SsrfSafeSocketsHttpHandler.IsPrivateOrReservedIp(IPAddress.Parse("127.0.0.1"));
 
-        await Assert.That(result).IsEqualTo(true);
+        await Assert.That(result).IsTrue();
     }
 
     [Test]
@@ -30,7 +30,7 @@ public class SsrfSafeSocketsHttpHandlerTests
     {
         bool result = SsrfSafeSocketsHttpHandler.IsPrivateOrReservedIp(IPAddress.Parse("127.0.0.2"));
 
-        await Assert.That(result).IsEqualTo(true);
+        await Assert.That(result).IsTrue();
     }
 
     [Test]
@@ -38,7 +38,7 @@ public class SsrfSafeSocketsHttpHandlerTests
     {
         bool result = SsrfSafeSocketsHttpHandler.IsPrivateOrReservedIp(IPAddress.Loopback);
 
-        await Assert.That(result).IsEqualTo(true);
+        await Assert.That(result).IsTrue();
     }
 
     [Test]
@@ -46,7 +46,7 @@ public class SsrfSafeSocketsHttpHandlerTests
     {
         bool result = SsrfSafeSocketsHttpHandler.IsPrivateOrReservedIp(IPAddress.IPv6Loopback);
 
-        await Assert.That(result).IsEqualTo(true);
+        await Assert.That(result).IsTrue();
     }
 
     // --- Wildcard/any addresses must be blocked ---
@@ -56,7 +56,7 @@ public class SsrfSafeSocketsHttpHandlerTests
     {
         bool result = SsrfSafeSocketsHttpHandler.IsPrivateOrReservedIp(IPAddress.Any);
 
-        await Assert.That(result).IsEqualTo(true);
+        await Assert.That(result).IsTrue();
     }
 
     [Test]
@@ -64,7 +64,7 @@ public class SsrfSafeSocketsHttpHandlerTests
     {
         bool result = SsrfSafeSocketsHttpHandler.IsPrivateOrReservedIp(IPAddress.IPv6Any);
 
-        await Assert.That(result).IsEqualTo(true);
+        await Assert.That(result).IsTrue();
     }
 
     // --- RFC 1918 private ranges must be blocked ---
@@ -74,7 +74,7 @@ public class SsrfSafeSocketsHttpHandlerTests
     {
         bool result = SsrfSafeSocketsHttpHandler.IsPrivateOrReservedIp(IPAddress.Parse("10.0.0.1"));
 
-        await Assert.That(result).IsEqualTo(true);
+        await Assert.That(result).IsTrue();
     }
 
     [Test]
@@ -82,7 +82,7 @@ public class SsrfSafeSocketsHttpHandlerTests
     {
         bool result = SsrfSafeSocketsHttpHandler.IsPrivateOrReservedIp(IPAddress.Parse("10.255.255.255"));
 
-        await Assert.That(result).IsEqualTo(true);
+        await Assert.That(result).IsTrue();
     }
 
     [Test]
@@ -90,7 +90,7 @@ public class SsrfSafeSocketsHttpHandlerTests
     {
         bool result = SsrfSafeSocketsHttpHandler.IsPrivateOrReservedIp(IPAddress.Parse("172.16.0.1"));
 
-        await Assert.That(result).IsEqualTo(true);
+        await Assert.That(result).IsTrue();
     }
 
     [Test]
@@ -98,7 +98,7 @@ public class SsrfSafeSocketsHttpHandlerTests
     {
         bool result = SsrfSafeSocketsHttpHandler.IsPrivateOrReservedIp(IPAddress.Parse("172.31.255.255"));
 
-        await Assert.That(result).IsEqualTo(true);
+        await Assert.That(result).IsTrue();
     }
 
     [Test]
@@ -106,7 +106,7 @@ public class SsrfSafeSocketsHttpHandlerTests
     {
         bool result = SsrfSafeSocketsHttpHandler.IsPrivateOrReservedIp(IPAddress.Parse("172.32.0.1"));
 
-        await Assert.That(result).IsEqualTo(false);
+        await Assert.That(result).IsFalse();
     }
 
     [Test]
@@ -114,7 +114,7 @@ public class SsrfSafeSocketsHttpHandlerTests
     {
         bool result = SsrfSafeSocketsHttpHandler.IsPrivateOrReservedIp(IPAddress.Parse("192.168.1.1"));
 
-        await Assert.That(result).IsEqualTo(true);
+        await Assert.That(result).IsTrue();
     }
 
     // --- Cloud metadata / link-local must be blocked ---
@@ -125,7 +125,7 @@ public class SsrfSafeSocketsHttpHandlerTests
         // AWS/GCP/Azure metadata endpoint lives at 169.254.169.254
         bool result = SsrfSafeSocketsHttpHandler.IsPrivateOrReservedIp(IPAddress.Parse("169.254.169.254"));
 
-        await Assert.That(result).IsEqualTo(true);
+        await Assert.That(result).IsTrue();
     }
 
     [Test]
@@ -133,7 +133,7 @@ public class SsrfSafeSocketsHttpHandlerTests
     {
         bool result = SsrfSafeSocketsHttpHandler.IsPrivateOrReservedIp(IPAddress.Parse("169.254.0.1"));
 
-        await Assert.That(result).IsEqualTo(true);
+        await Assert.That(result).IsTrue();
     }
 
     // --- IPv6 private ranges must be blocked ---
@@ -143,7 +143,7 @@ public class SsrfSafeSocketsHttpHandlerTests
     {
         bool result = SsrfSafeSocketsHttpHandler.IsPrivateOrReservedIp(IPAddress.Parse("fc00::1"));
 
-        await Assert.That(result).IsEqualTo(true);
+        await Assert.That(result).IsTrue();
     }
 
     [Test]
@@ -151,7 +151,7 @@ public class SsrfSafeSocketsHttpHandlerTests
     {
         bool result = SsrfSafeSocketsHttpHandler.IsPrivateOrReservedIp(IPAddress.Parse("fd12:3456:789a::1"));
 
-        await Assert.That(result).IsEqualTo(true);
+        await Assert.That(result).IsTrue();
     }
 
     [Test]
@@ -159,7 +159,7 @@ public class SsrfSafeSocketsHttpHandlerTests
     {
         bool result = SsrfSafeSocketsHttpHandler.IsPrivateOrReservedIp(IPAddress.Parse("fe80::1"));
 
-        await Assert.That(result).IsEqualTo(true);
+        await Assert.That(result).IsTrue();
     }
 
     // --- IPv4-mapped IPv6 with private embedded address must be blocked ---
@@ -172,7 +172,7 @@ public class SsrfSafeSocketsHttpHandlerTests
 
         bool result = SsrfSafeSocketsHttpHandler.IsPrivateOrReservedIp(mapped);
 
-        await Assert.That(result).IsEqualTo(true);
+        await Assert.That(result).IsTrue();
     }
 
     [Test]
@@ -183,7 +183,7 @@ public class SsrfSafeSocketsHttpHandlerTests
 
         bool result = SsrfSafeSocketsHttpHandler.IsPrivateOrReservedIp(mapped);
 
-        await Assert.That(result).IsEqualTo(true);
+        await Assert.That(result).IsTrue();
     }
 
     // --- Public addresses must be allowed ---
@@ -193,7 +193,7 @@ public class SsrfSafeSocketsHttpHandlerTests
     {
         bool result = SsrfSafeSocketsHttpHandler.IsPrivateOrReservedIp(IPAddress.Parse("8.8.8.8"));
 
-        await Assert.That(result).IsEqualTo(false);
+        await Assert.That(result).IsFalse();
     }
 
     [Test]
@@ -201,7 +201,7 @@ public class SsrfSafeSocketsHttpHandlerTests
     {
         bool result = SsrfSafeSocketsHttpHandler.IsPrivateOrReservedIp(IPAddress.Parse("93.184.216.34"));
 
-        await Assert.That(result).IsEqualTo(false);
+        await Assert.That(result).IsFalse();
     }
 
     [Test]
@@ -210,7 +210,7 @@ public class SsrfSafeSocketsHttpHandlerTests
         // Google Public DNS IPv6
         bool result = SsrfSafeSocketsHttpHandler.IsPrivateOrReservedIp(IPAddress.Parse("2001:4860:4860::8888"));
 
-        await Assert.That(result).IsEqualTo(false);
+        await Assert.That(result).IsFalse();
     }
 
     [Test]
@@ -220,7 +220,7 @@ public class SsrfSafeSocketsHttpHandlerTests
 
         bool result = SsrfSafeSocketsHttpHandler.IsPrivateOrReservedIp(mapped);
 
-        await Assert.That(result).IsEqualTo(false);
+        await Assert.That(result).IsFalse();
     }
 
     // --- Boundary tests for 172.16-31 range ---
@@ -231,7 +231,7 @@ public class SsrfSafeSocketsHttpHandlerTests
         // Start of 172.16.0.0/12 range
         bool result = SsrfSafeSocketsHttpHandler.IsPrivateOrReservedIp(IPAddress.Parse("172.16.0.1"));
 
-        await Assert.That(result).IsEqualTo(true);
+        await Assert.That(result).IsTrue();
     }
 
     [Test]
@@ -240,7 +240,7 @@ public class SsrfSafeSocketsHttpHandlerTests
         // End of 172.16.0.0/12 range
         bool result = SsrfSafeSocketsHttpHandler.IsPrivateOrReservedIp(IPAddress.Parse("172.31.255.254"));
 
-        await Assert.That(result).IsEqualTo(true);
+        await Assert.That(result).IsTrue();
     }
 
     [Test]
@@ -249,7 +249,7 @@ public class SsrfSafeSocketsHttpHandlerTests
         // Just below the private range
         bool result = SsrfSafeSocketsHttpHandler.IsPrivateOrReservedIp(IPAddress.Parse("172.15.255.254"));
 
-        await Assert.That(result).IsEqualTo(false);
+        await Assert.That(result).IsFalse();
     }
 
     [Test]
@@ -258,7 +258,7 @@ public class SsrfSafeSocketsHttpHandlerTests
         // Just above the private range
         bool result = SsrfSafeSocketsHttpHandler.IsPrivateOrReservedIp(IPAddress.Parse("172.32.0.1"));
 
-        await Assert.That(result).IsEqualTo(false);
+        await Assert.That(result).IsFalse();
     }
 
     // --- IPv6 link-local second byte boundary ---
@@ -269,7 +269,7 @@ public class SsrfSafeSocketsHttpHandlerTests
         // fe80::/10 includes fe80:: through febf::
         bool result = SsrfSafeSocketsHttpHandler.IsPrivateOrReservedIp(IPAddress.Parse("febf::1"));
 
-        await Assert.That(result).IsEqualTo(true);
+        await Assert.That(result).IsTrue();
     }
 
     // --- ConnectAsync callback integration via HttpClient ---

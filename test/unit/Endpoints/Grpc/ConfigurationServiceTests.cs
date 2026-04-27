@@ -140,7 +140,7 @@ public sealed class ConfigurationServiceTests
         AgentPingResponse response = await service.AgentPing(
             new AgentPingRequest { MachineId = 10 }, context);
 
-        await Assert.That(response.Success).IsEqualTo(true);
+        await Assert.That(response.Success).IsTrue();
         await _pingService.Received(1).RecordPingAsync(10);
     }
 
@@ -173,7 +173,7 @@ public sealed class ConfigurationServiceTests
         AgentPingResponse response = await service.AgentPing(
             new AgentPingRequest { MachineId = 10 }, context);
 
-        await Assert.That(response.Success).IsEqualTo(false);
+        await Assert.That(response.Success).IsFalse();
     }
 
     [Test]
@@ -232,7 +232,7 @@ public sealed class ConfigurationServiceTests
                 Result = new CommandResult { Success = true, ExitCode = 0, Message = "OK" }
             }, context);
 
-        await Assert.That(response.Success).IsEqualTo(true);
+        await Assert.That(response.Success).IsTrue();
     }
 
     [Test]
@@ -327,7 +327,7 @@ public sealed class ConfigurationServiceTests
                 Result = new CommandResult { Success = false, ExitCode = 1, Message = "error", ResultType = Framlux.FleetManagement.Grpc.AgentConfiguration.ResultType.Completed }
             }, context);
 
-        await Assert.That(response.Success).IsEqualTo(true);
+        await Assert.That(response.Success).IsTrue();
         await dbCache.Received(1).UpdateRemoteCommandStatusAsync(
             "cmd-fail", 1L, Database.Enums.RemoteCommandStatus.Failed,
             Arg.Any<int?>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<string?>(),
@@ -357,7 +357,7 @@ public sealed class ConfigurationServiceTests
                 Result = new CommandResult { Success = false, ExitCode = -1, Message = "invalid signature", ResultType = Framlux.FleetManagement.Grpc.AgentConfiguration.ResultType.Rejected }
             }, context);
 
-        await Assert.That(response.Success).IsEqualTo(true);
+        await Assert.That(response.Success).IsTrue();
         await dbCache.Received(1).UpdateRemoteCommandStatusAsync(
             "cmd-reject", 1L, Database.Enums.RemoteCommandStatus.Rejected,
             Arg.Any<int?>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<string?>(),
@@ -386,7 +386,7 @@ public sealed class ConfigurationServiceTests
                 CommandId = "cmd-null",
             }, context);
 
-        await Assert.That(response.Success).IsEqualTo(true);
+        await Assert.That(response.Success).IsTrue();
         await dbCache.Received(1).UpdateRemoteCommandStatusAsync(
             "cmd-null", 1L, Database.Enums.RemoteCommandStatus.Failed,
             Arg.Any<int?>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<string?>(),

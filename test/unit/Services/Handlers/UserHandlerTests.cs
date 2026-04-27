@@ -57,7 +57,7 @@ public class UserHandlerTests
 
         ServiceResult<List<UserAccountDto>> result = await handler.ListAsync(null, CancellationToken.None);
 
-        await Assert.That(result.IsSuccess).IsEqualTo(true);
+        await Assert.That(result.IsSuccess).IsTrue();
         await Assert.That(result.Data!.Count).IsEqualTo(0);
     }
 
@@ -70,7 +70,7 @@ public class UserHandlerTests
 
         ServiceResult<List<UserAccountDto>> result = await handler.ListAsync(999, CancellationToken.None);
 
-        await Assert.That(result.IsSuccess).IsEqualTo(true);
+        await Assert.That(result.IsSuccess).IsTrue();
         await Assert.That(result.Data!.Count).IsEqualTo(0);
     }
 
@@ -85,7 +85,7 @@ public class UserHandlerTests
 
         ServiceResult<List<UserAccountDto>> result = await handler.ListAsync(tenantId, CancellationToken.None);
 
-        await Assert.That(result.IsSuccess).IsEqualTo(true);
+        await Assert.That(result.IsSuccess).IsTrue();
         await Assert.That(result.Data!.Count).IsEqualTo(1);
         await Assert.That(result.Data![0].Username).IsEqualTo("viewer@example.com");
         await Assert.That(result.Data![0].Tenants.Count).IsEqualTo(1);
@@ -107,7 +107,7 @@ public class UserHandlerTests
 
         ServiceResult<List<UserAccountDto>> result = await handler.ListAsync(tenantId, CancellationToken.None);
 
-        await Assert.That(result.IsSuccess).IsEqualTo(true);
+        await Assert.That(result.IsSuccess).IsTrue();
         await Assert.That(result.Data!.Count).IsEqualTo(1);
         await Assert.That(result.Data![0].Username).IsEqualTo("normal@example.com");
     }
@@ -123,7 +123,7 @@ public class UserHandlerTests
 
         ServiceResult<List<UserAccountDto>> result = await handler.ListAsync(tenantId, CancellationToken.None);
 
-        await Assert.That(result.IsSuccess).IsEqualTo(true);
+        await Assert.That(result.IsSuccess).IsTrue();
         await Assert.That(result.Data!.Count).IsEqualTo(0);
     }
 
@@ -138,7 +138,7 @@ public class UserHandlerTests
 
         ServiceResult<UserAccountDto> result = await handler.GetDetailAsync(1, null, CancellationToken.None);
 
-        await Assert.That(result.IsNotFound).IsEqualTo(true);
+        await Assert.That(result.IsNotFound).IsTrue();
     }
 
     [Test]
@@ -152,7 +152,7 @@ public class UserHandlerTests
 
         ServiceResult<UserAccountDto> result = await handler.GetDetailAsync(userId, 999, CancellationToken.None);
 
-        await Assert.That(result.IsNotFound).IsEqualTo(true);
+        await Assert.That(result.IsNotFound).IsTrue();
     }
 
     [Test]
@@ -164,7 +164,7 @@ public class UserHandlerTests
 
         ServiceResult<UserAccountDto> result = await handler.GetDetailAsync(999, 1, CancellationToken.None);
 
-        await Assert.That(result.IsNotFound).IsEqualTo(true);
+        await Assert.That(result.IsNotFound).IsTrue();
     }
 
     [Test]
@@ -178,7 +178,7 @@ public class UserHandlerTests
 
         ServiceResult<UserAccountDto> result = await handler.GetDetailAsync(userId, tenantId, CancellationToken.None);
 
-        await Assert.That(result.IsSuccess).IsEqualTo(true);
+        await Assert.That(result.IsSuccess).IsTrue();
         await Assert.That(result.Data!.Username).IsEqualTo("detail@example.com");
         await Assert.That(result.Data!.Tenants.Count).IsEqualTo(1);
     }
@@ -206,7 +206,7 @@ public class UserHandlerTests
 
         ServiceResult<object> result = await handler.DeactivateAsync(1, 2, null, CancellationToken.None);
 
-        await Assert.That(result.IsNotFound).IsEqualTo(true);
+        await Assert.That(result.IsNotFound).IsTrue();
     }
 
     [Test]
@@ -220,7 +220,7 @@ public class UserHandlerTests
 
         ServiceResult<object> result = await handler.DeactivateAsync(userId, userId + 1, 999, CancellationToken.None);
 
-        await Assert.That(result.IsNotFound).IsEqualTo(true);
+        await Assert.That(result.IsNotFound).IsTrue();
     }
 
     [Test]
@@ -238,16 +238,16 @@ public class UserHandlerTests
 
         ServiceResult<object> result = await handler.DeactivateAsync(userId, admin.Id, tenantId, CancellationToken.None);
 
-        await Assert.That(result.IsSuccess).IsEqualTo(true);
+        await Assert.That(result.IsSuccess).IsTrue();
 
         // Verify role deactivated
         UserTenantRole? role = await dbFactory.Context.UserTenantRoles
             .FirstOrDefaultAsync(r => r.UserId == userId && r.AssignedTenantId == tenantId);
-        await Assert.That(role!.IsActive).IsEqualTo(false);
+        await Assert.That(role!.IsActive).IsFalse();
 
         // Verify account deactivated (last active role)
         UserAccount? user = await dbFactory.Context.UserAccounts.FirstOrDefaultAsync(u => u.Id == userId);
-        await Assert.That(user!.IsActive).IsEqualTo(false);
+        await Assert.That(user!.IsActive).IsFalse();
     }
 
     [Test]
@@ -276,20 +276,20 @@ public class UserHandlerTests
         // Deactivate from tenant 1 only
         ServiceResult<object> result = await handler.DeactivateAsync(user.Id, admin.Id, tenant1.Id, CancellationToken.None);
 
-        await Assert.That(result.IsSuccess).IsEqualTo(true);
+        await Assert.That(result.IsSuccess).IsTrue();
 
         // Verify role in tenant 1 deactivated
         UserTenantRole? role1 = await dbFactory.Context.UserTenantRoles
             .FirstOrDefaultAsync(r => r.UserId == user.Id && r.AssignedTenantId == tenant1.Id);
-        await Assert.That(role1!.IsActive).IsEqualTo(false);
+        await Assert.That(role1!.IsActive).IsFalse();
 
         // Verify role in tenant 2 still active
         UserTenantRole? role2 = await dbFactory.Context.UserTenantRoles
             .FirstOrDefaultAsync(r => r.UserId == user.Id && r.AssignedTenantId == tenant2.Id);
-        await Assert.That(role2!.IsActive).IsEqualTo(true);
+        await Assert.That(role2!.IsActive).IsTrue();
 
         // Verify account still active (has other active roles)
         UserAccount? userAfter = await dbFactory.Context.UserAccounts.FirstOrDefaultAsync(u => u.Id == user.Id);
-        await Assert.That(userAfter!.IsActive).IsEqualTo(true);
+        await Assert.That(userAfter!.IsActive).IsTrue();
     }
 }

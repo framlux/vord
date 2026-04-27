@@ -63,7 +63,7 @@ public class RequestIdMiddlewareTests
 
         string storedId = (string)context.Items[RequestIdMiddleware.ItemsKey]!;
         bool isValidGuid = Guid.TryParseExact(storedId, "N", out _);
-        await Assert.That(isValidGuid).IsEqualTo(true);
+        await Assert.That(isValidGuid).IsTrue();
     }
 
     /// <summary>
@@ -138,7 +138,7 @@ public class RequestIdMiddlewareTests
 
         string storedId = (string)context.Items[RequestIdMiddleware.ItemsKey]!;
         bool isValidGuid = Guid.TryParseExact(storedId, "N", out _);
-        await Assert.That(isValidGuid).IsEqualTo(true);
+        await Assert.That(isValidGuid).IsTrue();
     }
 
     /// <summary>
@@ -154,7 +154,7 @@ public class RequestIdMiddlewareTests
 
         string storedId = (string)context.Items[RequestIdMiddleware.ItemsKey]!;
         bool isValidGuid = Guid.TryParseExact(storedId, "N", out _);
-        await Assert.That(isValidGuid).IsEqualTo(true);
+        await Assert.That(isValidGuid).IsTrue();
     }
 
     // ───────────────────────────────────────────────
@@ -237,7 +237,7 @@ public class RequestIdMiddlewareTests
 
         await middleware.InvokeAsync(context);
 
-        await Assert.That(nextCalled).IsEqualTo(true);
+        await Assert.That(nextCalled).IsTrue();
     }
 
     /// <summary>
@@ -310,7 +310,7 @@ public class RequestIdMiddlewareTests
         string result = RequestIdMiddleware.ResolveRequestId(context);
 
         bool isValidGuid = Guid.TryParseExact(result, "N", out _);
-        await Assert.That(isValidGuid).IsEqualTo(true);
+        await Assert.That(isValidGuid).IsTrue();
     }
 
     /// <summary>
@@ -325,6 +325,6 @@ public class RequestIdMiddlewareTests
         string result = RequestIdMiddleware.ResolveRequestId(context);
 
         bool isValidGuid = Guid.TryParseExact(result, "N", out _);
-        await Assert.That(isValidGuid).IsEqualTo(true);
+        await Assert.That(isValidGuid).IsTrue();
     }
 }

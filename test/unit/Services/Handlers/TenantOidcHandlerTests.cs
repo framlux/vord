@@ -62,7 +62,7 @@ public class TenantOidcHandlerTests
 
         ServiceResult<TenantOidcConfigDto> result = await handler.GetConfigAsync(1, null, CancellationToken.None);
 
-        await Assert.That(result.IsNotFound).IsEqualTo(true);
+        await Assert.That(result.IsNotFound).IsTrue();
     }
 
     [Test]
@@ -73,7 +73,7 @@ public class TenantOidcHandlerTests
 
         ServiceResult<TenantOidcConfigDto> result = await handler.GetConfigAsync(1, 2, CancellationToken.None);
 
-        await Assert.That(result.IsNotFound).IsEqualTo(true);
+        await Assert.That(result.IsNotFound).IsTrue();
     }
 
     [Test]
@@ -97,7 +97,7 @@ public class TenantOidcHandlerTests
 
         ServiceResult<TenantOidcConfigDto> result = await handler.GetConfigAsync(1, 1, CancellationToken.None);
 
-        await Assert.That(result.IsSuccess).IsEqualTo(true);
+        await Assert.That(result.IsSuccess).IsTrue();
         await Assert.That(result.Data!.Authority).IsEqualTo(string.Empty);
         await Assert.That(result.Data!.ClientId).IsEqualTo(string.Empty);
     }
@@ -114,11 +114,11 @@ public class TenantOidcHandlerTests
 
         ServiceResult<TenantOidcConfigDto> result = await handler.GetConfigAsync(1, 1, CancellationToken.None);
 
-        await Assert.That(result.IsSuccess).IsEqualTo(true);
+        await Assert.That(result.IsSuccess).IsTrue();
         await Assert.That(result.Data!.Authority).IsEqualTo("https://login.example.com");
         await Assert.That(result.Data!.ClientId).IsEqualTo("test-client-id");
         await Assert.That(result.Data!.ClientSecret).IsEqualTo("********");
-        await Assert.That(result.Data!.IsEnabled).IsEqualTo(true);
+        await Assert.That(result.Data!.IsEnabled).IsTrue();
     }
 
     // ========== UpdateConfigAsync tests ==========
@@ -132,7 +132,7 @@ public class TenantOidcHandlerTests
         TenantOidcConfigDto request = new() { Authority = "https://example.com" };
         ServiceResult<TenantOidcConfigDto> result = await handler.UpdateConfigAsync(1, null, request, CancellationToken.None);
 
-        await Assert.That(result.IsNotFound).IsEqualTo(true);
+        await Assert.That(result.IsNotFound).IsTrue();
     }
 
     [Test]
@@ -144,7 +144,7 @@ public class TenantOidcHandlerTests
         TenantOidcConfigDto request = new() { Authority = "https://example.com" };
         ServiceResult<TenantOidcConfigDto> result = await handler.UpdateConfigAsync(1, 2, request, CancellationToken.None);
 
-        await Assert.That(result.IsNotFound).IsEqualTo(true);
+        await Assert.That(result.IsNotFound).IsTrue();
     }
 
     [Test]
@@ -207,7 +207,7 @@ public class TenantOidcHandlerTests
         };
         ServiceResult<TenantOidcConfigDto> result = await handler.UpdateConfigAsync(1, 1, request, CancellationToken.None);
 
-        await Assert.That(result.IsSuccess).IsEqualTo(true);
+        await Assert.That(result.IsSuccess).IsTrue();
 
         TenantOidcConfiguration? config = await dbFactory.Context.TenantOidcConfigurations
             .FirstOrDefaultAsync(c => c.TenantId == 1);
@@ -239,7 +239,7 @@ public class TenantOidcHandlerTests
         };
         ServiceResult<TenantOidcConfigDto> result = await handler.UpdateConfigAsync(1, 1, request, CancellationToken.None);
 
-        await Assert.That(result.IsSuccess).IsEqualTo(true);
+        await Assert.That(result.IsSuccess).IsTrue();
 
         TenantOidcConfiguration? config = await dbFactory.Context.TenantOidcConfigurations
             .FirstOrDefaultAsync(c => c.TenantId == 1);
@@ -272,7 +272,7 @@ public class TenantOidcHandlerTests
         };
         ServiceResult<TenantOidcConfigDto> result = await handler.UpdateConfigAsync(1, 1, request, CancellationToken.None);
 
-        await Assert.That(result.IsSuccess).IsEqualTo(true);
+        await Assert.That(result.IsSuccess).IsTrue();
 
         TenantOidcConfiguration? config = await dbFactory.Context.TenantOidcConfigurations
             .FirstOrDefaultAsync(c => c.TenantId == 1);

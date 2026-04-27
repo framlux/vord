@@ -47,7 +47,7 @@ public class RedisRateLimiterTests
 
         bool result = await limiter.IsAllowedAsync("127.0.0.1");
 
-        await Assert.That(result).IsEqualTo(true);
+        await Assert.That(result).IsTrue();
     }
 
     /// <summary>
@@ -61,7 +61,7 @@ public class RedisRateLimiterTests
 
         bool result = await limiter.IsAllowedAsync("127.0.0.1");
 
-        await Assert.That(result).IsEqualTo(false);
+        await Assert.That(result).IsFalse();
     }
 
     /// <summary>
@@ -93,7 +93,7 @@ public class RedisRateLimiterTests
         bool result = await limiter.IsAllowedAsync("127.0.0.1");
 
         // Boundary: count == limit is allowed (currentCount <= _permitLimit).
-        await Assert.That(result).IsEqualTo(true);
+        await Assert.That(result).IsTrue();
     }
 
     [Test]
@@ -105,7 +105,7 @@ public class RedisRateLimiterTests
         bool result = await limiter.IsAllowedAsync("127.0.0.1");
 
         // Boundary: count == limit+1 is denied.
-        await Assert.That(result).IsEqualTo(false);
+        await Assert.That(result).IsFalse();
     }
 
     [Test]
@@ -116,7 +116,7 @@ public class RedisRateLimiterTests
         // Synchronous acquire always fails to force callers through async path.
         System.Threading.RateLimiting.RateLimitLease lease = limiter.AttemptAcquire();
 
-        await Assert.That(lease.IsAcquired).IsEqualTo(false);
+        await Assert.That(lease.IsAcquired).IsFalse();
     }
 
     [Test]
@@ -127,7 +127,7 @@ public class RedisRateLimiterTests
 
         System.Threading.RateLimiting.RateLimitLease lease = await limiter.AcquireAsync();
 
-        await Assert.That(lease.IsAcquired).IsEqualTo(true);
+        await Assert.That(lease.IsAcquired).IsTrue();
     }
 
     // --- Error and isolation tests ---
@@ -182,8 +182,8 @@ public class RedisRateLimiterTests
         bool firstResult = await limiter.IsAllowedAsync("127.0.0.1");
         bool secondResult = await limiter.IsAllowedAsync("127.0.0.1");
 
-        await Assert.That(firstResult).IsEqualTo(true);
-        await Assert.That(secondResult).IsEqualTo(false);
+        await Assert.That(firstResult).IsTrue();
+        await Assert.That(secondResult).IsFalse();
     }
 
     /// <summary>
@@ -200,7 +200,7 @@ public class RedisRateLimiterTests
         bool result = await limiter.IsAllowedAsync("127.0.0.1");
 
         // After window expiry, the counter resets and the request is allowed
-        await Assert.That(result).IsEqualTo(true);
+        await Assert.That(result).IsTrue();
         // The Lua script handles EXPIRE atomically, so ScriptEvaluateAsync is called once
         await db.Received(1).ScriptEvaluateAsync(
             Arg.Any<string>(), Arg.Any<RedisKey[]>(), Arg.Any<RedisValue[]>(), Arg.Any<CommandFlags>());
@@ -217,7 +217,7 @@ public class RedisRateLimiterTests
 
         System.Threading.RateLimiting.RateLimitLease lease = await limiter.AcquireAsync();
 
-        await Assert.That(lease.IsAcquired).IsEqualTo(false);
+        await Assert.That(lease.IsAcquired).IsFalse();
     }
 
     /// <summary>
@@ -262,7 +262,7 @@ public class RedisRateLimiterTests
 
         System.Threading.RateLimiting.RateLimitLease lease = partitioned.AttemptAcquire();
 
-        await Assert.That(lease.IsAcquired).IsEqualTo(false);
+        await Assert.That(lease.IsAcquired).IsFalse();
     }
 
     /// <summary>
@@ -277,7 +277,7 @@ public class RedisRateLimiterTests
 
         System.Threading.RateLimiting.RateLimitLease lease = await partitioned.AcquireAsync();
 
-        await Assert.That(lease.IsAcquired).IsEqualTo(true);
+        await Assert.That(lease.IsAcquired).IsTrue();
     }
 
     /// <summary>
@@ -292,7 +292,7 @@ public class RedisRateLimiterTests
 
         System.Threading.RateLimiting.RateLimitLease lease = await partitioned.AcquireAsync();
 
-        await Assert.That(lease.IsAcquired).IsEqualTo(false);
+        await Assert.That(lease.IsAcquired).IsFalse();
     }
 
     /// <summary>
@@ -314,7 +314,7 @@ public class RedisRateLimiterTests
         await partitioned.AcquireAsync();
 
         await Assert.That(capturedKeys).IsNotNull();
-        await Assert.That(capturedKeys![0].ToString().Contains(expectedPartitionKey)).IsEqualTo(true);
+        await Assert.That(capturedKeys![0].ToString().Contains(expectedPartitionKey)).IsTrue();
     }
 
     /// <summary>
@@ -330,10 +330,10 @@ public class RedisRateLimiterTests
         MockScriptResult(db, 1L);
 
         System.Threading.RateLimiting.RateLimitLease firstLease = await partitioned.AcquireAsync();
-        await Assert.That(firstLease.IsAcquired).IsEqualTo(true);
+        await Assert.That(firstLease.IsAcquired).IsTrue();
 
         System.Threading.RateLimiting.RateLimitLease secondLease = await partitioned.AcquireAsync();
-        await Assert.That(secondLease.IsAcquired).IsEqualTo(true);
+        await Assert.That(secondLease.IsAcquired).IsTrue();
 
         // The Lua script handles EXPIRE atomically, so ScriptEvaluateAsync is called twice
         await db.Received(2).ScriptEvaluateAsync(

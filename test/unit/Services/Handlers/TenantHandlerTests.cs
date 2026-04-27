@@ -144,7 +144,7 @@ public class TenantHandlerTests
 
         ServiceResult<TenantDto> result = await handler.CreateAsync("テスト組織です", "https://logo.png", 1, CancellationToken.None);
 
-        await Assert.That(result.IsSuccess).IsEqualTo(true);
+        await Assert.That(result.IsSuccess).IsTrue();
     }
 
     [Test]
@@ -163,7 +163,7 @@ public class TenantHandlerTests
 
         ServiceResult<TenantDto> result = await handler.CreateAsync("  Trimmed Corp  ", "https://logo.png", 1, CancellationToken.None);
 
-        await Assert.That(result.IsSuccess).IsEqualTo(true);
+        await Assert.That(result.IsSuccess).IsTrue();
         await cache.Received(1).GetTenantByNameAsync("Trimmed Corp", Arg.Any<CancellationToken>());
     }
 
@@ -183,7 +183,7 @@ public class TenantHandlerTests
 
         ServiceResult<TenantDto> result = await handler.CreateAsync("Acme & Co. - HQ_1", "https://logo.png", 1, CancellationToken.None);
 
-        await Assert.That(result.IsSuccess).IsEqualTo(true);
+        await Assert.That(result.IsSuccess).IsTrue();
     }
 
     [Test]
@@ -217,7 +217,7 @@ public class TenantHandlerTests
 
         ServiceResult<TenantDto> result = await handler.CreateAsync("New Corp", "https://logo.png", 1, CancellationToken.None);
 
-        await Assert.That(result.IsSuccess).IsEqualTo(true);
+        await Assert.That(result.IsSuccess).IsTrue();
         await Assert.That(result.Data!.Name).IsEqualTo("New Corp");
         await Assert.That(result.Data!.Id).IsEqualTo(42);
     }
@@ -236,7 +236,7 @@ public class TenantHandlerTests
 
         ServiceResult<TenantDto> result = await handler.GetDetailAsync(999, CancellationToken.None);
 
-        await Assert.That(result.IsNotFound).IsEqualTo(true);
+        await Assert.That(result.IsNotFound).IsTrue();
     }
 
     [Test]
@@ -253,7 +253,7 @@ public class TenantHandlerTests
 
         ServiceResult<TenantDto> result = await handler.GetDetailAsync(7, CancellationToken.None);
 
-        await Assert.That(result.IsSuccess).IsEqualTo(true);
+        await Assert.That(result.IsSuccess).IsTrue();
         await Assert.That(result.Data!.Id).IsEqualTo(7);
         await Assert.That(result.Data!.Name).IsEqualTo("Detail Corp");
     }
@@ -275,7 +275,7 @@ public class TenantHandlerTests
 
         ServiceResult<List<TenantDto>> result = await handler.ListForUserAsync(true, [], CancellationToken.None);
 
-        await Assert.That(result.IsSuccess).IsEqualTo(true);
+        await Assert.That(result.IsSuccess).IsTrue();
         await Assert.That(result.Data!.Count).IsEqualTo(2);
     }
 
@@ -294,7 +294,7 @@ public class TenantHandlerTests
 
         ServiceResult<List<TenantDto>> result = await handler.ListForUserAsync(false, [tenant1.Id], CancellationToken.None);
 
-        await Assert.That(result.IsSuccess).IsEqualTo(true);
+        await Assert.That(result.IsSuccess).IsTrue();
         await Assert.That(result.Data!.Count).IsEqualTo(1);
         await Assert.That(result.Data![0].Name).IsEqualTo("Member Corp");
     }
@@ -309,7 +309,7 @@ public class TenantHandlerTests
 
         ServiceResult<List<TenantDto>> result = await handler.ListForUserAsync(false, [], CancellationToken.None);
 
-        await Assert.That(result.IsSuccess).IsEqualTo(true);
+        await Assert.That(result.IsSuccess).IsTrue();
         await Assert.That(result.Data!.Count).IsEqualTo(0);
     }
 }

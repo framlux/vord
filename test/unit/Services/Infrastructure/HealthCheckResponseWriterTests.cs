@@ -148,7 +148,7 @@ public sealed class HealthCheckResponseWriterTests
         using JsonDocument doc = JsonDocument.Parse(json);
         JsonElement checkEntry = doc.RootElement.GetProperty("entries").GetProperty("check");
 
-        await Assert.That(checkEntry.TryGetProperty("description", out _)).IsEqualTo(false);
+        await Assert.That(checkEntry.TryGetProperty("description", out _)).IsFalse();
     }
 
     [Test]

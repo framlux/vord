@@ -30,7 +30,7 @@ public class MachineCacheTests
 
         bool result = await cache.DoesMachineExistAsync(machine.SerialNumber, "no-match", "", 1);
 
-        await Assert.That(result).IsEqualTo(true);
+        await Assert.That(result).IsTrue();
     }
 
     [Test]
@@ -44,7 +44,7 @@ public class MachineCacheTests
 
         bool result = await cache.DoesMachineExistAsync("no-match", machine.SystemId, "", 1);
 
-        await Assert.That(result).IsEqualTo(true);
+        await Assert.That(result).IsTrue();
     }
 
     [Test]
@@ -55,7 +55,7 @@ public class MachineCacheTests
 
         bool result = await cache.DoesMachineExistAsync("no-serial", "no-sysid", "", 1);
 
-        await Assert.That(result).IsEqualTo(false);
+        await Assert.That(result).IsFalse();
     }
 
     [Test]
@@ -70,7 +70,7 @@ public class MachineCacheTests
         // Callers are expected to normalize to lowercase before querying.
         bool result = await cache.DoesMachineExistAsync(machine.SerialNumber.ToLowerInvariant(), "no-match", "", 1);
 
-        await Assert.That(result).IsEqualTo(true);
+        await Assert.That(result).IsTrue();
     }
 
     [Test]
@@ -85,7 +85,7 @@ public class MachineCacheTests
 
         bool result = await cache.DoesMachineExistAsync(machine.SerialNumber, machine.SystemId, "", 1);
 
-        await Assert.That(result).IsEqualTo(false);
+        await Assert.That(result).IsFalse();
     }
 
     // ========== CreateMachineWithKeyAsync tests ==========
@@ -104,7 +104,7 @@ public class MachineCacheTests
         await Assert.That(plaintextApiKey).IsNotNull();
         await Assert.That(created!.Id).IsNotEqualTo(0L);
         await Assert.That(created.TenantId).IsEqualTo(1);
-        await Assert.That(created.IsDeleted).IsEqualTo(false);
+        await Assert.That(created.IsDeleted).IsFalse();
         await Assert.That(created.Name).IsEqualTo(machine.Name);
     }
 
@@ -157,7 +157,7 @@ public class MachineCacheTests
         await Assert.That(result).IsNotNull();
         await Assert.That(result!.Id).IsEqualTo(machine.Id);
         await Assert.That(result.TenantId).IsEqualTo(1);
-        await Assert.That(result.IsDeleted).IsEqualTo(false);
+        await Assert.That(result.IsDeleted).IsFalse();
     }
 
     [Test]

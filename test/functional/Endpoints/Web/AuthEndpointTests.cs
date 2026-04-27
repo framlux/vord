@@ -103,7 +103,7 @@ public sealed class AuthEndpointTests
         await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.Redirect);
         string? location = response.Headers.Location?.ToString();
         await Assert.That(location).IsNotNull();
-        await Assert.That(location!.Contains("evil.com")).IsEqualTo(false);
+        await Assert.That(location!.Contains("evil.com")).IsFalse();
     }
 
     [Test]
@@ -120,7 +120,7 @@ public sealed class AuthEndpointTests
         await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.Redirect);
         string? location = response.Headers.Location?.ToString();
         await Assert.That(location).IsNotNull();
-        await Assert.That(location!.Contains("evil.com")).IsEqualTo(false);
+        await Assert.That(location!.Contains("evil.com")).IsFalse();
     }
 
     [Test]
@@ -171,7 +171,7 @@ public sealed class AuthEndpointTests
         await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.Redirect);
         string? location = response.Headers.Location?.ToString();
         await Assert.That(location).IsNotNull();
-        await Assert.That(location!.Contains("evil.com")).IsEqualTo(false);
+        await Assert.That(location!.Contains("evil.com")).IsFalse();
     }
 
     [Test]

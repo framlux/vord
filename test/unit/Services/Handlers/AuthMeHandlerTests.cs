@@ -25,7 +25,7 @@ public class AuthMeHandlerTests
 
         ServiceResult<AuthMeResult> result = await handler.GetCurrentUserAsync("unknown", CancellationToken.None);
 
-        await Assert.That(result.IsNotFound).IsEqualTo(true);
+        await Assert.That(result.IsNotFound).IsTrue();
     }
 
     [Test]
@@ -49,8 +49,8 @@ public class AuthMeHandlerTests
 
         ServiceResult<AuthMeResult> result = await handler.GetCurrentUserAsync("ext-1", CancellationToken.None);
 
-        await Assert.That(result.IsSuccess).IsEqualTo(true);
-        await Assert.That(result.Data!.NeedsOnboarding).IsEqualTo(true);
+        await Assert.That(result.IsSuccess).IsTrue();
+        await Assert.That(result.Data!.NeedsOnboarding).IsTrue();
         await Assert.That(result.Data!.Tenants.Count).IsEqualTo(0);
         await Assert.That(result.Data!.UserId).IsEqualTo(1);
     }
@@ -100,9 +100,9 @@ public class AuthMeHandlerTests
 
         ServiceResult<AuthMeResult> result = await handler.GetCurrentUserAsync("ext-5", CancellationToken.None);
 
-        await Assert.That(result.IsSuccess).IsEqualTo(true);
-        await Assert.That(result.Data!.IsGlobalAdmin).IsEqualTo(true);
-        await Assert.That(result.Data!.NeedsOnboarding).IsEqualTo(false);
+        await Assert.That(result.IsSuccess).IsTrue();
+        await Assert.That(result.Data!.IsGlobalAdmin).IsTrue();
+        await Assert.That(result.Data!.NeedsOnboarding).IsFalse();
         await Assert.That(result.Data!.Tenants.Count).IsEqualTo(1);
         await Assert.That(result.Data!.Tenants[0].TenantId).IsEqualTo(10);
         await Assert.That(result.Data!.Tenants[0].TenantName).IsEqualTo("Test Org");
@@ -129,6 +129,6 @@ public class AuthMeHandlerTests
 
         ServiceResult<AuthMeResult> result = await handler.GetCurrentUserAsync("ext-3", CancellationToken.None);
 
-        await Assert.That(result.Data!.IsGlobalAdmin).IsEqualTo(false);
+        await Assert.That(result.Data!.IsGlobalAdmin).IsFalse();
     }
 }

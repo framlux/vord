@@ -106,7 +106,7 @@ public class UserCacheTests
         await Assert.That(updated).IsNotNull();
         await Assert.That(updated!.AuthProvider).IsEqualTo(AuthProviderType.Google);
         await Assert.That(updated.Username).IsEqualTo("original@example.com");
-        await Assert.That(updated.IsActive).IsEqualTo(true);
+        await Assert.That(updated.IsActive).IsTrue();
         await Assert.That(updated.ExternalId).IsEqualTo(user.ExternalId);
     }
 

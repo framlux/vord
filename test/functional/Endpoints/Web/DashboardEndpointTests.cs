@@ -94,7 +94,7 @@ public sealed class DashboardEndpointTests
         JsonElement root = doc.RootElement;
 
         // Verify top-level API response structure
-        await Assert.That(root.GetProperty("success").GetBoolean()).IsEqualTo(true);
+        await Assert.That(root.GetProperty("success").GetBoolean()).IsTrue();
 
         JsonElement data = root.GetProperty("data");
 
@@ -130,7 +130,7 @@ public sealed class DashboardEndpointTests
         using JsonDocument doc = JsonDocument.Parse(body);
         JsonElement root = doc.RootElement;
 
-        await Assert.That(root.GetProperty("success").GetBoolean()).IsEqualTo(true);
+        await Assert.That(root.GetProperty("success").GetBoolean()).IsTrue();
 
         JsonElement data = root.GetProperty("data");
 
@@ -286,19 +286,19 @@ public sealed class DashboardEndpointTests
         JsonElement machine = machines[0];
 
         // Verify the machine data fields match the FleetMachineDto contract
-        await Assert.That(machine.TryGetProperty("id", out _)).IsEqualTo(true);
-        await Assert.That(machine.TryGetProperty("name", out _)).IsEqualTo(true);
-        await Assert.That(machine.TryGetProperty("healthStatus", out _)).IsEqualTo(true);
-        await Assert.That(machine.TryGetProperty("isOnline", out _)).IsEqualTo(true);
-        await Assert.That(machine.TryGetProperty("cpuUsagePercent", out _)).IsEqualTo(true);
-        await Assert.That(machine.TryGetProperty("memoryUsagePercent", out _)).IsEqualTo(true);
-        await Assert.That(machine.TryGetProperty("maxDiskUsagePercent", out _)).IsEqualTo(true);
-        await Assert.That(machine.TryGetProperty("hasDiskHealthIssue", out _)).IsEqualTo(true);
-        await Assert.That(machine.TryGetProperty("hasHardwareIssue", out _)).IsEqualTo(true);
-        await Assert.That(machine.TryGetProperty("pendingUpdates", out _)).IsEqualTo(true);
-        await Assert.That(machine.TryGetProperty("securityUpdates", out _)).IsEqualTo(true);
-        await Assert.That(machine.TryGetProperty("failedServices", out _)).IsEqualTo(true);
-        await Assert.That(machine.TryGetProperty("totalServices", out _)).IsEqualTo(true);
+        await Assert.That(machine.TryGetProperty("id", out _)).IsTrue();
+        await Assert.That(machine.TryGetProperty("name", out _)).IsTrue();
+        await Assert.That(machine.TryGetProperty("healthStatus", out _)).IsTrue();
+        await Assert.That(machine.TryGetProperty("isOnline", out _)).IsTrue();
+        await Assert.That(machine.TryGetProperty("cpuUsagePercent", out _)).IsTrue();
+        await Assert.That(machine.TryGetProperty("memoryUsagePercent", out _)).IsTrue();
+        await Assert.That(machine.TryGetProperty("maxDiskUsagePercent", out _)).IsTrue();
+        await Assert.That(machine.TryGetProperty("hasDiskHealthIssue", out _)).IsTrue();
+        await Assert.That(machine.TryGetProperty("hasHardwareIssue", out _)).IsTrue();
+        await Assert.That(machine.TryGetProperty("pendingUpdates", out _)).IsTrue();
+        await Assert.That(machine.TryGetProperty("securityUpdates", out _)).IsTrue();
+        await Assert.That(machine.TryGetProperty("failedServices", out _)).IsTrue();
+        await Assert.That(machine.TryGetProperty("totalServices", out _)).IsTrue();
 
         // Verify the machine name matches what we seeded
         await Assert.That(machine.GetProperty("name").GetString()).IsEqualTo("field-check-host");
@@ -323,12 +323,12 @@ public sealed class DashboardEndpointTests
         JsonElement summary = doc.RootElement.GetProperty("data").GetProperty("summary");
 
         // Verify the FleetSummaryDto contract fields are present
-        await Assert.That(summary.TryGetProperty("totalMachines", out _)).IsEqualTo(true);
-        await Assert.That(summary.TryGetProperty("onlineMachines", out _)).IsEqualTo(true);
-        await Assert.That(summary.TryGetProperty("offlineCount", out _)).IsEqualTo(true);
-        await Assert.That(summary.TryGetProperty("warningCount", out _)).IsEqualTo(true);
-        await Assert.That(summary.TryGetProperty("criticalCount", out _)).IsEqualTo(true);
-        await Assert.That(summary.TryGetProperty("securityUpdates", out _)).IsEqualTo(true);
+        await Assert.That(summary.TryGetProperty("totalMachines", out _)).IsTrue();
+        await Assert.That(summary.TryGetProperty("onlineMachines", out _)).IsTrue();
+        await Assert.That(summary.TryGetProperty("offlineCount", out _)).IsTrue();
+        await Assert.That(summary.TryGetProperty("warningCount", out _)).IsTrue();
+        await Assert.That(summary.TryGetProperty("criticalCount", out _)).IsTrue();
+        await Assert.That(summary.TryGetProperty("securityUpdates", out _)).IsTrue();
     }
 
     [Test]

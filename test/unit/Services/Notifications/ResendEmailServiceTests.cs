@@ -37,7 +37,7 @@ public sealed class ResendEmailServiceTests
 
         bool result = await service.SendInvitationEmailAsync("user@example.com", "Acme", "Admin", "https://app.example.com/accept", CancellationToken.None);
 
-        await Assert.That(result).IsEqualTo(false);
+        await Assert.That(result).IsFalse();
         await Assert.That(handler.Requests.Count).IsEqualTo(0);
     }
 
@@ -52,7 +52,7 @@ public sealed class ResendEmailServiceTests
 
         bool result = await service.SendInvitationEmailAsync("user@example.com", "Acme", "Admin", "https://app.example.com/accept", CancellationToken.None);
 
-        await Assert.That(result).IsEqualTo(false);
+        await Assert.That(result).IsFalse();
         await Assert.That(handler.Requests.Count).IsEqualTo(0);
     }
 
@@ -108,7 +108,7 @@ public sealed class ResendEmailServiceTests
 
         bool result = await service.SendInvitationEmailAsync("user@example.com", "Acme", "Admin", "https://app.example.com/accept", CancellationToken.None);
 
-        await Assert.That(result).IsEqualTo(true);
+        await Assert.That(result).IsTrue();
     }
 
     [Test]
@@ -126,7 +126,7 @@ public sealed class ResendEmailServiceTests
 
         bool result = await service.SendInvitationEmailAsync("user@example.com", "Acme", "Admin", "https://app.example.com/accept", CancellationToken.None);
 
-        await Assert.That(result).IsEqualTo(false);
+        await Assert.That(result).IsFalse();
     }
 
     [Test]
@@ -144,7 +144,7 @@ public sealed class ResendEmailServiceTests
 
         bool result = await service.SendInvitationEmailAsync("user@example.com", "Acme", "Admin", "https://app.example.com/accept", CancellationToken.None);
 
-        await Assert.That(result).IsEqualTo(false);
+        await Assert.That(result).IsFalse();
     }
 
     [Test]
@@ -159,7 +159,7 @@ public sealed class ResendEmailServiceTests
 
         bool result = await service.SendInvitationEmailAsync("user@example.com", "Acme", "Admin", "https://app.example.com/accept", CancellationToken.None);
 
-        await Assert.That(result).IsEqualTo(false);
+        await Assert.That(result).IsFalse();
     }
 
     [Test]
@@ -180,7 +180,7 @@ public sealed class ResendEmailServiceTests
         string htmlField = doc.RootElement.GetProperty("html").GetString()!;
 
         // The HTML body must not contain raw script tags from user input
-        await Assert.That(htmlField.Contains("<script>alert")).IsEqualTo(false);
+        await Assert.That(htmlField.Contains("<script>alert")).IsFalse();
         // The HTML body must contain the HTML-encoded form of the tenant name
         await Assert.That(htmlField).Contains("&lt;script&gt;");
     }

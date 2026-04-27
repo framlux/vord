@@ -30,7 +30,7 @@ public sealed class TenantDataExportTests
         await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.Unauthorized);
 
         string body = await response.Content.ReadAsStringAsync();
-        await Assert.That(body.Contains("\"success\":true")).IsEqualTo(false);
+        await Assert.That(body.Contains("\"success\":true")).IsFalse();
     }
 
     [Test]
@@ -52,7 +52,7 @@ public sealed class TenantDataExportTests
         await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.Forbidden);
 
         string body = await response.Content.ReadAsStringAsync();
-        await Assert.That(body.Contains("\"success\":true")).IsEqualTo(false);
+        await Assert.That(body.Contains("\"success\":true")).IsFalse();
     }
 
     [Test]
@@ -74,7 +74,7 @@ public sealed class TenantDataExportTests
         await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.Forbidden);
 
         string body = await response.Content.ReadAsStringAsync();
-        await Assert.That(body.Contains("\"success\":true")).IsEqualTo(false);
+        await Assert.That(body.Contains("\"success\":true")).IsFalse();
     }
 
     [Test]
@@ -193,7 +193,7 @@ public sealed class TenantDataExportTests
         await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.NotFound);
 
         string body = await response.Content.ReadAsStringAsync();
-        await Assert.That(body.Contains("\"success\":true")).IsEqualTo(false);
+        await Assert.That(body.Contains("\"success\":true")).IsFalse();
     }
 
     // ========== Seed helpers ==========

@@ -58,7 +58,7 @@ public class SubscriptionCacheNewMethodsTests
         TenantSubscription? updated = await dbFactory.Context.TenantSubscriptions
             .FirstOrDefaultAsync(s => s.TenantId == 1);
         await Assert.That(updated).IsNotNull();
-        await Assert.That(updated!.CancelAtPeriodEnd).IsEqualTo(false);
+        await Assert.That(updated!.CancelAtPeriodEnd).IsFalse();
     }
 
     [Test]
@@ -98,7 +98,7 @@ public class SubscriptionCacheNewMethodsTests
         TenantSubscription? updated = await dbFactory.Context.TenantSubscriptions
             .FirstOrDefaultAsync(s => s.TenantId == 1);
         await Assert.That(updated).IsNotNull();
-        await Assert.That(updated!.UpdatedAt > originalTimestamp).IsEqualTo(true);
+        await Assert.That(updated!.UpdatedAt > originalTimestamp).IsTrue();
     }
 
     [Test]
@@ -132,7 +132,7 @@ public class SubscriptionCacheNewMethodsTests
         TenantSubscription? updated = await dbFactory.Context.TenantSubscriptions
             .FirstOrDefaultAsync(s => s.TenantId == 1);
         await Assert.That(updated).IsNotNull();
-        await Assert.That(updated!.CancelAtPeriodEnd).IsEqualTo(true);
+        await Assert.That(updated!.CancelAtPeriodEnd).IsTrue();
         await Assert.That(updated.PendingAction).IsEqualTo(PendingSubscriptionAction.DowngradeToFree);
     }
 
@@ -152,7 +152,7 @@ public class SubscriptionCacheNewMethodsTests
         TenantSubscription? updated = await dbFactory.Context.TenantSubscriptions
             .FirstOrDefaultAsync(s => s.TenantId == 1);
         await Assert.That(updated).IsNotNull();
-        await Assert.That(updated!.CancelAtPeriodEnd).IsEqualTo(true);
+        await Assert.That(updated!.CancelAtPeriodEnd).IsTrue();
         await Assert.That(updated.PendingAction).IsEqualTo(PendingSubscriptionAction.DowngradeToPro);
     }
 
@@ -172,7 +172,7 @@ public class SubscriptionCacheNewMethodsTests
         TenantSubscription? updated = await dbFactory.Context.TenantSubscriptions
             .FirstOrDefaultAsync(s => s.TenantId == 1);
         await Assert.That(updated).IsNotNull();
-        await Assert.That(updated!.CancelAtPeriodEnd).IsEqualTo(true);
+        await Assert.That(updated!.CancelAtPeriodEnd).IsTrue();
         await Assert.That(updated.PendingAction).IsEqualTo(PendingSubscriptionAction.CancelAccount);
     }
 
@@ -194,7 +194,7 @@ public class SubscriptionCacheNewMethodsTests
         TenantSubscription? updated = await dbFactory.Context.TenantSubscriptions
             .FirstOrDefaultAsync(s => s.TenantId == 1);
         await Assert.That(updated).IsNotNull();
-        await Assert.That(updated!.CancelAtPeriodEnd).IsEqualTo(false);
+        await Assert.That(updated!.CancelAtPeriodEnd).IsFalse();
         await Assert.That(updated.PendingAction).IsEqualTo(PendingSubscriptionAction.None);
     }
 
@@ -216,7 +216,7 @@ public class SubscriptionCacheNewMethodsTests
         TenantSubscription? updated = await dbFactory.Context.TenantSubscriptions
             .FirstOrDefaultAsync(s => s.TenantId == 1);
         await Assert.That(updated).IsNotNull();
-        await Assert.That(updated!.UpdatedAt > originalTimestamp).IsEqualTo(true);
+        await Assert.That(updated!.UpdatedAt > originalTimestamp).IsTrue();
     }
 
     [Test]

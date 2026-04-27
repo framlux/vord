@@ -34,7 +34,7 @@ public class DowngradeCleanupServiceTests
         TenantOidcConfiguration? updated = await dbFactory.Context.TenantOidcConfigurations
             .FirstOrDefaultAsync(c => c.TenantId == 1);
         await Assert.That(updated).IsNotNull();
-        await Assert.That(updated!.IsEnabled).IsEqualTo(false);
+        await Assert.That(updated!.IsEnabled).IsFalse();
     }
 
     [Test]
@@ -53,7 +53,7 @@ public class DowngradeCleanupServiceTests
         AlertRule? updated = await dbFactory.Context.AlertRules
             .FirstOrDefaultAsync(r => r.Id == customRule.Id);
         await Assert.That(updated).IsNotNull();
-        await Assert.That(updated!.IsEnabled).IsEqualTo(false);
+        await Assert.That(updated!.IsEnabled).IsFalse();
     }
 
     [Test]
@@ -79,12 +79,12 @@ public class DowngradeCleanupServiceTests
         AlertRule? updatedDefault = await dbFactory.Context.AlertRules
             .FirstOrDefaultAsync(r => r.Id == defaultRule.Id);
         await Assert.That(updatedDefault).IsNotNull();
-        await Assert.That(updatedDefault!.IsEnabled).IsEqualTo(true);
+        await Assert.That(updatedDefault!.IsEnabled).IsTrue();
 
         AlertRule? updatedCustom = await dbFactory.Context.AlertRules
             .FirstOrDefaultAsync(r => r.Id == customRule.Id);
         await Assert.That(updatedCustom).IsNotNull();
-        await Assert.That(updatedCustom!.IsEnabled).IsEqualTo(false);
+        await Assert.That(updatedCustom!.IsEnabled).IsFalse();
     }
 
     [Test]
@@ -113,12 +113,12 @@ public class DowngradeCleanupServiceTests
         TenantOidcConfiguration? tenant2Oidc = await dbFactory.Context.TenantOidcConfigurations
             .FirstOrDefaultAsync(c => c.TenantId == 2);
         await Assert.That(tenant2Oidc).IsNotNull();
-        await Assert.That(tenant2Oidc!.IsEnabled).IsEqualTo(true);
+        await Assert.That(tenant2Oidc!.IsEnabled).IsTrue();
 
         AlertRule? tenant2Rule = await dbFactory.Context.AlertRules
             .FirstOrDefaultAsync(r => r.TenantId == 2);
         await Assert.That(tenant2Rule).IsNotNull();
-        await Assert.That(tenant2Rule!.IsEnabled).IsEqualTo(true);
+        await Assert.That(tenant2Rule!.IsEnabled).IsTrue();
     }
 
     [Test]
@@ -137,7 +137,7 @@ public class DowngradeCleanupServiceTests
         TenantOidcConfiguration? updated = await dbFactory.Context.TenantOidcConfigurations
             .FirstOrDefaultAsync(c => c.TenantId == 1);
         await Assert.That(updated).IsNotNull();
-        await Assert.That(updated!.IsEnabled).IsEqualTo(false);
+        await Assert.That(updated!.IsEnabled).IsFalse();
     }
 
     // --- CleanupForFreeTierAsync ---
@@ -164,7 +164,7 @@ public class DowngradeCleanupServiceTests
             .Where(r => r.TenantId == 1)
             .ToListAsync();
         await Assert.That(rules.Count).IsEqualTo(2);
-        await Assert.That(rules.All(r => r.IsEnabled == false)).IsEqualTo(true);
+        await Assert.That(rules.All(r => r.IsEnabled == false)).IsTrue();
     }
 
     [Test]
@@ -182,7 +182,7 @@ public class DowngradeCleanupServiceTests
         TenantOidcConfiguration? updated = await dbFactory.Context.TenantOidcConfigurations
             .FirstOrDefaultAsync(c => c.TenantId == 1);
         await Assert.That(updated).IsNotNull();
-        await Assert.That(updated!.IsEnabled).IsEqualTo(false);
+        await Assert.That(updated!.IsEnabled).IsFalse();
     }
 
     [Test]
@@ -200,7 +200,7 @@ public class DowngradeCleanupServiceTests
         WebhookEndpoint? updated = await dbFactory.Context.WebhookEndpoints
             .FirstOrDefaultAsync(w => w.Id == webhook.Id);
         await Assert.That(updated).IsNotNull();
-        await Assert.That(updated!.IsEnabled).IsEqualTo(false);
+        await Assert.That(updated!.IsEnabled).IsFalse();
     }
 
     [Test]
@@ -227,17 +227,17 @@ public class DowngradeCleanupServiceTests
         TenantOidcConfiguration? tenant2Oidc = await dbFactory.Context.TenantOidcConfigurations
             .FirstOrDefaultAsync(c => c.TenantId == 2);
         await Assert.That(tenant2Oidc).IsNotNull();
-        await Assert.That(tenant2Oidc!.IsEnabled).IsEqualTo(true);
+        await Assert.That(tenant2Oidc!.IsEnabled).IsTrue();
 
         AlertRule? tenant2Rule = await dbFactory.Context.AlertRules
             .FirstOrDefaultAsync(r => r.TenantId == 2);
         await Assert.That(tenant2Rule).IsNotNull();
-        await Assert.That(tenant2Rule!.IsEnabled).IsEqualTo(true);
+        await Assert.That(tenant2Rule!.IsEnabled).IsTrue();
 
         WebhookEndpoint? tenant2Webhook = await dbFactory.Context.WebhookEndpoints
             .FirstOrDefaultAsync(w => w.TenantId == 2);
         await Assert.That(tenant2Webhook).IsNotNull();
-        await Assert.That(tenant2Webhook!.IsEnabled).IsEqualTo(true);
+        await Assert.That(tenant2Webhook!.IsEnabled).IsTrue();
     }
 
     [Test]
@@ -267,6 +267,6 @@ public class DowngradeCleanupServiceTests
         WebhookEndpoint? updated = await dbFactory.Context.WebhookEndpoints
             .FirstOrDefaultAsync(w => w.Id == webhook.Id);
         await Assert.That(updated).IsNotNull();
-        await Assert.That(updated!.IsEnabled).IsEqualTo(false);
+        await Assert.That(updated!.IsEnabled).IsFalse();
     }
 }

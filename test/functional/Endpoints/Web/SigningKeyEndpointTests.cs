@@ -308,7 +308,7 @@ public sealed class SigningKeyEndpointTests
         // The endpoint returns a non-success response (either error payload or non-200 status).
         bool isError = secondBody.Contains("\"success\":false") ||
                        (int)secondRevokeResponse.StatusCode >= 400;
-        await Assert.That(isError).IsEqualTo(true);
+        await Assert.That(isError).IsTrue();
     }
 
     // ========== Invalid public key format ==========

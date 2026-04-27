@@ -29,7 +29,7 @@ public class MemberHandlerTests
         ServiceResult<ApiResponse<object>> result = await handler.RemoveAsync(2, null, 1, CancellationToken.None);
 
         await Assert.That(result.StatusCode).IsEqualTo(401);
-        await Assert.That(result.IsSuccess).IsEqualTo(false);
+        await Assert.That(result.IsSuccess).IsFalse();
     }
 
     [Test]
@@ -55,7 +55,7 @@ public class MemberHandlerTests
 
         ServiceResult<ApiResponse<object>> result = await handler.RemoveAsync(2, 1, 1, CancellationToken.None);
 
-        await Assert.That(result.IsNotFound).IsEqualTo(true);
+        await Assert.That(result.IsNotFound).IsTrue();
     }
 
     [Test]
@@ -70,8 +70,8 @@ public class MemberHandlerTests
 
         ServiceResult<ApiResponse<object>> result = await handler.RemoveAsync(2, 1, 1, CancellationToken.None);
 
-        await Assert.That(result.IsSuccess).IsEqualTo(true);
-        await Assert.That(result.Data!.Success).IsEqualTo(true);
+        await Assert.That(result.IsSuccess).IsTrue();
+        await Assert.That(result.Data!.Success).IsTrue();
     }
 
     // ========== ChangeRoleAsync tests ==========
@@ -86,7 +86,7 @@ public class MemberHandlerTests
         ServiceResult<ApiResponse<object>> result = await handler.ChangeRoleAsync(2, null, 1, "Viewer", CancellationToken.None);
 
         await Assert.That(result.StatusCode).IsEqualTo(401);
-        await Assert.That(result.IsSuccess).IsEqualTo(false);
+        await Assert.That(result.IsSuccess).IsFalse();
     }
 
     [Test]
@@ -174,7 +174,7 @@ public class MemberHandlerTests
 
         ServiceResult<ApiResponse<object>> result = await handler.ChangeRoleAsync(2, 1, 1, "Viewer", CancellationToken.None);
 
-        await Assert.That(result.IsSuccess).IsEqualTo(true);
+        await Assert.That(result.IsSuccess).IsTrue();
         await cache.Received(1).CreateUserTenantRoleAsync(
             Arg.Is<UserTenantRole>(r => r.Role == UserAccountRoles.Viewer && r.UserId == 2 && r.AssignedTenantId == 1),
             Arg.Any<CancellationToken>());
@@ -195,6 +195,6 @@ public class MemberHandlerTests
 
         ServiceResult<ApiResponse<object>> result = await handler.ChangeRoleAsync(2, 1, 1, "Viewer", CancellationToken.None);
 
-        await Assert.That(result.IsNotFound).IsEqualTo(true);
+        await Assert.That(result.IsNotFound).IsTrue();
     }
 }

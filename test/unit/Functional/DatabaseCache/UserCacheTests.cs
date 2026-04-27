@@ -136,7 +136,7 @@ public class UserCacheTests
 
         bool result = await cache.DoAnyUsersExistAsync();
 
-        await Assert.That(result).IsEqualTo(false);
+        await Assert.That(result).IsFalse();
     }
 
     [Test]
@@ -150,7 +150,7 @@ public class UserCacheTests
 
         bool result = await cache.DoAnyUsersExistAsync();
 
-        await Assert.That(result).IsEqualTo(true);
+        await Assert.That(result).IsTrue();
     }
 
     [Test]
@@ -164,7 +164,7 @@ public class UserCacheTests
 
         bool result = await cache.DoAnyUsersExistAsync();
 
-        await Assert.That(result).IsEqualTo(false);
+        await Assert.That(result).IsFalse();
     }
 
     [Test]

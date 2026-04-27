@@ -210,9 +210,9 @@ public sealed class AlertRuleEndpointTests
         await Assert.That(dbRule.Threshold).IsEqualTo(75m);
         await Assert.That(dbRule.DurationMinutes).IsEqualTo(10);
         await Assert.That(dbRule.Severity).IsEqualTo(AlertSeverity.Warning);
-        await Assert.That(dbRule.NotifyEmail).IsEqualTo(true);
-        await Assert.That(dbRule.NotifyWebhook).IsEqualTo(false);
-        await Assert.That(dbRule.IsCustom).IsEqualTo(true);
+        await Assert.That(dbRule.NotifyEmail).IsTrue();
+        await Assert.That(dbRule.NotifyWebhook).IsFalse();
+        await Assert.That(dbRule.IsCustom).IsTrue();
     }
 
     [Test]
@@ -504,9 +504,9 @@ public sealed class AlertRuleEndpointTests
         await Assert.That(updated!.Name).IsEqualTo("Updated Name");
         await Assert.That(updated.Threshold).IsEqualTo(95m);
         await Assert.That(updated.DurationMinutes).IsEqualTo(10);
-        await Assert.That(updated.IsEnabled).IsEqualTo(false);
-        await Assert.That(updated.NotifyEmail).IsEqualTo(true);
-        await Assert.That(updated.NotifyWebhook).IsEqualTo(true);
+        await Assert.That(updated.IsEnabled).IsFalse();
+        await Assert.That(updated.NotifyEmail).IsTrue();
+        await Assert.That(updated.NotifyWebhook).IsTrue();
     }
 
     [Test]
@@ -742,7 +742,7 @@ public sealed class AlertRuleEndpointTests
         int alphaIndex = body.IndexOf("Alpha", StringComparison.Ordinal);
         int bravoIndex = body.IndexOf("Bravo", StringComparison.Ordinal);
         int charlieIndex = body.IndexOf("Charlie", StringComparison.Ordinal);
-        await Assert.That(alphaIndex < bravoIndex).IsEqualTo(true);
-        await Assert.That(bravoIndex < charlieIndex).IsEqualTo(true);
+        await Assert.That(alphaIndex < bravoIndex).IsTrue();
+        await Assert.That(bravoIndex < charlieIndex).IsTrue();
     }
 }

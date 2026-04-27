@@ -126,7 +126,7 @@ public sealed class MachineSearchEndpointTests
         using JsonDocument doc = JsonDocument.Parse(body);
         JsonElement root = doc.RootElement;
 
-        await Assert.That(root.GetProperty("success").GetBoolean()).IsEqualTo(true);
+        await Assert.That(root.GetProperty("success").GetBoolean()).IsTrue();
 
         JsonElement data = root.GetProperty("data");
         await Assert.That(data.GetProperty("totalCount").GetInt32()).IsEqualTo(2);
@@ -275,14 +275,14 @@ public sealed class MachineSearchEndpointTests
         await Assert.That(items.GetArrayLength()).IsEqualTo(1);
 
         JsonElement machine = items[0];
-        await Assert.That(machine.TryGetProperty("id", out _)).IsEqualTo(true);
-        await Assert.That(machine.TryGetProperty("name", out _)).IsEqualTo(true);
-        await Assert.That(machine.TryGetProperty("healthStatus", out _)).IsEqualTo(true);
-        await Assert.That(machine.TryGetProperty("cpuUsagePercent", out _)).IsEqualTo(true);
-        await Assert.That(machine.TryGetProperty("memoryUsagePercent", out _)).IsEqualTo(true);
-        await Assert.That(machine.TryGetProperty("isOnline", out _)).IsEqualTo(true);
-        await Assert.That(machine.TryGetProperty("pendingUpdates", out _)).IsEqualTo(true);
-        await Assert.That(machine.TryGetProperty("failedServices", out _)).IsEqualTo(true);
+        await Assert.That(machine.TryGetProperty("id", out _)).IsTrue();
+        await Assert.That(machine.TryGetProperty("name", out _)).IsTrue();
+        await Assert.That(machine.TryGetProperty("healthStatus", out _)).IsTrue();
+        await Assert.That(machine.TryGetProperty("cpuUsagePercent", out _)).IsTrue();
+        await Assert.That(machine.TryGetProperty("memoryUsagePercent", out _)).IsTrue();
+        await Assert.That(machine.TryGetProperty("isOnline", out _)).IsTrue();
+        await Assert.That(machine.TryGetProperty("pendingUpdates", out _)).IsTrue();
+        await Assert.That(machine.TryGetProperty("failedServices", out _)).IsTrue();
     }
 
     // ========== Tenant isolation ==========

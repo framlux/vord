@@ -219,7 +219,7 @@ public sealed class SshSessionsEndpointTests
         string body = await response.Content.ReadAsStringAsync();
         await Assert.That(body).Contains("\"totalCount\":1");
         await Assert.That(body).Contains("web-server-1");
-        await Assert.That(body.Contains("db-server-1")).IsEqualTo(false);
+        await Assert.That(body.Contains("db-server-1")).IsFalse();
     }
 
     [Test]

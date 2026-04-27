@@ -30,7 +30,7 @@ public sealed class SsoOidcEventsTests
     {
         bool result = SsoOidcEvents.IsUrlSafe("https://login.example.com/.well-known/openid-configuration");
 
-        await Assert.That(result).IsEqualTo(true);
+        await Assert.That(result).IsTrue();
     }
 
     [Test]
@@ -38,7 +38,7 @@ public sealed class SsoOidcEventsTests
     {
         bool result = SsoOidcEvents.IsUrlSafe("http://login.example.com/.well-known/openid-configuration");
 
-        await Assert.That(result).IsEqualTo(false);
+        await Assert.That(result).IsFalse();
     }
 
     [Test]
@@ -46,7 +46,7 @@ public sealed class SsoOidcEventsTests
     {
         bool result = SsoOidcEvents.IsUrlSafe("https://localhost/.well-known/openid-configuration");
 
-        await Assert.That(result).IsEqualTo(false);
+        await Assert.That(result).IsFalse();
     }
 
     [Test]
@@ -54,7 +54,7 @@ public sealed class SsoOidcEventsTests
     {
         bool result = SsoOidcEvents.IsUrlSafe("https://127.0.0.1/.well-known/openid-configuration");
 
-        await Assert.That(result).IsEqualTo(false);
+        await Assert.That(result).IsFalse();
     }
 
     [Test]
@@ -62,7 +62,7 @@ public sealed class SsoOidcEventsTests
     {
         bool result = SsoOidcEvents.IsUrlSafe("https://0.0.0.0/.well-known/openid-configuration");
 
-        await Assert.That(result).IsEqualTo(false);
+        await Assert.That(result).IsFalse();
     }
 
     [Test]
@@ -70,7 +70,7 @@ public sealed class SsoOidcEventsTests
     {
         bool result = SsoOidcEvents.IsUrlSafe("https://[::1]/.well-known/openid-configuration");
 
-        await Assert.That(result).IsEqualTo(false);
+        await Assert.That(result).IsFalse();
     }
 
     [Test]
@@ -78,7 +78,7 @@ public sealed class SsoOidcEventsTests
     {
         bool result = SsoOidcEvents.IsUrlSafe("https://10.0.0.1/.well-known/openid-configuration");
 
-        await Assert.That(result).IsEqualTo(false);
+        await Assert.That(result).IsFalse();
     }
 
     [Test]
@@ -86,7 +86,7 @@ public sealed class SsoOidcEventsTests
     {
         bool result = SsoOidcEvents.IsUrlSafe("https://192.168.1.1/.well-known/openid-configuration");
 
-        await Assert.That(result).IsEqualTo(false);
+        await Assert.That(result).IsFalse();
     }
 
     [Test]
@@ -94,7 +94,7 @@ public sealed class SsoOidcEventsTests
     {
         bool result = SsoOidcEvents.IsUrlSafe("https://172.16.0.1/.well-known/openid-configuration");
 
-        await Assert.That(result).IsEqualTo(false);
+        await Assert.That(result).IsFalse();
     }
 
     [Test]
@@ -102,7 +102,7 @@ public sealed class SsoOidcEventsTests
     {
         bool resultEmpty = SsoOidcEvents.IsUrlSafe(string.Empty);
 
-        await Assert.That(resultEmpty).IsEqualTo(false);
+        await Assert.That(resultEmpty).IsFalse();
     }
 
     [Test]
@@ -110,7 +110,7 @@ public sealed class SsoOidcEventsTests
     {
         bool result = SsoOidcEvents.IsUrlSafe("not-a-url");
 
-        await Assert.That(result).IsEqualTo(false);
+        await Assert.That(result).IsFalse();
     }
 
     [Test]
@@ -118,7 +118,7 @@ public sealed class SsoOidcEventsTests
     {
         bool result = SsoOidcEvents.IsUrlSafe("https://8.8.8.8/endpoint");
 
-        await Assert.That(result).IsEqualTo(true);
+        await Assert.That(result).IsTrue();
     }
 
     // --- IsUrlSafeAsync Tests ---
@@ -128,7 +128,7 @@ public sealed class SsoOidcEventsTests
     {
         bool result = await SsoOidcEvents.IsUrlSafeAsync("http://example.com");
 
-        await Assert.That(result).IsEqualTo(false);
+        await Assert.That(result).IsFalse();
     }
 
     [Test]
@@ -136,7 +136,7 @@ public sealed class SsoOidcEventsTests
     {
         bool result = await SsoOidcEvents.IsUrlSafeAsync("not-a-url");
 
-        await Assert.That(result).IsEqualTo(false);
+        await Assert.That(result).IsFalse();
     }
 
     [Test]
@@ -144,7 +144,7 @@ public sealed class SsoOidcEventsTests
     {
         bool result = await SsoOidcEvents.IsUrlSafeAsync("https://localhost/test");
 
-        await Assert.That(result).IsEqualTo(false);
+        await Assert.That(result).IsFalse();
     }
 
     [Test]
@@ -152,7 +152,7 @@ public sealed class SsoOidcEventsTests
     {
         bool result = await SsoOidcEvents.IsUrlSafeAsync("https://8.8.8.8/endpoint");
 
-        await Assert.That(result).IsEqualTo(true);
+        await Assert.That(result).IsTrue();
     }
 
     [Test]
@@ -160,7 +160,7 @@ public sealed class SsoOidcEventsTests
     {
         bool result = await SsoOidcEvents.IsUrlSafeAsync("https://10.0.0.1/test");
 
-        await Assert.That(result).IsEqualTo(false);
+        await Assert.That(result).IsFalse();
     }
 
     // --- FetchDiscoveryDocumentAsync Tests ---
@@ -237,7 +237,7 @@ public sealed class SsoOidcEventsTests
         // ::ffff:127.0.0.1 should be detected as private via the IPv4-mapped check
         bool result = SsoOidcEvents.IsUrlSafe("https://[::ffff:127.0.0.1]/endpoint");
 
-        await Assert.That(result).IsEqualTo(false);
+        await Assert.That(result).IsFalse();
     }
 
     [Test]
@@ -245,7 +245,7 @@ public sealed class SsoOidcEventsTests
     {
         bool result = SsoOidcEvents.IsUrlSafe("https://[::ffff:10.0.0.1]/endpoint");
 
-        await Assert.That(result).IsEqualTo(false);
+        await Assert.That(result).IsFalse();
     }
 
     [Test]
@@ -253,7 +253,7 @@ public sealed class SsoOidcEventsTests
     {
         bool result = SsoOidcEvents.IsUrlSafe("/relative/path");
 
-        await Assert.That(result).IsEqualTo(false);
+        await Assert.That(result).IsFalse();
     }
 
     [Test]
@@ -261,7 +261,7 @@ public sealed class SsoOidcEventsTests
     {
         bool result = SsoOidcEvents.IsUrlSafe(null!);
 
-        await Assert.That(result).IsEqualTo(false);
+        await Assert.That(result).IsFalse();
     }
 
     [Test]
@@ -269,7 +269,7 @@ public sealed class SsoOidcEventsTests
     {
         bool result = SsoOidcEvents.IsUrlSafe("https://172.31.255.254/endpoint");
 
-        await Assert.That(result).IsEqualTo(false);
+        await Assert.That(result).IsFalse();
     }
 
     [Test]
@@ -277,7 +277,7 @@ public sealed class SsoOidcEventsTests
     {
         bool result = SsoOidcEvents.IsUrlSafe("https://login.microsoftonline.com/tenant/v2.0/.well-known/openid-configuration");
 
-        await Assert.That(result).IsEqualTo(true);
+        await Assert.That(result).IsTrue();
     }
 
     // --- Additional IsUrlSafeAsync edge cases ---
@@ -288,7 +288,7 @@ public sealed class SsoOidcEventsTests
         // A non-existent domain should fail DNS resolution and return false
         bool result = await SsoOidcEvents.IsUrlSafeAsync("https://this-domain-does-not-exist-xyzzy123456.example.invalid/endpoint");
 
-        await Assert.That(result).IsEqualTo(false);
+        await Assert.That(result).IsFalse();
     }
 
     [Test]
@@ -296,7 +296,7 @@ public sealed class SsoOidcEventsTests
     {
         bool result = await SsoOidcEvents.IsUrlSafeAsync(string.Empty);
 
-        await Assert.That(result).IsEqualTo(false);
+        await Assert.That(result).IsFalse();
     }
 
     [Test]
@@ -305,7 +305,7 @@ public sealed class SsoOidcEventsTests
         // ::ffff:10.0.0.1 resolved from DNS should be detected as private
         bool result = await SsoOidcEvents.IsUrlSafeAsync("https://[::ffff:10.0.0.1]/endpoint");
 
-        await Assert.That(result).IsEqualTo(false);
+        await Assert.That(result).IsFalse();
     }
 
     [Test]
@@ -313,7 +313,7 @@ public sealed class SsoOidcEventsTests
     {
         bool result = await SsoOidcEvents.IsUrlSafeAsync("https://[::ffff:127.0.0.1]/endpoint");
 
-        await Assert.That(result).IsEqualTo(false);
+        await Assert.That(result).IsFalse();
     }
 
     [Test]
@@ -322,7 +322,7 @@ public sealed class SsoOidcEventsTests
         // ::ffff:8.8.8.8 is a public IP mapped to IPv6 — should be allowed
         bool result = SsoOidcEvents.IsUrlSafe("https://[::ffff:8.8.8.8]/endpoint");
 
-        await Assert.That(result).IsEqualTo(true);
+        await Assert.That(result).IsTrue();
     }
 
     [Test]
@@ -330,7 +330,7 @@ public sealed class SsoOidcEventsTests
     {
         bool result = SsoOidcEvents.IsUrlSafe("https://[::ffff:192.168.0.1]/endpoint");
 
-        await Assert.That(result).IsEqualTo(false);
+        await Assert.That(result).IsFalse();
     }
 
     [Test]
@@ -339,7 +339,7 @@ public sealed class SsoOidcEventsTests
         // 169.254.x.x is link-local / cloud metadata — should be blocked
         bool result = SsoOidcEvents.IsUrlSafe("https://169.254.169.254/latest/meta-data/");
 
-        await Assert.That(result).IsEqualTo(false);
+        await Assert.That(result).IsFalse();
     }
 
     [Test]
@@ -347,7 +347,7 @@ public sealed class SsoOidcEventsTests
     {
         bool result = SsoOidcEvents.IsUrlSafe("ftp://example.com/file");
 
-        await Assert.That(result).IsEqualTo(false);
+        await Assert.That(result).IsFalse();
     }
 
     // --- FetchDiscoveryDocumentAsync Tests ---

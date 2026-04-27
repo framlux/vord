@@ -313,7 +313,7 @@ public class TenantCacheTests
 
         bool result = await cache.DisableUserTenantRoleAsync(userId, tenantId, adminId);
 
-        await Assert.That(result).IsEqualTo(true);
+        await Assert.That(result).IsTrue();
 
         // Verify the user no longer appears in members
         IEnumerable<UserTenantRole> members = await cache.GetMembersForTenantAsync(tenantId);
@@ -329,6 +329,6 @@ public class TenantCacheTests
 
         bool result = await cache.DisableUserTenantRoleAsync(9999, 9999, 1);
 
-        await Assert.That(result).IsEqualTo(false);
+        await Assert.That(result).IsFalse();
     }
 }

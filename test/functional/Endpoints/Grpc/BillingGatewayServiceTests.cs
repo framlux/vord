@@ -170,7 +170,7 @@ public sealed class BillingGatewayServiceTests
                 Action = BillingAction.UpgradeToPro
             }, headers);
 
-        await Assert.That(response.Success).IsEqualTo(true);
+        await Assert.That(response.Success).IsTrue();
         await Assert.That(response.Message).IsEqualTo("OK");
 
         TenantSubscription? updated = await db.TenantSubscriptions
@@ -209,7 +209,7 @@ public sealed class BillingGatewayServiceTests
                 Action = BillingAction.UpgradeToTeam
             }, headers);
 
-        await Assert.That(response.Success).IsEqualTo(true);
+        await Assert.That(response.Success).IsTrue();
         await Assert.That(response.Message).IsEqualTo("OK");
 
         TenantSubscription? updated = await db.TenantSubscriptions
@@ -255,7 +255,7 @@ public sealed class BillingGatewayServiceTests
                 Action = BillingAction.DowngradeToFree
             }, headers);
 
-        await Assert.That(response.Success).IsEqualTo(true);
+        await Assert.That(response.Success).IsTrue();
 
         TenantSubscription? updated = await db.TenantSubscriptions
             .FirstOrDefaultAsync(s => s.TenantId == tenantId);
@@ -264,7 +264,7 @@ public sealed class BillingGatewayServiceTests
         await Assert.That(updated.Status).IsEqualTo(SubscriptionStatus.Active);
         await Assert.That(updated.RetentionDays).IsEqualTo(1);
         await Assert.That(updated.MachineLimit).IsEqualTo(3);
-        await Assert.That(updated.CancelAtPeriodEnd).IsEqualTo(false);
+        await Assert.That(updated.CancelAtPeriodEnd).IsFalse();
         await Assert.That(updated.PendingAction).IsEqualTo(PendingSubscriptionAction.None);
         await Assert.That(updated.UpdatedAt).IsGreaterThanOrEqualTo(originalUpdatedAt);
     }
@@ -298,7 +298,7 @@ public sealed class BillingGatewayServiceTests
                 Action = BillingAction.DowngradeToFree
             }, headers);
 
-        await Assert.That(response.Success).IsEqualTo(true);
+        await Assert.That(response.Success).IsTrue();
 
         TenantSubscription? updated = await db.TenantSubscriptions
             .FirstOrDefaultAsync(s => s.TenantId == tenantId);
@@ -307,7 +307,7 @@ public sealed class BillingGatewayServiceTests
         await Assert.That(updated.Status).IsEqualTo(SubscriptionStatus.Active);
         await Assert.That(updated.RetentionDays).IsEqualTo(1);
         await Assert.That(updated.MachineLimit).IsEqualTo(3);
-        await Assert.That(updated.CancelAtPeriodEnd).IsEqualTo(false);
+        await Assert.That(updated.CancelAtPeriodEnd).IsFalse();
         await Assert.That(updated.PendingAction).IsEqualTo(PendingSubscriptionAction.None);
     }
 
@@ -337,7 +337,7 @@ public sealed class BillingGatewayServiceTests
                 Action = BillingAction.DowngradeToPro
             }, headers);
 
-        await Assert.That(response.Success).IsEqualTo(true);
+        await Assert.That(response.Success).IsTrue();
 
         TenantSubscription? updated = await db.TenantSubscriptions
             .FirstOrDefaultAsync(s => s.TenantId == tenantId);
@@ -373,12 +373,12 @@ public sealed class BillingGatewayServiceTests
                 CurrentPeriodEnd = Timestamp.FromDateTimeOffset(periodEnd)
             }, headers);
 
-        await Assert.That(response.Success).IsEqualTo(true);
+        await Assert.That(response.Success).IsTrue();
 
         TenantSubscription? updated = await db.TenantSubscriptions
             .FirstOrDefaultAsync(s => s.TenantId == tenantId);
         await Assert.That(updated).IsNotNull();
-        await Assert.That(updated!.CurrentPeriodEnd.HasValue).IsEqualTo(true);
+        await Assert.That(updated!.CurrentPeriodEnd.HasValue).IsTrue();
     }
 
     [Test]
@@ -403,7 +403,7 @@ public sealed class BillingGatewayServiceTests
                 Action = BillingAction.SetPastDue
             }, headers);
 
-        await Assert.That(response.Success).IsEqualTo(true);
+        await Assert.That(response.Success).IsTrue();
 
         TenantSubscription? updated = await db.TenantSubscriptions
             .FirstOrDefaultAsync(s => s.TenantId == tenantId);
@@ -433,7 +433,7 @@ public sealed class BillingGatewayServiceTests
                 Action = BillingAction.SetActive
             }, headers);
 
-        await Assert.That(response.Success).IsEqualTo(true);
+        await Assert.That(response.Success).IsTrue();
 
         TenantSubscription? updated = await db.TenantSubscriptions
             .FirstOrDefaultAsync(s => s.TenantId == tenantId);
@@ -535,7 +535,7 @@ public sealed class BillingGatewayServiceTests
                 Action = BillingAction.DowngradeToFree
             }, headers);
 
-        await Assert.That(response.Success).IsEqualTo(true);
+        await Assert.That(response.Success).IsTrue();
 
         TenantSubscription? updated = await db.TenantSubscriptions
             .FirstOrDefaultAsync(s => s.TenantId == tenantId);
@@ -574,14 +574,14 @@ public sealed class BillingGatewayServiceTests
                 Action = BillingAction.DowngradeToFree
             }, headers);
 
-        await Assert.That(response.Success).IsEqualTo(true);
+        await Assert.That(response.Success).IsTrue();
 
         TenantSubscription? updated = await db.TenantSubscriptions
             .FirstOrDefaultAsync(s => s.TenantId == tenantId);
         await Assert.That(updated).IsNotNull();
         await Assert.That(updated!.Tier).IsEqualTo(SubscriptionTier.Pro);
         await Assert.That(updated.Status).IsEqualTo(SubscriptionStatus.Canceled);
-        await Assert.That(updated.CancelAtPeriodEnd).IsEqualTo(false);
+        await Assert.That(updated.CancelAtPeriodEnd).IsFalse();
         await Assert.That(updated.PendingAction).IsEqualTo(PendingSubscriptionAction.None);
         await Assert.That(updated.UpdatedAt).IsGreaterThanOrEqualTo(originalUpdatedAt);
     }
@@ -615,13 +615,13 @@ public sealed class BillingGatewayServiceTests
                 CurrentPeriodEnd = Timestamp.FromDateTimeOffset(periodEnd)
             }, headers);
 
-        await Assert.That(response.Success).IsEqualTo(true);
+        await Assert.That(response.Success).IsTrue();
         await Assert.That(response.Message).IsEqualTo("OK");
 
         TenantSubscription? updated = await db.TenantSubscriptions
             .FirstOrDefaultAsync(s => s.TenantId == tenantId);
         await Assert.That(updated).IsNotNull();
-        await Assert.That(updated!.CurrentPeriodEnd.HasValue).IsEqualTo(true);
+        await Assert.That(updated!.CurrentPeriodEnd.HasValue).IsTrue();
         await Assert.That(updated.Tier).IsEqualTo(SubscriptionTier.Team);
         await Assert.That(updated.Status).IsEqualTo(SubscriptionStatus.Active);
     }
@@ -649,7 +649,7 @@ public sealed class BillingGatewayServiceTests
                 Action = BillingAction.SetPastDue
             }, headers);
 
-        await Assert.That(response.Success).IsEqualTo(true);
+        await Assert.That(response.Success).IsTrue();
         await Assert.That(response.Message).IsEqualTo("OK");
 
         TenantSubscription? updated = await db.TenantSubscriptions
@@ -682,7 +682,7 @@ public sealed class BillingGatewayServiceTests
                 Action = BillingAction.SetActive
             }, headers);
 
-        await Assert.That(response.Success).IsEqualTo(true);
+        await Assert.That(response.Success).IsTrue();
         await Assert.That(response.Message).IsEqualTo("OK");
 
         TenantSubscription? updated = await db.TenantSubscriptions

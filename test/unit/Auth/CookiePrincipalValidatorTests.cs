@@ -75,7 +75,7 @@ public class CookiePrincipalValidatorTests
 
         bool result = await validator.CheckUserIsActiveAsync(1, redisDb, CancellationToken.None);
 
-        await Assert.That(result).IsEqualTo(true);
+        await Assert.That(result).IsTrue();
     }
 
     [Test]
@@ -91,7 +91,7 @@ public class CookiePrincipalValidatorTests
 
         bool result = await validator.CheckUserIsActiveAsync(1, redisDb, CancellationToken.None);
 
-        await Assert.That(result).IsEqualTo(false);
+        await Assert.That(result).IsFalse();
     }
 
     [Test]
@@ -108,7 +108,7 @@ public class CookiePrincipalValidatorTests
 
         bool result = await validator.CheckUserIsActiveAsync(user.Id, redisDb, CancellationToken.None);
 
-        await Assert.That(result).IsEqualTo(true);
+        await Assert.That(result).IsTrue();
     }
 
     [Test]
@@ -125,7 +125,7 @@ public class CookiePrincipalValidatorTests
 
         bool result = await validator.CheckUserIsActiveAsync(user.Id, redisDb, CancellationToken.None);
 
-        await Assert.That(result).IsEqualTo(false);
+        await Assert.That(result).IsFalse();
     }
 
     [Test]
@@ -140,7 +140,7 @@ public class CookiePrincipalValidatorTests
 
         bool result = await validator.CheckUserIsActiveAsync(99999, redisDb, CancellationToken.None);
 
-        await Assert.That(result).IsEqualTo(false);
+        await Assert.That(result).IsFalse();
     }
 
     // --- Role claim refresh ---
@@ -172,7 +172,7 @@ public class CookiePrincipalValidatorTests
         await validator.RefreshRoleClaimsIfChangedAsync(context, 1, "ext-123", redisDb);
 
         // ShouldRenew stays false because claims match
-        await Assert.That(context.ShouldRenew).IsEqualTo(false);
+        await Assert.That(context.ShouldRenew).IsFalse();
     }
 
     [Test]
@@ -205,7 +205,7 @@ public class CookiePrincipalValidatorTests
         await validator.RefreshRoleClaimsIfChangedAsync(context, 1, "ext-123", redisDb);
 
         // Cookie should be renewed with updated claims
-        await Assert.That(context.ShouldRenew).IsEqualTo(true);
+        await Assert.That(context.ShouldRenew).IsTrue();
 
         // Principal should have both roles now
         List<string> updatedRoles = context.Principal!.FindAll(ClaimTypes.Role)
@@ -242,7 +242,7 @@ public class CookiePrincipalValidatorTests
 
         await validator.RefreshRoleClaimsIfChangedAsync(context, 1, "ext-123", redisDb);
 
-        await Assert.That(context.ShouldRenew).IsEqualTo(true);
+        await Assert.That(context.ShouldRenew).IsTrue();
 
         List<string> updatedRoles = context.Principal!.FindAll(ClaimTypes.Role)
             .Select(c => c.Value)
@@ -277,7 +277,7 @@ public class CookiePrincipalValidatorTests
 
         // No database call should have been made
         await dbCache.DidNotReceive().GetTenantsForUserAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
-        await Assert.That(context.ShouldRenew).IsEqualTo(false);
+        await Assert.That(context.ShouldRenew).IsFalse();
     }
 
     // --- Redirect overrides ---
@@ -418,7 +418,7 @@ public class CookiePrincipalValidatorTests
 
         // Active user with matching roles => principal NOT rejected, NOT renewed
         await Assert.That(context.Principal).IsNotNull();
-        await Assert.That(context.ShouldRenew).IsEqualTo(false);
+        await Assert.That(context.ShouldRenew).IsFalse();
     }
 
     [Test]
@@ -452,7 +452,7 @@ public class CookiePrincipalValidatorTests
 
         // Active user, but roles changed => cookie renewed, principal still valid
         await Assert.That(context.Principal).IsNotNull();
-        await Assert.That(context.ShouldRenew).IsEqualTo(true);
+        await Assert.That(context.ShouldRenew).IsTrue();
         List<string> roles = context.Principal!.FindAll(ClaimTypes.Role).Select(c => c.Value).ToList();
         await Assert.That(roles.Count).IsEqualTo(2);
     }

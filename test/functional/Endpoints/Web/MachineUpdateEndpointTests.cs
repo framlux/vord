@@ -210,7 +210,7 @@ public sealed class MachineUpdateEndpointTests
         JsonElement root = doc.RootElement;
 
         bool success = root.GetProperty("success").GetBoolean();
-        await Assert.That(success).IsEqualTo(true);
+        await Assert.That(success).IsTrue();
 
         JsonElement data = root.GetProperty("data");
         string returnedName = data.GetProperty("name").GetString()!;
@@ -446,7 +446,7 @@ public sealed class MachineUpdateEndpointTests
         string body = await response.Content.ReadAsStringAsync();
         using JsonDocument doc = JsonDocument.Parse(body);
         bool success = doc.RootElement.GetProperty("success").GetBoolean();
-        await Assert.That(success).IsEqualTo(true);
+        await Assert.That(success).IsTrue();
     }
 
     [Test]
@@ -471,7 +471,7 @@ public sealed class MachineUpdateEndpointTests
         string body = await response.Content.ReadAsStringAsync();
         using JsonDocument doc = JsonDocument.Parse(body);
         bool success = doc.RootElement.GetProperty("success").GetBoolean();
-        await Assert.That(success).IsEqualTo(true);
+        await Assert.That(success).IsTrue();
     }
 
     [Test]
@@ -658,7 +658,7 @@ public sealed class MachineUpdateEndpointTests
 
         bool isRejected = (response.StatusCode == HttpStatusCode.Unauthorized) ||
                           (response.StatusCode == HttpStatusCode.Forbidden);
-        await Assert.That(isRejected).IsEqualTo(true);
+        await Assert.That(isRejected).IsTrue();
     }
 
     // ──────────────────────────────────────────────
@@ -759,6 +759,6 @@ public sealed class MachineUpdateEndpointTests
             }
         }
 
-        await Assert.That(foundWithCorrectHostname).IsEqualTo(true);
+        await Assert.That(foundWithCorrectHostname).IsTrue();
     }
 }

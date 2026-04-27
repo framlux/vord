@@ -29,7 +29,7 @@ public sealed class AlertEvaluationServiceTests
     {
         bool result = AlertEvaluationService.EvaluateCondition(81m, AlertOperator.GreaterThan, 80m);
 
-        await Assert.That(result).IsEqualTo(true);
+        await Assert.That(result).IsTrue();
     }
 
     [Test]
@@ -37,7 +37,7 @@ public sealed class AlertEvaluationServiceTests
     {
         bool result = AlertEvaluationService.EvaluateCondition(80m, AlertOperator.GreaterThan, 80m);
 
-        await Assert.That(result).IsEqualTo(false);
+        await Assert.That(result).IsFalse();
     }
 
     [Test]
@@ -45,7 +45,7 @@ public sealed class AlertEvaluationServiceTests
     {
         bool result = AlertEvaluationService.EvaluateCondition(79m, AlertOperator.GreaterThan, 80m);
 
-        await Assert.That(result).IsEqualTo(false);
+        await Assert.That(result).IsFalse();
     }
 
     [Test]
@@ -53,7 +53,7 @@ public sealed class AlertEvaluationServiceTests
     {
         bool result = AlertEvaluationService.EvaluateCondition(19m, AlertOperator.LessThan, 20m);
 
-        await Assert.That(result).IsEqualTo(true);
+        await Assert.That(result).IsTrue();
     }
 
     [Test]
@@ -61,7 +61,7 @@ public sealed class AlertEvaluationServiceTests
     {
         bool result = AlertEvaluationService.EvaluateCondition(20m, AlertOperator.LessThan, 20m);
 
-        await Assert.That(result).IsEqualTo(false);
+        await Assert.That(result).IsFalse();
     }
 
     [Test]
@@ -69,7 +69,7 @@ public sealed class AlertEvaluationServiceTests
     {
         bool result = AlertEvaluationService.EvaluateCondition(21m, AlertOperator.LessThan, 20m);
 
-        await Assert.That(result).IsEqualTo(false);
+        await Assert.That(result).IsFalse();
     }
 
     [Test]
@@ -77,7 +77,7 @@ public sealed class AlertEvaluationServiceTests
     {
         bool result = AlertEvaluationService.EvaluateCondition(50m, AlertOperator.Equals, 50m);
 
-        await Assert.That(result).IsEqualTo(true);
+        await Assert.That(result).IsTrue();
     }
 
     [Test]
@@ -85,7 +85,7 @@ public sealed class AlertEvaluationServiceTests
     {
         bool result = AlertEvaluationService.EvaluateCondition(49m, AlertOperator.Equals, 50m);
 
-        await Assert.That(result).IsEqualTo(false);
+        await Assert.That(result).IsFalse();
     }
 
     [Test]
@@ -93,7 +93,7 @@ public sealed class AlertEvaluationServiceTests
     {
         bool result = AlertEvaluationService.EvaluateCondition(80m, (AlertOperator)99, 80m);
 
-        await Assert.That(result).IsEqualTo(false);
+        await Assert.That(result).IsFalse();
     }
 
     [Test]
@@ -101,7 +101,7 @@ public sealed class AlertEvaluationServiceTests
     {
         bool result = AlertEvaluationService.EvaluateCondition(1m, AlertOperator.GreaterThan, 0m);
 
-        await Assert.That(result).IsEqualTo(true);
+        await Assert.That(result).IsTrue();
     }
 
     [Test]
@@ -109,7 +109,7 @@ public sealed class AlertEvaluationServiceTests
     {
         bool result = AlertEvaluationService.EvaluateCondition(-5m, AlertOperator.LessThan, 0m);
 
-        await Assert.That(result).IsEqualTo(true);
+        await Assert.That(result).IsTrue();
     }
 
     [Test]
@@ -117,7 +117,7 @@ public sealed class AlertEvaluationServiceTests
     {
         bool result = AlertEvaluationService.EvaluateCondition(80.01m, AlertOperator.GreaterThan, 80.00m);
 
-        await Assert.That(result).IsEqualTo(true);
+        await Assert.That(result).IsTrue();
     }
 
     // --- GetMetricValue Tests ---

@@ -1859,7 +1859,7 @@ public class MachineSearchServiceTests
 
         await Assert.That(result.TotalCount).IsEqualTo(1);
         await Assert.That(result.Items[0].LastPing).IsNotNull();
-        await Assert.That(result.Items[0].IsOnline).IsEqualTo(true);
+        await Assert.That(result.Items[0].IsOnline).IsTrue();
     }
 
     // ========== LastPing — state LastSeenAt takes precedence over Redis ==========

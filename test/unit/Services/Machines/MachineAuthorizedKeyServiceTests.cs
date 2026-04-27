@@ -74,7 +74,7 @@ public sealed class MachineAuthorizedKeyServiceTests
         ServiceResult<MachineAuthorizedKey> result = await service.AuthorizeKeyAsync(
             machineId, signingKeyId, userId, tenantId, CancellationToken.None);
 
-        await Assert.That(result.IsSuccess).IsEqualTo(true);
+        await Assert.That(result.IsSuccess).IsTrue();
         await Assert.That(result.Data).IsNotNull();
         await Assert.That(result.Data!.MachineId).IsEqualTo(machineId);
         await Assert.That(result.Data!.SigningKeyId).IsEqualTo(signingKeyId);
@@ -95,7 +95,7 @@ public sealed class MachineAuthorizedKeyServiceTests
         ServiceResult<MachineAuthorizedKey> result = await service.AuthorizeKeyAsync(
             machineId, signingKeyId, userId, tenantId, CancellationToken.None);
 
-        await Assert.That(result.IsSuccess).IsEqualTo(true);
+        await Assert.That(result.IsSuccess).IsTrue();
 
         AuditLogEntry? auditEntry = await dbFactory.Context.AuditLog
             .FirstOrDefaultAsync(a => (a.Action == AuditAction.MachineKeyAuthorized) &&
@@ -119,7 +119,7 @@ public sealed class MachineAuthorizedKeyServiceTests
         ServiceResult<MachineAuthorizedKey> result = await service.AuthorizeKeyAsync(
             1, 1, 1, 0, CancellationToken.None);
 
-        await Assert.That(result.IsNotFound).IsEqualTo(true);
+        await Assert.That(result.IsNotFound).IsTrue();
     }
 
     [Test]
@@ -131,7 +131,7 @@ public sealed class MachineAuthorizedKeyServiceTests
         ServiceResult<MachineAuthorizedKey> result = await service.AuthorizeKeyAsync(
             1, 1, 1, -5, CancellationToken.None);
 
-        await Assert.That(result.IsNotFound).IsEqualTo(true);
+        await Assert.That(result.IsNotFound).IsTrue();
     }
 
     // ========== AuthorizeKeyAsync — Machine does not exist ==========
@@ -146,7 +146,7 @@ public sealed class MachineAuthorizedKeyServiceTests
         ServiceResult<MachineAuthorizedKey> result = await service.AuthorizeKeyAsync(
             99999, signingKeyId, userId, tenantId, CancellationToken.None);
 
-        await Assert.That(result.IsNotFound).IsEqualTo(true);
+        await Assert.That(result.IsNotFound).IsTrue();
     }
 
     // ========== AuthorizeKeyAsync — Machine in different tenant ==========
@@ -164,7 +164,7 @@ public sealed class MachineAuthorizedKeyServiceTests
         ServiceResult<MachineAuthorizedKey> result = await service.AuthorizeKeyAsync(
             machineId, signingKeyId, userId, wrongTenantId, CancellationToken.None);
 
-        await Assert.That(result.IsNotFound).IsEqualTo(true);
+        await Assert.That(result.IsNotFound).IsTrue();
     }
 
     // ========== AuthorizeKeyAsync — Soft-deleted machine ==========
@@ -179,7 +179,7 @@ public sealed class MachineAuthorizedKeyServiceTests
         ServiceResult<MachineAuthorizedKey> result = await service.AuthorizeKeyAsync(
             machineId, signingKeyId, userId, tenantId, CancellationToken.None);
 
-        await Assert.That(result.IsNotFound).IsEqualTo(true);
+        await Assert.That(result.IsNotFound).IsTrue();
     }
 
     // ========== AuthorizeKeyAsync — Signing key does not exist ==========
@@ -194,7 +194,7 @@ public sealed class MachineAuthorizedKeyServiceTests
         ServiceResult<MachineAuthorizedKey> result = await service.AuthorizeKeyAsync(
             machineId, 99999, userId, tenantId, CancellationToken.None);
 
-        await Assert.That(result.IsNotFound).IsEqualTo(true);
+        await Assert.That(result.IsNotFound).IsTrue();
     }
 
     // ========== AuthorizeKeyAsync — Signing key in different tenant ==========
@@ -224,7 +224,7 @@ public sealed class MachineAuthorizedKeyServiceTests
         ServiceResult<MachineAuthorizedKey> result = await service.AuthorizeKeyAsync(
             machine.Id, signingKey.Id, user.Id, tenant1.Id, CancellationToken.None);
 
-        await Assert.That(result.IsNotFound).IsEqualTo(true);
+        await Assert.That(result.IsNotFound).IsTrue();
     }
 
     // ========== AuthorizeKeyAsync — Revoked signing key ==========
@@ -255,7 +255,7 @@ public sealed class MachineAuthorizedKeyServiceTests
         // First authorization should succeed.
         ServiceResult<MachineAuthorizedKey> firstResult = await service.AuthorizeKeyAsync(
             machineId, signingKeyId, userId, tenantId, CancellationToken.None);
-        await Assert.That(firstResult.IsSuccess).IsEqualTo(true);
+        await Assert.That(firstResult.IsSuccess).IsTrue();
 
         // Second authorization for the same key-machine pair should conflict.
         ServiceResult<MachineAuthorizedKey> secondResult = await service.AuthorizeKeyAsync(
@@ -277,20 +277,20 @@ public sealed class MachineAuthorizedKeyServiceTests
         // Authorize, then revoke.
         ServiceResult<MachineAuthorizedKey> authResult = await service.AuthorizeKeyAsync(
             machineId, signingKeyId, userId, tenantId, CancellationToken.None);
-        await Assert.That(authResult.IsSuccess).IsEqualTo(true);
+        await Assert.That(authResult.IsSuccess).IsTrue();
         int originalId = authResult.Data!.Id;
 
         ServiceResult<bool> revokeResult = await service.RevokeAuthorizationAsync(
             machineId, signingKeyId, userId, tenantId, CancellationToken.None);
-        await Assert.That(revokeResult.IsSuccess).IsEqualTo(true);
+        await Assert.That(revokeResult.IsSuccess).IsTrue();
 
         // Re-authorization should succeed by reactivating the same row.
         ServiceResult<MachineAuthorizedKey> reAuthResult = await service.AuthorizeKeyAsync(
             machineId, signingKeyId, userId, tenantId, CancellationToken.None);
-        await Assert.That(reAuthResult.IsSuccess).IsEqualTo(true);
+        await Assert.That(reAuthResult.IsSuccess).IsTrue();
         await Assert.That(reAuthResult.Data!.Id).IsEqualTo(originalId);
-        await Assert.That(reAuthResult.Data!.RevokedAt.HasValue).IsEqualTo(false);
-        await Assert.That(reAuthResult.Data!.RevokedByUserId.HasValue).IsEqualTo(false);
+        await Assert.That(reAuthResult.Data!.RevokedAt.HasValue).IsFalse();
+        await Assert.That(reAuthResult.Data!.RevokedByUserId.HasValue).IsFalse();
     }
 
     // ========== RevokeAuthorizationAsync — Happy path ==========
@@ -305,14 +305,14 @@ public sealed class MachineAuthorizedKeyServiceTests
         // Authorize first.
         ServiceResult<MachineAuthorizedKey> authResult = await service.AuthorizeKeyAsync(
             machineId, signingKeyId, userId, tenantId, CancellationToken.None);
-        await Assert.That(authResult.IsSuccess).IsEqualTo(true);
+        await Assert.That(authResult.IsSuccess).IsTrue();
 
         // Revoke the authorization.
         ServiceResult<bool> revokeResult = await service.RevokeAuthorizationAsync(
             machineId, signingKeyId, userId, tenantId, CancellationToken.None);
 
-        await Assert.That(revokeResult.IsSuccess).IsEqualTo(true);
-        await Assert.That(revokeResult.Data).IsEqualTo(true);
+        await Assert.That(revokeResult.IsSuccess).IsTrue();
+        await Assert.That(revokeResult.Data).IsTrue();
 
         // Verify the authorization record is actually revoked in the database.
         MachineAuthorizedKey? record = await dbFactory.Context.MachineAuthorizedKeys
@@ -332,7 +332,7 @@ public sealed class MachineAuthorizedKeyServiceTests
 
         ServiceResult<MachineAuthorizedKey> authResult = await service.AuthorizeKeyAsync(
             machineId, signingKeyId, userId, tenantId, CancellationToken.None);
-        await Assert.That(authResult.IsSuccess).IsEqualTo(true);
+        await Assert.That(authResult.IsSuccess).IsTrue();
 
         await service.RevokeAuthorizationAsync(
             machineId, signingKeyId, userId, tenantId, CancellationToken.None);
@@ -360,7 +360,7 @@ public sealed class MachineAuthorizedKeyServiceTests
         ServiceResult<bool> result = await service.RevokeAuthorizationAsync(
             machineId, signingKeyId, userId, tenantId, CancellationToken.None);
 
-        await Assert.That(result.IsNotFound).IsEqualTo(true);
+        await Assert.That(result.IsNotFound).IsTrue();
     }
 
     // ========== RevokeAuthorizationAsync — Wrong tenant ==========
@@ -375,14 +375,14 @@ public sealed class MachineAuthorizedKeyServiceTests
         // Authorize first.
         ServiceResult<MachineAuthorizedKey> authResult = await service.AuthorizeKeyAsync(
             machineId, signingKeyId, userId, tenantId, CancellationToken.None);
-        await Assert.That(authResult.IsSuccess).IsEqualTo(true);
+        await Assert.That(authResult.IsSuccess).IsTrue();
 
         // Revoke with wrong tenant should not find the record.
         int wrongTenantId = tenantId + 100;
         ServiceResult<bool> revokeResult = await service.RevokeAuthorizationAsync(
             machineId, signingKeyId, userId, wrongTenantId, CancellationToken.None);
 
-        await Assert.That(revokeResult.IsNotFound).IsEqualTo(true);
+        await Assert.That(revokeResult.IsNotFound).IsTrue();
     }
 
     // ========== ListAuthorizedKeysAsync — Empty machine ==========
@@ -397,7 +397,7 @@ public sealed class MachineAuthorizedKeyServiceTests
         ServiceResult<List<MachineAuthorizedKeyDto>> result = await service.ListAuthorizedKeysAsync(
             machineId, tenantId, CancellationToken.None);
 
-        await Assert.That(result.IsSuccess).IsEqualTo(true);
+        await Assert.That(result.IsSuccess).IsTrue();
         await Assert.That(result.Data).IsNotNull();
         await Assert.That(result.Data!.Count).IsEqualTo(0);
     }
@@ -429,11 +429,11 @@ public sealed class MachineAuthorizedKeyServiceTests
         // Authorize both keys.
         ServiceResult<MachineAuthorizedKey> auth1 = await service.AuthorizeKeyAsync(
             machine.Id, key1.Id, user.Id, tenant.Id, CancellationToken.None);
-        await Assert.That(auth1.IsSuccess).IsEqualTo(true);
+        await Assert.That(auth1.IsSuccess).IsTrue();
 
         ServiceResult<MachineAuthorizedKey> auth2 = await service.AuthorizeKeyAsync(
             machine.Id, key2.Id, user.Id, tenant.Id, CancellationToken.None);
-        await Assert.That(auth2.IsSuccess).IsEqualTo(true);
+        await Assert.That(auth2.IsSuccess).IsTrue();
 
         // Revoke the second one.
         await service.RevokeAuthorizationAsync(machine.Id, key2.Id, user.Id, tenant.Id, CancellationToken.None);
@@ -442,7 +442,7 @@ public sealed class MachineAuthorizedKeyServiceTests
         ServiceResult<List<MachineAuthorizedKeyDto>> listResult = await service.ListAuthorizedKeysAsync(
             machine.Id, tenant.Id, CancellationToken.None);
 
-        await Assert.That(listResult.IsSuccess).IsEqualTo(true);
+        await Assert.That(listResult.IsSuccess).IsTrue();
         await Assert.That(listResult.Data!.Count).IsEqualTo(2);
 
         // Verify DTO fields on the active authorization.
@@ -450,17 +450,17 @@ public sealed class MachineAuthorizedKeyServiceTests
         await Assert.That(activeDto).IsNotNull();
         await Assert.That(activeDto!.Label).IsEqualTo("Active Key");
         await Assert.That(activeDto.Fingerprint).IsNotNull();
-        await Assert.That(string.IsNullOrEmpty(activeDto.Fingerprint)).IsEqualTo(false);
+        await Assert.That(string.IsNullOrEmpty(activeDto.Fingerprint)).IsFalse();
         await Assert.That(activeDto.OwnerUsername).IsEqualTo("testowner@example.com");
         await Assert.That(activeDto.AuthorizedByUsername).IsEqualTo("testowner@example.com");
-        await Assert.That(activeDto.IsActive).IsEqualTo(true);
+        await Assert.That(activeDto.IsActive).IsTrue();
         await Assert.That(activeDto.RevokedAt).IsNull();
 
         // Verify DTO fields on the revoked authorization.
         MachineAuthorizedKeyDto? revokedDto = listResult.Data!.Find(d => d.SigningKeyId == key2.Id);
         await Assert.That(revokedDto).IsNotNull();
         await Assert.That(revokedDto!.Label).IsEqualTo("Revoked Key");
-        await Assert.That(revokedDto.IsActive).IsEqualTo(false);
+        await Assert.That(revokedDto.IsActive).IsFalse();
         await Assert.That(revokedDto.RevokedAt).IsNotNull();
     }
 
@@ -476,7 +476,7 @@ public sealed class MachineAuthorizedKeyServiceTests
         ServiceResult<List<MachineAuthorizedKeyDto>> result = await service.ListAuthorizedKeysAsync(
             99999, tenantId, CancellationToken.None);
 
-        await Assert.That(result.IsNotFound).IsEqualTo(true);
+        await Assert.That(result.IsNotFound).IsTrue();
     }
 
     // ========== ListAuthorizedKeysAsync — Cross-machine isolation ==========
@@ -505,13 +505,13 @@ public sealed class MachineAuthorizedKeyServiceTests
         // Authorize the key for machine2 only.
         ServiceResult<MachineAuthorizedKey> authResult = await service.AuthorizeKeyAsync(
             machine2.Id, key.Id, user.Id, tenant.Id, CancellationToken.None);
-        await Assert.That(authResult.IsSuccess).IsEqualTo(true);
+        await Assert.That(authResult.IsSuccess).IsTrue();
 
         // Listing for machine1 should return no authorizations.
         ServiceResult<List<MachineAuthorizedKeyDto>> listResult = await service.ListAuthorizedKeysAsync(
             machine1.Id, tenant.Id, CancellationToken.None);
 
-        await Assert.That(listResult.IsSuccess).IsEqualTo(true);
+        await Assert.That(listResult.IsSuccess).IsTrue();
         await Assert.That(listResult.Data!.Count).IsEqualTo(0);
     }
 
@@ -527,7 +527,7 @@ public sealed class MachineAuthorizedKeyServiceTests
         ServiceResult<MachineAuthorizedKey> result = await service.AuthorizeKeyAsync(
             machineId, signingKeyId, userId, tenantId, CancellationToken.None);
 
-        await Assert.That(result.IsSuccess).IsEqualTo(true);
-        await Assert.That(result.Data!.Id > 0).IsEqualTo(true);
+        await Assert.That(result.IsSuccess).IsTrue();
+        await Assert.That(result.Data!.Id > 0).IsTrue();
     }
 }

@@ -52,11 +52,11 @@ public class RegistrationTokenHandlerTests
 
         ServiceResult<RegistrationTokenDto> result = await handler.CreateAsync(1, 1, "My Token", CancellationToken.None);
 
-        await Assert.That(result.IsSuccess).IsEqualTo(true);
+        await Assert.That(result.IsSuccess).IsTrue();
         await Assert.That(result.Data!.Name).IsEqualTo("My Token");
         await Assert.That(result.Data!.Token).IsNotNull();
-        await Assert.That(string.IsNullOrEmpty(result.Data!.Token)).IsEqualTo(false);
-        await Assert.That(result.Data!.IsRevoked).IsEqualTo(false);
+        await Assert.That(string.IsNullOrEmpty(result.Data!.Token)).IsFalse();
+        await Assert.That(result.Data!.IsRevoked).IsFalse();
     }
 
     [Test]
@@ -96,7 +96,7 @@ public class RegistrationTokenHandlerTests
 
         ServiceResult<object> result = await handler.RevokeAsync(999, 1, 1, CancellationToken.None);
 
-        await Assert.That(result.IsNotFound).IsEqualTo(true);
+        await Assert.That(result.IsNotFound).IsTrue();
     }
 
     [Test]
@@ -118,7 +118,7 @@ public class RegistrationTokenHandlerTests
 
         ServiceResult<object> result = await handler.RevokeAsync(token.Id, 1, 1, CancellationToken.None);
 
-        await Assert.That(result.IsNotFound).IsEqualTo(true);
+        await Assert.That(result.IsNotFound).IsTrue();
     }
 
     [Test]
@@ -141,7 +141,7 @@ public class RegistrationTokenHandlerTests
 
         ServiceResult<object> result = await handler.RevokeAsync(token.Id, 1, 1, CancellationToken.None);
 
-        await Assert.That(result.IsNotFound).IsEqualTo(true);
+        await Assert.That(result.IsNotFound).IsTrue();
     }
 
     [Test]
@@ -163,11 +163,11 @@ public class RegistrationTokenHandlerTests
 
         ServiceResult<object> result = await handler.RevokeAsync(token.Id, 1, 1, CancellationToken.None);
 
-        await Assert.That(result.IsSuccess).IsEqualTo(true);
+        await Assert.That(result.IsSuccess).IsTrue();
 
         RegistrationToken? revoked = await dbFactory.Context.RegistrationTokens.FirstOrDefaultAsync(t => t.Id == token.Id);
-        await Assert.That(revoked!.IsRevoked).IsEqualTo(true);
-        await Assert.That(revoked.RevokedAt.HasValue).IsEqualTo(true);
+        await Assert.That(revoked!.IsRevoked).IsTrue();
+        await Assert.That(revoked.RevokedAt.HasValue).IsTrue();
     }
 
     // ========== ListAsync tests ==========
@@ -180,7 +180,7 @@ public class RegistrationTokenHandlerTests
 
         ServiceResult<PaginatedResponse<RegistrationTokenDto>> result = await handler.ListAsync(1, 1, 25, CancellationToken.None);
 
-        await Assert.That(result.IsSuccess).IsEqualTo(true);
+        await Assert.That(result.IsSuccess).IsTrue();
         await Assert.That(result.Data!.Items.Count).IsEqualTo(0);
         await Assert.That(result.Data!.TotalCount).IsEqualTo(0);
     }
@@ -207,7 +207,7 @@ public class RegistrationTokenHandlerTests
 
         ServiceResult<PaginatedResponse<RegistrationTokenDto>> result = await handler.ListAsync(1, 1, 2, CancellationToken.None);
 
-        await Assert.That(result.IsSuccess).IsEqualTo(true);
+        await Assert.That(result.IsSuccess).IsTrue();
         await Assert.That(result.Data!.TotalCount).IsEqualTo(5);
         await Assert.That(result.Data!.Items.Count).IsEqualTo(2);
         await Assert.That(result.Data!.Page).IsEqualTo(1);
@@ -236,7 +236,7 @@ public class RegistrationTokenHandlerTests
 
         ServiceResult<PaginatedResponse<RegistrationTokenDto>> result = await handler.ListAsync(1, 5, 2, CancellationToken.None);
 
-        await Assert.That(result.IsSuccess).IsEqualTo(true);
+        await Assert.That(result.IsSuccess).IsTrue();
         await Assert.That(result.Data!.Items.Count).IsEqualTo(0);
         await Assert.That(result.Data!.TotalCount).IsEqualTo(3);
     }
@@ -263,10 +263,10 @@ public class RegistrationTokenHandlerTests
 
         ServiceResult<PaginatedResponse<RegistrationTokenDto>> result = await handler.ListAsync(1, 1, 2, CancellationToken.None);
 
-        await Assert.That(result.IsSuccess).IsEqualTo(true);
+        await Assert.That(result.IsSuccess).IsTrue();
         await Assert.That(result.Data!.Items.Count).IsEqualTo(2);
         await Assert.That(result.Data!.TotalCount).IsEqualTo(2);
-        await Assert.That(result.Data!.HasNextPage).IsEqualTo(false);
-        await Assert.That(result.Data!.HasPreviousPage).IsEqualTo(false);
+        await Assert.That(result.Data!.HasNextPage).IsFalse();
+        await Assert.That(result.Data!.HasPreviousPage).IsFalse();
     }
 }

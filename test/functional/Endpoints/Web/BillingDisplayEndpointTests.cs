@@ -155,7 +155,7 @@ public sealed class BillingDisplayEndpointTests
         string body = await response.Content.ReadAsStringAsync();
         using JsonDocument doc = JsonDocument.Parse(body);
         bool hasInvoice = doc.RootElement.GetProperty("data").GetProperty("hasInvoice").GetBoolean();
-        await Assert.That(hasInvoice).IsEqualTo(false);
+        await Assert.That(hasInvoice).IsFalse();
     }
 
     // ========== UsageHistory Endpoint ==========
@@ -389,7 +389,7 @@ public sealed class BillingDisplayEndpointTests
 
         // NoOpBillingApiClient returns null -> HasInvoice = false
         bool hasInvoice = data.GetProperty("hasInvoice").GetBoolean();
-        await Assert.That(hasInvoice).IsEqualTo(false);
+        await Assert.That(hasInvoice).IsFalse();
         // When no invoice, amounts should be zero
         long amount = data.GetProperty("amountDueCents").GetInt64();
         await Assert.That(amount).IsEqualTo(0);

@@ -66,15 +66,15 @@ public sealed class AuthenticatedEndpointTests
         JsonElement root = json.RootElement;
 
         // Verify the API response envelope
-        await Assert.That(root.GetProperty("success").GetBoolean()).IsEqualTo(true);
+        await Assert.That(root.GetProperty("success").GetBoolean()).IsTrue();
 
         // Verify user fields match the seeded data
         JsonElement data = root.GetProperty("data");
         await Assert.That(data.GetProperty("id").GetInt32()).IsEqualTo(user.Id);
         await Assert.That(data.GetProperty("email").GetString()).IsEqualTo("authme@example.com");
         await Assert.That(data.GetProperty("uniqueId").GetString()).IsEqualTo("ext-authme-1");
-        await Assert.That(data.GetProperty("isGlobalAdmin").GetBoolean()).IsEqualTo(false);
-        await Assert.That(data.GetProperty("needsOnboarding").GetBoolean()).IsEqualTo(false);
+        await Assert.That(data.GetProperty("isGlobalAdmin").GetBoolean()).IsFalse();
+        await Assert.That(data.GetProperty("needsOnboarding").GetBoolean()).IsFalse();
         await Assert.That(data.GetProperty("activeTenantId").GetInt32()).IsEqualTo(tenantId);
 
         // Verify the tenant list contains the expected tenant with correct role
@@ -118,8 +118,8 @@ public sealed class AuthenticatedEndpointTests
         JsonDocument json = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync());
         JsonElement data = json.RootElement.GetProperty("data");
 
-        await Assert.That(data.GetProperty("isGlobalAdmin").GetBoolean()).IsEqualTo(true);
-        await Assert.That(data.GetProperty("needsOnboarding").GetBoolean()).IsEqualTo(true);
+        await Assert.That(data.GetProperty("isGlobalAdmin").GetBoolean()).IsTrue();
+        await Assert.That(data.GetProperty("needsOnboarding").GetBoolean()).IsTrue();
     }
 
     [Test]
@@ -186,10 +186,10 @@ public sealed class AuthenticatedEndpointTests
         JsonDocument json = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync());
         JsonElement root = json.RootElement;
 
-        await Assert.That(root.GetProperty("success").GetBoolean()).IsEqualTo(true);
+        await Assert.That(root.GetProperty("success").GetBoolean()).IsTrue();
 
         JsonElement data = root.GetProperty("data");
-        await Assert.That(data.GetProperty("needsOnboarding").GetBoolean()).IsEqualTo(true);
+        await Assert.That(data.GetProperty("needsOnboarding").GetBoolean()).IsTrue();
         await Assert.That(data.GetProperty("tenants").GetArrayLength()).IsEqualTo(0);
     }
 
@@ -227,7 +227,7 @@ public sealed class AuthenticatedEndpointTests
         // The important assertion is that the endpoint does not throw a 500.
         bool isExpectedStatus = (response.StatusCode == HttpStatusCode.OK) ||
             (response.StatusCode == HttpStatusCode.NotFound);
-        await Assert.That(isExpectedStatus).IsEqualTo(true);
+        await Assert.That(isExpectedStatus).IsTrue();
     }
 
     [Test]
@@ -265,7 +265,7 @@ public sealed class AuthenticatedEndpointTests
         JsonElement root = json.RootElement;
 
         // Verify the API response envelope
-        await Assert.That(root.GetProperty("success").GetBoolean()).IsEqualTo(true);
+        await Assert.That(root.GetProperty("success").GetBoolean()).IsTrue();
         await Assert.That(root.GetProperty("message").GetString()).IsEqualTo("Organization created successfully");
 
         // Verify the response contains a valid tenant ID
@@ -290,7 +290,7 @@ public sealed class AuthenticatedEndpointTests
             .FirstOrDefaultAsync(r => r.UserId == user.Id && r.AssignedTenantId == tenant.Id);
         await Assert.That(userRole).IsNotNull();
         await Assert.That(userRole!.Role).IsEqualTo(UserAccountRoles.TenantAdmin);
-        await Assert.That(userRole.IsActive).IsEqualTo(true);
+        await Assert.That(userRole.IsActive).IsTrue();
     }
 
     [Test]
@@ -343,7 +343,7 @@ public sealed class AuthenticatedEndpointTests
         JsonElement root = json.RootElement;
 
         // Verify the error envelope indicates failure
-        await Assert.That(root.GetProperty("success").GetBoolean()).IsEqualTo(false);
+        await Assert.That(root.GetProperty("success").GetBoolean()).IsFalse();
 
         // Verify the error message communicates the conflict reason
         string? message = root.GetProperty("message").GetString();
@@ -414,13 +414,13 @@ public sealed class AuthenticatedEndpointTests
         // Verify the response payload indicates success
         JsonDocument json = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync());
         JsonElement root = json.RootElement;
-        await Assert.That(root.GetProperty("success").GetBoolean()).IsEqualTo(true);
+        await Assert.That(root.GetProperty("success").GetBoolean()).IsTrue();
         await Assert.That(root.GetProperty("message").GetString()).IsEqualTo("Tenant switched");
 
         // Verify Set-Cookie header sets vord_tenant to the new tenant ID
         bool hasTenantCookie = response.Headers.TryGetValues("Set-Cookie", out IEnumerable<string>? cookies) &&
             cookies.Any(c => c.Contains($"vord_tenant={tenant2Id}"));
-        await Assert.That(hasTenantCookie).IsEqualTo(true);
+        await Assert.That(hasTenantCookie).IsTrue();
     }
 
     [Test]
@@ -449,7 +449,7 @@ public sealed class AuthenticatedEndpointTests
         JsonDocument json = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync());
         JsonElement root = json.RootElement;
 
-        await Assert.That(root.GetProperty("success").GetBoolean()).IsEqualTo(false);
+        await Assert.That(root.GetProperty("success").GetBoolean()).IsFalse();
 
         string? message = root.GetProperty("message").GetString();
         await Assert.That(message).IsNotNull();
@@ -458,7 +458,7 @@ public sealed class AuthenticatedEndpointTests
         // Verify no Set-Cookie header was sent
         bool hasTenantCookie = response.Headers.TryGetValues("Set-Cookie", out IEnumerable<string>? cookies) &&
             cookies.Any(c => c.Contains("vord_tenant"));
-        await Assert.That(hasTenantCookie).IsEqualTo(false);
+        await Assert.That(hasTenantCookie).IsFalse();
     }
 
     [Test]

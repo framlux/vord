@@ -106,7 +106,7 @@ public sealed class MachineManagementEndpointTests
         JsonElement root = doc.RootElement;
 
         bool success = root.GetProperty("success").GetBoolean();
-        await Assert.That(success).IsEqualTo(true);
+        await Assert.That(success).IsTrue();
 
         string message = root.GetProperty("message").GetString()!;
         await Assert.That(message).Contains("deleted");
@@ -114,7 +114,7 @@ public sealed class MachineManagementEndpointTests
         // Verify the machine is actually soft-deleted in the database
         Machine? deletedMachine = await db.Machines.FirstOrDefaultAsync(m => m.Id == machineId);
         await Assert.That(deletedMachine).IsNotNull();
-        await Assert.That(deletedMachine!.IsDeleted).IsEqualTo(true);
+        await Assert.That(deletedMachine!.IsDeleted).IsTrue();
     }
 
     [Test]
@@ -139,7 +139,7 @@ public sealed class MachineManagementEndpointTests
         // Verify the machine was NOT deleted in the database
         Machine? machine = await db.Machines.FirstOrDefaultAsync(m => m.Id == machineId1);
         await Assert.That(machine).IsNotNull();
-        await Assert.That(machine!.IsDeleted).IsEqualTo(false);
+        await Assert.That(machine!.IsDeleted).IsFalse();
     }
 
     [Test]
@@ -197,7 +197,7 @@ public sealed class MachineManagementEndpointTests
         // Malformed IDs should be rejected; either 400 or 404 is acceptable
         bool isClientError = (response.StatusCode == HttpStatusCode.BadRequest) ||
                              (response.StatusCode == HttpStatusCode.NotFound);
-        await Assert.That(isClientError).IsEqualTo(true);
+        await Assert.That(isClientError).IsTrue();
     }
 
     [Test]
@@ -222,7 +222,7 @@ public sealed class MachineManagementEndpointTests
         JsonElement root = doc.RootElement;
 
         bool success = root.GetProperty("success").GetBoolean();
-        await Assert.That(success).IsEqualTo(true);
+        await Assert.That(success).IsTrue();
 
         JsonElement data = root.GetProperty("data");
         long returnedId = data.GetProperty("id").GetInt64();
@@ -236,15 +236,15 @@ public sealed class MachineManagementEndpointTests
 
         // Verify machine type is present and valid
         bool hasMachineType = data.TryGetProperty("machineType", out JsonElement _);
-        await Assert.That(hasMachineType).IsEqualTo(true);
+        await Assert.That(hasMachineType).IsTrue();
 
         // Verify operating system is present
         bool hasOs = data.TryGetProperty("operatingSystem", out JsonElement _);
-        await Assert.That(hasOs).IsEqualTo(true);
+        await Assert.That(hasOs).IsTrue();
 
         // Verify isDeleted is false for an active machine
         bool isDeleted = data.GetProperty("isDeleted").GetBoolean();
-        await Assert.That(isDeleted).IsEqualTo(false);
+        await Assert.That(isDeleted).IsFalse();
     }
 
     [Test]
@@ -301,7 +301,7 @@ public sealed class MachineManagementEndpointTests
 
         bool isClientError = (response.StatusCode == HttpStatusCode.BadRequest) ||
                              (response.StatusCode == HttpStatusCode.NotFound);
-        await Assert.That(isClientError).IsEqualTo(true);
+        await Assert.That(isClientError).IsTrue();
     }
 
     [Test]
@@ -326,16 +326,16 @@ public sealed class MachineManagementEndpointTests
         JsonElement root = doc.RootElement;
 
         bool success = root.GetProperty("success").GetBoolean();
-        await Assert.That(success).IsEqualTo(true);
+        await Assert.That(success).IsTrue();
 
         JsonElement data = root.GetProperty("data");
         // Status should have isOnline field
         bool hasIsOnline = data.TryGetProperty("isOnline", out JsonElement isOnlineElement);
-        await Assert.That(hasIsOnline).IsEqualTo(true);
+        await Assert.That(hasIsOnline).IsTrue();
 
         // Freshly registered machine should be offline
         bool isOnline = isOnlineElement.GetBoolean();
-        await Assert.That(isOnline).IsEqualTo(false);
+        await Assert.That(isOnline).IsFalse();
     }
 
     [Test]

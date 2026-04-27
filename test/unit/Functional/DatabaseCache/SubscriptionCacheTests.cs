@@ -173,7 +173,7 @@ public class SubscriptionCacheTests
 
         bool result = await service.CanApproveMachineAsync(88888, CancellationToken.None);
 
-        await Assert.That(result).IsEqualTo(false);
+        await Assert.That(result).IsFalse();
     }
 
     [Test]
@@ -189,6 +189,6 @@ public class SubscriptionCacheTests
 
         bool result = await service.CanApproveMachineAsync(70, CancellationToken.None);
 
-        await Assert.That(result).IsEqualTo(true);
+        await Assert.That(result).IsTrue();
     }
 }

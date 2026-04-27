@@ -52,7 +52,7 @@ public class DataExportHandlerTests
 
         ServiceResult<int> result = await handler.ExportTenantDataAsync(null, 1, CancellationToken.None);
 
-        await Assert.That(result.IsNotFound).IsEqualTo(true);
+        await Assert.That(result.IsNotFound).IsTrue();
     }
 
     [Test]
@@ -64,7 +64,7 @@ public class DataExportHandlerTests
 
         ServiceResult<int> result = await handler.ExportTenantDataAsync(1, 1, CancellationToken.None);
 
-        await Assert.That(result.IsSuccess).IsEqualTo(true);
+        await Assert.That(result.IsSuccess).IsTrue();
         await Assert.That(result.Data).IsGreaterThan(0);
 
         DataExportJob? job = await dbFactory.Context.DataExportJobs
@@ -330,7 +330,7 @@ public class DataExportHandlerTests
 
         ServiceResult<DataExportJob> result = await handler.GetExportJobAsync(jobId, 999, CancellationToken.None);
 
-        await Assert.That(result.IsNotFound).IsEqualTo(true);
+        await Assert.That(result.IsNotFound).IsTrue();
     }
 
     [Test]
@@ -350,7 +350,7 @@ public class DataExportHandlerTests
 
         try
         {
-            await Assert.That(result.IsSuccess).IsEqualTo(true);
+            await Assert.That(result.IsSuccess).IsTrue();
             await Assert.That(result.Data!.Status).IsEqualTo(DataExportJobStatus.Complete);
             await Assert.That(result.Data!.ObjectKey).IsNotEqualTo(string.Empty);
             await Assert.That(result.Data!.DownloadToken).IsNotEqualTo(string.Empty);
@@ -372,7 +372,7 @@ public class DataExportHandlerTests
         // Tenant 999 has no machines
         ServiceResult<int> result = await handler.ExportTenantDataAsync(999, 1, CancellationToken.None);
 
-        await Assert.That(result.IsNotFound).IsEqualTo(true);
+        await Assert.That(result.IsNotFound).IsTrue();
     }
 
     [Test]
@@ -384,7 +384,7 @@ public class DataExportHandlerTests
 
         ServiceResult<int> result = await handler.ExportTenantDataAsync(5, 1, CancellationToken.None);
 
-        await Assert.That(result.IsNotFound).IsEqualTo(true);
+        await Assert.That(result.IsNotFound).IsTrue();
     }
 
     [Test]
@@ -396,7 +396,7 @@ public class DataExportHandlerTests
 
         // Create first job
         ServiceResult<int> firstResult = await handler.ExportTenantDataAsync(1, 1, CancellationToken.None);
-        await Assert.That(firstResult.IsSuccess).IsEqualTo(true);
+        await Assert.That(firstResult.IsSuccess).IsTrue();
 
         // Attempt second job while first is still pending
         ServiceResult<int> secondResult = await handler.ExportTenantDataAsync(1, 1, CancellationToken.None);
@@ -422,7 +422,7 @@ public class DataExportHandlerTests
             // Second job should succeed since first is completed
             ServiceResult<int> secondResult = await handler.ExportTenantDataAsync(1, 1, CancellationToken.None);
 
-            await Assert.That(secondResult.IsSuccess).IsEqualTo(true);
+            await Assert.That(secondResult.IsSuccess).IsTrue();
             await Assert.That(secondResult.Data).IsGreaterThan(firstResult.Data);
         }
         finally
@@ -440,7 +440,7 @@ public class DataExportHandlerTests
 
         ServiceResult<int> result = await handler.ExportTenantDataAsync(1, 42, CancellationToken.None);
 
-        await Assert.That(result.IsSuccess).IsEqualTo(true);
+        await Assert.That(result.IsSuccess).IsTrue();
 
         AuditLogEntry? audit = await dbFactory.Context.AuditLog
             .FirstOrDefaultAsync(a => a.ResourceId == result.Data.ToString());
@@ -482,7 +482,7 @@ public class DataExportHandlerTests
             .FirstOrDefaultAsync(j => j.Id == jobId);
         await Assert.That(job).IsNotNull();
         await Assert.That(job!.Status).IsEqualTo(DataExportJobStatus.Failed);
-        await Assert.That(string.IsNullOrEmpty(job.ErrorMessage)).IsEqualTo(false);
+        await Assert.That(string.IsNullOrEmpty(job.ErrorMessage)).IsFalse();
     }
 
     [Test]
@@ -608,7 +608,7 @@ public class DataExportHandlerTests
 
         ServiceResult<DataExportJob> result = await handler.GetExportJobAsync(1, null, CancellationToken.None);
 
-        await Assert.That(result.IsNotFound).IsEqualTo(true);
+        await Assert.That(result.IsNotFound).IsTrue();
     }
 
     [Test]
@@ -619,7 +619,7 @@ public class DataExportHandlerTests
 
         ServiceResult<DataExportJob> result = await handler.GetExportJobAsync(99999, 1, CancellationToken.None);
 
-        await Assert.That(result.IsNotFound).IsEqualTo(true);
+        await Assert.That(result.IsNotFound).IsTrue();
     }
 
     [Test]
@@ -634,7 +634,7 @@ public class DataExportHandlerTests
 
         ServiceResult<DataExportJob> result = await handler.GetExportJobAsync(jobId, 1, CancellationToken.None);
 
-        await Assert.That(result.IsSuccess).IsEqualTo(true);
+        await Assert.That(result.IsSuccess).IsTrue();
         await Assert.That(result.Data).IsNotNull();
         await Assert.That(result.Data!.Id).IsEqualTo(jobId);
         await Assert.That(result.Data.TenantId).IsEqualTo(1);
@@ -650,7 +650,7 @@ public class DataExportHandlerTests
 
         ServiceResult<DataExportJob> result = await handler.GetExportJobByTokenAsync(null!, CancellationToken.None);
 
-        await Assert.That(result.IsNotFound).IsEqualTo(true);
+        await Assert.That(result.IsNotFound).IsTrue();
     }
 
     [Test]
@@ -661,7 +661,7 @@ public class DataExportHandlerTests
 
         ServiceResult<DataExportJob> result = await handler.GetExportJobByTokenAsync(string.Empty, CancellationToken.None);
 
-        await Assert.That(result.IsNotFound).IsEqualTo(true);
+        await Assert.That(result.IsNotFound).IsTrue();
     }
 
     [Test]
@@ -672,7 +672,7 @@ public class DataExportHandlerTests
 
         ServiceResult<DataExportJob> result = await handler.GetExportJobByTokenAsync("nonexistent-token", CancellationToken.None);
 
-        await Assert.That(result.IsNotFound).IsEqualTo(true);
+        await Assert.That(result.IsNotFound).IsTrue();
     }
 
     [Test]
@@ -693,7 +693,7 @@ public class DataExportHandlerTests
         ServiceResult<DataExportJob> result = await handler.GetExportJobByTokenAsync(
             createdJob!.DownloadToken, CancellationToken.None);
 
-        await Assert.That(result.IsSuccess).IsEqualTo(true);
+        await Assert.That(result.IsSuccess).IsTrue();
         await Assert.That(result.Data).IsNotNull();
         await Assert.That(result.Data!.Id).IsEqualTo(jobId);
     }

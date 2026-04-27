@@ -93,8 +93,8 @@ public sealed class FleetAdminServiceTests
         await Assert.That(result.Id).IsEqualTo(42);
         await Assert.That(result.ExternalId).IsEqualTo("ext-abc");
         await Assert.That(result.Username).IsEqualTo("testuser");
-        await Assert.That(result.IsActive).IsEqualTo(true);
-        await Assert.That(result.IsGlobalAdmin).IsEqualTo(true);
+        await Assert.That(result.IsActive).IsTrue();
+        await Assert.That(result.IsGlobalAdmin).IsTrue();
         await Assert.That(result.AuthProvider).IsEqualTo("GitHub");
         await Assert.That(result.TenantRoles.Count).IsEqualTo(0);
     }
@@ -221,7 +221,7 @@ public sealed class FleetAdminServiceTests
         await Assert.That(result.Id).IsEqualTo(5);
         await Assert.That(result.ExternalId).IsEqualTo("ext-t5");
         await Assert.That(result.Name).IsEqualTo("acme");
-        await Assert.That(result.IsActive).IsEqualTo(true);
+        await Assert.That(result.IsActive).IsTrue();
         await Assert.That(result.LogoUrl).IsEqualTo("https://example.com/logo.png");
         await Assert.That(result.MachineCount).IsEqualTo(10);
         await Assert.That(result.UserCount).IsEqualTo(3);
@@ -290,7 +290,7 @@ public sealed class FleetAdminServiceTests
         FleetTenantSubscription result = FleetAdminService.MapSubscription(subscription);
 
         await Assert.That(result.CurrentPeriodEnd).IsNotNull();
-        await Assert.That(result.CancelAtPeriodEnd).IsEqualTo(true);
+        await Assert.That(result.CancelAtPeriodEnd).IsTrue();
     }
 
     [Test]
@@ -337,7 +337,7 @@ public sealed class FleetAdminServiceTests
         await Assert.That(result.Name).IsEqualTo("server-01");
         await Assert.That(result.TenantId).IsEqualTo(5);
         await Assert.That(result.TenantName).IsEqualTo("My Tenant");
-        await Assert.That(result.IsDeleted).IsEqualTo(false);
+        await Assert.That(result.IsDeleted).IsFalse();
     }
 
     [Test]

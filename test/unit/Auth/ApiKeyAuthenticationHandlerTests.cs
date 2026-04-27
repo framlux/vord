@@ -48,7 +48,7 @@ public class ApiKeyAuthenticationHandlerTests
 
         AuthenticateResult result = await RunHandlerAsync(dbCache, null);
 
-        await Assert.That(result.Succeeded).IsEqualTo(false);
+        await Assert.That(result.Succeeded).IsFalse();
     }
 
     [Test]
@@ -60,7 +60,7 @@ public class ApiKeyAuthenticationHandlerTests
 
         AuthenticateResult result = await RunHandlerAsync(dbCache, "invalid-key");
 
-        await Assert.That(result.Succeeded).IsEqualTo(false);
+        await Assert.That(result.Succeeded).IsFalse();
     }
 
     [Test]
@@ -86,7 +86,7 @@ public class ApiKeyAuthenticationHandlerTests
 
         AuthenticateResult result = await RunHandlerAsync(dbCache, "valid-key");
 
-        await Assert.That(result.Succeeded).IsEqualTo(true);
+        await Assert.That(result.Succeeded).IsTrue();
         await Assert.That(result.Principal!.FindFirst("MachineId")!.Value).IsEqualTo("42");
     }
 
@@ -124,7 +124,7 @@ public class ApiKeyAuthenticationHandlerTests
 
         AuthenticateResult result = await RunHandlerAsync(dbCache, "");
 
-        await Assert.That(result.Succeeded).IsEqualTo(false);
+        await Assert.That(result.Succeeded).IsFalse();
     }
 
     [Test]

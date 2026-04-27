@@ -53,7 +53,7 @@ public class MachineDetailHandlerTests
 
         ServiceResult<MachineDto> result = await handler.GetDetailAsync(1, null, CancellationToken.None);
 
-        await Assert.That(result.IsNotFound).IsEqualTo(true);
+        await Assert.That(result.IsNotFound).IsTrue();
     }
 
     [Test]
@@ -64,7 +64,7 @@ public class MachineDetailHandlerTests
 
         ServiceResult<MachineDto> result = await handler.GetDetailAsync(999, 1, CancellationToken.None);
 
-        await Assert.That(result.IsNotFound).IsEqualTo(true);
+        await Assert.That(result.IsNotFound).IsTrue();
     }
 
     [Test]
@@ -76,7 +76,7 @@ public class MachineDetailHandlerTests
 
         ServiceResult<MachineDto> result = await handler.GetDetailAsync(machineId, 1, CancellationToken.None);
 
-        await Assert.That(result.IsNotFound).IsEqualTo(true);
+        await Assert.That(result.IsNotFound).IsTrue();
     }
 
     [Test]
@@ -88,7 +88,7 @@ public class MachineDetailHandlerTests
 
         ServiceResult<MachineDto> result = await handler.GetDetailAsync(machineId, 1, CancellationToken.None);
 
-        await Assert.That(result.IsNotFound).IsEqualTo(true);
+        await Assert.That(result.IsNotFound).IsTrue();
     }
 
     [Test]
@@ -100,7 +100,7 @@ public class MachineDetailHandlerTests
 
         ServiceResult<MachineDto> result = await handler.GetDetailAsync(machineId, 1, CancellationToken.None);
 
-        await Assert.That(result.IsSuccess).IsEqualTo(true);
+        await Assert.That(result.IsSuccess).IsTrue();
         await Assert.That(result.Data!.Id).IsEqualTo(machineId);
         await Assert.That(result.Data!.Name).IsEqualTo("prod-web-01");
     }
@@ -117,9 +117,9 @@ public class MachineDetailHandlerTests
 
         ServiceResult<MachineDto> result = await handler.GetDetailAsync(machineId, 1, CancellationToken.None);
 
-        await Assert.That(result.IsSuccess).IsEqualTo(true);
-        await Assert.That(result.Data!.IsOnline).IsEqualTo(true);
-        await Assert.That(result.Data!.LastPing.HasValue).IsEqualTo(true);
+        await Assert.That(result.IsSuccess).IsTrue();
+        await Assert.That(result.Data!.IsOnline).IsTrue();
+        await Assert.That(result.Data!.LastPing.HasValue).IsTrue();
     }
 
     // ========== GetFullDetailAsync tests ==========
@@ -135,7 +135,7 @@ public class MachineDetailHandlerTests
 
         ServiceResult<MachineDetailDto> result = await handler.GetFullDetailAsync(999, 1, CancellationToken.None);
 
-        await Assert.That(result.IsNotFound).IsEqualTo(true);
+        await Assert.That(result.IsNotFound).IsTrue();
     }
 
     [Test]
@@ -150,7 +150,7 @@ public class MachineDetailHandlerTests
 
         ServiceResult<MachineDetailDto> result = await handler.GetFullDetailAsync(1, 1, CancellationToken.None);
 
-        await Assert.That(result.IsSuccess).IsEqualTo(true);
+        await Assert.That(result.IsSuccess).IsTrue();
         await Assert.That(result.Data!.Name).IsEqualTo("detail-machine");
     }
 
@@ -165,7 +165,7 @@ public class MachineDetailHandlerTests
 
         ServiceResult<MachineDetailDto> result = await handler.GetFullDetailAsync(1, null, CancellationToken.None);
 
-        await Assert.That(result.IsNotFound).IsEqualTo(true);
+        await Assert.That(result.IsNotFound).IsTrue();
     }
 
     // ========== GetStatusAsync tests ==========
@@ -178,7 +178,7 @@ public class MachineDetailHandlerTests
 
         ServiceResult<MachineStatusDto> result = await handler.GetStatusAsync(1, null, CancellationToken.None);
 
-        await Assert.That(result.IsNotFound).IsEqualTo(true);
+        await Assert.That(result.IsNotFound).IsTrue();
     }
 
     [Test]
@@ -189,7 +189,7 @@ public class MachineDetailHandlerTests
 
         ServiceResult<MachineStatusDto> result = await handler.GetStatusAsync(999, 1, CancellationToken.None);
 
-        await Assert.That(result.IsNotFound).IsEqualTo(true);
+        await Assert.That(result.IsNotFound).IsTrue();
     }
 
     [Test]
@@ -201,8 +201,8 @@ public class MachineDetailHandlerTests
 
         ServiceResult<MachineStatusDto> result = await handler.GetStatusAsync(machineId, 1, CancellationToken.None);
 
-        await Assert.That(result.IsSuccess).IsEqualTo(true);
-        await Assert.That(result.Data!.IsOnline).IsEqualTo(false);
+        await Assert.That(result.IsSuccess).IsTrue();
+        await Assert.That(result.Data!.IsOnline).IsFalse();
     }
 
     [Test]
@@ -216,8 +216,8 @@ public class MachineDetailHandlerTests
 
         ServiceResult<MachineStatusDto> result = await handler.GetStatusAsync(machineId, 1, CancellationToken.None);
 
-        await Assert.That(result.IsSuccess).IsEqualTo(true);
-        await Assert.That(result.Data!.IsOnline).IsEqualTo(true);
+        await Assert.That(result.IsSuccess).IsTrue();
+        await Assert.That(result.Data!.IsOnline).IsTrue();
     }
 
     // ========== CommandsEnabled from agent capabilities ==========
@@ -231,8 +231,8 @@ public class MachineDetailHandlerTests
 
         ServiceResult<MachineDto> result = await handler.GetDetailAsync(machineId, 1, CancellationToken.None);
 
-        await Assert.That(result.IsSuccess).IsEqualTo(true);
-        await Assert.That(result.Data!.CommandsEnabled).IsEqualTo(false);
+        await Assert.That(result.IsSuccess).IsTrue();
+        await Assert.That(result.Data!.CommandsEnabled).IsFalse();
     }
 
     [Test]
@@ -247,8 +247,8 @@ public class MachineDetailHandlerTests
 
         ServiceResult<MachineDto> result = await handler.GetDetailAsync(machineId, 1, CancellationToken.None);
 
-        await Assert.That(result.IsSuccess).IsEqualTo(true);
-        await Assert.That(result.Data!.CommandsEnabled).IsEqualTo(true);
+        await Assert.That(result.IsSuccess).IsTrue();
+        await Assert.That(result.Data!.CommandsEnabled).IsTrue();
     }
 
     [Test]
@@ -260,8 +260,8 @@ public class MachineDetailHandlerTests
 
         ServiceResult<MachineStatusDto> result = await handler.GetStatusAsync(machineId, 1, CancellationToken.None);
 
-        await Assert.That(result.IsSuccess).IsEqualTo(true);
-        await Assert.That(result.Data!.CommandsEnabled).IsEqualTo(false);
+        await Assert.That(result.IsSuccess).IsTrue();
+        await Assert.That(result.Data!.CommandsEnabled).IsFalse();
     }
 
     [Test]
@@ -276,7 +276,7 @@ public class MachineDetailHandlerTests
 
         ServiceResult<MachineStatusDto> result = await handler.GetStatusAsync(machineId, 1, CancellationToken.None);
 
-        await Assert.That(result.IsSuccess).IsEqualTo(true);
-        await Assert.That(result.Data!.CommandsEnabled).IsEqualTo(true);
+        await Assert.That(result.IsSuccess).IsTrue();
+        await Assert.That(result.Data!.CommandsEnabled).IsTrue();
     }
 }

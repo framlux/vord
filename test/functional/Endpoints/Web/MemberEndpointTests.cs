@@ -175,7 +175,7 @@ public sealed class MemberEndpointTests
 
         UserTenantRole? updatedRole = await db.UserTenantRoles
             .FirstOrDefaultAsync(r => r.UserId == targetUser.Id && r.AssignedTenantId == tenantId);
-        await Assert.That(updatedRole!.IsActive).IsEqualTo(false);
+        await Assert.That(updatedRole!.IsActive).IsFalse();
     }
 
     // --- MemberRoleChangeEndpoint Tests ---
@@ -322,7 +322,7 @@ public sealed class MemberEndpointTests
         // Old role should be disabled
         UserTenantRole? oldRole = await db.UserTenantRoles
             .FirstOrDefaultAsync(r => r.UserId == targetUser.Id && r.AssignedTenantId == tenantId && r.Role == UserAccountRoles.Viewer);
-        await Assert.That(oldRole!.IsActive).IsEqualTo(false);
+        await Assert.That(oldRole!.IsActive).IsFalse();
 
         // New role should be active
         UserTenantRole? newRole = await db.UserTenantRoles

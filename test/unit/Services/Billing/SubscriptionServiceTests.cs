@@ -42,7 +42,7 @@ public class SubscriptionServiceTests
 
         bool result = await service.CanApproveMachineAsync(1, CancellationToken.None);
 
-        await Assert.That(result).IsEqualTo(true);
+        await Assert.That(result).IsTrue();
     }
 
     [Test]
@@ -65,7 +65,7 @@ public class SubscriptionServiceTests
 
         bool result = await service.CanApproveMachineAsync(1, CancellationToken.None);
 
-        await Assert.That(result).IsEqualTo(false);
+        await Assert.That(result).IsFalse();
     }
 
     [Test]
@@ -81,7 +81,7 @@ public class SubscriptionServiceTests
 
         bool result = await service.CanApproveMachineAsync(1, CancellationToken.None);
 
-        await Assert.That(result).IsEqualTo(true);
+        await Assert.That(result).IsTrue();
     }
 
     [Test]
@@ -94,7 +94,7 @@ public class SubscriptionServiceTests
 
         bool result = await service.CanApproveMachineAsync(999, CancellationToken.None);
 
-        await Assert.That(result).IsEqualTo(false);
+        await Assert.That(result).IsFalse();
     }
 
     [Test]
@@ -303,7 +303,7 @@ public class SubscriptionServiceTests
 
         await Assert.That(result).IsNotNull();
         // PastDue subscriptions should not be considered active for telemetry acceptance
-        await Assert.That(result!.Status == SubscriptionStatus.Active).IsEqualTo(false);
+        await Assert.That(result!.Status == SubscriptionStatus.Active).IsFalse();
     }
 
     [Test]
@@ -320,7 +320,7 @@ public class SubscriptionServiceTests
         TenantSubscription? result = await service.GetSubscriptionForTenantAsync(1, CancellationToken.None);
 
         await Assert.That(result).IsNotNull();
-        await Assert.That(result!.Status == SubscriptionStatus.Active).IsEqualTo(true);
+        await Assert.That(result!.Status == SubscriptionStatus.Active).IsTrue();
     }
 
     [Test]
@@ -337,6 +337,6 @@ public class SubscriptionServiceTests
         TenantSubscription? result = await service.GetSubscriptionForTenantAsync(1, CancellationToken.None);
 
         await Assert.That(result).IsNotNull();
-        await Assert.That(result!.Status == SubscriptionStatus.Active).IsEqualTo(false);
+        await Assert.That(result!.Status == SubscriptionStatus.Active).IsFalse();
     }
 }

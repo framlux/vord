@@ -8,6 +8,7 @@ using FluentMigrator;
 using Framlux.FleetManagement.Database.Migrations;
 using Framlux.FleetManagement.Database;
 using Framlux.FleetManagement.Server.Auth;
+using Framlux.FleetManagement.Server.Services.Alerts;
 using Framlux.FleetManagement.Server.Services.Billing;
 using Framlux.FleetManagement.Server.Services.Commands;
 using Framlux.FleetManagement.Server.Services.DataExport;
@@ -180,12 +181,17 @@ public class FunctionalTestFactory : WebApplicationFactory<Program>
                     _ => RateLimitPartition.GetNoLimiter("test"));
             });
 
-            // Remove hosted services that depend on Redis, distributed locking, or billing gRPC
-            RemoveHostedService<DataExportBackgroundService>(services);
-            RemoveHostedService<StripeSyncService>(services);
-            RemoveHostedService<MachineStateStreamingService>(services);
-            RemoveHostedService<HealthSweepService>(services);
+            // Remove hosted services that depend on Redis, distributed locking, or billing gRPC.
+            // All background services must be removed to prevent concurrent SQLite access on the
+            // shared in-memory connection, which causes intermittent "database is locked" errors.
+            RemoveHostedService<AlertEvaluationService>(services);
             RemoveHostedService<CommandExpiryBackgroundService>(services);
+            RemoveHostedService<DataExportBackgroundService>(services);
+            RemoveHostedService<DataExportCleanupService>(services);
+            RemoveHostedService<HealthSweepService>(services);
+            RemoveHostedService<MachineStateStreamingService>(services);
+            RemoveHostedService<PartitionManagementService>(services);
+            RemoveHostedService<StripeSyncService>(services);
 
             // Replace object storage with a fake for tests
             services.RemoveAll<IObjectStorageService>();

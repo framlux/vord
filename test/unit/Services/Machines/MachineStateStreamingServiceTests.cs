@@ -352,8 +352,8 @@ public class MachineStateStreamingServiceTests
             .FirstOrDefaultAsync();
 
         await Assert.That(summary).IsNotNull();
-        await Assert.That(summary!.HasDiskHealthIssue).IsEqualTo(true);
-        await Assert.That(summary.HasHardwareIssue).IsEqualTo(false);
+        await Assert.That(summary!.HasDiskHealthIssue).IsTrue();
+        await Assert.That(summary.HasHardwareIssue).IsFalse();
     }
 
     // ========== ProcessTelemetryRow_PackageUpdates_UpdatesSummaryFields ==========
@@ -510,8 +510,8 @@ public class MachineStateStreamingServiceTests
         (bool hasDiskIssue, bool hasHardwareIssue) = MachineStateStreamingService.ComputeHardwareHealthFlags(
             """{"fans":[{"name":"fan1","rpm":0}],"disk_smart":[],"power_supplies":[]}""");
 
-        await Assert.That(hasDiskIssue).IsEqualTo(false);
-        await Assert.That(hasHardwareIssue).IsEqualTo(true);
+        await Assert.That(hasDiskIssue).IsFalse();
+        await Assert.That(hasHardwareIssue).IsTrue();
     }
 
     [Test]
@@ -520,8 +520,8 @@ public class MachineStateStreamingServiceTests
         (bool hasDiskIssue, bool hasHardwareIssue) = MachineStateStreamingService.ComputeHardwareHealthFlags(
             """{"fans":[{"name":"fan1","rpm":3000}],"disk_smart":[],"power_supplies":[{"name":"psu1","status":"DEGRADED"}]}""");
 
-        await Assert.That(hasDiskIssue).IsEqualTo(false);
-        await Assert.That(hasHardwareIssue).IsEqualTo(true);
+        await Assert.That(hasDiskIssue).IsFalse();
+        await Assert.That(hasHardwareIssue).IsTrue();
     }
 
     [Test]
@@ -530,8 +530,8 @@ public class MachineStateStreamingServiceTests
         (bool hasDiskIssue, bool hasHardwareIssue) = MachineStateStreamingService.ComputeHardwareHealthFlags(
             """{"disk_smart":[{"device":"/dev/sda","health_status":"FAILED"}],"fans":[],"power_supplies":[]}""");
 
-        await Assert.That(hasDiskIssue).IsEqualTo(true);
-        await Assert.That(hasHardwareIssue).IsEqualTo(false);
+        await Assert.That(hasDiskIssue).IsTrue();
+        await Assert.That(hasHardwareIssue).IsFalse();
     }
 
     [Test]
@@ -540,8 +540,8 @@ public class MachineStateStreamingServiceTests
         (bool hasDiskIssue, bool hasHardwareIssue) = MachineStateStreamingService.ComputeHardwareHealthFlags(
             """{"disk_smart":[{"device":"/dev/sda","health_status":"PASSED"}],"fans":[{"name":"fan1","rpm":3000}],"power_supplies":[{"name":"psu1","status":"OK"}]}""");
 
-        await Assert.That(hasDiskIssue).IsEqualTo(false);
-        await Assert.That(hasHardwareIssue).IsEqualTo(false);
+        await Assert.That(hasDiskIssue).IsFalse();
+        await Assert.That(hasHardwareIssue).IsFalse();
     }
 
     [Test]
@@ -550,8 +550,8 @@ public class MachineStateStreamingServiceTests
         (bool hasDiskIssue, bool hasHardwareIssue) = MachineStateStreamingService.ComputeHardwareHealthFlags(
             "not-valid-json{{{");
 
-        await Assert.That(hasDiskIssue).IsEqualTo(false);
-        await Assert.That(hasHardwareIssue).IsEqualTo(false);
+        await Assert.That(hasDiskIssue).IsFalse();
+        await Assert.That(hasHardwareIssue).IsFalse();
     }
 
     [Test]
@@ -560,8 +560,8 @@ public class MachineStateStreamingServiceTests
         (bool hasDiskIssue, bool hasHardwareIssue) = MachineStateStreamingService.ComputeHardwareHealthFlags(
             """{"fans":[],"disk_smart":[],"power_supplies":[]}""");
 
-        await Assert.That(hasDiskIssue).IsEqualTo(false);
-        await Assert.That(hasHardwareIssue).IsEqualTo(false);
+        await Assert.That(hasDiskIssue).IsFalse();
+        await Assert.That(hasHardwareIssue).IsFalse();
     }
 
     [Test]
@@ -570,8 +570,8 @@ public class MachineStateStreamingServiceTests
         (bool hasDiskIssue, bool hasHardwareIssue) = MachineStateStreamingService.ComputeHardwareHealthFlags(
             """{"fans":[{"name":"fan1","rpm":2500}],"disk_smart":[],"power_supplies":[]}""");
 
-        await Assert.That(hasDiskIssue).IsEqualTo(false);
-        await Assert.That(hasHardwareIssue).IsEqualTo(false);
+        await Assert.That(hasDiskIssue).IsFalse();
+        await Assert.That(hasHardwareIssue).IsFalse();
     }
 
     [Test]
@@ -580,8 +580,8 @@ public class MachineStateStreamingServiceTests
         (bool hasDiskIssue, bool hasHardwareIssue) = MachineStateStreamingService.ComputeHardwareHealthFlags(
             """{"fans":[{"name":"fan1","rpm":2500}],"disk_smart":[],"power_supplies":[{"name":"psu1","status":"OK"}]}""");
 
-        await Assert.That(hasDiskIssue).IsEqualTo(false);
-        await Assert.That(hasHardwareIssue).IsEqualTo(false);
+        await Assert.That(hasDiskIssue).IsFalse();
+        await Assert.That(hasHardwareIssue).IsFalse();
     }
 
     [Test]
@@ -591,8 +591,8 @@ public class MachineStateStreamingServiceTests
         (bool hasDiskIssue, bool hasHardwareIssue) = MachineStateStreamingService.ComputeHardwareHealthFlags(
             """{"disk_smart":[{"device":"/dev/sda","health_status":"PASSED"}]}""");
 
-        await Assert.That(hasDiskIssue).IsEqualTo(false);
-        await Assert.That(hasHardwareIssue).IsEqualTo(false);
+        await Assert.That(hasDiskIssue).IsFalse();
+        await Assert.That(hasHardwareIssue).IsFalse();
     }
 
     [Test]
@@ -602,8 +602,8 @@ public class MachineStateStreamingServiceTests
         (bool hasDiskIssue, bool hasHardwareIssue) = MachineStateStreamingService.ComputeHardwareHealthFlags(
             """{"disk_smart":[],"fans":[{"name":"fan1","rpm":2000}]}""");
 
-        await Assert.That(hasDiskIssue).IsEqualTo(false);
-        await Assert.That(hasHardwareIssue).IsEqualTo(false);
+        await Assert.That(hasDiskIssue).IsFalse();
+        await Assert.That(hasHardwareIssue).IsFalse();
     }
 
     // ========== ProcessTelemetryRow_NullPayload_SkipsGracefully ==========
@@ -877,8 +877,8 @@ public class MachineStateStreamingServiceTests
         (bool hasDiskIssue, bool hasHardwareIssue) = MachineStateStreamingService.ComputeHardwareHealthFlags(
             """{"disk_smart":[{"device":"/dev/sda","health_status":"FAILED"}],"fans":[{"name":"fan1","rpm":0}],"power_supplies":[{"name":"psu1","status":"OK"}]}""");
 
-        await Assert.That(hasDiskIssue).IsEqualTo(true);
-        await Assert.That(hasHardwareIssue).IsEqualTo(true);
+        await Assert.That(hasDiskIssue).IsTrue();
+        await Assert.That(hasHardwareIssue).IsTrue();
     }
 
     // ========== ComputeMaxDiskUsagePercent_SingleDisk_ReturnsItsValue ==========
@@ -938,8 +938,8 @@ public class MachineStateStreamingServiceTests
         (bool hasDiskIssue, bool hasHardwareIssue) = MachineStateStreamingService.ComputeHardwareHealthFlags(
             """{"fans":"none","disk_smart":[],"power_supplies":[]}""");
 
-        await Assert.That(hasDiskIssue).IsEqualTo(false);
-        await Assert.That(hasHardwareIssue).IsEqualTo(false);
+        await Assert.That(hasDiskIssue).IsFalse();
+        await Assert.That(hasHardwareIssue).IsFalse();
     }
 
     // ========== ComputeHardwareHealthFlags_DiskSmartNotArray_NoFalsePositive ==========
@@ -950,8 +950,8 @@ public class MachineStateStreamingServiceTests
         (bool hasDiskIssue, bool hasHardwareIssue) = MachineStateStreamingService.ComputeHardwareHealthFlags(
             """{"disk_smart":"none","fans":[],"power_supplies":[]}""");
 
-        await Assert.That(hasDiskIssue).IsEqualTo(false);
-        await Assert.That(hasHardwareIssue).IsEqualTo(false);
+        await Assert.That(hasDiskIssue).IsFalse();
+        await Assert.That(hasHardwareIssue).IsFalse();
     }
 
     // ========== ComputeHardwareHealthFlags_PsuCheckSkippedWhenFanAlreadyFailed ==========
@@ -964,8 +964,8 @@ public class MachineStateStreamingServiceTests
         (bool hasDiskIssue, bool hasHardwareIssue) = MachineStateStreamingService.ComputeHardwareHealthFlags(
             """{"fans":[{"name":"fan1","rpm":0}],"disk_smart":[],"power_supplies":[{"name":"psu1","status":"DEGRADED"}]}""");
 
-        await Assert.That(hasDiskIssue).IsEqualTo(false);
-        await Assert.That(hasHardwareIssue).IsEqualTo(true);
+        await Assert.That(hasDiskIssue).IsFalse();
+        await Assert.That(hasHardwareIssue).IsTrue();
     }
 
     // ========== Constructor null guard tests ==========

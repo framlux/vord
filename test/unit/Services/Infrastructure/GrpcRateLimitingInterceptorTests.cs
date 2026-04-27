@@ -65,7 +65,7 @@ public class GrpcRateLimitingInterceptorTests
 
         string result = await interceptor.UnaryServerHandler("request", context, continuation);
 
-        await Assert.That(continuationCalled).IsEqualTo(true);
+        await Assert.That(continuationCalled).IsTrue();
         await Assert.That(result).IsEqualTo("response");
     }
 
@@ -115,7 +115,7 @@ public class GrpcRateLimitingInterceptorTests
 
         await interceptor.ServerStreamingServerHandler("request", responseStream, context, continuation);
 
-        await Assert.That(continuationCalled).IsEqualTo(true);
+        await Assert.That(continuationCalled).IsTrue();
     }
 
     [Test]
@@ -162,7 +162,7 @@ public class GrpcRateLimitingInterceptorTests
 
         string result = await interceptor.ClientStreamingServerHandler(requestStream, context, continuation);
 
-        await Assert.That(continuationCalled).IsEqualTo(true);
+        await Assert.That(continuationCalled).IsTrue();
         await Assert.That(result).IsEqualTo("response");
     }
 
@@ -211,7 +211,7 @@ public class GrpcRateLimitingInterceptorTests
 
         await interceptor.DuplexStreamingServerHandler(requestStream, responseStream, context, continuation);
 
-        await Assert.That(continuationCalled).IsEqualTo(true);
+        await Assert.That(continuationCalled).IsTrue();
     }
 
     [Test]
@@ -272,6 +272,6 @@ public class GrpcRateLimitingInterceptorTests
         await interceptor.UnaryServerHandler("request", context, continuation);
 
         // The request should be allowed (under limit) — proves IP extraction didn't crash.
-        await Assert.That(continuationCalled).IsEqualTo(true);
+        await Assert.That(continuationCalled).IsTrue();
     }
 }

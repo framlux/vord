@@ -102,7 +102,7 @@ public sealed class SigningKeyServiceTests
         ServiceResult<UserSigningKey> result = await service.RegisterKeyAsync(
             1, 1, "Valid Key", GenerateValidPublicKey(), CancellationToken.None);
 
-        await Assert.That(result.IsSuccess).IsEqualTo(true);
+        await Assert.That(result.IsSuccess).IsTrue();
         await Assert.That(result.Data!.Id).IsEqualTo(42);
     }
 
@@ -215,7 +215,7 @@ public sealed class SigningKeyServiceTests
         ServiceResult<bool> result = await service.RevokeKeyAsync(
             keyId: 1, userId: 42, tenantId: 1, isAdminOrTenantAdmin: true, CancellationToken.None);
 
-        await Assert.That(result.IsSuccess).IsEqualTo(true);
+        await Assert.That(result.IsSuccess).IsTrue();
     }
 
     [Test]
@@ -241,7 +241,7 @@ public sealed class SigningKeyServiceTests
         ServiceResult<bool> result = await service.RevokeKeyAsync(
             keyId: 1, userId: 42, tenantId: 1, isAdminOrTenantAdmin: false, CancellationToken.None);
 
-        await Assert.That(result.IsSuccess).IsEqualTo(true);
+        await Assert.That(result.IsSuccess).IsTrue();
     }
 
     // ========== RevokeKeyAsync — Cross-tenant isolation ==========
@@ -265,7 +265,7 @@ public sealed class SigningKeyServiceTests
         ServiceResult<bool> result = await service.RevokeKeyAsync(
             keyId: 1, userId: 42, tenantId: 1, isAdminOrTenantAdmin: true, CancellationToken.None);
 
-        await Assert.That(result.IsNotFound).IsEqualTo(true);
+        await Assert.That(result.IsNotFound).IsTrue();
     }
 
     // ========== RevokeKeyAsync — Already revoked ==========
@@ -305,6 +305,6 @@ public sealed class SigningKeyServiceTests
         ServiceResult<bool> result = await service.RevokeKeyAsync(
             keyId: 999, userId: 1, tenantId: 1, isAdminOrTenantAdmin: false, CancellationToken.None);
 
-        await Assert.That(result.IsNotFound).IsEqualTo(true);
+        await Assert.That(result.IsNotFound).IsTrue();
     }
 }

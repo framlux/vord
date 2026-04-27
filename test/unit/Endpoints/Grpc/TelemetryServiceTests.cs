@@ -120,7 +120,7 @@ public sealed class TelemetryServiceTests
 
         TelemetryAck ack = await service.SubmitTelemetry(envelope, context);
 
-        await Assert.That(ack.Success).IsEqualTo(false);
+        await Assert.That(ack.Success).IsFalse();
         await Assert.That(ack.ErrorMessage).IsEqualTo("Could not determine machine identity");
     }
 
@@ -175,7 +175,7 @@ public sealed class TelemetryServiceTests
 
         TelemetryAck ack = await service.SubmitTelemetry(envelope, context);
 
-        await Assert.That(ack.Success).IsEqualTo(false);
+        await Assert.That(ack.Success).IsFalse();
         await Assert.That(ack.ErrorMessage).IsEqualTo("Machine ID mismatch between API key and header");
     }
 
@@ -201,7 +201,7 @@ public sealed class TelemetryServiceTests
 
         TelemetryAck ack = await service.SubmitTelemetry(envelope, context);
 
-        await Assert.That(ack.Success).IsEqualTo(true);
+        await Assert.That(ack.Success).IsTrue();
         await Assert.That(ack.BatchId).IsEqualTo("batch-3");
         await Assert.That(ack.AcknowledgedEventIds.Count).IsEqualTo(1);
         await Assert.That(ack.AcknowledgedEventIds[0]).IsEqualTo("event-3");
@@ -258,7 +258,7 @@ public sealed class TelemetryServiceTests
         TelemetryAck ack = await service.SubmitTelemetry(envelope, context);
 
         List<MachineTelemetry> telemetry = await dbFactory.Context.MachineTelemetry.ToListAsync();
-        await Assert.That(ack.Success).IsEqualTo(true);
+        await Assert.That(ack.Success).IsTrue();
         await Assert.That(telemetry.Count).IsEqualTo(1);
         await Assert.That(telemetry[0].TenantId).IsEqualTo(5);
         await Assert.That(telemetry[0].SourceEventId).IsEqualTo("event-state-1");
@@ -297,7 +297,7 @@ public sealed class TelemetryServiceTests
 
         TelemetryAck ack = await service.SubmitTelemetry(envelope, context);
 
-        await Assert.That(ack.Success).IsEqualTo(true);
+        await Assert.That(ack.Success).IsTrue();
         await Assert.That(ack.AcknowledgedEventIds.Count).IsEqualTo(1);
 
         // No rows should be inserted — Redis layer caught the duplicate.
@@ -330,7 +330,7 @@ public sealed class TelemetryServiceTests
 
         TelemetryAck ack = await service.SubmitTelemetry(envelope, context);
 
-        await Assert.That(ack.Success).IsEqualTo(true);
+        await Assert.That(ack.Success).IsTrue();
         await Assert.That(ack.BatchId).IsEqualTo("batch-5");
     }
 
@@ -362,7 +362,7 @@ public sealed class TelemetryServiceTests
 
         TelemetryAck ack = await service.SubmitTelemetry(envelope, context);
 
-        await Assert.That(ack.Success).IsEqualTo(true);
+        await Assert.That(ack.Success).IsTrue();
         await Assert.That(ack.AcknowledgedEventIds.Count).IsEqualTo(2);
 
         List<MachineTelemetry> telemetry = await dbFactory.Context.MachineTelemetry.ToListAsync();
@@ -401,7 +401,7 @@ public sealed class TelemetryServiceTests
 
         TelemetryAck ack = await service.SubmitTelemetry(envelope, context);
 
-        await Assert.That(ack.Success).IsEqualTo(false);
+        await Assert.That(ack.Success).IsFalse();
         await Assert.That(ack.ErrorMessage).IsEqualTo("Tenant subscription is not active");
 
         // No telemetry rows should be inserted when subscription is inactive
@@ -431,7 +431,7 @@ public sealed class TelemetryServiceTests
 
         TelemetryAck ack = await service.SubmitTelemetry(envelope, context);
 
-        await Assert.That(ack.Success).IsEqualTo(false);
+        await Assert.That(ack.Success).IsFalse();
         await Assert.That(ack.ErrorMessage).Contains("exceeds maximum item count");
     }
 
@@ -447,7 +447,7 @@ public sealed class TelemetryServiceTests
 
         TelemetryAck ack = await service.SubmitTelemetry(envelope, context);
 
-        await Assert.That(ack.Success).IsEqualTo(true);
+        await Assert.That(ack.Success).IsTrue();
         await Assert.That(ack.BatchId).IsEqualTo("batch-empty");
     }
 

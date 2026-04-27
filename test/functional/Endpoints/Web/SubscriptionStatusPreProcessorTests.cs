@@ -253,7 +253,7 @@ public sealed class SubscriptionStatusPreProcessorTests
         // The key distinction: preprocessor returns 403 with "read-only" message; endpoint returns 403 without it
         await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.Forbidden);
         string body = await response.Content.ReadAsStringAsync();
-        await Assert.That(body.Contains("read-only")).IsEqualTo(false);
+        await Assert.That(body.Contains("read-only")).IsFalse();
     }
 
     // --- Verify JSON response body ---

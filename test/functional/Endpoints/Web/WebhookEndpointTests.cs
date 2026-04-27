@@ -135,7 +135,7 @@ public sealed class WebhookEndpointTests
         await Assert.That(body).Contains("My Webhook");
         await Assert.That(body).Contains("https://hooks.example.com/alerts");
         // The DTO should not contain the secret
-        await Assert.That(body.Contains("\"secret\"")).IsEqualTo(false);
+        await Assert.That(body.Contains("\"secret\"")).IsFalse();
     }
 
     [Test]
@@ -245,7 +245,7 @@ public sealed class WebhookEndpointTests
         string body = await response.Content.ReadAsStringAsync();
         int alphaIndex = body.IndexOf("Alpha Hook", StringComparison.Ordinal);
         int zetaIndex = body.IndexOf("Zeta Hook", StringComparison.Ordinal);
-        await Assert.That(alphaIndex < zetaIndex).IsEqualTo(true);
+        await Assert.That(alphaIndex < zetaIndex).IsTrue();
     }
 
     // --- DeleteWebhook Tests ---

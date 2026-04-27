@@ -90,7 +90,7 @@ public class RedisMachinePingServiceTests
 
         bool result = await service.IsOnlineAsync(1, TimeSpan.FromMinutes(5));
 
-        await Assert.That(result).IsEqualTo(false);
+        await Assert.That(result).IsFalse();
     }
 
     [Test]
@@ -112,7 +112,7 @@ public class RedisMachinePingServiceTests
 
         bool result = await service.IsOnlineAsync(1, TimeSpan.FromMinutes(5));
 
-        await Assert.That(result).IsEqualTo(true);
+        await Assert.That(result).IsTrue();
     }
 
     [Test]
@@ -134,7 +134,7 @@ public class RedisMachinePingServiceTests
 
         bool result = await service.IsOnlineAsync(1, TimeSpan.FromMinutes(5));
 
-        await Assert.That(result).IsEqualTo(false);
+        await Assert.That(result).IsFalse();
     }
 
     // ========== GetPingHistoryAsync tests ==========
@@ -257,9 +257,9 @@ public class RedisMachinePingServiceTests
 
         Dictionary<long, bool> result = await service.AreOnlineAsync([1L, 2L, 3L], TimeSpan.FromMinutes(5));
 
-        await Assert.That(result[1]).IsEqualTo(true);
-        await Assert.That(result[2]).IsEqualTo(false);
-        await Assert.That(result[3]).IsEqualTo(false);
+        await Assert.That(result[1]).IsTrue();
+        await Assert.That(result[2]).IsFalse();
+        await Assert.That(result[3]).IsFalse();
     }
 
     // ========== GetLastPingsAsync tests ==========
@@ -333,7 +333,7 @@ public class RedisMachinePingServiceTests
 
         Dictionary<long, bool> result = await service.AreOnlineAsync([1L, 2L], TimeSpan.FromMinutes(5));
 
-        await Assert.That(result[1]).IsEqualTo(false);
-        await Assert.That(result[2]).IsEqualTo(false);
+        await Assert.That(result[1]).IsFalse();
+        await Assert.That(result[2]).IsFalse();
     }
 }

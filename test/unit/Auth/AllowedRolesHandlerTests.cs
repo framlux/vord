@@ -54,7 +54,7 @@ public class AllowedRolesHandlerTests
 
         await handler.HandleAsync(context);
 
-        await Assert.That(context.HasSucceeded).IsEqualTo(true);
+        await Assert.That(context.HasSucceeded).IsTrue();
     }
 
     [Test]
@@ -70,7 +70,7 @@ public class AllowedRolesHandlerTests
 
         await handler.HandleAsync(context);
 
-        await Assert.That(context.HasSucceeded).IsEqualTo(true);
+        await Assert.That(context.HasSucceeded).IsTrue();
     }
 
     [Test]
@@ -88,7 +88,7 @@ public class AllowedRolesHandlerTests
 
         await handler.HandleAsync(context);
 
-        await Assert.That(context.HasSucceeded).IsEqualTo(true);
+        await Assert.That(context.HasSucceeded).IsTrue();
     }
 
     [Test]
@@ -104,7 +104,7 @@ public class AllowedRolesHandlerTests
 
         await handler.HandleAsync(context);
 
-        await Assert.That(context.HasSucceeded).IsEqualTo(true);
+        await Assert.That(context.HasSucceeded).IsTrue();
     }
 
     [Test]
@@ -119,7 +119,7 @@ public class AllowedRolesHandlerTests
 
         await handler.HandleAsync(context);
 
-        await Assert.That(context.HasSucceeded).IsEqualTo(false);
+        await Assert.That(context.HasSucceeded).IsFalse();
     }
 
     [Test]
@@ -139,7 +139,7 @@ public class AllowedRolesHandlerTests
         await handler.HandleAsync(context);
 
         // Falls back to first role claim (tenant 1, role Viewer=3), which matches the requirement
-        await Assert.That(context.HasSucceeded).IsEqualTo(true);
+        await Assert.That(context.HasSucceeded).IsTrue();
     }
 
     [Test]
@@ -155,7 +155,7 @@ public class AllowedRolesHandlerTests
 
         await handler.HandleAsync(context);
 
-        await Assert.That(context.HasSucceeded).IsEqualTo(false);
+        await Assert.That(context.HasSucceeded).IsFalse();
     }
 
     [Test]
@@ -174,7 +174,7 @@ public class AllowedRolesHandlerTests
 
         await handler.HandleAsync(context);
 
-        await Assert.That(context.HasSucceeded).IsEqualTo(true);
+        await Assert.That(context.HasSucceeded).IsTrue();
     }
 
     [Test]
@@ -193,7 +193,7 @@ public class AllowedRolesHandlerTests
 
         await handler.HandleAsync(context);
 
-        await Assert.That(context.HasSucceeded).IsEqualTo(false);
+        await Assert.That(context.HasSucceeded).IsFalse();
     }
 
     [Test]
@@ -209,7 +209,7 @@ public class AllowedRolesHandlerTests
 
         await handler.HandleAsync(context);
 
-        await Assert.That(context.HasSucceeded).IsEqualTo(false);
+        await Assert.That(context.HasSucceeded).IsFalse();
     }
 
     [Test]
@@ -225,7 +225,7 @@ public class AllowedRolesHandlerTests
 
         await handler.HandleAsync(context);
 
-        await Assert.That(context.HasSucceeded).IsEqualTo(false);
+        await Assert.That(context.HasSucceeded).IsFalse();
     }
 
     [Test]
@@ -241,7 +241,7 @@ public class AllowedRolesHandlerTests
 
         await handler.HandleAsync(context);
 
-        await Assert.That(context.HasSucceeded).IsEqualTo(false);
+        await Assert.That(context.HasSucceeded).IsFalse();
     }
 
     [Test]
@@ -255,7 +255,7 @@ public class AllowedRolesHandlerTests
 
         await handler.HandleAsync(context);
 
-        await Assert.That(context.HasSucceeded).IsEqualTo(false);
+        await Assert.That(context.HasSucceeded).IsFalse();
     }
 
     [Test]
@@ -271,6 +271,6 @@ public class AllowedRolesHandlerTests
 
         await handler.HandleAsync(context);
 
-        await Assert.That(context.HasSucceeded).IsEqualTo(false);
+        await Assert.That(context.HasSucceeded).IsFalse();
     }
 }

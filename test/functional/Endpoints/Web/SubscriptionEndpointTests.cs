@@ -36,7 +36,7 @@ public sealed class SubscriptionEndpointTests
         await Assert.That(data.GetProperty("machineLimit").GetInt32()).IsEqualTo(3);
         await Assert.That(data.GetProperty("retentionDays").GetInt32()).IsEqualTo(1);
         await Assert.That(data.GetProperty("status").GetString()).IsEqualTo("Active");
-        await Assert.That(data.GetProperty("cancelAtPeriodEnd").GetBoolean()).IsEqualTo(false);
+        await Assert.That(data.GetProperty("cancelAtPeriodEnd").GetBoolean()).IsFalse();
         await Assert.That(data.GetProperty("pendingAction").ValueKind).IsEqualTo(JsonValueKind.Null);
     }
 
@@ -266,7 +266,7 @@ public sealed class SubscriptionEndpointTests
         await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
 
         JsonElement data = await ExtractDataElement(response);
-        await Assert.That(data.GetProperty("cancelAtPeriodEnd").GetBoolean()).IsEqualTo(true);
+        await Assert.That(data.GetProperty("cancelAtPeriodEnd").GetBoolean()).IsTrue();
     }
 
     [Test]
@@ -284,7 +284,7 @@ public sealed class SubscriptionEndpointTests
         await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
 
         JsonElement data = await ExtractDataElement(response);
-        await Assert.That(data.GetProperty("cancelAtPeriodEnd").GetBoolean()).IsEqualTo(false);
+        await Assert.That(data.GetProperty("cancelAtPeriodEnd").GetBoolean()).IsFalse();
     }
 
     [Test]
@@ -312,7 +312,7 @@ public sealed class SubscriptionEndpointTests
         await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.NotFound);
 
         string body = await response.Content.ReadAsStringAsync();
-        await Assert.That(body.Contains("\"success\":true")).IsEqualTo(false);
+        await Assert.That(body.Contains("\"success\":true")).IsFalse();
     }
 
     [Test]
@@ -326,7 +326,7 @@ public sealed class SubscriptionEndpointTests
         await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.Unauthorized);
 
         string body = await response.Content.ReadAsStringAsync();
-        await Assert.That(body.Contains("\"success\":true")).IsEqualTo(false);
+        await Assert.That(body.Contains("\"success\":true")).IsFalse();
     }
 
     [Test]

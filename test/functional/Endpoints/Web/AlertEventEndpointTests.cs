@@ -217,7 +217,7 @@ public sealed class AlertEventEndpointTests
         string body = await response.Content.ReadAsStringAsync();
         await Assert.That(body).Contains("\"totalCount\":1");
         await Assert.That(body).Contains("Triggered event");
-        await Assert.That(body.Contains("Acknowledged event")).IsEqualTo(false);
+        await Assert.That(body.Contains("Acknowledged event")).IsFalse();
     }
 
     [Test]
@@ -259,7 +259,7 @@ public sealed class AlertEventEndpointTests
         string body = await response.Content.ReadAsStringAsync();
         await Assert.That(body).Contains("\"totalCount\":1");
         await Assert.That(body).Contains("Critical event");
-        await Assert.That(body.Contains("Warning event")).IsEqualTo(false);
+        await Assert.That(body.Contains("Warning event")).IsFalse();
     }
 
     [Test]
@@ -399,7 +399,7 @@ public sealed class AlertEventEndpointTests
         string body = await response.Content.ReadAsStringAsync();
         int newestIndex = body.IndexOf("Newest event", StringComparison.Ordinal);
         int oldestIndex = body.IndexOf("Oldest event", StringComparison.Ordinal);
-        await Assert.That(newestIndex < oldestIndex).IsEqualTo(true);
+        await Assert.That(newestIndex < oldestIndex).IsTrue();
     }
 
     // --- AcknowledgeAlertEvent Tests ---
@@ -542,6 +542,6 @@ public sealed class AlertEventEndpointTests
 
         AlertEvent? updated = await db.AlertEvents.FirstOrDefaultAsync(e => e.Id == evt.Id);
         await Assert.That(updated!.Status).IsEqualTo(AlertEventStatus.Acknowledged);
-        await Assert.That(updated.AcknowledgedAt.HasValue).IsEqualTo(true);
+        await Assert.That(updated.AcknowledgedAt.HasValue).IsTrue();
     }
 }

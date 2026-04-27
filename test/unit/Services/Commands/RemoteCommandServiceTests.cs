@@ -233,7 +233,7 @@ public sealed class RemoteCommandServiceTests
 
         ServiceResult<RemoteCommand> result = await service.SubmitCommandAsync(command, CancellationToken.None);
 
-        await Assert.That(result.IsSuccess).IsEqualTo(true);
+        await Assert.That(result.IsSuccess).IsTrue();
     }
 
     // ========== SubmitCommandAsync — Machine in different tenant ==========
@@ -321,7 +321,7 @@ public sealed class RemoteCommandServiceTests
 
         ServiceResult<RemoteCommand> result = await service.SubmitCommandAsync(command, CancellationToken.None);
 
-        await Assert.That(result.IsSuccess).IsEqualTo(true);
+        await Assert.That(result.IsSuccess).IsTrue();
         await Assert.That(result.Data!.Id).IsEqualTo(100L);
         await Assert.That(result.Data!.Status).IsEqualTo(RemoteCommandStatus.Pending);
     }
@@ -360,7 +360,7 @@ public sealed class RemoteCommandServiceTests
         RemoteCommandService service = CreateService();
         ServiceResult<RemoteCommand> result = await service.GetCommandDetailAsync(1, 999, CancellationToken.None);
 
-        await Assert.That(result.IsNotFound).IsEqualTo(true);
+        await Assert.That(result.IsNotFound).IsTrue();
     }
 
     [Test]
@@ -373,7 +373,7 @@ public sealed class RemoteCommandServiceTests
         RemoteCommandService service = CreateService();
         ServiceResult<RemoteCommand> result = await service.GetCommandDetailAsync(42, 1, CancellationToken.None);
 
-        await Assert.That(result.IsSuccess).IsEqualTo(true);
+        await Assert.That(result.IsSuccess).IsTrue();
         await Assert.That(result.Data!.Id).IsEqualTo(42L);
     }
 
@@ -423,6 +423,6 @@ public sealed class RemoteCommandServiceTests
 
         ServiceResult<RemoteCommand> result = await service.SubmitCommandAsync(command, CancellationToken.None);
 
-        await Assert.That(result.IsSuccess).IsEqualTo(true);
+        await Assert.That(result.IsSuccess).IsTrue();
     }
 }

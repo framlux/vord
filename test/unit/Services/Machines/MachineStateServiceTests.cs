@@ -387,7 +387,7 @@ public class MachineStateServiceTests
 
         await Assert.That(result).IsNotNull();
         await Assert.That(result!.Id).IsEqualTo(machine.Id);
-        await Assert.That(result.IsOnline).IsEqualTo(true);
+        await Assert.That(result.IsOnline).IsTrue();
     }
 
     [Test]

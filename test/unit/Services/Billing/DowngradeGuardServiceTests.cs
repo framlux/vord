@@ -31,7 +31,7 @@ public class DowngradeGuardServiceTests
 
         bool result = await service.CanDowngradeFromTeamAsync(1, CancellationToken.None);
 
-        await Assert.That(result).IsEqualTo(true);
+        await Assert.That(result).IsTrue();
     }
 
     [Test]
@@ -50,7 +50,7 @@ public class DowngradeGuardServiceTests
 
         bool result = await service.CanDowngradeFromTeamAsync(1, CancellationToken.None);
 
-        await Assert.That(result).IsEqualTo(true);
+        await Assert.That(result).IsTrue();
     }
 
     [Test]
@@ -69,7 +69,7 @@ public class DowngradeGuardServiceTests
 
         bool result = await service.CanDowngradeFromTeamAsync(1, CancellationToken.None);
 
-        await Assert.That(result).IsEqualTo(true);
+        await Assert.That(result).IsTrue();
     }
 
     [Test]
@@ -88,7 +88,7 @@ public class DowngradeGuardServiceTests
 
         bool result = await service.CanDowngradeFromTeamAsync(1, CancellationToken.None);
 
-        await Assert.That(result).IsEqualTo(false);
+        await Assert.That(result).IsFalse();
     }
 
     [Test]
@@ -99,7 +99,7 @@ public class DowngradeGuardServiceTests
 
         bool result = await service.CanDowngradeFromTeamAsync(1, CancellationToken.None);
 
-        await Assert.That(result).IsEqualTo(false);
+        await Assert.That(result).IsFalse();
     }
 
     [Test]
@@ -129,7 +129,7 @@ public class DowngradeGuardServiceTests
 
         bool result = await service.CanDowngradeFromTeamAsync(1, CancellationToken.None);
 
-        await Assert.That(result).IsEqualTo(true);
+        await Assert.That(result).IsTrue();
     }
 
     [Test]
@@ -148,7 +148,7 @@ public class DowngradeGuardServiceTests
 
         bool result = await service.CanDowngradeFromTeamAsync(1, CancellationToken.None);
 
-        await Assert.That(result).IsEqualTo(true);
+        await Assert.That(result).IsTrue();
     }
 
     [Test]
@@ -179,7 +179,7 @@ public class DowngradeGuardServiceTests
 
         bool result = await service.CanDowngradeFromTeamAsync(1, CancellationToken.None);
 
-        await Assert.That(result).IsEqualTo(false);
+        await Assert.That(result).IsFalse();
     }
 
     [Test]
@@ -200,7 +200,7 @@ public class DowngradeGuardServiceTests
 
         bool result = await service.CanDowngradeFromTeamAsync(1, CancellationToken.None);
 
-        await Assert.That(result).IsEqualTo(false);
+        await Assert.That(result).IsFalse();
     }
 
     [Test]
@@ -222,6 +222,6 @@ public class DowngradeGuardServiceTests
         // Querying tenant 1 should not see tenant 99's admin
         bool result = await service.CanDowngradeFromTeamAsync(1, CancellationToken.None);
 
-        await Assert.That(result).IsEqualTo(false);
+        await Assert.That(result).IsFalse();
     }
 }

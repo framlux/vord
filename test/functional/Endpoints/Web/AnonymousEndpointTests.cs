@@ -44,9 +44,9 @@ public sealed class AnonymousEndpointTests
         JsonDocument doc = JsonDocument.Parse(body);
         JsonElement root = doc.RootElement;
 
-        await Assert.That(root.GetProperty("success").GetBoolean()).IsEqualTo(true);
+        await Assert.That(root.GetProperty("success").GetBoolean()).IsTrue();
         await Assert.That(root.GetProperty("message").GetString()).IsEqualTo("Thank you for your interest! We'll be in touch soon.");
-        await Assert.That(root.TryGetProperty("data", out JsonElement _)).IsEqualTo(true);
+        await Assert.That(root.TryGetProperty("data", out JsonElement _)).IsTrue();
     }
 
     [Test]
@@ -74,7 +74,7 @@ public sealed class AnonymousEndpointTests
         JsonDocument doc = JsonDocument.Parse(body);
         JsonElement root = doc.RootElement;
 
-        await Assert.That(root.GetProperty("success").GetBoolean()).IsEqualTo(true);
+        await Assert.That(root.GetProperty("success").GetBoolean()).IsTrue();
         await Assert.That(root.GetProperty("message").GetString()).IsEqualTo("Thank you for your interest! We'll be in touch soon.");
     }
 
@@ -106,7 +106,7 @@ public sealed class AnonymousEndpointTests
         JsonDocument doc = JsonDocument.Parse(body);
         JsonElement root = doc.RootElement;
 
-        await Assert.That(root.GetProperty("success").GetBoolean()).IsEqualTo(false);
+        await Assert.That(root.GetProperty("success").GetBoolean()).IsFalse();
         await Assert.That(root.GetProperty("message").GetString()).IsEqualTo("Name, email, and message are required");
     }
 
@@ -134,7 +134,7 @@ public sealed class AnonymousEndpointTests
         JsonDocument doc = JsonDocument.Parse(body);
         JsonElement root = doc.RootElement;
 
-        await Assert.That(root.GetProperty("success").GetBoolean()).IsEqualTo(false);
+        await Assert.That(root.GetProperty("success").GetBoolean()).IsFalse();
         await Assert.That(root.GetProperty("message").GetString()).IsEqualTo("Name, email, and message are required");
     }
 
@@ -189,7 +189,7 @@ public sealed class AnonymousEndpointTests
         JsonDocument doc = JsonDocument.Parse(body);
         JsonElement root = doc.RootElement;
 
-        await Assert.That(root.GetProperty("success").GetBoolean()).IsEqualTo(true);
+        await Assert.That(root.GetProperty("success").GetBoolean()).IsTrue();
         await Assert.That(root.GetProperty("data").GetProperty("tenantId").GetInt32()).IsEqualTo(tenant.Id);
         // Error response should not return error-specific fields on success
         await Assert.That(root.GetProperty("message").ValueKind).IsEqualTo(JsonValueKind.Null);
@@ -242,7 +242,7 @@ public sealed class AnonymousEndpointTests
         JsonDocument doc = JsonDocument.Parse(body);
         JsonElement root = doc.RootElement;
 
-        await Assert.That(root.GetProperty("success").GetBoolean()).IsEqualTo(true);
+        await Assert.That(root.GetProperty("success").GetBoolean()).IsTrue();
         await Assert.That(root.GetProperty("data").GetProperty("tenantId").GetInt32()).IsEqualTo(tenant.Id);
     }
 
@@ -270,7 +270,7 @@ public sealed class AnonymousEndpointTests
         JsonDocument doc = JsonDocument.Parse(body);
         JsonElement root = doc.RootElement;
 
-        await Assert.That(root.GetProperty("success").GetBoolean()).IsEqualTo(false);
+        await Assert.That(root.GetProperty("success").GetBoolean()).IsFalse();
         await Assert.That(root.GetProperty("message").GetString()).IsEqualTo("A valid email address is required");
         await Assert.That(root.GetProperty("data").ValueKind).IsEqualTo(JsonValueKind.Null);
     }
@@ -295,7 +295,7 @@ public sealed class AnonymousEndpointTests
         JsonDocument doc = JsonDocument.Parse(body);
         JsonElement root = doc.RootElement;
 
-        await Assert.That(root.GetProperty("success").GetBoolean()).IsEqualTo(false);
+        await Assert.That(root.GetProperty("success").GetBoolean()).IsFalse();
         await Assert.That(root.GetProperty("message").GetString()).IsEqualTo("A valid email address is required");
         await Assert.That(root.GetProperty("data").ValueKind).IsEqualTo(JsonValueKind.Null);
     }
@@ -320,7 +320,7 @@ public sealed class AnonymousEndpointTests
         JsonDocument doc = JsonDocument.Parse(body);
         JsonElement root = doc.RootElement;
 
-        await Assert.That(root.GetProperty("success").GetBoolean()).IsEqualTo(false);
+        await Assert.That(root.GetProperty("success").GetBoolean()).IsFalse();
         await Assert.That(root.GetProperty("message").GetString()).IsEqualTo("A valid email address is required");
     }
 
@@ -344,7 +344,7 @@ public sealed class AnonymousEndpointTests
         JsonDocument doc = JsonDocument.Parse(body);
         JsonElement root = doc.RootElement;
 
-        await Assert.That(root.GetProperty("success").GetBoolean()).IsEqualTo(false);
+        await Assert.That(root.GetProperty("success").GetBoolean()).IsFalse();
         await Assert.That(root.GetProperty("message").GetString()).IsEqualTo("No SSO provider found for this email domain");
         await Assert.That(root.GetProperty("data").ValueKind).IsEqualTo(JsonValueKind.Null);
     }
@@ -397,7 +397,7 @@ public sealed class AnonymousEndpointTests
         JsonElement root = doc.RootElement;
 
         // Disabled OIDC configs should not be returned as valid SSO providers
-        await Assert.That(root.GetProperty("success").GetBoolean()).IsEqualTo(false);
+        await Assert.That(root.GetProperty("success").GetBoolean()).IsFalse();
         await Assert.That(root.GetProperty("message").GetString()).IsEqualTo("No SSO provider found for this email domain");
     }
 
@@ -448,7 +448,7 @@ public sealed class AnonymousEndpointTests
         JsonDocument doc = JsonDocument.Parse(body);
         JsonElement root = doc.RootElement;
 
-        await Assert.That(root.GetProperty("success").GetBoolean()).IsEqualTo(true);
+        await Assert.That(root.GetProperty("success").GetBoolean()).IsTrue();
         await Assert.That(root.GetProperty("data").GetProperty("tenantId").GetInt32()).IsEqualTo(tenant.Id);
     }
 
