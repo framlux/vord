@@ -2,6 +2,17 @@
 
 All notable changes to this project will be documented in this file. See [versionize](https://github.com/versionize/versionize) for commit guidelines.
 
+<a name="2.7.0"></a>
+## [2.7.0](https://www.github.com/framlux/vord/releases/tag/v2.7.0) (2026-04-27)
+
+### Features
+
+* Optimizing agent and server storage space per-machine ([3f18294](https://www.github.com/framlux/vord/commit/3f182948235dd5fcd5c805c7399e93dd569a213e))
+
+### Bug Fixes
+
+* Fixing accessibility and responsiveness ([b50523c](https://www.github.com/framlux/vord/commit/b50523c94c852ec1c81982f1fae7a42f8a40e6d4))
+
 <a name="2.6.3"></a>
 ## [2.6.3](https://www.github.com/framlux/vord/releases/tag/v2.6.3) (2026-04-22)
 
