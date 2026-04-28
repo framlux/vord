@@ -13,8 +13,8 @@ using LinqToDB;
 namespace Framlux.FleetManagement.Server.Endpoints.Web.Alerts;
 
 /// <summary>
-/// Creates a new alert rule for the current tenant.
-/// Pro tier can only reconfigure default rules. Team tier can create custom rules.
+/// Creates a new custom alert rule for the current tenant.
+/// Requires TenantAdmin role and Team subscription.
 /// </summary>
 public sealed class AlertRuleCreateEndpoint : Endpoint<CreateAlertRuleRequest, ApiResponse<AlertRuleDto>>
 {
@@ -64,6 +64,15 @@ public sealed class AlertRuleCreateEndpoint : Endpoint<CreateAlertRuleRequest, A
         {
             HttpContext.Response.StatusCode = 403;
             await HttpContext.Response.WriteAsJsonAsync(ApiResponse<AlertRuleDto>.Error("Custom alert rules require a Team subscription"), ct);
+
+            return;
+        }
+
+        if (req.DurationMinutes < 0)
+        {
+            HttpContext.Response.StatusCode = 400;
+            await HttpContext.Response.WriteAsJsonAsync(
+                ApiResponse<AlertRuleDto>.Error("Duration must be zero or positive"), ct);
 
             return;
         }

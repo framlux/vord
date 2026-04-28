@@ -462,11 +462,13 @@ export interface AlertEventDto {
 	id: number;
 	ruleName: string;
 	machineId: number;
+	machineName: string;
 	severity: string;
 	message: string;
 	status: string;
 	triggeredAt: string;
 	acknowledgedAt: string | null;
+	acknowledgedByUserId: number | null;
 	resolvedAt: string | null;
 }
 

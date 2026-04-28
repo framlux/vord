@@ -75,7 +75,7 @@ public sealed class AlertEvaluationServiceTests
     [Test]
     public async Task EvaluateCondition_Equals_MatchesThreshold_ReturnsTrue()
     {
-        bool result = AlertEvaluationService.EvaluateCondition(50m, AlertOperator.Equals, 50m);
+        bool result = AlertEvaluationService.EvaluateCondition(50m, AlertOperator.EqualTo, 50m);
 
         await Assert.That(result).IsTrue();
     }
@@ -83,7 +83,7 @@ public sealed class AlertEvaluationServiceTests
     [Test]
     public async Task EvaluateCondition_Equals_DoesNotMatch_ReturnsFalse()
     {
-        bool result = AlertEvaluationService.EvaluateCondition(49m, AlertOperator.Equals, 50m);
+        bool result = AlertEvaluationService.EvaluateCondition(49m, AlertOperator.EqualTo, 50m);
 
         await Assert.That(result).IsFalse();
     }

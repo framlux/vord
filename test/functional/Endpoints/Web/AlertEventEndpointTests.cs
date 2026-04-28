@@ -544,4 +544,105 @@ public sealed class AlertEventEndpointTests
         await Assert.That(updated!.Status).IsEqualTo(AlertEventStatus.Acknowledged);
         await Assert.That(updated.AcknowledgedAt.HasValue).IsTrue();
     }
+
+    // --- WS-4: AcknowledgedByUserId Tests ---
+
+    [Test]
+    public async Task AcknowledgeEvent_SetsAcknowledgedByUserId()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId, int ruleId) = await SeedAlertEventEnvironment(db);
+
+        AlertEvent evt = new()
+        {
+            AlertRuleId = ruleId,
+            TenantId = tenantId,
+            MachineId = 1,
+            Severity = AlertSeverity.Warning,
+            Message = "Track acknowledger",
+            Status = AlertEventStatus.Triggered,
+            TriggeredAt = DateTimeOffset.UtcNow,
+        };
+        evt.Id = await db.InsertWithInt64IdentityAsync(evt);
+
+        HttpClient client = BuildClient(factory, tenantId, userId, UserAccountRoles.MachineAdmin);
+
+        HttpResponseMessage response = await client.PostAsync($"/api/v1/alert-events/{evt.Id}/acknowledge", null);
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
+
+        AlertEvent? updated = await db.AlertEvents.FirstOrDefaultAsync(e => e.Id == evt.Id);
+        await Assert.That(updated!.AcknowledgedByUserId).IsEqualTo(userId);
+    }
+
+    // --- WS-4: MachineName Tests ---
+
+    [Test]
+    public async Task ListEvents_IncludesMachineName()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId, int ruleId) = await SeedAlertEventEnvironment(db);
+
+        long machineId = 5001;
+        MachineStateSummary summary = new()
+        {
+            MachineId = machineId,
+            TenantId = tenantId,
+            Name = "web-server-prod-01",
+            OperatingSystem = 0,
+            MachineType = 0,
+            HealthStatus = 0,
+        };
+        await db.InsertAsync(summary);
+
+        AlertEvent evt = new()
+        {
+            AlertRuleId = ruleId,
+            TenantId = tenantId,
+            MachineId = machineId,
+            Severity = AlertSeverity.Warning,
+            Message = "Machine name test",
+            Status = AlertEventStatus.Triggered,
+            TriggeredAt = DateTimeOffset.UtcNow,
+        };
+        await db.InsertWithInt64IdentityAsync(evt);
+
+        HttpClient client = BuildClient(factory, tenantId, userId, UserAccountRoles.Viewer);
+
+        HttpResponseMessage response = await client.GetAsync("/api/v1/alert-events");
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
+        string body = await response.Content.ReadAsStringAsync();
+        await Assert.That(body).Contains("web-server-prod-01");
+    }
+
+    [Test]
+    public async Task ListEvents_MachineNotInSummary_ShowsFallbackName()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId, int ruleId) = await SeedAlertEventEnvironment(db);
+
+        AlertEvent evt = new()
+        {
+            AlertRuleId = ruleId,
+            TenantId = tenantId,
+            MachineId = 99999,
+            Severity = AlertSeverity.Warning,
+            Message = "Fallback name test",
+            Status = AlertEventStatus.Triggered,
+            TriggeredAt = DateTimeOffset.UtcNow,
+        };
+        await db.InsertWithInt64IdentityAsync(evt);
+
+        HttpClient client = BuildClient(factory, tenantId, userId, UserAccountRoles.Viewer);
+
+        HttpResponseMessage response = await client.GetAsync("/api/v1/alert-events");
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
+        string body = await response.Content.ReadAsStringAsync();
+        await Assert.That(body).Contains("Machine 99999");
+    }
 }

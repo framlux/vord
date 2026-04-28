@@ -16,6 +16,9 @@ public sealed class AlertEventDto
     /// <summary>The machine ID.</summary>
     public long MachineId { get; set; }
 
+    /// <summary>The machine name.</summary>
+    public string MachineName { get; set; } = string.Empty;
+
     /// <summary>The severity level.</summary>
     public string Severity { get; set; } = string.Empty;
 
@@ -30,6 +33,9 @@ public sealed class AlertEventDto
 
     /// <summary>When the alert was acknowledged.</summary>
     public DateTimeOffset? AcknowledgedAt { get; set; }
+
+    /// <summary>The user who acknowledged this event.</summary>
+    public int? AcknowledgedByUserId { get; set; }
 
     /// <summary>When the alert was resolved.</summary>
     public DateTimeOffset? ResolvedAt { get; set; }

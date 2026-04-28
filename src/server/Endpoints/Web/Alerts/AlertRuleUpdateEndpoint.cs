@@ -102,6 +102,15 @@ public sealed class AlertRuleUpdateEndpoint : Endpoint<UpdateAlertRuleRequest, A
             return;
         }
 
+        if (req.DurationMinutes < 0)
+        {
+            HttpContext.Response.StatusCode = 400;
+            await HttpContext.Response.WriteAsJsonAsync(
+                ApiResponse<AlertRuleDto>.Error("Duration must be zero or positive"), ct);
+
+            return;
+        }
+
         if (Enum.TryParse<AlertSeverity>(req.Severity, true, out AlertSeverity severity) == false)
         {
             HttpContext.Response.StatusCode = 400;

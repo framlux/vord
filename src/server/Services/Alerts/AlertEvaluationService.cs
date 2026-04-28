@@ -235,7 +235,7 @@ public sealed class AlertEvaluationService : BackgroundService
         {
             AlertOperator.GreaterThan => value > threshold,
             AlertOperator.LessThan => value < threshold,
-            AlertOperator.Equals => value == threshold,
+            AlertOperator.EqualTo => value == threshold,
             _ => false,
         };
     }

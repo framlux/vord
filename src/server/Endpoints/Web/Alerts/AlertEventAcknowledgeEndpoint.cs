@@ -80,10 +80,13 @@ public sealed class AlertEventAcknowledgeEndpoint : EndpointWithoutRequest<ApiRe
             return;
         }
 
+        int? userId = TenantClaimHelper.GetUserIdFromClaims(User);
+
         await _db.AlertEvents
             .Where(e => e.Id == eventId)
             .Set(e => e.Status, AlertEventStatus.Acknowledged)
             .Set(e => e.AcknowledgedAt, DateTimeOffset.UtcNow)
+            .Set(e => e.AcknowledgedByUserId, userId)
             .UpdateAsync(ct);
 
         await Send.OkAsync(ApiResponse<bool>.Ok(true, "Alert acknowledged"), cancellation: ct);

@@ -58,6 +58,10 @@ public sealed class AlertEvent
     [Column("AcknowledgedAt"), Nullable]
     public DateTimeOffset? AcknowledgedAt { get; set; }
 
+    /// <summary>The user who acknowledged this event.</summary>
+    [Column("AcknowledgedByUserId"), Nullable]
+    public int? AcknowledgedByUserId { get; set; }
+
     /// <summary>When the alert was resolved, if applicable.</summary>
     [Column("ResolvedAt"), Nullable]
     public DateTimeOffset? ResolvedAt { get; set; }

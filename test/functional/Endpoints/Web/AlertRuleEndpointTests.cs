@@ -705,6 +705,141 @@ public sealed class AlertRuleEndpointTests
         await Assert.That(body).Contains("\"data\":[]");
     }
 
+    // --- WS-4: DurationMinutes Validation Tests ---
+
+    [Test]
+    public async Task CreateRule_NegativeDuration_Returns400()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId) = await SeedAlertEnvironment(db, SubscriptionTier.Team);
+        HttpClient client = BuildClient(factory, tenantId, userId);
+
+        HttpResponseMessage response = await client.PostAsJsonAsync("/api/v1/alert-rules", new
+        {
+            Name = "Negative duration",
+            Metric = "CpuUsage",
+            Operator = "GreaterThan",
+            Threshold = 80,
+            DurationMinutes = -5,
+            Severity = "Warning",
+        });
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.BadRequest);
+        string body = await response.Content.ReadAsStringAsync();
+        await Assert.That(body).Contains("Duration");
+    }
+
+    [Test]
+    public async Task UpdateRule_NegativeDuration_Returns400()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId) = await SeedAlertEnvironment(db, SubscriptionTier.Pro);
+
+        AlertRule rule = new()
+        {
+            TenantId = tenantId,
+            Name = "Duration Check",
+            Metric = AlertMetric.CpuUsage,
+            Operator = AlertOperator.GreaterThan,
+            Threshold = 80,
+            Severity = AlertSeverity.Warning,
+            IsEnabled = true,
+            IsCustom = true,
+            CreatedByUserId = userId,
+            CreatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow,
+        };
+        rule.Id = await db.InsertWithInt32IdentityAsync(rule);
+
+        HttpClient client = BuildClient(factory, tenantId, userId);
+
+        HttpResponseMessage response = await client.PutAsJsonAsync($"/api/v1/alert-rules/{rule.Id}", new
+        {
+            Name = "Updated",
+            Threshold = 90,
+            DurationMinutes = -1,
+            Severity = "Critical",
+            IsEnabled = true,
+            NotifyEmail = true,
+            NotifyWebhook = false,
+        });
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.BadRequest);
+        string body = await response.Content.ReadAsStringAsync();
+        await Assert.That(body).Contains("Duration");
+    }
+
+    [Test]
+    public async Task CreateRule_ZeroDuration_Returns200()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId) = await SeedAlertEnvironment(db, SubscriptionTier.Team);
+        HttpClient client = BuildClient(factory, tenantId, userId);
+
+        HttpResponseMessage response = await client.PostAsJsonAsync("/api/v1/alert-rules", new
+        {
+            Name = "Zero duration",
+            Metric = "CpuUsage",
+            Operator = "GreaterThan",
+            Threshold = 80,
+            DurationMinutes = 0,
+            Severity = "Warning",
+        });
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
+    }
+
+    // --- WS-4: EqualTo Operator Tests ---
+
+    [Test]
+    public async Task CreateRule_OperatorEqualTo_Returns200()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId) = await SeedAlertEnvironment(db, SubscriptionTier.Team);
+        HttpClient client = BuildClient(factory, tenantId, userId);
+
+        HttpResponseMessage response = await client.PostAsJsonAsync("/api/v1/alert-rules", new
+        {
+            Name = "EqualTo test",
+            Metric = "CpuUsage",
+            Operator = "EqualTo",
+            Threshold = 50,
+            DurationMinutes = 0,
+            Severity = "Warning",
+        });
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
+        string body = await response.Content.ReadAsStringAsync();
+        await Assert.That(body).Contains("EqualTo");
+    }
+
+    [Test]
+    public async Task CreateRule_OperatorEquals_Returns400()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId) = await SeedAlertEnvironment(db, SubscriptionTier.Team);
+        HttpClient client = BuildClient(factory, tenantId, userId);
+
+        HttpResponseMessage response = await client.PostAsJsonAsync("/api/v1/alert-rules", new
+        {
+            Name = "Old Equals test",
+            Metric = "CpuUsage",
+            Operator = "Equals",
+            Threshold = 50,
+            DurationMinutes = 0,
+            Severity = "Warning",
+        });
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.BadRequest);
+        string body = await response.Content.ReadAsStringAsync();
+        await Assert.That(body).Contains("Invalid operator");
+    }
+
     [Test]
     public async Task ListAlertRules_MultipleRules_ReturnsSortedByName()
     {

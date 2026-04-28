@@ -193,7 +193,7 @@
 									<select id="rule-operator" name="operator" required class="w-full rounded-lg border border-surface-300 bg-surface-50 px-3 py-2 text-sm dark:border-surface-600 dark:bg-surface-700 dark:text-surface-100">
 										<option value="GreaterThan">Greater Than</option>
 										<option value="LessThan">Less Than</option>
-										<option value="Equals">Equals</option>
+										<option value="EqualTo">Equals</option>
 									</select>
 								</div>
 								<div>

@@ -107,16 +107,23 @@ public sealed class AlertEventListEndpoint : Endpoint<AlertEventListRequest, Api
             .Take(pageSize)
             .ToListAsync(ct);
 
+        List<long> machineIds = events.Select(e => e.MachineId).Distinct().ToList();
+        Dictionary<long, string> machineNames = await _db.MachineStateSummaries
+            .Where(s => machineIds.Contains(s.MachineId))
+            .ToDictionaryAsync(s => s.MachineId, s => s.Name, ct);
+
         List<AlertEventDto> dtos = events.Select(e => new AlertEventDto
         {
             Id = e.Id,
             RuleName = e.AlertRule?.Name ?? string.Empty,
             MachineId = e.MachineId,
+            MachineName = machineNames.GetValueOrDefault(e.MachineId, $"Machine {e.MachineId}"),
             Severity = e.Severity.ToString(),
             Message = e.Message,
             Status = e.Status.ToString(),
             TriggeredAt = e.TriggeredAt,
             AcknowledgedAt = e.AcknowledgedAt,
+            AcknowledgedByUserId = e.AcknowledgedByUserId,
             ResolvedAt = e.ResolvedAt,
         }).ToList();
 

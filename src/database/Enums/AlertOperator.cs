@@ -14,5 +14,5 @@ public enum AlertOperator : short
     /// <summary>Value is less than threshold.</summary>
     LessThan = 2,
     /// <summary>Value equals threshold.</summary>
-    Equals = 3
+    EqualTo = 3
 }
