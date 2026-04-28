@@ -47,9 +47,9 @@ namespace Framlux.FleetManagement.FunctionalTest.Infrastructure;
 public class FunctionalTestFactory : WebApplicationFactory<Program>
 {
     // FastEndpoints modifies a static JsonSerializerOptions during UseFastEndpoints.
-    // Only the first factory startup needs to complete before others can proceed safely.
-    private static readonly object FirstHostLock = new();
-    private static volatile bool _firstHostCreated;
+    // The options become read-only after first serialization use, so concurrent host
+    // creation causes InvalidOperationException. Serialize all host creation to prevent this.
+    private static readonly object HostCreationLock = new();
 
     private readonly SqliteConnection _dbConnection;
     private string? _internalApiKey;
@@ -117,21 +117,10 @@ public class FunctionalTestFactory : WebApplicationFactory<Program>
     /// <inheritdoc/>
     protected override IHost CreateHost(IHostBuilder builder)
     {
-        if (_firstHostCreated == false)
+        lock (HostCreationLock)
         {
-            lock (FirstHostLock)
-            {
-                if (_firstHostCreated == false)
-                {
-                    IHost host = base.CreateHost(builder);
-                    _firstHostCreated = true;
-
-                    return host;
-                }
-            }
+            return base.CreateHost(builder);
         }
-
-        return base.CreateHost(builder);
     }
 
     /// <inheritdoc/>

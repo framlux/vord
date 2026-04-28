@@ -455,7 +455,13 @@ app.UseAuthentication()
     .UseAuthorization()
     .UseFastEndpoints(options =>
     {
-        options.Serializer.Options.Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping;
+        // Guard against concurrent modification in parallel test hosts — FastEndpoints uses
+        // a static JsonSerializerOptions that gets locked after first serialization use.
+        if (options.Serializer.Options.IsReadOnly == false)
+        {
+            options.Serializer.Options.Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping;
+        }
+
         options.Versioning.PrependToRoute = true;
         options.Versioning.DefaultVersion = 1;
         options.Versioning.Prefix = "api/v";
