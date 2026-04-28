@@ -907,4 +907,116 @@ public sealed class AlertEvaluationServiceTests
 
         await delivery.DidNotReceive().EnqueueAsync(Arg.Any<long>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>());
     }
+
+    // --- Cross-Cutting Tests ---
+
+    [Test]
+    public async Task EvaluateRuleForMachineAsync_AcknowledgedEvent_BlocksNewAlert()
+    {
+        (AlertEvaluationService service, DatabaseContext db, IDatabase redisDb, IAlertDeliveryService delivery) = CreateServiceWithDb();
+
+        Tenant tenant = TestDataBuilder.BuildTenant();
+        tenant.Id = await db.InsertWithInt32IdentityAsync(tenant);
+
+        Machine machine = TestDataBuilder.BuildMachine(tenantId: tenant.Id);
+        machine.Id = await db.InsertWithInt64IdentityAsync(machine);
+
+        AlertRule rule = TestDataBuilder.BuildAlertRule(tenantId: tenant.Id, metric: AlertMetric.CpuUsage, threshold: 80m, durationMinutes: 0);
+        rule.Id = await db.InsertWithInt32IdentityAsync(rule);
+
+        // Seed an existing Acknowledged (not Triggered, not Resolved) event.
+        AlertEvent existingEvent = TestDataBuilder.BuildAlertEvent(alertRuleId: rule.Id, tenantId: tenant.Id, machineId: machine.Id, status: AlertEventStatus.Acknowledged);
+        existingEvent.AcknowledgedAt = DateTimeOffset.UtcNow;
+        existingEvent.Id = await db.InsertWithInt64IdentityAsync(existingEvent);
+
+        MachineStateSummary state = new() { MachineId = machine.Id, CpuUsagePercent = 95, LastSeenAt = DateTimeOffset.UtcNow };
+
+        await service.EvaluateRuleForMachineAsync(db, rule, state, CancellationToken.None);
+
+        // Acknowledged event should block a new alert from being created.
+        int eventCount = await db.AlertEvents.Where(e => e.AlertRuleId == rule.Id).CountAsync();
+        await Assert.That(eventCount).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task EvaluateAllRulesAsync_ProTierBreachingMetric_CreatesAlert()
+    {
+        (AlertEvaluationService service, DatabaseContext db, IDatabase redisDb, IAlertDeliveryService delivery) = CreateServiceWithDb();
+
+        Tenant tenant = TestDataBuilder.BuildTenant();
+        tenant.Id = await db.InsertWithInt32IdentityAsync(tenant);
+
+        TenantSubscription proSub = TestDataBuilder.BuildSubscription(tenantId: tenant.Id, tier: SubscriptionTier.Pro, status: SubscriptionStatus.Active);
+        await db.InsertWithInt32IdentityAsync(proSub);
+
+        using Microsoft.Extensions.DependencyInjection.IServiceScope scope = ((TestServiceScopeFactory)typeof(AlertEvaluationService)
+            .GetField("_scopeFactory", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+            .GetValue(service)!).CreateScope();
+        ISubscriptionService subService = scope.ServiceProvider.GetService(typeof(ISubscriptionService)) as ISubscriptionService
+            ?? throw new InvalidOperationException("ISubscriptionService not found");
+        subService.GetSubscriptionForTenantAsync(tenant.Id, Arg.Any<CancellationToken>()).Returns(proSub);
+
+        AlertRule rule = TestDataBuilder.BuildAlertRule(tenantId: tenant.Id, metric: AlertMetric.CpuUsage, threshold: 80m, durationMinutes: 0);
+        rule.Id = await db.InsertWithInt32IdentityAsync(rule);
+
+        Machine machine = TestDataBuilder.BuildMachine(tenantId: tenant.Id);
+        machine.Id = await db.InsertWithInt64IdentityAsync(machine);
+
+        MachineStateSummary machineState = TestDataBuilder.BuildMachineStateSummary(machineId: machine.Id, cpuPercent: 95);
+        await db.InsertAsync(machineState);
+
+        await service.EvaluateAllRulesAsync(CancellationToken.None);
+
+        int eventCount = await db.AlertEvents.CountAsync();
+        await Assert.That(eventCount).IsEqualTo(1);
+
+        await delivery.Received(1).EnqueueAsync(Arg.Any<long>(), Arg.Is<int>(id => id == rule.Id), Arg.Is<int>(id => id == tenant.Id), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task EvaluateAllRulesAsync_MultipleTenantsMultipleRules_EvaluatesCorrectly()
+    {
+        (AlertEvaluationService service, DatabaseContext db, IDatabase redisDb, IAlertDeliveryService delivery) = CreateServiceWithDb();
+
+        // Tenant 1: one rule, one machine breaching
+        Tenant tenant1 = TestDataBuilder.BuildTenant();
+        tenant1.Id = await db.InsertWithInt32IdentityAsync(tenant1);
+        TenantSubscription sub1 = TestDataBuilder.BuildSubscription(tenantId: tenant1.Id, tier: SubscriptionTier.Pro, status: SubscriptionStatus.Active);
+        await db.InsertWithInt32IdentityAsync(sub1);
+
+        // Tenant 2: one rule, one machine breaching
+        Tenant tenant2 = TestDataBuilder.BuildTenant();
+        tenant2.Id = await db.InsertWithInt32IdentityAsync(tenant2);
+        TenantSubscription sub2 = TestDataBuilder.BuildSubscription(tenantId: tenant2.Id, tier: SubscriptionTier.Team, status: SubscriptionStatus.Active);
+        await db.InsertWithInt32IdentityAsync(sub2);
+
+        using Microsoft.Extensions.DependencyInjection.IServiceScope scope = ((TestServiceScopeFactory)typeof(AlertEvaluationService)
+            .GetField("_scopeFactory", System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)!
+            .GetValue(service)!).CreateScope();
+        ISubscriptionService subService = scope.ServiceProvider.GetService(typeof(ISubscriptionService)) as ISubscriptionService
+            ?? throw new InvalidOperationException("ISubscriptionService not found");
+        subService.GetSubscriptionForTenantAsync(tenant1.Id, Arg.Any<CancellationToken>()).Returns(sub1);
+        subService.GetSubscriptionForTenantAsync(tenant2.Id, Arg.Any<CancellationToken>()).Returns(sub2);
+
+        AlertRule rule1 = TestDataBuilder.BuildAlertRule(tenantId: tenant1.Id, metric: AlertMetric.CpuUsage, threshold: 80m, durationMinutes: 0);
+        rule1.Id = await db.InsertWithInt32IdentityAsync(rule1);
+        AlertRule rule2 = TestDataBuilder.BuildAlertRule(tenantId: tenant2.Id, metric: AlertMetric.MemoryUsage, threshold: 50m, durationMinutes: 0);
+        rule2.Id = await db.InsertWithInt32IdentityAsync(rule2);
+
+        Machine machine1 = TestDataBuilder.BuildMachine(tenantId: tenant1.Id);
+        machine1.Id = await db.InsertWithInt64IdentityAsync(machine1);
+        Machine machine2 = TestDataBuilder.BuildMachine(tenantId: tenant2.Id);
+        machine2.Id = await db.InsertWithInt64IdentityAsync(machine2);
+
+        // Tenant 1: machine breaches CPU
+        await db.InsertAsync(TestDataBuilder.BuildMachineStateSummary(machineId: machine1.Id, tenantId: tenant1.Id, cpuPercent: 95));
+        // Tenant 2: machine breaches memory
+        await db.InsertAsync(TestDataBuilder.BuildMachineStateSummary(machineId: machine2.Id, tenantId: tenant2.Id, memoryPercent: 75));
+
+        await service.EvaluateAllRulesAsync(CancellationToken.None);
+
+        // Exactly 2 events (one per tenant for the breaching machine).
+        int eventCount = await db.AlertEvents.CountAsync();
+        await Assert.That(eventCount).IsEqualTo(2);
+    }
 }

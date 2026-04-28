@@ -512,4 +512,227 @@ public sealed class WebhookEndpointTests
 
         await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.Forbidden);
     }
+
+    // --- Cross-Cutting Webhook Validation Tests ---
+
+    [Test]
+    public async Task CreateWebhook_HttpUrl_Returns400()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId) = await SeedWebhookEnvironment(db);
+        HttpClient client = BuildClient(factory, tenantId, userId);
+
+        HttpResponseMessage response = await client.PostAsJsonAsync("/api/v1/webhooks", new
+        {
+            Name = "HTTP Hook",
+            Url = "http://hooks.example.com/test",
+        });
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.BadRequest);
+        string body = await response.Content.ReadAsStringAsync();
+        await Assert.That(body.ToLowerInvariant()).Contains("https");
+    }
+
+    [Test]
+    public async Task CreateWebhook_PrivateIpUrl_Returns400()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId) = await SeedWebhookEnvironment(db);
+        HttpClient client = BuildClient(factory, tenantId, userId);
+
+        HttpResponseMessage response = await client.PostAsJsonAsync("/api/v1/webhooks", new
+        {
+            Name = "Private IP Hook",
+            Url = "https://192.168.1.1/alert",
+        });
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.BadRequest);
+        string body = await response.Content.ReadAsStringAsync();
+        await Assert.That(body.ToLowerInvariant()).Contains("private");
+    }
+
+    [Test]
+    public async Task CreateWebhook_EmptyName_Returns400()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId) = await SeedWebhookEnvironment(db);
+        HttpClient client = BuildClient(factory, tenantId, userId);
+
+        HttpResponseMessage response = await client.PostAsJsonAsync("/api/v1/webhooks", new
+        {
+            Name = "",
+            Url = "https://hooks.example.com/test",
+        });
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.BadRequest);
+    }
+
+    [Test]
+    public async Task CreateWebhook_EmptyUrl_Returns400()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId) = await SeedWebhookEnvironment(db);
+        HttpClient client = BuildClient(factory, tenantId, userId);
+
+        HttpResponseMessage response = await client.PostAsJsonAsync("/api/v1/webhooks", new
+        {
+            Name = "No URL Hook",
+            Url = "",
+        });
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.BadRequest);
+    }
+
+    // --- WS-7: Webhook Update (Enable/Disable Toggle) Tests ---
+
+    [Test]
+    public async Task UpdateWebhook_ToggleEnabled_Returns200()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId) = await SeedWebhookEnvironment(db);
+
+        WebhookEndpoint webhook = new()
+        {
+            TenantId = tenantId,
+            Name = "Toggle Hook",
+            Url = "https://hooks.example.com/toggle",
+            Secret = "f1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
+            IsEnabled = true,
+            CreatedByUserId = userId,
+            CreatedAt = DateTimeOffset.UtcNow,
+        };
+        webhook.Id = await db.InsertWithInt32IdentityAsync(webhook);
+
+        HttpClient client = BuildClient(factory, tenantId, userId);
+
+        HttpResponseMessage response = await client.PutAsJsonAsync($"/api/v1/webhooks/{webhook.Id}", new
+        {
+            IsEnabled = false,
+        });
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
+        string body = await response.Content.ReadAsStringAsync();
+        await Assert.That(body).Contains("\"success\":true");
+        await Assert.That(body).Contains("\"isEnabled\":false");
+    }
+
+    [Test]
+    public async Task UpdateWebhook_ToggleEnabled_PersistsInList()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId) = await SeedWebhookEnvironment(db);
+
+        WebhookEndpoint webhook = new()
+        {
+            TenantId = tenantId,
+            Name = "Persist Toggle Hook",
+            Url = "https://hooks.example.com/persist-toggle",
+            Secret = "g1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
+            IsEnabled = true,
+            CreatedByUserId = userId,
+            CreatedAt = DateTimeOffset.UtcNow,
+        };
+        webhook.Id = await db.InsertWithInt32IdentityAsync(webhook);
+
+        HttpClient client = BuildClient(factory, tenantId, userId);
+
+        // Toggle off
+        await client.PutAsJsonAsync($"/api/v1/webhooks/{webhook.Id}", new { IsEnabled = false });
+
+        // Verify in list
+        HttpResponseMessage listResponse = await client.GetAsync("/api/v1/webhooks");
+        string listBody = await listResponse.Content.ReadAsStringAsync();
+        await Assert.That(listBody).Contains("Persist Toggle Hook");
+        await Assert.That(listBody).Contains("\"isEnabled\":false");
+    }
+
+    [Test]
+    public async Task UpdateWebhook_NonExistentId_Returns404()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId) = await SeedWebhookEnvironment(db);
+        HttpClient client = BuildClient(factory, tenantId, userId);
+
+        HttpResponseMessage response = await client.PutAsJsonAsync("/api/v1/webhooks/99999", new
+        {
+            IsEnabled = false,
+        });
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.NotFound);
+    }
+
+    [Test]
+    public async Task UpdateWebhook_WrongTenant_Returns404()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId1, int userId1) = await SeedWebhookEnvironment(db);
+        (int tenantId2, int userId2) = await SeedWebhookEnvironment(db);
+
+        WebhookEndpoint webhook = new()
+        {
+            TenantId = tenantId1,
+            Name = "Tenant1 Update Hook",
+            Url = "https://hooks.example.com/t1update",
+            Secret = "h1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
+            IsEnabled = true,
+            CreatedByUserId = userId1,
+            CreatedAt = DateTimeOffset.UtcNow,
+        };
+        webhook.Id = await db.InsertWithInt32IdentityAsync(webhook);
+
+        HttpClient client = BuildClient(factory, tenantId2, userId2);
+
+        HttpResponseMessage response = await client.PutAsJsonAsync($"/api/v1/webhooks/{webhook.Id}", new
+        {
+            IsEnabled = false,
+        });
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.NotFound);
+    }
+
+    [Test]
+    public async Task UpdateWebhook_FreeTier_Returns403()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId) = await SeedWebhookEnvironment(db, SubscriptionTier.Free);
+        HttpClient client = BuildClient(factory, tenantId, userId);
+
+        HttpResponseMessage response = await client.PutAsJsonAsync("/api/v1/webhooks/1", new
+        {
+            IsEnabled = false,
+        });
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.Forbidden);
+    }
+
+    [Test]
+    public async Task UpdateWebhook_ViewerRole_Returns403()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId) = await SeedWebhookEnvironment(db);
+
+        // Build client with Viewer role instead of TenantAdmin
+        HttpClient client = new AuthenticatedClientBuilder(factory)
+            .WithUserId(userId)
+            .WithRole(tenantId, (int)UserAccountRoles.Viewer)
+            .WithActiveTenant(tenantId)
+            .Build();
+
+        HttpResponseMessage response = await client.PutAsJsonAsync("/api/v1/webhooks/1", new
+        {
+            IsEnabled = false,
+        });
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.Forbidden);
+    }
 }

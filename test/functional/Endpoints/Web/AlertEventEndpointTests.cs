@@ -545,6 +545,65 @@ public sealed class AlertEventEndpointTests
         await Assert.That(updated.AcknowledgedAt.HasValue).IsTrue();
     }
 
+    // --- Cross-Cutting Tests ---
+
+    [Test]
+    public async Task ListAlertEvents_VerifiesRuleNamePopulated()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId, int ruleId) = await SeedAlertEventEnvironment(db);
+
+        AlertEvent evt = new()
+        {
+            AlertRuleId = ruleId,
+            TenantId = tenantId,
+            MachineId = 1,
+            Severity = AlertSeverity.Warning,
+            Message = "Rule name check",
+            Status = AlertEventStatus.Triggered,
+            TriggeredAt = DateTimeOffset.UtcNow,
+        };
+        await db.InsertWithInt64IdentityAsync(evt);
+
+        HttpClient client = BuildClient(factory, tenantId, userId, UserAccountRoles.Viewer);
+
+        HttpResponseMessage response = await client.GetAsync("/api/v1/alert-events");
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
+        string body = await response.Content.ReadAsStringAsync();
+        await Assert.That(body).Contains("\"ruleName\":\"Test Rule\"");
+    }
+
+    [Test]
+    public async Task AcknowledgeEvent_ResponseIncludesTimestampAndStatus()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId, int ruleId) = await SeedAlertEventEnvironment(db);
+
+        AlertEvent evt = new()
+        {
+            AlertRuleId = ruleId,
+            TenantId = tenantId,
+            MachineId = 1,
+            Severity = AlertSeverity.Warning,
+            Message = "Response check",
+            Status = AlertEventStatus.Triggered,
+            TriggeredAt = DateTimeOffset.UtcNow,
+        };
+        evt.Id = await db.InsertWithInt64IdentityAsync(evt);
+
+        HttpClient client = BuildClient(factory, tenantId, userId, UserAccountRoles.MachineAdmin);
+
+        HttpResponseMessage response = await client.PostAsync($"/api/v1/alert-events/{evt.Id}/acknowledge", null);
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
+        string body = await response.Content.ReadAsStringAsync();
+        await Assert.That(body).Contains("\"success\":true");
+        await Assert.That(body).Contains("acknowledged");
+    }
+
     // --- WS-4: AcknowledgedByUserId Tests ---
 
     [Test]

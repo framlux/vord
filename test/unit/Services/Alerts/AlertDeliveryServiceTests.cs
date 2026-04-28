@@ -537,4 +537,87 @@ public sealed class AlertDeliveryServiceTests
 
         await Assert.That(signature1).IsNotEqualTo(signature2);
     }
+
+    // --- Cross-Cutting Tests ---
+
+    [Test]
+    public async Task DeliverAsync_BothNotifyFlags_ExecutesBothPaths()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        int tenantId = 1;
+
+        WebhookEndpoint webhook = new()
+        {
+            TenantId = tenantId,
+            Name = "Both Flags Hook",
+            Url = "https://hooks.example.com/both",
+            Secret = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+            IsEnabled = true,
+            CreatedByUserId = 1,
+            CreatedAt = DateTimeOffset.UtcNow,
+        };
+        await dbFactory.Context.InsertWithInt32IdentityAsync(webhook);
+
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+        MockHttpMessageHandler handler = new();
+        IHttpClientFactory httpFactory = Substitute.For<IHttpClientFactory>();
+        httpFactory.CreateClient(Arg.Any<string>()).Returns(new HttpClient(handler));
+        IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
+        ILogger<AlertDeliveryService> logger = Substitute.For<ILogger<AlertDeliveryService>>();
+
+        AlertDeliveryService service = new(scopeFactory, httpFactory, redis, logger);
+
+        // Both notifyEmail and notifyWebhook enabled.
+        await service.DeliverAsync(CreateEvent(tenantId), CreateRule(notifyEmail: true, notifyWebhook: true, tenantId: tenantId), CancellationToken.None);
+
+        // Webhook should receive an HTTP POST.
+        await Assert.That(handler.Requests.Count).IsEqualTo(1);
+
+        // Email path should log a message (placeholder implementation).
+        logger.Received().Log(
+            LogLevel.Information,
+            Arg.Any<EventId>(),
+            Arg.Is<object>(o => o.ToString()!.Contains("email")),
+            Arg.Any<Exception?>(),
+            Arg.Any<Func<object, Exception?, string>>());
+    }
+
+    [Test]
+    public async Task DeliverWebhooksAsync_TriggeredAtIsIso8601()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        int tenantId = 1;
+
+        WebhookEndpoint webhook = new()
+        {
+            TenantId = tenantId,
+            Name = "ISO8601 Hook",
+            Url = "https://hooks.example.com/iso",
+            Secret = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+            IsEnabled = true,
+            CreatedByUserId = 1,
+            CreatedAt = DateTimeOffset.UtcNow,
+        };
+        await dbFactory.Context.InsertWithInt32IdentityAsync(webhook);
+
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+        MockHttpMessageHandler handler = new();
+        IHttpClientFactory httpFactory = Substitute.For<IHttpClientFactory>();
+        httpFactory.CreateClient(Arg.Any<string>()).Returns(new HttpClient(handler));
+        IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
+
+        AlertDeliveryService service = new(scopeFactory, httpFactory, redis, new NullLogger<AlertDeliveryService>());
+
+        await service.DeliverAsync(CreateEvent(tenantId), CreateRule(notifyWebhook: true, tenantId: tenantId), CancellationToken.None);
+
+        string? body = handler.Requests[0].Body;
+        await Assert.That(body).IsNotNull();
+
+        // The triggeredAt field should be parseable as ISO 8601 with timezone.
+        System.Text.Json.JsonDocument doc = System.Text.Json.JsonDocument.Parse(body!);
+        string triggeredAt = doc.RootElement.GetProperty("triggeredAt").GetString()!;
+        bool parsed = DateTimeOffset.TryParse(triggeredAt, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out DateTimeOffset _);
+
+        await Assert.That(parsed).IsTrue();
+    }
 }
