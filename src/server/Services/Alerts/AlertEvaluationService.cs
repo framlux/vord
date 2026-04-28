@@ -154,13 +154,18 @@ public sealed class AlertEvaluationService : BackgroundService
                 return;
             }
 
-            if (DateTimeOffset.TryParse(startTimeStr, out DateTimeOffset conditionStart))
+            if (DateTimeOffset.TryParse(startTimeStr, out DateTimeOffset conditionStart) == false)
             {
-                TimeSpan elapsed = DateTimeOffset.UtcNow - conditionStart;
-                if (elapsed.TotalMinutes < rule.DurationMinutes)
-                {
-                    return;
-                }
+                // Corrupted timestamp — reset the tracking key and treat as a fresh start.
+                await redisDb.StringSetAsync(conditionKey, DateTimeOffset.UtcNow.ToString("o"), TimeSpan.FromMinutes(rule.DurationMinutes + 30));
+
+                return;
+            }
+
+            TimeSpan elapsed = DateTimeOffset.UtcNow - conditionStart;
+            if (elapsed.TotalMinutes < rule.DurationMinutes)
+            {
+                return;
             }
         }
 

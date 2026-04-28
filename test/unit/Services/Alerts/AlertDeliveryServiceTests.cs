@@ -538,6 +538,50 @@ public sealed class AlertDeliveryServiceTests
         await Assert.That(signature1).IsNotEqualTo(signature2);
     }
 
+    // --- EnqueueAsync Tests ---
+
+    [Test]
+    public async Task EnqueueAsync_PushesToCorrectRedisKey()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+        IHttpClientFactory httpFactory = Substitute.For<IHttpClientFactory>();
+        IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
+        IDatabase redisDb = Substitute.For<IDatabase>();
+        redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(redisDb);
+
+        AlertDeliveryService service = new(scopeFactory, httpFactory, redis, new NullLogger<AlertDeliveryService>());
+
+        await service.EnqueueAsync(100, 1, 1, CancellationToken.None);
+
+        await redisDb.Received(1).ListLeftPushAsync(
+            Arg.Is<RedisKey>(k => k == "alert:delivery:queue"),
+            Arg.Any<RedisValue>(),
+            Arg.Any<When>(),
+            Arg.Any<CommandFlags>());
+    }
+
+    [Test]
+    public async Task EnqueueAsync_PayloadContainsEventIdRuleIdTenantId()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+        IHttpClientFactory httpFactory = Substitute.For<IHttpClientFactory>();
+        IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
+        IDatabase redisDb = Substitute.For<IDatabase>();
+        redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(redisDb);
+
+        AlertDeliveryService service = new(scopeFactory, httpFactory, redis, new NullLogger<AlertDeliveryService>());
+
+        await service.EnqueueAsync(42, 7, 3, CancellationToken.None);
+
+        await redisDb.Received(1).ListLeftPushAsync(
+            Arg.Any<RedisKey>(),
+            Arg.Is<RedisValue>(v => v.ToString().Contains("\"eventId\":42") && v.ToString().Contains("\"ruleId\":7") && v.ToString().Contains("\"tenantId\":3")),
+            Arg.Any<When>(),
+            Arg.Any<CommandFlags>());
+    }
+
     // --- Cross-Cutting Tests ---
 
     [Test]

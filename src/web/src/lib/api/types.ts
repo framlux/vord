@@ -509,6 +509,10 @@ export interface CreateWebhookRequest {
 	url: string;
 }
 
+export interface UpdateWebhookRequest {
+	isEnabled: boolean;
+}
+
 // Machine Update
 export interface UpdateMachineRequest {
 	name: string;

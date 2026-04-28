@@ -23,6 +23,40 @@
 		oncancel?: () => void;
 	} = $props();
 
+	let dialogElement: HTMLDivElement | undefined = $state(undefined);
+	let previouslyFocused: HTMLElement | null = null;
+
+	$effect(() => {
+		if (open) {
+			previouslyFocused = document.activeElement as HTMLElement;
+			requestAnimationFrame(() => {
+				const firstButton = dialogElement?.querySelector('button');
+				firstButton?.focus();
+			});
+		} else if (previouslyFocused) {
+			previouslyFocused.focus();
+			previouslyFocused = null;
+		}
+	});
+
+	function trapFocus(event: KeyboardEvent) {
+		if (event.key !== 'Tab') return;
+
+		const focusable = dialogElement?.querySelectorAll('button') ?? [];
+		if (focusable.length === 0) return;
+
+		const first = focusable[0] as HTMLElement;
+		const last = focusable[focusable.length - 1] as HTMLElement;
+
+		if (event.shiftKey && document.activeElement === first) {
+			event.preventDefault();
+			last.focus();
+		} else if (event.shiftKey === false && document.activeElement === last) {
+			event.preventDefault();
+			first.focus();
+		}
+	}
+
 	const btnClass: Record<string, string> = {
 		danger: 'bg-error-500 hover:bg-red-600 text-white',
 		warning: 'bg-warning-500 hover:bg-yellow-600 text-black',
@@ -38,7 +72,11 @@
 
 {#if open}
 	<div class="fixed inset-0 z-50 flex items-center justify-center bg-black/50" role="presentation">
+		<!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
 		<div
+			bind:this={dialogElement}
+			onkeydown={trapFocus}
+			tabindex="-1"
 			class="w-full max-w-md rounded-xl bg-surface-50 p-6 shadow-xl dark:bg-surface-800"
 			role="dialog"
 			aria-modal="true"

@@ -68,6 +68,15 @@ public sealed class AlertRuleCreateEndpoint : Endpoint<CreateAlertRuleRequest, A
             return;
         }
 
+        if (string.IsNullOrWhiteSpace(req.Name))
+        {
+            HttpContext.Response.StatusCode = 400;
+            await HttpContext.Response.WriteAsJsonAsync(
+                ApiResponse<AlertRuleDto>.Error("Rule name is required"), ct);
+
+            return;
+        }
+
         if (req.DurationMinutes < 0)
         {
             HttpContext.Response.StatusCode = 400;

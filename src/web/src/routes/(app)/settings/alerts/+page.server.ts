@@ -190,6 +190,29 @@ export const actions: Actions = {
 		}
 	},
 
+	updateWebhook: async ({ fetch, cookies, request, locals }) => {
+		if (locals.user === null || canAdminTenant(locals.user) === false) {
+			return fail(403, { message: 'Access denied' });
+		}
+
+		const api = createServerApiClient(fetch, cookies.get('vord_auth'), cookies.get('vord_tenant'));
+		const data = await request.formData();
+		const id = parseInt(data.get('id') as string);
+		const isEnabled = data.get('isEnabled') === 'on';
+
+		try {
+			await api.updateWebhook(id, { isEnabled });
+
+			return { success: true };
+		} catch (e) {
+			if (e instanceof ApiError) {
+				return fail(e.status, { message: e.message });
+			}
+
+			return fail(500, { message: 'Failed to update webhook' });
+		}
+	},
+
 	deleteWebhook: async ({ fetch, cookies, request, locals }) => {
 		if (locals.user === null || canAdminTenant(locals.user) === false) {
 			return fail(403, { message: 'Access denied' });

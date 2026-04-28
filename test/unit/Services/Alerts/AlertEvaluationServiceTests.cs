@@ -252,6 +252,26 @@ public sealed class AlertEvaluationServiceTests
         await Assert.That(result).IsNull();
     }
 
+    [Test]
+    public async Task GetMetricValue_DiskUsage_ReturnsMaxDiskUsage()
+    {
+        MachineStateSummary state = new() { MachineId = 1, MaxDiskUsagePercent = 85, LastSeenAt = DateTimeOffset.UtcNow };
+
+        decimal? result = AlertEvaluationService.GetMetricValue(AlertMetric.DiskUsage, state);
+
+        await Assert.That(result).IsEqualTo(85m);
+    }
+
+    [Test]
+    public async Task GetMetricValue_DiskHealth_ReturnsDiskHealthValue()
+    {
+        MachineStateSummary state = new() { MachineId = 1, HasDiskHealthIssue = true, LastSeenAt = DateTimeOffset.UtcNow };
+
+        decimal? result = AlertEvaluationService.GetMetricValue(AlertMetric.DiskHealth, state);
+
+        await Assert.That(result).IsEqualTo(1m);
+    }
+
     // --- GetMaxDiskUsage Tests ---
 
     [Test]
@@ -764,7 +784,7 @@ public sealed class AlertEvaluationServiceTests
     }
 
     [Test]
-    public async Task EvaluateRuleForMachineAsync_DurationRequired_MalformedRedisTimestamp_FallsThroughToAlertCreation()
+    public async Task EvaluateRuleForMachineAsync_DurationRequired_MalformedRedisTimestamp_ResetsKeyAndReturns()
     {
         (AlertEvaluationService service, DatabaseContext db, IDatabase redisDb, IAlertDeliveryService delivery) = CreateServiceWithDb();
 
@@ -777,8 +797,8 @@ public sealed class AlertEvaluationServiceTests
         AlertRule rule = TestDataBuilder.BuildAlertRule(tenantId: tenant.Id, metric: AlertMetric.CpuUsage, threshold: 80m, durationMinutes: 5);
         rule.Id = await db.InsertWithInt32IdentityAsync(rule);
 
-        // Redis returns corrupted timestamp data — TryParse fails, falls through the
-        // duration guard (no early return on parse failure), and creates an alert.
+        // Redis returns corrupted timestamp data — TryParse fails, key should be reset
+        // defensively and no alert should fire (treated as a fresh start).
         string conditionKey = $"alert:condition:{rule.Id}:{machine.Id}";
         redisDb.StringGetAsync(conditionKey).Returns((RedisValue)"not-a-valid-date");
 
@@ -786,9 +806,10 @@ public sealed class AlertEvaluationServiceTests
 
         await service.EvaluateRuleForMachineAsync(db, rule, state, CancellationToken.None);
 
-        // Malformed timestamp causes the duration check to be skipped, so the alert fires.
+        // Corrupted timestamp should reset the key and NOT fire an alert.
+        await redisDb.Received().StringSetAsync(conditionKey, Arg.Any<RedisValue>(), Arg.Any<Expiration>());
         int eventCount = await db.AlertEvents.Where(e => e.AlertRuleId == rule.Id).CountAsync();
-        await Assert.That(eventCount).IsEqualTo(1);
+        await Assert.That(eventCount).IsEqualTo(0);
     }
 
     // --- EvaluateAllRulesAsync Tests ---

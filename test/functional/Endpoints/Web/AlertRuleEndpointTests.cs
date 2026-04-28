@@ -705,6 +705,52 @@ public sealed class AlertRuleEndpointTests
         await Assert.That(body).Contains("\"data\":[]");
     }
 
+    // --- Name Validation Tests ---
+
+    [Test]
+    public async Task CreateAlertRule_EmptyName_Returns400()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId) = await SeedAlertEnvironment(db, SubscriptionTier.Team);
+        HttpClient client = BuildClient(factory, tenantId, userId);
+
+        HttpResponseMessage response = await client.PostAsJsonAsync("/api/v1/alert-rules", new
+        {
+            Name = "",
+            Metric = "CpuUsage",
+            Operator = "GreaterThan",
+            Threshold = 80,
+            DurationMinutes = 0,
+            Severity = "Warning",
+        });
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.BadRequest);
+        string body = await response.Content.ReadAsStringAsync();
+        await Assert.That(body).Contains("name");
+    }
+
+    [Test]
+    public async Task CreateAlertRule_WhitespaceName_Returns400()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId) = await SeedAlertEnvironment(db, SubscriptionTier.Team);
+        HttpClient client = BuildClient(factory, tenantId, userId);
+
+        HttpResponseMessage response = await client.PostAsJsonAsync("/api/v1/alert-rules", new
+        {
+            Name = "   ",
+            Metric = "CpuUsage",
+            Operator = "GreaterThan",
+            Threshold = 80,
+            DurationMinutes = 0,
+            Severity = "Warning",
+        });
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.BadRequest);
+    }
+
     // --- WS-4: DurationMinutes Validation Tests ---
 
     [Test]

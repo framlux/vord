@@ -19,7 +19,9 @@
 	const webhooks: WebhookEndpointDto[] | null = $derived(data.webhooks);
 	const filters = $derived(data.filters);
 
-	let activeTab = $state<'rules' | 'events' | 'webhooks'>('rules');
+	let activeTab = $state<'rules' | 'events' | 'webhooks'>(
+		(pageState.url.searchParams.get('tab') as 'rules' | 'events' | 'webhooks') ?? 'rules'
+	);
 	let showCreateRule = $state(false);
 	let showCreateWebhook = $state(false);
 	let editingRuleId = $state<number | null>(null);
@@ -27,6 +29,9 @@
 	let deleteWebhookConfirm = $state<{ open: boolean; id: number | null }>({ open: false, id: null });
 	let revealedSecret = $state<string | null>(null);
 	let secretCopied = $state(false);
+	let errorMessage = $state<string | null>(null);
+	let deleteRuleForm: HTMLFormElement;
+	let deleteWebhookForm: HTMLFormElement;
 
 	function copySecret() {
 		if (revealedSecret) {
@@ -53,11 +58,19 @@
 		Resolved: 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400'
 	};
 
+	function switchTab(tab: 'rules' | 'events' | 'webhooks') {
+		activeTab = tab;
+		const params = new URLSearchParams(pageState.url.searchParams);
+		params.set('tab', tab);
+		goto(`/settings/alerts?${params.toString()}`, { replaceState: true });
+	}
+
 	function applyEventFilters() {
 		const params = new URLSearchParams();
 		if (statusFilter) params.set('status', statusFilter);
 		if (severityFilter) params.set('severity', severityFilter);
 		params.set('page', '1');
+		params.set('tab', 'events');
 
 		goto(`/settings/alerts?${params.toString()}`);
 	}
@@ -65,7 +78,7 @@
 	function clearEventFilters() {
 		statusFilter = '';
 		severityFilter = '';
-		goto('/settings/alerts');
+		goto('/settings/alerts?tab=events');
 	}
 
 	function goToPage(p: number) {
@@ -90,7 +103,7 @@
 		}
 
 		event.preventDefault();
-		activeTab = tabOrder[newIndex];
+		switchTab(tabOrder[newIndex]);
 
 		const tabId = `tab-${tabOrder[newIndex]}`;
 		const tabElement = document.getElementById(tabId);
@@ -104,6 +117,13 @@
 
 <div class="space-y-6">
 	<PageHeader title="Alerts" description="Manage alert rules, view alert events, and configure webhook delivery." />
+
+	{#if errorMessage && showCreateRule === false && showCreateWebhook === false && editingRuleId === null}
+		<div class="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-900/20 dark:text-red-300">
+			{errorMessage}
+			<button onclick={() => { errorMessage = null; }} class="ml-2 text-red-500 underline hover:text-red-700 dark:text-red-400 dark:hover:text-red-300">Dismiss</button>
+		</div>
+	{/if}
 
 	{#if rules === null}
 		<div class="flex items-center gap-3 rounded-xl border border-amber-200 bg-amber-50 p-6 dark:border-amber-800 dark:bg-amber-900/20">
@@ -121,7 +141,7 @@
 				aria-selected={activeTab === 'rules'}
 				aria-controls="tabpanel-rules"
 				tabindex={activeTab === 'rules' ? 0 : -1}
-				onclick={() => (activeTab = 'rules')}
+				onclick={() => switchTab('rules')}
 				onkeydown={handleTabKeydown}
 				class="flex-1 rounded-md px-4 py-2 text-sm font-medium transition-colors {activeTab === 'rules'
 					? 'bg-surface-50 text-surface-900 shadow dark:bg-surface-700 dark:text-surface-100'
@@ -135,7 +155,7 @@
 				aria-selected={activeTab === 'events'}
 				aria-controls="tabpanel-events"
 				tabindex={activeTab === 'events' ? 0 : -1}
-				onclick={() => (activeTab = 'events')}
+				onclick={() => switchTab('events')}
 				onkeydown={handleTabKeydown}
 				class="flex-1 rounded-md px-4 py-2 text-sm font-medium transition-colors {activeTab === 'events'
 					? 'bg-surface-50 text-surface-900 shadow dark:bg-surface-700 dark:text-surface-100'
@@ -149,7 +169,7 @@
 				aria-selected={activeTab === 'webhooks'}
 				aria-controls="tabpanel-webhooks"
 				tabindex={activeTab === 'webhooks' ? 0 : -1}
-				onclick={() => (activeTab = 'webhooks')}
+				onclick={() => switchTab('webhooks')}
 				onkeydown={handleTabKeydown}
 				class="flex-1 rounded-md px-4 py-2 text-sm font-medium transition-colors {activeTab === 'webhooks'
 					? 'bg-surface-50 text-surface-900 shadow dark:bg-surface-700 dark:text-surface-100'
@@ -177,7 +197,12 @@
 				{#if showCreateRule}
 					<div class="rounded-xl border border-surface-200 bg-surface-50 p-6 dark:border-surface-700 dark:bg-surface-800">
 						<h3 class="mb-4 text-sm font-semibold text-surface-900 dark:text-surface-50">Create Alert Rule</h3>
-						<form method="POST" action="?/createRule" use:enhance={() => { return async ({ update }) => { showCreateRule = false; await update(); }; }}>
+						<form method="POST" action="?/createRule" use:enhance={() => { errorMessage = null; return async ({ result, update }) => { if (result.type === 'failure') { errorMessage = (result.data as { message?: string })?.message ?? 'An error occurred'; } else { showCreateRule = false; errorMessage = null; await update(); } }; }}>
+							{#if errorMessage}
+								<div class="mb-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-900/20 dark:text-red-300">
+									{errorMessage}
+								</div>
+							{/if}
 							<div class="grid grid-cols-1 gap-4 md:grid-cols-2">
 								<div>
 									<label for="rule-name" class="mb-1 block text-xs text-surface-500 dark:text-surface-400">Name</label>
@@ -235,7 +260,7 @@
 								</div>
 							</div>
 							<div class="mt-4 flex justify-end gap-2">
-								<button type="button" onclick={() => (showCreateRule = false)} class="rounded-lg border border-surface-300 px-4 py-2 text-sm font-medium text-surface-700 hover:bg-surface-100 dark:border-surface-600 dark:text-surface-300 dark:hover:bg-surface-700">Cancel</button>
+								<button type="button" onclick={() => { showCreateRule = false; errorMessage = null; }} class="rounded-lg border border-surface-300 px-4 py-2 text-sm font-medium text-surface-700 hover:bg-surface-100 dark:border-surface-600 dark:text-surface-300 dark:hover:bg-surface-700">Cancel</button>
 								<button type="submit" class="rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700 dark:bg-primary-500 dark:hover:bg-primary-600">Create Rule</button>
 							</div>
 						</form>
@@ -303,31 +328,8 @@
 											</td>
 											<td class="px-4 py-3">
 												<div class="flex items-center gap-2">
-													{#if editingRuleId === rule.id}
-														<form method="POST" action="?/updateRule" use:enhance={() => { return async ({ update }) => { editingRuleId = null; await update(); }; }} class="flex items-center gap-2">
-															<input type="hidden" name="id" value={rule.id} />
-															<input type="hidden" name="name" value={rule.name} />
-															<input type="hidden" name="threshold" value={rule.threshold} />
-															<input type="hidden" name="durationMinutes" value={rule.durationMinutes} />
-															<input type="hidden" name="severity" value={rule.severity} />
-															<label class="flex items-center gap-1 text-xs">
-																<input name="isEnabled" type="checkbox" checked={rule.isEnabled} class="rounded" />
-																On
-															</label>
-															<label class="flex items-center gap-1 text-xs">
-																<input name="notifyEmail" type="checkbox" checked={rule.notifyEmail} class="rounded" />
-																Email
-															</label>
-															<label class="flex items-center gap-1 text-xs">
-																<input name="notifyWebhook" type="checkbox" checked={rule.notifyWebhook} class="rounded" />
-																WH
-															</label>
-															<button type="submit" class="rounded p-1 text-green-600 hover:bg-green-50 dark:text-green-400 dark:hover:bg-green-900/20">
-																<Check class="h-4 w-4" />
-															</button>
-														</form>
-													{:else}
-														<button onclick={() => (editingRuleId = rule.id)} class="text-xs text-primary-600 hover:underline dark:text-primary-400">Edit</button>
+													{#if editingRuleId !== rule.id}
+														<button onclick={() => { editingRuleId = rule.id; errorMessage = null; }} class="text-xs text-primary-600 hover:underline dark:text-primary-400">Edit</button>
 														{#if rule.isCustom}
 															<button type="button" onclick={() => deleteRuleConfirm = { open: true, id: rule.id }} class="rounded p-1 text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-900/20">
 																<Trash2 class="h-4 w-4" />
@@ -337,6 +339,60 @@
 												</div>
 											</td>
 										</tr>
+										{#if editingRuleId === rule.id}
+											<tr class="bg-surface-50 dark:bg-surface-800/50">
+												<td colspan="7" class="px-4 py-4">
+													<form method="POST" action="?/updateRule" use:enhance={() => { errorMessage = null; return async ({ result, update }) => { if (result.type === 'failure') { errorMessage = (result.data as { message?: string })?.message ?? 'An error occurred'; } else { editingRuleId = null; errorMessage = null; await update(); } }; }}>
+														<input type="hidden" name="id" value={rule.id} />
+														{#if errorMessage}
+															<div class="mb-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-900/20 dark:text-red-300">
+																{errorMessage}
+															</div>
+														{/if}
+														<div class="grid grid-cols-1 gap-4 md:grid-cols-3 lg:grid-cols-4">
+															<div>
+																<label for="edit-name-{rule.id}" class="mb-1 block text-xs text-surface-500 dark:text-surface-400">Name</label>
+																<input id="edit-name-{rule.id}" name="name" type="text" value={rule.name} required class="w-full rounded-lg border border-surface-300 bg-surface-50 px-3 py-2 text-sm dark:border-surface-600 dark:bg-surface-700 dark:text-surface-100" />
+															</div>
+															<div>
+																<label for="edit-threshold-{rule.id}" class="mb-1 block text-xs text-surface-500 dark:text-surface-400">Threshold</label>
+																<input id="edit-threshold-{rule.id}" name="threshold" type="number" step="any" value={rule.threshold} required class="w-full rounded-lg border border-surface-300 bg-surface-50 px-3 py-2 text-sm dark:border-surface-600 dark:bg-surface-700 dark:text-surface-100" />
+															</div>
+															<div>
+																<label for="edit-duration-{rule.id}" class="mb-1 block text-xs text-surface-500 dark:text-surface-400">Duration (minutes)</label>
+																<input id="edit-duration-{rule.id}" name="durationMinutes" type="number" value={rule.durationMinutes} class="w-full rounded-lg border border-surface-300 bg-surface-50 px-3 py-2 text-sm dark:border-surface-600 dark:bg-surface-700 dark:text-surface-100" />
+															</div>
+															<div>
+																<label for="edit-severity-{rule.id}" class="mb-1 block text-xs text-surface-500 dark:text-surface-400">Severity</label>
+																<select id="edit-severity-{rule.id}" name="severity" class="w-full rounded-lg border border-surface-300 bg-surface-50 px-3 py-2 text-sm dark:border-surface-600 dark:bg-surface-700 dark:text-surface-100">
+																	<option value="Info" selected={rule.severity === 'Info'}>Info</option>
+																	<option value="Warning" selected={rule.severity === 'Warning'}>Warning</option>
+																	<option value="Critical" selected={rule.severity === 'Critical'}>Critical</option>
+																</select>
+															</div>
+														</div>
+														<div class="mt-3 flex flex-wrap items-center gap-6">
+															<label class="flex items-center gap-2 text-sm text-surface-700 dark:text-surface-300">
+																<input name="isEnabled" type="checkbox" checked={rule.isEnabled} class="rounded border-surface-300" />
+																Enabled
+															</label>
+															<label class="flex items-center gap-2 text-sm text-surface-700 dark:text-surface-300">
+																<input name="notifyEmail" type="checkbox" checked={rule.notifyEmail} class="rounded border-surface-300" />
+																Email
+															</label>
+															<label class="flex items-center gap-2 text-sm text-surface-700 dark:text-surface-300">
+																<input name="notifyWebhook" type="checkbox" checked={rule.notifyWebhook} class="rounded border-surface-300" />
+																Webhook
+															</label>
+														</div>
+														<div class="mt-4 flex justify-end gap-2">
+															<button type="button" onclick={() => { editingRuleId = null; errorMessage = null; }} class="rounded-lg border border-surface-300 px-4 py-2 text-sm font-medium text-surface-700 hover:bg-surface-100 dark:border-surface-600 dark:text-surface-300 dark:hover:bg-surface-700">Cancel</button>
+															<button type="submit" class="rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700 dark:bg-primary-500 dark:hover:bg-primary-600">Save Changes</button>
+														</div>
+													</form>
+												</td>
+											</tr>
+										{/if}
 									{/each}
 								{/if}
 							</tbody>
@@ -347,8 +403,9 @@
 		{/if}
 
 		<!-- Alert Events Tab -->
-		{#if activeTab === 'events' && events}
+		{#if activeTab === 'events'}
 			<div id="tabpanel-events" role="tabpanel" aria-labelledby="tab-events" class="space-y-4">
+			{#if events}
 				<h2 class="text-lg font-semibold text-surface-900 dark:text-surface-50">Alert Events</h2>
 
 				<!-- Event Filters -->
@@ -405,7 +462,7 @@
 												{formatDateTime(event.triggeredAt)}
 											</td>
 											<td class="px-4 py-3 text-surface-600 dark:text-surface-400">{event.ruleName}</td>
-											<td class="px-4 py-3 text-surface-600 dark:text-surface-400">#{event.machineId}</td>
+											<td class="px-4 py-3 text-surface-600 dark:text-surface-400">{event.machineName}</td>
 											<td class="px-4 py-3">
 												<span class="inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium {severityColors[event.severity] ?? ''}">
 													{event.severity}
@@ -453,12 +510,21 @@
 						</div>
 					{/if}
 				</div>
+			{:else}
+				<div class="flex items-center gap-3 rounded-xl border border-surface-200 bg-surface-50 p-6 dark:border-surface-700 dark:bg-surface-800">
+					<Bell class="h-5 w-5 text-surface-400" />
+					<p class="text-sm text-surface-500 dark:text-surface-400">
+						Alert events are not available. This may be due to subscription restrictions.
+					</p>
+				</div>
+			{/if}
 			</div>
 		{/if}
 
 		<!-- Webhooks Tab -->
-		{#if activeTab === 'webhooks' && webhooks}
+		{#if activeTab === 'webhooks'}
 			<div id="tabpanel-webhooks" role="tabpanel" aria-labelledby="tab-webhooks" class="space-y-4">
+			{#if webhooks}
 				<div class="flex items-center justify-between">
 					<h2 class="text-lg font-semibold text-surface-900 dark:text-surface-50">Webhook Endpoints</h2>
 					<button
@@ -473,7 +539,12 @@
 				{#if showCreateWebhook}
 					<div class="rounded-xl border border-surface-200 bg-surface-50 p-6 dark:border-surface-700 dark:bg-surface-800">
 						<h3 class="mb-4 text-sm font-semibold text-surface-900 dark:text-surface-50">Create Webhook</h3>
-						<form method="POST" action="?/createWebhook" use:enhance={() => { return async ({ result, update }) => { if (result.type === 'success' && result.data?.secret) { revealedSecret = result.data.secret; secretCopied = false; } showCreateWebhook = false; await update(); }; }}>
+						<form method="POST" action="?/createWebhook" use:enhance={() => { errorMessage = null; return async ({ result, update }) => { if (result.type === 'failure') { errorMessage = (result.data as { message?: string })?.message ?? 'An error occurred'; } else { if (result.type === 'success') { const data = result.data as { secret?: string } | null; if (data?.secret) { revealedSecret = data.secret; secretCopied = false; } } showCreateWebhook = false; errorMessage = null; await update(); } }; }}>
+							{#if errorMessage}
+								<div class="mb-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-900/20 dark:text-red-300">
+									{errorMessage}
+								</div>
+							{/if}
 							<div class="grid grid-cols-1 gap-4 md:grid-cols-2">
 								<div>
 									<label for="webhook-name" class="mb-1 block text-xs text-surface-500 dark:text-surface-400">Name</label>
@@ -485,7 +556,7 @@
 								</div>
 							</div>
 							<div class="mt-4 flex justify-end gap-2">
-								<button type="button" onclick={() => (showCreateWebhook = false)} class="rounded-lg border border-surface-300 px-4 py-2 text-sm font-medium text-surface-700 hover:bg-surface-100 dark:border-surface-600 dark:text-surface-300 dark:hover:bg-surface-700">Cancel</button>
+								<button type="button" onclick={() => { showCreateWebhook = false; errorMessage = null; }} class="rounded-lg border border-surface-300 px-4 py-2 text-sm font-medium text-surface-700 hover:bg-surface-100 dark:border-surface-600 dark:text-surface-300 dark:hover:bg-surface-700">Cancel</button>
 								<button type="submit" class="rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700 dark:bg-primary-500 dark:hover:bg-primary-600">Create Webhook</button>
 							</div>
 						</form>
@@ -541,16 +612,22 @@
 											<td class="px-4 py-3 font-medium text-surface-900 dark:text-surface-100">{webhook.name}</td>
 											<td class="max-w-xs truncate px-4 py-3 text-surface-600 dark:text-surface-400" title={webhook.url}>{webhook.url}</td>
 											<td class="px-4 py-3">
-												{#if webhook.isEnabled}
-													<span class="inline-flex items-center rounded-full bg-green-100 px-2.5 py-0.5 text-xs font-medium text-green-700 dark:bg-green-900/30 dark:text-green-400">Active</span>
-												{:else}
-													<span class="inline-flex items-center rounded-full bg-surface-100 px-2.5 py-0.5 text-xs font-medium text-surface-500 dark:bg-surface-700 dark:text-surface-400">Disabled</span>
-												{/if}
+												<form method="POST" action="?/updateWebhook" use:enhance={() => { return async ({ result, update }) => { if (result.type === 'failure') { errorMessage = (result.data as { message?: string })?.message ?? 'Failed to update webhook'; } else { errorMessage = null; await update(); } }; }}>
+													<input type="hidden" name="id" value={webhook.id} />
+													<input type="hidden" name="isEnabled" value={webhook.isEnabled ? 'off' : 'on'} />
+													<button type="submit" title={webhook.isEnabled ? 'Disable webhook' : 'Enable webhook'}>
+														{#if webhook.isEnabled}
+															<span class="inline-flex items-center rounded-full bg-green-100 px-2.5 py-0.5 text-xs font-medium text-green-700 hover:bg-green-200 dark:bg-green-900/30 dark:text-green-400 dark:hover:bg-green-900/50">Active</span>
+														{:else}
+															<span class="inline-flex items-center rounded-full bg-surface-100 px-2.5 py-0.5 text-xs font-medium text-surface-500 hover:bg-surface-200 dark:bg-surface-700 dark:text-surface-400 dark:hover:bg-surface-600">Disabled</span>
+														{/if}
+													</button>
+												</form>
 											</td>
 											<td class="whitespace-nowrap px-4 py-3 text-surface-500 dark:text-surface-400">{formatDateTime(webhook.createdAt)}</td>
 											<td class="px-4 py-3">
 												<div class="flex items-center gap-1">
-													<form method="POST" action="?/rotateSecret" use:enhance={() => { return async ({ result, update }) => { if (result.type === 'success' && result.data?.secret) { revealedSecret = result.data.secret; secretCopied = false; } await update(); }; }}>
+													<form method="POST" action="?/rotateSecret" use:enhance={() => { return async ({ result, update }) => { if (result.type === 'success') { const data = result.data as { secret?: string } | null; if (data?.secret) { revealedSecret = data.secret; secretCopied = false; } } await update(); }; }}>
 														<input type="hidden" name="id" value={webhook.id} />
 														<button type="submit" title="Rotate secret" class="rounded p-1 text-surface-500 hover:bg-surface-100 dark:text-surface-400 dark:hover:bg-surface-700">
 															<RefreshCw class="h-4 w-4" />
@@ -568,10 +645,58 @@
 						</table>
 					</div>
 				</div>
+			{:else}
+				<div class="flex items-center gap-3 rounded-xl border border-surface-200 bg-surface-50 p-6 dark:border-surface-700 dark:bg-surface-800">
+					<Webhook class="h-5 w-5 text-surface-400" />
+					<p class="text-sm text-surface-500 dark:text-surface-400">
+						Webhooks are not available. This may be due to subscription restrictions.
+					</p>
+				</div>
+			{/if}
 			</div>
 		{/if}
 	{/if}
 </div>
+
+<form
+	method="POST"
+	action="?/deleteRule"
+	use:enhance={() => {
+		return async ({ result, update }) => {
+			deleteRuleConfirm = { open: false, id: null };
+			if (result.type === 'failure') {
+				errorMessage = (result.data as { message?: string })?.message ?? 'Failed to delete rule';
+			} else {
+				errorMessage = null;
+				await update();
+			}
+		};
+	}}
+	bind:this={deleteRuleForm}
+	class="hidden"
+>
+	<input type="hidden" name="id" value={deleteRuleConfirm.id ?? ''} />
+</form>
+
+<form
+	method="POST"
+	action="?/deleteWebhook"
+	use:enhance={() => {
+		return async ({ result, update }) => {
+			deleteWebhookConfirm = { open: false, id: null };
+			if (result.type === 'failure') {
+				errorMessage = (result.data as { message?: string })?.message ?? 'Failed to delete webhook';
+			} else {
+				errorMessage = null;
+				await update();
+			}
+		};
+	}}
+	bind:this={deleteWebhookForm}
+	class="hidden"
+>
+	<input type="hidden" name="id" value={deleteWebhookConfirm.id ?? ''} />
+</form>
 
 <ConfirmDialog
 	open={deleteRuleConfirm.open}
@@ -581,19 +706,8 @@
 	variant="danger"
 	onconfirm={() => {
 		if (deleteRuleConfirm.id !== null) {
-			const form = document.createElement('form');
-			form.method = 'POST';
-			form.action = '?/deleteRule';
-			const input = document.createElement('input');
-			input.type = 'hidden';
-			input.name = 'id';
-			input.value = String(deleteRuleConfirm.id);
-			form.appendChild(input);
-			document.body.appendChild(form);
-			form.requestSubmit();
-			document.body.removeChild(form);
+			deleteRuleForm.requestSubmit();
 		}
-		deleteRuleConfirm = { open: false, id: null };
 	}}
 	oncancel={() => deleteRuleConfirm = { open: false, id: null }}
 />
@@ -606,19 +720,8 @@
 	variant="danger"
 	onconfirm={() => {
 		if (deleteWebhookConfirm.id !== null) {
-			const form = document.createElement('form');
-			form.method = 'POST';
-			form.action = '?/deleteWebhook';
-			const input = document.createElement('input');
-			input.type = 'hidden';
-			input.name = 'id';
-			input.value = String(deleteWebhookConfirm.id);
-			form.appendChild(input);
-			document.body.appendChild(form);
-			form.requestSubmit();
-			document.body.removeChild(form);
+			deleteWebhookForm.requestSubmit();
 		}
-		deleteWebhookConfirm = { open: false, id: null };
 	}}
 	oncancel={() => deleteWebhookConfirm = { open: false, id: null }}
 />

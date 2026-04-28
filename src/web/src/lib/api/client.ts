@@ -30,6 +30,7 @@ import type {
 	CreateAlertRuleRequest,
 	UpdateAlertRuleRequest,
 	CreateWebhookRequest,
+	UpdateWebhookRequest,
 	MachineAuthorizedKeyDto,
 	SigningKeyDto,
 	SigningKeyListResponse,
@@ -493,6 +494,12 @@ export class ApiClient {
 
 	async createWebhook(req: CreateWebhookRequest): Promise<WebhookEndpointDto> {
 		const resp = await this.post<ApiResponse<WebhookEndpointDto>>('/api/v1/webhooks', req);
+
+		return this.unwrap(resp);
+	}
+
+	async updateWebhook(id: number, req: UpdateWebhookRequest): Promise<WebhookEndpointDto> {
+		const resp = await this.put<ApiResponse<WebhookEndpointDto>>(`/api/v1/webhooks/${id}`, req);
 
 		return this.unwrap(resp);
 	}
