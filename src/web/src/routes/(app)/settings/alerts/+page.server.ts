@@ -5,7 +5,7 @@
 import { createServerApiClient } from '$lib/api/server';
 import { ApiError } from '$lib/api/client';
 import { parsePaginationParams } from '$lib/utils/pagination';
-import { canAdminTenant } from '$lib/utils/roles';
+import { canAdminTenant, canAdminMachines } from '$lib/utils/roles';
 import { redirect, error, fail } from '@sveltejs/kit';
 import type { PageServerLoad, Actions } from './$types';
 
@@ -123,7 +123,7 @@ export const actions: Actions = {
 	},
 
 	acknowledgeEvent: async ({ fetch, cookies, request, locals }) => {
-		if (locals.user === null || canAdminTenant(locals.user) === false) {
+		if (locals.user === null || canAdminMachines(locals.user) === false) {
 			return fail(403, { message: 'Access denied' });
 		}
 
@@ -153,18 +153,40 @@ export const actions: Actions = {
 		const data = await request.formData();
 
 		try {
-			await api.createWebhook({
+			const result = await api.createWebhook({
 				name: data.get('name') as string,
 				url: data.get('url') as string
 			});
 
-			return { success: true };
+			return { success: true, secret: result.secret };
 		} catch (e) {
 			if (e instanceof ApiError) {
 				return fail(e.status, { message: e.message });
 			}
 
 			return fail(500, { message: 'Failed to create webhook' });
+		}
+	},
+
+	rotateSecret: async ({ fetch, cookies, request, locals }) => {
+		if (locals.user === null || canAdminTenant(locals.user) === false) {
+			return fail(403, { message: 'Access denied' });
+		}
+
+		const api = createServerApiClient(fetch, cookies.get('vord_auth'), cookies.get('vord_tenant'));
+		const data = await request.formData();
+		const id = parseInt(data.get('id') as string);
+
+		try {
+			const result = await api.rotateWebhookSecret(id);
+
+			return { success: true, secret: result.secret };
+		} catch (e) {
+			if (e instanceof ApiError) {
+				return fail(e.status, { message: e.message });
+			}
+
+			return fail(500, { message: 'Failed to rotate webhook secret' });
 		}
 	},
 

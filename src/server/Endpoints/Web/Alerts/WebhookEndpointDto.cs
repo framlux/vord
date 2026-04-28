@@ -21,4 +21,7 @@ public sealed class WebhookEndpointDto
 
     /// <summary>When the webhook was created.</summary>
     public DateTimeOffset CreatedAt { get; set; }
+
+    /// <summary>The signing secret (only populated on creation or rotation, never in list/get responses).</summary>
+    public string? Secret { get; set; }
 }

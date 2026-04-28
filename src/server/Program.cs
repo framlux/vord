@@ -140,7 +140,10 @@ builder.Services.AddHttpClient("OidcDiscovery")
     .ConfigurePrimaryHttpMessageHandler(() => SsrfSafeSocketsHttpHandler.Create());
 builder.Services.AddHttpClient("OidcTokenExchange")
     .ConfigurePrimaryHttpMessageHandler(() => SsrfSafeSocketsHttpHandler.Create());
-builder.Services.AddHttpClient("WebhookDelivery")
+builder.Services.AddHttpClient("WebhookDelivery", client =>
+    {
+        client.Timeout = TimeSpan.FromSeconds(10);
+    })
     .ConfigurePrimaryHttpMessageHandler(() => SsrfSafeSocketsHttpHandler.Create());
 
 // Dual authentication: API key for agents, cookie + social OAuth for web users
@@ -344,6 +347,7 @@ else
 
 builder.Services.AddSingleton<IAlertDeliveryService, AlertDeliveryService>();
 builder.Services.AddHostedService<AlertEvaluationService>();
+builder.Services.AddHostedService<WebhookDeliveryWorkerService>();
 builder.Services.AddHostedService<CommandExpiryBackgroundService>();
 builder.Services.AddHostedService<MachineStateStreamingService>();
 builder.Services.AddHostedService<HealthSweepService>();

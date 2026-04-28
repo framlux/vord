@@ -26,7 +26,7 @@ public sealed class AlertEvaluationService : BackgroundService
     private readonly ILogger<AlertEvaluationService> _logger;
 
     private static readonly TimeSpan EvaluationInterval = TimeSpan.FromSeconds(60);
-    private static readonly TimeSpan LockTtl = TimeSpan.FromMinutes(5);
+    private static readonly TimeSpan LockTtl = TimeSpan.FromMinutes(15);
 
     /// <summary>
     /// Creates a new instance of the <see cref="AlertEvaluationService"/> class.
@@ -149,7 +149,7 @@ public sealed class AlertEvaluationService : BackgroundService
 
             if (startTimeStr is null)
             {
-                await redisDb.StringSetAsync(conditionKey, DateTimeOffset.UtcNow.ToString("o"), TimeSpan.FromMinutes(rule.DurationMinutes + 5));
+                await redisDb.StringSetAsync(conditionKey, DateTimeOffset.UtcNow.ToString("o"), TimeSpan.FromMinutes(rule.DurationMinutes + 30));
 
                 return;
             }
@@ -191,7 +191,15 @@ public sealed class AlertEvaluationService : BackgroundService
         alertEvent.Id = await db.InsertWithInt64IdentityAsync(alertEvent, token: ct);
         _logger.LogInformation("Alert triggered: Rule {RuleId} ({RuleName}) for machine {MachineId}", rule.Id, rule.Name, state.MachineId);
 
-        await _deliveryService.DeliverAsync(alertEvent, rule, ct);
+        // Delete the condition key after a duration-elapsed alert fires so that if the
+        // condition clears and re-triggers, the duration window starts fresh.
+        if (rule.DurationMinutes > 0)
+        {
+            IDatabase redisDb = _redis.GetDatabase();
+            await redisDb.KeyDeleteAsync($"alert:condition:{rule.Id}:{state.MachineId}");
+        }
+
+        await _deliveryService.EnqueueAsync(alertEvent.Id, rule.Id, rule.TenantId, ct);
     }
 
     internal static decimal? GetMetricValue(AlertMetric metric, MachineStateSummary state)
@@ -204,7 +212,7 @@ public sealed class AlertEvaluationService : BackgroundService
             AlertMetric.FailedServices => state.FailedServices.HasValue ? (decimal)state.FailedServices.Value : null,
             AlertMetric.SecurityUpdates => state.SecurityUpdates.HasValue ? (decimal)state.SecurityUpdates.Value : null,
             AlertMetric.DiskHealth => GetDiskHealthValue(state),
-            AlertMetric.MachineOffline => null, // Handled separately via ping service
+            AlertMetric.MachineOffline => state.HealthStatus == 3 ? 1m : 0m,
             _ => null,
         };
     }

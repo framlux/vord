@@ -502,6 +502,12 @@ export class ApiClient {
 		this.unwrap(resp);
 	}
 
+	async rotateWebhookSecret(id: number): Promise<WebhookEndpointDto> {
+		const resp = await this.post<ApiResponse<WebhookEndpointDto>>(`/api/v1/webhooks/${id}/rotate-secret`);
+
+		return this.unwrap(resp);
+	}
+
 	// Signing Keys
 	async getSigningKeys(): Promise<SigningKeyListResponse> {
 		const resp = await this.get<ApiResponse<SigningKeyListResponse>>('/api/v1/signing-keys');

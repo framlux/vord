@@ -116,7 +116,7 @@ public sealed class WebhookEndpointTests
     }
 
     [Test]
-    public async Task CreateWebhook_ValidRequest_ReturnsDtoWithoutSecret()
+    public async Task CreateWebhook_ValidRequest_ReturnsDtoWithSecret()
     {
         using FunctionalTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
@@ -134,8 +134,8 @@ public sealed class WebhookEndpointTests
         await Assert.That(body).Contains("\"success\":true");
         await Assert.That(body).Contains("My Webhook");
         await Assert.That(body).Contains("https://hooks.example.com/alerts");
-        // The DTO should not contain the secret
-        await Assert.That(body.Contains("\"secret\"")).IsFalse();
+        // The create response now includes the secret for one-time reveal
+        await Assert.That(body.Contains("\"secret\"")).IsTrue();
     }
 
     [Test]
@@ -317,5 +317,199 @@ public sealed class WebhookEndpointTests
 
         WebhookEndpoint? deleted = await db.WebhookEndpoints.FirstOrDefaultAsync(w => w.Id == webhook.Id);
         await Assert.That(deleted).IsNull();
+    }
+
+    // --- WS-5: Webhook Secret & Signature Tests ---
+
+    [Test]
+    public async Task CreateWebhook_ResponseIncludesSecret()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId) = await SeedWebhookEnvironment(db);
+        HttpClient client = BuildClient(factory, tenantId, userId);
+
+        HttpResponseMessage response = await client.PostAsJsonAsync("/api/v1/webhooks", new
+        {
+            Name = "Secret Reveal",
+            Url = "https://hooks.example.com/secret-reveal",
+        });
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
+        string body = await response.Content.ReadAsStringAsync();
+        await Assert.That(body).Contains("\"secret\":");
+
+        // The secret should be a 64-character hex string (32 bytes)
+        System.Text.Json.JsonDocument doc = System.Text.Json.JsonDocument.Parse(body);
+        string? secret = doc.RootElement.GetProperty("data").GetProperty("secret").GetString();
+        await Assert.That(secret).IsNotNull();
+        await Assert.That(secret!.Length).IsEqualTo(64);
+        await Assert.That(System.Text.RegularExpressions.Regex.IsMatch(secret, "^[a-f0-9]{64}$")).IsTrue();
+    }
+
+    [Test]
+    public async Task CreateWebhook_SecretIsUnique()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId) = await SeedWebhookEnvironment(db);
+        HttpClient client = BuildClient(factory, tenantId, userId);
+
+        HttpResponseMessage response1 = await client.PostAsJsonAsync("/api/v1/webhooks", new
+        {
+            Name = "Unique Secret 1",
+            Url = "https://hooks.example.com/unique1",
+        });
+        HttpResponseMessage response2 = await client.PostAsJsonAsync("/api/v1/webhooks", new
+        {
+            Name = "Unique Secret 2",
+            Url = "https://hooks.example.com/unique2",
+        });
+
+        string body1 = await response1.Content.ReadAsStringAsync();
+        string body2 = await response2.Content.ReadAsStringAsync();
+
+        System.Text.Json.JsonDocument doc1 = System.Text.Json.JsonDocument.Parse(body1);
+        System.Text.Json.JsonDocument doc2 = System.Text.Json.JsonDocument.Parse(body2);
+        string? secret1 = doc1.RootElement.GetProperty("data").GetProperty("secret").GetString();
+        string? secret2 = doc2.RootElement.GetProperty("data").GetProperty("secret").GetString();
+
+        await Assert.That(secret1).IsNotNull();
+        await Assert.That(secret2).IsNotNull();
+        await Assert.That(secret1).IsNotEqualTo(secret2);
+    }
+
+    [Test]
+    public async Task ListWebhooks_DoesNotIncludeSecret()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId) = await SeedWebhookEnvironment(db);
+        HttpClient client = BuildClient(factory, tenantId, userId);
+
+        // Create a webhook first
+        await client.PostAsJsonAsync("/api/v1/webhooks", new
+        {
+            Name = "No Secret in List",
+            Url = "https://hooks.example.com/nosecret",
+        });
+
+        // List webhooks and verify secret is null
+        HttpResponseMessage listResponse = await client.GetAsync("/api/v1/webhooks");
+        await Assert.That(listResponse.StatusCode).IsEqualTo(HttpStatusCode.OK);
+        string listBody = await listResponse.Content.ReadAsStringAsync();
+        await Assert.That(listBody).Contains("No Secret in List");
+
+        // The secret field should be null in list responses
+        System.Text.Json.JsonDocument doc = System.Text.Json.JsonDocument.Parse(listBody);
+        System.Text.Json.JsonElement dataArray = doc.RootElement.GetProperty("data");
+        System.Text.Json.JsonElement firstItem = dataArray[0];
+        System.Text.Json.JsonElement secretElement = firstItem.GetProperty("secret");
+        await Assert.That(secretElement.ValueKind).IsEqualTo(System.Text.Json.JsonValueKind.Null);
+    }
+
+    [Test]
+    public async Task RotateSecret_ValidWebhook_ReturnsNewSecret()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId) = await SeedWebhookEnvironment(db);
+        HttpClient client = BuildClient(factory, tenantId, userId);
+
+        // Create a webhook and capture the original secret
+        HttpResponseMessage createResponse = await client.PostAsJsonAsync("/api/v1/webhooks", new
+        {
+            Name = "Rotate Target",
+            Url = "https://hooks.example.com/rotate",
+        });
+        string createBody = await createResponse.Content.ReadAsStringAsync();
+        System.Text.Json.JsonDocument createDoc = System.Text.Json.JsonDocument.Parse(createBody);
+        string? originalSecret = createDoc.RootElement.GetProperty("data").GetProperty("secret").GetString();
+        int webhookId = createDoc.RootElement.GetProperty("data").GetProperty("id").GetInt32();
+
+        // Rotate the secret
+        HttpResponseMessage rotateResponse = await client.PostAsync($"/api/v1/webhooks/{webhookId}/rotate-secret", null);
+        await Assert.That(rotateResponse.StatusCode).IsEqualTo(HttpStatusCode.OK);
+
+        string rotateBody = await rotateResponse.Content.ReadAsStringAsync();
+        System.Text.Json.JsonDocument rotateDoc = System.Text.Json.JsonDocument.Parse(rotateBody);
+        string? newSecret = rotateDoc.RootElement.GetProperty("data").GetProperty("secret").GetString();
+
+        await Assert.That(newSecret).IsNotNull();
+        await Assert.That(newSecret!.Length).IsEqualTo(64);
+        await Assert.That(newSecret).IsNotEqualTo(originalSecret);
+    }
+
+    [Test]
+    public async Task RotateSecret_NonExistentWebhook_Returns404()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId) = await SeedWebhookEnvironment(db);
+        HttpClient client = BuildClient(factory, tenantId, userId);
+
+        HttpResponseMessage response = await client.PostAsync("/api/v1/webhooks/99999/rotate-secret", null);
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.NotFound);
+    }
+
+    [Test]
+    public async Task RotateSecret_WrongTenant_Returns404()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId1, int userId1) = await SeedWebhookEnvironment(db);
+        (int tenantId2, int userId2) = await SeedWebhookEnvironment(db);
+
+        // Create webhook in tenant 1
+        WebhookEndpoint webhook = new()
+        {
+            TenantId = tenantId1,
+            Name = "Tenant1 Rotate Hook",
+            Url = "https://hooks.example.com/t1rotate",
+            Secret = "e1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
+            IsEnabled = true,
+            CreatedByUserId = userId1,
+            CreatedAt = DateTimeOffset.UtcNow,
+        };
+        webhook.Id = await db.InsertWithInt32IdentityAsync(webhook);
+
+        // Authenticate as tenant 2 and try to rotate
+        HttpClient client = BuildClient(factory, tenantId2, userId2);
+        HttpResponseMessage response = await client.PostAsync($"/api/v1/webhooks/{webhook.Id}/rotate-secret", null);
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.NotFound);
+    }
+
+    [Test]
+    public async Task RotateSecret_FreeTier_Returns403()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId) = await SeedWebhookEnvironment(db, SubscriptionTier.Free);
+        HttpClient client = BuildClient(factory, tenantId, userId);
+
+        HttpResponseMessage response = await client.PostAsync("/api/v1/webhooks/1/rotate-secret", null);
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.Forbidden);
+    }
+
+    [Test]
+    public async Task RotateSecret_ViewerRole_Returns403()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId) = await SeedWebhookEnvironment(db);
+
+        // Build client with Viewer role instead of TenantAdmin
+        HttpClient client = new AuthenticatedClientBuilder(factory)
+            .WithUserId(userId)
+            .WithRole(tenantId, (int)UserAccountRoles.Viewer)
+            .WithActiveTenant(tenantId)
+            .Build();
+
+        HttpResponseMessage response = await client.PostAsync("/api/v1/webhooks/1/rotate-secret", null);
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.Forbidden);
     }
 }

@@ -4,7 +4,7 @@
 
 <script lang="ts">
 	import type { AlertRuleDto, AlertEventDto, WebhookEndpointDto, PaginatedResponse } from '$lib/api/types';
-	import { Bell, CircleAlert, ChevronLeft, ChevronRight, Plus, Trash2, Check, Webhook } from 'lucide-svelte';
+	import { Bell, CircleAlert, ChevronLeft, ChevronRight, Plus, Trash2, Check, Webhook, Copy, RefreshCw } from 'lucide-svelte';
 	import { enhance } from '$app/forms';
 	import { goto } from '$app/navigation';
 	import { page as pageState } from '$app/state';
@@ -25,6 +25,16 @@
 	let editingRuleId = $state<number | null>(null);
 	let deleteRuleConfirm = $state<{ open: boolean; id: number | null }>({ open: false, id: null });
 	let deleteWebhookConfirm = $state<{ open: boolean; id: number | null }>({ open: false, id: null });
+	let revealedSecret = $state<string | null>(null);
+	let secretCopied = $state(false);
+
+	function copySecret() {
+		if (revealedSecret) {
+			navigator.clipboard.writeText(revealedSecret);
+			secretCopied = true;
+			setTimeout(() => { secretCopied = false; }, 2000);
+		}
+	}
 
 	// svelte-ignore state_referenced_locally
 	let statusFilter = $state(filters.status ?? '');
@@ -186,6 +196,7 @@
 										<option value="FailedServices">Failed Services</option>
 										<option value="SecurityUpdates">Security Updates</option>
 										<option value="DiskHealth">Disk Health</option>
+										<option value="MachineOffline">Machine Offline</option>
 									</select>
 								</div>
 								<div>
@@ -462,7 +473,7 @@
 				{#if showCreateWebhook}
 					<div class="rounded-xl border border-surface-200 bg-surface-50 p-6 dark:border-surface-700 dark:bg-surface-800">
 						<h3 class="mb-4 text-sm font-semibold text-surface-900 dark:text-surface-50">Create Webhook</h3>
-						<form method="POST" action="?/createWebhook" use:enhance={() => { return async ({ update }) => { showCreateWebhook = false; await update(); }; }}>
+						<form method="POST" action="?/createWebhook" use:enhance={() => { return async ({ result, update }) => { if (result.type === 'success' && result.data?.secret) { revealedSecret = result.data.secret; secretCopied = false; } showCreateWebhook = false; await update(); }; }}>
 							<div class="grid grid-cols-1 gap-4 md:grid-cols-2">
 								<div>
 									<label for="webhook-name" class="mb-1 block text-xs text-surface-500 dark:text-surface-400">Name</label>
@@ -478,6 +489,29 @@
 								<button type="submit" class="rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700 dark:bg-primary-500 dark:hover:bg-primary-600">Create Webhook</button>
 							</div>
 						</form>
+					</div>
+				{/if}
+
+				{#if revealedSecret}
+					<div class="rounded-xl border border-amber-200 bg-amber-50 p-4 dark:border-amber-800 dark:bg-amber-900/20">
+						<p class="mb-2 text-sm font-semibold text-amber-700 dark:text-amber-300">Webhook signing secret (shown once -- copy it now):</p>
+						<div class="flex items-center gap-2">
+							<code class="flex-1 rounded-lg border border-amber-300 bg-white px-3 py-2 font-mono text-sm text-surface-900 dark:border-amber-700 dark:bg-surface-800 dark:text-surface-100">{revealedSecret}</code>
+							<button
+								onclick={copySecret}
+								class="flex items-center gap-1 rounded-lg border border-amber-300 px-3 py-2 text-sm font-medium text-amber-700 hover:bg-amber-100 dark:border-amber-700 dark:text-amber-300 dark:hover:bg-amber-900/30"
+							>
+								<Copy class="h-4 w-4" />
+								{secretCopied ? 'Copied' : 'Copy'}
+							</button>
+							<button
+								onclick={() => { revealedSecret = null; secretCopied = false; }}
+								class="rounded-lg border border-surface-300 px-3 py-2 text-sm font-medium text-surface-700 hover:bg-surface-100 dark:border-surface-600 dark:text-surface-300 dark:hover:bg-surface-700"
+							>
+								Dismiss
+							</button>
+						</div>
+						<p class="mt-2 text-xs text-amber-600 dark:text-amber-400">This secret will not be shown again. Store it securely for webhook signature verification.</p>
 					</div>
 				{/if}
 
@@ -515,9 +549,17 @@
 											</td>
 											<td class="whitespace-nowrap px-4 py-3 text-surface-500 dark:text-surface-400">{formatDateTime(webhook.createdAt)}</td>
 											<td class="px-4 py-3">
-												<button type="button" onclick={() => deleteWebhookConfirm = { open: true, id: webhook.id }} class="rounded p-1 text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-900/20">
-													<Trash2 class="h-4 w-4" />
-												</button>
+												<div class="flex items-center gap-1">
+													<form method="POST" action="?/rotateSecret" use:enhance={() => { return async ({ result, update }) => { if (result.type === 'success' && result.data?.secret) { revealedSecret = result.data.secret; secretCopied = false; } await update(); }; }}>
+														<input type="hidden" name="id" value={webhook.id} />
+														<button type="submit" title="Rotate secret" class="rounded p-1 text-surface-500 hover:bg-surface-100 dark:text-surface-400 dark:hover:bg-surface-700">
+															<RefreshCw class="h-4 w-4" />
+														</button>
+													</form>
+													<button type="button" onclick={() => deleteWebhookConfirm = { open: true, id: webhook.id }} class="rounded p-1 text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-900/20">
+														<Trash2 class="h-4 w-4" />
+													</button>
+												</div>
 											</td>
 										</tr>
 									{/each}

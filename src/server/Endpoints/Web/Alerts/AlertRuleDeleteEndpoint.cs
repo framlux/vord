@@ -10,6 +10,7 @@ using Framlux.FleetManagement.Server.Auth;
 using Framlux.FleetManagement.Server.Services.Billing;
 using LinqToDB;
 using LinqToDB.Async;
+using StackExchange.Redis;
 
 namespace Framlux.FleetManagement.Server.Endpoints.Web.Alerts;
 
@@ -21,14 +22,16 @@ public sealed class AlertRuleDeleteEndpoint : EndpointWithoutRequest<ApiResponse
 {
     private readonly DatabaseContext _db;
     private readonly ISubscriptionService _subscriptionService;
+    private readonly IConnectionMultiplexer _redis;
 
     /// <summary>
     /// Creates a new instance of the <see cref="AlertRuleDeleteEndpoint"/> class.
     /// </summary>
-    public AlertRuleDeleteEndpoint(DatabaseContext db, ISubscriptionService subscriptionService)
+    public AlertRuleDeleteEndpoint(DatabaseContext db, ISubscriptionService subscriptionService, IConnectionMultiplexer redis)
     {
         _db = db;
         _subscriptionService = subscriptionService;
+        _redis = redis;
     }
 
     /// <inheritdoc/>
@@ -78,6 +81,25 @@ public sealed class AlertRuleDeleteEndpoint : EndpointWithoutRequest<ApiResponse
             await HttpContext.Response.WriteAsJsonAsync(ApiResponse<bool>.Error("Default rules cannot be deleted. Disable them instead."), ct);
 
             return;
+        }
+
+        // Resolve all active events for this rule before deleting it.
+        await _db.AlertEvents
+            .Where(e => (e.AlertRuleId == ruleId) && (e.Status != AlertEventStatus.Resolved))
+            .Set(e => e.Status, AlertEventStatus.Resolved)
+            .Set(e => e.ResolvedAt, DateTimeOffset.UtcNow)
+            .UpdateAsync(ct);
+
+        // Clean up Redis condition-tracking keys for this rule.
+        List<long> machineIds = await _db.Machines
+            .Where(m => (m.TenantId == tenantId.Value) && (m.IsDeleted == false))
+            .Select(m => m.Id)
+            .ToListAsync(ct);
+
+        IDatabase redisDb = _redis.GetDatabase();
+        foreach (long machineId in machineIds)
+        {
+            await redisDb.KeyDeleteAsync($"alert:condition:{ruleId}:{machineId}");
         }
 
         await _db.AlertRules

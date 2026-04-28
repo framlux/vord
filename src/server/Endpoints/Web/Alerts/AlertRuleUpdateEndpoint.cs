@@ -102,6 +102,24 @@ public sealed class AlertRuleUpdateEndpoint : Endpoint<UpdateAlertRuleRequest, A
             return;
         }
 
+        if (rule.IsCustom && (subscription.Tier != SubscriptionTier.Team))
+        {
+            HttpContext.Response.StatusCode = 403;
+            await HttpContext.Response.WriteAsJsonAsync(
+                ApiResponse<AlertRuleDto>.Error("Custom rules can only be modified with a Team subscription"), ct);
+
+            return;
+        }
+
+        if (string.IsNullOrWhiteSpace(req.Name))
+        {
+            HttpContext.Response.StatusCode = 400;
+            await HttpContext.Response.WriteAsJsonAsync(
+                ApiResponse<AlertRuleDto>.Error("Rule name is required"), ct);
+
+            return;
+        }
+
         if (req.DurationMinutes < 0)
         {
             HttpContext.Response.StatusCode = 400;

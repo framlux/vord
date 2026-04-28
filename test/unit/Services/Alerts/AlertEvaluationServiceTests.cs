@@ -203,13 +203,43 @@ public sealed class AlertEvaluationServiceTests
     }
 
     [Test]
-    public async Task GetMetricValue_MachineOffline_ReturnsNull()
+    public async Task GetMetricValue_MachineOffline_HealthStatus3_Returns1()
     {
-        MachineStateSummary state = new() { MachineId = 1, LastSeenAt = DateTimeOffset.UtcNow };
+        MachineStateSummary state = new() { MachineId = 1, HealthStatus = 3, LastSeenAt = DateTimeOffset.UtcNow };
 
         decimal? result = AlertEvaluationService.GetMetricValue(AlertMetric.MachineOffline, state);
 
-        await Assert.That(result).IsNull();
+        await Assert.That(result).IsEqualTo(1m);
+    }
+
+    [Test]
+    public async Task GetMetricValue_MachineOffline_HealthStatus0_Returns0()
+    {
+        MachineStateSummary state = new() { MachineId = 1, HealthStatus = 0, LastSeenAt = DateTimeOffset.UtcNow };
+
+        decimal? result = AlertEvaluationService.GetMetricValue(AlertMetric.MachineOffline, state);
+
+        await Assert.That(result).IsEqualTo(0m);
+    }
+
+    [Test]
+    public async Task GetMetricValue_MachineOffline_HealthStatus1_Returns0()
+    {
+        MachineStateSummary state = new() { MachineId = 1, HealthStatus = 1, LastSeenAt = DateTimeOffset.UtcNow };
+
+        decimal? result = AlertEvaluationService.GetMetricValue(AlertMetric.MachineOffline, state);
+
+        await Assert.That(result).IsEqualTo(0m);
+    }
+
+    [Test]
+    public async Task GetMetricValue_MachineOffline_HealthStatus2_Returns0()
+    {
+        MachineStateSummary state = new() { MachineId = 1, HealthStatus = 2, LastSeenAt = DateTimeOffset.UtcNow };
+
+        decimal? result = AlertEvaluationService.GetMetricValue(AlertMetric.MachineOffline, state);
+
+        await Assert.That(result).IsEqualTo(0m);
     }
 
     [Test]
@@ -418,7 +448,7 @@ public sealed class AlertEvaluationServiceTests
         await service.EvaluateRuleForMachineAsync(db, rule, state, CancellationToken.None);
 
         // Should set the start time in Redis but NOT create an alert event.
-        await redisDb.Received().StringSetAsync(conditionKey, Arg.Any<RedisValue>(), Arg.Is<Expiration>(e => e.Equals(new Expiration(TimeSpan.FromMinutes(10)))));
+        await redisDb.Received().StringSetAsync(conditionKey, Arg.Any<RedisValue>(), Arg.Is<Expiration>(e => e.Equals(new Expiration(TimeSpan.FromMinutes(35)))));
         int eventCount = await db.AlertEvents.Where(e => e.AlertRuleId == rule.Id).CountAsync();
         await Assert.That(eventCount).IsEqualTo(0);
     }
@@ -476,26 +506,195 @@ public sealed class AlertEvaluationServiceTests
         await Assert.That(events[0].Status).IsEqualTo(AlertEventStatus.Triggered);
     }
 
+    // --- WS-2: Condition Key TTL and Cleanup Tests ---
+
+    [Test]
+    public async Task EvaluateRuleForMachineAsync_DurationRule_SetsKeyWithAdequateTTL()
+    {
+        (AlertEvaluationService service, DatabaseContext db, IDatabase redisDb, IAlertDeliveryService delivery) = CreateServiceWithDb();
+
+        Tenant tenant = TestDataBuilder.BuildTenant();
+        tenant.Id = await db.InsertWithInt32IdentityAsync(tenant);
+
+        AlertRule rule = TestDataBuilder.BuildAlertRule(tenantId: tenant.Id, metric: AlertMetric.CpuUsage, threshold: 80m, durationMinutes: 10);
+        rule.Id = await db.InsertWithInt32IdentityAsync(rule);
+
+        string conditionKey = $"alert:condition:{rule.Id}:1";
+        redisDb.StringGetAsync(conditionKey).Returns((RedisValue)RedisValue.Null);
+
+        MachineStateSummary state = new() { MachineId = 1, CpuUsagePercent = 90, LastSeenAt = DateTimeOffset.UtcNow };
+
+        await service.EvaluateRuleForMachineAsync(db, rule, state, CancellationToken.None);
+
+        // TTL should be DurationMinutes + 30 (not DurationMinutes + 5).
+        await redisDb.Received().StringSetAsync(conditionKey, Arg.Any<RedisValue>(), Arg.Is<Expiration>(e => e.Equals(new Expiration(TimeSpan.FromMinutes(40)))));
+    }
+
+    [Test]
+    public async Task EvaluateRuleForMachineAsync_DurationElapsed_DeletesConditionKey()
+    {
+        (AlertEvaluationService service, DatabaseContext db, IDatabase redisDb, IAlertDeliveryService delivery) = CreateServiceWithDb();
+
+        Tenant tenant = TestDataBuilder.BuildTenant();
+        tenant.Id = await db.InsertWithInt32IdentityAsync(tenant);
+
+        Machine machine = TestDataBuilder.BuildMachine(tenantId: tenant.Id);
+        machine.Id = await db.InsertWithInt64IdentityAsync(machine);
+
+        AlertRule rule = TestDataBuilder.BuildAlertRule(tenantId: tenant.Id, metric: AlertMetric.CpuUsage, threshold: 80m, durationMinutes: 5);
+        rule.Id = await db.InsertWithInt32IdentityAsync(rule);
+
+        string conditionKey = $"alert:condition:{rule.Id}:{machine.Id}";
+        string tenMinutesAgo = DateTimeOffset.UtcNow.AddMinutes(-10).ToString("o");
+        redisDb.StringGetAsync(conditionKey).Returns((RedisValue)tenMinutesAgo);
+
+        MachineStateSummary state = new() { MachineId = machine.Id, CpuUsagePercent = 90, LastSeenAt = DateTimeOffset.UtcNow };
+
+        await service.EvaluateRuleForMachineAsync(db, rule, state, CancellationToken.None);
+
+        // Condition key should be deleted after the duration-elapsed alert fires.
+        await redisDb.Received().KeyDeleteAsync(conditionKey);
+    }
+
+    [Test]
+    public async Task EvaluateRuleForMachineAsync_DurationNotElapsed_KeyPersists()
+    {
+        (AlertEvaluationService service, DatabaseContext db, IDatabase redisDb, IAlertDeliveryService delivery) = CreateServiceWithDb();
+
+        Tenant tenant = TestDataBuilder.BuildTenant();
+        tenant.Id = await db.InsertWithInt32IdentityAsync(tenant);
+
+        AlertRule rule = TestDataBuilder.BuildAlertRule(tenantId: tenant.Id, metric: AlertMetric.CpuUsage, threshold: 80m, durationMinutes: 10);
+        rule.Id = await db.InsertWithInt32IdentityAsync(rule);
+
+        string conditionKey = $"alert:condition:{rule.Id}:1";
+        string twoMinutesAgo = DateTimeOffset.UtcNow.AddMinutes(-2).ToString("o");
+        redisDb.StringGetAsync(conditionKey).Returns((RedisValue)twoMinutesAgo);
+
+        MachineStateSummary state = new() { MachineId = 1, CpuUsagePercent = 90, LastSeenAt = DateTimeOffset.UtcNow };
+
+        await service.EvaluateRuleForMachineAsync(db, rule, state, CancellationToken.None);
+
+        // Duration not yet elapsed — condition key should NOT be deleted.
+        await redisDb.DidNotReceive().KeyDeleteAsync(conditionKey);
+        int eventCount = await db.AlertEvents.CountAsync();
+        await Assert.That(eventCount).IsEqualTo(0);
+    }
+
     [Test]
     public async Task EvaluateRuleForMachineAsync_MetricNull_ReturnsWithoutEvaluation()
     {
         (AlertEvaluationService service, DatabaseContext db, IDatabase redisDb, IAlertDeliveryService delivery) = CreateServiceWithDb();
 
-        AlertRule rule = TestDataBuilder.BuildAlertRule(metric: AlertMetric.MachineOffline, threshold: 1m);
+        // Use an unknown metric value that returns null.
+        AlertRule rule = TestDataBuilder.BuildAlertRule(metric: (AlertMetric)99, threshold: 1m);
         rule.Id = 1;
 
         MachineStateSummary state = new() { MachineId = 1, LastSeenAt = DateTimeOffset.UtcNow };
 
         await service.EvaluateRuleForMachineAsync(db, rule, state, CancellationToken.None);
 
-        // MachineOffline returns null metric, so no Redis or DB interaction.
+        // Unknown metric returns null, so no Redis or DB interaction.
         await redisDb.DidNotReceive().KeyDeleteAsync(Arg.Any<RedisKey>());
         int eventCount = await db.AlertEvents.CountAsync();
         await Assert.That(eventCount).IsEqualTo(0);
     }
 
+    // --- MachineOffline Integration Tests ---
+
     [Test]
-    public async Task EvaluateRuleForMachineAsync_AlertCreated_CallsDeliveryService()
+    public async Task EvaluateRuleForMachineAsync_MachineOfflineGreaterThan0_OfflineMachine_FiresAlert()
+    {
+        (AlertEvaluationService service, DatabaseContext db, IDatabase redisDb, IAlertDeliveryService delivery) = CreateServiceWithDb();
+
+        Tenant tenant = TestDataBuilder.BuildTenant();
+        tenant.Id = await db.InsertWithInt32IdentityAsync(tenant);
+
+        Machine machine = TestDataBuilder.BuildMachine(tenantId: tenant.Id);
+        machine.Id = await db.InsertWithInt64IdentityAsync(machine);
+
+        AlertRule rule = TestDataBuilder.BuildAlertRule(tenantId: tenant.Id, metric: AlertMetric.MachineOffline, op: AlertOperator.GreaterThan, threshold: 0m, durationMinutes: 0);
+        rule.Id = await db.InsertWithInt32IdentityAsync(rule);
+
+        MachineStateSummary state = new() { MachineId = machine.Id, HealthStatus = 3, LastSeenAt = DateTimeOffset.UtcNow };
+
+        await service.EvaluateRuleForMachineAsync(db, rule, state, CancellationToken.None);
+
+        List<AlertEvent> events = await db.AlertEvents.Where(e => e.AlertRuleId == rule.Id).ToListAsync();
+        await Assert.That(events.Count).IsEqualTo(1);
+        await Assert.That(events[0].Status).IsEqualTo(AlertEventStatus.Triggered);
+    }
+
+    [Test]
+    public async Task EvaluateRuleForMachineAsync_MachineOfflineGreaterThan0_OnlineMachine_DoesNotFire()
+    {
+        (AlertEvaluationService service, DatabaseContext db, IDatabase redisDb, IAlertDeliveryService delivery) = CreateServiceWithDb();
+
+        Tenant tenant = TestDataBuilder.BuildTenant();
+        tenant.Id = await db.InsertWithInt32IdentityAsync(tenant);
+
+        AlertRule rule = TestDataBuilder.BuildAlertRule(tenantId: tenant.Id, metric: AlertMetric.MachineOffline, op: AlertOperator.GreaterThan, threshold: 0m, durationMinutes: 0);
+        rule.Id = await db.InsertWithInt32IdentityAsync(rule);
+
+        MachineStateSummary state = new() { MachineId = 1, HealthStatus = 0, LastSeenAt = DateTimeOffset.UtcNow };
+
+        await service.EvaluateRuleForMachineAsync(db, rule, state, CancellationToken.None);
+
+        int eventCount = await db.AlertEvents.CountAsync();
+        await Assert.That(eventCount).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task EvaluateRuleForMachineAsync_MachineOfflineWithDuration_StaysOffline_FiresAfterDuration()
+    {
+        (AlertEvaluationService service, DatabaseContext db, IDatabase redisDb, IAlertDeliveryService delivery) = CreateServiceWithDb();
+
+        Tenant tenant = TestDataBuilder.BuildTenant();
+        tenant.Id = await db.InsertWithInt32IdentityAsync(tenant);
+
+        Machine machine = TestDataBuilder.BuildMachine(tenantId: tenant.Id);
+        machine.Id = await db.InsertWithInt64IdentityAsync(machine);
+
+        AlertRule rule = TestDataBuilder.BuildAlertRule(tenantId: tenant.Id, metric: AlertMetric.MachineOffline, op: AlertOperator.GreaterThan, threshold: 0m, durationMinutes: 5);
+        rule.Id = await db.InsertWithInt32IdentityAsync(rule);
+
+        // Simulate duration already elapsed via Redis key set 10 minutes ago.
+        string conditionKey = $"alert:condition:{rule.Id}:{machine.Id}";
+        string tenMinutesAgo = DateTimeOffset.UtcNow.AddMinutes(-10).ToString("o");
+        redisDb.StringGetAsync(conditionKey).Returns((RedisValue)tenMinutesAgo);
+
+        MachineStateSummary state = new() { MachineId = machine.Id, HealthStatus = 3, LastSeenAt = DateTimeOffset.UtcNow };
+
+        await service.EvaluateRuleForMachineAsync(db, rule, state, CancellationToken.None);
+
+        List<AlertEvent> events = await db.AlertEvents.Where(e => e.AlertRuleId == rule.Id).ToListAsync();
+        await Assert.That(events.Count).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task EvaluateRuleForMachineAsync_MachineOfflineWithDuration_ComesBackOnline_DoesNotFire()
+    {
+        (AlertEvaluationService service, DatabaseContext db, IDatabase redisDb, IAlertDeliveryService delivery) = CreateServiceWithDb();
+
+        Tenant tenant = TestDataBuilder.BuildTenant();
+        tenant.Id = await db.InsertWithInt32IdentityAsync(tenant);
+
+        AlertRule rule = TestDataBuilder.BuildAlertRule(tenantId: tenant.Id, metric: AlertMetric.MachineOffline, op: AlertOperator.GreaterThan, threshold: 0m, durationMinutes: 5);
+        rule.Id = await db.InsertWithInt32IdentityAsync(rule);
+
+        // Machine came back online (HealthStatus = 0), condition no longer met.
+        MachineStateSummary state = new() { MachineId = 1, HealthStatus = 0, LastSeenAt = DateTimeOffset.UtcNow };
+
+        await service.EvaluateRuleForMachineAsync(db, rule, state, CancellationToken.None);
+
+        // Condition not met — should clear Redis key and not fire.
+        await redisDb.Received().KeyDeleteAsync($"alert:condition:{rule.Id}:{state.MachineId}");
+        int eventCount = await db.AlertEvents.CountAsync();
+        await Assert.That(eventCount).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task EvaluateRuleForMachineAsync_AlertCreated_EnqueuesDeliveryJob()
     {
         (AlertEvaluationService service, DatabaseContext db, IDatabase redisDb, IAlertDeliveryService delivery) = CreateServiceWithDb();
 
@@ -512,7 +711,33 @@ public sealed class AlertEvaluationServiceTests
 
         await service.EvaluateRuleForMachineAsync(db, rule, state, CancellationToken.None);
 
-        await delivery.Received(1).DeliverAsync(Arg.Any<AlertEvent>(), Arg.Is<AlertRule>(r => r.Id == rule.Id), Arg.Any<CancellationToken>());
+        // Delivery is now enqueued via Redis, not called directly
+        await delivery.Received(1).EnqueueAsync(Arg.Any<long>(), Arg.Is<int>(id => id == rule.Id), Arg.Is<int>(id => id == rule.TenantId), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task EvaluateRuleForMachineAsync_AlertFires_DoesNotCallDeliverDirectly()
+    {
+        (AlertEvaluationService service, DatabaseContext db, IDatabase redisDb, IAlertDeliveryService delivery) = CreateServiceWithDb();
+
+        Tenant tenant = TestDataBuilder.BuildTenant();
+        tenant.Id = await db.InsertWithInt32IdentityAsync(tenant);
+
+        Machine machine = TestDataBuilder.BuildMachine(tenantId: tenant.Id);
+        machine.Id = await db.InsertWithInt64IdentityAsync(machine);
+
+        AlertRule rule = TestDataBuilder.BuildAlertRule(tenantId: tenant.Id, metric: AlertMetric.CpuUsage, threshold: 80m, durationMinutes: 0);
+        rule.Id = await db.InsertWithInt32IdentityAsync(rule);
+
+        MachineStateSummary state = new() { MachineId = machine.Id, CpuUsagePercent = 95, LastSeenAt = DateTimeOffset.UtcNow };
+
+        await service.EvaluateRuleForMachineAsync(db, rule, state, CancellationToken.None);
+
+        // DeliverAsync must not be called directly from evaluation; delivery is decoupled via queue
+        await delivery.Received(0).DeliverAsync(Arg.Any<AlertEvent>(), Arg.Any<AlertRule>(), Arg.Any<CancellationToken>());
+
+        // EnqueueAsync should be called instead of DeliverAsync
+        await delivery.Received(1).EnqueueAsync(Arg.Any<long>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>());
     }
 
     [Test]
@@ -576,7 +801,7 @@ public sealed class AlertEvaluationServiceTests
         // No rules seeded — should return immediately.
         await service.EvaluateAllRulesAsync(CancellationToken.None);
 
-        await delivery.DidNotReceive().DeliverAsync(Arg.Any<AlertEvent>(), Arg.Any<AlertRule>(), Arg.Any<CancellationToken>());
+        await delivery.DidNotReceive().EnqueueAsync(Arg.Any<long>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>());
     }
 
     [Test]
@@ -680,6 +905,6 @@ public sealed class AlertEvaluationServiceTests
 
         await service.EvaluateAllRulesAsync(CancellationToken.None);
 
-        await delivery.DidNotReceive().DeliverAsync(Arg.Any<AlertEvent>(), Arg.Any<AlertRule>(), Arg.Any<CancellationToken>());
+        await delivery.DidNotReceive().EnqueueAsync(Arg.Any<long>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>());
     }
 }

@@ -478,6 +478,7 @@ export interface WebhookEndpointDto {
 	url: string;
 	isEnabled: boolean;
 	createdAt: string;
+	secret?: string | null;
 }
 
 export interface CreateAlertRuleRequest {

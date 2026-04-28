@@ -108,6 +108,7 @@ public sealed class WebhookCreateEndpoint : Endpoint<CreateWebhookRequest, ApiRe
             Url = webhook.Url,
             IsEnabled = webhook.IsEnabled,
             CreatedAt = webhook.CreatedAt,
+            Secret = secret,
         };
 
         await Send.OkAsync(ApiResponse<WebhookEndpointDto>.Ok(dto, "Webhook created"), cancellation: ct);

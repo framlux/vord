@@ -429,7 +429,7 @@ public sealed class AlertRuleEndpointTests
             Threshold = 80,
             Severity = AlertSeverity.Warning,
             IsEnabled = true,
-            IsCustom = true,
+            IsCustom = false,
             CreatedByUserId = userId,
             CreatedAt = DateTimeOffset.UtcNow,
             UpdatedAt = DateTimeOffset.UtcNow,
@@ -474,7 +474,7 @@ public sealed class AlertRuleEndpointTests
             IsEnabled = true,
             NotifyEmail = false,
             NotifyWebhook = false,
-            IsCustom = true,
+            IsCustom = false,
             CreatedByUserId = userId,
             CreatedAt = DateTimeOffset.UtcNow,
             UpdatedAt = DateTimeOffset.UtcNow.AddHours(-1),
@@ -525,7 +525,7 @@ public sealed class AlertRuleEndpointTests
             Threshold = 20,
             Severity = AlertSeverity.Info,
             IsEnabled = true,
-            IsCustom = true,
+            IsCustom = false,
             CreatedByUserId = userId,
             CreatedAt = DateTimeOffset.UtcNow,
             UpdatedAt = DateTimeOffset.UtcNow,
@@ -746,7 +746,7 @@ public sealed class AlertRuleEndpointTests
             Threshold = 80,
             Severity = AlertSeverity.Warning,
             IsEnabled = true,
-            IsCustom = true,
+            IsCustom = false,
             CreatedByUserId = userId,
             CreatedAt = DateTimeOffset.UtcNow,
             UpdatedAt = DateTimeOffset.UtcNow,
@@ -838,6 +838,501 @@ public sealed class AlertRuleEndpointTests
         await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.BadRequest);
         string body = await response.Content.ReadAsStringAsync();
         await Assert.That(body).Contains("Invalid operator");
+    }
+
+    // --- WS-2: Delete Cleanup Tests ---
+
+    [Test]
+    public async Task DeleteRule_WithTriggeredEvents_ResolvesAllEvents()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId) = await SeedAlertEnvironment(db, SubscriptionTier.Pro);
+
+        AlertRule rule = new()
+        {
+            TenantId = tenantId,
+            Name = "Cleanup Test",
+            Metric = AlertMetric.CpuUsage,
+            Operator = AlertOperator.GreaterThan,
+            Threshold = 80,
+            Severity = AlertSeverity.Warning,
+            IsEnabled = true,
+            IsCustom = true,
+            CreatedByUserId = userId,
+            CreatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow,
+        };
+        rule.Id = await db.InsertWithInt32IdentityAsync(rule);
+
+        AlertEvent triggered = new()
+        {
+            AlertRuleId = rule.Id,
+            TenantId = tenantId,
+            MachineId = 1,
+            Severity = AlertSeverity.Warning,
+            Message = "Triggered",
+            Status = AlertEventStatus.Triggered,
+            TriggeredAt = DateTimeOffset.UtcNow,
+        };
+        triggered.Id = await db.InsertWithInt64IdentityAsync(triggered);
+
+        AlertEvent acknowledged = new()
+        {
+            AlertRuleId = rule.Id,
+            TenantId = tenantId,
+            MachineId = 2,
+            Severity = AlertSeverity.Warning,
+            Message = "Acknowledged",
+            Status = AlertEventStatus.Acknowledged,
+            TriggeredAt = DateTimeOffset.UtcNow,
+            AcknowledgedAt = DateTimeOffset.UtcNow,
+        };
+        acknowledged.Id = await db.InsertWithInt64IdentityAsync(acknowledged);
+
+        AlertEvent alreadyResolved = new()
+        {
+            AlertRuleId = rule.Id,
+            TenantId = tenantId,
+            MachineId = 3,
+            Severity = AlertSeverity.Warning,
+            Message = "Already resolved",
+            Status = AlertEventStatus.Resolved,
+            TriggeredAt = DateTimeOffset.UtcNow,
+            ResolvedAt = DateTimeOffset.UtcNow.AddMinutes(-5),
+        };
+        alreadyResolved.Id = await db.InsertWithInt64IdentityAsync(alreadyResolved);
+
+        HttpClient client = BuildClient(factory, tenantId, userId);
+
+        HttpResponseMessage response = await client.DeleteAsync($"/api/v1/alert-rules/{rule.Id}");
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
+
+        // Verify triggered and acknowledged events are now resolved.
+        AlertEvent? triggeredEvent = await db.AlertEvents.FirstOrDefaultAsync(e => e.Id == triggered.Id);
+        await Assert.That(triggeredEvent!.Status).IsEqualTo(AlertEventStatus.Resolved);
+        await Assert.That(triggeredEvent.ResolvedAt.HasValue).IsTrue();
+
+        AlertEvent? ackedEvent = await db.AlertEvents.FirstOrDefaultAsync(e => e.Id == acknowledged.Id);
+        await Assert.That(ackedEvent!.Status).IsEqualTo(AlertEventStatus.Resolved);
+
+        // Already-resolved event should be unchanged.
+        AlertEvent? resolvedEvent = await db.AlertEvents.FirstOrDefaultAsync(e => e.Id == alreadyResolved.Id);
+        await Assert.That(resolvedEvent!.Status).IsEqualTo(AlertEventStatus.Resolved);
+    }
+
+    [Test]
+    public async Task DeleteRule_WithNoEvents_SucceedsCleanly()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId) = await SeedAlertEnvironment(db, SubscriptionTier.Pro);
+
+        AlertRule rule = new()
+        {
+            TenantId = tenantId,
+            Name = "No Events",
+            Metric = AlertMetric.CpuUsage,
+            Operator = AlertOperator.GreaterThan,
+            Threshold = 80,
+            Severity = AlertSeverity.Warning,
+            IsEnabled = true,
+            IsCustom = true,
+            CreatedByUserId = userId,
+            CreatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow,
+        };
+        rule.Id = await db.InsertWithInt32IdentityAsync(rule);
+
+        HttpClient client = BuildClient(factory, tenantId, userId);
+
+        HttpResponseMessage response = await client.DeleteAsync($"/api/v1/alert-rules/{rule.Id}");
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
+        AlertRule? deleted = await db.AlertRules.FirstOrDefaultAsync(r => r.Id == rule.Id);
+        await Assert.That(deleted).IsNull();
+    }
+
+    // --- WS-3: Authorization & Tier Guard Tests ---
+
+    [Test]
+    public async Task UpdateRule_ProTierCustomRule_Returns403()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId) = await SeedAlertEnvironment(db, SubscriptionTier.Pro);
+
+        AlertRule customRule = new()
+        {
+            TenantId = tenantId,
+            Name = "Custom Pro Rule",
+            Metric = AlertMetric.CpuUsage,
+            Operator = AlertOperator.GreaterThan,
+            Threshold = 80,
+            Severity = AlertSeverity.Warning,
+            IsEnabled = true,
+            IsCustom = true,
+            CreatedByUserId = userId,
+            CreatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow,
+        };
+        customRule.Id = await db.InsertWithInt32IdentityAsync(customRule);
+
+        HttpClient client = BuildClient(factory, tenantId, userId);
+
+        HttpResponseMessage response = await client.PutAsJsonAsync($"/api/v1/alert-rules/{customRule.Id}", new
+        {
+            Name = "Updated",
+            Threshold = 90,
+            DurationMinutes = 5,
+            Severity = "Critical",
+            IsEnabled = true,
+            NotifyEmail = true,
+            NotifyWebhook = false,
+        });
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.Forbidden);
+        string body = await response.Content.ReadAsStringAsync();
+        await Assert.That(body).Contains("Team subscription");
+    }
+
+    [Test]
+    public async Task UpdateRule_ProTierDefaultRule_Returns200()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId) = await SeedAlertEnvironment(db, SubscriptionTier.Pro);
+
+        AlertRule defaultRule = new()
+        {
+            TenantId = tenantId,
+            Name = "Default CPU Rule",
+            Metric = AlertMetric.CpuUsage,
+            Operator = AlertOperator.GreaterThan,
+            Threshold = 80,
+            Severity = AlertSeverity.Warning,
+            IsEnabled = true,
+            IsCustom = false,
+            CreatedByUserId = userId,
+            CreatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow,
+        };
+        defaultRule.Id = await db.InsertWithInt32IdentityAsync(defaultRule);
+
+        HttpClient client = BuildClient(factory, tenantId, userId);
+
+        HttpResponseMessage response = await client.PutAsJsonAsync($"/api/v1/alert-rules/{defaultRule.Id}", new
+        {
+            Name = "Updated Default",
+            Threshold = 90,
+            DurationMinutes = 5,
+            Severity = "Critical",
+            IsEnabled = true,
+            NotifyEmail = true,
+            NotifyWebhook = false,
+        });
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
+    }
+
+    [Test]
+    public async Task UpdateRule_TeamTierCustomRule_Returns200()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId) = await SeedAlertEnvironment(db, SubscriptionTier.Team);
+
+        AlertRule customRule = new()
+        {
+            TenantId = tenantId,
+            Name = "Team Custom Rule",
+            Metric = AlertMetric.CpuUsage,
+            Operator = AlertOperator.GreaterThan,
+            Threshold = 80,
+            Severity = AlertSeverity.Warning,
+            IsEnabled = true,
+            IsCustom = true,
+            CreatedByUserId = userId,
+            CreatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow,
+        };
+        customRule.Id = await db.InsertWithInt32IdentityAsync(customRule);
+
+        HttpClient client = BuildClient(factory, tenantId, userId);
+
+        HttpResponseMessage response = await client.PutAsJsonAsync($"/api/v1/alert-rules/{customRule.Id}", new
+        {
+            Name = "Updated Team Custom",
+            Threshold = 95,
+            DurationMinutes = 10,
+            Severity = "Critical",
+            IsEnabled = true,
+            NotifyEmail = true,
+            NotifyWebhook = true,
+        });
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
+    }
+
+    [Test]
+    public async Task UpdateRule_BlankName_Returns400()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId) = await SeedAlertEnvironment(db, SubscriptionTier.Pro);
+
+        AlertRule rule = new()
+        {
+            TenantId = tenantId,
+            Name = "Name Check",
+            Metric = AlertMetric.CpuUsage,
+            Operator = AlertOperator.GreaterThan,
+            Threshold = 80,
+            Severity = AlertSeverity.Warning,
+            IsEnabled = true,
+            IsCustom = false,
+            CreatedByUserId = userId,
+            CreatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow,
+        };
+        rule.Id = await db.InsertWithInt32IdentityAsync(rule);
+
+        HttpClient client = BuildClient(factory, tenantId, userId);
+
+        HttpResponseMessage response = await client.PutAsJsonAsync($"/api/v1/alert-rules/{rule.Id}", new
+        {
+            Name = "",
+            Threshold = 90,
+            DurationMinutes = 5,
+            Severity = "Critical",
+            IsEnabled = true,
+            NotifyEmail = true,
+            NotifyWebhook = false,
+        });
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.BadRequest);
+        string body = await response.Content.ReadAsStringAsync();
+        await Assert.That(body).Contains("name");
+    }
+
+    [Test]
+    public async Task UpdateRule_WhitespaceName_Returns400()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId) = await SeedAlertEnvironment(db, SubscriptionTier.Pro);
+
+        AlertRule rule = new()
+        {
+            TenantId = tenantId,
+            Name = "Whitespace Check",
+            Metric = AlertMetric.CpuUsage,
+            Operator = AlertOperator.GreaterThan,
+            Threshold = 80,
+            Severity = AlertSeverity.Warning,
+            IsEnabled = true,
+            IsCustom = false,
+            CreatedByUserId = userId,
+            CreatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow,
+        };
+        rule.Id = await db.InsertWithInt32IdentityAsync(rule);
+
+        HttpClient client = BuildClient(factory, tenantId, userId);
+
+        HttpResponseMessage response = await client.PutAsJsonAsync($"/api/v1/alert-rules/{rule.Id}", new
+        {
+            Name = "   ",
+            Threshold = 90,
+            DurationMinutes = 5,
+            Severity = "Critical",
+            IsEnabled = true,
+            NotifyEmail = true,
+            NotifyWebhook = false,
+        });
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.BadRequest);
+    }
+
+    // --- WS-3: Acknowledge Role Tests ---
+
+    [Test]
+    public async Task AcknowledgeEvent_MachineAdminRole_Returns200()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId, int ruleId) = await AlertEventEndpointTests_SeedEnvironment(db);
+
+        AlertEvent evt = new()
+        {
+            AlertRuleId = ruleId,
+            TenantId = tenantId,
+            MachineId = 1,
+            Severity = AlertSeverity.Warning,
+            Message = "MachineAdmin ack test",
+            Status = AlertEventStatus.Triggered,
+            TriggeredAt = DateTimeOffset.UtcNow,
+        };
+        evt.Id = await db.InsertWithInt64IdentityAsync(evt);
+
+        // Authenticate as MachineAdmin (not TenantAdmin)
+        HttpClient client = new AuthenticatedClientBuilder(factory)
+            .WithUserId(userId)
+            .WithRole(tenantId, (int)UserAccountRoles.MachineAdmin)
+            .WithActiveTenant(tenantId)
+            .Build();
+
+        HttpResponseMessage response = await client.PostAsync($"/api/v1/alert-events/{evt.Id}/acknowledge", null);
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
+    }
+
+    [Test]
+    public async Task AcknowledgeEvent_ViewerRole_Returns403()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId, int ruleId) = await AlertEventEndpointTests_SeedEnvironment(db);
+
+        AlertEvent evt = new()
+        {
+            AlertRuleId = ruleId,
+            TenantId = tenantId,
+            MachineId = 1,
+            Severity = AlertSeverity.Warning,
+            Message = "Viewer ack test",
+            Status = AlertEventStatus.Triggered,
+            TriggeredAt = DateTimeOffset.UtcNow,
+        };
+        evt.Id = await db.InsertWithInt64IdentityAsync(evt);
+
+        HttpClient client = new AuthenticatedClientBuilder(factory)
+            .WithUserId(userId)
+            .WithRole(tenantId, (int)UserAccountRoles.Viewer)
+            .WithActiveTenant(tenantId)
+            .Build();
+
+        HttpResponseMessage response = await client.PostAsync($"/api/v1/alert-events/{evt.Id}/acknowledge", null);
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.Forbidden);
+    }
+
+    private static async Task<(int TenantId, int UserId, int RuleId)> AlertEventEndpointTests_SeedEnvironment(
+        DatabaseContext db)
+    {
+        Tenant tenant = new()
+        {
+            ExternalId = Guid.NewGuid().ToString("N"),
+            Name = $"Ack Tenant {Guid.NewGuid():N}",
+            CreatedAt = DateTimeOffset.UtcNow,
+            CreatedByUserId = 0,
+            IsActive = true,
+            LogoUrl = ""
+        };
+        tenant.Id = await db.InsertWithInt32IdentityAsync(tenant);
+
+        TenantSubscription subscription = new()
+        {
+            TenantId = tenant.Id,
+            Tier = SubscriptionTier.Pro,
+            Status = SubscriptionStatus.Active,
+            MachineLimit = null,
+            RetentionDays = 30,
+            CreatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow,
+        };
+        await db.InsertWithInt32IdentityAsync(subscription);
+
+        UserAccount user = new()
+        {
+            ExternalId = $"ext-ack-user-{Guid.NewGuid():N}",
+            Username = $"ackuser-{Guid.NewGuid():N}@example.com",
+            CreatedAt = DateTimeOffset.UtcNow,
+            CreatedByUserId = 0,
+            IsActive = true,
+            IsSystem = false,
+            IsGlobalAdmin = false,
+        };
+        user.Id = await db.InsertWithInt32IdentityAsync(user);
+
+        UserTenantRole role = new()
+        {
+            UserId = user.Id,
+            AssignedTenantId = tenant.Id,
+            Role = UserAccountRoles.MachineAdmin,
+            AssignedByUserId = user.Id,
+            AssignedAt = DateTimeOffset.UtcNow,
+            IsActive = true,
+        };
+        await db.InsertAsync(role);
+
+        AlertRule alertRule = new()
+        {
+            TenantId = tenant.Id,
+            Name = "Ack Test Rule",
+            Metric = AlertMetric.CpuUsage,
+            Operator = AlertOperator.GreaterThan,
+            Threshold = 80,
+            Severity = AlertSeverity.Warning,
+            IsEnabled = true,
+            IsCustom = true,
+            CreatedByUserId = user.Id,
+            CreatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow,
+        };
+        alertRule.Id = await db.InsertWithInt32IdentityAsync(alertRule);
+
+        return (tenant.Id, user.Id, alertRule.Id);
+    }
+
+    // --- WS-6: MachineOffline Metric Tests ---
+
+    [Test]
+    public async Task CreateRule_MachineOfflineMetric_Returns200()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId) = await SeedAlertEnvironment(db, SubscriptionTier.Team);
+        HttpClient client = BuildClient(factory, tenantId, userId);
+
+        HttpResponseMessage response = await client.PostAsJsonAsync("/api/v1/alert-rules", new
+        {
+            Name = "Machine Offline Alert",
+            Metric = "MachineOffline",
+            Operator = "GreaterThan",
+            Threshold = 0,
+            DurationMinutes = 5,
+            Severity = "Critical",
+        });
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
+        string body = await response.Content.ReadAsStringAsync();
+        await Assert.That(body).Contains("MachineOffline");
+    }
+
+    [Test]
+    public async Task CreateRule_MachineOffline_OperatorGreaterThan_Returns200()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId) = await SeedAlertEnvironment(db, SubscriptionTier.Team);
+        HttpClient client = BuildClient(factory, tenantId, userId);
+
+        HttpResponseMessage response = await client.PostAsJsonAsync("/api/v1/alert-rules", new
+        {
+            Name = "Offline GT check",
+            Metric = "MachineOffline",
+            Operator = "GreaterThan",
+            Threshold = 0,
+            DurationMinutes = 0,
+            Severity = "Warning",
+        });
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
+        string body = await response.Content.ReadAsStringAsync();
+        await Assert.That(body).Contains("\"success\":true");
+        await Assert.That(body).Contains("GreaterThan");
     }
 
     [Test]
