@@ -52,7 +52,7 @@ public sealed class WebhookListEndpoint : EndpointWithoutRequest<ApiResponse<Lis
         }
 
         TenantSubscription? subscription = await _subscriptionService.GetSubscriptionForTenantAsync(tenantId.Value, ct);
-        if ((subscription is null) || (subscription.Tier == SubscriptionTier.Free))
+        if ((subscription is null) || (subscription.Tier == SubscriptionTier.Free) || (subscription.Status != SubscriptionStatus.Active))
         {
             HttpContext.Response.StatusCode = 403;
             await HttpContext.Response.WriteAsJsonAsync(ApiResponse<List<WebhookEndpointDto>>.Error("Webhooks require a Pro or Team subscription"), ct);

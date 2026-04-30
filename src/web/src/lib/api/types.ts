@@ -336,6 +336,10 @@ export interface SubscriptionDto {
 	currentPeriodEnd: string | null;
 	cancelAtPeriodEnd: boolean;
 	pendingAction: string | null;
+	alertRuleLimit: number | null;
+	alertRuleCount: number;
+	webhookLimit: number | null;
+	webhookCount: number;
 }
 
 export interface UpcomingInvoiceDto {

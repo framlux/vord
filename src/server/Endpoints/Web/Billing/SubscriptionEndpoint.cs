@@ -3,10 +3,13 @@
 // See LICENSE for details.
 
 using FastEndpoints;
+using Framlux.FleetManagement.Database;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Server.Auth;
 using Framlux.FleetManagement.Server.Services.Billing;
+using LinqToDB;
+using LinqToDB.Async;
 
 namespace Framlux.FleetManagement.Server.Endpoints.Web.Billing;
 
@@ -38,6 +41,18 @@ public sealed class SubscriptionDto
 
     /// <summary>The pending action that will occur at period end, if any.</summary>
     public string? PendingAction { get; set; }
+
+    /// <summary>Maximum alert rules allowed, null if unlimited.</summary>
+    public int? AlertRuleLimit { get; set; }
+
+    /// <summary>Current alert rule count for this tenant.</summary>
+    public int AlertRuleCount { get; set; }
+
+    /// <summary>Maximum webhooks allowed, null if unlimited.</summary>
+    public int? WebhookLimit { get; set; }
+
+    /// <summary>Current webhook count for this tenant.</summary>
+    public int WebhookCount { get; set; }
 }
 
 /// <summary>
@@ -46,13 +61,15 @@ public sealed class SubscriptionDto
 public sealed class SubscriptionEndpoint : EndpointWithoutRequest<ApiResponse<SubscriptionDto>>
 {
     private readonly ISubscriptionService _subscriptionService;
+    private readonly DatabaseContext _db;
 
     /// <summary>
     /// Creates a new instance of the <see cref="SubscriptionEndpoint"/> class.
     /// </summary>
-    public SubscriptionEndpoint(ISubscriptionService subscriptionService)
+    public SubscriptionEndpoint(ISubscriptionService subscriptionService, DatabaseContext db)
     {
         _subscriptionService = subscriptionService;
+        _db = db;
     }
 
     /// <inheritdoc/>
@@ -84,6 +101,8 @@ public sealed class SubscriptionEndpoint : EndpointWithoutRequest<ApiResponse<Su
         }
 
         int machineCount = await _subscriptionService.GetMachineCountForTenantAsync(tenantId.Value, ct);
+        int alertRuleCount = await _db.AlertRules.CountAsync(r => r.TenantId == tenantId.Value, ct);
+        int webhookCount = await _db.WebhookEndpoints.CountAsync(w => w.TenantId == tenantId.Value, ct);
 
         SubscriptionDto dto = new()
         {
@@ -97,6 +116,10 @@ public sealed class SubscriptionEndpoint : EndpointWithoutRequest<ApiResponse<Su
             PendingAction = subscription.PendingAction != PendingSubscriptionAction.None
                 ? subscription.PendingAction.ToString()
                 : null,
+            AlertRuleLimit = subscription.AlertRuleLimit,
+            AlertRuleCount = alertRuleCount,
+            WebhookLimit = subscription.WebhookLimit,
+            WebhookCount = webhookCount,
         };
 
         await Send.OkAsync(ApiResponse<SubscriptionDto>.Ok(dto), cancellation: ct);

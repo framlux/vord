@@ -9,6 +9,7 @@ using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Server.Auth;
 using Framlux.FleetManagement.Server.Services.Billing;
+using Framlux.FleetManagement.Server.Services.Security;
 using LinqToDB;
 
 namespace Framlux.FleetManagement.Server.Endpoints.Web.Alerts;
@@ -21,14 +22,16 @@ public sealed class WebhookCreateEndpoint : Endpoint<CreateWebhookRequest, ApiRe
 {
     private readonly DatabaseContext _db;
     private readonly ISubscriptionService _subscriptionService;
+    private readonly IWebhookSecretProtector _secretProtector;
 
     /// <summary>
     /// Creates a new instance of the <see cref="WebhookCreateEndpoint"/> class.
     /// </summary>
-    public WebhookCreateEndpoint(DatabaseContext db, ISubscriptionService subscriptionService)
+    public WebhookCreateEndpoint(DatabaseContext db, ISubscriptionService subscriptionService, IWebhookSecretProtector secretProtector)
     {
         _db = db;
         _subscriptionService = subscriptionService;
+        _secretProtector = secretProtector;
     }
 
     /// <inheritdoc/>
@@ -52,10 +55,20 @@ public sealed class WebhookCreateEndpoint : Endpoint<CreateWebhookRequest, ApiRe
         }
 
         TenantSubscription? subscription = await _subscriptionService.GetSubscriptionForTenantAsync(tenantId.Value, ct);
-        if ((subscription is null) || (subscription.Tier == SubscriptionTier.Free))
+        if ((subscription is null) || (subscription.Tier == SubscriptionTier.Free) || (subscription.Status != SubscriptionStatus.Active))
         {
             HttpContext.Response.StatusCode = 403;
             await HttpContext.Response.WriteAsJsonAsync(ApiResponse<WebhookEndpointDto>.Error("Webhooks require a Pro or Team subscription"), ct);
+
+            return;
+        }
+
+        bool canCreate = await _subscriptionService.CanCreateWebhookAsync(tenantId.Value, _db, ct);
+        if (canCreate == false)
+        {
+            HttpContext.Response.StatusCode = 403;
+            await HttpContext.Response.WriteAsJsonAsync(
+                ApiResponse<WebhookEndpointDto>.Error("Webhook endpoint limit reached for your subscription tier"), ct);
 
             return;
         }
@@ -64,6 +77,24 @@ public sealed class WebhookCreateEndpoint : Endpoint<CreateWebhookRequest, ApiRe
         {
             HttpContext.Response.StatusCode = 400;
             await HttpContext.Response.WriteAsJsonAsync(ApiResponse<WebhookEndpointDto>.Error("Name and URL are required"), ct);
+
+            return;
+        }
+
+        if (req.Name.Length > 250)
+        {
+            HttpContext.Response.StatusCode = 400;
+            await HttpContext.Response.WriteAsJsonAsync(
+                ApiResponse<WebhookEndpointDto>.Error("Webhook name must be 250 characters or fewer"), ct);
+
+            return;
+        }
+
+        if (req.Url.Length > 2000)
+        {
+            HttpContext.Response.StatusCode = 400;
+            await HttpContext.Response.WriteAsJsonAsync(
+                ApiResponse<WebhookEndpointDto>.Error("Webhook URL must be 2000 characters or fewer"), ct);
 
             return;
         }
@@ -86,14 +117,15 @@ public sealed class WebhookCreateEndpoint : Endpoint<CreateWebhookRequest, ApiRe
             return;
         }
 
-        string secret = Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(32));
+        string hexSecret = Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(32));
+        string encryptedSecret = _secretProtector.Protect(hexSecret);
 
         WebhookEndpoint webhook = new()
         {
             TenantId = tenantId.Value,
             Name = req.Name,
             Url = req.Url,
-            Secret = secret,
+            Secret = encryptedSecret,
             IsEnabled = true,
             CreatedByUserId = userId.Value,
             CreatedAt = DateTimeOffset.UtcNow,
@@ -108,7 +140,7 @@ public sealed class WebhookCreateEndpoint : Endpoint<CreateWebhookRequest, ApiRe
             Url = webhook.Url,
             IsEnabled = webhook.IsEnabled,
             CreatedAt = webhook.CreatedAt,
-            Secret = secret,
+            Secret = hexSecret,
         };
 
         await Send.OkAsync(ApiResponse<WebhookEndpointDto>.Ok(dto, "Webhook created"), cancellation: ct);

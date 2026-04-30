@@ -8,6 +8,7 @@ using System.Text.Json;
 using Framlux.FleetManagement.Database;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Server.Services.Infrastructure;
+using Framlux.FleetManagement.Server.Services.Security;
 using LinqToDB;
 using LinqToDB.Async;
 using StackExchange.Redis;
@@ -22,9 +23,8 @@ public sealed class AlertDeliveryService : IAlertDeliveryService
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly IConnectionMultiplexer _redis;
+    private readonly IWebhookSecretProtector _secretProtector;
     private readonly ILogger<AlertDeliveryService> _logger;
-
-    private const string DeliveryQueueKey = "alert:delivery:queue";
 
     /// <summary>
     /// Creates a new instance of the <see cref="AlertDeliveryService"/> class.
@@ -33,11 +33,13 @@ public sealed class AlertDeliveryService : IAlertDeliveryService
         IServiceScopeFactory scopeFactory,
         IHttpClientFactory httpClientFactory,
         IConnectionMultiplexer redis,
+        IWebhookSecretProtector secretProtector,
         ILogger<AlertDeliveryService> logger)
     {
         _scopeFactory = scopeFactory;
         _httpClientFactory = httpClientFactory;
         _redis = redis;
+        _secretProtector = secretProtector;
         _logger = logger;
     }
 
@@ -79,8 +81,9 @@ public sealed class AlertDeliveryService : IAlertDeliveryService
                     details = alertEvent.Details,
                 }, JsonDefaults.CamelCase);
 
+                string secret = _secretProtector.Unprotect(webhook.Secret);
                 byte[] signatureBytes = HMACSHA256.HashData(
-                    Encoding.UTF8.GetBytes(webhook.Secret),
+                    Encoding.UTF8.GetBytes(secret),
                     Encoding.UTF8.GetBytes(payload));
                 string signature = $"sha256={Convert.ToHexStringLower(signatureBytes)}";
 
@@ -108,7 +111,7 @@ public sealed class AlertDeliveryService : IAlertDeliveryService
     {
         string payload = JsonSerializer.Serialize(new { eventId, ruleId, tenantId }, JsonDefaults.CamelCase);
         IDatabase redisDb = _redis.GetDatabase();
-        await redisDb.ListLeftPushAsync(DeliveryQueueKey, payload);
+        await redisDb.ListLeftPushAsync(AlertConstants.DeliveryQueueKey, payload);
         _logger.LogDebug("Enqueued delivery job for event {EventId}, rule {RuleId}", eventId, ruleId);
     }
 }

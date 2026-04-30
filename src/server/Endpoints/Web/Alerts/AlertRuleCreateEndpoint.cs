@@ -51,7 +51,7 @@ public sealed class AlertRuleCreateEndpoint : Endpoint<CreateAlertRuleRequest, A
         }
 
         TenantSubscription? subscription = await _subscriptionService.GetSubscriptionForTenantAsync(tenantId.Value, ct);
-        if ((subscription is null) || (subscription.Tier == SubscriptionTier.Free))
+        if ((subscription is null) || (subscription.Tier == SubscriptionTier.Free) || (subscription.Status != SubscriptionStatus.Active))
         {
             HttpContext.Response.StatusCode = 403;
             await HttpContext.Response.WriteAsJsonAsync(ApiResponse<AlertRuleDto>.Error("Alerting requires a Pro or Team subscription"), ct);
@@ -68,11 +68,39 @@ public sealed class AlertRuleCreateEndpoint : Endpoint<CreateAlertRuleRequest, A
             return;
         }
 
+        bool canCreate = await _subscriptionService.CanCreateAlertRuleAsync(tenantId.Value, _db, ct);
+        if (canCreate == false)
+        {
+            HttpContext.Response.StatusCode = 403;
+            await HttpContext.Response.WriteAsJsonAsync(
+                ApiResponse<AlertRuleDto>.Error("Alert rule limit reached for your subscription tier"), ct);
+
+            return;
+        }
+
         if (string.IsNullOrWhiteSpace(req.Name))
         {
             HttpContext.Response.StatusCode = 400;
             await HttpContext.Response.WriteAsJsonAsync(
                 ApiResponse<AlertRuleDto>.Error("Rule name is required"), ct);
+
+            return;
+        }
+
+        if (req.Name.Length > 250)
+        {
+            HttpContext.Response.StatusCode = 400;
+            await HttpContext.Response.WriteAsJsonAsync(
+                ApiResponse<AlertRuleDto>.Error("Rule name must be 250 characters or fewer"), ct);
+
+            return;
+        }
+
+        if ((req.Description is not null) && (req.Description.Length > 2000))
+        {
+            HttpContext.Response.StatusCode = 400;
+            await HttpContext.Response.WriteAsJsonAsync(
+                ApiResponse<AlertRuleDto>.Error("Description must be 2000 characters or fewer"), ct);
 
             return;
         }
@@ -106,6 +134,36 @@ public sealed class AlertRuleCreateEndpoint : Endpoint<CreateAlertRuleRequest, A
         {
             HttpContext.Response.StatusCode = 400;
             await HttpContext.Response.WriteAsJsonAsync(ApiResponse<AlertRuleDto>.Error("Invalid severity"), ct);
+
+            return;
+        }
+
+        bool isPercentageMetric = metric is AlertMetric.CpuUsage or AlertMetric.MemoryUsage or AlertMetric.DiskUsage;
+        bool isBinaryMetric = metric is AlertMetric.MachineOffline or AlertMetric.DiskHealth;
+
+        if (isPercentageMetric && ((req.Threshold < 0) || (req.Threshold > 100)))
+        {
+            HttpContext.Response.StatusCode = 400;
+            await HttpContext.Response.WriteAsJsonAsync(
+                ApiResponse<AlertRuleDto>.Error("Threshold for percentage metrics must be between 0 and 100"), ct);
+
+            return;
+        }
+
+        if (isBinaryMetric && (req.Threshold != 0) && (req.Threshold != 1))
+        {
+            HttpContext.Response.StatusCode = 400;
+            await HttpContext.Response.WriteAsJsonAsync(
+                ApiResponse<AlertRuleDto>.Error("Threshold for this metric must be 0 or 1"), ct);
+
+            return;
+        }
+
+        if ((isPercentageMetric == false) && (isBinaryMetric == false) && (req.Threshold < 0))
+        {
+            HttpContext.Response.StatusCode = 400;
+            await HttpContext.Response.WriteAsJsonAsync(
+                ApiResponse<AlertRuleDto>.Error("Threshold must be zero or positive"), ct);
 
             return;
         }

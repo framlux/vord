@@ -62,7 +62,7 @@ public sealed class WebhookUpdateEndpoint : Endpoint<UpdateWebhookRequest, ApiRe
         }
 
         TenantSubscription? subscription = await _subscriptionService.GetSubscriptionForTenantAsync(tenantId.Value, ct);
-        if ((subscription is null) || (subscription.Tier == SubscriptionTier.Free))
+        if ((subscription is null) || (subscription.Tier == SubscriptionTier.Free) || (subscription.Status != SubscriptionStatus.Active))
         {
             HttpContext.Response.StatusCode = 403;
             await HttpContext.Response.WriteAsJsonAsync(

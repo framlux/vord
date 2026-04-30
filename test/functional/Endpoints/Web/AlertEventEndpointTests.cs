@@ -396,10 +396,14 @@ public sealed class AlertEventEndpointTests
 
         HttpResponseMessage response = await client.GetAsync("/api/v1/alert-events");
 
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
         string body = await response.Content.ReadAsStringAsync();
-        int newestIndex = body.IndexOf("Newest event", StringComparison.Ordinal);
-        int oldestIndex = body.IndexOf("Oldest event", StringComparison.Ordinal);
-        await Assert.That(newestIndex < oldestIndex).IsTrue();
+
+        JsonDocument doc = JsonDocument.Parse(body);
+        JsonElement items = doc.RootElement.GetProperty("data").GetProperty("items");
+        await Assert.That(items.GetArrayLength()).IsGreaterThanOrEqualTo(2);
+        await Assert.That(items[0].GetProperty("message").GetString()).IsEqualTo("Newest event");
+        await Assert.That(items[1].GetProperty("message").GetString()).IsEqualTo("Oldest event");
     }
 
     // --- AcknowledgeAlertEvent Tests ---
@@ -703,5 +707,42 @@ public sealed class AlertEventEndpointTests
         await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
         string body = await response.Content.ReadAsStringAsync();
         await Assert.That(body).Contains("Machine 99999");
+    }
+
+    // --- Canceled Subscription Tests ---
+
+    [Test]
+    public async Task AcknowledgeEvent_CanceledSubscription_Returns403()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId, int ruleId) = await SeedAlertEventEnvironment(db);
+
+        // Create a triggered event before canceling the subscription
+        AlertEvent evt = new()
+        {
+            AlertRuleId = ruleId,
+            TenantId = tenantId,
+            MachineId = 1,
+            Severity = AlertSeverity.Warning,
+            Message = "Canceled sub ack test",
+            Status = AlertEventStatus.Triggered,
+            TriggeredAt = DateTimeOffset.UtcNow,
+        };
+        evt.Id = await db.InsertWithInt64IdentityAsync(evt);
+
+        // Mark the subscription as canceled after creating the event
+        await db.TenantSubscriptions
+            .Where(s => s.TenantId == tenantId)
+            .Set(s => s.Status, SubscriptionStatus.Canceled)
+            .UpdateAsync();
+
+        HttpClient client = BuildClient(factory, tenantId, userId, UserAccountRoles.MachineAdmin);
+
+        HttpResponseMessage response = await client.PostAsync($"/api/v1/alert-events/{evt.Id}/acknowledge", null);
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.Forbidden);
+        string body = await response.Content.ReadAsStringAsync();
+        await Assert.That(body.ToLowerInvariant()).Contains("canceled");
     }
 }

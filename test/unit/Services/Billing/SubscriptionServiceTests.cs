@@ -339,4 +339,115 @@ public class SubscriptionServiceTests
         await Assert.That(result).IsNotNull();
         await Assert.That(result!.Status == SubscriptionStatus.Active).IsFalse();
     }
+
+    // ========== Alert Rule Limit Tests ==========
+
+    [Test]
+    public async Task CanCreateAlertRule_UnderLimit_ReturnsTrue()
+    {
+        using TestDatabaseFactory dbFactory = new();
+
+        TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 1, tier: SubscriptionTier.Pro);
+        sub.AlertRuleLimit = 25;
+        sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
+
+        // Seed 10 rules (well under the limit of 25)
+        for (int i = 0; i < 10; i++)
+        {
+            AlertRule rule = TestDataBuilder.BuildAlertRule(tenantId: 1);
+            await dbFactory.Context.InsertWithInt32IdentityAsync(rule);
+        }
+
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+        SubscriptionService service = new(scopeFactory, BuildOptions(), new NullLogger<SubscriptionService>());
+
+        bool result = await service.CanCreateAlertRuleAsync(1, null, CancellationToken.None);
+
+        await Assert.That(result).IsTrue();
+    }
+
+    [Test]
+    public async Task CanCreateAlertRule_AtLimit_ReturnsFalse()
+    {
+        using TestDatabaseFactory dbFactory = new();
+
+        TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 1, tier: SubscriptionTier.Pro);
+        sub.AlertRuleLimit = 25;
+        sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
+
+        // Seed exactly 25 rules to reach the limit
+        for (int i = 0; i < 25; i++)
+        {
+            AlertRule rule = TestDataBuilder.BuildAlertRule(tenantId: 1);
+            await dbFactory.Context.InsertWithInt32IdentityAsync(rule);
+        }
+
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+        SubscriptionService service = new(scopeFactory, BuildOptions(), new NullLogger<SubscriptionService>());
+
+        bool result = await service.CanCreateAlertRuleAsync(1, null, CancellationToken.None);
+
+        await Assert.That(result).IsFalse();
+    }
+
+    [Test]
+    public async Task CanCreateAlertRule_NullLimit_ReturnsTrue()
+    {
+        using TestDatabaseFactory dbFactory = new();
+
+        TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 1, tier: SubscriptionTier.Team);
+        sub.AlertRuleLimit = null; // Unlimited
+        sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
+
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+        SubscriptionService service = new(scopeFactory, BuildOptions(), new NullLogger<SubscriptionService>());
+
+        bool result = await service.CanCreateAlertRuleAsync(1, null, CancellationToken.None);
+
+        await Assert.That(result).IsTrue();
+    }
+
+    [Test]
+    public async Task CanCreateAlertRule_ZeroLimit_ReturnsFalse()
+    {
+        using TestDatabaseFactory dbFactory = new();
+
+        TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 1, tier: SubscriptionTier.Free);
+        sub.AlertRuleLimit = 0;
+        sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
+
+        // Zero rules exist, but limit is zero so no rules can be created
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+        SubscriptionService service = new(scopeFactory, BuildOptions(), new NullLogger<SubscriptionService>());
+
+        bool result = await service.CanCreateAlertRuleAsync(1, null, CancellationToken.None);
+
+        await Assert.That(result).IsFalse();
+    }
+
+    // ========== Webhook Limit Tests ==========
+
+    [Test]
+    public async Task CanCreateWebhook_AtLimit_ReturnsFalse()
+    {
+        using TestDatabaseFactory dbFactory = new();
+
+        TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 1, tier: SubscriptionTier.Pro);
+        sub.WebhookLimit = 5;
+        sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
+
+        // Seed exactly 5 webhooks to reach the limit
+        for (int i = 0; i < 5; i++)
+        {
+            WebhookEndpoint webhook = TestDataBuilder.BuildWebhookEndpoint(tenantId: 1);
+            await dbFactory.Context.InsertWithInt32IdentityAsync(webhook);
+        }
+
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+        SubscriptionService service = new(scopeFactory, BuildOptions(), new NullLogger<SubscriptionService>());
+
+        bool result = await service.CanCreateWebhookAsync(1, null, CancellationToken.None);
+
+        await Assert.That(result).IsFalse();
+    }
 }

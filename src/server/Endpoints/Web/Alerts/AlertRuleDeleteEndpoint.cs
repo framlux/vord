@@ -7,6 +7,7 @@ using Framlux.FleetManagement.Database;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Server.Auth;
+using Framlux.FleetManagement.Server.Services.Alerts;
 using Framlux.FleetManagement.Server.Services.Billing;
 using LinqToDB;
 using LinqToDB.Async;
@@ -55,7 +56,7 @@ public sealed class AlertRuleDeleteEndpoint : EndpointWithoutRequest<ApiResponse
         }
 
         TenantSubscription? subscription = await _subscriptionService.GetSubscriptionForTenantAsync(tenantId.Value, ct);
-        if ((subscription is null) || (subscription.Tier == SubscriptionTier.Free))
+        if ((subscription is null) || (subscription.Tier == SubscriptionTier.Free) || (subscription.Status != SubscriptionStatus.Active))
         {
             HttpContext.Response.StatusCode = 403;
             await HttpContext.Response.WriteAsJsonAsync(ApiResponse<bool>.Error("Alerting requires a Pro or Team subscription"), ct);
@@ -99,11 +100,11 @@ public sealed class AlertRuleDeleteEndpoint : EndpointWithoutRequest<ApiResponse
         IDatabase redisDb = _redis.GetDatabase();
         foreach (long machineId in machineIds)
         {
-            await redisDb.KeyDeleteAsync($"alert:condition:{ruleId}:{machineId}");
+            await redisDb.KeyDeleteAsync($"{AlertConstants.ConditionKeyPrefix}:{ruleId}:{machineId}");
         }
 
         await _db.AlertRules
-            .Where(r => r.Id == ruleId)
+            .Where(r => (r.Id == ruleId) && (r.TenantId == tenantId.Value))
             .DeleteAsync(ct);
 
         await Send.OkAsync(ApiResponse<bool>.Ok(true, "Alert rule deleted"), cancellation: ct);

@@ -10,6 +10,7 @@ using Framlux.FleetManagement.Server.Services.Billing;
 using Framlux.FleetManagement.Server.Services.Infrastructure;
 using LinqToDB;
 using LinqToDB.Async;
+using LinqToDB.Data;
 using StackExchange.Redis;
 
 namespace Framlux.FleetManagement.Server.Services.Alerts;
@@ -90,6 +91,7 @@ public sealed class AlertEvaluationService : BackgroundService
 
         if (enabledRules.Count == 0)
         {
+
             return;
         }
 
@@ -126,6 +128,7 @@ public sealed class AlertEvaluationService : BackgroundService
         decimal? currentValue = GetMetricValue(rule.Metric, state);
         if (currentValue is null)
         {
+
             return;
         }
 
@@ -135,7 +138,16 @@ public sealed class AlertEvaluationService : BackgroundService
         {
             // Clear any tracked condition start time
             IDatabase redisDb = _redis.GetDatabase();
-            await redisDb.KeyDeleteAsync($"alert:condition:{rule.Id}:{state.MachineId}");
+            await redisDb.KeyDeleteAsync($"{AlertConstants.ConditionKeyPrefix}:{rule.Id}:{state.MachineId}");
+
+            // Auto-resolve any active events for this rule+machine
+            await db.AlertEvents
+                .Where(e => (e.AlertRuleId == rule.Id) &&
+                            (e.MachineId == state.MachineId) &&
+                            (e.Status != AlertEventStatus.Resolved))
+                .Set(e => e.Status, AlertEventStatus.Resolved)
+                .Set(e => e.ResolvedAt, DateTimeOffset.UtcNow)
+                .UpdateAsync(ct);
 
             return;
         }
@@ -144,7 +156,7 @@ public sealed class AlertEvaluationService : BackgroundService
         if (rule.DurationMinutes > 0)
         {
             IDatabase redisDb = _redis.GetDatabase();
-            string conditionKey = $"alert:condition:{rule.Id}:{state.MachineId}";
+            string conditionKey = $"{AlertConstants.ConditionKeyPrefix}:{rule.Id}:{state.MachineId}";
             string? startTimeStr = await redisDb.StringGetAsync(conditionKey);
 
             if (startTimeStr is null)
@@ -165,18 +177,32 @@ public sealed class AlertEvaluationService : BackgroundService
             TimeSpan elapsed = DateTimeOffset.UtcNow - conditionStart;
             if (elapsed.TotalMinutes < rule.DurationMinutes)
             {
+
                 return;
             }
         }
 
+        await using DataConnectionTransaction tx = await db.BeginTransactionAsync(ct);
+
+        // Advisory lock scoped to this rule+machine pair (PostgreSQL only; no-op on SQLite).
+        // Uses the two-argument form: key1=ruleId (int32), key2=machineId folded to int32 via XOR
+        // so all 64 bits of machineId contribute to the lock key.
+        if (db.DataProvider.Name.Contains("PostgreSQL"))
+        {
+            int foldedMachineId = (int)(state.MachineId ^ (state.MachineId >> 32));
+            await db.ExecuteAsync($"SELECT pg_advisory_xact_lock({rule.Id}, {foldedMachineId})", ct, []);
+        }
+
         // Check if there's already an active (non-resolved) event for this rule+machine
         bool hasActiveEvent = await db.AlertEvents
-            .AnyAsync(e => e.AlertRuleId == rule.Id &&
-                          e.MachineId == state.MachineId &&
-                          e.Status != AlertEventStatus.Resolved, ct);
+            .AnyAsync(e => (e.AlertRuleId == rule.Id) &&
+                          (e.MachineId == state.MachineId) &&
+                          (e.Status != AlertEventStatus.Resolved), ct);
 
         if (hasActiveEvent)
         {
+            await tx.CommitAsync(ct);
+
             return;
         }
 
@@ -201,10 +227,12 @@ public sealed class AlertEvaluationService : BackgroundService
         if (rule.DurationMinutes > 0)
         {
             IDatabase redisDb = _redis.GetDatabase();
-            await redisDb.KeyDeleteAsync($"alert:condition:{rule.Id}:{state.MachineId}");
+            await redisDb.KeyDeleteAsync($"{AlertConstants.ConditionKeyPrefix}:{rule.Id}:{state.MachineId}");
         }
 
         await _deliveryService.EnqueueAsync(alertEvent.Id, rule.Id, rule.TenantId, ct);
+
+        await tx.CommitAsync(ct);
     }
 
     internal static decimal? GetMetricValue(AlertMetric metric, MachineStateSummary state)
@@ -217,7 +245,7 @@ public sealed class AlertEvaluationService : BackgroundService
             AlertMetric.FailedServices => state.FailedServices.HasValue ? (decimal)state.FailedServices.Value : null,
             AlertMetric.SecurityUpdates => state.SecurityUpdates.HasValue ? (decimal)state.SecurityUpdates.Value : null,
             AlertMetric.DiskHealth => GetDiskHealthValue(state),
-            AlertMetric.MachineOffline => state.HealthStatus == 3 ? 1m : 0m,
+            AlertMetric.MachineOffline => state.HealthStatus == AlertConstants.HealthStatusOffline ? 1m : 0m,
             _ => null,
         };
     }

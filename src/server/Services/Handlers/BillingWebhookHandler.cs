@@ -41,7 +41,9 @@ public sealed class BillingWebhookHandler : IBillingWebhookHandler
     {
         using IDatabaseTransaction transaction = await _databaseCache.BeginTransactionAsync(ct);
 
-        await _databaseCache.UpdateSubscriptionOnCheckoutAsync(tenantId, tier, ct);
+        int? alertRuleLimit = tier == SubscriptionTier.Team ? _subscriptionOptions.TeamTierAlertRuleLimit : _subscriptionOptions.ProTierAlertRuleLimit;
+        int? webhookLimit = tier == SubscriptionTier.Team ? _subscriptionOptions.TeamTierWebhookLimit : _subscriptionOptions.ProTierWebhookLimit;
+        await _databaseCache.UpdateSubscriptionOnCheckoutAsync(tenantId, tier, alertRuleLimit, webhookLimit, ct);
 
         await _databaseCache.InsertAuditLogAsync(AuditHelper.Create(
             tenantId, null, null,
@@ -148,7 +150,7 @@ public sealed class BillingWebhookHandler : IBillingWebhookHandler
             {
                 using IDatabaseTransaction transaction = await _databaseCache.BeginTransactionAsync(ct);
 
-                await _databaseCache.RevertSubscriptionToFreeAsync(tenantId, _subscriptionOptions.FreeTierMachineLimit, _subscriptionOptions.FreeTierRetentionDays, ct);
+                await _databaseCache.RevertSubscriptionToFreeAsync(tenantId, _subscriptionOptions.FreeTierMachineLimit, _subscriptionOptions.FreeTierRetentionDays, 0, 0, ct);
                 await _databaseCache.InsertAuditLogAsync(AuditHelper.Create(
                     tenantId, null, null,
                     AuditAction.SubscriptionDowngraded, AuditResourceType.Subscription,
@@ -165,7 +167,7 @@ public sealed class BillingWebhookHandler : IBillingWebhookHandler
             {
                 using IDatabaseTransaction transaction = await _databaseCache.BeginTransactionAsync(ct);
 
-                await _databaseCache.DowngradeSubscriptionToProAsync(tenantId, ct);
+                await _databaseCache.DowngradeSubscriptionToProAsync(tenantId, _subscriptionOptions.ProTierAlertRuleLimit, _subscriptionOptions.ProTierWebhookLimit, ct);
                 await _databaseCache.InsertAuditLogAsync(AuditHelper.Create(
                     tenantId, null, null,
                     AuditAction.SubscriptionDowngraded, AuditResourceType.Subscription,
@@ -223,7 +225,7 @@ public sealed class BillingWebhookHandler : IBillingWebhookHandler
     {
         using IDatabaseTransaction transaction = await _databaseCache.BeginTransactionAsync(ct);
 
-        await _databaseCache.DowngradeSubscriptionToProAsync(tenantId, ct);
+        await _databaseCache.DowngradeSubscriptionToProAsync(tenantId, _subscriptionOptions.ProTierAlertRuleLimit, _subscriptionOptions.ProTierWebhookLimit, ct);
 
         await _databaseCache.InsertAuditLogAsync(AuditHelper.Create(
             tenantId, null, null,

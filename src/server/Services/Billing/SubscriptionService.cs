@@ -88,6 +88,8 @@ public sealed class SubscriptionService : ISubscriptionService
             Status = SubscriptionStatus.Active,
             MachineLimit = machineLimit,
             RetentionDays = retentionDays,
+            AlertRuleLimit = 0,
+            WebhookLimit = 0,
             CreatedAt = now,
             UpdatedAt = now,
         };
@@ -155,6 +157,76 @@ public sealed class SubscriptionService : ISubscriptionService
         if (subscription is null)
         {
             await ProvisionFreeSubscriptionAsync(tenantId, ct);
+        }
+    }
+
+    /// <inheritdoc/>
+    public async Task<bool> CanCreateAlertRuleAsync(int tenantId, DatabaseContext? db, CancellationToken ct)
+    {
+        IServiceScope? scope = db is null ? _scopeFactory.CreateScope() : null;
+        try
+        {
+            DatabaseContext resolvedDb = db ?? scope!.ServiceProvider.GetRequiredService<DatabaseContext>();
+
+            TenantSubscription? subscription = await resolvedDb.TenantSubscriptions
+                .Where(s => s.TenantId == tenantId)
+                .FirstOrDefaultAsync(ct);
+
+            if (subscription is null)
+            {
+
+                return false;
+            }
+
+            if (subscription.AlertRuleLimit is null)
+            {
+
+                return true;
+            }
+
+            int count = await resolvedDb.AlertRules
+                .CountAsync(r => r.TenantId == tenantId, ct);
+
+            return count < subscription.AlertRuleLimit.Value;
+        }
+        finally
+        {
+            scope?.Dispose();
+        }
+    }
+
+    /// <inheritdoc/>
+    public async Task<bool> CanCreateWebhookAsync(int tenantId, DatabaseContext? db, CancellationToken ct)
+    {
+        IServiceScope? scope = db is null ? _scopeFactory.CreateScope() : null;
+        try
+        {
+            DatabaseContext resolvedDb = db ?? scope!.ServiceProvider.GetRequiredService<DatabaseContext>();
+
+            TenantSubscription? subscription = await resolvedDb.TenantSubscriptions
+                .Where(s => s.TenantId == tenantId)
+                .FirstOrDefaultAsync(ct);
+
+            if (subscription is null)
+            {
+
+                return false;
+            }
+
+            if (subscription.WebhookLimit is null)
+            {
+
+                return true;
+            }
+
+            int count = await resolvedDb.WebhookEndpoints
+                .CountAsync(w => w.TenantId == tenantId, ct);
+
+            return count < subscription.WebhookLimit.Value;
+        }
+        finally
+        {
+            scope?.Dispose();
         }
     }
 

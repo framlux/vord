@@ -10,6 +10,7 @@ using LinqToDB.Async;
 using LinqToDB;
 using System.Net.Http.Json;
 using System.Net;
+using System.Text.Json;
 
 namespace Framlux.FleetManagement.FunctionalTest.Endpoints.Web;
 
@@ -189,7 +190,7 @@ public sealed class AlertRuleEndpointTests
         (int tenantId, int userId) = await SeedAlertEnvironment(db, SubscriptionTier.Team);
         HttpClient client = BuildClient(factory, tenantId, userId);
 
-        await client.PostAsJsonAsync("/api/v1/alert-rules", new
+        HttpResponseMessage response = await client.PostAsJsonAsync("/api/v1/alert-rules", new
         {
             Name = "DB Check Rule",
             Description = "Persisted rule",
@@ -201,6 +202,8 @@ public sealed class AlertRuleEndpointTests
             NotifyEmail = true,
             NotifyWebhook = false,
         });
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
 
         AlertRule? dbRule = await db.AlertRules.FirstOrDefaultAsync(r => r.Name == "DB Check Rule");
         await Assert.That(dbRule).IsNotNull();
@@ -534,7 +537,7 @@ public sealed class AlertRuleEndpointTests
 
         HttpClient client = BuildClient(factory, tenantId, userId);
 
-        await client.PutAsJsonAsync($"/api/v1/alert-rules/{rule.Id}", new
+        HttpResponseMessage response = await client.PutAsJsonAsync($"/api/v1/alert-rules/{rule.Id}", new
         {
             Name = "Changed Name",
             Threshold = 50,
@@ -544,6 +547,8 @@ public sealed class AlertRuleEndpointTests
             NotifyEmail = false,
             NotifyWebhook = false,
         });
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
 
         AlertRule? updated = await db.AlertRules.FirstOrDefaultAsync(r => r.Id == rule.Id);
         await Assert.That(updated!.Metric).IsEqualTo(AlertMetric.MemoryUsage);
@@ -1415,10 +1420,266 @@ public sealed class AlertRuleEndpointTests
         await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
         string body = await response.Content.ReadAsStringAsync();
 
-        int alphaIndex = body.IndexOf("Alpha", StringComparison.Ordinal);
-        int bravoIndex = body.IndexOf("Bravo", StringComparison.Ordinal);
-        int charlieIndex = body.IndexOf("Charlie", StringComparison.Ordinal);
-        await Assert.That(alphaIndex < bravoIndex).IsTrue();
-        await Assert.That(bravoIndex < charlieIndex).IsTrue();
+        JsonDocument doc = JsonDocument.Parse(body);
+        JsonElement dataArray = doc.RootElement.GetProperty("data");
+        await Assert.That(dataArray.GetArrayLength()).IsGreaterThanOrEqualTo(3);
+        await Assert.That(dataArray[0].GetProperty("name").GetString()).IsEqualTo("Alpha");
+        await Assert.That(dataArray[1].GetProperty("name").GetString()).IsEqualTo("Bravo");
+        await Assert.That(dataArray[2].GetProperty("name").GetString()).IsEqualTo("Charlie");
+    }
+
+    // --- Limit, Validation, and Cross-Tenant Tests ---
+
+    [Test]
+    public async Task CreateAlertRule_AtLimit_Returns403WithLimitMessage()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId) = await SeedAlertEnvironment(db, SubscriptionTier.Team);
+
+        // Set the alert rule limit to 1 so we can hit it with a single rule
+        await db.TenantSubscriptions
+            .Where(s => s.TenantId == tenantId)
+            .Set(s => s.AlertRuleLimit, 1)
+            .UpdateAsync();
+
+        HttpClient client = BuildClient(factory, tenantId, userId);
+
+        // Create first rule to consume the limit
+        HttpResponseMessage firstResponse = await client.PostAsJsonAsync("/api/v1/alert-rules", new
+        {
+            Name = "First Rule",
+            Metric = "CpuUsage",
+            Operator = "GreaterThan",
+            Threshold = 80,
+            DurationMinutes = 0,
+            Severity = "Warning",
+        });
+        await Assert.That(firstResponse.StatusCode).IsEqualTo(HttpStatusCode.OK);
+
+        // Second rule should be rejected because the limit is reached
+        HttpResponseMessage secondResponse = await client.PostAsJsonAsync("/api/v1/alert-rules", new
+        {
+            Name = "Second Rule",
+            Metric = "MemoryUsage",
+            Operator = "GreaterThan",
+            Threshold = 90,
+            DurationMinutes = 0,
+            Severity = "Critical",
+        });
+
+        await Assert.That(secondResponse.StatusCode).IsEqualTo(HttpStatusCode.Forbidden);
+        string body = await secondResponse.Content.ReadAsStringAsync();
+        await Assert.That(body.ToLowerInvariant()).Contains("limit");
+    }
+
+    [Test]
+    public async Task CreateAlertRule_NameTooLong_Returns400()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId) = await SeedAlertEnvironment(db, SubscriptionTier.Team);
+        HttpClient client = BuildClient(factory, tenantId, userId);
+
+        string longName = new string('A', 251);
+
+        HttpResponseMessage response = await client.PostAsJsonAsync("/api/v1/alert-rules", new
+        {
+            Name = longName,
+            Metric = "CpuUsage",
+            Operator = "GreaterThan",
+            Threshold = 80,
+            DurationMinutes = 0,
+            Severity = "Warning",
+        });
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.BadRequest);
+        string body = await response.Content.ReadAsStringAsync();
+        await Assert.That(body).Contains("250 characters");
+    }
+
+    [Test]
+    public async Task CreateAlertRule_DescriptionTooLong_Returns400()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId) = await SeedAlertEnvironment(db, SubscriptionTier.Team);
+        HttpClient client = BuildClient(factory, tenantId, userId);
+
+        string longDescription = new string('D', 2001);
+
+        HttpResponseMessage response = await client.PostAsJsonAsync("/api/v1/alert-rules", new
+        {
+            Name = "Valid Name",
+            Description = longDescription,
+            Metric = "CpuUsage",
+            Operator = "GreaterThan",
+            Threshold = 80,
+            DurationMinutes = 0,
+            Severity = "Warning",
+        });
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.BadRequest);
+        string body = await response.Content.ReadAsStringAsync();
+        await Assert.That(body).Contains("2000 characters");
+    }
+
+    [Test]
+    public async Task CreateAlertRule_CpuUsage_ThresholdOver100_Returns400()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId) = await SeedAlertEnvironment(db, SubscriptionTier.Team);
+        HttpClient client = BuildClient(factory, tenantId, userId);
+
+        HttpResponseMessage response = await client.PostAsJsonAsync("/api/v1/alert-rules", new
+        {
+            Name = "CPU Over 100",
+            Metric = "CpuUsage",
+            Operator = "GreaterThan",
+            Threshold = 101,
+            DurationMinutes = 0,
+            Severity = "Warning",
+        });
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.BadRequest);
+        string body = await response.Content.ReadAsStringAsync();
+        await Assert.That(body).Contains("percentage");
+    }
+
+    [Test]
+    public async Task CreateAlertRule_CpuUsage_ThresholdNegative_Returns400()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId) = await SeedAlertEnvironment(db, SubscriptionTier.Team);
+        HttpClient client = BuildClient(factory, tenantId, userId);
+
+        HttpResponseMessage response = await client.PostAsJsonAsync("/api/v1/alert-rules", new
+        {
+            Name = "CPU Negative",
+            Metric = "CpuUsage",
+            Operator = "GreaterThan",
+            Threshold = -1,
+            DurationMinutes = 0,
+            Severity = "Warning",
+        });
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.BadRequest);
+        string body = await response.Content.ReadAsStringAsync();
+        await Assert.That(body).Contains("percentage");
+    }
+
+    [Test]
+    public async Task CreateAlertRule_MachineOffline_Threshold2_Returns400()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId) = await SeedAlertEnvironment(db, SubscriptionTier.Team);
+        HttpClient client = BuildClient(factory, tenantId, userId);
+
+        HttpResponseMessage response = await client.PostAsJsonAsync("/api/v1/alert-rules", new
+        {
+            Name = "Offline Bad Threshold",
+            Metric = "MachineOffline",
+            Operator = "GreaterThan",
+            Threshold = 2,
+            DurationMinutes = 0,
+            Severity = "Warning",
+        });
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.BadRequest);
+        string body = await response.Content.ReadAsStringAsync();
+        await Assert.That(body).Contains("0 or 1");
+    }
+
+    [Test]
+    public async Task CreateAlertRule_FailedServices_NegativeThreshold_Returns400()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId) = await SeedAlertEnvironment(db, SubscriptionTier.Team);
+        HttpClient client = BuildClient(factory, tenantId, userId);
+
+        HttpResponseMessage response = await client.PostAsJsonAsync("/api/v1/alert-rules", new
+        {
+            Name = "Failed Services Negative",
+            Metric = "FailedServices",
+            Operator = "GreaterThan",
+            Threshold = -1,
+            DurationMinutes = 0,
+            Severity = "Warning",
+        });
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.BadRequest);
+        string body = await response.Content.ReadAsStringAsync();
+        await Assert.That(body).Contains("zero or positive");
+    }
+
+    [Test]
+    public async Task CreateAlertRule_CanceledSubscription_Returns403()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId) = await SeedAlertEnvironment(db, SubscriptionTier.Team);
+
+        // Mark the subscription as canceled to simulate a lapsed subscription
+        await db.TenantSubscriptions
+            .Where(s => s.TenantId == tenantId)
+            .Set(s => s.Status, SubscriptionStatus.Canceled)
+            .UpdateAsync();
+
+        HttpClient client = BuildClient(factory, tenantId, userId);
+
+        HttpResponseMessage response = await client.PostAsJsonAsync("/api/v1/alert-rules", new
+        {
+            Name = "Should Fail",
+            Metric = "CpuUsage",
+            Operator = "GreaterThan",
+            Threshold = 80,
+            DurationMinutes = 0,
+            Severity = "Warning",
+        });
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.Forbidden);
+        string body = await response.Content.ReadAsStringAsync();
+        await Assert.That(body.ToLowerInvariant()).Contains("canceled");
+    }
+
+    [Test]
+    public async Task DeleteRule_CrossTenant_Returns404()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantIdA, int userIdA) = await SeedAlertEnvironment(db, SubscriptionTier.Team);
+        (int tenantIdB, int userIdB) = await SeedAlertEnvironment(db, SubscriptionTier.Team);
+
+        // Create a custom rule owned by tenant A
+        AlertRule ruleA = new()
+        {
+            TenantId = tenantIdA,
+            Name = "TenantA Custom Rule",
+            Metric = AlertMetric.CpuUsage,
+            Operator = AlertOperator.GreaterThan,
+            Threshold = 85,
+            Severity = AlertSeverity.Warning,
+            IsEnabled = true,
+            IsCustom = true,
+            CreatedByUserId = userIdA,
+            CreatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow,
+        };
+        ruleA.Id = await db.InsertWithInt32IdentityAsync(ruleA);
+
+        // Authenticate as tenant B and try to delete tenant A's rule
+        HttpClient clientB = BuildClient(factory, tenantIdB, userIdB);
+
+        HttpResponseMessage response = await clientB.DeleteAsync($"/api/v1/alert-rules/{ruleA.Id}");
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.NotFound);
+
+        // Verify the rule still exists in the database
+        AlertRule? stillExists = await db.AlertRules.FirstOrDefaultAsync(r => r.Id == ruleA.Id);
+        await Assert.That(stillExists).IsNotNull();
     }
 }

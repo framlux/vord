@@ -22,4 +22,20 @@ public sealed class SubscriptionOptions
     /// </summary>
     [Range(1, int.MaxValue)]
     public int FreeTierRetentionDays { get; set; } = 1;
+
+    /// <summary>Maximum alert rules for Pro tier subscriptions.</summary>
+    [Range(0, int.MaxValue)]
+    public int ProTierAlertRuleLimit { get; set; } = 25;
+
+    /// <summary>Maximum webhook endpoints for Pro tier subscriptions.</summary>
+    [Range(0, int.MaxValue)]
+    public int ProTierWebhookLimit { get; set; } = 5;
+
+    /// <summary>Maximum alert rules for Team tier subscriptions.</summary>
+    [Range(0, int.MaxValue)]
+    public int TeamTierAlertRuleLimit { get; set; } = 100;
+
+    /// <summary>Maximum webhook endpoints for Team tier subscriptions.</summary>
+    [Range(0, int.MaxValue)]
+    public int TeamTierWebhookLimit { get; set; } = 25;
 }

@@ -158,7 +158,7 @@ public sealed class WebhookDeliveryWorkerServiceTests
     }
 
     [Test]
-    public async Task ProcessJob_DisabledWebhook_SkipsDelivery()
+    public async Task ProcessJob_WithDisabledWebhook_StillDelegatesToDeliverAsync()
     {
         (WebhookDeliveryWorkerService worker, DatabaseContext db, IAlertDeliveryService delivery, IDatabase redisDb, ILogger<WebhookDeliveryWorkerService> logger) = CreateWorker();
 
@@ -260,5 +260,119 @@ public sealed class WebhookDeliveryWorkerServiceTests
 
         // DeliverAsync should not be called when the rule does not exist
         await delivery.DidNotReceive().DeliverAsync(Arg.Any<AlertEvent>(), Arg.Any<AlertRule>(), Arg.Any<CancellationToken>());
+    }
+
+    // --- Retry and Dead Letter Tests ---
+
+    [Test]
+    public async Task ProcessJob_TransientFailure_RetryCount0_RequeuesWithRetryCount1()
+    {
+        (WebhookDeliveryWorkerService worker, DatabaseContext db, IAlertDeliveryService delivery, IDatabase redisDb, ILogger<WebhookDeliveryWorkerService> logger) = CreateWorker();
+
+        Tenant tenant = TestDataBuilder.BuildTenant();
+        tenant.Id = await db.InsertWithInt32IdentityAsync(tenant);
+
+        Machine machine = TestDataBuilder.BuildMachine(tenantId: tenant.Id);
+        machine.Id = await db.InsertWithInt64IdentityAsync(machine);
+
+        AlertRule rule = TestDataBuilder.BuildAlertRule(tenantId: tenant.Id, metric: AlertMetric.CpuUsage, threshold: 80m, notifyWebhook: true);
+        rule.Id = await db.InsertWithInt32IdentityAsync(rule);
+
+        AlertEvent alertEvent = TestDataBuilder.BuildAlertEvent(alertRuleId: rule.Id, tenantId: tenant.Id, machineId: machine.Id);
+        alertEvent.Id = await db.InsertWithInt64IdentityAsync(alertEvent);
+
+        // Simulate transient HTTP failure on delivery
+        delivery.DeliverAsync(Arg.Any<AlertEvent>(), Arg.Any<AlertRule>(), Arg.Any<CancellationToken>())
+            .Throws(new HttpRequestException("Connection refused"));
+
+        // Job starts with RetryCount=0
+        string payload = JsonSerializer.Serialize(new { eventId = alertEvent.Id, ruleId = rule.Id, tenantId = tenant.Id, retryCount = 0 }, JsonDefaults.CamelCase);
+
+        await worker.ProcessJobAsync(payload, CancellationToken.None);
+
+        // Should requeue to the delivery queue (not dead letter) with an incremented RetryCount
+        await redisDb.Received(1).ListLeftPushAsync(
+            AlertConstants.DeliveryQueueKey,
+            Arg.Is<RedisValue>(v => v.ToString().Contains("\"retryCount\":1")));
+
+        // Should NOT push to dead letter queue
+        await redisDb.DidNotReceive().ListLeftPushAsync(
+            AlertConstants.DeliveryDeadLetterKey,
+            Arg.Any<RedisValue>());
+    }
+
+    [Test]
+    public async Task ProcessJob_ExhaustedRetries_RetryCount2_PushesToDeadLetter()
+    {
+        (WebhookDeliveryWorkerService worker, DatabaseContext db, IAlertDeliveryService delivery, IDatabase redisDb, ILogger<WebhookDeliveryWorkerService> logger) = CreateWorker();
+
+        Tenant tenant = TestDataBuilder.BuildTenant();
+        tenant.Id = await db.InsertWithInt32IdentityAsync(tenant);
+
+        Machine machine = TestDataBuilder.BuildMachine(tenantId: tenant.Id);
+        machine.Id = await db.InsertWithInt64IdentityAsync(machine);
+
+        AlertRule rule = TestDataBuilder.BuildAlertRule(tenantId: tenant.Id, metric: AlertMetric.CpuUsage, threshold: 80m, notifyWebhook: true);
+        rule.Id = await db.InsertWithInt32IdentityAsync(rule);
+
+        AlertEvent alertEvent = TestDataBuilder.BuildAlertEvent(alertRuleId: rule.Id, tenantId: tenant.Id, machineId: machine.Id);
+        alertEvent.Id = await db.InsertWithInt64IdentityAsync(alertEvent);
+
+        // Simulate persistent HTTP failure
+        delivery.DeliverAsync(Arg.Any<AlertEvent>(), Arg.Any<AlertRule>(), Arg.Any<CancellationToken>())
+            .Throws(new HttpRequestException("Service unavailable"));
+
+        // Job has already been retried twice (RetryCount=2), the next failure will increment
+        // to 3 which meets the threshold of 3 retries, so it should go to dead letter
+        string payload = JsonSerializer.Serialize(new { eventId = alertEvent.Id, ruleId = rule.Id, tenantId = tenant.Id, retryCount = 2 }, JsonDefaults.CamelCase);
+
+        await worker.ProcessJobAsync(payload, CancellationToken.None);
+
+        // Should push to the dead letter queue since retries are exhausted (RetryCount becomes 3)
+        await redisDb.Received(1).ListLeftPushAsync(
+            AlertConstants.DeliveryDeadLetterKey,
+            Arg.Is<RedisValue>(v => v.ToString().Contains("\"retryCount\":3")));
+
+        // Should NOT requeue to the main delivery queue
+        await redisDb.DidNotReceive().ListLeftPushAsync(
+            AlertConstants.DeliveryQueueKey,
+            Arg.Any<RedisValue>());
+    }
+
+    [Test]
+    public async Task ProcessJob_SuccessfulDelivery_NoRequeue()
+    {
+        (WebhookDeliveryWorkerService worker, DatabaseContext db, IAlertDeliveryService delivery, IDatabase redisDb, ILogger<WebhookDeliveryWorkerService> logger) = CreateWorker();
+
+        Tenant tenant = TestDataBuilder.BuildTenant();
+        tenant.Id = await db.InsertWithInt32IdentityAsync(tenant);
+
+        Machine machine = TestDataBuilder.BuildMachine(tenantId: tenant.Id);
+        machine.Id = await db.InsertWithInt64IdentityAsync(machine);
+
+        AlertRule rule = TestDataBuilder.BuildAlertRule(tenantId: tenant.Id, metric: AlertMetric.CpuUsage, threshold: 80m, notifyWebhook: true);
+        rule.Id = await db.InsertWithInt32IdentityAsync(rule);
+
+        AlertEvent alertEvent = TestDataBuilder.BuildAlertEvent(alertRuleId: rule.Id, tenantId: tenant.Id, machineId: machine.Id);
+        alertEvent.Id = await db.InsertWithInt64IdentityAsync(alertEvent);
+
+        // DeliverAsync succeeds (no exception thrown)
+        string payload = JsonSerializer.Serialize(new { eventId = alertEvent.Id, ruleId = rule.Id, tenantId = tenant.Id, retryCount = 0 }, JsonDefaults.CamelCase);
+
+        await worker.ProcessJobAsync(payload, CancellationToken.None);
+
+        // Delivery should have been called
+        await delivery.Received(1).DeliverAsync(
+            Arg.Is<AlertEvent>(e => e.Id == alertEvent.Id),
+            Arg.Is<AlertRule>(r => r.Id == rule.Id),
+            Arg.Any<CancellationToken>());
+
+        // No requeue to delivery queue or dead letter queue on success
+        await redisDb.DidNotReceive().ListLeftPushAsync(
+            AlertConstants.DeliveryQueueKey,
+            Arg.Any<RedisValue>());
+        await redisDb.DidNotReceive().ListLeftPushAsync(
+            AlertConstants.DeliveryDeadLetterKey,
+            Arg.Any<RedisValue>());
     }
 }

@@ -82,7 +82,7 @@ public sealed class AlertRuleUpdateEndpoint : Endpoint<UpdateAlertRuleRequest, A
         }
 
         TenantSubscription? subscription = await _subscriptionService.GetSubscriptionForTenantAsync(tenantId.Value, ct);
-        if ((subscription is null) || (subscription.Tier == SubscriptionTier.Free))
+        if ((subscription is null) || (subscription.Tier == SubscriptionTier.Free) || (subscription.Status != SubscriptionStatus.Active))
         {
             HttpContext.Response.StatusCode = 403;
             await HttpContext.Response.WriteAsJsonAsync(ApiResponse<AlertRuleDto>.Error("Alerting requires a Pro or Team subscription"), ct);
@@ -120,6 +120,24 @@ public sealed class AlertRuleUpdateEndpoint : Endpoint<UpdateAlertRuleRequest, A
             return;
         }
 
+        if (req.Name.Length > 250)
+        {
+            HttpContext.Response.StatusCode = 400;
+            await HttpContext.Response.WriteAsJsonAsync(
+                ApiResponse<AlertRuleDto>.Error("Rule name must be 250 characters or fewer"), ct);
+
+            return;
+        }
+
+        if ((req.Description is not null) && (req.Description.Length > 2000))
+        {
+            HttpContext.Response.StatusCode = 400;
+            await HttpContext.Response.WriteAsJsonAsync(
+                ApiResponse<AlertRuleDto>.Error("Description must be 2000 characters or fewer"), ct);
+
+            return;
+        }
+
         if (req.DurationMinutes < 0)
         {
             HttpContext.Response.StatusCode = 400;
@@ -137,8 +155,39 @@ public sealed class AlertRuleUpdateEndpoint : Endpoint<UpdateAlertRuleRequest, A
             return;
         }
 
+        // Validate threshold range based on the rule's metric type
+        bool isPercentageMetric = rule.Metric is AlertMetric.CpuUsage or AlertMetric.MemoryUsage or AlertMetric.DiskUsage;
+        bool isBinaryMetric = rule.Metric is AlertMetric.MachineOffline or AlertMetric.DiskHealth;
+
+        if (isPercentageMetric && ((req.Threshold < 0) || (req.Threshold > 100)))
+        {
+            HttpContext.Response.StatusCode = 400;
+            await HttpContext.Response.WriteAsJsonAsync(
+                ApiResponse<AlertRuleDto>.Error("Threshold for percentage metrics must be between 0 and 100"), ct);
+
+            return;
+        }
+
+        if (isBinaryMetric && (req.Threshold != 0) && (req.Threshold != 1))
+        {
+            HttpContext.Response.StatusCode = 400;
+            await HttpContext.Response.WriteAsJsonAsync(
+                ApiResponse<AlertRuleDto>.Error("Threshold for this metric must be 0 or 1"), ct);
+
+            return;
+        }
+
+        if ((isPercentageMetric == false) && (isBinaryMetric == false) && (req.Threshold < 0))
+        {
+            HttpContext.Response.StatusCode = 400;
+            await HttpContext.Response.WriteAsJsonAsync(
+                ApiResponse<AlertRuleDto>.Error("Threshold must be zero or positive"), ct);
+
+            return;
+        }
+
         await _db.AlertRules
-            .Where(r => r.Id == ruleId)
+            .Where(r => (r.Id == ruleId) && (r.TenantId == tenantId.Value))
             .Set(r => r.Name, req.Name)
             .Set(r => r.Description, req.Description)
             .Set(r => r.Threshold, req.Threshold)

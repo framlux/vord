@@ -256,7 +256,7 @@ public interface IDatabaseCache
     /// <summary>
     /// Updates a subscription after a checkout completes.
     /// </summary>
-    Task UpdateSubscriptionOnCheckoutAsync(int tenantId, SubscriptionTier tier, CancellationToken cancellationToken = default);
+    Task UpdateSubscriptionOnCheckoutAsync(int tenantId, SubscriptionTier tier, int? alertRuleLimit, int? webhookLimit, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Updates the current period end of a subscription.
@@ -269,8 +269,10 @@ public interface IDatabaseCache
     /// <param name="tenantId">The tenant to revert.</param>
     /// <param name="machineLimit">The free tier machine limit.</param>
     /// <param name="retentionDays">The free tier retention period in days.</param>
+    /// <param name="alertRuleLimit">The free tier alert rule limit.</param>
+    /// <param name="webhookLimit">The free tier webhook endpoint limit.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
-    Task RevertSubscriptionToFreeAsync(int tenantId, int machineLimit, int retentionDays, CancellationToken cancellationToken = default);
+    Task RevertSubscriptionToFreeAsync(int tenantId, int machineLimit, int retentionDays, int alertRuleLimit, int webhookLimit, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Sets a subscription status to PastDue after a payment failure.
@@ -290,7 +292,7 @@ public interface IDatabaseCache
     /// <summary>
     /// Downgrades a subscription from Team to Pro tier.
     /// </summary>
-    Task DowngradeSubscriptionToProAsync(int tenantId, CancellationToken cancellationToken = default);
+    Task DowngradeSubscriptionToProAsync(int tenantId, int? alertRuleLimit, int? webhookLimit, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Sets the cancel-at-period-end flag and pending action on a subscription.

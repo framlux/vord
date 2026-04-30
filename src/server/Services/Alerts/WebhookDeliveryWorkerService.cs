@@ -23,8 +23,7 @@ public sealed class WebhookDeliveryWorkerService : BackgroundService
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly ILogger<WebhookDeliveryWorkerService> _logger;
 
-    private const string DeliveryQueueKey = "alert:delivery:queue";
-    private static readonly TimeSpan BrpopTimeout = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan PollingInterval = TimeSpan.FromSeconds(5);
 
     /// <summary>
     /// Creates a new instance of the <see cref="WebhookDeliveryWorkerService"/> class.
@@ -68,17 +67,39 @@ public sealed class WebhookDeliveryWorkerService : BackgroundService
     internal async Task ProcessNextJobAsync(CancellationToken ct)
     {
         IDatabase redisDb = _redis.GetDatabase();
-        RedisValue result = await redisDb.ListRightPopAsync(DeliveryQueueKey);
+        RedisValue result = await redisDb.ListRightPopAsync(AlertConstants.DeliveryQueueKey);
 
         if (result.IsNullOrEmpty)
         {
             // No job available; wait before polling again
-            await Task.Delay(BrpopTimeout, ct);
+            await Task.Delay(PollingInterval, ct);
 
             return;
         }
 
-        await ProcessJobAsync(result.ToString(), ct);
+        string payload = result.ToString();
+
+        // Check if this is a retry job that isn't ready yet
+        DeliveryJob? peekedJob = null;
+        try
+        {
+            peekedJob = JsonSerializer.Deserialize<DeliveryJob>(payload, JsonDefaults.CamelCase);
+        }
+        catch
+        {
+            // Deserialization errors are handled in ProcessJobAsync
+        }
+
+        if ((peekedJob?.NotBefore is not null) && (peekedJob.NotBefore.Value > DateTimeOffset.UtcNow))
+        {
+            // Not ready yet — push to back of queue and wait briefly to avoid spin-looping
+            await redisDb.ListRightPushAsync(AlertConstants.DeliveryQueueKey, payload);
+            await Task.Delay(TimeSpan.FromSeconds(1), ct);
+
+            return;
+        }
+
+        await ProcessJobAsync(payload, ct);
     }
 
     /// <summary>
@@ -142,7 +163,25 @@ public sealed class WebhookDeliveryWorkerService : BackgroundService
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Failed to deliver alert event {EventId} for rule {RuleId}", job.EventId, job.RuleId);
+            job.RetryCount++;
+            if (job.RetryCount < 3)
+            {
+                TimeSpan retryDelay = TimeSpan.FromSeconds(10 * Math.Pow(2, job.RetryCount - 1));
+                job.NotBefore = DateTimeOffset.UtcNow.Add(retryDelay);
+                _logger.LogWarning(ex, "Delivery attempt {Attempt} failed for event {EventId}, scheduling retry at {NotBefore}",
+                    job.RetryCount, job.EventId, job.NotBefore.Value.ToString("o"));
+                string retryPayload = JsonSerializer.Serialize(job, JsonDefaults.CamelCase);
+                IDatabase retryDb = _redis.GetDatabase();
+                await retryDb.ListLeftPushAsync(AlertConstants.DeliveryQueueKey, retryPayload);
+            }
+            else
+            {
+                _logger.LogError(ex, "Delivery exhausted all retries for event {EventId}, rule {RuleId}. Moving to dead letter queue",
+                    job.EventId, job.RuleId);
+                string deadLetterPayload = JsonSerializer.Serialize(job, JsonDefaults.CamelCase);
+                IDatabase dlDb = _redis.GetDatabase();
+                await dlDb.ListLeftPushAsync(AlertConstants.DeliveryDeadLetterKey, deadLetterPayload);
+            }
         }
     }
 
@@ -159,5 +198,11 @@ public sealed class WebhookDeliveryWorkerService : BackgroundService
 
         /// <summary>The tenant identifier.</summary>
         public int TenantId { get; set; }
+
+        /// <summary>The number of retry attempts made so far.</summary>
+        public int RetryCount { get; set; }
+
+        /// <summary>Earliest time this job should be processed. Null means immediately.</summary>
+        public DateTimeOffset? NotBefore { get; set; }
     }
 }

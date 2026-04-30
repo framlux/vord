@@ -13,7 +13,7 @@ namespace Framlux.FleetManagement.Database.Cache;
 public partial class DatabaseCache : IDatabaseCache
 {
     /// <inheritdoc/>
-    public async Task UpdateSubscriptionOnCheckoutAsync(int tenantId, SubscriptionTier tier, CancellationToken cancellationToken)
+    public async Task UpdateSubscriptionOnCheckoutAsync(int tenantId, SubscriptionTier tier, int? alertRuleLimit, int? webhookLimit, CancellationToken cancellationToken)
     {
         int retentionDays = tier == SubscriptionTier.Team ? 365 : 30;
         DateTimeOffset now = DateTimeOffset.UtcNow;
@@ -23,6 +23,8 @@ public partial class DatabaseCache : IDatabaseCache
             .Set(s => s.Status, SubscriptionStatus.Active)
             .Set(s => s.MachineLimit, (int?)null)
             .Set(s => s.RetentionDays, retentionDays)
+            .Set(s => s.AlertRuleLimit, alertRuleLimit)
+            .Set(s => s.WebhookLimit, webhookLimit)
             .Set(s => s.CancelAtPeriodEnd, false)
             .Set(s => s.PendingAction, PendingSubscriptionAction.None)
             .Set(s => s.UpdatedAt, now)
@@ -41,7 +43,7 @@ public partial class DatabaseCache : IDatabaseCache
     }
 
     /// <inheritdoc/>
-    public async Task RevertSubscriptionToFreeAsync(int tenantId, int machineLimit, int retentionDays, CancellationToken cancellationToken)
+    public async Task RevertSubscriptionToFreeAsync(int tenantId, int machineLimit, int retentionDays, int alertRuleLimit, int webhookLimit, CancellationToken cancellationToken)
     {
         DateTimeOffset now = DateTimeOffset.UtcNow;
         await _db.TenantSubscriptions
@@ -50,6 +52,8 @@ public partial class DatabaseCache : IDatabaseCache
             .Set(s => s.Status, SubscriptionStatus.Active)
             .Set(s => s.MachineLimit, machineLimit)
             .Set(s => s.RetentionDays, retentionDays)
+            .Set(s => s.AlertRuleLimit, alertRuleLimit)
+            .Set(s => s.WebhookLimit, webhookLimit)
             .Set(s => s.CancelAtPeriodEnd, false)
             .Set(s => s.PendingAction, PendingSubscriptionAction.None)
             .Set(s => s.UpdatedAt, now)
@@ -89,7 +93,7 @@ public partial class DatabaseCache : IDatabaseCache
     }
 
     /// <inheritdoc/>
-    public async Task DowngradeSubscriptionToProAsync(int tenantId, CancellationToken cancellationToken)
+    public async Task DowngradeSubscriptionToProAsync(int tenantId, int? alertRuleLimit, int? webhookLimit, CancellationToken cancellationToken)
     {
         DateTimeOffset now = DateTimeOffset.UtcNow;
         await _db.TenantSubscriptions
@@ -98,6 +102,8 @@ public partial class DatabaseCache : IDatabaseCache
             .Set(s => s.Status, SubscriptionStatus.Active)
             .Set(s => s.MachineLimit, (int?)null)
             .Set(s => s.RetentionDays, 30)
+            .Set(s => s.AlertRuleLimit, alertRuleLimit)
+            .Set(s => s.WebhookLimit, webhookLimit)
             .Set(s => s.CancelAtPeriodEnd, false)
             .Set(s => s.PendingAction, PendingSubscriptionAction.None)
             .Set(s => s.UpdatedAt, now)

@@ -314,6 +314,7 @@ builder.Services.AddSingleton<ISubscriptionService, SubscriptionService>();
 builder.Services.AddScoped<IDowngradeGuardService, DowngradeGuardService>();
 builder.Services.AddScoped<IDowngradeCleanupService, DowngradeCleanupService>();
 builder.Services.AddSingleton<IOidcSecretProtector, OidcSecretProtector>();
+builder.Services.AddSingleton<IWebhookSecretProtector, WebhookSecretProtector>();
 builder.Services.AddSingleton<IRoleCacheInvalidator, RoleCacheInvalidator>();
 builder.Services.AddHttpClient<IEmailService, ResendEmailService>();
 

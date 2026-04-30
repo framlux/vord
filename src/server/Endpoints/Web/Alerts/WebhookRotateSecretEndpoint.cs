@@ -9,6 +9,7 @@ using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Server.Auth;
 using Framlux.FleetManagement.Server.Services.Billing;
+using Framlux.FleetManagement.Server.Services.Security;
 using LinqToDB;
 using LinqToDB.Async;
 
@@ -22,14 +23,16 @@ public sealed class WebhookRotateSecretEndpoint : EndpointWithoutRequest<ApiResp
 {
     private readonly DatabaseContext _db;
     private readonly ISubscriptionService _subscriptionService;
+    private readonly IWebhookSecretProtector _secretProtector;
 
     /// <summary>
     /// Creates a new instance of the <see cref="WebhookRotateSecretEndpoint"/> class.
     /// </summary>
-    public WebhookRotateSecretEndpoint(DatabaseContext db, ISubscriptionService subscriptionService)
+    public WebhookRotateSecretEndpoint(DatabaseContext db, ISubscriptionService subscriptionService, IWebhookSecretProtector secretProtector)
     {
         _db = db;
         _subscriptionService = subscriptionService;
+        _secretProtector = secretProtector;
     }
 
     /// <inheritdoc/>
@@ -54,7 +57,7 @@ public sealed class WebhookRotateSecretEndpoint : EndpointWithoutRequest<ApiResp
         }
 
         TenantSubscription? subscription = await _subscriptionService.GetSubscriptionForTenantAsync(tenantId.Value, ct);
-        if ((subscription is null) || (subscription.Tier == SubscriptionTier.Free))
+        if ((subscription is null) || (subscription.Tier == SubscriptionTier.Free) || (subscription.Status != SubscriptionStatus.Active))
         {
             HttpContext.Response.StatusCode = 403;
             await HttpContext.Response.WriteAsJsonAsync(
@@ -76,10 +79,11 @@ public sealed class WebhookRotateSecretEndpoint : EndpointWithoutRequest<ApiResp
         }
 
         string newSecret = Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(32));
+        string encryptedSecret = _secretProtector.Protect(newSecret);
 
         await _db.WebhookEndpoints
             .Where(w => w.Id == webhookId)
-            .Set(w => w.Secret, newSecret)
+            .Set(w => w.Secret, encryptedSecret)
             .UpdateAsync(ct);
 
         WebhookEndpointDto dto = new()

@@ -29,7 +29,9 @@
 	let deleteWebhookConfirm = $state<{ open: boolean; id: number | null }>({ open: false, id: null });
 	let revealedSecret = $state<string | null>(null);
 	let secretCopied = $state(false);
-	let errorMessage = $state<string | null>(null);
+	let rulesError = $state<string | null>(null);
+	let eventsError = $state<string | null>(null);
+	let webhooksError = $state<string | null>(null);
 	let deleteRuleForm: HTMLFormElement;
 	let deleteWebhookForm: HTMLFormElement;
 
@@ -66,9 +68,9 @@
 	}
 
 	function applyEventFilters() {
-		const params = new URLSearchParams();
-		if (statusFilter) params.set('status', statusFilter);
-		if (severityFilter) params.set('severity', severityFilter);
+		const params = new URLSearchParams(pageState.url.searchParams);
+		if (statusFilter) { params.set('status', statusFilter); } else { params.delete('status'); }
+		if (severityFilter) { params.set('severity', severityFilter); } else { params.delete('severity'); }
 		params.set('page', '1');
 		params.set('tab', 'events');
 
@@ -117,13 +119,6 @@
 
 <div class="space-y-6">
 	<PageHeader title="Alerts" description="Manage alert rules, view alert events, and configure webhook delivery." />
-
-	{#if errorMessage && showCreateRule === false && showCreateWebhook === false && editingRuleId === null}
-		<div class="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-900/20 dark:text-red-300">
-			{errorMessage}
-			<button onclick={() => { errorMessage = null; }} class="ml-2 text-red-500 underline hover:text-red-700 dark:text-red-400 dark:hover:text-red-300">Dismiss</button>
-		</div>
-	{/if}
 
 	{#if rules === null}
 		<div class="flex items-center gap-3 rounded-xl border border-amber-200 bg-amber-50 p-6 dark:border-amber-800 dark:bg-amber-900/20">
@@ -182,11 +177,30 @@
 		<!-- Alert Rules Tab -->
 		{#if activeTab === 'rules'}
 			<div id="tabpanel-rules" role="tabpanel" aria-labelledby="tab-rules" class="space-y-4">
+				{#if rulesError && showCreateRule === false && editingRuleId === null}
+					<div role="alert" class="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-900/20 dark:text-red-300">
+						{rulesError}
+						<button onclick={() => { rulesError = null; }} class="ml-2 text-red-500 underline hover:text-red-700 dark:text-red-400 dark:hover:text-red-300">Dismiss</button>
+					</div>
+				{/if}
 				<div class="flex items-center justify-between">
-					<h2 class="text-lg font-semibold text-surface-900 dark:text-surface-50">Alert Rules</h2>
+					<div class="flex items-center gap-3">
+						<h2 class="text-lg font-semibold text-surface-900 dark:text-surface-50">Alert Rules</h2>
+						{#if data.subscription?.alertRuleLimit !== null && data.subscription?.alertRuleLimit !== undefined}
+							<span class="text-sm text-surface-500 dark:text-surface-400">
+								{data.subscription.alertRuleCount} of {data.subscription.alertRuleLimit} rules used
+							</span>
+							{#if data.subscription.alertRuleCount >= data.subscription.alertRuleLimit}
+								<span class="text-sm font-medium text-red-600 dark:text-red-400">Limit reached</span>
+							{:else if data.subscription.alertRuleCount >= data.subscription.alertRuleLimit * 0.8}
+								<span class="text-sm font-medium text-amber-600 dark:text-amber-400">Approaching limit</span>
+							{/if}
+						{/if}
+					</div>
 					<button
-						onclick={() => (showCreateRule = !showCreateRule)}
-						class="flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-primary-700 dark:bg-primary-500 dark:hover:bg-primary-600"
+						onclick={() => { showCreateRule = !showCreateRule; rulesError = null; }}
+						disabled={data.subscription?.alertRuleLimit !== null && data.subscription?.alertRuleLimit !== undefined && data.subscription.alertRuleCount >= data.subscription.alertRuleLimit}
+						class="flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-primary-700 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-primary-500 dark:hover:bg-primary-600"
 					>
 						<Plus class="h-4 w-4" />
 						New Rule
@@ -197,10 +211,10 @@
 				{#if showCreateRule}
 					<div class="rounded-xl border border-surface-200 bg-surface-50 p-6 dark:border-surface-700 dark:bg-surface-800">
 						<h3 class="mb-4 text-sm font-semibold text-surface-900 dark:text-surface-50">Create Alert Rule</h3>
-						<form method="POST" action="?/createRule" use:enhance={() => { errorMessage = null; return async ({ result, update }) => { if (result.type === 'failure') { errorMessage = (result.data as { message?: string })?.message ?? 'An error occurred'; } else { showCreateRule = false; errorMessage = null; await update(); } }; }}>
-							{#if errorMessage}
-								<div class="mb-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-900/20 dark:text-red-300">
-									{errorMessage}
+						<form method="POST" action="?/createRule" use:enhance={() => { rulesError = null; return async ({ result, update }) => { if (result.type === 'failure') { rulesError = (result.data as { message?: string })?.message ?? 'An error occurred'; } else { showCreateRule = false; rulesError = null; await update(); } }; }}>
+							{#if rulesError}
+								<div role="alert" class="mb-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-900/20 dark:text-red-300">
+									{rulesError}
 								</div>
 							{/if}
 							<div class="grid grid-cols-1 gap-4 md:grid-cols-2">
@@ -260,7 +274,7 @@
 								</div>
 							</div>
 							<div class="mt-4 flex justify-end gap-2">
-								<button type="button" onclick={() => { showCreateRule = false; errorMessage = null; }} class="rounded-lg border border-surface-300 px-4 py-2 text-sm font-medium text-surface-700 hover:bg-surface-100 dark:border-surface-600 dark:text-surface-300 dark:hover:bg-surface-700">Cancel</button>
+								<button type="button" onclick={() => { showCreateRule = false; rulesError = null; }} class="rounded-lg border border-surface-300 px-4 py-2 text-sm font-medium text-surface-700 hover:bg-surface-100 dark:border-surface-600 dark:text-surface-300 dark:hover:bg-surface-700">Cancel</button>
 								<button type="submit" class="rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700 dark:bg-primary-500 dark:hover:bg-primary-600">Create Rule</button>
 							</div>
 						</form>
@@ -329,7 +343,7 @@
 											<td class="px-4 py-3">
 												<div class="flex items-center gap-2">
 													{#if editingRuleId !== rule.id}
-														<button onclick={() => { editingRuleId = rule.id; errorMessage = null; }} class="text-xs text-primary-600 hover:underline dark:text-primary-400">Edit</button>
+														<button onclick={() => { editingRuleId = rule.id; rulesError = null; }} class="text-xs text-primary-600 hover:underline dark:text-primary-400">Edit</button>
 														{#if rule.isCustom}
 															<button type="button" onclick={() => deleteRuleConfirm = { open: true, id: rule.id }} class="rounded p-1 text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-900/20">
 																<Trash2 class="h-4 w-4" />
@@ -342,11 +356,11 @@
 										{#if editingRuleId === rule.id}
 											<tr class="bg-surface-50 dark:bg-surface-800/50">
 												<td colspan="7" class="px-4 py-4">
-													<form method="POST" action="?/updateRule" use:enhance={() => { errorMessage = null; return async ({ result, update }) => { if (result.type === 'failure') { errorMessage = (result.data as { message?: string })?.message ?? 'An error occurred'; } else { editingRuleId = null; errorMessage = null; await update(); } }; }}>
+													<form method="POST" action="?/updateRule" use:enhance={() => { rulesError = null; return async ({ result, update }) => { if (result.type === 'failure') { rulesError = (result.data as { message?: string })?.message ?? 'An error occurred'; } else { editingRuleId = null; rulesError = null; await update(); } }; }}>
 														<input type="hidden" name="id" value={rule.id} />
-														{#if errorMessage}
-															<div class="mb-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-900/20 dark:text-red-300">
-																{errorMessage}
+														{#if rulesError}
+															<div role="alert" class="mb-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-900/20 dark:text-red-300">
+																{rulesError}
 															</div>
 														{/if}
 														<div class="grid grid-cols-1 gap-4 md:grid-cols-3 lg:grid-cols-4">
@@ -386,7 +400,7 @@
 															</label>
 														</div>
 														<div class="mt-4 flex justify-end gap-2">
-															<button type="button" onclick={() => { editingRuleId = null; errorMessage = null; }} class="rounded-lg border border-surface-300 px-4 py-2 text-sm font-medium text-surface-700 hover:bg-surface-100 dark:border-surface-600 dark:text-surface-300 dark:hover:bg-surface-700">Cancel</button>
+															<button type="button" onclick={() => { editingRuleId = null; rulesError = null; }} class="rounded-lg border border-surface-300 px-4 py-2 text-sm font-medium text-surface-700 hover:bg-surface-100 dark:border-surface-600 dark:text-surface-300 dark:hover:bg-surface-700">Cancel</button>
 															<button type="submit" class="rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700 dark:bg-primary-500 dark:hover:bg-primary-600">Save Changes</button>
 														</div>
 													</form>
@@ -406,6 +420,12 @@
 		{#if activeTab === 'events'}
 			<div id="tabpanel-events" role="tabpanel" aria-labelledby="tab-events" class="space-y-4">
 			{#if events}
+				{#if eventsError}
+					<div role="alert" class="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-900/20 dark:text-red-300">
+						{eventsError}
+						<button onclick={() => { eventsError = null; }} class="ml-2 text-red-500 underline hover:text-red-700 dark:text-red-400 dark:hover:text-red-300">Dismiss</button>
+					</div>
+				{/if}
 				<h2 class="text-lg font-semibold text-surface-900 dark:text-surface-50">Alert Events</h2>
 
 				<!-- Event Filters -->
@@ -478,7 +498,7 @@
 											</td>
 											<td class="px-4 py-3">
 												{#if event.status === 'Triggered'}
-													<form method="POST" action="?/acknowledgeEvent" use:enhance>
+													<form method="POST" action="?/acknowledgeEvent" use:enhance={() => { return async ({ result, update }) => { if (result.type === 'failure') { eventsError = (result.data as { message?: string })?.message ?? 'Failed to acknowledge event'; } else { eventsError = null; } await update(); }; }}>
 														<input type="hidden" name="id" value={event.id} />
 														<button type="submit" class="rounded-lg border border-surface-300 px-3 py-1 text-xs font-medium text-surface-700 hover:bg-surface-100 dark:border-surface-600 dark:text-surface-300 dark:hover:bg-surface-700">
 															Acknowledge
@@ -525,11 +545,30 @@
 		{#if activeTab === 'webhooks'}
 			<div id="tabpanel-webhooks" role="tabpanel" aria-labelledby="tab-webhooks" class="space-y-4">
 			{#if webhooks}
+				{#if webhooksError && showCreateWebhook === false}
+					<div role="alert" class="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-900/20 dark:text-red-300">
+						{webhooksError}
+						<button onclick={() => { webhooksError = null; }} class="ml-2 text-red-500 underline hover:text-red-700 dark:text-red-400 dark:hover:text-red-300">Dismiss</button>
+					</div>
+				{/if}
 				<div class="flex items-center justify-between">
-					<h2 class="text-lg font-semibold text-surface-900 dark:text-surface-50">Webhook Endpoints</h2>
+					<div class="flex items-center gap-3">
+						<h2 class="text-lg font-semibold text-surface-900 dark:text-surface-50">Webhook Endpoints</h2>
+						{#if data.subscription?.webhookLimit !== null && data.subscription?.webhookLimit !== undefined}
+							<span class="text-sm text-surface-500 dark:text-surface-400">
+								{data.subscription.webhookCount} of {data.subscription.webhookLimit} webhooks used
+							</span>
+							{#if data.subscription.webhookCount >= data.subscription.webhookLimit}
+								<span class="text-sm font-medium text-red-600 dark:text-red-400">Limit reached</span>
+							{:else if data.subscription.webhookCount >= data.subscription.webhookLimit * 0.8}
+								<span class="text-sm font-medium text-amber-600 dark:text-amber-400">Approaching limit</span>
+							{/if}
+						{/if}
+					</div>
 					<button
-						onclick={() => (showCreateWebhook = !showCreateWebhook)}
-						class="flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700 dark:bg-primary-500 dark:hover:bg-primary-600"
+						onclick={() => { showCreateWebhook = !showCreateWebhook; webhooksError = null; }}
+						disabled={data.subscription?.webhookLimit !== null && data.subscription?.webhookLimit !== undefined && data.subscription.webhookCount >= data.subscription.webhookLimit}
+						class="flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-primary-500 dark:hover:bg-primary-600"
 					>
 						<Plus class="h-4 w-4" />
 						New Webhook
@@ -539,10 +578,10 @@
 				{#if showCreateWebhook}
 					<div class="rounded-xl border border-surface-200 bg-surface-50 p-6 dark:border-surface-700 dark:bg-surface-800">
 						<h3 class="mb-4 text-sm font-semibold text-surface-900 dark:text-surface-50">Create Webhook</h3>
-						<form method="POST" action="?/createWebhook" use:enhance={() => { errorMessage = null; return async ({ result, update }) => { if (result.type === 'failure') { errorMessage = (result.data as { message?: string })?.message ?? 'An error occurred'; } else { if (result.type === 'success') { const data = result.data as { secret?: string } | null; if (data?.secret) { revealedSecret = data.secret; secretCopied = false; } } showCreateWebhook = false; errorMessage = null; await update(); } }; }}>
-							{#if errorMessage}
-								<div class="mb-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-900/20 dark:text-red-300">
-									{errorMessage}
+						<form method="POST" action="?/createWebhook" use:enhance={() => { webhooksError = null; return async ({ result, update }) => { if (result.type === 'failure') { webhooksError = (result.data as { message?: string })?.message ?? 'An error occurred'; } else { if (result.type === 'success') { const data = result.data as { secret?: string } | null; if (data?.secret) { revealedSecret = data.secret; secretCopied = false; } } showCreateWebhook = false; webhooksError = null; await update(); } }; }}>
+							{#if webhooksError}
+								<div role="alert" class="mb-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-900/20 dark:text-red-300">
+									{webhooksError}
 								</div>
 							{/if}
 							<div class="grid grid-cols-1 gap-4 md:grid-cols-2">
@@ -556,7 +595,7 @@
 								</div>
 							</div>
 							<div class="mt-4 flex justify-end gap-2">
-								<button type="button" onclick={() => { showCreateWebhook = false; errorMessage = null; }} class="rounded-lg border border-surface-300 px-4 py-2 text-sm font-medium text-surface-700 hover:bg-surface-100 dark:border-surface-600 dark:text-surface-300 dark:hover:bg-surface-700">Cancel</button>
+								<button type="button" onclick={() => { showCreateWebhook = false; webhooksError = null; }} class="rounded-lg border border-surface-300 px-4 py-2 text-sm font-medium text-surface-700 hover:bg-surface-100 dark:border-surface-600 dark:text-surface-300 dark:hover:bg-surface-700">Cancel</button>
 								<button type="submit" class="rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700 dark:bg-primary-500 dark:hover:bg-primary-600">Create Webhook</button>
 							</div>
 						</form>
@@ -612,7 +651,7 @@
 											<td class="px-4 py-3 font-medium text-surface-900 dark:text-surface-100">{webhook.name}</td>
 											<td class="max-w-xs truncate px-4 py-3 text-surface-600 dark:text-surface-400" title={webhook.url}>{webhook.url}</td>
 											<td class="px-4 py-3">
-												<form method="POST" action="?/updateWebhook" use:enhance={() => { return async ({ result, update }) => { if (result.type === 'failure') { errorMessage = (result.data as { message?: string })?.message ?? 'Failed to update webhook'; } else { errorMessage = null; await update(); } }; }}>
+												<form method="POST" action="?/updateWebhook" use:enhance={() => { return async ({ result, update }) => { if (result.type === 'failure') { webhooksError = (result.data as { message?: string })?.message ?? 'Failed to update webhook'; } else { webhooksError = null; await update(); } }; }}>
 													<input type="hidden" name="id" value={webhook.id} />
 													<input type="hidden" name="isEnabled" value={webhook.isEnabled ? 'off' : 'on'} />
 													<button type="submit" title={webhook.isEnabled ? 'Disable webhook' : 'Enable webhook'}>
@@ -627,7 +666,7 @@
 											<td class="whitespace-nowrap px-4 py-3 text-surface-500 dark:text-surface-400">{formatDateTime(webhook.createdAt)}</td>
 											<td class="px-4 py-3">
 												<div class="flex items-center gap-1">
-													<form method="POST" action="?/rotateSecret" use:enhance={() => { return async ({ result, update }) => { if (result.type === 'success') { const data = result.data as { secret?: string } | null; if (data?.secret) { revealedSecret = data.secret; secretCopied = false; } } await update(); }; }}>
+													<form method="POST" action="?/rotateSecret" use:enhance={() => { return async ({ result, update }) => { if (result.type === 'success') { const data = result.data as { secret?: string } | null; if (data?.secret) { revealedSecret = data.secret; secretCopied = false; } } else if (result.type === 'failure') { webhooksError = (result.data as { message?: string })?.message ?? 'Failed to rotate secret'; } await update(); }; }}>
 														<input type="hidden" name="id" value={webhook.id} />
 														<button type="submit" title="Rotate secret" class="rounded p-1 text-surface-500 hover:bg-surface-100 dark:text-surface-400 dark:hover:bg-surface-700">
 															<RefreshCw class="h-4 w-4" />
@@ -665,9 +704,9 @@
 		return async ({ result, update }) => {
 			deleteRuleConfirm = { open: false, id: null };
 			if (result.type === 'failure') {
-				errorMessage = (result.data as { message?: string })?.message ?? 'Failed to delete rule';
+				rulesError = (result.data as { message?: string })?.message ?? 'Failed to delete rule';
 			} else {
-				errorMessage = null;
+				rulesError = null;
 				await update();
 			}
 		};
@@ -685,9 +724,9 @@
 		return async ({ result, update }) => {
 			deleteWebhookConfirm = { open: false, id: null };
 			if (result.type === 'failure') {
-				errorMessage = (result.data as { message?: string })?.message ?? 'Failed to delete webhook';
+				webhooksError = (result.data as { message?: string })?.message ?? 'Failed to delete webhook';
 			} else {
-				errorMessage = null;
+				webhooksError = null;
 				await update();
 			}
 		};

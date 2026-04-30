@@ -9,6 +9,19 @@ import { canAdminTenant, canAdminMachines } from '$lib/utils/roles';
 import { redirect, error, fail } from '@sveltejs/kit';
 import type { PageServerLoad, Actions } from './$types';
 
+function parseRequiredInt(formData: FormData, field: string): number | null {
+	const raw = formData.get(field);
+	if (raw === null) {
+		return null;
+	}
+	const parsed = parseInt(raw as string);
+	if (Number.isNaN(parsed)) {
+		return null;
+	}
+
+	return parsed;
+}
+
 export const load: PageServerLoad = async ({ fetch, cookies, locals, url }) => {
 	if (locals.user === null || canAdminTenant(locals.user) === false) {
 		error(403, 'Access denied');
@@ -21,17 +34,18 @@ export const load: PageServerLoad = async ({ fetch, cookies, locals, url }) => {
 	const severity = url.searchParams.get('severity') ?? undefined;
 
 	try {
-		const [rules, events, webhooks] = await Promise.all([
+		const [rules, events, webhooks, subscription] = await Promise.all([
 			api.getAlertRules(),
 			api.getAlertEvents({ page, pageSize, status, severity }),
-			api.getWebhooks()
+			api.getWebhooks(),
+			api.getSubscription().catch(() => null)
 		]);
 
-		return { rules, events, webhooks, filters: { status, severity } };
+		return { rules, events, webhooks, subscription, filters: { status, severity } };
 	} catch (e) {
 		if (e instanceof ApiError) {
 			if (e.status === 401) redirect(302, '/auth/login');
-			if (e.status === 403) return { rules: null, events: null, webhooks: null, filters: { status, severity } };
+			if (e.status === 403) return { rules: null, events: null, webhooks: null, subscription: null, filters: { status, severity } };
 		}
 		throw e;
 	}
@@ -76,7 +90,10 @@ export const actions: Actions = {
 
 		const api = createServerApiClient(fetch, cookies.get('vord_auth'), cookies.get('vord_tenant'));
 		const data = await request.formData();
-		const id = parseInt(data.get('id') as string);
+		const id = parseRequiredInt(data, 'id');
+		if (id === null) {
+			return fail(400, { message: 'Invalid ID' });
+		}
 
 		try {
 			await api.updateAlertRule(id, {
@@ -107,7 +124,10 @@ export const actions: Actions = {
 
 		const api = createServerApiClient(fetch, cookies.get('vord_auth'), cookies.get('vord_tenant'));
 		const data = await request.formData();
-		const id = parseInt(data.get('id') as string);
+		const id = parseRequiredInt(data, 'id');
+		if (id === null) {
+			return fail(400, { message: 'Invalid ID' });
+		}
 
 		try {
 			await api.deleteAlertRule(id);
@@ -129,7 +149,10 @@ export const actions: Actions = {
 
 		const api = createServerApiClient(fetch, cookies.get('vord_auth'), cookies.get('vord_tenant'));
 		const data = await request.formData();
-		const id = parseInt(data.get('id') as string);
+		const id = parseRequiredInt(data, 'id');
+		if (id === null) {
+			return fail(400, { message: 'Invalid ID' });
+		}
 
 		try {
 			await api.acknowledgeAlertEvent(id);
@@ -175,7 +198,10 @@ export const actions: Actions = {
 
 		const api = createServerApiClient(fetch, cookies.get('vord_auth'), cookies.get('vord_tenant'));
 		const data = await request.formData();
-		const id = parseInt(data.get('id') as string);
+		const id = parseRequiredInt(data, 'id');
+		if (id === null) {
+			return fail(400, { message: 'Invalid ID' });
+		}
 
 		try {
 			const result = await api.rotateWebhookSecret(id);
@@ -197,7 +223,10 @@ export const actions: Actions = {
 
 		const api = createServerApiClient(fetch, cookies.get('vord_auth'), cookies.get('vord_tenant'));
 		const data = await request.formData();
-		const id = parseInt(data.get('id') as string);
+		const id = parseRequiredInt(data, 'id');
+		if (id === null) {
+			return fail(400, { message: 'Invalid ID' });
+		}
 		const isEnabled = data.get('isEnabled') === 'on';
 
 		try {
@@ -220,7 +249,10 @@ export const actions: Actions = {
 
 		const api = createServerApiClient(fetch, cookies.get('vord_auth'), cookies.get('vord_tenant'));
 		const data = await request.formData();
-		const id = parseInt(data.get('id') as string);
+		const id = parseRequiredInt(data, 'id');
+		if (id === null) {
+			return fail(400, { message: 'Invalid ID' });
+		}
 
 		try {
 			await api.deleteWebhook(id);

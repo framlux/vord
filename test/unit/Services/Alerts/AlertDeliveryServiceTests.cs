@@ -7,6 +7,7 @@ using System.Text;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Server.Services.Alerts;
+using Framlux.FleetManagement.Server.Services.Security;
 using Framlux.FleetManagement.Test.Infrastructure;
 using LinqToDB;
 using Microsoft.Extensions.Logging;
@@ -21,6 +22,15 @@ namespace Framlux.FleetManagement.Test.Services;
 /// </summary>
 public sealed class AlertDeliveryServiceTests
 {
+    private static IWebhookSecretProtector CreatePassthroughProtector()
+    {
+        IWebhookSecretProtector protector = Substitute.For<IWebhookSecretProtector>();
+        protector.Protect(Arg.Any<string>()).Returns(callInfo => callInfo.Arg<string>());
+        protector.Unprotect(Arg.Any<string>()).Returns(callInfo => callInfo.Arg<string>());
+
+        return protector;
+    }
+
     private static AlertRule CreateRule(
         bool notifyEmail = false,
         bool notifyWebhook = false,
@@ -71,7 +81,7 @@ public sealed class AlertDeliveryServiceTests
         httpFactory.CreateClient(Arg.Any<string>()).Returns(new HttpClient(handler));
 
         IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
-        AlertDeliveryService service = new(scopeFactory, httpFactory, redis, new NullLogger<AlertDeliveryService>());
+        AlertDeliveryService service = new(scopeFactory, httpFactory, redis, CreatePassthroughProtector(), new NullLogger<AlertDeliveryService>());
 
         await service.DeliverAsync(CreateEvent(), CreateRule(notifyEmail: false, notifyWebhook: false), CancellationToken.None);
 
@@ -89,7 +99,7 @@ public sealed class AlertDeliveryServiceTests
         IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
         ILogger<AlertDeliveryService> logger = Substitute.For<ILogger<AlertDeliveryService>>();
 
-        AlertDeliveryService service = new(scopeFactory, httpFactory, redis, logger);
+        AlertDeliveryService service = new(scopeFactory, httpFactory, redis, CreatePassthroughProtector(), logger);
 
         await service.DeliverAsync(CreateEvent(), CreateRule(notifyEmail: true, notifyWebhook: false), CancellationToken.None);
 
@@ -122,7 +132,7 @@ public sealed class AlertDeliveryServiceTests
         httpFactory.CreateClient(Arg.Any<string>()).Returns(new HttpClient(handler));
 
         IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
-        AlertDeliveryService service = new(scopeFactory, httpFactory, redis, new NullLogger<AlertDeliveryService>());
+        AlertDeliveryService service = new(scopeFactory, httpFactory, redis, CreatePassthroughProtector(), new NullLogger<AlertDeliveryService>());
 
         await service.DeliverAsync(CreateEvent(tenantId), CreateRule(notifyWebhook: true, tenantId: tenantId), CancellationToken.None);
 
@@ -155,7 +165,7 @@ public sealed class AlertDeliveryServiceTests
         httpFactory.CreateClient(Arg.Any<string>()).Returns(new HttpClient(handler));
 
         IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
-        AlertDeliveryService service = new(scopeFactory, httpFactory, redis, new NullLogger<AlertDeliveryService>());
+        AlertDeliveryService service = new(scopeFactory, httpFactory, redis, CreatePassthroughProtector(), new NullLogger<AlertDeliveryService>());
 
         await service.DeliverAsync(CreateEvent(tenantId), CreateRule(notifyWebhook: true, tenantId: tenantId), CancellationToken.None);
 
@@ -194,7 +204,7 @@ public sealed class AlertDeliveryServiceTests
         httpFactory.CreateClient(Arg.Any<string>()).Returns(new HttpClient(handler));
 
         IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
-        AlertDeliveryService service = new(scopeFactory, httpFactory, redis, new NullLogger<AlertDeliveryService>());
+        AlertDeliveryService service = new(scopeFactory, httpFactory, redis, CreatePassthroughProtector(), new NullLogger<AlertDeliveryService>());
 
         await service.DeliverAsync(CreateEvent(tenantId), CreateRule(notifyWebhook: true, tenantId: tenantId), CancellationToken.None);
 
@@ -237,7 +247,7 @@ public sealed class AlertDeliveryServiceTests
         httpFactory.CreateClient(Arg.Any<string>()).Returns(new HttpClient(handler));
 
         IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
-        AlertDeliveryService service = new(scopeFactory, httpFactory, redis, new NullLogger<AlertDeliveryService>());
+        AlertDeliveryService service = new(scopeFactory, httpFactory, redis, CreatePassthroughProtector(), new NullLogger<AlertDeliveryService>());
 
         await service.DeliverAsync(CreateEvent(tenantId), CreateRule(notifyWebhook: true, tenantId: tenantId), CancellationToken.None);
 
@@ -269,7 +279,7 @@ public sealed class AlertDeliveryServiceTests
         httpFactory.CreateClient(Arg.Any<string>()).Returns(new HttpClient(handler));
 
         IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
-        AlertDeliveryService service = new(scopeFactory, httpFactory, redis, new NullLogger<AlertDeliveryService>());
+        AlertDeliveryService service = new(scopeFactory, httpFactory, redis, CreatePassthroughProtector(), new NullLogger<AlertDeliveryService>());
 
         // Should not throw
         await service.DeliverAsync(CreateEvent(tenantId), CreateRule(notifyWebhook: true, tenantId: tenantId), CancellationToken.None);
@@ -302,10 +312,12 @@ public sealed class AlertDeliveryServiceTests
         httpFactory.CreateClient(Arg.Any<string>()).Returns(new HttpClient(handler));
 
         IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
-        AlertDeliveryService service = new(scopeFactory, httpFactory, redis, new NullLogger<AlertDeliveryService>());
+        AlertDeliveryService service = new(scopeFactory, httpFactory, redis, CreatePassthroughProtector(), new NullLogger<AlertDeliveryService>());
 
         // Should not throw
         await service.DeliverAsync(CreateEvent(tenantId), CreateRule(notifyWebhook: true, tenantId: tenantId), CancellationToken.None);
+
+        await Assert.That(handler.Requests.Count).IsEqualTo(1);
     }
 
     [Test]
@@ -332,7 +344,7 @@ public sealed class AlertDeliveryServiceTests
         httpFactory.CreateClient(Arg.Any<string>()).Returns(new HttpClient(handler));
 
         IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
-        AlertDeliveryService service = new(scopeFactory, httpFactory, redis, new NullLogger<AlertDeliveryService>());
+        AlertDeliveryService service = new(scopeFactory, httpFactory, redis, CreatePassthroughProtector(), new NullLogger<AlertDeliveryService>());
 
         await service.DeliverAsync(CreateEvent(tenantId), CreateRule(notifyWebhook: true, tenantId: tenantId), CancellationToken.None);
 
@@ -349,7 +361,7 @@ public sealed class AlertDeliveryServiceTests
         httpFactory.CreateClient(Arg.Any<string>()).Returns(new HttpClient(handler));
 
         IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
-        AlertDeliveryService service = new(scopeFactory, httpFactory, redis, new NullLogger<AlertDeliveryService>());
+        AlertDeliveryService service = new(scopeFactory, httpFactory, redis, CreatePassthroughProtector(), new NullLogger<AlertDeliveryService>());
 
         await service.DeliverAsync(CreateEvent(), CreateRule(notifyWebhook: true), CancellationToken.None);
 
@@ -380,7 +392,7 @@ public sealed class AlertDeliveryServiceTests
         httpFactory.CreateClient(Arg.Any<string>()).Returns(new HttpClient(handler));
 
         IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
-        AlertDeliveryService service = new(scopeFactory, httpFactory, redis, new NullLogger<AlertDeliveryService>());
+        AlertDeliveryService service = new(scopeFactory, httpFactory, redis, CreatePassthroughProtector(), new NullLogger<AlertDeliveryService>());
 
         await service.DeliverAsync(CreateEvent(tenantId), CreateRule(notifyWebhook: true, tenantId: tenantId), CancellationToken.None);
 
@@ -415,7 +427,7 @@ public sealed class AlertDeliveryServiceTests
         httpFactory.CreateClient(Arg.Any<string>()).Returns(new HttpClient(handler));
 
         IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
-        AlertDeliveryService service = new(scopeFactory, httpFactory, redis, new NullLogger<AlertDeliveryService>());
+        AlertDeliveryService service = new(scopeFactory, httpFactory, redis, CreatePassthroughProtector(), new NullLogger<AlertDeliveryService>());
 
         await service.DeliverAsync(CreateEvent(tenantId), CreateRule(notifyWebhook: true, tenantId: tenantId), CancellationToken.None);
 
@@ -458,7 +470,7 @@ public sealed class AlertDeliveryServiceTests
         httpFactory.CreateClient(Arg.Any<string>()).Returns(new HttpClient(handler));
 
         IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
-        AlertDeliveryService service = new(scopeFactory, httpFactory, redis, new NullLogger<AlertDeliveryService>());
+        AlertDeliveryService service = new(scopeFactory, httpFactory, redis, CreatePassthroughProtector(), new NullLogger<AlertDeliveryService>());
 
         // Deliver first event
         AlertEvent event1 = CreateEvent(tenantId);
@@ -516,7 +528,7 @@ public sealed class AlertDeliveryServiceTests
         httpFactory1.CreateClient(Arg.Any<string>()).Returns(new HttpClient(handler1));
         TestServiceScopeFactory scopeFactory1 = new(dbFactory.Context);
         IConnectionMultiplexer redis1 = Substitute.For<IConnectionMultiplexer>();
-        AlertDeliveryService service1 = new(scopeFactory1, httpFactory1, redis1, new NullLogger<AlertDeliveryService>());
+        AlertDeliveryService service1 = new(scopeFactory1, httpFactory1, redis1, CreatePassthroughProtector(), new NullLogger<AlertDeliveryService>());
 
         AlertEvent eventForTenant1 = CreateEvent(tenantId1);
         await service1.DeliverAsync(eventForTenant1, CreateRule(notifyWebhook: true, tenantId: tenantId1), CancellationToken.None);
@@ -527,7 +539,7 @@ public sealed class AlertDeliveryServiceTests
         httpFactory2.CreateClient(Arg.Any<string>()).Returns(new HttpClient(handler2));
         TestServiceScopeFactory scopeFactory2 = new(dbFactory.Context);
         IConnectionMultiplexer redis2 = Substitute.For<IConnectionMultiplexer>();
-        AlertDeliveryService service2 = new(scopeFactory2, httpFactory2, redis2, new NullLogger<AlertDeliveryService>());
+        AlertDeliveryService service2 = new(scopeFactory2, httpFactory2, redis2, CreatePassthroughProtector(), new NullLogger<AlertDeliveryService>());
 
         AlertEvent eventForTenant2 = CreateEvent(tenantId2);
         await service2.DeliverAsync(eventForTenant2, CreateRule(notifyWebhook: true, tenantId: tenantId2), CancellationToken.None);
@@ -550,7 +562,7 @@ public sealed class AlertDeliveryServiceTests
         IDatabase redisDb = Substitute.For<IDatabase>();
         redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(redisDb);
 
-        AlertDeliveryService service = new(scopeFactory, httpFactory, redis, new NullLogger<AlertDeliveryService>());
+        AlertDeliveryService service = new(scopeFactory, httpFactory, redis, CreatePassthroughProtector(), new NullLogger<AlertDeliveryService>());
 
         await service.EnqueueAsync(100, 1, 1, CancellationToken.None);
 
@@ -571,7 +583,7 @@ public sealed class AlertDeliveryServiceTests
         IDatabase redisDb = Substitute.For<IDatabase>();
         redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(redisDb);
 
-        AlertDeliveryService service = new(scopeFactory, httpFactory, redis, new NullLogger<AlertDeliveryService>());
+        AlertDeliveryService service = new(scopeFactory, httpFactory, redis, CreatePassthroughProtector(), new NullLogger<AlertDeliveryService>());
 
         await service.EnqueueAsync(42, 7, 3, CancellationToken.None);
 
@@ -609,7 +621,7 @@ public sealed class AlertDeliveryServiceTests
         IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
         ILogger<AlertDeliveryService> logger = Substitute.For<ILogger<AlertDeliveryService>>();
 
-        AlertDeliveryService service = new(scopeFactory, httpFactory, redis, logger);
+        AlertDeliveryService service = new(scopeFactory, httpFactory, redis, CreatePassthroughProtector(), logger);
 
         // Both notifyEmail and notifyWebhook enabled.
         await service.DeliverAsync(CreateEvent(tenantId), CreateRule(notifyEmail: true, notifyWebhook: true, tenantId: tenantId), CancellationToken.None);
@@ -650,7 +662,7 @@ public sealed class AlertDeliveryServiceTests
         httpFactory.CreateClient(Arg.Any<string>()).Returns(new HttpClient(handler));
         IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
 
-        AlertDeliveryService service = new(scopeFactory, httpFactory, redis, new NullLogger<AlertDeliveryService>());
+        AlertDeliveryService service = new(scopeFactory, httpFactory, redis, CreatePassthroughProtector(), new NullLogger<AlertDeliveryService>());
 
         await service.DeliverAsync(CreateEvent(tenantId), CreateRule(notifyWebhook: true, tenantId: tenantId), CancellationToken.None);
 

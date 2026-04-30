@@ -74,7 +74,7 @@ public sealed class AlertEventListEndpoint : Endpoint<AlertEventListRequest, Api
         }
 
         TenantSubscription? subscription = await _subscriptionService.GetSubscriptionForTenantAsync(tenantId.Value, ct);
-        if ((subscription is null) || (subscription.Tier == SubscriptionTier.Free))
+        if ((subscription is null) || (subscription.Tier == SubscriptionTier.Free) || (subscription.Status != SubscriptionStatus.Active))
         {
             HttpContext.Response.StatusCode = 403;
             await HttpContext.Response.WriteAsJsonAsync(ApiResponse<PaginatedResponse<AlertEventDto>>.Error("Alerting requires a Pro or Team subscription"), ct);
@@ -83,18 +83,18 @@ public sealed class AlertEventListEndpoint : Endpoint<AlertEventListRequest, Api
         }
 
         int page = req.Page < 1 ? 1 : req.Page;
-        int pageSize = req.PageSize < 1 || req.PageSize > 100 ? 25 : req.PageSize;
+        int pageSize = (req.PageSize < 1) || (req.PageSize > 100) ? 25 : req.PageSize;
 
         IQueryable<AlertEvent> query = _db.AlertEvents
             .LoadWith(e => e.AlertRule)
             .Where(e => e.TenantId == tenantId.Value);
 
-        if (string.IsNullOrEmpty(req.Status) == false && Enum.TryParse<AlertEventStatus>(req.Status, true, out AlertEventStatus statusFilter))
+        if ((string.IsNullOrEmpty(req.Status) == false) && Enum.TryParse<AlertEventStatus>(req.Status, true, out AlertEventStatus statusFilter))
         {
             query = query.Where(e => e.Status == statusFilter);
         }
 
-        if (string.IsNullOrEmpty(req.Severity) == false && Enum.TryParse<AlertSeverity>(req.Severity, true, out AlertSeverity severityFilter))
+        if ((string.IsNullOrEmpty(req.Severity) == false) && Enum.TryParse<AlertSeverity>(req.Severity, true, out AlertSeverity severityFilter))
         {
             query = query.Where(e => e.Severity == severityFilter);
         }

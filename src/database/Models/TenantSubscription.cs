@@ -56,6 +56,14 @@ public sealed class TenantSubscription
     [Column("RetentionDays"), NotNull]
     public required int RetentionDays { get; set; }
 
+    /// <summary>Maximum number of alert rules allowed for this tenant. Null means unlimited.</summary>
+    [Column("AlertRuleLimit"), Nullable]
+    public int? AlertRuleLimit { get; set; }
+
+    /// <summary>Maximum number of webhook endpoints allowed for this tenant. Null means unlimited.</summary>
+    [Column("WebhookLimit"), Nullable]
+    public int? WebhookLimit { get; set; }
+
     /// <summary>
     /// The end of the current billing period from Stripe.
     /// </summary>

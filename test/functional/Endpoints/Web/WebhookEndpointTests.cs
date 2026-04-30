@@ -139,22 +139,30 @@ public sealed class WebhookEndpointTests
     }
 
     [Test]
-    public async Task CreateWebhook_StoresSecretInDatabase()
+    public async Task CreateWebhook_StoresEncryptedSecretInDatabase()
     {
         using FunctionalTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
         (int tenantId, int userId) = await SeedWebhookEnvironment(db);
         HttpClient client = BuildClient(factory, tenantId, userId);
 
-        await client.PostAsJsonAsync("/api/v1/webhooks", new
+        HttpResponseMessage response = await client.PostAsJsonAsync("/api/v1/webhooks", new
         {
             Name = "Secret Check",
             Url = "https://hooks.example.com/secret",
         });
 
+        string responseBody = await response.Content.ReadAsStringAsync();
+        System.Text.Json.JsonDocument doc = System.Text.Json.JsonDocument.Parse(responseBody);
+        string plaintextSecret = doc.RootElement.GetProperty("data").GetProperty("secret").GetString()!;
+
         WebhookEndpoint? webhook = await db.WebhookEndpoints.FirstOrDefaultAsync(w => w.Name == "Secret Check");
         await Assert.That(webhook).IsNotNull();
-        await Assert.That(webhook!.Secret.Length).IsEqualTo(64);
+        // The stored secret should be encrypted and differ from the plaintext returned in the response
+        await Assert.That(webhook!.Secret).IsNotEqualTo(plaintextSecret);
+        await Assert.That(string.IsNullOrEmpty(webhook.Secret)).IsFalse();
+        // The plaintext secret should be a 64-character hex string
+        await Assert.That(plaintextSecret.Length).IsEqualTo(64);
     }
 
     [Test]
@@ -242,10 +250,14 @@ public sealed class WebhookEndpointTests
 
         HttpResponseMessage response = await client.GetAsync("/api/v1/webhooks");
 
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
         string body = await response.Content.ReadAsStringAsync();
-        int alphaIndex = body.IndexOf("Alpha Hook", StringComparison.Ordinal);
-        int zetaIndex = body.IndexOf("Zeta Hook", StringComparison.Ordinal);
-        await Assert.That(alphaIndex < zetaIndex).IsTrue();
+
+        System.Text.Json.JsonDocument doc = System.Text.Json.JsonDocument.Parse(body);
+        System.Text.Json.JsonElement dataArray = doc.RootElement.GetProperty("data");
+        await Assert.That(dataArray.GetArrayLength()).IsGreaterThanOrEqualTo(2);
+        await Assert.That(dataArray[0].GetProperty("name").GetString()).IsEqualTo("Alpha Hook");
+        await Assert.That(dataArray[1].GetProperty("name").GetString()).IsEqualTo("Zeta Hook");
     }
 
     // --- DeleteWebhook Tests ---
@@ -734,5 +746,112 @@ public sealed class WebhookEndpointTests
         });
 
         await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.Forbidden);
+    }
+
+    // --- Limit, Validation, and Canceled Subscription Tests ---
+
+    [Test]
+    public async Task CreateWebhook_AtLimit_Returns403WithLimitMessage()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId) = await SeedWebhookEnvironment(db);
+
+        // Set the webhook limit to 1 so we can hit it with a single webhook
+        await db.TenantSubscriptions
+            .Where(s => s.TenantId == tenantId)
+            .Set(s => s.WebhookLimit, 1)
+            .UpdateAsync();
+
+        HttpClient client = BuildClient(factory, tenantId, userId);
+
+        // Create first webhook to consume the limit
+        HttpResponseMessage firstResponse = await client.PostAsJsonAsync("/api/v1/webhooks", new
+        {
+            Name = "First Webhook",
+            Url = "https://hooks.example.com/first",
+        });
+        await Assert.That(firstResponse.StatusCode).IsEqualTo(HttpStatusCode.OK);
+
+        // Second webhook should be rejected because the limit is reached
+        HttpResponseMessage secondResponse = await client.PostAsJsonAsync("/api/v1/webhooks", new
+        {
+            Name = "Second Webhook",
+            Url = "https://hooks.example.com/second",
+        });
+
+        await Assert.That(secondResponse.StatusCode).IsEqualTo(HttpStatusCode.Forbidden);
+        string body = await secondResponse.Content.ReadAsStringAsync();
+        await Assert.That(body.ToLowerInvariant()).Contains("limit");
+    }
+
+    [Test]
+    public async Task CreateWebhook_NameTooLong_Returns400()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId) = await SeedWebhookEnvironment(db);
+        HttpClient client = BuildClient(factory, tenantId, userId);
+
+        string longName = new string('W', 251);
+
+        HttpResponseMessage response = await client.PostAsJsonAsync("/api/v1/webhooks", new
+        {
+            Name = longName,
+            Url = "https://hooks.example.com/test",
+        });
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.BadRequest);
+        string body = await response.Content.ReadAsStringAsync();
+        await Assert.That(body).Contains("250 characters");
+    }
+
+    [Test]
+    public async Task CreateWebhook_UrlTooLong_Returns400()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId) = await SeedWebhookEnvironment(db);
+        HttpClient client = BuildClient(factory, tenantId, userId);
+
+        // Build a valid HTTPS URL that exceeds 2000 characters
+        string longPath = new string('x', 1975);
+        string longUrl = $"https://hooks.example.com/{longPath}";
+
+        HttpResponseMessage response = await client.PostAsJsonAsync("/api/v1/webhooks", new
+        {
+            Name = "Long URL Webhook",
+            Url = longUrl,
+        });
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.BadRequest);
+        string body = await response.Content.ReadAsStringAsync();
+        await Assert.That(body).Contains("2000 characters");
+    }
+
+    [Test]
+    public async Task CreateWebhook_CanceledSubscription_Returns403()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId) = await SeedWebhookEnvironment(db);
+
+        // Mark the subscription as canceled to simulate a lapsed subscription
+        await db.TenantSubscriptions
+            .Where(s => s.TenantId == tenantId)
+            .Set(s => s.Status, SubscriptionStatus.Canceled)
+            .UpdateAsync();
+
+        HttpClient client = BuildClient(factory, tenantId, userId);
+
+        HttpResponseMessage response = await client.PostAsJsonAsync("/api/v1/webhooks", new
+        {
+            Name = "Should Fail",
+            Url = "https://hooks.example.com/canceled",
+        });
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.Forbidden);
+        string body = await response.Content.ReadAsStringAsync();
+        await Assert.That(body.ToLowerInvariant()).Contains("canceled");
     }
 }
