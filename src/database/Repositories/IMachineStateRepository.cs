@@ -211,4 +211,64 @@ public interface IMachineStateRepository
     /// <param name="telemetryType">The telemetry type identifier.</param>
     /// <param name="cancellationToken">A cancellation token.</param>
     Task<List<MachineTelemetry>> GetTelemetryByMachineIdsAndTypeAsync(List<long> machineIds, short telemetryType, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Returns a cursor-based batch of telemetry rows for the specified machines, ordered by ID ascending.
+    /// Used for data export operations.
+    /// </summary>
+    /// <param name="machineIds">The machine IDs to filter by.</param>
+    /// <param name="afterId">Return only rows with ID greater than this value.</param>
+    /// <param name="batchSize">Maximum number of rows to return.</param>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    Task<List<MachineTelemetry>> GetTelemetryExportBatchAsync(List<long> machineIds, long afterId, int batchSize, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Returns the latest telemetry row for each telemetry type for a machine, looking back a specified number of days.
+    /// Used for machine detail views.
+    /// </summary>
+    /// <param name="machineId">The machine ID.</param>
+    /// <param name="daysBack">Number of days to look back from now.</param>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    Task<Dictionary<short, MachineTelemetry>> GetLatestTelemetryPerTypeAsync(long machineId, int daysBack, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Returns recent telemetry rows of a specific type for a machine, ordered by most recent first.
+    /// Used for SSH session history and similar views.
+    /// </summary>
+    /// <param name="machineId">The machine ID.</param>
+    /// <param name="telemetryType">The telemetry type identifier.</param>
+    /// <param name="limit">Maximum number of rows to return.</param>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    Task<List<MachineTelemetry>> GetRecentTelemetryAsync(long machineId, short telemetryType, int limit, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Returns health count aggregation (grouped by HealthStatus) and total security updates
+    /// for all machines in a tenant, using a Machines LEFT JOIN MachineStateSummaries query.
+    /// </summary>
+    /// <param name="tenantId">The tenant ID.</param>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    Task<(List<(short HealthStatus, int Count)> HealthCounts, int TotalSecurityUpdates)> GetFleetHealthAggregationAsync(int tenantId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Returns a filtered, sorted, paginated fleet overview joining Machines and MachineStateSummaries.
+    /// Includes machine name, hostname, IP addresses, hardware model, CPU/memory usage, health status, etc.
+    /// </summary>
+    /// <param name="tenantId">The tenant ID.</param>
+    /// <param name="statusFilter">Optional health status filter (healthy/warning/critical/offline).</param>
+    /// <param name="search">Optional search term for name/hostname/hardware model.</param>
+    /// <param name="sortBy">Sort field name.</param>
+    /// <param name="sortDescending">True for descending sort.</param>
+    /// <param name="skip">Number of rows to skip.</param>
+    /// <param name="take">Number of rows to return.</param>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    Task<(List<FleetMachineRow> Rows, int TotalCount)> GetFleetMachinePageAsync(int tenantId, string? statusFilter, string? search, string sortBy, bool sortDescending, int skip, int take, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Searches fleet machines with comprehensive SQL-level filtering, sorting, and pagination.
+    /// Joins Machines with MachineStateSummaries and applies criteria-based WHERE clauses at the SQL level.
+    /// </summary>
+    /// <param name="tenantId">The tenant ID.</param>
+    /// <param name="parameters">Search parameters including filters, sort, and pagination.</param>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    Task<(List<FleetMachineRow> Rows, int TotalCount)> SearchFleetMachinesAsync(int tenantId, FleetSearchParameters parameters, CancellationToken cancellationToken = default);
 }

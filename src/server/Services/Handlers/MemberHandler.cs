@@ -38,6 +38,12 @@ public sealed class MemberHandler : IMemberHandler
         ISubscriptionService subscriptionService,
         IRoleCacheInvalidator roleCacheInvalidator)
     {
+        ArgumentNullException.ThrowIfNull(transactionProvider);
+        ArgumentNullException.ThrowIfNull(auditLog);
+        ArgumentNullException.ThrowIfNull(tenantRepository);
+        ArgumentNullException.ThrowIfNull(subscriptionService);
+        ArgumentNullException.ThrowIfNull(roleCacheInvalidator);
+
         _transactionProvider = transactionProvider;
         _auditLog = auditLog;
         _tenantRepository = tenantRepository;

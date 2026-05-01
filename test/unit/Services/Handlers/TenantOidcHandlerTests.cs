@@ -282,6 +282,57 @@ public class TenantOidcHandlerTests
         await Assert.That(config!.ClientSecret).IsEqualTo("original-encrypted");
     }
 
+    [Test]
+    public async Task UpdateConfigAsync_NewConfig_ResponseMasksClientSecret()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        ISubscriptionService subService = CreateTeamSubscription(1);
+        IOidcSecretProtector protector = Substitute.For<IOidcSecretProtector>();
+        protector.Protect(Arg.Any<string>()).Returns(callInfo => $"protected-{callInfo.ArgAt<string>(0)}");
+        TenantOidcHandler handler = CreateHandler(dbFactory, subscriptionService: subService, secretProtector: protector);
+
+        TenantOidcConfigDto request = new()
+        {
+            Authority = "https://accounts.google.com",
+            ClientId = "new-client",
+            ClientSecret = "my-plaintext-secret",
+            EmailDomain = "test.com",
+            IsEnabled = true,
+        };
+        ServiceResult<TenantOidcConfigDto> result = await handler.UpdateConfigAsync(1, 1, request, CancellationToken.None);
+
+        await Assert.That(result.IsSuccess).IsTrue();
+        await Assert.That(result.Data!.ClientSecret).IsEqualTo("********");
+        await Assert.That(result.Data!.Authority).IsEqualTo("https://accounts.google.com");
+        await Assert.That(result.Data!.ClientId).IsEqualTo("new-client");
+    }
+
+    [Test]
+    public async Task UpdateConfigAsync_ExistingConfig_ResponseMasksClientSecret()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        TenantOidcConfiguration existing = TestDataBuilder.BuildTenantOidcConfiguration(tenantId: 1);
+        await dbFactory.Context.InsertAsync(existing);
+
+        ISubscriptionService subService = CreateTeamSubscription(1);
+        IOidcSecretProtector protector = Substitute.For<IOidcSecretProtector>();
+        protector.Protect(Arg.Any<string>()).Returns(callInfo => $"protected-{callInfo.ArgAt<string>(0)}");
+        TenantOidcHandler handler = CreateHandler(dbFactory, subscriptionService: subService, secretProtector: protector);
+
+        TenantOidcConfigDto request = new()
+        {
+            Authority = "https://accounts.google.com",
+            ClientId = "updated-client",
+            ClientSecret = "updated-plaintext-secret",
+            EmailDomain = "test.com",
+            IsEnabled = true,
+        };
+        ServiceResult<TenantOidcConfigDto> result = await handler.UpdateConfigAsync(1, 1, request, CancellationToken.None);
+
+        await Assert.That(result.IsSuccess).IsTrue();
+        await Assert.That(result.Data!.ClientSecret).IsEqualTo("********");
+    }
+
     // ========== Helper methods ==========
 
     private static DatabaseRepository CreateRepo(TestDatabaseFactory dbFactory)

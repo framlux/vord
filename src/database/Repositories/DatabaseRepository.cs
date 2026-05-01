@@ -125,4 +125,16 @@ public partial class DatabaseRepository : IDatabaseTransactionProvider, IAuditLo
 
         return (entries, totalCount);
     }
+
+    /// <inheritdoc/>
+    public async Task<List<AuditLogEntry>> GetAuditLogBatchAsync(int tenantId, long afterId, int batchSize, CancellationToken cancellationToken)
+    {
+        List<AuditLogEntry> entries = await _db.AuditLog
+            .Where(a => (a.TenantId == tenantId) && (a.Id > afterId))
+            .OrderBy(a => a.Id)
+            .Take(batchSize)
+            .ToListAsync(cancellationToken);
+
+        return entries;
+    }
 }

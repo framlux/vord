@@ -32,4 +32,10 @@ public interface IServerConfigurationRepository
     /// <param name="cancellationToken">A cancellation token.</param>
     /// <returns>The number of rows updated.</returns>
     Task<int> UpdateSettingAsync(ServerConfigurationSettingKeys key, string value, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Returns all server configuration settings ordered by key.
+    /// </summary>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    Task<List<ServerConfigurationSettings>> GetAllSettingsAsync(CancellationToken cancellationToken = default);
 }

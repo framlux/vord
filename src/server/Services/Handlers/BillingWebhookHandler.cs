@@ -35,6 +35,13 @@ public sealed class BillingWebhookHandler : IBillingWebhookHandler
         IDowngradeCleanupService downgradeCleanupService,
         IOptions<SubscriptionOptions> subscriptionOptions)
     {
+        ArgumentNullException.ThrowIfNull(transactionProvider);
+        ArgumentNullException.ThrowIfNull(auditLog);
+        ArgumentNullException.ThrowIfNull(subscriptionRepo);
+        ArgumentNullException.ThrowIfNull(alertRuleRepo);
+        ArgumentNullException.ThrowIfNull(downgradeCleanupService);
+        ArgumentNullException.ThrowIfNull(subscriptionOptions);
+
         _transactionProvider = transactionProvider;
         _auditLog = auditLog;
         _subscriptionRepo = subscriptionRepo;

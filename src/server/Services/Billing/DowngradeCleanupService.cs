@@ -23,6 +23,11 @@ public sealed class DowngradeCleanupService : IDowngradeCleanupService
         IWebhookRepository webhookRepo,
         ILogger<DowngradeCleanupService> logger)
     {
+        ArgumentNullException.ThrowIfNull(tenantRepo);
+        ArgumentNullException.ThrowIfNull(alertRuleRepo);
+        ArgumentNullException.ThrowIfNull(webhookRepo);
+        ArgumentNullException.ThrowIfNull(logger);
+
         _tenantRepo = tenantRepo;
         _alertRuleRepo = alertRuleRepo;
         _webhookRepo = webhookRepo;

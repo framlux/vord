@@ -3,13 +3,12 @@
 // See LICENSE for details.
 
 using System.Text.Json;
-using Framlux.FleetManagement.Database;
 using Framlux.FleetManagement.Database.Enums;
+using Framlux.FleetManagement.Database.Models;
+using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Server.Endpoints.Web;
 using Framlux.FleetManagement.Server.Endpoints.Web.Models.Machines;
 using Framlux.FleetManagement.Server.Services.ServerConfiguration;
-using LinqToDB;
-using LinqToDB.Async;
 
 namespace Framlux.FleetManagement.Server.Services.Machines;
 
@@ -34,6 +33,10 @@ public sealed class MachineSearchService : IMachineSearchService
         IMachinePingService pingService,
         ServerConfigurationService configService)
     {
+        ArgumentNullException.ThrowIfNull(scopeFactory);
+        ArgumentNullException.ThrowIfNull(pingService);
+        ArgumentNullException.ThrowIfNull(configService);
+
         _scopeFactory = scopeFactory;
         _pingService = pingService;
         _configService = configService;
@@ -60,28 +63,9 @@ public sealed class MachineSearchService : IMachineSearchService
         }
 
         using IServiceScope scope = _scopeFactory.CreateScope();
-        DatabaseContext db = scope.ServiceProvider.GetRequiredService<DatabaseContext>();
+        IMachineStateRepository machineStateRepo = scope.ServiceProvider.GetRequiredService<IMachineStateRepository>();
 
-        if (RequiresFullScan(criteria))
-        {
-            return await SearchFullScanAsync(db, criteria, tenantId.Value, page, pageSize, ct);
-        }
-
-        return await SearchSqlPaginatedAsync(db, criteria, tenantId.Value, page, pageSize, ct);
-    }
-
-    /// <summary>
-    /// Returns true when the criteria include filters or sort options that cannot be
-    /// pushed to SQL on the current database dialect. With pre-computed scalar columns
-    /// on MachineStateSummary, all common filters are now handled at the SQL level.
-    /// </summary>
-    private static bool RequiresFullScan(MachineSearchCriteria criteria)
-    {
-        // All filters and sorts now use pre-computed scalar columns and can be
-        // handled at the SQL level on all dialects.
-        _ = criteria;
-
-        return false;
+        return await SearchSqlPaginatedAsync(machineStateRepo, criteria, tenantId.Value, page, pageSize, ct);
     }
 
     /// <summary>
@@ -89,26 +73,15 @@ public sealed class MachineSearchService : IMachineSearchService
     /// JSONB data only for the paged subset.
     /// </summary>
     private async Task<PaginatedResponse<FleetMachineDto>> SearchSqlPaginatedAsync(
-        DatabaseContext db,
+        IMachineStateRepository machineStateRepo,
         MachineSearchCriteria criteria,
         int tenantId,
         int page,
         int pageSize,
         CancellationToken ct)
     {
-        IQueryable<SearchScalarRow> query = BuildBaseQuery(db, tenantId, criteria);
-
-        // Count at SQL level.
-        int totalCount = await query.CountAsync(ct);
-
-        // Sort at SQL level.
-        IOrderedQueryable<SearchScalarRow> sorted = ApplySqlSort(query, criteria.SortBy, criteria.SortDir);
-
-        // Paginate at SQL level — only the requested page is loaded into memory.
-        List<SearchScalarRow> pagedRows = await sorted
-            .Skip((page - 1) * pageSize)
-            .Take(pageSize)
-            .ToListAsync(ct);
+        FleetSearchParameters searchParams = BuildSearchParameters(criteria, page, pageSize);
+        (List<FleetMachineRow> pagedRows, int totalCount) = await machineStateRepo.SearchFleetMachinesAsync(tenantId, searchParams, ct);
 
         // Resolve Redis only for the paged subset.
         List<long> pagedIds = pagedRows.Select(r => r.Id).ToList();
@@ -119,8 +92,8 @@ public sealed class MachineSearchService : IMachineSearchService
         // Build DTOs for the paged subset only.
         List<FleetMachineDto> pagedDtos = BuildDtos(pagedRows, onlineMap, lastPingMap);
 
-        // Enrich the paged subset with JSONB data for accurate display.
-        EnrichWithJsonbData(pagedDtos, pagedRows, onlineMap);
+        // Enrich the paged subset with health computation from Redis+scalar data.
+        EnrichWithHealth(pagedDtos, pagedRows, onlineMap);
 
         return new PaginatedResponse<FleetMachineDto>
         {
@@ -131,437 +104,117 @@ public sealed class MachineSearchService : IMachineSearchService
         };
     }
 
-    /// <summary>
-    /// Slow path: loads all matching rows, resolves Redis for all of them, applies
-    /// in-memory filters (health, last seen, disk, hardware), then paginates.
-    /// Used when criteria include filters that cannot be evaluated at the SQL level.
-    /// </summary>
-    private async Task<PaginatedResponse<FleetMachineDto>> SearchFullScanAsync(
-        DatabaseContext db,
-        MachineSearchCriteria criteria,
-        int tenantId,
-        int page,
-        int pageSize,
-        CancellationToken ct)
+    private static FleetSearchParameters BuildSearchParameters(MachineSearchCriteria criteria, int page, int pageSize)
     {
-        IQueryable<SearchScalarRow> query = BuildBaseQuery(db, tenantId, criteria);
-
-        // Load all matching scalar rows.
-        List<SearchScalarRow> scalarRows = await query.ToListAsync(ct);
-
-        // Resolve online status and last ping from Redis for all rows.
-        List<long> machineIds = scalarRows.Select(r => r.Id).ToList();
-        TimeSpan onlineThreshold = await _configService.GetOnlineThresholdAsync(ct);
-        Dictionary<long, bool> onlineMap = await _pingService.AreOnlineAsync(machineIds, onlineThreshold);
-        Dictionary<long, DateTimeOffset?> lastPingMap = await _pingService.GetLastPingsAsync(machineIds);
-
-        // Build DTOs with computed health status.
-        List<FleetMachineDto> allDtos = BuildDtos(scalarRows, onlineMap, lastPingMap);
-
-        // Apply in-memory filters that require Redis data (health status, last seen).
-        IEnumerable<FleetMachineDto> filtered = ApplyInMemoryFilters(allDtos, criteria);
-
-        // If disk/hardware filters are active, enrich all filtered rows with JSONB
-        // data so we can apply those filters before pagination.
-        bool needsJsonbFilters = criteria.HasDiskHealthIssue.HasValue ||
-            criteria.HasHardwareIssue.HasValue ||
-            criteria.DiskMin.HasValue || criteria.DiskMax.HasValue;
-
-        List<FleetMachineDto> filteredList = filtered.ToList();
-
-        if (needsJsonbFilters)
+        List<short>? healthStatusValues = null;
+        if (string.IsNullOrWhiteSpace(criteria.HealthStatus) == false)
         {
-            EnrichWithJsonbData(filteredList, scalarRows, onlineMap);
-            filteredList = ApplyPostEnrichmentFilters(filteredList, criteria);
+            HashSet<MachineHealthStatus> statuses = ParseHealthStatuses(criteria.HealthStatus);
+            if (statuses.Count > 0)
+            {
+                healthStatusValues = statuses.Select(hs => (short)hs).ToList();
+            }
         }
 
-        // Sort in-memory.
-        List<FleetMachineDto> sortedList = ApplySort(filteredList, criteria.SortBy, criteria.SortDir);
-
-        int totalCount = sortedList.Count;
-
-        // Paginate.
-        List<FleetMachineDto> pagedDtos = sortedList
-            .Skip((page - 1) * pageSize)
-            .Take(pageSize)
-            .ToList();
-
-        // Enrich the paged subset with JSONB data if not already done above.
-        if (needsJsonbFilters == false)
+        OperatingSystems? osFilter = null;
+        if (string.IsNullOrWhiteSpace(criteria.Os) == false &&
+            Enum.TryParse<OperatingSystems>(criteria.Os, true, out OperatingSystems osEnum))
         {
-            EnrichWithJsonbData(pagedDtos, scalarRows, onlineMap);
+            osFilter = osEnum;
         }
 
-        return new PaginatedResponse<FleetMachineDto>
+        MachineTypes? typeFilter = null;
+        if (string.IsNullOrWhiteSpace(criteria.Type) == false &&
+            Enum.TryParse<MachineTypes>(criteria.Type, true, out MachineTypes typeEnum))
         {
-            Items = pagedDtos,
-            Page = page,
-            PageSize = pageSize,
-            TotalCount = totalCount,
+            typeFilter = typeEnum;
+        }
+
+        return new FleetSearchParameters
+        {
+            Search = criteria.Search,
+            Os = osFilter,
+            MachineType = typeFilter,
+            CpuMin = criteria.CpuMin,
+            CpuMax = criteria.CpuMax,
+            MemoryMin = criteria.MemoryMin,
+            MemoryMax = criteria.MemoryMax,
+            PendingUpdatesMin = criteria.PendingUpdatesMin,
+            SecurityUpdatesMin = criteria.SecurityUpdatesMin,
+            FailedServicesMin = criteria.FailedServicesMin,
+            DiskMin = criteria.DiskMin,
+            DiskMax = criteria.DiskMax,
+            HasDiskHealthIssue = criteria.HasDiskHealthIssue,
+            HasHardwareIssue = criteria.HasHardwareIssue,
+            HealthStatusValues = healthStatusValues,
+            LastSeenAfter = criteria.LastSeenAfter,
+            LastSeenBefore = criteria.LastSeenBefore,
+            SortBy = criteria.SortBy,
+            SortDescending = string.Equals(criteria.SortDir, "desc", StringComparison.OrdinalIgnoreCase),
+            Skip = (page - 1) * pageSize,
+            Take = pageSize,
         };
     }
 
     private static List<FleetMachineDto> BuildDtos(
-        List<SearchScalarRow> rows,
+        List<FleetMachineRow> rows,
         Dictionary<long, bool> onlineMap,
         Dictionary<long, DateTimeOffset?> lastPingMap)
     {
         List<FleetMachineDto> dtos = new(rows.Count);
 
-        foreach (SearchScalarRow row in rows)
+        foreach (FleetMachineRow row in rows)
         {
             bool isOnline = onlineMap.GetValueOrDefault(row.Id, false);
-            DateTimeOffset? lastPing = row.StateLastPingAt ?? lastPingMap.GetValueOrDefault(row.Id);
-
-            MachineHealthStatus health;
-            if (row.StateHealthStatus.HasValue)
-            {
-                health = (MachineHealthStatus)row.StateHealthStatus.Value;
-            }
-            else
-            {
-                health = ComputeScalarHealth(
-                    isOnline, row.StateCpuUsagePercent, row.StateMemoryUsagePercent, row.StateFailedServices);
-            }
+            DateTimeOffset? lastPing = row.LastSeenAt ?? lastPingMap.GetValueOrDefault(row.Id);
+            MachineHealthStatus health = (MachineHealthStatus)row.HealthStatus;
 
             dtos.Add(new FleetMachineDto
             {
                 Id = row.Id,
                 Name = row.Name,
-                Hostname = row.StateHostname,
-                IpAddress = ParseFirstIp(row.StateIpAddresses),
-                HardwareModel = row.StateHardwareModel,
+                Hostname = row.Hostname,
+                IpAddress = ParseFirstIp(row.IpAddresses),
+                HardwareModel = row.HardwareModel,
                 HealthStatus = health,
-                CpuUsagePercent = row.StateCpuUsagePercent,
-                MemoryUsagePercent = row.StateMemoryUsagePercent,
+                CpuUsagePercent = row.CpuUsagePercent,
+                MemoryUsagePercent = row.MemoryUsagePercent,
                 IsOnline = isOnline,
                 LastPing = lastPing,
-                PendingUpdates = row.StatePendingUpdates ?? 0,
-                SecurityUpdates = row.StateSecurityUpdates ?? 0,
-                FailedServices = row.StateFailedServices ?? 0,
-                TotalServices = row.StateTotalServices ?? 0,
+                PendingUpdates = row.PendingUpdates ?? 0,
+                SecurityUpdates = row.SecurityUpdates ?? 0,
+                FailedServices = row.FailedServices ?? 0,
+                TotalServices = row.TotalServices ?? 0,
+                MaxDiskUsagePercent = row.MaxDiskUsagePercent,
+                HasDiskHealthIssue = row.HasDiskHealthIssue ?? false,
+                HasHardwareIssue = row.HasHardwareIssue ?? false,
             });
         }
 
         return dtos;
     }
 
-    private static IQueryable<SearchScalarRow> BuildBaseQuery(
-        DatabaseContext db, int tenantId, MachineSearchCriteria criteria)
-    {
-        IQueryable<SearchScalarRow> query =
-            from m in db.Machines
-            join s in db.MachineStateSummaries on m.Id equals s.MachineId into stateJoin
-            from s in stateJoin.DefaultIfEmpty()
-            where m.TenantId == tenantId && m.IsDeleted == false
-            select new SearchScalarRow
-            {
-                Id = m.Id,
-                Name = m.Name,
-                OperatingSystem = m.OperatingSystem,
-                MachineType = m.MachineType,
-                StateHostname = s != null ? s.Hostname : null,
-                StateIpAddresses = s != null ? s.IpAddresses : null,
-                StateHardwareModel = s != null ? s.HardwareModel : null,
-                StateCpuUsagePercent = s != null ? s.CpuUsagePercent : (int?)null,
-                StateMemoryUsagePercent = s != null ? s.MemoryUsagePercent : (int?)null,
-                StatePendingUpdates = s != null ? s.PendingUpdates : (int?)null,
-                StateSecurityUpdates = s != null ? s.SecurityUpdates : (int?)null,
-                StateFailedServices = s != null ? s.FailedServices : (int?)null,
-                StateTotalServices = s != null ? s.TotalServices : (int?)null,
-                StateMaxDiskUsagePercent = s != null ? s.MaxDiskUsagePercent : (int?)null,
-                StateHasDiskHealthIssue = s != null ? s.HasDiskHealthIssue : (bool?)null,
-                StateHasHardwareIssue = s != null ? s.HasHardwareIssue : (bool?)null,
-                StateHealthStatus = s != null ? s.HealthStatus : (short?)null,
-                StateLastPingAt = s != null ? s.LastSeenAt : (DateTimeOffset?)null,
-            };
-
-        // Apply SQL-level text search filter.
-        if (string.IsNullOrWhiteSpace(criteria.Search) == false)
-        {
-            string searchLower = criteria.Search.ToLowerInvariant();
-            query = query.Where(r =>
-                r.Name.ToLower().Contains(searchLower) ||
-                (r.StateHostname != null && r.StateHostname.ToLower().Contains(searchLower)) ||
-                (r.StateHardwareModel != null && r.StateHardwareModel.ToLower().Contains(searchLower)));
-        }
-
-        // Apply SQL-level OS filter.
-        if (string.IsNullOrWhiteSpace(criteria.Os) == false &&
-            Enum.TryParse<OperatingSystems>(criteria.Os, true, out OperatingSystems osEnum))
-        {
-            query = query.Where(r => r.OperatingSystem == osEnum);
-        }
-
-        // Apply SQL-level machine type filter.
-        if (string.IsNullOrWhiteSpace(criteria.Type) == false &&
-            Enum.TryParse<MachineTypes>(criteria.Type, true, out MachineTypes typeEnum))
-        {
-            query = query.Where(r => r.MachineType == typeEnum);
-        }
-
-        // Apply SQL-level CPU range filters.
-        if (criteria.CpuMin.HasValue)
-        {
-            int cpuMin = criteria.CpuMin.Value;
-            query = query.Where(r => r.StateCpuUsagePercent != null && r.StateCpuUsagePercent >= cpuMin);
-        }
-
-        if (criteria.CpuMax.HasValue)
-        {
-            int cpuMax = criteria.CpuMax.Value;
-            query = query.Where(r => r.StateCpuUsagePercent != null && r.StateCpuUsagePercent <= cpuMax);
-        }
-
-        // Apply SQL-level memory range filters.
-        if (criteria.MemoryMin.HasValue)
-        {
-            int memMin = criteria.MemoryMin.Value;
-            query = query.Where(r => r.StateMemoryUsagePercent != null && r.StateMemoryUsagePercent >= memMin);
-        }
-
-        if (criteria.MemoryMax.HasValue)
-        {
-            int memMax = criteria.MemoryMax.Value;
-            query = query.Where(r => r.StateMemoryUsagePercent != null && r.StateMemoryUsagePercent <= memMax);
-        }
-
-        // Apply SQL-level threshold filters.
-        if (criteria.PendingUpdatesMin.HasValue)
-        {
-            int pendingMin = criteria.PendingUpdatesMin.Value;
-            query = query.Where(r => r.StatePendingUpdates != null && r.StatePendingUpdates >= pendingMin);
-        }
-
-        if (criteria.SecurityUpdatesMin.HasValue)
-        {
-            int securityMin = criteria.SecurityUpdatesMin.Value;
-            query = query.Where(r => r.StateSecurityUpdates != null && r.StateSecurityUpdates >= securityMin);
-        }
-
-        if (criteria.FailedServicesMin.HasValue)
-        {
-            int failedMin = criteria.FailedServicesMin.Value;
-            query = query.Where(r => r.StateFailedServices != null && r.StateFailedServices >= failedMin);
-        }
-
-        // Apply disk and hardware filters using pre-computed scalar columns.
-        if (criteria.DiskMin.HasValue)
-        {
-            int diskMin = criteria.DiskMin.Value;
-            query = query.Where(r => r.StateMaxDiskUsagePercent != null && r.StateMaxDiskUsagePercent >= diskMin);
-        }
-
-        if (criteria.DiskMax.HasValue)
-        {
-            int diskMax = criteria.DiskMax.Value;
-            query = query.Where(r => r.StateMaxDiskUsagePercent != null && r.StateMaxDiskUsagePercent <= diskMax);
-        }
-
-        if (criteria.HasDiskHealthIssue.HasValue)
-        {
-            bool hasDiskIssue = criteria.HasDiskHealthIssue.Value;
-            query = query.Where(r => r.StateHasDiskHealthIssue != null && r.StateHasDiskHealthIssue == hasDiskIssue);
-        }
-
-        if (criteria.HasHardwareIssue.HasValue)
-        {
-            bool hasHwIssue = criteria.HasHardwareIssue.Value;
-            query = query.Where(r => r.StateHasHardwareIssue != null && r.StateHasHardwareIssue == hasHwIssue);
-        }
-
-        // Apply SQL-level health status filter using the pre-computed HealthStatus column.
-        if (string.IsNullOrWhiteSpace(criteria.HealthStatus) == false)
-        {
-            HashSet<MachineHealthStatus> targetStatuses = ParseHealthStatuses(criteria.HealthStatus);
-            if (targetStatuses.Count > 0)
-            {
-                List<short> statusValues = targetStatuses.Select(hs => (short)hs).ToList();
-                query = query.Where(r => r.StateHealthStatus != null && statusValues.Contains(r.StateHealthStatus.Value));
-            }
-        }
-
-        // Apply SQL-level last seen time range filters using the LastPingAt column.
-        if (criteria.LastSeenAfter.HasValue)
-        {
-            DateTimeOffset after = criteria.LastSeenAfter.Value;
-            query = query.Where(r => r.StateLastPingAt != null && r.StateLastPingAt >= after);
-        }
-
-        if (criteria.LastSeenBefore.HasValue)
-        {
-            DateTimeOffset before = criteria.LastSeenBefore.Value;
-            query = query.Where(r => r.StateLastPingAt != null && r.StateLastPingAt <= before);
-        }
-
-        return query;
-    }
-
-    /// <summary>
-    /// Applies ORDER BY at the SQL level for columns that exist in the scalar projection.
-    /// Supports status and disk sorting via pre-computed health column and JSONB expressions.
-    /// </summary>
-    private static IOrderedQueryable<SearchScalarRow> ApplySqlSort(
-        IQueryable<SearchScalarRow> query, string? sortBy, string? sortDir)
-    {
-        bool desc = string.Equals(sortDir, "desc", StringComparison.OrdinalIgnoreCase);
-
-        return sortBy?.ToLowerInvariant() switch
-        {
-            "status" => desc
-                ? query.OrderByDescending(r => r.StateHealthStatus ?? 0)
-                : query.OrderBy(r => r.StateHealthStatus ?? 0),
-            "cpu" => desc
-                ? query.OrderByDescending(r => r.StateCpuUsagePercent ?? 0)
-                : query.OrderBy(r => r.StateCpuUsagePercent ?? 0),
-            "memory" => desc
-                ? query.OrderByDescending(r => r.StateMemoryUsagePercent ?? 0)
-                : query.OrderBy(r => r.StateMemoryUsagePercent ?? 0),
-            "disk" => desc
-                ? query.OrderByDescending(r => r.StateMaxDiskUsagePercent ?? 0)
-                : query.OrderBy(r => r.StateMaxDiskUsagePercent ?? 0),
-            _ => desc
-                ? query.OrderByDescending(r => r.Name)
-                : query.OrderBy(r => r.Name),
-        };
-    }
-
-    private static IEnumerable<FleetMachineDto> ApplyInMemoryFilters(
-        List<FleetMachineDto> dtos, MachineSearchCriteria criteria)
-    {
-        IEnumerable<FleetMachineDto> filtered = dtos;
-
-        // Health status filter (comma-separated, e.g., "healthy,warning").
-        if (string.IsNullOrWhiteSpace(criteria.HealthStatus) == false)
-        {
-            HashSet<MachineHealthStatus> targetStatuses = ParseHealthStatuses(criteria.HealthStatus);
-            if (targetStatuses.Count > 0)
-            {
-                filtered = filtered.Where(m => targetStatuses.Contains(m.HealthStatus));
-            }
-        }
-
-        // Last seen time range filters.
-        if (criteria.LastSeenAfter.HasValue)
-        {
-            DateTimeOffset after = criteria.LastSeenAfter.Value;
-            filtered = filtered.Where(m => m.LastPing.HasValue && m.LastPing.Value >= after);
-        }
-
-        if (criteria.LastSeenBefore.HasValue)
-        {
-            DateTimeOffset before = criteria.LastSeenBefore.Value;
-            filtered = filtered.Where(m => m.LastPing.HasValue && m.LastPing.Value <= before);
-        }
-
-        return filtered;
-    }
-
-    private static List<FleetMachineDto> ApplyPostEnrichmentFilters(
-        List<FleetMachineDto> dtos, MachineSearchCriteria criteria)
-    {
-        IEnumerable<FleetMachineDto> filtered = dtos;
-
-        if (criteria.DiskMin.HasValue)
-        {
-            int diskMin = criteria.DiskMin.Value;
-            filtered = filtered.Where(m => m.MaxDiskUsagePercent.HasValue && m.MaxDiskUsagePercent.Value >= diskMin);
-        }
-
-        if (criteria.DiskMax.HasValue)
-        {
-            int diskMax = criteria.DiskMax.Value;
-            filtered = filtered.Where(m => m.MaxDiskUsagePercent.HasValue && m.MaxDiskUsagePercent.Value <= diskMax);
-        }
-
-        if (criteria.HasDiskHealthIssue.HasValue)
-        {
-            if (criteria.HasDiskHealthIssue.Value == true)
-            {
-                filtered = filtered.Where(m => m.HasDiskHealthIssue == true);
-            }
-            else
-            {
-                filtered = filtered.Where(m => m.HasDiskHealthIssue == false);
-            }
-        }
-
-        if (criteria.HasHardwareIssue.HasValue)
-        {
-            if (criteria.HasHardwareIssue.Value == true)
-            {
-                filtered = filtered.Where(m => m.HasHardwareIssue == true);
-            }
-            else
-            {
-                filtered = filtered.Where(m => m.HasHardwareIssue == false);
-            }
-        }
-
-        return filtered.ToList();
-    }
-
-    /// <summary>
-    /// In-memory sort for the full-scan path. Supports all sort keys including
-    /// status and disk which are not available at the SQL level.
-    /// </summary>
-    private static List<FleetMachineDto> ApplySort(IEnumerable<FleetMachineDto> dtos, string? sortBy, string? sortDir)
-    {
-        bool desc = string.Equals(sortDir, "desc", StringComparison.OrdinalIgnoreCase);
-
-        return sortBy?.ToLowerInvariant() switch
-        {
-            "status" => desc
-                ? dtos.OrderByDescending(m => m.HealthStatus).ToList()
-                : dtos.OrderBy(m => m.HealthStatus).ToList(),
-            "cpu" => desc
-                ? dtos.OrderByDescending(m => m.CpuUsagePercent ?? 0).ToList()
-                : dtos.OrderBy(m => m.CpuUsagePercent ?? 0).ToList(),
-            "memory" => desc
-                ? dtos.OrderByDescending(m => m.MemoryUsagePercent ?? 0).ToList()
-                : dtos.OrderBy(m => m.MemoryUsagePercent ?? 0).ToList(),
-            "disk" => desc
-                ? dtos.OrderByDescending(m => m.MaxDiskUsagePercent ?? 0).ToList()
-                : dtos.OrderBy(m => m.MaxDiskUsagePercent ?? 0).ToList(),
-            _ => desc
-                ? dtos.OrderByDescending(m => m.Name).ToList()
-                : dtos.OrderBy(m => m.Name).ToList(),
-        };
-    }
-
-    /// <summary>
-    /// Enriches DTOs with pre-computed scalar fields (disk usage, hardware health) from the
-    /// already-loaded scalar row projections and recomputes health status accordingly.
-    /// </summary>
-    private static void EnrichWithJsonbData(
+    private static void EnrichWithHealth(
         List<FleetMachineDto> dtos,
-        List<SearchScalarRow> scalarRows,
+        List<FleetMachineRow> rows,
         Dictionary<long, bool> onlineMap)
     {
-        Dictionary<long, SearchScalarRow> rowMap = scalarRows.ToDictionary(r => r.Id);
+        Dictionary<long, FleetMachineRow> rowMap = rows.ToDictionary(r => r.Id);
 
         foreach (FleetMachineDto dto in dtos)
         {
-            if (rowMap.TryGetValue(dto.Id, out SearchScalarRow? row) == false)
+            if (rowMap.TryGetValue(dto.Id, out FleetMachineRow? row) == false)
             {
                 continue;
             }
 
-            dto.MaxDiskUsagePercent = row.StateMaxDiskUsagePercent;
-            dto.HasDiskHealthIssue = row.StateHasDiskHealthIssue ?? false;
-            dto.HasHardwareIssue = row.StateHasHardwareIssue ?? false;
-
-            // Recompute health with the full set of scalar fields.
             bool isOnline = onlineMap.GetValueOrDefault(dto.Id, false);
-            dto.HealthStatus = ComputeEnrichedHealth(isOnline, row, dto);
+            dto.HealthStatus = ComputeDetailedHealth(isOnline, row, dto);
         }
     }
 
-    /// <summary>
-    /// Computes health status using both scalar and JSONB data from the search scalar row.
-    /// </summary>
-    private static MachineHealthStatus ComputeEnrichedHealth(
-        bool isOnline, SearchScalarRow row, FleetMachineDto dto)
+    private static MachineHealthStatus ComputeDetailedHealth(
+        bool isOnline, FleetMachineRow row, FleetMachineDto dto)
     {
         if (isOnline == false)
         {
@@ -569,8 +222,9 @@ public sealed class MachineSearchService : IMachineSearchService
         }
 
         // Critical checks.
-        if ((row.StateCpuUsagePercent >= 95) || (row.StateMemoryUsagePercent >= 95) ||
-            ((row.StateFailedServices ?? 0) > 0))
+        if ((row.FailedServices > 0) ||
+            (row.CpuUsagePercent >= 95) ||
+            (row.MemoryUsagePercent >= 95))
         {
             return MachineHealthStatus.Critical;
         }
@@ -581,7 +235,7 @@ public sealed class MachineSearchService : IMachineSearchService
         }
 
         // Warning checks.
-        if ((row.StateCpuUsagePercent >= 80) || (row.StateMemoryUsagePercent >= 80))
+        if ((row.CpuUsagePercent >= 80) || (row.MemoryUsagePercent >= 80))
         {
             return MachineHealthStatus.Warning;
         }
@@ -617,27 +271,6 @@ public sealed class MachineSearchService : IMachineSearchService
         }
 
         return statuses;
-    }
-
-    private static MachineHealthStatus ComputeScalarHealth(
-        bool isOnline, int? cpuPercent, int? memPercent, int? failedServices)
-    {
-        if (isOnline == false)
-        {
-            return MachineHealthStatus.Offline;
-        }
-
-        if ((cpuPercent >= 95) || (memPercent >= 95) || (failedServices > 0))
-        {
-            return MachineHealthStatus.Critical;
-        }
-
-        if ((cpuPercent >= 80) || (memPercent >= 80))
-        {
-            return MachineHealthStatus.Warning;
-        }
-
-        return MachineHealthStatus.Healthy;
     }
 
     private static string? ParseFirstIp(string? ipJson)

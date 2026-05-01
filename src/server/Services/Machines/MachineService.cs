@@ -4,14 +4,11 @@
 
 using System.Security.Cryptography;
 using System.Text;
-using Framlux.FleetManagement.Database;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Grpc.AgentRegistration;
 using Framlux.FleetManagement.Server.Services.Billing;
-using LinqToDB;
-using LinqToDB.Async;
 using StackExchange.Redis;
 
 namespace Framlux.FleetManagement.Server.Services.Machines;
@@ -56,11 +53,11 @@ public sealed class MachineService : IMachineService
         string tokenHash = ComputeSha256Hash(registrationToken);
 
         using IServiceScope scope = _serviceScopeFactory.CreateScope();
-        DatabaseContext db = scope.ServiceProvider.GetRequiredService<DatabaseContext>();
+        IRegistrationTokenRepository tokenRepo = scope.ServiceProvider.GetRequiredService<IRegistrationTokenRepository>();
+        IMachineRepository machineRepo = scope.ServiceProvider.GetRequiredService<IMachineRepository>();
 
         // Validate the registration token exists
-        RegistrationToken? token = await db.RegistrationTokens
-            .FirstOrDefaultAsync(t => t.TokenHash == tokenHash, cancellationToken);
+        RegistrationToken? token = await tokenRepo.GetTokenByHashAsync(tokenHash, cancellationToken);
 
         if (token is null)
         {
@@ -79,11 +76,7 @@ public sealed class MachineService : IMachineService
         string normalizedSystemId = systemId.ToLowerInvariant();
 
         // Look up the machine by serial number and system ID within the token's tenant
-        Machine? machine = await db.Machines
-            .FirstOrDefaultAsync(m => m.SerialNumber == normalizedSerial &&
-                                      m.SystemId == normalizedSystemId &&
-                                      m.TenantId == token.TenantId &&
-                                      m.IsDeleted == false, cancellationToken);
+        Machine? machine = await machineRepo.GetMachineBySerialAndSystemIdAsync(normalizedSerial, normalizedSystemId, token.TenantId, cancellationToken);
 
         if (machine is null)
         {
@@ -105,10 +98,7 @@ public sealed class MachineService : IMachineService
         if (cachedKey.HasValue)
         {
             // Atomic update: only deliver key if it hasn't been delivered yet
-            int updated = await db.Machines
-                .Where(m => m.Id == machine.Id && m.KeyDeliveredAt == null)
-                .Set(m => m.KeyDeliveredAt, DateTimeOffset.UtcNow)
-                .UpdateAsync(cancellationToken);
+            int updated = await machineRepo.MarkKeyDeliveredAsync(machine.Id, cancellationToken);
 
             if (updated > 0)
             {
@@ -125,17 +115,13 @@ public sealed class MachineService : IMachineService
         // If no cached key was available, re-issue a new one.
         if (plaintextKey is null)
         {
-            IMachineRepository machineRepo = scope.ServiceProvider.GetRequiredService<IMachineRepository>();
             plaintextKey = await machineRepo.ReissueApiKeyAsync(machine.Id, cancellationToken);
 
             if (plaintextKey is not null)
             {
                 // Cache for retry resilience and mark as delivered.
                 await redisDb.StringSetAsync(cacheKey, plaintextKey, ApiKeyCacheTtl);
-                await db.Machines
-                    .Where(m => m.Id == machine.Id)
-                    .Set(m => m.KeyDeliveredAt, DateTimeOffset.UtcNow)
-                    .UpdateAsync(cancellationToken);
+                await machineRepo.SetKeyDeliveredAsync(machine.Id, cancellationToken);
                 _logger.LogInformation("API key re-issued for machine {MachineId} in tenant {TenantId}", machine.Id, token.TenantId);
             }
         }
@@ -155,10 +141,9 @@ public sealed class MachineService : IMachineService
         string tokenHash = ComputeSha256Hash(request.RegistrationToken);
 
         using IServiceScope scope = _serviceScopeFactory.CreateScope();
-        DatabaseContext dbContext = scope.ServiceProvider.GetRequiredService<DatabaseContext>();
+        IRegistrationTokenRepository tokenRepo = scope.ServiceProvider.GetRequiredService<IRegistrationTokenRepository>();
 
-        RegistrationToken? token = await dbContext.RegistrationTokens
-            .FirstOrDefaultAsync(t => t.TokenHash == tokenHash, cancellationToken);
+        RegistrationToken? token = await tokenRepo.GetTokenByHashAsync(tokenHash, cancellationToken);
 
         if (token is null)
         {
@@ -188,8 +173,8 @@ public sealed class MachineService : IMachineService
         }
 
         // Check subscription machine limit
-        TenantSubscription? subscription = await dbContext.TenantSubscriptions
-            .FirstOrDefaultAsync(s => s.TenantId == token.TenantId, cancellationToken);
+        ISubscriptionRepository subscriptionRepo = scope.ServiceProvider.GetRequiredService<ISubscriptionRepository>();
+        TenantSubscription? subscription = await subscriptionRepo.GetSubscriptionForTenantAsync(token.TenantId, cancellationToken);
         int? machineLimit = subscription?.MachineLimit;
 
         _logger.LogInformation("Creating Machine for {SerialNumber} with token {TokenId}", request.SerialNumber, token.Id);
@@ -218,7 +203,8 @@ public sealed class MachineService : IMachineService
         }
 
         // Pre-create summary and detail rows so all subsequent telemetry writes are pure UPDATEs.
-        await dbContext.InsertAsync(new MachineStateSummary
+        IMachineStateRepository machineStateRepo = scope.ServiceProvider.GetRequiredService<IMachineStateRepository>();
+        await machineStateRepo.InsertSummaryAsync(new MachineStateSummary
         {
             MachineId = createdMachine.Id,
             TenantId = token.TenantId,
@@ -226,12 +212,12 @@ public sealed class MachineService : IMachineService
             OperatingSystem = (byte)machine.OperatingSystem,
             MachineType = (byte)machine.MachineType,
             HealthStatus = 0,
-        }, token: cancellationToken);
+        }, cancellationToken);
 
-        await dbContext.InsertAsync(new MachineStateDetail
+        await machineStateRepo.InsertDetailAsync(new MachineStateDetail
         {
             MachineId = createdMachine.Id,
-        }, token: cancellationToken);
+        }, cancellationToken);
 
         // Cache the plaintext key in Redis for recovery via GetRegistrationStatus
         IDatabase redisDb = _redis.GetDatabase();
@@ -247,9 +233,7 @@ public sealed class MachineService : IMachineService
             Tenant? tenant = await tenantRepository.GetTenantByIdAsync(token.TenantId, cancellationToken);
             if (tenant is not null)
             {
-                int machineCount = await dbContext.Machines
-                    .Where(m => m.TenantId == token.TenantId && m.IsDeleted == false)
-                    .CountAsync(cancellationToken);
+                int machineCount = await machineRepository.GetActiveMachineCountAsync(token.TenantId, cancellationToken);
                 await _billingApiClient.UpdateQuantityAsync(tenant.ExternalId, machineCount, cancellationToken);
             }
         }

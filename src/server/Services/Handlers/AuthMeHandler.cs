@@ -24,6 +24,9 @@ public sealed class AuthMeHandler : IAuthMeHandler
     /// <param name="tenantRepository">The tenant repository.</param>
     public AuthMeHandler(IUserRepository userRepository, ITenantRepository tenantRepository)
     {
+        ArgumentNullException.ThrowIfNull(userRepository);
+        ArgumentNullException.ThrowIfNull(tenantRepository);
+
         _userRepository = userRepository;
         _tenantRepository = tenantRepository;
     }

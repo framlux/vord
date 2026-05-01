@@ -346,4 +346,26 @@ public partial class DatabaseRepository : ITenantRepository
 
         return roles;
     }
+
+    /// <inheritdoc/>
+    public async Task<(List<Tenant> Tenants, int TotalCount)> SearchTenantsPagedAsync(string? search, int skip, int take, CancellationToken cancellationToken)
+    {
+        IQueryable<Tenant> query = _db.Tenants;
+
+        if (string.IsNullOrWhiteSpace(search) == false)
+        {
+            string searchTrimmed = search.Trim();
+            query = query.Where(t => t.Name.Contains(searchTrimmed));
+        }
+
+        int totalCount = await query.CountAsync(cancellationToken);
+
+        List<Tenant> tenants = await query
+            .OrderBy(t => t.Id)
+            .Skip(skip)
+            .Take(take)
+            .ToListAsync(cancellationToken);
+
+        return (tenants, totalCount);
+    }
 }

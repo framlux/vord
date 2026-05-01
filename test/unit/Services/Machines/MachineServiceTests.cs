@@ -188,6 +188,8 @@ public class MachineServiceTests
             .Returns(Task.FromResult<RedisValue>(RedisValue.Null));
 
         IMachineRepository machineRepo = Substitute.For<IMachineRepository>();
+        machineRepo.GetMachineBySerialAndSystemIdAsync(machine.SerialNumber, machine.SystemId, token.TenantId, Arg.Any<CancellationToken>())
+            .Returns(machine);
         machineRepo.ReissueApiKeyAsync(machine.Id, Arg.Any<CancellationToken>())
             .Returns("reissued-plaintext-key");
 

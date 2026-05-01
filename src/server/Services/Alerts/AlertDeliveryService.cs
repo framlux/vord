@@ -34,6 +34,12 @@ public sealed class AlertDeliveryService : IAlertDeliveryService
         IWebhookSecretProtector secretProtector,
         ILogger<AlertDeliveryService> logger)
     {
+        ArgumentNullException.ThrowIfNull(scopeFactory);
+        ArgumentNullException.ThrowIfNull(httpClientFactory);
+        ArgumentNullException.ThrowIfNull(redis);
+        ArgumentNullException.ThrowIfNull(secretProtector);
+        ArgumentNullException.ThrowIfNull(logger);
+
         _scopeFactory = scopeFactory;
         _httpClientFactory = httpClientFactory;
         _redis = redis;

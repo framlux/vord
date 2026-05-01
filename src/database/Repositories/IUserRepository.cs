@@ -95,4 +95,13 @@ public interface IUserRepository
     /// <param name="userIds">The user IDs to retrieve.</param>
     /// <param name="cancellationToken">A cancellation token.</param>
     Task<List<UserAccount>> GetUsersByIdsAsync(List<int> userIds, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Returns a paginated list of user accounts with optional search, ordered by ID.
+    /// </summary>
+    /// <param name="search">Optional username search term.</param>
+    /// <param name="skip">Number of records to skip.</param>
+    /// <param name="take">Number of records to take.</param>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    Task<(List<UserAccount> Users, int TotalCount)> SearchUsersPagedAsync(string? search, int skip, int take, CancellationToken cancellationToken = default);
 }

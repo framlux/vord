@@ -3,17 +3,14 @@
 // See LICENSE for details.
 
 using System.Text.Json;
-using Framlux.FleetManagement.Database;
 using Framlux.FleetManagement.Database.Models;
+using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Grpc.AgentTelemetry;
 using Framlux.FleetManagement.Server.Auth;
 using Framlux.FleetManagement.Server.Services.Billing;
 using Framlux.FleetManagement.Server.Services.Infrastructure;
-using Framlux.FleetManagement.Server.Services.Machines;
 using Framlux.FleetManagement.Server.Services.Telemetry;
 using Grpc.Core;
-using LinqToDB;
-using LinqToDB.Data;
 using Microsoft.AspNetCore.Authorization;
 using Npgsql;
 
@@ -251,7 +248,7 @@ public sealed class TelemetryService : Telemetry.TelemetryBase
             if (newItems.Count > 0)
             {
                 using IServiceScope scope = _scopeFactory.CreateScope();
-                DatabaseContext db = scope.ServiceProvider.GetRequiredService<DatabaseContext>();
+                IMachineStateRepository machineStateRepo = scope.ServiceProvider.GetRequiredService<IMachineStateRepository>();
 
                 // Bulk insert all new telemetry rows.
                 List<MachineTelemetry> rows = newItems.Select(n => new MachineTelemetry
@@ -266,7 +263,7 @@ public sealed class TelemetryService : Telemetry.TelemetryBase
 
                 try
                 {
-                    await db.BulkCopyAsync(new BulkCopyOptions { BulkCopyType = BulkCopyType.MultipleRows }, rows, ct);
+                    await machineStateRepo.BulkInsertTelemetryAsync(rows, ct);
                 }
                 catch (PostgresException ex) when (ex.SqlState == PostgresUniqueViolation)
                 {
@@ -277,7 +274,7 @@ public sealed class TelemetryService : Telemetry.TelemetryBase
                     {
                         try
                         {
-                            await db.InsertAsync(row, token: ct);
+                            await machineStateRepo.InsertTelemetryAsync(row, ct);
                         }
                         catch (PostgresException innerEx) when (innerEx.SqlState == PostgresUniqueViolation)
                         {

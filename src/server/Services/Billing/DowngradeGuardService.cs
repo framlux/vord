@@ -16,6 +16,8 @@ public sealed class DowngradeGuardService : IDowngradeGuardService
     /// </summary>
     public DowngradeGuardService(ITenantRepository tenantRepository)
     {
+        ArgumentNullException.ThrowIfNull(tenantRepository);
+
         _tenantRepository = tenantRepository;
     }
 

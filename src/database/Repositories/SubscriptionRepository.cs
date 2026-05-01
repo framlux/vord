@@ -191,4 +191,14 @@ public partial class DatabaseRepository : ISubscriptionRepository
 
         return updated;
     }
+
+    /// <inheritdoc/>
+    public async Task<List<TenantSubscription>> GetSubscriptionsForTenantsAsync(List<int> tenantIds, CancellationToken cancellationToken)
+    {
+        List<TenantSubscription> subscriptions = await _db.TenantSubscriptions
+            .Where(s => tenantIds.Contains(s.TenantId))
+            .ToListAsync(cancellationToken);
+
+        return subscriptions;
+    }
 }

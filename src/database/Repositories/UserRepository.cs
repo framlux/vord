@@ -215,4 +215,26 @@ public partial class DatabaseRepository : IUserRepository
 
         return users;
     }
+
+    /// <inheritdoc/>
+    public async Task<(List<UserAccount> Users, int TotalCount)> SearchUsersPagedAsync(string? search, int skip, int take, CancellationToken cancellationToken)
+    {
+        IQueryable<UserAccount> query = _db.UserAccounts;
+
+        if (string.IsNullOrWhiteSpace(search) == false)
+        {
+            string searchTrimmed = search.Trim();
+            query = query.Where(u => u.Username.Contains(searchTrimmed));
+        }
+
+        int totalCount = await query.CountAsync(cancellationToken);
+
+        List<UserAccount> users = await query
+            .OrderBy(u => u.Id)
+            .Skip(skip)
+            .Take(take)
+            .ToListAsync(cancellationToken);
+
+        return (users, totalCount);
+    }
 }

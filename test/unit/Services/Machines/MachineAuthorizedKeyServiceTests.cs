@@ -57,7 +57,7 @@ public sealed class MachineAuthorizedKeyServiceTests
         DatabaseRepository repository = new(dbFactory.Context, new NullLogger<DatabaseRepository>());
 
         return new MachineAuthorizedKeyService(
-            dbFactory.Context,
+            repository,
             repository,
             repository,
             repository,

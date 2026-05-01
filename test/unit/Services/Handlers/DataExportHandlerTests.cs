@@ -34,7 +34,7 @@ public class DataExportHandlerTests
 
         DatabaseRepository repo = new(dbFactory.Context, NullLogger<DatabaseRepository>.Instance);
 
-        return new DataExportHandler(dbFactory.Context, repo, repo, repo, repo, repo, repo, logger, objectStorage);
+        return new DataExportHandler(repo, repo, repo, repo, repo, repo, logger, objectStorage);
     }
 
     private static async Task<long> SeedMachine(TestDatabaseFactory dbFactory, int tenantId = 1, bool isDeleted = false, string hostname = "export-host")

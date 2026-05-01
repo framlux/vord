@@ -2,16 +2,14 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
-using Framlux.FleetManagement.Database;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
+using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Server.Options;
 using Framlux.FleetManagement.Server.Services.Handlers;
 using Framlux.Vord.BillingGrpc;
 using Google.Protobuf.WellKnownTypes;
 using Grpc.Core;
-using LinqToDB;
-using LinqToDB.Async;
 using Microsoft.Extensions.Options;
 
 namespace Framlux.FleetManagement.Server.Endpoints.Grpc;
@@ -50,36 +48,20 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
         ValidateInternalKey(context);
 
         using IServiceScope scope = _scopeFactory.CreateScope();
-        DatabaseContext db = scope.ServiceProvider.GetRequiredService<DatabaseContext>();
+        IUserRepository userRepo = scope.ServiceProvider.GetRequiredService<IUserRepository>();
+        ITenantRepository tenantRepo = scope.ServiceProvider.GetRequiredService<ITenantRepository>();
 
         (int page, int pageSize) = SanitizePagination(request.Page, request.PageSize);
 
-        IQueryable<UserAccount> query = db.UserAccounts;
-
-        if (string.IsNullOrWhiteSpace(request.Search) == false)
-        {
-            string search = request.Search.Trim();
-            query = query.Where(u => u.Username.Contains(search));
-        }
-
-        int totalCount = await query.CountAsync(context.CancellationToken);
-
-        List<UserAccount> users = await query
-            .OrderBy(u => u.Id)
-            .Skip((page - 1) * pageSize)
-            .Take(pageSize)
-            .ToListAsync(context.CancellationToken);
+        (List<UserAccount> users, int totalCount) = await userRepo.SearchUsersPagedAsync(
+            request.Search, (page - 1) * pageSize, pageSize, context.CancellationToken);
 
         List<int> userIds = users.Select(u => u.Id).ToList();
 
-        List<UserTenantRole> allRoles = await db.UserTenantRoles
-            .Where(r => userIds.Contains(r.UserId) && (r.IsActive == true))
-            .ToListAsync(context.CancellationToken);
+        List<UserTenantRole> allRoles = await tenantRepo.GetActiveRolesForUsersAsync(userIds, context.CancellationToken);
 
         List<int> distinctTenantIds = allRoles.Select(r => r.AssignedTenantId).Distinct().ToList();
-        List<Tenant> roleTenants = await db.Tenants
-            .Where(t => distinctTenantIds.Contains(t.Id))
-            .ToListAsync(context.CancellationToken);
+        List<Tenant> roleTenants = await tenantRepo.ListTenantsByIdsAsync(distinctTenantIds, context.CancellationToken);
 
         Dictionary<int, string> tenantNames = roleTenants.ToDictionary(t => t.Id, t => t.Name);
 
@@ -106,48 +88,28 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
         ValidateInternalKey(context);
 
         using IServiceScope scope = _scopeFactory.CreateScope();
-        DatabaseContext db = scope.ServiceProvider.GetRequiredService<DatabaseContext>();
+        ITenantRepository tenantRepo = scope.ServiceProvider.GetRequiredService<ITenantRepository>();
+        IMachineRepository machineRepo = scope.ServiceProvider.GetRequiredService<IMachineRepository>();
+        ISubscriptionRepository subscriptionRepo = scope.ServiceProvider.GetRequiredService<ISubscriptionRepository>();
 
         (int page, int pageSize) = SanitizePagination(request.Page, request.PageSize);
 
-        IQueryable<Tenant> query = db.Tenants;
-
-        if (string.IsNullOrWhiteSpace(request.Search) == false)
-        {
-            string search = request.Search.Trim();
-            query = query.Where(t => t.Name.Contains(search));
-        }
-
-        int totalCount = await query.CountAsync(context.CancellationToken);
-
-        List<Tenant> tenants = await query
-            .OrderBy(t => t.Id)
-            .Skip((page - 1) * pageSize)
-            .Take(pageSize)
-            .ToListAsync(context.CancellationToken);
+        (List<Tenant> tenants, int totalCount) = await tenantRepo.SearchTenantsPagedAsync(
+            request.Search, (page - 1) * pageSize, pageSize, context.CancellationToken);
 
         List<int> tenantIds = tenants.Select(t => t.Id).ToList();
 
         // Batch-load machine counts per tenant
-        List<Machine> activeMachines = await db.Machines
-            .Where(m => tenantIds.Contains(m.TenantId) && (m.IsDeleted == false))
-            .ToListAsync(context.CancellationToken);
-        Dictionary<int, int> machineCounts = activeMachines
-            .GroupBy(m => m.TenantId)
-            .ToDictionary(g => g.Key, g => g.Count());
+        Dictionary<int, int> machineCounts = await machineRepo.GetMachineCountsByTenantsAsync(tenantIds, context.CancellationToken);
 
         // Batch-load user counts per tenant
-        List<UserTenantRole> activeRoles = await db.UserTenantRoles
-            .Where(r => tenantIds.Contains(r.AssignedTenantId) && (r.IsActive == true))
-            .ToListAsync(context.CancellationToken);
+        List<UserTenantRole> activeRoles = await tenantRepo.GetActiveRolesForTenantsAsync(tenantIds, context.CancellationToken);
         Dictionary<int, int> userCounts = activeRoles
             .GroupBy(r => r.AssignedTenantId)
             .ToDictionary(g => g.Key, g => g.Count());
 
         // Batch-load subscriptions
-        List<TenantSubscription> subscriptionList = await db.TenantSubscriptions
-            .Where(s => tenantIds.Contains(s.TenantId))
-            .ToListAsync(context.CancellationToken);
+        List<TenantSubscription> subscriptionList = await subscriptionRepo.GetSubscriptionsForTenantsAsync(tenantIds, context.CancellationToken);
         Dictionary<int, TenantSubscription> subscriptions = subscriptionList
             .ToDictionary(s => s.TenantId);
 
@@ -177,36 +139,30 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
         ValidateInternalKey(context);
 
         using IServiceScope scope = _scopeFactory.CreateScope();
-        DatabaseContext db = scope.ServiceProvider.GetRequiredService<DatabaseContext>();
+        ITenantRepository tenantRepo = scope.ServiceProvider.GetRequiredService<ITenantRepository>();
+        IUserRepository userRepo = scope.ServiceProvider.GetRequiredService<IUserRepository>();
+        IMachineRepository machineRepo = scope.ServiceProvider.GetRequiredService<IMachineRepository>();
+        ISubscriptionRepository subscriptionRepo = scope.ServiceProvider.GetRequiredService<ISubscriptionRepository>();
 
         Tenant tenant = await ResolveTenantByExternalIdAsync(
-            db, request.TenantExternalId, context.CancellationToken);
+            tenantRepo, request.TenantExternalId, context.CancellationToken);
 
         // Load users via tenant roles
-        List<UserTenantRole> roles = await db.UserTenantRoles
-            .Where(r => (r.AssignedTenantId == tenant.Id) && (r.IsActive == true))
-            .ToListAsync(context.CancellationToken);
+        List<UserTenantRole> roles = await tenantRepo.GetActiveRolesForTenantAsync(tenant.Id, context.CancellationToken);
 
         List<int> userIds = roles.Select(r => r.UserId).Distinct().ToList();
-        List<UserAccount> users = await db.UserAccounts
-            .Where(u => userIds.Contains(u.Id))
-            .ToListAsync(context.CancellationToken);
+        List<UserAccount> users = await userRepo.GetUsersByIdsAsync(userIds, context.CancellationToken);
 
         Dictionary<int, string> tenantNameMap = new Dictionary<int, string>
         {
             { tenant.Id, tenant.Name }
         };
 
-        // Load machines
-        List<Machine> machines = await db.Machines
-            .Where(m => m.TenantId == tenant.Id)
-            .OrderBy(m => m.Id)
-            .ToListAsync(context.CancellationToken);
+        // Load all machines (including deleted) for admin detail view
+        (List<Machine> machines, int _) = await machineRepo.SearchMachinesPagedAsync(tenant.Id, 0, 10000, context.CancellationToken);
 
         // Load subscription
-        TenantSubscription? subscription = await db.TenantSubscriptions
-            .Where(s => s.TenantId == tenant.Id)
-            .FirstOrDefaultAsync(context.CancellationToken);
+        TenantSubscription? subscription = await subscriptionRepo.GetSubscriptionForTenantAsync(tenant.Id, context.CancellationToken);
 
         int machineCount = machines.Count(m => m.IsDeleted == false);
         int userCount = roles.Count;
@@ -239,33 +195,26 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
         ValidateInternalKey(context);
 
         using IServiceScope scope = _scopeFactory.CreateScope();
-        DatabaseContext db = scope.ServiceProvider.GetRequiredService<DatabaseContext>();
+        ITenantRepository tenantRepo = scope.ServiceProvider.GetRequiredService<ITenantRepository>();
+        IMachineRepository machineRepo = scope.ServiceProvider.GetRequiredService<IMachineRepository>();
 
         (int page, int pageSize) = SanitizePagination(request.Page, request.PageSize);
 
-        IQueryable<Machine> query = db.Machines;
-
-        // Optionally filter by tenant
+        // Resolve optional tenant filter
+        int? tenantIdFilter = null;
         if (string.IsNullOrWhiteSpace(request.TenantExternalId) == false)
         {
             Tenant tenant = await ResolveTenantByExternalIdAsync(
-                db, request.TenantExternalId, context.CancellationToken);
-            query = query.Where(m => m.TenantId == tenant.Id);
+                tenantRepo, request.TenantExternalId, context.CancellationToken);
+            tenantIdFilter = tenant.Id;
         }
 
-        int totalCount = await query.CountAsync(context.CancellationToken);
-
-        List<Machine> machines = await query
-            .OrderBy(m => m.Id)
-            .Skip((page - 1) * pageSize)
-            .Take(pageSize)
-            .ToListAsync(context.CancellationToken);
+        (List<Machine> machines, int totalCount) = await machineRepo.SearchMachinesPagedAsync(
+            tenantIdFilter, (page - 1) * pageSize, pageSize, context.CancellationToken);
 
         // Batch-load tenant names
         List<int> tenantIds = machines.Select(m => m.TenantId).Distinct().ToList();
-        List<Tenant> tenantList = await db.Tenants
-            .Where(t => tenantIds.Contains(t.Id))
-            .ToListAsync(context.CancellationToken);
+        List<Tenant> tenantList = await tenantRepo.ListTenantsByIdsAsync(tenantIds, context.CancellationToken);
         Dictionary<int, string> tenantNames = tenantList.ToDictionary(t => t.Id, t => t.Name);
 
         ListMachinesResponse response = new ListMachinesResponse
@@ -291,27 +240,23 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
         ValidateInternalKey(context);
 
         using IServiceScope scope = _scopeFactory.CreateScope();
-        DatabaseContext db = scope.ServiceProvider.GetRequiredService<DatabaseContext>();
+        ITenantRepository tenantRepo = scope.ServiceProvider.GetRequiredService<ITenantRepository>();
+        IUserRepository userRepo = scope.ServiceProvider.GetRequiredService<IUserRepository>();
+        IAuditLogRepository auditLogRepo = scope.ServiceProvider.GetRequiredService<IAuditLogRepository>();
 
         (int page, int pageSize) = SanitizePagination(request.Page, request.PageSize);
 
-        IQueryable<AuditLogEntry> query = db.AuditLog;
-
-        // Optionally filter by tenant
+        // Resolve optional tenant filter
+        int? tenantIdFilter = null;
         if (string.IsNullOrWhiteSpace(request.TenantExternalId) == false)
         {
             Tenant tenant = await ResolveTenantByExternalIdAsync(
-                db, request.TenantExternalId, context.CancellationToken);
-            query = query.Where(e => e.TenantId == tenant.Id);
+                tenantRepo, request.TenantExternalId, context.CancellationToken);
+            tenantIdFilter = tenant.Id;
         }
 
-        int totalCount = await query.CountAsync(context.CancellationToken);
-
-        List<AuditLogEntry> entries = await query
-            .OrderByDescending(e => e.Timestamp)
-            .Skip((page - 1) * pageSize)
-            .Take(pageSize)
-            .ToListAsync(context.CancellationToken);
+        (List<AuditLogEntry> entries, int totalCount) = await auditLogRepo.QueryAuditLogEntriesAsync(
+            tenantIdFilter, (page - 1) * pageSize, pageSize, context.CancellationToken);
 
         // Batch-load usernames
         List<int> userIds = entries
@@ -320,9 +265,7 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
             .Distinct()
             .ToList();
 
-        List<UserAccount> userList = await db.UserAccounts
-            .Where(u => userIds.Contains(u.Id))
-            .ToListAsync(context.CancellationToken);
+        List<UserAccount> userList = await userRepo.GetUsersByIdsAsync(userIds, context.CancellationToken);
         Dictionary<int, string> usernames = userList.ToDictionary(u => u.Id, u => u.Username);
 
         // Batch-load tenant names
@@ -332,9 +275,7 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
             .Distinct()
             .ToList();
 
-        List<Tenant> tenantList = await db.Tenants
-            .Where(t => tenantIds.Contains(t.Id))
-            .ToListAsync(context.CancellationToken);
+        List<Tenant> tenantList = await tenantRepo.ListTenantsByIdsAsync(tenantIds, context.CancellationToken);
         Dictionary<int, string> tenantNames = tenantList.ToDictionary(t => t.Id, t => t.Name);
 
         ListAuditLogEntriesResponse response = new ListAuditLogEntriesResponse
@@ -371,11 +312,9 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
         ValidateInternalKey(context);
 
         using IServiceScope scope = _scopeFactory.CreateScope();
-        DatabaseContext db = scope.ServiceProvider.GetRequiredService<DatabaseContext>();
+        IServerConfigurationRepository configRepo = scope.ServiceProvider.GetRequiredService<IServerConfigurationRepository>();
 
-        List<ServerConfigurationSettings> settings = await db.ServerConfigurationSettings
-            .OrderBy(s => s.Key)
-            .ToListAsync(context.CancellationToken);
+        List<ServerConfigurationSettings> settings = await configRepo.GetAllSettingsAsync(context.CancellationToken);
 
         GetServerSettingsResponse response = new GetServerSettingsResponse();
 
@@ -417,13 +356,9 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
         ServerConfigurationSettingKeys key = (ServerConfigurationSettingKeys)request.Key;
 
         using IServiceScope scope = _scopeFactory.CreateScope();
-        DatabaseContext db = scope.ServiceProvider.GetRequiredService<DatabaseContext>();
+        IServerConfigurationRepository configRepo = scope.ServiceProvider.GetRequiredService<IServerConfigurationRepository>();
 
-        int updated = await db.ServerConfigurationSettings
-            .Where(s => s.Key == key)
-            .Set(s => s.Value, request.Value)
-            .Set(s => s.Version, s => s.Version + 1)
-            .UpdateAsync(context.CancellationToken);
+        int updated = await configRepo.UpdateSettingAsync(key, request.Value, context.CancellationToken);
 
         if (updated == 0)
         {
@@ -467,19 +402,15 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
         }
 
         using IServiceScope scope = _scopeFactory.CreateScope();
-        DatabaseContext db = scope.ServiceProvider.GetRequiredService<DatabaseContext>();
+        ITenantRepository tenantRepo = scope.ServiceProvider.GetRequiredService<ITenantRepository>();
+        ISubscriptionRepository subscriptionRepo = scope.ServiceProvider.GetRequiredService<ISubscriptionRepository>();
 
         Tenant tenant = await ResolveTenantByExternalIdAsync(
-            db, request.TenantExternalId, context.CancellationToken);
+            tenantRepo, request.TenantExternalId, context.CancellationToken);
 
-        int updated = await db.TenantSubscriptions
-            .Where(s => s.TenantId == tenant.Id)
-            .Set(s => s.Tier, tier)
-            .Set(s => s.Status, status)
-            .Set(s => s.MachineLimit, request.MachineLimit > 0 ? request.MachineLimit : (int?)null)
-            .Set(s => s.RetentionDays, request.RetentionDays)
-            .Set(s => s.UpdatedAt, DateTimeOffset.UtcNow)
-            .UpdateAsync(context.CancellationToken);
+        int? machineLimit = request.MachineLimit > 0 ? request.MachineLimit : null;
+        int updated = await subscriptionRepo.UpdateSubscriptionAdminAsync(
+            tenant.Id, tier, status, machineLimit, request.RetentionDays, context.CancellationToken);
 
         if (updated == 0)
         {
@@ -510,49 +441,47 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
         ValidateInternalKey(context);
 
         using IServiceScope scope = _scopeFactory.CreateScope();
-        DatabaseContext db = scope.ServiceProvider.GetRequiredService<DatabaseContext>();
+        ITenantRepository tenantRepo = scope.ServiceProvider.GetRequiredService<ITenantRepository>();
 
         Tenant tenant = await ResolveTenantByExternalIdAsync(
-            db, request.TenantExternalId, context.CancellationToken);
+            tenantRepo, request.TenantExternalId, context.CancellationToken);
 
-        TenantOidcConfiguration? existing = await db.TenantOidcConfigurations
-            .Where(c => c.TenantId == tenant.Id)
-            .FirstOrDefaultAsync(context.CancellationToken);
+        TenantOidcConfiguration? existing = await tenantRepo.GetTenantOidcConfigByTenantIdAsync(tenant.Id, context.CancellationToken);
 
-        DateTimeOffset now = DateTimeOffset.UtcNow;
+        string? metadataAddress = string.IsNullOrWhiteSpace(request.MetadataAddress) ? null : request.MetadataAddress;
 
         if (existing is not null)
         {
-            await db.TenantOidcConfigurations
-                .Where(c => c.Id == existing.Id)
-                .Set(c => c.Authority, request.Authority)
-                .Set(c => c.ClientId, request.ClientId)
-                .Set(c => c.ClientSecret, request.ClientSecret)
-                .Set(c => c.MetadataAddress, string.IsNullOrWhiteSpace(request.MetadataAddress) ? null : request.MetadataAddress)
-                .Set(c => c.EmailDomain, request.EmailDomain)
-                .Set(c => c.IsEnabled, request.IsEnabled)
-                .Set(c => c.UpdatedAt, now)
-                .UpdateAsync(context.CancellationToken);
+            await tenantRepo.UpdateTenantOidcConfigAsync(
+                tenant.Id,
+                request.Authority,
+                request.ClientId,
+                request.ClientSecret,
+                metadataAddress,
+                request.EmailDomain,
+                request.IsEnabled,
+                context.CancellationToken);
 
             _logger.LogInformation(
                 "FleetAdmin: updated OIDC configuration for tenant {TenantId}", tenant.Id);
         }
         else
         {
+            DateTimeOffset now = DateTimeOffset.UtcNow;
             TenantOidcConfiguration config = new TenantOidcConfiguration
             {
                 TenantId = tenant.Id,
                 Authority = request.Authority,
                 ClientId = request.ClientId,
                 ClientSecret = request.ClientSecret,
-                MetadataAddress = string.IsNullOrWhiteSpace(request.MetadataAddress) ? null : request.MetadataAddress,
+                MetadataAddress = metadataAddress,
                 EmailDomain = request.EmailDomain,
                 IsEnabled = request.IsEnabled,
                 CreatedAt = now,
-                UpdatedAt = now
+                UpdatedAt = now,
             };
 
-            await db.InsertAsync(config, token: context.CancellationToken);
+            await tenantRepo.InsertTenantOidcConfigAsync(config, context.CancellationToken);
 
             _logger.LogInformation(
                 "FleetAdmin: created OIDC configuration for tenant {TenantId}", tenant.Id);
@@ -709,11 +638,9 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
     }
 
     private static async Task<Tenant> ResolveTenantByExternalIdAsync(
-        DatabaseContext db, string externalId, CancellationToken cancellationToken)
+        ITenantRepository tenantRepo, string externalId, CancellationToken cancellationToken)
     {
-        Tenant? tenant = await db.Tenants
-            .Where(t => t.ExternalId == externalId)
-            .FirstOrDefaultAsync(cancellationToken);
+        Tenant? tenant = await tenantRepo.GetTenantByExternalIdAsync(externalId, cancellationToken);
 
         if (tenant is null)
         {

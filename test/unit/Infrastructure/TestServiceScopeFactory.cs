@@ -56,8 +56,29 @@ public sealed class TestServiceScopeFactory : IServiceScopeFactory
 
     private sealed class TestServiceProvider : IServiceProvider
     {
+        private static readonly HashSet<Type> RepositoryInterfaces =
+        [
+            typeof(IAlertEventRepository),
+            typeof(IAlertRuleRepository),
+            typeof(IAuditLogRepository),
+            typeof(IDataExportRepository),
+            typeof(IDatabaseTransactionProvider),
+            typeof(IInvitationRepository),
+            typeof(IMachineRepository),
+            typeof(IMachineStateRepository),
+            typeof(IRegistrationTokenRepository),
+            typeof(IRemoteCommandRepository),
+            typeof(IServerConfigurationRepository),
+            typeof(ISigningKeyRepository),
+            typeof(ISubscriptionRepository),
+            typeof(ITenantRepository),
+            typeof(IUserRepository),
+            typeof(IWebhookRepository),
+        ];
+
         private readonly DatabaseContext _context;
         private readonly Dictionary<Type, object> _additionalServices;
+        private DatabaseRepository? _cachedRepo;
 
         public TestServiceProvider(DatabaseContext context, Dictionary<Type, object> additionalServices)
         {
@@ -72,17 +93,17 @@ public sealed class TestServiceScopeFactory : IServiceScopeFactory
                 return _context;
             }
 
-            // Auto-resolve repository interfaces backed by the test DatabaseContext.
-            if (serviceType == typeof(IMachineStateRepository))
+            // Auto-resolve any repository interface backed by DatabaseRepository.
+            if (RepositoryInterfaces.Contains(serviceType))
             {
-                if (_additionalServices.TryGetValue(serviceType, out object? cached))
+                if (_additionalServices.TryGetValue(serviceType, out object? overridden))
                 {
-                    return cached;
+                    return overridden;
                 }
 
-                DatabaseRepository repo = new(_context, NullLogger<DatabaseRepository>.Instance);
+                _cachedRepo ??= new DatabaseRepository(_context, NullLogger<DatabaseRepository>.Instance);
 
-                return repo;
+                return _cachedRepo;
             }
 
             if (_additionalServices.TryGetValue(serviceType, out object? service))

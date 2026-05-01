@@ -32,6 +32,11 @@ public sealed class WebhookDeliveryWorkerService : BackgroundService
         IServiceScopeFactory scopeFactory,
         ILogger<WebhookDeliveryWorkerService> logger)
     {
+        ArgumentNullException.ThrowIfNull(redis);
+        ArgumentNullException.ThrowIfNull(deliveryService);
+        ArgumentNullException.ThrowIfNull(scopeFactory);
+        ArgumentNullException.ThrowIfNull(logger);
+
         _redis = redis;
         _deliveryService = deliveryService;
         _scopeFactory = scopeFactory;
@@ -180,26 +185,5 @@ public sealed class WebhookDeliveryWorkerService : BackgroundService
                 await dlDb.ListLeftPushAsync(AlertConstants.DeliveryDeadLetterKey, deadLetterPayload);
             }
         }
-    }
-
-    /// <summary>
-    /// Represents a serialized delivery job from the Redis queue.
-    /// </summary>
-    internal sealed class DeliveryJob
-    {
-        /// <summary>The alert event identifier.</summary>
-        public long EventId { get; set; }
-
-        /// <summary>The alert rule identifier.</summary>
-        public int RuleId { get; set; }
-
-        /// <summary>The tenant identifier.</summary>
-        public int TenantId { get; set; }
-
-        /// <summary>The number of retry attempts made so far.</summary>
-        public int RetryCount { get; set; }
-
-        /// <summary>Earliest time this job should be processed. Null means immediately.</summary>
-        public DateTimeOffset? NotBefore { get; set; }
     }
 }

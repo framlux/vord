@@ -146,4 +146,20 @@ public interface IMachineRepository
         OperatingSystems? osFilter,
         MachineTypes? typeFilter,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Returns a paginated list of machines with optional tenant filter, ordered by ID.
+    /// </summary>
+    /// <param name="tenantId">Optional tenant ID filter.</param>
+    /// <param name="skip">Number of records to skip.</param>
+    /// <param name="take">Number of records to take.</param>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    Task<(List<Machine> Machines, int TotalCount)> SearchMachinesPagedAsync(int? tenantId, int skip, int take, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Returns the count of active (non-deleted) machines per tenant for the given tenant IDs.
+    /// </summary>
+    /// <param name="tenantIds">The tenant IDs to query.</param>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    Task<Dictionary<int, int>> GetMachineCountsByTenantsAsync(List<int> tenantIds, CancellationToken cancellationToken = default);
 }

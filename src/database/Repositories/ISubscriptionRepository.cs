@@ -94,4 +94,11 @@ public interface ISubscriptionRepository
     /// <param name="cancellationToken">A cancellation token.</param>
     /// <returns>The number of rows updated.</returns>
     Task<int> UpdateSubscriptionAdminAsync(int tenantId, SubscriptionTier tier, SubscriptionStatus status, int? machineLimit, int retentionDays, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Returns subscriptions for the given tenant IDs.
+    /// </summary>
+    /// <param name="tenantIds">The tenant IDs to query.</param>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    Task<List<TenantSubscription>> GetSubscriptionsForTenantsAsync(List<int> tenantIds, CancellationToken cancellationToken = default);
 }

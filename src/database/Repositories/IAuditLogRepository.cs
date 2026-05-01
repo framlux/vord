@@ -40,4 +40,14 @@ public interface IAuditLogRepository
     /// <param name="take">Number of records to take.</param>
     /// <param name="cancellationToken">A cancellation token.</param>
     Task<(List<AuditLogEntry> Entries, int TotalCount)> QueryAuditLogEntriesAsync(int? tenantId, int skip, int take, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Returns a cursor-based batch of audit log entries for a tenant, ordered by ID ascending.
+    /// Used for data export operations.
+    /// </summary>
+    /// <param name="tenantId">The tenant ID to filter by.</param>
+    /// <param name="afterId">Return only entries with ID greater than this value.</param>
+    /// <param name="batchSize">Maximum number of entries to return.</param>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    Task<List<AuditLogEntry>> GetAuditLogBatchAsync(int tenantId, long afterId, int batchSize, CancellationToken cancellationToken = default);
 }

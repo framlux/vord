@@ -33,6 +33,13 @@ public sealed class SubscriptionService : ISubscriptionService
         IOptions<SubscriptionOptions> subscriptionOptions,
         ILogger<SubscriptionService> logger)
     {
+        ArgumentNullException.ThrowIfNull(subscriptionRepo);
+        ArgumentNullException.ThrowIfNull(machineRepo);
+        ArgumentNullException.ThrowIfNull(alertRuleRepo);
+        ArgumentNullException.ThrowIfNull(webhookRepo);
+        ArgumentNullException.ThrowIfNull(subscriptionOptions);
+        ArgumentNullException.ThrowIfNull(logger);
+
         _subscriptionRepo = subscriptionRepo;
         _machineRepo = machineRepo;
         _alertRuleRepo = alertRuleRepo;

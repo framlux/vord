@@ -379,4 +379,44 @@ public partial class DatabaseRepository : IMachineRepository
 
         return query;
     }
+
+    /// <inheritdoc/>
+    public async Task<(List<Machine> Machines, int TotalCount)> SearchMachinesPagedAsync(int? tenantId, int skip, int take, CancellationToken cancellationToken)
+    {
+        IQueryable<Machine> query = _db.Machines;
+
+        if (tenantId.HasValue)
+        {
+            query = query.Where(m => m.TenantId == tenantId.Value);
+        }
+
+        int totalCount = await query.CountAsync(cancellationToken);
+
+        List<Machine> machines = await query
+            .OrderBy(m => m.Id)
+            .Skip(skip)
+            .Take(take)
+            .ToListAsync(cancellationToken);
+
+        return (machines, totalCount);
+    }
+
+    /// <inheritdoc/>
+    public async Task<Dictionary<int, int>> GetMachineCountsByTenantsAsync(List<int> tenantIds, CancellationToken cancellationToken)
+    {
+        if (tenantIds.Count == 0)
+        {
+            return new Dictionary<int, int>();
+        }
+
+        List<Machine> machines = await _db.Machines
+            .Where(m => tenantIds.Contains(m.TenantId) && (m.IsDeleted == false))
+            .ToListAsync(cancellationToken);
+
+        Dictionary<int, int> counts = machines
+            .GroupBy(m => m.TenantId)
+            .ToDictionary(g => g.Key, g => g.Count());
+
+        return counts;
+    }
 }

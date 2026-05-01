@@ -130,4 +130,13 @@ public interface ITenantRepository
     /// <param name="userIds">The user IDs to query.</param>
     /// <param name="cancellationToken">A cancellation token.</param>
     Task<List<UserTenantRole>> GetActiveRolesForUsersAsync(List<int> userIds, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Returns a paginated list of tenants with optional search, ordered by ID.
+    /// </summary>
+    /// <param name="search">Optional name search term.</param>
+    /// <param name="skip">Number of records to skip.</param>
+    /// <param name="take">Number of records to take.</param>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    Task<(List<Tenant> Tenants, int TotalCount)> SearchTenantsPagedAsync(string? search, int skip, int take, CancellationToken cancellationToken = default);
 }

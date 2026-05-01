@@ -36,6 +36,12 @@ public sealed class AlertEvaluationService : BackgroundService
         IAlertDeliveryService deliveryService,
         ILogger<AlertEvaluationService> logger)
     {
+        ArgumentNullException.ThrowIfNull(scopeFactory);
+        ArgumentNullException.ThrowIfNull(distributedLock);
+        ArgumentNullException.ThrowIfNull(redis);
+        ArgumentNullException.ThrowIfNull(deliveryService);
+        ArgumentNullException.ThrowIfNull(logger);
+
         _scopeFactory = scopeFactory;
         _distributedLock = distributedLock;
         _redis = redis;

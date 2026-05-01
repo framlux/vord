@@ -33,6 +33,11 @@ public sealed class DataExportBackgroundService : BackgroundService
         IDataExportHandler handler,
         ILogger<DataExportBackgroundService> logger)
     {
+        ArgumentNullException.ThrowIfNull(scopeFactory);
+        ArgumentNullException.ThrowIfNull(distributedLock);
+        ArgumentNullException.ThrowIfNull(handler);
+        ArgumentNullException.ThrowIfNull(logger);
+
         _scopeFactory = scopeFactory;
         _distributedLock = distributedLock;
         _handler = handler;

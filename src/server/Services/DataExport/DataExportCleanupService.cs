@@ -32,6 +32,11 @@ public sealed class DataExportCleanupService : BackgroundService
         IObjectStorageService objectStorageService,
         ILogger<DataExportCleanupService> logger)
     {
+        ArgumentNullException.ThrowIfNull(scopeFactory);
+        ArgumentNullException.ThrowIfNull(distributedLock);
+        ArgumentNullException.ThrowIfNull(objectStorageService);
+        ArgumentNullException.ThrowIfNull(logger);
+
         _scopeFactory = scopeFactory;
         _distributedLock = distributedLock;
         _objectStorageService = objectStorageService;

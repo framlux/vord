@@ -38,6 +38,12 @@ public sealed class StripeSyncService : BackgroundService
         IDistributedLock distributedLock,
         ILogger<StripeSyncService> logger)
     {
+        ArgumentNullException.ThrowIfNull(scopeFactory);
+        ArgumentNullException.ThrowIfNull(billingApiClient);
+        ArgumentNullException.ThrowIfNull(billingOptions);
+        ArgumentNullException.ThrowIfNull(distributedLock);
+        ArgumentNullException.ThrowIfNull(logger);
+
         _scopeFactory = scopeFactory;
         _billingApiClient = billingApiClient;
         _billingOptions = billingOptions.Value;

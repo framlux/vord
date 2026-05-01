@@ -2,15 +2,12 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
-using Framlux.FleetManagement.Database;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Migrations.Export;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Server.Services.DataExport;
 using Framlux.FleetManagement.Server.Services.Infrastructure;
-using LinqToDB;
-using LinqToDB.Async;
 using Microsoft.Data.Sqlite;
 using System.Security.Cryptography;
 
@@ -22,7 +19,6 @@ namespace Framlux.FleetManagement.Server.Services.Handlers;
 /// </summary>
 public sealed class DataExportHandler : IDataExportHandler
 {
-    private readonly DatabaseContext _db;
     private readonly IDataExportRepository _exportRepo;
     private readonly IAuditLogRepository _auditLog;
     private readonly IDatabaseTransactionProvider _transactionProvider;
@@ -38,7 +34,6 @@ public sealed class DataExportHandler : IDataExportHandler
     /// Creates a new instance of the <see cref="DataExportHandler"/> class.
     /// </summary>
     public DataExportHandler(
-        DatabaseContext db,
         IDataExportRepository exportRepo,
         IAuditLogRepository auditLog,
         IDatabaseTransactionProvider transactionProvider,
@@ -48,7 +43,6 @@ public sealed class DataExportHandler : IDataExportHandler
         ILogger<DataExportHandler> logger,
         IObjectStorageService objectStorageService)
     {
-        ArgumentNullException.ThrowIfNull(db);
         ArgumentNullException.ThrowIfNull(exportRepo);
         ArgumentNullException.ThrowIfNull(auditLog);
         ArgumentNullException.ThrowIfNull(transactionProvider);
@@ -58,7 +52,6 @@ public sealed class DataExportHandler : IDataExportHandler
         ArgumentNullException.ThrowIfNull(logger);
         ArgumentNullException.ThrowIfNull(objectStorageService);
 
-        _db = db;
         _exportRepo = exportRepo;
         _auditLog = auditLog;
         _transactionProvider = transactionProvider;
@@ -265,11 +258,7 @@ public sealed class DataExportHandler : IDataExportHandler
         while (true)
         {
             long capturedLastId = lastId;
-            List<AuditLogEntry> batch = await _db.AuditLog
-                .Where(a => a.TenantId == tenantId && a.Id > capturedLastId)
-                .OrderBy(a => a.Id)
-                .Take(BatchSize)
-                .ToListAsync(ct);
+            List<AuditLogEntry> batch = await _auditLog.GetAuditLogBatchAsync(tenantId, capturedLastId, BatchSize, ct);
 
             if (batch.Count == 0)
             {
@@ -323,9 +312,7 @@ public sealed class DataExportHandler : IDataExportHandler
     private async Task ExportMachinesAsync(
         SqliteConnection sqlite, int tenantId, CancellationToken ct)
     {
-        List<Machine> machines = await _db.Machines
-            .Where(m => m.TenantId == tenantId && m.IsDeleted == false)
-            .ToListAsync(ct);
+        List<Machine> machines = await _machineRepo.ListActiveMachinesForTenantAsync(tenantId, ct);
 
         using SqliteTransaction tx = sqlite.BeginTransaction();
         using SqliteCommand cmd = sqlite.CreateCommand();
@@ -469,12 +456,7 @@ public sealed class DataExportHandler : IDataExportHandler
         while (true)
         {
             long capturedLastId = lastId;
-            List<MachineTelemetry> batch = await _db.MachineTelemetry
-                .Where(t => machineIds.Contains(t.MachineId) &&
-                            t.Id > capturedLastId)
-                .OrderBy(t => t.Id)
-                .Take(BatchSize)
-                .ToListAsync(ct);
+            List<MachineTelemetry> batch = await _machineStateRepo.GetTelemetryExportBatchAsync(machineIds, capturedLastId, BatchSize, ct);
 
             if (batch.Count == 0)
             {

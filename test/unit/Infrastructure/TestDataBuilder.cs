@@ -384,6 +384,34 @@ public static class TestDataBuilder
     }
 
     /// <summary>
+    /// Builds a <see cref="DataExportJob"/> with sensible defaults.
+    /// </summary>
+    public static DataExportJob BuildDataExportJob(
+        int tenantId = 1,
+        int requestedByUserId = 1,
+        DataExportJobStatus status = DataExportJobStatus.Pending,
+        string? objectKey = null,
+        string? downloadToken = null,
+        DateTimeOffset? requestedAt = null,
+        DateTimeOffset? expiresAt = null,
+        string? errorMessage = null,
+        long? fileSizeBytes = null)
+    {
+        return new DataExportJob
+        {
+            TenantId = tenantId,
+            RequestedByUserId = requestedByUserId,
+            Status = status,
+            ObjectKey = objectKey ?? "",
+            DownloadToken = downloadToken ?? Guid.NewGuid().ToString("N"),
+            RequestedAt = requestedAt ?? DateTimeOffset.UtcNow,
+            ExpiresAt = expiresAt ?? DateTimeOffset.UtcNow.AddHours(24),
+            ErrorMessage = errorMessage,
+            FileSizeBytes = fileSizeBytes,
+        };
+    }
+
+    /// <summary>
     /// Builds a <see cref="MachineAuthorizedKey"/> with sensible defaults.
     /// </summary>
     public static MachineAuthorizedKey BuildMachineAuthorizedKey(

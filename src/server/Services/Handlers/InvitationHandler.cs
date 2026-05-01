@@ -45,6 +45,16 @@ public sealed class InvitationHandler : IInvitationHandler
         IOptions<SubscriptionOptions> subscriptionOptions,
         IRoleCacheInvalidator roleCacheInvalidator)
     {
+        ArgumentNullException.ThrowIfNull(transactionProvider);
+        ArgumentNullException.ThrowIfNull(auditLog);
+        ArgumentNullException.ThrowIfNull(invitationRepository);
+        ArgumentNullException.ThrowIfNull(tenantRepository);
+        ArgumentNullException.ThrowIfNull(subscriptionRepository);
+        ArgumentNullException.ThrowIfNull(emailService);
+        ArgumentNullException.ThrowIfNull(subscriptionService);
+        ArgumentNullException.ThrowIfNull(subscriptionOptions);
+        ArgumentNullException.ThrowIfNull(roleCacheInvalidator);
+
         _transactionProvider = transactionProvider;
         _auditLog = auditLog;
         _invitationRepository = invitationRepository;

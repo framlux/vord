@@ -133,6 +133,16 @@ public sealed class TenantOidcHandler : ITenantOidcHandler
                 ct);
         }
 
-        return ServiceResult<TenantOidcConfigDto>.Ok(request);
+        TenantOidcConfigDto response = new()
+        {
+            Authority = request.Authority,
+            ClientId = request.ClientId,
+            ClientSecret = "********",
+            MetadataAddress = request.MetadataAddress,
+            EmailDomain = normalizedDomain,
+            IsEnabled = request.IsEnabled,
+        };
+
+        return ServiceResult<TenantOidcConfigDto>.Ok(response);
     }
 }

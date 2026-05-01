@@ -24,6 +24,9 @@ public sealed class BillingApiClient : IBillingApiClient
         BillingManagement.BillingManagementClient grpcClient,
         ILogger<BillingApiClient> logger)
     {
+        ArgumentNullException.ThrowIfNull(grpcClient);
+        ArgumentNullException.ThrowIfNull(logger);
+
         _grpcClient = grpcClient;
         _logger = logger;
     }

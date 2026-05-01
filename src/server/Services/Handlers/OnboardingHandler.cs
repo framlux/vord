@@ -41,6 +41,13 @@ public sealed class OnboardingHandler : IOnboardingHandler
         IOptions<SubscriptionOptions> subscriptionOptions,
         IRoleCacheInvalidator roleCacheInvalidator)
     {
+        ArgumentNullException.ThrowIfNull(transactionProvider);
+        ArgumentNullException.ThrowIfNull(tenantRepository);
+        ArgumentNullException.ThrowIfNull(subscriptionRepository);
+        ArgumentNullException.ThrowIfNull(auditLog);
+        ArgumentNullException.ThrowIfNull(subscriptionOptions);
+        ArgumentNullException.ThrowIfNull(roleCacheInvalidator);
+
         _transactionProvider = transactionProvider;
         _tenantRepository = tenantRepository;
         _subscriptionRepository = subscriptionRepository;

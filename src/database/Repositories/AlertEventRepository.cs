@@ -158,7 +158,11 @@ public partial class DatabaseRepository : IAlertEventRepository
         if (_db.DataProvider.Name.Contains("PostgreSQL"))
         {
             int foldedMachineId = (int)(alertEvent.MachineId ^ (alertEvent.MachineId >> 32));
-            await _db.ExecuteAsync($"SELECT pg_advisory_xact_lock({alertEvent.AlertRuleId}, {foldedMachineId})", cancellationToken, []);
+            await _db.ExecuteAsync(
+                "SELECT pg_advisory_xact_lock(@ruleId, @machineId)",
+                cancellationToken,
+                new DataParameter("@ruleId", alertEvent.AlertRuleId),
+                new DataParameter("@machineId", foldedMachineId));
         }
 
         // Deduplication check: skip insert if an active event already exists for this rule and machine.

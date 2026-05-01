@@ -54,4 +54,14 @@ public partial class DatabaseRepository : IServerConfigurationRepository
 
         return updated;
     }
+
+    /// <inheritdoc/>
+    public async Task<List<ServerConfigurationSettings>> GetAllSettingsAsync(CancellationToken cancellationToken)
+    {
+        List<ServerConfigurationSettings> settings = await _db.ServerConfigurationSettings
+            .OrderBy(s => s.Key)
+            .ToListAsync(cancellationToken);
+
+        return settings;
+    }
 }
