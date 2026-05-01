@@ -3,9 +3,9 @@
 // See LICENSE for details.
 
 using FastEndpoints;
-using Framlux.FleetManagement.Database.Cache;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
+using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Server.Auth;
 using Framlux.FleetManagement.Server.Services.Billing;
 
@@ -30,7 +30,8 @@ public sealed class ResumeSubscriptionResponse
 public sealed class ResumeSubscriptionEndpoint : EndpointWithoutRequest<ApiResponse<ResumeSubscriptionResponse>>
 {
     private readonly IBillingStatus _billingStatus;
-    private readonly IDatabaseCache _databaseCache;
+    private readonly ISubscriptionRepository _subscriptionRepository;
+    private readonly ITenantRepository _tenantRepository;
     private readonly ISubscriptionService _subscriptionService;
     private readonly IBillingApiClient _billingApiClient;
     private readonly ILogger<ResumeSubscriptionEndpoint> _logger;
@@ -40,13 +41,15 @@ public sealed class ResumeSubscriptionEndpoint : EndpointWithoutRequest<ApiRespo
     /// </summary>
     public ResumeSubscriptionEndpoint(
         IBillingStatus billingStatus,
-        IDatabaseCache databaseCache,
+        ISubscriptionRepository subscriptionRepository,
+        ITenantRepository tenantRepository,
         ISubscriptionService subscriptionService,
         IBillingApiClient billingApiClient,
         ILogger<ResumeSubscriptionEndpoint> logger)
     {
         _billingStatus = billingStatus;
-        _databaseCache = databaseCache;
+        _subscriptionRepository = subscriptionRepository;
+        _tenantRepository = tenantRepository;
         _subscriptionService = subscriptionService;
         _billingApiClient = billingApiClient;
         _logger = logger;
@@ -110,10 +113,10 @@ public sealed class ResumeSubscriptionEndpoint : EndpointWithoutRequest<ApiRespo
         }
 
         // Clear the local cancellation/downgrade intent
-        await _databaseCache.SetCancelAtPeriodEndAsync(tenantId.Value, false, PendingSubscriptionAction.None, ct);
+        await _subscriptionRepository.SetCancelAtPeriodEndAsync(tenantId.Value, false, PendingSubscriptionAction.None, ct);
 
         // Tell Stripe to remove cancel_at_period_end (best effort)
-        Tenant? tenant = await _databaseCache.GetTenantByIdAsync(tenantId.Value, ct);
+        Tenant? tenant = await _tenantRepository.GetTenantByIdAsync(tenantId.Value, ct);
         if (tenant is not null)
         {
             try

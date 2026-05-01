@@ -2,9 +2,9 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
-using Framlux.FleetManagement.Database.Cache;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
+using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Server.Options;
 using Framlux.FleetManagement.Server.Services.Infrastructure;
 using Microsoft.Extensions.Options;
@@ -78,17 +78,18 @@ public sealed class StripeSyncService : BackgroundService
     private async Task RunSyncCycleAsync(CancellationToken ct)
     {
         using IServiceScope scope = _scopeFactory.CreateScope();
-        IDatabaseCache databaseCache = scope.ServiceProvider.GetRequiredService<IDatabaseCache>();
+        ISubscriptionRepository subscriptionRepository = scope.ServiceProvider.GetRequiredService<ISubscriptionRepository>();
+        ITenantRepository tenantRepository = scope.ServiceProvider.GetRequiredService<ITenantRepository>();
         ISubscriptionService subscriptionService = scope.ServiceProvider.GetRequiredService<ISubscriptionService>();
 
-        await ReconcilePendingCancellationsAsync(scope, databaseCache, ct);
-        await SyncPaidSubscriptionsAsync(scope, databaseCache, subscriptionService, ct);
+        await ReconcilePendingCancellationsAsync(scope, subscriptionRepository, tenantRepository, ct);
+        await SyncPaidSubscriptionsAsync(scope, subscriptionRepository, tenantRepository, subscriptionService, ct);
     }
 
     private async Task ReconcilePendingCancellationsAsync(
-        IServiceScope scope, IDatabaseCache databaseCache, CancellationToken ct)
+        IServiceScope scope, ISubscriptionRepository subscriptionRepository, ITenantRepository tenantRepository, CancellationToken ct)
     {
-        List<TenantSubscription> pendingCancellations = await databaseCache.GetPendingCancellationsAsync(ct);
+        List<TenantSubscription> pendingCancellations = await subscriptionRepository.GetPendingCancellationsAsync(ct);
 
         if (pendingCancellations.Count == 0)
         {
@@ -101,7 +102,7 @@ public sealed class StripeSyncService : BackgroundService
         {
             try
             {
-                Tenant? tenant = await databaseCache.GetTenantByIdAsync(subscription.TenantId, ct);
+                Tenant? tenant = await tenantRepository.GetTenantByIdAsync(subscription.TenantId, ct);
                 if (tenant is null)
                 {
                     _logger.LogWarning("Tenant {TenantId} not found during reconciliation", subscription.TenantId);
@@ -156,10 +157,10 @@ public sealed class StripeSyncService : BackgroundService
     }
 
     private async Task SyncPaidSubscriptionsAsync(
-        IServiceScope scope, IDatabaseCache databaseCache,
+        IServiceScope scope, ISubscriptionRepository subscriptionRepository, ITenantRepository tenantRepository,
         ISubscriptionService subscriptionService, CancellationToken ct)
     {
-        List<TenantSubscription> paidSubscriptions = await databaseCache.GetPaidSubscriptionsAsync(ct);
+        List<TenantSubscription> paidSubscriptions = await subscriptionRepository.GetPaidSubscriptionsAsync(ct);
 
         if (paidSubscriptions.Count == 0)
         {
@@ -173,7 +174,7 @@ public sealed class StripeSyncService : BackgroundService
         {
             try
             {
-                Tenant? tenant = await databaseCache.GetTenantByIdAsync(subscription.TenantId, ct);
+                Tenant? tenant = await tenantRepository.GetTenantByIdAsync(subscription.TenantId, ct);
                 if (tenant is null)
                 {
                     _logger.LogWarning(
@@ -194,8 +195,8 @@ public sealed class StripeSyncService : BackgroundService
 
                 await SyncMachineQuantityAsync(subscription, tenant.ExternalId, stripeStatus, subscriptionService, ct);
                 await SyncTierAsync(subscription, stripeStatus, scope, proPriceId, teamPriceId, ct);
-                await SyncStatusAsync(subscription, stripeStatus, databaseCache, ct);
-                await SyncPeriodEndAsync(subscription, stripeStatus, databaseCache, ct);
+                await SyncStatusAsync(subscription, stripeStatus, subscriptionRepository, ct);
+                await SyncPeriodEndAsync(subscription, stripeStatus, subscriptionRepository, ct);
             }
             catch (Exception ex)
             {
@@ -258,7 +259,7 @@ public sealed class StripeSyncService : BackgroundService
 
     private async Task SyncStatusAsync(
         TenantSubscription subscription,
-        StripeSubscriptionStatus stripeStatus, IDatabaseCache databaseCache, CancellationToken ct)
+        StripeSubscriptionStatus stripeStatus, ISubscriptionRepository subscriptionRepository, CancellationToken ct)
     {
         SubscriptionStatus? mappedStatus = MapStripeStatusToLocal(stripeStatus.StripeStatus);
         if (mappedStatus is null)
@@ -275,17 +276,17 @@ public sealed class StripeSyncService : BackgroundService
             switch (mappedStatus.Value)
             {
                 case SubscriptionStatus.Active:
-                    await databaseCache.SetSubscriptionActiveAsync(subscription.TenantId, ct);
+                    await subscriptionRepository.SetSubscriptionActiveAsync(subscription.TenantId, ct);
 
                     break;
 
                 case SubscriptionStatus.PastDue:
-                    await databaseCache.SetSubscriptionPastDueAsync(subscription.TenantId, ct);
+                    await subscriptionRepository.SetSubscriptionPastDueAsync(subscription.TenantId, ct);
 
                     break;
 
                 case SubscriptionStatus.Canceled:
-                    await databaseCache.DeactivateSubscriptionAsync(subscription.TenantId, ct);
+                    await subscriptionRepository.DeactivateSubscriptionAsync(subscription.TenantId, ct);
 
                     break;
             }
@@ -294,7 +295,7 @@ public sealed class StripeSyncService : BackgroundService
 
     private async Task SyncPeriodEndAsync(
         TenantSubscription subscription,
-        StripeSubscriptionStatus stripeStatus, IDatabaseCache databaseCache, CancellationToken ct)
+        StripeSubscriptionStatus stripeStatus, ISubscriptionRepository subscriptionRepository, CancellationToken ct)
     {
         if (stripeStatus.CurrentPeriodEnd is null)
         {
@@ -311,7 +312,7 @@ public sealed class StripeSyncService : BackgroundService
                 "Stripe sync: Period end drift detected for tenant {TenantId}. Local: {LocalPeriodEnd}, Stripe: {StripePeriodEnd}. Updating",
                 subscription.TenantId, subscription.CurrentPeriodEnd, stripeStatus.CurrentPeriodEnd.Value);
 
-            await databaseCache.UpdateSubscriptionPeriodEndAsync(
+            await subscriptionRepository.UpdateSubscriptionPeriodEndAsync(
                 subscription.TenantId, stripeStatus.CurrentPeriodEnd.Value, ct);
         }
     }

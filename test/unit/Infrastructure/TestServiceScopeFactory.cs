@@ -3,7 +3,10 @@
 // See LICENSE for details.
 
 using Framlux.FleetManagement.Database;
+using Framlux.FleetManagement.Database.Repositories;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Framlux.FleetManagement.Test.Infrastructure;
 
@@ -67,6 +70,19 @@ public sealed class TestServiceScopeFactory : IServiceScopeFactory
             if (serviceType == typeof(DatabaseContext))
             {
                 return _context;
+            }
+
+            // Auto-resolve repository interfaces backed by the test DatabaseContext.
+            if (serviceType == typeof(IMachineStateRepository))
+            {
+                if (_additionalServices.TryGetValue(serviceType, out object? cached))
+                {
+                    return cached;
+                }
+
+                DatabaseRepository repo = new(_context, NullLogger<DatabaseRepository>.Instance);
+
+                return repo;
             }
 
             if (_additionalServices.TryGetValue(serviceType, out object? service))

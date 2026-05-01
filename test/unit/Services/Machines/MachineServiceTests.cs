@@ -2,15 +2,15 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
-using Framlux.FleetManagement.Database.Cache;
 using Framlux.FleetManagement.Database.Models;
+using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Grpc.AgentRegistration;
 using Framlux.FleetManagement.Server.Services.Billing;
 using Framlux.FleetManagement.Server.Services.Machines;
 using Framlux.FleetManagement.Test.Infrastructure;
 using LinqToDB;
-using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
 using StackExchange.Redis;
 using System.Security.Cryptography;
@@ -46,12 +46,19 @@ public class MachineServiceTests
         return token;
     }
 
-    private static TestServiceScopeFactory CreateScopeFactory(TestDatabaseFactory dbFactory, IDatabaseCache dbCache)
+    private static TestServiceScopeFactory CreateScopeFactory(TestDatabaseFactory dbFactory, IMachineRepository machineRepo, ITenantRepository? tenantRepo = null)
     {
-        return new TestServiceScopeFactory(dbFactory.Context, new Dictionary<Type, object>
+        Dictionary<Type, object> services = new()
         {
-            { typeof(IDatabaseCache), dbCache },
-        });
+            { typeof(IMachineRepository), machineRepo },
+        };
+
+        if (tenantRepo is not null)
+        {
+            services[typeof(ITenantRepository)] = tenantRepo;
+        }
+
+        return new TestServiceScopeFactory(dbFactory.Context, services);
     }
 
     // ========== GetRegistrationStatus tests ==========
@@ -180,11 +187,11 @@ public class MachineServiceTests
         redisDb.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
             .Returns(Task.FromResult<RedisValue>(RedisValue.Null));
 
-        IDatabaseCache dbCache = Substitute.For<IDatabaseCache>();
-        dbCache.ReissueApiKeyAsync(machine.Id, Arg.Any<CancellationToken>())
+        IMachineRepository machineRepo = Substitute.For<IMachineRepository>();
+        machineRepo.ReissueApiKeyAsync(machine.Id, Arg.Any<CancellationToken>())
             .Returns("reissued-plaintext-key");
 
-        TestServiceScopeFactory scopeFactory = CreateScopeFactory(dbFactory, dbCache);
+        TestServiceScopeFactory scopeFactory = CreateScopeFactory(dbFactory, machineRepo);
         ILogger<MachineService> logger = new NullLogger<MachineService>();
         IBillingApiClient billingApiClient = Substitute.For<IBillingApiClient>();
         MachineService service = new(scopeFactory, logger, redis, billingApiClient);
@@ -195,7 +202,7 @@ public class MachineServiceTests
         await Assert.That(result.status).IsEqualTo(RegistrationStatus.RegistrationActive);
         await Assert.That(result.id).IsEqualTo(machine.Id);
         await Assert.That(result.apiKey).IsEqualTo("reissued-plaintext-key");
-        await dbCache.Received(1).ReissueApiKeyAsync(machine.Id, Arg.Any<CancellationToken>());
+        await machineRepo.Received(1).ReissueApiKeyAsync(machine.Id, Arg.Any<CancellationToken>());
         await redisDb.Received(1).StringSetAsync(
             Arg.Any<RedisKey>(),
             Arg.Is<RedisValue>(v => v == "reissued-plaintext-key"),
@@ -263,8 +270,8 @@ public class MachineServiceTests
     public async Task RegisterSystem_NoToken_ReturnsError()
     {
         using TestDatabaseFactory dbFactory = new();
-        IDatabaseCache dbCache = Substitute.For<IDatabaseCache>();
-        TestServiceScopeFactory scopeFactory = CreateScopeFactory(dbFactory, dbCache);
+        IMachineRepository machineRepo = Substitute.For<IMachineRepository>();
+        TestServiceScopeFactory scopeFactory = CreateScopeFactory(dbFactory, machineRepo);
         ILogger<MachineService> logger = new NullLogger<MachineService>();
         IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
         redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(Substitute.For<IDatabase>());
@@ -293,8 +300,8 @@ public class MachineServiceTests
     public async Task RegisterSystem_InvalidToken_ReturnsError()
     {
         using TestDatabaseFactory dbFactory = new();
-        IDatabaseCache dbCache = Substitute.For<IDatabaseCache>();
-        TestServiceScopeFactory scopeFactory = CreateScopeFactory(dbFactory, dbCache);
+        IMachineRepository machineRepo = Substitute.For<IMachineRepository>();
+        TestServiceScopeFactory scopeFactory = CreateScopeFactory(dbFactory, machineRepo);
         ILogger<MachineService> logger = new NullLogger<MachineService>();
         IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
         redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(Substitute.For<IDatabase>());
@@ -330,8 +337,8 @@ public class MachineServiceTests
             .Set(t => t.RevokedAt, DateTimeOffset.UtcNow)
             .UpdateAsync();
 
-        IDatabaseCache dbCache = Substitute.For<IDatabaseCache>();
-        TestServiceScopeFactory scopeFactory = CreateScopeFactory(dbFactory, dbCache);
+        IMachineRepository machineRepo = Substitute.For<IMachineRepository>();
+        TestServiceScopeFactory scopeFactory = CreateScopeFactory(dbFactory, machineRepo);
         ILogger<MachineService> logger = new NullLogger<MachineService>();
         IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
         redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(Substitute.For<IDatabase>());
@@ -362,17 +369,17 @@ public class MachineServiceTests
         using TestDatabaseFactory dbFactory = new();
         RegistrationToken token = await SeedValidRegistrationToken(dbFactory, tenantId: 5);
 
-        IDatabaseCache dbCache = Substitute.For<IDatabaseCache>();
-        dbCache.DoesMachineExistAsync(
+        IMachineRepository machineRepo = Substitute.For<IMachineRepository>();
+        machineRepo.DoesMachineExistAsync(
             Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
             .Returns(false);
 
         Machine createdMachine = TestDataBuilder.BuildMachine(tenantId: 5, registrationTokenId: token.Id);
         createdMachine.Id = 100;
-        dbCache.CreateMachineWithKeyAsync(Arg.Any<Machine>(), Arg.Any<int?>(), Arg.Any<CancellationToken>())
+        machineRepo.CreateMachineWithKeyAsync(Arg.Any<Machine>(), Arg.Any<int?>(), Arg.Any<CancellationToken>())
             .Returns((createdMachine, "plaintext-api-key-123"));
 
-        TestServiceScopeFactory scopeFactory = CreateScopeFactory(dbFactory, dbCache);
+        TestServiceScopeFactory scopeFactory = CreateScopeFactory(dbFactory, machineRepo);
         ILogger<MachineService> logger = new NullLogger<MachineService>();
         IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
         redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(Substitute.For<IDatabase>());
@@ -403,17 +410,17 @@ public class MachineServiceTests
         using TestDatabaseFactory dbFactory = new();
         RegistrationToken token = await SeedValidRegistrationToken(dbFactory, tenantId: 5);
 
-        IDatabaseCache dbCache = Substitute.For<IDatabaseCache>();
-        dbCache.DoesMachineExistAsync(
+        IMachineRepository machineRepo = Substitute.For<IMachineRepository>();
+        machineRepo.DoesMachineExistAsync(
             Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
             .Returns(false);
 
         Machine createdMachine = TestDataBuilder.BuildMachine(tenantId: 5, registrationTokenId: token.Id);
         createdMachine.Id = 100;
-        dbCache.CreateMachineWithKeyAsync(Arg.Any<Machine>(), Arg.Any<int?>(), Arg.Any<CancellationToken>())
+        machineRepo.CreateMachineWithKeyAsync(Arg.Any<Machine>(), Arg.Any<int?>(), Arg.Any<CancellationToken>())
             .Returns((createdMachine, "plaintext-api-key-123"));
 
-        TestServiceScopeFactory scopeFactory = CreateScopeFactory(dbFactory, dbCache);
+        TestServiceScopeFactory scopeFactory = CreateScopeFactory(dbFactory, machineRepo);
         ILogger<MachineService> logger = new NullLogger<MachineService>();
         IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
         redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(Substitute.For<IDatabase>());
@@ -432,7 +439,7 @@ public class MachineServiceTests
 
         await service.RegisterSystemAsync(request, CancellationToken.None);
 
-        await dbCache.Received(1).CreateMachineWithKeyAsync(
+        await machineRepo.Received(1).CreateMachineWithKeyAsync(
             Arg.Is<Machine>(m => m.TenantId == 5),
             Arg.Any<int?>(),
             Arg.Any<CancellationToken>());
@@ -444,12 +451,12 @@ public class MachineServiceTests
         using TestDatabaseFactory dbFactory = new();
         await SeedValidRegistrationToken(dbFactory);
 
-        IDatabaseCache dbCache = Substitute.For<IDatabaseCache>();
-        dbCache.DoesMachineExistAsync(
+        IMachineRepository machineRepo = Substitute.For<IMachineRepository>();
+        machineRepo.DoesMachineExistAsync(
             Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
             .Returns(true);
 
-        TestServiceScopeFactory scopeFactory = CreateScopeFactory(dbFactory, dbCache);
+        TestServiceScopeFactory scopeFactory = CreateScopeFactory(dbFactory, machineRepo);
         ILogger<MachineService> logger = new NullLogger<MachineService>();
         IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
         redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(Substitute.For<IDatabase>());

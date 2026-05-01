@@ -3,13 +3,11 @@
 // See LICENSE for details.
 
 using FastEndpoints;
-using Framlux.FleetManagement.Database;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
+using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Server.Auth;
 using Framlux.FleetManagement.Server.Services.Billing;
-using LinqToDB;
-using LinqToDB.Async;
 
 namespace Framlux.FleetManagement.Server.Endpoints.Web.Billing;
 
@@ -61,15 +59,20 @@ public sealed class SubscriptionDto
 public sealed class SubscriptionEndpoint : EndpointWithoutRequest<ApiResponse<SubscriptionDto>>
 {
     private readonly ISubscriptionService _subscriptionService;
-    private readonly DatabaseContext _db;
+    private readonly IAlertRuleRepository _alertRuleRepo;
+    private readonly IWebhookRepository _webhookRepo;
 
     /// <summary>
     /// Creates a new instance of the <see cref="SubscriptionEndpoint"/> class.
     /// </summary>
-    public SubscriptionEndpoint(ISubscriptionService subscriptionService, DatabaseContext db)
+    public SubscriptionEndpoint(
+        ISubscriptionService subscriptionService,
+        IAlertRuleRepository alertRuleRepo,
+        IWebhookRepository webhookRepo)
     {
         _subscriptionService = subscriptionService;
-        _db = db;
+        _alertRuleRepo = alertRuleRepo;
+        _webhookRepo = webhookRepo;
     }
 
     /// <inheritdoc/>
@@ -101,8 +104,8 @@ public sealed class SubscriptionEndpoint : EndpointWithoutRequest<ApiResponse<Su
         }
 
         int machineCount = await _subscriptionService.GetMachineCountForTenantAsync(tenantId.Value, ct);
-        int alertRuleCount = await _db.AlertRules.CountAsync(r => r.TenantId == tenantId.Value, ct);
-        int webhookCount = await _db.WebhookEndpoints.CountAsync(w => w.TenantId == tenantId.Value, ct);
+        int alertRuleCount = await _alertRuleRepo.CountAlertRulesForTenantAsync(tenantId.Value, ct);
+        int webhookCount = await _webhookRepo.CountWebhooksForTenantAsync(tenantId.Value, ct);
 
         SubscriptionDto dto = new()
         {

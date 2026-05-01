@@ -2,9 +2,9 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
-using Framlux.FleetManagement.Database.Cache;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
+using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Server.Endpoints.Web.Models.Machines;
 using Framlux.FleetManagement.Server.Services.Infrastructure;
 using Framlux.FleetManagement.Server.Services.Machines;
@@ -54,11 +54,14 @@ public sealed class MachineAuthorizedKeyServiceTests
 
     private static MachineAuthorizedKeyService CreateService(TestDatabaseFactory dbFactory)
     {
-        IDatabaseCache cache = new DatabaseCache(dbFactory.Context, new NullLogger<DatabaseCache>());
+        DatabaseRepository repository = new(dbFactory.Context, new NullLogger<DatabaseRepository>());
 
         return new MachineAuthorizedKeyService(
             dbFactory.Context,
-            cache,
+            repository,
+            repository,
+            repository,
+            repository,
             new NullLogger<MachineAuthorizedKeyService>());
     }
 

@@ -3,13 +3,12 @@
 // See LICENSE for details.
 
 using FastEndpoints;
-using Framlux.FleetManagement.Database;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
+using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Server.Auth;
 using Framlux.FleetManagement.Server.Services.Billing;
-using LinqToDB;
-using LinqToDB.Async;
+using Framlux.FleetManagement.Server.Services.Infrastructure;
 
 namespace Framlux.FleetManagement.Server.Endpoints.Web.Alerts;
 
@@ -19,15 +18,20 @@ namespace Framlux.FleetManagement.Server.Endpoints.Web.Alerts;
 /// </summary>
 public sealed class AlertEventAcknowledgeEndpoint : EndpointWithoutRequest<ApiResponse<bool>>
 {
-    private readonly DatabaseContext _db;
+    private readonly IAlertEventRepository _alertEventRepo;
+    private readonly IAuditLogRepository _auditLog;
     private readonly ISubscriptionService _subscriptionService;
 
     /// <summary>
     /// Creates a new instance of the <see cref="AlertEventAcknowledgeEndpoint"/> class.
     /// </summary>
-    public AlertEventAcknowledgeEndpoint(DatabaseContext db, ISubscriptionService subscriptionService)
+    public AlertEventAcknowledgeEndpoint(
+        IAlertEventRepository alertEventRepo,
+        IAuditLogRepository auditLog,
+        ISubscriptionService subscriptionService)
     {
-        _db = db;
+        _alertEventRepo = alertEventRepo;
+        _auditLog = auditLog;
         _subscriptionService = subscriptionService;
     }
 
@@ -62,8 +66,7 @@ public sealed class AlertEventAcknowledgeEndpoint : EndpointWithoutRequest<ApiRe
 
         long eventId = Route<long>("id");
 
-        AlertEvent? alertEvent = await _db.AlertEvents
-            .FirstOrDefaultAsync(e => e.Id == eventId && e.TenantId == tenantId.Value, ct);
+        AlertEvent? alertEvent = await _alertEventRepo.GetAlertEventByIdAsync(eventId, tenantId.Value, ct);
 
         if (alertEvent is null)
         {
@@ -82,12 +85,12 @@ public sealed class AlertEventAcknowledgeEndpoint : EndpointWithoutRequest<ApiRe
 
         int? userId = TenantClaimHelper.GetUserIdFromClaims(User);
 
-        await _db.AlertEvents
-            .Where(e => e.Id == eventId)
-            .Set(e => e.Status, AlertEventStatus.Acknowledged)
-            .Set(e => e.AcknowledgedAt, DateTimeOffset.UtcNow)
-            .Set(e => e.AcknowledgedByUserId, userId)
-            .UpdateAsync(ct);
+        await _alertEventRepo.AcknowledgeAlertEventAsync(eventId, userId, ct);
+
+        await _auditLog.InsertAuditLogAsync(AuditHelper.Create(
+            tenantId.Value, userId, null,
+            AuditAction.AlertEventAcknowledged, AuditResourceType.AlertEvent,
+            eventId.ToString(), null, null), ct);
 
         await Send.OkAsync(ApiResponse<bool>.Ok(true, "Alert acknowledged"), cancellation: ct);
     }

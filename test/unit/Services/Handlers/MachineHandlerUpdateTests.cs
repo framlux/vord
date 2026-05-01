@@ -2,7 +2,7 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
-using Framlux.FleetManagement.Database.Cache;
+using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Server.Endpoints.Web;
@@ -26,12 +26,18 @@ namespace Framlux.FleetManagement.Test.Services.Handlers;
 /// </summary>
 public class MachineHandlerUpdateTests
 {
+    private static DatabaseRepository CreateRepo(TestDatabaseFactory dbFactory)
+    {
+        return new DatabaseRepository(dbFactory.Context, new NullLogger<DatabaseRepository>());
+    }
+
     private static MachineHandler CreateHandler(TestDatabaseFactory dbFactory, InMemoryMachinePingService? pingService = null)
     {
         InMemoryMachinePingService ping = pingService ?? new InMemoryMachinePingService();
         ServerConfigurationService configService = new(Substitute.For<IServerSettingsCache>(), Substitute.For<IConnectionMultiplexer>());
+        DatabaseRepository repo = CreateRepo(dbFactory);
 
-        return new MachineHandler(dbFactory.Context, ping, configService, Substitute.For<IBillingApiClient>(), NullLogger<MachineHandler>.Instance);
+        return new MachineHandler(repo, repo, repo, repo, repo, ping, configService, Substitute.For<IBillingApiClient>(), NullLogger<MachineHandler>.Instance);
     }
 
     private static async Task<long> SeedMachine(

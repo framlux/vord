@@ -3,13 +3,11 @@
 // See LICENSE for details.
 
 using FastEndpoints;
-using Framlux.FleetManagement.Database;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
+using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Server.Auth;
 using Framlux.FleetManagement.Server.Services.Billing;
-using LinqToDB;
-using LinqToDB.Async;
 
 namespace Framlux.FleetManagement.Server.Endpoints.Web.Alerts;
 
@@ -41,15 +39,17 @@ public sealed class AlertEventListRequest
 /// </summary>
 public sealed class AlertEventListEndpoint : Endpoint<AlertEventListRequest, ApiResponse<PaginatedResponse<AlertEventDto>>>
 {
-    private readonly DatabaseContext _db;
+    private readonly IAlertEventRepository _alertEventRepo;
+    private readonly IMachineStateRepository _machineStateRepo;
     private readonly ISubscriptionService _subscriptionService;
 
     /// <summary>
     /// Creates a new instance of the <see cref="AlertEventListEndpoint"/> class.
     /// </summary>
-    public AlertEventListEndpoint(DatabaseContext db, ISubscriptionService subscriptionService)
+    public AlertEventListEndpoint(IAlertEventRepository alertEventRepo, IMachineStateRepository machineStateRepo, ISubscriptionService subscriptionService)
     {
-        _db = db;
+        _alertEventRepo = alertEventRepo;
+        _machineStateRepo = machineStateRepo;
         _subscriptionService = subscriptionService;
     }
 
@@ -85,32 +85,25 @@ public sealed class AlertEventListEndpoint : Endpoint<AlertEventListRequest, Api
         int page = req.Page < 1 ? 1 : req.Page;
         int pageSize = (req.PageSize < 1) || (req.PageSize > 100) ? 25 : req.PageSize;
 
-        IQueryable<AlertEvent> query = _db.AlertEvents
-            .LoadWith(e => e.AlertRule)
-            .Where(e => e.TenantId == tenantId.Value);
-
-        if ((string.IsNullOrEmpty(req.Status) == false) && Enum.TryParse<AlertEventStatus>(req.Status, true, out AlertEventStatus statusFilter))
+        AlertEventStatus? statusFilter = null;
+        if ((string.IsNullOrEmpty(req.Status) == false) && Enum.TryParse<AlertEventStatus>(req.Status, true, out AlertEventStatus parsedStatus))
         {
-            query = query.Where(e => e.Status == statusFilter);
+            statusFilter = parsedStatus;
         }
 
-        if ((string.IsNullOrEmpty(req.Severity) == false) && Enum.TryParse<AlertSeverity>(req.Severity, true, out AlertSeverity severityFilter))
+        AlertSeverity? severityFilter = null;
+        if ((string.IsNullOrEmpty(req.Severity) == false) && Enum.TryParse<AlertSeverity>(req.Severity, true, out AlertSeverity parsedSeverity))
         {
-            query = query.Where(e => e.Severity == severityFilter);
+            severityFilter = parsedSeverity;
         }
 
-        int totalCount = await query.CountAsync(ct);
+        int totalCount = await _alertEventRepo.CountAlertEventsForTenantAsync(tenantId.Value, statusFilter, severityFilter, ct);
 
-        List<AlertEvent> events = await query
-            .OrderByDescending(e => e.TriggeredAt)
-            .Skip((page - 1) * pageSize)
-            .Take(pageSize)
-            .ToListAsync(ct);
+        int skip = (page - 1) * pageSize;
+        List<AlertEvent> events = await _alertEventRepo.GetAlertEventsForTenantAsync(tenantId.Value, skip, pageSize, statusFilter, severityFilter, ct);
 
         List<long> machineIds = events.Select(e => e.MachineId).Distinct().ToList();
-        Dictionary<long, string> machineNames = await _db.MachineStateSummaries
-            .Where(s => machineIds.Contains(s.MachineId))
-            .ToDictionaryAsync(s => s.MachineId, s => s.Name, ct);
+        Dictionary<long, string> machineNames = await _machineStateRepo.GetNameMapAsync(machineIds, ct);
 
         List<AlertEventDto> dtos = events.Select(e => new AlertEventDto
         {

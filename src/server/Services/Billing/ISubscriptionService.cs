@@ -2,7 +2,6 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
-using Framlux.FleetManagement.Database;
 using Framlux.FleetManagement.Database.Models;
 
 namespace Framlux.FleetManagement.Server.Services.Billing;
@@ -50,15 +49,17 @@ public interface ISubscriptionService
     /// </summary>
     Task<int> GetMachineCountAtDateAsync(int tenantId, DateTimeOffset targetDate, CancellationToken ct = default);
 
-    /// <summary>Checks whether the tenant can create another alert rule within their subscription limit.</summary>
+    /// <summary>
+    /// Checks whether the tenant can create another alert rule within their subscription limit.
+    /// </summary>
     /// <param name="tenantId">The tenant to check.</param>
-    /// <param name="db">Optional existing database context to avoid creating a new scope.</param>
     /// <param name="ct">Cancellation token.</param>
-    Task<bool> CanCreateAlertRuleAsync(int tenantId, DatabaseContext? db = null, CancellationToken ct = default);
+    Task<bool> CanCreateAlertRuleAsync(int tenantId, CancellationToken ct = default);
 
-    /// <summary>Checks whether the tenant can create another webhook endpoint within their subscription limit.</summary>
+    /// <summary>
+    /// Checks whether the tenant can create another webhook endpoint within their subscription limit.
+    /// </summary>
     /// <param name="tenantId">The tenant to check.</param>
-    /// <param name="db">Optional existing database context to avoid creating a new scope.</param>
     /// <param name="ct">Cancellation token.</param>
-    Task<bool> CanCreateWebhookAsync(int tenantId, DatabaseContext? db = null, CancellationToken ct = default);
+    Task<bool> CanCreateWebhookAsync(int tenantId, CancellationToken ct = default);
 }

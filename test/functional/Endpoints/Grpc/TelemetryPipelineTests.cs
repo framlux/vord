@@ -5,6 +5,7 @@
 using Framlux.FleetManagement.Database;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
+using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.FunctionalTest.Infrastructure;
 using Framlux.FleetManagement.Grpc.AgentTelemetry;
 using Framlux.FleetManagement.Server.Services.Infrastructure;
@@ -70,7 +71,7 @@ public sealed class TelemetryPipelineTests
         await Assert.That(row).IsNotNull();
 
         MachineStateStreamingService streamingService = CreateStreamingService(factory);
-        await streamingService.ProcessTelemetryRowAsync(db, row!, CancellationToken.None);
+        await streamingService.ProcessTelemetryRowAsync(CreateRepo(db),row!, CancellationToken.None);
 
         // Assert — the CPU value must survive the full proto → JSON → parse round-trip
         MachineStateSummary? summary = await db.MachineStateSummaries
@@ -125,7 +126,7 @@ public sealed class TelemetryPipelineTests
         await Assert.That(row).IsNotNull();
 
         MachineStateStreamingService streamingService = CreateStreamingService(factory);
-        await streamingService.ProcessTelemetryRowAsync(db, row!, CancellationToken.None);
+        await streamingService.ProcessTelemetryRowAsync(CreateRepo(db),row!, CancellationToken.None);
 
         // Assert
         MachineStateSummary? summary = await db.MachineStateSummaries
@@ -202,7 +203,7 @@ public sealed class TelemetryPipelineTests
         await Assert.That(row).IsNotNull();
 
         MachineStateStreamingService streamingService = CreateStreamingService(factory);
-        await streamingService.ProcessTelemetryRowAsync(db, row!, CancellationToken.None);
+        await streamingService.ProcessTelemetryRowAsync(CreateRepo(db),row!, CancellationToken.None);
 
         // Assert — max disk usage should be the highest across all disks (90%)
         MachineStateSummary? summary = await db.MachineStateSummaries
@@ -277,7 +278,7 @@ public sealed class TelemetryPipelineTests
 
         foreach (MachineTelemetry row in rows)
         {
-            await streamingService.ProcessTelemetryRowAsync(db, row, CancellationToken.None);
+            await streamingService.ProcessTelemetryRowAsync(CreateRepo(db),row, CancellationToken.None);
         }
 
         // Assert all values round-tripped correctly
@@ -294,12 +295,17 @@ public sealed class TelemetryPipelineTests
         await Assert.That(detail!.MemoryUsedBytes).IsEqualTo(24_000_000_000);
     }
 
+    private static IMachineStateRepository CreateRepo(DatabaseContext db)
+    {
+        return new DatabaseRepository(db, NullLogger<DatabaseRepository>.Instance);
+    }
+
     private static MachineStateStreamingService CreateStreamingService(FunctionalTestFactory factory)
     {
         IServiceScopeFactory scopeFactory = factory.Services.GetRequiredService<IServiceScopeFactory>();
         ISqlDialect dialect = factory.Services.GetRequiredService<ISqlDialect>();
         IDistributedLock distributedLock = factory.Services.GetRequiredService<IDistributedLock>();
-        Database.Cache.IServerSettingsCache settingsCache = factory.Services.GetRequiredService<Database.Cache.IServerSettingsCache>();
+        Database.Repositories.IServerSettingsCache settingsCache = factory.Services.GetRequiredService<Database.Repositories.IServerSettingsCache>();
 
         return new MachineStateStreamingService(
             scopeFactory,
@@ -509,7 +515,7 @@ public sealed class TelemetryPipelineTests
 
         // Process through the streaming service and verify state tables are updated
         MachineStateStreamingService streamingService = CreateStreamingService(factory);
-        await streamingService.ProcessTelemetryRowAsync(db, row!, CancellationToken.None);
+        await streamingService.ProcessTelemetryRowAsync(CreateRepo(db),row!, CancellationToken.None);
 
         MachineStateSummary? summary = await db.MachineStateSummaries
             .FirstOrDefaultAsync(s => s.MachineId == machineId);
@@ -559,7 +565,7 @@ public sealed class TelemetryPipelineTests
         await Assert.That(row).IsNotNull();
 
         MachineStateStreamingService streamingService = CreateStreamingService(factory);
-        await streamingService.ProcessTelemetryRowAsync(db, row!, CancellationToken.None);
+        await streamingService.ProcessTelemetryRowAsync(CreateRepo(db),row!, CancellationToken.None);
 
         // Assert - CpuUsagePercent must be exactly 0, not null
         MachineStateSummary? summary = await db.MachineStateSummaries

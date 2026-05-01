@@ -3,7 +3,7 @@
 // See LICENSE for details.
 
 using FastEndpoints;
-using Framlux.FleetManagement.Database.Cache;
+using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Server.Auth;
 
@@ -40,14 +40,14 @@ public sealed class MemberDto
 /// </summary>
 public sealed class MemberListEndpoint : EndpointWithoutRequest<ApiResponse<List<MemberDto>>>
 {
-    private readonly IDatabaseCache _databaseCache;
+    private readonly ITenantRepository _tenantRepository;
 
     /// <summary>
     /// Creates a new instance of the <see cref="MemberListEndpoint"/> class.
     /// </summary>
-    public MemberListEndpoint(IDatabaseCache databaseCache)
+    public MemberListEndpoint(ITenantRepository tenantRepository)
     {
-        _databaseCache = databaseCache;
+        _tenantRepository = tenantRepository;
     }
 
     /// <inheritdoc/>
@@ -70,7 +70,7 @@ public sealed class MemberListEndpoint : EndpointWithoutRequest<ApiResponse<List
             return;
         }
 
-        IEnumerable<UserTenantRole> members = await _databaseCache.GetMembersForTenantAsync(tenantId.Value, ct);
+        IEnumerable<UserTenantRole> members = await _tenantRepository.GetMembersForTenantAsync(tenantId.Value, ct);
         List<MemberDto> dtos = members.Select(m => new MemberDto
         {
             UserId = m.UserId,

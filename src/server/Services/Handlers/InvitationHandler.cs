@@ -2,9 +2,9 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
-using Framlux.FleetManagement.Database.Cache;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
+using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Server.Options;
 using Framlux.FleetManagement.Server.Services.Billing;
 using Framlux.FleetManagement.Server.Services.Infrastructure;
@@ -21,7 +21,11 @@ namespace Framlux.FleetManagement.Server.Services.Handlers;
 /// </summary>
 public sealed class InvitationHandler : IInvitationHandler
 {
-    private readonly IDatabaseCache _databaseCache;
+    private readonly IDatabaseTransactionProvider _transactionProvider;
+    private readonly IAuditLogRepository _auditLog;
+    private readonly IInvitationRepository _invitationRepository;
+    private readonly ITenantRepository _tenantRepository;
+    private readonly ISubscriptionRepository _subscriptionRepository;
     private readonly IEmailService _emailService;
     private readonly ISubscriptionService _subscriptionService;
     private readonly SubscriptionOptions _subscriptionOptions;
@@ -31,13 +35,21 @@ public sealed class InvitationHandler : IInvitationHandler
     /// Creates a new instance of the <see cref="InvitationHandler"/> class.
     /// </summary>
     public InvitationHandler(
-        IDatabaseCache databaseCache,
+        IDatabaseTransactionProvider transactionProvider,
+        IAuditLogRepository auditLog,
+        IInvitationRepository invitationRepository,
+        ITenantRepository tenantRepository,
+        ISubscriptionRepository subscriptionRepository,
         IEmailService emailService,
         ISubscriptionService subscriptionService,
         IOptions<SubscriptionOptions> subscriptionOptions,
         IRoleCacheInvalidator roleCacheInvalidator)
     {
-        _databaseCache = databaseCache;
+        _transactionProvider = transactionProvider;
+        _auditLog = auditLog;
+        _invitationRepository = invitationRepository;
+        _tenantRepository = tenantRepository;
+        _subscriptionRepository = subscriptionRepository;
         _emailService = emailService;
         _subscriptionService = subscriptionService;
         _subscriptionOptions = subscriptionOptions.Value;
@@ -73,14 +85,14 @@ public sealed class InvitationHandler : IInvitationHandler
                 new InvitationCreateResult { ErrorMessage = "Upgrade to Pro or Team to invite team members" });
         }
 
-        TenantInvitation? existing = await _databaseCache.GetPendingInvitationByEmailAndTenantAsync(normalizedEmail, tenantId.Value, ct);
+        TenantInvitation? existing = await _invitationRepository.GetPendingInvitationByEmailAndTenantAsync(normalizedEmail, tenantId.Value, ct);
         if (existing is not null)
         {
             return ServiceResult<InvitationCreateResult>.Error(409,
                 new InvitationCreateResult { ErrorMessage = "A pending invitation already exists for this email" });
         }
 
-        IEnumerable<UserTenantRole> members = await _databaseCache.GetMembersForTenantAsync(tenantId.Value, ct);
+        IEnumerable<UserTenantRole> members = await _tenantRepository.GetMembersForTenantAsync(tenantId.Value, ct);
         bool alreadyMember = members.Any(m => m.User is not null &&
             string.Equals(m.User.Username, normalizedEmail, StringComparison.OrdinalIgnoreCase));
         if (alreadyMember)
@@ -105,9 +117,9 @@ public sealed class InvitationHandler : IInvitationHandler
         string tokenHash = HashToken(token);
         DateTimeOffset now = DateTimeOffset.UtcNow;
 
-        using IDatabaseTransaction transaction = await _databaseCache.BeginTransactionAsync(ct);
+        using IDatabaseTransaction transaction = await _transactionProvider.BeginTransactionAsync(ct);
 
-        TenantInvitation invitation = await _databaseCache.CreateInvitationAsync(new TenantInvitation
+        TenantInvitation invitation = await _invitationRepository.CreateInvitationAsync(new TenantInvitation
         {
             TenantId = tenantId.Value,
             Email = normalizedEmail,
@@ -119,7 +131,7 @@ public sealed class InvitationHandler : IInvitationHandler
             ExpiresAt = now.AddDays(7),
         }, ct);
 
-        await _databaseCache.InsertAuditLogAsync(AuditHelper.Create(
+        await _auditLog.InsertAuditLogAsync(AuditHelper.Create(
             tenantId, userId, null,
             AuditAction.MemberInvited, AuditResourceType.Invitation,
             invitation.Id.ToString(), new { invitation.Email, Role = assignedRole.ToString() }, null), ct);
@@ -128,7 +140,7 @@ public sealed class InvitationHandler : IInvitationHandler
 
         string acceptUrl = $"{baseUrl}/invitations/accept?token={token}";
 
-        Tenant? tenant = await _databaseCache.GetTenantByIdAsync(tenantId.Value, ct);
+        Tenant? tenant = await _tenantRepository.GetTenantByIdAsync(tenantId.Value, ct);
         string tenantName = tenant?.Name ?? "your organization";
 
         await _emailService.SendInvitationEmailAsync(normalizedEmail, tenantName, "A team member", acceptUrl, ct);
@@ -152,7 +164,7 @@ public sealed class InvitationHandler : IInvitationHandler
         string uniqueId,
         CancellationToken ct)
     {
-        TenantInvitation? invitation = await _databaseCache.GetInvitationByTokenAsync(token, ct);
+        TenantInvitation? invitation = await _invitationRepository.GetInvitationByTokenAsync(token, ct);
         if (invitation is null)
         {
             return ServiceResult<InvitationAcceptResult>.NotFound();
@@ -182,7 +194,7 @@ public sealed class InvitationHandler : IInvitationHandler
                 new InvitationAcceptResult { ErrorMessage = "Unauthorized" });
         }
 
-        IEnumerable<UserTenantRole> existingRoles = await _databaseCache.GetTenantsForUserAsync(uniqueId, ct);
+        IEnumerable<UserTenantRole> existingRoles = await _tenantRepository.GetTenantsForUserAsync(uniqueId, ct);
         bool alreadyMember = existingRoles.Any(r => r.AssignedTenantId == invitation.TenantId);
         if (alreadyMember)
         {
@@ -193,11 +205,11 @@ public sealed class InvitationHandler : IInvitationHandler
         DateTimeOffset now = DateTimeOffset.UtcNow;
         bool personalTenantProvisioned = false;
 
-        using IDatabaseTransaction transaction = await _databaseCache.BeginTransactionAsync(ct);
+        using IDatabaseTransaction transaction = await _transactionProvider.BeginTransactionAsync(ct);
 
         if (existingRoles.Any() == false)
         {
-            Tenant personalTenant = await _databaseCache.CreateTenantAsync(new Tenant
+            Tenant personalTenant = await _tenantRepository.CreateTenantAsync(new Tenant
             {
                 Name = $"{userEmail}'s Organization",
                 ExternalId = Guid.NewGuid().ToString(),
@@ -209,7 +221,7 @@ public sealed class InvitationHandler : IInvitationHandler
 
             // Create the free subscription within the same transaction so the FK on TenantId
             // can see the uncommitted Tenant row.
-            await _databaseCache.CreateTenantSubscriptionAsync(new TenantSubscription
+            await _subscriptionRepository.CreateTenantSubscriptionAsync(new TenantSubscription
             {
                 TenantId = personalTenant.Id,
                 Tier = SubscriptionTier.Free,
@@ -220,7 +232,7 @@ public sealed class InvitationHandler : IInvitationHandler
                 UpdatedAt = now,
             }, ct);
 
-            await _databaseCache.CreateUserTenantRoleAsync(new UserTenantRole
+            await _tenantRepository.CreateUserTenantRoleAsync(new UserTenantRole
             {
                 UserId = userId,
                 AssignedTenantId = personalTenant.Id,
@@ -233,7 +245,7 @@ public sealed class InvitationHandler : IInvitationHandler
             personalTenantProvisioned = true;
         }
 
-        await _databaseCache.CreateUserTenantRoleAsync(new UserTenantRole
+        await _tenantRepository.CreateUserTenantRoleAsync(new UserTenantRole
         {
             UserId = userId,
             AssignedTenantId = invitation.TenantId,
@@ -243,9 +255,9 @@ public sealed class InvitationHandler : IInvitationHandler
             IsActive = true,
         }, ct);
 
-        await _databaseCache.UpdateInvitationStatusAsync(invitation.Id, InvitationStatus.Accepted, userId, ct);
+        await _invitationRepository.UpdateInvitationStatusAsync(invitation.Id, InvitationStatus.Accepted, userId, ct);
 
-        await _databaseCache.InsertAuditLogAsync(AuditHelper.Create(
+        await _auditLog.InsertAuditLogAsync(AuditHelper.Create(
             invitation.TenantId, userId, null,
             AuditAction.MemberInvitationAccepted, AuditResourceType.Invitation,
             invitation.Id.ToString(), new { invitation.Email }, null), ct);
@@ -274,7 +286,7 @@ public sealed class InvitationHandler : IInvitationHandler
                 new InvitationRevokeResult { ErrorMessage = "Unauthorized" });
         }
 
-        IEnumerable<TenantInvitation> invitations = await _databaseCache.GetInvitationsForTenantAsync(tenantId.Value, ct);
+        IEnumerable<TenantInvitation> invitations = await _invitationRepository.GetInvitationsForTenantAsync(tenantId.Value, ct);
         TenantInvitation? invitation = invitations.FirstOrDefault(i => i.Id == invitationId);
 
         if (invitation is null)
@@ -288,11 +300,11 @@ public sealed class InvitationHandler : IInvitationHandler
                 new InvitationRevokeResult { ErrorMessage = "Only pending invitations can be revoked" });
         }
 
-        using IDatabaseTransaction transaction = await _databaseCache.BeginTransactionAsync(ct);
+        using IDatabaseTransaction transaction = await _transactionProvider.BeginTransactionAsync(ct);
 
-        await _databaseCache.RevokeInvitationAsync(invitationId, ct);
+        await _invitationRepository.RevokeInvitationAsync(invitationId, ct);
 
-        await _databaseCache.InsertAuditLogAsync(AuditHelper.Create(
+        await _auditLog.InsertAuditLogAsync(AuditHelper.Create(
             tenantId, null, null,
             AuditAction.MemberInvitationRevoked, AuditResourceType.Invitation,
             invitationId.ToString(), new { invitation.Email }, null), ct);
@@ -317,7 +329,7 @@ public sealed class InvitationHandler : IInvitationHandler
                 new InvitationResendResult { ErrorMessage = "Unauthorized" });
         }
 
-        IEnumerable<TenantInvitation> invitations = await _databaseCache.GetInvitationsForTenantAsync(tenantId.Value, ct);
+        IEnumerable<TenantInvitation> invitations = await _invitationRepository.GetInvitationsForTenantAsync(tenantId.Value, ct);
         TenantInvitation? oldInvitation = invitations.FirstOrDefault(i => i.Id == invitationId);
 
         if (oldInvitation is null)
@@ -335,11 +347,11 @@ public sealed class InvitationHandler : IInvitationHandler
         string tokenHash = HashToken(token);
         DateTimeOffset now = DateTimeOffset.UtcNow;
 
-        using IDatabaseTransaction transaction = await _databaseCache.BeginTransactionAsync(ct);
+        using IDatabaseTransaction transaction = await _transactionProvider.BeginTransactionAsync(ct);
 
-        await _databaseCache.RevokeInvitationAsync(invitationId, ct);
+        await _invitationRepository.RevokeInvitationAsync(invitationId, ct);
 
-        TenantInvitation newInvitation = await _databaseCache.CreateInvitationAsync(new TenantInvitation
+        TenantInvitation newInvitation = await _invitationRepository.CreateInvitationAsync(new TenantInvitation
         {
             TenantId = tenantId.Value,
             Email = oldInvitation.Email,
@@ -355,7 +367,7 @@ public sealed class InvitationHandler : IInvitationHandler
 
         string acceptUrl = $"{baseUrl}/invitations/accept?token={token}";
 
-        Tenant? tenant = await _databaseCache.GetTenantByIdAsync(tenantId.Value, ct);
+        Tenant? tenant = await _tenantRepository.GetTenantByIdAsync(tenantId.Value, ct);
         string tenantName = tenant?.Name ?? "your organization";
 
         await _emailService.SendInvitationEmailAsync(oldInvitation.Email, tenantName, inviterEmail, acceptUrl, ct);

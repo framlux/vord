@@ -96,7 +96,7 @@ dotnet run --project test/functional/functional.csproj
 
 **Namespaces:** `Framlux.FleetManagement.{Server|Agent|Web}`
 
-**Database:** LinqToDB (not EF Core). Models use `[Table]`, `[Column]`, `[PrimaryKey]` attributes. Access via `IDatabaseCache.GetDataContext()`. Migrations use FluentMigrator.
+**Database:** LinqToDB (not EF Core). Models use `[Table]`, `[Column]`, `[PrimaryKey]` attributes. Access via domain-specific repository interfaces (e.g., `IMachineRepository`, `IAuditLogRepository`) — never inject `DatabaseContext` directly in server-side code. `DatabaseContext` is only used within repository implementations in the `database` project and for DI registration in `Program.cs`. Do not use composite/aggregate repository interfaces. If a constructor has 6+ repository dependencies, consider whether the class has too many responsibilities. Migrations use FluentMigrator.
 
 **API Endpoints:** FastEndpoints pattern — inherit `Endpoint<TReq, TRes>`, configure route/auth/version in `Configure()`, implement `HandleAsync()`. Versioned routes: `/v{n}/api/{resource}`.
 

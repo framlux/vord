@@ -2,12 +2,9 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
-using Framlux.FleetManagement.Database;
+using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Server.Services.Infrastructure;
 using Framlux.FleetManagement.Server.Services.ServerConfiguration;
-using LinqToDB;
-using LinqToDB.Async;
-using LinqToDB.Data;
 
 namespace Framlux.FleetManagement.Server.Services.Machines;
 
@@ -86,14 +83,11 @@ public sealed class HealthSweepService : BackgroundService
     internal async Task SweepAllTenantsAsync(CancellationToken ct)
     {
         using IServiceScope scope = _scopeFactory.CreateScope();
-        DatabaseContext db = scope.ServiceProvider.GetRequiredService<DatabaseContext>();
+        IMachineStateRepository machineStateRepo = scope.ServiceProvider.GetRequiredService<IMachineStateRepository>();
 
         TimeSpan onlineThreshold = await _configService.GetOnlineThresholdAsync(ct);
 
-        List<int> tenantIds = await db.MachineStateSummaries
-            .Select(s => s.TenantId)
-            .Distinct()
-            .ToListAsync(ct);
+        List<int> tenantIds = await machineStateRepo.GetDistinctTenantIdsAsync(ct);
 
         int totalUpdated = 0;
 
@@ -107,7 +101,11 @@ public sealed class HealthSweepService : BackgroundService
                 continue;
             }
 
-            int rowsAffected = await SweepTenantAsync(db, tenantId, onlineThreshold, ct);
+            int rowsAffected = await machineStateRepo.SweepHealthStatusAsync(
+                _dialect.HealthSweepForTenant,
+                tenantId,
+                (int)onlineThreshold.TotalSeconds,
+                ct);
             totalUpdated += rowsAffected;
         }
 
@@ -115,24 +113,5 @@ public sealed class HealthSweepService : BackgroundService
         {
             _logger.LogDebug("Health sweep updated {Count} machine state rows across {TenantCount} tenants", totalUpdated, tenantIds.Count);
         }
-    }
-
-    /// <summary>
-    /// Runs the health sweep for a single tenant. Computes HealthStatus from current
-    /// scalar values and only updates rows where the status actually changed.
-    /// </summary>
-    internal async Task<int> SweepTenantAsync(
-        DatabaseContext db,
-        int tenantId,
-        TimeSpan onlineThreshold,
-        CancellationToken ct)
-    {
-        int rowsAffected = await db.ExecuteAsync(
-            _dialect.HealthSweepForTenant,
-            ct,
-            new DataParameter("tenantId", tenantId),
-            new DataParameter("onlineThresholdSeconds", (int)onlineThreshold.TotalSeconds));
-
-        return rowsAffected;
     }
 }

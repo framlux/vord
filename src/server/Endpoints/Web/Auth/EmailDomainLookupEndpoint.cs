@@ -5,7 +5,7 @@
 using System.ComponentModel.DataAnnotations;
 using System.Net.Mail;
 using FastEndpoints;
-using Framlux.FleetManagement.Database.Cache;
+using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Database.Models;
 
 namespace Framlux.FleetManagement.Server.Endpoints.Web.Auth;
@@ -38,14 +38,14 @@ public sealed class EmailDomainLookupResponse
 /// </summary>
 public sealed class EmailDomainLookupEndpoint : Endpoint<EmailDomainLookupRequest, ApiResponse<EmailDomainLookupResponse>>
 {
-    private readonly IDatabaseCache _dbCache;
+    private readonly ITenantRepository _tenantRepository;
 
     /// <summary>
     /// Creates a new instance of the <see cref="EmailDomainLookupEndpoint"/> class.
     /// </summary>
-    public EmailDomainLookupEndpoint(IDatabaseCache dbCache)
+    public EmailDomainLookupEndpoint(ITenantRepository tenantRepository)
     {
-        _dbCache = dbCache;
+        _tenantRepository = tenantRepository;
     }
 
     /// <inheritdoc/>
@@ -87,7 +87,7 @@ public sealed class EmailDomainLookupEndpoint : Endpoint<EmailDomainLookupReques
             return;
         }
 
-        TenantOidcConfiguration? config = await _dbCache.GetTenantOidcConfigurationByEmailDomainAsync(domain, ct);
+        TenantOidcConfiguration? config = await _tenantRepository.GetTenantOidcConfigurationByEmailDomainAsync(domain, ct);
         if (config is null)
         {
             await Send.OkAsync(ApiResponse<EmailDomainLookupResponse>.Error("No SSO provider found for this email domain"), cancellation: ct);

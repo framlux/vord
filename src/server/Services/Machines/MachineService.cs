@@ -5,9 +5,9 @@
 using System.Security.Cryptography;
 using System.Text;
 using Framlux.FleetManagement.Database;
-using Framlux.FleetManagement.Database.Cache;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
+using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Grpc.AgentRegistration;
 using Framlux.FleetManagement.Server.Services.Billing;
 using LinqToDB;
@@ -125,8 +125,8 @@ public sealed class MachineService : IMachineService
         // If no cached key was available, re-issue a new one.
         if (plaintextKey is null)
         {
-            IDatabaseCache dbCache = scope.ServiceProvider.GetRequiredService<IDatabaseCache>();
-            plaintextKey = await dbCache.ReissueApiKeyAsync(machine.Id, cancellationToken);
+            IMachineRepository machineRepo = scope.ServiceProvider.GetRequiredService<IMachineRepository>();
+            plaintextKey = await machineRepo.ReissueApiKeyAsync(machine.Id, cancellationToken);
 
             if (plaintextKey is not null)
             {
@@ -174,14 +174,14 @@ public sealed class MachineService : IMachineService
             return (null, null, "Registration token has been revoked");
         }
 
-        IDatabaseCache db = scope.ServiceProvider.GetRequiredService<IDatabaseCache>();
+        IMachineRepository machineRepository = scope.ServiceProvider.GetRequiredService<IMachineRepository>();
 
         // Normalize case-sensitive fields to lowercase for consistent index usage.
         string normalizedSerial = request.SerialNumber.ToLowerInvariant();
         string normalizedSystemId = request.SystemId.ToLowerInvariant();
 
         // Check if we have a machine already with these IDs
-        bool machineExists = await db.DoesMachineExistAsync(normalizedSerial, normalizedSystemId, request.AssetTag ?? string.Empty, token.TenantId, cancellationToken);
+        bool machineExists = await machineRepository.DoesMachineExistAsync(normalizedSerial, normalizedSystemId, request.AssetTag ?? string.Empty, token.TenantId, cancellationToken);
         if (machineExists)
         {
             return (null, null, "Machine already exists");
@@ -208,7 +208,7 @@ public sealed class MachineService : IMachineService
             TenantId = token.TenantId,
         };
 
-        (Machine? createdMachine, string? plaintextApiKey) = await db.CreateMachineWithKeyAsync(machine, machineLimit, cancellationToken);
+        (Machine? createdMachine, string? plaintextApiKey) = await machineRepository.CreateMachineWithKeyAsync(machine, machineLimit, cancellationToken);
 
         if (createdMachine is null)
         {
@@ -243,7 +243,8 @@ public sealed class MachineService : IMachineService
         // Sync the updated machine count to Stripe (best effort, StripeSyncService provides the safety net)
         try
         {
-            Tenant? tenant = await db.GetTenantByIdAsync(token.TenantId, cancellationToken);
+            ITenantRepository tenantRepository = scope.ServiceProvider.GetRequiredService<ITenantRepository>();
+            Tenant? tenant = await tenantRepository.GetTenantByIdAsync(token.TenantId, cancellationToken);
             if (tenant is not null)
             {
                 int machineCount = await dbContext.Machines

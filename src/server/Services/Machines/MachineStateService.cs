@@ -5,6 +5,7 @@
 using System.Text.Json;
 using Framlux.FleetManagement.Database;
 using Framlux.FleetManagement.Database.Models;
+using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Server.Endpoints.Web.Models.Dashboard;
 using Framlux.FleetManagement.Server.Endpoints.Web.Models.Machines;
 using Framlux.FleetManagement.Server.Endpoints.Web.Models.Telemetry;
@@ -70,6 +71,7 @@ public sealed class MachineStateService : IMachineStateService
 
         using IServiceScope scope = _scopeFactory.CreateScope();
         DatabaseContext db = scope.ServiceProvider.GetRequiredService<DatabaseContext>();
+        IMachineStateRepository machineStateRepo = scope.ServiceProvider.GetRequiredService<IMachineStateRepository>();
         TimeSpan onlineThreshold = await _configService.GetOnlineThresholdAsync(ct);
 
         // Step 1: SQL-level summary aggregation using pre-computed HealthStatus.
@@ -197,9 +199,7 @@ public sealed class MachineStateService : IMachineStateService
         List<long> pagedIds = pagedDtos.Select(m => m.Id).ToList();
         if (pagedIds.Count > 0)
         {
-            Dictionary<long, MachineStateSummary> pagedStates = await db.MachineStateSummaries
-                .Where(s => pagedIds.Contains(s.MachineId))
-                .ToDictionaryAsync(s => s.MachineId, ct);
+            Dictionary<long, MachineStateSummary> pagedStates = await machineStateRepo.GetSummariesByMachineIdsAsync(pagedIds, ct);
 
             foreach (FleetMachineDto dto in pagedDtos)
             {
@@ -234,6 +234,7 @@ public sealed class MachineStateService : IMachineStateService
 
         using IServiceScope scope = _scopeFactory.CreateScope();
         DatabaseContext db = scope.ServiceProvider.GetRequiredService<DatabaseContext>();
+        IMachineStateRepository machineStateRepo = scope.ServiceProvider.GetRequiredService<IMachineStateRepository>();
 
         Machine? machine = await db.Machines
             .Where(m => m.Id == machineId && m.TenantId == tenantId.Value && m.IsDeleted == false)
@@ -244,9 +245,7 @@ public sealed class MachineStateService : IMachineStateService
             return null;
         }
 
-        MachineStateSummary? state = await db.MachineStateSummaries
-            .Where(s => s.MachineId == machineId)
-            .FirstOrDefaultAsync(ct);
+        MachineStateSummary? state = await machineStateRepo.GetSummaryForMachineAsync(machineId, ct);
 
         TimeSpan onlineThreshold = await _configService.GetOnlineThresholdAsync(ct);
         bool isOnline = await _pingService.IsOnlineAsync(machineId, onlineThreshold);

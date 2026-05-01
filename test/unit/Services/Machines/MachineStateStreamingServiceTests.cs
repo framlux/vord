@@ -3,7 +3,7 @@
 // See LICENSE for details.
 
 using Framlux.FleetManagement.Database;
-using Framlux.FleetManagement.Database.Cache;
+using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Server.Services.Infrastructure;
@@ -14,6 +14,7 @@ using LinqToDB;
 using LinqToDB.Async;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
 
 namespace Framlux.FleetManagement.Test.Services.Machines;
@@ -42,6 +43,11 @@ public class MachineStateStreamingServiceTests
     {
         await db.InsertAsync(TestDataBuilder.BuildMachineStateSummary(machineId: machineId, tenantId: tenantId));
         await db.InsertAsync(new MachineStateDetail { MachineId = machineId });
+    }
+
+    private static IMachineStateRepository CreateRepo(DatabaseContext db)
+    {
+        return new DatabaseRepository(db, NullLogger<DatabaseRepository>.Instance);
     }
 
     private static MachineTelemetry BuildRow(long machineId, short telemetryType, string payload, long id = 1)
@@ -74,7 +80,7 @@ public class MachineStateStreamingServiceTests
         string payload = """{"hostname":"web-01","hardware_model":"PowerEdge R740","hardware_vendor":"Dell","hardware_serial":"SN123","cpu_brand":"Xeon","cpu_cores":16,"memory_total_bytes":34359738368,"uptime_seconds":86400,"bios_version":"2.1","ip_addresses":["10.0.0.1"]}""";
         MachineTelemetry row = BuildRow(machineId, TelemetryTypeIds.SystemInfo, payload);
 
-        await service.ProcessTelemetryRowAsync(db, row, CancellationToken.None);
+        await service.ProcessTelemetryRowAsync(CreateRepo(db),row, CancellationToken.None);
 
         MachineStateSummary? summary = await db.MachineStateSummaries
             .Where(s => s.MachineId == machineId)
@@ -112,7 +118,7 @@ public class MachineStateStreamingServiceTests
         string payload = """{"os_name":"Ubuntu","os_version":"22.04","kernel":"5.15.0-91"}""";
         MachineTelemetry row = BuildRow(machineId, TelemetryTypeIds.OsVersion, payload);
 
-        await service.ProcessTelemetryRowAsync(db, row, CancellationToken.None);
+        await service.ProcessTelemetryRowAsync(CreateRepo(db),row, CancellationToken.None);
 
         MachineStateSummary? summary = await db.MachineStateSummaries
             .Where(s => s.MachineId == machineId)
@@ -146,7 +152,7 @@ public class MachineStateStreamingServiceTests
         string payload = """{"cpu_type":"x86_64","physical_cpus":2,"logical_cpus":8}""";
         MachineTelemetry row = BuildRow(machineId, TelemetryTypeIds.CpuInfo, payload);
 
-        await service.ProcessTelemetryRowAsync(db, row, CancellationToken.None);
+        await service.ProcessTelemetryRowAsync(CreateRepo(db),row, CancellationToken.None);
 
         MachineStateDetail? detail = await db.MachineStateDetails
             .Where(d => d.MachineId == machineId)
@@ -174,7 +180,7 @@ public class MachineStateStreamingServiceTests
         string payload = """{"swap_total_bytes":8589934592,"swap_free_bytes":4294967296}""";
         MachineTelemetry row = BuildRow(machineId, TelemetryTypeIds.MemoryInfo, payload);
 
-        await service.ProcessTelemetryRowAsync(db, row, CancellationToken.None);
+        await service.ProcessTelemetryRowAsync(CreateRepo(db),row, CancellationToken.None);
 
         MachineStateDetail? detail = await db.MachineStateDetails
             .Where(d => d.MachineId == machineId)
@@ -201,7 +207,7 @@ public class MachineStateStreamingServiceTests
         string payload = """[{"mount":"/","size_bytes":107374182400,"filesystem":"ext4"},{"mount":"/data","size_bytes":536870912000,"filesystem":"xfs"}]""";
         MachineTelemetry row = BuildRow(machineId, TelemetryTypeIds.DiskInfo, payload);
 
-        await service.ProcessTelemetryRowAsync(db, row, CancellationToken.None);
+        await service.ProcessTelemetryRowAsync(CreateRepo(db),row, CancellationToken.None);
 
         MachineStateDetail? detail = await db.MachineStateDetails
             .Where(d => d.MachineId == machineId)
@@ -227,7 +233,7 @@ public class MachineStateStreamingServiceTests
         string payload = """{"cpu_usage_percent":73}""";
         MachineTelemetry row = BuildRow(machineId, TelemetryTypeIds.CpuUsage, payload);
 
-        await service.ProcessTelemetryRowAsync(db, row, CancellationToken.None);
+        await service.ProcessTelemetryRowAsync(CreateRepo(db),row, CancellationToken.None);
 
         MachineStateSummary? summary = await db.MachineStateSummaries
             .Where(s => s.MachineId == machineId)
@@ -253,7 +259,7 @@ public class MachineStateStreamingServiceTests
         string payload = """{"memory_used":12884901888,"memory_usage_percent":75}""";
         MachineTelemetry row = BuildRow(machineId, TelemetryTypeIds.MemoryUsage, payload);
 
-        await service.ProcessTelemetryRowAsync(db, row, CancellationToken.None);
+        await service.ProcessTelemetryRowAsync(CreateRepo(db),row, CancellationToken.None);
 
         MachineStateSummary? summary = await db.MachineStateSummaries
             .Where(s => s.MachineId == machineId)
@@ -286,7 +292,7 @@ public class MachineStateStreamingServiceTests
         string payload = """[{"mount":"/","usage_percent":42},{"mount":"/data","usage_percent":87}]""";
         MachineTelemetry row = BuildRow(machineId, TelemetryTypeIds.DiskUsage, payload);
 
-        await service.ProcessTelemetryRowAsync(db, row, CancellationToken.None);
+        await service.ProcessTelemetryRowAsync(CreateRepo(db),row, CancellationToken.None);
 
         MachineStateSummary? summary = await db.MachineStateSummaries
             .Where(s => s.MachineId == machineId)
@@ -319,7 +325,7 @@ public class MachineStateStreamingServiceTests
         string payload = """[{"user":"root","ip":"10.0.0.5","pid":1234}]""";
         MachineTelemetry row = BuildRow(machineId, TelemetryTypeIds.SshSessions, payload);
 
-        await service.ProcessTelemetryRowAsync(db, row, CancellationToken.None);
+        await service.ProcessTelemetryRowAsync(CreateRepo(db),row, CancellationToken.None);
 
         MachineStateDetail? detail = await db.MachineStateDetails
             .Where(d => d.MachineId == machineId)
@@ -345,7 +351,7 @@ public class MachineStateStreamingServiceTests
         string payload = """{"disk_smart":[{"device":"/dev/sda","health_status":"FAILED"}],"fans":[{"name":"fan1","rpm":3000}],"power_supplies":[{"name":"psu1","status":"OK"}]}""";
         MachineTelemetry row = BuildRow(machineId, TelemetryTypeIds.HardwareHealth, payload);
 
-        await service.ProcessTelemetryRowAsync(db, row, CancellationToken.None);
+        await service.ProcessTelemetryRowAsync(CreateRepo(db),row, CancellationToken.None);
 
         MachineStateSummary? summary = await db.MachineStateSummaries
             .Where(s => s.MachineId == machineId)
@@ -372,7 +378,7 @@ public class MachineStateStreamingServiceTests
         string payload = """{"pending_updates":42,"security_updates":7}""";
         MachineTelemetry row = BuildRow(machineId, TelemetryTypeIds.PackageUpdates, payload);
 
-        await service.ProcessTelemetryRowAsync(db, row, CancellationToken.None);
+        await service.ProcessTelemetryRowAsync(CreateRepo(db),row, CancellationToken.None);
 
         MachineStateSummary? summary = await db.MachineStateSummaries
             .Where(s => s.MachineId == machineId)
@@ -399,7 +405,7 @@ public class MachineStateStreamingServiceTests
         string payload = """{"total_services":120,"failed_services":3}""";
         MachineTelemetry row = BuildRow(machineId, TelemetryTypeIds.ServiceStatus, payload);
 
-        await service.ProcessTelemetryRowAsync(db, row, CancellationToken.None);
+        await service.ProcessTelemetryRowAsync(CreateRepo(db),row, CancellationToken.None);
 
         MachineStateSummary? summary = await db.MachineStateSummaries
             .Where(s => s.MachineId == machineId)
@@ -426,7 +432,7 @@ public class MachineStateStreamingServiceTests
         MachineTelemetry row = BuildRow(machineId, 999, """{"unknown":"data"}""");
 
         // Should not throw
-        await service.ProcessTelemetryRowAsync(db, row, CancellationToken.None);
+        await service.ProcessTelemetryRowAsync(CreateRepo(db),row, CancellationToken.None);
 
         // Summary should remain unchanged (no LastSeenAt update)
         MachineStateSummary? summary = await db.MachineStateSummaries
@@ -626,7 +632,7 @@ public class MachineStateStreamingServiceTests
 
         // Null payload causes JsonDocument.Parse to throw ArgumentNullException,
         // which the streaming loop's catch block handles.
-        await Assert.That(async () => await service.ProcessTelemetryRowAsync(db, row, CancellationToken.None))
+        await Assert.That(async () => await service.ProcessTelemetryRowAsync(CreateRepo(db),row, CancellationToken.None))
             .Throws<ArgumentNullException>();
     }
 
@@ -647,7 +653,7 @@ public class MachineStateStreamingServiceTests
 
         MachineTelemetry row = BuildRow(machineId, TelemetryTypeIds.CpuUsage, "");
 
-        await Assert.That(async () => await service.ProcessTelemetryRowAsync(db, row, CancellationToken.None))
+        await Assert.That(async () => await service.ProcessTelemetryRowAsync(CreateRepo(db),row, CancellationToken.None))
             .Throws<System.Text.Json.JsonException>();
     }
 
@@ -669,7 +675,7 @@ public class MachineStateStreamingServiceTests
         MachineTelemetry row = BuildRow(machineId, TelemetryTypeIds.CpuUsage, payload);
 
         // Should not throw even though machine doesn't exist in summary/detail tables
-        await service.ProcessTelemetryRowAsync(db, row, CancellationToken.None);
+        await service.ProcessTelemetryRowAsync(CreateRepo(db),row, CancellationToken.None);
 
         MachineStateSummary? summary = await db.MachineStateSummaries
             .Where(s => s.MachineId == machineId)
@@ -695,8 +701,8 @@ public class MachineStateStreamingServiceTests
         MachineTelemetry row = BuildRow(machineId, TelemetryTypeIds.CpuUsage, payload);
 
         // Process the same row twice
-        await service.ProcessTelemetryRowAsync(db, row, CancellationToken.None);
-        await service.ProcessTelemetryRowAsync(db, row, CancellationToken.None);
+        await service.ProcessTelemetryRowAsync(CreateRepo(db),row, CancellationToken.None);
+        await service.ProcessTelemetryRowAsync(CreateRepo(db),row, CancellationToken.None);
 
         // Should still have exactly one summary row
         int count = await db.MachineStateSummaries
@@ -817,7 +823,7 @@ public class MachineStateStreamingServiceTests
         // Process bad row - should throw
         try
         {
-            await service.ProcessTelemetryRowAsync(db, badRow, CancellationToken.None);
+            await service.ProcessTelemetryRowAsync(CreateRepo(db),badRow, CancellationToken.None);
         }
         catch (System.Text.Json.JsonException)
         {
@@ -825,7 +831,7 @@ public class MachineStateStreamingServiceTests
         }
 
         // Process good row - should succeed despite bad row before it
-        await service.ProcessTelemetryRowAsync(db, goodRow, CancellationToken.None);
+        await service.ProcessTelemetryRowAsync(CreateRepo(db),goodRow, CancellationToken.None);
 
         MachineStateSummary? summary = await db.MachineStateSummaries
             .Where(s => s.MachineId == machineId)
@@ -859,7 +865,7 @@ public class MachineStateStreamingServiceTests
             SourceEventId = "evt1"
         };
 
-        await service.ProcessTelemetryRowAsync(db, row, CancellationToken.None);
+        await service.ProcessTelemetryRowAsync(CreateRepo(db),row, CancellationToken.None);
 
         MachineStateSummary? summary = await db.MachineStateSummaries
             .Where(s => s.MachineId == machineId)
@@ -919,7 +925,7 @@ public class MachineStateStreamingServiceTests
         string payload = """{"disk_smart":[],"fans":[],"power_supplies":[]}""";
         MachineTelemetry row = BuildRow(machineId, TelemetryTypeIds.HardwareHealth, payload);
 
-        await service.ProcessTelemetryRowAsync(db, row, CancellationToken.None);
+        await service.ProcessTelemetryRowAsync(CreateRepo(db),row, CancellationToken.None);
 
         MachineStateDetail? detail = await db.MachineStateDetails
             .Where(d => d.MachineId == machineId)
@@ -1048,7 +1054,7 @@ public class MachineStateStreamingServiceTests
 
         MachineTelemetry row = BuildRow(machineId, TelemetryTypeIds.CpuUsage, "not-valid-json{{{");
 
-        await Assert.That(async () => await service.ProcessTelemetryRowAsync(db, row, CancellationToken.None))
+        await Assert.That(async () => await service.ProcessTelemetryRowAsync(CreateRepo(db),row, CancellationToken.None))
             .Throws<System.Text.Json.JsonException>();
     }
 
@@ -1071,7 +1077,7 @@ public class MachineStateStreamingServiceTests
         string payload = """{"cpu_usage_percent":0}""";
         MachineTelemetry row = BuildRow(machineId, TelemetryTypeIds.CpuUsage, payload);
 
-        await service.ProcessTelemetryRowAsync(db, row, CancellationToken.None);
+        await service.ProcessTelemetryRowAsync(CreateRepo(db),row, CancellationToken.None);
 
         MachineStateSummary? summary = await db.MachineStateSummaries
             .Where(s => s.MachineId == machineId)
@@ -1100,7 +1106,7 @@ public class MachineStateStreamingServiceTests
         MachineTelemetry row = BuildRow(machineId, 9999, """{"future":"data"}""");
 
         // Must not throw
-        await service.ProcessTelemetryRowAsync(db, row, CancellationToken.None);
+        await service.ProcessTelemetryRowAsync(CreateRepo(db),row, CancellationToken.None);
 
         // Summary and detail rows must remain unchanged
         MachineStateSummary? summary = await db.MachineStateSummaries

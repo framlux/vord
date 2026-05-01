@@ -2,8 +2,8 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
-using Framlux.FleetManagement.Database.Cache;
 using Framlux.FleetManagement.Database.Enums;
+using Framlux.FleetManagement.Database.Repositories;
 using StackExchange.Redis;
 
 namespace Framlux.FleetManagement.Server.Services.ServerConfiguration;

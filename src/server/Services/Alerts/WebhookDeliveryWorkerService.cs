@@ -3,11 +3,9 @@
 // See LICENSE for details.
 
 using System.Text.Json;
-using Framlux.FleetManagement.Database;
 using Framlux.FleetManagement.Database.Models;
+using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Server.Services.Infrastructure;
-using LinqToDB;
-using LinqToDB.Async;
 using StackExchange.Redis;
 
 namespace Framlux.FleetManagement.Server.Services.Alerts;
@@ -135,10 +133,10 @@ public sealed class WebhookDeliveryWorkerService : BackgroundService
         }
 
         using IServiceScope scope = _scopeFactory.CreateScope();
-        DatabaseContext db = scope.ServiceProvider.GetRequiredService<DatabaseContext>();
+        IAlertEventRepository alertEventRepo = scope.ServiceProvider.GetRequiredService<IAlertEventRepository>();
+        IAlertRuleRepository alertRuleRepo = scope.ServiceProvider.GetRequiredService<IAlertRuleRepository>();
 
-        AlertEvent? alertEvent = await db.AlertEvents
-            .FirstOrDefaultAsync(e => e.Id == job.EventId, ct);
+        AlertEvent? alertEvent = await alertEventRepo.GetAlertEventByIdAsync(job.EventId, ct);
 
         if (alertEvent is null)
         {
@@ -147,8 +145,7 @@ public sealed class WebhookDeliveryWorkerService : BackgroundService
             return;
         }
 
-        AlertRule? rule = await db.AlertRules
-            .FirstOrDefaultAsync(r => r.Id == job.RuleId, ct);
+        AlertRule? rule = await alertRuleRepo.GetAlertRuleByIdAsync(job.RuleId, ct);
 
         if (rule is null)
         {

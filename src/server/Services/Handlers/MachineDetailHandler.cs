@@ -2,14 +2,12 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
-using Framlux.FleetManagement.Database;
 using Framlux.FleetManagement.Database.Models;
+using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Server.Endpoints.Web.Models.Machines;
 using Framlux.FleetManagement.Server.Services.Infrastructure;
 using Framlux.FleetManagement.Server.Services.Machines;
 using Framlux.FleetManagement.Server.Services.ServerConfiguration;
-using LinqToDB;
-using LinqToDB.Async;
 
 namespace Framlux.FleetManagement.Server.Services.Handlers;
 
@@ -20,7 +18,8 @@ public sealed class MachineDetailHandler : IMachineDetailHandler
 {
     private const ulong CapabilityRemoteCommands = 1UL;
 
-    private readonly DatabaseContext _db;
+    private readonly IMachineRepository _machineRepo;
+    private readonly IMachineStateRepository _machineStateRepo;
     private readonly IMachinePingService _pingService;
     private readonly ServerConfigurationService _configService;
     private readonly IMachineStateService _stateService;
@@ -29,17 +28,20 @@ public sealed class MachineDetailHandler : IMachineDetailHandler
     /// Creates a new instance of the <see cref="MachineDetailHandler"/> class.
     /// </summary>
     public MachineDetailHandler(
-        DatabaseContext db,
+        IMachineRepository machineRepo,
+        IMachineStateRepository machineStateRepo,
         IMachinePingService pingService,
         ServerConfigurationService configService,
         IMachineStateService stateService)
     {
-        ArgumentNullException.ThrowIfNull(db);
+        ArgumentNullException.ThrowIfNull(machineRepo);
+        ArgumentNullException.ThrowIfNull(machineStateRepo);
         ArgumentNullException.ThrowIfNull(pingService);
         ArgumentNullException.ThrowIfNull(configService);
         ArgumentNullException.ThrowIfNull(stateService);
 
-        _db = db;
+        _machineRepo = machineRepo;
+        _machineStateRepo = machineStateRepo;
         _pingService = pingService;
         _configService = configService;
         _stateService = stateService;
@@ -53,8 +55,7 @@ public sealed class MachineDetailHandler : IMachineDetailHandler
             return ServiceResult<MachineDto>.NotFound();
         }
 
-        Machine? machine = await _db.Machines
-            .FirstOrDefaultAsync(m => m.Id == machineId && m.TenantId == tenantId.Value && m.IsDeleted == false, ct);
+        Machine? machine = await _machineRepo.GetActiveMachineByIdAsync(machineId, tenantId.Value, ct);
 
         if (machine is null)
         {
@@ -66,8 +67,7 @@ public sealed class MachineDetailHandler : IMachineDetailHandler
         DateTimeOffset? lastPing = await _pingService.GetLastPingAsync(machine.Id);
         ulong capabilities = await _pingService.GetAgentCapabilitiesAsync(machine.Id);
 
-        MachineStateSummary? summary = await _db.MachineStateSummaries
-            .FirstOrDefaultAsync(s => s.MachineId == machine.Id, ct);
+        MachineStateSummary? summary = await _machineStateRepo.GetSummaryForMachineAsync(machine.Id, ct);
 
         MachineDto dto = new()
         {
@@ -110,10 +110,9 @@ public sealed class MachineDetailHandler : IMachineDetailHandler
             return ServiceResult<MachineStatusDto>.NotFound();
         }
 
-        bool machineExists = await _db.Machines
-            .AnyAsync(m => m.Id == machineId && m.TenantId == tenantId.Value && m.IsDeleted == false, ct);
+        Machine? machine = await _machineRepo.GetActiveMachineByIdAsync(machineId, tenantId.Value, ct);
 
-        if (machineExists == false)
+        if (machine is null)
         {
             return ServiceResult<MachineStatusDto>.NotFound();
         }

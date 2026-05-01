@@ -2,7 +2,7 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
-using Framlux.FleetManagement.Database.Cache;
+using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Test.Infrastructure;
 using LinqToDB;
@@ -13,7 +13,7 @@ namespace Framlux.FleetManagement.Test.Endpoints.Web.Auth;
 
 /// <summary>
 /// Tests for email domain SSO lookup functionality used by <see cref="Framlux.FleetManagement.Server.Endpoints.Web.Auth.EmailDomainLookupEndpoint"/>.
-/// Tests the underlying <see cref="DatabaseCache.GetTenantOidcConfigurationByEmailDomainAsync"/> method
+/// Tests the underlying <see cref="DatabaseRepository.GetTenantOidcConfigurationByEmailDomainAsync"/> method
 /// which drives the endpoint behavior.
 /// </summary>
 public sealed class EmailDomainLookupTests
@@ -36,8 +36,8 @@ public sealed class EmailDomainLookupTests
             UpdatedAt = DateTimeOffset.UtcNow
         });
 
-        ILogger<DatabaseCache> logger = new NullLogger<DatabaseCache>();
-        DatabaseCache cache = new(dbFactory.Context, logger);
+        ILogger<DatabaseRepository> logger = new NullLogger<DatabaseRepository>();
+        DatabaseRepository cache = new(dbFactory.Context, logger);
 
         TenantOidcConfiguration? result = await cache.GetTenantOidcConfigurationByEmailDomainAsync("example.com");
 
@@ -51,8 +51,8 @@ public sealed class EmailDomainLookupTests
     {
         using TestDatabaseFactory dbFactory = new();
 
-        ILogger<DatabaseCache> logger = new NullLogger<DatabaseCache>();
-        DatabaseCache cache = new(dbFactory.Context, logger);
+        ILogger<DatabaseRepository> logger = new NullLogger<DatabaseRepository>();
+        DatabaseRepository cache = new(dbFactory.Context, logger);
 
         TenantOidcConfiguration? result = await cache.GetTenantOidcConfigurationByEmailDomainAsync("unknown.com");
 
@@ -77,8 +77,8 @@ public sealed class EmailDomainLookupTests
             UpdatedAt = DateTimeOffset.UtcNow
         });
 
-        ILogger<DatabaseCache> logger = new NullLogger<DatabaseCache>();
-        DatabaseCache cache = new(dbFactory.Context, logger);
+        ILogger<DatabaseRepository> logger = new NullLogger<DatabaseRepository>();
+        DatabaseRepository cache = new(dbFactory.Context, logger);
 
         TenantOidcConfiguration? result = await cache.GetTenantOidcConfigurationByEmailDomainAsync("disabled.com");
 
@@ -103,8 +103,8 @@ public sealed class EmailDomainLookupTests
             UpdatedAt = DateTimeOffset.UtcNow
         });
 
-        ILogger<DatabaseCache> logger = new NullLogger<DatabaseCache>();
-        DatabaseCache cache = new(dbFactory.Context, logger);
+        ILogger<DatabaseRepository> logger = new NullLogger<DatabaseRepository>();
+        DatabaseRepository cache = new(dbFactory.Context, logger);
 
         // Query with mixed case — service normalizes input to lowercase.
         TenantOidcConfiguration? result = await cache.GetTenantOidcConfigurationByEmailDomainAsync("MixedCase.COM");

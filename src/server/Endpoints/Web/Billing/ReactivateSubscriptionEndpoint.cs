@@ -3,9 +3,9 @@
 // See LICENSE for details.
 
 using FastEndpoints;
-using Framlux.FleetManagement.Database.Cache;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
+using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Server.Auth;
 using Framlux.FleetManagement.Server.Options;
 using Framlux.FleetManagement.Server.Services.Billing;
@@ -33,7 +33,9 @@ public sealed class ReactivateSubscriptionResponse
 public sealed class ReactivateSubscriptionEndpoint : EndpointWithoutRequest<ApiResponse<ReactivateSubscriptionResponse>>
 {
     private readonly IBillingStatus _billingStatus;
-    private readonly IDatabaseCache _databaseCache;
+    private readonly IDatabaseTransactionProvider _transactionProvider;
+    private readonly IAuditLogRepository _auditLog;
+    private readonly ISubscriptionRepository _subscriptionRepository;
     private readonly ISubscriptionService _subscriptionService;
     private readonly SubscriptionOptions _subscriptionOptions;
     private readonly ILogger<ReactivateSubscriptionEndpoint> _logger;
@@ -43,13 +45,17 @@ public sealed class ReactivateSubscriptionEndpoint : EndpointWithoutRequest<ApiR
     /// </summary>
     public ReactivateSubscriptionEndpoint(
         IBillingStatus billingStatus,
-        IDatabaseCache databaseCache,
+        IDatabaseTransactionProvider transactionProvider,
+        IAuditLogRepository auditLog,
+        ISubscriptionRepository subscriptionRepository,
         ISubscriptionService subscriptionService,
         IOptions<SubscriptionOptions> subscriptionOptions,
         ILogger<ReactivateSubscriptionEndpoint> logger)
     {
         _billingStatus = billingStatus;
-        _databaseCache = databaseCache;
+        _transactionProvider = transactionProvider;
+        _auditLog = auditLog;
+        _subscriptionRepository = subscriptionRepository;
         _subscriptionService = subscriptionService;
         _subscriptionOptions = subscriptionOptions.Value;
         _logger = logger;
@@ -101,12 +107,12 @@ public sealed class ReactivateSubscriptionEndpoint : EndpointWithoutRequest<ApiR
             return;
         }
 
-        using IDatabaseTransaction transaction = await _databaseCache.BeginTransactionAsync(ct);
+        using IDatabaseTransaction transaction = await _transactionProvider.BeginTransactionAsync(ct);
 
         // Reactivate by reverting to Free tier with Active status
-        await _databaseCache.RevertSubscriptionToFreeAsync(tenantId.Value, _subscriptionOptions.FreeTierMachineLimit, _subscriptionOptions.FreeTierRetentionDays, 0, 0, ct);
+        await _subscriptionRepository.RevertSubscriptionToFreeAsync(tenantId.Value, _subscriptionOptions.FreeTierMachineLimit, _subscriptionOptions.FreeTierRetentionDays, 0, 0, ct);
 
-        await _databaseCache.InsertAuditLogAsync(AuditHelper.Create(
+        await _auditLog.InsertAuditLogAsync(AuditHelper.Create(
             tenantId.Value, null, null,
             AuditAction.SubscriptionUpgraded, AuditResourceType.Subscription,
             tenantId.Value.ToString(), "Account reactivated to Free tier from canceled state", null), ct);

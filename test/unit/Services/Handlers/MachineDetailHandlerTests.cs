@@ -2,7 +2,7 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
-using Framlux.FleetManagement.Database.Cache;
+using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Server.Endpoints.Web.Models.Machines;
 using Framlux.FleetManagement.Server.Services.Handlers;
@@ -12,6 +12,7 @@ using Framlux.FleetManagement.Server.Services.ServerConfiguration;
 using Framlux.FleetManagement.Test.Infrastructure;
 using LinqToDB.Async;
 using LinqToDB;
+using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
 using StackExchange.Redis;
 
@@ -31,6 +32,11 @@ public class MachineDetailHandlerTests
         return machine.Id;
     }
 
+    private static DatabaseRepository CreateRepo(TestDatabaseFactory dbFactory)
+    {
+        return new DatabaseRepository(dbFactory.Context, new NullLogger<DatabaseRepository>());
+    }
+
     private static MachineDetailHandler CreateHandler(
         TestDatabaseFactory dbFactory,
         InMemoryMachinePingService? pingService = null,
@@ -39,8 +45,9 @@ public class MachineDetailHandlerTests
         pingService ??= new InMemoryMachinePingService();
         stateService ??= Substitute.For<IMachineStateService>();
         ServerConfigurationService configService = new(Substitute.For<IServerSettingsCache>(), Substitute.For<IConnectionMultiplexer>());
+        DatabaseRepository repo = CreateRepo(dbFactory);
 
-        return new MachineDetailHandler(dbFactory.Context, pingService, configService, stateService);
+        return new MachineDetailHandler(repo, repo, pingService, configService, stateService);
     }
 
     // ========== GetDetailAsync tests ==========

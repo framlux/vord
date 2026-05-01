@@ -4,13 +4,11 @@
 
 using System.Text.Json;
 using FastEndpoints;
-using Framlux.FleetManagement.Database;
 using Framlux.FleetManagement.Database.Models;
+using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Server.Auth;
 using Framlux.FleetManagement.Server.Endpoints.Web.Models.Telemetry;
 using Framlux.FleetManagement.Server.Services.Telemetry;
-using LinqToDB;
-using LinqToDB.Async;
 
 namespace Framlux.FleetManagement.Server.Endpoints.Web.Machines;
 
@@ -65,14 +63,16 @@ public sealed class FleetSshSessionsRequest
 /// </summary>
 public sealed class SshSessionsFleetEndpoint : Endpoint<FleetSshSessionsRequest, ApiResponse<PaginatedResponse<FleetSshSessionDto>>>
 {
-    private readonly DatabaseContext _db;
+    private readonly IMachineRepository _machineRepo;
+    private readonly IMachineStateRepository _machineStateRepo;
 
     /// <summary>
     /// Creates a new instance of the <see cref="SshSessionsFleetEndpoint"/> class.
     /// </summary>
-    public SshSessionsFleetEndpoint(DatabaseContext db)
+    public SshSessionsFleetEndpoint(IMachineRepository machineRepo, IMachineStateRepository machineStateRepo)
     {
-        _db = db;
+        _machineRepo = machineRepo;
+        _machineStateRepo = machineStateRepo;
     }
 
     /// <inheritdoc/>
@@ -99,9 +99,7 @@ public sealed class SshSessionsFleetEndpoint : Endpoint<FleetSshSessionsRequest,
         int pageSize = (req.PageSize < 1) || (req.PageSize > 100) ? 50 : req.PageSize;
 
         // Build a lookup of machine names for tenant machines.
-        Dictionary<long, string> machineNames = await _db.Machines
-            .Where(m => m.TenantId == tenantId.Value && m.IsDeleted == false)
-            .ToDictionaryAsync(m => m.Id, m => m.Name, ct);
+        Dictionary<long, string> machineNames = await _machineRepo.GetMachineNameMapForTenantAsync(tenantId.Value, ct);
 
         if (machineNames.Count == 0)
         {
@@ -118,11 +116,8 @@ public sealed class SshSessionsFleetEndpoint : Endpoint<FleetSshSessionsRequest,
 
         // Query SSH session telemetry rows for all tenant machines.
         List<long> machineIds = machineNames.Keys.ToList();
-        List<MachineTelemetry> telemetryRows = await _db.MachineTelemetry
-            .Where(t => machineIds.Contains(t.MachineId) &&
-                        t.TelemetryType == TelemetryTypeIds.SshSessions)
-            .OrderByDescending(t => t.ReceivedAt)
-            .ToListAsync(ct);
+        List<MachineTelemetry> telemetryRows = await _machineStateRepo.GetTelemetryByMachineIdsAndTypeAsync(
+            machineIds, TelemetryTypeIds.SshSessions, ct);
 
         JsonSerializerOptions jsonOptions = new() { PropertyNameCaseInsensitive = true };
 
@@ -190,4 +185,3 @@ public sealed class SshSessionsFleetEndpoint : Endpoint<FleetSshSessionsRequest,
         await Send.OkAsync(ApiResponse<PaginatedResponse<FleetSshSessionDto>>.Ok(response), cancellation: ct);
     }
 }
-

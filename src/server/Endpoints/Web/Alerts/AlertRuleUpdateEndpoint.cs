@@ -3,13 +3,12 @@
 // See LICENSE for details.
 
 using FastEndpoints;
-using Framlux.FleetManagement.Database;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
+using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Server.Auth;
 using Framlux.FleetManagement.Server.Services.Billing;
-using LinqToDB;
-using LinqToDB.Async;
+using Framlux.FleetManagement.Server.Services.Infrastructure;
 
 namespace Framlux.FleetManagement.Server.Endpoints.Web.Alerts;
 
@@ -49,16 +48,18 @@ public sealed class UpdateAlertRuleRequest
 /// </summary>
 public sealed class AlertRuleUpdateEndpoint : Endpoint<UpdateAlertRuleRequest, ApiResponse<AlertRuleDto>>
 {
-    private readonly DatabaseContext _db;
+    private readonly IAlertRuleRepository _alertRuleRepo;
     private readonly ISubscriptionService _subscriptionService;
+    private readonly IAuditLogRepository _auditLog;
 
     /// <summary>
     /// Creates a new instance of the <see cref="AlertRuleUpdateEndpoint"/> class.
     /// </summary>
-    public AlertRuleUpdateEndpoint(DatabaseContext db, ISubscriptionService subscriptionService)
+    public AlertRuleUpdateEndpoint(IAlertRuleRepository alertRuleRepo, ISubscriptionService subscriptionService, IAuditLogRepository auditLog)
     {
-        _db = db;
+        _alertRuleRepo = alertRuleRepo;
         _subscriptionService = subscriptionService;
+        _auditLog = auditLog;
     }
 
     /// <inheritdoc/>
@@ -92,8 +93,7 @@ public sealed class AlertRuleUpdateEndpoint : Endpoint<UpdateAlertRuleRequest, A
 
         int ruleId = Route<int>("id");
 
-        AlertRule? rule = await _db.AlertRules
-            .FirstOrDefaultAsync(r => r.Id == ruleId && r.TenantId == tenantId.Value, ct);
+        AlertRule? rule = await _alertRuleRepo.GetAlertRuleByIdAsync(ruleId, tenantId.Value, ct);
 
         if (rule is null)
         {
@@ -186,18 +186,18 @@ public sealed class AlertRuleUpdateEndpoint : Endpoint<UpdateAlertRuleRequest, A
             return;
         }
 
-        await _db.AlertRules
-            .Where(r => (r.Id == ruleId) && (r.TenantId == tenantId.Value))
-            .Set(r => r.Name, req.Name)
-            .Set(r => r.Description, req.Description)
-            .Set(r => r.Threshold, req.Threshold)
-            .Set(r => r.DurationMinutes, req.DurationMinutes)
-            .Set(r => r.Severity, severity)
-            .Set(r => r.IsEnabled, req.IsEnabled)
-            .Set(r => r.NotifyEmail, req.NotifyEmail)
-            .Set(r => r.NotifyWebhook, req.NotifyWebhook)
-            .Set(r => r.UpdatedAt, DateTimeOffset.UtcNow)
-            .UpdateAsync(ct);
+        await _alertRuleRepo.UpdateAlertRuleAsync(
+            ruleId, tenantId.Value,
+            req.Name, req.Description,
+            req.Threshold, req.DurationMinutes,
+            severity, req.IsEnabled,
+            req.NotifyEmail, req.NotifyWebhook, ct);
+
+        int? userId = TenantClaimHelper.GetUserIdFromClaims(User);
+        await _auditLog.InsertAuditLogAsync(AuditHelper.Create(
+            tenantId.Value, userId, null,
+            AuditAction.AlertRuleUpdated, AuditResourceType.AlertRule,
+            ruleId.ToString(), req.Name, null), ct);
 
         AlertRuleDto dto = new()
         {

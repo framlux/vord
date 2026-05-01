@@ -2,7 +2,7 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
-using Framlux.FleetManagement.Database.Cache;
+using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Server.Services.Commands;
 using Framlux.FleetManagement.Server.Services.Infrastructure;
 using Microsoft.Extensions.DependencyInjection;
@@ -23,8 +23,8 @@ public sealed class CommandExpiryBackgroundServiceTests
         using CancellationTokenSource cts = new();
         TaskCompletionSource workDone = new();
 
-        IDatabaseCache cache = Substitute.For<IDatabaseCache>();
-        cache.ExpirePendingCommandsAsync(Arg.Any<CancellationToken>())
+        IRemoteCommandRepository remoteCommandRepository = Substitute.For<IRemoteCommandRepository>();
+        remoteCommandRepository.ExpirePendingCommandsAsync(Arg.Any<CancellationToken>())
             .Returns(callInfo =>
             {
                 workDone.TrySetResult();
@@ -34,7 +34,7 @@ public sealed class CommandExpiryBackgroundServiceTests
 
         IServiceScope scope = Substitute.For<IServiceScope>();
         IServiceProvider serviceProvider = Substitute.For<IServiceProvider>();
-        serviceProvider.GetService(typeof(IDatabaseCache)).Returns(cache);
+        serviceProvider.GetService(typeof(IRemoteCommandRepository)).Returns(remoteCommandRepository);
         scope.ServiceProvider.Returns(serviceProvider);
 
         IServiceScopeFactory scopeFactory = Substitute.For<IServiceScopeFactory>();
@@ -53,7 +53,7 @@ public sealed class CommandExpiryBackgroundServiceTests
         await cts.CancelAsync();
         await service.StopAsync(CancellationToken.None);
 
-        await cache.Received(1).ExpirePendingCommandsAsync(Arg.Any<CancellationToken>());
+        await remoteCommandRepository.Received(1).ExpirePendingCommandsAsync(Arg.Any<CancellationToken>());
     }
 
     [Test]
@@ -62,8 +62,8 @@ public sealed class CommandExpiryBackgroundServiceTests
         using CancellationTokenSource cts = new();
         TaskCompletionSource workDone = new();
 
-        IDatabaseCache cache = Substitute.For<IDatabaseCache>();
-        cache.ExpirePendingCommandsAsync(Arg.Any<CancellationToken>())
+        IRemoteCommandRepository remoteCommandRepository = Substitute.For<IRemoteCommandRepository>();
+        remoteCommandRepository.ExpirePendingCommandsAsync(Arg.Any<CancellationToken>())
             .Returns(callInfo =>
             {
                 workDone.TrySetResult();
@@ -73,7 +73,7 @@ public sealed class CommandExpiryBackgroundServiceTests
 
         IServiceScope scope = Substitute.For<IServiceScope>();
         IServiceProvider serviceProvider = Substitute.For<IServiceProvider>();
-        serviceProvider.GetService(typeof(IDatabaseCache)).Returns(cache);
+        serviceProvider.GetService(typeof(IRemoteCommandRepository)).Returns(remoteCommandRepository);
         scope.ServiceProvider.Returns(serviceProvider);
 
         IServiceScopeFactory scopeFactory = Substitute.For<IServiceScopeFactory>();

@@ -4,9 +4,9 @@
 
 using System.Security.Claims;
 using System.Text.Json;
-using Framlux.FleetManagement.Database.Cache;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
+using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Grpc.AgentConfiguration;
 using Framlux.FleetManagement.Server.Auth;
 using Framlux.FleetManagement.Server.Services.Machines;
@@ -23,7 +23,8 @@ namespace Framlux.FleetManagement.Server.Endpoints.Grpc;
 [Authorize(ApiKeyAuthenticationHandler.SchemeName)]
 public sealed class ConfigurationService : Configuration.ConfigurationBase
 {
-    private readonly IDatabaseCache _cache;
+    private readonly ISigningKeyRepository _signingKeyRepository;
+    private readonly IRemoteCommandRepository _remoteCommandRepository;
     private readonly IMachinePingService _pingService;
     private readonly ServerConfigurationService _configService;
     private readonly ILogger<ConfigurationService> _logger;
@@ -31,14 +32,21 @@ public sealed class ConfigurationService : Configuration.ConfigurationBase
     /// <summary>
     /// Initializes a new instance of the <see cref="ConfigurationService"/> class.
     /// </summary>
-    /// <param name="cache">The database caching layer instance</param>
+    /// <param name="signingKeyRepository">The signing key repository for retrieving trusted keys</param>
+    /// <param name="remoteCommandRepository">The remote command repository for pending commands</param>
     /// <param name="pingService">The machine ping tracking service</param>
     /// <param name="configService">The server configuration service for runtime settings</param>
     /// <param name="logger">The application-wide logging service instance</param>
     /// <exception cref="ArgumentNullException"></exception>
-    public ConfigurationService(IDatabaseCache cache, IMachinePingService pingService, ServerConfigurationService configService, ILogger<ConfigurationService> logger)
+    public ConfigurationService(
+        ISigningKeyRepository signingKeyRepository,
+        IRemoteCommandRepository remoteCommandRepository,
+        IMachinePingService pingService,
+        ServerConfigurationService configService,
+        ILogger<ConfigurationService> logger)
     {
-        _cache = cache ?? throw new ArgumentNullException(nameof(cache));
+        _signingKeyRepository = signingKeyRepository ?? throw new ArgumentNullException(nameof(signingKeyRepository));
+        _remoteCommandRepository = remoteCommandRepository ?? throw new ArgumentNullException(nameof(remoteCommandRepository));
         _pingService = pingService ?? throw new ArgumentNullException(nameof(pingService));
         _configService = configService ?? throw new ArgumentNullException(nameof(configService));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
@@ -92,7 +100,7 @@ public sealed class ConfigurationService : Configuration.ConfigurationBase
 
         if (tenantId > 0)
         {
-            List<UserSigningKey> signingKeys = await _cache.GetActiveSigningKeysForMachineAsync(machineId, context.CancellationToken);
+            List<UserSigningKey> signingKeys = await _signingKeyRepository.GetActiveSigningKeysForMachineAsync(machineId, context.CancellationToken);
             foreach (UserSigningKey key in signingKeys)
             {
                 response.SigningKeys.Add(new TrustedSigningKey
@@ -162,7 +170,7 @@ public sealed class ConfigurationService : Configuration.ConfigurationBase
         long machineId = claimMachineId > 0 ? claimMachineId : request.MachineId;
         int tenantId = ExtractTenantIdFromClaims(context);
 
-        List<RemoteCommand> pendingCommands = await _cache.GetPendingCommandsForMachineAsync(machineId, tenantId, context.CancellationToken);
+        List<RemoteCommand> pendingCommands = await _remoteCommandRepository.GetPendingCommandsForMachineAsync(machineId, tenantId, context.CancellationToken);
 
         GetPendingCommandsResponse response = new();
         List<string> deliveredIds = [];
@@ -200,7 +208,7 @@ public sealed class ConfigurationService : Configuration.ConfigurationBase
         // Mark delivered commands.
         if (deliveredIds.Count > 0)
         {
-            await _cache.MarkCommandsDeliveredAsync(deliveredIds, context.CancellationToken);
+            await _remoteCommandRepository.MarkCommandsDeliveredAsync(deliveredIds, context.CancellationToken);
         }
 
         return response;
@@ -248,7 +256,7 @@ public sealed class ConfigurationService : Configuration.ConfigurationBase
             status = RemoteCommandStatus.Failed;
         }
 
-        await _cache.UpdateRemoteCommandStatusAsync(
+        await _remoteCommandRepository.UpdateRemoteCommandStatusAsync(
             request.CommandId,
             machineId,
             status,

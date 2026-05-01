@@ -4,14 +4,12 @@
 
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
-using Framlux.FleetManagement.Database;
+using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Server.Auth;
 using Framlux.FleetManagement.Server.Endpoints.Web.Tenants;
 using Framlux.FleetManagement.Server.Services.Billing;
 using Framlux.FleetManagement.Server.Services.Infrastructure;
 using Framlux.FleetManagement.Server.Services.Security;
-using LinqToDB.Async;
-using LinqToDB;
 
 namespace Framlux.FleetManagement.Server.Services.Handlers;
 
@@ -20,20 +18,20 @@ namespace Framlux.FleetManagement.Server.Services.Handlers;
 /// </summary>
 public sealed class TenantOidcHandler : ITenantOidcHandler
 {
-    private readonly DatabaseContext _db;
+    private readonly ITenantRepository _tenantRepo;
     private readonly ISubscriptionService _subscriptionService;
     private readonly IOidcSecretProtector _secretProtector;
 
     /// <summary>
     /// Creates a new instance of the <see cref="TenantOidcHandler"/> class.
     /// </summary>
-    public TenantOidcHandler(DatabaseContext db, ISubscriptionService subscriptionService, IOidcSecretProtector secretProtector)
+    public TenantOidcHandler(ITenantRepository tenantRepo, ISubscriptionService subscriptionService, IOidcSecretProtector secretProtector)
     {
-        ArgumentNullException.ThrowIfNull(db);
+        ArgumentNullException.ThrowIfNull(tenantRepo);
         ArgumentNullException.ThrowIfNull(subscriptionService);
         ArgumentNullException.ThrowIfNull(secretProtector);
 
-        _db = db;
+        _tenantRepo = tenantRepo;
         _subscriptionService = subscriptionService;
         _secretProtector = secretProtector;
     }
@@ -52,9 +50,7 @@ public sealed class TenantOidcHandler : ITenantOidcHandler
             return ServiceResult<TenantOidcConfigDto>.Forbidden("Custom OIDC configuration requires a Team tier subscription");
         }
 
-        TenantOidcConfiguration? config = await _db.TenantOidcConfigurations
-            .Where(c => c.TenantId == tenantId)
-            .FirstOrDefaultAsync(ct);
+        TenantOidcConfiguration? config = await _tenantRepo.GetTenantOidcConfigByTenantIdAsync(tenantId, ct);
 
         if (config is null)
         {
@@ -101,26 +97,24 @@ public sealed class TenantOidcHandler : ITenantOidcHandler
 
         string normalizedDomain = (request.EmailDomain ?? string.Empty).Trim().ToLowerInvariant().TrimStart('@');
 
-        DateTimeOffset now = DateTimeOffset.UtcNow;
-        TenantOidcConfiguration? existing = await _db.TenantOidcConfigurations
-            .Where(c => c.TenantId == tenantId)
-            .FirstOrDefaultAsync(ct);
+        TenantOidcConfiguration? existing = await _tenantRepo.GetTenantOidcConfigByTenantIdAsync(tenantId, ct);
 
         if (existing is null)
         {
+            string encryptedSecret = _secretProtector.Protect(request.ClientSecret);
             TenantOidcConfiguration config = new()
             {
                 TenantId = tenantId,
                 Authority = request.Authority,
                 ClientId = request.ClientId,
-                ClientSecret = _secretProtector.Protect(request.ClientSecret),
+                ClientSecret = encryptedSecret,
                 MetadataAddress = request.MetadataAddress,
                 EmailDomain = normalizedDomain,
                 IsEnabled = request.IsEnabled,
-                CreatedAt = now,
-                UpdatedAt = now,
+                CreatedAt = DateTimeOffset.UtcNow,
+                UpdatedAt = DateTimeOffset.UtcNow,
             };
-            await _db.InsertAsync(config, token: ct);
+            await _tenantRepo.InsertTenantOidcConfigAsync(config, ct);
         }
         else
         {
@@ -128,16 +122,15 @@ public sealed class TenantOidcHandler : ITenantOidcHandler
                 ? _secretProtector.Protect(request.ClientSecret)
                 : existing.ClientSecret;
 
-            await _db.TenantOidcConfigurations
-                .Where(c => c.TenantId == tenantId)
-                .Set(c => c.Authority, request.Authority)
-                .Set(c => c.ClientId, request.ClientId)
-                .Set(c => c.ClientSecret, encryptedSecret)
-                .Set(c => c.MetadataAddress, request.MetadataAddress)
-                .Set(c => c.EmailDomain, normalizedDomain)
-                .Set(c => c.IsEnabled, request.IsEnabled)
-                .Set(c => c.UpdatedAt, now)
-                .UpdateAsync(ct);
+            await _tenantRepo.UpdateTenantOidcConfigAsync(
+                tenantId,
+                request.Authority,
+                request.ClientId,
+                encryptedSecret,
+                request.MetadataAddress,
+                normalizedDomain,
+                request.IsEnabled,
+                ct);
         }
 
         return ServiceResult<TenantOidcConfigDto>.Ok(request);

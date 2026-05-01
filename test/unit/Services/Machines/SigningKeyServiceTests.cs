@@ -2,9 +2,9 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
-using Framlux.FleetManagement.Database.Cache;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
+using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Server.Services.Infrastructure;
 using Framlux.FleetManagement.Server.Services.Machines;
 using Microsoft.Extensions.Logging;
@@ -18,17 +18,21 @@ namespace Framlux.FleetManagement.Test.Services;
 /// </summary>
 public sealed class SigningKeyServiceTests
 {
-    private readonly IDatabaseCache _cache;
+    private readonly IDatabaseTransactionProvider _transactionProvider;
+    private readonly IAuditLogRepository _auditLog;
+    private readonly ISigningKeyRepository _signingKeyRepository;
     private readonly ILogger<SigningKeyService> _logger = Substitute.For<ILogger<SigningKeyService>>();
 
     public SigningKeyServiceTests()
     {
-        _cache = Substitute.For<IDatabaseCache>();
+        _transactionProvider = Substitute.For<IDatabaseTransactionProvider>();
+        _auditLog = Substitute.For<IAuditLogRepository>();
+        _signingKeyRepository = Substitute.For<ISigningKeyRepository>();
         IDatabaseTransaction mockTransaction = Substitute.For<IDatabaseTransaction>();
-        _cache.BeginTransactionAsync(Arg.Any<CancellationToken>()).Returns(mockTransaction);
+        _transactionProvider.BeginTransactionAsync(Arg.Any<CancellationToken>()).Returns(mockTransaction);
     }
 
-    private SigningKeyService CreateService() => new(_cache, _logger);
+    private SigningKeyService CreateService() => new(_transactionProvider, _auditLog, _signingKeyRepository, _logger);
 
     /// <summary>
     /// Generates a valid 32-byte Ed25519 public key as base64.
@@ -72,7 +76,7 @@ public sealed class SigningKeyServiceTests
     [Test]
     public async Task RegisterKey_AtMaxActiveKeys_Returns409()
     {
-        _cache.GetActiveSigningKeyCountAsync(1, 1, Arg.Any<CancellationToken>())
+        _signingKeyRepository.GetActiveSigningKeyCountAsync(1, 1, Arg.Any<CancellationToken>())
             .Returns(ISigningKeyService.MaxActiveKeysPerUser);
         SigningKeyService service = CreateService();
 
@@ -85,9 +89,9 @@ public sealed class SigningKeyServiceTests
     [Test]
     public async Task RegisterKey_BelowMaxKeys_Succeeds()
     {
-        _cache.GetActiveSigningKeyCountAsync(1, 1, Arg.Any<CancellationToken>())
+        _signingKeyRepository.GetActiveSigningKeyCountAsync(1, 1, Arg.Any<CancellationToken>())
             .Returns(ISigningKeyService.MaxActiveKeysPerUser - 1);
-        _cache.CreateSigningKeyAsync(Arg.Any<UserSigningKey>(), Arg.Any<CancellationToken>())
+        _signingKeyRepository.CreateSigningKeyAsync(Arg.Any<UserSigningKey>(), Arg.Any<CancellationToken>())
             .Returns(callInfo =>
             {
                 UserSigningKey k = callInfo.Arg<UserSigningKey>();
@@ -95,7 +99,7 @@ public sealed class SigningKeyServiceTests
 
                 return k;
             });
-        _cache.InsertAuditLogAsync(Arg.Any<AuditLogEntry>(), Arg.Any<CancellationToken>())
+        _auditLog.InsertAuditLogAsync(Arg.Any<AuditLogEntry>(), Arg.Any<CancellationToken>())
             .Returns(Task.CompletedTask);
         SigningKeyService service = CreateService();
 
@@ -111,10 +115,10 @@ public sealed class SigningKeyServiceTests
     [Test]
     public async Task RegisterKey_ComputesSha256Fingerprint()
     {
-        _cache.GetActiveSigningKeyCountAsync(Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+        _signingKeyRepository.GetActiveSigningKeyCountAsync(Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
             .Returns(0);
         UserSigningKey? captured = null;
-        _cache.CreateSigningKeyAsync(Arg.Any<UserSigningKey>(), Arg.Any<CancellationToken>())
+        _signingKeyRepository.CreateSigningKeyAsync(Arg.Any<UserSigningKey>(), Arg.Any<CancellationToken>())
             .Returns(callInfo =>
             {
                 captured = callInfo.Arg<UserSigningKey>();
@@ -122,7 +126,7 @@ public sealed class SigningKeyServiceTests
 
                 return captured;
             });
-        _cache.InsertAuditLogAsync(Arg.Any<AuditLogEntry>(), Arg.Any<CancellationToken>())
+        _auditLog.InsertAuditLogAsync(Arg.Any<AuditLogEntry>(), Arg.Any<CancellationToken>())
             .Returns(Task.CompletedTask);
 
         byte[] keyBytes = new byte[32];
@@ -143,9 +147,9 @@ public sealed class SigningKeyServiceTests
     [Test]
     public async Task RegisterKey_Success_CreatesAuditEntry()
     {
-        _cache.GetActiveSigningKeyCountAsync(Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+        _signingKeyRepository.GetActiveSigningKeyCountAsync(Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
             .Returns(0);
-        _cache.CreateSigningKeyAsync(Arg.Any<UserSigningKey>(), Arg.Any<CancellationToken>())
+        _signingKeyRepository.CreateSigningKeyAsync(Arg.Any<UserSigningKey>(), Arg.Any<CancellationToken>())
             .Returns(callInfo =>
             {
                 UserSigningKey k = callInfo.Arg<UserSigningKey>();
@@ -153,13 +157,13 @@ public sealed class SigningKeyServiceTests
 
                 return k;
             });
-        _cache.InsertAuditLogAsync(Arg.Any<AuditLogEntry>(), Arg.Any<CancellationToken>())
+        _auditLog.InsertAuditLogAsync(Arg.Any<AuditLogEntry>(), Arg.Any<CancellationToken>())
             .Returns(Task.CompletedTask);
 
         SigningKeyService service = CreateService();
         await service.RegisterKeyAsync(5, 3, "Audit Test", GenerateValidPublicKey(), CancellationToken.None);
 
-        await _cache.Received(1).InsertAuditLogAsync(
+        await _auditLog.Received(1).InsertAuditLogAsync(
             Arg.Is<AuditLogEntry>(a =>
                 a.Action == AuditAction.SigningKeyRegistered &&
                 a.ResourceType == AuditResourceType.SigningKey &&
@@ -183,7 +187,7 @@ public sealed class SigningKeyServiceTests
             PublicKeyFingerprint = "abc",
             CreatedAt = DateTimeOffset.UtcNow,
         };
-        _cache.GetSigningKeyByIdAsync(1, Arg.Any<CancellationToken>()).Returns(otherUsersKey);
+        _signingKeyRepository.GetSigningKeyByIdAsync(1, Arg.Any<CancellationToken>()).Returns(otherUsersKey);
 
         SigningKeyService service = CreateService();
         ServiceResult<bool> result = await service.RevokeKeyAsync(
@@ -205,10 +209,10 @@ public sealed class SigningKeyServiceTests
             PublicKeyFingerprint = "abc",
             CreatedAt = DateTimeOffset.UtcNow,
         };
-        _cache.GetSigningKeyByIdAsync(1, Arg.Any<CancellationToken>()).Returns(otherUsersKey);
-        _cache.RevokeSigningKeyAsync(Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+        _signingKeyRepository.GetSigningKeyByIdAsync(1, Arg.Any<CancellationToken>()).Returns(otherUsersKey);
+        _signingKeyRepository.RevokeSigningKeyAsync(Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
             .Returns(Task.CompletedTask);
-        _cache.InsertAuditLogAsync(Arg.Any<AuditLogEntry>(), Arg.Any<CancellationToken>())
+        _auditLog.InsertAuditLogAsync(Arg.Any<AuditLogEntry>(), Arg.Any<CancellationToken>())
             .Returns(Task.CompletedTask);
 
         SigningKeyService service = CreateService();
@@ -231,10 +235,10 @@ public sealed class SigningKeyServiceTests
             PublicKeyFingerprint = "abc",
             CreatedAt = DateTimeOffset.UtcNow,
         };
-        _cache.GetSigningKeyByIdAsync(1, Arg.Any<CancellationToken>()).Returns(ownKey);
-        _cache.RevokeSigningKeyAsync(Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+        _signingKeyRepository.GetSigningKeyByIdAsync(1, Arg.Any<CancellationToken>()).Returns(ownKey);
+        _signingKeyRepository.RevokeSigningKeyAsync(Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
             .Returns(Task.CompletedTask);
-        _cache.InsertAuditLogAsync(Arg.Any<AuditLogEntry>(), Arg.Any<CancellationToken>())
+        _auditLog.InsertAuditLogAsync(Arg.Any<AuditLogEntry>(), Arg.Any<CancellationToken>())
             .Returns(Task.CompletedTask);
 
         SigningKeyService service = CreateService();
@@ -259,7 +263,7 @@ public sealed class SigningKeyServiceTests
             PublicKeyFingerprint = "abc",
             CreatedAt = DateTimeOffset.UtcNow,
         };
-        _cache.GetSigningKeyByIdAsync(1, Arg.Any<CancellationToken>()).Returns(key);
+        _signingKeyRepository.GetSigningKeyByIdAsync(1, Arg.Any<CancellationToken>()).Returns(key);
 
         SigningKeyService service = CreateService();
         ServiceResult<bool> result = await service.RevokeKeyAsync(
@@ -284,7 +288,7 @@ public sealed class SigningKeyServiceTests
             CreatedAt = DateTimeOffset.UtcNow,
             RevokedAt = DateTimeOffset.UtcNow.AddHours(-1),
         };
-        _cache.GetSigningKeyByIdAsync(1, Arg.Any<CancellationToken>()).Returns(revokedKey);
+        _signingKeyRepository.GetSigningKeyByIdAsync(1, Arg.Any<CancellationToken>()).Returns(revokedKey);
 
         SigningKeyService service = CreateService();
         ServiceResult<bool> result = await service.RevokeKeyAsync(
@@ -298,7 +302,7 @@ public sealed class SigningKeyServiceTests
     [Test]
     public async Task RevokeKey_NonExistentKey_ReturnsNotFound()
     {
-        _cache.GetSigningKeyByIdAsync(999, Arg.Any<CancellationToken>())
+        _signingKeyRepository.GetSigningKeyByIdAsync(999, Arg.Any<CancellationToken>())
             .Returns((UserSigningKey?)null);
 
         SigningKeyService service = CreateService();

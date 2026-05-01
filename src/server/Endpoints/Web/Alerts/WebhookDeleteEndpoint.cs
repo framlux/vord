@@ -3,13 +3,12 @@
 // See LICENSE for details.
 
 using FastEndpoints;
-using Framlux.FleetManagement.Database;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
+using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Server.Auth;
 using Framlux.FleetManagement.Server.Services.Billing;
-using LinqToDB;
-using LinqToDB.Async;
+using Framlux.FleetManagement.Server.Services.Infrastructure;
 
 namespace Framlux.FleetManagement.Server.Endpoints.Web.Alerts;
 
@@ -19,16 +18,18 @@ namespace Framlux.FleetManagement.Server.Endpoints.Web.Alerts;
 /// </summary>
 public sealed class WebhookDeleteEndpoint : EndpointWithoutRequest<ApiResponse<bool>>
 {
-    private readonly DatabaseContext _db;
+    private readonly IWebhookRepository _webhookRepo;
     private readonly ISubscriptionService _subscriptionService;
+    private readonly IAuditLogRepository _auditLog;
 
     /// <summary>
     /// Creates a new instance of the <see cref="WebhookDeleteEndpoint"/> class.
     /// </summary>
-    public WebhookDeleteEndpoint(DatabaseContext db, ISubscriptionService subscriptionService)
+    public WebhookDeleteEndpoint(IWebhookRepository webhookRepo, ISubscriptionService subscriptionService, IAuditLogRepository auditLog)
     {
-        _db = db;
+        _webhookRepo = webhookRepo;
         _subscriptionService = subscriptionService;
+        _auditLog = auditLog;
     }
 
     /// <inheritdoc/>
@@ -62,8 +63,7 @@ public sealed class WebhookDeleteEndpoint : EndpointWithoutRequest<ApiResponse<b
 
         int webhookId = Route<int>("id");
 
-        WebhookEndpoint? webhook = await _db.WebhookEndpoints
-            .FirstOrDefaultAsync(w => w.Id == webhookId && w.TenantId == tenantId.Value, ct);
+        WebhookEndpoint? webhook = await _webhookRepo.GetWebhookByIdAsync(webhookId, tenantId.Value, ct);
 
         if (webhook is null)
         {
@@ -72,9 +72,13 @@ public sealed class WebhookDeleteEndpoint : EndpointWithoutRequest<ApiResponse<b
             return;
         }
 
-        await _db.WebhookEndpoints
-            .Where(w => w.Id == webhookId)
-            .DeleteAsync(ct);
+        await _webhookRepo.DeleteWebhookAsync(webhookId, ct);
+
+        int? userId = TenantClaimHelper.GetUserIdFromClaims(User);
+        await _auditLog.InsertAuditLogAsync(AuditHelper.Create(
+            tenantId.Value, userId, null,
+            AuditAction.WebhookDeleted, AuditResourceType.Webhook,
+            webhookId.ToString(), webhook.Name, null), ct);
 
         await Send.OkAsync(ApiResponse<bool>.Ok(true, "Webhook deleted"), cancellation: ct);
     }

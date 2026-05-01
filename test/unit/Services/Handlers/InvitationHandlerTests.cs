@@ -2,9 +2,9 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
-using Framlux.FleetManagement.Database.Cache;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
+using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Server.Options;
 using Framlux.FleetManagement.Server.Services.Billing;
 using Framlux.FleetManagement.Server.Services.Handlers;
@@ -21,13 +21,24 @@ namespace Framlux.FleetManagement.Test.Services.Handlers;
 /// </summary>
 public class InvitationHandlerTests
 {
-    private static IDatabaseCache CreateMockCache()
+    private static (
+        IDatabaseTransactionProvider TransactionProvider,
+        IAuditLogRepository AuditLog,
+        IInvitationRepository InvitationRepository,
+        ITenantRepository TenantRepository,
+        ISubscriptionRepository SubscriptionRepository
+    ) CreateMockRepositories()
     {
-        IDatabaseCache cache = Substitute.For<IDatabaseCache>();
+        IDatabaseTransactionProvider transactionProvider = Substitute.For<IDatabaseTransactionProvider>();
         IDatabaseTransaction mockTransaction = Substitute.For<IDatabaseTransaction>();
-        cache.BeginTransactionAsync(Arg.Any<CancellationToken>()).Returns(mockTransaction);
+        transactionProvider.BeginTransactionAsync(Arg.Any<CancellationToken>()).Returns(mockTransaction);
 
-        return cache;
+        IAuditLogRepository auditLog = Substitute.For<IAuditLogRepository>();
+        IInvitationRepository invitationRepository = Substitute.For<IInvitationRepository>();
+        ITenantRepository tenantRepository = Substitute.For<ITenantRepository>();
+        ISubscriptionRepository subscriptionRepository = Substitute.For<ISubscriptionRepository>();
+
+        return (transactionProvider, auditLog, invitationRepository, tenantRepository, subscriptionRepository);
     }
 
     private static IEmailService CreateMockEmailService()
@@ -60,7 +71,8 @@ public class InvitationHandlerTests
     [Test]
     public async Task CreateAsync_InvalidEmail_Returns400()
     {
-        InvitationHandler handler = new(CreateMockCache(), CreateMockEmailService(), CreateMockSubService(), CreateMockSubOptions(), Substitute.For<IRoleCacheInvalidator>());
+        (IDatabaseTransactionProvider transactionProvider, IAuditLogRepository auditLog, IInvitationRepository invitationRepository, ITenantRepository tenantRepository, ISubscriptionRepository subscriptionRepository) = CreateMockRepositories();
+        InvitationHandler handler = new(transactionProvider, auditLog, invitationRepository, tenantRepository, subscriptionRepository, CreateMockEmailService(), CreateMockSubService(), CreateMockSubOptions(), Substitute.For<IRoleCacheInvalidator>());
 
         ServiceResult<InvitationCreateResult> result = await handler.CreateAsync("notanemail", null, 1, 1, "https://app.test", CancellationToken.None);
 
@@ -71,7 +83,8 @@ public class InvitationHandlerTests
     [Test]
     public async Task CreateAsync_EmptyEmail_Returns400()
     {
-        InvitationHandler handler = new(CreateMockCache(), CreateMockEmailService(), CreateMockSubService(), CreateMockSubOptions(), Substitute.For<IRoleCacheInvalidator>());
+        (IDatabaseTransactionProvider transactionProvider, IAuditLogRepository auditLog, IInvitationRepository invitationRepository, ITenantRepository tenantRepository, ISubscriptionRepository subscriptionRepository) = CreateMockRepositories();
+        InvitationHandler handler = new(transactionProvider, auditLog, invitationRepository, tenantRepository, subscriptionRepository, CreateMockEmailService(), CreateMockSubService(), CreateMockSubOptions(), Substitute.For<IRoleCacheInvalidator>());
 
         ServiceResult<InvitationCreateResult> result = await handler.CreateAsync("", null, 1, 1, "https://app.test", CancellationToken.None);
 
@@ -81,7 +94,8 @@ public class InvitationHandlerTests
     [Test]
     public async Task CreateAsync_NullTenantId_Returns401()
     {
-        InvitationHandler handler = new(CreateMockCache(), CreateMockEmailService(), CreateMockSubService(), CreateMockSubOptions(), Substitute.For<IRoleCacheInvalidator>());
+        (IDatabaseTransactionProvider transactionProvider, IAuditLogRepository auditLog, IInvitationRepository invitationRepository, ITenantRepository tenantRepository, ISubscriptionRepository subscriptionRepository) = CreateMockRepositories();
+        InvitationHandler handler = new(transactionProvider, auditLog, invitationRepository, tenantRepository, subscriptionRepository, CreateMockEmailService(), CreateMockSubService(), CreateMockSubOptions(), Substitute.For<IRoleCacheInvalidator>());
 
         ServiceResult<InvitationCreateResult> result = await handler.CreateAsync("user@example.com", null, null, 1, "https://app.test", CancellationToken.None);
 
@@ -91,7 +105,8 @@ public class InvitationHandlerTests
     [Test]
     public async Task CreateAsync_FreeTierSubscription_Returns402()
     {
-        InvitationHandler handler = new(CreateMockCache(), CreateMockEmailService(), CreateMockSubService(SubscriptionTier.Free), CreateMockSubOptions(), Substitute.For<IRoleCacheInvalidator>());
+        (IDatabaseTransactionProvider transactionProvider, IAuditLogRepository auditLog, IInvitationRepository invitationRepository, ITenantRepository tenantRepository, ISubscriptionRepository subscriptionRepository) = CreateMockRepositories();
+        InvitationHandler handler = new(transactionProvider, auditLog, invitationRepository, tenantRepository, subscriptionRepository, CreateMockEmailService(), CreateMockSubService(SubscriptionTier.Free), CreateMockSubOptions(), Substitute.For<IRoleCacheInvalidator>());
 
         ServiceResult<InvitationCreateResult> result = await handler.CreateAsync("user@example.com", null, 1, 1, "https://app.test", CancellationToken.None);
 
@@ -102,10 +117,10 @@ public class InvitationHandlerTests
     [Test]
     public async Task CreateAsync_ExistingPendingInvitation_Returns409()
     {
-        IDatabaseCache cache = CreateMockCache();
-        cache.GetPendingInvitationByEmailAndTenantAsync("user@example.com", 1, Arg.Any<CancellationToken>())
+        (IDatabaseTransactionProvider transactionProvider, IAuditLogRepository auditLog, IInvitationRepository invitationRepository, ITenantRepository tenantRepository, ISubscriptionRepository subscriptionRepository) = CreateMockRepositories();
+        invitationRepository.GetPendingInvitationByEmailAndTenantAsync("user@example.com", 1, Arg.Any<CancellationToken>())
             .Returns(new TenantInvitation { Id = 1, Email = "user@example.com", TenantId = 1, TokenHash = "abc", Role = UserAccountRoles.Viewer, Status = InvitationStatus.Pending, InvitedByUserId = 1, CreatedAt = DateTimeOffset.UtcNow, ExpiresAt = DateTimeOffset.UtcNow.AddDays(7) });
-        InvitationHandler handler = new(cache, CreateMockEmailService(), CreateMockSubService(), CreateMockSubOptions(), Substitute.For<IRoleCacheInvalidator>());
+        InvitationHandler handler = new(transactionProvider, auditLog, invitationRepository, tenantRepository, subscriptionRepository, CreateMockEmailService(), CreateMockSubService(), CreateMockSubOptions(), Substitute.For<IRoleCacheInvalidator>());
 
         ServiceResult<InvitationCreateResult> result = await handler.CreateAsync("user@example.com", null, 1, 1, "https://app.test", CancellationToken.None);
 
@@ -116,14 +131,14 @@ public class InvitationHandlerTests
     [Test]
     public async Task CreateAsync_AlreadyMember_Returns409()
     {
-        IDatabaseCache cache = CreateMockCache();
-        cache.GetPendingInvitationByEmailAndTenantAsync("user@example.com", 1, Arg.Any<CancellationToken>()).Returns((TenantInvitation?)null);
+        (IDatabaseTransactionProvider transactionProvider, IAuditLogRepository auditLog, IInvitationRepository invitationRepository, ITenantRepository tenantRepository, ISubscriptionRepository subscriptionRepository) = CreateMockRepositories();
+        invitationRepository.GetPendingInvitationByEmailAndTenantAsync("user@example.com", 1, Arg.Any<CancellationToken>()).Returns((TenantInvitation?)null);
         UserAccount memberUser = new() { Id = 5, ExternalId = "ext-5", Username = "user@example.com", CreatedAt = DateTimeOffset.UtcNow, CreatedByUserId = 0, IsActive = true, IsSystem = false, IsGlobalAdmin = false };
-        cache.GetMembersForTenantAsync(1, Arg.Any<CancellationToken>()).Returns(new List<UserTenantRole>
+        tenantRepository.GetMembersForTenantAsync(1, Arg.Any<CancellationToken>()).Returns(new List<UserTenantRole>
         {
             new() { UserId = 5, User = memberUser, AssignedTenantId = 1, Role = UserAccountRoles.Viewer, AssignedByUserId = 1, AssignedAt = DateTimeOffset.UtcNow, IsActive = true }
         });
-        InvitationHandler handler = new(cache, CreateMockEmailService(), CreateMockSubService(), CreateMockSubOptions(), Substitute.For<IRoleCacheInvalidator>());
+        InvitationHandler handler = new(transactionProvider, auditLog, invitationRepository, tenantRepository, subscriptionRepository, CreateMockEmailService(), CreateMockSubService(), CreateMockSubOptions(), Substitute.For<IRoleCacheInvalidator>());
 
         ServiceResult<InvitationCreateResult> result = await handler.CreateAsync("user@example.com", null, 1, 1, "https://app.test", CancellationToken.None);
 
@@ -134,22 +149,22 @@ public class InvitationHandlerTests
     [Test]
     public async Task CreateAsync_Success_ReturnsInvitationData()
     {
-        IDatabaseCache cache = CreateMockCache();
+        (IDatabaseTransactionProvider transactionProvider, IAuditLogRepository auditLog, IInvitationRepository invitationRepository, ITenantRepository tenantRepository, ISubscriptionRepository subscriptionRepository) = CreateMockRepositories();
         IEmailService emailService = CreateMockEmailService();
-        cache.GetPendingInvitationByEmailAndTenantAsync("newuser@example.com", 1, Arg.Any<CancellationToken>()).Returns((TenantInvitation?)null);
-        cache.GetMembersForTenantAsync(1, Arg.Any<CancellationToken>()).Returns(Enumerable.Empty<UserTenantRole>());
-        cache.CreateInvitationAsync(Arg.Any<TenantInvitation>(), Arg.Any<CancellationToken>()).Returns(callInfo =>
+        invitationRepository.GetPendingInvitationByEmailAndTenantAsync("newuser@example.com", 1, Arg.Any<CancellationToken>()).Returns((TenantInvitation?)null);
+        tenantRepository.GetMembersForTenantAsync(1, Arg.Any<CancellationToken>()).Returns(Enumerable.Empty<UserTenantRole>());
+        invitationRepository.CreateInvitationAsync(Arg.Any<TenantInvitation>(), Arg.Any<CancellationToken>()).Returns(callInfo =>
         {
             TenantInvitation inv = callInfo.Arg<TenantInvitation>();
             inv.Id = 10;
 
             return inv;
         });
-        cache.GetTenantByIdAsync(1, Arg.Any<CancellationToken>()).Returns(new Tenant
+        tenantRepository.GetTenantByIdAsync(1, Arg.Any<CancellationToken>()).Returns(new Tenant
         {
             Id = 1, Name = "Test Org", ExternalId = "ext-1", CreatedAt = DateTimeOffset.UtcNow, CreatedByUserId = 1, IsActive = true, LogoUrl = ""
         });
-        InvitationHandler handler = new(cache, emailService, CreateMockSubService(), CreateMockSubOptions(), Substitute.For<IRoleCacheInvalidator>());
+        InvitationHandler handler = new(transactionProvider, auditLog, invitationRepository, tenantRepository, subscriptionRepository, emailService, CreateMockSubService(), CreateMockSubOptions(), Substitute.For<IRoleCacheInvalidator>());
 
         ServiceResult<InvitationCreateResult> result = await handler.CreateAsync("newuser@example.com", null, 1, 1, "https://app.test", CancellationToken.None);
 
@@ -162,22 +177,22 @@ public class InvitationHandlerTests
     [Test]
     public async Task CreateAsync_Success_SendsInvitationEmail()
     {
-        IDatabaseCache cache = CreateMockCache();
+        (IDatabaseTransactionProvider transactionProvider, IAuditLogRepository auditLog, IInvitationRepository invitationRepository, ITenantRepository tenantRepository, ISubscriptionRepository subscriptionRepository) = CreateMockRepositories();
         IEmailService emailService = CreateMockEmailService();
-        cache.GetPendingInvitationByEmailAndTenantAsync("newuser@example.com", 1, Arg.Any<CancellationToken>()).Returns((TenantInvitation?)null);
-        cache.GetMembersForTenantAsync(1, Arg.Any<CancellationToken>()).Returns(Enumerable.Empty<UserTenantRole>());
-        cache.CreateInvitationAsync(Arg.Any<TenantInvitation>(), Arg.Any<CancellationToken>()).Returns(callInfo =>
+        invitationRepository.GetPendingInvitationByEmailAndTenantAsync("newuser@example.com", 1, Arg.Any<CancellationToken>()).Returns((TenantInvitation?)null);
+        tenantRepository.GetMembersForTenantAsync(1, Arg.Any<CancellationToken>()).Returns(Enumerable.Empty<UserTenantRole>());
+        invitationRepository.CreateInvitationAsync(Arg.Any<TenantInvitation>(), Arg.Any<CancellationToken>()).Returns(callInfo =>
         {
             TenantInvitation inv = callInfo.Arg<TenantInvitation>();
             inv.Id = 10;
 
             return inv;
         });
-        cache.GetTenantByIdAsync(1, Arg.Any<CancellationToken>()).Returns(new Tenant
+        tenantRepository.GetTenantByIdAsync(1, Arg.Any<CancellationToken>()).Returns(new Tenant
         {
             Id = 1, Name = "Test Org", ExternalId = "ext-1", CreatedAt = DateTimeOffset.UtcNow, CreatedByUserId = 1, IsActive = true, LogoUrl = ""
         });
-        InvitationHandler handler = new(cache, emailService, CreateMockSubService(), CreateMockSubOptions(), Substitute.For<IRoleCacheInvalidator>());
+        InvitationHandler handler = new(transactionProvider, auditLog, invitationRepository, tenantRepository, subscriptionRepository, emailService, CreateMockSubService(), CreateMockSubOptions(), Substitute.For<IRoleCacheInvalidator>());
 
         await handler.CreateAsync("newuser@example.com", null, 1, 1, "https://app.test", CancellationToken.None);
 
@@ -189,25 +204,25 @@ public class InvitationHandlerTests
     [Test]
     public async Task CreateAsync_ProTier_RequestsViewer_ForcesToTenantAdmin()
     {
-        IDatabaseCache cache = CreateMockCache();
-        cache.GetPendingInvitationByEmailAndTenantAsync("newuser@example.com", 1, Arg.Any<CancellationToken>()).Returns((TenantInvitation?)null);
-        cache.GetMembersForTenantAsync(1, Arg.Any<CancellationToken>()).Returns(Enumerable.Empty<UserTenantRole>());
-        cache.CreateInvitationAsync(Arg.Any<TenantInvitation>(), Arg.Any<CancellationToken>()).Returns(callInfo =>
+        (IDatabaseTransactionProvider transactionProvider, IAuditLogRepository auditLog, IInvitationRepository invitationRepository, ITenantRepository tenantRepository, ISubscriptionRepository subscriptionRepository) = CreateMockRepositories();
+        invitationRepository.GetPendingInvitationByEmailAndTenantAsync("newuser@example.com", 1, Arg.Any<CancellationToken>()).Returns((TenantInvitation?)null);
+        tenantRepository.GetMembersForTenantAsync(1, Arg.Any<CancellationToken>()).Returns(Enumerable.Empty<UserTenantRole>());
+        invitationRepository.CreateInvitationAsync(Arg.Any<TenantInvitation>(), Arg.Any<CancellationToken>()).Returns(callInfo =>
         {
             TenantInvitation inv = callInfo.Arg<TenantInvitation>();
             inv.Id = 10;
 
             return inv;
         });
-        cache.GetTenantByIdAsync(1, Arg.Any<CancellationToken>()).Returns(new Tenant
+        tenantRepository.GetTenantByIdAsync(1, Arg.Any<CancellationToken>()).Returns(new Tenant
         {
             Id = 1, Name = "Test Org", ExternalId = "ext-1", CreatedAt = DateTimeOffset.UtcNow, CreatedByUserId = 1, IsActive = true, LogoUrl = ""
         });
-        InvitationHandler handler = new(cache, CreateMockEmailService(), CreateMockSubService(SubscriptionTier.Pro), CreateMockSubOptions(), Substitute.For<IRoleCacheInvalidator>());
+        InvitationHandler handler = new(transactionProvider, auditLog, invitationRepository, tenantRepository, subscriptionRepository, CreateMockEmailService(), CreateMockSubService(SubscriptionTier.Pro), CreateMockSubOptions(), Substitute.For<IRoleCacheInvalidator>());
 
         await handler.CreateAsync("newuser@example.com", "Viewer", 1, 1, "https://app.test", CancellationToken.None);
 
-        await cache.Received(1).CreateInvitationAsync(
+        await invitationRepository.Received(1).CreateInvitationAsync(
             Arg.Is<TenantInvitation>(i => i.Role == UserAccountRoles.TenantAdmin),
             Arg.Any<CancellationToken>());
     }
@@ -215,25 +230,25 @@ public class InvitationHandlerTests
     [Test]
     public async Task CreateAsync_TeamTier_RequestsViewer_HonorsRequestedRole()
     {
-        IDatabaseCache cache = CreateMockCache();
-        cache.GetPendingInvitationByEmailAndTenantAsync("newuser@example.com", 1, Arg.Any<CancellationToken>()).Returns((TenantInvitation?)null);
-        cache.GetMembersForTenantAsync(1, Arg.Any<CancellationToken>()).Returns(Enumerable.Empty<UserTenantRole>());
-        cache.CreateInvitationAsync(Arg.Any<TenantInvitation>(), Arg.Any<CancellationToken>()).Returns(callInfo =>
+        (IDatabaseTransactionProvider transactionProvider, IAuditLogRepository auditLog, IInvitationRepository invitationRepository, ITenantRepository tenantRepository, ISubscriptionRepository subscriptionRepository) = CreateMockRepositories();
+        invitationRepository.GetPendingInvitationByEmailAndTenantAsync("newuser@example.com", 1, Arg.Any<CancellationToken>()).Returns((TenantInvitation?)null);
+        tenantRepository.GetMembersForTenantAsync(1, Arg.Any<CancellationToken>()).Returns(Enumerable.Empty<UserTenantRole>());
+        invitationRepository.CreateInvitationAsync(Arg.Any<TenantInvitation>(), Arg.Any<CancellationToken>()).Returns(callInfo =>
         {
             TenantInvitation inv = callInfo.Arg<TenantInvitation>();
             inv.Id = 10;
 
             return inv;
         });
-        cache.GetTenantByIdAsync(1, Arg.Any<CancellationToken>()).Returns(new Tenant
+        tenantRepository.GetTenantByIdAsync(1, Arg.Any<CancellationToken>()).Returns(new Tenant
         {
             Id = 1, Name = "Test Org", ExternalId = "ext-1", CreatedAt = DateTimeOffset.UtcNow, CreatedByUserId = 1, IsActive = true, LogoUrl = ""
         });
-        InvitationHandler handler = new(cache, CreateMockEmailService(), CreateMockSubService(SubscriptionTier.Team), CreateMockSubOptions(), Substitute.For<IRoleCacheInvalidator>());
+        InvitationHandler handler = new(transactionProvider, auditLog, invitationRepository, tenantRepository, subscriptionRepository, CreateMockEmailService(), CreateMockSubService(SubscriptionTier.Team), CreateMockSubOptions(), Substitute.For<IRoleCacheInvalidator>());
 
         await handler.CreateAsync("newuser@example.com", "Viewer", 1, 1, "https://app.test", CancellationToken.None);
 
-        await cache.Received(1).CreateInvitationAsync(
+        await invitationRepository.Received(1).CreateInvitationAsync(
             Arg.Is<TenantInvitation>(i => i.Role == UserAccountRoles.Viewer),
             Arg.Any<CancellationToken>());
     }
@@ -241,25 +256,25 @@ public class InvitationHandlerTests
     [Test]
     public async Task CreateAsync_ProTier_NullRole_DefaultsToTenantAdmin()
     {
-        IDatabaseCache cache = CreateMockCache();
-        cache.GetPendingInvitationByEmailAndTenantAsync("newuser@example.com", 1, Arg.Any<CancellationToken>()).Returns((TenantInvitation?)null);
-        cache.GetMembersForTenantAsync(1, Arg.Any<CancellationToken>()).Returns(Enumerable.Empty<UserTenantRole>());
-        cache.CreateInvitationAsync(Arg.Any<TenantInvitation>(), Arg.Any<CancellationToken>()).Returns(callInfo =>
+        (IDatabaseTransactionProvider transactionProvider, IAuditLogRepository auditLog, IInvitationRepository invitationRepository, ITenantRepository tenantRepository, ISubscriptionRepository subscriptionRepository) = CreateMockRepositories();
+        invitationRepository.GetPendingInvitationByEmailAndTenantAsync("newuser@example.com", 1, Arg.Any<CancellationToken>()).Returns((TenantInvitation?)null);
+        tenantRepository.GetMembersForTenantAsync(1, Arg.Any<CancellationToken>()).Returns(Enumerable.Empty<UserTenantRole>());
+        invitationRepository.CreateInvitationAsync(Arg.Any<TenantInvitation>(), Arg.Any<CancellationToken>()).Returns(callInfo =>
         {
             TenantInvitation inv = callInfo.Arg<TenantInvitation>();
             inv.Id = 10;
 
             return inv;
         });
-        cache.GetTenantByIdAsync(1, Arg.Any<CancellationToken>()).Returns(new Tenant
+        tenantRepository.GetTenantByIdAsync(1, Arg.Any<CancellationToken>()).Returns(new Tenant
         {
             Id = 1, Name = "Test Org", ExternalId = "ext-1", CreatedAt = DateTimeOffset.UtcNow, CreatedByUserId = 1, IsActive = true, LogoUrl = ""
         });
-        InvitationHandler handler = new(cache, CreateMockEmailService(), CreateMockSubService(SubscriptionTier.Pro), CreateMockSubOptions(), Substitute.For<IRoleCacheInvalidator>());
+        InvitationHandler handler = new(transactionProvider, auditLog, invitationRepository, tenantRepository, subscriptionRepository, CreateMockEmailService(), CreateMockSubService(SubscriptionTier.Pro), CreateMockSubOptions(), Substitute.For<IRoleCacheInvalidator>());
 
         await handler.CreateAsync("newuser@example.com", null, 1, 1, "https://app.test", CancellationToken.None);
 
-        await cache.Received(1).CreateInvitationAsync(
+        await invitationRepository.Received(1).CreateInvitationAsync(
             Arg.Is<TenantInvitation>(i => i.Role == UserAccountRoles.TenantAdmin),
             Arg.Any<CancellationToken>());
     }
@@ -267,25 +282,25 @@ public class InvitationHandlerTests
     [Test]
     public async Task CreateAsync_TeamTier_NullRole_DefaultsToViewer()
     {
-        IDatabaseCache cache = CreateMockCache();
-        cache.GetPendingInvitationByEmailAndTenantAsync("newuser@example.com", 1, Arg.Any<CancellationToken>()).Returns((TenantInvitation?)null);
-        cache.GetMembersForTenantAsync(1, Arg.Any<CancellationToken>()).Returns(Enumerable.Empty<UserTenantRole>());
-        cache.CreateInvitationAsync(Arg.Any<TenantInvitation>(), Arg.Any<CancellationToken>()).Returns(callInfo =>
+        (IDatabaseTransactionProvider transactionProvider, IAuditLogRepository auditLog, IInvitationRepository invitationRepository, ITenantRepository tenantRepository, ISubscriptionRepository subscriptionRepository) = CreateMockRepositories();
+        invitationRepository.GetPendingInvitationByEmailAndTenantAsync("newuser@example.com", 1, Arg.Any<CancellationToken>()).Returns((TenantInvitation?)null);
+        tenantRepository.GetMembersForTenantAsync(1, Arg.Any<CancellationToken>()).Returns(Enumerable.Empty<UserTenantRole>());
+        invitationRepository.CreateInvitationAsync(Arg.Any<TenantInvitation>(), Arg.Any<CancellationToken>()).Returns(callInfo =>
         {
             TenantInvitation inv = callInfo.Arg<TenantInvitation>();
             inv.Id = 10;
 
             return inv;
         });
-        cache.GetTenantByIdAsync(1, Arg.Any<CancellationToken>()).Returns(new Tenant
+        tenantRepository.GetTenantByIdAsync(1, Arg.Any<CancellationToken>()).Returns(new Tenant
         {
             Id = 1, Name = "Test Org", ExternalId = "ext-1", CreatedAt = DateTimeOffset.UtcNow, CreatedByUserId = 1, IsActive = true, LogoUrl = ""
         });
-        InvitationHandler handler = new(cache, CreateMockEmailService(), CreateMockSubService(SubscriptionTier.Team), CreateMockSubOptions(), Substitute.For<IRoleCacheInvalidator>());
+        InvitationHandler handler = new(transactionProvider, auditLog, invitationRepository, tenantRepository, subscriptionRepository, CreateMockEmailService(), CreateMockSubService(SubscriptionTier.Team), CreateMockSubOptions(), Substitute.For<IRoleCacheInvalidator>());
 
         await handler.CreateAsync("newuser@example.com", null, 1, 1, "https://app.test", CancellationToken.None);
 
-        await cache.Received(1).CreateInvitationAsync(
+        await invitationRepository.Received(1).CreateInvitationAsync(
             Arg.Is<TenantInvitation>(i => i.Role == UserAccountRoles.Viewer),
             Arg.Any<CancellationToken>());
     }
@@ -295,9 +310,9 @@ public class InvitationHandlerTests
     [Test]
     public async Task AcceptAsync_TokenNotFound_Returns404()
     {
-        IDatabaseCache cache = CreateMockCache();
-        cache.GetInvitationByTokenAsync("badtoken", Arg.Any<CancellationToken>()).Returns((TenantInvitation?)null);
-        InvitationHandler handler = new(cache, CreateMockEmailService(), CreateMockSubService(), CreateMockSubOptions(), Substitute.For<IRoleCacheInvalidator>());
+        (IDatabaseTransactionProvider transactionProvider, IAuditLogRepository auditLog, IInvitationRepository invitationRepository, ITenantRepository tenantRepository, ISubscriptionRepository subscriptionRepository) = CreateMockRepositories();
+        invitationRepository.GetInvitationByTokenAsync("badtoken", Arg.Any<CancellationToken>()).Returns((TenantInvitation?)null);
+        InvitationHandler handler = new(transactionProvider, auditLog, invitationRepository, tenantRepository, subscriptionRepository, CreateMockEmailService(), CreateMockSubService(), CreateMockSubOptions(), Substitute.For<IRoleCacheInvalidator>());
 
         ServiceResult<InvitationAcceptResult> result = await handler.AcceptAsync("badtoken", "user@test.com", 1, "ext-1", CancellationToken.None);
 
@@ -307,13 +322,13 @@ public class InvitationHandlerTests
     [Test]
     public async Task AcceptAsync_AlreadyAccepted_Returns400()
     {
-        IDatabaseCache cache = CreateMockCache();
-        cache.GetInvitationByTokenAsync("token", Arg.Any<CancellationToken>()).Returns(new TenantInvitation
+        (IDatabaseTransactionProvider transactionProvider, IAuditLogRepository auditLog, IInvitationRepository invitationRepository, ITenantRepository tenantRepository, ISubscriptionRepository subscriptionRepository) = CreateMockRepositories();
+        invitationRepository.GetInvitationByTokenAsync("token", Arg.Any<CancellationToken>()).Returns(new TenantInvitation
         {
             Id = 1, TenantId = 1, Email = "user@test.com", TokenHash = "token", Role = UserAccountRoles.Viewer, Status = InvitationStatus.Accepted,
             InvitedByUserId = 1, CreatedAt = DateTimeOffset.UtcNow, ExpiresAt = DateTimeOffset.UtcNow.AddDays(7)
         });
-        InvitationHandler handler = new(cache, CreateMockEmailService(), CreateMockSubService(), CreateMockSubOptions(), Substitute.For<IRoleCacheInvalidator>());
+        InvitationHandler handler = new(transactionProvider, auditLog, invitationRepository, tenantRepository, subscriptionRepository, CreateMockEmailService(), CreateMockSubService(), CreateMockSubOptions(), Substitute.For<IRoleCacheInvalidator>());
 
         ServiceResult<InvitationAcceptResult> result = await handler.AcceptAsync("token", "user@test.com", 1, "ext-1", CancellationToken.None);
 
@@ -324,13 +339,13 @@ public class InvitationHandlerTests
     [Test]
     public async Task AcceptAsync_Expired_Returns400()
     {
-        IDatabaseCache cache = CreateMockCache();
-        cache.GetInvitationByTokenAsync("token", Arg.Any<CancellationToken>()).Returns(new TenantInvitation
+        (IDatabaseTransactionProvider transactionProvider, IAuditLogRepository auditLog, IInvitationRepository invitationRepository, ITenantRepository tenantRepository, ISubscriptionRepository subscriptionRepository) = CreateMockRepositories();
+        invitationRepository.GetInvitationByTokenAsync("token", Arg.Any<CancellationToken>()).Returns(new TenantInvitation
         {
             Id = 1, TenantId = 1, Email = "user@test.com", TokenHash = "token", Role = UserAccountRoles.Viewer, Status = InvitationStatus.Pending,
             InvitedByUserId = 1, CreatedAt = DateTimeOffset.UtcNow.AddDays(-8), ExpiresAt = DateTimeOffset.UtcNow.AddDays(-1)
         });
-        InvitationHandler handler = new(cache, CreateMockEmailService(), CreateMockSubService(), CreateMockSubOptions(), Substitute.For<IRoleCacheInvalidator>());
+        InvitationHandler handler = new(transactionProvider, auditLog, invitationRepository, tenantRepository, subscriptionRepository, CreateMockEmailService(), CreateMockSubService(), CreateMockSubOptions(), Substitute.For<IRoleCacheInvalidator>());
 
         ServiceResult<InvitationAcceptResult> result = await handler.AcceptAsync("token", "user@test.com", 1, "ext-1", CancellationToken.None);
 
@@ -341,13 +356,13 @@ public class InvitationHandlerTests
     [Test]
     public async Task AcceptAsync_EmailMismatch_Returns403()
     {
-        IDatabaseCache cache = CreateMockCache();
-        cache.GetInvitationByTokenAsync("token", Arg.Any<CancellationToken>()).Returns(new TenantInvitation
+        (IDatabaseTransactionProvider transactionProvider, IAuditLogRepository auditLog, IInvitationRepository invitationRepository, ITenantRepository tenantRepository, ISubscriptionRepository subscriptionRepository) = CreateMockRepositories();
+        invitationRepository.GetInvitationByTokenAsync("token", Arg.Any<CancellationToken>()).Returns(new TenantInvitation
         {
             Id = 1, TenantId = 1, Email = "invited@test.com", TokenHash = "token", Role = UserAccountRoles.Viewer, Status = InvitationStatus.Pending,
             InvitedByUserId = 1, CreatedAt = DateTimeOffset.UtcNow, ExpiresAt = DateTimeOffset.UtcNow.AddDays(7)
         });
-        InvitationHandler handler = new(cache, CreateMockEmailService(), CreateMockSubService(), CreateMockSubOptions(), Substitute.For<IRoleCacheInvalidator>());
+        InvitationHandler handler = new(transactionProvider, auditLog, invitationRepository, tenantRepository, subscriptionRepository, CreateMockEmailService(), CreateMockSubService(), CreateMockSubOptions(), Substitute.For<IRoleCacheInvalidator>());
 
         ServiceResult<InvitationAcceptResult> result = await handler.AcceptAsync("token", "wrong@test.com", 1, "ext-1", CancellationToken.None);
 
@@ -358,13 +373,13 @@ public class InvitationHandlerTests
     [Test]
     public async Task AcceptAsync_ZeroUserId_Returns401()
     {
-        IDatabaseCache cache = CreateMockCache();
-        cache.GetInvitationByTokenAsync("token", Arg.Any<CancellationToken>()).Returns(new TenantInvitation
+        (IDatabaseTransactionProvider transactionProvider, IAuditLogRepository auditLog, IInvitationRepository invitationRepository, ITenantRepository tenantRepository, ISubscriptionRepository subscriptionRepository) = CreateMockRepositories();
+        invitationRepository.GetInvitationByTokenAsync("token", Arg.Any<CancellationToken>()).Returns(new TenantInvitation
         {
             Id = 1, TenantId = 1, Email = "user@test.com", TokenHash = "token", Role = UserAccountRoles.Viewer, Status = InvitationStatus.Pending,
             InvitedByUserId = 1, CreatedAt = DateTimeOffset.UtcNow, ExpiresAt = DateTimeOffset.UtcNow.AddDays(7)
         });
-        InvitationHandler handler = new(cache, CreateMockEmailService(), CreateMockSubService(), CreateMockSubOptions(), Substitute.For<IRoleCacheInvalidator>());
+        InvitationHandler handler = new(transactionProvider, auditLog, invitationRepository, tenantRepository, subscriptionRepository, CreateMockEmailService(), CreateMockSubService(), CreateMockSubOptions(), Substitute.For<IRoleCacheInvalidator>());
 
         ServiceResult<InvitationAcceptResult> result = await handler.AcceptAsync("token", "user@test.com", 0, "ext-1", CancellationToken.None);
 
@@ -374,17 +389,17 @@ public class InvitationHandlerTests
     [Test]
     public async Task AcceptAsync_AlreadyMember_Returns409()
     {
-        IDatabaseCache cache = CreateMockCache();
-        cache.GetInvitationByTokenAsync("token", Arg.Any<CancellationToken>()).Returns(new TenantInvitation
+        (IDatabaseTransactionProvider transactionProvider, IAuditLogRepository auditLog, IInvitationRepository invitationRepository, ITenantRepository tenantRepository, ISubscriptionRepository subscriptionRepository) = CreateMockRepositories();
+        invitationRepository.GetInvitationByTokenAsync("token", Arg.Any<CancellationToken>()).Returns(new TenantInvitation
         {
             Id = 1, TenantId = 5, Email = "user@test.com", TokenHash = "token", Role = UserAccountRoles.Viewer, Status = InvitationStatus.Pending,
             InvitedByUserId = 1, CreatedAt = DateTimeOffset.UtcNow, ExpiresAt = DateTimeOffset.UtcNow.AddDays(7)
         });
-        cache.GetTenantsForUserAsync("ext-1", Arg.Any<CancellationToken>()).Returns(new List<UserTenantRole>
+        tenantRepository.GetTenantsForUserAsync("ext-1", Arg.Any<CancellationToken>()).Returns(new List<UserTenantRole>
         {
             new() { UserId = 1, AssignedTenantId = 5, Role = UserAccountRoles.Viewer, AssignedByUserId = 1, AssignedAt = DateTimeOffset.UtcNow, IsActive = true }
         });
-        InvitationHandler handler = new(cache, CreateMockEmailService(), CreateMockSubService(), CreateMockSubOptions(), Substitute.For<IRoleCacheInvalidator>());
+        InvitationHandler handler = new(transactionProvider, auditLog, invitationRepository, tenantRepository, subscriptionRepository, CreateMockEmailService(), CreateMockSubService(), CreateMockSubOptions(), Substitute.For<IRoleCacheInvalidator>());
 
         ServiceResult<InvitationAcceptResult> result = await handler.AcceptAsync("token", "user@test.com", 1, "ext-1", CancellationToken.None);
 
@@ -395,28 +410,28 @@ public class InvitationHandlerTests
     [Test]
     public async Task AcceptAsync_NewUser_ReturnsSuccessWithPersonalTenantFlag()
     {
-        IDatabaseCache cache = CreateMockCache();
-        cache.GetInvitationByTokenAsync("token", Arg.Any<CancellationToken>()).Returns(new TenantInvitation
+        (IDatabaseTransactionProvider transactionProvider, IAuditLogRepository auditLog, IInvitationRepository invitationRepository, ITenantRepository tenantRepository, ISubscriptionRepository subscriptionRepository) = CreateMockRepositories();
+        invitationRepository.GetInvitationByTokenAsync("token", Arg.Any<CancellationToken>()).Returns(new TenantInvitation
         {
             Id = 1, TenantId = 5, Email = "user@test.com", TokenHash = "token", Role = UserAccountRoles.Viewer, Status = InvitationStatus.Pending,
             InvitedByUserId = 2, CreatedAt = DateTimeOffset.UtcNow, ExpiresAt = DateTimeOffset.UtcNow.AddDays(7)
         });
-        cache.GetTenantsForUserAsync("ext-1", Arg.Any<CancellationToken>()).Returns(Enumerable.Empty<UserTenantRole>());
-        cache.CreateTenantAsync(Arg.Any<Tenant>(), Arg.Any<CancellationToken>()).Returns(callInfo =>
+        tenantRepository.GetTenantsForUserAsync("ext-1", Arg.Any<CancellationToken>()).Returns(Enumerable.Empty<UserTenantRole>());
+        tenantRepository.CreateTenantAsync(Arg.Any<Tenant>(), Arg.Any<CancellationToken>()).Returns(callInfo =>
         {
             Tenant t = callInfo.Arg<Tenant>();
             t.Id = 99;
 
             return t;
         });
-        cache.CreateTenantSubscriptionAsync(Arg.Any<TenantSubscription>(), Arg.Any<CancellationToken>()).Returns(callInfo =>
+        subscriptionRepository.CreateTenantSubscriptionAsync(Arg.Any<TenantSubscription>(), Arg.Any<CancellationToken>()).Returns(callInfo =>
         {
             TenantSubscription s = callInfo.Arg<TenantSubscription>();
             s.Id = 1;
 
             return s;
         });
-        InvitationHandler handler = new(cache, CreateMockEmailService(), CreateMockSubService(), CreateMockSubOptions(), Substitute.For<IRoleCacheInvalidator>());
+        InvitationHandler handler = new(transactionProvider, auditLog, invitationRepository, tenantRepository, subscriptionRepository, CreateMockEmailService(), CreateMockSubService(), CreateMockSubOptions(), Substitute.For<IRoleCacheInvalidator>());
 
         ServiceResult<InvitationAcceptResult> result = await handler.AcceptAsync("token", "user@test.com", 1, "ext-1", CancellationToken.None);
 
@@ -426,34 +441,34 @@ public class InvitationHandlerTests
     }
 
     [Test]
-    public async Task AcceptAsync_NewUser_CreatesSubscriptionViaDatabaseCache()
+    public async Task AcceptAsync_NewUser_CreatesSubscriptionViaSubscriptionRepository()
     {
-        IDatabaseCache cache = CreateMockCache();
-        cache.GetInvitationByTokenAsync("token", Arg.Any<CancellationToken>()).Returns(new TenantInvitation
+        (IDatabaseTransactionProvider transactionProvider, IAuditLogRepository auditLog, IInvitationRepository invitationRepository, ITenantRepository tenantRepository, ISubscriptionRepository subscriptionRepository) = CreateMockRepositories();
+        invitationRepository.GetInvitationByTokenAsync("token", Arg.Any<CancellationToken>()).Returns(new TenantInvitation
         {
             Id = 1, TenantId = 5, Email = "user@test.com", TokenHash = "token", Role = UserAccountRoles.Viewer, Status = InvitationStatus.Pending,
             InvitedByUserId = 2, CreatedAt = DateTimeOffset.UtcNow, ExpiresAt = DateTimeOffset.UtcNow.AddDays(7)
         });
-        cache.GetTenantsForUserAsync("ext-1", Arg.Any<CancellationToken>()).Returns(Enumerable.Empty<UserTenantRole>());
-        cache.CreateTenantAsync(Arg.Any<Tenant>(), Arg.Any<CancellationToken>()).Returns(callInfo =>
+        tenantRepository.GetTenantsForUserAsync("ext-1", Arg.Any<CancellationToken>()).Returns(Enumerable.Empty<UserTenantRole>());
+        tenantRepository.CreateTenantAsync(Arg.Any<Tenant>(), Arg.Any<CancellationToken>()).Returns(callInfo =>
         {
             Tenant t = callInfo.Arg<Tenant>();
             t.Id = 99;
 
             return t;
         });
-        cache.CreateTenantSubscriptionAsync(Arg.Any<TenantSubscription>(), Arg.Any<CancellationToken>()).Returns(callInfo =>
+        subscriptionRepository.CreateTenantSubscriptionAsync(Arg.Any<TenantSubscription>(), Arg.Any<CancellationToken>()).Returns(callInfo =>
         {
             TenantSubscription s = callInfo.Arg<TenantSubscription>();
             s.Id = 1;
 
             return s;
         });
-        InvitationHandler handler = new(cache, CreateMockEmailService(), CreateMockSubService(), CreateMockSubOptions(), Substitute.For<IRoleCacheInvalidator>());
+        InvitationHandler handler = new(transactionProvider, auditLog, invitationRepository, tenantRepository, subscriptionRepository, CreateMockEmailService(), CreateMockSubService(), CreateMockSubOptions(), Substitute.For<IRoleCacheInvalidator>());
 
         await handler.AcceptAsync("token", "user@test.com", 1, "ext-1", CancellationToken.None);
 
-        await cache.Received(1).CreateTenantSubscriptionAsync(
+        await subscriptionRepository.Received(1).CreateTenantSubscriptionAsync(
             Arg.Is<TenantSubscription>(s =>
                 s.TenantId == 99 &&
                 s.Tier == SubscriptionTier.Free &&
@@ -464,49 +479,49 @@ public class InvitationHandlerTests
     [Test]
     public async Task AcceptAsync_NewUser_CreatesTwoTenantRoleAssignments()
     {
-        IDatabaseCache cache = CreateMockCache();
-        cache.GetInvitationByTokenAsync("token", Arg.Any<CancellationToken>()).Returns(new TenantInvitation
+        (IDatabaseTransactionProvider transactionProvider, IAuditLogRepository auditLog, IInvitationRepository invitationRepository, ITenantRepository tenantRepository, ISubscriptionRepository subscriptionRepository) = CreateMockRepositories();
+        invitationRepository.GetInvitationByTokenAsync("token", Arg.Any<CancellationToken>()).Returns(new TenantInvitation
         {
             Id = 1, TenantId = 5, Email = "user@test.com", TokenHash = "token", Role = UserAccountRoles.Viewer, Status = InvitationStatus.Pending,
             InvitedByUserId = 2, CreatedAt = DateTimeOffset.UtcNow, ExpiresAt = DateTimeOffset.UtcNow.AddDays(7)
         });
-        cache.GetTenantsForUserAsync("ext-1", Arg.Any<CancellationToken>()).Returns(Enumerable.Empty<UserTenantRole>());
-        cache.CreateTenantAsync(Arg.Any<Tenant>(), Arg.Any<CancellationToken>()).Returns(callInfo =>
+        tenantRepository.GetTenantsForUserAsync("ext-1", Arg.Any<CancellationToken>()).Returns(Enumerable.Empty<UserTenantRole>());
+        tenantRepository.CreateTenantAsync(Arg.Any<Tenant>(), Arg.Any<CancellationToken>()).Returns(callInfo =>
         {
             Tenant t = callInfo.Arg<Tenant>();
             t.Id = 99;
 
             return t;
         });
-        cache.CreateTenantSubscriptionAsync(Arg.Any<TenantSubscription>(), Arg.Any<CancellationToken>()).Returns(callInfo =>
+        subscriptionRepository.CreateTenantSubscriptionAsync(Arg.Any<TenantSubscription>(), Arg.Any<CancellationToken>()).Returns(callInfo =>
         {
             TenantSubscription s = callInfo.Arg<TenantSubscription>();
             s.Id = 1;
 
             return s;
         });
-        InvitationHandler handler = new(cache, CreateMockEmailService(), CreateMockSubService(), CreateMockSubOptions(), Substitute.For<IRoleCacheInvalidator>());
+        InvitationHandler handler = new(transactionProvider, auditLog, invitationRepository, tenantRepository, subscriptionRepository, CreateMockEmailService(), CreateMockSubService(), CreateMockSubOptions(), Substitute.For<IRoleCacheInvalidator>());
 
         await handler.AcceptAsync("token", "user@test.com", 1, "ext-1", CancellationToken.None);
 
         // Should have created personal tenant role + invitation tenant role = 2 calls
-        await cache.Received(2).CreateUserTenantRoleAsync(Arg.Any<UserTenantRole>(), Arg.Any<CancellationToken>());
+        await tenantRepository.Received(2).CreateUserTenantRoleAsync(Arg.Any<UserTenantRole>(), Arg.Any<CancellationToken>());
     }
 
     [Test]
     public async Task AcceptAsync_ExistingUser_ReturnsSuccessWithoutPersonalTenant()
     {
-        IDatabaseCache cache = CreateMockCache();
-        cache.GetInvitationByTokenAsync("token", Arg.Any<CancellationToken>()).Returns(new TenantInvitation
+        (IDatabaseTransactionProvider transactionProvider, IAuditLogRepository auditLog, IInvitationRepository invitationRepository, ITenantRepository tenantRepository, ISubscriptionRepository subscriptionRepository) = CreateMockRepositories();
+        invitationRepository.GetInvitationByTokenAsync("token", Arg.Any<CancellationToken>()).Returns(new TenantInvitation
         {
             Id = 1, TenantId = 5, Email = "user@test.com", TokenHash = "token", Role = UserAccountRoles.TenantAdmin, Status = InvitationStatus.Pending,
             InvitedByUserId = 2, CreatedAt = DateTimeOffset.UtcNow, ExpiresAt = DateTimeOffset.UtcNow.AddDays(7)
         });
-        cache.GetTenantsForUserAsync("ext-1", Arg.Any<CancellationToken>()).Returns(new List<UserTenantRole>
+        tenantRepository.GetTenantsForUserAsync("ext-1", Arg.Any<CancellationToken>()).Returns(new List<UserTenantRole>
         {
             new() { UserId = 1, AssignedTenantId = 10, Role = UserAccountRoles.TenantAdmin, AssignedByUserId = 1, AssignedAt = DateTimeOffset.UtcNow, IsActive = true }
         });
-        InvitationHandler handler = new(cache, CreateMockEmailService(), CreateMockSubService(), CreateMockSubOptions(), Substitute.For<IRoleCacheInvalidator>());
+        InvitationHandler handler = new(transactionProvider, auditLog, invitationRepository, tenantRepository, subscriptionRepository, CreateMockEmailService(), CreateMockSubService(), CreateMockSubOptions(), Substitute.For<IRoleCacheInvalidator>());
 
         ServiceResult<InvitationAcceptResult> result = await handler.AcceptAsync("token", "user@test.com", 1, "ext-1", CancellationToken.None);
 
@@ -517,22 +532,22 @@ public class InvitationHandlerTests
     [Test]
     public async Task AcceptAsync_ExistingUser_CreatesOneTenantRoleAssignment()
     {
-        IDatabaseCache cache = CreateMockCache();
-        cache.GetInvitationByTokenAsync("token", Arg.Any<CancellationToken>()).Returns(new TenantInvitation
+        (IDatabaseTransactionProvider transactionProvider, IAuditLogRepository auditLog, IInvitationRepository invitationRepository, ITenantRepository tenantRepository, ISubscriptionRepository subscriptionRepository) = CreateMockRepositories();
+        invitationRepository.GetInvitationByTokenAsync("token", Arg.Any<CancellationToken>()).Returns(new TenantInvitation
         {
             Id = 1, TenantId = 5, Email = "user@test.com", TokenHash = "token", Role = UserAccountRoles.TenantAdmin, Status = InvitationStatus.Pending,
             InvitedByUserId = 2, CreatedAt = DateTimeOffset.UtcNow, ExpiresAt = DateTimeOffset.UtcNow.AddDays(7)
         });
-        cache.GetTenantsForUserAsync("ext-1", Arg.Any<CancellationToken>()).Returns(new List<UserTenantRole>
+        tenantRepository.GetTenantsForUserAsync("ext-1", Arg.Any<CancellationToken>()).Returns(new List<UserTenantRole>
         {
             new() { UserId = 1, AssignedTenantId = 10, Role = UserAccountRoles.TenantAdmin, AssignedByUserId = 1, AssignedAt = DateTimeOffset.UtcNow, IsActive = true }
         });
-        InvitationHandler handler = new(cache, CreateMockEmailService(), CreateMockSubService(), CreateMockSubOptions(), Substitute.For<IRoleCacheInvalidator>());
+        InvitationHandler handler = new(transactionProvider, auditLog, invitationRepository, tenantRepository, subscriptionRepository, CreateMockEmailService(), CreateMockSubService(), CreateMockSubOptions(), Substitute.For<IRoleCacheInvalidator>());
 
         await handler.AcceptAsync("token", "user@test.com", 1, "ext-1", CancellationToken.None);
 
         // Only 1 call for the invitation tenant role (no personal tenant)
-        await cache.Received(1).CreateUserTenantRoleAsync(Arg.Any<UserTenantRole>(), Arg.Any<CancellationToken>());
+        await tenantRepository.Received(1).CreateUserTenantRoleAsync(Arg.Any<UserTenantRole>(), Arg.Any<CancellationToken>());
     }
 
     // ========== RevokeAsync tests ==========
@@ -540,7 +555,8 @@ public class InvitationHandlerTests
     [Test]
     public async Task RevokeAsync_NullTenantId_Returns401()
     {
-        InvitationHandler handler = new(CreateMockCache(), CreateMockEmailService(), CreateMockSubService(), CreateMockSubOptions(), Substitute.For<IRoleCacheInvalidator>());
+        (IDatabaseTransactionProvider transactionProvider, IAuditLogRepository auditLog, IInvitationRepository invitationRepository, ITenantRepository tenantRepository, ISubscriptionRepository subscriptionRepository) = CreateMockRepositories();
+        InvitationHandler handler = new(transactionProvider, auditLog, invitationRepository, tenantRepository, subscriptionRepository, CreateMockEmailService(), CreateMockSubService(), CreateMockSubOptions(), Substitute.For<IRoleCacheInvalidator>());
 
         ServiceResult<InvitationRevokeResult> result = await handler.RevokeAsync(1, null, CancellationToken.None);
 
@@ -550,9 +566,9 @@ public class InvitationHandlerTests
     [Test]
     public async Task RevokeAsync_InvitationNotFound_Returns404()
     {
-        IDatabaseCache cache = CreateMockCache();
-        cache.GetInvitationsForTenantAsync(1, Arg.Any<CancellationToken>()).Returns(Enumerable.Empty<TenantInvitation>());
-        InvitationHandler handler = new(cache, CreateMockEmailService(), CreateMockSubService(), CreateMockSubOptions(), Substitute.For<IRoleCacheInvalidator>());
+        (IDatabaseTransactionProvider transactionProvider, IAuditLogRepository auditLog, IInvitationRepository invitationRepository, ITenantRepository tenantRepository, ISubscriptionRepository subscriptionRepository) = CreateMockRepositories();
+        invitationRepository.GetInvitationsForTenantAsync(1, Arg.Any<CancellationToken>()).Returns(Enumerable.Empty<TenantInvitation>());
+        InvitationHandler handler = new(transactionProvider, auditLog, invitationRepository, tenantRepository, subscriptionRepository, CreateMockEmailService(), CreateMockSubService(), CreateMockSubOptions(), Substitute.For<IRoleCacheInvalidator>());
 
         ServiceResult<InvitationRevokeResult> result = await handler.RevokeAsync(99, 1, CancellationToken.None);
 
@@ -562,12 +578,12 @@ public class InvitationHandlerTests
     [Test]
     public async Task RevokeAsync_NotPending_Returns400()
     {
-        IDatabaseCache cache = CreateMockCache();
-        cache.GetInvitationsForTenantAsync(1, Arg.Any<CancellationToken>()).Returns(new List<TenantInvitation>
+        (IDatabaseTransactionProvider transactionProvider, IAuditLogRepository auditLog, IInvitationRepository invitationRepository, ITenantRepository tenantRepository, ISubscriptionRepository subscriptionRepository) = CreateMockRepositories();
+        invitationRepository.GetInvitationsForTenantAsync(1, Arg.Any<CancellationToken>()).Returns(new List<TenantInvitation>
         {
             new() { Id = 1, TenantId = 1, Email = "user@test.com", TokenHash = "abc", Role = UserAccountRoles.Viewer, Status = InvitationStatus.Accepted, InvitedByUserId = 1, CreatedAt = DateTimeOffset.UtcNow, ExpiresAt = DateTimeOffset.UtcNow.AddDays(7) }
         });
-        InvitationHandler handler = new(cache, CreateMockEmailService(), CreateMockSubService(), CreateMockSubOptions(), Substitute.For<IRoleCacheInvalidator>());
+        InvitationHandler handler = new(transactionProvider, auditLog, invitationRepository, tenantRepository, subscriptionRepository, CreateMockEmailService(), CreateMockSubService(), CreateMockSubOptions(), Substitute.For<IRoleCacheInvalidator>());
 
         ServiceResult<InvitationRevokeResult> result = await handler.RevokeAsync(1, 1, CancellationToken.None);
 
@@ -578,12 +594,12 @@ public class InvitationHandlerTests
     [Test]
     public async Task RevokeAsync_Success_ReturnsSuccess()
     {
-        IDatabaseCache cache = CreateMockCache();
-        cache.GetInvitationsForTenantAsync(1, Arg.Any<CancellationToken>()).Returns(new List<TenantInvitation>
+        (IDatabaseTransactionProvider transactionProvider, IAuditLogRepository auditLog, IInvitationRepository invitationRepository, ITenantRepository tenantRepository, ISubscriptionRepository subscriptionRepository) = CreateMockRepositories();
+        invitationRepository.GetInvitationsForTenantAsync(1, Arg.Any<CancellationToken>()).Returns(new List<TenantInvitation>
         {
             new() { Id = 1, TenantId = 1, Email = "user@test.com", TokenHash = "abc", Role = UserAccountRoles.Viewer, Status = InvitationStatus.Pending, InvitedByUserId = 1, CreatedAt = DateTimeOffset.UtcNow, ExpiresAt = DateTimeOffset.UtcNow.AddDays(7) }
         });
-        InvitationHandler handler = new(cache, CreateMockEmailService(), CreateMockSubService(), CreateMockSubOptions(), Substitute.For<IRoleCacheInvalidator>());
+        InvitationHandler handler = new(transactionProvider, auditLog, invitationRepository, tenantRepository, subscriptionRepository, CreateMockEmailService(), CreateMockSubService(), CreateMockSubOptions(), Substitute.For<IRoleCacheInvalidator>());
 
         ServiceResult<InvitationRevokeResult> result = await handler.RevokeAsync(1, 1, CancellationToken.None);
 
@@ -591,18 +607,18 @@ public class InvitationHandlerTests
     }
 
     [Test]
-    public async Task RevokeAsync_Success_CallsRevokeOnCache()
+    public async Task RevokeAsync_Success_CallsRevokeOnRepository()
     {
-        IDatabaseCache cache = CreateMockCache();
-        cache.GetInvitationsForTenantAsync(1, Arg.Any<CancellationToken>()).Returns(new List<TenantInvitation>
+        (IDatabaseTransactionProvider transactionProvider, IAuditLogRepository auditLog, IInvitationRepository invitationRepository, ITenantRepository tenantRepository, ISubscriptionRepository subscriptionRepository) = CreateMockRepositories();
+        invitationRepository.GetInvitationsForTenantAsync(1, Arg.Any<CancellationToken>()).Returns(new List<TenantInvitation>
         {
             new() { Id = 1, TenantId = 1, Email = "user@test.com", TokenHash = "abc", Role = UserAccountRoles.Viewer, Status = InvitationStatus.Pending, InvitedByUserId = 1, CreatedAt = DateTimeOffset.UtcNow, ExpiresAt = DateTimeOffset.UtcNow.AddDays(7) }
         });
-        InvitationHandler handler = new(cache, CreateMockEmailService(), CreateMockSubService(), CreateMockSubOptions(), Substitute.For<IRoleCacheInvalidator>());
+        InvitationHandler handler = new(transactionProvider, auditLog, invitationRepository, tenantRepository, subscriptionRepository, CreateMockEmailService(), CreateMockSubService(), CreateMockSubOptions(), Substitute.For<IRoleCacheInvalidator>());
 
         await handler.RevokeAsync(1, 1, CancellationToken.None);
 
-        await cache.Received(1).RevokeInvitationAsync(1, Arg.Any<CancellationToken>());
+        await invitationRepository.Received(1).RevokeInvitationAsync(1, Arg.Any<CancellationToken>());
     }
 
     // ========== ResendAsync tests ==========
@@ -610,7 +626,8 @@ public class InvitationHandlerTests
     [Test]
     public async Task ResendAsync_NullTenantId_Returns401()
     {
-        InvitationHandler handler = new(CreateMockCache(), CreateMockEmailService(), CreateMockSubService(), CreateMockSubOptions(), Substitute.For<IRoleCacheInvalidator>());
+        (IDatabaseTransactionProvider transactionProvider, IAuditLogRepository auditLog, IInvitationRepository invitationRepository, ITenantRepository tenantRepository, ISubscriptionRepository subscriptionRepository) = CreateMockRepositories();
+        InvitationHandler handler = new(transactionProvider, auditLog, invitationRepository, tenantRepository, subscriptionRepository, CreateMockEmailService(), CreateMockSubService(), CreateMockSubOptions(), Substitute.For<IRoleCacheInvalidator>());
 
         ServiceResult<InvitationResendResult> result = await handler.ResendAsync(1, null, 1, "inviter@test.com", "https://app.test", CancellationToken.None);
 
@@ -620,9 +637,9 @@ public class InvitationHandlerTests
     [Test]
     public async Task ResendAsync_InvitationNotFound_Returns404()
     {
-        IDatabaseCache cache = CreateMockCache();
-        cache.GetInvitationsForTenantAsync(1, Arg.Any<CancellationToken>()).Returns(Enumerable.Empty<TenantInvitation>());
-        InvitationHandler handler = new(cache, CreateMockEmailService(), CreateMockSubService(), CreateMockSubOptions(), Substitute.For<IRoleCacheInvalidator>());
+        (IDatabaseTransactionProvider transactionProvider, IAuditLogRepository auditLog, IInvitationRepository invitationRepository, ITenantRepository tenantRepository, ISubscriptionRepository subscriptionRepository) = CreateMockRepositories();
+        invitationRepository.GetInvitationsForTenantAsync(1, Arg.Any<CancellationToken>()).Returns(Enumerable.Empty<TenantInvitation>());
+        InvitationHandler handler = new(transactionProvider, auditLog, invitationRepository, tenantRepository, subscriptionRepository, CreateMockEmailService(), CreateMockSubService(), CreateMockSubOptions(), Substitute.For<IRoleCacheInvalidator>());
 
         ServiceResult<InvitationResendResult> result = await handler.ResendAsync(99, 1, 1, "inviter@test.com", "https://app.test", CancellationToken.None);
 
@@ -632,12 +649,12 @@ public class InvitationHandlerTests
     [Test]
     public async Task ResendAsync_NotPending_Returns400()
     {
-        IDatabaseCache cache = CreateMockCache();
-        cache.GetInvitationsForTenantAsync(1, Arg.Any<CancellationToken>()).Returns(new List<TenantInvitation>
+        (IDatabaseTransactionProvider transactionProvider, IAuditLogRepository auditLog, IInvitationRepository invitationRepository, ITenantRepository tenantRepository, ISubscriptionRepository subscriptionRepository) = CreateMockRepositories();
+        invitationRepository.GetInvitationsForTenantAsync(1, Arg.Any<CancellationToken>()).Returns(new List<TenantInvitation>
         {
             new() { Id = 1, TenantId = 1, Email = "user@test.com", TokenHash = "abc", Role = UserAccountRoles.Viewer, Status = InvitationStatus.Revoked, InvitedByUserId = 1, CreatedAt = DateTimeOffset.UtcNow, ExpiresAt = DateTimeOffset.UtcNow.AddDays(7) }
         });
-        InvitationHandler handler = new(cache, CreateMockEmailService(), CreateMockSubService(), CreateMockSubOptions(), Substitute.For<IRoleCacheInvalidator>());
+        InvitationHandler handler = new(transactionProvider, auditLog, invitationRepository, tenantRepository, subscriptionRepository, CreateMockEmailService(), CreateMockSubService(), CreateMockSubOptions(), Substitute.For<IRoleCacheInvalidator>());
 
         ServiceResult<InvitationResendResult> result = await handler.ResendAsync(1, 1, 1, "inviter@test.com", "https://app.test", CancellationToken.None);
 
@@ -647,24 +664,24 @@ public class InvitationHandlerTests
     [Test]
     public async Task ResendAsync_Success_ReturnsNewInvitationData()
     {
-        IDatabaseCache cache = CreateMockCache();
+        (IDatabaseTransactionProvider transactionProvider, IAuditLogRepository auditLog, IInvitationRepository invitationRepository, ITenantRepository tenantRepository, ISubscriptionRepository subscriptionRepository) = CreateMockRepositories();
         IEmailService emailService = CreateMockEmailService();
-        cache.GetInvitationsForTenantAsync(1, Arg.Any<CancellationToken>()).Returns(new List<TenantInvitation>
+        invitationRepository.GetInvitationsForTenantAsync(1, Arg.Any<CancellationToken>()).Returns(new List<TenantInvitation>
         {
             new() { Id = 1, TenantId = 1, Email = "user@test.com", TokenHash = "oldtoken", Role = UserAccountRoles.Viewer, Status = InvitationStatus.Pending, InvitedByUserId = 1, CreatedAt = DateTimeOffset.UtcNow, ExpiresAt = DateTimeOffset.UtcNow.AddDays(7) }
         });
-        cache.CreateInvitationAsync(Arg.Any<TenantInvitation>(), Arg.Any<CancellationToken>()).Returns(callInfo =>
+        invitationRepository.CreateInvitationAsync(Arg.Any<TenantInvitation>(), Arg.Any<CancellationToken>()).Returns(callInfo =>
         {
             TenantInvitation inv = callInfo.Arg<TenantInvitation>();
             inv.Id = 20;
 
             return inv;
         });
-        cache.GetTenantByIdAsync(1, Arg.Any<CancellationToken>()).Returns(new Tenant
+        tenantRepository.GetTenantByIdAsync(1, Arg.Any<CancellationToken>()).Returns(new Tenant
         {
             Id = 1, Name = "Test Org", ExternalId = "ext-1", CreatedAt = DateTimeOffset.UtcNow, CreatedByUserId = 1, IsActive = true, LogoUrl = ""
         });
-        InvitationHandler handler = new(cache, emailService, CreateMockSubService(), CreateMockSubOptions(), Substitute.For<IRoleCacheInvalidator>());
+        InvitationHandler handler = new(transactionProvider, auditLog, invitationRepository, tenantRepository, subscriptionRepository, emailService, CreateMockSubService(), CreateMockSubOptions(), Substitute.For<IRoleCacheInvalidator>());
 
         ServiceResult<InvitationResendResult> result = await handler.ResendAsync(1, 1, 1, "inviter@test.com", "https://app.test", CancellationToken.None);
 
@@ -676,28 +693,28 @@ public class InvitationHandlerTests
     [Test]
     public async Task ResendAsync_Success_RevokesOldAndSendsEmail()
     {
-        IDatabaseCache cache = CreateMockCache();
+        (IDatabaseTransactionProvider transactionProvider, IAuditLogRepository auditLog, IInvitationRepository invitationRepository, ITenantRepository tenantRepository, ISubscriptionRepository subscriptionRepository) = CreateMockRepositories();
         IEmailService emailService = CreateMockEmailService();
-        cache.GetInvitationsForTenantAsync(1, Arg.Any<CancellationToken>()).Returns(new List<TenantInvitation>
+        invitationRepository.GetInvitationsForTenantAsync(1, Arg.Any<CancellationToken>()).Returns(new List<TenantInvitation>
         {
             new() { Id = 1, TenantId = 1, Email = "user@test.com", TokenHash = "oldtoken", Role = UserAccountRoles.Viewer, Status = InvitationStatus.Pending, InvitedByUserId = 1, CreatedAt = DateTimeOffset.UtcNow, ExpiresAt = DateTimeOffset.UtcNow.AddDays(7) }
         });
-        cache.CreateInvitationAsync(Arg.Any<TenantInvitation>(), Arg.Any<CancellationToken>()).Returns(callInfo =>
+        invitationRepository.CreateInvitationAsync(Arg.Any<TenantInvitation>(), Arg.Any<CancellationToken>()).Returns(callInfo =>
         {
             TenantInvitation inv = callInfo.Arg<TenantInvitation>();
             inv.Id = 20;
 
             return inv;
         });
-        cache.GetTenantByIdAsync(1, Arg.Any<CancellationToken>()).Returns(new Tenant
+        tenantRepository.GetTenantByIdAsync(1, Arg.Any<CancellationToken>()).Returns(new Tenant
         {
             Id = 1, Name = "Test Org", ExternalId = "ext-1", CreatedAt = DateTimeOffset.UtcNow, CreatedByUserId = 1, IsActive = true, LogoUrl = ""
         });
-        InvitationHandler handler = new(cache, emailService, CreateMockSubService(), CreateMockSubOptions(), Substitute.For<IRoleCacheInvalidator>());
+        InvitationHandler handler = new(transactionProvider, auditLog, invitationRepository, tenantRepository, subscriptionRepository, emailService, CreateMockSubService(), CreateMockSubOptions(), Substitute.For<IRoleCacheInvalidator>());
 
         await handler.ResendAsync(1, 1, 1, "inviter@test.com", "https://app.test", CancellationToken.None);
 
-        await cache.Received(1).RevokeInvitationAsync(1, Arg.Any<CancellationToken>());
+        await invitationRepository.Received(1).RevokeInvitationAsync(1, Arg.Any<CancellationToken>());
         await emailService.Received(1).SendInvitationEmailAsync("user@test.com", "Test Org", "inviter@test.com", Arg.Any<string>(), Arg.Any<CancellationToken>());
     }
 }

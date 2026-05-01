@@ -4,6 +4,7 @@
 
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
+using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Server.Endpoints.Web.Models.Users;
 using Framlux.FleetManagement.Server.Services.Handlers;
 using Framlux.FleetManagement.Server.Services.Infrastructure;
@@ -11,6 +12,7 @@ using Framlux.FleetManagement.Test.Infrastructure;
 using LinqToDB.Async;
 using LinqToDB;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
 
 namespace Framlux.FleetManagement.Test.Services.Handlers;
@@ -53,7 +55,7 @@ public class UserHandlerTests
     {
         using TestDatabaseFactory dbFactory = new();
         ILogger<UserHandler> logger = Substitute.For<ILogger<UserHandler>>();
-        UserHandler handler = new(dbFactory.Context, logger);
+        UserHandler handler = new(CreateRepo(dbFactory), logger);
 
         ServiceResult<List<UserAccountDto>> result = await handler.ListAsync(null, CancellationToken.None);
 
@@ -66,7 +68,7 @@ public class UserHandlerTests
     {
         using TestDatabaseFactory dbFactory = new();
         ILogger<UserHandler> logger = Substitute.For<ILogger<UserHandler>>();
-        UserHandler handler = new(dbFactory.Context, logger);
+        UserHandler handler = new(CreateRepo(dbFactory), logger);
 
         ServiceResult<List<UserAccountDto>> result = await handler.ListAsync(999, CancellationToken.None);
 
@@ -81,7 +83,7 @@ public class UserHandlerTests
         (int userId, int tenantId) = await SeedUserWithRole(dbFactory, username: "viewer@example.com");
 
         ILogger<UserHandler> logger = Substitute.For<ILogger<UserHandler>>();
-        UserHandler handler = new(dbFactory.Context, logger);
+        UserHandler handler = new(CreateRepo(dbFactory), logger);
 
         ServiceResult<List<UserAccountDto>> result = await handler.ListAsync(tenantId, CancellationToken.None);
 
@@ -103,7 +105,7 @@ public class UserHandlerTests
         await dbFactory.Context.InsertAsync(normalRole);
 
         ILogger<UserHandler> logger = Substitute.For<ILogger<UserHandler>>();
-        UserHandler handler = new(dbFactory.Context, logger);
+        UserHandler handler = new(CreateRepo(dbFactory), logger);
 
         ServiceResult<List<UserAccountDto>> result = await handler.ListAsync(tenantId, CancellationToken.None);
 
@@ -119,7 +121,7 @@ public class UserHandlerTests
         (_, int tenantId) = await SeedUserWithRole(dbFactory, username: "inactive@example.com", roleActive: false);
 
         ILogger<UserHandler> logger = Substitute.For<ILogger<UserHandler>>();
-        UserHandler handler = new(dbFactory.Context, logger);
+        UserHandler handler = new(CreateRepo(dbFactory), logger);
 
         ServiceResult<List<UserAccountDto>> result = await handler.ListAsync(tenantId, CancellationToken.None);
 
@@ -134,7 +136,7 @@ public class UserHandlerTests
     {
         using TestDatabaseFactory dbFactory = new();
         ILogger<UserHandler> logger = Substitute.For<ILogger<UserHandler>>();
-        UserHandler handler = new(dbFactory.Context, logger);
+        UserHandler handler = new(CreateRepo(dbFactory), logger);
 
         ServiceResult<UserAccountDto> result = await handler.GetDetailAsync(1, null, CancellationToken.None);
 
@@ -148,7 +150,7 @@ public class UserHandlerTests
         (int userId, _) = await SeedUserWithRole(dbFactory);
 
         ILogger<UserHandler> logger = Substitute.For<ILogger<UserHandler>>();
-        UserHandler handler = new(dbFactory.Context, logger);
+        UserHandler handler = new(CreateRepo(dbFactory), logger);
 
         ServiceResult<UserAccountDto> result = await handler.GetDetailAsync(userId, 999, CancellationToken.None);
 
@@ -160,7 +162,7 @@ public class UserHandlerTests
     {
         using TestDatabaseFactory dbFactory = new();
         ILogger<UserHandler> logger = Substitute.For<ILogger<UserHandler>>();
-        UserHandler handler = new(dbFactory.Context, logger);
+        UserHandler handler = new(CreateRepo(dbFactory), logger);
 
         ServiceResult<UserAccountDto> result = await handler.GetDetailAsync(999, 1, CancellationToken.None);
 
@@ -174,7 +176,7 @@ public class UserHandlerTests
         (int userId, int tenantId) = await SeedUserWithRole(dbFactory, username: "detail@example.com", role: UserAccountRoles.TenantAdmin);
 
         ILogger<UserHandler> logger = Substitute.For<ILogger<UserHandler>>();
-        UserHandler handler = new(dbFactory.Context, logger);
+        UserHandler handler = new(CreateRepo(dbFactory), logger);
 
         ServiceResult<UserAccountDto> result = await handler.GetDetailAsync(userId, tenantId, CancellationToken.None);
 
@@ -190,7 +192,7 @@ public class UserHandlerTests
     {
         using TestDatabaseFactory dbFactory = new();
         ILogger<UserHandler> logger = Substitute.For<ILogger<UserHandler>>();
-        UserHandler handler = new(dbFactory.Context, logger);
+        UserHandler handler = new(CreateRepo(dbFactory), logger);
 
         ServiceResult<object> result = await handler.DeactivateAsync(5, 5, 1, CancellationToken.None);
 
@@ -202,7 +204,7 @@ public class UserHandlerTests
     {
         using TestDatabaseFactory dbFactory = new();
         ILogger<UserHandler> logger = Substitute.For<ILogger<UserHandler>>();
-        UserHandler handler = new(dbFactory.Context, logger);
+        UserHandler handler = new(CreateRepo(dbFactory), logger);
 
         ServiceResult<object> result = await handler.DeactivateAsync(1, 2, null, CancellationToken.None);
 
@@ -216,7 +218,7 @@ public class UserHandlerTests
         (int userId, _) = await SeedUserWithRole(dbFactory);
 
         ILogger<UserHandler> logger = Substitute.For<ILogger<UserHandler>>();
-        UserHandler handler = new(dbFactory.Context, logger);
+        UserHandler handler = new(CreateRepo(dbFactory), logger);
 
         ServiceResult<object> result = await handler.DeactivateAsync(userId, userId + 1, 999, CancellationToken.None);
 
@@ -234,7 +236,7 @@ public class UserHandlerTests
         admin.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(admin);
 
         ILogger<UserHandler> logger = Substitute.For<ILogger<UserHandler>>();
-        UserHandler handler = new(dbFactory.Context, logger);
+        UserHandler handler = new(CreateRepo(dbFactory), logger);
 
         ServiceResult<object> result = await handler.DeactivateAsync(userId, admin.Id, tenantId, CancellationToken.None);
 
@@ -271,7 +273,7 @@ public class UserHandlerTests
         admin.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(admin);
 
         ILogger<UserHandler> logger = Substitute.For<ILogger<UserHandler>>();
-        UserHandler handler = new(dbFactory.Context, logger);
+        UserHandler handler = new(CreateRepo(dbFactory), logger);
 
         // Deactivate from tenant 1 only
         ServiceResult<object> result = await handler.DeactivateAsync(user.Id, admin.Id, tenant1.Id, CancellationToken.None);
@@ -291,5 +293,12 @@ public class UserHandlerTests
         // Verify account still active (has other active roles)
         UserAccount? userAfter = await dbFactory.Context.UserAccounts.FirstOrDefaultAsync(u => u.Id == user.Id);
         await Assert.That(userAfter!.IsActive).IsTrue();
+    }
+
+    // ========== Helper methods ==========
+
+    private static DatabaseRepository CreateRepo(TestDatabaseFactory dbFactory)
+    {
+        return new DatabaseRepository(dbFactory.Context, new NullLogger<DatabaseRepository>());
     }
 }

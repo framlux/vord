@@ -2,9 +2,9 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
-using Framlux.FleetManagement.Database.Cache;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
+using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Server.Options;
 using Framlux.FleetManagement.Server.Services.Handlers;
 using Framlux.Vord.BillingGrpc;
@@ -46,10 +46,10 @@ public sealed class BillingGatewayService : BillingGateway.BillingGatewayBase
         ValidateInternalKey(context);
 
         using IServiceScope scope = _scopeFactory.CreateScope();
-        IDatabaseCache databaseCache = scope.ServiceProvider.GetRequiredService<IDatabaseCache>();
+        ITenantRepository tenantRepository = scope.ServiceProvider.GetRequiredService<ITenantRepository>();
         IBillingWebhookHandler webhookHandler = scope.ServiceProvider.GetRequiredService<IBillingWebhookHandler>();
 
-        Tenant? tenant = await databaseCache.GetTenantByExternalIdAsync(
+        Tenant? tenant = await tenantRepository.GetTenantByExternalIdAsync(
             request.TenantExternalId, context.CancellationToken);
 
         if (tenant is null)

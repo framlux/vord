@@ -4,10 +4,8 @@
 
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
-using Framlux.FleetManagement.Database;
+using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Server.Options;
-using LinqToDB.Async;
-using LinqToDB;
 using Microsoft.Extensions.Options;
 
 namespace Framlux.FleetManagement.Server.Services.Billing;
@@ -17,16 +15,28 @@ namespace Framlux.FleetManagement.Server.Services.Billing;
 /// </summary>
 public sealed class SubscriptionService : ISubscriptionService
 {
-    private readonly IServiceScopeFactory _scopeFactory;
+    private readonly ISubscriptionRepository _subscriptionRepo;
+    private readonly IMachineRepository _machineRepo;
+    private readonly IAlertRuleRepository _alertRuleRepo;
+    private readonly IWebhookRepository _webhookRepo;
     private readonly SubscriptionOptions _subscriptionOptions;
     private readonly ILogger<SubscriptionService> _logger;
 
     /// <summary>
     /// Creates a new instance of the <see cref="SubscriptionService"/> class.
     /// </summary>
-    public SubscriptionService(IServiceScopeFactory scopeFactory, IOptions<SubscriptionOptions> subscriptionOptions, ILogger<SubscriptionService> logger)
+    public SubscriptionService(
+        ISubscriptionRepository subscriptionRepo,
+        IMachineRepository machineRepo,
+        IAlertRuleRepository alertRuleRepo,
+        IWebhookRepository webhookRepo,
+        IOptions<SubscriptionOptions> subscriptionOptions,
+        ILogger<SubscriptionService> logger)
     {
-        _scopeFactory = scopeFactory;
+        _subscriptionRepo = subscriptionRepo;
+        _machineRepo = machineRepo;
+        _alertRuleRepo = alertRuleRepo;
+        _webhookRepo = webhookRepo;
         _subscriptionOptions = subscriptionOptions.Value;
         _logger = logger;
     }
@@ -34,12 +44,7 @@ public sealed class SubscriptionService : ISubscriptionService
     /// <inheritdoc/>
     public async Task<TenantSubscription?> GetSubscriptionForTenantAsync(int tenantId, CancellationToken ct)
     {
-        using IServiceScope scope = _scopeFactory.CreateScope();
-        DatabaseContext db = scope.ServiceProvider.GetRequiredService<DatabaseContext>();
-
-        TenantSubscription? subscription = await db.TenantSubscriptions
-            .Where(s => s.TenantId == tenantId)
-            .FirstOrDefaultAsync(ct);
+        TenantSubscription? subscription = await _subscriptionRepo.GetSubscriptionForTenantAsync(tenantId, ct);
 
         return subscription;
     }
@@ -47,12 +52,7 @@ public sealed class SubscriptionService : ISubscriptionService
     /// <inheritdoc/>
     public async Task<bool> CanApproveMachineAsync(int tenantId, CancellationToken ct)
     {
-        using IServiceScope scope = _scopeFactory.CreateScope();
-        DatabaseContext db = scope.ServiceProvider.GetRequiredService<DatabaseContext>();
-
-        TenantSubscription? subscription = await db.TenantSubscriptions
-            .Where(s => s.TenantId == tenantId)
-            .FirstOrDefaultAsync(ct);
+        TenantSubscription? subscription = await _subscriptionRepo.GetSubscriptionForTenantAsync(tenantId, ct);
 
         if (subscription is null)
         {
@@ -61,12 +61,10 @@ public sealed class SubscriptionService : ISubscriptionService
 
         if (subscription.MachineLimit is null)
         {
-            return true; // Unlimited
+            return true;
         }
 
-        int activeMachineCount = await db.Machines
-            .Where(m => m.TenantId == tenantId && m.IsDeleted == false)
-            .CountAsync(ct);
+        int activeMachineCount = await _machineRepo.GetActiveMachineCountAsync(tenantId, ct);
 
         return activeMachineCount < subscription.MachineLimit.Value;
     }
@@ -74,9 +72,6 @@ public sealed class SubscriptionService : ISubscriptionService
     /// <inheritdoc/>
     public async Task<TenantSubscription> ProvisionFreeSubscriptionAsync(int tenantId, CancellationToken ct)
     {
-        using IServiceScope scope = _scopeFactory.CreateScope();
-        DatabaseContext db = scope.ServiceProvider.GetRequiredService<DatabaseContext>();
-
         int machineLimit = _subscriptionOptions.FreeTierMachineLimit;
         int retentionDays = _subscriptionOptions.FreeTierRetentionDays;
 
@@ -94,7 +89,7 @@ public sealed class SubscriptionService : ISubscriptionService
             UpdatedAt = now,
         };
 
-        subscription.Id = await db.InsertWithInt32IdentityAsync(subscription, token: ct);
+        subscription = await _subscriptionRepo.InsertSubscriptionAsync(subscription, ct);
         _logger.LogInformation("Provisioned Free subscription for tenant {TenantId} (machines: {MachineLimit}, retention: {RetentionDays}d)", tenantId, machineLimit, retentionDays);
 
         return subscription;
@@ -111,12 +106,7 @@ public sealed class SubscriptionService : ISubscriptionService
     /// <inheritdoc/>
     public async Task<int> GetMachineCountForTenantAsync(int tenantId, CancellationToken ct)
     {
-        using IServiceScope scope = _scopeFactory.CreateScope();
-        DatabaseContext db = scope.ServiceProvider.GetRequiredService<DatabaseContext>();
-
-        int count = await db.Machines
-            .Where(m => m.TenantId == tenantId && m.IsDeleted == false)
-            .CountAsync(ct);
+        int count = await _machineRepo.GetActiveMachineCountAsync(tenantId, ct);
 
         return count;
     }
@@ -124,12 +114,7 @@ public sealed class SubscriptionService : ISubscriptionService
     /// <inheritdoc/>
     public async Task EnsureSubscriptionExistsAsync(int tenantId, CancellationToken ct)
     {
-        using IServiceScope scope = _scopeFactory.CreateScope();
-        DatabaseContext db = scope.ServiceProvider.GetRequiredService<DatabaseContext>();
-
-        TenantSubscription? subscription = await db.TenantSubscriptions
-            .Where(s => s.TenantId == tenantId)
-            .FirstOrDefaultAsync(ct);
+        TenantSubscription? subscription = await _subscriptionRepo.GetSubscriptionForTenantAsync(tenantId, ct);
 
         if (subscription is not null && subscription.Status == SubscriptionStatus.Active)
         {
@@ -141,13 +126,7 @@ public sealed class SubscriptionService : ISubscriptionService
             int machineLimit = _subscriptionOptions.FreeTierMachineLimit;
             int retentionDays = _subscriptionOptions.FreeTierRetentionDays;
 
-            await db.TenantSubscriptions
-                .Where(s => s.Id == subscription.Id)
-                .Set(s => s.Status, SubscriptionStatus.Active)
-                .Set(s => s.MachineLimit, machineLimit)
-                .Set(s => s.RetentionDays, retentionDays)
-                .Set(s => s.UpdatedAt, DateTimeOffset.UtcNow)
-                .UpdateAsync(ct);
+            await _subscriptionRepo.ReactivateFreeSubscriptionAsync(subscription.Id, machineLimit, retentionDays, ct);
 
             _logger.LogInformation("Reactivated Free subscription for tenant {TenantId}", tenantId);
 
@@ -161,86 +140,49 @@ public sealed class SubscriptionService : ISubscriptionService
     }
 
     /// <inheritdoc/>
-    public async Task<bool> CanCreateAlertRuleAsync(int tenantId, DatabaseContext? db, CancellationToken ct)
+    public async Task<bool> CanCreateAlertRuleAsync(int tenantId, CancellationToken ct)
     {
-        IServiceScope? scope = db is null ? _scopeFactory.CreateScope() : null;
-        try
+        TenantSubscription? subscription = await _subscriptionRepo.GetSubscriptionForTenantAsync(tenantId, ct);
+
+        if (subscription is null)
         {
-            DatabaseContext resolvedDb = db ?? scope!.ServiceProvider.GetRequiredService<DatabaseContext>();
-
-            TenantSubscription? subscription = await resolvedDb.TenantSubscriptions
-                .Where(s => s.TenantId == tenantId)
-                .FirstOrDefaultAsync(ct);
-
-            if (subscription is null)
-            {
-
-                return false;
-            }
-
-            if (subscription.AlertRuleLimit is null)
-            {
-
-                return true;
-            }
-
-            int count = await resolvedDb.AlertRules
-                .CountAsync(r => r.TenantId == tenantId, ct);
-
-            return count < subscription.AlertRuleLimit.Value;
+            return false;
         }
-        finally
+
+        if (subscription.AlertRuleLimit is null)
         {
-            scope?.Dispose();
+            return true;
         }
+
+        int count = await _alertRuleRepo.CountAlertRulesForTenantAsync(tenantId, ct);
+
+        return count < subscription.AlertRuleLimit.Value;
     }
 
     /// <inheritdoc/>
-    public async Task<bool> CanCreateWebhookAsync(int tenantId, DatabaseContext? db, CancellationToken ct)
+    public async Task<bool> CanCreateWebhookAsync(int tenantId, CancellationToken ct)
     {
-        IServiceScope? scope = db is null ? _scopeFactory.CreateScope() : null;
-        try
+        TenantSubscription? subscription = await _subscriptionRepo.GetSubscriptionForTenantAsync(tenantId, ct);
+
+        if (subscription is null)
         {
-            DatabaseContext resolvedDb = db ?? scope!.ServiceProvider.GetRequiredService<DatabaseContext>();
-
-            TenantSubscription? subscription = await resolvedDb.TenantSubscriptions
-                .Where(s => s.TenantId == tenantId)
-                .FirstOrDefaultAsync(ct);
-
-            if (subscription is null)
-            {
-
-                return false;
-            }
-
-            if (subscription.WebhookLimit is null)
-            {
-
-                return true;
-            }
-
-            int count = await resolvedDb.WebhookEndpoints
-                .CountAsync(w => w.TenantId == tenantId, ct);
-
-            return count < subscription.WebhookLimit.Value;
+            return false;
         }
-        finally
+
+        if (subscription.WebhookLimit is null)
         {
-            scope?.Dispose();
+            return true;
         }
+
+        int count = await _webhookRepo.CountWebhooksForTenantAsync(tenantId, ct);
+
+        return count < subscription.WebhookLimit.Value;
     }
 
     /// <inheritdoc/>
     public async Task<int> GetMachineCountAtDateAsync(int tenantId, DateTimeOffset targetDate, CancellationToken ct)
     {
-        using IServiceScope scope = _scopeFactory.CreateScope();
-        DatabaseContext db = scope.ServiceProvider.GetRequiredService<DatabaseContext>();
-
-        int count = await db.Machines
-            .Where(m => m.TenantId == tenantId
-                && m.RegisteredOn <= targetDate
-                && (m.IsDeleted == false || m.DeletedOn > targetDate))
-            .CountAsync(ct);
+        int count = await _machineRepo.GetMachineCountAtDateAsync(tenantId, targetDate, ct);
 
         return count;
     }

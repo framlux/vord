@@ -2,7 +2,7 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
-using Framlux.FleetManagement.Database.Cache;
+using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Server.Options;
@@ -25,7 +25,7 @@ public sealed class StripeSyncServiceTests
 {
     private static (
         StripeSyncService Service,
-        IDatabaseCache DbCache,
+        ISubscriptionRepository DbCache,
         IBillingApiClient BillingClient,
         IBillingWebhookHandler WebhookHandler,
         ISubscriptionService SubscriptionService,
@@ -34,7 +34,7 @@ public sealed class StripeSyncServiceTests
         string proPriceId = "price_pro_123",
         string teamPriceId = "price_team_456")
     {
-        IDatabaseCache dbCache = Substitute.For<IDatabaseCache>();
+        ISubscriptionRepository dbCache = Substitute.For<ISubscriptionRepository, ITenantRepository>();
         IBillingApiClient billingClient = Substitute.For<IBillingApiClient>();
         IBillingWebhookHandler webhookHandler = Substitute.For<IBillingWebhookHandler>();
         ISubscriptionService subscriptionService = Substitute.For<ISubscriptionService>();
@@ -42,7 +42,8 @@ public sealed class StripeSyncServiceTests
 
         IServiceScope scope = Substitute.For<IServiceScope>();
         IServiceProvider serviceProvider = Substitute.For<IServiceProvider>();
-        serviceProvider.GetService(typeof(IDatabaseCache)).Returns(dbCache);
+        serviceProvider.GetService(typeof(ISubscriptionRepository)).Returns(dbCache);
+        serviceProvider.GetService(typeof(ITenantRepository)).Returns(dbCache);
         serviceProvider.GetService(typeof(IBillingWebhookHandler)).Returns(webhookHandler);
         serviceProvider.GetService(typeof(ISubscriptionService)).Returns(subscriptionService);
         scope.ServiceProvider.Returns(serviceProvider);
@@ -106,7 +107,7 @@ public sealed class StripeSyncServiceTests
     [Test]
     public async Task ReconcilePendingCancellations_NoPendingCancellations_NoBillingApiCalls()
     {
-        (StripeSyncService service, IDatabaseCache dbCache, IBillingApiClient billingClient,
+        (StripeSyncService service, ISubscriptionRepository dbCache, IBillingApiClient billingClient,
             IBillingWebhookHandler _, ISubscriptionService _, ILogger<StripeSyncService> _) = CreateSut();
         TaskCompletionSource workDone = new();
 
@@ -132,7 +133,7 @@ public sealed class StripeSyncServiceTests
     [Test]
     public async Task ReconcilePendingCancellations_StripeSaysCanceled_ProcessesDowngrade()
     {
-        (StripeSyncService service, IDatabaseCache dbCache, IBillingApiClient billingClient,
+        (StripeSyncService service, ISubscriptionRepository dbCache, IBillingApiClient billingClient,
             IBillingWebhookHandler webhookHandler, ISubscriptionService _, ILogger<StripeSyncService> _) = CreateSut();
         TaskCompletionSource workDone = new();
 
@@ -143,7 +144,7 @@ public sealed class StripeSyncServiceTests
             .Returns(new List<TenantSubscription> { sub });
         dbCache.GetPaidSubscriptionsAsync(Arg.Any<CancellationToken>())
             .Returns(new List<TenantSubscription>());
-        dbCache.GetTenantByIdAsync(1, Arg.Any<CancellationToken>())
+        ((ITenantRepository)dbCache).GetTenantByIdAsync(1, Arg.Any<CancellationToken>())
             .Returns(tenant);
         billingClient.GetSubscriptionStatusAsync("ext-1", Arg.Any<CancellationToken>())
             .Returns(new StripeSubscriptionStatus(false, "canceled", "price_pro_123", 1, null));
@@ -167,7 +168,7 @@ public sealed class StripeSyncServiceTests
     [Test]
     public async Task ReconcilePendingCancellations_StripeSaysNone_ProcessesDowngrade()
     {
-        (StripeSyncService service, IDatabaseCache dbCache, IBillingApiClient billingClient,
+        (StripeSyncService service, ISubscriptionRepository dbCache, IBillingApiClient billingClient,
             IBillingWebhookHandler webhookHandler, ISubscriptionService _, ILogger<StripeSyncService> _) = CreateSut();
         TaskCompletionSource workDone = new();
 
@@ -178,7 +179,7 @@ public sealed class StripeSyncServiceTests
             .Returns(new List<TenantSubscription> { sub });
         dbCache.GetPaidSubscriptionsAsync(Arg.Any<CancellationToken>())
             .Returns(new List<TenantSubscription>());
-        dbCache.GetTenantByIdAsync(1, Arg.Any<CancellationToken>())
+        ((ITenantRepository)dbCache).GetTenantByIdAsync(1, Arg.Any<CancellationToken>())
             .Returns(tenant);
         billingClient.GetSubscriptionStatusAsync("ext-1", Arg.Any<CancellationToken>())
             .Returns(new StripeSubscriptionStatus(false, "none", string.Empty, 0, null));
@@ -202,7 +203,7 @@ public sealed class StripeSyncServiceTests
     [Test]
     public async Task ReconcilePendingCancellations_StripeDoesNotReflectCancellation_RetriesCancelCall()
     {
-        (StripeSyncService service, IDatabaseCache dbCache, IBillingApiClient billingClient,
+        (StripeSyncService service, ISubscriptionRepository dbCache, IBillingApiClient billingClient,
             IBillingWebhookHandler _, ISubscriptionService _, ILogger<StripeSyncService> _) = CreateSut();
         TaskCompletionSource workDone = new();
 
@@ -213,7 +214,7 @@ public sealed class StripeSyncServiceTests
             .Returns(new List<TenantSubscription> { sub });
         dbCache.GetPaidSubscriptionsAsync(Arg.Any<CancellationToken>())
             .Returns(new List<TenantSubscription>());
-        dbCache.GetTenantByIdAsync(1, Arg.Any<CancellationToken>())
+        ((ITenantRepository)dbCache).GetTenantByIdAsync(1, Arg.Any<CancellationToken>())
             .Returns(tenant);
         billingClient.GetSubscriptionStatusAsync("ext-1", Arg.Any<CancellationToken>())
             .Returns(new StripeSubscriptionStatus(false, "active", "price_pro_123", 1, null));
@@ -237,7 +238,7 @@ public sealed class StripeSyncServiceTests
     [Test]
     public async Task ReconcilePendingCancellations_StripeAlreadyReflectsCancellation_NoCancelCallMade()
     {
-        (StripeSyncService service, IDatabaseCache dbCache, IBillingApiClient billingClient,
+        (StripeSyncService service, ISubscriptionRepository dbCache, IBillingApiClient billingClient,
             IBillingWebhookHandler webhookHandler, ISubscriptionService _, ILogger<StripeSyncService> _) = CreateSut();
         TaskCompletionSource workDone = new();
 
@@ -253,7 +254,7 @@ public sealed class StripeSyncServiceTests
 
                 return new List<TenantSubscription>();
             });
-        dbCache.GetTenantByIdAsync(1, Arg.Any<CancellationToken>())
+        ((ITenantRepository)dbCache).GetTenantByIdAsync(1, Arg.Any<CancellationToken>())
             .Returns(tenant);
         billingClient.GetSubscriptionStatusAsync("ext-1", Arg.Any<CancellationToken>())
             .Returns(new StripeSubscriptionStatus(true, "active", "price_pro_123", 1, null));
@@ -273,7 +274,7 @@ public sealed class StripeSyncServiceTests
     [Test]
     public async Task SyncPaidSubscriptions_MachineQuantityDiffers_UpdatesStripeQuantity()
     {
-        (StripeSyncService service, IDatabaseCache dbCache, IBillingApiClient billingClient,
+        (StripeSyncService service, ISubscriptionRepository dbCache, IBillingApiClient billingClient,
             IBillingWebhookHandler _, ISubscriptionService subscriptionService,
             ILogger<StripeSyncService> _) = CreateSut();
         TaskCompletionSource workDone = new();
@@ -286,7 +287,7 @@ public sealed class StripeSyncServiceTests
             .Returns(new List<TenantSubscription>());
         dbCache.GetPaidSubscriptionsAsync(Arg.Any<CancellationToken>())
             .Returns(new List<TenantSubscription> { sub });
-        dbCache.GetTenantByIdAsync(1, Arg.Any<CancellationToken>())
+        ((ITenantRepository)dbCache).GetTenantByIdAsync(1, Arg.Any<CancellationToken>())
             .Returns(tenant);
         subscriptionService.GetMachineCountForTenantAsync(1, Arg.Any<CancellationToken>())
             .Returns(5);
@@ -314,7 +315,7 @@ public sealed class StripeSyncServiceTests
     [Test]
     public async Task SyncPaidSubscriptions_MachineQuantityMatches_NoUpdateCall()
     {
-        (StripeSyncService service, IDatabaseCache dbCache, IBillingApiClient billingClient,
+        (StripeSyncService service, ISubscriptionRepository dbCache, IBillingApiClient billingClient,
             IBillingWebhookHandler _, ISubscriptionService subscriptionService,
             ILogger<StripeSyncService> _) = CreateSut();
         TaskCompletionSource workDone = new();
@@ -327,7 +328,7 @@ public sealed class StripeSyncServiceTests
             .Returns(new List<TenantSubscription>());
         dbCache.GetPaidSubscriptionsAsync(Arg.Any<CancellationToken>())
             .Returns(new List<TenantSubscription> { sub });
-        dbCache.GetTenantByIdAsync(1, Arg.Any<CancellationToken>())
+        ((ITenantRepository)dbCache).GetTenantByIdAsync(1, Arg.Any<CancellationToken>())
             .Returns(tenant);
         subscriptionService.GetMachineCountForTenantAsync(1, Arg.Any<CancellationToken>())
             .Returns(callInfo =>
@@ -355,7 +356,7 @@ public sealed class StripeSyncServiceTests
     [Test]
     public async Task SyncPaidSubscriptions_TierDriftDetected_CorrectsTierToMatchStripe()
     {
-        (StripeSyncService service, IDatabaseCache dbCache, IBillingApiClient billingClient,
+        (StripeSyncService service, ISubscriptionRepository dbCache, IBillingApiClient billingClient,
             IBillingWebhookHandler webhookHandler, ISubscriptionService subscriptionService,
             ILogger<StripeSyncService> _) = CreateSut();
         TaskCompletionSource workDone = new();
@@ -369,7 +370,7 @@ public sealed class StripeSyncServiceTests
             .Returns(new List<TenantSubscription>());
         dbCache.GetPaidSubscriptionsAsync(Arg.Any<CancellationToken>())
             .Returns(new List<TenantSubscription> { sub });
-        dbCache.GetTenantByIdAsync(1, Arg.Any<CancellationToken>())
+        ((ITenantRepository)dbCache).GetTenantByIdAsync(1, Arg.Any<CancellationToken>())
             .Returns(tenant);
         subscriptionService.GetMachineCountForTenantAsync(1, Arg.Any<CancellationToken>())
             .Returns(5);
@@ -398,7 +399,7 @@ public sealed class StripeSyncServiceTests
     [Test]
     public async Task SyncPaidSubscriptions_TierMatches_NoTierCorrection()
     {
-        (StripeSyncService service, IDatabaseCache dbCache, IBillingApiClient billingClient,
+        (StripeSyncService service, ISubscriptionRepository dbCache, IBillingApiClient billingClient,
             IBillingWebhookHandler webhookHandler, ISubscriptionService subscriptionService,
             ILogger<StripeSyncService> _) = CreateSut();
         TaskCompletionSource workDone = new();
@@ -411,7 +412,7 @@ public sealed class StripeSyncServiceTests
             .Returns(new List<TenantSubscription>());
         dbCache.GetPaidSubscriptionsAsync(Arg.Any<CancellationToken>())
             .Returns(new List<TenantSubscription> { sub });
-        dbCache.GetTenantByIdAsync(1, Arg.Any<CancellationToken>())
+        ((ITenantRepository)dbCache).GetTenantByIdAsync(1, Arg.Any<CancellationToken>())
             .Returns(tenant);
         subscriptionService.GetMachineCountForTenantAsync(1, Arg.Any<CancellationToken>())
             .Returns(callInfo =>
@@ -438,7 +439,7 @@ public sealed class StripeSyncServiceTests
     [Test]
     public async Task SyncPaidSubscriptions_UnknownPriceId_NoTierCorrection()
     {
-        (StripeSyncService service, IDatabaseCache dbCache, IBillingApiClient billingClient,
+        (StripeSyncService service, ISubscriptionRepository dbCache, IBillingApiClient billingClient,
             IBillingWebhookHandler webhookHandler, ISubscriptionService subscriptionService,
             ILogger<StripeSyncService> _) = CreateSut();
         TaskCompletionSource workDone = new();
@@ -451,7 +452,7 @@ public sealed class StripeSyncServiceTests
             .Returns(new List<TenantSubscription>());
         dbCache.GetPaidSubscriptionsAsync(Arg.Any<CancellationToken>())
             .Returns(new List<TenantSubscription> { sub });
-        dbCache.GetTenantByIdAsync(1, Arg.Any<CancellationToken>())
+        ((ITenantRepository)dbCache).GetTenantByIdAsync(1, Arg.Any<CancellationToken>())
             .Returns(tenant);
         subscriptionService.GetMachineCountForTenantAsync(1, Arg.Any<CancellationToken>())
             .Returns(callInfo =>
@@ -480,7 +481,7 @@ public sealed class StripeSyncServiceTests
     [Test]
     public async Task SyncPaidSubscriptions_StatusDrift_ActiveToPastDue_CorrectStatus()
     {
-        (StripeSyncService service, IDatabaseCache dbCache, IBillingApiClient billingClient,
+        (StripeSyncService service, ISubscriptionRepository dbCache, IBillingApiClient billingClient,
             IBillingWebhookHandler _, ISubscriptionService subscriptionService,
             ILogger<StripeSyncService> _) = CreateSut();
         TaskCompletionSource workDone = new();
@@ -495,7 +496,7 @@ public sealed class StripeSyncServiceTests
             .Returns(new List<TenantSubscription>());
         dbCache.GetPaidSubscriptionsAsync(Arg.Any<CancellationToken>())
             .Returns(new List<TenantSubscription> { sub });
-        dbCache.GetTenantByIdAsync(1, Arg.Any<CancellationToken>())
+        ((ITenantRepository)dbCache).GetTenantByIdAsync(1, Arg.Any<CancellationToken>())
             .Returns(tenant);
         subscriptionService.GetMachineCountForTenantAsync(1, Arg.Any<CancellationToken>())
             .Returns(5);
@@ -523,7 +524,7 @@ public sealed class StripeSyncServiceTests
     [Test]
     public async Task SyncPaidSubscriptions_StatusDrift_PastDueToActive_CorrectStatus()
     {
-        (StripeSyncService service, IDatabaseCache dbCache, IBillingApiClient billingClient,
+        (StripeSyncService service, ISubscriptionRepository dbCache, IBillingApiClient billingClient,
             IBillingWebhookHandler _, ISubscriptionService subscriptionService,
             ILogger<StripeSyncService> _) = CreateSut();
         TaskCompletionSource workDone = new();
@@ -538,7 +539,7 @@ public sealed class StripeSyncServiceTests
             .Returns(new List<TenantSubscription>());
         dbCache.GetPaidSubscriptionsAsync(Arg.Any<CancellationToken>())
             .Returns(new List<TenantSubscription> { sub });
-        dbCache.GetTenantByIdAsync(1, Arg.Any<CancellationToken>())
+        ((ITenantRepository)dbCache).GetTenantByIdAsync(1, Arg.Any<CancellationToken>())
             .Returns(tenant);
         subscriptionService.GetMachineCountForTenantAsync(1, Arg.Any<CancellationToken>())
             .Returns(5);
@@ -566,7 +567,7 @@ public sealed class StripeSyncServiceTests
     [Test]
     public async Task SyncPaidSubscriptions_StatusDrift_ActiveToCanceled_DeactivatesSubscription()
     {
-        (StripeSyncService service, IDatabaseCache dbCache, IBillingApiClient billingClient,
+        (StripeSyncService service, ISubscriptionRepository dbCache, IBillingApiClient billingClient,
             IBillingWebhookHandler _, ISubscriptionService subscriptionService,
             ILogger<StripeSyncService> _) = CreateSut();
         TaskCompletionSource workDone = new();
@@ -580,7 +581,7 @@ public sealed class StripeSyncServiceTests
             .Returns(new List<TenantSubscription>());
         dbCache.GetPaidSubscriptionsAsync(Arg.Any<CancellationToken>())
             .Returns(new List<TenantSubscription> { sub });
-        dbCache.GetTenantByIdAsync(1, Arg.Any<CancellationToken>())
+        ((ITenantRepository)dbCache).GetTenantByIdAsync(1, Arg.Any<CancellationToken>())
             .Returns(tenant);
         subscriptionService.GetMachineCountForTenantAsync(1, Arg.Any<CancellationToken>())
             .Returns(5);
@@ -608,7 +609,7 @@ public sealed class StripeSyncServiceTests
     [Test]
     public async Task SyncPaidSubscriptions_StatusMatches_NoStatusCorrection()
     {
-        (StripeSyncService service, IDatabaseCache dbCache, IBillingApiClient billingClient,
+        (StripeSyncService service, ISubscriptionRepository dbCache, IBillingApiClient billingClient,
             IBillingWebhookHandler _, ISubscriptionService subscriptionService,
             ILogger<StripeSyncService> _) = CreateSut();
         TaskCompletionSource workDone = new();
@@ -622,7 +623,7 @@ public sealed class StripeSyncServiceTests
             .Returns(new List<TenantSubscription>());
         dbCache.GetPaidSubscriptionsAsync(Arg.Any<CancellationToken>())
             .Returns(new List<TenantSubscription> { sub });
-        dbCache.GetTenantByIdAsync(1, Arg.Any<CancellationToken>())
+        ((ITenantRepository)dbCache).GetTenantByIdAsync(1, Arg.Any<CancellationToken>())
             .Returns(tenant);
         subscriptionService.GetMachineCountForTenantAsync(1, Arg.Any<CancellationToken>())
             .Returns(callInfo =>
@@ -652,7 +653,7 @@ public sealed class StripeSyncServiceTests
     [Test]
     public async Task SyncPaidSubscriptions_PeriodEndStale_UpdatesPeriodEnd()
     {
-        (StripeSyncService service, IDatabaseCache dbCache, IBillingApiClient billingClient,
+        (StripeSyncService service, ISubscriptionRepository dbCache, IBillingApiClient billingClient,
             IBillingWebhookHandler _, ISubscriptionService subscriptionService,
             ILogger<StripeSyncService> _) = CreateSut();
         TaskCompletionSource workDone = new();
@@ -668,7 +669,7 @@ public sealed class StripeSyncServiceTests
             .Returns(new List<TenantSubscription>());
         dbCache.GetPaidSubscriptionsAsync(Arg.Any<CancellationToken>())
             .Returns(new List<TenantSubscription> { sub });
-        dbCache.GetTenantByIdAsync(1, Arg.Any<CancellationToken>())
+        ((ITenantRepository)dbCache).GetTenantByIdAsync(1, Arg.Any<CancellationToken>())
             .Returns(tenant);
         subscriptionService.GetMachineCountForTenantAsync(1, Arg.Any<CancellationToken>())
             .Returns(5);
@@ -695,7 +696,7 @@ public sealed class StripeSyncServiceTests
     [Test]
     public async Task SyncPaidSubscriptions_PeriodEndNull_UpdatesPeriodEnd()
     {
-        (StripeSyncService service, IDatabaseCache dbCache, IBillingApiClient billingClient,
+        (StripeSyncService service, ISubscriptionRepository dbCache, IBillingApiClient billingClient,
             IBillingWebhookHandler _, ISubscriptionService subscriptionService,
             ILogger<StripeSyncService> _) = CreateSut();
         TaskCompletionSource workDone = new();
@@ -711,7 +712,7 @@ public sealed class StripeSyncServiceTests
             .Returns(new List<TenantSubscription>());
         dbCache.GetPaidSubscriptionsAsync(Arg.Any<CancellationToken>())
             .Returns(new List<TenantSubscription> { sub });
-        dbCache.GetTenantByIdAsync(1, Arg.Any<CancellationToken>())
+        ((ITenantRepository)dbCache).GetTenantByIdAsync(1, Arg.Any<CancellationToken>())
             .Returns(tenant);
         subscriptionService.GetMachineCountForTenantAsync(1, Arg.Any<CancellationToken>())
             .Returns(5);
@@ -738,7 +739,7 @@ public sealed class StripeSyncServiceTests
     [Test]
     public async Task SyncPaidSubscriptions_PeriodEndCurrent_NoUpdate()
     {
-        (StripeSyncService service, IDatabaseCache dbCache, IBillingApiClient billingClient,
+        (StripeSyncService service, ISubscriptionRepository dbCache, IBillingApiClient billingClient,
             IBillingWebhookHandler _, ISubscriptionService subscriptionService,
             ILogger<StripeSyncService> _) = CreateSut();
         TaskCompletionSource workDone = new();
@@ -753,7 +754,7 @@ public sealed class StripeSyncServiceTests
             .Returns(new List<TenantSubscription>());
         dbCache.GetPaidSubscriptionsAsync(Arg.Any<CancellationToken>())
             .Returns(new List<TenantSubscription> { sub });
-        dbCache.GetTenantByIdAsync(1, Arg.Any<CancellationToken>())
+        ((ITenantRepository)dbCache).GetTenantByIdAsync(1, Arg.Any<CancellationToken>())
             .Returns(tenant);
         subscriptionService.GetMachineCountForTenantAsync(1, Arg.Any<CancellationToken>())
             .Returns(callInfo =>
@@ -779,7 +780,7 @@ public sealed class StripeSyncServiceTests
     [Test]
     public async Task SyncPaidSubscriptions_LocalActive_StripePastDue_UpdatesToPastDue()
     {
-        (StripeSyncService service, IDatabaseCache dbCache, IBillingApiClient billingClient,
+        (StripeSyncService service, ISubscriptionRepository dbCache, IBillingApiClient billingClient,
             IBillingWebhookHandler _, ISubscriptionService subscriptionService,
             ILogger<StripeSyncService> _) = CreateSut();
         TaskCompletionSource workDone = new();
@@ -794,7 +795,7 @@ public sealed class StripeSyncServiceTests
             .Returns(new List<TenantSubscription>());
         dbCache.GetPaidSubscriptionsAsync(Arg.Any<CancellationToken>())
             .Returns(new List<TenantSubscription> { sub });
-        dbCache.GetTenantByIdAsync(1, Arg.Any<CancellationToken>())
+        ((ITenantRepository)dbCache).GetTenantByIdAsync(1, Arg.Any<CancellationToken>())
             .Returns(tenant);
         subscriptionService.GetMachineCountForTenantAsync(1, Arg.Any<CancellationToken>())
             .Returns(3);
@@ -824,7 +825,7 @@ public sealed class StripeSyncServiceTests
     [Test]
     public async Task SyncPaidSubscriptions_LocalActive_StripeCanceled_ProcessesCancellation()
     {
-        (StripeSyncService service, IDatabaseCache dbCache, IBillingApiClient billingClient,
+        (StripeSyncService service, ISubscriptionRepository dbCache, IBillingApiClient billingClient,
             IBillingWebhookHandler _, ISubscriptionService subscriptionService,
             ILogger<StripeSyncService> _) = CreateSut();
         TaskCompletionSource workDone = new();
@@ -839,7 +840,7 @@ public sealed class StripeSyncServiceTests
             .Returns(new List<TenantSubscription>());
         dbCache.GetPaidSubscriptionsAsync(Arg.Any<CancellationToken>())
             .Returns(new List<TenantSubscription> { sub });
-        dbCache.GetTenantByIdAsync(1, Arg.Any<CancellationToken>())
+        ((ITenantRepository)dbCache).GetTenantByIdAsync(1, Arg.Any<CancellationToken>())
             .Returns(tenant);
         subscriptionService.GetMachineCountForTenantAsync(1, Arg.Any<CancellationToken>())
             .Returns(2);
@@ -869,7 +870,7 @@ public sealed class StripeSyncServiceTests
     [Test]
     public async Task SyncPaidSubscriptions_LocalPastDue_StripeActive_UpdatesToActive()
     {
-        (StripeSyncService service, IDatabaseCache dbCache, IBillingApiClient billingClient,
+        (StripeSyncService service, ISubscriptionRepository dbCache, IBillingApiClient billingClient,
             IBillingWebhookHandler _, ISubscriptionService subscriptionService,
             ILogger<StripeSyncService> _) = CreateSut();
         TaskCompletionSource workDone = new();
@@ -884,7 +885,7 @@ public sealed class StripeSyncServiceTests
             .Returns(new List<TenantSubscription>());
         dbCache.GetPaidSubscriptionsAsync(Arg.Any<CancellationToken>())
             .Returns(new List<TenantSubscription> { sub });
-        dbCache.GetTenantByIdAsync(1, Arg.Any<CancellationToken>())
+        ((ITenantRepository)dbCache).GetTenantByIdAsync(1, Arg.Any<CancellationToken>())
             .Returns(tenant);
         subscriptionService.GetMachineCountForTenantAsync(1, Arg.Any<CancellationToken>())
             .Returns(4);
@@ -916,7 +917,7 @@ public sealed class StripeSyncServiceTests
     [Test]
     public async Task SyncPaidSubscriptions_ErrorForOneTenant_ContinuesWithNext()
     {
-        (StripeSyncService service, IDatabaseCache dbCache, IBillingApiClient billingClient,
+        (StripeSyncService service, ISubscriptionRepository dbCache, IBillingApiClient billingClient,
             IBillingWebhookHandler _, ISubscriptionService subscriptionService,
             ILogger<StripeSyncService> logger) = CreateSut();
         TaskCompletionSource workDone = new();
@@ -932,9 +933,9 @@ public sealed class StripeSyncServiceTests
             .Returns(new List<TenantSubscription>());
         dbCache.GetPaidSubscriptionsAsync(Arg.Any<CancellationToken>())
             .Returns(new List<TenantSubscription> { sub1, sub2 });
-        dbCache.GetTenantByIdAsync(1, Arg.Any<CancellationToken>())
+        ((ITenantRepository)dbCache).GetTenantByIdAsync(1, Arg.Any<CancellationToken>())
             .Returns(tenant1);
-        dbCache.GetTenantByIdAsync(2, Arg.Any<CancellationToken>())
+        ((ITenantRepository)dbCache).GetTenantByIdAsync(2, Arg.Any<CancellationToken>())
             .Returns(tenant2);
 
         // First tenant throws
@@ -974,7 +975,7 @@ public sealed class StripeSyncServiceTests
     [Test]
     public async Task SyncPaidSubscriptions_TenantNotFound_LogsWarningAndSkips()
     {
-        (StripeSyncService service, IDatabaseCache dbCache, IBillingApiClient billingClient,
+        (StripeSyncService service, ISubscriptionRepository dbCache, IBillingApiClient billingClient,
             IBillingWebhookHandler _, ISubscriptionService _,
             ILogger<StripeSyncService> logger) = CreateSut();
         TaskCompletionSource workDone = new();
@@ -985,7 +986,7 @@ public sealed class StripeSyncServiceTests
             .Returns(new List<TenantSubscription>());
         dbCache.GetPaidSubscriptionsAsync(Arg.Any<CancellationToken>())
             .Returns(new List<TenantSubscription> { sub });
-        dbCache.GetTenantByIdAsync(1, Arg.Any<CancellationToken>())
+        ((ITenantRepository)dbCache).GetTenantByIdAsync(1, Arg.Any<CancellationToken>())
             .Returns(callInfo =>
             {
                 workDone.TrySetResult();
@@ -1011,7 +1012,7 @@ public sealed class StripeSyncServiceTests
     [Test]
     public async Task SyncPaidSubscriptions_StripeStatusNone_SkipsAllSyncOperations()
     {
-        (StripeSyncService service, IDatabaseCache dbCache, IBillingApiClient billingClient,
+        (StripeSyncService service, ISubscriptionRepository dbCache, IBillingApiClient billingClient,
             IBillingWebhookHandler _, ISubscriptionService subscriptionService,
             ILogger<StripeSyncService> _) = CreateSut();
         TaskCompletionSource workDone = new();
@@ -1023,7 +1024,7 @@ public sealed class StripeSyncServiceTests
             .Returns(new List<TenantSubscription>());
         dbCache.GetPaidSubscriptionsAsync(Arg.Any<CancellationToken>())
             .Returns(new List<TenantSubscription> { sub });
-        dbCache.GetTenantByIdAsync(1, Arg.Any<CancellationToken>())
+        ((ITenantRepository)dbCache).GetTenantByIdAsync(1, Arg.Any<CancellationToken>())
             .Returns(tenant);
         billingClient.GetSubscriptionStatusAsync("ext-1", Arg.Any<CancellationToken>())
             .Returns(callInfo =>
@@ -1047,7 +1048,7 @@ public sealed class StripeSyncServiceTests
     [Test]
     public async Task ExecuteAsync_TopLevelError_LogsAndContinues()
     {
-        (StripeSyncService service, IDatabaseCache dbCache, IBillingApiClient _,
+        (StripeSyncService service, ISubscriptionRepository dbCache, IBillingApiClient _,
             IBillingWebhookHandler _, ISubscriptionService _,
             ILogger<StripeSyncService> logger) = CreateSut();
         TaskCompletionSource workDone = new();
@@ -1074,7 +1075,7 @@ public sealed class StripeSyncServiceTests
     [Test]
     public async Task SyncPaidSubscriptions_NoPaidSubscriptions_NoSyncOperations()
     {
-        (StripeSyncService service, IDatabaseCache dbCache, IBillingApiClient billingClient,
+        (StripeSyncService service, ISubscriptionRepository dbCache, IBillingApiClient billingClient,
             IBillingWebhookHandler _, ISubscriptionService _,
             ILogger<StripeSyncService> _) = CreateSut();
         TaskCompletionSource workDone = new();
@@ -1101,7 +1102,7 @@ public sealed class StripeSyncServiceTests
     [Test]
     public async Task SyncPaidSubscriptions_QuantityUpdateFails_LogsWarning()
     {
-        (StripeSyncService service, IDatabaseCache dbCache, IBillingApiClient billingClient,
+        (StripeSyncService service, ISubscriptionRepository dbCache, IBillingApiClient billingClient,
             IBillingWebhookHandler _, ISubscriptionService subscriptionService,
             ILogger<StripeSyncService> logger) = CreateSut();
         TaskCompletionSource workDone = new();
@@ -1114,7 +1115,7 @@ public sealed class StripeSyncServiceTests
             .Returns(new List<TenantSubscription>());
         dbCache.GetPaidSubscriptionsAsync(Arg.Any<CancellationToken>())
             .Returns(new List<TenantSubscription> { sub });
-        dbCache.GetTenantByIdAsync(1, Arg.Any<CancellationToken>())
+        ((ITenantRepository)dbCache).GetTenantByIdAsync(1, Arg.Any<CancellationToken>())
             .Returns(tenant);
         subscriptionService.GetMachineCountForTenantAsync(1, Arg.Any<CancellationToken>())
             .Returns(10);

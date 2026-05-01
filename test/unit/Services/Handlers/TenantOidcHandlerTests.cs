@@ -4,6 +4,7 @@
 
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
+using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Server.Endpoints.Web.Tenants;
 using Framlux.FleetManagement.Server.Services.Billing;
 using Framlux.FleetManagement.Server.Services.Handlers;
@@ -12,6 +13,7 @@ using Framlux.FleetManagement.Server.Services.Security;
 using Framlux.FleetManagement.Test.Infrastructure;
 using LinqToDB.Async;
 using LinqToDB;
+using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
 
 namespace Framlux.FleetManagement.Test.Services.Handlers;
@@ -29,7 +31,7 @@ public class TenantOidcHandlerTests
         subscriptionService ??= Substitute.For<ISubscriptionService>();
         secretProtector ??= Substitute.For<IOidcSecretProtector>();
 
-        return new TenantOidcHandler(dbFactory.Context, subscriptionService, secretProtector);
+        return new TenantOidcHandler(CreateRepo(dbFactory), subscriptionService, secretProtector);
     }
 
     private static ISubscriptionService CreateTeamSubscription(int tenantId)
@@ -278,5 +280,12 @@ public class TenantOidcHandlerTests
             .FirstOrDefaultAsync(c => c.TenantId == 1);
         await Assert.That(config).IsNotNull();
         await Assert.That(config!.ClientSecret).IsEqualTo("original-encrypted");
+    }
+
+    // ========== Helper methods ==========
+
+    private static DatabaseRepository CreateRepo(TestDatabaseFactory dbFactory)
+    {
+        return new DatabaseRepository(dbFactory.Context, new NullLogger<DatabaseRepository>());
     }
 }

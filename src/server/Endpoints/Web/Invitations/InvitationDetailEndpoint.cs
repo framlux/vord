@@ -3,7 +3,7 @@
 // See LICENSE for details.
 
 using FastEndpoints;
-using Framlux.FleetManagement.Database.Cache;
+using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 
@@ -45,14 +45,14 @@ public sealed class InvitationDetailDto
 /// </summary>
 public sealed class InvitationDetailEndpoint : EndpointWithoutRequest<ApiResponse<InvitationDetailDto>>
 {
-    private readonly IDatabaseCache _databaseCache;
+    private readonly IInvitationRepository _invitationRepository;
 
     /// <summary>
     /// Creates a new instance of the <see cref="InvitationDetailEndpoint"/> class.
     /// </summary>
-    public InvitationDetailEndpoint(IDatabaseCache databaseCache)
+    public InvitationDetailEndpoint(IInvitationRepository invitationRepository)
     {
-        _databaseCache = databaseCache;
+        _invitationRepository = invitationRepository;
     }
 
     /// <inheritdoc/>
@@ -67,7 +67,7 @@ public sealed class InvitationDetailEndpoint : EndpointWithoutRequest<ApiRespons
     {
         string token = Route<string>("token") ?? string.Empty;
 
-        TenantInvitation? invitation = await _databaseCache.GetInvitationByTokenAsync(token, ct);
+        TenantInvitation? invitation = await _invitationRepository.GetInvitationByTokenAsync(token, ct);
         if (invitation is null)
         {
             await Send.NotFoundAsync(ct);

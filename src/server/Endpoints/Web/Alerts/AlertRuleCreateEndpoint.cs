@@ -3,12 +3,12 @@
 // See LICENSE for details.
 
 using FastEndpoints;
-using Framlux.FleetManagement.Database;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
+using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Server.Auth;
 using Framlux.FleetManagement.Server.Services.Billing;
-using LinqToDB;
+using Framlux.FleetManagement.Server.Services.Infrastructure;
 
 namespace Framlux.FleetManagement.Server.Endpoints.Web.Alerts;
 
@@ -18,16 +18,18 @@ namespace Framlux.FleetManagement.Server.Endpoints.Web.Alerts;
 /// </summary>
 public sealed class AlertRuleCreateEndpoint : Endpoint<CreateAlertRuleRequest, ApiResponse<AlertRuleDto>>
 {
-    private readonly DatabaseContext _db;
+    private readonly IAlertRuleRepository _alertRuleRepo;
     private readonly ISubscriptionService _subscriptionService;
+    private readonly IAuditLogRepository _auditLog;
 
     /// <summary>
     /// Creates a new instance of the <see cref="AlertRuleCreateEndpoint"/> class.
     /// </summary>
-    public AlertRuleCreateEndpoint(DatabaseContext db, ISubscriptionService subscriptionService)
+    public AlertRuleCreateEndpoint(IAlertRuleRepository alertRuleRepo, ISubscriptionService subscriptionService, IAuditLogRepository auditLog)
     {
-        _db = db;
+        _alertRuleRepo = alertRuleRepo;
         _subscriptionService = subscriptionService;
+        _auditLog = auditLog;
     }
 
     /// <inheritdoc/>
@@ -68,7 +70,7 @@ public sealed class AlertRuleCreateEndpoint : Endpoint<CreateAlertRuleRequest, A
             return;
         }
 
-        bool canCreate = await _subscriptionService.CanCreateAlertRuleAsync(tenantId.Value, _db, ct);
+        bool canCreate = await _subscriptionService.CanCreateAlertRuleAsync(tenantId.Value, ct);
         if (canCreate == false)
         {
             HttpContext.Response.StatusCode = 403;
@@ -198,7 +200,12 @@ public sealed class AlertRuleCreateEndpoint : Endpoint<CreateAlertRuleRequest, A
             UpdatedAt = now,
         };
 
-        rule.Id = await _db.InsertWithInt32IdentityAsync(rule, token: ct);
+        rule = await _alertRuleRepo.CreateAlertRuleAsync(rule, ct);
+
+        await _auditLog.InsertAuditLogAsync(AuditHelper.Create(
+            tenantId.Value, userId.Value, null,
+            AuditAction.AlertRuleCreated, AuditResourceType.AlertRule,
+            rule.Id.ToString(), rule.Name, null), ct);
 
         AlertRuleDto dto = new()
         {

@@ -2,9 +2,9 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
-using Framlux.FleetManagement.Database.Cache;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
+using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Server.Services.Commands;
 using Framlux.FleetManagement.Server.Services.Infrastructure;
 using Framlux.FleetManagement.Server.Services.Machines;
@@ -20,18 +20,26 @@ namespace Framlux.FleetManagement.Test.Services;
 /// </summary>
 public sealed class RemoteCommandServiceTests
 {
-    private readonly IDatabaseCache _cache;
+    private readonly IDatabaseTransactionProvider _transactionProvider;
+    private readonly IAuditLogRepository _auditLog;
+    private readonly IMachineRepository _machineRepository;
+    private readonly ISigningKeyRepository _signingKeyRepository;
+    private readonly IRemoteCommandRepository _remoteCommandRepository;
     private readonly InMemoryMachinePingService _pingService = new();
     private readonly ILogger<RemoteCommandService> _logger = Substitute.For<ILogger<RemoteCommandService>>();
 
     public RemoteCommandServiceTests()
     {
-        _cache = Substitute.For<IDatabaseCache>();
+        _transactionProvider = Substitute.For<IDatabaseTransactionProvider>();
+        _auditLog = Substitute.For<IAuditLogRepository>();
+        _machineRepository = Substitute.For<IMachineRepository>();
+        _signingKeyRepository = Substitute.For<ISigningKeyRepository>();
+        _remoteCommandRepository = Substitute.For<IRemoteCommandRepository>();
         IDatabaseTransaction mockTransaction = Substitute.For<IDatabaseTransaction>();
-        _cache.BeginTransactionAsync(Arg.Any<CancellationToken>()).Returns(mockTransaction);
+        _transactionProvider.BeginTransactionAsync(Arg.Any<CancellationToken>()).Returns(mockTransaction);
     }
 
-    private RemoteCommandService CreateService() => new(_cache, _pingService, _logger);
+    private RemoteCommandService CreateService() => new(_transactionProvider, _auditLog, _machineRepository, _signingKeyRepository, _remoteCommandRepository, _pingService, _logger);
 
     private static (UserSigningKey key, NSec.Cryptography.Key privateKey) BuildSignedKey(int id = 1, int userId = 1, int tenantId = 1)
     {
@@ -104,8 +112,8 @@ public sealed class RemoteCommandServiceTests
 
     private void SetupValidCommandMocks(UserSigningKey key, long machineId = 1)
     {
-        _cache.GetSigningKeyByIdAsync(key.Id, Arg.Any<CancellationToken>()).Returns(key);
-        _cache.GetMachineAsync(Arg.Any<long>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+        _signingKeyRepository.GetSigningKeyByIdAsync(key.Id, Arg.Any<CancellationToken>()).Returns(key);
+        _machineRepository.GetMachineAsync(Arg.Any<long>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
             .Returns(new Machine
             {
                 Id = machineId,
@@ -120,13 +128,13 @@ public sealed class RemoteCommandServiceTests
                 RegisteredOn = DateTimeOffset.UtcNow,
                 IsDeleted = false,
             });
-        _cache.IsKeyAuthorizedForMachineAsync(Arg.Any<int>(), Arg.Any<long>(), Arg.Any<CancellationToken>())
+        _signingKeyRepository.IsKeyAuthorizedForMachineAsync(Arg.Any<int>(), Arg.Any<long>(), Arg.Any<CancellationToken>())
             .Returns(true);
-        _cache.GetRemoteCommandByCommandIdAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+        _remoteCommandRepository.GetRemoteCommandByCommandIdAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns((RemoteCommand?)null);
-        _cache.IsNonceUsedAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+        _remoteCommandRepository.IsNonceUsedAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns(false);
-        _cache.CreateRemoteCommandAsync(Arg.Any<RemoteCommand>(), Arg.Any<CancellationToken>())
+        _remoteCommandRepository.CreateRemoteCommandAsync(Arg.Any<RemoteCommand>(), Arg.Any<CancellationToken>())
             .Returns(callInfo =>
             {
                 RemoteCommand c = callInfo.Arg<RemoteCommand>();
@@ -134,7 +142,7 @@ public sealed class RemoteCommandServiceTests
 
                 return c;
             });
-        _cache.InsertAuditLogAsync(Arg.Any<AuditLogEntry>(), Arg.Any<CancellationToken>())
+        _auditLog.InsertAuditLogAsync(Arg.Any<AuditLogEntry>(), Arg.Any<CancellationToken>())
             .Returns(Task.CompletedTask);
 
         // Enable remote commands capability (bit 0) for the machine.
@@ -148,7 +156,7 @@ public sealed class RemoteCommandServiceTests
     {
         UserSigningKey revokedKey = BuildActiveKey();
         revokedKey.RevokedAt = DateTimeOffset.UtcNow.AddHours(-1);
-        _cache.GetSigningKeyByIdAsync(1, Arg.Any<CancellationToken>()).Returns(revokedKey);
+        _signingKeyRepository.GetSigningKeyByIdAsync(1, Arg.Any<CancellationToken>()).Returns(revokedKey);
 
         RemoteCommand command = TestDataBuilder.BuildRemoteCommand(signingKeyId: 1);
         RemoteCommandService service = CreateService();
@@ -164,7 +172,7 @@ public sealed class RemoteCommandServiceTests
     public async Task SubmitCommand_KeyBelongsToOtherUser_ReturnsForbidden()
     {
         UserSigningKey otherUsersKey = BuildActiveKey(userId: 99);
-        _cache.GetSigningKeyByIdAsync(1, Arg.Any<CancellationToken>()).Returns(otherUsersKey);
+        _signingKeyRepository.GetSigningKeyByIdAsync(1, Arg.Any<CancellationToken>()).Returns(otherUsersKey);
 
         RemoteCommand command = TestDataBuilder.BuildRemoteCommand(userId: 42, signingKeyId: 1);
         RemoteCommandService service = CreateService();
@@ -180,7 +188,7 @@ public sealed class RemoteCommandServiceTests
     public async Task SubmitCommand_KeyFromDifferentTenant_Rejects()
     {
         UserSigningKey wrongTenantKey = BuildActiveKey(tenantId: 999);
-        _cache.GetSigningKeyByIdAsync(1, Arg.Any<CancellationToken>()).Returns(wrongTenantKey);
+        _signingKeyRepository.GetSigningKeyByIdAsync(1, Arg.Any<CancellationToken>()).Returns(wrongTenantKey);
 
         RemoteCommand command = TestDataBuilder.BuildRemoteCommand(tenantId: 1, signingKeyId: 1);
         RemoteCommandService service = CreateService();
@@ -209,7 +217,7 @@ public sealed class RemoteCommandServiceTests
     public async Task SubmitCommand_InvalidSignature_Returns400()
     {
         (UserSigningKey key, NSec.Cryptography.Key _) = BuildSignedKey();
-        _cache.GetSigningKeyByIdAsync(1, Arg.Any<CancellationToken>()).Returns(key);
+        _signingKeyRepository.GetSigningKeyByIdAsync(1, Arg.Any<CancellationToken>()).Returns(key);
 
         // Use a command with an invalid signature (all zeroes).
         RemoteCommand command = TestDataBuilder.BuildRemoteCommand(signingKeyId: 1);
@@ -242,8 +250,8 @@ public sealed class RemoteCommandServiceTests
     public async Task SubmitCommand_MachineInDifferentTenant_Returns400()
     {
         (UserSigningKey key, NSec.Cryptography.Key privateKey) = BuildSignedKey();
-        _cache.GetSigningKeyByIdAsync(1, Arg.Any<CancellationToken>()).Returns(key);
-        _cache.GetMachineAsync(Arg.Any<long>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+        _signingKeyRepository.GetSigningKeyByIdAsync(1, Arg.Any<CancellationToken>()).Returns(key);
+        _machineRepository.GetMachineAsync(Arg.Any<long>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
             .Returns((Machine?)null);
 
         RemoteCommand command = BuildSignedCommand(privateKey);
@@ -263,7 +271,7 @@ public sealed class RemoteCommandServiceTests
         SetupValidCommandMocks(key);
 
         string duplicateId = Guid.NewGuid().ToString("D");
-        _cache.GetRemoteCommandByCommandIdAsync(duplicateId, Arg.Any<CancellationToken>())
+        _remoteCommandRepository.GetRemoteCommandByCommandIdAsync(duplicateId, Arg.Any<CancellationToken>())
             .Returns(TestDataBuilder.BuildRemoteCommand(commandId: duplicateId));
 
         RemoteCommand command = BuildSignedCommand(privateKey, commandId: duplicateId);
@@ -281,7 +289,7 @@ public sealed class RemoteCommandServiceTests
     {
         (UserSigningKey key, NSec.Cryptography.Key privateKey) = BuildSignedKey();
         SetupValidCommandMocks(key);
-        _cache.IsNonceUsedAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+        _remoteCommandRepository.IsNonceUsedAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns(true);
 
         RemoteCommand command = BuildSignedCommand(privateKey);
@@ -297,7 +305,7 @@ public sealed class RemoteCommandServiceTests
     [Test]
     public async Task SubmitCommand_NonExistentSigningKey_Rejects()
     {
-        _cache.GetSigningKeyByIdAsync(999, Arg.Any<CancellationToken>())
+        _signingKeyRepository.GetSigningKeyByIdAsync(999, Arg.Any<CancellationToken>())
             .Returns((UserSigningKey?)null);
 
         RemoteCommand command = TestDataBuilder.BuildRemoteCommand(signingKeyId: 999);
@@ -339,7 +347,7 @@ public sealed class RemoteCommandServiceTests
 
         await service.SubmitCommandAsync(command, CancellationToken.None);
 
-        await _cache.Received(1).InsertAuditLogAsync(
+        await _auditLog.Received(1).InsertAuditLogAsync(
             Arg.Is<AuditLogEntry>(a =>
                 a.Action == AuditAction.RemoteCommandSent &&
                 a.ResourceType == AuditResourceType.RemoteCommand &&
@@ -354,7 +362,7 @@ public sealed class RemoteCommandServiceTests
     [Test]
     public async Task GetCommandDetail_WrongTenant_ReturnsNotFound()
     {
-        _cache.GetRemoteCommandByIdAsync(1, 999, Arg.Any<CancellationToken>())
+        _remoteCommandRepository.GetRemoteCommandByIdAsync(1, 999, Arg.Any<CancellationToken>())
             .Returns((RemoteCommand?)null);
 
         RemoteCommandService service = CreateService();
@@ -368,7 +376,7 @@ public sealed class RemoteCommandServiceTests
     {
         RemoteCommand cmd = TestDataBuilder.BuildRemoteCommand(tenantId: 1);
         cmd.Id = 42;
-        _cache.GetRemoteCommandByIdAsync(42, 1, Arg.Any<CancellationToken>()).Returns(cmd);
+        _remoteCommandRepository.GetRemoteCommandByIdAsync(42, 1, Arg.Any<CancellationToken>()).Returns(cmd);
 
         RemoteCommandService service = CreateService();
         ServiceResult<RemoteCommand> result = await service.GetCommandDetailAsync(42, 1, CancellationToken.None);
@@ -383,8 +391,8 @@ public sealed class RemoteCommandServiceTests
     public async Task SubmitCommand_CommandsCapabilityNotSet_Returns400()
     {
         (UserSigningKey key, NSec.Cryptography.Key privateKey) = BuildSignedKey();
-        _cache.GetSigningKeyByIdAsync(key.Id, Arg.Any<CancellationToken>()).Returns(key);
-        _cache.GetMachineAsync(Arg.Any<long>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+        _signingKeyRepository.GetSigningKeyByIdAsync(key.Id, Arg.Any<CancellationToken>()).Returns(key);
+        _machineRepository.GetMachineAsync(Arg.Any<long>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
             .Returns(new Machine
             {
                 Id = 1,
@@ -400,7 +408,7 @@ public sealed class RemoteCommandServiceTests
                 IsDeleted = false,
             });
 
-        _cache.IsKeyAuthorizedForMachineAsync(Arg.Any<int>(), Arg.Any<long>(), Arg.Any<CancellationToken>())
+        _signingKeyRepository.IsKeyAuthorizedForMachineAsync(Arg.Any<int>(), Arg.Any<long>(), Arg.Any<CancellationToken>())
             .Returns(true);
 
         // No capabilities set — machine has never reported or commands are disabled.

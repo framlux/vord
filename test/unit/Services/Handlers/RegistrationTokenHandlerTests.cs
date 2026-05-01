@@ -3,6 +3,7 @@
 // See LICENSE for details.
 
 using Framlux.FleetManagement.Database.Models;
+using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Server.Endpoints.Web.Machines;
 using Framlux.FleetManagement.Server.Endpoints.Web;
 using Framlux.FleetManagement.Server.Services.Handlers;
@@ -10,6 +11,7 @@ using Framlux.FleetManagement.Server.Services.Infrastructure;
 using Framlux.FleetManagement.Test.Infrastructure;
 using LinqToDB.Async;
 using LinqToDB;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Framlux.FleetManagement.Test.Services.Handlers;
 
@@ -18,13 +20,20 @@ namespace Framlux.FleetManagement.Test.Services.Handlers;
 /// </summary>
 public class RegistrationTokenHandlerTests
 {
+    private static RegistrationTokenHandler CreateHandler(TestDatabaseFactory dbFactory)
+    {
+        DatabaseRepository repo = new(dbFactory.Context, new NullLogger<DatabaseRepository>());
+
+        return new RegistrationTokenHandler(repo, repo, repo);
+    }
+
     // ========== CreateAsync null name tests ==========
 
     [Test]
     public async Task CreateAsync_NullName_Returns400()
     {
         using TestDatabaseFactory dbFactory = new();
-        RegistrationTokenHandler handler = new(dbFactory.Context);
+        RegistrationTokenHandler handler = CreateHandler(dbFactory);
 
         ServiceResult<RegistrationTokenDto> result = await handler.CreateAsync(1, 1, null!, CancellationToken.None);
 
@@ -37,7 +46,7 @@ public class RegistrationTokenHandlerTests
     public async Task CreateAsync_EmptyName_Returns400()
     {
         using TestDatabaseFactory dbFactory = new();
-        RegistrationTokenHandler handler = new(dbFactory.Context);
+        RegistrationTokenHandler handler = CreateHandler(dbFactory);
 
         ServiceResult<RegistrationTokenDto> result = await handler.CreateAsync(1, 1, "", CancellationToken.None);
 
@@ -48,7 +57,7 @@ public class RegistrationTokenHandlerTests
     public async Task CreateAsync_ValidRequest_ReturnsTokenWithPlaintext()
     {
         using TestDatabaseFactory dbFactory = new();
-        RegistrationTokenHandler handler = new(dbFactory.Context);
+        RegistrationTokenHandler handler = CreateHandler(dbFactory);
 
         ServiceResult<RegistrationTokenDto> result = await handler.CreateAsync(1, 1, "My Token", CancellationToken.None);
 
@@ -63,7 +72,7 @@ public class RegistrationTokenHandlerTests
     public async Task CreateAsync_ValidRequest_InsertsTokenInDatabase()
     {
         using TestDatabaseFactory dbFactory = new();
-        RegistrationTokenHandler handler = new(dbFactory.Context);
+        RegistrationTokenHandler handler = CreateHandler(dbFactory);
 
         await handler.CreateAsync(1, 1, "DB Token", CancellationToken.None);
 
@@ -77,7 +86,7 @@ public class RegistrationTokenHandlerTests
     public async Task CreateAsync_ValidRequest_TokenHashDiffersFromPlaintext()
     {
         using TestDatabaseFactory dbFactory = new();
-        RegistrationTokenHandler handler = new(dbFactory.Context);
+        RegistrationTokenHandler handler = CreateHandler(dbFactory);
 
         ServiceResult<RegistrationTokenDto> result = await handler.CreateAsync(1, 1, "Hash Token", CancellationToken.None);
 
@@ -86,13 +95,26 @@ public class RegistrationTokenHandlerTests
         await Assert.That(dbToken!.TokenHash).IsNotEqualTo(result.Data!.Token);
     }
 
+    [Test]
+    public async Task CreateAsync_ValidRequest_InsertsAuditLogEntry()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        RegistrationTokenHandler handler = CreateHandler(dbFactory);
+
+        await handler.CreateAsync(1, 1, "Audit Token", CancellationToken.None);
+
+        List<AuditLogEntry> auditEntries = await dbFactory.Context.AuditLog.ToListAsync();
+        await Assert.That(auditEntries.Count).IsEqualTo(1);
+        await Assert.That(auditEntries[0].TenantId).IsEqualTo(1);
+    }
+
     // ========== RevokeAsync tests ==========
 
     [Test]
     public async Task RevokeAsync_TokenNotFound_ReturnsNotFound()
     {
         using TestDatabaseFactory dbFactory = new();
-        RegistrationTokenHandler handler = new(dbFactory.Context);
+        RegistrationTokenHandler handler = CreateHandler(dbFactory);
 
         ServiceResult<object> result = await handler.RevokeAsync(999, 1, 1, CancellationToken.None);
 
@@ -114,7 +136,7 @@ public class RegistrationTokenHandlerTests
         };
         token.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(token);
 
-        RegistrationTokenHandler handler = new(dbFactory.Context);
+        RegistrationTokenHandler handler = CreateHandler(dbFactory);
 
         ServiceResult<object> result = await handler.RevokeAsync(token.Id, 1, 1, CancellationToken.None);
 
@@ -137,7 +159,7 @@ public class RegistrationTokenHandlerTests
         };
         token.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(token);
 
-        RegistrationTokenHandler handler = new(dbFactory.Context);
+        RegistrationTokenHandler handler = CreateHandler(dbFactory);
 
         ServiceResult<object> result = await handler.RevokeAsync(token.Id, 1, 1, CancellationToken.None);
 
@@ -159,7 +181,7 @@ public class RegistrationTokenHandlerTests
         };
         token.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(token);
 
-        RegistrationTokenHandler handler = new(dbFactory.Context);
+        RegistrationTokenHandler handler = CreateHandler(dbFactory);
 
         ServiceResult<object> result = await handler.RevokeAsync(token.Id, 1, 1, CancellationToken.None);
 
@@ -170,13 +192,36 @@ public class RegistrationTokenHandlerTests
         await Assert.That(revoked.RevokedAt.HasValue).IsTrue();
     }
 
+    [Test]
+    public async Task RevokeAsync_ValidToken_InsertsAuditLogEntry()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        RegistrationToken token = new()
+        {
+            TenantId = 1,
+            TokenHash = "hash-audit-revoke",
+            Name = "Audit Revoke Token",
+            CreatedByUserId = 1,
+            CreatedAt = DateTimeOffset.UtcNow,
+            IsRevoked = false,
+        };
+        token.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(token);
+
+        RegistrationTokenHandler handler = CreateHandler(dbFactory);
+
+        await handler.RevokeAsync(token.Id, 1, 1, CancellationToken.None);
+
+        List<AuditLogEntry> auditEntries = await dbFactory.Context.AuditLog.ToListAsync();
+        await Assert.That(auditEntries.Count).IsEqualTo(1);
+    }
+
     // ========== ListAsync tests ==========
 
     [Test]
     public async Task ListAsync_NoTokens_ReturnsEmptyPage()
     {
         using TestDatabaseFactory dbFactory = new();
-        RegistrationTokenHandler handler = new(dbFactory.Context);
+        RegistrationTokenHandler handler = CreateHandler(dbFactory);
 
         ServiceResult<PaginatedResponse<RegistrationTokenDto>> result = await handler.ListAsync(1, 1, 25, CancellationToken.None);
 
@@ -203,7 +248,7 @@ public class RegistrationTokenHandlerTests
             await dbFactory.Context.InsertWithInt64IdentityAsync(token);
         }
 
-        RegistrationTokenHandler handler = new(dbFactory.Context);
+        RegistrationTokenHandler handler = CreateHandler(dbFactory);
 
         ServiceResult<PaginatedResponse<RegistrationTokenDto>> result = await handler.ListAsync(1, 1, 2, CancellationToken.None);
 
@@ -232,7 +277,7 @@ public class RegistrationTokenHandlerTests
             await dbFactory.Context.InsertWithInt64IdentityAsync(token);
         }
 
-        RegistrationTokenHandler handler = new(dbFactory.Context);
+        RegistrationTokenHandler handler = CreateHandler(dbFactory);
 
         ServiceResult<PaginatedResponse<RegistrationTokenDto>> result = await handler.ListAsync(1, 5, 2, CancellationToken.None);
 
@@ -259,7 +304,7 @@ public class RegistrationTokenHandlerTests
             await dbFactory.Context.InsertWithInt64IdentityAsync(token);
         }
 
-        RegistrationTokenHandler handler = new(dbFactory.Context);
+        RegistrationTokenHandler handler = CreateHandler(dbFactory);
 
         ServiceResult<PaginatedResponse<RegistrationTokenDto>> result = await handler.ListAsync(1, 1, 2, CancellationToken.None);
 

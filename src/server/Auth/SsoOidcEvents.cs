@@ -5,7 +5,7 @@
 using System.Net;
 using System.Security.Claims;
 using System.Text.Json;
-using Framlux.FleetManagement.Database.Cache;
+using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Server.Services.Security;
@@ -343,9 +343,9 @@ public sealed class SsoOidcEvents : OpenIdConnectEvents
 
     private static async Task<TenantOidcConfiguration?> ResolveTenantOidcConfigAsync(HttpContext httpContext, int tenantId)
     {
-        IDatabaseCache dbCache = httpContext.RequestServices.GetRequiredService<IDatabaseCache>();
+        ITenantRepository tenantRepository = httpContext.RequestServices.GetRequiredService<ITenantRepository>();
 
-        return await dbCache.GetTenantOidcConfigurationAsync(tenantId, httpContext.RequestAborted);
+        return await tenantRepository.GetTenantOidcConfigurationAsync(tenantId, httpContext.RequestAborted);
     }
 
     private static ILogger<SsoOidcEvents> ResolveLogger(HttpContext httpContext)

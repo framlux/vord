@@ -3,13 +3,11 @@
 // See LICENSE for details.
 
 using FastEndpoints;
-using Framlux.FleetManagement.Database;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
+using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Server.Auth;
 using Framlux.FleetManagement.Server.Services.Billing;
-using LinqToDB;
-using LinqToDB.Async;
 
 namespace Framlux.FleetManagement.Server.Endpoints.Web.Alerts;
 
@@ -19,15 +17,15 @@ namespace Framlux.FleetManagement.Server.Endpoints.Web.Alerts;
 /// </summary>
 public sealed class AlertRuleListEndpoint : EndpointWithoutRequest<ApiResponse<List<AlertRuleDto>>>
 {
-    private readonly DatabaseContext _db;
+    private readonly IAlertRuleRepository _alertRuleRepo;
     private readonly ISubscriptionService _subscriptionService;
 
     /// <summary>
     /// Creates a new instance of the <see cref="AlertRuleListEndpoint"/> class.
     /// </summary>
-    public AlertRuleListEndpoint(DatabaseContext db, ISubscriptionService subscriptionService)
+    public AlertRuleListEndpoint(IAlertRuleRepository alertRuleRepo, ISubscriptionService subscriptionService)
     {
-        _db = db;
+        _alertRuleRepo = alertRuleRepo;
         _subscriptionService = subscriptionService;
     }
 
@@ -60,10 +58,7 @@ public sealed class AlertRuleListEndpoint : EndpointWithoutRequest<ApiResponse<L
             return;
         }
 
-        List<AlertRule> rules = await _db.AlertRules
-            .Where(r => r.TenantId == tenantId.Value)
-            .OrderBy(r => r.Name)
-            .ToListAsync(ct);
+        List<AlertRule> rules = await _alertRuleRepo.GetAlertRulesForTenantAsync(tenantId.Value, ct);
 
         List<AlertRuleDto> dtos = rules.Select(r => new AlertRuleDto
         {

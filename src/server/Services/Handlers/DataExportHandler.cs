@@ -2,15 +2,15 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
+using Framlux.FleetManagement.Database;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Migrations.Export;
 using Framlux.FleetManagement.Database.Models;
-using Framlux.FleetManagement.Database;
+using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Server.Services.DataExport;
 using Framlux.FleetManagement.Server.Services.Infrastructure;
-using LinqToDB.Async;
 using LinqToDB;
-using LinqToDB.Data;
+using LinqToDB.Async;
 using Microsoft.Data.Sqlite;
 using System.Security.Cryptography;
 
@@ -23,6 +23,12 @@ namespace Framlux.FleetManagement.Server.Services.Handlers;
 public sealed class DataExportHandler : IDataExportHandler
 {
     private readonly DatabaseContext _db;
+    private readonly IDataExportRepository _exportRepo;
+    private readonly IAuditLogRepository _auditLog;
+    private readonly IDatabaseTransactionProvider _transactionProvider;
+    private readonly IMachineRepository _machineRepo;
+    private readonly ISubscriptionRepository _subscriptionRepo;
+    private readonly IMachineStateRepository _machineStateRepo;
     private readonly ILogger<DataExportHandler> _logger;
     private readonly IObjectStorageService _objectStorageService;
 
@@ -33,14 +39,32 @@ public sealed class DataExportHandler : IDataExportHandler
     /// </summary>
     public DataExportHandler(
         DatabaseContext db,
+        IDataExportRepository exportRepo,
+        IAuditLogRepository auditLog,
+        IDatabaseTransactionProvider transactionProvider,
+        IMachineRepository machineRepo,
+        ISubscriptionRepository subscriptionRepo,
+        IMachineStateRepository machineStateRepo,
         ILogger<DataExportHandler> logger,
         IObjectStorageService objectStorageService)
     {
         ArgumentNullException.ThrowIfNull(db);
+        ArgumentNullException.ThrowIfNull(exportRepo);
+        ArgumentNullException.ThrowIfNull(auditLog);
+        ArgumentNullException.ThrowIfNull(transactionProvider);
+        ArgumentNullException.ThrowIfNull(machineRepo);
+        ArgumentNullException.ThrowIfNull(subscriptionRepo);
+        ArgumentNullException.ThrowIfNull(machineStateRepo);
         ArgumentNullException.ThrowIfNull(logger);
         ArgumentNullException.ThrowIfNull(objectStorageService);
 
         _db = db;
+        _exportRepo = exportRepo;
+        _auditLog = auditLog;
+        _transactionProvider = transactionProvider;
+        _machineRepo = machineRepo;
+        _subscriptionRepo = subscriptionRepo;
+        _machineStateRepo = machineStateRepo;
         _logger = logger;
         _objectStorageService = objectStorageService;
     }
@@ -55,9 +79,7 @@ public sealed class DataExportHandler : IDataExportHandler
         }
 
         // Check if there are machines to export
-        int machineCount = await _db.Machines
-            .Where(m => m.TenantId == tenantId.Value && m.IsDeleted == false)
-            .CountAsync(ct);
+        int machineCount = await _machineRepo.GetActiveMachineCountAsync(tenantId.Value, ct);
 
         if (machineCount == 0)
         {
@@ -66,9 +88,7 @@ public sealed class DataExportHandler : IDataExportHandler
         }
 
         // Reject if tenant already has a Pending or Processing job
-        bool hasActiveJob = await _db.DataExportJobs
-            .AnyAsync(j => j.TenantId == tenantId.Value &&
-                          (j.Status == DataExportJobStatus.Pending || j.Status == DataExportJobStatus.Processing), ct);
+        bool hasActiveJob = await _exportRepo.HasActiveExportJobAsync(tenantId.Value, ct);
 
         if (hasActiveJob)
         {
@@ -89,28 +109,26 @@ public sealed class DataExportHandler : IDataExportHandler
             DownloadToken = RandomNumberGenerator.GetHexString(64, true)
         };
 
-        using DataConnectionTransaction transaction = await _db.BeginTransactionAsync(ct);
+        using IDatabaseTransaction transaction = await _transactionProvider.BeginTransactionAsync(ct);
 
-        job.Id = await _db.InsertWithInt32IdentityAsync(job, token: ct);
+        DataExportJob createdJob = await _exportRepo.CreateExportJobAsync(job, ct);
 
-        await _db.InsertAsync(AuditHelper.Create(
+        await _auditLog.InsertAuditLogAsync(AuditHelper.Create(
             tenantId, requestedByUserId, null,
             AuditAction.DataExportRequested, AuditResourceType.DataExport,
-            job.Id.ToString(), null, null), token: ct);
+            createdJob.Id.ToString(), null, null), ct);
 
         await transaction.CommitAsync(ct);
 
-        _logger.LogInformation("Created data export job {JobId} for tenant {TenantId}", job.Id, tenantId);
+        _logger.LogInformation("Created data export job {JobId} for tenant {TenantId}", createdJob.Id, tenantId);
 
-        return ServiceResult<int>.Ok(job.Id);
+        return ServiceResult<int>.Ok(createdJob.Id);
     }
 
     /// <inheritdoc/>
     public async Task ProcessExportJobAsync(int jobId, CancellationToken ct)
     {
-
-        DataExportJob? job = await _db.DataExportJobs
-            .FirstOrDefaultAsync(j => j.Id == jobId, ct);
+        DataExportJob? job = await _exportRepo.GetExportJobByIdAsync(jobId, ct);
 
         if (job is null)
         {
@@ -120,23 +138,17 @@ public sealed class DataExportHandler : IDataExportHandler
         }
 
         // Update status to Processing
-        await _db.DataExportJobs
-            .Where(j => j.Id == jobId)
-            .Set(j => j.Status, DataExportJobStatus.Processing)
-            .UpdateAsync(ct);
+        await _exportRepo.UpdateExportJobStatusAsync(jobId, DataExportJobStatus.Processing, ct);
 
         string tempPath = Path.Combine(Path.GetTempPath(), $"vord-export-{job.TenantId}-{Guid.NewGuid():N}.sqlite");
 
         try
         {
-            List<long> machineIds = await _db.Machines
-                .Where(m => m.TenantId == job.TenantId && m.IsDeleted == false)
-                .Select(m => m.Id)
-                .ToListAsync(ct);
+            List<long> machineIds = await _machineRepo.GetActiveMachineIdsForTenantAsync(job.TenantId, ct);
 
             if (machineIds.Count == 0)
             {
-                await FailJobAsync(jobId, "No machines found for tenant", ct);
+                await _exportRepo.FailExportJobAsync(jobId, "No machines found for tenant", ct);
 
                 return;
             }
@@ -152,8 +164,7 @@ public sealed class DataExportHandler : IDataExportHandler
             await ExportTelemetryAsync(sqlite, machineIds, ct);
 
             // Include audit log for Team tier subscriptions
-            TenantSubscription? subscription = await _db.TenantSubscriptions
-                .FirstOrDefaultAsync(s => s.TenantId == job.TenantId, ct);
+            TenantSubscription? subscription = await _subscriptionRepo.GetSubscriptionForTenantAsync(job.TenantId, ct);
 
             if (subscription is not null && subscription.Tier == SubscriptionTier.Team)
             {
@@ -168,13 +179,7 @@ public sealed class DataExportHandler : IDataExportHandler
             await _objectStorageService.UploadFileAsync(objectKey, tempPath, ct);
 
             // Update job to Complete
-            await _db.DataExportJobs
-                .Where(j => j.Id == jobId)
-                .Set(j => j.Status, DataExportJobStatus.Complete)
-                .Set(j => j.CompletedAt, DateTimeOffset.UtcNow)
-                .Set(j => j.ObjectKey, objectKey)
-                .Set(j => j.FileSizeBytes, fileSize)
-                .UpdateAsync(ct);
+            await _exportRepo.CompleteExportJobAsync(jobId, objectKey, fileSize, ct);
 
             _logger.LogInformation("Data export job {JobId} completed for tenant {TenantId}. Size: {Size} bytes",
                 jobId, job.TenantId, fileSize);
@@ -182,7 +187,7 @@ public sealed class DataExportHandler : IDataExportHandler
         catch (Exception ex)
         {
             _logger.LogError(ex, "Data export job {JobId} failed for tenant {TenantId}", jobId, job.TenantId);
-            await FailJobAsync(jobId, ex.Message, ct);
+            await _exportRepo.FailExportJobAsync(jobId, ex.Message, ct);
         }
         finally
         {
@@ -202,10 +207,9 @@ public sealed class DataExportHandler : IDataExportHandler
             return ServiceResult<DataExportJob>.NotFound();
         }
 
-        DataExportJob? job = await _db.DataExportJobs
-            .FirstOrDefaultAsync(j => j.Id == jobId && j.TenantId == tenantId.Value, ct);
+        DataExportJob? job = await _exportRepo.GetExportJobByIdAsync(jobId, ct);
 
-        if (job is null)
+        if ((job is null) || (job.TenantId != tenantId.Value))
         {
 
             return ServiceResult<DataExportJob>.NotFound();
@@ -223,8 +227,7 @@ public sealed class DataExportHandler : IDataExportHandler
             return ServiceResult<DataExportJob>.NotFound();
         }
 
-        DataExportJob? job = await _db.DataExportJobs
-            .FirstOrDefaultAsync(j => j.DownloadToken == token, ct);
+        DataExportJob? job = await _exportRepo.GetExportJobByTokenAsync(token, ct);
 
         if (job is null)
         {
@@ -317,16 +320,6 @@ public sealed class DataExportHandler : IDataExportHandler
         cmd.ExecuteNonQuery();
     }
 
-    private async Task FailJobAsync(int jobId, string errorMessage, CancellationToken ct)
-    {
-        await _db.DataExportJobs
-            .Where(j => j.Id == jobId)
-            .Set(j => j.Status, DataExportJobStatus.Failed)
-            .Set(j => j.CompletedAt, DateTimeOffset.UtcNow)
-            .Set(j => j.ErrorMessage, errorMessage)
-            .UpdateAsync(ct);
-    }
-
     private async Task ExportMachinesAsync(
         SqliteConnection sqlite, int tenantId, CancellationToken ct)
     {
@@ -398,9 +391,7 @@ public sealed class DataExportHandler : IDataExportHandler
     private async Task ExportMachineStateAsync(
         SqliteConnection sqlite, List<long> machineIds, CancellationToken ct)
     {
-        List<MachineStateSummary> states = await _db.MachineStateSummaries
-            .Where(s => machineIds.Contains(s.MachineId))
-            .ToListAsync(ct);
+        List<MachineStateSummary> states = await _machineStateRepo.GetSummaryListByMachineIdsAsync(machineIds, ct);
 
         using SqliteTransaction tx = sqlite.BeginTransaction();
         using SqliteCommand cmd = sqlite.CreateCommand();

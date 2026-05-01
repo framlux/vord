@@ -29,4 +29,10 @@ public enum AuditResourceType : short
     RemoteCommand = 9,
     /// <summary>A machine authorized key.</summary>
     MachineAuthorizedKey = 10,
+    /// <summary>An alert rule.</summary>
+    AlertRule = 11,
+    /// <summary>A webhook endpoint.</summary>
+    Webhook = 12,
+    /// <summary>An alert event.</summary>
+    AlertEvent = 13,
 }

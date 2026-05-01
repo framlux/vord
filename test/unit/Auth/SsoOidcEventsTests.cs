@@ -4,7 +4,7 @@
 
 using System.Net;
 using System.Text.Json;
-using Framlux.FleetManagement.Database.Cache;
+using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Server.Auth;
 using Framlux.FleetManagement.Server.Services.Security;
@@ -379,7 +379,7 @@ public sealed class SsoOidcEventsTests
     private static AuthorizationCodeReceivedContext BuildCodeReceivedContext(
         string? tenantId,
         string authCode,
-        IDatabaseCache? dbCache = null,
+        ITenantRepository? tenantRepo = null,
         IHttpClientFactory? httpClientFactory = null,
         IOidcSecretProtector? secretProtector = null,
         ILogger<SsoOidcEvents>? logger = null)
@@ -387,9 +387,9 @@ public sealed class SsoOidcEventsTests
         IServiceProvider serviceProvider = Substitute.For<IServiceProvider>();
         serviceProvider.GetService(typeof(ILogger<SsoOidcEvents>))
             .Returns(logger ?? Substitute.For<ILogger<SsoOidcEvents>>());
-        if (dbCache is not null)
+        if (tenantRepo is not null)
         {
-            serviceProvider.GetService(typeof(IDatabaseCache)).Returns(dbCache);
+            serviceProvider.GetService(typeof(ITenantRepository)).Returns(tenantRepo);
         }
         if (httpClientFactory is not null)
         {
@@ -509,15 +509,15 @@ public sealed class SsoOidcEventsTests
     [Test]
     public async Task AuthorizationCodeReceived_OidcConfigNotFound_FailsWithConfigNotFoundMessage()
     {
-        IDatabaseCache dbCache = Substitute.For<IDatabaseCache>();
-        dbCache.GetTenantOidcConfigurationAsync(42, Arg.Any<CancellationToken>())
+        ITenantRepository tenantRepo = Substitute.For<ITenantRepository>();
+        tenantRepo.GetTenantOidcConfigurationAsync(42, Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<TenantOidcConfiguration?>(null));
 
         SsoOidcEvents events = new();
         AuthorizationCodeReceivedContext context = BuildCodeReceivedContext(
             tenantId: "42",
             authCode: "test-code",
-            dbCache: dbCache);
+            tenantRepo: tenantRepo);
 
         await events.AuthorizationCodeReceived(context);
 
@@ -530,8 +530,8 @@ public sealed class SsoOidcEventsTests
         TenantOidcConfiguration oidcConfig = TestDataBuilder.BuildTenantOidcConfiguration(tenantId: 42);
         oidcConfig.MetadataAddress = "https://idp.example.com/.well-known/openid-configuration";
 
-        IDatabaseCache dbCache = Substitute.For<IDatabaseCache>();
-        dbCache.GetTenantOidcConfigurationAsync(42, Arg.Any<CancellationToken>())
+        ITenantRepository tenantRepo = Substitute.For<ITenantRepository>();
+        tenantRepo.GetTenantOidcConfigurationAsync(42, Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<TenantOidcConfiguration?>(oidcConfig));
 
         // Discovery returns a token endpoint pointing to a private IP, which IsUrlSafe should reject
@@ -543,7 +543,7 @@ public sealed class SsoOidcEventsTests
         AuthorizationCodeReceivedContext context = BuildCodeReceivedContext(
             tenantId: "42",
             authCode: "test-code",
-            dbCache: dbCache,
+            tenantRepo: tenantRepo,
             httpClientFactory: httpClientFactory);
 
         await events.AuthorizationCodeReceived(context);
@@ -557,8 +557,8 @@ public sealed class SsoOidcEventsTests
         TenantOidcConfiguration oidcConfig = TestDataBuilder.BuildTenantOidcConfiguration(tenantId: 42);
         oidcConfig.MetadataAddress = "https://idp.example.com/.well-known/openid-configuration";
 
-        IDatabaseCache dbCache = Substitute.For<IDatabaseCache>();
-        dbCache.GetTenantOidcConfigurationAsync(42, Arg.Any<CancellationToken>())
+        ITenantRepository tenantRepo = Substitute.For<ITenantRepository>();
+        tenantRepo.GetTenantOidcConfigurationAsync(42, Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<TenantOidcConfiguration?>(oidcConfig));
 
         IOidcSecretProtector secretProtector = Substitute.For<IOidcSecretProtector>();
@@ -575,7 +575,7 @@ public sealed class SsoOidcEventsTests
         AuthorizationCodeReceivedContext context = BuildCodeReceivedContext(
             tenantId: "42",
             authCode: "test-code",
-            dbCache: dbCache,
+            tenantRepo: tenantRepo,
             httpClientFactory: httpClientFactory,
             secretProtector: secretProtector);
 
@@ -590,8 +590,8 @@ public sealed class SsoOidcEventsTests
         TenantOidcConfiguration oidcConfig = TestDataBuilder.BuildTenantOidcConfiguration(tenantId: 42);
         oidcConfig.MetadataAddress = "https://idp.example.com/.well-known/openid-configuration";
 
-        IDatabaseCache dbCache = Substitute.For<IDatabaseCache>();
-        dbCache.GetTenantOidcConfigurationAsync(42, Arg.Any<CancellationToken>())
+        ITenantRepository tenantRepo = Substitute.For<ITenantRepository>();
+        tenantRepo.GetTenantOidcConfigurationAsync(42, Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<TenantOidcConfiguration?>(oidcConfig));
 
         IOidcSecretProtector secretProtector = Substitute.For<IOidcSecretProtector>();
@@ -615,7 +615,7 @@ public sealed class SsoOidcEventsTests
         AuthorizationCodeReceivedContext context = BuildCodeReceivedContext(
             tenantId: "42",
             authCode: "test-code",
-            dbCache: dbCache,
+            tenantRepo: tenantRepo,
             httpClientFactory: httpClientFactory,
             secretProtector: secretProtector);
 
@@ -630,8 +630,8 @@ public sealed class SsoOidcEventsTests
         TenantOidcConfiguration oidcConfig = TestDataBuilder.BuildTenantOidcConfiguration(tenantId: 42);
         oidcConfig.MetadataAddress = "https://idp.example.com/.well-known/openid-configuration";
 
-        IDatabaseCache dbCache = Substitute.For<IDatabaseCache>();
-        dbCache.GetTenantOidcConfigurationAsync(42, Arg.Any<CancellationToken>())
+        ITenantRepository tenantRepo = Substitute.For<ITenantRepository>();
+        tenantRepo.GetTenantOidcConfigurationAsync(42, Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<TenantOidcConfiguration?>(oidcConfig));
 
         IOidcSecretProtector secretProtector = Substitute.For<IOidcSecretProtector>();
@@ -655,7 +655,7 @@ public sealed class SsoOidcEventsTests
         AuthorizationCodeReceivedContext context = BuildCodeReceivedContext(
             tenantId: "42",
             authCode: "test-code",
-            dbCache: dbCache,
+            tenantRepo: tenantRepo,
             httpClientFactory: httpClientFactory,
             secretProtector: secretProtector);
 
@@ -670,8 +670,8 @@ public sealed class SsoOidcEventsTests
         TenantOidcConfiguration oidcConfig = TestDataBuilder.BuildTenantOidcConfiguration(tenantId: 42);
         oidcConfig.MetadataAddress = "https://idp.example.com/.well-known/openid-configuration";
 
-        IDatabaseCache dbCache = Substitute.For<IDatabaseCache>();
-        dbCache.GetTenantOidcConfigurationAsync(42, Arg.Any<CancellationToken>())
+        ITenantRepository tenantRepo = Substitute.For<ITenantRepository>();
+        tenantRepo.GetTenantOidcConfigurationAsync(42, Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<TenantOidcConfiguration?>(oidcConfig));
 
         IOidcSecretProtector secretProtector = Substitute.For<IOidcSecretProtector>();
@@ -696,7 +696,7 @@ public sealed class SsoOidcEventsTests
         AuthorizationCodeReceivedContext context = BuildCodeReceivedContext(
             tenantId: "42",
             authCode: "test-code",
-            dbCache: dbCache,
+            tenantRepo: tenantRepo,
             httpClientFactory: httpClientFactory,
             secretProtector: secretProtector);
 
@@ -740,8 +740,8 @@ public sealed class SsoOidcEventsTests
         TenantOidcConfiguration oidcConfig = TestDataBuilder.BuildTenantOidcConfiguration(tenantId: 42);
         oidcConfig.MetadataAddress = "https://idp.example.com/.well-known/openid-configuration";
 
-        IDatabaseCache dbCache = Substitute.For<IDatabaseCache>();
-        dbCache.GetTenantOidcConfigurationAsync(42, Arg.Any<CancellationToken>())
+        ITenantRepository tenantRepo = Substitute.For<ITenantRepository>();
+        tenantRepo.GetTenantOidcConfigurationAsync(42, Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<TenantOidcConfiguration?>(oidcConfig));
 
         // Discovery returns a token endpoint pointing to localhost
@@ -753,7 +753,7 @@ public sealed class SsoOidcEventsTests
         AuthorizationCodeReceivedContext context = BuildCodeReceivedContext(
             tenantId: "42",
             authCode: "test-code",
-            dbCache: dbCache,
+            tenantRepo: tenantRepo,
             httpClientFactory: httpClientFactory);
 
         await events.AuthorizationCodeReceived(context);
@@ -767,8 +767,8 @@ public sealed class SsoOidcEventsTests
         TenantOidcConfiguration oidcConfig = TestDataBuilder.BuildTenantOidcConfiguration(tenantId: 42);
         oidcConfig.MetadataAddress = "https://idp.example.com/.well-known/openid-configuration";
 
-        IDatabaseCache dbCache = Substitute.For<IDatabaseCache>();
-        dbCache.GetTenantOidcConfigurationAsync(42, Arg.Any<CancellationToken>())
+        ITenantRepository tenantRepo = Substitute.For<ITenantRepository>();
+        tenantRepo.GetTenantOidcConfigurationAsync(42, Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<TenantOidcConfiguration?>(oidcConfig));
 
         IOidcSecretProtector secretProtector = Substitute.For<IOidcSecretProtector>();
@@ -785,7 +785,7 @@ public sealed class SsoOidcEventsTests
         AuthorizationCodeReceivedContext context = BuildCodeReceivedContext(
             tenantId: "42",
             authCode: "test-code",
-            dbCache: dbCache,
+            tenantRepo: tenantRepo,
             httpClientFactory: httpClientFactory,
             secretProtector: secretProtector);
 

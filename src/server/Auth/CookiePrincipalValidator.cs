@@ -3,11 +3,8 @@
 // See LICENSE for details.
 
 using System.Security.Claims;
-using Framlux.FleetManagement.Database;
-using Framlux.FleetManagement.Database.Cache;
 using Framlux.FleetManagement.Database.Models;
-using LinqToDB;
-using LinqToDB.Async;
+using Framlux.FleetManagement.Database.Repositories;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using StackExchange.Redis;
@@ -28,7 +25,7 @@ public sealed class CookiePrincipalValidator : CookieAuthenticationEvents
     private static readonly TimeSpan CacheTtl = TimeSpan.FromMinutes(5);
 
     private readonly IConnectionMultiplexer _redis;
-    private readonly IDatabaseCache _databaseCache;
+    private readonly ITenantRepository _tenantRepository;
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly ILogger<CookiePrincipalValidator> _logger;
 
@@ -36,17 +33,17 @@ public sealed class CookiePrincipalValidator : CookieAuthenticationEvents
     /// Creates a new instance of the <see cref="CookiePrincipalValidator"/> class.
     /// </summary>
     /// <param name="redis">The Redis connection multiplexer.</param>
-    /// <param name="databaseCache">The database cache.</param>
+    /// <param name="tenantRepository">The tenant repository.</param>
     /// <param name="scopeFactory">The service scope factory for creating database contexts.</param>
     /// <param name="logger">The logger instance.</param>
     public CookiePrincipalValidator(
         IConnectionMultiplexer redis,
-        IDatabaseCache databaseCache,
+        ITenantRepository tenantRepository,
         IServiceScopeFactory scopeFactory,
         ILogger<CookiePrincipalValidator> logger)
     {
         _redis = redis;
-        _databaseCache = databaseCache;
+        _tenantRepository = tenantRepository;
         _scopeFactory = scopeFactory;
         _logger = logger;
     }
@@ -116,10 +113,8 @@ public sealed class CookiePrincipalValidator : CookieAuthenticationEvents
 
         // Cache miss — query the database
         using IServiceScope scope = _scopeFactory.CreateScope();
-        DatabaseContext db = scope.ServiceProvider.GetRequiredService<DatabaseContext>();
-        UserAccount? user = await db.UserAccounts
-            .Where(u => u.Id == userId)
-            .FirstOrDefaultAsync(ct);
+        IUserRepository userRepo = scope.ServiceProvider.GetRequiredService<IUserRepository>();
+        UserAccount? user = await userRepo.GetUserByIdAsync(userId, ct);
 
         bool isActive = user is not null && user.IsActive;
         await redisDb.StringSetAsync(cacheKey, isActive ? "1" : "0", CacheTtl);
@@ -148,7 +143,7 @@ public sealed class CookiePrincipalValidator : CookieAuthenticationEvents
         }
         else
         {
-            IEnumerable<UserTenantRole> roles = await _databaseCache.GetTenantsForUserAsync(externalId, CancellationToken.None);
+            IEnumerable<UserTenantRole> roles = await _tenantRepository.GetTenantsForUserAsync(externalId, CancellationToken.None);
             currentRoles = string.Join(",", roles
                 .OrderBy(r => r.AssignedTenantId)
                 .Select(r => $"{r.AssignedTenantId}:{(byte)r.Role}"));

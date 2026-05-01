@@ -3,14 +3,11 @@
 // See LICENSE for details.
 
 using System.Text.Json;
-using Framlux.FleetManagement.Database;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
+using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Server.Services.Billing;
 using Framlux.FleetManagement.Server.Services.Infrastructure;
-using LinqToDB;
-using LinqToDB.Async;
-using LinqToDB.Data;
 using StackExchange.Redis;
 
 namespace Framlux.FleetManagement.Server.Services.Alerts;
@@ -82,12 +79,12 @@ public sealed class AlertEvaluationService : BackgroundService
     internal async Task EvaluateAllRulesAsync(CancellationToken ct)
     {
         using IServiceScope scope = _scopeFactory.CreateScope();
-        DatabaseContext db = scope.ServiceProvider.GetRequiredService<DatabaseContext>();
+        IMachineStateRepository machineStateRepo = scope.ServiceProvider.GetRequiredService<IMachineStateRepository>();
+        IAlertRuleRepository alertRuleRepo = scope.ServiceProvider.GetRequiredService<IAlertRuleRepository>();
+        IAlertEventRepository alertEventRepo = scope.ServiceProvider.GetRequiredService<IAlertEventRepository>();
         ISubscriptionService subscriptionService = scope.ServiceProvider.GetRequiredService<ISubscriptionService>();
 
-        List<AlertRule> enabledRules = await db.AlertRules
-            .Where(r => r.IsEnabled)
-            .ToListAsync(ct);
+        List<AlertRule> enabledRules = await alertRuleRepo.GetEnabledAlertRulesAsync(ct);
 
         if (enabledRules.Count == 0)
         {
@@ -109,21 +106,19 @@ public sealed class AlertEvaluationService : BackgroundService
                 continue;
             }
 
-            List<MachineStateSummary> machineStates = await db.MachineStateSummaries
-                .Where(s => db.Machines.Any(m => m.Id == s.MachineId && m.TenantId == tenantId && m.IsDeleted == false))
-                .ToListAsync(ct);
+            List<MachineStateSummary> machineStates = await machineStateRepo.GetSummariesForTenantMachinesAsync(tenantId, ct);
 
             foreach (AlertRule rule in tenantRules)
             {
                 foreach (MachineStateSummary state in machineStates)
                 {
-                    await EvaluateRuleForMachineAsync(db, rule, state, ct);
+                    await EvaluateRuleForMachineAsync(alertEventRepo, rule, state, ct);
                 }
             }
         }
     }
 
-    internal async Task EvaluateRuleForMachineAsync(DatabaseContext db, AlertRule rule, MachineStateSummary state, CancellationToken ct)
+    internal async Task EvaluateRuleForMachineAsync(IAlertEventRepository alertEventRepo, AlertRule rule, MachineStateSummary state, CancellationToken ct)
     {
         decimal? currentValue = GetMetricValue(rule.Metric, state);
         if (currentValue is null)
@@ -140,14 +135,8 @@ public sealed class AlertEvaluationService : BackgroundService
             IDatabase redisDb = _redis.GetDatabase();
             await redisDb.KeyDeleteAsync($"{AlertConstants.ConditionKeyPrefix}:{rule.Id}:{state.MachineId}");
 
-            // Auto-resolve any active events for this rule+machine
-            await db.AlertEvents
-                .Where(e => (e.AlertRuleId == rule.Id) &&
-                            (e.MachineId == state.MachineId) &&
-                            (e.Status != AlertEventStatus.Resolved))
-                .Set(e => e.Status, AlertEventStatus.Resolved)
-                .Set(e => e.ResolvedAt, DateTimeOffset.UtcNow)
-                .UpdateAsync(ct);
+            // Auto-resolve any active events for this rule and machine
+            await alertEventRepo.ResolveEventsForRuleMachineAsync(rule.Id, state.MachineId, ct);
 
             return;
         }
@@ -182,31 +171,7 @@ public sealed class AlertEvaluationService : BackgroundService
             }
         }
 
-        await using DataConnectionTransaction tx = await db.BeginTransactionAsync(ct);
-
-        // Advisory lock scoped to this rule+machine pair (PostgreSQL only; no-op on SQLite).
-        // Uses the two-argument form: key1=ruleId (int32), key2=machineId folded to int32 via XOR
-        // so all 64 bits of machineId contribute to the lock key.
-        if (db.DataProvider.Name.Contains("PostgreSQL"))
-        {
-            int foldedMachineId = (int)(state.MachineId ^ (state.MachineId >> 32));
-            await db.ExecuteAsync($"SELECT pg_advisory_xact_lock({rule.Id}, {foldedMachineId})", ct, []);
-        }
-
-        // Check if there's already an active (non-resolved) event for this rule+machine
-        bool hasActiveEvent = await db.AlertEvents
-            .AnyAsync(e => (e.AlertRuleId == rule.Id) &&
-                          (e.MachineId == state.MachineId) &&
-                          (e.Status != AlertEventStatus.Resolved), ct);
-
-        if (hasActiveEvent)
-        {
-            await tx.CommitAsync(ct);
-
-            return;
-        }
-
-        // Create alert event
+        // Create alert event with advisory lock deduplication protection.
         AlertEvent alertEvent = new()
         {
             AlertRuleId = rule.Id,
@@ -219,7 +184,14 @@ public sealed class AlertEvaluationService : BackgroundService
             TriggeredAt = DateTimeOffset.UtcNow,
         };
 
-        alertEvent.Id = await db.InsertWithInt64IdentityAsync(alertEvent, token: ct);
+        AlertEvent? createdEvent = await alertEventRepo.CreateEventIfNotExistsAsync(alertEvent, ct);
+
+        if (createdEvent is null)
+        {
+            // An active event already exists for this rule and machine; skip delivery.
+            return;
+        }
+
         _logger.LogInformation("Alert triggered: Rule {RuleId} ({RuleName}) for machine {MachineId}", rule.Id, rule.Name, state.MachineId);
 
         // Delete the condition key after a duration-elapsed alert fires so that if the
@@ -230,9 +202,7 @@ public sealed class AlertEvaluationService : BackgroundService
             await redisDb.KeyDeleteAsync($"{AlertConstants.ConditionKeyPrefix}:{rule.Id}:{state.MachineId}");
         }
 
-        await _deliveryService.EnqueueAsync(alertEvent.Id, rule.Id, rule.TenantId, ct);
-
-        await tx.CommitAsync(ct);
+        await _deliveryService.EnqueueAsync(createdEvent.Id, rule.Id, rule.TenantId, ct);
     }
 
     internal static decimal? GetMetricValue(AlertMetric metric, MachineStateSummary state)

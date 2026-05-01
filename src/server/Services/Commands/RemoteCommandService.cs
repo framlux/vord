@@ -2,9 +2,9 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
-using Framlux.FleetManagement.Database.Cache;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
+using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Server.Services.Infrastructure;
 using Framlux.FleetManagement.Server.Services.Machines;
 
@@ -26,19 +26,38 @@ public sealed class RemoteCommandService : IRemoteCommandService
         "install_updates",
     };
 
-    private readonly IDatabaseCache _cache;
+    private readonly IDatabaseTransactionProvider _transactionProvider;
+    private readonly IAuditLogRepository _auditLog;
+    private readonly IMachineRepository _machineRepository;
+    private readonly ISigningKeyRepository _signingKeyRepository;
+    private readonly IRemoteCommandRepository _remoteCommandRepository;
     private readonly IMachinePingService _pingService;
     private readonly ILogger<RemoteCommandService> _logger;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="RemoteCommandService"/> class.
     /// </summary>
-    /// <param name="cache">The database caching layer</param>
+    /// <param name="transactionProvider">The database transaction provider</param>
+    /// <param name="auditLog">The audit log repository</param>
+    /// <param name="machineRepository">The machine repository</param>
+    /// <param name="signingKeyRepository">The signing key repository</param>
+    /// <param name="remoteCommandRepository">The remote command repository</param>
     /// <param name="pingService">The machine ping and capabilities service</param>
     /// <param name="logger">The logger</param>
-    public RemoteCommandService(IDatabaseCache cache, IMachinePingService pingService, ILogger<RemoteCommandService> logger)
+    public RemoteCommandService(
+        IDatabaseTransactionProvider transactionProvider,
+        IAuditLogRepository auditLog,
+        IMachineRepository machineRepository,
+        ISigningKeyRepository signingKeyRepository,
+        IRemoteCommandRepository remoteCommandRepository,
+        IMachinePingService pingService,
+        ILogger<RemoteCommandService> logger)
     {
-        _cache = cache ?? throw new ArgumentNullException(nameof(cache));
+        _transactionProvider = transactionProvider ?? throw new ArgumentNullException(nameof(transactionProvider));
+        _auditLog = auditLog ?? throw new ArgumentNullException(nameof(auditLog));
+        _machineRepository = machineRepository ?? throw new ArgumentNullException(nameof(machineRepository));
+        _signingKeyRepository = signingKeyRepository ?? throw new ArgumentNullException(nameof(signingKeyRepository));
+        _remoteCommandRepository = remoteCommandRepository ?? throw new ArgumentNullException(nameof(remoteCommandRepository));
         _pingService = pingService ?? throw new ArgumentNullException(nameof(pingService));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
@@ -53,7 +72,7 @@ public sealed class RemoteCommandService : IRemoteCommandService
         }
 
         // Verify the signing key exists, belongs to the correct tenant, and is not revoked.
-        UserSigningKey? signingKey = await _cache.GetSigningKeyByIdAsync(command.SigningKeyId, cancellationToken);
+        UserSigningKey? signingKey = await _signingKeyRepository.GetSigningKeyByIdAsync(command.SigningKeyId, cancellationToken);
         if ((signingKey is null) || (signingKey.TenantId != command.TenantId))
         {
             return ServiceResult<RemoteCommand>.BadRequest("Signing key not found or does not belong to tenant");
@@ -101,14 +120,14 @@ public sealed class RemoteCommandService : IRemoteCommandService
         }
 
         // Validate target machine belongs to user's tenant.
-        Machine? machine = await _cache.GetMachineAsync(command.MachineId, command.TenantId, cancellationToken);
+        Machine? machine = await _machineRepository.GetMachineAsync(command.MachineId, command.TenantId, cancellationToken);
         if (machine is null)
         {
             return ServiceResult<RemoteCommand>.BadRequest("Target machine not found or does not belong to tenant");
         }
 
         // Verify the signing key is authorized for this specific machine.
-        bool isAuthorized = await _cache.IsKeyAuthorizedForMachineAsync(command.SigningKeyId, command.MachineId, cancellationToken);
+        bool isAuthorized = await _signingKeyRepository.IsKeyAuthorizedForMachineAsync(command.SigningKeyId, command.MachineId, cancellationToken);
         if (isAuthorized == false)
         {
             return ServiceResult<RemoteCommand>.Forbidden("Signing key is not authorized for this machine");
@@ -122,14 +141,14 @@ public sealed class RemoteCommandService : IRemoteCommandService
         }
 
         // Check for duplicate command ID.
-        RemoteCommand? existing = await _cache.GetRemoteCommandByCommandIdAsync(command.CommandId, cancellationToken);
+        RemoteCommand? existing = await _remoteCommandRepository.GetRemoteCommandByCommandIdAsync(command.CommandId, cancellationToken);
         if (existing is not null)
         {
             return ServiceResult<RemoteCommand>.Conflict("Duplicate command ID");
         }
 
         // Check nonce uniqueness.
-        bool nonceUsed = await _cache.IsNonceUsedAsync(command.Nonce, cancellationToken);
+        bool nonceUsed = await _remoteCommandRepository.IsNonceUsedAsync(command.Nonce, cancellationToken);
         if (nonceUsed)
         {
             return ServiceResult<RemoteCommand>.Conflict("Nonce already used");
@@ -138,11 +157,11 @@ public sealed class RemoteCommandService : IRemoteCommandService
         command.Status = RemoteCommandStatus.Pending;
         command.CreatedAt = DateTimeOffset.UtcNow;
 
-        using IDatabaseTransaction transaction = await _cache.BeginTransactionAsync(cancellationToken);
+        using IDatabaseTransaction transaction = await _transactionProvider.BeginTransactionAsync(cancellationToken);
 
-        RemoteCommand created = await _cache.CreateRemoteCommandAsync(command, cancellationToken);
+        RemoteCommand created = await _remoteCommandRepository.CreateRemoteCommandAsync(command, cancellationToken);
 
-        await _cache.InsertAuditLogAsync(new AuditLogEntry
+        await _auditLog.InsertAuditLogAsync(new AuditLogEntry
         {
             TenantId = command.TenantId,
             UserId = command.UserId,
@@ -164,13 +183,13 @@ public sealed class RemoteCommandService : IRemoteCommandService
     /// <inheritdoc/>
     public async Task<List<RemoteCommand>> GetCommandHistoryAsync(long machineId, int tenantId, int page, int pageSize, CancellationToken cancellationToken = default)
     {
-        return await _cache.GetCommandsForMachineAsync(machineId, tenantId, page, pageSize, cancellationToken);
+        return await _remoteCommandRepository.GetCommandsForMachineAsync(machineId, tenantId, page, pageSize, cancellationToken);
     }
 
     /// <inheritdoc/>
     public async Task<ServiceResult<RemoteCommand>> GetCommandDetailAsync(long id, int tenantId, CancellationToken cancellationToken = default)
     {
-        RemoteCommand? command = await _cache.GetRemoteCommandByIdAsync(id, tenantId, cancellationToken);
+        RemoteCommand? command = await _remoteCommandRepository.GetRemoteCommandByIdAsync(id, tenantId, cancellationToken);
         if (command is null)
         {
             return ServiceResult<RemoteCommand>.NotFound();

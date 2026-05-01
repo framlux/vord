@@ -4,6 +4,7 @@
 
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
+using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Server.Services.DataExport;
 using Framlux.FleetManagement.Server.Services.Handlers;
 using Framlux.FleetManagement.Server.Services.Infrastructure;
@@ -12,6 +13,7 @@ using LinqToDB.Async;
 using LinqToDB;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
 using NSubstitute.ExceptionExtensions;
 
@@ -30,7 +32,9 @@ public class DataExportHandlerTests
         objectStorage ??= new CaptureObjectStorageService();
         logger ??= Substitute.For<ILogger<DataExportHandler>>();
 
-        return new DataExportHandler(dbFactory.Context, logger, objectStorage);
+        DatabaseRepository repo = new(dbFactory.Context, NullLogger<DatabaseRepository>.Instance);
+
+        return new DataExportHandler(dbFactory.Context, repo, repo, repo, repo, repo, repo, logger, objectStorage);
     }
 
     private static async Task<long> SeedMachine(TestDatabaseFactory dbFactory, int tenantId = 1, bool isDeleted = false, string hostname = "export-host")

@@ -2,12 +2,9 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
-using Framlux.FleetManagement.Database;
-using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
+using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Server.Services.Infrastructure;
-using LinqToDB;
-using LinqToDB.Async;
 
 namespace Framlux.FleetManagement.Server.Services.DataExport;
 
@@ -70,13 +67,9 @@ public sealed class DataExportCleanupService : BackgroundService
     internal async Task CleanupExpiredExportsAsync(CancellationToken ct)
     {
         using IServiceScope scope = _scopeFactory.CreateScope();
-        DatabaseContext db = scope.ServiceProvider.GetRequiredService<DatabaseContext>();
+        IDataExportRepository exportRepo = scope.ServiceProvider.GetRequiredService<IDataExportRepository>();
 
-        DateTimeOffset now = DateTimeOffset.UtcNow;
-
-        List<DataExportJob> expiredJobs = await db.DataExportJobs
-            .Where(j => j.Status == DataExportJobStatus.Complete && j.ExpiresAt < now)
-            .ToListAsync(ct);
+        List<DataExportJob> expiredJobs = await exportRepo.GetExpiredExportJobsAsync(ct);
 
         if (expiredJobs.Count == 0)
         {
@@ -100,10 +93,7 @@ public sealed class DataExportCleanupService : BackgroundService
                     await _objectStorageService.DeleteObjectAsync(job.ObjectKey, ct);
                 }
 
-                await db.DataExportJobs
-                    .Where(j => j.Id == job.Id)
-                    .Set(j => j.Status, DataExportJobStatus.Expired)
-                    .UpdateAsync(ct);
+                await exportRepo.ExpireExportJobAsync(job.Id, ct);
 
                 _logger.LogInformation(
                     "Cleaned up expired export job {JobId} for tenant {TenantId}",

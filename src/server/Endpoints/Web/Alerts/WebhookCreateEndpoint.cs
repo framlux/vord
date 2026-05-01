@@ -4,13 +4,13 @@
 
 using System.Security.Cryptography;
 using FastEndpoints;
-using Framlux.FleetManagement.Database;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
+using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Server.Auth;
 using Framlux.FleetManagement.Server.Services.Billing;
+using Framlux.FleetManagement.Server.Services.Infrastructure;
 using Framlux.FleetManagement.Server.Services.Security;
-using LinqToDB;
 
 namespace Framlux.FleetManagement.Server.Endpoints.Web.Alerts;
 
@@ -20,18 +20,20 @@ namespace Framlux.FleetManagement.Server.Endpoints.Web.Alerts;
 /// </summary>
 public sealed class WebhookCreateEndpoint : Endpoint<CreateWebhookRequest, ApiResponse<WebhookEndpointDto>>
 {
-    private readonly DatabaseContext _db;
+    private readonly IWebhookRepository _webhookRepo;
     private readonly ISubscriptionService _subscriptionService;
     private readonly IWebhookSecretProtector _secretProtector;
+    private readonly IAuditLogRepository _auditLog;
 
     /// <summary>
     /// Creates a new instance of the <see cref="WebhookCreateEndpoint"/> class.
     /// </summary>
-    public WebhookCreateEndpoint(DatabaseContext db, ISubscriptionService subscriptionService, IWebhookSecretProtector secretProtector)
+    public WebhookCreateEndpoint(IWebhookRepository webhookRepo, ISubscriptionService subscriptionService, IWebhookSecretProtector secretProtector, IAuditLogRepository auditLog)
     {
-        _db = db;
+        _webhookRepo = webhookRepo;
         _subscriptionService = subscriptionService;
         _secretProtector = secretProtector;
+        _auditLog = auditLog;
     }
 
     /// <inheritdoc/>
@@ -63,7 +65,7 @@ public sealed class WebhookCreateEndpoint : Endpoint<CreateWebhookRequest, ApiRe
             return;
         }
 
-        bool canCreate = await _subscriptionService.CanCreateWebhookAsync(tenantId.Value, _db, ct);
+        bool canCreate = await _subscriptionService.CanCreateWebhookAsync(tenantId.Value, ct);
         if (canCreate == false)
         {
             HttpContext.Response.StatusCode = 403;
@@ -131,7 +133,12 @@ public sealed class WebhookCreateEndpoint : Endpoint<CreateWebhookRequest, ApiRe
             CreatedAt = DateTimeOffset.UtcNow,
         };
 
-        webhook.Id = await _db.InsertWithInt32IdentityAsync(webhook, token: ct);
+        await _webhookRepo.CreateWebhookAsync(webhook, ct);
+
+        await _auditLog.InsertAuditLogAsync(AuditHelper.Create(
+            tenantId.Value, userId.Value, null,
+            AuditAction.WebhookCreated, AuditResourceType.Webhook,
+            webhook.Id.ToString(), webhook.Name, null), ct);
 
         WebhookEndpointDto dto = new()
         {

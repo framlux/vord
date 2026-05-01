@@ -2,7 +2,7 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
-using Framlux.FleetManagement.Database.Cache;
+using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Server.Auth;
@@ -30,14 +30,14 @@ public class CookiePrincipalValidatorTests
 {
     private static CookiePrincipalValidator CreateValidator(
         IDatabase redisDb,
-        IDatabaseCache databaseCache,
+        ITenantRepository tenantRepository,
         IServiceScopeFactory scopeFactory)
     {
         IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
         redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(redisDb);
         ILogger<CookiePrincipalValidator> logger = new NullLogger<CookiePrincipalValidator>();
 
-        return new CookiePrincipalValidator(redis, databaseCache, scopeFactory, logger);
+        return new CookiePrincipalValidator(redis, tenantRepository, scopeFactory, logger);
     }
 
     private static IDatabase CreateRedisDb(Dictionary<string, string>? entries = null)
@@ -69,9 +69,9 @@ public class CookiePrincipalValidatorTests
         {
             ["user:active:1"] = "1"
         });
-        IDatabaseCache dbCache = Substitute.For<IDatabaseCache>();
+        ITenantRepository tenantRepo = Substitute.For<ITenantRepository>();
         IServiceScopeFactory scopeFactory = Substitute.For<IServiceScopeFactory>();
-        CookiePrincipalValidator validator = CreateValidator(redisDb, dbCache, scopeFactory);
+        CookiePrincipalValidator validator = CreateValidator(redisDb, tenantRepo, scopeFactory);
 
         bool result = await validator.CheckUserIsActiveAsync(1, redisDb, CancellationToken.None);
 
@@ -85,9 +85,9 @@ public class CookiePrincipalValidatorTests
         {
             ["user:active:1"] = "0"
         });
-        IDatabaseCache dbCache = Substitute.For<IDatabaseCache>();
+        ITenantRepository tenantRepo = Substitute.For<ITenantRepository>();
         IServiceScopeFactory scopeFactory = Substitute.For<IServiceScopeFactory>();
-        CookiePrincipalValidator validator = CreateValidator(redisDb, dbCache, scopeFactory);
+        CookiePrincipalValidator validator = CreateValidator(redisDb, tenantRepo, scopeFactory);
 
         bool result = await validator.CheckUserIsActiveAsync(1, redisDb, CancellationToken.None);
 
@@ -102,9 +102,9 @@ public class CookiePrincipalValidatorTests
         user.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(user);
 
         IDatabase redisDb = CreateRedisDb();
-        IDatabaseCache dbCache = Substitute.For<IDatabaseCache>();
+        ITenantRepository tenantRepo = Substitute.For<ITenantRepository>();
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        CookiePrincipalValidator validator = CreateValidator(redisDb, dbCache, scopeFactory);
+        CookiePrincipalValidator validator = CreateValidator(redisDb, tenantRepo, scopeFactory);
 
         bool result = await validator.CheckUserIsActiveAsync(user.Id, redisDb, CancellationToken.None);
 
@@ -119,9 +119,9 @@ public class CookiePrincipalValidatorTests
         user.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(user);
 
         IDatabase redisDb = CreateRedisDb();
-        IDatabaseCache dbCache = Substitute.For<IDatabaseCache>();
+        ITenantRepository tenantRepo = Substitute.For<ITenantRepository>();
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        CookiePrincipalValidator validator = CreateValidator(redisDb, dbCache, scopeFactory);
+        CookiePrincipalValidator validator = CreateValidator(redisDb, tenantRepo, scopeFactory);
 
         bool result = await validator.CheckUserIsActiveAsync(user.Id, redisDb, CancellationToken.None);
 
@@ -134,9 +134,9 @@ public class CookiePrincipalValidatorTests
         using TestDatabaseFactory dbFactory = new();
 
         IDatabase redisDb = CreateRedisDb();
-        IDatabaseCache dbCache = Substitute.For<IDatabaseCache>();
+        ITenantRepository tenantRepo = Substitute.For<ITenantRepository>();
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        CookiePrincipalValidator validator = CreateValidator(redisDb, dbCache, scopeFactory);
+        CookiePrincipalValidator validator = CreateValidator(redisDb, tenantRepo, scopeFactory);
 
         bool result = await validator.CheckUserIsActiveAsync(99999, redisDb, CancellationToken.None);
 
@@ -149,15 +149,15 @@ public class CookiePrincipalValidatorTests
     public async Task RoleClaims_WhenMatchingDatabase_AreNotRefreshed()
     {
         IDatabase redisDb = CreateRedisDb();
-        IDatabaseCache dbCache = Substitute.For<IDatabaseCache>();
-        dbCache.GetTenantsForUserAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+        ITenantRepository tenantRepo = Substitute.For<ITenantRepository>();
+        tenantRepo.GetTenantsForUserAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns(new List<UserTenantRole>
             {
                 TestDataBuilder.BuildUserTenantRole(userId: 1, tenantId: 10, role: UserAccountRoles.TenantAdmin)
             });
 
         IServiceScopeFactory scopeFactory = Substitute.For<IServiceScopeFactory>();
-        CookiePrincipalValidator validator = CreateValidator(redisDb, dbCache, scopeFactory);
+        CookiePrincipalValidator validator = CreateValidator(redisDb, tenantRepo, scopeFactory);
 
         // Cookie has the same role: "10:1" (TenantAdmin = 1)
         ClaimsIdentity identity = new(new[]
@@ -179,10 +179,10 @@ public class CookiePrincipalValidatorTests
     public async Task RoleClaims_WhenDifferentFromDatabase_AreRefreshed()
     {
         IDatabase redisDb = CreateRedisDb();
-        IDatabaseCache dbCache = Substitute.For<IDatabaseCache>();
+        ITenantRepository tenantRepo = Substitute.For<ITenantRepository>();
 
         // Database has two roles now (user was added to a second tenant)
-        dbCache.GetTenantsForUserAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+        tenantRepo.GetTenantsForUserAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns(new List<UserTenantRole>
             {
                 TestDataBuilder.BuildUserTenantRole(userId: 1, tenantId: 10, role: UserAccountRoles.TenantAdmin),
@@ -190,7 +190,7 @@ public class CookiePrincipalValidatorTests
             });
 
         IServiceScopeFactory scopeFactory = Substitute.For<IServiceScopeFactory>();
-        CookiePrincipalValidator validator = CreateValidator(redisDb, dbCache, scopeFactory);
+        CookiePrincipalValidator validator = CreateValidator(redisDb, tenantRepo, scopeFactory);
 
         // Cookie only has the original role
         ClaimsIdentity identity = new(new[]
@@ -221,14 +221,14 @@ public class CookiePrincipalValidatorTests
     public async Task RoleClaims_WhenRoleRevoked_AreRemoved()
     {
         IDatabase redisDb = CreateRedisDb();
-        IDatabaseCache dbCache = Substitute.For<IDatabaseCache>();
+        ITenantRepository tenantRepo = Substitute.For<ITenantRepository>();
 
         // Database has no roles for this user (all revoked)
-        dbCache.GetTenantsForUserAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+        tenantRepo.GetTenantsForUserAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns(new List<UserTenantRole>());
 
         IServiceScopeFactory scopeFactory = Substitute.For<IServiceScopeFactory>();
-        CookiePrincipalValidator validator = CreateValidator(redisDb, dbCache, scopeFactory);
+        CookiePrincipalValidator validator = CreateValidator(redisDb, tenantRepo, scopeFactory);
 
         // Cookie still has the old role
         ClaimsIdentity identity = new(new[]
@@ -259,9 +259,9 @@ public class CookiePrincipalValidatorTests
         {
             ["user:roles:1"] = cachedRoles
         });
-        IDatabaseCache dbCache = Substitute.For<IDatabaseCache>();
+        ITenantRepository tenantRepo = Substitute.For<ITenantRepository>();
         IServiceScopeFactory scopeFactory = Substitute.For<IServiceScopeFactory>();
-        CookiePrincipalValidator validator = CreateValidator(redisDb, dbCache, scopeFactory);
+        CookiePrincipalValidator validator = CreateValidator(redisDb, tenantRepo, scopeFactory);
 
         // Cookie matches the cached value
         ClaimsIdentity identity = new(new[]
@@ -276,7 +276,7 @@ public class CookiePrincipalValidatorTests
         await validator.RefreshRoleClaimsIfChangedAsync(context, 1, "ext-123", redisDb);
 
         // No database call should have been made
-        await dbCache.DidNotReceive().GetTenantsForUserAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
+        await tenantRepo.DidNotReceive().GetTenantsForUserAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
         await Assert.That(context.ShouldRenew).IsFalse();
     }
 
@@ -286,9 +286,9 @@ public class CookiePrincipalValidatorTests
     public async Task RedirectToLogin_Returns401()
     {
         IDatabase redisDb = CreateRedisDb();
-        IDatabaseCache dbCache = Substitute.For<IDatabaseCache>();
+        ITenantRepository tenantRepo = Substitute.For<ITenantRepository>();
         IServiceScopeFactory scopeFactory = Substitute.For<IServiceScopeFactory>();
-        CookiePrincipalValidator validator = CreateValidator(redisDb, dbCache, scopeFactory);
+        CookiePrincipalValidator validator = CreateValidator(redisDb, tenantRepo, scopeFactory);
 
         DefaultHttpContext httpContext = new();
         RedirectContext<CookieAuthenticationOptions> redirectContext = new(
@@ -307,9 +307,9 @@ public class CookiePrincipalValidatorTests
     public async Task RedirectToAccessDenied_Returns403()
     {
         IDatabase redisDb = CreateRedisDb();
-        IDatabaseCache dbCache = Substitute.For<IDatabaseCache>();
+        ITenantRepository tenantRepo = Substitute.For<ITenantRepository>();
         IServiceScopeFactory scopeFactory = Substitute.For<IServiceScopeFactory>();
-        CookiePrincipalValidator validator = CreateValidator(redisDb, dbCache, scopeFactory);
+        CookiePrincipalValidator validator = CreateValidator(redisDb, tenantRepo, scopeFactory);
 
         DefaultHttpContext httpContext = new();
         RedirectContext<CookieAuthenticationOptions> redirectContext = new(
@@ -330,9 +330,9 @@ public class CookiePrincipalValidatorTests
     public async Task ValidatePrincipal_MissingActorClaim_RejectsPrincipal()
     {
         IDatabase redisDb = CreateRedisDb();
-        IDatabaseCache dbCache = Substitute.For<IDatabaseCache>();
+        ITenantRepository tenantRepo = Substitute.For<ITenantRepository>();
         IServiceScopeFactory scopeFactory = Substitute.For<IServiceScopeFactory>();
-        CookiePrincipalValidator validator = CreateValidator(redisDb, dbCache, scopeFactory);
+        CookiePrincipalValidator validator = CreateValidator(redisDb, tenantRepo, scopeFactory);
 
         // Identity has no Actor claim (userId)
         ClaimsIdentity identity = new(new[]
@@ -351,9 +351,9 @@ public class CookiePrincipalValidatorTests
     public async Task ValidatePrincipal_NonNumericActorClaim_RejectsPrincipal()
     {
         IDatabase redisDb = CreateRedisDb();
-        IDatabaseCache dbCache = Substitute.For<IDatabaseCache>();
+        ITenantRepository tenantRepo = Substitute.For<ITenantRepository>();
         IServiceScopeFactory scopeFactory = Substitute.For<IServiceScopeFactory>();
-        CookiePrincipalValidator validator = CreateValidator(redisDb, dbCache, scopeFactory);
+        CookiePrincipalValidator validator = CreateValidator(redisDb, tenantRepo, scopeFactory);
 
         // Actor claim with non-numeric value
         ClaimsIdentity identity = new(new[]
@@ -375,9 +375,9 @@ public class CookiePrincipalValidatorTests
         {
             ["user:active:1"] = "0"
         });
-        IDatabaseCache dbCache = Substitute.For<IDatabaseCache>();
+        ITenantRepository tenantRepo = Substitute.For<ITenantRepository>();
         IServiceScopeFactory scopeFactory = Substitute.For<IServiceScopeFactory>();
-        CookiePrincipalValidator validator = CreateValidator(redisDb, dbCache, scopeFactory);
+        CookiePrincipalValidator validator = CreateValidator(redisDb, tenantRepo, scopeFactory);
 
         ClaimsIdentity identity = new(new[]
         {
@@ -402,9 +402,9 @@ public class CookiePrincipalValidatorTests
             ["user:active:1"] = "1",
             ["user:roles:1"] = roleString
         });
-        IDatabaseCache dbCache = Substitute.For<IDatabaseCache>();
+        ITenantRepository tenantRepo = Substitute.For<ITenantRepository>();
         IServiceScopeFactory scopeFactory = Substitute.For<IServiceScopeFactory>();
-        CookiePrincipalValidator validator = CreateValidator(redisDb, dbCache, scopeFactory);
+        CookiePrincipalValidator validator = CreateValidator(redisDb, tenantRepo, scopeFactory);
 
         ClaimsIdentity identity = new(new[]
         {
@@ -429,8 +429,8 @@ public class CookiePrincipalValidatorTests
         {
             ["user:active:1"] = "1",
         });
-        IDatabaseCache dbCache = Substitute.For<IDatabaseCache>();
-        dbCache.GetTenantsForUserAsync("ext-123", Arg.Any<CancellationToken>())
+        ITenantRepository tenantRepo = Substitute.For<ITenantRepository>();
+        tenantRepo.GetTenantsForUserAsync("ext-123", Arg.Any<CancellationToken>())
             .Returns(new List<UserTenantRole>
             {
                 TestDataBuilder.BuildUserTenantRole(userId: 1, tenantId: 10, role: UserAccountRoles.TenantAdmin),
@@ -438,7 +438,7 @@ public class CookiePrincipalValidatorTests
             });
 
         IServiceScopeFactory scopeFactory = Substitute.For<IServiceScopeFactory>();
-        CookiePrincipalValidator validator = CreateValidator(redisDb, dbCache, scopeFactory);
+        CookiePrincipalValidator validator = CreateValidator(redisDb, tenantRepo, scopeFactory);
 
         ClaimsIdentity identity = new(new[]
         {
@@ -465,9 +465,9 @@ public class CookiePrincipalValidatorTests
         {
             ["user:active:1"] = "1",
         });
-        IDatabaseCache dbCache = Substitute.For<IDatabaseCache>();
+        ITenantRepository tenantRepo = Substitute.For<ITenantRepository>();
         IServiceScopeFactory scopeFactory = Substitute.For<IServiceScopeFactory>();
-        CookiePrincipalValidator validator = CreateValidator(redisDb, dbCache, scopeFactory);
+        CookiePrincipalValidator validator = CreateValidator(redisDb, tenantRepo, scopeFactory);
 
         ClaimsIdentity identity = new(new[]
         {
@@ -480,7 +480,7 @@ public class CookiePrincipalValidatorTests
 
         // Should not crash, should not reject, should not attempt role refresh
         await Assert.That(context.Principal).IsNotNull();
-        await dbCache.DidNotReceive().GetTenantsForUserAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
+        await tenantRepo.DidNotReceive().GetTenantsForUserAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
     }
 
     private static CookieValidatePrincipalContext CreateValidationContext(ClaimsIdentity identity)

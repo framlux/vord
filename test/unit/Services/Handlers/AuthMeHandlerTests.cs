@@ -2,9 +2,9 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
-using Framlux.FleetManagement.Database.Cache;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
+using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Server.Services.Handlers;
 using Framlux.FleetManagement.Server.Services.Infrastructure;
 using NSubstitute;
@@ -19,9 +19,10 @@ public class AuthMeHandlerTests
     [Test]
     public async Task GetCurrentUserAsync_UserNotFound_Returns404()
     {
-        IDatabaseCache cache = Substitute.For<IDatabaseCache>();
-        cache.GetUserByExternalIdAsync("unknown", Arg.Any<CancellationToken>()).Returns((UserAccount?)null);
-        AuthMeHandler handler = new(cache);
+        IUserRepository userRepository = Substitute.For<IUserRepository>();
+        ITenantRepository tenantRepository = Substitute.For<ITenantRepository>();
+        userRepository.GetUserByExternalIdAsync("unknown", Arg.Any<CancellationToken>()).Returns((UserAccount?)null);
+        AuthMeHandler handler = new(userRepository, tenantRepository);
 
         ServiceResult<AuthMeResult> result = await handler.GetCurrentUserAsync("unknown", CancellationToken.None);
 
@@ -31,7 +32,8 @@ public class AuthMeHandlerTests
     [Test]
     public async Task GetCurrentUserAsync_UserFoundNoTenants_ReturnsNeedsOnboarding()
     {
-        IDatabaseCache cache = Substitute.For<IDatabaseCache>();
+        IUserRepository userRepository = Substitute.For<IUserRepository>();
+        ITenantRepository tenantRepository = Substitute.For<ITenantRepository>();
         UserAccount user = new()
         {
             Id = 1,
@@ -43,9 +45,9 @@ public class AuthMeHandlerTests
             IsSystem = false,
             IsGlobalAdmin = false,
         };
-        cache.GetUserByExternalIdAsync("ext-1", Arg.Any<CancellationToken>()).Returns(user);
-        cache.GetTenantsForUserAsync("ext-1", Arg.Any<CancellationToken>()).Returns(Enumerable.Empty<UserTenantRole>());
-        AuthMeHandler handler = new(cache);
+        userRepository.GetUserByExternalIdAsync("ext-1", Arg.Any<CancellationToken>()).Returns(user);
+        tenantRepository.GetTenantsForUserAsync("ext-1", Arg.Any<CancellationToken>()).Returns(Enumerable.Empty<UserTenantRole>());
+        AuthMeHandler handler = new(userRepository, tenantRepository);
 
         ServiceResult<AuthMeResult> result = await handler.GetCurrentUserAsync("ext-1", CancellationToken.None);
 
@@ -58,7 +60,8 @@ public class AuthMeHandlerTests
     [Test]
     public async Task GetCurrentUserAsync_UserWithTenants_ReturnsTenants()
     {
-        IDatabaseCache cache = Substitute.For<IDatabaseCache>();
+        IUserRepository userRepository = Substitute.For<IUserRepository>();
+        ITenantRepository tenantRepository = Substitute.For<ITenantRepository>();
         UserAccount user = new()
         {
             Id = 5,
@@ -70,7 +73,7 @@ public class AuthMeHandlerTests
             IsSystem = false,
             IsGlobalAdmin = true,
         };
-        cache.GetUserByExternalIdAsync("ext-5", Arg.Any<CancellationToken>()).Returns(user);
+        userRepository.GetUserByExternalIdAsync("ext-5", Arg.Any<CancellationToken>()).Returns(user);
 
         Tenant tenant = new()
         {
@@ -95,8 +98,8 @@ public class AuthMeHandlerTests
                 IsActive = true,
             }
         };
-        cache.GetTenantsForUserAsync("ext-5", Arg.Any<CancellationToken>()).Returns(roles);
-        AuthMeHandler handler = new(cache);
+        tenantRepository.GetTenantsForUserAsync("ext-5", Arg.Any<CancellationToken>()).Returns(roles);
+        AuthMeHandler handler = new(userRepository, tenantRepository);
 
         ServiceResult<AuthMeResult> result = await handler.GetCurrentUserAsync("ext-5", CancellationToken.None);
 
@@ -111,7 +114,8 @@ public class AuthMeHandlerTests
     [Test]
     public async Task GetCurrentUserAsync_NonAdmin_ReturnsIsGlobalAdminFalse()
     {
-        IDatabaseCache cache = Substitute.For<IDatabaseCache>();
+        IUserRepository userRepository = Substitute.For<IUserRepository>();
+        ITenantRepository tenantRepository = Substitute.For<ITenantRepository>();
         UserAccount user = new()
         {
             Id = 3,
@@ -123,9 +127,9 @@ public class AuthMeHandlerTests
             IsSystem = false,
             IsGlobalAdmin = false,
         };
-        cache.GetUserByExternalIdAsync("ext-3", Arg.Any<CancellationToken>()).Returns(user);
-        cache.GetTenantsForUserAsync("ext-3", Arg.Any<CancellationToken>()).Returns(Enumerable.Empty<UserTenantRole>());
-        AuthMeHandler handler = new(cache);
+        userRepository.GetUserByExternalIdAsync("ext-3", Arg.Any<CancellationToken>()).Returns(user);
+        tenantRepository.GetTenantsForUserAsync("ext-3", Arg.Any<CancellationToken>()).Returns(Enumerable.Empty<UserTenantRole>());
+        AuthMeHandler handler = new(userRepository, tenantRepository);
 
         ServiceResult<AuthMeResult> result = await handler.GetCurrentUserAsync("ext-3", CancellationToken.None);
 

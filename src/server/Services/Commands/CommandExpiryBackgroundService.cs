@@ -2,7 +2,7 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
-using Framlux.FleetManagement.Database.Cache;
+using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Server.Services.Infrastructure;
 
 namespace Framlux.FleetManagement.Server.Services.Commands;
@@ -51,8 +51,8 @@ public sealed class CommandExpiryBackgroundService : BackgroundService
                 else
                 {
                     using IServiceScope scope = _scopeFactory.CreateScope();
-                    IDatabaseCache cache = scope.ServiceProvider.GetRequiredService<IDatabaseCache>();
-                    await cache.ExpirePendingCommandsAsync(stoppingToken);
+                    IRemoteCommandRepository remoteCommandRepository = scope.ServiceProvider.GetRequiredService<IRemoteCommandRepository>();
+                    await remoteCommandRepository.ExpirePendingCommandsAsync(stoppingToken);
                 }
 
                 await Task.Delay(Interval, stoppingToken);

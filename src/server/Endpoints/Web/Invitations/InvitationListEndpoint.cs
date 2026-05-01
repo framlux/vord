@@ -3,7 +3,7 @@
 // See LICENSE for details.
 
 using FastEndpoints;
-using Framlux.FleetManagement.Database.Cache;
+using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Server.Auth;
 
@@ -50,14 +50,14 @@ public sealed class InvitationListDto
 /// </summary>
 public sealed class InvitationListEndpoint : EndpointWithoutRequest<ApiResponse<List<InvitationListDto>>>
 {
-    private readonly IDatabaseCache _databaseCache;
+    private readonly IInvitationRepository _invitationRepository;
 
     /// <summary>
     /// Creates a new instance of the <see cref="InvitationListEndpoint"/> class.
     /// </summary>
-    public InvitationListEndpoint(IDatabaseCache databaseCache)
+    public InvitationListEndpoint(IInvitationRepository invitationRepository)
     {
-        _databaseCache = databaseCache;
+        _invitationRepository = invitationRepository;
     }
 
     /// <inheritdoc/>
@@ -80,7 +80,7 @@ public sealed class InvitationListEndpoint : EndpointWithoutRequest<ApiResponse<
             return;
         }
 
-        IEnumerable<TenantInvitation> invitations = await _databaseCache.GetInvitationsForTenantAsync(tenantId.Value, ct);
+        IEnumerable<TenantInvitation> invitations = await _invitationRepository.GetInvitationsForTenantAsync(tenantId.Value, ct);
         List<InvitationListDto> dtos = invitations.Select(i => new InvitationListDto
         {
             Id = i.Id,

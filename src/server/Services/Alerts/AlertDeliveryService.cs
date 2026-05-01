@@ -5,12 +5,10 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
-using Framlux.FleetManagement.Database;
 using Framlux.FleetManagement.Database.Models;
+using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Server.Services.Infrastructure;
 using Framlux.FleetManagement.Server.Services.Security;
-using LinqToDB;
-using LinqToDB.Async;
 using StackExchange.Redis;
 
 namespace Framlux.FleetManagement.Server.Services.Alerts;
@@ -60,11 +58,9 @@ public sealed class AlertDeliveryService : IAlertDeliveryService
     private async Task DeliverWebhooksAsync(AlertEvent alertEvent, AlertRule rule, CancellationToken ct)
     {
         using IServiceScope scope = _scopeFactory.CreateScope();
-        DatabaseContext db = scope.ServiceProvider.GetRequiredService<DatabaseContext>();
+        IWebhookRepository webhookRepo = scope.ServiceProvider.GetRequiredService<IWebhookRepository>();
 
-        List<WebhookEndpoint> webhooks = await db.WebhookEndpoints
-            .Where(w => w.TenantId == rule.TenantId && w.IsEnabled)
-            .ToListAsync(ct);
+        List<WebhookEndpoint> webhooks = await webhookRepo.GetEnabledWebhooksForTenantAsync(rule.TenantId, ct);
 
         foreach (WebhookEndpoint webhook in webhooks)
         {

@@ -3,13 +3,11 @@
 // See LICENSE for details.
 
 using FastEndpoints;
-using Framlux.FleetManagement.Database;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
+using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Server.Auth;
 using Framlux.FleetManagement.Server.Services.Billing;
-using LinqToDB;
-using LinqToDB.Async;
 
 namespace Framlux.FleetManagement.Server.Endpoints.Web.Alerts;
 
@@ -19,15 +17,15 @@ namespace Framlux.FleetManagement.Server.Endpoints.Web.Alerts;
 /// </summary>
 public sealed class WebhookListEndpoint : EndpointWithoutRequest<ApiResponse<List<WebhookEndpointDto>>>
 {
-    private readonly DatabaseContext _db;
+    private readonly IWebhookRepository _webhookRepo;
     private readonly ISubscriptionService _subscriptionService;
 
     /// <summary>
     /// Creates a new instance of the <see cref="WebhookListEndpoint"/> class.
     /// </summary>
-    public WebhookListEndpoint(DatabaseContext db, ISubscriptionService subscriptionService)
+    public WebhookListEndpoint(IWebhookRepository webhookRepo, ISubscriptionService subscriptionService)
     {
-        _db = db;
+        _webhookRepo = webhookRepo;
         _subscriptionService = subscriptionService;
     }
 
@@ -60,10 +58,7 @@ public sealed class WebhookListEndpoint : EndpointWithoutRequest<ApiResponse<Lis
             return;
         }
 
-        List<WebhookEndpoint> webhooks = await _db.WebhookEndpoints
-            .Where(w => w.TenantId == tenantId.Value)
-            .OrderBy(w => w.Name)
-            .ToListAsync(ct);
+        List<WebhookEndpoint> webhooks = await _webhookRepo.GetWebhooksForTenantAsync(tenantId.Value, ct);
 
         List<WebhookEndpointDto> dtos = webhooks.Select(w => new WebhookEndpointDto
         {

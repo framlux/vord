@@ -2,9 +2,9 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
-using Framlux.FleetManagement.Database.Cache;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
+using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Server.Options;
 using Framlux.FleetManagement.Server.Services.Billing;
 using Framlux.FleetManagement.Server.Services.Handlers;
@@ -23,9 +23,22 @@ namespace Framlux.FleetManagement.Test.Services.Handlers;
 /// </summary>
 public class BillingWebhookHandlerTests
 {
-    private static IDatabaseCache CreateCache(TestDatabaseFactory dbFactory)
+    private static readonly SubscriptionOptions DefaultOptions = new() { FreeTierMachineLimit = 3, FreeTierRetentionDays = 1 };
+
+    private static BillingWebhookHandler CreateHandler(
+        TestDatabaseFactory dbFactory,
+        IDowngradeCleanupService? cleanupService = null,
+        SubscriptionOptions? options = null)
     {
-        return new DatabaseCache(dbFactory.Context, new NullLogger<DatabaseCache>());
+        DatabaseRepository repo = new(dbFactory.Context, new NullLogger<DatabaseRepository>());
+
+        return new BillingWebhookHandler(
+            repo,
+            repo,
+            repo,
+            repo,
+            cleanupService ?? Substitute.For<IDowngradeCleanupService>(),
+            Options.Create(options ?? DefaultOptions));
     }
 
     [Test]
@@ -35,8 +48,7 @@ public class BillingWebhookHandlerTests
         TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 1, tier: SubscriptionTier.Free, machineLimit: 3, retentionDays: 1);
         sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
 
-        IDatabaseCache cache = CreateCache(dbFactory);
-        BillingWebhookHandler handler = new(cache, new TestServiceScopeFactory(dbFactory.Context), Substitute.For<IDowngradeCleanupService>(), Options.Create(new SubscriptionOptions { FreeTierMachineLimit = 3, FreeTierRetentionDays = 1 }));
+        BillingWebhookHandler handler = CreateHandler(dbFactory);
 
         await handler.HandleCheckoutCompletedAsync(1, SubscriptionTier.Pro, CancellationToken.None);
 
@@ -56,8 +68,7 @@ public class BillingWebhookHandlerTests
         TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 1, tier: SubscriptionTier.Pro);
         sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
 
-        IDatabaseCache cache = CreateCache(dbFactory);
-        BillingWebhookHandler handler = new(cache, new TestServiceScopeFactory(dbFactory.Context), Substitute.For<IDowngradeCleanupService>(), Options.Create(new SubscriptionOptions { FreeTierMachineLimit = 3, FreeTierRetentionDays = 1 }));
+        BillingWebhookHandler handler = CreateHandler(dbFactory);
         DateTimeOffset newPeriodEnd = DateTimeOffset.UtcNow.AddDays(30);
 
         await handler.HandleSubscriptionUpdatedAsync(1, newPeriodEnd, CancellationToken.None);
@@ -79,8 +90,7 @@ public class BillingWebhookHandlerTests
         sub.PendingAction = PendingSubscriptionAction.None;
         sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
 
-        IDatabaseCache cache = CreateCache(dbFactory);
-        BillingWebhookHandler handler = new(cache, new TestServiceScopeFactory(dbFactory.Context), Substitute.For<IDowngradeCleanupService>(), Options.Create(new SubscriptionOptions { FreeTierMachineLimit = 3, FreeTierRetentionDays = 1 }));
+        BillingWebhookHandler handler = CreateHandler(dbFactory);
 
         await handler.HandleSubscriptionDeletedAsync(1, CancellationToken.None);
 
@@ -102,8 +112,7 @@ public class BillingWebhookHandlerTests
         sub.CancelAtPeriodEnd = true;
         sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
 
-        IDatabaseCache cache = CreateCache(dbFactory);
-        BillingWebhookHandler handler = new(cache, new TestServiceScopeFactory(dbFactory.Context), Substitute.For<IDowngradeCleanupService>(), Options.Create(new SubscriptionOptions { FreeTierMachineLimit = 3, FreeTierRetentionDays = 1 }));
+        BillingWebhookHandler handler = CreateHandler(dbFactory);
 
         await handler.HandleSubscriptionDeletedAsync(1, CancellationToken.None);
 
@@ -124,9 +133,8 @@ public class BillingWebhookHandlerTests
         sub.CancelAtPeriodEnd = true;
         sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
 
-        IDatabaseCache cache = CreateCache(dbFactory);
         IDowngradeCleanupService cleanupService = Substitute.For<IDowngradeCleanupService>();
-        BillingWebhookHandler handler = new(cache, new TestServiceScopeFactory(dbFactory.Context), cleanupService, Options.Create(new SubscriptionOptions { FreeTierMachineLimit = 3, FreeTierRetentionDays = 1 }));
+        BillingWebhookHandler handler = CreateHandler(dbFactory, cleanupService: cleanupService);
 
         await handler.HandleSubscriptionDeletedAsync(1, CancellationToken.None);
 
@@ -150,9 +158,8 @@ public class BillingWebhookHandlerTests
         sub.CancelAtPeriodEnd = true;
         sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
 
-        IDatabaseCache cache = CreateCache(dbFactory);
         IDowngradeCleanupService cleanupService = Substitute.For<IDowngradeCleanupService>();
-        BillingWebhookHandler handler = new(cache, new TestServiceScopeFactory(dbFactory.Context), cleanupService, Options.Create(new SubscriptionOptions { FreeTierMachineLimit = 3, FreeTierRetentionDays = 1 }));
+        BillingWebhookHandler handler = CreateHandler(dbFactory, cleanupService: cleanupService);
 
         await handler.HandleSubscriptionDeletedAsync(1, CancellationToken.None);
 
@@ -174,8 +181,7 @@ public class BillingWebhookHandlerTests
         TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 1, tier: SubscriptionTier.Pro);
         sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
 
-        IDatabaseCache cache = CreateCache(dbFactory);
-        BillingWebhookHandler handler = new(cache, new TestServiceScopeFactory(dbFactory.Context), Substitute.For<IDowngradeCleanupService>(), Options.Create(new SubscriptionOptions { FreeTierMachineLimit = 3, FreeTierRetentionDays = 1 }));
+        BillingWebhookHandler handler = CreateHandler(dbFactory);
 
         await handler.HandlePaymentFailedAsync(1, CancellationToken.None);
 
@@ -189,8 +195,7 @@ public class BillingWebhookHandlerTests
     public async Task HandlePaymentFailedAsync_NoMatchingSubscription_NoOp()
     {
         using TestDatabaseFactory dbFactory = new();
-        IDatabaseCache cache = CreateCache(dbFactory);
-        BillingWebhookHandler handler = new(cache, new TestServiceScopeFactory(dbFactory.Context), Substitute.For<IDowngradeCleanupService>(), Options.Create(new SubscriptionOptions { FreeTierMachineLimit = 3, FreeTierRetentionDays = 1 }));
+        BillingWebhookHandler handler = CreateHandler(dbFactory);
 
         // Should not throw
         await handler.HandlePaymentFailedAsync(999, CancellationToken.None);
@@ -203,8 +208,7 @@ public class BillingWebhookHandlerTests
     public async Task HandleSubscriptionDeletedAsync_NoMatchingSubscription_NoOp()
     {
         using TestDatabaseFactory dbFactory = new();
-        IDatabaseCache cache = CreateCache(dbFactory);
-        BillingWebhookHandler handler = new(cache, new TestServiceScopeFactory(dbFactory.Context), Substitute.For<IDowngradeCleanupService>(), Options.Create(new SubscriptionOptions { FreeTierMachineLimit = 3, FreeTierRetentionDays = 1 }));
+        BillingWebhookHandler handler = CreateHandler(dbFactory);
 
         // Should not throw
         await handler.HandleSubscriptionDeletedAsync(999, CancellationToken.None);
@@ -220,8 +224,7 @@ public class BillingWebhookHandlerTests
         TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 1, tier: SubscriptionTier.Free, machineLimit: 3, retentionDays: 1);
         sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
 
-        IDatabaseCache cache = CreateCache(dbFactory);
-        BillingWebhookHandler handler = new(cache, new TestServiceScopeFactory(dbFactory.Context), Substitute.For<IDowngradeCleanupService>(), Options.Create(new SubscriptionOptions { FreeTierMachineLimit = 3, FreeTierRetentionDays = 1 }));
+        BillingWebhookHandler handler = CreateHandler(dbFactory);
 
         await handler.HandleCheckoutCompletedAsync(1, SubscriptionTier.Team, CancellationToken.None);
 
@@ -237,8 +240,7 @@ public class BillingWebhookHandlerTests
     public async Task HandleCheckoutCompletedAsync_NoExistingSubscription_NoOp()
     {
         using TestDatabaseFactory dbFactory = new();
-        IDatabaseCache cache = CreateCache(dbFactory);
-        BillingWebhookHandler handler = new(cache, new TestServiceScopeFactory(dbFactory.Context), Substitute.For<IDowngradeCleanupService>(), Options.Create(new SubscriptionOptions { FreeTierMachineLimit = 3, FreeTierRetentionDays = 1 }));
+        BillingWebhookHandler handler = CreateHandler(dbFactory);
 
         // No subscription exists for tenant 999 — should not throw
         await handler.HandleCheckoutCompletedAsync(999, SubscriptionTier.Pro, CancellationToken.None);
@@ -254,8 +256,7 @@ public class BillingWebhookHandlerTests
         TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 1, tier: SubscriptionTier.Free, machineLimit: 3, retentionDays: 1);
         sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
 
-        IDatabaseCache cache = CreateCache(dbFactory);
-        BillingWebhookHandler handler = new(cache, new TestServiceScopeFactory(dbFactory.Context), Substitute.For<IDowngradeCleanupService>(), Options.Create(new SubscriptionOptions { FreeTierMachineLimit = 3, FreeTierRetentionDays = 1 }));
+        BillingWebhookHandler handler = CreateHandler(dbFactory);
 
         await handler.HandleCheckoutCompletedAsync(1, SubscriptionTier.Pro, CancellationToken.None);
 
@@ -275,8 +276,7 @@ public class BillingWebhookHandlerTests
         TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 1, tier: SubscriptionTier.Free, machineLimit: 3, retentionDays: 1);
         sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
 
-        IDatabaseCache cache = CreateCache(dbFactory);
-        BillingWebhookHandler handler = new(cache, new TestServiceScopeFactory(dbFactory.Context), Substitute.For<IDowngradeCleanupService>(), Options.Create(new SubscriptionOptions { FreeTierMachineLimit = 3, FreeTierRetentionDays = 1 }));
+        BillingWebhookHandler handler = CreateHandler(dbFactory);
 
         // First upgrade creates default alert rules
         await handler.HandleCheckoutCompletedAsync(1, SubscriptionTier.Pro, CancellationToken.None);
@@ -302,8 +302,7 @@ public class BillingWebhookHandlerTests
         TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 1, tier: SubscriptionTier.Pro, machineLimit: null, retentionDays: 30);
         sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
 
-        IDatabaseCache cache = CreateCache(dbFactory);
-        BillingWebhookHandler handler = new(cache, new TestServiceScopeFactory(dbFactory.Context), Substitute.For<IDowngradeCleanupService>(), Options.Create(new SubscriptionOptions { FreeTierMachineLimit = 3, FreeTierRetentionDays = 1 }));
+        BillingWebhookHandler handler = CreateHandler(dbFactory);
 
         await handler.HandleCheckoutCompletedAsync(1, SubscriptionTier.Pro, CancellationToken.None);
 
@@ -323,8 +322,7 @@ public class BillingWebhookHandlerTests
         TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 1, tier: SubscriptionTier.Pro, machineLimit: null, retentionDays: 30);
         sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
 
-        IDatabaseCache cache = CreateCache(dbFactory);
-        BillingWebhookHandler handler = new(cache, new TestServiceScopeFactory(dbFactory.Context), Substitute.For<IDowngradeCleanupService>(), Options.Create(new SubscriptionOptions { FreeTierMachineLimit = 3, FreeTierRetentionDays = 1 }));
+        BillingWebhookHandler handler = CreateHandler(dbFactory);
 
         await handler.HandleCheckoutCompletedAsync(1, SubscriptionTier.Team, CancellationToken.None);
 
@@ -344,8 +342,7 @@ public class BillingWebhookHandlerTests
         TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 1, tier: SubscriptionTier.Team, machineLimit: null, retentionDays: 365);
         sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
 
-        IDatabaseCache cache = CreateCache(dbFactory);
-        BillingWebhookHandler handler = new(cache, new TestServiceScopeFactory(dbFactory.Context), Substitute.For<IDowngradeCleanupService>(), Options.Create(new SubscriptionOptions { FreeTierMachineLimit = 3, FreeTierRetentionDays = 1 }));
+        BillingWebhookHandler handler = CreateHandler(dbFactory);
 
         await handler.HandleDowngradeToProAsync(1, CancellationToken.None);
 
@@ -365,8 +362,7 @@ public class BillingWebhookHandlerTests
         TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 1, tier: SubscriptionTier.Pro, status: SubscriptionStatus.PastDue);
         sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
 
-        IDatabaseCache cache = CreateCache(dbFactory);
-        BillingWebhookHandler handler = new(cache, new TestServiceScopeFactory(dbFactory.Context), Substitute.For<IDowngradeCleanupService>(), Options.Create(new SubscriptionOptions { FreeTierMachineLimit = 3, FreeTierRetentionDays = 1 }));
+        BillingWebhookHandler handler = CreateHandler(dbFactory);
 
         await handler.HandlePaymentSucceededAsync(1, CancellationToken.None);
 
@@ -380,8 +376,7 @@ public class BillingWebhookHandlerTests
     public async Task HandlePaymentSucceededAsync_NoSubscription_NoOp()
     {
         using TestDatabaseFactory dbFactory = new();
-        IDatabaseCache cache = CreateCache(dbFactory);
-        BillingWebhookHandler handler = new(cache, new TestServiceScopeFactory(dbFactory.Context), Substitute.For<IDowngradeCleanupService>(), Options.Create(new SubscriptionOptions { FreeTierMachineLimit = 3, FreeTierRetentionDays = 1 }));
+        BillingWebhookHandler handler = CreateHandler(dbFactory);
 
         // Should not throw when no subscription exists
         await handler.HandlePaymentSucceededAsync(999, CancellationToken.None);

@@ -2,18 +2,15 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
-using Framlux.FleetManagement.Database;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
+using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Server.Endpoints.Web;
 using Framlux.FleetManagement.Server.Endpoints.Web.Models.Machines;
 using Framlux.FleetManagement.Server.Services.Billing;
 using Framlux.FleetManagement.Server.Services.Infrastructure;
 using Framlux.FleetManagement.Server.Services.Machines;
 using Framlux.FleetManagement.Server.Services.ServerConfiguration;
-using LinqToDB;
-using LinqToDB.Async;
-using LinqToDB.Data;
 
 namespace Framlux.FleetManagement.Server.Services.Handlers;
 
@@ -22,7 +19,11 @@ namespace Framlux.FleetManagement.Server.Services.Handlers;
 /// </summary>
 public sealed class MachineHandler : IMachineHandler
 {
-    private readonly DatabaseContext _db;
+    private readonly IMachineRepository _machineRepo;
+    private readonly IMachineStateRepository _machineStateRepo;
+    private readonly ITenantRepository _tenantRepo;
+    private readonly IDatabaseTransactionProvider _transactionProvider;
+    private readonly IAuditLogRepository _auditLog;
     private readonly IMachinePingService _pingService;
     private readonly ServerConfigurationService _configService;
     private readonly IBillingApiClient _billingApiClient;
@@ -32,13 +33,31 @@ public sealed class MachineHandler : IMachineHandler
     /// Creates a new instance of the <see cref="MachineHandler"/> class.
     /// </summary>
     public MachineHandler(
-        DatabaseContext db,
+        IMachineRepository machineRepo,
+        IMachineStateRepository machineStateRepo,
+        ITenantRepository tenantRepo,
+        IDatabaseTransactionProvider transactionProvider,
+        IAuditLogRepository auditLog,
         IMachinePingService pingService,
         ServerConfigurationService configService,
         IBillingApiClient billingApiClient,
         ILogger<MachineHandler> logger)
     {
-        _db = db;
+        ArgumentNullException.ThrowIfNull(machineRepo);
+        ArgumentNullException.ThrowIfNull(machineStateRepo);
+        ArgumentNullException.ThrowIfNull(tenantRepo);
+        ArgumentNullException.ThrowIfNull(transactionProvider);
+        ArgumentNullException.ThrowIfNull(auditLog);
+        ArgumentNullException.ThrowIfNull(pingService);
+        ArgumentNullException.ThrowIfNull(configService);
+        ArgumentNullException.ThrowIfNull(billingApiClient);
+        ArgumentNullException.ThrowIfNull(logger);
+
+        _machineRepo = machineRepo;
+        _machineStateRepo = machineStateRepo;
+        _tenantRepo = tenantRepo;
+        _transactionProvider = transactionProvider;
+        _auditLog = auditLog;
         _pingService = pingService;
         _configService = configService;
         _billingApiClient = billingApiClient;
@@ -53,39 +72,30 @@ public sealed class MachineHandler : IMachineHandler
             return ServiceResult<ApiResponse<object>>.NotFound();
         }
 
-        using DataConnectionTransaction transaction = await _db.BeginTransactionAsync(ct);
+        using IDatabaseTransaction transaction = await _transactionProvider.BeginTransactionAsync(ct);
 
-        int updated = await _db.Machines
-            .Where(m => m.Id == machineId && m.TenantId == tenantId.Value && m.IsDeleted == false)
-            .Set(m => m.IsDeleted, true)
-            .Set(m => m.DeletedOn, DateTimeOffset.UtcNow)
-            .Set(m => m.DeletedByUserId, userId)
-            .UpdateAsync(ct);
+        int updated = await _machineRepo.SoftDeleteMachineAsync(machineId, tenantId.Value, userId, ct);
 
         if (updated == 0)
         {
             return ServiceResult<ApiResponse<object>>.NotFound();
         }
 
-        await _db.InsertAsync(AuditHelper.Create(
+        await _auditLog.InsertAuditLogAsync(AuditHelper.Create(
             tenantId, userId, machineId,
             AuditAction.MachineDeleted, AuditResourceType.Machine,
-            machineId.ToString(), null, null), token: ct);
+            machineId.ToString(), null, null), ct);
 
         await transaction.CommitAsync(ct);
 
         // Sync the machine quantity with Stripe after deletion (fire-and-forget)
         try
         {
-            Tenant? tenant = await _db.Tenants
-                .Where(t => t.Id == tenantId.Value)
-                .FirstOrDefaultAsync(ct);
+            Tenant? tenant = await _tenantRepo.GetTenantByIdAsync(tenantId.Value, ct);
 
             if (tenant is not null)
             {
-                int activeMachineCount = await _db.Machines
-                    .Where(m => m.TenantId == tenantId.Value && m.IsDeleted == false)
-                    .CountAsync(ct);
+                int activeMachineCount = await _machineRepo.GetActiveMachineCountAsync(tenantId.Value, ct);
 
                 await _billingApiClient.UpdateQuantityAsync(tenant.ExternalId, activeMachineCount, ct);
             }
@@ -131,32 +141,23 @@ public sealed class MachineHandler : IMachineHandler
             return ServiceResult<ApiResponse<MachineDto>>.BadRequest("Location must be 250 characters or fewer.");
         }
 
-        Machine? machine = await _db.Machines
-            .FirstOrDefaultAsync(m => m.Id == machineId && m.TenantId == tenantId.Value && m.IsDeleted == false, ct);
+        Machine? machine = await _machineRepo.GetActiveMachineByIdAsync(machineId, tenantId.Value, ct);
 
         if (machine is null)
         {
             return ServiceResult<ApiResponse<MachineDto>>.NotFound();
         }
 
-        using DataConnectionTransaction transaction = await _db.BeginTransactionAsync(ct);
+        using IDatabaseTransaction transaction = await _transactionProvider.BeginTransactionAsync(ct);
 
-        await _db.Machines
-            .Where(m => m.Id == machineId)
-            .Set(m => m.Name, trimmedName)
-            .Set(m => m.Description, description)
-            .Set(m => m.Location, location)
-            .UpdateAsync(ct);
+        await _machineRepo.UpdateMachineFieldsAsync(machineId, trimmedName, description, location, ct);
 
-        await _db.MachineStateSummaries
-            .Where(s => s.MachineId == machineId)
-            .Set(s => s.Name, trimmedName)
-            .UpdateAsync(ct);
+        await _machineStateRepo.UpdateSummaryNameAsync(machineId, trimmedName, ct);
 
-        await _db.InsertAsync(AuditHelper.Create(
+        await _auditLog.InsertAuditLogAsync(AuditHelper.Create(
             tenantId, userId, machineId,
             AuditAction.MachineUpdated, AuditResourceType.Machine,
-            machineId.ToString(), new { Name = trimmedName, Description = description, Location = location }, null), token: ct);
+            machineId.ToString(), new { Name = trimmedName, Description = description, Location = location }, null), ct);
 
         await transaction.CommitAsync(ct);
 
@@ -168,8 +169,7 @@ public sealed class MachineHandler : IMachineHandler
         bool isOnline = await _pingService.IsOnlineAsync(machine.Id, onlineThreshold);
         DateTimeOffset? lastPing = await _pingService.GetLastPingAsync(machine.Id);
 
-        MachineStateSummary? summary = await _db.MachineStateSummaries
-            .FirstOrDefaultAsync(s => s.MachineId == machineId, ct);
+        MachineStateSummary? summary = await _machineStateRepo.GetSummaryForMachineAsync(machineId, ct);
 
         MachineDto dto = BuildMachineDto(machine, isOnline, lastPing, summary?.Hostname);
 
@@ -211,23 +211,16 @@ public sealed class MachineHandler : IMachineHandler
             pageSize = 25;
         }
 
-        IQueryable<Machine> query = _db.Machines
-            .Where(m => m.TenantId == tenantId.Value && m.IsDeleted == false);
-
-        if (string.IsNullOrWhiteSpace(search) == false)
-        {
-            string searchLower = search.ToLowerInvariant();
-            query = query.Where(m => m.Name.ToLower().Contains(searchLower));
-        }
-
+        OperatingSystems? parsedOs = null;
         if (string.IsNullOrWhiteSpace(osFilter) == false && Enum.TryParse<OperatingSystems>(osFilter, true, out OperatingSystems osEnum))
         {
-            query = query.Where(m => m.OperatingSystem == osEnum);
+            parsedOs = osEnum;
         }
 
+        MachineTypes? parsedType = null;
         if (string.IsNullOrWhiteSpace(typeFilter) == false && Enum.TryParse<MachineTypes>(typeFilter, true, out MachineTypes typeEnum))
         {
-            query = query.Where(m => m.MachineType == typeEnum);
+            parsedType = typeEnum;
         }
 
         // When filtering by online/offline status, we must resolve status for all matching machines
@@ -238,8 +231,26 @@ public sealed class MachineHandler : IMachineHandler
 
         if (hasStatusFilter)
         {
-            // Load all matching machine IDs and resolve online status via batch Redis call.
-            List<Machine> allMachines = await query.ToListAsync(ct);
+            // Load all matching machines and resolve online status via batch Redis call.
+            List<Machine> allMachines = await _machineRepo.ListActiveMachinesForTenantAsync(tenantId.Value, ct);
+
+            // Apply search/OS/type filters in memory since we loaded all machines
+            if (string.IsNullOrWhiteSpace(search) == false)
+            {
+                string searchLower = search.ToLowerInvariant();
+                allMachines = allMachines.Where(m => m.Name.ToLower().Contains(searchLower)).ToList();
+            }
+
+            if (parsedOs.HasValue)
+            {
+                allMachines = allMachines.Where(m => m.OperatingSystem == parsedOs.Value).ToList();
+            }
+
+            if (parsedType.HasValue)
+            {
+                allMachines = allMachines.Where(m => m.MachineType == parsedType.Value).ToList();
+            }
+
             List<long> allIds = allMachines.Select(m => m.Id).ToList();
             TimeSpan onlineThreshold = await _configService.GetOnlineThresholdAsync(ct);
             Dictionary<long, bool> onlineMap = await _pingService.AreOnlineAsync(allIds, onlineThreshold);
@@ -262,7 +273,7 @@ public sealed class MachineHandler : IMachineHandler
                 .ToList();
 
             List<long> pagedIds = paged.Select(m => m.Id).ToList();
-            Dictionary<long, string?> hostnameMap = await LoadHostnameMapAsync(pagedIds, ct);
+            Dictionary<long, string?> hostnameMap = await _machineStateRepo.GetHostnameMapAsync(pagedIds, ct);
 
             List<MachineDto> dtos = paged.Select(machine => BuildMachineDto(
                 machine,
@@ -282,25 +293,11 @@ public sealed class MachineHandler : IMachineHandler
         }
         else
         {
-            int totalCount = await query.CountAsync(ct);
+            int totalCount = await _machineRepo.CountActiveMachinesAsync(tenantId.Value, search, parsedOs, parsedType, ct);
 
-            IOrderedQueryable<Machine> orderedQuery = sortBy?.ToLowerInvariant() switch
-            {
-                "type" => sortDir == "desc"
-                    ? query.OrderByDescending(m => m.MachineType)
-                    : query.OrderBy(m => m.MachineType),
-                "registeredon" => sortDir == "desc"
-                    ? query.OrderByDescending(m => m.RegisteredOn)
-                    : query.OrderBy(m => m.RegisteredOn),
-                _ => sortDir == "desc"
-                    ? query.OrderByDescending(m => m.Name)
-                    : query.OrderBy(m => m.Name),
-            };
-
-            List<Machine> machines = await orderedQuery
-                .Skip((page - 1) * pageSize)
-                .Take(pageSize)
-                .ToListAsync(ct);
+            List<Machine> machines = await _machineRepo.QueryActiveMachinesAsync(
+                tenantId.Value, search, parsedOs, parsedType,
+                sortBy, sortDir, (page - 1) * pageSize, pageSize, ct);
 
             // Batch Redis calls instead of N+1 individual calls.
             List<long> machineIds = machines.Select(m => m.Id).ToList();
@@ -308,7 +305,7 @@ public sealed class MachineHandler : IMachineHandler
             Dictionary<long, bool> onlineMap = await _pingService.AreOnlineAsync(machineIds, onlineThreshold);
             Dictionary<long, DateTimeOffset?> lastPingMap = await _pingService.GetLastPingsAsync(machineIds);
 
-            Dictionary<long, string?> hostnameMap = await LoadHostnameMapAsync(machineIds, ct);
+            Dictionary<long, string?> hostnameMap = await _machineStateRepo.GetHostnameMapAsync(machineIds, ct);
 
             List<MachineDto> dtos = machines.Select(machine => BuildMachineDto(
                 machine,
@@ -346,18 +343,6 @@ public sealed class MachineHandler : IMachineHandler
             RegisteredOn = machine.RegisteredOn,
             IsDeleted = machine.IsDeleted,
         };
-    }
-
-    private async Task<Dictionary<long, string?>> LoadHostnameMapAsync(List<long> machineIds, CancellationToken ct)
-    {
-        if (machineIds.Count == 0)
-        {
-            return new Dictionary<long, string?>();
-        }
-
-        return await _db.MachineStateSummaries
-            .Where(s => machineIds.Contains(s.MachineId))
-            .ToDictionaryAsync(s => s.MachineId, s => s.Hostname, ct);
     }
 
     private static List<Machine> ApplySort(List<Machine> machines, string sortBy, string sortDir)

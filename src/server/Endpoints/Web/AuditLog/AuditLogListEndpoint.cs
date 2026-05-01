@@ -3,13 +3,11 @@
 // See LICENSE for details.
 
 using FastEndpoints;
-using Framlux.FleetManagement.Database;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
+using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Server.Auth;
 using Framlux.FleetManagement.Server.Services.Billing;
-using LinqToDB;
-using LinqToDB.Async;
 
 namespace Framlux.FleetManagement.Server.Endpoints.Web.AuditLog;
 
@@ -45,15 +43,15 @@ public sealed class AuditLogListRequest
 /// </summary>
 public sealed class AuditLogListEndpoint : Endpoint<AuditLogListRequest, ApiResponse<PaginatedResponse<AuditLogEntryDto>>>
 {
-    private readonly DatabaseContext _db;
+    private readonly IAuditLogRepository _auditLogRepo;
     private readonly ISubscriptionService _subscriptionService;
 
     /// <summary>
     /// Creates a new instance of the <see cref="AuditLogListEndpoint"/> class.
     /// </summary>
-    public AuditLogListEndpoint(DatabaseContext db, ISubscriptionService subscriptionService)
+    public AuditLogListEndpoint(IAuditLogRepository auditLogRepo, ISubscriptionService subscriptionService)
     {
-        _db = db;
+        _auditLogRepo = auditLogRepo;
         _subscriptionService = subscriptionService;
     }
 
@@ -89,34 +87,18 @@ public sealed class AuditLogListEndpoint : Endpoint<AuditLogListRequest, ApiResp
         }
 
         int page = req.Page < 1 ? 1 : req.Page;
-        int pageSize = req.PageSize < 1 || req.PageSize > 100 ? 25 : req.PageSize;
+        int pageSize = (req.PageSize < 1) || (req.PageSize > 100) ? 25 : req.PageSize;
 
-        IQueryable<AuditLogEntry> query = _db.AuditLog
-            .LoadWith(a => a.User)
-            .Where(a => a.TenantId == tenantId.Value);
-
-        if (string.IsNullOrEmpty(req.Action) == false && Enum.TryParse<AuditAction>(req.Action, true, out AuditAction actionFilter))
+        AuditAction? actionFilter = null;
+        if ((string.IsNullOrEmpty(req.Action) == false) && Enum.TryParse<AuditAction>(req.Action, true, out AuditAction parsed))
         {
-            query = query.Where(a => a.Action == actionFilter);
+            actionFilter = parsed;
         }
 
-        if (req.From.HasValue)
-        {
-            query = query.Where(a => a.Timestamp >= req.From.Value);
-        }
+        int totalCount = await _auditLogRepo.CountAuditLogEntriesForTenantAsync(tenantId.Value, actionFilter, req.From, req.To, ct);
 
-        if (req.To.HasValue)
-        {
-            query = query.Where(a => a.Timestamp <= req.To.Value);
-        }
-
-        int totalCount = await query.CountAsync(ct);
-
-        List<AuditLogEntry> entries = await query
-            .OrderByDescending(a => a.Timestamp)
-            .Skip((page - 1) * pageSize)
-            .Take(pageSize)
-            .ToListAsync(ct);
+        List<AuditLogEntry> entries = await _auditLogRepo.GetAuditLogEntriesForTenantAsync(
+            tenantId.Value, (page - 1) * pageSize, pageSize, actionFilter, req.From, req.To, ct);
 
         List<AuditLogEntryDto> dtos = entries.Select(e => new AuditLogEntryDto
         {

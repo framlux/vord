@@ -3,8 +3,8 @@
 // See LICENSE for details.
 
 using FastEndpoints;
-using Framlux.FleetManagement.Database.Cache;
 using Framlux.FleetManagement.Database.Models;
+using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Server.Auth;
 using Framlux.FleetManagement.Server.Services.Billing;
 
@@ -70,15 +70,15 @@ public sealed class LineItemDto
 /// </summary>
 public sealed class UpcomingInvoiceEndpoint : EndpointWithoutRequest<ApiResponse<UpcomingInvoiceDto>>
 {
-    private readonly IDatabaseCache _databaseCache;
+    private readonly ITenantRepository _tenantRepository;
     private readonly IBillingApiClient _billingApiClient;
 
     /// <summary>
     /// Creates a new instance of the <see cref="UpcomingInvoiceEndpoint"/> class.
     /// </summary>
-    public UpcomingInvoiceEndpoint(IDatabaseCache databaseCache, IBillingApiClient billingApiClient)
+    public UpcomingInvoiceEndpoint(ITenantRepository tenantRepository, IBillingApiClient billingApiClient)
     {
-        _databaseCache = databaseCache;
+        _tenantRepository = tenantRepository;
         _billingApiClient = billingApiClient;
     }
 
@@ -102,7 +102,7 @@ public sealed class UpcomingInvoiceEndpoint : EndpointWithoutRequest<ApiResponse
             return;
         }
 
-        Tenant? tenant = await _databaseCache.GetTenantByIdAsync(tenantId.Value, ct);
+        Tenant? tenant = await _tenantRepository.GetTenantByIdAsync(tenantId.Value, ct);
         if (tenant is null)
         {
             await Send.NotFoundAsync(ct);

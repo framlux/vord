@@ -4,14 +4,13 @@
 
 using System.Security.Cryptography;
 using FastEndpoints;
-using Framlux.FleetManagement.Database;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
+using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Server.Auth;
 using Framlux.FleetManagement.Server.Services.Billing;
+using Framlux.FleetManagement.Server.Services.Infrastructure;
 using Framlux.FleetManagement.Server.Services.Security;
-using LinqToDB;
-using LinqToDB.Async;
 
 namespace Framlux.FleetManagement.Server.Endpoints.Web.Alerts;
 
@@ -21,18 +20,20 @@ namespace Framlux.FleetManagement.Server.Endpoints.Web.Alerts;
 /// </summary>
 public sealed class WebhookRotateSecretEndpoint : EndpointWithoutRequest<ApiResponse<WebhookEndpointDto>>
 {
-    private readonly DatabaseContext _db;
+    private readonly IWebhookRepository _webhookRepo;
     private readonly ISubscriptionService _subscriptionService;
     private readonly IWebhookSecretProtector _secretProtector;
+    private readonly IAuditLogRepository _auditLog;
 
     /// <summary>
     /// Creates a new instance of the <see cref="WebhookRotateSecretEndpoint"/> class.
     /// </summary>
-    public WebhookRotateSecretEndpoint(DatabaseContext db, ISubscriptionService subscriptionService, IWebhookSecretProtector secretProtector)
+    public WebhookRotateSecretEndpoint(IWebhookRepository webhookRepo, ISubscriptionService subscriptionService, IWebhookSecretProtector secretProtector, IAuditLogRepository auditLog)
     {
-        _db = db;
+        _webhookRepo = webhookRepo;
         _subscriptionService = subscriptionService;
         _secretProtector = secretProtector;
+        _auditLog = auditLog;
     }
 
     /// <inheritdoc/>
@@ -68,8 +69,7 @@ public sealed class WebhookRotateSecretEndpoint : EndpointWithoutRequest<ApiResp
 
         int webhookId = Route<int>("id");
 
-        WebhookEndpoint? webhook = await _db.WebhookEndpoints
-            .FirstOrDefaultAsync(w => w.Id == webhookId && w.TenantId == tenantId.Value, ct);
+        WebhookEndpoint? webhook = await _webhookRepo.GetWebhookByIdAsync(webhookId, tenantId.Value, ct);
 
         if (webhook is null)
         {
@@ -81,10 +81,13 @@ public sealed class WebhookRotateSecretEndpoint : EndpointWithoutRequest<ApiResp
         string newSecret = Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(32));
         string encryptedSecret = _secretProtector.Protect(newSecret);
 
-        await _db.WebhookEndpoints
-            .Where(w => w.Id == webhookId)
-            .Set(w => w.Secret, encryptedSecret)
-            .UpdateAsync(ct);
+        await _webhookRepo.UpdateWebhookSecretAsync(webhookId, encryptedSecret, ct);
+
+        int? userId = TenantClaimHelper.GetUserIdFromClaims(User);
+        await _auditLog.InsertAuditLogAsync(AuditHelper.Create(
+            tenantId.Value, userId, null,
+            AuditAction.WebhookSecretRotated, AuditResourceType.Webhook,
+            webhookId.ToString(), webhook.Name, null), ct);
 
         WebhookEndpointDto dto = new()
         {

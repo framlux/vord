@@ -3,11 +3,9 @@
 // See LICENSE for details.
 
 using Framlux.FleetManagement.Database.Models;
-using Framlux.FleetManagement.Database;
+using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Server.Endpoints.Web.Models.Users;
 using Framlux.FleetManagement.Server.Services.Infrastructure;
-using LinqToDB.Async;
-using LinqToDB;
 
 namespace Framlux.FleetManagement.Server.Services.Handlers;
 
@@ -16,18 +14,18 @@ namespace Framlux.FleetManagement.Server.Services.Handlers;
 /// </summary>
 public sealed class UserHandler : IUserHandler
 {
-    private readonly DatabaseContext _db;
+    private readonly IUserRepository _userRepo;
     private readonly ILogger<UserHandler> _logger;
 
     /// <summary>
     /// Creates a new instance of the <see cref="UserHandler"/> class.
     /// </summary>
-    public UserHandler(DatabaseContext db, ILogger<UserHandler> logger)
+    public UserHandler(IUserRepository userRepo, ILogger<UserHandler> logger)
     {
-        ArgumentNullException.ThrowIfNull(db);
+        ArgumentNullException.ThrowIfNull(userRepo);
         ArgumentNullException.ThrowIfNull(logger);
 
-        _db = db;
+        _userRepo = userRepo;
         _logger = logger;
     }
 
@@ -39,25 +37,8 @@ public sealed class UserHandler : IUserHandler
             return ServiceResult<List<UserAccountDto>>.Ok([]);
         }
 
-        List<int> tenantUserIds = await _db.UserTenantRoles
-            .Where(r => r.AssignedTenantId == tenantId.Value && r.IsActive)
-            .Select(r => r.UserId)
-            .Distinct()
-            .ToListAsync(ct);
-
-        List<UserAccount> users = await _db.UserAccounts
-            .Where(u => u.IsSystem == false && tenantUserIds.Contains(u.Id))
-            .OrderBy(u => u.Username)
-            .ToListAsync(ct);
-
-        List<UserTenantRole> tenantRoles = await _db.UserTenantRoles
-            .LoadWith(r => r.AssignedTenant)
-            .Where(r => r.IsActive && r.AssignedTenantId == tenantId.Value)
-            .ToListAsync(ct);
-
-        Dictionary<int, List<UserTenantRole>> rolesByUser = tenantRoles
-            .GroupBy(r => r.UserId)
-            .ToDictionary(g => g.Key, g => g.ToList());
+        (List<UserAccount> users, Dictionary<int, List<UserTenantRole>> rolesByUser) =
+            await _userRepo.ListUsersForTenantAsync(tenantId.Value, ct);
 
         List<UserAccountDto> dtos = users.Select(u =>
         {
@@ -94,26 +75,13 @@ public sealed class UserHandler : IUserHandler
             return ServiceResult<UserAccountDto>.NotFound();
         }
 
-        bool userInTenant = await _db.UserTenantRoles
-            .AnyAsync(r => r.UserId == userId && r.AssignedTenantId == tenantId.Value && r.IsActive, ct);
-
-        if (userInTenant == false)
-        {
-            return ServiceResult<UserAccountDto>.NotFound();
-        }
-
-        UserAccount? user = await _db.UserAccounts
-            .FirstOrDefaultAsync(u => u.Id == userId, ct);
+        (UserAccount? user, List<UserTenantRole> roles) =
+            await _userRepo.GetUserDetailForTenantAsync(userId, tenantId.Value, ct);
 
         if (user is null)
         {
             return ServiceResult<UserAccountDto>.NotFound();
         }
-
-        List<UserTenantRole> roles = await _db.UserTenantRoles
-            .LoadWith(r => r.AssignedTenant)
-            .Where(r => r.UserId == userId && r.AssignedTenantId == tenantId.Value && r.IsActive)
-            .ToListAsync(ct);
 
         UserAccountDto dto = new()
         {
@@ -146,39 +114,27 @@ public sealed class UserHandler : IUserHandler
             return ServiceResult<object>.NotFound();
         }
 
-        bool userInTenant = await _db.UserTenantRoles
-            .AnyAsync(r => r.UserId == targetUserId && r.AssignedTenantId == tenantId.Value && r.IsActive, ct);
+        // Check if the target user has an active role in this tenant
+        (UserAccount? targetUser, List<UserTenantRole> targetRoles) =
+            await _userRepo.GetUserDetailForTenantAsync(targetUserId, tenantId.Value, ct);
 
-        if (userInTenant == false)
+        if ((targetUser is null) || (targetRoles.Count == 0))
         {
             return ServiceResult<object>.NotFound();
         }
 
-        int roleUpdated = await _db.UserTenantRoles
-            .Where(r => r.UserId == targetUserId &&
-                         r.AssignedTenantId == tenantId.Value &&
-                         r.IsActive)
-            .Set(r => r.IsActive, false)
-            .Set(r => r.DisabledByUserId, currentUserId)
-            .Set(r => r.DisabledAt, DateTimeOffset.UtcNow)
-            .UpdateAsync(ct);
+        int roleUpdated = await _userRepo.DeactivateUserTenantRolesAsync(targetUserId, tenantId.Value, currentUserId, ct);
 
         if (roleUpdated == 0)
         {
             return ServiceResult<object>.NotFound();
         }
 
-        bool hasActiveRoles = await _db.UserTenantRoles
-            .AnyAsync(r => r.UserId == targetUserId && r.IsActive, ct);
+        bool hasActiveRoles = await _userRepo.HasActiveRolesAsync(targetUserId, ct);
 
         if (hasActiveRoles == false)
         {
-            await _db.UserAccounts
-                .Where(u => u.Id == targetUserId && u.IsActive && u.IsSystem == false)
-                .Set(u => u.IsActive, false)
-                .Set(u => u.DeletedOn, DateTimeOffset.UtcNow)
-                .Set(u => u.DeletedByUserId, currentUserId)
-                .UpdateAsync(ct);
+            await _userRepo.DeactivateUserAccountAsync(targetUserId, currentUserId, ct);
 
             _logger.LogInformation("User {TargetUserId} fully deactivated (no active roles remain) by user {CurrentUserId}", targetUserId, currentUserId);
         }

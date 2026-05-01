@@ -2,9 +2,9 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
-using Framlux.FleetManagement.Database.Cache;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
+using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Server.Services.Infrastructure;
 using System.Security.Cryptography;
 
@@ -15,17 +15,27 @@ namespace Framlux.FleetManagement.Server.Services.Machines;
 /// </summary>
 public sealed class SigningKeyService : ISigningKeyService
 {
-    private readonly IDatabaseCache _cache;
+    private readonly IDatabaseTransactionProvider _transactionProvider;
+    private readonly IAuditLogRepository _auditLog;
+    private readonly ISigningKeyRepository _signingKeyRepository;
     private readonly ILogger<SigningKeyService> _logger;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="SigningKeyService"/> class.
     /// </summary>
-    /// <param name="cache">The database caching layer</param>
+    /// <param name="transactionProvider">The database transaction provider</param>
+    /// <param name="auditLog">The audit log repository</param>
+    /// <param name="signingKeyRepository">The signing key repository</param>
     /// <param name="logger">The logger</param>
-    public SigningKeyService(IDatabaseCache cache, ILogger<SigningKeyService> logger)
+    public SigningKeyService(
+        IDatabaseTransactionProvider transactionProvider,
+        IAuditLogRepository auditLog,
+        ISigningKeyRepository signingKeyRepository,
+        ILogger<SigningKeyService> logger)
     {
-        _cache = cache ?? throw new ArgumentNullException(nameof(cache));
+        _transactionProvider = transactionProvider ?? throw new ArgumentNullException(nameof(transactionProvider));
+        _auditLog = auditLog ?? throw new ArgumentNullException(nameof(auditLog));
+        _signingKeyRepository = signingKeyRepository ?? throw new ArgumentNullException(nameof(signingKeyRepository));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -49,7 +59,7 @@ public sealed class SigningKeyService : ISigningKeyService
         }
 
         // Enforce max active keys per user per tenant.
-        int activeCount = await _cache.GetActiveSigningKeyCountAsync(userId, tenantId, cancellationToken);
+        int activeCount = await _signingKeyRepository.GetActiveSigningKeyCountAsync(userId, tenantId, cancellationToken);
         if (activeCount >= ISigningKeyService.MaxActiveKeysPerUser)
         {
             return ServiceResult<UserSigningKey>.Conflict("Maximum number of active signing keys per user has been reached");
@@ -68,11 +78,11 @@ public sealed class SigningKeyService : ISigningKeyService
             CreatedAt = DateTimeOffset.UtcNow,
         };
 
-        using IDatabaseTransaction transaction = await _cache.BeginTransactionAsync(cancellationToken);
+        using IDatabaseTransaction transaction = await _transactionProvider.BeginTransactionAsync(cancellationToken);
 
-        UserSigningKey created = await _cache.CreateSigningKeyAsync(key, cancellationToken);
+        UserSigningKey created = await _signingKeyRepository.CreateSigningKeyAsync(key, cancellationToken);
 
-        await _cache.InsertAuditLogAsync(new AuditLogEntry
+        await _auditLog.InsertAuditLogAsync(new AuditLogEntry
         {
             TenantId = tenantId,
             UserId = userId,
@@ -93,13 +103,13 @@ public sealed class SigningKeyService : ISigningKeyService
     /// <inheritdoc/>
     public async Task<List<UserSigningKey>> ListKeysAsync(int userId, int tenantId, CancellationToken cancellationToken = default)
     {
-        return await _cache.GetSigningKeysForUserAsync(userId, tenantId, cancellationToken);
+        return await _signingKeyRepository.GetSigningKeysForUserAsync(userId, tenantId, cancellationToken);
     }
 
     /// <inheritdoc/>
     public async Task<ServiceResult<bool>> RevokeKeyAsync(int keyId, int userId, int tenantId, bool isAdminOrTenantAdmin, CancellationToken cancellationToken = default)
     {
-        UserSigningKey? key = await _cache.GetSigningKeyByIdAsync(keyId, cancellationToken);
+        UserSigningKey? key = await _signingKeyRepository.GetSigningKeyByIdAsync(keyId, cancellationToken);
         if ((key is null) || (key.TenantId != tenantId))
         {
             return ServiceResult<bool>.NotFound();
@@ -116,11 +126,11 @@ public sealed class SigningKeyService : ISigningKeyService
             return ServiceResult<bool>.Error(403, false);
         }
 
-        using IDatabaseTransaction transaction = await _cache.BeginTransactionAsync(cancellationToken);
+        using IDatabaseTransaction transaction = await _transactionProvider.BeginTransactionAsync(cancellationToken);
 
-        await _cache.RevokeSigningKeyAsync(keyId, userId, cancellationToken);
+        await _signingKeyRepository.RevokeSigningKeyAsync(keyId, userId, cancellationToken);
 
-        await _cache.InsertAuditLogAsync(new AuditLogEntry
+        await _auditLog.InsertAuditLogAsync(new AuditLogEntry
         {
             TenantId = tenantId,
             UserId = userId,

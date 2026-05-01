@@ -2,15 +2,12 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
-using Framlux.FleetManagement.Database.Cache;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
-using Framlux.FleetManagement.Database;
+using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Server.Endpoints.Web.Admin;
 using Framlux.FleetManagement.Server.Endpoints.Web.Models.Users;
 using Framlux.FleetManagement.Server.Services.Infrastructure;
-using LinqToDB.Async;
-using LinqToDB;
 using StackExchange.Redis;
 
 namespace Framlux.FleetManagement.Server.Services.Handlers;
@@ -47,20 +44,27 @@ public sealed class AdminHandler : IAdminHandler
         [ServerConfigurationSettingKeys.ServiceStatusSeconds] = (60, 86400),
     };
 
-    private readonly DatabaseContext _db;
+    private readonly IServerConfigurationRepository _configRepo;
+    private readonly IUserRepository _userRepo;
     private readonly IServerSettingsCache _settingsCache;
     private readonly IConnectionMultiplexer _redis;
 
     /// <summary>
     /// Creates a new instance of the <see cref="AdminHandler"/> class.
     /// </summary>
-    public AdminHandler(DatabaseContext db, IServerSettingsCache settingsCache, IConnectionMultiplexer redis)
+    public AdminHandler(
+        IServerConfigurationRepository configRepo,
+        IUserRepository userRepo,
+        IServerSettingsCache settingsCache,
+        IConnectionMultiplexer redis)
     {
-        ArgumentNullException.ThrowIfNull(db);
+        ArgumentNullException.ThrowIfNull(configRepo);
+        ArgumentNullException.ThrowIfNull(userRepo);
         ArgumentNullException.ThrowIfNull(settingsCache);
         ArgumentNullException.ThrowIfNull(redis);
 
-        _db = db;
+        _configRepo = configRepo;
+        _userRepo = userRepo;
         _settingsCache = settingsCache;
         _redis = redis;
     }
@@ -68,8 +72,7 @@ public sealed class AdminHandler : IAdminHandler
     /// <inheritdoc/>
     public async Task<ServiceResult<List<SettingEntry>>> GetSettingsAsync(CancellationToken ct)
     {
-        List<ServerConfigurationSettings> settings = await _db.ServerConfigurationSettings
-            .ToListAsync(ct);
+        List<ServerConfigurationSettings> settings = await _configRepo.ListAllSettingsAsync(ct);
 
         List<SettingEntry> entries = settings.Select(s =>
         {
@@ -141,25 +144,7 @@ public sealed class AdminHandler : IAdminHandler
         {
             ServerConfigurationSettingKeys key = (ServerConfigurationSettingKeys)update.Key;
 
-            ServerConfigurationSettings? existing = await _db.ServerConfigurationSettings
-                .FirstOrDefaultAsync(s => s.Key == key, ct);
-
-            if (existing is not null)
-            {
-                await _db.ServerConfigurationSettings
-                    .Where(s => s.Id == existing.Id)
-                    .Set(s => s.Value, update.Value)
-                    .Set(s => s.Version, existing.Version + 1)
-                    .UpdateAsync(ct);
-            }
-            else
-            {
-                await _db.ServerConfigurationSettings
-                    .Value(s => s.Key, key)
-                    .Value(s => s.Value, update.Value)
-                    .Value(s => s.Version, 1)
-                    .InsertAsync(ct);
-            }
+            await _configRepo.UpsertSettingAsync(key, update.Value, ct);
 
             string redisKey = $"config:{key}";
             await redisDb.KeyDeleteAsync(redisKey);
@@ -173,18 +158,8 @@ public sealed class AdminHandler : IAdminHandler
     /// <inheritdoc/>
     public async Task<ServiceResult<List<UserAccountDto>>> GetAllUsersAsync(CancellationToken ct)
     {
-        List<UserAccount> users = await _db.UserAccounts
-            .OrderBy(u => u.Username)
-            .ToListAsync(ct);
-
-        List<UserTenantRole> allRoles = await _db.UserTenantRoles
-            .LoadWith(r => r.AssignedTenant)
-            .Where(r => r.IsActive)
-            .ToListAsync(ct);
-
-        Dictionary<int, List<UserTenantRole>> rolesByUser = allRoles
-            .GroupBy(r => r.UserId)
-            .ToDictionary(g => g.Key, g => g.ToList());
+        (List<UserAccount> users, Dictionary<int, List<UserTenantRole>> rolesByUser) =
+            await _userRepo.GetAllUsersWithRolesAsync(ct);
 
         List<UserAccountDto> dtos = users.Select(u =>
         {

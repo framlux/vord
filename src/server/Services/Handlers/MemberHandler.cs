@@ -2,9 +2,9 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
-using Framlux.FleetManagement.Database.Cache;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
+using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Server.Endpoints.Web;
 using Framlux.FleetManagement.Server.Services.Billing;
 using Framlux.FleetManagement.Server.Services.Infrastructure;
@@ -17,22 +17,30 @@ namespace Framlux.FleetManagement.Server.Services.Handlers;
 /// </summary>
 public sealed class MemberHandler : IMemberHandler
 {
-    private readonly IDatabaseCache _databaseCache;
+    private readonly IDatabaseTransactionProvider _transactionProvider;
+    private readonly IAuditLogRepository _auditLog;
+    private readonly ITenantRepository _tenantRepository;
     private readonly ISubscriptionService _subscriptionService;
     private readonly IRoleCacheInvalidator _roleCacheInvalidator;
 
     /// <summary>
     /// Creates a new instance of the <see cref="MemberHandler"/> class.
     /// </summary>
-    /// <param name="databaseCache">The database cache service.</param>
+    /// <param name="transactionProvider">The database transaction provider.</param>
+    /// <param name="auditLog">The audit log repository.</param>
+    /// <param name="tenantRepository">The tenant repository.</param>
     /// <param name="subscriptionService">The subscription service.</param>
     /// <param name="roleCacheInvalidator">The role cache invalidator.</param>
     public MemberHandler(
-        IDatabaseCache databaseCache,
+        IDatabaseTransactionProvider transactionProvider,
+        IAuditLogRepository auditLog,
+        ITenantRepository tenantRepository,
         ISubscriptionService subscriptionService,
         IRoleCacheInvalidator roleCacheInvalidator)
     {
-        _databaseCache = databaseCache;
+        _transactionProvider = transactionProvider;
+        _auditLog = auditLog;
+        _tenantRepository = tenantRepository;
         _subscriptionService = subscriptionService;
         _roleCacheInvalidator = roleCacheInvalidator;
     }
@@ -50,15 +58,15 @@ public sealed class MemberHandler : IMemberHandler
             return ServiceResult<ApiResponse<object>>.Error(400, ApiResponse<object>.Error("You cannot remove yourself from the organization"));
         }
 
-        using IDatabaseTransaction transaction = await _databaseCache.BeginTransactionAsync(ct);
+        using IDatabaseTransaction transaction = await _transactionProvider.BeginTransactionAsync(ct);
 
-        bool removed = await _databaseCache.DisableUserTenantRoleAsync(targetUserId, tenantId.Value, currentUserId, ct);
+        bool removed = await _tenantRepository.DisableUserTenantRoleAsync(targetUserId, tenantId.Value, currentUserId, ct);
         if (removed == false)
         {
             return ServiceResult<ApiResponse<object>>.NotFound();
         }
 
-        await _databaseCache.InsertAuditLogAsync(AuditHelper.Create(
+        await _auditLog.InsertAuditLogAsync(AuditHelper.Create(
             tenantId, currentUserId, null,
             AuditAction.MemberRemoved, AuditResourceType.User,
             targetUserId.ToString(), null, null), ct);
@@ -95,15 +103,15 @@ public sealed class MemberHandler : IMemberHandler
             return ServiceResult<ApiResponse<object>>.Error(400, ApiResponse<object>.Error("You cannot change your own role"));
         }
 
-        using IDatabaseTransaction transaction = await _databaseCache.BeginTransactionAsync(ct);
+        using IDatabaseTransaction transaction = await _transactionProvider.BeginTransactionAsync(ct);
 
-        bool disabled = await _databaseCache.DisableUserTenantRoleAsync(targetUserId, tenantId.Value, currentUserId, ct);
+        bool disabled = await _tenantRepository.DisableUserTenantRoleAsync(targetUserId, tenantId.Value, currentUserId, ct);
         if (disabled == false)
         {
             return ServiceResult<ApiResponse<object>>.NotFound();
         }
 
-        await _databaseCache.CreateUserTenantRoleAsync(new UserTenantRole
+        await _tenantRepository.CreateUserTenantRoleAsync(new UserTenantRole
         {
             UserId = targetUserId,
             AssignedTenantId = tenantId.Value,
@@ -113,7 +121,7 @@ public sealed class MemberHandler : IMemberHandler
             IsActive = true,
         }, ct);
 
-        await _databaseCache.InsertAuditLogAsync(AuditHelper.Create(
+        await _auditLog.InsertAuditLogAsync(AuditHelper.Create(
             tenantId, currentUserId, null,
             AuditAction.MemberRoleChanged, AuditResourceType.User,
             targetUserId.ToString(), new { NewRole = newRole }, null), ct);

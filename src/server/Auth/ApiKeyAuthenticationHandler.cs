@@ -4,7 +4,7 @@
 
 using System.Security.Claims;
 using System.Text.Encodings.Web;
-using Framlux.FleetManagement.Database.Cache;
+using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Database.Models;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.Extensions.Options;
@@ -22,24 +22,23 @@ public class ApiKeyAuthenticationHandler : AuthenticationHandler<AuthenticationS
     /// </summary>
     public const string SchemeName = "API_Key";
 
-    private readonly IDatabaseCache _dbCache;
+    private readonly IMachineRepository _machineRepository;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="ApiKeyAuthenticationHandler"/> class.
     /// </summary>
-    /// <param name="options"></param>
-    /// <param name="logger"></param>
-    /// <param name="encoder"></param>
-    /// <param name="databaseCache"></param>
-    /// <exception cref="ArgumentNullException"></exception>
+    /// <param name="options">The authentication scheme options.</param>
+    /// <param name="logger">The logger factory.</param>
+    /// <param name="encoder">The URL encoder.</param>
+    /// <param name="machineRepository">The machine repository.</param>
     public ApiKeyAuthenticationHandler(
         IOptionsMonitor<AuthenticationSchemeOptions> options,
         ILoggerFactory logger,
         UrlEncoder encoder,
-        IDatabaseCache databaseCache)
+        IMachineRepository machineRepository)
     : base(options, logger, encoder)
     {
-        _dbCache = databaseCache;
+        _machineRepository = machineRepository;
     }
 
     /// <summary>
@@ -68,7 +67,7 @@ public class ApiKeyAuthenticationHandler : AuthenticationHandler<AuthenticationS
         }
         else
         {
-            machine = await _dbCache.GetMachineByApiKeyAsync(apiKeyHeader, Context.RequestAborted);
+            machine = await _machineRepository.GetMachineByApiKeyAsync(apiKeyHeader, Context.RequestAborted);
             if (machine is null)
             {
                 string keyPrefix = apiKeyHeader.Length > 8 ? apiKeyHeader[..8] : apiKeyHeader;

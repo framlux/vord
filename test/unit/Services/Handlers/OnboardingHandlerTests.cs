@@ -2,9 +2,9 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
-using Framlux.FleetManagement.Database.Cache;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
+using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Server.Options;
 using Framlux.FleetManagement.Server.Services.Handlers;
 using Framlux.FleetManagement.Server.Services.Infrastructure;
@@ -22,9 +22,12 @@ public class OnboardingHandlerTests
     [Test]
     public async Task CreateOrganizationAsync_EmptyName_Returns400()
     {
-        IDatabaseCache cache = Substitute.For<IDatabaseCache>();
+        IDatabaseTransactionProvider transactionProvider = Substitute.For<IDatabaseTransactionProvider>();
+        ITenantRepository tenantRepository = Substitute.For<ITenantRepository>();
+        ISubscriptionRepository subscriptionRepository = Substitute.For<ISubscriptionRepository>();
+        IAuditLogRepository auditLog = Substitute.For<IAuditLogRepository>();
         IOptions<SubscriptionOptions> subOptions = Options.Create(new SubscriptionOptions { FreeTierMachineLimit = 2, FreeTierRetentionDays = 1 });
-        OnboardingHandler handler = new(cache, subOptions, Substitute.For<IRoleCacheInvalidator>());
+        OnboardingHandler handler = new(transactionProvider, tenantRepository, subscriptionRepository, auditLog, subOptions, Substitute.For<IRoleCacheInvalidator>());
 
         ServiceResult<OnboardingResult> result = await handler.CreateOrganizationAsync("", "free", 1, "ext-1", CancellationToken.None);
 
@@ -35,9 +38,12 @@ public class OnboardingHandlerTests
     [Test]
     public async Task CreateOrganizationAsync_NameTooLong_Returns400()
     {
-        IDatabaseCache cache = Substitute.For<IDatabaseCache>();
+        IDatabaseTransactionProvider transactionProvider = Substitute.For<IDatabaseTransactionProvider>();
+        ITenantRepository tenantRepository = Substitute.For<ITenantRepository>();
+        ISubscriptionRepository subscriptionRepository = Substitute.For<ISubscriptionRepository>();
+        IAuditLogRepository auditLog = Substitute.For<IAuditLogRepository>();
         IOptions<SubscriptionOptions> subOptions = Options.Create(new SubscriptionOptions { FreeTierMachineLimit = 2, FreeTierRetentionDays = 1 });
-        OnboardingHandler handler = new(cache, subOptions, Substitute.For<IRoleCacheInvalidator>());
+        OnboardingHandler handler = new(transactionProvider, tenantRepository, subscriptionRepository, auditLog, subOptions, Substitute.For<IRoleCacheInvalidator>());
         string longName = new('A', 101);
 
         ServiceResult<OnboardingResult> result = await handler.CreateOrganizationAsync(longName, "free", 1, "ext-1", CancellationToken.None);
@@ -48,9 +54,12 @@ public class OnboardingHandlerTests
     [Test]
     public async Task CreateOrganizationAsync_ZeroUserId_Returns401()
     {
-        IDatabaseCache cache = Substitute.For<IDatabaseCache>();
+        IDatabaseTransactionProvider transactionProvider = Substitute.For<IDatabaseTransactionProvider>();
+        ITenantRepository tenantRepository = Substitute.For<ITenantRepository>();
+        ISubscriptionRepository subscriptionRepository = Substitute.For<ISubscriptionRepository>();
+        IAuditLogRepository auditLog = Substitute.For<IAuditLogRepository>();
         IOptions<SubscriptionOptions> subOptions = Options.Create(new SubscriptionOptions { FreeTierMachineLimit = 2, FreeTierRetentionDays = 1 });
-        OnboardingHandler handler = new(cache, subOptions, Substitute.For<IRoleCacheInvalidator>());
+        OnboardingHandler handler = new(transactionProvider, tenantRepository, subscriptionRepository, auditLog, subOptions, Substitute.For<IRoleCacheInvalidator>());
 
         ServiceResult<OnboardingResult> result = await handler.CreateOrganizationAsync("My Org", "free", 0, "ext-1", CancellationToken.None);
 
@@ -60,9 +69,12 @@ public class OnboardingHandlerTests
     [Test]
     public async Task CreateOrganizationAsync_EmptyUniqueId_Returns401()
     {
-        IDatabaseCache cache = Substitute.For<IDatabaseCache>();
+        IDatabaseTransactionProvider transactionProvider = Substitute.For<IDatabaseTransactionProvider>();
+        ITenantRepository tenantRepository = Substitute.For<ITenantRepository>();
+        ISubscriptionRepository subscriptionRepository = Substitute.For<ISubscriptionRepository>();
+        IAuditLogRepository auditLog = Substitute.For<IAuditLogRepository>();
         IOptions<SubscriptionOptions> subOptions = Options.Create(new SubscriptionOptions { FreeTierMachineLimit = 2, FreeTierRetentionDays = 1 });
-        OnboardingHandler handler = new(cache, subOptions, Substitute.For<IRoleCacheInvalidator>());
+        OnboardingHandler handler = new(transactionProvider, tenantRepository, subscriptionRepository, auditLog, subOptions, Substitute.For<IRoleCacheInvalidator>());
 
         ServiceResult<OnboardingResult> result = await handler.CreateOrganizationAsync("My Org", "free", 1, "", CancellationToken.None);
 
@@ -72,13 +84,16 @@ public class OnboardingHandlerTests
     [Test]
     public async Task CreateOrganizationAsync_UserAlreadyHasTenants_Returns409()
     {
-        IDatabaseCache cache = Substitute.For<IDatabaseCache>();
+        IDatabaseTransactionProvider transactionProvider = Substitute.For<IDatabaseTransactionProvider>();
+        ITenantRepository tenantRepository = Substitute.For<ITenantRepository>();
+        ISubscriptionRepository subscriptionRepository = Substitute.For<ISubscriptionRepository>();
+        IAuditLogRepository auditLog = Substitute.For<IAuditLogRepository>();
         IOptions<SubscriptionOptions> subOptions = Options.Create(new SubscriptionOptions { FreeTierMachineLimit = 2, FreeTierRetentionDays = 1 });
-        cache.GetTenantsForUserAsync("ext-1", Arg.Any<CancellationToken>()).Returns(new List<UserTenantRole>
+        tenantRepository.GetTenantsForUserAsync("ext-1", Arg.Any<CancellationToken>()).Returns(new List<UserTenantRole>
         {
-            new() { UserId = 1, AssignedTenantId = 1, Role = Database.Enums.UserAccountRoles.TenantAdmin, AssignedByUserId = 1, AssignedAt = DateTimeOffset.UtcNow, IsActive = true }
+            new() { UserId = 1, AssignedTenantId = 1, Role = UserAccountRoles.TenantAdmin, AssignedByUserId = 1, AssignedAt = DateTimeOffset.UtcNow, IsActive = true }
         });
-        OnboardingHandler handler = new(cache, subOptions, Substitute.For<IRoleCacheInvalidator>());
+        OnboardingHandler handler = new(transactionProvider, tenantRepository, subscriptionRepository, auditLog, subOptions, Substitute.For<IRoleCacheInvalidator>());
 
         ServiceResult<OnboardingResult> result = await handler.CreateOrganizationAsync("My Org", "free", 1, "ext-1", CancellationToken.None);
 
@@ -89,14 +104,17 @@ public class OnboardingHandlerTests
     [Test]
     public async Task CreateOrganizationAsync_NameTaken_Returns409()
     {
-        IDatabaseCache cache = Substitute.For<IDatabaseCache>();
+        IDatabaseTransactionProvider transactionProvider = Substitute.For<IDatabaseTransactionProvider>();
+        ITenantRepository tenantRepository = Substitute.For<ITenantRepository>();
+        ISubscriptionRepository subscriptionRepository = Substitute.For<ISubscriptionRepository>();
+        IAuditLogRepository auditLog = Substitute.For<IAuditLogRepository>();
         IOptions<SubscriptionOptions> subOptions = Options.Create(new SubscriptionOptions { FreeTierMachineLimit = 2, FreeTierRetentionDays = 1 });
-        cache.GetTenantsForUserAsync("ext-1", Arg.Any<CancellationToken>()).Returns(Enumerable.Empty<UserTenantRole>());
-        cache.GetTenantByNameAsync("Existing Org", Arg.Any<CancellationToken>()).Returns(new Tenant
+        tenantRepository.GetTenantsForUserAsync("ext-1", Arg.Any<CancellationToken>()).Returns(Enumerable.Empty<UserTenantRole>());
+        tenantRepository.GetTenantByNameAsync("Existing Org", Arg.Any<CancellationToken>()).Returns(new Tenant
         {
             Id = 99, Name = "Existing Org", ExternalId = "ext-99", CreatedAt = DateTimeOffset.UtcNow, CreatedByUserId = 1, IsActive = true, LogoUrl = ""
         });
-        OnboardingHandler handler = new(cache, subOptions, Substitute.For<IRoleCacheInvalidator>());
+        OnboardingHandler handler = new(transactionProvider, tenantRepository, subscriptionRepository, auditLog, subOptions, Substitute.For<IRoleCacheInvalidator>());
 
         ServiceResult<OnboardingResult> result = await handler.CreateOrganizationAsync("Existing Org", "free", 1, "ext-1", CancellationToken.None);
 
@@ -107,27 +125,30 @@ public class OnboardingHandlerTests
     [Test]
     public async Task CreateOrganizationAsync_Success_ReturnsTenantId()
     {
-        IDatabaseCache cache = Substitute.For<IDatabaseCache>();
+        IDatabaseTransactionProvider transactionProvider = Substitute.For<IDatabaseTransactionProvider>();
         IDatabaseTransaction mockTransaction = Substitute.For<IDatabaseTransaction>();
-        cache.BeginTransactionAsync(Arg.Any<CancellationToken>()).Returns(mockTransaction);
+        transactionProvider.BeginTransactionAsync(Arg.Any<CancellationToken>()).Returns(mockTransaction);
+        ITenantRepository tenantRepository = Substitute.For<ITenantRepository>();
+        ISubscriptionRepository subscriptionRepository = Substitute.For<ISubscriptionRepository>();
+        IAuditLogRepository auditLog = Substitute.For<IAuditLogRepository>();
         IOptions<SubscriptionOptions> subOptions = Options.Create(new SubscriptionOptions { FreeTierMachineLimit = 2, FreeTierRetentionDays = 1 });
-        cache.GetTenantsForUserAsync("ext-1", Arg.Any<CancellationToken>()).Returns(Enumerable.Empty<UserTenantRole>());
-        cache.GetTenantByNameAsync("New Org", Arg.Any<CancellationToken>()).Returns((Tenant?)null);
-        cache.CreateTenantAsync(Arg.Any<Tenant>(), Arg.Any<CancellationToken>()).Returns(callInfo =>
+        tenantRepository.GetTenantsForUserAsync("ext-1", Arg.Any<CancellationToken>()).Returns(Enumerable.Empty<UserTenantRole>());
+        tenantRepository.GetTenantByNameAsync("New Org", Arg.Any<CancellationToken>()).Returns((Tenant?)null);
+        tenantRepository.CreateTenantAsync(Arg.Any<Tenant>(), Arg.Any<CancellationToken>()).Returns(callInfo =>
         {
             Tenant t = callInfo.Arg<Tenant>();
             t.Id = 42;
 
             return t;
         });
-        cache.CreateTenantSubscriptionAsync(Arg.Any<TenantSubscription>(), Arg.Any<CancellationToken>()).Returns(callInfo =>
+        subscriptionRepository.CreateTenantSubscriptionAsync(Arg.Any<TenantSubscription>(), Arg.Any<CancellationToken>()).Returns(callInfo =>
         {
             TenantSubscription s = callInfo.Arg<TenantSubscription>();
             s.Id = 1;
 
             return s;
         });
-        OnboardingHandler handler = new(cache, subOptions, Substitute.For<IRoleCacheInvalidator>());
+        OnboardingHandler handler = new(transactionProvider, tenantRepository, subscriptionRepository, auditLog, subOptions, Substitute.For<IRoleCacheInvalidator>());
 
         ServiceResult<OnboardingResult> result = await handler.CreateOrganizationAsync("New Org", "free", 1, "ext-1", CancellationToken.None);
 
@@ -136,33 +157,36 @@ public class OnboardingHandlerTests
     }
 
     [Test]
-    public async Task CreateOrganizationAsync_Success_CreatesSubscriptionViaDatabaseCache()
+    public async Task CreateOrganizationAsync_Success_CreatesSubscriptionViaSubscriptionRepository()
     {
-        IDatabaseCache cache = Substitute.For<IDatabaseCache>();
+        IDatabaseTransactionProvider transactionProvider = Substitute.For<IDatabaseTransactionProvider>();
         IDatabaseTransaction mockTransaction = Substitute.For<IDatabaseTransaction>();
-        cache.BeginTransactionAsync(Arg.Any<CancellationToken>()).Returns(mockTransaction);
+        transactionProvider.BeginTransactionAsync(Arg.Any<CancellationToken>()).Returns(mockTransaction);
+        ITenantRepository tenantRepository = Substitute.For<ITenantRepository>();
+        ISubscriptionRepository subscriptionRepository = Substitute.For<ISubscriptionRepository>();
+        IAuditLogRepository auditLog = Substitute.For<IAuditLogRepository>();
         IOptions<SubscriptionOptions> subOptions = Options.Create(new SubscriptionOptions { FreeTierMachineLimit = 5, FreeTierRetentionDays = 7 });
-        cache.GetTenantsForUserAsync("ext-1", Arg.Any<CancellationToken>()).Returns(Enumerable.Empty<UserTenantRole>());
-        cache.GetTenantByNameAsync("New Org", Arg.Any<CancellationToken>()).Returns((Tenant?)null);
-        cache.CreateTenantAsync(Arg.Any<Tenant>(), Arg.Any<CancellationToken>()).Returns(callInfo =>
+        tenantRepository.GetTenantsForUserAsync("ext-1", Arg.Any<CancellationToken>()).Returns(Enumerable.Empty<UserTenantRole>());
+        tenantRepository.GetTenantByNameAsync("New Org", Arg.Any<CancellationToken>()).Returns((Tenant?)null);
+        tenantRepository.CreateTenantAsync(Arg.Any<Tenant>(), Arg.Any<CancellationToken>()).Returns(callInfo =>
         {
             Tenant t = callInfo.Arg<Tenant>();
             t.Id = 42;
 
             return t;
         });
-        cache.CreateTenantSubscriptionAsync(Arg.Any<TenantSubscription>(), Arg.Any<CancellationToken>()).Returns(callInfo =>
+        subscriptionRepository.CreateTenantSubscriptionAsync(Arg.Any<TenantSubscription>(), Arg.Any<CancellationToken>()).Returns(callInfo =>
         {
             TenantSubscription s = callInfo.Arg<TenantSubscription>();
             s.Id = 1;
 
             return s;
         });
-        OnboardingHandler handler = new(cache, subOptions, Substitute.For<IRoleCacheInvalidator>());
+        OnboardingHandler handler = new(transactionProvider, tenantRepository, subscriptionRepository, auditLog, subOptions, Substitute.For<IRoleCacheInvalidator>());
 
         await handler.CreateOrganizationAsync("New Org", "free", 1, "ext-1", CancellationToken.None);
 
-        await cache.Received(1).CreateTenantSubscriptionAsync(
+        await subscriptionRepository.Received(1).CreateTenantSubscriptionAsync(
             Arg.Is<TenantSubscription>(s =>
                 s.TenantId == 42 &&
                 s.Tier == SubscriptionTier.Free &&
@@ -175,31 +199,34 @@ public class OnboardingHandlerTests
     [Test]
     public async Task CreateOrganizationAsync_Success_AssignsUserAsTenantAdmin()
     {
-        IDatabaseCache cache = Substitute.For<IDatabaseCache>();
+        IDatabaseTransactionProvider transactionProvider = Substitute.For<IDatabaseTransactionProvider>();
         IDatabaseTransaction mockTransaction = Substitute.For<IDatabaseTransaction>();
-        cache.BeginTransactionAsync(Arg.Any<CancellationToken>()).Returns(mockTransaction);
+        transactionProvider.BeginTransactionAsync(Arg.Any<CancellationToken>()).Returns(mockTransaction);
+        ITenantRepository tenantRepository = Substitute.For<ITenantRepository>();
+        ISubscriptionRepository subscriptionRepository = Substitute.For<ISubscriptionRepository>();
+        IAuditLogRepository auditLog = Substitute.For<IAuditLogRepository>();
         IOptions<SubscriptionOptions> subOptions = Options.Create(new SubscriptionOptions { FreeTierMachineLimit = 2, FreeTierRetentionDays = 1 });
-        cache.GetTenantsForUserAsync("ext-1", Arg.Any<CancellationToken>()).Returns(Enumerable.Empty<UserTenantRole>());
-        cache.GetTenantByNameAsync("New Org", Arg.Any<CancellationToken>()).Returns((Tenant?)null);
-        cache.CreateTenantAsync(Arg.Any<Tenant>(), Arg.Any<CancellationToken>()).Returns(callInfo =>
+        tenantRepository.GetTenantsForUserAsync("ext-1", Arg.Any<CancellationToken>()).Returns(Enumerable.Empty<UserTenantRole>());
+        tenantRepository.GetTenantByNameAsync("New Org", Arg.Any<CancellationToken>()).Returns((Tenant?)null);
+        tenantRepository.CreateTenantAsync(Arg.Any<Tenant>(), Arg.Any<CancellationToken>()).Returns(callInfo =>
         {
             Tenant t = callInfo.Arg<Tenant>();
             t.Id = 42;
 
             return t;
         });
-        cache.CreateTenantSubscriptionAsync(Arg.Any<TenantSubscription>(), Arg.Any<CancellationToken>()).Returns(callInfo =>
+        subscriptionRepository.CreateTenantSubscriptionAsync(Arg.Any<TenantSubscription>(), Arg.Any<CancellationToken>()).Returns(callInfo =>
         {
             TenantSubscription s = callInfo.Arg<TenantSubscription>();
             s.Id = 1;
 
             return s;
         });
-        OnboardingHandler handler = new(cache, subOptions, Substitute.For<IRoleCacheInvalidator>());
+        OnboardingHandler handler = new(transactionProvider, tenantRepository, subscriptionRepository, auditLog, subOptions, Substitute.For<IRoleCacheInvalidator>());
 
         await handler.CreateOrganizationAsync("New Org", "free", 1, "ext-1", CancellationToken.None);
 
-        await cache.Received(1).CreateUserTenantRoleAsync(
+        await tenantRepository.Received(1).CreateUserTenantRoleAsync(
             Arg.Is<UserTenantRole>(r =>
                 r.UserId == 1 &&
                 r.AssignedTenantId == 42 &&

@@ -2,23 +2,30 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
-using Framlux.FleetManagement.Database;
-using LinqToDB;
+using Framlux.FleetManagement.Database.Repositories;
 
 namespace Framlux.FleetManagement.Server.Services.Billing;
 
 /// <inheritdoc/>
 public sealed class DowngradeCleanupService : IDowngradeCleanupService
 {
-    private readonly DatabaseContext _db;
+    private readonly ITenantRepository _tenantRepo;
+    private readonly IAlertRuleRepository _alertRuleRepo;
+    private readonly IWebhookRepository _webhookRepo;
     private readonly ILogger<DowngradeCleanupService> _logger;
 
     /// <summary>
     /// Creates a new instance of the <see cref="DowngradeCleanupService"/> class.
     /// </summary>
-    public DowngradeCleanupService(DatabaseContext db, ILogger<DowngradeCleanupService> logger)
+    public DowngradeCleanupService(
+        ITenantRepository tenantRepo,
+        IAlertRuleRepository alertRuleRepo,
+        IWebhookRepository webhookRepo,
+        ILogger<DowngradeCleanupService> logger)
     {
-        _db = db;
+        _tenantRepo = tenantRepo;
+        _alertRuleRepo = alertRuleRepo;
+        _webhookRepo = webhookRepo;
         _logger = logger;
     }
 
@@ -26,11 +33,7 @@ public sealed class DowngradeCleanupService : IDowngradeCleanupService
     public async Task CleanupForProTierAsync(int tenantId, CancellationToken ct)
     {
         // Disable custom OIDC configuration
-        int oidcDisabled = await _db.TenantOidcConfigurations
-            .Where(c => c.TenantId == tenantId && c.IsEnabled == true)
-            .Set(c => c.IsEnabled, false)
-            .Set(c => c.UpdatedAt, DateTimeOffset.UtcNow)
-            .UpdateAsync(ct);
+        int oidcDisabled = await _tenantRepo.DisableTenantOidcConfigAsync(tenantId, ct);
 
         if (oidcDisabled > 0)
         {
@@ -40,11 +43,7 @@ public sealed class DowngradeCleanupService : IDowngradeCleanupService
         }
 
         // Disable custom alert rules (keep default/system rules active)
-        int rulesDisabled = await _db.AlertRules
-            .Where(r => r.TenantId == tenantId && r.IsCustom == true && r.IsEnabled == true)
-            .Set(r => r.IsEnabled, false)
-            .Set(r => r.UpdatedAt, DateTimeOffset.UtcNow)
-            .UpdateAsync(ct);
+        int rulesDisabled = await _alertRuleRepo.DisableCustomAlertRulesForTenantAsync(tenantId, ct);
 
         if (rulesDisabled > 0)
         {
@@ -58,18 +57,10 @@ public sealed class DowngradeCleanupService : IDowngradeCleanupService
     public async Task CleanupForFreeTierAsync(int tenantId, CancellationToken ct)
     {
         // Disable custom OIDC configuration
-        await _db.TenantOidcConfigurations
-            .Where(c => c.TenantId == tenantId && c.IsEnabled == true)
-            .Set(c => c.IsEnabled, false)
-            .Set(c => c.UpdatedAt, DateTimeOffset.UtcNow)
-            .UpdateAsync(ct);
+        await _tenantRepo.DisableTenantOidcConfigAsync(tenantId, ct);
 
         // Disable ALL alert rules for the tenant (Free tier has no alerting)
-        int rulesDisabled = await _db.AlertRules
-            .Where(r => r.TenantId == tenantId && r.IsEnabled == true)
-            .Set(r => r.IsEnabled, false)
-            .Set(r => r.UpdatedAt, DateTimeOffset.UtcNow)
-            .UpdateAsync(ct);
+        int rulesDisabled = await _alertRuleRepo.DisableAlertRulesForTenantAsync(tenantId, customOnly: false, ct);
 
         if (rulesDisabled > 0)
         {
@@ -79,10 +70,7 @@ public sealed class DowngradeCleanupService : IDowngradeCleanupService
         }
 
         // Disable webhook notification endpoints
-        int webhooksDisabled = await _db.WebhookEndpoints
-            .Where(w => w.TenantId == tenantId && w.IsEnabled == true)
-            .Set(w => w.IsEnabled, false)
-            .UpdateAsync(ct);
+        int webhooksDisabled = await _webhookRepo.DisableWebhooksForTenantAsync(tenantId, ct);
 
         if (webhooksDisabled > 0)
         {

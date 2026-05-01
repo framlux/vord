@@ -2,7 +2,7 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
-using Framlux.FleetManagement.Database.Cache;
+using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Server.Endpoints.Web.Models.Users;
 using Framlux.FleetManagement.Server.Services.Infrastructure;
@@ -14,27 +14,30 @@ namespace Framlux.FleetManagement.Server.Services.Handlers;
 /// </summary>
 public sealed class AuthMeHandler : IAuthMeHandler
 {
-    private readonly IDatabaseCache _databaseCache;
+    private readonly IUserRepository _userRepository;
+    private readonly ITenantRepository _tenantRepository;
 
     /// <summary>
     /// Creates a new instance of the <see cref="AuthMeHandler"/> class.
     /// </summary>
-    /// <param name="databaseCache">The database cache service.</param>
-    public AuthMeHandler(IDatabaseCache databaseCache)
+    /// <param name="userRepository">The user repository.</param>
+    /// <param name="tenantRepository">The tenant repository.</param>
+    public AuthMeHandler(IUserRepository userRepository, ITenantRepository tenantRepository)
     {
-        _databaseCache = databaseCache;
+        _userRepository = userRepository;
+        _tenantRepository = tenantRepository;
     }
 
     /// <inheritdoc/>
     public async Task<ServiceResult<AuthMeResult>> GetCurrentUserAsync(string uniqueId, CancellationToken ct)
     {
-        UserAccount? user = await _databaseCache.GetUserByExternalIdAsync(uniqueId, ct);
+        UserAccount? user = await _userRepository.GetUserByExternalIdAsync(uniqueId, ct);
         if (user is null)
         {
             return ServiceResult<AuthMeResult>.NotFound();
         }
 
-        IEnumerable<UserTenantRole> tenants = await _databaseCache.GetTenantsForUserAsync(uniqueId, ct);
+        IEnumerable<UserTenantRole> tenants = await _tenantRepository.GetTenantsForUserAsync(uniqueId, ct);
         List<UserTenantDto> tenantDtos = tenants.Select(t => new UserTenantDto
         {
             TenantId = t.AssignedTenantId,

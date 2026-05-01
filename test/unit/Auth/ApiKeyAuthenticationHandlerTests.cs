@@ -2,7 +2,7 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
-using Framlux.FleetManagement.Database.Cache;
+using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Server.Auth;
 using Microsoft.AspNetCore.Authentication;
@@ -20,14 +20,14 @@ namespace Framlux.FleetManagement.Test.Auth;
 /// </summary>
 public class ApiKeyAuthenticationHandlerTests
 {
-    private static async Task<AuthenticateResult> RunHandlerAsync(IDatabaseCache dbCache, string? apiKeyHeader)
+    private static async Task<AuthenticateResult> RunHandlerAsync(IMachineRepository machineRepository, string? apiKeyHeader)
     {
         IOptionsMonitor<AuthenticationSchemeOptions> options = Substitute.For<IOptionsMonitor<AuthenticationSchemeOptions>>();
         options.Get(Arg.Any<string>()).Returns(new AuthenticationSchemeOptions());
         ILoggerFactory loggerFactory = new NullLoggerFactory();
         UrlEncoder encoder = UrlEncoder.Default;
 
-        ApiKeyAuthenticationHandler handler = new(options, loggerFactory, encoder, dbCache);
+        ApiKeyAuthenticationHandler handler = new(options, loggerFactory, encoder, machineRepository);
 
         DefaultHttpContext httpContext = new();
         if (apiKeyHeader is not null)
@@ -44,9 +44,9 @@ public class ApiKeyAuthenticationHandlerTests
     [Test]
     public async Task NoHeader_ReturnsFail()
     {
-        IDatabaseCache dbCache = Substitute.For<IDatabaseCache>();
+        IMachineRepository machineRepo = Substitute.For<IMachineRepository>();
 
-        AuthenticateResult result = await RunHandlerAsync(dbCache, null);
+        AuthenticateResult result = await RunHandlerAsync(machineRepo, null);
 
         await Assert.That(result.Succeeded).IsFalse();
     }
@@ -54,11 +54,11 @@ public class ApiKeyAuthenticationHandlerTests
     [Test]
     public async Task InvalidKey_ReturnsFail()
     {
-        IDatabaseCache dbCache = Substitute.For<IDatabaseCache>();
-        dbCache.GetMachineByApiKeyAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+        IMachineRepository machineRepo = Substitute.For<IMachineRepository>();
+        machineRepo.GetMachineByApiKeyAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns((Machine?)null);
 
-        AuthenticateResult result = await RunHandlerAsync(dbCache, "invalid-key");
+        AuthenticateResult result = await RunHandlerAsync(machineRepo, "invalid-key");
 
         await Assert.That(result.Succeeded).IsFalse();
     }
@@ -80,11 +80,11 @@ public class ApiKeyAuthenticationHandlerTests
             IsDeleted = false,
             TenantId = 1
         };
-        IDatabaseCache dbCache = Substitute.For<IDatabaseCache>();
-        dbCache.GetMachineByApiKeyAsync("valid-key", Arg.Any<CancellationToken>())
+        IMachineRepository machineRepo = Substitute.For<IMachineRepository>();
+        machineRepo.GetMachineByApiKeyAsync("valid-key", Arg.Any<CancellationToken>())
             .Returns(machine);
 
-        AuthenticateResult result = await RunHandlerAsync(dbCache, "valid-key");
+        AuthenticateResult result = await RunHandlerAsync(machineRepo, "valid-key");
 
         await Assert.That(result.Succeeded).IsTrue();
         await Assert.That(result.Principal!.FindFirst("MachineId")!.Value).IsEqualTo("42");
@@ -107,11 +107,11 @@ public class ApiKeyAuthenticationHandlerTests
             IsDeleted = false,
             TenantId = 7
         };
-        IDatabaseCache dbCache = Substitute.For<IDatabaseCache>();
-        dbCache.GetMachineByApiKeyAsync("valid-key", Arg.Any<CancellationToken>())
+        IMachineRepository machineRepo = Substitute.For<IMachineRepository>();
+        machineRepo.GetMachineByApiKeyAsync("valid-key", Arg.Any<CancellationToken>())
             .Returns(machine);
 
-        AuthenticateResult result = await RunHandlerAsync(dbCache, "valid-key");
+        AuthenticateResult result = await RunHandlerAsync(machineRepo, "valid-key");
 
         await Assert.That(result.Principal!.FindFirst("TenantId")!.Value).IsEqualTo("7");
     }
@@ -120,9 +120,9 @@ public class ApiKeyAuthenticationHandlerTests
     public async Task EmptyHeaderValue_ReturnsFail()
     {
         // Header present but with empty string value
-        IDatabaseCache dbCache = Substitute.For<IDatabaseCache>();
+        IMachineRepository machineRepo = Substitute.For<IMachineRepository>();
 
-        AuthenticateResult result = await RunHandlerAsync(dbCache, "");
+        AuthenticateResult result = await RunHandlerAsync(machineRepo, "");
 
         await Assert.That(result.Succeeded).IsFalse();
     }
@@ -131,11 +131,11 @@ public class ApiKeyAuthenticationHandlerTests
     public async Task InvalidKey_DoesNotLookUpDatabase_WhenHeaderEmpty()
     {
         // When the header is empty, the handler should fail before querying the database
-        IDatabaseCache dbCache = Substitute.For<IDatabaseCache>();
+        IMachineRepository machineRepo = Substitute.For<IMachineRepository>();
 
-        await RunHandlerAsync(dbCache, "");
+        await RunHandlerAsync(machineRepo, "");
 
-        await dbCache.DidNotReceive().GetMachineByApiKeyAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
+        await machineRepo.DidNotReceive().GetMachineByApiKeyAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
     }
 
     [Test]
@@ -155,11 +155,11 @@ public class ApiKeyAuthenticationHandlerTests
             IsDeleted = false,
             TenantId = 1
         };
-        IDatabaseCache dbCache = Substitute.For<IDatabaseCache>();
-        dbCache.GetMachineByApiKeyAsync("key", Arg.Any<CancellationToken>())
+        IMachineRepository machineRepo = Substitute.For<IMachineRepository>();
+        machineRepo.GetMachineByApiKeyAsync("key", Arg.Any<CancellationToken>())
             .Returns(machine);
 
-        AuthenticateResult result = await RunHandlerAsync(dbCache, "key");
+        AuthenticateResult result = await RunHandlerAsync(machineRepo, "key");
 
         // The scheme name should be set on the identity so authorization policies can match it
         await Assert.That(result.Principal!.Identity!.AuthenticationType).IsEqualTo(ApiKeyAuthenticationHandler.SchemeName);

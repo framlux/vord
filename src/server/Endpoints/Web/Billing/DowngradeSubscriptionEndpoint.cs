@@ -3,9 +3,9 @@
 // See LICENSE for details.
 
 using FastEndpoints;
-using Framlux.FleetManagement.Database.Cache;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
+using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Server.Auth;
 using Framlux.FleetManagement.Server.Options;
 using Framlux.FleetManagement.Server.Services.Billing;
@@ -42,7 +42,10 @@ public sealed class DowngradeSubscriptionResponse
 public sealed class DowngradeSubscriptionEndpoint : Endpoint<DowngradeSubscriptionRequest, ApiResponse<DowngradeSubscriptionResponse>>
 {
     private readonly IBillingStatus _billingStatus;
-    private readonly IDatabaseCache _databaseCache;
+    private readonly IDatabaseTransactionProvider _transactionProvider;
+    private readonly IAuditLogRepository _auditLog;
+    private readonly ISubscriptionRepository _subscriptionRepository;
+    private readonly ITenantRepository _tenantRepository;
     private readonly ISubscriptionService _subscriptionService;
     private readonly IBillingApiClient _billingApiClient;
     private readonly IDowngradeGuardService _downgradeGuardService;
@@ -55,7 +58,10 @@ public sealed class DowngradeSubscriptionEndpoint : Endpoint<DowngradeSubscripti
     /// </summary>
     public DowngradeSubscriptionEndpoint(
         IBillingStatus billingStatus,
-        IDatabaseCache databaseCache,
+        IDatabaseTransactionProvider transactionProvider,
+        IAuditLogRepository auditLog,
+        ISubscriptionRepository subscriptionRepository,
+        ITenantRepository tenantRepository,
         ISubscriptionService subscriptionService,
         IBillingApiClient billingApiClient,
         IDowngradeGuardService downgradeGuardService,
@@ -64,7 +70,10 @@ public sealed class DowngradeSubscriptionEndpoint : Endpoint<DowngradeSubscripti
         ILogger<DowngradeSubscriptionEndpoint> logger)
     {
         _billingStatus = billingStatus;
-        _databaseCache = databaseCache;
+        _transactionProvider = transactionProvider;
+        _auditLog = auditLog;
+        _subscriptionRepository = subscriptionRepository;
+        _tenantRepository = tenantRepository;
         _subscriptionService = subscriptionService;
         _billingApiClient = billingApiClient;
         _downgradeGuardService = downgradeGuardService;
@@ -180,12 +189,12 @@ public sealed class DowngradeSubscriptionEndpoint : Endpoint<DowngradeSubscripti
 
     private async Task HandleTeamToProDowngradeAsync(int tenantId, CancellationToken ct)
     {
-        using IDatabaseTransaction transaction = await _databaseCache.BeginTransactionAsync(ct);
+        using IDatabaseTransaction transaction = await _transactionProvider.BeginTransactionAsync(ct);
 
         // Proactively update local subscription to avoid stale data before webhook arrives
-        await _databaseCache.DowngradeSubscriptionToProAsync(tenantId, _subscriptionOptions.ProTierAlertRuleLimit, _subscriptionOptions.ProTierWebhookLimit, ct);
+        await _subscriptionRepository.DowngradeSubscriptionToProAsync(tenantId, _subscriptionOptions.ProTierAlertRuleLimit, _subscriptionOptions.ProTierWebhookLimit, ct);
 
-        await _databaseCache.InsertAuditLogAsync(AuditHelper.Create(
+        await _auditLog.InsertAuditLogAsync(AuditHelper.Create(
             tenantId, null, null,
             AuditAction.SubscriptionDowngradeRequested, AuditResourceType.Subscription,
             tenantId.ToString(), "Immediate downgrade from Team to Pro", null), ct);
@@ -196,7 +205,7 @@ public sealed class DowngradeSubscriptionEndpoint : Endpoint<DowngradeSubscripti
         await _downgradeCleanupService.CleanupForProTierAsync(tenantId, ct);
 
         // Swap the Stripe price (best effort, webhook will also fire)
-        Tenant? tenant = await _databaseCache.GetTenantByIdAsync(tenantId, ct);
+        Tenant? tenant = await _tenantRepository.GetTenantByIdAsync(tenantId, ct);
         if (tenant is not null)
         {
             try
@@ -232,12 +241,12 @@ public sealed class DowngradeSubscriptionEndpoint : Endpoint<DowngradeSubscripti
             return;
         }
 
-        using IDatabaseTransaction transaction = await _databaseCache.BeginTransactionAsync(ct);
+        using IDatabaseTransaction transaction = await _transactionProvider.BeginTransactionAsync(ct);
 
         // Record the downgrade intent in the local database first
-        await _databaseCache.SetCancelAtPeriodEndAsync(tenantId, true, PendingSubscriptionAction.DowngradeToFree, ct);
+        await _subscriptionRepository.SetCancelAtPeriodEndAsync(tenantId, true, PendingSubscriptionAction.DowngradeToFree, ct);
 
-        await _databaseCache.InsertAuditLogAsync(AuditHelper.Create(
+        await _auditLog.InsertAuditLogAsync(AuditHelper.Create(
             tenantId, null, null,
             AuditAction.SubscriptionDowngradeRequested, AuditResourceType.Subscription,
             tenantId.ToString(), "Downgrade to Free at period end", null), ct);
@@ -245,7 +254,7 @@ public sealed class DowngradeSubscriptionEndpoint : Endpoint<DowngradeSubscripti
         await transaction.CommitAsync(ct);
 
         // Cancel the Stripe subscription at period end (best effort)
-        Tenant? tenant = await _databaseCache.GetTenantByIdAsync(tenantId, ct);
+        Tenant? tenant = await _tenantRepository.GetTenantByIdAsync(tenantId, ct);
         if (tenant is not null)
         {
             try

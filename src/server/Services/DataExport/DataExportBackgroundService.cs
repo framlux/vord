@@ -2,13 +2,10 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
-using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
-using Framlux.FleetManagement.Database;
+using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Server.Services.Handlers;
 using Framlux.FleetManagement.Server.Services.Infrastructure;
-using LinqToDB.Async;
-using LinqToDB;
 
 namespace Framlux.FleetManagement.Server.Services.DataExport;
 
@@ -71,12 +68,9 @@ public sealed class DataExportBackgroundService : BackgroundService
     private async Task ProcessPendingJobsAsync(CancellationToken ct)
     {
         using IServiceScope scope = _scopeFactory.CreateScope();
-        DatabaseContext db = scope.ServiceProvider.GetRequiredService<DatabaseContext>();
+        IDataExportRepository exportRepo = scope.ServiceProvider.GetRequiredService<IDataExportRepository>();
 
-        List<DataExportJob> pendingJobs = await db.DataExportJobs
-            .Where(j => j.Status == DataExportJobStatus.Pending)
-            .OrderBy(j => j.RequestedAt)
-            .ToListAsync(ct);
+        List<DataExportJob> pendingJobs = await exportRepo.GetPendingExportJobsAsync(ct);
 
         foreach (DataExportJob job in pendingJobs)
         {

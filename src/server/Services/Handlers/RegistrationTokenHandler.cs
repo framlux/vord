@@ -4,15 +4,12 @@
 
 using System.Security.Cryptography;
 using System.Text;
-using Framlux.FleetManagement.Database;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
+using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Server.Endpoints.Web;
 using Framlux.FleetManagement.Server.Endpoints.Web.Machines;
 using Framlux.FleetManagement.Server.Services.Infrastructure;
-using LinqToDB;
-using LinqToDB.Async;
-using LinqToDB.Data;
 
 namespace Framlux.FleetManagement.Server.Services.Handlers;
 
@@ -21,16 +18,25 @@ namespace Framlux.FleetManagement.Server.Services.Handlers;
 /// </summary>
 public sealed class RegistrationTokenHandler : IRegistrationTokenHandler
 {
-    private readonly DatabaseContext _db;
+    private readonly IRegistrationTokenRepository _tokenRepo;
+    private readonly IDatabaseTransactionProvider _transactionProvider;
+    private readonly IAuditLogRepository _auditLog;
 
     /// <summary>
     /// Creates a new instance of the <see cref="RegistrationTokenHandler"/> class.
     /// </summary>
-    public RegistrationTokenHandler(DatabaseContext db)
+    public RegistrationTokenHandler(
+        IRegistrationTokenRepository tokenRepo,
+        IDatabaseTransactionProvider transactionProvider,
+        IAuditLogRepository auditLog)
     {
-        ArgumentNullException.ThrowIfNull(db);
+        ArgumentNullException.ThrowIfNull(tokenRepo);
+        ArgumentNullException.ThrowIfNull(transactionProvider);
+        ArgumentNullException.ThrowIfNull(auditLog);
 
-        _db = db;
+        _tokenRepo = tokenRepo;
+        _transactionProvider = transactionProvider;
+        _auditLog = auditLog;
     }
 
     /// <inheritdoc/>
@@ -54,14 +60,14 @@ public sealed class RegistrationTokenHandler : IRegistrationTokenHandler
             IsRevoked = false,
         };
 
-        using DataConnectionTransaction transaction = await _db.BeginTransactionAsync(ct);
+        using IDatabaseTransaction transaction = await _transactionProvider.BeginTransactionAsync(ct);
 
-        token.Id = await _db.InsertWithInt64IdentityAsync(token, token: ct);
+        await _tokenRepo.CreateRegistrationTokenAsync(token, ct);
 
-        await _db.InsertAsync(AuditHelper.Create(
+        await _auditLog.InsertAuditLogAsync(AuditHelper.Create(
             tenantId, userId, null,
             AuditAction.RegistrationTokenCreated, AuditResourceType.RegistrationToken,
-            token.Id.ToString(), new { token.Name }, null), token: ct);
+            token.Id.ToString(), new { token.Name }, null), ct);
 
         await transaction.CommitAsync(ct);
 
@@ -80,23 +86,19 @@ public sealed class RegistrationTokenHandler : IRegistrationTokenHandler
     /// <inheritdoc/>
     public async Task<ServiceResult<object>> RevokeAsync(long tokenId, int tenantId, int userId, CancellationToken ct)
     {
-        using DataConnectionTransaction transaction = await _db.BeginTransactionAsync(ct);
+        using IDatabaseTransaction transaction = await _transactionProvider.BeginTransactionAsync(ct);
 
-        int updated = await _db.RegistrationTokens
-            .Where(t => t.Id == tokenId && t.TenantId == tenantId && t.IsRevoked == false)
-            .Set(t => t.IsRevoked, true)
-            .Set(t => t.RevokedAt, DateTimeOffset.UtcNow)
-            .UpdateAsync(ct);
+        int updated = await _tokenRepo.RevokeRegistrationTokenAsync(tokenId, tenantId, ct);
 
         if (updated == 0)
         {
             return ServiceResult<object>.NotFound();
         }
 
-        await _db.InsertAsync(AuditHelper.Create(
+        await _auditLog.InsertAuditLogAsync(AuditHelper.Create(
             tenantId, userId, null,
             AuditAction.RegistrationTokenRevoked, AuditResourceType.RegistrationToken,
-            tokenId.ToString(), null, null), token: ct);
+            tokenId.ToString(), null, null), ct);
 
         await transaction.CommitAsync(ct);
 
@@ -116,16 +118,10 @@ public sealed class RegistrationTokenHandler : IRegistrationTokenHandler
             pageSize = 25;
         }
 
-        IQueryable<RegistrationToken> query = _db.RegistrationTokens
-            .Where(t => t.TenantId == tenantId)
-            .OrderByDescending(t => t.CreatedAt);
+        int totalCount = await _tokenRepo.CountRegistrationTokensForTenantAsync(tenantId, ct);
 
-        int totalCount = await query.CountAsync(ct);
-
-        List<RegistrationToken> tokens = await query
-            .Skip((page - 1) * pageSize)
-            .Take(pageSize)
-            .ToListAsync(ct);
+        List<RegistrationToken> tokens = await _tokenRepo.GetRegistrationTokensForTenantAsync(
+            tenantId, (page - 1) * pageSize, pageSize, ct);
 
         List<RegistrationTokenDto> dtos = tokens.Select(t => new RegistrationTokenDto
         {

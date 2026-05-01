@@ -2,7 +2,7 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
-using Framlux.FleetManagement.Database.Cache;
+using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Server.Endpoints.Web.Models.Dashboard;
 using Framlux.FleetManagement.Server.Services.Handlers;
@@ -10,6 +10,7 @@ using Framlux.FleetManagement.Server.Services.Infrastructure;
 using Framlux.FleetManagement.Server.Services.ServerConfiguration;
 using Framlux.FleetManagement.Test.Infrastructure;
 using LinqToDB;
+using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
 using StackExchange.Redis;
 
@@ -26,7 +27,7 @@ public class DashboardHandlerTests
         using TestDatabaseFactory dbFactory = new();
         InMemoryMachinePingService pingService = new();
         ServerConfigurationService configService = new(Substitute.For<IServerSettingsCache>(), Substitute.For<IConnectionMultiplexer>());
-        DashboardHandler handler = new(dbFactory.Context, pingService, configService);
+        DashboardHandler handler = new(CreateRepo(dbFactory), pingService, configService);
 
         ServiceResult<DashboardSummaryDto> result = await handler.GetSummaryAsync(1, CancellationToken.None);
 
@@ -56,7 +57,7 @@ public class DashboardHandlerTests
         await pingService.RecordPingAsync(m1.Id); // Only m1 is online
 
         ServerConfigurationService configService = new(Substitute.For<IServerSettingsCache>(), Substitute.For<IConnectionMultiplexer>());
-        DashboardHandler handler = new(dbFactory.Context, pingService, configService);
+        DashboardHandler handler = new(CreateRepo(dbFactory), pingService, configService);
 
         ServiceResult<DashboardSummaryDto> result = await handler.GetSummaryAsync(1, CancellationToken.None);
 
@@ -77,11 +78,17 @@ public class DashboardHandlerTests
 
         InMemoryMachinePingService pingService = new();
         ServerConfigurationService configService = new(Substitute.For<IServerSettingsCache>(), Substitute.For<IConnectionMultiplexer>());
-        DashboardHandler handler = new(dbFactory.Context, pingService, configService);
+        DashboardHandler handler = new(CreateRepo(dbFactory), pingService, configService);
 
         ServiceResult<DashboardSummaryDto> result = await handler.GetSummaryAsync(1, CancellationToken.None);
 
         await Assert.That(result.Data!.PendingApprovals).IsEqualTo(0);
     }
 
+    // ========== Helper methods ==========
+
+    private static DatabaseRepository CreateRepo(TestDatabaseFactory dbFactory)
+    {
+        return new DatabaseRepository(dbFactory.Context, new NullLogger<DatabaseRepository>());
+    }
 }

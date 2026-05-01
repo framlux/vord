@@ -3,9 +3,9 @@
 // See LICENSE for details.
 
 using FastEndpoints;
-using Framlux.FleetManagement.Database.Cache;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
+using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Server.Auth;
 using Framlux.FleetManagement.Server.Services.Billing;
 using Framlux.FleetManagement.Server.Services.Infrastructure;
@@ -32,7 +32,10 @@ public sealed class CancelSubscriptionResponse
 public sealed class CancelSubscriptionEndpoint : EndpointWithoutRequest<ApiResponse<CancelSubscriptionResponse>>
 {
     private readonly IBillingStatus _billingStatus;
-    private readonly IDatabaseCache _databaseCache;
+    private readonly IDatabaseTransactionProvider _transactionProvider;
+    private readonly IAuditLogRepository _auditLog;
+    private readonly ISubscriptionRepository _subscriptionRepository;
+    private readonly ITenantRepository _tenantRepository;
     private readonly ISubscriptionService _subscriptionService;
     private readonly IBillingApiClient _billingApiClient;
     private readonly ILogger<CancelSubscriptionEndpoint> _logger;
@@ -42,13 +45,19 @@ public sealed class CancelSubscriptionEndpoint : EndpointWithoutRequest<ApiRespo
     /// </summary>
     public CancelSubscriptionEndpoint(
         IBillingStatus billingStatus,
-        IDatabaseCache databaseCache,
+        IDatabaseTransactionProvider transactionProvider,
+        IAuditLogRepository auditLog,
+        ISubscriptionRepository subscriptionRepository,
+        ITenantRepository tenantRepository,
         ISubscriptionService subscriptionService,
         IBillingApiClient billingApiClient,
         ILogger<CancelSubscriptionEndpoint> logger)
     {
         _billingStatus = billingStatus;
-        _databaseCache = databaseCache;
+        _transactionProvider = transactionProvider;
+        _auditLog = auditLog;
+        _subscriptionRepository = subscriptionRepository;
+        _tenantRepository = tenantRepository;
         _subscriptionService = subscriptionService;
         _billingApiClient = billingApiClient;
         _logger = logger;
@@ -114,11 +123,11 @@ public sealed class CancelSubscriptionEndpoint : EndpointWithoutRequest<ApiRespo
         // Free tier cancellation takes effect immediately since there is no Stripe subscription
         if (subscription.Tier == SubscriptionTier.Free)
         {
-            using IDatabaseTransaction freeTransaction = await _databaseCache.BeginTransactionAsync(ct);
+            using IDatabaseTransaction freeTransaction = await _transactionProvider.BeginTransactionAsync(ct);
 
-            await _databaseCache.DeactivateSubscriptionAsync(tenantId.Value, ct);
+            await _subscriptionRepository.DeactivateSubscriptionAsync(tenantId.Value, ct);
 
-            await _databaseCache.InsertAuditLogAsync(AuditHelper.Create(
+            await _auditLog.InsertAuditLogAsync(AuditHelper.Create(
                 tenantId.Value, null, null,
                 AuditAction.SubscriptionCancelRequested, AuditResourceType.Subscription,
                 tenantId.Value.ToString(), "Free tier account canceled immediately", null), ct);
@@ -134,12 +143,12 @@ public sealed class CancelSubscriptionEndpoint : EndpointWithoutRequest<ApiRespo
             return;
         }
 
-        using IDatabaseTransaction paidTransaction = await _databaseCache.BeginTransactionAsync(ct);
+        using IDatabaseTransaction paidTransaction = await _transactionProvider.BeginTransactionAsync(ct);
 
         // For paid tiers, record the cancellation intent in the local database first
-        await _databaseCache.SetCancelAtPeriodEndAsync(tenantId.Value, true, PendingSubscriptionAction.CancelAccount, ct);
+        await _subscriptionRepository.SetCancelAtPeriodEndAsync(tenantId.Value, true, PendingSubscriptionAction.CancelAccount, ct);
 
-        await _databaseCache.InsertAuditLogAsync(AuditHelper.Create(
+        await _auditLog.InsertAuditLogAsync(AuditHelper.Create(
             tenantId.Value, null, null,
             AuditAction.SubscriptionCancelRequested, AuditResourceType.Subscription,
             tenantId.Value.ToString(), null, null), ct);
@@ -147,7 +156,7 @@ public sealed class CancelSubscriptionEndpoint : EndpointWithoutRequest<ApiRespo
         await paidTransaction.CommitAsync(ct);
 
         // Attempt to cancel with Stripe via the billing API (best effort)
-        Tenant? tenant = await _databaseCache.GetTenantByIdAsync(tenantId.Value, ct);
+        Tenant? tenant = await _tenantRepository.GetTenantByIdAsync(tenantId.Value, ct);
         if (tenant is not null)
         {
             try

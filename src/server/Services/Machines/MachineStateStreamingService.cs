@@ -3,15 +3,11 @@
 // See LICENSE for details.
 
 using System.Text.Json;
-using Framlux.FleetManagement.Database;
-using Framlux.FleetManagement.Database.Cache;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
+using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Server.Services.Infrastructure;
 using Framlux.FleetManagement.Server.Services.Telemetry;
-using LinqToDB;
-using LinqToDB.Async;
-using LinqToDB.Data;
 
 namespace Framlux.FleetManagement.Server.Services.Machines;
 
@@ -114,14 +110,11 @@ public sealed class MachineStateStreamingService : BackgroundService
         while (ct.IsCancellationRequested == false)
         {
             using IServiceScope scope = _scopeFactory.CreateScope();
-            DatabaseContext db = scope.ServiceProvider.GetRequiredService<DatabaseContext>();
+            IMachineStateRepository repo = scope.ServiceProvider.GetRequiredService<IMachineStateRepository>();
 
             DateTimeOffset streamingWindow = DateTimeOffset.UtcNow.AddDays(-2);
-            List<MachineTelemetry> batch = await db.MachineTelemetry
-                .Where(t => t.Id > _highWaterMark && t.ReceivedAt > streamingWindow)
-                .OrderBy(t => t.Id)
-                .Take(BatchSize)
-                .ToListAsync(ct);
+            List<MachineTelemetry> batch = await repo.GetTelemetryBatchAsync(
+                _highWaterMark, streamingWindow, BatchSize, ct);
 
             if (batch.Count == 0)
             {
@@ -134,7 +127,7 @@ public sealed class MachineStateStreamingService : BackgroundService
             {
                 try
                 {
-                    await ProcessTelemetryRowAsync(db, row, ct);
+                    await ProcessTelemetryRowAsync(repo, row, ct);
                 }
                 catch (Exception ex)
                 {
@@ -161,7 +154,7 @@ public sealed class MachineStateStreamingService : BackgroundService
     /// Processes a single telemetry row by applying a targeted UPDATE to the
     /// summary and/or detail tables based on the telemetry type.
     /// </summary>
-    internal async Task ProcessTelemetryRowAsync(DatabaseContext db, MachineTelemetry row, CancellationToken ct)
+    internal async Task ProcessTelemetryRowAsync(IMachineStateRepository repo, MachineTelemetry row, CancellationToken ct)
     {
         DateTimeOffset receivedAt = row.ReceivedAt;
         long machineId = row.MachineId;
@@ -169,51 +162,51 @@ public sealed class MachineStateStreamingService : BackgroundService
         switch (row.TelemetryType)
         {
             case TelemetryTypeIds.SystemInfo:
-                await ProcessSystemInfoAsync(db, machineId, row.Payload, receivedAt, ct);
+                await ProcessSystemInfoAsync(repo, machineId, row.Payload, receivedAt, ct);
                 break;
 
             case TelemetryTypeIds.OsVersion:
-                await ProcessOsVersionAsync(db, machineId, row.Payload, receivedAt, ct);
+                await ProcessOsVersionAsync(repo, machineId, row.Payload, receivedAt, ct);
                 break;
 
             case TelemetryTypeIds.CpuInfo:
-                await ProcessCpuInfoAsync(db, machineId, row.Payload, receivedAt, ct);
+                await ProcessCpuInfoAsync(repo, machineId, row.Payload, receivedAt, ct);
                 break;
 
             case TelemetryTypeIds.MemoryInfo:
-                await ProcessMemoryInfoAsync(db, machineId, row.Payload, receivedAt, ct);
+                await ProcessMemoryInfoAsync(repo, machineId, row.Payload, receivedAt, ct);
                 break;
 
             case TelemetryTypeIds.DiskInfo:
-                await ProcessDiskInfoAsync(db, machineId, row.Payload, receivedAt, ct);
+                await ProcessDiskInfoAsync(repo, machineId, row.Payload, receivedAt, ct);
                 break;
 
             case TelemetryTypeIds.CpuUsage:
-                await ProcessCpuUsageAsync(db, machineId, row.Payload, receivedAt, ct);
+                await ProcessCpuUsageAsync(repo, machineId, row.Payload, receivedAt, ct);
                 break;
 
             case TelemetryTypeIds.MemoryUsage:
-                await ProcessMemoryUsageAsync(db, machineId, row.Payload, receivedAt, ct);
+                await ProcessMemoryUsageAsync(repo, machineId, row.Payload, receivedAt, ct);
                 break;
 
             case TelemetryTypeIds.DiskUsage:
-                await ProcessDiskUsageAsync(db, machineId, row.Payload, receivedAt, ct);
+                await ProcessDiskUsageAsync(repo, machineId, row.Payload, receivedAt, ct);
                 break;
 
             case TelemetryTypeIds.SshSessions:
-                await ProcessSshSessionsAsync(db, machineId, row.Payload, receivedAt, ct);
+                await ProcessSshSessionsAsync(repo, machineId, row.Payload, receivedAt, ct);
                 break;
 
             case TelemetryTypeIds.HardwareHealth:
-                await ProcessHardwareHealthAsync(db, machineId, row.Payload, receivedAt, ct);
+                await ProcessHardwareHealthAsync(repo, machineId, row.Payload, receivedAt, ct);
                 break;
 
             case TelemetryTypeIds.PackageUpdates:
-                await ProcessPackageUpdatesAsync(db, machineId, row.Payload, receivedAt, ct);
+                await ProcessPackageUpdatesAsync(repo, machineId, row.Payload, receivedAt, ct);
                 break;
 
             case TelemetryTypeIds.ServiceStatus:
-                await ProcessServiceStatusAsync(db, machineId, row.Payload, receivedAt, ct);
+                await ProcessServiceStatusAsync(repo, machineId, row.Payload, receivedAt, ct);
                 break;
 
             default:
@@ -222,7 +215,7 @@ public sealed class MachineStateStreamingService : BackgroundService
         }
     }
 
-    private static async Task ProcessSystemInfoAsync(DatabaseContext db, long machineId, string payload, DateTimeOffset ts, CancellationToken ct)
+    private static async Task ProcessSystemInfoAsync(IMachineStateRepository repo, long machineId, string payload, DateTimeOffset ts, CancellationToken ct)
     {
         using JsonDocument doc = JsonDocument.Parse(payload);
         JsonElement root = doc.RootElement;
@@ -238,27 +231,11 @@ public sealed class MachineStateStreamingService : BackgroundService
         string? biosVersion = root.TryGetProperty("bios_version", out JsonElement bv) ? bv.GetString() : null;
         string? ipAddresses = root.TryGetProperty("ip_addresses", out JsonElement ip) ? ip.GetRawText() : null;
 
-        await db.MachineStateSummaries
-            .Where(s => s.MachineId == machineId)
-            .Set(s => s.Hostname, hostname)
-            .Set(s => s.HardwareModel, hardwareModel)
-            .Set(s => s.IpAddresses, ipAddresses)
-            .Set(s => s.LastSeenAt, ts)
-            .UpdateAsync(ct);
-
-        await db.MachineStateDetails
-            .Where(d => d.MachineId == machineId)
-            .Set(d => d.HardwareVendor, hardwareVendor)
-            .Set(d => d.HardwareSerial, hardwareSerial)
-            .Set(d => d.CpuBrand, cpuBrand)
-            .Set(d => d.CpuCores, cpuCores)
-            .Set(d => d.MemoryTotalBytes, memoryTotal)
-            .Set(d => d.UptimeSeconds, uptime)
-            .Set(d => d.BiosVersion, biosVersion)
-            .UpdateAsync(ct);
+        await repo.UpdateSystemInfoSummaryAsync(machineId, hostname, hardwareModel, ipAddresses, ts, ct);
+        await repo.UpdateSystemInfoDetailAsync(machineId, hardwareVendor, hardwareSerial, cpuBrand, cpuCores, memoryTotal, uptime, biosVersion, ct);
     }
 
-    private static async Task ProcessOsVersionAsync(DatabaseContext db, long machineId, string payload, DateTimeOffset ts, CancellationToken ct)
+    private static async Task ProcessOsVersionAsync(IMachineStateRepository repo, long machineId, string payload, DateTimeOffset ts, CancellationToken ct)
     {
         using JsonDocument doc = JsonDocument.Parse(payload);
         JsonElement root = doc.RootElement;
@@ -267,20 +244,11 @@ public sealed class MachineStateStreamingService : BackgroundService
         string? osVersion = root.TryGetProperty("os_version", out JsonElement ov) ? ov.GetString() : null;
         string? kernel = root.TryGetProperty("kernel", out JsonElement k) ? k.GetString() : null;
 
-        await db.MachineStateSummaries
-            .Where(s => s.MachineId == machineId)
-            .Set(s => s.OsName, osName)
-            .Set(s => s.OsVersion, osVersion)
-            .Set(s => s.LastSeenAt, ts)
-            .UpdateAsync(ct);
-
-        await db.MachineStateDetails
-            .Where(d => d.MachineId == machineId)
-            .Set(d => d.Kernel, kernel)
-            .UpdateAsync(ct);
+        await repo.UpdateOsVersionSummaryAsync(machineId, osName, osVersion, ts, ct);
+        await repo.UpdateOsVersionDetailAsync(machineId, kernel, ct);
     }
 
-    private static async Task ProcessCpuInfoAsync(DatabaseContext db, long machineId, string payload, DateTimeOffset ts, CancellationToken ct)
+    private static async Task ProcessCpuInfoAsync(IMachineStateRepository repo, long machineId, string payload, DateTimeOffset ts, CancellationToken ct)
     {
         using JsonDocument doc = JsonDocument.Parse(payload);
         JsonElement root = doc.RootElement;
@@ -289,20 +257,11 @@ public sealed class MachineStateStreamingService : BackgroundService
         int? physCpus = root.TryGetProperty("physical_cpus", out JsonElement pc) ? pc.GetInt32() : null;
         int? logCpus = root.TryGetProperty("logical_cpus", out JsonElement lc) ? lc.GetInt32() : null;
 
-        await db.MachineStateSummaries
-            .Where(s => s.MachineId == machineId)
-            .Set(s => s.LastSeenAt, ts)
-            .UpdateAsync(ct);
-
-        await db.MachineStateDetails
-            .Where(d => d.MachineId == machineId)
-            .Set(d => d.CpuType, cpuType)
-            .Set(d => d.CpuPhysicalCpus, physCpus)
-            .Set(d => d.CpuLogicalCpus, logCpus)
-            .UpdateAsync(ct);
+        await repo.UpdateCpuInfoSummaryAsync(machineId, ts, ct);
+        await repo.UpdateCpuInfoDetailAsync(machineId, cpuType, physCpus, logCpus, ct);
     }
 
-    private static async Task ProcessMemoryInfoAsync(DatabaseContext db, long machineId, string payload, DateTimeOffset ts, CancellationToken ct)
+    private static async Task ProcessMemoryInfoAsync(IMachineStateRepository repo, long machineId, string payload, DateTimeOffset ts, CancellationToken ct)
     {
         using JsonDocument doc = JsonDocument.Parse(payload);
         JsonElement root = doc.RootElement;
@@ -310,46 +269,27 @@ public sealed class MachineStateStreamingService : BackgroundService
         long? swapTotal = root.TryGetProperty("swap_total_bytes", out JsonElement st) ? st.GetInt64() : null;
         long? swapFree = root.TryGetProperty("swap_free_bytes", out JsonElement sf) ? sf.GetInt64() : null;
 
-        await db.MachineStateSummaries
-            .Where(s => s.MachineId == machineId)
-            .Set(s => s.LastSeenAt, ts)
-            .UpdateAsync(ct);
-
-        await db.MachineStateDetails
-            .Where(d => d.MachineId == machineId)
-            .Set(d => d.SwapTotalBytes, swapTotal)
-            .Set(d => d.SwapFreeBytes, swapFree)
-            .UpdateAsync(ct);
+        await repo.UpdateMemoryInfoSummaryAsync(machineId, ts, ct);
+        await repo.UpdateMemoryInfoDetailAsync(machineId, swapTotal, swapFree, ct);
     }
 
-    private static async Task ProcessDiskInfoAsync(DatabaseContext db, long machineId, string payload, DateTimeOffset ts, CancellationToken ct)
+    private static async Task ProcessDiskInfoAsync(IMachineStateRepository repo, long machineId, string payload, DateTimeOffset ts, CancellationToken ct)
     {
-        await db.MachineStateSummaries
-            .Where(s => s.MachineId == machineId)
-            .Set(s => s.LastSeenAt, ts)
-            .UpdateAsync(ct);
-
-        await db.MachineStateDetails
-            .Where(d => d.MachineId == machineId)
-            .Set(d => d.DiskInfos, payload)
-            .UpdateAsync(ct);
+        await repo.UpdateDiskInfoSummaryAsync(machineId, ts, ct);
+        await repo.UpdateDiskInfoDetailAsync(machineId, payload, ct);
     }
 
-    private static async Task ProcessCpuUsageAsync(DatabaseContext db, long machineId, string payload, DateTimeOffset ts, CancellationToken ct)
+    private static async Task ProcessCpuUsageAsync(IMachineStateRepository repo, long machineId, string payload, DateTimeOffset ts, CancellationToken ct)
     {
         using JsonDocument doc = JsonDocument.Parse(payload);
         JsonElement root = doc.RootElement;
 
         int? cpuPercent = root.TryGetProperty("cpu_usage_percent", out JsonElement cp) ? cp.GetInt32() : null;
 
-        await db.MachineStateSummaries
-            .Where(s => s.MachineId == machineId)
-            .Set(s => s.CpuUsagePercent, cpuPercent)
-            .Set(s => s.LastSeenAt, ts)
-            .UpdateAsync(ct);
+        await repo.UpdateCpuUsageSummaryAsync(machineId, cpuPercent, ts, ct);
     }
 
-    private static async Task ProcessMemoryUsageAsync(DatabaseContext db, long machineId, string payload, DateTimeOffset ts, CancellationToken ct)
+    private static async Task ProcessMemoryUsageAsync(IMachineStateRepository repo, long machineId, string payload, DateTimeOffset ts, CancellationToken ct)
     {
         using JsonDocument doc = JsonDocument.Parse(payload);
         JsonElement root = doc.RootElement;
@@ -357,65 +297,33 @@ public sealed class MachineStateStreamingService : BackgroundService
         long? memUsed = root.TryGetProperty("memory_used", out JsonElement mu) ? mu.GetInt64() : null;
         int? memPercent = root.TryGetProperty("memory_usage_percent", out JsonElement mp) ? mp.GetInt32() : null;
 
-        await db.MachineStateSummaries
-            .Where(s => s.MachineId == machineId)
-            .Set(s => s.MemoryUsagePercent, memPercent)
-            .Set(s => s.LastSeenAt, ts)
-            .UpdateAsync(ct);
-
-        await db.MachineStateDetails
-            .Where(d => d.MachineId == machineId)
-            .Set(d => d.MemoryUsedBytes, memUsed)
-            .UpdateAsync(ct);
+        await repo.UpdateMemoryUsageSummaryAsync(machineId, memPercent, ts, ct);
+        await repo.UpdateMemoryUsageDetailAsync(machineId, memUsed, ct);
     }
 
-    private static async Task ProcessDiskUsageAsync(DatabaseContext db, long machineId, string payload, DateTimeOffset ts, CancellationToken ct)
+    private static async Task ProcessDiskUsageAsync(IMachineStateRepository repo, long machineId, string payload, DateTimeOffset ts, CancellationToken ct)
     {
         int maxDiskUsage = ComputeMaxDiskUsagePercent(payload);
 
-        await db.MachineStateSummaries
-            .Where(s => s.MachineId == machineId)
-            .Set(s => s.MaxDiskUsagePercent, maxDiskUsage)
-            .Set(s => s.LastSeenAt, ts)
-            .UpdateAsync(ct);
-
-        await db.MachineStateDetails
-            .Where(d => d.MachineId == machineId)
-            .Set(d => d.DiskUsages, payload)
-            .UpdateAsync(ct);
+        await repo.UpdateDiskUsageSummaryAsync(machineId, maxDiskUsage, ts, ct);
+        await repo.UpdateDiskUsageDetailAsync(machineId, payload, ct);
     }
 
-    private static async Task ProcessSshSessionsAsync(DatabaseContext db, long machineId, string payload, DateTimeOffset ts, CancellationToken ct)
+    private static async Task ProcessSshSessionsAsync(IMachineStateRepository repo, long machineId, string payload, DateTimeOffset ts, CancellationToken ct)
     {
-        await db.MachineStateSummaries
-            .Where(s => s.MachineId == machineId)
-            .Set(s => s.LastSeenAt, ts)
-            .UpdateAsync(ct);
-
-        await db.MachineStateDetails
-            .Where(d => d.MachineId == machineId)
-            .Set(d => d.SshSessions, payload)
-            .UpdateAsync(ct);
+        await repo.UpdateSshSessionsSummaryAsync(machineId, ts, ct);
+        await repo.UpdateSshSessionsDetailAsync(machineId, payload, ct);
     }
 
-    private static async Task ProcessHardwareHealthAsync(DatabaseContext db, long machineId, string payload, DateTimeOffset ts, CancellationToken ct)
+    private static async Task ProcessHardwareHealthAsync(IMachineStateRepository repo, long machineId, string payload, DateTimeOffset ts, CancellationToken ct)
     {
         (bool hasDiskIssue, bool hasHardwareIssue) = ComputeHardwareHealthFlags(payload);
 
-        await db.MachineStateSummaries
-            .Where(s => s.MachineId == machineId)
-            .Set(s => s.HasDiskHealthIssue, hasDiskIssue)
-            .Set(s => s.HasHardwareIssue, hasHardwareIssue)
-            .Set(s => s.LastSeenAt, ts)
-            .UpdateAsync(ct);
-
-        await db.MachineStateDetails
-            .Where(d => d.MachineId == machineId)
-            .Set(d => d.HardwareHealth, payload)
-            .UpdateAsync(ct);
+        await repo.UpdateHardwareHealthSummaryAsync(machineId, hasDiskIssue, hasHardwareIssue, ts, ct);
+        await repo.UpdateHardwareHealthDetailAsync(machineId, payload, ct);
     }
 
-    private static async Task ProcessPackageUpdatesAsync(DatabaseContext db, long machineId, string payload, DateTimeOffset ts, CancellationToken ct)
+    private static async Task ProcessPackageUpdatesAsync(IMachineStateRepository repo, long machineId, string payload, DateTimeOffset ts, CancellationToken ct)
     {
         using JsonDocument doc = JsonDocument.Parse(payload);
         JsonElement root = doc.RootElement;
@@ -423,15 +331,10 @@ public sealed class MachineStateStreamingService : BackgroundService
         int? pending = root.TryGetProperty("pending_updates", out JsonElement pu) ? pu.GetInt32() : null;
         int? security = root.TryGetProperty("security_updates", out JsonElement su) ? su.GetInt32() : null;
 
-        await db.MachineStateSummaries
-            .Where(s => s.MachineId == machineId)
-            .Set(s => s.PendingUpdates, pending)
-            .Set(s => s.SecurityUpdates, security)
-            .Set(s => s.LastSeenAt, ts)
-            .UpdateAsync(ct);
+        await repo.UpdatePackageUpdatesSummaryAsync(machineId, pending, security, ts, ct);
     }
 
-    private static async Task ProcessServiceStatusAsync(DatabaseContext db, long machineId, string payload, DateTimeOffset ts, CancellationToken ct)
+    private static async Task ProcessServiceStatusAsync(IMachineStateRepository repo, long machineId, string payload, DateTimeOffset ts, CancellationToken ct)
     {
         using JsonDocument doc = JsonDocument.Parse(payload);
         JsonElement root = doc.RootElement;
@@ -439,12 +342,7 @@ public sealed class MachineStateStreamingService : BackgroundService
         int? total = root.TryGetProperty("total_services", out JsonElement ts2) ? ts2.GetInt32() : null;
         int? failed = root.TryGetProperty("failed_services", out JsonElement fs) ? fs.GetInt32() : null;
 
-        await db.MachineStateSummaries
-            .Where(s => s.MachineId == machineId)
-            .Set(s => s.TotalServices, total)
-            .Set(s => s.FailedServices, failed)
-            .Set(s => s.LastSeenAt, ts)
-            .UpdateAsync(ct);
+        await repo.UpdateServiceStatusSummaryAsync(machineId, total, failed, ts, ct);
     }
 
     /// <summary>

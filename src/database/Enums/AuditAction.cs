@@ -63,4 +63,20 @@ public enum AuditAction : short
     MachineKeyAuthorized = 90,
     /// <summary>A signing key authorization was revoked for a machine.</summary>
     MachineKeyRevoked = 91,
+    /// <summary>An alert rule was created.</summary>
+    AlertRuleCreated = 100,
+    /// <summary>An alert rule was updated.</summary>
+    AlertRuleUpdated = 101,
+    /// <summary>An alert rule was deleted.</summary>
+    AlertRuleDeleted = 102,
+    /// <summary>A webhook endpoint was created.</summary>
+    WebhookCreated = 110,
+    /// <summary>A webhook endpoint was updated.</summary>
+    WebhookUpdated = 111,
+    /// <summary>A webhook endpoint was deleted.</summary>
+    WebhookDeleted = 112,
+    /// <summary>A webhook endpoint secret was rotated.</summary>
+    WebhookSecretRotated = 113,
+    /// <summary>An alert event was acknowledged.</summary>
+    AlertEventAcknowledged = 120,
 }

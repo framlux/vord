@@ -2,9 +2,9 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
-using Framlux.FleetManagement.Database.Cache;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
+using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Grpc.AgentConfiguration;
 using Framlux.FleetManagement.Server.Endpoints.Grpc;
 using Framlux.FleetManagement.Server.Services.Machines;
@@ -27,15 +27,19 @@ public sealed class ConfigurationServiceTests
     private readonly IMachinePingService _pingService = Substitute.For<IMachinePingService>();
     private readonly ILogger<ConfigurationService> _logger = Substitute.For<ILogger<ConfigurationService>>();
 
-    private ConfigurationService CreateService(IServerSettingsCache? settingsCache = null, IDatabaseCache? dbCache = null)
+    private ConfigurationService CreateService(
+        IServerSettingsCache? settingsCache = null,
+        ISigningKeyRepository? signingKeyRepo = null,
+        IRemoteCommandRepository? remoteCommandRepo = null)
     {
         IServerSettingsCache resolvedSettingsCache = settingsCache ?? Substitute.For<IServerSettingsCache>();
-        IDatabaseCache resolvedDbCache = dbCache ?? Substitute.For<IDatabaseCache>();
-        resolvedDbCache.GetActiveSigningKeysForMachineAsync(Arg.Any<long>(), Arg.Any<CancellationToken>())
+        ISigningKeyRepository resolvedSigningKeyRepo = signingKeyRepo ?? Substitute.For<ISigningKeyRepository>();
+        IRemoteCommandRepository resolvedRemoteCommandRepo = remoteCommandRepo ?? Substitute.For<IRemoteCommandRepository>();
+        resolvedSigningKeyRepo.GetActiveSigningKeysForMachineAsync(Arg.Any<long>(), Arg.Any<CancellationToken>())
             .Returns(new List<Database.Models.UserSigningKey>());
         ServerConfigurationService configService = new(resolvedSettingsCache, Substitute.For<IConnectionMultiplexer>());
 
-        return new ConfigurationService(resolvedDbCache, _pingService, configService, _logger);
+        return new ConfigurationService(resolvedSigningKeyRepo, resolvedRemoteCommandRepo, _pingService, configService, _logger);
     }
 
     private static ServerCallContext CreateAuthenticatedContext(long machineId, int tenantId = 1)
@@ -179,11 +183,11 @@ public sealed class ConfigurationServiceTests
     [Test]
     public async Task GetPendingCommands_ValidRequest_ReturnsEmptyResponse()
     {
-        IDatabaseCache dbCache = Substitute.For<IDatabaseCache>();
-        dbCache.GetPendingCommandsForMachineAsync(Arg.Any<long>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+        IRemoteCommandRepository remoteCommandRepo = Substitute.For<IRemoteCommandRepository>();
+        remoteCommandRepo.GetPendingCommandsForMachineAsync(Arg.Any<long>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
             .Returns(new List<Database.Models.RemoteCommand>());
 
-        ConfigurationService service = CreateService(dbCache: dbCache);
+        ConfigurationService service = CreateService(remoteCommandRepo: remoteCommandRepo);
         ServerCallContext context = CreateAuthenticatedContext(1);
 
         GetPendingCommandsResponse response = await service.GetPendingCommands(
@@ -214,14 +218,14 @@ public sealed class ConfigurationServiceTests
     [Test]
     public async Task AcknowledgeCommand_ValidRequest_ReturnsSuccess()
     {
-        IDatabaseCache dbCache = Substitute.For<IDatabaseCache>();
-        dbCache.UpdateRemoteCommandStatusAsync(
+        IRemoteCommandRepository remoteCommandRepo = Substitute.For<IRemoteCommandRepository>();
+        remoteCommandRepo.UpdateRemoteCommandStatusAsync(
             Arg.Any<string>(), Arg.Any<long>(), Arg.Any<Database.Enums.RemoteCommandStatus>(),
             Arg.Any<int?>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<string?>(),
             Arg.Any<CancellationToken>())
             .Returns(Task.CompletedTask);
 
-        ConfigurationService service = CreateService(dbCache: dbCache);
+        ConfigurationService service = CreateService(remoteCommandRepo: remoteCommandRepo);
         ServerCallContext context = CreateAuthenticatedContext(1);
 
         AcknowledgeCommandResponse response = await service.AcknowledgeCommand(
@@ -259,9 +263,7 @@ public sealed class ConfigurationServiceTests
     [Test]
     public async Task GetPendingCommands_WithData_ConvertsToProtoAndMarksDelivered()
     {
-        IDatabaseCache dbCache = Substitute.For<IDatabaseCache>();
-        dbCache.GetActiveSigningKeysForMachineAsync(Arg.Any<long>(), Arg.Any<CancellationToken>())
-            .Returns(new List<Database.Models.UserSigningKey>());
+        IRemoteCommandRepository remoteCommandRepo = Substitute.For<IRemoteCommandRepository>();
 
         Database.Models.RemoteCommand pendingCmd = new()
         {
@@ -281,12 +283,12 @@ public sealed class ConfigurationServiceTests
             Status = Database.Enums.RemoteCommandStatus.Pending,
             CreatedAt = DateTimeOffset.UtcNow,
         };
-        dbCache.GetPendingCommandsForMachineAsync(1, 1, Arg.Any<CancellationToken>())
+        remoteCommandRepo.GetPendingCommandsForMachineAsync(1, 1, Arg.Any<CancellationToken>())
             .Returns(new List<Database.Models.RemoteCommand> { pendingCmd });
-        dbCache.MarkCommandsDeliveredAsync(Arg.Any<IEnumerable<string>>(), Arg.Any<CancellationToken>())
+        remoteCommandRepo.MarkCommandsDeliveredAsync(Arg.Any<IEnumerable<string>>(), Arg.Any<CancellationToken>())
             .Returns(Task.CompletedTask);
 
-        ConfigurationService service = CreateService(dbCache: dbCache);
+        ConfigurationService service = CreateService(remoteCommandRepo: remoteCommandRepo);
         ServerCallContext context = CreateAuthenticatedContext(1, tenantId: 1);
 
         GetPendingCommandsResponse response = await service.GetPendingCommands(
@@ -297,7 +299,7 @@ public sealed class ConfigurationServiceTests
         await Assert.That(response.Commands[0].Type).IsEqualTo("reboot");
         await Assert.That(response.Commands[0].Params["delay_minutes"]).IsEqualTo("5");
 
-        await dbCache.Received(1).MarkCommandsDeliveredAsync(
+        await remoteCommandRepo.Received(1).MarkCommandsDeliveredAsync(
             Arg.Is<IEnumerable<string>>(ids => ids.Contains("cmd-abc")),
             Arg.Any<CancellationToken>());
     }
@@ -307,16 +309,14 @@ public sealed class ConfigurationServiceTests
     [Test]
     public async Task AcknowledgeCommand_Failure_MapsFailed()
     {
-        IDatabaseCache dbCache = Substitute.For<IDatabaseCache>();
-        dbCache.GetActiveSigningKeysForMachineAsync(Arg.Any<long>(), Arg.Any<CancellationToken>())
-            .Returns(new List<Database.Models.UserSigningKey>());
-        dbCache.UpdateRemoteCommandStatusAsync(
+        IRemoteCommandRepository remoteCommandRepo = Substitute.For<IRemoteCommandRepository>();
+        remoteCommandRepo.UpdateRemoteCommandStatusAsync(
             Arg.Any<string>(), Arg.Any<long>(), Arg.Any<Database.Enums.RemoteCommandStatus>(),
             Arg.Any<int?>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<string?>(),
             Arg.Any<CancellationToken>())
             .Returns(Task.CompletedTask);
 
-        ConfigurationService service = CreateService(dbCache: dbCache);
+        ConfigurationService service = CreateService(remoteCommandRepo: remoteCommandRepo);
         ServerCallContext context = CreateAuthenticatedContext(1);
 
         AcknowledgeCommandResponse response = await service.AcknowledgeCommand(
@@ -328,7 +328,7 @@ public sealed class ConfigurationServiceTests
             }, context);
 
         await Assert.That(response.Success).IsTrue();
-        await dbCache.Received(1).UpdateRemoteCommandStatusAsync(
+        await remoteCommandRepo.Received(1).UpdateRemoteCommandStatusAsync(
             "cmd-fail", 1L, Database.Enums.RemoteCommandStatus.Failed,
             Arg.Any<int?>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<string?>(),
             Arg.Any<CancellationToken>());
@@ -337,16 +337,14 @@ public sealed class ConfigurationServiceTests
     [Test]
     public async Task AcknowledgeCommand_Rejected_MapsRejected()
     {
-        IDatabaseCache dbCache = Substitute.For<IDatabaseCache>();
-        dbCache.GetActiveSigningKeysForMachineAsync(Arg.Any<long>(), Arg.Any<CancellationToken>())
-            .Returns(new List<Database.Models.UserSigningKey>());
-        dbCache.UpdateRemoteCommandStatusAsync(
+        IRemoteCommandRepository remoteCommandRepo = Substitute.For<IRemoteCommandRepository>();
+        remoteCommandRepo.UpdateRemoteCommandStatusAsync(
             Arg.Any<string>(), Arg.Any<long>(), Arg.Any<Database.Enums.RemoteCommandStatus>(),
             Arg.Any<int?>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<string?>(),
             Arg.Any<CancellationToken>())
             .Returns(Task.CompletedTask);
 
-        ConfigurationService service = CreateService(dbCache: dbCache);
+        ConfigurationService service = CreateService(remoteCommandRepo: remoteCommandRepo);
         ServerCallContext context = CreateAuthenticatedContext(1);
 
         AcknowledgeCommandResponse response = await service.AcknowledgeCommand(
@@ -358,7 +356,7 @@ public sealed class ConfigurationServiceTests
             }, context);
 
         await Assert.That(response.Success).IsTrue();
-        await dbCache.Received(1).UpdateRemoteCommandStatusAsync(
+        await remoteCommandRepo.Received(1).UpdateRemoteCommandStatusAsync(
             "cmd-reject", 1L, Database.Enums.RemoteCommandStatus.Rejected,
             Arg.Any<int?>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<string?>(),
             Arg.Any<CancellationToken>());
@@ -367,16 +365,14 @@ public sealed class ConfigurationServiceTests
     [Test]
     public async Task AcknowledgeCommand_NullResult_MapsFailed()
     {
-        IDatabaseCache dbCache = Substitute.For<IDatabaseCache>();
-        dbCache.GetActiveSigningKeysForMachineAsync(Arg.Any<long>(), Arg.Any<CancellationToken>())
-            .Returns(new List<Database.Models.UserSigningKey>());
-        dbCache.UpdateRemoteCommandStatusAsync(
+        IRemoteCommandRepository remoteCommandRepo = Substitute.For<IRemoteCommandRepository>();
+        remoteCommandRepo.UpdateRemoteCommandStatusAsync(
             Arg.Any<string>(), Arg.Any<long>(), Arg.Any<Database.Enums.RemoteCommandStatus>(),
             Arg.Any<int?>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<string?>(),
             Arg.Any<CancellationToken>())
             .Returns(Task.CompletedTask);
 
-        ConfigurationService service = CreateService(dbCache: dbCache);
+        ConfigurationService service = CreateService(remoteCommandRepo: remoteCommandRepo);
         ServerCallContext context = CreateAuthenticatedContext(1);
 
         AcknowledgeCommandResponse response = await service.AcknowledgeCommand(
@@ -387,7 +383,7 @@ public sealed class ConfigurationServiceTests
             }, context);
 
         await Assert.That(response.Success).IsTrue();
-        await dbCache.Received(1).UpdateRemoteCommandStatusAsync(
+        await remoteCommandRepo.Received(1).UpdateRemoteCommandStatusAsync(
             "cmd-null", 1L, Database.Enums.RemoteCommandStatus.Failed,
             Arg.Any<int?>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<string?>(),
             Arg.Any<CancellationToken>());

@@ -3,13 +3,10 @@
 // See LICENSE for details.
 
 using System.Text.RegularExpressions;
-using Framlux.FleetManagement.Database.Cache;
 using Framlux.FleetManagement.Database.Models;
-using Framlux.FleetManagement.Database;
+using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Server.Endpoints.Web.Models.Tenants;
 using Framlux.FleetManagement.Server.Services.Infrastructure;
-using LinqToDB.Async;
-using LinqToDB;
 
 namespace Framlux.FleetManagement.Server.Services.Handlers;
 
@@ -28,21 +25,18 @@ public sealed partial class TenantHandler : ITenantHandler
     [GeneratedRegex("""[<>"'`\\/{}\|\x00-\x1F]""", RegexOptions.None, matchTimeoutMilliseconds: 100)]
     private static partial Regex BlockedCharactersRegex();
 
-    private readonly IDatabaseCache _databaseCache;
-    private readonly DatabaseContext _db;
+    private readonly ITenantRepository _tenantRepo;
     private readonly ILogger<TenantHandler> _logger;
 
     /// <summary>
     /// Creates a new instance of the <see cref="TenantHandler"/> class.
     /// </summary>
-    public TenantHandler(IDatabaseCache databaseCache, DatabaseContext db, ILogger<TenantHandler> logger)
+    public TenantHandler(ITenantRepository tenantRepo, ILogger<TenantHandler> logger)
     {
-        ArgumentNullException.ThrowIfNull(databaseCache);
-        ArgumentNullException.ThrowIfNull(db);
+        ArgumentNullException.ThrowIfNull(tenantRepo);
         ArgumentNullException.ThrowIfNull(logger);
 
-        _databaseCache = databaseCache;
-        _db = db;
+        _tenantRepo = tenantRepo;
         _logger = logger;
     }
 
@@ -66,13 +60,13 @@ public sealed partial class TenantHandler : ITenantHandler
             return ServiceResult<TenantDto>.BadRequest("Tenant name contains characters that are not allowed");
         }
 
-        Tenant? existing = await _databaseCache.GetTenantByNameAsync(name, ct);
+        Tenant? existing = await _tenantRepo.GetTenantByNameAsync(name, ct);
         if (existing is not null)
         {
             return ServiceResult<TenantDto>.Conflict("A tenant with this name already exists");
         }
 
-        Tenant tenant = await _databaseCache.CreateTenantAsync(new Tenant
+        Tenant tenant = await _tenantRepo.CreateTenantAsync(new Tenant
         {
             Name = name,
             ExternalId = Guid.NewGuid().ToString(),
@@ -98,7 +92,7 @@ public sealed partial class TenantHandler : ITenantHandler
     /// <inheritdoc/>
     public async Task<ServiceResult<TenantDto>> GetDetailAsync(int tenantId, CancellationToken ct)
     {
-        Tenant? tenant = await _databaseCache.GetTenantByIdAsync(tenantId, ct);
+        Tenant? tenant = await _tenantRepo.GetTenantByIdAsync(tenantId, ct);
         if (tenant is null)
         {
             return ServiceResult<TenantDto>.NotFound();
@@ -123,16 +117,11 @@ public sealed partial class TenantHandler : ITenantHandler
         List<Tenant> tenants;
         if (isGlobalAdmin)
         {
-            tenants = await _db.Tenants
-                .OrderBy(t => t.Name)
-                .ToListAsync(ct);
+            tenants = await _tenantRepo.ListAllTenantsAsync(ct);
         }
         else
         {
-            tenants = await _db.Tenants
-                .Where(t => tenantIds.Contains(t.Id))
-                .OrderBy(t => t.Name)
-                .ToListAsync(ct);
+            tenants = await _tenantRepo.ListTenantsByIdsAsync(tenantIds, ct);
         }
 
         List<TenantDto> dtos = tenants.Select(t => new TenantDto

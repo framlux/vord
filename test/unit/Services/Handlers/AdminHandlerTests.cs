@@ -2,7 +2,7 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
-using Framlux.FleetManagement.Database.Cache;
+using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Server.Endpoints.Web.Admin;
@@ -12,6 +12,7 @@ using Framlux.FleetManagement.Server.Services.Infrastructure;
 using Framlux.FleetManagement.Test.Infrastructure;
 using LinqToDB.Async;
 using LinqToDB;
+using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
 using StackExchange.Redis;
 
@@ -99,7 +100,8 @@ public class AdminHandlerTests
             Version = 1,
         });
 
-        AdminHandler handler = new(dbFactory.Context, cache, redis);
+        DatabaseRepository repo = CreateRepo(dbFactory);
+        AdminHandler handler = new(repo, repo, cache, redis);
         List<SettingUpdateEntry> updates = [new() { Key = 1, Value = "600" }];
 
         ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, CancellationToken.None);
@@ -116,7 +118,8 @@ public class AdminHandlerTests
         IServerSettingsCache cache = Substitute.For<IServerSettingsCache>();
         IConnectionMultiplexer redis = CreateFakeRedis();
 
-        AdminHandler handler = new(dbFactory.Context, cache, redis);
+        DatabaseRepository repo = CreateRepo(dbFactory);
+        AdminHandler handler = new(repo, repo, cache, redis);
         List<SettingUpdateEntry> updates = [new() { Key = 1, Value = "500" }];
 
         ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, CancellationToken.None);
@@ -199,7 +202,8 @@ public class AdminHandlerTests
         IServerSettingsCache cache = Substitute.For<IServerSettingsCache>();
         IConnectionMultiplexer redis = CreateFakeRedis();
 
-        AdminHandler handler = new(dbFactory.Context, cache, redis);
+        DatabaseRepository repo = CreateRepo(dbFactory);
+        AdminHandler handler = new(repo, repo, cache, redis);
         List<SettingUpdateEntry> updates = [new() { Key = 8, Value = "true" }];
 
         ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, CancellationToken.None);
@@ -220,7 +224,8 @@ public class AdminHandlerTests
         IServerSettingsCache cache = Substitute.For<IServerSettingsCache>();
         IConnectionMultiplexer redis = CreateFakeRedis();
 
-        AdminHandler handler = new(dbFactory.Context, cache, redis);
+        DatabaseRepository repo = CreateRepo(dbFactory);
+        AdminHandler handler = new(repo, repo, cache, redis);
         List<SettingUpdateEntry> updates = [new() { Key = 8, Value = "false" }];
 
         ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, CancellationToken.None);
@@ -268,7 +273,8 @@ public class AdminHandlerTests
             Version = 1,
         });
 
-        AdminHandler handler = new(dbFactory.Context, cache, redis);
+        DatabaseRepository repo = CreateRepo(dbFactory);
+        AdminHandler handler = new(repo, repo, cache, redis);
         List<SettingUpdateEntry> updates = [];
 
         ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, CancellationToken.None);
@@ -287,7 +293,8 @@ public class AdminHandlerTests
         IConnectionMultiplexer redis = CreateFakeRedis();
         IDatabase redisDb = redis.GetDatabase();
 
-        AdminHandler handler = new(dbFactory.Context, cache, redis);
+        DatabaseRepository repo = CreateRepo(dbFactory);
+        AdminHandler handler = new(repo, repo, cache, redis);
         List<SettingUpdateEntry> updates = [new() { Key = 1, Value = "600" }];
 
         await handler.UpdateSettingsAsync(updates, CancellationToken.None);
@@ -310,7 +317,8 @@ public class AdminHandlerTests
             Version = 1,
         });
 
-        AdminHandler handler = new(dbFactory.Context, cache, redis);
+        DatabaseRepository repo = CreateRepo(dbFactory);
+        AdminHandler handler = new(repo, repo, cache, redis);
         List<SettingUpdateEntry> updates = [new() { Key = 1, Value = "600" }];
 
         await handler.UpdateSettingsAsync(updates, CancellationToken.None);
@@ -358,7 +366,8 @@ public class AdminHandlerTests
         IServerSettingsCache cache = Substitute.For<IServerSettingsCache>();
         IConnectionMultiplexer redis = CreateFakeRedis();
 
-        AdminHandler handler = new(dbFactory.Context, cache, redis);
+        DatabaseRepository repo = CreateRepo(dbFactory);
+        AdminHandler handler = new(repo, repo, cache, redis);
         List<SettingUpdateEntry> updates = [new() { Key = 1, Value = "10" }];
 
         ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, CancellationToken.None);
@@ -373,7 +382,8 @@ public class AdminHandlerTests
         IServerSettingsCache cache = Substitute.For<IServerSettingsCache>();
         IConnectionMultiplexer redis = CreateFakeRedis();
 
-        AdminHandler handler = new(dbFactory.Context, cache, redis);
+        DatabaseRepository repo = CreateRepo(dbFactory);
+        AdminHandler handler = new(repo, repo, cache, redis);
         List<SettingUpdateEntry> updates = [new() { Key = 1, Value = "600" }];
 
         ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, CancellationToken.None);
@@ -416,7 +426,8 @@ public class AdminHandlerTests
         IServerSettingsCache cache = Substitute.For<IServerSettingsCache>();
         IConnectionMultiplexer redis = CreateFakeRedis();
 
-        AdminHandler handler = new(dbFactory.Context, cache, redis);
+        DatabaseRepository repo = CreateRepo(dbFactory);
+        AdminHandler handler = new(repo, repo, cache, redis);
         List<SettingUpdateEntry> updates =
         [
             new() { Key = 9, Value = "60" },
@@ -438,7 +449,8 @@ public class AdminHandlerTests
         IServerSettingsCache cache = Substitute.For<IServerSettingsCache>();
         IConnectionMultiplexer redis = CreateFakeRedis();
 
-        AdminHandler handler = new(dbFactory.Context, cache, redis);
+        DatabaseRepository repo = CreateRepo(dbFactory);
+        AdminHandler handler = new(repo, repo, cache, redis);
         List<SettingUpdateEntry> updates = [new() { Key = 3, Value = "3600" }];
 
         ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, CancellationToken.None);
@@ -504,7 +516,8 @@ public class AdminHandlerTests
         IServerSettingsCache cache = Substitute.For<IServerSettingsCache>();
         IConnectionMultiplexer redis = CreateFakeRedis();
 
-        AdminHandler handler = new(dbFactory.Context, cache, redis);
+        DatabaseRepository repo = CreateRepo(dbFactory);
+        AdminHandler handler = new(repo, repo, cache, redis);
         List<SettingUpdateEntry> updates = [new() { Key = 14, Value = "60" }];
 
         ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, CancellationToken.None);
@@ -519,7 +532,8 @@ public class AdminHandlerTests
         IServerSettingsCache cache = Substitute.For<IServerSettingsCache>();
         IConnectionMultiplexer redis = CreateFakeRedis();
 
-        AdminHandler handler = new(dbFactory.Context, cache, redis);
+        DatabaseRepository repo = CreateRepo(dbFactory);
+        AdminHandler handler = new(repo, repo, cache, redis);
         List<SettingUpdateEntry> updates = [new() { Key = 14, Value = "86400" }];
 
         ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, CancellationToken.None);
@@ -534,7 +548,8 @@ public class AdminHandlerTests
         IServerSettingsCache cache = Substitute.For<IServerSettingsCache>();
         IConnectionMultiplexer redis = CreateFakeRedis();
 
-        AdminHandler handler = new(dbFactory.Context, cache, redis);
+        DatabaseRepository repo = CreateRepo(dbFactory);
+        AdminHandler handler = new(repo, repo, cache, redis);
         List<SettingUpdateEntry> updates = [new() { Key = 14, Value = "3600" }];
 
         ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, CancellationToken.None);
@@ -657,12 +672,18 @@ public class AdminHandlerTests
 
     // ========== Helper methods ==========
 
+    private static DatabaseRepository CreateRepo(TestDatabaseFactory dbFactory)
+    {
+        return new DatabaseRepository(dbFactory.Context, new NullLogger<DatabaseRepository>());
+    }
+
     private static AdminHandler CreateHandler(TestDatabaseFactory dbFactory)
     {
         IServerSettingsCache cache = Substitute.For<IServerSettingsCache>();
         IConnectionMultiplexer redis = CreateFakeRedis();
+        DatabaseRepository repo = CreateRepo(dbFactory);
 
-        return new AdminHandler(dbFactory.Context, cache, redis);
+        return new AdminHandler(repo, repo, cache, redis);
     }
 
     private static IConnectionMultiplexer CreateFakeRedis()

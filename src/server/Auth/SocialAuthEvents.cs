@@ -3,7 +3,7 @@
 // See LICENSE for details.
 
 using System.Security.Claims;
-using Framlux.FleetManagement.Database.Cache;
+using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Microsoft.AspNetCore.Authentication.OAuth;
@@ -68,8 +68,9 @@ public static class SocialAuthEvents
             ?? identity.FindFirst("email")?.Value
             ?? string.Empty;
 
-        IDatabaseCache dbCache = httpContext.RequestServices.GetRequiredService<IDatabaseCache>();
-        UserAccount? user = await dbCache.GetUserByExternalIdAsync(uniqueId, ct);
+        IUserRepository userRepository = httpContext.RequestServices.GetRequiredService<IUserRepository>();
+        ITenantRepository tenantRepository = httpContext.RequestServices.GetRequiredService<ITenantRepository>();
+        UserAccount? user = await userRepository.GetUserByExternalIdAsync(uniqueId, ct);
         if (user is null)
         {
             // Check whether self-signup is enabled before auto-creating a new account
@@ -80,7 +81,7 @@ public static class SocialAuthEvents
                 return false;
             }
 
-            user = await dbCache.CreateUserAccountAsync(new UserAccount
+            user = await userRepository.CreateUserAccountAsync(new UserAccount
             {
                 CreatedAt = DateTimeOffset.UtcNow,
                 ExternalId = uniqueId,
@@ -106,17 +107,17 @@ public static class SocialAuthEvents
         else if (string.IsNullOrEmpty(email) == false && string.Equals(user.Username, email, StringComparison.OrdinalIgnoreCase) == false)
         {
             user.Username = email;
-            await dbCache.UpdateUserEmailAsync(user.Id, email, ct);
+            await userRepository.UpdateUserEmailAsync(user.Id, email, ct);
         }
 
         // Update the auth provider on each login to track the most recent provider used
         if ((authProvider != AuthProviderType.Unknown) && (user.AuthProvider != authProvider))
         {
-            await dbCache.UpdateUserAuthProviderAsync(user.Id, authProvider, ct);
+            await userRepository.UpdateUserAuthProviderAsync(user.Id, authProvider, ct);
         }
 
         // Retrieve and assign tenant roles
-        IEnumerable<UserTenantRole> tenantRoles = await dbCache.GetTenantsForUserAsync(uniqueId, ct);
+        IEnumerable<UserTenantRole> tenantRoles = await tenantRepository.GetTenantsForUserAsync(uniqueId, ct);
         foreach (UserTenantRole role in tenantRoles)
         {
             identity.AddClaim(new Claim(ClaimTypes.Role, $"{role.AssignedTenantId}:{(byte)role.Role}"));

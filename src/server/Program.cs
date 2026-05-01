@@ -4,7 +4,7 @@
 
 using FastEndpoints;
 using Framlux.FleetManagement.Database;
-using Framlux.FleetManagement.Database.Cache;
+using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Server.Auth;
 using Framlux.FleetManagement.Server.Endpoints.Grpc;
@@ -41,6 +41,11 @@ using Serilog.Formatting.Compact;
 using StackExchange.Redis;
 
 WebApplicationBuilder builder = WebApplication.CreateBuilder(args);
+builder.Host.UseDefaultServiceProvider(options =>
+{
+    options.ValidateScopes = true;
+    options.ValidateOnBuild = true;
+});
 builder.WebHost.ConfigureKestrel(options =>
 {
     options.Limits.MaxRequestBodySize = 1 * 1024 * 1024; // 1 MB
@@ -301,7 +306,23 @@ builder.Services.AddNpgsqlDataSource(connectionString);
 builder.Services.AddLinqToDBContext<DatabaseContext>((provider, options) => options.UsePostgreSQL(connectionString: connectionString)
         .UseDefaultLogging(provider));
 
-builder.Services.AddScoped<IDatabaseCache, DatabaseCache>();
+builder.Services.AddScoped<DatabaseRepository>();
+builder.Services.AddScoped<IDatabaseTransactionProvider>(sp => sp.GetRequiredService<DatabaseRepository>());
+builder.Services.AddScoped<IAuditLogRepository>(sp => sp.GetRequiredService<DatabaseRepository>());
+builder.Services.AddScoped<IUserRepository>(sp => sp.GetRequiredService<DatabaseRepository>());
+builder.Services.AddScoped<ITenantRepository>(sp => sp.GetRequiredService<DatabaseRepository>());
+builder.Services.AddScoped<ISubscriptionRepository>(sp => sp.GetRequiredService<DatabaseRepository>());
+builder.Services.AddScoped<IMachineRepository>(sp => sp.GetRequiredService<DatabaseRepository>());
+builder.Services.AddScoped<IInvitationRepository>(sp => sp.GetRequiredService<DatabaseRepository>());
+builder.Services.AddScoped<ISigningKeyRepository>(sp => sp.GetRequiredService<DatabaseRepository>());
+builder.Services.AddScoped<IRemoteCommandRepository>(sp => sp.GetRequiredService<DatabaseRepository>());
+builder.Services.AddScoped<IAlertRuleRepository>(sp => sp.GetRequiredService<DatabaseRepository>());
+builder.Services.AddScoped<IAlertEventRepository>(sp => sp.GetRequiredService<DatabaseRepository>());
+builder.Services.AddScoped<IWebhookRepository>(sp => sp.GetRequiredService<DatabaseRepository>());
+builder.Services.AddScoped<IDataExportRepository>(sp => sp.GetRequiredService<DatabaseRepository>());
+builder.Services.AddScoped<IRegistrationTokenRepository>(sp => sp.GetRequiredService<DatabaseRepository>());
+builder.Services.AddScoped<IMachineStateRepository>(sp => sp.GetRequiredService<DatabaseRepository>());
+builder.Services.AddScoped<IServerConfigurationRepository>(sp => sp.GetRequiredService<DatabaseRepository>());
 builder.Services.AddSingleton<IServerSettingsCache, ServerSettingsCache>();
 
 builder.Services.AddSingleton<IMachineService, MachineService>()
@@ -310,7 +331,7 @@ builder.Services.AddSingleton<IMachineService, MachineService>()
                 .AddSingleton<ISqlDialect, PostgresSqlDialect>();
 
 builder.Services.AddSingleton<ServerConfigurationService>();
-builder.Services.AddSingleton<ISubscriptionService, SubscriptionService>();
+builder.Services.AddScoped<ISubscriptionService, SubscriptionService>();
 builder.Services.AddScoped<IDowngradeGuardService, DowngradeGuardService>();
 builder.Services.AddScoped<IDowngradeCleanupService, DowngradeCleanupService>();
 builder.Services.AddSingleton<IOidcSecretProtector, OidcSecretProtector>();

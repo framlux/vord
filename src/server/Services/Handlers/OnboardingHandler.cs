@@ -2,7 +2,7 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
-using Framlux.FleetManagement.Database.Cache;
+using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Server.Options;
@@ -17,22 +17,34 @@ namespace Framlux.FleetManagement.Server.Services.Handlers;
 /// </summary>
 public sealed class OnboardingHandler : IOnboardingHandler
 {
-    private readonly IDatabaseCache _databaseCache;
+    private readonly IDatabaseTransactionProvider _transactionProvider;
+    private readonly ITenantRepository _tenantRepository;
+    private readonly ISubscriptionRepository _subscriptionRepository;
+    private readonly IAuditLogRepository _auditLog;
     private readonly SubscriptionOptions _subscriptionOptions;
     private readonly IRoleCacheInvalidator _roleCacheInvalidator;
 
     /// <summary>
     /// Creates a new instance of the <see cref="OnboardingHandler"/> class.
     /// </summary>
-    /// <param name="databaseCache">The database cache service.</param>
+    /// <param name="transactionProvider">The database transaction provider.</param>
+    /// <param name="tenantRepository">The tenant repository.</param>
+    /// <param name="subscriptionRepository">The subscription repository.</param>
+    /// <param name="auditLog">The audit log repository.</param>
     /// <param name="subscriptionOptions">The subscription tier configuration.</param>
     /// <param name="roleCacheInvalidator">The role cache invalidator.</param>
     public OnboardingHandler(
-        IDatabaseCache databaseCache,
+        IDatabaseTransactionProvider transactionProvider,
+        ITenantRepository tenantRepository,
+        ISubscriptionRepository subscriptionRepository,
+        IAuditLogRepository auditLog,
         IOptions<SubscriptionOptions> subscriptionOptions,
         IRoleCacheInvalidator roleCacheInvalidator)
     {
-        _databaseCache = databaseCache;
+        _transactionProvider = transactionProvider;
+        _tenantRepository = tenantRepository;
+        _subscriptionRepository = subscriptionRepository;
+        _auditLog = auditLog;
         _subscriptionOptions = subscriptionOptions.Value;
         _roleCacheInvalidator = roleCacheInvalidator;
     }
@@ -61,14 +73,14 @@ public sealed class OnboardingHandler : IOnboardingHandler
         }
 
         // Check if user already has tenants
-        IEnumerable<UserTenantRole> existingRoles = await _databaseCache.GetTenantsForUserAsync(uniqueId, ct);
+        IEnumerable<UserTenantRole> existingRoles = await _tenantRepository.GetTenantsForUserAsync(uniqueId, ct);
         if (existingRoles.Any())
         {
             return ServiceResult<OnboardingResult>.Error(409, new OnboardingResult { ErrorMessage = "You already belong to an organization" });
         }
 
         // Check if tenant name is taken
-        Tenant? existing = await _databaseCache.GetTenantByNameAsync(organizationName, ct);
+        Tenant? existing = await _tenantRepository.GetTenantByNameAsync(organizationName, ct);
         if (existing is not null)
         {
             return ServiceResult<OnboardingResult>.Error(409, new OnboardingResult { ErrorMessage = "An organization with this name already exists" });
@@ -76,11 +88,11 @@ public sealed class OnboardingHandler : IOnboardingHandler
 
         // Create tenant (unique constraint on name catches races)
         Tenant tenant;
-        using IDatabaseTransaction transaction = await _databaseCache.BeginTransactionAsync(ct);
+        using IDatabaseTransaction transaction = await _transactionProvider.BeginTransactionAsync(ct);
 
         try
         {
-            tenant = await _databaseCache.CreateTenantAsync(new Tenant
+            tenant = await _tenantRepository.CreateTenantAsync(new Tenant
             {
                 Name = organizationName.Trim(),
                 ExternalId = Guid.NewGuid().ToString(),
@@ -108,10 +120,10 @@ public sealed class OnboardingHandler : IOnboardingHandler
             CreatedAt = now,
             UpdatedAt = now,
         };
-        await _databaseCache.CreateTenantSubscriptionAsync(subscription, ct);
+        await _subscriptionRepository.CreateTenantSubscriptionAsync(subscription, ct);
 
         // Assign the creating user as TenantAdmin
-        await _databaseCache.CreateUserTenantRoleAsync(new UserTenantRole
+        await _tenantRepository.CreateUserTenantRoleAsync(new UserTenantRole
         {
             UserId = userId,
             AssignedTenantId = tenant.Id,
@@ -121,7 +133,7 @@ public sealed class OnboardingHandler : IOnboardingHandler
             IsActive = true,
         }, ct);
 
-        await _databaseCache.InsertAuditLogAsync(AuditHelper.Create(
+        await _auditLog.InsertAuditLogAsync(AuditHelper.Create(
             tenant.Id, userId, null,
             AuditAction.TenantCreated, AuditResourceType.Tenant,
             tenant.Id.ToString(), new { tenant.Name }, null), ct);

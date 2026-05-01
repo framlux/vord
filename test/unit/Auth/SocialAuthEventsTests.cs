@@ -2,7 +2,7 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
-using Framlux.FleetManagement.Database.Cache;
+using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Server.Auth;
 using Microsoft.AspNetCore.Http;
@@ -17,13 +17,15 @@ namespace Framlux.FleetManagement.Test.Auth;
 /// </summary>
 public sealed class SocialAuthEventsTests
 {
-    private static (DefaultHttpContext HttpContext, IDatabaseCache DbCache) CreateTestContext()
+    private static (DefaultHttpContext HttpContext, IUserRepository UserRepo, ITenantRepository TenantRepo) CreateTestContext()
     {
-        IDatabaseCache dbCache = Substitute.For<IDatabaseCache>();
+        IUserRepository userRepo = Substitute.For<IUserRepository>();
+        ITenantRepository tenantRepo = Substitute.For<ITenantRepository>();
         IServerSettingsCache settingsCache = Substitute.For<IServerSettingsCache>();
 
         ServiceCollection services = new();
-        services.AddSingleton(dbCache);
+        services.AddSingleton(userRepo);
+        services.AddSingleton(tenantRepo);
         services.AddSingleton(settingsCache);
         ServiceProvider provider = services.BuildServiceProvider();
 
@@ -32,7 +34,7 @@ public sealed class SocialAuthEventsTests
             RequestServices = provider
         };
 
-        return (httpContext, dbCache);
+        return (httpContext, userRepo, tenantRepo);
     }
 
     private static ClaimsIdentity CreateIdentity(string? nameIdentifier = null, string? sub = null, string? email = null)
@@ -83,7 +85,7 @@ public sealed class SocialAuthEventsTests
     [Test]
     public async Task PopulateUserClaimsAsync_NoNameIdentifierOrSubClaim_ReturnsFalse()
     {
-        (DefaultHttpContext httpContext, IDatabaseCache _) = CreateTestContext();
+        (DefaultHttpContext httpContext, IUserRepository _, ITenantRepository __) = CreateTestContext();
         ClaimsIdentity identity = new(Array.Empty<Claim>(), "TestAuth");
 
         bool result = await SocialAuthEvents.PopulateUserClaimsAsync(identity, httpContext, CancellationToken.None);
@@ -94,7 +96,7 @@ public sealed class SocialAuthEventsTests
     [Test]
     public async Task PopulateUserClaimsAsync_EmptyNameIdentifier_ReturnsFalse()
     {
-        (DefaultHttpContext httpContext, IDatabaseCache _) = CreateTestContext();
+        (DefaultHttpContext httpContext, IUserRepository _, ITenantRepository __) = CreateTestContext();
         ClaimsIdentity identity = CreateIdentity(nameIdentifier: "");
 
         bool result = await SocialAuthEvents.PopulateUserClaimsAsync(identity, httpContext, CancellationToken.None);
@@ -105,19 +107,19 @@ public sealed class SocialAuthEventsTests
     [Test]
     public async Task PopulateUserClaimsAsync_FallsBackToSubClaim()
     {
-        (DefaultHttpContext httpContext, IDatabaseCache dbCache) = CreateTestContext();
+        (DefaultHttpContext httpContext, IUserRepository userRepo, ITenantRepository tenantRepo) = CreateTestContext();
         ClaimsIdentity identity = CreateIdentity(sub: "sub-123");
         UserAccount user = CreateUser(externalId: "sub-123");
 
-        dbCache.GetUserByExternalIdAsync("sub-123", Arg.Any<CancellationToken>())
+        userRepo.GetUserByExternalIdAsync("sub-123", Arg.Any<CancellationToken>())
             .Returns(user);
-        dbCache.GetTenantsForUserAsync("sub-123", Arg.Any<CancellationToken>())
+        tenantRepo.GetTenantsForUserAsync("sub-123", Arg.Any<CancellationToken>())
             .Returns(Enumerable.Empty<UserTenantRole>());
 
         bool result = await SocialAuthEvents.PopulateUserClaimsAsync(identity, httpContext, CancellationToken.None);
 
         await Assert.That(result).IsTrue();
-        await dbCache.Received(1).GetUserByExternalIdAsync("sub-123", Arg.Any<CancellationToken>());
+        await userRepo.Received(1).GetUserByExternalIdAsync("sub-123", Arg.Any<CancellationToken>());
     }
 
     // --- Auto-creation of new users ---
@@ -125,20 +127,20 @@ public sealed class SocialAuthEventsTests
     [Test]
     public async Task PopulateUserClaimsAsync_AutoCreatesNewUser()
     {
-        (DefaultHttpContext httpContext, IDatabaseCache dbCache) = CreateTestContext();
+        (DefaultHttpContext httpContext, IUserRepository userRepo, ITenantRepository tenantRepo) = CreateTestContext();
         ClaimsIdentity identity = CreateIdentity(nameIdentifier: "new-user-ext", email: "new@example.com");
 
-        dbCache.GetUserByExternalIdAsync("new-user-ext", Arg.Any<CancellationToken>())
+        userRepo.GetUserByExternalIdAsync("new-user-ext", Arg.Any<CancellationToken>())
             .Returns((UserAccount?)null);
-        dbCache.CreateUserAccountAsync(Arg.Any<UserAccount>())
+        userRepo.CreateUserAccountAsync(Arg.Any<UserAccount>())
             .Returns(callInfo => callInfo.Arg<UserAccount>());
-        dbCache.GetTenantsForUserAsync("new-user-ext", Arg.Any<CancellationToken>())
+        tenantRepo.GetTenantsForUserAsync("new-user-ext", Arg.Any<CancellationToken>())
             .Returns(Enumerable.Empty<UserTenantRole>());
 
         bool result = await SocialAuthEvents.PopulateUserClaimsAsync(identity, httpContext, CancellationToken.None);
 
         await Assert.That(result).IsTrue();
-        await dbCache.Received(1).CreateUserAccountAsync(Arg.Is<UserAccount>(u =>
+        await userRepo.Received(1).CreateUserAccountAsync(Arg.Is<UserAccount>(u =>
             u.CreatedByUserId == 1 &&
             u.IsActive == true &&
             u.IsGlobalAdmin == false &&
@@ -148,57 +150,57 @@ public sealed class SocialAuthEventsTests
     [Test]
     public async Task PopulateUserClaimsAsync_AutoCreatedUser_GetsEmailAsUsername()
     {
-        (DefaultHttpContext httpContext, IDatabaseCache dbCache) = CreateTestContext();
+        (DefaultHttpContext httpContext, IUserRepository userRepo, ITenantRepository tenantRepo) = CreateTestContext();
         ClaimsIdentity identity = CreateIdentity(nameIdentifier: "new-ext", email: "test@example.com");
 
-        dbCache.GetUserByExternalIdAsync("new-ext", Arg.Any<CancellationToken>())
+        userRepo.GetUserByExternalIdAsync("new-ext", Arg.Any<CancellationToken>())
             .Returns((UserAccount?)null);
-        dbCache.CreateUserAccountAsync(Arg.Any<UserAccount>())
+        userRepo.CreateUserAccountAsync(Arg.Any<UserAccount>())
             .Returns(callInfo => callInfo.Arg<UserAccount>());
-        dbCache.GetTenantsForUserAsync("new-ext", Arg.Any<CancellationToken>())
+        tenantRepo.GetTenantsForUserAsync("new-ext", Arg.Any<CancellationToken>())
             .Returns(Enumerable.Empty<UserTenantRole>());
 
         await SocialAuthEvents.PopulateUserClaimsAsync(identity, httpContext, CancellationToken.None);
 
-        await dbCache.Received(1).CreateUserAccountAsync(Arg.Is<UserAccount>(u =>
+        await userRepo.Received(1).CreateUserAccountAsync(Arg.Is<UserAccount>(u =>
             u.Username == "test@example.com"));
     }
 
     [Test]
     public async Task PopulateUserClaimsAsync_AutoCreatedUser_GetsExternalIdAsUsernameWhenNoEmail()
     {
-        (DefaultHttpContext httpContext, IDatabaseCache dbCache) = CreateTestContext();
+        (DefaultHttpContext httpContext, IUserRepository userRepo, ITenantRepository tenantRepo) = CreateTestContext();
         ClaimsIdentity identity = CreateIdentity(nameIdentifier: "ext-no-email");
 
-        dbCache.GetUserByExternalIdAsync("ext-no-email", Arg.Any<CancellationToken>())
+        userRepo.GetUserByExternalIdAsync("ext-no-email", Arg.Any<CancellationToken>())
             .Returns((UserAccount?)null);
-        dbCache.CreateUserAccountAsync(Arg.Any<UserAccount>())
+        userRepo.CreateUserAccountAsync(Arg.Any<UserAccount>())
             .Returns(callInfo => callInfo.Arg<UserAccount>());
-        dbCache.GetTenantsForUserAsync("ext-no-email", Arg.Any<CancellationToken>())
+        tenantRepo.GetTenantsForUserAsync("ext-no-email", Arg.Any<CancellationToken>())
             .Returns(Enumerable.Empty<UserTenantRole>());
 
         await SocialAuthEvents.PopulateUserClaimsAsync(identity, httpContext, CancellationToken.None);
 
-        await dbCache.Received(1).CreateUserAccountAsync(Arg.Is<UserAccount>(u =>
+        await userRepo.Received(1).CreateUserAccountAsync(Arg.Is<UserAccount>(u =>
             u.Username == "ext-no-email"));
     }
 
     [Test]
     public async Task PopulateUserClaimsAsync_AutoCreatedUser_GetsCorrectExternalId()
     {
-        (DefaultHttpContext httpContext, IDatabaseCache dbCache) = CreateTestContext();
+        (DefaultHttpContext httpContext, IUserRepository userRepo, ITenantRepository tenantRepo) = CreateTestContext();
         ClaimsIdentity identity = CreateIdentity(nameIdentifier: "unique-ext-id");
 
-        dbCache.GetUserByExternalIdAsync("unique-ext-id", Arg.Any<CancellationToken>())
+        userRepo.GetUserByExternalIdAsync("unique-ext-id", Arg.Any<CancellationToken>())
             .Returns((UserAccount?)null);
-        dbCache.CreateUserAccountAsync(Arg.Any<UserAccount>())
+        userRepo.CreateUserAccountAsync(Arg.Any<UserAccount>())
             .Returns(callInfo => callInfo.Arg<UserAccount>());
-        dbCache.GetTenantsForUserAsync("unique-ext-id", Arg.Any<CancellationToken>())
+        tenantRepo.GetTenantsForUserAsync("unique-ext-id", Arg.Any<CancellationToken>())
             .Returns(Enumerable.Empty<UserTenantRole>());
 
         await SocialAuthEvents.PopulateUserClaimsAsync(identity, httpContext, CancellationToken.None);
 
-        await dbCache.Received(1).CreateUserAccountAsync(Arg.Is<UserAccount>(u =>
+        await userRepo.Received(1).CreateUserAccountAsync(Arg.Is<UserAccount>(u =>
             u.ExternalId == "unique-ext-id"));
     }
 
@@ -207,11 +209,11 @@ public sealed class SocialAuthEventsTests
     [Test]
     public async Task PopulateUserClaimsAsync_InactiveUser_ReturnsFalse()
     {
-        (DefaultHttpContext httpContext, IDatabaseCache dbCache) = CreateTestContext();
+        (DefaultHttpContext httpContext, IUserRepository userRepo, ITenantRepository tenantRepo) = CreateTestContext();
         ClaimsIdentity identity = CreateIdentity(nameIdentifier: "inactive-ext");
         UserAccount user = CreateUser(externalId: "inactive-ext", isActive: false);
 
-        dbCache.GetUserByExternalIdAsync("inactive-ext", Arg.Any<CancellationToken>())
+        userRepo.GetUserByExternalIdAsync("inactive-ext", Arg.Any<CancellationToken>())
             .Returns(user);
 
         bool result = await SocialAuthEvents.PopulateUserClaimsAsync(identity, httpContext, CancellationToken.None);
@@ -222,11 +224,11 @@ public sealed class SocialAuthEventsTests
     [Test]
     public async Task PopulateUserClaimsAsync_SystemUser_ReturnsFalse()
     {
-        (DefaultHttpContext httpContext, IDatabaseCache dbCache) = CreateTestContext();
+        (DefaultHttpContext httpContext, IUserRepository userRepo, ITenantRepository tenantRepo) = CreateTestContext();
         ClaimsIdentity identity = CreateIdentity(nameIdentifier: "system-ext");
         UserAccount user = CreateUser(externalId: "system-ext", isSystem: true);
 
-        dbCache.GetUserByExternalIdAsync("system-ext", Arg.Any<CancellationToken>())
+        userRepo.GetUserByExternalIdAsync("system-ext", Arg.Any<CancellationToken>())
             .Returns(user);
 
         bool result = await SocialAuthEvents.PopulateUserClaimsAsync(identity, httpContext, CancellationToken.None);
@@ -237,11 +239,11 @@ public sealed class SocialAuthEventsTests
     [Test]
     public async Task PopulateUserClaimsAsync_InactiveUser_RemovesNameIdentifierClaim()
     {
-        (DefaultHttpContext httpContext, IDatabaseCache dbCache) = CreateTestContext();
+        (DefaultHttpContext httpContext, IUserRepository userRepo, ITenantRepository tenantRepo) = CreateTestContext();
         ClaimsIdentity identity = CreateIdentity(nameIdentifier: "inactive-ext");
         UserAccount user = CreateUser(externalId: "inactive-ext", isActive: false);
 
-        dbCache.GetUserByExternalIdAsync("inactive-ext", Arg.Any<CancellationToken>())
+        userRepo.GetUserByExternalIdAsync("inactive-ext", Arg.Any<CancellationToken>())
             .Returns(user);
 
         await SocialAuthEvents.PopulateUserClaimsAsync(identity, httpContext, CancellationToken.None);
@@ -256,52 +258,52 @@ public sealed class SocialAuthEventsTests
     [Test]
     public async Task PopulateUserClaimsAsync_UpdatesUsernameWhenEmailDiffers()
     {
-        (DefaultHttpContext httpContext, IDatabaseCache dbCache) = CreateTestContext();
+        (DefaultHttpContext httpContext, IUserRepository userRepo, ITenantRepository tenantRepo) = CreateTestContext();
         ClaimsIdentity identity = CreateIdentity(nameIdentifier: "ext-1", email: "new@example.com");
         UserAccount user = CreateUser(id: 42, externalId: "ext-1", username: "old@example.com");
 
-        dbCache.GetUserByExternalIdAsync("ext-1", Arg.Any<CancellationToken>())
+        userRepo.GetUserByExternalIdAsync("ext-1", Arg.Any<CancellationToken>())
             .Returns(user);
-        dbCache.GetTenantsForUserAsync("ext-1", Arg.Any<CancellationToken>())
+        tenantRepo.GetTenantsForUserAsync("ext-1", Arg.Any<CancellationToken>())
             .Returns(Enumerable.Empty<UserTenantRole>());
 
         await SocialAuthEvents.PopulateUserClaimsAsync(identity, httpContext, CancellationToken.None);
 
-        await dbCache.Received(1).UpdateUserEmailAsync(42, "new@example.com", Arg.Any<CancellationToken>());
+        await userRepo.Received(1).UpdateUserEmailAsync(42, "new@example.com", Arg.Any<CancellationToken>());
     }
 
     [Test]
     public async Task PopulateUserClaimsAsync_DoesNotUpdateWhenEmailMatchesCaseInsensitive()
     {
-        (DefaultHttpContext httpContext, IDatabaseCache dbCache) = CreateTestContext();
+        (DefaultHttpContext httpContext, IUserRepository userRepo, ITenantRepository tenantRepo) = CreateTestContext();
         ClaimsIdentity identity = CreateIdentity(nameIdentifier: "ext-1", email: "user@x.com");
         UserAccount user = CreateUser(externalId: "ext-1", username: "User@X.com");
 
-        dbCache.GetUserByExternalIdAsync("ext-1", Arg.Any<CancellationToken>())
+        userRepo.GetUserByExternalIdAsync("ext-1", Arg.Any<CancellationToken>())
             .Returns(user);
-        dbCache.GetTenantsForUserAsync("ext-1", Arg.Any<CancellationToken>())
+        tenantRepo.GetTenantsForUserAsync("ext-1", Arg.Any<CancellationToken>())
             .Returns(Enumerable.Empty<UserTenantRole>());
 
         await SocialAuthEvents.PopulateUserClaimsAsync(identity, httpContext, CancellationToken.None);
 
-        await dbCache.DidNotReceive().UpdateUserEmailAsync(Arg.Any<int>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
+        await userRepo.DidNotReceive().UpdateUserEmailAsync(Arg.Any<int>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
     }
 
     [Test]
     public async Task PopulateUserClaimsAsync_DoesNotUpdateWhenEmailClaimIsEmpty()
     {
-        (DefaultHttpContext httpContext, IDatabaseCache dbCache) = CreateTestContext();
+        (DefaultHttpContext httpContext, IUserRepository userRepo, ITenantRepository tenantRepo) = CreateTestContext();
         ClaimsIdentity identity = CreateIdentity(nameIdentifier: "ext-1");
         UserAccount user = CreateUser(externalId: "ext-1", username: "user@example.com");
 
-        dbCache.GetUserByExternalIdAsync("ext-1", Arg.Any<CancellationToken>())
+        userRepo.GetUserByExternalIdAsync("ext-1", Arg.Any<CancellationToken>())
             .Returns(user);
-        dbCache.GetTenantsForUserAsync("ext-1", Arg.Any<CancellationToken>())
+        tenantRepo.GetTenantsForUserAsync("ext-1", Arg.Any<CancellationToken>())
             .Returns(Enumerable.Empty<UserTenantRole>());
 
         await SocialAuthEvents.PopulateUserClaimsAsync(identity, httpContext, CancellationToken.None);
 
-        await dbCache.DidNotReceive().UpdateUserEmailAsync(Arg.Any<int>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
+        await userRepo.DidNotReceive().UpdateUserEmailAsync(Arg.Any<int>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
     }
 
     // --- Claims population ---
@@ -309,11 +311,11 @@ public sealed class SocialAuthEventsTests
     [Test]
     public async Task PopulateUserClaimsAsync_AddsTenantRoleClaims()
     {
-        (DefaultHttpContext httpContext, IDatabaseCache dbCache) = CreateTestContext();
+        (DefaultHttpContext httpContext, IUserRepository userRepo, ITenantRepository tenantRepo) = CreateTestContext();
         ClaimsIdentity identity = CreateIdentity(nameIdentifier: "ext-1");
         UserAccount user = CreateUser(id: 5, externalId: "ext-1");
 
-        dbCache.GetUserByExternalIdAsync("ext-1", Arg.Any<CancellationToken>())
+        userRepo.GetUserByExternalIdAsync("ext-1", Arg.Any<CancellationToken>())
             .Returns(user);
 
         List<UserTenantRole> roles = new()
@@ -337,7 +339,7 @@ public sealed class SocialAuthEventsTests
                 IsActive = true
             }
         };
-        dbCache.GetTenantsForUserAsync("ext-1", Arg.Any<CancellationToken>())
+        tenantRepo.GetTenantsForUserAsync("ext-1", Arg.Any<CancellationToken>())
             .Returns(roles);
 
         await SocialAuthEvents.PopulateUserClaimsAsync(identity, httpContext, CancellationToken.None);
@@ -352,13 +354,13 @@ public sealed class SocialAuthEventsTests
     [Test]
     public async Task PopulateUserClaimsAsync_AddsActorClaimWithUserId()
     {
-        (DefaultHttpContext httpContext, IDatabaseCache dbCache) = CreateTestContext();
+        (DefaultHttpContext httpContext, IUserRepository userRepo, ITenantRepository tenantRepo) = CreateTestContext();
         ClaimsIdentity identity = CreateIdentity(nameIdentifier: "ext-1");
         UserAccount user = CreateUser(id: 42, externalId: "ext-1");
 
-        dbCache.GetUserByExternalIdAsync("ext-1", Arg.Any<CancellationToken>())
+        userRepo.GetUserByExternalIdAsync("ext-1", Arg.Any<CancellationToken>())
             .Returns(user);
-        dbCache.GetTenantsForUserAsync("ext-1", Arg.Any<CancellationToken>())
+        tenantRepo.GetTenantsForUserAsync("ext-1", Arg.Any<CancellationToken>())
             .Returns(Enumerable.Empty<UserTenantRole>());
 
         await SocialAuthEvents.PopulateUserClaimsAsync(identity, httpContext, CancellationToken.None);
@@ -372,13 +374,13 @@ public sealed class SocialAuthEventsTests
     [Test]
     public async Task PopulateUserClaimsAsync_AddsIgaClaimWithGlobalAdminFlag()
     {
-        (DefaultHttpContext httpContext, IDatabaseCache dbCache) = CreateTestContext();
+        (DefaultHttpContext httpContext, IUserRepository userRepo, ITenantRepository tenantRepo) = CreateTestContext();
         ClaimsIdentity identity = CreateIdentity(nameIdentifier: "ext-1");
         UserAccount user = CreateUser(externalId: "ext-1", isGlobalAdmin: true);
 
-        dbCache.GetUserByExternalIdAsync("ext-1", Arg.Any<CancellationToken>())
+        userRepo.GetUserByExternalIdAsync("ext-1", Arg.Any<CancellationToken>())
             .Returns(user);
-        dbCache.GetTenantsForUserAsync("ext-1", Arg.Any<CancellationToken>())
+        tenantRepo.GetTenantsForUserAsync("ext-1", Arg.Any<CancellationToken>())
             .Returns(Enumerable.Empty<UserTenantRole>());
 
         await SocialAuthEvents.PopulateUserClaimsAsync(identity, httpContext, CancellationToken.None);
@@ -392,13 +394,13 @@ public sealed class SocialAuthEventsTests
     [Test]
     public async Task PopulateUserClaimsAsync_UserWithNoTenantRoles_GetsZeroRoleClaims()
     {
-        (DefaultHttpContext httpContext, IDatabaseCache dbCache) = CreateTestContext();
+        (DefaultHttpContext httpContext, IUserRepository userRepo, ITenantRepository tenantRepo) = CreateTestContext();
         ClaimsIdentity identity = CreateIdentity(nameIdentifier: "ext-1");
         UserAccount user = CreateUser(externalId: "ext-1");
 
-        dbCache.GetUserByExternalIdAsync("ext-1", Arg.Any<CancellationToken>())
+        userRepo.GetUserByExternalIdAsync("ext-1", Arg.Any<CancellationToken>())
             .Returns(user);
-        dbCache.GetTenantsForUserAsync("ext-1", Arg.Any<CancellationToken>())
+        tenantRepo.GetTenantsForUserAsync("ext-1", Arg.Any<CancellationToken>())
             .Returns(Enumerable.Empty<UserTenantRole>());
 
         await SocialAuthEvents.PopulateUserClaimsAsync(identity, httpContext, CancellationToken.None);
@@ -455,55 +457,55 @@ public sealed class SocialAuthEventsTests
     [Test]
     public async Task PopulateUserClaimsAsync_ExistingUser_UpdatesAuthProvider_WhenDifferent()
     {
-        (DefaultHttpContext httpContext, IDatabaseCache dbCache) = CreateTestContext();
+        (DefaultHttpContext httpContext, IUserRepository userRepo, ITenantRepository tenantRepo) = CreateTestContext();
         ClaimsIdentity identity = CreateIdentity(nameIdentifier: "ext-provider-update");
         UserAccount user = CreateUser(id: 50, externalId: "ext-provider-update");
         user.AuthProvider = Database.Enums.AuthProviderType.GitHub;
 
-        dbCache.GetUserByExternalIdAsync("ext-provider-update", Arg.Any<CancellationToken>())
+        userRepo.GetUserByExternalIdAsync("ext-provider-update", Arg.Any<CancellationToken>())
             .Returns(user);
-        dbCache.GetTenantsForUserAsync("ext-provider-update", Arg.Any<CancellationToken>())
+        tenantRepo.GetTenantsForUserAsync("ext-provider-update", Arg.Any<CancellationToken>())
             .Returns(Enumerable.Empty<UserTenantRole>());
 
         await SocialAuthEvents.PopulateUserClaimsAsync(identity, httpContext, CancellationToken.None, Database.Enums.AuthProviderType.Google);
 
-        await dbCache.Received(1).UpdateUserAuthProviderAsync(50, Database.Enums.AuthProviderType.Google, Arg.Any<CancellationToken>());
+        await userRepo.Received(1).UpdateUserAuthProviderAsync(50, Database.Enums.AuthProviderType.Google, Arg.Any<CancellationToken>());
     }
 
     [Test]
     public async Task PopulateUserClaimsAsync_ExistingUser_SkipsAuthProviderUpdate_WhenSame()
     {
-        (DefaultHttpContext httpContext, IDatabaseCache dbCache) = CreateTestContext();
+        (DefaultHttpContext httpContext, IUserRepository userRepo, ITenantRepository tenantRepo) = CreateTestContext();
         ClaimsIdentity identity = CreateIdentity(nameIdentifier: "ext-same-provider");
         UserAccount user = CreateUser(id: 51, externalId: "ext-same-provider");
         user.AuthProvider = Database.Enums.AuthProviderType.Google;
 
-        dbCache.GetUserByExternalIdAsync("ext-same-provider", Arg.Any<CancellationToken>())
+        userRepo.GetUserByExternalIdAsync("ext-same-provider", Arg.Any<CancellationToken>())
             .Returns(user);
-        dbCache.GetTenantsForUserAsync("ext-same-provider", Arg.Any<CancellationToken>())
+        tenantRepo.GetTenantsForUserAsync("ext-same-provider", Arg.Any<CancellationToken>())
             .Returns(Enumerable.Empty<UserTenantRole>());
 
         await SocialAuthEvents.PopulateUserClaimsAsync(identity, httpContext, CancellationToken.None, Database.Enums.AuthProviderType.Google);
 
-        await dbCache.DidNotReceive().UpdateUserAuthProviderAsync(Arg.Any<int>(), Arg.Any<Database.Enums.AuthProviderType>(), Arg.Any<CancellationToken>());
+        await userRepo.DidNotReceive().UpdateUserAuthProviderAsync(Arg.Any<int>(), Arg.Any<Database.Enums.AuthProviderType>(), Arg.Any<CancellationToken>());
     }
 
     [Test]
     public async Task PopulateUserClaimsAsync_ExistingUser_SkipsAuthProviderUpdate_WhenUnknown()
     {
-        (DefaultHttpContext httpContext, IDatabaseCache dbCache) = CreateTestContext();
+        (DefaultHttpContext httpContext, IUserRepository userRepo, ITenantRepository tenantRepo) = CreateTestContext();
         ClaimsIdentity identity = CreateIdentity(nameIdentifier: "ext-unknown-provider");
         UserAccount user = CreateUser(id: 52, externalId: "ext-unknown-provider");
         user.AuthProvider = Database.Enums.AuthProviderType.GitHub;
 
-        dbCache.GetUserByExternalIdAsync("ext-unknown-provider", Arg.Any<CancellationToken>())
+        userRepo.GetUserByExternalIdAsync("ext-unknown-provider", Arg.Any<CancellationToken>())
             .Returns(user);
-        dbCache.GetTenantsForUserAsync("ext-unknown-provider", Arg.Any<CancellationToken>())
+        tenantRepo.GetTenantsForUserAsync("ext-unknown-provider", Arg.Any<CancellationToken>())
             .Returns(Enumerable.Empty<UserTenantRole>());
 
         await SocialAuthEvents.PopulateUserClaimsAsync(identity, httpContext, CancellationToken.None, Database.Enums.AuthProviderType.Unknown);
 
-        await dbCache.DidNotReceive().UpdateUserAuthProviderAsync(Arg.Any<int>(), Arg.Any<Database.Enums.AuthProviderType>(), Arg.Any<CancellationToken>());
+        await userRepo.DidNotReceive().UpdateUserAuthProviderAsync(Arg.Any<int>(), Arg.Any<Database.Enums.AuthProviderType>(), Arg.Any<CancellationToken>());
     }
 
     // --- Email claim fallback ---
@@ -511,7 +513,7 @@ public sealed class SocialAuthEventsTests
     [Test]
     public async Task PopulateUserClaimsAsync_UsesEmailClaimType_WhenClaimTypesEmailMissing()
     {
-        (DefaultHttpContext httpContext, IDatabaseCache dbCache) = CreateTestContext();
+        (DefaultHttpContext httpContext, IUserRepository userRepo, ITenantRepository tenantRepo) = CreateTestContext();
 
         // Create identity with "email" claim instead of ClaimTypes.Email
         List<Claim> claims = new()
@@ -521,16 +523,16 @@ public sealed class SocialAuthEventsTests
         };
         ClaimsIdentity identity = new(claims, "TestAuth");
 
-        dbCache.GetUserByExternalIdAsync("ext-fallback-email", Arg.Any<CancellationToken>())
+        userRepo.GetUserByExternalIdAsync("ext-fallback-email", Arg.Any<CancellationToken>())
             .Returns((UserAccount?)null);
-        dbCache.CreateUserAccountAsync(Arg.Any<UserAccount>())
+        userRepo.CreateUserAccountAsync(Arg.Any<UserAccount>())
             .Returns(callInfo => callInfo.Arg<UserAccount>());
-        dbCache.GetTenantsForUserAsync("ext-fallback-email", Arg.Any<CancellationToken>())
+        tenantRepo.GetTenantsForUserAsync("ext-fallback-email", Arg.Any<CancellationToken>())
             .Returns(Enumerable.Empty<UserTenantRole>());
 
         await SocialAuthEvents.PopulateUserClaimsAsync(identity, httpContext, CancellationToken.None);
 
-        await dbCache.Received(1).CreateUserAccountAsync(Arg.Is<UserAccount>(u =>
+        await userRepo.Received(1).CreateUserAccountAsync(Arg.Is<UserAccount>(u =>
             u.Username == "fallback@example.com"));
     }
 
@@ -539,19 +541,19 @@ public sealed class SocialAuthEventsTests
     [Test]
     public async Task PopulateUserClaimsAsync_AutoCreatedUser_SetsAuthProvider()
     {
-        (DefaultHttpContext httpContext, IDatabaseCache dbCache) = CreateTestContext();
+        (DefaultHttpContext httpContext, IUserRepository userRepo, ITenantRepository tenantRepo) = CreateTestContext();
         ClaimsIdentity identity = CreateIdentity(nameIdentifier: "ext-new-with-provider", email: "new-prov@example.com");
 
-        dbCache.GetUserByExternalIdAsync("ext-new-with-provider", Arg.Any<CancellationToken>())
+        userRepo.GetUserByExternalIdAsync("ext-new-with-provider", Arg.Any<CancellationToken>())
             .Returns((UserAccount?)null);
-        dbCache.CreateUserAccountAsync(Arg.Any<UserAccount>())
+        userRepo.CreateUserAccountAsync(Arg.Any<UserAccount>())
             .Returns(callInfo => callInfo.Arg<UserAccount>());
-        dbCache.GetTenantsForUserAsync("ext-new-with-provider", Arg.Any<CancellationToken>())
+        tenantRepo.GetTenantsForUserAsync("ext-new-with-provider", Arg.Any<CancellationToken>())
             .Returns(Enumerable.Empty<UserTenantRole>());
 
         await SocialAuthEvents.PopulateUserClaimsAsync(identity, httpContext, CancellationToken.None, Database.Enums.AuthProviderType.Microsoft);
 
-        await dbCache.Received(1).CreateUserAccountAsync(Arg.Is<UserAccount>(u =>
+        await userRepo.Received(1).CreateUserAccountAsync(Arg.Is<UserAccount>(u =>
             u.AuthProvider == Database.Enums.AuthProviderType.Microsoft));
     }
 
@@ -560,13 +562,15 @@ public sealed class SocialAuthEventsTests
     [Test]
     public async Task PopulateUserClaimsAsync_SignupDisabled_BlocksNewUser()
     {
-        IDatabaseCache dbCache = Substitute.For<IDatabaseCache>();
+        IUserRepository userRepo = Substitute.For<IUserRepository>();
+        ITenantRepository tenantRepo = Substitute.For<ITenantRepository>();
         IServerSettingsCache settingsCache = Substitute.For<IServerSettingsCache>();
         settingsCache.GetSettingAsync(Database.Enums.ServerConfigurationSettingKeys.AllowUserSignup, Arg.Any<CancellationToken>())
             .Returns("false");
 
         ServiceCollection services = new();
-        services.AddSingleton(dbCache);
+        services.AddSingleton(userRepo);
+        services.AddSingleton(tenantRepo);
         services.AddSingleton(settingsCache);
         ServiceProvider provider = services.BuildServiceProvider();
 
@@ -577,13 +581,13 @@ public sealed class SocialAuthEventsTests
 
         ClaimsIdentity identity = CreateIdentity(nameIdentifier: "ext-new-blocked", email: "blocked@example.com");
 
-        dbCache.GetUserByExternalIdAsync("ext-new-blocked", Arg.Any<CancellationToken>())
+        userRepo.GetUserByExternalIdAsync("ext-new-blocked", Arg.Any<CancellationToken>())
             .Returns((UserAccount?)null);
 
         bool result = await SocialAuthEvents.PopulateUserClaimsAsync(identity, httpContext, CancellationToken.None);
 
         await Assert.That(result).IsFalse();
-        await dbCache.DidNotReceive().CreateUserAccountAsync(Arg.Any<UserAccount>());
+        await userRepo.DidNotReceive().CreateUserAccountAsync(Arg.Any<UserAccount>());
     }
 
     // --- Global admin false sets iga to False ---
@@ -591,13 +595,13 @@ public sealed class SocialAuthEventsTests
     [Test]
     public async Task PopulateUserClaimsAsync_GlobalAdminFalse_SetsIgaFalse()
     {
-        (DefaultHttpContext httpContext, IDatabaseCache dbCache) = CreateTestContext();
+        (DefaultHttpContext httpContext, IUserRepository userRepo, ITenantRepository tenantRepo) = CreateTestContext();
         ClaimsIdentity identity = CreateIdentity(nameIdentifier: "ext-non-admin");
         UserAccount user = CreateUser(externalId: "ext-non-admin", isGlobalAdmin: false);
 
-        dbCache.GetUserByExternalIdAsync("ext-non-admin", Arg.Any<CancellationToken>())
+        userRepo.GetUserByExternalIdAsync("ext-non-admin", Arg.Any<CancellationToken>())
             .Returns(user);
-        dbCache.GetTenantsForUserAsync("ext-non-admin", Arg.Any<CancellationToken>())
+        tenantRepo.GetTenantsForUserAsync("ext-non-admin", Arg.Any<CancellationToken>())
             .Returns(Enumerable.Empty<UserTenantRole>());
 
         await SocialAuthEvents.PopulateUserClaimsAsync(identity, httpContext, CancellationToken.None);

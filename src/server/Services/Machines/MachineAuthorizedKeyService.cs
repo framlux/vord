@@ -3,9 +3,9 @@
 // See LICENSE for details.
 
 using Framlux.FleetManagement.Database;
-using Framlux.FleetManagement.Database.Cache;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
+using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Server.Endpoints.Web.Models.Machines;
 using Framlux.FleetManagement.Server.Services.Infrastructure;
 using LinqToDB;
@@ -19,19 +19,34 @@ namespace Framlux.FleetManagement.Server.Services.Machines;
 public sealed class MachineAuthorizedKeyService : IMachineAuthorizedKeyService
 {
     private readonly DatabaseContext _db;
-    private readonly IDatabaseCache _cache;
+    private readonly IDatabaseTransactionProvider _transactionProvider;
+    private readonly IAuditLogRepository _auditLog;
+    private readonly IMachineRepository _machineRepository;
+    private readonly ISigningKeyRepository _signingKeyRepository;
     private readonly ILogger<MachineAuthorizedKeyService> _logger;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="MachineAuthorizedKeyService"/> class.
     /// </summary>
     /// <param name="db">The database context</param>
-    /// <param name="cache">The database caching layer</param>
+    /// <param name="transactionProvider">The database transaction provider</param>
+    /// <param name="auditLog">The audit log repository</param>
+    /// <param name="machineRepository">The machine repository</param>
+    /// <param name="signingKeyRepository">The signing key repository</param>
     /// <param name="logger">The logger</param>
-    public MachineAuthorizedKeyService(DatabaseContext db, IDatabaseCache cache, ILogger<MachineAuthorizedKeyService> logger)
+    public MachineAuthorizedKeyService(
+        DatabaseContext db,
+        IDatabaseTransactionProvider transactionProvider,
+        IAuditLogRepository auditLog,
+        IMachineRepository machineRepository,
+        ISigningKeyRepository signingKeyRepository,
+        ILogger<MachineAuthorizedKeyService> logger)
     {
         _db = db ?? throw new ArgumentNullException(nameof(db));
-        _cache = cache ?? throw new ArgumentNullException(nameof(cache));
+        _transactionProvider = transactionProvider ?? throw new ArgumentNullException(nameof(transactionProvider));
+        _auditLog = auditLog ?? throw new ArgumentNullException(nameof(auditLog));
+        _machineRepository = machineRepository ?? throw new ArgumentNullException(nameof(machineRepository));
+        _signingKeyRepository = signingKeyRepository ?? throw new ArgumentNullException(nameof(signingKeyRepository));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -44,14 +59,14 @@ public sealed class MachineAuthorizedKeyService : IMachineAuthorizedKeyService
         }
 
         // Verify the machine exists, belongs to the tenant, and is not deleted.
-        Machine? machine = await _cache.GetMachineAsync(machineId, tenantId, cancellationToken);
+        Machine? machine = await _machineRepository.GetMachineAsync(machineId, tenantId, cancellationToken);
         if (machine is null)
         {
             return ServiceResult<MachineAuthorizedKey>.NotFound();
         }
 
         // Verify the signing key exists and belongs to the tenant.
-        UserSigningKey? signingKey = await _cache.GetSigningKeyByIdAsync(signingKeyId, cancellationToken);
+        UserSigningKey? signingKey = await _signingKeyRepository.GetSigningKeyByIdAsync(signingKeyId, cancellationToken);
         if ((signingKey is null) || (signingKey.TenantId != tenantId))
         {
             return ServiceResult<MachineAuthorizedKey>.NotFound();
@@ -64,7 +79,7 @@ public sealed class MachineAuthorizedKeyService : IMachineAuthorizedKeyService
         }
 
         // Check if the signing key is already actively authorized for this machine.
-        bool alreadyAuthorized = await _cache.IsKeyAuthorizedForMachineAsync(signingKeyId, machineId, cancellationToken);
+        bool alreadyAuthorized = await _signingKeyRepository.IsKeyAuthorizedForMachineAsync(signingKeyId, machineId, cancellationToken);
         if (alreadyAuthorized)
         {
             return ServiceResult<MachineAuthorizedKey>.Conflict("Signing key is already authorized for this machine");
@@ -78,7 +93,7 @@ public sealed class MachineAuthorizedKeyService : IMachineAuthorizedKeyService
                                       (a.TenantId == tenantId) &&
                                       (a.RevokedAt != null), cancellationToken);
 
-        using IDatabaseTransaction transaction = await _cache.BeginTransactionAsync(cancellationToken);
+        using IDatabaseTransaction transaction = await _transactionProvider.BeginTransactionAsync(cancellationToken);
 
         MachineAuthorizedKey result;
         if (existingRevoked is not null)
@@ -110,10 +125,10 @@ public sealed class MachineAuthorizedKeyService : IMachineAuthorizedKeyService
                 AuthorizedAt = DateTimeOffset.UtcNow,
                 AuthorizedByUserId = userId,
             };
-            result = await _cache.CreateMachineAuthorizationAsync(authorization, cancellationToken);
+            result = await _signingKeyRepository.CreateMachineAuthorizationAsync(authorization, cancellationToken);
         }
 
-        await _cache.InsertAuditLogAsync(new AuditLogEntry
+        await _auditLog.InsertAuditLogAsync(new AuditLogEntry
         {
             TenantId = tenantId,
             UserId = userId,
@@ -148,11 +163,11 @@ public sealed class MachineAuthorizedKeyService : IMachineAuthorizedKeyService
             return ServiceResult<bool>.NotFound();
         }
 
-        using IDatabaseTransaction transaction = await _cache.BeginTransactionAsync(cancellationToken);
+        using IDatabaseTransaction transaction = await _transactionProvider.BeginTransactionAsync(cancellationToken);
 
-        await _cache.RevokeMachineAuthorizationAsync(machineId, signingKeyId, userId, cancellationToken);
+        await _signingKeyRepository.RevokeMachineAuthorizationAsync(machineId, signingKeyId, userId, cancellationToken);
 
-        await _cache.InsertAuditLogAsync(new AuditLogEntry
+        await _auditLog.InsertAuditLogAsync(new AuditLogEntry
         {
             TenantId = tenantId,
             UserId = userId,
@@ -176,7 +191,7 @@ public sealed class MachineAuthorizedKeyService : IMachineAuthorizedKeyService
     public async Task<ServiceResult<List<MachineAuthorizedKeyDto>>> ListAuthorizedKeysAsync(long machineId, int tenantId, CancellationToken cancellationToken = default)
     {
         // Verify the machine exists in the tenant.
-        Machine? machine = await _cache.GetMachineAsync(machineId, tenantId, cancellationToken);
+        Machine? machine = await _machineRepository.GetMachineAsync(machineId, tenantId, cancellationToken);
         if (machine is null)
         {
             return ServiceResult<List<MachineAuthorizedKeyDto>>.NotFound();
