@@ -22,6 +22,14 @@ public sealed class NoOpBillingApiClientTests
     }
 
     [Test]
+    public async Task ReportMachineUsageAsync_AlwaysReturnsTrue()
+    {
+        bool result = await _client.ReportMachineUsageAsync("tenant-123", 5, CancellationToken.None);
+
+        await Assert.That(result).IsTrue();
+    }
+
+    [Test]
     public async Task CancelSubscriptionAsync_AlwaysReturnsTrue()
     {
         bool result = await _client.CancelSubscriptionAsync("tenant-123", CancellationToken.None);
