@@ -295,7 +295,7 @@ public sealed class StripeSyncServiceTests
         DateTimeOffset periodEnd = sub.CurrentPeriodEnd!.Value;
         billingClient.GetSubscriptionStatusAsync("ext-1", Arg.Any<CancellationToken>())
             .Returns(new StripeSubscriptionStatus(false, "active", "price_pro_123", 3, periodEnd));
-        billingClient.UpdateQuantityAsync("ext-1", 5, Arg.Any<CancellationToken>())
+        billingClient.ReportMachineUsageAsync("ext-1", 5, Arg.Any<CancellationToken>())
             .Returns(callInfo =>
             {
                 workDone.TrySetResult();
@@ -309,7 +309,7 @@ public sealed class StripeSyncServiceTests
         await cts.CancelAsync();
         await service.StopAsync(CancellationToken.None);
 
-        await billingClient.Received(1).UpdateQuantityAsync("ext-1", 5, Arg.Any<CancellationToken>());
+        await billingClient.Received(1).ReportMachineUsageAsync("ext-1", 5, Arg.Any<CancellationToken>());
     }
 
     [Test]
@@ -348,7 +348,7 @@ public sealed class StripeSyncServiceTests
         await cts.CancelAsync();
         await service.StopAsync(CancellationToken.None);
 
-        await billingClient.DidNotReceive().UpdateQuantityAsync(Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>());
+        await billingClient.DidNotReceive().ReportMachineUsageAsync(Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>());
     }
 
     // --- Tier drift detection ---
@@ -1042,7 +1042,7 @@ public sealed class StripeSyncServiceTests
 
         // No sync operations should be called
         await subscriptionService.DidNotReceive().GetMachineCountForTenantAsync(Arg.Any<int>(), Arg.Any<CancellationToken>());
-        await billingClient.DidNotReceive().UpdateQuantityAsync(Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>());
+        await billingClient.DidNotReceive().ReportMachineUsageAsync(Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>());
     }
 
     [Test]
@@ -1123,7 +1123,7 @@ public sealed class StripeSyncServiceTests
         DateTimeOffset periodEnd = sub.CurrentPeriodEnd!.Value;
         billingClient.GetSubscriptionStatusAsync("ext-1", Arg.Any<CancellationToken>())
             .Returns(new StripeSubscriptionStatus(false, "active", "price_pro_123", 5, periodEnd));
-        billingClient.UpdateQuantityAsync("ext-1", 10, Arg.Any<CancellationToken>())
+        billingClient.ReportMachineUsageAsync("ext-1", 10, Arg.Any<CancellationToken>())
             .Returns(callInfo =>
             {
                 workDone.TrySetResult();

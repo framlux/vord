@@ -54,7 +54,7 @@ public class MachineHandlerTests
         ServerConfigurationService configService = new(Substitute.For<IServerSettingsCache>(), Substitute.For<IConnectionMultiplexer>());
         DatabaseRepository repo = CreateRepo(dbFactory);
 
-        return new MachineHandler(repo, repo, repo, repo, repo, ping, configService, Substitute.For<IBillingApiClient>(), NullLogger<MachineHandler>.Instance);
+        return new MachineHandler(repo, repo, repo, repo, repo, ping, configService, Substitute.For<IBillingApiClient>(), Substitute.For<ISubscriptionService>(), NullLogger<MachineHandler>.Instance);
     }
 
     // ========== DeleteAsync tests ==========

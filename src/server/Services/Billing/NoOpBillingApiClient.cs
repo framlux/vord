@@ -16,6 +16,12 @@ public sealed class NoOpBillingApiClient : IBillingApiClient
     }
 
     /// <inheritdoc/>
+    public Task<bool> ReportMachineUsageAsync(string tenantExternalId, int machineCount, CancellationToken ct)
+    {
+        return Task.FromResult(true);
+    }
+
+    /// <inheritdoc/>
     public Task<bool> CancelSubscriptionAsync(string tenantExternalId, CancellationToken ct)
     {
         return Task.FromResult(true);

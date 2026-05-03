@@ -19,6 +19,15 @@ public interface IBillingApiClient
     Task<bool> UpdateQuantityAsync(string tenantExternalId, int machineCount, CancellationToken ct);
 
     /// <summary>
+    /// Reports the current machine count for a tenant to the billing API for metered billing.
+    /// </summary>
+    /// <param name="tenantExternalId">The tenant external ID.</param>
+    /// <param name="machineCount">The current active machine count.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>True if the usage report was successful.</returns>
+    Task<bool> ReportMachineUsageAsync(string tenantExternalId, int machineCount, CancellationToken ct);
+
+    /// <summary>
     /// Cancels a subscription at the end of the current billing period.
     /// </summary>
     /// <param name="tenantExternalId">The tenant external ID.</param>

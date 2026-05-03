@@ -65,6 +65,39 @@ public sealed class BillingApiClient : IBillingApiClient
     }
 
     /// <inheritdoc/>
+    public async Task<bool> ReportMachineUsageAsync(string tenantExternalId, int machineCount, CancellationToken ct)
+    {
+        try
+        {
+            ReportMachineUsageResponse response = await _grpcClient.ReportMachineUsageAsync(
+                new ReportMachineUsageRequest
+                {
+                    TenantExternalId = tenantExternalId,
+                    MachineCount = machineCount
+                },
+                deadline: DateTime.UtcNow.Add(GrpcDeadline),
+                cancellationToken: ct);
+
+            if (response.Success == false)
+            {
+                _logger.LogWarning(
+                    "Failed to report machine usage for tenant {TenantExternalId}: {Message}",
+                    tenantExternalId, response.Message);
+            }
+
+            return response.Success;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex,
+                "Error reporting machine usage for tenant {TenantExternalId}",
+                tenantExternalId);
+
+            return false;
+        }
+    }
+
+    /// <inheritdoc/>
     public async Task<bool> CancelSubscriptionAsync(string tenantExternalId, CancellationToken ct)
     {
         try

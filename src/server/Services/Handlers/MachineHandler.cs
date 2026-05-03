@@ -27,6 +27,7 @@ public sealed class MachineHandler : IMachineHandler
     private readonly IMachinePingService _pingService;
     private readonly ServerConfigurationService _configService;
     private readonly IBillingApiClient _billingApiClient;
+    private readonly ISubscriptionService _subscriptionService;
     private readonly ILogger<MachineHandler> _logger;
 
     /// <summary>
@@ -41,6 +42,7 @@ public sealed class MachineHandler : IMachineHandler
         IMachinePingService pingService,
         ServerConfigurationService configService,
         IBillingApiClient billingApiClient,
+        ISubscriptionService subscriptionService,
         ILogger<MachineHandler> logger)
     {
         ArgumentNullException.ThrowIfNull(machineRepo);
@@ -51,6 +53,7 @@ public sealed class MachineHandler : IMachineHandler
         ArgumentNullException.ThrowIfNull(pingService);
         ArgumentNullException.ThrowIfNull(configService);
         ArgumentNullException.ThrowIfNull(billingApiClient);
+        ArgumentNullException.ThrowIfNull(subscriptionService);
         ArgumentNullException.ThrowIfNull(logger);
 
         _machineRepo = machineRepo;
@@ -61,6 +64,7 @@ public sealed class MachineHandler : IMachineHandler
         _pingService = pingService;
         _configService = configService;
         _billingApiClient = billingApiClient;
+        _subscriptionService = subscriptionService;
         _logger = logger;
     }
 
@@ -88,22 +92,27 @@ public sealed class MachineHandler : IMachineHandler
 
         await transaction.CommitAsync(ct);
 
-        // Sync the machine quantity with Stripe after deletion (fire-and-forget)
+        // Report usage to billing for metered billing after deletion (best effort)
         try
         {
-            Tenant? tenant = await _tenantRepo.GetTenantByIdAsync(tenantId.Value, ct);
+            TenantSubscription? subscription = await _subscriptionService.GetSubscriptionForTenantAsync(tenantId.Value, ct);
 
-            if (tenant is not null)
+            // Only report usage for paid tiers; Free tier has no Stripe subscription
+            if ((subscription is not null) && (subscription.Tier != SubscriptionTier.Free))
             {
-                int activeMachineCount = await _machineRepo.GetActiveMachineCountAsync(tenantId.Value, ct);
+                Tenant? tenant = await _tenantRepo.GetTenantByIdAsync(tenantId.Value, ct);
 
-                await _billingApiClient.UpdateQuantityAsync(tenant.ExternalId, activeMachineCount, ct);
+                if (tenant is not null)
+                {
+                    int activeMachineCount = await _machineRepo.GetActiveMachineCountAsync(tenantId.Value, ct);
+                    await _billingApiClient.ReportMachineUsageAsync(tenant.ExternalId, activeMachineCount, ct);
+                }
             }
         }
         catch (Exception ex)
         {
             _logger.LogWarning(ex,
-                "Failed to sync machine quantity with Stripe after deleting machine {MachineId} for tenant {TenantId}",
+                "Failed to report machine usage to billing after deleting machine {MachineId} for tenant {TenantId}",
                 machineId, tenantId.Value);
         }
 

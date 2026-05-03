@@ -392,6 +392,9 @@ if (billingOpts.Enabled)
 
     // Stripe sync background service for reconciliation
     builder.Services.AddHostedService<StripeSyncService>();
+
+    // Hourly usage heartbeat for metered billing
+    builder.Services.AddHostedService<UsageHeartbeatService>();
 }
 else
 {

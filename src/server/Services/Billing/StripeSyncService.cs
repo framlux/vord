@@ -220,19 +220,19 @@ public sealed class StripeSyncService : BackgroundService
     {
         int localMachineCount = await subscriptionService.GetMachineCountForTenantAsync(subscription.TenantId, ct);
 
+        // With metered billing, the quantity field represents the last reported usage.
+        // If it differs from the local count, report the correct usage as a safety net.
         if (localMachineCount != stripeStatus.Quantity)
         {
-            bool success = await _billingApiClient.UpdateQuantityAsync(tenantExternalId, localMachineCount, ct);
-            if (success)
+            _logger.LogWarning(
+                "Stripe sync: Usage drift detected for tenant {TenantId}. Local: {LocalCount}, Stripe: {StripeCount}. Correcting via usage report",
+                subscription.TenantId, localMachineCount, stripeStatus.Quantity);
+
+            bool success = await _billingApiClient.ReportMachineUsageAsync(tenantExternalId, localMachineCount, ct);
+            if (success == false)
             {
                 _logger.LogWarning(
-                    "Stripe sync: Updated machine quantity for tenant {TenantId} from {StripeQuantity} to {LocalQuantity}",
-                    subscription.TenantId, stripeStatus.Quantity, localMachineCount);
-            }
-            else
-            {
-                _logger.LogWarning(
-                    "Stripe sync: Failed to update machine quantity for tenant {TenantId}",
+                    "Stripe sync: Failed to report machine usage for tenant {TenantId}",
                     subscription.TenantId);
             }
         }
@@ -323,19 +323,37 @@ public sealed class StripeSyncService : BackgroundService
         }
     }
 
-    private static SubscriptionTier? MapPriceIdToTier(string priceId, string proPriceId, string teamPriceId)
+    private SubscriptionTier? MapPriceIdToTier(string priceId, string proPriceId, string teamPriceId)
     {
         if (string.IsNullOrEmpty(priceId))
         {
             return null;
         }
 
+        // Check legacy single price IDs
         if (string.Equals(priceId, proPriceId, StringComparison.Ordinal))
         {
             return SubscriptionTier.Pro;
         }
 
         if (string.Equals(priceId, teamPriceId, StringComparison.Ordinal))
+        {
+            return SubscriptionTier.Team;
+        }
+
+        // Check interval-aware metered price IDs
+        if ((string.IsNullOrEmpty(_billingOptions.StripeProMonthlyPriceId) == false &&
+             string.Equals(priceId, _billingOptions.StripeProMonthlyPriceId, StringComparison.Ordinal)) ||
+            (string.IsNullOrEmpty(_billingOptions.StripeProAnnualPriceId) == false &&
+             string.Equals(priceId, _billingOptions.StripeProAnnualPriceId, StringComparison.Ordinal)))
+        {
+            return SubscriptionTier.Pro;
+        }
+
+        if ((string.IsNullOrEmpty(_billingOptions.StripeTeamMonthlyPriceId) == false &&
+             string.Equals(priceId, _billingOptions.StripeTeamMonthlyPriceId, StringComparison.Ordinal)) ||
+            (string.IsNullOrEmpty(_billingOptions.StripeTeamAnnualPriceId) == false &&
+             string.Equals(priceId, _billingOptions.StripeTeamAnnualPriceId, StringComparison.Ordinal)))
         {
             return SubscriptionTier.Team;
         }

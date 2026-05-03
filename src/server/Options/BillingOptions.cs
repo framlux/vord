@@ -28,4 +28,24 @@ public sealed class BillingOptions
     /// The Stripe price ID for the Team tier.
     /// </summary>
     public string StripeTeamPriceId { get; set; } = string.Empty;
+
+    /// <summary>
+    /// The Stripe price ID for the Pro tier monthly metered subscription.
+    /// </summary>
+    public string StripeProMonthlyPriceId { get; set; } = string.Empty;
+
+    /// <summary>
+    /// The Stripe price ID for the Pro tier annual metered subscription.
+    /// </summary>
+    public string StripeProAnnualPriceId { get; set; } = string.Empty;
+
+    /// <summary>
+    /// The Stripe price ID for the Team tier monthly metered subscription.
+    /// </summary>
+    public string StripeTeamMonthlyPriceId { get; set; } = string.Empty;
+
+    /// <summary>
+    /// The Stripe price ID for the Team tier annual metered subscription.
+    /// </summary>
+    public string StripeTeamAnnualPriceId { get; set; } = string.Empty;
 }

@@ -226,20 +226,24 @@ public sealed class MachineService : IMachineService
 
         _logger.LogInformation("Machine created with ID {MachineId} for {SerialNumber}", createdMachine.Id, request.SerialNumber);
 
-        // Sync the updated machine count to Stripe (best effort, StripeSyncService provides the safety net)
+        // Report usage to billing for metered billing (best effort, hourly heartbeat provides the safety net)
         try
         {
-            ITenantRepository tenantRepository = scope.ServiceProvider.GetRequiredService<ITenantRepository>();
-            Tenant? tenant = await tenantRepository.GetTenantByIdAsync(token.TenantId, cancellationToken);
-            if (tenant is not null)
+            // Only report usage for paid tiers; Free tier has no Stripe subscription
+            if ((subscription is not null) && (subscription.Tier != SubscriptionTier.Free))
             {
-                int machineCount = await machineRepository.GetActiveMachineCountAsync(token.TenantId, cancellationToken);
-                await _billingApiClient.UpdateQuantityAsync(tenant.ExternalId, machineCount, cancellationToken);
+                ITenantRepository tenantRepository = scope.ServiceProvider.GetRequiredService<ITenantRepository>();
+                Tenant? tenant = await tenantRepository.GetTenantByIdAsync(token.TenantId, cancellationToken);
+                if (tenant is not null)
+                {
+                    int machineCount = await machineRepository.GetActiveMachineCountAsync(token.TenantId, cancellationToken);
+                    await _billingApiClient.ReportMachineUsageAsync(tenant.ExternalId, machineCount, cancellationToken);
+                }
             }
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Failed to sync machine count to billing for tenant {TenantId}", token.TenantId);
+            _logger.LogWarning(ex, "Failed to report machine usage to billing for tenant {TenantId}", token.TenantId);
         }
 
         return (createdMachine.Id, plaintextApiKey, string.Empty);
