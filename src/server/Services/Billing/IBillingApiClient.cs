@@ -31,9 +31,10 @@ public interface IBillingApiClient
     /// Cancels a subscription at the end of the current billing period.
     /// </summary>
     /// <param name="tenantExternalId">The tenant external ID.</param>
+    /// <param name="pendingAction">The action to take when the subscription ends (e.g., "DowngradeToFree", "DowngradeToPro", "CancelAccount").</param>
     /// <param name="ct">Cancellation token.</param>
     /// <returns>True if the cancellation was successful.</returns>
-    Task<bool> CancelSubscriptionAsync(string tenantExternalId, CancellationToken ct);
+    Task<bool> CancelSubscriptionAsync(string tenantExternalId, string pendingAction, CancellationToken ct);
 
     /// <summary>
     /// Gets the current subscription status from Stripe for reconciliation.

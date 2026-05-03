@@ -259,7 +259,7 @@ public sealed class DowngradeSubscriptionEndpoint : Endpoint<DowngradeSubscripti
         {
             try
             {
-                await _billingApiClient.CancelSubscriptionAsync(tenant.ExternalId, ct);
+                await _billingApiClient.CancelSubscriptionAsync(tenant.ExternalId, "DowngradeToFree", ct);
             }
             catch (Exception ex)
             {

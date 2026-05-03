@@ -218,7 +218,7 @@ public sealed class StripeSyncServiceTests
             .Returns(tenant);
         billingClient.GetSubscriptionStatusAsync("ext-1", Arg.Any<CancellationToken>())
             .Returns(new StripeSubscriptionStatus(false, "active", "price_pro_123", 1, null));
-        billingClient.CancelSubscriptionAsync("ext-1", Arg.Any<CancellationToken>())
+        billingClient.CancelSubscriptionAsync("ext-1", Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns(callInfo =>
             {
                 workDone.TrySetResult();
@@ -232,7 +232,7 @@ public sealed class StripeSyncServiceTests
         await cts.CancelAsync();
         await service.StopAsync(CancellationToken.None);
 
-        await billingClient.Received(1).CancelSubscriptionAsync("ext-1", Arg.Any<CancellationToken>());
+        await billingClient.Received(1).CancelSubscriptionAsync("ext-1", Arg.Any<string>(), Arg.Any<CancellationToken>());
     }
 
     [Test]
@@ -265,7 +265,7 @@ public sealed class StripeSyncServiceTests
         await cts.CancelAsync();
         await service.StopAsync(CancellationToken.None);
 
-        await billingClient.DidNotReceive().CancelSubscriptionAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
+        await billingClient.DidNotReceive().CancelSubscriptionAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
         await webhookHandler.DidNotReceive().HandleSubscriptionDeletedAsync(Arg.Any<int>(), Arg.Any<CancellationToken>());
     }
 

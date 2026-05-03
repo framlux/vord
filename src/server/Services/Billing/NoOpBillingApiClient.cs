@@ -22,7 +22,7 @@ public sealed class NoOpBillingApiClient : IBillingApiClient
     }
 
     /// <inheritdoc/>
-    public Task<bool> CancelSubscriptionAsync(string tenantExternalId, CancellationToken ct)
+    public Task<bool> CancelSubscriptionAsync(string tenantExternalId, string pendingAction, CancellationToken ct)
     {
         return Task.FromResult(true);
     }

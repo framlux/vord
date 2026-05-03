@@ -98,14 +98,15 @@ public sealed class BillingApiClient : IBillingApiClient
     }
 
     /// <inheritdoc/>
-    public async Task<bool> CancelSubscriptionAsync(string tenantExternalId, CancellationToken ct)
+    public async Task<bool> CancelSubscriptionAsync(string tenantExternalId, string pendingAction, CancellationToken ct)
     {
         try
         {
             CancelSubscriptionResponse response = await _grpcClient.CancelSubscriptionAsync(
                 new CancelSubscriptionRequest
                 {
-                    TenantExternalId = tenantExternalId
+                    TenantExternalId = tenantExternalId,
+                    PendingAction = pendingAction
                 },
                 deadline: DateTime.UtcNow.Add(GrpcDeadline),
                 cancellationToken: ct);

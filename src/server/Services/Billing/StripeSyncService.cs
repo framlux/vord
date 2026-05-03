@@ -132,7 +132,14 @@ public sealed class StripeSyncService : BackgroundService
                 else if (stripeStatus.CancelAtPeriodEnd == false)
                 {
                     // Stripe doesn't reflect the cancellation yet, retry
-                    bool success = await _billingApiClient.CancelSubscriptionAsync(tenant.ExternalId, ct);
+                    string pendingActionStr = subscription.PendingAction switch
+                    {
+                        PendingSubscriptionAction.DowngradeToFree => "DowngradeToFree",
+                        PendingSubscriptionAction.DowngradeToPro => "DowngradeToPro",
+                        PendingSubscriptionAction.CancelAccount => "CancelAccount",
+                        _ => "DowngradeToFree",
+                    };
+                    bool success = await _billingApiClient.CancelSubscriptionAsync(tenant.ExternalId, pendingActionStr, ct);
                     if (success)
                     {
                         _logger.LogInformation(

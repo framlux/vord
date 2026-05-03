@@ -32,7 +32,7 @@ public sealed class NoOpBillingApiClientTests
     [Test]
     public async Task CancelSubscriptionAsync_AlwaysReturnsTrue()
     {
-        bool result = await _client.CancelSubscriptionAsync("tenant-123", CancellationToken.None);
+        bool result = await _client.CancelSubscriptionAsync("tenant-123", "CancelAccount", CancellationToken.None);
 
         await Assert.That(result).IsTrue();
     }

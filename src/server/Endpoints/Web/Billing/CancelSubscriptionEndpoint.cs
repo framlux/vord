@@ -161,7 +161,7 @@ public sealed class CancelSubscriptionEndpoint : EndpointWithoutRequest<ApiRespo
         {
             try
             {
-                await _billingApiClient.CancelSubscriptionAsync(tenant.ExternalId, ct);
+                await _billingApiClient.CancelSubscriptionAsync(tenant.ExternalId, "CancelAccount", ct);
             }
             catch (Exception ex)
             {
