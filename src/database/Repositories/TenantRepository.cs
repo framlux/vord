@@ -128,27 +128,6 @@ public partial class DatabaseRepository : ITenantRepository
     }
 
     /// <inheritdoc/>
-    public async Task<TenantSubscription> CreateTenantSubscriptionAsync(TenantSubscription subscription, CancellationToken cancellationToken = default)
-    {
-        ArgumentNullException.ThrowIfNull(subscription);
-
-        try
-        {
-            _logger.LogDebug("Creating subscription for tenant {TenantId}", subscription.TenantId);
-            int newId = await _db.InsertWithInt32IdentityAsync(subscription, token: cancellationToken);
-            subscription.Id = newId;
-            _logger.LogInformation("Successfully created subscription {SubscriptionId} for tenant {TenantId}", newId, subscription.TenantId);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Failed to create subscription for tenant {TenantId}", subscription.TenantId);
-            throw;
-        }
-
-        return subscription;
-    }
-
-    /// <inheritdoc/>
     public async Task CreateUserTenantRoleAsync(UserTenantRole role, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNull(role);
@@ -367,5 +346,51 @@ public partial class DatabaseRepository : ITenantRepository
             .ToListAsync(cancellationToken);
 
         return (tenants, totalCount);
+    }
+
+    /// <inheritdoc/>
+    public async Task<IEnumerable<UserTenantRole>> GetMembersForTenantAsync(int tenantId, CancellationToken cancellationToken)
+    {
+        List<UserTenantRole> roles = await (from utr in _db.UserTenantRoles
+                join ua in _db.UserAccounts on utr.UserId equals ua.Id
+                where (utr.AssignedTenantId == tenantId) && (utr.IsActive == true) && (ua.IsActive == true)
+                select new UserTenantRole
+                {
+                    UserId = utr.UserId,
+                    User = ua,
+                    AssignedTenantId = utr.AssignedTenantId,
+                    Role = utr.Role,
+                    AssignedByUserId = utr.AssignedByUserId,
+                    AssignedAt = utr.AssignedAt,
+                    IsActive = utr.IsActive,
+                }).ToListAsync(cancellationToken);
+
+        return roles;
+    }
+
+    /// <inheritdoc/>
+    public async Task<bool> DisableUserTenantRoleAsync(int userId, int tenantId, int disabledByUserId, CancellationToken cancellationToken)
+    {
+        try
+        {
+            _logger.LogDebug("Disabling UserTenantRole for user {UserId} in tenant {TenantId}", userId, tenantId);
+            int affected = await _db.UserTenantRoles
+                .Where(utr => (utr.UserId == userId) &&
+                               (utr.AssignedTenantId == tenantId) &&
+                               (utr.IsActive == true))
+                .Set(utr => utr.IsActive, false)
+                .Set(utr => utr.DisabledByUserId, disabledByUserId)
+                .Set(utr => utr.DisabledAt, DateTimeOffset.UtcNow)
+                .UpdateAsync(cancellationToken);
+
+            _logger.LogInformation("Disabled {Count} UserTenantRole(s) for user {UserId} in tenant {TenantId}", affected, userId, tenantId);
+
+            return affected > 0;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to disable UserTenantRole for user {UserId} in tenant {TenantId}", userId, tenantId);
+            throw;
+        }
     }
 }

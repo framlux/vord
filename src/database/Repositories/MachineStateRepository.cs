@@ -374,7 +374,7 @@ public partial class DatabaseRepository : IMachineStateRepository
     public async Task<List<MachineTelemetry>> GetTelemetryExportBatchAsync(List<long> machineIds, long afterId, int batchSize, CancellationToken cancellationToken)
     {
         return await _db.MachineTelemetry
-            .Where(t => machineIds.Contains(t.MachineId) && (t.Id > afterId))
+            .Where(t => machineIds.Contains(t.MachineId) && t.Id > afterId)
             .OrderBy(t => t.Id)
             .Take(batchSize)
             .ToListAsync(cancellationToken);
@@ -448,8 +448,8 @@ public partial class DatabaseRepository : IMachineStateRepository
             string q = search.ToLowerInvariant();
             query = query.Where(r =>
                 r.Name.ToLower().Contains(q) ||
-                (r.Hostname != null && r.Hostname.ToLower().Contains(q)) ||
-                (r.HardwareModel != null && r.HardwareModel.ToLower().Contains(q)));
+                ((r.Hostname != null) && r.Hostname.ToLower().Contains(q)) ||
+                ((r.HardwareModel != null) && r.HardwareModel.ToLower().Contains(q)));
         }
 
         int totalCount = await query.CountAsync(cancellationToken);
@@ -489,8 +489,8 @@ public partial class DatabaseRepository : IMachineStateRepository
             string searchLower = parameters.Search.ToLowerInvariant();
             query = query.Where(r =>
                 r.Name.ToLower().Contains(searchLower) ||
-                (r.Hostname != null && r.Hostname.ToLower().Contains(searchLower)) ||
-                (r.HardwareModel != null && r.HardwareModel.ToLower().Contains(searchLower)));
+                ((r.Hostname != null) && r.Hostname.ToLower().Contains(searchLower)) ||
+                ((r.HardwareModel != null) && r.HardwareModel.ToLower().Contains(searchLower)));
         }
 
         // OS and machine type filters

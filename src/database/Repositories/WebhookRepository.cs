@@ -39,7 +39,7 @@ public partial class DatabaseRepository : IWebhookRepository
     public async Task<WebhookEndpoint?> GetWebhookByIdAsync(int webhookId, int tenantId, CancellationToken cancellationToken)
     {
         WebhookEndpoint? webhook = await _db.WebhookEndpoints
-            .FirstOrDefaultAsync(w => w.Id == webhookId && w.TenantId == tenantId, cancellationToken);
+            .FirstOrDefaultAsync(w => (w.Id == webhookId) && (w.TenantId == tenantId), cancellationToken);
 
         return webhook;
     }
@@ -93,7 +93,7 @@ public partial class DatabaseRepository : IWebhookRepository
     public async Task<int> DisableWebhooksForTenantAsync(int tenantId, CancellationToken cancellationToken)
     {
         int updated = await _db.WebhookEndpoints
-            .Where(w => w.TenantId == tenantId && w.IsEnabled == true)
+            .Where(w => (w.TenantId == tenantId) && (w.IsEnabled == true))
             .Set(w => w.IsEnabled, false)
             .UpdateAsync(cancellationToken);
 

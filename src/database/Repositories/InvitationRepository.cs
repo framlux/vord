@@ -72,6 +72,7 @@ public partial class DatabaseRepository : IInvitationRepository
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to retrieve invitation by token hash");
+            throw;
         }
 
         return invitation;
@@ -106,6 +107,7 @@ public partial class DatabaseRepository : IInvitationRepository
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to retrieve invitations for tenant {TenantId}", tenantId);
+            throw;
         }
 
         return invitations;
@@ -122,14 +124,15 @@ public partial class DatabaseRepository : IInvitationRepository
         {
             _logger.LogDebug("Checking for pending invitation for email {Email} in tenant {TenantId}", MaskEmail(email), tenantId);
             invitation = await _db.TenantInvitations
-                .Where(i => i.Email == email &&
-                             i.TenantId == tenantId &&
-                             i.Status == InvitationStatus.Pending)
+                .Where(i => (i.Email == email) &&
+                             (i.TenantId == tenantId) &&
+                             (i.Status == InvitationStatus.Pending))
                 .FirstOrDefaultAsync(cancellationToken);
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to check for pending invitation for email {Email} in tenant {TenantId}", MaskEmail(email), tenantId);
+            throw;
         }
 
         return invitation;
@@ -184,64 +187,6 @@ public partial class DatabaseRepository : IInvitationRepository
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to revoke invitation {InvitationId}", invitationId);
-            throw;
-        }
-    }
-
-    /// <inheritdoc/>
-    public async Task<UserAccount?> GetUserByEmailAsync(string email, CancellationToken cancellationToken)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(email);
-
-        UserAccount? user = await _db.UserAccounts
-            .Where(u => u.Username.ToLower() == email.ToLower() && u.IsActive)
-            .FirstOrDefaultAsync(cancellationToken);
-
-        return user;
-    }
-
-    /// <inheritdoc/>
-    public async Task<IEnumerable<UserTenantRole>> GetMembersForTenantAsync(int tenantId, CancellationToken cancellationToken)
-    {
-        List<UserTenantRole> roles = await (from utr in _db.UserTenantRoles
-                join ua in _db.UserAccounts on utr.UserId equals ua.Id
-                where utr.AssignedTenantId == tenantId && utr.IsActive && ua.IsActive
-                select new UserTenantRole
-                {
-                    UserId = utr.UserId,
-                    User = ua,
-                    AssignedTenantId = utr.AssignedTenantId,
-                    Role = utr.Role,
-                    AssignedByUserId = utr.AssignedByUserId,
-                    AssignedAt = utr.AssignedAt,
-                    IsActive = utr.IsActive,
-                }).ToListAsync(cancellationToken);
-
-        return roles;
-    }
-
-    /// <inheritdoc/>
-    public async Task<bool> DisableUserTenantRoleAsync(int userId, int tenantId, int disabledByUserId, CancellationToken cancellationToken)
-    {
-        try
-        {
-            _logger.LogDebug("Disabling UserTenantRole for user {UserId} in tenant {TenantId}", userId, tenantId);
-            int affected = await _db.UserTenantRoles
-                .Where(utr => utr.UserId == userId &&
-                               utr.AssignedTenantId == tenantId &&
-                               utr.IsActive)
-                .Set(utr => utr.IsActive, false)
-                .Set(utr => utr.DisabledByUserId, disabledByUserId)
-                .Set(utr => utr.DisabledAt, DateTimeOffset.UtcNow)
-                .UpdateAsync(cancellationToken);
-
-            _logger.LogInformation("Disabled {Count} UserTenantRole(s) for user {UserId} in tenant {TenantId}", affected, userId, tenantId);
-
-            return affected > 0;
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Failed to disable UserTenantRole for user {UserId} in tenant {TenantId}", userId, tenantId);
             throw;
         }
     }

@@ -63,11 +63,11 @@ public partial class DatabaseRepository : IMachineRepository
             // pass pre-lowered values for SerialNumber and SystemId.
             _logger.LogDebug("Searching for active Machine with Serial Number {SerialNumber}, System ID {SystemId}, or Asset Tag {AssetTag} in tenant {TenantId}", serialNumber, systemId, assetTag, tenantId);
             IQueryable<Machine> query = _db.Machines.Where(m =>
-                m.TenantId == tenantId &&
-                m.IsDeleted == false &&
-                (m.SerialNumber == serialNumber ||
-                m.SystemId == systemId ||
-                (string.IsNullOrEmpty(assetTag) == false && m.AssetTagNumber == assetTag)));
+                (m.TenantId == tenantId) &&
+                (m.IsDeleted == false) &&
+                ((m.SerialNumber == serialNumber) ||
+                (m.SystemId == systemId) ||
+                (string.IsNullOrEmpty(assetTag) == false && (m.AssetTagNumber == assetTag))));
 
             exists = await query.AnyAsync(cancellationToken);
             _logger.LogInformation("Active Machine query for Serial Number {SerialNumber}, System ID {SystemId}, or Asset Tag {AssetTag}: {FoundResult}", serialNumber, systemId, assetTag, exists);
@@ -100,7 +100,7 @@ public partial class DatabaseRepository : IMachineRepository
             if (machineLimit.HasValue)
             {
                 int activeMachineCount = await _db.Machines
-                    .Where(m => m.TenantId == machine.TenantId && m.IsDeleted == false)
+                    .Where(m => (m.TenantId == machine.TenantId) && (m.IsDeleted == false))
                     .CountAsync(cancellationToken);
 
                 if (activeMachineCount >= machineLimit.Value)
@@ -210,7 +210,7 @@ public partial class DatabaseRepository : IMachineRepository
     public async Task<int> SoftDeleteMachineAsync(long machineId, int tenantId, int userId, CancellationToken cancellationToken)
     {
         int updated = await _db.Machines
-            .Where(m => m.Id == machineId && m.TenantId == tenantId && m.IsDeleted == false)
+            .Where(m => (m.Id == machineId) && (m.TenantId == tenantId) && (m.IsDeleted == false))
             .Set(m => m.IsDeleted, true)
             .Set(m => m.DeletedOn, DateTimeOffset.UtcNow)
             .Set(m => m.DeletedByUserId, userId)
@@ -223,7 +223,7 @@ public partial class DatabaseRepository : IMachineRepository
     public async Task<int> GetActiveMachineCountAsync(int tenantId, CancellationToken cancellationToken)
     {
         int count = await _db.Machines
-            .Where(m => m.TenantId == tenantId && m.IsDeleted == false)
+            .Where(m => (m.TenantId == tenantId) && (m.IsDeleted == false))
             .CountAsync(cancellationToken);
 
         return count;
@@ -233,7 +233,7 @@ public partial class DatabaseRepository : IMachineRepository
     public async Task<Machine?> GetActiveMachineByIdAsync(long machineId, int tenantId, CancellationToken cancellationToken)
     {
         Machine? machine = await _db.Machines
-            .FirstOrDefaultAsync(m => m.Id == machineId && m.TenantId == tenantId && m.IsDeleted == false, cancellationToken);
+            .FirstOrDefaultAsync(m => (m.Id == machineId) && (m.TenantId == tenantId) && (m.IsDeleted == false), cancellationToken);
 
         return machine;
     }
@@ -253,7 +253,7 @@ public partial class DatabaseRepository : IMachineRepository
     public async Task<List<long>> GetActiveMachineIdsForTenantAsync(int tenantId, CancellationToken cancellationToken)
     {
         List<long> ids = await _db.Machines
-            .Where(m => m.TenantId == tenantId && m.IsDeleted == false)
+            .Where(m => (m.TenantId == tenantId) && (m.IsDeleted == false))
             .Select(m => m.Id)
             .ToListAsync(cancellationToken);
 
@@ -274,9 +274,9 @@ public partial class DatabaseRepository : IMachineRepository
     public async Task<int> GetMachineCountAtDateAsync(int tenantId, DateTimeOffset targetDate, CancellationToken cancellationToken)
     {
         int count = await _db.Machines
-            .Where(m => m.TenantId == tenantId
-                && m.RegisteredOn <= targetDate
-                && (m.IsDeleted == false || m.DeletedOn > targetDate))
+            .Where(m => (m.TenantId == tenantId) &&
+                (m.RegisteredOn <= targetDate) &&
+                ((m.IsDeleted == false) || (m.DeletedOn > targetDate)))
             .CountAsync(cancellationToken);
 
         return count;
@@ -286,7 +286,7 @@ public partial class DatabaseRepository : IMachineRepository
     public async Task<Dictionary<long, string>> GetMachineNameMapForTenantAsync(int tenantId, CancellationToken cancellationToken)
     {
         Dictionary<long, string> nameMap = await _db.Machines
-            .Where(m => m.TenantId == tenantId && m.IsDeleted == false)
+            .Where(m => (m.TenantId == tenantId) && (m.IsDeleted == false))
             .ToDictionaryAsync(m => m.Id, m => m.Name, cancellationToken);
 
         return nameMap;
@@ -296,7 +296,7 @@ public partial class DatabaseRepository : IMachineRepository
     public async Task<List<Machine>> ListActiveMachinesForTenantAsync(int tenantId, CancellationToken cancellationToken)
     {
         List<Machine> machines = await _db.Machines
-            .Where(m => m.TenantId == tenantId && m.IsDeleted == false)
+            .Where(m => (m.TenantId == tenantId) && (m.IsDeleted == false))
             .ToListAsync(cancellationToken);
 
         return machines;
@@ -359,7 +359,7 @@ public partial class DatabaseRepository : IMachineRepository
         MachineTypes? typeFilter)
     {
         IQueryable<Machine> query = _db.Machines
-            .Where(m => m.TenantId == tenantId && m.IsDeleted == false);
+            .Where(m => (m.TenantId == tenantId) && (m.IsDeleted == false));
 
         if (string.IsNullOrWhiteSpace(search) == false)
         {

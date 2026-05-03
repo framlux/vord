@@ -6,12 +6,34 @@ using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using LinqToDB;
 using LinqToDB.Async;
+using Microsoft.Extensions.Logging;
 
 namespace Framlux.FleetManagement.Database.Repositories;
 
 /// <inheritdoc/>
 public partial class DatabaseRepository : ISubscriptionRepository
 {
+    /// <inheritdoc/>
+    public async Task<TenantSubscription> CreateTenantSubscriptionAsync(TenantSubscription subscription, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(subscription);
+
+        try
+        {
+            _logger.LogDebug("Creating subscription for tenant {TenantId}", subscription.TenantId);
+            int newId = await _db.InsertWithInt32IdentityAsync(subscription, token: cancellationToken);
+            subscription.Id = newId;
+            _logger.LogInformation("Successfully created subscription {SubscriptionId} for tenant {TenantId}", newId, subscription.TenantId);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to create subscription for tenant {TenantId}", subscription.TenantId);
+            throw;
+        }
+
+        return subscription;
+    }
+
     /// <inheritdoc/>
     public async Task UpdateSubscriptionOnCheckoutAsync(int tenantId, SubscriptionTier tier, int? alertRuleLimit, int? webhookLimit, CancellationToken cancellationToken)
     {

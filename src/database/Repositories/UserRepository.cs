@@ -237,4 +237,16 @@ public partial class DatabaseRepository : IUserRepository
 
         return (users, totalCount);
     }
+
+    /// <inheritdoc/>
+    public async Task<UserAccount?> GetUserByEmailAsync(string email, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(email);
+
+        UserAccount? user = await _db.UserAccounts
+            .Where(u => (u.Username.ToLower() == email.ToLower()) && (u.IsActive == true))
+            .FirstOrDefaultAsync(cancellationToken);
+
+        return user;
+    }
 }
