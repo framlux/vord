@@ -113,4 +113,14 @@ public sealed class DatabaseContext(DataOptions<DatabaseContext> options) : Data
     /// Represents the collection of machine authorized key records in the database.
     /// </summary>
     public ITable<MachineAuthorizedKey> MachineAuthorizedKeys => this.GetTable<MachineAuthorizedKey>();
+
+    /// <summary>
+    /// Represents the collection of tier feature limit configurations.
+    /// </summary>
+    public ITable<TierFeatureLimit> TierFeatureLimits => this.GetTable<TierFeatureLimit>();
+
+    /// <summary>
+    /// Represents the collection of per-tenant subscription limit overrides.
+    /// </summary>
+    public ITable<TenantSubscriptionOverride> TenantSubscriptionOverrides => this.GetTable<TenantSubscriptionOverride>();
 }
