@@ -61,7 +61,6 @@ public sealed class UsageHeartbeatServiceTests
             TenantId = tenantId,
             Tier = tier,
             Status = SubscriptionStatus.Active,
-            RetentionDays = 30,
             CreatedAt = DateTimeOffset.UtcNow,
             UpdatedAt = DateTimeOffset.UtcNow,
         };

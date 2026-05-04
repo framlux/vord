@@ -4,6 +4,7 @@
 
 using Framlux.FleetManagement.Database;
 using Framlux.FleetManagement.Database.Enums;
+using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Server.Services.Infrastructure;
 using Framlux.FleetManagement.Test.Infrastructure;
 using LinqToDB;
@@ -353,14 +354,24 @@ public class PartitionManagementServiceTests
     [Test]
     public async Task DropExpiredPartitions_DropsOldPartitions_KeepsRecentOnes()
     {
-        // Arrange: create a database with a Free-tier subscription (1-day retention)
+        // Arrange: create a database with a Free-tier subscription and TierFeatureLimits (1-day retention)
         using TestDatabaseFactory dbFactory = new();
         DatabaseContext db = dbFactory.Context;
 
         await db.InsertAsync(TestDataBuilder.BuildSubscription(
             tenantId: 1,
-            tier: SubscriptionTier.Free,
-            retentionDays: 1));
+            tier: SubscriptionTier.Free));
+
+        // Seed TierFeatureLimits so PartitionManagementService can determine max retention
+        await db.InsertAsync(new TierFeatureLimit
+        {
+            Tier = SubscriptionTier.Free,
+            MachineLimit = 3,
+            RetentionDays = 1,
+            AlertRuleLimit = 0,
+            WebhookLimit = 0,
+            UpdatedAt = DateTimeOffset.UtcNow,
+        });
 
         // Create fake partition tables at specific dates.
         // With RetentionDays=1 and DropBufferDays=2, the cutoff is today - 3.
@@ -438,8 +449,18 @@ public class PartitionManagementServiceTests
 
         await db.InsertAsync(TestDataBuilder.BuildSubscription(
             tenantId: 1,
-            tier: SubscriptionTier.Pro,
-            retentionDays: 30));
+            tier: SubscriptionTier.Pro));
+
+        // Seed TierFeatureLimits so PartitionManagementService can determine max retention
+        await db.InsertAsync(new TierFeatureLimit
+        {
+            Tier = SubscriptionTier.Pro,
+            MachineLimit = null,
+            RetentionDays = 30,
+            AlertRuleLimit = 25,
+            WebhookLimit = 5,
+            UpdatedAt = DateTimeOffset.UtcNow,
+        });
 
         DateOnly today = DateOnly.FromDateTime(DateTimeOffset.UtcNow.UtcDateTime);
         int retentionPlusBuffer = 30 + PartitionManagementService.DropBufferDays;

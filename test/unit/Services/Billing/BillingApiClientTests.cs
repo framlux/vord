@@ -6,8 +6,8 @@ using Framlux.FleetManagement.Server.Services.Billing;
 using Framlux.Vord.BillingGrpc;
 using Grpc.Core;
 using Microsoft.Extensions.Logging;
-using NSubstitute.ExceptionExtensions;
 using NSubstitute;
+using NSubstitute.ExceptionExtensions;
 
 namespace Framlux.FleetManagement.Test.Services;
 

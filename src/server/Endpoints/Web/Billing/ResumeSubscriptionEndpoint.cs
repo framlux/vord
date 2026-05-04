@@ -25,12 +25,11 @@ public sealed class ResumeSubscriptionResponse
 
 /// <summary>
 /// Resumes a subscription that was set to cancel or downgrade at the end of the billing period.
-/// Clears the CancelAtPeriodEnd flag and PendingAction, and tells Stripe to remove cancel_at_period_end.
+/// Tells the billing-api to remove cancel_at_period_end from Stripe and clear pending actions.
 /// </summary>
 public sealed class ResumeSubscriptionEndpoint : EndpointWithoutRequest<ApiResponse<ResumeSubscriptionResponse>>
 {
     private readonly IBillingStatus _billingStatus;
-    private readonly ISubscriptionRepository _subscriptionRepository;
     private readonly ITenantRepository _tenantRepository;
     private readonly ISubscriptionService _subscriptionService;
     private readonly IBillingApiClient _billingApiClient;
@@ -41,14 +40,12 @@ public sealed class ResumeSubscriptionEndpoint : EndpointWithoutRequest<ApiRespo
     /// </summary>
     public ResumeSubscriptionEndpoint(
         IBillingStatus billingStatus,
-        ISubscriptionRepository subscriptionRepository,
         ITenantRepository tenantRepository,
         ISubscriptionService subscriptionService,
         IBillingApiClient billingApiClient,
         ILogger<ResumeSubscriptionEndpoint> logger)
     {
         _billingStatus = billingStatus;
-        _subscriptionRepository = subscriptionRepository;
         _tenantRepository = tenantRepository;
         _subscriptionService = subscriptionService;
         _billingApiClient = billingApiClient;
@@ -101,7 +98,17 @@ public sealed class ResumeSubscriptionEndpoint : EndpointWithoutRequest<ApiRespo
             return;
         }
 
-        if (subscription.CancelAtPeriodEnd == false)
+        Tenant? tenant = await _tenantRepository.GetTenantByIdAsync(tenantId.Value, ct);
+        if (tenant is null)
+        {
+            await Send.NotFoundAsync(ct);
+
+            return;
+        }
+
+        // Check if the subscription is actually pending cancellation in Stripe
+        StripeSubscriptionStatus stripeStatus = await _billingApiClient.GetSubscriptionStatusAsync(tenant.ExternalId, ct);
+        if (stripeStatus.CancelAtPeriodEnd == false)
         {
             await Send.OkAsync(ApiResponse<ResumeSubscriptionResponse>.Ok(new ResumeSubscriptionResponse
             {
@@ -112,23 +119,16 @@ public sealed class ResumeSubscriptionEndpoint : EndpointWithoutRequest<ApiRespo
             return;
         }
 
-        // Clear the local cancellation/downgrade intent
-        await _subscriptionRepository.SetCancelAtPeriodEndAsync(tenantId.Value, false, PendingSubscriptionAction.None, ct);
-
-        // Tell Stripe to remove cancel_at_period_end (best effort)
-        Tenant? tenant = await _tenantRepository.GetTenantByIdAsync(tenantId.Value, ct);
-        if (tenant is not null)
+        // Tell billing-api to remove cancel_at_period_end from Stripe and clear pending actions
+        bool success = await _billingApiClient.ResumeSubscriptionAsync(tenant.ExternalId, ct);
+        if (success == false)
         {
-            try
-            {
-                await _billingApiClient.ResumeSubscriptionAsync(tenant.ExternalId, ct);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex,
-                    "Failed to resume subscription with Stripe for tenant {TenantId}",
-                    tenantId.Value);
-            }
+            _logger.LogWarning("Failed to resume subscription with billing-api for tenant {TenantId}", tenantId.Value);
+            HttpContext.Response.StatusCode = 502;
+            await HttpContext.Response.WriteAsJsonAsync(
+                ApiResponse<ResumeSubscriptionResponse>.Error("Failed to resume subscription. Please try again."), ct);
+
+            return;
         }
 
         await Send.OkAsync(ApiResponse<ResumeSubscriptionResponse>.Ok(new ResumeSubscriptionResponse

@@ -209,14 +209,20 @@ public sealed class FleetAdminServiceTests
             TenantId = 5,
             Tier = SubscriptionTier.Pro,
             Status = SubscriptionStatus.Active,
-            MachineLimit = 50,
-            RetentionDays = 30,
-            CancelAtPeriodEnd = false,
+
             CreatedAt = DateTimeOffset.UtcNow,
             UpdatedAt = DateTimeOffset.UtcNow
         };
 
-        FleetTenant result = FleetAdminService.MapToFleetTenant(tenant, 10, 3, subscription);
+        TierFeatureLimit tierLimits = new TierFeatureLimit
+        {
+            Tier = SubscriptionTier.Pro,
+            MachineLimit = 50,
+            RetentionDays = 30,
+            UpdatedAt = DateTimeOffset.UtcNow
+        };
+
+        FleetTenant result = FleetAdminService.MapToFleetTenant(tenant, 10, 3, subscription, tierLimits);
 
         await Assert.That(result.Id).IsEqualTo(5);
         await Assert.That(result.ExternalId).IsEqualTo("ext-t5");
@@ -259,9 +265,7 @@ public sealed class FleetAdminServiceTests
             TenantId = 1,
             Tier = SubscriptionTier.Team,
             Status = SubscriptionStatus.Active,
-            MachineLimit = null,
-            RetentionDays = 365,
-            CancelAtPeriodEnd = false,
+
             CreatedAt = DateTimeOffset.UtcNow,
             UpdatedAt = DateTimeOffset.UtcNow
         };
@@ -280,9 +284,8 @@ public sealed class FleetAdminServiceTests
             TenantId = 1,
             Tier = SubscriptionTier.Pro,
             Status = SubscriptionStatus.Active,
-            RetentionDays = 30,
             CurrentPeriodEnd = periodEnd,
-            CancelAtPeriodEnd = true,
+
             CreatedAt = DateTimeOffset.UtcNow,
             UpdatedAt = DateTimeOffset.UtcNow
         };
@@ -290,7 +293,7 @@ public sealed class FleetAdminServiceTests
         FleetTenantSubscription result = FleetAdminService.MapSubscription(subscription);
 
         await Assert.That(result.CurrentPeriodEnd).IsNotNull();
-        await Assert.That(result.CancelAtPeriodEnd).IsTrue();
+
     }
 
     [Test]
@@ -301,9 +304,8 @@ public sealed class FleetAdminServiceTests
             TenantId = 1,
             Tier = SubscriptionTier.Free,
             Status = SubscriptionStatus.Active,
-            RetentionDays = 1,
             CurrentPeriodEnd = null,
-            CancelAtPeriodEnd = false,
+
             CreatedAt = DateTimeOffset.UtcNow,
             UpdatedAt = DateTimeOffset.UtcNow
         };

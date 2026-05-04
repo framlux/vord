@@ -26,13 +26,11 @@ public sealed class CancelSubscriptionResponse
 
 /// <summary>
 /// Cancels the tenant's subscription at the end of the current billing period.
-/// Records the cancellation intent locally first, then attempts to cancel with Stripe via gRPC.
-/// The intent-first approach ensures cancellation is eventually processed even if the gRPC call fails.
+/// Delegates cancellation to the billing-api which manages Stripe state and pending actions.
 /// </summary>
 public sealed class CancelSubscriptionEndpoint : EndpointWithoutRequest<ApiResponse<CancelSubscriptionResponse>>
 {
     private readonly IBillingStatus _billingStatus;
-    private readonly IDatabaseTransactionProvider _transactionProvider;
     private readonly IAuditLogRepository _auditLog;
     private readonly ISubscriptionRepository _subscriptionRepository;
     private readonly ITenantRepository _tenantRepository;
@@ -45,7 +43,6 @@ public sealed class CancelSubscriptionEndpoint : EndpointWithoutRequest<ApiRespo
     /// </summary>
     public CancelSubscriptionEndpoint(
         IBillingStatus billingStatus,
-        IDatabaseTransactionProvider transactionProvider,
         IAuditLogRepository auditLog,
         ISubscriptionRepository subscriptionRepository,
         ITenantRepository tenantRepository,
@@ -54,7 +51,6 @@ public sealed class CancelSubscriptionEndpoint : EndpointWithoutRequest<ApiRespo
         ILogger<CancelSubscriptionEndpoint> logger)
     {
         _billingStatus = billingStatus;
-        _transactionProvider = transactionProvider;
         _auditLog = auditLog;
         _subscriptionRepository = subscriptionRepository;
         _tenantRepository = tenantRepository;
@@ -109,30 +105,15 @@ public sealed class CancelSubscriptionEndpoint : EndpointWithoutRequest<ApiRespo
             return;
         }
 
-        if (subscription.CancelAtPeriodEnd && (subscription.PendingAction == PendingSubscriptionAction.CancelAccount))
-        {
-            await Send.OkAsync(ApiResponse<CancelSubscriptionResponse>.Ok(new CancelSubscriptionResponse
-            {
-                Success = true,
-                Message = "Subscription is already set to cancel at the end of the billing period."
-            }), cancellation: ct);
-
-            return;
-        }
-
         // Free tier cancellation takes effect immediately since there is no Stripe subscription
         if (subscription.Tier == SubscriptionTier.Free)
         {
-            using IDatabaseTransaction freeTransaction = await _transactionProvider.BeginTransactionAsync(ct);
-
             await _subscriptionRepository.DeactivateSubscriptionAsync(tenantId.Value, ct);
 
             await _auditLog.InsertAuditLogAsync(AuditHelper.Create(
                 tenantId.Value, null, null,
                 AuditAction.SubscriptionCancelRequested, AuditResourceType.Subscription,
                 tenantId.Value.ToString(), "Free tier account canceled immediately", null), ct);
-
-            await freeTransaction.CommitAsync(ct);
 
             await Send.OkAsync(ApiResponse<CancelSubscriptionResponse>.Ok(new CancelSubscriptionResponse
             {
@@ -143,34 +124,43 @@ public sealed class CancelSubscriptionEndpoint : EndpointWithoutRequest<ApiRespo
             return;
         }
 
-        using IDatabaseTransaction paidTransaction = await _transactionProvider.BeginTransactionAsync(ct);
+        // For paid tiers, delegate cancellation to the billing-api which manages Stripe state
+        Tenant? tenant = await _tenantRepository.GetTenantByIdAsync(tenantId.Value, ct);
+        if (tenant is null)
+        {
+            await Send.NotFoundAsync(ct);
 
-        // For paid tiers, record the cancellation intent in the local database first
-        await _subscriptionRepository.SetCancelAtPeriodEndAsync(tenantId.Value, true, PendingSubscriptionAction.CancelAccount, ct);
+            return;
+        }
+
+        // Check if Stripe already reflects a pending cancellation
+        StripeSubscriptionStatus stripeStatus = await _billingApiClient.GetSubscriptionStatusAsync(tenant.ExternalId, ct);
+        if (stripeStatus.CancelAtPeriodEnd)
+        {
+            await Send.OkAsync(ApiResponse<CancelSubscriptionResponse>.Ok(new CancelSubscriptionResponse
+            {
+                Success = true,
+                Message = "Subscription is already set to cancel at the end of the billing period."
+            }), cancellation: ct);
+
+            return;
+        }
+
+        bool success = await _billingApiClient.CancelSubscriptionAsync(tenant.ExternalId, PendingActions.CancelAccount, ct);
+        if (success == false)
+        {
+            _logger.LogWarning("Failed to cancel subscription with billing-api for tenant {TenantId}", tenantId.Value);
+            HttpContext.Response.StatusCode = 502;
+            await HttpContext.Response.WriteAsJsonAsync(
+                ApiResponse<CancelSubscriptionResponse>.Error("Failed to process cancellation. Please try again."), ct);
+
+            return;
+        }
 
         await _auditLog.InsertAuditLogAsync(AuditHelper.Create(
             tenantId.Value, null, null,
             AuditAction.SubscriptionCancelRequested, AuditResourceType.Subscription,
             tenantId.Value.ToString(), null, null), ct);
-
-        await paidTransaction.CommitAsync(ct);
-
-        // Attempt to cancel with Stripe via the billing API (best effort)
-        Tenant? tenant = await _tenantRepository.GetTenantByIdAsync(tenantId.Value, ct);
-        if (tenant is not null)
-        {
-            try
-            {
-                await _billingApiClient.CancelSubscriptionAsync(tenant.ExternalId, "CancelAccount", ct);
-            }
-            catch (Exception ex)
-            {
-                // The reconciliation service will retry this
-                _logger.LogWarning(ex,
-                    "Failed to cancel subscription with Stripe for tenant {TenantId}, reconciliation will retry",
-                    tenantId.Value);
-            }
-        }
 
         await Send.OkAsync(ApiResponse<CancelSubscriptionResponse>.Ok(new CancelSubscriptionResponse
         {

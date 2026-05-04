@@ -45,42 +45,10 @@ public sealed class TenantSubscription
     public required SubscriptionStatus Status { get; set; }
 
     /// <summary>
-    /// The maximum number of machines allowed, null for unlimited.
-    /// </summary>
-    [Column("MachineLimit"), Nullable]
-    public int? MachineLimit { get; set; }
-
-    /// <summary>
-    /// The number of days telemetry data is retained.
-    /// </summary>
-    [Column("RetentionDays"), NotNull]
-    public required int RetentionDays { get; set; }
-
-    /// <summary>Maximum number of alert rules allowed for this tenant. Null means unlimited.</summary>
-    [Column("AlertRuleLimit"), Nullable]
-    public int? AlertRuleLimit { get; set; }
-
-    /// <summary>Maximum number of webhook endpoints allowed for this tenant. Null means unlimited.</summary>
-    [Column("WebhookLimit"), Nullable]
-    public int? WebhookLimit { get; set; }
-
-    /// <summary>
     /// The end of the current billing period from Stripe.
     /// </summary>
     [Column("CurrentPeriodEnd"), Nullable]
     public DateTimeOffset? CurrentPeriodEnd { get; set; }
-
-    /// <summary>
-    /// Whether the subscription is set to cancel at the end of the current billing period.
-    /// </summary>
-    [Column("CancelAtPeriodEnd"), NotNull]
-    public bool CancelAtPeriodEnd { get; set; }
-
-    /// <summary>
-    /// The action to perform when the subscription's current billing period ends.
-    /// </summary>
-    [Column("PendingAction"), NotNull]
-    public PendingSubscriptionAction PendingAction { get; set; }
 
     /// <summary>
     /// When the subscription was created.

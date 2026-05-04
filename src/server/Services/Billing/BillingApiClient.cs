@@ -146,12 +146,15 @@ public sealed class BillingApiClient : IBillingApiClient
             ? response.CurrentPeriodEnd.ToDateTimeOffset()
             : null;
 
+        string? tier = string.IsNullOrEmpty(response.Tier) == false ? response.Tier : null;
+
         return new StripeSubscriptionStatus(
             response.CancelAtPeriodEnd,
             response.StripeStatus,
             response.PriceId,
             response.Quantity,
-            currentPeriodEnd);
+            currentPeriodEnd,
+            tier);
     }
 
     /// <inheritdoc/>
@@ -242,6 +245,11 @@ public sealed class BillingApiClient : IBillingApiClient
                 l.PeriodEnd?.ToDateTimeOffset(),
                 l.Proration)).ToList();
 
+            // Sum negative line items to determine discount amount
+            long discountAmountCents = Math.Abs(lines
+                .Where(l => l.AmountCents < 0)
+                .Sum(l => l.AmountCents));
+
             return new UpcomingInvoiceResult(
                 response.AmountDueCents,
                 response.Currency,
@@ -249,6 +257,7 @@ public sealed class BillingApiClient : IBillingApiClient
                 response.PeriodEnd?.ToDateTimeOffset(),
                 response.NextPaymentAttempt?.ToDateTimeOffset(),
                 response.UnitAmountCents,
+                discountAmountCents,
                 lines);
         }
         catch (Exception ex)

@@ -36,7 +36,6 @@ public sealed class MachineManagementEndpointTests
             TenantId = tenant.Id,
             Tier = SubscriptionTier.Pro,
             Status = SubscriptionStatus.Active,
-            RetentionDays = 30,
             CreatedAt = DateTimeOffset.UtcNow,
             UpdatedAt = DateTimeOffset.UtcNow,
         };

@@ -69,11 +69,6 @@ builder.Services.AddOptions<BillingOptions>()
     .ValidateOnStart();
 builder.Services.AddSingleton<IValidateOptions<BillingOptions>, BillingOptionsValidator>();
 
-builder.Services.AddOptions<SubscriptionOptions>()
-    .Bind(builder.Configuration.GetSection("Subscription"))
-    .ValidateDataAnnotations()
-    .ValidateOnStart();
-
 builder.Services.AddOptions<DatabaseOptions>()
     .Bind(builder.Configuration.GetSection("Database"))
     .ValidateDataAnnotations()
@@ -323,6 +318,8 @@ builder.Services.AddScoped<IDataExportRepository>(sp => sp.GetRequiredService<Da
 builder.Services.AddScoped<IRegistrationTokenRepository>(sp => sp.GetRequiredService<DatabaseRepository>());
 builder.Services.AddScoped<IMachineStateRepository>(sp => sp.GetRequiredService<DatabaseRepository>());
 builder.Services.AddScoped<IServerConfigurationRepository>(sp => sp.GetRequiredService<DatabaseRepository>());
+builder.Services.AddScoped<ITierFeatureLimitRepository>(sp => sp.GetRequiredService<DatabaseRepository>());
+builder.Services.AddScoped<ITenantSubscriptionOverrideRepository>(sp => sp.GetRequiredService<DatabaseRepository>());
 builder.Services.AddSingleton<IServerSettingsCache, ServerSettingsCache>();
 
 builder.Services.AddSingleton<IMachineService, MachineService>()

@@ -348,8 +348,6 @@ public sealed class TelemetryPipelineTests
             TenantId = tenantId,
             Tier = SubscriptionTier.Free,
             Status = SubscriptionStatus.Active,
-            MachineLimit = 10,
-            RetentionDays = 7,
             CreatedAt = DateTimeOffset.UtcNow,
             UpdatedAt = DateTimeOffset.UtcNow
         };

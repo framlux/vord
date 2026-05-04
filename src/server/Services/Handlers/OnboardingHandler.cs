@@ -5,10 +5,8 @@
 using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
-using Framlux.FleetManagement.Server.Options;
 using Framlux.FleetManagement.Server.Services.Infrastructure;
 using Framlux.FleetManagement.Server.Services.Security;
-using Microsoft.Extensions.Options;
 
 namespace Framlux.FleetManagement.Server.Services.Handlers;
 
@@ -21,7 +19,6 @@ public sealed class OnboardingHandler : IOnboardingHandler
     private readonly ITenantRepository _tenantRepository;
     private readonly ISubscriptionRepository _subscriptionRepository;
     private readonly IAuditLogRepository _auditLog;
-    private readonly SubscriptionOptions _subscriptionOptions;
     private readonly IRoleCacheInvalidator _roleCacheInvalidator;
 
     /// <summary>
@@ -31,28 +28,24 @@ public sealed class OnboardingHandler : IOnboardingHandler
     /// <param name="tenantRepository">The tenant repository.</param>
     /// <param name="subscriptionRepository">The subscription repository.</param>
     /// <param name="auditLog">The audit log repository.</param>
-    /// <param name="subscriptionOptions">The subscription tier configuration.</param>
     /// <param name="roleCacheInvalidator">The role cache invalidator.</param>
     public OnboardingHandler(
         IDatabaseTransactionProvider transactionProvider,
         ITenantRepository tenantRepository,
         ISubscriptionRepository subscriptionRepository,
         IAuditLogRepository auditLog,
-        IOptions<SubscriptionOptions> subscriptionOptions,
         IRoleCacheInvalidator roleCacheInvalidator)
     {
         ArgumentNullException.ThrowIfNull(transactionProvider);
         ArgumentNullException.ThrowIfNull(tenantRepository);
         ArgumentNullException.ThrowIfNull(subscriptionRepository);
         ArgumentNullException.ThrowIfNull(auditLog);
-        ArgumentNullException.ThrowIfNull(subscriptionOptions);
         ArgumentNullException.ThrowIfNull(roleCacheInvalidator);
 
         _transactionProvider = transactionProvider;
         _tenantRepository = tenantRepository;
         _subscriptionRepository = subscriptionRepository;
         _auditLog = auditLog;
-        _subscriptionOptions = subscriptionOptions.Value;
         _roleCacheInvalidator = roleCacheInvalidator;
     }
 
@@ -122,8 +115,6 @@ public sealed class OnboardingHandler : IOnboardingHandler
             TenantId = tenant.Id,
             Tier = SubscriptionTier.Free,
             Status = SubscriptionStatus.Active,
-            MachineLimit = _subscriptionOptions.FreeTierMachineLimit,
-            RetentionDays = _subscriptionOptions.FreeTierRetentionDays,
             CreatedAt = now,
             UpdatedAt = now,
         };

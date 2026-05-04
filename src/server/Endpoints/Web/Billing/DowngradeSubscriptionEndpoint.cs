@@ -7,10 +7,8 @@ using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Server.Auth;
-using Framlux.FleetManagement.Server.Options;
 using Framlux.FleetManagement.Server.Services.Billing;
 using Framlux.FleetManagement.Server.Services.Infrastructure;
-using Microsoft.Extensions.Options;
 
 namespace Framlux.FleetManagement.Server.Endpoints.Web.Billing;
 
@@ -50,7 +48,7 @@ public sealed class DowngradeSubscriptionEndpoint : Endpoint<DowngradeSubscripti
     private readonly IBillingApiClient _billingApiClient;
     private readonly IDowngradeGuardService _downgradeGuardService;
     private readonly IDowngradeCleanupService _downgradeCleanupService;
-    private readonly SubscriptionOptions _subscriptionOptions;
+    private readonly ITierFeatureLimitRepository _tierLimitRepo;
     private readonly ILogger<DowngradeSubscriptionEndpoint> _logger;
 
     /// <summary>
@@ -66,7 +64,7 @@ public sealed class DowngradeSubscriptionEndpoint : Endpoint<DowngradeSubscripti
         IBillingApiClient billingApiClient,
         IDowngradeGuardService downgradeGuardService,
         IDowngradeCleanupService downgradeCleanupService,
-        IOptions<SubscriptionOptions> subscriptionOptions,
+        ITierFeatureLimitRepository tierLimitRepo,
         ILogger<DowngradeSubscriptionEndpoint> logger)
     {
         _billingStatus = billingStatus;
@@ -78,7 +76,7 @@ public sealed class DowngradeSubscriptionEndpoint : Endpoint<DowngradeSubscripti
         _billingApiClient = billingApiClient;
         _downgradeGuardService = downgradeGuardService;
         _downgradeCleanupService = downgradeCleanupService;
-        _subscriptionOptions = subscriptionOptions.Value;
+        _tierLimitRepo = tierLimitRepo;
         _logger = logger;
     }
 
@@ -192,7 +190,7 @@ public sealed class DowngradeSubscriptionEndpoint : Endpoint<DowngradeSubscripti
         using IDatabaseTransaction transaction = await _transactionProvider.BeginTransactionAsync(ct);
 
         // Proactively update local subscription to avoid stale data before webhook arrives
-        await _subscriptionRepository.DowngradeSubscriptionToProAsync(tenantId, _subscriptionOptions.ProTierAlertRuleLimit, _subscriptionOptions.ProTierWebhookLimit, ct);
+        await _subscriptionRepository.DowngradeSubscriptionToProAsync(tenantId, ct);
 
         await _auditLog.InsertAuditLogAsync(AuditHelper.Create(
             tenantId, null, null,
@@ -231,7 +229,8 @@ public sealed class DowngradeSubscriptionEndpoint : Endpoint<DowngradeSubscripti
     {
         // Check that current machine count does not exceed Free tier limit
         int machineCount = await _subscriptionService.GetMachineCountForTenantAsync(tenantId, ct);
-        int freeTierLimit = _subscriptionOptions.FreeTierMachineLimit;
+        TierFeatureLimit? freeLimits = await _tierLimitRepo.GetLimitsForTierAsync(SubscriptionTier.Free, ct);
+        int freeTierLimit = freeLimits?.MachineLimit ?? 3;
         if (machineCount > freeTierLimit)
         {
             await SendErrorResponse(400,
@@ -241,33 +240,28 @@ public sealed class DowngradeSubscriptionEndpoint : Endpoint<DowngradeSubscripti
             return;
         }
 
-        using IDatabaseTransaction transaction = await _transactionProvider.BeginTransactionAsync(ct);
+        // Delegate cancellation to the billing-api which manages Stripe state and pending actions
+        Tenant? tenant = await _tenantRepository.GetTenantByIdAsync(tenantId, ct);
+        if (tenant is null)
+        {
+            await SendErrorResponse(404, "Tenant not found.", ct);
 
-        // Record the downgrade intent in the local database first
-        await _subscriptionRepository.SetCancelAtPeriodEndAsync(tenantId, true, PendingSubscriptionAction.DowngradeToFree, ct);
+            return;
+        }
+
+        bool success = await _billingApiClient.CancelSubscriptionAsync(tenant.ExternalId, PendingActions.DowngradeToFree, ct);
+        if (success == false)
+        {
+            _logger.LogWarning("Failed to cancel Stripe subscription for tenant {TenantId} during downgrade to Free", tenantId);
+            await SendErrorResponse(502, "Failed to process downgrade. Please try again.", ct);
+
+            return;
+        }
 
         await _auditLog.InsertAuditLogAsync(AuditHelper.Create(
             tenantId, null, null,
             AuditAction.SubscriptionDowngradeRequested, AuditResourceType.Subscription,
             tenantId.ToString(), "Downgrade to Free at period end", null), ct);
-
-        await transaction.CommitAsync(ct);
-
-        // Cancel the Stripe subscription at period end (best effort)
-        Tenant? tenant = await _tenantRepository.GetTenantByIdAsync(tenantId, ct);
-        if (tenant is not null)
-        {
-            try
-            {
-                await _billingApiClient.CancelSubscriptionAsync(tenant.ExternalId, "DowngradeToFree", ct);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex,
-                    "Failed to cancel Stripe subscription for tenant {TenantId} during downgrade to Free, reconciliation will retry",
-                    tenantId);
-            }
-        }
 
         await Send.OkAsync(ApiResponse<DowngradeSubscriptionResponse>.Ok(new DowngradeSubscriptionResponse
         {

@@ -38,7 +38,6 @@ public sealed class TenantEndpointTests
             TenantId = tenant.Id,
             Tier = SubscriptionTier.Pro,
             Status = SubscriptionStatus.Active,
-            RetentionDays = 30,
             CreatedAt = DateTimeOffset.UtcNow,
             UpdatedAt = DateTimeOffset.UtcNow,
         };

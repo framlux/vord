@@ -37,9 +37,6 @@ public sealed class SubscriptionDto
     /// <summary>Whether the subscription is set to cancel at the end of the billing period.</summary>
     public bool CancelAtPeriodEnd { get; set; }
 
-    /// <summary>The pending action that will occur at period end, if any.</summary>
-    public string? PendingAction { get; set; }
-
     /// <summary>Maximum alert rules allowed, null if unlimited.</summary>
     public int? AlertRuleLimit { get; set; }
 
@@ -61,6 +58,8 @@ public sealed class SubscriptionEndpoint : EndpointWithoutRequest<ApiResponse<Su
     private readonly ISubscriptionService _subscriptionService;
     private readonly IAlertRuleRepository _alertRuleRepo;
     private readonly IWebhookRepository _webhookRepo;
+    private readonly ITenantRepository _tenantRepository;
+    private readonly IBillingApiClient _billingApiClient;
 
     /// <summary>
     /// Creates a new instance of the <see cref="SubscriptionEndpoint"/> class.
@@ -68,11 +67,15 @@ public sealed class SubscriptionEndpoint : EndpointWithoutRequest<ApiResponse<Su
     public SubscriptionEndpoint(
         ISubscriptionService subscriptionService,
         IAlertRuleRepository alertRuleRepo,
-        IWebhookRepository webhookRepo)
+        IWebhookRepository webhookRepo,
+        ITenantRepository tenantRepository,
+        IBillingApiClient billingApiClient)
     {
         _subscriptionService = subscriptionService;
         _alertRuleRepo = alertRuleRepo;
         _webhookRepo = webhookRepo;
+        _tenantRepository = tenantRepository;
+        _billingApiClient = billingApiClient;
     }
 
     /// <inheritdoc/>
@@ -106,22 +109,32 @@ public sealed class SubscriptionEndpoint : EndpointWithoutRequest<ApiResponse<Su
         int machineCount = await _subscriptionService.GetMachineCountForTenantAsync(tenantId.Value, ct);
         int alertRuleCount = await _alertRuleRepo.CountAlertRulesForTenantAsync(tenantId.Value, ct);
         int webhookCount = await _webhookRepo.CountWebhooksForTenantAsync(tenantId.Value, ct);
+        EffectiveLimits limits = await _subscriptionService.GetEffectiveLimitsForTenantAsync(tenantId.Value, ct);
+
+        // Retrieve cancellation state from billing-api (source of truth for Stripe state)
+        bool cancelAtPeriodEnd = false;
+        if (subscription.Tier != SubscriptionTier.Free)
+        {
+            Tenant? tenant = await _tenantRepository.GetTenantByIdAsync(tenantId.Value, ct);
+            if (tenant is not null)
+            {
+                StripeSubscriptionStatus stripeStatus = await _billingApiClient.GetSubscriptionStatusAsync(tenant.ExternalId, ct);
+                cancelAtPeriodEnd = stripeStatus.CancelAtPeriodEnd;
+            }
+        }
 
         SubscriptionDto dto = new()
         {
             Tier = subscription.Tier.ToString(),
             Status = subscription.Status.ToString(),
-            MachineLimit = subscription.MachineLimit,
+            MachineLimit = limits.MachineLimit,
             MachineCount = machineCount,
-            RetentionDays = subscription.RetentionDays,
+            RetentionDays = limits.RetentionDays,
             CurrentPeriodEnd = subscription.CurrentPeriodEnd,
-            CancelAtPeriodEnd = subscription.CancelAtPeriodEnd,
-            PendingAction = subscription.PendingAction != PendingSubscriptionAction.None
-                ? subscription.PendingAction.ToString()
-                : null,
-            AlertRuleLimit = subscription.AlertRuleLimit,
+            CancelAtPeriodEnd = cancelAtPeriodEnd,
+            AlertRuleLimit = limits.AlertRuleLimit,
             AlertRuleCount = alertRuleCount,
-            WebhookLimit = subscription.WebhookLimit,
+            WebhookLimit = limits.WebhookLimit,
             WebhookCount = webhookCount,
         };
 

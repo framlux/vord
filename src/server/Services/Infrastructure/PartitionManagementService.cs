@@ -127,9 +127,9 @@ public sealed class PartitionManagementService : BackgroundService
 
     internal async Task DropExpiredPartitionsAsync(DatabaseContext db, CancellationToken ct)
     {
-        // Determine the oldest date we need to keep: max retention across all tenants + buffer days.
-        int? maxRetentionDays = await db.TenantSubscriptions
-            .MaxAsync(s => (int?)s.RetentionDays, ct);
+        // Determine the oldest date we need to keep: max retention across all tiers + buffer days.
+        int? maxRetentionDays = await db.TierFeatureLimits
+            .MaxAsync(l => (int?)l.RetentionDays, ct);
 
         if (maxRetentionDays is null)
         {

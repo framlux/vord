@@ -2,11 +2,13 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
-using FluentMigrator.Runner.Generators.SQLite;
-using FluentMigrator.Runner;
 using FluentMigrator;
-using Framlux.FleetManagement.Database.Migrations;
+using FluentMigrator.Runner;
+using FluentMigrator.Runner.Generators.SQLite;
 using Framlux.FleetManagement.Database;
+using Framlux.FleetManagement.Database.Enums;
+using Framlux.FleetManagement.Database.Migrations;
+using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Server.Auth;
 using Framlux.FleetManagement.Server.Services.Alerts;
 using Framlux.FleetManagement.Server.Services.Billing;
@@ -55,6 +57,15 @@ public class FunctionalTestFactory : WebApplicationFactory<Program>
     private string? _internalApiKey;
 
     /// <summary>
+    /// NSubstitute mock for <see cref="IBillingApiClient"/> that replaces the real
+    /// gRPC-based client in functional tests. Tests can configure return values on this
+    /// mock before making HTTP/gRPC requests.
+    /// Defaults match the behavior of <see cref="NoOpBillingApiClient"/>: all operations
+    /// succeed and subscription status shows no pending cancellation.
+    /// </summary>
+    public IBillingApiClient BillingApiClientMock { get; } = CreateDefaultBillingApiClientMock();
+
+    /// <summary>
     /// Creates a new functional test factory with an isolated in-memory SQLite database.
     /// </summary>
     public FunctionalTestFactory()
@@ -86,6 +97,7 @@ public class FunctionalTestFactory : WebApplicationFactory<Program>
         _dbConnection.Open();
         ApplyMigrations();
         DisableForeignKeys();
+        SeedTierFeatureLimits();
     }
 
     /// <summary>
@@ -181,6 +193,14 @@ public class FunctionalTestFactory : WebApplicationFactory<Program>
             RemoveHostedService<MachineStateStreamingService>(services);
             RemoveHostedService<PartitionManagementService>(services);
             RemoveHostedService<StripeSyncService>(services);
+            RemoveHostedService<UsageHeartbeatService>(services);
+
+            // Replace BillingApiClient with an NSubstitute mock.
+            // The real BillingApiClient requires a live billing gRPC endpoint
+            // which is not available in functional tests.
+            // Tests can configure specific mock behavior via BillingApiClientMock.
+            services.RemoveAll<IBillingApiClient>();
+            services.AddSingleton(BillingApiClientMock);
 
             // Replace object storage with a fake for tests
             services.RemoveAll<IObjectStorageService>();
@@ -287,6 +307,36 @@ public class FunctionalTestFactory : WebApplicationFactory<Program>
     }
 
     /// <summary>
+    /// Seeds the TierFeatureLimits table with the default tier values.
+    /// The migration runner copies only DDL (CREATE TABLE) statements from the temp
+    /// database, so the INSERT seed data from <see cref="TierFeatureLimitsMigration"/>
+    /// must be applied manually.
+    /// </summary>
+    private void SeedTierFeatureLimits()
+    {
+        string now = DateTimeOffset.UtcNow.ToString("o");
+
+        // Free tier: MachineLimit=3, RetentionDays=1, AlertRuleLimit=0, WebhookLimit=0
+        ExecuteSql($@"INSERT INTO TierFeatureLimits (Tier, MachineLimit, RetentionDays, AlertRuleLimit, WebhookLimit, UpdatedAt)
+            VALUES ({(int)SubscriptionTier.Free}, 3, 1, 0, 0, '{now}')");
+
+        // Pro tier: MachineLimit=null (unlimited), RetentionDays=30, AlertRuleLimit=25, WebhookLimit=5
+        ExecuteSql($@"INSERT INTO TierFeatureLimits (Tier, MachineLimit, RetentionDays, AlertRuleLimit, WebhookLimit, UpdatedAt)
+            VALUES ({(int)SubscriptionTier.Pro}, NULL, 30, 25, 5, '{now}')");
+
+        // Team tier: MachineLimit=null (unlimited), RetentionDays=365, AlertRuleLimit=100, WebhookLimit=25
+        ExecuteSql($@"INSERT INTO TierFeatureLimits (Tier, MachineLimit, RetentionDays, AlertRuleLimit, WebhookLimit, UpdatedAt)
+            VALUES ({(int)SubscriptionTier.Team}, NULL, 365, 100, 25, '{now}')");
+    }
+
+    private void ExecuteSql(string sql)
+    {
+        using SqliteCommand cmd = _dbConnection.CreateCommand();
+        cmd.CommandText = sql;
+        cmd.ExecuteNonQuery();
+    }
+
+    /// <summary>
     /// Patches the SQLiteTypeMap on the generator to support DateTimeOffset.
     /// FluentMigrator's SQLite type map does not include DateTimeOffset by default.
     /// </summary>
@@ -329,6 +379,34 @@ public class FunctionalTestFactory : WebApplicationFactory<Program>
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// Creates an NSubstitute mock for <see cref="IBillingApiClient"/> with default
+    /// return values that match the no-op behavior (all operations succeed, no pending cancellation).
+    /// </summary>
+    private static IBillingApiClient CreateDefaultBillingApiClientMock()
+    {
+        IBillingApiClient mock = Substitute.For<IBillingApiClient>();
+
+        mock.UpdateQuantityAsync(Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(true));
+        mock.ReportMachineUsageAsync(Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(true));
+        mock.CancelSubscriptionAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(true));
+        mock.GetSubscriptionStatusAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new StripeSubscriptionStatus(false, "none", string.Empty, 0, null, null)));
+        mock.SwapSubscriptionPriceAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(true));
+        mock.ResumeSubscriptionAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(true));
+        mock.GetUpcomingInvoiceAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<UpcomingInvoiceResult?>(null));
+        mock.ListInvoicesAsync(Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<List<InvoiceResult>>([]));
+
+        return mock;
     }
 
     private static void RemoveHostedService<T>(IServiceCollection services) where T : class

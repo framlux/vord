@@ -350,6 +350,7 @@ export interface UpcomingInvoiceDto {
 	periodEnd: string | null;
 	nextPaymentAttempt: string | null;
 	unitAmountCents: number;
+	discountAmountCents: number;
 	lines: LineItemDto[];
 }
 

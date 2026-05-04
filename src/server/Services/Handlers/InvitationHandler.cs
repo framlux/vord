@@ -5,12 +5,10 @@
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
-using Framlux.FleetManagement.Server.Options;
 using Framlux.FleetManagement.Server.Services.Billing;
 using Framlux.FleetManagement.Server.Services.Infrastructure;
 using Framlux.FleetManagement.Server.Services.Notifications;
 using Framlux.FleetManagement.Server.Services.Security;
-using Microsoft.Extensions.Options;
 using System.Security.Cryptography;
 using System.Text;
 
@@ -28,7 +26,6 @@ public sealed class InvitationHandler : IInvitationHandler
     private readonly ISubscriptionRepository _subscriptionRepository;
     private readonly IEmailService _emailService;
     private readonly ISubscriptionService _subscriptionService;
-    private readonly SubscriptionOptions _subscriptionOptions;
     private readonly IRoleCacheInvalidator _roleCacheInvalidator;
 
     /// <summary>
@@ -42,7 +39,6 @@ public sealed class InvitationHandler : IInvitationHandler
         ISubscriptionRepository subscriptionRepository,
         IEmailService emailService,
         ISubscriptionService subscriptionService,
-        IOptions<SubscriptionOptions> subscriptionOptions,
         IRoleCacheInvalidator roleCacheInvalidator)
     {
         ArgumentNullException.ThrowIfNull(transactionProvider);
@@ -52,7 +48,6 @@ public sealed class InvitationHandler : IInvitationHandler
         ArgumentNullException.ThrowIfNull(subscriptionRepository);
         ArgumentNullException.ThrowIfNull(emailService);
         ArgumentNullException.ThrowIfNull(subscriptionService);
-        ArgumentNullException.ThrowIfNull(subscriptionOptions);
         ArgumentNullException.ThrowIfNull(roleCacheInvalidator);
 
         _transactionProvider = transactionProvider;
@@ -62,7 +57,6 @@ public sealed class InvitationHandler : IInvitationHandler
         _subscriptionRepository = subscriptionRepository;
         _emailService = emailService;
         _subscriptionService = subscriptionService;
-        _subscriptionOptions = subscriptionOptions.Value;
         _roleCacheInvalidator = roleCacheInvalidator;
     }
 
@@ -236,8 +230,6 @@ public sealed class InvitationHandler : IInvitationHandler
                 TenantId = personalTenant.Id,
                 Tier = SubscriptionTier.Free,
                 Status = SubscriptionStatus.Active,
-                MachineLimit = _subscriptionOptions.FreeTierMachineLimit,
-                RetentionDays = _subscriptionOptions.FreeTierRetentionDays,
                 CreatedAt = now,
                 UpdatedAt = now,
             }, ct);

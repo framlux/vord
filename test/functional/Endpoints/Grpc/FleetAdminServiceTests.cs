@@ -634,8 +634,6 @@ public sealed class FleetAdminServiceTests
                 TenantExternalId = extId,
                 Tier = "Pro",
                 Status = "Active",
-                MachineLimit = 25,
-                RetentionDays = 30
             },
             Headers("test-key"));
 
@@ -648,8 +646,6 @@ public sealed class FleetAdminServiceTests
         await Assert.That(updated).IsNotNull();
         await Assert.That(updated!.Tier).IsEqualTo(SubscriptionTier.Pro);
         await Assert.That(updated.Status).IsEqualTo(SubscriptionStatus.Active);
-        await Assert.That(updated.MachineLimit).IsEqualTo(25);
-        await Assert.That(updated.RetentionDays).IsEqualTo(30);
     }
 
     [Test]
@@ -669,8 +665,6 @@ public sealed class FleetAdminServiceTests
                     TenantExternalId = "ext-x",
                     Tier = "InvalidTier",
                     Status = "Active",
-                    MachineLimit = 10,
-                    RetentionDays = 30
                 },
                 Headers("test-key"));
         }
@@ -701,8 +695,6 @@ public sealed class FleetAdminServiceTests
                     TenantExternalId = "nonexistent",
                     Tier = "Pro",
                     Status = "Active",
-                    MachineLimit = 10,
-                    RetentionDays = 30
                 },
                 Headers("test-key"));
         }
@@ -903,13 +895,6 @@ public sealed class FleetAdminServiceTests
             TenantId = tenantId,
             Tier = tier,
             Status = status,
-            MachineLimit = tier == SubscriptionTier.Free ? 3 : null,
-            RetentionDays = tier switch
-            {
-                SubscriptionTier.Team => 365,
-                SubscriptionTier.Pro => 30,
-                _ => 1
-            },
             CreatedAt = DateTimeOffset.UtcNow,
             UpdatedAt = DateTimeOffset.UtcNow
         };

@@ -53,7 +53,6 @@ public sealed class TelemetryServiceTests
                 TenantId = 1,
                 Tier = Database.Enums.SubscriptionTier.Free,
                 Status = Database.Enums.SubscriptionStatus.Active,
-                RetentionDays = 7,
                 CreatedAt = DateTimeOffset.UtcNow,
                 UpdatedAt = DateTimeOffset.UtcNow,
             });
@@ -383,7 +382,6 @@ public sealed class TelemetryServiceTests
                 TenantId = 1,
                 Tier = Database.Enums.SubscriptionTier.Free,
                 Status = Database.Enums.SubscriptionStatus.PastDue,
-                RetentionDays = 7,
                 CreatedAt = DateTimeOffset.UtcNow,
                 UpdatedAt = DateTimeOffset.UtcNow,
             });

@@ -216,8 +216,6 @@ public sealed class TenantDataExportTests
             TenantId = tenant.Id,
             Tier = SubscriptionTier.Pro,
             Status = SubscriptionStatus.Active,
-            MachineLimit = null,
-            RetentionDays = 30,
             CreatedAt = DateTimeOffset.UtcNow,
             UpdatedAt = DateTimeOffset.UtcNow
         };

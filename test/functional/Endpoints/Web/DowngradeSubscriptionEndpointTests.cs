@@ -10,7 +10,6 @@ using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.FunctionalTest.Infrastructure;
 using LinqToDB;
-using LinqToDB.Async;
 
 namespace Framlux.FleetManagement.FunctionalTest.Endpoints.Web;
 
@@ -22,9 +21,7 @@ public sealed class DowngradeSubscriptionEndpointTests
     private static async Task<(int TenantId, int UserId)> SeedBillingEnvironment(
         DatabaseContext db,
         SubscriptionTier tier = SubscriptionTier.Pro,
-        SubscriptionStatus status = SubscriptionStatus.Active,
-        bool cancelAtPeriodEnd = false,
-        PendingSubscriptionAction pendingAction = PendingSubscriptionAction.None)
+        SubscriptionStatus status = SubscriptionStatus.Active)
     {
         Tenant tenant = new()
         {
@@ -42,9 +39,6 @@ public sealed class DowngradeSubscriptionEndpointTests
             TenantId = tenant.Id,
             Tier = tier,
             Status = status,
-            RetentionDays = 30,
-            CancelAtPeriodEnd = cancelAtPeriodEnd,
-            PendingAction = pendingAction,
             CreatedAt = DateTimeOffset.UtcNow,
             UpdatedAt = DateTimeOffset.UtcNow,
         };
@@ -125,10 +119,10 @@ public sealed class DowngradeSubscriptionEndpointTests
     }
 
     [Test]
-    public async Task TeamToFree_Returns200_SetsCancelAtPeriodEnd()
+    public async Task TeamToFree_Returns200_WithScheduledDowngradeMessage()
     {
-        // A Team-tier tenant requesting a downgrade to Free should have CancelAtPeriodEnd
-        // set and a DowngradeToFree pending action recorded in the database
+        // A Team-tier tenant requesting a downgrade to Free should receive a response
+        // indicating the downgrade is scheduled for the end of the billing period
         using FunctionalTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
         (int tenantId, int userId) = await SeedBillingEnvironment(db, tier: SubscriptionTier.Team);
@@ -153,23 +147,13 @@ public sealed class DowngradeSubscriptionEndpointTests
 
         string message = data.GetProperty("message").GetString()!;
         await Assert.That(message).Contains("end of the current billing period");
-
-        // Verify the database reflects the scheduled downgrade intent
-        using DatabaseContext verifyDb = factory.CreateDbContext();
-        TenantSubscription? subscription = await verifyDb.TenantSubscriptions
-            .Where(s => s.TenantId == tenantId)
-            .FirstOrDefaultAsync();
-
-        await Assert.That(subscription).IsNotNull();
-        await Assert.That(subscription!.CancelAtPeriodEnd).IsTrue();
-        await Assert.That(subscription.PendingAction).IsEqualTo(PendingSubscriptionAction.DowngradeToFree);
     }
 
     [Test]
-    public async Task ProToFree_Returns200_SetsCancelAtPeriodEnd()
+    public async Task ProToFree_Returns200_WithScheduledDowngradeMessage()
     {
-        // A Pro-tier tenant requesting a downgrade to Free should have CancelAtPeriodEnd
-        // set and a DowngradeToFree pending action recorded in the database
+        // A Pro-tier tenant requesting a downgrade to Free should receive a response
+        // indicating the downgrade is scheduled for the end of the billing period
         using FunctionalTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
         (int tenantId, int userId) = await SeedBillingEnvironment(db, tier: SubscriptionTier.Pro);
@@ -194,16 +178,6 @@ public sealed class DowngradeSubscriptionEndpointTests
 
         string message = data.GetProperty("message").GetString()!;
         await Assert.That(message).Contains("end of the current billing period");
-
-        // Verify the database reflects the scheduled downgrade intent
-        using DatabaseContext verifyDb = factory.CreateDbContext();
-        TenantSubscription? subscription = await verifyDb.TenantSubscriptions
-            .Where(s => s.TenantId == tenantId)
-            .FirstOrDefaultAsync();
-
-        await Assert.That(subscription).IsNotNull();
-        await Assert.That(subscription!.CancelAtPeriodEnd).IsTrue();
-        await Assert.That(subscription.PendingAction).IsEqualTo(PendingSubscriptionAction.DowngradeToFree);
     }
 
     [Test]

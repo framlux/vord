@@ -30,7 +30,7 @@ public sealed class NoOpBillingApiClient : IBillingApiClient
     /// <inheritdoc/>
     public Task<StripeSubscriptionStatus> GetSubscriptionStatusAsync(string tenantExternalId, CancellationToken ct)
     {
-        return Task.FromResult(new StripeSubscriptionStatus(false, "none", string.Empty, 0, null));
+        return Task.FromResult(new StripeSubscriptionStatus(false, "none", string.Empty, 0, null, null));
     }
 
     /// <inheritdoc/>

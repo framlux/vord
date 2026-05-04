@@ -137,57 +137,57 @@ public sealed class RegistrationFlowTests
     [Test]
     public async Task RegisterSystem_MachineLimitExceeded_ReturnsError()
     {
-        // Arrange
+        // Arrange — the Free tier allows 3 machines (defined in TierFeatureLimits seed data)
         using FunctionalTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
 
         (int tenantId, long tokenId) = await SeedTenantWithToken(db);
 
-        // Create subscription with limit of 1 machine
         TenantSubscription subscription = new()
         {
             TenantId = tenantId,
             Tier = SubscriptionTier.Free,
             Status = SubscriptionStatus.Active,
-            MachineLimit = 1,
-            RetentionDays = 7,
             CreatedAt = DateTimeOffset.UtcNow,
             UpdatedAt = DateTimeOffset.UtcNow
         };
         await db.InsertAsync(subscription);
 
-        // Register the first machine (fills the limit)
         using GrpcChannel channel = CreateChannel(factory);
         Registration.RegistrationClient client = new(channel);
 
-        RegisterSystemRequest firstRequest = new()
+        // Register 3 machines to fill the Free tier limit
+        for (int i = 1; i <= 3; i++)
         {
-            Hostname = "first-host",
-            SerialNumber = "sn-limit-001",
-            SystemId = "sys-limit-001",
+            RegisterSystemRequest fillRequest = new()
+            {
+                Hostname = $"fill-host-{i}",
+                SerialNumber = $"sn-limit-{i:D3}",
+                SystemId = $"sys-limit-{i:D3}",
+                RegistrationToken = "test-registration-token",
+                MachineType = MachineType.BareMetalServerType,
+                Os = OperatingSystemType.UbuntuOs
+            };
+            RegisterSystemResponse fillResponse = await client.RegisterSystemAsync(fillRequest);
+            await Assert.That(fillResponse.MachineId).IsGreaterThan(0);
+        }
+
+        // Act — register a 4th machine (should fail because limit is 3)
+        RegisterSystemRequest overLimitRequest = new()
+        {
+            Hostname = "over-limit-host",
+            SerialNumber = "sn-limit-004",
+            SystemId = "sys-limit-004",
             RegistrationToken = "test-registration-token",
             MachineType = MachineType.BareMetalServerType,
             Os = OperatingSystemType.UbuntuOs
         };
-        RegisterSystemResponse firstResponse = await client.RegisterSystemAsync(firstRequest);
-        await Assert.That(firstResponse.MachineId).IsGreaterThan(0);
 
-        // Act — register a second machine (should fail)
-        RegisterSystemRequest secondRequest = new()
-        {
-            Hostname = "second-host",
-            SerialNumber = "sn-limit-002",
-            SystemId = "sys-limit-002",
-            RegistrationToken = "test-registration-token",
-            MachineType = MachineType.BareMetalServerType,
-            Os = OperatingSystemType.UbuntuOs
-        };
-
-        RegisterSystemResponse secondResponse = await client.RegisterSystemAsync(secondRequest);
+        RegisterSystemResponse overLimitResponse = await client.RegisterSystemAsync(overLimitRequest);
 
         // Assert
-        await Assert.That(secondResponse.MachineId).IsEqualTo(0);
-        await Assert.That(secondResponse.ErrorMessage).Contains("limit");
+        await Assert.That(overLimitResponse.MachineId).IsEqualTo(0);
+        await Assert.That(overLimitResponse.ErrorMessage).Contains("limit");
     }
 
     [Test]
@@ -667,8 +667,6 @@ public sealed class RegistrationFlowTests
             TenantId = tenantId,
             Tier = SubscriptionTier.Free,
             Status = SubscriptionStatus.Active,
-            MachineLimit = 10,
-            RetentionDays = 7,
             CreatedAt = DateTimeOffset.UtcNow,
             UpdatedAt = DateTimeOffset.UtcNow
         };

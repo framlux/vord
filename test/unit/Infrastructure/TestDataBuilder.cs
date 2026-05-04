@@ -94,17 +94,13 @@ public static class TestDataBuilder
     public static TenantSubscription BuildSubscription(
         int tenantId = 1,
         SubscriptionTier tier = SubscriptionTier.Free,
-        SubscriptionStatus status = SubscriptionStatus.Active,
-        int? machineLimit = 3,
-        int retentionDays = 7)
+        SubscriptionStatus status = SubscriptionStatus.Active)
     {
         return new TenantSubscription
         {
             TenantId = tenantId,
             Tier = tier,
             Status = status,
-            MachineLimit = machineLimit,
-            RetentionDays = retentionDays,
             CreatedAt = DateTimeOffset.UtcNow,
             UpdatedAt = DateTimeOffset.UtcNow
         };

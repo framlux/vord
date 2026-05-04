@@ -5,12 +5,11 @@
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
-using Framlux.FleetManagement.Server.Options;
 using Framlux.FleetManagement.Server.Services.Billing;
 using Framlux.FleetManagement.Test.Infrastructure;
 using LinqToDB;
 using Microsoft.Extensions.Logging.Abstractions;
-using Microsoft.Extensions.Options;
+using NSubstitute;
 
 namespace Framlux.FleetManagement.Test.Functional.DatabaseRepository;
 
@@ -20,13 +19,40 @@ namespace Framlux.FleetManagement.Test.Functional.DatabaseRepository;
 /// </summary>
 public class SubscriptionCacheTests
 {
-    private static IOptions<SubscriptionOptions> BuildOptions(int machineLimit = 3, int retentionDays = 1)
+    private static SubscriptionService BuildService(Database.Repositories.DatabaseRepository repo, int machineLimit = 3, int retentionDays = 1)
     {
-        return Options.Create(new SubscriptionOptions
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        ITierFeatureLimitRepository tierLimitRepo = Substitute.For<ITierFeatureLimitRepository>();
+        tierLimitRepo.GetLimitsForTierAsync(SubscriptionTier.Free, Arg.Any<CancellationToken>()).Returns(new TierFeatureLimit
         {
-            FreeTierMachineLimit = machineLimit,
-            FreeTierRetentionDays = retentionDays,
+            Tier = SubscriptionTier.Free,
+            MachineLimit = machineLimit,
+            RetentionDays = retentionDays,
+            AlertRuleLimit = 0,
+            WebhookLimit = 0,
+            UpdatedAt = now,
         });
+        tierLimitRepo.GetLimitsForTierAsync(SubscriptionTier.Pro, Arg.Any<CancellationToken>()).Returns(new TierFeatureLimit
+        {
+            Tier = SubscriptionTier.Pro,
+            MachineLimit = null,
+            RetentionDays = 30,
+            AlertRuleLimit = 25,
+            WebhookLimit = 5,
+            UpdatedAt = now,
+        });
+        tierLimitRepo.GetLimitsForTierAsync(SubscriptionTier.Team, Arg.Any<CancellationToken>()).Returns(new TierFeatureLimit
+        {
+            Tier = SubscriptionTier.Team,
+            MachineLimit = null,
+            RetentionDays = 365,
+            AlertRuleLimit = 100,
+            WebhookLimit = 25,
+            UpdatedAt = now,
+        });
+        ITenantSubscriptionOverrideRepository overrideRepo = Substitute.For<ITenantSubscriptionOverrideRepository>();
+
+        return new SubscriptionService(repo, repo, repo, repo, tierLimitRepo, overrideRepo, new NullLogger<SubscriptionService>());
     }
 
     [Test]
@@ -37,9 +63,7 @@ public class SubscriptionCacheTests
         TenantSubscription sub = TestDataBuilder.BuildSubscription(
             tenantId: 1,
             tier: SubscriptionTier.Pro,
-            status: SubscriptionStatus.Active,
-            machineLimit: 10,
-            retentionDays: 30);
+            status: SubscriptionStatus.Active);
 
         int subId = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
 
@@ -47,14 +71,12 @@ public class SubscriptionCacheTests
 
         // Verify retrieval through SubscriptionService
         Database.Repositories.DatabaseRepository repo = new(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
-        SubscriptionService service = new(repo, repo, repo, repo, BuildOptions(), new NullLogger<SubscriptionService>());
+        SubscriptionService service = BuildService(repo);
 
         TenantSubscription? result = await service.GetSubscriptionForTenantAsync(1, CancellationToken.None);
 
         await Assert.That(result).IsNotNull();
         await Assert.That(result!.Tier).IsEqualTo(SubscriptionTier.Pro);
-        await Assert.That(result.MachineLimit).IsEqualTo(10);
-        await Assert.That(result.RetentionDays).IsEqualTo(30);
     }
 
     [Test]
@@ -66,7 +88,7 @@ public class SubscriptionCacheTests
         sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
 
         Database.Repositories.DatabaseRepository repo = new(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
-        SubscriptionService service = new(repo, repo, repo, repo, BuildOptions(), new NullLogger<SubscriptionService>());
+        SubscriptionService service = BuildService(repo);
 
         TenantSubscription? result = await service.GetSubscriptionForTenantAsync(42, CancellationToken.None);
 
@@ -80,7 +102,7 @@ public class SubscriptionCacheTests
     {
         using TestDatabaseFactory dbFactory = new();
         Database.Repositories.DatabaseRepository repo = new(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
-        SubscriptionService service = new(repo, repo, repo, repo, BuildOptions(), new NullLogger<SubscriptionService>());
+        SubscriptionService service = BuildService(repo);
 
         TenantSubscription? result = await service.GetSubscriptionForTenantAsync(99999, CancellationToken.None);
 
@@ -92,7 +114,7 @@ public class SubscriptionCacheTests
     {
         using TestDatabaseFactory dbFactory = new();
         Database.Repositories.DatabaseRepository repo = new(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
-        SubscriptionService service = new(repo, repo, repo, repo, BuildOptions(), new NullLogger<SubscriptionService>());
+        SubscriptionService service = BuildService(repo);
 
         TenantSubscription result = await service.ProvisionFreeSubscriptionAsync(77, CancellationToken.None);
 
@@ -100,8 +122,6 @@ public class SubscriptionCacheTests
         await Assert.That(result.TenantId).IsEqualTo(77);
         await Assert.That(result.Tier).IsEqualTo(SubscriptionTier.Free);
         await Assert.That(result.Status).IsEqualTo(SubscriptionStatus.Active);
-        await Assert.That(result.MachineLimit).IsEqualTo(3);
-        await Assert.That(result.RetentionDays).IsEqualTo(1);
         await Assert.That(result.Id).IsNotEqualTo(0);
     }
 
@@ -112,45 +132,41 @@ public class SubscriptionCacheTests
 
         TenantSubscription sub = TestDataBuilder.BuildSubscription(
             tenantId: 50,
-            tier: SubscriptionTier.Free,
-            machineLimit: 3,
-            retentionDays: 1);
+            tier: SubscriptionTier.Free);
         sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
 
-        // Update the subscription tier and limits directly through the context
+        // Update the subscription tier directly through the context
         await dbFactory.Context.TenantSubscriptions
             .Where(s => s.Id == sub.Id)
             .Set(s => s.Tier, SubscriptionTier.Pro)
-            .Set(s => s.MachineLimit, 25)
-            .Set(s => s.RetentionDays, 30)
             .Set(s => s.UpdatedAt, DateTimeOffset.UtcNow)
             .UpdateAsync();
 
         Database.Repositories.DatabaseRepository repo = new(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
-        SubscriptionService service = new(repo, repo, repo, repo, BuildOptions(), new NullLogger<SubscriptionService>());
+        SubscriptionService service = BuildService(repo);
 
         TenantSubscription? result = await service.GetSubscriptionForTenantAsync(50, CancellationToken.None);
 
         await Assert.That(result).IsNotNull();
         await Assert.That(result!.Tier).IsEqualTo(SubscriptionTier.Pro);
-        await Assert.That(result.MachineLimit).IsEqualTo(25);
-        await Assert.That(result.RetentionDays).IsEqualTo(30);
     }
 
     [Test]
-    public async Task GetRetentionDays_WithSubscription_ReturnsConfiguredValue()
+    public async Task GetRetentionDays_WithSubscription_ReturnsTierLimitValue()
     {
         using TestDatabaseFactory dbFactory = new();
 
-        TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 60, retentionDays: 90);
+        // Subscription uses Pro tier; retention days are now resolved from tier limits
+        TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 60, tier: SubscriptionTier.Pro);
         sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
 
         Database.Repositories.DatabaseRepository repo = new(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
-        SubscriptionService service = new(repo, repo, repo, repo, BuildOptions(), new NullLogger<SubscriptionService>());
+        SubscriptionService service = BuildService(repo);
 
         int result = await service.GetRetentionDaysForTenantAsync(60, CancellationToken.None);
 
-        await Assert.That(result).IsEqualTo(90);
+        // Pro tier returns 30 days from the tier limit repo mock
+        await Assert.That(result).IsEqualTo(30);
     }
 
     [Test]
@@ -158,7 +174,7 @@ public class SubscriptionCacheTests
     {
         using TestDatabaseFactory dbFactory = new();
         Database.Repositories.DatabaseRepository repo = new(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
-        SubscriptionService service = new(repo, repo, repo, repo, BuildOptions(), new NullLogger<SubscriptionService>());
+        SubscriptionService service = BuildService(repo);
 
         int result = await service.GetRetentionDaysForTenantAsync(99999, CancellationToken.None);
 
@@ -170,7 +186,7 @@ public class SubscriptionCacheTests
     {
         using TestDatabaseFactory dbFactory = new();
         Database.Repositories.DatabaseRepository repo = new(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
-        SubscriptionService service = new(repo, repo, repo, repo, BuildOptions(), new NullLogger<SubscriptionService>());
+        SubscriptionService service = BuildService(repo);
 
         bool result = await service.CanApproveMachineAsync(88888, CancellationToken.None);
 
@@ -182,11 +198,11 @@ public class SubscriptionCacheTests
     {
         using TestDatabaseFactory dbFactory = new();
 
-        TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 70, machineLimit: null);
+        TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 70);
         sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
 
         Database.Repositories.DatabaseRepository repo = new(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
-        SubscriptionService service = new(repo, repo, repo, repo, BuildOptions(), new NullLogger<SubscriptionService>());
+        SubscriptionService service = BuildService(repo);
 
         bool result = await service.CanApproveMachineAsync(70, CancellationToken.None);
 

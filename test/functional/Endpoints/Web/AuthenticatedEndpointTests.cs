@@ -494,8 +494,6 @@ public sealed class AuthenticatedEndpointTests
             TenantId = tenant.Id,
             Tier = SubscriptionTier.Free,
             Status = SubscriptionStatus.Active,
-            MachineLimit = 3,
-            RetentionDays = 1,
             CreatedAt = DateTimeOffset.UtcNow,
             UpdatedAt = DateTimeOffset.UtcNow
         };

@@ -5,8 +5,6 @@
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
-using Framlux.FleetManagement.Server.Options;
-using Microsoft.Extensions.Options;
 
 namespace Framlux.FleetManagement.Server.Services.Billing;
 
@@ -19,7 +17,8 @@ public sealed class SubscriptionService : ISubscriptionService
     private readonly IMachineRepository _machineRepo;
     private readonly IAlertRuleRepository _alertRuleRepo;
     private readonly IWebhookRepository _webhookRepo;
-    private readonly SubscriptionOptions _subscriptionOptions;
+    private readonly ITierFeatureLimitRepository _tierLimitRepo;
+    private readonly ITenantSubscriptionOverrideRepository _overrideRepo;
     private readonly ILogger<SubscriptionService> _logger;
 
     /// <summary>
@@ -30,21 +29,24 @@ public sealed class SubscriptionService : ISubscriptionService
         IMachineRepository machineRepo,
         IAlertRuleRepository alertRuleRepo,
         IWebhookRepository webhookRepo,
-        IOptions<SubscriptionOptions> subscriptionOptions,
+        ITierFeatureLimitRepository tierLimitRepo,
+        ITenantSubscriptionOverrideRepository overrideRepo,
         ILogger<SubscriptionService> logger)
     {
         ArgumentNullException.ThrowIfNull(subscriptionRepo);
         ArgumentNullException.ThrowIfNull(machineRepo);
         ArgumentNullException.ThrowIfNull(alertRuleRepo);
         ArgumentNullException.ThrowIfNull(webhookRepo);
-        ArgumentNullException.ThrowIfNull(subscriptionOptions);
+        ArgumentNullException.ThrowIfNull(tierLimitRepo);
+        ArgumentNullException.ThrowIfNull(overrideRepo);
         ArgumentNullException.ThrowIfNull(logger);
 
         _subscriptionRepo = subscriptionRepo;
         _machineRepo = machineRepo;
         _alertRuleRepo = alertRuleRepo;
         _webhookRepo = webhookRepo;
-        _subscriptionOptions = subscriptionOptions.Value;
+        _tierLimitRepo = tierLimitRepo;
+        _overrideRepo = overrideRepo;
         _logger = logger;
     }
 
@@ -66,38 +68,37 @@ public sealed class SubscriptionService : ISubscriptionService
             return false;
         }
 
-        if (subscription.MachineLimit is null)
+        int? machineLimit = await GetEffectiveLimitAsync(
+            tenantId, subscription.Tier,
+            o => o.MachineLimit,
+            t => t.MachineLimit,
+            ct);
+
+        if (machineLimit is null)
         {
             return true;
         }
 
         int activeMachineCount = await _machineRepo.GetActiveMachineCountAsync(tenantId, ct);
 
-        return activeMachineCount < subscription.MachineLimit.Value;
+        return activeMachineCount < machineLimit.Value;
     }
 
     /// <inheritdoc/>
     public async Task<TenantSubscription> ProvisionFreeSubscriptionAsync(int tenantId, CancellationToken ct)
     {
-        int machineLimit = _subscriptionOptions.FreeTierMachineLimit;
-        int retentionDays = _subscriptionOptions.FreeTierRetentionDays;
-
         DateTimeOffset now = DateTimeOffset.UtcNow;
         TenantSubscription subscription = new()
         {
             TenantId = tenantId,
             Tier = SubscriptionTier.Free,
             Status = SubscriptionStatus.Active,
-            MachineLimit = machineLimit,
-            RetentionDays = retentionDays,
-            AlertRuleLimit = 0,
-            WebhookLimit = 0,
             CreatedAt = now,
             UpdatedAt = now,
         };
 
         subscription = await _subscriptionRepo.InsertSubscriptionAsync(subscription, ct);
-        _logger.LogInformation("Provisioned Free subscription for tenant {TenantId} (machines: {MachineLimit}, retention: {RetentionDays}d)", tenantId, machineLimit, retentionDays);
+        _logger.LogInformation("Provisioned Free subscription for tenant {TenantId}", tenantId);
 
         return subscription;
     }
@@ -107,7 +108,20 @@ public sealed class SubscriptionService : ISubscriptionService
     {
         TenantSubscription? subscription = await GetSubscriptionForTenantAsync(tenantId, ct);
 
-        return subscription?.RetentionDays ?? 1;
+        if (subscription is null)
+        {
+            return 1;
+        }
+
+        TenantSubscriptionOverride? tenantOverride = await _overrideRepo.GetOverrideForTenantAsync(tenantId, ct);
+        if (tenantOverride?.RetentionDays is not null)
+        {
+            return tenantOverride.RetentionDays.Value;
+        }
+
+        TierFeatureLimit? tierLimits = await _tierLimitRepo.GetLimitsForTierAsync(subscription.Tier, ct);
+
+        return tierLimits?.RetentionDays ?? 1;
     }
 
     /// <inheritdoc/>
@@ -130,10 +144,7 @@ public sealed class SubscriptionService : ISubscriptionService
 
         if (subscription is not null && subscription.Tier == SubscriptionTier.Free && subscription.Status != SubscriptionStatus.Active)
         {
-            int machineLimit = _subscriptionOptions.FreeTierMachineLimit;
-            int retentionDays = _subscriptionOptions.FreeTierRetentionDays;
-
-            await _subscriptionRepo.ReactivateFreeSubscriptionAsync(subscription.Id, machineLimit, retentionDays, ct);
+            await _subscriptionRepo.ReactivateFreeSubscriptionAsync(subscription.Id, ct);
 
             _logger.LogInformation("Reactivated Free subscription for tenant {TenantId}", tenantId);
 
@@ -156,14 +167,20 @@ public sealed class SubscriptionService : ISubscriptionService
             return false;
         }
 
-        if (subscription.AlertRuleLimit is null)
+        int? alertRuleLimit = await GetEffectiveLimitAsync(
+            tenantId, subscription.Tier,
+            o => o.AlertRuleLimit,
+            t => t.AlertRuleLimit,
+            ct);
+
+        if (alertRuleLimit is null)
         {
             return true;
         }
 
         int count = await _alertRuleRepo.CountAlertRulesForTenantAsync(tenantId, ct);
 
-        return count < subscription.AlertRuleLimit.Value;
+        return count < alertRuleLimit.Value;
     }
 
     /// <inheritdoc/>
@@ -176,14 +193,20 @@ public sealed class SubscriptionService : ISubscriptionService
             return false;
         }
 
-        if (subscription.WebhookLimit is null)
+        int? webhookLimit = await GetEffectiveLimitAsync(
+            tenantId, subscription.Tier,
+            o => o.WebhookLimit,
+            t => t.WebhookLimit,
+            ct);
+
+        if (webhookLimit is null)
         {
             return true;
         }
 
         int count = await _webhookRepo.CountWebhooksForTenantAsync(tenantId, ct);
 
-        return count < subscription.WebhookLimit.Value;
+        return count < webhookLimit.Value;
     }
 
     /// <inheritdoc/>
@@ -192,5 +215,60 @@ public sealed class SubscriptionService : ISubscriptionService
         int count = await _machineRepo.GetMachineCountAtDateAsync(tenantId, targetDate, ct);
 
         return count;
+    }
+
+    /// <inheritdoc/>
+    public async Task<EffectiveLimits> GetEffectiveLimitsForTenantAsync(int tenantId, CancellationToken ct)
+    {
+        TenantSubscription? subscription = await _subscriptionRepo.GetSubscriptionForTenantAsync(tenantId, ct);
+
+        if (subscription is null)
+        {
+            return new EffectiveLimits { RetentionDays = 1 };
+        }
+
+        TierFeatureLimit? tierLimits = await _tierLimitRepo.GetLimitsForTierAsync(subscription.Tier, ct);
+        TenantSubscriptionOverride? tenantOverride = await _overrideRepo.GetOverrideForTenantAsync(tenantId, ct);
+
+        return new EffectiveLimits
+        {
+            MachineLimit = tenantOverride?.MachineLimit ?? tierLimits?.MachineLimit,
+            RetentionDays = tenantOverride?.RetentionDays ?? tierLimits?.RetentionDays ?? 1,
+            AlertRuleLimit = tenantOverride?.AlertRuleLimit ?? tierLimits?.AlertRuleLimit,
+            WebhookLimit = tenantOverride?.WebhookLimit ?? tierLimits?.WebhookLimit,
+        };
+    }
+
+    /// <summary>
+    /// Gets the effective limit for a tenant by checking overrides first, then tier defaults.
+    /// Returns null if the limit is unlimited.
+    /// </summary>
+    private async Task<int?> GetEffectiveLimitAsync(
+        int tenantId,
+        SubscriptionTier tier,
+        Func<TenantSubscriptionOverride, int?> overrideSelector,
+        Func<TierFeatureLimit, int?> tierSelector,
+        CancellationToken ct)
+    {
+        TenantSubscriptionOverride? tenantOverride = await _overrideRepo.GetOverrideForTenantAsync(tenantId, ct);
+        if (tenantOverride is not null)
+        {
+            int? overrideValue = overrideSelector(tenantOverride);
+            if (overrideValue is not null)
+            {
+                return overrideValue;
+            }
+        }
+
+        TierFeatureLimit? tierLimits = await _tierLimitRepo.GetLimitsForTierAsync(tier, ct);
+        if (tierLimits is not null)
+        {
+            return tierSelector(tierLimits);
+        }
+
+        // Fallback: no tier limits configured, allow unlimited
+        _logger.LogWarning("No TierFeatureLimits found for tier {Tier}, defaulting to unlimited", tier);
+
+        return null;
     }
 }

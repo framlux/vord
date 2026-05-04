@@ -4,7 +4,7 @@
 
 <script lang="ts">
 	import type { SubscriptionDto, UpcomingInvoiceDto, InvoiceDto, UsagePointDto } from '$lib/api/types';
-	import { CreditCard, CircleArrowUp, CircleArrowDown, ExternalLink, CircleAlert, CircleX, RotateCcw, Calculator, Receipt, TrendingUp, Download, ChevronDown } from 'lucide-svelte';
+	import { CreditCard, CircleArrowUp, CircleArrowDown, ExternalLink, CircleAlert, CircleX, RotateCcw, Calculator, Receipt, TrendingUp, Download, ChevronDown, Tag } from 'lucide-svelte';
 
 	let { data, form } = $props();
 
@@ -26,6 +26,50 @@
 	const upcomingInvoice: UpcomingInvoiceDto | null = $derived(data.upcomingInvoice ?? null);
 	const invoices: InvoiceDto[] = $derived(data.invoices ?? []);
 	const usageHistory: UsagePointDto[] = $derived(data.usageHistory ?? []);
+
+	// Invoice pagination: show first batch, expand on "Load more"
+	const invoicePageSize = 5;
+	let invoicesShown = $state(invoicePageSize);
+	const visibleInvoices: InvoiceDto[] = $derived(invoices.slice(0, invoicesShown));
+	const hasMoreInvoices = $derived(invoicesShown < invoices.length);
+
+	// Billing interval derived from upcoming invoice period length
+	const billingInterval: string | null = $derived.by(() => {
+		if (upcomingInvoice?.periodStart === null || upcomingInvoice?.periodEnd === null) {
+			return null;
+		}
+		if (upcomingInvoice === null) {
+			return null;
+		}
+		const start = new Date(upcomingInvoice.periodStart as string);
+		const end = new Date(upcomingInvoice.periodEnd as string);
+		const days = Math.round((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24));
+		if (days >= 350 && days <= 380) {
+			return 'Annual';
+		}
+		if (days >= 27 && days <= 33) {
+			return 'Monthly';
+		}
+
+		return 'Custom';
+	});
+
+	// Projected cost: unit amount per machine times current machine count
+	const projectedCostCents: number | null = $derived.by(() => {
+		if (upcomingInvoice === null || subscription === null) {
+			return null;
+		}
+		if (upcomingInvoice.unitAmountCents <= 0) {
+			return null;
+		}
+
+		return upcomingInvoice.unitAmountCents * subscription.machineCount;
+	});
+
+	// Discount/credits detection from upcoming invoice
+	const hasDiscount = $derived(
+		upcomingInvoice !== null && upcomingInvoice.discountAmountCents > 0
+	);
 
 	let showLineItems = $state(false);
 
@@ -331,6 +375,14 @@
 							{subscription.retentionDays} day(s)
 						</p>
 					</div>
+					{#if billingInterval !== null}
+						<div>
+							<p class="text-xs text-surface-500 dark:text-surface-400">Billing Interval</p>
+							<p class="mt-1 text-sm font-medium text-surface-900 dark:text-surface-100">
+								{billingInterval}
+							</p>
+						</div>
+					{/if}
 					{#if subscription.currentPeriodEnd !== null}
 						<div>
 							<p class="text-xs text-surface-500 dark:text-surface-400">Current Period Ends</p>
@@ -664,12 +716,27 @@
 						{formatCents(upcomingInvoice.unitAmountCents, upcomingInvoice.currency)}/host/mo
 					</span>
 				{/if}
+				{#if projectedCostCents !== null}
+					<span class="text-sm text-surface-500">
+						Projected: {formatCents(projectedCostCents, upcomingInvoice.currency)} ({subscription?.machineCount ?? 0} {subscription?.machineCount === 1 ? 'machine' : 'machines'})
+					</span>
+				{/if}
 				{#if upcomingInvoice.nextPaymentAttempt}
 					<span class="text-sm text-surface-500">
 						Next charge: {formatShortDate(upcomingInvoice.nextPaymentAttempt)}
 					</span>
 				{/if}
 			</div>
+
+			<!-- Active credits or discounts -->
+			{#if hasDiscount}
+				<div class="mt-3 flex items-center gap-2 rounded-lg border border-green-200 bg-green-50 px-3 py-2 dark:border-green-800 dark:bg-green-900/20">
+					<Tag size={14} class="text-green-600 dark:text-green-400" />
+					<span class="text-sm font-medium text-green-700 dark:text-green-300">
+						{formatCents(upcomingInvoice.discountAmountCents, upcomingInvoice.currency)} discount applied
+					</span>
+				</div>
+			{/if}
 
 			{#if upcomingInvoice.lines.length > 0}
 				<button
@@ -719,7 +786,7 @@
 						</tr>
 					</thead>
 					<tbody class="divide-y divide-surface-100 dark:divide-surface-700">
-						{#each invoices as invoice}
+						{#each visibleInvoices as invoice}
 							<tr class="hover:bg-surface-100/50 dark:hover:bg-surface-800/50">
 								<td class="py-3 pr-4 text-surface-700 dark:text-surface-300">
 									{formatShortDate(invoice.created)}
@@ -757,6 +824,19 @@
 					</tbody>
 				</table>
 			</div>
+
+			{#if hasMoreInvoices}
+				<div class="mt-4 text-center">
+					<button
+						type="button"
+						onclick={() => invoicesShown = invoicesShown + invoicePageSize}
+						class="inline-flex items-center gap-1 text-sm font-medium text-primary-500 transition-colors hover:text-primary-600"
+					>
+						<ChevronDown size={14} />
+						Load more ({invoices.length - invoicesShown} remaining)
+					</button>
+				</div>
+			{/if}
 		</div>
 	{/if}
 

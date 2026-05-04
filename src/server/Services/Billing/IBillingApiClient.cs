@@ -82,6 +82,7 @@ public sealed record UpcomingInvoiceResult(
     DateTimeOffset? PeriodEnd,
     DateTimeOffset? NextPaymentAttempt,
     long UnitAmountCents,
+    long DiscountAmountCents,
     List<InvoiceLineItemResult> Lines);
 
 /// <summary>

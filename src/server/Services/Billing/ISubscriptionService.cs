@@ -62,4 +62,27 @@ public interface ISubscriptionService
     /// <param name="tenantId">The tenant to check.</param>
     /// <param name="ct">Cancellation token.</param>
     Task<bool> CanCreateWebhookAsync(int tenantId, CancellationToken ct = default);
+
+    /// <summary>
+    /// Gets the effective feature limits for a tenant, considering tier defaults and per-tenant overrides.
+    /// </summary>
+    Task<EffectiveLimits> GetEffectiveLimitsForTenantAsync(int tenantId, CancellationToken ct = default);
+}
+
+/// <summary>
+/// Represents the effective feature limits for a tenant after applying overrides.
+/// </summary>
+public sealed record EffectiveLimits
+{
+    /// <summary>Maximum machines allowed, null means unlimited.</summary>
+    public int? MachineLimit { get; init; }
+
+    /// <summary>Data retention in days.</summary>
+    public int RetentionDays { get; init; }
+
+    /// <summary>Maximum alert rules allowed, null means unlimited.</summary>
+    public int? AlertRuleLimit { get; init; }
+
+    /// <summary>Maximum webhooks allowed, null means unlimited.</summary>
+    public int? WebhookLimit { get; init; }
 }

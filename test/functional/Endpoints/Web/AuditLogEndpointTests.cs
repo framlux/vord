@@ -38,7 +38,6 @@ public sealed class AuditLogEndpointTests
             TenantId = tenant.Id,
             Tier = tier,
             Status = SubscriptionStatus.Active,
-            RetentionDays = 30,
             CreatedAt = DateTimeOffset.UtcNow,
             UpdatedAt = DateTimeOffset.UtcNow,
         };

@@ -38,8 +38,6 @@ public sealed class MemberEndpointTests
             TenantId = tenant.Id,
             Tier = tier,
             Status = SubscriptionStatus.Active,
-            MachineLimit = tier == SubscriptionTier.Free ? 3 : null,
-            RetentionDays = 30,
             CreatedAt = DateTimeOffset.UtcNow,
             UpdatedAt = DateTimeOffset.UtcNow,
         };

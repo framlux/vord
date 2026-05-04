@@ -340,8 +340,6 @@ public sealed class TenantAdminEndpointTests
             TenantId = tenant.Id,
             Tier = tier,
             Status = SubscriptionStatus.Active,
-            MachineLimit = tier == SubscriptionTier.Free ? 3 : null,
-            RetentionDays = tier == SubscriptionTier.Free ? 1 : 30,
             CreatedAt = DateTimeOffset.UtcNow,
             UpdatedAt = DateTimeOffset.UtcNow
         };

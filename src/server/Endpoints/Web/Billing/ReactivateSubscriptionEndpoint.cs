@@ -7,10 +7,8 @@ using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Server.Auth;
-using Framlux.FleetManagement.Server.Options;
 using Framlux.FleetManagement.Server.Services.Billing;
 using Framlux.FleetManagement.Server.Services.Infrastructure;
-using Microsoft.Extensions.Options;
 
 namespace Framlux.FleetManagement.Server.Endpoints.Web.Billing;
 
@@ -37,7 +35,6 @@ public sealed class ReactivateSubscriptionEndpoint : EndpointWithoutRequest<ApiR
     private readonly IAuditLogRepository _auditLog;
     private readonly ISubscriptionRepository _subscriptionRepository;
     private readonly ISubscriptionService _subscriptionService;
-    private readonly SubscriptionOptions _subscriptionOptions;
     private readonly ILogger<ReactivateSubscriptionEndpoint> _logger;
 
     /// <summary>
@@ -49,7 +46,6 @@ public sealed class ReactivateSubscriptionEndpoint : EndpointWithoutRequest<ApiR
         IAuditLogRepository auditLog,
         ISubscriptionRepository subscriptionRepository,
         ISubscriptionService subscriptionService,
-        IOptions<SubscriptionOptions> subscriptionOptions,
         ILogger<ReactivateSubscriptionEndpoint> logger)
     {
         _billingStatus = billingStatus;
@@ -57,7 +53,6 @@ public sealed class ReactivateSubscriptionEndpoint : EndpointWithoutRequest<ApiR
         _auditLog = auditLog;
         _subscriptionRepository = subscriptionRepository;
         _subscriptionService = subscriptionService;
-        _subscriptionOptions = subscriptionOptions.Value;
         _logger = logger;
     }
 
@@ -110,7 +105,7 @@ public sealed class ReactivateSubscriptionEndpoint : EndpointWithoutRequest<ApiR
         using IDatabaseTransaction transaction = await _transactionProvider.BeginTransactionAsync(ct);
 
         // Reactivate by reverting to Free tier with Active status
-        await _subscriptionRepository.RevertSubscriptionToFreeAsync(tenantId.Value, _subscriptionOptions.FreeTierMachineLimit, _subscriptionOptions.FreeTierRetentionDays, 0, 0, ct);
+        await _subscriptionRepository.RevertSubscriptionToFreeAsync(tenantId.Value, ct);
 
         await _auditLog.InsertAuditLogAsync(AuditHelper.Create(
             tenantId.Value, null, null,

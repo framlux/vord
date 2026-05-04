@@ -172,10 +172,11 @@ public sealed class MachineService : IMachineService
             return (null, null, "Machine already exists");
         }
 
-        // Check subscription machine limit
-        ISubscriptionRepository subscriptionRepo = scope.ServiceProvider.GetRequiredService<ISubscriptionRepository>();
-        TenantSubscription? subscription = await subscriptionRepo.GetSubscriptionForTenantAsync(token.TenantId, cancellationToken);
-        int? machineLimit = subscription?.MachineLimit;
+        // Check subscription machine limit from tier defaults + overrides
+        ISubscriptionService subscriptionService = scope.ServiceProvider.GetRequiredService<ISubscriptionService>();
+        TenantSubscription? subscription = await subscriptionService.GetSubscriptionForTenantAsync(token.TenantId, cancellationToken);
+        EffectiveLimits effectiveLimits = await subscriptionService.GetEffectiveLimitsForTenantAsync(token.TenantId, cancellationToken);
+        int? machineLimit = effectiveLimits.MachineLimit;
 
         _logger.LogInformation("Creating Machine for {SerialNumber} with token {TokenId}", request.SerialNumber, token.Id);
         Machine machine = new()

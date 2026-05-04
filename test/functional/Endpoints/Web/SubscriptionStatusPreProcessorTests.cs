@@ -41,7 +41,6 @@ public sealed class SubscriptionStatusPreProcessorTests
             TenantId = tenant.Id,
             Tier = SubscriptionTier.Pro,
             Status = status,
-            RetentionDays = 30,
             CreatedAt = DateTimeOffset.UtcNow,
             UpdatedAt = DateTimeOffset.UtcNow,
         };

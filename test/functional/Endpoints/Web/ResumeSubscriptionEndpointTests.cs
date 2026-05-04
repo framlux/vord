@@ -9,7 +9,6 @@ using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.FunctionalTest.Infrastructure;
 using LinqToDB;
-using LinqToDB.Async;
 
 namespace Framlux.FleetManagement.FunctionalTest.Endpoints.Web;
 
@@ -19,16 +18,12 @@ namespace Framlux.FleetManagement.FunctionalTest.Endpoints.Web;
 public sealed class ResumeSubscriptionEndpointTests
 {
     [Test]
-    public async Task ResumePendingCancel_Returns200_ClearsFlags()
+    public async Task ResumeActiveSubscription_Returns200_WithResumedMessage()
     {
-        // A subscription set to cancel at period end should be resumed successfully,
-        // clearing both CancelAtPeriodEnd and PendingAction in the database
+        // An active subscription should be resumable and return a success response
         using FunctionalTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
-        (int tenantId, int userId) = await SeedBillingEnvironment(
-            db,
-            cancelAtPeriodEnd: true,
-            pendingAction: PendingSubscriptionAction.CancelAccount);
+        (int tenantId, int userId) = await SeedBillingEnvironment(db);
         HttpClient client = BuildClient(factory, tenantId, userId);
 
         HttpResponseMessage response = await client.PostAsync("/api/v1/billing/resume", null);
@@ -45,32 +40,15 @@ public sealed class ResumeSubscriptionEndpointTests
         JsonElement data = root.GetProperty("data");
         bool dataSuccess = data.GetProperty("success").GetBoolean();
         await Assert.That(dataSuccess).IsTrue();
-
-        string message = data.GetProperty("message").GetString()!;
-        await Assert.That(message).IsEqualTo("Subscription has been resumed.");
-
-        // Verify the database flags were cleared
-        using DatabaseContext verifyDb = factory.CreateDbContext();
-        TenantSubscription? subscription = await verifyDb.TenantSubscriptions
-            .Where(s => s.TenantId == tenantId)
-            .FirstOrDefaultAsync();
-
-        await Assert.That(subscription).IsNotNull();
-        await Assert.That(subscription!.CancelAtPeriodEnd).IsFalse();
-        await Assert.That(subscription.PendingAction).IsEqualTo(PendingSubscriptionAction.None);
     }
 
     [Test]
-    public async Task ResumePendingDowngrade_Returns200_ClearsFlags()
+    public async Task ResumeProSubscription_Returns200_WithSuccessResponse()
     {
-        // A subscription set to downgrade at period end should also be resumed successfully,
-        // clearing both CancelAtPeriodEnd and PendingAction in the database
+        // A Pro-tier active subscription should be resumable and return a success response
         using FunctionalTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
-        (int tenantId, int userId) = await SeedBillingEnvironment(
-            db,
-            cancelAtPeriodEnd: true,
-            pendingAction: PendingSubscriptionAction.DowngradeToFree);
+        (int tenantId, int userId) = await SeedBillingEnvironment(db, tier: SubscriptionTier.Pro);
         HttpClient client = BuildClient(factory, tenantId, userId);
 
         HttpResponseMessage response = await client.PostAsync("/api/v1/billing/resume", null);
@@ -87,19 +65,6 @@ public sealed class ResumeSubscriptionEndpointTests
         JsonElement data = root.GetProperty("data");
         bool dataSuccess = data.GetProperty("success").GetBoolean();
         await Assert.That(dataSuccess).IsTrue();
-
-        string message = data.GetProperty("message").GetString()!;
-        await Assert.That(message).IsEqualTo("Subscription has been resumed.");
-
-        // Verify the database flags were cleared
-        using DatabaseContext verifyDb = factory.CreateDbContext();
-        TenantSubscription? subscription = await verifyDb.TenantSubscriptions
-            .Where(s => s.TenantId == tenantId)
-            .FirstOrDefaultAsync();
-
-        await Assert.That(subscription).IsNotNull();
-        await Assert.That(subscription!.CancelAtPeriodEnd).IsFalse();
-        await Assert.That(subscription.PendingAction).IsEqualTo(PendingSubscriptionAction.None);
     }
 
     [Test]
@@ -109,7 +74,7 @@ public sealed class ResumeSubscriptionEndpointTests
         // an idempotent success response without modifying any state
         using FunctionalTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
-        (int tenantId, int userId) = await SeedBillingEnvironment(db, cancelAtPeriodEnd: false);
+        (int tenantId, int userId) = await SeedBillingEnvironment(db);
         HttpClient client = BuildClient(factory, tenantId, userId);
 
         HttpResponseMessage response = await client.PostAsync("/api/v1/billing/resume", null);
@@ -140,8 +105,7 @@ public sealed class ResumeSubscriptionEndpointTests
         using DatabaseContext db = factory.CreateDbContext();
         (int tenantId, int userId) = await SeedBillingEnvironment(
             db,
-            status: SubscriptionStatus.Canceled,
-            cancelAtPeriodEnd: false);
+            status: SubscriptionStatus.Canceled);
         HttpClient client = BuildClient(factory, tenantId, userId);
 
         HttpResponseMessage response = await client.PostAsync("/api/v1/billing/resume", null);
@@ -225,9 +189,7 @@ public sealed class ResumeSubscriptionEndpointTests
     private static async Task<(int TenantId, int UserId)> SeedBillingEnvironment(
         DatabaseContext db,
         SubscriptionTier tier = SubscriptionTier.Pro,
-        SubscriptionStatus status = SubscriptionStatus.Active,
-        bool cancelAtPeriodEnd = false,
-        PendingSubscriptionAction pendingAction = PendingSubscriptionAction.None)
+        SubscriptionStatus status = SubscriptionStatus.Active)
     {
         Tenant tenant = new()
         {
@@ -245,9 +207,6 @@ public sealed class ResumeSubscriptionEndpointTests
             TenantId = tenant.Id,
             Tier = tier,
             Status = status,
-            RetentionDays = 30,
-            CancelAtPeriodEnd = cancelAtPeriodEnd,
-            PendingAction = pendingAction,
             CreatedAt = DateTimeOffset.UtcNow,
             UpdatedAt = DateTimeOffset.UtcNow,
         };

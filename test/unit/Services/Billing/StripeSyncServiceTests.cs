@@ -2,9 +2,9 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
-using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
+using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Server.Options;
 using Framlux.FleetManagement.Server.Services.Billing;
 using Framlux.FleetManagement.Server.Services.Handlers;
@@ -70,7 +70,6 @@ public sealed class StripeSyncServiceTests
         int tenantId = 1,
         SubscriptionTier tier = SubscriptionTier.Pro,
         SubscriptionStatus status = SubscriptionStatus.Active,
-        bool cancelAtPeriodEnd = false,
         DateTimeOffset? currentPeriodEnd = null)
     {
         return new TenantSubscription
@@ -79,9 +78,6 @@ public sealed class StripeSyncServiceTests
             TenantId = tenantId,
             Tier = tier,
             Status = status,
-            MachineLimit = null,
-            RetentionDays = 30,
-            CancelAtPeriodEnd = cancelAtPeriodEnd,
             CurrentPeriodEnd = currentPeriodEnd,
             CreatedAt = DateTimeOffset.UtcNow,
             UpdatedAt = DateTimeOffset.UtcNow
@@ -102,173 +98,6 @@ public sealed class StripeSyncServiceTests
         };
     }
 
-    // --- Pending cancellation reconciliation (preserved from BillingReconciliationService) ---
-
-    [Test]
-    public async Task ReconcilePendingCancellations_NoPendingCancellations_NoBillingApiCalls()
-    {
-        (StripeSyncService service, ISubscriptionRepository dbCache, IBillingApiClient billingClient,
-            IBillingWebhookHandler _, ISubscriptionService _, ILogger<StripeSyncService> _) = CreateSut();
-        TaskCompletionSource workDone = new();
-
-        dbCache.GetPendingCancellationsAsync(Arg.Any<CancellationToken>())
-            .Returns(callInfo =>
-            {
-                workDone.TrySetResult();
-
-                return new List<TenantSubscription>();
-            });
-        dbCache.GetPaidSubscriptionsAsync(Arg.Any<CancellationToken>())
-            .Returns(new List<TenantSubscription>());
-
-        using CancellationTokenSource cts = new();
-        await service.StartAsync(cts.Token);
-        await workDone.Task;
-        await cts.CancelAsync();
-        await service.StopAsync(CancellationToken.None);
-
-        await billingClient.DidNotReceive().GetSubscriptionStatusAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
-    }
-
-    [Test]
-    public async Task ReconcilePendingCancellations_StripeSaysCanceled_ProcessesDowngrade()
-    {
-        (StripeSyncService service, ISubscriptionRepository dbCache, IBillingApiClient billingClient,
-            IBillingWebhookHandler webhookHandler, ISubscriptionService _, ILogger<StripeSyncService> _) = CreateSut();
-        TaskCompletionSource workDone = new();
-
-        TenantSubscription sub = CreateSubscription(1, cancelAtPeriodEnd: true);
-        Tenant tenant = CreateTenant(1, "ext-1");
-
-        dbCache.GetPendingCancellationsAsync(Arg.Any<CancellationToken>())
-            .Returns(new List<TenantSubscription> { sub });
-        dbCache.GetPaidSubscriptionsAsync(Arg.Any<CancellationToken>())
-            .Returns(new List<TenantSubscription>());
-        ((ITenantRepository)dbCache).GetTenantByIdAsync(1, Arg.Any<CancellationToken>())
-            .Returns(tenant);
-        billingClient.GetSubscriptionStatusAsync("ext-1", Arg.Any<CancellationToken>())
-            .Returns(new StripeSubscriptionStatus(false, "canceled", "price_pro_123", 1, null));
-        webhookHandler.HandleSubscriptionDeletedAsync(1, Arg.Any<CancellationToken>())
-            .Returns(callInfo =>
-            {
-                workDone.TrySetResult();
-
-                return Task.CompletedTask;
-            });
-
-        using CancellationTokenSource cts = new();
-        await service.StartAsync(cts.Token);
-        await workDone.Task;
-        await cts.CancelAsync();
-        await service.StopAsync(CancellationToken.None);
-
-        await webhookHandler.Received(1).HandleSubscriptionDeletedAsync(1, Arg.Any<CancellationToken>());
-    }
-
-    [Test]
-    public async Task ReconcilePendingCancellations_StripeSaysNone_ProcessesDowngrade()
-    {
-        (StripeSyncService service, ISubscriptionRepository dbCache, IBillingApiClient billingClient,
-            IBillingWebhookHandler webhookHandler, ISubscriptionService _, ILogger<StripeSyncService> _) = CreateSut();
-        TaskCompletionSource workDone = new();
-
-        TenantSubscription sub = CreateSubscription(1, cancelAtPeriodEnd: true);
-        Tenant tenant = CreateTenant(1, "ext-1");
-
-        dbCache.GetPendingCancellationsAsync(Arg.Any<CancellationToken>())
-            .Returns(new List<TenantSubscription> { sub });
-        dbCache.GetPaidSubscriptionsAsync(Arg.Any<CancellationToken>())
-            .Returns(new List<TenantSubscription>());
-        ((ITenantRepository)dbCache).GetTenantByIdAsync(1, Arg.Any<CancellationToken>())
-            .Returns(tenant);
-        billingClient.GetSubscriptionStatusAsync("ext-1", Arg.Any<CancellationToken>())
-            .Returns(new StripeSubscriptionStatus(false, "none", string.Empty, 0, null));
-        webhookHandler.HandleSubscriptionDeletedAsync(1, Arg.Any<CancellationToken>())
-            .Returns(callInfo =>
-            {
-                workDone.TrySetResult();
-
-                return Task.CompletedTask;
-            });
-
-        using CancellationTokenSource cts = new();
-        await service.StartAsync(cts.Token);
-        await workDone.Task;
-        await cts.CancelAsync();
-        await service.StopAsync(CancellationToken.None);
-
-        await webhookHandler.Received(1).HandleSubscriptionDeletedAsync(1, Arg.Any<CancellationToken>());
-    }
-
-    [Test]
-    public async Task ReconcilePendingCancellations_StripeDoesNotReflectCancellation_RetriesCancelCall()
-    {
-        (StripeSyncService service, ISubscriptionRepository dbCache, IBillingApiClient billingClient,
-            IBillingWebhookHandler _, ISubscriptionService _, ILogger<StripeSyncService> _) = CreateSut();
-        TaskCompletionSource workDone = new();
-
-        TenantSubscription sub = CreateSubscription(1, cancelAtPeriodEnd: true);
-        Tenant tenant = CreateTenant(1, "ext-1");
-
-        dbCache.GetPendingCancellationsAsync(Arg.Any<CancellationToken>())
-            .Returns(new List<TenantSubscription> { sub });
-        dbCache.GetPaidSubscriptionsAsync(Arg.Any<CancellationToken>())
-            .Returns(new List<TenantSubscription>());
-        ((ITenantRepository)dbCache).GetTenantByIdAsync(1, Arg.Any<CancellationToken>())
-            .Returns(tenant);
-        billingClient.GetSubscriptionStatusAsync("ext-1", Arg.Any<CancellationToken>())
-            .Returns(new StripeSubscriptionStatus(false, "active", "price_pro_123", 1, null));
-        billingClient.CancelSubscriptionAsync("ext-1", Arg.Any<string>(), Arg.Any<CancellationToken>())
-            .Returns(callInfo =>
-            {
-                workDone.TrySetResult();
-
-                return true;
-            });
-
-        using CancellationTokenSource cts = new();
-        await service.StartAsync(cts.Token);
-        await workDone.Task;
-        await cts.CancelAsync();
-        await service.StopAsync(CancellationToken.None);
-
-        await billingClient.Received(1).CancelSubscriptionAsync("ext-1", Arg.Any<string>(), Arg.Any<CancellationToken>());
-    }
-
-    [Test]
-    public async Task ReconcilePendingCancellations_StripeAlreadyReflectsCancellation_NoCancelCallMade()
-    {
-        (StripeSyncService service, ISubscriptionRepository dbCache, IBillingApiClient billingClient,
-            IBillingWebhookHandler webhookHandler, ISubscriptionService _, ILogger<StripeSyncService> _) = CreateSut();
-        TaskCompletionSource workDone = new();
-
-        TenantSubscription sub = CreateSubscription(1, cancelAtPeriodEnd: true);
-        Tenant tenant = CreateTenant(1, "ext-1");
-
-        dbCache.GetPendingCancellationsAsync(Arg.Any<CancellationToken>())
-            .Returns(new List<TenantSubscription> { sub });
-        dbCache.GetPaidSubscriptionsAsync(Arg.Any<CancellationToken>())
-            .Returns(callInfo =>
-            {
-                workDone.TrySetResult();
-
-                return new List<TenantSubscription>();
-            });
-        ((ITenantRepository)dbCache).GetTenantByIdAsync(1, Arg.Any<CancellationToken>())
-            .Returns(tenant);
-        billingClient.GetSubscriptionStatusAsync("ext-1", Arg.Any<CancellationToken>())
-            .Returns(new StripeSubscriptionStatus(true, "active", "price_pro_123", 1, null));
-
-        using CancellationTokenSource cts = new();
-        await service.StartAsync(cts.Token);
-        await workDone.Task;
-        await cts.CancelAsync();
-        await service.StopAsync(CancellationToken.None);
-
-        await billingClient.DidNotReceive().CancelSubscriptionAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
-        await webhookHandler.DidNotReceive().HandleSubscriptionDeletedAsync(Arg.Any<int>(), Arg.Any<CancellationToken>());
-    }
-
     // --- Machine quantity sync ---
 
     [Test]
@@ -283,8 +112,6 @@ public sealed class StripeSyncServiceTests
             currentPeriodEnd: DateTimeOffset.UtcNow.AddDays(15));
         Tenant tenant = CreateTenant(1, "ext-1");
 
-        dbCache.GetPendingCancellationsAsync(Arg.Any<CancellationToken>())
-            .Returns(new List<TenantSubscription>());
         dbCache.GetPaidSubscriptionsAsync(Arg.Any<CancellationToken>())
             .Returns(new List<TenantSubscription> { sub });
         ((ITenantRepository)dbCache).GetTenantByIdAsync(1, Arg.Any<CancellationToken>())
@@ -294,7 +121,7 @@ public sealed class StripeSyncServiceTests
 
         DateTimeOffset periodEnd = sub.CurrentPeriodEnd!.Value;
         billingClient.GetSubscriptionStatusAsync("ext-1", Arg.Any<CancellationToken>())
-            .Returns(new StripeSubscriptionStatus(false, "active", "price_pro_123", 3, periodEnd));
+            .Returns(new StripeSubscriptionStatus(false, "active", "price_pro_123", 3, periodEnd, "Pro"));
         billingClient.ReportMachineUsageAsync("ext-1", 5, Arg.Any<CancellationToken>())
             .Returns(callInfo =>
             {
@@ -324,8 +151,6 @@ public sealed class StripeSyncServiceTests
             currentPeriodEnd: DateTimeOffset.UtcNow.AddDays(15));
         Tenant tenant = CreateTenant(1, "ext-1");
 
-        dbCache.GetPendingCancellationsAsync(Arg.Any<CancellationToken>())
-            .Returns(new List<TenantSubscription>());
         dbCache.GetPaidSubscriptionsAsync(Arg.Any<CancellationToken>())
             .Returns(new List<TenantSubscription> { sub });
         ((ITenantRepository)dbCache).GetTenantByIdAsync(1, Arg.Any<CancellationToken>())
@@ -340,7 +165,7 @@ public sealed class StripeSyncServiceTests
 
         DateTimeOffset periodEnd = sub.CurrentPeriodEnd!.Value;
         billingClient.GetSubscriptionStatusAsync("ext-1", Arg.Any<CancellationToken>())
-            .Returns(new StripeSubscriptionStatus(false, "active", "price_pro_123", 5, periodEnd));
+            .Returns(new StripeSubscriptionStatus(false, "active", "price_pro_123", 5, periodEnd, "Pro"));
 
         using CancellationTokenSource cts = new();
         await service.StartAsync(cts.Token);
@@ -366,8 +191,6 @@ public sealed class StripeSyncServiceTests
             currentPeriodEnd: DateTimeOffset.UtcNow.AddDays(15));
         Tenant tenant = CreateTenant(1, "ext-1");
 
-        dbCache.GetPendingCancellationsAsync(Arg.Any<CancellationToken>())
-            .Returns(new List<TenantSubscription>());
         dbCache.GetPaidSubscriptionsAsync(Arg.Any<CancellationToken>())
             .Returns(new List<TenantSubscription> { sub });
         ((ITenantRepository)dbCache).GetTenantByIdAsync(1, Arg.Any<CancellationToken>())
@@ -377,7 +200,7 @@ public sealed class StripeSyncServiceTests
 
         DateTimeOffset periodEnd = sub.CurrentPeriodEnd!.Value;
         billingClient.GetSubscriptionStatusAsync("ext-1", Arg.Any<CancellationToken>())
-            .Returns(new StripeSubscriptionStatus(false, "active", "price_team_456", 5, periodEnd));
+            .Returns(new StripeSubscriptionStatus(false, "active", "price_team_456", 5, periodEnd, "Team"));
 
         webhookHandler.HandleCheckoutCompletedAsync(1, SubscriptionTier.Team, Arg.Any<CancellationToken>())
             .Returns(callInfo =>
@@ -408,8 +231,6 @@ public sealed class StripeSyncServiceTests
             currentPeriodEnd: DateTimeOffset.UtcNow.AddDays(15));
         Tenant tenant = CreateTenant(1, "ext-1");
 
-        dbCache.GetPendingCancellationsAsync(Arg.Any<CancellationToken>())
-            .Returns(new List<TenantSubscription>());
         dbCache.GetPaidSubscriptionsAsync(Arg.Any<CancellationToken>())
             .Returns(new List<TenantSubscription> { sub });
         ((ITenantRepository)dbCache).GetTenantByIdAsync(1, Arg.Any<CancellationToken>())
@@ -424,7 +245,7 @@ public sealed class StripeSyncServiceTests
 
         DateTimeOffset periodEnd = sub.CurrentPeriodEnd!.Value;
         billingClient.GetSubscriptionStatusAsync("ext-1", Arg.Any<CancellationToken>())
-            .Returns(new StripeSubscriptionStatus(false, "active", "price_pro_123", 5, periodEnd));
+            .Returns(new StripeSubscriptionStatus(false, "active", "price_pro_123", 5, periodEnd, "Pro"));
 
         using CancellationTokenSource cts = new();
         await service.StartAsync(cts.Token);
@@ -448,8 +269,6 @@ public sealed class StripeSyncServiceTests
             currentPeriodEnd: DateTimeOffset.UtcNow.AddDays(15));
         Tenant tenant = CreateTenant(1, "ext-1");
 
-        dbCache.GetPendingCancellationsAsync(Arg.Any<CancellationToken>())
-            .Returns(new List<TenantSubscription>());
         dbCache.GetPaidSubscriptionsAsync(Arg.Any<CancellationToken>())
             .Returns(new List<TenantSubscription> { sub });
         ((ITenantRepository)dbCache).GetTenantByIdAsync(1, Arg.Any<CancellationToken>())
@@ -464,7 +283,7 @@ public sealed class StripeSyncServiceTests
 
         DateTimeOffset periodEnd = sub.CurrentPeriodEnd!.Value;
         billingClient.GetSubscriptionStatusAsync("ext-1", Arg.Any<CancellationToken>())
-            .Returns(new StripeSubscriptionStatus(false, "active", "price_unknown_789", 5, periodEnd));
+            .Returns(new StripeSubscriptionStatus(false, "active", "price_unknown_789", 5, periodEnd, null));
 
         using CancellationTokenSource cts = new();
         await service.StartAsync(cts.Token);
@@ -492,8 +311,6 @@ public sealed class StripeSyncServiceTests
             currentPeriodEnd: DateTimeOffset.UtcNow.AddDays(15));
         Tenant tenant = CreateTenant(1, "ext-1");
 
-        dbCache.GetPendingCancellationsAsync(Arg.Any<CancellationToken>())
-            .Returns(new List<TenantSubscription>());
         dbCache.GetPaidSubscriptionsAsync(Arg.Any<CancellationToken>())
             .Returns(new List<TenantSubscription> { sub });
         ((ITenantRepository)dbCache).GetTenantByIdAsync(1, Arg.Any<CancellationToken>())
@@ -510,7 +327,7 @@ public sealed class StripeSyncServiceTests
 
         DateTimeOffset periodEnd = sub.CurrentPeriodEnd!.Value;
         billingClient.GetSubscriptionStatusAsync("ext-1", Arg.Any<CancellationToken>())
-            .Returns(new StripeSubscriptionStatus(false, "past_due", "price_pro_123", 5, periodEnd));
+            .Returns(new StripeSubscriptionStatus(false, "past_due", "price_pro_123", 5, periodEnd, "Pro"));
 
         using CancellationTokenSource cts = new();
         await service.StartAsync(cts.Token);
@@ -535,8 +352,6 @@ public sealed class StripeSyncServiceTests
             currentPeriodEnd: DateTimeOffset.UtcNow.AddDays(15));
         Tenant tenant = CreateTenant(1, "ext-1");
 
-        dbCache.GetPendingCancellationsAsync(Arg.Any<CancellationToken>())
-            .Returns(new List<TenantSubscription>());
         dbCache.GetPaidSubscriptionsAsync(Arg.Any<CancellationToken>())
             .Returns(new List<TenantSubscription> { sub });
         ((ITenantRepository)dbCache).GetTenantByIdAsync(1, Arg.Any<CancellationToken>())
@@ -553,7 +368,7 @@ public sealed class StripeSyncServiceTests
 
         DateTimeOffset periodEnd = sub.CurrentPeriodEnd!.Value;
         billingClient.GetSubscriptionStatusAsync("ext-1", Arg.Any<CancellationToken>())
-            .Returns(new StripeSubscriptionStatus(false, "active", "price_pro_123", 5, periodEnd));
+            .Returns(new StripeSubscriptionStatus(false, "active", "price_pro_123", 5, periodEnd, "Pro"));
 
         using CancellationTokenSource cts = new();
         await service.StartAsync(cts.Token);
@@ -577,8 +392,6 @@ public sealed class StripeSyncServiceTests
             currentPeriodEnd: DateTimeOffset.UtcNow.AddDays(15));
         Tenant tenant = CreateTenant(1, "ext-1");
 
-        dbCache.GetPendingCancellationsAsync(Arg.Any<CancellationToken>())
-            .Returns(new List<TenantSubscription>());
         dbCache.GetPaidSubscriptionsAsync(Arg.Any<CancellationToken>())
             .Returns(new List<TenantSubscription> { sub });
         ((ITenantRepository)dbCache).GetTenantByIdAsync(1, Arg.Any<CancellationToken>())
@@ -595,7 +408,7 @@ public sealed class StripeSyncServiceTests
 
         DateTimeOffset periodEnd = sub.CurrentPeriodEnd!.Value;
         billingClient.GetSubscriptionStatusAsync("ext-1", Arg.Any<CancellationToken>())
-            .Returns(new StripeSubscriptionStatus(false, "canceled", "price_pro_123", 5, periodEnd));
+            .Returns(new StripeSubscriptionStatus(false, "canceled", "price_pro_123", 5, periodEnd, "Pro"));
 
         using CancellationTokenSource cts = new();
         await service.StartAsync(cts.Token);
@@ -619,8 +432,6 @@ public sealed class StripeSyncServiceTests
             currentPeriodEnd: DateTimeOffset.UtcNow.AddDays(15));
         Tenant tenant = CreateTenant(1, "ext-1");
 
-        dbCache.GetPendingCancellationsAsync(Arg.Any<CancellationToken>())
-            .Returns(new List<TenantSubscription>());
         dbCache.GetPaidSubscriptionsAsync(Arg.Any<CancellationToken>())
             .Returns(new List<TenantSubscription> { sub });
         ((ITenantRepository)dbCache).GetTenantByIdAsync(1, Arg.Any<CancellationToken>())
@@ -635,7 +446,7 @@ public sealed class StripeSyncServiceTests
 
         DateTimeOffset periodEnd = sub.CurrentPeriodEnd!.Value;
         billingClient.GetSubscriptionStatusAsync("ext-1", Arg.Any<CancellationToken>())
-            .Returns(new StripeSubscriptionStatus(false, "active", "price_pro_123", 5, periodEnd));
+            .Returns(new StripeSubscriptionStatus(false, "active", "price_pro_123", 5, periodEnd, "Pro"));
 
         using CancellationTokenSource cts = new();
         await service.StartAsync(cts.Token);
@@ -665,8 +476,6 @@ public sealed class StripeSyncServiceTests
             currentPeriodEnd: localPeriodEnd);
         Tenant tenant = CreateTenant(1, "ext-1");
 
-        dbCache.GetPendingCancellationsAsync(Arg.Any<CancellationToken>())
-            .Returns(new List<TenantSubscription>());
         dbCache.GetPaidSubscriptionsAsync(Arg.Any<CancellationToken>())
             .Returns(new List<TenantSubscription> { sub });
         ((ITenantRepository)dbCache).GetTenantByIdAsync(1, Arg.Any<CancellationToken>())
@@ -682,7 +491,7 @@ public sealed class StripeSyncServiceTests
             });
 
         billingClient.GetSubscriptionStatusAsync("ext-1", Arg.Any<CancellationToken>())
-            .Returns(new StripeSubscriptionStatus(false, "active", "price_pro_123", 5, stripePeriodEnd));
+            .Returns(new StripeSubscriptionStatus(false, "active", "price_pro_123", 5, stripePeriodEnd, "Pro"));
 
         using CancellationTokenSource cts = new();
         await service.StartAsync(cts.Token);
@@ -708,8 +517,6 @@ public sealed class StripeSyncServiceTests
             currentPeriodEnd: null);
         Tenant tenant = CreateTenant(1, "ext-1");
 
-        dbCache.GetPendingCancellationsAsync(Arg.Any<CancellationToken>())
-            .Returns(new List<TenantSubscription>());
         dbCache.GetPaidSubscriptionsAsync(Arg.Any<CancellationToken>())
             .Returns(new List<TenantSubscription> { sub });
         ((ITenantRepository)dbCache).GetTenantByIdAsync(1, Arg.Any<CancellationToken>())
@@ -725,7 +532,7 @@ public sealed class StripeSyncServiceTests
             });
 
         billingClient.GetSubscriptionStatusAsync("ext-1", Arg.Any<CancellationToken>())
-            .Returns(new StripeSubscriptionStatus(false, "active", "price_pro_123", 5, stripePeriodEnd));
+            .Returns(new StripeSubscriptionStatus(false, "active", "price_pro_123", 5, stripePeriodEnd, "Pro"));
 
         using CancellationTokenSource cts = new();
         await service.StartAsync(cts.Token);
@@ -750,8 +557,6 @@ public sealed class StripeSyncServiceTests
             currentPeriodEnd: periodEnd);
         Tenant tenant = CreateTenant(1, "ext-1");
 
-        dbCache.GetPendingCancellationsAsync(Arg.Any<CancellationToken>())
-            .Returns(new List<TenantSubscription>());
         dbCache.GetPaidSubscriptionsAsync(Arg.Any<CancellationToken>())
             .Returns(new List<TenantSubscription> { sub });
         ((ITenantRepository)dbCache).GetTenantByIdAsync(1, Arg.Any<CancellationToken>())
@@ -765,7 +570,7 @@ public sealed class StripeSyncServiceTests
             });
 
         billingClient.GetSubscriptionStatusAsync("ext-1", Arg.Any<CancellationToken>())
-            .Returns(new StripeSubscriptionStatus(false, "active", "price_pro_123", 5, periodEnd));
+            .Returns(new StripeSubscriptionStatus(false, "active", "price_pro_123", 5, periodEnd, "Pro"));
 
         using CancellationTokenSource cts = new();
         await service.StartAsync(cts.Token);
@@ -791,8 +596,6 @@ public sealed class StripeSyncServiceTests
             currentPeriodEnd: DateTimeOffset.UtcNow.AddDays(5));
         Tenant tenant = CreateTenant(1, "ext-1");
 
-        dbCache.GetPendingCancellationsAsync(Arg.Any<CancellationToken>())
-            .Returns(new List<TenantSubscription>());
         dbCache.GetPaidSubscriptionsAsync(Arg.Any<CancellationToken>())
             .Returns(new List<TenantSubscription> { sub });
         ((ITenantRepository)dbCache).GetTenantByIdAsync(1, Arg.Any<CancellationToken>())
@@ -809,7 +612,7 @@ public sealed class StripeSyncServiceTests
 
         DateTimeOffset periodEnd = sub.CurrentPeriodEnd!.Value;
         billingClient.GetSubscriptionStatusAsync("ext-1", Arg.Any<CancellationToken>())
-            .Returns(new StripeSubscriptionStatus(false, "past_due", "price_pro_123", 3, periodEnd));
+            .Returns(new StripeSubscriptionStatus(false, "past_due", "price_pro_123", 3, periodEnd, "Pro"));
 
         using CancellationTokenSource cts = new();
         await service.StartAsync(cts.Token);
@@ -836,8 +639,6 @@ public sealed class StripeSyncServiceTests
             currentPeriodEnd: DateTimeOffset.UtcNow.AddDays(3));
         Tenant tenant = CreateTenant(1, "ext-1");
 
-        dbCache.GetPendingCancellationsAsync(Arg.Any<CancellationToken>())
-            .Returns(new List<TenantSubscription>());
         dbCache.GetPaidSubscriptionsAsync(Arg.Any<CancellationToken>())
             .Returns(new List<TenantSubscription> { sub });
         ((ITenantRepository)dbCache).GetTenantByIdAsync(1, Arg.Any<CancellationToken>())
@@ -854,7 +655,7 @@ public sealed class StripeSyncServiceTests
 
         DateTimeOffset periodEnd = sub.CurrentPeriodEnd!.Value;
         billingClient.GetSubscriptionStatusAsync("ext-1", Arg.Any<CancellationToken>())
-            .Returns(new StripeSubscriptionStatus(false, "canceled", "price_team_456", 2, periodEnd));
+            .Returns(new StripeSubscriptionStatus(false, "canceled", "price_team_456", 2, periodEnd, "Team"));
 
         using CancellationTokenSource cts = new();
         await service.StartAsync(cts.Token);
@@ -881,8 +682,6 @@ public sealed class StripeSyncServiceTests
             currentPeriodEnd: DateTimeOffset.UtcNow.AddDays(20));
         Tenant tenant = CreateTenant(1, "ext-1");
 
-        dbCache.GetPendingCancellationsAsync(Arg.Any<CancellationToken>())
-            .Returns(new List<TenantSubscription>());
         dbCache.GetPaidSubscriptionsAsync(Arg.Any<CancellationToken>())
             .Returns(new List<TenantSubscription> { sub });
         ((ITenantRepository)dbCache).GetTenantByIdAsync(1, Arg.Any<CancellationToken>())
@@ -899,7 +698,7 @@ public sealed class StripeSyncServiceTests
 
         DateTimeOffset periodEnd = sub.CurrentPeriodEnd!.Value;
         billingClient.GetSubscriptionStatusAsync("ext-1", Arg.Any<CancellationToken>())
-            .Returns(new StripeSubscriptionStatus(false, "active", "price_pro_123", 4, periodEnd));
+            .Returns(new StripeSubscriptionStatus(false, "active", "price_pro_123", 4, periodEnd, "Pro"));
 
         using CancellationTokenSource cts = new();
         await service.StartAsync(cts.Token);
@@ -929,8 +728,6 @@ public sealed class StripeSyncServiceTests
         Tenant tenant1 = CreateTenant(1, "ext-1");
         Tenant tenant2 = CreateTenant(2, "ext-2");
 
-        dbCache.GetPendingCancellationsAsync(Arg.Any<CancellationToken>())
-            .Returns(new List<TenantSubscription>());
         dbCache.GetPaidSubscriptionsAsync(Arg.Any<CancellationToken>())
             .Returns(new List<TenantSubscription> { sub1, sub2 });
         ((ITenantRepository)dbCache).GetTenantByIdAsync(1, Arg.Any<CancellationToken>())
@@ -945,7 +742,7 @@ public sealed class StripeSyncServiceTests
         // Second tenant succeeds
         DateTimeOffset periodEnd = sub2.CurrentPeriodEnd!.Value;
         billingClient.GetSubscriptionStatusAsync("ext-2", Arg.Any<CancellationToken>())
-            .Returns(new StripeSubscriptionStatus(false, "active", "price_team_456", 5, periodEnd));
+            .Returns(new StripeSubscriptionStatus(false, "active", "price_team_456", 5, periodEnd, "Team"));
         subscriptionService.GetMachineCountForTenantAsync(2, Arg.Any<CancellationToken>())
             .Returns(callInfo =>
             {
@@ -982,8 +779,6 @@ public sealed class StripeSyncServiceTests
 
         TenantSubscription sub = CreateSubscription(1, tier: SubscriptionTier.Pro);
 
-        dbCache.GetPendingCancellationsAsync(Arg.Any<CancellationToken>())
-            .Returns(new List<TenantSubscription>());
         dbCache.GetPaidSubscriptionsAsync(Arg.Any<CancellationToken>())
             .Returns(new List<TenantSubscription> { sub });
         ((ITenantRepository)dbCache).GetTenantByIdAsync(1, Arg.Any<CancellationToken>())
@@ -1020,8 +815,6 @@ public sealed class StripeSyncServiceTests
         TenantSubscription sub = CreateSubscription(1, tier: SubscriptionTier.Pro);
         Tenant tenant = CreateTenant(1, "ext-1");
 
-        dbCache.GetPendingCancellationsAsync(Arg.Any<CancellationToken>())
-            .Returns(new List<TenantSubscription>());
         dbCache.GetPaidSubscriptionsAsync(Arg.Any<CancellationToken>())
             .Returns(new List<TenantSubscription> { sub });
         ((ITenantRepository)dbCache).GetTenantByIdAsync(1, Arg.Any<CancellationToken>())
@@ -1031,7 +824,7 @@ public sealed class StripeSyncServiceTests
             {
                 workDone.TrySetResult();
 
-                return new StripeSubscriptionStatus(false, "none", string.Empty, 0, null);
+                return new StripeSubscriptionStatus(false, "none", string.Empty, 0, null, null);
             });
 
         using CancellationTokenSource cts = new();
@@ -1053,9 +846,9 @@ public sealed class StripeSyncServiceTests
             ILogger<StripeSyncService> logger) = CreateSut();
         TaskCompletionSource workDone = new();
 
-        dbCache.GetPendingCancellationsAsync(Arg.Any<CancellationToken>())
+        dbCache.GetPaidSubscriptionsAsync(Arg.Any<CancellationToken>())
             .Returns(Task.FromException<List<TenantSubscription>>(new InvalidOperationException("DB error")));
-        dbCache.When(x => x.GetPendingCancellationsAsync(Arg.Any<CancellationToken>()))
+        dbCache.When(x => x.GetPaidSubscriptionsAsync(Arg.Any<CancellationToken>()))
             .Do(_ => workDone.TrySetResult());
 
         using CancellationTokenSource cts = new();
@@ -1080,8 +873,6 @@ public sealed class StripeSyncServiceTests
             ILogger<StripeSyncService> _) = CreateSut();
         TaskCompletionSource workDone = new();
 
-        dbCache.GetPendingCancellationsAsync(Arg.Any<CancellationToken>())
-            .Returns(new List<TenantSubscription>());
         dbCache.GetPaidSubscriptionsAsync(Arg.Any<CancellationToken>())
             .Returns(callInfo =>
             {
@@ -1111,8 +902,6 @@ public sealed class StripeSyncServiceTests
             currentPeriodEnd: DateTimeOffset.UtcNow.AddDays(15));
         Tenant tenant = CreateTenant(1, "ext-1");
 
-        dbCache.GetPendingCancellationsAsync(Arg.Any<CancellationToken>())
-            .Returns(new List<TenantSubscription>());
         dbCache.GetPaidSubscriptionsAsync(Arg.Any<CancellationToken>())
             .Returns(new List<TenantSubscription> { sub });
         ((ITenantRepository)dbCache).GetTenantByIdAsync(1, Arg.Any<CancellationToken>())
@@ -1122,7 +911,7 @@ public sealed class StripeSyncServiceTests
 
         DateTimeOffset periodEnd = sub.CurrentPeriodEnd!.Value;
         billingClient.GetSubscriptionStatusAsync("ext-1", Arg.Any<CancellationToken>())
-            .Returns(new StripeSubscriptionStatus(false, "active", "price_pro_123", 5, periodEnd));
+            .Returns(new StripeSubscriptionStatus(false, "active", "price_pro_123", 5, periodEnd, "Pro"));
         billingClient.ReportMachineUsageAsync("ext-1", 10, Arg.Any<CancellationToken>())
             .Returns(callInfo =>
             {

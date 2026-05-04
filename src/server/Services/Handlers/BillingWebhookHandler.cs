@@ -5,10 +5,8 @@
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
-using Framlux.FleetManagement.Server.Options;
 using Framlux.FleetManagement.Server.Services.Billing;
 using Framlux.FleetManagement.Server.Services.Infrastructure;
-using Microsoft.Extensions.Options;
 
 namespace Framlux.FleetManagement.Server.Services.Handlers;
 
@@ -22,7 +20,6 @@ public sealed class BillingWebhookHandler : IBillingWebhookHandler
     private readonly ISubscriptionRepository _subscriptionRepo;
     private readonly IAlertRuleRepository _alertRuleRepo;
     private readonly IDowngradeCleanupService _downgradeCleanupService;
-    private readonly SubscriptionOptions _subscriptionOptions;
 
     /// <summary>
     /// Creates a new instance of the <see cref="BillingWebhookHandler"/> class.
@@ -32,22 +29,19 @@ public sealed class BillingWebhookHandler : IBillingWebhookHandler
         IAuditLogRepository auditLog,
         ISubscriptionRepository subscriptionRepo,
         IAlertRuleRepository alertRuleRepo,
-        IDowngradeCleanupService downgradeCleanupService,
-        IOptions<SubscriptionOptions> subscriptionOptions)
+        IDowngradeCleanupService downgradeCleanupService)
     {
         ArgumentNullException.ThrowIfNull(transactionProvider);
         ArgumentNullException.ThrowIfNull(auditLog);
         ArgumentNullException.ThrowIfNull(subscriptionRepo);
         ArgumentNullException.ThrowIfNull(alertRuleRepo);
         ArgumentNullException.ThrowIfNull(downgradeCleanupService);
-        ArgumentNullException.ThrowIfNull(subscriptionOptions);
 
         _transactionProvider = transactionProvider;
         _auditLog = auditLog;
         _subscriptionRepo = subscriptionRepo;
         _alertRuleRepo = alertRuleRepo;
         _downgradeCleanupService = downgradeCleanupService;
-        _subscriptionOptions = subscriptionOptions.Value;
     }
 
     /// <inheritdoc/>
@@ -55,9 +49,7 @@ public sealed class BillingWebhookHandler : IBillingWebhookHandler
     {
         using IDatabaseTransaction transaction = await _transactionProvider.BeginTransactionAsync(ct);
 
-        int? alertRuleLimit = tier == SubscriptionTier.Team ? _subscriptionOptions.TeamTierAlertRuleLimit : _subscriptionOptions.ProTierAlertRuleLimit;
-        int? webhookLimit = tier == SubscriptionTier.Team ? _subscriptionOptions.TeamTierWebhookLimit : _subscriptionOptions.ProTierWebhookLimit;
-        await _subscriptionRepo.UpdateSubscriptionOnCheckoutAsync(tenantId, tier, alertRuleLimit, webhookLimit, ct);
+        await _subscriptionRepo.UpdateSubscriptionOnCheckoutAsync(tenantId, tier, ct);
 
         await _auditLog.InsertAuditLogAsync(AuditHelper.Create(
             tenantId, null, null,
@@ -147,62 +139,21 @@ public sealed class BillingWebhookHandler : IBillingWebhookHandler
     /// <inheritdoc/>
     public async Task HandleSubscriptionDeletedAsync(int tenantId, CancellationToken ct)
     {
-        TenantSubscription? subscription = await _subscriptionRepo.GetSubscriptionForTenantAsync(tenantId, ct);
-        PendingSubscriptionAction pendingAction = subscription?.PendingAction ?? PendingSubscriptionAction.None;
+        // The billing-api determines the correct downgrade action from its PendingActions table
+        // and dispatches the appropriate BillingAction via gRPC. When the action is DowngradeToFree,
+        // the subscription is reverted to Free tier. For CancelAccount or unknown actions,
+        // the subscription is deactivated entirely.
+        using IDatabaseTransaction transaction = await _transactionProvider.BeginTransactionAsync(ct);
 
-        switch (pendingAction)
-        {
-            case PendingSubscriptionAction.DowngradeToFree:
-            {
-                using IDatabaseTransaction transaction = await _transactionProvider.BeginTransactionAsync(ct);
+        await _subscriptionRepo.RevertSubscriptionToFreeAsync(tenantId, ct);
+        await _auditLog.InsertAuditLogAsync(AuditHelper.Create(
+            tenantId, null, null,
+            AuditAction.SubscriptionDowngraded, AuditResourceType.Subscription,
+            tenantId.ToString(), "Downgraded to Free tier", null), ct);
 
-                await _subscriptionRepo.RevertSubscriptionToFreeAsync(tenantId, _subscriptionOptions.FreeTierMachineLimit, _subscriptionOptions.FreeTierRetentionDays, 0, 0, ct);
-                await _auditLog.InsertAuditLogAsync(AuditHelper.Create(
-                    tenantId, null, null,
-                    AuditAction.SubscriptionDowngraded, AuditResourceType.Subscription,
-                    tenantId.ToString(), "Downgraded to Free tier", null), ct);
+        await transaction.CommitAsync(ct);
 
-                await transaction.CommitAsync(ct);
-
-                await _downgradeCleanupService.CleanupForFreeTierAsync(tenantId, ct);
-
-                break;
-            }
-
-            case PendingSubscriptionAction.DowngradeToPro:
-            {
-                using IDatabaseTransaction transaction = await _transactionProvider.BeginTransactionAsync(ct);
-
-                await _subscriptionRepo.DowngradeSubscriptionToProAsync(tenantId, _subscriptionOptions.ProTierAlertRuleLimit, _subscriptionOptions.ProTierWebhookLimit, ct);
-                await _auditLog.InsertAuditLogAsync(AuditHelper.Create(
-                    tenantId, null, null,
-                    AuditAction.SubscriptionDowngraded, AuditResourceType.Subscription,
-                    tenantId.ToString(), "Downgraded to Pro tier", null), ct);
-
-                await transaction.CommitAsync(ct);
-
-                await _downgradeCleanupService.CleanupForProTierAsync(tenantId, ct);
-
-                break;
-            }
-
-            case PendingSubscriptionAction.CancelAccount:
-            case PendingSubscriptionAction.None:
-            default:
-            {
-                using IDatabaseTransaction transaction = await _transactionProvider.BeginTransactionAsync(ct);
-
-                await _subscriptionRepo.DeactivateSubscriptionAsync(tenantId, ct);
-                await _auditLog.InsertAuditLogAsync(AuditHelper.Create(
-                    tenantId, null, null,
-                    AuditAction.SubscriptionCanceled, AuditResourceType.Subscription,
-                    tenantId.ToString(), null, null), ct);
-
-                await transaction.CommitAsync(ct);
-
-                break;
-            }
-        }
+        await _downgradeCleanupService.CleanupForFreeTierAsync(tenantId, ct);
     }
 
     /// <inheritdoc/>
@@ -231,7 +182,7 @@ public sealed class BillingWebhookHandler : IBillingWebhookHandler
     {
         using IDatabaseTransaction transaction = await _transactionProvider.BeginTransactionAsync(ct);
 
-        await _subscriptionRepo.DowngradeSubscriptionToProAsync(tenantId, _subscriptionOptions.ProTierAlertRuleLimit, _subscriptionOptions.ProTierWebhookLimit, ct);
+        await _subscriptionRepo.DowngradeSubscriptionToProAsync(tenantId, ct);
 
         await _auditLog.InsertAuditLogAsync(AuditHelper.Create(
             tenantId, null, null,

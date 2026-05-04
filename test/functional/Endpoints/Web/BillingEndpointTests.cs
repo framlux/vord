@@ -8,8 +8,10 @@ using Framlux.FleetManagement.Database;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.FunctionalTest.Infrastructure;
+using Framlux.FleetManagement.Server.Services.Billing;
 using LinqToDB;
 using LinqToDB.Async;
+using NSubstitute;
 
 namespace Framlux.FleetManagement.FunctionalTest.Endpoints.Web;
 
@@ -21,9 +23,7 @@ public sealed class BillingEndpointTests
     private static async Task<(int TenantId, int UserId)> SeedBillingEnvironment(
         DatabaseContext db,
         SubscriptionTier tier = SubscriptionTier.Pro,
-        SubscriptionStatus status = SubscriptionStatus.Active,
-        bool cancelAtPeriodEnd = false,
-        PendingSubscriptionAction pendingAction = PendingSubscriptionAction.None)
+        SubscriptionStatus status = SubscriptionStatus.Active)
     {
         Tenant tenant = new()
         {
@@ -41,9 +41,6 @@ public sealed class BillingEndpointTests
             TenantId = tenant.Id,
             Tier = tier,
             Status = status,
-            RetentionDays = 30,
-            CancelAtPeriodEnd = cancelAtPeriodEnd,
-            PendingAction = pendingAction,
             CreatedAt = DateTimeOffset.UtcNow,
             UpdatedAt = DateTimeOffset.UtcNow,
         };
@@ -102,9 +99,17 @@ public sealed class BillingEndpointTests
     {
         using FunctionalTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
-        (int tenantId, int userId) = await SeedBillingEnvironment(db, cancelAtPeriodEnd: true, pendingAction: PendingSubscriptionAction.CancelAccount);
+        (int tenantId, int userId) = await SeedBillingEnvironment(db);
         HttpClient client = BuildClient(factory, tenantId, userId);
 
+        // Configure the billing mock to report that Stripe already has cancel_at_period_end set,
+        // simulating the state after a previous cancellation request was processed.
+        factory.BillingApiClientMock.GetSubscriptionStatusAsync(
+            Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(
+                new StripeSubscriptionStatus(true, "active", string.Empty, 0, null, null)));
+
+        // Cancel when Stripe already reflects a pending cancellation
         HttpResponseMessage response = await client.PostAsync("/api/v1/billing/cancel", null);
 
         await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
@@ -152,28 +157,34 @@ public sealed class BillingEndpointTests
     }
 
     [Test]
-    public async Task CancelSubscription_ActiveSubscription_SetsCancelAtPeriodEndInDatabase()
+    public async Task CancelSubscription_ActiveSubscription_DelegatesCancellationToBillingApi()
     {
+        // Cancellation for paid tiers is delegated to the billing-api via gRPC.
+        // The fleet server does not modify the subscription record directly;
+        // instead it calls the billing-api and records an audit log entry.
         using FunctionalTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
         (int tenantId, int userId) = await SeedBillingEnvironment(db);
         HttpClient client = BuildClient(factory, tenantId, userId);
-        DateTimeOffset beforeCancel = DateTimeOffset.UtcNow;
 
         HttpResponseMessage response = await client.PostAsync("/api/v1/billing/cancel", null);
 
         await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
 
-        // Verify the database was updated correctly
+        // Verify the subscription status was not changed (billing-api handles that via webhook)
         using DatabaseContext verifyDb = factory.CreateDbContext();
         TenantSubscription? subscription = await verifyDb.TenantSubscriptions
             .Where(s => s.TenantId == tenantId)
             .FirstOrDefaultAsync();
 
         await Assert.That(subscription).IsNotNull();
-        await Assert.That(subscription!.CancelAtPeriodEnd).IsTrue();
-        await Assert.That(subscription.Status).IsEqualTo(SubscriptionStatus.Active);
-        await Assert.That(subscription.UpdatedAt).IsGreaterThanOrEqualTo(beforeCancel);
+        await Assert.That(subscription!.Status).IsEqualTo(SubscriptionStatus.Active);
+
+        // Verify an audit log entry was created for the cancellation request
+        AuditLogEntry? auditEntry = await verifyDb.AuditLog
+            .Where(a => a.TenantId == tenantId && a.Action == AuditAction.SubscriptionCancelRequested)
+            .FirstOrDefaultAsync();
+        await Assert.That(auditEntry).IsNotNull();
     }
 
     [Test]
@@ -185,9 +196,7 @@ public sealed class BillingEndpointTests
         using DatabaseContext db = factory.CreateDbContext();
         (int tenantId, int userId) = await SeedBillingEnvironment(
             db,
-            status: SubscriptionStatus.Canceled,
-            cancelAtPeriodEnd: true,
-            pendingAction: PendingSubscriptionAction.CancelAccount);
+            status: SubscriptionStatus.Canceled);
         HttpClient client = BuildClient(factory, tenantId, userId);
 
         HttpResponseMessage response = await client.PostAsync("/api/v1/billing/cancel", null);
@@ -241,30 +250,35 @@ public sealed class BillingEndpointTests
     }
 
     [Test]
-    public async Task CancelSubscription_PastDueSubscription_SetsCancelAtPeriodEndInDatabase()
+    public async Task CancelSubscription_PastDueSubscription_DelegatesCancellationToBillingApi()
     {
+        // A past-due subscription that is not yet canceled delegates cancellation
+        // to the billing-api and preserves the PastDue status locally.
         using FunctionalTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
         (int tenantId, int userId) = await SeedBillingEnvironment(
             db,
             status: SubscriptionStatus.PastDue);
         HttpClient client = BuildClient(factory, tenantId, userId);
-        DateTimeOffset beforeCancel = DateTimeOffset.UtcNow;
 
         HttpResponseMessage response = await client.PostAsync("/api/v1/billing/cancel", null);
 
         await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
 
-        // Verify the database reflects cancellation intent while preserving PastDue status
+        // Verify the subscription status was preserved (billing-api handles the Stripe side)
         using DatabaseContext verifyDb = factory.CreateDbContext();
         TenantSubscription? subscription = await verifyDb.TenantSubscriptions
             .Where(s => s.TenantId == tenantId)
             .FirstOrDefaultAsync();
 
         await Assert.That(subscription).IsNotNull();
-        await Assert.That(subscription!.CancelAtPeriodEnd).IsTrue();
-        await Assert.That(subscription.Status).IsEqualTo(SubscriptionStatus.PastDue);
-        await Assert.That(subscription.UpdatedAt).IsGreaterThanOrEqualTo(beforeCancel);
+        await Assert.That(subscription!.Status).IsEqualTo(SubscriptionStatus.PastDue);
+
+        // Verify an audit log entry was created for the cancellation request
+        AuditLogEntry? auditEntry = await verifyDb.AuditLog
+            .Where(a => a.TenantId == tenantId && a.Action == AuditAction.SubscriptionCancelRequested)
+            .FirstOrDefaultAsync();
+        await Assert.That(auditEntry).IsNotNull();
     }
 
     [Test]
@@ -304,20 +318,26 @@ public sealed class BillingEndpointTests
     [Test]
     public async Task CancelSubscription_AlreadyCancelling_DoesNotModifyDatabaseTimestamp()
     {
-        // When the subscription is already cancelling, the endpoint should return idempotently
-        // without writing to the database again
+        // When Stripe already reflects a pending cancellation, the endpoint should return
+        // idempotently without writing to the database again
         using FunctionalTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
-        (int tenantId, int userId) = await SeedBillingEnvironment(db, cancelAtPeriodEnd: true, pendingAction: PendingSubscriptionAction.CancelAccount);
+        (int tenantId, int userId) = await SeedBillingEnvironment(db);
+        HttpClient client = BuildClient(factory, tenantId, userId);
 
-        // Record the original UpdatedAt timestamp
+        // Record the UpdatedAt timestamp before any cancel attempt
         TenantSubscription? originalSubscription = await db.TenantSubscriptions
             .Where(s => s.TenantId == tenantId)
             .FirstOrDefaultAsync();
         DateTimeOffset originalUpdatedAt = originalSubscription!.UpdatedAt;
 
-        HttpClient client = BuildClient(factory, tenantId, userId);
+        // Configure the billing mock to report that Stripe already has cancel_at_period_end set
+        factory.BillingApiClientMock.GetSubscriptionStatusAsync(
+            Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(
+                new StripeSubscriptionStatus(true, "active", string.Empty, 0, null, null)));
 
+        // Cancel when Stripe already reflects cancellation
         HttpResponseMessage response = await client.PostAsync("/api/v1/billing/cancel", null);
 
         await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);

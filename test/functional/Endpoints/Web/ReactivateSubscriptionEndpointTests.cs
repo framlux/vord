@@ -21,9 +21,7 @@ public sealed class ReactivateSubscriptionEndpointTests
     private static async Task<(int TenantId, int UserId)> SeedBillingEnvironment(
         DatabaseContext db,
         SubscriptionTier tier = SubscriptionTier.Pro,
-        SubscriptionStatus status = SubscriptionStatus.Active,
-        bool cancelAtPeriodEnd = false,
-        PendingSubscriptionAction pendingAction = PendingSubscriptionAction.None)
+        SubscriptionStatus status = SubscriptionStatus.Active)
     {
         Tenant tenant = new()
         {
@@ -41,9 +39,6 @@ public sealed class ReactivateSubscriptionEndpointTests
             TenantId = tenant.Id,
             Tier = tier,
             Status = status,
-            RetentionDays = 30,
-            CancelAtPeriodEnd = cancelAtPeriodEnd,
-            PendingAction = pendingAction,
             CreatedAt = DateTimeOffset.UtcNow,
             UpdatedAt = DateTimeOffset.UtcNow,
         };
@@ -251,7 +246,5 @@ public sealed class ReactivateSubscriptionEndpointTests
         await Assert.That(subscription).IsNotNull();
         await Assert.That(subscription!.Tier).IsEqualTo(SubscriptionTier.Free);
         await Assert.That(subscription.Status).IsEqualTo(SubscriptionStatus.Active);
-        await Assert.That(subscription.MachineLimit).IsEqualTo(3);
-        await Assert.That(subscription.RetentionDays).IsEqualTo(1);
     }
 }

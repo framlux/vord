@@ -88,85 +88,7 @@ public sealed class StripeSyncService : BackgroundService
         ITenantRepository tenantRepository = scope.ServiceProvider.GetRequiredService<ITenantRepository>();
         ISubscriptionService subscriptionService = scope.ServiceProvider.GetRequiredService<ISubscriptionService>();
 
-        await ReconcilePendingCancellationsAsync(scope, subscriptionRepository, tenantRepository, ct);
         await SyncPaidSubscriptionsAsync(scope, subscriptionRepository, tenantRepository, subscriptionService, ct);
-    }
-
-    private async Task ReconcilePendingCancellationsAsync(
-        IServiceScope scope, ISubscriptionRepository subscriptionRepository, ITenantRepository tenantRepository, CancellationToken ct)
-    {
-        List<TenantSubscription> pendingCancellations = await subscriptionRepository.GetPendingCancellationsAsync(ct);
-
-        if (pendingCancellations.Count == 0)
-        {
-            return;
-        }
-
-        _logger.LogInformation("Reconciling {Count} pending cancellations", pendingCancellations.Count);
-
-        foreach (TenantSubscription subscription in pendingCancellations)
-        {
-            try
-            {
-                Tenant? tenant = await tenantRepository.GetTenantByIdAsync(subscription.TenantId, ct);
-                if (tenant is null)
-                {
-                    _logger.LogWarning("Tenant {TenantId} not found during reconciliation", subscription.TenantId);
-
-                    continue;
-                }
-
-                StripeSubscriptionStatus stripeStatus =
-                    await _billingApiClient.GetSubscriptionStatusAsync(tenant.ExternalId, ct);
-
-                if (stripeStatus.StripeStatus == "canceled" || stripeStatus.StripeStatus == "none")
-                {
-                    // Subscription already ended in Stripe, process the downgrade
-                    Services.Handlers.IBillingWebhookHandler webhookHandler =
-                        scope.ServiceProvider.GetRequiredService<Services.Handlers.IBillingWebhookHandler>();
-                    await webhookHandler.HandleSubscriptionDeletedAsync(subscription.TenantId, ct);
-                    _logger.LogInformation(
-                        "Reconciliation: Tenant {TenantId} subscription already canceled in Stripe, processed downgrade",
-                        subscription.TenantId);
-                }
-                else if (stripeStatus.CancelAtPeriodEnd == false)
-                {
-                    // Stripe doesn't reflect the cancellation yet, retry
-                    string pendingActionStr = subscription.PendingAction switch
-                    {
-                        PendingSubscriptionAction.DowngradeToFree => "DowngradeToFree",
-                        PendingSubscriptionAction.DowngradeToPro => "DowngradeToPro",
-                        PendingSubscriptionAction.CancelAccount => "CancelAccount",
-                        _ => "DowngradeToFree",
-                    };
-                    bool success = await _billingApiClient.CancelSubscriptionAsync(tenant.ExternalId, pendingActionStr, ct);
-                    if (success)
-                    {
-                        _logger.LogInformation(
-                            "Reconciliation: Successfully retried cancellation for tenant {TenantId}",
-                            subscription.TenantId);
-                    }
-                    else
-                    {
-                        _logger.LogWarning(
-                            "Reconciliation: Failed to retry cancellation for tenant {TenantId}",
-                            subscription.TenantId);
-                    }
-                }
-                else
-                {
-                    _logger.LogDebug(
-                        "Reconciliation: Tenant {TenantId} cancellation already reflected in Stripe",
-                        subscription.TenantId);
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex,
-                    "Reconciliation error for tenant {TenantId}",
-                    subscription.TenantId);
-            }
-        }
     }
 
     private async Task SyncPaidSubscriptionsAsync(
@@ -251,10 +173,17 @@ public sealed class StripeSyncService : BackgroundService
         IServiceScope scope,
         string proPriceId, string teamPriceId, CancellationToken ct)
     {
-        SubscriptionTier? stripeTier = MapPriceIdToTier(stripeStatus.PriceId, proPriceId, teamPriceId);
+        // Prefer the tier resolved by the billing API from TierMappings
+        SubscriptionTier? stripeTier = MapTierStringToEnum(stripeStatus.Tier);
         if (stripeTier is null)
         {
-            // Unknown price ID, cannot determine tier
+            // Fallback: try legacy price ID mapping
+            stripeTier = MapPriceIdToTier(stripeStatus.PriceId, proPriceId, teamPriceId);
+        }
+
+        if (stripeTier is null)
+        {
+            // Unknown tier, cannot determine subscription tier
             return;
         }
 
@@ -366,6 +295,16 @@ public sealed class StripeSyncService : BackgroundService
         }
 
         return null;
+    }
+
+    private static SubscriptionTier? MapTierStringToEnum(string? tier)
+    {
+        return tier?.ToLowerInvariant() switch
+        {
+            "pro" => SubscriptionTier.Pro,
+            "team" => SubscriptionTier.Team,
+            _ => null,
+        };
     }
 
     private static SubscriptionStatus? MapStripeStatusToLocal(string stripeStatus)

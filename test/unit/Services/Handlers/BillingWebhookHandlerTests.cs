@@ -2,10 +2,10 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
+using Framlux.FleetManagement.Database;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
-using Framlux.FleetManagement.Server.Options;
 using Framlux.FleetManagement.Server.Services.Billing;
 using Framlux.FleetManagement.Server.Services.Handlers;
 using Framlux.FleetManagement.Test.Infrastructure;
@@ -13,7 +13,6 @@ using LinqToDB;
 using LinqToDB.Async;
 using LinqToDB.Tools;
 using Microsoft.Extensions.Logging.Abstractions;
-using Microsoft.Extensions.Options;
 using NSubstitute;
 
 namespace Framlux.FleetManagement.Test.Services.Handlers;
@@ -23,12 +22,47 @@ namespace Framlux.FleetManagement.Test.Services.Handlers;
 /// </summary>
 public class BillingWebhookHandlerTests
 {
-    private static readonly SubscriptionOptions DefaultOptions = new() { FreeTierMachineLimit = 3, FreeTierRetentionDays = 1 };
+    /// <summary>
+    /// Seeds the TierFeatureLimits table with the standard tier configurations used by tests.
+    /// </summary>
+    private static async Task SeedTierFeatureLimitsAsync(DatabaseContext context)
+    {
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+
+        await context.InsertAsync(new TierFeatureLimit
+        {
+            Tier = SubscriptionTier.Free,
+            MachineLimit = 3,
+            RetentionDays = 1,
+            AlertRuleLimit = 0,
+            WebhookLimit = 0,
+            UpdatedAt = now,
+        });
+
+        await context.InsertAsync(new TierFeatureLimit
+        {
+            Tier = SubscriptionTier.Pro,
+            MachineLimit = null,
+            RetentionDays = 30,
+            AlertRuleLimit = 25,
+            WebhookLimit = 5,
+            UpdatedAt = now,
+        });
+
+        await context.InsertAsync(new TierFeatureLimit
+        {
+            Tier = SubscriptionTier.Team,
+            MachineLimit = null,
+            RetentionDays = 365,
+            AlertRuleLimit = 100,
+            WebhookLimit = 25,
+            UpdatedAt = now,
+        });
+    }
 
     private static BillingWebhookHandler CreateHandler(
         TestDatabaseFactory dbFactory,
-        IDowngradeCleanupService? cleanupService = null,
-        SubscriptionOptions? options = null)
+        IDowngradeCleanupService? cleanupService = null)
     {
         DatabaseRepository repo = new(dbFactory.Context, new NullLogger<DatabaseRepository>());
 
@@ -37,15 +71,15 @@ public class BillingWebhookHandlerTests
             repo,
             repo,
             repo,
-            cleanupService ?? Substitute.For<IDowngradeCleanupService>(),
-            Options.Create(options ?? DefaultOptions));
+            cleanupService ?? Substitute.For<IDowngradeCleanupService>());
     }
 
     [Test]
     public async Task HandleCheckoutCompletedAsync_UpgradesToPro()
     {
         using TestDatabaseFactory dbFactory = new();
-        TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 1, tier: SubscriptionTier.Free, machineLimit: 3, retentionDays: 1);
+        await SeedTierFeatureLimitsAsync(dbFactory.Context);
+        TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 1, tier: SubscriptionTier.Free);
         sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
 
         BillingWebhookHandler handler = CreateHandler(dbFactory);
@@ -57,8 +91,6 @@ public class BillingWebhookHandlerTests
         await Assert.That(updated).IsNotNull();
         await Assert.That(updated!.Tier).IsEqualTo(SubscriptionTier.Pro);
         await Assert.That(updated.Status).IsEqualTo(SubscriptionStatus.Active);
-        await Assert.That(updated.MachineLimit).IsNull();
-        await Assert.That(updated.RetentionDays).IsEqualTo(30);
     }
 
     [Test]
@@ -83,54 +115,11 @@ public class BillingWebhookHandlerTests
     }
 
     [Test]
-    public async Task HandleSubscriptionDeletedAsync_NoPendingAction_DeactivatesSubscription()
+    public async Task HandleSubscriptionDeletedAsync_RevertsToFreeTierAndCleansUp()
     {
         using TestDatabaseFactory dbFactory = new();
-        TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 1, tier: SubscriptionTier.Pro, machineLimit: null, retentionDays: 30);
-        sub.PendingAction = PendingSubscriptionAction.None;
-        sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
-
-        BillingWebhookHandler handler = CreateHandler(dbFactory);
-
-        await handler.HandleSubscriptionDeletedAsync(1, CancellationToken.None);
-
-        TenantSubscription? updated = await dbFactory.Context.TenantSubscriptions
-            .FirstOrDefaultAsync(s => s.TenantId == 1);
-        await Assert.That(updated).IsNotNull();
-        await Assert.That(updated!.Status).IsEqualTo(SubscriptionStatus.Canceled);
-        await Assert.That(updated.Tier).IsEqualTo(SubscriptionTier.Pro);
-        await Assert.That(updated.CancelAtPeriodEnd).IsFalse();
-        await Assert.That(updated.PendingAction).IsEqualTo(PendingSubscriptionAction.None);
-    }
-
-    [Test]
-    public async Task HandleSubscriptionDeletedAsync_CancelAccount_DeactivatesSubscription()
-    {
-        using TestDatabaseFactory dbFactory = new();
-        TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 1, tier: SubscriptionTier.Team, machineLimit: null, retentionDays: 365);
-        sub.PendingAction = PendingSubscriptionAction.CancelAccount;
-        sub.CancelAtPeriodEnd = true;
-        sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
-
-        BillingWebhookHandler handler = CreateHandler(dbFactory);
-
-        await handler.HandleSubscriptionDeletedAsync(1, CancellationToken.None);
-
-        TenantSubscription? updated = await dbFactory.Context.TenantSubscriptions
-            .FirstOrDefaultAsync(s => s.TenantId == 1);
-        await Assert.That(updated).IsNotNull();
-        await Assert.That(updated!.Status).IsEqualTo(SubscriptionStatus.Canceled);
-        await Assert.That(updated.CancelAtPeriodEnd).IsFalse();
-        await Assert.That(updated.PendingAction).IsEqualTo(PendingSubscriptionAction.None);
-    }
-
-    [Test]
-    public async Task HandleSubscriptionDeletedAsync_DowngradeToFree_RevertsToFreeAndCleansUp()
-    {
-        using TestDatabaseFactory dbFactory = new();
-        TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 1, tier: SubscriptionTier.Pro, machineLimit: null, retentionDays: 30);
-        sub.PendingAction = PendingSubscriptionAction.DowngradeToFree;
-        sub.CancelAtPeriodEnd = true;
+        await SeedTierFeatureLimitsAsync(dbFactory.Context);
+        TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 1, tier: SubscriptionTier.Pro);
         sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
 
         IDowngradeCleanupService cleanupService = Substitute.For<IDowngradeCleanupService>();
@@ -143,19 +132,15 @@ public class BillingWebhookHandlerTests
         await Assert.That(updated).IsNotNull();
         await Assert.That(updated!.Tier).IsEqualTo(SubscriptionTier.Free);
         await Assert.That(updated.Status).IsEqualTo(SubscriptionStatus.Active);
-        await Assert.That(updated.MachineLimit).IsEqualTo(3);
-        await Assert.That(updated.RetentionDays).IsEqualTo(1);
-        await Assert.That(updated.PendingAction).IsEqualTo(PendingSubscriptionAction.None);
         await cleanupService.Received(1).CleanupForFreeTierAsync(1, Arg.Any<CancellationToken>());
     }
 
     [Test]
-    public async Task HandleSubscriptionDeletedAsync_DowngradeToPro_DowngradesAndCleansUp()
+    public async Task HandleSubscriptionDeletedAsync_TeamTier_RevertsToFreeAndCleansUp()
     {
         using TestDatabaseFactory dbFactory = new();
-        TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 1, tier: SubscriptionTier.Team, machineLimit: null, retentionDays: 365);
-        sub.PendingAction = PendingSubscriptionAction.DowngradeToPro;
-        sub.CancelAtPeriodEnd = true;
+        await SeedTierFeatureLimitsAsync(dbFactory.Context);
+        TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 1, tier: SubscriptionTier.Team);
         sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
 
         IDowngradeCleanupService cleanupService = Substitute.For<IDowngradeCleanupService>();
@@ -166,12 +151,9 @@ public class BillingWebhookHandlerTests
         TenantSubscription? updated = await dbFactory.Context.TenantSubscriptions
             .FirstOrDefaultAsync(s => s.TenantId == 1);
         await Assert.That(updated).IsNotNull();
-        await Assert.That(updated!.Tier).IsEqualTo(SubscriptionTier.Pro);
+        await Assert.That(updated!.Tier).IsEqualTo(SubscriptionTier.Free);
         await Assert.That(updated.Status).IsEqualTo(SubscriptionStatus.Active);
-        await Assert.That(updated.MachineLimit).IsNull();
-        await Assert.That(updated.RetentionDays).IsEqualTo(30);
-        await Assert.That(updated.PendingAction).IsEqualTo(PendingSubscriptionAction.None);
-        await cleanupService.Received(1).CleanupForProTierAsync(1, Arg.Any<CancellationToken>());
+        await cleanupService.Received(1).CleanupForFreeTierAsync(1, Arg.Any<CancellationToken>());
     }
 
     [Test]
@@ -221,7 +203,8 @@ public class BillingWebhookHandlerTests
     public async Task HandleCheckoutCompletedAsync_UpgradesToTeam_SetsRetention365()
     {
         using TestDatabaseFactory dbFactory = new();
-        TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 1, tier: SubscriptionTier.Free, machineLimit: 3, retentionDays: 1);
+        await SeedTierFeatureLimitsAsync(dbFactory.Context);
+        TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 1, tier: SubscriptionTier.Free);
         sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
 
         BillingWebhookHandler handler = CreateHandler(dbFactory);
@@ -232,14 +215,13 @@ public class BillingWebhookHandlerTests
             .FirstOrDefaultAsync(s => s.TenantId == 1);
         await Assert.That(updated).IsNotNull();
         await Assert.That(updated!.Tier).IsEqualTo(SubscriptionTier.Team);
-        await Assert.That(updated.RetentionDays).IsEqualTo(365);
-        await Assert.That(updated.MachineLimit).IsNull();
     }
 
     [Test]
     public async Task HandleCheckoutCompletedAsync_NoExistingSubscription_NoOp()
     {
         using TestDatabaseFactory dbFactory = new();
+        await SeedTierFeatureLimitsAsync(dbFactory.Context);
         BillingWebhookHandler handler = CreateHandler(dbFactory);
 
         // No subscription exists for tenant 999 — should not throw
@@ -253,7 +235,8 @@ public class BillingWebhookHandlerTests
     public async Task HandleCheckoutCompletedAsync_CreatesDefaultAlertRules()
     {
         using TestDatabaseFactory dbFactory = new();
-        TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 1, tier: SubscriptionTier.Free, machineLimit: 3, retentionDays: 1);
+        await SeedTierFeatureLimitsAsync(dbFactory.Context);
+        TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 1, tier: SubscriptionTier.Free);
         sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
 
         BillingWebhookHandler handler = CreateHandler(dbFactory);
@@ -273,7 +256,8 @@ public class BillingWebhookHandlerTests
     public async Task HandleCheckoutCompletedAsync_ExistingRules_DoesNotDuplicate()
     {
         using TestDatabaseFactory dbFactory = new();
-        TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 1, tier: SubscriptionTier.Free, machineLimit: 3, retentionDays: 1);
+        await SeedTierFeatureLimitsAsync(dbFactory.Context);
+        TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 1, tier: SubscriptionTier.Free);
         sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
 
         BillingWebhookHandler handler = CreateHandler(dbFactory);
@@ -299,7 +283,8 @@ public class BillingWebhookHandlerTests
     public async Task HandleCheckoutCompletedAsync_AlreadyOnPro_StaysOnPro()
     {
         using TestDatabaseFactory dbFactory = new();
-        TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 1, tier: SubscriptionTier.Pro, machineLimit: null, retentionDays: 30);
+        await SeedTierFeatureLimitsAsync(dbFactory.Context);
+        TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 1, tier: SubscriptionTier.Pro);
         sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
 
         BillingWebhookHandler handler = CreateHandler(dbFactory);
@@ -311,15 +296,14 @@ public class BillingWebhookHandlerTests
         await Assert.That(updated).IsNotNull();
         await Assert.That(updated!.Tier).IsEqualTo(SubscriptionTier.Pro);
         await Assert.That(updated.Status).IsEqualTo(SubscriptionStatus.Active);
-        await Assert.That(updated.MachineLimit).IsNull();
-        await Assert.That(updated.RetentionDays).IsEqualTo(30);
     }
 
     [Test]
     public async Task HandleCheckoutCompletedAsync_ProToTeam_ChangesToTeam()
     {
         using TestDatabaseFactory dbFactory = new();
-        TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 1, tier: SubscriptionTier.Pro, machineLimit: null, retentionDays: 30);
+        await SeedTierFeatureLimitsAsync(dbFactory.Context);
+        TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 1, tier: SubscriptionTier.Pro);
         sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
 
         BillingWebhookHandler handler = CreateHandler(dbFactory);
@@ -331,15 +315,14 @@ public class BillingWebhookHandlerTests
         await Assert.That(updated).IsNotNull();
         await Assert.That(updated!.Tier).IsEqualTo(SubscriptionTier.Team);
         await Assert.That(updated.Status).IsEqualTo(SubscriptionStatus.Active);
-        await Assert.That(updated.MachineLimit).IsNull();
-        await Assert.That(updated.RetentionDays).IsEqualTo(365);
     }
 
     [Test]
     public async Task HandleDowngradeToProAsync_SetsCorrectValues()
     {
         using TestDatabaseFactory dbFactory = new();
-        TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 1, tier: SubscriptionTier.Team, machineLimit: null, retentionDays: 365);
+        await SeedTierFeatureLimitsAsync(dbFactory.Context);
+        TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 1, tier: SubscriptionTier.Team);
         sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
 
         BillingWebhookHandler handler = CreateHandler(dbFactory);
@@ -351,8 +334,6 @@ public class BillingWebhookHandlerTests
         await Assert.That(updated).IsNotNull();
         await Assert.That(updated!.Tier).IsEqualTo(SubscriptionTier.Pro);
         await Assert.That(updated.Status).IsEqualTo(SubscriptionStatus.Active);
-        await Assert.That(updated.MachineLimit).IsNull();
-        await Assert.That(updated.RetentionDays).IsEqualTo(30);
     }
 
     [Test]
@@ -383,5 +364,62 @@ public class BillingWebhookHandlerTests
 
         int count = await dbFactory.Context.TenantSubscriptions.CountAsync();
         await Assert.That(count).IsEqualTo(0);
+    }
+
+    // ========== M6: Payment failure changes status but NOT tier or limits ==========
+
+    [Test]
+    public async Task HandlePaymentFailedAsync_ChangesPastDue_PreservesTierAndLimits()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        await SeedTierFeatureLimitsAsync(dbFactory.Context);
+
+        TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 1, tier: SubscriptionTier.Pro, status: SubscriptionStatus.Active);
+        sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
+
+        // Capture the original tier and its limits before the payment failure
+        TierFeatureLimit? proLimits = await dbFactory.Context.TierFeatureLimits
+            .FirstOrDefaultAsync(l => l.Tier == SubscriptionTier.Pro);
+
+        BillingWebhookHandler handler = CreateHandler(dbFactory);
+
+        await handler.HandlePaymentFailedAsync(1, CancellationToken.None);
+
+        TenantSubscription? updated = await dbFactory.Context.TenantSubscriptions
+            .FirstOrDefaultAsync(s => s.TenantId == 1);
+        await Assert.That(updated).IsNotNull();
+
+        // Status changed to PastDue
+        await Assert.That(updated!.Status).IsEqualTo(SubscriptionStatus.PastDue);
+
+        // Tier remains Pro (not downgraded to Free or any other tier)
+        await Assert.That(updated.Tier).IsEqualTo(SubscriptionTier.Pro);
+
+        // The tier feature limits are still intact (Pro tier limits still apply)
+        TierFeatureLimit? proLimitsAfter = await dbFactory.Context.TierFeatureLimits
+            .FirstOrDefaultAsync(l => l.Tier == SubscriptionTier.Pro);
+        await Assert.That(proLimitsAfter).IsNotNull();
+        await Assert.That(proLimitsAfter!.MachineLimit).IsEqualTo(proLimits!.MachineLimit);
+        await Assert.That(proLimitsAfter.RetentionDays).IsEqualTo(proLimits.RetentionDays);
+        await Assert.That(proLimitsAfter.AlertRuleLimit).IsEqualTo(proLimits.AlertRuleLimit);
+        await Assert.That(proLimitsAfter.WebhookLimit).IsEqualTo(proLimits.WebhookLimit);
+    }
+
+    [Test]
+    public async Task HandlePaymentFailedAsync_TeamTier_PreservesTierAtTeam()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 1, tier: SubscriptionTier.Team, status: SubscriptionStatus.Active);
+        sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
+
+        BillingWebhookHandler handler = CreateHandler(dbFactory);
+
+        await handler.HandlePaymentFailedAsync(1, CancellationToken.None);
+
+        TenantSubscription? updated = await dbFactory.Context.TenantSubscriptions
+            .FirstOrDefaultAsync(s => s.TenantId == 1);
+        await Assert.That(updated).IsNotNull();
+        await Assert.That(updated!.Status).IsEqualTo(SubscriptionStatus.PastDue);
+        await Assert.That(updated.Tier).IsEqualTo(SubscriptionTier.Team);
     }
 }

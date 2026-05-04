@@ -36,9 +36,6 @@ public sealed class AdminSettingsEndpointTests
             TenantId = tenant.Id,
             Tier = SubscriptionTier.Pro,
             Status = SubscriptionStatus.Active,
-            RetentionDays = 30,
-            CancelAtPeriodEnd = false,
-            PendingAction = PendingSubscriptionAction.None,
             CreatedAt = DateTimeOffset.UtcNow,
             UpdatedAt = DateTimeOffset.UtcNow,
         };

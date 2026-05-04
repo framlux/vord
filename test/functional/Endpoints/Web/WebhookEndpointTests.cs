@@ -38,8 +38,6 @@ public sealed class WebhookEndpointTests
             TenantId = tenant.Id,
             Tier = tier,
             Status = SubscriptionStatus.Active,
-            MachineLimit = tier == SubscriptionTier.Free ? 3 : null,
-            RetentionDays = 30,
             CreatedAt = DateTimeOffset.UtcNow,
             UpdatedAt = DateTimeOffset.UtcNow,
         };
@@ -757,10 +755,11 @@ public sealed class WebhookEndpointTests
         using DatabaseContext db = factory.CreateDbContext();
         (int tenantId, int userId) = await SeedWebhookEnvironment(db);
 
-        // Set the webhook limit to 1 so we can hit it with a single webhook
-        await db.TenantSubscriptions
-            .Where(s => s.TenantId == tenantId)
-            .Set(s => s.WebhookLimit, 1)
+        // Reduce the Pro tier webhook limit to 1 so we can hit it with a single webhook
+        await db.TierFeatureLimits
+            .Where(l => l.Tier == SubscriptionTier.Pro)
+            .Set(l => l.WebhookLimit, 1)
+            .Set(l => l.UpdatedAt, DateTimeOffset.UtcNow)
             .UpdateAsync();
 
         HttpClient client = BuildClient(factory, tenantId, userId);

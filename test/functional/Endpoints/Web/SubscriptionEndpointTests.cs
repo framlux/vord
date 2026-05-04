@@ -37,7 +37,6 @@ public sealed class SubscriptionEndpointTests
         await Assert.That(data.GetProperty("retentionDays").GetInt32()).IsEqualTo(1);
         await Assert.That(data.GetProperty("status").GetString()).IsEqualTo("Active");
         await Assert.That(data.GetProperty("cancelAtPeriodEnd").GetBoolean()).IsFalse();
-        await Assert.That(data.GetProperty("pendingAction").ValueKind).IsEqualTo(JsonValueKind.Null);
     }
 
     [Test]
@@ -175,102 +174,7 @@ public sealed class SubscriptionEndpointTests
     }
 
     [Test]
-    public async Task GetSubscription_PendingActionCancelAccount_ReturnsCancelAccountString()
-    {
-        using FunctionalTestFactory factory = new();
-        using DatabaseContext db = factory.CreateDbContext();
-
-        int tenantId = await SeedTenantWithSubscription(
-            db,
-            SubscriptionTier.Pro,
-            null,
-            30,
-            cancelAtPeriodEnd: true,
-            pendingAction: PendingSubscriptionAction.CancelAccount);
-
-        HttpClient client = BuildViewerClient(factory, tenantId);
-
-        HttpResponseMessage response = await client.GetAsync("/api/v1/billing/subscription");
-
-        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
-
-        JsonElement data = await ExtractDataElement(response);
-        await Assert.That(data.GetProperty("pendingAction").GetString()).IsEqualTo("CancelAccount");
-    }
-
-    [Test]
-    public async Task GetSubscription_PendingActionDowngradeToFree_ReturnsDowngradeToFreeString()
-    {
-        using FunctionalTestFactory factory = new();
-        using DatabaseContext db = factory.CreateDbContext();
-
-        int tenantId = await SeedTenantWithSubscription(
-            db,
-            SubscriptionTier.Pro,
-            null,
-            30,
-            cancelAtPeriodEnd: true,
-            pendingAction: PendingSubscriptionAction.DowngradeToFree);
-
-        HttpClient client = BuildViewerClient(factory, tenantId);
-
-        HttpResponseMessage response = await client.GetAsync("/api/v1/billing/subscription");
-
-        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
-
-        JsonElement data = await ExtractDataElement(response);
-        await Assert.That(data.GetProperty("pendingAction").GetString()).IsEqualTo("DowngradeToFree");
-    }
-
-    [Test]
-    public async Task GetSubscription_PendingActionNone_ReturnsNullPendingAction()
-    {
-        using FunctionalTestFactory factory = new();
-        using DatabaseContext db = factory.CreateDbContext();
-
-        int tenantId = await SeedTenantWithSubscription(
-            db,
-            SubscriptionTier.Pro,
-            null,
-            30,
-            pendingAction: PendingSubscriptionAction.None);
-
-        HttpClient client = BuildViewerClient(factory, tenantId);
-
-        HttpResponseMessage response = await client.GetAsync("/api/v1/billing/subscription");
-
-        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
-
-        JsonElement data = await ExtractDataElement(response);
-        await Assert.That(data.GetProperty("pendingAction").ValueKind).IsEqualTo(JsonValueKind.Null);
-    }
-
-    [Test]
-    public async Task GetSubscription_CancelAtPeriodEndTrue_ReturnsTrueInDto()
-    {
-        using FunctionalTestFactory factory = new();
-        using DatabaseContext db = factory.CreateDbContext();
-
-        int tenantId = await SeedTenantWithSubscription(
-            db,
-            SubscriptionTier.Pro,
-            null,
-            30,
-            cancelAtPeriodEnd: true,
-            pendingAction: PendingSubscriptionAction.CancelAccount);
-
-        HttpClient client = BuildViewerClient(factory, tenantId);
-
-        HttpResponseMessage response = await client.GetAsync("/api/v1/billing/subscription");
-
-        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
-
-        JsonElement data = await ExtractDataElement(response);
-        await Assert.That(data.GetProperty("cancelAtPeriodEnd").GetBoolean()).IsTrue();
-    }
-
-    [Test]
-    public async Task GetSubscription_CancelAtPeriodEndFalse_ReturnsFalseInDto()
+    public async Task GetSubscription_DefaultCancelAtPeriodEnd_ReturnsFalseInDto()
     {
         using FunctionalTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
@@ -382,9 +286,7 @@ public sealed class SubscriptionEndpointTests
         int? machineLimit,
         int retentionDays,
         SubscriptionStatus status = SubscriptionStatus.Active,
-        DateTimeOffset? currentPeriodEnd = null,
-        bool cancelAtPeriodEnd = false,
-        PendingSubscriptionAction pendingAction = PendingSubscriptionAction.None)
+        DateTimeOffset? currentPeriodEnd = null)
     {
         Tenant tenant = new()
         {
@@ -402,11 +304,7 @@ public sealed class SubscriptionEndpointTests
             TenantId = tenantId,
             Tier = tier,
             Status = status,
-            MachineLimit = machineLimit,
-            RetentionDays = retentionDays,
             CurrentPeriodEnd = currentPeriodEnd,
-            CancelAtPeriodEnd = cancelAtPeriodEnd,
-            PendingAction = pendingAction,
             CreatedAt = DateTimeOffset.UtcNow,
             UpdatedAt = DateTimeOffset.UtcNow
         };

@@ -40,7 +40,6 @@ public sealed class BillingDisplayEndpointTests
             TenantId = tenant.Id,
             Tier = tier,
             Status = status,
-            RetentionDays = 30,
             CreatedAt = DateTimeOffset.UtcNow,
             UpdatedAt = DateTimeOffset.UtcNow,
         };

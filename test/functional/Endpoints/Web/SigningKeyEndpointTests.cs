@@ -47,8 +47,6 @@ public sealed class SigningKeyEndpointTests
             TenantId = tenant.Id,
             Tier = tier,
             Status = SubscriptionStatus.Active,
-            MachineLimit = 100,
-            RetentionDays = 30,
             CreatedAt = DateTimeOffset.UtcNow,
             UpdatedAt = DateTimeOffset.UtcNow
         };

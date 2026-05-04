@@ -36,6 +36,9 @@ public sealed class UpcomingInvoiceDto
     /// <summary>Per-unit amount in cents.</summary>
     public long UnitAmountCents { get; set; }
 
+    /// <summary>Total discount amount in cents (from coupons or credits).</summary>
+    public long DiscountAmountCents { get; set; }
+
     /// <summary>Individual line items on the invoice.</summary>
     public List<LineItemDto> Lines { get; set; } = [];
 }
@@ -128,6 +131,7 @@ public sealed class UpcomingInvoiceEndpoint : EndpointWithoutRequest<ApiResponse
             PeriodEnd = result.PeriodEnd,
             NextPaymentAttempt = result.NextPaymentAttempt,
             UnitAmountCents = result.UnitAmountCents,
+            DiscountAmountCents = result.DiscountAmountCents,
             Lines = result.Lines.Select(l => new LineItemDto
             {
                 Description = l.Description,

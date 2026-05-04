@@ -39,8 +39,6 @@ public sealed class AlertRuleEndpointTests
             TenantId = tenant.Id,
             Tier = tier,
             Status = SubscriptionStatus.Active,
-            MachineLimit = tier == SubscriptionTier.Free ? 3 : null,
-            RetentionDays = tier == SubscriptionTier.Free ? 1 : 30,
             CreatedAt = DateTimeOffset.UtcNow,
             UpdatedAt = DateTimeOffset.UtcNow,
         };
@@ -1288,8 +1286,6 @@ public sealed class AlertRuleEndpointTests
             TenantId = tenant.Id,
             Tier = SubscriptionTier.Pro,
             Status = SubscriptionStatus.Active,
-            MachineLimit = null,
-            RetentionDays = 30,
             CreatedAt = DateTimeOffset.UtcNow,
             UpdatedAt = DateTimeOffset.UtcNow,
         };
@@ -1437,10 +1433,11 @@ public sealed class AlertRuleEndpointTests
         using DatabaseContext db = factory.CreateDbContext();
         (int tenantId, int userId) = await SeedAlertEnvironment(db, SubscriptionTier.Team);
 
-        // Set the alert rule limit to 1 so we can hit it with a single rule
-        await db.TenantSubscriptions
-            .Where(s => s.TenantId == tenantId)
-            .Set(s => s.AlertRuleLimit, 1)
+        // Reduce the Team tier alert rule limit to 1 so we can hit it with a single rule
+        await db.TierFeatureLimits
+            .Where(l => l.Tier == SubscriptionTier.Team)
+            .Set(l => l.AlertRuleLimit, 1)
+            .Set(l => l.UpdatedAt, DateTimeOffset.UtcNow)
             .UpdateAsync();
 
         HttpClient client = BuildClient(factory, tenantId, userId);

@@ -408,9 +408,8 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
         Tenant tenant = await ResolveTenantByExternalIdAsync(
             tenantRepo, request.TenantExternalId, context.CancellationToken);
 
-        int? machineLimit = request.MachineLimit > 0 ? request.MachineLimit : null;
         int updated = await subscriptionRepo.UpdateSubscriptionAdminAsync(
-            tenant.Id, tier, status, machineLimit, request.RetentionDays, context.CancellationToken);
+            tenant.Id, tier, status, context.CancellationToken);
 
         if (updated == 0)
         {
@@ -426,6 +425,108 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
             tenant.Id, tier, status);
 
         return new UpdateTenantSubscriptionResponse
+        {
+            Success = true,
+            Message = "OK"
+        };
+    }
+
+    /// <summary>
+    /// Gets the per-tenant subscription limit overrides for a tenant.
+    /// </summary>
+    public override async Task<GetTenantOverrideResponse> GetTenantOverride(
+        GetTenantOverrideRequest request, ServerCallContext context)
+    {
+        ValidateInternalKey(context);
+
+        using IServiceScope scope = _scopeFactory.CreateScope();
+        ITenantRepository tenantRepo = scope.ServiceProvider.GetRequiredService<ITenantRepository>();
+        ITenantSubscriptionOverrideRepository overrideRepo = scope.ServiceProvider.GetRequiredService<ITenantSubscriptionOverrideRepository>();
+
+        Tenant tenant = await ResolveTenantByExternalIdAsync(
+            tenantRepo, request.TenantExternalId, context.CancellationToken);
+
+        TenantSubscriptionOverride? overrideRecord = await overrideRepo.GetOverrideForTenantAsync(
+            tenant.Id, context.CancellationToken);
+
+        if (overrideRecord is null)
+        {
+            return new GetTenantOverrideResponse
+            {
+                HasOverride = false,
+                MachineLimit = 0,
+                RetentionDays = 0,
+                AlertRuleLimit = 0,
+                WebhookLimit = 0,
+            };
+        }
+
+        return new GetTenantOverrideResponse
+        {
+            HasOverride = true,
+            MachineLimit = overrideRecord.MachineLimit ?? 0,
+            RetentionDays = overrideRecord.RetentionDays ?? 0,
+            AlertRuleLimit = overrideRecord.AlertRuleLimit ?? 0,
+            WebhookLimit = overrideRecord.WebhookLimit ?? 0,
+        };
+    }
+
+    /// <summary>
+    /// Creates or updates the per-tenant subscription limit overrides for a tenant.
+    /// </summary>
+    public override async Task<SetTenantOverrideResponse> SetTenantOverride(
+        SetTenantOverrideRequest request, ServerCallContext context)
+    {
+        ValidateInternalKey(context);
+
+        using IServiceScope scope = _scopeFactory.CreateScope();
+        ITenantRepository tenantRepo = scope.ServiceProvider.GetRequiredService<ITenantRepository>();
+        ITenantSubscriptionOverrideRepository overrideRepo = scope.ServiceProvider.GetRequiredService<ITenantSubscriptionOverrideRepository>();
+
+        Tenant tenant = await ResolveTenantByExternalIdAsync(
+            tenantRepo, request.TenantExternalId, context.CancellationToken);
+
+        // Convert 0 to null for database storage (0 means "use tier default")
+        int? machineLimit = request.MachineLimit > 0 ? request.MachineLimit : null;
+        int? retentionDays = request.RetentionDays > 0 ? request.RetentionDays : null;
+        int? alertRuleLimit = request.AlertRuleLimit > 0 ? request.AlertRuleLimit : null;
+        int? webhookLimit = request.WebhookLimit > 0 ? request.WebhookLimit : null;
+
+        await overrideRepo.UpsertOverrideAsync(
+            tenant.Id, machineLimit, retentionDays, alertRuleLimit, webhookLimit, context.CancellationToken);
+
+        _logger.LogInformation(
+            "FleetAdmin: tenant {TenantId} override set (machineLimit={MachineLimit}, retentionDays={RetentionDays}, alertRuleLimit={AlertRuleLimit}, webhookLimit={WebhookLimit})",
+            tenant.Id, machineLimit, retentionDays, alertRuleLimit, webhookLimit);
+
+        return new SetTenantOverrideResponse
+        {
+            Success = true,
+            Message = "OK"
+        };
+    }
+
+    /// <summary>
+    /// Removes the per-tenant subscription limit overrides for a tenant, reverting to tier defaults.
+    /// </summary>
+    public override async Task<RemoveTenantOverrideResponse> RemoveTenantOverride(
+        RemoveTenantOverrideRequest request, ServerCallContext context)
+    {
+        ValidateInternalKey(context);
+
+        using IServiceScope scope = _scopeFactory.CreateScope();
+        ITenantRepository tenantRepo = scope.ServiceProvider.GetRequiredService<ITenantRepository>();
+        ITenantSubscriptionOverrideRepository overrideRepo = scope.ServiceProvider.GetRequiredService<ITenantSubscriptionOverrideRepository>();
+
+        Tenant tenant = await ResolveTenantByExternalIdAsync(
+            tenantRepo, request.TenantExternalId, context.CancellationToken);
+
+        await overrideRepo.RemoveOverrideAsync(tenant.Id, context.CancellationToken);
+
+        _logger.LogInformation(
+            "FleetAdmin: tenant {TenantId} override removed", tenant.Id);
+
+        return new RemoveTenantOverrideResponse
         {
             Success = true,
             Message = "OK"
@@ -564,7 +665,8 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
         Tenant tenant,
         int machineCount,
         int userCount,
-        TenantSubscription? subscription)
+        TenantSubscription? subscription,
+        TierFeatureLimit? tierLimits = null)
     {
         FleetTenant fleetTenant = new FleetTenant
         {
@@ -580,21 +682,20 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
 
         if (subscription is not null)
         {
-            fleetTenant.Subscription = MapSubscription(subscription);
+            fleetTenant.Subscription = MapSubscription(subscription, tierLimits);
         }
 
         return fleetTenant;
     }
 
-    internal static FleetTenantSubscription MapSubscription(TenantSubscription subscription)
+    internal static FleetTenantSubscription MapSubscription(TenantSubscription subscription, TierFeatureLimit? tierLimits = null)
     {
         FleetTenantSubscription proto = new FleetTenantSubscription
         {
             Tier = subscription.Tier.ToString(),
             Status = subscription.Status.ToString(),
-            MachineLimit = subscription.MachineLimit ?? 0,
-            RetentionDays = subscription.RetentionDays,
-            CancelAtPeriodEnd = subscription.CancelAtPeriodEnd
+            MachineLimit = tierLimits?.MachineLimit ?? 0,
+            RetentionDays = tierLimits?.RetentionDays ?? 0,
         };
 
         if (subscription.CurrentPeriodEnd.HasValue)

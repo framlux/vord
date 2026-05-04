@@ -177,8 +177,6 @@ public sealed class BillingGatewayServiceTests
             .FirstOrDefaultAsync(s => s.TenantId == tenantId);
         await Assert.That(updated).IsNotNull();
         await Assert.That(updated!.Tier).IsEqualTo(SubscriptionTier.Pro);
-        await Assert.That(updated.RetentionDays).IsEqualTo(30);
-        await Assert.That(updated.MachineLimit).IsNull();
         await Assert.That(updated.Status).IsEqualTo(SubscriptionStatus.Active);
         await Assert.That(updated.UpdatedAt).IsGreaterThanOrEqualTo(originalUpdatedAt);
     }
@@ -216,8 +214,6 @@ public sealed class BillingGatewayServiceTests
             .FirstOrDefaultAsync(s => s.TenantId == tenantId);
         await Assert.That(updated).IsNotNull();
         await Assert.That(updated!.Tier).IsEqualTo(SubscriptionTier.Team);
-        await Assert.That(updated.RetentionDays).IsEqualTo(365);
-        await Assert.That(updated.MachineLimit).IsNull();
         await Assert.That(updated.Status).IsEqualTo(SubscriptionStatus.Active);
         await Assert.That(updated.UpdatedAt).IsGreaterThanOrEqualTo(originalUpdatedAt);
     }
@@ -231,13 +227,6 @@ public sealed class BillingGatewayServiceTests
 
         string externalId = $"ext-{Guid.NewGuid():N}";
         int tenantId = await SeedTenantWithSubscription(db, externalId, SubscriptionTier.Pro);
-
-        // Simulate the downgrade intent being set before Stripe fires subscription.deleted
-        await db.TenantSubscriptions
-            .Where(s => s.TenantId == tenantId)
-            .Set(s => s.PendingAction, PendingSubscriptionAction.DowngradeToFree)
-            .Set(s => s.CancelAtPeriodEnd, true)
-            .UpdateAsync();
 
         TenantSubscription? original = await db.TenantSubscriptions
             .FirstOrDefaultAsync(s => s.TenantId == tenantId);
@@ -262,10 +251,6 @@ public sealed class BillingGatewayServiceTests
         await Assert.That(updated).IsNotNull();
         await Assert.That(updated!.Tier).IsEqualTo(SubscriptionTier.Free);
         await Assert.That(updated.Status).IsEqualTo(SubscriptionStatus.Active);
-        await Assert.That(updated.RetentionDays).IsEqualTo(1);
-        await Assert.That(updated.MachineLimit).IsEqualTo(3);
-        await Assert.That(updated.CancelAtPeriodEnd).IsFalse();
-        await Assert.That(updated.PendingAction).IsEqualTo(PendingSubscriptionAction.None);
         await Assert.That(updated.UpdatedAt).IsGreaterThanOrEqualTo(originalUpdatedAt);
     }
 
@@ -278,13 +263,6 @@ public sealed class BillingGatewayServiceTests
 
         string externalId = $"ext-{Guid.NewGuid():N}";
         int tenantId = await SeedTenantWithSubscription(db, externalId, SubscriptionTier.Team);
-
-        // Simulate the downgrade intent being set before Stripe fires subscription.deleted
-        await db.TenantSubscriptions
-            .Where(s => s.TenantId == tenantId)
-            .Set(s => s.PendingAction, PendingSubscriptionAction.DowngradeToFree)
-            .Set(s => s.CancelAtPeriodEnd, true)
-            .UpdateAsync();
 
         using GrpcChannel channel = CreateChannel(factory);
         BillingGateway.BillingGatewayClient client = new(channel);
@@ -305,10 +283,6 @@ public sealed class BillingGatewayServiceTests
         await Assert.That(updated).IsNotNull();
         await Assert.That(updated!.Tier).IsEqualTo(SubscriptionTier.Free);
         await Assert.That(updated.Status).IsEqualTo(SubscriptionStatus.Active);
-        await Assert.That(updated.RetentionDays).IsEqualTo(1);
-        await Assert.That(updated.MachineLimit).IsEqualTo(3);
-        await Assert.That(updated.CancelAtPeriodEnd).IsFalse();
-        await Assert.That(updated.PendingAction).IsEqualTo(PendingSubscriptionAction.None);
     }
 
     [Test]
@@ -343,8 +317,6 @@ public sealed class BillingGatewayServiceTests
             .FirstOrDefaultAsync(s => s.TenantId == tenantId);
         await Assert.That(updated).IsNotNull();
         await Assert.That(updated!.Tier).IsEqualTo(SubscriptionTier.Pro);
-        await Assert.That(updated.RetentionDays).IsEqualTo(30);
-        await Assert.That(updated.MachineLimit).IsNull();
         await Assert.That(updated.Status).IsEqualTo(SubscriptionStatus.Active);
         await Assert.That(updated.UpdatedAt).IsGreaterThanOrEqualTo(originalUpdatedAt);
     }
@@ -516,13 +488,6 @@ public sealed class BillingGatewayServiceTests
         string externalId = $"ext-{Guid.NewGuid():N}";
         int tenantId = await SeedTenantWithSubscription(db, externalId, SubscriptionTier.Pro);
 
-        // Simulate the downgrade intent being set before Stripe fires subscription.deleted
-        await db.TenantSubscriptions
-            .Where(s => s.TenantId == tenantId)
-            .Set(s => s.PendingAction, PendingSubscriptionAction.DowngradeToFree)
-            .Set(s => s.CancelAtPeriodEnd, true)
-            .UpdateAsync();
-
         using GrpcChannel channel = CreateChannel(factory);
         BillingGateway.BillingGatewayClient client = new(channel);
 
@@ -542,15 +507,14 @@ public sealed class BillingGatewayServiceTests
         await Assert.That(updated).IsNotNull();
         await Assert.That(updated!.Tier).IsEqualTo(SubscriptionTier.Free);
         await Assert.That(updated.Status).IsEqualTo(SubscriptionStatus.Active);
-        await Assert.That(updated.RetentionDays).IsEqualTo(1);
-        await Assert.That(updated.MachineLimit).IsEqualTo(3);
     }
 
     [Test]
-    public async Task ProcessBillingAction_DowngradeToFree_WithoutPendingAction_DeactivatesSubscription()
+    public async Task ProcessBillingAction_DowngradeToFree_AlwaysRevertsToFreeTier()
     {
-        // When no DowngradeToFree PendingAction is set, a subscription.deleted event deactivates the subscription
-        // rather than reverting to Free tier — this covers the case where cancellation happens unexpectedly
+        // The billing-api determines the correct action from its PendingActions table
+        // and dispatches DowngradeToFree only when an intentional downgrade was scheduled.
+        // The fleet server always reverts to Free/Active when it receives this action.
         using FunctionalTestFactory factory = new();
         factory.WithInternalApiKey("test-internal-key");
         using DatabaseContext db = factory.CreateDbContext();
@@ -579,10 +543,8 @@ public sealed class BillingGatewayServiceTests
         TenantSubscription? updated = await db.TenantSubscriptions
             .FirstOrDefaultAsync(s => s.TenantId == tenantId);
         await Assert.That(updated).IsNotNull();
-        await Assert.That(updated!.Tier).IsEqualTo(SubscriptionTier.Pro);
-        await Assert.That(updated.Status).IsEqualTo(SubscriptionStatus.Canceled);
-        await Assert.That(updated.CancelAtPeriodEnd).IsFalse();
-        await Assert.That(updated.PendingAction).IsEqualTo(PendingSubscriptionAction.None);
+        await Assert.That(updated!.Tier).IsEqualTo(SubscriptionTier.Free);
+        await Assert.That(updated.Status).IsEqualTo(SubscriptionStatus.Active);
         await Assert.That(updated.UpdatedAt).IsGreaterThanOrEqualTo(originalUpdatedAt);
     }
 
@@ -724,20 +686,11 @@ public sealed class BillingGatewayServiceTests
         };
         int tenantId = (int)(long)await db.InsertWithIdentityAsync(tenant);
 
-        int retentionDays = tier switch
-        {
-            SubscriptionTier.Team => 365,
-            SubscriptionTier.Pro => 30,
-            _ => 1
-        };
-
         TenantSubscription subscription = new()
         {
             TenantId = tenantId,
             Tier = tier,
             Status = status,
-            MachineLimit = tier == SubscriptionTier.Free ? 3 : null,
-            RetentionDays = retentionDays,
             CreatedAt = DateTimeOffset.UtcNow,
             UpdatedAt = DateTimeOffset.UtcNow
         };

@@ -41,8 +41,6 @@ public sealed class CommandEndpointTests
             TenantId = tenant.Id,
             Tier = tier,
             Status = SubscriptionStatus.Active,
-            MachineLimit = 100,
-            RetentionDays = tier == SubscriptionTier.Team ? 365 : 30,
             CreatedAt = DateTimeOffset.UtcNow,
             UpdatedAt = DateTimeOffset.UtcNow
         };

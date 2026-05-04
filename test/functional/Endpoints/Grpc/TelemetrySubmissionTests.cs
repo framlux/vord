@@ -597,8 +597,6 @@ public sealed class TelemetrySubmissionTests
             TenantId = tenantId,
             Tier = SubscriptionTier.Free,
             Status = subscriptionStatus,
-            MachineLimit = 10,
-            RetentionDays = 7,
             CreatedAt = DateTimeOffset.UtcNow,
             UpdatedAt = DateTimeOffset.UtcNow
         };
