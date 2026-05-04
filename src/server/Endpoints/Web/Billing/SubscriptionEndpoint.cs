@@ -22,8 +22,8 @@ public sealed class SubscriptionDto
     /// <summary>The subscription status.</summary>
     public string Status { get; set; } = string.Empty;
 
-    /// <summary>Maximum machines allowed, null if unlimited.</summary>
-    public int? MachineLimit { get; set; }
+    /// <summary>Maximum machines allowed.</summary>
+    public int MachineLimit { get; set; }
 
     /// <summary>Current active machine count.</summary>
     public int MachineCount { get; set; }
@@ -37,14 +37,14 @@ public sealed class SubscriptionDto
     /// <summary>Whether the subscription is set to cancel at the end of the billing period.</summary>
     public bool CancelAtPeriodEnd { get; set; }
 
-    /// <summary>Maximum alert rules allowed, null if unlimited.</summary>
-    public int? AlertRuleLimit { get; set; }
+    /// <summary>Maximum alert rules allowed.</summary>
+    public int AlertRuleLimit { get; set; }
 
     /// <summary>Current alert rule count for this tenant.</summary>
     public int AlertRuleCount { get; set; }
 
-    /// <summary>Maximum webhooks allowed, null if unlimited.</summary>
-    public int? WebhookLimit { get; set; }
+    /// <summary>Maximum webhooks allowed.</summary>
+    public int WebhookLimit { get; set; }
 
     /// <summary>Current webhook count for this tenant.</summary>
     public int WebhookCount { get; set; }

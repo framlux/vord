@@ -111,6 +111,12 @@ public sealed class BillingGatewayService : BillingGateway.BillingGatewayBase
 
                 break;
 
+            case BillingAction.CancelAccount:
+                await webhookHandler.HandleAccountCanceledAsync(tenant.Id, context.CancellationToken);
+                _logger.LogInformation("Billing gRPC: tenant {TenantId} account canceled", tenant.Id);
+
+                break;
+
             default:
                 throw new RpcException(new Status(
                     StatusCode.InvalidArgument,

@@ -330,15 +330,15 @@ export enum SubscriptionStatus {
 export interface SubscriptionDto {
 	tier: string;
 	status: string;
-	machineLimit: number | null;
+	machineLimit: number;
 	machineCount: number;
 	retentionDays: number;
 	currentPeriodEnd: string | null;
 	cancelAtPeriodEnd: boolean;
 	pendingAction: string | null;
-	alertRuleLimit: number | null;
+	alertRuleLimit: number;
 	alertRuleCount: number;
-	webhookLimit: number | null;
+	webhookLimit: number;
 	webhookCount: number;
 }
 

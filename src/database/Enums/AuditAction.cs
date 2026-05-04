@@ -43,6 +43,8 @@ public enum AuditAction : short
     SubscriptionCancelRequested = 43,
     /// <summary>A subscription downgrade was requested.</summary>
     SubscriptionDowngradeRequested = 44,
+    /// <summary>A subscription was resumed from pending cancellation or downgrade.</summary>
+    SubscriptionResumed = 45,
     /// <summary>A registration token was created.</summary>
     RegistrationTokenCreated = 50,
     /// <summary>A registration token was revoked.</summary>

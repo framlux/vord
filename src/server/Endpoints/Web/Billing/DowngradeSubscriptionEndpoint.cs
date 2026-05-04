@@ -229,8 +229,8 @@ public sealed class DowngradeSubscriptionEndpoint : Endpoint<DowngradeSubscripti
     {
         // Check that current machine count does not exceed Free tier limit
         int machineCount = await _subscriptionService.GetMachineCountForTenantAsync(tenantId, ct);
-        TierFeatureLimit? freeLimits = await _tierLimitRepo.GetLimitsForTierAsync(SubscriptionTier.Free, ct);
-        int freeTierLimit = freeLimits?.MachineLimit ?? 3;
+        TierFeatureLimit? freeTierLimits = await _tierLimitRepo.GetLimitsForTierAsync(SubscriptionTier.Free, ct);
+        int freeTierLimit = freeTierLimits?.MachineLimit ?? 3;
         if (machineCount > freeTierLimit)
         {
             await SendErrorResponse(400,

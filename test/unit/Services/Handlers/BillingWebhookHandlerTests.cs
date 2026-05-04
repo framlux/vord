@@ -42,9 +42,9 @@ public class BillingWebhookHandlerTests
         await context.InsertAsync(new TierFeatureLimit
         {
             Tier = SubscriptionTier.Pro,
-            MachineLimit = null,
+            MachineLimit = 1000,
             RetentionDays = 30,
-            AlertRuleLimit = 25,
+            AlertRuleLimit = 10,
             WebhookLimit = 5,
             UpdatedAt = now,
         });
@@ -52,10 +52,10 @@ public class BillingWebhookHandlerTests
         await context.InsertAsync(new TierFeatureLimit
         {
             Tier = SubscriptionTier.Team,
-            MachineLimit = null,
+            MachineLimit = 10000,
             RetentionDays = 365,
-            AlertRuleLimit = 100,
-            WebhookLimit = 25,
+            AlertRuleLimit = 25,
+            WebhookLimit = 15,
             UpdatedAt = now,
         });
     }

@@ -55,9 +55,9 @@ public partial class DatabaseRepository : ITenantSubscriptionOverrideRepository
                 UpdatedAt = now,
             }, token: cancellationToken);
         }
-        catch (Exception) when (updated == 0)
+        catch (System.Data.Common.DbException)
         {
-            // Race condition: another request inserted first. Retry as update.
+            // Unique constraint violation from race condition: another request inserted first. Retry as update.
             await _db.TenantSubscriptionOverrides
                 .Where(o => o.TenantId == tenantId)
                 .Set(o => o.MachineLimit, machineLimit)

@@ -113,6 +113,11 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
         Dictionary<int, TenantSubscription> subscriptions = subscriptionList
             .ToDictionary(s => s.TenantId);
 
+        // Batch-load tier limits so the admin panel shows correct values
+        ITierFeatureLimitRepository tierLimitRepo = scope.ServiceProvider.GetRequiredService<ITierFeatureLimitRepository>();
+        List<TierFeatureLimit> allLimits = await tierLimitRepo.GetAllLimitsAsync(context.CancellationToken);
+        Dictionary<SubscriptionTier, TierFeatureLimit> tierLimitsMap = allLimits.ToDictionary(l => l.Tier);
+
         ListTenantsResponse response = new ListTenantsResponse
         {
             TotalCount = totalCount
@@ -124,7 +129,13 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
             userCounts.TryGetValue(tenant.Id, out int userCount);
             subscriptions.TryGetValue(tenant.Id, out TenantSubscription? subscription);
 
-            response.Tenants.Add(MapToFleetTenant(tenant, machineCount, userCount, subscription));
+            TierFeatureLimit? tierLimits = null;
+            if (subscription is not null)
+            {
+                tierLimitsMap.TryGetValue(subscription.Tier, out tierLimits);
+            }
+
+            response.Tenants.Add(MapToFleetTenant(tenant, machineCount, userCount, subscription, tierLimits));
         }
 
         return response;
@@ -164,12 +175,20 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
         // Load subscription
         TenantSubscription? subscription = await subscriptionRepo.GetSubscriptionForTenantAsync(tenant.Id, context.CancellationToken);
 
+        // Load tier limits for the subscription
+        ITierFeatureLimitRepository tierLimitRepo = scope.ServiceProvider.GetRequiredService<ITierFeatureLimitRepository>();
+        TierFeatureLimit? tierLimits = null;
+        if (subscription is not null)
+        {
+            tierLimits = await tierLimitRepo.GetLimitsForTierAsync(subscription.Tier, context.CancellationToken);
+        }
+
         int machineCount = machines.Count(m => m.IsDeleted == false);
         int userCount = roles.Count;
 
         GetTenantDetailResponse response = new GetTenantDetailResponse
         {
-            Tenant = MapToFleetTenant(tenant, machineCount, userCount, subscription)
+            Tenant = MapToFleetTenant(tenant, machineCount, userCount, subscription, tierLimits)
         };
 
         foreach (UserAccount user in users)
@@ -464,10 +483,10 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
         return new GetTenantOverrideResponse
         {
             HasOverride = true,
-            MachineLimit = overrideRecord.MachineLimit ?? 0,
-            RetentionDays = overrideRecord.RetentionDays ?? 0,
-            AlertRuleLimit = overrideRecord.AlertRuleLimit ?? 0,
-            WebhookLimit = overrideRecord.WebhookLimit ?? 0,
+            MachineLimit = overrideRecord.MachineLimit ?? -1,
+            RetentionDays = overrideRecord.RetentionDays ?? -1,
+            AlertRuleLimit = overrideRecord.AlertRuleLimit ?? -1,
+            WebhookLimit = overrideRecord.WebhookLimit ?? -1,
         };
     }
 
@@ -486,11 +505,11 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
         Tenant tenant = await ResolveTenantByExternalIdAsync(
             tenantRepo, request.TenantExternalId, context.CancellationToken);
 
-        // Convert 0 to null for database storage (0 means "use tier default")
-        int? machineLimit = request.MachineLimit > 0 ? request.MachineLimit : null;
-        int? retentionDays = request.RetentionDays > 0 ? request.RetentionDays : null;
-        int? alertRuleLimit = request.AlertRuleLimit > 0 ? request.AlertRuleLimit : null;
-        int? webhookLimit = request.WebhookLimit > 0 ? request.WebhookLimit : null;
+        // Convert -1 to null for database storage (-1 means "use tier default", 0 means "deny all")
+        int? machineLimit = request.MachineLimit >= 0 ? request.MachineLimit : null;
+        int? retentionDays = request.RetentionDays >= 0 ? request.RetentionDays : null;
+        int? alertRuleLimit = request.AlertRuleLimit >= 0 ? request.AlertRuleLimit : null;
+        int? webhookLimit = request.WebhookLimit >= 0 ? request.WebhookLimit : null;
 
         await overrideRepo.UpsertOverrideAsync(
             tenant.Id, machineLimit, retentionDays, alertRuleLimit, webhookLimit, context.CancellationToken);

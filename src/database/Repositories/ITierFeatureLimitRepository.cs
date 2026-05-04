@@ -24,6 +24,7 @@ public interface ITierFeatureLimitRepository
 
     /// <summary>
     /// Updates the feature limits for a specific subscription tier.
+    /// Returns the number of rows updated (0 if the tier does not exist).
     /// </summary>
-    Task UpdateLimitsForTierAsync(SubscriptionTier tier, int? machineLimit, int retentionDays, int? alertRuleLimit, int? webhookLimit, CancellationToken cancellationToken = default);
+    Task<int> UpdateLimitsForTierAsync(SubscriptionTier tier, int machineLimit, int retentionDays, int alertRuleLimit, int webhookLimit, CancellationToken cancellationToken = default);
 }

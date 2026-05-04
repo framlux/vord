@@ -20,16 +20,17 @@ public sealed class TierFeatureLimitsMigration : Migration
     {
         Create.Table("TierFeatureLimits")
             .WithColumn("Id").AsInt32().PrimaryKey().Identity()
-            .WithColumn("Tier").AsInt16().NotNullable().Unique()
-            .WithColumn("MachineLimit").AsInt32().Nullable()
+            .WithColumn("Tier").AsInt32().NotNullable().Unique()
+            .WithColumn("MachineLimit").AsInt32().NotNullable()
             .WithColumn("RetentionDays").AsInt32().NotNullable()
-            .WithColumn("AlertRuleLimit").AsInt32().Nullable()
-            .WithColumn("WebhookLimit").AsInt32().Nullable()
+            .WithColumn("AlertRuleLimit").AsInt32().NotNullable()
+            .WithColumn("WebhookLimit").AsInt32().NotNullable()
             .WithColumn("UpdatedAt").AsDateTimeOffset().NotNullable();
 
         Create.Table("TenantSubscriptionOverrides")
             .WithColumn("Id").AsInt32().PrimaryKey().Identity()
             .WithColumn("TenantId").AsInt32().NotNullable().Unique()
+                .ForeignKey("FK_TenantSubscriptionOverrides_Tenants", TableNames.Tenants, "Id")
             .WithColumn("MachineLimit").AsInt32().Nullable()
             .WithColumn("RetentionDays").AsInt32().Nullable()
             .WithColumn("AlertRuleLimit").AsInt32().Nullable()
@@ -37,8 +38,7 @@ public sealed class TierFeatureLimitsMigration : Migration
             .WithColumn("CreatedAt").AsDateTimeOffset().NotNullable()
             .WithColumn("UpdatedAt").AsDateTimeOffset().NotNullable();
 
-        // Seed with current hardcoded values from SubscriptionOptions
-        // Free tier: MachineLimit=3, RetentionDays=1, AlertRuleLimit=0, WebhookLimit=0
+        // Seed default tier limits matching TierDefaults configuration
         Insert.IntoTable("TierFeatureLimits").Row(new
         {
             Tier = 1, // SubscriptionTier.Free
@@ -49,23 +49,23 @@ public sealed class TierFeatureLimitsMigration : Migration
             UpdatedAt = DateTimeOffset.UtcNow,
         });
 
-        // Pro tier: MachineLimit=null (unlimited), RetentionDays=30, AlertRuleLimit=25, WebhookLimit=5
         Insert.IntoTable("TierFeatureLimits").Row(new
         {
             Tier = 2, // SubscriptionTier.Pro
+            MachineLimit = 1000,
             RetentionDays = 30,
-            AlertRuleLimit = 25,
+            AlertRuleLimit = 10,
             WebhookLimit = 5,
             UpdatedAt = DateTimeOffset.UtcNow,
         });
 
-        // Team tier: MachineLimit=null (unlimited), RetentionDays=365, AlertRuleLimit=100, WebhookLimit=25
         Insert.IntoTable("TierFeatureLimits").Row(new
         {
             Tier = 3, // SubscriptionTier.Team
+            MachineLimit = 10000,
             RetentionDays = 365,
-            AlertRuleLimit = 100,
-            WebhookLimit = 25,
+            AlertRuleLimit = 25,
+            WebhookLimit = 15,
             UpdatedAt = DateTimeOffset.UtcNow,
         });
     }

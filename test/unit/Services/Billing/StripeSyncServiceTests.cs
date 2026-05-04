@@ -202,7 +202,7 @@ public sealed class StripeSyncServiceTests
         billingClient.GetSubscriptionStatusAsync("ext-1", Arg.Any<CancellationToken>())
             .Returns(new StripeSubscriptionStatus(false, "active", "price_team_456", 5, periodEnd, "Team"));
 
-        webhookHandler.HandleCheckoutCompletedAsync(1, SubscriptionTier.Team, Arg.Any<CancellationToken>())
+        webhookHandler.HandleTierCorrectionAsync(1, SubscriptionTier.Team, Arg.Any<CancellationToken>())
             .Returns(callInfo =>
             {
                 workDone.TrySetResult();
@@ -216,7 +216,7 @@ public sealed class StripeSyncServiceTests
         await cts.CancelAsync();
         await service.StopAsync(CancellationToken.None);
 
-        await webhookHandler.Received(1).HandleCheckoutCompletedAsync(1, SubscriptionTier.Team, Arg.Any<CancellationToken>());
+        await webhookHandler.Received(1).HandleTierCorrectionAsync(1, SubscriptionTier.Team, Arg.Any<CancellationToken>());
     }
 
     [Test]
@@ -253,7 +253,7 @@ public sealed class StripeSyncServiceTests
         await cts.CancelAsync();
         await service.StopAsync(CancellationToken.None);
 
-        await webhookHandler.DidNotReceive().HandleCheckoutCompletedAsync(
+        await webhookHandler.DidNotReceive().HandleTierCorrectionAsync(
             Arg.Any<int>(), Arg.Any<SubscriptionTier>(), Arg.Any<CancellationToken>());
     }
 
@@ -291,7 +291,7 @@ public sealed class StripeSyncServiceTests
         await cts.CancelAsync();
         await service.StopAsync(CancellationToken.None);
 
-        await webhookHandler.DidNotReceive().HandleCheckoutCompletedAsync(
+        await webhookHandler.DidNotReceive().HandleTierCorrectionAsync(
             Arg.Any<int>(), Arg.Any<SubscriptionTier>(), Arg.Any<CancellationToken>());
     }
 

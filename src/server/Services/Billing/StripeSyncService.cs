@@ -195,7 +195,7 @@ public sealed class StripeSyncService : BackgroundService
 
             Services.Handlers.IBillingWebhookHandler webhookHandler =
                 scope.ServiceProvider.GetRequiredService<Services.Handlers.IBillingWebhookHandler>();
-            await webhookHandler.HandleCheckoutCompletedAsync(subscription.TenantId, stripeTier.Value, ct);
+            await webhookHandler.HandleTierCorrectionAsync(subscription.TenantId, stripeTier.Value, ct);
         }
     }
 

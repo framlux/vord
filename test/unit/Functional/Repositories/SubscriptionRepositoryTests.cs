@@ -5,10 +5,12 @@
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
+using Framlux.FleetManagement.Server.Options;
 using Framlux.FleetManagement.Server.Services.Billing;
 using Framlux.FleetManagement.Test.Infrastructure;
 using LinqToDB;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 using NSubstitute;
 
 namespace Framlux.FleetManagement.Test.Functional.DatabaseRepository;
@@ -35,24 +37,31 @@ public class SubscriptionCacheTests
         tierLimitRepo.GetLimitsForTierAsync(SubscriptionTier.Pro, Arg.Any<CancellationToken>()).Returns(new TierFeatureLimit
         {
             Tier = SubscriptionTier.Pro,
-            MachineLimit = null,
+            MachineLimit = 1000,
             RetentionDays = 30,
-            AlertRuleLimit = 25,
+            AlertRuleLimit = 10,
             WebhookLimit = 5,
             UpdatedAt = now,
         });
         tierLimitRepo.GetLimitsForTierAsync(SubscriptionTier.Team, Arg.Any<CancellationToken>()).Returns(new TierFeatureLimit
         {
             Tier = SubscriptionTier.Team,
-            MachineLimit = null,
+            MachineLimit = 10000,
             RetentionDays = 365,
-            AlertRuleLimit = 100,
-            WebhookLimit = 25,
+            AlertRuleLimit = 25,
+            WebhookLimit = 15,
             UpdatedAt = now,
         });
         ITenantSubscriptionOverrideRepository overrideRepo = Substitute.For<ITenantSubscriptionOverrideRepository>();
 
-        return new SubscriptionService(repo, repo, repo, repo, tierLimitRepo, overrideRepo, new NullLogger<SubscriptionService>());
+        IOptions<TierDefaultOptions> tierDefaults = Options.Create(new TierDefaultOptions
+        {
+            Free = new() { MachineLimit = 3, RetentionDays = 1, AlertRuleLimit = 0, WebhookLimit = 0 },
+            Pro = new() { MachineLimit = 1000, RetentionDays = 30, AlertRuleLimit = 10, WebhookLimit = 5 },
+            Team = new() { MachineLimit = 10000, RetentionDays = 365, AlertRuleLimit = 25, WebhookLimit = 15 },
+        });
+
+        return new SubscriptionService(repo, repo, repo, repo, tierLimitRepo, overrideRepo, tierDefaults, new NullLogger<SubscriptionService>());
     }
 
     [Test]

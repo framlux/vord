@@ -65,6 +65,7 @@ public partial class DatabaseRepository : ISubscriptionRepository
             .Where(s => s.TenantId == tenantId)
             .Set(s => s.Tier, SubscriptionTier.Free)
             .Set(s => s.Status, SubscriptionStatus.Active)
+            .Set(s => s.CurrentPeriodEnd, (DateTimeOffset?)null)
             .Set(s => s.UpdatedAt, now)
             .UpdateAsync(cancellationToken);
     }
@@ -109,6 +110,7 @@ public partial class DatabaseRepository : ISubscriptionRepository
             .Where(s => s.TenantId == tenantId)
             .Set(s => s.Tier, SubscriptionTier.Pro)
             .Set(s => s.Status, SubscriptionStatus.Active)
+            .Set(s => s.CurrentPeriodEnd, (DateTimeOffset?)null)
             .Set(s => s.UpdatedAt, now)
             .UpdateAsync(cancellationToken);
     }

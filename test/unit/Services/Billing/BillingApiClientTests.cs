@@ -230,17 +230,21 @@ public sealed class BillingApiClientTests
     }
 
     [Test]
-    public async Task GetSubscriptionStatusAsync_PropagatesExceptions()
+    public async Task GetSubscriptionStatusAsync_GrpcFailure_ReturnsSafeFallback()
     {
         (BillingApiClient client, BillingManagement.BillingManagementClient grpc, ILogger<BillingApiClient> _) = CreateSut();
         grpc.GetSubscriptionStatusAsync(
                 Arg.Any<GetSubscriptionStatusRequest>(), Arg.Any<Metadata>(), Arg.Any<DateTime?>(), Arg.Any<CancellationToken>())
             .Returns(CreateFaultedCall<GetSubscriptionStatusResponse>(new RpcException(new Status(StatusCode.Unavailable, "down"))));
 
-        await Assert.ThrowsAsync<RpcException>(async () =>
-        {
-            await client.GetSubscriptionStatusAsync("tenant-ext-1", CancellationToken.None);
-        });
+        StripeSubscriptionStatus status = await client.GetSubscriptionStatusAsync("tenant-ext-1", CancellationToken.None);
+
+        await Assert.That(status.CancelAtPeriodEnd).IsFalse();
+        await Assert.That(status.StripeStatus).IsEqualTo("none");
+        await Assert.That(status.PriceId).IsEqualTo(string.Empty);
+        await Assert.That(status.Quantity).IsEqualTo(0);
+        await Assert.That(status.CurrentPeriodEnd).IsNull();
+        await Assert.That(status.Tier).IsNull();
     }
 
     // --- Parameter handling ---
@@ -329,25 +333,18 @@ public sealed class BillingApiClientTests
     /// propagates because that method does not catch exceptions.
     /// </summary>
     [Test]
-    public async Task GetSubscriptionStatusAsync_DeadlineExceeded_PropagatesException()
+    public async Task GetSubscriptionStatusAsync_DeadlineExceeded_ReturnsSafeFallback()
     {
         (BillingApiClient client, BillingManagement.BillingManagementClient grpc, ILogger<BillingApiClient> _) = CreateSut();
         grpc.GetSubscriptionStatusAsync(
                 Arg.Any<GetSubscriptionStatusRequest>(), Arg.Any<Metadata>(), Arg.Any<DateTime?>(), Arg.Any<CancellationToken>())
             .Returns(CreateFaultedCall<GetSubscriptionStatusResponse>(new RpcException(new Status(StatusCode.DeadlineExceeded, "deadline exceeded"))));
 
-        RpcException? caughtException = null;
-        try
-        {
-            await client.GetSubscriptionStatusAsync("tenant-ext-1", CancellationToken.None);
-        }
-        catch (RpcException ex)
-        {
-            caughtException = ex;
-        }
+        StripeSubscriptionStatus status = await client.GetSubscriptionStatusAsync("tenant-ext-1", CancellationToken.None);
 
-        await Assert.That(caughtException).IsNotNull();
-        await Assert.That(caughtException!.StatusCode).IsEqualTo(StatusCode.DeadlineExceeded);
+        await Assert.That(status.CancelAtPeriodEnd).IsFalse();
+        await Assert.That(status.StripeStatus).IsEqualTo("none");
+        await Assert.That(status.Quantity).IsEqualTo(0);
     }
 
     /// <summary>

@@ -219,6 +219,8 @@ public sealed class FleetAdminServiceTests
             Tier = SubscriptionTier.Pro,
             MachineLimit = 50,
             RetentionDays = 30,
+            AlertRuleLimit = 10,
+            WebhookLimit = 5,
             UpdatedAt = DateTimeOffset.UtcNow
         };
 

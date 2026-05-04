@@ -29,10 +29,10 @@ public sealed class TierFeatureLimit
     public SubscriptionTier Tier { get; set; }
 
     /// <summary>
-    /// Maximum number of machines allowed. Null means unlimited.
+    /// Maximum number of machines allowed.
     /// </summary>
-    [Column(Name = "MachineLimit"), Nullable]
-    public int? MachineLimit { get; set; }
+    [Column(Name = "MachineLimit"), NotNull]
+    public required int MachineLimit { get; set; }
 
     /// <summary>
     /// Telemetry data retention period in days.
@@ -41,16 +41,16 @@ public sealed class TierFeatureLimit
     public required int RetentionDays { get; set; }
 
     /// <summary>
-    /// Maximum number of alert rules allowed. Null means unlimited.
+    /// Maximum number of alert rules allowed.
     /// </summary>
-    [Column(Name = "AlertRuleLimit"), Nullable]
-    public int? AlertRuleLimit { get; set; }
+    [Column(Name = "AlertRuleLimit"), NotNull]
+    public required int AlertRuleLimit { get; set; }
 
     /// <summary>
-    /// Maximum number of webhook endpoints allowed. Null means unlimited.
+    /// Maximum number of webhook endpoints allowed.
     /// </summary>
-    [Column(Name = "WebhookLimit"), Nullable]
-    public int? WebhookLimit { get; set; }
+    [Column(Name = "WebhookLimit"), NotNull]
+    public required int WebhookLimit { get; set; }
 
     /// <summary>
     /// When these limits were last updated.

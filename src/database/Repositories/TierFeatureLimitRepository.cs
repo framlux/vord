@@ -33,10 +33,10 @@ public partial class DatabaseRepository : ITierFeatureLimitRepository
     }
 
     /// <inheritdoc/>
-    public async Task UpdateLimitsForTierAsync(SubscriptionTier tier, int? machineLimit, int retentionDays, int? alertRuleLimit, int? webhookLimit, CancellationToken cancellationToken)
+    public async Task<int> UpdateLimitsForTierAsync(SubscriptionTier tier, int machineLimit, int retentionDays, int alertRuleLimit, int webhookLimit, CancellationToken cancellationToken)
     {
         DateTimeOffset now = DateTimeOffset.UtcNow;
-        await _db.TierFeatureLimits
+        int updated = await _db.TierFeatureLimits
             .Where(l => l.Tier == tier)
             .Set(l => l.MachineLimit, machineLimit)
             .Set(l => l.RetentionDays, retentionDays)
@@ -44,5 +44,7 @@ public partial class DatabaseRepository : ITierFeatureLimitRepository
             .Set(l => l.WebhookLimit, webhookLimit)
             .Set(l => l.UpdatedAt, now)
             .UpdateAsync(cancellationToken);
+
+        return updated;
     }
 }

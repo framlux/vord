@@ -5,6 +5,8 @@
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
+using Framlux.FleetManagement.Server.Options;
+using Microsoft.Extensions.Options;
 
 namespace Framlux.FleetManagement.Server.Services.Billing;
 
@@ -19,6 +21,7 @@ public sealed class SubscriptionService : ISubscriptionService
     private readonly IWebhookRepository _webhookRepo;
     private readonly ITierFeatureLimitRepository _tierLimitRepo;
     private readonly ITenantSubscriptionOverrideRepository _overrideRepo;
+    private readonly TierDefaultOptions _tierDefaults;
     private readonly ILogger<SubscriptionService> _logger;
 
     /// <summary>
@@ -31,6 +34,7 @@ public sealed class SubscriptionService : ISubscriptionService
         IWebhookRepository webhookRepo,
         ITierFeatureLimitRepository tierLimitRepo,
         ITenantSubscriptionOverrideRepository overrideRepo,
+        IOptions<TierDefaultOptions> tierDefaults,
         ILogger<SubscriptionService> logger)
     {
         ArgumentNullException.ThrowIfNull(subscriptionRepo);
@@ -39,6 +43,7 @@ public sealed class SubscriptionService : ISubscriptionService
         ArgumentNullException.ThrowIfNull(webhookRepo);
         ArgumentNullException.ThrowIfNull(tierLimitRepo);
         ArgumentNullException.ThrowIfNull(overrideRepo);
+        ArgumentNullException.ThrowIfNull(tierDefaults);
         ArgumentNullException.ThrowIfNull(logger);
 
         _subscriptionRepo = subscriptionRepo;
@@ -47,6 +52,7 @@ public sealed class SubscriptionService : ISubscriptionService
         _webhookRepo = webhookRepo;
         _tierLimitRepo = tierLimitRepo;
         _overrideRepo = overrideRepo;
+        _tierDefaults = tierDefaults.Value;
         _logger = logger;
     }
 
@@ -68,20 +74,16 @@ public sealed class SubscriptionService : ISubscriptionService
             return false;
         }
 
-        int? machineLimit = await GetEffectiveLimitAsync(
+        int machineLimit = await GetEffectiveLimitAsync(
             tenantId, subscription.Tier,
             o => o.MachineLimit,
             t => t.MachineLimit,
+            tier => GetConfigDefaultsForTier(tier).MachineLimit,
             ct);
-
-        if (machineLimit is null)
-        {
-            return true;
-        }
 
         int activeMachineCount = await _machineRepo.GetActiveMachineCountAsync(tenantId, ct);
 
-        return activeMachineCount < machineLimit.Value;
+        return activeMachineCount < machineLimit;
     }
 
     /// <inheritdoc/>
@@ -151,6 +153,16 @@ public sealed class SubscriptionService : ISubscriptionService
             return;
         }
 
+        // Canceled paid subscription — Stripe subscription is gone, revert to Free
+        if (subscription is not null && subscription.Status == SubscriptionStatus.Canceled)
+        {
+            await _subscriptionRepo.RevertSubscriptionToFreeAsync(tenantId, ct);
+
+            _logger.LogInformation("Reverted canceled paid subscription to Free for tenant {TenantId}", tenantId);
+
+            return;
+        }
+
         if (subscription is null)
         {
             await ProvisionFreeSubscriptionAsync(tenantId, ct);
@@ -167,20 +179,16 @@ public sealed class SubscriptionService : ISubscriptionService
             return false;
         }
 
-        int? alertRuleLimit = await GetEffectiveLimitAsync(
+        int alertRuleLimit = await GetEffectiveLimitAsync(
             tenantId, subscription.Tier,
             o => o.AlertRuleLimit,
             t => t.AlertRuleLimit,
+            tier => GetConfigDefaultsForTier(tier).AlertRuleLimit,
             ct);
-
-        if (alertRuleLimit is null)
-        {
-            return true;
-        }
 
         int count = await _alertRuleRepo.CountAlertRulesForTenantAsync(tenantId, ct);
 
-        return count < alertRuleLimit.Value;
+        return count < alertRuleLimit;
     }
 
     /// <inheritdoc/>
@@ -193,20 +201,16 @@ public sealed class SubscriptionService : ISubscriptionService
             return false;
         }
 
-        int? webhookLimit = await GetEffectiveLimitAsync(
+        int webhookLimit = await GetEffectiveLimitAsync(
             tenantId, subscription.Tier,
             o => o.WebhookLimit,
             t => t.WebhookLimit,
+            tier => GetConfigDefaultsForTier(tier).WebhookLimit,
             ct);
-
-        if (webhookLimit is null)
-        {
-            return true;
-        }
 
         int count = await _webhookRepo.CountWebhooksForTenantAsync(tenantId, ct);
 
-        return count < webhookLimit.Value;
+        return count < webhookLimit;
     }
 
     /// <inheritdoc/>
@@ -224,30 +228,41 @@ public sealed class SubscriptionService : ISubscriptionService
 
         if (subscription is null)
         {
-            return new EffectiveLimits { RetentionDays = 1 };
+            TierLimitDefaults freeDefaults = GetConfigDefaultsForTier(SubscriptionTier.Free);
+
+            return new EffectiveLimits
+            {
+                MachineLimit = freeDefaults.MachineLimit,
+                RetentionDays = freeDefaults.RetentionDays,
+                AlertRuleLimit = freeDefaults.AlertRuleLimit,
+                WebhookLimit = freeDefaults.WebhookLimit,
+            };
         }
 
         TierFeatureLimit? tierLimits = await _tierLimitRepo.GetLimitsForTierAsync(subscription.Tier, ct);
         TenantSubscriptionOverride? tenantOverride = await _overrideRepo.GetOverrideForTenantAsync(tenantId, ct);
 
+        TierLimitDefaults configDefaults = GetConfigDefaultsForTier(subscription.Tier);
+
         return new EffectiveLimits
         {
-            MachineLimit = tenantOverride?.MachineLimit ?? tierLimits?.MachineLimit,
-            RetentionDays = tenantOverride?.RetentionDays ?? tierLimits?.RetentionDays ?? 1,
-            AlertRuleLimit = tenantOverride?.AlertRuleLimit ?? tierLimits?.AlertRuleLimit,
-            WebhookLimit = tenantOverride?.WebhookLimit ?? tierLimits?.WebhookLimit,
+            MachineLimit = tenantOverride?.MachineLimit ?? tierLimits?.MachineLimit ?? configDefaults.MachineLimit,
+            RetentionDays = tenantOverride?.RetentionDays ?? tierLimits?.RetentionDays ?? configDefaults.RetentionDays,
+            AlertRuleLimit = tenantOverride?.AlertRuleLimit ?? tierLimits?.AlertRuleLimit ?? configDefaults.AlertRuleLimit,
+            WebhookLimit = tenantOverride?.WebhookLimit ?? tierLimits?.WebhookLimit ?? configDefaults.WebhookLimit,
         };
     }
 
     /// <summary>
-    /// Gets the effective limit for a tenant by checking overrides first, then tier defaults.
-    /// Returns null if the limit is unlimited.
+    /// Gets the effective limit for a tenant by checking overrides first, then tier defaults,
+    /// then configuration fallback.
     /// </summary>
-    private async Task<int?> GetEffectiveLimitAsync(
+    private async Task<int> GetEffectiveLimitAsync(
         int tenantId,
         SubscriptionTier tier,
         Func<TenantSubscriptionOverride, int?> overrideSelector,
-        Func<TierFeatureLimit, int?> tierSelector,
+        Func<TierFeatureLimit, int> tierSelector,
+        Func<SubscriptionTier, int> configFallbackSelector,
         CancellationToken ct)
     {
         TenantSubscriptionOverride? tenantOverride = await _overrideRepo.GetOverrideForTenantAsync(tenantId, ct);
@@ -256,7 +271,7 @@ public sealed class SubscriptionService : ISubscriptionService
             int? overrideValue = overrideSelector(tenantOverride);
             if (overrideValue is not null)
             {
-                return overrideValue;
+                return overrideValue.Value;
             }
         }
 
@@ -266,9 +281,23 @@ public sealed class SubscriptionService : ISubscriptionService
             return tierSelector(tierLimits);
         }
 
-        // Fallback: no tier limits configured, allow unlimited
-        _logger.LogWarning("No TierFeatureLimits found for tier {Tier}, defaulting to unlimited", tier);
+        // Fallback to configuration defaults when the database row is missing
+        _logger.LogWarning("No TierFeatureLimits found for tier {Tier}, using configuration defaults", tier);
 
-        return null;
+        return configFallbackSelector(tier);
+    }
+
+    /// <summary>
+    /// Gets the configuration-driven default limits for a subscription tier.
+    /// </summary>
+    private TierLimitDefaults GetConfigDefaultsForTier(SubscriptionTier tier)
+    {
+        return tier switch
+        {
+            SubscriptionTier.Free => _tierDefaults.Free,
+            SubscriptionTier.Pro => _tierDefaults.Pro,
+            SubscriptionTier.Team => _tierDefaults.Team,
+            _ => _tierDefaults.Free,
+        };
     }
 }

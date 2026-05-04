@@ -69,6 +69,8 @@ builder.Services.AddOptions<BillingOptions>()
     .ValidateOnStart();
 builder.Services.AddSingleton<IValidateOptions<BillingOptions>, BillingOptionsValidator>();
 
+builder.Services.Configure<TierDefaultOptions>(builder.Configuration.GetSection("TierDefaults"));
+
 builder.Services.AddOptions<DatabaseOptions>()
     .Bind(builder.Configuration.GetSection("Database"))
     .ValidateDataAnnotations()

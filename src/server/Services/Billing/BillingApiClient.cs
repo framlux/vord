@@ -134,27 +134,38 @@ public sealed class BillingApiClient : IBillingApiClient
     public async Task<StripeSubscriptionStatus> GetSubscriptionStatusAsync(
         string tenantExternalId, CancellationToken ct)
     {
-        GetSubscriptionStatusResponse response = await _grpcClient.GetSubscriptionStatusAsync(
-            new GetSubscriptionStatusRequest
-            {
-                TenantExternalId = tenantExternalId
-            },
-            deadline: DateTime.UtcNow.Add(GrpcDeadline),
-            cancellationToken: ct);
+        try
+        {
+            GetSubscriptionStatusResponse response = await _grpcClient.GetSubscriptionStatusAsync(
+                new GetSubscriptionStatusRequest
+                {
+                    TenantExternalId = tenantExternalId
+                },
+                deadline: DateTime.UtcNow.Add(GrpcDeadline),
+                cancellationToken: ct);
 
-        DateTimeOffset? currentPeriodEnd = response.CurrentPeriodEnd is not null
-            ? response.CurrentPeriodEnd.ToDateTimeOffset()
-            : null;
+            DateTimeOffset? currentPeriodEnd = response.CurrentPeriodEnd is not null
+                ? response.CurrentPeriodEnd.ToDateTimeOffset()
+                : null;
 
-        string? tier = string.IsNullOrEmpty(response.Tier) == false ? response.Tier : null;
+            string? tier = string.IsNullOrEmpty(response.Tier) == false ? response.Tier : null;
 
-        return new StripeSubscriptionStatus(
-            response.CancelAtPeriodEnd,
-            response.StripeStatus,
-            response.PriceId,
-            response.Quantity,
-            currentPeriodEnd,
-            tier);
+            return new StripeSubscriptionStatus(
+                response.CancelAtPeriodEnd,
+                response.StripeStatus,
+                response.PriceId,
+                response.Quantity,
+                currentPeriodEnd,
+                tier);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex,
+                "Error getting subscription status for tenant {TenantExternalId}",
+                tenantExternalId);
+
+            return new StripeSubscriptionStatus(false, "none", string.Empty, 0, null, null);
+        }
     }
 
     /// <inheritdoc/>

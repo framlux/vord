@@ -320,13 +320,13 @@ public class FunctionalTestFactory : WebApplicationFactory<Program>
         ExecuteSql($@"INSERT INTO TierFeatureLimits (Tier, MachineLimit, RetentionDays, AlertRuleLimit, WebhookLimit, UpdatedAt)
             VALUES ({(int)SubscriptionTier.Free}, 3, 1, 0, 0, '{now}')");
 
-        // Pro tier: MachineLimit=null (unlimited), RetentionDays=30, AlertRuleLimit=25, WebhookLimit=5
+        // Pro tier: MachineLimit=1000, RetentionDays=30, AlertRuleLimit=10, WebhookLimit=5
         ExecuteSql($@"INSERT INTO TierFeatureLimits (Tier, MachineLimit, RetentionDays, AlertRuleLimit, WebhookLimit, UpdatedAt)
-            VALUES ({(int)SubscriptionTier.Pro}, NULL, 30, 25, 5, '{now}')");
+            VALUES ({(int)SubscriptionTier.Pro}, 1000, 30, 10, 5, '{now}')");
 
-        // Team tier: MachineLimit=null (unlimited), RetentionDays=365, AlertRuleLimit=100, WebhookLimit=25
+        // Team tier: MachineLimit=10000, RetentionDays=365, AlertRuleLimit=25, WebhookLimit=15
         ExecuteSql($@"INSERT INTO TierFeatureLimits (Tier, MachineLimit, RetentionDays, AlertRuleLimit, WebhookLimit, UpdatedAt)
-            VALUES ({(int)SubscriptionTier.Team}, NULL, 365, 100, 25, '{now}')");
+            VALUES ({(int)SubscriptionTier.Team}, 10000, 365, 25, 15, '{now}')");
     }
 
     private void ExecuteSql(string sql)

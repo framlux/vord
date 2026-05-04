@@ -8,6 +8,7 @@ using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Server.Auth;
 using Framlux.FleetManagement.Server.Services.Billing;
+using Framlux.FleetManagement.Server.Services.Infrastructure;
 
 namespace Framlux.FleetManagement.Server.Endpoints.Web.Billing;
 
@@ -30,6 +31,7 @@ public sealed class ResumeSubscriptionResponse
 public sealed class ResumeSubscriptionEndpoint : EndpointWithoutRequest<ApiResponse<ResumeSubscriptionResponse>>
 {
     private readonly IBillingStatus _billingStatus;
+    private readonly IAuditLogRepository _auditLog;
     private readonly ITenantRepository _tenantRepository;
     private readonly ISubscriptionService _subscriptionService;
     private readonly IBillingApiClient _billingApiClient;
@@ -40,12 +42,14 @@ public sealed class ResumeSubscriptionEndpoint : EndpointWithoutRequest<ApiRespo
     /// </summary>
     public ResumeSubscriptionEndpoint(
         IBillingStatus billingStatus,
+        IAuditLogRepository auditLog,
         ITenantRepository tenantRepository,
         ISubscriptionService subscriptionService,
         IBillingApiClient billingApiClient,
         ILogger<ResumeSubscriptionEndpoint> logger)
     {
         _billingStatus = billingStatus;
+        _auditLog = auditLog;
         _tenantRepository = tenantRepository;
         _subscriptionService = subscriptionService;
         _billingApiClient = billingApiClient;
@@ -130,6 +134,11 @@ public sealed class ResumeSubscriptionEndpoint : EndpointWithoutRequest<ApiRespo
 
             return;
         }
+
+        await _auditLog.InsertAuditLogAsync(AuditHelper.Create(
+            tenantId.Value, null, null,
+            AuditAction.SubscriptionResumed, AuditResourceType.Subscription,
+            tenantId.Value.ToString(), null, null), ct);
 
         await Send.OkAsync(ApiResponse<ResumeSubscriptionResponse>.Ok(new ResumeSubscriptionResponse
         {

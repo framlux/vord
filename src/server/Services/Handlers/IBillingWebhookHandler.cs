@@ -54,4 +54,20 @@ public interface IBillingWebhookHandler
     /// <param name="tenantId">The tenant ID.</param>
     /// <param name="ct">A cancellation token.</param>
     Task HandleDowngradeToProAsync(int tenantId, CancellationToken ct);
+
+    /// <summary>
+    /// Corrects the tier for a tenant when drift is detected by the sync service.
+    /// Unlike HandleCheckoutCompletedAsync, this does not provision default alert rules.
+    /// </summary>
+    /// <param name="tenantId">The tenant ID.</param>
+    /// <param name="tier">The correct subscription tier.</param>
+    /// <param name="ct">A cancellation token.</param>
+    Task HandleTierCorrectionAsync(int tenantId, SubscriptionTier tier, CancellationToken ct);
+
+    /// <summary>
+    /// Handles a full account cancellation by deactivating the subscription and cleaning up resources.
+    /// </summary>
+    /// <param name="tenantId">The tenant ID.</param>
+    /// <param name="ct">A cancellation token.</param>
+    Task HandleAccountCanceledAsync(int tenantId, CancellationToken ct);
 }

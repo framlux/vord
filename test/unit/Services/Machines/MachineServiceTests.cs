@@ -542,7 +542,7 @@ public class MachineServiceTests
         ISubscriptionService subscriptionService = Substitute.For<ISubscriptionService>();
         subscriptionService.GetSubscriptionForTenantAsync(1, Arg.Any<CancellationToken>()).Returns(sub);
         subscriptionService.GetEffectiveLimitsForTenantAsync(1, Arg.Any<CancellationToken>()).Returns(
-            new EffectiveLimits { MachineLimit = null, RetentionDays = 30 });
+            new EffectiveLimits { MachineLimit = 1000, RetentionDays = 30, AlertRuleLimit = 10, WebhookLimit = 5 });
 
         Dictionary<Type, object> services = new()
         {
@@ -673,7 +673,7 @@ public class MachineServiceTests
         ISubscriptionService subscriptionService = Substitute.For<ISubscriptionService>();
         subscriptionService.GetSubscriptionForTenantAsync(1, Arg.Any<CancellationToken>()).Returns(sub);
         subscriptionService.GetEffectiveLimitsForTenantAsync(1, Arg.Any<CancellationToken>()).Returns(
-            new EffectiveLimits { MachineLimit = null, RetentionDays = 30 });
+            new EffectiveLimits { MachineLimit = 1000, RetentionDays = 30, AlertRuleLimit = 10, WebhookLimit = 5 });
 
         Dictionary<Type, object> services = new()
         {
@@ -729,9 +729,9 @@ public class MachineServiceTests
         await dbFactory.Context.InsertAsync(new TierFeatureLimit
         {
             Tier = SubscriptionTier.Pro,
-            MachineLimit = null,
+            MachineLimit = 1000,
             RetentionDays = 30,
-            AlertRuleLimit = 25,
+            AlertRuleLimit = 10,
             WebhookLimit = 5,
             UpdatedAt = now,
         });
@@ -739,10 +739,10 @@ public class MachineServiceTests
         await dbFactory.Context.InsertAsync(new TierFeatureLimit
         {
             Tier = SubscriptionTier.Team,
-            MachineLimit = null,
+            MachineLimit = 10000,
             RetentionDays = 365,
-            AlertRuleLimit = 100,
-            WebhookLimit = 25,
+            AlertRuleLimit = 25,
+            WebhookLimit = 15,
             UpdatedAt = now,
         });
     }

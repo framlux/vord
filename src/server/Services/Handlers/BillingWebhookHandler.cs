@@ -191,4 +191,36 @@ public sealed class BillingWebhookHandler : IBillingWebhookHandler
 
         await transaction.CommitAsync(ct);
     }
+
+    /// <inheritdoc/>
+    public async Task HandleTierCorrectionAsync(int tenantId, SubscriptionTier tier, CancellationToken ct)
+    {
+        using IDatabaseTransaction transaction = await _transactionProvider.BeginTransactionAsync(ct);
+
+        await _subscriptionRepo.UpdateSubscriptionOnCheckoutAsync(tenantId, tier, ct);
+
+        await _auditLog.InsertAuditLogAsync(AuditHelper.Create(
+            tenantId, null, null,
+            AuditAction.SubscriptionUpgraded, AuditResourceType.Subscription,
+            tenantId.ToString(), "Tier corrected by sync service", null), ct);
+
+        await transaction.CommitAsync(ct);
+    }
+
+    /// <inheritdoc/>
+    public async Task HandleAccountCanceledAsync(int tenantId, CancellationToken ct)
+    {
+        using IDatabaseTransaction transaction = await _transactionProvider.BeginTransactionAsync(ct);
+
+        await _subscriptionRepo.DeactivateSubscriptionAsync(tenantId, ct);
+
+        await _auditLog.InsertAuditLogAsync(AuditHelper.Create(
+            tenantId, null, null,
+            AuditAction.SubscriptionDowngraded, AuditResourceType.Subscription,
+            tenantId.ToString(), "Account canceled", null), ct);
+
+        await transaction.CommitAsync(ct);
+
+        await _downgradeCleanupService.CleanupForFreeTierAsync(tenantId, ct);
+    }
 }

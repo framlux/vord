@@ -455,9 +455,9 @@ public class PartitionManagementServiceTests
         await db.InsertAsync(new TierFeatureLimit
         {
             Tier = SubscriptionTier.Pro,
-            MachineLimit = null,
+            MachineLimit = 1000,
             RetentionDays = 30,
-            AlertRuleLimit = 25,
+            AlertRuleLimit = 10,
             WebhookLimit = 5,
             UpdatedAt = DateTimeOffset.UtcNow,
         });
