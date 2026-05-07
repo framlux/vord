@@ -39,7 +39,7 @@ public class SubscriptionServiceTests
         {
             Tier = SubscriptionTier.Pro,
             MachineLimit = 1000,
-            RetentionDays = 30,
+            RetentionDays = 60,
             AlertRuleLimit = 10,
             WebhookLimit = 5,
             UpdatedAt = now,
@@ -62,7 +62,7 @@ public class SubscriptionServiceTests
         IOptions<TierDefaultOptions> tierDefaults = Options.Create(new TierDefaultOptions
         {
             Free = new() { MachineLimit = 3, RetentionDays = 1, AlertRuleLimit = 0, WebhookLimit = 0 },
-            Pro = new() { MachineLimit = 1000, RetentionDays = 30, AlertRuleLimit = 10, WebhookLimit = 5 },
+            Pro = new() { MachineLimit = 1000, RetentionDays = 60, AlertRuleLimit = 10, WebhookLimit = 5 },
             Team = new() { MachineLimit = 10000, RetentionDays = 365, AlertRuleLimit = 25, WebhookLimit = 15 },
         });
 
@@ -196,8 +196,8 @@ public class SubscriptionServiceTests
 
             int result = await service.GetRetentionDaysForTenantAsync(1, CancellationToken.None);
 
-            // Pro tier returns 30 days from the tier limit repo mock
-            await Assert.That(result).IsEqualTo(30);
+            // Pro tier returns 60 days from the tier limit repo mock
+            await Assert.That(result).IsEqualTo(60);
         }
     }
 
@@ -675,7 +675,7 @@ public class SubscriptionServiceTests
         (DatabaseRepository repo, TestDatabaseFactory dbFactory) = BuildRepoAndFactory();
         using (dbFactory)
         {
-            // Pro tier has RetentionDays=30
+            // Pro tier has RetentionDays=60
             TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 1, tier: SubscriptionTier.Pro);
             sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
 

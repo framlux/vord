@@ -9,6 +9,7 @@ using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Server.Auth;
 using Framlux.FleetManagement.Server.Services.Billing;
 using Framlux.FleetManagement.Server.Services.Infrastructure;
+using Framlux.Vord.BillingGrpc;
 
 namespace Framlux.FleetManagement.Server.Endpoints.Web.Billing;
 
@@ -146,7 +147,7 @@ public sealed class CancelSubscriptionEndpoint : EndpointWithoutRequest<ApiRespo
             return;
         }
 
-        bool success = await _billingApiClient.CancelSubscriptionAsync(tenant.ExternalId, PendingActions.CancelAccount, ct);
+        bool success = await _billingApiClient.CancelSubscriptionAsync(tenant.ExternalId, PendingActionType.CancelAccount, ct);
         if (success == false)
         {
             _logger.LogWarning("Failed to cancel subscription with billing-api for tenant {TenantId}", tenantId.Value);

@@ -2,6 +2,8 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
+using Framlux.Vord.BillingGrpc;
+
 namespace Framlux.FleetManagement.Server.Services.Billing;
 
 /// <summary>
@@ -22,7 +24,7 @@ public sealed class NoOpBillingApiClient : IBillingApiClient
     }
 
     /// <inheritdoc/>
-    public Task<bool> CancelSubscriptionAsync(string tenantExternalId, string pendingAction, CancellationToken ct)
+    public Task<bool> CancelSubscriptionAsync(string tenantExternalId, PendingActionType pendingAction, CancellationToken ct)
     {
         return Task.FromResult(true);
     }
@@ -30,11 +32,11 @@ public sealed class NoOpBillingApiClient : IBillingApiClient
     /// <inheritdoc/>
     public Task<StripeSubscriptionStatus> GetSubscriptionStatusAsync(string tenantExternalId, CancellationToken ct)
     {
-        return Task.FromResult(new StripeSubscriptionStatus(false, "none", string.Empty, 0, null, null));
+        return Task.FromResult(new StripeSubscriptionStatus(false, "none", string.Empty, 0, null, BillingTier.Unspecified));
     }
 
     /// <inheritdoc/>
-    public Task<bool> SwapSubscriptionPriceAsync(string tenantExternalId, string targetTier, CancellationToken ct)
+    public Task<bool> SwapSubscriptionPriceAsync(string tenantExternalId, BillingTier targetTier, CancellationToken ct)
     {
         return Task.FromResult(true);
     }

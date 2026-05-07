@@ -9,6 +9,7 @@ using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Server.Auth;
 using Framlux.FleetManagement.Server.Services.Billing;
 using Framlux.FleetManagement.Server.Services.Infrastructure;
+using Framlux.Vord.BillingGrpc;
 
 namespace Framlux.FleetManagement.Server.Endpoints.Web.Billing;
 
@@ -125,8 +126,10 @@ public sealed class DowngradeSubscriptionEndpoint : Endpoint<DowngradeSubscripti
 
         // Parse and validate the target tier
         string targetTierStr = req.TargetTier?.ToLowerInvariant() ?? string.Empty;
-        if ((string.Equals(targetTierStr, "free", StringComparison.Ordinal) == false) &&
-            (string.Equals(targetTierStr, "pro", StringComparison.Ordinal) == false))
+        bool isDowngradeToFree = string.Equals(targetTierStr, "free", StringComparison.Ordinal);
+        bool isDowngradeToPro = string.Equals(targetTierStr, "pro", StringComparison.Ordinal);
+
+        if ((isDowngradeToFree == false) && (isDowngradeToPro == false))
         {
             await SendErrorResponse(400, "Target tier must be 'free' or 'pro'.", ct);
 
@@ -135,8 +138,6 @@ public sealed class DowngradeSubscriptionEndpoint : Endpoint<DowngradeSubscripti
 
         // Validate the downgrade path
         SubscriptionTier currentTier = subscription.Tier;
-        bool isDowngradeToFree = string.Equals(targetTierStr, "free", StringComparison.Ordinal);
-        bool isDowngradeToPro = string.Equals(targetTierStr, "pro", StringComparison.Ordinal);
 
         if (currentTier == SubscriptionTier.Free)
         {
@@ -208,7 +209,7 @@ public sealed class DowngradeSubscriptionEndpoint : Endpoint<DowngradeSubscripti
         {
             try
             {
-                await _billingApiClient.SwapSubscriptionPriceAsync(tenant.ExternalId, "pro", ct);
+                await _billingApiClient.SwapSubscriptionPriceAsync(tenant.ExternalId, BillingTier.Pro, ct);
             }
             catch (Exception ex)
             {
@@ -249,7 +250,7 @@ public sealed class DowngradeSubscriptionEndpoint : Endpoint<DowngradeSubscripti
             return;
         }
 
-        bool success = await _billingApiClient.CancelSubscriptionAsync(tenant.ExternalId, PendingActions.DowngradeToFree, ct);
+        bool success = await _billingApiClient.CancelSubscriptionAsync(tenant.ExternalId, PendingActionType.DowngradeToFree, ct);
         if (success == false)
         {
             _logger.LogWarning("Failed to cancel Stripe subscription for tenant {TenantId} during downgrade to Free", tenantId);

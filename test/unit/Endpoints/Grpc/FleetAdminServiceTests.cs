@@ -218,7 +218,7 @@ public sealed class FleetAdminServiceTests
         {
             Tier = SubscriptionTier.Pro,
             MachineLimit = 50,
-            RetentionDays = 30,
+            RetentionDays = 60,
             AlertRuleLimit = 10,
             WebhookLimit = 5,
             UpdatedAt = DateTimeOffset.UtcNow
@@ -234,10 +234,10 @@ public sealed class FleetAdminServiceTests
         await Assert.That(result.MachineCount).IsEqualTo(10);
         await Assert.That(result.UserCount).IsEqualTo(3);
         await Assert.That(result.Subscription).IsNotNull();
-        await Assert.That(result.Subscription.Tier).IsEqualTo("Pro");
+        await Assert.That(result.Subscription.Tier).IsEqualTo(BillingTier.Pro);
         await Assert.That(result.Subscription.Status).IsEqualTo("Active");
         await Assert.That(result.Subscription.MachineLimit).IsEqualTo(50);
-        await Assert.That(result.Subscription.RetentionDays).IsEqualTo(30);
+        await Assert.That(result.Subscription.RetentionDays).IsEqualTo(60);
     }
 
     [Test]

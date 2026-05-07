@@ -9,6 +9,7 @@ using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.FunctionalTest.Infrastructure;
 using Framlux.FleetManagement.Server.Services.Billing;
+using Framlux.Vord.BillingGrpc;
 using LinqToDB;
 using LinqToDB.Async;
 using NSubstitute;
@@ -107,7 +108,7 @@ public sealed class BillingEndpointTests
         factory.BillingApiClientMock.GetSubscriptionStatusAsync(
             Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(
-                new StripeSubscriptionStatus(true, "active", string.Empty, 0, null, null)));
+                new StripeSubscriptionStatus(true, "active", string.Empty, 0, null, BillingTier.Unspecified)));
 
         // Cancel when Stripe already reflects a pending cancellation
         HttpResponseMessage response = await client.PostAsync("/api/v1/billing/cancel", null);
@@ -335,7 +336,7 @@ public sealed class BillingEndpointTests
         factory.BillingApiClientMock.GetSubscriptionStatusAsync(
             Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(
-                new StripeSubscriptionStatus(true, "active", string.Empty, 0, null, null)));
+                new StripeSubscriptionStatus(true, "active", string.Empty, 0, null, BillingTier.Unspecified)));
 
         // Cancel when Stripe already reflects cancellation
         HttpResponseMessage response = await client.PostAsync("/api/v1/billing/cancel", null);

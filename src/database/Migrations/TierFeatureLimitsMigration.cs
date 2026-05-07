@@ -53,7 +53,7 @@ public sealed class TierFeatureLimitsMigration : Migration
         {
             Tier = 2, // SubscriptionTier.Pro
             MachineLimit = 1000,
-            RetentionDays = 30,
+            RetentionDays = 60,
             AlertRuleLimit = 10,
             WebhookLimit = 5,
             UpdatedAt = DateTimeOffset.UtcNow,

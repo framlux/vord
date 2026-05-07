@@ -153,7 +153,7 @@ public sealed class ViewOnlyEndpointTests
         string body = await response.Content.ReadAsStringAsync();
         await Assert.That(body).Contains("\"success\":true");
         await Assert.That(body).Contains("\"tier\":\"Pro\"");
-        await Assert.That(body).Contains("\"retentionDays\":30");
+        await Assert.That(body).Contains("\"retentionDays\":60");
     }
 
     [Test]

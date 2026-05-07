@@ -443,7 +443,7 @@ public class PartitionManagementServiceTests
     [Test]
     public async Task DropExpiredPartitions_HigherRetention_KeepsMorePartitions()
     {
-        // Pro tier with 30-day retention should keep partitions within 30 + DropBufferDays
+        // Pro tier with 60-day retention should keep partitions within 60 + DropBufferDays
         using TestDatabaseFactory dbFactory = new();
         DatabaseContext db = dbFactory.Context;
 
@@ -456,16 +456,16 @@ public class PartitionManagementServiceTests
         {
             Tier = SubscriptionTier.Pro,
             MachineLimit = 1000,
-            RetentionDays = 30,
+            RetentionDays = 60,
             AlertRuleLimit = 10,
             WebhookLimit = 5,
             UpdatedAt = DateTimeOffset.UtcNow,
         });
 
         DateOnly today = DateOnly.FromDateTime(DateTimeOffset.UtcNow.UtcDateTime);
-        int retentionPlusBuffer = 30 + PartitionManagementService.DropBufferDays;
+        int retentionPlusBuffer = 60 + PartitionManagementService.DropBufferDays;
 
-        // A partition 20 days old should survive with 30-day retention
+        // A partition 20 days old should survive with 60-day retention
         DateOnly recentDate = today.AddDays(-20);
         string recentPartition = PartitionManagementService.BuildPartitionName("MachineTelemetry", recentDate);
         await db.ExecuteAsync($"CREATE TABLE \"{recentPartition}\" (id INTEGER)", CancellationToken.None);

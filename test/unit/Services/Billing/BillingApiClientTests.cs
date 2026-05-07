@@ -159,7 +159,7 @@ public sealed class BillingApiClientTests
                 Arg.Any<CancelSubscriptionRequest>(), Arg.Any<Metadata>(), Arg.Any<DateTime?>(), Arg.Any<CancellationToken>())
             .Returns(CreateAsyncCall(new CancelSubscriptionResponse { Success = true }));
 
-        bool result = await client.CancelSubscriptionAsync("tenant-ext-1", "CancelAccount", CancellationToken.None);
+        bool result = await client.CancelSubscriptionAsync("tenant-ext-1", PendingActionType.CancelAccount, CancellationToken.None);
 
         await Assert.That(result).IsTrue();
     }
@@ -172,7 +172,7 @@ public sealed class BillingApiClientTests
                 Arg.Any<CancelSubscriptionRequest>(), Arg.Any<Metadata>(), Arg.Any<DateTime?>(), Arg.Any<CancellationToken>())
             .Returns(CreateAsyncCall(new CancelSubscriptionResponse { Success = false, Message = "error" }));
 
-        bool result = await client.CancelSubscriptionAsync("tenant-ext-1", "CancelAccount", CancellationToken.None);
+        bool result = await client.CancelSubscriptionAsync("tenant-ext-1", PendingActionType.CancelAccount, CancellationToken.None);
 
         await Assert.That(result).IsFalse();
         logger.Received().Log(
@@ -191,7 +191,7 @@ public sealed class BillingApiClientTests
                 Arg.Any<CancelSubscriptionRequest>(), Arg.Any<Metadata>(), Arg.Any<DateTime?>(), Arg.Any<CancellationToken>())
             .Returns(CreateFaultedCall<CancelSubscriptionResponse>(new RpcException(new Status(StatusCode.Unavailable, "down"))));
 
-        bool result = await client.CancelSubscriptionAsync("tenant-ext-1", "CancelAccount", CancellationToken.None);
+        bool result = await client.CancelSubscriptionAsync("tenant-ext-1", PendingActionType.CancelAccount, CancellationToken.None);
 
         await Assert.That(result).IsFalse();
         logger.Received().Log(
@@ -244,7 +244,7 @@ public sealed class BillingApiClientTests
         await Assert.That(status.PriceId).IsEqualTo(string.Empty);
         await Assert.That(status.Quantity).IsEqualTo(0);
         await Assert.That(status.CurrentPeriodEnd).IsNull();
-        await Assert.That(status.Tier).IsNull();
+        await Assert.That(status.Tier).IsEqualTo(BillingTier.Unspecified);
     }
 
     // --- Parameter handling ---
@@ -274,7 +274,7 @@ public sealed class BillingApiClientTests
                 Arg.Do<CancelSubscriptionRequest>(r => capturedRequest = r), Arg.Any<Metadata>(), Arg.Any<DateTime?>(), Arg.Any<CancellationToken>())
             .Returns(CreateAsyncCall(new CancelSubscriptionResponse { Success = true }));
 
-        await client.CancelSubscriptionAsync("tenant-xyz", "CancelAccount", CancellationToken.None);
+        await client.CancelSubscriptionAsync("tenant-xyz", PendingActionType.CancelAccount, CancellationToken.None);
 
         await Assert.That(capturedRequest).IsNotNull();
         await Assert.That(capturedRequest!.TenantExternalId).IsEqualTo("tenant-xyz");
@@ -317,7 +317,7 @@ public sealed class BillingApiClientTests
                 Arg.Any<CancelSubscriptionRequest>(), Arg.Any<Metadata>(), Arg.Any<DateTime?>(), Arg.Any<CancellationToken>())
             .Returns(CreateFaultedCall<CancelSubscriptionResponse>(new RpcException(new Status(StatusCode.DeadlineExceeded, "deadline exceeded"))));
 
-        bool result = await client.CancelSubscriptionAsync("tenant-ext-1", "CancelAccount", CancellationToken.None);
+        bool result = await client.CancelSubscriptionAsync("tenant-ext-1", PendingActionType.CancelAccount, CancellationToken.None);
 
         await Assert.That(result).IsFalse();
         logger.Received().Log(
@@ -359,7 +359,7 @@ public sealed class BillingApiClientTests
                 Arg.Any<SwapSubscriptionPriceRequest>(), Arg.Any<Metadata>(), Arg.Any<DateTime?>(), Arg.Any<CancellationToken>())
             .Returns(CreateFaultedCall<SwapSubscriptionPriceResponse>(new RpcException(new Status(StatusCode.DeadlineExceeded, "deadline exceeded"))));
 
-        bool result = await client.SwapSubscriptionPriceAsync("tenant-ext-1", "pro", CancellationToken.None);
+        bool result = await client.SwapSubscriptionPriceAsync("tenant-ext-1", BillingTier.Pro, CancellationToken.None);
 
         await Assert.That(result).IsFalse();
         logger.Received().Log(
@@ -504,7 +504,7 @@ public sealed class BillingApiClientTests
                 Arg.Any<SwapSubscriptionPriceRequest>(), Arg.Any<Metadata>(), Arg.Any<DateTime?>(), Arg.Any<CancellationToken>())
             .Returns(CreateFaultedCall<SwapSubscriptionPriceResponse>(new RpcException(new Status(StatusCode.Internal, "server error"))));
 
-        bool result = await client.SwapSubscriptionPriceAsync("tenant-ext-1", "pro", CancellationToken.None);
+        bool result = await client.SwapSubscriptionPriceAsync("tenant-ext-1", BillingTier.Pro, CancellationToken.None);
 
         await Assert.That(result).IsFalse();
     }
@@ -519,7 +519,7 @@ public sealed class BillingApiClientTests
                 Arg.Any<SwapSubscriptionPriceRequest>(), Arg.Any<Metadata>(), Arg.Any<DateTime?>(), Arg.Any<CancellationToken>())
             .Returns(CreateAsyncCall(response));
 
-        bool result = await client.SwapSubscriptionPriceAsync("tenant-ext-1", "enterprise", CancellationToken.None);
+        bool result = await client.SwapSubscriptionPriceAsync("tenant-ext-1", BillingTier.Unspecified, CancellationToken.None);
 
         await Assert.That(result).IsFalse();
     }

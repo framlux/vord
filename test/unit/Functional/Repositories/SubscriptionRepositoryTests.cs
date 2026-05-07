@@ -38,7 +38,7 @@ public class SubscriptionCacheTests
         {
             Tier = SubscriptionTier.Pro,
             MachineLimit = 1000,
-            RetentionDays = 30,
+            RetentionDays = 60,
             AlertRuleLimit = 10,
             WebhookLimit = 5,
             UpdatedAt = now,
@@ -57,7 +57,7 @@ public class SubscriptionCacheTests
         IOptions<TierDefaultOptions> tierDefaults = Options.Create(new TierDefaultOptions
         {
             Free = new() { MachineLimit = 3, RetentionDays = 1, AlertRuleLimit = 0, WebhookLimit = 0 },
-            Pro = new() { MachineLimit = 1000, RetentionDays = 30, AlertRuleLimit = 10, WebhookLimit = 5 },
+            Pro = new() { MachineLimit = 1000, RetentionDays = 60, AlertRuleLimit = 10, WebhookLimit = 5 },
             Team = new() { MachineLimit = 10000, RetentionDays = 365, AlertRuleLimit = 25, WebhookLimit = 15 },
         });
 
@@ -174,8 +174,8 @@ public class SubscriptionCacheTests
 
         int result = await service.GetRetentionDaysForTenantAsync(60, CancellationToken.None);
 
-        // Pro tier returns 30 days from the tier limit repo mock
-        await Assert.That(result).IsEqualTo(30);
+        // Pro tier returns 60 days from the tier limit repo mock
+        await Assert.That(result).IsEqualTo(60);
     }
 
     [Test]

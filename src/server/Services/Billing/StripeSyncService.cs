@@ -7,6 +7,7 @@ using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Server.Options;
 using Framlux.FleetManagement.Server.Services.Infrastructure;
+using Framlux.Vord.BillingGrpc;
 using Microsoft.Extensions.Options;
 
 namespace Framlux.FleetManagement.Server.Services.Billing;
@@ -174,7 +175,7 @@ public sealed class StripeSyncService : BackgroundService
         string proPriceId, string teamPriceId, CancellationToken ct)
     {
         // Prefer the tier resolved by the billing API from TierMappings
-        SubscriptionTier? stripeTier = MapTierStringToEnum(stripeStatus.Tier);
+        SubscriptionTier? stripeTier = MapBillingTierToSubscriptionTier(stripeStatus.Tier);
         if (stripeTier is null)
         {
             // Fallback: try legacy price ID mapping
@@ -297,12 +298,13 @@ public sealed class StripeSyncService : BackgroundService
         return null;
     }
 
-    private static SubscriptionTier? MapTierStringToEnum(string? tier)
+    private static SubscriptionTier? MapBillingTierToSubscriptionTier(BillingTier tier)
     {
-        return tier?.ToLowerInvariant() switch
+        return tier switch
         {
-            "pro" => SubscriptionTier.Pro,
-            "team" => SubscriptionTier.Team,
+            BillingTier.Pro => SubscriptionTier.Pro,
+            BillingTier.Team => SubscriptionTier.Team,
+            BillingTier.Free => SubscriptionTier.Free,
             _ => null,
         };
     }

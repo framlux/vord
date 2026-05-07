@@ -98,7 +98,7 @@ public sealed class BillingApiClient : IBillingApiClient
     }
 
     /// <inheritdoc/>
-    public async Task<bool> CancelSubscriptionAsync(string tenantExternalId, string pendingAction, CancellationToken ct)
+    public async Task<bool> CancelSubscriptionAsync(string tenantExternalId, PendingActionType pendingAction, CancellationToken ct)
     {
         try
         {
@@ -148,15 +148,13 @@ public sealed class BillingApiClient : IBillingApiClient
                 ? response.CurrentPeriodEnd.ToDateTimeOffset()
                 : null;
 
-            string? tier = string.IsNullOrEmpty(response.Tier) == false ? response.Tier : null;
-
             return new StripeSubscriptionStatus(
                 response.CancelAtPeriodEnd,
                 response.StripeStatus,
                 response.PriceId,
                 response.Quantity,
                 currentPeriodEnd,
-                tier);
+                response.Tier);
         }
         catch (Exception ex)
         {
@@ -164,12 +162,12 @@ public sealed class BillingApiClient : IBillingApiClient
                 "Error getting subscription status for tenant {TenantExternalId}",
                 tenantExternalId);
 
-            return new StripeSubscriptionStatus(false, "none", string.Empty, 0, null, null);
+            return new StripeSubscriptionStatus(false, "none", string.Empty, 0, null, BillingTier.Unspecified);
         }
     }
 
     /// <inheritdoc/>
-    public async Task<bool> SwapSubscriptionPriceAsync(string tenantExternalId, string targetTier, CancellationToken ct)
+    public async Task<bool> SwapSubscriptionPriceAsync(string tenantExternalId, BillingTier targetTier, CancellationToken ct)
     {
         try
         {

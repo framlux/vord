@@ -56,7 +56,8 @@
     <PackageReference Include="Microsoft.AspNetCore.DataProtection.StackExchangeRedis" Version="10.0.7" />
     <PackageReference Include="AWSSDK.S3" Version="4.0.21.2" />
     <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.7" />
-    <PackageReference Include="Framlux.Vord.BillingGrpc" Version="1.12.0" />
+    <!-- TODO: Revert to PackageReference after billingGrpc NuGet is published -->
+    <ProjectReference Include="../../../vord-internal/src/billingGrpc/billingGrpc.csproj" />
     <PackageReference Include="StackExchange.Redis" Version="2.12.14" />
   </ItemGroup>
 

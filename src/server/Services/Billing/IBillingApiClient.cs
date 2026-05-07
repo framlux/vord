@@ -2,6 +2,8 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
+using Framlux.Vord.BillingGrpc;
+
 namespace Framlux.FleetManagement.Server.Services.Billing;
 
 /// <summary>
@@ -31,10 +33,10 @@ public interface IBillingApiClient
     /// Cancels a subscription at the end of the current billing period.
     /// </summary>
     /// <param name="tenantExternalId">The tenant external ID.</param>
-    /// <param name="pendingAction">The action to take when the subscription ends (e.g., "DowngradeToFree", "DowngradeToPro", "CancelAccount").</param>
+    /// <param name="pendingAction">The action to take when the subscription ends.</param>
     /// <param name="ct">Cancellation token.</param>
     /// <returns>True if the cancellation was successful.</returns>
-    Task<bool> CancelSubscriptionAsync(string tenantExternalId, string pendingAction, CancellationToken ct);
+    Task<bool> CancelSubscriptionAsync(string tenantExternalId, PendingActionType pendingAction, CancellationToken ct);
 
     /// <summary>
     /// Gets the current subscription status from Stripe for reconciliation.
@@ -48,10 +50,10 @@ public interface IBillingApiClient
     /// Swaps the subscription price in Stripe for an immediate tier change with proration.
     /// </summary>
     /// <param name="tenantExternalId">The tenant external ID.</param>
-    /// <param name="targetTier">The target tier to swap to (e.g., "pro").</param>
+    /// <param name="targetTier">The target tier to swap to.</param>
     /// <param name="ct">Cancellation token.</param>
     /// <returns>True if the swap was successful.</returns>
-    Task<bool> SwapSubscriptionPriceAsync(string tenantExternalId, string targetTier, CancellationToken ct);
+    Task<bool> SwapSubscriptionPriceAsync(string tenantExternalId, BillingTier targetTier, CancellationToken ct);
 
     /// <summary>
     /// Resumes a subscription that was set to cancel at period end.

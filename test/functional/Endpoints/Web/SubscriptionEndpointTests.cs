@@ -45,7 +45,7 @@ public sealed class SubscriptionEndpointTests
         using FunctionalTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
 
-        int tenantId = await SeedTenantWithSubscription(db, SubscriptionTier.Pro, null, 30);
+        int tenantId = await SeedTenantWithSubscription(db, SubscriptionTier.Pro, null, 60);
 
         HttpClient client = BuildViewerClient(factory, tenantId);
 
@@ -55,8 +55,8 @@ public sealed class SubscriptionEndpointTests
 
         JsonElement data = await ExtractDataElement(response);
         await Assert.That(data.GetProperty("tier").GetString()).IsEqualTo("Pro");
-        await Assert.That(data.GetProperty("retentionDays").GetInt32()).IsEqualTo(30);
-        await Assert.That(data.GetProperty("machineLimit").ValueKind).IsEqualTo(JsonValueKind.Null);
+        await Assert.That(data.GetProperty("retentionDays").GetInt32()).IsEqualTo(60);
+        await Assert.That(data.GetProperty("machineLimit").GetInt32()).IsEqualTo(1000);
     }
 
     [Test]
@@ -76,7 +76,7 @@ public sealed class SubscriptionEndpointTests
         JsonElement data = await ExtractDataElement(response);
         await Assert.That(data.GetProperty("tier").GetString()).IsEqualTo("Team");
         await Assert.That(data.GetProperty("retentionDays").GetInt32()).IsEqualTo(365);
-        await Assert.That(data.GetProperty("machineLimit").ValueKind).IsEqualTo(JsonValueKind.Null);
+        await Assert.That(data.GetProperty("machineLimit").GetInt32()).IsEqualTo(10000);
     }
 
     [Test]
@@ -89,7 +89,7 @@ public sealed class SubscriptionEndpointTests
             db,
             SubscriptionTier.Pro,
             null,
-            30,
+            60,
             status: SubscriptionStatus.PastDue);
 
         HttpClient client = BuildViewerClient(factory, tenantId);
@@ -113,7 +113,7 @@ public sealed class SubscriptionEndpointTests
             db,
             SubscriptionTier.Pro,
             null,
-            30,
+            60,
             status: SubscriptionStatus.Canceled);
 
         HttpClient client = BuildViewerClient(factory, tenantId);
@@ -137,7 +137,7 @@ public sealed class SubscriptionEndpointTests
             db,
             SubscriptionTier.Pro,
             null,
-            30,
+            60,
             currentPeriodEnd: periodEnd);
 
         HttpClient client = BuildViewerClient(factory, tenantId);
@@ -179,7 +179,7 @@ public sealed class SubscriptionEndpointTests
         using FunctionalTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
 
-        int tenantId = await SeedTenantWithSubscription(db, SubscriptionTier.Pro, null, 30);
+        int tenantId = await SeedTenantWithSubscription(db, SubscriptionTier.Pro, null, 60);
 
         HttpClient client = BuildViewerClient(factory, tenantId);
 
@@ -239,7 +239,7 @@ public sealed class SubscriptionEndpointTests
         using FunctionalTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
 
-        int tenantId = await SeedTenantWithSubscription(db, SubscriptionTier.Pro, null, 30);
+        int tenantId = await SeedTenantWithSubscription(db, SubscriptionTier.Pro, null, 60);
 
         HttpClient client = BuildViewerClient(factory, tenantId);
 

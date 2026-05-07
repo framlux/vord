@@ -9,6 +9,7 @@ using Framlux.FleetManagement.Server.Options;
 using Framlux.FleetManagement.Server.Services.Billing;
 using Framlux.FleetManagement.Server.Services.Handlers;
 using Framlux.FleetManagement.Server.Services.Infrastructure;
+using Framlux.Vord.BillingGrpc;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -121,7 +122,7 @@ public sealed class StripeSyncServiceTests
 
         DateTimeOffset periodEnd = sub.CurrentPeriodEnd!.Value;
         billingClient.GetSubscriptionStatusAsync("ext-1", Arg.Any<CancellationToken>())
-            .Returns(new StripeSubscriptionStatus(false, "active", "price_pro_123", 3, periodEnd, "Pro"));
+            .Returns(new StripeSubscriptionStatus(false, "active", "price_pro_123", 3, periodEnd, BillingTier.Pro));
         billingClient.ReportMachineUsageAsync("ext-1", 5, Arg.Any<CancellationToken>())
             .Returns(callInfo =>
             {
@@ -165,7 +166,7 @@ public sealed class StripeSyncServiceTests
 
         DateTimeOffset periodEnd = sub.CurrentPeriodEnd!.Value;
         billingClient.GetSubscriptionStatusAsync("ext-1", Arg.Any<CancellationToken>())
-            .Returns(new StripeSubscriptionStatus(false, "active", "price_pro_123", 5, periodEnd, "Pro"));
+            .Returns(new StripeSubscriptionStatus(false, "active", "price_pro_123", 5, periodEnd, BillingTier.Pro));
 
         using CancellationTokenSource cts = new();
         await service.StartAsync(cts.Token);
@@ -200,7 +201,7 @@ public sealed class StripeSyncServiceTests
 
         DateTimeOffset periodEnd = sub.CurrentPeriodEnd!.Value;
         billingClient.GetSubscriptionStatusAsync("ext-1", Arg.Any<CancellationToken>())
-            .Returns(new StripeSubscriptionStatus(false, "active", "price_team_456", 5, periodEnd, "Team"));
+            .Returns(new StripeSubscriptionStatus(false, "active", "price_team_456", 5, periodEnd, BillingTier.Team));
 
         webhookHandler.HandleTierCorrectionAsync(1, SubscriptionTier.Team, Arg.Any<CancellationToken>())
             .Returns(callInfo =>
@@ -245,7 +246,7 @@ public sealed class StripeSyncServiceTests
 
         DateTimeOffset periodEnd = sub.CurrentPeriodEnd!.Value;
         billingClient.GetSubscriptionStatusAsync("ext-1", Arg.Any<CancellationToken>())
-            .Returns(new StripeSubscriptionStatus(false, "active", "price_pro_123", 5, periodEnd, "Pro"));
+            .Returns(new StripeSubscriptionStatus(false, "active", "price_pro_123", 5, periodEnd, BillingTier.Pro));
 
         using CancellationTokenSource cts = new();
         await service.StartAsync(cts.Token);
@@ -283,7 +284,7 @@ public sealed class StripeSyncServiceTests
 
         DateTimeOffset periodEnd = sub.CurrentPeriodEnd!.Value;
         billingClient.GetSubscriptionStatusAsync("ext-1", Arg.Any<CancellationToken>())
-            .Returns(new StripeSubscriptionStatus(false, "active", "price_unknown_789", 5, periodEnd, null));
+            .Returns(new StripeSubscriptionStatus(false, "active", "price_unknown_789", 5, periodEnd, BillingTier.Unspecified));
 
         using CancellationTokenSource cts = new();
         await service.StartAsync(cts.Token);
@@ -327,7 +328,7 @@ public sealed class StripeSyncServiceTests
 
         DateTimeOffset periodEnd = sub.CurrentPeriodEnd!.Value;
         billingClient.GetSubscriptionStatusAsync("ext-1", Arg.Any<CancellationToken>())
-            .Returns(new StripeSubscriptionStatus(false, "past_due", "price_pro_123", 5, periodEnd, "Pro"));
+            .Returns(new StripeSubscriptionStatus(false, "past_due", "price_pro_123", 5, periodEnd, BillingTier.Pro));
 
         using CancellationTokenSource cts = new();
         await service.StartAsync(cts.Token);
@@ -368,7 +369,7 @@ public sealed class StripeSyncServiceTests
 
         DateTimeOffset periodEnd = sub.CurrentPeriodEnd!.Value;
         billingClient.GetSubscriptionStatusAsync("ext-1", Arg.Any<CancellationToken>())
-            .Returns(new StripeSubscriptionStatus(false, "active", "price_pro_123", 5, periodEnd, "Pro"));
+            .Returns(new StripeSubscriptionStatus(false, "active", "price_pro_123", 5, periodEnd, BillingTier.Pro));
 
         using CancellationTokenSource cts = new();
         await service.StartAsync(cts.Token);
@@ -408,7 +409,7 @@ public sealed class StripeSyncServiceTests
 
         DateTimeOffset periodEnd = sub.CurrentPeriodEnd!.Value;
         billingClient.GetSubscriptionStatusAsync("ext-1", Arg.Any<CancellationToken>())
-            .Returns(new StripeSubscriptionStatus(false, "canceled", "price_pro_123", 5, periodEnd, "Pro"));
+            .Returns(new StripeSubscriptionStatus(false, "canceled", "price_pro_123", 5, periodEnd, BillingTier.Pro));
 
         using CancellationTokenSource cts = new();
         await service.StartAsync(cts.Token);
@@ -446,7 +447,7 @@ public sealed class StripeSyncServiceTests
 
         DateTimeOffset periodEnd = sub.CurrentPeriodEnd!.Value;
         billingClient.GetSubscriptionStatusAsync("ext-1", Arg.Any<CancellationToken>())
-            .Returns(new StripeSubscriptionStatus(false, "active", "price_pro_123", 5, periodEnd, "Pro"));
+            .Returns(new StripeSubscriptionStatus(false, "active", "price_pro_123", 5, periodEnd, BillingTier.Pro));
 
         using CancellationTokenSource cts = new();
         await service.StartAsync(cts.Token);
@@ -491,7 +492,7 @@ public sealed class StripeSyncServiceTests
             });
 
         billingClient.GetSubscriptionStatusAsync("ext-1", Arg.Any<CancellationToken>())
-            .Returns(new StripeSubscriptionStatus(false, "active", "price_pro_123", 5, stripePeriodEnd, "Pro"));
+            .Returns(new StripeSubscriptionStatus(false, "active", "price_pro_123", 5, stripePeriodEnd, BillingTier.Pro));
 
         using CancellationTokenSource cts = new();
         await service.StartAsync(cts.Token);
@@ -532,7 +533,7 @@ public sealed class StripeSyncServiceTests
             });
 
         billingClient.GetSubscriptionStatusAsync("ext-1", Arg.Any<CancellationToken>())
-            .Returns(new StripeSubscriptionStatus(false, "active", "price_pro_123", 5, stripePeriodEnd, "Pro"));
+            .Returns(new StripeSubscriptionStatus(false, "active", "price_pro_123", 5, stripePeriodEnd, BillingTier.Pro));
 
         using CancellationTokenSource cts = new();
         await service.StartAsync(cts.Token);
@@ -570,7 +571,7 @@ public sealed class StripeSyncServiceTests
             });
 
         billingClient.GetSubscriptionStatusAsync("ext-1", Arg.Any<CancellationToken>())
-            .Returns(new StripeSubscriptionStatus(false, "active", "price_pro_123", 5, periodEnd, "Pro"));
+            .Returns(new StripeSubscriptionStatus(false, "active", "price_pro_123", 5, periodEnd, BillingTier.Pro));
 
         using CancellationTokenSource cts = new();
         await service.StartAsync(cts.Token);
@@ -612,7 +613,7 @@ public sealed class StripeSyncServiceTests
 
         DateTimeOffset periodEnd = sub.CurrentPeriodEnd!.Value;
         billingClient.GetSubscriptionStatusAsync("ext-1", Arg.Any<CancellationToken>())
-            .Returns(new StripeSubscriptionStatus(false, "past_due", "price_pro_123", 3, periodEnd, "Pro"));
+            .Returns(new StripeSubscriptionStatus(false, "past_due", "price_pro_123", 3, periodEnd, BillingTier.Pro));
 
         using CancellationTokenSource cts = new();
         await service.StartAsync(cts.Token);
@@ -655,7 +656,7 @@ public sealed class StripeSyncServiceTests
 
         DateTimeOffset periodEnd = sub.CurrentPeriodEnd!.Value;
         billingClient.GetSubscriptionStatusAsync("ext-1", Arg.Any<CancellationToken>())
-            .Returns(new StripeSubscriptionStatus(false, "canceled", "price_team_456", 2, periodEnd, "Team"));
+            .Returns(new StripeSubscriptionStatus(false, "canceled", "price_team_456", 2, periodEnd, BillingTier.Team));
 
         using CancellationTokenSource cts = new();
         await service.StartAsync(cts.Token);
@@ -698,7 +699,7 @@ public sealed class StripeSyncServiceTests
 
         DateTimeOffset periodEnd = sub.CurrentPeriodEnd!.Value;
         billingClient.GetSubscriptionStatusAsync("ext-1", Arg.Any<CancellationToken>())
-            .Returns(new StripeSubscriptionStatus(false, "active", "price_pro_123", 4, periodEnd, "Pro"));
+            .Returns(new StripeSubscriptionStatus(false, "active", "price_pro_123", 4, periodEnd, BillingTier.Pro));
 
         using CancellationTokenSource cts = new();
         await service.StartAsync(cts.Token);
@@ -742,7 +743,7 @@ public sealed class StripeSyncServiceTests
         // Second tenant succeeds
         DateTimeOffset periodEnd = sub2.CurrentPeriodEnd!.Value;
         billingClient.GetSubscriptionStatusAsync("ext-2", Arg.Any<CancellationToken>())
-            .Returns(new StripeSubscriptionStatus(false, "active", "price_team_456", 5, periodEnd, "Team"));
+            .Returns(new StripeSubscriptionStatus(false, "active", "price_team_456", 5, periodEnd, BillingTier.Team));
         subscriptionService.GetMachineCountForTenantAsync(2, Arg.Any<CancellationToken>())
             .Returns(callInfo =>
             {
@@ -824,7 +825,7 @@ public sealed class StripeSyncServiceTests
             {
                 workDone.TrySetResult();
 
-                return new StripeSubscriptionStatus(false, "none", string.Empty, 0, null, null);
+                return new StripeSubscriptionStatus(false, "none", string.Empty, 0, null, BillingTier.Unspecified);
             });
 
         using CancellationTokenSource cts = new();
@@ -911,7 +912,7 @@ public sealed class StripeSyncServiceTests
 
         DateTimeOffset periodEnd = sub.CurrentPeriodEnd!.Value;
         billingClient.GetSubscriptionStatusAsync("ext-1", Arg.Any<CancellationToken>())
-            .Returns(new StripeSubscriptionStatus(false, "active", "price_pro_123", 5, periodEnd, "Pro"));
+            .Returns(new StripeSubscriptionStatus(false, "active", "price_pro_123", 5, periodEnd, BillingTier.Pro));
         billingClient.ReportMachineUsageAsync("ext-1", 10, Arg.Any<CancellationToken>())
             .Returns(callInfo =>
             {

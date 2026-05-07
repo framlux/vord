@@ -2,6 +2,8 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
+using Framlux.Vord.BillingGrpc;
+
 namespace Framlux.FleetManagement.Server.Services.Billing;
 
 /// <summary>
@@ -12,11 +14,11 @@ namespace Framlux.FleetManagement.Server.Services.Billing;
 /// <param name="PriceId">The Stripe price ID of the current subscription item.</param>
 /// <param name="Quantity">The quantity on the current subscription item.</param>
 /// <param name="CurrentPeriodEnd">The end of the current billing period, if available.</param>
-/// <param name="Tier">The tier resolved from TierMappings in the billing database (e.g., "Pro", "Team"), or null if not resolved.</param>
+/// <param name="Tier">The billing tier resolved from TierMappings in the billing database, or Unspecified if not resolved.</param>
 public sealed record StripeSubscriptionStatus(
     bool CancelAtPeriodEnd,
     string StripeStatus,
     string PriceId,
     int Quantity,
     DateTimeOffset? CurrentPeriodEnd,
-    string? Tier);
+    BillingTier Tier);

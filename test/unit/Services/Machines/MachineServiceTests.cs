@@ -542,7 +542,7 @@ public class MachineServiceTests
         ISubscriptionService subscriptionService = Substitute.For<ISubscriptionService>();
         subscriptionService.GetSubscriptionForTenantAsync(1, Arg.Any<CancellationToken>()).Returns(sub);
         subscriptionService.GetEffectiveLimitsForTenantAsync(1, Arg.Any<CancellationToken>()).Returns(
-            new EffectiveLimits { MachineLimit = 1000, RetentionDays = 30, AlertRuleLimit = 10, WebhookLimit = 5 });
+            new EffectiveLimits { MachineLimit = 1000, RetentionDays = 60, AlertRuleLimit = 10, WebhookLimit = 5 });
 
         Dictionary<Type, object> services = new()
         {
@@ -673,7 +673,7 @@ public class MachineServiceTests
         ISubscriptionService subscriptionService = Substitute.For<ISubscriptionService>();
         subscriptionService.GetSubscriptionForTenantAsync(1, Arg.Any<CancellationToken>()).Returns(sub);
         subscriptionService.GetEffectiveLimitsForTenantAsync(1, Arg.Any<CancellationToken>()).Returns(
-            new EffectiveLimits { MachineLimit = 1000, RetentionDays = 30, AlertRuleLimit = 10, WebhookLimit = 5 });
+            new EffectiveLimits { MachineLimit = 1000, RetentionDays = 60, AlertRuleLimit = 10, WebhookLimit = 5 });
 
         Dictionary<Type, object> services = new()
         {
@@ -730,7 +730,7 @@ public class MachineServiceTests
         {
             Tier = SubscriptionTier.Pro,
             MachineLimit = 1000,
-            RetentionDays = 30,
+            RetentionDays = 60,
             AlertRuleLimit = 10,
             WebhookLimit = 5,
             UpdatedAt = now,

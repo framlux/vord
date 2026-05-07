@@ -234,7 +234,7 @@ public sealed class FleetAdminServiceTests
         await Assert.That(found!.MachineCount).IsEqualTo(1);
         await Assert.That(found.UserCount).IsEqualTo(1);
         await Assert.That(found.Subscription).IsNotNull();
-        await Assert.That(found.Subscription.Tier).IsEqualTo("Pro");
+        await Assert.That(found.Subscription.Tier).IsEqualTo(BillingTier.Pro);
     }
 
     [Test]
@@ -310,7 +310,7 @@ public sealed class FleetAdminServiceTests
         await Assert.That(response.Machines.Count).IsEqualTo(1);
         await Assert.That(response.Machines[0].Name).IsEqualTo("detail-machine");
         await Assert.That(response.Tenant.Subscription).IsNotNull();
-        await Assert.That(response.Tenant.Subscription.Tier).IsEqualTo("Team");
+        await Assert.That(response.Tenant.Subscription.Tier).IsEqualTo(BillingTier.Team);
     }
 
     // ========== ListMachines Tests ==========
@@ -632,7 +632,7 @@ public sealed class FleetAdminServiceTests
             new UpdateTenantSubscriptionRequest
             {
                 TenantExternalId = extId,
-                Tier = "Pro",
+                Tier = BillingTier.Pro,
                 Status = "Active",
             },
             Headers("test-key"));
@@ -663,7 +663,7 @@ public sealed class FleetAdminServiceTests
                 new UpdateTenantSubscriptionRequest
                 {
                     TenantExternalId = "ext-x",
-                    Tier = "InvalidTier",
+                    Tier = BillingTier.Unspecified,
                     Status = "Active",
                 },
                 Headers("test-key"));
@@ -675,7 +675,7 @@ public sealed class FleetAdminServiceTests
 
         await Assert.That(exception).IsNotNull();
         await Assert.That(exception!.StatusCode).IsEqualTo(StatusCode.InvalidArgument);
-        await Assert.That(exception.Status.Detail).Contains("InvalidTier");
+        await Assert.That(exception.Status.Detail).Contains("Unspecified");
     }
 
     [Test]
@@ -693,7 +693,7 @@ public sealed class FleetAdminServiceTests
                 new UpdateTenantSubscriptionRequest
                 {
                     TenantExternalId = "nonexistent",
-                    Tier = "Pro",
+                    Tier = BillingTier.Pro,
                     Status = "Active",
                 },
                 Headers("test-key"));

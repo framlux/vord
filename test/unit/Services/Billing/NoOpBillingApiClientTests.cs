@@ -3,6 +3,7 @@
 // See LICENSE for details.
 
 using Framlux.FleetManagement.Server.Services.Billing;
+using Framlux.Vord.BillingGrpc;
 
 namespace Framlux.FleetManagement.Test.Services;
 
@@ -32,7 +33,7 @@ public sealed class NoOpBillingApiClientTests
     [Test]
     public async Task CancelSubscriptionAsync_AlwaysReturnsTrue()
     {
-        bool result = await _client.CancelSubscriptionAsync("tenant-123", "CancelAccount", CancellationToken.None);
+        bool result = await _client.CancelSubscriptionAsync("tenant-123", PendingActionType.CancelAccount, CancellationToken.None);
 
         await Assert.That(result).IsTrue();
     }
@@ -69,7 +70,7 @@ public sealed class NoOpBillingApiClientTests
     [Test]
     public async Task SwapSubscriptionPriceAsync_ReturnsTrue()
     {
-        bool result = await _client.SwapSubscriptionPriceAsync("tenant-123", "pro", CancellationToken.None);
+        bool result = await _client.SwapSubscriptionPriceAsync("tenant-123", BillingTier.Pro, CancellationToken.None);
 
         await Assert.That(result).IsTrue();
     }

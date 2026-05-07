@@ -406,7 +406,8 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
     {
         ValidateInternalKey(context);
 
-        if (System.Enum.TryParse<SubscriptionTier>(request.Tier, ignoreCase: true, out SubscriptionTier tier) == false)
+        SubscriptionTier? tier = MapBillingTierToSubscriptionTier(request.Tier);
+        if (tier is null)
         {
             throw new RpcException(new Status(
                 StatusCode.InvalidArgument,
@@ -428,7 +429,7 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
             tenantRepo, request.TenantExternalId, context.CancellationToken);
 
         int updated = await subscriptionRepo.UpdateSubscriptionAdminAsync(
-            tenant.Id, tier, status, context.CancellationToken);
+            tenant.Id, tier.Value, status, context.CancellationToken);
 
         if (updated == 0)
         {
@@ -441,7 +442,7 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
 
         _logger.LogInformation(
             "FleetAdmin: tenant {TenantId} subscription updated to tier={Tier}, status={Status}",
-            tenant.Id, tier, status);
+            tenant.Id, tier.Value, status);
 
         return new UpdateTenantSubscriptionResponse
         {
@@ -711,7 +712,7 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
     {
         FleetTenantSubscription proto = new FleetTenantSubscription
         {
-            Tier = subscription.Tier.ToString(),
+            Tier = MapSubscriptionTierToBillingTier(subscription.Tier),
             Status = subscription.Status.ToString(),
             MachineLimit = tierLimits?.MachineLimit ?? 0,
             RetentionDays = tierLimits?.RetentionDays ?? 0,
@@ -754,6 +755,28 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
             Timestamp = Timestamp.FromDateTimeOffset(entry.Timestamp),
             TenantName = tenantName ?? string.Empty,
             Username = username ?? string.Empty
+        };
+    }
+
+    internal static BillingTier MapSubscriptionTierToBillingTier(SubscriptionTier tier)
+    {
+        return tier switch
+        {
+            SubscriptionTier.Free => BillingTier.Free,
+            SubscriptionTier.Pro => BillingTier.Pro,
+            SubscriptionTier.Team => BillingTier.Team,
+            _ => BillingTier.Unspecified,
+        };
+    }
+
+    internal static SubscriptionTier? MapBillingTierToSubscriptionTier(BillingTier tier)
+    {
+        return tier switch
+        {
+            BillingTier.Free => SubscriptionTier.Free,
+            BillingTier.Pro => SubscriptionTier.Pro,
+            BillingTier.Team => SubscriptionTier.Team,
+            _ => null,
         };
     }
 
