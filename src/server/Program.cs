@@ -8,6 +8,7 @@ using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Server.Auth;
 using Framlux.FleetManagement.Server.Endpoints.Grpc;
+using Framlux.FleetManagement.Server.Endpoints.Web.Machines.History;
 using Framlux.FleetManagement.Server.Options;
 using Framlux.FleetManagement.Server.Services.Alerts;
 using Framlux.FleetManagement.Server.Services.Billing;
@@ -337,6 +338,9 @@ builder.Services.AddSingleton<IOidcSecretProtector, OidcSecretProtector>();
 builder.Services.AddSingleton<IWebhookSecretProtector, WebhookSecretProtector>();
 builder.Services.AddSingleton<IRoleCacheInvalidator, RoleCacheInvalidator>();
 builder.Services.AddHttpClient<IEmailService, ResendEmailService>();
+
+// Shared endpoint validators (scoped — depend on scoped repositories)
+builder.Services.AddScoped<HistoryRequestValidator>();
 
 // Handler services for extracted endpoint business logic (scoped to share DatabaseContext)
 builder.Services.AddScoped<IInvitationHandler, InvitationHandler>();

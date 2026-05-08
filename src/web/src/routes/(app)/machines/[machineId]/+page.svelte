@@ -21,7 +21,7 @@
 	import HealthBadge from '$lib/components/HealthBadge.svelte';
 	import MachineHero from '$lib/components/machine/MachineHero.svelte';
 	import VitalsBar from '$lib/components/machine/VitalsBar.svelte';
-	import { CircleAlert, Terminal, Pencil } from 'lucide-svelte';
+	import { CircleAlert, Terminal, Pencil, History } from 'lucide-svelte';
 	import { invalidateAll } from '$app/navigation';
 	import { canAdminMachines } from '$lib/utils/roles';
 	import {
@@ -466,14 +466,23 @@
 	<MachineHero {machine} detail={machineDetail} {isOnline} {lastPing} />
 
 	<!-- Vitals -->
-	<VitalsBar
-		cpuPercent={cpuPercent}
-		cpuDetails={cpuTooltip}
-		memoryPercent={memoryPercent}
-		memoryDetails={memoryTooltip}
-		maxDiskPercent={maxDiskPercent}
-		diskDetails={diskTooltip}
-	/>
+	<div class="flex items-center justify-between">
+		<VitalsBar
+			cpuPercent={cpuPercent}
+			cpuDetails={cpuTooltip}
+			memoryPercent={memoryPercent}
+			memoryDetails={memoryTooltip}
+			maxDiskPercent={maxDiskPercent}
+			diskDetails={diskTooltip}
+		/>
+		<a
+			href="/machines/{data.machine.id}/history"
+			class="inline-flex items-center gap-1.5 rounded-lg border border-surface-200 bg-surface-50 px-3 py-2 text-sm font-medium text-surface-700 transition hover:bg-surface-100 dark:border-surface-700 dark:bg-surface-800 dark:text-surface-300 dark:hover:bg-surface-700"
+		>
+			<History size={16} />
+			View History
+		</a>
+	</div>
 
 	<!-- Tabs -->
 	<div class="overflow-x-auto border-b border-surface-200 dark:border-surface-700">

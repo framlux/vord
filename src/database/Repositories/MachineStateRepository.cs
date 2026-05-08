@@ -404,6 +404,18 @@ public partial class DatabaseRepository : IMachineStateRepository
     }
 
     /// <inheritdoc/>
+    public async Task<List<MachineTelemetry>> GetTelemetryHistoryAsync(long machineId, short telemetryType, DateTimeOffset rangeStart, DateTimeOffset rangeEnd, CancellationToken cancellationToken)
+    {
+        return await _db.MachineTelemetry
+            .Where(t => (t.MachineId == machineId) &&
+                        (t.TelemetryType == telemetryType) &&
+                        (t.ReceivedAt >= rangeStart) &&
+                        (t.ReceivedAt < rangeEnd))
+            .OrderBy(t => t.ReceivedAt)
+            .ToListAsync(cancellationToken);
+    }
+
+    /// <inheritdoc/>
     public async Task<(List<(short HealthStatus, int Count)> HealthCounts, int TotalSecurityUpdates)> GetFleetHealthAggregationAsync(int tenantId, CancellationToken cancellationToken)
     {
         IQueryable<FleetMachineRow> baseQuery = BuildFleetBaseQuery(tenantId);

@@ -626,3 +626,63 @@ export interface MachineSearchParams {
 	sortDir?: string;
 }
 
+// History / Trends
+export interface HistoryPoint {
+	timestamp: string;
+	value: number;
+}
+
+export interface HistoryStats {
+	min: number;
+	avg: number;
+	max: number;
+	p95: number;
+}
+
+export interface HistoryResponse {
+	points: HistoryPoint[];
+	stats: HistoryStats;
+	bucketSeconds: number;
+	rawPointCount: number;
+}
+
+export interface DiskSeries {
+	device: string;
+	mountPoint: string;
+	points: HistoryPoint[];
+	stats: HistoryStats;
+}
+
+export interface DiskHistoryResponse {
+	series: DiskSeries[];
+	bucketSeconds: number;
+	rawPointCount: number;
+}
+
+export interface ServiceHistoryPoint {
+	timestamp: string;
+	failedCount: number;
+	totalCount: number;
+}
+
+export interface ServiceHistoryResponse {
+	points: ServiceHistoryPoint[];
+	stats: HistoryStats;
+	bucketSeconds: number;
+	rawPointCount: number;
+}
+
+export interface SshEvent {
+	timestamp: string;
+	user: string;
+	sourceIp: string;
+	sourcePort: number;
+	action: string;
+	authMethod: string;
+}
+
+export interface SshHistoryResponse {
+	events: SshEvent[];
+	totalEvents: number;
+}
+

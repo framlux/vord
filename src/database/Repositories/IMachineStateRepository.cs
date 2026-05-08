@@ -242,6 +242,17 @@ public interface IMachineStateRepository
     Task<List<MachineTelemetry>> GetRecentTelemetryAsync(long machineId, short telemetryType, int limit, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Returns telemetry rows for a machine filtered by type and time range, ordered by ReceivedAt ascending.
+    /// Used for historical trend charts. The time range filter enables Postgres partition pruning.
+    /// </summary>
+    /// <param name="machineId">The machine ID.</param>
+    /// <param name="telemetryType">The telemetry type identifier.</param>
+    /// <param name="rangeStart">Inclusive start of the time range.</param>
+    /// <param name="rangeEnd">Exclusive end of the time range.</param>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    Task<List<MachineTelemetry>> GetTelemetryHistoryAsync(long machineId, short telemetryType, DateTimeOffset rangeStart, DateTimeOffset rangeEnd, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Returns health count aggregation (grouped by HealthStatus) and total security updates
     /// for all machines in a tenant, using a Machines LEFT JOIN MachineStateSummaries query.
     /// </summary>

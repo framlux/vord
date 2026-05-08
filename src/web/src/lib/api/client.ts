@@ -42,7 +42,11 @@ import type {
 	UsagePointDto,
 	MachineSearchParams,
 	FleetMachineDto,
-	UpdateMachineRequest
+	UpdateMachineRequest,
+	HistoryResponse,
+	DiskHistoryResponse,
+	ServiceHistoryResponse,
+	SshHistoryResponse
 } from './types';
 import { buildQueryString } from '$lib/utils/query';
 
@@ -562,6 +566,47 @@ export class ApiClient {
 	async switchTenant(tenantId: number): Promise<void> {
 		const resp = await this.post<ApiResponse<object>>('/api/v1/tenants/switch', { tenantId });
 		this.unwrap(resp);
+	}
+
+	// Machine History / Trends
+	async getMachineCpuHistory(machineId: number, range: string): Promise<HistoryResponse> {
+		const resp = await this.get<ApiResponse<HistoryResponse>>(
+			`/api/v1/machines/${machineId}/history/cpu?range=${range}`
+		);
+
+		return this.unwrap(resp);
+	}
+
+	async getMachineMemoryHistory(machineId: number, range: string): Promise<HistoryResponse> {
+		const resp = await this.get<ApiResponse<HistoryResponse>>(
+			`/api/v1/machines/${machineId}/history/memory?range=${range}`
+		);
+
+		return this.unwrap(resp);
+	}
+
+	async getMachineDiskHistory(machineId: number, range: string): Promise<DiskHistoryResponse> {
+		const resp = await this.get<ApiResponse<DiskHistoryResponse>>(
+			`/api/v1/machines/${machineId}/history/disk?range=${range}`
+		);
+
+		return this.unwrap(resp);
+	}
+
+	async getMachineServiceHistory(machineId: number, range: string): Promise<ServiceHistoryResponse> {
+		const resp = await this.get<ApiResponse<ServiceHistoryResponse>>(
+			`/api/v1/machines/${machineId}/history/services?range=${range}`
+		);
+
+		return this.unwrap(resp);
+	}
+
+	async getMachineSshHistory(machineId: number, range: string): Promise<SshHistoryResponse> {
+		const resp = await this.get<ApiResponse<SshHistoryResponse>>(
+			`/api/v1/machines/${machineId}/history/ssh?range=${range}`
+		);
+
+		return this.unwrap(resp);
 	}
 
 }
