@@ -8,6 +8,7 @@ using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Server.Auth;
 using Framlux.FleetManagement.Server.Endpoints.Grpc;
+using Framlux.FleetManagement.Server.Endpoints.Web;
 using Framlux.FleetManagement.Server.Endpoints.Web.Machines.History;
 using Framlux.FleetManagement.Server.Options;
 using Framlux.FleetManagement.Server.Services.Alerts;
@@ -496,6 +497,16 @@ app.UseAuthentication()
         options.Endpoints.Configurator = ep =>
         {
             ep.PreProcessor<SubscriptionStatusPreProcessor>(FastEndpoints.Order.Before);
+        };
+        options.Errors.StatusCode = 400;
+        options.Errors.ResponseBuilder = (failures, ctx, statusCode) =>
+        {
+            List<string> errorMessages = failures
+                .Select(f => f.ErrorMessage)
+                .ToList();
+            string firstMessage = errorMessages.FirstOrDefault() ?? "One or more validation errors occurred.";
+
+            return ApiResponse<object>.Error(firstMessage, errorMessages);
         };
     });
 

@@ -75,39 +75,7 @@ public sealed class WebhookCreateEndpoint : Endpoint<CreateWebhookRequest, ApiRe
             return;
         }
 
-        if (string.IsNullOrWhiteSpace(req.Name) || string.IsNullOrWhiteSpace(req.Url))
-        {
-            HttpContext.Response.StatusCode = 400;
-            await HttpContext.Response.WriteAsJsonAsync(ApiResponse<WebhookEndpointDto>.Error("Name and URL are required"), ct);
-
-            return;
-        }
-
-        if (req.Name.Length > 250)
-        {
-            HttpContext.Response.StatusCode = 400;
-            await HttpContext.Response.WriteAsJsonAsync(
-                ApiResponse<WebhookEndpointDto>.Error("Webhook name must be 250 characters or fewer"), ct);
-
-            return;
-        }
-
-        if (req.Url.Length > 2000)
-        {
-            HttpContext.Response.StatusCode = 400;
-            await HttpContext.Response.WriteAsJsonAsync(
-                ApiResponse<WebhookEndpointDto>.Error("Webhook URL must be 2000 characters or fewer"), ct);
-
-            return;
-        }
-
-        if (SsoOidcEvents.IsUrlSafe(req.Url) == false)
-        {
-            HttpContext.Response.StatusCode = 400;
-            await HttpContext.Response.WriteAsJsonAsync(ApiResponse<WebhookEndpointDto>.Error("Webhook URL must be HTTPS and must not point to a private or reserved address"), ct);
-
-            return;
-        }
+        // Input validation handled by CreateWebhookValidator
 
         int? userId = TenantClaimHelper.GetUserIdFromClaims(User);
         if (userId is null)

@@ -124,17 +124,10 @@ public sealed class DowngradeSubscriptionEndpoint : Endpoint<DowngradeSubscripti
             return;
         }
 
-        // Parse and validate the target tier
-        string targetTierStr = req.TargetTier?.ToLowerInvariant() ?? string.Empty;
+        // Parse the target tier (format already validated by DowngradeSubscriptionValidator)
+        string targetTierStr = req.TargetTier.ToLowerInvariant();
         bool isDowngradeToFree = string.Equals(targetTierStr, "free", StringComparison.Ordinal);
         bool isDowngradeToPro = string.Equals(targetTierStr, "pro", StringComparison.Ordinal);
-
-        if ((isDowngradeToFree == false) && (isDowngradeToPro == false))
-        {
-            await SendErrorResponse(400, "Target tier must be 'free' or 'pro'.", ct);
-
-            return;
-        }
 
         // Validate the downgrade path
         SubscriptionTier currentTier = subscription.Tier;

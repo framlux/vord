@@ -107,7 +107,7 @@ public sealed class AnonymousEndpointTests
         JsonElement root = doc.RootElement;
 
         await Assert.That(root.GetProperty("success").GetBoolean()).IsFalse();
-        await Assert.That(root.GetProperty("message").GetString()).IsEqualTo("Name, email, and message are required");
+        await Assert.That(root.GetProperty("message").GetString()).IsEqualTo("Name is required");
     }
 
     [Test]
@@ -135,7 +135,8 @@ public sealed class AnonymousEndpointTests
         JsonElement root = doc.RootElement;
 
         await Assert.That(root.GetProperty("success").GetBoolean()).IsFalse();
-        await Assert.That(root.GetProperty("message").GetString()).IsEqualTo("Name, email, and message are required");
+        await Assert.That(root.GetProperty("message").GetString()).IsEqualTo("Name is required");
+        await Assert.That(root.GetProperty("errors").GetArrayLength()).IsGreaterThanOrEqualTo(3);
     }
 
     #endregion

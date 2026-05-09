@@ -334,6 +334,6 @@ public sealed class SigningKeyEndpointTests
 
         string body = await response.Content.ReadAsStringAsync();
         await Assert.That(body).Contains("\"success\":false");
-        await Assert.That(body).Contains("Invalid public key");
+        await Assert.That(body).Contains("32-byte Ed25519 key");
     }
 }

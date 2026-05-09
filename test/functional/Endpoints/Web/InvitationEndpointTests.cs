@@ -327,7 +327,7 @@ public sealed class InvitationEndpointTests
         await Assert.That(success).IsFalse();
 
         string message = root.GetProperty("message").GetString() ?? string.Empty;
-        await Assert.That(message).Contains("valid email");
+        await Assert.That(message).Contains("Email is required");
     }
 
     [Test]

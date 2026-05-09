@@ -111,51 +111,10 @@ public sealed class AlertRuleUpdateEndpoint : Endpoint<UpdateAlertRuleRequest, A
             return;
         }
 
-        if (string.IsNullOrWhiteSpace(req.Name))
-        {
-            HttpContext.Response.StatusCode = 400;
-            await HttpContext.Response.WriteAsJsonAsync(
-                ApiResponse<AlertRuleDto>.Error("Rule name is required"), ct);
+        // Input validation handled by UpdateAlertRuleValidator
+        AlertSeverity severity = Enum.Parse<AlertSeverity>(req.Severity, true);
 
-            return;
-        }
-
-        if (req.Name.Length > 250)
-        {
-            HttpContext.Response.StatusCode = 400;
-            await HttpContext.Response.WriteAsJsonAsync(
-                ApiResponse<AlertRuleDto>.Error("Rule name must be 250 characters or fewer"), ct);
-
-            return;
-        }
-
-        if ((req.Description is not null) && (req.Description.Length > 2000))
-        {
-            HttpContext.Response.StatusCode = 400;
-            await HttpContext.Response.WriteAsJsonAsync(
-                ApiResponse<AlertRuleDto>.Error("Description must be 2000 characters or fewer"), ct);
-
-            return;
-        }
-
-        if (req.DurationMinutes < 0)
-        {
-            HttpContext.Response.StatusCode = 400;
-            await HttpContext.Response.WriteAsJsonAsync(
-                ApiResponse<AlertRuleDto>.Error("Duration must be zero or positive"), ct);
-
-            return;
-        }
-
-        if (Enum.TryParse<AlertSeverity>(req.Severity, true, out AlertSeverity severity) == false)
-        {
-            HttpContext.Response.StatusCode = 400;
-            await HttpContext.Response.WriteAsJsonAsync(ApiResponse<AlertRuleDto>.Error("Invalid severity"), ct);
-
-            return;
-        }
-
-        // Validate threshold range based on the rule's metric type
+        // Validate threshold range based on the rule's metric type (requires DB-loaded metric)
         bool isPercentageMetric = rule.Metric is AlertMetric.CpuUsage or AlertMetric.MemoryUsage or AlertMetric.DiskUsage;
         bool isBinaryMetric = rule.Metric is AlertMetric.MachineOffline or AlertMetric.DiskHealth;
 

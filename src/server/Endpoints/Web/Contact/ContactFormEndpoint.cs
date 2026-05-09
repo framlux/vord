@@ -54,15 +54,6 @@ public sealed class ContactFormEndpoint : Endpoint<ContactFormRequest, ApiRespon
     /// <inheritdoc/>
     public override async Task HandleAsync(ContactFormRequest req, CancellationToken ct)
     {
-        if (string.IsNullOrWhiteSpace(req.Name) || string.IsNullOrWhiteSpace(req.Email) || string.IsNullOrWhiteSpace(req.Message))
-        {
-            HttpContext.Response.StatusCode = 400;
-            await HttpContext.Response.WriteAsJsonAsync(
-                ApiResponse<object>.Error("Name, email, and message are required"), ct);
-
-            return;
-        }
-
         string maskedEmail = req.Email.IndexOf('@') > 0
             ? $"{req.Email[0]}***{req.Email[req.Email.IndexOf('@')..]}"
             : "***";
