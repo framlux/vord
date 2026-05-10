@@ -42,7 +42,9 @@ public sealed class UpdateTenantOidcConfigEndpoint : Endpoint<TenantOidcConfigDt
 
         if (result.IsNotFound)
         {
-            await Send.NotFoundAsync(ct);
+            HttpContext.Response.StatusCode = 404;
+            await HttpContext.Response.WriteAsJsonAsync(
+                ApiResponse<TenantOidcConfigDto>.Error("Tenant not found"), ct);
 
             return;
         }
@@ -50,7 +52,8 @@ public sealed class UpdateTenantOidcConfigEndpoint : Endpoint<TenantOidcConfigDt
         if (result.StatusCode == 403)
         {
             HttpContext.Response.StatusCode = 403;
-            await Send.OkAsync(ApiResponse<TenantOidcConfigDto>.Error("Custom OIDC is only available on the Team tier"), cancellation: ct);
+            await HttpContext.Response.WriteAsJsonAsync(
+                ApiResponse<TenantOidcConfigDto>.Error("Custom OIDC is only available on the Team tier"), ct);
 
             return;
         }
@@ -58,7 +61,8 @@ public sealed class UpdateTenantOidcConfigEndpoint : Endpoint<TenantOidcConfigDt
         if (result.StatusCode == 400)
         {
             HttpContext.Response.StatusCode = 400;
-            await Send.OkAsync(ApiResponse<TenantOidcConfigDto>.Error("Authority URL must be a valid HTTPS URL pointing to a public address"), cancellation: ct);
+            await HttpContext.Response.WriteAsJsonAsync(
+                ApiResponse<TenantOidcConfigDto>.Error("Authority URL must be a valid HTTPS URL pointing to a public address"), ct);
 
             return;
         }

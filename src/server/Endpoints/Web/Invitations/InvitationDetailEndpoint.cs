@@ -70,7 +70,9 @@ public sealed class InvitationDetailEndpoint : EndpointWithoutRequest<ApiRespons
         TenantInvitation? invitation = await _invitationRepository.GetInvitationByTokenAsync(token, ct);
         if (invitation is null)
         {
-            await Send.NotFoundAsync(ct);
+            HttpContext.Response.StatusCode = 404;
+            await HttpContext.Response.WriteAsJsonAsync(
+                ApiResponse<InvitationDetailDto>.Error("Invitation not found"), ct);
 
             return;
         }

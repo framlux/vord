@@ -618,7 +618,7 @@ func TestValidateConfig_PortTooHigh(t *testing.T) {
 // Intent: Port 1 and 65535 are valid boundary values.
 func TestValidateConfig_PortBoundaries(t *testing.T) {
 	for _, port := range []int{1, 65535} {
-		cfg := &Config{ServerPort: port, DataDir: t.TempDir()}
+		cfg := &Config{ServerPort: port, DataDir: t.TempDir(), MaxQueueSize: DefaultMaxQueueSize}
 		if err := validateConfig(cfg); err != nil {
 			t.Errorf("expected no error for port %d, got %v", port, err)
 		}
@@ -662,7 +662,7 @@ func TestEnsureDataDir_ReadOnlyParent(t *testing.T) {
 // Intent: validateConfig does not create directories (pure validation).
 func TestValidateConfig_NoSideEffects(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "should-not-exist")
-	cfg := &Config{ServerPort: 12234, DataDir: dir}
+	cfg := &Config{ServerPort: 12234, DataDir: dir, MaxQueueSize: DefaultMaxQueueSize}
 
 	err := validateConfig(cfg)
 	if err != nil {

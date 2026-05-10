@@ -45,7 +45,9 @@ public sealed class UserDeactivateEndpoint : EndpointWithoutRequest<ApiResponse<
 
         if (result.IsNotFound)
         {
-            await Send.NotFoundAsync(ct);
+            HttpContext.Response.StatusCode = 404;
+            await HttpContext.Response.WriteAsJsonAsync(
+                ApiResponse<object>.Error("User not found"), ct);
 
             return;
         }

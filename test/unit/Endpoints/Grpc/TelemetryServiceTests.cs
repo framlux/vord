@@ -17,6 +17,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using NSubstitute;
+using Polly;
 using System.Security.Claims;
 
 namespace Framlux.FleetManagement.Test.Endpoints.Grpc;
@@ -92,9 +93,11 @@ public sealed class TelemetryServiceTests
         return new TestServerCallContextWithHttp(httpContext, new Metadata());
     }
 
+    private static readonly ResiliencePipeline NoOpPipeline = ResiliencePipeline.Empty;
+
     private TelemetryService CreateService(IServiceScopeFactory scopeFactory)
     {
-        return new TelemetryService(scopeFactory, _dedupService, _subscriptionService, _logger);
+        return new TelemetryService(scopeFactory, _dedupService, _subscriptionService, NoOpPipeline, _logger);
     }
 
     [Test]
@@ -279,7 +282,7 @@ public sealed class TelemetryServiceTests
                 return ids.ToDictionary(id => id, _ => false);
             });
 
-        TelemetryService service = new(scopeFactory, dupDedupService, _subscriptionService, _logger);
+        TelemetryService service = new(scopeFactory, dupDedupService, _subscriptionService, NoOpPipeline, _logger);
         ServerCallContext context = CreateAuthenticatedContext(200);
 
         TelemetryEnvelope envelope = new()
@@ -386,7 +389,7 @@ public sealed class TelemetryServiceTests
                 UpdatedAt = DateTimeOffset.UtcNow,
             });
 
-        TelemetryService service = new(scopeFactory, _dedupService, inactiveSubService, _logger);
+        TelemetryService service = new(scopeFactory, _dedupService, inactiveSubService, NoOpPipeline, _logger);
         ServerCallContext context = CreateAuthenticatedContext(100);
 
         TelemetryEnvelope envelope = new() { AgentTimestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow), BatchId ="batch-inactive" };

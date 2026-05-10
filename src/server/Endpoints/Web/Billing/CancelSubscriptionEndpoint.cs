@@ -73,7 +73,9 @@ public sealed class CancelSubscriptionEndpoint : EndpointWithoutRequest<ApiRespo
     {
         if (_billingStatus.IsEnabled == false)
         {
-            await Send.NotFoundAsync(ct);
+            HttpContext.Response.StatusCode = 404;
+            await HttpContext.Response.WriteAsJsonAsync(
+                ApiResponse<CancelSubscriptionResponse>.Error("Billing is not enabled"), ct);
 
             return;
         }
@@ -90,7 +92,9 @@ public sealed class CancelSubscriptionEndpoint : EndpointWithoutRequest<ApiRespo
         TenantSubscription? subscription = await _subscriptionService.GetSubscriptionForTenantAsync(tenantId.Value, ct);
         if (subscription is null)
         {
-            await Send.NotFoundAsync(ct);
+            HttpContext.Response.StatusCode = 404;
+            await HttpContext.Response.WriteAsJsonAsync(
+                ApiResponse<CancelSubscriptionResponse>.Error("Subscription not found"), ct);
 
             return;
         }
@@ -129,7 +133,9 @@ public sealed class CancelSubscriptionEndpoint : EndpointWithoutRequest<ApiRespo
         Tenant? tenant = await _tenantRepository.GetTenantByIdAsync(tenantId.Value, ct);
         if (tenant is null)
         {
-            await Send.NotFoundAsync(ct);
+            HttpContext.Response.StatusCode = 404;
+            await HttpContext.Response.WriteAsJsonAsync(
+                ApiResponse<CancelSubscriptionResponse>.Error("Tenant not found"), ct);
 
             return;
         }

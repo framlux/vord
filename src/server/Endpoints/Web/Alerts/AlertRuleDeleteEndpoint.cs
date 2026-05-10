@@ -81,7 +81,8 @@ public sealed class AlertRuleDeleteEndpoint : EndpointWithoutRequest<ApiResponse
 
         if (rule is null)
         {
-            await Send.NotFoundAsync(ct);
+            HttpContext.Response.StatusCode = 404;
+            await HttpContext.Response.WriteAsJsonAsync(ApiResponse<bool>.Error("Alert rule not found"), ct);
 
             return;
         }

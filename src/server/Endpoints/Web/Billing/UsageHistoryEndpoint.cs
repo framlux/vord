@@ -72,7 +72,10 @@ public sealed class UsageHistoryEndpoint : EndpointWithoutRequest<ApiResponse<Li
         Tenant? tenant = await _tenantRepository.GetTenantByIdAsync(tenantId.Value, ct);
         if (tenant is null)
         {
-            await Send.NotFoundAsync(ct);
+            HttpContext.Response.StatusCode = 404;
+            await HttpContext.Response.WriteAsJsonAsync(
+                ApiResponse<List<UsagePointDto>>.Error("Tenant not found"), ct);
+
             return;
         }
 

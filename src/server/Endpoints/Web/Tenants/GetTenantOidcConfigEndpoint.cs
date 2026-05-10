@@ -42,7 +42,9 @@ public sealed class GetTenantOidcConfigEndpoint : EndpointWithoutRequest<ApiResp
 
         if (result.IsNotFound)
         {
-            await Send.NotFoundAsync(ct);
+            HttpContext.Response.StatusCode = 404;
+            await HttpContext.Response.WriteAsJsonAsync(
+                ApiResponse<TenantOidcConfigDto>.Error("Tenant not found"), ct);
 
             return;
         }

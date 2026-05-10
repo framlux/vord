@@ -82,7 +82,9 @@ public sealed class RequestDataExportEndpoint : EndpointWithoutRequest<RequestDa
 
         if (result.IsNotFound)
         {
-            await Send.NotFoundAsync(ct);
+            HttpContext.Response.StatusCode = 404;
+            await HttpContext.Response.WriteAsJsonAsync(
+                ApiResponse<RequestDataExportResponse>.Error("Tenant not found"), ct);
 
             return;
         }

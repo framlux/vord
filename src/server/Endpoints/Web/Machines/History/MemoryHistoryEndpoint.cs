@@ -48,10 +48,7 @@ public sealed class MemoryHistoryEndpoint : EndpointWithoutRequest
         string? range = Query<string?>("range", isRequired: false) ?? "24h";
 
         HistoryRequestContext? context = await _validator.ValidateAsync(
-            machineId, range, HttpContext,
-            ct => Send.ForbiddenAsync(ct),
-            ct => Send.NotFoundAsync(ct),
-            ct);
+            machineId, range, HttpContext, ct);
 
         if (context is null)
         {

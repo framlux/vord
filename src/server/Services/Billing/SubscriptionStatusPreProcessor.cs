@@ -10,8 +10,21 @@ using Framlux.FleetManagement.Server.Auth;
 namespace Framlux.FleetManagement.Server.Services.Billing;
 
 /// <summary>
+/// Tag applied to endpoints that are exempt from subscription enforcement.
+/// Apply this tag in Configure() to allow access regardless of subscription status.
+/// </summary>
+public static class EndpointTags
+{
+    /// <summary>
+    /// Endpoints with this tag are exempt from subscription enforcement.
+    /// </summary>
+    public const string SubscriptionExempt = "SubscriptionExempt";
+}
+
+/// <summary>
 /// FastEndpoints global pre-processor that enforces read-only access for tenants with canceled subscriptions.
-/// GET requests are always allowed. POST/PUT/DELETE requests to non-billing endpoints return 403.
+/// GET requests are always allowed. POST/PUT/DELETE requests return 403 unless the endpoint is tagged
+/// with <see cref="EndpointTags.SubscriptionExempt"/>.
 /// </summary>
 public sealed class SubscriptionStatusPreProcessor : IGlobalPreProcessor
 {
@@ -27,27 +40,22 @@ public sealed class SubscriptionStatusPreProcessor : IGlobalPreProcessor
             return;
         }
 
-        // Skip billing endpoints so users can reactivate or manage their subscription
+        // Skip endpoints tagged as subscription-exempt (billing, auth, admin, onboarding).
+        // Endpoints opt in by calling Tags(EndpointTags.SubscriptionExempt) in Configure().
+        Endpoint? endpoint = httpContext.GetEndpoint();
+        EndpointDefinition? epDef = endpoint?.Metadata?.GetMetadata<EndpointDefinition>();
+        if ((epDef is not null) && epDef.EndpointTags?.Contains(EndpointTags.SubscriptionExempt) == true)
+        {
+            return;
+        }
+
+        // Fallback: skip paths that match known exempt prefixes.
+        // This handles non-FastEndpoints routes (middleware, health, etc.)
         string path = httpContext.Request.Path.Value ?? string.Empty;
-        if (path.Contains("/billing/", StringComparison.OrdinalIgnoreCase))
-        {
-            return;
-        }
-
-        // Skip admin endpoints so system administrators can still operate
-        if (path.Contains("/admin/", StringComparison.OrdinalIgnoreCase))
-        {
-            return;
-        }
-
-        // Skip authentication endpoints
-        if (path.Contains("/auth/", StringComparison.OrdinalIgnoreCase))
-        {
-            return;
-        }
-
-        // Skip onboarding endpoints
-        if (path.Contains("/onboarding/", StringComparison.OrdinalIgnoreCase))
+        if (path.Contains("/billing/", StringComparison.OrdinalIgnoreCase) ||
+            path.Contains("/admin/", StringComparison.OrdinalIgnoreCase) ||
+            path.Contains("/auth/", StringComparison.OrdinalIgnoreCase) ||
+            path.Contains("/onboarding/", StringComparison.OrdinalIgnoreCase))
         {
             return;
         }

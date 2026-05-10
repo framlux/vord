@@ -18,6 +18,7 @@ import (
 type Store struct {
 	db           *sql.DB
 	pendingCount atomic.Int64
+	maxQueueSize int
 
 	// countMu protects countLoaded and countInitErr so that the pending count
 	// can be safely invalidated and reloaded (unlike sync.Once, which cannot be
@@ -27,9 +28,21 @@ type Store struct {
 	countInitErr error
 }
 
+// defaultMaxQueueSize is used when no explicit max is provided.
+const defaultMaxQueueSize = 10000
+
 // NewStore creates a new Store backed by the given database connection.
-func NewStore(db *sql.DB) *Store {
-	return &Store{db: db}
+// The maxQueueSize parameter controls the maximum number of pending telemetry
+// items in the queue. When the queue is at capacity, the oldest pending items
+// are evicted (FIFO) to make room for new telemetry. Pass 0 to use the default
+// of 10000.
+func NewStore(db *sql.DB, maxQueueSize ...int) *Store {
+	size := defaultMaxQueueSize
+	if len(maxQueueSize) > 0 && maxQueueSize[0] > 0 {
+		size = maxQueueSize[0]
+	}
+
+	return &Store{db: db, maxQueueSize: size}
 }
 
 // loadPendingCount initializes the cached pending count from the database if not already loaded.
@@ -82,17 +95,29 @@ func (s *Store) SetConfig(key, value string) error {
 // --- telemetry_queue ---
 
 // EnqueueTelemetry inserts a new telemetry item into the queue.
-// maxQueueDepth is the maximum number of pending telemetry items in the queue.
-// Enqueue is rejected once this limit is reached to prevent unbounded growth.
-const maxQueueDepth = 10000
-
+// If the queue has reached its configured maximum size, the oldest pending items
+// are evicted (FIFO) to make room. This prevents unbounded queue growth during
+// prolonged server outages while ensuring the newest telemetry is always retained.
 func (s *Store) EnqueueTelemetry(id string, itemType TelemetryType, payload string) error {
 	count, err := s.loadPendingCount()
 	if err != nil {
 		return fmt.Errorf("checking queue depth: %w", err)
 	}
-	if count >= int64(maxQueueDepth) {
-		return fmt.Errorf("telemetry queue full (%d items)", count)
+
+	// Evict the oldest pending items when the queue is at capacity so new
+	// telemetry can always be enqueued. This keeps the most recent data and
+	// discards stale entries that accumulated while the server was unreachable.
+	if count >= int64(s.maxQueueSize) {
+		evictCount := count - int64(s.maxQueueSize) + 1
+		evicted, evictErr := s.evictOldestPending(evictCount)
+		if evictErr != nil {
+			return fmt.Errorf("evicting oldest telemetry: %w", evictErr)
+		}
+		s.pendingCount.Add(-evicted)
+		slog.Warn("telemetry queue at capacity, evicted oldest items",
+			"evicted", evicted,
+			"max_queue_size", s.maxQueueSize,
+		)
 	}
 
 	now := time.Now().UTC().Format(time.RFC3339)
@@ -114,6 +139,25 @@ func (s *Store) EnqueueTelemetry(id string, itemType TelemetryType, payload stri
 	s.pendingCount.Add(1)
 
 	return nil
+}
+
+// evictOldestPending deletes the N oldest pending items from the telemetry queue.
+// Returns the number of rows actually deleted.
+func (s *Store) evictOldestPending(n int64) (int64, error) {
+	result, err := s.db.Exec(
+		`DELETE FROM telemetry_queue WHERE id IN (
+			SELECT id FROM telemetry_queue
+			WHERE status = ?
+			ORDER BY created_at ASC
+			LIMIT ?
+		)`,
+		int(QueueStatusPending), n,
+	)
+	if err != nil {
+		return 0, err
+	}
+
+	return result.RowsAffected()
 }
 
 // isSQLiteFull checks if an error indicates the SQLite database is full.

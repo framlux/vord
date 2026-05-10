@@ -108,7 +108,10 @@ public sealed class UpcomingInvoiceEndpoint : EndpointWithoutRequest<ApiResponse
         Tenant? tenant = await _tenantRepository.GetTenantByIdAsync(tenantId.Value, ct);
         if (tenant is null)
         {
-            await Send.NotFoundAsync(ct);
+            HttpContext.Response.StatusCode = 404;
+            await HttpContext.Response.WriteAsJsonAsync(
+                ApiResponse<UpcomingInvoiceDto>.Error("Tenant not found"), ct);
+
             return;
         }
 

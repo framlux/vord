@@ -39,30 +39,30 @@ public sealed class HistoryRequestValidator
     /// <param name="machineId">The machine ID from the route.</param>
     /// <param name="range">The time range query parameter.</param>
     /// <param name="httpContext">The current HTTP context for claims and response writing.</param>
-    /// <param name="sendForbidden">Delegate to send a 403 via FastEndpoints.</param>
-    /// <param name="sendNotFound">Delegate to send a 404 via FastEndpoints.</param>
     /// <param name="ct">Cancellation token.</param>
     /// <returns>A validated context, or null if an error response was written.</returns>
     public async Task<HistoryRequestContext?> ValidateAsync(
         long machineId,
         string? range,
         HttpContext httpContext,
-        Func<CancellationToken, Task> sendForbidden,
-        Func<CancellationToken, Task> sendNotFound,
         CancellationToken ct)
     {
         int? tenantId = TenantClaimHelper.GetTenantIdFromClaims(httpContext.User, httpContext);
 
         if (tenantId is null)
         {
-            await sendForbidden(ct);
+            httpContext.Response.StatusCode = 403;
+            await httpContext.Response.WriteAsJsonAsync(
+                ApiResponse<object>.Error("Forbidden"), ct);
 
             return null;
         }
 
         if (await _machineRepo.GetActiveMachineByIdAsync(machineId, tenantId.Value, ct) is null)
         {
-            await sendNotFound(ct);
+            httpContext.Response.StatusCode = 404;
+            await httpContext.Response.WriteAsJsonAsync(
+                ApiResponse<object>.Error("Machine not found"), ct);
 
             return null;
         }

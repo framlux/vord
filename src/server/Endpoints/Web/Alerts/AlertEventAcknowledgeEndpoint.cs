@@ -70,7 +70,8 @@ public sealed class AlertEventAcknowledgeEndpoint : EndpointWithoutRequest<ApiRe
 
         if (alertEvent is null)
         {
-            await Send.NotFoundAsync(ct);
+            HttpContext.Response.StatusCode = 404;
+            await HttpContext.Response.WriteAsJsonAsync(ApiResponse<bool>.Error("Alert event not found"), ct);
 
             return;
         }

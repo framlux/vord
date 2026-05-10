@@ -45,7 +45,7 @@ public sealed class RegistrationServiceTests
     // --- GetRegistrationStatus tests ---
 
     [Test]
-    public async Task GetRegistrationStatus_EmptySerialNumber_ReturnsUnknown()
+    public async Task GetRegistrationStatus_EmptySerialNumber_ThrowsInvalidArgument()
     {
         RegistrationService service = CreateService();
         ServerCallContext context = CreateCallContext();
@@ -56,14 +56,14 @@ public sealed class RegistrationServiceTests
             SystemId = "SYS-001"
         };
 
-        SystemRegistrationStatusResponse response = await service.GetRegistrationStatus(request, context);
-
-        await Assert.That(response.Status).IsEqualTo(RegistrationStatus.UnknownRegistration);
-        await Assert.That(response.ErrorMessage).IsEqualTo("Serial number is required");
+        RpcException? ex = await Assert.ThrowsAsync<RpcException>(
+            async () => await service.GetRegistrationStatus(request, context));
+        await Assert.That(ex!.StatusCode).IsEqualTo(StatusCode.InvalidArgument);
+        await Assert.That(ex.Status.Detail).IsEqualTo("Serial number is required");
     }
 
     [Test]
-    public async Task GetRegistrationStatus_EmptySystemId_ReturnsUnknown()
+    public async Task GetRegistrationStatus_EmptySystemId_ThrowsInvalidArgument()
     {
         RegistrationService service = CreateService();
         ServerCallContext context = CreateCallContext();
@@ -74,10 +74,10 @@ public sealed class RegistrationServiceTests
             SystemId = ""
         };
 
-        SystemRegistrationStatusResponse response = await service.GetRegistrationStatus(request, context);
-
-        await Assert.That(response.Status).IsEqualTo(RegistrationStatus.UnknownRegistration);
-        await Assert.That(response.ErrorMessage).IsEqualTo("System ID is required");
+        RpcException? ex = await Assert.ThrowsAsync<RpcException>(
+            async () => await service.GetRegistrationStatus(request, context));
+        await Assert.That(ex!.StatusCode).IsEqualTo(StatusCode.InvalidArgument);
+        await Assert.That(ex.Status.Detail).IsEqualTo("System ID is required");
     }
 
     [Test]
@@ -105,7 +105,7 @@ public sealed class RegistrationServiceTests
     }
 
     [Test]
-    public async Task GetRegistrationStatus_ServiceThrows_ReturnsInternalError()
+    public async Task GetRegistrationStatus_ServiceThrows_ThrowsInternalError()
     {
         _machineService.GetRegistrationStatusAsync("SN-001", "SYS-001", "test-token", Arg.Any<bool>(), Arg.Any<CancellationToken>())
             .Throws(new InvalidOperationException("Database error"));
@@ -120,14 +120,14 @@ public sealed class RegistrationServiceTests
             RegistrationToken = "test-token"
         };
 
-        SystemRegistrationStatusResponse response = await service.GetRegistrationStatus(request, context);
-
-        await Assert.That(response.Status).IsEqualTo(RegistrationStatus.UnknownRegistration);
-        await Assert.That(response.ErrorMessage).IsEqualTo("Internal server error");
+        RpcException? ex = await Assert.ThrowsAsync<RpcException>(
+            async () => await service.GetRegistrationStatus(request, context));
+        await Assert.That(ex!.StatusCode).IsEqualTo(StatusCode.Internal);
+        await Assert.That(ex.Status.Detail).IsEqualTo("Internal server error");
     }
 
     [Test]
-    public async Task GetRegistrationStatus_EmptyRegistrationToken_ReturnsUnknown()
+    public async Task GetRegistrationStatus_EmptyRegistrationToken_ThrowsInvalidArgument()
     {
         RegistrationService service = CreateService();
         ServerCallContext context = CreateCallContext();
@@ -139,10 +139,10 @@ public sealed class RegistrationServiceTests
             RegistrationToken = ""
         };
 
-        SystemRegistrationStatusResponse response = await service.GetRegistrationStatus(request, context);
-
-        await Assert.That(response.Status).IsEqualTo(RegistrationStatus.UnknownRegistration);
-        await Assert.That(response.ErrorMessage).IsEqualTo("Registration token is required");
+        RpcException? ex = await Assert.ThrowsAsync<RpcException>(
+            async () => await service.GetRegistrationStatus(request, context));
+        await Assert.That(ex!.StatusCode).IsEqualTo(StatusCode.InvalidArgument);
+        await Assert.That(ex.Status.Detail).IsEqualTo("Registration token is required");
     }
 
     [Test]
@@ -170,7 +170,7 @@ public sealed class RegistrationServiceTests
     // --- RegisterSystem tests ---
 
     [Test]
-    public async Task RegisterSystem_EmptyHostname_ReturnsError()
+    public async Task RegisterSystem_EmptyHostname_ThrowsInvalidArgument()
     {
         RegistrationService service = CreateService();
         ServerCallContext context = CreateCallContext();
@@ -184,15 +184,14 @@ public sealed class RegistrationServiceTests
             Os = FleetManagement.Grpc.AgentRegistration.OperatingSystemType.UbuntuOs
         };
 
-        RegisterSystemResponse response = await service.RegisterSystem(request, context);
-
-        await Assert.That(response.ErrorMessage).IsEqualTo("Hostname is required");
-        await Assert.That(response.MachineId).IsEqualTo(0);
-        await Assert.That(response.ApiKey).IsEqualTo(string.Empty);
+        RpcException? ex = await Assert.ThrowsAsync<RpcException>(
+            async () => await service.RegisterSystem(request, context));
+        await Assert.That(ex!.StatusCode).IsEqualTo(StatusCode.InvalidArgument);
+        await Assert.That(ex.Status.Detail).IsEqualTo("Hostname is required");
     }
 
     [Test]
-    public async Task RegisterSystem_EmptySerialNumber_ReturnsError()
+    public async Task RegisterSystem_EmptySerialNumber_ThrowsInvalidArgument()
     {
         RegistrationService service = CreateService();
         ServerCallContext context = CreateCallContext();
@@ -204,13 +203,14 @@ public sealed class RegistrationServiceTests
             SystemId = "SYS-001"
         };
 
-        RegisterSystemResponse response = await service.RegisterSystem(request, context);
-
-        await Assert.That(response.ErrorMessage).IsEqualTo("Serial number is required");
+        RpcException? ex = await Assert.ThrowsAsync<RpcException>(
+            async () => await service.RegisterSystem(request, context));
+        await Assert.That(ex!.StatusCode).IsEqualTo(StatusCode.InvalidArgument);
+        await Assert.That(ex.Status.Detail).IsEqualTo("Serial number is required");
     }
 
     [Test]
-    public async Task RegisterSystem_EmptySystemId_ReturnsError()
+    public async Task RegisterSystem_EmptySystemId_ThrowsInvalidArgument()
     {
         RegistrationService service = CreateService();
         ServerCallContext context = CreateCallContext();
@@ -222,9 +222,10 @@ public sealed class RegistrationServiceTests
             SystemId = ""
         };
 
-        RegisterSystemResponse response = await service.RegisterSystem(request, context);
-
-        await Assert.That(response.ErrorMessage).IsEqualTo("System ID is required");
+        RpcException? ex = await Assert.ThrowsAsync<RpcException>(
+            async () => await service.RegisterSystem(request, context));
+        await Assert.That(ex!.StatusCode).IsEqualTo(StatusCode.InvalidArgument);
+        await Assert.That(ex.Status.Detail).IsEqualTo("System ID is required");
     }
 
     [Test]
@@ -253,7 +254,7 @@ public sealed class RegistrationServiceTests
     }
 
     [Test]
-    public async Task RegisterSystem_ServiceThrows_ReturnsInternalError()
+    public async Task RegisterSystem_ServiceThrows_ThrowsInternalError()
     {
         _machineService.RegisterSystemAsync(Arg.Any<RegisterSystemRequest>(), Arg.Any<CancellationToken>())
             .Throws(new InvalidOperationException("Database error"));
@@ -270,14 +271,14 @@ public sealed class RegistrationServiceTests
             Os = FleetManagement.Grpc.AgentRegistration.OperatingSystemType.UbuntuOs
         };
 
-        RegisterSystemResponse response = await service.RegisterSystem(request, context);
-
-        await Assert.That(response.ErrorMessage).IsEqualTo("Internal server error");
-        await Assert.That(response.MachineId).IsEqualTo(0);
+        RpcException? ex = await Assert.ThrowsAsync<RpcException>(
+            async () => await service.RegisterSystem(request, context));
+        await Assert.That(ex!.StatusCode).IsEqualTo(StatusCode.Internal);
+        await Assert.That(ex.Status.Detail).IsEqualTo("Internal server error");
     }
 
     [Test]
-    public async Task RegisterSystem_ServiceReturnsError_ReturnsServiceError()
+    public async Task RegisterSystem_ServiceReturnsError_ThrowsInvalidArgument()
     {
         _machineService.RegisterSystemAsync(Arg.Any<RegisterSystemRequest>(), Arg.Any<CancellationToken>())
             .Returns(((long?)null, (string?)null, "Machine limit reached"));
@@ -294,9 +295,9 @@ public sealed class RegistrationServiceTests
             Os = FleetManagement.Grpc.AgentRegistration.OperatingSystemType.UbuntuOs
         };
 
-        RegisterSystemResponse response = await service.RegisterSystem(request, context);
-
-        await Assert.That(response.ErrorMessage).IsEqualTo("Machine limit reached");
-        await Assert.That(response.MachineId).IsEqualTo(0);
+        RpcException? ex = await Assert.ThrowsAsync<RpcException>(
+            async () => await service.RegisterSystem(request, context));
+        await Assert.That(ex!.StatusCode).IsEqualTo(StatusCode.InvalidArgument);
+        await Assert.That(ex.Status.Detail).IsEqualTo("Machine limit reached");
     }
 }

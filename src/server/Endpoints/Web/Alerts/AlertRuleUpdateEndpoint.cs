@@ -97,7 +97,8 @@ public sealed class AlertRuleUpdateEndpoint : Endpoint<UpdateAlertRuleRequest, A
 
         if (rule is null)
         {
-            await Send.NotFoundAsync(ct);
+            HttpContext.Response.StatusCode = 404;
+            await HttpContext.Response.WriteAsJsonAsync(ApiResponse<AlertRuleDto>.Error("Alert rule not found"), ct);
 
             return;
         }
@@ -111,8 +112,14 @@ public sealed class AlertRuleUpdateEndpoint : Endpoint<UpdateAlertRuleRequest, A
             return;
         }
 
-        // Input validation handled by UpdateAlertRuleValidator
-        AlertSeverity severity = Enum.Parse<AlertSeverity>(req.Severity, true);
+        if (Enum.TryParse<AlertSeverity>(req.Severity, true, out AlertSeverity severity) == false)
+        {
+            HttpContext.Response.StatusCode = 400;
+            await HttpContext.Response.WriteAsJsonAsync(
+                ApiResponse<AlertRuleDto>.Error($"Invalid severity value: {req.Severity}"), ct);
+
+            return;
+        }
 
         // Validate threshold range based on the rule's metric type (requires DB-loaded metric)
         bool isPercentageMetric = rule.Metric is AlertMetric.CpuUsage or AlertMetric.MemoryUsage or AlertMetric.DiskUsage;

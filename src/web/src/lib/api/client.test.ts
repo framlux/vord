@@ -333,7 +333,7 @@ describe('ApiClient', () => {
             }
         });
 
-        it('should fallback to default error message when body has no message', async () => {
+        it('should retry 5xx errors and throw after max retries', async () => {
             fetchFn.mockResolvedValue({
                 ok: false,
                 status: 500,
@@ -342,10 +342,13 @@ describe('ApiClient', () => {
 
             try {
                 await client.getMe();
+                expect.unreachable('Expected ApiError to be thrown');
             } catch (e) {
                 expect(e).toBeInstanceOf(ApiError);
                 expect((e as ApiError).status).toBe(500);
-                expect((e as ApiError).message).toBe('Request failed');
+                expect((e as ApiError).message).toBe('Server error (500)');
+                // Should have retried 3 times
+                expect(fetchFn).toHaveBeenCalledTimes(3);
             }
         });
     });
@@ -498,9 +501,27 @@ describe('ApiClient', () => {
     });
 
     describe('JSON parse failure', () => {
-        it('should throw ApiError with statusText when response body is not JSON', async () => {
+        it('should throw ApiError with statusText when response body is not JSON on non-5xx', async () => {
             fetchFn.mockResolvedValue({
                 ok: true,
+                status: 200,
+                statusText: 'OK',
+                json: () => Promise.reject(new SyntaxError('Unexpected token'))
+            });
+
+            try {
+                await client.getMe();
+                expect.unreachable('Expected ApiError to be thrown');
+            } catch (e) {
+                expect(e).toBeInstanceOf(ApiError);
+                expect((e as ApiError).status).toBe(200);
+                expect((e as ApiError).message).toBe('Request failed with status 200 (OK)');
+            }
+        });
+
+        it('should retry and throw server error for 5xx responses', async () => {
+            fetchFn.mockResolvedValue({
+                ok: false,
                 status: 502,
                 statusText: 'Bad Gateway',
                 json: () => Promise.reject(new SyntaxError('Unexpected token'))
@@ -512,7 +533,8 @@ describe('ApiClient', () => {
             } catch (e) {
                 expect(e).toBeInstanceOf(ApiError);
                 expect((e as ApiError).status).toBe(502);
-                expect((e as ApiError).message).toBe('Request failed with status 502 (Bad Gateway)');
+                expect((e as ApiError).message).toBe('Server error (502)');
+                expect(fetchFn).toHaveBeenCalledTimes(3);
             }
         });
     });
@@ -787,6 +809,105 @@ describe('ApiClient', () => {
                     body: JSON.stringify({ email: 'user@company.com' })
                 })
             );
+        });
+    });
+
+    describe('retry behavior', () => {
+        it('should succeed on second attempt after transient 500', async () => {
+            const userData = {
+                id: 1, name: 'Test', email: 'test@example.com',
+                avatar: '', isGlobalAdmin: false, uniqueId: 'abc',
+                needsOnboarding: false, tenants: [], activeTenantId: 1
+            };
+
+            fetchFn
+                .mockResolvedValueOnce({ ok: false, status: 500, json: () => Promise.resolve({}) })
+                .mockResolvedValueOnce({
+                    ok: true,
+                    status: 200,
+                    json: () => Promise.resolve({ success: true, data: userData, message: null, errors: null })
+                });
+
+            const result = await client.getMe();
+            expect(result).toEqual(userData);
+            expect(fetchFn).toHaveBeenCalledTimes(2);
+        });
+
+        it('should not retry 4xx errors', async () => {
+            fetchFn.mockResolvedValue({
+                ok: false,
+                status: 422,
+                json: () => Promise.resolve({ success: false, data: null, message: 'Validation failed', errors: null })
+            });
+
+            try {
+                await client.getMe();
+                expect.unreachable('Expected ApiError to be thrown');
+            } catch (e) {
+                expect(e).toBeInstanceOf(ApiError);
+                expect((e as ApiError).status).toBe(422);
+                // Should only be called once since 4xx is not retried
+                expect(fetchFn).toHaveBeenCalledTimes(1);
+            }
+        });
+
+        it('should include abort signal for timeout', async () => {
+            const userData = {
+                id: 1, name: 'Test', email: 'test@example.com',
+                avatar: '', isGlobalAdmin: false, uniqueId: 'abc',
+                needsOnboarding: false, tenants: [], activeTenantId: 1
+            };
+
+            fetchFn.mockResolvedValue({
+                ok: true,
+                status: 200,
+                json: () => Promise.resolve({ success: true, data: userData, message: null, errors: null })
+            });
+
+            await client.getMe();
+            expect(fetchFn).toHaveBeenCalledWith(
+                expect.any(String),
+                expect.objectContaining({
+                    signal: expect.any(AbortSignal)
+                })
+            );
+        });
+
+        it('should retry on abort timeout error', async () => {
+            const abortError = new DOMException('The operation was aborted', 'AbortError');
+
+            const userData = {
+                id: 1, name: 'Test', email: 'test@example.com',
+                avatar: '', isGlobalAdmin: false, uniqueId: 'abc',
+                needsOnboarding: false, tenants: [], activeTenantId: 1
+            };
+
+            fetchFn
+                .mockRejectedValueOnce(abortError)
+                .mockResolvedValueOnce({
+                    ok: true,
+                    status: 200,
+                    json: () => Promise.resolve({ success: true, data: userData, message: null, errors: null })
+                });
+
+            const result = await client.getMe();
+            expect(result).toEqual(userData);
+            expect(fetchFn).toHaveBeenCalledTimes(2);
+        });
+
+        it('should throw timeout error after all retries exhausted', async () => {
+            const abortError = new DOMException('The operation was aborted', 'AbortError');
+            fetchFn.mockRejectedValue(abortError);
+
+            try {
+                await client.getMe();
+                expect.unreachable('Expected ApiError to be thrown');
+            } catch (e) {
+                expect(e).toBeInstanceOf(ApiError);
+                expect((e as ApiError).status).toBe(0);
+                expect((e as ApiError).message).toBe('Request timed out');
+                expect(fetchFn).toHaveBeenCalledTimes(3);
+            }
         });
     });
 });

@@ -41,7 +41,9 @@ public sealed class SigningKeyRevokeEndpoint : EndpointWithoutRequest<ApiRespons
         int? tenantId = TenantClaimHelper.GetTenantIdFromClaims(User, HttpContext);
         if (tenantId is null)
         {
-            await Send.NotFoundAsync(ct);
+            HttpContext.Response.StatusCode = 401;
+            await HttpContext.Response.WriteAsJsonAsync(
+                ApiResponse<bool>.Error("Unable to identify tenant"), ct);
 
             return;
         }
@@ -66,7 +68,9 @@ public sealed class SigningKeyRevokeEndpoint : EndpointWithoutRequest<ApiRespons
 
         if (result.IsNotFound)
         {
-            await Send.NotFoundAsync(ct);
+            HttpContext.Response.StatusCode = 404;
+            await HttpContext.Response.WriteAsJsonAsync(
+                ApiResponse<bool>.Error("Signing key not found"), ct);
 
             return;
         }
@@ -74,7 +78,8 @@ public sealed class SigningKeyRevokeEndpoint : EndpointWithoutRequest<ApiRespons
         if (result.IsSuccess == false)
         {
             HttpContext.Response.StatusCode = result.StatusCode;
-            await Send.OkAsync(ApiResponse<bool>.Error("Cannot revoke this key"), cancellation: ct);
+            await HttpContext.Response.WriteAsJsonAsync(
+                ApiResponse<bool>.Error("Cannot revoke this key"), ct);
 
             return;
         }

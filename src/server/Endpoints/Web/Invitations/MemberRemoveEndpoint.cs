@@ -54,7 +54,9 @@ public sealed class MemberRemoveEndpoint : EndpointWithoutRequest<ApiResponse<ob
 
         if (result.IsNotFound)
         {
-            await Send.NotFoundAsync(ct);
+            HttpContext.Response.StatusCode = 404;
+            await HttpContext.Response.WriteAsJsonAsync(
+                ApiResponse<object>.Error("Member not found"), ct);
 
             return;
         }

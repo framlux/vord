@@ -80,13 +80,11 @@ public sealed class RegistrationFlowTests
             Os = OperatingSystemType.UbuntuOs
         };
 
-        // Act
-        RegisterSystemResponse response = await client.RegisterSystemAsync(request);
-
-        // Assert
-        await Assert.That(response.MachineId).IsEqualTo(0);
-        await Assert.That(response.ApiKey).IsEmpty();
-        await Assert.That(response.ErrorMessage).IsNotEmpty();
+        // Act & Assert — should throw RpcException with InvalidArgument
+        RpcException? ex = await Assert.ThrowsAsync<RpcException>(
+            async () => await client.RegisterSystemAsync(request));
+        await Assert.That(ex!.StatusCode).IsEqualTo(StatusCode.InvalidArgument);
+        await Assert.That(ex.Status.Detail).IsNotEmpty();
     }
 
     [Test]
@@ -126,12 +124,11 @@ public sealed class RegistrationFlowTests
             Os = OperatingSystemType.UbuntuOs
         };
 
-        // Act
-        RegisterSystemResponse response = await client.RegisterSystemAsync(request);
-
-        // Assert
-        await Assert.That(response.MachineId).IsEqualTo(0);
-        await Assert.That(response.ErrorMessage).Contains("revoked");
+        // Act & Assert — should throw RpcException for revoked token
+        RpcException? ex = await Assert.ThrowsAsync<RpcException>(
+            async () => await client.RegisterSystemAsync(request));
+        await Assert.That(ex!.StatusCode).IsEqualTo(StatusCode.InvalidArgument);
+        await Assert.That(ex.Status.Detail).Contains("revoked");
     }
 
     [Test]
@@ -183,11 +180,11 @@ public sealed class RegistrationFlowTests
             Os = OperatingSystemType.UbuntuOs
         };
 
-        RegisterSystemResponse overLimitResponse = await client.RegisterSystemAsync(overLimitRequest);
-
-        // Assert
-        await Assert.That(overLimitResponse.MachineId).IsEqualTo(0);
-        await Assert.That(overLimitResponse.ErrorMessage).Contains("limit");
+        // Assert — should throw RpcException for limit exceeded
+        RpcException? ex = await Assert.ThrowsAsync<RpcException>(
+            async () => await client.RegisterSystemAsync(overLimitRequest));
+        await Assert.That(ex!.StatusCode).IsEqualTo(StatusCode.InvalidArgument);
+        await Assert.That(ex.Status.Detail).Contains("limit");
     }
 
     [Test]
@@ -209,12 +206,11 @@ public sealed class RegistrationFlowTests
             Os = OperatingSystemType.UbuntuOs
         };
 
-        // Act
-        RegisterSystemResponse response = await client.RegisterSystemAsync(request);
-
-        // Assert
-        await Assert.That(response.MachineId).IsEqualTo(0);
-        await Assert.That(response.ErrorMessage).Contains("Hostname");
+        // Act & Assert — should throw RpcException for missing hostname
+        RpcException? ex = await Assert.ThrowsAsync<RpcException>(
+            async () => await client.RegisterSystemAsync(request));
+        await Assert.That(ex!.StatusCode).IsEqualTo(StatusCode.InvalidArgument);
+        await Assert.That(ex.Status.Detail).Contains("Hostname");
     }
 
     [Test]

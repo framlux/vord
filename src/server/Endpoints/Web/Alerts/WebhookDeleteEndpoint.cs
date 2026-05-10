@@ -67,7 +67,8 @@ public sealed class WebhookDeleteEndpoint : EndpointWithoutRequest<ApiResponse<b
 
         if (webhook is null)
         {
-            await Send.NotFoundAsync(ct);
+            HttpContext.Response.StatusCode = 404;
+            await HttpContext.Response.WriteAsJsonAsync(ApiResponse<bool>.Error("Webhook not found"), ct);
 
             return;
         }

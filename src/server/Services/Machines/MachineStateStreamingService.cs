@@ -23,12 +23,17 @@ public sealed class MachineStateStreamingService : BackgroundService
     /// <summary>
     /// Number of telemetry rows to fetch per poll cycle.
     /// </summary>
-    internal const int BatchSize = 50;
+    internal const int BatchSize = 200;
 
     /// <summary>
     /// How long to sleep when no new telemetry rows are available.
     /// </summary>
-    internal static readonly TimeSpan IdleSleepDuration = TimeSpan.FromSeconds(2);
+    internal static readonly TimeSpan IdleSleepDuration = TimeSpan.FromMilliseconds(500);
+
+    /// <summary>
+    /// Maximum number of telemetry rows to process concurrently within a batch.
+    /// </summary>
+    private const int MaxDegreeOfParallelism = 4;
 
     /// <summary>
     /// How often to persist the high-water mark to the database.
@@ -104,6 +109,7 @@ public sealed class MachineStateStreamingService : BackgroundService
     /// <summary>
     /// Main streaming loop: continuously polls MachineTelemetry for new rows
     /// and applies targeted UPDATEs to the summary and detail tables.
+    /// Groups rows by machine and processes machines concurrently for throughput.
     /// </summary>
     private async Task StreamLoopAsync(CancellationToken ct)
     {
@@ -123,30 +129,47 @@ public sealed class MachineStateStreamingService : BackgroundService
                 continue;
             }
 
-            foreach (MachineTelemetry row in batch)
+            // Group by machine to process different machines concurrently.
+            // Rows within the same machine are processed sequentially to avoid state conflicts.
+            IEnumerable<IGrouping<long, MachineTelemetry>> machineGroups = batch.GroupBy(r => r.MachineId);
+
+            await Parallel.ForEachAsync(machineGroups, new ParallelOptions
             {
-                try
-                {
-                    await ProcessTelemetryRowAsync(repo, row, ct);
-                }
-                catch (Exception ex)
-                {
-                    _logger.LogWarning(ex, "Failed to process telemetry row {Id} for machine {MachineId}", row.Id, row.MachineId);
-                }
+                MaxDegreeOfParallelism = MaxDegreeOfParallelism,
+                CancellationToken = ct
+            }, async (group, token) =>
+            {
+                using IServiceScope innerScope = _scopeFactory.CreateScope();
+                IMachineStateRepository innerRepo = innerScope.ServiceProvider.GetRequiredService<IMachineStateRepository>();
 
-                _highWaterMark = row.Id;
-                _rowsSinceLastPersist++;
-
-                if (_rowsSinceLastPersist >= PersistHighWaterMarkEveryNRows)
+                foreach (MachineTelemetry row in group)
                 {
-                    await PersistHighWaterMarkAsync(ct);
-                    _rowsSinceLastPersist = 0;
+                    try
+                    {
+                        await ProcessTelemetryRowAsync(innerRepo, row, token);
+                    }
+                    catch (Exception ex)
+                    {
+                        _logger.LogWarning(ex, "Failed to process telemetry row {Id} for machine {MachineId}", row.Id, row.MachineId);
+                    }
                 }
+            });
+
+            // Advance the high-water mark to the last row in the batch.
+            _highWaterMark = batch[^1].Id;
+            _rowsSinceLastPersist += batch.Count;
+
+            if (_rowsSinceLastPersist >= PersistHighWaterMarkEveryNRows)
+            {
+                await PersistHighWaterMarkAsync(ct);
+                _rowsSinceLastPersist = 0;
             }
-
-            // Persist after each batch to avoid re-processing on crash.
-            await PersistHighWaterMarkAsync(ct);
-            _rowsSinceLastPersist = 0;
+            else
+            {
+                // Persist after each batch to avoid re-processing on crash.
+                await PersistHighWaterMarkAsync(ct);
+                _rowsSinceLastPersist = 0;
+            }
         }
     }
 

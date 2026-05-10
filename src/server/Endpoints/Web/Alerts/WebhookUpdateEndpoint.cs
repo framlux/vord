@@ -78,7 +78,9 @@ public sealed class WebhookUpdateEndpoint : Endpoint<UpdateWebhookRequest, ApiRe
 
         if (webhook is null)
         {
-            await Send.NotFoundAsync(ct);
+            HttpContext.Response.StatusCode = 404;
+            await HttpContext.Response.WriteAsJsonAsync(
+                ApiResponse<WebhookEndpointDto>.Error("Webhook not found"), ct);
 
             return;
         }

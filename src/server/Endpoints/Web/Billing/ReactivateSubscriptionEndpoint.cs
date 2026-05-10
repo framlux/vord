@@ -69,7 +69,9 @@ public sealed class ReactivateSubscriptionEndpoint : EndpointWithoutRequest<ApiR
     {
         if (_billingStatus.IsEnabled == false)
         {
-            await Send.NotFoundAsync(ct);
+            HttpContext.Response.StatusCode = 404;
+            await HttpContext.Response.WriteAsJsonAsync(
+                ApiResponse<ReactivateSubscriptionResponse>.Error("Billing is not enabled"), ct);
 
             return;
         }
@@ -87,7 +89,9 @@ public sealed class ReactivateSubscriptionEndpoint : EndpointWithoutRequest<ApiR
         TenantSubscription? subscription = await _subscriptionService.GetSubscriptionForTenantAsync(tenantId.Value, ct);
         if (subscription is null)
         {
-            await Send.NotFoundAsync(ct);
+            HttpContext.Response.StatusCode = 404;
+            await HttpContext.Response.WriteAsJsonAsync(
+                ApiResponse<ReactivateSubscriptionResponse>.Error("Subscription not found"), ct);
 
             return;
         }

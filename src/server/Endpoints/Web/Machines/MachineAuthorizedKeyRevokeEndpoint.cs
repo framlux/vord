@@ -41,7 +41,9 @@ public sealed class MachineAuthorizedKeyRevokeEndpoint : EndpointWithoutRequest<
         int? tenantId = TenantClaimHelper.GetTenantIdFromClaims(User, HttpContext);
         if (tenantId is null)
         {
-            await Send.NotFoundAsync(ct);
+            HttpContext.Response.StatusCode = 401;
+            await HttpContext.Response.WriteAsJsonAsync(
+                ApiResponse<bool>.Error("Unable to identify tenant"), ct);
 
             return;
         }
@@ -61,7 +63,9 @@ public sealed class MachineAuthorizedKeyRevokeEndpoint : EndpointWithoutRequest<
 
         if (result.IsNotFound)
         {
-            await Send.NotFoundAsync(ct);
+            HttpContext.Response.StatusCode = 404;
+            await HttpContext.Response.WriteAsJsonAsync(
+                ApiResponse<bool>.Error("Authorization not found"), ct);
 
             return;
         }

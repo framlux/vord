@@ -40,7 +40,9 @@ public sealed class RevokeRegistrationTokenEndpoint : EndpointWithoutRequest<Api
 
         if (tenantId is null)
         {
-            await Send.NotFoundAsync(ct);
+            HttpContext.Response.StatusCode = 401;
+            await HttpContext.Response.WriteAsJsonAsync(
+                ApiResponse<object>.Error("Unable to identify tenant"), ct);
 
             return;
         }
@@ -59,7 +61,9 @@ public sealed class RevokeRegistrationTokenEndpoint : EndpointWithoutRequest<Api
 
         if (result.IsNotFound)
         {
-            await Send.NotFoundAsync(ct);
+            HttpContext.Response.StatusCode = 404;
+            await HttpContext.Response.WriteAsJsonAsync(
+                ApiResponse<object>.Error("Registration token not found"), ct);
 
             return;
         }

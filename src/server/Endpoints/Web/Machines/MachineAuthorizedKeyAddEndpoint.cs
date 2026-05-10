@@ -55,7 +55,9 @@ public sealed class MachineAuthorizedKeyAddEndpoint : Endpoint<MachineAuthorized
         int? tenantId = TenantClaimHelper.GetTenantIdFromClaims(User, HttpContext);
         if (tenantId is null)
         {
-            await Send.NotFoundAsync(ct);
+            HttpContext.Response.StatusCode = 401;
+            await HttpContext.Response.WriteAsJsonAsync(
+                ApiResponse<MachineAuthorizedKeyDto>.Error("Unable to identify tenant"), ct);
 
             return;
         }
@@ -88,7 +90,9 @@ public sealed class MachineAuthorizedKeyAddEndpoint : Endpoint<MachineAuthorized
 
         if (result.IsNotFound)
         {
-            await Send.NotFoundAsync(ct);
+            HttpContext.Response.StatusCode = 404;
+            await HttpContext.Response.WriteAsJsonAsync(
+                ApiResponse<MachineAuthorizedKeyDto>.Error("Machine or signing key not found"), ct);
 
             return;
         }

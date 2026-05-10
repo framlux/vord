@@ -55,7 +55,9 @@ public sealed class MachineUpdateEndpoint : Endpoint<UpdateMachineRequest, ApiRe
 
         if (result.IsNotFound)
         {
-            await Send.NotFoundAsync(ct);
+            HttpContext.Response.StatusCode = 404;
+            await HttpContext.Response.WriteAsJsonAsync(
+                ApiResponse<MachineDto>.Error("Machine not found"), ct);
 
             return;
         }

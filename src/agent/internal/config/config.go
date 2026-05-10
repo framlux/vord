@@ -24,7 +24,12 @@ type Config struct {
 	UseTLS              bool
 	AllowRemoteCommands bool
 	RegistrationToken   string
+	MaxQueueSize        int
 }
+
+// DefaultMaxQueueSize is the maximum number of pending telemetry items allowed
+// in the local SQLite queue before FIFO eviction kicks in.
+const DefaultMaxQueueSize = 10000
 
 // fileConfig mirrors Config for TOML deserialization.
 type fileConfig struct {
@@ -35,6 +40,7 @@ type fileConfig struct {
 	UseTLS              bool   `toml:"use_tls"`
 	AllowRemoteCommands bool   `toml:"allow_remote_commands"`
 	RegistrationToken   string `toml:"registration_token"`
+	MaxQueueSize        int    `toml:"max_queue_size"`
 }
 
 // DatabasePath returns the full path to the SQLite database file.
@@ -53,6 +59,7 @@ func Load() (*Config, error) {
 		LogLevel:            "info",
 		UseTLS:              true,
 		AllowRemoteCommands: false,
+		MaxQueueSize:        DefaultMaxQueueSize,
 	}
 
 	// Define flags.
@@ -64,6 +71,7 @@ func Load() (*Config, error) {
 	flagInsecure := flag.Bool("insecure", false, "Disable TLS for gRPC connection (development only)")
 	flagAllowRemoteCommands := flag.Bool("allow-remote-commands", cfg.AllowRemoteCommands, "Allow remote command execution from the server")
 	flagRegistrationToken := flag.String("registration-token", "", "Registration token for tenant association")
+	flagMaxQueueSize := flag.Int("max-queue-size", cfg.MaxQueueSize, "Maximum telemetry queue size before FIFO eviction")
 	flag.Parse()
 
 	// Record which flags were explicitly set on the CLI.
@@ -87,6 +95,7 @@ func Load() (*Config, error) {
 		Insecure:            *flagInsecure,
 		AllowRemoteCommands: *flagAllowRemoteCommands,
 		RegistrationToken:   *flagRegistrationToken,
+		MaxQueueSize:        *flagMaxQueueSize,
 	}
 
 	applyLayeredConfig(cfg, meta, fc, explicitFlags, flagValues)
@@ -107,6 +116,7 @@ type resolvedFlags struct {
 	Insecure            bool
 	AllowRemoteCommands bool
 	RegistrationToken   string
+	MaxQueueSize        int
 }
 
 // loadFromTOML loads and decodes a TOML config file. If the file does not exist, it returns
@@ -188,6 +198,16 @@ func applyLayeredConfig(cfg *Config, meta toml.MetaData, fc fileConfig, explicit
 	} else if v := os.Getenv("VORD_REGISTRATION_TOKEN"); v != "" {
 		cfg.RegistrationToken = v
 	}
+
+	if explicitFlags["max-queue-size"] {
+		cfg.MaxQueueSize = flags.MaxQueueSize
+	} else if meta.IsDefined("max_queue_size") {
+		cfg.MaxQueueSize = fc.MaxQueueSize
+	} else if v := os.Getenv("VORD_MAX_QUEUE_SIZE"); v != "" {
+		if i, err := strconv.Atoi(v); err == nil {
+			cfg.MaxQueueSize = i
+		}
+	}
 }
 
 // validateConfig checks that all configuration values are within valid ranges.
@@ -195,6 +215,10 @@ func applyLayeredConfig(cfg *Config, meta toml.MetaData, fc fileConfig, explicit
 func validateConfig(cfg *Config) error {
 	if cfg.ServerPort < 1 || cfg.ServerPort > 65535 {
 		return fmt.Errorf("invalid server port %d: must be between 1 and 65535", cfg.ServerPort)
+	}
+
+	if cfg.MaxQueueSize < 100 {
+		return fmt.Errorf("invalid max_queue_size %d: must be at least 100", cfg.MaxQueueSize)
 	}
 
 	return nil

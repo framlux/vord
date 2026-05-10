@@ -16,8 +16,10 @@ export const load: PageServerLoad = async ({ fetch, cookies, url }) => {
 	const pageSize = Number.isNaN(rawPageSize) ? 25 : Math.min(100, Math.max(1, rawPageSize));
 	const search = url.searchParams.get('search') ?? undefined;
 	const status = url.searchParams.get('status') ?? undefined;
-	const sortBy = url.searchParams.get('sortBy') ?? 'name';
-	const sortDir = url.searchParams.get('sortDir') ?? 'asc';
+	const validSortFields = ['name', 'status', 'cpu', 'memory'] as const;
+	const rawSortBy = url.searchParams.get('sortBy') ?? 'name';
+	const sortBy = validSortFields.includes(rawSortBy as typeof validSortFields[number]) ? rawSortBy : 'name';
+	const sortDir = url.searchParams.get('sortDir') === 'desc' ? 'desc' : 'asc';
 
 	try {
 		const fleet = await api.getFleetOverview({ page, pageSize, search, status, sortBy, sortDir });

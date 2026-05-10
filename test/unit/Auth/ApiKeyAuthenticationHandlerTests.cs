@@ -11,6 +11,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using NSubstitute;
+using StackExchange.Redis;
 using System.Text.Encodings.Web;
 
 namespace Framlux.FleetManagement.Test.Auth;
@@ -27,7 +28,12 @@ public class ApiKeyAuthenticationHandlerTests
         ILoggerFactory loggerFactory = new NullLoggerFactory();
         UrlEncoder encoder = UrlEncoder.Default;
 
-        ApiKeyAuthenticationHandler handler = new(options, loggerFactory, encoder, machineRepository);
+        IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
+        IDatabase redisDb = Substitute.For<IDatabase>();
+        redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(redisDb);
+        redisDb.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>()).Returns(RedisValue.Null);
+
+        ApiKeyAuthenticationHandler handler = new(options, loggerFactory, encoder, machineRepository, redis);
 
         DefaultHttpContext httpContext = new();
         if (apiKeyHeader is not null)

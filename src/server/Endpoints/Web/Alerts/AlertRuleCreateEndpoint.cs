@@ -80,10 +80,32 @@ public sealed class AlertRuleCreateEndpoint : Endpoint<CreateAlertRuleRequest, A
             return;
         }
 
-        // Input validation handled by CreateAlertRuleValidator
-        AlertMetric metric = Enum.Parse<AlertMetric>(req.Metric, true);
-        AlertOperator op = Enum.Parse<AlertOperator>(req.Operator, true);
-        AlertSeverity severity = Enum.Parse<AlertSeverity>(req.Severity, true);
+        if (Enum.TryParse<AlertMetric>(req.Metric, true, out AlertMetric metric) == false)
+        {
+            HttpContext.Response.StatusCode = 400;
+            await HttpContext.Response.WriteAsJsonAsync(
+                ApiResponse<AlertRuleDto>.Error($"Invalid metric value: {req.Metric}"), ct);
+
+            return;
+        }
+
+        if (Enum.TryParse<AlertOperator>(req.Operator, true, out AlertOperator op) == false)
+        {
+            HttpContext.Response.StatusCode = 400;
+            await HttpContext.Response.WriteAsJsonAsync(
+                ApiResponse<AlertRuleDto>.Error($"Invalid operator value: {req.Operator}"), ct);
+
+            return;
+        }
+
+        if (Enum.TryParse<AlertSeverity>(req.Severity, true, out AlertSeverity severity) == false)
+        {
+            HttpContext.Response.StatusCode = 400;
+            await HttpContext.Response.WriteAsJsonAsync(
+                ApiResponse<AlertRuleDto>.Error($"Invalid severity value: {req.Severity}"), ct);
+
+            return;
+        }
 
         int? userId = TenantClaimHelper.GetUserIdFromClaims(User);
         if (userId is null)

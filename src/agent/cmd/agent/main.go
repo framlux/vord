@@ -72,7 +72,7 @@ func main() {
 		slog.Error("failed to open database", "error", err)
 		os.Exit(1)
 	}
-	store := db.NewStore(database)
+	store := db.NewStore(database, cfg.MaxQueueSize)
 	defer store.Close()
 
 	// Initialize state.

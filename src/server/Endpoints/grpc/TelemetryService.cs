@@ -13,6 +13,8 @@ using Framlux.FleetManagement.Server.Services.Telemetry;
 using Grpc.Core;
 using Microsoft.AspNetCore.Authorization;
 using Npgsql;
+using Polly;
+using Polly.Timeout;
 
 namespace Framlux.FleetManagement.Server.Endpoints.Grpc;
 
@@ -53,6 +55,7 @@ public sealed class TelemetryService : Telemetry.TelemetryBase
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly ITelemetryDeduplicationService _dedupService;
     private readonly ISubscriptionService _subscriptionService;
+    private readonly ResiliencePipeline _dbPipeline;
     private readonly ILogger<TelemetryService> _logger;
 
     /// <summary>
@@ -62,11 +65,13 @@ public sealed class TelemetryService : Telemetry.TelemetryBase
         IServiceScopeFactory scopeFactory,
         ITelemetryDeduplicationService dedupService,
         ISubscriptionService subscriptionService,
+        ResiliencePipeline dbPipeline,
         ILogger<TelemetryService> logger)
     {
         _scopeFactory = scopeFactory;
         _dedupService = dedupService;
         _subscriptionService = subscriptionService;
+        _dbPipeline = dbPipeline;
         _logger = logger;
     }
 
@@ -263,7 +268,34 @@ public sealed class TelemetryService : Telemetry.TelemetryBase
 
                 try
                 {
-                    await machineStateRepo.BulkInsertTelemetryAsync(rows, ct);
+                    await _dbPipeline.ExecuteAsync(async token =>
+                    {
+                        await machineStateRepo.BulkInsertTelemetryAsync(rows, token);
+                    }, ct);
+                }
+                catch (Polly.CircuitBreaker.BrokenCircuitException)
+                {
+                    _logger.LogWarning("Circuit breaker open for telemetry writes, signaling backpressure to machine {MachineId}", machineId);
+
+                    return new TelemetryAck
+                    {
+                        BatchId = envelope.BatchId,
+                        AcknowledgedEventIds = { acknowledgedIds },
+                        Success = false,
+                        ErrorMessage = "Service temporarily unavailable, please retry later"
+                    };
+                }
+                catch (TimeoutRejectedException)
+                {
+                    _logger.LogWarning("Telemetry write timed out for machine {MachineId} batch {BatchId}", machineId, envelope.BatchId);
+
+                    return new TelemetryAck
+                    {
+                        BatchId = envelope.BatchId,
+                        AcknowledgedEventIds = { acknowledgedIds },
+                        Success = false,
+                        ErrorMessage = "Database write timed out, please retry later"
+                    };
                 }
                 catch (PostgresException ex) when (ex.SqlState == PostgresUniqueViolation)
                 {

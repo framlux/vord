@@ -38,6 +38,7 @@ using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Protocols.OpenIdConnect;
 using Npgsql;
+using Polly;
 using Serilog;
 using Serilog.Formatting.Compact;
 using StackExchange.Redis;
@@ -130,9 +131,10 @@ builder.Services.Configure<ForwardedHeadersOptions>(options =>
         ForwardedHeaders.XForwardedProto |
         ForwardedHeaders.XForwardedHost;
 
-    // NOTE: Trusting all proxies — only safe when deployed behind a known reverse proxy
-    // (e.g. Docker/K8s ingress). The server does NOT terminate TLS itself; security headers
-    // (HSTS, X-Frame-Options, etc.) are configured at the reverse proxy level.
+    // Service always runs behind exactly one Traefik reverse proxy.
+    // ForwardLimit = 1 trusts only the most recent X-Forwarded-* header,
+    // preventing IP spoofing via extra headers.
+    options.ForwardLimit = 1;
     options.KnownIPNetworks.Clear();
     options.KnownProxies.Clear();
 });
@@ -298,7 +300,9 @@ string connectionString = (new NpgsqlConnectionStringBuilder()
     Database = dbOpts.Db,
     Username = dbOpts.User,
     Password = dbOpts.Password,
-    Host = dbOpts.Hostname
+    Host = dbOpts.Hostname,
+    MaxPoolSize = 50,
+    MinPoolSize = 5
 }).ConnectionString;
 
 builder.Services.AddNpgsqlDataSource(connectionString);
@@ -406,18 +410,37 @@ else
     builder.Services.AddSingleton<IBillingApiClient, NoOpBillingApiClient>();
 }
 
-string redisConnectionString = redisOpts.ConnectionString;
+ConfigurationOptions redisConfig = ConfigurationOptions.Parse(redisOpts.ConnectionString);
+redisConfig.ConnectTimeout = 5000;
+redisConfig.SyncTimeout = 3000;
+redisConfig.AsyncTimeout = 3000;
+redisConfig.ConnectRetry = 3;
+redisConfig.AbortOnConnectFail = false;
 builder.Services.AddSingleton<IConnectionMultiplexer>(sp =>
-    ConnectionMultiplexer.Connect(redisConnectionString));
+    ConnectionMultiplexer.Connect(redisConfig));
 builder.Services.AddSingleton<IMachinePingService, RedisMachinePingService>();
 builder.Services.AddSingleton<ITelemetryDeduplicationService, RedisTelemetryDeduplicationService>();
 builder.Services.AddSingleton<IDistributedLock, RedisDistributedLock>();
 builder.Services.AddRedisRateLimiting();
 
+// Circuit breaker for telemetry database writes — prevents cascading failures
+// when PostgreSQL is slow or overloaded.
+builder.Services.AddSingleton(
+    new ResiliencePipelineBuilder()
+        .AddTimeout(TimeSpan.FromSeconds(10))
+        .AddCircuitBreaker(new Polly.CircuitBreaker.CircuitBreakerStrategyOptions
+        {
+            FailureRatio = 0.5,
+            SamplingDuration = TimeSpan.FromSeconds(30),
+            MinimumThroughput = 5,
+            BreakDuration = TimeSpan.FromSeconds(15),
+        })
+        .Build());
+
 // Health checks for PostgreSQL and Redis
 builder.Services.AddHealthChecks()
     .AddNpgSql(connectionString, name: "postgresql", failureStatus: HealthStatus.Unhealthy)
-    .AddRedis(redisConnectionString, name: "redis", failureStatus: HealthStatus.Unhealthy);
+    .AddRedis(redisOpts.ConnectionString, name: "redis", failureStatus: HealthStatus.Unhealthy);
 
 builder.Services.AddGrpc(options =>
 {

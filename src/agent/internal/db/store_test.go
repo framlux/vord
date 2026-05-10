@@ -5,6 +5,7 @@
 package db
 
 import (
+	"fmt"
 	"testing"
 	"time"
 )
@@ -870,13 +871,10 @@ func TestDequeueTelemetryByTypes_EmptyTypes(t *testing.T) {
 
 // --- Extended store tests (Priority 4) ---
 
-// Intent: Exceeding maxQueueDepth (10,000) returns error — prevents unbounded queue growth.
+// Intent: Enqueueing many items tracks the pending count correctly.
 func TestEnqueueTelemetry_QueueOverflow(t *testing.T) {
 	store := newTestStore(t)
 
-	// Enqueue items up to the max queue depth.
-	// To avoid actually inserting 10,000 rows (slow), we manipulate the
-	// internal pending count via a batch insert and counter manipulation.
 	for i := 0; i < 100; i++ {
 		id := "overflow-" + string(rune('a'+i%26)) + string(rune('0'+i/26))
 		err := store.EnqueueTelemetry(id, TelemetryCpuUsage, `{}`)
@@ -892,6 +890,116 @@ func TestEnqueueTelemetry_QueueOverflow(t *testing.T) {
 	}
 	if count != 100 {
 		t.Errorf("expected 100 pending, got %d", count)
+	}
+}
+
+// Intent: When the queue reaches its maximum size, the oldest pending items are
+// evicted (FIFO) to make room for new telemetry, preventing unbounded growth.
+func TestEnqueueTelemetry_FIFOEviction(t *testing.T) {
+	database, err := Open(":memory:")
+	if err != nil {
+		t.Fatalf("open test db: %v", err)
+	}
+	t.Cleanup(func() { database.Close() })
+
+	// Create a store with a small max queue size for testing eviction.
+	store := NewStore(database, 5)
+
+	// Fill the queue to capacity.
+	for i := 0; i < 5; i++ {
+		id := fmt.Sprintf("item-%d", i)
+		if err := store.EnqueueTelemetry(id, TelemetryCpuUsage, fmt.Sprintf(`{"seq":%d}`, i)); err != nil {
+			t.Fatalf("EnqueueTelemetry %d: %v", i, err)
+		}
+	}
+
+	count, err := store.CountPendingTelemetry()
+	if err != nil {
+		t.Fatalf("CountPendingTelemetry: %v", err)
+	}
+	if count != 5 {
+		t.Fatalf("expected 5 pending before eviction, got %d", count)
+	}
+
+	// Enqueue one more item; this should evict the oldest (item-0).
+	if err := store.EnqueueTelemetry("item-5", TelemetryCpuUsage, `{"seq":5}`); err != nil {
+		t.Fatalf("EnqueueTelemetry after capacity: %v", err)
+	}
+
+	count, err = store.CountPendingTelemetry()
+	if err != nil {
+		t.Fatalf("CountPendingTelemetry after eviction: %v", err)
+	}
+	if count != 5 {
+		t.Errorf("expected 5 pending after eviction, got %d", count)
+	}
+
+	// Dequeue all items and verify the oldest was evicted.
+	items, err := store.DequeueTelemetry(10)
+	if err != nil {
+		t.Fatalf("DequeueTelemetry: %v", err)
+	}
+	if len(items) != 5 {
+		t.Fatalf("expected 5 items, got %d", len(items))
+	}
+
+	// The first item should be item-1 (item-0 was evicted).
+	if items[0].ID != "item-1" {
+		t.Errorf("expected oldest remaining item to be %q, got %q", "item-1", items[0].ID)
+	}
+	// The last item should be the newly inserted item-5.
+	if items[4].ID != "item-5" {
+		t.Errorf("expected newest item to be %q, got %q", "item-5", items[4].ID)
+	}
+}
+
+// Intent: Multiple evictions when queue is well over capacity still work correctly.
+func TestEnqueueTelemetry_FIFOEviction_MultipleBurst(t *testing.T) {
+	database, err := Open(":memory:")
+	if err != nil {
+		t.Fatalf("open test db: %v", err)
+	}
+	t.Cleanup(func() { database.Close() })
+
+	store := NewStore(database, 3)
+
+	// Fill queue to capacity.
+	for i := 0; i < 3; i++ {
+		id := fmt.Sprintf("burst-%d", i)
+		if err := store.EnqueueTelemetry(id, TelemetryMemoryUsage, `{}`); err != nil {
+			t.Fatalf("EnqueueTelemetry %d: %v", i, err)
+		}
+	}
+
+	// Enqueue 3 more items, causing 3 evictions total.
+	for i := 3; i < 6; i++ {
+		id := fmt.Sprintf("burst-%d", i)
+		if err := store.EnqueueTelemetry(id, TelemetryMemoryUsage, `{}`); err != nil {
+			t.Fatalf("EnqueueTelemetry %d: %v", i, err)
+		}
+	}
+
+	count, err := store.CountPendingTelemetry()
+	if err != nil {
+		t.Fatalf("CountPendingTelemetry: %v", err)
+	}
+	if count != 3 {
+		t.Errorf("expected 3 pending after burst evictions, got %d", count)
+	}
+
+	// Only the last 3 items should remain.
+	items, err := store.DequeueTelemetry(10)
+	if err != nil {
+		t.Fatalf("DequeueTelemetry: %v", err)
+	}
+	if len(items) != 3 {
+		t.Fatalf("expected 3 items, got %d", len(items))
+	}
+	if items[0].ID != "burst-3" {
+		t.Errorf("expected first remaining item %q, got %q", "burst-3", items[0].ID)
+	}
+	if items[2].ID != "burst-5" {
+		t.Errorf("expected last remaining item %q, got %q", "burst-5", items[2].ID)
 	}
 }
 

@@ -41,15 +41,15 @@ public sealed class RegistrationService : Registration.RegistrationBase
     {
         if (string.IsNullOrEmpty(request.SerialNumber))
         {
-            return new SystemRegistrationStatusResponse { Status = RegistrationStatus.UnknownRegistration, ErrorMessage = "Serial number is required" };
+            throw new RpcException(new Status(StatusCode.InvalidArgument, "Serial number is required"));
         }
         else if (string.IsNullOrEmpty(request.SystemId))
         {
-            return new SystemRegistrationStatusResponse { Status = RegistrationStatus.UnknownRegistration, ErrorMessage = "System ID is required" };
+            throw new RpcException(new Status(StatusCode.InvalidArgument, "System ID is required"));
         }
         else if (string.IsNullOrEmpty(request.RegistrationToken))
         {
-            return new SystemRegistrationStatusResponse { Status = RegistrationStatus.UnknownRegistration, ErrorMessage = "Registration token is required" };
+            throw new RpcException(new Status(StatusCode.InvalidArgument, "Registration token is required"));
         }
 
         RegistrationStatus status;
@@ -63,9 +63,8 @@ public sealed class RegistrationService : Registration.RegistrationBase
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error retrieving registration status for Serial Number {SerialNumber} and System ID {SystemId}", request.SerialNumber, request.SystemId);
-            context.Status = new Status(StatusCode.Internal, "Internal server error");
 
-            return new SystemRegistrationStatusResponse { Status = RegistrationStatus.UnknownRegistration, ErrorMessage = "Internal server error" };
+            throw new RpcException(new Status(StatusCode.Internal, "Internal server error"));
         }
 
         return new SystemRegistrationStatusResponse()
@@ -88,23 +87,23 @@ public sealed class RegistrationService : Registration.RegistrationBase
     {
         if (string.IsNullOrEmpty(request.Hostname))
         {
-            return new RegisterSystemResponse { MachineId = 0, ApiKey = string.Empty, ErrorMessage = "Hostname is required" };
+            throw new RpcException(new Status(StatusCode.InvalidArgument, "Hostname is required"));
         }
         else if (string.IsNullOrEmpty(request.SerialNumber))
         {
-            return new RegisterSystemResponse { MachineId = 0, ApiKey = string.Empty, ErrorMessage = "Serial number is required" };
+            throw new RpcException(new Status(StatusCode.InvalidArgument, "Serial number is required"));
         }
         else if (string.IsNullOrEmpty(request.SystemId))
         {
-            return new RegisterSystemResponse { MachineId = 0, ApiKey = string.Empty, ErrorMessage = "System ID is required" };
+            throw new RpcException(new Status(StatusCode.InvalidArgument, "System ID is required"));
         }
         else if ((request.MachineType < MachineType.UnknownType) || (request.MachineType > MachineType.VirtualMachineType))
         {
-            return new RegisterSystemResponse { MachineId = 0, ApiKey = string.Empty, ErrorMessage = "Invalid machine type" };
+            throw new RpcException(new Status(StatusCode.InvalidArgument, "Invalid machine type"));
         }
         else if ((request.Os < FleetManagement.Grpc.AgentRegistration.OperatingSystemType.UnknownOs) || (request.Os > FleetManagement.Grpc.AgentRegistration.OperatingSystemType.RedhatOs))
         {
-            return new RegisterSystemResponse { MachineId = 0, ApiKey = string.Empty, ErrorMessage = "Invalid operating system" };
+            throw new RpcException(new Status(StatusCode.InvalidArgument, "Invalid operating system"));
         }
         else
         {
@@ -117,9 +116,8 @@ public sealed class RegistrationService : Registration.RegistrationBase
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error registering system with Serial Number {SerialNumber} and System ID {SystemId}", request.SerialNumber, request.SystemId);
-                context.Status = new Status(StatusCode.Internal, "Internal server error");
 
-                return new RegisterSystemResponse { MachineId = 0, ApiKey = string.Empty, ErrorMessage = "Internal server error" };
+                throw new RpcException(new Status(StatusCode.Internal, "Internal server error"));
             }
 
             if (result.machineId.HasValue && string.IsNullOrEmpty(result.apiKey) == false)
@@ -133,7 +131,7 @@ public sealed class RegistrationService : Registration.RegistrationBase
             }
             else
             {
-                return new RegisterSystemResponse { MachineId = 0, ApiKey = string.Empty, ErrorMessage = result.errorMessage };
+                throw new RpcException(new Status(StatusCode.InvalidArgument, result.errorMessage));
             }
         }
     }

@@ -101,7 +101,9 @@ public sealed class SubscriptionEndpoint : EndpointWithoutRequest<ApiResponse<Su
         TenantSubscription? subscription = await _subscriptionService.GetSubscriptionForTenantAsync(tenantId.Value, ct);
         if (subscription is null)
         {
-            await Send.NotFoundAsync(ct);
+            HttpContext.Response.StatusCode = 404;
+            await HttpContext.Response.WriteAsJsonAsync(
+                ApiResponse<SubscriptionDto>.Error("Subscription not found"), ct);
 
             return;
         }

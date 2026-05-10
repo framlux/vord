@@ -67,7 +67,9 @@ public sealed class InvitationResendEndpoint : EndpointWithoutRequest<ApiRespons
 
         if (result.IsNotFound)
         {
-            await Send.NotFoundAsync(ct);
+            HttpContext.Response.StatusCode = 404;
+            await HttpContext.Response.WriteAsJsonAsync(
+                ApiResponse<InvitationResponse>.Error("Invitation not found"), ct);
 
             return;
         }

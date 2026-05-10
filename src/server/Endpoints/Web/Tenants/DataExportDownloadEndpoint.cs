@@ -60,7 +60,9 @@ public sealed class DataExportDownloadEndpoint : Endpoint<DataExportDownloadRequ
 
         if (result.IsNotFound)
         {
-            await Send.NotFoundAsync(ct);
+            HttpContext.Response.StatusCode = 404;
+            await HttpContext.Response.WriteAsJsonAsync(
+                ApiResponse<object>.Error("Export not found"), ct);
 
             return;
         }

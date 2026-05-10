@@ -97,7 +97,9 @@ public sealed class DataExportStatusEndpoint : Endpoint<DataExportStatusRequest,
 
         if (result.IsNotFound)
         {
-            await Send.NotFoundAsync(ct);
+            HttpContext.Response.StatusCode = 404;
+            await HttpContext.Response.WriteAsJsonAsync(
+                ApiResponse<DataExportStatusResponse>.Error("Export job not found"), ct);
 
             return;
         }

@@ -39,7 +39,9 @@ public sealed class UpdateAdminSettingsEndpoint : Endpoint<UpdateAdminSettingsRe
     {
         if (_billingStatus.IsEnabled)
         {
-            await Send.NotFoundAsync(ct);
+            HttpContext.Response.StatusCode = 404;
+            await HttpContext.Response.WriteAsJsonAsync(
+                ApiResponse<ServerSettingsDto>.Error("Endpoint not available when billing is enabled"), ct);
 
             return;
         }

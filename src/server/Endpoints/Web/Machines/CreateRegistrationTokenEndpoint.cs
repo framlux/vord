@@ -38,7 +38,9 @@ public sealed class CreateRegistrationTokenEndpoint : Endpoint<CreateRegistratio
         int? tenantId = TenantClaimHelper.GetTenantIdFromClaims(User, HttpContext);
         if (tenantId is null)
         {
-            await Send.NotFoundAsync(ct);
+            HttpContext.Response.StatusCode = 401;
+            await HttpContext.Response.WriteAsJsonAsync(
+                ApiResponse<RegistrationTokenDto>.Error("Unable to identify tenant"), ct);
 
             return;
         }

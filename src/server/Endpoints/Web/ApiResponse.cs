@@ -30,6 +30,12 @@ public class ApiResponse<T>
     public List<string>? Errors { get; set; }
 
     /// <summary>
+    /// Machine-readable error code for programmatic handling by API consumers.
+    /// Only present on error responses. Examples: SUBSCRIPTION_REQUIRED, ALERT_LIMIT_EXCEEDED.
+    /// </summary>
+    public string? ErrorCode { get; set; }
+
+    /// <summary>
     /// Creates a successful response.
     /// </summary>
     public static ApiResponse<T> Ok(T data, string? message = null)
@@ -51,6 +57,20 @@ public class ApiResponse<T>
         {
             Success = false,
             Message = message,
+            Errors = errors
+        };
+    }
+
+    /// <summary>
+    /// Creates an error response with a structured error code.
+    /// </summary>
+    public static ApiResponse<T> Error(string message, string errorCode, List<string>? errors = null)
+    {
+        return new ApiResponse<T>
+        {
+            Success = false,
+            Message = message,
+            ErrorCode = errorCode,
             Errors = errors
         };
     }

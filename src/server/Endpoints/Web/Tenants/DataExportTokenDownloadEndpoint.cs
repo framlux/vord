@@ -67,7 +67,9 @@ public sealed class DataExportTokenDownloadEndpoint : Endpoint<DataExportTokenDo
 
         if (result.IsNotFound)
         {
-            await Send.NotFoundAsync(ct);
+            HttpContext.Response.StatusCode = 404;
+            await HttpContext.Response.WriteAsJsonAsync(
+                ApiResponse<object>.Error("Export not found or token is invalid"), ct);
 
             return;
         }

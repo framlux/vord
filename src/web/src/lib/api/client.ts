@@ -69,6 +69,10 @@ export class ApiClient {
 		this.fetchFn = fetchFn;
 	}
 
+	private static readonly REQUEST_TIMEOUT_MS = 30_000;
+	private static readonly MAX_RETRIES = 3;
+	private static readonly RETRY_BASE_DELAY_MS = 500;
+
 	private async request<T>(method: string, path: string, body?: unknown): Promise<T> {
 		const url = `${this.baseUrl}${path}`;
 		const headers: Record<string, string> = {
@@ -79,36 +83,68 @@ export class ApiClient {
 			headers['Content-Type'] = 'application/json';
 		}
 
-		const response = await this.fetchFn(url, {
-			method,
-			headers,
-			body: body !== undefined ? JSON.stringify(body) : undefined,
-			credentials: 'include'
-		});
+		let lastError: Error | undefined;
+		for (let attempt = 0; attempt < ApiClient.MAX_RETRIES; attempt++) {
+			if (attempt > 0) {
+				const delay = ApiClient.RETRY_BASE_DELAY_MS * Math.pow(2, attempt - 1);
+				await new Promise((resolve) => setTimeout(resolve, delay));
+			}
 
-		if (response.status === 401) {
-			throw new ApiError(401, 'Unauthorized');
-		}
-		if (response.status === 403) {
-			throw new ApiError(403, 'Forbidden');
-		}
-		if (response.status === 404) {
-			throw new ApiError(404, 'Not found');
+			const controller = new AbortController();
+			const timeout = setTimeout(() => controller.abort(), ApiClient.REQUEST_TIMEOUT_MS);
+
+			let response: Response;
+			try {
+				response = await this.fetchFn(url, {
+					method,
+					headers,
+					body: body !== undefined ? JSON.stringify(body) : undefined,
+					credentials: 'include',
+					signal: controller.signal
+				});
+			} catch (e) {
+				clearTimeout(timeout);
+				if (e instanceof DOMException && e.name === 'AbortError') {
+					lastError = new ApiError(0, 'Request timed out');
+					continue;
+				}
+				throw e;
+			} finally {
+				clearTimeout(timeout);
+			}
+
+			if (response.status === 401) {
+				throw new ApiError(401, 'Unauthorized');
+			}
+			if (response.status === 403) {
+				throw new ApiError(403, 'Forbidden');
+			}
+			if (response.status === 404) {
+				throw new ApiError(404, 'Not found');
+			}
+
+			// Retry only on 5xx server errors
+			if (response.status >= 500) {
+				lastError = new ApiError(response.status, `Server error (${response.status})`);
+				continue;
+			}
+
+			let json: unknown;
+			try {
+				json = await response.json();
+			} catch {
+				throw new ApiError(response.status, `Request failed with status ${response.status} (${response.statusText})`);
+			}
+
+			if (response.ok === false) {
+				const apiResp = json as ApiResponse<unknown>;
+				throw new ApiError(response.status, apiResp?.message ?? 'Request failed');
+			}
+
+			return json as T;
 		}
 
-		let json: unknown;
-		try {
-			json = await response.json();
-		} catch {
-			throw new ApiError(response.status, `Request failed with status ${response.status} (${response.statusText})`);
-		}
-
-		if (response.ok === false) {
-			const apiResp = json as ApiResponse<unknown>;
-			throw new ApiError(response.status, apiResp?.message ?? 'Request failed');
-		}
-
-		return json as T;
+		throw lastError ?? new ApiError(0, 'Request failed after retries');
 	}
 
 	private async get<T>(path: string): Promise<T> {
