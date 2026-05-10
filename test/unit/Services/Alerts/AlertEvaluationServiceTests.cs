@@ -973,6 +973,9 @@ public sealed class AlertEvaluationServiceTests
         Machine machine = TestDataBuilder.BuildMachine(tenantId: tenant.Id);
         machine.Id = await db.InsertWithInt64IdentityAsync(machine);
 
+        // Assign machine to rule so evaluation processes it
+        await db.InsertAsync(new AlertRuleMachine { AlertRuleId = rule.Id, MachineId = machine.Id, CreatedAt = DateTimeOffset.UtcNow });
+
         MachineStateSummary machineState = TestDataBuilder.BuildMachineStateSummary(machineId: machine.Id, cpuPercent: 95);
         await db.InsertAsync(machineState);
 
@@ -1014,6 +1017,10 @@ public sealed class AlertEvaluationServiceTests
         machine1.Id = await db.InsertWithInt64IdentityAsync(machine1);
         Machine machine2 = TestDataBuilder.BuildMachine(tenantId: tenant2.Id);
         machine2.Id = await db.InsertWithInt64IdentityAsync(machine2);
+
+        // Assign machines to their respective rules
+        await db.InsertAsync(new AlertRuleMachine { AlertRuleId = rule1.Id, MachineId = machine1.Id, CreatedAt = DateTimeOffset.UtcNow });
+        await db.InsertAsync(new AlertRuleMachine { AlertRuleId = rule2.Id, MachineId = machine2.Id, CreatedAt = DateTimeOffset.UtcNow });
 
         // Tenant 1: machine breaches CPU
         await db.InsertAsync(TestDataBuilder.BuildMachineStateSummary(machineId: machine1.Id, tenantId: tenant1.Id, cpuPercent: 95));

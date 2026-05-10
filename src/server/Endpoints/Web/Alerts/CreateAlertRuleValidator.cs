@@ -59,6 +59,10 @@ public sealed class CreateAlertRuleValidator : Validator<CreateAlertRuleRequest>
             .GreaterThanOrEqualTo(0)
             .WithMessage("Threshold must be zero or positive")
             .When(x => (IsPercentageMetric(x.Metric) == false) && (IsBinaryMetric(x.Metric) == false));
+
+        RuleFor(x => x.MachineIds)
+            .NotEmpty()
+            .WithMessage("At least one machine must be selected");
     }
 
     private static bool IsPercentageMetric(string? metric)

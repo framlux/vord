@@ -95,6 +95,11 @@ public sealed class DatabaseContext(DataOptions<DatabaseContext> options) : Data
     public ITable<AlertEvent> AlertEvents => this.GetTable<AlertEvent>();
 
     /// <summary>
+    /// Represents the collection of alert rule machine associations for scoping rules to specific machines.
+    /// </summary>
+    public ITable<AlertRuleMachine> AlertRuleMachines => this.GetTable<AlertRuleMachine>();
+
+    /// <summary>
     /// Represents the collection of webhook endpoints in the database.
     /// </summary>
     public ITable<WebhookEndpoint> WebhookEndpoints => this.GetTable<WebhookEndpoint>();

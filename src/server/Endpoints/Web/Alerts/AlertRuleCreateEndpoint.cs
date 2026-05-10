@@ -19,15 +19,21 @@ namespace Framlux.FleetManagement.Server.Endpoints.Web.Alerts;
 public sealed class AlertRuleCreateEndpoint : Endpoint<CreateAlertRuleRequest, ApiResponse<AlertRuleDto>>
 {
     private readonly IAlertRuleRepository _alertRuleRepo;
+    private readonly IMachineRepository _machineRepo;
     private readonly ISubscriptionService _subscriptionService;
     private readonly IAuditLogRepository _auditLog;
 
     /// <summary>
     /// Creates a new instance of the <see cref="AlertRuleCreateEndpoint"/> class.
     /// </summary>
-    public AlertRuleCreateEndpoint(IAlertRuleRepository alertRuleRepo, ISubscriptionService subscriptionService, IAuditLogRepository auditLog)
+    public AlertRuleCreateEndpoint(
+        IAlertRuleRepository alertRuleRepo,
+        IMachineRepository machineRepo,
+        ISubscriptionService subscriptionService,
+        IAuditLogRepository auditLog)
     {
         _alertRuleRepo = alertRuleRepo;
+        _machineRepo = machineRepo;
         _subscriptionService = subscriptionService;
         _auditLog = auditLog;
     }
@@ -139,6 +145,19 @@ public sealed class AlertRuleCreateEndpoint : Endpoint<CreateAlertRuleRequest, A
 
         rule = await _alertRuleRepo.CreateAlertRuleAsync(rule, ct);
 
+        // Validate machine IDs belong to this tenant
+        List<long> validMachineIds = await _machineRepo.GetActiveMachineIdsForTenantAsync(tenantId.Value, req.MachineIds, ct);
+        if (validMachineIds.Count != req.MachineIds.Distinct().Count())
+        {
+            HttpContext.Response.StatusCode = 400;
+            await HttpContext.Response.WriteAsJsonAsync(
+                ApiResponse<AlertRuleDto>.Error("One or more machine IDs are invalid or do not belong to this tenant"), ct);
+
+            return;
+        }
+
+        await _alertRuleRepo.SetMachinesForRuleAsync(rule.Id, req.MachineIds, ct);
+
         await _auditLog.InsertAuditLogAsync(AuditHelper.Create(
             tenantId.Value, userId.Value, null,
             AuditAction.AlertRuleCreated, AuditResourceType.AlertRule,
@@ -158,6 +177,7 @@ public sealed class AlertRuleCreateEndpoint : Endpoint<CreateAlertRuleRequest, A
             NotifyEmail = rule.NotifyEmail,
             NotifyWebhook = rule.NotifyWebhook,
             IsCustom = rule.IsCustom,
+            MachineIds = req.MachineIds,
         };
 
         await Send.OkAsync(ApiResponse<AlertRuleDto>.Ok(dto, "Alert rule created"), cancellation: ct);

@@ -81,4 +81,6 @@ public enum AuditAction : short
     WebhookSecretRotated = 113,
     /// <summary>An alert event was acknowledged.</summary>
     AlertEventAcknowledged = 120,
+    /// <summary>The alert rules assigned to a machine were updated.</summary>
+    MachineAlertRulesUpdated = 130,
 }

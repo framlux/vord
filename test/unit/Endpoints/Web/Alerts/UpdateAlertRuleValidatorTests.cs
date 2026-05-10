@@ -26,6 +26,7 @@ public sealed class UpdateAlertRuleValidatorTests
             IsEnabled = true,
             NotifyEmail = true,
             NotifyWebhook = false,
+            MachineIds = [1L],
         };
     }
 

@@ -33,4 +33,7 @@ public sealed class CreateAlertRuleRequest
 
     /// <summary>Whether webhook notifications are enabled.</summary>
     public bool NotifyWebhook { get; set; }
+
+    /// <summary>The machine IDs this rule should evaluate against.</summary>
+    public long[] MachineIds { get; set; } = [];
 }

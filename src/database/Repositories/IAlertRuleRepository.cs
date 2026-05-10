@@ -120,4 +120,54 @@ public interface IAlertRuleRepository
     /// <param name="rules">The alert rules to insert.</param>
     /// <param name="cancellationToken">A cancellation token.</param>
     Task InsertAlertRulesAsync(IEnumerable<AlertRule> rules, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Returns the machine IDs assigned to each of the specified alert rules.
+    /// </summary>
+    /// <param name="ruleIds">The alert rule IDs to query.</param>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    Task<Dictionary<int, List<long>>> GetMachineIdsForRulesAsync(List<int> ruleIds, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Returns the machine IDs assigned to a single alert rule.
+    /// </summary>
+    /// <param name="ruleId">The alert rule ID.</param>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    Task<List<long>> GetMachineIdsForRuleAsync(int ruleId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Replaces the set of machines assigned to an alert rule. Existing assignments are deleted
+    /// and the provided machine IDs are inserted (deduplicated).
+    /// </summary>
+    /// <param name="ruleId">The alert rule ID.</param>
+    /// <param name="machineIds">The machine IDs to assign.</param>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    Task SetMachinesForRuleAsync(int ruleId, IReadOnlyList<long> machineIds, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Returns the alert rule IDs assigned to a machine within a specific tenant.
+    /// </summary>
+    /// <param name="machineId">The machine ID.</param>
+    /// <param name="tenantId">The tenant ID.</param>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    Task<List<int>> GetRuleIdsForMachineAsync(long machineId, int tenantId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Replaces the set of alert rules assigned to a machine within a tenant. Existing
+    /// assignments for the machine within the tenant are deleted and the provided rule IDs
+    /// are inserted (deduplicated).
+    /// </summary>
+    /// <param name="machineId">The machine ID.</param>
+    /// <param name="tenantId">The tenant ID.</param>
+    /// <param name="ruleIds">The rule IDs to assign.</param>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    Task SetRulesForMachineAsync(long machineId, int tenantId, IReadOnlyList<int> ruleIds, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Removes all machine assignments for a given machine across all rules.
+    /// Returns the number of rows deleted.
+    /// </summary>
+    /// <param name="machineId">The machine ID.</param>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    Task<int> RemoveAllMachineAssignmentsAsync(long machineId, CancellationToken cancellationToken = default);
 }

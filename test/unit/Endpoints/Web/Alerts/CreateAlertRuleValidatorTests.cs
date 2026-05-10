@@ -27,6 +27,7 @@ public sealed class CreateAlertRuleValidatorTests
             Severity = "Warning",
             NotifyEmail = true,
             NotifyWebhook = false,
+            MachineIds = [1L],
         };
     }
 

@@ -506,6 +506,18 @@ export class ApiClient {
 		this.unwrap(resp);
 	}
 
+	async getMachineAlertRules(machineId: number): Promise<AlertRuleDto[]> {
+		const resp = await this.get<ApiResponse<AlertRuleDto[]>>(`/api/v1/machines/${machineId}/alert-rules`);
+
+		return this.unwrap(resp);
+	}
+
+	async updateMachineAlertRules(machineId: number, ruleIds: number[]): Promise<{ machineId: number; ruleIds: number[] }> {
+		const resp = await this.put<ApiResponse<{ machineId: number; ruleIds: number[] }>>(`/api/v1/machines/${machineId}/alert-rules`, { ruleIds });
+
+		return this.unwrap(resp);
+	}
+
 	// Alert Events
 	async getAlertEvents(params?: {
 		page?: number;

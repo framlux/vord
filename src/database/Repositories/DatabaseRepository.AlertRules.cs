@@ -6,6 +6,7 @@ using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using LinqToDB;
 using LinqToDB.Async;
+using LinqToDB.Data;
 using Microsoft.Extensions.Logging;
 
 namespace Framlux.FleetManagement.Database.Repositories;
@@ -171,5 +172,132 @@ public partial class DatabaseRepository : IAlertRuleRepository
         }
 
         _logger.LogDebug("Inserted batch of alert rules");
+    }
+
+    /// <inheritdoc/>
+    public async Task<Dictionary<int, List<long>>> GetMachineIdsForRulesAsync(List<int> ruleIds, CancellationToken cancellationToken)
+    {
+        Dictionary<int, List<long>> result = ruleIds.ToDictionary(id => id, _ => new List<long>());
+
+        if (ruleIds.Count == 0)
+        {
+            return result;
+        }
+
+        List<AlertRuleMachine> assignments = await _db.AlertRuleMachines
+            .Where(arm => ruleIds.Contains(arm.AlertRuleId))
+            .ToListAsync(cancellationToken);
+
+        foreach (AlertRuleMachine assignment in assignments)
+        {
+            result[assignment.AlertRuleId].Add(assignment.MachineId);
+        }
+
+        return result;
+    }
+
+    /// <inheritdoc/>
+    public async Task<List<long>> GetMachineIdsForRuleAsync(int ruleId, CancellationToken cancellationToken)
+    {
+        List<long> machineIds = await _db.AlertRuleMachines
+            .Where(arm => arm.AlertRuleId == ruleId)
+            .Select(arm => arm.MachineId)
+            .ToListAsync(cancellationToken);
+
+        return machineIds;
+    }
+
+    /// <inheritdoc/>
+    public async Task SetMachinesForRuleAsync(int ruleId, IReadOnlyList<long> machineIds, CancellationToken cancellationToken)
+    {
+        await _db.AlertRuleMachines
+            .Where(arm => arm.AlertRuleId == ruleId)
+            .DeleteAsync(cancellationToken);
+
+        List<long> distinctMachineIds = machineIds.Distinct().ToList();
+
+        if (distinctMachineIds.Count > 0)
+        {
+            DateTimeOffset now = DateTimeOffset.UtcNow;
+            List<AlertRuleMachine> assignments = distinctMachineIds
+                .Select(machineId => new AlertRuleMachine
+                {
+                    AlertRuleId = ruleId,
+                    MachineId = machineId,
+                    CreatedAt = now
+                })
+                .ToList();
+
+            await _db.BulkCopyAsync(new BulkCopyOptions { BulkCopyType = BulkCopyType.MultipleRows }, assignments, cancellationToken);
+        }
+
+        _logger.LogDebug(
+            "Set {Count} machine assignments for alert rule {AlertRuleId}",
+            distinctMachineIds.Count, ruleId);
+    }
+
+    /// <inheritdoc/>
+    public async Task<List<int>> GetRuleIdsForMachineAsync(long machineId, int tenantId, CancellationToken cancellationToken)
+    {
+        List<int> ruleIds = await (from arm in _db.AlertRuleMachines
+                                   join ar in _db.AlertRules on arm.AlertRuleId equals ar.Id
+                                   where arm.MachineId == machineId && ar.TenantId == tenantId
+                                   select arm.AlertRuleId)
+            .ToListAsync(cancellationToken);
+
+        return ruleIds;
+    }
+
+    /// <inheritdoc/>
+    public async Task SetRulesForMachineAsync(long machineId, int tenantId, IReadOnlyList<int> ruleIds, CancellationToken cancellationToken)
+    {
+        // Get existing rule IDs for this machine within the tenant
+        List<int> existingRuleIds = await GetRuleIdsForMachineAsync(machineId, tenantId, cancellationToken);
+
+        // Delete existing assignments for this machine within the tenant
+        if (existingRuleIds.Count > 0)
+        {
+            await _db.AlertRuleMachines
+                .Where(arm => (arm.MachineId == machineId) && existingRuleIds.Contains(arm.AlertRuleId))
+                .DeleteAsync(cancellationToken);
+        }
+
+        List<int> distinctRuleIds = ruleIds.Distinct().ToList();
+
+        if (distinctRuleIds.Count > 0)
+        {
+            DateTimeOffset now = DateTimeOffset.UtcNow;
+            List<AlertRuleMachine> assignments = distinctRuleIds
+                .Select(ruleId => new AlertRuleMachine
+                {
+                    AlertRuleId = ruleId,
+                    MachineId = machineId,
+                    CreatedAt = now
+                })
+                .ToList();
+
+            await _db.BulkCopyAsync(new BulkCopyOptions { BulkCopyType = BulkCopyType.MultipleRows }, assignments, cancellationToken);
+        }
+
+        _logger.LogDebug(
+            "Set {Count} rule assignments for machine {MachineId} in tenant {TenantId}",
+            distinctRuleIds.Count, machineId, tenantId);
+    }
+
+    /// <inheritdoc/>
+    public async Task<int> RemoveAllMachineAssignmentsAsync(long machineId, CancellationToken cancellationToken)
+    {
+        int deleted = await _db.AlertRuleMachines
+            .Where(arm => arm.MachineId == machineId)
+            .DeleteAsync(cancellationToken);
+
+        if (deleted > 0)
+        {
+            _logger.LogInformation(
+                "Removed {Count} alert rule machine assignments for machine {MachineId}",
+                deleted, machineId);
+        }
+
+        return deleted;
     }
 }

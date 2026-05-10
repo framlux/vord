@@ -448,6 +448,11 @@ export interface FleetSshSessionDto {
 }
 
 // Alert Rules
+export interface AlertRuleMachineDto {
+	id: number;
+	name: string;
+}
+
 export interface AlertRuleDto {
 	id: number;
 	name: string;
@@ -461,6 +466,8 @@ export interface AlertRuleDto {
 	notifyEmail: boolean;
 	notifyWebhook: boolean;
 	isCustom: boolean;
+	machineIds: number[];
+	machines: AlertRuleMachineDto[];
 }
 
 export interface AlertEventDto {
@@ -496,6 +503,7 @@ export interface CreateAlertRuleRequest {
 	severity: string;
 	notifyEmail: boolean;
 	notifyWebhook: boolean;
+	machineIds: number[];
 }
 
 export interface UpdateAlertRuleRequest {
@@ -507,6 +515,7 @@ export interface UpdateAlertRuleRequest {
 	isEnabled: boolean;
 	notifyEmail: boolean;
 	notifyWebhook: boolean;
+	machineIds: number[];
 }
 
 export interface CreateWebhookRequest {

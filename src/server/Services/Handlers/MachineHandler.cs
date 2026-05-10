@@ -22,6 +22,7 @@ public sealed class MachineHandler : IMachineHandler
     private readonly IMachineRepository _machineRepo;
     private readonly IMachineStateRepository _machineStateRepo;
     private readonly ITenantRepository _tenantRepo;
+    private readonly IAlertRuleRepository _alertRuleRepo;
     private readonly IDatabaseTransactionProvider _transactionProvider;
     private readonly IAuditLogRepository _auditLog;
     private readonly IMachinePingService _pingService;
@@ -37,6 +38,7 @@ public sealed class MachineHandler : IMachineHandler
         IMachineRepository machineRepo,
         IMachineStateRepository machineStateRepo,
         ITenantRepository tenantRepo,
+        IAlertRuleRepository alertRuleRepo,
         IDatabaseTransactionProvider transactionProvider,
         IAuditLogRepository auditLog,
         IMachinePingService pingService,
@@ -48,6 +50,7 @@ public sealed class MachineHandler : IMachineHandler
         ArgumentNullException.ThrowIfNull(machineRepo);
         ArgumentNullException.ThrowIfNull(machineStateRepo);
         ArgumentNullException.ThrowIfNull(tenantRepo);
+        ArgumentNullException.ThrowIfNull(alertRuleRepo);
         ArgumentNullException.ThrowIfNull(transactionProvider);
         ArgumentNullException.ThrowIfNull(auditLog);
         ArgumentNullException.ThrowIfNull(pingService);
@@ -59,6 +62,7 @@ public sealed class MachineHandler : IMachineHandler
         _machineRepo = machineRepo;
         _machineStateRepo = machineStateRepo;
         _tenantRepo = tenantRepo;
+        _alertRuleRepo = alertRuleRepo;
         _transactionProvider = transactionProvider;
         _auditLog = auditLog;
         _pingService = pingService;
@@ -77,6 +81,15 @@ public sealed class MachineHandler : IMachineHandler
         }
 
         using IDatabaseTransaction transaction = await _transactionProvider.BeginTransactionAsync(ct);
+
+        // Remove alert rule machine assignments before deletion
+        int removedAssignments = await _alertRuleRepo.RemoveAllMachineAssignmentsAsync(machineId, ct);
+        if (removedAssignments > 0)
+        {
+            _logger.LogInformation(
+                "Removed {Count} alert rule assignments for machine {MachineId} during deletion",
+                removedAssignments, machineId);
+        }
 
         int updated = await _machineRepo.SoftDeleteMachineAsync(machineId, tenantId.Value, userId, ct);
 

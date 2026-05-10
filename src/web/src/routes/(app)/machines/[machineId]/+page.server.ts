@@ -4,8 +4,8 @@
 
 import { createServerApiClient } from '$lib/api/server';
 import { ApiError } from '$lib/api/client';
-import { redirect, error } from '@sveltejs/kit';
-import type { PageServerLoad } from './$types';
+import { redirect, error, fail } from '@sveltejs/kit';
+import type { PageServerLoad, Actions } from './$types';
 
 export const load: PageServerLoad = async ({ fetch, cookies, params }) => {
 	const api = createServerApiClient(fetch, cookies.get('vord_auth'), cookies.get('vord_tenant'));
@@ -25,7 +25,17 @@ export const load: PageServerLoad = async ({ fetch, cookies, params }) => {
 			authorizedKeys = await api.getMachineAuthorizedKeys(id);
 		} catch { /* Authorized keys may not be available */ }
 
-		return { machine, machineDetail, authorizedKeys };
+		let machineAlertRules = [];
+		try {
+			machineAlertRules = await api.getMachineAlertRules(id);
+		} catch { /* Alert rules may not be available */ }
+
+		let allAlertRules = [];
+		try {
+			allAlertRules = await api.getAlertRules();
+		} catch { /* Alert rules may not be available */ }
+
+		return { machine, machineDetail, authorizedKeys, machineAlertRules, allAlertRules };
 	} catch (e) {
 		if (e instanceof ApiError) {
 			if (e.status === 401) redirect(302, '/auth/login');
@@ -33,5 +43,31 @@ export const load: PageServerLoad = async ({ fetch, cookies, params }) => {
 			if (e.status === 404) error(404, 'Machine not found');
 		}
 		throw e;
+	}
+};
+
+export const actions: Actions = {
+	updateAlertRules: async ({ fetch, cookies, request, params }) => {
+		const api = createServerApiClient(fetch, cookies.get('vord_auth'), cookies.get('vord_tenant'));
+		const id = Number(params.machineId);
+		if (isNaN(id)) {
+			return fail(400, { message: 'Invalid machine ID' });
+		}
+
+		const formData = await request.formData();
+		const ruleIds = formData.getAll('ruleIds')
+			.map((v) => parseInt(v as string))
+			.filter((v) => Number.isNaN(v) === false);
+
+		try {
+			await api.updateMachineAlertRules(id, ruleIds);
+		} catch (e) {
+			if (e instanceof ApiError) {
+				return fail(e.status, { message: e.message });
+			}
+			throw e;
+		}
+
+		return { success: true };
 	}
 };

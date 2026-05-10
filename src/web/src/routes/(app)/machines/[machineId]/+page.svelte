@@ -11,7 +11,8 @@
 		MachineDetailDto,
 		MachineAuthorizedKeyDto,
 		CommandDto,
-		SigningKeyDto
+		SigningKeyDto,
+		AlertRuleDto
 	} from '$lib/api/types';
 	import { MachineHealthStatus } from '$lib/api/types';
 	import { ApiClient } from '$lib/api/client';
@@ -21,8 +22,9 @@
 	import HealthBadge from '$lib/components/HealthBadge.svelte';
 	import MachineHero from '$lib/components/machine/MachineHero.svelte';
 	import VitalsBar from '$lib/components/machine/VitalsBar.svelte';
-	import { CircleAlert, Terminal, Pencil, History } from 'lucide-svelte';
+	import { CircleAlert, Terminal, Pencil, History, ShieldAlert } from 'lucide-svelte';
 	import { invalidateAll } from '$app/navigation';
+	import { enhance } from '$app/forms';
 	import { canAdminMachines } from '$lib/utils/roles';
 	import {
 		generateNonce,
@@ -446,6 +448,39 @@
 			});
 		}
 	});
+
+	// Alert Rules state
+	const machineAlertRules: AlertRuleDto[] = $derived(data.machineAlertRules ?? []);
+	const allAlertRules: AlertRuleDto[] = $derived(data.allAlertRules ?? []);
+	let showAlertRulesModal = $state(false);
+	let alertRulesError = $state('');
+
+	const assignedRuleIds = $derived(new Set(machineAlertRules.map((r) => r.id)));
+
+	function getSeverityBadgeClasses(severity: string): string {
+		switch (severity.toLowerCase()) {
+			case 'critical':
+				return 'bg-red-100 text-red-800 dark:bg-red-900/30 dark:text-red-400';
+			case 'warning':
+				return 'bg-amber-100 text-amber-800 dark:bg-amber-900/30 dark:text-amber-400';
+			case 'info':
+				return 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400';
+			default:
+				return 'bg-surface-100 text-surface-800 dark:bg-surface-700 dark:text-surface-300';
+		}
+	}
+
+	function formatOperator(operator: string): string {
+		switch (operator) {
+			case 'gt': return '>';
+			case 'gte': return '>=';
+			case 'lt': return '<';
+			case 'lte': return '<=';
+			case 'eq': return '=';
+			case 'neq': return '!=';
+			default: return operator;
+		}
+	}
 
 </script>
 
@@ -1322,4 +1357,175 @@
 		{/if}
 	{/if}
 	</div>
+
+	<!-- Alert Rules Section -->
+	<div class="rounded-xl border border-surface-200 bg-surface-50 p-4 sm:p-5 dark:border-surface-700 dark:bg-surface-800">
+		<div class="mb-4 flex items-center justify-between">
+			<div class="flex items-center gap-2">
+				<ShieldAlert size={18} class="text-surface-500 dark:text-surface-400" />
+				<h3 class="text-xs font-semibold uppercase tracking-wider text-surface-400 dark:text-surface-500">Alert Rules</h3>
+			</div>
+			{#if canAdminMachines(data.user)}
+				<button
+					onclick={() => { showAlertRulesModal = true; alertRulesError = ''; }}
+					class="inline-flex items-center gap-1.5 rounded-lg border border-surface-200 bg-surface-50 px-3 py-1.5 text-sm font-medium text-surface-700 transition hover:bg-surface-100 dark:border-surface-700 dark:bg-surface-800 dark:text-surface-300 dark:hover:bg-surface-700"
+				>
+					Manage Rules
+				</button>
+			{/if}
+		</div>
+
+		{#if machineAlertRules.length === 0}
+			<p class="py-4 text-center text-sm text-surface-500 dark:text-surface-400">
+				No alert rules are assigned to this machine.
+			</p>
+		{:else}
+			<div class="overflow-x-auto">
+				<table class="w-full text-left text-sm">
+					<thead>
+						<tr class="border-b border-surface-200 dark:border-surface-700">
+							<th scope="col" class="pb-2 pr-4 text-xs font-semibold uppercase tracking-wider text-surface-500 dark:text-surface-400">Rule Name</th>
+							<th scope="col" class="pb-2 pr-4 text-xs font-semibold uppercase tracking-wider text-surface-500 dark:text-surface-400">Metric</th>
+							<th scope="col" class="pb-2 pr-4 text-xs font-semibold uppercase tracking-wider text-surface-500 dark:text-surface-400">Condition</th>
+							<th scope="col" class="pb-2 pr-4 text-xs font-semibold uppercase tracking-wider text-surface-500 dark:text-surface-400">Severity</th>
+							<th scope="col" class="pb-2 text-xs font-semibold uppercase tracking-wider text-surface-500 dark:text-surface-400">Status</th>
+						</tr>
+					</thead>
+					<tbody class="divide-y divide-surface-100 dark:divide-surface-700">
+						{#each machineAlertRules as rule (rule.id)}
+							<tr class="hover:bg-surface-50 dark:hover:bg-surface-700/50">
+								<td class="py-2.5 pr-4 font-medium text-surface-900 dark:text-surface-100">{rule.name}</td>
+								<td class="py-2.5 pr-4 font-mono text-xs text-surface-600 dark:text-surface-400">{rule.metric}</td>
+								<td class="py-2.5 pr-4 text-xs text-surface-600 dark:text-surface-400">
+									{formatOperator(rule.operator)} {rule.threshold}
+									{#if rule.durationMinutes > 0}
+										<span class="text-surface-400"> for {rule.durationMinutes}m</span>
+									{/if}
+								</td>
+								<td class="py-2.5 pr-4">
+									<span class="inline-flex rounded-full px-2 py-0.5 text-xs font-medium {getSeverityBadgeClasses(rule.severity)}">
+										{rule.severity}
+									</span>
+								</td>
+								<td class="py-2.5">
+									{#if rule.isEnabled}
+										<span class="inline-flex rounded-full px-2 py-0.5 text-xs font-medium bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400">
+											Enabled
+										</span>
+									{:else}
+										<span class="inline-flex rounded-full px-2 py-0.5 text-xs font-medium bg-surface-100 text-surface-600 dark:bg-surface-700 dark:text-surface-400">
+											Disabled
+										</span>
+									{/if}
+								</td>
+							</tr>
+						{/each}
+					</tbody>
+				</table>
+			</div>
+		{/if}
+	</div>
 </div>
+
+<!-- Alert Rules Management Modal -->
+{#if showAlertRulesModal}
+	<!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+	<!-- svelte-ignore a11y_interactive_supports_focus -->
+	<div
+		class="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
+		role="dialog"
+		aria-modal="true"
+		aria-labelledby="alert-rules-modal-title"
+		onkeydown={(e) => { if (e.key === 'Escape') showAlertRulesModal = false; }}
+	>
+		<div class="mx-4 w-full max-w-lg rounded-xl border border-surface-200 bg-white p-6 shadow-xl dark:border-surface-700 dark:bg-surface-800">
+			<div class="mb-4 flex items-center justify-between">
+				<h2 id="alert-rules-modal-title" class="text-lg font-semibold text-surface-900 dark:text-surface-50">Manage Alert Rules</h2>
+				<button
+					onclick={() => { showAlertRulesModal = false; }}
+					class="rounded p-1 text-surface-400 transition hover:bg-surface-200 hover:text-surface-600 dark:hover:bg-surface-700 dark:hover:text-surface-300"
+					aria-label="Close"
+				>
+					<svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+				</button>
+			</div>
+
+			<p class="mb-4 text-sm text-surface-500 dark:text-surface-400">
+				Select which alert rules should apply to this machine.
+			</p>
+
+			{#if alertRulesError}
+				<p class="mb-4 text-sm text-red-600 dark:text-red-400" role="alert">{alertRulesError}</p>
+			{/if}
+
+			<form
+				method="POST"
+				action="?/updateAlertRules"
+				use:enhance={() => {
+					return async ({ result, update }) => {
+						if (result.type === 'failure') {
+							alertRulesError = (result.data as { message?: string })?.message ?? 'An error occurred';
+						} else {
+							showAlertRulesModal = false;
+							alertRulesError = '';
+							await update();
+						}
+					};
+				}}
+			>
+				{#if allAlertRules.length === 0}
+					<p class="py-4 text-center text-sm text-surface-500 dark:text-surface-400">
+						No alert rules have been created for this tenant. Create rules in Settings to assign them here.
+					</p>
+				{:else}
+					<div class="max-h-80 space-y-2 overflow-y-auto">
+						{#each allAlertRules as rule (rule.id)}
+							<label class="flex cursor-pointer items-start gap-3 rounded-lg border border-surface-200 p-3 transition hover:bg-surface-50 dark:border-surface-700 dark:hover:bg-surface-700/50">
+								<input
+									type="checkbox"
+									name="ruleIds"
+									value={rule.id}
+									checked={assignedRuleIds.has(rule.id)}
+									class="mt-0.5 h-4 w-4 rounded border-surface-300 text-primary-600 focus:ring-primary-500 dark:border-surface-600"
+								/>
+								<div class="flex-1">
+									<div class="flex items-center gap-2">
+										<span class="text-sm font-medium text-surface-900 dark:text-surface-100">{rule.name}</span>
+										<span class="inline-flex rounded-full px-2 py-0.5 text-xs font-medium {getSeverityBadgeClasses(rule.severity)}">
+											{rule.severity}
+										</span>
+										{#if rule.isEnabled === false}
+											<span class="text-xs text-surface-400">(disabled)</span>
+										{/if}
+									</div>
+									<p class="mt-0.5 text-xs text-surface-500 dark:text-surface-400">
+										{rule.metric} {formatOperator(rule.operator)} {rule.threshold}
+										{#if rule.durationMinutes > 0}
+											for {rule.durationMinutes}m
+										{/if}
+									</p>
+								</div>
+							</label>
+						{/each}
+					</div>
+				{/if}
+
+				<div class="mt-4 flex justify-end gap-2 border-t border-surface-200 pt-4 dark:border-surface-700">
+					<button
+						type="button"
+						onclick={() => { showAlertRulesModal = false; }}
+						class="rounded-md border border-surface-300 px-4 py-2 text-sm text-surface-700 transition hover:bg-surface-100 dark:border-surface-600 dark:text-surface-300 dark:hover:bg-surface-700"
+					>
+						Cancel
+					</button>
+					<button
+						type="submit"
+						class="rounded-md bg-primary-500 px-4 py-2 text-sm font-medium text-white transition hover:bg-primary-600"
+					>
+						Save
+					</button>
+				</div>
+			</form>
+		</div>
+	</div>
+{/if}

@@ -419,4 +419,37 @@ public partial class DatabaseRepository : IMachineRepository
 
         return counts;
     }
+
+    /// <inheritdoc/>
+    public async Task<List<long>> GetActiveMachineIdsForTenantAsync(int tenantId, IReadOnlyList<long> machineIds, CancellationToken cancellationToken)
+    {
+        if (machineIds.Count == 0)
+        {
+            return new List<long>();
+        }
+
+        List<long> activeMachineIds = await _db.Machines
+            .Where(m => (m.TenantId == tenantId) &&
+                        (m.IsDeleted == false) &&
+                        machineIds.Contains(m.Id))
+            .Select(m => m.Id)
+            .ToListAsync(cancellationToken);
+
+        return activeMachineIds;
+    }
+
+    /// <inheritdoc/>
+    public async Task<Dictionary<long, string>> GetMachineNamesAsync(IReadOnlyList<long> machineIds, CancellationToken cancellationToken)
+    {
+        if (machineIds.Count == 0)
+        {
+            return new Dictionary<long, string>();
+        }
+
+        Dictionary<long, string> nameMap = await _db.Machines
+            .Where(m => machineIds.Contains(m.Id))
+            .ToDictionaryAsync(m => m.Id, m => m.Name, cancellationToken);
+
+        return nameMap;
+    }
 }

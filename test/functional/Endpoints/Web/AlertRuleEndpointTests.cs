@@ -19,7 +19,7 @@ namespace Framlux.FleetManagement.FunctionalTest.Endpoints.Web;
 /// </summary>
 public sealed class AlertRuleEndpointTests
 {
-    private static async Task<(int TenantId, int UserId)> SeedAlertEnvironment(
+    private static async Task<(int TenantId, int UserId, long MachineId)> SeedAlertEnvironment(
         DatabaseContext db,
         SubscriptionTier tier = SubscriptionTier.Team)
     {
@@ -67,7 +67,22 @@ public sealed class AlertRuleEndpointTests
         };
         await db.InsertAsync(role);
 
-        return (tenant.Id, user.Id);
+        Machine machine = new()
+        {
+            TenantId = tenant.Id,
+            Name = $"test-machine-{Guid.NewGuid():N}",
+            ApiKeyHash = Guid.NewGuid().ToString("N").PadLeft(64, '0'),
+            SerialNumber = $"sn-{Guid.NewGuid():N}",
+            SystemId = $"sid-{Guid.NewGuid():N}",
+            MachineType = MachineTypes.VirtualMachine,
+            OperatingSystem = OperatingSystems.Ubuntu,
+            RegistrationTokenId = 0,
+            RegisteredOn = DateTimeOffset.UtcNow,
+            IsDeleted = false,
+        };
+        machine.Id = await db.InsertWithInt64IdentityAsync(machine);
+
+        return (tenant.Id, user.Id, machine.Id);
     }
 
     private static HttpClient BuildClient(
@@ -99,6 +114,7 @@ public sealed class AlertRuleEndpointTests
             Threshold = 80,
             DurationMinutes = 0,
             Severity = "Warning",
+            MachineIds = new long[] { 1 },
         });
 
         await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.Forbidden);
@@ -109,7 +125,7 @@ public sealed class AlertRuleEndpointTests
     {
         using FunctionalTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
-        (int tenantId, int userId) = await SeedAlertEnvironment(db, SubscriptionTier.Free);
+        (int tenantId, int userId, long machineId) = await SeedAlertEnvironment(db, SubscriptionTier.Free);
         HttpClient client = BuildClient(factory, tenantId, userId);
 
         HttpResponseMessage response = await client.PostAsJsonAsync("/api/v1/alert-rules", new
@@ -120,6 +136,7 @@ public sealed class AlertRuleEndpointTests
             Threshold = 80,
             DurationMinutes = 0,
             Severity = "Warning",
+            MachineIds = new long[] { machineId },
         });
 
         await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.Forbidden);
@@ -132,7 +149,7 @@ public sealed class AlertRuleEndpointTests
     {
         using FunctionalTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
-        (int tenantId, int userId) = await SeedAlertEnvironment(db, SubscriptionTier.Pro);
+        (int tenantId, int userId, long machineId) = await SeedAlertEnvironment(db, SubscriptionTier.Pro);
         HttpClient client = BuildClient(factory, tenantId, userId);
 
         HttpResponseMessage response = await client.PostAsJsonAsync("/api/v1/alert-rules", new
@@ -143,6 +160,7 @@ public sealed class AlertRuleEndpointTests
             Threshold = 80,
             DurationMinutes = 0,
             Severity = "Warning",
+            MachineIds = new long[] { machineId },
         });
 
         await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.Forbidden);
@@ -155,7 +173,7 @@ public sealed class AlertRuleEndpointTests
     {
         using FunctionalTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
-        (int tenantId, int userId) = await SeedAlertEnvironment(db, SubscriptionTier.Team);
+        (int tenantId, int userId, long machineId) = await SeedAlertEnvironment(db, SubscriptionTier.Team);
         HttpClient client = BuildClient(factory, tenantId, userId);
 
         HttpResponseMessage response = await client.PostAsJsonAsync("/api/v1/alert-rules", new
@@ -169,6 +187,7 @@ public sealed class AlertRuleEndpointTests
             Severity = "Critical",
             NotifyEmail = true,
             NotifyWebhook = true,
+            MachineIds = new long[] { machineId },
         });
 
         await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
@@ -185,7 +204,7 @@ public sealed class AlertRuleEndpointTests
     {
         using FunctionalTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
-        (int tenantId, int userId) = await SeedAlertEnvironment(db, SubscriptionTier.Team);
+        (int tenantId, int userId, long machineId) = await SeedAlertEnvironment(db, SubscriptionTier.Team);
         HttpClient client = BuildClient(factory, tenantId, userId);
 
         HttpResponseMessage response = await client.PostAsJsonAsync("/api/v1/alert-rules", new
@@ -199,6 +218,7 @@ public sealed class AlertRuleEndpointTests
             Severity = "Warning",
             NotifyEmail = true,
             NotifyWebhook = false,
+            MachineIds = new long[] { machineId },
         });
 
         await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
@@ -221,7 +241,7 @@ public sealed class AlertRuleEndpointTests
     {
         using FunctionalTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
-        (int tenantId, int userId) = await SeedAlertEnvironment(db, SubscriptionTier.Team);
+        (int tenantId, int userId, long machineId) = await SeedAlertEnvironment(db, SubscriptionTier.Team);
         HttpClient client = BuildClient(factory, tenantId, userId);
 
         HttpResponseMessage response = await client.PostAsJsonAsync("/api/v1/alert-rules", new
@@ -232,6 +252,7 @@ public sealed class AlertRuleEndpointTests
             Threshold = 80,
             DurationMinutes = 0,
             Severity = "Warning",
+            MachineIds = new long[] { machineId },
         });
 
         await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.BadRequest);
@@ -244,7 +265,7 @@ public sealed class AlertRuleEndpointTests
     {
         using FunctionalTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
-        (int tenantId, int userId) = await SeedAlertEnvironment(db, SubscriptionTier.Team);
+        (int tenantId, int userId, long machineId) = await SeedAlertEnvironment(db, SubscriptionTier.Team);
         HttpClient client = BuildClient(factory, tenantId, userId);
 
         HttpResponseMessage response = await client.PostAsJsonAsync("/api/v1/alert-rules", new
@@ -255,6 +276,7 @@ public sealed class AlertRuleEndpointTests
             Threshold = 80,
             DurationMinutes = 0,
             Severity = "Warning",
+            MachineIds = new long[] { machineId },
         });
 
         await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.BadRequest);
@@ -267,7 +289,7 @@ public sealed class AlertRuleEndpointTests
     {
         using FunctionalTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
-        (int tenantId, int userId) = await SeedAlertEnvironment(db, SubscriptionTier.Team);
+        (int tenantId, int userId, long machineId) = await SeedAlertEnvironment(db, SubscriptionTier.Team);
         HttpClient client = BuildClient(factory, tenantId, userId);
 
         HttpResponseMessage response = await client.PostAsJsonAsync("/api/v1/alert-rules", new
@@ -278,6 +300,7 @@ public sealed class AlertRuleEndpointTests
             Threshold = 80,
             DurationMinutes = 0,
             Severity = "Extreme",
+            MachineIds = new long[] { machineId },
         });
 
         await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.BadRequest);
@@ -290,7 +313,7 @@ public sealed class AlertRuleEndpointTests
     {
         using FunctionalTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
-        (int tenantId, int userId) = await SeedAlertEnvironment(db, SubscriptionTier.Team);
+        (int tenantId, int userId, long machineId) = await SeedAlertEnvironment(db, SubscriptionTier.Team);
         HttpClient client = BuildClient(factory, tenantId, userId);
 
         HttpResponseMessage response = await client.PostAsJsonAsync("/api/v1/alert-rules", new
@@ -301,6 +324,7 @@ public sealed class AlertRuleEndpointTests
             Threshold = 50,
             DurationMinutes = 0,
             Severity = "warning",
+            MachineIds = new long[] { machineId },
         });
 
         await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
@@ -325,6 +349,7 @@ public sealed class AlertRuleEndpointTests
             IsEnabled = true,
             NotifyEmail = true,
             NotifyWebhook = false,
+            MachineIds = new long[] { 1 },
         });
 
         await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.Forbidden);
@@ -335,7 +360,7 @@ public sealed class AlertRuleEndpointTests
     {
         using FunctionalTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
-        (int tenantId, int userId) = await SeedAlertEnvironment(db, SubscriptionTier.Free);
+        (int tenantId, int userId, long machineId) = await SeedAlertEnvironment(db, SubscriptionTier.Free);
         HttpClient client = BuildClient(factory, tenantId, userId);
 
         HttpResponseMessage response = await client.PutAsJsonAsync("/api/v1/alert-rules/1", new
@@ -347,6 +372,7 @@ public sealed class AlertRuleEndpointTests
             IsEnabled = true,
             NotifyEmail = true,
             NotifyWebhook = false,
+            MachineIds = new long[] { machineId },
         });
 
         await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.Forbidden);
@@ -357,7 +383,7 @@ public sealed class AlertRuleEndpointTests
     {
         using FunctionalTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
-        (int tenantId, int userId) = await SeedAlertEnvironment(db, SubscriptionTier.Pro);
+        (int tenantId, int userId, long machineId) = await SeedAlertEnvironment(db, SubscriptionTier.Pro);
         HttpClient client = BuildClient(factory, tenantId, userId);
 
         HttpResponseMessage response = await client.PutAsJsonAsync("/api/v1/alert-rules/99999", new
@@ -369,6 +395,7 @@ public sealed class AlertRuleEndpointTests
             IsEnabled = true,
             NotifyEmail = true,
             NotifyWebhook = false,
+            MachineIds = new long[] { machineId },
         });
 
         await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.NotFound);
@@ -379,8 +406,8 @@ public sealed class AlertRuleEndpointTests
     {
         using FunctionalTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
-        (int tenantId1, int userId1) = await SeedAlertEnvironment(db, SubscriptionTier.Team);
-        (int tenantId2, int userId2) = await SeedAlertEnvironment(db, SubscriptionTier.Pro);
+        (int tenantId1, int userId1, long machineId1) = await SeedAlertEnvironment(db, SubscriptionTier.Team);
+        (int tenantId2, int userId2, long machineId2) = await SeedAlertEnvironment(db, SubscriptionTier.Pro);
 
         AlertRule rule = new()
         {
@@ -409,6 +436,7 @@ public sealed class AlertRuleEndpointTests
             IsEnabled = true,
             NotifyEmail = false,
             NotifyWebhook = false,
+            MachineIds = new long[] { machineId2 },
         });
 
         await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.NotFound);
@@ -419,7 +447,7 @@ public sealed class AlertRuleEndpointTests
     {
         using FunctionalTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
-        (int tenantId, int userId) = await SeedAlertEnvironment(db, SubscriptionTier.Pro);
+        (int tenantId, int userId, long machineId) = await SeedAlertEnvironment(db, SubscriptionTier.Pro);
 
         AlertRule rule = new()
         {
@@ -448,6 +476,7 @@ public sealed class AlertRuleEndpointTests
             IsEnabled = true,
             NotifyEmail = false,
             NotifyWebhook = false,
+            MachineIds = new long[] { machineId },
         });
 
         await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.BadRequest);
@@ -460,7 +489,7 @@ public sealed class AlertRuleEndpointTests
     {
         using FunctionalTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
-        (int tenantId, int userId) = await SeedAlertEnvironment(db, SubscriptionTier.Pro);
+        (int tenantId, int userId, long machineId) = await SeedAlertEnvironment(db, SubscriptionTier.Pro);
 
         AlertRule rule = new()
         {
@@ -494,6 +523,7 @@ public sealed class AlertRuleEndpointTests
             IsEnabled = false,
             NotifyEmail = true,
             NotifyWebhook = true,
+            MachineIds = new long[] { machineId },
         });
 
         await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
@@ -515,7 +545,7 @@ public sealed class AlertRuleEndpointTests
     {
         using FunctionalTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
-        (int tenantId, int userId) = await SeedAlertEnvironment(db, SubscriptionTier.Pro);
+        (int tenantId, int userId, long machineId) = await SeedAlertEnvironment(db, SubscriptionTier.Pro);
 
         AlertRule rule = new()
         {
@@ -544,6 +574,7 @@ public sealed class AlertRuleEndpointTests
             IsEnabled = true,
             NotifyEmail = false,
             NotifyWebhook = false,
+            MachineIds = new long[] { machineId },
         });
 
         await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
@@ -560,7 +591,7 @@ public sealed class AlertRuleEndpointTests
     {
         using FunctionalTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
-        (int tenantId, int userId) = await SeedAlertEnvironment(db, SubscriptionTier.Free);
+        (int tenantId, int userId, long machineId) = await SeedAlertEnvironment(db, SubscriptionTier.Free);
         HttpClient client = BuildClient(factory, tenantId, userId);
 
         HttpResponseMessage response = await client.DeleteAsync("/api/v1/alert-rules/1");
@@ -573,7 +604,7 @@ public sealed class AlertRuleEndpointTests
     {
         using FunctionalTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
-        (int tenantId, int userId) = await SeedAlertEnvironment(db, SubscriptionTier.Pro);
+        (int tenantId, int userId, long machineId) = await SeedAlertEnvironment(db, SubscriptionTier.Pro);
         HttpClient client = BuildClient(factory, tenantId, userId);
 
         HttpResponseMessage response = await client.DeleteAsync("/api/v1/alert-rules/99999");
@@ -586,7 +617,7 @@ public sealed class AlertRuleEndpointTests
     {
         using FunctionalTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
-        (int tenantId, int userId) = await SeedAlertEnvironment(db, SubscriptionTier.Pro);
+        (int tenantId, int userId, long machineId) = await SeedAlertEnvironment(db, SubscriptionTier.Pro);
 
         AlertRule defaultRule = new()
         {
@@ -618,7 +649,7 @@ public sealed class AlertRuleEndpointTests
     {
         using FunctionalTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
-        (int tenantId, int userId) = await SeedAlertEnvironment(db, SubscriptionTier.Pro);
+        (int tenantId, int userId, long machineId) = await SeedAlertEnvironment(db, SubscriptionTier.Pro);
 
         AlertRule customRule = new()
         {
@@ -651,8 +682,8 @@ public sealed class AlertRuleEndpointTests
     {
         using FunctionalTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
-        (int tenantId1, int userId1) = await SeedAlertEnvironment(db, SubscriptionTier.Pro);
-        (int tenantId2, int userId2) = await SeedAlertEnvironment(db, SubscriptionTier.Pro);
+        (int tenantId1, int userId1, long machineId1) = await SeedAlertEnvironment(db, SubscriptionTier.Pro);
+        (int tenantId2, int userId2, long machineId2) = await SeedAlertEnvironment(db, SubscriptionTier.Pro);
 
         AlertRule rule = new()
         {
@@ -684,7 +715,7 @@ public sealed class AlertRuleEndpointTests
     {
         using FunctionalTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
-        (int tenantId, int userId) = await SeedAlertEnvironment(db, SubscriptionTier.Free);
+        (int tenantId, int userId, long machineId) = await SeedAlertEnvironment(db, SubscriptionTier.Free);
         HttpClient client = BuildClient(factory, tenantId, userId, UserAccountRoles.Viewer);
 
         HttpResponseMessage response = await client.GetAsync("/api/v1/alert-rules");
@@ -697,7 +728,7 @@ public sealed class AlertRuleEndpointTests
     {
         using FunctionalTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
-        (int tenantId, int userId) = await SeedAlertEnvironment(db, SubscriptionTier.Pro);
+        (int tenantId, int userId, long machineId) = await SeedAlertEnvironment(db, SubscriptionTier.Pro);
         HttpClient client = BuildClient(factory, tenantId, userId, UserAccountRoles.Viewer);
 
         HttpResponseMessage response = await client.GetAsync("/api/v1/alert-rules");
@@ -715,7 +746,7 @@ public sealed class AlertRuleEndpointTests
     {
         using FunctionalTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
-        (int tenantId, int userId) = await SeedAlertEnvironment(db, SubscriptionTier.Team);
+        (int tenantId, int userId, long machineId) = await SeedAlertEnvironment(db, SubscriptionTier.Team);
         HttpClient client = BuildClient(factory, tenantId, userId);
 
         HttpResponseMessage response = await client.PostAsJsonAsync("/api/v1/alert-rules", new
@@ -726,6 +757,7 @@ public sealed class AlertRuleEndpointTests
             Threshold = 80,
             DurationMinutes = 0,
             Severity = "Warning",
+            MachineIds = new long[] { machineId },
         });
 
         await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.BadRequest);
@@ -738,7 +770,7 @@ public sealed class AlertRuleEndpointTests
     {
         using FunctionalTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
-        (int tenantId, int userId) = await SeedAlertEnvironment(db, SubscriptionTier.Team);
+        (int tenantId, int userId, long machineId) = await SeedAlertEnvironment(db, SubscriptionTier.Team);
         HttpClient client = BuildClient(factory, tenantId, userId);
 
         HttpResponseMessage response = await client.PostAsJsonAsync("/api/v1/alert-rules", new
@@ -749,6 +781,7 @@ public sealed class AlertRuleEndpointTests
             Threshold = 80,
             DurationMinutes = 0,
             Severity = "Warning",
+            MachineIds = new long[] { machineId },
         });
 
         await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.BadRequest);
@@ -761,7 +794,7 @@ public sealed class AlertRuleEndpointTests
     {
         using FunctionalTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
-        (int tenantId, int userId) = await SeedAlertEnvironment(db, SubscriptionTier.Team);
+        (int tenantId, int userId, long machineId) = await SeedAlertEnvironment(db, SubscriptionTier.Team);
         HttpClient client = BuildClient(factory, tenantId, userId);
 
         HttpResponseMessage response = await client.PostAsJsonAsync("/api/v1/alert-rules", new
@@ -772,6 +805,7 @@ public sealed class AlertRuleEndpointTests
             Threshold = 80,
             DurationMinutes = -5,
             Severity = "Warning",
+            MachineIds = new long[] { machineId },
         });
 
         await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.BadRequest);
@@ -784,7 +818,7 @@ public sealed class AlertRuleEndpointTests
     {
         using FunctionalTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
-        (int tenantId, int userId) = await SeedAlertEnvironment(db, SubscriptionTier.Pro);
+        (int tenantId, int userId, long machineId) = await SeedAlertEnvironment(db, SubscriptionTier.Pro);
 
         AlertRule rule = new()
         {
@@ -813,6 +847,7 @@ public sealed class AlertRuleEndpointTests
             IsEnabled = true,
             NotifyEmail = true,
             NotifyWebhook = false,
+            MachineIds = new long[] { machineId },
         });
 
         await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.BadRequest);
@@ -825,7 +860,7 @@ public sealed class AlertRuleEndpointTests
     {
         using FunctionalTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
-        (int tenantId, int userId) = await SeedAlertEnvironment(db, SubscriptionTier.Team);
+        (int tenantId, int userId, long machineId) = await SeedAlertEnvironment(db, SubscriptionTier.Team);
         HttpClient client = BuildClient(factory, tenantId, userId);
 
         HttpResponseMessage response = await client.PostAsJsonAsync("/api/v1/alert-rules", new
@@ -836,6 +871,7 @@ public sealed class AlertRuleEndpointTests
             Threshold = 80,
             DurationMinutes = 0,
             Severity = "Warning",
+            MachineIds = new long[] { machineId },
         });
 
         await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
@@ -848,7 +884,7 @@ public sealed class AlertRuleEndpointTests
     {
         using FunctionalTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
-        (int tenantId, int userId) = await SeedAlertEnvironment(db, SubscriptionTier.Team);
+        (int tenantId, int userId, long machineId) = await SeedAlertEnvironment(db, SubscriptionTier.Team);
         HttpClient client = BuildClient(factory, tenantId, userId);
 
         HttpResponseMessage response = await client.PostAsJsonAsync("/api/v1/alert-rules", new
@@ -859,6 +895,7 @@ public sealed class AlertRuleEndpointTests
             Threshold = 50,
             DurationMinutes = 0,
             Severity = "Warning",
+            MachineIds = new long[] { machineId },
         });
 
         await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
@@ -871,7 +908,7 @@ public sealed class AlertRuleEndpointTests
     {
         using FunctionalTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
-        (int tenantId, int userId) = await SeedAlertEnvironment(db, SubscriptionTier.Team);
+        (int tenantId, int userId, long machineId) = await SeedAlertEnvironment(db, SubscriptionTier.Team);
         HttpClient client = BuildClient(factory, tenantId, userId);
 
         HttpResponseMessage response = await client.PostAsJsonAsync("/api/v1/alert-rules", new
@@ -882,6 +919,7 @@ public sealed class AlertRuleEndpointTests
             Threshold = 50,
             DurationMinutes = 0,
             Severity = "Warning",
+            MachineIds = new long[] { machineId },
         });
 
         await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.BadRequest);
@@ -896,7 +934,7 @@ public sealed class AlertRuleEndpointTests
     {
         using FunctionalTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
-        (int tenantId, int userId) = await SeedAlertEnvironment(db, SubscriptionTier.Pro);
+        (int tenantId, int userId, long machineId) = await SeedAlertEnvironment(db, SubscriptionTier.Pro);
 
         AlertRule rule = new()
         {
@@ -976,7 +1014,7 @@ public sealed class AlertRuleEndpointTests
     {
         using FunctionalTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
-        (int tenantId, int userId) = await SeedAlertEnvironment(db, SubscriptionTier.Pro);
+        (int tenantId, int userId, long machineId) = await SeedAlertEnvironment(db, SubscriptionTier.Pro);
 
         AlertRule rule = new()
         {
@@ -1010,7 +1048,7 @@ public sealed class AlertRuleEndpointTests
     {
         using FunctionalTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
-        (int tenantId, int userId) = await SeedAlertEnvironment(db, SubscriptionTier.Pro);
+        (int tenantId, int userId, long machineId) = await SeedAlertEnvironment(db, SubscriptionTier.Pro);
 
         AlertRule customRule = new()
         {
@@ -1039,6 +1077,7 @@ public sealed class AlertRuleEndpointTests
             IsEnabled = true,
             NotifyEmail = true,
             NotifyWebhook = false,
+            MachineIds = new long[] { machineId },
         });
 
         await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.Forbidden);
@@ -1051,7 +1090,7 @@ public sealed class AlertRuleEndpointTests
     {
         using FunctionalTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
-        (int tenantId, int userId) = await SeedAlertEnvironment(db, SubscriptionTier.Pro);
+        (int tenantId, int userId, long machineId) = await SeedAlertEnvironment(db, SubscriptionTier.Pro);
 
         AlertRule defaultRule = new()
         {
@@ -1080,6 +1119,7 @@ public sealed class AlertRuleEndpointTests
             IsEnabled = true,
             NotifyEmail = true,
             NotifyWebhook = false,
+            MachineIds = new long[] { machineId },
         });
 
         await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
@@ -1090,7 +1130,7 @@ public sealed class AlertRuleEndpointTests
     {
         using FunctionalTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
-        (int tenantId, int userId) = await SeedAlertEnvironment(db, SubscriptionTier.Team);
+        (int tenantId, int userId, long machineId) = await SeedAlertEnvironment(db, SubscriptionTier.Team);
 
         AlertRule customRule = new()
         {
@@ -1119,6 +1159,7 @@ public sealed class AlertRuleEndpointTests
             IsEnabled = true,
             NotifyEmail = true,
             NotifyWebhook = true,
+            MachineIds = new long[] { machineId },
         });
 
         await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
@@ -1129,7 +1170,7 @@ public sealed class AlertRuleEndpointTests
     {
         using FunctionalTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
-        (int tenantId, int userId) = await SeedAlertEnvironment(db, SubscriptionTier.Pro);
+        (int tenantId, int userId, long machineId) = await SeedAlertEnvironment(db, SubscriptionTier.Pro);
 
         AlertRule rule = new()
         {
@@ -1158,6 +1199,7 @@ public sealed class AlertRuleEndpointTests
             IsEnabled = true,
             NotifyEmail = true,
             NotifyWebhook = false,
+            MachineIds = new long[] { machineId },
         });
 
         await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.BadRequest);
@@ -1170,7 +1212,7 @@ public sealed class AlertRuleEndpointTests
     {
         using FunctionalTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
-        (int tenantId, int userId) = await SeedAlertEnvironment(db, SubscriptionTier.Pro);
+        (int tenantId, int userId, long machineId) = await SeedAlertEnvironment(db, SubscriptionTier.Pro);
 
         AlertRule rule = new()
         {
@@ -1199,6 +1241,7 @@ public sealed class AlertRuleEndpointTests
             IsEnabled = true,
             NotifyEmail = true,
             NotifyWebhook = false,
+            MachineIds = new long[] { machineId },
         });
 
         await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.BadRequest);
@@ -1340,7 +1383,7 @@ public sealed class AlertRuleEndpointTests
     {
         using FunctionalTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
-        (int tenantId, int userId) = await SeedAlertEnvironment(db, SubscriptionTier.Team);
+        (int tenantId, int userId, long machineId) = await SeedAlertEnvironment(db, SubscriptionTier.Team);
         HttpClient client = BuildClient(factory, tenantId, userId);
 
         HttpResponseMessage response = await client.PostAsJsonAsync("/api/v1/alert-rules", new
@@ -1351,6 +1394,7 @@ public sealed class AlertRuleEndpointTests
             Threshold = 0,
             DurationMinutes = 5,
             Severity = "Critical",
+            MachineIds = new long[] { machineId },
         });
 
         await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
@@ -1363,7 +1407,7 @@ public sealed class AlertRuleEndpointTests
     {
         using FunctionalTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
-        (int tenantId, int userId) = await SeedAlertEnvironment(db, SubscriptionTier.Team);
+        (int tenantId, int userId, long machineId) = await SeedAlertEnvironment(db, SubscriptionTier.Team);
         HttpClient client = BuildClient(factory, tenantId, userId);
 
         HttpResponseMessage response = await client.PostAsJsonAsync("/api/v1/alert-rules", new
@@ -1374,6 +1418,7 @@ public sealed class AlertRuleEndpointTests
             Threshold = 0,
             DurationMinutes = 0,
             Severity = "Warning",
+            MachineIds = new long[] { machineId },
         });
 
         await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
@@ -1387,7 +1432,7 @@ public sealed class AlertRuleEndpointTests
     {
         using FunctionalTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
-        (int tenantId, int userId) = await SeedAlertEnvironment(db, SubscriptionTier.Pro);
+        (int tenantId, int userId, long machineId) = await SeedAlertEnvironment(db, SubscriptionTier.Pro);
 
         string[] names = ["Charlie", "Alpha", "Bravo"];
         foreach (string name in names)
@@ -1431,7 +1476,7 @@ public sealed class AlertRuleEndpointTests
     {
         using FunctionalTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
-        (int tenantId, int userId) = await SeedAlertEnvironment(db, SubscriptionTier.Team);
+        (int tenantId, int userId, long machineId) = await SeedAlertEnvironment(db, SubscriptionTier.Team);
 
         // Reduce the Team tier alert rule limit to 1 so we can hit it with a single rule
         await db.TierFeatureLimits
@@ -1451,6 +1496,7 @@ public sealed class AlertRuleEndpointTests
             Threshold = 80,
             DurationMinutes = 0,
             Severity = "Warning",
+            MachineIds = new long[] { machineId },
         });
         await Assert.That(firstResponse.StatusCode).IsEqualTo(HttpStatusCode.OK);
 
@@ -1463,6 +1509,7 @@ public sealed class AlertRuleEndpointTests
             Threshold = 90,
             DurationMinutes = 0,
             Severity = "Critical",
+            MachineIds = new long[] { machineId },
         });
 
         await Assert.That(secondResponse.StatusCode).IsEqualTo(HttpStatusCode.Forbidden);
@@ -1475,7 +1522,7 @@ public sealed class AlertRuleEndpointTests
     {
         using FunctionalTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
-        (int tenantId, int userId) = await SeedAlertEnvironment(db, SubscriptionTier.Team);
+        (int tenantId, int userId, long machineId) = await SeedAlertEnvironment(db, SubscriptionTier.Team);
         HttpClient client = BuildClient(factory, tenantId, userId);
 
         string longName = new string('A', 251);
@@ -1488,6 +1535,7 @@ public sealed class AlertRuleEndpointTests
             Threshold = 80,
             DurationMinutes = 0,
             Severity = "Warning",
+            MachineIds = new long[] { machineId },
         });
 
         await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.BadRequest);
@@ -1500,7 +1548,7 @@ public sealed class AlertRuleEndpointTests
     {
         using FunctionalTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
-        (int tenantId, int userId) = await SeedAlertEnvironment(db, SubscriptionTier.Team);
+        (int tenantId, int userId, long machineId) = await SeedAlertEnvironment(db, SubscriptionTier.Team);
         HttpClient client = BuildClient(factory, tenantId, userId);
 
         string longDescription = new string('D', 2001);
@@ -1514,6 +1562,7 @@ public sealed class AlertRuleEndpointTests
             Threshold = 80,
             DurationMinutes = 0,
             Severity = "Warning",
+            MachineIds = new long[] { machineId },
         });
 
         await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.BadRequest);
@@ -1526,7 +1575,7 @@ public sealed class AlertRuleEndpointTests
     {
         using FunctionalTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
-        (int tenantId, int userId) = await SeedAlertEnvironment(db, SubscriptionTier.Team);
+        (int tenantId, int userId, long machineId) = await SeedAlertEnvironment(db, SubscriptionTier.Team);
         HttpClient client = BuildClient(factory, tenantId, userId);
 
         HttpResponseMessage response = await client.PostAsJsonAsync("/api/v1/alert-rules", new
@@ -1537,6 +1586,7 @@ public sealed class AlertRuleEndpointTests
             Threshold = 101,
             DurationMinutes = 0,
             Severity = "Warning",
+            MachineIds = new long[] { machineId },
         });
 
         await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.BadRequest);
@@ -1549,7 +1599,7 @@ public sealed class AlertRuleEndpointTests
     {
         using FunctionalTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
-        (int tenantId, int userId) = await SeedAlertEnvironment(db, SubscriptionTier.Team);
+        (int tenantId, int userId, long machineId) = await SeedAlertEnvironment(db, SubscriptionTier.Team);
         HttpClient client = BuildClient(factory, tenantId, userId);
 
         HttpResponseMessage response = await client.PostAsJsonAsync("/api/v1/alert-rules", new
@@ -1560,6 +1610,7 @@ public sealed class AlertRuleEndpointTests
             Threshold = -1,
             DurationMinutes = 0,
             Severity = "Warning",
+            MachineIds = new long[] { machineId },
         });
 
         await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.BadRequest);
@@ -1572,7 +1623,7 @@ public sealed class AlertRuleEndpointTests
     {
         using FunctionalTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
-        (int tenantId, int userId) = await SeedAlertEnvironment(db, SubscriptionTier.Team);
+        (int tenantId, int userId, long machineId) = await SeedAlertEnvironment(db, SubscriptionTier.Team);
         HttpClient client = BuildClient(factory, tenantId, userId);
 
         HttpResponseMessage response = await client.PostAsJsonAsync("/api/v1/alert-rules", new
@@ -1583,6 +1634,7 @@ public sealed class AlertRuleEndpointTests
             Threshold = 2,
             DurationMinutes = 0,
             Severity = "Warning",
+            MachineIds = new long[] { machineId },
         });
 
         await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.BadRequest);
@@ -1595,7 +1647,7 @@ public sealed class AlertRuleEndpointTests
     {
         using FunctionalTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
-        (int tenantId, int userId) = await SeedAlertEnvironment(db, SubscriptionTier.Team);
+        (int tenantId, int userId, long machineId) = await SeedAlertEnvironment(db, SubscriptionTier.Team);
         HttpClient client = BuildClient(factory, tenantId, userId);
 
         HttpResponseMessage response = await client.PostAsJsonAsync("/api/v1/alert-rules", new
@@ -1606,6 +1658,7 @@ public sealed class AlertRuleEndpointTests
             Threshold = -1,
             DurationMinutes = 0,
             Severity = "Warning",
+            MachineIds = new long[] { machineId },
         });
 
         await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.BadRequest);
@@ -1618,7 +1671,7 @@ public sealed class AlertRuleEndpointTests
     {
         using FunctionalTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
-        (int tenantId, int userId) = await SeedAlertEnvironment(db, SubscriptionTier.Team);
+        (int tenantId, int userId, long machineId) = await SeedAlertEnvironment(db, SubscriptionTier.Team);
 
         // Mark the subscription as canceled to simulate a lapsed subscription
         await db.TenantSubscriptions
@@ -1636,6 +1689,7 @@ public sealed class AlertRuleEndpointTests
             Threshold = 80,
             DurationMinutes = 0,
             Severity = "Warning",
+            MachineIds = new long[] { machineId },
         });
 
         await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.Forbidden);
@@ -1648,8 +1702,8 @@ public sealed class AlertRuleEndpointTests
     {
         using FunctionalTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
-        (int tenantIdA, int userIdA) = await SeedAlertEnvironment(db, SubscriptionTier.Team);
-        (int tenantIdB, int userIdB) = await SeedAlertEnvironment(db, SubscriptionTier.Team);
+        (int tenantIdA, int userIdA, long machineIdA) = await SeedAlertEnvironment(db, SubscriptionTier.Team);
+        (int tenantIdB, int userIdB, long machineIdB) = await SeedAlertEnvironment(db, SubscriptionTier.Team);
 
         // Create a custom rule owned by tenant A
         AlertRule ruleA = new()

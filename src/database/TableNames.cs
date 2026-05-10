@@ -24,6 +24,7 @@ internal static class TableNames
     public const string AuditLog = "AuditLog";
     public const string AlertRules = "AlertRules";
     public const string AlertEvents = "AlertEvents";
+    public const string AlertRuleMachines = "AlertRuleMachines";
     public const string WebhookEndpoints = "WebhookEndpoints";
     public const string UserSigningKeys = "UserSigningKeys";
     public const string RemoteCommands = "RemoteCommands";

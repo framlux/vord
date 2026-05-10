@@ -41,5 +41,9 @@ public sealed class UpdateAlertRuleValidator : Validator<UpdateAlertRuleRequest>
         RuleFor(x => x.Threshold)
             .GreaterThanOrEqualTo(0)
             .WithMessage("Threshold must be zero or positive");
+
+        RuleFor(x => x.MachineIds)
+            .NotEmpty()
+            .WithMessage("At least one machine must be selected");
     }
 }

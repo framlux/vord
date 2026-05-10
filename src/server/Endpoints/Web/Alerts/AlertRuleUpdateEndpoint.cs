@@ -40,6 +40,9 @@ public sealed class UpdateAlertRuleRequest
 
     /// <summary>Whether webhook notifications are enabled.</summary>
     public bool NotifyWebhook { get; set; }
+
+    /// <summary>The machine IDs this rule should evaluate against.</summary>
+    public long[] MachineIds { get; set; } = [];
 }
 
 /// <summary>
@@ -49,15 +52,21 @@ public sealed class UpdateAlertRuleRequest
 public sealed class AlertRuleUpdateEndpoint : Endpoint<UpdateAlertRuleRequest, ApiResponse<AlertRuleDto>>
 {
     private readonly IAlertRuleRepository _alertRuleRepo;
+    private readonly IMachineRepository _machineRepo;
     private readonly ISubscriptionService _subscriptionService;
     private readonly IAuditLogRepository _auditLog;
 
     /// <summary>
     /// Creates a new instance of the <see cref="AlertRuleUpdateEndpoint"/> class.
     /// </summary>
-    public AlertRuleUpdateEndpoint(IAlertRuleRepository alertRuleRepo, ISubscriptionService subscriptionService, IAuditLogRepository auditLog)
+    public AlertRuleUpdateEndpoint(
+        IAlertRuleRepository alertRuleRepo,
+        IMachineRepository machineRepo,
+        ISubscriptionService subscriptionService,
+        IAuditLogRepository auditLog)
     {
         _alertRuleRepo = alertRuleRepo;
+        _machineRepo = machineRepo;
         _subscriptionService = subscriptionService;
         _auditLog = auditLog;
     }
@@ -159,6 +168,19 @@ public sealed class AlertRuleUpdateEndpoint : Endpoint<UpdateAlertRuleRequest, A
             severity, req.IsEnabled,
             req.NotifyEmail, req.NotifyWebhook, ct);
 
+        // Validate and update machine assignments
+        List<long> validMachineIds = await _machineRepo.GetActiveMachineIdsForTenantAsync(tenantId.Value, req.MachineIds, ct);
+        if (validMachineIds.Count != req.MachineIds.Distinct().Count())
+        {
+            HttpContext.Response.StatusCode = 400;
+            await HttpContext.Response.WriteAsJsonAsync(
+                ApiResponse<AlertRuleDto>.Error("One or more machine IDs are invalid or do not belong to this tenant"), ct);
+
+            return;
+        }
+
+        await _alertRuleRepo.SetMachinesForRuleAsync(ruleId, req.MachineIds, ct);
+
         int? userId = TenantClaimHelper.GetUserIdFromClaims(User);
         await _auditLog.InsertAuditLogAsync(AuditHelper.Create(
             tenantId.Value, userId, null,
@@ -179,6 +201,7 @@ public sealed class AlertRuleUpdateEndpoint : Endpoint<UpdateAlertRuleRequest, A
             NotifyEmail = req.NotifyEmail,
             NotifyWebhook = req.NotifyWebhook,
             IsCustom = rule.IsCustom,
+            MachineIds = req.MachineIds,
         };
 
         await Send.OkAsync(ApiResponse<AlertRuleDto>.Ok(dto, "Alert rule updated"), cancellation: ct);

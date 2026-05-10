@@ -42,4 +42,10 @@ public sealed class AlertRuleDto
 
     /// <summary>Whether this is a custom rule.</summary>
     public bool IsCustom { get; set; }
+
+    /// <summary>Machine IDs this rule is assigned to.</summary>
+    public long[] MachineIds { get; set; } = [];
+
+    /// <summary>Machine names for display.</summary>
+    public List<AlertRuleMachineDto> Machines { get; set; } = [];
 }

@@ -17,6 +17,7 @@
 	const rules: AlertRuleDto[] | null = $derived(data.rules);
 	const events: PaginatedResponse<AlertEventDto> | null = $derived(data.events);
 	const webhooks: WebhookEndpointDto[] | null = $derived(data.webhooks);
+	const machines: { id: number; name: string }[] = $derived(data.machines ?? []);
 	const filters = $derived(data.filters);
 
 	let activeTab = $state<'rules' | 'events' | 'webhooks'>(
@@ -273,6 +274,20 @@
 									</label>
 								</div>
 							</div>
+							<div class="mt-4">
+								<label class="mb-1 block text-xs text-surface-500 dark:text-surface-400">Machines (at least 1 required)</label>
+								<div class="max-h-40 overflow-y-auto border border-surface-300 rounded p-2 space-y-1 dark:border-surface-600">
+									{#each machines as machine}
+										<label class="flex items-center gap-2 text-sm">
+											<input type="checkbox" name="machineIds" value={machine.id} class="checkbox" />
+											<span class="text-surface-700 dark:text-surface-300">{machine.name}</span>
+										</label>
+									{/each}
+									{#if machines.length === 0}
+										<p class="text-xs text-surface-400 dark:text-surface-500">No machines available.</p>
+									{/if}
+								</div>
+							</div>
 							<div class="mt-4 flex justify-end gap-2">
 								<button type="button" onclick={() => { showCreateRule = false; rulesError = null; }} class="rounded-lg border border-surface-300 px-4 py-2 text-sm font-medium text-surface-700 hover:bg-surface-100 dark:border-surface-600 dark:text-surface-300 dark:hover:bg-surface-700">Cancel</button>
 								<button type="submit" class="rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700 dark:bg-primary-500 dark:hover:bg-primary-600">Create Rule</button>
@@ -291,6 +306,7 @@
 									<th scope="col" class="px-4 py-3 text-left font-medium text-surface-500 dark:text-surface-400">Metric</th>
 									<th scope="col" class="px-4 py-3 text-left font-medium text-surface-500 dark:text-surface-400">Condition</th>
 									<th scope="col" class="px-4 py-3 text-left font-medium text-surface-500 dark:text-surface-400">Severity</th>
+									<th scope="col" class="px-4 py-3 text-left font-medium text-surface-500 dark:text-surface-400">Machines</th>
 									<th scope="col" class="px-4 py-3 text-left font-medium text-surface-500 dark:text-surface-400">Status</th>
 									<th scope="col" class="px-4 py-3 text-left font-medium text-surface-500 dark:text-surface-400">Notify</th>
 									<th scope="col" class="px-4 py-3 text-left font-medium text-surface-500 dark:text-surface-400">Actions</th>
@@ -299,7 +315,7 @@
 							<tbody class="divide-y divide-surface-100 dark:divide-surface-700">
 								{#if rules.length === 0}
 									<tr>
-										<td colspan="7" class="px-4 py-8 text-center text-surface-500 dark:text-surface-400">
+										<td colspan="8" class="px-4 py-8 text-center text-surface-500 dark:text-surface-400">
 											<Bell class="mx-auto mb-2 h-8 w-8 text-surface-400 dark:text-surface-600" />
 											No alert rules configured.
 										</td>
@@ -328,6 +344,9 @@
 													{rule.severity}
 												</span>
 											</td>
+											<td class="px-4 py-3 text-surface-600 dark:text-surface-400">
+												{rule.machineIds?.length ?? 0} machine{(rule.machineIds?.length ?? 0) === 1 ? '' : 's'}
+											</td>
 											<td class="px-4 py-3">
 												{#if rule.isEnabled}
 													<span class="inline-flex items-center rounded-full bg-green-100 px-2.5 py-0.5 text-xs font-medium text-green-700 dark:bg-green-900/30 dark:text-green-400">Enabled</span>
@@ -355,7 +374,7 @@
 										</tr>
 										{#if editingRuleId === rule.id}
 											<tr class="bg-surface-50 dark:bg-surface-800/50">
-												<td colspan="7" class="px-4 py-4">
+												<td colspan="8" class="px-4 py-4">
 													<form method="POST" action="?/updateRule" use:enhance={() => { rulesError = null; return async ({ result, update }) => { if (result.type === 'failure') { rulesError = (result.data as { message?: string })?.message ?? 'An error occurred'; } else { editingRuleId = null; rulesError = null; await update(); } }; }}>
 														<input type="hidden" name="id" value={rule.id} />
 														{#if rulesError}
@@ -398,6 +417,20 @@
 																<input name="notifyWebhook" type="checkbox" checked={rule.notifyWebhook} class="rounded border-surface-300" />
 																Webhook
 															</label>
+														</div>
+														<div class="mt-4">
+															<label class="mb-1 block text-xs text-surface-500 dark:text-surface-400">Machines (at least 1 required)</label>
+															<div class="max-h-40 overflow-y-auto border border-surface-300 rounded p-2 space-y-1 dark:border-surface-600">
+																{#each machines as machine}
+																	<label class="flex items-center gap-2 text-sm">
+																		<input type="checkbox" name="machineIds" value={machine.id} checked={rule.machineIds?.includes(machine.id) ?? false} class="checkbox" />
+																		<span class="text-surface-700 dark:text-surface-300">{machine.name}</span>
+																	</label>
+																{/each}
+																{#if machines.length === 0}
+																	<p class="text-xs text-surface-400 dark:text-surface-500">No machines available.</p>
+																{/if}
+															</div>
 														</div>
 														<div class="mt-4 flex justify-end gap-2">
 															<button type="button" onclick={() => { editingRuleId = null; rulesError = null; }} class="rounded-lg border border-surface-300 px-4 py-2 text-sm font-medium text-surface-700 hover:bg-surface-100 dark:border-surface-600 dark:text-surface-300 dark:hover:bg-surface-700">Cancel</button>

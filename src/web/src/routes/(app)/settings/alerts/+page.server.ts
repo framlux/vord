@@ -34,18 +34,21 @@ export const load: PageServerLoad = async ({ fetch, cookies, locals, url }) => {
 	const severity = url.searchParams.get('severity') ?? undefined;
 
 	try {
-		const [rules, events, webhooks, subscription] = await Promise.all([
+		const [rules, events, webhooks, subscription, machinesResponse] = await Promise.all([
 			api.getAlertRules(),
 			api.getAlertEvents({ page, pageSize, status, severity }),
 			api.getWebhooks(),
-			api.getSubscription().catch(() => null)
+			api.getSubscription().catch(() => null),
+			api.getMachines({ pageSize: 1000 })
 		]);
 
-		return { rules, events, webhooks, subscription, filters: { status, severity } };
+		const machines = machinesResponse.items.map((m) => ({ id: m.id, name: m.name }));
+
+		return { rules, events, webhooks, subscription, machines, filters: { status, severity } };
 	} catch (e) {
 		if (e instanceof ApiError) {
 			if (e.status === 401) redirect(302, '/auth/login');
-			if (e.status === 403) return { rules: null, events: null, webhooks: null, subscription: null, filters: { status, severity } };
+			if (e.status === 403) return { rules: null, events: null, webhooks: null, subscription: null, machines: [], filters: { status, severity } };
 		}
 		throw e;
 	}
@@ -60,6 +63,8 @@ export const actions: Actions = {
 		const api = createServerApiClient(fetch, cookies.get('vord_auth'), cookies.get('vord_tenant'));
 		const data = await request.formData();
 
+		const machineIds = data.getAll('machineIds').map((v) => parseInt(v as string)).filter((v) => Number.isNaN(v) === false);
+
 		try {
 			await api.createAlertRule({
 				name: data.get('name') as string,
@@ -70,7 +75,8 @@ export const actions: Actions = {
 				durationMinutes: parseInt(data.get('durationMinutes') as string) || 0,
 				severity: data.get('severity') as string,
 				notifyEmail: data.get('notifyEmail') === 'on',
-				notifyWebhook: data.get('notifyWebhook') === 'on'
+				notifyWebhook: data.get('notifyWebhook') === 'on',
+				machineIds
 			});
 
 			return { success: true };
@@ -95,6 +101,8 @@ export const actions: Actions = {
 			return fail(400, { message: 'Invalid ID' });
 		}
 
+		const machineIds = data.getAll('machineIds').map((v) => parseInt(v as string)).filter((v) => Number.isNaN(v) === false);
+
 		try {
 			await api.updateAlertRule(id, {
 				name: data.get('name') as string,
@@ -104,7 +112,8 @@ export const actions: Actions = {
 				severity: data.get('severity') as string,
 				isEnabled: data.get('isEnabled') === 'on',
 				notifyEmail: data.get('notifyEmail') === 'on',
-				notifyWebhook: data.get('notifyWebhook') === 'on'
+				notifyWebhook: data.get('notifyWebhook') === 'on',
+				machineIds
 			});
 
 			return { success: true };

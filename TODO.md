@@ -1,5 +1,6 @@
 # TODO
 
-## Alerts
+## Infrastructure
 
-- **Machine-scoping on alert rules** — Currently all alert rules evaluate against every machine in the tenant. Add support for targeting rules to specific machines or groups of machines (e.g., by tag, group, or explicit machine list). Requires: optional `MachineId` column on `AlertRule` (NULL = all machines), or a join table `AlertRuleMachines` for multi-machine targeting. Update `AlertEvaluationService.EvaluateAllRulesAsync` to filter machine states by rule scope. Add frontend UI for selecting target machines during rule creation/editing.
+- **Upgrade Node.js to v22 LTS** — pnpm 11 requires `node:sqlite` which isn't available in Node 20. Currently `pnpm build` fails but `npx vite build` works as a workaround. Upgrade to Node 22 LTS to fix the pnpm wrapper.
+

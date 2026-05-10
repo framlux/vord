@@ -112,11 +112,27 @@ public sealed class AlertEvaluationService : BackgroundService
                 continue;
             }
 
+            List<int> ruleIds = tenantRules.Select(r => r.Id).ToList();
+            Dictionary<int, List<long>> machinesByRule = await alertRuleRepo.GetMachineIdsForRulesAsync(ruleIds, ct);
+
             List<MachineStateSummary> machineStates = await machineStateRepo.GetSummariesForTenantMachinesAsync(tenantId, ct);
 
             foreach (AlertRule rule in tenantRules)
             {
-                foreach (MachineStateSummary state in machineStates)
+                List<long> assignedMachineIds = machinesByRule.GetValueOrDefault(rule.Id, []);
+                if (assignedMachineIds.Count == 0)
+                {
+                    _logger.LogDebug("Alert rule {RuleId} has no assigned machines, skipping", rule.Id);
+
+                    continue;
+                }
+
+                HashSet<long> assignedSet = new(assignedMachineIds);
+                List<MachineStateSummary> scopedStates = machineStates
+                    .Where(s => assignedSet.Contains(s.MachineId))
+                    .ToList();
+
+                foreach (MachineStateSummary state in scopedStates)
                 {
                     await EvaluateRuleForMachineAsync(alertEventRepo, rule, state, ct);
                 }

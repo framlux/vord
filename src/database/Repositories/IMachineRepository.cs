@@ -162,4 +162,19 @@ public interface IMachineRepository
     /// <param name="tenantIds">The tenant IDs to query.</param>
     /// <param name="cancellationToken">A cancellation token.</param>
     Task<Dictionary<int, int>> GetMachineCountsByTenantsAsync(List<int> tenantIds, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Returns the subset of provided machine IDs that are active (non-deleted) and belong to the specified tenant.
+    /// </summary>
+    /// <param name="tenantId">The tenant ID.</param>
+    /// <param name="machineIds">The machine IDs to filter.</param>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    Task<List<long>> GetActiveMachineIdsForTenantAsync(int tenantId, IReadOnlyList<long> machineIds, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Returns a dictionary mapping machine IDs to their names for the specified machines.
+    /// </summary>
+    /// <param name="machineIds">The machine IDs to look up.</param>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    Task<Dictionary<long, string>> GetMachineNamesAsync(IReadOnlyList<long> machineIds, CancellationToken cancellationToken = default);
 }
