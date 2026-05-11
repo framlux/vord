@@ -108,6 +108,7 @@ export const actions: Actions = {
 			await api.updateAlertRule(id, {
 				name: data.get('name') as string,
 				description: (data.get('description') as string) || undefined,
+				metric: data.get('metric') as string,
 				threshold: parseFloat(data.get('threshold') as string),
 				durationMinutes: parseInt(data.get('durationMinutes') as string) || 0,
 				severity: data.get('severity') as string,

@@ -112,7 +112,7 @@ public sealed class AlertRuleEndpointTests
             Metric = "CpuUsage",
             Operator = "GreaterThan",
             Threshold = 80,
-            DurationMinutes = 0,
+            DurationMinutes = 5,
             Severity = "Warning",
             MachineIds = new long[] { 1 },
         });
@@ -134,7 +134,7 @@ public sealed class AlertRuleEndpointTests
             Metric = "CpuUsage",
             Operator = "GreaterThan",
             Threshold = 80,
-            DurationMinutes = 0,
+            DurationMinutes = 5,
             Severity = "Warning",
             MachineIds = new long[] { machineId },
         });
@@ -158,7 +158,7 @@ public sealed class AlertRuleEndpointTests
             Metric = "CpuUsage",
             Operator = "GreaterThan",
             Threshold = 80,
-            DurationMinutes = 0,
+            DurationMinutes = 5,
             Severity = "Warning",
             MachineIds = new long[] { machineId },
         });
@@ -250,7 +250,7 @@ public sealed class AlertRuleEndpointTests
             Metric = "InvalidMetric",
             Operator = "GreaterThan",
             Threshold = 80,
-            DurationMinutes = 0,
+            DurationMinutes = 5,
             Severity = "Warning",
             MachineIds = new long[] { machineId },
         });
@@ -274,7 +274,7 @@ public sealed class AlertRuleEndpointTests
             Metric = "CpuUsage",
             Operator = "NotAnOperator",
             Threshold = 80,
-            DurationMinutes = 0,
+            DurationMinutes = 5,
             Severity = "Warning",
             MachineIds = new long[] { machineId },
         });
@@ -298,7 +298,7 @@ public sealed class AlertRuleEndpointTests
             Metric = "CpuUsage",
             Operator = "GreaterThan",
             Threshold = 80,
-            DurationMinutes = 0,
+            DurationMinutes = 5,
             Severity = "Extreme",
             MachineIds = new long[] { machineId },
         });
@@ -322,7 +322,7 @@ public sealed class AlertRuleEndpointTests
             Metric = "cpuusage",
             Operator = "greaterthan",
             Threshold = 50,
-            DurationMinutes = 0,
+            DurationMinutes = 5,
             Severity = "warning",
             MachineIds = new long[] { machineId },
         });
@@ -343,6 +343,7 @@ public sealed class AlertRuleEndpointTests
         HttpResponseMessage response = await client.PutAsJsonAsync("/api/v1/alert-rules/999", new
         {
             Name = "Updated",
+            Metric = "CpuUsage",
             Threshold = 90,
             DurationMinutes = 5,
             Severity = "Critical",
@@ -366,6 +367,7 @@ public sealed class AlertRuleEndpointTests
         HttpResponseMessage response = await client.PutAsJsonAsync("/api/v1/alert-rules/1", new
         {
             Name = "Updated",
+            Metric = "CpuUsage",
             Threshold = 90,
             DurationMinutes = 5,
             Severity = "Critical",
@@ -389,6 +391,7 @@ public sealed class AlertRuleEndpointTests
         HttpResponseMessage response = await client.PutAsJsonAsync("/api/v1/alert-rules/99999", new
         {
             Name = "Updated",
+            Metric = "CpuUsage",
             Threshold = 90,
             DurationMinutes = 5,
             Severity = "Critical",
@@ -430,8 +433,9 @@ public sealed class AlertRuleEndpointTests
         HttpResponseMessage response = await client.PutAsJsonAsync($"/api/v1/alert-rules/{rule.Id}", new
         {
             Name = "Hacked",
+            Metric = "CpuUsage",
             Threshold = 1,
-            DurationMinutes = 0,
+            DurationMinutes = 5,
             Severity = "Critical",
             IsEnabled = true,
             NotifyEmail = false,
@@ -470,6 +474,7 @@ public sealed class AlertRuleEndpointTests
         HttpResponseMessage response = await client.PutAsJsonAsync($"/api/v1/alert-rules/{rule.Id}", new
         {
             Name = "Updated",
+            Metric = "CpuUsage",
             Threshold = 90,
             DurationMinutes = 5,
             Severity = "Bogus",
@@ -499,7 +504,7 @@ public sealed class AlertRuleEndpointTests
             Metric = AlertMetric.CpuUsage,
             Operator = AlertOperator.GreaterThan,
             Threshold = 80,
-            DurationMinutes = 0,
+            DurationMinutes = 5,
             Severity = AlertSeverity.Warning,
             IsEnabled = true,
             NotifyEmail = false,
@@ -517,6 +522,7 @@ public sealed class AlertRuleEndpointTests
         {
             Name = "Updated Name",
             Description = "Updated Desc",
+            Metric = "CpuUsage",
             Threshold = 95,
             DurationMinutes = 10,
             Severity = "Critical",
@@ -568,8 +574,9 @@ public sealed class AlertRuleEndpointTests
         HttpResponseMessage response = await client.PutAsJsonAsync($"/api/v1/alert-rules/{rule.Id}", new
         {
             Name = "Changed Name",
+            Metric = "MemoryUsage",
             Threshold = 50,
-            DurationMinutes = 0,
+            DurationMinutes = 5,
             Severity = "Warning",
             IsEnabled = true,
             NotifyEmail = false,
@@ -755,7 +762,7 @@ public sealed class AlertRuleEndpointTests
             Metric = "CpuUsage",
             Operator = "GreaterThan",
             Threshold = 80,
-            DurationMinutes = 0,
+            DurationMinutes = 5,
             Severity = "Warning",
             MachineIds = new long[] { machineId },
         });
@@ -779,7 +786,7 @@ public sealed class AlertRuleEndpointTests
             Metric = "CpuUsage",
             Operator = "GreaterThan",
             Threshold = 80,
-            DurationMinutes = 0,
+            DurationMinutes = 5,
             Severity = "Warning",
             MachineIds = new long[] { machineId },
         });
@@ -841,6 +848,7 @@ public sealed class AlertRuleEndpointTests
         HttpResponseMessage response = await client.PutAsJsonAsync($"/api/v1/alert-rules/{rule.Id}", new
         {
             Name = "Updated",
+            Metric = "CpuUsage",
             Threshold = 90,
             DurationMinutes = -1,
             Severity = "Critical",
@@ -856,7 +864,7 @@ public sealed class AlertRuleEndpointTests
     }
 
     [Test]
-    public async Task CreateRule_ZeroDuration_Returns200()
+    public async Task CreateRule_ZeroDuration_VolatileMetric_Returns400()
     {
         using FunctionalTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
@@ -874,7 +882,9 @@ public sealed class AlertRuleEndpointTests
             MachineIds = new long[] { machineId },
         });
 
-        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.BadRequest);
+        string body = await response.Content.ReadAsStringAsync();
+        await Assert.That(body).Contains("Duration must be at least 5 minutes for CpuUsage alerts");
     }
 
     // --- WS-4: EqualTo Operator Tests ---
@@ -893,7 +903,7 @@ public sealed class AlertRuleEndpointTests
             Metric = "CpuUsage",
             Operator = "EqualTo",
             Threshold = 50,
-            DurationMinutes = 0,
+            DurationMinutes = 5,
             Severity = "Warning",
             MachineIds = new long[] { machineId },
         });
@@ -917,7 +927,7 @@ public sealed class AlertRuleEndpointTests
             Metric = "CpuUsage",
             Operator = "Equals",
             Threshold = 50,
-            DurationMinutes = 0,
+            DurationMinutes = 5,
             Severity = "Warning",
             MachineIds = new long[] { machineId },
         });
@@ -1071,6 +1081,7 @@ public sealed class AlertRuleEndpointTests
         HttpResponseMessage response = await client.PutAsJsonAsync($"/api/v1/alert-rules/{customRule.Id}", new
         {
             Name = "Updated",
+            Metric = "CpuUsage",
             Threshold = 90,
             DurationMinutes = 5,
             Severity = "Critical",
@@ -1113,6 +1124,7 @@ public sealed class AlertRuleEndpointTests
         HttpResponseMessage response = await client.PutAsJsonAsync($"/api/v1/alert-rules/{defaultRule.Id}", new
         {
             Name = "Updated Default",
+            Metric = "CpuUsage",
             Threshold = 90,
             DurationMinutes = 5,
             Severity = "Critical",
@@ -1153,6 +1165,7 @@ public sealed class AlertRuleEndpointTests
         HttpResponseMessage response = await client.PutAsJsonAsync($"/api/v1/alert-rules/{customRule.Id}", new
         {
             Name = "Updated Team Custom",
+            Metric = "CpuUsage",
             Threshold = 95,
             DurationMinutes = 10,
             Severity = "Critical",
@@ -1193,6 +1206,7 @@ public sealed class AlertRuleEndpointTests
         HttpResponseMessage response = await client.PutAsJsonAsync($"/api/v1/alert-rules/{rule.Id}", new
         {
             Name = "",
+            Metric = "CpuUsage",
             Threshold = 90,
             DurationMinutes = 5,
             Severity = "Critical",
@@ -1235,6 +1249,7 @@ public sealed class AlertRuleEndpointTests
         HttpResponseMessage response = await client.PutAsJsonAsync($"/api/v1/alert-rules/{rule.Id}", new
         {
             Name = "   ",
+            Metric = "CpuUsage",
             Threshold = 90,
             DurationMinutes = 5,
             Severity = "Critical",
@@ -1376,6 +1391,224 @@ public sealed class AlertRuleEndpointTests
         return (tenant.Id, user.Id, alertRule.Id);
     }
 
+    // --- WS-4: Update DurationMinutes Metric-Specific Validation Tests ---
+
+    [Test]
+    public async Task UpdateAlertRule_CpuMetric_DurationBelowMinimum_Returns400()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId, long machineId) = await SeedAlertEnvironment(db, SubscriptionTier.Pro);
+
+        AlertRule rule = new()
+        {
+            TenantId = tenantId,
+            Name = "CPU Duration Check",
+            Metric = AlertMetric.CpuUsage,
+            Operator = AlertOperator.GreaterThan,
+            Threshold = 80,
+            DurationMinutes = 5,
+            Severity = AlertSeverity.Warning,
+            IsEnabled = true,
+            IsCustom = false,
+            CreatedByUserId = userId,
+            CreatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow,
+        };
+        rule.Id = await db.InsertWithInt32IdentityAsync(rule);
+
+        HttpClient client = BuildClient(factory, tenantId, userId);
+
+        HttpResponseMessage response = await client.PutAsJsonAsync($"/api/v1/alert-rules/{rule.Id}", new
+        {
+            Name = "CPU Duration Check",
+            Metric = "CpuUsage",
+            Threshold = 80,
+            DurationMinutes = 3,
+            Severity = "Warning",
+            IsEnabled = true,
+            NotifyEmail = true,
+            NotifyWebhook = false,
+            MachineIds = new long[] { machineId },
+        });
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.BadRequest);
+        string body = await response.Content.ReadAsStringAsync();
+        await Assert.That(body).Contains("Duration must be at least 5 minutes");
+    }
+
+    [Test]
+    public async Task UpdateAlertRule_CpuMetric_DurationAtMinimum_Returns200()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId, long machineId) = await SeedAlertEnvironment(db, SubscriptionTier.Pro);
+
+        AlertRule rule = new()
+        {
+            TenantId = tenantId,
+            Name = "CPU Duration OK",
+            Metric = AlertMetric.CpuUsage,
+            Operator = AlertOperator.GreaterThan,
+            Threshold = 80,
+            DurationMinutes = 10,
+            Severity = AlertSeverity.Warning,
+            IsEnabled = true,
+            IsCustom = false,
+            CreatedByUserId = userId,
+            CreatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow,
+        };
+        rule.Id = await db.InsertWithInt32IdentityAsync(rule);
+
+        HttpClient client = BuildClient(factory, tenantId, userId);
+
+        HttpResponseMessage response = await client.PutAsJsonAsync($"/api/v1/alert-rules/{rule.Id}", new
+        {
+            Name = "CPU Duration OK",
+            Metric = "CpuUsage",
+            Threshold = 80,
+            DurationMinutes = 5,
+            Severity = "Warning",
+            IsEnabled = true,
+            NotifyEmail = true,
+            NotifyWebhook = false,
+            MachineIds = new long[] { machineId },
+        });
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
+    }
+
+    [Test]
+    public async Task UpdateAlertRule_StateMetric_DurationBelowMinimum_Returns400()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId, long machineId) = await SeedAlertEnvironment(db, SubscriptionTier.Pro);
+
+        AlertRule rule = new()
+        {
+            TenantId = tenantId,
+            Name = "Offline Duration Check",
+            Metric = AlertMetric.MachineOffline,
+            Operator = AlertOperator.EqualTo,
+            Threshold = 1,
+            DurationMinutes = 1,
+            Severity = AlertSeverity.Critical,
+            IsEnabled = true,
+            IsCustom = false,
+            CreatedByUserId = userId,
+            CreatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow,
+        };
+        rule.Id = await db.InsertWithInt32IdentityAsync(rule);
+
+        HttpClient client = BuildClient(factory, tenantId, userId);
+
+        HttpResponseMessage response = await client.PutAsJsonAsync($"/api/v1/alert-rules/{rule.Id}", new
+        {
+            Name = "Offline Duration Check",
+            Metric = "MachineOffline",
+            Threshold = 1,
+            DurationMinutes = 0,
+            Severity = "Critical",
+            IsEnabled = true,
+            NotifyEmail = true,
+            NotifyWebhook = false,
+            MachineIds = new long[] { machineId },
+        });
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.BadRequest);
+        string body = await response.Content.ReadAsStringAsync();
+        await Assert.That(body).Contains("Duration must be at least 1 minutes");
+    }
+
+    [Test]
+    public async Task UpdateAlertRule_SshMetric_NonZeroDuration_Returns400()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId, long machineId) = await SeedAlertEnvironment(db, SubscriptionTier.Pro);
+
+        AlertRule rule = new()
+        {
+            TenantId = tenantId,
+            Name = "SSH Duration Check",
+            Metric = AlertMetric.SshConnection,
+            Operator = AlertOperator.EqualTo,
+            Threshold = 1,
+            DurationMinutes = 0,
+            Severity = AlertSeverity.Info,
+            IsEnabled = true,
+            IsCustom = false,
+            CreatedByUserId = userId,
+            CreatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow,
+        };
+        rule.Id = await db.InsertWithInt32IdentityAsync(rule);
+
+        HttpClient client = BuildClient(factory, tenantId, userId);
+
+        HttpResponseMessage response = await client.PutAsJsonAsync($"/api/v1/alert-rules/{rule.Id}", new
+        {
+            Name = "SSH Duration Check",
+            Metric = "SshConnection",
+            Threshold = 1,
+            DurationMinutes = 1,
+            Severity = "Info",
+            IsEnabled = true,
+            NotifyEmail = true,
+            NotifyWebhook = false,
+            MachineIds = new long[] { machineId },
+        });
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.BadRequest);
+        string body = await response.Content.ReadAsStringAsync();
+        await Assert.That(body).Contains("Duration must be zero for event-based metrics");
+    }
+
+    [Test]
+    public async Task UpdateAlertRule_SshMetric_ZeroDuration_Returns200()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId, long machineId) = await SeedAlertEnvironment(db, SubscriptionTier.Pro);
+
+        AlertRule rule = new()
+        {
+            TenantId = tenantId,
+            Name = "SSH Zero Duration",
+            Metric = AlertMetric.SshConnection,
+            Operator = AlertOperator.EqualTo,
+            Threshold = 1,
+            DurationMinutes = 0,
+            Severity = AlertSeverity.Info,
+            IsEnabled = true,
+            IsCustom = false,
+            CreatedByUserId = userId,
+            CreatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow,
+        };
+        rule.Id = await db.InsertWithInt32IdentityAsync(rule);
+
+        HttpClient client = BuildClient(factory, tenantId, userId);
+
+        HttpResponseMessage response = await client.PutAsJsonAsync($"/api/v1/alert-rules/{rule.Id}", new
+        {
+            Name = "SSH Zero Duration",
+            Metric = "SshConnection",
+            Threshold = 1,
+            DurationMinutes = 0,
+            Severity = "Info",
+            IsEnabled = true,
+            NotifyEmail = true,
+            NotifyWebhook = false,
+            MachineIds = new long[] { machineId },
+        });
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
+    }
+
     // --- WS-6: MachineOffline Metric Tests ---
 
     [Test]
@@ -1416,7 +1649,7 @@ public sealed class AlertRuleEndpointTests
             Metric = "MachineOffline",
             Operator = "GreaterThan",
             Threshold = 0,
-            DurationMinutes = 0,
+            DurationMinutes = 1,
             Severity = "Warning",
             MachineIds = new long[] { machineId },
         });
@@ -1494,7 +1727,7 @@ public sealed class AlertRuleEndpointTests
             Metric = "CpuUsage",
             Operator = "GreaterThan",
             Threshold = 80,
-            DurationMinutes = 0,
+            DurationMinutes = 5,
             Severity = "Warning",
             MachineIds = new long[] { machineId },
         });
@@ -1507,7 +1740,7 @@ public sealed class AlertRuleEndpointTests
             Metric = "MemoryUsage",
             Operator = "GreaterThan",
             Threshold = 90,
-            DurationMinutes = 0,
+            DurationMinutes = 5,
             Severity = "Critical",
             MachineIds = new long[] { machineId },
         });
@@ -1533,7 +1766,7 @@ public sealed class AlertRuleEndpointTests
             Metric = "CpuUsage",
             Operator = "GreaterThan",
             Threshold = 80,
-            DurationMinutes = 0,
+            DurationMinutes = 5,
             Severity = "Warning",
             MachineIds = new long[] { machineId },
         });
@@ -1560,7 +1793,7 @@ public sealed class AlertRuleEndpointTests
             Metric = "CpuUsage",
             Operator = "GreaterThan",
             Threshold = 80,
-            DurationMinutes = 0,
+            DurationMinutes = 5,
             Severity = "Warning",
             MachineIds = new long[] { machineId },
         });
@@ -1584,7 +1817,7 @@ public sealed class AlertRuleEndpointTests
             Metric = "CpuUsage",
             Operator = "GreaterThan",
             Threshold = 101,
-            DurationMinutes = 0,
+            DurationMinutes = 5,
             Severity = "Warning",
             MachineIds = new long[] { machineId },
         });
@@ -1608,7 +1841,7 @@ public sealed class AlertRuleEndpointTests
             Metric = "CpuUsage",
             Operator = "GreaterThan",
             Threshold = -1,
-            DurationMinutes = 0,
+            DurationMinutes = 5,
             Severity = "Warning",
             MachineIds = new long[] { machineId },
         });
@@ -1632,7 +1865,7 @@ public sealed class AlertRuleEndpointTests
             Metric = "MachineOffline",
             Operator = "GreaterThan",
             Threshold = 2,
-            DurationMinutes = 0,
+            DurationMinutes = 1,
             Severity = "Warning",
             MachineIds = new long[] { machineId },
         });
@@ -1656,7 +1889,7 @@ public sealed class AlertRuleEndpointTests
             Metric = "FailedServices",
             Operator = "GreaterThan",
             Threshold = -1,
-            DurationMinutes = 0,
+            DurationMinutes = 1,
             Severity = "Warning",
             MachineIds = new long[] { machineId },
         });
@@ -1687,7 +1920,7 @@ public sealed class AlertRuleEndpointTests
             Metric = "CpuUsage",
             Operator = "GreaterThan",
             Threshold = 80,
-            DurationMinutes = 0,
+            DurationMinutes = 5,
             Severity = "Warning",
             MachineIds = new long[] { machineId },
         });

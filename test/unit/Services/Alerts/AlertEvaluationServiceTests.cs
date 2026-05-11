@@ -1145,4 +1145,106 @@ public sealed class AlertEvaluationServiceTests
         int eventCount = await db.AlertEvents.CountAsync();
         await Assert.That(eventCount).IsEqualTo(0);
     }
+
+    // --- Event Metric (SshConnection) Tests ---
+
+    /// <summary>
+    /// Verifies that <see cref="AlertEvaluationService.GetMetricValue"/> returns null for
+    /// <see cref="AlertMetric.SshConnection"/>. SshConnection is event-based and should
+    /// never reach GetMetricValue in normal operation, but the switch arm explicitly returns null
+    /// as a defensive measure.
+    /// </summary>
+    [Test]
+    public async Task GetMetricValue_SshConnection_ReturnsNull()
+    {
+        MachineStateSummary state = new() { MachineId = 1, CpuUsagePercent = 90, LastSeenAt = DateTimeOffset.UtcNow };
+
+        decimal? result = AlertEvaluationService.GetMetricValue(AlertMetric.SshConnection, state);
+
+        await Assert.That(result).IsNull();
+    }
+
+    /// <summary>
+    /// Verifies that an enabled SshConnection alert rule is skipped during periodic evaluation
+    /// because <see cref="AlertConstants.IsEventMetric"/> returns true for SshConnection.
+    /// Event-based metrics are only evaluated at telemetry ingestion time, not in the periodic loop.
+    /// </summary>
+    [Test]
+    public async Task EvaluateAllRulesAsync_SshConnectionEventMetric_SkippedInPeriodicEvaluation()
+    {
+        ISubscriptionService subscriptionService = Substitute.For<ISubscriptionService>();
+        (AlertEvaluationService service, DatabaseContext db, IDatabase redisDb, IAlertDeliveryService delivery, IAlertEventRepository alertEventRepo) = CreateServiceWithDb(subscriptionService);
+
+        Tenant tenant = TestDataBuilder.BuildTenant();
+        tenant.Id = await db.InsertWithInt32IdentityAsync(tenant);
+
+        TenantSubscription proSub = TestDataBuilder.BuildSubscription(tenantId: tenant.Id, tier: SubscriptionTier.Pro, status: SubscriptionStatus.Active);
+        await db.InsertWithInt32IdentityAsync(proSub);
+
+        subscriptionService.GetSubscriptionForTenantAsync(tenant.Id, Arg.Any<CancellationToken>()).Returns(proSub);
+
+        Machine machine = TestDataBuilder.BuildMachine(tenantId: tenant.Id);
+        machine.Id = await db.InsertWithInt64IdentityAsync(machine);
+
+        // Create an enabled SshConnection rule and assign it to the machine
+        AlertRule sshRule = TestDataBuilder.BuildAlertRule(tenantId: tenant.Id, metric: AlertMetric.SshConnection, threshold: 1m, durationMinutes: 0);
+        sshRule.Id = await db.InsertWithInt32IdentityAsync(sshRule);
+
+        await db.InsertAsync(new AlertRuleMachine { AlertRuleId = sshRule.Id, MachineId = machine.Id, CreatedAt = DateTimeOffset.UtcNow });
+
+        MachineStateSummary machineState = TestDataBuilder.BuildMachineStateSummary(machineId: machine.Id, tenantId: tenant.Id, cpuPercent: 95);
+        await db.InsertAsync(machineState);
+
+        await service.EvaluateAllRulesAsync(CancellationToken.None);
+
+        // SshConnection is event-based and must be skipped by the periodic evaluation loop
+        int eventCount = await db.AlertEvents.CountAsync();
+        await Assert.That(eventCount).IsEqualTo(0);
+    }
+
+    /// <summary>
+    /// Verifies that when both a threshold metric (CpuUsage) and an event metric (SshConnection)
+    /// are configured, only the threshold metric is evaluated during periodic evaluation. The
+    /// event metric rule should be skipped entirely.
+    /// </summary>
+    [Test]
+    public async Task EvaluateAllRulesAsync_MixedThresholdAndEventMetrics_OnlyThresholdEvaluated()
+    {
+        ISubscriptionService subscriptionService = Substitute.For<ISubscriptionService>();
+        (AlertEvaluationService service, DatabaseContext db, IDatabase redisDb, IAlertDeliveryService delivery, IAlertEventRepository alertEventRepo) = CreateServiceWithDb(subscriptionService);
+
+        Tenant tenant = TestDataBuilder.BuildTenant();
+        tenant.Id = await db.InsertWithInt32IdentityAsync(tenant);
+
+        TenantSubscription proSub = TestDataBuilder.BuildSubscription(tenantId: tenant.Id, tier: SubscriptionTier.Pro, status: SubscriptionStatus.Active);
+        await db.InsertWithInt32IdentityAsync(proSub);
+
+        subscriptionService.GetSubscriptionForTenantAsync(tenant.Id, Arg.Any<CancellationToken>()).Returns(proSub);
+
+        Machine machine = TestDataBuilder.BuildMachine(tenantId: tenant.Id);
+        machine.Id = await db.InsertWithInt64IdentityAsync(machine);
+
+        // Create a threshold-based CpuUsage rule (should fire)
+        AlertRule cpuRule = TestDataBuilder.BuildAlertRule(tenantId: tenant.Id, metric: AlertMetric.CpuUsage, threshold: 90m, durationMinutes: 0);
+        cpuRule.Id = await db.InsertWithInt32IdentityAsync(cpuRule);
+
+        // Create an event-based SshConnection rule (should be skipped)
+        AlertRule sshRule = TestDataBuilder.BuildAlertRule(tenantId: tenant.Id, metric: AlertMetric.SshConnection, threshold: 1m, durationMinutes: 0);
+        sshRule.Id = await db.InsertWithInt32IdentityAsync(sshRule);
+
+        // Assign both rules to the same machine
+        await db.InsertAsync(new AlertRuleMachine { AlertRuleId = cpuRule.Id, MachineId = machine.Id, CreatedAt = DateTimeOffset.UtcNow });
+        await db.InsertAsync(new AlertRuleMachine { AlertRuleId = sshRule.Id, MachineId = machine.Id, CreatedAt = DateTimeOffset.UtcNow });
+
+        // Set CPU above the threshold so the CPU rule fires
+        MachineStateSummary machineState = TestDataBuilder.BuildMachineStateSummary(machineId: machine.Id, tenantId: tenant.Id, cpuPercent: 95);
+        await db.InsertAsync(machineState);
+
+        await service.EvaluateAllRulesAsync(CancellationToken.None);
+
+        // Exactly one alert event should be created: the CPU rule, not the SSH rule
+        List<AlertEvent> events = await db.AlertEvents.ToListAsync();
+        await Assert.That(events.Count).IsEqualTo(1);
+        await Assert.That(events[0].AlertRuleId).IsEqualTo(cpuRule.Id);
+    }
 }

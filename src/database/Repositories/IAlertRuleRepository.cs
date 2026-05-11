@@ -170,4 +170,14 @@ public interface IAlertRuleRepository
     /// <param name="machineId">The machine ID.</param>
     /// <param name="cancellationToken">A cancellation token.</param>
     Task<int> RemoveAllMachineAssignmentsAsync(long machineId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Returns enabled alert rules of a specific metric type that are assigned to a machine
+    /// within a tenant. Used by event-based alert evaluation at telemetry ingestion time.
+    /// </summary>
+    /// <param name="tenantId">The tenant ID.</param>
+    /// <param name="machineId">The machine ID.</param>
+    /// <param name="metric">The alert metric to filter by.</param>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    Task<List<AlertRule>> GetEnabledRulesForMachineByMetricAsync(int tenantId, long machineId, AlertMetric metric, CancellationToken cancellationToken = default);
 }

@@ -146,6 +146,25 @@ public partial class DatabaseRepository : IAlertEventRepository
     }
 
     /// <inheritdoc/>
+    public async Task ResolveEventsForMachineByMetricAsync(long machineId, AlertMetric metric, CancellationToken cancellationToken)
+    {
+        int resolved = await (from e in _db.AlertEvents
+                              join r in _db.AlertRules on e.AlertRuleId equals r.Id
+                              where (e.MachineId == machineId) &&
+                                    (r.Metric == metric) &&
+                                    (e.Status != AlertEventStatus.Resolved)
+                              select e)
+            .Set(e => e.Status, AlertEventStatus.Resolved)
+            .Set(e => e.ResolvedAt, DateTimeOffset.UtcNow)
+            .UpdateAsync(cancellationToken);
+
+        if (resolved > 0)
+        {
+            _logger.LogDebug("Resolved {Count} active {Metric} events for machine {MachineId}", resolved, metric, machineId);
+        }
+    }
+
+    /// <inheritdoc/>
     public async Task<AlertEvent?> CreateEventIfNotExistsAsync(AlertEvent alertEvent, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(alertEvent);

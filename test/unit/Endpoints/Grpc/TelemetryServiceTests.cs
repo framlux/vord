@@ -6,6 +6,7 @@ using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database;
 using Framlux.FleetManagement.Grpc.AgentTelemetry;
 using Framlux.FleetManagement.Server.Endpoints.Grpc;
+using Framlux.FleetManagement.Server.Services.Alerts;
 using Framlux.FleetManagement.Server.Services.Billing;
 using Framlux.FleetManagement.Server.Services.Machines;
 using Framlux.FleetManagement.Server.Services.Telemetry;
@@ -29,6 +30,7 @@ public sealed class TelemetryServiceTests
 {
     private readonly ITelemetryDeduplicationService _dedupService;
     private readonly ISubscriptionService _subscriptionService;
+    private readonly IEventAlertService _eventAlertService = Substitute.For<IEventAlertService>();
     private readonly ILogger<TelemetryService> _logger = Substitute.For<ILogger<TelemetryService>>();
 
     /// <summary>
@@ -97,7 +99,7 @@ public sealed class TelemetryServiceTests
 
     private TelemetryService CreateService(IServiceScopeFactory scopeFactory)
     {
-        return new TelemetryService(scopeFactory, _dedupService, _subscriptionService, NoOpPipeline, _logger);
+        return new TelemetryService(scopeFactory, _dedupService, _subscriptionService, _eventAlertService, NoOpPipeline, _logger);
     }
 
     [Test]
@@ -282,7 +284,7 @@ public sealed class TelemetryServiceTests
                 return ids.ToDictionary(id => id, _ => false);
             });
 
-        TelemetryService service = new(scopeFactory, dupDedupService, _subscriptionService, NoOpPipeline, _logger);
+        TelemetryService service = new(scopeFactory, dupDedupService, _subscriptionService, _eventAlertService, NoOpPipeline, _logger);
         ServerCallContext context = CreateAuthenticatedContext(200);
 
         TelemetryEnvelope envelope = new()
@@ -389,7 +391,7 @@ public sealed class TelemetryServiceTests
                 UpdatedAt = DateTimeOffset.UtcNow,
             });
 
-        TelemetryService service = new(scopeFactory, _dedupService, inactiveSubService, NoOpPipeline, _logger);
+        TelemetryService service = new(scopeFactory, _dedupService, inactiveSubService, _eventAlertService, NoOpPipeline, _logger);
         ServerCallContext context = CreateAuthenticatedContext(100);
 
         TelemetryEnvelope envelope = new() { AgentTimestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow), BatchId ="batch-inactive" };
@@ -450,6 +452,146 @@ public sealed class TelemetryServiceTests
 
         await Assert.That(ack.Success).IsTrue();
         await Assert.That(ack.BatchId).IsEqualTo("batch-empty");
+    }
+
+    [Test]
+    public async Task SubmitTelemetry_SshConnectEvent_InvokesEventAlertEvaluation()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+        TelemetryService service = CreateService(scopeFactory);
+        ServerCallContext context = CreateAuthenticatedContext(500, tenantId: 7);
+
+        TelemetryEnvelope envelope = new()
+        {
+            AgentTimestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            BatchId = "batch-ssh-connect",
+        };
+        envelope.Items.Add(new TelemetryItem
+        {
+            EventId = "event-ssh-connect-1",
+            Type = TelemetryTypes.SshSessionType,
+            SshSession = new SshSessionRecord
+            {
+                User = "admin",
+                SourceIp = "192.168.1.100",
+                SourcePort = 54321,
+                Action = "connect",
+                AuthMethod = "publickey",
+                Timestamp = DateTimeOffset.UtcNow.ToString("o"),
+            }
+        });
+
+        TelemetryAck ack = await service.SubmitTelemetry(envelope, context);
+
+        await Assert.That(ack.Success).IsTrue();
+        await _eventAlertService.Received(1).EvaluateSshConnectAsync(
+            7, 500, "admin", "192.168.1.100", 54321, "publickey", Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task SubmitTelemetry_SshDisconnectEvent_InvokesResolution()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+        TelemetryService service = CreateService(scopeFactory);
+        ServerCallContext context = CreateAuthenticatedContext(600, tenantId: 8);
+
+        TelemetryEnvelope envelope = new()
+        {
+            AgentTimestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            BatchId = "batch-ssh-disconnect",
+        };
+        envelope.Items.Add(new TelemetryItem
+        {
+            EventId = "event-ssh-disconnect-1",
+            Type = TelemetryTypes.SshSessionType,
+            SshSession = new SshSessionRecord
+            {
+                User = "deploy",
+                SourceIp = "10.0.0.50",
+                SourcePort = 44000,
+                Action = "disconnect",
+                AuthMethod = "password",
+                Timestamp = DateTimeOffset.UtcNow.ToString("o"),
+            }
+        });
+
+        TelemetryAck ack = await service.SubmitTelemetry(envelope, context);
+
+        await Assert.That(ack.Success).IsTrue();
+        await _eventAlertService.Received(1).ResolveSshDisconnectAsync(
+            600, Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task SubmitTelemetry_NonSshTelemetry_DoesNotInvokeEventAlertService()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+        TelemetryService service = CreateService(scopeFactory);
+        ServerCallContext context = CreateAuthenticatedContext(700, tenantId: 9);
+
+        TelemetryEnvelope envelope = new()
+        {
+            AgentTimestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            BatchId = "batch-cpu-only",
+        };
+        envelope.Items.Add(new TelemetryItem
+        {
+            EventId = "event-cpu-only-1",
+            Type = TelemetryTypes.CpuUtilizationType,
+            CpuUtilization = new CpuUtilizationRecord { CpuUsagePercent = 85 }
+        });
+
+        TelemetryAck ack = await service.SubmitTelemetry(envelope, context);
+
+        await Assert.That(ack.Success).IsTrue();
+        await _eventAlertService.DidNotReceive().EvaluateSshConnectAsync(
+            Arg.Any<int>(), Arg.Any<long>(), Arg.Any<string>(), Arg.Any<string>(),
+            Arg.Any<int>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
+        await _eventAlertService.DidNotReceive().ResolveSshDisconnectAsync(
+            Arg.Any<long>(), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task SubmitTelemetry_SshAlertServiceThrows_TelemetryStillProcessed()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+        TelemetryService service = CreateService(scopeFactory);
+        ServerCallContext context = CreateAuthenticatedContext(800, tenantId: 10);
+
+        _eventAlertService.EvaluateSshConnectAsync(
+            Arg.Any<int>(), Arg.Any<long>(), Arg.Any<string>(), Arg.Any<string>(),
+            Arg.Any<int>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns<Task>(callInfo => throw new InvalidOperationException("Alert service failure"));
+
+        TelemetryEnvelope envelope = new()
+        {
+            AgentTimestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            BatchId = "batch-ssh-throws",
+        };
+        envelope.Items.Add(new TelemetryItem
+        {
+            EventId = "event-ssh-throws-1",
+            Type = TelemetryTypes.SshSessionType,
+            SshSession = new SshSessionRecord
+            {
+                User = "root",
+                SourceIp = "172.16.0.1",
+                SourcePort = 22222,
+                Action = "connect",
+                AuthMethod = "keyboard-interactive",
+                Timestamp = DateTimeOffset.UtcNow.ToString("o"),
+            }
+        });
+
+        TelemetryAck ack = await service.SubmitTelemetry(envelope, context);
+
+        await Assert.That(ack.Success).IsTrue();
+        await Assert.That(ack.AcknowledgedEventIds.Count).IsEqualTo(1);
+        await Assert.That(ack.AcknowledgedEventIds[0]).IsEqualTo("event-ssh-throws-1");
     }
 
     /// <summary>

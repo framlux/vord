@@ -40,6 +40,24 @@
 	let deleteRuleForm: HTMLFormElement;
 	let deleteIntegrationForm: HTMLFormElement;
 
+	// Metric category metadata for duration minimums and event-based metrics
+	const metricMinDuration: Record<string, number> = {
+		CpuUsage: 5,
+		MemoryUsage: 5,
+		DiskUsage: 5,
+		MachineOffline: 1,
+		FailedServices: 1,
+		SecurityUpdates: 1,
+		DiskHealth: 1,
+		SshConnection: 0
+	};
+
+	const eventMetrics = new Set(['SshConnection']);
+
+	let createMetric = $state('CpuUsage');
+	const isCreateEventMetric = $derived(eventMetrics.has(createMetric));
+	const createMinDuration = $derived(metricMinDuration[createMetric] ?? 1);
+
 	async function copySecret() {
 		if (revealedSecret) {
 			try {
@@ -237,7 +255,7 @@
 								</div>
 								<div>
 									<label for="rule-metric" class="mb-1 block text-xs text-surface-500 dark:text-surface-400">Metric</label>
-									<select id="rule-metric" name="metric" required class="w-full rounded-lg border border-surface-300 bg-surface-50 px-3 py-2 text-sm dark:border-surface-600 dark:bg-surface-700 dark:text-surface-100">
+									<select id="rule-metric" name="metric" required bind:value={createMetric} class="w-full rounded-lg border border-surface-300 bg-surface-50 px-3 py-2 text-sm dark:border-surface-600 dark:bg-surface-700 dark:text-surface-100">
 										<option value="CpuUsage">CPU Usage</option>
 										<option value="MemoryUsage">Memory Usage</option>
 										<option value="DiskUsage">Disk Usage</option>
@@ -245,24 +263,35 @@
 										<option value="SecurityUpdates">Security Updates</option>
 										<option value="DiskHealth">Disk Health</option>
 										<option value="MachineOffline">Machine Offline</option>
+										<option value="SshConnection">SSH Connection</option>
 									</select>
 								</div>
-								<div>
-									<label for="rule-operator" class="mb-1 block text-xs text-surface-500 dark:text-surface-400">Operator</label>
-									<select id="rule-operator" name="operator" required class="w-full rounded-lg border border-surface-300 bg-surface-50 px-3 py-2 text-sm dark:border-surface-600 dark:bg-surface-700 dark:text-surface-100">
-										<option value="GreaterThan">Greater Than</option>
-										<option value="LessThan">Less Than</option>
-										<option value="EqualTo">Equals</option>
-									</select>
-								</div>
-								<div>
-									<label for="rule-threshold" class="mb-1 block text-xs text-surface-500 dark:text-surface-400">Threshold</label>
-									<input id="rule-threshold" name="threshold" type="number" step="any" required class="w-full rounded-lg border border-surface-300 bg-surface-50 px-3 py-2 text-sm dark:border-surface-600 dark:bg-surface-700 dark:text-surface-100" />
-								</div>
-								<div>
-									<label for="rule-duration" class="mb-1 block text-xs text-surface-500 dark:text-surface-400">Duration (minutes)</label>
-									<input id="rule-duration" name="durationMinutes" type="number" value="0" class="w-full rounded-lg border border-surface-300 bg-surface-50 px-3 py-2 text-sm dark:border-surface-600 dark:bg-surface-700 dark:text-surface-100" />
-								</div>
+								{#if isCreateEventMetric === false}
+									<div>
+										<label for="rule-operator" class="mb-1 block text-xs text-surface-500 dark:text-surface-400">Operator</label>
+										<select id="rule-operator" name="operator" required class="w-full rounded-lg border border-surface-300 bg-surface-50 px-3 py-2 text-sm dark:border-surface-600 dark:bg-surface-700 dark:text-surface-100">
+											<option value="GreaterThan">Greater Than</option>
+											<option value="LessThan">Less Than</option>
+											<option value="EqualTo">Equals</option>
+										</select>
+									</div>
+									<div>
+										<label for="rule-threshold" class="mb-1 block text-xs text-surface-500 dark:text-surface-400">Threshold</label>
+										<input id="rule-threshold" name="threshold" type="number" step="any" required class="w-full rounded-lg border border-surface-300 bg-surface-50 px-3 py-2 text-sm dark:border-surface-600 dark:bg-surface-700 dark:text-surface-100" />
+									</div>
+									<div>
+										<label for="rule-duration" class="mb-1 block text-xs text-surface-500 dark:text-surface-400">Duration (minutes)</label>
+										<input id="rule-duration" name="durationMinutes" type="number" value={createMinDuration} min={createMinDuration} class="w-full rounded-lg border border-surface-300 bg-surface-50 px-3 py-2 text-sm dark:border-surface-600 dark:bg-surface-700 dark:text-surface-100" />
+										<p class="mt-1 text-xs text-surface-400 dark:text-surface-500">Minimum {createMinDuration} min. Condition must be sustained before the alert fires.</p>
+									</div>
+								{:else}
+									<input type="hidden" name="operator" value="EqualTo" />
+									<input type="hidden" name="threshold" value="1" />
+									<input type="hidden" name="durationMinutes" value="0" />
+									<div class="col-span-2">
+										<p class="pt-5 text-xs text-surface-500 dark:text-surface-400">This event-based alert fires immediately when the event is detected. No threshold or duration applies.</p>
+									</div>
+								{/if}
 								<div>
 									<label for="rule-severity" class="mb-1 block text-xs text-surface-500 dark:text-surface-400">Severity</label>
 									<select id="rule-severity" name="severity" required class="w-full rounded-lg border border-surface-300 bg-surface-50 px-3 py-2 text-sm dark:border-surface-600 dark:bg-surface-700 dark:text-surface-100">
@@ -342,9 +371,13 @@
 											</td>
 											<td class="px-4 py-3 text-surface-600 dark:text-surface-400">{rule.metric}</td>
 											<td class="px-4 py-3 text-surface-600 dark:text-surface-400">
-												{rule.operator} {rule.threshold}
-												{#if rule.durationMinutes > 0}
-													<span class="text-xs text-surface-400">for {rule.durationMinutes}m</span>
+												{#if eventMetrics.has(rule.metric)}
+													<span class="text-xs text-surface-400">On event</span>
+												{:else}
+													{rule.operator} {rule.threshold}
+													{#if rule.durationMinutes > 0}
+														<span class="text-xs text-surface-400">for {rule.durationMinutes}m</span>
+													{/if}
 												{/if}
 											</td>
 											<td class="px-4 py-3">
@@ -381,10 +414,13 @@
 											</td>
 										</tr>
 										{#if editingRuleId === rule.id}
+											{@const isEditEvent = eventMetrics.has(rule.metric)}
+											{@const editMinDuration = metricMinDuration[rule.metric] ?? 1}
 											<tr class="bg-surface-50 dark:bg-surface-800/50">
 												<td colspan="8" class="px-4 py-4">
 													<form method="POST" action="?/updateRule" use:enhance={() => { rulesError = null; return async ({ result, update }) => { if (result.type === 'failure') { rulesError = (result.data as { message?: string })?.message ?? 'An error occurred'; } else { editingRuleId = null; rulesError = null; await update(); } }; }}>
 														<input type="hidden" name="id" value={rule.id} />
+														<input type="hidden" name="metric" value={rule.metric} />
 														{#if rulesError}
 															<div role="alert" class="mb-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-900/20 dark:text-red-300">
 																{rulesError}
@@ -395,14 +431,23 @@
 																<label for="edit-name-{rule.id}" class="mb-1 block text-xs text-surface-500 dark:text-surface-400">Name</label>
 																<input id="edit-name-{rule.id}" name="name" type="text" value={rule.name} required class="w-full rounded-lg border border-surface-300 bg-surface-50 px-3 py-2 text-sm dark:border-surface-600 dark:bg-surface-700 dark:text-surface-100" />
 															</div>
-															<div>
-																<label for="edit-threshold-{rule.id}" class="mb-1 block text-xs text-surface-500 dark:text-surface-400">Threshold</label>
-																<input id="edit-threshold-{rule.id}" name="threshold" type="number" step="any" value={rule.threshold} required class="w-full rounded-lg border border-surface-300 bg-surface-50 px-3 py-2 text-sm dark:border-surface-600 dark:bg-surface-700 dark:text-surface-100" />
-															</div>
-															<div>
-																<label for="edit-duration-{rule.id}" class="mb-1 block text-xs text-surface-500 dark:text-surface-400">Duration (minutes)</label>
-																<input id="edit-duration-{rule.id}" name="durationMinutes" type="number" value={rule.durationMinutes} class="w-full rounded-lg border border-surface-300 bg-surface-50 px-3 py-2 text-sm dark:border-surface-600 dark:bg-surface-700 dark:text-surface-100" />
-															</div>
+															{#if isEditEvent === false}
+																<div>
+																	<label for="edit-threshold-{rule.id}" class="mb-1 block text-xs text-surface-500 dark:text-surface-400">Threshold</label>
+																	<input id="edit-threshold-{rule.id}" name="threshold" type="number" step="any" value={rule.threshold} required class="w-full rounded-lg border border-surface-300 bg-surface-50 px-3 py-2 text-sm dark:border-surface-600 dark:bg-surface-700 dark:text-surface-100" />
+																</div>
+																<div>
+																	<label for="edit-duration-{rule.id}" class="mb-1 block text-xs text-surface-500 dark:text-surface-400">Duration (minutes)</label>
+																	<input id="edit-duration-{rule.id}" name="durationMinutes" type="number" value={rule.durationMinutes} min={editMinDuration} class="w-full rounded-lg border border-surface-300 bg-surface-50 px-3 py-2 text-sm dark:border-surface-600 dark:bg-surface-700 dark:text-surface-100" />
+																	<p class="mt-1 text-xs text-surface-400 dark:text-surface-500">Minimum {editMinDuration} min</p>
+																</div>
+															{:else}
+																<input type="hidden" name="threshold" value={rule.threshold} />
+																<input type="hidden" name="durationMinutes" value="0" />
+																<div>
+																	<p class="pt-5 text-xs text-surface-500 dark:text-surface-400">Event-based alert — fires immediately on detection.</p>
+																</div>
+															{/if}
 															<div>
 																<label for="edit-severity-{rule.id}" class="mb-1 block text-xs text-surface-500 dark:text-surface-400">Severity</label>
 																<select id="edit-severity-{rule.id}" name="severity" class="w-full rounded-lg border border-surface-300 bg-surface-50 px-3 py-2 text-sm dark:border-surface-600 dark:bg-surface-700 dark:text-surface-100">

@@ -7,6 +7,7 @@ using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Grpc.AgentTelemetry;
 using Framlux.FleetManagement.Server.Auth;
+using Framlux.FleetManagement.Server.Services.Alerts;
 using Framlux.FleetManagement.Server.Services.Billing;
 using Framlux.FleetManagement.Server.Services.Infrastructure;
 using Framlux.FleetManagement.Server.Services.Telemetry;
@@ -55,6 +56,7 @@ public sealed class TelemetryService : Telemetry.TelemetryBase
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly ITelemetryDeduplicationService _dedupService;
     private readonly ISubscriptionService _subscriptionService;
+    private readonly IEventAlertService _eventAlertService;
     private readonly ResiliencePipeline _dbPipeline;
     private readonly ILogger<TelemetryService> _logger;
 
@@ -65,12 +67,14 @@ public sealed class TelemetryService : Telemetry.TelemetryBase
         IServiceScopeFactory scopeFactory,
         ITelemetryDeduplicationService dedupService,
         ISubscriptionService subscriptionService,
+        IEventAlertService eventAlertService,
         ResiliencePipeline dbPipeline,
         ILogger<TelemetryService> logger)
     {
         _scopeFactory = scopeFactory;
         _dedupService = dedupService;
         _subscriptionService = subscriptionService;
+        _eventAlertService = eventAlertService;
         _dbPipeline = dbPipeline;
         _logger = logger;
     }
@@ -319,6 +323,9 @@ public sealed class TelemetryService : Telemetry.TelemetryBase
                 {
                     acknowledgedIds.Add(item.EventId);
                 }
+
+                // Evaluate event-based alerts for SSH sessions after persisting telemetry
+                await EvaluateSshAlertEventsAsync(tenantId, machineId, newItems, ct);
             }
 
             _logger.LogDebug("Processed {Count} telemetry items for machine {MachineId} batch {BatchId}",
@@ -343,6 +350,40 @@ public sealed class TelemetryService : Telemetry.TelemetryBase
                 Success = false,
                 ErrorMessage = "Internal server error"
             };
+        }
+    }
+
+    private async Task EvaluateSshAlertEventsAsync(
+        int tenantId,
+        long machineId,
+        List<(TelemetryItem Item, short Type, string Payload)> items,
+        CancellationToken ct)
+    {
+        foreach ((TelemetryItem item, short _, string _) in items)
+        {
+            if (item.PayloadCase != TelemetryItem.PayloadOneofCase.SshSession)
+            {
+                continue;
+            }
+
+            SshSessionRecord ssh = item.SshSession;
+
+            try
+            {
+                if (string.Equals(ssh.Action, "connect", StringComparison.OrdinalIgnoreCase))
+                {
+                    await _eventAlertService.EvaluateSshConnectAsync(
+                        tenantId, machineId, ssh.User, ssh.SourceIp, ssh.SourcePort, ssh.AuthMethod, ct);
+                }
+                else if (string.Equals(ssh.Action, "disconnect", StringComparison.OrdinalIgnoreCase))
+                {
+                    await _eventAlertService.ResolveSshDisconnectAsync(machineId, ct);
+                }
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to evaluate SSH alert for machine {MachineId}", machineId);
+            }
         }
     }
 

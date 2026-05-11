@@ -81,6 +81,15 @@ public interface IAlertEventRepository
     Task<bool> HasActiveEventForRuleMachineAsync(int ruleId, long machineId, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Resolves all active (non-resolved) events for a specific metric type and machine pair.
+    /// Used for event-based alert auto-resolution (e.g., resolving SSH alerts on disconnect).
+    /// </summary>
+    /// <param name="machineId">The machine ID.</param>
+    /// <param name="metric">The alert metric to filter by.</param>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    Task ResolveEventsForMachineByMetricAsync(long machineId, AlertMetric metric, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Creates an alert event atomically with advisory lock deduplication protection.
     /// On PostgreSQL, acquires pg_advisory_xact_lock within a transaction to prevent duplicates.
     /// If an active event already exists for the rule and machine, returns null without inserting.

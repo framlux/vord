@@ -109,6 +109,110 @@ public sealed class CreateAlertRuleValidatorTests
     }
 
     [Test]
+    public async Task VolatileMetric_DurationBelowMinimum_FailsValidation()
+    {
+        CreateAlertRuleRequest request = ValidRequest();
+        request.Metric = "CpuUsage";
+        request.DurationMinutes = 4;
+
+        ValidationResult result = await _validator.ValidateAsync(request);
+
+        await Assert.That(result.IsValid).IsFalse();
+        await Assert.That(result.Errors.Any(e => e.ErrorMessage == "Duration must be at least 5 minutes for CpuUsage alerts")).IsTrue();
+    }
+
+    [Test]
+    public async Task VolatileMetric_DurationAtMinimum_PassesValidation()
+    {
+        CreateAlertRuleRequest request = ValidRequest();
+        request.Metric = "CpuUsage";
+        request.DurationMinutes = 5;
+
+        ValidationResult result = await _validator.ValidateAsync(request);
+
+        await Assert.That(result.IsValid).IsTrue();
+    }
+
+    [Test]
+    public async Task VolatileMetric_DurationAboveMinimum_PassesValidation()
+    {
+        CreateAlertRuleRequest request = ValidRequest();
+        request.Metric = "MemoryUsage";
+        request.DurationMinutes = 10;
+
+        ValidationResult result = await _validator.ValidateAsync(request);
+
+        await Assert.That(result.IsValid).IsTrue();
+    }
+
+    [Test]
+    public async Task VolatileMetric_ZeroDuration_FailsValidation()
+    {
+        CreateAlertRuleRequest request = ValidRequest();
+        request.Metric = "DiskUsage";
+        request.DurationMinutes = 0;
+
+        ValidationResult result = await _validator.ValidateAsync(request);
+
+        await Assert.That(result.IsValid).IsFalse();
+    }
+
+    [Test]
+    public async Task StateMetric_DurationBelowMinimum_FailsValidation()
+    {
+        CreateAlertRuleRequest request = ValidRequest();
+        request.Metric = "MachineOffline";
+        request.Operator = "EqualTo";
+        request.Threshold = 1;
+        request.DurationMinutes = 0;
+
+        ValidationResult result = await _validator.ValidateAsync(request);
+
+        await Assert.That(result.IsValid).IsFalse();
+    }
+
+    [Test]
+    public async Task StateMetric_DurationAtMinimum_PassesValidation()
+    {
+        CreateAlertRuleRequest request = ValidRequest();
+        request.Metric = "FailedServices";
+        request.DurationMinutes = 1;
+
+        ValidationResult result = await _validator.ValidateAsync(request);
+
+        await Assert.That(result.IsValid).IsTrue();
+    }
+
+    [Test]
+    public async Task EventMetric_ZeroDuration_PassesValidation()
+    {
+        CreateAlertRuleRequest request = ValidRequest();
+        request.Metric = "SshConnection";
+        request.Operator = "EqualTo";
+        request.Threshold = 1;
+        request.DurationMinutes = 0;
+
+        ValidationResult result = await _validator.ValidateAsync(request);
+
+        await Assert.That(result.IsValid).IsTrue();
+    }
+
+    [Test]
+    public async Task EventMetric_NonZeroDuration_FailsValidation()
+    {
+        CreateAlertRuleRequest request = ValidRequest();
+        request.Metric = "SshConnection";
+        request.Operator = "EqualTo";
+        request.Threshold = 1;
+        request.DurationMinutes = 1;
+
+        ValidationResult result = await _validator.ValidateAsync(request);
+
+        await Assert.That(result.IsValid).IsFalse();
+        await Assert.That(result.Errors.Any(e => e.ErrorMessage == "Duration must be zero for event-based metrics")).IsTrue();
+    }
+
+    [Test]
     public async Task NegativeDuration_FailsValidation()
     {
         CreateAlertRuleRequest request = ValidRequest();
@@ -117,18 +221,6 @@ public sealed class CreateAlertRuleValidatorTests
         ValidationResult result = await _validator.ValidateAsync(request);
 
         await Assert.That(result.IsValid).IsFalse();
-        await Assert.That(result.Errors.Any(e => e.ErrorMessage == "Duration must be zero or positive")).IsTrue();
-    }
-
-    [Test]
-    public async Task ZeroDuration_PassesValidation()
-    {
-        CreateAlertRuleRequest request = ValidRequest();
-        request.DurationMinutes = 0;
-
-        ValidationResult result = await _validator.ValidateAsync(request);
-
-        await Assert.That(result.IsValid).IsTrue();
     }
 
     [Test]

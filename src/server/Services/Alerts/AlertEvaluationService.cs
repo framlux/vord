@@ -119,6 +119,12 @@ public sealed class AlertEvaluationService : BackgroundService
 
             foreach (AlertRule rule in tenantRules)
             {
+                // Event-based metrics are evaluated at telemetry ingestion time, not here
+                if (AlertConstants.IsEventMetric(rule.Metric))
+                {
+                    continue;
+                }
+
                 List<long> assignedMachineIds = machinesByRule.GetValueOrDefault(rule.Id, []);
                 if (assignedMachineIds.Count == 0)
                 {
@@ -238,6 +244,7 @@ public sealed class AlertEvaluationService : BackgroundService
             AlertMetric.SecurityUpdates => state.SecurityUpdates.HasValue ? (decimal)state.SecurityUpdates.Value : null,
             AlertMetric.DiskHealth => GetDiskHealthValue(state),
             AlertMetric.MachineOffline => state.HealthStatus == AlertConstants.HealthStatusOffline ? 1m : 0m,
+            AlertMetric.SshConnection => null,
             _ => null,
         };
     }

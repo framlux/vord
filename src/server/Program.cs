@@ -380,6 +380,7 @@ else
 }
 
 builder.Services.AddSingleton<IAlertDeliveryService, AlertDeliveryService>();
+builder.Services.AddSingleton<IEventAlertService, EventAlertService>();
 builder.Services.AddHostedService<AlertEvaluationService>();
 builder.Services.AddHostedService<IntegrationDeliveryWorkerService>();
 builder.Services.AddHostedService<CommandExpiryBackgroundService>();

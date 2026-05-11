@@ -7,6 +7,7 @@ using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Server.Auth;
+using Framlux.FleetManagement.Server.Services.Alerts;
 using Framlux.FleetManagement.Server.Services.Billing;
 using Framlux.FleetManagement.Server.Services.Infrastructure;
 
@@ -22,6 +23,12 @@ public sealed class UpdateAlertRuleRequest
 
     /// <summary>Optional description.</summary>
     public string? Description { get; set; }
+
+    /// <summary>
+    /// The metric type of the rule, used for client-side validation of threshold and duration constraints.
+    /// The handler verifies this matches the DB-stored metric (the metric is immutable after creation).
+    /// </summary>
+    public string Metric { get; set; } = string.Empty;
 
     /// <summary>The threshold value.</summary>
     public decimal Threshold { get; set; }
@@ -112,6 +119,16 @@ public sealed class AlertRuleUpdateEndpoint : Endpoint<UpdateAlertRuleRequest, A
             return;
         }
 
+        // Verify the metric in the request matches the DB-stored metric (metric is immutable)
+        if (Enum.TryParse<AlertMetric>(req.Metric, true, out AlertMetric requestMetric) == false || requestMetric != rule.Metric)
+        {
+            HttpContext.Response.StatusCode = 400;
+            await HttpContext.Response.WriteAsJsonAsync(
+                ApiResponse<AlertRuleDto>.Error("Metric in request does not match the rule's metric"), ct);
+
+            return;
+        }
+
         if (rule.IsCustom && (subscription.Tier != SubscriptionTier.Team))
         {
             HttpContext.Response.StatusCode = 403;
@@ -130,33 +147,13 @@ public sealed class AlertRuleUpdateEndpoint : Endpoint<UpdateAlertRuleRequest, A
             return;
         }
 
-        // Validate threshold range based on the rule's metric type (requires DB-loaded metric)
-        bool isPercentageMetric = rule.Metric is AlertMetric.CpuUsage or AlertMetric.MemoryUsage or AlertMetric.DiskUsage;
-        bool isBinaryMetric = rule.Metric is AlertMetric.MachineOffline or AlertMetric.DiskHealth;
-
-        if (isPercentageMetric && ((req.Threshold < 0) || (req.Threshold > 100)))
+        // Validate threshold and duration based on the rule's metric type (requires DB-loaded metric)
+        string? validationError = ValidateMetricConstraints(rule.Metric, req.Threshold, req.DurationMinutes);
+        if (validationError is not null)
         {
             HttpContext.Response.StatusCode = 400;
             await HttpContext.Response.WriteAsJsonAsync(
-                ApiResponse<AlertRuleDto>.Error("Threshold for percentage metrics must be between 0 and 100"), ct);
-
-            return;
-        }
-
-        if (isBinaryMetric && (req.Threshold != 0) && (req.Threshold != 1))
-        {
-            HttpContext.Response.StatusCode = 400;
-            await HttpContext.Response.WriteAsJsonAsync(
-                ApiResponse<AlertRuleDto>.Error("Threshold for this metric must be 0 or 1"), ct);
-
-            return;
-        }
-
-        if ((isPercentageMetric == false) && (isBinaryMetric == false) && (req.Threshold < 0))
-        {
-            HttpContext.Response.StatusCode = 400;
-            await HttpContext.Response.WriteAsJsonAsync(
-                ApiResponse<AlertRuleDto>.Error("Threshold must be zero or positive"), ct);
+                ApiResponse<AlertRuleDto>.Error(validationError), ct);
 
             return;
         }
@@ -205,5 +202,43 @@ public sealed class AlertRuleUpdateEndpoint : Endpoint<UpdateAlertRuleRequest, A
         };
 
         await Send.OkAsync(ApiResponse<AlertRuleDto>.Ok(dto, "Alert rule updated"), cancellation: ct);
+    }
+
+    /// <summary>
+    /// Validates threshold and duration constraints based on the metric type.
+    /// Returns an error message if validation fails, or null if valid.
+    /// </summary>
+    internal static string? ValidateMetricConstraints(AlertMetric metric, decimal threshold, int durationMinutes)
+    {
+        bool isPercentageMetric = metric is AlertMetric.CpuUsage or AlertMetric.MemoryUsage or AlertMetric.DiskUsage;
+        bool isBinaryMetric = metric is AlertMetric.MachineOffline or AlertMetric.DiskHealth;
+
+        if (isPercentageMetric && ((threshold < 0) || (threshold > 100)))
+        {
+            return "Threshold for percentage metrics must be between 0 and 100";
+        }
+
+        if (isBinaryMetric && (threshold != 0) && (threshold != 1))
+        {
+            return "Threshold for this metric must be 0 or 1";
+        }
+
+        if ((isPercentageMetric == false) && (isBinaryMetric == false) && (threshold < 0))
+        {
+            return "Threshold must be zero or positive";
+        }
+
+        if (AlertConstants.IsEventMetric(metric) && (durationMinutes != 0))
+        {
+            return "Duration must be zero for event-based metrics";
+        }
+
+        int minimumDuration = AlertConstants.GetMinimumDurationMinutes(metric);
+        if (durationMinutes < minimumDuration)
+        {
+            return $"Duration must be at least {minimumDuration} minutes for {metric} alerts";
+        }
+
+        return null;
     }
 }

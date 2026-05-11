@@ -300,4 +300,19 @@ public partial class DatabaseRepository : IAlertRuleRepository
 
         return deleted;
     }
+
+    /// <inheritdoc/>
+    public async Task<List<AlertRule>> GetEnabledRulesForMachineByMetricAsync(int tenantId, long machineId, AlertMetric metric, CancellationToken cancellationToken)
+    {
+        List<AlertRule> rules = await (from ar in _db.AlertRules
+                                      join arm in _db.AlertRuleMachines on ar.Id equals arm.AlertRuleId
+                                      where (ar.TenantId == tenantId) &&
+                                            (ar.IsEnabled == true) &&
+                                            (ar.Metric == metric) &&
+                                            (arm.MachineId == machineId)
+                                      select ar)
+            .ToListAsync(cancellationToken);
+
+        return rules;
+    }
 }

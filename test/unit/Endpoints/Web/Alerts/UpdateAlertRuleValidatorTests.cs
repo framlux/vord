@@ -20,6 +20,7 @@ public sealed class UpdateAlertRuleValidatorTests
         {
             Name = "Updated Alert Rule",
             Description = "Updated description",
+            Metric = "CpuUsage",
             Threshold = 80,
             DurationMinutes = 10,
             Severity = "Warning",
@@ -86,26 +87,15 @@ public sealed class UpdateAlertRuleValidatorTests
     }
 
     [Test]
-    public async Task NegativeDuration_FailsValidation()
+    public async Task InvalidMetric_FailsValidation()
     {
         UpdateAlertRuleRequest request = ValidRequest();
-        request.DurationMinutes = -1;
+        request.Metric = "InvalidMetric";
 
         ValidationResult result = await _validator.ValidateAsync(request);
 
         await Assert.That(result.IsValid).IsFalse();
-        await Assert.That(result.Errors.Any(e => e.ErrorMessage == "Duration must be zero or positive")).IsTrue();
-    }
-
-    [Test]
-    public async Task ZeroDuration_PassesValidation()
-    {
-        UpdateAlertRuleRequest request = ValidRequest();
-        request.DurationMinutes = 0;
-
-        ValidationResult result = await _validator.ValidateAsync(request);
-
-        await Assert.That(result.IsValid).IsTrue();
+        await Assert.That(result.Errors.Any(e => e.ErrorMessage == "Invalid metric")).IsTrue();
     }
 
     [Test]
@@ -163,5 +153,117 @@ public sealed class UpdateAlertRuleValidatorTests
         ValidationResult result = await _validator.ValidateAsync(request);
 
         await Assert.That(result.IsValid).IsTrue();
+    }
+
+    // --- Per-Metric Duration Validation ---
+
+    [Test]
+    public async Task VolatileMetric_DurationBelowMinimum_FailsValidation()
+    {
+        UpdateAlertRuleRequest request = ValidRequest();
+        request.Metric = "CpuUsage";
+        request.DurationMinutes = 4;
+
+        ValidationResult result = await _validator.ValidateAsync(request);
+
+        await Assert.That(result.IsValid).IsFalse();
+        await Assert.That(result.Errors.Any(e => e.ErrorMessage == "Duration must be at least 5 minutes for CpuUsage alerts")).IsTrue();
+    }
+
+    [Test]
+    public async Task VolatileMetric_DurationAtMinimum_PassesValidation()
+    {
+        UpdateAlertRuleRequest request = ValidRequest();
+        request.Metric = "CpuUsage";
+        request.DurationMinutes = 5;
+
+        ValidationResult result = await _validator.ValidateAsync(request);
+
+        await Assert.That(result.IsValid).IsTrue();
+    }
+
+    [Test]
+    public async Task VolatileMetric_ZeroDuration_FailsValidation()
+    {
+        UpdateAlertRuleRequest request = ValidRequest();
+        request.Metric = "MemoryUsage";
+        request.DurationMinutes = 0;
+
+        ValidationResult result = await _validator.ValidateAsync(request);
+
+        await Assert.That(result.IsValid).IsFalse();
+    }
+
+    [Test]
+    public async Task StateMetric_ZeroDuration_FailsValidation()
+    {
+        UpdateAlertRuleRequest request = ValidRequest();
+        request.Metric = "MachineOffline";
+        request.Threshold = 1;
+        request.DurationMinutes = 0;
+
+        ValidationResult result = await _validator.ValidateAsync(request);
+
+        await Assert.That(result.IsValid).IsFalse();
+    }
+
+    [Test]
+    public async Task StateMetric_DurationAtMinimum_PassesValidation()
+    {
+        UpdateAlertRuleRequest request = ValidRequest();
+        request.Metric = "FailedServices";
+        request.DurationMinutes = 1;
+
+        ValidationResult result = await _validator.ValidateAsync(request);
+
+        await Assert.That(result.IsValid).IsTrue();
+    }
+
+    [Test]
+    public async Task EventMetric_ZeroDuration_PassesValidation()
+    {
+        UpdateAlertRuleRequest request = ValidRequest();
+        request.Metric = "SshConnection";
+        request.DurationMinutes = 0;
+
+        ValidationResult result = await _validator.ValidateAsync(request);
+
+        await Assert.That(result.IsValid).IsTrue();
+    }
+
+    [Test]
+    public async Task EventMetric_NonZeroDuration_FailsValidation()
+    {
+        UpdateAlertRuleRequest request = ValidRequest();
+        request.Metric = "SshConnection";
+        request.DurationMinutes = 1;
+
+        ValidationResult result = await _validator.ValidateAsync(request);
+
+        await Assert.That(result.IsValid).IsFalse();
+        await Assert.That(result.Errors.Any(e => e.ErrorMessage == "Duration must be zero for event-based metrics")).IsTrue();
+    }
+
+    [Test]
+    public async Task NegativeDuration_FailsValidation()
+    {
+        UpdateAlertRuleRequest request = ValidRequest();
+        request.DurationMinutes = -1;
+
+        ValidationResult result = await _validator.ValidateAsync(request);
+
+        await Assert.That(result.IsValid).IsFalse();
+    }
+
+    [Test]
+    public async Task EmptyMachineIds_FailsValidation()
+    {
+        UpdateAlertRuleRequest request = ValidRequest();
+        request.MachineIds = [];
+
+        ValidationResult result = await _validator.ValidateAsync(request);
+
+        await Assert.That(result.IsValid).IsFalse();
+        await Assert.That(result.Errors.Any(e => e.ErrorMessage == "At least one machine must be selected")).IsTrue();
     }
 }

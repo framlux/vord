@@ -531,6 +531,7 @@ export interface CreateAlertRuleRequest {
 export interface UpdateAlertRuleRequest {
 	name: string;
 	description?: string;
+	metric: string;
 	threshold: number;
 	durationMinutes: number;
 	severity: string;

@@ -22,5 +22,7 @@ public enum AlertMetric : short
     /// <summary>Number of pending security updates.</summary>
     SecurityUpdates = 6,
     /// <summary>Disk SMART health status.</summary>
-    DiskHealth = 7
+    DiskHealth = 7,
+    /// <summary>New SSH connection detected on the machine.</summary>
+    SshConnection = 8
 }
