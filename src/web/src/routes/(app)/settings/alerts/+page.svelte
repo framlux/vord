@@ -3,8 +3,8 @@
      See LICENSE for details. -->
 
 <script lang="ts">
-	import type { AlertRuleDto, AlertEventDto, WebhookEndpointDto, PaginatedResponse } from '$lib/api/types';
-	import { Bell, CircleAlert, ChevronLeft, ChevronRight, Plus, Trash2, Check, Webhook, Copy, RefreshCw } from 'lucide-svelte';
+	import type { AlertRuleDto, AlertEventDto, IntegrationEndpointDto, IntegrationProviderDto, IntegrationTestResultDto, PaginatedResponse } from '$lib/api/types';
+	import { Bell, CircleAlert, ChevronLeft, ChevronRight, Plus, Trash2, Check, Plug, Copy, RefreshCw, Zap } from 'lucide-svelte';
 	import { enhance } from '$app/forms';
 	import { goto } from '$app/navigation';
 	import { page as pageState } from '$app/state';
@@ -16,31 +16,39 @@
 
 	const rules: AlertRuleDto[] | null = $derived(data.rules);
 	const events: PaginatedResponse<AlertEventDto> | null = $derived(data.events);
-	const webhooks: WebhookEndpointDto[] | null = $derived(data.webhooks);
+	const integrations: IntegrationEndpointDto[] | null = $derived(data.integrations);
+	const providers: IntegrationProviderDto[] | null = $derived(data.providers);
 	const machines: { id: number; name: string }[] = $derived(data.machines ?? []);
 	const filters = $derived(data.filters);
 
-	let activeTab = $state<'rules' | 'events' | 'webhooks'>(
-		(pageState.url.searchParams.get('tab') as 'rules' | 'events' | 'webhooks') ?? 'rules'
+	const validTabs = ['rules', 'events', 'integrations'] as const;
+	const urlTab = pageState.url.searchParams.get('tab');
+	let activeTab = $state<'rules' | 'events' | 'integrations'>(
+		validTabs.includes(urlTab as typeof validTabs[number]) ? (urlTab as 'rules' | 'events' | 'integrations') : 'rules'
 	);
 	let showCreateRule = $state(false);
-	let showCreateWebhook = $state(false);
+	let connectingProvider = $state<string | null>(null);
 	let editingRuleId = $state<number | null>(null);
 	let deleteRuleConfirm = $state<{ open: boolean; id: number | null }>({ open: false, id: null });
-	let deleteWebhookConfirm = $state<{ open: boolean; id: number | null }>({ open: false, id: null });
+	let deleteIntegrationConfirm = $state<{ open: boolean; id: number | null }>({ open: false, id: null });
 	let revealedSecret = $state<string | null>(null);
 	let secretCopied = $state(false);
 	let rulesError = $state<string | null>(null);
 	let eventsError = $state<string | null>(null);
-	let webhooksError = $state<string | null>(null);
+	let integrationsError = $state<string | null>(null);
+	let testResults = $state<Record<number, IntegrationTestResultDto>>({});
 	let deleteRuleForm: HTMLFormElement;
-	let deleteWebhookForm: HTMLFormElement;
+	let deleteIntegrationForm: HTMLFormElement;
 
-	function copySecret() {
+	async function copySecret() {
 		if (revealedSecret) {
-			navigator.clipboard.writeText(revealedSecret);
-			secretCopied = true;
-			setTimeout(() => { secretCopied = false; }, 2000);
+			try {
+				await navigator.clipboard.writeText(revealedSecret);
+				secretCopied = true;
+				setTimeout(() => { secretCopied = false; }, 2000);
+			} catch {
+				integrationsError = 'Failed to copy secret to clipboard. Please select and copy it manually.';
+			}
 		}
 	}
 
@@ -61,7 +69,7 @@
 		Resolved: 'bg-green-100 text-green-700 dark:bg-green-900/30 dark:text-green-400'
 	};
 
-	function switchTab(tab: 'rules' | 'events' | 'webhooks') {
+	function switchTab(tab: 'rules' | 'events' | 'integrations') {
 		activeTab = tab;
 		const params = new URLSearchParams(pageState.url.searchParams);
 		params.set('tab', tab);
@@ -91,7 +99,7 @@
 		goto(`/settings/alerts?${params.toString()}`);
 	}
 
-	const tabOrder: Array<'rules' | 'events' | 'webhooks'> = ['rules', 'events', 'webhooks'];
+	const tabOrder: Array<'rules' | 'events' | 'integrations'> = ['rules', 'events', 'integrations'];
 
 	function handleTabKeydown(event: KeyboardEvent) {
 		const currentIndex = tabOrder.indexOf(activeTab);
@@ -119,7 +127,7 @@
 <svelte:head><title>Alerts - Vord</title></svelte:head>
 
 <div class="space-y-6">
-	<PageHeader title="Alerts" description="Manage alert rules, view alert events, and configure webhook delivery." />
+	<PageHeader title="Alerts" description="Manage alert rules, view alert events, and configure integrations." />
 
 	{#if rules === null}
 		<div class="flex items-center gap-3 rounded-xl border border-amber-200 bg-amber-50 p-6 dark:border-amber-800 dark:bg-amber-900/20">
@@ -160,18 +168,18 @@
 				Alert Events {events ? `(${events.totalCount})` : ''}
 			</button>
 			<button
-				id="tab-webhooks"
+				id="tab-integrations"
 				role="tab"
-				aria-selected={activeTab === 'webhooks'}
-				aria-controls="tabpanel-webhooks"
-				tabindex={activeTab === 'webhooks' ? 0 : -1}
-				onclick={() => switchTab('webhooks')}
+				aria-selected={activeTab === 'integrations'}
+				aria-controls="tabpanel-integrations"
+				tabindex={activeTab === 'integrations' ? 0 : -1}
+				onclick={() => switchTab('integrations')}
 				onkeydown={handleTabKeydown}
-				class="flex-1 rounded-md px-4 py-2 text-sm font-medium transition-colors {activeTab === 'webhooks'
+				class="flex-1 rounded-md px-4 py-2 text-sm font-medium transition-colors {activeTab === 'integrations'
 					? 'bg-surface-50 text-surface-900 shadow dark:bg-surface-700 dark:text-surface-100'
 					: 'text-surface-500 hover:text-surface-700 dark:text-surface-400 dark:hover:text-surface-200'}"
 			>
-				Webhooks ({webhooks?.length ?? 0})
+				Integrations ({integrations?.length ?? 0})
 			</button>
 		</div>
 
@@ -364,7 +372,7 @@
 													{#if editingRuleId !== rule.id}
 														<button onclick={() => { editingRuleId = rule.id; rulesError = null; }} class="text-xs text-primary-600 hover:underline dark:text-primary-400">Edit</button>
 														{#if rule.isCustom}
-															<button type="button" onclick={() => deleteRuleConfirm = { open: true, id: rule.id }} class="rounded p-1 text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-900/20">
+															<button type="button" aria-label="Delete rule" onclick={() => deleteRuleConfirm = { open: true, id: rule.id }} class="rounded p-1 text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-900/20">
 																<Trash2 class="h-4 w-4" />
 															</button>
 														{/if}
@@ -574,22 +582,24 @@
 			</div>
 		{/if}
 
-		<!-- Webhooks Tab -->
-		{#if activeTab === 'webhooks'}
-			<div id="tabpanel-webhooks" role="tabpanel" aria-labelledby="tab-webhooks" class="space-y-4">
-			{#if webhooks}
-				{#if webhooksError && showCreateWebhook === false}
+		<!-- Integrations Tab -->
+		{#if activeTab === 'integrations'}
+			<div id="tabpanel-integrations" role="tabpanel" aria-labelledby="tab-integrations" class="space-y-4">
+			{#if integrations}
+				{#if integrationsError && connectingProvider === null}
 					<div role="alert" class="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-900/20 dark:text-red-300">
-						{webhooksError}
-						<button onclick={() => { webhooksError = null; }} class="ml-2 text-red-500 underline hover:text-red-700 dark:text-red-400 dark:hover:text-red-300">Dismiss</button>
+						{integrationsError}
+						<button onclick={() => { integrationsError = null; }} class="ml-2 text-red-500 underline hover:text-red-700 dark:text-red-400 dark:hover:text-red-300">Dismiss</button>
 					</div>
 				{/if}
+
+				<!-- Usage counter -->
 				<div class="flex items-center justify-between">
 					<div class="flex items-center gap-3">
-						<h2 class="text-lg font-semibold text-surface-900 dark:text-surface-50">Webhook Endpoints</h2>
+						<h2 class="text-lg font-semibold text-surface-900 dark:text-surface-50">Integrations</h2>
 						{#if data.subscription?.webhookLimit !== null && data.subscription?.webhookLimit !== undefined}
 							<span class="text-sm text-surface-500 dark:text-surface-400">
-								{data.subscription.webhookCount} of {data.subscription.webhookLimit} webhooks used
+								Using {data.subscription.webhookCount} of {data.subscription.webhookLimit} integrations
 							</span>
 							{#if data.subscription.webhookCount >= data.subscription.webhookLimit}
 								<span class="text-sm font-medium text-red-600 dark:text-red-400">Limit reached</span>
@@ -598,46 +608,93 @@
 							{/if}
 						{/if}
 					</div>
-					<button
-						onclick={() => { showCreateWebhook = !showCreateWebhook; webhooksError = null; }}
-						disabled={data.subscription?.webhookLimit !== null && data.subscription?.webhookLimit !== undefined && data.subscription.webhookCount >= data.subscription.webhookLimit}
-						class="flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-primary-500 dark:hover:bg-primary-600"
-					>
-						<Plus class="h-4 w-4" />
-						New Webhook
-					</button>
 				</div>
 
-				{#if showCreateWebhook}
-					<div class="rounded-xl border border-surface-200 bg-surface-50 p-6 dark:border-surface-700 dark:bg-surface-800">
-						<h3 class="mb-4 text-sm font-semibold text-surface-900 dark:text-surface-50">Create Webhook</h3>
-						<form method="POST" action="?/createWebhook" use:enhance={() => { webhooksError = null; return async ({ result, update }) => { if (result.type === 'failure') { webhooksError = (result.data as { message?: string })?.message ?? 'An error occurred'; } else { if (result.type === 'success') { const data = result.data as { secret?: string } | null; if (data?.secret) { revealedSecret = data.secret; secretCopied = false; } } showCreateWebhook = false; webhooksError = null; await update(); } }; }}>
-							{#if webhooksError}
-								<div role="alert" class="mb-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-900/20 dark:text-red-300">
-									{webhooksError}
+				<!-- Quick Connect cards -->
+				{#if providers && providers.length > 0}
+					<div class="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+						{#each providers as provider}
+							{@const isConnected = integrations.some((i) => i.provider === provider.provider)}
+							<div class="flex items-center gap-4 rounded-xl border border-surface-200 bg-surface-50 p-4 dark:border-surface-700 dark:bg-surface-800">
+								<div class="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-primary-100 text-lg font-bold text-primary-700 dark:bg-primary-900/30 dark:text-primary-400">
+									{provider.displayName.charAt(0)}
 								</div>
-							{/if}
-							<div class="grid grid-cols-1 gap-4 md:grid-cols-2">
-								<div>
-									<label for="webhook-name" class="mb-1 block text-xs text-surface-500 dark:text-surface-400">Name</label>
-									<input id="webhook-name" name="name" type="text" required class="w-full rounded-lg border border-surface-300 bg-surface-50 px-3 py-2 text-sm dark:border-surface-600 dark:bg-surface-700 dark:text-surface-100" />
+								<div class="flex-1 min-w-0">
+									<p class="text-sm font-medium text-surface-900 dark:text-surface-100">{provider.displayName}</p>
+									<p class="truncate text-xs text-surface-500 dark:text-surface-400">{provider.description}</p>
 								</div>
-								<div>
-									<label for="webhook-url" class="mb-1 block text-xs text-surface-500 dark:text-surface-400">URL</label>
-									<input id="webhook-url" name="url" type="url" required class="w-full rounded-lg border border-surface-300 bg-surface-50 px-3 py-2 text-sm dark:border-surface-600 dark:bg-surface-700 dark:text-surface-100" />
-								</div>
+								{#if isConnected}
+									<span class="inline-flex items-center gap-1 rounded-full bg-green-100 px-2.5 py-0.5 text-xs font-medium text-green-700 dark:bg-green-900/30 dark:text-green-400">
+										<Check class="h-3 w-3" />
+										Connected
+									</span>
+								{:else}
+									<button
+										onclick={() => { connectingProvider = provider.provider; integrationsError = null; }}
+										disabled={data.subscription?.webhookLimit !== null && data.subscription?.webhookLimit !== undefined && data.subscription.webhookCount >= data.subscription.webhookLimit}
+										class="rounded-lg bg-primary-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-primary-700 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-primary-500 dark:hover:bg-primary-600"
+									>
+										Connect
+									</button>
+								{/if}
 							</div>
-							<div class="mt-4 flex justify-end gap-2">
-								<button type="button" onclick={() => { showCreateWebhook = false; webhooksError = null; }} class="rounded-lg border border-surface-300 px-4 py-2 text-sm font-medium text-surface-700 hover:bg-surface-100 dark:border-surface-600 dark:text-surface-300 dark:hover:bg-surface-700">Cancel</button>
-								<button type="submit" class="rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700 dark:bg-primary-500 dark:hover:bg-primary-600">Create Webhook</button>
-							</div>
-						</form>
+						{/each}
 					</div>
 				{/if}
 
+				<!-- Inline connect form -->
+				{#if connectingProvider}
+					{@const selectedProvider = providers?.find((p) => p.provider === connectingProvider)}
+					{#if selectedProvider}
+						<div class="rounded-xl border border-primary-200 bg-primary-50/50 p-6 dark:border-primary-800 dark:bg-primary-900/10">
+							<h3 class="mb-4 text-sm font-semibold text-surface-900 dark:text-surface-50">Connect {selectedProvider.displayName}</h3>
+							<form method="POST" action="?/createIntegration" use:enhance={() => { integrationsError = null; return async ({ result, update }) => { if (result.type === 'failure') { integrationsError = (result.data as { message?: string })?.message ?? 'An error occurred'; } else { if (result.type === 'success') { const resultData = result.data as { secret?: string } | null; if (resultData?.secret) { revealedSecret = resultData.secret; secretCopied = false; } } connectingProvider = null; integrationsError = null; await update(); } }; }}>
+								<input type="hidden" name="provider" value={selectedProvider.provider} />
+								{#if integrationsError}
+									<div role="alert" class="mb-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-900/20 dark:text-red-300">
+										{integrationsError}
+									</div>
+								{/if}
+								<div class="grid grid-cols-1 gap-4 md:grid-cols-2">
+									<div>
+										<label for="integration-name" class="mb-1 block text-xs text-surface-500 dark:text-surface-400">Name</label>
+										<input id="integration-name" name="name" type="text" value="{selectedProvider.displayName}" class="w-full rounded-lg border border-surface-300 bg-surface-50 px-3 py-2 text-sm dark:border-surface-600 dark:bg-surface-700 dark:text-surface-100" />
+									</div>
+									{#each selectedProvider.configFields as field}
+										<div>
+											<label for="config-{field.key}" class="mb-1 block text-xs text-surface-500 dark:text-surface-400">{field.label}</label>
+											<input
+												id="config-{field.key}"
+												name="config.{field.key}"
+												type={field.type === 'url' ? 'url' : 'text'}
+												placeholder={field.placeholder}
+												required
+												class="w-full rounded-lg border border-surface-300 bg-surface-50 px-3 py-2 text-sm dark:border-surface-600 dark:bg-surface-700 dark:text-surface-100"
+											/>
+											{#if field.helpText}
+												<p class="mt-1 text-xs text-surface-400 dark:text-surface-500">
+													{field.helpText}
+													{#if field.helpUrl}
+														<a href={field.helpUrl} target="_blank" rel="noopener noreferrer" class="text-primary-600 hover:underline dark:text-primary-400">Learn more</a>
+													{/if}
+												</p>
+											{/if}
+										</div>
+									{/each}
+								</div>
+								<div class="mt-4 flex justify-end gap-2">
+									<button type="button" onclick={() => { connectingProvider = null; integrationsError = null; }} class="rounded-lg border border-surface-300 px-4 py-2 text-sm font-medium text-surface-700 hover:bg-surface-100 dark:border-surface-600 dark:text-surface-300 dark:hover:bg-surface-700">Cancel</button>
+									<button type="submit" class="rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700 dark:bg-primary-500 dark:hover:bg-primary-600">Connect</button>
+								</div>
+							</form>
+						</div>
+					{/if}
+				{/if}
+
+				<!-- Secret revealed banner -->
 				{#if revealedSecret}
 					<div class="rounded-xl border border-amber-200 bg-amber-50 p-4 dark:border-amber-800 dark:bg-amber-900/20">
-						<p class="mb-2 text-sm font-semibold text-amber-700 dark:text-amber-300">Webhook signing secret (shown once -- copy it now):</p>
+						<p class="mb-2 text-sm font-semibold text-amber-700 dark:text-amber-300">Integration signing secret (shown once -- copy it now):</p>
 						<div class="flex items-center gap-2">
 							<code class="flex-1 rounded-lg border border-amber-300 bg-white px-3 py-2 font-mono text-sm text-surface-900 dark:border-amber-700 dark:bg-surface-800 dark:text-surface-100">{revealedSecret}</code>
 							<button
@@ -654,41 +711,48 @@
 								Dismiss
 							</button>
 						</div>
-						<p class="mt-2 text-xs text-amber-600 dark:text-amber-400">This secret will not be shown again. Store it securely for webhook signature verification.</p>
+						<p class="mt-2 text-xs text-amber-600 dark:text-amber-400">This secret will not be shown again. Store it securely for signature verification.</p>
 					</div>
 				{/if}
 
+				<!-- Active Integrations list -->
 				<div class="overflow-hidden rounded-xl border border-surface-200 bg-surface-50 dark:border-surface-700 dark:bg-surface-800">
 					<div class="overflow-x-auto">
 						<table class="w-full text-sm">
 							<thead>
 								<tr class="border-b border-surface-200 bg-surface-50 dark:border-surface-700 dark:bg-surface-800/50">
+									<th scope="col" class="px-4 py-3 text-left font-medium text-surface-500 dark:text-surface-400">Provider</th>
 									<th scope="col" class="px-4 py-3 text-left font-medium text-surface-500 dark:text-surface-400">Name</th>
-									<th scope="col" class="px-4 py-3 text-left font-medium text-surface-500 dark:text-surface-400">URL</th>
 									<th scope="col" class="px-4 py-3 text-left font-medium text-surface-500 dark:text-surface-400">Status</th>
 									<th scope="col" class="px-4 py-3 text-left font-medium text-surface-500 dark:text-surface-400">Created</th>
 									<th scope="col" class="px-4 py-3 text-left font-medium text-surface-500 dark:text-surface-400">Actions</th>
 								</tr>
 							</thead>
 							<tbody class="divide-y divide-surface-100 dark:divide-surface-700">
-								{#if webhooks.length === 0}
+								{#if integrations.length === 0}
 									<tr>
 										<td colspan="5" class="px-4 py-8 text-center text-surface-500 dark:text-surface-400">
-											<Webhook class="mx-auto mb-2 h-8 w-8 text-surface-400 dark:text-surface-600" />
-											No webhook endpoints configured.
+											<Plug class="mx-auto mb-2 h-8 w-8 text-surface-400 dark:text-surface-600" />
+											No integrations configured. Connect a provider above to get started.
 										</td>
 									</tr>
 								{:else}
-									{#each webhooks as webhook, i}
+									{#each integrations as integration, i}
 										<tr class="{i % 2 === 1 ? 'bg-surface-100/50 dark:bg-surface-800/30' : ''} hover:bg-surface-50 dark:hover:bg-surface-800/50">
-											<td class="px-4 py-3 font-medium text-surface-900 dark:text-surface-100">{webhook.name}</td>
-											<td class="max-w-xs truncate px-4 py-3 text-surface-600 dark:text-surface-400" title={webhook.url}>{webhook.url}</td>
 											<td class="px-4 py-3">
-												<form method="POST" action="?/updateWebhook" use:enhance={() => { return async ({ result, update }) => { if (result.type === 'failure') { webhooksError = (result.data as { message?: string })?.message ?? 'Failed to update webhook'; } else { webhooksError = null; await update(); } }; }}>
-													<input type="hidden" name="id" value={webhook.id} />
-													<input type="hidden" name="isEnabled" value={webhook.isEnabled ? 'off' : 'on'} />
-													<button type="submit" title={webhook.isEnabled ? 'Disable webhook' : 'Enable webhook'}>
-														{#if webhook.isEnabled}
+												<span class="inline-flex items-center gap-2 text-surface-900 dark:text-surface-100">
+													<span class="flex h-6 w-6 items-center justify-center rounded bg-primary-100 text-xs font-bold text-primary-700 dark:bg-primary-900/30 dark:text-primary-400">{integration.provider.charAt(0).toUpperCase()}</span>
+													{integration.provider}
+												</span>
+											</td>
+											<td class="px-4 py-3 font-medium text-surface-900 dark:text-surface-100">{integration.name}</td>
+											<td class="px-4 py-3">
+												<form method="POST" action="?/updateIntegration" use:enhance={() => { return async ({ result, update }) => { if (result.type === 'failure') { integrationsError = (result.data as { message?: string })?.message ?? 'Failed to update integration'; } else { integrationsError = null; await update(); } }; }}>
+													<input type="hidden" name="id" value={integration.id} />
+													<input type="hidden" name="name" value={integration.name} />
+													<input type="hidden" name="isEnabled" value={integration.isEnabled ? 'off' : 'on'} />
+													<button type="submit" title={integration.isEnabled ? 'Disable integration' : 'Enable integration'}>
+														{#if integration.isEnabled}
 															<span class="inline-flex items-center rounded-full bg-green-100 px-2.5 py-0.5 text-xs font-medium text-green-700 hover:bg-green-200 dark:bg-green-900/30 dark:text-green-400 dark:hover:bg-green-900/50">Active</span>
 														{:else}
 															<span class="inline-flex items-center rounded-full bg-surface-100 px-2.5 py-0.5 text-xs font-medium text-surface-500 hover:bg-surface-200 dark:bg-surface-700 dark:text-surface-400 dark:hover:bg-surface-600">Disabled</span>
@@ -696,32 +760,73 @@
 													</button>
 												</form>
 											</td>
-											<td class="whitespace-nowrap px-4 py-3 text-surface-500 dark:text-surface-400">{formatDateTime(webhook.createdAt)}</td>
+											<td class="whitespace-nowrap px-4 py-3 text-surface-500 dark:text-surface-400">{formatDateTime(integration.createdAt)}</td>
 											<td class="px-4 py-3">
 												<div class="flex items-center gap-1">
-													<form method="POST" action="?/rotateSecret" use:enhance={() => { return async ({ result, update }) => { if (result.type === 'success') { const data = result.data as { secret?: string } | null; if (data?.secret) { revealedSecret = data.secret; secretCopied = false; } } else if (result.type === 'failure') { webhooksError = (result.data as { message?: string })?.message ?? 'Failed to rotate secret'; } await update(); }; }}>
-														<input type="hidden" name="id" value={webhook.id} />
-														<button type="submit" title="Rotate secret" class="rounded p-1 text-surface-500 hover:bg-surface-100 dark:text-surface-400 dark:hover:bg-surface-700">
-															<RefreshCw class="h-4 w-4" />
+													<!-- Test button -->
+													<form method="POST" action="?/testIntegration" use:enhance={() => { return async ({ result, update }) => { if (result.type === 'success') { const resultData = result.data as { testResult?: IntegrationTestResultDto } | null; if (resultData?.testResult) { testResults = { ...testResults, [integration.id]: resultData.testResult }; } } else if (result.type === 'failure') { integrationsError = (result.data as { message?: string })?.message ?? 'Failed to test integration'; } await update(); }; }}>
+														<input type="hidden" name="id" value={integration.id} />
+														<button type="submit" title="Test integration" aria-label="Test integration" class="rounded p-1 text-surface-500 hover:bg-surface-100 dark:text-surface-400 dark:hover:bg-surface-700">
+															<Zap class="h-4 w-4" />
 														</button>
 													</form>
-													<button type="button" onclick={() => deleteWebhookConfirm = { open: true, id: webhook.id }} class="rounded p-1 text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-900/20">
+													<!-- Rotate secret (only for Custom provider) -->
+													{#if integration.provider === 'Custom'}
+														<form method="POST" action="?/rotateSecret" use:enhance={() => { return async ({ result, update }) => { if (result.type === 'success') { const resultData = result.data as { secret?: string } | null; if (resultData?.secret) { revealedSecret = resultData.secret; secretCopied = false; } } else if (result.type === 'failure') { integrationsError = (result.data as { message?: string })?.message ?? 'Failed to rotate secret'; } await update(); }; }}>
+															<input type="hidden" name="id" value={integration.id} />
+															<button type="submit" title="Rotate secret" aria-label="Rotate secret" class="rounded p-1 text-surface-500 hover:bg-surface-100 dark:text-surface-400 dark:hover:bg-surface-700">
+																<RefreshCw class="h-4 w-4" />
+															</button>
+														</form>
+													{/if}
+													<!-- Delete button -->
+													<button type="button" aria-label="Delete integration" onclick={() => deleteIntegrationConfirm = { open: true, id: integration.id }} class="rounded p-1 text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-900/20">
 														<Trash2 class="h-4 w-4" />
 													</button>
 												</div>
 											</td>
 										</tr>
+										<!-- Test result inline -->
+										{#if testResults[integration.id]}
+											<tr class="bg-surface-50 dark:bg-surface-800/50">
+												<td colspan="5" class="px-4 py-2">
+													{#if testResults[integration.id].success}
+														<div class="flex items-center gap-2 text-sm text-green-700 dark:text-green-400">
+															<Check class="h-4 w-4" />
+															<span>Test successful{testResults[integration.id].statusCode !== null ? ` (HTTP ${testResults[integration.id].statusCode})` : ''}: {testResults[integration.id].message}</span>
+														</div>
+													{:else}
+														<div class="flex items-center gap-2 text-sm text-red-700 dark:text-red-400">
+															<CircleAlert class="h-4 w-4" />
+															<span>Test failed{testResults[integration.id].statusCode !== null ? ` (HTTP ${testResults[integration.id].statusCode})` : ''}: {testResults[integration.id].message}</span>
+														</div>
+													{/if}
+												</td>
+											</tr>
+										{/if}
 									{/each}
 								{/if}
 							</tbody>
 						</table>
 					</div>
 				</div>
+
+				<!-- Add Custom Webhook button -->
+				<div class="flex justify-start">
+					<button
+						onclick={() => { connectingProvider = 'Custom'; integrationsError = null; }}
+						disabled={data.subscription?.webhookLimit !== null && data.subscription?.webhookLimit !== undefined && data.subscription.webhookCount >= data.subscription.webhookLimit}
+						class="flex items-center gap-2 rounded-lg border border-surface-300 px-4 py-2 text-sm font-medium text-surface-700 hover:bg-surface-100 disabled:cursor-not-allowed disabled:opacity-50 dark:border-surface-600 dark:text-surface-300 dark:hover:bg-surface-700"
+					>
+						<Plus class="h-4 w-4" />
+						Add Custom Webhook
+					</button>
+				</div>
 			{:else}
 				<div class="flex items-center gap-3 rounded-xl border border-surface-200 bg-surface-50 p-6 dark:border-surface-700 dark:bg-surface-800">
-					<Webhook class="h-5 w-5 text-surface-400" />
+					<Plug class="h-5 w-5 text-surface-400" />
 					<p class="text-sm text-surface-500 dark:text-surface-400">
-						Webhooks are not available. This may be due to subscription restrictions.
+						Integrations are not available. This may be due to subscription restrictions.
 					</p>
 				</div>
 			{/if}
@@ -752,22 +857,22 @@
 
 <form
 	method="POST"
-	action="?/deleteWebhook"
+	action="?/deleteIntegration"
 	use:enhance={() => {
 		return async ({ result, update }) => {
-			deleteWebhookConfirm = { open: false, id: null };
+			deleteIntegrationConfirm = { open: false, id: null };
 			if (result.type === 'failure') {
-				webhooksError = (result.data as { message?: string })?.message ?? 'Failed to delete webhook';
+				integrationsError = (result.data as { message?: string })?.message ?? 'Failed to delete integration';
 			} else {
-				webhooksError = null;
+				integrationsError = null;
 				await update();
 			}
 		};
 	}}
-	bind:this={deleteWebhookForm}
+	bind:this={deleteIntegrationForm}
 	class="hidden"
 >
-	<input type="hidden" name="id" value={deleteWebhookConfirm.id ?? ''} />
+	<input type="hidden" name="id" value={deleteIntegrationConfirm.id ?? ''} />
 </form>
 
 <ConfirmDialog
@@ -785,15 +890,15 @@
 />
 
 <ConfirmDialog
-	open={deleteWebhookConfirm.open}
-	title="Delete Webhook"
-	message="Are you sure you want to delete this webhook endpoint? This cannot be undone."
+	open={deleteIntegrationConfirm.open}
+	title="Delete Integration"
+	message="Are you sure you want to delete this integration? This cannot be undone."
 	confirmLabel="Delete"
 	variant="danger"
 	onconfirm={() => {
-		if (deleteWebhookConfirm.id !== null) {
-			deleteWebhookForm.requestSubmit();
+		if (deleteIntegrationConfirm.id !== null) {
+			deleteIntegrationForm.requestSubmit();
 		}
 	}}
-	oncancel={() => deleteWebhookConfirm = { open: false, id: null }}
+	oncancel={() => deleteIntegrationConfirm = { open: false, id: null }}
 />

@@ -2,26 +2,24 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
-using System.Security.Cryptography;
-using System.Text;
 using System.Text.Json;
+using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Server.Services.Infrastructure;
-using Framlux.FleetManagement.Server.Services.Security;
 using StackExchange.Redis;
 
 namespace Framlux.FleetManagement.Server.Services.Alerts;
 
 /// <summary>
-/// Delivers alert notifications via email and webhook.
+/// Delivers alert notifications via email and integration endpoints.
 /// </summary>
 public sealed class AlertDeliveryService : IAlertDeliveryService
 {
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly IConnectionMultiplexer _redis;
-    private readonly IWebhookSecretProtector _secretProtector;
+    private readonly Dictionary<IntegrationProvider, IIntegrationPayloadFormatter> _formatters;
     private readonly ILogger<AlertDeliveryService> _logger;
 
     /// <summary>
@@ -31,19 +29,19 @@ public sealed class AlertDeliveryService : IAlertDeliveryService
         IServiceScopeFactory scopeFactory,
         IHttpClientFactory httpClientFactory,
         IConnectionMultiplexer redis,
-        IWebhookSecretProtector secretProtector,
+        IEnumerable<IIntegrationPayloadFormatter> formatters,
         ILogger<AlertDeliveryService> logger)
     {
         ArgumentNullException.ThrowIfNull(scopeFactory);
         ArgumentNullException.ThrowIfNull(httpClientFactory);
         ArgumentNullException.ThrowIfNull(redis);
-        ArgumentNullException.ThrowIfNull(secretProtector);
+        ArgumentNullException.ThrowIfNull(formatters);
         ArgumentNullException.ThrowIfNull(logger);
 
         _scopeFactory = scopeFactory;
         _httpClientFactory = httpClientFactory;
         _redis = redis;
-        _secretProtector = secretProtector;
+        _formatters = formatters.ToDictionary(f => f.Provider);
         _logger = logger;
     }
 
@@ -52,7 +50,7 @@ public sealed class AlertDeliveryService : IAlertDeliveryService
     {
         if (rule.NotifyWebhook)
         {
-            await DeliverWebhooksAsync(alertEvent, rule, ct);
+            await DeliverIntegrationsAsync(alertEvent, rule, ct);
         }
 
         if (rule.NotifyEmail)
@@ -61,49 +59,39 @@ public sealed class AlertDeliveryService : IAlertDeliveryService
         }
     }
 
-    private async Task DeliverWebhooksAsync(AlertEvent alertEvent, AlertRule rule, CancellationToken ct)
+    private async Task DeliverIntegrationsAsync(AlertEvent alertEvent, AlertRule rule, CancellationToken ct)
     {
         using IServiceScope scope = _scopeFactory.CreateScope();
-        IWebhookRepository webhookRepo = scope.ServiceProvider.GetRequiredService<IWebhookRepository>();
+        IIntegrationRepository integrationRepo = scope.ServiceProvider.GetRequiredService<IIntegrationRepository>();
 
-        List<WebhookEndpoint> webhooks = await webhookRepo.GetEnabledWebhooksForTenantAsync(rule.TenantId, ct);
+        List<IntegrationEndpoint> integrations = await integrationRepo.GetEnabledIntegrationsForTenantAsync(rule.TenantId, ct);
 
-        foreach (WebhookEndpoint webhook in webhooks)
+        foreach (IntegrationEndpoint integration in integrations)
         {
             try
             {
-                string payload = JsonSerializer.Serialize(new
+                if (_formatters.TryGetValue(integration.Provider, out IIntegrationPayloadFormatter? formatter) == false)
                 {
-                    eventId = alertEvent.Id,
-                    ruleName = rule.Name,
-                    severity = alertEvent.Severity.ToString(),
-                    message = alertEvent.Message,
-                    machineId = alertEvent.MachineId,
-                    triggeredAt = alertEvent.TriggeredAt,
-                    details = alertEvent.Details,
-                }, JsonDefaults.CamelCase);
+                    _logger.LogWarning("No formatter registered for provider {Provider} on integration {IntegrationId}",
+                        integration.Provider, integration.Id);
 
-                string secret = _secretProtector.Unprotect(webhook.Secret);
-                byte[] signatureBytes = HMACSHA256.HashData(
-                    Encoding.UTF8.GetBytes(secret),
-                    Encoding.UTF8.GetBytes(payload));
-                string signature = $"sha256={Convert.ToHexStringLower(signatureBytes)}";
+                    continue;
+                }
 
-                HttpClient client = _httpClientFactory.CreateClient("WebhookDelivery");
-                HttpRequestMessage request = new(HttpMethod.Post, webhook.Url);
-                request.Content = new StringContent(payload, Encoding.UTF8, "application/json");
-                request.Headers.Add("X-Vord-Signature", signature);
-
+                HttpRequestMessage request = formatter.FormatRequest(alertEvent, rule, integration);
+                HttpClient client = _httpClientFactory.CreateClient("IntegrationDelivery");
                 HttpResponseMessage response = await client.SendAsync(request, ct);
 
                 if (response.IsSuccessStatusCode == false)
                 {
-                    _logger.LogWarning("Webhook {WebhookId} delivery failed with status {StatusCode}", webhook.Id, response.StatusCode);
+                    _logger.LogWarning("Integration {IntegrationId} ({Provider}) delivery failed with status {StatusCode}",
+                        integration.Id, integration.Provider, response.StatusCode);
                 }
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Failed to deliver webhook {WebhookId} for alert event {EventId}", webhook.Id, alertEvent.Id);
+                _logger.LogError(ex, "Failed to deliver integration {IntegrationId} ({Provider}) for alert event {EventId}",
+                    integration.Id, integration.Provider, alertEvent.Id);
             }
         }
     }

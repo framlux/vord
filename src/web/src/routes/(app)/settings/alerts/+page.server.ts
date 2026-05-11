@@ -34,21 +34,22 @@ export const load: PageServerLoad = async ({ fetch, cookies, locals, url }) => {
 	const severity = url.searchParams.get('severity') ?? undefined;
 
 	try {
-		const [rules, events, webhooks, subscription, machinesResponse] = await Promise.all([
+		const [rules, events, integrations, providers, subscription, machinesResponse] = await Promise.all([
 			api.getAlertRules(),
 			api.getAlertEvents({ page, pageSize, status, severity }),
-			api.getWebhooks(),
+			api.getIntegrations(),
+			api.getIntegrationProviders(),
 			api.getSubscription().catch(() => null),
 			api.getMachines({ pageSize: 1000 })
 		]);
 
 		const machines = machinesResponse.items.map((m) => ({ id: m.id, name: m.name }));
 
-		return { rules, events, webhooks, subscription, machines, filters: { status, severity } };
+		return { rules, events, integrations, providers, subscription, machines, filters: { status, severity } };
 	} catch (e) {
 		if (e instanceof ApiError) {
 			if (e.status === 401) redirect(302, '/auth/login');
-			if (e.status === 403) return { rules: null, events: null, webhooks: null, subscription: null, machines: [], filters: { status, severity } };
+			if (e.status === 403) return { rules: null, events: null, integrations: null, providers: null, subscription: null, machines: [], filters: { status, severity } };
 		}
 		throw e;
 	}
@@ -176,7 +177,7 @@ export const actions: Actions = {
 		}
 	},
 
-	createWebhook: async ({ fetch, cookies, request, locals }) => {
+	createIntegration: async ({ fetch, cookies, request, locals }) => {
 		if (locals.user === null || canAdminTenant(locals.user) === false) {
 			return fail(403, { message: 'Access denied' });
 		}
@@ -184,11 +185,19 @@ export const actions: Actions = {
 		const api = createServerApiClient(fetch, cookies.get('vord_auth'), cookies.get('vord_tenant'));
 		const data = await request.formData();
 
+		const provider = data.get('provider') as string;
+		const name = (data.get('name') as string) || undefined;
+
+		// Collect configuration fields (prefixed with "config.")
+		const configuration: Record<string, string> = {};
+		for (const [key, value] of data.entries()) {
+			if (key.startsWith('config.')) {
+				configuration[key.substring(7)] = value as string;
+			}
+		}
+
 		try {
-			const result = await api.createWebhook({
-				name: data.get('name') as string,
-				url: data.get('url') as string
-			});
+			const result = await api.createIntegration({ provider, name, configuration });
 
 			return { success: true, secret: result.secret };
 		} catch (e) {
@@ -196,7 +205,60 @@ export const actions: Actions = {
 				return fail(e.status, { message: e.message });
 			}
 
-			return fail(500, { message: 'Failed to create webhook' });
+			return fail(500, { message: 'Failed to create integration' });
+		}
+	},
+
+	updateIntegration: async ({ fetch, cookies, request, locals }) => {
+		if (locals.user === null || canAdminTenant(locals.user) === false) {
+			return fail(403, { message: 'Access denied' });
+		}
+
+		const api = createServerApiClient(fetch, cookies.get('vord_auth'), cookies.get('vord_tenant'));
+		const data = await request.formData();
+		const id = parseRequiredInt(data, 'id');
+		if (id === null) {
+			return fail(400, { message: 'Invalid ID' });
+		}
+
+		const name = (data.get('name') as string) || undefined;
+		const isEnabled = data.get('isEnabled') === 'on';
+
+		try {
+			await api.updateIntegration(id, { name, isEnabled });
+
+			return { success: true };
+		} catch (e) {
+			if (e instanceof ApiError) {
+				return fail(e.status, { message: e.message });
+			}
+
+			return fail(500, { message: 'Failed to update integration' });
+		}
+	},
+
+	deleteIntegration: async ({ fetch, cookies, request, locals }) => {
+		if (locals.user === null || canAdminTenant(locals.user) === false) {
+			return fail(403, { message: 'Access denied' });
+		}
+
+		const api = createServerApiClient(fetch, cookies.get('vord_auth'), cookies.get('vord_tenant'));
+		const data = await request.formData();
+		const id = parseRequiredInt(data, 'id');
+		if (id === null) {
+			return fail(400, { message: 'Invalid ID' });
+		}
+
+		try {
+			await api.deleteIntegration(id);
+
+			return { success: true };
+		} catch (e) {
+			if (e instanceof ApiError) {
+				return fail(e.status, { message: e.message });
+			}
+
+			return fail(500, { message: 'Failed to delete integration' });
 		}
 	},
 
@@ -213,7 +275,7 @@ export const actions: Actions = {
 		}
 
 		try {
-			const result = await api.rotateWebhookSecret(id);
+			const result = await api.rotateIntegrationSecret(id);
 
 			return { success: true, secret: result.secret };
 		} catch (e) {
@@ -221,37 +283,11 @@ export const actions: Actions = {
 				return fail(e.status, { message: e.message });
 			}
 
-			return fail(500, { message: 'Failed to rotate webhook secret' });
+			return fail(500, { message: 'Failed to rotate integration secret' });
 		}
 	},
 
-	updateWebhook: async ({ fetch, cookies, request, locals }) => {
-		if (locals.user === null || canAdminTenant(locals.user) === false) {
-			return fail(403, { message: 'Access denied' });
-		}
-
-		const api = createServerApiClient(fetch, cookies.get('vord_auth'), cookies.get('vord_tenant'));
-		const data = await request.formData();
-		const id = parseRequiredInt(data, 'id');
-		if (id === null) {
-			return fail(400, { message: 'Invalid ID' });
-		}
-		const isEnabled = data.get('isEnabled') === 'on';
-
-		try {
-			await api.updateWebhook(id, { isEnabled });
-
-			return { success: true };
-		} catch (e) {
-			if (e instanceof ApiError) {
-				return fail(e.status, { message: e.message });
-			}
-
-			return fail(500, { message: 'Failed to update webhook' });
-		}
-	},
-
-	deleteWebhook: async ({ fetch, cookies, request, locals }) => {
+	testIntegration: async ({ fetch, cookies, request, locals }) => {
 		if (locals.user === null || canAdminTenant(locals.user) === false) {
 			return fail(403, { message: 'Access denied' });
 		}
@@ -264,15 +300,15 @@ export const actions: Actions = {
 		}
 
 		try {
-			await api.deleteWebhook(id);
+			const result = await api.testIntegration(id);
 
-			return { success: true };
+			return { success: true, testResult: result };
 		} catch (e) {
 			if (e instanceof ApiError) {
 				return fail(e.status, { message: e.message });
 			}
 
-			return fail(500, { message: 'Failed to delete webhook' });
+			return fail(500, { message: 'Failed to test integration' });
 		}
 	}
 };

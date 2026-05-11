@@ -45,6 +45,7 @@ dotnet run --project test/functional/functional.csproj
 - All new code must have unit and functional tests written, where possible
 - Tests must adhere to FIRST principles and *must* test for intent and *never* simply exercise code or to increase test numbers
 - Tests must test both happy-paths as well as error cases, parameter ranges (both valid ranges and invalid ranges), and null inputs.
+- All new features, bug fixes, and code review fixes must include regression tests that verify the functionality works and prevent regressions. Tests are part of the exit criteria — no feature or fix is complete without unit and functional tests that would catch a regression if the code were reverted or broken.
 
 ## Architecture
 
@@ -115,6 +116,7 @@ dotnet run --project test/functional/functional.csproj
 - When modifying code, always run the full build and test suite before reporting completion. Verify: Go (`go build ./...` && `go test ./...`), .NET (`dotnet build` && `dotnet test`), SvelteKit (`npm run build`). Never report 'done' with a plan — confirm green builds.
 - When encountering transient API errors (500s), automatically retry the operation without waiting for user prompting. Do not stop and ask — just resume.
 - Before starting implementation, check what work has already been completed in the codebase. Do not include already-done items in plans. If resuming a multi-session effort, diff against current state first.
+- Before fixing this bug, write a failing test that reproduces the exact behavior I'm seeing. Then fix the code to make the test pass. Then run the full test suite.
 
 
 ## Frontend

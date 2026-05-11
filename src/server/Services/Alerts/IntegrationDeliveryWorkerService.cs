@@ -11,26 +11,26 @@ using StackExchange.Redis;
 namespace Framlux.FleetManagement.Server.Services.Alerts;
 
 /// <summary>
-/// Background service that dequeues webhook delivery jobs from Redis and processes them
+/// Background service that dequeues integration delivery jobs from Redis and processes them
 /// outside the alert evaluation lock.
 /// </summary>
-public sealed class WebhookDeliveryWorkerService : BackgroundService
+public sealed class IntegrationDeliveryWorkerService : BackgroundService
 {
     private readonly IConnectionMultiplexer _redis;
     private readonly IAlertDeliveryService _deliveryService;
     private readonly IServiceScopeFactory _scopeFactory;
-    private readonly ILogger<WebhookDeliveryWorkerService> _logger;
+    private readonly ILogger<IntegrationDeliveryWorkerService> _logger;
 
     private static readonly TimeSpan PollingInterval = TimeSpan.FromSeconds(5);
 
     /// <summary>
-    /// Creates a new instance of the <see cref="WebhookDeliveryWorkerService"/> class.
+    /// Creates a new instance of the <see cref="IntegrationDeliveryWorkerService"/> class.
     /// </summary>
-    public WebhookDeliveryWorkerService(
+    public IntegrationDeliveryWorkerService(
         IConnectionMultiplexer redis,
         IAlertDeliveryService deliveryService,
         IServiceScopeFactory scopeFactory,
-        ILogger<WebhookDeliveryWorkerService> logger)
+        ILogger<IntegrationDeliveryWorkerService> logger)
     {
         ArgumentNullException.ThrowIfNull(redis);
         ArgumentNullException.ThrowIfNull(deliveryService);
@@ -58,7 +58,7 @@ public sealed class WebhookDeliveryWorkerService : BackgroundService
             }
             catch (Exception ex)
             {
-                _logger.LogError(ex, "Unexpected error in webhook delivery worker");
+                _logger.LogError(ex, "Unexpected error in integration delivery worker");
             }
         }
     }
@@ -74,7 +74,6 @@ public sealed class WebhookDeliveryWorkerService : BackgroundService
 
         if (result.IsNullOrEmpty)
         {
-            // No job available; wait before polling again
             await Task.Delay(PollingInterval, ct);
 
             return;
@@ -82,7 +81,6 @@ public sealed class WebhookDeliveryWorkerService : BackgroundService
 
         string payload = result.ToString();
 
-        // Check if this is a retry job that isn't ready yet
         DeliveryJob? peekedJob = null;
         try
         {
@@ -95,7 +93,6 @@ public sealed class WebhookDeliveryWorkerService : BackgroundService
 
         if ((peekedJob?.NotBefore is not null) && (peekedJob.NotBefore.Value > DateTimeOffset.UtcNow))
         {
-            // Not ready yet — push to back of queue and wait briefly to avoid spin-looping
             await redisDb.ListRightPushAsync(AlertConstants.DeliveryQueueKey, payload);
             await Task.Delay(TimeSpan.FromSeconds(1), ct);
 

@@ -505,11 +505,20 @@ public class SubscriptionServiceTests
             // Webhook limit is 5 via TierFeatureLimits for Pro tier
             sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
 
-            // Seed exactly 5 webhooks to reach the limit
+            // Seed exactly 5 integration endpoints to reach the limit
             for (int i = 0; i < 5; i++)
             {
-                WebhookEndpoint webhook = TestDataBuilder.BuildWebhookEndpoint(tenantId: 1);
-                await dbFactory.Context.InsertWithInt32IdentityAsync(webhook);
+                IntegrationEndpoint integration = new()
+                {
+                    TenantId = 1,
+                    Provider = IntegrationProvider.Custom,
+                    Name = $"Integration {i}",
+                    Configuration = """{"url":"https://hooks.example.com/test","secret":"test-secret"}""",
+                    IsEnabled = true,
+                    CreatedByUserId = 1,
+                    CreatedAt = DateTimeOffset.UtcNow,
+                };
+                await dbFactory.Context.InsertWithInt32IdentityAsync(integration);
             }
 
             SubscriptionService service = BuildService(repo);
@@ -693,6 +702,40 @@ public class SubscriptionServiceTests
             int retentionDays = await service.GetRetentionDaysForTenantAsync(1, CancellationToken.None);
 
             await Assert.That(retentionDays).IsEqualTo(180);
+        }
+    }
+
+    [Test]
+    public async Task CanCreateWebhook_UnderLimit_ReturnsTrue()
+    {
+        (DatabaseRepository repo, TestDatabaseFactory dbFactory) = BuildRepoAndFactory();
+        using (dbFactory)
+        {
+            TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 1, tier: SubscriptionTier.Pro);
+            // Webhook limit is 5 via TierFeatureLimits for Pro tier
+            sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
+
+            // Seed 2 integration endpoints (under the limit of 5)
+            for (int i = 0; i < 2; i++)
+            {
+                IntegrationEndpoint integration = new()
+                {
+                    TenantId = 1,
+                    Provider = IntegrationProvider.Custom,
+                    Name = $"Integration {i}",
+                    Configuration = """{"url":"https://hooks.example.com/test","secret":"test-secret"}""",
+                    IsEnabled = true,
+                    CreatedByUserId = 1,
+                    CreatedAt = DateTimeOffset.UtcNow,
+                };
+                await dbFactory.Context.InsertWithInt32IdentityAsync(integration);
+            }
+
+            SubscriptionService service = BuildService(repo);
+
+            bool result = await service.CanCreateWebhookAsync(1, CancellationToken.None);
+
+            await Assert.That(result).IsTrue();
         }
     }
 }

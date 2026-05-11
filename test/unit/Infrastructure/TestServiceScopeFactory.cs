@@ -73,7 +73,7 @@ public sealed class TestServiceScopeFactory : IServiceScopeFactory
             typeof(ISubscriptionRepository),
             typeof(ITenantRepository),
             typeof(IUserRepository),
-            typeof(IWebhookRepository),
+            typeof(IIntegrationRepository),
         ];
 
         private readonly DatabaseContext _context;

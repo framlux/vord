@@ -25,7 +25,9 @@ internal static class TableNames
     public const string AlertRules = "AlertRules";
     public const string AlertEvents = "AlertEvents";
     public const string AlertRuleMachines = "AlertRuleMachines";
+    /// <summary>Legacy table name, retained for migration rollback only. Table was replaced by IntegrationEndpoints.</summary>
     public const string WebhookEndpoints = "WebhookEndpoints";
+    public const string IntegrationEndpoints = "IntegrationEndpoints";
     public const string UserSigningKeys = "UserSigningKeys";
     public const string RemoteCommands = "RemoteCommands";
 }

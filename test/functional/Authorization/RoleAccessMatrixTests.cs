@@ -247,10 +247,10 @@ public sealed class RoleAccessMatrixTests
         await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.Forbidden);
     }
 
-    // ========== Webhook Create ==========
+    // ========== Integration Create ==========
 
     [Test]
-    public async Task WebhookCreate_Viewer_Returns403()
+    public async Task IntegrationCreate_Viewer_Returns403()
     {
         using FunctionalTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
@@ -258,7 +258,7 @@ public sealed class RoleAccessMatrixTests
 
         HttpClient client = BuildViewerClient(factory, tenantId, viewerUserId);
 
-        HttpResponseMessage response = await client.PostAsJsonAsync("/api/v1/webhooks", new { name = "test", url = "https://example.com/hook" });
+        HttpResponseMessage response = await client.PostAsJsonAsync("/api/v1/integrations", new { provider = "Slack", name = "test", configuration = new { webhookUrl = "https://hooks.slack.com/services/T123/B456/abc" } });
 
         await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.Forbidden);
     }

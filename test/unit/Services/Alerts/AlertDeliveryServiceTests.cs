@@ -2,12 +2,10 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
-using System.Security.Cryptography;
 using System.Text;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Server.Services.Alerts;
-using Framlux.FleetManagement.Server.Services.Security;
 using Framlux.FleetManagement.Test.Infrastructure;
 using LinqToDB;
 using Microsoft.Extensions.Logging;
@@ -22,13 +20,24 @@ namespace Framlux.FleetManagement.Test.Services;
 /// </summary>
 public sealed class AlertDeliveryServiceTests
 {
-    private static IWebhookSecretProtector CreatePassthroughProtector()
+    private static IIntegrationPayloadFormatter CreateCustomFormatter()
     {
-        IWebhookSecretProtector protector = Substitute.For<IWebhookSecretProtector>();
-        protector.Protect(Arg.Any<string>()).Returns(callInfo => callInfo.Arg<string>());
-        protector.Unprotect(Arg.Any<string>()).Returns(callInfo => callInfo.Arg<string>());
+        IIntegrationPayloadFormatter customFormatter = Substitute.For<IIntegrationPayloadFormatter>();
+        customFormatter.Provider.Returns(IntegrationProvider.Custom);
+        customFormatter.FormatRequest(Arg.Any<AlertEvent>(), Arg.Any<AlertRule>(), Arg.Any<IntegrationEndpoint>())
+            .Returns(callInfo =>
+            {
+                IntegrationEndpoint endpoint = callInfo.Arg<IntegrationEndpoint>();
+                System.Text.Json.JsonDocument config = System.Text.Json.JsonDocument.Parse(endpoint.Configuration);
+                string url = config.RootElement.GetProperty("url").GetString()!;
 
-        return protector;
+                HttpRequestMessage req = new(HttpMethod.Post, url);
+                req.Content = new StringContent("{}", Encoding.UTF8, "application/json");
+
+                return req;
+            });
+
+        return customFormatter;
     }
 
     private static AlertRule CreateRule(
@@ -81,7 +90,8 @@ public sealed class AlertDeliveryServiceTests
         httpFactory.CreateClient(Arg.Any<string>()).Returns(new HttpClient(handler));
 
         IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
-        AlertDeliveryService service = new(scopeFactory, httpFactory, redis, CreatePassthroughProtector(), new NullLogger<AlertDeliveryService>());
+        IIntegrationPayloadFormatter[] formatters = [CreateCustomFormatter()];
+        AlertDeliveryService service = new(scopeFactory, httpFactory, redis, formatters, new NullLogger<AlertDeliveryService>());
 
         await service.DeliverAsync(CreateEvent(), CreateRule(notifyEmail: false, notifyWebhook: false), CancellationToken.None);
 
@@ -89,7 +99,7 @@ public sealed class AlertDeliveryServiceTests
     }
 
     [Test]
-    public async Task DeliverAsync_NotifyEmailOnly_LogsEmailAction()
+    public async Task DeliverAsync_NotifyEmailOnly_NoHttpCalls()
     {
         using TestDatabaseFactory dbFactory = new();
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
@@ -97,34 +107,33 @@ public sealed class AlertDeliveryServiceTests
         IHttpClientFactory httpFactory = Substitute.For<IHttpClientFactory>();
         httpFactory.CreateClient(Arg.Any<string>()).Returns(new HttpClient(handler));
         IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
-        ILogger<AlertDeliveryService> logger = Substitute.For<ILogger<AlertDeliveryService>>();
 
-        AlertDeliveryService service = new(scopeFactory, httpFactory, redis, CreatePassthroughProtector(), logger);
+        IIntegrationPayloadFormatter[] formatters = [CreateCustomFormatter()];
+        AlertDeliveryService service = new(scopeFactory, httpFactory, redis, formatters, new NullLogger<AlertDeliveryService>());
 
         await service.DeliverAsync(CreateEvent(), CreateRule(notifyEmail: true, notifyWebhook: false), CancellationToken.None);
 
-        // No HTTP calls for email-only (email is placeholder)
+        // No HTTP calls for email-only (email delivery not yet implemented)
         await Assert.That(handler.Requests.Count).IsEqualTo(0);
     }
 
     [Test]
-    public async Task DeliverAsync_NotifyWebhookOnly_PostsToWebhookUrl()
+    public async Task DeliverAsync_NotifyWebhookWithEnabledIntegrations_MakesHttpCalls()
     {
         using TestDatabaseFactory dbFactory = new();
         int tenantId = 1;
 
-        // Seed webhook
-        WebhookEndpoint webhook = new()
+        IntegrationEndpoint integration = new()
         {
             TenantId = tenantId,
-            Name = "Test Hook",
-            Url = "https://hooks.example.com/alerts",
-            Secret = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+            Provider = IntegrationProvider.Custom,
+            Name = "Test Integration",
+            Configuration = """{"url":"https://hooks.example.com/test","secret":"plaintext-secret"}""",
             IsEnabled = true,
             CreatedByUserId = 1,
             CreatedAt = DateTimeOffset.UtcNow,
         };
-        await dbFactory.Context.InsertWithInt32IdentityAsync(webhook);
+        await dbFactory.Context.InsertWithInt32IdentityAsync(integration);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
         MockHttpMessageHandler handler = new();
@@ -132,32 +141,33 @@ public sealed class AlertDeliveryServiceTests
         httpFactory.CreateClient(Arg.Any<string>()).Returns(new HttpClient(handler));
 
         IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
-        AlertDeliveryService service = new(scopeFactory, httpFactory, redis, CreatePassthroughProtector(), new NullLogger<AlertDeliveryService>());
+        IIntegrationPayloadFormatter[] formatters = [CreateCustomFormatter()];
+        AlertDeliveryService service = new(scopeFactory, httpFactory, redis, formatters, new NullLogger<AlertDeliveryService>());
 
         await service.DeliverAsync(CreateEvent(tenantId), CreateRule(notifyWebhook: true, tenantId: tenantId), CancellationToken.None);
 
         await Assert.That(handler.Requests.Count).IsEqualTo(1);
-        await Assert.That(handler.Requests[0].RequestUri!.ToString()).IsEqualTo("https://hooks.example.com/alerts");
+        await Assert.That(handler.Requests[0].RequestUri!.ToString()).IsEqualTo("https://hooks.example.com/test");
         await Assert.That(handler.Requests[0].Method).IsEqualTo(HttpMethod.Post);
     }
 
     [Test]
-    public async Task DeliverAsync_WebhookPayload_ContainsCorrectFields()
+    public async Task DeliverAsync_DisabledIntegration_Skipped()
     {
         using TestDatabaseFactory dbFactory = new();
         int tenantId = 1;
 
-        WebhookEndpoint webhook = new()
+        IntegrationEndpoint integration = new()
         {
             TenantId = tenantId,
-            Name = "Payload Hook",
-            Url = "https://hooks.example.com/payload",
-            Secret = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
-            IsEnabled = true,
+            Provider = IntegrationProvider.Custom,
+            Name = "Disabled Integration",
+            Configuration = """{"url":"https://hooks.example.com/disabled","secret":"plaintext-secret"}""",
+            IsEnabled = false,
             CreatedByUserId = 1,
             CreatedAt = DateTimeOffset.UtcNow,
         };
-        await dbFactory.Context.InsertWithInt32IdentityAsync(webhook);
+        await dbFactory.Context.InsertWithInt32IdentityAsync(integration);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
         MockHttpMessageHandler handler = new();
@@ -165,38 +175,32 @@ public sealed class AlertDeliveryServiceTests
         httpFactory.CreateClient(Arg.Any<string>()).Returns(new HttpClient(handler));
 
         IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
-        AlertDeliveryService service = new(scopeFactory, httpFactory, redis, CreatePassthroughProtector(), new NullLogger<AlertDeliveryService>());
+        IIntegrationPayloadFormatter[] formatters = [CreateCustomFormatter()];
+        AlertDeliveryService service = new(scopeFactory, httpFactory, redis, formatters, new NullLogger<AlertDeliveryService>());
 
         await service.DeliverAsync(CreateEvent(tenantId), CreateRule(notifyWebhook: true, tenantId: tenantId), CancellationToken.None);
 
-        string? body = handler.Requests[0].Body;
-        await Assert.That(body).IsNotNull();
-        await Assert.That(body!).Contains("\"eventId\":");
-        await Assert.That(body).Contains("\"ruleName\":");
-        await Assert.That(body).Contains("\"severity\":");
-        await Assert.That(body).Contains("\"message\":");
-        await Assert.That(body).Contains("\"machineId\":");
-        await Assert.That(body).Contains("\"triggeredAt\":");
+        await Assert.That(handler.Requests.Count).IsEqualTo(0);
     }
 
     [Test]
-    public async Task DeliverAsync_WebhookSignature_IsValidHmacSha256()
+    public async Task DeliverAsync_DeletedIntegration_Skipped()
     {
         using TestDatabaseFactory dbFactory = new();
         int tenantId = 1;
-        string secret = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
 
-        WebhookEndpoint webhook = new()
+        IntegrationEndpoint integration = new()
         {
             TenantId = tenantId,
-            Name = "Sig Hook",
-            Url = "https://hooks.example.com/sig",
-            Secret = secret,
+            Provider = IntegrationProvider.Custom,
+            Name = "Deleted Integration",
+            Configuration = """{"url":"https://hooks.example.com/deleted","secret":"plaintext-secret"}""",
             IsEnabled = true,
             CreatedByUserId = 1,
             CreatedAt = DateTimeOffset.UtcNow,
+            DeletedAt = DateTimeOffset.UtcNow.AddHours(-1),
         };
-        await dbFactory.Context.InsertWithInt32IdentityAsync(webhook);
+        await dbFactory.Context.InsertWithInt32IdentityAsync(integration);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
         MockHttpMessageHandler handler = new();
@@ -204,41 +208,51 @@ public sealed class AlertDeliveryServiceTests
         httpFactory.CreateClient(Arg.Any<string>()).Returns(new HttpClient(handler));
 
         IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
-        AlertDeliveryService service = new(scopeFactory, httpFactory, redis, CreatePassthroughProtector(), new NullLogger<AlertDeliveryService>());
+        IIntegrationPayloadFormatter[] formatters = [CreateCustomFormatter()];
+        AlertDeliveryService service = new(scopeFactory, httpFactory, redis, formatters, new NullLogger<AlertDeliveryService>());
 
         await service.DeliverAsync(CreateEvent(tenantId), CreateRule(notifyWebhook: true, tenantId: tenantId), CancellationToken.None);
 
-        string? body = handler.Requests[0].Body;
-        IEnumerable<string> sigValues = handler.Requests[0].Headers["X-Vord-Signature"];
-        string signature = sigValues.First();
-
-        byte[] expectedSig = HMACSHA256.HashData(
-            Encoding.UTF8.GetBytes(secret),
-            Encoding.UTF8.GetBytes(body!));
-        string expectedHex = $"sha256={Convert.ToHexStringLower(expectedSig)}";
-
-        await Assert.That(signature).IsEqualTo(expectedHex);
+        await Assert.That(handler.Requests.Count).IsEqualTo(0);
     }
 
     [Test]
-    public async Task DeliverAsync_MultipleWebhooks_PostsToAll()
+    public async Task DeliverAsync_NoIntegrationsExist_CompletesWithoutError()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+        MockHttpMessageHandler handler = new();
+        IHttpClientFactory httpFactory = Substitute.For<IHttpClientFactory>();
+        httpFactory.CreateClient(Arg.Any<string>()).Returns(new HttpClient(handler));
+
+        IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
+        IIntegrationPayloadFormatter[] formatters = [CreateCustomFormatter()];
+        AlertDeliveryService service = new(scopeFactory, httpFactory, redis, formatters, new NullLogger<AlertDeliveryService>());
+
+        await service.DeliverAsync(CreateEvent(), CreateRule(notifyWebhook: true), CancellationToken.None);
+
+        await Assert.That(handler.Requests.Count).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task DeliverAsync_MultipleIntegrations_EachGetsHttpCall()
     {
         using TestDatabaseFactory dbFactory = new();
         int tenantId = 1;
 
-        for (int i = 0; i < 2; i++)
+        for (int i = 0; i < 3; i++)
         {
-            WebhookEndpoint webhook = new()
+            IntegrationEndpoint integration = new()
             {
                 TenantId = tenantId,
-                Name = $"Hook {i}",
-                Url = $"https://hooks.example.com/multi{i}",
-                Secret = $"abcdef0123456789abcdef0123456789abcdef0123456789abcdef012345678{i}",
+                Provider = IntegrationProvider.Custom,
+                Name = $"Integration {i}",
+                Configuration = $$$"""{"url":"https://hooks.example.com/multi{{{i}}}","secret":"secret-{{{i}}}"}""",
                 IsEnabled = true,
                 CreatedByUserId = 1,
                 CreatedAt = DateTimeOffset.UtcNow,
             };
-            await dbFactory.Context.InsertWithInt32IdentityAsync(webhook);
+            await dbFactory.Context.InsertWithInt32IdentityAsync(integration);
         }
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
@@ -247,30 +261,31 @@ public sealed class AlertDeliveryServiceTests
         httpFactory.CreateClient(Arg.Any<string>()).Returns(new HttpClient(handler));
 
         IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
-        AlertDeliveryService service = new(scopeFactory, httpFactory, redis, CreatePassthroughProtector(), new NullLogger<AlertDeliveryService>());
+        IIntegrationPayloadFormatter[] formatters = [CreateCustomFormatter()];
+        AlertDeliveryService service = new(scopeFactory, httpFactory, redis, formatters, new NullLogger<AlertDeliveryService>());
 
         await service.DeliverAsync(CreateEvent(tenantId), CreateRule(notifyWebhook: true, tenantId: tenantId), CancellationToken.None);
 
-        await Assert.That(handler.Requests.Count).IsEqualTo(2);
+        await Assert.That(handler.Requests.Count).IsEqualTo(3);
     }
 
     [Test]
-    public async Task DeliverAsync_WebhookHttpError_LogsWarningAndContinues()
+    public async Task DeliverAsync_HttpError_LogsWarningAndContinues()
     {
         using TestDatabaseFactory dbFactory = new();
         int tenantId = 1;
 
-        WebhookEndpoint webhook = new()
+        IntegrationEndpoint integration = new()
         {
             TenantId = tenantId,
-            Name = "Error Hook",
-            Url = "https://hooks.example.com/error",
-            Secret = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+            Provider = IntegrationProvider.Custom,
+            Name = "Error Integration",
+            Configuration = """{"url":"https://hooks.example.com/error","secret":"plaintext-secret"}""",
             IsEnabled = true,
             CreatedByUserId = 1,
             CreatedAt = DateTimeOffset.UtcNow,
         };
-        await dbFactory.Context.InsertWithInt32IdentityAsync(webhook);
+        await dbFactory.Context.InsertWithInt32IdentityAsync(integration);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
         MockHttpMessageHandler handler = new();
@@ -279,7 +294,8 @@ public sealed class AlertDeliveryServiceTests
         httpFactory.CreateClient(Arg.Any<string>()).Returns(new HttpClient(handler));
 
         IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
-        AlertDeliveryService service = new(scopeFactory, httpFactory, redis, CreatePassthroughProtector(), new NullLogger<AlertDeliveryService>());
+        IIntegrationPayloadFormatter[] formatters = [CreateCustomFormatter()];
+        AlertDeliveryService service = new(scopeFactory, httpFactory, redis, formatters, new NullLogger<AlertDeliveryService>());
 
         // Should not throw
         await service.DeliverAsync(CreateEvent(tenantId), CreateRule(notifyWebhook: true, tenantId: tenantId), CancellationToken.None);
@@ -288,22 +304,22 @@ public sealed class AlertDeliveryServiceTests
     }
 
     [Test]
-    public async Task DeliverAsync_WebhookNetworkException_LogsErrorAndContinues()
+    public async Task DeliverAsync_NetworkException_LogsErrorAndContinues()
     {
         using TestDatabaseFactory dbFactory = new();
         int tenantId = 1;
 
-        WebhookEndpoint webhook = new()
+        IntegrationEndpoint integration = new()
         {
             TenantId = tenantId,
-            Name = "Network Error Hook",
-            Url = "https://hooks.example.com/netfail",
-            Secret = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+            Provider = IntegrationProvider.Custom,
+            Name = "Network Error Integration",
+            Configuration = """{"url":"https://hooks.example.com/netfail","secret":"plaintext-secret"}""",
             IsEnabled = true,
             CreatedByUserId = 1,
             CreatedAt = DateTimeOffset.UtcNow,
         };
-        await dbFactory.Context.InsertWithInt32IdentityAsync(webhook);
+        await dbFactory.Context.InsertWithInt32IdentityAsync(integration);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
         MockHttpMessageHandler handler = new();
@@ -312,31 +328,34 @@ public sealed class AlertDeliveryServiceTests
         httpFactory.CreateClient(Arg.Any<string>()).Returns(new HttpClient(handler));
 
         IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
-        AlertDeliveryService service = new(scopeFactory, httpFactory, redis, CreatePassthroughProtector(), new NullLogger<AlertDeliveryService>());
+        IIntegrationPayloadFormatter[] formatters = [CreateCustomFormatter()];
+        AlertDeliveryService service = new(scopeFactory, httpFactory, redis, formatters, new NullLogger<AlertDeliveryService>());
 
         // Should not throw
         await service.DeliverAsync(CreateEvent(tenantId), CreateRule(notifyWebhook: true, tenantId: tenantId), CancellationToken.None);
 
+        // Request was attempted even though it threw
         await Assert.That(handler.Requests.Count).IsEqualTo(1);
     }
 
     [Test]
-    public async Task DeliverAsync_DisabledWebhook_Skipped()
+    public async Task DeliverAsync_MissingFormatterForProvider_LogsWarningAndSkips()
     {
         using TestDatabaseFactory dbFactory = new();
         int tenantId = 1;
 
-        WebhookEndpoint webhook = new()
+        // Seed a Slack integration but only register a Custom formatter
+        IntegrationEndpoint integration = new()
         {
             TenantId = tenantId,
-            Name = "Disabled Hook",
-            Url = "https://hooks.example.com/disabled",
-            Secret = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
-            IsEnabled = false,
+            Provider = IntegrationProvider.Slack,
+            Name = "Slack Integration",
+            Configuration = """{"webhookUrl":"https://hooks.slack.com/test"}""",
+            IsEnabled = true,
             CreatedByUserId = 1,
             CreatedAt = DateTimeOffset.UtcNow,
         };
-        await dbFactory.Context.InsertWithInt32IdentityAsync(webhook);
+        await dbFactory.Context.InsertWithInt32IdentityAsync(integration);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
         MockHttpMessageHandler handler = new();
@@ -344,210 +363,15 @@ public sealed class AlertDeliveryServiceTests
         httpFactory.CreateClient(Arg.Any<string>()).Returns(new HttpClient(handler));
 
         IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
-        AlertDeliveryService service = new(scopeFactory, httpFactory, redis, CreatePassthroughProtector(), new NullLogger<AlertDeliveryService>());
+        // Only register Custom formatter, not Slack
+        IIntegrationPayloadFormatter[] formatters = [CreateCustomFormatter()];
+        ILogger<AlertDeliveryService> logger = Substitute.For<ILogger<AlertDeliveryService>>();
+        AlertDeliveryService service = new(scopeFactory, httpFactory, redis, formatters, logger);
 
         await service.DeliverAsync(CreateEvent(tenantId), CreateRule(notifyWebhook: true, tenantId: tenantId), CancellationToken.None);
 
+        // No HTTP call because the formatter was not found
         await Assert.That(handler.Requests.Count).IsEqualTo(0);
-    }
-
-    [Test]
-    public async Task DeliverAsync_NoWebhooksExist_CompletesSuccessfully()
-    {
-        using TestDatabaseFactory dbFactory = new();
-        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MockHttpMessageHandler handler = new();
-        IHttpClientFactory httpFactory = Substitute.For<IHttpClientFactory>();
-        httpFactory.CreateClient(Arg.Any<string>()).Returns(new HttpClient(handler));
-
-        IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
-        AlertDeliveryService service = new(scopeFactory, httpFactory, redis, CreatePassthroughProtector(), new NullLogger<AlertDeliveryService>());
-
-        await service.DeliverAsync(CreateEvent(), CreateRule(notifyWebhook: true), CancellationToken.None);
-
-        await Assert.That(handler.Requests.Count).IsEqualTo(0);
-    }
-
-    [Test]
-    public async Task DeliverWebhooksAsync_SignatureHasSha256Prefix()
-    {
-        using TestDatabaseFactory dbFactory = new();
-        int tenantId = 1;
-
-        WebhookEndpoint webhook = new()
-        {
-            TenantId = tenantId,
-            Name = "Prefix Hook",
-            Url = "https://hooks.example.com/prefix",
-            Secret = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
-            IsEnabled = true,
-            CreatedByUserId = 1,
-            CreatedAt = DateTimeOffset.UtcNow,
-        };
-        await dbFactory.Context.InsertWithInt32IdentityAsync(webhook);
-
-        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MockHttpMessageHandler handler = new();
-        IHttpClientFactory httpFactory = Substitute.For<IHttpClientFactory>();
-        httpFactory.CreateClient(Arg.Any<string>()).Returns(new HttpClient(handler));
-
-        IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
-        AlertDeliveryService service = new(scopeFactory, httpFactory, redis, CreatePassthroughProtector(), new NullLogger<AlertDeliveryService>());
-
-        await service.DeliverAsync(CreateEvent(tenantId), CreateRule(notifyWebhook: true, tenantId: tenantId), CancellationToken.None);
-
-        IEnumerable<string> sigValues = handler.Requests[0].Headers["X-Vord-Signature"];
-        string signature = sigValues.First();
-
-        await Assert.That(signature.StartsWith("sha256=", StringComparison.Ordinal)).IsTrue();
-    }
-
-    [Test]
-    public async Task DeliverWebhooksAsync_SignatureIsValidHmacSha256()
-    {
-        using TestDatabaseFactory dbFactory = new();
-        int tenantId = 1;
-        string secret = "f1e2d3c4b5a6f1e2d3c4b5a6f1e2d3c4b5a6f1e2d3c4b5a6f1e2d3c4b5a6f1e2";
-
-        WebhookEndpoint webhook = new()
-        {
-            TenantId = tenantId,
-            Name = "Valid Sig Hook",
-            Url = "https://hooks.example.com/validsig",
-            Secret = secret,
-            IsEnabled = true,
-            CreatedByUserId = 1,
-            CreatedAt = DateTimeOffset.UtcNow,
-        };
-        await dbFactory.Context.InsertWithInt32IdentityAsync(webhook);
-
-        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MockHttpMessageHandler handler = new();
-        IHttpClientFactory httpFactory = Substitute.For<IHttpClientFactory>();
-        httpFactory.CreateClient(Arg.Any<string>()).Returns(new HttpClient(handler));
-
-        IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
-        AlertDeliveryService service = new(scopeFactory, httpFactory, redis, CreatePassthroughProtector(), new NullLogger<AlertDeliveryService>());
-
-        await service.DeliverAsync(CreateEvent(tenantId), CreateRule(notifyWebhook: true, tenantId: tenantId), CancellationToken.None);
-
-        string? body = handler.Requests[0].Body;
-        IEnumerable<string> sigValues = handler.Requests[0].Headers["X-Vord-Signature"];
-        string signature = sigValues.First();
-
-        // Strip the sha256= prefix and verify the HMAC matches
-        string hexPart = signature.Substring("sha256=".Length);
-        byte[] expectedSig = HMACSHA256.HashData(
-            Encoding.UTF8.GetBytes(secret),
-            Encoding.UTF8.GetBytes(body!));
-        string expectedHex = Convert.ToHexStringLower(expectedSig);
-
-        await Assert.That(hexPart).IsEqualTo(expectedHex);
-    }
-
-    [Test]
-    public async Task DeliverWebhooksAsync_DifferentPayloads_ProduceDifferentSignatures()
-    {
-        using TestDatabaseFactory dbFactory = new();
-        int tenantId = 1;
-        string secret = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
-
-        WebhookEndpoint webhook = new()
-        {
-            TenantId = tenantId,
-            Name = "Diff Payload Hook",
-            Url = "https://hooks.example.com/diffpayload",
-            Secret = secret,
-            IsEnabled = true,
-            CreatedByUserId = 1,
-            CreatedAt = DateTimeOffset.UtcNow,
-        };
-        await dbFactory.Context.InsertWithInt32IdentityAsync(webhook);
-
-        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MockHttpMessageHandler handler = new();
-        IHttpClientFactory httpFactory = Substitute.For<IHttpClientFactory>();
-        httpFactory.CreateClient(Arg.Any<string>()).Returns(new HttpClient(handler));
-
-        IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
-        AlertDeliveryService service = new(scopeFactory, httpFactory, redis, CreatePassthroughProtector(), new NullLogger<AlertDeliveryService>());
-
-        // Deliver first event
-        AlertEvent event1 = CreateEvent(tenantId);
-        event1.Message = "First payload message";
-        await service.DeliverAsync(event1, CreateRule(notifyWebhook: true, tenantId: tenantId), CancellationToken.None);
-
-        // Deliver second event with different message
-        AlertEvent event2 = CreateEvent(tenantId);
-        event2.Id = 200;
-        event2.Message = "Second payload message";
-        await service.DeliverAsync(event2, CreateRule(notifyWebhook: true, tenantId: tenantId), CancellationToken.None);
-
-        string signature1 = handler.Requests[0].Headers["X-Vord-Signature"].First();
-        string signature2 = handler.Requests[1].Headers["X-Vord-Signature"].First();
-
-        await Assert.That(signature1).IsNotEqualTo(signature2);
-    }
-
-    [Test]
-    public async Task DeliverWebhooksAsync_DifferentSecrets_ProduceDifferentSignatures()
-    {
-        using TestDatabaseFactory dbFactory = new();
-        int tenantId1 = 1;
-        int tenantId2 = 2;
-        string secret1 = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-        string secret2 = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
-
-        WebhookEndpoint webhook1 = new()
-        {
-            TenantId = tenantId1,
-            Name = "Secret1 Hook",
-            Url = "https://hooks.example.com/secret1",
-            Secret = secret1,
-            IsEnabled = true,
-            CreatedByUserId = 1,
-            CreatedAt = DateTimeOffset.UtcNow,
-        };
-        await dbFactory.Context.InsertWithInt32IdentityAsync(webhook1);
-
-        WebhookEndpoint webhook2 = new()
-        {
-            TenantId = tenantId2,
-            Name = "Secret2 Hook",
-            Url = "https://hooks.example.com/secret2",
-            Secret = secret2,
-            IsEnabled = true,
-            CreatedByUserId = 1,
-            CreatedAt = DateTimeOffset.UtcNow,
-        };
-        await dbFactory.Context.InsertWithInt32IdentityAsync(webhook2);
-
-        // Deliver to tenant 1
-        MockHttpMessageHandler handler1 = new();
-        IHttpClientFactory httpFactory1 = Substitute.For<IHttpClientFactory>();
-        httpFactory1.CreateClient(Arg.Any<string>()).Returns(new HttpClient(handler1));
-        TestServiceScopeFactory scopeFactory1 = new(dbFactory.Context);
-        IConnectionMultiplexer redis1 = Substitute.For<IConnectionMultiplexer>();
-        AlertDeliveryService service1 = new(scopeFactory1, httpFactory1, redis1, CreatePassthroughProtector(), new NullLogger<AlertDeliveryService>());
-
-        AlertEvent eventForTenant1 = CreateEvent(tenantId1);
-        await service1.DeliverAsync(eventForTenant1, CreateRule(notifyWebhook: true, tenantId: tenantId1), CancellationToken.None);
-
-        // Deliver to tenant 2 with same event content but different secret
-        MockHttpMessageHandler handler2 = new();
-        IHttpClientFactory httpFactory2 = Substitute.For<IHttpClientFactory>();
-        httpFactory2.CreateClient(Arg.Any<string>()).Returns(new HttpClient(handler2));
-        TestServiceScopeFactory scopeFactory2 = new(dbFactory.Context);
-        IConnectionMultiplexer redis2 = Substitute.For<IConnectionMultiplexer>();
-        AlertDeliveryService service2 = new(scopeFactory2, httpFactory2, redis2, CreatePassthroughProtector(), new NullLogger<AlertDeliveryService>());
-
-        AlertEvent eventForTenant2 = CreateEvent(tenantId2);
-        await service2.DeliverAsync(eventForTenant2, CreateRule(notifyWebhook: true, tenantId: tenantId2), CancellationToken.None);
-
-        string signature1 = handler1.Requests[0].Headers["X-Vord-Signature"].First();
-        string signature2 = handler2.Requests[0].Headers["X-Vord-Signature"].First();
-
-        await Assert.That(signature1).IsNotEqualTo(signature2);
     }
 
     // --- EnqueueAsync Tests ---
@@ -562,7 +386,8 @@ public sealed class AlertDeliveryServiceTests
         IDatabase redisDb = Substitute.For<IDatabase>();
         redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(redisDb);
 
-        AlertDeliveryService service = new(scopeFactory, httpFactory, redis, CreatePassthroughProtector(), new NullLogger<AlertDeliveryService>());
+        IIntegrationPayloadFormatter[] formatters = [CreateCustomFormatter()];
+        AlertDeliveryService service = new(scopeFactory, httpFactory, redis, formatters, new NullLogger<AlertDeliveryService>());
 
         await service.EnqueueAsync(100, 1, 1, CancellationToken.None);
 
@@ -583,7 +408,8 @@ public sealed class AlertDeliveryServiceTests
         IDatabase redisDb = Substitute.For<IDatabase>();
         redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(redisDb);
 
-        AlertDeliveryService service = new(scopeFactory, httpFactory, redis, CreatePassthroughProtector(), new NullLogger<AlertDeliveryService>());
+        IIntegrationPayloadFormatter[] formatters = [CreateCustomFormatter()];
+        AlertDeliveryService service = new(scopeFactory, httpFactory, redis, formatters, new NullLogger<AlertDeliveryService>());
 
         await service.EnqueueAsync(42, 7, 3, CancellationToken.None);
 
@@ -602,17 +428,17 @@ public sealed class AlertDeliveryServiceTests
         using TestDatabaseFactory dbFactory = new();
         int tenantId = 1;
 
-        WebhookEndpoint webhook = new()
+        IntegrationEndpoint integration = new()
         {
             TenantId = tenantId,
-            Name = "Both Flags Hook",
-            Url = "https://hooks.example.com/both",
-            Secret = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
+            Provider = IntegrationProvider.Custom,
+            Name = "Both Flags Integration",
+            Configuration = """{"url":"https://hooks.example.com/both","secret":"plaintext-secret"}""",
             IsEnabled = true,
             CreatedByUserId = 1,
             CreatedAt = DateTimeOffset.UtcNow,
         };
-        await dbFactory.Context.InsertWithInt32IdentityAsync(webhook);
+        await dbFactory.Context.InsertWithInt32IdentityAsync(integration);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
         MockHttpMessageHandler handler = new();
@@ -621,59 +447,21 @@ public sealed class AlertDeliveryServiceTests
         IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
         ILogger<AlertDeliveryService> logger = Substitute.For<ILogger<AlertDeliveryService>>();
 
-        AlertDeliveryService service = new(scopeFactory, httpFactory, redis, CreatePassthroughProtector(), logger);
+        IIntegrationPayloadFormatter[] formatters = [CreateCustomFormatter()];
+        AlertDeliveryService service = new(scopeFactory, httpFactory, redis, formatters, logger);
 
-        // Both notifyEmail and notifyWebhook enabled.
+        // Both notifyEmail and notifyWebhook enabled
         await service.DeliverAsync(CreateEvent(tenantId), CreateRule(notifyEmail: true, notifyWebhook: true, tenantId: tenantId), CancellationToken.None);
 
-        // Webhook should receive an HTTP POST.
+        // Integration should receive an HTTP POST
         await Assert.That(handler.Requests.Count).IsEqualTo(1);
 
-        // Email path should log a message (placeholder implementation).
+        // Email path should log a message (placeholder implementation)
         logger.Received().Log(
             LogLevel.Information,
             Arg.Any<EventId>(),
             Arg.Is<object>(o => o.ToString()!.Contains("email")),
             Arg.Any<Exception?>(),
             Arg.Any<Func<object, Exception?, string>>());
-    }
-
-    [Test]
-    public async Task DeliverWebhooksAsync_TriggeredAtIsIso8601()
-    {
-        using TestDatabaseFactory dbFactory = new();
-        int tenantId = 1;
-
-        WebhookEndpoint webhook = new()
-        {
-            TenantId = tenantId,
-            Name = "ISO8601 Hook",
-            Url = "https://hooks.example.com/iso",
-            Secret = "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789",
-            IsEnabled = true,
-            CreatedByUserId = 1,
-            CreatedAt = DateTimeOffset.UtcNow,
-        };
-        await dbFactory.Context.InsertWithInt32IdentityAsync(webhook);
-
-        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MockHttpMessageHandler handler = new();
-        IHttpClientFactory httpFactory = Substitute.For<IHttpClientFactory>();
-        httpFactory.CreateClient(Arg.Any<string>()).Returns(new HttpClient(handler));
-        IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
-
-        AlertDeliveryService service = new(scopeFactory, httpFactory, redis, CreatePassthroughProtector(), new NullLogger<AlertDeliveryService>());
-
-        await service.DeliverAsync(CreateEvent(tenantId), CreateRule(notifyWebhook: true, tenantId: tenantId), CancellationToken.None);
-
-        string? body = handler.Requests[0].Body;
-        await Assert.That(body).IsNotNull();
-
-        // The triggeredAt field should be parseable as ISO 8601 with timezone.
-        System.Text.Json.JsonDocument doc = System.Text.Json.JsonDocument.Parse(body!);
-        string triggeredAt = doc.RootElement.GetProperty("triggeredAt").GetString()!;
-        bool parsed = DateTimeOffset.TryParse(triggeredAt, System.Globalization.CultureInfo.InvariantCulture, System.Globalization.DateTimeStyles.None, out DateTimeOffset _);
-
-        await Assert.That(parsed).IsTrue();
     }
 }

@@ -26,11 +26,13 @@ import type {
 	FleetSshSessionDto,
 	AlertRuleDto,
 	AlertEventDto,
-	WebhookEndpointDto,
+	IntegrationEndpointDto,
+	IntegrationTestResultDto,
+	IntegrationProviderDto,
 	CreateAlertRuleRequest,
 	UpdateAlertRuleRequest,
-	CreateWebhookRequest,
-	UpdateWebhookRequest,
+	CreateIntegrationRequest,
+	UpdateIntegrationRequest,
 	MachineAuthorizedKeyDto,
 	SigningKeyDto,
 	SigningKeyListResponse,
@@ -537,32 +539,44 @@ export class ApiClient {
 		this.unwrap(resp);
 	}
 
-	// Webhooks
-	async getWebhooks(): Promise<WebhookEndpointDto[]> {
-		const resp = await this.get<ApiResponse<WebhookEndpointDto[]>>('/api/v1/webhooks');
+	// Integrations
+	async getIntegrations(): Promise<IntegrationEndpointDto[]> {
+		const resp = await this.get<ApiResponse<IntegrationEndpointDto[]>>('/api/v1/integrations');
 
 		return this.unwrap(resp);
 	}
 
-	async createWebhook(req: CreateWebhookRequest): Promise<WebhookEndpointDto> {
-		const resp = await this.post<ApiResponse<WebhookEndpointDto>>('/api/v1/webhooks', req);
+	async createIntegration(req: CreateIntegrationRequest): Promise<IntegrationEndpointDto> {
+		const resp = await this.post<ApiResponse<IntegrationEndpointDto>>('/api/v1/integrations', req);
 
 		return this.unwrap(resp);
 	}
 
-	async updateWebhook(id: number, req: UpdateWebhookRequest): Promise<WebhookEndpointDto> {
-		const resp = await this.put<ApiResponse<WebhookEndpointDto>>(`/api/v1/webhooks/${id}`, req);
+	async updateIntegration(id: number, req: UpdateIntegrationRequest): Promise<IntegrationEndpointDto> {
+		const resp = await this.put<ApiResponse<IntegrationEndpointDto>>(`/api/v1/integrations/${id}`, req);
 
 		return this.unwrap(resp);
 	}
 
-	async deleteWebhook(id: number): Promise<void> {
-		const resp = await this.del<ApiResponse<boolean>>(`/api/v1/webhooks/${id}`);
+	async deleteIntegration(id: number): Promise<void> {
+		const resp = await this.del<ApiResponse<boolean>>(`/api/v1/integrations/${id}`);
 		this.unwrap(resp);
 	}
 
-	async rotateWebhookSecret(id: number): Promise<WebhookEndpointDto> {
-		const resp = await this.post<ApiResponse<WebhookEndpointDto>>(`/api/v1/webhooks/${id}/rotate-secret`);
+	async rotateIntegrationSecret(id: number): Promise<IntegrationEndpointDto> {
+		const resp = await this.post<ApiResponse<IntegrationEndpointDto>>(`/api/v1/integrations/${id}/rotate-secret`);
+
+		return this.unwrap(resp);
+	}
+
+	async testIntegration(id: number): Promise<IntegrationTestResultDto> {
+		const resp = await this.post<ApiResponse<IntegrationTestResultDto>>(`/api/v1/integrations/${id}/test`);
+
+		return this.unwrap(resp);
+	}
+
+	async getIntegrationProviders(): Promise<IntegrationProviderDto[]> {
+		const resp = await this.get<ApiResponse<IntegrationProviderDto[]>>('/api/v1/integrations/providers');
 
 		return this.unwrap(resp);
 	}

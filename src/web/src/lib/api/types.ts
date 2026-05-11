@@ -484,13 +484,35 @@ export interface AlertEventDto {
 	resolvedAt: string | null;
 }
 
-export interface WebhookEndpointDto {
+export interface IntegrationEndpointDto {
 	id: number;
+	provider: string;
 	name: string;
-	url: string;
 	isEnabled: boolean;
 	createdAt: string;
 	secret?: string | null;
+}
+
+export interface IntegrationTestResultDto {
+	success: boolean;
+	statusCode: number | null;
+	message: string;
+}
+
+export interface IntegrationProviderDto {
+	provider: string;
+	displayName: string;
+	description: string;
+	configFields: IntegrationConfigField[];
+}
+
+export interface IntegrationConfigField {
+	key: string;
+	label: string;
+	type: string;
+	placeholder: string;
+	helpText: string;
+	helpUrl?: string;
 }
 
 export interface CreateAlertRuleRequest {
@@ -518,13 +540,16 @@ export interface UpdateAlertRuleRequest {
 	machineIds: number[];
 }
 
-export interface CreateWebhookRequest {
-	name: string;
-	url: string;
+export interface CreateIntegrationRequest {
+	provider: string;
+	name?: string;
+	configuration: Record<string, string>;
 }
 
-export interface UpdateWebhookRequest {
-	isEnabled: boolean;
+export interface UpdateIntegrationRequest {
+	name?: string;
+	isEnabled?: boolean;
+	configuration?: Record<string, string>;
 }
 
 // Machine Update

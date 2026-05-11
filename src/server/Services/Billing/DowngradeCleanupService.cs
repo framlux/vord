@@ -11,7 +11,7 @@ public sealed class DowngradeCleanupService : IDowngradeCleanupService
 {
     private readonly ITenantRepository _tenantRepo;
     private readonly IAlertRuleRepository _alertRuleRepo;
-    private readonly IWebhookRepository _webhookRepo;
+    private readonly IIntegrationRepository _integrationRepo;
     private readonly ILogger<DowngradeCleanupService> _logger;
 
     /// <summary>
@@ -20,17 +20,17 @@ public sealed class DowngradeCleanupService : IDowngradeCleanupService
     public DowngradeCleanupService(
         ITenantRepository tenantRepo,
         IAlertRuleRepository alertRuleRepo,
-        IWebhookRepository webhookRepo,
+        IIntegrationRepository integrationRepo,
         ILogger<DowngradeCleanupService> logger)
     {
         ArgumentNullException.ThrowIfNull(tenantRepo);
         ArgumentNullException.ThrowIfNull(alertRuleRepo);
-        ArgumentNullException.ThrowIfNull(webhookRepo);
+        ArgumentNullException.ThrowIfNull(integrationRepo);
         ArgumentNullException.ThrowIfNull(logger);
 
         _tenantRepo = tenantRepo;
         _alertRuleRepo = alertRuleRepo;
-        _webhookRepo = webhookRepo;
+        _integrationRepo = integrationRepo;
         _logger = logger;
     }
 
@@ -74,14 +74,14 @@ public sealed class DowngradeCleanupService : IDowngradeCleanupService
                 rulesDisabled, tenantId);
         }
 
-        // Disable webhook notification endpoints
-        int webhooksDisabled = await _webhookRepo.DisableWebhooksForTenantAsync(tenantId, ct);
+        // Disable integration notification endpoints
+        int integrationsDisabled = await _integrationRepo.DisableIntegrationsForTenantAsync(tenantId, ct);
 
-        if (webhooksDisabled > 0)
+        if (integrationsDisabled > 0)
         {
             _logger.LogInformation(
-                "Disabled {Count} webhook endpoints for tenant {TenantId} during downgrade to Free",
-                webhooksDisabled, tenantId);
+                "Disabled {Count} integration endpoints for tenant {TenantId} during downgrade to Free",
+                integrationsDisabled, tenantId);
         }
     }
 }

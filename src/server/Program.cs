@@ -146,7 +146,7 @@ builder.Services.AddHttpClient("OidcDiscovery")
     .ConfigurePrimaryHttpMessageHandler(() => SsrfSafeSocketsHttpHandler.Create());
 builder.Services.AddHttpClient("OidcTokenExchange")
     .ConfigurePrimaryHttpMessageHandler(() => SsrfSafeSocketsHttpHandler.Create());
-builder.Services.AddHttpClient("WebhookDelivery", client =>
+builder.Services.AddHttpClient("IntegrationDelivery", client =>
     {
         client.Timeout = TimeSpan.FromSeconds(10);
     })
@@ -321,7 +321,7 @@ builder.Services.AddScoped<ISigningKeyRepository>(sp => sp.GetRequiredService<Da
 builder.Services.AddScoped<IRemoteCommandRepository>(sp => sp.GetRequiredService<DatabaseRepository>());
 builder.Services.AddScoped<IAlertRuleRepository>(sp => sp.GetRequiredService<DatabaseRepository>());
 builder.Services.AddScoped<IAlertEventRepository>(sp => sp.GetRequiredService<DatabaseRepository>());
-builder.Services.AddScoped<IWebhookRepository>(sp => sp.GetRequiredService<DatabaseRepository>());
+builder.Services.AddScoped<IIntegrationRepository>(sp => sp.GetRequiredService<DatabaseRepository>());
 builder.Services.AddScoped<IDataExportRepository>(sp => sp.GetRequiredService<DatabaseRepository>());
 builder.Services.AddScoped<IRegistrationTokenRepository>(sp => sp.GetRequiredService<DatabaseRepository>());
 builder.Services.AddScoped<IMachineStateRepository>(sp => sp.GetRequiredService<DatabaseRepository>());
@@ -340,7 +340,11 @@ builder.Services.AddScoped<ISubscriptionService, SubscriptionService>();
 builder.Services.AddScoped<IDowngradeGuardService, DowngradeGuardService>();
 builder.Services.AddScoped<IDowngradeCleanupService, DowngradeCleanupService>();
 builder.Services.AddSingleton<IOidcSecretProtector, OidcSecretProtector>();
-builder.Services.AddSingleton<IWebhookSecretProtector, WebhookSecretProtector>();
+builder.Services.AddSingleton<IIntegrationPayloadFormatter, Framlux.FleetManagement.Server.Services.Alerts.Formatters.SlackPayloadFormatter>();
+builder.Services.AddSingleton<IIntegrationPayloadFormatter, Framlux.FleetManagement.Server.Services.Alerts.Formatters.TeamsPayloadFormatter>();
+builder.Services.AddSingleton<IIntegrationPayloadFormatter, Framlux.FleetManagement.Server.Services.Alerts.Formatters.DiscordPayloadFormatter>();
+builder.Services.AddSingleton<IIntegrationPayloadFormatter, Framlux.FleetManagement.Server.Services.Alerts.Formatters.PagerDutyPayloadFormatter>();
+builder.Services.AddSingleton<IIntegrationPayloadFormatter, Framlux.FleetManagement.Server.Services.Alerts.Formatters.CustomPayloadFormatter>();
 builder.Services.AddSingleton<IRoleCacheInvalidator, RoleCacheInvalidator>();
 builder.Services.AddHttpClient<IEmailService, ResendEmailService>();
 
@@ -377,7 +381,7 @@ else
 
 builder.Services.AddSingleton<IAlertDeliveryService, AlertDeliveryService>();
 builder.Services.AddHostedService<AlertEvaluationService>();
-builder.Services.AddHostedService<WebhookDeliveryWorkerService>();
+builder.Services.AddHostedService<IntegrationDeliveryWorkerService>();
 builder.Services.AddHostedService<CommandExpiryBackgroundService>();
 builder.Services.AddHostedService<MachineStateStreamingService>();
 builder.Services.AddHostedService<HealthSweepService>();

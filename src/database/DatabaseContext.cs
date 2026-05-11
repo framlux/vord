@@ -100,9 +100,9 @@ public sealed class DatabaseContext(DataOptions<DatabaseContext> options) : Data
     public ITable<AlertRuleMachine> AlertRuleMachines => this.GetTable<AlertRuleMachine>();
 
     /// <summary>
-    /// Represents the collection of webhook endpoints in the database.
+    /// Represents the collection of integration endpoints for alert delivery.
     /// </summary>
-    public ITable<WebhookEndpoint> WebhookEndpoints => this.GetTable<WebhookEndpoint>();
+    public ITable<IntegrationEndpoint> IntegrationEndpoints => this.GetTable<IntegrationEndpoint>();
 
     /// <summary>
     /// Represents the collection of user signing keys for remote command authorization.

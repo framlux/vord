@@ -35,4 +35,6 @@ public enum AuditResourceType : short
     Webhook = 12,
     /// <summary>An alert event.</summary>
     AlertEvent = 13,
+    /// <summary>An integration endpoint.</summary>
+    Integration = 14,
 }

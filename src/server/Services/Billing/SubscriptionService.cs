@@ -18,7 +18,7 @@ public sealed class SubscriptionService : ISubscriptionService
     private readonly ISubscriptionRepository _subscriptionRepo;
     private readonly IMachineRepository _machineRepo;
     private readonly IAlertRuleRepository _alertRuleRepo;
-    private readonly IWebhookRepository _webhookRepo;
+    private readonly IIntegrationRepository _integrationRepo;
     private readonly ITierFeatureLimitRepository _tierLimitRepo;
     private readonly ITenantSubscriptionOverrideRepository _overrideRepo;
     private readonly TierDefaultOptions _tierDefaults;
@@ -31,7 +31,7 @@ public sealed class SubscriptionService : ISubscriptionService
         ISubscriptionRepository subscriptionRepo,
         IMachineRepository machineRepo,
         IAlertRuleRepository alertRuleRepo,
-        IWebhookRepository webhookRepo,
+        IIntegrationRepository integrationRepo,
         ITierFeatureLimitRepository tierLimitRepo,
         ITenantSubscriptionOverrideRepository overrideRepo,
         IOptions<TierDefaultOptions> tierDefaults,
@@ -40,7 +40,7 @@ public sealed class SubscriptionService : ISubscriptionService
         ArgumentNullException.ThrowIfNull(subscriptionRepo);
         ArgumentNullException.ThrowIfNull(machineRepo);
         ArgumentNullException.ThrowIfNull(alertRuleRepo);
-        ArgumentNullException.ThrowIfNull(webhookRepo);
+        ArgumentNullException.ThrowIfNull(integrationRepo);
         ArgumentNullException.ThrowIfNull(tierLimitRepo);
         ArgumentNullException.ThrowIfNull(overrideRepo);
         ArgumentNullException.ThrowIfNull(tierDefaults);
@@ -49,7 +49,7 @@ public sealed class SubscriptionService : ISubscriptionService
         _subscriptionRepo = subscriptionRepo;
         _machineRepo = machineRepo;
         _alertRuleRepo = alertRuleRepo;
-        _webhookRepo = webhookRepo;
+        _integrationRepo = integrationRepo;
         _tierLimitRepo = tierLimitRepo;
         _overrideRepo = overrideRepo;
         _tierDefaults = tierDefaults.Value;
@@ -208,7 +208,7 @@ public sealed class SubscriptionService : ISubscriptionService
             tier => GetConfigDefaultsForTier(tier).WebhookLimit,
             ct);
 
-        int count = await _webhookRepo.CountWebhooksForTenantAsync(tenantId, ct);
+        int count = await _integrationRepo.CountIntegrationsForTenantAsync(tenantId, ct);
 
         return count < webhookLimit;
     }

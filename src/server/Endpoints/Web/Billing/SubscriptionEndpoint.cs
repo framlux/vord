@@ -57,7 +57,7 @@ public sealed class SubscriptionEndpoint : EndpointWithoutRequest<ApiResponse<Su
 {
     private readonly ISubscriptionService _subscriptionService;
     private readonly IAlertRuleRepository _alertRuleRepo;
-    private readonly IWebhookRepository _webhookRepo;
+    private readonly IIntegrationRepository _integrationRepo;
     private readonly ITenantRepository _tenantRepository;
     private readonly IBillingApiClient _billingApiClient;
 
@@ -67,13 +67,13 @@ public sealed class SubscriptionEndpoint : EndpointWithoutRequest<ApiResponse<Su
     public SubscriptionEndpoint(
         ISubscriptionService subscriptionService,
         IAlertRuleRepository alertRuleRepo,
-        IWebhookRepository webhookRepo,
+        IIntegrationRepository integrationRepo,
         ITenantRepository tenantRepository,
         IBillingApiClient billingApiClient)
     {
         _subscriptionService = subscriptionService;
         _alertRuleRepo = alertRuleRepo;
-        _webhookRepo = webhookRepo;
+        _integrationRepo = integrationRepo;
         _tenantRepository = tenantRepository;
         _billingApiClient = billingApiClient;
     }
@@ -110,7 +110,7 @@ public sealed class SubscriptionEndpoint : EndpointWithoutRequest<ApiResponse<Su
 
         int machineCount = await _subscriptionService.GetMachineCountForTenantAsync(tenantId.Value, ct);
         int alertRuleCount = await _alertRuleRepo.CountAlertRulesForTenantAsync(tenantId.Value, ct);
-        int webhookCount = await _webhookRepo.CountWebhooksForTenantAsync(tenantId.Value, ct);
+        int webhookCount = await _integrationRepo.CountIntegrationsForTenantAsync(tenantId.Value, ct);
         EffectiveLimits limits = await _subscriptionService.GetEffectiveLimitsForTenantAsync(tenantId.Value, ct);
 
         // Retrieve cancellation state from billing-api (source of truth for Stripe state)

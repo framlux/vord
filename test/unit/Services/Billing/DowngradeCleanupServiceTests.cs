@@ -206,20 +206,29 @@ public class DowngradeCleanupServiceTests
     }
 
     [Test]
-    public async Task CleanupForFreeTierAsync_DisablesWebhookEndpoints()
+    public async Task CleanupForFreeTierAsync_DisablesIntegrationEndpoints()
     {
         (DatabaseRepository repo, TestDatabaseFactory dbFactory) = BuildRepoAndFactory();
         using (dbFactory)
         {
-            WebhookEndpoint webhook = TestDataBuilder.BuildWebhookEndpoint(tenantId: 1, isEnabled: true);
-            webhook.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(webhook);
+            IntegrationEndpoint integration = new()
+            {
+                TenantId = 1,
+                Provider = IntegrationProvider.Custom,
+                Name = "Test Integration",
+                Configuration = """{"url":"https://hooks.example.com/test","secret":"test-secret"}""",
+                IsEnabled = true,
+                CreatedByUserId = 1,
+                CreatedAt = DateTimeOffset.UtcNow,
+            };
+            integration.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(integration);
 
             DowngradeCleanupService service = new(repo, repo, repo, new NullLogger<DowngradeCleanupService>());
 
             await service.CleanupForFreeTierAsync(1, CancellationToken.None);
 
-            WebhookEndpoint? updated = await dbFactory.Context.WebhookEndpoints
-                .FirstOrDefaultAsync(w => w.Id == webhook.Id);
+            IntegrationEndpoint? updated = await dbFactory.Context.IntegrationEndpoints
+                .FirstOrDefaultAsync(i => i.Id == integration.Id);
             await Assert.That(updated).IsNotNull();
             await Assert.That(updated!.IsEnabled).IsFalse();
         }
@@ -239,8 +248,17 @@ public class DowngradeCleanupServiceTests
                 tenantId: 2, isCustom: true, isEnabled: true);
             ruleTenant2.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(ruleTenant2);
 
-            WebhookEndpoint webhookTenant2 = TestDataBuilder.BuildWebhookEndpoint(tenantId: 2, isEnabled: true);
-            webhookTenant2.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(webhookTenant2);
+            IntegrationEndpoint integrationTenant2 = new()
+            {
+                TenantId = 2,
+                Provider = IntegrationProvider.Custom,
+                Name = "Tenant 2 Integration",
+                Configuration = """{"url":"https://hooks.example.com/test","secret":"test-secret"}""",
+                IsEnabled = true,
+                CreatedByUserId = 1,
+                CreatedAt = DateTimeOffset.UtcNow,
+            };
+            integrationTenant2.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(integrationTenant2);
 
             DowngradeCleanupService service = new(repo, repo, repo, new NullLogger<DowngradeCleanupService>());
 
@@ -256,10 +274,10 @@ public class DowngradeCleanupServiceTests
             await Assert.That(tenant2Rule).IsNotNull();
             await Assert.That(tenant2Rule!.IsEnabled).IsTrue();
 
-            WebhookEndpoint? tenant2Webhook = await dbFactory.Context.WebhookEndpoints
-                .FirstOrDefaultAsync(w => w.TenantId == 2);
-            await Assert.That(tenant2Webhook).IsNotNull();
-            await Assert.That(tenant2Webhook!.IsEnabled).IsTrue();
+            IntegrationEndpoint? tenant2Integration = await dbFactory.Context.IntegrationEndpoints
+                .FirstOrDefaultAsync(i => i.TenantId == 2);
+            await Assert.That(tenant2Integration).IsNotNull();
+            await Assert.That(tenant2Integration!.IsEnabled).IsTrue();
         }
     }
 
@@ -277,21 +295,30 @@ public class DowngradeCleanupServiceTests
     }
 
     [Test]
-    public async Task CleanupForFreeTierAsync_AlreadyDisabledWebhook_NoError()
+    public async Task CleanupForFreeTierAsync_AlreadyDisabledIntegration_NoError()
     {
         (DatabaseRepository repo, TestDatabaseFactory dbFactory) = BuildRepoAndFactory();
         using (dbFactory)
         {
-            WebhookEndpoint webhook = TestDataBuilder.BuildWebhookEndpoint(tenantId: 1, isEnabled: false);
-            webhook.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(webhook);
+            IntegrationEndpoint integration = new()
+            {
+                TenantId = 1,
+                Provider = IntegrationProvider.Custom,
+                Name = "Disabled Integration",
+                Configuration = """{"url":"https://hooks.example.com/test","secret":"test-secret"}""",
+                IsEnabled = false,
+                CreatedByUserId = 1,
+                CreatedAt = DateTimeOffset.UtcNow,
+            };
+            integration.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(integration);
 
             DowngradeCleanupService service = new(repo, repo, repo, new NullLogger<DowngradeCleanupService>());
 
-            // Should complete without error when webhook is already disabled
+            // Should complete without error when integration is already disabled
             await service.CleanupForFreeTierAsync(1, CancellationToken.None);
 
-            WebhookEndpoint? updated = await dbFactory.Context.WebhookEndpoints
-                .FirstOrDefaultAsync(w => w.Id == webhook.Id);
+            IntegrationEndpoint? updated = await dbFactory.Context.IntegrationEndpoints
+                .FirstOrDefaultAsync(i => i.Id == integration.Id);
             await Assert.That(updated).IsNotNull();
             await Assert.That(updated!.IsEnabled).IsFalse();
         }

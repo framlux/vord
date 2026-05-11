@@ -355,24 +355,24 @@ public static class TestDataBuilder
     }
 
     /// <summary>
-    /// Builds a <see cref="WebhookEndpoint"/> with sensible defaults.
+    /// Builds an <see cref="IntegrationEndpoint"/> with sensible defaults.
     /// </summary>
-    public static WebhookEndpoint BuildWebhookEndpoint(
+    public static IntegrationEndpoint BuildIntegrationEndpoint(
         int tenantId = 1,
+        IntegrationProvider provider = IntegrationProvider.Custom,
         string? name = null,
-        string url = "https://hooks.example.com/test",
-        string? secret = null,
+        string? configuration = null,
         bool isEnabled = true,
         int createdByUserId = 1)
     {
         int n = Interlocked.Increment(ref _machineCounter);
 
-        return new WebhookEndpoint
+        return new IntegrationEndpoint
         {
             TenantId = tenantId,
-            Name = name ?? $"Test Webhook {n}",
-            Url = url,
-            Secret = secret ?? Convert.ToHexStringLower(RandomNumberGenerator.GetBytes(32)),
+            Provider = provider,
+            Name = name ?? $"Test Integration {n}",
+            Configuration = configuration ?? """{"url":"https://hooks.example.com/test","secret":"test-secret"}""",
             IsEnabled = isEnabled,
             CreatedByUserId = createdByUserId,
             CreatedAt = DateTimeOffset.UtcNow,

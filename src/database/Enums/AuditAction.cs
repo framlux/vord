@@ -79,6 +79,14 @@ public enum AuditAction : short
     WebhookDeleted = 112,
     /// <summary>A webhook endpoint secret was rotated.</summary>
     WebhookSecretRotated = 113,
+    /// <summary>An integration endpoint was created.</summary>
+    IntegrationCreated = 114,
+    /// <summary>An integration endpoint was updated.</summary>
+    IntegrationUpdated = 115,
+    /// <summary>An integration endpoint was deleted.</summary>
+    IntegrationDeleted = 116,
+    /// <summary>An integration endpoint secret was rotated.</summary>
+    IntegrationSecretRotated = 117,
     /// <summary>An alert event was acknowledged.</summary>
     AlertEventAcknowledged = 120,
     /// <summary>The alert rules assigned to a machine were updated.</summary>
