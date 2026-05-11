@@ -46,6 +46,10 @@ dotnet run --project test/functional/functional.csproj
 - Tests must adhere to FIRST principles and *must* test for intent and *never* simply exercise code or to increase test numbers
 - Tests must test both happy-paths as well as error cases, parameter ranges (both valid ranges and invalid ranges), and null inputs.
 - All new features, bug fixes, and code review fixes must include regression tests that verify the functionality works and prevent regressions. Tests are part of the exit criteria — no feature or fix is complete without unit and functional tests that would catch a regression if the code were reverted or broken.
+- Extract non-trivial logic from endpoint handlers into `internal static` methods so they can be unit tested directly without framework coupling (e.g., `ValidateMetricConstraints`, `EvaluateCondition`). Endpoint handlers themselves are tested via functional tests.
+- Validator tests must cover: valid requests, each field's invalid states, boundary values (at/above/below limits), and cross-field constraints (e.g., duration minimum depends on metric type).
+- When a feature adds new enum values, seed data, or configuration: write tests that verify the exact values (durations, severities, flags) — not just counts. Configuration correctness tests catch silent regressions that count-based assertions miss.
+- Measure code coverage using coverlet: `~/.dotnet/tools/coverlet test/unit/bin/Debug/net10.0/osx-arm64/unit.dll --target test/unit/bin/Debug/net10.0/osx-arm64/unit --include "[Assembly]Namespace.Class" --format cobertura --output coverage.xml`. Target >80% line and branch coverage for all new code. Note that functional tests run in a separate process and are not captured by coverlet — factor this into coverage analysis for endpoint handlers.
 
 ## Architecture
 
@@ -100,6 +104,8 @@ dotnet run --project test/functional/functional.csproj
 **Database:** LinqToDB (not EF Core). Models use `[Table]`, `[Column]`, `[PrimaryKey]` attributes. Access via domain-specific repository interfaces (e.g., `IMachineRepository`, `IAuditLogRepository`) — never inject `DatabaseContext` directly in server-side code. `DatabaseContext` is only used within repository implementations in the `database` project and for DI registration in `Program.cs`. Do not use composite/aggregate repository interfaces. If a constructor has 6+ repository dependencies, consider whether the class has too many responsibilities. Migrations use FluentMigrator.
 
 **API Endpoints:** FastEndpoints pattern — inherit `Endpoint<TReq, TRes>`, configure route/auth/version in `Configure()`, implement `HandleAsync()`. Versioned routes: `/v{n}/api/{resource}`.
+
+**Validation:** Use `Validator<T>` (FastEndpoints' wrapper around FluentValidation) for all request-level validation. Validators auto-register and run before the handler — no manual DI wiring needed. Validators are singletons; use `Resolve<T>()` inside rules to access scoped services if needed. Place all constraint logic that can be derived from the request DTO in the validator (field formats, ranges, per-metric minimums, enum parsing). Business logic validation that requires DB state (e.g., checking a record exists, verifying tenant ownership) belongs in the handler using `AddError()` / `ThrowIfAnyErrors()`. When the handler needs DB-loaded context for validation (e.g., a metric type stored on an existing rule), include that field in the request DTO so the validator can enforce constraints, and have the handler verify the request value matches the DB value.
 
 **Billing:** Stripe integration for subscription management (checkout, webhooks, customer portal). Tiers: Free, Pro, Team.
 
