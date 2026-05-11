@@ -389,6 +389,65 @@ public sealed class ConfigurationServiceTests
             Arg.Any<CancellationToken>());
     }
 
+    [Test]
+    public async Task GetConfiguration_WithActiveTenantId_LoadsSigningKeys()
+    {
+        ISigningKeyRepository signingKeyRepo = Substitute.For<ISigningKeyRepository>();
+
+        // CreateService also stubs this, so we configure the return after creating the service.
+        ConfigurationService service = CreateService(signingKeyRepo: signingKeyRepo);
+
+        // Override to return a real signing key — the CreateService factory sets empty by default.
+        signingKeyRepo.GetActiveSigningKeysForMachineAsync(Arg.Any<long>(), Arg.Any<CancellationToken>())
+            .Returns(new List<Database.Models.UserSigningKey>
+            {
+                new Database.Models.UserSigningKey
+                {
+                    Id = 1,
+                    UserId = 1,
+                    TenantId = 1,
+                    PublicKey = Convert.ToBase64String(new byte[32]),
+                    PublicKeyFingerprint = "fp1",
+                    Label = "My Key",
+                    CreatedAt = DateTimeOffset.UtcNow
+                }
+            });
+
+        // tenantId > 0 causes the signing keys branch to execute.
+        ServerCallContext context = CreateAuthenticatedContext(machineId: 1, tenantId: 5);
+
+        GetConfigurationResponse response = await service.GetConfiguration(
+            new GetConfigurationRequest { MachineId = 1 }, context);
+
+        await Assert.That(response.SigningKeys.Count).IsEqualTo(1);
+        await Assert.That(response.SigningKeys[0].KeyId).IsEqualTo(1);
+        await signingKeyRepo.Received(1).GetActiveSigningKeysForMachineAsync(1L, Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task GetConfiguration_WithZeroTenantId_SkipsSigningKeyLoad()
+    {
+        ISigningKeyRepository signingKeyRepo = Substitute.For<ISigningKeyRepository>();
+        signingKeyRepo.GetActiveSigningKeysForMachineAsync(Arg.Any<long>(), Arg.Any<CancellationToken>())
+            .Returns(new List<Database.Models.UserSigningKey>());
+
+        ConfigurationService service = CreateService(signingKeyRepo: signingKeyRepo);
+
+        // tenantId = 0 (no TenantId claim) means the signing keys branch is skipped.
+        DefaultHttpContext httpContext = new();
+        ClaimsIdentity identity = new("ApiKey");
+        identity.AddClaim(new Claim("MachineId", "1"));
+        httpContext.User = new ClaimsPrincipal(identity);
+        ServerCallContext context = new TestServerCallContext(httpContext, new Metadata());
+
+        GetConfigurationResponse response = await service.GetConfiguration(
+            new GetConfigurationRequest { MachineId = 1 }, context);
+
+        await Assert.That(response.SigningKeys.Count).IsEqualTo(0);
+        await signingKeyRepo.DidNotReceive().GetActiveSigningKeysForMachineAsync(
+            Arg.Any<long>(), Arg.Any<CancellationToken>());
+    }
+
     /// <summary>
     /// Custom <see cref="ServerCallContext"/> subclass for testing gRPC endpoints.
     /// </summary>

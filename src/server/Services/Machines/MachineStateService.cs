@@ -217,7 +217,7 @@ public sealed class MachineStateService : IMachineStateService
         {
             return JsonSerializer.Deserialize<T>(row.Payload, JsonDefaults.SnakeCase);
         }
-        catch
+        catch (JsonException)
         {
             return null;
         }
@@ -236,7 +236,7 @@ public sealed class MachineStateService : IMachineStateService
 
             return ips is { Count: > 0 } ? ips[0] : null;
         }
-        catch
+        catch (JsonException)
         {
             return null;
         }

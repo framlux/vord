@@ -41,6 +41,115 @@ public sealed class RemoteCommandServiceTests
 
     private RemoteCommandService CreateService() => new(_transactionProvider, _auditLog, _machineRepository, _signingKeyRepository, _remoteCommandRepository, _pingService, _logger);
 
+    // ========== Constructor null guard validation ==========
+
+    [Test]
+    public async Task Constructor_NullTransactionProvider_Throws()
+    {
+        // Intent: A null transaction provider must be caught at construction time so any
+        // misconfigured DI container fails loudly rather than causing a deferred NullReferenceException.
+        ArgumentNullException? ex = await Assert.ThrowsAsync<ArgumentNullException>(() =>
+        {
+            RemoteCommandService _ = new(null!, _auditLog, _machineRepository, _signingKeyRepository, _remoteCommandRepository, _pingService, _logger);
+
+            return Task.CompletedTask;
+        });
+
+        await Assert.That(ex).IsNotNull();
+        await Assert.That(ex!.ParamName).IsEqualTo("transactionProvider");
+    }
+
+    [Test]
+    public async Task Constructor_NullAuditLog_Throws()
+    {
+        // Intent: A null audit log must be caught at construction to ensure the service
+        // never silently proceeds without its required audit dependency.
+        ArgumentNullException? ex = await Assert.ThrowsAsync<ArgumentNullException>(() =>
+        {
+            RemoteCommandService _ = new(_transactionProvider, null!, _machineRepository, _signingKeyRepository, _remoteCommandRepository, _pingService, _logger);
+
+            return Task.CompletedTask;
+        });
+
+        await Assert.That(ex).IsNotNull();
+        await Assert.That(ex!.ParamName).IsEqualTo("auditLog");
+    }
+
+    [Test]
+    public async Task Constructor_NullMachineRepository_Throws()
+    {
+        // Intent: A null machine repository must be caught at construction.
+        ArgumentNullException? ex = await Assert.ThrowsAsync<ArgumentNullException>(() =>
+        {
+            RemoteCommandService _ = new(_transactionProvider, _auditLog, null!, _signingKeyRepository, _remoteCommandRepository, _pingService, _logger);
+
+            return Task.CompletedTask;
+        });
+
+        await Assert.That(ex).IsNotNull();
+        await Assert.That(ex!.ParamName).IsEqualTo("machineRepository");
+    }
+
+    [Test]
+    public async Task Constructor_NullSigningKeyRepository_Throws()
+    {
+        // Intent: A null signing key repository must be caught at construction.
+        ArgumentNullException? ex = await Assert.ThrowsAsync<ArgumentNullException>(() =>
+        {
+            RemoteCommandService _ = new(_transactionProvider, _auditLog, _machineRepository, null!, _remoteCommandRepository, _pingService, _logger);
+
+            return Task.CompletedTask;
+        });
+
+        await Assert.That(ex).IsNotNull();
+        await Assert.That(ex!.ParamName).IsEqualTo("signingKeyRepository");
+    }
+
+    [Test]
+    public async Task Constructor_NullRemoteCommandRepository_Throws()
+    {
+        // Intent: A null remote command repository must be caught at construction.
+        ArgumentNullException? ex = await Assert.ThrowsAsync<ArgumentNullException>(() =>
+        {
+            RemoteCommandService _ = new(_transactionProvider, _auditLog, _machineRepository, _signingKeyRepository, null!, _pingService, _logger);
+
+            return Task.CompletedTask;
+        });
+
+        await Assert.That(ex).IsNotNull();
+        await Assert.That(ex!.ParamName).IsEqualTo("remoteCommandRepository");
+    }
+
+    [Test]
+    public async Task Constructor_NullPingService_Throws()
+    {
+        // Intent: A null machine ping service must be caught at construction.
+        ArgumentNullException? ex = await Assert.ThrowsAsync<ArgumentNullException>(() =>
+        {
+            RemoteCommandService _ = new(_transactionProvider, _auditLog, _machineRepository, _signingKeyRepository, _remoteCommandRepository, null!, _logger);
+
+            return Task.CompletedTask;
+        });
+
+        await Assert.That(ex).IsNotNull();
+        await Assert.That(ex!.ParamName).IsEqualTo("pingService");
+    }
+
+    [Test]
+    public async Task Constructor_NullLogger_Throws()
+    {
+        // Intent: A null logger must be caught at construction.
+        ArgumentNullException? ex = await Assert.ThrowsAsync<ArgumentNullException>(() =>
+        {
+            RemoteCommandService _ = new(_transactionProvider, _auditLog, _machineRepository, _signingKeyRepository, _remoteCommandRepository, _pingService, null!);
+
+            return Task.CompletedTask;
+        });
+
+        await Assert.That(ex).IsNotNull();
+        await Assert.That(ex!.ParamName).IsEqualTo("logger");
+    }
+
     private static (UserSigningKey key, NSec.Cryptography.Key privateKey) BuildSignedKey(int id = 1, int userId = 1, int tenantId = 1)
     {
         NSec.Cryptography.SignatureAlgorithm algorithm = NSec.Cryptography.SignatureAlgorithm.Ed25519;
@@ -432,5 +541,158 @@ public sealed class RemoteCommandServiceTests
         ServiceResult<RemoteCommand> result = await service.SubmitCommandAsync(command, CancellationToken.None);
 
         await Assert.That(result.IsSuccess).IsTrue();
+    }
+
+    // ========== SubmitCommandAsync — Signing key not authorized for machine ==========
+
+    [Test]
+    public async Task SubmitCommand_SigningKeyNotAuthorizedForMachine_ReturnsForbidden()
+    {
+        // Intent: Even if a signing key is valid and active, it must be explicitly authorized
+        // for the target machine. Submitting without that authorization must be rejected.
+        (UserSigningKey key, NSec.Cryptography.Key privateKey) = BuildSignedKey();
+        _signingKeyRepository.GetSigningKeyByIdAsync(key.Id, Arg.Any<CancellationToken>()).Returns(key);
+        _machineRepository.GetMachineAsync(Arg.Any<long>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns(new Machine
+            {
+                Id = 1,
+                TenantId = key.TenantId,
+                Name = "test",
+                ApiKeyHash = "test",
+                SerialNumber = "test",
+                SystemId = "test",
+                MachineType = MachineTypes.BareMetalServer,
+                OperatingSystem = OperatingSystems.Ubuntu,
+                RegistrationTokenId = 1,
+                RegisteredOn = DateTimeOffset.UtcNow,
+                IsDeleted = false,
+            });
+
+        // Explicitly deny authorization for this key/machine combination.
+        _signingKeyRepository.IsKeyAuthorizedForMachineAsync(Arg.Any<int>(), Arg.Any<long>(), Arg.Any<CancellationToken>())
+            .Returns(false);
+
+        RemoteCommand command = BuildSignedCommand(privateKey);
+        RemoteCommandService service = CreateService();
+
+        ServiceResult<RemoteCommand> result = await service.SubmitCommandAsync(command, CancellationToken.None);
+
+        await Assert.That(result.StatusCode).IsEqualTo(403);
+    }
+
+    // ========== SubmitCommandAsync — Invalid base64 in public key or signature ==========
+
+    [Test]
+    public async Task SubmitCommand_InvalidBase64InPublicKey_Returns400()
+    {
+        // Intent: When the stored public key is not valid base64 the server must reject
+        // the command with a clear bad-request response rather than throwing an unhandled exception.
+        UserSigningKey keyWithBadBase64 = new()
+        {
+            Id = 1,
+            UserId = 1,
+            TenantId = 1,
+            Label = "Bad Key",
+            PublicKey = "!!! not-valid-base64 !!!",
+            PublicKeyFingerprint = "abc",
+            CreatedAt = DateTimeOffset.UtcNow,
+            RevokedAt = null,
+        };
+
+        _signingKeyRepository.GetSigningKeyByIdAsync(1, Arg.Any<CancellationToken>()).Returns(keyWithBadBase64);
+
+        RemoteCommand command = TestDataBuilder.BuildRemoteCommand(signingKeyId: 1);
+        RemoteCommandService service = CreateService();
+
+        ServiceResult<RemoteCommand> result = await service.SubmitCommandAsync(command, CancellationToken.None);
+
+        await Assert.That(result.StatusCode).IsEqualTo(400);
+    }
+
+    [Test]
+    public async Task SubmitCommand_InvalidBase64InSignature_Returns400()
+    {
+        // Intent: When the submitted signature field is not valid base64 the server must
+        // reject the command with a bad-request rather than propagating an unhandled exception.
+        (UserSigningKey key, NSec.Cryptography.Key _) = BuildSignedKey();
+        _signingKeyRepository.GetSigningKeyByIdAsync(key.Id, Arg.Any<CancellationToken>()).Returns(key);
+
+        RemoteCommand command = TestDataBuilder.BuildRemoteCommand(signingKeyId: key.Id);
+        command.Signature = "!!! not-valid-base64 !!!";
+
+        RemoteCommandService service = CreateService();
+
+        ServiceResult<RemoteCommand> result = await service.SubmitCommandAsync(command, CancellationToken.None);
+
+        await Assert.That(result.StatusCode).IsEqualTo(400);
+    }
+
+    // ========== SubmitCommandAsync — Malformed public key bytes ==========
+
+    [Test]
+    public async Task SubmitCommand_MalformedPublicKeyBytes_Returns400()
+    {
+        // Intent: Base64 that decodes successfully but does not represent a valid Ed25519
+        // public key must be caught and returned as a bad-request rather than an unhandled exception.
+        UserSigningKey keyWithBadKeyBytes = new()
+        {
+            Id = 1,
+            UserId = 1,
+            TenantId = 1,
+            Label = "Malformed Key",
+            // Valid base64 but not a valid 32-byte Ed25519 public key (only 4 bytes).
+            PublicKey = Convert.ToBase64String(new byte[] { 0x01, 0x02, 0x03, 0x04 }),
+            PublicKeyFingerprint = "abc",
+            CreatedAt = DateTimeOffset.UtcNow,
+            RevokedAt = null,
+        };
+
+        _signingKeyRepository.GetSigningKeyByIdAsync(1, Arg.Any<CancellationToken>()).Returns(keyWithBadKeyBytes);
+
+        RemoteCommand command = TestDataBuilder.BuildRemoteCommand(signingKeyId: 1);
+        RemoteCommandService service = CreateService();
+
+        ServiceResult<RemoteCommand> result = await service.SubmitCommandAsync(command, CancellationToken.None);
+
+        await Assert.That(result.StatusCode).IsEqualTo(400);
+    }
+
+    // ========== GetCommandHistoryAsync — Delegates to repository ==========
+
+    [Test]
+    public async Task GetCommandHistory_ReturnsPagedResultsFromRepository()
+    {
+        // Intent: GetCommandHistoryAsync is responsible for retrieving paginated command
+        // history for a machine and must pass the caller's pagination parameters to the repository.
+        List<RemoteCommand> expectedCommands = new()
+        {
+            TestDataBuilder.BuildRemoteCommand(machineId: 5, tenantId: 2),
+            TestDataBuilder.BuildRemoteCommand(machineId: 5, tenantId: 2),
+        };
+
+        _remoteCommandRepository.GetCommandsForMachineAsync(5, 2, 1, 10, Arg.Any<CancellationToken>())
+            .Returns(expectedCommands);
+
+        RemoteCommandService service = CreateService();
+
+        List<RemoteCommand> result = await service.GetCommandHistoryAsync(5, 2, 1, 10, CancellationToken.None);
+
+        await Assert.That(result.Count).IsEqualTo(2);
+        await _remoteCommandRepository.Received(1).GetCommandsForMachineAsync(5, 2, 1, 10, Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task GetCommandHistory_NoCommandsForMachine_ReturnsEmptyList()
+    {
+        // Intent: A machine that has never had commands issued should return an empty list
+        // rather than null or an error result.
+        _remoteCommandRepository.GetCommandsForMachineAsync(Arg.Any<long>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns(new List<RemoteCommand>());
+
+        RemoteCommandService service = CreateService();
+
+        List<RemoteCommand> result = await service.GetCommandHistoryAsync(99, 1, 1, 10, CancellationToken.None);
+
+        await Assert.That(result).IsEmpty();
     }
 }

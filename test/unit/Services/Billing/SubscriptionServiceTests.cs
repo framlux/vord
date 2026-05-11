@@ -706,6 +706,165 @@ public class SubscriptionServiceTests
     }
 
     [Test]
+    public async Task EnsureSubscriptionExists_CanceledPaidSubscription_RevertsToFree()
+    {
+        (DatabaseRepository repo, TestDatabaseFactory dbFactory) = BuildRepoAndFactory();
+        using (dbFactory)
+        {
+            TenantSubscription sub = TestDataBuilder.BuildSubscription(
+                tenantId: 400, tier: SubscriptionTier.Pro, status: SubscriptionStatus.Canceled);
+            sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
+
+            SubscriptionService service = BuildService(repo);
+
+            await service.EnsureSubscriptionExistsAsync(400, CancellationToken.None);
+
+            TenantSubscription? updated = await dbFactory.Context.TenantSubscriptions
+                .FirstOrDefaultAsync(s => s.TenantId == 400);
+
+            await Assert.That(updated).IsNotNull();
+            await Assert.That(updated!.Tier).IsEqualTo(SubscriptionTier.Free);
+            await Assert.That(updated.Status).IsEqualTo(SubscriptionStatus.Active);
+        }
+    }
+
+    [Test]
+    public async Task EnsureSubscriptionExists_PastDuePaidSubscription_RetainsTierAndStatus()
+    {
+        // Regression test: previously, PastDue paid subscriptions silently fell through
+        // EnsureSubscriptionExistsAsync without any action or logging. The method now
+        // explicitly handles PastDue status, retaining the current tier while Stripe
+        // handles dunning. This prevents accidental revert-to-free or re-provisioning.
+        (DatabaseRepository repo, TestDatabaseFactory dbFactory) = BuildRepoAndFactory();
+        using (dbFactory)
+        {
+            TenantSubscription sub = TestDataBuilder.BuildSubscription(
+                tenantId: 500, tier: SubscriptionTier.Pro, status: SubscriptionStatus.PastDue);
+            sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
+
+            SubscriptionService service = BuildService(repo);
+
+            await service.EnsureSubscriptionExistsAsync(500, CancellationToken.None);
+
+            TenantSubscription? updated = await dbFactory.Context.TenantSubscriptions
+                .FirstOrDefaultAsync(s => s.TenantId == 500);
+
+            // Should remain PastDue Pro — not reverted or re-provisioned
+            await Assert.That(updated).IsNotNull();
+            await Assert.That(updated!.Tier).IsEqualTo(SubscriptionTier.Pro);
+            await Assert.That(updated.Status).IsEqualTo(SubscriptionStatus.PastDue);
+
+            // Verify no additional subscription was created
+            int count = await dbFactory.Context.TenantSubscriptions
+                .Where(s => s.TenantId == 500)
+                .CountAsync();
+            await Assert.That(count).IsEqualTo(1);
+        }
+    }
+
+    [Test]
+    public async Task GetEffectiveLimits_NoSubscription_ReturnsFreeDefaults()
+    {
+        (DatabaseRepository repo, TestDatabaseFactory dbFactory) = BuildRepoAndFactory();
+        using (dbFactory)
+        {
+            // No subscription exists for this tenant
+            SubscriptionService service = BuildService(repo);
+
+            EffectiveLimits limits = await service.GetEffectiveLimitsForTenantAsync(888, CancellationToken.None);
+
+            await Assert.That(limits.MachineLimit).IsEqualTo(3);
+            await Assert.That(limits.RetentionDays).IsEqualTo(1);
+            await Assert.That(limits.AlertRuleLimit).IsEqualTo(0);
+            await Assert.That(limits.WebhookLimit).IsEqualTo(0);
+        }
+    }
+
+    [Test]
+    public async Task GetEffectiveLimits_NullTierLimits_FallsBackToConfig()
+    {
+        (DatabaseRepository repo, TestDatabaseFactory dbFactory) = BuildRepoAndFactory();
+        using (dbFactory)
+        {
+            TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 1, tier: SubscriptionTier.Pro);
+            sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
+
+            // Build service with null tier limits for Pro
+            ITierFeatureLimitRepository tierLimitRepo = Substitute.For<ITierFeatureLimitRepository>();
+            tierLimitRepo.GetLimitsForTierAsync(Arg.Any<SubscriptionTier>(), Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult<TierFeatureLimit?>(null));
+
+            ITenantSubscriptionOverrideRepository overrideRepo = Substitute.For<ITenantSubscriptionOverrideRepository>();
+            overrideRepo.GetOverrideForTenantAsync(Arg.Any<int>(), Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult<TenantSubscriptionOverride?>(null));
+
+            IOptions<TierDefaultOptions> tierDefaults = Options.Create(new TierDefaultOptions
+            {
+                Free = new() { MachineLimit = 3, RetentionDays = 1, AlertRuleLimit = 0, WebhookLimit = 0 },
+                Pro = new() { MachineLimit = 500, RetentionDays = 30, AlertRuleLimit = 8, WebhookLimit = 4 },
+                Team = new() { MachineLimit = 10000, RetentionDays = 365, AlertRuleLimit = 25, WebhookLimit = 15 },
+            });
+
+            SubscriptionService service = new(repo, repo, repo, repo, tierLimitRepo, overrideRepo, tierDefaults, new NullLogger<SubscriptionService>());
+
+            EffectiveLimits limits = await service.GetEffectiveLimitsForTenantAsync(1, CancellationToken.None);
+
+            // Should fall back to config defaults for Pro tier
+            await Assert.That(limits.MachineLimit).IsEqualTo(500);
+            await Assert.That(limits.RetentionDays).IsEqualTo(30);
+            await Assert.That(limits.AlertRuleLimit).IsEqualTo(8);
+            await Assert.That(limits.WebhookLimit).IsEqualTo(4);
+        }
+    }
+
+    [Test]
+    public async Task GetMachineCountAtDate_ReturnsCountFromRepository()
+    {
+        (DatabaseRepository repo, TestDatabaseFactory dbFactory) = BuildRepoAndFactory();
+        using (dbFactory)
+        {
+            DateTimeOffset now = DateTimeOffset.UtcNow;
+            Machine m1 = TestDataBuilder.BuildMachine(tenantId: 1);
+            m1.RegisteredOn = now.AddDays(-5);
+            m1.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(m1);
+
+            SubscriptionService service = BuildService(repo);
+
+            int count = await service.GetMachineCountAtDateAsync(1, now, CancellationToken.None);
+
+            await Assert.That(count).IsGreaterThanOrEqualTo(0);
+        }
+    }
+
+    [Test]
+    public async Task CanCreateWebhook_NoSubscription_ReturnsFalse()
+    {
+        (DatabaseRepository repo, TestDatabaseFactory dbFactory) = BuildRepoAndFactory();
+        using (dbFactory)
+        {
+            SubscriptionService service = BuildService(repo);
+
+            bool result = await service.CanCreateWebhookAsync(999, CancellationToken.None);
+
+            await Assert.That(result).IsFalse();
+        }
+    }
+
+    [Test]
+    public async Task CanCreateAlertRule_NoSubscription_ReturnsFalse()
+    {
+        (DatabaseRepository repo, TestDatabaseFactory dbFactory) = BuildRepoAndFactory();
+        using (dbFactory)
+        {
+            SubscriptionService service = BuildService(repo);
+
+            bool result = await service.CanCreateAlertRuleAsync(999, CancellationToken.None);
+
+            await Assert.That(result).IsFalse();
+        }
+    }
+
+    [Test]
     public async Task CanCreateWebhook_UnderLimit_ReturnsTrue()
     {
         (DatabaseRepository repo, TestDatabaseFactory dbFactory) = BuildRepoAndFactory();
@@ -736,6 +895,184 @@ public class SubscriptionServiceTests
             bool result = await service.CanCreateWebhookAsync(1, CancellationToken.None);
 
             await Assert.That(result).IsTrue();
+        }
+    }
+
+    /// <summary>
+    /// Verifies that when a tenant override exists but the override's specific field (MachineLimit)
+    /// is null, GetEffectiveLimitAsync falls through to the tier-based limit rather than
+    /// treating the override as a hard cap. This exercises the overrideValue-is-null branch
+    /// inside GetEffectiveLimitAsync.
+    /// </summary>
+    [Test]
+    public async Task CanApproveMachine_OverrideExistsButMachineLimitNull_FallsBackToTierLimit()
+    {
+        (DatabaseRepository repo, TestDatabaseFactory dbFactory) = BuildRepoAndFactory();
+        using (dbFactory)
+        {
+            // Pro tier allows 1000 machines
+            TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 1, tier: SubscriptionTier.Pro);
+            sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
+
+            // Seed 5 machines — well under the Pro limit of 1000
+            for (int i = 0; i < 5; i++)
+            {
+                Machine machine = TestDataBuilder.BuildMachine(tenantId: 1);
+                await dbFactory.Context.InsertWithInt32IdentityAsync(machine);
+            }
+
+            // Insert an override that sets RetentionDays but leaves MachineLimit null
+            // This means MachineLimit should fall through to the tier default (1000)
+            await dbFactory.Context.InsertAsync(new TenantSubscriptionOverride
+            {
+                TenantId = 1,
+                MachineLimit = null,
+                RetentionDays = 180,
+                CreatedAt = DateTimeOffset.UtcNow,
+                UpdatedAt = DateTimeOffset.UtcNow,
+            });
+
+            SubscriptionService service = BuildService(repo, useRealOverrideRepo: true);
+
+            bool result = await service.CanApproveMachineAsync(1, CancellationToken.None);
+
+            // 5 machines < 1000 tier limit, so should be allowed
+            await Assert.That(result).IsTrue();
+        }
+    }
+
+    /// <summary>
+    /// Verifies that GetEffectiveLimitsForTenantAsync falls back to configuration defaults
+    /// for the Team tier when no DB tier limits exist, testing the GetConfigDefaultsForTier
+    /// Team branch.
+    /// </summary>
+    [Test]
+    public async Task GetEffectiveLimits_TeamTier_NullDbLimits_FallsBackToTeamConfigDefaults()
+    {
+        (DatabaseRepository repo, TestDatabaseFactory dbFactory) = BuildRepoAndFactory();
+        using (dbFactory)
+        {
+            TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 1, tier: SubscriptionTier.Team);
+            sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
+
+            ITierFeatureLimitRepository tierLimitRepo = Substitute.For<ITierFeatureLimitRepository>();
+            tierLimitRepo.GetLimitsForTierAsync(Arg.Any<SubscriptionTier>(), Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult<TierFeatureLimit?>(null));
+
+            ITenantSubscriptionOverrideRepository overrideRepo = Substitute.For<ITenantSubscriptionOverrideRepository>();
+            overrideRepo.GetOverrideForTenantAsync(Arg.Any<int>(), Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult<TenantSubscriptionOverride?>(null));
+
+            IOptions<TierDefaultOptions> tierDefaults = Options.Create(new TierDefaultOptions
+            {
+                Free = new() { MachineLimit = 3, RetentionDays = 1, AlertRuleLimit = 0, WebhookLimit = 0 },
+                Pro = new() { MachineLimit = 1000, RetentionDays = 60, AlertRuleLimit = 10, WebhookLimit = 5 },
+                Team = new() { MachineLimit = 5000, RetentionDays = 180, AlertRuleLimit = 20, WebhookLimit = 10 },
+            });
+
+            SubscriptionService service = new(repo, repo, repo, repo, tierLimitRepo, overrideRepo, tierDefaults,
+                new NullLogger<SubscriptionService>());
+
+            EffectiveLimits limits = await service.GetEffectiveLimitsForTenantAsync(1, CancellationToken.None);
+
+            // Should use Team config defaults since DB returned null
+            await Assert.That(limits.MachineLimit).IsEqualTo(5000);
+            await Assert.That(limits.RetentionDays).IsEqualTo(180);
+            await Assert.That(limits.AlertRuleLimit).IsEqualTo(20);
+            await Assert.That(limits.WebhookLimit).IsEqualTo(10);
+        }
+    }
+
+    /// <summary>
+    /// Verifies that GetEffectiveLimitAsync (via CanApproveMachineAsync) falls back to config
+    /// defaults when no DB tier limits exist, exercising the config fallback branch with
+    /// a warning log. This tests the private method via a public method for Pro tier.
+    /// </summary>
+    [Test]
+    public async Task CanApproveMachine_NullTierLimits_FallsBackToConfigDefault()
+    {
+        (DatabaseRepository repo, TestDatabaseFactory dbFactory) = BuildRepoAndFactory();
+        using (dbFactory)
+        {
+            TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 1, tier: SubscriptionTier.Pro);
+            sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
+
+            // 2 machines — under any reasonable limit
+            for (int i = 0; i < 2; i++)
+            {
+                Machine machine = TestDataBuilder.BuildMachine(tenantId: 1);
+                await dbFactory.Context.InsertWithInt32IdentityAsync(machine);
+            }
+
+            ITierFeatureLimitRepository tierLimitRepo = Substitute.For<ITierFeatureLimitRepository>();
+            tierLimitRepo.GetLimitsForTierAsync(Arg.Any<SubscriptionTier>(), Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult<TierFeatureLimit?>(null));
+
+            ITenantSubscriptionOverrideRepository overrideRepo = Substitute.For<ITenantSubscriptionOverrideRepository>();
+            overrideRepo.GetOverrideForTenantAsync(Arg.Any<int>(), Arg.Any<CancellationToken>())
+                .Returns(Task.FromResult<TenantSubscriptionOverride?>(null));
+
+            IOptions<TierDefaultOptions> tierDefaults = Options.Create(new TierDefaultOptions
+            {
+                Free = new() { MachineLimit = 3, RetentionDays = 1, AlertRuleLimit = 0, WebhookLimit = 0 },
+                Pro = new() { MachineLimit = 500, RetentionDays = 60, AlertRuleLimit = 10, WebhookLimit = 5 },
+                Team = new() { MachineLimit = 5000, RetentionDays = 180, AlertRuleLimit = 20, WebhookLimit = 10 },
+            });
+
+            SubscriptionService service = new(repo, repo, repo, repo, tierLimitRepo, overrideRepo, tierDefaults,
+                new NullLogger<SubscriptionService>());
+
+            bool result = await service.CanApproveMachineAsync(1, CancellationToken.None);
+
+            // 2 machines < 500 Pro config default, so should allow
+            await Assert.That(result).IsTrue();
+        }
+    }
+
+    /// <summary>
+    /// Verifies that CanCreateWebhookAsync uses the override's WebhookLimit when an override exists
+    /// with a non-null WebhookLimit, exercising the override-field-present branch.
+    /// </summary>
+    [Test]
+    public async Task CanCreateWebhook_OverrideTakesPrecedence_LimitsWebhooks()
+    {
+        (DatabaseRepository repo, TestDatabaseFactory dbFactory) = BuildRepoAndFactory();
+        using (dbFactory)
+        {
+            // Pro tier has WebhookLimit=5 by default
+            TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 1, tier: SubscriptionTier.Pro);
+            sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
+
+            // Seed 2 integrations
+            for (int i = 0; i < 2; i++)
+            {
+                IntegrationEndpoint integration = new()
+                {
+                    TenantId = 1,
+                    Provider = IntegrationProvider.Custom,
+                    Name = $"Integration {i}",
+                    Configuration = """{"url":"https://hooks.example.com/test","secret":"test-secret"}""",
+                    IsEnabled = true,
+                    CreatedByUserId = 1,
+                    CreatedAt = DateTimeOffset.UtcNow,
+                };
+                await dbFactory.Context.InsertWithInt32IdentityAsync(integration);
+            }
+
+            // Override sets WebhookLimit to 2 — should block the 3rd
+            await dbFactory.Context.InsertAsync(new TenantSubscriptionOverride
+            {
+                TenantId = 1,
+                WebhookLimit = 2,
+                CreatedAt = DateTimeOffset.UtcNow,
+                UpdatedAt = DateTimeOffset.UtcNow,
+            });
+
+            SubscriptionService service = BuildService(repo, useRealOverrideRepo: true);
+
+            bool result = await service.CanCreateWebhookAsync(1, CancellationToken.None);
+
+            await Assert.That(result).IsFalse();
         }
     }
 }

@@ -352,4 +352,93 @@ public sealed class BillingEndpointTests
         await Assert.That(subscription).IsNotNull();
         await Assert.That(subscription!.UpdatedAt).IsEqualTo(originalUpdatedAt);
     }
+
+    [Test]
+    public async Task CancelSubscription_NoSubscription_Returns404()
+    {
+        // A tenant with no subscription record should receive a 404 response with
+        // a non-success payload — the handler cannot proceed without a subscription record
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+
+        Tenant tenant = new()
+        {
+            ExternalId = Guid.NewGuid().ToString("N"),
+            Name = $"No Sub Cancel Tenant {Guid.NewGuid():N}",
+            CreatedAt = DateTimeOffset.UtcNow,
+            CreatedByUserId = 0,
+            IsActive = true,
+            LogoUrl = ""
+        };
+        tenant.Id = await db.InsertWithInt32IdentityAsync(tenant);
+
+        UserAccount user = new()
+        {
+            ExternalId = $"ext-cancel-nosub-{Guid.NewGuid():N}",
+            Username = $"cancel-nosub-{Guid.NewGuid():N}@example.com",
+            CreatedAt = DateTimeOffset.UtcNow,
+            CreatedByUserId = 0,
+            IsActive = true,
+            IsSystem = false,
+            IsGlobalAdmin = false,
+        };
+        user.Id = await db.InsertWithInt32IdentityAsync(user);
+
+        UserTenantRole role = new()
+        {
+            UserId = user.Id,
+            AssignedTenantId = tenant.Id,
+            Role = UserAccountRoles.TenantAdmin,
+            AssignedByUserId = user.Id,
+            AssignedAt = DateTimeOffset.UtcNow,
+            IsActive = true,
+        };
+        await db.InsertAsync(role);
+
+        HttpClient client = BuildClient(factory, tenant.Id, user.Id);
+
+        HttpResponseMessage response = await client.PostAsync("/api/v1/billing/cancel", null);
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.NotFound);
+
+        string body = await response.Content.ReadAsStringAsync();
+        using JsonDocument doc = JsonDocument.Parse(body);
+        JsonElement root = doc.RootElement;
+
+        bool success = root.GetProperty("success").GetBoolean();
+        await Assert.That(success).IsFalse();
+    }
+
+    [Test]
+    public async Task CancelSubscription_FreeTier_CancelsImmediatelyWithoutStripe()
+    {
+        // Free-tier tenants have no Stripe subscription, so cancellation takes effect immediately
+        // and the billing-api is never called — the handler deactivates the subscription directly
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId) = await SeedBillingEnvironment(db, tier: SubscriptionTier.Free);
+        HttpClient client = BuildClient(factory, tenantId, userId);
+
+        HttpResponseMessage response = await client.PostAsync("/api/v1/billing/cancel", null);
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
+
+        string body = await response.Content.ReadAsStringAsync();
+        using JsonDocument doc = JsonDocument.Parse(body);
+        JsonElement root = doc.RootElement;
+
+        bool outerSuccess = root.GetProperty("success").GetBoolean();
+        await Assert.That(outerSuccess).IsTrue();
+
+        JsonElement data = root.GetProperty("data");
+        bool dataSuccess = data.GetProperty("success").GetBoolean();
+        await Assert.That(dataSuccess).IsTrue();
+
+        string message = data.GetProperty("message").GetString()!;
+        await Assert.That(message).Contains("canceled");
+
+        // The billing-api should not have been called for a free-tier cancellation
+        await factory.BillingApiClientMock.DidNotReceive()
+            .CancelSubscriptionAsync(Arg.Any<string>(), Arg.Any<PendingActionType>(), Arg.Any<CancellationToken>());
+    }
 }

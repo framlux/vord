@@ -54,6 +54,23 @@ public class RedisDistributedLockTests
     }
 
     /// <summary>
+    /// Verifies that constructing with a null Redis connection throws ArgumentNullException.
+    /// </summary>
+    [Test]
+    public async Task Constructor_NullRedis_ThrowsArgumentNullException()
+    {
+        ArgumentNullException? ex = await Assert.ThrowsAsync<ArgumentNullException>(() =>
+        {
+            RedisDistributedLock _ = new(null!);
+
+            return Task.CompletedTask;
+        });
+
+        await Assert.That(ex).IsNotNull();
+        await Assert.That(ex!.ParamName).IsEqualTo("redis");
+    }
+
+    /// <summary>
     /// Verifies that disposing a lock handle releases the lock via Lua script
     /// with the correct key and owner token arguments.
     /// </summary>

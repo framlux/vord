@@ -336,4 +336,125 @@ public class RedisMachinePingServiceTests
         await Assert.That(result[1]).IsFalse();
         await Assert.That(result[2]).IsFalse();
     }
+
+    // ========== GetAgentCapabilitiesAsync tests ==========
+
+    [Test]
+    public async Task GetAgentCapabilitiesAsync_NoValue_ReturnsZero()
+    {
+        (RedisMachinePingService service, IDatabase redisDb) = CreateService();
+        redisDb.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
+            .Returns(Task.FromResult<RedisValue>(RedisValue.Null));
+
+        ulong result = await service.GetAgentCapabilitiesAsync(1);
+
+        await Assert.That(result).IsEqualTo(0UL);
+    }
+
+    [Test]
+    public async Task GetAgentCapabilitiesAsync_ValidValue_ReturnsParsedCapabilities()
+    {
+        (RedisMachinePingService service, IDatabase redisDb) = CreateService();
+        redisDb.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
+            .Returns(Task.FromResult<RedisValue>(new RedisValue("42")));
+
+        ulong result = await service.GetAgentCapabilitiesAsync(1);
+
+        await Assert.That(result).IsEqualTo(42UL);
+    }
+
+    [Test]
+    public async Task GetAgentCapabilitiesAsync_InvalidStringValue_ReturnsZero()
+    {
+        (RedisMachinePingService service, IDatabase redisDb) = CreateService();
+        redisDb.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
+            .Returns(Task.FromResult<RedisValue>(new RedisValue("not-a-number")));
+
+        ulong result = await service.GetAgentCapabilitiesAsync(1);
+
+        await Assert.That(result).IsEqualTo(0UL);
+    }
+
+    [Test]
+    public async Task GetAgentCapabilitiesAsync_EmptyString_ReturnsZero()
+    {
+        (RedisMachinePingService service, IDatabase redisDb) = CreateService();
+        redisDb.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
+            .Returns(Task.FromResult<RedisValue>(new RedisValue("")));
+
+        ulong result = await service.GetAgentCapabilitiesAsync(1);
+
+        await Assert.That(result).IsEqualTo(0UL);
+    }
+
+    // ========== SetAgentCapabilitiesAsync tests ==========
+
+    [Test]
+    public async Task SetAgentCapabilitiesAsync_StoresValueWithCorrectKey()
+    {
+        (RedisMachinePingService service, IDatabase redisDb) = CreateService();
+
+        await service.SetAgentCapabilitiesAsync(99, 255);
+
+        // Verify the value was stored with the correct key pattern
+        IEnumerable<NSubstitute.Core.ICall> calls = redisDb.ReceivedCalls()
+            .Where(c => c.GetMethodInfo().Name == "StringSetAsync");
+        await Assert.That(calls.Count()).IsGreaterThanOrEqualTo(1);
+    }
+
+    // ========== GetAgentCapabilitiesBatchAsync tests ==========
+
+    [Test]
+    public async Task GetAgentCapabilitiesBatchAsync_MultipleMachines_ReturnsCorrectMap()
+    {
+        IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
+        IDatabase redisDb = Substitute.For<IDatabase>();
+        redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(redisDb);
+        NullLogger<RedisMachinePingService> logger = new();
+        RedisMachinePingService service = new(redis, logger);
+
+        IBatch batch = Substitute.For<IBatch>();
+        redisDb.CreateBatch(Arg.Any<object>()).Returns(batch);
+
+        // Machine 1: has capabilities
+        batch.StringGetAsync(
+            Arg.Is<RedisKey>(k => k.ToString() == "machine:caps:1"),
+            Arg.Any<CommandFlags>())
+            .Returns(Task.FromResult<RedisValue>(new RedisValue("7")));
+
+        // Machine 2: no value
+        batch.StringGetAsync(
+            Arg.Is<RedisKey>(k => k.ToString() == "machine:caps:2"),
+            Arg.Any<CommandFlags>())
+            .Returns(Task.FromResult<RedisValue>(RedisValue.Null));
+
+        // Machine 3: invalid value
+        batch.StringGetAsync(
+            Arg.Is<RedisKey>(k => k.ToString() == "machine:caps:3"),
+            Arg.Any<CommandFlags>())
+            .Returns(Task.FromResult<RedisValue>(new RedisValue("bad")));
+
+        Dictionary<long, ulong> result = await service.GetAgentCapabilitiesBatchAsync([1L, 2L, 3L]);
+
+        await Assert.That(result[1]).IsEqualTo(7UL);
+        await Assert.That(result[2]).IsEqualTo(0UL);
+        await Assert.That(result[3]).IsEqualTo(0UL);
+    }
+
+    [Test]
+    public async Task GetAgentCapabilitiesBatchAsync_EmptyInput_ReturnsEmptyDictionary()
+    {
+        IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
+        IDatabase redisDb = Substitute.For<IDatabase>();
+        redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(redisDb);
+        NullLogger<RedisMachinePingService> logger = new();
+        RedisMachinePingService service = new(redis, logger);
+
+        IBatch batch = Substitute.For<IBatch>();
+        redisDb.CreateBatch(Arg.Any<object>()).Returns(batch);
+
+        Dictionary<long, ulong> result = await service.GetAgentCapabilitiesBatchAsync([]);
+
+        await Assert.That(result.Count).IsEqualTo(0);
+    }
 }

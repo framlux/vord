@@ -162,4 +162,122 @@ public class TenantClaimHelperTests
 
         await Assert.That(result).IsEqualTo(5);
     }
+
+    [Test]
+    public async Task GetTenantIdFromClaims_WithHttpContext_NonNumericTenantIdInClaim_IsSkipped()
+    {
+        // Claims where tenant ID portion before ':' is non-numeric must be skipped.
+        // Only the valid numeric claim should be returned.
+        ClaimsIdentity identity = new(
+            [
+                new Claim(ClaimTypes.Role, "abc:1"),
+                new Claim(ClaimTypes.Role, "99:2")
+            ],
+            authenticationType: "test");
+        ClaimsPrincipal user = new(identity);
+
+        DefaultHttpContext httpContext = new();
+
+        int? result = TenantClaimHelper.GetTenantIdFromClaims(user, httpContext);
+
+        await Assert.That(result).IsEqualTo(99);
+    }
+
+    [Test]
+    public async Task GetTenantIdFromClaims_WithHttpContext_AllClaimsNonNumericTenantId_ReturnsNull()
+    {
+        // When every role claim has a non-numeric tenant ID portion, no valid tenant IDs are collected.
+        ClaimsIdentity identity = new(
+            [new Claim(ClaimTypes.Role, "abc:1")],
+            authenticationType: "test");
+        ClaimsPrincipal user = new(identity);
+
+        DefaultHttpContext httpContext = new();
+
+        int? result = TenantClaimHelper.GetTenantIdFromClaims(user, httpContext);
+
+        await Assert.That(result).IsNull();
+    }
+
+    [Test]
+    public async Task GetUserIdFromClaims_ValidActorClaim_ReturnsUserId()
+    {
+        // A positive integer Actor claim must be extracted as the user ID.
+        ClaimsIdentity identity = new(
+            [new Claim(ClaimTypes.Actor, "42")],
+            authenticationType: "test");
+        ClaimsPrincipal user = new(identity);
+
+        int? result = TenantClaimHelper.GetUserIdFromClaims(user);
+
+        await Assert.That(result).IsEqualTo(42);
+    }
+
+    [Test]
+    public async Task GetUserIdFromClaims_NoActorClaim_ReturnsNull()
+    {
+        // When no Actor claim is present the user ID cannot be determined.
+        ClaimsIdentity identity = new(authenticationType: "test");
+        ClaimsPrincipal user = new(identity);
+
+        int? result = TenantClaimHelper.GetUserIdFromClaims(user);
+
+        await Assert.That(result).IsNull();
+    }
+
+    [Test]
+    public async Task GetUserIdFromClaims_EmptyActorClaim_ReturnsNull()
+    {
+        // An empty Actor claim value is treated the same as absent — no user ID.
+        ClaimsIdentity identity = new(
+            [new Claim(ClaimTypes.Actor, "")],
+            authenticationType: "test");
+        ClaimsPrincipal user = new(identity);
+
+        int? result = TenantClaimHelper.GetUserIdFromClaims(user);
+
+        await Assert.That(result).IsNull();
+    }
+
+    [Test]
+    public async Task GetUserIdFromClaims_NonNumericActorClaim_ReturnsNull()
+    {
+        // A non-numeric Actor claim value cannot be parsed as a user ID.
+        ClaimsIdentity identity = new(
+            [new Claim(ClaimTypes.Actor, "not-a-number")],
+            authenticationType: "test");
+        ClaimsPrincipal user = new(identity);
+
+        int? result = TenantClaimHelper.GetUserIdFromClaims(user);
+
+        await Assert.That(result).IsNull();
+    }
+
+    [Test]
+    public async Task GetUserIdFromClaims_ZeroActorClaim_ReturnsNull()
+    {
+        // User IDs must be positive; zero is not a valid user ID.
+        ClaimsIdentity identity = new(
+            [new Claim(ClaimTypes.Actor, "0")],
+            authenticationType: "test");
+        ClaimsPrincipal user = new(identity);
+
+        int? result = TenantClaimHelper.GetUserIdFromClaims(user);
+
+        await Assert.That(result).IsNull();
+    }
+
+    [Test]
+    public async Task GetUserIdFromClaims_NegativeActorClaim_ReturnsNull()
+    {
+        // Negative values are not valid user IDs and must be rejected.
+        ClaimsIdentity identity = new(
+            [new Claim(ClaimTypes.Actor, "-5")],
+            authenticationType: "test");
+        ClaimsPrincipal user = new(identity);
+
+        int? result = TenantClaimHelper.GetUserIdFromClaims(user);
+
+        await Assert.That(result).IsNull();
+    }
 }

@@ -493,6 +493,19 @@ public sealed class MachineUpdateEndpointTests
 
         await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.NotFound);
 
+        string body = await response.Content.ReadAsStringAsync();
+        using JsonDocument doc = JsonDocument.Parse(body);
+        JsonElement root = doc.RootElement;
+
+        bool success = root.GetProperty("success").GetBoolean();
+        await Assert.That(success).IsFalse();
+
+        bool hasMessage = root.TryGetProperty("message", out JsonElement messageElement);
+        await Assert.That(hasMessage).IsTrue();
+
+        string message = messageElement.GetString()!;
+        await Assert.That(string.IsNullOrWhiteSpace(message)).IsFalse();
+
         // Verify the machine was NOT modified in the database
         Machine? machine = await db.Machines.FirstOrDefaultAsync(m => m.Id == machineId1);
         await Assert.That(machine).IsNotNull();
@@ -521,6 +534,14 @@ public sealed class MachineUpdateEndpointTests
             new { name = "", description = "desc", location = "loc" });
 
         await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.BadRequest);
+
+        string body = await response.Content.ReadAsStringAsync();
+        await Assert.That(string.IsNullOrWhiteSpace(body)).IsFalse();
+
+        // Verify the machine name was not modified in the database
+        Machine? dbMachine = await db.Machines.FirstOrDefaultAsync(m => m.Id == machineId);
+        await Assert.That(dbMachine).IsNotNull();
+        await Assert.That(string.IsNullOrWhiteSpace(dbMachine!.Name)).IsFalse();
     }
 
     [Test]
@@ -642,6 +663,19 @@ public sealed class MachineUpdateEndpointTests
             new { name = "Revive Attempt", description = "nope", location = "nope" });
 
         await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.NotFound);
+
+        string body = await response.Content.ReadAsStringAsync();
+        using JsonDocument doc = JsonDocument.Parse(body);
+        JsonElement root = doc.RootElement;
+
+        bool success = root.GetProperty("success").GetBoolean();
+        await Assert.That(success).IsFalse();
+
+        bool hasMessage = root.TryGetProperty("message", out JsonElement messageElement);
+        await Assert.That(hasMessage).IsTrue();
+
+        string message = messageElement.GetString()!;
+        await Assert.That(string.IsNullOrWhiteSpace(message)).IsFalse();
     }
 
     [Test]

@@ -274,4 +274,124 @@ public class GrpcRateLimitingInterceptorTests
         // The request should be allowed (under limit) — proves IP extraction didn't crash.
         await Assert.That(continuationCalled).IsTrue();
     }
+
+    // ========== ExtractPeerIp branch coverage ==========
+
+    // Note: Tests for null/empty peer and no-colon peer are not included here because
+    // the HttpContext fallback path (ExtractPeerIp line 120) requires a real ASP.NET
+    // HttpContext that TestServerCallContext cannot provide. These paths are exercised
+    // by the functional test suite which uses WebApplicationFactory.
+
+    /// <summary>
+    /// Verifies that a peer string with host:port but no protocol prefix returns the host part.
+    /// </summary>
+    [Test]
+    public async Task UnaryServerHandler_PeerWithHostPortOnly_ExtractsHost()
+    {
+        (GrpcRateLimitingInterceptor interceptor, IDatabase db) = CreateInterceptor();
+
+        RedisKey[]? capturedKeys = null;
+        db.ScriptEvaluateAsync(
+            Arg.Any<string>(),
+            Arg.Do<RedisKey[]>(k => capturedKeys = k),
+            Arg.Any<RedisValue[]>(),
+            Arg.Any<CommandFlags>())
+            .Returns(RedisResult.Create((RedisValue)1L));
+
+        // Peer format "host:port" - single colon means protocolEnd == -1 after substract,
+        // so it returns the hostPart directly
+        ServerCallContext context = TestServerCallContext.Create(
+            method: "TestMethod",
+            host: "localhost",
+            deadline: DateTime.MaxValue,
+            requestHeaders: new Metadata(),
+            cancellationToken: CancellationToken.None,
+            peer: "192.168.1.1:50051",
+            authContext: null,
+            contextPropagationToken: null,
+            writeHeadersFunc: (metadata) => Task.CompletedTask,
+            writeOptionsGetter: () => new WriteOptions(),
+            writeOptionsSetter: (writeOptions) => { });
+
+        bool continuationCalled = false;
+        UnaryServerMethod<string, string> continuation = (req, ctx) =>
+        {
+            continuationCalled = true;
+
+            return Task.FromResult("ok");
+        };
+
+        await interceptor.UnaryServerHandler("request", context, continuation);
+
+        await Assert.That(continuationCalled).IsTrue();
+        // The key should contain 192.168.1.1 (the host part before the last colon)
+        await Assert.That(capturedKeys).IsNotNull();
+        await Assert.That(capturedKeys![0].ToString().Contains("192.168.1.1")).IsTrue();
+    }
+
+    /// <summary>
+    /// Verifies that a standard ipv4:host:port peer format correctly extracts just the host.
+    /// </summary>
+    [Test]
+    public async Task UnaryServerHandler_Ipv4Peer_ExtractsHostFromRedisKey()
+    {
+        (GrpcRateLimitingInterceptor interceptor, IDatabase db) = CreateInterceptor();
+
+        RedisKey[]? capturedKeys = null;
+        db.ScriptEvaluateAsync(
+            Arg.Any<string>(),
+            Arg.Do<RedisKey[]>(k => capturedKeys = k),
+            Arg.Any<RedisValue[]>(),
+            Arg.Any<CommandFlags>())
+            .Returns(RedisResult.Create((RedisValue)1L));
+
+        ServerCallContext context = CreateTestContext();
+
+        UnaryServerMethod<string, string> continuation = (req, ctx) => Task.FromResult("ok");
+
+        await interceptor.UnaryServerHandler("request", context, continuation);
+
+        // The peer is "ipv4:127.0.0.1:12345", so it should extract "127.0.0.1"
+        await Assert.That(capturedKeys).IsNotNull();
+        await Assert.That(capturedKeys![0].ToString().Contains("127.0.0.1")).IsTrue();
+    }
+
+    /// <summary>
+    /// Verifies that the rate limit exceeded message includes the method name.
+    /// </summary>
+    [Test]
+    public async Task UnaryServerHandler_OverLimit_ExceptionMessageContainsRateLimitExceeded()
+    {
+        (GrpcRateLimitingInterceptor interceptor, IDatabase db) = CreateInterceptor();
+        db.ScriptEvaluateAsync(Arg.Any<string>(), Arg.Any<RedisKey[]>(), Arg.Any<RedisValue[]>(), Arg.Any<CommandFlags>())
+            .Returns(RedisResult.Create((RedisValue)101L));
+        ServerCallContext context = CreateTestContext();
+        UnaryServerMethod<string, string> continuation = (req, ctx) => Task.FromResult("response");
+
+        RpcException? exception = await Assert.ThrowsAsync<RpcException>(async () =>
+        {
+            await interceptor.UnaryServerHandler("request", context, continuation);
+        });
+
+        await Assert.That(exception).IsNotNull();
+        await Assert.That(exception!.Status.Detail).IsEqualTo("Rate limit exceeded");
+    }
+
+    /// <summary>
+    /// Verifies that when Redis throws an error during gRPC rate limiting, it propagates.
+    /// </summary>
+    [Test]
+    public async Task UnaryServerHandler_RedisFailure_PropagatesException()
+    {
+        (GrpcRateLimitingInterceptor interceptor, IDatabase db) = CreateInterceptor();
+        db.ScriptEvaluateAsync(Arg.Any<string>(), Arg.Any<RedisKey[]>(), Arg.Any<RedisValue[]>(), Arg.Any<CommandFlags>())
+            .Returns<RedisResult>(_ => throw new RedisConnectionException(ConnectionFailureType.UnableToConnect, "Connection refused"));
+        ServerCallContext context = CreateTestContext();
+        UnaryServerMethod<string, string> continuation = (req, ctx) => Task.FromResult("response");
+
+        await Assert.ThrowsAsync<RedisConnectionException>(async () =>
+        {
+            await interceptor.UnaryServerHandler("request", context, continuation);
+        });
+    }
 }

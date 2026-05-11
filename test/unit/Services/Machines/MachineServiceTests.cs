@@ -712,6 +712,446 @@ public class MachineServiceTests
         await Assert.That(result.errorMessage).IsEqualTo(string.Empty);
     }
 
+    // ========== GetRegistrationStatus — concurrent delivery and null key reissue branches ==========
+
+    // ========== Regression: API key cache deleted before DB update (bug fix) ==========
+
+    [Test]
+    public async Task GetRegistrationStatus_CacheDeletedBeforeDbMark_PreventsStaleRedelivery()
+    {
+        // Regression test: previously, MarkKeyDeliveredAsync ran before KeyDeleteAsync.
+        // If KeyDeleteAsync failed, the stale cache entry allowed duplicate delivery.
+        // Fix: KeyDeleteAsync runs first so the cache is cleared even if MarkKeyDelivered fails.
+        using TestDatabaseFactory dbFactory = new();
+        RegistrationToken token = await SeedValidRegistrationToken(dbFactory);
+
+        Machine machine = TestDataBuilder.BuildMachine(tenantId: token.TenantId, registrationTokenId: token.Id);
+        machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
+
+        IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
+        IDatabase redisDb = Substitute.For<IDatabase>();
+        redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(redisDb);
+
+        // Cache has a key
+        redisDb.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
+            .Returns(Task.FromResult<RedisValue>("cached-plaintext-key"));
+
+        IMachineRepository machineRepo = Substitute.For<IMachineRepository>();
+        machineRepo.GetMachineBySerialAndSystemIdAsync(machine.SerialNumber, machine.SystemId, token.TenantId, Arg.Any<CancellationToken>())
+            .Returns(machine);
+        machineRepo.MarkKeyDeliveredAsync(machine.Id, Arg.Any<CancellationToken>())
+            .Returns(1);
+
+        // Track call ordering: KeyDeleteAsync must be called BEFORE MarkKeyDeliveredAsync
+        List<string> callOrder = [];
+        redisDb.When(db => db.KeyDeleteAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>()))
+            .Do(_ => callOrder.Add("KeyDelete"));
+        machineRepo.When(repo => repo.MarkKeyDeliveredAsync(Arg.Any<long>(), Arg.Any<CancellationToken>()))
+            .Do(_ => callOrder.Add("MarkDelivered"));
+
+        TestServiceScopeFactory scopeFactory = CreateScopeFactory(dbFactory, machineRepo);
+        ILogger<MachineService> logger = new NullLogger<MachineService>();
+        IBillingApiClient billingApiClient = Substitute.For<IBillingApiClient>();
+        MachineService service = new(scopeFactory, logger, redis, billingApiClient);
+
+        await service.GetRegistrationStatusAsync(machine.SerialNumber, machine.SystemId, TestTokenValue, true, CancellationToken.None);
+
+        // Verify cache is deleted before the DB mark — this is the regression guard
+        await Assert.That(callOrder.Count).IsGreaterThanOrEqualTo(2);
+        int deleteIdx = callOrder.IndexOf("KeyDelete");
+        int markIdx = callOrder.IndexOf("MarkDelivered");
+        await Assert.That(deleteIdx).IsLessThan(markIdx);
+    }
+
+    [Test]
+    public async Task GetRegistrationStatus_CachedKey_ConcurrentDelivery_LogsWarningAndReissuesKey()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        RegistrationToken token = await SeedValidRegistrationToken(dbFactory);
+
+        Machine machine = TestDataBuilder.BuildMachine(tenantId: token.TenantId, registrationTokenId: token.Id);
+        machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
+
+        IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
+        IDatabase redisDb = Substitute.For<IDatabase>();
+        redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(redisDb);
+
+        // Simulate cached key exists but concurrent delivery already happened (MarkKeyDelivered returns 0)
+        redisDb.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
+            .Returns(Task.FromResult<RedisValue>("cached-key-value"));
+
+        IMachineRepository machineRepo = Substitute.For<IMachineRepository>();
+        machineRepo.GetMachineBySerialAndSystemIdAsync(machine.SerialNumber, machine.SystemId, token.TenantId, Arg.Any<CancellationToken>())
+            .Returns(machine);
+        machineRepo.MarkKeyDeliveredAsync(machine.Id, Arg.Any<CancellationToken>())
+            .Returns(0); // Concurrent delivery — key already delivered
+        machineRepo.ReissueApiKeyAsync(machine.Id, Arg.Any<CancellationToken>())
+            .Returns("reissued-after-concurrent");
+
+        TestServiceScopeFactory scopeFactory = CreateScopeFactory(dbFactory, machineRepo);
+        ILogger<MachineService> logger = new NullLogger<MachineService>();
+        IBillingApiClient billingApiClient = Substitute.For<IBillingApiClient>();
+        MachineService service = new(scopeFactory, logger, redis, billingApiClient);
+
+        (RegistrationStatus status, long? id, string? apiKey) result =
+            await service.GetRegistrationStatusAsync(machine.SerialNumber, machine.SystemId, TestTokenValue, true, CancellationToken.None);
+
+        await Assert.That(result.status).IsEqualTo(RegistrationStatus.RegistrationActive);
+        await Assert.That(result.id).IsEqualTo(machine.Id);
+        // After concurrent delivery, the service falls through to ReissueApiKeyAsync
+        await Assert.That(result.apiKey).IsEqualTo("reissued-after-concurrent");
+        await machineRepo.Received(1).ReissueApiKeyAsync(machine.Id, Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task GetRegistrationStatus_NoCacheAndReissueReturnsNull_ReturnsNullApiKey()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        RegistrationToken token = await SeedValidRegistrationToken(dbFactory);
+
+        Machine machine = TestDataBuilder.BuildMachine(tenantId: token.TenantId, registrationTokenId: token.Id);
+        machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
+
+        IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
+        IDatabase redisDb = Substitute.For<IDatabase>();
+        redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(redisDb);
+        redisDb.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
+            .Returns(Task.FromResult<RedisValue>(RedisValue.Null));
+
+        IMachineRepository machineRepo = Substitute.For<IMachineRepository>();
+        machineRepo.GetMachineBySerialAndSystemIdAsync(machine.SerialNumber, machine.SystemId, token.TenantId, Arg.Any<CancellationToken>())
+            .Returns(machine);
+        machineRepo.ReissueApiKeyAsync(machine.Id, Arg.Any<CancellationToken>())
+            .Returns((string?)null);
+
+        TestServiceScopeFactory scopeFactory = CreateScopeFactory(dbFactory, machineRepo);
+        ILogger<MachineService> logger = new NullLogger<MachineService>();
+        IBillingApiClient billingApiClient = Substitute.For<IBillingApiClient>();
+        MachineService service = new(scopeFactory, logger, redis, billingApiClient);
+
+        (RegistrationStatus status, long? id, string? apiKey) result =
+            await service.GetRegistrationStatusAsync(machine.SerialNumber, machine.SystemId, TestTokenValue, true, CancellationToken.None);
+
+        await Assert.That(result.status).IsEqualTo(RegistrationStatus.RegistrationActive);
+        await Assert.That(result.apiKey).IsNull();
+    }
+
+    // ========== RegisterSystem — OS and MachineType conversion branches ==========
+
+    [Test]
+    public async Task RegisterSystem_DesktopMachineType_ConvertsCorrectly()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        RegistrationToken token = await SeedValidRegistrationToken(dbFactory);
+
+        IMachineRepository machineRepo = Substitute.For<IMachineRepository>();
+        machineRepo.DoesMachineExistAsync(
+            Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns(false);
+
+        Machine createdMachine = TestDataBuilder.BuildMachine(tenantId: token.TenantId, registrationTokenId: token.Id);
+        createdMachine.Id = 301;
+        machineRepo.CreateMachineWithKeyAsync(Arg.Any<Machine>(), Arg.Any<int?>(), Arg.Any<CancellationToken>())
+            .Returns((createdMachine, "desktop-key"));
+
+        TestServiceScopeFactory scopeFactory = CreateScopeFactory(dbFactory, machineRepo);
+        ILogger<MachineService> logger = new NullLogger<MachineService>();
+        IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
+        redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(Substitute.For<IDatabase>());
+        IBillingApiClient billingApiClient = Substitute.For<IBillingApiClient>();
+        MachineService service = new(scopeFactory, logger, redis, billingApiClient);
+
+        RegisterSystemRequest request = new()
+        {
+            SerialNumber = "SN-DESKTOP",
+            SystemId = "SID-DESKTOP",
+            Hostname = "desktop-host",
+            MachineType = Grpc.AgentRegistration.MachineType.DesktopType,
+            Os = OperatingSystemType.FedoraOs,
+            RegistrationToken = TestTokenValue,
+        };
+
+        await service.RegisterSystemAsync(request, CancellationToken.None);
+
+        await machineRepo.Received(1).CreateMachineWithKeyAsync(
+            Arg.Is<Machine>(m => m.MachineType == MachineTypes.Desktop && m.OperatingSystem == OperatingSystems.Fedora),
+            Arg.Any<int?>(),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task RegisterSystem_LaptopMachineType_ConvertsCorrectly()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        RegistrationToken token = await SeedValidRegistrationToken(dbFactory);
+
+        IMachineRepository machineRepo = Substitute.For<IMachineRepository>();
+        machineRepo.DoesMachineExistAsync(
+            Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns(false);
+
+        Machine createdMachine = TestDataBuilder.BuildMachine(tenantId: token.TenantId, registrationTokenId: token.Id);
+        createdMachine.Id = 302;
+        machineRepo.CreateMachineWithKeyAsync(Arg.Any<Machine>(), Arg.Any<int?>(), Arg.Any<CancellationToken>())
+            .Returns((createdMachine, "laptop-key"));
+
+        TestServiceScopeFactory scopeFactory = CreateScopeFactory(dbFactory, machineRepo);
+        ILogger<MachineService> logger = new NullLogger<MachineService>();
+        IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
+        redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(Substitute.For<IDatabase>());
+        IBillingApiClient billingApiClient = Substitute.For<IBillingApiClient>();
+        MachineService service = new(scopeFactory, logger, redis, billingApiClient);
+
+        RegisterSystemRequest request = new()
+        {
+            SerialNumber = "SN-LAPTOP",
+            SystemId = "SID-LAPTOP",
+            Hostname = "laptop-host",
+            MachineType = Grpc.AgentRegistration.MachineType.LaptopType,
+            Os = OperatingSystemType.MacOs,
+            RegistrationToken = TestTokenValue,
+        };
+
+        await service.RegisterSystemAsync(request, CancellationToken.None);
+
+        await machineRepo.Received(1).CreateMachineWithKeyAsync(
+            Arg.Is<Machine>(m => m.MachineType == MachineTypes.Laptop && m.OperatingSystem == OperatingSystems.MacOS),
+            Arg.Any<int?>(),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task RegisterSystem_VirtualMachineType_ConvertsCorrectly()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        RegistrationToken token = await SeedValidRegistrationToken(dbFactory);
+
+        IMachineRepository machineRepo = Substitute.For<IMachineRepository>();
+        machineRepo.DoesMachineExistAsync(
+            Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns(false);
+
+        Machine createdMachine = TestDataBuilder.BuildMachine(tenantId: token.TenantId, registrationTokenId: token.Id);
+        createdMachine.Id = 303;
+        machineRepo.CreateMachineWithKeyAsync(Arg.Any<Machine>(), Arg.Any<int?>(), Arg.Any<CancellationToken>())
+            .Returns((createdMachine, "vm-key"));
+
+        TestServiceScopeFactory scopeFactory = CreateScopeFactory(dbFactory, machineRepo);
+        ILogger<MachineService> logger = new NullLogger<MachineService>();
+        IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
+        redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(Substitute.For<IDatabase>());
+        IBillingApiClient billingApiClient = Substitute.For<IBillingApiClient>();
+        MachineService service = new(scopeFactory, logger, redis, billingApiClient);
+
+        RegisterSystemRequest request = new()
+        {
+            SerialNumber = "SN-VM",
+            SystemId = "SID-VM",
+            Hostname = "vm-host",
+            MachineType = Grpc.AgentRegistration.MachineType.VirtualMachineType,
+            Os = OperatingSystemType.RedhatOs,
+            RegistrationToken = TestTokenValue,
+        };
+
+        await service.RegisterSystemAsync(request, CancellationToken.None);
+
+        await machineRepo.Received(1).CreateMachineWithKeyAsync(
+            Arg.Is<Machine>(m => m.MachineType == MachineTypes.VirtualMachine && m.OperatingSystem == OperatingSystems.RedHat),
+            Arg.Any<int?>(),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task RegisterSystem_WindowsOs_ConvertsCorrectly()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        RegistrationToken token = await SeedValidRegistrationToken(dbFactory);
+
+        IMachineRepository machineRepo = Substitute.For<IMachineRepository>();
+        machineRepo.DoesMachineExistAsync(
+            Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns(false);
+
+        Machine createdMachine = TestDataBuilder.BuildMachine(tenantId: token.TenantId, registrationTokenId: token.Id);
+        createdMachine.Id = 304;
+        machineRepo.CreateMachineWithKeyAsync(Arg.Any<Machine>(), Arg.Any<int?>(), Arg.Any<CancellationToken>())
+            .Returns((createdMachine, "win-key"));
+
+        TestServiceScopeFactory scopeFactory = CreateScopeFactory(dbFactory, machineRepo);
+        ILogger<MachineService> logger = new NullLogger<MachineService>();
+        IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
+        redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(Substitute.For<IDatabase>());
+        IBillingApiClient billingApiClient = Substitute.For<IBillingApiClient>();
+        MachineService service = new(scopeFactory, logger, redis, billingApiClient);
+
+        RegisterSystemRequest request = new()
+        {
+            SerialNumber = "SN-WIN",
+            SystemId = "SID-WIN",
+            Hostname = "win-host",
+            MachineType = Grpc.AgentRegistration.MachineType.UnknownType,
+            Os = OperatingSystemType.WindowsOs,
+            RegistrationToken = TestTokenValue,
+        };
+
+        await service.RegisterSystemAsync(request, CancellationToken.None);
+
+        await machineRepo.Received(1).CreateMachineWithKeyAsync(
+            Arg.Is<Machine>(m => m.MachineType == MachineTypes.Unknown && m.OperatingSystem == OperatingSystems.Windows),
+            Arg.Any<int?>(),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task RegisterSystem_MachineLimit_ReturnsError()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        RegistrationToken token = await SeedValidRegistrationToken(dbFactory);
+
+        IMachineRepository machineRepo = Substitute.For<IMachineRepository>();
+        machineRepo.DoesMachineExistAsync(
+            Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns(false);
+        machineRepo.CreateMachineWithKeyAsync(Arg.Any<Machine>(), Arg.Any<int?>(), Arg.Any<CancellationToken>())
+            .Returns(((Machine?)null, (string?)null));
+
+        TestServiceScopeFactory scopeFactory = CreateScopeFactory(dbFactory, machineRepo);
+        ILogger<MachineService> logger = new NullLogger<MachineService>();
+        IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
+        redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(Substitute.For<IDatabase>());
+        IBillingApiClient billingApiClient = Substitute.For<IBillingApiClient>();
+        MachineService service = new(scopeFactory, logger, redis, billingApiClient);
+
+        RegisterSystemRequest request = new()
+        {
+            SerialNumber = "SN-LIMIT",
+            SystemId = "SID-LIMIT",
+            Hostname = "limit-host",
+            MachineType = Grpc.AgentRegistration.MachineType.BareMetalServerType,
+            Os = OperatingSystemType.UbuntuOs,
+            RegistrationToken = TestTokenValue,
+        };
+
+        (long? machineId, string? apiKey, string errorMessage) result =
+            await service.RegisterSystemAsync(request, CancellationToken.None);
+
+        await Assert.That(result.machineId).IsNull();
+        await Assert.That(result.apiKey).IsNull();
+        await Assert.That(result.errorMessage).IsEqualTo("Machine limit exceeded");
+    }
+
+    [Test]
+    public async Task RegisterSystem_PaidTier_TenantNotFound_SkipsBillingGracefully()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        RegistrationToken token = await SeedValidRegistrationToken(dbFactory, tenantId: 1);
+
+        TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 1, tier: SubscriptionTier.Pro);
+        sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
+
+        IMachineRepository machineRepo = Substitute.For<IMachineRepository>();
+        machineRepo.DoesMachineExistAsync(
+            Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns(false);
+
+        Machine createdMachine = TestDataBuilder.BuildMachine(tenantId: 1, registrationTokenId: token.Id);
+        createdMachine.Id = 305;
+        machineRepo.CreateMachineWithKeyAsync(Arg.Any<Machine>(), Arg.Any<int?>(), Arg.Any<CancellationToken>())
+            .Returns((createdMachine, "api-key-no-tenant"));
+
+        ITenantRepository tenantRepo = Substitute.For<ITenantRepository>();
+        tenantRepo.GetTenantByIdAsync(1, Arg.Any<CancellationToken>()).Returns((Tenant?)null);
+
+        ISubscriptionService subscriptionService = Substitute.For<ISubscriptionService>();
+        subscriptionService.GetSubscriptionForTenantAsync(1, Arg.Any<CancellationToken>()).Returns(sub);
+        subscriptionService.GetEffectiveLimitsForTenantAsync(1, Arg.Any<CancellationToken>()).Returns(
+            new EffectiveLimits { MachineLimit = 1000, RetentionDays = 60, AlertRuleLimit = 10, WebhookLimit = 5 });
+
+        Dictionary<Type, object> services = new()
+        {
+            { typeof(IMachineRepository), machineRepo },
+            { typeof(ITenantRepository), tenantRepo },
+            { typeof(ISubscriptionService), subscriptionService },
+        };
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context, services);
+        ILogger<MachineService> logger = new NullLogger<MachineService>();
+        IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
+        redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(Substitute.For<IDatabase>());
+        IBillingApiClient billingApiClient = Substitute.For<IBillingApiClient>();
+        MachineService service = new(scopeFactory, logger, redis, billingApiClient);
+
+        RegisterSystemRequest request = new()
+        {
+            SerialNumber = "SN-NOTENANT",
+            SystemId = "SID-NOTENANT",
+            Hostname = "notenant-host",
+            MachineType = Grpc.AgentRegistration.MachineType.BareMetalServerType,
+            Os = OperatingSystemType.UbuntuOs,
+            RegistrationToken = TestTokenValue,
+        };
+
+        (long? machineId, string? apiKey, string errorMessage) result =
+            await service.RegisterSystemAsync(request, CancellationToken.None);
+
+        // Registration succeeds; billing is skipped when tenant is null
+        await Assert.That(result.machineId).IsEqualTo(305L);
+        await Assert.That(result.errorMessage).IsEqualTo(string.Empty);
+        await billingApiClient.DidNotReceive().ReportMachineUsageAsync(
+            Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task RegisterSystem_NullSubscription_SkipsBilling()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        RegistrationToken token = await SeedValidRegistrationToken(dbFactory, tenantId: 1);
+
+        IMachineRepository machineRepo = Substitute.For<IMachineRepository>();
+        machineRepo.DoesMachineExistAsync(
+            Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns(false);
+
+        Machine createdMachine = TestDataBuilder.BuildMachine(tenantId: 1, registrationTokenId: token.Id);
+        createdMachine.Id = 306;
+        machineRepo.CreateMachineWithKeyAsync(Arg.Any<Machine>(), Arg.Any<int?>(), Arg.Any<CancellationToken>())
+            .Returns((createdMachine, "api-key-nosub"));
+
+        ISubscriptionService subscriptionService = Substitute.For<ISubscriptionService>();
+        subscriptionService.GetSubscriptionForTenantAsync(1, Arg.Any<CancellationToken>()).Returns((TenantSubscription?)null);
+        subscriptionService.GetEffectiveLimitsForTenantAsync(1, Arg.Any<CancellationToken>()).Returns(
+            new EffectiveLimits { MachineLimit = 3, RetentionDays = 1 });
+
+        Dictionary<Type, object> services = new()
+        {
+            { typeof(IMachineRepository), machineRepo },
+            { typeof(ISubscriptionService), subscriptionService },
+        };
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context, services);
+        ILogger<MachineService> logger = new NullLogger<MachineService>();
+        IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
+        redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(Substitute.For<IDatabase>());
+        IBillingApiClient billingApiClient = Substitute.For<IBillingApiClient>();
+        MachineService service = new(scopeFactory, logger, redis, billingApiClient);
+
+        RegisterSystemRequest request = new()
+        {
+            SerialNumber = "SN-NOSUB",
+            SystemId = "SID-NOSUB",
+            Hostname = "nosub-host",
+            MachineType = Grpc.AgentRegistration.MachineType.BareMetalServerType,
+            Os = OperatingSystemType.UbuntuOs,
+            RegistrationToken = TestTokenValue,
+        };
+
+        (long? machineId, string? apiKey, string errorMessage) result =
+            await service.RegisterSystemAsync(request, CancellationToken.None);
+
+        await Assert.That(result.machineId).IsEqualTo(306L);
+        await Assert.That(result.errorMessage).IsEqualTo(string.Empty);
+        await billingApiClient.DidNotReceive().ReportMachineUsageAsync(
+            Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>());
+    }
+
     private static async Task SeedTierFeatureLimitsAsync(TestDatabaseFactory dbFactory)
     {
         DateTimeOffset now = DateTimeOffset.UtcNow;

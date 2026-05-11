@@ -82,7 +82,7 @@ public sealed class StripeSyncService : BackgroundService
         }
     }
 
-    private async Task RunSyncCycleAsync(CancellationToken ct)
+    internal async Task RunSyncCycleAsync(CancellationToken ct)
     {
         using IServiceScope scope = _scopeFactory.CreateScope();
         ISubscriptionRepository subscriptionRepository = scope.ServiceProvider.GetRequiredService<ISubscriptionRepository>();
@@ -92,7 +92,7 @@ public sealed class StripeSyncService : BackgroundService
         await SyncPaidSubscriptionsAsync(scope, subscriptionRepository, tenantRepository, subscriptionService, ct);
     }
 
-    private async Task SyncPaidSubscriptionsAsync(
+    internal async Task SyncPaidSubscriptionsAsync(
         IServiceScope scope, ISubscriptionRepository subscriptionRepository, ITenantRepository tenantRepository,
         ISubscriptionService subscriptionService, CancellationToken ct)
     {
@@ -143,7 +143,7 @@ public sealed class StripeSyncService : BackgroundService
         }
     }
 
-    private async Task SyncMachineQuantityAsync(
+    internal async Task SyncMachineQuantityAsync(
         TenantSubscription subscription, string tenantExternalId,
         StripeSubscriptionStatus stripeStatus,
         ISubscriptionService subscriptionService, CancellationToken ct)
@@ -168,7 +168,7 @@ public sealed class StripeSyncService : BackgroundService
         }
     }
 
-    private async Task SyncTierAsync(
+    internal async Task SyncTierAsync(
         TenantSubscription subscription,
         StripeSubscriptionStatus stripeStatus,
         IServiceScope scope,
@@ -200,7 +200,7 @@ public sealed class StripeSyncService : BackgroundService
         }
     }
 
-    private async Task SyncStatusAsync(
+    internal async Task SyncStatusAsync(
         TenantSubscription subscription,
         StripeSubscriptionStatus stripeStatus, ISubscriptionRepository subscriptionRepository, CancellationToken ct)
     {
@@ -236,7 +236,7 @@ public sealed class StripeSyncService : BackgroundService
         }
     }
 
-    private async Task SyncPeriodEndAsync(
+    internal async Task SyncPeriodEndAsync(
         TenantSubscription subscription,
         StripeSubscriptionStatus stripeStatus, ISubscriptionRepository subscriptionRepository, CancellationToken ct)
     {
@@ -260,7 +260,7 @@ public sealed class StripeSyncService : BackgroundService
         }
     }
 
-    private SubscriptionTier? MapPriceIdToTier(string priceId, string proPriceId, string teamPriceId)
+    internal SubscriptionTier? MapPriceIdToTier(string priceId, string proPriceId, string teamPriceId)
     {
         if (string.IsNullOrEmpty(priceId))
         {
@@ -298,7 +298,7 @@ public sealed class StripeSyncService : BackgroundService
         return null;
     }
 
-    private static SubscriptionTier? MapBillingTierToSubscriptionTier(BillingTier tier)
+    internal static SubscriptionTier? MapBillingTierToSubscriptionTier(BillingTier tier)
     {
         return tier switch
         {
@@ -309,7 +309,7 @@ public sealed class StripeSyncService : BackgroundService
         };
     }
 
-    private static SubscriptionStatus? MapStripeStatusToLocal(string stripeStatus)
+    internal static SubscriptionStatus? MapStripeStatusToLocal(string stripeStatus)
     {
         return stripeStatus switch
         {

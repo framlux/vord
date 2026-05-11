@@ -93,12 +93,25 @@ public sealed class DataExportCleanupService : BackgroundService
 
             try
             {
+                // Mark as expired in the database first — this is the authoritative state.
+                // If the S3 delete fails afterward, the object is orphaned but the user
+                // cannot re-download it (safe direction). The reverse order risked deleting
+                // the S3 object but leaving the DB record active if the DB update failed.
+                await exportRepo.ExpireExportJobAsync(job.Id, ct);
+
                 if (string.IsNullOrEmpty(job.ObjectKey) == false)
                 {
-                    await _objectStorageService.DeleteObjectAsync(job.ObjectKey, ct);
+                    try
+                    {
+                        await _objectStorageService.DeleteObjectAsync(job.ObjectKey, ct);
+                    }
+                    catch (Exception storageEx)
+                    {
+                        _logger.LogWarning(storageEx,
+                            "Failed to delete S3 object {ObjectKey} for expired export job {JobId} — object may be orphaned",
+                            job.ObjectKey, job.Id);
+                    }
                 }
-
-                await exportRepo.ExpireExportJobAsync(job.Id, ct);
 
                 _logger.LogInformation(
                     "Cleaned up expired export job {JobId} for tenant {TenantId}",

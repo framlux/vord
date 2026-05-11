@@ -438,4 +438,176 @@ public sealed class CommandEndpointTests
         string body = await response.Content.ReadAsStringAsync();
         await Assert.That(body).Contains("Team subscription");
     }
+
+    // ========== Error path: command detail not found ==========
+
+    [Test]
+    public async Task CommandDetail_NonExistentId_Returns404()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId, long _, int _, NSec.Cryptography.Key _) = await SeedFullEnvironment(db);
+
+        HttpClient client = new AuthenticatedClientBuilder(factory)
+            .WithUserId(userId)
+            .WithRole(tenantId, (int)UserAccountRoles.MachineAdmin)
+            .WithActiveTenant(tenantId)
+            .Build();
+
+        // Use an ID that cannot exist in the test database.
+        HttpResponseMessage response = await client.GetAsync("/api/v1/commands/999999999");
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.NotFound);
+
+        string body = await response.Content.ReadAsStringAsync();
+        await Assert.That(body).Contains("Command not found");
+    }
+
+    // ========== Error path: command detail for a different tenant ==========
+
+    [Test]
+    public async Task CommandDetail_WrongTenant_Returns404()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+
+        // Seed two separate tenant environments.
+        (int tenantA, int userA, long machineA, int signingKeyA, NSec.Cryptography.Key privateKeyA) = await SeedFullEnvironment(db);
+        (int tenantB, int userB, long _, int _, NSec.Cryptography.Key _) = await SeedFullEnvironment(db);
+
+        await EnableCommandsCapability(factory, machineA);
+
+        // User A submits a command under tenant A.
+        HttpClient clientA = new AuthenticatedClientBuilder(factory)
+            .WithUserId(userA)
+            .WithRole(tenantA, (int)UserAccountRoles.MachineAdmin)
+            .WithActiveTenant(tenantA)
+            .Build();
+
+        HttpResponseMessage submitResponse = await clientA.PostAsJsonAsync(
+            "/api/v1/commands", BuildCommandRequest(machineA, signingKeyA, privateKeyA));
+        await Assert.That(submitResponse.StatusCode).IsEqualTo(HttpStatusCode.OK);
+
+        string submitBody = await submitResponse.Content.ReadAsStringAsync();
+        using JsonDocument submitDoc = JsonDocument.Parse(submitBody);
+        long cmdId = submitDoc.RootElement.GetProperty("data").GetProperty("id").GetInt64();
+
+        // User B (tenant B) attempts to retrieve the command owned by tenant A.
+        HttpClient clientB = new AuthenticatedClientBuilder(factory)
+            .WithUserId(userB)
+            .WithRole(tenantB, (int)UserAccountRoles.MachineAdmin)
+            .WithActiveTenant(tenantB)
+            .Build();
+
+        HttpResponseMessage detailResponse = await clientB.GetAsync($"/api/v1/commands/{cmdId}");
+
+        await Assert.That(detailResponse.StatusCode).IsEqualTo(HttpStatusCode.NotFound);
+
+        string body = await detailResponse.Content.ReadAsStringAsync();
+        await Assert.That(body).Contains("Command not found");
+    }
+
+    // ========== Error path: send command to a soft-deleted machine ==========
+
+    [Test]
+    public async Task CommandSend_DeletedMachine_Returns400()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId, long machineId, int signingKeyId, NSec.Cryptography.Key privateKey) = await SeedFullEnvironment(db);
+        await EnableCommandsCapability(factory, machineId);
+
+        // Soft-delete the machine directly in the database.
+        await db.Machines
+            .Where(m => m.Id == machineId)
+            .Set(m => m.IsDeleted, true)
+            .UpdateAsync();
+
+        HttpClient client = new AuthenticatedClientBuilder(factory)
+            .WithUserId(userId)
+            .WithRole(tenantId, (int)UserAccountRoles.MachineAdmin)
+            .WithActiveTenant(tenantId)
+            .Build();
+
+        HttpResponseMessage response = await client.PostAsJsonAsync(
+            "/api/v1/commands", BuildCommandRequest(machineId, signingKeyId, privateKey));
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.BadRequest);
+
+        string body = await response.Content.ReadAsStringAsync();
+        await Assert.That(body).Contains("\"success\":false");
+    }
+
+    // ========== Error path: send command to a machine in a different tenant ==========
+
+    [Test]
+    public async Task CommandSend_WrongTenant_Returns400()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+
+        // Seed two separate tenant environments.
+        (int tenantA, int userA, long _, int signingKeyA, NSec.Cryptography.Key privateKeyA) = await SeedFullEnvironment(db);
+        (int tenantB, int _, long machineBId, int _, NSec.Cryptography.Key _) = await SeedFullEnvironment(db);
+
+        await EnableCommandsCapability(factory, machineBId);
+
+        // User A attempts to send a command targeting tenant B's machine.
+        HttpClient clientA = new AuthenticatedClientBuilder(factory)
+            .WithUserId(userA)
+            .WithRole(tenantA, (int)UserAccountRoles.MachineAdmin)
+            .WithActiveTenant(tenantA)
+            .Build();
+
+        HttpResponseMessage response = await clientA.PostAsJsonAsync(
+            "/api/v1/commands", BuildCommandRequest(machineBId, signingKeyA, privateKeyA));
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.BadRequest);
+
+        string body = await response.Content.ReadAsStringAsync();
+        await Assert.That(body).Contains("\"success\":false");
+    }
+
+    // ========== Error path: send command with missing command type ==========
+
+    [Test]
+    public async Task CommandSend_MissingCommandType_Returns400()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId, long machineId, int signingKeyId, NSec.Cryptography.Key privateKey) = await SeedFullEnvironment(db);
+        await EnableCommandsCapability(factory, machineId);
+
+        HttpClient client = new AuthenticatedClientBuilder(factory)
+            .WithUserId(userId)
+            .WithRole(tenantId, (int)UserAccountRoles.MachineAdmin)
+            .WithActiveTenant(tenantId)
+            .Build();
+
+        NSec.Cryptography.SignatureAlgorithm algorithm = NSec.Cryptography.SignatureAlgorithm.Ed25519;
+        string payload = "{}";
+        byte[] payloadBytes = System.Text.Encoding.UTF8.GetBytes(payload);
+        byte[] signature = algorithm.Sign(privateKey, payloadBytes);
+
+        // Build request with empty CommandType to trigger validator rejection.
+        object requestWithEmptyCommandType = new
+        {
+            CommandId = Guid.NewGuid().ToString("D"),
+            MachineId = machineId,
+            SigningKeyId = signingKeyId,
+            CommandType = "",
+            Nonce = Guid.NewGuid().ToString("N"),
+            Signature = Convert.ToBase64String(signature),
+            CanonicalPayload = payload,
+            Timestamp = DateTimeOffset.UtcNow,
+            ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(10),
+        };
+
+        HttpResponseMessage response = await client.PostAsJsonAsync("/api/v1/commands", requestWithEmptyCommandType);
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.BadRequest);
+
+        string body = await response.Content.ReadAsStringAsync();
+        await Assert.That(body).Contains("Command type is required");
+    }
 }

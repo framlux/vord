@@ -144,6 +144,16 @@ public sealed class SubscriptionService : ISubscriptionService
             return;
         }
 
+        // PastDue paid subscriptions keep access — Stripe handles dunning and will
+        // eventually send a payment_succeeded or subscription_deleted webhook.
+        // Do not revert or provision; the tenant retains their current tier.
+        if (subscription is not null && subscription.Status == SubscriptionStatus.PastDue)
+        {
+            _logger.LogDebug("Subscription for tenant {TenantId} is past due — retaining current tier pending payment resolution", tenantId);
+
+            return;
+        }
+
         if (subscription is not null && subscription.Tier == SubscriptionTier.Free && subscription.Status != SubscriptionStatus.Active)
         {
             await _subscriptionRepo.ReactivateFreeSubscriptionAsync(subscription.Id, ct);

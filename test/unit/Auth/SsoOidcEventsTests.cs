@@ -370,6 +370,103 @@ public sealed class SsoOidcEventsTests
         await Assert.That(ex!.Message).Contains("disallowed");
     }
 
+    // --- RedirectToIdentityProvider Tests ---
+
+    /// <summary>
+    /// Creates a <see cref="RedirectContext"/> with the supplied tenant ID and protocol message.
+    /// </summary>
+    private static RedirectContext BuildRedirectContext(
+        string? tenantId,
+        ITenantRepository? tenantRepo = null,
+        IHttpClientFactory? httpClientFactory = null,
+        ILogger<SsoOidcEvents>? logger = null)
+    {
+        IServiceProvider serviceProvider = Substitute.For<IServiceProvider>();
+        serviceProvider.GetService(typeof(ILogger<SsoOidcEvents>))
+            .Returns(logger ?? Substitute.For<ILogger<SsoOidcEvents>>());
+        if (tenantRepo is not null)
+        {
+            serviceProvider.GetService(typeof(ITenantRepository)).Returns(tenantRepo);
+        }
+        if (httpClientFactory is not null)
+        {
+            serviceProvider.GetService(typeof(IHttpClientFactory)).Returns(httpClientFactory);
+        }
+
+        DefaultHttpContext httpContext = new();
+        httpContext.RequestServices = serviceProvider;
+
+        OpenIdConnectOptions options = new();
+        AuthenticationProperties properties = new();
+        if (tenantId is not null)
+        {
+            properties.Items["tenantId"] = tenantId;
+        }
+
+        OidcMessage message = new();
+
+        RedirectContext context = new(
+            httpContext,
+            new AuthenticationScheme("sso-oidc", "SSO OIDC", typeof(OpenIdConnectHandler)),
+            options,
+            properties)
+        {
+            ProtocolMessage = message
+        };
+
+        return context;
+    }
+
+    [Test]
+    public async Task RedirectToIdentityProvider_MissingTenantId_Returns400()
+    {
+        SsoOidcEvents events = new();
+        RedirectContext context = BuildRedirectContext(tenantId: null);
+
+        await events.RedirectToIdentityProvider(context);
+
+        await Assert.That(context.HttpContext.Response.StatusCode).IsEqualTo(400);
+    }
+
+    [Test]
+    public async Task RedirectToIdentityProvider_EmptyTenantId_Returns400()
+    {
+        SsoOidcEvents events = new();
+        RedirectContext context = BuildRedirectContext(tenantId: "");
+
+        await events.RedirectToIdentityProvider(context);
+
+        await Assert.That(context.HttpContext.Response.StatusCode).IsEqualTo(400);
+    }
+
+    [Test]
+    public async Task RedirectToIdentityProvider_NonNumericTenantId_Returns400()
+    {
+        SsoOidcEvents events = new();
+        RedirectContext context = BuildRedirectContext(tenantId: "abc");
+
+        await events.RedirectToIdentityProvider(context);
+
+        await Assert.That(context.HttpContext.Response.StatusCode).IsEqualTo(400);
+    }
+
+    [Test]
+    public async Task RedirectToIdentityProvider_OidcConfigNotFound_Returns400()
+    {
+        ITenantRepository tenantRepo = Substitute.For<ITenantRepository>();
+        tenantRepo.GetTenantOidcConfigurationAsync(42, Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<TenantOidcConfiguration?>(null));
+
+        SsoOidcEvents events = new();
+        RedirectContext context = BuildRedirectContext(
+            tenantId: "42",
+            tenantRepo: tenantRepo);
+
+        await events.RedirectToIdentityProvider(context);
+
+        await Assert.That(context.HttpContext.Response.StatusCode).IsEqualTo(400);
+    }
+
     // --- AuthorizationCodeReceived Tests ---
 
     /// <summary>

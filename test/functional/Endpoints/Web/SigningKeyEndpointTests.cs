@@ -336,4 +336,141 @@ public sealed class SigningKeyEndpointTests
         await Assert.That(body).Contains("\"success\":false");
         await Assert.That(body).Contains("32-byte Ed25519 key");
     }
+
+    // ========== Error path: revoke non-existent key (body assertion) ==========
+
+    [Test]
+    public async Task RevokeKey_NonExistentKeyId_Returns404WithErrorBody()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId) = await SeedTenantAndUser(db);
+
+        HttpClient client = new AuthenticatedClientBuilder(factory)
+            .WithUserId(userId)
+            .WithRole(tenantId, (int)UserAccountRoles.MachineAdmin)
+            .WithActiveTenant(tenantId)
+            .Build();
+
+        HttpResponseMessage response = await client.DeleteAsync("/api/v1/signing-keys/999999");
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.NotFound);
+
+        string body = await response.Content.ReadAsStringAsync();
+        await Assert.That(body).Contains("\"success\":false");
+        await Assert.That(body).Contains("Signing key not found");
+    }
+
+    // ========== Error path: revoke key belonging to a different tenant ==========
+
+    [Test]
+    public async Task RevokeKey_KeyFromDifferentTenant_Returns404()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenant1Id, int user1Id) = await SeedTenantAndUser(db);
+        (int tenant2Id, int user2Id) = await SeedTenantAndUser(db);
+
+        // Register a key under tenant 2.
+        HttpClient client2 = new AuthenticatedClientBuilder(factory)
+            .WithUserId(user2Id)
+            .WithRole(tenant2Id, (int)UserAccountRoles.MachineAdmin)
+            .WithActiveTenant(tenant2Id)
+            .Build();
+
+        HttpResponseMessage registerResponse = await client2.PostAsJsonAsync("/api/v1/signing-keys", new
+        {
+            Label = "Tenant 2 Key",
+            PublicKey = GenerateValidPublicKey()
+        });
+
+        string registerBody = await registerResponse.Content.ReadAsStringAsync();
+        using JsonDocument doc = JsonDocument.Parse(registerBody);
+        int keyId = doc.RootElement.GetProperty("data").GetProperty("id").GetInt32();
+
+        // Attempt to revoke tenant 2's key while authenticated as tenant 1.
+        HttpClient client1 = new AuthenticatedClientBuilder(factory)
+            .WithUserId(user1Id)
+            .WithRole(tenant1Id, (int)UserAccountRoles.MachineAdmin)
+            .WithActiveTenant(tenant1Id)
+            .Build();
+
+        HttpResponseMessage revokeResponse = await client1.DeleteAsync($"/api/v1/signing-keys/{keyId}");
+
+        await Assert.That(revokeResponse.StatusCode).IsEqualTo(HttpStatusCode.NotFound);
+
+        string revokeBody = await revokeResponse.Content.ReadAsStringAsync();
+        await Assert.That(revokeBody).Contains("\"success\":false");
+        await Assert.That(revokeBody).Contains("Signing key not found");
+    }
+
+    // ========== Error path: missing required fields on register ==========
+
+    [Test]
+    public async Task RegisterKey_MissingRequiredFields_Returns400()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId) = await SeedTenantAndUser(db);
+
+        HttpClient client = new AuthenticatedClientBuilder(factory)
+            .WithUserId(userId)
+            .WithRole(tenantId, (int)UserAccountRoles.MachineAdmin)
+            .WithActiveTenant(tenantId)
+            .Build();
+
+        // Submit a request with an empty Label — the validator requires a non-empty label.
+        HttpResponseMessage response = await client.PostAsJsonAsync("/api/v1/signing-keys", new
+        {
+            Label = "",
+            PublicKey = GenerateValidPublicKey()
+        });
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.BadRequest);
+
+        string body = await response.Content.ReadAsStringAsync();
+        await Assert.That(body).Contains("Label is required");
+    }
+
+    // ========== Role restriction: Viewer cannot list signing keys ==========
+
+    [Test]
+    public async Task ListKeys_ViewerRole_Returns403()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId) = await SeedTenantAndUser(db);
+
+        // Viewer role (UserAccountRoles.Viewer = 3) is not included in the MachineAdmin policy.
+        HttpClient client = new AuthenticatedClientBuilder(factory)
+            .WithUserId(userId)
+            .WithRole(tenantId, (int)UserAccountRoles.Viewer)
+            .WithActiveTenant(tenantId)
+            .Build();
+
+        HttpResponseMessage response = await client.GetAsync("/api/v1/signing-keys");
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.Forbidden);
+    }
+
+    // ========== Role restriction: Viewer cannot revoke signing keys ==========
+
+    [Test]
+    public async Task RevokeKey_ViewerRole_Returns403()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId) = await SeedTenantAndUser(db);
+
+        // Viewer role (UserAccountRoles.Viewer = 3) is not included in the MachineAdmin policy.
+        HttpClient client = new AuthenticatedClientBuilder(factory)
+            .WithUserId(userId)
+            .WithRole(tenantId, (int)UserAccountRoles.Viewer)
+            .WithActiveTenant(tenantId)
+            .Build();
+
+        HttpResponseMessage response = await client.DeleteAsync("/api/v1/signing-keys/1");
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.Forbidden);
+    }
 }

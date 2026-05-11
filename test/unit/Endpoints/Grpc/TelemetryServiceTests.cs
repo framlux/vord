@@ -594,6 +594,568 @@ public sealed class TelemetryServiceTests
         await Assert.That(ack.AcknowledgedEventIds[0]).IsEqualTo("event-ssh-throws-1");
     }
 
+    // ========================================================================
+    // StreamTelemetry tests
+    // ========================================================================
+
+    [Test]
+    public async Task StreamTelemetry_NoMachineIdClaim_SetsUnauthenticatedStatus()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+        TelemetryService service = CreateService(scopeFactory);
+        ServerCallContext context = CreateUnauthenticatedContext();
+
+        FakeAsyncStreamReader<TelemetryEnvelope> requestStream = new([]);
+        FakeServerStreamWriter<TelemetryAck> responseStream = new();
+
+        await service.StreamTelemetry(requestStream, responseStream, context);
+
+        await Assert.That(context.Status.StatusCode).IsEqualTo(StatusCode.Unauthenticated);
+        await Assert.That(responseStream.Written.Count).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task StreamTelemetry_MismatchedMachineIdHeader_SetsPermissionDeniedStatus()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+        TelemetryService service = CreateService(scopeFactory);
+
+        // Claim says 42, header says 99 — mismatch returns -1 which maps to PermissionDenied.
+        ServerCallContext context = CreateAuthenticatedContext(42, headerMachineId: "99");
+
+        FakeAsyncStreamReader<TelemetryEnvelope> requestStream = new([]);
+        FakeServerStreamWriter<TelemetryAck> responseStream = new();
+
+        await service.StreamTelemetry(requestStream, responseStream, context);
+
+        await Assert.That(context.Status.StatusCode).IsEqualTo(StatusCode.PermissionDenied);
+        await Assert.That(context.Status.Detail).IsEqualTo("Machine ID mismatch between API key and header");
+        await Assert.That(responseStream.Written.Count).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task StreamTelemetry_InactiveSubscription_SetsPermissionDeniedStatus()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+
+        ISubscriptionService inactiveSubService = Substitute.For<ISubscriptionService>();
+        inactiveSubService.GetSubscriptionForTenantAsync(Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns(new TenantSubscription
+            {
+                TenantId = 1,
+                Tier = Database.Enums.SubscriptionTier.Free,
+                Status = Database.Enums.SubscriptionStatus.PastDue,
+                CreatedAt = DateTimeOffset.UtcNow,
+                UpdatedAt = DateTimeOffset.UtcNow,
+            });
+
+        TelemetryService service = new(scopeFactory, _dedupService, inactiveSubService, _eventAlertService, NoOpPipeline, _logger);
+        ServerCallContext context = CreateAuthenticatedContext(100);
+
+        FakeAsyncStreamReader<TelemetryEnvelope> requestStream = new([]);
+        FakeServerStreamWriter<TelemetryAck> responseStream = new();
+
+        await service.StreamTelemetry(requestStream, responseStream, context);
+
+        await Assert.That(context.Status.StatusCode).IsEqualTo(StatusCode.PermissionDenied);
+        await Assert.That(context.Status.Detail).IsEqualTo("Tenant subscription is not active");
+        await Assert.That(responseStream.Written.Count).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task StreamTelemetry_EmptyStream_CompletesWithoutError()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+        TelemetryService service = CreateService(scopeFactory);
+        ServerCallContext context = CreateAuthenticatedContext(100);
+
+        FakeAsyncStreamReader<TelemetryEnvelope> requestStream = new([]);
+        FakeServerStreamWriter<TelemetryAck> responseStream = new();
+
+        await service.StreamTelemetry(requestStream, responseStream, context);
+
+        // Should complete normally with no acks written and default OK status.
+        await Assert.That(responseStream.Written.Count).IsEqualTo(0);
+        await Assert.That(context.Status.StatusCode).IsEqualTo(StatusCode.OK);
+    }
+
+    [Test]
+    public async Task StreamTelemetry_SingleEnvelope_WritesOneAck()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+        TelemetryService service = CreateService(scopeFactory);
+        ServerCallContext context = CreateAuthenticatedContext(100);
+
+        TelemetryEnvelope envelope = new()
+        {
+            AgentTimestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            BatchId = "stream-batch-1",
+        };
+        envelope.Items.Add(new TelemetryItem
+        {
+            EventId = "stream-event-1",
+            Type = TelemetryTypes.CpuUtilizationType,
+            CpuUtilization = new CpuUtilizationRecord { CpuUsagePercent = 50 }
+        });
+
+        FakeAsyncStreamReader<TelemetryEnvelope> requestStream = new([envelope]);
+        FakeServerStreamWriter<TelemetryAck> responseStream = new();
+
+        await service.StreamTelemetry(requestStream, responseStream, context);
+
+        await Assert.That(responseStream.Written.Count).IsEqualTo(1);
+        await Assert.That(responseStream.Written[0].BatchId).IsEqualTo("stream-batch-1");
+        await Assert.That(responseStream.Written[0].Success).IsTrue();
+    }
+
+    [Test]
+    public async Task StreamTelemetry_TwoEnvelopes_WritesTwoAcks()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+        TelemetryService service = CreateService(scopeFactory);
+        ServerCallContext context = CreateAuthenticatedContext(100);
+
+        TelemetryEnvelope envelope1 = new()
+        {
+            AgentTimestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            BatchId = "stream-batch-a",
+        };
+        envelope1.Items.Add(new TelemetryItem
+        {
+            EventId = "stream-event-a",
+            Type = TelemetryTypes.CpuUtilizationType,
+            CpuUtilization = new CpuUtilizationRecord { CpuUsagePercent = 30 }
+        });
+
+        TelemetryEnvelope envelope2 = new()
+        {
+            AgentTimestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            BatchId = "stream-batch-b",
+        };
+        envelope2.Items.Add(new TelemetryItem
+        {
+            EventId = "stream-event-b",
+            Type = TelemetryTypes.MemoryUtilizationType,
+            MemoryUtilization = new MemoryUtilizationRecord { MemoryUsagePercent = 70 }
+        });
+
+        FakeAsyncStreamReader<TelemetryEnvelope> requestStream = new([envelope1, envelope2]);
+        FakeServerStreamWriter<TelemetryAck> responseStream = new();
+
+        await service.StreamTelemetry(requestStream, responseStream, context);
+
+        await Assert.That(responseStream.Written.Count).IsEqualTo(2);
+        await Assert.That(responseStream.Written[0].BatchId).IsEqualTo("stream-batch-a");
+        await Assert.That(responseStream.Written[0].Success).IsTrue();
+        await Assert.That(responseStream.Written[1].BatchId).IsEqualTo("stream-batch-b");
+        await Assert.That(responseStream.Written[1].Success).IsTrue();
+    }
+
+    [Test]
+    public async Task StreamTelemetry_TwoEnvelopes_InsertsTelemetryIntoDatabase()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+        TelemetryService service = CreateService(scopeFactory);
+        ServerCallContext context = CreateAuthenticatedContext(100, tenantId: 3);
+
+        TelemetryEnvelope envelope1 = new()
+        {
+            AgentTimestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            BatchId = "stream-db-a",
+        };
+        envelope1.Items.Add(new TelemetryItem
+        {
+            EventId = "stream-db-event-a",
+            Type = TelemetryTypes.CpuUtilizationType,
+            CpuUtilization = new CpuUtilizationRecord { CpuUsagePercent = 25 }
+        });
+
+        TelemetryEnvelope envelope2 = new()
+        {
+            AgentTimestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            BatchId = "stream-db-b",
+        };
+        envelope2.Items.Add(new TelemetryItem
+        {
+            EventId = "stream-db-event-b",
+            Type = TelemetryTypes.MemoryUtilizationType,
+            MemoryUtilization = new MemoryUtilizationRecord { MemoryUsagePercent = 60 }
+        });
+
+        FakeAsyncStreamReader<TelemetryEnvelope> requestStream = new([envelope1, envelope2]);
+        FakeServerStreamWriter<TelemetryAck> responseStream = new();
+
+        await service.StreamTelemetry(requestStream, responseStream, context);
+
+        List<MachineTelemetry> telemetry = await dbFactory.Context.MachineTelemetry.ToListAsync();
+
+        await Assert.That(telemetry.Count).IsEqualTo(2);
+        await Assert.That(telemetry.All(t => t.MachineId == 100)).IsTrue();
+        await Assert.That(telemetry.All(t => t.TenantId == 3)).IsTrue();
+    }
+
+    [Test]
+    public async Task StreamTelemetry_ExceedsMaxEnvelopeLimit_StopsProcessingAfterLimit()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+        TelemetryService service = CreateService(scopeFactory);
+        ServerCallContext context = CreateAuthenticatedContext(100);
+
+        // Create 1002 envelopes — the service should process the first 1000 then break.
+        List<TelemetryEnvelope> envelopes = new();
+        for (int i = 0; i < 1002; i++)
+        {
+            TelemetryEnvelope envelope = new()
+            {
+                AgentTimestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+                BatchId = $"stream-limit-{i}",
+            };
+            envelope.Items.Add(new TelemetryItem
+            {
+                EventId = $"stream-limit-event-{i}",
+                Type = TelemetryTypes.CpuUtilizationType,
+                CpuUtilization = new CpuUtilizationRecord { CpuUsagePercent = 10 }
+            });
+            envelopes.Add(envelope);
+        }
+
+        FakeAsyncStreamReader<TelemetryEnvelope> requestStream = new(envelopes);
+        FakeServerStreamWriter<TelemetryAck> responseStream = new();
+
+        await service.StreamTelemetry(requestStream, responseStream, context);
+
+        // The loop processes envelope 1 through 1000 (envelopeCount 1..1000),
+        // then on envelope 1001 (envelopeCount 1001) the > MaxEnvelopesPerStream check triggers break.
+        // So exactly 1000 acks should be written.
+        await Assert.That(responseStream.Written.Count).IsEqualTo(1000);
+    }
+
+    // Note: The stream timeout branch (MaxStreamDuration = 5 minutes) is infeasible to test
+    // without actual wall-clock waits. The OperationCanceledException catch for streamTimeout
+    // would require waiting 5 minutes or modifying the production code to accept configurable
+    // timeouts. Skipping this scenario.
+
+    // ========================================================================
+    // ProcessEnvelopeAsync branch tests
+    // ========================================================================
+
+    [Test]
+    public async Task SubmitTelemetry_MissingAgentTimestamp_ReturnsError()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+        TelemetryService service = CreateService(scopeFactory);
+        ServerCallContext context = CreateAuthenticatedContext(100);
+
+        // AgentTimestamp is intentionally omitted to trigger the null-timestamp rejection path.
+        TelemetryEnvelope envelope = new() { BatchId = "batch-no-ts" };
+        envelope.Items.Add(new TelemetryItem
+        {
+            EventId = "event-no-ts",
+            Type = TelemetryTypes.CpuUtilizationType,
+            CpuUtilization = new CpuUtilizationRecord { CpuUsagePercent = 50 }
+        });
+
+        TelemetryAck ack = await service.SubmitTelemetry(envelope, context);
+
+        await Assert.That(ack.Success).IsFalse();
+        await Assert.That(ack.ErrorMessage).IsEqualTo("agent_timestamp is required");
+
+        List<MachineTelemetry> telemetry = await dbFactory.Context.MachineTelemetry.ToListAsync();
+
+        await Assert.That(telemetry.Count).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task SubmitTelemetry_ClockSkewExceedsLimit_ReturnsError()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+        TelemetryService service = CreateService(scopeFactory);
+        ServerCallContext context = CreateAuthenticatedContext(100);
+
+        // 10 minutes in the future exceeds the 5-minute skew window.
+        DateTimeOffset skewedTime = DateTimeOffset.UtcNow.AddMinutes(10);
+
+        TelemetryEnvelope envelope = new()
+        {
+            AgentTimestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(skewedTime),
+            BatchId = "batch-skew"
+        };
+        envelope.Items.Add(new TelemetryItem
+        {
+            EventId = "event-skew",
+            Type = TelemetryTypes.CpuUtilizationType,
+            CpuUtilization = new CpuUtilizationRecord { CpuUsagePercent = 50 }
+        });
+
+        TelemetryAck ack = await service.SubmitTelemetry(envelope, context);
+
+        await Assert.That(ack.Success).IsFalse();
+        await Assert.That(ack.ErrorMessage).Contains("clock skew");
+
+        List<MachineTelemetry> telemetry = await dbFactory.Context.MachineTelemetry.ToListAsync();
+
+        await Assert.That(telemetry.Count).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task SubmitTelemetry_ClockSkewPastLimit_ReturnsError()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+        TelemetryService service = CreateService(scopeFactory);
+        ServerCallContext context = CreateAuthenticatedContext(100);
+
+        // 10 minutes in the past also exceeds the 5-minute skew window.
+        DateTimeOffset skewedTime = DateTimeOffset.UtcNow.AddMinutes(-10);
+
+        TelemetryEnvelope envelope = new()
+        {
+            AgentTimestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(skewedTime),
+            BatchId = "batch-skew-past"
+        };
+        envelope.Items.Add(new TelemetryItem
+        {
+            EventId = "event-skew-past",
+            Type = TelemetryTypes.CpuUtilizationType,
+            CpuUtilization = new CpuUtilizationRecord { CpuUsagePercent = 50 }
+        });
+
+        TelemetryAck ack = await service.SubmitTelemetry(envelope, context);
+
+        await Assert.That(ack.Success).IsFalse();
+        await Assert.That(ack.ErrorMessage).Contains("clock skew");
+    }
+
+    [Test]
+    public async Task SubmitTelemetry_BrokenCircuitException_ReturnsBackpressureError()
+    {
+        using TestDatabaseFactory dbFactory = new();
+
+        // Replace the machineStateRepo with one that throws BrokenCircuitException.
+        Database.Repositories.IMachineStateRepository throwingRepo = NSubstitute.Substitute.For<Database.Repositories.IMachineStateRepository>();
+        throwingRepo.BulkInsertTelemetryAsync(
+            NSubstitute.Arg.Any<List<MachineTelemetry>>(),
+            NSubstitute.Arg.Any<CancellationToken>())
+            .Returns<Task>(_ => throw new Polly.CircuitBreaker.BrokenCircuitException("Circuit open"));
+
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context, new Dictionary<Type, object>
+        {
+            { typeof(Database.Repositories.IMachineStateRepository), throwingRepo }
+        });
+
+        // Use a no-op pipeline so the BrokenCircuitException propagates out unhandled by Polly.
+        TelemetryService service = new(scopeFactory, _dedupService, _subscriptionService, _eventAlertService, NoOpPipeline, _logger);
+        ServerCallContext context = CreateAuthenticatedContext(100);
+
+        TelemetryEnvelope envelope = new()
+        {
+            AgentTimestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            BatchId = "batch-circuit"
+        };
+        envelope.Items.Add(new TelemetryItem
+        {
+            EventId = "event-circuit",
+            Type = TelemetryTypes.CpuUtilizationType,
+            CpuUtilization = new CpuUtilizationRecord { CpuUsagePercent = 50 }
+        });
+
+        TelemetryAck ack = await service.SubmitTelemetry(envelope, context);
+
+        await Assert.That(ack.Success).IsFalse();
+        await Assert.That(ack.ErrorMessage).Contains("temporarily unavailable");
+    }
+
+    [Test]
+    public async Task SubmitTelemetry_TimeoutRejectedException_ReturnsTimeoutError()
+    {
+        using TestDatabaseFactory dbFactory = new();
+
+        Database.Repositories.IMachineStateRepository throwingRepo = NSubstitute.Substitute.For<Database.Repositories.IMachineStateRepository>();
+        throwingRepo.BulkInsertTelemetryAsync(
+            NSubstitute.Arg.Any<List<MachineTelemetry>>(),
+            NSubstitute.Arg.Any<CancellationToken>())
+            .Returns<Task>(_ => throw new Polly.Timeout.TimeoutRejectedException("Timed out"));
+
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context, new Dictionary<Type, object>
+        {
+            { typeof(Database.Repositories.IMachineStateRepository), throwingRepo }
+        });
+
+        TelemetryService service = new(scopeFactory, _dedupService, _subscriptionService, _eventAlertService, NoOpPipeline, _logger);
+        ServerCallContext context = CreateAuthenticatedContext(100);
+
+        TelemetryEnvelope envelope = new()
+        {
+            AgentTimestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            BatchId = "batch-timeout"
+        };
+        envelope.Items.Add(new TelemetryItem
+        {
+            EventId = "event-timeout",
+            Type = TelemetryTypes.CpuUtilizationType,
+            CpuUtilization = new CpuUtilizationRecord { CpuUsagePercent = 50 }
+        });
+
+        TelemetryAck ack = await service.SubmitTelemetry(envelope, context);
+
+        await Assert.That(ack.Success).IsFalse();
+        await Assert.That(ack.ErrorMessage).Contains("timed out");
+    }
+
+    [Test]
+    public async Task SubmitTelemetry_UnhandledException_ReturnsInternalServerError()
+    {
+        using TestDatabaseFactory dbFactory = new();
+
+        Database.Repositories.IMachineStateRepository throwingRepo = NSubstitute.Substitute.For<Database.Repositories.IMachineStateRepository>();
+        throwingRepo.BulkInsertTelemetryAsync(
+            NSubstitute.Arg.Any<List<MachineTelemetry>>(),
+            NSubstitute.Arg.Any<CancellationToken>())
+            .Returns<Task>(_ => throw new InvalidOperationException("Unexpected failure"));
+
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context, new Dictionary<Type, object>
+        {
+            { typeof(Database.Repositories.IMachineStateRepository), throwingRepo }
+        });
+
+        TelemetryService service = new(scopeFactory, _dedupService, _subscriptionService, _eventAlertService, NoOpPipeline, _logger);
+        ServerCallContext context = CreateAuthenticatedContext(100);
+
+        TelemetryEnvelope envelope = new()
+        {
+            AgentTimestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            BatchId = "batch-unhandled"
+        };
+        envelope.Items.Add(new TelemetryItem
+        {
+            EventId = "event-unhandled",
+            Type = TelemetryTypes.CpuUtilizationType,
+            CpuUtilization = new CpuUtilizationRecord { CpuUsagePercent = 50 }
+        });
+
+        TelemetryAck ack = await service.SubmitTelemetry(envelope, context);
+
+        await Assert.That(ack.Success).IsFalse();
+        await Assert.That(ack.ErrorMessage).IsEqualTo("Internal server error");
+    }
+
+    // ========================================================================
+    // IsSubscriptionActiveAsync: null TenantId claim
+    // ========================================================================
+
+    [Test]
+    public async Task SubmitTelemetry_NoTenantIdClaim_ReturnsSubscriptionInactiveError()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+
+        TelemetryService service = new(scopeFactory, _dedupService, _subscriptionService, _eventAlertService, NoOpPipeline, _logger);
+
+        // Context with a valid MachineId claim but no TenantId claim — IsSubscriptionActiveAsync returns false.
+        DefaultHttpContext httpContext = new();
+        ClaimsIdentity identity = new("ApiKey");
+        identity.AddClaim(new Claim("MachineId", "100"));
+        httpContext.User = new ClaimsPrincipal(identity);
+        ServerCallContext context = new TestServerCallContextWithHttp(httpContext, new Metadata());
+
+        TelemetryEnvelope envelope = new()
+        {
+            AgentTimestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            BatchId = "batch-no-tenant"
+        };
+        envelope.Items.Add(new TelemetryItem
+        {
+            EventId = "event-no-tenant",
+            Type = TelemetryTypes.CpuUtilizationType,
+            CpuUtilization = new CpuUtilizationRecord { CpuUsagePercent = 50 }
+        });
+
+        TelemetryAck ack = await service.SubmitTelemetry(envelope, context);
+
+        await Assert.That(ack.Success).IsFalse();
+        await Assert.That(ack.ErrorMessage).IsEqualTo("Tenant subscription is not active");
+
+        List<MachineTelemetry> telemetry = await dbFactory.Context.MachineTelemetry.ToListAsync();
+
+        await Assert.That(telemetry.Count).IsEqualTo(0);
+    }
+
+    // ========================================================================
+    // Test helpers for streaming
+    // ========================================================================
+
+    /// <summary>
+    /// Fake <see cref="IAsyncStreamReader{T}"/> backed by a list of items.
+    /// </summary>
+    private sealed class FakeAsyncStreamReader<T> : IAsyncStreamReader<T>
+    {
+        private readonly IReadOnlyList<T> _items;
+        private int _index = -1;
+
+        /// <summary>
+        /// Creates a fake stream reader that yields the given items in order.
+        /// </summary>
+        public FakeAsyncStreamReader(IReadOnlyList<T> items)
+        {
+            _items = items;
+        }
+
+        /// <inheritdoc/>
+        public T Current => _items[_index];
+
+        /// <inheritdoc/>
+        public Task<bool> MoveNext(CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            _index++;
+
+            return Task.FromResult(_index < _items.Count);
+        }
+    }
+
+    /// <summary>
+    /// Fake <see cref="IServerStreamWriter{T}"/> that captures all written messages.
+    /// </summary>
+    private sealed class FakeServerStreamWriter<T> : IServerStreamWriter<T>
+    {
+        private readonly List<T> _written = new();
+
+        /// <summary>
+        /// Gets the list of messages written to this stream.
+        /// </summary>
+        public IReadOnlyList<T> Written => _written;
+
+        /// <inheritdoc/>
+        public WriteOptions? WriteOptions { get; set; }
+
+        /// <inheritdoc/>
+        public Task WriteAsync(T message)
+        {
+            _written.Add(message);
+
+            return Task.CompletedTask;
+        }
+
+        /// <inheritdoc/>
+        public Task WriteAsync(T message, CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            _written.Add(message);
+
+            return Task.CompletedTask;
+        }
+    }
+
     /// <summary>
     /// Custom <see cref="ServerCallContext"/> subclass that provides an <see cref="HttpContext"/>
     /// for testing gRPC endpoints that use <c>context.GetHttpContext()</c>.

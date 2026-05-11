@@ -97,13 +97,16 @@ public sealed class MachineService : IMachineService
 
         if (cachedKey.HasValue)
         {
-            // Atomic update: only deliver key if it hasn't been delivered yet
+            // Delete from cache first — safe direction: if MarkKeyDelivered fails afterward,
+            // the reissue path below will recover. The reverse order risked stale cache entries
+            // allowing duplicate delivery if KeyDeleteAsync failed after a successful DB update.
+            await redisDb.KeyDeleteAsync(cacheKey);
+
             int updated = await machineRepo.MarkKeyDeliveredAsync(machine.Id, cancellationToken);
 
             if (updated > 0)
             {
                 plaintextKey = cachedKey.ToString();
-                await redisDb.KeyDeleteAsync(cacheKey);
                 _logger.LogInformation("API key delivered to machine {MachineId}", machine.Id);
             }
             else
@@ -123,6 +126,10 @@ public sealed class MachineService : IMachineService
                 await redisDb.StringSetAsync(cacheKey, plaintextKey, ApiKeyCacheTtl);
                 await machineRepo.SetKeyDeliveredAsync(machine.Id, cancellationToken);
                 _logger.LogInformation("API key re-issued for machine {MachineId} in tenant {TenantId}", machine.Id, token.TenantId);
+            }
+            else
+            {
+                _logger.LogError("Failed to re-issue API key for machine {MachineId} — machine is active but has no credentials", machine.Id);
             }
         }
 

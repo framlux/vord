@@ -457,6 +457,70 @@ public sealed class InvitationEndpointTests
         await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.NotFound);
     }
 
+    [Test]
+    public async Task InvitationDetail_NonExistentToken_Returns404WithErrorBody()
+    {
+        // A randomly-generated token that was never seeded must return 404 with an error body.
+        using FunctionalTestFactory factory = new();
+        HttpClient client = new AuthenticatedClientBuilder(factory).WithUserId(1).Build();
+
+        string randomToken = Guid.NewGuid().ToString("N");
+        HttpResponseMessage response = await client.GetAsync($"/api/v1/invitations/by-token/{randomToken}");
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.NotFound);
+        string body = await response.Content.ReadAsStringAsync();
+        using JsonDocument doc = JsonDocument.Parse(body);
+        JsonElement root = doc.RootElement;
+        bool success = root.GetProperty("success").GetBoolean();
+        await Assert.That(success).IsFalse();
+
+        string message = root.GetProperty("message").GetString() ?? string.Empty;
+        await Assert.That(message).Contains("not found");
+    }
+
+    [Test]
+    public async Task InvitationDetail_TokenNotRegisteredInAnyTenant_Returns404WithErrorBody()
+    {
+        // Verifies that a token never seeded in any tenant returns 404 regardless of caller context.
+        // The detail endpoint is intentionally public (pre-login accept page) and looks up purely
+        // by token hash — so tenant context of the caller is irrelevant. A missing token always 404s.
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId1, int userId1) = await SeedInvitationEnvironment(db);
+        (int tenantId2, int userId2) = await SeedInvitationEnvironment(db);
+
+        // Seed a real invitation in tenant 2 — it will be found by its token
+        string realToken = $"real-token-tenant2-{Guid.NewGuid():N}";
+        TenantInvitation invitation = new()
+        {
+            TenantId = tenantId2,
+            Email = "detail-tenant2@example.com",
+            TokenHash = HashToken(realToken),
+            Role = UserAccountRoles.Viewer,
+            Status = InvitationStatus.Pending,
+            InvitedByUserId = userId2,
+            CreatedAt = DateTimeOffset.UtcNow,
+            ExpiresAt = DateTimeOffset.UtcNow.AddDays(7),
+        };
+        await db.InsertWithInt32IdentityAsync(invitation);
+
+        // A different token never seeded in any tenant returns 404 even from a tenant 1 client
+        string unregisteredToken = $"unregistered-cross-tenant-{Guid.NewGuid():N}";
+        HttpClient client = BuildClient(factory, tenantId1, userId1);
+
+        HttpResponseMessage response = await client.GetAsync($"/api/v1/invitations/by-token/{unregisteredToken}");
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.NotFound);
+        string body = await response.Content.ReadAsStringAsync();
+        using JsonDocument doc = JsonDocument.Parse(body);
+        JsonElement root = doc.RootElement;
+        bool success = root.GetProperty("success").GetBoolean();
+        await Assert.That(success).IsFalse();
+
+        string message = root.GetProperty("message").GetString() ?? string.Empty;
+        await Assert.That(message).Contains("not found");
+    }
+
     // --- InvitationAcceptEndpoint Tests ---
 
     [Test]
@@ -671,6 +735,44 @@ public sealed class InvitationEndpointTests
 
         string message = root.GetProperty("message").GetString() ?? string.Empty;
         await Assert.That(message).Contains("Only pending invitations can be resent");
+    }
+
+    [Test]
+    public async Task ResendInvitation_CrossTenantInvitation_Returns404()
+    {
+        // Verifies tenant isolation: an invitation belonging to tenant 2 cannot be resent
+        // by a tenant-admin acting on behalf of tenant 1.
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId1, int userId1) = await SeedInvitationEnvironment(db);
+        (int tenantId2, int userId2) = await SeedInvitationEnvironment(db);
+
+        TenantInvitation invitation = new()
+        {
+            TenantId = tenantId2,
+            Email = "resend-cross-tenant@example.com",
+            TokenHash = Guid.NewGuid().ToString("N"),
+            Role = UserAccountRoles.Viewer,
+            Status = InvitationStatus.Pending,
+            InvitedByUserId = userId2,
+            CreatedAt = DateTimeOffset.UtcNow,
+            ExpiresAt = DateTimeOffset.UtcNow.AddDays(7),
+        };
+        invitation.Id = await db.InsertWithInt32IdentityAsync(invitation);
+
+        HttpClient client = BuildClient(factory, tenantId1, userId1);
+
+        HttpResponseMessage response = await client.PostAsync($"/api/v1/invitations/{invitation.Id}/resend", null);
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.NotFound);
+        string body = await response.Content.ReadAsStringAsync();
+        using JsonDocument doc = JsonDocument.Parse(body);
+        JsonElement root = doc.RootElement;
+        bool success = root.GetProperty("success").GetBoolean();
+        await Assert.That(success).IsFalse();
+
+        string message = root.GetProperty("message").GetString() ?? string.Empty;
+        await Assert.That(message).Contains("not found");
     }
 
     // --- InvitationAcceptEndpoint Tests ---

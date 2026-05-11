@@ -573,6 +573,89 @@ public class BillingWebhookHandlerTests
     }
 
     [Test]
+    public async Task HandleTierCorrectionAsync_UpdatesTierAndCreatesAuditLog()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        await SeedTierFeatureLimitsAsync(dbFactory.Context);
+        TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 1, tier: SubscriptionTier.Free);
+        sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
+
+        BillingWebhookHandler handler = CreateHandler(dbFactory);
+
+        await handler.HandleTierCorrectionAsync(1, SubscriptionTier.Pro, CancellationToken.None);
+
+        TenantSubscription? updated = await dbFactory.Context.TenantSubscriptions
+            .FirstOrDefaultAsync(s => s.TenantId == 1);
+        await Assert.That(updated).IsNotNull();
+        await Assert.That(updated!.Tier).IsEqualTo(SubscriptionTier.Pro);
+        await Assert.That(updated.Status).IsEqualTo(SubscriptionStatus.Active);
+
+        // Verify audit log was created
+        int auditCount = await dbFactory.Context.AuditLog
+            .Where(a => a.TenantId == 1 && a.Action == AuditAction.SubscriptionUpgraded)
+            .CountAsync();
+        await Assert.That(auditCount).IsGreaterThanOrEqualTo(1);
+    }
+
+    [Test]
+    public async Task HandleTierCorrectionAsync_TeamToFree_CorrectsTier()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        await SeedTierFeatureLimitsAsync(dbFactory.Context);
+        TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 2, tier: SubscriptionTier.Team);
+        sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
+
+        BillingWebhookHandler handler = CreateHandler(dbFactory);
+
+        await handler.HandleTierCorrectionAsync(2, SubscriptionTier.Free, CancellationToken.None);
+
+        TenantSubscription? updated = await dbFactory.Context.TenantSubscriptions
+            .FirstOrDefaultAsync(s => s.TenantId == 2);
+        await Assert.That(updated).IsNotNull();
+        await Assert.That(updated!.Tier).IsEqualTo(SubscriptionTier.Free);
+    }
+
+    [Test]
+    public async Task HandleAccountCanceledAsync_DeactivatesSubscriptionAndCleansUp()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        await SeedTierFeatureLimitsAsync(dbFactory.Context);
+        TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 1, tier: SubscriptionTier.Pro);
+        sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
+
+        IDowngradeCleanupService cleanupService = Substitute.For<IDowngradeCleanupService>();
+        BillingWebhookHandler handler = CreateHandler(dbFactory, cleanupService: cleanupService);
+
+        await handler.HandleAccountCanceledAsync(1, CancellationToken.None);
+
+        TenantSubscription? updated = await dbFactory.Context.TenantSubscriptions
+            .FirstOrDefaultAsync(s => s.TenantId == 1);
+        await Assert.That(updated).IsNotNull();
+        await Assert.That(updated!.Status).IsEqualTo(SubscriptionStatus.Canceled);
+
+        // Verify cleanup was called
+        await cleanupService.Received(1).CleanupForFreeTierAsync(1, Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task HandleAccountCanceledAsync_CreatesAuditLog()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        await SeedTierFeatureLimitsAsync(dbFactory.Context);
+        TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 3, tier: SubscriptionTier.Team);
+        sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
+
+        BillingWebhookHandler handler = CreateHandler(dbFactory);
+
+        await handler.HandleAccountCanceledAsync(3, CancellationToken.None);
+
+        int auditCount = await dbFactory.Context.AuditLog
+            .Where(a => a.TenantId == 3 && a.Action == AuditAction.SubscriptionDowngraded)
+            .CountAsync();
+        await Assert.That(auditCount).IsGreaterThanOrEqualTo(1);
+    }
+
+    [Test]
     public async Task HandleCheckoutCompletedAsync_DefaultRules_SystemUserCreatedBy()
     {
         using TestDatabaseFactory dbFactory = new();

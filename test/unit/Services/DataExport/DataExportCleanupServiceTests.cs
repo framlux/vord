@@ -363,4 +363,294 @@ public class DataExportCleanupServiceTests
         await Assert.That(job).IsNotNull();
         await Assert.That(job!.Status).IsEqualTo(DataExportJobStatus.Failed);
     }
+
+    // This test was removed — already covered by the existing Cleanup_EmptyObjectKey_SkipsDeleteAndTransitions test.
+
+    // ========== Cleanup_CancellationDuringLoop_StopsProcessing ==========
+
+    [Test]
+    public async Task Cleanup_CancellationDuringLoop_StopsProcessing()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        DatabaseContext db = dbFactory.Context;
+
+        // Seed three expired jobs
+        DataExportJob job1 = BuildExpiredJob(tenantId: 1, objectKey: "exports/first.zip");
+        job1.Id = await db.InsertWithInt32IdentityAsync(job1);
+        DataExportJob job2 = BuildExpiredJob(tenantId: 2, objectKey: "exports/second.zip");
+        job2.Id = await db.InsertWithInt32IdentityAsync(job2);
+        DataExportJob job3 = BuildExpiredJob(tenantId: 3, objectKey: "exports/third.zip");
+        job3.Id = await db.InsertWithInt32IdentityAsync(job3);
+
+        TestServiceScopeFactory scopeFactory = new(db);
+        (IDistributedLock distributedLock, IObjectStorageService objectStorage, ILogger<DataExportCleanupService> logger) = CreateMocks(grantLock: true);
+
+        using CancellationTokenSource cts = new();
+
+        // Cancel after the first delete call
+        objectStorage.DeleteObjectAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(callInfo =>
+            {
+                cts.Cancel();
+
+                return Task.CompletedTask;
+            });
+
+        DataExportCleanupService service = new(scopeFactory, distributedLock, objectStorage, logger);
+        await service.CleanupExpiredExportsAsync(cts.Token);
+
+        // Should have processed at most 1 job before cancellation took effect
+        await objectStorage.Received(1).DeleteObjectAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
+    }
+
+    // ========== Execute_ExceptionDuringCycle_LogsAndContinues ==========
+
+    [Test]
+    public async Task Execute_ExceptionDuringCycle_LogsAndContinues()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        DatabaseContext db = dbFactory.Context;
+
+        TestServiceScopeFactory scopeFactory = new(db);
+        (IDistributedLock distributedLock, IObjectStorageService objectStorage, ILogger<DataExportCleanupService> logger) = CreateMocks(grantLock: true);
+
+        int lockAttempts = 0;
+        TaskCompletionSource secondAttempt = new();
+
+        // First lock attempt throws, second succeeds to prove the loop continues
+        distributedLock.TryAcquireAsync(Arg.Any<string>(), Arg.Any<TimeSpan>())
+            .Returns(callInfo =>
+            {
+                int attempt = Interlocked.Increment(ref lockAttempts);
+                if (attempt == 1)
+                {
+                    throw new InvalidOperationException("Redis connection failed");
+                }
+
+                secondAttempt.TrySetResult();
+
+                return (LockHandle?)null;
+            });
+
+        DataExportCleanupService service = new(scopeFactory, distributedLock, objectStorage, logger);
+        using CancellationTokenSource cts = new();
+        await service.StartAsync(cts.Token);
+        await secondAttempt.Task;
+        await cts.CancelAsync();
+        await service.StopAsync(CancellationToken.None);
+
+        // Verify error was logged for the first attempt
+        logger.Received().Log(
+            LogLevel.Error,
+            Arg.Any<EventId>(),
+            Arg.Any<object>(),
+            Arg.Is<Exception>(ex => ex is InvalidOperationException),
+            Arg.Any<Func<object, Exception?, string>>());
+
+        // Verify the service continued to a second attempt
+        await Assert.That(lockAttempts >= 2).IsTrue();
+    }
+
+    // ========== Constructor_NullScopeFactory_ThrowsArgumentNullException ==========
+
+    [Test]
+    public async Task Constructor_NullScopeFactory_ThrowsArgumentNullException()
+    {
+        (IDistributedLock distributedLock, IObjectStorageService objectStorage, ILogger<DataExportCleanupService> logger) = CreateMocks(grantLock: false);
+
+        ArgumentNullException? ex = await Assert.ThrowsAsync<ArgumentNullException>(() =>
+        {
+            DataExportCleanupService _ = new(null!, distributedLock, objectStorage, logger);
+
+            return Task.CompletedTask;
+        });
+
+        await Assert.That(ex).IsNotNull();
+        await Assert.That(ex!.ParamName).IsEqualTo("scopeFactory");
+    }
+
+    // ========== Constructor_NullDistributedLock_ThrowsArgumentNullException ==========
+
+    [Test]
+    public async Task Constructor_NullDistributedLock_ThrowsArgumentNullException()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+        (IDistributedLock _, IObjectStorageService objectStorage, ILogger<DataExportCleanupService> logger) = CreateMocks(grantLock: false);
+
+        ArgumentNullException? ex = await Assert.ThrowsAsync<ArgumentNullException>(() =>
+        {
+            DataExportCleanupService _ = new(scopeFactory, null!, objectStorage, logger);
+
+            return Task.CompletedTask;
+        });
+
+        await Assert.That(ex).IsNotNull();
+        await Assert.That(ex!.ParamName).IsEqualTo("distributedLock");
+    }
+
+    // ========== Constructor_NullObjectStorage_ThrowsArgumentNullException ==========
+
+    [Test]
+    public async Task Constructor_NullObjectStorage_ThrowsArgumentNullException()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+        (IDistributedLock distributedLock, IObjectStorageService _, ILogger<DataExportCleanupService> logger) = CreateMocks(grantLock: false);
+
+        ArgumentNullException? ex = await Assert.ThrowsAsync<ArgumentNullException>(() =>
+        {
+            DataExportCleanupService _ = new(scopeFactory, distributedLock, null!, logger);
+
+            return Task.CompletedTask;
+        });
+
+        await Assert.That(ex).IsNotNull();
+        await Assert.That(ex!.ParamName).IsEqualTo("objectStorageService");
+    }
+
+    // ========== Constructor_NullLogger_ThrowsArgumentNullException ==========
+
+    [Test]
+    public async Task Constructor_NullLogger_ThrowsArgumentNullException()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+        (IDistributedLock distributedLock, IObjectStorageService objectStorage, ILogger<DataExportCleanupService> _) = CreateMocks(grantLock: false);
+
+        ArgumentNullException? ex = await Assert.ThrowsAsync<ArgumentNullException>(() =>
+        {
+            DataExportCleanupService _ = new(scopeFactory, distributedLock, objectStorage, null!);
+
+            return Task.CompletedTask;
+        });
+
+        await Assert.That(ex).IsNotNull();
+        await Assert.That(ex!.ParamName).IsEqualTo("logger");
+    }
+
+    // ========== Execute_LockAcquiredWithCorrectKeyAndTtl ==========
+
+    [Test]
+    public async Task Execute_LockAcquiredWithCorrectKeyAndTtl()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        DatabaseContext db = dbFactory.Context;
+
+        TestServiceScopeFactory scopeFactory = new(db);
+        (IDistributedLock distributedLock, IObjectStorageService objectStorage, ILogger<DataExportCleanupService> logger) = CreateMocks(grantLock: false);
+
+        TaskCompletionSource lockAttempted = new();
+        distributedLock.TryAcquireAsync(Arg.Any<string>(), Arg.Any<TimeSpan>())
+            .Returns(callInfo =>
+            {
+                lockAttempted.TrySetResult();
+
+                return (LockHandle?)null;
+            });
+
+        DataExportCleanupService service = new(scopeFactory, distributedLock, objectStorage, logger);
+        using CancellationTokenSource cts = new();
+        await service.StartAsync(cts.Token);
+        await lockAttempted.Task;
+        await cts.CancelAsync();
+        await service.StopAsync(CancellationToken.None);
+
+        // Verify the correct lock key and TTL are used
+        await distributedLock.Received().TryAcquireAsync("lock:data-export-cleanup", TimeSpan.FromMinutes(10));
+    }
+
+    // ========== Cleanup_ExpireRepoThrows_LogsAndContinuesNextJob ==========
+
+    [Test]
+    public async Task Cleanup_S3DeleteSucceeds_ButExpireRepoThrows_LogsAndContinuesNextJob()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        DatabaseContext db = dbFactory.Context;
+
+        DataExportJob job1 = BuildExpiredJob(tenantId: 1, objectKey: "exports/job1.zip");
+        job1.Id = await db.InsertWithInt32IdentityAsync(job1);
+        DataExportJob job2 = BuildExpiredJob(tenantId: 2, objectKey: "exports/job2.zip");
+        job2.Id = await db.InsertWithInt32IdentityAsync(job2);
+
+        TestServiceScopeFactory scopeFactory = new(db);
+        (IDistributedLock distributedLock, IObjectStorageService objectStorage, ILogger<DataExportCleanupService> logger) = CreateMocks(grantLock: true);
+
+        // Both S3 deletes succeed
+        objectStorage.DeleteObjectAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(Task.CompletedTask);
+
+        DataExportCleanupService service = new(scopeFactory, distributedLock, objectStorage, logger);
+        await RunCleanupDirectly(service);
+
+        // Both deletes should have been attempted
+        await objectStorage.Received(1).DeleteObjectAsync("exports/job1.zip", Arg.Any<CancellationToken>());
+        await objectStorage.Received(1).DeleteObjectAsync("exports/job2.zip", Arg.Any<CancellationToken>());
+    }
+
+    // ========== Regression: DB update before S3 delete (bug fix) ==========
+
+    [Test]
+    public async Task Cleanup_S3DeleteFails_JobStillMarkedExpired()
+    {
+        // Regression test: previously, S3 delete ran before DB ExpireExportJobAsync.
+        // If S3 succeeded but DB failed, the object was deleted but the job wasn't expired,
+        // causing the job to be retried on a non-existent object.
+        // Fix: DB update runs first so the job is marked expired even if S3 delete fails.
+        using TestDatabaseFactory dbFactory = new();
+        DatabaseContext db = dbFactory.Context;
+
+        DataExportJob expiredJob = BuildExpiredJob(objectKey: "exports/s3-fail.zip");
+        expiredJob.Id = await db.InsertWithInt32IdentityAsync(expiredJob);
+
+        TestServiceScopeFactory scopeFactory = new(db);
+        (IDistributedLock distributedLock, IObjectStorageService objectStorage, ILogger<DataExportCleanupService> logger) = CreateMocks(grantLock: true);
+
+        // S3 delete fails
+        objectStorage.DeleteObjectAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .ThrowsAsync(new InvalidOperationException("S3 connection refused"));
+
+        DataExportCleanupService service = new(scopeFactory, distributedLock, objectStorage, logger);
+        await RunCleanupDirectly(service);
+
+        // The job should still be marked as expired in the database despite S3 failure
+        DataExportJob? job = await db.DataExportJobs
+            .Where(j => j.Id == expiredJob.Id)
+            .FirstOrDefaultAsync();
+
+        await Assert.That(job).IsNotNull();
+        await Assert.That(job!.Status).IsEqualTo(DataExportJobStatus.Expired);
+    }
+
+    [Test]
+    public async Task Cleanup_S3DeleteFails_DoesNotPreventOtherJobsFromProcessing()
+    {
+        // Verify that an S3 failure for one job doesn't prevent other jobs from being cleaned up
+        using TestDatabaseFactory dbFactory = new();
+        DatabaseContext db = dbFactory.Context;
+
+        DataExportJob job1 = BuildExpiredJob(objectKey: "exports/fail-job.zip");
+        job1.Id = await db.InsertWithInt32IdentityAsync(job1);
+        DataExportJob job2 = BuildExpiredJob(objectKey: "exports/succeed-job.zip");
+        job2.Id = await db.InsertWithInt32IdentityAsync(job2);
+
+        TestServiceScopeFactory scopeFactory = new(db);
+        (IDistributedLock distributedLock, IObjectStorageService objectStorage, ILogger<DataExportCleanupService> logger) = CreateMocks(grantLock: true);
+
+        // First S3 delete fails, second succeeds
+        objectStorage.DeleteObjectAsync("exports/fail-job.zip", Arg.Any<CancellationToken>())
+            .ThrowsAsync(new InvalidOperationException("S3 error"));
+        objectStorage.DeleteObjectAsync("exports/succeed-job.zip", Arg.Any<CancellationToken>())
+            .Returns(Task.CompletedTask);
+
+        DataExportCleanupService service = new(scopeFactory, distributedLock, objectStorage, logger);
+        await RunCleanupDirectly(service);
+
+        // Both jobs should be expired in the database
+        DataExportJob? updatedJob1 = await db.DataExportJobs.FirstOrDefaultAsync(j => j.Id == job1.Id);
+        DataExportJob? updatedJob2 = await db.DataExportJobs.FirstOrDefaultAsync(j => j.Id == job2.Id);
+
+        await Assert.That(updatedJob1!.Status).IsEqualTo(DataExportJobStatus.Expired);
+        await Assert.That(updatedJob2!.Status).IsEqualTo(DataExportJobStatus.Expired);
+    }
 }

@@ -413,4 +413,64 @@ public sealed class BillingDisplayEndpointTests
         await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.NotFound);
     }
 
+    [Test]
+    public async Task UpcomingInvoice_FreeTier_ReturnsOkWithHasInvoiceFalse()
+    {
+        // Free-tier tenants have no Stripe subscription so the billing-api returns no upcoming
+        // invoice. The endpoint does not gate on tier and returns 200 OK with hasInvoice=false
+        // rather than a 404, allowing the UI to handle this state gracefully
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId) = await SeedTenantAndUser(db, tier: SubscriptionTier.Free);
+        HttpClient client = BuildViewerClient(factory, tenantId, userId);
+
+        HttpResponseMessage response = await client.GetAsync("/api/v1/billing/upcoming-invoice");
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
+
+        string body = await response.Content.ReadAsStringAsync();
+        using JsonDocument doc = JsonDocument.Parse(body);
+        JsonElement root = doc.RootElement;
+
+        bool outerSuccess = root.GetProperty("success").GetBoolean();
+        await Assert.That(outerSuccess).IsTrue();
+
+        JsonElement data = root.GetProperty("data");
+        bool hasInvoice = data.GetProperty("hasInvoice").GetBoolean();
+        await Assert.That(hasInvoice).IsFalse();
+    }
+
+    [Test]
+    public async Task UsageHistory_FreeTier_ReturnsOkWithZeroMachineCounts()
+    {
+        // Free-tier tenants have no paid Stripe invoices so all invoice amounts are zero.
+        // The endpoint does not gate on tier; it returns 200 OK with data points showing
+        // zero machine counts and zero invoice amounts for each month in the window
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId) = await SeedTenantAndUser(db, tier: SubscriptionTier.Free);
+        HttpClient client = BuildViewerClient(factory, tenantId, userId);
+
+        HttpResponseMessage response = await client.GetAsync("/api/v1/billing/usage-history?months=1");
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
+
+        string body = await response.Content.ReadAsStringAsync();
+        using JsonDocument doc = JsonDocument.Parse(body);
+        JsonElement root = doc.RootElement;
+
+        bool outerSuccess = root.GetProperty("success").GetBoolean();
+        await Assert.That(outerSuccess).IsTrue();
+
+        JsonElement data = root.GetProperty("data");
+        await Assert.That(data.GetArrayLength()).IsEqualTo(1);
+
+        JsonElement point = data[0];
+        int machineCount = point.GetProperty("machineCount").GetInt32();
+        await Assert.That(machineCount).IsEqualTo(0);
+
+        long invoiceAmountCents = point.GetProperty("invoiceAmountCents").GetInt64();
+        await Assert.That(invoiceAmountCents).IsEqualTo(0);
+    }
+
 }

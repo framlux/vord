@@ -184,6 +184,34 @@ public sealed class ResumeSubscriptionEndpointTests
         await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.Forbidden);
     }
 
+    [Test]
+    public async Task ResumeSubscription_FreeTierCanceledSubscription_Returns400()
+    {
+        // A free-tier subscription that has been fully canceled cannot be resumed through
+        // this endpoint — customers must use the reactivate endpoint instead
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId) = await SeedBillingEnvironment(
+            db,
+            tier: SubscriptionTier.Free,
+            status: SubscriptionStatus.Canceled);
+        HttpClient client = BuildClient(factory, tenantId, userId);
+
+        HttpResponseMessage response = await client.PostAsync("/api/v1/billing/resume", null);
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.BadRequest);
+
+        string body = await response.Content.ReadAsStringAsync();
+        using JsonDocument doc = JsonDocument.Parse(body);
+        JsonElement root = doc.RootElement;
+
+        bool success = root.GetProperty("success").GetBoolean();
+        await Assert.That(success).IsFalse();
+
+        string message = root.GetProperty("message").GetString()!;
+        await Assert.That(message).Contains("Cannot resume a canceled subscription");
+    }
+
     // ========== Helpers ==========
 
     private static async Task<(int TenantId, int UserId)> SeedBillingEnvironment(

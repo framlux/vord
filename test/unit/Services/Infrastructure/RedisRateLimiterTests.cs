@@ -339,4 +339,247 @@ public class RedisRateLimiterTests
         await db.Received(2).ScriptEvaluateAsync(
             Arg.Any<string>(), Arg.Any<RedisKey[]>(), Arg.Any<RedisValue[]>(), Arg.Any<CommandFlags>());
     }
+
+    // ========== RedisFixedWindowRateLimiter property/disposal tests ==========
+
+    /// <summary>
+    /// Verifies that GetStatistics returns null since the Redis limiter does not track statistics.
+    /// </summary>
+    [Test]
+    public async Task FixedWindow_GetStatistics_ReturnsNull()
+    {
+        (RedisFixedWindowRateLimiter limiter, IDatabase _) = CreateLimiter();
+
+        System.Threading.RateLimiting.RateLimiterStatistics? stats = limiter.GetStatistics();
+
+        await Assert.That(stats).IsNull();
+    }
+
+    /// <summary>
+    /// Verifies that IdleDuration returns null since the Redis limiter does not track idle duration.
+    /// </summary>
+    [Test]
+    public async Task FixedWindow_IdleDuration_ReturnsNull()
+    {
+        (RedisFixedWindowRateLimiter limiter, IDatabase _) = CreateLimiter();
+
+        TimeSpan? idleDuration = limiter.IdleDuration;
+
+        await Assert.That(idleDuration).IsNull();
+    }
+
+    /// <summary>
+    /// Verifies that Dispose completes without error.
+    /// </summary>
+    [Test]
+    public async Task FixedWindow_Dispose_CompletesSuccessfully()
+    {
+        (RedisFixedWindowRateLimiter limiter, IDatabase _) = CreateLimiter();
+
+        // Dispose should not throw
+        limiter.Dispose();
+
+        // Test verifies no exception is thrown — if Dispose/DisposeAsync throws, the test runner catches it as a failure
+    }
+
+    /// <summary>
+    /// Verifies that DisposeAsync completes without error.
+    /// </summary>
+    [Test]
+    public async Task FixedWindow_DisposeAsync_CompletesSuccessfully()
+    {
+        (RedisFixedWindowRateLimiter limiter, IDatabase _) = CreateLimiter();
+
+        // DisposeAsync should not throw
+        await limiter.DisposeAsync();
+
+        // Test verifies no exception is thrown — if Dispose/DisposeAsync throws, the test runner catches it as a failure
+    }
+
+    /// <summary>
+    /// Verifies that the lease returned by AttemptAcquireCore has empty MetadataNames.
+    /// </summary>
+    [Test]
+    public async Task FixedWindow_AttemptAcquireLease_MetadataNames_IsEmpty()
+    {
+        (RedisFixedWindowRateLimiter limiter, IDatabase _) = CreateLimiter();
+
+        System.Threading.RateLimiting.RateLimitLease lease = limiter.AttemptAcquire();
+
+        await Assert.That(lease.MetadataNames.Any()).IsFalse();
+    }
+
+    /// <summary>
+    /// Verifies that the lease returned by AttemptAcquireCore returns false for TryGetMetadata.
+    /// </summary>
+    [Test]
+    public async Task FixedWindow_AttemptAcquireLease_TryGetMetadata_ReturnsFalse()
+    {
+        (RedisFixedWindowRateLimiter limiter, IDatabase _) = CreateLimiter();
+
+        System.Threading.RateLimiting.RateLimitLease lease = limiter.AttemptAcquire();
+        bool found = lease.TryGetMetadata("anything", out object? metadata);
+
+        await Assert.That(found).IsFalse();
+        await Assert.That(metadata).IsNull();
+    }
+
+    /// <summary>
+    /// Verifies that the lease returned by AcquireAsync has empty MetadataNames.
+    /// </summary>
+    [Test]
+    public async Task FixedWindow_AcquireAsyncLease_MetadataNames_IsEmpty()
+    {
+        (RedisFixedWindowRateLimiter limiter, IDatabase db) = CreateLimiter();
+        MockScriptResult(db, 1L);
+
+        System.Threading.RateLimiting.RateLimitLease lease = await limiter.AcquireAsync();
+
+        await Assert.That(lease.MetadataNames.Any()).IsFalse();
+    }
+
+    /// <summary>
+    /// Verifies that the lease returned by AcquireAsync returns false for TryGetMetadata.
+    /// </summary>
+    [Test]
+    public async Task FixedWindow_AcquireAsyncLease_TryGetMetadata_ReturnsFalse()
+    {
+        (RedisFixedWindowRateLimiter limiter, IDatabase db) = CreateLimiter();
+        MockScriptResult(db, 1L);
+
+        System.Threading.RateLimiting.RateLimitLease lease = await limiter.AcquireAsync();
+        bool found = lease.TryGetMetadata("anything", out object? metadata);
+
+        await Assert.That(found).IsFalse();
+        await Assert.That(metadata).IsNull();
+    }
+
+    // ========== RedisPartitionedRateLimiter property/disposal tests ==========
+
+    /// <summary>
+    /// Verifies that the partitioned limiter GetStatistics returns null.
+    /// </summary>
+    [Test]
+    public async Task Partitioned_GetStatistics_ReturnsNull()
+    {
+        (RedisPartitionedRateLimiter partitioned, IDatabase _) = CreatePartitionedLimiter();
+
+        System.Threading.RateLimiting.RateLimiterStatistics? stats = partitioned.GetStatistics();
+
+        await Assert.That(stats).IsNull();
+    }
+
+    /// <summary>
+    /// Verifies that the partitioned limiter IdleDuration returns null.
+    /// </summary>
+    [Test]
+    public async Task Partitioned_IdleDuration_ReturnsNull()
+    {
+        (RedisPartitionedRateLimiter partitioned, IDatabase _) = CreatePartitionedLimiter();
+
+        TimeSpan? idleDuration = partitioned.IdleDuration;
+
+        await Assert.That(idleDuration).IsNull();
+    }
+
+    /// <summary>
+    /// Verifies that the partitioned limiter Dispose completes without error.
+    /// </summary>
+    [Test]
+    public async Task Partitioned_Dispose_CompletesSuccessfully()
+    {
+        (RedisPartitionedRateLimiter partitioned, IDatabase _) = CreatePartitionedLimiter();
+
+        partitioned.Dispose();
+
+        // Test verifies no exception is thrown — if Dispose/DisposeAsync throws, the test runner catches it as a failure
+    }
+
+    /// <summary>
+    /// Verifies that the partitioned limiter DisposeAsync completes without error.
+    /// </summary>
+    [Test]
+    public async Task Partitioned_DisposeAsync_CompletesSuccessfully()
+    {
+        (RedisPartitionedRateLimiter partitioned, IDatabase _) = CreatePartitionedLimiter();
+
+        await partitioned.DisposeAsync();
+
+        // Test verifies no exception is thrown — if Dispose/DisposeAsync throws, the test runner catches it as a failure
+    }
+
+    /// <summary>
+    /// Verifies that the FailedLease singleton has empty MetadataNames.
+    /// </summary>
+    [Test]
+    public async Task Partitioned_FailedLease_MetadataNames_IsEmpty()
+    {
+        (RedisPartitionedRateLimiter partitioned, IDatabase _) = CreatePartitionedLimiter();
+
+        // AttemptAcquire returns the FailedLease singleton
+        System.Threading.RateLimiting.RateLimitLease lease = partitioned.AttemptAcquire();
+
+        await Assert.That(lease.MetadataNames.Any()).IsFalse();
+    }
+
+    /// <summary>
+    /// Verifies that the FailedLease singleton returns false for TryGetMetadata.
+    /// </summary>
+    [Test]
+    public async Task Partitioned_FailedLease_TryGetMetadata_ReturnsFalse()
+    {
+        (RedisPartitionedRateLimiter partitioned, IDatabase _) = CreatePartitionedLimiter();
+
+        System.Threading.RateLimiting.RateLimitLease lease = partitioned.AttemptAcquire();
+        bool found = lease.TryGetMetadata("anything", out object? metadata);
+
+        await Assert.That(found).IsFalse();
+        await Assert.That(metadata).IsNull();
+    }
+
+    /// <summary>
+    /// Verifies that the SimpleRateLimitLease from AcquireAsync has empty MetadataNames.
+    /// </summary>
+    [Test]
+    public async Task Partitioned_SimpleRateLimitLease_MetadataNames_IsEmpty()
+    {
+        (RedisPartitionedRateLimiter partitioned, IDatabase db) = CreatePartitionedLimiter();
+        MockScriptResult(db, 1L);
+
+        System.Threading.RateLimiting.RateLimitLease lease = await partitioned.AcquireAsync();
+
+        await Assert.That(lease.MetadataNames.Any()).IsFalse();
+    }
+
+    /// <summary>
+    /// Verifies that the SimpleRateLimitLease from AcquireAsync returns false for TryGetMetadata.
+    /// </summary>
+    [Test]
+    public async Task Partitioned_SimpleRateLimitLease_TryGetMetadata_ReturnsFalse()
+    {
+        (RedisPartitionedRateLimiter partitioned, IDatabase db) = CreatePartitionedLimiter();
+        MockScriptResult(db, 1L);
+
+        System.Threading.RateLimiting.RateLimitLease lease = await partitioned.AcquireAsync();
+        bool found = lease.TryGetMetadata("anything", out object? metadata);
+
+        await Assert.That(found).IsFalse();
+        await Assert.That(metadata).IsNull();
+    }
+
+    /// <summary>
+    /// Verifies that when Redis throws during AcquireAsync, the exception propagates.
+    /// </summary>
+    [Test]
+    public async Task Partitioned_AcquireAsync_RedisFailure_PropagatesException()
+    {
+        (RedisPartitionedRateLimiter partitioned, IDatabase db) = CreatePartitionedLimiter();
+        db.ScriptEvaluateAsync(Arg.Any<string>(), Arg.Any<RedisKey[]>(), Arg.Any<RedisValue[]>(), Arg.Any<CommandFlags>())
+            .Returns<RedisResult>(_ => throw new RedisConnectionException(ConnectionFailureType.UnableToConnect, "Connection refused"));
+
+        await Assert.ThrowsAsync<RedisConnectionException>(async () =>
+        {
+            await partitioned.AcquireAsync();
+        });
+    }
 }

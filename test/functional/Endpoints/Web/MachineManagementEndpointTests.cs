@@ -135,6 +135,19 @@ public sealed class MachineManagementEndpointTests
 
         await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.NotFound);
 
+        string body = await response.Content.ReadAsStringAsync();
+        using JsonDocument doc = JsonDocument.Parse(body);
+        JsonElement root = doc.RootElement;
+
+        bool success = root.GetProperty("success").GetBoolean();
+        await Assert.That(success).IsFalse();
+
+        bool hasMessage = root.TryGetProperty("message", out JsonElement messageElement);
+        await Assert.That(hasMessage).IsTrue();
+
+        string message = messageElement.GetString()!;
+        await Assert.That(string.IsNullOrWhiteSpace(message)).IsFalse();
+
         // Verify the machine was NOT deleted in the database
         Machine? machine = await db.Machines.FirstOrDefaultAsync(m => m.Id == machineId1);
         await Assert.That(machine).IsNotNull();
@@ -157,6 +170,19 @@ public sealed class MachineManagementEndpointTests
         HttpResponseMessage response = await client.DeleteAsync("/api/v1/machines/99999");
 
         await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.NotFound);
+
+        string body = await response.Content.ReadAsStringAsync();
+        using JsonDocument doc = JsonDocument.Parse(body);
+        JsonElement root = doc.RootElement;
+
+        bool success = root.GetProperty("success").GetBoolean();
+        await Assert.That(success).IsFalse();
+
+        bool hasMessage = root.TryGetProperty("message", out JsonElement messageElement);
+        await Assert.That(hasMessage).IsTrue();
+
+        string message = messageElement.GetString()!;
+        await Assert.That(string.IsNullOrWhiteSpace(message)).IsFalse();
     }
 
     [Test]
@@ -354,5 +380,36 @@ public sealed class MachineManagementEndpointTests
         HttpResponseMessage response = await client.GetAsync($"/api/v1/machines/{machineId1}/status");
 
         await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.NotFound);
+    }
+
+    [Test]
+    public async Task MachineStatus_NonExistentId_Returns404WithErrorBody()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId, long _, string _) = await SeedEnvironment(db);
+
+        HttpClient client = new AuthenticatedClientBuilder(factory)
+            .WithUserId(userId)
+            .WithRole(tenantId, (int)UserAccountRoles.Viewer)
+            .WithActiveTenant(tenantId)
+            .Build();
+
+        HttpResponseMessage response = await client.GetAsync("/api/v1/machines/99999/status");
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.NotFound);
+
+        string body = await response.Content.ReadAsStringAsync();
+        using JsonDocument doc = JsonDocument.Parse(body);
+        JsonElement root = doc.RootElement;
+
+        bool success = root.GetProperty("success").GetBoolean();
+        await Assert.That(success).IsFalse();
+
+        bool hasMessage = root.TryGetProperty("message", out JsonElement messageElement);
+        await Assert.That(hasMessage).IsTrue();
+
+        string message = messageElement.GetString()!;
+        await Assert.That(string.IsNullOrWhiteSpace(message)).IsFalse();
     }
 }

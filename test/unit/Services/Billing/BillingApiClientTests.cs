@@ -539,4 +539,199 @@ public sealed class BillingApiClientTests
 
         await Assert.That(result).IsFalse();
     }
+
+    /// <summary>
+    /// When the billing API returns success=false for ResumeSubscriptionAsync, the method
+    /// logs a warning and returns false — verifying the failure-response branch distinct
+    /// from the exception branch.
+    /// </summary>
+    [Test]
+    public async Task ResumeSubscriptionAsync_FailureResponse_ReturnsFalseAndLogsWarning()
+    {
+        (BillingApiClient client, BillingManagement.BillingManagementClient grpc, ILogger<BillingApiClient> logger) = CreateSut();
+
+        grpc.ResumeSubscriptionAsync(
+                Arg.Any<ResumeSubscriptionRequest>(), Arg.Any<Metadata>(), Arg.Any<DateTime?>(), Arg.Any<CancellationToken>())
+            .Returns(CreateAsyncCall(new ResumeSubscriptionResponse { Success = false, Message = "subscription not found" }));
+
+        bool result = await client.ResumeSubscriptionAsync("tenant-ext-1", CancellationToken.None);
+
+        await Assert.That(result).IsFalse();
+        logger.Received().Log(
+            LogLevel.Warning,
+            Arg.Any<EventId>(),
+            Arg.Any<object>(),
+            Arg.Any<Exception>(),
+            Arg.Any<Func<object, Exception?, string>>());
+    }
+
+    /// <summary>
+    /// When the billing API succeeds for ResumeSubscriptionAsync, the method returns true
+    /// and no warning or error is logged.
+    /// </summary>
+    [Test]
+    public async Task ResumeSubscriptionAsync_SuccessResponse_ReturnsTrue()
+    {
+        (BillingApiClient client, BillingManagement.BillingManagementClient grpc, ILogger<BillingApiClient> _) = CreateSut();
+
+        grpc.ResumeSubscriptionAsync(
+                Arg.Any<ResumeSubscriptionRequest>(), Arg.Any<Metadata>(), Arg.Any<DateTime?>(), Arg.Any<CancellationToken>())
+            .Returns(CreateAsyncCall(new ResumeSubscriptionResponse { Success = true }));
+
+        bool result = await client.ResumeSubscriptionAsync("tenant-ext-1", CancellationToken.None);
+
+        await Assert.That(result).IsTrue();
+    }
+
+    /// <summary>
+    /// Verifies that GetSubscriptionStatusAsync handles a null CurrentPeriodEnd in the response
+    /// by returning a status with a null CurrentPeriodEnd, exercising the null-check branch.
+    /// </summary>
+    [Test]
+    public async Task GetSubscriptionStatusAsync_NullPeriodEnd_ReturnsStatusWithNullPeriodEnd()
+    {
+        (BillingApiClient client, BillingManagement.BillingManagementClient grpc, ILogger<BillingApiClient> _) = CreateSut();
+
+        grpc.GetSubscriptionStatusAsync(
+                Arg.Any<GetSubscriptionStatusRequest>(), Arg.Any<Metadata>(), Arg.Any<DateTime?>(), Arg.Any<CancellationToken>())
+            .Returns(CreateAsyncCall(new GetSubscriptionStatusResponse
+            {
+                CancelAtPeriodEnd = false,
+                StripeStatus = "active",
+                PriceId = "price_pro_123",
+                Quantity = 3,
+                // CurrentPeriodEnd deliberately omitted (null)
+            }));
+
+        StripeSubscriptionStatus status = await client.GetSubscriptionStatusAsync("tenant-ext-1", CancellationToken.None);
+
+        await Assert.That(status.StripeStatus).IsEqualTo("active");
+        await Assert.That(status.CurrentPeriodEnd).IsNull();
+    }
+
+    /// <summary>
+    /// Verifies GetUpcomingInvoiceAsync correctly calculates the discount amount from
+    /// negative line items, exercising the LINQ Where/Sum branch for discounts.
+    /// </summary>
+    [Test]
+    public async Task GetUpcomingInvoiceAsync_NegativeLineItems_CalculatesDiscountAmount()
+    {
+        (BillingApiClient client, BillingManagement.BillingManagementClient grpc, ILogger<BillingApiClient> _) = CreateSut();
+
+        GetUpcomingInvoiceResponse response = new()
+        {
+            HasInvoice = true,
+            AmountDueCents = 4000,
+            Currency = "usd",
+            UnitAmountCents = 5000,
+        };
+        response.Lines.Add(new BillingLineItem { Description = "Subscription", AmountCents = 5000, Quantity = 1, Proration = false });
+        response.Lines.Add(new BillingLineItem { Description = "Proration credit", AmountCents = -1000, Quantity = 1, Proration = true });
+
+        grpc.GetUpcomingInvoiceAsync(
+                Arg.Any<GetUpcomingInvoiceRequest>(), Arg.Any<Metadata>(), Arg.Any<DateTime?>(), Arg.Any<CancellationToken>())
+            .Returns(CreateAsyncCall(response));
+
+        UpcomingInvoiceResult? result = await client.GetUpcomingInvoiceAsync("tenant-ext-1", CancellationToken.None);
+
+        await Assert.That(result).IsNotNull();
+        await Assert.That(result!.AmountDueCents).IsEqualTo(4000);
+        // Discount is the absolute value of negative line items
+        await Assert.That(result.DiscountAmountCents).IsEqualTo(1000);
+        await Assert.That(result.Lines.Count).IsEqualTo(2);
+    }
+
+    /// <summary>
+    /// Verifies GetUpcomingInvoiceAsync with no negative line items results in zero discount,
+    /// covering the all-positive branch.
+    /// </summary>
+    [Test]
+    public async Task GetUpcomingInvoiceAsync_NoNegativeLineItems_DiscountIsZero()
+    {
+        (BillingApiClient client, BillingManagement.BillingManagementClient grpc, ILogger<BillingApiClient> _) = CreateSut();
+
+        GetUpcomingInvoiceResponse response = new()
+        {
+            HasInvoice = true,
+            AmountDueCents = 5000,
+            Currency = "usd",
+            UnitAmountCents = 5000,
+        };
+        response.Lines.Add(new BillingLineItem { Description = "Subscription", AmountCents = 5000, Quantity = 1, Proration = false });
+
+        grpc.GetUpcomingInvoiceAsync(
+                Arg.Any<GetUpcomingInvoiceRequest>(), Arg.Any<Metadata>(), Arg.Any<DateTime?>(), Arg.Any<CancellationToken>())
+            .Returns(CreateAsyncCall(response));
+
+        UpcomingInvoiceResult? result = await client.GetUpcomingInvoiceAsync("tenant-ext-1", CancellationToken.None);
+
+        await Assert.That(result).IsNotNull();
+        await Assert.That(result!.DiscountAmountCents).IsEqualTo(0);
+    }
+
+    /// <summary>
+    /// Verifies ListInvoicesAsync correctly maps invoices with a non-null Created timestamp,
+    /// exercising the non-null branch of the null-coalescing operator.
+    /// </summary>
+    [Test]
+    public async Task ListInvoicesAsync_InvoiceWithNonNullCreated_MapsCreatedCorrectly()
+    {
+        (BillingApiClient client, BillingManagement.BillingManagementClient grpc, ILogger<BillingApiClient> _) = CreateSut();
+
+        DateTimeOffset expectedCreated = new(2026, 3, 15, 0, 0, 0, TimeSpan.Zero);
+        ListInvoicesResponse response = new();
+        response.Invoices.Add(new BillingInvoice
+        {
+            Id = "inv_123",
+            AmountCents = 4900,
+            Currency = "usd",
+            Status = "paid",
+            Created = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(expectedCreated),
+            HostedInvoiceUrl = "https://stripe.com/invoice/123",
+            InvoicePdfUrl = "https://stripe.com/invoice/123.pdf",
+        });
+
+        grpc.ListInvoicesAsync(
+                Arg.Any<ListInvoicesRequest>(), Arg.Any<Metadata>(), Arg.Any<DateTime?>(), Arg.Any<CancellationToken>())
+            .Returns(CreateAsyncCall(response));
+
+        List<InvoiceResult> result = await client.ListInvoicesAsync("tenant-ext-1", 12, CancellationToken.None);
+
+        await Assert.That(result.Count).IsEqualTo(1);
+        await Assert.That(result[0].Id).IsEqualTo("inv_123");
+        await Assert.That(result[0].Created).IsEqualTo(expectedCreated);
+        await Assert.That(result[0].AmountCents).IsEqualTo(4900);
+    }
+
+    /// <summary>
+    /// Verifies ListInvoicesAsync falls back to DateTimeOffset.MinValue when invoice Created is null,
+    /// exercising the null-coalescing branch.
+    /// </summary>
+    [Test]
+    public async Task ListInvoicesAsync_InvoiceWithNullCreated_FallsBackToMinValue()
+    {
+        (BillingApiClient client, BillingManagement.BillingManagementClient grpc, ILogger<BillingApiClient> _) = CreateSut();
+
+        ListInvoicesResponse response = new();
+        response.Invoices.Add(new BillingInvoice
+        {
+            Id = "inv_456",
+            AmountCents = 2900,
+            Currency = "usd",
+            Status = "open",
+            // Created deliberately omitted (null)
+            HostedInvoiceUrl = "https://stripe.com/invoice/456",
+            InvoicePdfUrl = "https://stripe.com/invoice/456.pdf",
+        });
+
+        grpc.ListInvoicesAsync(
+                Arg.Any<ListInvoicesRequest>(), Arg.Any<Metadata>(), Arg.Any<DateTime?>(), Arg.Any<CancellationToken>())
+            .Returns(CreateAsyncCall(response));
+
+        List<InvoiceResult> result = await client.ListInvoicesAsync("tenant-ext-1", 12, CancellationToken.None);
+
+        await Assert.That(result.Count).IsEqualTo(1);
+        await Assert.That(result[0].Id).IsEqualTo("inv_456");
+        await Assert.That(result[0].Created).IsEqualTo(DateTimeOffset.MinValue);
+    }
 }

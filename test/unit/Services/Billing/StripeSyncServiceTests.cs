@@ -934,4 +934,508 @@ public sealed class StripeSyncServiceTests
             Arg.Any<Exception>(),
             Arg.Any<Func<object, Exception?, string>>());
     }
+
+    // ========== Direct internal method tests ==========
+
+    [Test]
+    public async Task SyncStatus_TrialingStatus_NoStatusChange()
+    {
+        (StripeSyncService service, ISubscriptionRepository dbCache, IBillingApiClient _,
+            IBillingWebhookHandler _, ISubscriptionService _,
+            ILogger<StripeSyncService> _) = CreateSut();
+
+        TenantSubscription sub = CreateSubscription(1, status: SubscriptionStatus.Active,
+            currentPeriodEnd: DateTimeOffset.UtcNow.AddDays(15));
+
+        StripeSubscriptionStatus stripeStatus = new(false, "trialing", "price_pro_123", 5,
+            DateTimeOffset.UtcNow.AddDays(15), BillingTier.Pro);
+
+        await service.SyncStatusAsync(sub, stripeStatus, dbCache, CancellationToken.None);
+
+        await dbCache.DidNotReceive().SetSubscriptionActiveAsync(Arg.Any<int>(), Arg.Any<CancellationToken>());
+        await dbCache.DidNotReceive().SetSubscriptionPastDueAsync(Arg.Any<int>(), Arg.Any<CancellationToken>());
+        await dbCache.DidNotReceive().DeactivateSubscriptionAsync(Arg.Any<int>(), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task SyncTier_MonthlyProPriceId_DetectsProTier()
+    {
+        ISubscriptionRepository dbCache = Substitute.For<ISubscriptionRepository, ITenantRepository>();
+        IBillingApiClient billingClient = Substitute.For<IBillingApiClient>();
+        IBillingWebhookHandler webhookHandler = Substitute.For<IBillingWebhookHandler>();
+        ISubscriptionService subscriptionService = Substitute.For<ISubscriptionService>();
+        ILogger<StripeSyncService> logger = Substitute.For<ILogger<StripeSyncService>>();
+
+        IServiceScope scope = Substitute.For<IServiceScope>();
+        IServiceProvider serviceProvider = Substitute.For<IServiceProvider>();
+        serviceProvider.GetService(typeof(IBillingWebhookHandler)).Returns(webhookHandler);
+        scope.ServiceProvider.Returns(serviceProvider);
+
+        IServiceScopeFactory scopeFactory = Substitute.For<IServiceScopeFactory>();
+        IDistributedLock distributedLock = Substitute.For<IDistributedLock>();
+
+        string proMonthlyPriceId = "price_pro_monthly_111";
+        IOptions<BillingOptions> billingOptions = Options.Create(new BillingOptions
+        {
+            StripeProPriceId = "price_pro_123",
+            StripeTeamPriceId = "price_team_456",
+            StripeProMonthlyPriceId = proMonthlyPriceId
+        });
+
+        StripeSyncService service = new(scopeFactory, billingClient, billingOptions, distributedLock, logger);
+
+        // Local says Team, Stripe reports the Pro monthly price → tier correction to Pro
+        TenantSubscription sub = CreateSubscription(1, tier: SubscriptionTier.Team,
+            currentPeriodEnd: DateTimeOffset.UtcNow.AddDays(15));
+
+        StripeSubscriptionStatus stripeStatus = new(false, "active", proMonthlyPriceId, 5,
+            DateTimeOffset.UtcNow.AddDays(15), BillingTier.Unspecified);
+
+        await service.SyncTierAsync(sub, stripeStatus, scope, "price_pro_123", "price_team_456", CancellationToken.None);
+
+        await webhookHandler.Received(1).HandleTierCorrectionAsync(1, SubscriptionTier.Pro, Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task SyncTier_AnnualTeamPriceId_DetectsTeamTier()
+    {
+        ISubscriptionRepository dbCache = Substitute.For<ISubscriptionRepository, ITenantRepository>();
+        IBillingApiClient billingClient = Substitute.For<IBillingApiClient>();
+        IBillingWebhookHandler webhookHandler = Substitute.For<IBillingWebhookHandler>();
+        ILogger<StripeSyncService> logger = Substitute.For<ILogger<StripeSyncService>>();
+
+        IServiceScope scope = Substitute.For<IServiceScope>();
+        IServiceProvider serviceProvider = Substitute.For<IServiceProvider>();
+        serviceProvider.GetService(typeof(IBillingWebhookHandler)).Returns(webhookHandler);
+        scope.ServiceProvider.Returns(serviceProvider);
+
+        IServiceScopeFactory scopeFactory = Substitute.For<IServiceScopeFactory>();
+        IDistributedLock distributedLock = Substitute.For<IDistributedLock>();
+
+        string teamAnnualPriceId = "price_team_annual_222";
+        IOptions<BillingOptions> billingOptions = Options.Create(new BillingOptions
+        {
+            StripeProPriceId = "price_pro_123",
+            StripeTeamPriceId = "price_team_456",
+            StripeTeamAnnualPriceId = teamAnnualPriceId
+        });
+
+        StripeSyncService service = new(scopeFactory, billingClient, billingOptions, distributedLock, logger);
+
+        // Local says Pro, Stripe reports the Team annual price → tier correction to Team
+        TenantSubscription sub = CreateSubscription(1, tier: SubscriptionTier.Pro,
+            currentPeriodEnd: DateTimeOffset.UtcNow.AddDays(15));
+
+        StripeSubscriptionStatus stripeStatus = new(false, "active", teamAnnualPriceId, 5,
+            DateTimeOffset.UtcNow.AddDays(15), BillingTier.Unspecified);
+
+        await service.SyncTierAsync(sub, stripeStatus, scope, "price_pro_123", "price_team_456", CancellationToken.None);
+
+        await webhookHandler.Received(1).HandleTierCorrectionAsync(1, SubscriptionTier.Team, Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task SyncPeriodEnd_NullPeriodEnd_NoUpdate()
+    {
+        (StripeSyncService service, ISubscriptionRepository dbCache, IBillingApiClient _,
+            IBillingWebhookHandler _, ISubscriptionService _,
+            ILogger<StripeSyncService> _) = CreateSut();
+
+        TenantSubscription sub = CreateSubscription(1,
+            currentPeriodEnd: DateTimeOffset.UtcNow.AddDays(15));
+
+        StripeSubscriptionStatus stripeStatus = new(false, "active", "price_pro_123", 5, null, BillingTier.Pro);
+
+        await service.SyncPeriodEndAsync(sub, stripeStatus, dbCache, CancellationToken.None);
+
+        await dbCache.DidNotReceive().UpdateSubscriptionPeriodEndAsync(
+            Arg.Any<int>(), Arg.Any<DateTimeOffset>(), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task SyncPaidSubscriptions_EmptyList_ReturnsEarly()
+    {
+        (StripeSyncService service, ISubscriptionRepository dbCache, IBillingApiClient billingClient,
+            IBillingWebhookHandler _, ISubscriptionService subscriptionService,
+            ILogger<StripeSyncService> _) = CreateSut();
+
+        IServiceScope scope = Substitute.For<IServiceScope>();
+        IServiceProvider serviceProvider = Substitute.For<IServiceProvider>();
+        scope.ServiceProvider.Returns(serviceProvider);
+
+        dbCache.GetPaidSubscriptionsAsync(Arg.Any<CancellationToken>())
+            .Returns(new List<TenantSubscription>());
+
+        await service.SyncPaidSubscriptionsAsync(scope, dbCache, (ITenantRepository)dbCache,
+            subscriptionService, CancellationToken.None);
+
+        await billingClient.DidNotReceive().GetSubscriptionStatusAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
+        await subscriptionService.DidNotReceive().GetMachineCountForTenantAsync(Arg.Any<int>(), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task SyncPaidSubscriptions_BillingApiThrows_LogsAndContinues()
+    {
+        (StripeSyncService service, ISubscriptionRepository dbCache, IBillingApiClient billingClient,
+            IBillingWebhookHandler _, ISubscriptionService subscriptionService,
+            ILogger<StripeSyncService> logger) = CreateSut();
+
+        IServiceScope scope = Substitute.For<IServiceScope>();
+        IServiceProvider serviceProvider = Substitute.For<IServiceProvider>();
+        scope.ServiceProvider.Returns(serviceProvider);
+
+        TenantSubscription sub = CreateSubscription(1, tier: SubscriptionTier.Pro,
+            currentPeriodEnd: DateTimeOffset.UtcNow.AddDays(15));
+        Tenant tenant = CreateTenant(1, "ext-1");
+
+        dbCache.GetPaidSubscriptionsAsync(Arg.Any<CancellationToken>())
+            .Returns(new List<TenantSubscription> { sub });
+        ((ITenantRepository)dbCache).GetTenantByIdAsync(1, Arg.Any<CancellationToken>())
+            .Returns(tenant);
+        billingClient.GetSubscriptionStatusAsync("ext-1", Arg.Any<CancellationToken>())
+            .ThrowsAsync(new InvalidOperationException("billing API failure"));
+
+        await service.SyncPaidSubscriptionsAsync(scope, dbCache, (ITenantRepository)dbCache,
+            subscriptionService, CancellationToken.None);
+
+        logger.Received().Log(
+            LogLevel.Error,
+            Arg.Any<EventId>(),
+            Arg.Any<object>(),
+            Arg.Any<Exception>(),
+            Arg.Any<Func<object, Exception?, string>>());
+        await subscriptionService.DidNotReceive().GetMachineCountForTenantAsync(Arg.Any<int>(), Arg.Any<CancellationToken>());
+    }
+
+    // ========== MapPriceIdToTier tests ==========
+
+    [Test]
+    public async Task MapPriceIdToTier_EmptyPriceId_ReturnsNull()
+    {
+        (StripeSyncService service, _, _, _, _, _) = CreateSut();
+
+        SubscriptionTier? result = service.MapPriceIdToTier("", "price_pro", "price_team");
+
+        await Assert.That(result).IsNull();
+    }
+
+    [Test]
+    public async Task MapPriceIdToTier_ProPriceId_ReturnsPro()
+    {
+        (StripeSyncService service, _, _, _, _, _) = CreateSut(proPriceId: "price_pro_123");
+
+        SubscriptionTier? result = service.MapPriceIdToTier("price_pro_123", "price_pro_123", "price_team_456");
+
+        await Assert.That(result).IsEqualTo(SubscriptionTier.Pro);
+    }
+
+    [Test]
+    public async Task MapPriceIdToTier_TeamPriceId_ReturnsTeam()
+    {
+        (StripeSyncService service, _, _, _, _, _) = CreateSut(teamPriceId: "price_team_456");
+
+        SubscriptionTier? result = service.MapPriceIdToTier("price_team_456", "price_pro_123", "price_team_456");
+
+        await Assert.That(result).IsEqualTo(SubscriptionTier.Team);
+    }
+
+    [Test]
+    public async Task MapPriceIdToTier_UnknownPriceId_ReturnsNull()
+    {
+        (StripeSyncService service, _, _, _, _, _) = CreateSut();
+
+        SubscriptionTier? result = service.MapPriceIdToTier("price_unknown", "price_pro_123", "price_team_456");
+
+        await Assert.That(result).IsNull();
+    }
+
+    // ========== MapBillingTierToSubscriptionTier tests ==========
+
+    [Test]
+    public async Task MapBillingTierToSubscriptionTier_Pro_ReturnsPro()
+    {
+        SubscriptionTier? result = StripeSyncService.MapBillingTierToSubscriptionTier(BillingTier.Pro);
+
+        await Assert.That(result).IsEqualTo(SubscriptionTier.Pro);
+    }
+
+    [Test]
+    public async Task MapBillingTierToSubscriptionTier_Team_ReturnsTeam()
+    {
+        SubscriptionTier? result = StripeSyncService.MapBillingTierToSubscriptionTier(BillingTier.Team);
+
+        await Assert.That(result).IsEqualTo(SubscriptionTier.Team);
+    }
+
+    [Test]
+    public async Task MapBillingTierToSubscriptionTier_Free_ReturnsFree()
+    {
+        SubscriptionTier? result = StripeSyncService.MapBillingTierToSubscriptionTier(BillingTier.Free);
+
+        await Assert.That(result).IsEqualTo(SubscriptionTier.Free);
+    }
+
+    [Test]
+    public async Task MapBillingTierToSubscriptionTier_Unknown_ReturnsNull()
+    {
+        SubscriptionTier? result = StripeSyncService.MapBillingTierToSubscriptionTier((BillingTier)999);
+
+        await Assert.That(result).IsNull();
+    }
+
+    // ========== MapStripeStatusToLocal tests ==========
+
+    [Test]
+    public async Task MapStripeStatusToLocal_Active_ReturnsActive()
+    {
+        SubscriptionStatus? result = StripeSyncService.MapStripeStatusToLocal("active");
+
+        await Assert.That(result).IsEqualTo(SubscriptionStatus.Active);
+    }
+
+    [Test]
+    public async Task MapStripeStatusToLocal_PastDue_ReturnsPastDue()
+    {
+        SubscriptionStatus? result = StripeSyncService.MapStripeStatusToLocal("past_due");
+
+        await Assert.That(result).IsEqualTo(SubscriptionStatus.PastDue);
+    }
+
+    [Test]
+    public async Task MapStripeStatusToLocal_Canceled_ReturnsCanceled()
+    {
+        SubscriptionStatus? result = StripeSyncService.MapStripeStatusToLocal("canceled");
+
+        await Assert.That(result).IsEqualTo(SubscriptionStatus.Canceled);
+    }
+
+    [Test]
+    public async Task MapStripeStatusToLocal_Trialing_ReturnsNull()
+    {
+        SubscriptionStatus? result = StripeSyncService.MapStripeStatusToLocal("trialing");
+
+        await Assert.That(result).IsNull();
+    }
+
+    [Test]
+    public async Task MapStripeStatusToLocal_Incomplete_ReturnsNull()
+    {
+        SubscriptionStatus? result = StripeSyncService.MapStripeStatusToLocal("incomplete");
+
+        await Assert.That(result).IsNull();
+    }
+
+    // ========== Additional MapPriceIdToTier branch coverage ==========
+
+    /// <summary>
+    /// Verifies that a Pro annual price ID is correctly mapped to the Pro tier,
+    /// exercising the annual interval-aware price matching branch.
+    /// </summary>
+    [Test]
+    public async Task MapPriceIdToTier_ProAnnualPriceId_ReturnsPro()
+    {
+        string proAnnualPriceId = "price_pro_annual_333";
+        IOptions<BillingOptions> billingOptions = Options.Create(new BillingOptions
+        {
+            StripeProPriceId = "price_pro_123",
+            StripeTeamPriceId = "price_team_456",
+            StripeProAnnualPriceId = proAnnualPriceId
+        });
+
+        IServiceScopeFactory scopeFactory = Substitute.For<IServiceScopeFactory>();
+        IBillingApiClient billingClient = Substitute.For<IBillingApiClient>();
+        IDistributedLock distributedLock = Substitute.For<IDistributedLock>();
+        ILogger<StripeSyncService> logger = Substitute.For<ILogger<StripeSyncService>>();
+
+        StripeSyncService service = new(scopeFactory, billingClient, billingOptions, distributedLock, logger);
+
+        SubscriptionTier? result = service.MapPriceIdToTier(proAnnualPriceId, "price_pro_123", "price_team_456");
+
+        await Assert.That(result).IsEqualTo(SubscriptionTier.Pro);
+    }
+
+    /// <summary>
+    /// Verifies that a Team monthly price ID is correctly mapped to the Team tier,
+    /// exercising the monthly interval-aware Team price matching branch.
+    /// </summary>
+    [Test]
+    public async Task MapPriceIdToTier_TeamMonthlyPriceId_ReturnsTeam()
+    {
+        string teamMonthlyPriceId = "price_team_monthly_444";
+        IOptions<BillingOptions> billingOptions = Options.Create(new BillingOptions
+        {
+            StripeProPriceId = "price_pro_123",
+            StripeTeamPriceId = "price_team_456",
+            StripeTeamMonthlyPriceId = teamMonthlyPriceId
+        });
+
+        IServiceScopeFactory scopeFactory = Substitute.For<IServiceScopeFactory>();
+        IBillingApiClient billingClient = Substitute.For<IBillingApiClient>();
+        IDistributedLock distributedLock = Substitute.For<IDistributedLock>();
+        ILogger<StripeSyncService> logger = Substitute.For<ILogger<StripeSyncService>>();
+
+        StripeSyncService service = new(scopeFactory, billingClient, billingOptions, distributedLock, logger);
+
+        SubscriptionTier? result = service.MapPriceIdToTier(teamMonthlyPriceId, "price_pro_123", "price_team_456");
+
+        await Assert.That(result).IsEqualTo(SubscriptionTier.Team);
+    }
+
+    /// <summary>
+    /// Verifies that when the Pro monthly price ID is configured but the actual price ID does
+    /// not match it, the method continues checking other IDs and returns null if none match.
+    /// This exercises the short-circuit of the compound Pro monthly/annual condition.
+    /// </summary>
+    [Test]
+    public async Task MapPriceIdToTier_ProMonthlyConfiguredButNoMatch_ReturnsNull()
+    {
+        IOptions<BillingOptions> billingOptions = Options.Create(new BillingOptions
+        {
+            StripeProPriceId = "price_pro_123",
+            StripeTeamPriceId = "price_team_456",
+            StripeProMonthlyPriceId = "price_pro_monthly_111"
+            // No annual, no team monthly/annual configured
+        });
+
+        IServiceScopeFactory scopeFactory = Substitute.For<IServiceScopeFactory>();
+        IBillingApiClient billingClient = Substitute.For<IBillingApiClient>();
+        IDistributedLock distributedLock = Substitute.For<IDistributedLock>();
+        ILogger<StripeSyncService> logger = Substitute.For<ILogger<StripeSyncService>>();
+
+        StripeSyncService service = new(scopeFactory, billingClient, billingOptions, distributedLock, logger);
+
+        // Price ID that doesn't match any configured price
+        SubscriptionTier? result = service.MapPriceIdToTier("price_custom_999", "price_pro_123", "price_team_456");
+
+        await Assert.That(result).IsNull();
+    }
+
+    /// <summary>
+    /// Verifies SyncTierAsync takes no action when Stripe reports Free tier and local is also Free,
+    /// exercising the case where tier mapping succeeds but tiers already match.
+    /// </summary>
+    [Test]
+    public async Task SyncTierAsync_FreeTierBothMatch_NoTierCorrection()
+    {
+        IBillingWebhookHandler webhookHandler = Substitute.For<IBillingWebhookHandler>();
+        IServiceScope scope = Substitute.For<IServiceScope>();
+        IServiceProvider serviceProvider = Substitute.For<IServiceProvider>();
+        serviceProvider.GetService(typeof(IBillingWebhookHandler)).Returns(webhookHandler);
+        scope.ServiceProvider.Returns(serviceProvider);
+
+        (StripeSyncService service, _, _, _, _, _) = CreateSut();
+
+        TenantSubscription sub = CreateSubscription(1, tier: SubscriptionTier.Free,
+            currentPeriodEnd: DateTimeOffset.UtcNow.AddDays(15));
+
+        // Stripe reports Free tier — same as local
+        StripeSubscriptionStatus stripeStatus = new(false, "active", string.Empty, 0,
+            DateTimeOffset.UtcNow.AddDays(15), BillingTier.Free);
+
+        await service.SyncTierAsync(sub, stripeStatus, scope, "price_pro_123", "price_team_456", CancellationToken.None);
+
+        await webhookHandler.DidNotReceive().HandleTierCorrectionAsync(
+            Arg.Any<int>(), Arg.Any<SubscriptionTier>(), Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>
+    /// Verifies SyncTierAsync corrects when Stripe reports Free but local has Pro,
+    /// exercising the tier-drift correction with a Free stripe tier.
+    /// </summary>
+    [Test]
+    public async Task SyncTierAsync_FreeTierFromStripe_LocalIsPro_CorrectsTierToFree()
+    {
+        IBillingWebhookHandler webhookHandler = Substitute.For<IBillingWebhookHandler>();
+        IServiceScope scope = Substitute.For<IServiceScope>();
+        IServiceProvider serviceProvider = Substitute.For<IServiceProvider>();
+        serviceProvider.GetService(typeof(IBillingWebhookHandler)).Returns(webhookHandler);
+        scope.ServiceProvider.Returns(serviceProvider);
+
+        (StripeSyncService service, _, _, _, _, _) = CreateSut();
+
+        TenantSubscription sub = CreateSubscription(1, tier: SubscriptionTier.Pro,
+            currentPeriodEnd: DateTimeOffset.UtcNow.AddDays(15));
+
+        // Stripe reports Free but local says Pro — drift detected
+        StripeSubscriptionStatus stripeStatus = new(false, "active", string.Empty, 0,
+            DateTimeOffset.UtcNow.AddDays(15), BillingTier.Free);
+
+        await service.SyncTierAsync(sub, stripeStatus, scope, "price_pro_123", "price_team_456", CancellationToken.None);
+
+        await webhookHandler.Received(1).HandleTierCorrectionAsync(1, SubscriptionTier.Free, Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>
+    /// Verifies SyncStatusAsync takes no action when local status already matches Stripe status,
+    /// exercising the no-drift branch for PastDue status.
+    /// </summary>
+    [Test]
+    public async Task SyncStatusAsync_PastDueAlreadyMatches_NoStatusChange()
+    {
+        (StripeSyncService service, ISubscriptionRepository dbCache, IBillingApiClient _,
+            IBillingWebhookHandler _, ISubscriptionService _,
+            ILogger<StripeSyncService> _) = CreateSut();
+
+        TenantSubscription sub = CreateSubscription(1, status: SubscriptionStatus.PastDue,
+            currentPeriodEnd: DateTimeOffset.UtcNow.AddDays(5));
+
+        // Stripe also reports past_due — no drift
+        StripeSubscriptionStatus stripeStatus = new(false, "past_due", "price_pro_123", 5,
+            DateTimeOffset.UtcNow.AddDays(5), BillingTier.Pro);
+
+        await service.SyncStatusAsync(sub, stripeStatus, dbCache, CancellationToken.None);
+
+        await dbCache.DidNotReceive().SetSubscriptionActiveAsync(Arg.Any<int>(), Arg.Any<CancellationToken>());
+        await dbCache.DidNotReceive().SetSubscriptionPastDueAsync(Arg.Any<int>(), Arg.Any<CancellationToken>());
+        await dbCache.DidNotReceive().DeactivateSubscriptionAsync(Arg.Any<int>(), Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>
+    /// Verifies SyncStatusAsync takes no action when local status already matches Stripe canceled status,
+    /// exercising the no-drift branch for Canceled status.
+    /// </summary>
+    [Test]
+    public async Task SyncStatusAsync_CanceledAlreadyMatches_NoStatusChange()
+    {
+        (StripeSyncService service, ISubscriptionRepository dbCache, IBillingApiClient _,
+            IBillingWebhookHandler _, ISubscriptionService _,
+            ILogger<StripeSyncService> _) = CreateSut();
+
+        TenantSubscription sub = CreateSubscription(1, status: SubscriptionStatus.Canceled,
+            currentPeriodEnd: DateTimeOffset.UtcNow.AddDays(5));
+
+        // Stripe also reports canceled — no drift
+        StripeSubscriptionStatus stripeStatus = new(false, "canceled", "price_pro_123", 5,
+            DateTimeOffset.UtcNow.AddDays(5), BillingTier.Pro);
+
+        await service.SyncStatusAsync(sub, stripeStatus, dbCache, CancellationToken.None);
+
+        await dbCache.DidNotReceive().SetSubscriptionActiveAsync(Arg.Any<int>(), Arg.Any<CancellationToken>());
+        await dbCache.DidNotReceive().SetSubscriptionPastDueAsync(Arg.Any<int>(), Arg.Any<CancellationToken>());
+        await dbCache.DidNotReceive().DeactivateSubscriptionAsync(Arg.Any<int>(), Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>
+    /// Verifies SyncPeriodEndAsync does not update when both local and Stripe have the same period end
+    /// within one minute, exercising the "not stale" branch of the staleness check.
+    /// </summary>
+    [Test]
+    public async Task SyncPeriodEndAsync_PeriodEndWithin1Minute_IsNotStale_NoUpdate()
+    {
+        (StripeSyncService service, ISubscriptionRepository dbCache, IBillingApiClient _,
+            IBillingWebhookHandler _, ISubscriptionService _,
+            ILogger<StripeSyncService> _) = CreateSut();
+
+        DateTimeOffset localEnd = DateTimeOffset.UtcNow.AddDays(30);
+        // Stripe differs by 30 seconds — within the 1-minute staleness threshold
+        DateTimeOffset stripeEnd = localEnd.AddSeconds(30);
+
+        TenantSubscription sub = CreateSubscription(1, currentPeriodEnd: localEnd);
+        StripeSubscriptionStatus stripeStatus = new(false, "active", "price_pro_123", 5, stripeEnd, BillingTier.Pro);
+
+        await service.SyncPeriodEndAsync(sub, stripeStatus, dbCache, CancellationToken.None);
+
+        await dbCache.DidNotReceive().UpdateSubscriptionPeriodEndAsync(
+            Arg.Any<int>(), Arg.Any<DateTimeOffset>(), Arg.Any<CancellationToken>());
+    }
 }
