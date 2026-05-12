@@ -77,6 +77,7 @@ describe('getOsFilterOptions', () => {
         expect(labels).toContain('Ubuntu');
         expect(labels).toContain('Fedora');
         expect(labels).toContain('RedHat');
+        expect(labels).toContain('Debian');
     });
 
     it('should have enum key names as values for non-All options', () => {
@@ -88,12 +89,13 @@ describe('getOsFilterOptions', () => {
         expect(values).toContain('Ubuntu');
         expect(values).toContain('Fedora');
         expect(values).toContain('RedHat');
+        expect(values).toContain('Debian');
     });
 
     it('should have one more option than the number of enum members', () => {
         const options = getOsFilterOptions();
-        // 6 enum members + 1 "All OS" entry
-        expect(options.length).toBe(7);
+        // 7 enum members + 1 "All OS" entry
+        expect(options.length).toBe(8);
     });
 });
 

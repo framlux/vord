@@ -21,5 +21,5 @@ func runCmd(ctx context.Context, name string, args ...string) ([]byte, error) {
 	cmdCtx, cancel := context.WithTimeout(ctx, cmdTimeout)
 	defer cancel()
 
-	return exec.CommandContext(cmdCtx, name, args...).Output()
+	return exec.CommandContext(cmdCtx, name, args...).CombinedOutput()
 }

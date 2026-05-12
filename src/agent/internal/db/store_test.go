@@ -6,6 +6,7 @@ package db
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 )
@@ -17,7 +18,7 @@ func newTestStore(t *testing.T) *Store {
 		t.Fatalf("open test db: %v", err)
 	}
 	t.Cleanup(func() { db.Close() })
-	store := NewStore(db)
+	store := NewStore(db, 0)
 
 	return store
 }
@@ -1041,7 +1042,7 @@ func TestClose_ClosesDB(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open: %v", err)
 	}
-	store := NewStore(database)
+	store := NewStore(database, 0)
 
 	// Close the store.
 	if err := store.Close(); err != nil {
@@ -1389,5 +1390,94 @@ func TestPurgeNonces_RemovesOld(t *testing.T) {
 	}
 	if used == false {
 		t.Error("expected recent nonce to still exist")
+	}
+}
+
+// Intent: RecordNonce must reject inserts when the nonce table reaches maxNonceTableSize,
+// preventing a compromised server from exhausting disk space via unbounded nonce growth.
+func TestRecordNonce_TableSizeGuard(t *testing.T) {
+	store := newTestStore(t)
+
+	// Fill the nonce table to the maximum capacity of 10000.
+	for i := 0; i < 10000; i++ {
+		nonce := fmt.Sprintf("nonce-%d", i)
+		err := store.RecordNonce(nonce)
+		if err != nil {
+			t.Fatalf("RecordNonce %d: %v", i, err)
+		}
+	}
+
+	// The 10001st insert must be rejected with a capacity error.
+	err := store.RecordNonce("nonce-overflow")
+	if err == nil {
+		t.Fatal("expected error when nonce table is at capacity, got nil")
+	}
+
+	errMsg := err.Error()
+	if strings.Contains(errMsg, "nonce table at capacity") == false {
+		t.Errorf("expected error containing %q, got %q", "nonce table at capacity", errMsg)
+	}
+
+	// Verify the overflow nonce was not actually stored.
+	used, err := store.IsNonceUsed("nonce-overflow")
+	if err != nil {
+		t.Fatalf("IsNonceUsed after overflow: %v", err)
+	}
+	if used {
+		t.Error("expected overflow nonce to not be stored")
+	}
+}
+
+// Intent: When the queue has maxQueueSize=3 and a 4th item is enqueued, the oldest
+// pending item is evicted so only the 3 newest items remain.
+func TestEnqueueTelemetry_EvictsOldestWhenAtCapacity(t *testing.T) {
+	database, err := Open(":memory:")
+	if err != nil {
+		t.Fatalf("open test db: %v", err)
+	}
+	t.Cleanup(func() { database.Close() })
+
+	store := NewStore(database, 3)
+
+	// Enqueue 3 items to fill the queue to capacity.
+	for i := 1; i <= 3; i++ {
+		id := fmt.Sprintf("evict-%d", i)
+		enqErr := store.EnqueueTelemetry(id, TelemetryCpuUsage, fmt.Sprintf(`{"seq":%d}`, i))
+		if enqErr != nil {
+			t.Fatalf("EnqueueTelemetry %d: %v", i, enqErr)
+		}
+	}
+
+	// Enqueue a 4th item, which should evict the oldest (evict-1).
+	enqErr := store.EnqueueTelemetry("evict-4", TelemetryCpuUsage, `{"seq":4}`)
+	if enqErr != nil {
+		t.Fatalf("EnqueueTelemetry 4th item: %v", enqErr)
+	}
+
+	// Verify the pending count is still 3 (not 4).
+	count, countErr := store.CountPendingTelemetry()
+	if countErr != nil {
+		t.Fatalf("CountPendingTelemetry: %v", countErr)
+	}
+	if count != 3 {
+		t.Errorf("expected 3 pending items after eviction, got %d", count)
+	}
+
+	// Dequeue all items and verify exactly which ones remain.
+	items, deqErr := store.DequeueTelemetry(10)
+	if deqErr != nil {
+		t.Fatalf("DequeueTelemetry: %v", deqErr)
+	}
+	if len(items) != 3 {
+		t.Fatalf("expected 3 items after eviction, got %d", len(items))
+	}
+
+	// The oldest item (evict-1) should have been evicted.
+	// Remaining items should be evict-2, evict-3, evict-4 in FIFO order.
+	expectedIDs := []string{"evict-2", "evict-3", "evict-4"}
+	for i, expected := range expectedIDs {
+		if items[i].ID != expected {
+			t.Errorf("expected item[%d].ID=%q, got %q", i, expected, items[i].ID)
+		}
 	}
 }

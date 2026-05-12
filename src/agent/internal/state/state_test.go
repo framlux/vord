@@ -231,3 +231,57 @@ func TestAgentCapabilities_SetGet(t *testing.T) {
 		t.Errorf("expected AgentCapabilities=0 after reset, got %d", s.AgentCapabilities())
 	}
 }
+
+// Intent: Concurrent reads and writes to ALL getter/setter pairs must not race.
+// This test exercises every field on RuntimeState concurrently to catch data races
+// when run with -race, complementing TestConcurrentAccess which covers a subset.
+func TestConcurrentAccess_AllFields(t *testing.T) {
+	s := New()
+	var wg sync.WaitGroup
+
+	for i := 0; i < 100; i++ {
+		wg.Add(2)
+
+		// Writer goroutine: sets every field.
+		go func(n int) {
+			defer wg.Done()
+			s.SetMachineID(int64(n))
+			s.SetTenantID(int32(n))
+			s.SetApiKey("key")
+			s.SetRegistered(n%2 == 0)
+			s.SetHostname("host")
+			s.SetSerialNumber("sn")
+			s.SetCommandPollInterval(time.Duration(n) * time.Second)
+			s.SetTelemetryCollectFastInterval(time.Duration(n) * time.Second)
+			s.SetTelemetryCollectSlowInterval(time.Duration(n) * time.Minute)
+			s.SetTelemetrySendFastInterval(time.Duration(n) * time.Second)
+			s.SetTelemetrySendSlowInterval(time.Duration(n) * time.Minute)
+			s.SetServiceStatusInterval(time.Duration(n) * time.Minute)
+			s.SetConfigRefreshInterval(time.Duration(n) * time.Minute)
+			s.SetPingInterval(time.Duration(n) * time.Second)
+			s.SetAgentCapabilities(uint64(n))
+		}(i)
+
+		// Reader goroutine: reads every field.
+		go func() {
+			defer wg.Done()
+			_ = s.MachineID()
+			_ = s.TenantID()
+			_ = s.ApiKey()
+			_ = s.IsRegistered()
+			_ = s.Hostname()
+			_ = s.SerialNumber()
+			_ = s.CommandPollInterval()
+			_ = s.TelemetryCollectFastInterval()
+			_ = s.TelemetryCollectSlowInterval()
+			_ = s.TelemetrySendFastInterval()
+			_ = s.TelemetrySendSlowInterval()
+			_ = s.ServiceStatusInterval()
+			_ = s.ConfigRefreshInterval()
+			_ = s.PingInterval()
+			_ = s.AgentCapabilities()
+		}()
+	}
+
+	wg.Wait()
+}

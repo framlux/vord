@@ -448,7 +448,7 @@ func detectOSType() pb.OperatingSystemType {
 		return pb.OperatingSystemType_UBUNTU_OS
 	}
 	if strings.Contains(content, "id=debian") || strings.Contains(content, "id=\"debian\"") {
-		return pb.OperatingSystemType_UBUNTU_OS // Debian is the closest available enum
+		return pb.OperatingSystemType_DEBIAN_OS
 	}
 	if strings.Contains(content, "fedora") {
 		return pb.OperatingSystemType_FEDORA_OS

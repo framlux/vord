@@ -181,6 +181,12 @@ func collectSMARTStructured(ctx context.Context, payload *hwHealthPayload) {
 		}
 		device := fields[0]
 
+		// Only pass validated /dev/ paths to smartctl to prevent reading arbitrary files.
+		if strings.HasPrefix(device, "/dev/") == false {
+			slog.Debug("skipping non-device path from smartctl --scan", "path", device)
+			continue
+		}
+
 		smartOut, err := runCmd(ctx, "smartctl", "--json=c", "--all", device)
 		if err != nil {
 			slog.Debug("smartctl failed for device", "device", device, "error", err)

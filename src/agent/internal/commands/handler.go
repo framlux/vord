@@ -90,7 +90,7 @@ func (h *Handler) Execute(ctx context.Context, cmd Command) Result {
 		}
 	}
 
-	slog.Info("executing command", "type", cmd.Type, "params", cmd.Params)
+	slog.Debug("executing command", "type", cmd.Type, "params", cmd.Params)
 	result := executor.Execute(ctx, cmd.Params)
 
 	if result.Error != nil {

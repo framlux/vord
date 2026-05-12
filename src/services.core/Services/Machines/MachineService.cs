@@ -278,6 +278,7 @@ public sealed class MachineService : IMachineService
     private static OperatingSystems ConvertRpcOsTypeToDatabaseOsType(Framlux.FleetManagement.Grpc.AgentRegistration.OperatingSystemType input)
         => input switch
         {
+            Framlux.FleetManagement.Grpc.AgentRegistration.OperatingSystemType.DebianOs => OperatingSystems.Debian,
             Framlux.FleetManagement.Grpc.AgentRegistration.OperatingSystemType.FedoraOs => OperatingSystems.Fedora,
             Framlux.FleetManagement.Grpc.AgentRegistration.OperatingSystemType.MacOs => OperatingSystems.MacOS,
             Framlux.FleetManagement.Grpc.AgentRegistration.OperatingSystemType.RedhatOs => OperatingSystems.RedHat,

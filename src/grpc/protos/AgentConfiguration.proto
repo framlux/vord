@@ -119,6 +119,7 @@ enum ResultType {
     COMPLETED = 0;
     INITIATED = 1;
     REJECTED = 2;
+    FAILED = 3;
 }
 
 message AcknowledgeCommandResponse {

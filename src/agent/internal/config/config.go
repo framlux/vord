@@ -8,6 +8,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -99,6 +100,12 @@ func Load() (*Config, error) {
 	}
 
 	applyLayeredConfig(cfg, meta, fc, explicitFlags, flagValues)
+
+	// Warn if the registration token was passed via CLI flag, since it is visible
+	// in /proc/<pid>/cmdline to other users on the system.
+	if explicitFlags["registration-token"] {
+		slog.Warn("registration token passed via CLI flag - it is visible in the process listing; prefer TOML config or VORD_REGISTRATION_TOKEN env var")
+	}
 
 	if err := validateConfig(cfg); err != nil {
 		return nil, err

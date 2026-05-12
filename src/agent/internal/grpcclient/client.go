@@ -9,6 +9,7 @@ import (
 	"context"
 	"crypto/tls"
 	"fmt"
+	"log/slog"
 	"strconv"
 	"time"
 
@@ -44,9 +45,10 @@ func New(target string, runtimeState *state.RuntimeState, useTLS bool) (*Client,
 
 	if useTLS {
 		opts = append(opts, grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{
-			MinVersion: tls.VersionTLS12,
+			MinVersion: tls.VersionTLS13,
 		})))
 	} else {
+		slog.Warn("TLS disabled - gRPC connection is unencrypted, API key will be sent in plaintext")
 		opts = append(opts, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	}
 

@@ -36,10 +36,10 @@ const defaultMaxQueueSize = 10000
 // items in the queue. When the queue is at capacity, the oldest pending items
 // are evicted (FIFO) to make room for new telemetry. Pass 0 to use the default
 // of 10000.
-func NewStore(db *sql.DB, maxQueueSize ...int) *Store {
-	size := defaultMaxQueueSize
-	if len(maxQueueSize) > 0 && maxQueueSize[0] > 0 {
-		size = maxQueueSize[0]
+func NewStore(db *sql.DB, maxQueueSize int) *Store {
+	size := maxQueueSize
+	if size <= 0 {
+		size = defaultMaxQueueSize
 	}
 
 	return &Store{db: db, maxQueueSize: size}
@@ -285,7 +285,26 @@ func (s *Store) MarkSSHSessionQueued(id string) error {
 // InsertSSHSessionAndEnqueue atomically inserts an SSH session, enqueues the
 // telemetry item, and marks the session as queued within a single transaction.
 // This prevents inconsistent state if the agent crashes between any of these steps.
+// Queue capacity is enforced by evicting the oldest pending items when at capacity.
 func (s *Store) InsertSSHSessionAndEnqueue(session *SSHSession, telemetryID string, telemetryPayload string) error {
+	// Enforce queue capacity, matching EnqueueTelemetry behavior.
+	count, err := s.loadPendingCount()
+	if err != nil {
+		return fmt.Errorf("checking queue depth for ssh session: %w", err)
+	}
+	if count >= int64(s.maxQueueSize) {
+		evictCount := count - int64(s.maxQueueSize) + 1
+		evicted, evictErr := s.evictOldestPending(evictCount)
+		if evictErr != nil {
+			return fmt.Errorf("evicting oldest telemetry for ssh session: %w", evictErr)
+		}
+		s.pendingCount.Add(-evicted)
+		slog.Warn("telemetry queue at capacity during ssh enqueue, evicted oldest items",
+			"evicted", evicted,
+			"max_queue_size", s.maxQueueSize,
+		)
+	}
+
 	tx, err := s.db.Begin()
 	if err != nil {
 		return fmt.Errorf("begin ssh session transaction: %w", err)
@@ -606,8 +625,22 @@ func (s *Store) IsNonceUsed(nonce string) (bool, error) {
 	return count > 0, nil
 }
 
+// maxNonceTableSize is the maximum number of nonces that can be stored.
+// This prevents a compromised server from flooding the agent with commands
+// to exhaust disk space via unbounded nonce table growth.
+const maxNonceTableSize = 10000
+
 // RecordNonce stores a nonce as executed.
+// Returns an error if the nonce table has reached its maximum size.
 func (s *Store) RecordNonce(nonce string) error {
+	var count int
+	if err := s.db.QueryRow("SELECT COUNT(*) FROM command_nonces").Scan(&count); err != nil {
+		return fmt.Errorf("checking nonce table size: %w", err)
+	}
+	if count >= maxNonceTableSize {
+		return fmt.Errorf("nonce table at capacity (%d), rejecting to prevent disk exhaustion", maxNonceTableSize)
+	}
+
 	now := time.Now().UTC().Format(time.RFC3339)
 	_, err := s.db.Exec(
 		"INSERT OR IGNORE INTO command_nonces (nonce, executed_at) VALUES (?, ?)",

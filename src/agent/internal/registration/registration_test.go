@@ -86,7 +86,7 @@ func newTestStore(t *testing.T) *db.Store {
 	}
 	t.Cleanup(func() { database.Close() })
 
-	return db.NewStore(database)
+	return db.NewStore(database, 0)
 }
 
 // newTestManager creates a Manager wired to mock gRPC clients for testing.

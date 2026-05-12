@@ -31,6 +31,7 @@ const (
 	ResultType_COMPLETED ResultType = 0
 	ResultType_INITIATED ResultType = 1
 	ResultType_REJECTED  ResultType = 2
+	ResultType_FAILED    ResultType = 3
 )
 
 // Enum value maps for ResultType.
@@ -39,11 +40,13 @@ var (
 		0: "COMPLETED",
 		1: "INITIATED",
 		2: "REJECTED",
+		3: "FAILED",
 	}
 	ResultType_value = map[string]int32{
 		"COMPLETED": 0,
 		"INITIATED": 1,
 		"REJECTED":  2,
+		"FAILED":    3,
 	}
 )
 

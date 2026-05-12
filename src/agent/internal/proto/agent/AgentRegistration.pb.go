@@ -135,6 +135,7 @@ const (
 	OperatingSystemType_UBUNTU_OS  OperatingSystemType = 3
 	OperatingSystemType_FEDORA_OS  OperatingSystemType = 4
 	OperatingSystemType_REDHAT_OS  OperatingSystemType = 5
+	OperatingSystemType_DEBIAN_OS  OperatingSystemType = 6
 )
 
 // Enum value maps for OperatingSystemType.
@@ -146,6 +147,7 @@ var (
 		3: "UBUNTU_OS",
 		4: "FEDORA_OS",
 		5: "REDHAT_OS",
+		6: "DEBIAN_OS",
 	}
 	OperatingSystemType_value = map[string]int32{
 		"UNKNOWN_OS": 0,
@@ -154,6 +156,7 @@ var (
 		"UBUNTU_OS":  3,
 		"FEDORA_OS":  4,
 		"REDHAT_OS":  5,
+		"DEBIAN_OS":  6,
 	}
 )
 

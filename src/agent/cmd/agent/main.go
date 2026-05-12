@@ -18,7 +18,6 @@ import (
 	"github.com/framlux/vord/internal/collector"
 	"github.com/framlux/vord/internal/commands"
 	"github.com/framlux/vord/internal/config"
-	"github.com/framlux/vord/internal/crypto"
 	"github.com/framlux/vord/internal/db"
 	"github.com/framlux/vord/internal/grpcclient"
 	pb "github.com/framlux/vord/internal/proto/agent"
@@ -81,7 +80,7 @@ func main() {
 	// Build agent capabilities bitmask from configuration.
 	var capabilities uint64
 	if cfg.AllowRemoteCommands {
-		capabilities |= 1 // bit 0 = remote commands enabled
+		capabilities |= state.CapabilityRemoteCommands
 	}
 	runtimeState.SetAgentCapabilities(capabilities)
 
@@ -117,10 +116,13 @@ func main() {
 		slog.Warn("failed to fetch initial configuration, using defaults", "error", err)
 	}
 
-	// Initialize command handler if remote commands are enabled.
-	var cmdHandler *commands.Handler
+	// Initialize command processor if remote commands are enabled.
+	var cmdProcessor *commands.Processor
 	if cfg.AllowRemoteCommands {
-		cmdHandler = commands.NewHandler()
+		cmdHandler := commands.NewHandler()
+		nonceAdapter := &storeNonceAdapter{store: store}
+		ackAdapter := &grpcAckAdapter{client: grpcClient.Configuration}
+		cmdProcessor = commands.NewProcessor(cmdHandler, nonceAdapter, ackAdapter, destructiveCommandDelay)
 	}
 
 	// Register independent collectors. Grouped collectors (CpuUsage, MemUsage,
@@ -165,7 +167,7 @@ func main() {
 		go func() {
 			defer wg.Done()
 			defer recoverPanic("command-poll")
-			runCommandPoll(ctx, grpcClient.Configuration, cmdHandler, runtimeState, store)
+			runCommandPoll(ctx, grpcClient.Configuration, cmdProcessor, runtimeState)
 		}()
 	} else {
 		slog.Info("remote command polling disabled by configuration")
@@ -345,7 +347,7 @@ func runConfigRefresh(ctx context.Context, reg *registration.Manager, runtimeSta
 	}
 }
 
-func runCommandPoll(ctx context.Context, cfgClient pb.ConfigurationClient, handler *commands.Handler, rs *state.RuntimeState, store *db.Store) {
+func runCommandPoll(ctx context.Context, cfgClient pb.ConfigurationClient, processor *commands.Processor, rs *state.RuntimeState) {
 	interval := rs.CommandPollInterval()
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
@@ -362,7 +364,20 @@ func runCommandPoll(ctx context.Context, cfgClient pb.ConfigurationClient, handl
 				slog.Debug("command poll failed", "error", err)
 			} else {
 				for _, cmd := range resp.Commands {
-					processCommand(ctx, cfgClient, handler, rs, store, cmd)
+					processor.Process(ctx, commands.PendingCommand{
+						ID:               cmd.Id,
+						Type:             cmd.Type,
+						Params:           cmd.Params,
+						CanonicalPayload: cmd.CanonicalPayload,
+						Signature:        cmd.Signature,
+						SigningKeyID:     cmd.SigningKeyId,
+						Timestamp:        cmd.Timestamp,
+						ExpiresAt:        cmd.ExpiresAt,
+						Nonce:            cmd.Nonce,
+						UserID:           cmd.UserId,
+						TenantID:         cmd.TenantId,
+						MachineID:        cmd.MachineId,
+					}, rs.TenantID(), rs.MachineID())
 				}
 			}
 
@@ -374,129 +389,48 @@ func runCommandPoll(ctx context.Context, cfgClient pb.ConfigurationClient, handl
 	}
 }
 
-func processCommand(ctx context.Context, cfgClient pb.ConfigurationClient, handler *commands.Handler, rs *state.RuntimeState, store *db.Store, cmd *pb.AgentCommand) {
-	cmdType := commands.CommandType(cmd.Type)
-
-	// 0a. Validate the command type before any further processing.
-	if cmdType.IsValid() == false {
-		slog.Error("unknown command type, rejecting", "command_id", cmd.Id, "type", cmd.Type)
-		acknowledgeCommand(ctx, cfgClient, rs, cmd.Id, false, -1, "", "", "unknown command type", pb.ResultType_REJECTED)
-
-		return
-	}
-
-	// 0b. Verify command ownership: tenant and machine must match agent identity.
-	if cmd.TenantId != rs.TenantID() {
-		slog.Error("command tenant mismatch, rejecting", "command_id", cmd.Id, "cmd_tenant", cmd.TenantId, "agent_tenant", rs.TenantID())
-		acknowledgeCommand(ctx, cfgClient, rs, cmd.Id, false, -1, "", "", "tenant mismatch", pb.ResultType_REJECTED)
-
-		return
-	}
-	if cmd.MachineId != rs.MachineID() {
-		slog.Error("command machine mismatch, rejecting", "command_id", cmd.Id, "cmd_machine", cmd.MachineId, "agent_machine", rs.MachineID())
-		acknowledgeCommand(ctx, cfgClient, rs, cmd.Id, false, -1, "", "", "machine mismatch", pb.ResultType_REJECTED)
-
-		return
-	}
-
-	// 1. Look up signing key.
-	key, err := store.GetSigningKey(cmd.SigningKeyId)
-	if err != nil {
-		slog.Error("unknown signing key, rejecting command", "command_id", cmd.Id, "key_id", cmd.SigningKeyId)
-		acknowledgeCommand(ctx, cfgClient, rs, cmd.Id, false, -1, "", "", "unknown signing key", pb.ResultType_REJECTED)
-
-		return
-	}
-
-	// 2. Verify Ed25519 signature.
-	canonicalPayload := []byte(cmd.CanonicalPayload)
-	if crypto.VerifySignature(key.PublicKey, canonicalPayload, cmd.Signature) == false {
-		slog.Error("invalid signature, rejecting command", "command_id", cmd.Id)
-		acknowledgeCommand(ctx, cfgClient, rs, cmd.Id, false, -1, "", "", "invalid signature", pb.ResultType_REJECTED)
-
-		return
-	}
-
-	// 3. Validate timestamps.
-	if err := crypto.ValidateTimestamps(cmd.Timestamp, cmd.ExpiresAt, 5*time.Minute); err != nil {
-		slog.Error("timestamp validation failed, rejecting command", "command_id", cmd.Id, "error", err)
-		acknowledgeCommand(ctx, cfgClient, rs, cmd.Id, false, -1, "", "", err.Error(), pb.ResultType_REJECTED)
-
-		return
-	}
-
-	// 4. Check nonce.
-	used, err := store.IsNonceUsed(cmd.Nonce)
-	if err != nil {
-		slog.Error("nonce check failed", "command_id", cmd.Id, "error", err)
-		acknowledgeCommand(ctx, cfgClient, rs, cmd.Id, false, -1, "", "", "nonce check error", pb.ResultType_REJECTED)
-
-		return
-	}
-	if used {
-		slog.Warn("nonce already used, rejecting replay", "command_id", cmd.Id, "nonce", cmd.Nonce)
-		acknowledgeCommand(ctx, cfgClient, rs, cmd.Id, false, -1, "", "", "nonce already used", pb.ResultType_REJECTED)
-
-		return
-	}
-
-	// 5. Record nonce — reject the command if recording fails to prevent replay.
-	if err := store.RecordNonce(cmd.Nonce); err != nil {
-		slog.Error("failed to record nonce, rejecting command", "command_id", cmd.Id, "error", err)
-		acknowledgeCommand(ctx, cfgClient, rs, cmd.Id, false, -1, "", "", "nonce recording failed", pb.ResultType_REJECTED)
-
-		return
-	}
-
-	// 6. Execute command, handling destructive commands with a delay.
-	if cmdType.IsDestructive() {
-		// ACK with Initiated before executing destructive command.
-		acknowledgeCommand(ctx, cfgClient, rs, cmd.Id, true, 0, "", "", "will execute in 10s", pb.ResultType_INITIATED)
-
-		// Wait to allow ACK to flush to server, but respect context cancellation.
-		select {
-		case <-time.After(destructiveCommandDelay):
-		case <-ctx.Done():
-			return
-		}
-
-		result := handler.Execute(ctx, commands.Command{
-			Type:   cmdType,
-			Params: cmd.Params,
-		})
-		if result.Error != nil {
-			slog.Error("destructive command failed", "command_id", cmd.Id, "type", cmd.Type, "error", result.Error)
-		} else {
-			slog.Info("destructive command executed", "command_id", cmd.Id, "type", cmd.Type, "message", result.Message)
-		}
-	} else {
-		// Execute immediately and ACK with full result.
-		result := handler.Execute(ctx, commands.Command{
-			Type:   cmdType,
-			Params: cmd.Params,
-		})
-
-		acknowledgeCommand(ctx, cfgClient, rs, cmd.Id, result.Success, 0, "", "", result.Message, pb.ResultType_COMPLETED)
-
-		if result.Error != nil {
-			slog.Error("command execution failed", "command_id", cmd.Id, "type", cmd.Type, "error", result.Error)
-		} else {
-			slog.Info("command executed", "command_id", cmd.Id, "type", cmd.Type, "message", result.Message)
-		}
-	}
+// storeNonceAdapter adapts *db.Store to the commands.NonceStore interface.
+type storeNonceAdapter struct {
+	store *db.Store
 }
 
-func acknowledgeCommand(ctx context.Context, cfgClient pb.ConfigurationClient, rs *state.RuntimeState, commandID string, success bool, exitCode int32, stdout string, stderr string, message string, resultType pb.ResultType) {
-	_, err := cfgClient.AcknowledgeCommand(ctx, &pb.AcknowledgeCommandRequest{
+func (a *storeNonceAdapter) IsNonceUsed(nonce string) (bool, error) {
+	return a.store.IsNonceUsed(nonce)
+}
+
+func (a *storeNonceAdapter) RecordNonce(nonce string) error {
+	return a.store.RecordNonce(nonce)
+}
+
+func (a *storeNonceAdapter) GetSigningKey(keyID int32) (*commands.SigningKey, error) {
+	k, err := a.store.GetSigningKey(keyID)
+	if err != nil {
+		return nil, err
+	}
+
+	return &commands.SigningKey{
+		KeyID:     k.KeyID,
+		UserID:    k.UserID,
+		PublicKey: k.PublicKey,
+	}, nil
+}
+
+// grpcAckAdapter adapts the gRPC ConfigurationClient to the commands.CommandAcknowledger interface.
+type grpcAckAdapter struct {
+	client pb.ConfigurationClient
+}
+
+func (a *grpcAckAdapter) Acknowledge(ctx context.Context, commandID string, machineID int64, success bool, exitCode int32, stdout string, stderr string, message string, resultType int32) {
+	_, err := a.client.AcknowledgeCommand(ctx, &pb.AcknowledgeCommandRequest{
 		CommandId: commandID,
-		MachineId: rs.MachineID(),
+		MachineId: machineID,
 		Result: &pb.CommandResult{
 			Success:    success,
 			ExitCode:   exitCode,
 			Stdout:     stdout,
 			Stderr:     stderr,
 			Message:    message,
-			ResultType: resultType,
+			ResultType: pb.ResultType(resultType),
 		},
 	})
 	if err != nil {

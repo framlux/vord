@@ -38,4 +38,9 @@ public enum OperatingSystems : byte
     /// Represents the Red Hat operating system.
     /// </summary>
     RedHat = 5,
+
+    /// <summary>
+    /// Represents the Debian operating system.
+    /// </summary>
+    Debian = 6,
 }

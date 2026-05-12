@@ -34,6 +34,7 @@ enum OperatingSystemType {
     UBUNTU_OS = 3;
     FEDORA_OS = 4;
     REDHAT_OS = 5;
+    DEBIAN_OS = 6;
 }
 
 message SystemRegistrationStatusRequest {

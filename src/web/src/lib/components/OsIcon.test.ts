@@ -34,6 +34,11 @@ describe('OsIcon', () => {
         expect(screen.getByText('Red Hat')).toBeInTheDocument();
     });
 
+    it('should render "Debian" for Debian enum value', () => {
+        render(OsIcon, { props: { os: OperatingSystem.Debian } });
+        expect(screen.getByText('Debian')).toBeInTheDocument();
+    });
+
     it('should render "Unknown" for Unknown enum value', () => {
         render(OsIcon, { props: { os: OperatingSystem.Unknown } });
         expect(screen.getByText('Unknown')).toBeInTheDocument();

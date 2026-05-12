@@ -101,7 +101,7 @@ public sealed class RegistrationService : Registration.RegistrationBase
         {
             throw new RpcException(new Status(StatusCode.InvalidArgument, "Invalid machine type"));
         }
-        else if ((request.Os < FleetManagement.Grpc.AgentRegistration.OperatingSystemType.UnknownOs) || (request.Os > FleetManagement.Grpc.AgentRegistration.OperatingSystemType.RedhatOs))
+        else if ((request.Os < FleetManagement.Grpc.AgentRegistration.OperatingSystemType.UnknownOs) || (request.Os > FleetManagement.Grpc.AgentRegistration.OperatingSystemType.DebianOs))
         {
             throw new RpcException(new Status(StatusCode.InvalidArgument, "Invalid operating system"));
         }

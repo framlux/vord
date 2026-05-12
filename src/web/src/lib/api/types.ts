@@ -27,7 +27,8 @@ export enum OperatingSystem {
 	MacOS = 2,
 	Ubuntu = 3,
 	Fedora = 4,
-	RedHat = 5
+	RedHat = 5,
+	Debian = 6
 }
 
 export enum MachineType {

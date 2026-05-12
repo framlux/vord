@@ -628,3 +628,305 @@ func TestParseVersion_ValidInput(t *testing.T) {
 		t.Errorf("expected 9.0.0, got %d.%d.%d", major, minor, patch)
 	}
 }
+
+// --- cpuBrandFromData correctness ---
+
+// Intent: cpuBrandFromData extracts the correct CPU model name from realistic /proc/cpuinfo data.
+func TestCpuBrandFromData_RealisticInput(t *testing.T) {
+	input := "processor\t: 0\n" +
+		"vendor_id\t: GenuineIntel\n" +
+		"cpu family\t: 6\n" +
+		"model\t\t: 85\n" +
+		"model name\t: Intel(R) Xeon(R) Platinum 8275CL CPU @ 3.00GHz\n" +
+		"stepping\t: 7\n" +
+		"cpu MHz\t\t: 3000.000\n" +
+		"cache size\t: 36608 KB\n" +
+		"\n" +
+		"processor\t: 1\n" +
+		"vendor_id\t: GenuineIntel\n" +
+		"model name\t: Intel(R) Xeon(R) Platinum 8275CL CPU @ 3.00GHz\n" +
+		"\n"
+
+	result := cpuBrandFromData(input)
+	if result != "Intel(R) Xeon(R) Platinum 8275CL CPU @ 3.00GHz" {
+		t.Errorf("expected Intel Xeon brand string, got %q", result)
+	}
+}
+
+// Intent: cpuBrandFromData returns an AMD brand string correctly.
+func TestCpuBrandFromData_AMDProcessor(t *testing.T) {
+	input := "processor\t: 0\n" +
+		"vendor_id\t: AuthenticAMD\n" +
+		"model name\t: AMD EPYC 7R13 48-Core Processor\n" +
+		"\n"
+
+	result := cpuBrandFromData(input)
+	if result != "AMD EPYC 7R13 48-Core Processor" {
+		t.Errorf("expected AMD EPYC brand string, got %q", result)
+	}
+}
+
+// Intent: cpuBrandFromData returns empty string when no model name line is present.
+func TestCpuBrandFromData_EmptyInput(t *testing.T) {
+	result := cpuBrandFromData("")
+	if result != "" {
+		t.Errorf("expected empty string for empty input, got %q", result)
+	}
+}
+
+// Intent: cpuBrandFromData returns empty string when cpuinfo has no model name field.
+func TestCpuBrandFromData_NoModelNameField(t *testing.T) {
+	input := "processor\t: 0\n" +
+		"vendor_id\t: GenuineIntel\n" +
+		"cpu family\t: 6\n" +
+		"\n"
+
+	result := cpuBrandFromData(input)
+	if result != "" {
+		t.Errorf("expected empty string when model name is absent, got %q", result)
+	}
+}
+
+// --- countPhysicalCoresFromData correctness ---
+
+// Intent: countPhysicalCoresFromData counts unique physical cores on a dual-socket system.
+func TestCountPhysicalCoresFromData_DualSocket(t *testing.T) {
+	// 2 physical sockets, each with 2 cores (4 logical processors via HT).
+	input := "processor\t: 0\nphysical id\t: 0\ncore id\t\t: 0\n\n" +
+		"processor\t: 1\nphysical id\t: 0\ncore id\t\t: 1\n\n" +
+		"processor\t: 2\nphysical id\t: 1\ncore id\t\t: 0\n\n" +
+		"processor\t: 3\nphysical id\t: 1\ncore id\t\t: 1\n\n"
+
+	result := countPhysicalCoresFromData(input)
+	if result != 4 {
+		t.Errorf("expected 4 physical cores on dual-socket system, got %d", result)
+	}
+}
+
+// Intent: countPhysicalCoresFromData deduplicates hyperthreaded siblings sharing the same core.
+func TestCountPhysicalCoresFromData_HyperThreaded(t *testing.T) {
+	// 1 socket, 2 cores, 4 threads (HT siblings share physical id + core id).
+	input := "processor\t: 0\nphysical id\t: 0\ncore id\t\t: 0\n\n" +
+		"processor\t: 1\nphysical id\t: 0\ncore id\t\t: 1\n\n" +
+		"processor\t: 2\nphysical id\t: 0\ncore id\t\t: 0\n\n" +
+		"processor\t: 3\nphysical id\t: 0\ncore id\t\t: 1\n\n"
+
+	result := countPhysicalCoresFromData(input)
+	if result != 2 {
+		t.Errorf("expected 2 physical cores with HT, got %d", result)
+	}
+}
+
+// Intent: countPhysicalCoresFromData returns 0 for empty input.
+func TestCountPhysicalCoresFromData_EmptyInput(t *testing.T) {
+	result := countPhysicalCoresFromData("")
+	if result != 0 {
+		t.Errorf("expected 0 for empty input, got %d", result)
+	}
+}
+
+// Intent: countPhysicalCoresFromData returns 0 when no physical id lines exist.
+func TestCountPhysicalCoresFromData_NoPhysicalID(t *testing.T) {
+	input := "processor\t: 0\nmodel name\t: ARM Cortex-A72\n\n"
+
+	result := countPhysicalCoresFromData(input)
+	if result != 0 {
+		t.Errorf("expected 0 when no physical id lines are present, got %d", result)
+	}
+}
+
+// Intent: countPhysicalCoresFromData handles input that does not end with a blank line.
+func TestCountPhysicalCoresFromData_NoTrailingBlankLine(t *testing.T) {
+	input := "processor\t: 0\nphysical id\t: 0\ncore id\t\t: 0"
+
+	result := countPhysicalCoresFromData(input)
+	if result != 1 {
+		t.Errorf("expected 1 core when input lacks trailing blank line, got %d", result)
+	}
+}
+
+// --- uptimeSecondsFromData correctness ---
+
+// Intent: uptimeSecondsFromData extracts the first field as whole seconds from typical /proc/uptime.
+func TestUptimeSecondsFromData_RealisticInput(t *testing.T) {
+	input := "123456.78 67890.12"
+
+	result := uptimeSecondsFromData(input)
+	if result != 123456 {
+		t.Errorf("expected 123456 seconds, got %d", result)
+	}
+}
+
+// Intent: uptimeSecondsFromData truncates fractional seconds (no rounding).
+func TestUptimeSecondsFromData_FractionalTruncation(t *testing.T) {
+	input := "0.99 0.50"
+
+	result := uptimeSecondsFromData(input)
+	if result != 0 {
+		t.Errorf("expected 0 (truncated from 0.99), got %d", result)
+	}
+}
+
+// Intent: uptimeSecondsFromData returns 0 for empty input.
+func TestUptimeSecondsFromData_EmptyInput(t *testing.T) {
+	result := uptimeSecondsFromData("")
+	if result != 0 {
+		t.Errorf("expected 0 for empty input, got %d", result)
+	}
+}
+
+// Intent: uptimeSecondsFromData returns 0 for non-numeric input.
+func TestUptimeSecondsFromData_NonNumeric(t *testing.T) {
+	result := uptimeSecondsFromData("not_a_number idle_time")
+	if result != 0 {
+		t.Errorf("expected 0 for non-numeric input, got %d", result)
+	}
+}
+
+// Intent: uptimeSecondsFromData handles large uptime values (server running for years).
+func TestUptimeSecondsFromData_LargeValue(t *testing.T) {
+	// Approximately 3 years of uptime.
+	input := "94608000.42 47304000.21"
+
+	result := uptimeSecondsFromData(input)
+	if result != 94608000 {
+		t.Errorf("expected 94608000 for multi-year uptime, got %d", result)
+	}
+}
+
+// --- parseGlobalIPAddresses correctness ---
+
+// Intent: parseGlobalIPAddresses extracts IPv4 and IPv6 addresses from realistic ip command output.
+func TestParseGlobalIPAddresses_MixedIPv4IPv6(t *testing.T) {
+	input := "2: eth0    inet 10.0.1.10/24 brd 10.0.1.255 scope global eth0\\       valid_lft forever preferred_lft forever\n" +
+		"2: eth0    inet6 2001:db8::1/64 scope global \\       valid_lft forever preferred_lft forever\n"
+
+	result := parseGlobalIPAddresses(input)
+	if len(result) != 2 {
+		t.Fatalf("expected 2 IPs, got %d", len(result))
+	}
+	if result[0] != "10.0.1.10" {
+		t.Errorf("expected first IP to be 10.0.1.10, got %q", result[0])
+	}
+	if result[1] != "2001:db8::1" {
+		t.Errorf("expected second IP to be 2001:db8::1, got %q", result[1])
+	}
+}
+
+// Intent: parseGlobalIPAddresses handles multiple interfaces.
+func TestParseGlobalIPAddresses_MultipleInterfaces(t *testing.T) {
+	input := "2: eth0    inet 192.168.1.100/24 brd 192.168.1.255 scope global eth0\n" +
+		"3: wlan0    inet 172.16.0.50/16 brd 172.16.255.255 scope global wlan0\n"
+
+	result := parseGlobalIPAddresses(input)
+	if len(result) != 2 {
+		t.Fatalf("expected 2 IPs, got %d", len(result))
+	}
+	if result[0] != "192.168.1.100" {
+		t.Errorf("expected 192.168.1.100, got %q", result[0])
+	}
+	if result[1] != "172.16.0.50" {
+		t.Errorf("expected 172.16.0.50, got %q", result[1])
+	}
+}
+
+// Intent: parseGlobalIPAddresses returns empty slice for empty input.
+func TestParseGlobalIPAddresses_EmptyInput(t *testing.T) {
+	result := parseGlobalIPAddresses("")
+	if len(result) != 0 {
+		t.Errorf("expected empty slice for empty input, got %d items", len(result))
+	}
+}
+
+// Intent: parseGlobalIPAddresses skips lines with fewer than 4 fields.
+func TestParseGlobalIPAddresses_ShortLines(t *testing.T) {
+	input := "2: eth0\n" +
+		"3: wlan0 inet\n"
+
+	result := parseGlobalIPAddresses(input)
+	if len(result) != 0 {
+		t.Errorf("expected empty slice for short lines, got %d items", len(result))
+	}
+}
+
+// --- parseMountsData correctness ---
+
+// Intent: parseMountsData extracts real filesystem mounts and filters pseudo-filesystems.
+func TestParseMountsData_RealisticMounts(t *testing.T) {
+	input := "sysfs /sys sysfs rw,nosuid,nodev,noexec,relatime 0 0\n" +
+		"proc /proc proc rw,nosuid,nodev,noexec,relatime 0 0\n" +
+		"/dev/sda1 / ext4 rw,relatime 0 0\n" +
+		"/dev/sdb1 /data xfs rw,relatime 0 0\n" +
+		"tmpfs /tmp tmpfs rw,nosuid,nodev 0 0\n"
+
+	result := parseMountsData(input)
+	if len(result) != 2 {
+		t.Fatalf("expected 2 real mount entries (sysfs/proc/tmpfs filtered), got %d", len(result))
+	}
+
+	if result[0].device != "/dev/sda1" {
+		t.Errorf("expected first device /dev/sda1, got %q", result[0].device)
+	}
+	if result[0].mountPoint != "/" {
+		t.Errorf("expected first mount point /, got %q", result[0].mountPoint)
+	}
+	if result[0].fsType != "ext4" {
+		t.Errorf("expected first fsType ext4, got %q", result[0].fsType)
+	}
+
+	if result[1].device != "/dev/sdb1" {
+		t.Errorf("expected second device /dev/sdb1, got %q", result[1].device)
+	}
+	if result[1].mountPoint != "/data" {
+		t.Errorf("expected second mount point /data, got %q", result[1].mountPoint)
+	}
+	if result[1].fsType != "xfs" {
+		t.Errorf("expected second fsType xfs, got %q", result[1].fsType)
+	}
+}
+
+// Intent: parseMountsData deduplicates by mount point, keeping the first occurrence.
+func TestParseMountsData_DeduplicatesMountPoints(t *testing.T) {
+	input := "/dev/sda1 /mnt ext4 rw 0 0\n" +
+		"/dev/sdb1 /mnt xfs rw 0 0\n"
+
+	result := parseMountsData(input)
+	if len(result) != 1 {
+		t.Fatalf("expected 1 entry after deduplication, got %d", len(result))
+	}
+	if result[0].device != "/dev/sda1" {
+		t.Errorf("expected first device to win deduplication, got %q", result[0].device)
+	}
+}
+
+// Intent: parseMountsData returns empty slice for empty input.
+func TestParseMountsData_EmptyInput(t *testing.T) {
+	result := parseMountsData("")
+	if len(result) != 0 {
+		t.Errorf("expected empty slice for empty input, got %d entries", len(result))
+	}
+}
+
+// Intent: parseMountsData skips lines with fewer than 3 fields.
+func TestParseMountsData_InsufficientFields(t *testing.T) {
+	input := "/dev/sda1 /\n" +
+		"/dev/sdb1\n"
+
+	result := parseMountsData(input)
+	if len(result) != 0 {
+		t.Errorf("expected empty slice for lines with <3 fields, got %d entries", len(result))
+	}
+}
+
+// Intent: parseMountsData correctly handles NFS and network filesystem entries.
+func TestParseMountsData_NFSMount(t *testing.T) {
+	input := "server:/export/data /mnt/nfs nfs4 rw,relatime 0 0\n"
+
+	result := parseMountsData(input)
+	if len(result) != 1 {
+		t.Fatalf("expected 1 NFS mount entry, got %d", len(result))
+	}
+	if result[0].fsType != "nfs4" {
+		t.Errorf("expected fsType nfs4, got %q", result[0].fsType)
+	}
+}

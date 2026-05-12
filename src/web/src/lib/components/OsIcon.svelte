@@ -14,6 +14,7 @@
 		[OperatingSystem.Ubuntu]: 'Ubuntu',
 		[OperatingSystem.Fedora]: 'Fedora',
 		[OperatingSystem.RedHat]: 'Red Hat',
+		[OperatingSystem.Debian]: 'Debian',
 		[OperatingSystem.Unknown]: 'Unknown'
 	};
 </script>

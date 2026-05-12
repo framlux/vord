@@ -1003,6 +1003,47 @@ public class MachineServiceTests
     }
 
     [Test]
+    public async Task RegisterSystem_DebianOs_ConvertsCorrectly()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        RegistrationToken token = await SeedValidRegistrationToken(dbFactory);
+
+        IMachineRepository machineRepo = Substitute.For<IMachineRepository>();
+        machineRepo.DoesMachineExistAsync(
+            Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns(false);
+
+        Machine createdMachine = TestDataBuilder.BuildMachine(tenantId: token.TenantId, registrationTokenId: token.Id);
+        createdMachine.Id = 305;
+        machineRepo.CreateMachineWithKeyAsync(Arg.Any<Machine>(), Arg.Any<int?>(), Arg.Any<CancellationToken>())
+            .Returns((createdMachine, "debian-key"));
+
+        TestServiceScopeFactory scopeFactory = CreateScopeFactory(dbFactory, machineRepo);
+        ILogger<MachineService> logger = new NullLogger<MachineService>();
+        IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
+        redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(Substitute.For<IDatabase>());
+        IBillingApiClient billingApiClient = Substitute.For<IBillingApiClient>();
+        MachineService service = new(scopeFactory, logger, redis, billingApiClient);
+
+        RegisterSystemRequest request = new()
+        {
+            SerialNumber = "SN-DEBIAN",
+            SystemId = "SID-DEBIAN",
+            Hostname = "debian-host",
+            MachineType = Grpc.AgentRegistration.MachineType.BareMetalServerType,
+            Os = OperatingSystemType.DebianOs,
+            RegistrationToken = TestTokenValue,
+        };
+
+        await service.RegisterSystemAsync(request, CancellationToken.None);
+
+        await machineRepo.Received(1).CreateMachineWithKeyAsync(
+            Arg.Is<Machine>(m => m.MachineType == MachineTypes.BareMetalServer && m.OperatingSystem == OperatingSystems.Debian),
+            Arg.Any<int?>(),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Test]
     public async Task RegisterSystem_MachineLimit_ReturnsError()
     {
         using TestDatabaseFactory dbFactory = new();

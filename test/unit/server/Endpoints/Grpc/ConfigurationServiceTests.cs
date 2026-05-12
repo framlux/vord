@@ -363,6 +363,34 @@ public sealed class ConfigurationServiceTests
     }
 
     [Test]
+    public async Task AcknowledgeCommand_FailedResultType_MapsFailed()
+    {
+        IRemoteCommandRepository remoteCommandRepo = Substitute.For<IRemoteCommandRepository>();
+        remoteCommandRepo.UpdateRemoteCommandStatusAsync(
+            Arg.Any<string>(), Arg.Any<long>(), Arg.Any<Database.Enums.RemoteCommandStatus>(),
+            Arg.Any<int?>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<string?>(),
+            Arg.Any<CancellationToken>())
+            .Returns(Task.CompletedTask);
+
+        ConfigurationService service = CreateService(remoteCommandRepo: remoteCommandRepo);
+        ServerCallContext context = CreateAuthenticatedContext(1);
+
+        AcknowledgeCommandResponse response = await service.AcknowledgeCommand(
+            new AcknowledgeCommandRequest
+            {
+                MachineId = 1,
+                CommandId = "cmd-failed-type",
+                Result = new CommandResult { Success = false, ExitCode = 1, Message = "reboot failed", ResultType = Framlux.FleetManagement.Grpc.AgentConfiguration.ResultType.Failed }
+            }, context);
+
+        await Assert.That(response.Success).IsTrue();
+        await remoteCommandRepo.Received(1).UpdateRemoteCommandStatusAsync(
+            "cmd-failed-type", 1L, Database.Enums.RemoteCommandStatus.Failed,
+            Arg.Any<int?>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<string?>(),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Test]
     public async Task AcknowledgeCommand_NullResult_MapsFailed()
     {
         IRemoteCommandRepository remoteCommandRepo = Substitute.For<IRemoteCommandRepository>();

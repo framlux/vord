@@ -15,6 +15,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/framlux/vord/internal/db"
@@ -157,30 +158,41 @@ func (c *SSHSessionsCollector) collectFromAuthLog(ctx context.Context, store *db
 	}
 
 	type authLogState struct {
-		Offset int64 `json:"offset"`
+		Offset int64  `json:"offset"`
+		Inode  uint64 `json:"inode,omitempty"`
 	}
 
 	var offset int64
+	var savedInode uint64
 	if state != nil && state.StateJSON != nil {
 		var als authLogState
 		if err := json.Unmarshal([]byte(*state.StateJSON), &als); err != nil {
 			slog.Debug("failed to unmarshal auth.log offset state", "error", err)
 		} else {
 			offset = als.Offset
+			savedInode = als.Inode
 		}
 	}
 
-	// Reset offset if the file has been rotated (new file is shorter than saved offset).
+	// Detect log rotation by checking both file size and inode number.
+	// Size-only detection misses rotations where the new file grows past the old offset.
 	if offset > 0 {
 		fi, err := os.Stat(logPath)
-		if err == nil && fi.Size() < offset {
-			slog.Info("auth log rotated, resetting offset", "old_offset", offset, "file_size", fi.Size())
-			offset = 0
+		if err == nil {
+			currentInode := fileInode(fi)
+			rotated := fi.Size() < offset || (savedInode > 0 && currentInode != savedInode)
+			if rotated {
+				slog.Info("auth log rotated, resetting offset",
+					"old_offset", offset, "file_size", fi.Size(),
+					"old_inode", savedInode, "new_inode", currentInode,
+				)
+				offset = 0
+			}
 		}
 	}
 
 	// Use tail to read new lines from the auth log.
-	output, err := runCmd(ctx, "tail", "-n", "+0", "-c", fmt.Sprintf("+%d", offset), logPath)
+	output, err := runCmd(ctx, "tail", "-c", fmt.Sprintf("+%d", offset), logPath)
 	if err != nil {
 		slog.Debug("reading auth log failed", "error", err, "path", logPath)
 		return nil
@@ -204,12 +216,26 @@ func (c *SSHSessionsCollector) collectFromAuthLog(ctx context.Context, store *db
 		}
 	}
 
-	// Save offset.
+	// Save offset and current inode for rotation detection.
 	newOffset := offset + bytesRead
-	als := authLogState{Offset: newOffset}
+	var currentInode uint64
+	if fi, err := os.Stat(logPath); err == nil {
+		currentInode = fileInode(fi)
+	}
+	als := authLogState{Offset: newOffset, Inode: currentInode}
 	stateJSON, _ := json.Marshal(als)
 	stateStr := string(stateJSON)
+
 	return store.SaveCollectorState(c.Name(), &stateStr)
+}
+
+// fileInode extracts the inode number from a FileInfo.
+func fileInode(fi os.FileInfo) uint64 {
+	if stat, ok := fi.Sys().(*syscall.Stat_t); ok {
+		return stat.Ino
+	}
+
+	return 0
 }
 
 func parseSSHLine(line string) []sshSessionPayload {

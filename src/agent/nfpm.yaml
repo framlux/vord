@@ -21,12 +21,12 @@ contents:
   - dst: /etc/framlux
     type: dir
     file_info:
-      mode: 0755
+      mode: 0700
 
   - dst: /var/lib/vord-agent
     type: dir
     file_info:
-      mode: 0755
+      mode: 0700
 
 scripts:
   postinstall: ./packaging/postinstall.sh

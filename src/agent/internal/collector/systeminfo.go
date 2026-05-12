@@ -9,10 +9,8 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"strings"
-	"time"
 )
 
 type systemInfoPayload struct {
@@ -147,12 +145,8 @@ func parseGlobalIPAddresses(data string) []string {
 	return ips
 }
 
-func globalIPAddresses(parentCtx context.Context) []string {
-	ctx, cancel := context.WithTimeout(parentCtx, 10*time.Second)
-	defer cancel()
-
-	// Collect both IPv4 and IPv6 addresses by omitting the -4 flag.
-	out, err := exec.CommandContext(ctx, "ip", "-o", "addr", "show", "scope", "global").Output()
+func globalIPAddresses(ctx context.Context) []string {
+	out, err := runCmd(ctx, "ip", "-o", "addr", "show", "scope", "global")
 	if err != nil {
 		return nil
 	}
@@ -166,15 +160,13 @@ func isPlaceholderSerial(serial string) bool {
 	return serial == "" || serial == "Not Specified" || serial == "To Be Filled By O.E.M."
 }
 
-func hardwareSerial(parentCtx context.Context) string {
+func hardwareSerial(ctx context.Context) string {
 	serial := readDMI("product_serial")
 	if isPlaceholderSerial(serial) == false {
 		return serial
 	}
-	// Fallback to dmidecode
-	ctx, cancel := context.WithTimeout(parentCtx, 10*time.Second)
-	defer cancel()
-	out, err := exec.CommandContext(ctx, "dmidecode", "-s", "system-serial-number").Output()
+	// Fallback to dmidecode.
+	out, err := runCmd(ctx, "dmidecode", "-s", "system-serial-number")
 	if err != nil {
 		slog.Debug("dmidecode fallback failed", "error", err)
 
