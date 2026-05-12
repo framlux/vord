@@ -39,9 +39,9 @@ function makeSubscription(overrides: Partial<SubscriptionDto> = {}): Subscriptio
         currentPeriodEnd: null,
         cancelAtPeriodEnd: false,
         pendingAction: null,
-        alertRuleLimit: null,
+        alertRuleLimit: 0,
         alertRuleCount: 0,
-        webhookLimit: null,
+        webhookLimit: 0,
         webhookCount: 0,
         ...overrides
     };

@@ -21,6 +21,7 @@
 		<button
 			onclick={() => onchange?.(page - 1)}
 			disabled={page <= 1}
+			aria-label="Previous page"
 			class="rounded-lg p-2 text-surface-500 transition hover:bg-surface-200 disabled:opacity-30 dark:hover:bg-surface-700"
 		>
 			<ChevronLeft size={16} />
@@ -31,6 +32,7 @@
 		<button
 			onclick={() => onchange?.(page + 1)}
 			disabled={page >= totalPages}
+			aria-label="Next page"
 			class="rounded-lg p-2 text-surface-500 transition hover:bg-surface-200 disabled:opacity-30 dark:hover:bg-surface-700"
 		>
 			<ChevronRight size={16} />

@@ -5,9 +5,8 @@
 <script lang="ts">
     import { onMount } from 'svelte';
     import type { PaginatedResponse, MachineDto } from '$lib/api/types';
-    import { OperatingSystem, MachineType } from '$lib/api/types';
     import { formatRelativeTime } from '$lib/utils/format';
-    import { getOsName, getTypeName } from '$lib/utils/enums';
+    import { getOsName, getTypeName, getOsFilterOptions, getTypeFilterOptions } from '$lib/utils/enums';
     import Pagination from '$lib/components/Pagination.svelte';
     import EmptyState from '$lib/components/EmptyState.svelte';
     import { goto, invalidateAll } from '$app/navigation';
@@ -35,27 +34,14 @@
     const machines: PaginatedResponse<MachineDto> = $derived(data.machines);
     const filters = $derived(data.filters);
 
-    // svelte-ignore state_referenced_locally
-    let searchValue = $state(filters.search);
+    let searchValue = $state('');
 
-    const osOptions = [
-        { value: '', label: 'All OS' },
-        { value: 'Unknown', label: 'Unknown' },
-        { value: 'Windows', label: 'Windows' },
-        { value: 'MacOS', label: 'MacOS' },
-        { value: 'Ubuntu', label: 'Ubuntu' },
-        { value: 'Fedora', label: 'Fedora' },
-        { value: 'RedHat', label: 'RedHat' }
-    ];
+    $effect(() => {
+        searchValue = filters.search;
+    });
 
-    const typeOptions = [
-        { value: '', label: 'All Types' },
-        { value: 'Unknown', label: 'Unknown' },
-        { value: 'Desktop', label: 'Desktop' },
-        { value: 'Laptop', label: 'Laptop' },
-        { value: 'BareMetalServer', label: 'Bare Metal Server' },
-        { value: 'VirtualMachine', label: 'Virtual Machine' }
-    ];
+    const osOptions = getOsFilterOptions();
+    const typeOptions = getTypeFilterOptions();
 
     const statusOptions = [
         { value: '', label: 'All Status' },

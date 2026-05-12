@@ -26,16 +26,21 @@
 	const fleet: PaginatedFleetOverviewDto = $derived(liveData ?? data.fleet);
 
 	// Track current filter/sort/page state from URL params.
-	// svelte-ignore state_referenced_locally
-	let searchQuery = $state(data.search ?? '');
-	// svelte-ignore state_referenced_locally
-	let statusFilter = $state(data.status ?? 'all');
-	// svelte-ignore state_referenced_locally
-	let sortKey = $state(data.sortBy ?? 'name');
-	// svelte-ignore state_referenced_locally
-	let sortDir = $state<'asc' | 'desc'>((data.sortDir as 'asc' | 'desc') ?? 'asc');
-	// svelte-ignore state_referenced_locally
-	let currentPage = $state(data.page ?? 1);
+	// These are synced from server data via $effect to handle back/forward navigation.
+	let searchQuery = $state('');
+	let statusFilter = $state('all');
+	let sortKey = $state('name');
+	let sortDir = $state<'asc' | 'desc'>('asc');
+	let currentPage = $state(1);
+
+	$effect(() => {
+		searchQuery = data.search ?? '';
+		statusFilter = data.status ?? 'all';
+		sortKey = data.sortBy ?? 'name';
+		sortDir = (data.sortDir as 'asc' | 'desc') ?? 'asc';
+		currentPage = data.page ?? 1;
+		liveData = null;
+	});
 
 	let searchTimeout: ReturnType<typeof setTimeout> | undefined;
 

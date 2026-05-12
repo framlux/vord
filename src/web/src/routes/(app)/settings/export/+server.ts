@@ -2,50 +2,31 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
-import { env } from '$env/dynamic/private';
 import { error, json, redirect } from '@sveltejs/kit';
 import { canAdminTenant } from '$lib/utils/roles';
+import { createServerApiClient } from '$lib/api/server';
+import { ApiError } from '$lib/api/client';
 import type { RequestEvent } from '@sveltejs/kit';
-
-const API_BASE = env.API_BASE_URL ?? 'http://127.0.0.1:12233';
-
-function buildCookieHeader(cookies: RequestEvent['cookies']): Record<string, string> {
-	const cookieParts: string[] = [];
-	const authCookie = cookies.get('vord_auth');
-	const tenantCookie = cookies.get('vord_tenant');
-	if (authCookie) cookieParts.push(`vord_auth=${authCookie}`);
-	if (tenantCookie) cookieParts.push(`vord_tenant=${tenantCookie}`);
-
-	return cookieParts.length > 0 ? { Cookie: cookieParts.join('; ') } : {};
-}
 
 export const POST = async ({ fetch, cookies, locals }: RequestEvent) => {
 	if (locals.user === null || canAdminTenant(locals.user) === false) {
 		error(403, 'Access denied');
 	}
 
-	const response = await fetch(`${API_BASE}/api/v1/tenants/export`, {
-		method: 'POST',
-		headers: {
-			...buildCookieHeader(cookies)
+	const api = createServerApiClient(fetch, cookies.get('vord_auth'), cookies.get('vord_tenant'));
+
+	try {
+		const data = await api.requestExport();
+
+		return json(data);
+	} catch (e) {
+		if (e instanceof ApiError) {
+			if (e.status === 401) redirect(302, '/auth/login');
+			if (e.status === 404) error(404, 'No machine data found to export');
+			error(e.status, 'Export request failed');
 		}
-	});
-
-	if (response.status === 401) {
-		redirect(302, '/auth/login');
+		throw e;
 	}
-
-	if (response.status === 404) {
-		error(404, 'No machine data found to export');
-	}
-
-	if (response.ok === false) {
-		error(response.status, 'Export request failed');
-	}
-
-	const data = await response.json();
-
-	return json(data);
 };
 
 export const GET = async ({ fetch, cookies, locals, url }: RequestEvent) => {
@@ -62,25 +43,18 @@ export const GET = async ({ fetch, cookies, locals, url }: RequestEvent) => {
 		error(400, 'Invalid jobId format');
 	}
 
-	const response = await fetch(`${API_BASE}/api/v1/tenants/export/${jobId}`, {
-		headers: {
-			...buildCookieHeader(cookies)
+	const api = createServerApiClient(fetch, cookies.get('vord_auth'), cookies.get('vord_tenant'));
+
+	try {
+		const data = await api.getExportStatus(parseInt(jobId));
+
+		return json(data);
+	} catch (e) {
+		if (e instanceof ApiError) {
+			if (e.status === 401) redirect(302, '/auth/login');
+			if (e.status === 404) error(404, 'Export job not found');
+			error(e.status, 'Failed to get export status');
 		}
-	});
-
-	if (response.status === 401) {
-		redirect(302, '/auth/login');
+		throw e;
 	}
-
-	if (response.status === 404) {
-		error(404, 'Export job not found');
-	}
-
-	if (response.ok === false) {
-		error(response.status, 'Failed to get export status');
-	}
-
-	const data = await response.json();
-
-	return json(data);
 };

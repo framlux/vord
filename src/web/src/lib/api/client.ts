@@ -671,4 +671,26 @@ export class ApiClient {
 		return this.unwrap(resp);
 	}
 
+	// Billing Checkout / Portal
+	async createCheckoutSession(tier: string): Promise<{ checkoutUrl: string }> {
+		return this.post<{ checkoutUrl: string }>('/api/v1/checkout', { tier });
+	}
+
+	async createPortalSession(): Promise<{ portalUrl: string }> {
+		return this.post<{ portalUrl: string }>('/api/v1/portal', {});
+	}
+
+	// Data Export
+	async requestExport(): Promise<{ jobId: number }> {
+		const resp = await this.post<ApiResponse<{ jobId: number }>>('/api/v1/tenants/export');
+
+		return this.unwrap(resp);
+	}
+
+	async getExportStatus(jobId: number): Promise<{ status: string; downloadUrl?: string }> {
+		const resp = await this.get<ApiResponse<{ status: string; downloadUrl?: string }>>(`/api/v1/tenants/export/${jobId}`);
+
+		return this.unwrap(resp);
+	}
+
 }

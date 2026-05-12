@@ -312,8 +312,8 @@
 								</div>
 							</div>
 							<div class="mt-4">
-								<label class="mb-1 block text-xs text-surface-500 dark:text-surface-400">Machines (at least 1 required)</label>
-								<div class="max-h-40 overflow-y-auto border border-surface-300 rounded p-2 space-y-1 dark:border-surface-600">
+								<span class="mb-1 block text-xs text-surface-500 dark:text-surface-400">Machines (at least 1 required)</span>
+								<div class="max-h-40 overflow-y-auto border border-surface-300 rounded p-2 space-y-1 dark:border-surface-600" role="group" aria-label="Machines (at least 1 required)">
 									{#each machines as machine}
 										<label class="flex items-center gap-2 text-sm">
 											<input type="checkbox" name="machineIds" value={machine.id} class="checkbox" />
@@ -472,8 +472,8 @@
 															</label>
 														</div>
 														<div class="mt-4">
-															<label class="mb-1 block text-xs text-surface-500 dark:text-surface-400">Machines (at least 1 required)</label>
-															<div class="max-h-40 overflow-y-auto border border-surface-300 rounded p-2 space-y-1 dark:border-surface-600">
+															<span class="mb-1 block text-xs text-surface-500 dark:text-surface-400">Machines (at least 1 required)</span>
+															<div class="max-h-40 overflow-y-auto border border-surface-300 rounded p-2 space-y-1 dark:border-surface-600" role="group" aria-label="Machines (at least 1 required)">
 																{#each machines as machine}
 																	<label class="flex items-center gap-2 text-sm">
 																		<input type="checkbox" name="machineIds" value={machine.id} checked={rule.machineIds?.includes(machine.id) ?? false} class="checkbox" />

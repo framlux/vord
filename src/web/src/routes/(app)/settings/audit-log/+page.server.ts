@@ -28,7 +28,7 @@ export const load: PageServerLoad = async ({ fetch, cookies, locals, url }) => {
 	} catch (e) {
 		if (e instanceof ApiError) {
 			if (e.status === 401) redirect(302, '/auth/login');
-			if (e.status === 403) return { auditLog: null, filters: { action, from, to } };
+			if (e.status === 403) error(403, 'Access denied');
 		}
 		throw e;
 	}

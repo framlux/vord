@@ -4,6 +4,7 @@
 
 import { createServerApiClient } from '$lib/api/server';
 import { ApiError } from '$lib/api/client';
+import type { AlertRuleDto } from '$lib/api/types';
 import { redirect, error, fail } from '@sveltejs/kit';
 import type { PageServerLoad, Actions } from './$types';
 
@@ -18,22 +19,46 @@ export const load: PageServerLoad = async ({ fetch, cookies, params }) => {
 		let machineDetail = null;
 		try {
 			machineDetail = await api.getMachineDetail(id);
-		} catch { /* Detail may not be available yet */ }
+		} catch (e) {
+			if (e instanceof ApiError && (e.status === 404 || e.status === 403)) {
+				machineDetail = null;
+			} else {
+				throw e;
+			}
+		}
 
 		let authorizedKeys = null;
 		try {
 			authorizedKeys = await api.getMachineAuthorizedKeys(id);
-		} catch { /* Authorized keys may not be available */ }
+		} catch (e) {
+			if (e instanceof ApiError && (e.status === 404 || e.status === 403)) {
+				authorizedKeys = null;
+			} else {
+				throw e;
+			}
+		}
 
-		let machineAlertRules = [];
+		let machineAlertRules: AlertRuleDto[] = [];
 		try {
 			machineAlertRules = await api.getMachineAlertRules(id);
-		} catch { /* Alert rules may not be available */ }
+		} catch (e) {
+			if (e instanceof ApiError && (e.status === 404 || e.status === 403)) {
+				machineAlertRules = [];
+			} else {
+				throw e;
+			}
+		}
 
-		let allAlertRules = [];
+		let allAlertRules: AlertRuleDto[] = [];
 		try {
 			allAlertRules = await api.getAlertRules();
-		} catch { /* Alert rules may not be available */ }
+		} catch (e) {
+			if (e instanceof ApiError && (e.status === 404 || e.status === 403)) {
+				allAlertRules = [];
+			} else {
+				throw e;
+			}
+		}
 
 		return { machine, machineDetail, authorizedKeys, machineAlertRules, allAlertRules };
 	} catch (e) {

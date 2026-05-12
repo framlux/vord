@@ -49,7 +49,7 @@ export const load: PageServerLoad = async ({ fetch, cookies, locals, url }) => {
 	} catch (e) {
 		if (e instanceof ApiError) {
 			if (e.status === 401) redirect(302, '/auth/login');
-			if (e.status === 403) return { rules: null, events: null, integrations: null, providers: null, subscription: null, machines: [], filters: { status, severity } };
+			if (e.status === 403) error(403, 'Access denied');
 		}
 		throw e;
 	}

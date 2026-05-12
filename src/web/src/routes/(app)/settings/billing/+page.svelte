@@ -18,7 +18,6 @@
 	const isPastDue = $derived(subscription !== null && subscription.status === 'PastDue');
 	const hasPendingAction = $derived(subscription !== null && subscription.cancelAtPeriodEnd);
 	const pendingAction = $derived(subscription?.pendingAction ?? null);
-	const isDowngrading = $derived(pendingAction === 'DowngradeToFree' || pendingAction === 'DowngradeToPro');
 	const isCanceling = $derived(pendingAction === 'CancelAccount');
 
 	const hasBillingService = $derived(data.billingEnabled === true);

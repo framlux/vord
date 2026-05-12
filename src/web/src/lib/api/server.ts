@@ -7,13 +7,13 @@ import { ApiClient } from './client';
 
 const API_BASE = env.API_BASE_URL ?? 'http://127.0.0.1:12233';
 
-export function createServerApiClient(skFetch: typeof fetch, cookie: string | undefined, tenantCookie?: string | undefined): ApiClient {
+export function createServerApiClient(skFetch: typeof fetch, cookie: string | undefined, tenantCookie?: string | undefined, baseUrl?: string): ApiClient {
 	const cookieParts: string[] = [];
 	if (cookie) cookieParts.push(`vord_auth=${cookie}`);
 	if (tenantCookie) cookieParts.push(`vord_tenant=${tenantCookie}`);
 	const cookieHeader = cookieParts.join('; ');
 
-	return new ApiClient(API_BASE, (input, init) => {
+	return new ApiClient(baseUrl ?? API_BASE, (input, init) => {
 		return skFetch(input, {
 			...init,
 			headers: {

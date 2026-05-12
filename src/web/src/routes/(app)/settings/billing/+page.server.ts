@@ -5,9 +5,16 @@
 import { createServerApiClient } from '$lib/api/server';
 import { ApiError } from '$lib/api/client';
 import { canAdminTenant } from '$lib/utils/roles';
-import { redirect, error, fail } from '@sveltejs/kit';
+import { redirect, error, fail, isRedirect } from '@sveltejs/kit';
 import type { PageServerLoad, Actions } from './$types';
 import { env } from '$env/dynamic/public';
+
+function createBillingClient(fetch: typeof globalThis.fetch, cookies: { get(name: string): string | undefined }) {
+	const billingUrl = env.PUBLIC_BILLING_URL;
+	if (!billingUrl) return null;
+
+	return createServerApiClient(fetch, cookies.get('vord_auth'), cookies.get('vord_tenant'), billingUrl);
+}
 
 export const load: PageServerLoad = async ({ fetch, cookies, locals }) => {
 	if (locals.user === null || canAdminTenant(locals.user) === false) {
@@ -44,47 +51,32 @@ export const actions: Actions = {
 			return fail(403, { message: 'Access denied' });
 		}
 
-		const billingUrl = env.PUBLIC_BILLING_URL;
-		if (!billingUrl) return fail(500, { message: 'Billing service not configured' });
+		const billingApi = createBillingClient(fetch, cookies);
+		if (billingApi === null) return fail(500, { message: 'Billing service not configured' });
 
 		const formData = await request.formData();
 		const tier = (formData.get('tier') as string) || 'pro';
 
-		const authCookie = cookies.get('vord_auth');
-		if (authCookie === undefined) return fail(401, { message: 'Not authenticated' });
-
-		const tenantCookie = cookies.get('vord_tenant');
-		const cookieParts = [`vord_auth=${authCookie}`];
-		if (tenantCookie !== undefined) {
-			cookieParts.push(`vord_tenant=${tenantCookie}`);
-		}
-
-		const response = await fetch(`${billingUrl}/api/v1/checkout`, {
-			method: 'POST',
-			headers: {
-				'Content-Type': 'application/json',
-				Cookie: cookieParts.join('; ')
-			},
-			body: JSON.stringify({ tier })
-		});
-
-		if (response.ok === false) return fail(response.status, { message: 'Failed to create checkout session' });
-
-		const data = await response.json();
-		if (data.checkoutUrl) {
-			try {
+		try {
+			const data = await billingApi.createCheckoutSession(tier);
+			if (data.checkoutUrl) {
 				const checkoutUrlObj = new URL(data.checkoutUrl);
 				if (checkoutUrlObj.hostname.endsWith('.stripe.com')) {
 					redirect(303, data.checkoutUrl);
 				}
-			} catch {
-				// Invalid URL
+
+				return fail(400, { message: 'Invalid checkout URL received' });
 			}
 
-			return fail(400, { message: 'Invalid checkout URL received' });
-		}
+			return fail(500, { message: 'No checkout URL received' });
+		} catch (e) {
+			if (isRedirect(e)) throw e;
+			if (e instanceof ApiError) {
+				return fail(e.status, { message: e.message });
+			}
 
-		return fail(500, { message: 'No checkout URL received' });
+			return fail(500, { message: 'Failed to create checkout session' });
+		}
 	},
 
 	portal: async ({ fetch, cookies, locals }) => {
@@ -92,43 +84,29 @@ export const actions: Actions = {
 			return fail(403, { message: 'Access denied' });
 		}
 
-		const billingUrl = env.PUBLIC_BILLING_URL;
-		if (!billingUrl) return fail(500, { message: 'Billing service not configured' });
+		const billingApi = createBillingClient(fetch, cookies);
+		if (billingApi === null) return fail(500, { message: 'Billing service not configured' });
 
-		const authCookie = cookies.get('vord_auth');
-		if (authCookie === undefined) return fail(401, { message: 'Not authenticated' });
-
-		const tenantCookie = cookies.get('vord_tenant');
-		const cookieParts = [`vord_auth=${authCookie}`];
-		if (tenantCookie !== undefined) {
-			cookieParts.push(`vord_tenant=${tenantCookie}`);
-		}
-
-		const response = await fetch(`${billingUrl}/api/v1/portal`, {
-			method: 'POST',
-			headers: {
-				'Content-Type': 'application/json',
-				Cookie: cookieParts.join('; ')
-			}
-		});
-
-		if (response.ok === false) return fail(response.status, { message: 'Failed to create portal session' });
-
-		const data = await response.json();
-		if (data.portalUrl) {
-			try {
+		try {
+			const data = await billingApi.createPortalSession();
+			if (data.portalUrl) {
 				const portalUrlObj = new URL(data.portalUrl);
 				if (portalUrlObj.hostname.endsWith('.stripe.com')) {
 					redirect(303, data.portalUrl);
 				}
-			} catch {
-				// Invalid URL
+
+				return fail(400, { message: 'Invalid portal URL received' });
 			}
 
-			return fail(400, { message: 'Invalid portal URL received' });
-		}
+			return fail(500, { message: 'No portal URL received' });
+		} catch (e) {
+			if (isRedirect(e)) throw e;
+			if (e instanceof ApiError) {
+				return fail(e.status, { message: e.message });
+			}
 
-		return fail(500, { message: 'No portal URL received' });
+			return fail(500, { message: 'Failed to create portal session' });
+		}
 	},
 
 	cancel: async ({ fetch, cookies, locals }) => {
