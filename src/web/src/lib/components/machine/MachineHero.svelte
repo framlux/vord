@@ -3,7 +3,7 @@
      See LICENSE for details. -->
 
 <script lang="ts">
-	import type { MachineDto, MachineDetailDto } from '$lib/api/types';
+	import type { MachineDto } from '$lib/api/types';
 	import { MachineHealthStatus } from '$lib/api/types';
 	import { getOsName, getTypeName } from '$lib/utils/enums';
 	import { formatRelativeTime } from '$lib/utils/format';
@@ -13,17 +13,15 @@
 
 	let {
 		machine,
-		detail,
 		isOnline,
-		lastPing
+		lastPing,
+		healthStatus
 	}: {
 		machine: MachineDto;
-		detail: MachineDetailDto | null;
 		isOnline: boolean;
 		lastPing: string | null;
+		healthStatus: MachineHealthStatus;
 	} = $props();
-
-	const healthStatus = $derived(detail?.healthStatus ?? MachineHealthStatus.Offline);
 </script>
 
 <div>

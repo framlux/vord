@@ -122,11 +122,17 @@ public sealed class MachineDetailHandler : IMachineDetailHandler
         DateTimeOffset? lastPing = await _pingService.GetLastPingAsync(machineId);
         ulong capabilities = await _pingService.GetAgentCapabilitiesAsync(machineId);
 
+        MachineStateSummary? summary = await _machineStateRepo.GetSummaryForMachineAsync(machineId, ct);
+        MachineHealthStatus healthStatus = summary is not null
+            ? HealthComputer.Compute(summary, isOnline)
+            : (isOnline ? MachineHealthStatus.Healthy : MachineHealthStatus.Offline);
+
         MachineStatusDto dto = new()
         {
             IsOnline = isOnline,
             LastPing = lastPing,
             CommandsEnabled = (capabilities & CapabilityRemoteCommands) != 0,
+            HealthStatus = healthStatus,
         };
 
         return ServiceResult<MachineStatusDto>.Ok(dto);

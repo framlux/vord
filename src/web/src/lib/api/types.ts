@@ -104,6 +104,7 @@ export interface MachineStatusDto {
 	isOnline: boolean;
 	lastPing: string | null;
 	commandsEnabled: boolean;
+	healthStatus: MachineHealthStatus;
 }
 
 // Dashboard (legacy)

@@ -286,4 +286,120 @@ public class MachineDetailHandlerTests
         await Assert.That(result.IsSuccess).IsTrue();
         await Assert.That(result.Data!.CommandsEnabled).IsTrue();
     }
+
+    // ========== GetStatusAsync HealthStatus regression tests ==========
+
+    [Test]
+    public async Task GetStatusAsync_OfflineMachine_ReturnsHealthStatusOffline()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        long machineId = await SeedMachine(dbFactory);
+
+        MachineStateSummary summary = TestDataBuilder.BuildMachineStateSummary(
+            machineId: machineId, cpuPercent: 20, memoryPercent: 30);
+        await dbFactory.Context.InsertAsync(summary);
+
+        MachineDetailHandler handler = CreateHandler(dbFactory);
+
+        ServiceResult<MachineStatusDto> result = await handler.GetStatusAsync(machineId, 1, CancellationToken.None);
+
+        await Assert.That(result.IsSuccess).IsTrue();
+        await Assert.That(result.Data!.IsOnline).IsFalse();
+        await Assert.That(result.Data!.HealthStatus).IsEqualTo(MachineHealthStatus.Offline);
+    }
+
+    [Test]
+    public async Task GetStatusAsync_OnlineHealthyMachine_ReturnsHealthStatusHealthy()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        long machineId = await SeedMachine(dbFactory);
+        InMemoryMachinePingService pingService = new();
+        await pingService.RecordPingAsync(machineId);
+
+        MachineStateSummary summary = TestDataBuilder.BuildMachineStateSummary(
+            machineId: machineId, cpuPercent: 20, memoryPercent: 30);
+        await dbFactory.Context.InsertAsync(summary);
+
+        MachineDetailHandler handler = CreateHandler(dbFactory, pingService: pingService);
+
+        ServiceResult<MachineStatusDto> result = await handler.GetStatusAsync(machineId, 1, CancellationToken.None);
+
+        await Assert.That(result.IsSuccess).IsTrue();
+        await Assert.That(result.Data!.IsOnline).IsTrue();
+        await Assert.That(result.Data!.HealthStatus).IsEqualTo(MachineHealthStatus.Healthy);
+    }
+
+    [Test]
+    public async Task GetStatusAsync_OnlineCriticalCpu_ReturnsHealthStatusCritical()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        long machineId = await SeedMachine(dbFactory);
+        InMemoryMachinePingService pingService = new();
+        await pingService.RecordPingAsync(machineId);
+
+        MachineStateSummary summary = TestDataBuilder.BuildMachineStateSummary(
+            machineId: machineId, cpuPercent: 96, memoryPercent: 30);
+        await dbFactory.Context.InsertAsync(summary);
+
+        MachineDetailHandler handler = CreateHandler(dbFactory, pingService: pingService);
+
+        ServiceResult<MachineStatusDto> result = await handler.GetStatusAsync(machineId, 1, CancellationToken.None);
+
+        await Assert.That(result.IsSuccess).IsTrue();
+        await Assert.That(result.Data!.IsOnline).IsTrue();
+        await Assert.That(result.Data!.HealthStatus).IsEqualTo(MachineHealthStatus.Critical);
+    }
+
+    [Test]
+    public async Task GetStatusAsync_OnlineWarningMemory_ReturnsHealthStatusWarning()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        long machineId = await SeedMachine(dbFactory);
+        InMemoryMachinePingService pingService = new();
+        await pingService.RecordPingAsync(machineId);
+
+        MachineStateSummary summary = TestDataBuilder.BuildMachineStateSummary(
+            machineId: machineId, cpuPercent: 20, memoryPercent: 85);
+        await dbFactory.Context.InsertAsync(summary);
+
+        MachineDetailHandler handler = CreateHandler(dbFactory, pingService: pingService);
+
+        ServiceResult<MachineStatusDto> result = await handler.GetStatusAsync(machineId, 1, CancellationToken.None);
+
+        await Assert.That(result.IsSuccess).IsTrue();
+        await Assert.That(result.Data!.IsOnline).IsTrue();
+        await Assert.That(result.Data!.HealthStatus).IsEqualTo(MachineHealthStatus.Warning);
+    }
+
+    [Test]
+    public async Task GetStatusAsync_OnlineNoSummary_ReturnsHealthStatusHealthy()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        long machineId = await SeedMachine(dbFactory);
+        InMemoryMachinePingService pingService = new();
+        await pingService.RecordPingAsync(machineId);
+
+        MachineDetailHandler handler = CreateHandler(dbFactory, pingService: pingService);
+
+        ServiceResult<MachineStatusDto> result = await handler.GetStatusAsync(machineId, 1, CancellationToken.None);
+
+        await Assert.That(result.IsSuccess).IsTrue();
+        await Assert.That(result.Data!.IsOnline).IsTrue();
+        await Assert.That(result.Data!.HealthStatus).IsEqualTo(MachineHealthStatus.Healthy);
+    }
+
+    [Test]
+    public async Task GetStatusAsync_OfflineNoSummary_ReturnsHealthStatusOffline()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        long machineId = await SeedMachine(dbFactory);
+
+        MachineDetailHandler handler = CreateHandler(dbFactory);
+
+        ServiceResult<MachineStatusDto> result = await handler.GetStatusAsync(machineId, 1, CancellationToken.None);
+
+        await Assert.That(result.IsSuccess).IsTrue();
+        await Assert.That(result.Data!.IsOnline).IsFalse();
+        await Assert.That(result.Data!.HealthStatus).IsEqualTo(MachineHealthStatus.Offline);
+    }
 }

@@ -16,12 +16,16 @@ MemoryMax=512M
 CPUQuota=50%
 StateDirectory=vord-agent
 
-ProtectSystem=full
+ProtectSystem=strict
+ReadWritePaths=/var/lib/vord-agent /etc/framlux
 ProtectHome=true
 PrivateTmp=true
 NoNewPrivileges=true
 ProtectKernelTunables=true
+ProtectKernelModules=true
 ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
 
 [Install]
 WantedBy=multi-user.target

@@ -61,8 +61,11 @@ info "Detected package manager: ${PKG_MANAGER}"
 
 info "Importing Framlux GPG key..."
 
+KEYRING_PATH="/usr/share/keyrings/framlux-archive-keyring.gpg"
+
 if [ "${PKG_MANAGER}" = "apt" ]; then
-    curl -fsSL "${GPG_KEY_URL}" | apt-key add -
+    curl -fsSL "${GPG_KEY_URL}" | gpg --dearmor -o "${KEYRING_PATH}"
+    chmod 0644 "${KEYRING_PATH}"
 else
     rpm --import "${GPG_KEY_URL}"
 fi
@@ -73,7 +76,7 @@ info "Adding Framlux package repository..."
 
 if [ "${PKG_MANAGER}" = "apt" ]; then
     cat > /etc/apt/sources.list.d/framlux.list <<EOF
-deb ${APT_REPO_URL} * *
+deb [signed-by=${KEYRING_PATH}] ${APT_REPO_URL} * *
 EOF
 else
     cat > /etc/yum.repos.d/framlux.repo <<EOF
@@ -110,38 +113,42 @@ success "${PACKAGE_NAME} installed successfully."
 
 # --- Configuration (env vars or interactive prompts) ---
 
-SERVER_ADDRESS="${VORD_SERVER_ADDRESS:-}"
-if [ -z "${SERVER_ADDRESS}" ]; then
-    printf "\n" > /dev/tty
-    printf "Enter the server address [%s]: " "${DEFAULT_SERVER}" > /dev/tty
-    read -r SERVER_ADDRESS < /dev/tty
+if [ -f "${CONFIG_FILE}" ]; then
+    info "Existing configuration found at ${CONFIG_FILE}, skipping configuration."
+else
+    SERVER_ADDRESS="${VORD_SERVER_ADDRESS:-}"
     if [ -z "${SERVER_ADDRESS}" ]; then
-        SERVER_ADDRESS="${DEFAULT_SERVER}"
+        printf "\n" > /dev/tty
+        printf "Enter the server address [%s]: " "${DEFAULT_SERVER}" > /dev/tty
+        read -r SERVER_ADDRESS < /dev/tty
+        if [ -z "${SERVER_ADDRESS}" ]; then
+            SERVER_ADDRESS="${DEFAULT_SERVER}"
+        fi
     fi
-fi
 
-REGISTRATION_TOKEN="${VORD_REGISTRATION_TOKEN:-}"
-if [ -z "${REGISTRATION_TOKEN}" ]; then
-    printf "Enter your registration token: " > /dev/tty
-    read -r REGISTRATION_TOKEN < /dev/tty
+    REGISTRATION_TOKEN="${VORD_REGISTRATION_TOKEN:-}"
     if [ -z "${REGISTRATION_TOKEN}" ]; then
-        error "Registration token is required. You can find it in the Vord Fleet dashboard under Machines > Register."
-        exit 1
+        printf "Enter your registration token: " > /dev/tty
+        read -r REGISTRATION_TOKEN < /dev/tty
+        if [ -z "${REGISTRATION_TOKEN}" ]; then
+            error "Registration token is required. You can find it in the Vord Fleet dashboard under Machines > Register."
+            exit 1
+        fi
     fi
-fi
 
-# --- Write Configuration ---
+    # --- Write Configuration ---
 
-info "Writing configuration to ${CONFIG_FILE}..."
+    info "Writing configuration to ${CONFIG_FILE}..."
 
-mkdir -p "${CONFIG_DIR}"
-cat > "${CONFIG_FILE}" <<EOF
+    mkdir -p "${CONFIG_DIR}"
+    cat > "${CONFIG_FILE}" <<EOF
 server_address = "${SERVER_ADDRESS}"
 server_port = ${DEFAULT_PORT}
 use_tls = true
 registration_token = "${REGISTRATION_TOKEN}"
 EOF
-chmod 0600 "${CONFIG_FILE}"
+    chmod 0600 "${CONFIG_FILE}"
+fi
 
 # --- Create Data Directory ---
 

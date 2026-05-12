@@ -40,6 +40,7 @@
 	const isOnline = $derived(liveStatus?.isOnline ?? machine.isOnline);
 	const lastPing = $derived(liveStatus?.lastPing ?? machine.lastPing);
 	const commandsEnabled = $derived(liveStatus?.commandsEnabled ?? machine.commandsEnabled);
+	const healthStatus = $derived(liveStatus?.healthStatus ?? data.machineDetail?.healthStatus ?? MachineHealthStatus.Offline);
 	const machineDetail: MachineDetailDto | null = $derived(data.machineDetail);
 	const isTeamTier = $derived(data.subscription !== null && data.subscription.tier === 'Team');
 	// svelte-ignore state_referenced_locally
@@ -498,7 +499,7 @@
 	{/if}
 
 	<!-- Header -->
-	<MachineHero {machine} detail={machineDetail} {isOnline} {lastPing} />
+	<MachineHero {machine} {isOnline} {lastPing} {healthStatus} />
 
 	<!-- Vitals -->
 	<div class="flex items-center justify-between">
@@ -714,7 +715,7 @@
 				<div class="space-y-3">
 					<div class="flex items-center justify-between">
 						<span class="text-sm text-surface-500 dark:text-surface-400">Status</span>
-						<HealthBadge status={machineDetail?.healthStatus ?? MachineHealthStatus.Offline} />
+						<HealthBadge status={healthStatus} />
 					</div>
 					{#if machineDetail}
 						<div class="flex justify-between">

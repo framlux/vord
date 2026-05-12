@@ -23,4 +23,9 @@ public sealed class MachineStatusDto
     /// Whether the agent on this machine accepts remote commands.
     /// </summary>
     public bool CommandsEnabled { get; set; }
+
+    /// <summary>
+    /// The computed health status combining online state and telemetry.
+    /// </summary>
+    public MachineHealthStatus HealthStatus { get; set; }
 }
