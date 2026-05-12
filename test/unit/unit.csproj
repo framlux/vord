@@ -23,6 +23,7 @@
 
   <ItemGroup>
     <ProjectReference Include="../../src/server/server.csproj" />
+    <ProjectReference Include="../../src/services.core/services.core.csproj" />
   </ItemGroup>
 
 </Project>

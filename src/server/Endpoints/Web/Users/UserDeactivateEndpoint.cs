@@ -4,8 +4,8 @@
 
 using FastEndpoints;
 using Framlux.FleetManagement.Server.Auth;
-using Framlux.FleetManagement.Server.Services.Handlers;
-using Framlux.FleetManagement.Server.Services.Infrastructure;
+using Framlux.FleetManagement.Services.Core.Handlers;
+using Framlux.FleetManagement.Services.Core.Infrastructure;
 using System.Security.Claims;
 
 namespace Framlux.FleetManagement.Server.Endpoints.Web.Users;

@@ -7,7 +7,7 @@ using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Server.Auth;
-using Framlux.FleetManagement.Server.Services.Billing;
+using Framlux.FleetManagement.Services.Core.Billing;
 
 namespace Framlux.FleetManagement.Server.Endpoints.Web.Alerts;
 

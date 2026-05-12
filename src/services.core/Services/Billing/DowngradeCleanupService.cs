@@ -1,0 +1,87 @@
+// Copyright (c) 2026 Framlux LLC
+// Licensed under the Functional Source License, Version 1.1, ALv2 Future License
+// See LICENSE for details.
+
+using Framlux.FleetManagement.Database.Repositories;
+
+namespace Framlux.FleetManagement.Services.Core.Billing;
+
+/// <inheritdoc/>
+public sealed class DowngradeCleanupService : IDowngradeCleanupService
+{
+    private readonly ITenantRepository _tenantRepo;
+    private readonly IAlertRuleRepository _alertRuleRepo;
+    private readonly IIntegrationRepository _integrationRepo;
+    private readonly ILogger<DowngradeCleanupService> _logger;
+
+    /// <summary>
+    /// Creates a new instance of the <see cref="DowngradeCleanupService"/> class.
+    /// </summary>
+    public DowngradeCleanupService(
+        ITenantRepository tenantRepo,
+        IAlertRuleRepository alertRuleRepo,
+        IIntegrationRepository integrationRepo,
+        ILogger<DowngradeCleanupService> logger)
+    {
+        ArgumentNullException.ThrowIfNull(tenantRepo);
+        ArgumentNullException.ThrowIfNull(alertRuleRepo);
+        ArgumentNullException.ThrowIfNull(integrationRepo);
+        ArgumentNullException.ThrowIfNull(logger);
+
+        _tenantRepo = tenantRepo;
+        _alertRuleRepo = alertRuleRepo;
+        _integrationRepo = integrationRepo;
+        _logger = logger;
+    }
+
+    /// <inheritdoc/>
+    public async Task CleanupForProTierAsync(int tenantId, CancellationToken ct)
+    {
+        // Disable custom OIDC configuration
+        int oidcDisabled = await _tenantRepo.DisableTenantOidcConfigAsync(tenantId, ct);
+
+        if (oidcDisabled > 0)
+        {
+            _logger.LogInformation(
+                "Disabled custom OIDC configuration for tenant {TenantId} during downgrade to Pro",
+                tenantId);
+        }
+
+        // Disable custom alert rules (keep default/system rules active)
+        int rulesDisabled = await _alertRuleRepo.DisableCustomAlertRulesForTenantAsync(tenantId, ct);
+
+        if (rulesDisabled > 0)
+        {
+            _logger.LogInformation(
+                "Disabled {Count} custom alert rules for tenant {TenantId} during downgrade to Pro",
+                rulesDisabled, tenantId);
+        }
+    }
+
+    /// <inheritdoc/>
+    public async Task CleanupForFreeTierAsync(int tenantId, CancellationToken ct)
+    {
+        // Disable custom OIDC configuration
+        await _tenantRepo.DisableTenantOidcConfigAsync(tenantId, ct);
+
+        // Disable ALL alert rules for the tenant (Free tier has no alerting)
+        int rulesDisabled = await _alertRuleRepo.DisableAlertRulesForTenantAsync(tenantId, customOnly: false, ct);
+
+        if (rulesDisabled > 0)
+        {
+            _logger.LogInformation(
+                "Disabled {Count} alert rules for tenant {TenantId} during downgrade to Free",
+                rulesDisabled, tenantId);
+        }
+
+        // Disable integration notification endpoints
+        int integrationsDisabled = await _integrationRepo.DisableIntegrationsForTenantAsync(tenantId, ct);
+
+        if (integrationsDisabled > 0)
+        {
+            _logger.LogInformation(
+                "Disabled {Count} integration endpoints for tenant {TenantId} during downgrade to Free",
+                integrationsDisabled, tenantId);
+        }
+    }
+}

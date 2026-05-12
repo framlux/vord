@@ -5,7 +5,7 @@
 using FastEndpoints;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Server.Auth;
-using Framlux.FleetManagement.Server.Services.Commands;
+using Framlux.FleetManagement.Services.Core.Commands;
 
 namespace Framlux.FleetManagement.Server.Endpoints.Web.Commands;
 

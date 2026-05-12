@@ -6,11 +6,11 @@ using System.Text.Json;
 using FastEndpoints;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
-using Framlux.FleetManagement.Server.Endpoints.Web.Models.History;
-using Framlux.FleetManagement.Server.Endpoints.Web.Models.Telemetry;
-using Framlux.FleetManagement.Server.Services.History;
-using Framlux.FleetManagement.Server.Services.Infrastructure;
-using Framlux.FleetManagement.Server.Services.Telemetry;
+using Framlux.FleetManagement.Services.Core.Models.History;
+using Framlux.FleetManagement.Services.Core.Models.Telemetry;
+using Framlux.FleetManagement.Services.Core.History;
+using Framlux.FleetManagement.Services.Core.Infrastructure;
+using Framlux.FleetManagement.Services.Core.Telemetry;
 
 namespace Framlux.FleetManagement.Server.Endpoints.Web.Machines.History;
 

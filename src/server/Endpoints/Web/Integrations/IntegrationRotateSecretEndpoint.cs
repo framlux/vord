@@ -9,7 +9,7 @@ using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Server.Auth;
-using Framlux.FleetManagement.Server.Services.Infrastructure;
+using Framlux.FleetManagement.Services.Core.Infrastructure;
 using Microsoft.AspNetCore.DataProtection;
 
 namespace Framlux.FleetManagement.Server.Endpoints.Web.Integrations;

@@ -3,29 +3,14 @@
 // See LICENSE for details.
 
 using FastEndpoints;
-using Framlux.FleetManagement.Database;
-using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Server.Auth;
 using Framlux.FleetManagement.Server.Endpoints.Grpc;
 using Framlux.FleetManagement.Server.Endpoints.Web;
 using Framlux.FleetManagement.Server.Endpoints.Web.Machines.History;
-using Framlux.FleetManagement.Server.Options;
-using Framlux.FleetManagement.Server.Services.Alerts;
-using Framlux.FleetManagement.Server.Services.Billing;
-using Framlux.FleetManagement.Server.Services.Commands;
-using Framlux.FleetManagement.Server.Services.DataExport;
-using Framlux.FleetManagement.Server.Services.Handlers;
-using Framlux.FleetManagement.Server.Services.Infrastructure;
-using Framlux.FleetManagement.Server.Services.Machines;
-using Framlux.FleetManagement.Server.Services.Notifications;
-using Framlux.FleetManagement.Server.Services.Security;
-using Framlux.FleetManagement.Server.Services.ServerConfiguration;
-using Framlux.FleetManagement.Server.Services.Telemetry;
-using Framlux.Vord.BillingGrpc;
-using LinqToDB;
-using LinqToDB.Extensions.DependencyInjection;
-using LinqToDB.Extensions.Logging;
+using Framlux.FleetManagement.Services.Core.Extensions;
+using Framlux.FleetManagement.Services.Core.Infrastructure;
+using Framlux.FleetManagement.Services.Core.Options;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authorization;
@@ -34,13 +19,9 @@ using Microsoft.AspNetCore.DataProtection.KeyManagement;
 using Microsoft.AspNetCore.DataProtection.StackExchangeRedis;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Microsoft.AspNetCore.HttpOverrides;
-using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.Protocols.OpenIdConnect;
-using Npgsql;
-using Polly;
 using Serilog;
-using Serilog.Formatting.Compact;
 using StackExchange.Redis;
 
 WebApplicationBuilder builder = WebApplication.CreateBuilder(args);
@@ -60,41 +41,12 @@ builder.Configuration
     .AddEnvironmentVariables()
     .AddUserSecrets<Program>();
 
-builder.Host.UseSerilog((context, configuration) =>
-    configuration
-        .ReadFrom.Configuration(context.Configuration)
-        .WriteTo.Console(new RenderedCompactJsonFormatter()));
+builder.Host.AddCoreSerilog();
 
-// Bind typed configuration options — all config reads go through IOptions<T> after this point
-builder.Services.AddOptions<BillingOptions>()
-    .Bind(builder.Configuration.GetSection("Billing"))
-    .ValidateDataAnnotations()
-    .ValidateOnStart();
-builder.Services.AddSingleton<IValidateOptions<BillingOptions>, BillingOptionsValidator>();
+// Bind shared configuration options
+builder.Services.AddCoreOptions(builder.Configuration);
 
-builder.Services.Configure<TierDefaultOptions>(builder.Configuration.GetSection("TierDefaults"));
-
-builder.Services.AddOptions<DatabaseOptions>()
-    .Bind(builder.Configuration.GetSection("Database"))
-    .ValidateDataAnnotations()
-    .ValidateOnStart();
-
-builder.Services.AddOptions<RedisOptions>()
-    .Bind(builder.Configuration.GetSection("Redis"))
-    .ValidateDataAnnotations()
-    .ValidateOnStart();
-
-builder.Services.AddOptions<ObjectStorageOptions>()
-    .Bind(builder.Configuration.GetSection("ObjectStorage"))
-    .ValidateOnStart();
-builder.Services.AddSingleton<IValidateOptions<ObjectStorageOptions>, ObjectStorageOptionsValidator>();
-
-builder.Services.AddOptions<ResendOptions>()
-    .Bind(builder.Configuration.GetSection("Resend"));
-
-builder.Services.AddOptions<AppOptions>()
-    .Bind(builder.Configuration.GetSection("App"));
-
+// Server-specific configuration options
 builder.Services.AddOptions<AuthCookieOptions>()
     .Bind(builder.Configuration.GetSection("Auth"));
 
@@ -293,159 +245,20 @@ builder.Services.AddAuthorization(options =>
     });
 });
 
-string connectionString = (new NpgsqlConnectionStringBuilder()
-{
-    ApplicationName = "Framlux.FleetManagement.ApiServer",
-    GssEncryptionMode = GssEncryptionMode.Disable,
-    Database = dbOpts.Db,
-    Username = dbOpts.User,
-    Password = dbOpts.Password,
-    Host = dbOpts.Hostname,
-    MaxPoolSize = 50,
-    MinPoolSize = 5
-}).ConnectionString;
+// Shared infrastructure: database, repositories, Redis, Polly, health checks
+string connectionString = ServiceCollectionExtensions.BuildConnectionString(dbOpts, "Framlux.FleetManagement.ApiServer");
+builder.Services.AddRepositories(dbOpts, "Framlux.FleetManagement.ApiServer");
+builder.Services.AddCoreInfrastructure(redisOpts, connectionString);
+builder.Services.AddCoreServices(billingOpts, objectStorageOpts);
 
-builder.Services.AddNpgsqlDataSource(connectionString);
-builder.Services.AddLinqToDBContext<DatabaseContext>((provider, options) => options.UsePostgreSQL(connectionString: connectionString)
-        .UseDefaultLogging(provider));
-
-builder.Services.AddScoped<DatabaseRepository>();
-builder.Services.AddScoped<IDatabaseTransactionProvider>(sp => sp.GetRequiredService<DatabaseRepository>());
-builder.Services.AddScoped<IAuditLogRepository>(sp => sp.GetRequiredService<DatabaseRepository>());
-builder.Services.AddScoped<IUserRepository>(sp => sp.GetRequiredService<DatabaseRepository>());
-builder.Services.AddScoped<ITenantRepository>(sp => sp.GetRequiredService<DatabaseRepository>());
-builder.Services.AddScoped<ISubscriptionRepository>(sp => sp.GetRequiredService<DatabaseRepository>());
-builder.Services.AddScoped<IMachineRepository>(sp => sp.GetRequiredService<DatabaseRepository>());
-builder.Services.AddScoped<IInvitationRepository>(sp => sp.GetRequiredService<DatabaseRepository>());
-builder.Services.AddScoped<ISigningKeyRepository>(sp => sp.GetRequiredService<DatabaseRepository>());
-builder.Services.AddScoped<IRemoteCommandRepository>(sp => sp.GetRequiredService<DatabaseRepository>());
-builder.Services.AddScoped<IAlertRuleRepository>(sp => sp.GetRequiredService<DatabaseRepository>());
-builder.Services.AddScoped<IAlertEventRepository>(sp => sp.GetRequiredService<DatabaseRepository>());
-builder.Services.AddScoped<IIntegrationRepository>(sp => sp.GetRequiredService<DatabaseRepository>());
-builder.Services.AddScoped<IDataExportRepository>(sp => sp.GetRequiredService<DatabaseRepository>());
-builder.Services.AddScoped<IRegistrationTokenRepository>(sp => sp.GetRequiredService<DatabaseRepository>());
-builder.Services.AddScoped<IMachineStateRepository>(sp => sp.GetRequiredService<DatabaseRepository>());
-builder.Services.AddScoped<IServerConfigurationRepository>(sp => sp.GetRequiredService<DatabaseRepository>());
-builder.Services.AddScoped<ITierFeatureLimitRepository>(sp => sp.GetRequiredService<DatabaseRepository>());
-builder.Services.AddScoped<ITenantSubscriptionOverrideRepository>(sp => sp.GetRequiredService<DatabaseRepository>());
-builder.Services.AddSingleton<IServerSettingsCache, ServerSettingsCache>();
-
-builder.Services.AddSingleton<IMachineService, MachineService>()
-                .AddSingleton<IMachineStateService, MachineStateService>()
-                .AddSingleton<IMachineSearchService, MachineSearchService>()
-                .AddSingleton<ISqlDialect, PostgresSqlDialect>();
-
-builder.Services.AddSingleton<ServerConfigurationService>();
-builder.Services.AddScoped<ISubscriptionService, SubscriptionService>();
-builder.Services.AddScoped<IDowngradeGuardService, DowngradeGuardService>();
-builder.Services.AddScoped<IDowngradeCleanupService, DowngradeCleanupService>();
-builder.Services.AddSingleton<IOidcSecretProtector, OidcSecretProtector>();
-builder.Services.AddSingleton<IIntegrationPayloadFormatter, Framlux.FleetManagement.Server.Services.Alerts.Formatters.SlackPayloadFormatter>();
-builder.Services.AddSingleton<IIntegrationPayloadFormatter, Framlux.FleetManagement.Server.Services.Alerts.Formatters.TeamsPayloadFormatter>();
-builder.Services.AddSingleton<IIntegrationPayloadFormatter, Framlux.FleetManagement.Server.Services.Alerts.Formatters.DiscordPayloadFormatter>();
-builder.Services.AddSingleton<IIntegrationPayloadFormatter, Framlux.FleetManagement.Server.Services.Alerts.Formatters.PagerDutyPayloadFormatter>();
-builder.Services.AddSingleton<IIntegrationPayloadFormatter, Framlux.FleetManagement.Server.Services.Alerts.Formatters.CustomPayloadFormatter>();
-builder.Services.AddSingleton<IRoleCacheInvalidator, RoleCacheInvalidator>();
-builder.Services.AddHttpClient<IEmailService, ResendEmailService>();
+// Server-specific handler registrations (have Auth dependencies that stay in server)
+builder.Services.AddScoped<Framlux.FleetManagement.Server.Services.Handlers.ITenantOidcHandler, Framlux.FleetManagement.Server.Services.Handlers.TenantOidcHandler>();
 
 // Shared endpoint validators (scoped — depend on scoped repositories)
 builder.Services.AddScoped<HistoryRequestValidator>();
 
-// Handler services for extracted endpoint business logic (scoped to share DatabaseContext)
-builder.Services.AddScoped<IInvitationHandler, InvitationHandler>();
-builder.Services.AddScoped<IMemberHandler, MemberHandler>();
-builder.Services.AddScoped<IOnboardingHandler, OnboardingHandler>();
-builder.Services.AddScoped<IMachineHandler, MachineHandler>();
-builder.Services.AddScoped<IDashboardHandler, DashboardHandler>();
-builder.Services.AddScoped<IAuthMeHandler, AuthMeHandler>();
-builder.Services.AddScoped<IAdminHandler, AdminHandler>();
-builder.Services.AddScoped<ITenantHandler, TenantHandler>();
-builder.Services.AddScoped<IRegistrationTokenHandler, RegistrationTokenHandler>();
-builder.Services.AddScoped<IUserHandler, UserHandler>();
-builder.Services.AddScoped<IMachineDetailHandler, MachineDetailHandler>();
-builder.Services.AddScoped<ITenantOidcHandler, TenantOidcHandler>();
-builder.Services.AddScoped<IDataExportHandler, DataExportHandler>();
-builder.Services.AddScoped<ISigningKeyService, SigningKeyService>();
-builder.Services.AddScoped<IMachineAuthorizedKeyService, MachineAuthorizedKeyService>();
-builder.Services.AddScoped<IRemoteCommandService, RemoteCommandService>();
-if (string.IsNullOrEmpty(objectStorageOpts.BucketName) == false)
-{
-    builder.Services.AddSingleton<IObjectStorageService, ObjectStorageService>();
-    builder.Services.AddHostedService<DataExportBackgroundService>();
-    builder.Services.AddHostedService<DataExportCleanupService>();
-}
-else
-{
-    builder.Services.AddSingleton<IObjectStorageService, NoOpObjectStorageService>();
-}
-
-builder.Services.AddSingleton<IAlertDeliveryService, AlertDeliveryService>();
-builder.Services.AddSingleton<IEventAlertService, EventAlertService>();
-builder.Services.AddHostedService<AlertEvaluationService>();
-builder.Services.AddHostedService<IntegrationDeliveryWorkerService>();
-builder.Services.AddHostedService<CommandExpiryBackgroundService>();
-builder.Services.AddHostedService<MachineStateStreamingService>();
-builder.Services.AddHostedService<HealthSweepService>();
-builder.Services.AddHostedService<PartitionManagementService>();
-
-// Billing configuration: explicit opt-in via Billing:Enabled flag
-builder.Services.AddSingleton<IBillingStatus, BillingStatus>();
-
-if (billingOpts.Enabled)
-{
-    // Billing gRPC client for managing Stripe subscriptions
-    builder.Services.AddGrpcClient<BillingManagement.BillingManagementClient>(options =>
-    {
-        options.Address = new Uri(billingOpts.GrpcUrl);
-    });
-    builder.Services.AddSingleton<IBillingApiClient, BillingApiClient>();
-
-    // Billing webhook handler processes inbound billing events
-    builder.Services.AddScoped<IBillingWebhookHandler, BillingWebhookHandler>();
-
-    // Stripe sync background service for reconciliation
-    builder.Services.AddHostedService<StripeSyncService>();
-
-    // Hourly usage heartbeat for metered billing
-    builder.Services.AddHostedService<UsageHeartbeatService>();
-}
-else
-{
-    // No-op: billing calls silently succeed (machine add/delete quantity sync is harmless)
-    builder.Services.AddSingleton<IBillingApiClient, NoOpBillingApiClient>();
-}
-
-ConfigurationOptions redisConfig = ConfigurationOptions.Parse(redisOpts.ConnectionString);
-redisConfig.ConnectTimeout = 5000;
-redisConfig.SyncTimeout = 3000;
-redisConfig.AsyncTimeout = 3000;
-redisConfig.ConnectRetry = 3;
-redisConfig.AbortOnConnectFail = false;
-builder.Services.AddSingleton<IConnectionMultiplexer>(sp =>
-    ConnectionMultiplexer.Connect(redisConfig));
-builder.Services.AddSingleton<IMachinePingService, RedisMachinePingService>();
-builder.Services.AddSingleton<ITelemetryDeduplicationService, RedisTelemetryDeduplicationService>();
-builder.Services.AddSingleton<IDistributedLock, RedisDistributedLock>();
+// Server-specific: rate limiting (requires Redis from AddCoreInfrastructure)
 builder.Services.AddRedisRateLimiting();
-
-// Circuit breaker for telemetry database writes — prevents cascading failures
-// when PostgreSQL is slow or overloaded.
-builder.Services.AddSingleton(
-    new ResiliencePipelineBuilder()
-        .AddTimeout(TimeSpan.FromSeconds(10))
-        .AddCircuitBreaker(new Polly.CircuitBreaker.CircuitBreakerStrategyOptions
-        {
-            FailureRatio = 0.5,
-            SamplingDuration = TimeSpan.FromSeconds(30),
-            MinimumThroughput = 5,
-            BreakDuration = TimeSpan.FromSeconds(15),
-        })
-        .Build());
-
-// Health checks for PostgreSQL and Redis
-builder.Services.AddHealthChecks()
-    .AddNpgSql(connectionString, name: "postgresql", failureStatus: HealthStatus.Unhealthy)
-    .AddRedis(redisOpts.ConnectionString, name: "redis", failureStatus: HealthStatus.Unhealthy);
 
 builder.Services.AddGrpc(options =>
 {

@@ -1,8 +1,13 @@
 <Solution>
-  <Project Path="test/unit/unit.csproj" />
-  <Project Path="test/functional/functional.csproj" />
   <Project Path="src/database/database.csproj" />
   <Project Path="src/grpc/grpc.csproj" />
   <Project Path="src/migrationRunner/migrationRunner.csproj" />
   <Project Path="src/server/server.csproj" />
+  <Project Path="src/services.core/services.core.csproj" />
+  <Project Path="src/services.worker/services.worker.csproj" />
+  <Project Path="test/shared/shared.csproj" />
+  <Project Path="test/unit/services.core/unit.services.core.csproj" />
+  <Project Path="test/unit/server/unit.server.csproj" />
+  <Project Path="test/unit/database/unit.database.csproj" />
+  <Project Path="test/functional/server/functional.server.csproj" />
 </Solution>

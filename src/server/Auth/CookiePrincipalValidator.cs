@@ -5,6 +5,7 @@
 using System.Security.Claims;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
+using Framlux.FleetManagement.Services.Core.Security;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using StackExchange.Redis;
@@ -19,8 +20,9 @@ public sealed class CookiePrincipalValidator : CookieAuthenticationEvents
 {
     /// <summary>
     /// Redis key prefix for cached user role claims. Full key is "{Prefix}{userId}".
+    /// Delegates to <see cref="IRoleCacheInvalidator.RoleCacheKeyPrefix"/> as the shared constant.
     /// </summary>
-    public const string RoleCacheKeyPrefix = "user:roles:";
+    public const string RoleCacheKeyPrefix = IRoleCacheInvalidator.RoleCacheKeyPrefix;
 
     private static readonly TimeSpan CacheTtl = TimeSpan.FromMinutes(5);
 

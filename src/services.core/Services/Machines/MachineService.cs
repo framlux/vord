@@ -1,0 +1,289 @@
+// Copyright (c) 2026 Framlux LLC
+// Licensed under the Functional Source License, Version 1.1, ALv2 Future License
+// See LICENSE for details.
+
+using System.Security.Cryptography;
+using System.Text;
+using Framlux.FleetManagement.Database.Enums;
+using Framlux.FleetManagement.Database.Models;
+using Framlux.FleetManagement.Database.Repositories;
+using Framlux.FleetManagement.Grpc.AgentRegistration;
+using Framlux.FleetManagement.Services.Core.Billing;
+using StackExchange.Redis;
+
+namespace Framlux.FleetManagement.Services.Core.Machines;
+
+/// <summary>
+/// Service for managing machine registration, activation, and lifecycle operations.
+/// Uses Redis for API key delivery cache to work across Kubernetes replicas.
+/// </summary>
+public sealed class MachineService : IMachineService
+{
+    private static readonly TimeSpan ApiKeyCacheTtl = TimeSpan.FromHours(24);
+
+    private readonly IServiceScopeFactory _serviceScopeFactory;
+    private readonly ILogger<MachineService> _logger;
+    private readonly IConnectionMultiplexer _redis;
+    private readonly IBillingApiClient _billingApiClient;
+
+    /// <summary>
+    /// Initializes a new instance of the <see cref="MachineService"/> class.
+    /// </summary>
+    /// <param name="scopeFactory">Factory for creating service scopes for database operations.</param>
+    /// <param name="logger">The logger instance for diagnostic logging.</param>
+    /// <param name="redis">Redis connection for cross-replica API key delivery cache.</param>
+    /// <param name="billingApiClient">Client for communicating billing updates to Stripe.</param>
+    /// <exception cref="ArgumentNullException">Thrown when a required parameter is null.</exception>
+    public MachineService(IServiceScopeFactory scopeFactory, ILogger<MachineService> logger, IConnectionMultiplexer redis, IBillingApiClient billingApiClient)
+    {
+        _serviceScopeFactory = scopeFactory ?? throw new ArgumentNullException(nameof(scopeFactory));
+        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        _redis = redis ?? throw new ArgumentNullException(nameof(redis));
+        _billingApiClient = billingApiClient ?? throw new ArgumentNullException(nameof(billingApiClient));
+    }
+
+    /// <inheritdoc/>
+    public async Task<(RegistrationStatus status, long? id, string? apiKey)> GetRegistrationStatusAsync(string serialNumber, string systemId, string registrationToken, bool needsApiKey, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrEmpty(registrationToken))
+        {
+            return (RegistrationStatus.UnknownRegistration, null, null);
+        }
+
+        string tokenHash = ComputeSha256Hash(registrationToken);
+
+        using IServiceScope scope = _serviceScopeFactory.CreateScope();
+        IRegistrationTokenRepository tokenRepo = scope.ServiceProvider.GetRequiredService<IRegistrationTokenRepository>();
+        IMachineRepository machineRepo = scope.ServiceProvider.GetRequiredService<IMachineRepository>();
+
+        // Validate the registration token exists
+        RegistrationToken? token = await tokenRepo.GetTokenByHashAsync(tokenHash, cancellationToken);
+
+        if (token is null)
+        {
+            return (RegistrationStatus.UnknownRegistration, null, null);
+        }
+
+        if (token.IsRevoked)
+        {
+            _logger.LogWarning("GetRegistrationStatus: token {TokenId} is revoked", token.Id);
+
+            return (RegistrationStatus.UnknownRegistration, null, null);
+        }
+
+        // Normalize to match how data is stored (lowercase).
+        string normalizedSerial = serialNumber.ToLowerInvariant();
+        string normalizedSystemId = systemId.ToLowerInvariant();
+
+        // Look up the machine by serial number and system ID within the token's tenant
+        Machine? machine = await machineRepo.GetMachineBySerialAndSystemIdAsync(normalizedSerial, normalizedSystemId, token.TenantId, cancellationToken);
+
+        if (machine is null)
+        {
+            return (RegistrationStatus.UnknownRegistration, null, null);
+        }
+
+        // If the caller does not need an API key, return status only.
+        if (needsApiKey == false)
+        {
+            return (RegistrationStatus.RegistrationActive, machine.Id, null);
+        }
+
+        // Try to deliver the cached plaintext key first (one-time delivery from initial registration).
+        IDatabase redisDb = _redis.GetDatabase();
+        string cacheKey = $"pending_api_key:{machine.Id}";
+        string? plaintextKey = null;
+        RedisValue cachedKey = await redisDb.StringGetAsync(cacheKey);
+
+        if (cachedKey.HasValue)
+        {
+            // Delete from cache first — safe direction: if MarkKeyDelivered fails afterward,
+            // the reissue path below will recover. The reverse order risked stale cache entries
+            // allowing duplicate delivery if KeyDeleteAsync failed after a successful DB update.
+            await redisDb.KeyDeleteAsync(cacheKey);
+
+            int updated = await machineRepo.MarkKeyDeliveredAsync(machine.Id, cancellationToken);
+
+            if (updated > 0)
+            {
+                plaintextKey = cachedKey.ToString();
+                _logger.LogInformation("API key delivered to machine {MachineId}", machine.Id);
+            }
+            else
+            {
+                _logger.LogWarning("Concurrent API key delivery attempt for machine {MachineId}", machine.Id);
+            }
+        }
+
+        // If no cached key was available, re-issue a new one.
+        if (plaintextKey is null)
+        {
+            plaintextKey = await machineRepo.ReissueApiKeyAsync(machine.Id, cancellationToken);
+
+            if (plaintextKey is not null)
+            {
+                // Cache for retry resilience and mark as delivered.
+                await redisDb.StringSetAsync(cacheKey, plaintextKey, ApiKeyCacheTtl);
+                await machineRepo.SetKeyDeliveredAsync(machine.Id, cancellationToken);
+                _logger.LogInformation("API key re-issued for machine {MachineId} in tenant {TenantId}", machine.Id, token.TenantId);
+            }
+            else
+            {
+                _logger.LogError("Failed to re-issue API key for machine {MachineId} — machine is active but has no credentials", machine.Id);
+            }
+        }
+
+        return (RegistrationStatus.RegistrationActive, machine.Id, plaintextKey);
+    }
+
+    /// <inheritdoc/>
+    public async Task<(long? machineId, string? apiKey, string errorMessage)> RegisterSystemAsync(RegisterSystemRequest request, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrEmpty(request.RegistrationToken))
+        {
+            return (null, null, "Registration token is required");
+        }
+
+        // Validate the registration token
+        string tokenHash = ComputeSha256Hash(request.RegistrationToken);
+
+        using IServiceScope scope = _serviceScopeFactory.CreateScope();
+        IRegistrationTokenRepository tokenRepo = scope.ServiceProvider.GetRequiredService<IRegistrationTokenRepository>();
+
+        RegistrationToken? token = await tokenRepo.GetTokenByHashAsync(tokenHash, cancellationToken);
+
+        if (token is null)
+        {
+            _logger.LogWarning("Registration attempt with invalid token hash");
+
+            return (null, null, "Invalid registration token");
+        }
+
+        if (token.IsRevoked)
+        {
+            _logger.LogWarning("Registration attempt with revoked token {TokenId}", token.Id);
+
+            return (null, null, "Registration token has been revoked");
+        }
+
+        IMachineRepository machineRepository = scope.ServiceProvider.GetRequiredService<IMachineRepository>();
+
+        // Normalize case-sensitive fields to lowercase for consistent index usage.
+        string normalizedSerial = request.SerialNumber.ToLowerInvariant();
+        string normalizedSystemId = request.SystemId.ToLowerInvariant();
+
+        // Check if we have a machine already with these IDs
+        bool machineExists = await machineRepository.DoesMachineExistAsync(normalizedSerial, normalizedSystemId, request.AssetTag ?? string.Empty, token.TenantId, cancellationToken);
+        if (machineExists)
+        {
+            return (null, null, "Machine already exists");
+        }
+
+        // Check subscription machine limit from tier defaults + overrides
+        ISubscriptionService subscriptionService = scope.ServiceProvider.GetRequiredService<ISubscriptionService>();
+        TenantSubscription? subscription = await subscriptionService.GetSubscriptionForTenantAsync(token.TenantId, cancellationToken);
+        EffectiveLimits effectiveLimits = await subscriptionService.GetEffectiveLimitsForTenantAsync(token.TenantId, cancellationToken);
+        int? machineLimit = effectiveLimits.MachineLimit;
+
+        _logger.LogInformation("Creating Machine for {SerialNumber} with token {TokenId}", request.SerialNumber, token.Id);
+        Machine machine = new()
+        {
+            ApiKeyHash = string.Empty, // Will be set by CreateMachineWithKeyAsync
+            Name = request.Hostname,
+            SerialNumber = normalizedSerial,
+            SystemId = normalizedSystemId,
+            AssetTagNumber = request.AssetTag,
+            MachineType = ConvertRpcMachineTypeToDatabaseMachineType(request.MachineType),
+            OperatingSystem = ConvertRpcOsTypeToDatabaseOsType(request.Os),
+            RegistrationTokenId = token.Id,
+            RegisteredOn = DateTimeOffset.UtcNow,
+            IsDeleted = false,
+            TenantId = token.TenantId,
+        };
+
+        (Machine? createdMachine, string? plaintextApiKey) = await machineRepository.CreateMachineWithKeyAsync(machine, machineLimit, cancellationToken);
+
+        if (createdMachine is null)
+        {
+            _logger.LogWarning("Machine limit exceeded for tenant {TenantId}", token.TenantId);
+
+            return (null, null, "Machine limit exceeded");
+        }
+
+        // Pre-create summary and detail rows so all subsequent telemetry writes are pure UPDATEs.
+        IMachineStateRepository machineStateRepo = scope.ServiceProvider.GetRequiredService<IMachineStateRepository>();
+        await machineStateRepo.InsertSummaryAsync(new MachineStateSummary
+        {
+            MachineId = createdMachine.Id,
+            TenantId = token.TenantId,
+            Name = machine.Name,
+            OperatingSystem = (byte)machine.OperatingSystem,
+            MachineType = (byte)machine.MachineType,
+            HealthStatus = 0,
+        }, cancellationToken);
+
+        await machineStateRepo.InsertDetailAsync(new MachineStateDetail
+        {
+            MachineId = createdMachine.Id,
+        }, cancellationToken);
+
+        // Cache the plaintext key in Redis for recovery via GetRegistrationStatus
+        IDatabase redisDb = _redis.GetDatabase();
+        string cacheKey = $"pending_api_key:{createdMachine.Id}";
+        await redisDb.StringSetAsync(cacheKey, plaintextApiKey, ApiKeyCacheTtl);
+
+        _logger.LogInformation("Machine created with ID {MachineId} for {SerialNumber}", createdMachine.Id, request.SerialNumber);
+
+        // Report usage to billing for metered billing (best effort, hourly heartbeat provides the safety net)
+        try
+        {
+            // Only report usage for paid tiers; Free tier has no Stripe subscription
+            if ((subscription is not null) && (subscription.Tier != SubscriptionTier.Free))
+            {
+                ITenantRepository tenantRepository = scope.ServiceProvider.GetRequiredService<ITenantRepository>();
+                Tenant? tenant = await tenantRepository.GetTenantByIdAsync(token.TenantId, cancellationToken);
+                if (tenant is not null)
+                {
+                    int machineCount = await machineRepository.GetActiveMachineCountAsync(token.TenantId, cancellationToken);
+                    await _billingApiClient.ReportMachineUsageAsync(tenant.ExternalId, machineCount, cancellationToken);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to report machine usage to billing for tenant {TenantId}", token.TenantId);
+        }
+
+        return (createdMachine.Id, plaintextApiKey, string.Empty);
+    }
+
+    private static string ComputeSha256Hash(string input)
+    {
+        byte[] hashBytes = SHA256.HashData(Encoding.UTF8.GetBytes(input));
+
+        return Convert.ToHexStringLower(hashBytes);
+    }
+
+    private static MachineTypes ConvertRpcMachineTypeToDatabaseMachineType(Framlux.FleetManagement.Grpc.AgentRegistration.MachineType input)
+        => input switch
+        {
+            Framlux.FleetManagement.Grpc.AgentRegistration.MachineType.BareMetalServerType => MachineTypes.BareMetalServer,
+            Framlux.FleetManagement.Grpc.AgentRegistration.MachineType.DesktopType => MachineTypes.Desktop,
+            Framlux.FleetManagement.Grpc.AgentRegistration.MachineType.LaptopType => MachineTypes.Laptop,
+            Framlux.FleetManagement.Grpc.AgentRegistration.MachineType.UnknownType => MachineTypes.Unknown,
+            Framlux.FleetManagement.Grpc.AgentRegistration.MachineType.VirtualMachineType => MachineTypes.VirtualMachine,
+            _ => MachineTypes.Unknown,
+        };
+
+    private static OperatingSystems ConvertRpcOsTypeToDatabaseOsType(Framlux.FleetManagement.Grpc.AgentRegistration.OperatingSystemType input)
+        => input switch
+        {
+            Framlux.FleetManagement.Grpc.AgentRegistration.OperatingSystemType.FedoraOs => OperatingSystems.Fedora,
+            Framlux.FleetManagement.Grpc.AgentRegistration.OperatingSystemType.MacOs => OperatingSystems.MacOS,
+            Framlux.FleetManagement.Grpc.AgentRegistration.OperatingSystemType.RedhatOs => OperatingSystems.RedHat,
+            Framlux.FleetManagement.Grpc.AgentRegistration.OperatingSystemType.UbuntuOs => OperatingSystems.Ubuntu,
+            Framlux.FleetManagement.Grpc.AgentRegistration.OperatingSystemType.UnknownOs => OperatingSystems.Unknown,
+            Framlux.FleetManagement.Grpc.AgentRegistration.OperatingSystemType.WindowsOs => OperatingSystems.Windows,
+            _ => OperatingSystems.Unknown,
+        };
+}

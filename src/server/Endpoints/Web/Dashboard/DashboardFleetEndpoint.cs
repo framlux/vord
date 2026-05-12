@@ -4,8 +4,8 @@
 
 using FastEndpoints;
 using Framlux.FleetManagement.Server.Auth;
-using Framlux.FleetManagement.Server.Endpoints.Web.Models.Dashboard;
-using Framlux.FleetManagement.Server.Services.Machines;
+using Framlux.FleetManagement.Services.Core.Models.Dashboard;
+using Framlux.FleetManagement.Services.Core.Machines;
 
 namespace Framlux.FleetManagement.Server.Endpoints.Web.Dashboard;
 

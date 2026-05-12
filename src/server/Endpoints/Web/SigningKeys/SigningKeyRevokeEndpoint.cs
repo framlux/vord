@@ -5,8 +5,8 @@
 using System.Security.Claims;
 using FastEndpoints;
 using Framlux.FleetManagement.Server.Auth;
-using Framlux.FleetManagement.Server.Services.Infrastructure;
-using Framlux.FleetManagement.Server.Services.Machines;
+using Framlux.FleetManagement.Services.Core.Infrastructure;
+using Framlux.FleetManagement.Services.Core.Machines;
 
 namespace Framlux.FleetManagement.Server.Endpoints.Web.SigningKeys;
 

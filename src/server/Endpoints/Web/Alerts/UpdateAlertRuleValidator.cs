@@ -5,7 +5,7 @@
 using FastEndpoints;
 using FluentValidation;
 using Framlux.FleetManagement.Database.Enums;
-using Framlux.FleetManagement.Server.Services.Alerts;
+using Framlux.FleetManagement.Services.Core.Alerts;
 
 namespace Framlux.FleetManagement.Server.Endpoints.Web.Alerts;
 

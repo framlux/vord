@@ -5,8 +5,8 @@
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
-using Framlux.FleetManagement.Server.Options;
-using Framlux.FleetManagement.Server.Services.Handlers;
+using Framlux.FleetManagement.Services.Core.Options;
+using Framlux.FleetManagement.Services.Core.Handlers;
 using Framlux.Vord.BillingGrpc;
 using Google.Protobuf.WellKnownTypes;
 using Grpc.Core;

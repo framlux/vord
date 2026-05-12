@@ -49,11 +49,17 @@ jobs:
       - name: Build (Release)
         run: dotnet build "$SOLUTION" -c Release --no-restore
 
-      - name: Run unit tests
-        run: dotnet run --project test/unit/unit.csproj -c Release --no-build
+      - name: Run unit tests (services.core)
+        run: dotnet run --project test/unit/services.core/unit.services.core.csproj -c Release --no-build
 
-      - name: Run functional tests
-        run: dotnet run --project test/functional/functional.csproj -c Release --no-build
+      - name: Run unit tests (server)
+        run: dotnet run --project test/unit/server/unit.server.csproj -c Release --no-build
+
+      - name: Run unit tests (database)
+        run: dotnet run --project test/unit/database/unit.database.csproj -c Release --no-build
+
+      - name: Run functional tests (server)
+        run: dotnet run --project test/functional/server/functional.server.csproj -c Release --no-build
 
       - name: Read version from csproj
         shell: bash
@@ -72,6 +78,9 @@ jobs:
 
       - name: Publish API Server
         run: dotnet publish src/server/server.csproj -c Release -r linux-x64 --self-contained /t:PublishContainer
+
+      - name: Publish Services Worker
+        run: dotnet publish src/services.worker/services.worker.csproj -c Release -r linux-x64 --self-contained /t:PublishContainer
 
       - name: Install web dependencies
         run: pnpm install

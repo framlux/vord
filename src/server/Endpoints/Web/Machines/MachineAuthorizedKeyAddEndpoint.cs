@@ -6,10 +6,10 @@ using FastEndpoints;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Server.Auth;
-using Framlux.FleetManagement.Server.Endpoints.Web.Models.Machines;
-using Framlux.FleetManagement.Server.Services.Billing;
-using Framlux.FleetManagement.Server.Services.Infrastructure;
-using Framlux.FleetManagement.Server.Services.Machines;
+using Framlux.FleetManagement.Services.Core.Models.Machines;
+using Framlux.FleetManagement.Services.Core.Billing;
+using Framlux.FleetManagement.Services.Core.Infrastructure;
+using Framlux.FleetManagement.Services.Core.Machines;
 
 namespace Framlux.FleetManagement.Server.Endpoints.Web.Machines;
 

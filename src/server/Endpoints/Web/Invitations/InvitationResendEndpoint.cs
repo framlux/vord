@@ -5,9 +5,9 @@
 using System.Security.Claims;
 using FastEndpoints;
 using Framlux.FleetManagement.Server.Auth;
-using Framlux.FleetManagement.Server.Options;
-using Framlux.FleetManagement.Server.Services.Handlers;
-using Framlux.FleetManagement.Server.Services.Infrastructure;
+using Framlux.FleetManagement.Services.Core.Options;
+using Framlux.FleetManagement.Services.Core.Handlers;
+using Framlux.FleetManagement.Services.Core.Infrastructure;
 using Microsoft.Extensions.Options;
 
 namespace Framlux.FleetManagement.Server.Endpoints.Web.Invitations;

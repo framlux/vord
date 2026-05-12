@@ -4,9 +4,9 @@
 
 using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Server.Auth;
-using Framlux.FleetManagement.Server.Endpoints.Web.Models.History;
-using Framlux.FleetManagement.Server.Services.Billing;
-using Framlux.FleetManagement.Server.Services.Infrastructure;
+using Framlux.FleetManagement.Services.Core.Models.History;
+using Framlux.FleetManagement.Services.Core.Billing;
+using Framlux.FleetManagement.Services.Core.Infrastructure;
 using Microsoft.AspNetCore.Http;
 
 namespace Framlux.FleetManagement.Server.Endpoints.Web.Machines.History;

@@ -4,7 +4,7 @@
 
 using System.Security.Claims;
 using FastEndpoints;
-using Framlux.FleetManagement.Server.Options;
+using Framlux.FleetManagement.Services.Core.Options;
 using Microsoft.Extensions.Options;
 
 namespace Framlux.FleetManagement.Server.Endpoints.Web.Tenants;

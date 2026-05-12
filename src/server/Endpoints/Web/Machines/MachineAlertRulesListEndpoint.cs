@@ -6,7 +6,7 @@ using FastEndpoints;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Server.Auth;
-using Framlux.FleetManagement.Server.Endpoints.Web.Alerts;
+using Framlux.FleetManagement.Services.Core.Models.Alerts;
 
 namespace Framlux.FleetManagement.Server.Endpoints.Web.Machines;
 

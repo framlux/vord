@@ -6,10 +6,10 @@ using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Server.Auth;
-using Framlux.FleetManagement.Server.Endpoints.Web.Tenants;
-using Framlux.FleetManagement.Server.Services.Billing;
-using Framlux.FleetManagement.Server.Services.Infrastructure;
-using Framlux.FleetManagement.Server.Services.Security;
+using Framlux.FleetManagement.Services.Core.Billing;
+using Framlux.FleetManagement.Services.Core.Infrastructure;
+using Framlux.FleetManagement.Services.Core.Models.Tenants;
+using Framlux.FleetManagement.Services.Core.Security;
 
 namespace Framlux.FleetManagement.Server.Services.Handlers;
 

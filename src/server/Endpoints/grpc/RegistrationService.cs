@@ -4,7 +4,7 @@
 
 using Framlux.FleetManagement.Grpc.AgentRegistration;
 using Framlux.FleetManagement.Server.Auth;
-using Framlux.FleetManagement.Server.Services.Machines;
+using Framlux.FleetManagement.Services.Core.Machines;
 using Grpc.Core;
 using Microsoft.AspNetCore.Authorization;
 

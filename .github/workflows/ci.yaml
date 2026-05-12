@@ -9,7 +9,7 @@ env:
   SOLUTION: machine-info.slnx
 
 jobs:
-  build-test-package:
+  build:
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -31,12 +31,6 @@ jobs:
       - name: Build (Release)
         run: dotnet build "$SOLUTION" -c Release
 
-      - name: Run unit tests
-        run: dotnet run --project test/unit/unit.csproj -c Release --no-build
-
-      - name: Run functional tests
-        run: dotnet run --project test/functional/functional.csproj -c Release --no-build
-
       - name: Build Go agent
         run: go build ./...
         working-directory: src/agent
@@ -52,3 +46,109 @@ jobs:
       - name: Build web
         run: pnpm build
         working-directory: src/web
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dotnet-build
+          path: |
+            src/*/bin/Release
+            test/*/bin/Release
+            test/*/*/bin/Release
+          retention-days: 1
+
+  test-unit-services-core:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Authenticate GitHub Packages
+        run: dotnet nuget update source framlux --username ${{ github.actor }} --password ${{ secrets.GITHUB_TOKEN }} --store-password-in-clear-text
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dotnet-build
+
+      - name: Run unit tests (services.core)
+        run: dotnet run --project test/unit/services.core/unit.services.core.csproj -c Release --no-build
+
+  test-unit-server:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Authenticate GitHub Packages
+        run: dotnet nuget update source framlux --username ${{ github.actor }} --password ${{ secrets.GITHUB_TOKEN }} --store-password-in-clear-text
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dotnet-build
+
+      - name: Run unit tests (server)
+        run: dotnet run --project test/unit/server/unit.server.csproj -c Release --no-build
+
+  test-unit-database:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Authenticate GitHub Packages
+        run: dotnet nuget update source framlux --username ${{ github.actor }} --password ${{ secrets.GITHUB_TOKEN }} --store-password-in-clear-text
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dotnet-build
+
+      - name: Run unit tests (database)
+        run: dotnet run --project test/unit/database/unit.database.csproj -c Release --no-build
+
+  test-functional-server:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Authenticate GitHub Packages
+        run: dotnet nuget update source framlux --username ${{ github.actor }} --password ${{ secrets.GITHUB_TOKEN }} --store-password-in-clear-text
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          name: dotnet-build
+
+      - name: Run functional tests (server)
+        run: dotnet run --project test/functional/server/functional.server.csproj -c Release --no-build
