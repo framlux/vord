@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file. See [versionize](https://github.com/versionize/versionize) for commit guidelines.
 
+<a name="2.8.1"></a>
+## [2.8.1](https://www.github.com/framlux/vord/releases/tag/v2.8.1) (2026-05-12)
+
+### Bug Fixes
+
+* Fixing code standard violations and broken temp nuget feed ([ee72b36](https://www.github.com/framlux/vord/commit/ee72b36e8845363108dcc732423ef09431dea065))
+
 <a name="2.8.0"></a>
 ## [2.8.0](https://www.github.com/framlux/vord/releases/tag/v2.8.0) (2026-05-12)
 
