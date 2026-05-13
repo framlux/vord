@@ -271,21 +271,9 @@ builder.Services.AddHttpContextAccessor();
 builder.Services.AddCascadingAuthenticationState();
 builder.Services.AddFastEndpoints();
 
-// Data protection for cookie compatibility — keys stored in Redis for multi-replica support.
-// Uses DI-aware configuration so the Redis connection is resolved lazily, allowing tests
-// to replace IConnectionMultiplexer before any connection is established.
-builder.Services.AddDataProtection()
-                .SetApplicationName("Framlux.FleetManagement.Web");
-builder.Services.AddSingleton<IConfigureOptions<KeyManagementOptions>>(sp =>
-{
-    IConnectionMultiplexer redis = sp.GetRequiredService<IConnectionMultiplexer>();
-
-    return new ConfigureOptions<KeyManagementOptions>(options =>
-    {
-        options.XmlRepository = new RedisXmlRepository(
-            () => redis.GetDatabase(), "DataProtection-Keys");
-    });
-});
+// Data protection for cookie compatibility — keys stored in Redis so the api-server's
+// multiple replicas and the services-worker process share the same key ring.
+builder.Services.AddCoreDataProtection("Framlux.FleetManagement.Web");
 
 WebApplication app = builder.Build();
 

@@ -21,9 +21,13 @@ using Framlux.Vord.BillingGrpc;
 using LinqToDB;
 using LinqToDB.Extensions.DependencyInjection;
 using LinqToDB.Extensions.Logging;
+using Microsoft.AspNetCore.DataProtection;
+using Microsoft.AspNetCore.DataProtection.KeyManagement;
+using Microsoft.AspNetCore.DataProtection.StackExchangeRedis;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
+using Microsoft.Extensions.Options;
 using Npgsql;
 using Polly;
 using Serilog;
@@ -176,6 +180,33 @@ public static class ServiceCollectionExtensions
         services.AddHealthChecks()
             .AddNpgSql(postgresConnectionString, name: "postgresql", failureStatus: HealthStatus.Unhealthy)
             .AddRedis(redisOpts.ConnectionString, name: "redis", failureStatus: HealthStatus.Unhealthy);
+
+        return services;
+    }
+
+    /// <summary>
+    /// Registers ASP.NET Core Data Protection with keys persisted in Redis so multiple
+    /// replicas (and processes — api-server and services-worker) share the same key ring.
+    /// Must be called after <see cref="AddCoreInfrastructure"/> so that
+    /// <see cref="IConnectionMultiplexer"/> is registered.
+    /// </summary>
+    public static IServiceCollection AddCoreDataProtection(
+        this IServiceCollection services,
+        string applicationName)
+    {
+        services.AddDataProtection()
+                .SetApplicationName(applicationName);
+
+        services.AddSingleton<IConfigureOptions<KeyManagementOptions>>(sp =>
+        {
+            IConnectionMultiplexer redis = sp.GetRequiredService<IConnectionMultiplexer>();
+
+            return new ConfigureOptions<KeyManagementOptions>(options =>
+            {
+                options.XmlRepository = new RedisXmlRepository(
+                    () => redis.GetDatabase(), "DataProtection-Keys");
+            });
+        });
 
         return services;
     }

@@ -21,7 +21,6 @@ public sealed class DataExportBackgroundService : BackgroundService
 
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly IDistributedLock _distributedLock;
-    private readonly IDataExportHandler _handler;
     private readonly ILogger<DataExportBackgroundService> _logger;
 
     /// <summary>
@@ -30,17 +29,14 @@ public sealed class DataExportBackgroundService : BackgroundService
     public DataExportBackgroundService(
         IServiceScopeFactory scopeFactory,
         IDistributedLock distributedLock,
-        IDataExportHandler handler,
         ILogger<DataExportBackgroundService> logger)
     {
         ArgumentNullException.ThrowIfNull(scopeFactory);
         ArgumentNullException.ThrowIfNull(distributedLock);
-        ArgumentNullException.ThrowIfNull(handler);
         ArgumentNullException.ThrowIfNull(logger);
 
         _scopeFactory = scopeFactory;
         _distributedLock = distributedLock;
-        _handler = handler;
         _logger = logger;
     }
 
@@ -74,6 +70,7 @@ public sealed class DataExportBackgroundService : BackgroundService
     {
         using IServiceScope scope = _scopeFactory.CreateScope();
         IDataExportRepository exportRepo = scope.ServiceProvider.GetRequiredService<IDataExportRepository>();
+        IDataExportHandler handler = scope.ServiceProvider.GetRequiredService<IDataExportHandler>();
 
         List<DataExportJob> pendingJobs = await exportRepo.GetPendingExportJobsAsync(ct);
 
@@ -85,7 +82,7 @@ public sealed class DataExportBackgroundService : BackgroundService
             }
 
             _logger.LogInformation("Processing data export job {JobId} for tenant {TenantId}", job.Id, job.TenantId);
-            await _handler.ProcessExportJobAsync(job.Id, ct);
+            await handler.ProcessExportJobAsync(job.Id, ct);
         }
     }
 }

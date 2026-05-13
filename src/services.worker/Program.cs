@@ -42,6 +42,7 @@ ObjectStorageOptions objectStorageOpts = builder.Configuration.GetSection("Objec
 string connectionString = ServiceCollectionExtensions.BuildConnectionString(dbOpts, "Framlux.FleetManagement.ServicesWorker");
 builder.Services.AddRepositories(dbOpts, "Framlux.FleetManagement.ServicesWorker");
 builder.Services.AddCoreInfrastructure(redisOpts, connectionString);
+builder.Services.AddCoreDataProtection("Framlux.FleetManagement.Web");
 builder.Services.AddCoreServices(billingOpts, objectStorageOpts);
 
 // Background workers — the primary purpose of this process
