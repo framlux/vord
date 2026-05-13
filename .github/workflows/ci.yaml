@@ -23,7 +23,15 @@ jobs:
 
       - uses: actions/setup-go@v5
         with:
-          go-version: 'stable'
+          go-version: '1.26.x'
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.1.1
 
       - name: Authenticate GitHub Packages
         run: dotnet nuget update source framlux --username ${{ github.actor }} --password ${{ secrets.GITHUB_TOKEN }} --store-password-in-clear-text
@@ -35,12 +43,8 @@ jobs:
         run: go build ./...
         working-directory: src/agent
 
-      - uses: pnpm/action-setup@v4
-        with:
-          version: 10
-
       - name: Install web dependencies
-        run: pnpm install
+        run: pnpm install --frozen-lockfile
         working-directory: src/web
 
       - name: Build web
