@@ -2,6 +2,46 @@
 
 All notable changes to this project will be documented in this file. See [versionize](https://github.com/versionize/versionize) for commit guidelines.
 
+<a name="2.8.0"></a>
+## [2.8.0](https://www.github.com/framlux/vord/releases/tag/v2.8.0) (2026-05-12)
+
+### Features
+
+* Add ReportMachineUsageAsync unit tests for billing client ([df4eb4e](https://www.github.com/framlux/vord/commit/df4eb4e0b3cddb51019f9fc75b7b2e8270961b38))
+* Add TierFeatureLimits and TenantSubscriptionOverrides tables ([38d5a71](https://www.github.com/framlux/vord/commit/38d5a71d76aa43aa1a5ae0442f0c4c02cfc09f8c))
+* Add UsageHeartbeatService unit tests ([f7158b1](https://www.github.com/framlux/vord/commit/f7158b18d436d900316dd63348f2fc0b50b75aa1))
+* Adding historical lookup of telemtry ([7786fc0](https://www.github.com/framlux/vord/commit/7786fc082db750033eab889676accbbb5abc16fe))
+* Alert delivery decoupling, webhook secrets, rule lifecycle, auth guards, and MachineOffline metric ([9886c56](https://www.github.com/framlux/vord/commit/9886c56fe213cf7656fcef5f95470e1ad5f0f495))
+* Frontend fixes, test quality improvements, and defensive bug fixes ([b739181](https://www.github.com/framlux/vord/commit/b7391819fc95c4cecfd01a17a865701c24a41452))
+* Implement metered billing in fleet server ([869b715](https://www.github.com/framlux/vord/commit/869b7150b7e9e1edc0967fd8f4bfbd2b309e0f36))
+* Overhauling subscriptions to be metered billing for more fair pricing ([254384b](https://www.github.com/framlux/vord/commit/254384b0b266a7e29039ad9af10887ae54c1f0c9))
+* Overhauling Webhooks and adding Teams / Slack / PagerDuty integrations ([b9f01e4](https://www.github.com/framlux/vord/commit/b9f01e4ce435582d76072b09328769aa3ae55c8a))
+* Pass pending action to billing-api on cancel/downgrade ([c39cef3](https://www.github.com/framlux/vord/commit/c39cef38e18c67daa59ac887abe8c4c8c3c450f1))
+* Splitting server out to API server and service worker, with test splits ([59961b7](https://www.github.com/framlux/vord/commit/59961b72bdf9c0719639cb3759beebcba8dbc4ac))
+* Upgrading Alerts to be machine-specific ([bdc45f6](https://www.github.com/framlux/vord/commit/bdc45f644fdbaf2b8bde57773543c46180eceffc))
+
+### Bug Fixes
+
+* Add cross-cutting test coverage for alerts pre-production readiness ([0782780](https://www.github.com/framlux/vord/commit/0782780261d66597b2a037d0aac18d7d07fd16ff))
+* Adding more tests ([33f3940](https://www.github.com/framlux/vord/commit/33f3940ebd3b1023899c8c102a9ceacf57d21a8f))
+* Adding more tests ([7387c21](https://www.github.com/framlux/vord/commit/7387c21eadcaf3e5462dc63b47e59fa99a25c678))
+* Claude code-review fixes ([68a5067](https://www.github.com/framlux/vord/commit/68a5067dcddb84a65330fd9a54e04df9d14305db))
+* Eliminate flaky test caused by concurrent FastEndpoints host creation ([824f85d](https://www.github.com/framlux/vord/commit/824f85d7d16b896a0088e4c8557e757c0b9434a8))
+* Fixing billing integrations ([8e70b6b](https://www.github.com/framlux/vord/commit/8e70b6ba4dcd1e2e358419dc249b22c8b96fdf6a))
+* Fixing broken alerts ([38be340](https://www.github.com/framlux/vord/commit/38be340311b094086c309221da3df2ffe5b3cac6))
+* Fixing broken install script and Dashboard vs Details page mismatch ([f5e2391](https://www.github.com/framlux/vord/commit/f5e23911ad445316b2ca01ba484fdb6b254c44ac))
+* Fixing Claude-code-review found horizontal scalability issues ([21eaeea](https://www.github.com/framlux/vord/commit/21eaeea80923b3cdb369ec7bb6843a46f59447d2))
+* Fixing code review issues in Svelte found by Claude ([8f8d62d](https://www.github.com/framlux/vord/commit/8f8d62d1b6f224d7b3dfa430cc7fed6d10ef2854))
+* Fixing code review issues via Claude ([29a7599](https://www.github.com/framlux/vord/commit/29a7599f40caa2ba1e46206e73e975e11164ed52))
+* Fixing FastEndpoint Validator<T> pattern testing ([8b9886a](https://www.github.com/framlux/vord/commit/8b9886ad30791061d984d00e60ea979e93bfa137))
+* fixing Go agent from Claude code review feedback ([619853a](https://www.github.com/framlux/vord/commit/619853a6cfb1b30f6792b7f475edd177e9f70838))
+* Fixing incorrect assert usage for newer TUnit ([4938dbc](https://www.github.com/framlux/vord/commit/4938dbca50e941dff0bc3d5364f84d45e240937e))
+* Fixing test warnings and removing project reference for nuget reference ([7788f01](https://www.github.com/framlux/vord/commit/7788f0155bb0cafa7cdc4b48691d63a00d4a1a6f))
+* Moving DB query layer to a Repository pattern for better maintenance ([5cffca7](https://www.github.com/framlux/vord/commit/5cffca75f6f4c5d80d6f92f30edb45c12cf822d5))
+* moving to FastEndpoints native DTO validation ([d4fcbd6](https://www.github.com/framlux/vord/commit/d4fcbd61d523f3982e7e1a1783878992f633617e))
+* Schema and model fixes for alerts pre-production readiness ([0a3bc59](https://www.github.com/framlux/vord/commit/0a3bc59093262deda0a33663636e6ce908f384b0))
+* Updating Alerts to be Metric or Event based for better customization ([af8aef8](https://www.github.com/framlux/vord/commit/af8aef829e85e123326e857ca8acfeda434b67fe))
+
 <a name="2.7.0"></a>
 ## [2.7.0](https://www.github.com/framlux/vord/releases/tag/v2.7.0) (2026-04-27)
 
