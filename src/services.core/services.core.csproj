@@ -7,7 +7,7 @@
     <RootNamespace>Framlux.FleetManagement.Services.Core</RootNamespace>
     <AssemblyName>Framlux.FleetManagement.Services.Core</AssemblyName>
     <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
-    <Version>2.8.3</Version>
+    <Version>2.8.4</Version>
   </PropertyGroup>
 
   <ItemGroup>

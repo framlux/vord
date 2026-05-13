@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file. See [versionize](https://github.com/versionize/versionize) for commit guidelines.
 
+<a name="2.8.4"></a>
+## [2.8.4](https://www.github.com/framlux/vord/releases/tag/v2.8.4) (2026-05-13)
+
+### Bug Fixes
+
+* Fixing pnpm build with CI flag ([d4683a0](https://www.github.com/framlux/vord/commit/d4683a0ffed58bdb0cd9e04c991ca690d0dd4323))
+
 <a name="2.8.3"></a>
 ## [2.8.3](https://www.github.com/framlux/vord/releases/tag/v2.8.3) (2026-05-13)
 

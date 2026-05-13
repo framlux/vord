@@ -7,7 +7,7 @@
     <RootNamespace>Framlux.FleetManagement.Services.Worker</RootNamespace>
     <AssemblyName>Framlux.FleetManagement.Services.Worker</AssemblyName>
     <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
-    <Version>2.8.3</Version>
+    <Version>2.8.4</Version>
     <ServerGarbageCollection>true</ServerGarbageCollection>
     <SelfContained>true</SelfContained>
     <ContainerRegistry>ghcr.io</ContainerRegistry>
