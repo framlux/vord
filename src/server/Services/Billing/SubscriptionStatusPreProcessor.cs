@@ -11,18 +11,6 @@ using Framlux.FleetManagement.Services.Core.Billing;
 namespace Framlux.FleetManagement.Server.Services.Billing;
 
 /// <summary>
-/// Tag applied to endpoints that are exempt from subscription enforcement.
-/// Apply this tag in Configure() to allow access regardless of subscription status.
-/// </summary>
-public static class EndpointTags
-{
-    /// <summary>
-    /// Endpoints with this tag are exempt from subscription enforcement.
-    /// </summary>
-    public const string SubscriptionExempt = "SubscriptionExempt";
-}
-
-/// <summary>
 /// FastEndpoints global pre-processor that enforces read-only access for tenants with canceled subscriptions.
 /// GET requests are always allowed. POST/PUT/DELETE requests return 403 unless the endpoint is tagged
 /// with <see cref="EndpointTags.SubscriptionExempt"/>.

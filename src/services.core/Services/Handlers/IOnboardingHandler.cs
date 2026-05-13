@@ -16,19 +16,3 @@ public interface IOnboardingHandler
     /// </summary>
     Task<ServiceResult<OnboardingResult>> CreateOrganizationAsync(string organizationName, string tier, int userId, string uniqueId, CancellationToken ct);
 }
-
-/// <summary>
-/// Result of organization creation.
-/// </summary>
-public sealed class OnboardingResult
-{
-    /// <summary>
-    /// The created tenant ID.
-    /// </summary>
-    public int TenantId { get; init; }
-
-    /// <summary>
-    /// Error message if the operation failed.
-    /// </summary>
-    public string? ErrorMessage { get; init; }
-}

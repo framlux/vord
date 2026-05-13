@@ -68,21 +68,3 @@ public interface ISubscriptionService
     /// </summary>
     Task<EffectiveLimits> GetEffectiveLimitsForTenantAsync(int tenantId, CancellationToken ct = default);
 }
-
-/// <summary>
-/// Represents the effective feature limits for a tenant after applying overrides.
-/// </summary>
-public sealed record EffectiveLimits
-{
-    /// <summary>Maximum machines allowed.</summary>
-    public int MachineLimit { get; init; }
-
-    /// <summary>Data retention in days.</summary>
-    public int RetentionDays { get; init; }
-
-    /// <summary>Maximum alert rules allowed.</summary>
-    public int AlertRuleLimit { get; init; }
-
-    /// <summary>Maximum webhooks allowed.</summary>
-    public int WebhookLimit { get; init; }
-}
