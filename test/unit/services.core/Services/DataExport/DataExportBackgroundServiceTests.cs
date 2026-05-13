@@ -36,9 +36,13 @@ public sealed class DataExportBackgroundServiceTests
         IDataExportHandler handler = Substitute.For<IDataExportHandler>();
         ILogger<DataExportBackgroundService> logger = Substitute.For<ILogger<DataExportBackgroundService>>();
 
-        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+        Dictionary<Type, object> scopedServices = new()
+        {
+            [typeof(IDataExportHandler)] = handler,
+        };
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context, scopedServices);
 
-        DataExportBackgroundService service = new(scopeFactory, distributedLock, handler, logger);
+        DataExportBackgroundService service = new(scopeFactory, distributedLock, logger);
 
         return (service, distributedLock, handler, logger, dbFactory);
     }
