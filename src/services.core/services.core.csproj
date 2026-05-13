@@ -23,8 +23,6 @@
 
   <ItemGroup>
     <ProjectReference Include="..\database\database.csproj" />
-    <!-- TODO: Revert to PackageReference after billingGrpc NuGet is published -->
-    <ProjectReference Include="../../../vord-internal/src/billingGrpc/billingGrpc.csproj" />
   </ItemGroup>
 
   <ItemGroup>
@@ -33,6 +31,7 @@
     <PackageReference Include="AspNetCore.HealthChecks.Redis" Version="9.0.0" />
     <PackageReference Include="CloudNative.CloudEvents" Version="2.8.0" />
     <PackageReference Include="CloudNative.CloudEvents.SystemTextJson" Version="2.8.0" />
+    <PackageReference Include="Framlux.Vord.BillingGrpc" Version="1.12.1" />
     <PackageReference Include="linq2db" Version="6.2.1" />
     <PackageReference Include="linq2db.Extensions" Version="6.2.1" />
     <PackageReference Include="linq2db.PostgreSQL" Version="6.2.1" />

@@ -193,7 +193,8 @@ public class HistoryEndpointUnitTests
     public async Task Cpu_UsesCorrectTelemetryTypeConstant()
     {
         // The CPU endpoint uses TelemetryTypeIds.CpuUsage which should be 6
-        await Assert.That(TelemetryTypeIds.CpuUsage).IsEqualTo((short)6);
+        short actual = TelemetryTypeIds.CpuUsage;
+        await Assert.That(actual).IsEqualTo((short)6);
     }
 
     [Test]
@@ -276,7 +277,8 @@ public class HistoryEndpointUnitTests
     public async Task Memory_UsesCorrectTelemetryTypeConstant()
     {
         // The Memory endpoint uses TelemetryTypeIds.MemoryUsage which should be 7
-        await Assert.That(TelemetryTypeIds.MemoryUsage).IsEqualTo((short)7);
+        short actual = TelemetryTypeIds.MemoryUsage;
+        await Assert.That(actual).IsEqualTo((short)7);
     }
 
     [Test]
@@ -380,7 +382,8 @@ public class HistoryEndpointUnitTests
     public async Task Disk_UsesCorrectTelemetryTypeConstant()
     {
         // The Disk endpoint uses TelemetryTypeIds.DiskUsage which should be 8
-        await Assert.That(TelemetryTypeIds.DiskUsage).IsEqualTo((short)8);
+        short actual = TelemetryTypeIds.DiskUsage;
+        await Assert.That(actual).IsEqualTo((short)8);
     }
 
     [Test]
@@ -539,7 +542,8 @@ public class HistoryEndpointUnitTests
     public async Task Services_UsesCorrectTelemetryTypeConstant()
     {
         // The Services endpoint uses TelemetryTypeIds.ServiceStatus which should be 12
-        await Assert.That(TelemetryTypeIds.ServiceStatus).IsEqualTo((short)12);
+        short actual = TelemetryTypeIds.ServiceStatus;
+        await Assert.That(actual).IsEqualTo((short)12);
     }
 
     [Test]
@@ -698,7 +702,8 @@ public class HistoryEndpointUnitTests
     public async Task Ssh_UsesCorrectTelemetryTypeConstant()
     {
         // The SSH endpoint uses TelemetryTypeIds.SshSessions which should be 9
-        await Assert.That(TelemetryTypeIds.SshSessions).IsEqualTo((short)9);
+        short actual = TelemetryTypeIds.SshSessions;
+        await Assert.That(actual).IsEqualTo((short)9);
     }
 
     [Test]
@@ -805,7 +810,8 @@ public class HistoryEndpointUnitTests
         await Assert.That(capped.Count).IsEqualTo(500);
 
         // Verify the cap constant matches the expected value
-        await Assert.That(SshHistoryEndpoint.MaxEvents).IsEqualTo(500);
+        int maxEvents = SshHistoryEndpoint.MaxEvents;
+        await Assert.That(maxEvents).IsEqualTo(500);
     }
 
     [Test]

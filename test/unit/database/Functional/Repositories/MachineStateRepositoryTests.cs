@@ -769,8 +769,8 @@ public class MachineStateRepositoryTests
         MachineStateSummary? updated = await repo.GetSummaryForMachineAsync(machineId);
 
         await Assert.That(updated).IsNotNull();
-        await Assert.That(updated!.HasDiskHealthIssue).IsEqualTo(true);
-        await Assert.That(updated.HasHardwareIssue).IsEqualTo(false);
+        await Assert.That(updated!.HasDiskHealthIssue).IsTrue();
+        await Assert.That(updated.HasHardwareIssue).IsFalse();
         // Package fields should survive the hardware health update
         await Assert.That(updated.PendingUpdates).IsEqualTo(12);
         await Assert.That(updated.SecurityUpdates).IsEqualTo(3);
