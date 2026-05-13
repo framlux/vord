@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file. See [versionize](https://github.com/versionize/versionize) for commit guidelines.
 
+<a name="2.8.2"></a>
+## [2.8.2](https://www.github.com/framlux/vord/releases/tag/v2.8.2) (2026-05-12)
+
+### Bug Fixes
+
+* fixing npm and go version pinning ([3c74395](https://www.github.com/framlux/vord/commit/3c74395d3ee72128d5f6923fc6d16b2d412e51b9))
+
 <a name="2.8.1"></a>
 ## [2.8.1](https://www.github.com/framlux/vord/releases/tag/v2.8.1) (2026-05-12)
 
