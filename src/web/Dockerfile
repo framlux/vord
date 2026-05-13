@@ -1,4 +1,5 @@
 FROM node:22-alpine AS build
+ENV CI=true
 RUN corepack enable && corepack prepare pnpm@11.1.1 --activate
 WORKDIR /app
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
@@ -7,6 +8,7 @@ COPY . .
 RUN pnpm run build
 
 FROM node:22-alpine
+ENV CI=true
 RUN corepack enable && corepack prepare pnpm@11.1.1 --activate
 WORKDIR /app
 COPY --from=build /app/build ./build

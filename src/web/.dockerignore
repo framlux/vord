@@ -1,0 +1,11 @@
+node_modules
+build
+.svelte-kit
+coverage
+.git
+.gitignore
+.env
+.env.*
+npm-cache
+Dockerfile
+.dockerignore
