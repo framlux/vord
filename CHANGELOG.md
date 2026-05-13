@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file. See [versionize](https://github.com/versionize/versionize) for commit guidelines.
 
+<a name="2.8.5"></a>
+## [2.8.5](https://www.github.com/framlux/vord/releases/tag/v2.8.5) (2026-05-13)
+
+### Bug Fixes
+
+* Fixing dependency issue with service.worker ([7d91eea](https://www.github.com/framlux/vord/commit/7d91eea14b744d24d6fe20209fa769d54ade9239))
+
 <a name="2.8.4"></a>
 ## [2.8.4](https://www.github.com/framlux/vord/releases/tag/v2.8.4) (2026-05-13)
 
