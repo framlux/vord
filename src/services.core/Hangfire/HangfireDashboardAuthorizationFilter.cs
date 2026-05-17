@@ -2,13 +2,15 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
+using System.Security.Claims;
 using Hangfire.Dashboard;
 using Microsoft.AspNetCore.Http;
 
 namespace Framlux.FleetManagement.Services.Core.Hangfire;
 
 /// <summary>
-/// Authorizes Hangfire dashboard access to users in the Admin role.
+/// Authorizes Hangfire dashboard access to system-wide administrators (users with the "iga" claim
+/// set to true). Matches the existing "Admin" authorization policy in server/Program.cs.
 /// </summary>
 public sealed class HangfireDashboardAuthorizationFilter : IDashboardAuthorizationFilter
 {
@@ -23,10 +25,11 @@ public sealed class HangfireDashboardAuthorizationFilter : IDashboardAuthorizati
     /// <summary>
     /// Pure authorization logic, exposed as an internal static method so it can be unit tested
     /// directly against a plain <see cref="HttpContext"/> without coupling to Hangfire dashboard
-    /// types whose constructors and namespaces drift across versions.
+    /// types whose constructors and namespaces drift across versions. System-wide administrators
+    /// are identified by the "iga" (is-global-admin) claim set to <see cref="bool.TrueString"/>.
     /// </summary>
     /// <param name="httpContext">The current HTTP context.</param>
-    /// <returns>True if the user is authenticated and in the Admin role; false otherwise.</returns>
+    /// <returns>True if the user is authenticated and a global admin; false otherwise.</returns>
     internal static bool AuthorizeHttpContext(HttpContext httpContext)
     {
         ArgumentNullException.ThrowIfNull(httpContext);
@@ -36,6 +39,8 @@ public sealed class HangfireDashboardAuthorizationFilter : IDashboardAuthorizati
             return false;
         }
 
-        return httpContext.User.IsInRole("Admin");
+        string? iga = httpContext.User.FindFirstValue("iga");
+
+        return string.Equals(iga, bool.TrueString, StringComparison.OrdinalIgnoreCase);
     }
 }

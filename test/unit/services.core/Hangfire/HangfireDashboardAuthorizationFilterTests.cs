@@ -14,13 +14,17 @@ namespace Framlux.FleetManagement.Test.HangfireSupport;
 /// types whose constructors and namespaces drift across Hangfire versions. Per CLAUDE.md:
 /// extract non-trivial logic from framework-coupled entry points into internal static methods
 /// so they can be unit tested directly.
+///
+/// The filter authorizes system-wide administrators identified by the "iga" (is-global-admin) claim
+/// set to <see cref="bool.TrueString"/>, matching the existing "Admin" authorization policy in
+/// server/Program.cs and the convention enforced by AllowedRolesHandler.
 /// </summary>
 public sealed class HangfireDashboardAuthorizationFilterTests
 {
     [Test]
     public async Task AuthorizeHttpContext_AnonymousUser_ReturnsFalse()
     {
-        HttpContext ctx = BuildHttpContext(isAuthenticated: false, isAdmin: false);
+        HttpContext ctx = BuildHttpContext(isAuthenticated: false, isGlobalAdmin: false);
 
         bool result = HangfireDashboardAuthorizationFilter.AuthorizeHttpContext(ctx);
 
@@ -30,7 +34,7 @@ public sealed class HangfireDashboardAuthorizationFilterTests
     [Test]
     public async Task AuthorizeHttpContext_AuthenticatedNonAdmin_ReturnsFalse()
     {
-        HttpContext ctx = BuildHttpContext(isAuthenticated: true, isAdmin: false);
+        HttpContext ctx = BuildHttpContext(isAuthenticated: true, isGlobalAdmin: false);
 
         bool result = HangfireDashboardAuthorizationFilter.AuthorizeHttpContext(ctx);
 
@@ -38,21 +42,23 @@ public sealed class HangfireDashboardAuthorizationFilterTests
     }
 
     [Test]
-    public async Task AuthorizeHttpContext_AdminUser_ReturnsTrue()
+    public async Task AuthorizeHttpContext_GlobalAdmin_ReturnsTrue()
     {
-        HttpContext ctx = BuildHttpContext(isAuthenticated: true, isAdmin: true);
+        HttpContext ctx = BuildHttpContext(isAuthenticated: true, isGlobalAdmin: true);
 
         bool result = HangfireDashboardAuthorizationFilter.AuthorizeHttpContext(ctx);
 
         await Assert.That(result).IsTrue();
     }
 
-    private static HttpContext BuildHttpContext(bool isAuthenticated, bool isAdmin)
+    private static HttpContext BuildHttpContext(bool isAuthenticated, bool isGlobalAdmin)
     {
         List<Claim> claims = new();
-        if (isAdmin)
+        if (isGlobalAdmin)
         {
-            claims.Add(new Claim(ClaimTypes.Role, "Admin"));
+            // Matches TestAuthHandler.cs and the existing "Admin" authorization policy in
+            // server/Program.cs which both gate on Claim("iga", bool.TrueString).
+            claims.Add(new Claim("iga", bool.TrueString));
         }
 
         ClaimsIdentity identity = isAuthenticated ? new ClaimsIdentity(claims, "test") : new ClaimsIdentity();
