@@ -10,6 +10,7 @@ using Framlux.FleetManagement.Services.Core.Billing;
 using Framlux.FleetManagement.Services.Core.Commands;
 using Framlux.FleetManagement.Services.Core.DataExport;
 using Framlux.FleetManagement.Services.Core.Handlers;
+using Framlux.FleetManagement.Services.Core.Hangfire;
 using Framlux.FleetManagement.Services.Core.Infrastructure;
 using Framlux.FleetManagement.Services.Core.Machines;
 using Framlux.FleetManagement.Services.Core.Notifications;
@@ -78,6 +79,9 @@ public static class ServiceCollectionExtensions
             .Bind(configuration.GetSection("Redis"))
             .ValidateDataAnnotations()
             .ValidateOnStart();
+
+        services.AddOptions<HangfireOptions>()
+            .Bind(configuration.GetSection("Hangfire"));
 
         services.AddOptions<ObjectStorageOptions>()
             .Bind(configuration.GetSection("ObjectStorage"))
@@ -161,6 +165,8 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IMachinePingService, RedisMachinePingService>();
         services.AddSingleton<ITelemetryDeduplicationService, RedisTelemetryDeduplicationService>();
         services.AddSingleton<IDistributedLock, RedisDistributedLock>();
+
+        services.AddHangfireClient(postgresConnectionString);
 
         // Circuit breaker for telemetry database writes — prevents cascading failures
         // when PostgreSQL is slow or overloaded.
