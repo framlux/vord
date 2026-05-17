@@ -9,6 +9,7 @@ using Framlux.FleetManagement.Server.Endpoints.Grpc;
 using Framlux.FleetManagement.Server.Endpoints.Web;
 using Framlux.FleetManagement.Server.Endpoints.Web.Machines.History;
 using Framlux.FleetManagement.Services.Core.Extensions;
+using Framlux.FleetManagement.Services.Core.Hangfire;
 using Framlux.FleetManagement.Services.Core.Infrastructure;
 using Framlux.FleetManagement.Services.Core.Options;
 using Microsoft.AspNetCore.Authentication;
@@ -310,8 +311,14 @@ app.UseForwardedHeaders();
 app.UseCors();
 app.UseRateLimiter();
 app.UseAuthentication()
-    .UseAuthorization()
-    .UseFastEndpoints(options =>
+    .UseAuthorization();
+
+// Hangfire admin dashboard at /admin/hangfire — Admin-only authorization filter is wired
+// inside UseHangfireAdminDashboard. Mounted before FastEndpoints so its routes are not
+// captured by FastEndpoints' terminal middleware.
+app.UseHangfireAdminDashboard();
+
+app.UseFastEndpoints(options =>
     {
         // Guard against concurrent modification in parallel test hosts — FastEndpoints uses
         // a static JsonSerializerOptions that gets locked after first serialization use.
