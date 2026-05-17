@@ -3,8 +3,10 @@
 // See LICENSE for details.
 
 using Framlux.FleetManagement.Services.Core.Extensions;
+using Framlux.FleetManagement.Services.Core.Hangfire;
 using Framlux.FleetManagement.Services.Core.Infrastructure;
 using Framlux.FleetManagement.Services.Core.Options;
+using Hangfire;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Serilog;
 
@@ -48,7 +50,19 @@ builder.Services.AddCoreServices(billingOpts, objectStorageOpts);
 // Background workers — the primary purpose of this process
 builder.Services.AddBackgroundWorkers(billingOpts, objectStorageOpts);
 
+// Hangfire processing server — runs the recurring jobs registered by RecurringJobRegistry
+builder.Services.AddHangfireServerForWorker();
+
 WebApplication app = builder.Build();
+
+// Register all recurring jobs with Hangfire. Hangfire.PostgreSql prepares its own schema on first
+// connection (PrepareSchemaIfNecessary=true in HangfireRegistration); the "hangfire" schema itself
+// is created earlier by HangfireSchemaMigration in the migrationRunner pipeline.
+using (IServiceScope startupScope = app.Services.CreateScope())
+{
+    IRecurringJobManager recurringJobs = startupScope.ServiceProvider.GetRequiredService<IRecurringJobManager>();
+    RecurringJobRegistry.RegisterAll(recurringJobs);
+}
 
 // Health check endpoint for Kubernetes probes
 app.MapHealthChecks("/healthz", new HealthCheckOptions
