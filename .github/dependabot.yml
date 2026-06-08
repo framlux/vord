@@ -1,0 +1,36 @@
+# Dependabot configuration for Vord Fleet.
+# Keeps GitHub Actions pinned to commit SHAs (per L1 of the production-readiness plan)
+# automatically updated by opening weekly PRs.
+#
+# See https://docs.github.com/en/code-security/dependabot/dependabot-version-updates
+version: 2
+updates:
+  # GitHub Actions referenced in .github/workflows/*.yaml — Dependabot bumps the SHA
+  # while preserving the trailing version comment.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+      - ci
+    commit-message:
+      prefix: "chore(ci)"
+      include: scope
+
+  # nfpm is installed via `go install` in the agent packaging workflow; track the
+  # Go module so a new release surfaces as a PR rather than going unnoticed.
+  - package-ecosystem: gomod
+    directory: /src/agent
+    schedule:
+      interval: weekly
+      day: monday
+    open-pull-requests-limit: 5
+    labels:
+      - dependencies
+      - agent
+    commit-message:
+      prefix: "chore(agent)"
+      include: scope

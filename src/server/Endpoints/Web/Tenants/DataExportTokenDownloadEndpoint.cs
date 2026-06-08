@@ -49,6 +49,10 @@ public sealed class DataExportTokenDownloadEndpoint : Endpoint<DataExportTokenDo
         Get("/exports/download");
         AllowAnonymous();
         Version(1);
+        // Cap anonymous token-brute-force at 30/min per IP. The token has 256 bits of
+        // entropy so brute force is not practical, but the rate limit prevents DB load from
+        // sustained probing and gives the operator a visible signal in the metrics.
+        Options(x => x.RequireRateLimiting("anonymous-token"));
     }
 
     /// <inheritdoc/>

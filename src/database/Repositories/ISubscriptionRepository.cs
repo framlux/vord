@@ -89,4 +89,14 @@ public interface ISubscriptionRepository
     /// <param name="tenantIds">The tenant IDs to query.</param>
     /// <param name="cancellationToken">A cancellation token.</param>
     Task<List<TenantSubscription>> GetSubscriptionsForTenantsAsync(List<int> tenantIds, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Sets the <see cref="TenantSubscription.CancelAtPeriodEnd"/> flag for a tenant's subscription.
+    /// Used by the Stripe sync path to mirror Stripe's cancel-at-period-end state locally so the UI
+    /// can reflect a pending cancellation before the subscription transitions to canceled.
+    /// </summary>
+    /// <param name="tenantId">The tenant whose subscription is being updated.</param>
+    /// <param name="cancelAtPeriodEnd">The new cancel-at-period-end value.</param>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    Task SetCancelAtPeriodEndAsync(int tenantId, bool cancelAtPeriodEnd, CancellationToken cancellationToken = default);
 }

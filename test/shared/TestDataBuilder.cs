@@ -18,13 +18,17 @@ public static class TestDataBuilder
     private static int _machineCounter;
 
     /// <summary>
-    /// Builds a <see cref="UserAccount"/> with sensible defaults.
+    /// Builds a <see cref="UserAccount"/> with sensible defaults. Defaults
+    /// <c>CreatedByUserId</c> to <c>1</c> (the system user seeded by
+    /// <see cref="FunctionalTestFactory.SeedSystemUser"/>) so the row satisfies the
+    /// FK on <c>UserAccounts.CreatedByUserId → UserAccounts.Id</c> without a per-test seed.
     /// </summary>
     public static UserAccount BuildUser(
         string? externalId = null,
         string? username = null,
         bool isGlobalAdmin = false,
-        bool isActive = true)
+        bool isActive = true,
+        int createdByUserId = 1)
     {
         int n = Interlocked.Increment(ref _userCounter);
 
@@ -33,7 +37,7 @@ public static class TestDataBuilder
             ExternalId = externalId ?? $"ext-user-{n}",
             Username = username ?? $"testuser{n}@example.com",
             CreatedAt = DateTimeOffset.UtcNow,
-            CreatedByUserId = 0,
+            CreatedByUserId = createdByUserId,
             IsActive = isActive,
             IsSystem = false,
             IsGlobalAdmin = isGlobalAdmin

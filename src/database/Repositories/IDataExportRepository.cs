@@ -53,6 +53,41 @@ public interface IDataExportRepository
     Task<List<DataExportJob>> GetPendingExportJobsAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Atomically transitions a job from Pending to Processing, stamping <paramref name="startedAt"/>.
+    /// Returns <c>true</c> when this caller is the one that claimed the job (exactly one row was
+    /// updated); <c>false</c> if the job was no longer Pending. Used by DataExportProcessingJob to
+    /// prevent two workers from processing the same row.
+    /// </summary>
+    Task<bool> TryClaimPendingJobAsync(int jobId, DateTimeOffset startedAt, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Returns export jobs stuck in Processing for longer than <paramref name="olderThan"/> — these
+    /// are orphans from a worker that crashed mid-export. The processing job re-claims them by
+    /// resetting Status to Pending so a fresh worker can pick them up.
+    /// </summary>
+    Task<List<DataExportJob>> GetStuckProcessingJobsAsync(DateTimeOffset olderThan, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Resets an orphaned Processing job back to Pending so the next processing tick can claim
+    /// and re-run it. Idempotent — if the row is not in Processing status, this is a no-op.
+    /// </summary>
+    Task ResetOrphanedJobToPendingAsync(int jobId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Atomically increments <c>FailureCount</c> for the supplied job and returns the resulting
+    /// value. Used by <c>DataExportProcessingJob</c> to detect when a job has exhausted its
+    /// retry budget so it can be transitioned to Failed instead of being re-claimed forever.
+    /// </summary>
+    Task<int> IncrementFailureCountAsync(int jobId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Transitions a job to <see cref="Enums.DataExportJobStatus.Failed"/> with the supplied
+    /// error message and the current UTC timestamp. Used when the failure count exceeds the
+    /// retry budget — the row remains in storage for diagnostics but no longer cycles.
+    /// </summary>
+    Task MarkExportJobFailedAsync(int jobId, string errorMessage, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Returns all completed export jobs that have passed their expiration time.
     /// </summary>
     Task<List<DataExportJob>> GetExpiredExportJobsAsync(CancellationToken cancellationToken = default);

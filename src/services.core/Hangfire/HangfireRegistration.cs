@@ -3,9 +3,11 @@
 // See LICENSE for details.
 
 using Hangfire;
+using Hangfire.Dashboard;
 using Hangfire.PostgreSql;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 
 namespace Framlux.FleetManagement.Services.Core.Hangfire;
@@ -47,7 +49,16 @@ public static class HangfireRegistration
                     // itself ("hangfire") is created by HangfireSchemaMigration before this runs, so
                     // Hangfire's per-table DDL operates inside the already-existing schema.
                     PrepareSchemaIfNecessary = true,
-                    EnableTransactionScopeEnlistment = false,
+                    // Required by Hangfire.PostgreSql 1.20.12 — the storage validates this in its
+                    // connection-string setup and throws ArgumentException if set to false. The
+                    // setting controls whether Hangfire participates in ambient System.Transactions
+                    // scopes; we don't use TransactionScope, but we still must set this to true.
+                    EnableTransactionScopeEnlistment = true,                    // Long-running jobs (partition management, data export processing) hold
+                    // [DisableConcurrentExecution] for up to 1800 seconds. The default
+                    // InvisibilityTimeout is 30 minutes, which equals the lock — so the storage
+                    // watchdog can re-queue a still-running job. Defaults to 2 hours; tunable
+                    // via HangfireOptions.InvisibilityTimeoutMinutes (M12).
+                    InvisibilityTimeout = TimeSpan.FromMinutes(options.InvisibilityTimeoutMinutes),
                 });
         });
 
@@ -67,16 +78,34 @@ public static class HangfireRegistration
         {
             HangfireOptions hangfireOptions = sp.GetRequiredService<IOptions<HangfireOptions>>().Value;
             options.WorkerCount = hangfireOptions.WorkerCount;
-            options.ServerName = $"vord-worker-{Environment.MachineName}";
+            options.ServerName = BuildServerName();
             options.ShutdownTimeout = TimeSpan.FromSeconds(30);
+            // Queue priority: critical first (per-minute jobs that must not be starved),
+            // then default (admin/UI-initiated work), then long (multi-minute jobs that
+            // would otherwise hog all workers and delay critical work).
+            options.Queues = new[] { "critical", "default", "long" };
         });
 
         return services;
     }
 
     /// <summary>
-    /// Mounts the Hangfire dashboard at /admin/hangfire behind the Admin-only authorization filter.
-    /// Call this only in the server process and only after authentication middleware is configured.
+    /// Builds the Hangfire server-name string used to identify this worker in storage.
+    /// Combines the host name (unique-per-pod in Kubernetes) with the process id so that
+    /// multiple replicas sharing a host (docker-compose, local dev) cannot collide on the
+    /// same Hangfire server registration.
+    /// </summary>
+    /// <returns>A stable per-process server name.</returns>
+    internal static string BuildServerName()
+    {
+        return $"vord-worker-{Environment.MachineName}-{Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture)}";
+    }
+
+    /// <summary>
+    /// Mounts the Hangfire dashboard at /admin/hangfire behind the Admin-only authorization filter,
+    /// IF <see cref="HangfireOptions.DashboardEnabled"/> is <c>true</c>. Call this only in the server
+    /// process and only after authentication middleware is configured. When the option is disabled
+    /// the dashboard route is NOT registered — requests to /admin/hangfire/* will return 404.
     /// </summary>
     /// <param name="app">The application builder.</param>
     /// <returns>The application builder for chaining.</returns>
@@ -84,15 +113,29 @@ public static class HangfireRegistration
     {
         ArgumentNullException.ThrowIfNull(app);
 
+        HangfireOptions hangfireOptions = app.ApplicationServices
+            .GetRequiredService<IOptions<HangfireOptions>>().Value;
+        ILogger logger = app.ApplicationServices
+            .GetRequiredService<ILoggerFactory>()
+            .CreateLogger(typeof(HangfireRegistration).FullName!);
+
+        if (hangfireOptions.DashboardEnabled == false)
+        {
+            logger.LogInformation("Hangfire dashboard disabled by configuration (Hangfire:DashboardEnabled=false)");
+
+            return app;
+        }
+
         DashboardOptions options = new()
         {
-            Authorization = new[] { new HangfireDashboardAuthorizationFilter() },
+            Authorization = new IDashboardAuthorizationFilter[] { new HangfireDashboardAuthorizationFilter() },
             DashboardTitle = "Vord Background Jobs",
             DisplayStorageConnectionString = false,
             IgnoreAntiforgeryToken = false,
         };
 
         app.UseHangfireDashboard("/admin/hangfire", options);
+        logger.LogInformation("Hangfire dashboard mounted at /admin/hangfire");
 
         return app;
     }

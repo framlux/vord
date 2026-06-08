@@ -102,6 +102,39 @@ public class AlertEventRepositoryTests
     }
 
     [Test]
+    public async Task CreateEventIfNotExistsAsync_AcknowledgedEvent_BlocksNewDuplicateAlert()
+    {
+        // Intent: an alert event that has been acknowledged (operator has seen it but the
+        // condition has not yet cleared) must NOT cause the next evaluation cycle to fire a
+        // duplicate alert for the same rule/machine. Without this guard the on-call would be
+        // re-paged every minute as long as the underlying condition persists. The deduplication
+        // is keyed on "status != Resolved", which includes both Triggered and Acknowledged.
+        // This is the regression test for that contract; the predecessor service had the same
+        // behavior tested under a different name.
+        using TestDatabaseFactory dbFactory = new();
+        IAlertEventRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+
+        (int userId, int tenantId, long machineId, int ruleId) = await SeedPrerequisitesAsync(dbFactory);
+
+        // Seed the first event, then acknowledge it via the repository's own API to mirror
+        // production semantics.
+        AlertEvent firstEvent = TestDataBuilder.BuildAlertEvent(
+            alertRuleId: ruleId, tenantId: tenantId, machineId: machineId);
+        AlertEvent? created = await repo.CreateEventIfNotExistsAsync(firstEvent);
+        await Assert.That(created).IsNotNull();
+        await repo.AcknowledgeAlertEventAsync(created!.Id, userId);
+
+        // Attempt to create a new event for the same rule/machine while the prior one is still
+        // Acknowledged (not Resolved). This must return null — no duplicate row, no new alert
+        // delivery.
+        AlertEvent duplicate = TestDataBuilder.BuildAlertEvent(
+            alertRuleId: ruleId, tenantId: tenantId, machineId: machineId);
+        AlertEvent? result = await repo.CreateEventIfNotExistsAsync(duplicate);
+
+        await Assert.That(result).IsNull();
+    }
+
+    [Test]
     public async Task CreateEventIfNotExistsAsync_ResolvedEventAllowsNew_ReturnsNewEvent()
     {
         using TestDatabaseFactory dbFactory = new();

@@ -7,6 +7,8 @@ using Framlux.FleetManagement.Server.Auth;
 using Framlux.FleetManagement.Services.Core.DataExport;
 using Framlux.FleetManagement.Services.Core.Handlers;
 using Framlux.FleetManagement.Services.Core.Infrastructure;
+using Hangfire;
+using Microsoft.AspNetCore.Http;
 
 namespace Framlux.FleetManagement.Server.Endpoints.Web.Tenants;
 
@@ -33,17 +35,23 @@ public sealed class RequestDataExportEndpoint : EndpointWithoutRequest<RequestDa
 {
     private readonly IDataExportHandler _handler;
     private readonly IObjectStorageService _objectStorageService;
+    private readonly IBackgroundJobClient _backgroundJobClient;
 
     /// <summary>
     /// Creates a new instance of the <see cref="RequestDataExportEndpoint"/> class.
     /// </summary>
-    public RequestDataExportEndpoint(IDataExportHandler handler, IObjectStorageService objectStorageService)
+    public RequestDataExportEndpoint(
+        IDataExportHandler handler,
+        IObjectStorageService objectStorageService,
+        IBackgroundJobClient backgroundJobClient)
     {
         ArgumentNullException.ThrowIfNull(handler);
         ArgumentNullException.ThrowIfNull(objectStorageService);
+        ArgumentNullException.ThrowIfNull(backgroundJobClient);
 
         _handler = handler;
         _objectStorageService = objectStorageService;
+        _backgroundJobClient = backgroundJobClient;
     }
 
     /// <inheritdoc/>
@@ -59,7 +67,7 @@ public sealed class RequestDataExportEndpoint : EndpointWithoutRequest<RequestDa
     {
         if (_objectStorageService is NoOpObjectStorageService)
         {
-            HttpContext.Response.StatusCode = 501;
+            HttpContext.Response.StatusCode = StatusCodes.Status501NotImplemented;
             await HttpContext.Response.WriteAsJsonAsync(
                 new RequestDataExportResponse { JobId = 0, Status = "NotAvailable" }, ct);
 
@@ -71,7 +79,7 @@ public sealed class RequestDataExportEndpoint : EndpointWithoutRequest<RequestDa
         int? userId = TenantClaimHelper.GetUserIdFromClaims(User);
         if (userId is null)
         {
-            HttpContext.Response.StatusCode = 401;
+            HttpContext.Response.StatusCode = StatusCodes.Status401Unauthorized;
             await HttpContext.Response.WriteAsJsonAsync(
                 ApiResponse<RequestDataExportResponse>.Error("Unable to identify user"), ct);
 
@@ -82,21 +90,25 @@ public sealed class RequestDataExportEndpoint : EndpointWithoutRequest<RequestDa
 
         if (result.IsNotFound)
         {
-            HttpContext.Response.StatusCode = 404;
+            HttpContext.Response.StatusCode = StatusCodes.Status404NotFound;
             await HttpContext.Response.WriteAsJsonAsync(
                 ApiResponse<RequestDataExportResponse>.Error("Tenant not found"), ct);
 
             return;
         }
 
-        if (result.StatusCode == 409)
+        if (result.StatusCode == StatusCodes.Status409Conflict)
         {
-            HttpContext.Response.StatusCode = 409;
+            HttpContext.Response.StatusCode = StatusCodes.Status409Conflict;
             await HttpContext.Response.WriteAsJsonAsync(
                 new RequestDataExportResponse { JobId = 0, Status = "AlreadyInProgress" }, ct);
 
             return;
         }
+
+        // Enqueue the per-job claim path so we process exactly this row, not a fleet-wide sweep.
+        // The recurring DataExportProcessingJob.RunAsync continues to run as the orphan reaper.
+        _backgroundJobClient.Enqueue<DataExportProcessingJob>(job => job.ProcessSingleAsync(result.Data, CancellationToken.None));
 
         await Send.OkAsync(new RequestDataExportResponse { JobId = result.Data, Status = "Pending" }, cancellation: ct);
     }

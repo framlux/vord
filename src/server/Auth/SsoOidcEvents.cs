@@ -115,9 +115,23 @@ public sealed class SsoOidcEvents : OpenIdConnectEvents
             return;
         }
 
-        // Decrypt the stored OIDC client secret
+        // Decrypt the stored OIDC client secret.
+        // Legacy plaintext rows (written before encryption was enforced everywhere) lack the
+        // marker prefix; treat them as plaintext and emit a warning so ops can re-migrate.
         IOidcSecretProtector secretProtector = context.HttpContext.RequestServices.GetRequiredService<IOidcSecretProtector>();
-        string clientSecret = secretProtector.Unprotect(config.ClientSecret);
+        string clientSecret;
+        if (secretProtector.IsProtected(config.ClientSecret))
+        {
+            clientSecret = secretProtector.Unprotect(config.ClientSecret);
+        }
+        else
+        {
+            logger.LogWarning(
+                "OIDC client secret for tenant {TenantId} is stored in plaintext (legacy); "
+                + "run EncryptLegacyTenantOidcSecretsMigration to re-protect at rest",
+                tenantId);
+            clientSecret = config.ClientSecret;
+        }
 
         // Manually exchange the authorization code for tokens (uses SSRF-safe HttpClient)
         using HttpClient httpClient = httpClientFactory.CreateClient("OidcTokenExchange");

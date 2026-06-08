@@ -3,10 +3,10 @@
 // See LICENSE for details.
 
 using System.Net.Http.Headers;
-using System.Text.Json;
 using System.Text;
-using Framlux.FleetManagement.Services.Core.Options;
+using System.Text.Json;
 using Framlux.FleetManagement.Services.Core.Infrastructure;
+using Framlux.FleetManagement.Services.Core.Options;
 using Microsoft.Extensions.Options;
 
 namespace Framlux.FleetManagement.Services.Core.Notifications;

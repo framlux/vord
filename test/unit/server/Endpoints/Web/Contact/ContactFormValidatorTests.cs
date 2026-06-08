@@ -119,4 +119,135 @@ public sealed class ContactFormValidatorTests
         await Assert.That(result.IsValid).IsFalse();
         await Assert.That(result.Errors.Count).IsGreaterThanOrEqualTo(3);
     }
+
+    // ==========================================================================================
+    // M9 regression: length caps and CRLF rejection.
+    // ==========================================================================================
+
+    [Test]
+    public async Task NameAtMaxLength_PassesValidation()
+    {
+        ContactFormRequest request = ValidRequest();
+        request.Name = new string('a', ContactFormValidator.MaxNameLength);
+
+        ValidationResult result = await _validator.ValidateAsync(request);
+
+        await Assert.That(result.IsValid).IsTrue();
+    }
+
+    [Test]
+    public async Task NameOverMaxLength_FailsValidation()
+    {
+        ContactFormRequest request = ValidRequest();
+        request.Name = new string('a', ContactFormValidator.MaxNameLength + 1);
+
+        ValidationResult result = await _validator.ValidateAsync(request);
+
+        await Assert.That(result.IsValid).IsFalse();
+    }
+
+    [Test]
+    public async Task NameContainsLineFeed_FailsValidation()
+    {
+        ContactFormRequest request = ValidRequest();
+        request.Name = "Bob\nFAKE LOG LINE";
+
+        ValidationResult result = await _validator.ValidateAsync(request);
+
+        await Assert.That(result.IsValid).IsFalse();
+    }
+
+    [Test]
+    public async Task NameContainsCarriageReturn_FailsValidation()
+    {
+        ContactFormRequest request = ValidRequest();
+        request.Name = "Bob\rFAKE LOG LINE";
+
+        ValidationResult result = await _validator.ValidateAsync(request);
+
+        await Assert.That(result.IsValid).IsFalse();
+    }
+
+    [Test]
+    public async Task CompanyContainsLineFeed_FailsValidation()
+    {
+        ContactFormRequest request = ValidRequest();
+        request.Company = "Acme\nInjected";
+
+        ValidationResult result = await _validator.ValidateAsync(request);
+
+        await Assert.That(result.IsValid).IsFalse();
+    }
+
+    [Test]
+    public async Task FleetSizeContainsCarriageReturn_FailsValidation()
+    {
+        ContactFormRequest request = ValidRequest();
+        request.FleetSize = "100-500\rInjected";
+
+        ValidationResult result = await _validator.ValidateAsync(request);
+
+        await Assert.That(result.IsValid).IsFalse();
+    }
+
+    [Test]
+    public async Task MessageOverMaxLength_FailsValidation()
+    {
+        ContactFormRequest request = ValidRequest();
+        request.Message = new string('m', ContactFormValidator.MaxMessageLength + 1);
+
+        ValidationResult result = await _validator.ValidateAsync(request);
+
+        await Assert.That(result.IsValid).IsFalse();
+    }
+
+    [Test]
+    public async Task MessageAtMaxLength_PassesValidation()
+    {
+        ContactFormRequest request = ValidRequest();
+        request.Message = new string('m', ContactFormValidator.MaxMessageLength);
+
+        ValidationResult result = await _validator.ValidateAsync(request);
+
+        await Assert.That(result.IsValid).IsTrue();
+    }
+
+    [Test]
+    public async Task EmailOverMaxLength_FailsValidation()
+    {
+        ContactFormRequest request = ValidRequest();
+        // RFC 5321 max-length email; build something larger.
+        string local = new('a', 250);
+        request.Email = $"{local}@e.co"; // > 254 chars
+
+        ValidationResult result = await _validator.ValidateAsync(request);
+
+        await Assert.That(result.IsValid).IsFalse();
+    }
+
+    [Test]
+    public async Task ComputeEmailFingerprint_NormalizesCase()
+    {
+        string lower = ContactFormEndpoint.ComputeEmailFingerprint("user@EXAMPLE.com");
+        string upper = ContactFormEndpoint.ComputeEmailFingerprint("USER@example.com");
+
+        await Assert.That(lower).IsEqualTo(upper);
+    }
+
+    [Test]
+    public async Task ComputeEmailFingerprint_StableShortHex()
+    {
+        string fp = ContactFormEndpoint.ComputeEmailFingerprint("jane@example.com");
+
+        await Assert.That(fp.Length).IsEqualTo(16);
+    }
+
+    [Test]
+    public async Task ComputeEmailFingerprint_DifferentEmails_DifferentFingerprints()
+    {
+        string a = ContactFormEndpoint.ComputeEmailFingerprint("a@x.com");
+        string b = ContactFormEndpoint.ComputeEmailFingerprint("b@x.com");
+
+        await Assert.That(a).IsNotEqualTo(b);
+    }
 }

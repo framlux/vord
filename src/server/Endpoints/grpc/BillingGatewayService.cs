@@ -5,8 +5,9 @@
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
-using Framlux.FleetManagement.Services.Core.Options;
+using Framlux.FleetManagement.Server.Auth;
 using Framlux.FleetManagement.Services.Core.Handlers;
+using Framlux.FleetManagement.Services.Core.Options;
 using Framlux.Vord.BillingGrpc;
 using Google.Protobuf.WellKnownTypes;
 using Grpc.Core;
@@ -132,18 +133,6 @@ public sealed class BillingGatewayService : BillingGateway.BillingGatewayBase
 
     private void ValidateInternalKey(ServerCallContext context)
     {
-        string configuredKey = _internalApiOptions.Key;
-        if (string.IsNullOrEmpty(configuredKey))
-        {
-            throw new RpcException(new Status(StatusCode.Unavailable, "Internal API is not configured"));
-        }
-
-        Metadata.Entry? keyEntry = context.RequestHeaders.Get("x-internal-key");
-        string providedKey = keyEntry?.Value ?? string.Empty;
-
-        if (string.Equals(providedKey, configuredKey, StringComparison.Ordinal) == false)
-        {
-            throw new RpcException(new Status(StatusCode.Unauthenticated, "Unauthorized"));
-        }
+        InternalApiKeyValidator.Validate(context, _internalApiOptions);
     }
 }

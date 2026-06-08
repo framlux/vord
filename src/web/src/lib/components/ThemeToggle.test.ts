@@ -25,12 +25,30 @@ vi.mock('$app/environment', () => ({
 
 import ThemeToggle from './ThemeToggle.svelte';
 
+function mockMatchMedia(prefersDark: boolean): void {
+    Object.defineProperty(window, 'matchMedia', {
+        writable: true,
+        configurable: true,
+        value: (query: string) => ({
+            matches: prefersDark && query.includes('dark'),
+            media: query,
+            onchange: null,
+            addListener: vi.fn(),
+            removeListener: vi.fn(),
+            addEventListener: vi.fn(),
+            removeEventListener: vi.fn(),
+            dispatchEvent: vi.fn()
+        })
+    });
+}
+
 describe('ThemeToggle', () => {
     beforeEach(() => {
         vi.clearAllMocks();
         mockGetTheme.mockReturnValue('light');
         document.cookie = '';
         document.documentElement.classList.remove('dark', 'light');
+        mockMatchMedia(false);
     });
 
     it('should render toggle button with correct aria label', () => {
@@ -114,15 +132,29 @@ describe('ThemeToggle', () => {
         expect(mockSetTheme).toHaveBeenCalledWith('dark');
     });
 
-    it('should default to light when no theme cookie exists', () => {
+    it('should default to OS preference (light) when no theme cookie and OS prefers light', () => {
         Object.defineProperty(document, 'cookie', {
             value: '',
             writable: true,
             configurable: true
         });
+        mockMatchMedia(false);
 
         render(ThemeToggle);
 
         expect(mockSetTheme).toHaveBeenCalledWith('light');
+    });
+
+    it('should default to OS preference (dark) when no theme cookie and OS prefers dark', () => {
+        Object.defineProperty(document, 'cookie', {
+            value: '',
+            writable: true,
+            configurable: true
+        });
+        mockMatchMedia(true);
+
+        render(ThemeToggle);
+
+        expect(mockSetTheme).toHaveBeenCalledWith('dark');
     });
 });

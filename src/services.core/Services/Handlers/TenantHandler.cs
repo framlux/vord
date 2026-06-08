@@ -5,8 +5,8 @@
 using System.Text.RegularExpressions;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
-using Framlux.FleetManagement.Services.Core.Models.Tenants;
 using Framlux.FleetManagement.Services.Core.Infrastructure;
+using Framlux.FleetManagement.Services.Core.Models.Tenants;
 
 namespace Framlux.FleetManagement.Services.Core.Handlers;
 

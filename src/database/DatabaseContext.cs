@@ -2,7 +2,7 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
-﻿using Framlux.FleetManagement.Database.Models;
+using Framlux.FleetManagement.Database.Models;
 using LinqToDB;
 using LinqToDB.Data;
 
@@ -100,9 +100,21 @@ public sealed class DatabaseContext(DataOptions<DatabaseContext> options) : Data
     public ITable<AlertRuleMachine> AlertRuleMachines => this.GetTable<AlertRuleMachine>();
 
     /// <summary>
+    /// Represents the per-rule-per-machine condition tracking rows used by AlertEvaluationJob to
+    /// enforce the DurationMinutes window. Replaces the previous Redis-backed condition keys.
+    /// </summary>
+    public ITable<AlertConditionState> AlertConditionStates => this.GetTable<AlertConditionState>();
+
+    /// <summary>
     /// Represents the collection of integration endpoints for alert delivery.
     /// </summary>
     public ITable<IntegrationEndpoint> IntegrationEndpoints => this.GetTable<IntegrationEndpoint>();
+
+    /// <summary>
+    /// Per-(event, integration) delivery-success records used by IntegrationDeliveryJob to enforce
+    /// idempotency on Hangfire retries. A row exists if and only if the delivery succeeded once.
+    /// </summary>
+    public ITable<IntegrationDeliveryAttempt> IntegrationDeliveryAttempts => this.GetTable<IntegrationDeliveryAttempt>();
 
     /// <summary>
     /// Represents the collection of user signing keys for remote command authorization.

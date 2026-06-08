@@ -18,6 +18,8 @@ using Framlux.FleetManagement.Services.Core.Infrastructure;
 using Framlux.FleetManagement.Services.Core.Machines;
 using Framlux.FleetManagement.Services.Core.Telemetry;
 using Framlux.Vord.BillingGrpc;
+using Hangfire;
+using Hangfire.InMemory;
 using LinqToDB.Data;
 using LinqToDB.DataProvider.SQLite;
 using LinqToDB;
@@ -67,6 +69,30 @@ public class FunctionalTestFactory : WebApplicationFactory<Program>
     public IBillingApiClient BillingApiClientMock { get; } = CreateDefaultBillingApiClientMock();
 
     /// <summary>
+    /// NSubstitute mock for <see cref="IBackgroundJobClient"/> that replaces the real
+    /// Hangfire client in functional tests. Tests that exercise endpoints which enqueue
+    /// Hangfire jobs (e.g., on-demand data-export processing) can assert against this
+    /// mock instead of running the InMemory pipeline.
+    /// </summary>
+    public IBackgroundJobClient BackgroundJobClientMock { get; } = Substitute.For<IBackgroundJobClient>();
+
+    /// <summary>
+    /// When set, the factory skips replacing <see cref="IBackgroundJobClient"/> with a mock
+    /// and registers a real Hangfire <c>BackgroundJobServer</c> against the InMemory storage.
+    /// Used exclusively by the Hangfire end-to-end smoke test so that enqueued jobs are
+    /// actually picked up and executed by a processing server inside the test host.
+    /// </summary>
+    public bool EnableHangfireProcessingServer { get; set; }
+
+    /// <summary>
+    /// Optional hook that runs at the end of <see cref="ConfigureWebHost"/> so individual
+    /// tests can register extra services (e.g., a test sink, a job type) without subclassing
+    /// the factory. Invoked after all default test-time overrides have been applied, so
+    /// callers can both register new services and override factory defaults.
+    /// </summary>
+    public Action<IServiceCollection>? AdditionalTestServices { get; set; }
+
+    /// <summary>
     /// Creates a new functional test factory with an isolated in-memory SQLite database.
     /// </summary>
     public FunctionalTestFactory()
@@ -96,9 +122,31 @@ public class FunctionalTestFactory : WebApplicationFactory<Program>
 
         _dbConnection = new SqliteConnection("Data Source=:memory:");
         _dbConnection.Open();
+
+        // Enforce foreign keys for the duration of the connection. SQLite defaults to OFF,
+        // so cascade/restrict semantics only fire when this PRAGMA is explicitly ON.
+        using (SqliteCommand fkCmd = _dbConnection.CreateCommand())
+        {
+            fkCmd.CommandText = "PRAGMA foreign_keys = ON";
+            fkCmd.ExecuteNonQuery();
+        }
+
         ApplyMigrations();
-        DisableForeignKeys();
         SeedTierFeatureLimits();
+        SeedSystemUser();
+
+        // Catches the case where a future migration change drops the UserAccounts table,
+        // renames its columns, or otherwise causes the manual seed above to silently no-op.
+        using SqliteCommand probe = _dbConnection.CreateCommand();
+        probe.CommandText = "SELECT COUNT(*) FROM UserAccounts WHERE Id = 1 AND IsSystem = 1";
+        object? probeResult = probe.ExecuteScalar();
+        long seededCount = probeResult is long l ? l : 0L;
+        if (seededCount != 1)
+        {
+            throw new InvalidOperationException(
+                $"FunctionalTestFactory failed to seed the system user (Id=1). Found {seededCount} matching rows. " +
+                "Check that SeedSystemUser() column list matches the UserAccounts table schema.");
+        }
     }
 
     /// <summary>
@@ -174,6 +222,51 @@ public class FunctionalTestFactory : WebApplicationFactory<Program>
             services.RemoveAll<ISqlDialect>();
             services.AddSingleton<ISqlDialect, NoOpSqlDialect>();
 
+            // Replace Postgres-backed Hangfire storage with Hangfire.InMemory for tests.
+            //
+            // Hangfire's `AddHangfire(...)` registers BOTH `JobStorage` (TryAddSingleton) AND an
+            // `IGlobalConfiguration` factory that, when resolved, runs the storage callback (which
+            // in production calls `UsePostgreSqlStorage(...)` and opens a Postgres connection).
+            // Removing `JobStorage` alone is insufficient — the dashboard's
+            // `ThrowIfNotConfigured` triggers the production `IGlobalConfiguration` factory.
+            // Strip every Hangfire-namespaced registration, then re-call AddHangfire with
+            // InMemory storage so all of Hangfire's TryAddSingleton calls land cleanly.
+            ServiceDescriptor[] hangfireDescriptors = services
+                .Where(s => s.ServiceType.Namespace?.StartsWith("Hangfire", StringComparison.Ordinal) == true)
+                .ToArray();
+            foreach (ServiceDescriptor descriptor in hangfireDescriptors)
+            {
+                services.Remove(descriptor);
+            }
+            services.AddHangfire(config => config.UseInMemoryStorage());
+
+            if (EnableHangfireProcessingServer == false)
+            {
+                // Replace IBackgroundJobClient with an NSubstitute mock so endpoint enqueue calls
+                // can be asserted in functional tests. AddHangfire above registers the real
+                // BackgroundJobClient against InMemory storage; we swap it for the mock here.
+                services.RemoveAll<IBackgroundJobClient>();
+                services.AddSingleton(BackgroundJobClientMock);
+            }
+            else
+            {
+                // Hangfire end-to-end smoke test path: keep the real BackgroundJobClient that
+                // AddHangfire registered against InMemory storage, and stand up a processing
+                // server in-process so enqueued jobs actually run.
+                services.AddHangfireServer(options =>
+                {
+                    options.WorkerCount = 1;
+                    options.ServerName = $"vord-functional-{Guid.NewGuid():N}";
+                    options.ShutdownTimeout = TimeSpan.FromSeconds(5);
+                });
+            }
+
+            // PostgresAdvisoryLockProvider needs a real Postgres connection; tests run on SQLite,
+            // so swap it for a no-op that always grants the lock. No multi-replica concurrency
+            // exists in the in-process functional fixture.
+            services.RemoveAll<IAdvisoryLockProvider>();
+            services.AddSingleton<IAdvisoryLockProvider, NoOpAdvisoryLockProvider>();
+
             // Disable rate limiting — replace the Redis-backed global limiter with a no-op.
             // The original limiter captures a disconnected Redis multiplexer; overriding
             // GlobalLimiter avoids connection errors during test requests.
@@ -183,18 +276,21 @@ public class FunctionalTestFactory : WebApplicationFactory<Program>
                     _ => RateLimitPartition.GetNoLimiter("test"));
             });
 
+            // Relax the antiforgery cookie's SecurePolicy in tests. Production uses
+            // CookieSecurePolicy.Always so the Secure flag is set whenever Traefik + ForwardedHeaders
+            // report Request.Scheme = "https"; functional tests run over HTTP, where
+            // ASP.NET Core's CookieManager refuses to emit a Secure cookie and Hangfire's
+            // dashboard antiforgery mint then fails. SameAsRequest keeps the mint working in
+            // tests without weakening the production setting.
+            services.Configure<Microsoft.AspNetCore.Antiforgery.AntiforgeryOptions>(options =>
+            {
+                options.Cookie.SecurePolicy = CookieSecurePolicy.SameAsRequest;
+            });
+
             // Remove hosted services that depend on Redis, distributed locking, or billing gRPC.
             // All background services must be removed to prevent concurrent SQLite access on the
             // shared in-memory connection, which causes intermittent "database is locked" errors.
-            RemoveHostedService<AlertEvaluationService>(services);
-            RemoveHostedService<CommandExpiryBackgroundService>(services);
-            RemoveHostedService<DataExportBackgroundService>(services);
-            RemoveHostedService<DataExportCleanupService>(services);
-            RemoveHostedService<HealthSweepService>(services);
             RemoveHostedService<MachineStateStreamingService>(services);
-            RemoveHostedService<PartitionManagementService>(services);
-            RemoveHostedService<StripeSyncService>(services);
-            RemoveHostedService<UsageHeartbeatService>(services);
 
             // Replace BillingApiClient with an NSubstitute mock.
             // The real BillingApiClient requires a live billing gRPC endpoint
@@ -230,6 +326,10 @@ public class FunctionalTestFactory : WebApplicationFactory<Program>
 
                 return new TestAuthSchemeProvider(authOptions);
             });
+
+            // Apply per-test service overrides last so callers can both register new
+            // services and replace any defaults wired above.
+            AdditionalTestServices?.Invoke(services);
         });
     }
 
@@ -300,13 +400,6 @@ public class FunctionalTestFactory : WebApplicationFactory<Program>
         try { File.Delete(tempFile); } catch { /* best effort */ }
     }
 
-    private void DisableForeignKeys()
-    {
-        using SqliteCommand cmd = _dbConnection.CreateCommand();
-        cmd.CommandText = "PRAGMA foreign_keys = OFF";
-        cmd.ExecuteNonQuery();
-    }
-
     /// <summary>
     /// Seeds the TierFeatureLimits table with the default tier values.
     /// The migration runner copies only DDL (CREATE TABLE) statements from the temp
@@ -328,6 +421,23 @@ public class FunctionalTestFactory : WebApplicationFactory<Program>
         // Team tier: MachineLimit=10000, RetentionDays=365, AlertRuleLimit=25, WebhookLimit=15
         ExecuteSql($@"INSERT INTO TierFeatureLimits (Tier, MachineLimit, RetentionDays, AlertRuleLimit, WebhookLimit, UpdatedAt)
             VALUES ({(int)SubscriptionTier.Team}, 10000, 365, 25, 15, '{now}')");
+    }
+
+    /// <summary>
+    /// Seeds the system user (Id=1) into the in-memory UserAccounts table. The schema-copy
+    /// step in <see cref="ApplyMigrations"/> only carries DDL — the system-user row that
+    /// <see cref="InitialMigration"/> inserts is not preserved. Test data builders default
+    /// CreatedByUserId/AssignedByUserId to 1, so this row must exist before any seed is
+    /// attempted with foreign keys enforced.
+    /// Mirrors the column list and values from InitialMigration.cs (UserAccounts insert block).
+    /// </summary>
+    private void SeedSystemUser()
+    {
+        string now = DateTimeOffset.UtcNow.ToString("o");
+        ExecuteSql(
+            $@"INSERT INTO UserAccounts
+                (Id, ExternalId, Username, CreatedAt, CreatedByUserId, IsActive, IsSystem, IsGlobalAdmin, AuthProvider)
+                VALUES (1, 'system', 'system', '{now}', 1, 1, 1, 1, 0)");
     }
 
     private void ExecuteSql(string sql)

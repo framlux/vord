@@ -619,7 +619,7 @@ public class MachineHandlerTests
         await Assert.That(result.Data!.Page).IsEqualTo(1);
     }
 
-    // ========== M1: ReportMachineUsage called on machine deletion ==========
+    // ========== ReportMachineUsage called on machine deletion ==========
 
     [Test]
     public async Task DeleteAsync_PaidTier_CallsReportMachineUsageWithUpdatedCount()

@@ -5,9 +5,9 @@
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
+using Framlux.FleetManagement.Services.Core.Infrastructure;
 using Framlux.FleetManagement.Services.Core.Models.Admin;
 using Framlux.FleetManagement.Services.Core.Models.Users;
-using Framlux.FleetManagement.Services.Core.Infrastructure;
 using StackExchange.Redis;
 
 namespace Framlux.FleetManagement.Services.Core.Handlers;

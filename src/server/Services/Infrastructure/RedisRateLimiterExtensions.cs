@@ -35,6 +35,10 @@ public static class RedisRateLimiterExtensions
             {
                 RedisFixedWindowRateLimiter globalLimiter = new(redis, "ratelimit:global", 100, TimeSpan.FromMinutes(1));
                 RedisFixedWindowRateLimiter loginLimiter = new(redis, "ratelimit:login", 10, TimeSpan.FromMinutes(5));
+                // Dedicated policy for anonymous token-authenticated endpoints (data-export
+                // download). 30/min per IP — tighter than global because a single IP brute-forcing
+                // 64-hex tokens is cheap to mount and the only response we can offer is to slow them.
+                RedisFixedWindowRateLimiter anonymousTokenLimiter = new(redis, "ratelimit:anonymous-token", 30, TimeSpan.FromMinutes(1));
 
                 options.GlobalLimiter = PartitionedRateLimiter.Create<HttpContext, string>(context =>
                 {
@@ -50,6 +54,14 @@ public static class RedisRateLimiterExtensions
 
                     return RateLimitPartition.Get(partitionKey, key =>
                         new RedisPartitionedRateLimiter(loginLimiter, key));
+                });
+
+                options.AddPolicy("anonymous-token", context =>
+                {
+                    string partitionKey = context.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+
+                    return RateLimitPartition.Get(partitionKey, key =>
+                        new RedisPartitionedRateLimiter(anonymousTokenLimiter, key));
                 });
             });
         });

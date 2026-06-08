@@ -74,6 +74,8 @@ public sealed class TestServiceScopeFactory : IServiceScopeFactory
             typeof(ITenantRepository),
             typeof(IUserRepository),
             typeof(IIntegrationRepository),
+            typeof(IIntegrationDeliveryAttemptRepository),
+            typeof(IAlertConditionStateRepository),
         ];
 
         private readonly DatabaseContext _context;

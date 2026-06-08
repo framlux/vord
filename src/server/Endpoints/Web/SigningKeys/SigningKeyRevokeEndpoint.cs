@@ -5,6 +5,7 @@
 using System.Security.Claims;
 using FastEndpoints;
 using Framlux.FleetManagement.Server.Auth;
+using Framlux.FleetManagement.Services.Core.Auth;
 using Framlux.FleetManagement.Services.Core.Infrastructure;
 using Framlux.FleetManagement.Services.Core.Machines;
 
@@ -59,7 +60,7 @@ public sealed class SigningKeyRevokeEndpoint : EndpointWithoutRequest<ApiRespons
         }
 
         // Check if the user is a TenantAdmin or GlobalAdmin for permission to revoke others' keys.
-        bool isAdmin = User.HasClaim("iga", true.ToString());
+        bool isAdmin = AuthClaims.IsUserGlobalAdmin(User);
         bool isTenantAdmin = User.FindAll(ClaimTypes.Role)
             .Any(c => c.Value.EndsWith(":1")); // :1 = TenantAdmin role
 

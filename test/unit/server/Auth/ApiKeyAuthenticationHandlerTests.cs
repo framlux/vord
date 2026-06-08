@@ -283,7 +283,8 @@ public class ApiKeyAuthenticationHandlerTests
 
         NSubstitute.Core.ICall setCall = calls.First();
         object?[] args = setCall.GetArguments();
-        await Assert.That(args[0]!.ToString()).IsEqualTo("apikey:new-key");
+        string expectedHash = ApiKeyAuthenticationHandler.ComputeKeyHash("new-key");
+        await Assert.That(args[0]!.ToString()).IsEqualTo("apikey:" + expectedHash);
         await Assert.That(args[1]!.ToString()).IsEqualTo("10:3");
     }
 
@@ -417,8 +418,9 @@ public class ApiKeyAuthenticationHandlerTests
 
         await handler.InvalidateCachedKeyAsync("some-api-key");
 
+        string expectedHash = ApiKeyAuthenticationHandler.ComputeKeyHash("some-api-key");
         await redisDb.Received(1).KeyDeleteAsync(
-            Arg.Is<RedisKey>(k => k.ToString() == "apikey:some-api-key"),
+            Arg.Is<RedisKey>(k => k.ToString() == "apikey:" + expectedHash),
             Arg.Any<CommandFlags>());
     }
 

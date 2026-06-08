@@ -3,9 +3,10 @@
 // See LICENSE for details.
 
 using System.Security.Claims;
-using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
+using Framlux.FleetManagement.Database.Repositories;
+using Framlux.FleetManagement.Services.Core.Auth;
 using Microsoft.AspNetCore.Authentication.OAuth;
 
 namespace Framlux.FleetManagement.Server.Auth;
@@ -125,7 +126,7 @@ public static class SocialAuthEvents
 
         // Add user account ID as claim
         identity.AddClaim(new Claim(ClaimTypes.Actor, user.Id.ToString()));
-        identity.AddClaim(new Claim("iga", user.IsGlobalAdmin.ToString()));
+        identity.AddClaim(new Claim(AuthClaims.IsGlobalAdmin, user.IsGlobalAdmin.ToString()));
 
         return true;
     }

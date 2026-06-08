@@ -2,6 +2,7 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
+using System.Globalization;
 using System.Text.Json;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
@@ -15,7 +16,7 @@ namespace Framlux.FleetManagement.Services.Core.Machines;
 /// Continuously polls MachineTelemetry by high-water mark and applies targeted
 /// per-column UPDATEs to MachineStateSummary and MachineStateDetail.
 /// Only updates the columns relevant to each telemetry type plus LastSeenAt.
-/// Does not compute health — that is handled by <see cref="HealthSweepService"/>.
+/// Does not compute health — that is handled by HealthSweepCoordinatorJob + HealthSweepTenantJob.
 /// Processes one row at a time for O(1) memory usage.
 /// </summary>
 public sealed class MachineStateStreamingService : BackgroundService
@@ -31,48 +32,66 @@ public sealed class MachineStateStreamingService : BackgroundService
     internal static readonly TimeSpan IdleSleepDuration = TimeSpan.FromMilliseconds(500);
 
     /// <summary>
+    /// Default delay before the first batch poll on service startup. Production value is 5 s
+    /// to let dependencies warm up; tests pass a shorter override via the constructor so the
+    /// suite remains fast and deterministic.
+    /// </summary>
+    internal static readonly TimeSpan DefaultStartupDelay = TimeSpan.FromSeconds(5);
+
+    /// <summary>
     /// Maximum number of telemetry rows to process concurrently within a batch.
     /// </summary>
     private const int MaxDegreeOfParallelism = 4;
 
-    /// <summary>
-    /// How often to persist the high-water mark to the database.
-    /// </summary>
-    private const int PersistHighWaterMarkEveryNRows = 500;
-
-    private static readonly TimeSpan LockTtl = TimeSpan.FromSeconds(30);
-    private const string LockKey = "lock:state-streaming";
+    private const string LockKey = LockNames.StateStreaming;
 
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly ISqlDialect _dialect;
-    private readonly IDistributedLock _distributedLock;
+    private readonly IAdvisoryLockProvider _advisoryLockProvider;
     private readonly IServerSettingsCache _settingsCache;
+    private readonly TimeSpan _startupDelay;
     private readonly ILogger<MachineStateStreamingService> _logger;
 
     private long _highWaterMark;
-    private int _rowsSinceLastPersist;
 
     /// <summary>
     /// Creates a new instance of the <see cref="MachineStateStreamingService"/> class.
     /// </summary>
+    /// <param name="scopeFactory">Service scope factory for resolving scoped repositories per batch.</param>
+    /// <param name="dialect">SQL dialect used by downstream repository calls.</param>
+    /// <param name="advisoryLockProvider">Provides exclusive coordination across replicas.</param>
+    /// <param name="settingsCache">Stores the streaming high-water mark across restarts.</param>
+    /// <param name="logger">The logger.</param>
+    /// <param name="startupDelay">Optional override for the startup delay; tests use a short value to keep the suite fast.</param>
     public MachineStateStreamingService(
         IServiceScopeFactory scopeFactory,
         ISqlDialect dialect,
-        IDistributedLock distributedLock,
+        IAdvisoryLockProvider advisoryLockProvider,
         IServerSettingsCache settingsCache,
-        ILogger<MachineStateStreamingService> logger)
+        ILogger<MachineStateStreamingService> logger,
+        TimeSpan? startupDelay = null)
     {
-        _scopeFactory = scopeFactory ?? throw new ArgumentNullException(nameof(scopeFactory));
-        _dialect = dialect ?? throw new ArgumentNullException(nameof(dialect));
-        _distributedLock = distributedLock ?? throw new ArgumentNullException(nameof(distributedLock));
-        _settingsCache = settingsCache ?? throw new ArgumentNullException(nameof(settingsCache));
-        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        ArgumentNullException.ThrowIfNull(scopeFactory);
+        ArgumentNullException.ThrowIfNull(dialect);
+        ArgumentNullException.ThrowIfNull(advisoryLockProvider);
+        ArgumentNullException.ThrowIfNull(settingsCache);
+        ArgumentNullException.ThrowIfNull(logger);
+
+        _scopeFactory = scopeFactory;
+        _dialect = dialect;
+        _advisoryLockProvider = advisoryLockProvider;
+        _settingsCache = settingsCache;
+        _startupDelay = startupDelay ?? DefaultStartupDelay;
+        _logger = logger;
     }
 
     /// <inheritdoc/>
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
-        await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken);
+        if (_startupDelay > TimeSpan.Zero)
+        {
+            await Task.Delay(_startupDelay, stoppingToken);
+        }
 
         _logger.LogInformation("Machine state streaming service started");
 
@@ -80,7 +99,7 @@ public sealed class MachineStateStreamingService : BackgroundService
         {
             try
             {
-                await using LockHandle? lockHandle = await _distributedLock.TryAcquireAsync(LockKey, LockTtl);
+                await using IAsyncDisposable? lockHandle = await _advisoryLockProvider.TryAcquireAsync(LockKey, stoppingToken);
                 if (lockHandle is null)
                 {
                     _logger.LogDebug("State streaming: another instance holds the lock, waiting");
@@ -155,21 +174,10 @@ public sealed class MachineStateStreamingService : BackgroundService
                 }
             });
 
-            // Advance the high-water mark to the last row in the batch.
+            // Advance the high-water mark and persist after every batch — re-processing rows on
+            // crash is more expensive than the extra DB write per batch.
             _highWaterMark = batch[^1].Id;
-            _rowsSinceLastPersist += batch.Count;
-
-            if (_rowsSinceLastPersist >= PersistHighWaterMarkEveryNRows)
-            {
-                await PersistHighWaterMarkAsync(ct);
-                _rowsSinceLastPersist = 0;
-            }
-            else
-            {
-                // Persist after each batch to avoid re-processing on crash.
-                await PersistHighWaterMarkAsync(ct);
-                _rowsSinceLastPersist = 0;
-            }
+            await PersistHighWaterMarkAsync(ct);
         }
     }
 
@@ -487,7 +495,9 @@ public sealed class MachineStateStreamingService : BackgroundService
         string? stored = await _settingsCache.GetSettingAsync(
             ServerConfigurationSettingKeys.StreamingHighWaterMark, ct);
 
-        if (stored is not null && long.TryParse(stored, out long hwm))
+        // Parse with invariant culture and explicit NumberStyles so the round-trip is stable on
+        // non-en hosts (the same applies to the symmetric Persist path below).
+        if (stored is not null && long.TryParse(stored, NumberStyles.Integer, CultureInfo.InvariantCulture, out long hwm))
         {
             _highWaterMark = hwm;
         }
@@ -503,7 +513,7 @@ public sealed class MachineStateStreamingService : BackgroundService
     {
         await _settingsCache.SetSettingAsync(
             ServerConfigurationSettingKeys.StreamingHighWaterMark,
-            _highWaterMark.ToString(),
+            _highWaterMark.ToString(CultureInfo.InvariantCulture),
             ct);
     }
 }

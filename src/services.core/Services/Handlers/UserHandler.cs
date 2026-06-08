@@ -4,8 +4,8 @@
 
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
-using Framlux.FleetManagement.Services.Core.Models.Users;
 using Framlux.FleetManagement.Services.Core.Infrastructure;
+using Framlux.FleetManagement.Services.Core.Models.Users;
 
 namespace Framlux.FleetManagement.Services.Core.Handlers;
 

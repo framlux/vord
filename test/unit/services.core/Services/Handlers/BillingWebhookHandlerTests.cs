@@ -366,7 +366,7 @@ public class BillingWebhookHandlerTests
         await Assert.That(count).IsEqualTo(0);
     }
 
-    // ========== M6: Payment failure changes status but NOT tier or limits ==========
+    // ========== Payment failure changes status but NOT tier or limits ==========
 
     [Test]
     public async Task HandlePaymentFailedAsync_ChangesPastDue_PreservesTierAndLimits()

@@ -2,6 +2,7 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
+using System.Globalization;
 using System.Text.Json;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
@@ -10,12 +11,15 @@ using Framlux.FleetManagement.Server.Auth;
 using Framlux.FleetManagement.Services.Core.Alerts;
 using Framlux.FleetManagement.Services.Core.Billing;
 using Framlux.FleetManagement.Services.Core.Infrastructure;
+using Framlux.FleetManagement.Services.Core.Options;
 using Framlux.FleetManagement.Services.Core.Telemetry;
 using Grpc.Core;
 using Microsoft.AspNetCore.Authorization;
+using Microsoft.Extensions.Options;
 using Npgsql;
 using Polly;
 using Polly.Timeout;
+using StackExchange.Redis;
 
 namespace Framlux.FleetManagement.Server.Endpoints.Grpc;
 
@@ -37,14 +41,9 @@ public sealed class TelemetryService : Telemetry.TelemetryBase
     private const int MaxItemsPerEnvelope = 500;
 
     /// <summary>
-    /// Maximum number of envelopes allowed per stream.
+    /// Redis key prefix for per-machine concurrent-stream tracking.
     /// </summary>
-    private const int MaxEnvelopesPerStream = 1000;
-
-    /// <summary>
-    /// Maximum duration for a single telemetry stream.
-    /// </summary>
-    private static readonly TimeSpan MaxStreamDuration = TimeSpan.FromMinutes(5);
+    private const string StreamCountKeyPrefix = "telemetry:stream:";
 
     /// <summary>
     /// Maximum allowed clock skew between the agent's timestamp and server time.
@@ -58,7 +57,24 @@ public sealed class TelemetryService : Telemetry.TelemetryBase
     private readonly ISubscriptionService _subscriptionService;
     private readonly IEventAlertService _eventAlertService;
     private readonly ResiliencePipeline _dbPipeline;
+    private readonly IConnectionMultiplexer _redis;
+    private readonly TelemetryOptions _options;
     private readonly ILogger<TelemetryService> _logger;
+
+    /// <summary>
+    /// Maximum duration for a single telemetry stream (from <see cref="TelemetryOptions"/>).
+    /// </summary>
+    private TimeSpan MaxStreamDuration => TimeSpan.FromMinutes(_options.MaxStreamDurationMinutes);
+
+    /// <summary>
+    /// Maximum envelopes per stream (from <see cref="TelemetryOptions"/>).
+    /// </summary>
+    private int MaxEnvelopesPerStream => _options.MaxEnvelopesPerStream;
+
+    /// <summary>
+    /// Subscription recheck interval (from <see cref="TelemetryOptions"/>).
+    /// </summary>
+    private TimeSpan SubscriptionRecheckInterval => TimeSpan.FromSeconds(_options.SubscriptionRecheckIntervalSeconds);
 
     /// <summary>
     /// Initializes a new instance of the <see cref="TelemetryService"/> class.
@@ -69,13 +85,25 @@ public sealed class TelemetryService : Telemetry.TelemetryBase
         ISubscriptionService subscriptionService,
         IEventAlertService eventAlertService,
         ResiliencePipeline dbPipeline,
+        IConnectionMultiplexer redis,
+        IOptions<TelemetryOptions> options,
         ILogger<TelemetryService> logger)
     {
+        ArgumentNullException.ThrowIfNull(scopeFactory);
+        ArgumentNullException.ThrowIfNull(dedupService);
+        ArgumentNullException.ThrowIfNull(subscriptionService);
+        ArgumentNullException.ThrowIfNull(eventAlertService);
+        ArgumentNullException.ThrowIfNull(dbPipeline);
+        ArgumentNullException.ThrowIfNull(redis);
+        ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(logger);
         _scopeFactory = scopeFactory;
         _dedupService = dedupService;
         _subscriptionService = subscriptionService;
         _eventAlertService = eventAlertService;
         _dbPipeline = dbPipeline;
+        _redis = redis;
+        _options = options.Value;
         _logger = logger;
     }
 
@@ -106,16 +134,48 @@ public sealed class TelemetryService : Telemetry.TelemetryBase
             return;
         }
 
+        // Cap concurrent streams per machine. A misbehaving agent (or a malicious holder of
+        // a stolen API key) cannot pin many simultaneous streams against the server.
+        TimeSpan slotTtl = MaxStreamDuration + TimeSpan.FromSeconds(60);
+        bool acquired = await TryAcquireStreamSlotAsync(machineId, slotTtl);
+        if (acquired == false)
+        {
+            context.Status = new Status(StatusCode.ResourceExhausted,
+                $"Machine {machineId} has reached the concurrent-stream limit");
+            _logger.LogWarning(
+                "Telemetry stream refused for machine {MachineId}: concurrent-stream limit ({Limit}) reached",
+                machineId, _options.MaxConcurrentStreamsPerMachine);
+
+            return;
+        }
+
         _logger.LogInformation("Telemetry stream opened for machine {MachineId}", machineId);
 
         using CancellationTokenSource streamTimeout = new(MaxStreamDuration);
         using CancellationTokenSource linkedCts = CancellationTokenSource.CreateLinkedTokenSource(context.CancellationToken, streamTimeout.Token);
         int envelopeCount = 0;
+        // Track the last subscription-check timestamp so we re-verify periodically.
+        DateTimeOffset lastSubscriptionCheck = DateTimeOffset.UtcNow;
 
         try
         {
             await foreach (TelemetryEnvelope envelope in requestStream.ReadAllAsync(linkedCts.Token))
             {
+                // Re-check subscription state mid-stream so a tenant that lapses to PastDue
+                // during a long-lived stream stops ingesting within one recheck window.
+                if ((DateTimeOffset.UtcNow - lastSubscriptionCheck) >= SubscriptionRecheckInterval)
+                {
+                    lastSubscriptionCheck = DateTimeOffset.UtcNow;
+                    if (await IsSubscriptionActiveAsync(context, linkedCts.Token) == false)
+                    {
+                        _logger.LogInformation(
+                            "Telemetry stream for machine {MachineId} closing — subscription no longer active",
+                            machineId);
+
+                        break;
+                    }
+                }
+
                 envelopeCount++;
                 if (envelopeCount > MaxEnvelopesPerStream)
                 {
@@ -132,8 +192,75 @@ public sealed class TelemetryService : Telemetry.TelemetryBase
         {
             _logger.LogInformation("Stream for machine {MachineId} closed after {Duration} timeout", machineId, MaxStreamDuration);
         }
+        finally
+        {
+            // Always release the slot — both graceful close and timeout/cancellation paths.
+            await ReleaseStreamSlotAsync(machineId);
+        }
 
         _logger.LogInformation("Telemetry stream closed for machine {MachineId} after {Count} envelopes", machineId, envelopeCount);
+    }
+
+    /// <summary>
+    /// Tries to claim a concurrent-stream slot for the given machine. Returns
+    /// <see langword="true"/> on success; <see langword="false"/> if the cap is reached.
+    /// Slot key is <c>telemetry:stream:{machineId}</c>; INCR returns the post-increment value,
+    /// so the very first slot for a machine sees count==1 and we set the TTL accordingly.
+    /// Subsequent slots over the cap immediately DECR and return false so the count stays bounded.
+    /// </summary>
+    internal async Task<bool> TryAcquireStreamSlotAsync(long machineId, TimeSpan slotTtl)
+    {
+        try
+        {
+            IDatabase db = _redis.GetDatabase();
+            string key = StreamCountKeyPrefix + machineId.ToString(CultureInfo.InvariantCulture);
+            long count = await db.StringIncrementAsync(key);
+            if (count == 1)
+            {
+                await db.KeyExpireAsync(key, slotTtl);
+            }
+
+            if (count > _options.MaxConcurrentStreamsPerMachine)
+            {
+                await db.StringDecrementAsync(key);
+
+                return false;
+            }
+
+            return true;
+        }
+        catch (RedisException ex)
+        {
+            // Fail-open on Redis outage — telemetry ingest must keep working even if the cap
+            // is unenforceable at the moment. The global rate limiter and per-stream limits
+            // provide secondary protection.
+            _logger.LogWarning(ex, "Telemetry stream-slot acquire failed for machine {MachineId}; allowing", machineId);
+
+            return true;
+        }
+    }
+
+    /// <summary>
+    /// Releases a previously-acquired stream slot. If the count reaches zero, the key is
+    /// deleted to keep Redis tidy.
+    /// </summary>
+    internal async Task ReleaseStreamSlotAsync(long machineId)
+    {
+        try
+        {
+            IDatabase db = _redis.GetDatabase();
+            string key = StreamCountKeyPrefix + machineId.ToString(CultureInfo.InvariantCulture);
+            long count = await db.StringDecrementAsync(key);
+            if (count <= 0)
+            {
+                await db.KeyDeleteAsync(key);
+            }
+        }
+        catch (RedisException ex)
+        {
+            // Slot leak is bounded by the TTL applied at acquire time; log and continue.
+            _logger.LogWarning(ex, "Telemetry stream-slot release failed for machine {MachineId}", machineId);
+        }
     }
 
     /// <summary>

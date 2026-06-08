@@ -94,6 +94,20 @@ public interface ITenantRepository
     Task<int> DisableTenantOidcConfigAsync(int tenantId, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Lists every <see cref="TenantOidcConfiguration"/> row regardless of enabled state.
+    /// Used by maintenance jobs (e.g., legacy-secret encryption migration). Returns only the
+    /// fields needed to read and migrate <c>ClientSecret</c>.
+    /// </summary>
+    Task<IReadOnlyList<TenantOidcConfiguration>> ListAllTenantOidcConfigsAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Updates only the <c>ClientSecret</c> column of a tenant's OIDC configuration.
+    /// Returns the number of rows updated. Used by the legacy-secret migration to re-protect
+    /// existing rows without rewriting the entire configuration.
+    /// </summary>
+    Task<int> UpdateTenantOidcClientSecretAsync(int tenantId, string clientSecret, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Checks whether a tenant has at least one active TenantAdmin who does not use CustomOidc
     /// as their authentication provider. Used to guard Team-to-lower-tier downgrades.
     /// </summary>

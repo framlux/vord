@@ -2,12 +2,12 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
-using System.Security.Claims;
 using FastEndpoints;
 using Framlux.FleetManagement.Server.Auth;
-using Framlux.FleetManagement.Services.Core.Models.Tenants;
+using Framlux.FleetManagement.Services.Core.Auth;
 using Framlux.FleetManagement.Services.Core.Handlers;
 using Framlux.FleetManagement.Services.Core.Infrastructure;
+using Framlux.FleetManagement.Services.Core.Models.Tenants;
 
 namespace Framlux.FleetManagement.Server.Endpoints.Web.Tenants;
 
@@ -40,8 +40,7 @@ public sealed class TenantDetailEndpoint : EndpointWithoutRequest<ApiResponse<Te
         int tenantId = Route<int>("id");
 
         // Global admins may view any tenant; non-admins can only view their own
-        string? iga = User.FindFirstValue("iga");
-        bool isGlobalAdmin = string.Equals(iga, bool.TrueString, StringComparison.OrdinalIgnoreCase);
+        bool isGlobalAdmin = AuthClaims.IsUserGlobalAdmin(User);
 
         if (isGlobalAdmin == false)
         {

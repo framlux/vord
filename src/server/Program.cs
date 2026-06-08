@@ -8,6 +8,7 @@ using Framlux.FleetManagement.Server.Auth;
 using Framlux.FleetManagement.Server.Endpoints.Grpc;
 using Framlux.FleetManagement.Server.Endpoints.Web;
 using Framlux.FleetManagement.Server.Endpoints.Web.Machines.History;
+using Framlux.FleetManagement.Server.Startup;
 using Framlux.FleetManagement.Services.Core.Extensions;
 using Framlux.FleetManagement.Services.Core.Hangfire;
 using Framlux.FleetManagement.Services.Core.Infrastructure;
@@ -60,8 +61,17 @@ builder.Services.AddOptions<AppCorsOptions>()
 builder.Services.AddOptions<AuthenticationProviderOptions>()
     .Bind(builder.Configuration.GetSection("Authentication"));
 
+builder.Services.AddOptions<ForwardedHeadersConfig>()
+    .Bind(builder.Configuration.GetSection("ForwardedHeaders"));
+
+builder.Services.AddOptions<TelemetryOptions>()
+    .Bind(builder.Configuration.GetSection("Telemetry"))
+    .ValidateDataAnnotations()
+    .ValidateOnStart();
+
 // Read typed config for use during service registration (before DI container is built)
 AppCorsOptions corsOpts = builder.Configuration.GetSection("Cors").Get<AppCorsOptions>() ?? new();
+ForwardedHeadersConfig forwardedHeadersOpts = builder.Configuration.GetSection("ForwardedHeaders").Get<ForwardedHeadersConfig>() ?? new();
 AuthCookieOptions authCookieOpts = builder.Configuration.GetSection("Auth").Get<AuthCookieOptions>() ?? new();
 AuthenticationProviderOptions authProviderOpts = builder.Configuration.GetSection("Authentication").Get<AuthenticationProviderOptions>() ?? new();
 DatabaseOptions dbOpts = builder.Configuration.GetSection("Database").Get<DatabaseOptions>()
@@ -72,25 +82,17 @@ BillingOptions billingOpts = builder.Configuration.GetSection("Billing").Get<Bil
 ObjectStorageOptions objectStorageOpts = builder.Configuration.GetSection("ObjectStorage").Get<ObjectStorageOptions>() ?? new();
 
 string[] corsOrigins = corsOpts.Origins;
+// Fail fast on Production misconfiguration (empty list or wildcard).
+CorsStartupValidator.Validate(corsOrigins, builder.Environment.EnvironmentName);
+// Cookie removed from WithHeaders: it's a forbidden CORS header — browsers never include it in
+// preflight allow lists. The cookie itself is automatically sent because AllowCredentials() is set.
 builder.Services.AddCors(options => options.AddDefaultPolicy(policyBuilder => policyBuilder
             .WithOrigins(corsOrigins)
             .WithMethods("GET", "POST", "PUT", "DELETE", "OPTIONS")
-            .WithHeaders("Content-Type", "Authorization", "x-api-key", "Cookie")
+            .WithHeaders("Content-Type", "Authorization", "x-api-key")
             .AllowCredentials()));
 builder.Services.Configure<ForwardedHeadersOptions>(options =>
-{
-    options.ForwardedHeaders =
-        ForwardedHeaders.XForwardedFor |
-        ForwardedHeaders.XForwardedProto |
-        ForwardedHeaders.XForwardedHost;
-
-    // Service always runs behind exactly one Traefik reverse proxy.
-    // ForwardLimit = 1 trusts only the most recent X-Forwarded-* header,
-    // preventing IP spoofing via extra headers.
-    options.ForwardLimit = 1;
-    options.KnownIPNetworks.Clear();
-    options.KnownProxies.Clear();
-});
+    ForwardedHeadersStartup.Configure(options, forwardedHeadersOpts, builder.Environment.EnvironmentName));
 
 // SSRF-safe named HttpClients for OIDC discovery and token exchange.
 // SsrfSafeSocketsHttpHandler rejects connections to private/reserved IPs at the socket level,
@@ -217,11 +219,12 @@ builder.Services.AddAuthorization(options =>
         policy.RequireAuthenticatedUser();
     });
 
-    // Global admin policy
+    // Global admin policy. iga-claim presence is delegated to AuthClaims so the value contract
+    // (case-insensitive "True") stays consistent across every check site.
     options.AddPolicy("Admin", policy =>
     {
         policy.RequireAuthenticatedUser();
-        policy.RequireClaim("iga", true.ToString());
+        policy.RequireAssertion(ctx => Framlux.FleetManagement.Services.Core.Auth.AuthClaims.IsUserGlobalAdmin(ctx.User));
         policy.AddAuthenticationSchemes(CookieAuthenticationDefaults.AuthenticationScheme);
     });
 
@@ -252,6 +255,14 @@ builder.Services.AddRepositories(dbOpts, "Framlux.FleetManagement.ApiServer");
 builder.Services.AddCoreInfrastructure(redisOpts, connectionString);
 builder.Services.AddCoreServices(billingOpts, objectStorageOpts);
 
+// Register Hangfire job-type concrete classes in the server too, not just the worker.
+// The server enqueues these jobs (e.g. RequestDataExportEndpoint -> DataExportProcessingJob);
+// without DI registration here, Hangfire's activator would fall back to Activator.CreateInstance
+// — fragile against future scoped-dependency additions. Feature gating mirrors the worker.
+builder.Services.AddHangfireJobTypes(
+    billingEnabled: billingOpts.Enabled,
+    objectStorageEnabled: string.IsNullOrEmpty(objectStorageOpts.BucketName) == false);
+
 // Server-specific handler registrations (have Auth dependencies that stay in server)
 builder.Services.AddScoped<Framlux.FleetManagement.Server.Services.Handlers.ITenantOidcHandler, Framlux.FleetManagement.Server.Services.Handlers.TenantOidcHandler>();
 
@@ -270,7 +281,17 @@ builder.Services.AddSingleton<GrpcRateLimitingInterceptor>();
 builder.Services.AddScoped<CookiePrincipalValidator>();
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddCascadingAuthenticationState();
+
 builder.Services.AddFastEndpoints();
+
+// ASP.NET Core antiforgery (CSRF). Cookie/header naming and security flags are centralized
+// in AntiforgeryStartup.ConfigureOptions so production server and functional tests share the
+// same defaults. The antiforgery cookie is signed and encrypted via IDataProtection, whose
+// keys come from the Redis-backed ring registered just below, so tokens minted on one
+// api-server replica validate on any other replica. Hangfire's dashboard antiforgery uses
+// the same IAntiforgery service directly — it does NOT go through FE's middleware, so
+// pipeline position of UseAntiforgeryFE has no effect on the dashboard's own form POSTs.
+builder.Services.AddAntiforgery(AntiforgeryStartup.ConfigureOptions);
 
 // Data protection for cookie compatibility — keys stored in Redis so the api-server's
 // multiple replicas and the services-worker process share the same key ring.
@@ -308,6 +329,7 @@ app.UseSerilogRequestLogging(options =>
 });
 
 app.UseForwardedHeaders();
+app.UseMiddleware<Framlux.FleetManagement.Server.Middleware.SecurityHeadersMiddleware>();
 app.UseCors();
 app.UseRateLimiter();
 app.UseAuthentication()
@@ -317,6 +339,11 @@ app.UseAuthentication()
 // inside UseHangfireAdminDashboard. Mounted before FastEndpoints so its routes are not
 // captured by FastEndpoints' terminal middleware.
 app.UseHangfireAdminDashboard();
+
+// Antiforgery middleware. Skip predicate keys on the presence of the auth cookie so callers
+// without a session (API key, anonymous) are not gated by a token they cannot mint. See
+// AntiforgeryStartup.ShouldSkipAntiforgery for the precise rule.
+app.UseAntiforgeryFE(skipRequestFilter: AntiforgeryStartup.ShouldSkipAntiforgery);
 
 app.UseFastEndpoints(options =>
     {
@@ -333,6 +360,11 @@ app.UseFastEndpoints(options =>
         options.Endpoints.Configurator = ep =>
         {
             ep.PreProcessor<SubscriptionStatusPreProcessor>(FastEndpoints.Order.Before);
+
+            // Global-by-default antiforgery enrollment. See AntiforgeryStartup and
+            // AntiforgeryEnrollment for the rule; opt out per-endpoint with [SkipAntiforgery]
+            // (every opt-out must also be reviewed and listed in AntiforgeryOptOutAllowlist).
+            AntiforgeryStartup.EnableAntiforgeryIfApplicable(ep);
         };
         options.Errors.StatusCode = 400;
         options.Errors.ResponseBuilder = (failures, ctx, statusCode) =>

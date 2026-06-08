@@ -103,6 +103,77 @@ public partial class DatabaseRepository : IDataExportRepository
     }
 
     /// <inheritdoc/>
+    public async Task<bool> TryClaimPendingJobAsync(int jobId, DateTimeOffset startedAt, CancellationToken cancellationToken)
+    {
+        // Conditional UPDATE: only the row whose status is still Pending flips to Processing,
+        // and the rows-affected count tells us whether THIS caller is the one that claimed it.
+        // If another worker already claimed (or the row was deleted), the count is 0 and we exit.
+        int affected = await _db.DataExportJobs
+            .Where(j => (j.Id == jobId) && (j.Status == DataExportJobStatus.Pending))
+            .Set(j => j.Status, DataExportJobStatus.Processing)
+            .Set(j => j.StartedAt, (DateTimeOffset?)startedAt)
+            .UpdateAsync(cancellationToken);
+
+        return affected == 1;
+    }
+
+    /// <inheritdoc/>
+    public async Task<List<DataExportJob>> GetStuckProcessingJobsAsync(DateTimeOffset olderThan, CancellationToken cancellationToken)
+    {
+        List<DataExportJob> jobs = await _db.DataExportJobs
+            .Where(j => (j.Status == DataExportJobStatus.Processing)
+                     && (j.StartedAt != null)
+                     && (j.StartedAt < olderThan))
+            .ToListAsync(cancellationToken);
+
+        return jobs;
+    }
+
+    /// <inheritdoc/>
+    public async Task ResetOrphanedJobToPendingAsync(int jobId, CancellationToken cancellationToken)
+    {
+        // Only reset if it is still in Processing. A concurrent completion would have moved it
+        // to Complete already; we must not clobber that.
+        await _db.DataExportJobs
+            .Where(j => (j.Id == jobId) && (j.Status == DataExportJobStatus.Processing))
+            .Set(j => j.Status, DataExportJobStatus.Pending)
+            .Set(j => j.StartedAt, (DateTimeOffset?)null)
+            .UpdateAsync(cancellationToken);
+
+        _logger.LogWarning("Reset orphaned export job {JobId} from Processing back to Pending", jobId);
+    }
+
+    /// <inheritdoc/>
+    public async Task<int> IncrementFailureCountAsync(int jobId, CancellationToken cancellationToken)
+    {
+        await _db.DataExportJobs
+            .Where(j => j.Id == jobId)
+            .Set(j => j.FailureCount, j => j.FailureCount + 1)
+            .UpdateAsync(cancellationToken);
+
+        int newCount = await _db.DataExportJobs
+            .Where(j => j.Id == jobId)
+            .Select(j => j.FailureCount)
+            .FirstOrDefaultAsync(cancellationToken);
+
+        return newCount;
+    }
+
+    /// <inheritdoc/>
+    public async Task MarkExportJobFailedAsync(int jobId, string errorMessage, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(errorMessage);
+        await _db.DataExportJobs
+            .Where(j => j.Id == jobId)
+            .Set(j => j.Status, DataExportJobStatus.Failed)
+            .Set(j => j.ErrorMessage, errorMessage)
+            .Set(j => j.CompletedAt, DateTimeOffset.UtcNow)
+            .UpdateAsync(cancellationToken);
+
+        _logger.LogWarning("Marked export job {JobId} as Failed after exhausting retries", jobId);
+    }
+
+    /// <inheritdoc/>
     public async Task<List<DataExportJob>> GetExpiredExportJobsAsync(CancellationToken cancellationToken)
     {
         DateTimeOffset now = DateTimeOffset.UtcNow;

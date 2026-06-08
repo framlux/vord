@@ -234,6 +234,29 @@ public partial class DatabaseRepository : ITenantRepository
     }
 
     /// <inheritdoc/>
+    public async Task<IReadOnlyList<TenantOidcConfiguration>> ListAllTenantOidcConfigsAsync(CancellationToken cancellationToken)
+    {
+        List<TenantOidcConfiguration> configs = await _db.TenantOidcConfigurations
+            .OrderBy(c => c.TenantId)
+            .ToListAsync(cancellationToken);
+
+        return configs;
+    }
+
+    /// <inheritdoc/>
+    public async Task<int> UpdateTenantOidcClientSecretAsync(int tenantId, string clientSecret, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(clientSecret);
+        int updated = await _db.TenantOidcConfigurations
+            .Where(c => c.TenantId == tenantId)
+            .Set(c => c.ClientSecret, clientSecret)
+            .Set(c => c.UpdatedAt, DateTimeOffset.UtcNow)
+            .UpdateAsync(cancellationToken);
+
+        return updated;
+    }
+
+    /// <inheritdoc/>
     public async Task<bool> HasNonOidcTenantAdminAsync(int tenantId, CancellationToken cancellationToken)
     {
         bool hasNonOidcAdmin = await (

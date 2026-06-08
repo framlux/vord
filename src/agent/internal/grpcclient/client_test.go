@@ -346,6 +346,109 @@ func TestStreamInterceptor_PreservesExistingMetadata(t *testing.T) {
 	}
 }
 
+// --- H2: plaintext-target safety tests ---
+
+func TestAssertPlaintextTargetIsSafe_LoopbackV4_Allowed(t *testing.T) {
+	if err := assertPlaintextTargetIsSafe("127.0.0.1:12234"); err != nil {
+		t.Fatalf("expected loopback v4 to be allowed, got %v", err)
+	}
+}
+
+func TestAssertPlaintextTargetIsSafe_LoopbackV6_Allowed(t *testing.T) {
+	if err := assertPlaintextTargetIsSafe("[::1]:12234"); err != nil {
+		t.Fatalf("expected loopback v6 to be allowed, got %v", err)
+	}
+}
+
+func TestAssertPlaintextTargetIsSafe_LocalhostHostname_Allowed(t *testing.T) {
+	if err := assertPlaintextTargetIsSafe("localhost:12234"); err != nil {
+		t.Fatalf("expected localhost to be allowed, got %v", err)
+	}
+}
+
+func TestAssertPlaintextTargetIsSafe_RFC1918_Class_A_Allowed(t *testing.T) {
+	if err := assertPlaintextTargetIsSafe("10.0.0.5:12234"); err != nil {
+		t.Fatalf("expected 10.0.0.5 (private) to be allowed, got %v", err)
+	}
+}
+
+func TestAssertPlaintextTargetIsSafe_RFC1918_Class_B_Allowed(t *testing.T) {
+	if err := assertPlaintextTargetIsSafe("172.20.0.1:12234"); err != nil {
+		t.Fatalf("expected 172.20.0.1 (private) to be allowed, got %v", err)
+	}
+}
+
+func TestAssertPlaintextTargetIsSafe_RFC1918_Class_C_Allowed(t *testing.T) {
+	if err := assertPlaintextTargetIsSafe("192.168.1.1:12234"); err != nil {
+		t.Fatalf("expected 192.168.1.1 (private) to be allowed, got %v", err)
+	}
+}
+
+func TestAssertPlaintextTargetIsSafe_RFC4193_ULA_Allowed(t *testing.T) {
+	if err := assertPlaintextTargetIsSafe("[fc00::1]:12234"); err != nil {
+		t.Fatalf("expected fc00::1 (ULA) to be allowed, got %v", err)
+	}
+}
+
+func TestAssertPlaintextTargetIsSafe_PublicIPv4_Refused(t *testing.T) {
+	err := assertPlaintextTargetIsSafe("203.0.113.5:12234")
+	if err == nil {
+		t.Fatal("expected public IPv4 to be refused, got nil error")
+	}
+}
+
+func TestAssertPlaintextTargetIsSafe_PublicIPv6_Refused(t *testing.T) {
+	err := assertPlaintextTargetIsSafe("[2001:db8::1]:12234")
+	if err == nil {
+		t.Fatal("expected public IPv6 to be refused, got nil error")
+	}
+}
+
+func TestAssertPlaintextTargetIsSafe_DnsSchemeStripped(t *testing.T) {
+	// dns:/// scheme with loopback target should be allowed after scheme strip.
+	if err := assertPlaintextTargetIsSafe("dns:///127.0.0.1:12234"); err != nil {
+		t.Fatalf("expected dns:/// scheme with loopback to be allowed, got %v", err)
+	}
+}
+
+func TestAssertPlaintextTargetIsSafe_EmptyTarget_Refused(t *testing.T) {
+	if err := assertPlaintextTargetIsSafe(""); err == nil {
+		t.Fatal("expected empty target to be refused, got nil error")
+	}
+}
+
+func TestAssertPlaintextTargetIsSafe_NoPortLocalhost_Allowed(t *testing.T) {
+	if err := assertPlaintextTargetIsSafe("localhost"); err != nil {
+		t.Fatalf("expected bare localhost to be allowed, got %v", err)
+	}
+}
+
+func TestAssertPlaintextTargetIsSafe_BareLoopbackIp_Allowed(t *testing.T) {
+	if err := assertPlaintextTargetIsSafe("127.0.0.1"); err != nil {
+		t.Fatalf("expected bare 127.0.0.1 to be allowed, got %v", err)
+	}
+}
+
+func TestParseHostForCheck_StripsIPv6Brackets(t *testing.T) {
+	host, err := parseHostForCheck("[fe80::1]:12234")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if host != "fe80::1" {
+		t.Errorf("expected fe80::1 host, got %q", host)
+	}
+}
+
+func TestParseHostForCheck_StripsDnsScheme(t *testing.T) {
+	host, err := parseHostForCheck("dns:///server.internal:12234")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if host != "server.internal" {
+		t.Errorf("expected server.internal host, got %q", host)
+	}
+}
+
 func TestStreamInterceptor_OmitsBothWhenDefaultState(t *testing.T) {
 	runtimeState := state.New()
 

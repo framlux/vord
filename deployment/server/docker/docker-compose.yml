@@ -132,6 +132,48 @@ services:
     networks:
       - vord-fleet
 
+  services-worker:
+    # Processes Hangfire recurring jobs (alert evaluation, data export, partition management,
+    # Stripe sync, usage heartbeat, health sweep, etc.). The api-server enqueues; this worker
+    # drains. Without this service the dashboard will show scheduled jobs but nothing executes.
+    image: ghcr.io/framlux/vord/services-worker:${IMAGE_TAG:-latest}
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migration-runner:
+        condition: service_healthy
+    environment:
+      ASPNETCORE_ENVIRONMENT: Production
+      ASPNETCORE_FORWARDEDHEADERS_ENABLED: "true"
+      Database__HOSTNAME: postgres
+      Database__USER: ${DB_USER}
+      Database__PASSWORD: ${DB_PASSWORD}
+      Database__DB: ${DB_NAME}
+      Redis__ConnectionString: redis:6379
+      Billing__Enabled: "${Billing__Enabled:-false}"
+      Hangfire__WorkerCount: "${HANGFIRE_WORKER_COUNT:-10}"
+      Resend__ApiKey: ${RESEND_API_KEY:-}
+      Resend__FromEmail: ${RESEND_FROM_EMAIL:-}
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8080/healthz || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+    deploy:
+      resources:
+        limits:
+          cpus: "1"
+          memory: 512M
+        reservations:
+          cpus: "0.25"
+          memory: 256M
+    networks:
+      - vord-fleet
+
   web:
     image: ghcr.io/framlux/vord/web:${IMAGE_TAG:-latest}
     restart: unless-stopped

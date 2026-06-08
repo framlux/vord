@@ -4,9 +4,10 @@
 
 using System.Security.Claims;
 using FastEndpoints;
-using Framlux.FleetManagement.Services.Core.Models.Tenants;
+using Framlux.FleetManagement.Services.Core.Auth;
 using Framlux.FleetManagement.Services.Core.Handlers;
 using Framlux.FleetManagement.Services.Core.Infrastructure;
+using Framlux.FleetManagement.Services.Core.Models.Tenants;
 
 namespace Framlux.FleetManagement.Server.Endpoints.Web.Tenants;
 
@@ -36,8 +37,7 @@ public sealed class TenantListEndpoint : EndpointWithoutRequest<ApiResponse<List
     public override async Task HandleAsync(CancellationToken ct)
     {
         // Global admins see all tenants
-        string? iga = User.FindFirstValue("iga");
-        bool isGlobalAdmin = string.Equals(iga, bool.TrueString, StringComparison.OrdinalIgnoreCase);
+        bool isGlobalAdmin = AuthClaims.IsUserGlobalAdmin(User);
 
         List<int> tenantIds = User.FindAll(ClaimTypes.Role)
             .Select(c => c.Value.Split(':'))

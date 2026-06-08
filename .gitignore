@@ -12,6 +12,7 @@
 *.DS_Store
 *.out
 .superpowers/
+.worktrees/
 
 src/certs/
 

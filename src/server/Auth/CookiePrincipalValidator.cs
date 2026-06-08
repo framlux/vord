@@ -5,6 +5,7 @@
 using System.Security.Claims;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
+using Framlux.FleetManagement.Services.Core.Auth;
 using Framlux.FleetManagement.Services.Core.Security;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
@@ -13,8 +14,9 @@ using StackExchange.Redis;
 namespace Framlux.FleetManagement.Server.Auth;
 
 /// <summary>
-/// Validates the cookie principal on every request. Checks that the user is still active
-/// and that role claims are current, refreshing them if they have changed.
+/// Validates the cookie principal on every request. Checks that the user is still active,
+/// that the global-admin (iga) claim matches the current DB state, and that role claims are
+/// current — refreshing them if they have changed.
 /// </summary>
 public sealed class CookiePrincipalValidator : CookieAuthenticationEvents
 {
@@ -51,8 +53,9 @@ public sealed class CookiePrincipalValidator : CookieAuthenticationEvents
     }
 
     /// <summary>
-    /// Validates the principal on every authenticated request. Rejects inactive users and
-    /// refreshes role claims when they have changed since the cookie was issued.
+    /// Validates the principal on every authenticated request. Rejects inactive users,
+    /// reconciles the iga claim with current DB state, and refreshes role claims when they
+    /// have changed since the cookie was issued.
     /// </summary>
     /// <param name="context">The cookie validation context.</param>
     /// <returns>Returns an awaitable Task.</returns>
@@ -68,13 +71,15 @@ public sealed class CookiePrincipalValidator : CookieAuthenticationEvents
 
         IDatabase redisDb = _redis.GetDatabase();
 
-        bool isActive = await CheckUserIsActiveAsync(userId, redisDb, context.HttpContext.RequestAborted);
+        (bool isActive, bool isGlobalAdmin) = await CheckUserStateAsync(userId, redisDb, context.HttpContext.RequestAborted);
         if (isActive == false)
         {
             context.RejectPrincipal();
 
             return;
         }
+
+        ReconcileGlobalAdminClaim(context, isGlobalAdmin);
 
         string? externalId = context.Principal?.FindFirstValue(ClaimTypes.NameIdentifier)
             ?? context.Principal?.FindFirstValue("sub");
@@ -101,27 +106,121 @@ public sealed class CookiePrincipalValidator : CookieAuthenticationEvents
     }
 
     /// <summary>
-    /// Checks whether the user account is still active, using Redis as a short-lived cache.
+    /// Checks whether the user account is still active AND captures the current global-admin
+    /// state in the same DB read. Both signals are cached together so reconciling either does
+    /// not require a second round-trip. Cache format: "<c>active:iga</c>" where each side is
+    /// <c>0</c> or <c>1</c>.
     /// </summary>
-    internal async Task<bool> CheckUserIsActiveAsync(int userId, IDatabase redisDb, CancellationToken ct)
+    internal async Task<(bool IsActive, bool IsGlobalAdmin)> CheckUserStateAsync(int userId, IDatabase redisDb, CancellationToken ct)
     {
         string cacheKey = $"user:active:{userId}";
         RedisValue cached = await redisDb.StringGetAsync(cacheKey);
 
         if (cached.HasValue)
         {
-            return cached != "0";
+            string raw = cached.ToString();
+            if (TryParseCachedState(raw, out bool isActive, out bool isGlobalAdmin))
+            {
+                return (isActive, isGlobalAdmin);
+            }
+            // Legacy cache format or corrupt — fall through to DB.
         }
 
-        // Cache miss — query the database
         using IServiceScope scope = _scopeFactory.CreateScope();
         IUserRepository userRepo = scope.ServiceProvider.GetRequiredService<IUserRepository>();
         UserAccount? user = await userRepo.GetUserByIdAsync(userId, ct);
 
-        bool isActive = user is not null && user.IsActive;
-        await redisDb.StringSetAsync(cacheKey, isActive ? "1" : "0", CacheTtl);
+        bool active = user is not null && user.IsActive;
+        bool admin = user is not null && user.IsGlobalAdmin;
+        await redisDb.StringSetAsync(cacheKey, $"{(active ? "1" : "0")}:{(admin ? "1" : "0")}", CacheTtl);
 
-        return isActive;
+        return (active, admin);
+    }
+
+    /// <summary>
+    /// Parses the combined active/iga cache string. Accepts the new format
+    /// (<c>"active:iga"</c>, e.g. <c>"1:1"</c>) and the legacy single-bit format
+    /// (<c>"0"</c> or <c>"1"</c>) for the transition window. Legacy values produce
+    /// <c>isGlobalAdmin=false</c> conservatively — a previously-cached admin who has since
+    /// been demoted will still appear as non-admin, while an admin who has been retained will
+    /// only lose admin until the cache refreshes (≤ 5 minutes), which is the expected refresh
+    /// granularity of the cache anyway. Returns <c>false</c> only for genuinely malformed entries.
+    /// </summary>
+    internal static bool TryParseCachedState(string raw, out bool isActive, out bool isGlobalAdmin)
+    {
+        isActive = false;
+        isGlobalAdmin = false;
+        if (string.IsNullOrEmpty(raw))
+        {
+            return false;
+        }
+
+        // Legacy single-bit format ("0" or "1") — parse as active-only.
+        if (raw == "0")
+        {
+            isActive = false;
+            isGlobalAdmin = false;
+
+            return true;
+        }
+
+        if (raw == "1")
+        {
+            isActive = true;
+            isGlobalAdmin = false;
+
+            return true;
+        }
+
+        string[] parts = raw.Split(':');
+        if (parts.Length != 2)
+        {
+            return false;
+        }
+
+        if ((parts[0] != "0") && (parts[0] != "1"))
+        {
+            return false;
+        }
+
+        if ((parts[1] != "0") && (parts[1] != "1"))
+        {
+            return false;
+        }
+
+        isActive = parts[0] == "1";
+        isGlobalAdmin = parts[1] == "1";
+
+        return true;
+    }
+
+    /// <summary>
+    /// Reconciles the cookie's iga claim with the current DB-resolved value. On mismatch the
+    /// identity is rebuilt (adding or removing the claim) and the cookie is marked for renewal.
+    /// </summary>
+    internal static void ReconcileGlobalAdminClaim(CookieValidatePrincipalContext context, bool isGlobalAdminInDb)
+    {
+        bool cookieClaimsAdmin = AuthClaims.IsUserGlobalAdmin(context.Principal!);
+        if (cookieClaimsAdmin == isGlobalAdminInDb)
+        {
+            return;
+        }
+
+        ClaimsIdentity identity = (ClaimsIdentity)context.Principal!.Identity!;
+        // Remove every iga claim (case-insensitive compare on name happens at the helper layer;
+        // the underlying claim name is the constant from AuthClaims).
+        List<Claim> existing = identity.FindAll(AuthClaims.IsGlobalAdmin).ToList();
+        foreach (Claim c in existing)
+        {
+            identity.RemoveClaim(c);
+        }
+
+        identity.AddClaim(new Claim(
+            AuthClaims.IsGlobalAdmin,
+            isGlobalAdminInDb ? AuthClaims.IsGlobalAdminValueTrue : "False"));
+
+        context.ReplacePrincipal(new ClaimsPrincipal(identity));
+        context.ShouldRenew = true;
     }
 
     /// <summary>

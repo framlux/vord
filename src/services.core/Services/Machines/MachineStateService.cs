@@ -5,10 +5,10 @@
 using System.Text.Json;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
+using Framlux.FleetManagement.Services.Core.Infrastructure;
 using Framlux.FleetManagement.Services.Core.Models.Dashboard;
 using Framlux.FleetManagement.Services.Core.Models.Machines;
 using Framlux.FleetManagement.Services.Core.Models.Telemetry;
-using Framlux.FleetManagement.Services.Core.Infrastructure;
 using Framlux.FleetManagement.Services.Core.ServerConfiguration;
 using Framlux.FleetManagement.Services.Core.Telemetry;
 
@@ -72,7 +72,6 @@ public sealed class MachineStateService : IMachineStateService
 
         using IServiceScope scope = _scopeFactory.CreateScope();
         IMachineStateRepository machineStateRepo = scope.ServiceProvider.GetRequiredService<IMachineStateRepository>();
-        TimeSpan onlineThreshold = await _configService.GetOnlineThresholdAsync(ct);
 
         // Step 1: SQL-level summary aggregation using pre-computed HealthStatus.
         (List<(short HealthStatus, int Count)> healthCounts, int totalSecurityUpdates) =
@@ -176,8 +175,7 @@ public sealed class MachineStateService : IMachineStateService
         List<MachineTelemetry> sshTelemetry = await machineStateRepo.GetRecentTelemetryAsync(machineId, TelemetryTypeIds.SshSessions, 20, ct);
         List<SshSessionPayload> sshSessions = sshTelemetry
             .Select(t => JsonSerializer.Deserialize<SshSessionPayload>(t.Payload, JsonDefaults.SnakeCase))
-            .Where(s => s is not null)
-            .Select(s => s!)
+            .OfType<SshSessionPayload>()
             .ToList();
 
         MachineHealthStatus health = state is not null
@@ -242,4 +240,3 @@ public sealed class MachineStateService : IMachineStateService
         }
     }
 }
-

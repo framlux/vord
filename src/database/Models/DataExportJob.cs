@@ -45,6 +45,13 @@ public sealed class DataExportJob
     public required DateTimeOffset RequestedAt { get; set; }
 
     /// <summary>
+    /// When the export transitioned from Pending to Processing. Used by the orphan reaper to
+    /// detect stuck Processing rows after a worker crash.
+    /// </summary>
+    [Column("StartedAt")]
+    public DateTimeOffset? StartedAt { get; set; }
+
+    /// <summary>
     /// When the export completed (successfully or with failure).
     /// </summary>
     [Column("CompletedAt")]
@@ -79,4 +86,13 @@ public sealed class DataExportJob
     /// </summary>
     [Column("FileSizeBytes")]
     public long? FileSizeBytes { get; set; }
+
+    /// <summary>
+    /// Number of processing attempts that have failed. Used by DataExportProcessingJob to cap
+    /// retries on a poison job — after MaxFailures the row transitions to Failed instead of
+    /// being reset to Pending, so a permanently-broken job no longer generates one Failed
+    /// Hangfire entry per minute forever.
+    /// </summary>
+    [Column("FailureCount"), NotNull]
+    public int FailureCount { get; set; }
 }

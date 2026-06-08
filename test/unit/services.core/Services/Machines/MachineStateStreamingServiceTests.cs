@@ -24,19 +24,44 @@ namespace Framlux.FleetManagement.Test.Services.Machines;
 /// </summary>
 public class MachineStateStreamingServiceTests
 {
+    /// <summary>
+    /// Zero startup delay so tests don't pay the production 5-second pause.
+    /// </summary>
+    private static readonly TimeSpan FastStartupDelay = TimeSpan.Zero;
+
     private static MachineStateStreamingService CreateService(
         IServiceScopeFactory scopeFactory,
         ISqlDialect? dialect = null,
-        IDistributedLock? distributedLock = null,
+        IAdvisoryLockProvider? advisoryLockProvider = null,
         IServerSettingsCache? settingsCache = null,
-        ILogger<MachineStateStreamingService>? logger = null)
+        ILogger<MachineStateStreamingService>? logger = null,
+        TimeSpan? startupDelay = null)
     {
         return new MachineStateStreamingService(
             scopeFactory,
             dialect ?? Substitute.For<ISqlDialect>(),
-            distributedLock ?? Substitute.For<IDistributedLock>(),
+            advisoryLockProvider ?? AcquiringAdvisoryLockProvider(),
             settingsCache ?? Substitute.For<IServerSettingsCache>(),
-            logger ?? Substitute.For<ILogger<MachineStateStreamingService>>());
+            logger ?? Substitute.For<ILogger<MachineStateStreamingService>>(),
+            startupDelay ?? FastStartupDelay);
+    }
+
+    private static IAdvisoryLockProvider AcquiringAdvisoryLockProvider()
+    {
+        IAdvisoryLockProvider provider = Substitute.For<IAdvisoryLockProvider>();
+        provider.TryAcquireAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(Substitute.For<IAsyncDisposable>());
+
+        return provider;
+    }
+
+    private static IAdvisoryLockProvider BlockingAdvisoryLockProvider()
+    {
+        IAdvisoryLockProvider provider = Substitute.For<IAdvisoryLockProvider>();
+        provider.TryAcquireAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns((IAsyncDisposable?)null);
+
+        return provider;
     }
 
     private static async Task SeedSummaryAndDetail(DatabaseContext db, long machineId, int tenantId = 1)
@@ -718,53 +743,6 @@ public class MachineStateStreamingServiceTests
         await Assert.That(summary!.CpuUsagePercent).IsEqualTo(60);
     }
 
-    // ========== LoadHighWaterMark tests ==========
-
-    [Test]
-    public async Task LoadHighWaterMark_ExistingValue_ParsesCorrectly()
-    {
-        using TestDatabaseFactory dbFactory = new();
-        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-
-        IServerSettingsCache settingsCache = Substitute.For<IServerSettingsCache>();
-        settingsCache.GetSettingAsync(ServerConfigurationSettingKeys.StreamingHighWaterMark, Arg.Any<CancellationToken>())
-            .Returns("42000");
-
-        IDistributedLock distributedLock = Substitute.For<IDistributedLock>();
-        // Return null lock handle to exit after loading HWM (lock not acquired -> skip)
-        distributedLock.TryAcquireAsync(Arg.Any<string>(), Arg.Any<TimeSpan>())
-            .Returns((LockHandle?)null);
-
-        MachineStateStreamingService service = CreateService(
-            scopeFactory, settingsCache: settingsCache, distributedLock: distributedLock);
-
-        // Seed a telemetry row at Id=42001 to verify HWM was loaded
-        MachineTelemetry telemetry = TestDataBuilder.BuildMachineTelemetry(machineId: 1, telemetryType: TelemetryTypeIds.CpuUsage, payload: """{"cpu_usage_percent":50}""");
-        telemetry.Id = 42001;
-        await dbFactory.Context.InsertAsync(telemetry);
-
-        // GetSettingAsync was called during the service's LoadHighWaterMarkAsync,
-        // confirming it reads the stored value.
-        await settingsCache.Received(0).GetSettingAsync(
-            ServerConfigurationSettingKeys.StreamingHighWaterMark, Arg.Any<CancellationToken>());
-
-        // The mock returns null for TryAcquireAsync so ExecuteAsync never calls Load.
-        // Instead, test the stored value via settings cache being configured.
-        await Assert.That(settingsCache).IsNotNull();
-    }
-
-    [Test]
-    public async Task LoadHighWaterMark_NoStoredValue_ReturnsZero()
-    {
-        IServerSettingsCache settingsCache = Substitute.For<IServerSettingsCache>();
-        settingsCache.GetSettingAsync(ServerConfigurationSettingKeys.StreamingHighWaterMark, Arg.Any<CancellationToken>())
-            .Returns((string?)null);
-
-        // The service defaults to 0 when no stored value exists.
-        // Verified by the service's internal behavior: it starts from ID > 0.
-        await Assert.That(settingsCache).IsNotNull();
-    }
-
     // ========== StreamLoop_EmptyBatch_SleepsWithoutError ==========
 
     [Test]
@@ -775,12 +753,10 @@ public class MachineStateStreamingServiceTests
         using TestDatabaseFactory dbFactory = new();
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
 
-        IDistributedLock distributedLock = Substitute.For<IDistributedLock>();
-        distributedLock.TryAcquireAsync(Arg.Any<string>(), Arg.Any<TimeSpan>())
-            .Returns((LockHandle?)null);
+        IAdvisoryLockProvider lockProvider = BlockingAdvisoryLockProvider();
 
         MachineStateStreamingService service = CreateService(
-            scopeFactory, distributedLock: distributedLock);
+            scopeFactory, advisoryLockProvider: lockProvider);
 
         using CancellationTokenSource cts = new(TimeSpan.FromMilliseconds(200));
 
@@ -800,44 +776,84 @@ public class MachineStateStreamingServiceTests
         }).ThrowsNothing();
     }
 
-    // ========== StreamLoop_RowException_ContinuesProcessing ==========
+    // ========== StreamLoop_PerRowException_ContinuesProcessingRemainingRows ==========
 
     [Test]
-    public async Task StreamLoop_RowException_ContinuesProcessing()
+    public async Task StreamLoop_PerRowException_ContinuesProcessingRemainingRows()
     {
-        // When a single row fails to process, the loop should continue with the next row.
-        // The streaming loop catches exceptions per-row and logs them.
+        // Intent: a per-row exception in the streaming loop must be caught and processing must
+        // continue with the next row. Drives the public BackgroundService entry point with two
+        // telemetry rows for the same machine (so they share one group and run sequentially):
+        // the FIRST row's payload is malformed JSON and throws inside ProcessTelemetryRowAsync,
+        // and the SECOND row must still be processed so its summary update is persisted.
+        // A regression that drops the per-row try/catch in StreamLoopAsync would propagate the
+        // exception out of Parallel.ForEachAsync, abort the batch before the good row runs,
+        // and leave the summary unchanged — this test would fail.
         using TestDatabaseFactory dbFactory = new();
         DatabaseContext db = dbFactory.Context;
         long machineId = 120;
         await SeedSummaryAndDetail(db, machineId);
 
-        TestServiceScopeFactory scopeFactory = new(db);
-        ILogger<MachineStateStreamingService> logger = Substitute.For<ILogger<MachineStateStreamingService>>();
-        MachineStateStreamingService service = CreateService(scopeFactory, logger: logger);
-
-        // First row has bad payload (will throw), second row is valid
+        // Seed two telemetry rows: row 1 has invalid JSON (throws JsonException during
+        // ProcessTelemetryRowAsync), row 2 is valid and must still be applied to the summary.
         MachineTelemetry badRow = BuildRow(machineId, TelemetryTypeIds.CpuUsage, "INVALID_JSON", id: 1);
         MachineTelemetry goodRow = BuildRow(machineId, TelemetryTypeIds.CpuUsage, """{"cpu_usage_percent":55}""", id: 2);
+        await db.InsertAsync(badRow);
+        await db.InsertAsync(goodRow);
 
-        // Process bad row - should throw
+        // High-water mark starts at 0 (cache returns null), so both rows are picked up.
+        IServerSettingsCache settingsCache = Substitute.For<IServerSettingsCache>();
+        settingsCache.GetSettingAsync(Arg.Any<ServerConfigurationSettingKeys>(), Arg.Any<CancellationToken>())
+            .Returns((string?)null);
+
+        TestServiceScopeFactory scopeFactory = new(db);
+        ILogger<MachineStateStreamingService> logger = Substitute.For<ILogger<MachineStateStreamingService>>();
+
+        // Non-blocking lock provider so the loop actually enters StreamLoopAsync.
+        MachineStateStreamingService service = CreateService(
+            scopeFactory,
+            advisoryLockProvider: AcquiringAdvisoryLockProvider(),
+            settingsCache: settingsCache,
+            logger: logger);
+
+        // The CreateService default uses FastStartupDelay (zero) so we no longer have to
+        // wait the production 5-second startup pause. A 1.5s window is still needed to let
+        // the loop pick up the seeded rows and the per-row catch path execute reliably under
+        // CI load — but it's still over 4x faster than the original 7-second wait.
+        using CancellationTokenSource cts = new();
+        cts.CancelAfter(TimeSpan.FromSeconds(3));
+
+        await service.StartAsync(cts.Token);
+
         try
         {
-            await service.ProcessTelemetryRowAsync(CreateRepo(db),badRow, CancellationToken.None);
+            await Task.Delay(TimeSpan.FromMilliseconds(1500), cts.Token);
         }
-        catch (System.Text.Json.JsonException)
+        catch (OperationCanceledException)
         {
-            // Expected - the streaming loop catches this
+            // Timeout fired — expected, the loop will be unwound below.
         }
 
-        // Process good row - should succeed despite bad row before it
-        await service.ProcessTelemetryRowAsync(CreateRepo(db),goodRow, CancellationToken.None);
+        await service.StopAsync(CancellationToken.None);
 
+        // Verify: row 2's summary update was written despite row 1's exception. If the per-row
+        // catch were removed, the exception from row 1 would bubble up out of Parallel.ForEachAsync
+        // and the second row would never be applied, leaving CpuUsagePercent null.
         MachineStateSummary? summary = await db.MachineStateSummaries
             .Where(s => s.MachineId == machineId)
             .FirstOrDefaultAsync();
 
+        await Assert.That(summary).IsNotNull();
         await Assert.That(summary!.CpuUsagePercent).IsEqualTo(55);
+
+        // And the per-row failure must have been logged at Warning level (don't assert the
+        // exact message text — assert intent only).
+        logger.Received().Log(
+            LogLevel.Warning,
+            Arg.Any<EventId>(),
+            Arg.Any<object>(),
+            Arg.Any<Exception?>(),
+            Arg.Any<Func<object, Exception?, string>>()!);
     }
 
     // ========== ProcessTelemetryRow_SystemInfo_UpdatesLastSeenAt ==========
@@ -982,7 +998,7 @@ public class MachineStateStreamingServiceTests
         await Assert.That(() => new MachineStateStreamingService(
             null!,
             Substitute.For<ISqlDialect>(),
-            Substitute.For<IDistributedLock>(),
+            Substitute.For<IAdvisoryLockProvider>(),
             Substitute.For<IServerSettingsCache>(),
             Substitute.For<ILogger<MachineStateStreamingService>>()))
             .Throws<ArgumentNullException>();
@@ -994,14 +1010,14 @@ public class MachineStateStreamingServiceTests
         await Assert.That(() => new MachineStateStreamingService(
             Substitute.For<IServiceScopeFactory>(),
             null!,
-            Substitute.For<IDistributedLock>(),
+            Substitute.For<IAdvisoryLockProvider>(),
             Substitute.For<IServerSettingsCache>(),
             Substitute.For<ILogger<MachineStateStreamingService>>()))
             .Throws<ArgumentNullException>();
     }
 
     [Test]
-    public async Task Constructor_NullDistributedLock_ThrowsArgumentNullException()
+    public async Task Constructor_NullAdvisoryLockProvider_ThrowsArgumentNullException()
     {
         await Assert.That(() => new MachineStateStreamingService(
             Substitute.For<IServiceScopeFactory>(),
@@ -1018,7 +1034,7 @@ public class MachineStateStreamingServiceTests
         await Assert.That(() => new MachineStateStreamingService(
             Substitute.For<IServiceScopeFactory>(),
             Substitute.For<ISqlDialect>(),
-            Substitute.For<IDistributedLock>(),
+            Substitute.For<IAdvisoryLockProvider>(),
             null!,
             Substitute.For<ILogger<MachineStateStreamingService>>()))
             .Throws<ArgumentNullException>();
@@ -1030,7 +1046,7 @@ public class MachineStateStreamingServiceTests
         await Assert.That(() => new MachineStateStreamingService(
             Substitute.For<IServiceScopeFactory>(),
             Substitute.For<ISqlDialect>(),
-            Substitute.For<IDistributedLock>(),
+            Substitute.For<IAdvisoryLockProvider>(),
             Substitute.For<IServerSettingsCache>(),
             null!))
             .Throws<ArgumentNullException>();

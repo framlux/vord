@@ -20,7 +20,9 @@
 
   <ItemGroup>
     <InternalsVisibleTo Include="unit.server" />
-    <InternalsVisibleTo Include="functional.server" />
+    <InternalsVisibleTo Include="functional.web" />
+    <InternalsVisibleTo Include="functional.grpc" />
+    <InternalsVisibleTo Include="functional.hangfire" />
   </ItemGroup>
 
   <ItemGroup>

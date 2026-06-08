@@ -2,12 +2,16 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
+using System.Security.Cryptography;
+using System.Text;
 using FastEndpoints;
 
 namespace Framlux.FleetManagement.Server.Endpoints.Web.Contact;
 
 /// <summary>
-/// Contact form submission request.
+/// Contact form submission request. Field-level validation lives in
+/// <see cref="ContactFormValidator"/> (length caps + CRLF rejection); the handler trusts the
+/// validator and only emits SCALAR identifiers to logs to prevent log injection.
 /// </summary>
 public sealed class ContactFormRequest
 {
@@ -39,6 +43,7 @@ public sealed class ContactFormEndpoint : Endpoint<ContactFormRequest, ApiRespon
     /// </summary>
     public ContactFormEndpoint(ILogger<ContactFormEndpoint> logger)
     {
+        ArgumentNullException.ThrowIfNull(logger);
         _logger = logger;
     }
 
@@ -54,13 +59,34 @@ public sealed class ContactFormEndpoint : Endpoint<ContactFormRequest, ApiRespon
     /// <inheritdoc/>
     public override async Task HandleAsync(ContactFormRequest req, CancellationToken ct)
     {
-        string maskedEmail = req.Email.IndexOf('@') > 0
-            ? $"{req.Email[0]}***{req.Email[req.Email.IndexOf('@')..]}"
-            : "***";
+        // Log scalar identifiers only. The validator strips CRLF from Name/Company/FleetSize
+        // before we get here, but the field bodies are still untrusted user input — keep them
+        // out of structured-log message templates entirely. A short SHA-256 fingerprint of the
+        // email provides correlation across multiple submissions from the same address without
+        // storing the address in the log line.
+        string emailFingerprint = ComputeEmailFingerprint(req.Email);
         _logger.LogInformation(
-            "Contact form submission from {Name} ({Email}), Company: {Company}, Fleet Size: {FleetSize}",
-            req.Name, maskedEmail, req.Company, req.FleetSize);
+            "Contact form submitted (email-fp={EmailFingerprint}, nameLen={NameLength}, companyLen={CompanyLength}, fleetSizeLen={FleetSizeLength}, messageLen={MessageLength})",
+            emailFingerprint,
+            req.Name.Length,
+            req.Company.Length,
+            req.FleetSize.Length,
+            req.Message.Length);
 
         await Send.OkAsync(ApiResponse<object>.Ok(new { }, "Thank you for your interest! We'll be in touch soon."), cancellation: ct);
+    }
+
+    /// <summary>
+    /// Returns a short (16-hex-char = 64-bit) SHA-256 fingerprint of the lowercased trimmed
+    /// email. Adequate for correlating multiple submissions from the same address without
+    /// exposing the address itself in the log stream.
+    /// </summary>
+    internal static string ComputeEmailFingerprint(string email)
+    {
+        ArgumentNullException.ThrowIfNull(email);
+        string normalized = email.Trim().ToLowerInvariant();
+        byte[] hash = SHA256.HashData(Encoding.UTF8.GetBytes(normalized));
+
+        return Convert.ToHexString(hash, 0, 8).ToLowerInvariant();
     }
 }

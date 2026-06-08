@@ -2,9 +2,9 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
+using Framlux.FleetManagement.Services.Core.Infrastructure;
 using Framlux.FleetManagement.Services.Core.Models.Admin;
 using Framlux.FleetManagement.Services.Core.Models.Users;
-using Framlux.FleetManagement.Services.Core.Infrastructure;
 
 namespace Framlux.FleetManagement.Services.Core.Handlers;
 

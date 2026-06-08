@@ -37,6 +37,14 @@ dotnet run --project test/unit/unit.csproj
 
 # Functional tests (full HTTP pipeline with in-memory SQLite)
 dotnet run --project test/functional/functional.csproj
+
+# Integration tests (requires Docker or Podman for Testcontainers — spins up a real Postgres)
+dotnet run --project test/integration/integration.csproj
+
+# For Podman on macOS, point Testcontainers at the podman socket first:
+#   export DOCKER_HOST="unix://$(podman machine inspect podman-machine-default --format '{{.ConnectionInfo.PodmanSocket.Path}}')"
+#   export TESTCONTAINERS_RYUK_DISABLED=true
+#   export TESTCONTAINERS_HOST_OVERRIDE=localhost
 ```
 
 - When adding or changing service dependencies, always update ALL test files that construct or mock the modified service. - Check for missing mock parameters, new interface dependencies, and model initializations before running tests.
@@ -92,7 +100,7 @@ dotnet run --project test/functional/functional.csproj
 - Never use !boolean, always be explicit. For example: if (false == false)
 - Always add blank line before return statements EXCEPT if the line prior is a comment
 - Always add a blank line at the end of files
-- Only one class or record or enum or struct per file (except for auto-generated files). Endpoint Request/Response types may be co-located in the same file as their Endpoint class, following the FastEndpoints convention.
+- Only one class or record or enum or struct per file (except for auto-generated files). Endpoint Request/Response types may be co-located in the same file as their Endpoint class, following the FastEndpoints convention. Private nested types (used to encapsulate implementation details — e.g., disposal handles, internal state machines) are permitted in the enclosing type's file.
 - Commends should always be written in natural language and should never include prompt information, plan numbers (ex: H1), and should always be descriptive on the intent of what the code is doing
 - Never had "Yoda statements", which are things like if (false == some_expression), always put the variable before the constant
 - All files should be formatted with spaces not tabs
@@ -111,6 +119,7 @@ dotnet run --project test/functional/functional.csproj
 
 **Infrastructure:** PostgreSQL, Redis, Docker containers published to GHCR (`ghcr.io/framlux/fleet/*`). Logging via Serilog.
 
+**Antiforgery (CSRF):** ASP.NET Core antiforgery is registered globally (`AntiforgeryStartup.ConfigureOptions`) and **every state-changing FastEndpoints endpoint** (verb other than GET/HEAD/OPTIONS) is automatically opted in via the FE `Endpoints.Configurator`. The middleware enforces on form-encoded and multipart content types only; JSON requests are unaffected. The runtime skip predicate (`AntiforgeryStartup.ShouldSkipAntiforgery`) bypasses the check when the request did not carry the auth cookie (API-key callers etc.). To opt a specific endpoint out — for example a webhook that authenticates via HMAC signature — attach `[SkipAntiforgery]` to the endpoint class AND add its full type name to `AntiforgeryOptOutAllowlist.Entries`. A regression test (`AntiforgeryEnrollmentRegressionTests`) fails if those two diverge, so every opt-out is a deliberate, reviewable change.
 
 ## Planning Rules
 - Before writing a plan or implementation, always check what work has ALREADY been completed in the codebase. Diff against recent commits and existing file state. Never include already-done items in plans.

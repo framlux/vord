@@ -7,9 +7,11 @@ using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Server.Endpoints.Grpc;
 using Framlux.FleetManagement.Services.Core.Options;
+using Framlux.FleetManagement.Services.Core.Security;
 using Framlux.Vord.BillingGrpc;
 using Grpc.Core;
 using Grpc.Core.Testing;
+using Microsoft.AspNetCore.DataProtection;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -447,13 +449,16 @@ public sealed class FleetAdminServiceTests
 
     private static FleetAdminService CreateFleetAdminService(
         IServiceScopeFactory scopeFactory,
-        string configuredKey = ValidInternalKey)
+        string configuredKey = ValidInternalKey,
+        IOidcSecretProtector? oidcSecretProtector = null)
     {
         InternalApiOptions options = new InternalApiOptions { Key = configuredKey };
         IOptions<InternalApiOptions> wrappedOptions = Options.Create(options);
         ILogger<FleetAdminService> logger = Substitute.For<ILogger<FleetAdminService>>();
+        IOidcSecretProtector resolvedProtector = oidcSecretProtector
+            ?? new OidcSecretProtector(new EphemeralDataProtectionProvider());
 
-        return new FleetAdminService(scopeFactory, wrappedOptions, logger);
+        return new FleetAdminService(scopeFactory, wrappedOptions, resolvedProtector, logger);
     }
 
     private static IServiceScopeFactory CreateScopeFactoryWithServices(Dictionary<Type, object> services)
@@ -1531,7 +1536,9 @@ public sealed class FleetAdminServiceTests
             Arg.Is<TenantOidcConfiguration>(c =>
                 c.TenantId == TenantInternalId &&
                 c.Authority == "https://idp.example.com" &&
-                c.EmailDomain == "example.com"),
+                c.EmailDomain == "example.com" &&
+                c.ClientSecret != "secret" &&
+                c.ClientSecret.StartsWith("prot1:", StringComparison.Ordinal)),
             Arg.Any<CancellationToken>());
         await tenantRepo.DidNotReceive().UpdateTenantOidcConfigAsync(
             Arg.Any<int>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(),
@@ -1594,7 +1601,7 @@ public sealed class FleetAdminServiceTests
             TenantInternalId,
             "https://new-idp.example.com",
             "new-client",
-            "new-secret",
+            Arg.Is<string>(s => s.StartsWith("prot1:", StringComparison.Ordinal) && (s != "new-secret")),
             "https://new-idp.example.com/.well-known/openid-configuration",
             "new.example.com",
             true,

@@ -51,6 +51,14 @@ public sealed class TenantSubscription
     public DateTimeOffset? CurrentPeriodEnd { get; set; }
 
     /// <summary>
+    /// Whether the subscription is scheduled to cancel at the end of the current billing period.
+    /// Mirrored from Stripe by the StripeSyncJob so the UI can reflect a pending cancellation
+    /// before the subscription actually transitions to a canceled status at period end.
+    /// </summary>
+    [Column("CancelAtPeriodEnd"), NotNull]
+    public bool CancelAtPeriodEnd { get; set; }
+
+    /// <summary>
     /// When the subscription was created.
     /// </summary>
     [Column("CreatedAt"), NotNull]

@@ -280,4 +280,98 @@ public class TenantClaimHelperTests
 
         await Assert.That(result).IsNull();
     }
+
+    // ==========================================================================================
+    // L4 regression: the vord_tenant cookie can never grant cross-tenant access. The cookie is
+    // only honored when its value is also present in the user's role claims; an unauthorized
+    // tenant id MUST be silently ignored, falling back to the first claim's tenant.
+    // ==========================================================================================
+
+    [Test]
+    public async Task GetTenantIdFromClaims_CookieNamesUnauthorizedTenant_FallsBackToAuthorized()
+    {
+        ClaimsIdentity identity = new(
+            [new Claim(ClaimTypes.Role, "10:1")],
+            authenticationType: "test");
+        ClaimsPrincipal user = new(identity);
+
+        DefaultHttpContext httpContext = new();
+        // Tenant 999 is NOT in the user's role claims — attempting to act as it must be ignored.
+        httpContext.Request.Headers["Cookie"] = "vord_tenant=999";
+
+        int? result = TenantClaimHelper.GetTenantIdFromClaims(user, httpContext);
+
+        // Falls back to the only authorized tenant; does NOT honor the unauthorized cookie value.
+        await Assert.That(result).IsEqualTo(10);
+    }
+
+    [Test]
+    public async Task GetTenantIdFromClaims_CookieWithNegativeTenant_Ignored()
+    {
+        ClaimsIdentity identity = new(
+            [new Claim(ClaimTypes.Role, "10:1")],
+            authenticationType: "test");
+        ClaimsPrincipal user = new(identity);
+
+        DefaultHttpContext httpContext = new();
+        httpContext.Request.Headers["Cookie"] = "vord_tenant=-1";
+
+        int? result = TenantClaimHelper.GetTenantIdFromClaims(user, httpContext);
+
+        await Assert.That(result).IsEqualTo(10);
+    }
+
+    [Test]
+    public async Task GetTenantIdFromClaims_CookieWithNonNumeric_Ignored()
+    {
+        ClaimsIdentity identity = new(
+            [new Claim(ClaimTypes.Role, "42:1")],
+            authenticationType: "test");
+        ClaimsPrincipal user = new(identity);
+
+        DefaultHttpContext httpContext = new();
+        httpContext.Request.Headers["Cookie"] = "vord_tenant=admin";
+
+        int? result = TenantClaimHelper.GetTenantIdFromClaims(user, httpContext);
+
+        await Assert.That(result).IsEqualTo(42);
+    }
+
+    [Test]
+    public async Task GetTenantIdFromClaims_CookieMatchesAuthorized_HonorsCookie()
+    {
+        // Positive regression: when the cookie names a tenant the user IS authorized for, the
+        // cookie value drives selection (user's active tenant). This is the legitimate
+        // tenant-switching path and must not be broken by the isolation hardening.
+        ClaimsIdentity identity = new(
+            [
+                new Claim(ClaimTypes.Role, "10:1"),
+                new Claim(ClaimTypes.Role, "20:2"),
+            ],
+            authenticationType: "test");
+        ClaimsPrincipal user = new(identity);
+
+        DefaultHttpContext httpContext = new();
+        httpContext.Request.Headers["Cookie"] = "vord_tenant=20";
+
+        int? result = TenantClaimHelper.GetTenantIdFromClaims(user, httpContext);
+
+        await Assert.That(result).IsEqualTo(20);
+    }
+
+    [Test]
+    public async Task GetTenantIdFromClaims_NoRoleClaims_ReturnsNullEvenIfCookieSet()
+    {
+        // A user with no role claims has no authorized tenants. Even a syntactically valid
+        // cookie must NOT manufacture access.
+        ClaimsIdentity identity = new(authenticationType: "test");
+        ClaimsPrincipal user = new(identity);
+
+        DefaultHttpContext httpContext = new();
+        httpContext.Request.Headers["Cookie"] = "vord_tenant=10";
+
+        int? result = TenantClaimHelper.GetTenantIdFromClaims(user, httpContext);
+
+        await Assert.That(result).IsNull();
+    }
 }

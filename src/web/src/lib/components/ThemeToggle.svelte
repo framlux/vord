@@ -13,7 +13,13 @@
 				.split('; ')
 				.find((c) => c.startsWith('framlux_theme='))
 				?.split('=')[1];
-			setTheme(stored === 'dark' ? 'dark' : 'light');
+			if (stored === 'dark' || stored === 'light') {
+				setTheme(stored);
+			} else if (window.matchMedia('(prefers-color-scheme: dark)').matches) {
+				setTheme('dark');
+			} else {
+				setTheme('light');
+			}
 		}
 	});
 

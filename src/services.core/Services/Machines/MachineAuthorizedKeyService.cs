@@ -2,11 +2,12 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
+using System.Globalization;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
-using Framlux.FleetManagement.Services.Core.Models.Machines;
 using Framlux.FleetManagement.Services.Core.Infrastructure;
+using Framlux.FleetManagement.Services.Core.Models.Machines;
 
 namespace Framlux.FleetManagement.Services.Core.Machines;
 
@@ -39,12 +40,18 @@ public sealed class MachineAuthorizedKeyService : IMachineAuthorizedKeyService
         IUserRepository userRepository,
         ILogger<MachineAuthorizedKeyService> logger)
     {
-        _transactionProvider = transactionProvider ?? throw new ArgumentNullException(nameof(transactionProvider));
-        _auditLog = auditLog ?? throw new ArgumentNullException(nameof(auditLog));
-        _machineRepository = machineRepository ?? throw new ArgumentNullException(nameof(machineRepository));
-        _signingKeyRepository = signingKeyRepository ?? throw new ArgumentNullException(nameof(signingKeyRepository));
-        _userRepository = userRepository ?? throw new ArgumentNullException(nameof(userRepository));
-        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        ArgumentNullException.ThrowIfNull(transactionProvider);
+        ArgumentNullException.ThrowIfNull(auditLog);
+        ArgumentNullException.ThrowIfNull(machineRepository);
+        ArgumentNullException.ThrowIfNull(signingKeyRepository);
+        ArgumentNullException.ThrowIfNull(userRepository);
+        ArgumentNullException.ThrowIfNull(logger);
+        _transactionProvider = transactionProvider;
+        _auditLog = auditLog;
+        _machineRepository = machineRepository;
+        _signingKeyRepository = signingKeyRepository;
+        _userRepository = userRepository;
+        _logger = logger;
     }
 
     /// <inheritdoc/>
@@ -121,7 +128,7 @@ public sealed class MachineAuthorizedKeyService : IMachineAuthorizedKeyService
             MachineId = machineId,
             Action = AuditAction.MachineKeyAuthorized,
             ResourceType = AuditResourceType.MachineAuthorizedKey,
-            ResourceId = result.Id.ToString(),
+            ResourceId = result.Id.ToString(CultureInfo.InvariantCulture),
             Timestamp = DateTimeOffset.UtcNow,
         }, cancellationToken);
 
@@ -156,7 +163,7 @@ public sealed class MachineAuthorizedKeyService : IMachineAuthorizedKeyService
             MachineId = machineId,
             Action = AuditAction.MachineKeyRevoked,
             ResourceType = AuditResourceType.MachineAuthorizedKey,
-            ResourceId = authorization.Id.ToString(),
+            ResourceId = authorization.Id.ToString(CultureInfo.InvariantCulture),
             Timestamp = DateTimeOffset.UtcNow,
         }, cancellationToken);
 

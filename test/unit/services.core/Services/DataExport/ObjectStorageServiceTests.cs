@@ -83,4 +83,75 @@ public sealed class ObjectStorageServiceTests
         await Assert.That(thrown).IsNull();
     }
 
+    // ==========================================================================================
+    // M10 regression: IDisposable semantics — Dispose is idempotent, post-Dispose method calls
+    // throw ObjectDisposedException.
+    // ==========================================================================================
+
+    [Test]
+    public async Task Dispose_CalledTwice_DoesNotThrow()
+    {
+        ObjectStorageService svc = new(BuildOptions(), Substitute.For<ILogger<ObjectStorageService>>());
+
+        Exception? caught = null;
+        try
+        {
+            svc.Dispose();
+            svc.Dispose();
+        }
+        catch (Exception ex)
+        {
+            caught = ex;
+        }
+
+        await Assert.That(caught).IsNull();
+    }
+
+    [Test]
+    public async Task UploadFileAsync_AfterDispose_ThrowsObjectDisposedException()
+    {
+        ObjectStorageService svc = new(BuildOptions(), Substitute.For<ILogger<ObjectStorageService>>());
+        svc.Dispose();
+
+        ObjectDisposedException? ex = await Assert.ThrowsAsync<ObjectDisposedException>(() =>
+            svc.UploadFileAsync("k", "/tmp/anything", CancellationToken.None));
+
+        await Assert.That(ex).IsNotNull();
+    }
+
+    [Test]
+    public async Task DeleteObjectAsync_AfterDispose_ThrowsObjectDisposedException()
+    {
+        ObjectStorageService svc = new(BuildOptions(), Substitute.For<ILogger<ObjectStorageService>>());
+        svc.Dispose();
+
+        ObjectDisposedException? ex = await Assert.ThrowsAsync<ObjectDisposedException>(() =>
+            svc.DeleteObjectAsync("k", CancellationToken.None));
+
+        await Assert.That(ex).IsNotNull();
+    }
+
+    [Test]
+    public async Task GeneratePresignedUrlAsync_AfterDispose_ThrowsObjectDisposedException()
+    {
+        ObjectStorageService svc = new(BuildOptions(), Substitute.For<ILogger<ObjectStorageService>>());
+        svc.Dispose();
+
+        ObjectDisposedException? ex = await Assert.ThrowsAsync<ObjectDisposedException>(() =>
+            svc.GeneratePresignedUrlAsync("k", TimeSpan.FromMinutes(5)));
+
+        await Assert.That(ex).IsNotNull();
+    }
+
+    [Test]
+    public async Task GetObjectStreamAsync_AfterDispose_ThrowsObjectDisposedException()
+    {
+        ObjectStorageService svc = new(BuildOptions(), Substitute.For<ILogger<ObjectStorageService>>());
+        svc.Dispose();
+
+        ObjectDisposedException? ex = await Assert.ThrowsAsync<ObjectDisposedException>(() =>
+            svc.GetObjectStreamAsync("k", CancellationToken.None));
+
+        await Assert.That(ex).IsNotNull();
+    }
 }

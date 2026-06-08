@@ -67,13 +67,13 @@ public class CookiePrincipalValidatorTests
     {
         IDatabase redisDb = CreateRedisDb(new Dictionary<string, string>
         {
-            ["user:active:1"] = "1"
+            ["user:active:1"] = "1:0"
         });
         ITenantRepository tenantRepo = Substitute.For<ITenantRepository>();
         IServiceScopeFactory scopeFactory = Substitute.For<IServiceScopeFactory>();
         CookiePrincipalValidator validator = CreateValidator(redisDb, tenantRepo, scopeFactory);
 
-        bool result = await validator.CheckUserIsActiveAsync(1, redisDb, CancellationToken.None);
+        (bool result, bool _) = await validator.CheckUserStateAsync(1, redisDb, CancellationToken.None);
 
         await Assert.That(result).IsTrue();
     }
@@ -83,13 +83,13 @@ public class CookiePrincipalValidatorTests
     {
         IDatabase redisDb = CreateRedisDb(new Dictionary<string, string>
         {
-            ["user:active:1"] = "0"
+            ["user:active:1"] = "0:0"
         });
         ITenantRepository tenantRepo = Substitute.For<ITenantRepository>();
         IServiceScopeFactory scopeFactory = Substitute.For<IServiceScopeFactory>();
         CookiePrincipalValidator validator = CreateValidator(redisDb, tenantRepo, scopeFactory);
 
-        bool result = await validator.CheckUserIsActiveAsync(1, redisDb, CancellationToken.None);
+        (bool result, bool _) = await validator.CheckUserStateAsync(1, redisDb, CancellationToken.None);
 
         await Assert.That(result).IsFalse();
     }
@@ -106,7 +106,7 @@ public class CookiePrincipalValidatorTests
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
         CookiePrincipalValidator validator = CreateValidator(redisDb, tenantRepo, scopeFactory);
 
-        bool result = await validator.CheckUserIsActiveAsync(user.Id, redisDb, CancellationToken.None);
+        (bool result, bool _) = await validator.CheckUserStateAsync(user.Id, redisDb, CancellationToken.None);
 
         await Assert.That(result).IsTrue();
     }
@@ -123,7 +123,7 @@ public class CookiePrincipalValidatorTests
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
         CookiePrincipalValidator validator = CreateValidator(redisDb, tenantRepo, scopeFactory);
 
-        bool result = await validator.CheckUserIsActiveAsync(user.Id, redisDb, CancellationToken.None);
+        (bool result, bool _) = await validator.CheckUserStateAsync(user.Id, redisDb, CancellationToken.None);
 
         await Assert.That(result).IsFalse();
     }
@@ -138,7 +138,7 @@ public class CookiePrincipalValidatorTests
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
         CookiePrincipalValidator validator = CreateValidator(redisDb, tenantRepo, scopeFactory);
 
-        bool result = await validator.CheckUserIsActiveAsync(99999, redisDb, CancellationToken.None);
+        (bool result, bool _) = await validator.CheckUserStateAsync(99999, redisDb, CancellationToken.None);
 
         await Assert.That(result).IsFalse();
     }
@@ -497,5 +497,147 @@ public class CookiePrincipalValidatorTests
             ticket);
 
         return context;
+    }
+
+    // ==========================================================================================
+    // C5 regression tests: iga claim re-validation against DB state on every request.
+    // ==========================================================================================
+
+    /// <summary>
+    /// Cache value "0:0" → user is inactive AND not admin. Parses cleanly.
+    /// </summary>
+    [Test]
+    public async Task TryParseCachedState_ValidPair_Parses()
+    {
+        bool ok = CookiePrincipalValidator.TryParseCachedState("1:1", out bool isActive, out bool isAdmin);
+
+        await Assert.That(ok).IsTrue();
+        await Assert.That(isActive).IsTrue();
+        await Assert.That(isAdmin).IsTrue();
+    }
+
+    [Test]
+    public async Task TryParseCachedState_ActiveOnly_Parses()
+    {
+        bool ok = CookiePrincipalValidator.TryParseCachedState("1:0", out bool isActive, out bool isAdmin);
+
+        await Assert.That(ok).IsTrue();
+        await Assert.That(isActive).IsTrue();
+        await Assert.That(isAdmin).IsFalse();
+    }
+
+    [Test]
+    public async Task TryParseCachedState_LegacyActiveBit_AcceptsAsActiveNotAdmin()
+    {
+        // Old single-bit format ("1") is accepted during the rollout window. The iga signal is
+        // conservatively False so demoted admins cannot retain access via a stale legacy entry.
+        bool ok = CookiePrincipalValidator.TryParseCachedState("1", out bool isActive, out bool isAdmin);
+
+        await Assert.That(ok).IsTrue();
+        await Assert.That(isActive).IsTrue();
+        await Assert.That(isAdmin).IsFalse();
+    }
+
+    [Test]
+    public async Task TryParseCachedState_LegacyInactiveBit_AcceptsAsInactive()
+    {
+        bool ok = CookiePrincipalValidator.TryParseCachedState("0", out bool isActive, out bool isAdmin);
+
+        await Assert.That(ok).IsTrue();
+        await Assert.That(isActive).IsFalse();
+        await Assert.That(isAdmin).IsFalse();
+    }
+
+    [Test]
+    public async Task TryParseCachedState_GarbageValue_Rejected()
+    {
+        bool ok = CookiePrincipalValidator.TryParseCachedState("nope:nope", out _, out _);
+
+        await Assert.That(ok).IsFalse();
+    }
+
+    [Test]
+    public async Task TryParseCachedState_EmptyString_Rejected()
+    {
+        bool ok = CookiePrincipalValidator.TryParseCachedState(string.Empty, out _, out _);
+
+        await Assert.That(ok).IsFalse();
+    }
+
+    [Test]
+    public async Task ReconcileGlobalAdminClaim_DbSaysAdmin_CookieDoesNot_AddsClaim_AndRenews()
+    {
+        ClaimsIdentity identity = new("Cookies");
+        identity.AddClaim(new Claim(ClaimTypes.Actor, "5"));
+        // No iga claim — simulate a user who was just promoted in the DB.
+        CookieValidatePrincipalContext context = CreateValidationContext(identity);
+
+        CookiePrincipalValidator.ReconcileGlobalAdminClaim(context, isGlobalAdminInDb: true);
+
+        await Assert.That(context.ShouldRenew).IsTrue();
+        await Assert.That(Framlux.FleetManagement.Services.Core.Auth.AuthClaims.IsUserGlobalAdmin(context.Principal!)).IsTrue();
+    }
+
+    [Test]
+    public async Task ReconcileGlobalAdminClaim_DbSaysNotAdmin_CookieSaysAdmin_RemovesClaim_AndRenews()
+    {
+        ClaimsIdentity identity = new("Cookies");
+        identity.AddClaim(new Claim(ClaimTypes.Actor, "5"));
+        identity.AddClaim(new Claim("iga", "True"));
+        CookieValidatePrincipalContext context = CreateValidationContext(identity);
+
+        CookiePrincipalValidator.ReconcileGlobalAdminClaim(context, isGlobalAdminInDb: false);
+
+        await Assert.That(context.ShouldRenew).IsTrue();
+        await Assert.That(Framlux.FleetManagement.Services.Core.Auth.AuthClaims.IsUserGlobalAdmin(context.Principal!)).IsFalse();
+    }
+
+    [Test]
+    public async Task ReconcileGlobalAdminClaim_DbAndCookieAgree_NoRenewal()
+    {
+        ClaimsIdentity identity = new("Cookies");
+        identity.AddClaim(new Claim(ClaimTypes.Actor, "5"));
+        identity.AddClaim(new Claim("iga", "True"));
+        CookieValidatePrincipalContext context = CreateValidationContext(identity);
+
+        CookiePrincipalValidator.ReconcileGlobalAdminClaim(context, isGlobalAdminInDb: true);
+
+        await Assert.That(context.ShouldRenew).IsFalse();
+    }
+
+    [Test]
+    public async Task ReconcileGlobalAdminClaim_BothFalse_NoRenewal()
+    {
+        ClaimsIdentity identity = new("Cookies");
+        identity.AddClaim(new Claim(ClaimTypes.Actor, "5"));
+        identity.AddClaim(new Claim("iga", "False"));
+        CookieValidatePrincipalContext context = CreateValidationContext(identity);
+
+        CookiePrincipalValidator.ReconcileGlobalAdminClaim(context, isGlobalAdminInDb: false);
+
+        await Assert.That(context.ShouldRenew).IsFalse();
+    }
+
+    [Test]
+    public async Task CheckUserStateAsync_CacheMissAdminUser_LoadsAndCachesBothSignals()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        UserAccount admin = TestDataBuilder.BuildUser(isActive: true);
+        admin.IsGlobalAdmin = true;
+        admin.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(admin);
+
+        IDatabase redisDb = CreateRedisDb();
+        ITenantRepository tenantRepo = Substitute.For<ITenantRepository>();
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+        CookiePrincipalValidator validator = CreateValidator(redisDb, tenantRepo, scopeFactory);
+
+        (bool isActive, bool isAdmin) = await validator.CheckUserStateAsync(admin.Id, redisDb, CancellationToken.None);
+
+        await Assert.That(isActive).IsTrue();
+        await Assert.That(isAdmin).IsTrue();
+        await redisDb.Received(1).StringSetAsync(
+            Arg.Is<RedisKey>(k => k.ToString() == $"user:active:{admin.Id}"),
+            Arg.Is<RedisValue>(v => v == "1:1"),
+            Arg.Any<Expiration>());
     }
 }

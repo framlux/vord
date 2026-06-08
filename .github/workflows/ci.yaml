@@ -15,21 +15,21 @@ jobs:
       contents: read
       packages: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
 
-      - uses: actions/setup-dotnet@v5
+      - uses: actions/setup-dotnet@c2fa09f4bde5ebb9d1777cf28262a3eb3db3ced7  # v5.2.0
         with:
           dotnet-version: 10.0.x
 
-      - uses: actions/setup-go@v5
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff  # v5.6.0
         with:
           go-version: '1.26.x'
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4.4.0
         with:
           node-version: 22
 
-      - uses: pnpm/action-setup@v4
+      - uses: pnpm/action-setup@a15d269cd4658e1107c09f1fabf4cbd7bd1f308a  # v4.4.0
         with:
           version: 11.1.1
 
@@ -51,8 +51,24 @@ jobs:
         run: pnpm build
         working-directory: src/web
 
+      - name: Verify mock symbols are not in production bundle
+        # Tree-shaking depends on dev resolving to a compile-time false constant in the
+        # production bundle. If any module accidentally introduces a non-side-effect-free
+        # reference to mock-fixtures, the mock data would ship to customers. Fail the build
+        # hard in that case. Scans local build output only — no untrusted GH event input.
+        run: |
+          if grep -r 'MockApiClient' build/server build/client 2>/dev/null; then
+            echo 'ERROR: MockApiClient symbol leaked into production bundle'
+            exit 1
+          fi
+          if grep -r 'mock-fixtures' build/server build/client 2>/dev/null; then
+            echo 'ERROR: mock-fixtures path leaked into production bundle'
+            exit 1
+          fi
+        working-directory: src/web
+
       - name: Upload build artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
         with:
           name: dotnet-build
           path: |
@@ -68,9 +84,9 @@ jobs:
       contents: read
       packages: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
 
-      - uses: actions/setup-dotnet@v5
+      - uses: actions/setup-dotnet@c2fa09f4bde5ebb9d1777cf28262a3eb3db3ced7  # v5.2.0
         with:
           dotnet-version: 10.0.x
 
@@ -78,7 +94,7 @@ jobs:
         run: dotnet nuget update source framlux --username ${{ github.actor }} --password ${{ secrets.GITHUB_TOKEN }} --store-password-in-clear-text
 
       - name: Download build artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
         with:
           name: dotnet-build
 
@@ -92,9 +108,9 @@ jobs:
       contents: read
       packages: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
 
-      - uses: actions/setup-dotnet@v5
+      - uses: actions/setup-dotnet@c2fa09f4bde5ebb9d1777cf28262a3eb3db3ced7  # v5.2.0
         with:
           dotnet-version: 10.0.x
 
@@ -102,7 +118,7 @@ jobs:
         run: dotnet nuget update source framlux --username ${{ github.actor }} --password ${{ secrets.GITHUB_TOKEN }} --store-password-in-clear-text
 
       - name: Download build artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
         with:
           name: dotnet-build
 
@@ -116,9 +132,9 @@ jobs:
       contents: read
       packages: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
 
-      - uses: actions/setup-dotnet@v5
+      - uses: actions/setup-dotnet@c2fa09f4bde5ebb9d1777cf28262a3eb3db3ced7  # v5.2.0
         with:
           dotnet-version: 10.0.x
 
@@ -126,23 +142,23 @@ jobs:
         run: dotnet nuget update source framlux --username ${{ github.actor }} --password ${{ secrets.GITHUB_TOKEN }} --store-password-in-clear-text
 
       - name: Download build artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
         with:
           name: dotnet-build
 
       - name: Run unit tests (database)
         run: dotnet run --project test/unit/database/unit.database.csproj -c Release --no-build
 
-  test-functional-server:
+  test-functional-web:
     needs: build
     runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: read
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
 
-      - uses: actions/setup-dotnet@v5
+      - uses: actions/setup-dotnet@c2fa09f4bde5ebb9d1777cf28262a3eb3db3ced7  # v5.2.0
         with:
           dotnet-version: 10.0.x
 
@@ -150,9 +166,83 @@ jobs:
         run: dotnet nuget update source framlux --username ${{ github.actor }} --password ${{ secrets.GITHUB_TOKEN }} --store-password-in-clear-text
 
       - name: Download build artifacts
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
         with:
           name: dotnet-build
 
-      - name: Run functional tests (server)
-        run: dotnet run --project test/functional/server/functional.server.csproj -c Release --no-build
+      - name: Run functional tests (web)
+        run: dotnet run --project test/functional/web/functional.web.csproj -c Release --no-build
+
+  test-functional-grpc:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
+
+      - uses: actions/setup-dotnet@c2fa09f4bde5ebb9d1777cf28262a3eb3db3ced7  # v5.2.0
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Authenticate GitHub Packages
+        run: dotnet nuget update source framlux --username ${{ github.actor }} --password ${{ secrets.GITHUB_TOKEN }} --store-password-in-clear-text
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
+        with:
+          name: dotnet-build
+
+      - name: Run functional tests (grpc)
+        run: dotnet run --project test/functional/grpc/functional.grpc.csproj -c Release --no-build
+
+  test-functional-hangfire:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
+
+      - uses: actions/setup-dotnet@c2fa09f4bde5ebb9d1777cf28262a3eb3db3ced7  # v5.2.0
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Authenticate GitHub Packages
+        run: dotnet nuget update source framlux --username ${{ github.actor }} --password ${{ secrets.GITHUB_TOKEN }} --store-password-in-clear-text
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
+        with:
+          name: dotnet-build
+
+      - name: Run functional tests (hangfire)
+        run: dotnet run --project test/functional/hangfire/functional.hangfire.csproj -c Release --no-build
+
+  test-integration:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
+
+      - uses: actions/setup-dotnet@c2fa09f4bde5ebb9d1777cf28262a3eb3db3ced7  # v5.2.0
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Authenticate GitHub Packages
+        run: dotnet nuget update source framlux --username ${{ github.actor }} --password ${{ secrets.GITHUB_TOKEN }} --store-password-in-clear-text
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
+        with:
+          name: dotnet-build
+
+      # ubuntu-latest runners ship with Docker pre-installed and the daemon already running,
+      # so Testcontainers.PostgreSql picks up the default Docker socket without extra config.
+      - name: Run integration tests
+        run: dotnet run --project test/integration/integration.csproj -c Release --no-build

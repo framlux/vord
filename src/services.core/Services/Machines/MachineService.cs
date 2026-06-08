@@ -9,6 +9,7 @@ using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Grpc.AgentRegistration;
 using Framlux.FleetManagement.Services.Core.Billing;
+using Microsoft.AspNetCore.DataProtection;
 using StackExchange.Redis;
 
 namespace Framlux.FleetManagement.Services.Core.Machines;
@@ -19,12 +20,17 @@ namespace Framlux.FleetManagement.Services.Core.Machines;
 /// </summary>
 public sealed class MachineService : IMachineService
 {
-    private static readonly TimeSpan ApiKeyCacheTtl = TimeSpan.FromHours(24);
+    // 1-hour TTL: the agent picks up the plaintext key once and persists it locally; if the
+    // agent hasn't claimed it within an hour, the row should regenerate rather than carry
+    // sensitive material in Redis indefinitely.
+    private static readonly TimeSpan ApiKeyCacheTtl = TimeSpan.FromHours(1);
+    private const string PendingApiKeyProtectorPurpose = "MachineService.PendingApiKey";
 
     private readonly IServiceScopeFactory _serviceScopeFactory;
     private readonly ILogger<MachineService> _logger;
     private readonly IConnectionMultiplexer _redis;
     private readonly IBillingApiClient _billingApiClient;
+    private readonly IDataProtector _pendingApiKeyProtector;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="MachineService"/> class.
@@ -33,13 +39,25 @@ public sealed class MachineService : IMachineService
     /// <param name="logger">The logger instance for diagnostic logging.</param>
     /// <param name="redis">Redis connection for cross-replica API key delivery cache.</param>
     /// <param name="billingApiClient">Client for communicating billing updates to Stripe.</param>
+    /// <param name="dataProtectionProvider">Data protection provider for encrypting pending API keys at rest in Redis.</param>
     /// <exception cref="ArgumentNullException">Thrown when a required parameter is null.</exception>
-    public MachineService(IServiceScopeFactory scopeFactory, ILogger<MachineService> logger, IConnectionMultiplexer redis, IBillingApiClient billingApiClient)
+    public MachineService(
+        IServiceScopeFactory scopeFactory,
+        ILogger<MachineService> logger,
+        IConnectionMultiplexer redis,
+        IBillingApiClient billingApiClient,
+        IDataProtectionProvider dataProtectionProvider)
     {
-        _serviceScopeFactory = scopeFactory ?? throw new ArgumentNullException(nameof(scopeFactory));
-        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
-        _redis = redis ?? throw new ArgumentNullException(nameof(redis));
-        _billingApiClient = billingApiClient ?? throw new ArgumentNullException(nameof(billingApiClient));
+        ArgumentNullException.ThrowIfNull(scopeFactory);
+        ArgumentNullException.ThrowIfNull(logger);
+        ArgumentNullException.ThrowIfNull(redis);
+        ArgumentNullException.ThrowIfNull(billingApiClient);
+        ArgumentNullException.ThrowIfNull(dataProtectionProvider);
+        _serviceScopeFactory = scopeFactory;
+        _logger = logger;
+        _redis = redis;
+        _billingApiClient = billingApiClient;
+        _pendingApiKeyProtector = dataProtectionProvider.CreateProtector(PendingApiKeyProtectorPurpose);
     }
 
     /// <inheritdoc/>
@@ -90,6 +108,8 @@ public sealed class MachineService : IMachineService
         }
 
         // Try to deliver the cached plaintext key first (one-time delivery from initial registration).
+        // Cache value is encrypted at rest via IDataProtector so Redis snapshots/MONITOR cannot
+        // extract live API keys.
         IDatabase redisDb = _redis.GetDatabase();
         string cacheKey = $"pending_api_key:{machine.Id}";
         string? plaintextKey = null;
@@ -106,8 +126,16 @@ public sealed class MachineService : IMachineService
 
             if (updated > 0)
             {
-                plaintextKey = cachedKey.ToString();
-                _logger.LogInformation("API key delivered to machine {MachineId}", machine.Id);
+                string? decrypted = TryUnprotectPendingKey(cachedKey.ToString()!, machine.Id);
+                if (decrypted is not null)
+                {
+                    plaintextKey = decrypted;
+                    _logger.LogInformation("API key delivered to machine {MachineId}", machine.Id);
+                }
+                else
+                {
+                    _logger.LogWarning("Cached API key for machine {MachineId} could not be decrypted; falling through to reissue", machine.Id);
+                }
             }
             else
             {
@@ -122,8 +150,9 @@ public sealed class MachineService : IMachineService
 
             if (plaintextKey is not null)
             {
-                // Cache for retry resilience and mark as delivered.
-                await redisDb.StringSetAsync(cacheKey, plaintextKey, ApiKeyCacheTtl);
+                // Cache the encrypted form for retry resilience and mark as delivered.
+                string protectedKey = _pendingApiKeyProtector.Protect(plaintextKey);
+                await redisDb.StringSetAsync(cacheKey, protectedKey, ApiKeyCacheTtl);
                 await machineRepo.SetKeyDeliveredAsync(machine.Id, cancellationToken);
                 _logger.LogInformation("API key re-issued for machine {MachineId} in tenant {TenantId}", machine.Id, token.TenantId);
             }
@@ -134,6 +163,28 @@ public sealed class MachineService : IMachineService
         }
 
         return (RegistrationStatus.RegistrationActive, machine.Id, plaintextKey);
+    }
+
+    /// <summary>
+    /// Decrypts a pending API key value pulled from Redis. Returns <c>null</c> on decryption
+    /// failure rather than throwing — the caller will fall through to the reissue path which is
+    /// the recovery mechanism for corrupted/rotated key material.
+    /// </summary>
+    private string? TryUnprotectPendingKey(string protectedValue, long machineId)
+    {
+        try
+        {
+            return _pendingApiKeyProtector.Unprotect(protectedValue);
+        }
+        catch (CryptographicException ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Pending API key for machine {MachineId} failed Unprotect; will reissue",
+                machineId);
+
+            return null;
+        }
     }
 
     /// <inheritdoc/>
@@ -227,10 +278,12 @@ public sealed class MachineService : IMachineService
             MachineId = createdMachine.Id,
         }, cancellationToken);
 
-        // Cache the plaintext key in Redis for recovery via GetRegistrationStatus
+        // Cache the encrypted key in Redis for recovery via GetRegistrationStatus.
+        // IDataProtector ensures Redis snapshots/MONITOR sessions cannot extract live API keys.
         IDatabase redisDb = _redis.GetDatabase();
         string cacheKey = $"pending_api_key:{createdMachine.Id}";
-        await redisDb.StringSetAsync(cacheKey, plaintextApiKey, ApiKeyCacheTtl);
+        string protectedApiKey = _pendingApiKeyProtector.Protect(plaintextApiKey!);
+        await redisDb.StringSetAsync(cacheKey, protectedApiKey, ApiKeyCacheTtl);
 
         _logger.LogInformation("Machine created with ID {MachineId} for {SerialNumber}", createdMachine.Id, request.SerialNumber);
 

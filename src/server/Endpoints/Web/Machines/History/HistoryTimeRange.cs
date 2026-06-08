@@ -122,4 +122,3 @@ public static class HistoryTimeRange
         return HistoryRangeResult.Ok;
     }
 }
-

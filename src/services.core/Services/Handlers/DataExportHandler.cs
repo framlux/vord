@@ -2,6 +2,7 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
+using System.Security.Cryptography;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Migrations.Export;
 using Framlux.FleetManagement.Database.Models;
@@ -9,7 +10,6 @@ using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Services.Core.DataExport;
 using Framlux.FleetManagement.Services.Core.Infrastructure;
 using Microsoft.Data.Sqlite;
-using System.Security.Cryptography;
 
 namespace Framlux.FleetManagement.Services.Core.Handlers;
 

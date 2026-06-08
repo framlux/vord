@@ -43,13 +43,18 @@ namespace Framlux.FleetManagement.Services.Core.Extensions;
 public static class ServiceCollectionExtensions
 {
     /// <summary>
-    /// Registers Serilog structured logging with compact JSON output.
+    /// Registers Serilog structured logging with compact JSON output and the
+    /// <see cref="Framlux.FleetManagement.Services.Core.Logging.SensitiveDestructuringPolicy"/>
+    /// so properties tagged with
+    /// <see cref="Framlux.FleetManagement.Services.Core.Logging.SensitiveAttribute"/> are
+    /// redacted from every log event.
     /// </summary>
     public static IHostBuilder AddCoreSerilog(this IHostBuilder hostBuilder)
     {
         hostBuilder.UseSerilog((context, configuration) =>
             configuration
                 .ReadFrom.Configuration(context.Configuration)
+                .Destructure.With<Framlux.FleetManagement.Services.Core.Logging.SensitiveDestructuringPolicy>()
                 .WriteTo.Console(new RenderedCompactJsonFormatter()));
 
         return hostBuilder;
@@ -81,7 +86,9 @@ public static class ServiceCollectionExtensions
             .ValidateOnStart();
 
         services.AddOptions<HangfireOptions>()
-            .Bind(configuration.GetSection("Hangfire"));
+            .Bind(configuration.GetSection("Hangfire"))
+            .ValidateDataAnnotations()
+            .ValidateOnStart();
 
         services.AddOptions<ObjectStorageOptions>()
             .Bind(configuration.GetSection("ObjectStorage"))
@@ -105,6 +112,10 @@ public static class ServiceCollectionExtensions
         DatabaseOptions dbOpts,
         string applicationName)
     {
+        // KeepAlive/TcpKeepAlive ensure Postgres detects dead worker connections within ~1 minute
+        // instead of waiting on Linux default tcp_keepalive_time (2 hours). This is critical for
+        // PostgresAdvisoryLockProvider — a SIGKILLed/OOM-killed worker holds its advisory lock
+        // until Postgres notices the dead TCP connection. See IAdvisoryLockProvider remarks.
         string connectionString = (new NpgsqlConnectionStringBuilder()
         {
             ApplicationName = applicationName,
@@ -114,7 +125,9 @@ public static class ServiceCollectionExtensions
             Password = dbOpts.Password,
             Host = dbOpts.Hostname,
             MaxPoolSize = 50,
-            MinPoolSize = 5
+            MinPoolSize = 5,
+            KeepAlive = 30,
+            TcpKeepAlive = true
         }).ConnectionString;
 
         services.AddNpgsqlDataSource(connectionString);
@@ -133,13 +146,16 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IRemoteCommandRepository>(sp => sp.GetRequiredService<DatabaseRepository>());
         services.AddScoped<IAlertRuleRepository>(sp => sp.GetRequiredService<DatabaseRepository>());
         services.AddScoped<IAlertEventRepository>(sp => sp.GetRequiredService<DatabaseRepository>());
+        services.AddScoped<IAlertConditionStateRepository>(sp => sp.GetRequiredService<DatabaseRepository>());
         services.AddScoped<IIntegrationRepository>(sp => sp.GetRequiredService<DatabaseRepository>());
+        services.AddScoped<IIntegrationDeliveryAttemptRepository>(sp => sp.GetRequiredService<DatabaseRepository>());
         services.AddScoped<IDataExportRepository>(sp => sp.GetRequiredService<DatabaseRepository>());
         services.AddScoped<IRegistrationTokenRepository>(sp => sp.GetRequiredService<DatabaseRepository>());
         services.AddScoped<IMachineStateRepository>(sp => sp.GetRequiredService<DatabaseRepository>());
         services.AddScoped<IServerConfigurationRepository>(sp => sp.GetRequiredService<DatabaseRepository>());
         services.AddScoped<ITierFeatureLimitRepository>(sp => sp.GetRequiredService<DatabaseRepository>());
         services.AddScoped<ITenantSubscriptionOverrideRepository>(sp => sp.GetRequiredService<DatabaseRepository>());
+        services.AddScoped<IPartitionRepository>(sp => sp.GetRequiredService<DatabaseRepository>());
         services.AddSingleton<IServerSettingsCache, ServerSettingsCache>();
 
         return services;
@@ -164,7 +180,7 @@ public static class ServiceCollectionExtensions
             ConnectionMultiplexer.Connect(redisConfig));
         services.AddSingleton<IMachinePingService, RedisMachinePingService>();
         services.AddSingleton<ITelemetryDeduplicationService, RedisTelemetryDeduplicationService>();
-        services.AddSingleton<IDistributedLock, RedisDistributedLock>();
+        services.AddSingleton<IAdvisoryLockProvider, PostgresAdvisoryLockProvider>();
 
         services.AddHangfireClient(postgresConnectionString);
 
@@ -297,34 +313,60 @@ public static class ServiceCollectionExtensions
     }
 
     /// <summary>
+    /// Registers Hangfire job-type concrete classes for DI activation. Must be called by both
+    /// the server (which enqueues) and the worker (which executes) so any caller resolving a
+    /// job class — including expression-tree-built Enqueue calls — sees a registered scope.
+    /// Feature gating mirrors the original <see cref="AddBackgroundWorkers"/> logic so that
+    /// disabled features do not register their job classes.
+    /// </summary>
+    /// <param name="services">The service collection.</param>
+    /// <param name="billingEnabled">Whether the Billing feature is enabled.</param>
+    /// <param name="objectStorageEnabled">Whether object-storage (data export) is enabled.</param>
+    public static IServiceCollection AddHangfireJobTypes(
+        this IServiceCollection services,
+        bool billingEnabled,
+        bool objectStorageEnabled)
+    {
+        ArgumentNullException.ThrowIfNull(services);
+
+        services.AddScoped<RemoteCommandExpiryJob>();
+        services.AddScoped<PartitionManagementJob>();
+        services.AddScoped<HealthSweepTenantJob>();
+        services.AddScoped<HealthSweepCoordinatorJob>();
+        services.AddScoped<AlertEvaluationJob>();
+        services.AddScoped<AlertConditionStateCleanupJob>();
+        services.AddScoped<IntegrationDeliveryJob>();
+
+        if (objectStorageEnabled)
+        {
+            services.AddScoped<DataExportProcessingJob>();
+            services.AddScoped<DataExportCleanupJob>();
+        }
+
+        if (billingEnabled)
+        {
+            services.AddScoped<StripeSyncJob>();
+            services.AddScoped<UsageHeartbeatJob>();
+        }
+
+        return services;
+    }
+
+    /// <summary>
     /// Registers all background worker hosted services. Call this only in the services-worker process.
+    /// Hangfire job-type registrations are now delegated to <see cref="AddHangfireJobTypes"/> so
+    /// the same set lands in both the server and worker processes.
     /// </summary>
     public static IServiceCollection AddBackgroundWorkers(
         this IServiceCollection services,
         BillingOptions billingOpts,
         ObjectStorageOptions objectStorageOpts)
     {
-        if (string.IsNullOrEmpty(objectStorageOpts.BucketName) == false)
-        {
-            services.AddHostedService<DataExportBackgroundService>();
-            services.AddHostedService<DataExportCleanupService>();
-        }
-
-        services.AddHostedService<AlertEvaluationService>();
-        services.AddHostedService<IntegrationDeliveryWorkerService>();
-        services.AddHostedService<CommandExpiryBackgroundService>();
         services.AddHostedService<MachineStateStreamingService>();
-        services.AddHostedService<HealthSweepService>();
-        services.AddHostedService<PartitionManagementService>();
 
-        if (billingOpts.Enabled)
-        {
-            // Stripe sync background service for reconciliation
-            services.AddHostedService<StripeSyncService>();
-
-            // Hourly usage heartbeat for metered billing
-            services.AddHostedService<UsageHeartbeatService>();
-        }
+        services.AddHangfireJobTypes(
+            billingEnabled: billingOpts.Enabled,
+            objectStorageEnabled: string.IsNullOrEmpty(objectStorageOpts.BucketName) == false);
 
         return services;
     }
@@ -334,6 +376,10 @@ public static class ServiceCollectionExtensions
     /// </summary>
     public static string BuildConnectionString(DatabaseOptions dbOpts, string applicationName)
     {
+        // KeepAlive/TcpKeepAlive ensure Postgres detects dead worker connections within ~1 minute
+        // instead of waiting on Linux default tcp_keepalive_time (2 hours). This is critical for
+        // PostgresAdvisoryLockProvider — a SIGKILLed/OOM-killed worker holds its advisory lock
+        // until Postgres notices the dead TCP connection. See IAdvisoryLockProvider remarks.
         return (new NpgsqlConnectionStringBuilder()
         {
             ApplicationName = applicationName,
@@ -343,7 +389,9 @@ public static class ServiceCollectionExtensions
             Password = dbOpts.Password,
             Host = dbOpts.Hostname,
             MaxPoolSize = 50,
-            MinPoolSize = 5
+            MinPoolSize = 5,
+            KeepAlive = 30,
+            TcpKeepAlive = true
         }).ConnectionString;
     }
 }

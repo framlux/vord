@@ -3,6 +3,8 @@
 // See LICENSE for details.
 
 using System.Security.Claims;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Encodings.Web;
 using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Database.Models;
@@ -15,7 +17,9 @@ namespace Framlux.FleetManagement.Server.Auth;
 
 /// <summary>
 /// An authentication handler that validates API keys provided in the request headers.
-/// Caches validated keys in Redis to avoid database lookups on every request.
+/// Caches validated keys in Redis to avoid database lookups on every request. The cache key is
+/// the SHA-256 hash of the plaintext token so the raw token never appears in Redis (RDB/AOF
+/// snapshots, MONITOR sessions, etc. cannot extract live agent credentials).
 /// </summary>
 public class ApiKeyAuthenticationHandler : AuthenticationHandler<AuthenticationSchemeOptions>
 {
@@ -74,8 +78,11 @@ public class ApiKeyAuthenticationHandler : AuthenticationHandler<AuthenticationS
             return AuthenticateResult.Fail("No API key found");
         }
 
+        // Compute the hash once so subsequent cache and invalidation paths share the same value.
+        string keyHash = ComputeKeyHash(apiKeyHeader);
+
         // Check Redis cache first
-        (long machineId, int tenantId)? cached = await GetCachedKeyAsync(apiKeyHeader);
+        (long machineId, int tenantId)? cached = await GetCachedKeyAsync(keyHash);
         if (cached is not null)
         {
             return BuildSuccessResult(cached.Value.machineId, cached.Value.tenantId);
@@ -91,8 +98,9 @@ public class ApiKeyAuthenticationHandler : AuthenticationHandler<AuthenticationS
             return AuthenticateResult.Fail("Invalid API key");
         }
 
-        // Cache the valid key for future requests
-        await SetCachedKeyAsync(apiKeyHeader, machine.Id, machine.TenantId);
+        // Cache the resolved (machineId, tenantId) tuple. The cache key is hash-derived so the
+        // raw token does not appear in Redis at any point.
+        await SetCachedKeyAsync(keyHash, machine.Id, machine.TenantId);
 
         return BuildSuccessResult(machine.Id, machine.TenantId);
     }
@@ -108,12 +116,12 @@ public class ApiKeyAuthenticationHandler : AuthenticationHandler<AuthenticationS
         return AuthenticateResult.Success(ticket);
     }
 
-    private async Task<(long MachineId, int TenantId)?> GetCachedKeyAsync(string apiKey)
+    private async Task<(long MachineId, int TenantId)?> GetCachedKeyAsync(string keyHash)
     {
         try
         {
             IDatabase db = _redis.GetDatabase();
-            RedisValue value = await db.StringGetAsync($"{CachePrefix}{apiKey}");
+            RedisValue value = await db.StringGetAsync($"{CachePrefix}{keyHash}");
             if (value.IsNullOrEmpty)
             {
                 return null;
@@ -135,12 +143,12 @@ public class ApiKeyAuthenticationHandler : AuthenticationHandler<AuthenticationS
         return null;
     }
 
-    private async Task SetCachedKeyAsync(string apiKey, long machineId, int tenantId)
+    private async Task SetCachedKeyAsync(string keyHash, long machineId, int tenantId)
     {
         try
         {
             IDatabase db = _redis.GetDatabase();
-            await db.StringSetAsync($"{CachePrefix}{apiKey}", $"{machineId}:{tenantId}", CacheTtl);
+            await db.StringSetAsync($"{CachePrefix}{keyHash}", $"{machineId}:{tenantId}", CacheTtl);
         }
         catch (RedisException ex)
         {
@@ -151,17 +159,31 @@ public class ApiKeyAuthenticationHandler : AuthenticationHandler<AuthenticationS
     /// <summary>
     /// Invalidates the cached API key entry. Call when a key is revoked or a machine is deleted.
     /// </summary>
-    /// <param name="apiKey">The API key to invalidate from cache.</param>
+    /// <param name="apiKey">The plaintext API key to invalidate from cache.</param>
     public async Task InvalidateCachedKeyAsync(string apiKey)
     {
         try
         {
+            string keyHash = ComputeKeyHash(apiKey);
             IDatabase db = _redis.GetDatabase();
-            await db.KeyDeleteAsync($"{CachePrefix}{apiKey}");
+            await db.KeyDeleteAsync($"{CachePrefix}{keyHash}");
         }
         catch (RedisException ex)
         {
             Logger.LogWarning(ex, "Redis cache invalidation failed for API key");
         }
+    }
+
+    /// <summary>
+    /// Hashes the API key for safe use as a Redis cache key. SHA-256 hex; same algorithm used
+    /// elsewhere in the codebase for token hashing (registration tokens, etc.).
+    /// </summary>
+    internal static string ComputeKeyHash(string apiKey)
+    {
+        ArgumentNullException.ThrowIfNull(apiKey);
+        byte[] bytes = Encoding.UTF8.GetBytes(apiKey);
+        byte[] hash = SHA256.HashData(bytes);
+
+        return Convert.ToHexString(hash).ToLowerInvariant();
     }
 }

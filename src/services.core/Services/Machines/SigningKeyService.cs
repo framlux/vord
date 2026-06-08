@@ -2,11 +2,12 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
+using System.Globalization;
+using System.Security.Cryptography;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Services.Core.Infrastructure;
-using System.Security.Cryptography;
 
 namespace Framlux.FleetManagement.Services.Core.Machines;
 
@@ -33,10 +34,14 @@ public sealed class SigningKeyService : ISigningKeyService
         ISigningKeyRepository signingKeyRepository,
         ILogger<SigningKeyService> logger)
     {
-        _transactionProvider = transactionProvider ?? throw new ArgumentNullException(nameof(transactionProvider));
-        _auditLog = auditLog ?? throw new ArgumentNullException(nameof(auditLog));
-        _signingKeyRepository = signingKeyRepository ?? throw new ArgumentNullException(nameof(signingKeyRepository));
-        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        ArgumentNullException.ThrowIfNull(transactionProvider);
+        ArgumentNullException.ThrowIfNull(auditLog);
+        ArgumentNullException.ThrowIfNull(signingKeyRepository);
+        ArgumentNullException.ThrowIfNull(logger);
+        _transactionProvider = transactionProvider;
+        _auditLog = auditLog;
+        _signingKeyRepository = signingKeyRepository;
+        _logger = logger;
     }
 
     /// <inheritdoc/>
@@ -88,7 +93,7 @@ public sealed class SigningKeyService : ISigningKeyService
             UserId = userId,
             Action = AuditAction.SigningKeyRegistered,
             ResourceType = AuditResourceType.SigningKey,
-            ResourceId = created.Id.ToString(),
+            ResourceId = created.Id.ToString(CultureInfo.InvariantCulture),
             Timestamp = DateTimeOffset.UtcNow,
         }, cancellationToken);
 
@@ -136,7 +141,7 @@ public sealed class SigningKeyService : ISigningKeyService
             UserId = userId,
             Action = AuditAction.SigningKeyRevoked,
             ResourceType = AuditResourceType.SigningKey,
-            ResourceId = keyId.ToString(),
+            ResourceId = keyId.ToString(CultureInfo.InvariantCulture),
             Timestamp = DateTimeOffset.UtcNow,
         }, cancellationToken);
 

@@ -5,8 +5,10 @@
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
-using Framlux.FleetManagement.Services.Core.Options;
+using Framlux.FleetManagement.Server.Auth;
 using Framlux.FleetManagement.Services.Core.Handlers;
+using Framlux.FleetManagement.Services.Core.Options;
+using Framlux.FleetManagement.Services.Core.Security;
 using Framlux.Vord.BillingGrpc;
 using Google.Protobuf.WellKnownTypes;
 using Grpc.Core;
@@ -24,6 +26,7 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
 
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly InternalApiOptions _internalApiOptions;
+    private readonly IOidcSecretProtector _oidcSecretProtector;
     private readonly ILogger<FleetAdminService> _logger;
 
     /// <summary>
@@ -32,10 +35,16 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
     public FleetAdminService(
         IServiceScopeFactory scopeFactory,
         IOptions<InternalApiOptions> internalApiOptions,
+        IOidcSecretProtector oidcSecretProtector,
         ILogger<FleetAdminService> logger)
     {
+        ArgumentNullException.ThrowIfNull(scopeFactory);
+        ArgumentNullException.ThrowIfNull(internalApiOptions);
+        ArgumentNullException.ThrowIfNull(oidcSecretProtector);
+        ArgumentNullException.ThrowIfNull(logger);
         _scopeFactory = scopeFactory;
         _internalApiOptions = internalApiOptions.Value;
+        _oidcSecretProtector = oidcSecretProtector;
         _logger = logger;
     }
 
@@ -571,13 +580,17 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
 
         string? metadataAddress = string.IsNullOrWhiteSpace(request.MetadataAddress) ? null : request.MetadataAddress;
 
+        // Encrypt the client secret at rest. The protector emits a marker-prefixed value
+        // so legacy plaintext rows are distinguishable from properly-encrypted ones.
+        string protectedClientSecret = _oidcSecretProtector.Protect(request.ClientSecret);
+
         if (existing is not null)
         {
             await tenantRepo.UpdateTenantOidcConfigAsync(
                 tenant.Id,
                 request.Authority,
                 request.ClientId,
-                request.ClientSecret,
+                protectedClientSecret,
                 metadataAddress,
                 request.EmailDomain,
                 request.IsEnabled,
@@ -594,7 +607,7 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
                 TenantId = tenant.Id,
                 Authority = request.Authority,
                 ClientId = request.ClientId,
-                ClientSecret = request.ClientSecret,
+                ClientSecret = protectedClientSecret,
                 MetadataAddress = metadataAddress,
                 EmailDomain = request.EmailDomain,
                 IsEnabled = request.IsEnabled,
@@ -617,19 +630,7 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
 
     private void ValidateInternalKey(ServerCallContext context)
     {
-        string configuredKey = _internalApiOptions.Key;
-        if (string.IsNullOrEmpty(configuredKey))
-        {
-            throw new RpcException(new Status(StatusCode.Unavailable, "Internal API is not configured"));
-        }
-
-        Metadata.Entry? keyEntry = context.RequestHeaders.Get("x-internal-key");
-        string providedKey = keyEntry?.Value ?? string.Empty;
-
-        if (string.Equals(providedKey, configuredKey, StringComparison.Ordinal) == false)
-        {
-            throw new RpcException(new Status(StatusCode.Unauthenticated, "Unauthorized"));
-        }
+        InternalApiKeyValidator.Validate(context, _internalApiOptions);
     }
 
     internal static (int Page, int PageSize) SanitizePagination(int page, int pageSize)

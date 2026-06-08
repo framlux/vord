@@ -2,15 +2,16 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
-using System.Security.Claims;
+using Framlux.FleetManagement.Services.Core.Auth;
 using Hangfire.Dashboard;
 using Microsoft.AspNetCore.Http;
 
 namespace Framlux.FleetManagement.Services.Core.Hangfire;
 
 /// <summary>
-/// Authorizes Hangfire dashboard access to system-wide administrators (users with the "iga" claim
-/// set to true). Matches the existing "Admin" authorization policy in server/Program.cs.
+/// Authorizes Hangfire dashboard access to system-wide administrators (users with the iga claim
+/// set to true). Matches the Admin authorization policy in server/Program.cs via the shared
+/// <see cref="AuthClaims.IsUserGlobalAdmin"/> helper.
 /// </summary>
 public sealed class HangfireDashboardAuthorizationFilter : IDashboardAuthorizationFilter
 {
@@ -25,8 +26,9 @@ public sealed class HangfireDashboardAuthorizationFilter : IDashboardAuthorizati
     /// <summary>
     /// Pure authorization logic, exposed as an internal static method so it can be unit tested
     /// directly against a plain <see cref="HttpContext"/> without coupling to Hangfire dashboard
-    /// types whose constructors and namespaces drift across versions. System-wide administrators
-    /// are identified by the "iga" (is-global-admin) claim set to <see cref="bool.TrueString"/>.
+    /// types whose constructors and namespaces drift across versions. Delegates the iga-claim
+    /// check to <see cref="AuthClaims.IsUserGlobalAdmin"/> so the contract is shared with the
+    /// Admin policy and the cookie principal validator.
     /// </summary>
     /// <param name="httpContext">The current HTTP context.</param>
     /// <returns>True if the user is authenticated and a global admin; false otherwise.</returns>
@@ -39,8 +41,6 @@ public sealed class HangfireDashboardAuthorizationFilter : IDashboardAuthorizati
             return false;
         }
 
-        string? iga = httpContext.User.FindFirstValue("iga");
-
-        return string.Equals(iga, bool.TrueString, StringComparison.OrdinalIgnoreCase);
+        return AuthClaims.IsUserGlobalAdmin(httpContext.User);
     }
 }

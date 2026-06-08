@@ -178,4 +178,15 @@ public partial class DatabaseRepository : ISubscriptionRepository
 
         return subscriptions;
     }
+
+    /// <inheritdoc/>
+    public async Task SetCancelAtPeriodEndAsync(int tenantId, bool cancelAtPeriodEnd, CancellationToken cancellationToken)
+    {
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        await _db.TenantSubscriptions
+            .Where(s => s.TenantId == tenantId)
+            .Set(s => s.CancelAtPeriodEnd, cancelAtPeriodEnd)
+            .Set(s => s.UpdatedAt, now)
+            .UpdateAsync(cancellationToken);
+    }
 }

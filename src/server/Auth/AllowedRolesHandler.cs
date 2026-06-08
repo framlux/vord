@@ -4,6 +4,7 @@
 
 using System.Security.Claims;
 using Framlux.FleetManagement.Database.Enums;
+using Framlux.FleetManagement.Services.Core.Auth;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Http;
 
@@ -41,8 +42,7 @@ public sealed class AllowedRolesHandler : AuthorizationHandler<AllowedRolesRequi
         }
 
         // Global admin bypass
-        string? iga = context.User.FindFirstValue("iga");
-        if (string.Equals(iga, bool.TrueString, StringComparison.OrdinalIgnoreCase))
+        if (AuthClaims.IsUserGlobalAdmin(context.User))
         {
             context.Succeed(requirement);
 
