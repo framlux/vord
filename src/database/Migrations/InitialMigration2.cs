@@ -17,12 +17,31 @@ public sealed class InitialMigration2 : Migration
     /// </summary>
     public override void Up()
     {
-        // In order to create our System account, we need to insert it before we add the foreign key constraints
-        // otherwise the CreatedByUserId constraint will fail.
-        Create.ForeignKey("FK_Users_CreatedBy")
+        // The System account is inserted by InitialMigration before these self-referential foreign
+        // keys are created, so CreatedByUserId = 1 already resolves when the constraints are added.
+        // On Postgres the constraints are DEFERRABLE INITIALLY DEFERRED: the System row references
+        // itself, which makes a --data-only restore otherwise require disabling triggers (pg_dump
+        // emits a circular-foreign-key warning for exactly this). Deferring constraint checks to
+        // commit time lets such a restore load the row cleanly. FluentMigrator has no fluent option
+        // for DEFERRABLE, so the Postgres path is expressed as raw SQL.
+        IfDatabase("PostgreSQL").Execute.Sql(@"
+            ALTER TABLE ""UserAccounts""
+            ADD CONSTRAINT ""FK_Users_CreatedBy""
+            FOREIGN KEY (""CreatedByUserId"") REFERENCES ""UserAccounts"" (""Id"")
+            DEFERRABLE INITIALLY DEFERRED;");
+        IfDatabase("PostgreSQL").Execute.Sql(@"
+            ALTER TABLE ""UserAccounts""
+            ADD CONSTRAINT ""FK_Users_DeletedBy""
+            FOREIGN KEY (""DeletedByUserId"") REFERENCES ""UserAccounts"" (""Id"")
+            DEFERRABLE INITIALLY DEFERRED;");
+
+        // SQLite (the in-memory test database) cannot ALTER a table to add a foreign key with
+        // explicit deferral, and its deferral semantics are not relevant to backups; the fluent
+        // self-referential keys preserve the historical test-schema behavior.
+        IfDatabase("SQLite").Create.ForeignKey("FK_Users_CreatedBy")
             .FromTable(TableNames.Users).ForeignColumn("CreatedByUserId")
             .ToTable(TableNames.Users).PrimaryColumn("Id");
-        Create.ForeignKey("FK_Users_DeletedBy")
+        IfDatabase("SQLite").Create.ForeignKey("FK_Users_DeletedBy")
             .FromTable(TableNames.Users).ForeignColumn("DeletedByUserId")
             .ToTable(TableNames.Users).PrimaryColumn("Id");
     }

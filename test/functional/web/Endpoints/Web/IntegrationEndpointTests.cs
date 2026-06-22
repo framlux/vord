@@ -837,7 +837,7 @@ public sealed class IntegrationEndpointTests
     {
         // Intent: prove that SQLite foreign-key enforcement (newly turned ON in
         // FunctionalTestFactory) cascades a hard delete from IntegrationEndpoints to
-        // IntegrationDeliveryAttempts as declared by HangfireSchemaMigration's
+        // IntegrationDeliveryAttempts as declared by InitialMigration's
         // `OnDelete(Rule.Cascade)` clause. Mirrors the unit-level
         // IntegrationDeliveryAttemptRepositoryTests.IntegrationEndpointDelete_CascadesToIntegrationDeliveryAttempts
         // test but runs against the functional factory's connection — which is the
