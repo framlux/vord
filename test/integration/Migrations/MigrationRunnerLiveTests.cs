@@ -12,10 +12,11 @@ namespace Framlux.FleetManagement.Test.Integration.Migrations;
 
 /// <summary>
 /// Live migration-runner integration tests. Runs the full FluentMigrator chain against a
-/// Testcontainers Postgres so the new migrations introduced in the Hangfire refactor
-/// (HangfireSchemaMigration, IntegrationDeliveryAttemptStatusMigration, AddCancelAtPeriodEnd,
-/// AddDataExportFailureCount, IntegrationDeliveryAttemptStatusDefault) actually apply against a
-/// real Postgres rather than only the in-memory SQLite used in unit tests.
+/// Testcontainers Postgres so the consolidated migrations (InitialMigration and
+/// InitialMigration2) — which fold in the hangfire schema, the integration-delivery lifecycle
+/// columns and their Pending status default, the subscription cancel-at-period-end flag, and the
+/// data-export failure count — actually apply against a real Postgres rather than only the
+/// in-memory SQLite used in unit tests.
 /// </summary>
 /// <remarks>
 /// Per the saved-feedback memory <c>feedback_migrations_initial.md</c>: the app is deployed,
@@ -101,7 +102,7 @@ public sealed class MigrationRunnerLiveTests
         await Assert.That(await TableExistsAsync(connStr, "AlertConditionStates")).IsTrue();
         await Assert.That(await TableExistsAsync(connStr, "IntegrationDeliveryAttempts")).IsTrue();
         await Assert.That(await TableExistsAsync(connStr, "DataExportJobs")).IsTrue();
-        // The hangfire schema is created by HangfireSchemaMigration; Hangfire's own tables
+        // The hangfire schema is created by InitialMigration; Hangfire's own tables
         // install separately at runtime, so we only assert the schema's presence here.
         await Assert.That(await SchemaExistsAsync(connStr, "hangfire")).IsTrue();
     }
@@ -131,9 +132,9 @@ public sealed class MigrationRunnerLiveTests
     [Test]
     public async Task IntegrationDeliveryAttempts_StatusDefault_IsPending_AfterFullChain()
     {
-        // The IntegrationDeliveryAttemptStatusDefaultMigration flips the Status column
-        // default from 1 (Succeeded) to 0 (Pending). After running the full migration chain on a
-        // fresh DB, the column default must be 0.
+        // InitialMigration creates the IntegrationDeliveryAttempts Status column with a default
+        // of 0 (Pending). After running the full migration chain on a fresh DB, the column default
+        // must be 0.
         string connStr = BuildIsolatedDatabaseConnectionString();
         await using ServiceProvider provider = BuildMigrationServices(connStr);
         using IServiceScope scope = provider.CreateScope();
@@ -150,7 +151,7 @@ public sealed class MigrationRunnerLiveTests
     [Test]
     public async Task DataExportJobs_FailureCount_AddedByMigration()
     {
-        // H7's new AddDataExportFailureCountMigration adds FailureCount with default 0. Verify
+        // InitialMigration creates DataExportJobs with FailureCount defaulting to 0. Verify
         // the column exists and has a NOT NULL default of 0 after the chain.
         string connStr = BuildIsolatedDatabaseConnectionString();
         await using ServiceProvider provider = BuildMigrationServices(connStr);
@@ -166,15 +167,65 @@ public sealed class MigrationRunnerLiveTests
     [Test]
     public async Task HangfireSchema_CreatedByMigration()
     {
-        // The consolidated/forwarded HangfireSchemaMigration creates the `hangfire` schema.
-        // Hangfire's own DDL runs against this schema at server boot; the migration only ensures
-        // the schema exists.
+        // InitialMigration creates the `hangfire` schema. Hangfire's own DDL runs against this
+        // schema at server boot; the migration only ensures the schema exists.
         string connStr = BuildIsolatedDatabaseConnectionString();
         await using ServiceProvider provider = BuildMigrationServices(connStr);
         using IServiceScope scope = provider.CreateScope();
         scope.ServiceProvider.GetRequiredService<IMigrationRunner>().MigrateUp();
 
         await Assert.That(await SchemaExistsAsync(connStr, "hangfire")).IsTrue();
+    }
+
+    [Test]
+    public async Task ConsolidatedSchema_HasNetCumulativeShape_AfterFullChain()
+    {
+        // Guards the migration consolidation: the two-file chain must reproduce the exact net
+        // shape of the former multi-migration timeline. Tables dropped along that timeline must be
+        // absent, tables and columns added across it must be present, and the nullability that
+        // downstream code depends on must hold.
+        string connStr = BuildIsolatedDatabaseConnectionString();
+        await using ServiceProvider provider = BuildMigrationServices(connStr);
+        using IServiceScope scope = provider.CreateScope();
+        scope.ServiceProvider.GetRequiredService<IMigrationRunner>().MigrateUp();
+
+        // Tables removed over the original timeline must not exist.
+        await Assert.That(await TableExistsAsync(connStr, "MachineCertificates")).IsFalse();
+        await Assert.That(await TableExistsAsync(connStr, "WebhookEndpoints")).IsFalse();
+
+        // Tables introduced over the original timeline must exist.
+        await Assert.That(await TableExistsAsync(connStr, "MachineAuthorizedKeys")).IsTrue();
+        await Assert.That(await TableExistsAsync(connStr, "IntegrationEndpoints")).IsTrue();
+        await Assert.That(await TableExistsAsync(connStr, "AlertRuleMachines")).IsTrue();
+        await Assert.That(await TableExistsAsync(connStr, "TierFeatureLimits")).IsTrue();
+        await Assert.That(await TableExistsAsync(connStr, "TenantSubscriptionOverrides")).IsTrue();
+
+        // Columns added over the timeline must be present; dropped columns must be gone.
+        await Assert.That(await ColumnExistsAsync(connStr, "RegistrationTokens", "ExpiresAt")).IsTrue();
+        await Assert.That(await ColumnExistsAsync(connStr, "TenantSubscriptions", "CancelAtPeriodEnd")).IsTrue();
+        await Assert.That(await ColumnExistsAsync(connStr, "TenantSubscriptions", "MachineLimit")).IsFalse();
+        await Assert.That(await ColumnExistsAsync(connStr, "TenantSubscriptions", "PendingAction")).IsFalse();
+
+        // IntegrationDeliveryAttempts.SucceededAt is nullable in the net schema.
+        await Assert.That(await ColumnIsNullableAsync(connStr, "IntegrationDeliveryAttempts", "SucceededAt")).IsTrue();
+    }
+
+    [Test]
+    public async Task TierFeatureLimits_SeededWithExactPerTierValues_AfterFullChain()
+    {
+        // The TierFeatureLimits seed was folded from its own migration into InitialMigration's seed
+        // section. Assert exact per-tier values (not just a row count) so a seed regression is caught.
+        string connStr = BuildIsolatedDatabaseConnectionString();
+        await using ServiceProvider provider = BuildMigrationServices(connStr);
+        using IServiceScope scope = provider.CreateScope();
+        scope.ServiceProvider.GetRequiredService<IMigrationRunner>().MigrateUp();
+
+        await Assert.That(await CountRowsAsync(connStr, "TierFeatureLimits")).IsEqualTo(3L);
+
+        // Tier 1 (Free), Tier 2 (Pro), Tier 3 (Team): MachineLimit, RetentionDays, AlertRuleLimit, WebhookLimit.
+        await Assert.That(await ReadTierLimitsAsync(connStr, 1)).IsEqualTo("3,1,0,0");
+        await Assert.That(await ReadTierLimitsAsync(connStr, 2)).IsEqualTo("1000,60,10,5");
+        await Assert.That(await ReadTierLimitsAsync(connStr, 3)).IsEqualTo("10000,365,25,15");
     }
 
     // ----- helpers -----
@@ -239,6 +290,49 @@ public sealed class MigrationRunnerLiveTests
         }
 
         return result.ToString();
+    }
+
+    private static async Task<bool> ColumnIsNullableAsync(string connStr, string tableName, string columnName)
+    {
+        await using NpgsqlConnection conn = new(connStr);
+        await conn.OpenAsync();
+        await using NpgsqlCommand cmd = conn.CreateCommand();
+        cmd.CommandText = @"SELECT is_nullable
+            FROM information_schema.columns
+            WHERE table_schema = 'public' AND table_name = @t AND column_name = @c";
+        cmd.Parameters.AddWithValue("@t", tableName);
+        cmd.Parameters.AddWithValue("@c", columnName);
+        object? result = await cmd.ExecuteScalarAsync();
+
+        return string.Equals(result?.ToString(), "YES", StringComparison.Ordinal);
+    }
+
+    private static async Task<long> CountRowsAsync(string connStr, string tableName)
+    {
+        await using NpgsqlConnection conn = new(connStr);
+        await conn.OpenAsync();
+        await using NpgsqlCommand cmd = conn.CreateCommand();
+        cmd.CommandText = $@"SELECT COUNT(*) FROM ""{tableName}""";
+        object? result = await cmd.ExecuteScalarAsync();
+
+        return result is long l ? l : Convert.ToInt64(result);
+    }
+
+    private static async Task<string> ReadTierLimitsAsync(string connStr, int tier)
+    {
+        await using NpgsqlConnection conn = new(connStr);
+        await conn.OpenAsync();
+        await using NpgsqlCommand cmd = conn.CreateCommand();
+        cmd.CommandText = @"SELECT ""MachineLimit"", ""RetentionDays"", ""AlertRuleLimit"", ""WebhookLimit""
+            FROM ""TierFeatureLimits"" WHERE ""Tier"" = @tier";
+        cmd.Parameters.AddWithValue("@tier", tier);
+        await using NpgsqlDataReader reader = await cmd.ExecuteReaderAsync();
+        if (false == await reader.ReadAsync())
+        {
+            return string.Empty;
+        }
+
+        return $"{Convert.ToInt64(reader.GetValue(0))},{Convert.ToInt64(reader.GetValue(1))},{Convert.ToInt64(reader.GetValue(2))},{Convert.ToInt64(reader.GetValue(3))}";
     }
 
     private static async Task<long> CountVersionsAsync(string connStr)

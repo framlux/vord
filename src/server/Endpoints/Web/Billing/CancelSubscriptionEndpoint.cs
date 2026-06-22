@@ -32,6 +32,7 @@ public sealed class CancelSubscriptionResponse
 public sealed class CancelSubscriptionEndpoint : EndpointWithoutRequest<ApiResponse<CancelSubscriptionResponse>>
 {
     private readonly IBillingStatus _billingStatus;
+    private readonly IDatabaseTransactionProvider _transactionProvider;
     private readonly IAuditLogRepository _auditLog;
     private readonly ISubscriptionRepository _subscriptionRepository;
     private readonly ITenantRepository _tenantRepository;
@@ -44,6 +45,7 @@ public sealed class CancelSubscriptionEndpoint : EndpointWithoutRequest<ApiRespo
     /// </summary>
     public CancelSubscriptionEndpoint(
         IBillingStatus billingStatus,
+        IDatabaseTransactionProvider transactionProvider,
         IAuditLogRepository auditLog,
         ISubscriptionRepository subscriptionRepository,
         ITenantRepository tenantRepository,
@@ -52,6 +54,7 @@ public sealed class CancelSubscriptionEndpoint : EndpointWithoutRequest<ApiRespo
         ILogger<CancelSubscriptionEndpoint> logger)
     {
         _billingStatus = billingStatus;
+        _transactionProvider = transactionProvider;
         _auditLog = auditLog;
         _subscriptionRepository = subscriptionRepository;
         _tenantRepository = tenantRepository;
@@ -113,12 +116,16 @@ public sealed class CancelSubscriptionEndpoint : EndpointWithoutRequest<ApiRespo
         // Free tier cancellation takes effect immediately since there is no Stripe subscription
         if (subscription.Tier == SubscriptionTier.Free)
         {
+            using IDatabaseTransaction transaction = await _transactionProvider.BeginTransactionAsync(ct);
+
             await _subscriptionRepository.DeactivateSubscriptionAsync(tenantId.Value, ct);
 
             await _auditLog.InsertAuditLogAsync(AuditHelper.Create(
                 tenantId.Value, null, null,
                 AuditAction.SubscriptionCancelRequested, AuditResourceType.Subscription,
                 tenantId.Value.ToString(), "Free tier account canceled immediately", null), ct);
+
+            await transaction.CommitAsync(ct);
 
             await Send.OkAsync(ApiResponse<CancelSubscriptionResponse>.Ok(new CancelSubscriptionResponse
             {

@@ -799,12 +799,45 @@ public sealed class IntegrationEndpointTests
         await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.NotFound);
     }
 
+    // --- Transactional Audit Log Tests ---
+
+    [Test]
+    public async Task Create_HappyPath_WritesAuditLogEntry()
+    {
+        // Intent: the integration create and its audit log entry must be written in the same
+        // transaction. This test confirms the transactional path still records the audit row on
+        // a successful create.
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId) = await SeedTenantAndUser(db);
+        HttpClient client = BuildClient(factory, tenantId, userId);
+
+        HttpResponseMessage response = await client.PostAsJsonAsync("/api/v1/integrations", new
+        {
+            provider = "Slack",
+            name = "Audit Log Test Integration",
+            configuration = new Dictionary<string, string>
+            {
+                ["webhookUrl"] = "https://hooks.slack.com/services/T123/B456/audit"
+            }
+        });
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.Created);
+
+        AuditLogEntry? auditEntry = await db.AuditLog
+            .Where(a => (a.TenantId == tenantId) && (a.Action == AuditAction.IntegrationCreated))
+            .FirstOrDefaultAsync();
+
+        await Assert.That(auditEntry).IsNotNull();
+        await Assert.That(auditEntry!.ResourceType).IsEqualTo(AuditResourceType.Integration);
+    }
+
     [Test]
     public async Task DbHardDeleteIntegration_CascadesDeliveryAttempts()
     {
         // Intent: prove that SQLite foreign-key enforcement (newly turned ON in
         // FunctionalTestFactory) cascades a hard delete from IntegrationEndpoints to
-        // IntegrationDeliveryAttempts as declared by HangfireSchemaMigration's
+        // IntegrationDeliveryAttempts as declared by InitialMigration's
         // `OnDelete(Rule.Cascade)` clause. Mirrors the unit-level
         // IntegrationDeliveryAttemptRepositoryTests.IntegrationEndpointDelete_CascadesToIntegrationDeliveryAttempts
         // test but runs against the functional factory's connection — which is the

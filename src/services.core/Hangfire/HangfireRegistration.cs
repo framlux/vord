@@ -46,7 +46,7 @@ public static class HangfireRegistration
                     SchemaName = options.SchemaName,
                     // Hangfire.PostgreSql 1.20.12 does not expose a public InstallSchema entry point,
                     // so we let the storage prepare its own tables on first connection. The schema
-                    // itself ("hangfire") is created by HangfireSchemaMigration before this runs, so
+                    // itself ("hangfire") is created by InitialMigration before this runs, so
                     // Hangfire's per-table DDL operates inside the already-existing schema.
                     PrepareSchemaIfNecessary = true,
                     // Required by Hangfire.PostgreSql 1.20.12 — the storage validates this in its

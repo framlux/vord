@@ -249,4 +249,92 @@ public class MachineCacheTests
 
         await Assert.That(result).IsNull();
     }
+
+    // ========== DoesMachineExistAsync DB-fault propagation ==========
+
+    [Test]
+    public async Task DoesMachineExistAsync_DatabaseFault_PropagatesInsteadOfReturningFalse()
+    {
+        // A transient DB fault must NOT be swallowed into a false "machine does not exist"
+        // answer — doing so would let a duplicate or over-limit registration proceed.
+        // Dispose the context to force the underlying query to fault, then assert the call
+        // surfaces the exception rather than returning false.
+        TestDatabaseFactory dbFactory = new();
+        IMachineRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+        dbFactory.Dispose();
+
+        await Assert.That(async () => await repo.DoesMachineExistAsync("some-serial", "some-sysid", "", 1))
+            .Throws<Exception>();
+    }
+
+    [Test]
+    public async Task GetMachineByApiKeyAsync_DatabaseFault_PropagatesInsteadOfReturningNull()
+    {
+        // A transient DB fault must NOT be swallowed into a null result, which callers treat
+        // as "no machine found" and would reject telemetry from a legitimately registered machine.
+        TestDatabaseFactory dbFactory = new();
+        IMachineRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+        dbFactory.Dispose();
+
+        await Assert.That(async () => await repo.GetMachineByApiKeyAsync("some-api-key"))
+            .Throws<Exception>();
+    }
+
+    [Test]
+    public async Task GetMachineAsync_DatabaseFault_PropagatesInsteadOfReturningNull()
+    {
+        TestDatabaseFactory dbFactory = new();
+        IMachineRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+        dbFactory.Dispose();
+
+        await Assert.That(async () => await repo.GetMachineAsync(1, 1))
+            .Throws<Exception>();
+    }
+
+    // ========== GetMachineCountsByTenantsAsync tests ==========
+
+    [Test]
+    public async Task GetMachineCountsByTenantsAsync_GroupsActiveMachinesByTenant()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        IMachineRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+
+        // Tenant 1: two active, one deleted (deleted must be excluded). Tenant 2: one active.
+        await dbFactory.Context.InsertWithInt64IdentityAsync(TestDataBuilder.BuildMachine(tenantId: 1));
+        await dbFactory.Context.InsertWithInt64IdentityAsync(TestDataBuilder.BuildMachine(tenantId: 1));
+        Machine deleted = TestDataBuilder.BuildMachine(tenantId: 1);
+        deleted.IsDeleted = true;
+        await dbFactory.Context.InsertWithInt64IdentityAsync(deleted);
+        await dbFactory.Context.InsertWithInt64IdentityAsync(TestDataBuilder.BuildMachine(tenantId: 2));
+
+        Dictionary<int, int> counts = await repo.GetMachineCountsByTenantsAsync([1, 2], CancellationToken.None);
+
+        await Assert.That(counts[1]).IsEqualTo(2);
+        await Assert.That(counts[2]).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task GetMachineCountsByTenantsAsync_EmptyTenantList_ReturnsEmpty()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        IMachineRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+
+        Dictionary<int, int> counts = await repo.GetMachineCountsByTenantsAsync([], CancellationToken.None);
+
+        await Assert.That(counts.Count).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task GetMachineCountsByTenantsAsync_TenantWithNoMachines_OmittedFromResult()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        IMachineRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+
+        await dbFactory.Context.InsertWithInt64IdentityAsync(TestDataBuilder.BuildMachine(tenantId: 1));
+
+        Dictionary<int, int> counts = await repo.GetMachineCountsByTenantsAsync([1, 2], CancellationToken.None);
+
+        await Assert.That(counts.ContainsKey(2)).IsFalse();
+        await Assert.That(counts[1]).IsEqualTo(1);
+    }
 }

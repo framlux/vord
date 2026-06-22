@@ -3,6 +3,7 @@
 // See LICENSE for details.
 
 using System.Text.RegularExpressions;
+using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Services.Core.Infrastructure;
@@ -26,17 +27,27 @@ public sealed partial class TenantHandler : ITenantHandler
     private static partial Regex BlockedCharactersRegex();
 
     private readonly ITenantRepository _tenantRepo;
+    private readonly IDatabaseTransactionProvider _transactionProvider;
+    private readonly IAuditLogRepository _auditLog;
     private readonly ILogger<TenantHandler> _logger;
 
     /// <summary>
     /// Creates a new instance of the <see cref="TenantHandler"/> class.
     /// </summary>
-    public TenantHandler(ITenantRepository tenantRepo, ILogger<TenantHandler> logger)
+    public TenantHandler(
+        ITenantRepository tenantRepo,
+        IDatabaseTransactionProvider transactionProvider,
+        IAuditLogRepository auditLog,
+        ILogger<TenantHandler> logger)
     {
         ArgumentNullException.ThrowIfNull(tenantRepo);
+        ArgumentNullException.ThrowIfNull(transactionProvider);
+        ArgumentNullException.ThrowIfNull(auditLog);
         ArgumentNullException.ThrowIfNull(logger);
 
         _tenantRepo = tenantRepo;
+        _transactionProvider = transactionProvider;
+        _auditLog = auditLog;
         _logger = logger;
     }
 
@@ -66,6 +77,8 @@ public sealed partial class TenantHandler : ITenantHandler
             return ServiceResult<TenantDto>.Conflict("A tenant with this name already exists");
         }
 
+        using IDatabaseTransaction transaction = await _transactionProvider.BeginTransactionAsync(ct);
+
         Tenant tenant = await _tenantRepo.CreateTenantAsync(new Tenant
         {
             Name = name,
@@ -75,6 +88,18 @@ public sealed partial class TenantHandler : ITenantHandler
             CreatedAt = DateTimeOffset.UtcNow,
             CreatedByUserId = userId,
         }, ct);
+
+        await _auditLog.InsertAuditLogAsync(AuditHelper.Create(
+            tenantId: tenant.Id,
+            userId,
+            machineId: null,
+            AuditAction.TenantCreatedByAdmin,
+            AuditResourceType.Tenant,
+            tenant.Id.ToString(),
+            new { Name = name },
+            ipAddress: null), ct);
+
+        await transaction.CommitAsync(ct);
 
         _logger.LogInformation("Tenant '{TenantName}' created by user {UserId}", name, userId);
 

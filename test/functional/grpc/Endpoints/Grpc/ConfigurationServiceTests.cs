@@ -195,6 +195,7 @@ public sealed class ConfigurationServiceTests
             Name = "Config test token",
             CreatedByUserId = 1,
             CreatedAt = DateTimeOffset.UtcNow,
+            ExpiresAt = DateTimeOffset.UtcNow.AddDays(7),
             IsRevoked = false,
         };
         await db.InsertWithIdentityAsync(token);

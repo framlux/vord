@@ -410,6 +410,36 @@ public sealed class BillingEndpointTests
     }
 
     [Test]
+    public async Task CancelSubscription_FreeTier_WritesAuditLogEntryAtomically()
+    {
+        // Intent: for a Free-tier cancellation the subscription deactivation and audit log entry
+        // must be written in the same transaction. This test confirms the transactional path still
+        // records the audit row when the operation succeeds.
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId) = await SeedBillingEnvironment(db, tier: SubscriptionTier.Free);
+        HttpClient client = BuildClient(factory, tenantId, userId);
+
+        HttpResponseMessage response = await client.PostAsync("/api/v1/billing/cancel", null);
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
+
+        using DatabaseContext verifyDb = factory.CreateDbContext();
+
+        TenantSubscription? subscription = await verifyDb.TenantSubscriptions
+            .Where(s => s.TenantId == tenantId)
+            .FirstOrDefaultAsync();
+        await Assert.That(subscription).IsNotNull();
+        await Assert.That(subscription!.Status).IsEqualTo(SubscriptionStatus.Canceled);
+
+        AuditLogEntry? auditEntry = await verifyDb.AuditLog
+            .Where(a => (a.TenantId == tenantId) && (a.Action == AuditAction.SubscriptionCancelRequested))
+            .FirstOrDefaultAsync();
+        await Assert.That(auditEntry).IsNotNull();
+        await Assert.That(auditEntry!.ResourceType).IsEqualTo(AuditResourceType.Subscription);
+    }
+
+    [Test]
     public async Task CancelSubscription_FreeTier_CancelsImmediatelyWithoutStripe()
     {
         // Free-tier tenants have no Stripe subscription, so cancellation takes effect immediately

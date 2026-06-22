@@ -89,6 +89,13 @@ public sealed class MachineService : IMachineService
             return (RegistrationStatus.UnknownRegistration, null, null);
         }
 
+        if (IsTokenExpired(token, DateTimeOffset.UtcNow))
+        {
+            _logger.LogWarning("GetRegistrationStatus: token {TokenId} is expired", token.Id);
+
+            return (RegistrationStatus.UnknownRegistration, null, null);
+        }
+
         // Normalize to match how data is stored (lowercase).
         string normalizedSerial = serialNumber.ToLowerInvariant();
         string normalizedSystemId = systemId.ToLowerInvariant();
@@ -217,6 +224,13 @@ public sealed class MachineService : IMachineService
             return (null, null, "Registration token has been revoked");
         }
 
+        if (IsTokenExpired(token, DateTimeOffset.UtcNow))
+        {
+            _logger.LogWarning("Registration attempt with expired token {TokenId}", token.Id);
+
+            return (null, null, "Registration token has expired");
+        }
+
         IMachineRepository machineRepository = scope.ServiceProvider.GetRequiredService<IMachineRepository>();
 
         // Normalize case-sensitive fields to lowercase for consistent index usage.
@@ -308,6 +322,20 @@ public sealed class MachineService : IMachineService
         }
 
         return (createdMachine.Id, plaintextApiKey, string.Empty);
+    }
+
+    /// <summary>
+    /// Determines whether a registration token has expired as of the supplied instant.
+    /// A token is expired when the current time is at or past its expiry timestamp.
+    /// </summary>
+    /// <param name="token">The registration token to evaluate.</param>
+    /// <param name="now">The instant to compare against, in UTC.</param>
+    /// <returns><c>true</c> if the token has expired; otherwise <c>false</c>.</returns>
+    internal static bool IsTokenExpired(RegistrationToken token, DateTimeOffset now)
+    {
+        ArgumentNullException.ThrowIfNull(token);
+
+        return token.ExpiresAt <= now;
     }
 
     private static string ComputeSha256Hash(string input)

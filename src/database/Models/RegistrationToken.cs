@@ -63,6 +63,13 @@ public sealed class RegistrationToken
     public required DateTimeOffset CreatedAt { get; set; }
 
     /// <summary>
+    /// The date and time when the token expires. After this instant the token is no longer
+    /// valid for registration even if it has not been revoked.
+    /// </summary>
+    [Column("ExpiresAt"), NotNull]
+    public required DateTimeOffset ExpiresAt { get; set; }
+
+    /// <summary>
     /// Whether the token has been revoked.
     /// </summary>
     [Column("IsRevoked"), NotNull]

@@ -6,6 +6,7 @@ using Framlux.FleetManagement.Database.Models;
 using LinqToDB;
 using LinqToDB.Async;
 using LinqToDB.Data;
+using LinqToDB.Linq;
 
 namespace Framlux.FleetManagement.Database.Repositories;
 
@@ -139,215 +140,149 @@ public partial class DatabaseRepository : IMachineStateRepository
     }
 
     /// <inheritdoc/>
-    public async Task UpdateSystemInfoSummaryAsync(long machineId, string? hostname, string? hardwareModel, string? ipAddresses, DateTimeOffset lastSeenAt, CancellationToken cancellationToken)
+    public async Task ApplySummaryPatchAsync(MachineSummaryPatch patch, CancellationToken cancellationToken)
     {
-        await _db.MachineStateSummaries
-            .Where(s => s.MachineId == machineId)
-            .Set(s => s.Hostname, hostname)
-            .Set(s => s.HardwareModel, hardwareModel)
-            .Set(s => s.IpAddresses, ipAddresses)
-            .Set(s => s.LastSeenAt, lastSeenAt)
-            .UpdateAsync(cancellationToken);
+        ArgumentNullException.ThrowIfNull(patch);
+
+        IUpdatable<MachineStateSummary> update = _db.MachineStateSummaries
+            .Where(s => s.MachineId == patch.MachineId)
+            .AsUpdatable();
+
+        if (patch.LastSeenAt is DateTimeOffset lastSeen)
+        {
+            // Monotonic guard: never move LastSeenAt backward (documented MAX(ReceivedAt) semantics).
+            update = update.Set(
+                s => s.LastSeenAt,
+                s => ((s.LastSeenAt == null) || (s.LastSeenAt < lastSeen)) ? lastSeen : s.LastSeenAt);
+        }
+
+        if (patch.HasSystemInfo == true)
+        {
+            update = update
+                .Set(s => s.Hostname, patch.Hostname)
+                .Set(s => s.HardwareModel, patch.HardwareModel)
+                .Set(s => s.IpAddresses, patch.IpAddresses);
+        }
+
+        if (patch.HasOsVersion == true)
+        {
+            update = update
+                .Set(s => s.OsName, patch.OsName)
+                .Set(s => s.OsVersion, patch.OsVersion);
+        }
+
+        if (patch.HasCpuUsage == true)
+        {
+            update = update.Set(s => s.CpuUsagePercent, patch.CpuUsagePercent);
+        }
+
+        if (patch.HasMemoryUsage == true)
+        {
+            update = update.Set(s => s.MemoryUsagePercent, patch.MemoryUsagePercent);
+        }
+
+        if (patch.HasDiskUsage == true)
+        {
+            update = update.Set(s => s.MaxDiskUsagePercent, patch.MaxDiskUsagePercent);
+        }
+
+        if (patch.HasHardwareHealth == true)
+        {
+            update = update
+                .Set(s => s.HasDiskHealthIssue, patch.HasDiskHealthIssue)
+                .Set(s => s.HasHardwareIssue, patch.HasHardwareIssue);
+        }
+
+        if (patch.HasPackageUpdates == true)
+        {
+            update = update
+                .Set(s => s.PendingUpdates, patch.PendingUpdates)
+                .Set(s => s.SecurityUpdates, patch.SecurityUpdates);
+        }
+
+        if (patch.HasServiceStatus == true)
+        {
+            update = update
+                .Set(s => s.TotalServices, patch.TotalServices)
+                .Set(s => s.FailedServices, patch.FailedServices);
+        }
+
+        await update.UpdateAsync(cancellationToken);
     }
 
     /// <inheritdoc/>
-    public async Task UpdateSystemInfoDetailAsync(long machineId, string? hardwareVendor, string? hardwareSerial, string? cpuBrand, int? cpuCores, long? memoryTotalBytes, long? uptimeSeconds, string? biosVersion, CancellationToken cancellationToken)
+    public async Task ApplyDetailPatchAsync(MachineDetailPatch patch, CancellationToken cancellationToken)
     {
-        await _db.MachineStateDetails
-            .Where(d => d.MachineId == machineId)
-            .Set(d => d.HardwareVendor, hardwareVendor)
-            .Set(d => d.HardwareSerial, hardwareSerial)
-            .Set(d => d.CpuBrand, cpuBrand)
-            .Set(d => d.CpuCores, cpuCores)
-            .Set(d => d.MemoryTotalBytes, memoryTotalBytes)
-            .Set(d => d.UptimeSeconds, uptimeSeconds)
-            .Set(d => d.BiosVersion, biosVersion)
-            .UpdateAsync(cancellationToken);
-    }
+        ArgumentNullException.ThrowIfNull(patch);
 
-    /// <inheritdoc/>
-    public async Task UpdateOsVersionSummaryAsync(long machineId, string? osName, string? osVersion, DateTimeOffset lastSeenAt, CancellationToken cancellationToken)
-    {
-        await _db.MachineStateSummaries
-            .Where(s => s.MachineId == machineId)
-            .Set(s => s.OsName, osName)
-            .Set(s => s.OsVersion, osVersion)
-            .Set(s => s.LastSeenAt, lastSeenAt)
-            .UpdateAsync(cancellationToken);
-    }
+        // An UPDATE that sets zero columns must never be issued.
+        if (patch.HasAnyDetail == false)
+        {
+            return;
+        }
 
-    /// <inheritdoc/>
-    public async Task UpdateOsVersionDetailAsync(long machineId, string? kernel, CancellationToken cancellationToken)
-    {
-        await _db.MachineStateDetails
-            .Where(d => d.MachineId == machineId)
-            .Set(d => d.Kernel, kernel)
-            .UpdateAsync(cancellationToken);
-    }
+        IUpdatable<MachineStateDetail> update = _db.MachineStateDetails
+            .Where(d => d.MachineId == patch.MachineId)
+            .AsUpdatable();
 
-    /// <inheritdoc/>
-    public async Task UpdateCpuInfoSummaryAsync(long machineId, DateTimeOffset lastSeenAt, CancellationToken cancellationToken)
-    {
-        await _db.MachineStateSummaries
-            .Where(s => s.MachineId == machineId)
-            .Set(s => s.LastSeenAt, lastSeenAt)
-            .UpdateAsync(cancellationToken);
-    }
+        if (patch.HasSystemInfo == true)
+        {
+            update = update
+                .Set(d => d.HardwareVendor, patch.HardwareVendor)
+                .Set(d => d.HardwareSerial, patch.HardwareSerial)
+                .Set(d => d.CpuBrand, patch.CpuBrand)
+                .Set(d => d.CpuCores, patch.CpuCores)
+                .Set(d => d.MemoryTotalBytes, patch.MemoryTotalBytes)
+                .Set(d => d.UptimeSeconds, patch.UptimeSeconds)
+                .Set(d => d.BiosVersion, patch.BiosVersion);
+        }
 
-    /// <inheritdoc/>
-    public async Task UpdateCpuInfoDetailAsync(long machineId, string? cpuType, int? physicalCpus, int? logicalCpus, CancellationToken cancellationToken)
-    {
-        await _db.MachineStateDetails
-            .Where(d => d.MachineId == machineId)
-            .Set(d => d.CpuType, cpuType)
-            .Set(d => d.CpuPhysicalCpus, physicalCpus)
-            .Set(d => d.CpuLogicalCpus, logicalCpus)
-            .UpdateAsync(cancellationToken);
-    }
+        if (patch.HasOsVersion == true)
+        {
+            update = update.Set(d => d.Kernel, patch.Kernel);
+        }
 
-    /// <inheritdoc/>
-    public async Task UpdateMemoryInfoSummaryAsync(long machineId, DateTimeOffset lastSeenAt, CancellationToken cancellationToken)
-    {
-        await _db.MachineStateSummaries
-            .Where(s => s.MachineId == machineId)
-            .Set(s => s.LastSeenAt, lastSeenAt)
-            .UpdateAsync(cancellationToken);
-    }
+        if (patch.HasCpuInfo == true)
+        {
+            update = update
+                .Set(d => d.CpuType, patch.CpuType)
+                .Set(d => d.CpuPhysicalCpus, patch.CpuPhysicalCpus)
+                .Set(d => d.CpuLogicalCpus, patch.CpuLogicalCpus);
+        }
 
-    /// <inheritdoc/>
-    public async Task UpdateMemoryInfoDetailAsync(long machineId, long? swapTotalBytes, long? swapFreeBytes, CancellationToken cancellationToken)
-    {
-        await _db.MachineStateDetails
-            .Where(d => d.MachineId == machineId)
-            .Set(d => d.SwapTotalBytes, swapTotalBytes)
-            .Set(d => d.SwapFreeBytes, swapFreeBytes)
-            .UpdateAsync(cancellationToken);
-    }
+        if (patch.HasMemoryInfo == true)
+        {
+            update = update
+                .Set(d => d.SwapTotalBytes, patch.SwapTotalBytes)
+                .Set(d => d.SwapFreeBytes, patch.SwapFreeBytes);
+        }
 
-    /// <inheritdoc/>
-    public async Task UpdateDiskInfoSummaryAsync(long machineId, DateTimeOffset lastSeenAt, CancellationToken cancellationToken)
-    {
-        await _db.MachineStateSummaries
-            .Where(s => s.MachineId == machineId)
-            .Set(s => s.LastSeenAt, lastSeenAt)
-            .UpdateAsync(cancellationToken);
-    }
+        if (patch.HasMemoryUsage == true)
+        {
+            update = update.Set(d => d.MemoryUsedBytes, patch.MemoryUsedBytes);
+        }
 
-    /// <inheritdoc/>
-    public async Task UpdateDiskInfoDetailAsync(long machineId, string payload, CancellationToken cancellationToken)
-    {
-        await _db.MachineStateDetails
-            .Where(d => d.MachineId == machineId)
-            .Set(d => d.DiskInfos, payload)
-            .UpdateAsync(cancellationToken);
-    }
+        if (patch.HasDiskInfo == true)
+        {
+            update = update.Set(d => d.DiskInfos, patch.DiskInfos);
+        }
 
-    /// <inheritdoc/>
-    public async Task UpdateCpuUsageSummaryAsync(long machineId, int? cpuUsagePercent, DateTimeOffset lastSeenAt, CancellationToken cancellationToken)
-    {
-        await _db.MachineStateSummaries
-            .Where(s => s.MachineId == machineId)
-            .Set(s => s.CpuUsagePercent, cpuUsagePercent)
-            .Set(s => s.LastSeenAt, lastSeenAt)
-            .UpdateAsync(cancellationToken);
-    }
+        if (patch.HasDiskUsage == true)
+        {
+            update = update.Set(d => d.DiskUsages, patch.DiskUsages);
+        }
 
-    /// <inheritdoc/>
-    public async Task UpdateMemoryUsageSummaryAsync(long machineId, int? memoryUsagePercent, DateTimeOffset lastSeenAt, CancellationToken cancellationToken)
-    {
-        await _db.MachineStateSummaries
-            .Where(s => s.MachineId == machineId)
-            .Set(s => s.MemoryUsagePercent, memoryUsagePercent)
-            .Set(s => s.LastSeenAt, lastSeenAt)
-            .UpdateAsync(cancellationToken);
-    }
+        if (patch.HasSshSessions == true)
+        {
+            update = update.Set(d => d.SshSessions, patch.SshSessions);
+        }
 
-    /// <inheritdoc/>
-    public async Task UpdateMemoryUsageDetailAsync(long machineId, long? memoryUsedBytes, CancellationToken cancellationToken)
-    {
-        await _db.MachineStateDetails
-            .Where(d => d.MachineId == machineId)
-            .Set(d => d.MemoryUsedBytes, memoryUsedBytes)
-            .UpdateAsync(cancellationToken);
-    }
+        if (patch.HasHardwareHealth == true)
+        {
+            update = update.Set(d => d.HardwareHealth, patch.HardwareHealth);
+        }
 
-    /// <inheritdoc/>
-    public async Task UpdateDiskUsageSummaryAsync(long machineId, int maxDiskUsagePercent, DateTimeOffset lastSeenAt, CancellationToken cancellationToken)
-    {
-        await _db.MachineStateSummaries
-            .Where(s => s.MachineId == machineId)
-            .Set(s => s.MaxDiskUsagePercent, maxDiskUsagePercent)
-            .Set(s => s.LastSeenAt, lastSeenAt)
-            .UpdateAsync(cancellationToken);
-    }
-
-    /// <inheritdoc/>
-    public async Task UpdateDiskUsageDetailAsync(long machineId, string payload, CancellationToken cancellationToken)
-    {
-        await _db.MachineStateDetails
-            .Where(d => d.MachineId == machineId)
-            .Set(d => d.DiskUsages, payload)
-            .UpdateAsync(cancellationToken);
-    }
-
-    /// <inheritdoc/>
-    public async Task UpdateSshSessionsSummaryAsync(long machineId, DateTimeOffset lastSeenAt, CancellationToken cancellationToken)
-    {
-        await _db.MachineStateSummaries
-            .Where(s => s.MachineId == machineId)
-            .Set(s => s.LastSeenAt, lastSeenAt)
-            .UpdateAsync(cancellationToken);
-    }
-
-    /// <inheritdoc/>
-    public async Task UpdateSshSessionsDetailAsync(long machineId, string payload, CancellationToken cancellationToken)
-    {
-        await _db.MachineStateDetails
-            .Where(d => d.MachineId == machineId)
-            .Set(d => d.SshSessions, payload)
-            .UpdateAsync(cancellationToken);
-    }
-
-    /// <inheritdoc/>
-    public async Task UpdateHardwareHealthSummaryAsync(long machineId, bool hasDiskHealthIssue, bool hasHardwareIssue, DateTimeOffset lastSeenAt, CancellationToken cancellationToken)
-    {
-        await _db.MachineStateSummaries
-            .Where(s => s.MachineId == machineId)
-            .Set(s => s.HasDiskHealthIssue, hasDiskHealthIssue)
-            .Set(s => s.HasHardwareIssue, hasHardwareIssue)
-            .Set(s => s.LastSeenAt, lastSeenAt)
-            .UpdateAsync(cancellationToken);
-    }
-
-    /// <inheritdoc/>
-    public async Task UpdateHardwareHealthDetailAsync(long machineId, string payload, CancellationToken cancellationToken)
-    {
-        await _db.MachineStateDetails
-            .Where(d => d.MachineId == machineId)
-            .Set(d => d.HardwareHealth, payload)
-            .UpdateAsync(cancellationToken);
-    }
-
-    /// <inheritdoc/>
-    public async Task UpdatePackageUpdatesSummaryAsync(long machineId, int? pendingUpdates, int? securityUpdates, DateTimeOffset lastSeenAt, CancellationToken cancellationToken)
-    {
-        await _db.MachineStateSummaries
-            .Where(s => s.MachineId == machineId)
-            .Set(s => s.PendingUpdates, pendingUpdates)
-            .Set(s => s.SecurityUpdates, securityUpdates)
-            .Set(s => s.LastSeenAt, lastSeenAt)
-            .UpdateAsync(cancellationToken);
-    }
-
-    /// <inheritdoc/>
-    public async Task UpdateServiceStatusSummaryAsync(long machineId, int? totalServices, int? failedServices, DateTimeOffset lastSeenAt, CancellationToken cancellationToken)
-    {
-        await _db.MachineStateSummaries
-            .Where(s => s.MachineId == machineId)
-            .Set(s => s.TotalServices, totalServices)
-            .Set(s => s.FailedServices, failedServices)
-            .Set(s => s.LastSeenAt, lastSeenAt)
-            .UpdateAsync(cancellationToken);
+        await update.UpdateAsync(cancellationToken);
     }
 
     /// <inheritdoc/>
@@ -368,6 +303,41 @@ public partial class DatabaseRepository : IMachineStateRepository
                         t.TelemetryType == telemetryType)
             .OrderByDescending(t => t.ReceivedAt)
             .ToListAsync(cancellationToken);
+    }
+
+    /// <inheritdoc/>
+    public async Task<List<MachineTelemetry>> GetTelemetryPageByMachineIdsAndTypeAsync(
+        List<long> machineIds, short telemetryType, DateTimeOffset receivedSince, int skip, int take, CancellationToken cancellationToken)
+    {
+        if (machineIds.Count == 0)
+        {
+            return [];
+        }
+
+        return await _db.MachineTelemetry
+            .Where(t => machineIds.Contains(t.MachineId) &&
+                        (t.TelemetryType == telemetryType) &&
+                        (t.ReceivedAt >= receivedSince))
+            .OrderByDescending(t => t.ReceivedAt)
+            .Skip(skip)
+            .Take(take)
+            .ToListAsync(cancellationToken);
+    }
+
+    /// <inheritdoc/>
+    public async Task<int> CountTelemetryByMachineIdsAndTypeAsync(
+        List<long> machineIds, short telemetryType, DateTimeOffset receivedSince, CancellationToken cancellationToken)
+    {
+        if (machineIds.Count == 0)
+        {
+            return 0;
+        }
+
+        return await _db.MachineTelemetry
+            .Where(t => machineIds.Contains(t.MachineId) &&
+                        (t.TelemetryType == telemetryType) &&
+                        (t.ReceivedAt >= receivedSince))
+            .CountAsync(cancellationToken);
     }
 
     /// <inheritdoc/>
@@ -420,12 +390,15 @@ public partial class DatabaseRepository : IMachineStateRepository
     {
         IQueryable<FleetMachineRow> baseQuery = BuildFleetBaseQuery(tenantId);
 
-        List<(short HealthStatus, int Count)> healthCounts = await (
+        List<HealthStatusCount> grouped = await (
             from r in baseQuery
             group r by r.HealthStatus into g
-            select new { HealthStatus = g.Key, Count = g.Count() }
-        ).ToListAsync(cancellationToken)
-         .ContinueWith(t => t.Result.Select(x => (x.HealthStatus, x.Count)).ToList(), cancellationToken);
+            select new HealthStatusCount { HealthStatus = g.Key, Count = g.Count() }
+        ).ToListAsync(cancellationToken);
+
+        List<(short HealthStatus, int Count)> healthCounts = grouped
+            .Select(x => (x.HealthStatus, x.Count))
+            .ToList();
 
         int totalSecurityUpdates = await baseQuery.SumAsync(r => r.SecurityUpdates ?? 0, cancellationToken);
 

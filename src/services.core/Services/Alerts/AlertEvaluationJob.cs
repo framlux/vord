@@ -17,6 +17,9 @@ namespace Framlux.FleetManagement.Services.Core.Alerts;
 /// on a per-minute cadence. Replaces the former <c>AlertEvaluationService</c>. Condition-duration
 /// tracking that previously lived in Redis (<c>alert:condition:*</c> keys) now lives in the
 /// <see cref="AlertConditionState"/> table accessed via <see cref="IAlertConditionStateRepository"/>.
+/// After the evaluation loop completes, a reconciliation pass re-enqueues any <c>Triggered</c>
+/// <see cref="AlertEvent"/>s that have no <c>IntegrationDeliveryAttempt</c> row, catching
+/// deliveries lost in the crash window between the event commit and the Hangfire enqueue.
 /// </summary>
 public sealed class AlertEvaluationJob
 {
@@ -58,6 +61,20 @@ public sealed class AlertEvaluationJob
     }
 
     /// <summary>
+    /// Re-drive window: only re-enqueue events triggered at least this many minutes ago.
+    /// Events triggered more recently than this are still in the normal Hangfire-enqueue flight
+    /// path; re-driving them would race with the concurrent enqueue attempt.
+    /// </summary>
+    internal const int RedriveMinAgeMinutes = 2;
+
+    /// <summary>
+    /// Re-drive window: do not re-enqueue events older than this many minutes. This prevents
+    /// perpetual re-driving for tenants that have never configured an integration — those events
+    /// will never have a delivery attempt, but they are genuinely abandoned rather than lost.
+    /// </summary>
+    internal const int RedriveMaxAgeMinutes = 15;
+
+    /// <summary>
     /// Evaluates every enabled, threshold-based alert rule against the latest machine state and
     /// enqueues delivery for any new alert events.
     /// </summary>
@@ -69,71 +86,110 @@ public sealed class AlertEvaluationJob
     {
         List<AlertRule> enabledRules = await _alertRuleRepository.GetEnabledAlertRulesAsync(ct);
 
-        if (enabledRules.Count == 0)
+        if (enabledRules.Count > 0)
+        {
+            IEnumerable<IGrouping<int, AlertRule>> rulesByTenant = enabledRules.GroupBy(r => r.TenantId);
+
+            foreach (IGrouping<int, AlertRule> tenantRules in rulesByTenant)
+            {
+                int tenantId = tenantRules.Key;
+
+                // Per-tenant fault isolation: one tenant's bad data (e.g., subscription lookup throws,
+                // or a stale machine state row trips a downstream call) must not abort the entire
+                // evaluation cycle. Log and move to the next tenant. The job retries every minute via
+                // the recurring schedule, so transient failures self-heal.
+                try
+                {
+                    // Threshold-based alerts are a paid feature. Free tier (and any non-active status) skip.
+                    TenantSubscription? subscription = await _subscriptionService.GetSubscriptionForTenantAsync(tenantId, ct);
+                    if ((subscription is null) || (subscription.Tier == SubscriptionTier.Free) || (subscription.Status != SubscriptionStatus.Active))
+                    {
+                        continue;
+                    }
+
+                    List<int> ruleIds = tenantRules.Select(r => r.Id).ToList();
+                    Dictionary<int, List<long>> machinesByRule = await _alertRuleRepository.GetMachineIdsForRulesAsync(ruleIds, ct);
+
+                    List<MachineStateSummary> machineStates = await _machineStateRepository.GetSummariesForTenantMachinesAsync(tenantId, ct);
+
+                    foreach (AlertRule rule in tenantRules)
+                    {
+                        // Event-based metrics are evaluated at telemetry ingestion time, not here.
+                        if (AlertConstants.IsEventMetric(rule.Metric))
+                        {
+                            continue;
+                        }
+
+                        List<long> assignedMachineIds = machinesByRule.GetValueOrDefault(rule.Id, []);
+                        if (assignedMachineIds.Count == 0)
+                        {
+                            _logger.LogDebug("Alert rule {RuleId} has no assigned machines, skipping", rule.Id);
+
+                            continue;
+                        }
+
+                        HashSet<long> assignedSet = new(assignedMachineIds);
+                        List<MachineStateSummary> scopedStates = machineStates
+                            .Where(s => assignedSet.Contains(s.MachineId))
+                            .ToList();
+
+                        foreach (MachineStateSummary state in scopedStates)
+                        {
+                            await EvaluateRuleForMachineAsync(rule, state, ct);
+                        }
+                    }
+                }
+                catch (OperationCanceledException) when (ct.IsCancellationRequested)
+                {
+                    // Shutdown — propagate so the recurring run records as cancelled.
+                    throw;
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Alert evaluation failed for tenant {TenantId}; continuing with remaining tenants", tenantId);
+                }
+            }
+        }
+
+        // Reconciliation pass: re-enqueue any Triggered events that lost their Hangfire enqueue
+        // in the crash window between the DB commit and the Enqueue call. The delivery job is
+        // idempotent via IntegrationDeliveryAttempt claims, so re-enqueueing is safe.
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        await RedriveOrphanedEventsAsync(
+            now.AddMinutes(-RedriveMaxAgeMinutes),
+            now.AddMinutes(-RedriveMinAgeMinutes),
+            ct);
+    }
+
+    /// <summary>
+    /// Queries for <see cref="AlertEvent"/>s in the re-drive window that have no
+    /// <c>IntegrationDeliveryAttempt</c> row, then enqueues a delivery job for each.
+    /// Extracted as an <c>internal</c> method so tests can call it with explicit timestamp
+    /// bounds (deterministic, no wall-clock dependency).
+    /// </summary>
+    /// <param name="triggeredNotBefore">Lower bound (inclusive) for <see cref="AlertEvent.TriggeredAt"/>.</param>
+    /// <param name="triggeredNotAfter">Upper bound (inclusive) for <see cref="AlertEvent.TriggeredAt"/>.</param>
+    /// <param name="ct">Cancellation token.</param>
+    internal async Task RedriveOrphanedEventsAsync(
+        DateTimeOffset triggeredNotBefore,
+        DateTimeOffset triggeredNotAfter,
+        CancellationToken ct)
+    {
+        List<AlertEvent> orphans = await _alertEventRepository
+            .GetTriggeredEventsWithoutDeliveryAttemptsAsync(triggeredNotAfter, triggeredNotBefore, ct);
+
+        if (orphans.Count == 0)
         {
             return;
         }
 
-        IEnumerable<IGrouping<int, AlertRule>> rulesByTenant = enabledRules.GroupBy(r => r.TenantId);
+        _logger.LogInformation(
+            "Re-driving {Count} orphaned alert event(s) with no delivery attempt (window: {NotBefore:O} to {NotAfter:O})",
+            orphans.Count, triggeredNotBefore, triggeredNotAfter);
 
-        foreach (IGrouping<int, AlertRule> tenantRules in rulesByTenant)
+        foreach (AlertEvent orphan in orphans)
         {
-            int tenantId = tenantRules.Key;
-
-            // Per-tenant fault isolation: one tenant's bad data (e.g., subscription lookup throws,
-            // or a stale machine state row trips a downstream call) must not abort the entire
-            // evaluation cycle. Log and move to the next tenant. The job retries every minute via
-            // the recurring schedule, so transient failures self-heal.
-            try
-            {
-                // Threshold-based alerts are a paid feature. Free tier (and any non-active status) skip.
-                TenantSubscription? subscription = await _subscriptionService.GetSubscriptionForTenantAsync(tenantId, ct);
-                if ((subscription is null) || (subscription.Tier == SubscriptionTier.Free) || (subscription.Status != SubscriptionStatus.Active))
-                {
-                    continue;
-                }
-
-                List<int> ruleIds = tenantRules.Select(r => r.Id).ToList();
-                Dictionary<int, List<long>> machinesByRule = await _alertRuleRepository.GetMachineIdsForRulesAsync(ruleIds, ct);
-
-                List<MachineStateSummary> machineStates = await _machineStateRepository.GetSummariesForTenantMachinesAsync(tenantId, ct);
-
-                foreach (AlertRule rule in tenantRules)
-                {
-                    // Event-based metrics are evaluated at telemetry ingestion time, not here.
-                    if (AlertConstants.IsEventMetric(rule.Metric))
-                    {
-                        continue;
-                    }
-
-                    List<long> assignedMachineIds = machinesByRule.GetValueOrDefault(rule.Id, []);
-                    if (assignedMachineIds.Count == 0)
-                    {
-                        _logger.LogDebug("Alert rule {RuleId} has no assigned machines, skipping", rule.Id);
-
-                        continue;
-                    }
-
-                    HashSet<long> assignedSet = new(assignedMachineIds);
-                    List<MachineStateSummary> scopedStates = machineStates
-                        .Where(s => assignedSet.Contains(s.MachineId))
-                        .ToList();
-
-                    foreach (MachineStateSummary state in scopedStates)
-                    {
-                        await EvaluateRuleForMachineAsync(rule, state, ct);
-                    }
-                }
-            }
-            catch (OperationCanceledException) when (ct.IsCancellationRequested)
-            {
-                // Shutdown — propagate so the recurring run records as cancelled.
-                throw;
-            }
-            catch (Exception ex)
-            {
-                _logger.LogError(ex, "Alert evaluation failed for tenant {TenantId}; continuing with remaining tenants", tenantId);
-            }
+            await _deliveryService.EnqueueAsync(orphan.Id, orphan.AlertRuleId, orphan.TenantId, ct);
         }
     }
 

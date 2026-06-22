@@ -64,6 +64,7 @@ public sealed class TenantAdminEndpointTests
             Name = "Revoke Me",
             CreatedByUserId = 1,
             CreatedAt = DateTimeOffset.UtcNow,
+            ExpiresAt = DateTimeOffset.UtcNow.AddDays(7),
             IsRevoked = false,
         };
         token.Id = await db.InsertWithInt64IdentityAsync(token);

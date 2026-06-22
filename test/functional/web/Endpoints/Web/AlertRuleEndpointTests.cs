@@ -2108,6 +2108,40 @@ public sealed class AlertRuleEndpointTests
         await Assert.That(body.ToLowerInvariant()).Contains("canceled");
     }
 
+    // --- Transactional Audit Log Tests ---
+
+    [Test]
+    public async Task CreateAlertRule_HappyPath_WritesAuditLogEntry()
+    {
+        // Intent: the alert rule creation and its audit log entry must be written in the same
+        // transaction. This test confirms the transactional path still records the audit row on
+        // a successful create.
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId, long machineId) = await SeedAlertEnvironment(db, SubscriptionTier.Team);
+        HttpClient client = BuildClient(factory, tenantId, userId);
+
+        HttpResponseMessage response = await client.PostAsJsonAsync("/api/v1/alert-rules", new
+        {
+            Name = "Audit Log Test Rule",
+            Metric = "CpuUsage",
+            Operator = "GreaterThan",
+            Threshold = 85,
+            DurationMinutes = 5,
+            Severity = "Warning",
+            MachineIds = new long[] { machineId },
+        });
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
+
+        AuditLogEntry? auditEntry = await db.AuditLog
+            .Where(a => (a.TenantId == tenantId) && (a.Action == AuditAction.AlertRuleCreated))
+            .FirstOrDefaultAsync();
+
+        await Assert.That(auditEntry).IsNotNull();
+        await Assert.That(auditEntry!.ResourceType).IsEqualTo(AuditResourceType.AlertRule);
+    }
+
     [Test]
     public async Task DeleteRule_CrossTenant_Returns404()
     {

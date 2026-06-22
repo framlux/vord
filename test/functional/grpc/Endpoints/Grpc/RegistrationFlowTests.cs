@@ -106,6 +106,7 @@ public sealed class RegistrationFlowTests
             Name = "Revoked Token",
             CreatedByUserId = 1,
             CreatedAt = DateTimeOffset.UtcNow,
+            ExpiresAt = DateTimeOffset.UtcNow.AddDays(7),
             IsRevoked = true,
             RevokedAt = DateTimeOffset.UtcNow.AddHours(-1)
         };
@@ -560,6 +561,7 @@ public sealed class RegistrationFlowTests
             Name = "Tenant A Token",
             CreatedByUserId = 1,
             CreatedAt = DateTimeOffset.UtcNow,
+            ExpiresAt = DateTimeOffset.UtcNow.AddDays(7),
             IsRevoked = false
         };
         await db.InsertWithIdentityAsync(tenantAToken);
@@ -591,6 +593,7 @@ public sealed class RegistrationFlowTests
             Name = "Tenant B Token",
             CreatedByUserId = 1,
             CreatedAt = DateTimeOffset.UtcNow,
+            ExpiresAt = DateTimeOffset.UtcNow.AddDays(7),
             IsRevoked = false
         };
         await db.InsertWithIdentityAsync(tenantBToken);
@@ -649,6 +652,7 @@ public sealed class RegistrationFlowTests
             Name = "Test Token",
             CreatedByUserId = 1,
             CreatedAt = DateTimeOffset.UtcNow,
+            ExpiresAt = DateTimeOffset.UtcNow.AddDays(7),
             IsRevoked = false
         };
         long tokenId = (long)await db.InsertWithIdentityAsync(token);

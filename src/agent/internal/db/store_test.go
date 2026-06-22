@@ -1301,6 +1301,40 @@ func TestGetSigningKey_NotFound(t *testing.T) {
 	}
 }
 
+// Intent: CountSigningKeys returns zero when no keys are stored.
+func TestCountSigningKeys_Empty(t *testing.T) {
+	store := newTestStore(t)
+
+	count, err := store.CountSigningKeys()
+	if err != nil {
+		t.Fatalf("CountSigningKeys: %v", err)
+	}
+	if count != 0 {
+		t.Errorf("expected 0 keys, got %d", count)
+	}
+}
+
+// Intent: CountSigningKeys reflects the number of stored trusted keys.
+func TestCountSigningKeys_AfterUpsert(t *testing.T) {
+	store := newTestStore(t)
+
+	keys := []TrustedKey{
+		{KeyID: 1, UserID: 10, PublicKey: []byte("key-one")},
+		{KeyID: 2, UserID: 20, PublicKey: []byte("key-two")},
+	}
+	if err := store.UpsertSigningKeys(keys); err != nil {
+		t.Fatalf("UpsertSigningKeys: %v", err)
+	}
+
+	count, err := store.CountSigningKeys()
+	if err != nil {
+		t.Fatalf("CountSigningKeys: %v", err)
+	}
+	if count != 2 {
+		t.Errorf("expected 2 keys, got %d", count)
+	}
+}
+
 // --- Nonce tests ---
 
 // Intent: RecordNonce stores nonce that IsNonceUsed can find.

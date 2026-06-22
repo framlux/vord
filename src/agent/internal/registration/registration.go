@@ -291,11 +291,31 @@ func (m *Manager) FetchConfiguration(ctx context.Context) error {
 	}
 
 	// Store tenant ID so the agent can verify command ownership.
+	//
+	// The tenant ID is the trust root for the command-ownership check, but the
+	// configuration channel is only authenticated by the agent's API key. Until the
+	// server cryptographically root-signs the tenant/key section of the config, the
+	// agent must not allow this channel to re-home it into a different tenant. Only
+	// accept the server-supplied tenant ID when the agent has none yet; a conflicting
+	// value on an already-bound agent is ignored.
 	if resp.TenantId > 0 {
-		m.state.SetTenantID(resp.TenantId)
+		currentTenantID := m.state.TenantID()
+		if currentTenantID == 0 {
+			m.state.SetTenantID(resp.TenantId)
+		} else if currentTenantID != resp.TenantId {
+			slog.Warn("ignoring attempt to change tenant ID over config channel",
+				"current_tenant", currentTenantID,
+				"proposed_tenant", resp.TenantId,
+			)
+		}
 	}
 
 	// Sync trusted signing keys for remote command verification.
+	//
+	// The set of trusted keys is part of the same unsigned trust root. A response that
+	// would remove every signing key is treated as suspicious: it could be a transient
+	// server bug or a precursor to swapping the trust root. The agent therefore never
+	// wipes an existing non-empty key set down to empty — it keeps the prior keys.
 	if len(resp.SigningKeys) > 0 {
 		keys := make([]db.TrustedKey, 0, len(resp.SigningKeys))
 		for _, sk := range resp.SigningKeys {
@@ -309,6 +329,15 @@ func (m *Manager) FetchConfiguration(ctx context.Context) error {
 			slog.Warn("failed to sync signing keys", "error", err)
 		} else {
 			slog.Debug("synced signing keys", "count", len(keys))
+		}
+	} else {
+		existing, err := m.store.CountSigningKeys()
+		if err != nil {
+			slog.Warn("failed to check existing signing keys, keeping prior keys", "error", err)
+		} else if existing > 0 {
+			slog.Warn("ignoring empty signing-key set from config channel to avoid erasing trusted keys",
+				"existing_keys", existing,
+			)
 		}
 	}
 

@@ -473,8 +473,11 @@ public sealed class AlertEvaluationJobTests
     // ----- RunAsync paths -----
 
     [Test]
-    public async Task RunAsync_NoEnabledRules_ReturnsEarly()
+    public async Task RunAsync_NoEnabledRules_SkipsEvaluationLoop_RunsRedrive()
     {
+        // Intent: with no enabled rules the evaluation loop is skipped but the reconciliation
+        // re-drive pass still executes. If there are no orphaned events the delivery service
+        // must not be called.
         using TestDatabaseFactory dbFactory = new();
         (AlertEvaluationJob job, _, _, IAlertDeliveryService delivery, _, _, _) = CreateJobWithDb(dbFactory);
 
@@ -993,6 +996,11 @@ public sealed class AlertEvaluationJobTests
         stateRepo.GetSummariesForTenantMachinesAsync(2, Arg.Any<CancellationToken>())
             .Returns(new List<MachineStateSummary>());
 
+        // The re-drive reconciliation pass runs after the loop; return no orphans.
+        eventRepo.GetTriggeredEventsWithoutDeliveryAttemptsAsync(
+                Arg.Any<DateTimeOffset>(), Arg.Any<DateTimeOffset>(), Arg.Any<CancellationToken>())
+            .Returns(new List<AlertEvent>());
+
         AlertEvaluationJob job = new(stateRepo, ruleRepo, eventRepo, conditionRepo, subscriptionService, delivery, logger);
 
         // Must NOT throw — tenant 1 failure is caught + logged.
@@ -1066,5 +1074,228 @@ public sealed class AlertEvaluationJobTests
         await Assert.That(attrData!.ConstructorArguments.Count).IsEqualTo(1);
         int timeoutSeconds = (int)attrData.ConstructorArguments[0].Value!;
         await Assert.That(timeoutSeconds).IsEqualTo(600);
+    }
+
+    // ----- RedriveOrphanedEventsAsync paths -----
+
+    [Test]
+    public async Task RedriveOrphanedEventsAsync_OrphanInWindow_EnqueuesDelivery()
+    {
+        // Intent: a Triggered event with no delivery attempt inside the re-drive window must be
+        // re-enqueued exactly once. This is the core crash-window recovery path.
+        using TestDatabaseFactory dbFactory = new();
+        (AlertEvaluationJob job, DatabaseContext db, _, IAlertDeliveryService delivery, _, _, _) = CreateJobWithDb(dbFactory);
+
+        Tenant tenant = TestDataBuilder.BuildTenant();
+        tenant.Id = await db.InsertWithInt32IdentityAsync(tenant);
+
+        Machine machine = TestDataBuilder.BuildMachine(tenantId: tenant.Id);
+        machine.Id = await db.InsertWithInt64IdentityAsync(machine);
+
+        AlertRule rule = TestDataBuilder.BuildAlertRule(tenantId: tenant.Id, metric: AlertMetric.CpuUsage);
+        rule.Id = await db.InsertWithInt32IdentityAsync(rule);
+
+        // Triggered 10 minutes ago — well inside the default [15 min, 2 min] window.
+        DateTimeOffset triggeredAt = DateTimeOffset.UtcNow.AddMinutes(-10);
+        AlertEvent orphan = TestDataBuilder.BuildAlertEvent(alertRuleId: rule.Id, tenantId: tenant.Id, machineId: machine.Id, status: AlertEventStatus.Triggered);
+        orphan.TriggeredAt = triggeredAt;
+        orphan.Id = await db.InsertWithInt64IdentityAsync(orphan);
+
+        // No IntegrationDeliveryAttempt row — this is the lost-enqueue case.
+        DateTimeOffset notBefore = DateTimeOffset.UtcNow.AddMinutes(-15);
+        DateTimeOffset notAfter = DateTimeOffset.UtcNow.AddMinutes(-2);
+
+        await job.RedriveOrphanedEventsAsync(notBefore, notAfter, CancellationToken.None);
+
+        await delivery.Received(1).EnqueueAsync(orphan.Id, rule.Id, tenant.Id, Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task RedriveOrphanedEventsAsync_EventTooRecent_NotRedriven()
+    {
+        // Intent: events triggered more recently than the minimum age (notAfter bound) must not be
+        // re-driven — they are still being processed by the normal path and re-enqueueing would race.
+        using TestDatabaseFactory dbFactory = new();
+        (AlertEvaluationJob job, DatabaseContext db, _, IAlertDeliveryService delivery, _, _, _) = CreateJobWithDb(dbFactory);
+
+        Tenant tenant = TestDataBuilder.BuildTenant();
+        tenant.Id = await db.InsertWithInt32IdentityAsync(tenant);
+
+        AlertRule rule = TestDataBuilder.BuildAlertRule(tenantId: tenant.Id, metric: AlertMetric.CpuUsage);
+        rule.Id = await db.InsertWithInt32IdentityAsync(rule);
+
+        // Triggered 1 minute ago — newer than the notAfter upper bound of 2 minutes.
+        AlertEvent recent = TestDataBuilder.BuildAlertEvent(alertRuleId: rule.Id, tenantId: tenant.Id, status: AlertEventStatus.Triggered);
+        recent.TriggeredAt = DateTimeOffset.UtcNow.AddMinutes(-1);
+        recent.Id = await db.InsertWithInt64IdentityAsync(recent);
+
+        DateTimeOffset notBefore = DateTimeOffset.UtcNow.AddMinutes(-15);
+        DateTimeOffset notAfter = DateTimeOffset.UtcNow.AddMinutes(-2);
+
+        await job.RedriveOrphanedEventsAsync(notBefore, notAfter, CancellationToken.None);
+
+        await delivery.DidNotReceive().EnqueueAsync(Arg.Any<long>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task RedriveOrphanedEventsAsync_EventTooOld_NotRedriven()
+    {
+        // Intent: events older than the maximum age (notBefore lower bound) must not be re-driven.
+        // These represent tenants that have never configured an integration and whose alerts
+        // will never have a delivery attempt — re-driving them perpetually would be noise.
+        using TestDatabaseFactory dbFactory = new();
+        (AlertEvaluationJob job, DatabaseContext db, _, IAlertDeliveryService delivery, _, _, _) = CreateJobWithDb(dbFactory);
+
+        Tenant tenant = TestDataBuilder.BuildTenant();
+        tenant.Id = await db.InsertWithInt32IdentityAsync(tenant);
+
+        AlertRule rule = TestDataBuilder.BuildAlertRule(tenantId: tenant.Id, metric: AlertMetric.CpuUsage);
+        rule.Id = await db.InsertWithInt32IdentityAsync(rule);
+
+        // Triggered 20 minutes ago — older than the notBefore lower bound of 15 minutes.
+        AlertEvent ancient = TestDataBuilder.BuildAlertEvent(alertRuleId: rule.Id, tenantId: tenant.Id, status: AlertEventStatus.Triggered);
+        ancient.TriggeredAt = DateTimeOffset.UtcNow.AddMinutes(-20);
+        ancient.Id = await db.InsertWithInt64IdentityAsync(ancient);
+
+        DateTimeOffset notBefore = DateTimeOffset.UtcNow.AddMinutes(-15);
+        DateTimeOffset notAfter = DateTimeOffset.UtcNow.AddMinutes(-2);
+
+        await job.RedriveOrphanedEventsAsync(notBefore, notAfter, CancellationToken.None);
+
+        await delivery.DidNotReceive().EnqueueAsync(Arg.Any<long>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task RedriveOrphanedEventsAsync_EventWithDeliveryAttempt_NotRedriven()
+    {
+        // Intent: a Triggered event that already has an IntegrationDeliveryAttempt row must not be
+        // re-enqueued. The delivery-attempt claim is the idempotency guard; the anti-join query must
+        // exclude these events so we do not double-enqueue and potentially cause double-POST to the
+        // receiver.
+        using TestDatabaseFactory dbFactory = new();
+        (AlertEvaluationJob job, DatabaseContext db, _, IAlertDeliveryService delivery, _, _, _) = CreateJobWithDb(dbFactory);
+
+        Tenant tenant = TestDataBuilder.BuildTenant();
+        tenant.Id = await db.InsertWithInt32IdentityAsync(tenant);
+
+        AlertRule rule = TestDataBuilder.BuildAlertRule(tenantId: tenant.Id, metric: AlertMetric.CpuUsage);
+        rule.Id = await db.InsertWithInt32IdentityAsync(rule);
+
+        IntegrationEndpoint integration = TestDataBuilder.BuildIntegrationEndpoint(tenantId: tenant.Id);
+        integration.Id = await db.InsertWithInt32IdentityAsync(integration);
+
+        AlertEvent eventWithAttempt = TestDataBuilder.BuildAlertEvent(alertRuleId: rule.Id, tenantId: tenant.Id, status: AlertEventStatus.Triggered);
+        eventWithAttempt.TriggeredAt = DateTimeOffset.UtcNow.AddMinutes(-10);
+        eventWithAttempt.Id = await db.InsertWithInt64IdentityAsync(eventWithAttempt);
+
+        // Seed an existing delivery attempt for this event — it has already been delivered.
+        await db.InsertAsync(new IntegrationDeliveryAttempt
+        {
+            AlertEventId = eventWithAttempt.Id,
+            IntegrationEndpointId = integration.Id,
+            Status = IntegrationDeliveryAttemptStatus.Succeeded,
+            AttemptedAt = DateTimeOffset.UtcNow.AddMinutes(-9),
+            SucceededAt = DateTimeOffset.UtcNow.AddMinutes(-9),
+        });
+
+        DateTimeOffset notBefore = DateTimeOffset.UtcNow.AddMinutes(-15);
+        DateTimeOffset notAfter = DateTimeOffset.UtcNow.AddMinutes(-2);
+
+        await job.RedriveOrphanedEventsAsync(notBefore, notAfter, CancellationToken.None);
+
+        await delivery.DidNotReceive().EnqueueAsync(Arg.Any<long>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task RedriveOrphanedEventsAsync_NonTriggeredEvent_NotRedriven()
+    {
+        // Intent: only Triggered events are eligible for re-drive. Resolved and Acknowledged events
+        // (whose delivery was successfully processed) must be excluded so we do not erroneously
+        // re-enqueue already-handled events.
+        using TestDatabaseFactory dbFactory = new();
+        (AlertEvaluationJob job, DatabaseContext db, _, IAlertDeliveryService delivery, _, _, _) = CreateJobWithDb(dbFactory);
+
+        Tenant tenant = TestDataBuilder.BuildTenant();
+        tenant.Id = await db.InsertWithInt32IdentityAsync(tenant);
+
+        AlertRule rule = TestDataBuilder.BuildAlertRule(tenantId: tenant.Id, metric: AlertMetric.CpuUsage);
+        rule.Id = await db.InsertWithInt32IdentityAsync(rule);
+
+        AlertEvent resolved = TestDataBuilder.BuildAlertEvent(alertRuleId: rule.Id, tenantId: tenant.Id, status: AlertEventStatus.Resolved);
+        resolved.TriggeredAt = DateTimeOffset.UtcNow.AddMinutes(-10);
+        resolved.Id = await db.InsertWithInt64IdentityAsync(resolved);
+
+        AlertEvent acknowledged = TestDataBuilder.BuildAlertEvent(alertRuleId: rule.Id, tenantId: tenant.Id, status: AlertEventStatus.Acknowledged);
+        acknowledged.TriggeredAt = DateTimeOffset.UtcNow.AddMinutes(-10);
+        acknowledged.AcknowledgedAt = DateTimeOffset.UtcNow.AddMinutes(-8);
+        acknowledged.Id = await db.InsertWithInt64IdentityAsync(acknowledged);
+
+        DateTimeOffset notBefore = DateTimeOffset.UtcNow.AddMinutes(-15);
+        DateTimeOffset notAfter = DateTimeOffset.UtcNow.AddMinutes(-2);
+
+        await job.RedriveOrphanedEventsAsync(notBefore, notAfter, CancellationToken.None);
+
+        await delivery.DidNotReceive().EnqueueAsync(Arg.Any<long>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task RedriveOrphanedEventsAsync_MultipleOrphans_EnqueuesEach()
+    {
+        // Intent: when multiple orphaned events exist in the window, every one must be re-enqueued.
+        // This covers the crash-window scenario where a batch of events was committed but the
+        // worker crashed before the Hangfire enqueue loop completed.
+        using TestDatabaseFactory dbFactory = new();
+        (AlertEvaluationJob job, DatabaseContext db, _, IAlertDeliveryService delivery, _, _, _) = CreateJobWithDb(dbFactory);
+
+        Tenant tenant = TestDataBuilder.BuildTenant();
+        tenant.Id = await db.InsertWithInt32IdentityAsync(tenant);
+
+        AlertRule rule = TestDataBuilder.BuildAlertRule(tenantId: tenant.Id, metric: AlertMetric.CpuUsage);
+        rule.Id = await db.InsertWithInt32IdentityAsync(rule);
+
+        AlertEvent orphan1 = TestDataBuilder.BuildAlertEvent(alertRuleId: rule.Id, tenantId: tenant.Id, status: AlertEventStatus.Triggered);
+        orphan1.TriggeredAt = DateTimeOffset.UtcNow.AddMinutes(-10);
+        orphan1.Id = await db.InsertWithInt64IdentityAsync(orphan1);
+
+        AlertEvent orphan2 = TestDataBuilder.BuildAlertEvent(alertRuleId: rule.Id, tenantId: tenant.Id, machineId: 2, status: AlertEventStatus.Triggered);
+        orphan2.TriggeredAt = DateTimeOffset.UtcNow.AddMinutes(-8);
+        orphan2.Id = await db.InsertWithInt64IdentityAsync(orphan2);
+
+        DateTimeOffset notBefore = DateTimeOffset.UtcNow.AddMinutes(-15);
+        DateTimeOffset notAfter = DateTimeOffset.UtcNow.AddMinutes(-2);
+
+        await job.RedriveOrphanedEventsAsync(notBefore, notAfter, CancellationToken.None);
+
+        await delivery.Received(1).EnqueueAsync(orphan1.Id, rule.Id, tenant.Id, Arg.Any<CancellationToken>());
+        await delivery.Received(1).EnqueueAsync(orphan2.Id, rule.Id, tenant.Id, Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task RedriveOrphanedEventsAsync_EmptyWindow_NoDelivery()
+    {
+        // Intent: when the window contains no events at all, the delivery service is never called.
+        using TestDatabaseFactory dbFactory = new();
+        (AlertEvaluationJob job, _, _, IAlertDeliveryService delivery, _, _, _) = CreateJobWithDb(dbFactory);
+
+        DateTimeOffset notBefore = DateTimeOffset.UtcNow.AddMinutes(-15);
+        DateTimeOffset notAfter = DateTimeOffset.UtcNow.AddMinutes(-2);
+
+        await job.RedriveOrphanedEventsAsync(notBefore, notAfter, CancellationToken.None);
+
+        await delivery.DidNotReceive().EnqueueAsync(Arg.Any<long>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task RedriveWindowConstants_ValuesMatchRationale()
+    {
+        // Intent: pin the window constants so a future change that shrinks the gap is caught.
+        // MinAge must be positive (avoid racing the live-enqueue path) and MaxAge must be larger
+        // than MinAge so the window is non-empty.
+        int minAge = AlertEvaluationJob.RedriveMinAgeMinutes;
+        int maxAge = AlertEvaluationJob.RedriveMaxAgeMinutes;
+        await Assert.That(minAge).IsGreaterThan(0);
+        await Assert.That(maxAge).IsGreaterThan(minAge);
+        await Assert.That(minAge).IsEqualTo(2);
+        await Assert.That(maxAge).IsEqualTo(15);
     }
 }

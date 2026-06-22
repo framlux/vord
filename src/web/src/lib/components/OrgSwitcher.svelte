@@ -51,6 +51,9 @@
         switching = true;
         try {
             await client.switchTenant(tenantId);
+            // Invalidate the server-side session cache so the reloaded page
+            // resolves roles and active tenant fresh under the new tenant.
+            await fetch('/api/session/purge', { method: 'POST', credentials: 'include' });
             window.location.reload();
         } catch {
             switching = false;

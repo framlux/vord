@@ -55,28 +55,21 @@ public partial class DatabaseRepository : IMachineRepository
         ArgumentException.ThrowIfNullOrWhiteSpace(serialNumber);
         ArgumentException.ThrowIfNullOrWhiteSpace(systemId);
 
-        bool exists;
+        // Data is normalized to lowercase at write time, so callers must
+        // pass pre-lowered values for SerialNumber and SystemId.
+        // A DB fault must propagate rather than be swallowed into a false negative:
+        // returning "machine does not exist" on a transient error would let a duplicate
+        // or over-limit registration proceed. Let the exception abort the registration.
+        _logger.LogDebug("Searching for active Machine with Serial Number {SerialNumber}, System ID {SystemId}, or Asset Tag {AssetTag} in tenant {TenantId}", serialNumber, systemId, assetTag, tenantId);
+        IQueryable<Machine> query = _db.Machines.Where(m =>
+            (m.TenantId == tenantId) &&
+            (m.IsDeleted == false) &&
+            ((m.SerialNumber == serialNumber) ||
+            (m.SystemId == systemId) ||
+            (string.IsNullOrEmpty(assetTag) == false && (m.AssetTagNumber == assetTag))));
 
-        try
-        {
-            // Data is normalized to lowercase at write time, so callers must
-            // pass pre-lowered values for SerialNumber and SystemId.
-            _logger.LogDebug("Searching for active Machine with Serial Number {SerialNumber}, System ID {SystemId}, or Asset Tag {AssetTag} in tenant {TenantId}", serialNumber, systemId, assetTag, tenantId);
-            IQueryable<Machine> query = _db.Machines.Where(m =>
-                (m.TenantId == tenantId) &&
-                (m.IsDeleted == false) &&
-                ((m.SerialNumber == serialNumber) ||
-                (m.SystemId == systemId) ||
-                (string.IsNullOrEmpty(assetTag) == false && (m.AssetTagNumber == assetTag))));
-
-            exists = await query.AnyAsync(cancellationToken);
-            _logger.LogInformation("Active Machine query for Serial Number {SerialNumber}, System ID {SystemId}, or Asset Tag {AssetTag}: {FoundResult}", serialNumber, systemId, assetTag, exists);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Failed to search for Machine by Serial Number {SerialNumber}, System ID {SystemId}, or Asset Tag {AssetTag}", serialNumber, systemId, assetTag);
-            exists = false;
-        }
+        bool exists = await query.AnyAsync(cancellationToken);
+        _logger.LogInformation("Active Machine query for Serial Number {SerialNumber}, System ID {SystemId}, or Asset Tag {AssetTag}: {FoundResult}", serialNumber, systemId, assetTag, exists);
 
         return exists;
     }
@@ -160,23 +153,15 @@ public partial class DatabaseRepository : IMachineRepository
     /// <inheritdoc/>
     public async Task<Machine?> GetMachineAsync(long machineId, int tenantId, CancellationToken cancellationToken)
     {
-        Machine? machine;
-
-        try
-        {
-            _logger.LogInformation("Checking for Machine with ID {MachineId} in tenant {TenantId}", machineId, tenantId);
-            machine = await _db.Machines
-                                      .Where(m => (m.Id == machineId) &&
-                                                  (m.TenantId == tenantId) &&
-                                                  (m.IsDeleted == false))
-                                      .SingleOrDefaultAsync(cancellationToken);
-            _logger.LogInformation("Found Machine with ID {MachineId}: {Found}", machineId, machine is not null);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Failed to query for Machine with ID {MachineId}", machineId);
-            machine = null;
-        }
+        // A DB fault must propagate rather than be swallowed into a null (treated as
+        // "not found") result by callers. Let the exception surface.
+        _logger.LogInformation("Checking for Machine with ID {MachineId} in tenant {TenantId}", machineId, tenantId);
+        Machine? machine = await _db.Machines
+                                  .Where(m => (m.Id == machineId) &&
+                                              (m.TenantId == tenantId) &&
+                                              (m.IsDeleted == false))
+                                  .SingleOrDefaultAsync(cancellationToken);
+        _logger.LogInformation("Found Machine with ID {MachineId}: {Found}", machineId, machine is not null);
 
         return machine;
     }
@@ -187,21 +172,14 @@ public partial class DatabaseRepository : IMachineRepository
         ArgumentException.ThrowIfNullOrWhiteSpace(apiKey);
 
         string apiKeyHash = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(apiKey)));
-        Machine? machine;
 
-        try
-        {
-            _logger.LogInformation("Searching for Machine with API Key hash");
-            machine = await _db.Machines.Where(m => (m.ApiKeyHash == apiKeyHash) &&
-                                                          (m.IsDeleted == false))
-                                              .SingleOrDefaultAsync(cancellationToken);
-            _logger.LogInformation("Found Machine with API Key hash: {Found}", machine is not null);
-        }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Failed to query for Machine with API Key hash");
-            machine = null;
-        }
+        // A DB fault must propagate rather than be swallowed into a null result: returning
+        // "no machine" on a transient error would reject telemetry from a valid machine.
+        _logger.LogInformation("Searching for Machine with API Key hash");
+        Machine? machine = await _db.Machines.Where(m => (m.ApiKeyHash == apiKeyHash) &&
+                                                      (m.IsDeleted == false))
+                                          .SingleOrDefaultAsync(cancellationToken);
+        _logger.LogInformation("Found Machine with API Key hash: {Found}", machine is not null);
 
         return machine;
     }
@@ -409,13 +387,13 @@ public partial class DatabaseRepository : IMachineRepository
             return new Dictionary<int, int>();
         }
 
-        List<Machine> machines = await _db.Machines
+        List<TenantMachineCount> grouped = await _db.Machines
             .Where(m => tenantIds.Contains(m.TenantId) && (m.IsDeleted == false))
+            .GroupBy(m => m.TenantId)
+            .Select(g => new TenantMachineCount { TenantId = g.Key, Count = g.Count() })
             .ToListAsync(cancellationToken);
 
-        Dictionary<int, int> counts = machines
-            .GroupBy(m => m.TenantId)
-            .ToDictionary(g => g.Key, g => g.Count());
+        Dictionary<int, int> counts = grouped.ToDictionary(x => x.TenantId, x => x.Count);
 
         return counts;
     }

@@ -37,4 +37,8 @@ public enum AuditResourceType : short
     AlertEvent = 13,
     /// <summary>An integration endpoint.</summary>
     Integration = 14,
+    /// <summary>A server configuration setting.</summary>
+    ServerConfiguration = 15,
+    /// <summary>A tenant OIDC configuration.</summary>
+    TenantOidcConfig = 16,
 }

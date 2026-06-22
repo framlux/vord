@@ -27,6 +27,7 @@ public class RegistrationTokenRepositoryTests
             Name = name ?? $"Test Token {Guid.NewGuid():N}",
             CreatedByUserId = createdByUserId,
             CreatedAt = DateTimeOffset.UtcNow,
+            ExpiresAt = DateTimeOffset.UtcNow.AddDays(7),
             IsRevoked = false,
         };
     }
@@ -67,6 +68,27 @@ public class RegistrationTokenRepositoryTests
         await Assert.That(result.TenantId).IsEqualTo(tenantId);
         await Assert.That(result.CreatedByUserId).IsEqualTo(userId);
         await Assert.That(result.IsRevoked).IsFalse();
+    }
+
+    [Test]
+    public async Task GetTokenByHashAsync_RoundTripsExpiresAtColumn()
+    {
+        // Regression for the ExpiresAt migration: the column must persist and round-trip.
+        using TestDatabaseFactory dbFactory = new();
+        IRegistrationTokenRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+
+        (int userId, int tenantId) = await SeedUserAndTenantAsync(dbFactory);
+
+        string knownHash = Guid.NewGuid().ToString("N") + Guid.NewGuid().ToString("N");
+        DateTimeOffset expiresAt = new(2026, 06, 22, 9, 30, 0, TimeSpan.Zero);
+        RegistrationToken token = BuildRegistrationToken(tenantId, userId, tokenHash: knownHash);
+        token.ExpiresAt = expiresAt;
+        await dbFactory.Context.InsertWithInt64IdentityAsync(token);
+
+        RegistrationToken? result = await repo.GetTokenByHashAsync(knownHash);
+
+        await Assert.That(result).IsNotNull();
+        await Assert.That(result!.ExpiresAt).IsEqualTo(expiresAt);
     }
 
     [Test]

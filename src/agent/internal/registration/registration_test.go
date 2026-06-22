@@ -1160,6 +1160,170 @@ func TestFetchConfiguration_SendsZeroCapabilitiesWhenDisabled(t *testing.T) {
 	}
 }
 
+// --- Trust-root mitigation tests (tenant ID + signing keys) ---
+
+// Intent: When the agent has no tenant ID yet, the server-supplied tenant ID is accepted.
+func TestFetchConfiguration_TenantID_SetWhenUnset(t *testing.T) {
+	store := newTestStore(t)
+	runtimeState := state.New()
+	runtimeState.SetMachineID(1)
+	// tenantID defaults to 0 (unset).
+
+	cfgClient := &mockConfigurationClient{
+		getConfigFunc: func(ctx context.Context, in *pb.GetConfigurationRequest, opts ...grpc.CallOption) (*pb.GetConfigurationResponse, error) {
+			return &pb.GetConfigurationResponse{
+				TenantId: 100,
+			}, nil
+		},
+	}
+	regClient := &mockRegistrationClient{}
+
+	mgr := newTestManager(regClient, cfgClient, store, runtimeState, "token")
+
+	if err := mgr.FetchConfiguration(context.Background()); err != nil {
+		t.Fatalf("FetchConfiguration: %v", err)
+	}
+
+	if runtimeState.TenantID() != 100 {
+		t.Errorf("expected TenantID=100 when previously unset, got %d", runtimeState.TenantID())
+	}
+}
+
+// Intent: Once the agent's tenant ID is set, a conflicting server-supplied tenant ID
+// is ignored. The tenant ID is the basis of the command-ownership check, so the
+// API-key-authenticated config channel must not be able to re-home the agent into
+// another tenant.
+func TestFetchConfiguration_TenantID_CannotBeOverwrittenOnceSet(t *testing.T) {
+	store := newTestStore(t)
+	runtimeState := state.New()
+	runtimeState.SetMachineID(1)
+	runtimeState.SetTenantID(100)
+
+	cfgClient := &mockConfigurationClient{
+		getConfigFunc: func(ctx context.Context, in *pb.GetConfigurationRequest, opts ...grpc.CallOption) (*pb.GetConfigurationResponse, error) {
+			return &pb.GetConfigurationResponse{
+				TenantId: 999, // Attempt to move the agent to a different tenant.
+			}, nil
+		},
+	}
+	regClient := &mockRegistrationClient{}
+
+	mgr := newTestManager(regClient, cfgClient, store, runtimeState, "token")
+
+	if err := mgr.FetchConfiguration(context.Background()); err != nil {
+		t.Fatalf("FetchConfiguration: %v", err)
+	}
+
+	if runtimeState.TenantID() != 100 {
+		t.Errorf("expected TenantID to remain 100 (conflicting overwrite ignored), got %d", runtimeState.TenantID())
+	}
+}
+
+// Intent: A config response that supplies an identical (already-set) tenant ID is a
+// no-op and must not be treated as a conflict.
+func TestFetchConfiguration_TenantID_SameValueIsNoOp(t *testing.T) {
+	store := newTestStore(t)
+	runtimeState := state.New()
+	runtimeState.SetMachineID(1)
+	runtimeState.SetTenantID(100)
+
+	cfgClient := &mockConfigurationClient{
+		getConfigFunc: func(ctx context.Context, in *pb.GetConfigurationRequest, opts ...grpc.CallOption) (*pb.GetConfigurationResponse, error) {
+			return &pb.GetConfigurationResponse{
+				TenantId: 100,
+			}, nil
+		},
+	}
+	regClient := &mockRegistrationClient{}
+
+	mgr := newTestManager(regClient, cfgClient, store, runtimeState, "token")
+
+	if err := mgr.FetchConfiguration(context.Background()); err != nil {
+		t.Fatalf("FetchConfiguration: %v", err)
+	}
+
+	if runtimeState.TenantID() != 100 {
+		t.Errorf("expected TenantID to remain 100, got %d", runtimeState.TenantID())
+	}
+}
+
+// Intent: A config response carrying a non-empty signing-key set replaces the trusted keys.
+func TestFetchConfiguration_SigningKeys_NonEmptyReplacesKeys(t *testing.T) {
+	store := newTestStore(t)
+	runtimeState := state.New()
+	runtimeState.SetMachineID(1)
+
+	cfgClient := &mockConfigurationClient{
+		getConfigFunc: func(ctx context.Context, in *pb.GetConfigurationRequest, opts ...grpc.CallOption) (*pb.GetConfigurationResponse, error) {
+			return &pb.GetConfigurationResponse{
+				SigningKeys: []*pb.TrustedSigningKey{
+					{KeyId: 5, UserId: 50, PublicKey: []byte("pub-five")},
+				},
+			}, nil
+		},
+	}
+	regClient := &mockRegistrationClient{}
+
+	mgr := newTestManager(regClient, cfgClient, store, runtimeState, "token")
+
+	if err := mgr.FetchConfiguration(context.Background()); err != nil {
+		t.Fatalf("FetchConfiguration: %v", err)
+	}
+
+	count, err := store.CountSigningKeys()
+	if err != nil {
+		t.Fatalf("CountSigningKeys: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("expected 1 signing key after sync, got %d", count)
+	}
+	if _, err := store.GetSigningKey(5); err != nil {
+		t.Errorf("expected key 5 to be present, got error: %v", err)
+	}
+}
+
+// Intent: A config response with an empty signing-key set must not wipe an existing
+// non-empty trusted-key set. Wiping the keys would be a denial-of-trust or a precursor
+// to swapping the trust root, so an empty incoming set is treated as suspicious and ignored.
+func TestFetchConfiguration_SigningKeys_EmptyDoesNotEraseExisting(t *testing.T) {
+	store := newTestStore(t)
+	runtimeState := state.New()
+	runtimeState.SetMachineID(1)
+
+	// Pre-populate the store with a trusted key.
+	if err := store.UpsertSigningKeys([]db.TrustedKey{
+		{KeyID: 7, UserID: 70, PublicKey: []byte("pub-seven")},
+	}); err != nil {
+		t.Fatalf("UpsertSigningKeys: %v", err)
+	}
+
+	cfgClient := &mockConfigurationClient{
+		getConfigFunc: func(ctx context.Context, in *pb.GetConfigurationRequest, opts ...grpc.CallOption) (*pb.GetConfigurationResponse, error) {
+			return &pb.GetConfigurationResponse{
+				SigningKeys: nil, // Empty incoming key set.
+			}, nil
+		},
+	}
+	regClient := &mockRegistrationClient{}
+
+	mgr := newTestManager(regClient, cfgClient, store, runtimeState, "token")
+
+	if err := mgr.FetchConfiguration(context.Background()); err != nil {
+		t.Fatalf("FetchConfiguration: %v", err)
+	}
+
+	count, err := store.CountSigningKeys()
+	if err != nil {
+		t.Fatalf("CountSigningKeys: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("expected existing key to be preserved (count=1), got %d", count)
+	}
+	if _, err := store.GetSigningKey(7); err != nil {
+		t.Errorf("expected pre-existing key 7 to survive empty incoming set, got error: %v", err)
+	}
+}
+
 // --- ServiceStatusSeconds bounds-checking tests ---
 
 // Intent: A valid ServiceStatusSeconds value (3600, mid-range) is applied to RuntimeState.

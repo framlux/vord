@@ -8,10 +8,12 @@ using Framlux.FleetManagement.Services.Core.Models.Machines;
 using Framlux.FleetManagement.Server.Endpoints.Web;
 using Framlux.FleetManagement.Services.Core.Handlers;
 using Framlux.FleetManagement.Services.Core.Infrastructure;
+using Framlux.FleetManagement.Services.Core.Options;
 using Framlux.FleetManagement.Test.Infrastructure;
 using LinqToDB.Async;
 using LinqToDB;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 
 namespace Framlux.FleetManagement.Test.Services.Handlers;
 
@@ -20,11 +22,15 @@ namespace Framlux.FleetManagement.Test.Services.Handlers;
 /// </summary>
 public class RegistrationTokenHandlerTests
 {
-    private static RegistrationTokenHandler CreateHandler(TestDatabaseFactory dbFactory)
+    private static RegistrationTokenHandler CreateHandler(
+        TestDatabaseFactory dbFactory,
+        int lifetimeDays = 7,
+        TimeProvider? timeProvider = null)
     {
         DatabaseRepository repo = new(dbFactory.Context, new NullLogger<DatabaseRepository>());
+        IOptions<AppOptions> options = Options.Create(new AppOptions { RegistrationTokenLifetimeDays = lifetimeDays });
 
-        return new RegistrationTokenHandler(repo, repo, repo);
+        return new RegistrationTokenHandler(repo, repo, repo, options, timeProvider ?? TimeProvider.System);
     }
 
     // ========== CreateAsync null name tests ==========
@@ -108,6 +114,40 @@ public class RegistrationTokenHandlerTests
         await Assert.That(auditEntries[0].TenantId).IsEqualTo(1);
     }
 
+    // ========== CreateAsync expiry tests ==========
+
+    [Test]
+    public async Task CreateAsync_SetsExpiresAtToCreationPlusConfiguredLifetime()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        DateTimeOffset fixedNow = new(2026, 06, 15, 12, 0, 0, TimeSpan.Zero);
+        FixedTimeProvider clock = new(fixedNow);
+        RegistrationTokenHandler handler = CreateHandler(dbFactory, lifetimeDays: 7, timeProvider: clock);
+
+        ServiceResult<RegistrationTokenDto> result = await handler.CreateAsync(1, 1, "Expiry Token", CancellationToken.None);
+
+        await Assert.That(result.IsSuccess).IsTrue();
+        await Assert.That(result.Data!.ExpiresAt).IsEqualTo(fixedNow.AddDays(7));
+
+        RegistrationToken? dbToken = await dbFactory.Context.RegistrationTokens.FirstOrDefaultAsync();
+        await Assert.That(dbToken).IsNotNull();
+        await Assert.That(dbToken!.ExpiresAt).IsEqualTo(fixedNow.AddDays(7));
+    }
+
+    [Test]
+    public async Task CreateAsync_HonorsConfiguredLifetimeDays()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        DateTimeOffset fixedNow = new(2026, 06, 15, 12, 0, 0, TimeSpan.Zero);
+        FixedTimeProvider clock = new(fixedNow);
+        RegistrationTokenHandler handler = CreateHandler(dbFactory, lifetimeDays: 30, timeProvider: clock);
+
+        ServiceResult<RegistrationTokenDto> result = await handler.CreateAsync(1, 1, "Long Token", CancellationToken.None);
+
+        await Assert.That(result.Data!.ExpiresAt).IsEqualTo(fixedNow.AddDays(30));
+    }
+
+
     // ========== RevokeAsync tests ==========
 
     [Test]
@@ -132,6 +172,7 @@ public class RegistrationTokenHandlerTests
             Name = "Wrong Tenant Token",
             CreatedByUserId = 1,
             CreatedAt = DateTimeOffset.UtcNow,
+            ExpiresAt = DateTimeOffset.UtcNow.AddDays(7),
             IsRevoked = false,
         };
         token.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(token);
@@ -154,6 +195,7 @@ public class RegistrationTokenHandlerTests
             Name = "Revoked Token",
             CreatedByUserId = 1,
             CreatedAt = DateTimeOffset.UtcNow,
+            ExpiresAt = DateTimeOffset.UtcNow.AddDays(7),
             IsRevoked = true,
             RevokedAt = DateTimeOffset.UtcNow,
         };
@@ -177,6 +219,7 @@ public class RegistrationTokenHandlerTests
             Name = "Valid Token",
             CreatedByUserId = 1,
             CreatedAt = DateTimeOffset.UtcNow,
+            ExpiresAt = DateTimeOffset.UtcNow.AddDays(7),
             IsRevoked = false,
         };
         token.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(token);
@@ -203,6 +246,7 @@ public class RegistrationTokenHandlerTests
             Name = "Audit Revoke Token",
             CreatedByUserId = 1,
             CreatedAt = DateTimeOffset.UtcNow,
+            ExpiresAt = DateTimeOffset.UtcNow.AddDays(7),
             IsRevoked = false,
         };
         token.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(token);
@@ -243,6 +287,7 @@ public class RegistrationTokenHandlerTests
                 Name = $"Token {i}",
                 CreatedByUserId = 1,
                 CreatedAt = DateTimeOffset.UtcNow.AddMinutes(-i),
+                ExpiresAt = DateTimeOffset.UtcNow.AddDays(7),
                 IsRevoked = false,
             };
             await dbFactory.Context.InsertWithInt64IdentityAsync(token);
@@ -272,6 +317,7 @@ public class RegistrationTokenHandlerTests
                 Name = $"Token Beyond {i}",
                 CreatedByUserId = 1,
                 CreatedAt = DateTimeOffset.UtcNow.AddMinutes(-i),
+                ExpiresAt = DateTimeOffset.UtcNow.AddDays(7),
                 IsRevoked = false,
             };
             await dbFactory.Context.InsertWithInt64IdentityAsync(token);
@@ -299,6 +345,7 @@ public class RegistrationTokenHandlerTests
                 Name = $"Token Exact {i}",
                 CreatedByUserId = 1,
                 CreatedAt = DateTimeOffset.UtcNow.AddMinutes(-i),
+                ExpiresAt = DateTimeOffset.UtcNow.AddDays(7),
                 IsRevoked = false,
             };
             await dbFactory.Context.InsertWithInt64IdentityAsync(token);

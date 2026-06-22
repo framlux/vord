@@ -825,6 +825,80 @@ func TestProcess_SignedWithWrongKey(t *testing.T) {
 	}
 }
 
+// Intent: A command whose UserID does not match the UserID bound to the signing key
+// is rejected even when the Ed25519 signature is valid. This prevents a signing key
+// issued to one user from being used to authorize commands attributed to another user.
+func TestProcess_SignedUserIDMismatch(t *testing.T) {
+	pub, priv := testKeyPair(t)
+	int32KeyID := int32(1)
+	int32TenantID := int32(100)
+	int64MachineID := int64(200)
+
+	// The stored key is bound to user 7, but the command (validPendingCommand) carries UserID 42.
+	store := &mockNonceStore{
+		getKeyFn: func(keyID int32) (*SigningKey, error) {
+			return &SigningKey{KeyID: int32KeyID, UserID: 7, PublicKey: pub}, nil
+		},
+	}
+	ack := &mockAcknowledger{}
+	handler := newTestHandlerAllTypes(Result{Success: true, Message: "ok"})
+	processor := NewProcessor(handler, store, ack, 10*time.Second)
+
+	// validPendingCommand signs the payload correctly with UserID 42, so the signature is valid.
+	cmd := validPendingCommand(t, CommandCheckUpdate, int32TenantID, int64MachineID, priv, pub, int32KeyID)
+	if cmd.UserID == 7 {
+		t.Fatal("test setup invalid: command UserID must differ from key UserID")
+	}
+
+	processor.Process(context.Background(), cmd, int32TenantID, int64MachineID)
+
+	if len(ack.calls) != 1 {
+		t.Fatalf("expected 1 ack call, got %d", len(ack.calls))
+	}
+	if ack.calls[0].ResultType != ResultTypeRejected {
+		t.Errorf("expected ResultTypeRejected (%d), got %d", ResultTypeRejected, ack.calls[0].ResultType)
+	}
+	if strings.Contains(ack.calls[0].Message, "user/key mismatch") == false {
+		t.Errorf("expected 'user/key mismatch' in message, got %q", ack.calls[0].Message)
+	}
+	if ack.calls[0].Success {
+		t.Error("expected Success=false for user/key mismatch")
+	}
+
+	// The command must not execute: no nonce should be recorded.
+	if len(store.recordedNonces) != 0 {
+		t.Errorf("expected no nonce recorded on user/key mismatch, got %d", len(store.recordedNonces))
+	}
+}
+
+// Intent: A command whose UserID matches the UserID bound to the signing key is accepted.
+func TestProcess_SignedUserIDMatch_Accepted(t *testing.T) {
+	pub, priv := testKeyPair(t)
+	int32KeyID := int32(1)
+	int32TenantID := int32(100)
+	int64MachineID := int64(200)
+
+	// The stored key is bound to user 42, matching validPendingCommand's UserID.
+	store := &mockNonceStore{
+		getKeyFn: func(keyID int32) (*SigningKey, error) {
+			return &SigningKey{KeyID: int32KeyID, UserID: 42, PublicKey: pub}, nil
+		},
+	}
+	ack := &mockAcknowledger{}
+	handler := newTestHandlerAllTypes(Result{Success: true, Message: "ok"})
+	processor := NewProcessor(handler, store, ack, 10*time.Second)
+
+	cmd := validPendingCommand(t, CommandCheckUpdate, int32TenantID, int64MachineID, priv, pub, int32KeyID)
+	processor.Process(context.Background(), cmd, int32TenantID, int64MachineID)
+
+	if len(ack.calls) != 1 {
+		t.Fatalf("expected 1 ack call, got %d", len(ack.calls))
+	}
+	if ack.calls[0].ResultType != ResultTypeCompleted {
+		t.Errorf("expected ResultTypeCompleted (%d), got %d", ResultTypeCompleted, ack.calls[0].ResultType)
+	}
+}
+
 // Intent: Empty command type string is rejected as unknown.
 func TestProcess_EmptyCommandType(t *testing.T) {
 	store := &mockNonceStore{}

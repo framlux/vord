@@ -8,9 +8,11 @@ import '@testing-library/jest-dom/vitest';
 import OrgSwitcher from './OrgSwitcher.svelte';
 import type { UserDto, SubscriptionDto } from '$lib/api/types';
 
+const switchTenantMock = vi.fn().mockResolvedValue(undefined);
+
 vi.mock('$lib/api/client', () => ({
     ApiClient: class {
-        switchTenant = vi.fn().mockResolvedValue(undefined);
+        switchTenant = switchTenantMock;
     }
 }));
 
@@ -211,7 +213,7 @@ describe('OrgSwitcher', () => {
     });
 
     describe('tenant switching', () => {
-        it('should call switchTenant API when selecting a different tenant', async () => {
+        it('should switch tenant, purge the session cache, then reload', async () => {
             const user = makeUser({
                 tenants: [
                     { tenantId: 1, tenantName: 'Acme Corp', role: '1' },
@@ -227,10 +229,22 @@ describe('OrgSwitcher', () => {
                 configurable: true
             });
 
+            const fetchSpy = vi.fn().mockResolvedValue(new Response(null, { status: 204 }));
+            vi.stubGlobal('fetch', fetchSpy);
+
             render(OrgSwitcher, { props: { user } });
 
             await fireEvent.click(screen.getByLabelText('Switch organization'));
             await fireEvent.click(screen.getByText('Other Org'));
+
+            expect(switchTenantMock).toHaveBeenCalledWith(2);
+            expect(fetchSpy).toHaveBeenCalledWith(
+                '/api/session/purge',
+                expect.objectContaining({ method: 'POST', credentials: 'include' })
+            );
+            expect(reloadSpy).toHaveBeenCalled();
+
+            vi.unstubAllGlobals();
         });
 
         it('should not disable buttons before switching starts', () => {

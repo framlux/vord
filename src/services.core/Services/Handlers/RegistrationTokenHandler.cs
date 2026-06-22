@@ -10,6 +10,8 @@ using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Services.Core.Infrastructure;
 using Framlux.FleetManagement.Services.Core.Models;
 using Framlux.FleetManagement.Services.Core.Models.Machines;
+using Framlux.FleetManagement.Services.Core.Options;
+using Microsoft.Extensions.Options;
 
 namespace Framlux.FleetManagement.Services.Core.Handlers;
 
@@ -21,6 +23,8 @@ public sealed class RegistrationTokenHandler : IRegistrationTokenHandler
     private readonly IRegistrationTokenRepository _tokenRepo;
     private readonly IDatabaseTransactionProvider _transactionProvider;
     private readonly IAuditLogRepository _auditLog;
+    private readonly TimeProvider _timeProvider;
+    private readonly int _tokenLifetimeDays;
 
     /// <summary>
     /// Creates a new instance of the <see cref="RegistrationTokenHandler"/> class.
@@ -28,15 +32,25 @@ public sealed class RegistrationTokenHandler : IRegistrationTokenHandler
     public RegistrationTokenHandler(
         IRegistrationTokenRepository tokenRepo,
         IDatabaseTransactionProvider transactionProvider,
-        IAuditLogRepository auditLog)
+        IAuditLogRepository auditLog,
+        IOptions<AppOptions> appOptions,
+        TimeProvider timeProvider)
     {
         ArgumentNullException.ThrowIfNull(tokenRepo);
         ArgumentNullException.ThrowIfNull(transactionProvider);
         ArgumentNullException.ThrowIfNull(auditLog);
+        ArgumentNullException.ThrowIfNull(appOptions);
+        ArgumentNullException.ThrowIfNull(timeProvider);
 
         _tokenRepo = tokenRepo;
         _transactionProvider = transactionProvider;
         _auditLog = auditLog;
+        _timeProvider = timeProvider;
+
+        // A non-positive configured lifetime would create tokens that are already expired;
+        // fall back to the 7-day default in that case.
+        int configuredDays = appOptions.Value.RegistrationTokenLifetimeDays;
+        _tokenLifetimeDays = configuredDays > 0 ? configuredDays : 7;
     }
 
     /// <inheritdoc/>
@@ -50,13 +64,15 @@ public sealed class RegistrationTokenHandler : IRegistrationTokenHandler
         string plaintextToken = GenerateToken();
         string tokenHash = ComputeSha256Hash(plaintextToken);
 
+        DateTimeOffset now = _timeProvider.GetUtcNow();
         RegistrationToken token = new()
         {
             TenantId = tenantId,
             TokenHash = tokenHash,
             Name = name.Trim(),
             CreatedByUserId = userId,
-            CreatedAt = DateTimeOffset.UtcNow,
+            CreatedAt = now,
+            ExpiresAt = now.AddDays(_tokenLifetimeDays),
             IsRevoked = false,
         };
 
@@ -77,6 +93,7 @@ public sealed class RegistrationTokenHandler : IRegistrationTokenHandler
             Name = token.Name,
             Token = plaintextToken,
             CreatedAt = token.CreatedAt,
+            ExpiresAt = token.ExpiresAt,
             IsRevoked = token.IsRevoked,
         };
 
@@ -128,6 +145,7 @@ public sealed class RegistrationTokenHandler : IRegistrationTokenHandler
             Id = t.Id,
             Name = t.Name,
             CreatedAt = t.CreatedAt,
+            ExpiresAt = t.ExpiresAt,
             IsRevoked = t.IsRevoked,
         }).ToList();
 

@@ -205,4 +205,37 @@ public partial class DatabaseRepository : IAlertEventRepository
 
         return alertEvent;
     }
+
+    /// <summary>Maximum rows returned per re-drive call; bounds work done per evaluation tick.</summary>
+    private const int RedrivePageSize = 500;
+
+    /// <inheritdoc/>
+    public async Task<List<AlertEvent>> GetTriggeredEventsWithoutDeliveryAttemptsAsync(
+        DateTimeOffset triggeredNotAfter,
+        DateTimeOffset triggeredNotBefore,
+        CancellationToken cancellationToken)
+    {
+        // Anti-join: return Triggered events in the window that have no IntegrationDeliveryAttempt row.
+        // NOT EXISTS is used so the query returns events for tenants that have zero integrations only
+        // within the bounded time window — the triggeredNotBefore cutoff prevents perpetual re-driving
+        // of events from tenants that have never configured an integration.
+        IQueryable<AlertEvent> query = from e in _db.AlertEvents
+                                       where e.Status == AlertEventStatus.Triggered
+                                             && e.TriggeredAt <= triggeredNotAfter
+                                             && e.TriggeredAt >= triggeredNotBefore
+                                             && !_db.IntegrationDeliveryAttempts.Any(a => a.AlertEventId == e.Id)
+                                       orderby e.TriggeredAt
+                                       select e;
+
+        List<AlertEvent> events = await query.Take(RedrivePageSize).ToListAsync(cancellationToken);
+
+        if (events.Count == RedrivePageSize)
+        {
+            _logger.LogWarning(
+                "GetTriggeredEventsWithoutDeliveryAttemptsAsync returned the page cap of {Cap} rows; orphaned events may exist beyond the page boundary",
+                RedrivePageSize);
+        }
+
+        return events;
+    }
 }

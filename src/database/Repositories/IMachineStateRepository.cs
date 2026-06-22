@@ -93,109 +93,22 @@ public interface IMachineStateRepository
     Task UpdateSummaryNameAsync(long machineId, string name, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Updates the summary fields from SystemInfo telemetry.
+    /// Applies a combined machine state summary patch as a single UPDATE. Sets only the columns
+    /// owned by the telemetry types present in the patch and advances LastSeenAt with a monotonic
+    /// guard so an already-stored value is never moved backward.
     /// </summary>
-    Task UpdateSystemInfoSummaryAsync(long machineId, string? hostname, string? hardwareModel, string? ipAddresses, DateTimeOffset lastSeenAt, CancellationToken cancellationToken = default);
+    /// <param name="patch">The combined summary patch produced from a collapsed telemetry batch.</param>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    Task ApplySummaryPatchAsync(MachineSummaryPatch patch, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Updates the detail fields from SystemInfo telemetry.
+    /// Applies a combined machine state detail patch as a single UPDATE. Sets only the columns
+    /// owned by the telemetry types present in the patch. Issues no update when the patch carries
+    /// no detail-bearing types.
     /// </summary>
-    Task UpdateSystemInfoDetailAsync(long machineId, string? hardwareVendor, string? hardwareSerial, string? cpuBrand, int? cpuCores, long? memoryTotalBytes, long? uptimeSeconds, string? biosVersion, CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// Updates the summary fields from OsVersion telemetry.
-    /// </summary>
-    Task UpdateOsVersionSummaryAsync(long machineId, string? osName, string? osVersion, DateTimeOffset lastSeenAt, CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// Updates the detail fields from OsVersion telemetry.
-    /// </summary>
-    Task UpdateOsVersionDetailAsync(long machineId, string? kernel, CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// Updates the summary LastSeenAt from CpuInfo telemetry.
-    /// </summary>
-    Task UpdateCpuInfoSummaryAsync(long machineId, DateTimeOffset lastSeenAt, CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// Updates the detail fields from CpuInfo telemetry.
-    /// </summary>
-    Task UpdateCpuInfoDetailAsync(long machineId, string? cpuType, int? physicalCpus, int? logicalCpus, CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// Updates the summary LastSeenAt from MemoryInfo telemetry.
-    /// </summary>
-    Task UpdateMemoryInfoSummaryAsync(long machineId, DateTimeOffset lastSeenAt, CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// Updates the detail fields from MemoryInfo telemetry.
-    /// </summary>
-    Task UpdateMemoryInfoDetailAsync(long machineId, long? swapTotalBytes, long? swapFreeBytes, CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// Updates the summary LastSeenAt from DiskInfo telemetry.
-    /// </summary>
-    Task UpdateDiskInfoSummaryAsync(long machineId, DateTimeOffset lastSeenAt, CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// Updates the detail DiskInfos payload from DiskInfo telemetry.
-    /// </summary>
-    Task UpdateDiskInfoDetailAsync(long machineId, string payload, CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// Updates the summary fields from CpuUsage telemetry.
-    /// </summary>
-    Task UpdateCpuUsageSummaryAsync(long machineId, int? cpuUsagePercent, DateTimeOffset lastSeenAt, CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// Updates the summary fields from MemoryUsage telemetry.
-    /// </summary>
-    Task UpdateMemoryUsageSummaryAsync(long machineId, int? memoryUsagePercent, DateTimeOffset lastSeenAt, CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// Updates the detail MemoryUsedBytes from MemoryUsage telemetry.
-    /// </summary>
-    Task UpdateMemoryUsageDetailAsync(long machineId, long? memoryUsedBytes, CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// Updates the summary fields from DiskUsage telemetry.
-    /// </summary>
-    Task UpdateDiskUsageSummaryAsync(long machineId, int maxDiskUsagePercent, DateTimeOffset lastSeenAt, CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// Updates the detail DiskUsages payload from DiskUsage telemetry.
-    /// </summary>
-    Task UpdateDiskUsageDetailAsync(long machineId, string payload, CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// Updates the summary LastSeenAt from SshSessions telemetry.
-    /// </summary>
-    Task UpdateSshSessionsSummaryAsync(long machineId, DateTimeOffset lastSeenAt, CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// Updates the detail SshSessions payload from SshSessions telemetry.
-    /// </summary>
-    Task UpdateSshSessionsDetailAsync(long machineId, string payload, CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// Updates the summary fields from HardwareHealth telemetry.
-    /// </summary>
-    Task UpdateHardwareHealthSummaryAsync(long machineId, bool hasDiskHealthIssue, bool hasHardwareIssue, DateTimeOffset lastSeenAt, CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// Updates the detail HardwareHealth payload from HardwareHealth telemetry.
-    /// </summary>
-    Task UpdateHardwareHealthDetailAsync(long machineId, string payload, CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// Updates the summary fields from PackageUpdates telemetry.
-    /// </summary>
-    Task UpdatePackageUpdatesSummaryAsync(long machineId, int? pendingUpdates, int? securityUpdates, DateTimeOffset lastSeenAt, CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// Updates the summary fields from ServiceStatus telemetry.
-    /// </summary>
-    Task UpdateServiceStatusSummaryAsync(long machineId, int? totalServices, int? failedServices, DateTimeOffset lastSeenAt, CancellationToken cancellationToken = default);
+    /// <param name="patch">The combined detail patch produced from a collapsed telemetry batch.</param>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    Task ApplyDetailPatchAsync(MachineDetailPatch patch, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Fetches a batch of telemetry rows with ID greater than the high-water mark
@@ -211,6 +124,33 @@ public interface IMachineStateRepository
     /// <param name="telemetryType">The telemetry type identifier.</param>
     /// <param name="cancellationToken">A cancellation token.</param>
     Task<List<MachineTelemetry>> GetTelemetryByMachineIdsAndTypeAsync(List<long> machineIds, short telemetryType, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Returns a single page of telemetry rows for the specified machine IDs and telemetry type,
+    /// bounded to rows received at or after <paramref name="receivedSince"/>, ordered by ReceivedAt
+    /// descending. Pagination (Skip/Take) is performed in SQL so the full history is never loaded
+    /// into memory.
+    /// </summary>
+    /// <param name="machineIds">The machine IDs to filter by.</param>
+    /// <param name="telemetryType">The telemetry type identifier.</param>
+    /// <param name="receivedSince">The inclusive lower bound on the row received timestamp.</param>
+    /// <param name="skip">The number of rows to skip.</param>
+    /// <param name="take">The maximum number of rows to return.</param>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    Task<List<MachineTelemetry>> GetTelemetryPageByMachineIdsAndTypeAsync(
+        List<long> machineIds, short telemetryType, DateTimeOffset receivedSince, int skip, int take, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Returns the total count of telemetry rows for the specified machine IDs and telemetry type
+    /// that were received at or after <paramref name="receivedSince"/>. Used to compute total page
+    /// count without materializing rows.
+    /// </summary>
+    /// <param name="machineIds">The machine IDs to filter by.</param>
+    /// <param name="telemetryType">The telemetry type identifier.</param>
+    /// <param name="receivedSince">The inclusive lower bound on the row received timestamp.</param>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    Task<int> CountTelemetryByMachineIdsAndTypeAsync(
+        List<long> machineIds, short telemetryType, DateTimeOffset receivedSince, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Returns a cursor-based batch of telemetry rows for the specified machines, ordered by ID ascending.

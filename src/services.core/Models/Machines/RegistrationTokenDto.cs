@@ -21,6 +21,9 @@ public sealed class RegistrationTokenDto
     /// <summary>When the token was created.</summary>
     public DateTimeOffset CreatedAt { get; set; }
 
+    /// <summary>When the token expires.</summary>
+    public DateTimeOffset ExpiresAt { get; set; }
+
     /// <summary>Whether the token is revoked.</summary>
     public bool IsRevoked { get; set; }
 }

@@ -46,6 +46,7 @@ public class RegistrationTokenRepositoryTests
             Name = "Test Token",
             CreatedByUserId = 1,
             CreatedAt = DateTimeOffset.UtcNow,
+            ExpiresAt = DateTimeOffset.UtcNow.AddDays(7),
             IsRevoked = false,
         };
 
@@ -67,6 +68,7 @@ public class RegistrationTokenRepositoryTests
             Name = "Persist Token",
             CreatedByUserId = 1,
             CreatedAt = DateTimeOffset.UtcNow,
+            ExpiresAt = DateTimeOffset.UtcNow.AddDays(7),
             IsRevoked = false,
         };
 
@@ -103,6 +105,7 @@ public class RegistrationTokenRepositoryTests
             Name = "Wrong Tenant",
             CreatedByUserId = 1,
             CreatedAt = DateTimeOffset.UtcNow,
+            ExpiresAt = DateTimeOffset.UtcNow.AddDays(7),
             IsRevoked = false,
         };
         token.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(token);
@@ -125,6 +128,7 @@ public class RegistrationTokenRepositoryTests
             Name = "Already Revoked",
             CreatedByUserId = 1,
             CreatedAt = DateTimeOffset.UtcNow,
+            ExpiresAt = DateTimeOffset.UtcNow.AddDays(7),
             IsRevoked = true,
             RevokedAt = DateTimeOffset.UtcNow,
         };
@@ -148,6 +152,7 @@ public class RegistrationTokenRepositoryTests
             Name = "Valid Revoke",
             CreatedByUserId = 1,
             CreatedAt = DateTimeOffset.UtcNow,
+            ExpiresAt = DateTimeOffset.UtcNow.AddDays(7),
             IsRevoked = false,
         };
         token.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(token);
@@ -190,6 +195,7 @@ public class RegistrationTokenRepositoryTests
                 Name = $"Token {i}",
                 CreatedByUserId = 1,
                 CreatedAt = DateTimeOffset.UtcNow.AddMinutes(-i),
+                ExpiresAt = DateTimeOffset.UtcNow.AddDays(7),
                 IsRevoked = false,
             };
             await dbFactory.Context.InsertWithInt64IdentityAsync(token);
@@ -217,6 +223,7 @@ public class RegistrationTokenRepositoryTests
                 Name = $"Token {i}",
                 CreatedByUserId = 1,
                 CreatedAt = DateTimeOffset.UtcNow.AddMinutes(-i),
+                ExpiresAt = DateTimeOffset.UtcNow.AddDays(7),
                 IsRevoked = false,
             };
             await dbFactory.Context.InsertWithInt64IdentityAsync(token);
@@ -239,14 +246,14 @@ public class RegistrationTokenRepositoryTests
         RegistrationToken tenant1Token = new()
         {
             TenantId = 1, TokenHash = "t1-hash", Name = "Tenant 1 Token",
-            CreatedByUserId = 1, CreatedAt = DateTimeOffset.UtcNow, IsRevoked = false,
+            CreatedByUserId = 1, CreatedAt = DateTimeOffset.UtcNow, ExpiresAt = DateTimeOffset.UtcNow.AddDays(7), IsRevoked = false,
         };
         await dbFactory.Context.InsertWithInt64IdentityAsync(tenant1Token);
 
         RegistrationToken tenant2Token = new()
         {
             TenantId = 2, TokenHash = "t2-hash", Name = "Tenant 2 Token",
-            CreatedByUserId = 1, CreatedAt = DateTimeOffset.UtcNow, IsRevoked = false,
+            CreatedByUserId = 1, CreatedAt = DateTimeOffset.UtcNow, ExpiresAt = DateTimeOffset.UtcNow.AddDays(7), IsRevoked = false,
         };
         await dbFactory.Context.InsertWithInt64IdentityAsync(tenant2Token);
 
@@ -284,6 +291,7 @@ public class RegistrationTokenRepositoryTests
                 Name = $"Count Token {i}",
                 CreatedByUserId = 1,
                 CreatedAt = DateTimeOffset.UtcNow,
+                ExpiresAt = DateTimeOffset.UtcNow.AddDays(7),
                 IsRevoked = false,
             };
             await dbFactory.Context.InsertWithInt64IdentityAsync(token);
@@ -306,7 +314,7 @@ public class RegistrationTokenRepositoryTests
             RegistrationToken token = new()
             {
                 TenantId = 1, TokenHash = $"count-t1-{i}", Name = $"T1 Count {i}",
-                CreatedByUserId = 1, CreatedAt = DateTimeOffset.UtcNow, IsRevoked = false,
+                CreatedByUserId = 1, CreatedAt = DateTimeOffset.UtcNow, ExpiresAt = DateTimeOffset.UtcNow.AddDays(7), IsRevoked = false,
             };
             await dbFactory.Context.InsertWithInt64IdentityAsync(token);
         }
@@ -314,7 +322,7 @@ public class RegistrationTokenRepositoryTests
         RegistrationToken otherToken = new()
         {
             TenantId = 2, TokenHash = "count-t2", Name = "T2 Count",
-            CreatedByUserId = 1, CreatedAt = DateTimeOffset.UtcNow, IsRevoked = false,
+            CreatedByUserId = 1, CreatedAt = DateTimeOffset.UtcNow, ExpiresAt = DateTimeOffset.UtcNow.AddDays(7), IsRevoked = false,
         };
         await dbFactory.Context.InsertWithInt64IdentityAsync(otherToken);
 
@@ -333,7 +341,7 @@ public class RegistrationTokenRepositoryTests
         RegistrationToken active = new()
         {
             TenantId = 1, TokenHash = "active-count", Name = "Active",
-            CreatedByUserId = 1, CreatedAt = DateTimeOffset.UtcNow, IsRevoked = false,
+            CreatedByUserId = 1, CreatedAt = DateTimeOffset.UtcNow, ExpiresAt = DateTimeOffset.UtcNow.AddDays(7), IsRevoked = false,
         };
         await dbFactory.Context.InsertWithInt64IdentityAsync(active);
 
@@ -341,6 +349,7 @@ public class RegistrationTokenRepositoryTests
         {
             TenantId = 1, TokenHash = "revoked-count", Name = "Revoked",
             CreatedByUserId = 1, CreatedAt = DateTimeOffset.UtcNow,
+            ExpiresAt = DateTimeOffset.UtcNow.AddDays(7),
             IsRevoked = true, RevokedAt = DateTimeOffset.UtcNow,
         };
         await dbFactory.Context.InsertWithInt64IdentityAsync(revoked);

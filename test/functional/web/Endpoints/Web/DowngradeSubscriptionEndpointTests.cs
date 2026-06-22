@@ -10,6 +10,7 @@ using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Test.Infrastructure;
 using LinqToDB;
+using LinqToDB.Async;
 
 namespace Framlux.FleetManagement.FunctionalTest.Endpoints.Web;
 
@@ -305,6 +306,7 @@ public sealed class DowngradeSubscriptionEndpointTests
             Name = "Downgrade Test Token",
             CreatedByUserId = 1,
             CreatedAt = DateTimeOffset.UtcNow,
+            ExpiresAt = DateTimeOffset.UtcNow.AddDays(7),
             IsRevoked = false
         };
         long tokenId = await db.InsertWithInt64IdentityAsync(token);
@@ -398,6 +400,35 @@ public sealed class DowngradeSubscriptionEndpointTests
             BuildDowngradeContent("free"));
 
         await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.NotFound);
+    }
+
+    // --- Transactional Audit Log Tests ---
+
+    [Test]
+    public async Task TeamToPro_WritesAuditLogEntryAtomically()
+    {
+        // Intent: for the Team-to-Pro downgrade the subscription update and audit log entry are
+        // wrapped in the same transaction. This test confirms the transactional path still records
+        // the audit row when the operation succeeds.
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId) = await SeedBillingEnvironment(db, tier: SubscriptionTier.Team);
+        HttpClient client = BuildClient(factory, tenantId, userId);
+
+        HttpResponseMessage response = await client.PostAsync(
+            "/api/v1/billing/downgrade",
+            BuildDowngradeContent("pro"));
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
+
+        using DatabaseContext verifyDb = factory.CreateDbContext();
+
+        AuditLogEntry? auditEntry = await verifyDb.AuditLog
+            .Where(a => (a.TenantId == tenantId) && (a.Action == AuditAction.SubscriptionDowngradeRequested))
+            .FirstOrDefaultAsync();
+
+        await Assert.That(auditEntry).IsNotNull();
+        await Assert.That(auditEntry!.ResourceType).IsEqualTo(AuditResourceType.Subscription);
     }
 
     [Test]

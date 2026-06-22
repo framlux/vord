@@ -83,6 +83,7 @@ public sealed class AlertRuleUpdateEndpoint : Endpoint<UpdateAlertRuleRequest, A
     {
         Put("/alert-rules/{id}");
         Policies("TenantAdmin");
+        Tags(Services.Billing.EndpointTags.RequiresProSubscription);
         Version(1);
     }
 
@@ -98,14 +99,10 @@ public sealed class AlertRuleUpdateEndpoint : Endpoint<UpdateAlertRuleRequest, A
             return;
         }
 
+        // Pro+ gating (null/Free/non-Active → 403) is enforced by ProSubscriptionPreProcessor via
+        // the RequiresProSubscription tag. The subscription is still loaded here for the custom-rule
+        // Team-tier check below.
         TenantSubscription? subscription = await _subscriptionService.GetSubscriptionForTenantAsync(tenantId.Value, ct);
-        if ((subscription is null) || (subscription.Tier == SubscriptionTier.Free) || (subscription.Status != SubscriptionStatus.Active))
-        {
-            HttpContext.Response.StatusCode = 403;
-            await HttpContext.Response.WriteAsJsonAsync(ApiResponse<AlertRuleDto>.Error("Alerting requires a Pro or Team subscription"), ct);
-
-            return;
-        }
 
         int ruleId = Route<int>("id");
 
@@ -129,7 +126,7 @@ public sealed class AlertRuleUpdateEndpoint : Endpoint<UpdateAlertRuleRequest, A
             return;
         }
 
-        if (rule.IsCustom && (subscription.Tier != SubscriptionTier.Team))
+        if (rule.IsCustom && ((subscription is null) || (subscription.Tier != SubscriptionTier.Team)))
         {
             HttpContext.Response.StatusCode = 403;
             await HttpContext.Response.WriteAsJsonAsync(

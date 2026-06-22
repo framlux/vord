@@ -13,4 +13,10 @@ public sealed class AppOptions
     /// The base URL of the application, used for generating invitation links.
     /// </summary>
     public string BaseUrl { get; set; } = string.Empty;
+
+    /// <summary>
+    /// The number of days a newly created registration token remains valid before it expires.
+    /// Defaults to 7 days.
+    /// </summary>
+    public int RegistrationTokenLifetimeDays { get; set; } = 7;
 }

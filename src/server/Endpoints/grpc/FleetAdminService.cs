@@ -7,6 +7,7 @@ using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Server.Auth;
 using Framlux.FleetManagement.Services.Core.Handlers;
+using Framlux.FleetManagement.Services.Core.Infrastructure;
 using Framlux.FleetManagement.Services.Core.Options;
 using Framlux.FleetManagement.Services.Core.Security;
 using Framlux.Vord.BillingGrpc;
@@ -511,6 +512,8 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
         using IServiceScope scope = _scopeFactory.CreateScope();
         ITenantRepository tenantRepo = scope.ServiceProvider.GetRequiredService<ITenantRepository>();
         ITenantSubscriptionOverrideRepository overrideRepo = scope.ServiceProvider.GetRequiredService<ITenantSubscriptionOverrideRepository>();
+        IDatabaseTransactionProvider transactionProvider = scope.ServiceProvider.GetRequiredService<IDatabaseTransactionProvider>();
+        IAuditLogRepository auditLog = scope.ServiceProvider.GetRequiredService<IAuditLogRepository>();
 
         Tenant tenant = await ResolveTenantByExternalIdAsync(
             tenantRepo, request.TenantExternalId, context.CancellationToken);
@@ -521,8 +524,22 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
         int? alertRuleLimit = request.AlertRuleLimit >= 0 ? request.AlertRuleLimit : null;
         int? webhookLimit = request.WebhookLimit >= 0 ? request.WebhookLimit : null;
 
+        using IDatabaseTransaction transaction = await transactionProvider.BeginTransactionAsync(context.CancellationToken);
+
         await overrideRepo.UpsertOverrideAsync(
             tenant.Id, machineLimit, retentionDays, alertRuleLimit, webhookLimit, context.CancellationToken);
+
+        await auditLog.InsertAuditLogAsync(AuditHelper.Create(
+            tenantId: tenant.Id,
+            userId: null,
+            machineId: null,
+            AuditAction.TenantSubscriptionOverrideChanged,
+            AuditResourceType.Subscription,
+            tenant.Id.ToString(),
+            new { MachineLimit = machineLimit, RetentionDays = retentionDays, AlertRuleLimit = alertRuleLimit, WebhookLimit = webhookLimit },
+            ipAddress: null), context.CancellationToken);
+
+        await transaction.CommitAsync(context.CancellationToken);
 
         _logger.LogInformation(
             "FleetAdmin: tenant {TenantId} override set (machineLimit={MachineLimit}, retentionDays={RetentionDays}, alertRuleLimit={AlertRuleLimit}, webhookLimit={WebhookLimit})",
@@ -546,11 +563,27 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
         using IServiceScope scope = _scopeFactory.CreateScope();
         ITenantRepository tenantRepo = scope.ServiceProvider.GetRequiredService<ITenantRepository>();
         ITenantSubscriptionOverrideRepository overrideRepo = scope.ServiceProvider.GetRequiredService<ITenantSubscriptionOverrideRepository>();
+        IDatabaseTransactionProvider transactionProvider = scope.ServiceProvider.GetRequiredService<IDatabaseTransactionProvider>();
+        IAuditLogRepository auditLog = scope.ServiceProvider.GetRequiredService<IAuditLogRepository>();
 
         Tenant tenant = await ResolveTenantByExternalIdAsync(
             tenantRepo, request.TenantExternalId, context.CancellationToken);
 
+        using IDatabaseTransaction transaction = await transactionProvider.BeginTransactionAsync(context.CancellationToken);
+
         await overrideRepo.RemoveOverrideAsync(tenant.Id, context.CancellationToken);
+
+        await auditLog.InsertAuditLogAsync(AuditHelper.Create(
+            tenantId: tenant.Id,
+            userId: null,
+            machineId: null,
+            AuditAction.TenantSubscriptionOverrideChanged,
+            AuditResourceType.Subscription,
+            tenant.Id.ToString(),
+            new { Cleared = true },
+            ipAddress: null), context.CancellationToken);
+
+        await transaction.CommitAsync(context.CancellationToken);
 
         _logger.LogInformation(
             "FleetAdmin: tenant {TenantId} override removed", tenant.Id);

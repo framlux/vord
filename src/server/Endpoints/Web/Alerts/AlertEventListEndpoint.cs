@@ -7,7 +7,6 @@ using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Server.Auth;
-using Framlux.FleetManagement.Services.Core.Billing;
 
 namespace Framlux.FleetManagement.Server.Endpoints.Web.Alerts;
 
@@ -41,16 +40,14 @@ public sealed class AlertEventListEndpoint : Endpoint<AlertEventListRequest, Api
 {
     private readonly IAlertEventRepository _alertEventRepo;
     private readonly IMachineStateRepository _machineStateRepo;
-    private readonly ISubscriptionService _subscriptionService;
 
     /// <summary>
     /// Creates a new instance of the <see cref="AlertEventListEndpoint"/> class.
     /// </summary>
-    public AlertEventListEndpoint(IAlertEventRepository alertEventRepo, IMachineStateRepository machineStateRepo, ISubscriptionService subscriptionService)
+    public AlertEventListEndpoint(IAlertEventRepository alertEventRepo, IMachineStateRepository machineStateRepo)
     {
         _alertEventRepo = alertEventRepo;
         _machineStateRepo = machineStateRepo;
-        _subscriptionService = subscriptionService;
     }
 
     /// <inheritdoc/>
@@ -58,6 +55,7 @@ public sealed class AlertEventListEndpoint : Endpoint<AlertEventListRequest, Api
     {
         Get("/alert-events");
         Policies("ViewOnly");
+        Tags(Services.Billing.EndpointTags.RequiresProSubscription);
         Version(1);
     }
 
@@ -73,15 +71,7 @@ public sealed class AlertEventListEndpoint : Endpoint<AlertEventListRequest, Api
             return;
         }
 
-        TenantSubscription? subscription = await _subscriptionService.GetSubscriptionForTenantAsync(tenantId.Value, ct);
-        if ((subscription is null) || (subscription.Tier == SubscriptionTier.Free) || (subscription.Status != SubscriptionStatus.Active))
-        {
-            HttpContext.Response.StatusCode = 403;
-            await HttpContext.Response.WriteAsJsonAsync(ApiResponse<PaginatedResponse<AlertEventDto>>.Error("Alerting requires a Pro or Team subscription"), ct);
-
-            return;
-        }
-
+        // Pro+ gating is enforced by ProSubscriptionPreProcessor via the RequiresProSubscription tag.
         int page = req.Page < 1 ? 1 : req.Page;
         int pageSize = (req.PageSize < 1) || (req.PageSize > 100) ? 25 : req.PageSize;
 

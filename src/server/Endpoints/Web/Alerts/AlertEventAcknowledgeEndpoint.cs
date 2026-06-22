@@ -7,7 +7,6 @@ using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Server.Auth;
-using Framlux.FleetManagement.Services.Core.Billing;
 using Framlux.FleetManagement.Services.Core.Infrastructure;
 
 namespace Framlux.FleetManagement.Server.Endpoints.Web.Alerts;
@@ -20,19 +19,16 @@ public sealed class AlertEventAcknowledgeEndpoint : EndpointWithoutRequest<ApiRe
 {
     private readonly IAlertEventRepository _alertEventRepo;
     private readonly IAuditLogRepository _auditLog;
-    private readonly ISubscriptionService _subscriptionService;
 
     /// <summary>
     /// Creates a new instance of the <see cref="AlertEventAcknowledgeEndpoint"/> class.
     /// </summary>
     public AlertEventAcknowledgeEndpoint(
         IAlertEventRepository alertEventRepo,
-        IAuditLogRepository auditLog,
-        ISubscriptionService subscriptionService)
+        IAuditLogRepository auditLog)
     {
         _alertEventRepo = alertEventRepo;
         _auditLog = auditLog;
-        _subscriptionService = subscriptionService;
     }
 
     /// <inheritdoc/>
@@ -40,6 +36,7 @@ public sealed class AlertEventAcknowledgeEndpoint : EndpointWithoutRequest<ApiRe
     {
         Post("/alert-events/{id}/acknowledge");
         Policies("MachineAdmin");
+        Tags(Services.Billing.EndpointTags.RequiresProSubscription);
         Version(1);
     }
 
@@ -55,15 +52,7 @@ public sealed class AlertEventAcknowledgeEndpoint : EndpointWithoutRequest<ApiRe
             return;
         }
 
-        TenantSubscription? subscription = await _subscriptionService.GetSubscriptionForTenantAsync(tenantId.Value, ct);
-        if ((subscription is null) || (subscription.Tier == SubscriptionTier.Free) || (subscription.Status != SubscriptionStatus.Active))
-        {
-            HttpContext.Response.StatusCode = 403;
-            await HttpContext.Response.WriteAsJsonAsync(ApiResponse<bool>.Error("Alerting requires a Pro or Team subscription"), ct);
-
-            return;
-        }
-
+        // Pro+ gating is enforced by ProSubscriptionPreProcessor via the RequiresProSubscription tag.
         long eventId = Route<long>("id");
 
         AlertEvent? alertEvent = await _alertEventRepo.GetAlertEventByIdAsync(eventId, tenantId.Value, ct);
