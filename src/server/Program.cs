@@ -4,6 +4,7 @@
 
 using FastEndpoints;
 using Framlux.FleetManagement.Database.Enums;
+using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Server.Auth;
 using Framlux.FleetManagement.Server.Endpoints.Grpc;
 using Framlux.FleetManagement.Server.Endpoints.Web;
@@ -280,6 +281,10 @@ builder.Services.AddGrpc(options =>
 builder.Services.AddSingleton<GrpcRateLimitingInterceptor>();
 builder.Services.AddScoped<CookiePrincipalValidator>();
 builder.Services.AddHttpContextAccessor();
+
+// Override the default NullAuditContextAccessor registered in AddRepositories with the
+// HTTP-aware implementation that reads the remote IP from the active HttpContext.
+builder.Services.AddScoped<IAuditContextAccessor, HttpAuditContextAccessor>();
 builder.Services.AddCascadingAuthenticationState();
 
 builder.Services.AddFastEndpoints();
@@ -360,6 +365,7 @@ app.UseFastEndpoints(options =>
         options.Endpoints.Configurator = ep =>
         {
             ep.PreProcessor<SubscriptionStatusPreProcessor>(FastEndpoints.Order.Before);
+            ep.PreProcessor<ProSubscriptionPreProcessor>(FastEndpoints.Order.Before);
 
             // Global-by-default antiforgery enrollment. See AntiforgeryStartup and
             // AntiforgeryEnrollment for the rule; opt out per-endpoint with [SkipAntiforgery]

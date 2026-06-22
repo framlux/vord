@@ -40,6 +40,7 @@ public sealed class IntegrationCreateEndpoint : Endpoint<CreateIntegrationReques
     private readonly ISubscriptionService _subscriptionService;
     private readonly IAuditLogRepository _auditLog;
     private readonly IDataProtectionProvider _dataProtectionProvider;
+    private readonly IDatabaseTransactionProvider _transactionProvider;
 
     /// <summary>
     /// Creates a new instance of the <see cref="IntegrationCreateEndpoint"/> class.
@@ -48,12 +49,14 @@ public sealed class IntegrationCreateEndpoint : Endpoint<CreateIntegrationReques
         IIntegrationRepository integrationRepo,
         ISubscriptionService subscriptionService,
         IAuditLogRepository auditLog,
-        IDataProtectionProvider dataProtectionProvider)
+        IDataProtectionProvider dataProtectionProvider,
+        IDatabaseTransactionProvider transactionProvider)
     {
         _integrationRepo = integrationRepo;
         _subscriptionService = subscriptionService;
         _auditLog = auditLog;
         _dataProtectionProvider = dataProtectionProvider;
+        _transactionProvider = transactionProvider;
     }
 
     /// <inheritdoc/>
@@ -178,12 +181,16 @@ public sealed class IntegrationCreateEndpoint : Endpoint<CreateIntegrationReques
             CreatedAt = now,
         };
 
+        using IDatabaseTransaction transaction = await _transactionProvider.BeginTransactionAsync(ct);
+
         integration = await _integrationRepo.CreateIntegrationAsync(integration, ct);
 
         await _auditLog.InsertAuditLogAsync(AuditHelper.Create(
             tenantId.Value, userId.Value, null,
             AuditAction.IntegrationCreated, AuditResourceType.Integration,
             integration.Id.ToString(), name, null), ct);
+
+        await transaction.CommitAsync(ct);
 
         IntegrationEndpointDto dto = new()
         {

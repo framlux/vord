@@ -3,6 +3,7 @@
 // See LICENSE for details.
 
 using FastEndpoints;
+using Framlux.FleetManagement.Server.Auth;
 using Framlux.FleetManagement.Services.Core.Billing;
 using Framlux.FleetManagement.Services.Core.Handlers;
 using Framlux.FleetManagement.Services.Core.Infrastructure;
@@ -46,7 +47,17 @@ public sealed class UpdateAdminSettingsEndpoint : Endpoint<UpdateAdminSettingsRe
             return;
         }
 
-        ServiceResult<List<SettingEntry>> result = await _handler.UpdateSettingsAsync(req.Settings, ct);
+        int? userId = TenantClaimHelper.GetUserIdFromClaims(User);
+        if (userId is null)
+        {
+            HttpContext.Response.StatusCode = 401;
+            await HttpContext.Response.WriteAsJsonAsync(
+                ApiResponse<ServerSettingsDto>.Error("Unable to identify user"), ct);
+
+            return;
+        }
+
+        ServiceResult<List<SettingEntry>> result = await _handler.UpdateSettingsAsync(req.Settings, userId.Value, ct);
 
         if (result.IsSuccess == false)
         {

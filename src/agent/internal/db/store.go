@@ -612,6 +612,16 @@ func (s *Store) GetSigningKey(keyID int32) (*TrustedKey, error) {
 	return &k, nil
 }
 
+// CountSigningKeys returns the number of trusted signing keys currently stored.
+func (s *Store) CountSigningKeys() (int, error) {
+	var count int
+	if err := s.db.QueryRow("SELECT COUNT(*) FROM trusted_signing_keys").Scan(&count); err != nil {
+		return 0, err
+	}
+
+	return count, nil
+}
+
 // --- Command Nonces ---
 
 // IsNonceUsed checks whether a nonce has already been executed.

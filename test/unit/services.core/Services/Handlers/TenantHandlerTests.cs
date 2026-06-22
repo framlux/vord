@@ -2,8 +2,8 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
-using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Database.Models;
+using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Services.Core.Models.Tenants;
 using Framlux.FleetManagement.Services.Core.Handlers;
 using Framlux.FleetManagement.Services.Core.Infrastructure;
@@ -27,8 +27,9 @@ public class TenantHandlerTests
     {
         ITenantRepository cache = Substitute.For<ITenantRepository>();
         using TestDatabaseFactory dbFactory = new();
+        DatabaseRepository repo = new(dbFactory.Context, new NullLogger<DatabaseRepository>());
         ILogger<TenantHandler> logger = Substitute.For<ILogger<TenantHandler>>();
-        TenantHandler handler = new(cache, logger);
+        TenantHandler handler = new(cache, repo, repo, logger);
 
         await Assert.That(async () =>
             await handler.ListForUserAsync(false, null!, CancellationToken.None))
@@ -42,8 +43,9 @@ public class TenantHandlerTests
     {
         ITenantRepository cache = Substitute.For<ITenantRepository>();
         using TestDatabaseFactory dbFactory = new();
+        DatabaseRepository repo = new(dbFactory.Context, new NullLogger<DatabaseRepository>());
         ILogger<TenantHandler> logger = Substitute.For<ILogger<TenantHandler>>();
-        TenantHandler handler = new(cache, logger);
+        TenantHandler handler = new(cache, repo, repo, logger);
 
         ServiceResult<TenantDto> result = await handler.CreateAsync("", "https://logo.png", 1, CancellationToken.None);
 
@@ -55,8 +57,9 @@ public class TenantHandlerTests
     {
         ITenantRepository cache = Substitute.For<ITenantRepository>();
         using TestDatabaseFactory dbFactory = new();
+        DatabaseRepository repo = new(dbFactory.Context, new NullLogger<DatabaseRepository>());
         ILogger<TenantHandler> logger = Substitute.For<ILogger<TenantHandler>>();
-        TenantHandler handler = new(cache, logger);
+        TenantHandler handler = new(cache, repo, repo, logger);
 
         ServiceResult<TenantDto> result = await handler.CreateAsync("   ", "https://logo.png", 1, CancellationToken.None);
 
@@ -68,8 +71,9 @@ public class TenantHandlerTests
     {
         ITenantRepository cache = Substitute.For<ITenantRepository>();
         using TestDatabaseFactory dbFactory = new();
+        DatabaseRepository repo = new(dbFactory.Context, new NullLogger<DatabaseRepository>());
         ILogger<TenantHandler> logger = Substitute.For<ILogger<TenantHandler>>();
-        TenantHandler handler = new(cache, logger);
+        TenantHandler handler = new(cache, repo, repo, logger);
 
         ServiceResult<TenantDto> result = await handler.CreateAsync("Abcd", "https://logo.png", 1, CancellationToken.None);
 
@@ -81,8 +85,9 @@ public class TenantHandlerTests
     {
         ITenantRepository cache = Substitute.For<ITenantRepository>();
         using TestDatabaseFactory dbFactory = new();
+        DatabaseRepository repo = new(dbFactory.Context, new NullLogger<DatabaseRepository>());
         ILogger<TenantHandler> logger = Substitute.For<ILogger<TenantHandler>>();
-        TenantHandler handler = new(cache, logger);
+        TenantHandler handler = new(cache, repo, repo, logger);
 
         string longName = new('A', 101);
         ServiceResult<TenantDto> result = await handler.CreateAsync(longName, "https://logo.png", 1, CancellationToken.None);
@@ -95,8 +100,9 @@ public class TenantHandlerTests
     {
         ITenantRepository cache = Substitute.For<ITenantRepository>();
         using TestDatabaseFactory dbFactory = new();
+        DatabaseRepository repo = new(dbFactory.Context, new NullLogger<DatabaseRepository>());
         ILogger<TenantHandler> logger = Substitute.For<ILogger<TenantHandler>>();
-        TenantHandler handler = new(cache, logger);
+        TenantHandler handler = new(cache, repo, repo, logger);
 
         ServiceResult<TenantDto> result = await handler.CreateAsync("<script>alert</script>", "https://logo.png", 1, CancellationToken.None);
 
@@ -108,8 +114,9 @@ public class TenantHandlerTests
     {
         ITenantRepository cache = Substitute.For<ITenantRepository>();
         using TestDatabaseFactory dbFactory = new();
+        DatabaseRepository repo = new(dbFactory.Context, new NullLogger<DatabaseRepository>());
         ILogger<TenantHandler> logger = Substitute.For<ILogger<TenantHandler>>();
-        TenantHandler handler = new(cache, logger);
+        TenantHandler handler = new(cache, repo, repo, logger);
 
         ServiceResult<TenantDto> result = await handler.CreateAsync("Test\x00Corp", "https://logo.png", 1, CancellationToken.None);
 
@@ -121,8 +128,9 @@ public class TenantHandlerTests
     {
         ITenantRepository cache = Substitute.For<ITenantRepository>();
         using TestDatabaseFactory dbFactory = new();
+        DatabaseRepository repo = new(dbFactory.Context, new NullLogger<DatabaseRepository>());
         ILogger<TenantHandler> logger = Substitute.For<ILogger<TenantHandler>>();
-        TenantHandler handler = new(cache, logger);
+        TenantHandler handler = new(cache, repo, repo, logger);
 
         ServiceResult<TenantDto> result = await handler.CreateAsync("Test\\Corp", "https://logo.png", 1, CancellationToken.None);
 
@@ -139,9 +147,9 @@ public class TenantHandlerTests
         createdTenant.Id = 50;
         cache.CreateTenantAsync(Arg.Any<Tenant>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(createdTenant));
-        using TestDatabaseFactory dbFactory = new();
+        (IDatabaseTransactionProvider txProvider, IAuditLogRepository auditLog) = CreateMockTransactionAndAudit();
         ILogger<TenantHandler> logger = Substitute.For<ILogger<TenantHandler>>();
-        TenantHandler handler = new(cache, logger);
+        TenantHandler handler = new(cache, txProvider, auditLog, logger);
 
         ServiceResult<TenantDto> result = await handler.CreateAsync("テスト組織です", "https://logo.png", 1, CancellationToken.None);
 
@@ -158,9 +166,9 @@ public class TenantHandlerTests
         createdTenant.Id = 51;
         cache.CreateTenantAsync(Arg.Any<Tenant>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(createdTenant));
-        using TestDatabaseFactory dbFactory = new();
+        (IDatabaseTransactionProvider txProvider, IAuditLogRepository auditLog) = CreateMockTransactionAndAudit();
         ILogger<TenantHandler> logger = Substitute.For<ILogger<TenantHandler>>();
-        TenantHandler handler = new(cache, logger);
+        TenantHandler handler = new(cache, txProvider, auditLog, logger);
 
         ServiceResult<TenantDto> result = await handler.CreateAsync("  Trimmed Corp  ", "https://logo.png", 1, CancellationToken.None);
 
@@ -178,9 +186,9 @@ public class TenantHandlerTests
         createdTenant.Id = 52;
         cache.CreateTenantAsync(Arg.Any<Tenant>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(createdTenant));
-        using TestDatabaseFactory dbFactory = new();
+        (IDatabaseTransactionProvider txProvider, IAuditLogRepository auditLog) = CreateMockTransactionAndAudit();
         ILogger<TenantHandler> logger = Substitute.For<ILogger<TenantHandler>>();
-        TenantHandler handler = new(cache, logger);
+        TenantHandler handler = new(cache, txProvider, auditLog, logger);
 
         ServiceResult<TenantDto> result = await handler.CreateAsync("Acme & Co. - HQ_1", "https://logo.png", 1, CancellationToken.None);
 
@@ -193,9 +201,9 @@ public class TenantHandlerTests
         ITenantRepository cache = Substitute.For<ITenantRepository>();
         cache.GetTenantByNameAsync("Existing Corp", Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<Tenant?>(TestDataBuilder.BuildTenant(name: "Existing Corp")));
-        using TestDatabaseFactory dbFactory = new();
+        (IDatabaseTransactionProvider txProvider, IAuditLogRepository auditLog) = CreateMockTransactionAndAudit();
         ILogger<TenantHandler> logger = Substitute.For<ILogger<TenantHandler>>();
-        TenantHandler handler = new(cache, logger);
+        TenantHandler handler = new(cache, txProvider, auditLog, logger);
 
         ServiceResult<TenantDto> result = await handler.CreateAsync("Existing Corp", "https://logo.png", 1, CancellationToken.None);
 
@@ -212,9 +220,9 @@ public class TenantHandlerTests
         createdTenant.Id = 42;
         cache.CreateTenantAsync(Arg.Any<Tenant>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(createdTenant));
-        using TestDatabaseFactory dbFactory = new();
+        (IDatabaseTransactionProvider txProvider, IAuditLogRepository auditLog) = CreateMockTransactionAndAudit();
         ILogger<TenantHandler> logger = Substitute.For<ILogger<TenantHandler>>();
-        TenantHandler handler = new(cache, logger);
+        TenantHandler handler = new(cache, txProvider, auditLog, logger);
 
         ServiceResult<TenantDto> result = await handler.CreateAsync("New Corp", "https://logo.png", 1, CancellationToken.None);
 
@@ -231,9 +239,9 @@ public class TenantHandlerTests
         ITenantRepository cache = Substitute.For<ITenantRepository>();
         cache.GetTenantByIdAsync(999, Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<Tenant?>(null));
-        using TestDatabaseFactory dbFactory = new();
+        (IDatabaseTransactionProvider txProvider, IAuditLogRepository auditLog) = CreateMockTransactionAndAudit();
         ILogger<TenantHandler> logger = Substitute.For<ILogger<TenantHandler>>();
-        TenantHandler handler = new(cache, logger);
+        TenantHandler handler = new(cache, txProvider, auditLog, logger);
 
         ServiceResult<TenantDto> result = await handler.GetDetailAsync(999, CancellationToken.None);
 
@@ -248,9 +256,9 @@ public class TenantHandlerTests
         tenant.Id = 7;
         cache.GetTenantByIdAsync(7, Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<Tenant?>(tenant));
-        using TestDatabaseFactory dbFactory = new();
+        (IDatabaseTransactionProvider txProvider, IAuditLogRepository auditLog) = CreateMockTransactionAndAudit();
         ILogger<TenantHandler> logger = Substitute.For<ILogger<TenantHandler>>();
-        TenantHandler handler = new(cache, logger);
+        TenantHandler handler = new(cache, txProvider, auditLog, logger);
 
         ServiceResult<TenantDto> result = await handler.GetDetailAsync(7, CancellationToken.None);
 
@@ -272,7 +280,7 @@ public class TenantHandlerTests
 
         DatabaseRepository repo = CreateRepo(dbFactory);
         ILogger<TenantHandler> logger = Substitute.For<ILogger<TenantHandler>>();
-        TenantHandler handler = new(repo, logger);
+        TenantHandler handler = new(repo, repo, repo, logger);
 
         ServiceResult<List<TenantDto>> result = await handler.ListForUserAsync(true, [], CancellationToken.None);
 
@@ -291,7 +299,7 @@ public class TenantHandlerTests
 
         DatabaseRepository repo = CreateRepo(dbFactory);
         ILogger<TenantHandler> logger = Substitute.For<ILogger<TenantHandler>>();
-        TenantHandler handler = new(repo, logger);
+        TenantHandler handler = new(repo, repo, repo, logger);
 
         ServiceResult<List<TenantDto>> result = await handler.ListForUserAsync(false, [tenant1.Id], CancellationToken.None);
 
@@ -306,7 +314,7 @@ public class TenantHandlerTests
         using TestDatabaseFactory dbFactory = new();
         DatabaseRepository repo = CreateRepo(dbFactory);
         ILogger<TenantHandler> logger = Substitute.For<ILogger<TenantHandler>>();
-        TenantHandler handler = new(repo, logger);
+        TenantHandler handler = new(repo, repo, repo, logger);
 
         ServiceResult<List<TenantDto>> result = await handler.ListForUserAsync(false, [], CancellationToken.None);
 
@@ -319,5 +327,21 @@ public class TenantHandlerTests
     private static DatabaseRepository CreateRepo(TestDatabaseFactory dbFactory)
     {
         return new DatabaseRepository(dbFactory.Context, new NullLogger<DatabaseRepository>());
+    }
+
+    private static (IDatabaseTransactionProvider, IAuditLogRepository) CreateMockTransactionAndAudit()
+    {
+        IDatabaseTransaction tx = Substitute.For<IDatabaseTransaction>();
+        tx.CommitAsync(Arg.Any<CancellationToken>()).Returns(Task.CompletedTask);
+
+        IDatabaseTransactionProvider txProvider = Substitute.For<IDatabaseTransactionProvider>();
+        txProvider.BeginTransactionAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(tx));
+
+        IAuditLogRepository auditLog = Substitute.For<IAuditLogRepository>();
+        auditLog.InsertAuditLogAsync(Arg.Any<AuditLogEntry>(), Arg.Any<CancellationToken>())
+            .Returns(Task.CompletedTask);
+
+        return (txProvider, auditLog);
     }
 }

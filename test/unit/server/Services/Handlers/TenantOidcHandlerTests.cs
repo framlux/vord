@@ -30,8 +30,9 @@ public class TenantOidcHandlerTests
     {
         subscriptionService ??= Substitute.For<ISubscriptionService>();
         secretProtector ??= Substitute.For<IOidcSecretProtector>();
+        DatabaseRepository repo = CreateRepo(dbFactory);
 
-        return new TenantOidcHandler(CreateRepo(dbFactory), subscriptionService, secretProtector);
+        return new TenantOidcHandler(repo, subscriptionService, secretProtector, repo, repo);
     }
 
     private static ISubscriptionService CreateTeamSubscription(int tenantId)
@@ -132,7 +133,7 @@ public class TenantOidcHandlerTests
         TenantOidcHandler handler = CreateHandler(dbFactory);
 
         TenantOidcConfigDto request = new() { Authority = "https://example.com" };
-        ServiceResult<TenantOidcConfigDto> result = await handler.UpdateConfigAsync(1, null, request, CancellationToken.None);
+        ServiceResult<TenantOidcConfigDto> result = await handler.UpdateConfigAsync(1, null, 99, request, CancellationToken.None);
 
         await Assert.That(result.IsNotFound).IsTrue();
     }
@@ -144,7 +145,7 @@ public class TenantOidcHandlerTests
         TenantOidcHandler handler = CreateHandler(dbFactory);
 
         TenantOidcConfigDto request = new() { Authority = "https://example.com" };
-        ServiceResult<TenantOidcConfigDto> result = await handler.UpdateConfigAsync(1, 2, request, CancellationToken.None);
+        ServiceResult<TenantOidcConfigDto> result = await handler.UpdateConfigAsync(1, 2, 99, request, CancellationToken.None);
 
         await Assert.That(result.IsNotFound).IsTrue();
     }
@@ -157,7 +158,7 @@ public class TenantOidcHandlerTests
         TenantOidcHandler handler = CreateHandler(dbFactory, subscriptionService: subService);
 
         TenantOidcConfigDto request = new() { Authority = "https://example.com" };
-        ServiceResult<TenantOidcConfigDto> result = await handler.UpdateConfigAsync(1, 1, request, CancellationToken.None);
+        ServiceResult<TenantOidcConfigDto> result = await handler.UpdateConfigAsync(1, 1, 42, request, CancellationToken.None);
 
         await Assert.That(result.StatusCode).IsEqualTo(403);
     }
@@ -170,7 +171,7 @@ public class TenantOidcHandlerTests
         TenantOidcHandler handler = CreateHandler(dbFactory, subscriptionService: subService);
 
         TenantOidcConfigDto request = new() { Authority = "" };
-        ServiceResult<TenantOidcConfigDto> result = await handler.UpdateConfigAsync(1, 1, request, CancellationToken.None);
+        ServiceResult<TenantOidcConfigDto> result = await handler.UpdateConfigAsync(1, 1, 42, request, CancellationToken.None);
 
         await Assert.That(result.StatusCode).IsEqualTo(400);
     }
@@ -183,7 +184,7 @@ public class TenantOidcHandlerTests
         TenantOidcHandler handler = CreateHandler(dbFactory, subscriptionService: subService);
 
         TenantOidcConfigDto request = new() { Authority = "   " };
-        ServiceResult<TenantOidcConfigDto> result = await handler.UpdateConfigAsync(1, 1, request, CancellationToken.None);
+        ServiceResult<TenantOidcConfigDto> result = await handler.UpdateConfigAsync(1, 1, 42, request, CancellationToken.None);
 
         await Assert.That(result.StatusCode).IsEqualTo(400);
     }
@@ -207,7 +208,7 @@ public class TenantOidcHandlerTests
             EmailDomain = "test.com",
             IsEnabled = true,
         };
-        ServiceResult<TenantOidcConfigDto> result = await handler.UpdateConfigAsync(1, 1, request, CancellationToken.None);
+        ServiceResult<TenantOidcConfigDto> result = await handler.UpdateConfigAsync(1, 1, 42, request, CancellationToken.None);
 
         await Assert.That(result.IsSuccess).IsTrue();
 
@@ -239,7 +240,7 @@ public class TenantOidcHandlerTests
             EmailDomain = "test.com",
             IsEnabled = true,
         };
-        ServiceResult<TenantOidcConfigDto> result = await handler.UpdateConfigAsync(1, 1, request, CancellationToken.None);
+        ServiceResult<TenantOidcConfigDto> result = await handler.UpdateConfigAsync(1, 1, 42, request, CancellationToken.None);
 
         await Assert.That(result.IsSuccess).IsTrue();
 
@@ -272,7 +273,7 @@ public class TenantOidcHandlerTests
             EmailDomain = "test.com",
             IsEnabled = true,
         };
-        ServiceResult<TenantOidcConfigDto> result = await handler.UpdateConfigAsync(1, 1, request, CancellationToken.None);
+        ServiceResult<TenantOidcConfigDto> result = await handler.UpdateConfigAsync(1, 1, 42, request, CancellationToken.None);
 
         await Assert.That(result.IsSuccess).IsTrue();
 
@@ -299,7 +300,7 @@ public class TenantOidcHandlerTests
             EmailDomain = "test.com",
             IsEnabled = true,
         };
-        ServiceResult<TenantOidcConfigDto> result = await handler.UpdateConfigAsync(1, 1, request, CancellationToken.None);
+        ServiceResult<TenantOidcConfigDto> result = await handler.UpdateConfigAsync(1, 1, 42, request, CancellationToken.None);
 
         await Assert.That(result.IsSuccess).IsTrue();
         await Assert.That(result.Data!.ClientSecret).IsEqualTo("********");
@@ -327,7 +328,7 @@ public class TenantOidcHandlerTests
             EmailDomain = "test.com",
             IsEnabled = true,
         };
-        ServiceResult<TenantOidcConfigDto> result = await handler.UpdateConfigAsync(1, 1, request, CancellationToken.None);
+        ServiceResult<TenantOidcConfigDto> result = await handler.UpdateConfigAsync(1, 1, 42, request, CancellationToken.None);
 
         await Assert.That(result.IsSuccess).IsTrue();
         await Assert.That(result.Data!.ClientSecret).IsEqualTo("********");

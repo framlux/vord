@@ -9,6 +9,7 @@ using Framlux.FleetManagement.Services.Core.DataExport;
 using Framlux.FleetManagement.Services.Core.Extensions;
 using Framlux.FleetManagement.Services.Core.Infrastructure;
 using Framlux.FleetManagement.Services.Core.Machines;
+using Framlux.FleetManagement.Services.Core.Notifications;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace Framlux.FleetManagement.Test.Hangfire;
@@ -62,6 +63,7 @@ public sealed class HangfireJobTypesTests
         await Assert.That(IsRegistered<AlertEvaluationJob>(services)).IsTrue();
         await Assert.That(IsRegistered<AlertConditionStateCleanupJob>(services)).IsTrue();
         await Assert.That(IsRegistered<IntegrationDeliveryJob>(services)).IsTrue();
+        await Assert.That(IsRegistered<SendInvitationEmailJob>(services)).IsTrue();
         await Assert.That(IsRegistered<DataExportProcessingJob>(services)).IsTrue();
         await Assert.That(IsRegistered<DataExportCleanupJob>(services)).IsTrue();
         await Assert.That(IsRegistered<StripeSyncJob>(services)).IsTrue();
@@ -82,6 +84,7 @@ public sealed class HangfireJobTypesTests
         await Assert.That(GetLifetime<AlertEvaluationJob>(services)).IsEqualTo(ServiceLifetime.Scoped);
         await Assert.That(GetLifetime<AlertConditionStateCleanupJob>(services)).IsEqualTo(ServiceLifetime.Scoped);
         await Assert.That(GetLifetime<IntegrationDeliveryJob>(services)).IsEqualTo(ServiceLifetime.Scoped);
+        await Assert.That(GetLifetime<SendInvitationEmailJob>(services)).IsEqualTo(ServiceLifetime.Scoped);
         await Assert.That(GetLifetime<DataExportProcessingJob>(services)).IsEqualTo(ServiceLifetime.Scoped);
         await Assert.That(GetLifetime<DataExportCleanupJob>(services)).IsEqualTo(ServiceLifetime.Scoped);
         await Assert.That(GetLifetime<StripeSyncJob>(services)).IsEqualTo(ServiceLifetime.Scoped);

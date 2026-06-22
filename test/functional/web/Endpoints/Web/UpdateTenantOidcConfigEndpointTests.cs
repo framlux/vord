@@ -345,4 +345,34 @@ public sealed class UpdateTenantOidcConfigEndpointTests
 
         await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.Unauthorized);
     }
+
+    [Test]
+    public async Task PutOidc_TeamTier_WritesExactlyOneAuditLogEntry()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        SeededTenant seeded = await SeedTenantWithSubscription(db, SubscriptionTier.Team);
+
+        HttpClient client = BuildTenantAdminClient(factory, seeded.TenantId, seeded.UserId);
+
+        HttpResponseMessage response = await client.PutAsJsonAsync($"/api/v1/tenants/{seeded.TenantId}/oidc", new
+        {
+            Authority = ValidAuthority,
+            ClientId = "audit-client",
+            ClientSecret = "audit-secret",
+            EmailDomain = "audit.test",
+            IsEnabled = true,
+        });
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
+
+        List<AuditLogEntry> entries = await db.AuditLog
+            .Where(e => e.Action == AuditAction.TenantOidcConfigured
+                        && e.ResourceType == AuditResourceType.TenantOidcConfig
+                        && e.TenantId == seeded.TenantId)
+            .ToListAsync();
+
+        await Assert.That(entries.Count).IsEqualTo(1);
+        await Assert.That(entries[0].UserId).IsEqualTo(seeded.UserId);
+    }
 }

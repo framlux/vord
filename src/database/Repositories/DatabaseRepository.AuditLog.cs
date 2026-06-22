@@ -15,6 +15,13 @@ public partial class DatabaseRepository : IAuditLogRepository
     public async Task InsertAuditLogAsync(AuditLogEntry entry, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(entry);
+
+        // Populate the client IP from the request context when the entry does not already
+        // carry an explicit address. An explicit non-null value always takes priority, so
+        // callers that supply their own IP are unaffected. Worker and background-job paths
+        // receive null from NullAuditContextAccessor.
+        entry.IpAddress ??= _auditContext.GetClientIp();
+
         await _db.InsertAsync(entry, token: cancellationToken);
     }
 

@@ -16,4 +16,11 @@ public sealed class RedisOptions
     /// </summary>
     [Required]
     public string ConnectionString { get; set; } = string.Empty;
+
+    /// <summary>
+    /// How long, in seconds, a tenant's subscription status is cached in Redis on the hot path.
+    /// Kept short so staleness is bounded; the cache is also invalidated immediately on any
+    /// subscription mutation. Defaults to 30 seconds.
+    /// </summary>
+    public int SubscriptionCacheTtlSeconds { get; set; } = 30;
 }

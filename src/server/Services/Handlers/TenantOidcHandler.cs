@@ -21,19 +21,30 @@ public sealed class TenantOidcHandler : ITenantOidcHandler
     private readonly ITenantRepository _tenantRepo;
     private readonly ISubscriptionService _subscriptionService;
     private readonly IOidcSecretProtector _secretProtector;
+    private readonly IDatabaseTransactionProvider _transactionProvider;
+    private readonly IAuditLogRepository _auditLog;
 
     /// <summary>
     /// Creates a new instance of the <see cref="TenantOidcHandler"/> class.
     /// </summary>
-    public TenantOidcHandler(ITenantRepository tenantRepo, ISubscriptionService subscriptionService, IOidcSecretProtector secretProtector)
+    public TenantOidcHandler(
+        ITenantRepository tenantRepo,
+        ISubscriptionService subscriptionService,
+        IOidcSecretProtector secretProtector,
+        IDatabaseTransactionProvider transactionProvider,
+        IAuditLogRepository auditLog)
     {
         ArgumentNullException.ThrowIfNull(tenantRepo);
         ArgumentNullException.ThrowIfNull(subscriptionService);
         ArgumentNullException.ThrowIfNull(secretProtector);
+        ArgumentNullException.ThrowIfNull(transactionProvider);
+        ArgumentNullException.ThrowIfNull(auditLog);
 
         _tenantRepo = tenantRepo;
         _subscriptionService = subscriptionService;
         _secretProtector = secretProtector;
+        _transactionProvider = transactionProvider;
+        _auditLog = auditLog;
     }
 
     /// <inheritdoc/>
@@ -71,7 +82,7 @@ public sealed class TenantOidcHandler : ITenantOidcHandler
     }
 
     /// <inheritdoc/>
-    public async Task<ServiceResult<TenantOidcConfigDto>> UpdateConfigAsync(int tenantId, int? claimTenantId, TenantOidcConfigDto request, CancellationToken ct)
+    public async Task<ServiceResult<TenantOidcConfigDto>> UpdateConfigAsync(int tenantId, int? claimTenantId, int userId, TenantOidcConfigDto request, CancellationToken ct)
     {
         if ((claimTenantId is null) || (claimTenantId.Value != tenantId))
         {
@@ -98,6 +109,8 @@ public sealed class TenantOidcHandler : ITenantOidcHandler
         string normalizedDomain = (request.EmailDomain ?? string.Empty).Trim().ToLowerInvariant().TrimStart('@');
 
         TenantOidcConfiguration? existing = await _tenantRepo.GetTenantOidcConfigByTenantIdAsync(tenantId, ct);
+
+        using IDatabaseTransaction transaction = await _transactionProvider.BeginTransactionAsync(ct);
 
         if (existing is null)
         {
@@ -132,6 +145,18 @@ public sealed class TenantOidcHandler : ITenantOidcHandler
                 request.IsEnabled,
                 ct);
         }
+
+        await _auditLog.InsertAuditLogAsync(AuditHelper.Create(
+            tenantId,
+            userId,
+            machineId: null,
+            AuditAction.TenantOidcConfigured,
+            AuditResourceType.TenantOidcConfig,
+            tenantId.ToString(),
+            new { Authority = request.Authority, ClientId = request.ClientId, IsEnabled = request.IsEnabled },
+            ipAddress: null), ct);
+
+        await transaction.CommitAsync(ct);
 
         TenantOidcConfigDto response = new()
         {

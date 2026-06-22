@@ -7,8 +7,11 @@ using FastEndpoints;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Server.Auth;
+using Framlux.FleetManagement.Services.Core.Billing;
+using Framlux.FleetManagement.Services.Core.Infrastructure;
 using Framlux.FleetManagement.Services.Core.Models.Telemetry;
 using Framlux.FleetManagement.Services.Core.Telemetry;
+using Microsoft.Extensions.Logging;
 
 namespace Framlux.FleetManagement.Server.Endpoints.Web.Machines;
 
@@ -65,14 +68,22 @@ public sealed class SshSessionsFleetEndpoint : Endpoint<FleetSshSessionsRequest,
 {
     private readonly IMachineRepository _machineRepo;
     private readonly IMachineStateRepository _machineStateRepo;
+    private readonly ISubscriptionService _subscriptionService;
+    private readonly ILogger<SshSessionsFleetEndpoint> _logger;
 
     /// <summary>
     /// Creates a new instance of the <see cref="SshSessionsFleetEndpoint"/> class.
     /// </summary>
-    public SshSessionsFleetEndpoint(IMachineRepository machineRepo, IMachineStateRepository machineStateRepo)
+    public SshSessionsFleetEndpoint(
+        IMachineRepository machineRepo,
+        IMachineStateRepository machineStateRepo,
+        ISubscriptionService subscriptionService,
+        ILogger<SshSessionsFleetEndpoint> logger)
     {
         _machineRepo = machineRepo;
         _machineStateRepo = machineStateRepo;
+        _subscriptionService = subscriptionService;
+        _logger = logger;
     }
 
     /// <inheritdoc/>
@@ -101,87 +112,113 @@ public sealed class SshSessionsFleetEndpoint : Endpoint<FleetSshSessionsRequest,
         // Build a lookup of machine names for tenant machines.
         Dictionary<long, string> machineNames = await _machineRepo.GetMachineNameMapForTenantAsync(tenantId.Value, ct);
 
-        if (machineNames.Count == 0)
+        // Resolve any machine-name search to a concrete machine-id set BEFORE the telemetry query
+        // so the filter is a SQL predicate rather than an in-memory pass over the whole history.
+        List<long> machineIds = ResolveMachineIds(machineNames, req.Search);
+
+        PaginatedResponse<FleetSshSessionDto> emptyResponse = new()
         {
-            await Send.OkAsync(ApiResponse<PaginatedResponse<FleetSshSessionDto>>.Ok(new PaginatedResponse<FleetSshSessionDto>
-            {
-                Items = [],
-                Page = page,
-                PageSize = pageSize,
-                TotalCount = 0,
-            }), cancellation: ct);
+            Items = [],
+            Page = page,
+            PageSize = pageSize,
+            TotalCount = 0,
+        };
+
+        if (machineIds.Count == 0)
+        {
+            await Send.OkAsync(ApiResponse<PaginatedResponse<FleetSshSessionDto>>.Ok(emptyResponse), cancellation: ct);
 
             return;
         }
 
-        // Query SSH session telemetry rows for all tenant machines.
-        List<long> machineIds = machineNames.Keys.ToList();
-        List<MachineTelemetry> telemetryRows = await _machineStateRepo.GetTelemetryByMachineIdsAndTypeAsync(
-            machineIds, TelemetryTypeIds.SshSessions, ct);
+        // Bound the query to the tenant's retention window so we never scan unbounded history.
+        int retentionDays = await _subscriptionService.GetRetentionDaysForTenantAsync(tenantId.Value, ct);
+        DateTimeOffset receivedSince = DateTimeOffset.UtcNow.AddDays(-retentionDays);
 
-        JsonSerializerOptions jsonOptions = new() { PropertyNameCaseInsensitive = true };
+        // Total count and the requested page are both computed in SQL (Skip/Take/Count) so memory
+        // use is bounded by the page size rather than the size of the SSH telemetry history.
+        int totalCount = await _machineStateRepo.CountTelemetryByMachineIdsAndTypeAsync(
+            machineIds, TelemetryTypeIds.SshSessions, receivedSince, ct);
 
-        List<FleetSshSessionDto> allSessions = [];
+        List<MachineTelemetry> telemetryRows = await _machineStateRepo.GetTelemetryPageByMachineIdsAndTypeAsync(
+            machineIds, TelemetryTypeIds.SshSessions, receivedSince, (page - 1) * pageSize, pageSize, ct);
+
+        int malformedCount = 0;
+        List<FleetSshSessionDto> sessions = [];
 
         foreach (MachineTelemetry row in telemetryRows)
         {
             string machineName = machineNames.GetValueOrDefault(row.MachineId, string.Empty);
 
+            SshSessionPayload? session;
             try
             {
-                SshSessionPayload? session = JsonSerializer.Deserialize<SshSessionPayload>(row.Payload, jsonOptions);
-                if (session is null)
-                {
-                    continue;
-                }
-
-                allSessions.Add(new FleetSshSessionDto
-                {
-                    MachineId = row.MachineId,
-                    MachineName = machineName,
-                    User = session.User,
-                    SourceIp = session.SourceIp,
-                    Action = session.Action,
-                    AuthMethod = session.AuthMethod,
-                    Timestamp = session.Timestamp,
-                });
+                session = JsonSerializer.Deserialize<SshSessionPayload>(row.Payload, JsonDefaults.SnakeCase);
             }
-            catch
+            catch (JsonException ex)
             {
-                // Skip malformed JSON
+                malformedCount++;
+                _logger.LogWarning(ex, "Skipping malformed SSH session telemetry row {RowId} for machine {MachineId}", row.Id, row.MachineId);
+
+                continue;
             }
+
+            if (session is null)
+            {
+                continue;
+            }
+
+            sessions.Add(new FleetSshSessionDto
+            {
+                MachineId = row.MachineId,
+                MachineName = machineName,
+                User = session.User,
+                SourceIp = session.SourceIp,
+                Action = session.Action,
+                AuthMethod = session.AuthMethod,
+                Timestamp = session.Timestamp,
+            });
         }
 
-        // Apply search filter
-        if (string.IsNullOrEmpty(req.Search) == false)
+        if (malformedCount > 0)
         {
-            string search = req.Search.ToLowerInvariant();
-            allSessions = allSessions
-                .Where(s => s.MachineName.Contains(search, StringComparison.OrdinalIgnoreCase) ||
-                            s.User.Contains(search, StringComparison.OrdinalIgnoreCase))
-                .ToList();
+            _logger.LogWarning("Skipped {MalformedCount} malformed SSH session telemetry rows for tenant {TenantId}", malformedCount, tenantId.Value);
         }
-
-        // Sort by timestamp descending
-        allSessions = allSessions
-            .OrderByDescending(s => s.Timestamp)
-            .ToList();
-
-        int totalCount = allSessions.Count;
-
-        List<FleetSshSessionDto> paged = allSessions
-            .Skip((page - 1) * pageSize)
-            .Take(pageSize)
-            .ToList();
 
         PaginatedResponse<FleetSshSessionDto> response = new()
         {
-            Items = paged,
+            Items = sessions,
             Page = page,
             PageSize = pageSize,
             TotalCount = totalCount,
         };
 
         await Send.OkAsync(ApiResponse<PaginatedResponse<FleetSshSessionDto>>.Ok(response), cancellation: ct);
+    }
+
+    /// <summary>
+    /// Resolves the set of machine IDs to query. When a search term is supplied, the result is
+    /// limited to tenant machines whose name contains the term (case-insensitive); otherwise all
+    /// tenant machine IDs are returned. Extracted as an <c>internal static</c> method so the
+    /// search-to-id-set resolution can be unit-tested without the endpoint pipeline.
+    /// </summary>
+    /// <param name="machineNames">Map of tenant machine ID to machine name.</param>
+    /// <param name="search">Optional machine-name search term.</param>
+    /// <returns>The machine IDs to include in the telemetry query.</returns>
+    internal static List<long> ResolveMachineIds(Dictionary<long, string> machineNames, string? search)
+    {
+        ArgumentNullException.ThrowIfNull(machineNames);
+
+        if (string.IsNullOrWhiteSpace(search))
+        {
+            return machineNames.Keys.ToList();
+        }
+
+        string term = search.Trim();
+
+        return machineNames
+            .Where(kvp => kvp.Value.Contains(term, StringComparison.OrdinalIgnoreCase))
+            .Select(kvp => kvp.Key)
+            .ToList();
     }
 }

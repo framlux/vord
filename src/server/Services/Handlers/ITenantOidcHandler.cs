@@ -26,8 +26,9 @@ public interface ITenantOidcHandler
     /// </summary>
     /// <param name="tenantId">The tenant ID.</param>
     /// <param name="claimTenantId">The tenant ID from the user's claims.</param>
+    /// <param name="userId">The ID of the user performing the update.</param>
     /// <param name="request">The OIDC configuration to apply.</param>
     /// <param name="ct">A cancellation token.</param>
     /// <returns>A service result containing the updated OIDC config DTO.</returns>
-    Task<ServiceResult<TenantOidcConfigDto>> UpdateConfigAsync(int tenantId, int? claimTenantId, TenantOidcConfigDto request, CancellationToken ct);
+    Task<ServiceResult<TenantOidcConfigDto>> UpdateConfigAsync(int tenantId, int? claimTenantId, int userId, TenantOidcConfigDto request, CancellationToken ct);
 }

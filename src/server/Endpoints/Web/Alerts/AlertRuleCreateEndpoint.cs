@@ -22,6 +22,7 @@ public sealed class AlertRuleCreateEndpoint : Endpoint<CreateAlertRuleRequest, A
     private readonly IMachineRepository _machineRepo;
     private readonly ISubscriptionService _subscriptionService;
     private readonly IAuditLogRepository _auditLog;
+    private readonly IDatabaseTransactionProvider _transactionProvider;
 
     /// <summary>
     /// Creates a new instance of the <see cref="AlertRuleCreateEndpoint"/> class.
@@ -30,12 +31,14 @@ public sealed class AlertRuleCreateEndpoint : Endpoint<CreateAlertRuleRequest, A
         IAlertRuleRepository alertRuleRepo,
         IMachineRepository machineRepo,
         ISubscriptionService subscriptionService,
-        IAuditLogRepository auditLog)
+        IAuditLogRepository auditLog,
+        IDatabaseTransactionProvider transactionProvider)
     {
         _alertRuleRepo = alertRuleRepo;
         _machineRepo = machineRepo;
         _subscriptionService = subscriptionService;
         _auditLog = auditLog;
+        _transactionProvider = transactionProvider;
     }
 
     /// <inheritdoc/>
@@ -43,6 +46,7 @@ public sealed class AlertRuleCreateEndpoint : Endpoint<CreateAlertRuleRequest, A
     {
         Post("/alert-rules");
         Policies("TenantAdmin");
+        Tags(Services.Billing.EndpointTags.RequiresProSubscription);
         Version(1);
     }
 
@@ -58,17 +62,13 @@ public sealed class AlertRuleCreateEndpoint : Endpoint<CreateAlertRuleRequest, A
             return;
         }
 
+        // Pro+ gating (null/Free/non-Active → 403) is enforced by ProSubscriptionPreProcessor via
+        // the RequiresProSubscription tag. The subscription is still loaded here for the Team-tier
+        // check below. The pre-processor guarantees a non-null, Active, non-Free subscription.
         TenantSubscription? subscription = await _subscriptionService.GetSubscriptionForTenantAsync(tenantId.Value, ct);
-        if ((subscription is null) || (subscription.Tier == SubscriptionTier.Free) || (subscription.Status != SubscriptionStatus.Active))
-        {
-            HttpContext.Response.StatusCode = 403;
-            await HttpContext.Response.WriteAsJsonAsync(ApiResponse<AlertRuleDto>.Error("Alerting requires a Pro or Team subscription"), ct);
-
-            return;
-        }
 
         // Only Team tier can create custom rules
-        if (subscription.Tier != SubscriptionTier.Team)
+        if ((subscription is null) || (subscription.Tier != SubscriptionTier.Team))
         {
             HttpContext.Response.StatusCode = 403;
             await HttpContext.Response.WriteAsJsonAsync(ApiResponse<AlertRuleDto>.Error("Custom alert rules require a Team subscription"), ct);
@@ -143,9 +143,7 @@ public sealed class AlertRuleCreateEndpoint : Endpoint<CreateAlertRuleRequest, A
             UpdatedAt = now,
         };
 
-        rule = await _alertRuleRepo.CreateAlertRuleAsync(rule, ct);
-
-        // Validate machine IDs belong to this tenant
+        // Validate machine IDs belong to this tenant before opening the transaction
         List<long> validMachineIds = await _machineRepo.GetActiveMachineIdsForTenantAsync(tenantId.Value, req.MachineIds, ct);
         if (validMachineIds.Count != req.MachineIds.Distinct().Count())
         {
@@ -156,12 +154,17 @@ public sealed class AlertRuleCreateEndpoint : Endpoint<CreateAlertRuleRequest, A
             return;
         }
 
+        using IDatabaseTransaction transaction = await _transactionProvider.BeginTransactionAsync(ct);
+
+        rule = await _alertRuleRepo.CreateAlertRuleAsync(rule, ct);
         await _alertRuleRepo.SetMachinesForRuleAsync(rule.Id, req.MachineIds, ct);
 
         await _auditLog.InsertAuditLogAsync(AuditHelper.Create(
             tenantId.Value, userId.Value, null,
             AuditAction.AlertRuleCreated, AuditResourceType.AlertRule,
             rule.Id.ToString(), rule.Name, null), ct);
+
+        await transaction.CommitAsync(ct);
 
         AlertRuleDto dto = new()
         {

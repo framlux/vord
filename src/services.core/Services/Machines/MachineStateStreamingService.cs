@@ -3,21 +3,25 @@
 // See LICENSE for details.
 
 using System.Globalization;
-using System.Text.Json;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Services.Core.Infrastructure;
-using Framlux.FleetManagement.Services.Core.Telemetry;
+using Framlux.FleetManagement.Services.Core.Machines.Projection;
 
 namespace Framlux.FleetManagement.Services.Core.Machines;
 
 /// <summary>
-/// Continuously polls MachineTelemetry by high-water mark and applies targeted
-/// per-column UPDATEs to MachineStateSummary and MachineStateDetail.
-/// Only updates the columns relevant to each telemetry type plus LastSeenAt.
+/// Continuously polls MachineTelemetry by high-water mark and projects new rows into
+/// MachineStateSummary and MachineStateDetail. Each batch is collapsed to one
+/// <see cref="MachineStatePatch"/> per machine via <see cref="MachineStateBatchCollapser"/>,
+/// so the service issues at most one UPDATE per table per machine rather than one per row.
+/// For each telemetry type the latest row by (ReceivedAt, Id) wins, so a backfilled row that
+/// arrives with a higher Id but an older ReceivedAt can never overwrite a fresher reading.
+/// LastSeenAt is set to MAX(ReceivedAt) across the machine's batch rows and is monotonic —
+/// the apply never moves an already-stored LastSeenAt backward.
 /// Does not compute health — that is handled by HealthSweepCoordinatorJob + HealthSweepTenantJob.
-/// Processes one row at a time for O(1) memory usage.
+/// The raw MachineTelemetry table is never modified, so history/detail read paths are untouched.
 /// </summary>
 public sealed class MachineStateStreamingService : BackgroundService
 {
@@ -49,6 +53,7 @@ public sealed class MachineStateStreamingService : BackgroundService
     private readonly ISqlDialect _dialect;
     private readonly IAdvisoryLockProvider _advisoryLockProvider;
     private readonly IServerSettingsCache _settingsCache;
+    private readonly TimeProvider _timeProvider;
     private readonly TimeSpan _startupDelay;
     private readonly ILogger<MachineStateStreamingService> _logger;
 
@@ -62,6 +67,7 @@ public sealed class MachineStateStreamingService : BackgroundService
     /// <param name="advisoryLockProvider">Provides exclusive coordination across replicas.</param>
     /// <param name="settingsCache">Stores the streaming high-water mark across restarts.</param>
     /// <param name="logger">The logger.</param>
+    /// <param name="timeProvider">Clock abstraction used for loop delays so tests do not depend on wall-clock time.</param>
     /// <param name="startupDelay">Optional override for the startup delay; tests use a short value to keep the suite fast.</param>
     public MachineStateStreamingService(
         IServiceScopeFactory scopeFactory,
@@ -69,6 +75,7 @@ public sealed class MachineStateStreamingService : BackgroundService
         IAdvisoryLockProvider advisoryLockProvider,
         IServerSettingsCache settingsCache,
         ILogger<MachineStateStreamingService> logger,
+        TimeProvider? timeProvider = null,
         TimeSpan? startupDelay = null)
     {
         ArgumentNullException.ThrowIfNull(scopeFactory);
@@ -81,6 +88,7 @@ public sealed class MachineStateStreamingService : BackgroundService
         _dialect = dialect;
         _advisoryLockProvider = advisoryLockProvider;
         _settingsCache = settingsCache;
+        _timeProvider = timeProvider ?? TimeProvider.System;
         _startupDelay = startupDelay ?? DefaultStartupDelay;
         _logger = logger;
     }
@@ -90,7 +98,7 @@ public sealed class MachineStateStreamingService : BackgroundService
     {
         if (_startupDelay > TimeSpan.Zero)
         {
-            await Task.Delay(_startupDelay, stoppingToken);
+            await Task.Delay(_startupDelay, _timeProvider, stoppingToken);
         }
 
         _logger.LogInformation("Machine state streaming service started");
@@ -103,7 +111,7 @@ public sealed class MachineStateStreamingService : BackgroundService
                 if (lockHandle is null)
                 {
                     _logger.LogDebug("State streaming: another instance holds the lock, waiting");
-                    await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken);
+                    await Task.Delay(TimeSpan.FromSeconds(5), _timeProvider, stoppingToken);
 
                     continue;
                 }
@@ -118,7 +126,7 @@ public sealed class MachineStateStreamingService : BackgroundService
             catch (Exception ex)
             {
                 _logger.LogError(ex, "Error in state streaming service, will retry");
-                await Task.Delay(TimeSpan.FromSeconds(5), stoppingToken);
+                await Task.Delay(TimeSpan.FromSeconds(5), _timeProvider, stoppingToken);
             }
         }
 
@@ -126,9 +134,9 @@ public sealed class MachineStateStreamingService : BackgroundService
     }
 
     /// <summary>
-    /// Main streaming loop: continuously polls MachineTelemetry for new rows
-    /// and applies targeted UPDATEs to the summary and detail tables.
-    /// Groups rows by machine and processes machines concurrently for throughput.
+    /// Main streaming loop: continuously polls MachineTelemetry for new rows, collapses each
+    /// batch to one <see cref="MachineStatePatch"/> per machine, and applies at most one UPDATE
+    /// per table per machine. Machines are applied concurrently for throughput.
     /// </summary>
     private async Task StreamLoopAsync(CancellationToken ct)
     {
@@ -137,40 +145,42 @@ public sealed class MachineStateStreamingService : BackgroundService
             using IServiceScope scope = _scopeFactory.CreateScope();
             IMachineStateRepository repo = scope.ServiceProvider.GetRequiredService<IMachineStateRepository>();
 
-            DateTimeOffset streamingWindow = DateTimeOffset.UtcNow.AddDays(-2);
+            DateTimeOffset streamingWindow = _timeProvider.GetUtcNow().AddDays(-2);
             List<MachineTelemetry> batch = await repo.GetTelemetryBatchAsync(
                 _highWaterMark, streamingWindow, BatchSize, ct);
 
             if (batch.Count == 0)
             {
-                await Task.Delay(IdleSleepDuration, ct);
+                await Task.Delay(IdleSleepDuration, _timeProvider, ct);
 
                 continue;
             }
 
-            // Group by machine to process different machines concurrently.
-            // Rows within the same machine are processed sequentially to avoid state conflicts.
-            IEnumerable<IGrouping<long, MachineTelemetry>> machineGroups = batch.GroupBy(r => r.MachineId);
+            // Collapse the batch into one patch per machine, then apply at most one UPDATE per
+            // table per machine. For each telemetry type the latest row by (ReceivedAt, Id) wins.
+            CollapseResult collapse = MachineStateBatchCollapser.Collapse(batch);
 
-            await Parallel.ForEachAsync(machineGroups, new ParallelOptions
+            foreach (SkippedTelemetryRow skip in collapse.Skipped)
+            {
+                _logger.LogWarning(
+                    "Skipped malformed telemetry row {RowId} (type {TelemetryType}) for machine {MachineId}",
+                    skip.RowId, skip.TelemetryType, skip.MachineId);
+            }
+
+            await Parallel.ForEachAsync(collapse.Patches, new ParallelOptions
             {
                 MaxDegreeOfParallelism = MaxDegreeOfParallelism,
                 CancellationToken = ct
-            }, async (group, token) =>
+            }, async (patch, token) =>
             {
                 using IServiceScope innerScope = _scopeFactory.CreateScope();
                 IMachineStateRepository innerRepo = innerScope.ServiceProvider.GetRequiredService<IMachineStateRepository>();
 
-                foreach (MachineTelemetry row in group)
+                await innerRepo.ApplySummaryPatchAsync(MapSummary(patch), token);
+
+                if (patch.HasDetailChanges == true)
                 {
-                    try
-                    {
-                        await ProcessTelemetryRowAsync(innerRepo, row, token);
-                    }
-                    catch (Exception ex)
-                    {
-                        _logger.LogWarning(ex, "Failed to process telemetry row {Id} for machine {MachineId}", row.Id, row.MachineId);
-                    }
+                    await innerRepo.ApplyDetailPatchAsync(MapDetail(patch), token);
                 }
             });
 
@@ -182,312 +192,79 @@ public sealed class MachineStateStreamingService : BackgroundService
     }
 
     /// <summary>
-    /// Processes a single telemetry row by applying a targeted UPDATE to the
-    /// summary and/or detail tables based on the telemetry type.
+    /// Maps a services.core projection patch onto the database-layer summary carrier. Each owning
+    /// type's presence flag is set from whether its fragment is present, and the fragment's columns
+    /// are copied across. Keeps the dependency direction (services.core to database) intact.
     /// </summary>
-    internal async Task ProcessTelemetryRowAsync(IMachineStateRepository repo, MachineTelemetry row, CancellationToken ct)
+    private static MachineSummaryPatch MapSummary(MachineStatePatch patch)
     {
-        DateTimeOffset receivedAt = row.ReceivedAt;
-        long machineId = row.MachineId;
-
-        switch (row.TelemetryType)
+        return new MachineSummaryPatch
         {
-            case TelemetryTypeIds.SystemInfo:
-                await ProcessSystemInfoAsync(repo, machineId, row.Payload, receivedAt, ct);
-                break;
-
-            case TelemetryTypeIds.OsVersion:
-                await ProcessOsVersionAsync(repo, machineId, row.Payload, receivedAt, ct);
-                break;
-
-            case TelemetryTypeIds.CpuInfo:
-                await ProcessCpuInfoAsync(repo, machineId, row.Payload, receivedAt, ct);
-                break;
-
-            case TelemetryTypeIds.MemoryInfo:
-                await ProcessMemoryInfoAsync(repo, machineId, row.Payload, receivedAt, ct);
-                break;
-
-            case TelemetryTypeIds.DiskInfo:
-                await ProcessDiskInfoAsync(repo, machineId, row.Payload, receivedAt, ct);
-                break;
-
-            case TelemetryTypeIds.CpuUsage:
-                await ProcessCpuUsageAsync(repo, machineId, row.Payload, receivedAt, ct);
-                break;
-
-            case TelemetryTypeIds.MemoryUsage:
-                await ProcessMemoryUsageAsync(repo, machineId, row.Payload, receivedAt, ct);
-                break;
-
-            case TelemetryTypeIds.DiskUsage:
-                await ProcessDiskUsageAsync(repo, machineId, row.Payload, receivedAt, ct);
-                break;
-
-            case TelemetryTypeIds.SshSessions:
-                await ProcessSshSessionsAsync(repo, machineId, row.Payload, receivedAt, ct);
-                break;
-
-            case TelemetryTypeIds.HardwareHealth:
-                await ProcessHardwareHealthAsync(repo, machineId, row.Payload, receivedAt, ct);
-                break;
-
-            case TelemetryTypeIds.PackageUpdates:
-                await ProcessPackageUpdatesAsync(repo, machineId, row.Payload, receivedAt, ct);
-                break;
-
-            case TelemetryTypeIds.ServiceStatus:
-                await ProcessServiceStatusAsync(repo, machineId, row.Payload, receivedAt, ct);
-                break;
-
-            default:
-                _logger.LogDebug("Unknown telemetry type {Type} for machine {MachineId}", row.TelemetryType, machineId);
-                break;
-        }
-    }
-
-    private static async Task ProcessSystemInfoAsync(IMachineStateRepository repo, long machineId, string payload, DateTimeOffset ts, CancellationToken ct)
-    {
-        using JsonDocument doc = JsonDocument.Parse(payload);
-        JsonElement root = doc.RootElement;
-
-        string? hostname = root.TryGetProperty("hostname", out JsonElement h) ? h.GetString() : null;
-        string? hardwareModel = root.TryGetProperty("hardware_model", out JsonElement hm) ? hm.GetString() : null;
-        string? hardwareVendor = root.TryGetProperty("hardware_vendor", out JsonElement hv) ? hv.GetString() : null;
-        string? hardwareSerial = root.TryGetProperty("hardware_serial", out JsonElement hs) ? hs.GetString() : null;
-        string? cpuBrand = root.TryGetProperty("cpu_brand", out JsonElement cb) ? cb.GetString() : null;
-        int? cpuCores = root.TryGetProperty("cpu_cores", out JsonElement cc) ? cc.GetInt32() : null;
-        long? memoryTotal = root.TryGetProperty("memory_total_bytes", out JsonElement mt) ? mt.GetInt64() : null;
-        long? uptime = root.TryGetProperty("uptime_seconds", out JsonElement ut) ? ut.GetInt64() : null;
-        string? biosVersion = root.TryGetProperty("bios_version", out JsonElement bv) ? bv.GetString() : null;
-        string? ipAddresses = root.TryGetProperty("ip_addresses", out JsonElement ip) ? ip.GetRawText() : null;
-
-        await repo.UpdateSystemInfoSummaryAsync(machineId, hostname, hardwareModel, ipAddresses, ts, ct);
-        await repo.UpdateSystemInfoDetailAsync(machineId, hardwareVendor, hardwareSerial, cpuBrand, cpuCores, memoryTotal, uptime, biosVersion, ct);
-    }
-
-    private static async Task ProcessOsVersionAsync(IMachineStateRepository repo, long machineId, string payload, DateTimeOffset ts, CancellationToken ct)
-    {
-        using JsonDocument doc = JsonDocument.Parse(payload);
-        JsonElement root = doc.RootElement;
-
-        string? osName = root.TryGetProperty("os_name", out JsonElement on) ? on.GetString() : null;
-        string? osVersion = root.TryGetProperty("os_version", out JsonElement ov) ? ov.GetString() : null;
-        string? kernel = root.TryGetProperty("kernel", out JsonElement k) ? k.GetString() : null;
-
-        await repo.UpdateOsVersionSummaryAsync(machineId, osName, osVersion, ts, ct);
-        await repo.UpdateOsVersionDetailAsync(machineId, kernel, ct);
-    }
-
-    private static async Task ProcessCpuInfoAsync(IMachineStateRepository repo, long machineId, string payload, DateTimeOffset ts, CancellationToken ct)
-    {
-        using JsonDocument doc = JsonDocument.Parse(payload);
-        JsonElement root = doc.RootElement;
-
-        string? cpuType = root.TryGetProperty("cpu_type", out JsonElement ct2) ? ct2.GetString() : null;
-        int? physCpus = root.TryGetProperty("physical_cpus", out JsonElement pc) ? pc.GetInt32() : null;
-        int? logCpus = root.TryGetProperty("logical_cpus", out JsonElement lc) ? lc.GetInt32() : null;
-
-        await repo.UpdateCpuInfoSummaryAsync(machineId, ts, ct);
-        await repo.UpdateCpuInfoDetailAsync(machineId, cpuType, physCpus, logCpus, ct);
-    }
-
-    private static async Task ProcessMemoryInfoAsync(IMachineStateRepository repo, long machineId, string payload, DateTimeOffset ts, CancellationToken ct)
-    {
-        using JsonDocument doc = JsonDocument.Parse(payload);
-        JsonElement root = doc.RootElement;
-
-        long? swapTotal = root.TryGetProperty("swap_total_bytes", out JsonElement st) ? st.GetInt64() : null;
-        long? swapFree = root.TryGetProperty("swap_free_bytes", out JsonElement sf) ? sf.GetInt64() : null;
-
-        await repo.UpdateMemoryInfoSummaryAsync(machineId, ts, ct);
-        await repo.UpdateMemoryInfoDetailAsync(machineId, swapTotal, swapFree, ct);
-    }
-
-    private static async Task ProcessDiskInfoAsync(IMachineStateRepository repo, long machineId, string payload, DateTimeOffset ts, CancellationToken ct)
-    {
-        await repo.UpdateDiskInfoSummaryAsync(machineId, ts, ct);
-        await repo.UpdateDiskInfoDetailAsync(machineId, payload, ct);
-    }
-
-    private static async Task ProcessCpuUsageAsync(IMachineStateRepository repo, long machineId, string payload, DateTimeOffset ts, CancellationToken ct)
-    {
-        using JsonDocument doc = JsonDocument.Parse(payload);
-        JsonElement root = doc.RootElement;
-
-        int? cpuPercent = root.TryGetProperty("cpu_usage_percent", out JsonElement cp) ? cp.GetInt32() : null;
-
-        await repo.UpdateCpuUsageSummaryAsync(machineId, cpuPercent, ts, ct);
-    }
-
-    private static async Task ProcessMemoryUsageAsync(IMachineStateRepository repo, long machineId, string payload, DateTimeOffset ts, CancellationToken ct)
-    {
-        using JsonDocument doc = JsonDocument.Parse(payload);
-        JsonElement root = doc.RootElement;
-
-        long? memUsed = root.TryGetProperty("memory_used", out JsonElement mu) ? mu.GetInt64() : null;
-        int? memPercent = root.TryGetProperty("memory_usage_percent", out JsonElement mp) ? mp.GetInt32() : null;
-
-        await repo.UpdateMemoryUsageSummaryAsync(machineId, memPercent, ts, ct);
-        await repo.UpdateMemoryUsageDetailAsync(machineId, memUsed, ct);
-    }
-
-    private static async Task ProcessDiskUsageAsync(IMachineStateRepository repo, long machineId, string payload, DateTimeOffset ts, CancellationToken ct)
-    {
-        int maxDiskUsage = ComputeMaxDiskUsagePercent(payload);
-
-        await repo.UpdateDiskUsageSummaryAsync(machineId, maxDiskUsage, ts, ct);
-        await repo.UpdateDiskUsageDetailAsync(machineId, payload, ct);
-    }
-
-    private static async Task ProcessSshSessionsAsync(IMachineStateRepository repo, long machineId, string payload, DateTimeOffset ts, CancellationToken ct)
-    {
-        await repo.UpdateSshSessionsSummaryAsync(machineId, ts, ct);
-        await repo.UpdateSshSessionsDetailAsync(machineId, payload, ct);
-    }
-
-    private static async Task ProcessHardwareHealthAsync(IMachineStateRepository repo, long machineId, string payload, DateTimeOffset ts, CancellationToken ct)
-    {
-        (bool hasDiskIssue, bool hasHardwareIssue) = ComputeHardwareHealthFlags(payload);
-
-        await repo.UpdateHardwareHealthSummaryAsync(machineId, hasDiskIssue, hasHardwareIssue, ts, ct);
-        await repo.UpdateHardwareHealthDetailAsync(machineId, payload, ct);
-    }
-
-    private static async Task ProcessPackageUpdatesAsync(IMachineStateRepository repo, long machineId, string payload, DateTimeOffset ts, CancellationToken ct)
-    {
-        using JsonDocument doc = JsonDocument.Parse(payload);
-        JsonElement root = doc.RootElement;
-
-        int? pending = root.TryGetProperty("pending_updates", out JsonElement pu) ? pu.GetInt32() : null;
-        int? security = root.TryGetProperty("security_updates", out JsonElement su) ? su.GetInt32() : null;
-
-        await repo.UpdatePackageUpdatesSummaryAsync(machineId, pending, security, ts, ct);
-    }
-
-    private static async Task ProcessServiceStatusAsync(IMachineStateRepository repo, long machineId, string payload, DateTimeOffset ts, CancellationToken ct)
-    {
-        using JsonDocument doc = JsonDocument.Parse(payload);
-        JsonElement root = doc.RootElement;
-
-        int? total = root.TryGetProperty("total_services", out JsonElement ts2) ? ts2.GetInt32() : null;
-        int? failed = root.TryGetProperty("failed_services", out JsonElement fs) ? fs.GetInt32() : null;
-
-        await repo.UpdateServiceStatusSummaryAsync(machineId, total, failed, ts, ct);
+            MachineId = patch.MachineId,
+            LastSeenAt = patch.LastSeenAt,
+            HasSystemInfo = patch.SystemInfo is not null,
+            Hostname = patch.SystemInfo?.Hostname,
+            HardwareModel = patch.SystemInfo?.HardwareModel,
+            IpAddresses = patch.SystemInfo?.IpAddresses,
+            HasOsVersion = patch.OsVersion is not null,
+            OsName = patch.OsVersion?.OsName,
+            OsVersion = patch.OsVersion?.OsVersion,
+            HasCpuUsage = patch.CpuUsage is not null,
+            CpuUsagePercent = patch.CpuUsage?.CpuUsagePercent,
+            HasMemoryUsage = patch.MemoryUsage is not null,
+            MemoryUsagePercent = patch.MemoryUsage?.MemoryUsagePercent,
+            HasDiskUsage = patch.DiskUsage is not null,
+            MaxDiskUsagePercent = patch.DiskUsage?.MaxDiskUsagePercent,
+            HasHardwareHealth = patch.HardwareHealth is not null,
+            HasDiskHealthIssue = patch.HardwareHealth?.HasDiskHealthIssue,
+            HasHardwareIssue = patch.HardwareHealth?.HasHardwareIssue,
+            HasPackageUpdates = patch.PackageUpdates is not null,
+            PendingUpdates = patch.PackageUpdates?.PendingUpdates,
+            SecurityUpdates = patch.PackageUpdates?.SecurityUpdates,
+            HasServiceStatus = patch.ServiceStatus is not null,
+            TotalServices = patch.ServiceStatus?.TotalServices,
+            FailedServices = patch.ServiceStatus?.FailedServices,
+        };
     }
 
     /// <summary>
-    /// Computes the maximum disk usage percentage across all disks in the JSONB payload.
+    /// Maps a services.core projection patch onto the database-layer detail carrier. Each owning
+    /// type's presence flag is set from whether its fragment is present, and the fragment's columns
+    /// are copied across. Keeps the dependency direction (services.core to database) intact.
     /// </summary>
-    internal static int ComputeMaxDiskUsagePercent(string diskUsagesJson)
+    private static MachineDetailPatch MapDetail(MachineStatePatch patch)
     {
-        int maxUsage = 0;
-
-        try
+        return new MachineDetailPatch
         {
-            using JsonDocument doc = JsonDocument.Parse(diskUsagesJson);
-            JsonElement root = doc.RootElement;
-
-            // The payload is serialized from DiskUtilizationRecord which wraps disks in a "disks" property.
-            JsonElement disksElement;
-            if (root.ValueKind == JsonValueKind.Array)
-            {
-                disksElement = root;
-            }
-            else if (root.TryGetProperty("disks", out JsonElement d) && (d.ValueKind == JsonValueKind.Array))
-            {
-                disksElement = d;
-            }
-            else
-            {
-                return maxUsage;
-            }
-
-            foreach (JsonElement disk in disksElement.EnumerateArray())
-            {
-                if (disk.TryGetProperty("usage_percent", out JsonElement up))
-                {
-                    int usage = up.GetInt32();
-                    if (usage > maxUsage)
-                    {
-                        maxUsage = usage;
-                    }
-                }
-            }
-        }
-        catch (JsonException)
-        {
-            // Malformed payload — return 0.
-        }
-
-        return maxUsage;
-    }
-
-    /// <summary>
-    /// Computes hardware health flags from the JSONB payload.
-    /// Returns (hasDiskHealthIssue, hasHardwareIssue).
-    /// </summary>
-    internal static (bool HasDiskHealthIssue, bool HasHardwareIssue) ComputeHardwareHealthFlags(string hardwareHealthJson)
-    {
-        bool hasDiskIssue = false;
-        bool hasHardwareIssue = false;
-
-        try
-        {
-            using JsonDocument doc = JsonDocument.Parse(hardwareHealthJson);
-            JsonElement root = doc.RootElement;
-
-            if (root.TryGetProperty("disk_smart", out JsonElement diskSmart) &&
-                diskSmart.ValueKind == JsonValueKind.Array)
-            {
-                foreach (JsonElement disk in diskSmart.EnumerateArray())
-                {
-                    if (disk.TryGetProperty("health_status", out JsonElement status) &&
-                        string.Equals(status.GetString(), "FAILED", StringComparison.OrdinalIgnoreCase))
-                    {
-                        hasDiskIssue = true;
-
-                        break;
-                    }
-                }
-            }
-
-            if (root.TryGetProperty("fans", out JsonElement fans) &&
-                fans.ValueKind == JsonValueKind.Array)
-            {
-                foreach (JsonElement fan in fans.EnumerateArray())
-                {
-                    if (fan.TryGetProperty("rpm", out JsonElement rpm) && (rpm.GetInt32() == 0))
-                    {
-                        hasHardwareIssue = true;
-
-                        break;
-                    }
-                }
-            }
-
-            if ((hasHardwareIssue == false) &&
-                root.TryGetProperty("power_supplies", out JsonElement powerSupplies) &&
-                powerSupplies.ValueKind == JsonValueKind.Array)
-            {
-                foreach (JsonElement ps in powerSupplies.EnumerateArray())
-                {
-                    if (ps.TryGetProperty("status", out JsonElement psStatus) &&
-                        (string.Equals(psStatus.GetString(), "OK", StringComparison.OrdinalIgnoreCase) == false))
-                    {
-                        hasHardwareIssue = true;
-
-                        break;
-                    }
-                }
-            }
-        }
-        catch (JsonException)
-        {
-            // Malformed payload — leave flags as false.
-        }
-
-        return (hasDiskIssue, hasHardwareIssue);
+            MachineId = patch.MachineId,
+            HasSystemInfo = patch.SystemInfo is not null,
+            HardwareVendor = patch.SystemInfo?.HardwareVendor,
+            HardwareSerial = patch.SystemInfo?.HardwareSerial,
+            CpuBrand = patch.SystemInfo?.CpuBrand,
+            CpuCores = patch.SystemInfo?.CpuCores,
+            MemoryTotalBytes = patch.SystemInfo?.MemoryTotalBytes,
+            UptimeSeconds = patch.SystemInfo?.UptimeSeconds,
+            BiosVersion = patch.SystemInfo?.BiosVersion,
+            HasOsVersion = patch.OsVersion is not null,
+            Kernel = patch.OsVersion?.Kernel,
+            HasCpuInfo = patch.CpuInfo is not null,
+            CpuType = patch.CpuInfo?.CpuType,
+            CpuPhysicalCpus = patch.CpuInfo?.CpuPhysicalCpus,
+            CpuLogicalCpus = patch.CpuInfo?.CpuLogicalCpus,
+            HasMemoryInfo = patch.MemoryInfo is not null,
+            SwapTotalBytes = patch.MemoryInfo?.SwapTotalBytes,
+            SwapFreeBytes = patch.MemoryInfo?.SwapFreeBytes,
+            HasMemoryUsage = patch.MemoryUsage is not null,
+            MemoryUsedBytes = patch.MemoryUsage?.MemoryUsedBytes,
+            HasDiskInfo = patch.DiskInfo is not null,
+            DiskInfos = patch.DiskInfo?.DiskInfos,
+            HasDiskUsage = patch.DiskUsage is not null,
+            DiskUsages = patch.DiskUsage?.DiskUsages,
+            HasSshSessions = patch.SshSessions is not null,
+            SshSessions = patch.SshSessions?.SshSessions,
+            HasHardwareHealth = patch.HardwareHealth is not null,
+            HardwareHealth = patch.HardwareHealth?.HardwareHealth,
+        };
     }
 
     private async Task LoadHighWaterMarkAsync(CancellationToken ct)

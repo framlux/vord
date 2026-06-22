@@ -11,6 +11,7 @@ using Framlux.FleetManagement.Services.Core.Billing;
 using Framlux.FleetManagement.Services.Core.Infrastructure;
 using Framlux.FleetManagement.Services.Core.Notifications;
 using Framlux.FleetManagement.Services.Core.Security;
+using Hangfire;
 
 namespace Framlux.FleetManagement.Services.Core.Handlers;
 
@@ -24,7 +25,7 @@ public sealed class InvitationHandler : IInvitationHandler
     private readonly IInvitationRepository _invitationRepository;
     private readonly ITenantRepository _tenantRepository;
     private readonly ISubscriptionRepository _subscriptionRepository;
-    private readonly IEmailService _emailService;
+    private readonly IBackgroundJobClient _backgroundJobClient;
     private readonly ISubscriptionService _subscriptionService;
     private readonly IRoleCacheInvalidator _roleCacheInvalidator;
 
@@ -37,7 +38,7 @@ public sealed class InvitationHandler : IInvitationHandler
         IInvitationRepository invitationRepository,
         ITenantRepository tenantRepository,
         ISubscriptionRepository subscriptionRepository,
-        IEmailService emailService,
+        IBackgroundJobClient backgroundJobClient,
         ISubscriptionService subscriptionService,
         IRoleCacheInvalidator roleCacheInvalidator)
     {
@@ -46,7 +47,7 @@ public sealed class InvitationHandler : IInvitationHandler
         ArgumentNullException.ThrowIfNull(invitationRepository);
         ArgumentNullException.ThrowIfNull(tenantRepository);
         ArgumentNullException.ThrowIfNull(subscriptionRepository);
-        ArgumentNullException.ThrowIfNull(emailService);
+        ArgumentNullException.ThrowIfNull(backgroundJobClient);
         ArgumentNullException.ThrowIfNull(subscriptionService);
         ArgumentNullException.ThrowIfNull(roleCacheInvalidator);
 
@@ -55,7 +56,7 @@ public sealed class InvitationHandler : IInvitationHandler
         _invitationRepository = invitationRepository;
         _tenantRepository = tenantRepository;
         _subscriptionRepository = subscriptionRepository;
-        _emailService = emailService;
+        _backgroundJobClient = backgroundJobClient;
         _subscriptionService = subscriptionService;
         _roleCacheInvalidator = roleCacheInvalidator;
     }
@@ -147,7 +148,9 @@ public sealed class InvitationHandler : IInvitationHandler
         Tenant? tenant = await _tenantRepository.GetTenantByIdAsync(tenantId.Value, ct);
         string tenantName = tenant?.Name ?? "your organization";
 
-        await _emailService.SendInvitationEmailAsync(normalizedEmail, tenantName, "A team member", acceptUrl, ct);
+        // Enqueue after the transaction commits so the invitation is persisted before we promise to email.
+        // The job retries on failure via Hangfire so a transient Resend outage does not silently drop the email.
+        _backgroundJobClient.Enqueue<SendInvitationEmailJob>(j => j.SendAsync(normalizedEmail, tenantName, "A team member", acceptUrl, CancellationToken.None));
 
         return ServiceResult<InvitationCreateResult>.Ok(new InvitationCreateResult
         {
@@ -372,7 +375,9 @@ public sealed class InvitationHandler : IInvitationHandler
         Tenant? tenant = await _tenantRepository.GetTenantByIdAsync(tenantId.Value, ct);
         string tenantName = tenant?.Name ?? "your organization";
 
-        await _emailService.SendInvitationEmailAsync(oldInvitation.Email, tenantName, inviterEmail, acceptUrl, ct);
+        // Enqueue after the transaction commits so the new invitation is persisted before we promise to email.
+        // The job retries on failure via Hangfire so a transient Resend outage does not silently drop the email.
+        _backgroundJobClient.Enqueue<SendInvitationEmailJob>(j => j.SendAsync(oldInvitation.Email, tenantName, inviterEmail, acceptUrl, CancellationToken.None));
 
         return ServiceResult<InvitationResendResult>.Ok(new InvitationResendResult
         {

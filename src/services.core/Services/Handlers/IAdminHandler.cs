@@ -24,9 +24,10 @@ public interface IAdminHandler
     /// Updates one or more server configuration settings.
     /// </summary>
     /// <param name="updates">The settings to update.</param>
+    /// <param name="userId">The ID of the global admin performing the update.</param>
     /// <param name="ct">A cancellation token.</param>
     /// <returns>A service result containing the full updated list of settings.</returns>
-    Task<ServiceResult<List<SettingEntry>>> UpdateSettingsAsync(List<SettingUpdateEntry> updates, CancellationToken ct);
+    Task<ServiceResult<List<SettingEntry>>> UpdateSettingsAsync(List<SettingUpdateEntry> updates, int userId, CancellationToken ct);
 
     /// <summary>
     /// Returns all user accounts with their tenant roles.

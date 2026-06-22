@@ -114,6 +114,17 @@ func (p *Processor) Process(ctx context.Context, cmd PendingCommand, agentTenant
 		return
 	}
 
+	// 1a. Authorize the command's UserID against the user bound to the signing key.
+	// A signing key is issued to a specific user; a command must be attributed to
+	// that same user. Rejecting here prevents one user's key from authorizing
+	// commands claimed under another user's identity.
+	if cmd.UserID != key.UserID {
+		slog.Error("command user does not match signing key owner, rejecting", "command_id", cmd.ID, "cmd_user", cmd.UserID, "key_user", key.UserID, "key_id", cmd.SigningKeyID)
+		p.ack.Acknowledge(ctx, cmd.ID, agentMachineID, false, -1, "", "", "user/key mismatch", ResultTypeRejected)
+
+		return
+	}
+
 	// 2. Rebuild canonical payload from individual fields and verify Ed25519 signature.
 	rebuiltPayload, err := crypto.BuildCanonicalPayload(crypto.CanonicalPayload{
 		CommandID:   cmd.ID,

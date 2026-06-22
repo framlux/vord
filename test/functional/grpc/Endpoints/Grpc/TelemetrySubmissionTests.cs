@@ -637,6 +637,7 @@ public sealed class TelemetrySubmissionTests
             Name = "Telemetry Test Token",
             CreatedByUserId = 1,
             CreatedAt = DateTimeOffset.UtcNow,
+            ExpiresAt = DateTimeOffset.UtcNow.AddDays(7),
             IsRevoked = false
         };
         long tokenId = (long)await db.InsertWithIdentityAsync(token);

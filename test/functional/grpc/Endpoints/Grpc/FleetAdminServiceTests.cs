@@ -711,6 +711,85 @@ public sealed class FleetAdminServiceTests
         await Assert.That(exception!.StatusCode).IsEqualTo(StatusCode.NotFound);
     }
 
+    // ========== SetTenantOverride / RemoveTenantOverride Audit Tests ==========
+
+    [Test]
+    public async Task SetTenantOverride_ValidRequest_WritesExactlyOneAuditLogEntry()
+    {
+        using FunctionalTestFactory factory = new();
+        factory.WithInternalApiKey("test-key");
+        using DatabaseContext db = factory.CreateDbContext();
+
+        string extId = $"ext-{Guid.NewGuid():N}";
+        int tenantId = await SeedTenantWithSubscription(db, extId, SubscriptionTier.Pro);
+
+        using GrpcChannel channel = CreateChannel(factory);
+        FleetAdmin.FleetAdminClient client = new(channel);
+
+        SetTenantOverrideResponse response = await client.SetTenantOverrideAsync(
+            new SetTenantOverrideRequest
+            {
+                TenantExternalId = extId,
+                MachineLimit = 50,
+                RetentionDays = 30,
+                AlertRuleLimit = 10,
+                WebhookLimit = 5,
+            },
+            Headers("test-key"));
+
+        await Assert.That(response.Success).IsTrue();
+
+        List<AuditLogEntry> entries = await db.AuditLog
+            .Where(e => e.Action == AuditAction.TenantSubscriptionOverrideChanged
+                        && e.ResourceType == AuditResourceType.Subscription
+                        && e.TenantId == tenantId)
+            .ToListAsync();
+
+        await Assert.That(entries.Count).IsEqualTo(1);
+        await Assert.That(entries[0].UserId).IsNull();
+    }
+
+    [Test]
+    public async Task RemoveTenantOverride_ValidRequest_WritesExactlyOneAuditLogEntry()
+    {
+        using FunctionalTestFactory factory = new();
+        factory.WithInternalApiKey("test-key");
+        using DatabaseContext db = factory.CreateDbContext();
+
+        string extId = $"ext-{Guid.NewGuid():N}";
+        int tenantId = await SeedTenantWithSubscription(db, extId, SubscriptionTier.Pro);
+
+        // Seed an override row first so RemoveTenantOverride has something to remove.
+        await db.InsertAsync(new TenantSubscriptionOverride
+        {
+            TenantId = tenantId,
+            MachineLimit = 100,
+            RetentionDays = null,
+            AlertRuleLimit = null,
+            WebhookLimit = null,
+            CreatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow,
+        });
+
+        using GrpcChannel channel = CreateChannel(factory);
+        FleetAdmin.FleetAdminClient client = new(channel);
+
+        RemoveTenantOverrideResponse response = await client.RemoveTenantOverrideAsync(
+            new RemoveTenantOverrideRequest { TenantExternalId = extId },
+            Headers("test-key"));
+
+        await Assert.That(response.Success).IsTrue();
+
+        List<AuditLogEntry> entries = await db.AuditLog
+            .Where(e => e.Action == AuditAction.TenantSubscriptionOverrideChanged
+                        && e.ResourceType == AuditResourceType.Subscription
+                        && e.TenantId == tenantId)
+            .ToListAsync();
+
+        await Assert.That(entries.Count).IsEqualTo(1);
+        await Assert.That(entries[0].UserId).IsNull();
+    }
+
     // ========== ConfigureTenantOidc Tests ==========
 
     [Test]
@@ -932,6 +1011,7 @@ public sealed class FleetAdminServiceTests
             TenantId = tenantId,
             CreatedByUserId = 1,
             CreatedAt = DateTimeOffset.UtcNow,
+            ExpiresAt = DateTimeOffset.UtcNow.AddDays(7),
             IsRevoked = false
         };
         long tokenId = (long)await db.InsertWithIdentityAsync(token);

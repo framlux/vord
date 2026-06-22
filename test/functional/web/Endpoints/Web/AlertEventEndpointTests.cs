@@ -654,6 +654,7 @@ public sealed class AlertEventEndpointTests
             Name = "Alert Event Test Token",
             CreatedByUserId = 1,
             CreatedAt = DateTimeOffset.UtcNow,
+            ExpiresAt = DateTimeOffset.UtcNow.AddDays(7),
             IsRevoked = false,
         };
         long tokenId = await db.InsertWithInt64IdentityAsync(token);

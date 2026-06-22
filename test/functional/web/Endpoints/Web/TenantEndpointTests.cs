@@ -315,4 +315,36 @@ public sealed class TenantEndpointTests
         await Assert.That(locationHeader).IsNotNull();
         await Assert.That(locationHeader!).Contains("/api/v1/tenants/");
     }
+
+    [Test]
+    public async Task CreateTenant_ValidRequest_WritesExactlyOneAuditLogEntry()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId) = await SeedTenantEnvironment(db, isGlobalAdmin: true);
+
+        HttpClient client = new AuthenticatedClientBuilder(factory)
+            .WithUserId(userId)
+            .AsGlobalAdmin()
+            .WithRole(tenantId, (int)UserAccountRoles.TenantAdmin)
+            .WithActiveTenant(tenantId)
+            .Build();
+
+        HttpResponseMessage response = await client.PostAsJsonAsync("/api/v1/tenants", new
+        {
+            Name = $"Audit Tenant {Guid.NewGuid():N}",
+            LogoUrl = "",
+        });
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.Created);
+
+        List<AuditLogEntry> entries = await db.AuditLog
+            .Where(e => e.Action == AuditAction.TenantCreatedByAdmin
+                        && e.ResourceType == AuditResourceType.Tenant)
+            .ToListAsync();
+
+        await Assert.That(entries.Count).IsEqualTo(1);
+        await Assert.That(entries[0].UserId).IsEqualTo(userId);
+        await Assert.That(entries[0].TenantId).IsNotNull();
+    }
 }

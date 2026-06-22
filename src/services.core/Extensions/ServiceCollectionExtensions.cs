@@ -134,12 +134,19 @@ public static class ServiceCollectionExtensions
         services.AddLinqToDBContext<DatabaseContext>((provider, options) => options.UsePostgreSQL(connectionString: connectionString)
                 .UseDefaultLogging(provider));
 
+        services.AddScoped<IAuditContextAccessor, NullAuditContextAccessor>();
         services.AddScoped<DatabaseRepository>();
         services.AddScoped<IDatabaseTransactionProvider>(sp => sp.GetRequiredService<DatabaseRepository>());
         services.AddScoped<IAuditLogRepository>(sp => sp.GetRequiredService<DatabaseRepository>());
         services.AddScoped<IUserRepository>(sp => sp.GetRequiredService<DatabaseRepository>());
         services.AddScoped<ITenantRepository>(sp => sp.GetRequiredService<DatabaseRepository>());
-        services.AddScoped<ISubscriptionRepository>(sp => sp.GetRequiredService<DatabaseRepository>());
+        // Subscription status is read on every state-changing request and every unary telemetry
+        // call, so wrap the database-backed repository in a Redis short-TTL caching decorator that
+        // invalidates on subscription mutations.
+        services.AddScoped<ISubscriptionRepository>(sp => new CachingSubscriptionRepository(
+            sp.GetRequiredService<DatabaseRepository>(),
+            sp.GetRequiredService<IConnectionMultiplexer>(),
+            sp.GetRequiredService<IOptions<RedisOptions>>()));
         services.AddScoped<IMachineRepository>(sp => sp.GetRequiredService<DatabaseRepository>());
         services.AddScoped<IInvitationRepository>(sp => sp.GetRequiredService<DatabaseRepository>());
         services.AddScoped<ISigningKeyRepository>(sp => sp.GetRequiredService<DatabaseRepository>());
@@ -259,6 +266,10 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IRoleCacheInvalidator, RoleCacheInvalidator>();
         services.AddHttpClient<IEmailService, ResendEmailService>();
 
+        // System clock abstraction so time-dependent logic (e.g. registration token expiry)
+        // can be unit-tested with a controllable TimeProvider.
+        services.AddSingleton(TimeProvider.System);
+
         // Handler services for extracted endpoint business logic (scoped to share DatabaseContext)
         services.AddScoped<IInvitationHandler, InvitationHandler>();
         services.AddScoped<IMemberHandler, MemberHandler>();
@@ -336,6 +347,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<AlertEvaluationJob>();
         services.AddScoped<AlertConditionStateCleanupJob>();
         services.AddScoped<IntegrationDeliveryJob>();
+        services.AddScoped<SendInvitationEmailJob>();
 
         if (objectStorageEnabled)
         {

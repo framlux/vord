@@ -6,6 +6,7 @@ using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Server.Endpoints.Grpc;
+using Framlux.FleetManagement.Services.Core.Infrastructure;
 using Framlux.FleetManagement.Services.Core.Options;
 using Framlux.FleetManagement.Services.Core.Security;
 using Framlux.Vord.BillingGrpc;
@@ -1428,10 +1429,19 @@ public sealed class FleetAdminServiceTests
         overrideRepo.UpsertOverrideAsync(Arg.Any<int>(), Arg.Any<int?>(), Arg.Any<int?>(), Arg.Any<int?>(), Arg.Any<int?>(), Arg.Any<CancellationToken>())
             .Returns(Task.CompletedTask);
 
+        IDatabaseTransaction tx = Substitute.For<IDatabaseTransaction>();
+        tx.CommitAsync(Arg.Any<CancellationToken>()).Returns(Task.CompletedTask);
+        IDatabaseTransactionProvider txProvider = Substitute.For<IDatabaseTransactionProvider>();
+        txProvider.BeginTransactionAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult(tx));
+        IAuditLogRepository auditLog = Substitute.For<IAuditLogRepository>();
+        auditLog.InsertAuditLogAsync(Arg.Any<AuditLogEntry>(), Arg.Any<CancellationToken>()).Returns(Task.CompletedTask);
+
         IServiceScopeFactory scopeFactory = CreateScopeFactoryWithServices(new Dictionary<Type, object>
         {
             { typeof(ITenantRepository), tenantRepo },
-            { typeof(ITenantSubscriptionOverrideRepository), overrideRepo }
+            { typeof(ITenantSubscriptionOverrideRepository), overrideRepo },
+            { typeof(IDatabaseTransactionProvider), txProvider },
+            { typeof(IAuditLogRepository), auditLog },
         });
 
         FleetAdminService service = CreateFleetAdminService(scopeFactory);
@@ -1476,10 +1486,19 @@ public sealed class FleetAdminServiceTests
         overrideRepo.RemoveOverrideAsync(TenantInternalId, Arg.Any<CancellationToken>())
             .Returns(Task.CompletedTask);
 
+        IDatabaseTransaction tx = Substitute.For<IDatabaseTransaction>();
+        tx.CommitAsync(Arg.Any<CancellationToken>()).Returns(Task.CompletedTask);
+        IDatabaseTransactionProvider txProvider = Substitute.For<IDatabaseTransactionProvider>();
+        txProvider.BeginTransactionAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult(tx));
+        IAuditLogRepository auditLog = Substitute.For<IAuditLogRepository>();
+        auditLog.InsertAuditLogAsync(Arg.Any<AuditLogEntry>(), Arg.Any<CancellationToken>()).Returns(Task.CompletedTask);
+
         IServiceScopeFactory scopeFactory = CreateScopeFactoryWithServices(new Dictionary<Type, object>
         {
             { typeof(ITenantRepository), tenantRepo },
-            { typeof(ITenantSubscriptionOverrideRepository), overrideRepo }
+            { typeof(ITenantSubscriptionOverrideRepository), overrideRepo },
+            { typeof(IDatabaseTransactionProvider), txProvider },
+            { typeof(IAuditLogRepository), auditLog },
         });
 
         FleetAdminService service = CreateFleetAdminService(scopeFactory);

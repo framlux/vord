@@ -91,4 +91,12 @@ public enum AuditAction : short
     AlertEventAcknowledged = 120,
     /// <summary>The alert rules assigned to a machine were updated.</summary>
     MachineAlertRulesUpdated = 130,
+    /// <summary>A server configuration setting was changed by a global admin.</summary>
+    ServerConfigurationChanged = 140,
+    /// <summary>A tenant subscription limit override was set or cleared by an admin.</summary>
+    TenantSubscriptionOverrideChanged = 141,
+    /// <summary>A tenant OIDC configuration was created or updated.</summary>
+    TenantOidcConfigured = 142,
+    /// <summary>A tenant was created by a global admin.</summary>
+    TenantCreatedByAdmin = 143,
 }

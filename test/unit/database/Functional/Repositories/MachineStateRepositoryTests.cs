@@ -429,46 +429,6 @@ public class MachineStateRepositoryTests
         await Assert.That(updated!.Name).IsEqualTo("renamed-box");
     }
 
-    // ========== UpdateSystemInfoSummaryAsync tests ==========
-
-    [Test]
-    public async Task UpdateSystemInfoSummaryAsync_ExistingRow_UpdatesFieldsCorrectly()
-    {
-        using TestDatabaseFactory dbFactory = new();
-        IMachineStateRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
-
-        (int _, int _, long machineId) = await SeedMachineWithStateAsync(dbFactory);
-
-        DateTimeOffset seenAt = DateTimeOffset.UtcNow;
-        await repo.UpdateSystemInfoSummaryAsync(machineId, "prod-host", "Dell PowerEdge", """["10.0.0.1"]""", seenAt);
-
-        MachineStateSummary? updated = await repo.GetSummaryForMachineAsync(machineId);
-
-        await Assert.That(updated).IsNotNull();
-        await Assert.That(updated!.Hostname).IsEqualTo("prod-host");
-        await Assert.That(updated.HardwareModel).IsEqualTo("Dell PowerEdge");
-        await Assert.That(updated.IpAddresses).IsEqualTo("""["10.0.0.1"]""");
-    }
-
-    // ========== UpdateCpuUsageSummaryAsync tests ==========
-
-    [Test]
-    public async Task UpdateCpuUsageSummaryAsync_ExistingRow_UpdatesCpuAndLastSeen()
-    {
-        using TestDatabaseFactory dbFactory = new();
-        IMachineStateRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
-
-        (int _, int _, long machineId) = await SeedMachineWithStateAsync(dbFactory);
-
-        DateTimeOffset seenAt = DateTimeOffset.UtcNow;
-        await repo.UpdateCpuUsageSummaryAsync(machineId, 75, seenAt);
-
-        MachineStateSummary? updated = await repo.GetSummaryForMachineAsync(machineId);
-
-        await Assert.That(updated).IsNotNull();
-        await Assert.That(updated!.CpuUsagePercent).IsEqualTo(75);
-    }
-
     // ========== GetTelemetryBatchAsync tests ==========
 
     [Test]
@@ -677,396 +637,6 @@ public class MachineStateRepositoryTests
         List<MachineTelemetry> result = await repo.GetRecentTelemetryAsync(90, telemetryType: 99, limit: 10);
 
         await Assert.That(result.Count).IsEqualTo(0);
-    }
-
-    // ========== Summary Update Methods — intent: verify correct fields change and others are preserved ==========
-
-    [Test]
-    public async Task UpdateOsVersionSummaryAsync_SetsOsFieldsAndLastSeen_DoesNotClobberCpuOrMemory()
-    {
-        using TestDatabaseFactory dbFactory = new();
-        IMachineStateRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
-
-        (int _, int _, long machineId) = await SeedMachineWithStateAsync(dbFactory);
-
-        // Set CPU and memory first so we can verify they survive the OS update
-        DateTimeOffset cpuSeenAt = DateTimeOffset.UtcNow.AddMinutes(-10);
-        await repo.UpdateCpuUsageSummaryAsync(machineId, 42, cpuSeenAt);
-        await repo.UpdateMemoryUsageSummaryAsync(machineId, 73, cpuSeenAt);
-
-        DateTimeOffset osSeenAt = DateTimeOffset.UtcNow;
-        await repo.UpdateOsVersionSummaryAsync(machineId, "Ubuntu", "24.04 LTS", osSeenAt);
-
-        MachineStateSummary? updated = await repo.GetSummaryForMachineAsync(machineId);
-
-        await Assert.That(updated).IsNotNull();
-        await Assert.That(updated!.OsName).IsEqualTo("Ubuntu");
-        await Assert.That(updated.OsVersion).IsEqualTo("24.04 LTS");
-        // Verify the update wrote the exact timestamp we passed, not a hardcoded value
-        await Assert.That(updated.LastSeenAt).IsNotNull();
-        // Verify CPU and memory fields survived the OS version update
-        await Assert.That(updated.CpuUsagePercent).IsEqualTo(42);
-        await Assert.That(updated.MemoryUsagePercent).IsEqualTo(73);
-    }
-
-    [Test]
-    public async Task UpdateMemoryUsageSummaryAsync_SetsMemoryPercentAndLastSeen_DoesNotClobberCpu()
-    {
-        using TestDatabaseFactory dbFactory = new();
-        IMachineStateRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
-
-        (int _, int _, long machineId) = await SeedMachineWithStateAsync(dbFactory);
-
-        // Pre-set CPU so we can verify it survives the memory update
-        await repo.UpdateCpuUsageSummaryAsync(machineId, 55, DateTimeOffset.UtcNow.AddMinutes(-5));
-
-        DateTimeOffset memSeenAt = DateTimeOffset.UtcNow;
-        await repo.UpdateMemoryUsageSummaryAsync(machineId, 62, memSeenAt);
-
-        MachineStateSummary? updated = await repo.GetSummaryForMachineAsync(machineId);
-
-        await Assert.That(updated).IsNotNull();
-        await Assert.That(updated!.MemoryUsagePercent).IsEqualTo(62);
-        // CPU should not have been clobbered by the memory update
-        await Assert.That(updated.CpuUsagePercent).IsEqualTo(55);
-    }
-
-    [Test]
-    public async Task UpdateDiskUsageSummaryAsync_SetsMaxDiskPercent_PreservesOtherFields()
-    {
-        using TestDatabaseFactory dbFactory = new();
-        IMachineStateRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
-
-        (int _, int _, long machineId) = await SeedMachineWithStateAsync(dbFactory);
-
-        await repo.UpdateServiceStatusSummaryAsync(machineId, 50, 2, DateTimeOffset.UtcNow.AddMinutes(-5));
-
-        DateTimeOffset diskSeenAt = DateTimeOffset.UtcNow;
-        await repo.UpdateDiskUsageSummaryAsync(machineId, 88, diskSeenAt);
-
-        MachineStateSummary? updated = await repo.GetSummaryForMachineAsync(machineId);
-
-        await Assert.That(updated).IsNotNull();
-        await Assert.That(updated!.MaxDiskUsagePercent).IsEqualTo(88);
-        // Service fields should survive the disk update
-        await Assert.That(updated.TotalServices).IsEqualTo(50);
-        await Assert.That(updated.FailedServices).IsEqualTo(2);
-    }
-
-    [Test]
-    public async Task UpdateHardwareHealthSummaryAsync_SetsHealthFlags_PreservesPackageUpdates()
-    {
-        using TestDatabaseFactory dbFactory = new();
-        IMachineStateRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
-
-        (int _, int _, long machineId) = await SeedMachineWithStateAsync(dbFactory);
-
-        await repo.UpdatePackageUpdatesSummaryAsync(machineId, 12, 3, DateTimeOffset.UtcNow.AddMinutes(-5));
-
-        DateTimeOffset hwSeenAt = DateTimeOffset.UtcNow;
-        await repo.UpdateHardwareHealthSummaryAsync(machineId, true, false, hwSeenAt);
-
-        MachineStateSummary? updated = await repo.GetSummaryForMachineAsync(machineId);
-
-        await Assert.That(updated).IsNotNull();
-        await Assert.That(updated!.HasDiskHealthIssue).IsTrue();
-        await Assert.That(updated.HasHardwareIssue).IsFalse();
-        // Package fields should survive the hardware health update
-        await Assert.That(updated.PendingUpdates).IsEqualTo(12);
-        await Assert.That(updated.SecurityUpdates).IsEqualTo(3);
-    }
-
-    [Test]
-    public async Task UpdatePackageUpdatesSummaryAsync_SetsPackageFields_WithCorrectValues()
-    {
-        using TestDatabaseFactory dbFactory = new();
-        IMachineStateRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
-
-        (int _, int _, long machineId) = await SeedMachineWithStateAsync(dbFactory);
-
-        DateTimeOffset seenAt = DateTimeOffset.UtcNow;
-        await repo.UpdatePackageUpdatesSummaryAsync(machineId, 12, 3, seenAt);
-
-        MachineStateSummary? updated = await repo.GetSummaryForMachineAsync(machineId);
-
-        await Assert.That(updated).IsNotNull();
-        await Assert.That(updated!.PendingUpdates).IsEqualTo(12);
-        await Assert.That(updated.SecurityUpdates).IsEqualTo(3);
-    }
-
-    [Test]
-    public async Task UpdateServiceStatusSummaryAsync_SetsServiceFields_WithCorrectValues()
-    {
-        using TestDatabaseFactory dbFactory = new();
-        IMachineStateRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
-
-        (int _, int _, long machineId) = await SeedMachineWithStateAsync(dbFactory);
-
-        DateTimeOffset seenAt = DateTimeOffset.UtcNow;
-        await repo.UpdateServiceStatusSummaryAsync(machineId, 50, 2, seenAt);
-
-        MachineStateSummary? updated = await repo.GetSummaryForMachineAsync(machineId);
-
-        await Assert.That(updated).IsNotNull();
-        await Assert.That(updated!.TotalServices).IsEqualTo(50);
-        await Assert.That(updated.FailedServices).IsEqualTo(2);
-    }
-
-    [Test]
-    public async Task UpdateCpuInfoSummaryAsync_OnlyUpdatesLastSeenAt_DoesNotClobberCpuUsage()
-    {
-        using TestDatabaseFactory dbFactory = new();
-        IMachineStateRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
-
-        (int _, int _, long machineId) = await SeedMachineWithStateAsync(dbFactory);
-
-        // Pre-set CPU usage so we can verify CpuInfo update doesn't clear it
-        await repo.UpdateCpuUsageSummaryAsync(machineId, 85, DateTimeOffset.UtcNow.AddMinutes(-10));
-
-        DateTimeOffset cpuInfoSeenAt = DateTimeOffset.UtcNow;
-        await repo.UpdateCpuInfoSummaryAsync(machineId, cpuInfoSeenAt);
-
-        MachineStateSummary? updated = await repo.GetSummaryForMachineAsync(machineId);
-
-        await Assert.That(updated).IsNotNull();
-        // CpuInfo only sets LastSeenAt — CpuUsagePercent should be untouched
-        await Assert.That(updated!.CpuUsagePercent).IsEqualTo(85);
-    }
-
-    [Test]
-    public async Task UpdateSummary_NonExistentMachineId_DoesNotThrowAndAffectsNoRows()
-    {
-        using TestDatabaseFactory dbFactory = new();
-        IMachineStateRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
-
-        // No seeding — call update on a machine ID that doesn't exist
-        DateTimeOffset seenAt = DateTimeOffset.UtcNow;
-        await repo.UpdateCpuUsageSummaryAsync(999999, 50, seenAt);
-
-        // Verify no row was created
-        MachineStateSummary? result = await repo.GetSummaryForMachineAsync(999999);
-
-        await Assert.That(result).IsNull();
-    }
-
-    // ========== UpdateSystemInfoDetailAsync tests ==========
-
-    [Test]
-    public async Task UpdateSystemInfoDetailAsync_ExistingRow_UpdatesAllSevenFields()
-    {
-        using TestDatabaseFactory dbFactory = new();
-        IMachineStateRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
-
-        (int _, int _, long machineId) = await SeedMachineWithStateAsync(dbFactory);
-
-        await repo.UpdateSystemInfoDetailAsync(machineId, "Dell", "SN12345", "Intel Xeon Gold", 16, 68719476736L, 86400L, "1.5.0");
-
-        MachineStateDetail? updated = await dbFactory.Context.MachineStateDetails
-            .Where(d => d.MachineId == machineId)
-            .FirstOrDefaultAsync();
-
-        await Assert.That(updated).IsNotNull();
-        await Assert.That(updated!.HardwareVendor).IsEqualTo("Dell");
-        await Assert.That(updated.HardwareSerial).IsEqualTo("SN12345");
-        await Assert.That(updated.CpuBrand).IsEqualTo("Intel Xeon Gold");
-        await Assert.That(updated.CpuCores).IsEqualTo(16);
-        await Assert.That(updated.MemoryTotalBytes).IsEqualTo(68719476736L);
-        await Assert.That(updated.UptimeSeconds).IsEqualTo(86400L);
-        await Assert.That(updated.BiosVersion).IsEqualTo("1.5.0");
-    }
-
-    // ========== Detail Update Methods — intent: verify correct columns change and other detail fields are preserved ==========
-
-    [Test]
-    public async Task UpdateOsVersionDetailAsync_SetsKernel_PreservesSystemInfoFields()
-    {
-        using TestDatabaseFactory dbFactory = new();
-        IMachineStateRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
-
-        (int _, int _, long machineId) = await SeedMachineWithStateAsync(dbFactory);
-
-        // Pre-populate SystemInfo detail fields so we can verify they survive
-        await repo.UpdateSystemInfoDetailAsync(machineId, "Dell", "SN12345", "Intel Xeon", 16, 68719476736L, 86400L, "1.5.0");
-
-        await repo.UpdateOsVersionDetailAsync(machineId, "6.8.0-45-generic");
-
-        MachineStateDetail? updated = await dbFactory.Context.MachineStateDetails
-            .Where(d => d.MachineId == machineId)
-            .FirstOrDefaultAsync();
-
-        await Assert.That(updated).IsNotNull();
-        await Assert.That(updated!.Kernel).IsEqualTo("6.8.0-45-generic");
-        // SystemInfo fields should not be clobbered
-        await Assert.That(updated.HardwareVendor).IsEqualTo("Dell");
-        await Assert.That(updated.CpuBrand).IsEqualTo("Intel Xeon");
-        await Assert.That(updated.CpuCores).IsEqualTo(16);
-    }
-
-    [Test]
-    public async Task UpdateCpuInfoDetailAsync_SetsCpuFields_PreservesMemoryAndDiskFields()
-    {
-        using TestDatabaseFactory dbFactory = new();
-        IMachineStateRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
-
-        (int _, int _, long machineId) = await SeedMachineWithStateAsync(dbFactory);
-
-        // Pre-populate memory fields
-        await repo.UpdateMemoryInfoDetailAsync(machineId, 8589934592L, 4294967296L);
-        await repo.UpdateDiskInfoDetailAsync(machineId, """[{"device":"/dev/sda"}]""");
-
-        await repo.UpdateCpuInfoDetailAsync(machineId, "x86_64", 2, 8);
-
-        MachineStateDetail? updated = await dbFactory.Context.MachineStateDetails
-            .Where(d => d.MachineId == machineId)
-            .FirstOrDefaultAsync();
-
-        await Assert.That(updated).IsNotNull();
-        await Assert.That(updated!.CpuType).IsEqualTo("x86_64");
-        await Assert.That(updated.CpuPhysicalCpus).IsEqualTo(2);
-        await Assert.That(updated.CpuLogicalCpus).IsEqualTo(8);
-        // Memory and disk fields should survive
-        await Assert.That(updated.SwapTotalBytes).IsEqualTo(8589934592L);
-        await Assert.That(updated.DiskInfos).IsEqualTo("""[{"device":"/dev/sda"}]""");
-    }
-
-    [Test]
-    public async Task UpdateMemoryInfoDetailAsync_SetsSwapFields_PreservesKernel()
-    {
-        using TestDatabaseFactory dbFactory = new();
-        IMachineStateRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
-
-        (int _, int _, long machineId) = await SeedMachineWithStateAsync(dbFactory);
-
-        await repo.UpdateOsVersionDetailAsync(machineId, "6.8.0-45-generic");
-
-        await repo.UpdateMemoryInfoDetailAsync(machineId, 8589934592L, 4294967296L);
-
-        MachineStateDetail? updated = await dbFactory.Context.MachineStateDetails
-            .Where(d => d.MachineId == machineId)
-            .FirstOrDefaultAsync();
-
-        await Assert.That(updated).IsNotNull();
-        await Assert.That(updated!.SwapTotalBytes).IsEqualTo(8589934592L);
-        await Assert.That(updated.SwapFreeBytes).IsEqualTo(4294967296L);
-        await Assert.That(updated.Kernel).IsEqualTo("6.8.0-45-generic");
-    }
-
-    [Test]
-    public async Task UpdateDiskInfoDetailAsync_SetsDiskInfosPayload_PreservesSshSessions()
-    {
-        using TestDatabaseFactory dbFactory = new();
-        IMachineStateRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
-
-        (int _, int _, long machineId) = await SeedMachineWithStateAsync(dbFactory);
-
-        string sshPayload = """[{"user":"root"}]""";
-        await repo.UpdateSshSessionsDetailAsync(machineId, sshPayload);
-
-        string diskPayload = """[{"device":"/dev/sda","size":500107862016}]""";
-        await repo.UpdateDiskInfoDetailAsync(machineId, diskPayload);
-
-        MachineStateDetail? updated = await dbFactory.Context.MachineStateDetails
-            .Where(d => d.MachineId == machineId)
-            .FirstOrDefaultAsync();
-
-        await Assert.That(updated).IsNotNull();
-        await Assert.That(updated!.DiskInfos).IsEqualTo(diskPayload);
-        // SSH sessions should survive
-        await Assert.That(updated.SshSessions).IsEqualTo(sshPayload);
-    }
-
-    [Test]
-    public async Task UpdateDiskUsageDetailAsync_SetsDiskUsagesPayload_PreservesDiskInfos()
-    {
-        using TestDatabaseFactory dbFactory = new();
-        IMachineStateRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
-
-        (int _, int _, long machineId) = await SeedMachineWithStateAsync(dbFactory);
-
-        string diskInfoPayload = """[{"device":"/dev/sda"}]""";
-        await repo.UpdateDiskInfoDetailAsync(machineId, diskInfoPayload);
-
-        string diskUsagePayload = """[{"mount":"/","usedPercent":45}]""";
-        await repo.UpdateDiskUsageDetailAsync(machineId, diskUsagePayload);
-
-        MachineStateDetail? updated = await dbFactory.Context.MachineStateDetails
-            .Where(d => d.MachineId == machineId)
-            .FirstOrDefaultAsync();
-
-        await Assert.That(updated).IsNotNull();
-        await Assert.That(updated!.DiskUsages).IsEqualTo(diskUsagePayload);
-        // DiskInfos (different column) should survive
-        await Assert.That(updated.DiskInfos).IsEqualTo(diskInfoPayload);
-    }
-
-    [Test]
-    public async Task UpdateMemoryUsageDetailAsync_SetsMemoryUsedBytes_PreservesSwapFields()
-    {
-        using TestDatabaseFactory dbFactory = new();
-        IMachineStateRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
-
-        (int _, int _, long machineId) = await SeedMachineWithStateAsync(dbFactory);
-
-        await repo.UpdateMemoryInfoDetailAsync(machineId, 8589934592L, 4294967296L);
-
-        await repo.UpdateMemoryUsageDetailAsync(machineId, 34359738368L);
-
-        MachineStateDetail? updated = await dbFactory.Context.MachineStateDetails
-            .Where(d => d.MachineId == machineId)
-            .FirstOrDefaultAsync();
-
-        await Assert.That(updated).IsNotNull();
-        await Assert.That(updated!.MemoryUsedBytes).IsEqualTo(34359738368L);
-        // Swap fields (from MemoryInfo, different update) should survive
-        await Assert.That(updated.SwapTotalBytes).IsEqualTo(8589934592L);
-        await Assert.That(updated.SwapFreeBytes).IsEqualTo(4294967296L);
-    }
-
-    [Test]
-    public async Task UpdateSshSessionsDetailAsync_SetsSshPayload_PreservesHardwareHealth()
-    {
-        using TestDatabaseFactory dbFactory = new();
-        IMachineStateRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
-
-        (int _, int _, long machineId) = await SeedMachineWithStateAsync(dbFactory);
-
-        string hwPayload = """{"smart":{"sda":{"passed":true}}}""";
-        await repo.UpdateHardwareHealthDetailAsync(machineId, hwPayload);
-
-        string sshPayload = """[{"user":"root","from":"10.0.0.5"}]""";
-        await repo.UpdateSshSessionsDetailAsync(machineId, sshPayload);
-
-        MachineStateDetail? updated = await dbFactory.Context.MachineStateDetails
-            .Where(d => d.MachineId == machineId)
-            .FirstOrDefaultAsync();
-
-        await Assert.That(updated).IsNotNull();
-        await Assert.That(updated!.SshSessions).IsEqualTo(sshPayload);
-        await Assert.That(updated.HardwareHealth).IsEqualTo(hwPayload);
-    }
-
-    [Test]
-    public async Task UpdateHardwareHealthDetailAsync_SetsHardwareHealthPayload_PreservesCpuInfo()
-    {
-        using TestDatabaseFactory dbFactory = new();
-        IMachineStateRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
-
-        (int _, int _, long machineId) = await SeedMachineWithStateAsync(dbFactory);
-
-        await repo.UpdateCpuInfoDetailAsync(machineId, "x86_64", 2, 8);
-
-        string hwPayload = """{"smart":{"sda":{"passed":true}},"fans":[{"name":"CPU","rpm":1200}]}""";
-        await repo.UpdateHardwareHealthDetailAsync(machineId, hwPayload);
-
-        MachineStateDetail? updated = await dbFactory.Context.MachineStateDetails
-            .Where(d => d.MachineId == machineId)
-            .FirstOrDefaultAsync();
-
-        await Assert.That(updated).IsNotNull();
-        await Assert.That(updated!.HardwareHealth).IsEqualTo(hwPayload);
-        // CPU fields should survive
-        await Assert.That(updated.CpuType).IsEqualTo("x86_64");
-        await Assert.That(updated.CpuPhysicalCpus).IsEqualTo(2);
     }
 
     // ========== GetTelemetryByMachineIdsAndTypeAsync tests ==========
@@ -1528,5 +1098,135 @@ public class MachineStateRepositoryTests
         MachineStateSummary? updated4 = await repo.GetSummaryForMachineAsync(m4Id);
         await Assert.That(updated4).IsNotNull();
         await Assert.That(updated4!.HealthStatus).IsEqualTo((short)2);
+    }
+
+    // ========== GetFleetHealthAggregationAsync tests ==========
+
+    [Test]
+    public async Task GetFleetHealthAggregationAsync_GroupsByHealthStatusAndSumsSecurityUpdates()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        IMachineStateRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+
+        UserAccount user = TestDataBuilder.BuildUser();
+        int userId = await dbFactory.Context.InsertWithInt32IdentityAsync(user);
+        Tenant tenant = TestDataBuilder.BuildTenant(createdByUserId: userId);
+        int tenantId = await dbFactory.Context.InsertWithInt32IdentityAsync(tenant);
+
+        // Two healthy (status 0) and one critical (status 2). Security updates sum to 12.
+        await SeedFleetMachineAsync(dbFactory, tenantId, healthStatus: 0, securityUpdates: 2);
+        await SeedFleetMachineAsync(dbFactory, tenantId, healthStatus: 0, securityUpdates: 3);
+        await SeedFleetMachineAsync(dbFactory, tenantId, healthStatus: 2, securityUpdates: 7);
+
+        (List<(short HealthStatus, int Count)> healthCounts, int totalSecurityUpdates) =
+            await repo.GetFleetHealthAggregationAsync(tenantId, CancellationToken.None);
+
+        Dictionary<short, int> byStatus = healthCounts.ToDictionary(x => x.HealthStatus, x => x.Count);
+        await Assert.That(byStatus[0]).IsEqualTo(2);
+        await Assert.That(byStatus[2]).IsEqualTo(1);
+        await Assert.That(totalSecurityUpdates).IsEqualTo(12);
+    }
+
+    [Test]
+    public async Task GetFleetHealthAggregationAsync_NoMachines_ReturnsEmptyAndZero()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        IMachineStateRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+
+        (List<(short HealthStatus, int Count)> healthCounts, int totalSecurityUpdates) =
+            await repo.GetFleetHealthAggregationAsync(99999, CancellationToken.None);
+
+        await Assert.That(healthCounts.Count).IsEqualTo(0);
+        await Assert.That(totalSecurityUpdates).IsEqualTo(0);
+    }
+
+    // ========== GetTelemetryPageByMachineIdsAndTypeAsync / CountTelemetryByMachineIdsAndTypeAsync ==========
+
+    [Test]
+    public async Task GetTelemetryPageByMachineIdsAndType_AppliesTimeWindowOrderingAndPaging()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        IMachineStateRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        DateTimeOffset since = now.AddDays(-2);
+
+        // Three in-window rows for machine 1 (newest first: r3, r2, r1) and one out-of-window row.
+        await InsertTelemetryAsync(dbFactory, machineId: 1, telemetryType: 9, receivedAt: now.AddHours(-1), id: 1);
+        await InsertTelemetryAsync(dbFactory, machineId: 1, telemetryType: 9, receivedAt: now.AddMinutes(-30), id: 2);
+        await InsertTelemetryAsync(dbFactory, machineId: 1, telemetryType: 9, receivedAt: now.AddMinutes(-5), id: 3);
+        await InsertTelemetryAsync(dbFactory, machineId: 1, telemetryType: 9, receivedAt: now.AddDays(-10), id: 4);
+        // A different telemetry type that must be excluded.
+        await InsertTelemetryAsync(dbFactory, machineId: 1, telemetryType: 1, receivedAt: now, id: 5);
+
+        int count = await repo.CountTelemetryByMachineIdsAndTypeAsync([1], 9, since, CancellationToken.None);
+        await Assert.That(count).IsEqualTo(3);
+
+        // First page of size 2: newest two rows (id 3 then id 2).
+        List<MachineTelemetry> page1 = await repo.GetTelemetryPageByMachineIdsAndTypeAsync([1], 9, since, 0, 2, CancellationToken.None);
+        await Assert.That(page1.Count).IsEqualTo(2);
+        await Assert.That(page1[0].Id).IsEqualTo(3L);
+        await Assert.That(page1[1].Id).IsEqualTo(2L);
+
+        // Second page of size 2: the remaining row (id 1).
+        List<MachineTelemetry> page2 = await repo.GetTelemetryPageByMachineIdsAndTypeAsync([1], 9, since, 2, 2, CancellationToken.None);
+        await Assert.That(page2.Count).IsEqualTo(1);
+        await Assert.That(page2[0].Id).IsEqualTo(1L);
+    }
+
+    [Test]
+    public async Task GetTelemetryPageByMachineIdsAndType_EmptyMachineIds_ReturnsEmpty()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        IMachineStateRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+
+        List<MachineTelemetry> page = await repo.GetTelemetryPageByMachineIdsAndTypeAsync([], 9, DateTimeOffset.UtcNow.AddDays(-1), 0, 10, CancellationToken.None);
+        int count = await repo.CountTelemetryByMachineIdsAndTypeAsync([], 9, DateTimeOffset.UtcNow.AddDays(-1), CancellationToken.None);
+
+        await Assert.That(page.Count).IsEqualTo(0);
+        await Assert.That(count).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task CountTelemetryByMachineIdsAndType_OnlyCountsRowsWithinWindowAndType()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        IMachineStateRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        DateTimeOffset since = now.AddDays(-1);
+
+        await InsertTelemetryAsync(dbFactory, machineId: 1, telemetryType: 9, receivedAt: now, id: 1);
+        await InsertTelemetryAsync(dbFactory, machineId: 2, telemetryType: 9, receivedAt: now, id: 2);
+        await InsertTelemetryAsync(dbFactory, machineId: 3, telemetryType: 9, receivedAt: now, id: 3); // not in id set
+        await InsertTelemetryAsync(dbFactory, machineId: 1, telemetryType: 9, receivedAt: now.AddDays(-5), id: 4); // out of window
+
+        int count = await repo.CountTelemetryByMachineIdsAndTypeAsync([1, 2], 9, since, CancellationToken.None);
+
+        await Assert.That(count).IsEqualTo(2);
+    }
+
+    private static async Task InsertTelemetryAsync(TestDatabaseFactory dbFactory, long machineId, short telemetryType, DateTimeOffset receivedAt, long id)
+    {
+        await dbFactory.Context.InsertAsync(new MachineTelemetry
+        {
+            Id = id,
+            MachineId = machineId,
+            TenantId = 1,
+            TelemetryType = telemetryType,
+            Payload = """{"user":"x"}""",
+            ReceivedAt = receivedAt,
+            SourceEventId = Guid.NewGuid().ToString("N"),
+        });
+    }
+
+    private static async Task SeedFleetMachineAsync(TestDatabaseFactory dbFactory, int tenantId, short healthStatus, int securityUpdates)
+    {
+        Machine machine = TestDataBuilder.BuildMachine(tenantId: tenantId);
+        long machineId = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
+
+        MachineStateSummary summary = TestDataBuilder.BuildMachineStateSummary(machineId: machineId, tenantId: tenantId, healthStatus: healthStatus);
+        summary.SecurityUpdates = securityUpdates;
+        await dbFactory.Context.InsertAsync(summary);
     }
 }

@@ -10,6 +10,7 @@ using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Test.Infrastructure;
 using LinqToDB;
+using LinqToDB.Async;
 
 namespace Framlux.FleetManagement.FunctionalTest.Endpoints.Web;
 
@@ -260,5 +261,43 @@ public sealed class AdminSettingsEndpointTests
         JsonElement updatedSetting = settingsArray.EnumerateArray()
             .First(s => s.GetProperty("key").GetInt32() == 3);
         await Assert.That(updatedSetting.GetProperty("value").GetString()).IsEqualTo("900");
+    }
+
+    [Test]
+    public async Task UpdateSettings_WhenBillingDisabled_WritesExactlyOneAuditLogEntry()
+    {
+        using BillingDisabledTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId) = await SeedGlobalAdmin(db);
+
+        await db.InsertAsync(new ServerConfigurationSettings
+        {
+            Key = ServerConfigurationSettingKeys.AgentHeartbeatSeconds,
+            Value = "300",
+            Version = 1,
+        });
+
+        HttpClient client = BuildGlobalAdminClient(factory, tenantId, userId);
+
+        string json = JsonSerializer.Serialize(new
+        {
+            settings = new[]
+            {
+                new { key = 1, value = "120" }
+            }
+        });
+        StringContent content = new(json, Encoding.UTF8, "application/json");
+        HttpResponseMessage response = await client.PutAsync("/api/v1/admin/settings", content);
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
+
+        List<AuditLogEntry> entries = await db.AuditLog
+            .Where(e => e.Action == AuditAction.ServerConfigurationChanged
+                        && e.ResourceType == AuditResourceType.ServerConfiguration)
+            .ToListAsync();
+
+        await Assert.That(entries.Count).IsEqualTo(1);
+        await Assert.That(entries[0].UserId).IsEqualTo(userId);
+        await Assert.That(entries[0].TenantId).IsNull();
     }
 }

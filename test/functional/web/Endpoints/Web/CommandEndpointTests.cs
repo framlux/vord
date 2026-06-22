@@ -77,6 +77,7 @@ public sealed class CommandEndpointTests
             Name = "Test Token",
             CreatedByUserId = user.Id,
             CreatedAt = DateTimeOffset.UtcNow,
+            ExpiresAt = DateTimeOffset.UtcNow.AddDays(7),
             IsRevoked = false,
         };
         regToken.Id = await db.InsertWithInt64IdentityAsync(regToken);

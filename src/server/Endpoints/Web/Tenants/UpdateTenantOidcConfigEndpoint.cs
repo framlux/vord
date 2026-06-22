@@ -6,6 +6,7 @@ using FastEndpoints;
 using Framlux.FleetManagement.Server.Auth;
 using Framlux.FleetManagement.Server.Services.Handlers;
 using Framlux.FleetManagement.Services.Core.Infrastructure;
+using Framlux.FleetManagement.Services.Core.Models.Tenants;
 
 namespace Framlux.FleetManagement.Server.Endpoints.Web.Tenants;
 
@@ -37,8 +38,18 @@ public sealed class UpdateTenantOidcConfigEndpoint : Endpoint<TenantOidcConfigDt
     {
         int tenantId = Route<int>("id");
         int? claimTenantId = TenantClaimHelper.GetTenantIdFromClaims(User, HttpContext);
+        int? userId = TenantClaimHelper.GetUserIdFromClaims(User);
 
-        ServiceResult<TenantOidcConfigDto> result = await _handler.UpdateConfigAsync(tenantId, claimTenantId, req, ct);
+        if (userId is null)
+        {
+            HttpContext.Response.StatusCode = 401;
+            await HttpContext.Response.WriteAsJsonAsync(
+                ApiResponse<TenantOidcConfigDto>.Error("Unable to identify user"), ct);
+
+            return;
+        }
+
+        ServiceResult<TenantOidcConfigDto> result = await _handler.UpdateConfigAsync(tenantId, claimTenantId, userId.Value, req, ct);
 
         if (result.IsNotFound)
         {

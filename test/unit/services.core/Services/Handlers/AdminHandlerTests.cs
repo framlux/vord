@@ -101,10 +101,10 @@ public class AdminHandlerTests
         });
 
         DatabaseRepository repo = CreateRepo(dbFactory);
-        AdminHandler handler = new(repo, repo, cache, redis);
+        AdminHandler handler = new(repo, repo, cache, redis, repo, repo);
         List<SettingUpdateEntry> updates = [new() { Key = 1, Value = "600" }];
 
-        ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, CancellationToken.None);
+        ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, 1, CancellationToken.None);
 
         await Assert.That(result.IsSuccess).IsTrue();
         await Assert.That(result.Data!.First(e => e.Key == 1).Value).IsEqualTo("600");
@@ -119,10 +119,10 @@ public class AdminHandlerTests
         IConnectionMultiplexer redis = CreateFakeRedis();
 
         DatabaseRepository repo = CreateRepo(dbFactory);
-        AdminHandler handler = new(repo, repo, cache, redis);
+        AdminHandler handler = new(repo, repo, cache, redis, repo, repo);
         List<SettingUpdateEntry> updates = [new() { Key = 1, Value = "500" }];
 
-        ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, CancellationToken.None);
+        ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, 1, CancellationToken.None);
 
         await Assert.That(result.IsSuccess).IsTrue();
         await Assert.That(result.Data!.Count).IsEqualTo(1);
@@ -136,7 +136,7 @@ public class AdminHandlerTests
         AdminHandler handler = CreateHandler(dbFactory);
         List<SettingUpdateEntry> updates = [new() { Key = 999, Value = "100" }];
 
-        ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, CancellationToken.None);
+        ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, 1, CancellationToken.None);
 
         await Assert.That(result.IsSuccess).IsFalse();
         await Assert.That(result.StatusCode).IsEqualTo(400);
@@ -150,7 +150,7 @@ public class AdminHandlerTests
         AdminHandler handler = CreateHandler(dbFactory);
         List<SettingUpdateEntry> updates = [new() { Key = 0, Value = "100" }];
 
-        ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, CancellationToken.None);
+        ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, 1, CancellationToken.None);
 
         await Assert.That(result.IsSuccess).IsFalse();
         await Assert.That(result.StatusCode).IsEqualTo(400);
@@ -163,7 +163,7 @@ public class AdminHandlerTests
         AdminHandler handler = CreateHandler(dbFactory);
         List<SettingUpdateEntry> updates = [new() { Key = 1, Value = "" }];
 
-        ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, CancellationToken.None);
+        ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, 1, CancellationToken.None);
 
         await Assert.That(result.IsSuccess).IsFalse();
         await Assert.That(result.StatusCode).IsEqualTo(400);
@@ -176,7 +176,7 @@ public class AdminHandlerTests
         AdminHandler handler = CreateHandler(dbFactory);
         List<SettingUpdateEntry> updates = [new() { Key = 1, Value = "-5" }];
 
-        ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, CancellationToken.None);
+        ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, 1, CancellationToken.None);
 
         await Assert.That(result.IsSuccess).IsFalse();
         await Assert.That(result.StatusCode).IsEqualTo(400);
@@ -189,7 +189,7 @@ public class AdminHandlerTests
         AdminHandler handler = CreateHandler(dbFactory);
         List<SettingUpdateEntry> updates = [new() { Key = 1, Value = "abc" }];
 
-        ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, CancellationToken.None);
+        ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, 1, CancellationToken.None);
 
         await Assert.That(result.IsSuccess).IsFalse();
         await Assert.That(result.StatusCode).IsEqualTo(400);
@@ -203,10 +203,10 @@ public class AdminHandlerTests
         IConnectionMultiplexer redis = CreateFakeRedis();
 
         DatabaseRepository repo = CreateRepo(dbFactory);
-        AdminHandler handler = new(repo, repo, cache, redis);
+        AdminHandler handler = new(repo, repo, cache, redis, repo, repo);
         List<SettingUpdateEntry> updates = [new() { Key = 8, Value = "true" }];
 
-        ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, CancellationToken.None);
+        ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, 1, CancellationToken.None);
 
         await Assert.That(result.IsSuccess).IsTrue();
 
@@ -225,10 +225,10 @@ public class AdminHandlerTests
         IConnectionMultiplexer redis = CreateFakeRedis();
 
         DatabaseRepository repo = CreateRepo(dbFactory);
-        AdminHandler handler = new(repo, repo, cache, redis);
+        AdminHandler handler = new(repo, repo, cache, redis, repo, repo);
         List<SettingUpdateEntry> updates = [new() { Key = 8, Value = "false" }];
 
-        ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, CancellationToken.None);
+        ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, 1, CancellationToken.None);
 
         await Assert.That(result.IsSuccess).IsTrue();
 
@@ -246,7 +246,7 @@ public class AdminHandlerTests
         AdminHandler handler = CreateHandler(dbFactory);
         List<SettingUpdateEntry> updates = [new() { Key = 8, Value = "maybe" }];
 
-        ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, CancellationToken.None);
+        ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, 1, CancellationToken.None);
 
         await Assert.That(result.IsSuccess).IsFalse();
         await Assert.That(result.StatusCode).IsEqualTo(400);
@@ -274,10 +274,10 @@ public class AdminHandlerTests
         });
 
         DatabaseRepository repo = CreateRepo(dbFactory);
-        AdminHandler handler = new(repo, repo, cache, redis);
+        AdminHandler handler = new(repo, repo, cache, redis, repo, repo);
         List<SettingUpdateEntry> updates = [];
 
-        ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, CancellationToken.None);
+        ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, 1, CancellationToken.None);
 
         await Assert.That(result.IsSuccess).IsTrue();
         await Assert.That(result.Data!.Count).IsEqualTo(2);
@@ -294,10 +294,10 @@ public class AdminHandlerTests
         IDatabase redisDb = redis.GetDatabase();
 
         DatabaseRepository repo = CreateRepo(dbFactory);
-        AdminHandler handler = new(repo, repo, cache, redis);
+        AdminHandler handler = new(repo, repo, cache, redis, repo, repo);
         List<SettingUpdateEntry> updates = [new() { Key = 1, Value = "600" }];
 
-        await handler.UpdateSettingsAsync(updates, CancellationToken.None);
+        await handler.UpdateSettingsAsync(updates, 1, CancellationToken.None);
 
         await redisDb.Received(1).KeyDeleteAsync(
             Arg.Is<RedisKey>(k => k.ToString() == "config:AgentHeartbeatSeconds"),
@@ -318,10 +318,10 @@ public class AdminHandlerTests
         });
 
         DatabaseRepository repo = CreateRepo(dbFactory);
-        AdminHandler handler = new(repo, repo, cache, redis);
+        AdminHandler handler = new(repo, repo, cache, redis, repo, repo);
         List<SettingUpdateEntry> updates = [new() { Key = 1, Value = "600" }];
 
-        await handler.UpdateSettingsAsync(updates, CancellationToken.None);
+        await handler.UpdateSettingsAsync(updates, 1, CancellationToken.None);
 
         ServerConfigurationSettings? updated = await dbFactory.Context.ServerConfigurationSettings
             .FirstOrDefaultAsync(s => s.Key == ServerConfigurationSettingKeys.AgentHeartbeatSeconds);
@@ -338,7 +338,7 @@ public class AdminHandlerTests
         AdminHandler handler = CreateHandler(dbFactory);
         List<SettingUpdateEntry> updates = [new() { Key = 1, Value = "5" }];
 
-        ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, CancellationToken.None);
+        ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, 1, CancellationToken.None);
 
         await Assert.That(result.IsSuccess).IsFalse();
         await Assert.That(result.StatusCode).IsEqualTo(400);
@@ -352,7 +352,7 @@ public class AdminHandlerTests
         AdminHandler handler = CreateHandler(dbFactory);
         List<SettingUpdateEntry> updates = [new() { Key = 1, Value = "1000" }];
 
-        ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, CancellationToken.None);
+        ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, 1, CancellationToken.None);
 
         await Assert.That(result.IsSuccess).IsFalse();
         await Assert.That(result.StatusCode).IsEqualTo(400);
@@ -367,10 +367,10 @@ public class AdminHandlerTests
         IConnectionMultiplexer redis = CreateFakeRedis();
 
         DatabaseRepository repo = CreateRepo(dbFactory);
-        AdminHandler handler = new(repo, repo, cache, redis);
+        AdminHandler handler = new(repo, repo, cache, redis, repo, repo);
         List<SettingUpdateEntry> updates = [new() { Key = 1, Value = "10" }];
 
-        ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, CancellationToken.None);
+        ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, 1, CancellationToken.None);
 
         await Assert.That(result.IsSuccess).IsTrue();
     }
@@ -383,10 +383,10 @@ public class AdminHandlerTests
         IConnectionMultiplexer redis = CreateFakeRedis();
 
         DatabaseRepository repo = CreateRepo(dbFactory);
-        AdminHandler handler = new(repo, repo, cache, redis);
+        AdminHandler handler = new(repo, repo, cache, redis, repo, repo);
         List<SettingUpdateEntry> updates = [new() { Key = 1, Value = "600" }];
 
-        ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, CancellationToken.None);
+        ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, 1, CancellationToken.None);
 
         await Assert.That(result.IsSuccess).IsTrue();
     }
@@ -398,7 +398,7 @@ public class AdminHandlerTests
         AdminHandler handler = CreateHandler(dbFactory);
         List<SettingUpdateEntry> updates = [new() { Key = 9, Value = "3" }];
 
-        ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, CancellationToken.None);
+        ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, 1, CancellationToken.None);
 
         await Assert.That(result.IsSuccess).IsFalse();
         await Assert.That(result.StatusCode).IsEqualTo(400);
@@ -412,7 +412,7 @@ public class AdminHandlerTests
         AdminHandler handler = CreateHandler(dbFactory);
         List<SettingUpdateEntry> updates = [new() { Key = 11, Value = "200" }];
 
-        ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, CancellationToken.None);
+        ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, 1, CancellationToken.None);
 
         await Assert.That(result.IsSuccess).IsFalse();
         await Assert.That(result.StatusCode).IsEqualTo(400);
@@ -427,7 +427,7 @@ public class AdminHandlerTests
         IConnectionMultiplexer redis = CreateFakeRedis();
 
         DatabaseRepository repo = CreateRepo(dbFactory);
-        AdminHandler handler = new(repo, repo, cache, redis);
+        AdminHandler handler = new(repo, repo, cache, redis, repo, repo);
         List<SettingUpdateEntry> updates =
         [
             new() { Key = 9, Value = "60" },
@@ -436,7 +436,7 @@ public class AdminHandlerTests
             new() { Key = 12, Value = "600" },
         ];
 
-        ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, CancellationToken.None);
+        ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, 1, CancellationToken.None);
 
         await Assert.That(result.IsSuccess).IsTrue();
         await Assert.That(result.Data!.Count).IsEqualTo(4);
@@ -450,10 +450,10 @@ public class AdminHandlerTests
         IConnectionMultiplexer redis = CreateFakeRedis();
 
         DatabaseRepository repo = CreateRepo(dbFactory);
-        AdminHandler handler = new(repo, repo, cache, redis);
+        AdminHandler handler = new(repo, repo, cache, redis, repo, repo);
         List<SettingUpdateEntry> updates = [new() { Key = 3, Value = "3600" }];
 
-        ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, CancellationToken.None);
+        ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, 1, CancellationToken.None);
 
         await Assert.That(result.IsSuccess).IsTrue();
     }
@@ -488,7 +488,7 @@ public class AdminHandlerTests
         AdminHandler handler = CreateHandler(dbFactory);
         List<SettingUpdateEntry> updates = [new() { Key = 14, Value = "30" }];
 
-        ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, CancellationToken.None);
+        ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, 1, CancellationToken.None);
 
         await Assert.That(result.IsSuccess).IsFalse();
         await Assert.That(result.StatusCode).IsEqualTo(400);
@@ -502,7 +502,7 @@ public class AdminHandlerTests
         AdminHandler handler = CreateHandler(dbFactory);
         List<SettingUpdateEntry> updates = [new() { Key = 14, Value = "100000" }];
 
-        ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, CancellationToken.None);
+        ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, 1, CancellationToken.None);
 
         await Assert.That(result.IsSuccess).IsFalse();
         await Assert.That(result.StatusCode).IsEqualTo(400);
@@ -517,10 +517,10 @@ public class AdminHandlerTests
         IConnectionMultiplexer redis = CreateFakeRedis();
 
         DatabaseRepository repo = CreateRepo(dbFactory);
-        AdminHandler handler = new(repo, repo, cache, redis);
+        AdminHandler handler = new(repo, repo, cache, redis, repo, repo);
         List<SettingUpdateEntry> updates = [new() { Key = 14, Value = "60" }];
 
-        ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, CancellationToken.None);
+        ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, 1, CancellationToken.None);
 
         await Assert.That(result.IsSuccess).IsTrue();
     }
@@ -533,10 +533,10 @@ public class AdminHandlerTests
         IConnectionMultiplexer redis = CreateFakeRedis();
 
         DatabaseRepository repo = CreateRepo(dbFactory);
-        AdminHandler handler = new(repo, repo, cache, redis);
+        AdminHandler handler = new(repo, repo, cache, redis, repo, repo);
         List<SettingUpdateEntry> updates = [new() { Key = 14, Value = "86400" }];
 
-        ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, CancellationToken.None);
+        ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, 1, CancellationToken.None);
 
         await Assert.That(result.IsSuccess).IsTrue();
     }
@@ -549,10 +549,10 @@ public class AdminHandlerTests
         IConnectionMultiplexer redis = CreateFakeRedis();
 
         DatabaseRepository repo = CreateRepo(dbFactory);
-        AdminHandler handler = new(repo, repo, cache, redis);
+        AdminHandler handler = new(repo, repo, cache, redis, repo, repo);
         List<SettingUpdateEntry> updates = [new() { Key = 14, Value = "3600" }];
 
-        ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, CancellationToken.None);
+        ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, 1, CancellationToken.None);
 
         await Assert.That(result.IsSuccess).IsTrue();
         await Assert.That(result.Data!.First(e => e.Key == 14).Value).IsEqualTo("3600");
@@ -683,7 +683,7 @@ public class AdminHandlerTests
         IConnectionMultiplexer redis = CreateFakeRedis();
         DatabaseRepository repo = CreateRepo(dbFactory);
 
-        return new AdminHandler(repo, repo, cache, redis);
+        return new AdminHandler(repo, repo, cache, redis, repo, repo);
     }
 
     private static IConnectionMultiplexer CreateFakeRedis()

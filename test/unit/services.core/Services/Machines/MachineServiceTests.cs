@@ -41,6 +41,7 @@ public class MachineServiceTests
             Name = "Test Token",
             CreatedByUserId = 1,
             CreatedAt = DateTimeOffset.UtcNow,
+            ExpiresAt = DateTimeOffset.UtcNow.AddDays(7),
             IsRevoked = false,
         };
         token.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(token);
@@ -298,6 +299,34 @@ public class MachineServiceTests
         await Assert.That(result.apiKey).IsNull();
     }
 
+    [Test]
+    public async Task GetRegistrationStatus_ExpiredToken_NeedsApiKey_ReturnsUnknown()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        RegistrationToken token = await SeedValidRegistrationToken(dbFactory);
+        // Force the token to be expired in the past while leaving it un-revoked.
+        await dbFactory.Context.RegistrationTokens
+            .Where(t => t.Id == token.Id)
+            .Set(t => t.ExpiresAt, DateTimeOffset.UtcNow.AddDays(-1))
+            .UpdateAsync();
+
+        Machine machine = TestDataBuilder.BuildMachine(tenantId: token.TenantId, registrationTokenId: token.Id);
+        machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
+
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+        ILogger<MachineService> logger = new NullLogger<MachineService>();
+        IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
+        redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(Substitute.For<IDatabase>());
+        IBillingApiClient billingApiClient = Substitute.For<IBillingApiClient>();
+        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider());
+
+        (RegistrationStatus status, long? id, string? apiKey) result =
+            await service.GetRegistrationStatusAsync(machine.SerialNumber, machine.SystemId, TestTokenValue, true, CancellationToken.None);
+
+        await Assert.That(result.status).IsEqualTo(RegistrationStatus.UnknownRegistration);
+        await Assert.That(result.apiKey).IsNull();
+    }
+
     // ========== RegisterSystem - Token Validation tests ==========
 
     [Test]
@@ -395,6 +424,43 @@ public class MachineServiceTests
         await Assert.That(result.machineId).IsNull();
         await Assert.That(result.apiKey).IsNull();
         await Assert.That(result.errorMessage).IsEqualTo("Registration token has been revoked");
+    }
+
+    [Test]
+    public async Task RegisterSystem_ExpiredToken_ReturnsError()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        RegistrationToken token = await SeedValidRegistrationToken(dbFactory);
+        // Force the token to be expired while leaving it un-revoked.
+        await dbFactory.Context.RegistrationTokens
+            .Where(t => t.Id == token.Id)
+            .Set(t => t.ExpiresAt, DateTimeOffset.UtcNow.AddDays(-1))
+            .UpdateAsync();
+
+        IMachineRepository machineRepo = Substitute.For<IMachineRepository>();
+        TestServiceScopeFactory scopeFactory = CreateScopeFactory(dbFactory, machineRepo);
+        ILogger<MachineService> logger = new NullLogger<MachineService>();
+        IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
+        redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(Substitute.For<IDatabase>());
+        IBillingApiClient billingApiClient = Substitute.For<IBillingApiClient>();
+        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider());
+
+        RegisterSystemRequest request = new()
+        {
+            SerialNumber = "SN-TEST",
+            SystemId = "SID-TEST",
+            Hostname = "test-host",
+            MachineType = Grpc.AgentRegistration.MachineType.BareMetalServerType,
+            Os = OperatingSystemType.UbuntuOs,
+            RegistrationToken = TestTokenValue,
+        };
+
+        (long? machineId, string? apiKey, string errorMessage) result =
+            await service.RegisterSystemAsync(request, CancellationToken.None);
+
+        await Assert.That(result.machineId).IsNull();
+        await Assert.That(result.apiKey).IsNull();
+        await Assert.That(result.errorMessage).IsEqualTo("Registration token has expired");
     }
 
     [Test]
@@ -1408,5 +1474,55 @@ public class MachineServiceTests
         });
         await Assert.That(ex).IsNotNull();
         await Assert.That(ex!.ParamName).IsEqualTo("dataProtectionProvider");
+    }
+
+    // ========== IsTokenExpired tests ==========
+
+    [Test]
+    public async Task IsTokenExpired_BeforeExpiry_ReturnsFalse()
+    {
+        DateTimeOffset now = new(2026, 06, 15, 12, 0, 0, TimeSpan.Zero);
+        RegistrationToken token = BuildTokenWithExpiry(now.AddHours(1));
+
+        bool expired = MachineService.IsTokenExpired(token, now);
+
+        await Assert.That(expired).IsFalse();
+    }
+
+    [Test]
+    public async Task IsTokenExpired_AtExpiry_ReturnsTrue()
+    {
+        DateTimeOffset now = new(2026, 06, 15, 12, 0, 0, TimeSpan.Zero);
+        RegistrationToken token = BuildTokenWithExpiry(now);
+
+        bool expired = MachineService.IsTokenExpired(token, now);
+
+        await Assert.That(expired).IsTrue();
+    }
+
+    [Test]
+    public async Task IsTokenExpired_AfterExpiry_ReturnsTrue()
+    {
+        DateTimeOffset now = new(2026, 06, 15, 12, 0, 0, TimeSpan.Zero);
+        RegistrationToken token = BuildTokenWithExpiry(now.AddMinutes(-1));
+
+        bool expired = MachineService.IsTokenExpired(token, now);
+
+        await Assert.That(expired).IsTrue();
+    }
+
+    private static RegistrationToken BuildTokenWithExpiry(DateTimeOffset expiresAt)
+    {
+        return new RegistrationToken
+        {
+            Id = 1,
+            TenantId = 1,
+            TokenHash = new string('a', 64),
+            Name = "token",
+            CreatedByUserId = 1,
+            CreatedAt = expiresAt.AddDays(-7),
+            ExpiresAt = expiresAt,
+            IsRevoked = false,
+        };
     }
 }

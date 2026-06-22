@@ -3,11 +3,11 @@
 // See LICENSE for details.
 
 using Framlux.FleetManagement.Database;
-using Framlux.FleetManagement.Database.Repositories;
-using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
+using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Services.Core.Infrastructure;
 using Framlux.FleetManagement.Services.Core.Machines;
+using Framlux.FleetManagement.Services.Core.Machines.Projection;
 using Framlux.FleetManagement.Services.Core.Telemetry;
 using Framlux.FleetManagement.Test.Infrastructure;
 using LinqToDB;
@@ -20,7 +20,10 @@ using NSubstitute;
 namespace Framlux.FleetManagement.Test.Services.Machines;
 
 /// <summary>
-/// Tests for <see cref="MachineStateStreamingService"/>.
+/// Tests for <see cref="MachineStateStreamingService"/>. The service collapses each telemetry
+/// batch to one patch per machine and applies at most one UPDATE per table per machine. These
+/// tests drive the public background loop deterministically (gated on an observable repository
+/// call, never on wall-clock time) and assert the projected state via the database or a spy.
 /// </summary>
 public class MachineStateStreamingServiceTests
 {
@@ -29,12 +32,24 @@ public class MachineStateStreamingServiceTests
     /// </summary>
     private static readonly TimeSpan FastStartupDelay = TimeSpan.Zero;
 
+    private static readonly DateTimeOffset FixedClock = new(2026, 06, 16, 0, 0, 0, TimeSpan.Zero);
+
+    /// <summary>
+    /// A recent base instant for seeded telemetry, anchored to <see cref="FixedClock"/> rather than
+    /// the wall clock. The streaming loop filters rows to the last two days using its injected
+    /// <see cref="TimeProvider"/>, which these tests seed at <see cref="FixedClock"/>, so anchoring
+    /// the seed timestamps to the same fixed instant keeps the rows inside the window regardless of
+    /// the real system date.
+    /// </summary>
+    private static DateTimeOffset RecentBase => FixedClock.AddHours(-1);
+
     private static MachineStateStreamingService CreateService(
         IServiceScopeFactory scopeFactory,
         ISqlDialect? dialect = null,
         IAdvisoryLockProvider? advisoryLockProvider = null,
         IServerSettingsCache? settingsCache = null,
         ILogger<MachineStateStreamingService>? logger = null,
+        TimeProvider? timeProvider = null,
         TimeSpan? startupDelay = null)
     {
         return new MachineStateStreamingService(
@@ -43,6 +58,7 @@ public class MachineStateStreamingServiceTests
             advisoryLockProvider ?? AcquiringAdvisoryLockProvider(),
             settingsCache ?? Substitute.For<IServerSettingsCache>(),
             logger ?? Substitute.For<ILogger<MachineStateStreamingService>>(),
+            timeProvider ?? TimeProvider.System,
             startupDelay ?? FastStartupDelay);
     }
 
@@ -70,12 +86,15 @@ public class MachineStateStreamingServiceTests
         await db.InsertAsync(new MachineStateDetail { MachineId = machineId });
     }
 
-    private static IMachineStateRepository CreateRepo(DatabaseContext db)
+    private static async Task SeedTelemetryAsync(DatabaseContext db, params MachineTelemetry[] rows)
     {
-        return new DatabaseRepository(db, NullLogger<DatabaseRepository>.Instance);
+        foreach (MachineTelemetry row in rows)
+        {
+            await db.InsertAsync(row);
+        }
     }
 
-    private static MachineTelemetry BuildRow(long machineId, short telemetryType, string payload, long id = 1)
+    private static MachineTelemetry Row(long id, long machineId, short telemetryType, string payload, DateTimeOffset receivedAt)
     {
         return new MachineTelemetry
         {
@@ -84,396 +103,605 @@ public class MachineStateStreamingServiceTests
             TenantId = 1,
             TelemetryType = telemetryType,
             Payload = payload,
-            ReceivedAt = DateTimeOffset.UtcNow,
+            ReceivedAt = receivedAt,
             SourceEventId = Guid.NewGuid().ToString("N")
         };
     }
 
-    // ========== ProcessTelemetryRow_SystemInfo_UpdatesSummaryFields ==========
+    /// <summary>
+    /// Drives a single batch through the background loop using an injected spy repository, then
+    /// cancels. Completion is gated on the loop's <b>second</b> telemetry poll — which the service
+    /// only reaches after advancing the high-water mark, i.e. after every patch has been applied —
+    /// so the wait is deterministic and never depends on wall-clock time.
+    /// </summary>
+    private static async Task RunOneLoopIterationAsync(IMachineStateRepository spy)
+    {
+        TaskCompletionSource batchConsumed = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        int polls = 0;
+
+        // The second GetTelemetryBatchAsync call signals that the first batch is fully applied.
+        spy.When(r => r.GetTelemetryBatchAsync(
+                Arg.Any<long>(), Arg.Any<DateTimeOffset>(), Arg.Any<int>(), Arg.Any<CancellationToken>()))
+            .Do(_ =>
+            {
+                if (Interlocked.Increment(ref polls) == 2)
+                {
+                    batchConsumed.TrySetResult();
+                }
+            });
+
+        Dictionary<Type, object> services = new() { [typeof(IMachineStateRepository)] = spy };
+        TestServiceScopeFactory scopeFactory = new(NoopContext(), services);
+
+        await RunUntilSignaledAsync(scopeFactory, batchConsumed);
+    }
+
+    /// <summary>
+    /// Drives a single batch through the background loop against a real database, then cancels.
+    /// The real repository is wrapped so the loop's second poll completes a signal once the batch
+    /// has been applied; the wait is gated on that signal, not on elapsed time.
+    /// </summary>
+    private static async Task RunOneLoopIterationAsync(DatabaseContext db, bool resetHighWaterMark = false)
+    {
+        _ = resetHighWaterMark; // Each iteration builds a fresh service whose high-water mark starts at zero.
+
+        TaskCompletionSource batchConsumed = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        DatabaseRepository real = new(db, NullLogger<DatabaseRepository>.Instance);
+        IMachineStateRepository repo = Substitute.For<IMachineStateRepository>();
+        int polls = 0;
+
+        // Forward the three loop-used calls to the real repository; the loop's second telemetry
+        // poll only happens after the high-water mark advances (i.e. after every patch is applied),
+        // so completing the signal there yields a deterministic, wall-clock-independent wait.
+        repo.GetTelemetryBatchAsync(Arg.Any<long>(), Arg.Any<DateTimeOffset>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns(ci =>
+            {
+                if (Interlocked.Increment(ref polls) == 2)
+                {
+                    batchConsumed.TrySetResult();
+                }
+
+                return real.GetTelemetryBatchAsync(ci.Arg<long>(), ci.Arg<DateTimeOffset>(), ci.Arg<int>(), ci.Arg<CancellationToken>());
+            });
+        repo.ApplySummaryPatchAsync(Arg.Any<MachineSummaryPatch>(), Arg.Any<CancellationToken>())
+            .Returns(ci => real.ApplySummaryPatchAsync(ci.Arg<MachineSummaryPatch>(), ci.Arg<CancellationToken>()));
+        repo.ApplyDetailPatchAsync(Arg.Any<MachineDetailPatch>(), Arg.Any<CancellationToken>())
+            .Returns(ci => real.ApplyDetailPatchAsync(ci.Arg<MachineDetailPatch>(), ci.Arg<CancellationToken>()));
+
+        Dictionary<Type, object> services = new() { [typeof(IMachineStateRepository)] = repo };
+        TestServiceScopeFactory scopeFactory = new(db, services);
+
+        await RunUntilSignaledAsync(scopeFactory, batchConsumed);
+    }
+
+    private static async Task RunUntilSignaledAsync(TestServiceScopeFactory scopeFactory, TaskCompletionSource batchConsumed)
+    {
+        FixedTimeProvider clock = new(FixedClock);
+        MachineStateStreamingService service = CreateService(scopeFactory, timeProvider: clock);
+
+        using CancellationTokenSource cts = new();
+        await service.StartAsync(cts.Token);
+
+        await batchConsumed.Task;
+
+        await cts.CancelAsync();
+        await service.StopAsync(CancellationToken.None);
+    }
+
+    private static DatabaseContext NoopContext()
+    {
+        TestDatabaseFactory factory = new();
+
+        return factory.Context;
+    }
+
+    // ========== One update per machine, not per row ==========
 
     [Test]
-    public async Task ProcessTelemetryRow_SystemInfo_UpdatesSummaryFields()
+    public async Task StreamLoop_BatchWithManyRowsPerMachine_AppliesOneSummaryUpdatePerMachine()
+    {
+        // Intent: 5 CpuUsage rows for one machine collapse to a SINGLE summary apply, not five.
+        IMachineStateRepository spy = Substitute.For<IMachineStateRepository>();
+        DateTimeOffset t0 = DateTimeOffset.UnixEpoch;
+        List<MachineTelemetry> batch = Enumerable.Range(1, 5)
+            .Select(i => Row(i, 100, TelemetryTypeIds.CpuUsage, $$"""{ "cpu_usage_percent": {{i}} }""", t0.AddMinutes(i)))
+            .ToList();
+        spy.GetTelemetryBatchAsync(Arg.Any<long>(), Arg.Any<DateTimeOffset>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns(batch, []); // first poll returns the batch, then empty
+
+        await RunOneLoopIterationAsync(spy);
+
+        await spy.Received(1).ApplySummaryPatchAsync(
+            Arg.Is<MachineSummaryPatch>(p => (p.MachineId == 100) && (p.CpuUsagePercent == 5)),
+            Arg.Any<CancellationToken>());
+    }
+
+    // ========== End-to-end projection against the real database ==========
+
+    [Test]
+    public async Task StreamLoop_ProjectsCorrectFinalState_AgainstRealDatabase()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        DatabaseContext db = dbFactory.Context;
+        await SeedSummaryAndDetail(db, 100);
+        DateTimeOffset t0 = RecentBase;
+        await SeedTelemetryAsync(db,
+            Row(1, 100, TelemetryTypeIds.CpuUsage, """{ "cpu_usage_percent": 40 }""", t0),
+            Row(2, 100, TelemetryTypeIds.CpuUsage, """{ "cpu_usage_percent": 88 }""", t0.AddMinutes(5)),
+            Row(3, 100, TelemetryTypeIds.OsVersion, """{ "os_name": "Ubuntu", "os_version": "22.04", "kernel": "6.2" }""", t0.AddMinutes(2)));
+
+        await RunOneLoopIterationAsync(db);
+
+        MachineStateSummary s = await db.GetTable<MachineStateSummary>().FirstAsync(x => x.MachineId == 100);
+        await Assert.That(s.CpuUsagePercent).IsEqualTo(88);                 // latest CpuUsage
+        await Assert.That(s.OsName).IsEqualTo("Ubuntu");
+        await Assert.That(s.LastSeenAt).IsEqualTo(t0.AddMinutes(5));        // MAX ReceivedAt
+        MachineStateDetail d = await db.GetTable<MachineStateDetail>().FirstAsync(x => x.MachineId == 100);
+        await Assert.That(d.Kernel).IsEqualTo("6.2");
+    }
+
+    // ========== Idempotent on replay ==========
+
+    [Test]
+    public async Task StreamLoop_RunTwiceOnSameBatch_IsIdempotent()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        DatabaseContext db = dbFactory.Context;
+        await SeedSummaryAndDetail(db, 100);
+        DateTimeOffset t0 = RecentBase;
+        await SeedTelemetryAsync(db, Row(1, 100, TelemetryTypeIds.CpuUsage, """{ "cpu_usage_percent": 60 }""", t0));
+
+        await RunOneLoopIterationAsync(db, resetHighWaterMark: true);
+        await RunOneLoopIterationAsync(db, resetHighWaterMark: true); // replay same batch
+
+        MachineStateSummary s = await db.GetTable<MachineStateSummary>().FirstAsync(x => x.MachineId == 100);
+        await Assert.That(s.CpuUsagePercent).IsEqualTo(60);
+    }
+
+    // ========== Raw telemetry is never modified (SSH history stays intact) ==========
+
+    [Test]
+    public async Task StreamLoop_DoesNotModifyRawTelemetryRows()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        DatabaseContext db = dbFactory.Context;
+        await SeedSummaryAndDetail(db, 100);
+        DateTimeOffset t0 = RecentBase;
+        await SeedTelemetryAsync(db,
+            Row(1, 100, TelemetryTypeIds.SshSessions, """[{"user":"root"}]""", t0),
+            Row(2, 100, TelemetryTypeIds.SshSessions, """[{"user":"admin"}]""", t0.AddMinutes(1)));
+
+        await RunOneLoopIterationAsync(db);
+
+        List<MachineTelemetry> raw = await db.GetTable<MachineTelemetry>().OrderBy(r => r.Id).ToListAsync();
+        await Assert.That(raw.Count).IsEqualTo(2);                              // both rows still present
+        await Assert.That(raw[0].Payload).IsEqualTo("""[{"user":"root"}]""");  // unchanged
+        MachineStateDetail d = await db.GetTable<MachineStateDetail>().FirstAsync(x => x.MachineId == 100);
+        await Assert.That(d.SshSessions).IsEqualTo("""[{"user":"admin"}]"""); // detail shows the latest
+    }
+
+    // ========== Poison row is skipped, the rest applied, and a warning logged ==========
+
+    [Test]
+    public async Task StreamLoop_PoisonRow_SkipsItAndAppliesTheRest_AndLogsWarning()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        DatabaseContext db = dbFactory.Context;
+        await SeedSummaryAndDetail(db, 100);
+        DateTimeOffset t0 = RecentBase;
+        await SeedTelemetryAsync(db,
+            Row(1, 100, TelemetryTypeIds.CpuUsage, "broken json", t0),
+            Row(2, 100, TelemetryTypeIds.MemoryUsage, """{ "memory_usage_percent": 25 }""", t0));
+
+        await RunOneLoopIterationAsync(db);
+
+        MachineStateSummary s = await db.GetTable<MachineStateSummary>().FirstAsync(x => x.MachineId == 100);
+        await Assert.That(s.MemoryUsagePercent).IsEqualTo(25); // healthy type applied
+        await Assert.That(s.CpuUsagePercent).IsNull();         // poison CpuUsage row left the column unchanged
+    }
+
+    // ========== Wrong-typed-field poison row does not wedge the loop ==========
+
+    [Test]
+    public async Task StreamLoop_WrongTypedFieldPoisonRow_AdvancesHighWaterMarkAndProjectsHealthyRows()
+    {
+        // Intent: a row with structurally valid JSON but a wrong-typed field (a string where an int
+        // is expected) must not throw out of Collapse and wedge the loop. The batch must complete:
+        // the high-water mark advances (proven by the loop's second poll being issued with the
+        // advanced mark) and the healthy row is projected.
+        IMachineStateRepository spy = Substitute.For<IMachineStateRepository>();
+        DateTimeOffset t0 = RecentBase;
+        List<MachineTelemetry> batch =
+        [
+            Row(1, 100, TelemetryTypeIds.CpuUsage, """{ "cpu_usage_percent": "high" }""", t0),
+            Row(2, 100, TelemetryTypeIds.MemoryUsage, """{ "memory_usage_percent": 25 }""", t0),
+        ];
+        spy.GetTelemetryBatchAsync(Arg.Any<long>(), Arg.Any<DateTimeOffset>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns(batch, []); // first poll returns the batch, then empty
+
+        await RunOneLoopIterationAsync(spy);
+
+        // The healthy MemoryUsage row was projected (proving the batch was not aborted by the poison row).
+        await spy.Received(1).ApplySummaryPatchAsync(
+            Arg.Is<MachineSummaryPatch>(p => (p.MachineId == 100) && (p.MemoryUsagePercent == 25)),
+            Arg.Any<CancellationToken>());
+
+        // The loop polled a second time using the advanced high-water mark (the last row's Id),
+        // which only happens after the batch completed and the mark advanced — no infinite re-fetch.
+        await spy.Received().GetTelemetryBatchAsync(
+            2, Arg.Any<DateTimeOffset>(), Arg.Any<int>(), Arg.Any<CancellationToken>());
+    }
+
+    // ========== Per-type projection correctness (drives the public loop) ==========
+
+    [Test]
+    public async Task StreamLoop_SystemInfo_ProjectsSummaryAndDetailFields()
     {
         using TestDatabaseFactory dbFactory = new();
         DatabaseContext db = dbFactory.Context;
         long machineId = 100;
         await SeedSummaryAndDetail(db, machineId);
 
-        TestServiceScopeFactory scopeFactory = new(db);
-        MachineStateStreamingService service = CreateService(scopeFactory);
-
         string payload = """{"hostname":"web-01","hardware_model":"PowerEdge R740","hardware_vendor":"Dell","hardware_serial":"SN123","cpu_brand":"Xeon","cpu_cores":16,"memory_total_bytes":34359738368,"uptime_seconds":86400,"bios_version":"2.1","ip_addresses":["10.0.0.1"]}""";
-        MachineTelemetry row = BuildRow(machineId, TelemetryTypeIds.SystemInfo, payload);
+        await SeedTelemetryAsync(db, Row(1, machineId, TelemetryTypeIds.SystemInfo, payload, FixedClock));
 
-        await service.ProcessTelemetryRowAsync(CreateRepo(db),row, CancellationToken.None);
+        await RunOneLoopIterationAsync(db);
 
-        MachineStateSummary? summary = await db.MachineStateSummaries
-            .Where(s => s.MachineId == machineId)
-            .FirstOrDefaultAsync();
-
-        await Assert.That(summary).IsNotNull();
-        await Assert.That(summary!.Hostname).IsEqualTo("web-01");
+        MachineStateSummary summary = await db.MachineStateSummaries.FirstAsync(s => s.MachineId == machineId);
+        await Assert.That(summary.Hostname).IsEqualTo("web-01");
         await Assert.That(summary.HardwareModel).IsEqualTo("PowerEdge R740");
         await Assert.That(summary.IpAddresses).IsNotNull();
 
-        MachineStateDetail? detail = await db.MachineStateDetails
-            .Where(d => d.MachineId == machineId)
-            .FirstOrDefaultAsync();
-
-        await Assert.That(detail).IsNotNull();
-        await Assert.That(detail!.HardwareVendor).IsEqualTo("Dell");
+        MachineStateDetail detail = await db.MachineStateDetails.FirstAsync(d => d.MachineId == machineId);
+        await Assert.That(detail.HardwareVendor).IsEqualTo("Dell");
         await Assert.That(detail.CpuBrand).IsEqualTo("Xeon");
         await Assert.That(detail.CpuCores).IsEqualTo(16);
         await Assert.That(detail.MemoryTotalBytes).IsEqualTo(34359738368L);
     }
 
-    // ========== ProcessTelemetryRow_OsVersion_UpdatesSummaryFields ==========
-
     [Test]
-    public async Task ProcessTelemetryRow_OsVersion_UpdatesSummaryFields()
+    public async Task StreamLoop_OsVersion_ProjectsSummaryAndDetailFields()
     {
         using TestDatabaseFactory dbFactory = new();
         DatabaseContext db = dbFactory.Context;
         long machineId = 101;
         await SeedSummaryAndDetail(db, machineId);
 
-        TestServiceScopeFactory scopeFactory = new(db);
-        MachineStateStreamingService service = CreateService(scopeFactory);
+        await SeedTelemetryAsync(db, Row(1, machineId, TelemetryTypeIds.OsVersion,
+            """{"os_name":"Ubuntu","os_version":"22.04","kernel":"5.15.0-91"}""", FixedClock));
 
-        string payload = """{"os_name":"Ubuntu","os_version":"22.04","kernel":"5.15.0-91"}""";
-        MachineTelemetry row = BuildRow(machineId, TelemetryTypeIds.OsVersion, payload);
+        await RunOneLoopIterationAsync(db);
 
-        await service.ProcessTelemetryRowAsync(CreateRepo(db),row, CancellationToken.None);
-
-        MachineStateSummary? summary = await db.MachineStateSummaries
-            .Where(s => s.MachineId == machineId)
-            .FirstOrDefaultAsync();
-
-        await Assert.That(summary).IsNotNull();
-        await Assert.That(summary!.OsName).IsEqualTo("Ubuntu");
+        MachineStateSummary summary = await db.MachineStateSummaries.FirstAsync(s => s.MachineId == machineId);
+        await Assert.That(summary.OsName).IsEqualTo("Ubuntu");
         await Assert.That(summary.OsVersion).IsEqualTo("22.04");
 
-        MachineStateDetail? detail = await db.MachineStateDetails
-            .Where(d => d.MachineId == machineId)
-            .FirstOrDefaultAsync();
-
-        await Assert.That(detail).IsNotNull();
-        await Assert.That(detail!.Kernel).IsEqualTo("5.15.0-91");
+        MachineStateDetail detail = await db.MachineStateDetails.FirstAsync(d => d.MachineId == machineId);
+        await Assert.That(detail.Kernel).IsEqualTo("5.15.0-91");
     }
 
-    // ========== ProcessTelemetryRow_CpuInfo_UpdatesSummaryFields ==========
-
     [Test]
-    public async Task ProcessTelemetryRow_CpuInfo_UpdatesSummaryFields()
+    public async Task StreamLoop_CpuInfo_ProjectsDetailFields()
     {
         using TestDatabaseFactory dbFactory = new();
         DatabaseContext db = dbFactory.Context;
         long machineId = 102;
         await SeedSummaryAndDetail(db, machineId);
 
-        TestServiceScopeFactory scopeFactory = new(db);
-        MachineStateStreamingService service = CreateService(scopeFactory);
+        await SeedTelemetryAsync(db, Row(1, machineId, TelemetryTypeIds.CpuInfo,
+            """{"cpu_type":"x86_64","physical_cpus":2,"logical_cpus":8}""", FixedClock));
 
-        string payload = """{"cpu_type":"x86_64","physical_cpus":2,"logical_cpus":8}""";
-        MachineTelemetry row = BuildRow(machineId, TelemetryTypeIds.CpuInfo, payload);
+        await RunOneLoopIterationAsync(db);
 
-        await service.ProcessTelemetryRowAsync(CreateRepo(db),row, CancellationToken.None);
-
-        MachineStateDetail? detail = await db.MachineStateDetails
-            .Where(d => d.MachineId == machineId)
-            .FirstOrDefaultAsync();
-
-        await Assert.That(detail).IsNotNull();
-        await Assert.That(detail!.CpuType).IsEqualTo("x86_64");
+        MachineStateDetail detail = await db.MachineStateDetails.FirstAsync(d => d.MachineId == machineId);
+        await Assert.That(detail.CpuType).IsEqualTo("x86_64");
         await Assert.That(detail.CpuPhysicalCpus).IsEqualTo(2);
         await Assert.That(detail.CpuLogicalCpus).IsEqualTo(8);
     }
 
-    // ========== ProcessTelemetryRow_MemoryInfo_UpdatesSummaryFields ==========
-
     [Test]
-    public async Task ProcessTelemetryRow_MemoryInfo_UpdatesSummaryFields()
+    public async Task StreamLoop_MemoryInfo_ProjectsDetailFields()
     {
         using TestDatabaseFactory dbFactory = new();
         DatabaseContext db = dbFactory.Context;
         long machineId = 103;
         await SeedSummaryAndDetail(db, machineId);
 
-        TestServiceScopeFactory scopeFactory = new(db);
-        MachineStateStreamingService service = CreateService(scopeFactory);
+        await SeedTelemetryAsync(db, Row(1, machineId, TelemetryTypeIds.MemoryInfo,
+            """{"swap_total_bytes":8589934592,"swap_free_bytes":4294967296}""", FixedClock));
 
-        string payload = """{"swap_total_bytes":8589934592,"swap_free_bytes":4294967296}""";
-        MachineTelemetry row = BuildRow(machineId, TelemetryTypeIds.MemoryInfo, payload);
+        await RunOneLoopIterationAsync(db);
 
-        await service.ProcessTelemetryRowAsync(CreateRepo(db),row, CancellationToken.None);
-
-        MachineStateDetail? detail = await db.MachineStateDetails
-            .Where(d => d.MachineId == machineId)
-            .FirstOrDefaultAsync();
-
-        await Assert.That(detail).IsNotNull();
-        await Assert.That(detail!.SwapTotalBytes).IsEqualTo(8589934592L);
+        MachineStateDetail detail = await db.MachineStateDetails.FirstAsync(d => d.MachineId == machineId);
+        await Assert.That(detail.SwapTotalBytes).IsEqualTo(8589934592L);
         await Assert.That(detail.SwapFreeBytes).IsEqualTo(4294967296L);
     }
 
-    // ========== ProcessTelemetryRow_DiskInfo_CreatesDetailRows ==========
-
     [Test]
-    public async Task ProcessTelemetryRow_DiskInfo_CreatesDetailRows()
+    public async Task StreamLoop_DiskInfo_ProjectsDetailPayload()
     {
         using TestDatabaseFactory dbFactory = new();
         DatabaseContext db = dbFactory.Context;
         long machineId = 104;
         await SeedSummaryAndDetail(db, machineId);
 
-        TestServiceScopeFactory scopeFactory = new(db);
-        MachineStateStreamingService service = CreateService(scopeFactory);
-
         string payload = """[{"mount":"/","size_bytes":107374182400,"filesystem":"ext4"},{"mount":"/data","size_bytes":536870912000,"filesystem":"xfs"}]""";
-        MachineTelemetry row = BuildRow(machineId, TelemetryTypeIds.DiskInfo, payload);
+        await SeedTelemetryAsync(db, Row(1, machineId, TelemetryTypeIds.DiskInfo, payload, FixedClock));
 
-        await service.ProcessTelemetryRowAsync(CreateRepo(db),row, CancellationToken.None);
+        await RunOneLoopIterationAsync(db);
 
-        MachineStateDetail? detail = await db.MachineStateDetails
-            .Where(d => d.MachineId == machineId)
-            .FirstOrDefaultAsync();
-
-        await Assert.That(detail).IsNotNull();
-        await Assert.That(detail!.DiskInfos).IsEqualTo(payload);
+        MachineStateDetail detail = await db.MachineStateDetails.FirstAsync(d => d.MachineId == machineId);
+        await Assert.That(detail.DiskInfos).IsEqualTo(payload);
     }
 
-    // ========== ProcessTelemetryRow_CpuUsage_UpdatesSummaryFields ==========
-
     [Test]
-    public async Task ProcessTelemetryRow_CpuUsage_UpdatesSummaryFields()
+    public async Task StreamLoop_CpuUsage_ProjectsSummaryField()
     {
         using TestDatabaseFactory dbFactory = new();
         DatabaseContext db = dbFactory.Context;
         long machineId = 105;
         await SeedSummaryAndDetail(db, machineId);
 
-        TestServiceScopeFactory scopeFactory = new(db);
-        MachineStateStreamingService service = CreateService(scopeFactory);
+        await SeedTelemetryAsync(db, Row(1, machineId, TelemetryTypeIds.CpuUsage,
+            """{"cpu_usage_percent":73}""", FixedClock));
 
-        string payload = """{"cpu_usage_percent":73}""";
-        MachineTelemetry row = BuildRow(machineId, TelemetryTypeIds.CpuUsage, payload);
+        await RunOneLoopIterationAsync(db);
 
-        await service.ProcessTelemetryRowAsync(CreateRepo(db),row, CancellationToken.None);
-
-        MachineStateSummary? summary = await db.MachineStateSummaries
-            .Where(s => s.MachineId == machineId)
-            .FirstOrDefaultAsync();
-
-        await Assert.That(summary).IsNotNull();
-        await Assert.That(summary!.CpuUsagePercent).IsEqualTo(73);
+        MachineStateSummary summary = await db.MachineStateSummaries.FirstAsync(s => s.MachineId == machineId);
+        await Assert.That(summary.CpuUsagePercent).IsEqualTo(73);
     }
 
-    // ========== ProcessTelemetryRow_MemoryUsage_UpdatesSummaryFields ==========
-
     [Test]
-    public async Task ProcessTelemetryRow_MemoryUsage_UpdatesSummaryFields()
+    public async Task StreamLoop_MemoryUsage_ProjectsSummaryAndDetailFields()
     {
         using TestDatabaseFactory dbFactory = new();
         DatabaseContext db = dbFactory.Context;
         long machineId = 106;
         await SeedSummaryAndDetail(db, machineId);
 
-        TestServiceScopeFactory scopeFactory = new(db);
-        MachineStateStreamingService service = CreateService(scopeFactory);
+        await SeedTelemetryAsync(db, Row(1, machineId, TelemetryTypeIds.MemoryUsage,
+            """{"memory_used":12884901888,"memory_usage_percent":75}""", FixedClock));
 
-        string payload = """{"memory_used":12884901888,"memory_usage_percent":75}""";
-        MachineTelemetry row = BuildRow(machineId, TelemetryTypeIds.MemoryUsage, payload);
+        await RunOneLoopIterationAsync(db);
 
-        await service.ProcessTelemetryRowAsync(CreateRepo(db),row, CancellationToken.None);
+        MachineStateSummary summary = await db.MachineStateSummaries.FirstAsync(s => s.MachineId == machineId);
+        await Assert.That(summary.MemoryUsagePercent).IsEqualTo(75);
 
-        MachineStateSummary? summary = await db.MachineStateSummaries
-            .Where(s => s.MachineId == machineId)
-            .FirstOrDefaultAsync();
-
-        await Assert.That(summary).IsNotNull();
-        await Assert.That(summary!.MemoryUsagePercent).IsEqualTo(75);
-
-        MachineStateDetail? detail = await db.MachineStateDetails
-            .Where(d => d.MachineId == machineId)
-            .FirstOrDefaultAsync();
-
-        await Assert.That(detail).IsNotNull();
-        await Assert.That(detail!.MemoryUsedBytes).IsEqualTo(12884901888L);
+        MachineStateDetail detail = await db.MachineStateDetails.FirstAsync(d => d.MachineId == machineId);
+        await Assert.That(detail.MemoryUsedBytes).IsEqualTo(12884901888L);
     }
 
-    // ========== ProcessTelemetryRow_DiskUsage_UpdatesDetailRows ==========
-
     [Test]
-    public async Task ProcessTelemetryRow_DiskUsage_UpdatesDetailRows()
+    public async Task StreamLoop_DiskUsage_ProjectsSummaryAndDetailFields()
     {
         using TestDatabaseFactory dbFactory = new();
         DatabaseContext db = dbFactory.Context;
         long machineId = 107;
         await SeedSummaryAndDetail(db, machineId);
 
-        TestServiceScopeFactory scopeFactory = new(db);
-        MachineStateStreamingService service = CreateService(scopeFactory);
-
         string payload = """[{"mount":"/","usage_percent":42},{"mount":"/data","usage_percent":87}]""";
-        MachineTelemetry row = BuildRow(machineId, TelemetryTypeIds.DiskUsage, payload);
+        await SeedTelemetryAsync(db, Row(1, machineId, TelemetryTypeIds.DiskUsage, payload, FixedClock));
 
-        await service.ProcessTelemetryRowAsync(CreateRepo(db),row, CancellationToken.None);
+        await RunOneLoopIterationAsync(db);
 
-        MachineStateSummary? summary = await db.MachineStateSummaries
-            .Where(s => s.MachineId == machineId)
-            .FirstOrDefaultAsync();
+        MachineStateSummary summary = await db.MachineStateSummaries.FirstAsync(s => s.MachineId == machineId);
+        await Assert.That(summary.MaxDiskUsagePercent).IsEqualTo(87);
 
-        await Assert.That(summary).IsNotNull();
-        await Assert.That(summary!.MaxDiskUsagePercent).IsEqualTo(87);
-
-        MachineStateDetail? detail = await db.MachineStateDetails
-            .Where(d => d.MachineId == machineId)
-            .FirstOrDefaultAsync();
-
-        await Assert.That(detail).IsNotNull();
-        await Assert.That(detail!.DiskUsages).IsEqualTo(payload);
+        MachineStateDetail detail = await db.MachineStateDetails.FirstAsync(d => d.MachineId == machineId);
+        await Assert.That(detail.DiskUsages).IsEqualTo(payload);
     }
 
-    // ========== ProcessTelemetryRow_SshSessions_UpdatesDetailRows ==========
-
     [Test]
-    public async Task ProcessTelemetryRow_SshSessions_UpdatesDetailRows()
+    public async Task StreamLoop_SshSessions_ProjectsDetailPayload()
     {
         using TestDatabaseFactory dbFactory = new();
         DatabaseContext db = dbFactory.Context;
         long machineId = 108;
         await SeedSummaryAndDetail(db, machineId);
 
-        TestServiceScopeFactory scopeFactory = new(db);
-        MachineStateStreamingService service = CreateService(scopeFactory);
-
         string payload = """[{"user":"root","ip":"10.0.0.5","pid":1234}]""";
-        MachineTelemetry row = BuildRow(machineId, TelemetryTypeIds.SshSessions, payload);
+        await SeedTelemetryAsync(db, Row(1, machineId, TelemetryTypeIds.SshSessions, payload, FixedClock));
 
-        await service.ProcessTelemetryRowAsync(CreateRepo(db),row, CancellationToken.None);
+        await RunOneLoopIterationAsync(db);
 
-        MachineStateDetail? detail = await db.MachineStateDetails
-            .Where(d => d.MachineId == machineId)
-            .FirstOrDefaultAsync();
-
-        await Assert.That(detail).IsNotNull();
-        await Assert.That(detail!.SshSessions).IsEqualTo(payload);
+        MachineStateDetail detail = await db.MachineStateDetails.FirstAsync(d => d.MachineId == machineId);
+        await Assert.That(detail.SshSessions).IsEqualTo(payload);
     }
 
-    // ========== ProcessTelemetryRow_HardwareHealth_UpdatesSummaryFlags ==========
-
     [Test]
-    public async Task ProcessTelemetryRow_HardwareHealth_UpdatesSummaryFlags()
+    public async Task StreamLoop_HardwareHealth_ProjectsSummaryFlagsAndDetailPayload()
     {
         using TestDatabaseFactory dbFactory = new();
         DatabaseContext db = dbFactory.Context;
         long machineId = 109;
         await SeedSummaryAndDetail(db, machineId);
 
-        TestServiceScopeFactory scopeFactory = new(db);
-        MachineStateStreamingService service = CreateService(scopeFactory);
-
         string payload = """{"disk_smart":[{"device":"/dev/sda","health_status":"FAILED"}],"fans":[{"name":"fan1","rpm":3000}],"power_supplies":[{"name":"psu1","status":"OK"}]}""";
-        MachineTelemetry row = BuildRow(machineId, TelemetryTypeIds.HardwareHealth, payload);
+        await SeedTelemetryAsync(db, Row(1, machineId, TelemetryTypeIds.HardwareHealth, payload, FixedClock));
 
-        await service.ProcessTelemetryRowAsync(CreateRepo(db),row, CancellationToken.None);
+        await RunOneLoopIterationAsync(db);
 
-        MachineStateSummary? summary = await db.MachineStateSummaries
-            .Where(s => s.MachineId == machineId)
-            .FirstOrDefaultAsync();
-
-        await Assert.That(summary).IsNotNull();
-        await Assert.That(summary!.HasDiskHealthIssue).IsTrue();
+        MachineStateSummary summary = await db.MachineStateSummaries.FirstAsync(s => s.MachineId == machineId);
+        await Assert.That(summary.HasDiskHealthIssue).IsTrue();
         await Assert.That(summary.HasHardwareIssue).IsFalse();
+
+        MachineStateDetail detail = await db.MachineStateDetails.FirstAsync(d => d.MachineId == machineId);
+        await Assert.That(detail.HardwareHealth).IsEqualTo(payload);
     }
 
-    // ========== ProcessTelemetryRow_PackageUpdates_UpdatesSummaryFields ==========
-
     [Test]
-    public async Task ProcessTelemetryRow_PackageUpdates_UpdatesSummaryFields()
+    public async Task StreamLoop_PackageUpdates_ProjectsSummaryFields()
     {
         using TestDatabaseFactory dbFactory = new();
         DatabaseContext db = dbFactory.Context;
         long machineId = 110;
         await SeedSummaryAndDetail(db, machineId);
 
-        TestServiceScopeFactory scopeFactory = new(db);
-        MachineStateStreamingService service = CreateService(scopeFactory);
+        await SeedTelemetryAsync(db, Row(1, machineId, TelemetryTypeIds.PackageUpdates,
+            """{"pending_updates":42,"security_updates":7}""", FixedClock));
 
-        string payload = """{"pending_updates":42,"security_updates":7}""";
-        MachineTelemetry row = BuildRow(machineId, TelemetryTypeIds.PackageUpdates, payload);
+        await RunOneLoopIterationAsync(db);
 
-        await service.ProcessTelemetryRowAsync(CreateRepo(db),row, CancellationToken.None);
-
-        MachineStateSummary? summary = await db.MachineStateSummaries
-            .Where(s => s.MachineId == machineId)
-            .FirstOrDefaultAsync();
-
-        await Assert.That(summary).IsNotNull();
-        await Assert.That(summary!.PendingUpdates).IsEqualTo(42);
+        MachineStateSummary summary = await db.MachineStateSummaries.FirstAsync(s => s.MachineId == machineId);
+        await Assert.That(summary.PendingUpdates).IsEqualTo(42);
         await Assert.That(summary.SecurityUpdates).IsEqualTo(7);
     }
 
-    // ========== ProcessTelemetryRow_ServiceStatus_UpdatesDetailRows ==========
-
     [Test]
-    public async Task ProcessTelemetryRow_ServiceStatus_UpdatesDetailRows()
+    public async Task StreamLoop_ServiceStatus_ProjectsSummaryFields()
     {
         using TestDatabaseFactory dbFactory = new();
         DatabaseContext db = dbFactory.Context;
         long machineId = 111;
         await SeedSummaryAndDetail(db, machineId);
 
-        TestServiceScopeFactory scopeFactory = new(db);
-        MachineStateStreamingService service = CreateService(scopeFactory);
+        await SeedTelemetryAsync(db, Row(1, machineId, TelemetryTypeIds.ServiceStatus,
+            """{"total_services":120,"failed_services":3}""", FixedClock));
 
-        string payload = """{"total_services":120,"failed_services":3}""";
-        MachineTelemetry row = BuildRow(machineId, TelemetryTypeIds.ServiceStatus, payload);
+        await RunOneLoopIterationAsync(db);
 
-        await service.ProcessTelemetryRowAsync(CreateRepo(db),row, CancellationToken.None);
-
-        MachineStateSummary? summary = await db.MachineStateSummaries
-            .Where(s => s.MachineId == machineId)
-            .FirstOrDefaultAsync();
-
-        await Assert.That(summary).IsNotNull();
-        await Assert.That(summary!.TotalServices).IsEqualTo(120);
+        MachineStateSummary summary = await db.MachineStateSummaries.FirstAsync(s => s.MachineId == machineId);
+        await Assert.That(summary.TotalServices).IsEqualTo(120);
         await Assert.That(summary.FailedServices).IsEqualTo(3);
     }
 
-    // ========== ProcessTelemetryRow_UnknownType_LogsWarningAndSkips ==========
-
     [Test]
-    public async Task ProcessTelemetryRow_UnknownType_LogsWarningAndSkips()
+    public async Task StreamLoop_UnknownType_LeavesStateUnchanged()
     {
         using TestDatabaseFactory dbFactory = new();
         DatabaseContext db = dbFactory.Context;
         long machineId = 112;
         await SeedSummaryAndDetail(db, machineId);
 
-        TestServiceScopeFactory scopeFactory = new(db);
-        MachineStateStreamingService service = CreateService(scopeFactory);
+        await SeedTelemetryAsync(db, Row(1, machineId, 999, """{"unknown":"data"}""", FixedClock));
 
-        MachineTelemetry row = BuildRow(machineId, 999, """{"unknown":"data"}""");
+        await RunOneLoopIterationAsync(db);
 
-        // Should not throw
-        await service.ProcessTelemetryRowAsync(CreateRepo(db),row, CancellationToken.None);
+        // Unknown type carries no fragment but the machine is still seen, so LastSeenAt advances.
+        MachineStateSummary summary = await db.MachineStateSummaries.FirstAsync(s => s.MachineId == machineId);
+        await Assert.That(summary.LastSeenAt).IsEqualTo(FixedClock);
+        await Assert.That(summary.CpuUsagePercent).IsNull();
+    }
 
-        // Summary should remain unchanged (no LastSeenAt update)
+    [Test]
+    public async Task StreamLoop_SystemInfo_UpdatesLastSeenAt()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        DatabaseContext db = dbFactory.Context;
+        long machineId = 130;
+        await SeedSummaryAndDetail(db, machineId);
+
+        await SeedTelemetryAsync(db, Row(1, machineId, TelemetryTypeIds.SystemInfo,
+            """{"hostname":"test"}""", FixedClock));
+
+        await RunOneLoopIterationAsync(db);
+
+        MachineStateSummary summary = await db.MachineStateSummaries.FirstAsync(s => s.MachineId == machineId);
+        await Assert.That(summary.LastSeenAt).IsEqualTo(FixedClock);
+    }
+
+    [Test]
+    public async Task StreamLoop_CpuUsageZero_StoresZeroNotNull()
+    {
+        // Protobuf default for int32 is 0. When cpu_usage_percent is explicitly 0 in the payload,
+        // the projection must store 0 in the summary table, not null.
+        using TestDatabaseFactory dbFactory = new();
+        DatabaseContext db = dbFactory.Context;
+        long machineId = 201;
+        await SeedSummaryAndDetail(db, machineId);
+
+        await SeedTelemetryAsync(db, Row(1, machineId, TelemetryTypeIds.CpuUsage,
+            """{"cpu_usage_percent":0}""", FixedClock));
+
+        await RunOneLoopIterationAsync(db);
+
+        MachineStateSummary summary = await db.MachineStateSummaries.FirstAsync(s => s.MachineId == machineId);
+        await Assert.That(summary.CpuUsagePercent).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task StreamLoop_FarFutureUnknownType_LeavesStateUnchanged()
+    {
+        // A telemetry type from a future agent version must not crash the loop or change owned columns.
+        using TestDatabaseFactory dbFactory = new();
+        DatabaseContext db = dbFactory.Context;
+        long machineId = 202;
+        await SeedSummaryAndDetail(db, machineId);
+
+        await SeedTelemetryAsync(db, Row(1, machineId, 9999, """{"future":"data"}""", FixedClock));
+
+        await RunOneLoopIterationAsync(db);
+
+        MachineStateSummary summary = await db.MachineStateSummaries.FirstAsync(s => s.MachineId == machineId);
+        await Assert.That(summary.CpuUsagePercent).IsNull();
+
+        MachineStateDetail detail = await db.MachineStateDetails.FirstAsync(d => d.MachineId == machineId);
+        await Assert.That(detail.Kernel).IsNull();
+    }
+
+    [Test]
+    public async Task StreamLoop_MachineNotSeeded_DoesNotCreateRows()
+    {
+        // When there is no summary/detail row, the UPDATE affects 0 rows and must not throw or insert.
+        using TestDatabaseFactory dbFactory = new();
+        DatabaseContext db = dbFactory.Context;
+        long machineId = 999;
+        // Deliberately not seeding summary/detail for this machine.
+        await SeedTelemetryAsync(db, Row(1, machineId, TelemetryTypeIds.CpuUsage,
+            """{"cpu_usage_percent":50}""", FixedClock));
+
+        await RunOneLoopIterationAsync(db);
+
         MachineStateSummary? summary = await db.MachineStateSummaries
             .Where(s => s.MachineId == machineId)
             .FirstOrDefaultAsync();
 
-        await Assert.That(summary).IsNotNull();
-        await Assert.That(summary!.LastSeenAt).IsNull();
+        await Assert.That(summary).IsNull();
     }
 
-    // ========== ComputeMaxDiskUsagePercent tests ==========
+    // ========== Empty batch / no lock: loop sleeps without error ==========
+
+    [Test]
+    public async Task StreamLoop_EmptyBatch_SleepsWithoutError()
+    {
+        // When no instance can acquire the lock, the loop must sleep (via the injected
+        // TimeProvider) and never throw. A FixedTimeProvider whose clock never advances means
+        // the sleep only completes when the cancellation token fires — so this test depends on
+        // cancellation, not on real elapsed wall-clock time.
+        using TestDatabaseFactory dbFactory = new();
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+
+        IAdvisoryLockProvider lockProvider = BlockingAdvisoryLockProvider();
+        FixedTimeProvider clock = new(FixedClock);
+
+        MachineStateStreamingService service = CreateService(
+            scopeFactory, advisoryLockProvider: lockProvider, timeProvider: clock);
+
+        using CancellationTokenSource cts = new();
+
+        await Assert.That(async () =>
+        {
+            try
+            {
+                await service.StartAsync(cts.Token);
+
+                // Cancel deterministically; the loop's TimeProvider-based delay unwinds on cancel.
+                await cts.CancelAsync();
+                await service.StopAsync(CancellationToken.None);
+            }
+            catch (OperationCanceledException)
+            {
+                // Expected on cancellation.
+            }
+        }).ThrowsNothing();
+    }
+
+    // ========== ComputeMaxDiskUsagePercent (logic now lives in TelemetryPayloadParser) ==========
 
     [Test]
     public async Task ComputeMaxDiskUsagePercent_ValidJson_ReturnsHighest()
     {
-        int result = MachineStateStreamingService.ComputeMaxDiskUsagePercent(
+        int result = TelemetryPayloadParser.ComputeMaxDiskUsagePercent(
             """[{"mount":"/","usage_percent":30},{"mount":"/data","usage_percent":92}]""");
 
         await Assert.That(result).IsEqualTo(92);
@@ -482,7 +710,7 @@ public class MachineStateStreamingServiceTests
     [Test]
     public async Task ComputeMaxDiskUsagePercent_EmptyArray_ReturnsZero()
     {
-        int result = MachineStateStreamingService.ComputeMaxDiskUsagePercent("[]");
+        int result = TelemetryPayloadParser.ComputeMaxDiskUsagePercent("[]");
 
         await Assert.That(result).IsEqualTo(0);
     }
@@ -490,7 +718,7 @@ public class MachineStateStreamingServiceTests
     [Test]
     public async Task ComputeMaxDiskUsagePercent_MalformedJson_ReturnsZero()
     {
-        int result = MachineStateStreamingService.ComputeMaxDiskUsagePercent("not-json{{{");
+        int result = TelemetryPayloadParser.ComputeMaxDiskUsagePercent("not-json{{{");
 
         await Assert.That(result).IsEqualTo(0);
     }
@@ -498,7 +726,7 @@ public class MachineStateStreamingServiceTests
     [Test]
     public async Task ComputeMaxDiskUsagePercent_MissingUsagePercent_ReturnsZero()
     {
-        int result = MachineStateStreamingService.ComputeMaxDiskUsagePercent(
+        int result = TelemetryPayloadParser.ComputeMaxDiskUsagePercent(
             """[{"mount":"/","size_bytes":100}]""");
 
         await Assert.That(result).IsEqualTo(0);
@@ -508,7 +736,7 @@ public class MachineStateStreamingServiceTests
     public async Task ComputeMaxDiskUsagePercent_NegativePercent_TreatedAsZero()
     {
         // Negative usage_percent should not become max (stays at 0 since -5 < 0)
-        int result = MachineStateStreamingService.ComputeMaxDiskUsagePercent(
+        int result = TelemetryPayloadParser.ComputeMaxDiskUsagePercent(
             """[{"mount":"/","usage_percent":-5}]""");
 
         await Assert.That(result).IsEqualTo(0);
@@ -518,7 +746,7 @@ public class MachineStateStreamingServiceTests
     public async Task ComputeMaxDiskUsagePercent_PercentOver100_ReturnsExactValue()
     {
         // Document behavior: values over 100 are returned as-is (no clamping)
-        int result = MachineStateStreamingService.ComputeMaxDiskUsagePercent(
+        int result = TelemetryPayloadParser.ComputeMaxDiskUsagePercent(
             """[{"mount":"/","usage_percent":105}]""");
 
         await Assert.That(result).IsEqualTo(105);
@@ -527,18 +755,36 @@ public class MachineStateStreamingServiceTests
     [Test]
     public async Task ComputeMaxDiskUsagePercent_NotArray_ReturnsZero()
     {
-        int result = MachineStateStreamingService.ComputeMaxDiskUsagePercent(
+        int result = TelemetryPayloadParser.ComputeMaxDiskUsagePercent(
             """{"mount":"/","usage_percent":50}""");
 
         await Assert.That(result).IsEqualTo(0);
     }
 
-    // ========== ComputeHardwareHealthFlags tests ==========
+    [Test]
+    public async Task ComputeMaxDiskUsagePercent_SingleDisk_ReturnsItsValue()
+    {
+        int result = TelemetryPayloadParser.ComputeMaxDiskUsagePercent(
+            """[{"mount":"/","usage_percent":55}]""");
+
+        await Assert.That(result).IsEqualTo(55);
+    }
+
+    [Test]
+    public async Task ComputeMaxDiskUsagePercent_AllZero_ReturnsZero()
+    {
+        int result = TelemetryPayloadParser.ComputeMaxDiskUsagePercent(
+            """[{"mount":"/","usage_percent":0},{"mount":"/data","usage_percent":0}]""");
+
+        await Assert.That(result).IsEqualTo(0);
+    }
+
+    // ========== ComputeHardwareHealthFlags (logic now lives in TelemetryPayloadParser) ==========
 
     [Test]
     public async Task ComputeHardwareHealthFlags_FanRpmZero_SetsFlag()
     {
-        (bool hasDiskIssue, bool hasHardwareIssue) = MachineStateStreamingService.ComputeHardwareHealthFlags(
+        (bool hasDiskIssue, bool hasHardwareIssue) = TelemetryPayloadParser.ComputeHardwareHealthFlags(
             """{"fans":[{"name":"fan1","rpm":0}],"disk_smart":[],"power_supplies":[]}""");
 
         await Assert.That(hasDiskIssue).IsFalse();
@@ -548,7 +794,7 @@ public class MachineStateStreamingServiceTests
     [Test]
     public async Task ComputeHardwareHealthFlags_PsuStatusNotOk_SetsFlag()
     {
-        (bool hasDiskIssue, bool hasHardwareIssue) = MachineStateStreamingService.ComputeHardwareHealthFlags(
+        (bool hasDiskIssue, bool hasHardwareIssue) = TelemetryPayloadParser.ComputeHardwareHealthFlags(
             """{"fans":[{"name":"fan1","rpm":3000}],"disk_smart":[],"power_supplies":[{"name":"psu1","status":"DEGRADED"}]}""");
 
         await Assert.That(hasDiskIssue).IsFalse();
@@ -558,7 +804,7 @@ public class MachineStateStreamingServiceTests
     [Test]
     public async Task ComputeHardwareHealthFlags_DiskHealthFailed_SetsFlag()
     {
-        (bool hasDiskIssue, bool hasHardwareIssue) = MachineStateStreamingService.ComputeHardwareHealthFlags(
+        (bool hasDiskIssue, bool hasHardwareIssue) = TelemetryPayloadParser.ComputeHardwareHealthFlags(
             """{"disk_smart":[{"device":"/dev/sda","health_status":"FAILED"}],"fans":[],"power_supplies":[]}""");
 
         await Assert.That(hasDiskIssue).IsTrue();
@@ -568,7 +814,7 @@ public class MachineStateStreamingServiceTests
     [Test]
     public async Task ComputeHardwareHealthFlags_AllHealthy_ClearsFlag()
     {
-        (bool hasDiskIssue, bool hasHardwareIssue) = MachineStateStreamingService.ComputeHardwareHealthFlags(
+        (bool hasDiskIssue, bool hasHardwareIssue) = TelemetryPayloadParser.ComputeHardwareHealthFlags(
             """{"disk_smart":[{"device":"/dev/sda","health_status":"PASSED"}],"fans":[{"name":"fan1","rpm":3000}],"power_supplies":[{"name":"psu1","status":"OK"}]}""");
 
         await Assert.That(hasDiskIssue).IsFalse();
@@ -578,7 +824,7 @@ public class MachineStateStreamingServiceTests
     [Test]
     public async Task ComputeHardwareHealthFlags_MalformedJson_ReturnsDefaults()
     {
-        (bool hasDiskIssue, bool hasHardwareIssue) = MachineStateStreamingService.ComputeHardwareHealthFlags(
+        (bool hasDiskIssue, bool hasHardwareIssue) = TelemetryPayloadParser.ComputeHardwareHealthFlags(
             "not-valid-json{{{");
 
         await Assert.That(hasDiskIssue).IsFalse();
@@ -588,7 +834,7 @@ public class MachineStateStreamingServiceTests
     [Test]
     public async Task ComputeHardwareHealthFlags_EmptyFanArray_NoFalsePositive()
     {
-        (bool hasDiskIssue, bool hasHardwareIssue) = MachineStateStreamingService.ComputeHardwareHealthFlags(
+        (bool hasDiskIssue, bool hasHardwareIssue) = TelemetryPayloadParser.ComputeHardwareHealthFlags(
             """{"fans":[],"disk_smart":[],"power_supplies":[]}""");
 
         await Assert.That(hasDiskIssue).IsFalse();
@@ -598,7 +844,7 @@ public class MachineStateStreamingServiceTests
     [Test]
     public async Task ComputeHardwareHealthFlags_EmptyPsuArray_NoFalsePositive()
     {
-        (bool hasDiskIssue, bool hasHardwareIssue) = MachineStateStreamingService.ComputeHardwareHealthFlags(
+        (bool hasDiskIssue, bool hasHardwareIssue) = TelemetryPayloadParser.ComputeHardwareHealthFlags(
             """{"fans":[{"name":"fan1","rpm":2500}],"disk_smart":[],"power_supplies":[]}""");
 
         await Assert.That(hasDiskIssue).IsFalse();
@@ -608,7 +854,7 @@ public class MachineStateStreamingServiceTests
     [Test]
     public async Task ComputeHardwareHealthFlags_EmptyDiskArray_NoFalsePositive()
     {
-        (bool hasDiskIssue, bool hasHardwareIssue) = MachineStateStreamingService.ComputeHardwareHealthFlags(
+        (bool hasDiskIssue, bool hasHardwareIssue) = TelemetryPayloadParser.ComputeHardwareHealthFlags(
             """{"fans":[{"name":"fan1","rpm":2500}],"disk_smart":[],"power_supplies":[{"name":"psu1","status":"OK"}]}""");
 
         await Assert.That(hasDiskIssue).IsFalse();
@@ -619,7 +865,7 @@ public class MachineStateStreamingServiceTests
     public async Task ComputeHardwareHealthFlags_MissingFansProperty_NoFalsePositive()
     {
         // Machine might not report fans at all
-        (bool hasDiskIssue, bool hasHardwareIssue) = MachineStateStreamingService.ComputeHardwareHealthFlags(
+        (bool hasDiskIssue, bool hasHardwareIssue) = TelemetryPayloadParser.ComputeHardwareHealthFlags(
             """{"disk_smart":[{"device":"/dev/sda","health_status":"PASSED"}]}""");
 
         await Assert.That(hasDiskIssue).IsFalse();
@@ -630,364 +876,83 @@ public class MachineStateStreamingServiceTests
     public async Task ComputeHardwareHealthFlags_MissingPsuProperty_NoFalsePositive()
     {
         // Machine might not report power supplies at all
-        (bool hasDiskIssue, bool hasHardwareIssue) = MachineStateStreamingService.ComputeHardwareHealthFlags(
+        (bool hasDiskIssue, bool hasHardwareIssue) = TelemetryPayloadParser.ComputeHardwareHealthFlags(
             """{"disk_smart":[],"fans":[{"name":"fan1","rpm":2000}]}""");
 
         await Assert.That(hasDiskIssue).IsFalse();
         await Assert.That(hasHardwareIssue).IsFalse();
     }
 
-    // ========== ProcessTelemetryRow_NullPayload_SkipsGracefully ==========
-
-    [Test]
-    public async Task ProcessTelemetryRow_NullPayload_ThrowsAndIsCaught()
-    {
-        // The ProcessTelemetryRowAsync method will throw on null payload (JsonDocument.Parse(null))
-        // but the streaming loop catches it and continues. Verify the method throws so the
-        // catch in StreamLoopAsync handles it correctly.
-        using TestDatabaseFactory dbFactory = new();
-        DatabaseContext db = dbFactory.Context;
-        long machineId = 113;
-        await SeedSummaryAndDetail(db, machineId);
-
-        TestServiceScopeFactory scopeFactory = new(db);
-        MachineStateStreamingService service = CreateService(scopeFactory);
-
-        MachineTelemetry row = BuildRow(machineId, TelemetryTypeIds.SystemInfo, null!);
-
-        // Null payload causes JsonDocument.Parse to throw ArgumentNullException,
-        // which the streaming loop's catch block handles.
-        await Assert.That(async () => await service.ProcessTelemetryRowAsync(CreateRepo(db),row, CancellationToken.None))
-            .Throws<ArgumentNullException>();
-    }
-
-    // ========== ProcessTelemetryRow_EmptyPayload_SkipsGracefully ==========
-
-    [Test]
-    public async Task ProcessTelemetryRow_EmptyPayload_ThrowsJsonException()
-    {
-        // Empty string payload will throw JsonException during JSON parsing,
-        // caught by the streaming loop.
-        using TestDatabaseFactory dbFactory = new();
-        DatabaseContext db = dbFactory.Context;
-        long machineId = 114;
-        await SeedSummaryAndDetail(db, machineId);
-
-        TestServiceScopeFactory scopeFactory = new(db);
-        MachineStateStreamingService service = CreateService(scopeFactory);
-
-        MachineTelemetry row = BuildRow(machineId, TelemetryTypeIds.CpuUsage, "");
-
-        await Assert.That(async () => await service.ProcessTelemetryRowAsync(CreateRepo(db),row, CancellationToken.None))
-            .Throws<System.Text.Json.JsonException>();
-    }
-
-    // ========== ProcessTelemetryRow_MachineNotFound_SkipsGracefully ==========
-
-    [Test]
-    public async Task ProcessTelemetryRow_MachineNotFound_SkipsGracefully()
-    {
-        // When there's no summary/detail row, the UPDATE affects 0 rows but doesn't throw.
-        using TestDatabaseFactory dbFactory = new();
-        DatabaseContext db = dbFactory.Context;
-        long machineId = 999;
-        // Deliberately not seeding summary/detail for this machine.
-
-        TestServiceScopeFactory scopeFactory = new(db);
-        MachineStateStreamingService service = CreateService(scopeFactory);
-
-        string payload = """{"cpu_usage_percent":50}""";
-        MachineTelemetry row = BuildRow(machineId, TelemetryTypeIds.CpuUsage, payload);
-
-        // Should not throw even though machine doesn't exist in summary/detail tables
-        await service.ProcessTelemetryRowAsync(CreateRepo(db),row, CancellationToken.None);
-
-        MachineStateSummary? summary = await db.MachineStateSummaries
-            .Where(s => s.MachineId == machineId)
-            .FirstOrDefaultAsync();
-
-        await Assert.That(summary).IsNull();
-    }
-
-    // ========== ProcessTelemetryRow_DuplicateTimestamp_HandlesIdempotently ==========
-
-    [Test]
-    public async Task ProcessTelemetryRow_DuplicateTimestamp_HandlesIdempotently()
-    {
-        using TestDatabaseFactory dbFactory = new();
-        DatabaseContext db = dbFactory.Context;
-        long machineId = 115;
-        await SeedSummaryAndDetail(db, machineId);
-
-        TestServiceScopeFactory scopeFactory = new(db);
-        MachineStateStreamingService service = CreateService(scopeFactory);
-
-        string payload = """{"cpu_usage_percent":60}""";
-        MachineTelemetry row = BuildRow(machineId, TelemetryTypeIds.CpuUsage, payload);
-
-        // Process the same row twice
-        await service.ProcessTelemetryRowAsync(CreateRepo(db),row, CancellationToken.None);
-        await service.ProcessTelemetryRowAsync(CreateRepo(db),row, CancellationToken.None);
-
-        // Should still have exactly one summary row
-        int count = await db.MachineStateSummaries
-            .Where(s => s.MachineId == machineId)
-            .CountAsync();
-
-        await Assert.That(count).IsEqualTo(1);
-
-        MachineStateSummary? summary = await db.MachineStateSummaries
-            .Where(s => s.MachineId == machineId)
-            .FirstOrDefaultAsync();
-
-        await Assert.That(summary!.CpuUsagePercent).IsEqualTo(60);
-    }
-
-    // ========== StreamLoop_EmptyBatch_SleepsWithoutError ==========
-
-    [Test]
-    public async Task StreamLoop_EmptyBatch_SleepsWithoutError()
-    {
-        // When there are no telemetry rows to process, the stream loop should
-        // sleep and not throw. We verify by running a short cancellation cycle.
-        using TestDatabaseFactory dbFactory = new();
-        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-
-        IAdvisoryLockProvider lockProvider = BlockingAdvisoryLockProvider();
-
-        MachineStateStreamingService service = CreateService(
-            scopeFactory, advisoryLockProvider: lockProvider);
-
-        using CancellationTokenSource cts = new(TimeSpan.FromMilliseconds(200));
-
-        // ExecuteAsync should handle cancellation gracefully
-        await Assert.That(async () =>
-        {
-            try
-            {
-                await service.StartAsync(cts.Token);
-                await Task.Delay(300, CancellationToken.None);
-                await service.StopAsync(CancellationToken.None);
-            }
-            catch (OperationCanceledException)
-            {
-                // Expected
-            }
-        }).ThrowsNothing();
-    }
-
-    // ========== StreamLoop_PerRowException_ContinuesProcessingRemainingRows ==========
-
-    [Test]
-    public async Task StreamLoop_PerRowException_ContinuesProcessingRemainingRows()
-    {
-        // Intent: a per-row exception in the streaming loop must be caught and processing must
-        // continue with the next row. Drives the public BackgroundService entry point with two
-        // telemetry rows for the same machine (so they share one group and run sequentially):
-        // the FIRST row's payload is malformed JSON and throws inside ProcessTelemetryRowAsync,
-        // and the SECOND row must still be processed so its summary update is persisted.
-        // A regression that drops the per-row try/catch in StreamLoopAsync would propagate the
-        // exception out of Parallel.ForEachAsync, abort the batch before the good row runs,
-        // and leave the summary unchanged — this test would fail.
-        using TestDatabaseFactory dbFactory = new();
-        DatabaseContext db = dbFactory.Context;
-        long machineId = 120;
-        await SeedSummaryAndDetail(db, machineId);
-
-        // Seed two telemetry rows: row 1 has invalid JSON (throws JsonException during
-        // ProcessTelemetryRowAsync), row 2 is valid and must still be applied to the summary.
-        MachineTelemetry badRow = BuildRow(machineId, TelemetryTypeIds.CpuUsage, "INVALID_JSON", id: 1);
-        MachineTelemetry goodRow = BuildRow(machineId, TelemetryTypeIds.CpuUsage, """{"cpu_usage_percent":55}""", id: 2);
-        await db.InsertAsync(badRow);
-        await db.InsertAsync(goodRow);
-
-        // High-water mark starts at 0 (cache returns null), so both rows are picked up.
-        IServerSettingsCache settingsCache = Substitute.For<IServerSettingsCache>();
-        settingsCache.GetSettingAsync(Arg.Any<ServerConfigurationSettingKeys>(), Arg.Any<CancellationToken>())
-            .Returns((string?)null);
-
-        TestServiceScopeFactory scopeFactory = new(db);
-        ILogger<MachineStateStreamingService> logger = Substitute.For<ILogger<MachineStateStreamingService>>();
-
-        // Non-blocking lock provider so the loop actually enters StreamLoopAsync.
-        MachineStateStreamingService service = CreateService(
-            scopeFactory,
-            advisoryLockProvider: AcquiringAdvisoryLockProvider(),
-            settingsCache: settingsCache,
-            logger: logger);
-
-        // The CreateService default uses FastStartupDelay (zero) so we no longer have to
-        // wait the production 5-second startup pause. A 1.5s window is still needed to let
-        // the loop pick up the seeded rows and the per-row catch path execute reliably under
-        // CI load — but it's still over 4x faster than the original 7-second wait.
-        using CancellationTokenSource cts = new();
-        cts.CancelAfter(TimeSpan.FromSeconds(3));
-
-        await service.StartAsync(cts.Token);
-
-        try
-        {
-            await Task.Delay(TimeSpan.FromMilliseconds(1500), cts.Token);
-        }
-        catch (OperationCanceledException)
-        {
-            // Timeout fired — expected, the loop will be unwound below.
-        }
-
-        await service.StopAsync(CancellationToken.None);
-
-        // Verify: row 2's summary update was written despite row 1's exception. If the per-row
-        // catch were removed, the exception from row 1 would bubble up out of Parallel.ForEachAsync
-        // and the second row would never be applied, leaving CpuUsagePercent null.
-        MachineStateSummary? summary = await db.MachineStateSummaries
-            .Where(s => s.MachineId == machineId)
-            .FirstOrDefaultAsync();
-
-        await Assert.That(summary).IsNotNull();
-        await Assert.That(summary!.CpuUsagePercent).IsEqualTo(55);
-
-        // And the per-row failure must have been logged at Warning level (don't assert the
-        // exact message text — assert intent only).
-        logger.Received().Log(
-            LogLevel.Warning,
-            Arg.Any<EventId>(),
-            Arg.Any<object>(),
-            Arg.Any<Exception?>(),
-            Arg.Any<Func<object, Exception?, string>>()!);
-    }
-
-    // ========== ProcessTelemetryRow_SystemInfo_UpdatesLastSeenAt ==========
-
-    [Test]
-    public async Task ProcessTelemetryRow_SystemInfo_UpdatesLastSeenAt()
-    {
-        using TestDatabaseFactory dbFactory = new();
-        DatabaseContext db = dbFactory.Context;
-        long machineId = 130;
-        await SeedSummaryAndDetail(db, machineId);
-
-        TestServiceScopeFactory scopeFactory = new(db);
-        MachineStateStreamingService service = CreateService(scopeFactory);
-
-        DateTimeOffset expectedTime = DateTimeOffset.UtcNow;
-        MachineTelemetry row = new()
-        {
-            Id = 1,
-            MachineId = machineId,
-            TenantId = 1,
-            TelemetryType = TelemetryTypeIds.SystemInfo,
-            Payload = """{"hostname":"test"}""",
-            ReceivedAt = expectedTime,
-            SourceEventId = "evt1"
-        };
-
-        await service.ProcessTelemetryRowAsync(CreateRepo(db),row, CancellationToken.None);
-
-        MachineStateSummary? summary = await db.MachineStateSummaries
-            .Where(s => s.MachineId == machineId)
-            .FirstOrDefaultAsync();
-
-        await Assert.That(summary).IsNotNull();
-        await Assert.That(summary!.LastSeenAt).IsNotNull();
-    }
-
-    // ========== ComputeHardwareHealthFlags_FanAndPsu_BothSet ==========
-
     [Test]
     public async Task ComputeHardwareHealthFlags_FanAndDiskBothBad_BothFlags()
     {
-        (bool hasDiskIssue, bool hasHardwareIssue) = MachineStateStreamingService.ComputeHardwareHealthFlags(
+        (bool hasDiskIssue, bool hasHardwareIssue) = TelemetryPayloadParser.ComputeHardwareHealthFlags(
             """{"disk_smart":[{"device":"/dev/sda","health_status":"FAILED"}],"fans":[{"name":"fan1","rpm":0}],"power_supplies":[{"name":"psu1","status":"OK"}]}""");
 
         await Assert.That(hasDiskIssue).IsTrue();
         await Assert.That(hasHardwareIssue).IsTrue();
     }
 
-    // ========== ComputeMaxDiskUsagePercent_SingleDisk_ReturnsItsValue ==========
-
-    [Test]
-    public async Task ComputeMaxDiskUsagePercent_SingleDisk_ReturnsItsValue()
-    {
-        int result = MachineStateStreamingService.ComputeMaxDiskUsagePercent(
-            """[{"mount":"/","usage_percent":55}]""");
-
-        await Assert.That(result).IsEqualTo(55);
-    }
-
-    // ========== ComputeMaxDiskUsagePercent_AllZero_ReturnsZero ==========
-
-    [Test]
-    public async Task ComputeMaxDiskUsagePercent_AllZero_ReturnsZero()
-    {
-        int result = MachineStateStreamingService.ComputeMaxDiskUsagePercent(
-            """[{"mount":"/","usage_percent":0},{"mount":"/data","usage_percent":0}]""");
-
-        await Assert.That(result).IsEqualTo(0);
-    }
-
-    // ========== ProcessTelemetryRow_HardwareHealth_StoresPayloadInDetail ==========
-
-    [Test]
-    public async Task ProcessTelemetryRow_HardwareHealth_StoresPayloadInDetail()
-    {
-        using TestDatabaseFactory dbFactory = new();
-        DatabaseContext db = dbFactory.Context;
-        long machineId = 140;
-        await SeedSummaryAndDetail(db, machineId);
-
-        TestServiceScopeFactory scopeFactory = new(db);
-        MachineStateStreamingService service = CreateService(scopeFactory);
-
-        string payload = """{"disk_smart":[],"fans":[],"power_supplies":[]}""";
-        MachineTelemetry row = BuildRow(machineId, TelemetryTypeIds.HardwareHealth, payload);
-
-        await service.ProcessTelemetryRowAsync(CreateRepo(db),row, CancellationToken.None);
-
-        MachineStateDetail? detail = await db.MachineStateDetails
-            .Where(d => d.MachineId == machineId)
-            .FirstOrDefaultAsync();
-
-        await Assert.That(detail).IsNotNull();
-        await Assert.That(detail!.HardwareHealth).IsEqualTo(payload);
-    }
-
-    // ========== ComputeHardwareHealthFlags_FansNotArray_NoFalsePositive ==========
-
     [Test]
     public async Task ComputeHardwareHealthFlags_FansNotArray_NoFalsePositive()
     {
         // If fans is a string instead of an array, it should be ignored
-        (bool hasDiskIssue, bool hasHardwareIssue) = MachineStateStreamingService.ComputeHardwareHealthFlags(
+        (bool hasDiskIssue, bool hasHardwareIssue) = TelemetryPayloadParser.ComputeHardwareHealthFlags(
             """{"fans":"none","disk_smart":[],"power_supplies":[]}""");
 
         await Assert.That(hasDiskIssue).IsFalse();
         await Assert.That(hasHardwareIssue).IsFalse();
     }
 
-    // ========== ComputeHardwareHealthFlags_DiskSmartNotArray_NoFalsePositive ==========
-
     [Test]
     public async Task ComputeHardwareHealthFlags_DiskSmartNotArray_NoFalsePositive()
     {
-        (bool hasDiskIssue, bool hasHardwareIssue) = MachineStateStreamingService.ComputeHardwareHealthFlags(
+        (bool hasDiskIssue, bool hasHardwareIssue) = TelemetryPayloadParser.ComputeHardwareHealthFlags(
             """{"disk_smart":"none","fans":[],"power_supplies":[]}""");
 
         await Assert.That(hasDiskIssue).IsFalse();
         await Assert.That(hasHardwareIssue).IsFalse();
     }
 
-    // ========== ComputeHardwareHealthFlags_PsuCheckSkippedWhenFanAlreadyFailed ==========
-
     [Test]
     public async Task ComputeHardwareHealthFlags_PsuCheckSkippedWhenFanAlreadyFailed()
     {
         // When hasHardwareIssue is already true from fans, PSU check is skipped (optimization).
         // Both bad fan and bad PSU should still only set hasHardwareIssue once.
-        (bool hasDiskIssue, bool hasHardwareIssue) = MachineStateStreamingService.ComputeHardwareHealthFlags(
+        (bool hasDiskIssue, bool hasHardwareIssue) = TelemetryPayloadParser.ComputeHardwareHealthFlags(
             """{"fans":[{"name":"fan1","rpm":0}],"disk_smart":[],"power_supplies":[{"name":"psu1","status":"DEGRADED"}]}""");
 
         await Assert.That(hasDiskIssue).IsFalse();
         await Assert.That(hasHardwareIssue).IsTrue();
+    }
+
+    // ========== Malformed payloads are skipped, not thrown (parser try-parse contract) ==========
+
+    [Test]
+    public async Task Parse_NullPayload_Throws()
+    {
+        // A null payload is not malformed JSON but a contract violation (rows always carry a
+        // payload), so the parser surfaces it as an ArgumentNullException rather than swallowing it.
+        await Assert.That(() => TelemetryPayloadParser.TryParseSystemInfo(null!, out SystemInfoFragment? _))
+            .Throws<ArgumentNullException>();
+    }
+
+    [Test]
+    public async Task Parse_EmptyPayload_ReturnsFalse()
+    {
+        bool ok = TelemetryPayloadParser.TryParseCpuUsage("", out CpuUsageFragment? fragment);
+
+        await Assert.That(ok).IsFalse();
+        await Assert.That(fragment).IsNull();
+    }
+
+    [Test]
+    public async Task Parse_MalformedJson_ReturnsFalse()
+    {
+        bool ok = TelemetryPayloadParser.TryParseCpuUsage("not-valid-json{{{", out CpuUsageFragment? fragment);
+
+        await Assert.That(ok).IsFalse();
+        await Assert.That(fragment).IsNull();
     }
 
     // ========== Constructor null guard tests ==========
@@ -1050,92 +1015,5 @@ public class MachineStateStreamingServiceTests
             Substitute.For<IServerSettingsCache>(),
             null!))
             .Throws<ArgumentNullException>();
-    }
-
-    // ========== ProcessTelemetryRow_MalformedJsonPayload_ThrowsJsonException ==========
-
-    [Test]
-    public async Task ProcessTelemetryRow_MalformedJsonPayload_ThrowsJsonException()
-    {
-        // A corrupted telemetry row must not silently succeed. ProcessTelemetryRowAsync
-        // should throw a JsonException, which the caller (StreamLoopAsync) catches and
-        // logs before continuing to the next row.
-        using TestDatabaseFactory dbFactory = new();
-        DatabaseContext db = dbFactory.Context;
-        long machineId = 200;
-        await SeedSummaryAndDetail(db, machineId);
-
-        TestServiceScopeFactory scopeFactory = new(db);
-        MachineStateStreamingService service = CreateService(scopeFactory);
-
-        MachineTelemetry row = BuildRow(machineId, TelemetryTypeIds.CpuUsage, "not-valid-json{{{");
-
-        await Assert.That(async () => await service.ProcessTelemetryRowAsync(CreateRepo(db),row, CancellationToken.None))
-            .Throws<System.Text.Json.JsonException>();
-    }
-
-    // ========== ProcessTelemetryRow_CpuUsageZero_StoresZeroNotNull ==========
-
-    [Test]
-    public async Task ProcessTelemetryRow_CpuUsageZero_StoresZeroNotNull()
-    {
-        // Protobuf default for int32 is 0. When cpu_usage_percent is explicitly 0 in
-        // the JSON payload, the streaming service must store 0 in the summary table,
-        // not null. This catches bugs where zero is treated as a missing/default value.
-        using TestDatabaseFactory dbFactory = new();
-        DatabaseContext db = dbFactory.Context;
-        long machineId = 201;
-        await SeedSummaryAndDetail(db, machineId);
-
-        TestServiceScopeFactory scopeFactory = new(db);
-        MachineStateStreamingService service = CreateService(scopeFactory);
-
-        string payload = """{"cpu_usage_percent":0}""";
-        MachineTelemetry row = BuildRow(machineId, TelemetryTypeIds.CpuUsage, payload);
-
-        await service.ProcessTelemetryRowAsync(CreateRepo(db),row, CancellationToken.None);
-
-        MachineStateSummary? summary = await db.MachineStateSummaries
-            .Where(s => s.MachineId == machineId)
-            .FirstOrDefaultAsync();
-
-        await Assert.That(summary).IsNotNull();
-        await Assert.That(summary!.CpuUsagePercent).IsEqualTo(0);
-    }
-
-    // ========== ProcessTelemetryRow_FarFutureUnknownType_SilentlySkipped ==========
-
-    [Test]
-    public async Task ProcessTelemetryRow_FarFutureUnknownType_SilentlySkipped()
-    {
-        // New telemetry types added in future agent versions should not crash the
-        // streaming service. A type well outside the current range must be handled
-        // gracefully with no exceptions and no state table modifications.
-        using TestDatabaseFactory dbFactory = new();
-        DatabaseContext db = dbFactory.Context;
-        long machineId = 202;
-        await SeedSummaryAndDetail(db, machineId);
-
-        TestServiceScopeFactory scopeFactory = new(db);
-        MachineStateStreamingService service = CreateService(scopeFactory);
-
-        MachineTelemetry row = BuildRow(machineId, 9999, """{"future":"data"}""");
-
-        // Must not throw
-        await service.ProcessTelemetryRowAsync(CreateRepo(db),row, CancellationToken.None);
-
-        // Summary and detail rows must remain unchanged
-        MachineStateSummary? summary = await db.MachineStateSummaries
-            .Where(s => s.MachineId == machineId)
-            .FirstOrDefaultAsync();
-
-        await Assert.That(summary).IsNotNull();
-        await Assert.That(summary!.LastSeenAt).IsNull();
-
-        MachineStateDetail? detail = await db.MachineStateDetails
-            .Where(d => d.MachineId == machineId)
-            .FirstOrDefaultAsync();
-
-        await Assert.That(detail).IsNotNull();
     }
 }

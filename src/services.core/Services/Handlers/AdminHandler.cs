@@ -2,6 +2,7 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
+using System.Text.Json;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
@@ -54,6 +55,8 @@ public sealed class AdminHandler : IAdminHandler
     private readonly IUserRepository _userRepo;
     private readonly IServerSettingsCache _settingsCache;
     private readonly IConnectionMultiplexer _redis;
+    private readonly IDatabaseTransactionProvider _transactionProvider;
+    private readonly IAuditLogRepository _auditLog;
 
     /// <summary>
     /// Creates a new instance of the <see cref="AdminHandler"/> class.
@@ -62,17 +65,23 @@ public sealed class AdminHandler : IAdminHandler
         IServerConfigurationRepository configRepo,
         IUserRepository userRepo,
         IServerSettingsCache settingsCache,
-        IConnectionMultiplexer redis)
+        IConnectionMultiplexer redis,
+        IDatabaseTransactionProvider transactionProvider,
+        IAuditLogRepository auditLog)
     {
         ArgumentNullException.ThrowIfNull(configRepo);
         ArgumentNullException.ThrowIfNull(userRepo);
         ArgumentNullException.ThrowIfNull(settingsCache);
         ArgumentNullException.ThrowIfNull(redis);
+        ArgumentNullException.ThrowIfNull(transactionProvider);
+        ArgumentNullException.ThrowIfNull(auditLog);
 
         _configRepo = configRepo;
         _userRepo = userRepo;
         _settingsCache = settingsCache;
         _redis = redis;
+        _transactionProvider = transactionProvider;
+        _auditLog = auditLog;
     }
 
     /// <inheritdoc/>
@@ -100,7 +109,7 @@ public sealed class AdminHandler : IAdminHandler
 
     /// <inheritdoc/>
     public async Task<ServiceResult<List<SettingEntry>>> UpdateSettingsAsync(
-        List<SettingUpdateEntry> updates, CancellationToken ct)
+        List<SettingUpdateEntry> updates, int userId, CancellationToken ct)
     {
         foreach (SettingUpdateEntry update in updates)
         {
@@ -146,15 +155,29 @@ public sealed class AdminHandler : IAdminHandler
 
         IDatabase redisDb = _redis.GetDatabase();
 
+        using IDatabaseTransaction transaction = await _transactionProvider.BeginTransactionAsync(ct);
+
         foreach (SettingUpdateEntry update in updates)
         {
             ServerConfigurationSettingKeys key = (ServerConfigurationSettingKeys)update.Key;
 
             await _configRepo.UpsertSettingAsync(key, update.Value, ct);
 
+            await _auditLog.InsertAuditLogAsync(AuditHelper.Create(
+                tenantId: null,
+                userId,
+                machineId: null,
+                AuditAction.ServerConfigurationChanged,
+                AuditResourceType.ServerConfiguration,
+                key.ToString(),
+                new { Key = key.ToString(), Value = update.Value },
+                ipAddress: null), ct);
+
             string redisKey = $"config:{key}";
             await redisDb.KeyDeleteAsync(redisKey);
         }
+
+        await transaction.CommitAsync(ct);
 
         _settingsCache.InvalidateCache();
 

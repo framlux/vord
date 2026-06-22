@@ -7,7 +7,6 @@ using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Server.Auth;
-using Framlux.FleetManagement.Services.Core.Billing;
 using Framlux.FleetManagement.Services.Core.Infrastructure;
 using Microsoft.AspNetCore.Http;
 
@@ -23,7 +22,6 @@ public sealed class AlertRuleDeleteEndpoint : EndpointWithoutRequest<ApiResponse
     private readonly IAlertEventRepository _alertEventRepo;
     private readonly IAlertConditionStateRepository _alertConditionStateRepo;
     private readonly IAuditLogRepository _auditLog;
-    private readonly ISubscriptionService _subscriptionService;
     private readonly IDatabaseTransactionProvider _transactionProvider;
 
     /// <summary>
@@ -33,28 +31,24 @@ public sealed class AlertRuleDeleteEndpoint : EndpointWithoutRequest<ApiResponse
     /// <param name="alertEventRepo">Alert event repository.</param>
     /// <param name="alertConditionStateRepo">Alert condition state repository.</param>
     /// <param name="auditLog">Audit log repository.</param>
-    /// <param name="subscriptionService">Subscription service for tier gating.</param>
     /// <param name="transactionProvider">Provides the cross-repository transaction boundary.</param>
     public AlertRuleDeleteEndpoint(
         IAlertRuleRepository alertRuleRepo,
         IAlertEventRepository alertEventRepo,
         IAlertConditionStateRepository alertConditionStateRepo,
         IAuditLogRepository auditLog,
-        ISubscriptionService subscriptionService,
         IDatabaseTransactionProvider transactionProvider)
     {
         ArgumentNullException.ThrowIfNull(alertRuleRepo);
         ArgumentNullException.ThrowIfNull(alertEventRepo);
         ArgumentNullException.ThrowIfNull(alertConditionStateRepo);
         ArgumentNullException.ThrowIfNull(auditLog);
-        ArgumentNullException.ThrowIfNull(subscriptionService);
         ArgumentNullException.ThrowIfNull(transactionProvider);
 
         _alertRuleRepo = alertRuleRepo;
         _alertEventRepo = alertEventRepo;
         _alertConditionStateRepo = alertConditionStateRepo;
         _auditLog = auditLog;
-        _subscriptionService = subscriptionService;
         _transactionProvider = transactionProvider;
     }
 
@@ -63,6 +57,7 @@ public sealed class AlertRuleDeleteEndpoint : EndpointWithoutRequest<ApiResponse
     {
         Delete("/alert-rules/{id}");
         Policies("TenantAdmin");
+        Tags(Services.Billing.EndpointTags.RequiresProSubscription);
         Version(1);
     }
 
@@ -78,15 +73,7 @@ public sealed class AlertRuleDeleteEndpoint : EndpointWithoutRequest<ApiResponse
             return;
         }
 
-        TenantSubscription? subscription = await _subscriptionService.GetSubscriptionForTenantAsync(tenantId.Value, ct);
-        if ((subscription is null) || (subscription.Tier == SubscriptionTier.Free) || (subscription.Status != SubscriptionStatus.Active))
-        {
-            HttpContext.Response.StatusCode = StatusCodes.Status403Forbidden;
-            await HttpContext.Response.WriteAsJsonAsync(ApiResponse<bool>.Error("Alerting requires a Pro or Team subscription"), ct);
-
-            return;
-        }
-
+        // Pro+ gating is enforced by ProSubscriptionPreProcessor via the RequiresProSubscription tag.
         int ruleId = Route<int>("id");
 
         AlertRule? rule = await _alertRuleRepo.GetAlertRuleByIdAsync(ruleId, tenantId.Value, ct);

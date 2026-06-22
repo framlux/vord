@@ -81,8 +81,7 @@ public sealed class MachineAlertRulesUpdateEndpoint : Endpoint<UpdateMachineAler
         if (req.RuleIds.Length > 0)
         {
             List<AlertRule> tenantRules = await _alertRuleRepo.GetAlertRulesForTenantAsync(tenantId.Value, ct);
-            HashSet<int> validRuleIds = new(tenantRules.Select(r => r.Id));
-            List<int> invalidIds = req.RuleIds.Where(id => validRuleIds.Contains(id) == false).ToList();
+            List<int> invalidIds = FindInvalidRuleIds(req.RuleIds, tenantRules);
 
             if (invalidIds.Count > 0)
             {
@@ -102,5 +101,25 @@ public sealed class MachineAlertRulesUpdateEndpoint : Endpoint<UpdateMachineAler
             machineId.ToString(), new { RuleIds = req.RuleIds }, null), ct);
 
         await Send.OkAsync(ApiResponse<object>.Ok(new { }, "Machine alert rules updated"), cancellation: ct);
+    }
+
+    /// <summary>
+    /// Returns the subset of <paramref name="requestedRuleIds"/> that do not correspond to a rule
+    /// owned by the tenant (i.e. are not present in <paramref name="tenantRules"/>). This is the
+    /// cross-tenant isolation guard: a non-empty result means the caller tried to assign a rule
+    /// that belongs to another tenant or does not exist, and the update must be rejected.
+    /// Extracted as an <c>internal static</c> method so the guard can be unit-tested directly.
+    /// </summary>
+    /// <param name="requestedRuleIds">The rule IDs the caller wants to assign.</param>
+    /// <param name="tenantRules">The alert rules owned by the caller's tenant.</param>
+    /// <returns>The requested rule IDs that are invalid for this tenant.</returns>
+    internal static List<int> FindInvalidRuleIds(IEnumerable<int> requestedRuleIds, IEnumerable<AlertRule> tenantRules)
+    {
+        ArgumentNullException.ThrowIfNull(requestedRuleIds);
+        ArgumentNullException.ThrowIfNull(tenantRules);
+
+        HashSet<int> validRuleIds = new(tenantRules.Select(r => r.Id));
+
+        return requestedRuleIds.Where(id => validRuleIds.Contains(id) == false).ToList();
     }
 }

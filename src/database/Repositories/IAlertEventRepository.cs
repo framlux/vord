@@ -98,4 +98,26 @@ public interface IAlertEventRepository
     /// <param name="alertEvent">The alert event to create.</param>
     /// <param name="cancellationToken">A cancellation token.</param>
     Task<AlertEvent?> CreateEventIfNotExistsAsync(AlertEvent alertEvent, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Returns <see cref="AlertEvent"/>s with <see cref="AlertEventStatus.Triggered"/> status whose
+    /// <see cref="AlertEvent.TriggeredAt"/> falls within the half-open window
+    /// [<paramref name="triggeredNotBefore"/>, <paramref name="triggeredNotAfter"/>], and for which
+    /// no <c>IntegrationDeliveryAttempt</c> row exists. Results are ordered by
+    /// <see cref="AlertEvent.TriggeredAt"/> ascending and capped at 500 rows per call.
+    /// </summary>
+    /// <remarks>
+    /// Used by <c>AlertEvaluationJob</c> to re-enqueue deliveries that were lost in the crash window
+    /// between the event's transaction commit and the Hangfire enqueue call. The two bounds form a
+    /// safe re-drive window: <paramref name="triggeredNotAfter"/> excludes freshly-created in-flight
+    /// events still being delivered normally; <paramref name="triggeredNotBefore"/> stops perpetual
+    /// re-driving of ancient events for tenants that have no integrations.
+    /// </remarks>
+    /// <param name="triggeredNotAfter">Upper bound (inclusive) — events triggered at or before this instant are considered.</param>
+    /// <param name="triggeredNotBefore">Lower bound (inclusive) — events triggered before this instant are excluded.</param>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    Task<List<AlertEvent>> GetTriggeredEventsWithoutDeliveryAttemptsAsync(
+        DateTimeOffset triggeredNotAfter,
+        DateTimeOffset triggeredNotBefore,
+        CancellationToken cancellationToken = default);
 }

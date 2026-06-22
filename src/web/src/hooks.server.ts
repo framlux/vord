@@ -78,7 +78,7 @@ export const handle: Handle = async ({ event, resolve }) => {
 							path: '/',
 							httpOnly: true,
 							sameSite: 'lax',
-							secure: true
+							secure: !dev
 						});
 					}
 				} catch {
@@ -106,7 +106,8 @@ export const handle: Handle = async ({ event, resolve }) => {
 			+ "base-uri 'self'; "
 			+ "frame-ancestors 'none'; "
 			+ "img-src 'self' data:; "
-			+ "style-src 'self' 'unsafe-inline'; "
+			+ "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
+			+ "font-src 'self' https://fonts.gstatic.com; "
 			+ "script-src 'self'; "
 			+ "connect-src 'self'; "
 			+ "object-src 'none'"

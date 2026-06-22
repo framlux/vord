@@ -10,6 +10,7 @@ using Framlux.FleetManagement.Test.Infrastructure;
 using Framlux.FleetManagement.Grpc.AgentTelemetry;
 using Framlux.FleetManagement.Services.Core.Infrastructure;
 using Framlux.FleetManagement.Services.Core.Machines;
+using Framlux.FleetManagement.Services.Core.Machines.Projection;
 using Framlux.FleetManagement.Services.Core.Telemetry;
 using Grpc.Core;
 using Grpc.Net.Client;
@@ -24,9 +25,9 @@ namespace Framlux.FleetManagement.FunctionalTest.Endpoints.Grpc;
 
 /// <summary>
 /// End-to-end pipeline tests that submit telemetry via gRPC (proto serialization)
-/// and verify the streaming service correctly deserializes and updates state tables.
+/// and verify the streaming projection correctly deserializes and updates state tables.
 /// Guards against field name mismatches between the write path (TelemetryService.SerializePayload)
-/// and the read path (MachineStateStreamingService.ProcessTelemetryRowAsync).
+/// and the read path (TelemetryPayloadParser via MachineStateBatchCollapser).
 /// </summary>
 public sealed class TelemetryPipelineTests
 {
@@ -70,8 +71,7 @@ public sealed class TelemetryPipelineTests
             .FirstOrDefaultAsync(t => t.SourceEventId == eventId);
         await Assert.That(row).IsNotNull();
 
-        MachineStateStreamingService streamingService = CreateStreamingService(factory);
-        await streamingService.ProcessTelemetryRowAsync(CreateRepo(db),row!, CancellationToken.None);
+        await ProjectRowsAsync(db, row!);
 
         // Assert — the CPU value must survive the full proto → JSON → parse round-trip
         MachineStateSummary? summary = await db.MachineStateSummaries
@@ -125,8 +125,7 @@ public sealed class TelemetryPipelineTests
             .FirstOrDefaultAsync(t => t.SourceEventId == eventId);
         await Assert.That(row).IsNotNull();
 
-        MachineStateStreamingService streamingService = CreateStreamingService(factory);
-        await streamingService.ProcessTelemetryRowAsync(CreateRepo(db),row!, CancellationToken.None);
+        await ProjectRowsAsync(db, row!);
 
         // Assert
         MachineStateSummary? summary = await db.MachineStateSummaries
@@ -202,8 +201,7 @@ public sealed class TelemetryPipelineTests
             .FirstOrDefaultAsync(t => t.SourceEventId == eventId);
         await Assert.That(row).IsNotNull();
 
-        MachineStateStreamingService streamingService = CreateStreamingService(factory);
-        await streamingService.ProcessTelemetryRowAsync(CreateRepo(db),row!, CancellationToken.None);
+        await ProjectRowsAsync(db, row!);
 
         // Assert — max disk usage should be the highest across all disks (90%)
         MachineStateSummary? summary = await db.MachineStateSummaries
@@ -269,17 +267,13 @@ public sealed class TelemetryPipelineTests
         TelemetryAck ack = await client.SubmitTelemetryAsync(envelope, headers: headers);
         await Assert.That(ack.Success).IsTrue();
 
-        // Process each persisted row through the streaming service
-        MachineStateStreamingService streamingService = CreateStreamingService(factory);
+        // Project all persisted rows through the production collapse-and-apply path in one batch.
         List<MachineTelemetry> rows = await db.MachineTelemetry
             .Where(t => t.MachineId == machineId)
             .OrderBy(t => t.Id)
             .ToListAsync();
 
-        foreach (MachineTelemetry row in rows)
-        {
-            await streamingService.ProcessTelemetryRowAsync(CreateRepo(db),row, CancellationToken.None);
-        }
+        await ProjectRowsAsync(db, rows.ToArray());
 
         // Assert all values round-tripped correctly
         MachineStateSummary? summary = await db.MachineStateSummaries
@@ -295,24 +289,91 @@ public sealed class TelemetryPipelineTests
         await Assert.That(detail!.MemoryUsedBytes).IsEqualTo(24_000_000_000);
     }
 
-    private static IMachineStateRepository CreateRepo(DatabaseContext db)
+    /// <summary>
+    /// Projects the supplied raw telemetry rows into the state tables exactly as the streaming
+    /// service does: collapse the rows to one patch per machine via the production collapser, then
+    /// apply the combined summary and detail patches through the public repository methods.
+    /// </summary>
+    private static async Task ProjectRowsAsync(DatabaseContext db, params MachineTelemetry[] rows)
     {
-        return new DatabaseRepository(db, NullLogger<DatabaseRepository>.Instance);
+        IMachineStateRepository repo = new DatabaseRepository(db, NullLogger<DatabaseRepository>.Instance);
+        CollapseResult collapse = MachineStateBatchCollapser.Collapse(rows);
+
+        foreach (MachineStatePatch patch in collapse.Patches)
+        {
+            await repo.ApplySummaryPatchAsync(MapSummary(patch), CancellationToken.None);
+
+            if (patch.HasDetailChanges == true)
+            {
+                await repo.ApplyDetailPatchAsync(MapDetail(patch), CancellationToken.None);
+            }
+        }
     }
 
-    private static MachineStateStreamingService CreateStreamingService(FunctionalTestFactory factory)
+    private static MachineSummaryPatch MapSummary(MachineStatePatch patch)
     {
-        IServiceScopeFactory scopeFactory = factory.Services.GetRequiredService<IServiceScopeFactory>();
-        ISqlDialect dialect = factory.Services.GetRequiredService<ISqlDialect>();
-        IAdvisoryLockProvider advisoryLockProvider = factory.Services.GetRequiredService<IAdvisoryLockProvider>();
-        Database.Repositories.IServerSettingsCache settingsCache = factory.Services.GetRequiredService<Database.Repositories.IServerSettingsCache>();
+        return new MachineSummaryPatch
+        {
+            MachineId = patch.MachineId,
+            LastSeenAt = patch.LastSeenAt,
+            HasSystemInfo = patch.SystemInfo is not null,
+            Hostname = patch.SystemInfo?.Hostname,
+            HardwareModel = patch.SystemInfo?.HardwareModel,
+            IpAddresses = patch.SystemInfo?.IpAddresses,
+            HasOsVersion = patch.OsVersion is not null,
+            OsName = patch.OsVersion?.OsName,
+            OsVersion = patch.OsVersion?.OsVersion,
+            HasCpuUsage = patch.CpuUsage is not null,
+            CpuUsagePercent = patch.CpuUsage?.CpuUsagePercent,
+            HasMemoryUsage = patch.MemoryUsage is not null,
+            MemoryUsagePercent = patch.MemoryUsage?.MemoryUsagePercent,
+            HasDiskUsage = patch.DiskUsage is not null,
+            MaxDiskUsagePercent = patch.DiskUsage?.MaxDiskUsagePercent,
+            HasHardwareHealth = patch.HardwareHealth is not null,
+            HasDiskHealthIssue = patch.HardwareHealth?.HasDiskHealthIssue,
+            HasHardwareIssue = patch.HardwareHealth?.HasHardwareIssue,
+            HasPackageUpdates = patch.PackageUpdates is not null,
+            PendingUpdates = patch.PackageUpdates?.PendingUpdates,
+            SecurityUpdates = patch.PackageUpdates?.SecurityUpdates,
+            HasServiceStatus = patch.ServiceStatus is not null,
+            TotalServices = patch.ServiceStatus?.TotalServices,
+            FailedServices = patch.ServiceStatus?.FailedServices,
+        };
+    }
 
-        return new MachineStateStreamingService(
-            scopeFactory,
-            dialect,
-            advisoryLockProvider,
-            settingsCache,
-            NullLogger<MachineStateStreamingService>.Instance);
+    private static MachineDetailPatch MapDetail(MachineStatePatch patch)
+    {
+        return new MachineDetailPatch
+        {
+            MachineId = patch.MachineId,
+            HasSystemInfo = patch.SystemInfo is not null,
+            HardwareVendor = patch.SystemInfo?.HardwareVendor,
+            HardwareSerial = patch.SystemInfo?.HardwareSerial,
+            CpuBrand = patch.SystemInfo?.CpuBrand,
+            CpuCores = patch.SystemInfo?.CpuCores,
+            MemoryTotalBytes = patch.SystemInfo?.MemoryTotalBytes,
+            UptimeSeconds = patch.SystemInfo?.UptimeSeconds,
+            BiosVersion = patch.SystemInfo?.BiosVersion,
+            HasOsVersion = patch.OsVersion is not null,
+            Kernel = patch.OsVersion?.Kernel,
+            HasCpuInfo = patch.CpuInfo is not null,
+            CpuType = patch.CpuInfo?.CpuType,
+            CpuPhysicalCpus = patch.CpuInfo?.CpuPhysicalCpus,
+            CpuLogicalCpus = patch.CpuInfo?.CpuLogicalCpus,
+            HasMemoryInfo = patch.MemoryInfo is not null,
+            SwapTotalBytes = patch.MemoryInfo?.SwapTotalBytes,
+            SwapFreeBytes = patch.MemoryInfo?.SwapFreeBytes,
+            HasMemoryUsage = patch.MemoryUsage is not null,
+            MemoryUsedBytes = patch.MemoryUsage?.MemoryUsedBytes,
+            HasDiskInfo = patch.DiskInfo is not null,
+            DiskInfos = patch.DiskInfo?.DiskInfos,
+            HasDiskUsage = patch.DiskUsage is not null,
+            DiskUsages = patch.DiskUsage?.DiskUsages,
+            HasSshSessions = patch.SshSessions is not null,
+            SshSessions = patch.SshSessions?.SshSessions,
+            HasHardwareHealth = patch.HardwareHealth is not null,
+            HardwareHealth = patch.HardwareHealth?.HardwareHealth,
+        };
     }
 
     private static GrpcChannel CreateChannel(FunctionalTestFactory factory)
@@ -361,6 +422,7 @@ public sealed class TelemetryPipelineTests
             Name = "Pipeline Test Token",
             CreatedByUserId = 1,
             CreatedAt = DateTimeOffset.UtcNow,
+            ExpiresAt = DateTimeOffset.UtcNow.AddDays(7),
             IsRevoked = false
         };
         long tokenId = (long)await db.InsertWithIdentityAsync(token);
@@ -513,9 +575,8 @@ public sealed class TelemetryPipelineTests
         await Assert.That(windowRows.Count).IsEqualTo(1);
         await Assert.That(windowRows[0].SourceEventId).IsEqualTo(eventId);
 
-        // Process through the streaming service and verify state tables are updated
-        MachineStateStreamingService streamingService = CreateStreamingService(factory);
-        await streamingService.ProcessTelemetryRowAsync(CreateRepo(db),row!, CancellationToken.None);
+        // Project through the production collapse-and-apply path and verify state tables update.
+        await ProjectRowsAsync(db, row!);
 
         MachineStateSummary? summary = await db.MachineStateSummaries
             .FirstOrDefaultAsync(s => s.MachineId == machineId);
@@ -564,8 +625,7 @@ public sealed class TelemetryPipelineTests
             .FirstOrDefaultAsync(t => t.SourceEventId == eventId);
         await Assert.That(row).IsNotNull();
 
-        MachineStateStreamingService streamingService = CreateStreamingService(factory);
-        await streamingService.ProcessTelemetryRowAsync(CreateRepo(db),row!, CancellationToken.None);
+        await ProjectRowsAsync(db, row!);
 
         // Assert - CpuUsagePercent must be exactly 0, not null
         MachineStateSummary? summary = await db.MachineStateSummaries
