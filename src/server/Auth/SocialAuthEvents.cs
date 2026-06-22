@@ -48,6 +48,25 @@ public static class SocialAuthEvents
     }
 
     /// <summary>
+    /// Namespaces a custom-OIDC subject identifier with the resolving tenant so that two tenants'
+    /// identity providers can reuse the same subject value without mapping to the same account.
+    /// The tenant id is read from the authentication properties stashed at challenge time.
+    /// </summary>
+    /// <param name="httpContext">The current HTTP context carrying the stashed tenant id.</param>
+    /// <param name="rawSubject">The raw subject identifier from the validated token.</param>
+    /// <returns>The tenant-namespaced subject, or the raw subject when no tenant id is present.</returns>
+    internal static string BuildTenantNamespacedSubject(HttpContext httpContext, string rawSubject)
+    {
+        string? tenantId = httpContext.Items.TryGetValue("tenant-oidc-tenant-id", out object? value)
+            ? value as string
+            : null;
+
+        return string.IsNullOrEmpty(tenantId)
+            ? rawSubject
+            : $"tenant:{tenantId}:{rawSubject}";
+    }
+
+    /// <summary>
     /// Core logic for populating user claims from the database.
     /// Looks up user by external ID, auto-creates if missing, loads tenant roles, adds claims.
     /// </summary>
@@ -58,12 +77,18 @@ public static class SocialAuthEvents
     /// <returns>Returns true if the user was successfully authenticated; false if denied.</returns>
     public static async Task<bool> PopulateUserClaimsAsync(ClaimsIdentity identity, HttpContext httpContext, CancellationToken ct, AuthProviderType authProvider = AuthProviderType.Unknown)
     {
-        string? uniqueId = identity.FindFirst(ClaimTypes.NameIdentifier)?.Value
+        string? rawSubject = identity.FindFirst(ClaimTypes.NameIdentifier)?.Value
                   ?? identity.FindFirst("sub")?.Value;
-        if (string.IsNullOrEmpty(uniqueId))
+        if (string.IsNullOrEmpty(rawSubject))
         {
             return false;
         }
+
+        // A bare subject identifier is only unique within one provider. For tenant custom OIDC the
+        // subject is additionally namespaced by tenant so two tenants' IdPs cannot collide.
+        string uniqueId = authProvider == AuthProviderType.CustomOidc
+            ? BuildTenantNamespacedSubject(httpContext, rawSubject)
+            : rawSubject;
 
         string email = identity.FindFirst(ClaimTypes.Email)?.Value
             ?? identity.FindFirst("email")?.Value
@@ -71,7 +96,7 @@ public static class SocialAuthEvents
 
         IUserRepository userRepository = httpContext.RequestServices.GetRequiredService<IUserRepository>();
         ITenantRepository tenantRepository = httpContext.RequestServices.GetRequiredService<ITenantRepository>();
-        UserAccount? user = await userRepository.GetUserByExternalIdAsync(uniqueId, ct);
+        UserAccount? user = await userRepository.GetUserByExternalIdForProviderAsync(authProvider, uniqueId, ct);
         if (user is null)
         {
             // Check whether self-signup is enabled before auto-creating a new account

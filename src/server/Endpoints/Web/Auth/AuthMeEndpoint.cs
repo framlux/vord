@@ -2,7 +2,9 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
+using System.Security.Claims;
 using FastEndpoints;
+using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Server.Auth;
 using Framlux.FleetManagement.Services.Core.Models.Users;
 using Framlux.FleetManagement.Services.Core.Handlers;
@@ -48,7 +50,14 @@ public sealed class AuthMeEndpoint : EndpointWithoutRequest<ApiResponse<UserDto>
         }
 
         UserDto dto = UserDto.FromPrincipal(User, _logger);
-        ServiceResult<AuthMeResult> result = await _handler.GetCurrentUserAsync(dto.UniqueId, ct);
+
+        // The provider claim is minted alongside the principal. Resolve identity on the
+        // (provider, subject) pair; absent, unparseable, or out-of-range values fall back to Unknown.
+        AuthProviderType authProvider = (Enum.TryParse(User.FindFirstValue("apr"), out AuthProviderType parsedProvider) && Enum.IsDefined(parsedProvider))
+            ? parsedProvider
+            : AuthProviderType.Unknown;
+
+        ServiceResult<AuthMeResult> result = await _handler.GetCurrentUserAsync(authProvider, dto.UniqueId, ct);
 
         if (result.IsNotFound)
         {

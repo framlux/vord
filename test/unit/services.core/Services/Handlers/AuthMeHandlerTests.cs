@@ -21,10 +21,10 @@ public class AuthMeHandlerTests
     {
         IUserRepository userRepository = Substitute.For<IUserRepository>();
         ITenantRepository tenantRepository = Substitute.For<ITenantRepository>();
-        userRepository.GetUserByExternalIdAsync("unknown", Arg.Any<CancellationToken>()).Returns((UserAccount?)null);
+        userRepository.GetUserByExternalIdForProviderAsync(Arg.Any<AuthProviderType>(), "unknown", Arg.Any<CancellationToken>()).Returns((UserAccount?)null);
         AuthMeHandler handler = new(userRepository, tenantRepository);
 
-        ServiceResult<AuthMeResult> result = await handler.GetCurrentUserAsync("unknown", CancellationToken.None);
+        ServiceResult<AuthMeResult> result = await handler.GetCurrentUserAsync(AuthProviderType.Google, "unknown", CancellationToken.None);
 
         await Assert.That(result.IsNotFound).IsTrue();
     }
@@ -45,11 +45,11 @@ public class AuthMeHandlerTests
             IsSystem = false,
             IsGlobalAdmin = false,
         };
-        userRepository.GetUserByExternalIdAsync("ext-1", Arg.Any<CancellationToken>()).Returns(user);
+        userRepository.GetUserByExternalIdForProviderAsync(Arg.Any<AuthProviderType>(), "ext-1", Arg.Any<CancellationToken>()).Returns(user);
         tenantRepository.GetTenantsForUserAsync("ext-1", Arg.Any<CancellationToken>()).Returns(Enumerable.Empty<UserTenantRole>());
         AuthMeHandler handler = new(userRepository, tenantRepository);
 
-        ServiceResult<AuthMeResult> result = await handler.GetCurrentUserAsync("ext-1", CancellationToken.None);
+        ServiceResult<AuthMeResult> result = await handler.GetCurrentUserAsync(AuthProviderType.Google, "ext-1", CancellationToken.None);
 
         await Assert.That(result.IsSuccess).IsTrue();
         await Assert.That(result.Data!.NeedsOnboarding).IsTrue();
@@ -73,7 +73,7 @@ public class AuthMeHandlerTests
             IsSystem = false,
             IsGlobalAdmin = true,
         };
-        userRepository.GetUserByExternalIdAsync("ext-5", Arg.Any<CancellationToken>()).Returns(user);
+        userRepository.GetUserByExternalIdForProviderAsync(Arg.Any<AuthProviderType>(), "ext-5", Arg.Any<CancellationToken>()).Returns(user);
 
         Tenant tenant = new()
         {
@@ -101,7 +101,7 @@ public class AuthMeHandlerTests
         tenantRepository.GetTenantsForUserAsync("ext-5", Arg.Any<CancellationToken>()).Returns(roles);
         AuthMeHandler handler = new(userRepository, tenantRepository);
 
-        ServiceResult<AuthMeResult> result = await handler.GetCurrentUserAsync("ext-5", CancellationToken.None);
+        ServiceResult<AuthMeResult> result = await handler.GetCurrentUserAsync(AuthProviderType.Google, "ext-5", CancellationToken.None);
 
         await Assert.That(result.IsSuccess).IsTrue();
         await Assert.That(result.Data!.IsGlobalAdmin).IsTrue();
@@ -127,11 +127,11 @@ public class AuthMeHandlerTests
             IsSystem = false,
             IsGlobalAdmin = false,
         };
-        userRepository.GetUserByExternalIdAsync("ext-3", Arg.Any<CancellationToken>()).Returns(user);
+        userRepository.GetUserByExternalIdForProviderAsync(Arg.Any<AuthProviderType>(), "ext-3", Arg.Any<CancellationToken>()).Returns(user);
         tenantRepository.GetTenantsForUserAsync("ext-3", Arg.Any<CancellationToken>()).Returns(Enumerable.Empty<UserTenantRole>());
         AuthMeHandler handler = new(userRepository, tenantRepository);
 
-        ServiceResult<AuthMeResult> result = await handler.GetCurrentUserAsync("ext-3", CancellationToken.None);
+        ServiceResult<AuthMeResult> result = await handler.GetCurrentUserAsync(AuthProviderType.Google, "ext-3", CancellationToken.None);
 
         await Assert.That(result.Data!.IsGlobalAdmin).IsFalse();
     }

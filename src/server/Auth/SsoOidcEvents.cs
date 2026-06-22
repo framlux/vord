@@ -194,6 +194,10 @@ public sealed class SsoOidcEvents : OpenIdConnectEvents
             return;
         }
 
+        // Stash the resolving tenant id so the subject can be namespaced per tenant during claim
+        // population — two tenants' IdPs may legitimately mint the same subject value.
+        context.HttpContext.Items["tenant-oidc-tenant-id"] = tenantId.ToString();
+
         // Build the principal from the validated token and populate user claims
         ClaimsIdentity identity = new(validationResult.ClaimsIdentity.Claims, "tenant-oidc");
         bool populated = await SocialAuthEvents.PopulateUserClaimsAsync(identity, context.HttpContext, context.HttpContext.RequestAborted, AuthProviderType.CustomOidc);

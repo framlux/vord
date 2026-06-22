@@ -25,6 +25,18 @@ public partial class DatabaseRepository : IUserRepository
     }
 
     /// <inheritdoc/>
+    public async Task<UserAccount?> GetUserByExternalIdForProviderAsync(AuthProviderType authProvider, string externalId, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(externalId);
+
+        UserAccount? user = await _db.UserAccounts
+            .Where(u => u.AuthProvider == authProvider && u.ExternalId == externalId && u.IsActive)
+            .FirstOrDefaultAsync(cancellationToken);
+
+        return user;
+    }
+
+    /// <inheritdoc/>
     public async Task<UserAccount> CreateUserAccountAsync(UserAccount user, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(user);

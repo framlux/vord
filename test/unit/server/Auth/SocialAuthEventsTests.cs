@@ -111,7 +111,7 @@ public sealed class SocialAuthEventsTests
         ClaimsIdentity identity = CreateIdentity(sub: "sub-123");
         UserAccount user = CreateUser(externalId: "sub-123");
 
-        userRepo.GetUserByExternalIdAsync("sub-123", Arg.Any<CancellationToken>())
+        userRepo.GetUserByExternalIdForProviderAsync(Arg.Any<Database.Enums.AuthProviderType>(), "sub-123", Arg.Any<CancellationToken>())
             .Returns(user);
         tenantRepo.GetTenantsForUserAsync("sub-123", Arg.Any<CancellationToken>())
             .Returns(Enumerable.Empty<UserTenantRole>());
@@ -119,7 +119,7 @@ public sealed class SocialAuthEventsTests
         bool result = await SocialAuthEvents.PopulateUserClaimsAsync(identity, httpContext, CancellationToken.None);
 
         await Assert.That(result).IsTrue();
-        await userRepo.Received(1).GetUserByExternalIdAsync("sub-123", Arg.Any<CancellationToken>());
+        await userRepo.Received(1).GetUserByExternalIdForProviderAsync(Arg.Any<Database.Enums.AuthProviderType>(), "sub-123", Arg.Any<CancellationToken>());
     }
 
     // --- Auto-creation of new users ---
@@ -130,7 +130,7 @@ public sealed class SocialAuthEventsTests
         (DefaultHttpContext httpContext, IUserRepository userRepo, ITenantRepository tenantRepo) = CreateTestContext();
         ClaimsIdentity identity = CreateIdentity(nameIdentifier: "new-user-ext", email: "new@example.com");
 
-        userRepo.GetUserByExternalIdAsync("new-user-ext", Arg.Any<CancellationToken>())
+        userRepo.GetUserByExternalIdForProviderAsync(Arg.Any<Database.Enums.AuthProviderType>(), "new-user-ext", Arg.Any<CancellationToken>())
             .Returns((UserAccount?)null);
         userRepo.CreateUserAccountAsync(Arg.Any<UserAccount>())
             .Returns(callInfo => callInfo.Arg<UserAccount>());
@@ -153,7 +153,7 @@ public sealed class SocialAuthEventsTests
         (DefaultHttpContext httpContext, IUserRepository userRepo, ITenantRepository tenantRepo) = CreateTestContext();
         ClaimsIdentity identity = CreateIdentity(nameIdentifier: "new-ext", email: "test@example.com");
 
-        userRepo.GetUserByExternalIdAsync("new-ext", Arg.Any<CancellationToken>())
+        userRepo.GetUserByExternalIdForProviderAsync(Arg.Any<Database.Enums.AuthProviderType>(), "new-ext", Arg.Any<CancellationToken>())
             .Returns((UserAccount?)null);
         userRepo.CreateUserAccountAsync(Arg.Any<UserAccount>())
             .Returns(callInfo => callInfo.Arg<UserAccount>());
@@ -172,7 +172,7 @@ public sealed class SocialAuthEventsTests
         (DefaultHttpContext httpContext, IUserRepository userRepo, ITenantRepository tenantRepo) = CreateTestContext();
         ClaimsIdentity identity = CreateIdentity(nameIdentifier: "ext-no-email");
 
-        userRepo.GetUserByExternalIdAsync("ext-no-email", Arg.Any<CancellationToken>())
+        userRepo.GetUserByExternalIdForProviderAsync(Arg.Any<Database.Enums.AuthProviderType>(), "ext-no-email", Arg.Any<CancellationToken>())
             .Returns((UserAccount?)null);
         userRepo.CreateUserAccountAsync(Arg.Any<UserAccount>())
             .Returns(callInfo => callInfo.Arg<UserAccount>());
@@ -191,7 +191,7 @@ public sealed class SocialAuthEventsTests
         (DefaultHttpContext httpContext, IUserRepository userRepo, ITenantRepository tenantRepo) = CreateTestContext();
         ClaimsIdentity identity = CreateIdentity(nameIdentifier: "unique-ext-id");
 
-        userRepo.GetUserByExternalIdAsync("unique-ext-id", Arg.Any<CancellationToken>())
+        userRepo.GetUserByExternalIdForProviderAsync(Arg.Any<Database.Enums.AuthProviderType>(), "unique-ext-id", Arg.Any<CancellationToken>())
             .Returns((UserAccount?)null);
         userRepo.CreateUserAccountAsync(Arg.Any<UserAccount>())
             .Returns(callInfo => callInfo.Arg<UserAccount>());
@@ -213,7 +213,7 @@ public sealed class SocialAuthEventsTests
         ClaimsIdentity identity = CreateIdentity(nameIdentifier: "inactive-ext");
         UserAccount user = CreateUser(externalId: "inactive-ext", isActive: false);
 
-        userRepo.GetUserByExternalIdAsync("inactive-ext", Arg.Any<CancellationToken>())
+        userRepo.GetUserByExternalIdForProviderAsync(Arg.Any<Database.Enums.AuthProviderType>(), "inactive-ext", Arg.Any<CancellationToken>())
             .Returns(user);
 
         bool result = await SocialAuthEvents.PopulateUserClaimsAsync(identity, httpContext, CancellationToken.None);
@@ -228,7 +228,7 @@ public sealed class SocialAuthEventsTests
         ClaimsIdentity identity = CreateIdentity(nameIdentifier: "system-ext");
         UserAccount user = CreateUser(externalId: "system-ext", isSystem: true);
 
-        userRepo.GetUserByExternalIdAsync("system-ext", Arg.Any<CancellationToken>())
+        userRepo.GetUserByExternalIdForProviderAsync(Arg.Any<Database.Enums.AuthProviderType>(), "system-ext", Arg.Any<CancellationToken>())
             .Returns(user);
 
         bool result = await SocialAuthEvents.PopulateUserClaimsAsync(identity, httpContext, CancellationToken.None);
@@ -243,7 +243,7 @@ public sealed class SocialAuthEventsTests
         ClaimsIdentity identity = CreateIdentity(nameIdentifier: "inactive-ext");
         UserAccount user = CreateUser(externalId: "inactive-ext", isActive: false);
 
-        userRepo.GetUserByExternalIdAsync("inactive-ext", Arg.Any<CancellationToken>())
+        userRepo.GetUserByExternalIdForProviderAsync(Arg.Any<Database.Enums.AuthProviderType>(), "inactive-ext", Arg.Any<CancellationToken>())
             .Returns(user);
 
         await SocialAuthEvents.PopulateUserClaimsAsync(identity, httpContext, CancellationToken.None);
@@ -262,7 +262,7 @@ public sealed class SocialAuthEventsTests
         ClaimsIdentity identity = CreateIdentity(nameIdentifier: "ext-1", email: "new@example.com");
         UserAccount user = CreateUser(id: 42, externalId: "ext-1", username: "old@example.com");
 
-        userRepo.GetUserByExternalIdAsync("ext-1", Arg.Any<CancellationToken>())
+        userRepo.GetUserByExternalIdForProviderAsync(Arg.Any<Database.Enums.AuthProviderType>(), "ext-1", Arg.Any<CancellationToken>())
             .Returns(user);
         tenantRepo.GetTenantsForUserAsync("ext-1", Arg.Any<CancellationToken>())
             .Returns(Enumerable.Empty<UserTenantRole>());
@@ -279,7 +279,7 @@ public sealed class SocialAuthEventsTests
         ClaimsIdentity identity = CreateIdentity(nameIdentifier: "ext-1", email: "user@x.com");
         UserAccount user = CreateUser(externalId: "ext-1", username: "User@X.com");
 
-        userRepo.GetUserByExternalIdAsync("ext-1", Arg.Any<CancellationToken>())
+        userRepo.GetUserByExternalIdForProviderAsync(Arg.Any<Database.Enums.AuthProviderType>(), "ext-1", Arg.Any<CancellationToken>())
             .Returns(user);
         tenantRepo.GetTenantsForUserAsync("ext-1", Arg.Any<CancellationToken>())
             .Returns(Enumerable.Empty<UserTenantRole>());
@@ -296,7 +296,7 @@ public sealed class SocialAuthEventsTests
         ClaimsIdentity identity = CreateIdentity(nameIdentifier: "ext-1");
         UserAccount user = CreateUser(externalId: "ext-1", username: "user@example.com");
 
-        userRepo.GetUserByExternalIdAsync("ext-1", Arg.Any<CancellationToken>())
+        userRepo.GetUserByExternalIdForProviderAsync(Arg.Any<Database.Enums.AuthProviderType>(), "ext-1", Arg.Any<CancellationToken>())
             .Returns(user);
         tenantRepo.GetTenantsForUserAsync("ext-1", Arg.Any<CancellationToken>())
             .Returns(Enumerable.Empty<UserTenantRole>());
@@ -315,7 +315,7 @@ public sealed class SocialAuthEventsTests
         ClaimsIdentity identity = CreateIdentity(nameIdentifier: "ext-1");
         UserAccount user = CreateUser(id: 5, externalId: "ext-1");
 
-        userRepo.GetUserByExternalIdAsync("ext-1", Arg.Any<CancellationToken>())
+        userRepo.GetUserByExternalIdForProviderAsync(Arg.Any<Database.Enums.AuthProviderType>(), "ext-1", Arg.Any<CancellationToken>())
             .Returns(user);
 
         List<UserTenantRole> roles = new()
@@ -358,7 +358,7 @@ public sealed class SocialAuthEventsTests
         ClaimsIdentity identity = CreateIdentity(nameIdentifier: "ext-1");
         UserAccount user = CreateUser(id: 42, externalId: "ext-1");
 
-        userRepo.GetUserByExternalIdAsync("ext-1", Arg.Any<CancellationToken>())
+        userRepo.GetUserByExternalIdForProviderAsync(Arg.Any<Database.Enums.AuthProviderType>(), "ext-1", Arg.Any<CancellationToken>())
             .Returns(user);
         tenantRepo.GetTenantsForUserAsync("ext-1", Arg.Any<CancellationToken>())
             .Returns(Enumerable.Empty<UserTenantRole>());
@@ -378,7 +378,7 @@ public sealed class SocialAuthEventsTests
         ClaimsIdentity identity = CreateIdentity(nameIdentifier: "ext-1");
         UserAccount user = CreateUser(externalId: "ext-1", isGlobalAdmin: true);
 
-        userRepo.GetUserByExternalIdAsync("ext-1", Arg.Any<CancellationToken>())
+        userRepo.GetUserByExternalIdForProviderAsync(Arg.Any<Database.Enums.AuthProviderType>(), "ext-1", Arg.Any<CancellationToken>())
             .Returns(user);
         tenantRepo.GetTenantsForUserAsync("ext-1", Arg.Any<CancellationToken>())
             .Returns(Enumerable.Empty<UserTenantRole>());
@@ -398,7 +398,7 @@ public sealed class SocialAuthEventsTests
         ClaimsIdentity identity = CreateIdentity(nameIdentifier: "ext-1");
         UserAccount user = CreateUser(externalId: "ext-1");
 
-        userRepo.GetUserByExternalIdAsync("ext-1", Arg.Any<CancellationToken>())
+        userRepo.GetUserByExternalIdForProviderAsync(Arg.Any<Database.Enums.AuthProviderType>(), "ext-1", Arg.Any<CancellationToken>())
             .Returns(user);
         tenantRepo.GetTenantsForUserAsync("ext-1", Arg.Any<CancellationToken>())
             .Returns(Enumerable.Empty<UserTenantRole>());
@@ -452,6 +452,28 @@ public sealed class SocialAuthEventsTests
         await Assert.That(result).IsEqualTo(Database.Enums.AuthProviderType.Unknown);
     }
 
+    // --- Provider-scoped identity resolution ---
+
+    [Test]
+    public async Task PopulateUserClaimsAsync_ResolvesIdentityScopedByProvider()
+    {
+        (DefaultHttpContext httpContext, IUserRepository userRepo, ITenantRepository tenantRepo) = CreateTestContext();
+        ClaimsIdentity identity = CreateIdentity(nameIdentifier: "shared-sub");
+        UserAccount googleUser = CreateUser(id: 7, externalId: "shared-sub");
+        googleUser.AuthProvider = Database.Enums.AuthProviderType.Google;
+
+        userRepo.GetUserByExternalIdForProviderAsync(Database.Enums.AuthProviderType.Google, "shared-sub", Arg.Any<CancellationToken>())
+            .Returns(googleUser);
+        tenantRepo.GetTenantsForUserAsync("shared-sub", Arg.Any<CancellationToken>())
+            .Returns(Enumerable.Empty<UserTenantRole>());
+
+        bool result = await SocialAuthEvents.PopulateUserClaimsAsync(identity, httpContext, CancellationToken.None, Database.Enums.AuthProviderType.Google);
+
+        await Assert.That(result).IsTrue();
+        await userRepo.Received(1).GetUserByExternalIdForProviderAsync(Database.Enums.AuthProviderType.Google, "shared-sub", Arg.Any<CancellationToken>());
+        await userRepo.DidNotReceive().GetUserByExternalIdAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
+    }
+
     // --- Auth provider update tests ---
 
     [Test]
@@ -462,7 +484,7 @@ public sealed class SocialAuthEventsTests
         UserAccount user = CreateUser(id: 50, externalId: "ext-provider-update");
         user.AuthProvider = Database.Enums.AuthProviderType.GitHub;
 
-        userRepo.GetUserByExternalIdAsync("ext-provider-update", Arg.Any<CancellationToken>())
+        userRepo.GetUserByExternalIdForProviderAsync(Arg.Any<Database.Enums.AuthProviderType>(), "ext-provider-update", Arg.Any<CancellationToken>())
             .Returns(user);
         tenantRepo.GetTenantsForUserAsync("ext-provider-update", Arg.Any<CancellationToken>())
             .Returns(Enumerable.Empty<UserTenantRole>());
@@ -480,7 +502,7 @@ public sealed class SocialAuthEventsTests
         UserAccount user = CreateUser(id: 51, externalId: "ext-same-provider");
         user.AuthProvider = Database.Enums.AuthProviderType.Google;
 
-        userRepo.GetUserByExternalIdAsync("ext-same-provider", Arg.Any<CancellationToken>())
+        userRepo.GetUserByExternalIdForProviderAsync(Arg.Any<Database.Enums.AuthProviderType>(), "ext-same-provider", Arg.Any<CancellationToken>())
             .Returns(user);
         tenantRepo.GetTenantsForUserAsync("ext-same-provider", Arg.Any<CancellationToken>())
             .Returns(Enumerable.Empty<UserTenantRole>());
@@ -498,7 +520,7 @@ public sealed class SocialAuthEventsTests
         UserAccount user = CreateUser(id: 52, externalId: "ext-unknown-provider");
         user.AuthProvider = Database.Enums.AuthProviderType.GitHub;
 
-        userRepo.GetUserByExternalIdAsync("ext-unknown-provider", Arg.Any<CancellationToken>())
+        userRepo.GetUserByExternalIdForProviderAsync(Arg.Any<Database.Enums.AuthProviderType>(), "ext-unknown-provider", Arg.Any<CancellationToken>())
             .Returns(user);
         tenantRepo.GetTenantsForUserAsync("ext-unknown-provider", Arg.Any<CancellationToken>())
             .Returns(Enumerable.Empty<UserTenantRole>());
@@ -523,7 +545,7 @@ public sealed class SocialAuthEventsTests
         };
         ClaimsIdentity identity = new(claims, "TestAuth");
 
-        userRepo.GetUserByExternalIdAsync("ext-fallback-email", Arg.Any<CancellationToken>())
+        userRepo.GetUserByExternalIdForProviderAsync(Arg.Any<Database.Enums.AuthProviderType>(), "ext-fallback-email", Arg.Any<CancellationToken>())
             .Returns((UserAccount?)null);
         userRepo.CreateUserAccountAsync(Arg.Any<UserAccount>())
             .Returns(callInfo => callInfo.Arg<UserAccount>());
@@ -544,7 +566,7 @@ public sealed class SocialAuthEventsTests
         (DefaultHttpContext httpContext, IUserRepository userRepo, ITenantRepository tenantRepo) = CreateTestContext();
         ClaimsIdentity identity = CreateIdentity(nameIdentifier: "ext-new-with-provider", email: "new-prov@example.com");
 
-        userRepo.GetUserByExternalIdAsync("ext-new-with-provider", Arg.Any<CancellationToken>())
+        userRepo.GetUserByExternalIdForProviderAsync(Arg.Any<Database.Enums.AuthProviderType>(), "ext-new-with-provider", Arg.Any<CancellationToken>())
             .Returns((UserAccount?)null);
         userRepo.CreateUserAccountAsync(Arg.Any<UserAccount>())
             .Returns(callInfo => callInfo.Arg<UserAccount>());
@@ -581,7 +603,7 @@ public sealed class SocialAuthEventsTests
 
         ClaimsIdentity identity = CreateIdentity(nameIdentifier: "ext-new-blocked", email: "blocked@example.com");
 
-        userRepo.GetUserByExternalIdAsync("ext-new-blocked", Arg.Any<CancellationToken>())
+        userRepo.GetUserByExternalIdForProviderAsync(Arg.Any<Database.Enums.AuthProviderType>(), "ext-new-blocked", Arg.Any<CancellationToken>())
             .Returns((UserAccount?)null);
 
         bool result = await SocialAuthEvents.PopulateUserClaimsAsync(identity, httpContext, CancellationToken.None);
@@ -599,7 +621,7 @@ public sealed class SocialAuthEventsTests
         ClaimsIdentity identity = CreateIdentity(nameIdentifier: "ext-non-admin");
         UserAccount user = CreateUser(externalId: "ext-non-admin", isGlobalAdmin: false);
 
-        userRepo.GetUserByExternalIdAsync("ext-non-admin", Arg.Any<CancellationToken>())
+        userRepo.GetUserByExternalIdForProviderAsync(Arg.Any<Database.Enums.AuthProviderType>(), "ext-non-admin", Arg.Any<CancellationToken>())
             .Returns(user);
         tenantRepo.GetTenantsForUserAsync("ext-non-admin", Arg.Any<CancellationToken>())
             .Returns(Enumerable.Empty<UserTenantRole>());
