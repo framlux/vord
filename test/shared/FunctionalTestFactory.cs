@@ -403,7 +403,7 @@ public class FunctionalTestFactory : WebApplicationFactory<Program>
     /// <summary>
     /// Seeds the TierFeatureLimits table with the default tier values.
     /// The migration runner copies only DDL (CREATE TABLE) statements from the temp
-    /// database, so the INSERT seed data from <see cref="TierFeatureLimitsMigration"/>
+    /// database, so the INSERT seed data from <see cref="InitialMigration"/>
     /// must be applied manually.
     /// </summary>
     private void SeedTierFeatureLimits()

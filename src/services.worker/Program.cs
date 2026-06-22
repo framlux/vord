@@ -78,7 +78,7 @@ WebApplication app = builder.Build();
 
 // Register all recurring jobs with Hangfire. Hangfire.PostgreSql prepares its own schema on first
 // connection (PrepareSchemaIfNecessary=true in HangfireRegistration); the "hangfire" schema itself
-// is created earlier by HangfireSchemaMigration in the migrationRunner pipeline (ArgoCD sync-wave
+// is created earlier by InitialMigration in the migrationRunner pipeline (ArgoCD sync-wave
 // guarantees migration-runner becomes Healthy before this pod starts).
 using (IServiceScope startupScope = app.Services.CreateScope())
 {

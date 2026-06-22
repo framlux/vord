@@ -4,22 +4,27 @@
 
 using FluentMigrator;
 using LinqToDB;
+using System.Data;
 
 namespace Framlux.FleetManagement.Database.Migrations;
 
 /// <summary>
-/// Initial database migration that creates core tables for machine management, user accounts,
-/// telemetry, alerts, audit logging, and remote commands. Time-series tables are range-partitioned
-/// by day on PostgreSQL for efficient data retention and archival.
+/// Initial database migration that creates the full set of core tables for machine management,
+/// user accounts, telemetry, alerts, audit logging, integrations, and remote commands, together
+/// with all seed data. Time-series tables are range-partitioned by day on PostgreSQL for efficient
+/// data retention and archival. The dedicated "hangfire" schema is created here; Hangfire installs
+/// its own tables into that schema on first connection.
 /// </summary>
 [MigrationVersion(2026, 04, 05, 1)]
 public sealed class InitialMigration : Migration
 {
     /// <summary>
-    /// Applies the migration by creating initial database tables and indexes.
+    /// Applies the migration by creating initial database tables, indexes, and seed data.
     /// </summary>
     public override void Up()
     {
+        IfDatabase("PostgreSQL").Execute.Sql(@"CREATE SCHEMA IF NOT EXISTS ""hangfire"";");
+
         Create.Table(TableNames.ServerConfigurationSettings)
             .WithColumn("Id").AsInt32().PrimaryKey().Identity().NotNullable()
             .WithColumn("Key").AsInt32().NotNullable().Indexed()
@@ -133,26 +138,17 @@ public sealed class InitialMigration : Migration
             .OnColumn("SystemId")
             .Ascending();
 
-        Create.Table(TableNames.MachineCertificates)
-            .WithColumn("Id").AsInt64().PrimaryKey().Identity().NotNullable()
-            .WithColumn("MachineId").AsInt64().NotNullable().ForeignKey(TableNames.Machines, "Id").Indexed()
-            .WithColumn("Thumbprint").AsString(128).NotNullable().Unique()
-            .WithColumn("IssuedAt").AsDateTimeOffset().NotNullable()
-            .WithColumn("ExpiresAt").AsDateTimeOffset().NotNullable()
-            .WithColumn("RevokedAt").AsDateTimeOffset().Nullable();
-
+        // Limits live in TierFeatureLimits/TenantSubscriptionOverrides; billing pending-state lives
+        // in the billing-api. CancelAtPeriodEnd is mirrored locally for the renewal-prompt flow.
         Create.Table(TableNames.TenantSubscriptions)
             .WithColumn("Id").AsInt32().PrimaryKey().Identity()
             .WithColumn("TenantId").AsInt32().NotNullable().ForeignKey(TableNames.Tenants, "Id").Unique()
             .WithColumn("Tier").AsInt32().NotNullable().WithDefaultValue(0)
             .WithColumn("Status").AsInt32().NotNullable().WithDefaultValue(0)
-            .WithColumn("MachineLimit").AsInt32().Nullable()
-            .WithColumn("RetentionDays").AsInt32().NotNullable().WithDefaultValue(1)
             .WithColumn("CurrentPeriodEnd").AsDateTimeOffset().Nullable()
-            .WithColumn("CancelAtPeriodEnd").AsBoolean().NotNullable().WithDefaultValue(false)
-            .WithColumn("PendingAction").AsInt16().NotNullable().WithDefaultValue(0)
             .WithColumn("CreatedAt").AsDateTimeOffset().NotNullable()
-            .WithColumn("UpdatedAt").AsDateTimeOffset().NotNullable();
+            .WithColumn("UpdatedAt").AsDateTimeOffset().NotNullable()
+            .WithColumn("CancelAtPeriodEnd").AsBoolean().NotNullable().WithDefaultValue(false);
 
         Create.Table(TableNames.TenantOidcConfigurations)
             .WithColumn("Id").AsInt32().PrimaryKey().Identity()
@@ -346,7 +342,11 @@ public sealed class InitialMigration : Migration
                 .ForeignKey("FK_RegistrationTokens_Users", TableNames.Users, "Id")
             .WithColumn("CreatedAt").AsDateTimeOffset().NotNullable()
             .WithColumn("IsRevoked").AsBoolean().NotNullable().WithDefaultValue(false)
-            .WithColumn("RevokedAt").AsDateTimeOffset().Nullable();
+            .WithColumn("RevokedAt").AsDateTimeOffset().Nullable()
+            // Bounded token lifetime with a far-future default so a token without an explicit
+            // expiry never silently expires.
+            .WithColumn("ExpiresAt").AsDateTimeOffset().NotNullable()
+                .WithDefaultValue(new DateTimeOffset(9999, 12, 31, 23, 59, 59, TimeSpan.Zero));
 
         // Partial index on Machines(TenantId) for active machines only.
         IfDatabase("PostgreSQL").Execute.Sql(
@@ -416,9 +416,13 @@ public sealed class InitialMigration : Migration
         IfDatabase("PostgreSQL").Execute.Sql("""ALTER TABLE "AlertRules" ADD CONSTRAINT "CK_AlertRules_DurationMinutes" CHECK ("DurationMinutes" >= 0)""");
 
         // AlertEvents: range-partitioned by TriggeredAt on Postgres, standard table on SQLite.
+        // The FK to AlertRules is intentionally omitted on both databases: Postgres cannot
+        // propagate FK constraints from a range-partitioned parent to child partitions, and the
+        // SQLite path is kept aligned with production so the rule-delete flow behaves identically.
+        // The FK to Tenants is retained.
         IfDatabase("SQLite").Create.Table(TableNames.AlertEvents)
             .WithColumn("Id").AsInt64().PrimaryKey().Identity().NotNullable()
-            .WithColumn("AlertRuleId").AsInt32().NotNullable().ForeignKey(TableNames.AlertRules, "Id")
+            .WithColumn("AlertRuleId").AsInt32().NotNullable()
             .WithColumn("TenantId").AsInt32().NotNullable().ForeignKey(TableNames.Tenants, "Id")
             .WithColumn("MachineId").AsInt64().NotNullable()
             .WithColumn("Severity").AsInt16().NotNullable()
@@ -430,10 +434,6 @@ public sealed class InitialMigration : Migration
             .WithColumn("AcknowledgedByUserId").AsInt32().Nullable()
             .WithColumn("ResolvedAt").AsDateTimeOffset().Nullable();
 
-        // PostgreSQL: range-partitioned by TriggeredAt. FK on AlertRuleId is intentionally
-        // omitted because PostgreSQL does not propagate FK constraints from a range-partitioned
-        // parent table to child partitions (the constraint would be syntactically valid but
-        // silently unenforced). Same pattern as MachineId which also has no FK.
         IfDatabase("PostgreSQL").Execute.Sql("""
             CREATE TABLE "AlertEvents" (
                 "Id" BIGINT GENERATED BY DEFAULT AS IDENTITY NOT NULL,
@@ -464,15 +464,121 @@ public sealed class InitialMigration : Migration
             .OnColumn("MachineId").Ascending()
             .OnColumn("Status").Ascending();
 
-        Create.Table(TableNames.WebhookEndpoints)
-            .WithColumn("Id").AsInt32().PrimaryKey().Identity().NotNullable()
-            .WithColumn("TenantId").AsInt32().NotNullable().ForeignKey(TableNames.Tenants, "Id").Indexed()
-            .WithColumn("Name").AsString(250).NotNullable()
-            .WithColumn("Url").AsString(2000).NotNullable()
-            .WithColumn("Secret").AsString(500).NotNullable()
+        // Join table scoping alert rules to specific machines. Composite primary key, cascade on
+        // rule delete. Raw SQL keeps the column types aligned with the shipped schema.
+        Execute.Sql($"""
+            CREATE TABLE "{TableNames.AlertRuleMachines}" (
+                "AlertRuleId" INTEGER NOT NULL,
+                "MachineId" INTEGER NOT NULL,
+                "CreatedAt" TEXT NOT NULL,
+                PRIMARY KEY ("AlertRuleId", "MachineId"),
+                FOREIGN KEY ("AlertRuleId") REFERENCES "{TableNames.AlertRules}" ("Id") ON DELETE CASCADE,
+                FOREIGN KEY ("MachineId") REFERENCES "{TableNames.Machines}" ("Id")
+            )
+            """);
+
+        Create.Index("IX_AlertRuleMachines_MachineId")
+            .OnTable(TableNames.AlertRuleMachines)
+            .OnColumn("MachineId").Ascending()
+            .OnColumn("AlertRuleId").Ascending();
+
+        // Per-(rule, machine) condition state replacing the previous Redis condition keys used to
+        // enforce DurationMinutes windows. Cascading FKs remove rows with the parent rule/machine.
+        Create.Table(TableNames.AlertConditionStates)
+            .WithColumn("Id").AsInt64().PrimaryKey().Identity()
+            .WithColumn("AlertRuleId").AsInt32().NotNullable()
+                .ForeignKey("FK_AlertConditionStates_AlertRules", TableNames.AlertRules, "Id")
+                    .OnDelete(Rule.Cascade)
+            .WithColumn("MachineId").AsInt64().NotNullable()
+                .ForeignKey("FK_AlertConditionStates_Machines", TableNames.Machines, "Id")
+                    .OnDelete(Rule.Cascade)
+            .WithColumn("FirstTriggeredAt").AsDateTimeOffset().NotNullable()
+            .WithColumn("LastObservedAt").AsDateTimeOffset().NotNullable();
+
+        Create.Index("UX_AlertConditionStates_RuleMachine")
+            .OnTable(TableNames.AlertConditionStates)
+            .OnColumn("AlertRuleId").Ascending()
+            .OnColumn("MachineId").Ascending()
+            .WithOptions().Unique();
+
+        // Pre-built and custom webhook integrations. Replaces the removed WebhookEndpoints table.
+        Create.Table(TableNames.IntegrationEndpoints)
+            .WithColumn("Id").AsInt32().PrimaryKey().Identity()
+            .WithColumn("TenantId").AsInt32().NotNullable()
+                .ForeignKey("FK_IntegrationEndpoints_Tenants", TableNames.Tenants, "Id")
+            .WithColumn("Provider").AsInt16().NotNullable()
+            .WithColumn("Name").AsString(100).NotNullable()
+            .WithColumn("Configuration").AsCustom("jsonb").NotNullable()
             .WithColumn("IsEnabled").AsBoolean().NotNullable().WithDefaultValue(true)
-            .WithColumn("CreatedByUserId").AsInt32().NotNullable().ForeignKey(TableNames.Users, "Id")
-            .WithColumn("CreatedAt").AsDateTimeOffset().NotNullable();
+            .WithColumn("CreatedByUserId").AsInt32().NotNullable()
+                .ForeignKey("FK_IntegrationEndpoints_Users", TableNames.Users, "Id")
+            .WithColumn("CreatedAt").AsDateTimeOffset().NotNullable()
+            .WithColumn("UpdatedAt").AsDateTimeOffset().Nullable()
+            .WithColumn("DeletedAt").AsDateTimeOffset().Nullable()
+            .WithColumn("DeletedByUserId").AsInt32().Nullable()
+                .ForeignKey("FK_IntegrationEndpoints_DeletedByUsers", TableNames.Users, "Id");
+
+        IfDatabase("PostgreSQL").Execute.Sql("""
+            CREATE INDEX "IX_IntegrationEndpoints_TenantId"
+            ON "IntegrationEndpoints" ("TenantId")
+            WHERE "DeletedAt" IS NULL;
+            """);
+
+        IfDatabase("SQLite").Execute.Sql("""
+            CREATE INDEX "IX_IntegrationEndpoints_TenantId"
+            ON "IntegrationEndpoints" ("TenantId")
+            WHERE "DeletedAt" IS NULL;
+            """);
+
+        IfDatabase("PostgreSQL").Execute.Sql("""
+            CREATE INDEX "IX_IntegrationEndpoints_TenantId_Provider"
+            ON "IntegrationEndpoints" ("TenantId", "Provider")
+            WHERE "DeletedAt" IS NULL;
+            """);
+
+        IfDatabase("SQLite").Execute.Sql("""
+            CREATE INDEX "IX_IntegrationEndpoints_TenantId_Provider"
+            ON "IntegrationEndpoints" ("TenantId", "Provider")
+            WHERE "DeletedAt" IS NULL;
+            """);
+
+        // Per-(eventId, integrationId) idempotency rows used to skip already-delivered integrations
+        // on retry. The definition diverges by provider only in the AlertEvents relationship: on
+        // Postgres, AlertEvents is range-partitioned with a composite primary key, so a single-column
+        // foreign key to it is rejected and the application enforces the relationship instead; on
+        // SQLite (the in-memory test database) AlertEvents is a plain table, so a cascading foreign
+        // key to it is both valid and relied upon by tests. Everything else is identical.
+        IfDatabase("PostgreSQL").Create.Table(TableNames.IntegrationDeliveryAttempts)
+            .WithColumn("Id").AsInt64().PrimaryKey().Identity()
+            .WithColumn("AlertEventId").AsInt64().NotNullable()
+            .WithColumn("IntegrationEndpointId").AsInt32().NotNullable()
+                .ForeignKey("FK_IntegrationDeliveryAttempts_Integrations", TableNames.IntegrationEndpoints, "Id")
+                    .OnDelete(Rule.Cascade)
+            .WithColumn("SucceededAt").AsDateTimeOffset().Nullable()
+            .WithColumn("Status").AsInt32().NotNullable().WithDefaultValue(0)
+            .WithColumn("AttemptedAt").AsDateTimeOffset().NotNullable();
+
+        IfDatabase("SQLite").Create.Table(TableNames.IntegrationDeliveryAttempts)
+            .WithColumn("Id").AsInt64().PrimaryKey().Identity()
+            .WithColumn("AlertEventId").AsInt64().NotNullable()
+                .ForeignKey("FK_IntegrationDeliveryAttempts_AlertEvents", TableNames.AlertEvents, "Id")
+                    .OnDelete(Rule.Cascade)
+            .WithColumn("IntegrationEndpointId").AsInt32().NotNullable()
+                .ForeignKey("FK_IntegrationDeliveryAttempts_Integrations", TableNames.IntegrationEndpoints, "Id")
+                    .OnDelete(Rule.Cascade)
+            .WithColumn("SucceededAt").AsDateTimeOffset().Nullable()
+            .WithColumn("Status").AsInt32().NotNullable().WithDefaultValue(0)
+            .WithColumn("AttemptedAt").AsDateTimeOffset().NotNullable();
+
+        Create.Index("UX_IntegrationDeliveryAttempts_EventIntegration")
+            .OnTable(TableNames.IntegrationDeliveryAttempts)
+            .OnColumn("AlertEventId").Ascending()
+            .OnColumn("IntegrationEndpointId").Ascending()
+            .WithOptions().Unique();
+
+        Create.Index("IX_IntegrationDeliveryAttempts_AlertEventId")
+            .OnTable(TableNames.IntegrationDeliveryAttempts)
+            .OnColumn("AlertEventId").Ascending();
 
         Create.Table(TableNames.DataExportJobs)
             .WithColumn("Id").AsInt32().PrimaryKey().Identity().NotNullable()
@@ -485,7 +591,11 @@ public sealed class InitialMigration : Migration
             .WithColumn("ExpiresAt").AsDateTimeOffset().NotNullable().WithDefaultValue("1970-01-01T00:00:00+00:00")
             .WithColumn("DownloadToken").AsString(64).NotNullable().WithDefaultValue("")
             .WithColumn("ErrorMessage").AsString().Nullable()
-            .WithColumn("FileSizeBytes").AsInt64().Nullable();
+            .WithColumn("FileSizeBytes").AsInt64().Nullable()
+            // Used by the orphan reaper to detect rows stuck in Processing after a worker crash.
+            .WithColumn("StartedAt").AsDateTimeOffset().Nullable()
+            // Bounded retry budget so a permanently broken job stops generating failed entries.
+            .WithColumn("FailureCount").AsInt32().NotNullable().WithDefaultValue(0);
 
         Create.Table(TableNames.UserSigningKeys)
             .WithColumn("Id").AsInt32().PrimaryKey().Identity().NotNullable()
@@ -502,6 +612,23 @@ public sealed class InitialMigration : Migration
             .OnTable(TableNames.UserSigningKeys)
             .OnColumn("UserId").Ascending()
             .OnColumn("TenantId").Ascending();
+
+        // Per-machine signing key authorizations. Replaces the removed MachineCertificates table.
+        Create.Table(TableNames.MachineAuthorizedKeys)
+            .WithColumn("Id").AsInt32().PrimaryKey().Identity().NotNullable()
+            .WithColumn("MachineId").AsInt64().NotNullable().ForeignKey(TableNames.Machines, "Id").Indexed()
+            .WithColumn("SigningKeyId").AsInt32().NotNullable().ForeignKey(TableNames.UserSigningKeys, "Id").Indexed()
+            .WithColumn("TenantId").AsInt32().NotNullable().ForeignKey(TableNames.Tenants, "Id").Indexed()
+            .WithColumn("AuthorizedAt").AsDateTimeOffset().NotNullable()
+            .WithColumn("AuthorizedByUserId").AsInt32().NotNullable().ForeignKey(TableNames.Users, "Id")
+            .WithColumn("RevokedAt").AsDateTimeOffset().Nullable()
+            .WithColumn("RevokedByUserId").AsInt32().Nullable().ForeignKey(TableNames.Users, "Id");
+
+        Create.Index("IX_MachineAuthorizedKeys_MachineId_SigningKeyId")
+            .OnTable(TableNames.MachineAuthorizedKeys)
+            .OnColumn("MachineId").Ascending()
+            .OnColumn("SigningKeyId").Ascending()
+            .WithOptions().Unique();
 
         // RemoteCommands: range-partitioned by CreatedAt on Postgres, standard table on SQLite.
         IfDatabase("SQLite").Create.Table(TableNames.RemoteCommands)
@@ -572,8 +699,57 @@ public sealed class InitialMigration : Migration
             @"CREATE UNIQUE INDEX ""IX_RemoteCommands_CommandId""
               ON ""RemoteCommands"" (""CommandId"")");
 
-        // Upgrade Params to JSONB on PostgreSQL for the SQLite RemoteCommands path.
-        // (The Postgres partitioned table already defines Params as JSONB.)
+        // Database-managed per-tier feature limits, replacing the previously hardcoded
+        // SubscriptionOptions configuration.
+        Create.Table("TierFeatureLimits")
+            .WithColumn("Id").AsInt32().PrimaryKey().Identity()
+            .WithColumn("Tier").AsInt32().NotNullable().Unique()
+            .WithColumn("MachineLimit").AsInt32().NotNullable()
+            .WithColumn("RetentionDays").AsInt32().NotNullable()
+            .WithColumn("AlertRuleLimit").AsInt32().NotNullable()
+            .WithColumn("WebhookLimit").AsInt32().NotNullable()
+            .WithColumn("UpdatedAt").AsDateTimeOffset().NotNullable();
+
+        // Default per-tier feature limits (Free=1, Pro=2, Team=3).
+        Insert.IntoTable("TierFeatureLimits").Row(new
+        {
+            Tier = 1,
+            MachineLimit = 3,
+            RetentionDays = 1,
+            AlertRuleLimit = 0,
+            WebhookLimit = 0,
+            UpdatedAt = DateTimeOffset.UtcNow,
+        });
+        Insert.IntoTable("TierFeatureLimits").Row(new
+        {
+            Tier = 2,
+            MachineLimit = 1000,
+            RetentionDays = 60,
+            AlertRuleLimit = 10,
+            WebhookLimit = 5,
+            UpdatedAt = DateTimeOffset.UtcNow,
+        });
+        Insert.IntoTable("TierFeatureLimits").Row(new
+        {
+            Tier = 3,
+            MachineLimit = 10000,
+            RetentionDays = 365,
+            AlertRuleLimit = 25,
+            WebhookLimit = 15,
+            UpdatedAt = DateTimeOffset.UtcNow,
+        });
+
+        // Per-customer limit overrides layered on top of the tier defaults.
+        Create.Table("TenantSubscriptionOverrides")
+            .WithColumn("Id").AsInt32().PrimaryKey().Identity()
+            .WithColumn("TenantId").AsInt32().NotNullable().Unique()
+                .ForeignKey("FK_TenantSubscriptionOverrides_Tenants", TableNames.Tenants, "Id")
+            .WithColumn("MachineLimit").AsInt32().Nullable()
+            .WithColumn("RetentionDays").AsInt32().Nullable()
+            .WithColumn("AlertRuleLimit").AsInt32().Nullable()
+            .WithColumn("WebhookLimit").AsInt32().Nullable()
+            .WithColumn("CreatedAt").AsDateTimeOffset().NotNullable()
+            .WithColumn("UpdatedAt").AsDateTimeOffset().NotNullable();
 
         // Create initial daily partitions and default partitions for all partitioned tables.
         CreateInitialDailyPartitions(TableNames.MachineTelemetry);
@@ -583,7 +759,7 @@ public sealed class InitialMigration : Migration
     }
 
     /// <summary>
-    /// Reverts the migration by dropping all initial tables and indexes.
+    /// Reverts the migration by dropping all tables, indexes, and the hangfire schema.
     /// </summary>
     public override void Down()
     {
@@ -593,11 +769,21 @@ public sealed class InitialMigration : Migration
         IfDatabase("SQLite").Execute.Sql(@"DROP INDEX IF EXISTS ""IX_MachineTelemetry_SourceEventId""");
         IfDatabase("PostgreSQL").Execute.Sql(@"DROP INDEX IF EXISTS ""IX_RemoteCommands_CommandId""");
         IfDatabase("SQLite").Execute.Sql(@"DROP INDEX IF EXISTS ""IX_RemoteCommands_CommandId""");
+        IfDatabase("PostgreSQL").Execute.Sql(@"DROP INDEX IF EXISTS ""IX_IntegrationEndpoints_TenantId""");
+        IfDatabase("SQLite").Execute.Sql(@"DROP INDEX IF EXISTS ""IX_IntegrationEndpoints_TenantId""");
+        IfDatabase("PostgreSQL").Execute.Sql(@"DROP INDEX IF EXISTS ""IX_IntegrationEndpoints_TenantId_Provider""");
+        IfDatabase("SQLite").Execute.Sql(@"DROP INDEX IF EXISTS ""IX_IntegrationEndpoints_TenantId_Provider""");
 
+        Delete.Table("TenantSubscriptionOverrides");
+        Delete.Table("TierFeatureLimits");
         Delete.Table(TableNames.RemoteCommands);
+        Delete.Table(TableNames.IntegrationDeliveryAttempts);
+        Delete.Table(TableNames.IntegrationEndpoints);
+        Delete.Table(TableNames.AlertConditionStates);
+        Delete.Table(TableNames.AlertRuleMachines);
+        Delete.Table(TableNames.MachineAuthorizedKeys);
         Delete.Table(TableNames.UserSigningKeys);
         Delete.Table(TableNames.DataExportJobs);
-        Delete.Table(TableNames.WebhookEndpoints);
         Delete.Table(TableNames.AlertEvents);
         Delete.Table(TableNames.AlertRules);
         Delete.Table(TableNames.AuditLog);
@@ -608,12 +794,13 @@ public sealed class InitialMigration : Migration
         Delete.Table(TableNames.MachineTelemetry);
         Delete.Table(TableNames.TenantOidcConfigurations);
         Delete.Table(TableNames.TenantSubscriptions);
-        Delete.Table(TableNames.MachineCertificates);
         Delete.Table(TableNames.Machines);
         Delete.Table(TableNames.UserTenantRoles);
         Delete.Table(TableNames.Tenants);
         Delete.Table(TableNames.Users);
         Delete.Table(TableNames.ServerConfigurationSettings);
+
+        IfDatabase("PostgreSQL").Execute.Sql(@"DROP SCHEMA IF EXISTS ""hangfire"" CASCADE;");
     }
 
     /// <summary>
