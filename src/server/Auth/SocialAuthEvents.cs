@@ -159,6 +159,7 @@ public static class SocialAuthEvents
         // Add user account ID as claim
         identity.AddClaim(new Claim(ClaimTypes.Actor, user.Id.ToString()));
         identity.AddClaim(new Claim(AuthClaims.IsGlobalAdmin, user.IsGlobalAdmin.ToString()));
+        identity.AddClaim(new Claim(SecurityStampClaims.AuthProviderClaim, ((short)authProvider).ToString()));
 
         return true;
     }

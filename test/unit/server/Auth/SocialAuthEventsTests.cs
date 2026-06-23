@@ -654,6 +654,29 @@ public sealed class SocialAuthEventsTests
         await tenantRepo.DidNotReceive().GetTenantsForUserAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
     }
 
+    // --- Auth provider claim minting ---
+
+    [Test]
+    public async Task PopulateUserClaimsAsync_AddsAuthProviderClaim()
+    {
+        (DefaultHttpContext httpContext, IUserRepository userRepo, ITenantRepository tenantRepo) = CreateTestContext();
+        ClaimsIdentity identity = CreateIdentity(nameIdentifier: "ext-apr");
+        UserAccount user = CreateUser(id: 77, externalId: "ext-apr");
+        user.AuthProvider = Database.Enums.AuthProviderType.GitHub;
+
+        userRepo.GetUserByExternalIdForProviderAsync(Database.Enums.AuthProviderType.GitHub, "ext-apr", Arg.Any<CancellationToken>())
+            .Returns(user);
+        tenantRepo.GetTenantsForUserByIdAsync(77, Arg.Any<CancellationToken>())
+            .Returns(Enumerable.Empty<UserTenantRole>());
+
+        await SocialAuthEvents.PopulateUserClaimsAsync(identity, httpContext, CancellationToken.None, Database.Enums.AuthProviderType.GitHub);
+
+        Claim? aprClaim = identity.FindFirst("apr");
+
+        await Assert.That(aprClaim).IsNotNull();
+        await Assert.That(aprClaim!.Value).IsEqualTo(((short)Database.Enums.AuthProviderType.GitHub).ToString());
+    }
+
     // --- BuildTenantNamespacedSubject ---
 
     [Test]

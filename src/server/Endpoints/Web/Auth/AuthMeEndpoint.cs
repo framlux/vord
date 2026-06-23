@@ -53,7 +53,7 @@ public sealed class AuthMeEndpoint : EndpointWithoutRequest<ApiResponse<UserDto>
 
         // The provider claim is minted alongside the principal. Resolve identity on the
         // (provider, subject) pair; absent, unparseable, or out-of-range values fall back to Unknown.
-        AuthProviderType authProvider = (Enum.TryParse(User.FindFirstValue("apr"), out AuthProviderType parsedProvider) && Enum.IsDefined(parsedProvider))
+        AuthProviderType authProvider = (Enum.TryParse(User.FindFirstValue(SecurityStampClaims.AuthProviderClaim), out AuthProviderType parsedProvider) && Enum.IsDefined(parsedProvider))
             ? parsedProvider
             : AuthProviderType.Unknown;
 
