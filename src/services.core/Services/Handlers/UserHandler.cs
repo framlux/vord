@@ -6,6 +6,7 @@ using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Services.Core.Infrastructure;
 using Framlux.FleetManagement.Services.Core.Models.Users;
+using Framlux.FleetManagement.Services.Core.Security;
 
 namespace Framlux.FleetManagement.Services.Core.Handlers;
 
@@ -15,17 +16,31 @@ namespace Framlux.FleetManagement.Services.Core.Handlers;
 public sealed class UserHandler : IUserHandler
 {
     private readonly IUserRepository _userRepo;
+    private readonly IRoleCacheInvalidator _roleCacheInvalidator;
+    private readonly IUserSecurityStampService _securityStampService;
     private readonly ILogger<UserHandler> _logger;
 
     /// <summary>
     /// Creates a new instance of the <see cref="UserHandler"/> class.
     /// </summary>
-    public UserHandler(IUserRepository userRepo, ILogger<UserHandler> logger)
+    /// <param name="userRepo">The user repository.</param>
+    /// <param name="roleCacheInvalidator">The role cache invalidator.</param>
+    /// <param name="securityStampService">The user security stamp service.</param>
+    /// <param name="logger">The logger.</param>
+    public UserHandler(
+        IUserRepository userRepo,
+        IRoleCacheInvalidator roleCacheInvalidator,
+        IUserSecurityStampService securityStampService,
+        ILogger<UserHandler> logger)
     {
         ArgumentNullException.ThrowIfNull(userRepo);
+        ArgumentNullException.ThrowIfNull(roleCacheInvalidator);
+        ArgumentNullException.ThrowIfNull(securityStampService);
         ArgumentNullException.ThrowIfNull(logger);
 
         _userRepo = userRepo;
+        _roleCacheInvalidator = roleCacheInvalidator;
+        _securityStampService = securityStampService;
         _logger = logger;
     }
 
@@ -142,6 +157,12 @@ public sealed class UserHandler : IUserHandler
         {
             _logger.LogInformation("User {TargetUserId} removed from tenant {TenantId} by user {CurrentUserId}", targetUserId, tenantId.Value, currentUserId);
         }
+
+        // A demotion or deactivation must drop the user's cached privilege state and rotate their
+        // security stamp so any existing cookie is invalidated on the next request rather than
+        // surviving until the cache entry expires.
+        await _roleCacheInvalidator.InvalidateUserStateAsync(targetUserId, ct);
+        await _securityStampService.BumpAsync(targetUserId, ct);
 
         return ServiceResult<object>.Ok(new { });
     }

@@ -59,4 +59,18 @@ public sealed class RoleCacheInvalidatorTests
             Arg.Any<CommandFlags>());
     }
 
+    [Test]
+    public async Task InvalidateUserStateAsync_DeletesCorrectRedisKey()
+    {
+        (RoleCacheInvalidator invalidator, IDatabase redisDb) = CreateInvalidator();
+        int userId = 42;
+
+        await invalidator.InvalidateUserStateAsync(userId, CancellationToken.None);
+
+        string expectedKey = $"user:active:{userId}";
+        await redisDb.Received(1).KeyDeleteAsync(
+            Arg.Is<RedisKey>(k => k.ToString() == expectedKey),
+            Arg.Any<CommandFlags>());
+    }
+
 }

@@ -138,7 +138,7 @@ public sealed class CookiePrincipalValidator : CookieAuthenticationEvents
     /// </summary>
     internal async Task<(bool IsActive, bool IsGlobalAdmin)> CheckUserStateAsync(int userId, IDatabase redisDb, CancellationToken ct)
     {
-        string cacheKey = $"user:active:{userId}";
+        string cacheKey = $"{IRoleCacheInvalidator.UserStateCacheKeyPrefix}{userId}";
         RedisValue cached = await redisDb.StringGetAsync(cacheKey);
 
         if (cached.HasValue)

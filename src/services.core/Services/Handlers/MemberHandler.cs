@@ -22,6 +22,7 @@ public sealed class MemberHandler : IMemberHandler
     private readonly ITenantRepository _tenantRepository;
     private readonly ISubscriptionService _subscriptionService;
     private readonly IRoleCacheInvalidator _roleCacheInvalidator;
+    private readonly IUserSecurityStampService _securityStampService;
 
     /// <summary>
     /// Creates a new instance of the <see cref="MemberHandler"/> class.
@@ -31,24 +32,28 @@ public sealed class MemberHandler : IMemberHandler
     /// <param name="tenantRepository">The tenant repository.</param>
     /// <param name="subscriptionService">The subscription service.</param>
     /// <param name="roleCacheInvalidator">The role cache invalidator.</param>
+    /// <param name="securityStampService">The user security stamp service.</param>
     public MemberHandler(
         IDatabaseTransactionProvider transactionProvider,
         IAuditLogRepository auditLog,
         ITenantRepository tenantRepository,
         ISubscriptionService subscriptionService,
-        IRoleCacheInvalidator roleCacheInvalidator)
+        IRoleCacheInvalidator roleCacheInvalidator,
+        IUserSecurityStampService securityStampService)
     {
         ArgumentNullException.ThrowIfNull(transactionProvider);
         ArgumentNullException.ThrowIfNull(auditLog);
         ArgumentNullException.ThrowIfNull(tenantRepository);
         ArgumentNullException.ThrowIfNull(subscriptionService);
         ArgumentNullException.ThrowIfNull(roleCacheInvalidator);
+        ArgumentNullException.ThrowIfNull(securityStampService);
 
         _transactionProvider = transactionProvider;
         _auditLog = auditLog;
         _tenantRepository = tenantRepository;
         _subscriptionService = subscriptionService;
         _roleCacheInvalidator = roleCacheInvalidator;
+        _securityStampService = securityStampService;
     }
 
     /// <inheritdoc/>
@@ -79,8 +84,12 @@ public sealed class MemberHandler : IMemberHandler
 
         await transaction.CommitAsync(ct);
 
-        // Invalidate the removed user's cached role claims after the transaction commits
+        // Invalidate the removed user's cached role claims, drop their cached privilege state, and
+        // rotate their security stamp after the transaction commits so any existing cookie is
+        // invalidated immediately.
         await _roleCacheInvalidator.InvalidateAsync(targetUserId, ct);
+        await _roleCacheInvalidator.InvalidateUserStateAsync(targetUserId, ct);
+        await _securityStampService.BumpAsync(targetUserId, ct);
 
         return ServiceResult<ApiResponse<object>>.Ok(ApiResponse<object>.Ok(new { }, "Member removed"));
     }
@@ -134,8 +143,12 @@ public sealed class MemberHandler : IMemberHandler
 
         await transaction.CommitAsync(ct);
 
-        // Invalidate the target user's cached role claims after the transaction commits
+        // Invalidate the target user's cached role claims, drop their cached privilege state, and
+        // rotate their security stamp after the transaction commits so any existing cookie is
+        // invalidated immediately.
         await _roleCacheInvalidator.InvalidateAsync(targetUserId, ct);
+        await _roleCacheInvalidator.InvalidateUserStateAsync(targetUserId, ct);
+        await _securityStampService.BumpAsync(targetUserId, ct);
 
         return ServiceResult<ApiResponse<object>>.Ok(ApiResponse<object>.Ok(new { }, "Member role updated"));
     }

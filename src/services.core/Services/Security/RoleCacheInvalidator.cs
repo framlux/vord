@@ -30,4 +30,11 @@ public sealed class RoleCacheInvalidator : IRoleCacheInvalidator
         string cacheKey = $"{IRoleCacheInvalidator.RoleCacheKeyPrefix}{userId}";
         await db.KeyDeleteAsync(cacheKey);
     }
+
+    /// <inheritdoc />
+    public async Task InvalidateUserStateAsync(int userId, CancellationToken ct)
+    {
+        IDatabase db = _redis.GetDatabase();
+        await db.KeyDeleteAsync($"{IRoleCacheInvalidator.UserStateCacheKeyPrefix}{userId}");
+    }
 }

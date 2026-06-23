@@ -15,6 +15,13 @@ public interface IRoleCacheInvalidator
     /// CookiePrincipalValidator (writes) and RoleCacheInvalidator (deletes).
     /// </summary>
     const string RoleCacheKeyPrefix = "user:roles:";
+
+    /// <summary>
+    /// Redis key prefix for the cached active/global-admin state. Shared between
+    /// CookiePrincipalValidator (reads and writes) and RoleCacheInvalidator (deletes).
+    /// </summary>
+    const string UserStateCacheKeyPrefix = "user:active:";
+
     /// <summary>
     /// Deletes the cached role claims for the specified user.
     /// </summary>
@@ -22,4 +29,12 @@ public interface IRoleCacheInvalidator
     /// <param name="ct">Cancellation token.</param>
     /// <returns>Returns an awaitable Task.</returns>
     Task InvalidateAsync(int userId, CancellationToken ct);
+
+    /// <summary>
+    /// Deletes the cached active/global-admin state for a user so the next request re-reads it live.
+    /// </summary>
+    /// <param name="userId">The user whose state cache should be invalidated.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>Returns an awaitable Task.</returns>
+    Task InvalidateUserStateAsync(int userId, CancellationToken ct);
 }
