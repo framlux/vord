@@ -46,16 +46,18 @@ public sealed class SsoOidcEvents : OpenIdConnectEvents
             return;
         }
 
-        TenantOidcConfiguration? config = await ResolveTenantOidcConfigAsync(context.HttpContext, tenantId);
-        if (config is null)
+        TenantOidcConfiguration? resolvedConfig = await ResolveTenantOidcConfigAsync(context.HttpContext, tenantId);
+        if (IsConfigUsable(resolvedConfig) == false)
         {
             ILogger<SsoOidcEvents> logger = ResolveLogger(context.HttpContext);
-            logger.LogWarning("OIDC configuration not found for tenant {TenantId}", tenantId);
+            logger.LogWarning("OIDC configuration missing or disabled for tenant {TenantId}", tenantId);
             context.Response.StatusCode = 400;
             context.HandleResponse();
 
             return;
         }
+
+        TenantOidcConfiguration config = resolvedConfig!;
 
         // Discover the authorization endpoint from the tenant's IdP — per-request, no shared state mutation
         IHttpClientFactory httpClientFactory = context.HttpContext.RequestServices.GetRequiredService<IHttpClientFactory>();
@@ -92,14 +94,16 @@ public sealed class SsoOidcEvents : OpenIdConnectEvents
         ILogger<SsoOidcEvents> logger = ResolveLogger(context.HttpContext);
 
         // Re-read OIDC config from DB instead of reading secrets from the cookie
-        TenantOidcConfiguration? config = await ResolveTenantOidcConfigAsync(context.HttpContext, tenantId);
-        if (config is null)
+        TenantOidcConfiguration? resolvedConfig = await ResolveTenantOidcConfigAsync(context.HttpContext, tenantId);
+        if (IsConfigUsable(resolvedConfig) == false)
         {
-            logger.LogWarning("Tenant OIDC configuration not found during code exchange for tenant {TenantId}", tenantId);
+            logger.LogWarning("Tenant OIDC configuration missing or disabled during code exchange for tenant {TenantId}", tenantId);
             context.Fail("Tenant OIDC configuration not found");
 
             return;
         }
+
+        TenantOidcConfiguration config = resolvedConfig!;
 
         // Fetch the discovery document (uses SSRF-safe HttpClient)
         IHttpClientFactory httpClientFactory = context.HttpContext.RequestServices.GetRequiredService<IHttpClientFactory>();
@@ -434,6 +438,17 @@ public sealed class SsoOidcEvents : OpenIdConnectEvents
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// Returns whether a tenant OIDC configuration may be used to authenticate. A configuration that
+    /// is absent or has been disabled must not authenticate anyone, at challenge time or at callback.
+    /// </summary>
+    /// <param name="config">The tenant OIDC configuration, or null when none exists.</param>
+    /// <returns>True only when the configuration exists and is enabled.</returns>
+    internal static bool IsConfigUsable(TenantOidcConfiguration? config)
+    {
+        return (config is not null) && config.IsEnabled;
     }
 
     private static async Task<TenantOidcConfiguration?> ResolveTenantOidcConfigAsync(HttpContext httpContext, int tenantId)

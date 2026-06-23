@@ -28,6 +28,31 @@ namespace Framlux.FleetManagement.Test.Auth;
 /// </summary>
 public sealed class SsoOidcEventsTests
 {
+    // --- IsConfigUsable Tests ---
+
+    [Test]
+    public async Task IsConfigUsable_DisabledConfig_ReturnsFalse()
+    {
+        TenantOidcConfiguration config = TestDataBuilder.BuildTenantOidcConfiguration(isEnabled: false);
+        bool result = SsoOidcEvents.IsConfigUsable(config);
+        await Assert.That(result).IsFalse();
+    }
+
+    [Test]
+    public async Task IsConfigUsable_EnabledConfig_ReturnsTrue()
+    {
+        TenantOidcConfiguration config = TestDataBuilder.BuildTenantOidcConfiguration(isEnabled: true);
+        bool result = SsoOidcEvents.IsConfigUsable(config);
+        await Assert.That(result).IsTrue();
+    }
+
+    [Test]
+    public async Task IsConfigUsable_NullConfig_ReturnsFalse()
+    {
+        bool result = SsoOidcEvents.IsConfigUsable(null);
+        await Assert.That(result).IsFalse();
+    }
+
     // --- IsUrlSafe Tests ---
 
     [Test]
@@ -472,6 +497,25 @@ public sealed class SsoOidcEventsTests
         await Assert.That(context.HttpContext.Response.StatusCode).IsEqualTo(400);
     }
 
+    [Test]
+    public async Task RedirectToIdentityProvider_DisabledConfig_Returns400()
+    {
+        TenantOidcConfiguration disabledConfig = TestDataBuilder.BuildTenantOidcConfiguration(tenantId: 42, isEnabled: false);
+
+        ITenantRepository tenantRepo = Substitute.For<ITenantRepository>();
+        tenantRepo.GetTenantOidcConfigurationAsync(42, Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<TenantOidcConfiguration?>(disabledConfig));
+
+        SsoOidcEvents events = new();
+        RedirectContext context = BuildRedirectContext(
+            tenantId: "42",
+            tenantRepo: tenantRepo);
+
+        await events.RedirectToIdentityProvider(context);
+
+        await Assert.That(context.HttpContext.Response.StatusCode).IsEqualTo(400);
+    }
+
     // --- AuthorizationCodeReceived Tests ---
 
     /// <summary>
@@ -627,6 +671,26 @@ public sealed class SsoOidcEventsTests
         ITenantRepository tenantRepo = Substitute.For<ITenantRepository>();
         tenantRepo.GetTenantOidcConfigurationAsync(42, Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<TenantOidcConfiguration?>(null));
+
+        SsoOidcEvents events = new();
+        AuthorizationCodeReceivedContext context = BuildCodeReceivedContext(
+            tenantId: "42",
+            authCode: "test-code",
+            tenantRepo: tenantRepo);
+
+        await events.AuthorizationCodeReceived(context);
+
+        await Assert.That(context.Result?.Failure?.Message).Contains("Tenant OIDC configuration not found");
+    }
+
+    [Test]
+    public async Task AuthorizationCodeReceived_DisabledConfig_FailsWithConfigNotFoundMessage()
+    {
+        TenantOidcConfiguration disabledConfig = TestDataBuilder.BuildTenantOidcConfiguration(tenantId: 42, isEnabled: false);
+
+        ITenantRepository tenantRepo = Substitute.For<ITenantRepository>();
+        tenantRepo.GetTenantOidcConfigurationAsync(42, Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<TenantOidcConfiguration?>(disabledConfig));
 
         SsoOidcEvents events = new();
         AuthorizationCodeReceivedContext context = BuildCodeReceivedContext(

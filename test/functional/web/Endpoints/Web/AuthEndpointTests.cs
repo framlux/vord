@@ -2,7 +2,12 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
+using Framlux.FleetManagement.Database;
+using Framlux.FleetManagement.Database.Enums;
+using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Test.Infrastructure;
+using LinqToDB;
+using LinqToDB.Async;
 using System.Net;
 
 namespace Framlux.FleetManagement.FunctionalTest.Endpoints.Web;
@@ -12,6 +17,53 @@ namespace Framlux.FleetManagement.FunctionalTest.Endpoints.Web;
 /// </summary>
 public sealed class AuthEndpointTests
 {
+    private static async Task<int> SeedTenantWithSubscriptionAndOidc(
+        DatabaseContext db,
+        SubscriptionTier tier,
+        bool oidcEnabled,
+        bool createOidcConfig = true)
+    {
+        Tenant tenant = new()
+        {
+            ExternalId = Guid.NewGuid().ToString("N"),
+            Name = $"OIDC Challenge Tenant {Guid.NewGuid():N}",
+            CreatedAt = DateTimeOffset.UtcNow,
+            CreatedByUserId = 1,
+            IsActive = true,
+            LogoUrl = ""
+        };
+        tenant.Id = await db.InsertWithInt32IdentityAsync(tenant);
+
+        TenantSubscription subscription = new()
+        {
+            TenantId = tenant.Id,
+            Tier = tier,
+            Status = SubscriptionStatus.Active,
+            CreatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow,
+        };
+        await db.InsertWithInt32IdentityAsync(subscription);
+
+        if (createOidcConfig)
+        {
+            TenantOidcConfiguration config = new()
+            {
+                TenantId = tenant.Id,
+                Authority = "https://login.example.com",
+                ClientId = "test-client-id",
+                ClientSecret = "encrypted-secret",
+                MetadataAddress = null,
+                EmailDomain = $"{Guid.NewGuid():N}.example.com",
+                IsEnabled = oidcEnabled,
+                CreatedAt = DateTimeOffset.UtcNow,
+                UpdatedAt = DateTimeOffset.UtcNow,
+            };
+            await db.InsertWithInt32IdentityAsync(config);
+        }
+
+        return tenant.Id;
+    }
+
     [Test]
     public async Task Challenge_InvalidProvider_Returns400()
     {
@@ -137,6 +189,80 @@ public sealed class AuthEndpointTests
         await Assert.That((int)response.StatusCode).IsEqualTo(400);
         string body = await response.Content.ReadAsStringAsync();
         await Assert.That(body).Contains("tenantId is required");
+    }
+
+    [Test]
+    public async Task Challenge_TenantOidc_NonNumericTenantId_Returns400()
+    {
+        using FunctionalTestFactory factory = new();
+        HttpClient client = factory.CreateClient(new Microsoft.AspNetCore.Mvc.Testing.WebApplicationFactoryClientOptions
+        {
+            AllowAutoRedirect = false
+        });
+
+        HttpResponseMessage response = await client.GetAsync("/api/v1/auth/challenge/tenant-oidc?tenantId=abc");
+
+        await Assert.That((int)response.StatusCode).IsEqualTo(400);
+        string body = await response.Content.ReadAsStringAsync();
+        await Assert.That(body).Contains("tenantId is invalid");
+    }
+
+    [Test]
+    public async Task Challenge_TenantOidc_NonTeamTier_Returns400()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        int tenantId = await SeedTenantWithSubscriptionAndOidc(db, SubscriptionTier.Pro, oidcEnabled: true);
+
+        HttpClient client = factory.CreateClient(new Microsoft.AspNetCore.Mvc.Testing.WebApplicationFactoryClientOptions
+        {
+            AllowAutoRedirect = false
+        });
+
+        HttpResponseMessage response = await client.GetAsync($"/api/v1/auth/challenge/tenant-oidc?tenantId={tenantId}");
+
+        await Assert.That((int)response.StatusCode).IsEqualTo(400);
+        string body = await response.Content.ReadAsStringAsync();
+        await Assert.That(body).Contains("Custom SSO is not available");
+    }
+
+    [Test]
+    public async Task Challenge_TenantOidc_TeamTierDisabledConfig_Returns400()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        int tenantId = await SeedTenantWithSubscriptionAndOidc(db, SubscriptionTier.Team, oidcEnabled: false);
+
+        HttpClient client = factory.CreateClient(new Microsoft.AspNetCore.Mvc.Testing.WebApplicationFactoryClientOptions
+        {
+            AllowAutoRedirect = false
+        });
+
+        HttpResponseMessage response = await client.GetAsync($"/api/v1/auth/challenge/tenant-oidc?tenantId={tenantId}");
+
+        await Assert.That((int)response.StatusCode).IsEqualTo(400);
+        string body = await response.Content.ReadAsStringAsync();
+        await Assert.That(body).Contains("Custom SSO is not available");
+    }
+
+    [Test]
+    public async Task Challenge_TenantOidc_TeamTierNoConfig_Returns400()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        int tenantId = await SeedTenantWithSubscriptionAndOidc(
+            db, SubscriptionTier.Team, oidcEnabled: true, createOidcConfig: false);
+
+        HttpClient client = factory.CreateClient(new Microsoft.AspNetCore.Mvc.Testing.WebApplicationFactoryClientOptions
+        {
+            AllowAutoRedirect = false
+        });
+
+        HttpResponseMessage response = await client.GetAsync($"/api/v1/auth/challenge/tenant-oidc?tenantId={tenantId}");
+
+        await Assert.That((int)response.StatusCode).IsEqualTo(400);
+        string body = await response.Content.ReadAsStringAsync();
+        await Assert.That(body).Contains("Custom SSO is not available");
     }
 
     [Test]

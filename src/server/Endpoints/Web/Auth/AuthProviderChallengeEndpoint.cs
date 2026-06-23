@@ -3,6 +3,11 @@
 // See LICENSE for details.
 
 using FastEndpoints;
+using Framlux.FleetManagement.Database.Enums;
+using Framlux.FleetManagement.Database.Models;
+using Framlux.FleetManagement.Database.Repositories;
+using Framlux.FleetManagement.Server.Auth;
+using Framlux.FleetManagement.Services.Core.Billing;
 using Microsoft.AspNetCore.Authentication;
 
 namespace Framlux.FleetManagement.Server.Endpoints.Web.Auth;
@@ -19,6 +24,20 @@ public sealed class AuthProviderChallengeEndpoint : EndpointWithoutRequest<ApiRe
         "microsoft",
         "tenant-oidc"
     };
+
+    private readonly ITenantRepository _tenantRepository;
+    private readonly ISubscriptionService _subscriptionService;
+
+    /// <summary>
+    /// Creates a new instance of the <see cref="AuthProviderChallengeEndpoint"/> class.
+    /// </summary>
+    public AuthProviderChallengeEndpoint(
+        ITenantRepository tenantRepository,
+        ISubscriptionService subscriptionService)
+    {
+        _tenantRepository = tenantRepository;
+        _subscriptionService = subscriptionService;
+    }
 
     /// <inheritdoc />
     public override void Configure()
@@ -64,6 +83,25 @@ public sealed class AuthProviderChallengeEndpoint : EndpointWithoutRequest<ApiRe
             {
                 HttpContext.Response.StatusCode = 400;
                 await HttpContext.Response.WriteAsJsonAsync(ApiResponse<object>.Error("tenantId is required for tenant-oidc provider"), ct);
+
+                return;
+            }
+
+            if (int.TryParse(tenantIdStr, out int tenantId) == false)
+            {
+                HttpContext.Response.StatusCode = 400;
+                await HttpContext.Response.WriteAsJsonAsync(ApiResponse<object>.Error("tenantId is invalid"), ct);
+
+                return;
+            }
+
+            TenantOidcConfiguration? oidcConfig = await _tenantRepository.GetTenantOidcConfigurationAsync(tenantId, ct);
+            TenantSubscription? subscription = await _subscriptionService.GetSubscriptionForTenantAsync(tenantId, ct);
+            bool teamTier = (subscription is not null) && (subscription.Tier == SubscriptionTier.Team);
+            if ((SsoOidcEvents.IsConfigUsable(oidcConfig) == false) || (teamTier == false))
+            {
+                HttpContext.Response.StatusCode = 400;
+                await HttpContext.Response.WriteAsJsonAsync(ApiResponse<object>.Error("Custom SSO is not available for this organization"), ct);
 
                 return;
             }
