@@ -516,6 +516,37 @@ public sealed class SsoOidcEventsTests
         await Assert.That(context.HttpContext.Response.StatusCode).IsEqualTo(400);
     }
 
+    [Test]
+    public async Task RedirectToIdentityProvider_EnabledConfig_PassesGuardAndProceeds()
+    {
+        TenantOidcConfiguration enabledConfig = TestDataBuilder.BuildTenantOidcConfiguration(tenantId: 42, isEnabled: true);
+        enabledConfig.MetadataAddress = "https://idp.example.com/.well-known/openid-configuration";
+
+        ITenantRepository tenantRepo = Substitute.For<ITenantRepository>();
+        tenantRepo.GetTenantOidcConfigurationAsync(42, Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<TenantOidcConfiguration?>(enabledConfig));
+
+        // A usable config must pass the IsConfigUsable guard and advance to discovery; the mock
+        // discovery handler returns a valid authorization endpoint so the redirect step is reached.
+        IHttpClientFactory httpClientFactory = BuildMockHttpClientFactory(
+            tokenEndpointUrl: "https://idp.example.com/token",
+            tokenExchangeResponse: new HttpResponseMessage(HttpStatusCode.OK));
+
+        SsoOidcEvents events = new();
+        RedirectContext context = BuildRedirectContext(
+            tenantId: "42",
+            tenantRepo: tenantRepo,
+            httpClientFactory: httpClientFactory);
+
+        await events.RedirectToIdentityProvider(context);
+
+        // The guard was passed: no 400 short-circuit, and the request advanced to the discovery step,
+        // setting the issuer address and client id on the per-request protocol message.
+        await Assert.That(context.HttpContext.Response.StatusCode).IsNotEqualTo(400);
+        await Assert.That(context.ProtocolMessage.IssuerAddress).IsEqualTo("https://idp.example.com/authorize");
+        await Assert.That(context.ProtocolMessage.ClientId).IsEqualTo(enabledConfig.ClientId);
+    }
+
     // --- AuthorizationCodeReceived Tests ---
 
     /// <summary>
@@ -761,6 +792,45 @@ public sealed class SsoOidcEventsTests
         await events.AuthorizationCodeReceived(context);
 
         await Assert.That(context.Result?.Failure?.Message).Contains("Token exchange failed");
+    }
+
+    [Test]
+    public async Task AuthorizationCodeReceived_ProtectedClientSecret_UnprotectsBeforeTokenExchange()
+    {
+        TenantOidcConfiguration oidcConfig = TestDataBuilder.BuildTenantOidcConfiguration(tenantId: 42);
+        oidcConfig.MetadataAddress = "https://idp.example.com/.well-known/openid-configuration";
+
+        ITenantRepository tenantRepo = Substitute.For<ITenantRepository>();
+        tenantRepo.GetTenantOidcConfigurationAsync(42, Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<TenantOidcConfiguration?>(oidcConfig));
+
+        // Mark the stored secret as encrypted so the production code takes the IsProtected -> Unprotect
+        // branch rather than the legacy-plaintext fallback. Every other token-exchange test leaves
+        // IsProtected at the NSubstitute default of false, so this is the only coverage of that path.
+        IOidcSecretProtector secretProtector = Substitute.For<IOidcSecretProtector>();
+        secretProtector.IsProtected(Arg.Any<string?>()).Returns(true);
+        secretProtector.Unprotect(Arg.Any<string>()).Returns("decrypted-secret");
+
+        // A non-success token exchange is sufficient: secret resolution happens before the token POST,
+        // so the flow reaches Unprotect regardless of how the exchange itself resolves.
+        IHttpClientFactory httpClientFactory = BuildMockHttpClientFactory(
+            tokenEndpointUrl: "https://idp.example.com/token",
+            tokenExchangeResponse: new HttpResponseMessage(HttpStatusCode.BadRequest)
+            {
+                Content = new StringContent("{\"error\":\"invalid_grant\"}")
+            });
+
+        SsoOidcEvents events = new();
+        AuthorizationCodeReceivedContext context = BuildCodeReceivedContext(
+            tenantId: "42",
+            authCode: "test-code",
+            tenantRepo: tenantRepo,
+            httpClientFactory: httpClientFactory,
+            secretProtector: secretProtector);
+
+        await events.AuthorizationCodeReceived(context);
+
+        secretProtector.Received(1).Unprotect(oidcConfig.ClientSecret);
     }
 
     [Test]

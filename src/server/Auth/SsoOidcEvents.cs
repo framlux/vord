@@ -82,6 +82,9 @@ public sealed class SsoOidcEvents : OpenIdConnectEvents
     /// <returns>Returns an awaitable Task.</returns>
     public override async Task AuthorizationCodeReceived(AuthorizationCodeReceivedContext context)
     {
+        // AuthorizationCodeReceivedContext.Properties is nullable on this context type (unlike
+        // RedirectContext.Properties, which is non-null), so the explicit null guard is required here
+        // and must not be "aligned" with RedirectToIdentityProvider by removing it.
         if (context.Properties?.Items is null ||
             context.Properties.Items.TryGetValue("tenantId", out string? tenantIdStr) == false ||
             int.TryParse(tenantIdStr, out int tenantId) == false)
