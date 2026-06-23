@@ -3,9 +3,10 @@
 // See LICENSE for details.
 
 using System.Net;
+using System.Security.Cryptography;
 using System.Text.Json;
-using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Database.Models;
+using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Server.Auth;
 using Framlux.FleetManagement.Services.Core.Security;
 using Framlux.FleetManagement.Test.Infrastructure;
@@ -13,7 +14,11 @@ using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Options;
+using Microsoft.IdentityModel.JsonWebTokens;
+using Microsoft.IdentityModel.Tokens;
 using NSubstitute;
+using StackExchange.Redis;
 using OidcMessage = Microsoft.IdentityModel.Protocols.OpenIdConnect.OpenIdConnectMessage;
 
 namespace Framlux.FleetManagement.Test.Auth;
@@ -479,7 +484,10 @@ public sealed class SsoOidcEventsTests
         ITenantRepository? tenantRepo = null,
         IHttpClientFactory? httpClientFactory = null,
         IOidcSecretProtector? secretProtector = null,
-        ILogger<SsoOidcEvents>? logger = null)
+        ILogger<SsoOidcEvents>? logger = null,
+        IConnectionMultiplexer? redis = null,
+        IOptionsMonitor<OpenIdConnectOptions>? optionsMonitor = null,
+        IDictionary<string, string>? cookies = null)
     {
         IServiceProvider serviceProvider = Substitute.For<IServiceProvider>();
         serviceProvider.GetService(typeof(ILogger<SsoOidcEvents>))
@@ -496,9 +504,19 @@ public sealed class SsoOidcEventsTests
         {
             serviceProvider.GetService(typeof(IOidcSecretProtector)).Returns(secretProtector);
         }
+        IConnectionMultiplexer redisConnection = redis ?? FakeRedisConnection.Create();
+        serviceProvider.GetService(typeof(IConnectionMultiplexer)).Returns(redisConnection);
+        IOptionsMonitor<OpenIdConnectOptions> resolvedOptionsMonitor =
+            optionsMonitor ?? Substitute.For<IOptionsMonitor<OpenIdConnectOptions>>();
+        serviceProvider.GetService(typeof(IOptionsMonitor<OpenIdConnectOptions>)).Returns(resolvedOptionsMonitor);
 
         DefaultHttpContext httpContext = new();
         httpContext.RequestServices = serviceProvider;
+        if (cookies is not null && cookies.Count > 0)
+        {
+            string cookieHeader = string.Join("; ", cookies.Select(kvp => $"{kvp.Key}={kvp.Value}"));
+            httpContext.Request.Headers.Cookie = cookieHeader;
+        }
 
         OpenIdConnectOptions options = new();
         AuthenticationProperties properties = new();
@@ -890,5 +908,220 @@ public sealed class SsoOidcEventsTests
 
         await Assert.That(context.Result?.Failure?.Message).Contains("Token exchange failed");
         await Assert.That(context.Result?.Failure?.Message).Contains("InternalServerError");
+    }
+
+    // --- AuthorizationCodeReceived nonce branch tests ---
+
+    private const string TestNonce = "test-nonce-value";
+
+    private const string TestSigningKid = "test-signing-key";
+
+    /// <summary>
+    /// Builds an <see cref="IHttpClientFactory"/> whose discovery document advertises a JWKS containing
+    /// the public half of <paramref name="signingKey"/>, so that an id_token signed by that key passes
+    /// signature validation in <see cref="SsoOidcEvents.AuthorizationCodeReceived"/>.
+    /// </summary>
+    private static IHttpClientFactory BuildMockHttpClientFactoryWithJwks(
+        RsaSecurityKey signingKey,
+        HttpResponseMessage tokenExchangeResponse)
+    {
+        string discoveryJson = JsonSerializer.Serialize(new
+        {
+            issuer = "https://idp.example.com",
+            authorization_endpoint = "https://idp.example.com/authorize",
+            token_endpoint = "https://idp.example.com/token",
+            jwks_uri = "https://idp.example.com/jwks",
+            response_types_supported = new[] { "code" },
+            subject_types_supported = new[] { "public" },
+            id_token_signing_alg_values_supported = new[] { "RS256" },
+        });
+
+        RSAParameters publicParams = signingKey.Rsa!.ExportParameters(false);
+        string jwksJson = JsonSerializer.Serialize(new
+        {
+            keys = new[]
+            {
+                new
+                {
+                    kty = "RSA",
+                    use = "sig",
+                    alg = "RS256",
+                    kid = TestSigningKid,
+                    n = Base64UrlEncoder.Encode(publicParams.Modulus),
+                    e = Base64UrlEncoder.Encode(publicParams.Exponent),
+                },
+            },
+        });
+
+        MockHttpMessageHandler discoveryHandler = new();
+        discoveryHandler.WithDefaultResponse(new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(discoveryJson, System.Text.Encoding.UTF8, "application/json")
+        });
+        discoveryHandler.WithResponse("https://idp.example.com/jwks", new HttpResponseMessage(HttpStatusCode.OK)
+        {
+            Content = new StringContent(jwksJson, System.Text.Encoding.UTF8, "application/json")
+        });
+
+        MockHttpMessageHandler tokenHandler = new();
+        tokenHandler.WithDefaultResponse(tokenExchangeResponse);
+
+        IHttpClientFactory httpClientFactory = Substitute.For<IHttpClientFactory>();
+        httpClientFactory.CreateClient("OidcDiscovery").Returns(new HttpClient(discoveryHandler));
+        httpClientFactory.CreateClient("OidcTokenExchange").Returns(new HttpClient(tokenHandler));
+
+        return httpClientFactory;
+    }
+
+    /// <summary>
+    /// Creates a signed RS256 id_token carrying the supplied nonce and issuer/audience that match the
+    /// mock discovery document. The token's lifetime is set far in the future so validation never
+    /// depends on wall-clock proximity.
+    /// </summary>
+    private static string BuildSignedIdToken(RsaSecurityKey signingKey, string nonce)
+    {
+        signingKey.KeyId = TestSigningKid;
+        SigningCredentials credentials = new(signingKey, SecurityAlgorithms.RsaSha256);
+
+        SecurityTokenDescriptor descriptor = new()
+        {
+            Issuer = "https://idp.example.com",
+            Audience = "test-client-id",
+            Claims = new Dictionary<string, object> { ["nonce"] = nonce },
+            Expires = DateTime.UtcNow.AddYears(10),
+            NotBefore = DateTime.UtcNow.AddYears(-1),
+            IssuedAt = DateTime.UtcNow.AddYears(-1),
+            SigningCredentials = credentials,
+        };
+
+        return new JsonWebTokenHandler().CreateToken(descriptor);
+    }
+
+    /// <summary>
+    /// Builds an <see cref="IOptionsMonitor{T}"/> for the tenant-oidc scheme whose
+    /// <see cref="OpenIdConnectOptions.StringDataFormat"/> unprotects the supplied protected cookie
+    /// value back to the expected nonce, mirroring the handler's challenge-time nonce binding.
+    /// </summary>
+    private static IOptionsMonitor<OpenIdConnectOptions> BuildOptionsMonitorWithNonce(
+        string protectedCookieValue,
+        string nonce)
+    {
+        OpenIdConnectOptions options = new()
+        {
+            StringDataFormat = new StubStringDataFormat(protectedCookieValue, nonce),
+        };
+
+        IOptionsMonitor<OpenIdConnectOptions> monitor = Substitute.For<IOptionsMonitor<OpenIdConnectOptions>>();
+        monitor.Get("tenant-oidc").Returns(options);
+
+        return monitor;
+    }
+
+    [Test]
+    public async Task AuthorizationCodeReceived_ValidMatchingNonceFirstUse_DoesNotFailAtNonceStep()
+    {
+        using RSA rsa = RSA.Create(2048);
+        RsaSecurityKey signingKey = new(rsa);
+
+        TenantOidcConfiguration oidcConfig = TestDataBuilder.BuildTenantOidcConfiguration(tenantId: 42);
+        oidcConfig.MetadataAddress = "https://idp.example.com/.well-known/openid-configuration";
+
+        ITenantRepository tenantRepo = Substitute.For<ITenantRepository>();
+        tenantRepo.GetTenantOidcConfigurationAsync(42, Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<TenantOidcConfiguration?>(oidcConfig));
+
+        IOidcSecretProtector secretProtector = Substitute.For<IOidcSecretProtector>();
+        secretProtector.Unprotect(Arg.Any<string>()).Returns("plain-secret");
+
+        string idToken = BuildSignedIdToken(signingKey, TestNonce);
+        string tokenResponseJson = JsonSerializer.Serialize(new { id_token = idToken });
+
+        IHttpClientFactory httpClientFactory = BuildMockHttpClientFactoryWithJwks(
+            signingKey,
+            new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(tokenResponseJson, System.Text.Encoding.UTF8, "application/json")
+            });
+
+        string protectedCookieValue = "protected-nonce-cookie";
+        IOptionsMonitor<OpenIdConnectOptions> optionsMonitor = BuildOptionsMonitorWithNonce(protectedCookieValue, TestNonce);
+        Dictionary<string, string> cookies = new()
+        {
+            [$"{OidcNonceValidator.NonceCookiePrefix}abc"] = protectedCookieValue,
+        };
+
+        SsoOidcEvents events = new();
+        AuthorizationCodeReceivedContext context = BuildCodeReceivedContext(
+            tenantId: "42",
+            authCode: "test-code",
+            tenantRepo: tenantRepo,
+            httpClientFactory: httpClientFactory,
+            secretProtector: secretProtector,
+            redis: FakeRedisConnection.Create(),
+            optionsMonitor: optionsMonitor,
+            cookies: cookies);
+
+        await events.AuthorizationCodeReceived(context);
+
+        // The id_token carries no subject, so the flow stops at user provisioning — but it must
+        // get past nonce validation first, proving the matching first-use nonce is accepted.
+        await Assert.That(context.Result?.Failure?.Message ?? string.Empty).DoesNotContain("nonce validation failed");
+    }
+
+    [Test]
+    public async Task AuthorizationCodeReceived_ReplayedNonce_FailsWithNonceValidationFailed()
+    {
+        using RSA rsa = RSA.Create(2048);
+        RsaSecurityKey signingKey = new(rsa);
+
+        TenantOidcConfiguration oidcConfig = TestDataBuilder.BuildTenantOidcConfiguration(tenantId: 42);
+        oidcConfig.MetadataAddress = "https://idp.example.com/.well-known/openid-configuration";
+
+        ITenantRepository tenantRepo = Substitute.For<ITenantRepository>();
+        tenantRepo.GetTenantOidcConfigurationAsync(42, Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<TenantOidcConfiguration?>(oidcConfig));
+
+        IOidcSecretProtector secretProtector = Substitute.For<IOidcSecretProtector>();
+        secretProtector.Unprotect(Arg.Any<string>()).Returns("plain-secret");
+
+        string idToken = BuildSignedIdToken(signingKey, TestNonce);
+        string tokenResponseJson = JsonSerializer.Serialize(new { id_token = idToken });
+
+        IHttpClientFactory httpClientFactory = BuildMockHttpClientFactoryWithJwks(
+            signingKey,
+            new HttpResponseMessage(HttpStatusCode.OK)
+            {
+                Content = new StringContent(tokenResponseJson, System.Text.Encoding.UTF8, "application/json")
+            });
+
+        string protectedCookieValue = "protected-nonce-cookie";
+        IOptionsMonitor<OpenIdConnectOptions> optionsMonitor = BuildOptionsMonitorWithNonce(protectedCookieValue, TestNonce);
+        Dictionary<string, string> cookies = new()
+        {
+            [$"{OidcNonceValidator.NonceCookiePrefix}abc"] = protectedCookieValue,
+        };
+
+        // Redis reports the nonce has already been consumed (replay): StringSetAsync When.NotExists -> false.
+        IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
+        IDatabase redisDb = Substitute.For<IDatabase>();
+        redisDb.StringSetAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<TimeSpan?>(),
+                Arg.Any<bool>(), When.NotExists, Arg.Any<CommandFlags>())
+            .Returns(false);
+        redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(redisDb);
+
+        SsoOidcEvents events = new();
+        AuthorizationCodeReceivedContext context = BuildCodeReceivedContext(
+            tenantId: "42",
+            authCode: "test-code",
+            tenantRepo: tenantRepo,
+            httpClientFactory: httpClientFactory,
+            secretProtector: secretProtector,
+            redis: redis,
+            optionsMonitor: optionsMonitor,
+            cookies: cookies);
+
+        await events.AuthorizationCodeReceived(context);
+
+        await Assert.That(context.Result?.Failure?.Message).Contains("nonce validation failed");
     }
 }

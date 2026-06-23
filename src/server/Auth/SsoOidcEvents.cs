@@ -5,15 +5,17 @@
 using System.Net;
 using System.Security.Claims;
 using System.Text.Json;
-using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
+using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Services.Core.Security;
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
+using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.JsonWebTokens;
 using Microsoft.IdentityModel.Protocols;
 using Microsoft.IdentityModel.Protocols.OpenIdConnect;
 using Microsoft.IdentityModel.Tokens;
+using StackExchange.Redis;
 
 namespace Framlux.FleetManagement.Server.Auth;
 
@@ -194,6 +196,25 @@ public sealed class SsoOidcEvents : OpenIdConnectEvents
             return;
         }
 
+        // Validate the id_token nonce against the value bound to the browser at challenge time and
+        // enforce single use. The manual code-exchange path bypasses the middleware's built-in nonce
+        // validation, so without this a captured or replayed id_token would be accepted.
+        string? tokenNonce = validationResult.Claims.TryGetValue("nonce", out object? nonceValue)
+            ? nonceValue as string
+            : null;
+
+        string? cookieNonce = ResolveNonceFromCookies(context.HttpContext, tokenNonce);
+
+        IConnectionMultiplexer redis = context.HttpContext.RequestServices.GetRequiredService<IConnectionMultiplexer>();
+        bool nonceOk = await OidcNonceValidator.ValidateAndConsumeAsync(redis.GetDatabase(), cookieNonce, tokenNonce);
+        if (nonceOk == false)
+        {
+            logger.LogWarning("id_token nonce validation failed for tenant {TenantId}", tenantId);
+            context.Fail("id_token nonce validation failed");
+
+            return;
+        }
+
         // Stash the resolving tenant id so the subject can be namespaced per tenant during claim
         // population — two tenants' IdPs may legitimately mint the same subject value.
         context.HttpContext.Items["tenant-oidc-tenant-id"] = tenantId.ToString();
@@ -357,6 +378,62 @@ public sealed class SsoOidcEvents : OpenIdConnectEvents
         }
 
         return true;
+    }
+
+    /// <summary>
+    /// Recovers the plaintext nonce that the OpenID Connect handler bound to the browser at
+    /// challenge time. The handler writes the protected nonce into a per-nonce cookie; here the
+    /// matching cookie is located and unprotected so it can be compared with the id_token claim.
+    /// </summary>
+    /// <param name="httpContext">The current HTTP context carrying the nonce cookies.</param>
+    /// <param name="tokenNonce">The nonce claim from the validated id_token.</param>
+    /// <returns>The unprotected nonce when a matching cookie is found; otherwise, null.</returns>
+    private static string? ResolveNonceFromCookies(HttpContext httpContext, string? tokenNonce)
+    {
+        if (string.IsNullOrEmpty(tokenNonce))
+        {
+            return null;
+        }
+
+        ILogger<SsoOidcEvents> logger = ResolveLogger(httpContext);
+
+        IOptionsMonitor<OpenIdConnectOptions> optionsMonitor =
+            httpContext.RequestServices.GetRequiredService<IOptionsMonitor<OpenIdConnectOptions>>();
+        OpenIdConnectOptions options = optionsMonitor.Get("tenant-oidc");
+
+        if (options.StringDataFormat is null)
+        {
+            logger.LogWarning("OpenIdConnectOptions.StringDataFormat is null for scheme tenant-oidc; nonce cookie cannot be unprotected");
+
+            return null;
+        }
+
+        foreach (KeyValuePair<string, string> cookie in httpContext.Request.Cookies)
+        {
+            if (cookie.Key.StartsWith(OidcNonceValidator.NonceCookiePrefix, StringComparison.Ordinal) == false)
+            {
+                continue;
+            }
+
+            string? unprotected;
+            try
+            {
+                unprotected = options.StringDataFormat.Unprotect(cookie.Value);
+            }
+            catch (Exception)
+            {
+                logger.LogDebug("Failed to unprotect nonce cookie {CookieName}; skipping", cookie.Key);
+
+                continue;
+            }
+
+            if (string.Equals(unprotected, tokenNonce, StringComparison.Ordinal))
+            {
+                return unprotected;
+            }
+        }
+
+        return null;
     }
 
     private static async Task<TenantOidcConfiguration?> ResolveTenantOidcConfigAsync(HttpContext httpContext, int tenantId)
