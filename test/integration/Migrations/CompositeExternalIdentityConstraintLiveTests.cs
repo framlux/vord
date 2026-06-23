@@ -85,7 +85,7 @@ public sealed class CompositeExternalIdentityConstraintLiveTests
     private static string BuildIsolatedDatabaseConnectionString()
     {
         string baseConn = _fixture.ConnectionString;
-        string dbName = $"identtest_{Guid.NewGuid():N}".Substring(0, 16).ToLowerInvariant();
+        string dbName = $"it_{Guid.NewGuid():N}".ToLowerInvariant();
         NpgsqlConnectionStringBuilder template = new(baseConn);
 
         using NpgsqlConnection admin = new(baseConn);

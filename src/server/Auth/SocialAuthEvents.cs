@@ -54,16 +54,23 @@ public static class SocialAuthEvents
     /// </summary>
     /// <param name="httpContext">The current HTTP context carrying the stashed tenant id.</param>
     /// <param name="rawSubject">The raw subject identifier from the validated token.</param>
-    /// <returns>The tenant-namespaced subject, or the raw subject when no tenant id is present.</returns>
+    /// <returns>The tenant-namespaced subject.</returns>
+    /// <exception cref="InvalidOperationException">
+    /// Thrown when no tenant id is present. A missing namespace must never silently degrade to a
+    /// raw subject that could collide across tenants.
+    /// </exception>
     internal static string BuildTenantNamespacedSubject(HttpContext httpContext, string rawSubject)
     {
         string? tenantId = httpContext.Items.TryGetValue("tenant-oidc-tenant-id", out object? value)
             ? value as string
             : null;
 
-        return string.IsNullOrEmpty(tenantId)
-            ? rawSubject
-            : $"tenant:{tenantId}:{rawSubject}";
+        if (string.IsNullOrEmpty(tenantId))
+        {
+            throw new InvalidOperationException("Custom OIDC subject cannot be namespaced because no tenant id was stashed for the request.");
+        }
+
+        return $"tenant:{tenantId}:{rawSubject}";
     }
 
     /// <summary>
@@ -143,7 +150,7 @@ public static class SocialAuthEvents
         }
 
         // Retrieve and assign tenant roles
-        IEnumerable<UserTenantRole> tenantRoles = await tenantRepository.GetTenantsForUserAsync(uniqueId, ct);
+        IEnumerable<UserTenantRole> tenantRoles = await tenantRepository.GetTenantsForUserByIdAsync(user.Id, ct);
         foreach (UserTenantRole role in tenantRoles)
         {
             identity.AddClaim(new Claim(ClaimTypes.Role, $"{role.AssignedTenantId}:{(byte)role.Role}"));

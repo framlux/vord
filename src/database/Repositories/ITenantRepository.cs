@@ -17,6 +17,13 @@ public interface ITenantRepository
     Task<IEnumerable<UserTenantRole>> GetTenantsForUserAsync(string userUniqueId, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Get the tenants and roles for the specified user by their account identifier.
+    /// Resolving on the user-account primary key avoids the cross-provider role leak that an
+    /// external-id lookup can produce when two accounts share an external id across providers.
+    /// </summary>
+    Task<IEnumerable<UserTenantRole>> GetTenantsForUserByIdAsync(int userId, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Gets a tenant by its external ID.
     /// </summary>
     Task<Tenant?> GetTenantByExternalIdAsync(string externalId, CancellationToken cancellationToken = default);

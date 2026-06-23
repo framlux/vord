@@ -30,6 +30,46 @@ public class AuthMeHandlerTests
     }
 
     [Test]
+    public async Task GetCurrentUserAsync_ForwardsAuthProvider_AndMissMapsToNotFound()
+    {
+        IUserRepository userRepository = Substitute.For<IUserRepository>();
+        ITenantRepository tenantRepository = Substitute.For<ITenantRepository>();
+        userRepository.GetUserByExternalIdForProviderAsync(AuthProviderType.GitHub, "ext-provider", Arg.Any<CancellationToken>()).Returns((UserAccount?)null);
+        AuthMeHandler handler = new(userRepository, tenantRepository);
+
+        ServiceResult<AuthMeResult> result = await handler.GetCurrentUserAsync(AuthProviderType.GitHub, "ext-provider", CancellationToken.None);
+
+        await Assert.That(result.IsNotFound).IsTrue();
+        await userRepository.Received(1).GetUserByExternalIdForProviderAsync(AuthProviderType.GitHub, "ext-provider", Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task GetCurrentUserAsync_ResolvesTenantsByUserId_NotExternalId()
+    {
+        IUserRepository userRepository = Substitute.For<IUserRepository>();
+        ITenantRepository tenantRepository = Substitute.For<ITenantRepository>();
+        UserAccount user = new()
+        {
+            Id = 42,
+            ExternalId = "ext-shared",
+            Username = "user@example.com",
+            CreatedAt = DateTimeOffset.UtcNow,
+            CreatedByUserId = 0,
+            IsActive = true,
+            IsSystem = false,
+            IsGlobalAdmin = false,
+        };
+        userRepository.GetUserByExternalIdForProviderAsync(Arg.Any<AuthProviderType>(), "ext-shared", Arg.Any<CancellationToken>()).Returns(user);
+        tenantRepository.GetTenantsForUserByIdAsync(42, Arg.Any<CancellationToken>()).Returns(Enumerable.Empty<UserTenantRole>());
+        AuthMeHandler handler = new(userRepository, tenantRepository);
+
+        await handler.GetCurrentUserAsync(AuthProviderType.Google, "ext-shared", CancellationToken.None);
+
+        await tenantRepository.Received(1).GetTenantsForUserByIdAsync(42, Arg.Any<CancellationToken>());
+        await tenantRepository.DidNotReceive().GetTenantsForUserAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
     public async Task GetCurrentUserAsync_UserFoundNoTenants_ReturnsNeedsOnboarding()
     {
         IUserRepository userRepository = Substitute.For<IUserRepository>();
@@ -46,7 +86,7 @@ public class AuthMeHandlerTests
             IsGlobalAdmin = false,
         };
         userRepository.GetUserByExternalIdForProviderAsync(Arg.Any<AuthProviderType>(), "ext-1", Arg.Any<CancellationToken>()).Returns(user);
-        tenantRepository.GetTenantsForUserAsync("ext-1", Arg.Any<CancellationToken>()).Returns(Enumerable.Empty<UserTenantRole>());
+        tenantRepository.GetTenantsForUserByIdAsync(1, Arg.Any<CancellationToken>()).Returns(Enumerable.Empty<UserTenantRole>());
         AuthMeHandler handler = new(userRepository, tenantRepository);
 
         ServiceResult<AuthMeResult> result = await handler.GetCurrentUserAsync(AuthProviderType.Google, "ext-1", CancellationToken.None);
@@ -98,7 +138,7 @@ public class AuthMeHandlerTests
                 IsActive = true,
             }
         };
-        tenantRepository.GetTenantsForUserAsync("ext-5", Arg.Any<CancellationToken>()).Returns(roles);
+        tenantRepository.GetTenantsForUserByIdAsync(5, Arg.Any<CancellationToken>()).Returns(roles);
         AuthMeHandler handler = new(userRepository, tenantRepository);
 
         ServiceResult<AuthMeResult> result = await handler.GetCurrentUserAsync(AuthProviderType.Google, "ext-5", CancellationToken.None);
@@ -128,7 +168,7 @@ public class AuthMeHandlerTests
             IsGlobalAdmin = false,
         };
         userRepository.GetUserByExternalIdForProviderAsync(Arg.Any<AuthProviderType>(), "ext-3", Arg.Any<CancellationToken>()).Returns(user);
-        tenantRepository.GetTenantsForUserAsync("ext-3", Arg.Any<CancellationToken>()).Returns(Enumerable.Empty<UserTenantRole>());
+        tenantRepository.GetTenantsForUserByIdAsync(3, Arg.Any<CancellationToken>()).Returns(Enumerable.Empty<UserTenantRole>());
         AuthMeHandler handler = new(userRepository, tenantRepository);
 
         ServiceResult<AuthMeResult> result = await handler.GetCurrentUserAsync(AuthProviderType.Google, "ext-3", CancellationToken.None);

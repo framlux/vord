@@ -41,7 +41,7 @@ public sealed class AuthMeHandler : IAuthMeHandler
             return ServiceResult<AuthMeResult>.NotFound();
         }
 
-        IEnumerable<UserTenantRole> tenants = await _tenantRepository.GetTenantsForUserAsync(uniqueId, ct);
+        IEnumerable<UserTenantRole> tenants = await _tenantRepository.GetTenantsForUserByIdAsync(user.Id, ct);
         List<UserTenantDto> tenantDtos = tenants.Select(t => new UserTenantDto
         {
             TenantId = t.AssignedTenantId,

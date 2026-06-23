@@ -339,7 +339,7 @@ public sealed class SocialAuthEventsTests
                 IsActive = true
             }
         };
-        tenantRepo.GetTenantsForUserAsync("ext-1", Arg.Any<CancellationToken>())
+        tenantRepo.GetTenantsForUserByIdAsync(5, Arg.Any<CancellationToken>())
             .Returns(roles);
 
         await SocialAuthEvents.PopulateUserClaimsAsync(identity, httpContext, CancellationToken.None);
@@ -632,5 +632,57 @@ public sealed class SocialAuthEventsTests
 
         await Assert.That(igaClaim).IsNotNull();
         await Assert.That(igaClaim!.Value).IsEqualTo("False");
+    }
+
+    // --- Tenant role resolution is scoped to the resolved user id ---
+
+    [Test]
+    public async Task PopulateUserClaimsAsync_ResolvesTenantRolesByUserId_NotExternalId()
+    {
+        (DefaultHttpContext httpContext, IUserRepository userRepo, ITenantRepository tenantRepo) = CreateTestContext();
+        ClaimsIdentity identity = CreateIdentity(nameIdentifier: "shared-sub");
+        UserAccount user = CreateUser(id: 99, externalId: "shared-sub");
+
+        userRepo.GetUserByExternalIdForProviderAsync(Arg.Any<Database.Enums.AuthProviderType>(), "shared-sub", Arg.Any<CancellationToken>())
+            .Returns(user);
+        tenantRepo.GetTenantsForUserByIdAsync(99, Arg.Any<CancellationToken>())
+            .Returns(Enumerable.Empty<UserTenantRole>());
+
+        await SocialAuthEvents.PopulateUserClaimsAsync(identity, httpContext, CancellationToken.None);
+
+        await tenantRepo.Received(1).GetTenantsForUserByIdAsync(99, Arg.Any<CancellationToken>());
+        await tenantRepo.DidNotReceive().GetTenantsForUserAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
+    }
+
+    // --- BuildTenantNamespacedSubject ---
+
+    [Test]
+    public async Task BuildTenantNamespacedSubject_WithTenantId_PrefixesSubject()
+    {
+        DefaultHttpContext httpContext = new();
+        httpContext.Items["tenant-oidc-tenant-id"] = "42";
+
+        string result = SocialAuthEvents.BuildTenantNamespacedSubject(httpContext, "raw-sub");
+
+        await Assert.That(result).IsEqualTo("tenant:42:raw-sub");
+    }
+
+    [Test]
+    public async Task BuildTenantNamespacedSubject_MissingTenantId_Throws()
+    {
+        DefaultHttpContext httpContext = new();
+
+        await Assert.That(() => SocialAuthEvents.BuildTenantNamespacedSubject(httpContext, "raw-sub"))
+            .Throws<InvalidOperationException>();
+    }
+
+    [Test]
+    public async Task BuildTenantNamespacedSubject_EmptyTenantId_Throws()
+    {
+        DefaultHttpContext httpContext = new();
+        httpContext.Items["tenant-oidc-tenant-id"] = "";
+
+        await Assert.That(() => SocialAuthEvents.BuildTenantNamespacedSubject(httpContext, "raw-sub"))
+            .Throws<InvalidOperationException>();
     }
 }

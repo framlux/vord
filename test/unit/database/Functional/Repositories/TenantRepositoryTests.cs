@@ -264,6 +264,73 @@ public class TenantCacheTests
     }
 
     [Test]
+    public async Task GetTenantsForUserByIdAsync_UserWithMultipleTenants_ReturnsAll()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        ITenantRepository cache = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+
+        UserAccount user = TestDataBuilder.BuildUser();
+        int userId = await dbFactory.Context.InsertWithInt32IdentityAsync(user);
+
+        Tenant tenant1 = TestDataBuilder.BuildTenant(name: "By-Id Tenant A", createdByUserId: userId);
+        int tenantId1 = await dbFactory.Context.InsertWithInt32IdentityAsync(tenant1);
+
+        Tenant tenant2 = TestDataBuilder.BuildTenant(name: "By-Id Tenant B", createdByUserId: userId);
+        int tenantId2 = await dbFactory.Context.InsertWithInt32IdentityAsync(tenant2);
+
+        await dbFactory.Context.InsertAsync(TestDataBuilder.BuildUserTenantRole(userId: userId, tenantId: tenantId1, assignedByUserId: userId));
+        await dbFactory.Context.InsertAsync(TestDataBuilder.BuildUserTenantRole(userId: userId, tenantId: tenantId2, assignedByUserId: userId));
+
+        IEnumerable<UserTenantRole> result = await cache.GetTenantsForUserByIdAsync(userId);
+
+        await Assert.That(result.Count()).IsEqualTo(2);
+    }
+
+    [Test]
+    public async Task GetTenantsForUserByIdAsync_NoRoles_ReturnsEmpty()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        ITenantRepository cache = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+
+        IEnumerable<UserTenantRole> result = await cache.GetTenantsForUserByIdAsync(99999);
+
+        await Assert.That(result.Count()).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task GetTenantsForUserByIdAsync_TwoUsersShareExternalId_ReturnsOnlyTargetUsersRoles()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        ITenantRepository cache = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+
+        // Two accounts that collide on ExternalId but belong to different providers. A lookup keyed
+        // on ExternalId alone would leak the victim's roles into the attacker's claims; the by-id
+        // lookup must return only the roles belonging to the requested account.
+        UserAccount victim = TestDataBuilder.BuildUser(externalId: "shared-external-id");
+        victim.AuthProvider = AuthProviderType.Google;
+        int victimId = await dbFactory.Context.InsertWithInt32IdentityAsync(victim);
+
+        UserAccount attacker = TestDataBuilder.BuildUser(externalId: "shared-external-id");
+        attacker.AuthProvider = AuthProviderType.GitHub;
+        int attackerId = await dbFactory.Context.InsertWithInt32IdentityAsync(attacker);
+
+        Tenant victimTenant = TestDataBuilder.BuildTenant(name: "Victim Tenant", createdByUserId: victimId);
+        int victimTenantId = await dbFactory.Context.InsertWithInt32IdentityAsync(victimTenant);
+
+        Tenant attackerTenant = TestDataBuilder.BuildTenant(name: "Attacker Tenant", createdByUserId: attackerId);
+        int attackerTenantId = await dbFactory.Context.InsertWithInt32IdentityAsync(attackerTenant);
+
+        await dbFactory.Context.InsertAsync(TestDataBuilder.BuildUserTenantRole(userId: victimId, tenantId: victimTenantId, assignedByUserId: victimId));
+        await dbFactory.Context.InsertAsync(TestDataBuilder.BuildUserTenantRole(userId: attackerId, tenantId: attackerTenantId, assignedByUserId: attackerId));
+
+        IEnumerable<UserTenantRole> attackerRoles = await cache.GetTenantsForUserByIdAsync(attackerId);
+
+        List<UserTenantRole> rolesList = attackerRoles.ToList();
+        await Assert.That(rolesList.Count).IsEqualTo(1);
+        await Assert.That(rolesList[0].AssignedTenantId).IsEqualTo(attackerTenantId);
+    }
+
+    [Test]
     public async Task GetMembersForTenantAsync_ActiveMembers_ReturnsOnlyActive()
     {
         using TestDatabaseFactory dbFactory = new();
