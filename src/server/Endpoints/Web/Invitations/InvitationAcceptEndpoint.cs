@@ -4,6 +4,7 @@
 
 using System.Security.Claims;
 using FastEndpoints;
+using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Server.Auth;
 using Framlux.FleetManagement.Services.Core.Options;
 using Framlux.FleetManagement.Services.Core.Handlers;
@@ -86,14 +87,32 @@ public sealed class InvitationAcceptEndpoint : EndpointWithoutRequest<ApiRespons
             return;
         }
 
-        // Re-issue auth cookie with updated claims (HTTP-specific, stays in endpoint)
+        // Re-issue auth cookie with updated claims (HTTP-specific, stays in endpoint).
+        // The provider claim was minted alongside the principal at login. Identity resolution is
+        // provider-scoped, so the refresh must look the user up under the SAME provider they are
+        // already signed in with — otherwise the lookup misses the real account and may create a
+        // duplicate Unknown-provider account. Absent, unparseable, or out-of-range values fall
+        // back to Unknown, matching how AuthMeEndpoint resolves the provider.
+        AuthProviderType provider = (Enum.TryParse(User.FindFirstValue(SecurityStampClaims.AuthProviderClaim), out AuthProviderType parsedProvider) && Enum.IsDefined(parsedProvider))
+            ? parsedProvider
+            : AuthProviderType.Unknown;
+
+        // CustomOidc subjects are namespaced as "tenant:{id}:{sub}" using the tenant id stashed in
+        // HttpContext.Items at challenge time. That item is never present on an invitation-accept
+        // request, so PopulateUserClaimsAsync cannot re-derive the namespaced subject for CustomOidc
+        // and would throw while trying. The user remains correctly signed in with their existing
+        // cookie; the only effect of skipping the refresh is that tenant-role claims are not updated
+        // until their next full login. Social providers refresh normally below.
         ClaimsIdentity identity = (ClaimsIdentity)User.Identity!;
-        bool refreshed = await SocialAuthEvents.PopulateUserClaimsAsync(identity, HttpContext, ct);
-        if (refreshed)
+        if (provider != AuthProviderType.CustomOidc)
         {
-            await HttpContext.SignInAsync(
-                CookieAuthenticationDefaults.AuthenticationScheme,
-                new ClaimsPrincipal(identity));
+            bool refreshed = await SocialAuthEvents.PopulateUserClaimsAsync(identity, HttpContext, ct, provider);
+            if (refreshed)
+            {
+                await HttpContext.SignInAsync(
+                    CookieAuthenticationDefaults.AuthenticationScheme,
+                    new ClaimsPrincipal(identity));
+            }
         }
 
         // Set vord_tenant cookie to the invitation's tenant

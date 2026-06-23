@@ -20,6 +20,7 @@ public sealed class AuthenticatedClientBuilder
     private string _email = "test@example.com";
     private bool _isGlobalAdmin;
     private int? _activeTenantId;
+    private int? _authProvider;
     private readonly List<string> _roles = new();
 
     /// <summary>
@@ -94,6 +95,19 @@ public sealed class AuthenticatedClientBuilder
     }
 
     /// <summary>
+    /// Sets the auth provider claim ("apr") to the given numeric
+    /// <see cref="Framlux.FleetManagement.Database.Enums.AuthProviderType"/> value, mirroring how the
+    /// real login mints the provider claim onto the principal.
+    /// </summary>
+    /// <param name="authProvider">The numeric auth provider value (e.g. 1 for GitHub).</param>
+    public AuthenticatedClientBuilder WithAuthProvider(int authProvider)
+    {
+        _authProvider = authProvider;
+
+        return this;
+    }
+
+    /// <summary>
     /// Builds an <see cref="HttpClient"/> with the configured test authentication headers.
     /// </summary>
     public HttpClient Build()
@@ -108,6 +122,11 @@ public sealed class AuthenticatedClientBuilder
         client.DefaultRequestHeaders.Add(TestAuthHandler.ExternalIdHeader, _externalId);
         client.DefaultRequestHeaders.Add(TestAuthHandler.EmailHeader, _email);
         client.DefaultRequestHeaders.Add(TestAuthHandler.IsGlobalAdminHeader, _isGlobalAdmin.ToString());
+
+        if (_authProvider.HasValue)
+        {
+            client.DefaultRequestHeaders.Add(TestAuthHandler.AuthProviderHeader, _authProvider.Value.ToString());
+        }
 
         if (_roles.Count > 0)
         {

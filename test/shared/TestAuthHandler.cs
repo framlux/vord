@@ -44,6 +44,13 @@ public sealed class TestAuthHandler : AuthenticationHandler<AuthenticationScheme
     public const string RolesHeader = "X-Test-Roles";
 
     /// <summary>
+    /// Header name for the auth provider claim (maps to the "apr" claim). Carries the numeric
+    /// <see cref="Framlux.FleetManagement.Database.Enums.AuthProviderType"/> value, mirroring how the
+    /// real login mints the provider claim onto the principal.
+    /// </summary>
+    public const string AuthProviderHeader = "X-Test-AuthProvider";
+
+    /// <summary>
     /// Creates a new instance of the <see cref="TestAuthHandler"/> class.
     /// </summary>
     public TestAuthHandler(
@@ -87,6 +94,12 @@ public sealed class TestAuthHandler : AuthenticationHandler<AuthenticationScheme
         claims.Add(new Claim("iga", string.Equals(isGlobalAdmin, "true", StringComparison.OrdinalIgnoreCase)
             ? bool.TrueString
             : bool.FalseString));
+
+        string? authProvider = Request.Headers[AuthProviderHeader];
+        if (string.IsNullOrEmpty(authProvider) == false)
+        {
+            claims.Add(new Claim("apr", authProvider));
+        }
 
         string? roles = Request.Headers[RolesHeader];
         if (string.IsNullOrEmpty(roles) == false)
