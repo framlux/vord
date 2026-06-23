@@ -6,6 +6,7 @@ using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Server.Auth;
+using Framlux.FleetManagement.Services.Core.Security;
 using Framlux.FleetManagement.Test.Infrastructure;
 using LinqToDB.Async;
 using LinqToDB;
@@ -38,6 +39,29 @@ public class CookiePrincipalValidatorTests
         ILogger<CookiePrincipalValidator> logger = new NullLogger<CookiePrincipalValidator>();
 
         return new CookiePrincipalValidator(redis, tenantRepository, scopeFactory, logger);
+    }
+
+    private const string DefaultStamp = "live-stamp";
+
+    /// <summary>
+    /// Builds a substitute scope factory whose scope resolves an
+    /// <see cref="IUserSecurityStampService"/> returning the given live stamp.
+    /// </summary>
+    private static IServiceScopeFactory CreateStampScopeFactory(string liveStamp)
+    {
+        IUserSecurityStampService stampService = Substitute.For<IUserSecurityStampService>();
+        stampService.GetCurrentStampAsync(Arg.Any<int>(), Arg.Any<CancellationToken>()).Returns(liveStamp);
+
+        IServiceProvider provider = Substitute.For<IServiceProvider>();
+        provider.GetService(typeof(IUserSecurityStampService)).Returns(stampService);
+
+        IServiceScope scope = Substitute.For<IServiceScope>();
+        scope.ServiceProvider.Returns(provider);
+
+        IServiceScopeFactory scopeFactory = Substitute.For<IServiceScopeFactory>();
+        scopeFactory.CreateScope().Returns(scope);
+
+        return scopeFactory;
     }
 
     private static IDatabase CreateRedisDb(Dictionary<string, string>? entries = null)
@@ -403,7 +427,7 @@ public class CookiePrincipalValidatorTests
             ["user:roles:1"] = roleString
         });
         ITenantRepository tenantRepo = Substitute.For<ITenantRepository>();
-        IServiceScopeFactory scopeFactory = Substitute.For<IServiceScopeFactory>();
+        IServiceScopeFactory scopeFactory = CreateStampScopeFactory(DefaultStamp);
         CookiePrincipalValidator validator = CreateValidator(redisDb, tenantRepo, scopeFactory);
 
         ClaimsIdentity identity = new(new[]
@@ -411,6 +435,7 @@ public class CookiePrincipalValidatorTests
             new Claim(ClaimTypes.Actor, "1"),
             new Claim(ClaimTypes.NameIdentifier, "ext-123"),
             new Claim(ClaimTypes.Role, roleString),
+            new Claim(SecurityStampClaims.SecurityStampClaim, DefaultStamp),
         }, "test");
 
         CookieValidatePrincipalContext context = CreateValidationContext(identity);
@@ -437,7 +462,7 @@ public class CookiePrincipalValidatorTests
                 TestDataBuilder.BuildUserTenantRole(userId: 1, tenantId: 20, role: UserAccountRoles.Viewer),
             });
 
-        IServiceScopeFactory scopeFactory = Substitute.For<IServiceScopeFactory>();
+        IServiceScopeFactory scopeFactory = CreateStampScopeFactory(DefaultStamp);
         CookiePrincipalValidator validator = CreateValidator(redisDb, tenantRepo, scopeFactory);
 
         ClaimsIdentity identity = new(new[]
@@ -445,6 +470,7 @@ public class CookiePrincipalValidatorTests
             new Claim(ClaimTypes.Actor, "1"),
             new Claim(ClaimTypes.NameIdentifier, "ext-123"),
             new Claim(ClaimTypes.Role, $"10:{(byte)UserAccountRoles.TenantAdmin}"),
+            new Claim(SecurityStampClaims.SecurityStampClaim, DefaultStamp),
         }, "test");
 
         CookieValidatePrincipalContext context = CreateValidationContext(identity);
@@ -466,12 +492,13 @@ public class CookiePrincipalValidatorTests
             ["user:active:1"] = "1",
         });
         ITenantRepository tenantRepo = Substitute.For<ITenantRepository>();
-        IServiceScopeFactory scopeFactory = Substitute.For<IServiceScopeFactory>();
+        IServiceScopeFactory scopeFactory = CreateStampScopeFactory(DefaultStamp);
         CookiePrincipalValidator validator = CreateValidator(redisDb, tenantRepo, scopeFactory);
 
         ClaimsIdentity identity = new(new[]
         {
             new Claim(ClaimTypes.Actor, "1"),
+            new Claim(SecurityStampClaims.SecurityStampClaim, DefaultStamp),
             // No NameIdentifier or sub claim
         }, "test");
 
@@ -639,5 +666,87 @@ public class CookiePrincipalValidatorTests
             Arg.Is<RedisKey>(k => k.ToString() == $"user:active:{admin.Id}"),
             Arg.Is<RedisValue>(v => v == "1:1"),
             Arg.Any<Expiration>());
+    }
+
+    // ==========================================================================================
+    // Security stamp binding: the cookie's stamp must exactly match the live stamp.
+    // ==========================================================================================
+
+    [Test]
+    public async Task SecurityStampMatches_MissingCookieStamp_IsFalse()
+    {
+        bool result = CookiePrincipalValidator.SecurityStampMatches(cookieStamp: null, liveStamp: "live");
+        await Assert.That(result).IsFalse();
+    }
+
+    [Test]
+    public async Task SecurityStampMatches_Mismatch_AfterBump()
+    {
+        bool result = CookiePrincipalValidator.SecurityStampMatches(cookieStamp: "old", liveStamp: "new");
+        await Assert.That(result).IsFalse();
+    }
+
+    [Test]
+    public async Task SecurityStampMatches_Equal_IsTrue()
+    {
+        bool result = CookiePrincipalValidator.SecurityStampMatches(cookieStamp: "same", liveStamp: "same");
+        await Assert.That(result).IsTrue();
+    }
+
+    [Test]
+    public async Task ValidatePrincipal_StaleSecurityStamp_RejectsPrincipal()
+    {
+        // Active user with current roles, but the cookie carries a stamp that no longer matches
+        // the live value (simulating a logout/bump on another session).
+        string roleString = $"10:{(byte)UserAccountRoles.TenantAdmin}";
+        IDatabase redisDb = CreateRedisDb(new Dictionary<string, string>
+        {
+            ["user:active:1"] = "1",
+            ["user:roles:1"] = roleString
+        });
+        ITenantRepository tenantRepo = Substitute.For<ITenantRepository>();
+        IServiceScopeFactory scopeFactory = CreateStampScopeFactory("live-stamp-new");
+        CookiePrincipalValidator validator = CreateValidator(redisDb, tenantRepo, scopeFactory);
+
+        ClaimsIdentity identity = new(new[]
+        {
+            new Claim(ClaimTypes.Actor, "1"),
+            new Claim(ClaimTypes.NameIdentifier, "ext-123"),
+            new Claim(ClaimTypes.Role, roleString),
+            new Claim(SecurityStampClaims.SecurityStampClaim, "cookie-stamp-old"),
+        }, "test");
+
+        CookieValidatePrincipalContext context = CreateValidationContext(identity);
+        await validator.ValidatePrincipal(context);
+
+        await Assert.That(context.Principal).IsNull();
+    }
+
+    [Test]
+    public async Task ValidatePrincipal_MissingSecurityStamp_RejectsPrincipal()
+    {
+        // Active user with current roles, but the cookie carries no stamp claim at all.
+        string roleString = $"10:{(byte)UserAccountRoles.TenantAdmin}";
+        IDatabase redisDb = CreateRedisDb(new Dictionary<string, string>
+        {
+            ["user:active:1"] = "1",
+            ["user:roles:1"] = roleString
+        });
+        ITenantRepository tenantRepo = Substitute.For<ITenantRepository>();
+        IServiceScopeFactory scopeFactory = CreateStampScopeFactory(DefaultStamp);
+        CookiePrincipalValidator validator = CreateValidator(redisDb, tenantRepo, scopeFactory);
+
+        ClaimsIdentity identity = new(new[]
+        {
+            new Claim(ClaimTypes.Actor, "1"),
+            new Claim(ClaimTypes.NameIdentifier, "ext-123"),
+            new Claim(ClaimTypes.Role, roleString),
+            // No security stamp claim
+        }, "test");
+
+        CookieValidatePrincipalContext context = CreateValidationContext(identity);
+        await validator.ValidatePrincipal(context);
+
+        await Assert.That(context.Principal).IsNull();
     }
 }

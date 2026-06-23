@@ -5,6 +5,7 @@
 using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Server.Auth;
+using Framlux.FleetManagement.Services.Core.Security;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 using NSubstitute;
@@ -22,11 +23,14 @@ public sealed class SocialAuthEventsTests
         IUserRepository userRepo = Substitute.For<IUserRepository>();
         ITenantRepository tenantRepo = Substitute.For<ITenantRepository>();
         IServerSettingsCache settingsCache = Substitute.For<IServerSettingsCache>();
+        IUserSecurityStampService stampService = Substitute.For<IUserSecurityStampService>();
+        stampService.GetCurrentStampAsync(Arg.Any<int>(), Arg.Any<CancellationToken>()).Returns(string.Empty);
 
         ServiceCollection services = new();
         services.AddSingleton(userRepo);
         services.AddSingleton(tenantRepo);
         services.AddSingleton(settingsCache);
+        services.AddSingleton(stampService);
         ServiceProvider provider = services.BuildServiceProvider();
 
         DefaultHttpContext httpContext = new()
@@ -675,6 +679,39 @@ public sealed class SocialAuthEventsTests
 
         await Assert.That(aprClaim).IsNotNull();
         await Assert.That(aprClaim!.Value).IsEqualTo(((short)Database.Enums.AuthProviderType.GitHub).ToString());
+    }
+
+    // --- Security stamp claim minting ---
+
+    [Test]
+    public async Task PopulateUserClaimsAsync_MintsSecurityStampClaim()
+    {
+        IUserRepository userRepo = Substitute.For<IUserRepository>();
+        ITenantRepository tenantRepo = Substitute.For<ITenantRepository>();
+        IServerSettingsCache settingsCache = Substitute.For<IServerSettingsCache>();
+        IUserSecurityStampService stampService = Substitute.For<IUserSecurityStampService>();
+        stampService.GetCurrentStampAsync(9, Arg.Any<CancellationToken>()).Returns("stamp-9");
+
+        ServiceCollection services = new();
+        services.AddSingleton(userRepo);
+        services.AddSingleton(tenantRepo);
+        services.AddSingleton(settingsCache);
+        services.AddSingleton(stampService);
+        DefaultHttpContext httpContext = new() { RequestServices = services.BuildServiceProvider() };
+
+        ClaimsIdentity identity = CreateIdentity(nameIdentifier: "ext-stamp");
+        UserAccount user = CreateUser(id: 9, externalId: "ext-stamp");
+        userRepo.GetUserByExternalIdForProviderAsync(Arg.Any<Database.Enums.AuthProviderType>(), "ext-stamp", Arg.Any<CancellationToken>())
+            .Returns(user);
+        tenantRepo.GetTenantsForUserByIdAsync(9, Arg.Any<CancellationToken>())
+            .Returns(Enumerable.Empty<UserTenantRole>());
+
+        await SocialAuthEvents.PopulateUserClaimsAsync(identity, httpContext, CancellationToken.None, Database.Enums.AuthProviderType.GitHub);
+
+        Claim? sstClaim = identity.FindFirst("sst");
+
+        await Assert.That(sstClaim).IsNotNull();
+        await Assert.That(sstClaim!.Value).IsEqualTo("stamp-9");
     }
 
     // --- BuildTenantNamespacedSubject ---

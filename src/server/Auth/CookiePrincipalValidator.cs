@@ -81,6 +81,17 @@ public sealed class CookiePrincipalValidator : CookieAuthenticationEvents
 
         ReconcileGlobalAdminClaim(context, isGlobalAdmin);
 
+        using IServiceScope stampScope = _scopeFactory.CreateScope();
+        IUserSecurityStampService stampService = stampScope.ServiceProvider.GetRequiredService<IUserSecurityStampService>();
+        string liveStamp = await stampService.GetCurrentStampAsync(userId, context.HttpContext.RequestAborted);
+        string? cookieStamp = context.Principal?.FindFirstValue(SecurityStampClaims.SecurityStampClaim);
+        if (SecurityStampMatches(cookieStamp, liveStamp) == false)
+        {
+            context.RejectPrincipal();
+
+            return;
+        }
+
         string? externalId = context.Principal?.FindFirstValue(ClaimTypes.NameIdentifier)
             ?? context.Principal?.FindFirstValue("sub");
         if (string.IsNullOrEmpty(externalId) == false)
@@ -192,6 +203,19 @@ public sealed class CookiePrincipalValidator : CookieAuthenticationEvents
         isGlobalAdmin = parts[1] == "1";
 
         return true;
+    }
+
+    /// <summary>
+    /// Compares the stamp carried by the cookie with the user's live stamp. Every issued cookie
+    /// carries a real stamp, so a missing or non-matching value rejects the principal.
+    /// </summary>
+    /// <param name="cookieStamp">The stamp claim value from the cookie, if present.</param>
+    /// <param name="liveStamp">The current stamp from the stamp service.</param>
+    /// <returns>True when the values are present and match.</returns>
+    internal static bool SecurityStampMatches(string? cookieStamp, string liveStamp)
+    {
+        return string.IsNullOrEmpty(cookieStamp) == false
+            && string.Equals(cookieStamp, liveStamp, StringComparison.Ordinal);
     }
 
     /// <summary>

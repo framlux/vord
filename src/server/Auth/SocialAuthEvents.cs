@@ -7,6 +7,7 @@ using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Services.Core.Auth;
+using Framlux.FleetManagement.Services.Core.Security;
 using Microsoft.AspNetCore.Authentication.OAuth;
 
 namespace Framlux.FleetManagement.Server.Auth;
@@ -160,6 +161,10 @@ public static class SocialAuthEvents
         identity.AddClaim(new Claim(ClaimTypes.Actor, user.Id.ToString()));
         identity.AddClaim(new Claim(AuthClaims.IsGlobalAdmin, user.IsGlobalAdmin.ToString()));
         identity.AddClaim(new Claim(SecurityStampClaims.AuthProviderClaim, ((short)authProvider).ToString()));
+
+        IUserSecurityStampService stampService = httpContext.RequestServices.GetRequiredService<IUserSecurityStampService>();
+        string currentStamp = await stampService.GetCurrentStampAsync(user.Id, ct);
+        identity.AddClaim(new Claim(SecurityStampClaims.SecurityStampClaim, currentStamp));
 
         return true;
     }
