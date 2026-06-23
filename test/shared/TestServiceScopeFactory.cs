@@ -4,9 +4,11 @@
 
 using Framlux.FleetManagement.Database;
 using Framlux.FleetManagement.Database.Repositories;
+using Framlux.FleetManagement.Services.Core.Security;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using NSubstitute;
 
 namespace Framlux.FleetManagement.Test.Infrastructure;
 
@@ -78,9 +80,12 @@ public sealed class TestServiceScopeFactory : IServiceScopeFactory
             typeof(IAlertConditionStateRepository),
         ];
 
+        private const string DefaultSecurityStamp = "test-stamp";
+
         private readonly DatabaseContext _context;
         private readonly Dictionary<Type, object> _additionalServices;
         private DatabaseRepository? _cachedRepo;
+        private IUserSecurityStampService? _cachedStampService;
 
         public TestServiceProvider(DatabaseContext context, Dictionary<Type, object> additionalServices)
         {
@@ -113,7 +118,25 @@ public sealed class TestServiceScopeFactory : IServiceScopeFactory
                 return service;
             }
 
+            // Provide a default security stamp service so validators that resolve it through this
+            // scope factory work end-to-end without each test having to register one explicitly.
+            if (serviceType == typeof(IUserSecurityStampService))
+            {
+                _cachedStampService ??= CreateDefaultStampService();
+
+                return _cachedStampService;
+            }
+
             return null;
+        }
+
+        private static IUserSecurityStampService CreateDefaultStampService()
+        {
+            IUserSecurityStampService stampService = Substitute.For<IUserSecurityStampService>();
+            stampService.GetCurrentStampAsync(Arg.Any<int>(), Arg.Any<CancellationToken>())
+                .Returns(DefaultSecurityStamp);
+
+            return stampService;
         }
     }
 }

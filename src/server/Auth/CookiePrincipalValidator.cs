@@ -81,9 +81,23 @@ public sealed class CookiePrincipalValidator : CookieAuthenticationEvents
 
         ReconcileGlobalAdminClaim(context, isGlobalAdmin);
 
-        using IServiceScope stampScope = _scopeFactory.CreateScope();
-        IUserSecurityStampService stampService = stampScope.ServiceProvider.GetRequiredService<IUserSecurityStampService>();
-        string liveStamp = await stampService.GetCurrentStampAsync(userId, context.HttpContext.RequestAborted);
+        string liveStamp;
+        try
+        {
+            using IServiceScope stampScope = _scopeFactory.CreateScope();
+            IUserSecurityStampService stampService = stampScope.ServiceProvider.GetRequiredService<IUserSecurityStampService>();
+            liveStamp = await stampService.GetCurrentStampAsync(userId, context.HttpContext.RequestAborted);
+        }
+        catch (Exception ex)
+        {
+            // Fail closed: if the live stamp cannot be read (e.g. Redis is unavailable) the cookie
+            // cannot be proven current, so the principal is rejected rather than trusted.
+            _logger.LogWarning(ex, "Rejecting principal for user {UserId}: the security stamp could not be read", userId);
+            context.RejectPrincipal();
+
+            return;
+        }
+
         string? cookieStamp = context.Principal?.FindFirstValue(SecurityStampClaims.SecurityStampClaim);
         if (SecurityStampMatches(cookieStamp, liveStamp) == false)
         {

@@ -64,6 +64,28 @@ public class CookiePrincipalValidatorTests
         return scopeFactory;
     }
 
+    /// <summary>
+    /// Builds a substitute scope factory whose stamp service throws when the live stamp is read,
+    /// simulating Redis being unavailable.
+    /// </summary>
+    private static IServiceScopeFactory CreateThrowingStampScopeFactory()
+    {
+        IUserSecurityStampService stampService = Substitute.For<IUserSecurityStampService>();
+        stampService.GetCurrentStampAsync(Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns<Task<string>>(_ => throw new InvalidOperationException("redis down"));
+
+        IServiceProvider provider = Substitute.For<IServiceProvider>();
+        provider.GetService(typeof(IUserSecurityStampService)).Returns(stampService);
+
+        IServiceScope scope = Substitute.For<IServiceScope>();
+        scope.ServiceProvider.Returns(provider);
+
+        IServiceScopeFactory scopeFactory = Substitute.For<IServiceScopeFactory>();
+        scopeFactory.CreateScope().Returns(scope);
+
+        return scopeFactory;
+    }
+
     private static IDatabase CreateRedisDb(Dictionary<string, string>? entries = null)
     {
         IDatabase redisDb = Substitute.For<IDatabase>();
@@ -714,6 +736,35 @@ public class CookiePrincipalValidatorTests
             new Claim(ClaimTypes.NameIdentifier, "ext-123"),
             new Claim(ClaimTypes.Role, roleString),
             new Claim(SecurityStampClaims.SecurityStampClaim, "cookie-stamp-old"),
+        }, "test");
+
+        CookieValidatePrincipalContext context = CreateValidationContext(identity);
+        await validator.ValidatePrincipal(context);
+
+        await Assert.That(context.Principal).IsNull();
+    }
+
+    [Test]
+    public async Task ValidatePrincipal_StampServiceThrows_RejectsPrincipal()
+    {
+        // The stamp lookup fails (e.g. Redis is unavailable). The validator must fail closed and
+        // reject the principal rather than surfacing the exception as an HTTP 500.
+        string roleString = $"10:{(byte)UserAccountRoles.TenantAdmin}";
+        IDatabase redisDb = CreateRedisDb(new Dictionary<string, string>
+        {
+            ["user:active:1"] = "1",
+            ["user:roles:1"] = roleString
+        });
+        ITenantRepository tenantRepo = Substitute.For<ITenantRepository>();
+        IServiceScopeFactory scopeFactory = CreateThrowingStampScopeFactory();
+        CookiePrincipalValidator validator = CreateValidator(redisDb, tenantRepo, scopeFactory);
+
+        ClaimsIdentity identity = new(new[]
+        {
+            new Claim(ClaimTypes.Actor, "1"),
+            new Claim(ClaimTypes.NameIdentifier, "ext-123"),
+            new Claim(ClaimTypes.Role, roleString),
+            new Claim(SecurityStampClaims.SecurityStampClaim, DefaultStamp),
         }, "test");
 
         CookieValidatePrincipalContext context = CreateValidationContext(identity);
