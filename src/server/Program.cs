@@ -91,7 +91,7 @@ CorsStartupValidator.Validate(corsOrigins, builder.Environment.EnvironmentName);
 builder.Services.AddCors(options => options.AddDefaultPolicy(policyBuilder => policyBuilder
             .WithOrigins(corsOrigins)
             .WithMethods("GET", "POST", "PUT", "DELETE", "OPTIONS")
-            .WithHeaders("Content-Type", "Authorization", "x-api-key")
+            .WithHeaders("Content-Type", "Authorization", "x-api-key", AntiforgeryStartup.AntiforgeryHeaderName)
             .AllowCredentials()));
 builder.Services.Configure<ForwardedHeadersOptions>(options =>
     ForwardedHeadersStartup.Configure(options, forwardedHeadersOpts, builder.Environment.EnvironmentName));
@@ -365,6 +365,7 @@ app.Use(async (context, next) =>
         catch (AntiforgeryValidationException)
         {
             context.Response.StatusCode = 400;
+            context.Response.ContentType = "application/json";
             await context.Response.WriteAsync("""{"error":"Antiforgery validation failed."}""");
 
             return;

@@ -994,4 +994,80 @@ describe('ApiClient', () => {
             }
         });
     });
+
+    describe('getMeBootstrap CSRF cookie extraction', () => {
+        const userData: UserDto = {
+            id: 1,
+            name: 'Test User',
+            email: 'test@example.com',
+            avatar: 'https://example.com/avatar.png',
+            isGlobalAdmin: false,
+            uniqueId: 'abc-123',
+            needsOnboarding: false,
+            tenants: [{ tenantId: 1, tenantName: 'Test Org', role: '1' }],
+            activeTenantId: 1
+        };
+        const meResponse: ApiResponse<UserDto> = {
+            success: true,
+            data: userData,
+            message: null,
+            errors: null
+        };
+
+        it('should extract vord_csrf from getSetCookie() when available', async () => {
+            fetchFn.mockResolvedValue({
+                ok: true,
+                status: 200,
+                json: () => Promise.resolve(meResponse),
+                headers: {
+                    getSetCookie: () => [
+                        'vord_auth=session-value; Path=/; HttpOnly',
+                        'vord_csrf=token-abc; Path=/; Secure; SameSite=Strict'
+                    ],
+                    get: () => null
+                }
+            });
+
+            const result = await client.getMeBootstrap();
+            expect(result.user).toEqual(userData);
+            expect(result.csrfCookie).toBe('token-abc');
+        });
+
+        it('should extract vord_csrf from a folded set-cookie header when getSetCookie is unavailable and vord_csrf is not first', async () => {
+            // Fetch spec folds multiple Set-Cookie headers into one comma-joined string when
+            // getSetCookie() is unavailable. The Expires date itself contains a comma, so the
+            // parser must split only on the cookie-name boundary.
+            const folded =
+                'vord_auth=session-value; Path=/; Expires=Wed, 21 Oct 2026 07:28:00 GMT; HttpOnly, ' +
+                'vord_csrf=token-xyz; Path=/; Expires=Wed, 21 Oct 2026 07:28:00 GMT; Secure; SameSite=Strict';
+
+            fetchFn.mockResolvedValue({
+                ok: true,
+                status: 200,
+                json: () => Promise.resolve(meResponse),
+                headers: {
+                    get: (name: string) => (name === 'set-cookie' ? folded : null)
+                }
+            });
+
+            const result = await client.getMeBootstrap();
+            expect(result.user).toEqual(userData);
+            expect(result.csrfCookie).toBe('token-xyz');
+        });
+
+        it('should return undefined csrfCookie when no set-cookie header is present', async () => {
+            fetchFn.mockResolvedValue({
+                ok: true,
+                status: 200,
+                json: () => Promise.resolve(meResponse),
+                headers: {
+                    get: () => null
+                }
+            });
+
+            const result = await client.getMeBootstrap();
+            expect(result.user).toEqual(userData);
+            expect(result.csrfCookie).toBeUndefined();
+        });
+    });
 });

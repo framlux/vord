@@ -232,8 +232,15 @@ export class ApiClient {
 		const setCookies: string[] = typeof headers.getSetCookie === 'function'
 			? headers.getSetCookie()
 			: (() => {
+					// Fallback for runtimes without getSetCookie(): get('set-cookie') folds multiple
+					// Set-Cookie headers into one comma-joined string. Split on the cookie-name
+					// boundary so the commas inside Expires=Wdy, DD-Mon-YYYY date values stay intact.
 					const combined = response.headers.get('set-cookie');
-					return combined ? [combined] : [];
+					if (!combined) {
+						return [];
+					}
+
+					return combined.split(/,(?=\s*[a-zA-Z0-9_\-]+=)/).map((entry) => entry.trim());
 				})();
 
 		for (const entry of setCookies) {
