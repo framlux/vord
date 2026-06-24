@@ -120,8 +120,20 @@ public sealed class MachineStateStreamingService : BackgroundService
                     continue;
                 }
 
-                await LoadHighWaterMarkAsync(stoppingToken);
-                await StreamLoopAsync(stoppingToken);
+                try
+                {
+                    await LoadHighWaterMarkAsync(stoppingToken);
+                    await StreamLoopAsync(stoppingToken);
+                }
+                finally
+                {
+                    // Flush the final high-water mark while the per-shard advisory lock is STILL held
+                    // (lockHandle has not yet disposed) and with a non-cancellable token. This ensures a
+                    // cancelled stopping token cannot skip the final write, and the write completes before
+                    // the lock is released — so a successor replica that takes over the shard can never be
+                    // clobbered by this process's stale cursor.
+                    await FlushHighWaterMarkAsync();
+                }
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
             {
@@ -137,17 +149,13 @@ public sealed class MachineStateStreamingService : BackgroundService
         _logger.LogInformation("Machine state streaming service stopped");
     }
 
-    /// <inheritdoc/>
-    public override async Task StopAsync(CancellationToken cancellationToken)
+    /// <summary>
+    /// Persists the current in-memory high-water mark while the per-shard lock is held, using a
+    /// non-cancellable token. Only writes when a mark has actually been loaded, and never throws —
+    /// a failed final persist costs at most an idempotent re-projection of one batch.
+    /// </summary>
+    private async Task FlushHighWaterMarkAsync()
     {
-        await base.StopAsync(cancellationToken);
-
-        // The streaming loop persists the high-water mark after every batch using the stopping
-        // token. On .NET 10 that token may already be cancelled while a batch was in flight, so the
-        // final advance can be skipped — leaving the in-memory mark ahead of the durable one and
-        // forcing the shard to re-process that batch on next start. Re-processing is idempotent but
-        // wasteful, so persist the current mark here with a non-cancellable token to close the gap.
-        // Only persist if a mark was ever loaded; otherwise there is nothing to write.
         if (_highWaterMarkLoaded == false)
         {
             return;
@@ -159,8 +167,7 @@ public sealed class MachineStateStreamingService : BackgroundService
         }
         catch (Exception ex)
         {
-            // Shutdown must never throw: a failed final persist only costs an idempotent replay.
-            _logger.LogWarning(ex, "Failed to persist final high-water mark for shard {ShardIndex} on shutdown", _shardIndex);
+            _logger.LogWarning(ex, "Failed to persist final high-water mark for shard {ShardIndex}", _shardIndex);
         }
     }
 
