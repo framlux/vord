@@ -335,13 +335,17 @@ public sealed class AnonymousEndpointTests
         JsonElement root = doc.RootElement;
 
         await Assert.That(root.GetProperty("success").GetBoolean()).IsTrue();
-        await Assert.That(root.GetProperty("data").GetProperty("tenantId").GetInt32()).IsEqualTo(tenant.Id);
-        // Error response should not return error-specific fields on success
-        await Assert.That(root.GetProperty("message").ValueKind).IsEqualTo(JsonValueKind.Null);
+        JsonElement data = root.GetProperty("data");
+        await Assert.That(data.GetProperty("ssoAvailable").GetBoolean()).IsTrue();
+        string slug = data.GetProperty("slug").GetString()!;
+        await Assert.That(slug).IsNotNull();
+        // The opaque response must never expose the raw numeric tenant id.
+        await Assert.That(data.TryGetProperty("tenantId", out _)).IsFalse();
+        await Assert.That(slug).IsNotEqualTo(tenant.Id.ToString());
     }
 
     [Test]
-    public async Task EmailDomainLookup_KnownDomain_CaseInsensitive_ReturnsSuccessWithTenantId()
+    public async Task EmailDomainLookup_KnownDomain_CaseInsensitive_ReturnsSuccessWithSlug()
     {
         using FunctionalTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
@@ -388,15 +392,18 @@ public sealed class AnonymousEndpointTests
         JsonElement root = doc.RootElement;
 
         await Assert.That(root.GetProperty("success").GetBoolean()).IsTrue();
-        await Assert.That(root.GetProperty("data").GetProperty("tenantId").GetInt32()).IsEqualTo(tenant.Id);
+        JsonElement data = root.GetProperty("data");
+        await Assert.That(data.GetProperty("ssoAvailable").GetBoolean()).IsTrue();
+        await Assert.That(data.GetProperty("slug").GetString()).IsNotNull();
+        await Assert.That(data.TryGetProperty("tenantId", out _)).IsFalse();
     }
 
     #endregion
 
-    #region EmailDomainLookup — Error Cases
+    #region EmailDomainLookup — Uniform Unavailable Responses
 
     [Test]
-    public async Task EmailDomainLookup_InvalidEmailFormat_ReturnsErrorWithValidationMessage()
+    public async Task EmailDomainLookup_InvalidEmailFormat_ReturnsUniformUnavailable()
     {
         using FunctionalTestFactory factory = new();
         HttpClient client = factory.CreateClient(new WebApplicationFactoryClientOptions
@@ -415,13 +422,14 @@ public sealed class AnonymousEndpointTests
         JsonDocument doc = JsonDocument.Parse(body);
         JsonElement root = doc.RootElement;
 
-        await Assert.That(root.GetProperty("success").GetBoolean()).IsFalse();
-        await Assert.That(root.GetProperty("message").GetString()).IsEqualTo("A valid email address is required");
-        await Assert.That(root.GetProperty("data").ValueKind).IsEqualTo(JsonValueKind.Null);
+        await Assert.That(root.GetProperty("success").GetBoolean()).IsTrue();
+        JsonElement data = root.GetProperty("data");
+        await Assert.That(data.GetProperty("ssoAvailable").GetBoolean()).IsFalse();
+        await Assert.That(data.GetProperty("slug").ValueKind).IsEqualTo(JsonValueKind.Null);
     }
 
     [Test]
-    public async Task EmailDomainLookup_EmptyEmail_ReturnsErrorWithValidationMessage()
+    public async Task EmailDomainLookup_EmptyEmail_ReturnsUniformUnavailable()
     {
         using FunctionalTestFactory factory = new();
         HttpClient client = factory.CreateClient(new WebApplicationFactoryClientOptions
@@ -440,13 +448,14 @@ public sealed class AnonymousEndpointTests
         JsonDocument doc = JsonDocument.Parse(body);
         JsonElement root = doc.RootElement;
 
-        await Assert.That(root.GetProperty("success").GetBoolean()).IsFalse();
-        await Assert.That(root.GetProperty("message").GetString()).IsEqualTo("A valid email address is required");
-        await Assert.That(root.GetProperty("data").ValueKind).IsEqualTo(JsonValueKind.Null);
+        await Assert.That(root.GetProperty("success").GetBoolean()).IsTrue();
+        JsonElement data = root.GetProperty("data");
+        await Assert.That(data.GetProperty("ssoAvailable").GetBoolean()).IsFalse();
+        await Assert.That(data.GetProperty("slug").ValueKind).IsEqualTo(JsonValueKind.Null);
     }
 
     [Test]
-    public async Task EmailDomainLookup_WhitespaceOnlyEmail_ReturnsErrorWithValidationMessage()
+    public async Task EmailDomainLookup_WhitespaceOnlyEmail_ReturnsUniformUnavailable()
     {
         using FunctionalTestFactory factory = new();
         HttpClient client = factory.CreateClient(new WebApplicationFactoryClientOptions
@@ -465,12 +474,12 @@ public sealed class AnonymousEndpointTests
         JsonDocument doc = JsonDocument.Parse(body);
         JsonElement root = doc.RootElement;
 
-        await Assert.That(root.GetProperty("success").GetBoolean()).IsFalse();
-        await Assert.That(root.GetProperty("message").GetString()).IsEqualTo("A valid email address is required");
+        await Assert.That(root.GetProperty("success").GetBoolean()).IsTrue();
+        await Assert.That(root.GetProperty("data").GetProperty("ssoAvailable").GetBoolean()).IsFalse();
     }
 
     [Test]
-    public async Task EmailDomainLookup_UnknownDomain_ReturnsErrorWithNoSsoProviderMessage()
+    public async Task EmailDomainLookup_UnknownDomain_ReturnsUniformUnavailable()
     {
         using FunctionalTestFactory factory = new();
         HttpClient client = factory.CreateClient(new WebApplicationFactoryClientOptions
@@ -489,13 +498,14 @@ public sealed class AnonymousEndpointTests
         JsonDocument doc = JsonDocument.Parse(body);
         JsonElement root = doc.RootElement;
 
-        await Assert.That(root.GetProperty("success").GetBoolean()).IsFalse();
-        await Assert.That(root.GetProperty("message").GetString()).IsEqualTo("No SSO provider found for this email domain");
-        await Assert.That(root.GetProperty("data").ValueKind).IsEqualTo(JsonValueKind.Null);
+        await Assert.That(root.GetProperty("success").GetBoolean()).IsTrue();
+        JsonElement data = root.GetProperty("data");
+        await Assert.That(data.GetProperty("ssoAvailable").GetBoolean()).IsFalse();
+        await Assert.That(data.GetProperty("slug").ValueKind).IsEqualTo(JsonValueKind.Null);
     }
 
     [Test]
-    public async Task EmailDomainLookup_DisabledOidcConfig_ReturnsNoSsoProviderError()
+    public async Task EmailDomainLookup_DisabledOidcConfig_ReturnsUniformUnavailable()
     {
         using FunctionalTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
@@ -541,9 +551,11 @@ public sealed class AnonymousEndpointTests
         JsonDocument doc = JsonDocument.Parse(body);
         JsonElement root = doc.RootElement;
 
-        // Disabled OIDC configs should not be returned as valid SSO providers
-        await Assert.That(root.GetProperty("success").GetBoolean()).IsFalse();
-        await Assert.That(root.GetProperty("message").GetString()).IsEqualTo("No SSO provider found for this email domain");
+        // Disabled OIDC configs are reported as unavailable, with the same shape as a miss.
+        await Assert.That(root.GetProperty("success").GetBoolean()).IsTrue();
+        JsonElement data = root.GetProperty("data");
+        await Assert.That(data.GetProperty("ssoAvailable").GetBoolean()).IsFalse();
+        await Assert.That(data.GetProperty("slug").ValueKind).IsEqualTo(JsonValueKind.Null);
     }
 
     [Test]
@@ -594,7 +606,10 @@ public sealed class AnonymousEndpointTests
         JsonElement root = doc.RootElement;
 
         await Assert.That(root.GetProperty("success").GetBoolean()).IsTrue();
-        await Assert.That(root.GetProperty("data").GetProperty("tenantId").GetInt32()).IsEqualTo(tenant.Id);
+        JsonElement data = root.GetProperty("data");
+        await Assert.That(data.GetProperty("ssoAvailable").GetBoolean()).IsTrue();
+        await Assert.That(data.GetProperty("slug").GetString()).IsNotNull();
+        await Assert.That(data.TryGetProperty("tenantId", out _)).IsFalse();
     }
 
     #endregion

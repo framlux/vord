@@ -259,8 +259,11 @@ export class ApiClient {
 		await this.post<void>('/api/v1/logout');
 	}
 
-	async emailLookup(email: string): Promise<{ tenantId: number }> {
-		const resp = await this.post<ApiResponse<{ tenantId: number }>>('/api/v1/auth/email-lookup', { email });
+	async emailLookup(email: string): Promise<{ ssoAvailable: boolean; slug: string | null }> {
+		const resp = await this.post<ApiResponse<{ ssoAvailable: boolean; slug: string | null }>>(
+			'/api/v1/auth/email-lookup',
+			{ email }
+		);
 
 		return this.unwrap(resp);
 	}

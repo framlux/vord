@@ -5,9 +5,12 @@
 using Framlux.FleetManagement.Database;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
+using Framlux.FleetManagement.Server.Auth;
 using Framlux.FleetManagement.Test.Infrastructure;
 using LinqToDB;
 using LinqToDB.Async;
+using Microsoft.AspNetCore.DataProtection;
+using Microsoft.Extensions.DependencyInjection;
 using System.Net;
 
 namespace Framlux.FleetManagement.FunctionalTest.Endpoints.Web;
@@ -62,6 +65,15 @@ public sealed class AuthEndpointTests
         }
 
         return tenant.Id;
+    }
+
+    private static string BuildSlug(FunctionalTestFactory factory, int tenantId)
+    {
+        IDataProtector protector = factory.Services
+            .GetRequiredService<IDataProtectionProvider>()
+            .CreateProtector(TenantSsoSlug.Purpose);
+
+        return TenantSsoSlug.Build(protector, tenantId);
     }
 
     [Test]
@@ -176,7 +188,7 @@ public sealed class AuthEndpointTests
     }
 
     [Test]
-    public async Task Challenge_TenantOidc_NoTenantId_Returns400()
+    public async Task Challenge_TenantOidc_NoSlug_Returns400()
     {
         using FunctionalTestFactory factory = new();
         HttpClient client = factory.CreateClient(new Microsoft.AspNetCore.Mvc.Testing.WebApplicationFactoryClientOptions
@@ -188,11 +200,11 @@ public sealed class AuthEndpointTests
 
         await Assert.That((int)response.StatusCode).IsEqualTo(400);
         string body = await response.Content.ReadAsStringAsync();
-        await Assert.That(body).Contains("tenantId is required");
+        await Assert.That(body).Contains("Custom SSO is not available");
     }
 
     [Test]
-    public async Task Challenge_TenantOidc_NonNumericTenantId_Returns400()
+    public async Task Challenge_TenantOidc_UnresolvableSlug_Returns400()
     {
         using FunctionalTestFactory factory = new();
         HttpClient client = factory.CreateClient(new Microsoft.AspNetCore.Mvc.Testing.WebApplicationFactoryClientOptions
@@ -200,11 +212,11 @@ public sealed class AuthEndpointTests
             AllowAutoRedirect = false
         });
 
-        HttpResponseMessage response = await client.GetAsync("/api/v1/auth/challenge/tenant-oidc?tenantId=abc");
+        HttpResponseMessage response = await client.GetAsync("/api/v1/auth/challenge/tenant-oidc?slug=abc");
 
         await Assert.That((int)response.StatusCode).IsEqualTo(400);
         string body = await response.Content.ReadAsStringAsync();
-        await Assert.That(body).Contains("tenantId is invalid");
+        await Assert.That(body).Contains("Custom SSO is not available");
     }
 
     [Test]
@@ -219,7 +231,9 @@ public sealed class AuthEndpointTests
             AllowAutoRedirect = false
         });
 
-        HttpResponseMessage response = await client.GetAsync($"/api/v1/auth/challenge/tenant-oidc?tenantId={tenantId}");
+        string slug = BuildSlug(factory, tenantId);
+
+        HttpResponseMessage response = await client.GetAsync($"/api/v1/auth/challenge/tenant-oidc?slug={Uri.EscapeDataString(slug)}");
 
         await Assert.That((int)response.StatusCode).IsEqualTo(400);
         string body = await response.Content.ReadAsStringAsync();
@@ -238,7 +252,9 @@ public sealed class AuthEndpointTests
             AllowAutoRedirect = false
         });
 
-        HttpResponseMessage response = await client.GetAsync($"/api/v1/auth/challenge/tenant-oidc?tenantId={tenantId}");
+        string slug = BuildSlug(factory, tenantId);
+
+        HttpResponseMessage response = await client.GetAsync($"/api/v1/auth/challenge/tenant-oidc?slug={Uri.EscapeDataString(slug)}");
 
         await Assert.That((int)response.StatusCode).IsEqualTo(400);
         string body = await response.Content.ReadAsStringAsync();
@@ -258,7 +274,9 @@ public sealed class AuthEndpointTests
             AllowAutoRedirect = false
         });
 
-        HttpResponseMessage response = await client.GetAsync($"/api/v1/auth/challenge/tenant-oidc?tenantId={tenantId}");
+        string slug = BuildSlug(factory, tenantId);
+
+        HttpResponseMessage response = await client.GetAsync($"/api/v1/auth/challenge/tenant-oidc?slug={Uri.EscapeDataString(slug)}");
 
         await Assert.That((int)response.StatusCode).IsEqualTo(400);
         string body = await response.Content.ReadAsStringAsync();

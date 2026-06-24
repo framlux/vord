@@ -798,10 +798,10 @@ describe('ApiClient', () => {
             );
         });
 
-        it('should POST to /api/v1/auth/email-lookup and return tenantId', async () => {
-            mockSuccess({ tenantId: 42 });
+        it('should POST to /api/v1/auth/email-lookup and return the opaque sso result', async () => {
+            mockSuccess({ ssoAvailable: true, slug: 'opaque-slug-token' });
             const result = await client.emailLookup('user@company.com');
-            expect(result).toEqual({ tenantId: 42 });
+            expect(result).toEqual({ ssoAvailable: true, slug: 'opaque-slug-token' });
             expect(fetchFn).toHaveBeenCalledWith(
                 'http://localhost:12233/api/v1/auth/email-lookup',
                 expect.objectContaining({
@@ -809,6 +809,12 @@ describe('ApiClient', () => {
                     body: JSON.stringify({ email: 'user@company.com' })
                 })
             );
+        });
+
+        it('should return ssoAvailable false on a domain with no SSO', async () => {
+            mockSuccess({ ssoAvailable: false, slug: null });
+            const result = await client.emailLookup('user@no-sso.com');
+            expect(result).toEqual({ ssoAvailable: false, slug: null });
         });
     });
 

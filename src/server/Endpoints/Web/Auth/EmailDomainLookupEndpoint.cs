@@ -5,8 +5,10 @@
 using System.ComponentModel.DataAnnotations;
 using System.Net.Mail;
 using FastEndpoints;
-using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Database.Models;
+using Framlux.FleetManagement.Database.Repositories;
+using Framlux.FleetManagement.Server.Auth;
+using Microsoft.AspNetCore.DataProtection;
 
 namespace Framlux.FleetManagement.Server.Endpoints.Web.Auth;
 
@@ -23,14 +25,17 @@ public sealed class EmailDomainLookupRequest
 }
 
 /// <summary>
-/// Response DTO for email domain SSO lookup.
+/// Response DTO for email domain SSO lookup. Deliberately opaque: it reveals only whether SSO is
+/// available and, when it is, an opaque challenge slug the client can use to start the flow —
+/// never the numeric tenant id, and never a different shape on hit vs miss.
 /// </summary>
 public sealed class EmailDomainLookupResponse
 {
-    /// <summary>
-    /// The tenant ID that owns the SSO configuration for this email domain.
-    /// </summary>
-    public int TenantId { get; set; }
+    /// <summary>Whether a usable SSO provider exists for the submitted domain.</summary>
+    public bool SsoAvailable { get; set; }
+
+    /// <summary>An opaque identifier used to initiate the SSO challenge, or null when unavailable.</summary>
+    public string? Slug { get; set; }
 }
 
 /// <summary>
@@ -39,13 +44,17 @@ public sealed class EmailDomainLookupResponse
 public sealed class EmailDomainLookupEndpoint : Endpoint<EmailDomainLookupRequest, ApiResponse<EmailDomainLookupResponse>>
 {
     private readonly ITenantRepository _tenantRepository;
+    private readonly IDataProtectionProvider _dataProtectionProvider;
 
     /// <summary>
     /// Creates a new instance of the <see cref="EmailDomainLookupEndpoint"/> class.
     /// </summary>
-    public EmailDomainLookupEndpoint(ITenantRepository tenantRepository)
+    public EmailDomainLookupEndpoint(
+        ITenantRepository tenantRepository,
+        IDataProtectionProvider dataProtectionProvider)
     {
         _tenantRepository = tenantRepository;
+        _dataProtectionProvider = dataProtectionProvider;
     }
 
     /// <inheritdoc/>
@@ -60,41 +69,62 @@ public sealed class EmailDomainLookupEndpoint : Endpoint<EmailDomainLookupReques
     /// <inheritdoc/>
     public override async Task HandleAsync(EmailDomainLookupRequest req, CancellationToken ct)
     {
-        if (string.IsNullOrWhiteSpace(req.Email))
-        {
-            await Send.OkAsync(ApiResponse<EmailDomainLookupResponse>.Error("A valid email address is required"), cancellation: ct);
+        EmailDomainLookupResponse unavailable = new() { SsoAvailable = false, Slug = null };
 
-            return;
-        }
-
-        MailAddress? mailAddress;
-        try
+        string? domain = ExtractDomain(req.Email);
+        if (domain is null)
         {
-            mailAddress = new MailAddress(req.Email.Trim());
-        }
-        catch (FormatException)
-        {
-            await Send.OkAsync(ApiResponse<EmailDomainLookupResponse>.Error("A valid email address is required"), cancellation: ct);
-
-            return;
-        }
-
-        string domain = mailAddress.Host.ToLowerInvariant();
-        if ((domain.Length < 3) || domain.Contains(' ') || (domain.IndexOf('.') < 1))
-        {
-            await Send.OkAsync(ApiResponse<EmailDomainLookupResponse>.Error("A valid email address is required"), cancellation: ct);
+            await Send.OkAsync(ApiResponse<EmailDomainLookupResponse>.Ok(unavailable), cancellation: ct);
 
             return;
         }
 
         TenantOidcConfiguration? config = await _tenantRepository.GetTenantOidcConfigurationByEmailDomainAsync(domain, ct);
-        if (config is null)
+        if ((config is null) || (config.IsEnabled == false))
         {
-            await Send.OkAsync(ApiResponse<EmailDomainLookupResponse>.Error("No SSO provider found for this email domain"), cancellation: ct);
+            await Send.OkAsync(ApiResponse<EmailDomainLookupResponse>.Ok(unavailable), cancellation: ct);
 
             return;
         }
 
-        await Send.OkAsync(ApiResponse<EmailDomainLookupResponse>.Ok(new EmailDomainLookupResponse { TenantId = config.TenantId }), cancellation: ct);
+        IDataProtector protector = _dataProtectionProvider.CreateProtector(TenantSsoSlug.Purpose);
+        EmailDomainLookupResponse available = new()
+        {
+            SsoAvailable = true,
+            Slug = TenantSsoSlug.Build(protector, config.TenantId),
+        };
+        await Send.OkAsync(ApiResponse<EmailDomainLookupResponse>.Ok(available), cancellation: ct);
+    }
+
+    /// <summary>
+    /// Extracts and validates the lowercase host portion of an email address, returning <c>null</c>
+    /// when the input is missing or not a plausible domain.
+    /// </summary>
+    /// <param name="email">The raw email address from the request.</param>
+    /// <returns>The normalized domain, or <c>null</c> when the email is invalid.</returns>
+    internal static string? ExtractDomain(string? email)
+    {
+        if (string.IsNullOrWhiteSpace(email))
+        {
+            return null;
+        }
+
+        MailAddress mailAddress;
+        try
+        {
+            mailAddress = new MailAddress(email.Trim());
+        }
+        catch (FormatException)
+        {
+            return null;
+        }
+
+        string domain = mailAddress.Host.ToLowerInvariant();
+        if ((domain.Length < 3) || domain.Contains(' ') || (domain.IndexOf('.') < 1))
+        {
+            return null;
+        }
+
+        return domain;
     }
 }
