@@ -156,6 +156,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IAlertConditionStateRepository>(sp => sp.GetRequiredService<DatabaseRepository>());
         services.AddScoped<IIntegrationRepository>(sp => sp.GetRequiredService<DatabaseRepository>());
         services.AddScoped<IIntegrationDeliveryAttemptRepository>(sp => sp.GetRequiredService<DatabaseRepository>());
+        services.AddScoped<IAlertEmailDeliveryAttemptRepository>(sp => sp.GetRequiredService<DatabaseRepository>());
         services.AddScoped<IDataExportRepository>(sp => sp.GetRequiredService<DatabaseRepository>());
         services.AddScoped<IRegistrationTokenRepository>(sp => sp.GetRequiredService<DatabaseRepository>());
         services.AddScoped<IMachineStateRepository>(sp => sp.GetRequiredService<DatabaseRepository>());
