@@ -41,6 +41,9 @@
     <PackageReference Include="linq2db.PostgreSQL" Version="6.2.1" />
     <PackageReference Include="Microsoft.AspNetCore.DataProtection.StackExchangeRedis" Version="10.0.7" />
     <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.7" />
+    <!-- Pin the native SQLite binary above the vulnerable 2.1.11 pulled transitively by
+         Microsoft.Data.Sqlite (advisory GHSA-2m69-gcr7-jv3q). Propagates to dependent projects. -->
+    <PackageReference Include="SQLitePCLRaw.lib.e_sqlite3" Version="3.50.3" />
     <PackageReference Include="Microsoft.Extensions.Resilience" Version="10.5.0" />
     <PackageReference Include="Newtonsoft.Json" Version="13.0.4" />
     <PackageReference Include="Npgsql" Version="10.0.2" />
