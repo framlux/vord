@@ -124,22 +124,20 @@ public sealed class SsoOidcEvents : OpenIdConnectEvents
             return;
         }
 
-        // Decrypt the stored OIDC client secret.
-        // Legacy plaintext rows (written before encryption was enforced everywhere) lack the
-        // marker prefix; treat them as plaintext and emit a warning so ops can re-migrate.
+        // Decrypt the stored OIDC client secret. Client secrets must be stored encrypted at rest;
+        // an unprotected (plaintext) value is rejected outright rather than used.
         IOidcSecretProtector secretProtector = context.HttpContext.RequestServices.GetRequiredService<IOidcSecretProtector>();
         string clientSecret;
-        if (secretProtector.IsProtected(config.ClientSecret))
+        try
         {
-            clientSecret = secretProtector.Unprotect(config.ClientSecret);
+            clientSecret = ResolveClientSecret(secretProtector, config.ClientSecret);
         }
-        else
+        catch (InvalidOperationException)
         {
-            logger.LogWarning(
-                "OIDC client secret for tenant {TenantId} is stored in plaintext (legacy); "
-                + "run EncryptLegacyTenantOidcSecretsMigration to re-protect at rest",
-                tenantId);
-            clientSecret = config.ClientSecret;
+            logger.LogError("OIDC client secret for tenant {TenantId} is unprotected", tenantId);
+            context.Fail("OIDC client secret is not protected at rest");
+
+            return;
         }
 
         // Manually exchange the authorization code for tokens (uses SSRF-safe HttpClient)
@@ -242,6 +240,25 @@ public sealed class SsoOidcEvents : OpenIdConnectEvents
         // placeholder authority issue and eliminating any need to mutate the shared Options singleton.
         context.Principal = new ClaimsPrincipal(identity);
         context.Success();
+    }
+
+    /// <summary>
+    /// Resolves the usable client secret from its stored form. A protected secret is unprotected and
+    /// returned; an unprotected (plaintext) value is rejected outright, because client secrets must be
+    /// stored encrypted at rest.
+    /// </summary>
+    /// <param name="protector">The secret protector.</param>
+    /// <param name="stored">The stored client secret as read from the database.</param>
+    /// <returns>The plaintext client secret ready for the token request.</returns>
+    internal static string ResolveClientSecret(IOidcSecretProtector protector, string stored)
+    {
+        if (protector.IsProtected(stored) == false)
+        {
+            throw new InvalidOperationException(
+                "OIDC client secret is stored unprotected; refusing to use it. Store the secret encrypted at rest.");
+        }
+
+        return protector.Unprotect(stored);
     }
 
     /// <summary>

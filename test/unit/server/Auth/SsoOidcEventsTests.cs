@@ -772,6 +772,7 @@ public sealed class SsoOidcEventsTests
             .Returns(Task.FromResult<TenantOidcConfiguration?>(oidcConfig));
 
         IOidcSecretProtector secretProtector = Substitute.For<IOidcSecretProtector>();
+        secretProtector.IsProtected(Arg.Any<string?>()).Returns(true);
         secretProtector.Unprotect(Arg.Any<string>()).Returns("plain-secret");
 
         IHttpClientFactory httpClientFactory = BuildMockHttpClientFactory(
@@ -804,9 +805,9 @@ public sealed class SsoOidcEventsTests
         tenantRepo.GetTenantOidcConfigurationAsync(42, Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<TenantOidcConfiguration?>(oidcConfig));
 
-        // Mark the stored secret as encrypted so the production code takes the IsProtected -> Unprotect
-        // branch rather than the legacy-plaintext fallback. Every other token-exchange test leaves
-        // IsProtected at the NSubstitute default of false, so this is the only coverage of that path.
+        // Mark the stored secret as encrypted so secret resolution takes the IsProtected -> Unprotect
+        // path. An unprotected secret is rejected outright, so a protected secret is required to reach
+        // the token exchange.
         IOidcSecretProtector secretProtector = Substitute.For<IOidcSecretProtector>();
         secretProtector.IsProtected(Arg.Any<string?>()).Returns(true);
         secretProtector.Unprotect(Arg.Any<string>()).Returns("decrypted-secret");
@@ -834,6 +835,39 @@ public sealed class SsoOidcEventsTests
     }
 
     [Test]
+    public async Task AuthorizationCodeReceived_UnprotectedClientSecret_FailsContext()
+    {
+        TenantOidcConfiguration oidcConfig = TestDataBuilder.BuildTenantOidcConfiguration(tenantId: 42);
+        oidcConfig.MetadataAddress = "https://idp.example.com/.well-known/openid-configuration";
+
+        ITenantRepository tenantRepo = Substitute.For<ITenantRepository>();
+        tenantRepo.GetTenantOidcConfigurationAsync(42, Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<TenantOidcConfiguration?>(oidcConfig));
+
+        // The stored secret is plaintext (not protected): the caller must fail the context rather than
+        // throw into the pipeline, and must never reach the token exchange.
+        IOidcSecretProtector secretProtector = Substitute.For<IOidcSecretProtector>();
+        secretProtector.IsProtected(Arg.Any<string?>()).Returns(false);
+
+        IHttpClientFactory httpClientFactory = BuildMockHttpClientFactory(
+            tokenEndpointUrl: "https://idp.example.com/token",
+            tokenExchangeResponse: new HttpResponseMessage(HttpStatusCode.OK));
+
+        SsoOidcEvents events = new();
+        AuthorizationCodeReceivedContext context = BuildCodeReceivedContext(
+            tenantId: "42",
+            authCode: "test-code",
+            tenantRepo: tenantRepo,
+            httpClientFactory: httpClientFactory,
+            secretProtector: secretProtector);
+
+        await events.AuthorizationCodeReceived(context);
+
+        await Assert.That(context.Result?.Failure?.Message).Contains("not protected at rest");
+        secretProtector.DidNotReceive().Unprotect(Arg.Any<string>());
+    }
+
+    [Test]
     public async Task AuthorizationCodeReceived_NoIdTokenInResponse_FailsWithNoIdTokenMessage()
     {
         TenantOidcConfiguration oidcConfig = TestDataBuilder.BuildTenantOidcConfiguration(tenantId: 42);
@@ -844,6 +878,7 @@ public sealed class SsoOidcEventsTests
             .Returns(Task.FromResult<TenantOidcConfiguration?>(oidcConfig));
 
         IOidcSecretProtector secretProtector = Substitute.For<IOidcSecretProtector>();
+        secretProtector.IsProtected(Arg.Any<string?>()).Returns(true);
         secretProtector.Unprotect(Arg.Any<string>()).Returns("plain-secret");
 
         // Return a token response with access_token but no id_token
@@ -884,6 +919,7 @@ public sealed class SsoOidcEventsTests
             .Returns(Task.FromResult<TenantOidcConfiguration?>(oidcConfig));
 
         IOidcSecretProtector secretProtector = Substitute.For<IOidcSecretProtector>();
+        secretProtector.IsProtected(Arg.Any<string?>()).Returns(true);
         secretProtector.Unprotect(Arg.Any<string>()).Returns("plain-secret");
 
         // Return a token response with an empty id_token string
@@ -924,6 +960,7 @@ public sealed class SsoOidcEventsTests
             .Returns(Task.FromResult<TenantOidcConfiguration?>(oidcConfig));
 
         IOidcSecretProtector secretProtector = Substitute.For<IOidcSecretProtector>();
+        secretProtector.IsProtected(Arg.Any<string?>()).Returns(true);
         secretProtector.Unprotect(Arg.Any<string>()).Returns("plain-secret");
 
         // Return a well-formed but unsigned/invalid JWT as the id_token.
@@ -1021,6 +1058,7 @@ public sealed class SsoOidcEventsTests
             .Returns(Task.FromResult<TenantOidcConfiguration?>(oidcConfig));
 
         IOidcSecretProtector secretProtector = Substitute.For<IOidcSecretProtector>();
+        secretProtector.IsProtected(Arg.Any<string?>()).Returns(true);
         secretProtector.Unprotect(Arg.Any<string>()).Returns("plain-secret");
 
         IHttpClientFactory httpClientFactory = BuildMockHttpClientFactory(
@@ -1165,6 +1203,7 @@ public sealed class SsoOidcEventsTests
             .Returns(Task.FromResult<TenantOidcConfiguration?>(oidcConfig));
 
         IOidcSecretProtector secretProtector = Substitute.For<IOidcSecretProtector>();
+        secretProtector.IsProtected(Arg.Any<string?>()).Returns(true);
         secretProtector.Unprotect(Arg.Any<string>()).Returns("plain-secret");
 
         string idToken = BuildSignedIdToken(signingKey, TestNonce);
@@ -1216,6 +1255,7 @@ public sealed class SsoOidcEventsTests
             .Returns(Task.FromResult<TenantOidcConfiguration?>(oidcConfig));
 
         IOidcSecretProtector secretProtector = Substitute.For<IOidcSecretProtector>();
+        secretProtector.IsProtected(Arg.Any<string?>()).Returns(true);
         secretProtector.Unprotect(Arg.Any<string>()).Returns("plain-secret");
 
         string idToken = BuildSignedIdToken(signingKey, TestNonce);
