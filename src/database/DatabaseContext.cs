@@ -121,6 +121,9 @@ public sealed class DatabaseContext(DataOptions<DatabaseContext> options) : Data
     /// </summary>
     public ITable<IntegrationDeliveryAttempt> IntegrationDeliveryAttempts => this.GetTable<IntegrationDeliveryAttempt>();
 
+    /// <summary>Alert email delivery idempotency rows.</summary>
+    public ITable<AlertEmailDeliveryAttempt> AlertEmailDeliveryAttempts => this.GetTable<AlertEmailDeliveryAttempt>();
+
     /// <summary>
     /// Represents the collection of user signing keys for remote command authorization.
     /// </summary>

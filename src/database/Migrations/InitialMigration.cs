@@ -597,6 +597,37 @@ public sealed class InitialMigration : Migration
             .OnTable(TableNames.IntegrationDeliveryAttempts)
             .OnColumn("AlertEventId").Ascending();
 
+        // Per-(eventId, recipient) idempotency rows used to skip an already-delivered email on
+        // retry. As with IntegrationDeliveryAttempts the definition diverges by provider only in the
+        // AlertEvents relationship: on Postgres, AlertEvents is range-partitioned with a composite
+        // primary key, so a single-column foreign key to it is rejected and the application enforces
+        // the relationship instead; on SQLite (the in-memory test database) AlertEvents is a plain
+        // table, so a cascading foreign key to it is both valid and relied upon by tests. Everything
+        // else is identical.
+        IfDatabase("PostgreSQL").Create.Table(TableNames.AlertEmailDeliveryAttempts)
+            .WithColumn("Id").AsInt64().PrimaryKey().Identity()
+            .WithColumn("AlertEventId").AsInt64().NotNullable()
+            .WithColumn("Recipient").AsString(320).NotNullable()
+            .WithColumn("Status").AsInt32().NotNullable()
+            .WithColumn("AttemptedAt").AsDateTimeOffset().NotNullable()
+            .WithColumn("SucceededAt").AsDateTimeOffset().Nullable();
+
+        IfDatabase("SQLite").Create.Table(TableNames.AlertEmailDeliveryAttempts)
+            .WithColumn("Id").AsInt64().PrimaryKey().Identity()
+            .WithColumn("AlertEventId").AsInt64().NotNullable()
+                .ForeignKey("FK_AlertEmailDeliveryAttempts_AlertEvents", TableNames.AlertEvents, "Id")
+                    .OnDelete(Rule.Cascade)
+            .WithColumn("Recipient").AsString(320).NotNullable()
+            .WithColumn("Status").AsInt32().NotNullable()
+            .WithColumn("AttemptedAt").AsDateTimeOffset().NotNullable()
+            .WithColumn("SucceededAt").AsDateTimeOffset().Nullable();
+
+        Create.Index("UX_AlertEmailDeliveryAttempts_EventRecipient")
+            .OnTable(TableNames.AlertEmailDeliveryAttempts)
+            .OnColumn("AlertEventId").Ascending()
+            .OnColumn("Recipient").Ascending()
+            .WithOptions().Unique();
+
         Create.Table(TableNames.DataExportJobs)
             .WithColumn("Id").AsInt32().PrimaryKey().Identity().NotNullable()
             .WithColumn("TenantId").AsInt32().NotNullable().ForeignKey(TableNames.Tenants, "Id")
@@ -794,6 +825,7 @@ public sealed class InitialMigration : Migration
         Delete.Table("TenantSubscriptionOverrides");
         Delete.Table("TierFeatureLimits");
         Delete.Table(TableNames.RemoteCommands);
+        Delete.Table(TableNames.AlertEmailDeliveryAttempts);
         Delete.Table(TableNames.IntegrationDeliveryAttempts);
         Delete.Table(TableNames.IntegrationEndpoints);
         Delete.Table(TableNames.AlertConditionStates);
