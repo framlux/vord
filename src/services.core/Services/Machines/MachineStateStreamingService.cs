@@ -8,6 +8,7 @@ using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Services.Core.Infrastructure;
 using Framlux.FleetManagement.Services.Core.Machines.Projection;
+using Framlux.FleetManagement.Services.Core.Options;
 
 namespace Framlux.FleetManagement.Services.Core.Machines;
 
@@ -26,11 +27,6 @@ namespace Framlux.FleetManagement.Services.Core.Machines;
 public sealed class MachineStateStreamingService : BackgroundService
 {
     /// <summary>
-    /// Number of telemetry rows to fetch per poll cycle.
-    /// </summary>
-    internal const int BatchSize = 200;
-
-    /// <summary>
     /// How long to sleep when no new telemetry rows are available.
     /// </summary>
     internal static readonly TimeSpan IdleSleepDuration = TimeSpan.FromMilliseconds(500);
@@ -47,8 +43,6 @@ public sealed class MachineStateStreamingService : BackgroundService
     /// </summary>
     private const int MaxDegreeOfParallelism = 4;
 
-    private const string LockKey = LockNames.StateStreaming;
-
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly ISqlDialect _dialect;
     private readonly IAdvisoryLockProvider _advisoryLockProvider;
@@ -56,8 +50,14 @@ public sealed class MachineStateStreamingService : BackgroundService
     private readonly TimeProvider _timeProvider;
     private readonly TimeSpan _startupDelay;
     private readonly ILogger<MachineStateStreamingService> _logger;
+    private readonly int _shardIndex;
+    private readonly int _shardCount;
+    private readonly int _batchSize;
+    private readonly string _lockKey;
+    private readonly string _highWaterMarkKey;
 
     private long _highWaterMark;
+    private bool _highWaterMarkLoaded;
 
     /// <summary>
     /// Creates a new instance of the <see cref="MachineStateStreamingService"/> class.
@@ -67,6 +67,8 @@ public sealed class MachineStateStreamingService : BackgroundService
     /// <param name="advisoryLockProvider">Provides exclusive coordination across replicas.</param>
     /// <param name="settingsCache">Stores the streaming high-water mark across restarts.</param>
     /// <param name="logger">The logger.</param>
+    /// <param name="shardIndex">The projection shard this instance owns under modulo partitioning.</param>
+    /// <param name="streamingOptions">Streaming options carrying the shard count and batch size.</param>
     /// <param name="timeProvider">Clock abstraction used for loop delays so tests do not depend on wall-clock time.</param>
     /// <param name="startupDelay">Optional override for the startup delay; tests use a short value to keep the suite fast.</param>
     public MachineStateStreamingService(
@@ -75,6 +77,8 @@ public sealed class MachineStateStreamingService : BackgroundService
         IAdvisoryLockProvider advisoryLockProvider,
         IServerSettingsCache settingsCache,
         ILogger<MachineStateStreamingService> logger,
+        int shardIndex,
+        IOptions<StreamingOptions> streamingOptions,
         TimeProvider? timeProvider = null,
         TimeSpan? startupDelay = null)
     {
@@ -83,6 +87,9 @@ public sealed class MachineStateStreamingService : BackgroundService
         ArgumentNullException.ThrowIfNull(advisoryLockProvider);
         ArgumentNullException.ThrowIfNull(settingsCache);
         ArgumentNullException.ThrowIfNull(logger);
+        ArgumentNullException.ThrowIfNull(streamingOptions);
+
+        StreamingOptions options = streamingOptions.Value;
 
         _scopeFactory = scopeFactory;
         _dialect = dialect;
@@ -91,6 +98,12 @@ public sealed class MachineStateStreamingService : BackgroundService
         _timeProvider = timeProvider ?? TimeProvider.System;
         _startupDelay = startupDelay ?? DefaultStartupDelay;
         _logger = logger;
+        _shardIndex = shardIndex;
+        _shardCount = options.ShardCount;
+        _batchSize = options.BatchSize;
+        _lockKey = StreamingShardCalculator.LockNameForShard(_shardIndex);
+        _highWaterMarkKey = StreamingShardCalculator.HighWaterMarkKeyForShard(
+            ServerConfigurationSettingKeys.StreamingHighWaterMark.ToString(), _shardIndex);
     }
 
     /// <inheritdoc/>
@@ -101,13 +114,14 @@ public sealed class MachineStateStreamingService : BackgroundService
             await Task.Delay(_startupDelay, _timeProvider, stoppingToken);
         }
 
-        _logger.LogInformation("Machine state streaming service started");
+        _logger.LogInformation(
+            "Machine state streaming service started for shard {ShardIndex} of {ShardCount}", _shardIndex, _shardCount);
 
         while (stoppingToken.IsCancellationRequested == false)
         {
             try
             {
-                await using IAsyncDisposable? lockHandle = await _advisoryLockProvider.TryAcquireAsync(LockKey, stoppingToken);
+                await using IAsyncDisposable? lockHandle = await _advisoryLockProvider.TryAcquireAsync(_lockKey, stoppingToken);
                 if (lockHandle is null)
                 {
                     _logger.LogDebug("State streaming: another instance holds the lock, waiting");
@@ -133,6 +147,33 @@ public sealed class MachineStateStreamingService : BackgroundService
         _logger.LogInformation("Machine state streaming service stopped");
     }
 
+    /// <inheritdoc/>
+    public override async Task StopAsync(CancellationToken cancellationToken)
+    {
+        await base.StopAsync(cancellationToken);
+
+        // The streaming loop persists the high-water mark after every batch using the stopping
+        // token. On .NET 10 that token may already be cancelled while a batch was in flight, so the
+        // final advance can be skipped — leaving the in-memory mark ahead of the durable one and
+        // forcing the shard to re-process that batch on next start. Re-processing is idempotent but
+        // wasteful, so persist the current mark here with a non-cancellable token to close the gap.
+        // Only persist if a mark was ever loaded; otherwise there is nothing to write.
+        if (_highWaterMarkLoaded == false)
+        {
+            return;
+        }
+
+        try
+        {
+            await PersistHighWaterMarkAsync(CancellationToken.None);
+        }
+        catch (Exception ex)
+        {
+            // Shutdown must never throw: a failed final persist only costs an idempotent replay.
+            _logger.LogWarning(ex, "Failed to persist final high-water mark for shard {ShardIndex} on shutdown", _shardIndex);
+        }
+    }
+
     /// <summary>
     /// Main streaming loop: continuously polls MachineTelemetry for new rows, collapses each
     /// batch to one <see cref="MachineStatePatch"/> per machine, and applies at most one UPDATE
@@ -147,7 +188,7 @@ public sealed class MachineStateStreamingService : BackgroundService
 
             DateTimeOffset streamingWindow = _timeProvider.GetUtcNow().AddDays(-2);
             List<MachineTelemetry> batch = await repo.GetTelemetryBatchAsync(
-                _highWaterMark, streamingWindow, BatchSize, ct);
+                _highWaterMark, streamingWindow, _batchSize, _shardIndex, _shardCount, ct);
 
             if (batch.Count == 0)
             {
@@ -269,8 +310,7 @@ public sealed class MachineStateStreamingService : BackgroundService
 
     private async Task LoadHighWaterMarkAsync(CancellationToken ct)
     {
-        string? stored = await _settingsCache.GetSettingAsync(
-            ServerConfigurationSettingKeys.StreamingHighWaterMark, ct);
+        string? stored = await _settingsCache.GetSettingAsync(_highWaterMarkKey, ct);
 
         // Parse with invariant culture and explicit NumberStyles so the round-trip is stable on
         // non-en hosts (the same applies to the symmetric Persist path below).
@@ -283,13 +323,15 @@ public sealed class MachineStateStreamingService : BackgroundService
             _highWaterMark = 0;
         }
 
+        _highWaterMarkLoaded = true;
+
         _logger.LogInformation("State streaming starting from high-water mark {HighWaterMark}", _highWaterMark);
     }
 
     private async Task PersistHighWaterMarkAsync(CancellationToken ct)
     {
         await _settingsCache.SetSettingAsync(
-            ServerConfigurationSettingKeys.StreamingHighWaterMark,
+            _highWaterMarkKey,
             _highWaterMark.ToString(CultureInfo.InvariantCulture),
             ct);
     }

@@ -27,6 +27,15 @@ public sealed class ServerConfigurationSettings
     public required ServerConfigurationSettingKeys Key { get; set; }
 
     /// <summary>
+    /// Optional free-form string key for settings that do not map to a fixed
+    /// <see cref="ServerConfigurationSettingKeys"/> value — for example the per-shard
+    /// telemetry-projection high-water marks, whose cardinality follows the configured shard count.
+    /// When set, <see cref="Key"/> is <see cref="ServerConfigurationSettingKeys.None"/>.
+    /// </summary>
+    [Column(Name = "StringKey"), Nullable]
+    public string? StringKey { get; set; }
+
+    /// <summary>
     /// The value for the server configuration setting.
     /// </summary>
     [Column(Name = "Value"), NotNull]

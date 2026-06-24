@@ -28,6 +28,7 @@ public sealed class InitialMigration : Migration
         Create.Table(TableNames.ServerConfigurationSettings)
             .WithColumn("Id").AsInt32().PrimaryKey().Identity().NotNullable()
             .WithColumn("Key").AsInt32().NotNullable().Indexed()
+            .WithColumn("StringKey").AsString().Nullable().Indexed()
             .WithColumn("Value").AsString().NotNullable()
             .WithColumn("Version").AsInt32().NotNullable();
 

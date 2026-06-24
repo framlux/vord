@@ -286,10 +286,19 @@ public partial class DatabaseRepository : IMachineStateRepository
     }
 
     /// <inheritdoc/>
-    public async Task<List<MachineTelemetry>> GetTelemetryBatchAsync(long highWaterMark, DateTimeOffset streamingWindow, int batchSize, CancellationToken cancellationToken)
+    public async Task<List<MachineTelemetry>> GetTelemetryBatchAsync(
+        long highWaterMark, DateTimeOffset streamingWindow, int batchSize, int shardIndex, int shardCount, CancellationToken cancellationToken)
     {
-        return await _db.MachineTelemetry
-            .Where(t => (t.Id > highWaterMark) && (t.ReceivedAt > streamingWindow))
+        IQueryable<MachineTelemetry> query = _db.MachineTelemetry
+            .Where(t => (t.Id > highWaterMark) && (t.ReceivedAt > streamingWindow));
+
+        // MachineId references the positive Machine.Id identity column, so signed SQL modulo is safe.
+        if (shardCount > 1)
+        {
+            query = query.Where(t => (t.MachineId % shardCount) == shardIndex);
+        }
+
+        return await query
             .OrderBy(t => t.Id)
             .Take(batchSize)
             .ToListAsync(cancellationToken);

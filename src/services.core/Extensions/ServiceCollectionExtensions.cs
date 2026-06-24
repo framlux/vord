@@ -373,9 +373,36 @@ public static class ServiceCollectionExtensions
     public static IServiceCollection AddBackgroundWorkers(
         this IServiceCollection services,
         BillingOptions billingOpts,
-        ObjectStorageOptions objectStorageOpts)
+        ObjectStorageOptions objectStorageOpts,
+        IConfiguration configuration)
     {
-        services.AddHostedService<MachineStateStreamingService>();
+        ArgumentNullException.ThrowIfNull(configuration);
+
+        // The telemetry-state projection is sharded by machineId % ShardCount. Each shard is a
+        // separate hosted service that takes its own advisory lock and tracks its own high-water
+        // mark, so the projection scales across worker replicas instead of a single active consumer.
+        // Every replica registers the full shard set; the per-shard lock guarantees exactly one
+        // replica actively projects each shard, and a replica that loses a shard's lock falls
+        // through to the existing wait-and-retry so shards rebalance on replica loss.
+        services.AddOptions<StreamingOptions>().Bind(configuration.GetSection("Streaming"));
+        int shardCount = configuration.GetSection("Streaming").Get<StreamingOptions>()?.ShardCount ?? 1;
+        if (shardCount < 1)
+        {
+            shardCount = 1;
+        }
+
+        for (int shardIndex = 0; shardIndex < shardCount; shardIndex++)
+        {
+            int captured = shardIndex;
+            services.AddSingleton<IHostedService>(sp => new MachineStateStreamingService(
+                sp.GetRequiredService<IServiceScopeFactory>(),
+                sp.GetRequiredService<ISqlDialect>(),
+                sp.GetRequiredService<IAdvisoryLockProvider>(),
+                sp.GetRequiredService<IServerSettingsCache>(),
+                sp.GetRequiredService<ILogger<MachineStateStreamingService>>(),
+                shardIndex: captured,
+                streamingOptions: sp.GetRequiredService<IOptions<StreamingOptions>>()));
+        }
 
         services.AddHangfireJobTypes(
             billingEnabled: billingOpts.Enabled,

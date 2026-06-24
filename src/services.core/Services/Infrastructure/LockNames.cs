@@ -24,6 +24,14 @@ public static class LockNames
     /// <summary>State-streaming singleton lock (one consumer per cluster).</summary>
     public const string StateStreaming = "state-streaming";
 
+    /// <summary>
+    /// Prefix for the per-shard state-streaming lock; the full key is
+    /// <c>state-streaming:shard:&lt;index&gt;</c>. Each projection shard takes its own lock so the
+    /// work scales across worker replicas. Shard cardinality is bounded by the configured shard
+    /// count, so the SHA-256 collision analysis on <see cref="PostgresAdvisoryLockProvider"/> holds.
+    /// </summary>
+    public const string StateStreamingShardPrefix = "state-streaming:shard:";
+
     /// <summary>Usage-heartbeat singleton lock (one heartbeat run per cluster per hour).</summary>
     public const string UsageHeartbeat = "usage-heartbeat";
 
@@ -44,5 +52,6 @@ public static class LockNames
     public static IReadOnlyList<string> Prefixes { get; } = new[]
     {
         HealthSweepTenantPrefix,
+        StateStreamingShardPrefix,
     };
 }

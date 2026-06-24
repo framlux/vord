@@ -15,7 +15,10 @@ public partial class DatabaseRepository : IServerConfigurationRepository
     /// <inheritdoc/>
     public async Task<List<ServerConfigurationSettings>> ListAllSettingsAsync(CancellationToken cancellationToken)
     {
+        // Exclude internal string-keyed coordination rows (e.g. per-shard high-water marks) so they
+        // never surface in the admin settings list; those rows carry a non-null StringKey.
         return await _db.ServerConfigurationSettings
+            .Where(s => s.StringKey == null)
             .ToListAsync(cancellationToken);
     }
 
@@ -58,7 +61,10 @@ public partial class DatabaseRepository : IServerConfigurationRepository
     /// <inheritdoc/>
     public async Task<List<ServerConfigurationSettings>> GetAllSettingsAsync(CancellationToken cancellationToken)
     {
+        // Exclude internal string-keyed coordination rows (e.g. per-shard high-water marks) so they
+        // never surface in the admin settings list; those rows carry a non-null StringKey.
         List<ServerConfigurationSettings> settings = await _db.ServerConfigurationSettings
+            .Where(s => s.StringKey == null)
             .OrderBy(s => s.Key)
             .ToListAsync(cancellationToken);
 

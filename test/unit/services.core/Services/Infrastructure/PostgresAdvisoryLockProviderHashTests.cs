@@ -53,6 +53,15 @@ public sealed class PostgresAdvisoryLockProviderHashTests
             long key = PostgresAdvisoryLockProvider.HashLockName(name);
             await Assert.That(keys.Add(key)).IsTrue();
         }
+
+        // Per-shard state-streaming lock names are bounded by the configured shard count; verify a
+        // representative cross-section hashes distinctly alongside the other lock-name domains.
+        for (int shardIndex = 0; shardIndex < 64; shardIndex++)
+        {
+            string name = $"{LockNames.StateStreamingShardPrefix}{shardIndex}";
+            long key = PostgresAdvisoryLockProvider.HashLockName(name);
+            await Assert.That(keys.Add(key)).IsTrue();
+        }
     }
 
     [Test]

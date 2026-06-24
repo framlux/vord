@@ -54,7 +54,7 @@ builder.Services.AddCoreDataProtection("Framlux.FleetManagement.Web");
 builder.Services.AddCoreServices(billingOpts, objectStorageOpts);
 
 // Background workers — the primary purpose of this process
-builder.Services.AddBackgroundWorkers(billingOpts, objectStorageOpts);
+builder.Services.AddBackgroundWorkers(billingOpts, objectStorageOpts, builder.Configuration);
 
 // Gate worker startup on Hangfire schema readiness. migration-runner installs the
 // hangfire schema and depends_on:service_healthy provides the ordering in compose/ArgoCD,
