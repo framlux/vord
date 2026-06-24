@@ -3,7 +3,6 @@
 // See LICENSE for details.
 
 using Framlux.FleetManagement.Database;
-using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Services.Core.Infrastructure;
@@ -50,7 +49,6 @@ public class MachineStateStreamingServiceTests
         IServiceScopeFactory scopeFactory,
         ISqlDialect? dialect = null,
         IAdvisoryLockProvider? advisoryLockProvider = null,
-        IServerSettingsCache? settingsCache = null,
         ILogger<MachineStateStreamingService>? logger = null,
         TimeProvider? timeProvider = null,
         TimeSpan? startupDelay = null,
@@ -61,7 +59,6 @@ public class MachineStateStreamingServiceTests
             scopeFactory,
             dialect ?? Substitute.For<ISqlDialect>(),
             advisoryLockProvider ?? AcquiringAdvisoryLockProvider(),
-            settingsCache ?? Substitute.For<IServerSettingsCache>(),
             logger ?? Substitute.For<ILogger<MachineStateStreamingService>>(),
             shardIndex,
             StreamingOptionsFor(shardCount),
@@ -796,27 +793,21 @@ public class MachineStateStreamingServiceTests
     {
         // Intent: even when the stopping token is already cancelled, StopAsync must persist the
         // in-memory high-water mark using CancellationToken.None so the shard does not needlessly
-        // re-process its last batch on next start. Drives the loop until the mark is loaded, then
+        // re-process its last batch on next start. Drives the loop until the cursor is loaded, then
         // stops with an already-cancelled token and asserts the durable write used a live token.
-        string expectedKey = StreamingShardCalculator.HighWaterMarkKeyForShard(
-            ServerConfigurationSettingKeys.StreamingHighWaterMark.ToString(), 0);
-
-        IServerSettingsCache settingsCache = Substitute.For<IServerSettingsCache>();
-        settingsCache.GetSettingAsync(expectedKey, Arg.Any<CancellationToken>()).Returns("7");
-
         IMachineStateRepository spy = Substitute.For<IMachineStateRepository>();
+        spy.GetProjectionCursorAsync(0, Arg.Any<CancellationToken>()).Returns(7L);
         spy.GetTelemetryBatchAsync(Arg.Any<long>(), Arg.Any<DateTimeOffset>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
             .Returns([], []);
 
         TaskCompletionSource markLoaded = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        settingsCache.When(c => c.GetSettingAsync(expectedKey, Arg.Any<CancellationToken>()))
+        spy.When(r => r.GetProjectionCursorAsync(0, Arg.Any<CancellationToken>()))
             .Do(_ => markLoaded.TrySetResult());
 
         Dictionary<Type, object> services = new() { [typeof(IMachineStateRepository)] = spy };
         TestServiceScopeFactory scopeFactory = new(NoopContext(), services);
         FixedTimeProvider clock = new(FixedClock);
-        MachineStateStreamingService service = CreateService(
-            scopeFactory, settingsCache: settingsCache, timeProvider: clock);
+        MachineStateStreamingService service = CreateService(scopeFactory, timeProvider: clock);
 
         using CancellationTokenSource cts = new();
         await service.StartAsync(cts.Token);
@@ -827,9 +818,9 @@ public class MachineStateStreamingServiceTests
         await service.StopAsync(CancellationToken.None);
 
         // The final persist must use a non-cancelled token (CancellationToken.None), not the
-        // already-cancelled stopping token.
-        await settingsCache.Received().SetSettingAsync(
-            expectedKey, "7", Arg.Is<CancellationToken>(t => t.IsCancellationRequested == false));
+        // already-cancelled stopping token, and carry the loaded mark for this shard.
+        await spy.Received().SetProjectionCursorAsync(
+            0, 7L, Arg.Is<CancellationToken>(t => t.IsCancellationRequested == false));
     }
 
     [Test]
@@ -837,13 +828,13 @@ public class MachineStateStreamingServiceTests
     {
         // Intent: if the service stopped before it ever loaded a high-water mark (the loop never
         // acquired the lock), StopAsync must not write a spurious mark over the durable value.
-        IServerSettingsCache settingsCache = Substitute.For<IServerSettingsCache>();
-        TestServiceScopeFactory scopeFactory = new(NoopContext());
+        IMachineStateRepository spy = Substitute.For<IMachineStateRepository>();
+        Dictionary<Type, object> services = new() { [typeof(IMachineStateRepository)] = spy };
+        TestServiceScopeFactory scopeFactory = new(NoopContext(), services);
         FixedTimeProvider clock = new(FixedClock);
         MachineStateStreamingService service = CreateService(
             scopeFactory,
             advisoryLockProvider: BlockingAdvisoryLockProvider(),
-            settingsCache: settingsCache,
             timeProvider: clock);
 
         using CancellationTokenSource cts = new();
@@ -851,8 +842,8 @@ public class MachineStateStreamingServiceTests
         await cts.CancelAsync();
         await service.StopAsync(CancellationToken.None);
 
-        await settingsCache.DidNotReceive().SetSettingAsync(
-            Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
+        await spy.DidNotReceive().SetProjectionCursorAsync(
+            Arg.Any<int>(), Arg.Any<long>(), Arg.Any<CancellationToken>());
     }
 
     // ========== ComputeMaxDiskUsagePercent (logic now lives in TelemetryPayloadParser) ==========
@@ -1123,7 +1114,6 @@ public class MachineStateStreamingServiceTests
             null!,
             Substitute.For<ISqlDialect>(),
             Substitute.For<IAdvisoryLockProvider>(),
-            Substitute.For<IServerSettingsCache>(),
             Substitute.For<ILogger<MachineStateStreamingService>>(),
             shardIndex: 0,
             StreamingOptionsFor(1)))
@@ -1137,7 +1127,6 @@ public class MachineStateStreamingServiceTests
             Substitute.For<IServiceScopeFactory>(),
             null!,
             Substitute.For<IAdvisoryLockProvider>(),
-            Substitute.For<IServerSettingsCache>(),
             Substitute.For<ILogger<MachineStateStreamingService>>(),
             shardIndex: 0,
             StreamingOptionsFor(1)))
@@ -1150,21 +1139,6 @@ public class MachineStateStreamingServiceTests
         await Assert.That(() => new MachineStateStreamingService(
             Substitute.For<IServiceScopeFactory>(),
             Substitute.For<ISqlDialect>(),
-            null!,
-            Substitute.For<IServerSettingsCache>(),
-            Substitute.For<ILogger<MachineStateStreamingService>>(),
-            shardIndex: 0,
-            StreamingOptionsFor(1)))
-            .Throws<ArgumentNullException>();
-    }
-
-    [Test]
-    public async Task Constructor_NullSettingsCache_ThrowsArgumentNullException()
-    {
-        await Assert.That(() => new MachineStateStreamingService(
-            Substitute.For<IServiceScopeFactory>(),
-            Substitute.For<ISqlDialect>(),
-            Substitute.For<IAdvisoryLockProvider>(),
             null!,
             Substitute.For<ILogger<MachineStateStreamingService>>(),
             shardIndex: 0,
@@ -1179,7 +1153,6 @@ public class MachineStateStreamingServiceTests
             Substitute.For<IServiceScopeFactory>(),
             Substitute.For<ISqlDialect>(),
             Substitute.For<IAdvisoryLockProvider>(),
-            Substitute.For<IServerSettingsCache>(),
             null!,
             shardIndex: 0,
             StreamingOptionsFor(1)))
@@ -1193,7 +1166,6 @@ public class MachineStateStreamingServiceTests
             Substitute.For<IServiceScopeFactory>(),
             Substitute.For<ISqlDialect>(),
             Substitute.For<IAdvisoryLockProvider>(),
-            Substitute.For<IServerSettingsCache>(),
             Substitute.For<ILogger<MachineStateStreamingService>>(),
             shardIndex: 0,
             null!))

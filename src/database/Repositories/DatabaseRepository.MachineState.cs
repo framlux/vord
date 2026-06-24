@@ -627,6 +627,36 @@ public partial class DatabaseRepository : IMachineStateRepository
         return (rows, totalCount);
     }
 
+    /// <inheritdoc/>
+    public async Task<long?> GetProjectionCursorAsync(int shardIndex, CancellationToken cancellationToken)
+    {
+        MachineStateProjectionCursor? cursor = await _db.MachineStateProjectionCursors
+            .Where(c => c.ShardIndex == shardIndex)
+            .FirstOrDefaultAsync(cancellationToken);
+
+        return cursor?.Position;
+    }
+
+    /// <inheritdoc/>
+    public async Task SetProjectionCursorAsync(int shardIndex, long position, CancellationToken cancellationToken)
+    {
+        int updated = await _db.MachineStateProjectionCursors
+            .Where(c => c.ShardIndex == shardIndex)
+            .Set(c => c.Position, position)
+            .Set(c => c.UpdatedAt, DateTimeOffset.UtcNow)
+            .UpdateAsync(cancellationToken);
+
+        if (updated == 0)
+        {
+            await _db.InsertAsync(new MachineStateProjectionCursor
+            {
+                ShardIndex = shardIndex,
+                Position = position,
+                UpdatedAt = DateTimeOffset.UtcNow,
+            }, token: cancellationToken);
+        }
+    }
+
     private IQueryable<FleetMachineRow> BuildFleetBaseQuery(int tenantId)
     {
         return from m in _db.Machines

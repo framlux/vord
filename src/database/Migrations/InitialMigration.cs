@@ -28,7 +28,6 @@ public sealed class InitialMigration : Migration
         Create.Table(TableNames.ServerConfigurationSettings)
             .WithColumn("Id").AsInt32().PrimaryKey().Identity().NotNullable()
             .WithColumn("Key").AsInt32().NotNullable().Indexed()
-            .WithColumn("StringKey").AsString().Nullable().Indexed()
             .WithColumn("Value").AsString().NotNullable()
             .WithColumn("Version").AsInt32().NotNullable();
 
@@ -342,6 +341,13 @@ public sealed class InitialMigration : Migration
             ALTER TABLE "MachineStateDetail" ALTER COLUMN "SshSessions" TYPE jsonb USING "SshSessions"::jsonb;
             ALTER TABLE "MachineStateDetail" ALTER COLUMN "HardwareHealth" TYPE jsonb USING "HardwareHealth"::jsonb;
         """);
+
+        // Per-shard cursor for the telemetry-to-state projection. Internal worker bookkeeping that
+        // tracks the last MachineTelemetry.Id each projection shard has projected.
+        Create.Table(TableNames.MachineStateProjectionCursor)
+            .WithColumn("ShardIndex").AsInt32().PrimaryKey().NotNullable()
+            .WithColumn("Position").AsInt64().NotNullable()
+            .WithColumn("UpdatedAt").AsDateTimeOffset().NotNullable();
 
         Create.Table(TableNames.RegistrationTokens)
             .WithColumn("Id").AsInt64().PrimaryKey().Identity()
@@ -799,6 +805,7 @@ public sealed class InitialMigration : Migration
         Delete.Table(TableNames.AlertRules);
         Delete.Table(TableNames.AuditLog);
         Delete.Table(TableNames.RegistrationTokens);
+        Delete.Table(TableNames.MachineStateProjectionCursor);
         Delete.Table(TableNames.MachineStateDetail);
         Delete.Table(TableNames.MachineStateSummary);
         Delete.Table(TableNames.TenantInvitations);

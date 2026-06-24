@@ -30,26 +30,6 @@ public interface IServerSettingsCache
     Task SetSettingAsync(ServerConfigurationSettingKeys key, string value, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Retrieve a server configuration setting by its free-form string key, using an in-memory
-    /// cache with TTL. Used for settings whose cardinality is not fixed — for example the
-    /// per-shard telemetry-projection high-water marks.
-    /// </summary>
-    /// <param name="stringKey">The free-form string key to retrieve.</param>
-    /// <param name="cancellationToken">Token used to cancel async calls.</param>
-    /// <returns>Returns the configuration value if found; otherwise, returns null.</returns>
-    Task<string?> GetSettingAsync(string stringKey, CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// Upserts a server configuration setting by its free-form string key. Inserts a new row if no
-    /// row exists for the key, or updates the existing row's value and increments the version.
-    /// Also updates the in-memory cache.
-    /// </summary>
-    /// <param name="stringKey">The free-form string key to set.</param>
-    /// <param name="value">The value to store.</param>
-    /// <param name="cancellationToken">Token used to cancel async calls.</param>
-    Task SetSettingAsync(string stringKey, string value, CancellationToken cancellationToken = default);
-
-    /// <summary>
     /// Invalidates the in-memory settings cache, forcing the next read to hit the database.
     /// </summary>
     void InvalidateCache();

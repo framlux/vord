@@ -33,10 +33,4 @@ internal static class StreamingShardCalculator
     {
         return LockNames.StateStreamingShardPrefix + shardIndex.ToString(CultureInfo.InvariantCulture);
     }
-
-    /// <summary>The per-shard high-water-mark settings key built from the base key.</summary>
-    internal static string HighWaterMarkKeyForShard(string baseKey, int shardIndex)
-    {
-        return baseKey + ":shard:" + shardIndex.ToString(CultureInfo.InvariantCulture);
-    }
 }
