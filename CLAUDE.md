@@ -29,17 +29,26 @@ dotnet publish src/server/server.csproj -c Release -r linux-x64 --self-contained
 
 ## Testing
 
-Uses **TUnit** (not xUnit/NUnit). Tests run as an executable NOT using the `dotnet test` command:
+Uses **TUnit** (not xUnit/NUnit). Tests run as an executable NOT using the `dotnet test` command. The test projects are split by tier — there is **no** `test/unit/unit.csproj` or `test/functional/functional.csproj`; run the specific project(s) you need:
 
 ```bash
-# Unit tests
-dotnet run --project test/unit/unit.csproj
+# Unit tests (split by assembly under test)
+dotnet run --project test/unit/server/unit.server.csproj
+dotnet run --project test/unit/services.core/unit.services.core.csproj
+dotnet run --project test/unit/database/unit.database.csproj
 
-# Functional tests (full HTTP pipeline with in-memory SQLite)
-dotnet run --project test/functional/functional.csproj
+# Functional tests (full HTTP pipeline with in-memory SQLite, split by surface)
+dotnet run --project test/functional/web/functional.web.csproj
+dotnet run --project test/functional/grpc/functional.grpc.csproj
+dotnet run --project test/functional/hangfire/functional.hangfire.csproj
 
 # Integration tests (requires Docker or Podman for Testcontainers — spins up a real Postgres)
 dotnet run --project test/integration/integration.csproj
+
+# Web frontend (SvelteKit / Vitest)
+pnpm -C src/web test      # also: pnpm -C src/web check  /  pnpm -C src/web build
+
+# Target a subset of any TUnit project with: --treenode-filter "*SomeTestName*"
 
 # For Podman on macOS, point Testcontainers at the podman socket first:
 #   export DOCKER_HOST="unix://$(podman machine inspect podman-machine-default --format '{{.ConnectionInfo.PodmanSocket.Path}}')"
@@ -109,7 +118,7 @@ dotnet run --project test/integration/integration.csproj
 
 **Namespaces:** `Framlux.FleetManagement.{Server|Agent|Web}`
 
-**Database:** LinqToDB (not EF Core). Models use `[Table]`, `[Column]`, `[PrimaryKey]` attributes. Access via domain-specific repository interfaces (e.g., `IMachineRepository`, `IAuditLogRepository`) — never inject `DatabaseContext` directly in server-side code. `DatabaseContext` is only used within repository implementations in the `database` project and for DI registration in `Program.cs`. Do not use composite/aggregate repository interfaces. If a constructor has 6+ repository dependencies, consider whether the class has too many responsibilities. Migrations use FluentMigrator.
+**Database:** LinqToDB (not EF Core). Models use `[Table]`, `[Column]`, `[PrimaryKey]` attributes. Access via domain-specific repository interfaces (e.g., `IMachineRepository`, `IAuditLogRepository`) — never inject `DatabaseContext` directly in server-side code. `DatabaseContext` is only used within repository implementations in the `database` project and for DI registration in `Program.cs`. Do not use composite/aggregate repository interfaces. If a constructor has 6+ repository dependencies, consider whether the class has too many responsibilities. Migrations use FluentMigrator. Migrations are consolidated to two files — `InitialMigration.cs` (all schema) and `InitialMigration2.cs` (deferred self-referential `Users` FKs); add schema in place, do not create new migration files. Internal stream-cursor / checkpoint state (e.g. the projection high-water mark) belongs in its own dedicated table keyed by shard/partition id — **never** in `ServerConfigurationSettings`, which is for admin-facing configuration only.
 
 **API Endpoints:** FastEndpoints pattern — inherit `Endpoint<TReq, TRes>`, configure route/auth/version in `Configure()`, implement `HandleAsync()`. Versioned routes: `/v{n}/api/{resource}`.
 
