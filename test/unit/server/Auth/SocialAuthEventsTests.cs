@@ -745,4 +745,46 @@ public sealed class SocialAuthEventsTests
         await Assert.That(() => SocialAuthEvents.BuildTenantNamespacedSubject(httpContext, "raw-sub"))
             .Throws<InvalidOperationException>();
     }
+
+    [Test]
+    public async Task BuildTenantNamespacedSubject_AlreadyNamespacedSubject_DoesNotDoubleWrap()
+    {
+        DefaultHttpContext httpContext = new();
+        httpContext.Items["tenant-oidc-tenant-id"] = "5";
+
+        string result = SocialAuthEvents.BuildTenantNamespacedSubject(httpContext, "tenant:5:rawsub");
+
+        await Assert.That(result).IsEqualTo("tenant:5:rawsub");
+    }
+
+    // --- Custom OIDC rewrites the cookie subject to the namespaced value ---
+
+    [Test]
+    public async Task PopulateUserClaimsAsync_CustomOidc_RewritesNameIdentifierToNamespacedSubject()
+    {
+        (DefaultHttpContext httpContext, IUserRepository userRepo, ITenantRepository tenantRepo) = CreateTestContext();
+        httpContext.Items["tenant-oidc-tenant-id"] = "5";
+
+        ClaimsIdentity identity = CreateIdentity(nameIdentifier: "rawsub");
+        UserAccount user = CreateUser(id: 88, externalId: "tenant:5:rawsub");
+        user.AuthProvider = Database.Enums.AuthProviderType.CustomOidc;
+
+        userRepo.GetUserByExternalIdForProviderAsync(Database.Enums.AuthProviderType.CustomOidc, "tenant:5:rawsub", Arg.Any<CancellationToken>())
+            .Returns(user);
+        tenantRepo.GetTenantsForUserByIdAsync(88, Arg.Any<CancellationToken>())
+            .Returns(Enumerable.Empty<UserTenantRole>());
+
+        bool result = await SocialAuthEvents.PopulateUserClaimsAsync(identity, httpContext, CancellationToken.None, Database.Enums.AuthProviderType.CustomOidc);
+
+        await Assert.That(result).IsTrue();
+
+        // The cookie subject must now match the namespaced value the DB keys on, so later reads resolve.
+        Claim? nameIdClaim = identity.FindFirst(ClaimTypes.NameIdentifier);
+        await Assert.That(nameIdClaim).IsNotNull();
+        await Assert.That(nameIdClaim!.Value).IsEqualTo("tenant:5:rawsub");
+
+        // The user lookup must have been performed with the namespaced subject, not the raw one.
+        await userRepo.Received(1).GetUserByExternalIdForProviderAsync(Database.Enums.AuthProviderType.CustomOidc, "tenant:5:rawsub", Arg.Any<CancellationToken>());
+        await userRepo.DidNotReceive().GetUserByExternalIdForProviderAsync(Database.Enums.AuthProviderType.CustomOidc, "rawsub", Arg.Any<CancellationToken>());
+    }
 }

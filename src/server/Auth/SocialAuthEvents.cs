@@ -71,7 +71,17 @@ public static class SocialAuthEvents
             throw new InvalidOperationException("Custom OIDC subject cannot be namespaced because no tenant id was stashed for the request.");
         }
 
-        return $"tenant:{tenantId}:{rawSubject}";
+        string expectedPrefix = $"tenant:{tenantId}:";
+
+        // Defensively refuse to double-wrap: if the subject already carries this tenant's namespace
+        // prefix (for example because the principal was rebuilt from a previously-namespaced cookie),
+        // it is already the canonical stored identifier and must be returned unchanged.
+        if (rawSubject.StartsWith(expectedPrefix, StringComparison.Ordinal))
+        {
+            return rawSubject;
+        }
+
+        return $"{expectedPrefix}{rawSubject}";
     }
 
     /// <summary>
@@ -142,6 +152,26 @@ public static class SocialAuthEvents
         {
             user.Username = email;
             await userRepository.UpdateUserEmailAsync(user.Id, email, ct);
+        }
+
+        // For tenant custom OIDC the stored ExternalId (and every later lookup) uses the
+        // tenant-namespaced subject. The cookie principal still carries the raw IdP subject, so
+        // rewrite the NameIdentifier claim to the same namespaced value the DB keys on. Without this
+        // every later read that matches the cookie subject against the stored ExternalId misses.
+        // The equality guard keeps the rewrite idempotent so a re-entry cannot double-wrap.
+        // For tenant custom OIDC the stored ExternalId (and every later lookup) uses the
+        // tenant-namespaced subject. The cookie principal still carries the raw IdP subject, so
+        // rewrite the NameIdentifier claim to the same namespaced value the DB keys on. Without this
+        // every later read that matches the cookie subject against the stored ExternalId misses.
+        // The equality guard keeps the rewrite idempotent so a re-entry cannot double-wrap.
+        if (authProvider == AuthProviderType.CustomOidc)
+        {
+            Claim? existingNameId = identity.FindFirst(ClaimTypes.NameIdentifier);
+            if ((existingNameId is not null) && (string.Equals(existingNameId.Value, uniqueId, StringComparison.Ordinal) == false))
+            {
+                identity.RemoveClaim(existingNameId);
+                identity.AddClaim(new Claim(ClaimTypes.NameIdentifier, uniqueId));
+            }
         }
 
         // Update the auth provider on each login to track the most recent provider used
