@@ -2,8 +2,6 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
-using System.Globalization;
-using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Services.Core.Infrastructure;
@@ -46,7 +44,6 @@ public sealed class MachineStateStreamingService : BackgroundService
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly ISqlDialect _dialect;
     private readonly IAdvisoryLockProvider _advisoryLockProvider;
-    private readonly IServerSettingsCache _settingsCache;
     private readonly TimeProvider _timeProvider;
     private readonly TimeSpan _startupDelay;
     private readonly ILogger<MachineStateStreamingService> _logger;
@@ -54,7 +51,6 @@ public sealed class MachineStateStreamingService : BackgroundService
     private readonly int _shardCount;
     private readonly int _batchSize;
     private readonly string _lockKey;
-    private readonly string _highWaterMarkKey;
 
     private long _highWaterMark;
     private bool _highWaterMarkLoaded;
@@ -65,7 +61,6 @@ public sealed class MachineStateStreamingService : BackgroundService
     /// <param name="scopeFactory">Service scope factory for resolving scoped repositories per batch.</param>
     /// <param name="dialect">SQL dialect used by downstream repository calls.</param>
     /// <param name="advisoryLockProvider">Provides exclusive coordination across replicas.</param>
-    /// <param name="settingsCache">Stores the streaming high-water mark across restarts.</param>
     /// <param name="logger">The logger.</param>
     /// <param name="shardIndex">The projection shard this instance owns under modulo partitioning.</param>
     /// <param name="streamingOptions">Streaming options carrying the shard count and batch size.</param>
@@ -75,7 +70,6 @@ public sealed class MachineStateStreamingService : BackgroundService
         IServiceScopeFactory scopeFactory,
         ISqlDialect dialect,
         IAdvisoryLockProvider advisoryLockProvider,
-        IServerSettingsCache settingsCache,
         ILogger<MachineStateStreamingService> logger,
         int shardIndex,
         IOptions<StreamingOptions> streamingOptions,
@@ -85,7 +79,6 @@ public sealed class MachineStateStreamingService : BackgroundService
         ArgumentNullException.ThrowIfNull(scopeFactory);
         ArgumentNullException.ThrowIfNull(dialect);
         ArgumentNullException.ThrowIfNull(advisoryLockProvider);
-        ArgumentNullException.ThrowIfNull(settingsCache);
         ArgumentNullException.ThrowIfNull(logger);
         ArgumentNullException.ThrowIfNull(streamingOptions);
 
@@ -94,7 +87,6 @@ public sealed class MachineStateStreamingService : BackgroundService
         _scopeFactory = scopeFactory;
         _dialect = dialect;
         _advisoryLockProvider = advisoryLockProvider;
-        _settingsCache = settingsCache;
         _timeProvider = timeProvider ?? TimeProvider.System;
         _startupDelay = startupDelay ?? DefaultStartupDelay;
         _logger = logger;
@@ -102,8 +94,6 @@ public sealed class MachineStateStreamingService : BackgroundService
         _shardCount = options.ShardCount;
         _batchSize = options.BatchSize;
         _lockKey = StreamingShardCalculator.LockNameForShard(_shardIndex);
-        _highWaterMarkKey = StreamingShardCalculator.HighWaterMarkKeyForShard(
-            ServerConfigurationSettingKeys.StreamingHighWaterMark.ToString(), _shardIndex);
     }
 
     /// <inheritdoc/>
@@ -310,19 +300,10 @@ public sealed class MachineStateStreamingService : BackgroundService
 
     private async Task LoadHighWaterMarkAsync(CancellationToken ct)
     {
-        string? stored = await _settingsCache.GetSettingAsync(_highWaterMarkKey, ct);
+        using IServiceScope scope = _scopeFactory.CreateScope();
+        IMachineStateRepository repo = scope.ServiceProvider.GetRequiredService<IMachineStateRepository>();
 
-        // Parse with invariant culture and explicit NumberStyles so the round-trip is stable on
-        // non-en hosts (the same applies to the symmetric Persist path below).
-        if (stored is not null && long.TryParse(stored, NumberStyles.Integer, CultureInfo.InvariantCulture, out long hwm))
-        {
-            _highWaterMark = hwm;
-        }
-        else
-        {
-            _highWaterMark = 0;
-        }
-
+        _highWaterMark = await repo.GetProjectionCursorAsync(_shardIndex, ct) ?? 0;
         _highWaterMarkLoaded = true;
 
         _logger.LogInformation("State streaming starting from high-water mark {HighWaterMark}", _highWaterMark);
@@ -330,9 +311,9 @@ public sealed class MachineStateStreamingService : BackgroundService
 
     private async Task PersistHighWaterMarkAsync(CancellationToken ct)
     {
-        await _settingsCache.SetSettingAsync(
-            _highWaterMarkKey,
-            _highWaterMark.ToString(CultureInfo.InvariantCulture),
-            ct);
+        using IServiceScope scope = _scopeFactory.CreateScope();
+        IMachineStateRepository repo = scope.ServiceProvider.GetRequiredService<IMachineStateRepository>();
+
+        await repo.SetProjectionCursorAsync(_shardIndex, _highWaterMark, ct);
     }
 }

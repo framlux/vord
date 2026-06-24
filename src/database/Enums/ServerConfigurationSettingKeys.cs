@@ -70,12 +70,6 @@ public enum ServerConfigurationSettingKeys : int
     TelemetrySendSlowSeconds = 12,
 
     /// <summary>
-    /// High-water mark (MachineTelemetry.Id) for the streaming state service.
-    /// Used to track which telemetry rows have been processed into the summary tables.
-    /// </summary>
-    StreamingHighWaterMark = 13,
-
-    /// <summary>
     /// Service status collection interval in seconds (default: 3600, range: 60-86400).
     /// Controls how often agents collect systemd service status.
     /// </summary>

@@ -63,12 +63,6 @@ public class StreamingShardCalculatorTests
     }
 
     [Test]
-    public async Task HighWaterMarkKeyForShard_IsDistinctPerShard()
-    {
-        await Assert.That(StreamingShardCalculator.HighWaterMarkKeyForShard("streaming.hwm", 2)).IsEqualTo("streaming.hwm:shard:2");
-    }
-
-    [Test]
     public async Task SingleShard_OwnsEveryMachine()
     {
         await Assert.That(StreamingShardCalculator.OwnsMachine(123, 0, 1)).IsTrue();

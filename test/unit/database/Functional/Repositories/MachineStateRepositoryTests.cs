@@ -1279,4 +1279,67 @@ public class MachineStateRepositoryTests
         summary.SecurityUpdates = securityUpdates;
         await dbFactory.Context.InsertAsync(summary);
     }
+
+    // ========== Projection cursor tests ==========
+
+    [Test]
+    public async Task GetProjectionCursorAsync_NoRow_ReturnsNull()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        IMachineStateRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+
+        long? position = await repo.GetProjectionCursorAsync(0);
+
+        await Assert.That(position).IsNull();
+    }
+
+    [Test]
+    public async Task SetProjectionCursorAsync_FirstWrite_InsertsRow()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        IMachineStateRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+
+        await repo.SetProjectionCursorAsync(0, 42);
+
+        long? position = await repo.GetProjectionCursorAsync(0);
+
+        await Assert.That(position).IsEqualTo(42L);
+    }
+
+    [Test]
+    public async Task SetProjectionCursorAsync_SecondWrite_UpdatesPosition()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        IMachineStateRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+
+        await repo.SetProjectionCursorAsync(0, 42);
+        await repo.SetProjectionCursorAsync(0, 100);
+
+        long? position = await repo.GetProjectionCursorAsync(0);
+        await Assert.That(position).IsEqualTo(100L);
+
+        // A second write must update in place, not insert a duplicate row for the same shard.
+        List<MachineStateProjectionCursor> rows = await dbFactory.Context.MachineStateProjectionCursors
+            .Where(c => c.ShardIndex == 0)
+            .ToListAsync();
+        await Assert.That(rows.Count).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task ProjectionCursor_DistinctShards_AreIndependent()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        IMachineStateRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+
+        await repo.SetProjectionCursorAsync(0, 10);
+        await repo.SetProjectionCursorAsync(1, 20);
+
+        await Assert.That(await repo.GetProjectionCursorAsync(0)).IsEqualTo(10L);
+        await Assert.That(await repo.GetProjectionCursorAsync(1)).IsEqualTo(20L);
+
+        // Advancing one shard must not move the other.
+        await repo.SetProjectionCursorAsync(0, 11);
+        await Assert.That(await repo.GetProjectionCursorAsync(0)).IsEqualTo(11L);
+        await Assert.That(await repo.GetProjectionCursorAsync(1)).IsEqualTo(20L);
+    }
 }

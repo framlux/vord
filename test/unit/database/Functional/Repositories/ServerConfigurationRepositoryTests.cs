@@ -43,35 +43,6 @@ public class ServerConfigurationRepositoryTests
     }
 
     [Test]
-    public async Task ListAllSettingsAsync_StringKeyedRowsExist_AreExcluded()
-    {
-        // Internal string-keyed coordination rows (e.g. per-shard high-water marks) must never leak
-        // into the admin settings surface, while enum-keyed settings still appear.
-        using TestDatabaseFactory dbFactory = new();
-        IServerConfigurationRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
-
-        await dbFactory.Context.InsertAsync(new ServerConfigurationSettings
-        {
-            Key = ServerConfigurationSettingKeys.AgentHeartbeatSeconds,
-            Value = "300",
-            Version = 1,
-        });
-        await dbFactory.Context.InsertAsync(new ServerConfigurationSettings
-        {
-            Key = ServerConfigurationSettingKeys.None,
-            StringKey = "streaming.hwm:shard:0",
-            Value = "42",
-            Version = 1,
-        });
-
-        List<ServerConfigurationSettings> result = await repo.ListAllSettingsAsync();
-
-        await Assert.That(result.Count).IsEqualTo(1);
-        await Assert.That(result[0].Key).IsEqualTo(ServerConfigurationSettingKeys.AgentHeartbeatSeconds);
-        await Assert.That(result.Any(s => s.StringKey is not null)).IsFalse();
-    }
-
-    [Test]
     public async Task ListAllSettingsAsync_NoSettings_ReturnsEmptyList()
     {
         using TestDatabaseFactory dbFactory = new();
@@ -117,42 +88,6 @@ public class ServerConfigurationRepositoryTests
         await Assert.That(result[0].Key).IsEqualTo(ServerConfigurationSettingKeys.AgentHeartbeatSeconds);
         await Assert.That(result[1].Key).IsEqualTo(ServerConfigurationSettingKeys.OnlineThresholdSeconds);
         await Assert.That(result[2].Key).IsEqualTo(ServerConfigurationSettingKeys.DeduplicationTtlSeconds);
-    }
-
-    [Test]
-    public async Task GetAllSettingsAsync_StringKeyedRowsExist_AreExcluded()
-    {
-        // Internal string-keyed coordination rows must never leak into the admin settings surface,
-        // while enum-keyed settings still appear in key order.
-        using TestDatabaseFactory dbFactory = new();
-        IServerConfigurationRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
-
-        await dbFactory.Context.InsertAsync(new ServerConfigurationSettings
-        {
-            Key = ServerConfigurationSettingKeys.OnlineThresholdSeconds,
-            Value = "600",
-            Version = 1,
-        });
-        await dbFactory.Context.InsertAsync(new ServerConfigurationSettings
-        {
-            Key = ServerConfigurationSettingKeys.AgentHeartbeatSeconds,
-            Value = "300",
-            Version = 1,
-        });
-        await dbFactory.Context.InsertAsync(new ServerConfigurationSettings
-        {
-            Key = ServerConfigurationSettingKeys.None,
-            StringKey = "streaming.hwm:shard:1",
-            Value = "99",
-            Version = 1,
-        });
-
-        List<ServerConfigurationSettings> result = await repo.GetAllSettingsAsync();
-
-        await Assert.That(result.Count).IsEqualTo(2);
-        await Assert.That(result[0].Key).IsEqualTo(ServerConfigurationSettingKeys.AgentHeartbeatSeconds);
-        await Assert.That(result[1].Key).IsEqualTo(ServerConfigurationSettingKeys.OnlineThresholdSeconds);
-        await Assert.That(result.Any(s => s.StringKey is not null)).IsFalse();
     }
 
     [Test]

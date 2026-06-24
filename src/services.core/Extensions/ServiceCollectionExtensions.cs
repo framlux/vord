@@ -398,7 +398,6 @@ public static class ServiceCollectionExtensions
                 sp.GetRequiredService<IServiceScopeFactory>(),
                 sp.GetRequiredService<ISqlDialect>(),
                 sp.GetRequiredService<IAdvisoryLockProvider>(),
-                sp.GetRequiredService<IServerSettingsCache>(),
                 sp.GetRequiredService<ILogger<MachineStateStreamingService>>(),
                 shardIndex: captured,
                 streamingOptions: sp.GetRequiredService<IOptions<StreamingOptions>>()));

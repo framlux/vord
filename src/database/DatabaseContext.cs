@@ -55,6 +55,11 @@ public sealed class DatabaseContext(DataOptions<DatabaseContext> options) : Data
     public ITable<MachineStateDetail> MachineStateDetails => this.GetTable<MachineStateDetail>();
 
     /// <summary>
+    /// Represents the per-shard cursors for the telemetry-to-state projection.
+    /// </summary>
+    public ITable<MachineStateProjectionCursor> MachineStateProjectionCursors => this.GetTable<MachineStateProjectionCursor>();
+
+    /// <summary>
     /// Represents the collection of tenant subscriptions in the database.
     /// </summary>
     public ITable<TenantSubscription> TenantSubscriptions => this.GetTable<TenantSubscription>();

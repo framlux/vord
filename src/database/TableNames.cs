@@ -16,6 +16,7 @@ internal static class TableNames
     public const string MachineAuthorizedKeys = "MachineAuthorizedKeys";
     public const string MachineStateSummary = "MachineStateSummary";
     public const string MachineStateDetail = "MachineStateDetail";
+    public const string MachineStateProjectionCursor = "MachineStateProjectionCursor";
     public const string TenantSubscriptions = "TenantSubscriptions";
     public const string TenantOidcConfigurations = "TenantOidcConfigurations";
     public const string TenantInvitations = "TenantInvitations";

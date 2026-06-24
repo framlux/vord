@@ -222,4 +222,21 @@ public interface IMachineStateRepository
     /// <param name="parameters">Search parameters including filters, sort, and pagination.</param>
     /// <param name="cancellationToken">A cancellation token.</param>
     Task<(List<FleetMachineRow> Rows, int TotalCount)> SearchFleetMachinesAsync(int tenantId, FleetSearchParameters parameters, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Returns the stored projection cursor position for the given shard, or null when no cursor
+    /// row exists yet for that shard.
+    /// </summary>
+    /// <param name="shardIndex">The projection shard's zero-based index.</param>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    Task<long?> GetProjectionCursorAsync(int shardIndex, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Upserts the projection cursor for the given shard, inserting a row when none exists or
+    /// advancing the stored position and update timestamp otherwise.
+    /// </summary>
+    /// <param name="shardIndex">The projection shard's zero-based index.</param>
+    /// <param name="position">The last <see cref="Models.MachineTelemetry.Id"/> this shard has projected.</param>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    Task SetProjectionCursorAsync(int shardIndex, long position, CancellationToken cancellationToken = default);
 }
