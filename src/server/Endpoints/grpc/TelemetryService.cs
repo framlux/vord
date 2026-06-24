@@ -46,6 +46,20 @@ public sealed class TelemetryService : Telemetry.TelemetryBase
     private const string StreamCountKeyPrefix = "telemetry:stream:";
 
     /// <summary>
+    /// Days of future daily partitions the partition job pre-creates. Mirrors
+    /// PartitionManagementJob.DaysAhead; the dedup timestamp clamp must not exceed it so derived
+    /// timestamps always land in an existing partition.
+    /// </summary>
+    private const int PartitionJobDaysAhead = 7;
+
+    /// <summary>
+    /// Maximum days into the past the dedup timestamp may be clamped to. Partition drop uses the
+    /// maximum tenant retention plus a safety buffer, so the oldest retained partition is always
+    /// older than this floor; a clamped timestamp therefore always lands in a partition that still exists.
+    /// </summary>
+    private const int MaxPartitionLookbackDays = 7;
+
+    /// <summary>
     /// Maximum allowed clock skew between the agent's timestamp and server time.
     /// Envelopes with an agent_timestamp outside this window are rejected — the
     /// agent's clock is too far off to produce meaningful telemetry.
@@ -393,7 +407,7 @@ public sealed class TelemetryService : Telemetry.TelemetryBase
                     TenantId = tenantId,
                     TelemetryType = n.Type,
                     Payload = n.Payload,
-                    ReceivedAt = receivedAt,
+                    ReceivedAt = ResolveDedupTimestamp(n.Item, receivedAt),
                     SourceEventId = n.Item.EventId,
                 }).ToList();
 
@@ -478,6 +492,38 @@ public sealed class TelemetryService : Telemetry.TelemetryBase
                 ErrorMessage = "Internal server error"
             };
         }
+    }
+
+    /// <summary>
+    /// Resolves the partition-key timestamp used to deduplicate a telemetry item. For items with a
+    /// source event id the value is derived from the item's immutable collected_at so a re-delivery
+    /// produces the same (SourceEventId, ReceivedAt) tuple and collides on the unique index. The
+    /// value is clamped to the window of maintained daily partitions around server time so a clock-
+    /// skewed agent cannot route rows outside the existing partition range. Items without a source
+    /// event id are not deduplicated and keep the server receipt time.
+    /// </summary>
+    internal static DateTimeOffset ResolveDedupTimestamp(TelemetryItem item, DateTimeOffset serverReceivedAt)
+    {
+        if (string.IsNullOrEmpty(item.EventId) || (item.CollectedAt is null))
+        {
+            return serverReceivedAt;
+        }
+
+        DateTimeOffset collected = item.CollectedAt.ToDateTimeOffset();
+        DateTimeOffset lowerBound = serverReceivedAt.AddDays(-MaxPartitionLookbackDays);
+        DateTimeOffset upperBound = serverReceivedAt.AddDays(PartitionJobDaysAhead);
+
+        if (collected < lowerBound)
+        {
+            return lowerBound;
+        }
+
+        if (collected > upperBound)
+        {
+            return upperBound;
+        }
+
+        return collected;
     }
 
     private async Task EvaluateSshAlertEventsAsync(
