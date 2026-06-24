@@ -87,6 +87,68 @@ public sealed class AuthenticatedEndpointTests
     }
 
     [Test]
+    public async Task AuthMe_CustomOidcNamespacedSubject_ResolvesUserWithTenantRole()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+
+        // Mirror the production state for a Team-tier custom OIDC user: the stored ExternalId is the
+        // tenant-namespaced subject, and the cookie principal carries that same namespaced value.
+        UserAccount user = new()
+        {
+            ExternalId = "tenant:5:somesub",
+            Username = "oidc-user@example.com",
+            CreatedAt = DateTimeOffset.UtcNow,
+            CreatedByUserId = 1,
+            IsActive = true,
+            IsSystem = false,
+            IsGlobalAdmin = false,
+            AuthProvider = AuthProviderType.CustomOidc
+        };
+        user.Id = await db.InsertWithInt32IdentityAsync(user);
+
+        int tenantId = await SeedTenantWithSubscription(db, "Custom OIDC Tenant");
+
+        UserTenantRole role = new()
+        {
+            UserId = user.Id,
+            AssignedTenantId = tenantId,
+            Role = UserAccountRoles.TenantAdmin,
+            AssignedByUserId = user.Id,
+            AssignedAt = DateTimeOffset.UtcNow,
+            IsActive = true
+        };
+        await db.InsertAsync(role);
+
+        HttpClient client = new AuthenticatedClientBuilder(factory)
+            .WithUserId(user.Id)
+            .WithExternalId("tenant:5:somesub")
+            .WithEmail("oidc-user@example.com")
+            .WithAuthProvider((int)AuthProviderType.CustomOidc)
+            .WithRole(tenantId, (int)UserAccountRoles.TenantAdmin)
+            .WithActiveTenant(tenantId)
+            .Build();
+
+        HttpResponseMessage response = await client.GetAsync("/api/v1/auth/me");
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
+
+        JsonDocument json = await JsonDocument.ParseAsync(await response.Content.ReadAsStreamAsync());
+        JsonElement data = json.RootElement.GetProperty("data");
+
+        await Assert.That(data.GetProperty("id").GetInt32()).IsEqualTo(user.Id);
+        await Assert.That(data.GetProperty("needsOnboarding").GetBoolean()).IsFalse();
+
+        // The namespaced cookie subject must resolve to the seeded tenant role.
+        JsonElement tenants = data.GetProperty("tenants");
+        await Assert.That(tenants.GetArrayLength()).IsEqualTo(1);
+
+        JsonElement firstTenant = tenants[0];
+        await Assert.That(firstTenant.GetProperty("tenantId").GetInt32()).IsEqualTo(tenantId);
+        await Assert.That(firstTenant.GetProperty("role").GetString()).IsEqualTo(((int)UserAccountRoles.TenantAdmin).ToString());
+    }
+
+    [Test]
     public async Task AuthMe_GlobalAdmin_ReturnsIsGlobalAdminTrue()
     {
         using FunctionalTestFactory factory = new();

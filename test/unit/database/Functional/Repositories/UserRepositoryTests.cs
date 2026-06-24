@@ -2,6 +2,7 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
+using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Test.Infrastructure;
@@ -70,6 +71,63 @@ public class UserCacheTests
         UserAccount? result = await cache.GetUserByExternalIdAsync("ext-inactive-1");
 
         await Assert.That(result).IsNull();
+    }
+
+    [Test]
+    public async Task GetUserByExternalIdForProviderAsync_MatchingProviderAndExternalId_ReturnsUser()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        IUserRepository cache = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+
+        UserAccount user = TestDataBuilder.BuildUser(externalId: "shared-sub");
+        user.AuthProvider = AuthProviderType.Google;
+        int userId = await dbFactory.Context.InsertWithInt32IdentityAsync(user);
+
+        UserAccount? result = await cache.GetUserByExternalIdForProviderAsync(AuthProviderType.Google, "shared-sub");
+
+        await Assert.That(result).IsNotNull();
+        await Assert.That(result!.Id).IsEqualTo(userId);
+    }
+
+    [Test]
+    public async Task GetUserByExternalIdForProviderAsync_SameExternalIdDifferentProvider_ReturnsNull()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        IUserRepository cache = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+
+        UserAccount user = TestDataBuilder.BuildUser(externalId: "shared-sub");
+        user.AuthProvider = AuthProviderType.Google;
+        await dbFactory.Context.InsertWithInt32IdentityAsync(user);
+
+        UserAccount? result = await cache.GetUserByExternalIdForProviderAsync(AuthProviderType.GitHub, "shared-sub");
+
+        await Assert.That(result).IsNull();
+    }
+
+    [Test]
+    public async Task GetUserByExternalIdForProviderAsync_InactiveUser_ReturnsNull()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        IUserRepository cache = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+
+        UserAccount user = TestDataBuilder.BuildUser(externalId: "provider-inactive", isActive: false);
+        user.AuthProvider = AuthProviderType.Microsoft;
+        await dbFactory.Context.InsertWithInt32IdentityAsync(user);
+
+        UserAccount? result = await cache.GetUserByExternalIdForProviderAsync(AuthProviderType.Microsoft, "provider-inactive");
+
+        await Assert.That(result).IsNull();
+    }
+
+    [Test]
+    public async Task GetUserByExternalIdForProviderAsync_NullExternalId_ThrowsArgumentException()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        IUserRepository cache = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+
+        await Assert.That(async () =>
+            await cache.GetUserByExternalIdForProviderAsync(AuthProviderType.Google, null!, CancellationToken.None))
+            .Throws<ArgumentException>();
     }
 
     [Test]

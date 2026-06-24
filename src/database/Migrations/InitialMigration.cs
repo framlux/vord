@@ -49,7 +49,7 @@ public sealed class InitialMigration : Migration
 
         Create.Table(TableNames.Users)
             .WithColumn("Id").AsInt32().PrimaryKey().Identity().NotNullable()
-            .WithColumn("ExternalId").AsString().NotNullable().Unique()
+            .WithColumn("ExternalId").AsString().NotNullable()
             .WithColumn("Username").AsString().NotNullable()
             .WithColumn("CreatedAt").AsDateTimeOffset().NotNullable()
             .WithColumn("CreatedByUserId").AsInt32().NotNullable()
@@ -59,6 +59,16 @@ public sealed class InitialMigration : Migration
             .WithColumn("AuthProvider").AsInt16().NotNullable().WithDefaultValue(0)
             .WithColumn("DeletedOn").AsDateTimeOffset().Nullable()
             .WithColumn("DeletedByUserId").AsInt32().Nullable();
+
+        // A subject identifier is only unique within one identity provider, so identity is keyed on the
+        // pair (AuthProvider, ExternalId) rather than the external id alone. A global unique on ExternalId
+        // would both reject legitimate cross-provider collisions and let a shared subject resolve two
+        // distinct people to a single account.
+        Create.Index("IX_Users_Provider_ExternalId")
+            .OnTable(TableNames.Users)
+            .OnColumn("AuthProvider").Ascending()
+            .OnColumn("ExternalId").Ascending()
+            .WithOptions().Unique();
 
         // This must be done here before we add foreign key constraints otherwise the insert
         // will fail due to the CreatedByUserId constraint.

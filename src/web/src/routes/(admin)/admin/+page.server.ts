@@ -2,7 +2,7 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
-import { createServerApiClient } from '$lib/api/server';
+import { createServerApiClient, csrfFor } from '$lib/api/server';
 import { ApiError } from '$lib/api/client';
 import { redirect, error, fail } from '@sveltejs/kit';
 import type { PageServerLoad, Actions } from './$types';
@@ -40,7 +40,9 @@ export const actions: Actions = {
 		const api = createServerApiClient(
 			fetch,
 			cookies.get('vord_auth'),
-			cookies.get('vord_tenant')
+			cookies.get('vord_tenant'),
+			undefined,
+			csrfFor(cookies, locals)
 		);
 		const data = await request.formData();
 		const settingsJson = data.get('settings') as string;

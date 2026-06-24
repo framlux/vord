@@ -28,7 +28,13 @@
 		try {
 			const result = await api.emailLookup(email.trim());
 
-			window.location.href = `/api/v1/auth/challenge/tenant-oidc?returnUrl=${returnUrl}&tenantId=${result.tenantId}`;
+			if (!result.ssoAvailable || result.slug === null) {
+				emailError = 'No SSO provider is configured for this email domain';
+				return;
+			}
+
+			const slug = encodeURIComponent(result.slug);
+			window.location.href = `/api/v1/auth/challenge/tenant-oidc?returnUrl=${returnUrl}&slug=${slug}`;
 		} catch (err) {
 			emailError = err instanceof Error ? err.message : 'An unexpected error occurred';
 		} finally {
@@ -73,10 +79,10 @@
 				</a>
 			</div>
 
-			{#if data.tenant}
+			{#if data.slug}
 				<div class="mt-4 border-t border-surface-200 pt-4 dark:border-surface-700">
 					<a
-						href="/api/v1/auth/challenge/tenant-oidc?returnUrl={returnUrl}&tenantId={data.tenant}"
+						href="/api/v1/auth/challenge/tenant-oidc?returnUrl={returnUrl}&slug={data.slug}"
 						class="flex w-full items-center justify-center gap-3 rounded-lg border border-primary-500 bg-primary-500/10 px-4 py-3 text-sm font-medium text-primary-600 transition hover:bg-primary-500/20 dark:text-primary-400"
 					>
 						Sign in with SSO

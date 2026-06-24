@@ -24,7 +24,7 @@
     let showInstallScript = $state(false);
     let revokeTokenConfirm = $state<{ open: boolean; id: number | null }>({ open: false, id: null });
 
-    const client = new ApiClient('');
+    const client = new ApiClient('', fetch);
 
     async function createToken() {
         createError = '';
@@ -37,6 +37,7 @@
 
         createLoading = true;
         try {
+            if (data.user?.csrfToken) client.setCsrfToken(data.user.csrfToken);
             const result = await client.createRegistrationToken({
                 name: tokenName.trim()
             });
@@ -52,6 +53,7 @@
 
     async function revokeToken(id: number) {
         try {
+            if (data.user?.csrfToken) client.setCsrfToken(data.user.csrfToken);
             await client.revokeRegistrationToken(id);
             await invalidateAll();
         } catch (err: unknown) {

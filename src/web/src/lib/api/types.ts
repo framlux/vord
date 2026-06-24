@@ -57,6 +57,7 @@ export interface UserDto {
 	needsOnboarding: boolean;
 	tenants: UserTenantDto[];
 	activeTenantId: number | null;
+	csrfToken?: string | null;
 }
 
 export interface UserTenantDto {

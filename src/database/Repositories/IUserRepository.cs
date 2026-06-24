@@ -18,6 +18,13 @@ public interface IUserRepository
     Task<UserAccount?> GetUserByExternalIdAsync(string externalId, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Gets an active user by the composite identity of authentication provider and external ID.
+    /// This is the takeover-safe lookup: a subject identifier is only unique within one provider,
+    /// so identity must be resolved on the pair rather than the external ID alone.
+    /// </summary>
+    Task<UserAccount?> GetUserByExternalIdForProviderAsync(AuthProviderType authProvider, string externalId, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Creates a new user account in the database.
     /// </summary>
     Task<UserAccount> CreateUserAccountAsync(UserAccount user, CancellationToken cancellationToken = default);

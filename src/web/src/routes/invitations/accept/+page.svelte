@@ -14,7 +14,7 @@
 	let error = $state('');
 	let accepted = $state(false);
 
-	const client = new ApiClient('');
+	const client = new ApiClient('', fetch);
 
 	const invitation = $derived(data.invitation);
 	const token = $derived(data.token);
@@ -40,6 +40,7 @@
 		error = '';
 
 		try {
+			if (data.user?.csrfToken) client.setCsrfToken(data.user.csrfToken);
 			await client.acceptInvitation(token);
 			accepted = true;
 			setTimeout(() => goto('/dashboard'), 1500);

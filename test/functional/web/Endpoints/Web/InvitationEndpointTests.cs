@@ -788,7 +788,9 @@ public sealed class InvitationEndpointTests
         using DatabaseContext db = factory.CreateDbContext();
         (int tenantId, int adminUserId) = await SeedInvitationEnvironment(db);
 
-        // Create a different user who will accept the invitation
+        // Create a different user who will accept the invitation. Seed a real auth provider so the
+        // accept flow exercises the provider-scoped identity resolution path rather than masking it
+        // with an Unknown-provider account.
         UserAccount acceptingUser = new()
         {
             ExternalId = $"ext-acceptor-{Guid.NewGuid():N}",
@@ -798,6 +800,7 @@ public sealed class InvitationEndpointTests
             IsActive = true,
             IsSystem = false,
             IsGlobalAdmin = false,
+            AuthProvider = AuthProviderType.GitHub,
         };
         acceptingUser.Id = await db.InsertWithInt32IdentityAsync(acceptingUser);
 
@@ -819,6 +822,7 @@ public sealed class InvitationEndpointTests
             .WithUserId(acceptingUser.Id)
             .WithEmail("acceptor@example.com")
             .WithExternalId(acceptingUser.ExternalId)
+            .WithAuthProvider((int)AuthProviderType.GitHub)
             .Build();
 
         // The request may return 500 due to SignInAsync limitation in test infrastructure,
@@ -840,6 +844,90 @@ public sealed class InvitationEndpointTests
 
         await Assert.That(tenantRole).IsNotNull();
         await Assert.That(tenantRole!.Role).IsEqualTo(UserAccountRoles.Viewer);
+    }
+
+    [Test]
+    public async Task AcceptInvitation_RealProviderUser_RefreshResolvesExistingUserNoDuplicate()
+    {
+        // Regression: the cookie re-issue after accept resolves identity provider-scoped. If the
+        // endpoint refreshes claims without passing the authenticated provider, the lookup defaults
+        // to Unknown, misses the real (GitHub) user, and — with self-signup enabled by default —
+        // creates a duplicate Unknown-provider account. This test seeds a GitHub user, authenticates
+        // with the matching "apr" claim, accepts, and asserts the existing user is reused with no
+        // duplicate created.
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int adminUserId) = await SeedInvitationEnvironment(db);
+
+        string externalId = $"ext-github-acceptor-{Guid.NewGuid():N}";
+        string acceptorEmail = $"github-acceptor-{Guid.NewGuid():N}@example.com";
+        UserAccount acceptingUser = new()
+        {
+            ExternalId = externalId,
+            Username = acceptorEmail,
+            CreatedAt = DateTimeOffset.UtcNow,
+            CreatedByUserId = 1,
+            IsActive = true,
+            IsSystem = false,
+            IsGlobalAdmin = false,
+            AuthProvider = AuthProviderType.GitHub,
+        };
+        acceptingUser.Id = await db.InsertWithInt32IdentityAsync(acceptingUser);
+
+        string rawToken = $"github-accept-token-{Guid.NewGuid():N}";
+        TenantInvitation invitation = new()
+        {
+            TenantId = tenantId,
+            Email = acceptorEmail,
+            TokenHash = HashToken(rawToken),
+            Role = UserAccountRoles.Viewer,
+            Status = InvitationStatus.Pending,
+            InvitedByUserId = adminUserId,
+            CreatedAt = DateTimeOffset.UtcNow,
+            ExpiresAt = DateTimeOffset.UtcNow.AddDays(7),
+        };
+        invitation.Id = await db.InsertWithInt32IdentityAsync(invitation);
+
+        HttpClient client = new AuthenticatedClientBuilder(factory)
+            .WithUserId(acceptingUser.Id)
+            .WithEmail(acceptorEmail)
+            .WithExternalId(externalId)
+            .WithAuthProvider((int)AuthProviderType.GitHub)
+            .Build();
+
+        // The claim refresh happens before SignInAsync, which the test cookie handler cannot
+        // complete (it surfaces as a 500). The regression signal is the database state: the
+        // provider-scoped refresh runs to completion before the sign-in, so a broken endpoint
+        // would already have created the duplicate by the time the request fails.
+        await client.PostAsync($"/api/v1/invitations/{rawToken}/accept", null);
+
+        // The refresh must have resolved the existing GitHub user, not created an Unknown duplicate.
+        List<UserAccount> usersForExternalId = await db.UserAccounts
+            .Where(u => u.ExternalId == externalId)
+            .ToListAsync();
+
+        await Assert.That(usersForExternalId.Count).IsEqualTo(1);
+        await Assert.That(usersForExternalId[0].Id).IsEqualTo(acceptingUser.Id);
+        await Assert.That(usersForExternalId[0].AuthProvider).IsEqualTo(AuthProviderType.GitHub);
+
+        // No Unknown-provider account should have been auto-created for this subject.
+        bool unknownDuplicateExists = await db.UserAccounts
+            .AnyAsync(u => u.ExternalId == externalId && u.AuthProvider == AuthProviderType.Unknown);
+
+        await Assert.That(unknownDuplicateExists).IsFalse();
+
+        // The invitation was accepted and the tenant role granted to the existing user.
+        TenantInvitation? updatedInvitation = await db.TenantInvitations
+            .Where(i => i.Id == invitation.Id)
+            .FirstOrDefaultAsync();
+
+        await Assert.That(updatedInvitation!.Status).IsEqualTo(InvitationStatus.Accepted);
+
+        UserTenantRole? tenantRole = await db.UserTenantRoles
+            .Where(r => r.UserId == acceptingUser.Id && r.AssignedTenantId == tenantId)
+            .FirstOrDefaultAsync();
+
+        await Assert.That(tenantRole).IsNotNull();
     }
 
     [Test]

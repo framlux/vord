@@ -26,7 +26,7 @@ public class MemberHandlerTests
         IAuditLogRepository auditLog = Substitute.For<IAuditLogRepository>();
         ITenantRepository tenantRepository = Substitute.For<ITenantRepository>();
         ISubscriptionService subService = Substitute.For<ISubscriptionService>();
-        MemberHandler handler = new(transactionProvider, auditLog, tenantRepository, subService, Substitute.For<IRoleCacheInvalidator>());
+        MemberHandler handler = new(transactionProvider, auditLog, tenantRepository, subService, Substitute.For<IRoleCacheInvalidator>(), Substitute.For<IUserSecurityStampService>());
 
         ServiceResult<ApiResponse<object>> result = await handler.RemoveAsync(2, null, 1, CancellationToken.None);
 
@@ -41,7 +41,7 @@ public class MemberHandlerTests
         IAuditLogRepository auditLog = Substitute.For<IAuditLogRepository>();
         ITenantRepository tenantRepository = Substitute.For<ITenantRepository>();
         ISubscriptionService subService = Substitute.For<ISubscriptionService>();
-        MemberHandler handler = new(transactionProvider, auditLog, tenantRepository, subService, Substitute.For<IRoleCacheInvalidator>());
+        MemberHandler handler = new(transactionProvider, auditLog, tenantRepository, subService, Substitute.For<IRoleCacheInvalidator>(), Substitute.For<IUserSecurityStampService>());
 
         ServiceResult<ApiResponse<object>> result = await handler.RemoveAsync(5, 1, 5, CancellationToken.None);
 
@@ -59,7 +59,7 @@ public class MemberHandlerTests
         ITenantRepository tenantRepository = Substitute.For<ITenantRepository>();
         tenantRepository.DisableUserTenantRoleAsync(2, 1, 1, Arg.Any<CancellationToken>()).Returns(false);
         ISubscriptionService subService = Substitute.For<ISubscriptionService>();
-        MemberHandler handler = new(transactionProvider, auditLog, tenantRepository, subService, Substitute.For<IRoleCacheInvalidator>());
+        MemberHandler handler = new(transactionProvider, auditLog, tenantRepository, subService, Substitute.For<IRoleCacheInvalidator>(), Substitute.For<IUserSecurityStampService>());
 
         ServiceResult<ApiResponse<object>> result = await handler.RemoveAsync(2, 1, 1, CancellationToken.None);
 
@@ -76,12 +76,17 @@ public class MemberHandlerTests
         ITenantRepository tenantRepository = Substitute.For<ITenantRepository>();
         tenantRepository.DisableUserTenantRoleAsync(2, 1, 1, Arg.Any<CancellationToken>()).Returns(true);
         ISubscriptionService subService = Substitute.For<ISubscriptionService>();
-        MemberHandler handler = new(transactionProvider, auditLog, tenantRepository, subService, Substitute.For<IRoleCacheInvalidator>());
+        IRoleCacheInvalidator roleCacheInvalidator = Substitute.For<IRoleCacheInvalidator>();
+        IUserSecurityStampService stampService = Substitute.For<IUserSecurityStampService>();
+        MemberHandler handler = new(transactionProvider, auditLog, tenantRepository, subService, roleCacheInvalidator, stampService);
 
         ServiceResult<ApiResponse<object>> result = await handler.RemoveAsync(2, 1, 1, CancellationToken.None);
 
         await Assert.That(result.IsSuccess).IsTrue();
         await Assert.That(result.Data!.Success).IsTrue();
+        await roleCacheInvalidator.Received(1).InvalidateAsync(2, Arg.Any<CancellationToken>());
+        await roleCacheInvalidator.Received(1).InvalidateUserStateAsync(2, Arg.Any<CancellationToken>());
+        await stampService.Received(1).BumpAsync(2, Arg.Any<CancellationToken>());
     }
 
     // ========== ChangeRoleAsync tests ==========
@@ -93,7 +98,7 @@ public class MemberHandlerTests
         IAuditLogRepository auditLog = Substitute.For<IAuditLogRepository>();
         ITenantRepository tenantRepository = Substitute.For<ITenantRepository>();
         ISubscriptionService subService = Substitute.For<ISubscriptionService>();
-        MemberHandler handler = new(transactionProvider, auditLog, tenantRepository, subService, Substitute.For<IRoleCacheInvalidator>());
+        MemberHandler handler = new(transactionProvider, auditLog, tenantRepository, subService, Substitute.For<IRoleCacheInvalidator>(), Substitute.For<IUserSecurityStampService>());
 
         ServiceResult<ApiResponse<object>> result = await handler.ChangeRoleAsync(2, null, 1, "Viewer", CancellationToken.None);
 
@@ -109,7 +114,7 @@ public class MemberHandlerTests
         ITenantRepository tenantRepository = Substitute.For<ITenantRepository>();
         ISubscriptionService subService = Substitute.For<ISubscriptionService>();
         subService.GetSubscriptionForTenantAsync(1, Arg.Any<CancellationToken>()).Returns((TenantSubscription?)null);
-        MemberHandler handler = new(transactionProvider, auditLog, tenantRepository, subService, Substitute.For<IRoleCacheInvalidator>());
+        MemberHandler handler = new(transactionProvider, auditLog, tenantRepository, subService, Substitute.For<IRoleCacheInvalidator>(), Substitute.For<IUserSecurityStampService>());
 
         ServiceResult<ApiResponse<object>> result = await handler.ChangeRoleAsync(2, 1, 1, "Viewer", CancellationToken.None);
 
@@ -129,7 +134,7 @@ public class MemberHandlerTests
             Id = 1, TenantId = 1, Tier = SubscriptionTier.Pro, Status = SubscriptionStatus.Active,
             CreatedAt = DateTimeOffset.UtcNow, UpdatedAt = DateTimeOffset.UtcNow,
         });
-        MemberHandler handler = new(transactionProvider, auditLog, tenantRepository, subService, Substitute.For<IRoleCacheInvalidator>());
+        MemberHandler handler = new(transactionProvider, auditLog, tenantRepository, subService, Substitute.For<IRoleCacheInvalidator>(), Substitute.For<IUserSecurityStampService>());
 
         ServiceResult<ApiResponse<object>> result = await handler.ChangeRoleAsync(2, 1, 1, "Viewer", CancellationToken.None);
 
@@ -149,7 +154,7 @@ public class MemberHandlerTests
             Id = 1, TenantId = 1, Tier = SubscriptionTier.Team, Status = SubscriptionStatus.Active,
             CreatedAt = DateTimeOffset.UtcNow, UpdatedAt = DateTimeOffset.UtcNow,
         });
-        MemberHandler handler = new(transactionProvider, auditLog, tenantRepository, subService, Substitute.For<IRoleCacheInvalidator>());
+        MemberHandler handler = new(transactionProvider, auditLog, tenantRepository, subService, Substitute.For<IRoleCacheInvalidator>(), Substitute.For<IUserSecurityStampService>());
 
         ServiceResult<ApiResponse<object>> result = await handler.ChangeRoleAsync(2, 1, 1, "NotARealRole", CancellationToken.None);
 
@@ -169,7 +174,7 @@ public class MemberHandlerTests
             Id = 1, TenantId = 1, Tier = SubscriptionTier.Team, Status = SubscriptionStatus.Active,
             CreatedAt = DateTimeOffset.UtcNow, UpdatedAt = DateTimeOffset.UtcNow,
         });
-        MemberHandler handler = new(transactionProvider, auditLog, tenantRepository, subService, Substitute.For<IRoleCacheInvalidator>());
+        MemberHandler handler = new(transactionProvider, auditLog, tenantRepository, subService, Substitute.For<IRoleCacheInvalidator>(), Substitute.For<IUserSecurityStampService>());
 
         ServiceResult<ApiResponse<object>> result = await handler.ChangeRoleAsync(5, 1, 5, "Viewer", CancellationToken.None);
 
@@ -192,7 +197,9 @@ public class MemberHandlerTests
             Id = 1, TenantId = 1, Tier = SubscriptionTier.Team, Status = SubscriptionStatus.Active,
             CreatedAt = DateTimeOffset.UtcNow, UpdatedAt = DateTimeOffset.UtcNow,
         });
-        MemberHandler handler = new(transactionProvider, auditLog, tenantRepository, subService, Substitute.For<IRoleCacheInvalidator>());
+        IRoleCacheInvalidator roleCacheInvalidator = Substitute.For<IRoleCacheInvalidator>();
+        IUserSecurityStampService stampService = Substitute.For<IUserSecurityStampService>();
+        MemberHandler handler = new(transactionProvider, auditLog, tenantRepository, subService, roleCacheInvalidator, stampService);
 
         ServiceResult<ApiResponse<object>> result = await handler.ChangeRoleAsync(2, 1, 1, "Viewer", CancellationToken.None);
 
@@ -200,6 +207,9 @@ public class MemberHandlerTests
         await tenantRepository.Received(1).CreateUserTenantRoleAsync(
             Arg.Is<UserTenantRole>(r => r.Role == UserAccountRoles.Viewer && r.UserId == 2 && r.AssignedTenantId == 1),
             Arg.Any<CancellationToken>());
+        await roleCacheInvalidator.Received(1).InvalidateAsync(2, Arg.Any<CancellationToken>());
+        await roleCacheInvalidator.Received(1).InvalidateUserStateAsync(2, Arg.Any<CancellationToken>());
+        await stampService.Received(1).BumpAsync(2, Arg.Any<CancellationToken>());
     }
 
     [Test]
@@ -217,7 +227,7 @@ public class MemberHandlerTests
             Id = 1, TenantId = 1, Tier = SubscriptionTier.Team, Status = SubscriptionStatus.Active,
             CreatedAt = DateTimeOffset.UtcNow, UpdatedAt = DateTimeOffset.UtcNow,
         });
-        MemberHandler handler = new(transactionProvider, auditLog, tenantRepository, subService, Substitute.For<IRoleCacheInvalidator>());
+        MemberHandler handler = new(transactionProvider, auditLog, tenantRepository, subService, Substitute.For<IRoleCacheInvalidator>(), Substitute.For<IUserSecurityStampService>());
 
         ServiceResult<ApiResponse<object>> result = await handler.ChangeRoleAsync(2, 1, 1, "Viewer", CancellationToken.None);
 

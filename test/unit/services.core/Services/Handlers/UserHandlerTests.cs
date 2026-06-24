@@ -8,6 +8,7 @@ using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Services.Core.Models.Users;
 using Framlux.FleetManagement.Services.Core.Handlers;
 using Framlux.FleetManagement.Services.Core.Infrastructure;
+using Framlux.FleetManagement.Services.Core.Security;
 using Framlux.FleetManagement.Test.Infrastructure;
 using LinqToDB.Async;
 using LinqToDB;
@@ -55,7 +56,7 @@ public class UserHandlerTests
     {
         using TestDatabaseFactory dbFactory = new();
         ILogger<UserHandler> logger = Substitute.For<ILogger<UserHandler>>();
-        UserHandler handler = new(CreateRepo(dbFactory), logger);
+        UserHandler handler = CreateHandler(dbFactory, logger);
 
         ServiceResult<List<UserAccountDto>> result = await handler.ListAsync(null, CancellationToken.None);
 
@@ -68,7 +69,7 @@ public class UserHandlerTests
     {
         using TestDatabaseFactory dbFactory = new();
         ILogger<UserHandler> logger = Substitute.For<ILogger<UserHandler>>();
-        UserHandler handler = new(CreateRepo(dbFactory), logger);
+        UserHandler handler = CreateHandler(dbFactory, logger);
 
         ServiceResult<List<UserAccountDto>> result = await handler.ListAsync(999, CancellationToken.None);
 
@@ -83,7 +84,7 @@ public class UserHandlerTests
         (int userId, int tenantId) = await SeedUserWithRole(dbFactory, username: "viewer@example.com");
 
         ILogger<UserHandler> logger = Substitute.For<ILogger<UserHandler>>();
-        UserHandler handler = new(CreateRepo(dbFactory), logger);
+        UserHandler handler = CreateHandler(dbFactory, logger);
 
         ServiceResult<List<UserAccountDto>> result = await handler.ListAsync(tenantId, CancellationToken.None);
 
@@ -105,7 +106,7 @@ public class UserHandlerTests
         await dbFactory.Context.InsertAsync(normalRole);
 
         ILogger<UserHandler> logger = Substitute.For<ILogger<UserHandler>>();
-        UserHandler handler = new(CreateRepo(dbFactory), logger);
+        UserHandler handler = CreateHandler(dbFactory, logger);
 
         ServiceResult<List<UserAccountDto>> result = await handler.ListAsync(tenantId, CancellationToken.None);
 
@@ -121,7 +122,7 @@ public class UserHandlerTests
         (_, int tenantId) = await SeedUserWithRole(dbFactory, username: "inactive@example.com", roleActive: false);
 
         ILogger<UserHandler> logger = Substitute.For<ILogger<UserHandler>>();
-        UserHandler handler = new(CreateRepo(dbFactory), logger);
+        UserHandler handler = CreateHandler(dbFactory, logger);
 
         ServiceResult<List<UserAccountDto>> result = await handler.ListAsync(tenantId, CancellationToken.None);
 
@@ -136,7 +137,7 @@ public class UserHandlerTests
     {
         using TestDatabaseFactory dbFactory = new();
         ILogger<UserHandler> logger = Substitute.For<ILogger<UserHandler>>();
-        UserHandler handler = new(CreateRepo(dbFactory), logger);
+        UserHandler handler = CreateHandler(dbFactory, logger);
 
         ServiceResult<UserAccountDto> result = await handler.GetDetailAsync(1, null, CancellationToken.None);
 
@@ -150,7 +151,7 @@ public class UserHandlerTests
         (int userId, _) = await SeedUserWithRole(dbFactory);
 
         ILogger<UserHandler> logger = Substitute.For<ILogger<UserHandler>>();
-        UserHandler handler = new(CreateRepo(dbFactory), logger);
+        UserHandler handler = CreateHandler(dbFactory, logger);
 
         ServiceResult<UserAccountDto> result = await handler.GetDetailAsync(userId, 999, CancellationToken.None);
 
@@ -162,7 +163,7 @@ public class UserHandlerTests
     {
         using TestDatabaseFactory dbFactory = new();
         ILogger<UserHandler> logger = Substitute.For<ILogger<UserHandler>>();
-        UserHandler handler = new(CreateRepo(dbFactory), logger);
+        UserHandler handler = CreateHandler(dbFactory, logger);
 
         ServiceResult<UserAccountDto> result = await handler.GetDetailAsync(999, 1, CancellationToken.None);
 
@@ -176,7 +177,7 @@ public class UserHandlerTests
         (int userId, int tenantId) = await SeedUserWithRole(dbFactory, username: "detail@example.com", role: UserAccountRoles.TenantAdmin);
 
         ILogger<UserHandler> logger = Substitute.For<ILogger<UserHandler>>();
-        UserHandler handler = new(CreateRepo(dbFactory), logger);
+        UserHandler handler = CreateHandler(dbFactory, logger);
 
         ServiceResult<UserAccountDto> result = await handler.GetDetailAsync(userId, tenantId, CancellationToken.None);
 
@@ -192,7 +193,7 @@ public class UserHandlerTests
     {
         using TestDatabaseFactory dbFactory = new();
         ILogger<UserHandler> logger = Substitute.For<ILogger<UserHandler>>();
-        UserHandler handler = new(CreateRepo(dbFactory), logger);
+        UserHandler handler = CreateHandler(dbFactory, logger);
 
         ServiceResult<object> result = await handler.DeactivateAsync(5, 5, 1, CancellationToken.None);
 
@@ -204,7 +205,7 @@ public class UserHandlerTests
     {
         using TestDatabaseFactory dbFactory = new();
         ILogger<UserHandler> logger = Substitute.For<ILogger<UserHandler>>();
-        UserHandler handler = new(CreateRepo(dbFactory), logger);
+        UserHandler handler = CreateHandler(dbFactory, logger);
 
         ServiceResult<object> result = await handler.DeactivateAsync(1, 2, null, CancellationToken.None);
 
@@ -218,7 +219,7 @@ public class UserHandlerTests
         (int userId, _) = await SeedUserWithRole(dbFactory);
 
         ILogger<UserHandler> logger = Substitute.For<ILogger<UserHandler>>();
-        UserHandler handler = new(CreateRepo(dbFactory), logger);
+        UserHandler handler = CreateHandler(dbFactory, logger);
 
         ServiceResult<object> result = await handler.DeactivateAsync(userId, userId + 1, 999, CancellationToken.None);
 
@@ -236,7 +237,7 @@ public class UserHandlerTests
         admin.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(admin);
 
         ILogger<UserHandler> logger = Substitute.For<ILogger<UserHandler>>();
-        UserHandler handler = new(CreateRepo(dbFactory), logger);
+        UserHandler handler = CreateHandler(dbFactory, logger);
 
         ServiceResult<object> result = await handler.DeactivateAsync(userId, admin.Id, tenantId, CancellationToken.None);
 
@@ -273,7 +274,7 @@ public class UserHandlerTests
         admin.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(admin);
 
         ILogger<UserHandler> logger = Substitute.For<ILogger<UserHandler>>();
-        UserHandler handler = new(CreateRepo(dbFactory), logger);
+        UserHandler handler = CreateHandler(dbFactory, logger);
 
         // Deactivate from tenant 1 only
         ServiceResult<object> result = await handler.DeactivateAsync(user.Id, admin.Id, tenant1.Id, CancellationToken.None);
@@ -295,7 +296,66 @@ public class UserHandlerTests
         await Assert.That(userAfter!.IsActive).IsTrue();
     }
 
+    [Test]
+    public async Task DeactivateAsync_FullDeactivation_InvalidatesUserStateAndBumpsStamp()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        (int userId, int tenantId) = await SeedUserWithRole(dbFactory, username: "fulldeactivate@example.com");
+
+        UserAccount admin = TestDataBuilder.BuildUser(username: "admin-state@example.com");
+        admin.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(admin);
+
+        ILogger<UserHandler> logger = Substitute.For<ILogger<UserHandler>>();
+        IRoleCacheInvalidator roleCacheInvalidator = Substitute.For<IRoleCacheInvalidator>();
+        IUserSecurityStampService stampService = Substitute.For<IUserSecurityStampService>();
+        UserHandler handler = new(CreateRepo(dbFactory), roleCacheInvalidator, stampService, logger);
+
+        ServiceResult<object> result = await handler.DeactivateAsync(userId, admin.Id, tenantId, CancellationToken.None);
+
+        await Assert.That(result.IsSuccess).IsTrue();
+        await roleCacheInvalidator.Received(1).InvalidateUserStateAsync(userId, Arg.Any<CancellationToken>());
+        await stampService.Received(1).BumpAsync(userId, Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task DeactivateAsync_TenantRemovalWithOtherRoles_InvalidatesUserStateAndBumpsStamp()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        Tenant tenant1 = TestDataBuilder.BuildTenant(name: "State Tenant One");
+        tenant1.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(tenant1);
+        Tenant tenant2 = TestDataBuilder.BuildTenant(name: "State Tenant Two");
+        tenant2.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(tenant2);
+
+        UserAccount user = TestDataBuilder.BuildUser(username: "multi-state@example.com");
+        user.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(user);
+        await dbFactory.Context.InsertAsync(TestDataBuilder.BuildUserTenantRole(userId: user.Id, tenantId: tenant1.Id));
+        await dbFactory.Context.InsertAsync(TestDataBuilder.BuildUserTenantRole(userId: user.Id, tenantId: tenant2.Id));
+
+        UserAccount admin = TestDataBuilder.BuildUser(username: "admin-state2@example.com");
+        admin.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(admin);
+
+        ILogger<UserHandler> logger = Substitute.For<ILogger<UserHandler>>();
+        IRoleCacheInvalidator roleCacheInvalidator = Substitute.For<IRoleCacheInvalidator>();
+        IUserSecurityStampService stampService = Substitute.For<IUserSecurityStampService>();
+        UserHandler handler = new(CreateRepo(dbFactory), roleCacheInvalidator, stampService, logger);
+
+        ServiceResult<object> result = await handler.DeactivateAsync(user.Id, admin.Id, tenant1.Id, CancellationToken.None);
+
+        await Assert.That(result.IsSuccess).IsTrue();
+        await roleCacheInvalidator.Received(1).InvalidateUserStateAsync(user.Id, Arg.Any<CancellationToken>());
+        await stampService.Received(1).BumpAsync(user.Id, Arg.Any<CancellationToken>());
+    }
+
     // ========== Helper methods ==========
+
+    private static UserHandler CreateHandler(TestDatabaseFactory dbFactory, ILogger<UserHandler> logger)
+    {
+        return new UserHandler(
+            CreateRepo(dbFactory),
+            Substitute.For<IRoleCacheInvalidator>(),
+            Substitute.For<IUserSecurityStampService>(),
+            logger);
+    }
 
     private static DatabaseRepository CreateRepo(TestDatabaseFactory dbFactory)
     {

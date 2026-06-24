@@ -11,7 +11,7 @@ const MAX_CACHE_SIZE = 10_000;
 const SESSION_TTL_MS = 60_000;
 const SWEEP_INTERVAL_MS = 5 * 60 * 1000;
 
-const sessionCache = new Map<string, { user: App.Locals['user']; expiresAt: number }>();
+const sessionCache = new Map<string, { user: App.Locals['user']; csrfCookie: string | undefined; expiresAt: number }>();
 
 // Periodic sweep of expired entries
 setInterval(() => {
@@ -23,7 +23,7 @@ setInterval(() => {
 	}
 }, SWEEP_INTERVAL_MS);
 
-function cacheSet(key: string, user: App.Locals['user'], ttlMs: number) {
+function cacheSet(key: string, user: App.Locals['user'], csrfCookie: string | undefined, ttlMs: number) {
 	if (sessionCache.size >= MAX_CACHE_SIZE) {
 		// Evict oldest (first inserted) entry
 		const firstKey = sessionCache.keys().next().value;
@@ -31,7 +31,24 @@ function cacheSet(key: string, user: App.Locals['user'], ttlMs: number) {
 			sessionCache.delete(firstKey);
 		}
 	}
-	sessionCache.set(key, { user, expiresAt: Date.now() + ttlMs });
+	sessionCache.set(key, { user, csrfCookie, expiresAt: Date.now() + ttlMs });
+}
+
+// Mirror the backend's vord_csrf antiforgery cookie onto the browser. A server-side fetch to the
+// backend does not propagate its Set-Cookie, so we re-issue the value captured from /auth/me here.
+// Strict SameSite and HttpOnly match the backend's AntiforgeryStartup.ConfigureOptions; the browser
+// can present it to the SvelteKit proxy without script access, which is all the double-submit
+// scheme requires.
+function setCsrfCookie(event: Parameters<Handle>[0]['event'], csrfCookie: string | undefined) {
+	if (!csrfCookie) {
+		return;
+	}
+	event.cookies.set('vord_csrf', csrfCookie, {
+		path: '/',
+		httpOnly: true,
+		sameSite: 'strict',
+		secure: !dev
+	});
 }
 
 export function purgeSession(authCookie: string, tenantCookie?: string): void {
@@ -45,6 +62,7 @@ export function purgeSession(authCookie: string, tenantCookie?: string): void {
 
 export const handle: Handle = async ({ event, resolve }) => {
 	event.locals.user = null;
+	event.locals.csrfCookie = undefined;
 
 	// Mock-mode short-circuit: skip cookie validation, populate locals.user
 	// from the MockApiClient's getMe(). Do not touch sessionCache or write any
@@ -65,12 +83,21 @@ export const handle: Handle = async ({ event, resolve }) => {
 			const cached = sessionCache.get(cacheKey);
 			if (cached && cached.expiresAt > Date.now()) {
 				event.locals.user = cached.user;
+				event.locals.csrfCookie = cached.csrfCookie;
+				// Re-issue the paired antiforgery cookie so a browser that lost it (or never
+				// received it) is re-armed without forcing a fresh /auth/me round-trip.
+				setCsrfCookie(event, cached.csrfCookie);
 			} else {
 				try {
 					const client = createServerApiClient(event.fetch, cookie, tenantCookie);
-					const user = await client.getMe();
+					const { user, csrfCookie } = await client.getMeBootstrap();
 					event.locals.user = user;
-					cacheSet(cacheKey, user, SESSION_TTL_MS);
+					event.locals.csrfCookie = csrfCookie;
+					cacheSet(cacheKey, user, csrfCookie, SESSION_TTL_MS);
+
+					// Mirror the antiforgery cookie onto the browser. The backend's Set-Cookie
+					// rides the server-to-server fetch and would otherwise be dropped here.
+					setCsrfCookie(event, csrfCookie);
 
 					// Auto-set vord_tenant cookie if missing but user has a tenant
 					if (!tenantCookie && user.activeTenantId) {
@@ -83,6 +110,7 @@ export const handle: Handle = async ({ event, resolve }) => {
 					}
 				} catch {
 					event.locals.user = null;
+					event.locals.csrfCookie = undefined;
 					sessionCache.delete(cacheKey);
 				}
 			}

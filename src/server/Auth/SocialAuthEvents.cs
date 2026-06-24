@@ -7,6 +7,7 @@ using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Services.Core.Auth;
+using Framlux.FleetManagement.Services.Core.Security;
 using Microsoft.AspNetCore.Authentication.OAuth;
 
 namespace Framlux.FleetManagement.Server.Auth;
@@ -48,6 +49,42 @@ public static class SocialAuthEvents
     }
 
     /// <summary>
+    /// Namespaces a custom-OIDC subject identifier with the resolving tenant so that two tenants'
+    /// identity providers can reuse the same subject value without mapping to the same account.
+    /// The tenant id is read from the authentication properties stashed at challenge time.
+    /// </summary>
+    /// <param name="httpContext">The current HTTP context carrying the stashed tenant id.</param>
+    /// <param name="rawSubject">The raw subject identifier from the validated token.</param>
+    /// <returns>The tenant-namespaced subject.</returns>
+    /// <exception cref="InvalidOperationException">
+    /// Thrown when no tenant id is present. A missing namespace must never silently degrade to a
+    /// raw subject that could collide across tenants.
+    /// </exception>
+    internal static string BuildTenantNamespacedSubject(HttpContext httpContext, string rawSubject)
+    {
+        string? tenantId = httpContext.Items.TryGetValue("tenant-oidc-tenant-id", out object? value)
+            ? value as string
+            : null;
+
+        if (string.IsNullOrEmpty(tenantId))
+        {
+            throw new InvalidOperationException("Custom OIDC subject cannot be namespaced because no tenant id was stashed for the request.");
+        }
+
+        string expectedPrefix = $"tenant:{tenantId}:";
+
+        // Defensively refuse to double-wrap: if the subject already carries this tenant's namespace
+        // prefix (for example because the principal was rebuilt from a previously-namespaced cookie),
+        // it is already the canonical stored identifier and must be returned unchanged.
+        if (rawSubject.StartsWith(expectedPrefix, StringComparison.Ordinal))
+        {
+            return rawSubject;
+        }
+
+        return $"{expectedPrefix}{rawSubject}";
+    }
+
+    /// <summary>
     /// Core logic for populating user claims from the database.
     /// Looks up user by external ID, auto-creates if missing, loads tenant roles, adds claims.
     /// </summary>
@@ -58,12 +95,18 @@ public static class SocialAuthEvents
     /// <returns>Returns true if the user was successfully authenticated; false if denied.</returns>
     public static async Task<bool> PopulateUserClaimsAsync(ClaimsIdentity identity, HttpContext httpContext, CancellationToken ct, AuthProviderType authProvider = AuthProviderType.Unknown)
     {
-        string? uniqueId = identity.FindFirst(ClaimTypes.NameIdentifier)?.Value
+        string? rawSubject = identity.FindFirst(ClaimTypes.NameIdentifier)?.Value
                   ?? identity.FindFirst("sub")?.Value;
-        if (string.IsNullOrEmpty(uniqueId))
+        if (string.IsNullOrEmpty(rawSubject))
         {
             return false;
         }
+
+        // A bare subject identifier is only unique within one provider. For tenant custom OIDC the
+        // subject is additionally namespaced by tenant so two tenants' IdPs cannot collide.
+        string uniqueId = authProvider == AuthProviderType.CustomOidc
+            ? BuildTenantNamespacedSubject(httpContext, rawSubject)
+            : rawSubject;
 
         string email = identity.FindFirst(ClaimTypes.Email)?.Value
             ?? identity.FindFirst("email")?.Value
@@ -71,7 +114,7 @@ public static class SocialAuthEvents
 
         IUserRepository userRepository = httpContext.RequestServices.GetRequiredService<IUserRepository>();
         ITenantRepository tenantRepository = httpContext.RequestServices.GetRequiredService<ITenantRepository>();
-        UserAccount? user = await userRepository.GetUserByExternalIdAsync(uniqueId, ct);
+        UserAccount? user = await userRepository.GetUserByExternalIdForProviderAsync(authProvider, uniqueId, ct);
         if (user is null)
         {
             // Check whether self-signup is enabled before auto-creating a new account
@@ -111,6 +154,26 @@ public static class SocialAuthEvents
             await userRepository.UpdateUserEmailAsync(user.Id, email, ct);
         }
 
+        // For tenant custom OIDC the stored ExternalId (and every later lookup) uses the
+        // tenant-namespaced subject. The cookie principal still carries the raw IdP subject, so
+        // rewrite the NameIdentifier claim to the same namespaced value the DB keys on. Without this
+        // every later read that matches the cookie subject against the stored ExternalId misses.
+        // The equality guard keeps the rewrite idempotent so a re-entry cannot double-wrap.
+        // For tenant custom OIDC the stored ExternalId (and every later lookup) uses the
+        // tenant-namespaced subject. The cookie principal still carries the raw IdP subject, so
+        // rewrite the NameIdentifier claim to the same namespaced value the DB keys on. Without this
+        // every later read that matches the cookie subject against the stored ExternalId misses.
+        // The equality guard keeps the rewrite idempotent so a re-entry cannot double-wrap.
+        if (authProvider == AuthProviderType.CustomOidc)
+        {
+            Claim? existingNameId = identity.FindFirst(ClaimTypes.NameIdentifier);
+            if ((existingNameId is not null) && (string.Equals(existingNameId.Value, uniqueId, StringComparison.Ordinal) == false))
+            {
+                identity.RemoveClaim(existingNameId);
+                identity.AddClaim(new Claim(ClaimTypes.NameIdentifier, uniqueId));
+            }
+        }
+
         // Update the auth provider on each login to track the most recent provider used
         if ((authProvider != AuthProviderType.Unknown) && (user.AuthProvider != authProvider))
         {
@@ -118,7 +181,7 @@ public static class SocialAuthEvents
         }
 
         // Retrieve and assign tenant roles
-        IEnumerable<UserTenantRole> tenantRoles = await tenantRepository.GetTenantsForUserAsync(uniqueId, ct);
+        IEnumerable<UserTenantRole> tenantRoles = await tenantRepository.GetTenantsForUserByIdAsync(user.Id, ct);
         foreach (UserTenantRole role in tenantRoles)
         {
             identity.AddClaim(new Claim(ClaimTypes.Role, $"{role.AssignedTenantId}:{(byte)role.Role}"));
@@ -127,6 +190,11 @@ public static class SocialAuthEvents
         // Add user account ID as claim
         identity.AddClaim(new Claim(ClaimTypes.Actor, user.Id.ToString()));
         identity.AddClaim(new Claim(AuthClaims.IsGlobalAdmin, user.IsGlobalAdmin.ToString()));
+        identity.AddClaim(new Claim(SecurityStampClaims.AuthProviderClaim, ((short)authProvider).ToString()));
+
+        IUserSecurityStampService stampService = httpContext.RequestServices.GetRequiredService<IUserSecurityStampService>();
+        string currentStamp = await stampService.GetCurrentStampAsync(user.Id, ct);
+        identity.AddClaim(new Claim(SecurityStampClaims.SecurityStampClaim, currentStamp));
 
         return true;
     }

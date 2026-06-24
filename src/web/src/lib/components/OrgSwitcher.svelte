@@ -12,7 +12,7 @@
     let open = $state(false);
     let switching = $state(false);
 
-    const client = new ApiClient('');
+    const client = new ApiClient('', fetch);
 
     const activeTenant = $derived(
         user.tenants.find(t => t.tenantId === user.activeTenantId) ?? user.tenants[0] ?? null
@@ -50,6 +50,7 @@
 
         switching = true;
         try {
+            if (user.csrfToken) client.setCsrfToken(user.csrfToken);
             await client.switchTenant(tenantId);
             // Invalidate the server-side session cache so the reloaded page
             // resolves roles and active tenant fresh under the new tenant.

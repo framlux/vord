@@ -21,7 +21,7 @@
 	let revokeError = $state('');
 	let revokeKeyConfirm = $state<{ open: boolean; id: number | null }>({ open: false, id: null });
 
-	const client = new ApiClient('');
+	const client = new ApiClient('', fetch);
 
 	async function generateAndRegisterKey() {
 		createError = '';
@@ -39,6 +39,7 @@
 
 			const { publicKeyBase64 } = await generateKeyPair(userId, tenantId, label);
 
+			if (data.user?.csrfToken) client.setCsrfToken(data.user.csrfToken);
 			await client.registerSigningKey({ label, publicKey: publicKeyBase64 });
 			keyLabel = '';
 			await invalidateAll();
@@ -52,6 +53,7 @@
 	async function revokeKey(keyId: number) {
 		revokeError = '';
 		try {
+			if (data.user?.csrfToken) client.setCsrfToken(data.user.csrfToken);
 			await client.revokeSigningKey(keyId);
 			await invalidateAll();
 		} catch (err: unknown) {

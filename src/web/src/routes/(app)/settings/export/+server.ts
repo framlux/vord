@@ -4,7 +4,7 @@
 
 import { error, json, redirect } from '@sveltejs/kit';
 import { canAdminTenant } from '$lib/utils/roles';
-import { createServerApiClient } from '$lib/api/server';
+import { createServerApiClient, csrfFor } from '$lib/api/server';
 import { ApiError } from '$lib/api/client';
 import type { RequestEvent } from '@sveltejs/kit';
 
@@ -13,7 +13,7 @@ export const POST = async ({ fetch, cookies, locals }: RequestEvent) => {
 		error(403, 'Access denied');
 	}
 
-	const api = createServerApiClient(fetch, cookies.get('vord_auth'), cookies.get('vord_tenant'));
+	const api = createServerApiClient(fetch, cookies.get('vord_auth'), cookies.get('vord_tenant'), undefined, csrfFor(cookies, locals));
 
 	try {
 		const data = await api.requestExport();

@@ -264,6 +264,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IIntegrationPayloadFormatter, PagerDutyPayloadFormatter>();
         services.AddSingleton<IIntegrationPayloadFormatter, CustomPayloadFormatter>();
         services.AddSingleton<IRoleCacheInvalidator, RoleCacheInvalidator>();
+        services.AddSingleton<IUserSecurityStampService, UserSecurityStampService>();
         services.AddHttpClient<IEmailService, ResendEmailService>();
 
         // System clock abstraction so time-dependent logic (e.g. registration token expiry)

@@ -81,6 +81,31 @@ public sealed class CookiePrincipalValidator : CookieAuthenticationEvents
 
         ReconcileGlobalAdminClaim(context, isGlobalAdmin);
 
+        string liveStamp;
+        try
+        {
+            using IServiceScope stampScope = _scopeFactory.CreateScope();
+            IUserSecurityStampService stampService = stampScope.ServiceProvider.GetRequiredService<IUserSecurityStampService>();
+            liveStamp = await stampService.GetCurrentStampAsync(userId, context.HttpContext.RequestAborted);
+        }
+        catch (Exception ex)
+        {
+            // Fail closed: if the live stamp cannot be read (e.g. Redis is unavailable) the cookie
+            // cannot be proven current, so the principal is rejected rather than trusted.
+            _logger.LogWarning(ex, "Rejecting principal for user {UserId}: the security stamp could not be read", userId);
+            context.RejectPrincipal();
+
+            return;
+        }
+
+        string? cookieStamp = context.Principal?.FindFirstValue(SecurityStampClaims.SecurityStampClaim);
+        if (SecurityStampMatches(cookieStamp, liveStamp) == false)
+        {
+            context.RejectPrincipal();
+
+            return;
+        }
+
         string? externalId = context.Principal?.FindFirstValue(ClaimTypes.NameIdentifier)
             ?? context.Principal?.FindFirstValue("sub");
         if (string.IsNullOrEmpty(externalId) == false)
@@ -113,7 +138,7 @@ public sealed class CookiePrincipalValidator : CookieAuthenticationEvents
     /// </summary>
     internal async Task<(bool IsActive, bool IsGlobalAdmin)> CheckUserStateAsync(int userId, IDatabase redisDb, CancellationToken ct)
     {
-        string cacheKey = $"user:active:{userId}";
+        string cacheKey = $"{IRoleCacheInvalidator.UserStateCacheKeyPrefix}{userId}";
         RedisValue cached = await redisDb.StringGetAsync(cacheKey);
 
         if (cached.HasValue)
@@ -192,6 +217,19 @@ public sealed class CookiePrincipalValidator : CookieAuthenticationEvents
         isGlobalAdmin = parts[1] == "1";
 
         return true;
+    }
+
+    /// <summary>
+    /// Compares the stamp carried by the cookie with the user's live stamp. Every issued cookie
+    /// carries a real stamp, so a missing or non-matching value rejects the principal.
+    /// </summary>
+    /// <param name="cookieStamp">The stamp claim value from the cookie, if present.</param>
+    /// <param name="liveStamp">The current stamp from the stamp service.</param>
+    /// <returns>True when the values are present and match.</returns>
+    internal static bool SecurityStampMatches(string? cookieStamp, string liveStamp)
+    {
+        return string.IsNullOrEmpty(cookieStamp) == false
+            && string.Equals(cookieStamp, liveStamp, StringComparison.Ordinal);
     }
 
     /// <summary>

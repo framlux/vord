@@ -12,7 +12,9 @@ export const load: PageServerLoad = async ({ url }) => {
 		returnUrl = '/dashboard';
 	}
 
-	const tenant = url.searchParams.get('tenant') ?? null;
+	// An opaque, server-resolvable SSO slug (never a raw tenant id) may be supplied to pre-offer
+	// the organization's SSO link.
+	const slug = url.searchParams.get('slug') ?? null;
 
-	return { returnUrl, tenant };
+	return { returnUrl, slug };
 };

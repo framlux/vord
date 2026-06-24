@@ -2,6 +2,7 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
+using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Services.Core.Infrastructure;
@@ -32,15 +33,15 @@ public sealed class AuthMeHandler : IAuthMeHandler
     }
 
     /// <inheritdoc/>
-    public async Task<ServiceResult<AuthMeResult>> GetCurrentUserAsync(string uniqueId, CancellationToken ct)
+    public async Task<ServiceResult<AuthMeResult>> GetCurrentUserAsync(AuthProviderType authProvider, string uniqueId, CancellationToken ct)
     {
-        UserAccount? user = await _userRepository.GetUserByExternalIdAsync(uniqueId, ct);
+        UserAccount? user = await _userRepository.GetUserByExternalIdForProviderAsync(authProvider, uniqueId, ct);
         if (user is null)
         {
             return ServiceResult<AuthMeResult>.NotFound();
         }
 
-        IEnumerable<UserTenantRole> tenants = await _tenantRepository.GetTenantsForUserAsync(uniqueId, ct);
+        IEnumerable<UserTenantRole> tenants = await _tenantRepository.GetTenantsForUserByIdAsync(user.Id, ct);
         List<UserTenantDto> tenantDtos = tenants.Select(t => new UserTenantDto
         {
             TenantId = t.AssignedTenantId,

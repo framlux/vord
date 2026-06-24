@@ -65,10 +65,19 @@ export class ApiError extends Error {
 export class ApiClient {
 	private baseUrl: string;
 	private fetchFn: typeof fetch;
+	private csrfToken: string | undefined;
 
-	constructor(baseUrl: string, fetchFn: typeof fetch = fetch) {
+	constructor(baseUrl: string, fetchFn: typeof fetch = fetch, csrfToken?: string) {
 		this.baseUrl = baseUrl.replace(/\/$/, '');
 		this.fetchFn = fetchFn;
+		this.csrfToken = csrfToken;
+	}
+
+	// Inject the double-submit antiforgery token (issued by GET /api/v1/auth/me). The token is
+	// echoed in the X-CSRF-TOKEN header on state-changing requests so the server can validate it
+	// against the vord_csrf cookie.
+	setCsrfToken(token: string): void {
+		this.csrfToken = token;
 	}
 
 	private static readonly REQUEST_TIMEOUT_MS = 30_000;
@@ -83,6 +92,10 @@ export class ApiClient {
 
 		if (body !== undefined) {
 			headers['Content-Type'] = 'application/json';
+		}
+
+		if (method !== 'GET' && method !== 'HEAD' && this.csrfToken) {
+			headers['X-CSRF-TOKEN'] = this.csrfToken;
 		}
 
 		let lastError: Error | undefined;
@@ -183,12 +196,74 @@ export class ApiClient {
 		return this.unwrap(resp);
 	}
 
+	// Auth bootstrap variant of getMe used by the SSR layer. Alongside the user it surfaces the
+	// raw vord_csrf antiforgery cookie value that GET /auth/me issues via Set-Cookie. A server-side
+	// fetch to the backend does not propagate that Set-Cookie to the browser, so hooks.server.ts
+	// captures it here and re-sets it on the browser. The cookie and user.csrfToken are minted by
+	// the same call, so they form a valid double-submit pair for later state-changing requests.
+	async getMeBootstrap(): Promise<{ user: UserDto; csrfCookie: string | undefined }> {
+		const url = `${this.baseUrl}/api/v1/auth/me`;
+		const response = await this.fetchFn(url, {
+			method: 'GET',
+			headers: { Accept: 'application/json' },
+			credentials: 'include'
+		});
+
+		if (response.status === 401) {
+			throw new ApiError(401, 'Unauthorized');
+		}
+
+		const json = (await response.json()) as ApiResponse<UserDto>;
+		if (response.ok === false) {
+			throw new ApiError(response.status, json?.message ?? 'Request failed');
+		}
+
+		const user = this.unwrap(json);
+		const csrfCookie = ApiClient.extractCsrfCookie(response);
+
+		return { user, csrfCookie };
+	}
+
+	// Reads the vord_csrf cookie value out of the response Set-Cookie header(s). Uses the standard
+	// getSetCookie() accessor where the runtime exposes it (Node/undici), falling back to a parse
+	// of the combined header for environments that only surface a folded value.
+	private static extractCsrfCookie(response: Response): string | undefined {
+		const headers = response.headers as Headers & { getSetCookie?: () => string[] };
+		const setCookies: string[] = typeof headers.getSetCookie === 'function'
+			? headers.getSetCookie()
+			: (() => {
+					// Fallback for runtimes without getSetCookie(): get('set-cookie') folds multiple
+					// Set-Cookie headers into one comma-joined string. Split on the cookie-name
+					// boundary so the commas inside Expires=Wdy, DD-Mon-YYYY date values stay intact.
+					const combined = response.headers.get('set-cookie');
+					if (!combined) {
+						return [];
+					}
+
+					return combined.split(/,(?=\s*[a-zA-Z0-9_\-]+=)/).map((entry) => entry.trim());
+				})();
+
+		for (const entry of setCookies) {
+			if (entry.startsWith('vord_csrf=')) {
+				const remainder = entry.slice('vord_csrf='.length);
+				const semicolon = remainder.indexOf(';');
+
+				return semicolon >= 0 ? remainder.slice(0, semicolon) : remainder;
+			}
+		}
+
+		return undefined;
+	}
+
 	async logout(): Promise<void> {
 		await this.post<void>('/api/v1/logout');
 	}
 
-	async emailLookup(email: string): Promise<{ tenantId: number }> {
-		const resp = await this.post<ApiResponse<{ tenantId: number }>>('/api/v1/auth/email-lookup', { email });
+	async emailLookup(email: string): Promise<{ ssoAvailable: boolean; slug: string | null }> {
+		const resp = await this.post<ApiResponse<{ ssoAvailable: boolean; slug: string | null }>>(
+			'/api/v1/auth/email-lookup',
+			{ email }
+		);
 
 		return this.unwrap(resp);
 	}

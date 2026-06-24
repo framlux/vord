@@ -36,6 +36,27 @@ public partial class DatabaseRepository : ITenantRepository
     }
 
     /// <inheritdoc/>
+    public async Task<IEnumerable<UserTenantRole>> GetTenantsForUserByIdAsync(int userId, CancellationToken cancellationToken)
+    {
+        List<UserTenantRole> roles = await (from utr in _db.UserTenantRoles
+                join ua in _db.UserAccounts on utr.UserId equals ua.Id
+                join t in _db.Tenants on utr.AssignedTenantId equals t.Id
+                where (utr.UserId == userId) && t.IsActive && ua.IsActive && utr.IsActive
+                select new UserTenantRole()
+                {
+                    AssignedAt = utr.AssignedAt,
+                    AssignedTenantId = utr.AssignedTenantId,
+                    AssignedTenant = t,
+                    Role = utr.Role,
+                    UserId = utr.UserId,
+                    IsActive = utr.IsActive,
+                    AssignedByUserId = utr.AssignedByUserId,
+                }).ToListAsync(cancellationToken);
+
+        return roles;
+    }
+
+    /// <inheritdoc/>
     public async Task<Tenant?> GetTenantByExternalIdAsync(string externalId, CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(externalId);

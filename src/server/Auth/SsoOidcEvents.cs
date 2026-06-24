@@ -5,15 +5,17 @@
 using System.Net;
 using System.Security.Claims;
 using System.Text.Json;
-using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
+using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Services.Core.Security;
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
+using Microsoft.Extensions.Options;
 using Microsoft.IdentityModel.JsonWebTokens;
 using Microsoft.IdentityModel.Protocols;
 using Microsoft.IdentityModel.Protocols.OpenIdConnect;
 using Microsoft.IdentityModel.Tokens;
+using StackExchange.Redis;
 
 namespace Framlux.FleetManagement.Server.Auth;
 
@@ -44,16 +46,18 @@ public sealed class SsoOidcEvents : OpenIdConnectEvents
             return;
         }
 
-        TenantOidcConfiguration? config = await ResolveTenantOidcConfigAsync(context.HttpContext, tenantId);
-        if (config is null)
+        TenantOidcConfiguration? resolvedConfig = await ResolveTenantOidcConfigAsync(context.HttpContext, tenantId);
+        if (IsConfigUsable(resolvedConfig) == false)
         {
             ILogger<SsoOidcEvents> logger = ResolveLogger(context.HttpContext);
-            logger.LogWarning("OIDC configuration not found for tenant {TenantId}", tenantId);
+            logger.LogWarning("OIDC configuration missing or disabled for tenant {TenantId}", tenantId);
             context.Response.StatusCode = 400;
             context.HandleResponse();
 
             return;
         }
+
+        TenantOidcConfiguration config = resolvedConfig!;
 
         // Discover the authorization endpoint from the tenant's IdP — per-request, no shared state mutation
         IHttpClientFactory httpClientFactory = context.HttpContext.RequestServices.GetRequiredService<IHttpClientFactory>();
@@ -78,6 +82,9 @@ public sealed class SsoOidcEvents : OpenIdConnectEvents
     /// <returns>Returns an awaitable Task.</returns>
     public override async Task AuthorizationCodeReceived(AuthorizationCodeReceivedContext context)
     {
+        // AuthorizationCodeReceivedContext.Properties is nullable on this context type (unlike
+        // RedirectContext.Properties, which is non-null), so the explicit null guard is required here
+        // and must not be "aligned" with RedirectToIdentityProvider by removing it.
         if (context.Properties?.Items is null ||
             context.Properties.Items.TryGetValue("tenantId", out string? tenantIdStr) == false ||
             int.TryParse(tenantIdStr, out int tenantId) == false)
@@ -90,14 +97,16 @@ public sealed class SsoOidcEvents : OpenIdConnectEvents
         ILogger<SsoOidcEvents> logger = ResolveLogger(context.HttpContext);
 
         // Re-read OIDC config from DB instead of reading secrets from the cookie
-        TenantOidcConfiguration? config = await ResolveTenantOidcConfigAsync(context.HttpContext, tenantId);
-        if (config is null)
+        TenantOidcConfiguration? resolvedConfig = await ResolveTenantOidcConfigAsync(context.HttpContext, tenantId);
+        if (IsConfigUsable(resolvedConfig) == false)
         {
-            logger.LogWarning("Tenant OIDC configuration not found during code exchange for tenant {TenantId}", tenantId);
+            logger.LogWarning("Tenant OIDC configuration missing or disabled during code exchange for tenant {TenantId}", tenantId);
             context.Fail("Tenant OIDC configuration not found");
 
             return;
         }
+
+        TenantOidcConfiguration config = resolvedConfig!;
 
         // Fetch the discovery document (uses SSRF-safe HttpClient)
         IHttpClientFactory httpClientFactory = context.HttpContext.RequestServices.GetRequiredService<IHttpClientFactory>();
@@ -115,22 +124,20 @@ public sealed class SsoOidcEvents : OpenIdConnectEvents
             return;
         }
 
-        // Decrypt the stored OIDC client secret.
-        // Legacy plaintext rows (written before encryption was enforced everywhere) lack the
-        // marker prefix; treat them as plaintext and emit a warning so ops can re-migrate.
+        // Decrypt the stored OIDC client secret. Client secrets must be stored encrypted at rest;
+        // an unprotected (plaintext) value is rejected outright rather than used.
         IOidcSecretProtector secretProtector = context.HttpContext.RequestServices.GetRequiredService<IOidcSecretProtector>();
         string clientSecret;
-        if (secretProtector.IsProtected(config.ClientSecret))
+        try
         {
-            clientSecret = secretProtector.Unprotect(config.ClientSecret);
+            clientSecret = ResolveClientSecret(secretProtector, config.ClientSecret);
         }
-        else
+        catch (InvalidOperationException)
         {
-            logger.LogWarning(
-                "OIDC client secret for tenant {TenantId} is stored in plaintext (legacy); "
-                + "run EncryptLegacyTenantOidcSecretsMigration to re-protect at rest",
-                tenantId);
-            clientSecret = config.ClientSecret;
+            logger.LogError("OIDC client secret for tenant {TenantId} is unprotected", tenantId);
+            context.Fail("OIDC client secret is not protected at rest");
+
+            return;
         }
 
         // Manually exchange the authorization code for tokens (uses SSRF-safe HttpClient)
@@ -194,6 +201,29 @@ public sealed class SsoOidcEvents : OpenIdConnectEvents
             return;
         }
 
+        // Validate the id_token nonce against the value bound to the browser at challenge time and
+        // enforce single use. The manual code-exchange path bypasses the middleware's built-in nonce
+        // validation, so without this a captured or replayed id_token would be accepted.
+        string? tokenNonce = validationResult.Claims.TryGetValue("nonce", out object? nonceValue)
+            ? nonceValue as string
+            : null;
+
+        string? cookieNonce = ResolveNonceFromCookies(context.HttpContext, tokenNonce);
+
+        IConnectionMultiplexer redis = context.HttpContext.RequestServices.GetRequiredService<IConnectionMultiplexer>();
+        bool nonceOk = await OidcNonceValidator.ValidateAndConsumeAsync(redis.GetDatabase(), cookieNonce, tokenNonce);
+        if (nonceOk == false)
+        {
+            logger.LogWarning("id_token nonce validation failed for tenant {TenantId}", tenantId);
+            context.Fail("id_token nonce validation failed");
+
+            return;
+        }
+
+        // Stash the resolving tenant id so the subject can be namespaced per tenant during claim
+        // population — two tenants' IdPs may legitimately mint the same subject value.
+        context.HttpContext.Items["tenant-oidc-tenant-id"] = tenantId.ToString();
+
         // Build the principal from the validated token and populate user claims
         ClaimsIdentity identity = new(validationResult.ClaimsIdentity.Claims, "tenant-oidc");
         bool populated = await SocialAuthEvents.PopulateUserClaimsAsync(identity, context.HttpContext, context.HttpContext.RequestAborted, AuthProviderType.CustomOidc);
@@ -210,6 +240,25 @@ public sealed class SsoOidcEvents : OpenIdConnectEvents
         // placeholder authority issue and eliminating any need to mutate the shared Options singleton.
         context.Principal = new ClaimsPrincipal(identity);
         context.Success();
+    }
+
+    /// <summary>
+    /// Resolves the usable client secret from its stored form. A protected secret is unprotected and
+    /// returned; an unprotected (plaintext) value is rejected outright, because client secrets must be
+    /// stored encrypted at rest.
+    /// </summary>
+    /// <param name="protector">The secret protector.</param>
+    /// <param name="stored">The stored client secret as read from the database.</param>
+    /// <returns>The plaintext client secret ready for the token request.</returns>
+    internal static string ResolveClientSecret(IOidcSecretProtector protector, string stored)
+    {
+        if (protector.IsProtected(stored) == false)
+        {
+            throw new InvalidOperationException(
+                "OIDC client secret is stored unprotected; refusing to use it. Store the secret encrypted at rest.");
+        }
+
+        return protector.Unprotect(stored);
     }
 
     /// <summary>
@@ -353,6 +402,73 @@ public sealed class SsoOidcEvents : OpenIdConnectEvents
         }
 
         return true;
+    }
+
+    /// <summary>
+    /// Recovers the plaintext nonce that the OpenID Connect handler bound to the browser at
+    /// challenge time. The handler writes the protected nonce into a per-nonce cookie; here the
+    /// matching cookie is located and unprotected so it can be compared with the id_token claim.
+    /// </summary>
+    /// <param name="httpContext">The current HTTP context carrying the nonce cookies.</param>
+    /// <param name="tokenNonce">The nonce claim from the validated id_token.</param>
+    /// <returns>The unprotected nonce when a matching cookie is found; otherwise, null.</returns>
+    private static string? ResolveNonceFromCookies(HttpContext httpContext, string? tokenNonce)
+    {
+        if (string.IsNullOrEmpty(tokenNonce))
+        {
+            return null;
+        }
+
+        ILogger<SsoOidcEvents> logger = ResolveLogger(httpContext);
+
+        IOptionsMonitor<OpenIdConnectOptions> optionsMonitor =
+            httpContext.RequestServices.GetRequiredService<IOptionsMonitor<OpenIdConnectOptions>>();
+        OpenIdConnectOptions options = optionsMonitor.Get("tenant-oidc");
+
+        if (options.StringDataFormat is null)
+        {
+            logger.LogWarning("OpenIdConnectOptions.StringDataFormat is null for scheme tenant-oidc; nonce cookie cannot be unprotected");
+
+            return null;
+        }
+
+        foreach (KeyValuePair<string, string> cookie in httpContext.Request.Cookies)
+        {
+            if (cookie.Key.StartsWith(OidcNonceValidator.NonceCookiePrefix, StringComparison.Ordinal) == false)
+            {
+                continue;
+            }
+
+            string? unprotected;
+            try
+            {
+                unprotected = options.StringDataFormat.Unprotect(cookie.Value);
+            }
+            catch (Exception)
+            {
+                logger.LogDebug("Failed to unprotect nonce cookie {CookieName}; skipping", cookie.Key);
+
+                continue;
+            }
+
+            if (string.Equals(unprotected, tokenNonce, StringComparison.Ordinal))
+            {
+                return unprotected;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Returns whether a tenant OIDC configuration may be used to authenticate. A configuration that
+    /// is absent or has been disabled must not authenticate anyone, at challenge time or at callback.
+    /// </summary>
+    /// <param name="config">The tenant OIDC configuration, or null when none exists.</param>
+    /// <returns>True only when the configuration exists and is enabled.</returns>
+    internal static bool IsConfigUsable(TenantOidcConfiguration? config)
+    {
+        return (config is not null) && config.IsEnabled;
     }
 
     private static async Task<TenantOidcConfiguration?> ResolveTenantOidcConfigAsync(HttpContext httpContext, int tenantId)

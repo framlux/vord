@@ -2,7 +2,7 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
-import { createServerApiClient } from '$lib/api/server';
+import { createServerApiClient, csrfFor } from '$lib/api/server';
 import { ApiError } from '$lib/api/client';
 import type { AlertRuleDto } from '$lib/api/types';
 import { redirect, error, fail } from '@sveltejs/kit';
@@ -72,8 +72,8 @@ export const load: PageServerLoad = async ({ fetch, cookies, params }) => {
 };
 
 export const actions: Actions = {
-	updateAlertRules: async ({ fetch, cookies, request, params }) => {
-		const api = createServerApiClient(fetch, cookies.get('vord_auth'), cookies.get('vord_tenant'));
+	updateAlertRules: async ({ fetch, cookies, request, params, locals }) => {
+		const api = createServerApiClient(fetch, cookies.get('vord_auth'), cookies.get('vord_tenant'), undefined, csrfFor(cookies, locals));
 		const id = Number(params.machineId);
 		if (isNaN(id)) {
 			return fail(400, { message: 'Invalid machine ID' });

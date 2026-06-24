@@ -2,7 +2,15 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
+using Framlux.FleetManagement.Database;
+using Framlux.FleetManagement.Database.Enums;
+using Framlux.FleetManagement.Database.Models;
+using Framlux.FleetManagement.Server.Auth;
 using Framlux.FleetManagement.Test.Infrastructure;
+using LinqToDB;
+using LinqToDB.Async;
+using Microsoft.AspNetCore.DataProtection;
+using Microsoft.Extensions.DependencyInjection;
 using System.Net;
 
 namespace Framlux.FleetManagement.FunctionalTest.Endpoints.Web;
@@ -12,6 +20,62 @@ namespace Framlux.FleetManagement.FunctionalTest.Endpoints.Web;
 /// </summary>
 public sealed class AuthEndpointTests
 {
+    private static async Task<int> SeedTenantWithSubscriptionAndOidc(
+        DatabaseContext db,
+        SubscriptionTier tier,
+        bool oidcEnabled,
+        bool createOidcConfig = true)
+    {
+        Tenant tenant = new()
+        {
+            ExternalId = Guid.NewGuid().ToString("N"),
+            Name = $"OIDC Challenge Tenant {Guid.NewGuid():N}",
+            CreatedAt = DateTimeOffset.UtcNow,
+            CreatedByUserId = 1,
+            IsActive = true,
+            LogoUrl = ""
+        };
+        tenant.Id = await db.InsertWithInt32IdentityAsync(tenant);
+
+        TenantSubscription subscription = new()
+        {
+            TenantId = tenant.Id,
+            Tier = tier,
+            Status = SubscriptionStatus.Active,
+            CreatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow,
+        };
+        await db.InsertWithInt32IdentityAsync(subscription);
+
+        if (createOidcConfig)
+        {
+            TenantOidcConfiguration config = new()
+            {
+                TenantId = tenant.Id,
+                Authority = "https://login.example.com",
+                ClientId = "test-client-id",
+                ClientSecret = "encrypted-secret",
+                MetadataAddress = null,
+                EmailDomain = $"{Guid.NewGuid():N}.example.com",
+                IsEnabled = oidcEnabled,
+                CreatedAt = DateTimeOffset.UtcNow,
+                UpdatedAt = DateTimeOffset.UtcNow,
+            };
+            await db.InsertWithInt32IdentityAsync(config);
+        }
+
+        return tenant.Id;
+    }
+
+    private static string BuildSlug(FunctionalTestFactory factory, int tenantId)
+    {
+        IDataProtector protector = factory.Services
+            .GetRequiredService<IDataProtectionProvider>()
+            .CreateProtector(TenantSsoSlug.Purpose);
+
+        return TenantSsoSlug.Build(protector, tenantId);
+    }
+
     [Test]
     public async Task Challenge_InvalidProvider_Returns400()
     {
@@ -124,7 +188,7 @@ public sealed class AuthEndpointTests
     }
 
     [Test]
-    public async Task Challenge_TenantOidc_NoTenantId_Returns400()
+    public async Task Challenge_TenantOidc_NoSlug_Returns400()
     {
         using FunctionalTestFactory factory = new();
         HttpClient client = factory.CreateClient(new Microsoft.AspNetCore.Mvc.Testing.WebApplicationFactoryClientOptions
@@ -136,7 +200,87 @@ public sealed class AuthEndpointTests
 
         await Assert.That((int)response.StatusCode).IsEqualTo(400);
         string body = await response.Content.ReadAsStringAsync();
-        await Assert.That(body).Contains("tenantId is required");
+        await Assert.That(body).Contains("Custom SSO is not available");
+    }
+
+    [Test]
+    public async Task Challenge_TenantOidc_UnresolvableSlug_Returns400()
+    {
+        using FunctionalTestFactory factory = new();
+        HttpClient client = factory.CreateClient(new Microsoft.AspNetCore.Mvc.Testing.WebApplicationFactoryClientOptions
+        {
+            AllowAutoRedirect = false
+        });
+
+        HttpResponseMessage response = await client.GetAsync("/api/v1/auth/challenge/tenant-oidc?slug=abc");
+
+        await Assert.That((int)response.StatusCode).IsEqualTo(400);
+        string body = await response.Content.ReadAsStringAsync();
+        await Assert.That(body).Contains("Custom SSO is not available");
+    }
+
+    [Test]
+    public async Task Challenge_TenantOidc_NonTeamTier_Returns400()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        int tenantId = await SeedTenantWithSubscriptionAndOidc(db, SubscriptionTier.Pro, oidcEnabled: true);
+
+        HttpClient client = factory.CreateClient(new Microsoft.AspNetCore.Mvc.Testing.WebApplicationFactoryClientOptions
+        {
+            AllowAutoRedirect = false
+        });
+
+        string slug = BuildSlug(factory, tenantId);
+
+        HttpResponseMessage response = await client.GetAsync($"/api/v1/auth/challenge/tenant-oidc?slug={Uri.EscapeDataString(slug)}");
+
+        await Assert.That((int)response.StatusCode).IsEqualTo(400);
+        string body = await response.Content.ReadAsStringAsync();
+        await Assert.That(body).Contains("Custom SSO is not available");
+    }
+
+    [Test]
+    public async Task Challenge_TenantOidc_TeamTierDisabledConfig_Returns400()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        int tenantId = await SeedTenantWithSubscriptionAndOidc(db, SubscriptionTier.Team, oidcEnabled: false);
+
+        HttpClient client = factory.CreateClient(new Microsoft.AspNetCore.Mvc.Testing.WebApplicationFactoryClientOptions
+        {
+            AllowAutoRedirect = false
+        });
+
+        string slug = BuildSlug(factory, tenantId);
+
+        HttpResponseMessage response = await client.GetAsync($"/api/v1/auth/challenge/tenant-oidc?slug={Uri.EscapeDataString(slug)}");
+
+        await Assert.That((int)response.StatusCode).IsEqualTo(400);
+        string body = await response.Content.ReadAsStringAsync();
+        await Assert.That(body).Contains("Custom SSO is not available");
+    }
+
+    [Test]
+    public async Task Challenge_TenantOidc_TeamTierNoConfig_Returns400()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        int tenantId = await SeedTenantWithSubscriptionAndOidc(
+            db, SubscriptionTier.Team, oidcEnabled: true, createOidcConfig: false);
+
+        HttpClient client = factory.CreateClient(new Microsoft.AspNetCore.Mvc.Testing.WebApplicationFactoryClientOptions
+        {
+            AllowAutoRedirect = false
+        });
+
+        string slug = BuildSlug(factory, tenantId);
+
+        HttpResponseMessage response = await client.GetAsync($"/api/v1/auth/challenge/tenant-oidc?slug={Uri.EscapeDataString(slug)}");
+
+        await Assert.That((int)response.StatusCode).IsEqualTo(400);
+        string body = await response.Content.ReadAsStringAsync();
+        await Assert.That(body).Contains("Custom SSO is not available");
     }
 
     [Test]

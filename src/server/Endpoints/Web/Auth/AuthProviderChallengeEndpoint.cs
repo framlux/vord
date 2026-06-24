@@ -2,8 +2,15 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
+using System.Globalization;
 using FastEndpoints;
+using Framlux.FleetManagement.Database.Enums;
+using Framlux.FleetManagement.Database.Models;
+using Framlux.FleetManagement.Database.Repositories;
+using Framlux.FleetManagement.Server.Auth;
+using Framlux.FleetManagement.Services.Core.Billing;
 using Microsoft.AspNetCore.Authentication;
+using Microsoft.AspNetCore.DataProtection;
 
 namespace Framlux.FleetManagement.Server.Endpoints.Web.Auth;
 
@@ -19,6 +26,23 @@ public sealed class AuthProviderChallengeEndpoint : EndpointWithoutRequest<ApiRe
         "microsoft",
         "tenant-oidc"
     };
+
+    private readonly ITenantRepository _tenantRepository;
+    private readonly ISubscriptionService _subscriptionService;
+    private readonly IDataProtectionProvider _dataProtectionProvider;
+
+    /// <summary>
+    /// Creates a new instance of the <see cref="AuthProviderChallengeEndpoint"/> class.
+    /// </summary>
+    public AuthProviderChallengeEndpoint(
+        ITenantRepository tenantRepository,
+        ISubscriptionService subscriptionService,
+        IDataProtectionProvider dataProtectionProvider)
+    {
+        _tenantRepository = tenantRepository;
+        _subscriptionService = subscriptionService;
+        _dataProtectionProvider = dataProtectionProvider;
+    }
 
     /// <inheritdoc />
     public override void Configure()
@@ -56,19 +80,33 @@ public sealed class AuthProviderChallengeEndpoint : EndpointWithoutRequest<ApiRe
 
         AuthenticationProperties properties = new() { RedirectUri = returnUrl, AllowRefresh = true };
 
-        // For tenant-oidc, pass the tenantId so SsoOidcEvents can load dynamic config
+        // For tenant-oidc the browser passes only an opaque slug. Resolve it server-side to the
+        // tenant id so SsoOidcEvents can load dynamic config; the raw id is never exposed to the
+        // client. An unresolvable slug is treated the same as an unavailable tenant.
         if (string.Equals(provider, "tenant-oidc", StringComparison.OrdinalIgnoreCase))
         {
-            string? tenantIdStr = Query<string?>("tenantId", isRequired: false);
-            if (string.IsNullOrEmpty(tenantIdStr))
+            string? slug = Query<string?>("slug", isRequired: false);
+            IDataProtector protector = _dataProtectionProvider.CreateProtector(TenantSsoSlug.Purpose);
+            if (TenantSsoSlug.TryResolve(protector, slug, out int tenantId) == false)
             {
                 HttpContext.Response.StatusCode = 400;
-                await HttpContext.Response.WriteAsJsonAsync(ApiResponse<object>.Error("tenantId is required for tenant-oidc provider"), ct);
+                await HttpContext.Response.WriteAsJsonAsync(ApiResponse<object>.Error("Custom SSO is not available for this organization"), ct);
 
                 return;
             }
 
-            properties.Items["tenantId"] = tenantIdStr;
+            TenantOidcConfiguration? oidcConfig = await _tenantRepository.GetTenantOidcConfigurationAsync(tenantId, ct);
+            TenantSubscription? subscription = await _subscriptionService.GetSubscriptionForTenantAsync(tenantId, ct);
+            bool teamTier = (subscription is not null) && (subscription.Tier == SubscriptionTier.Team);
+            if ((SsoOidcEvents.IsConfigUsable(oidcConfig) == false) || (teamTier == false))
+            {
+                HttpContext.Response.StatusCode = 400;
+                await HttpContext.Response.WriteAsJsonAsync(ApiResponse<object>.Error("Custom SSO is not available for this organization"), ct);
+
+                return;
+            }
+
+            properties.Items["tenantId"] = tenantId.ToString(CultureInfo.InvariantCulture);
         }
 
         await HttpContext.ChallengeAsync(provider, properties);
