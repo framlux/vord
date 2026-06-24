@@ -879,6 +879,21 @@ describe('ApiClient', () => {
             const headers = init.headers as Record<string, string>;
             expect(headers['X-CSRF-TOKEN']).toBe('late-token');
         });
+
+        it('should attach X-CSRF-TOKEN on createOrganization after setCsrfToken is called', async () => {
+            client.setCsrfToken('onboarding-token');
+            fetchFn.mockResolvedValue({
+                ok: true,
+                status: 200,
+                json: () => Promise.resolve({ success: true, data: { tenantId: 1 }, message: null, errors: null })
+            });
+
+            await client.createOrganization({ organizationName: 'New Org' });
+
+            const init = fetchFn.mock.calls[0][1] as RequestInit;
+            const headers = init.headers as Record<string, string>;
+            expect(headers['X-CSRF-TOKEN']).toBe('onboarding-token');
+        });
     });
 
     describe('retry behavior', () => {

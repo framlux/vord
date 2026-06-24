@@ -3,6 +3,7 @@
      See LICENSE for details. -->
 
 <script lang="ts">
+	import { ApiClient } from '$lib/api/client';
 	import PublicShell from '$lib/components/PublicShell.svelte';
 
 	let { data } = $props();
@@ -12,6 +13,8 @@
 	let error = $state('');
 
 	const blockedCharsPattern = /[<>"'`\\/{}\|\x00-\x1F]/;
+
+	const client = new ApiClient('', fetch);
 
 	async function handleSubmit(e: SubmitEvent) {
 		e.preventDefault();
@@ -38,30 +41,16 @@
 		error = '';
 
 		try {
-			const response = await fetch('/api/v1/onboarding/create-org', {
-				method: 'POST',
-				headers: { 'Content-Type': 'application/json' },
-				credentials: 'include',
-				body: JSON.stringify({
-					organizationName: organizationName.trim()
-				})
-			});
-
-			const result = await response.json();
-
-			if (response.ok === false) {
-				error = result.message ?? 'Failed to create organization';
-
-				return;
-			}
+			if (data.user?.csrfToken) client.setCsrfToken(data.user.csrfToken);
+			await client.createOrganization({ organizationName: organizationName.trim() });
 
 			// Purge the in-memory session cache so the full-page redirect fetches fresh user data
 			await fetch('/api/session/purge', { method: 'POST', credentials: 'include' });
 
 			// Full page reload to refresh the session cache with new tenant roles
 			window.location.href = '/onboarding/success';
-		} catch {
-			error = 'An unexpected error occurred';
+		} catch (err: unknown) {
+			error = err instanceof Error ? err.message : 'Failed to create organization';
 		} finally {
 			loading = false;
 		}
