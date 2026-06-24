@@ -8,7 +8,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Npgsql;
 
-namespace Framlux.FleetManagement.Test.Integration.Database.Migrations;
+namespace Framlux.FleetManagement.Test.Integration.Migrations;
 
 /// <summary>
 /// Live tests for the AlertEmailDeliveryAttempts idempotency table. The unique index on

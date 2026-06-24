@@ -608,7 +608,7 @@ public sealed class InitialMigration : Migration
             .WithColumn("Id").AsInt64().PrimaryKey().Identity()
             .WithColumn("AlertEventId").AsInt64().NotNullable()
             .WithColumn("Recipient").AsString(320).NotNullable()
-            .WithColumn("Status").AsInt32().NotNullable()
+            .WithColumn("Status").AsInt32().NotNullable().WithDefaultValue(0)
             .WithColumn("AttemptedAt").AsDateTimeOffset().NotNullable()
             .WithColumn("SucceededAt").AsDateTimeOffset().Nullable();
 
@@ -618,7 +618,7 @@ public sealed class InitialMigration : Migration
                 .ForeignKey("FK_AlertEmailDeliveryAttempts_AlertEvents", TableNames.AlertEvents, "Id")
                     .OnDelete(Rule.Cascade)
             .WithColumn("Recipient").AsString(320).NotNullable()
-            .WithColumn("Status").AsInt32().NotNullable()
+            .WithColumn("Status").AsInt32().NotNullable().WithDefaultValue(0)
             .WithColumn("AttemptedAt").AsDateTimeOffset().NotNullable()
             .WithColumn("SucceededAt").AsDateTimeOffset().Nullable();
 
@@ -627,6 +627,10 @@ public sealed class InitialMigration : Migration
             .OnColumn("AlertEventId").Ascending()
             .OnColumn("Recipient").Ascending()
             .WithOptions().Unique();
+
+        Create.Index("IX_AlertEmailDeliveryAttempts_AlertEventId")
+            .OnTable(TableNames.AlertEmailDeliveryAttempts)
+            .OnColumn("AlertEventId").Ascending();
 
         Create.Table(TableNames.DataExportJobs)
             .WithColumn("Id").AsInt32().PrimaryKey().Identity().NotNullable()
