@@ -23,6 +23,7 @@
     <InternalsVisibleTo Include="functional.web" />
     <InternalsVisibleTo Include="functional.grpc" />
     <InternalsVisibleTo Include="functional.hangfire" />
+    <InternalsVisibleTo Include="integration" />
   </ItemGroup>
 
   <ItemGroup>

@@ -454,7 +454,7 @@ public class MachineStateRepositoryTests
 
         // Fetch batch with high water mark of 0 and a streaming window in the past
         DateTimeOffset streamingWindow = now.AddMinutes(-10);
-        List<MachineTelemetry> batch = await repo.GetTelemetryBatchAsync(0, streamingWindow, batchSize: 10);
+        List<MachineTelemetry> batch = await repo.GetTelemetryBatchAsync(0, streamingWindow, batchSize: 10, shardIndex: 0, shardCount: 1);
 
         await Assert.That(batch.Count).IsEqualTo(3);
         // Verify ascending order by Id
@@ -480,11 +480,11 @@ public class MachineStateRepositoryTests
 
         // Get all rows to discover the first row's ID
         DateTimeOffset streamingWindow = now.AddMinutes(-10);
-        List<MachineTelemetry> allRows = await repo.GetTelemetryBatchAsync(0, streamingWindow, batchSize: 10);
+        List<MachineTelemetry> allRows = await repo.GetTelemetryBatchAsync(0, streamingWindow, batchSize: 10, shardIndex: 0, shardCount: 1);
         long firstRowId = allRows[0].Id;
 
         // Fetch batch using first row's ID as the high water mark
-        List<MachineTelemetry> batch = await repo.GetTelemetryBatchAsync(firstRowId, streamingWindow, batchSize: 10);
+        List<MachineTelemetry> batch = await repo.GetTelemetryBatchAsync(firstRowId, streamingWindow, batchSize: 10, shardIndex: 0, shardCount: 1);
 
         await Assert.That(batch.Count).IsEqualTo(1);
         await Assert.That(batch[0].Id > firstRowId).IsTrue();
@@ -510,10 +510,60 @@ public class MachineStateRepositoryTests
 
         // Set the streaming window to 1 hour ago, so the old row is excluded
         DateTimeOffset streamingWindow = now.AddHours(-1);
-        List<MachineTelemetry> batch = await repo.GetTelemetryBatchAsync(0, streamingWindow, batchSize: 10);
+        List<MachineTelemetry> batch = await repo.GetTelemetryBatchAsync(0, streamingWindow, batchSize: 10, shardIndex: 0, shardCount: 1);
 
         await Assert.That(batch.Count).IsEqualTo(1);
         await Assert.That(batch[0].TelemetryType).IsEqualTo((short)2);
+    }
+
+    [Test]
+    public async Task GetTelemetryBatchAsync_WithSharding_OnlyReturnsOwnedMachines()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        IMachineStateRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        DateTimeOffset streamingWindow = now.AddMinutes(-10);
+
+        // Machines 10 and 11 sit in different shards under modulo-2 partitioning (10 % 2 == 0, 11 % 2 == 1).
+        MachineTelemetry even = TestDataBuilder.BuildMachineTelemetry(machineId: 10, tenantId: 1, telemetryType: 1);
+        even.ReceivedAt = now.AddMinutes(-5);
+        await repo.InsertTelemetryAsync(even);
+
+        MachineTelemetry odd = TestDataBuilder.BuildMachineTelemetry(machineId: 11, tenantId: 1, telemetryType: 1);
+        odd.ReceivedAt = now.AddMinutes(-4);
+        await repo.InsertTelemetryAsync(odd);
+
+        List<MachineTelemetry> shardZero = await repo.GetTelemetryBatchAsync(0, streamingWindow, batchSize: 10, shardIndex: 0, shardCount: 2);
+        List<MachineTelemetry> shardOne = await repo.GetTelemetryBatchAsync(0, streamingWindow, batchSize: 10, shardIndex: 1, shardCount: 2);
+
+        await Assert.That(shardZero.Count).IsEqualTo(1);
+        await Assert.That(shardZero[0].MachineId).IsEqualTo(10L);
+        await Assert.That(shardOne.Count).IsEqualTo(1);
+        await Assert.That(shardOne[0].MachineId).IsEqualTo(11L);
+    }
+
+    [Test]
+    public async Task GetTelemetryBatchAsync_SingleShard_ReturnsAllMachines()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        IMachineStateRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        DateTimeOffset streamingWindow = now.AddMinutes(-10);
+
+        MachineTelemetry even = TestDataBuilder.BuildMachineTelemetry(machineId: 10, tenantId: 1, telemetryType: 1);
+        even.ReceivedAt = now.AddMinutes(-5);
+        await repo.InsertTelemetryAsync(even);
+
+        MachineTelemetry odd = TestDataBuilder.BuildMachineTelemetry(machineId: 11, tenantId: 1, telemetryType: 1);
+        odd.ReceivedAt = now.AddMinutes(-4);
+        await repo.InsertTelemetryAsync(odd);
+
+        // shardCount of 1 disables the modulo predicate, so both machines are returned.
+        List<MachineTelemetry> batch = await repo.GetTelemetryBatchAsync(0, streamingWindow, batchSize: 10, shardIndex: 0, shardCount: 1);
+
+        await Assert.That(batch.Count).IsEqualTo(2);
     }
 
     // ========== GetLatestTelemetryPerTypeAsync tests ==========

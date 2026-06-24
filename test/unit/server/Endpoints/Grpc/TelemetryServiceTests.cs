@@ -1110,6 +1110,94 @@ public sealed class TelemetryServiceTests
     }
 
     // ========================================================================
+    // ResolveDedupTimestamp clamp boundaries
+    // ========================================================================
+
+    [Test]
+    public async Task ResolveDedupTimestamp_NoEventId_ReturnsServerTime()
+    {
+        DateTimeOffset serverReceivedAt = new(2026, 6, 24, 12, 0, 0, TimeSpan.Zero);
+        TelemetryItem item = new()
+        {
+            Type = TelemetryTypes.CpuUtilizationType,
+            CollectedAt = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(
+                new DateTimeOffset(2026, 6, 24, 11, 0, 0, TimeSpan.Zero)),
+        };
+
+        DateTimeOffset resolved = TelemetryService.ResolveDedupTimestamp(item, serverReceivedAt);
+
+        await Assert.That(resolved).IsEqualTo(serverReceivedAt);
+    }
+
+    [Test]
+    public async Task ResolveDedupTimestamp_NullCollectedAt_ReturnsServerTime()
+    {
+        DateTimeOffset serverReceivedAt = new(2026, 6, 24, 12, 0, 0, TimeSpan.Zero);
+        TelemetryItem item = new()
+        {
+            EventId = "event-no-collected",
+            Type = TelemetryTypes.CpuUtilizationType,
+        };
+
+        DateTimeOffset resolved = TelemetryService.ResolveDedupTimestamp(item, serverReceivedAt);
+
+        await Assert.That(resolved).IsEqualTo(serverReceivedAt);
+    }
+
+    [Test]
+    public async Task ResolveDedupTimestamp_EventIdWithinWindow_ReturnsCollectedAt()
+    {
+        DateTimeOffset serverReceivedAt = new(2026, 6, 24, 12, 0, 0, TimeSpan.Zero);
+        DateTimeOffset collectedAt = new(2026, 6, 24, 11, 59, 0, TimeSpan.Zero);
+        TelemetryItem item = new()
+        {
+            EventId = "event-within",
+            Type = TelemetryTypes.CpuUtilizationType,
+            CollectedAt = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(collectedAt),
+        };
+
+        DateTimeOffset resolved = TelemetryService.ResolveDedupTimestamp(item, serverReceivedAt);
+
+        await Assert.That(resolved).IsEqualTo(collectedAt);
+    }
+
+    [Test]
+    public async Task ResolveDedupTimestamp_CollectedBelowLowerBound_ClampsToLowerBound()
+    {
+        DateTimeOffset serverReceivedAt = new(2026, 6, 24, 12, 0, 0, TimeSpan.Zero);
+        // 8 days in the past is below the 7-day lookback floor.
+        DateTimeOffset collectedAt = serverReceivedAt.AddDays(-8);
+        TelemetryItem item = new()
+        {
+            EventId = "event-too-old",
+            Type = TelemetryTypes.CpuUtilizationType,
+            CollectedAt = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(collectedAt),
+        };
+
+        DateTimeOffset resolved = TelemetryService.ResolveDedupTimestamp(item, serverReceivedAt);
+
+        await Assert.That(resolved).IsEqualTo(serverReceivedAt.AddDays(-7));
+    }
+
+    [Test]
+    public async Task ResolveDedupTimestamp_CollectedAboveUpperBound_ClampsToUpperBound()
+    {
+        DateTimeOffset serverReceivedAt = new(2026, 6, 24, 12, 0, 0, TimeSpan.Zero);
+        // 8 days in the future exceeds the 7-day pre-created partition ceiling.
+        DateTimeOffset collectedAt = serverReceivedAt.AddDays(8);
+        TelemetryItem item = new()
+        {
+            EventId = "event-too-future",
+            Type = TelemetryTypes.CpuUtilizationType,
+            CollectedAt = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(collectedAt),
+        };
+
+        DateTimeOffset resolved = TelemetryService.ResolveDedupTimestamp(item, serverReceivedAt);
+
+        await Assert.That(resolved).IsEqualTo(serverReceivedAt.AddDays(7));
+    }
+
+    // ========================================================================
     // Test helpers for streaming
     // ========================================================================
 

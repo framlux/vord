@@ -2,6 +2,7 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
+using System.Security.Claims;
 using Grpc.Core.Interceptors;
 using Grpc.Core;
 using StackExchange.Redis;
@@ -34,10 +35,10 @@ public sealed class GrpcRateLimitingInterceptor : Interceptor
         ServerCallContext context,
         UnaryServerMethod<TRequest, TResponse> continuation)
     {
-        string peerIp = ExtractPeerIp(context);
-        if (await _limiter.IsAllowedAsync(peerIp) == false)
+        string partitionKey = DerivePartitionKey(context);
+        if (await _limiter.IsAllowedAsync(partitionKey) == false)
         {
-            _logger.LogWarning("gRPC rate limit exceeded for peer {PeerIp} on method {Method}", peerIp, context.Method);
+            _logger.LogWarning("gRPC rate limit exceeded for {PartitionKey} on method {Method}", partitionKey, context.Method);
             throw new RpcException(new Status(StatusCode.ResourceExhausted, "Rate limit exceeded"));
         }
 
@@ -51,10 +52,10 @@ public sealed class GrpcRateLimitingInterceptor : Interceptor
         ServerCallContext context,
         ServerStreamingServerMethod<TRequest, TResponse> continuation)
     {
-        string peerIp = ExtractPeerIp(context);
-        if (await _limiter.IsAllowedAsync(peerIp) == false)
+        string partitionKey = DerivePartitionKey(context);
+        if (await _limiter.IsAllowedAsync(partitionKey) == false)
         {
-            _logger.LogWarning("gRPC rate limit exceeded for peer {PeerIp} on method {Method}", peerIp, context.Method);
+            _logger.LogWarning("gRPC rate limit exceeded for {PartitionKey} on method {Method}", partitionKey, context.Method);
             throw new RpcException(new Status(StatusCode.ResourceExhausted, "Rate limit exceeded"));
         }
 
@@ -67,10 +68,10 @@ public sealed class GrpcRateLimitingInterceptor : Interceptor
         ServerCallContext context,
         ClientStreamingServerMethod<TRequest, TResponse> continuation)
     {
-        string peerIp = ExtractPeerIp(context);
-        if (await _limiter.IsAllowedAsync(peerIp) == false)
+        string partitionKey = DerivePartitionKey(context);
+        if (await _limiter.IsAllowedAsync(partitionKey) == false)
         {
-            _logger.LogWarning("gRPC rate limit exceeded for peer {PeerIp} on method {Method}", peerIp, context.Method);
+            _logger.LogWarning("gRPC rate limit exceeded for {PartitionKey} on method {Method}", partitionKey, context.Method);
             throw new RpcException(new Status(StatusCode.ResourceExhausted, "Rate limit exceeded"));
         }
 
@@ -84,14 +85,37 @@ public sealed class GrpcRateLimitingInterceptor : Interceptor
         ServerCallContext context,
         DuplexStreamingServerMethod<TRequest, TResponse> continuation)
     {
-        string peerIp = ExtractPeerIp(context);
-        if (await _limiter.IsAllowedAsync(peerIp) == false)
+        string partitionKey = DerivePartitionKey(context);
+        if (await _limiter.IsAllowedAsync(partitionKey) == false)
         {
-            _logger.LogWarning("gRPC rate limit exceeded for peer {PeerIp} on method {Method}", peerIp, context.Method);
+            _logger.LogWarning("gRPC rate limit exceeded for {PartitionKey} on method {Method}", partitionKey, context.Method);
             throw new RpcException(new Status(StatusCode.ResourceExhausted, "Rate limit exceeded"));
         }
 
         await continuation(requestStream, responseStream, context);
+    }
+
+    private static string DerivePartitionKey(ServerCallContext context)
+    {
+        string peerIp = ExtractPeerIp(context);
+        ClaimsPrincipal? user = TryGetUser(context);
+
+        return GrpcRateLimitPartitionKey.Derive(user, peerIp);
+    }
+
+    private static ClaimsPrincipal? TryGetUser(ServerCallContext context)
+    {
+        // GetHttpContext throws when the call is not hosted by ASP.NET Core (e.g. a non-HTTP
+        // transport). Identity claims live on the HttpContext principal, so without it the call
+        // is treated as unauthenticated and falls back to peer-IP keying.
+        try
+        {
+            return context.GetHttpContext()?.User;
+        }
+        catch (InvalidOperationException)
+        {
+            return null;
+        }
     }
 
     private static string ExtractPeerIp(ServerCallContext context)

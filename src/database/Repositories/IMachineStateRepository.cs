@@ -111,10 +111,10 @@ public interface IMachineStateRepository
     Task ApplyDetailPatchAsync(MachineDetailPatch patch, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Fetches a batch of telemetry rows with ID greater than the high-water mark
-    /// and received within the streaming window.
+    /// Fetches the next batch of telemetry rows past the high-water mark within the streaming
+    /// window, restricted to the machines owned by the given shard under modulo partitioning.
     /// </summary>
-    Task<List<MachineTelemetry>> GetTelemetryBatchAsync(long highWaterMark, DateTimeOffset streamingWindow, int batchSize, CancellationToken cancellationToken = default);
+    Task<List<MachineTelemetry>> GetTelemetryBatchAsync(long highWaterMark, DateTimeOffset streamingWindow, int batchSize, int shardIndex, int shardCount, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Returns telemetry rows for the specified machine IDs and telemetry type,

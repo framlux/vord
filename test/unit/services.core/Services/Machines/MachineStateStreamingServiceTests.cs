@@ -3,11 +3,13 @@
 // See LICENSE for details.
 
 using Framlux.FleetManagement.Database;
+using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Services.Core.Infrastructure;
 using Framlux.FleetManagement.Services.Core.Machines;
 using Framlux.FleetManagement.Services.Core.Machines.Projection;
+using Framlux.FleetManagement.Services.Core.Options;
 using Framlux.FleetManagement.Services.Core.Telemetry;
 using Framlux.FleetManagement.Test.Infrastructure;
 using LinqToDB;
@@ -15,6 +17,7 @@ using LinqToDB.Async;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 using NSubstitute;
 
 namespace Framlux.FleetManagement.Test.Services.Machines;
@@ -50,7 +53,9 @@ public class MachineStateStreamingServiceTests
         IServerSettingsCache? settingsCache = null,
         ILogger<MachineStateStreamingService>? logger = null,
         TimeProvider? timeProvider = null,
-        TimeSpan? startupDelay = null)
+        TimeSpan? startupDelay = null,
+        int shardIndex = 0,
+        int shardCount = 1)
     {
         return new MachineStateStreamingService(
             scopeFactory,
@@ -58,8 +63,19 @@ public class MachineStateStreamingServiceTests
             advisoryLockProvider ?? AcquiringAdvisoryLockProvider(),
             settingsCache ?? Substitute.For<IServerSettingsCache>(),
             logger ?? Substitute.For<ILogger<MachineStateStreamingService>>(),
+            shardIndex,
+            StreamingOptionsFor(shardCount),
             timeProvider ?? TimeProvider.System,
             startupDelay ?? FastStartupDelay);
+    }
+
+    private static IOptions<StreamingOptions> StreamingOptionsFor(int shardCount)
+    {
+        return Microsoft.Extensions.Options.Options.Create(new StreamingOptions
+        {
+            ShardCount = shardCount,
+            BatchSize = 200,
+        });
     }
 
     private static IAdvisoryLockProvider AcquiringAdvisoryLockProvider()
@@ -121,7 +137,7 @@ public class MachineStateStreamingServiceTests
 
         // The second GetTelemetryBatchAsync call signals that the first batch is fully applied.
         spy.When(r => r.GetTelemetryBatchAsync(
-                Arg.Any<long>(), Arg.Any<DateTimeOffset>(), Arg.Any<int>(), Arg.Any<CancellationToken>()))
+                Arg.Any<long>(), Arg.Any<DateTimeOffset>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>()))
             .Do(_ =>
             {
                 if (Interlocked.Increment(ref polls) == 2)
@@ -145,6 +161,11 @@ public class MachineStateStreamingServiceTests
     {
         _ = resetHighWaterMark; // Each iteration builds a fresh service whose high-water mark starts at zero.
 
+        await RunOneLoopIterationAsync(db, shardIndex: 0, shardCount: 1);
+    }
+
+    private static async Task RunOneLoopIterationAsync(DatabaseContext db, int shardIndex, int shardCount)
+    {
         TaskCompletionSource batchConsumed = new(TaskCreationOptions.RunContinuationsAsynchronously);
         DatabaseRepository real = new(db, NullLogger<DatabaseRepository>.Instance);
         IMachineStateRepository repo = Substitute.For<IMachineStateRepository>();
@@ -153,7 +174,7 @@ public class MachineStateStreamingServiceTests
         // Forward the three loop-used calls to the real repository; the loop's second telemetry
         // poll only happens after the high-water mark advances (i.e. after every patch is applied),
         // so completing the signal there yields a deterministic, wall-clock-independent wait.
-        repo.GetTelemetryBatchAsync(Arg.Any<long>(), Arg.Any<DateTimeOffset>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+        repo.GetTelemetryBatchAsync(Arg.Any<long>(), Arg.Any<DateTimeOffset>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
             .Returns(ci =>
             {
                 if (Interlocked.Increment(ref polls) == 2)
@@ -161,7 +182,8 @@ public class MachineStateStreamingServiceTests
                     batchConsumed.TrySetResult();
                 }
 
-                return real.GetTelemetryBatchAsync(ci.Arg<long>(), ci.Arg<DateTimeOffset>(), ci.Arg<int>(), ci.Arg<CancellationToken>());
+                return real.GetTelemetryBatchAsync(
+                    ci.Arg<long>(), ci.Arg<DateTimeOffset>(), ci.ArgAt<int>(2), ci.ArgAt<int>(3), ci.ArgAt<int>(4), ci.Arg<CancellationToken>());
             });
         repo.ApplySummaryPatchAsync(Arg.Any<MachineSummaryPatch>(), Arg.Any<CancellationToken>())
             .Returns(ci => real.ApplySummaryPatchAsync(ci.Arg<MachineSummaryPatch>(), ci.Arg<CancellationToken>()));
@@ -171,13 +193,15 @@ public class MachineStateStreamingServiceTests
         Dictionary<Type, object> services = new() { [typeof(IMachineStateRepository)] = repo };
         TestServiceScopeFactory scopeFactory = new(db, services);
 
-        await RunUntilSignaledAsync(scopeFactory, batchConsumed);
+        await RunUntilSignaledAsync(scopeFactory, batchConsumed, shardIndex, shardCount);
     }
 
-    private static async Task RunUntilSignaledAsync(TestServiceScopeFactory scopeFactory, TaskCompletionSource batchConsumed)
+    private static async Task RunUntilSignaledAsync(
+        TestServiceScopeFactory scopeFactory, TaskCompletionSource batchConsumed, int shardIndex = 0, int shardCount = 1)
     {
         FixedTimeProvider clock = new(FixedClock);
-        MachineStateStreamingService service = CreateService(scopeFactory, timeProvider: clock);
+        MachineStateStreamingService service = CreateService(
+            scopeFactory, timeProvider: clock, shardIndex: shardIndex, shardCount: shardCount);
 
         using CancellationTokenSource cts = new();
         await service.StartAsync(cts.Token);
@@ -186,6 +210,31 @@ public class MachineStateStreamingServiceTests
 
         await cts.CancelAsync();
         await service.StopAsync(CancellationToken.None);
+    }
+
+    /// <summary>
+    /// Drives a single batch through a sharded service using a spy repository, then cancels.
+    /// Completion is gated on the loop's second telemetry poll, so the wait is deterministic.
+    /// </summary>
+    private static async Task RunOneLoopIterationAsync(IMachineStateRepository spy, int shardIndex, int shardCount)
+    {
+        TaskCompletionSource batchConsumed = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        int polls = 0;
+
+        spy.When(r => r.GetTelemetryBatchAsync(
+                Arg.Any<long>(), Arg.Any<DateTimeOffset>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>()))
+            .Do(_ =>
+            {
+                if (Interlocked.Increment(ref polls) == 2)
+                {
+                    batchConsumed.TrySetResult();
+                }
+            });
+
+        Dictionary<Type, object> services = new() { [typeof(IMachineStateRepository)] = spy };
+        TestServiceScopeFactory scopeFactory = new(NoopContext(), services);
+
+        await RunUntilSignaledAsync(scopeFactory, batchConsumed, shardIndex, shardCount);
     }
 
     private static DatabaseContext NoopContext()
@@ -206,7 +255,7 @@ public class MachineStateStreamingServiceTests
         List<MachineTelemetry> batch = Enumerable.Range(1, 5)
             .Select(i => Row(i, 100, TelemetryTypeIds.CpuUsage, $$"""{ "cpu_usage_percent": {{i}} }""", t0.AddMinutes(i)))
             .ToList();
-        spy.GetTelemetryBatchAsync(Arg.Any<long>(), Arg.Any<DateTimeOffset>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+        spy.GetTelemetryBatchAsync(Arg.Any<long>(), Arg.Any<DateTimeOffset>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
             .Returns(batch, []); // first poll returns the batch, then empty
 
         await RunOneLoopIterationAsync(spy);
@@ -214,6 +263,50 @@ public class MachineStateStreamingServiceTests
         await spy.Received(1).ApplySummaryPatchAsync(
             Arg.Is<MachineSummaryPatch>(p => (p.MachineId == 100) && (p.CpuUsagePercent == 5)),
             Arg.Any<CancellationToken>());
+    }
+
+    // ========== Sharding ==========
+
+    [Test]
+    public async Task StreamLoop_Sharded_PassesItsOwnShardIndexAndCountToTheRepository()
+    {
+        // Intent: a shard-1-of-2 service must fetch using its own shard predicate, so the repository
+        // only returns the rows this shard owns.
+        IMachineStateRepository spy = Substitute.For<IMachineStateRepository>();
+        spy.GetTelemetryBatchAsync(Arg.Any<long>(), Arg.Any<DateTimeOffset>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns([], []);
+
+        await RunOneLoopIterationAsync(spy, shardIndex: 1, shardCount: 2);
+
+        await spy.Received().GetTelemetryBatchAsync(
+            Arg.Any<long>(), Arg.Any<DateTimeOffset>(), Arg.Any<int>(), 1, 2, Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task StreamLoop_TwoShards_EachProjectsOnlyItsOwnedMachines()
+    {
+        // Machine 10 (10 % 2 == 0) belongs to shard 0; machine 11 (11 % 2 == 1) belongs to shard 1.
+        // Each shard service must project only the machine it owns.
+        using TestDatabaseFactory dbFactory = new();
+        DatabaseContext db = dbFactory.Context;
+        await SeedSummaryAndDetail(db, 10);
+        await SeedSummaryAndDetail(db, 11);
+        DateTimeOffset t0 = RecentBase;
+        await SeedTelemetryAsync(db,
+            Row(1, 10, TelemetryTypeIds.CpuUsage, """{ "cpu_usage_percent": 33 }""", t0),
+            Row(2, 11, TelemetryTypeIds.CpuUsage, """{ "cpu_usage_percent": 77 }""", t0));
+
+        await RunOneLoopIterationAsync(db, shardIndex: 0, shardCount: 2);
+
+        MachineStateSummary shardZeroOwned = await db.GetTable<MachineStateSummary>().FirstAsync(x => x.MachineId == 10);
+        MachineStateSummary shardZeroNotOwned = await db.GetTable<MachineStateSummary>().FirstAsync(x => x.MachineId == 11);
+        await Assert.That(shardZeroOwned.CpuUsagePercent).IsEqualTo(33);  // shard 0 projected its machine
+        await Assert.That(shardZeroNotOwned.CpuUsagePercent).IsNull();    // shard 0 left the other shard's machine alone
+
+        await RunOneLoopIterationAsync(db, shardIndex: 1, shardCount: 2);
+
+        MachineStateSummary shardOneOwned = await db.GetTable<MachineStateSummary>().FirstAsync(x => x.MachineId == 11);
+        await Assert.That(shardOneOwned.CpuUsagePercent).IsEqualTo(77);   // shard 1 projected its machine
     }
 
     // ========== End-to-end projection against the real database ==========
@@ -316,7 +409,7 @@ public class MachineStateStreamingServiceTests
             Row(1, 100, TelemetryTypeIds.CpuUsage, """{ "cpu_usage_percent": "high" }""", t0),
             Row(2, 100, TelemetryTypeIds.MemoryUsage, """{ "memory_usage_percent": 25 }""", t0),
         ];
-        spy.GetTelemetryBatchAsync(Arg.Any<long>(), Arg.Any<DateTimeOffset>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+        spy.GetTelemetryBatchAsync(Arg.Any<long>(), Arg.Any<DateTimeOffset>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
             .Returns(batch, []); // first poll returns the batch, then empty
 
         await RunOneLoopIterationAsync(spy);
@@ -329,7 +422,7 @@ public class MachineStateStreamingServiceTests
         // The loop polled a second time using the advanced high-water mark (the last row's Id),
         // which only happens after the batch completed and the mark advanced — no infinite re-fetch.
         await spy.Received().GetTelemetryBatchAsync(
-            2, Arg.Any<DateTimeOffset>(), Arg.Any<int>(), Arg.Any<CancellationToken>());
+            2, Arg.Any<DateTimeOffset>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>());
     }
 
     // ========== Per-type projection correctness (drives the public loop) ==========
@@ -696,6 +789,72 @@ public class MachineStateStreamingServiceTests
         }).ThrowsNothing();
     }
 
+    // ========== Final high-water mark is durably persisted on shutdown ==========
+
+    [Test]
+    public async Task StopAsync_AfterMarkLoaded_PersistsFinalMarkWithNonCancelledToken()
+    {
+        // Intent: even when the stopping token is already cancelled, StopAsync must persist the
+        // in-memory high-water mark using CancellationToken.None so the shard does not needlessly
+        // re-process its last batch on next start. Drives the loop until the mark is loaded, then
+        // stops with an already-cancelled token and asserts the durable write used a live token.
+        string expectedKey = StreamingShardCalculator.HighWaterMarkKeyForShard(
+            ServerConfigurationSettingKeys.StreamingHighWaterMark.ToString(), 0);
+
+        IServerSettingsCache settingsCache = Substitute.For<IServerSettingsCache>();
+        settingsCache.GetSettingAsync(expectedKey, Arg.Any<CancellationToken>()).Returns("7");
+
+        IMachineStateRepository spy = Substitute.For<IMachineStateRepository>();
+        spy.GetTelemetryBatchAsync(Arg.Any<long>(), Arg.Any<DateTimeOffset>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns([], []);
+
+        TaskCompletionSource markLoaded = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        settingsCache.When(c => c.GetSettingAsync(expectedKey, Arg.Any<CancellationToken>()))
+            .Do(_ => markLoaded.TrySetResult());
+
+        Dictionary<Type, object> services = new() { [typeof(IMachineStateRepository)] = spy };
+        TestServiceScopeFactory scopeFactory = new(NoopContext(), services);
+        FixedTimeProvider clock = new(FixedClock);
+        MachineStateStreamingService service = CreateService(
+            scopeFactory, settingsCache: settingsCache, timeProvider: clock);
+
+        using CancellationTokenSource cts = new();
+        await service.StartAsync(cts.Token);
+        await markLoaded.Task;
+
+        // Cancel before stopping so the stopping token is already cancelled, reproducing the race.
+        await cts.CancelAsync();
+        await service.StopAsync(CancellationToken.None);
+
+        // The final persist must use a non-cancelled token (CancellationToken.None), not the
+        // already-cancelled stopping token.
+        await settingsCache.Received().SetSettingAsync(
+            expectedKey, "7", Arg.Is<CancellationToken>(t => t.IsCancellationRequested == false));
+    }
+
+    [Test]
+    public async Task StopAsync_WithoutMarkEverLoaded_DoesNotPersist()
+    {
+        // Intent: if the service stopped before it ever loaded a high-water mark (the loop never
+        // acquired the lock), StopAsync must not write a spurious mark over the durable value.
+        IServerSettingsCache settingsCache = Substitute.For<IServerSettingsCache>();
+        TestServiceScopeFactory scopeFactory = new(NoopContext());
+        FixedTimeProvider clock = new(FixedClock);
+        MachineStateStreamingService service = CreateService(
+            scopeFactory,
+            advisoryLockProvider: BlockingAdvisoryLockProvider(),
+            settingsCache: settingsCache,
+            timeProvider: clock);
+
+        using CancellationTokenSource cts = new();
+        await service.StartAsync(cts.Token);
+        await cts.CancelAsync();
+        await service.StopAsync(CancellationToken.None);
+
+        await settingsCache.DidNotReceive().SetSettingAsync(
+            Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
+    }
+
     // ========== ComputeMaxDiskUsagePercent (logic now lives in TelemetryPayloadParser) ==========
 
     [Test]
@@ -965,7 +1124,9 @@ public class MachineStateStreamingServiceTests
             Substitute.For<ISqlDialect>(),
             Substitute.For<IAdvisoryLockProvider>(),
             Substitute.For<IServerSettingsCache>(),
-            Substitute.For<ILogger<MachineStateStreamingService>>()))
+            Substitute.For<ILogger<MachineStateStreamingService>>(),
+            shardIndex: 0,
+            StreamingOptionsFor(1)))
             .Throws<ArgumentNullException>();
     }
 
@@ -977,7 +1138,9 @@ public class MachineStateStreamingServiceTests
             null!,
             Substitute.For<IAdvisoryLockProvider>(),
             Substitute.For<IServerSettingsCache>(),
-            Substitute.For<ILogger<MachineStateStreamingService>>()))
+            Substitute.For<ILogger<MachineStateStreamingService>>(),
+            shardIndex: 0,
+            StreamingOptionsFor(1)))
             .Throws<ArgumentNullException>();
     }
 
@@ -989,7 +1152,9 @@ public class MachineStateStreamingServiceTests
             Substitute.For<ISqlDialect>(),
             null!,
             Substitute.For<IServerSettingsCache>(),
-            Substitute.For<ILogger<MachineStateStreamingService>>()))
+            Substitute.For<ILogger<MachineStateStreamingService>>(),
+            shardIndex: 0,
+            StreamingOptionsFor(1)))
             .Throws<ArgumentNullException>();
     }
 
@@ -1001,7 +1166,9 @@ public class MachineStateStreamingServiceTests
             Substitute.For<ISqlDialect>(),
             Substitute.For<IAdvisoryLockProvider>(),
             null!,
-            Substitute.For<ILogger<MachineStateStreamingService>>()))
+            Substitute.For<ILogger<MachineStateStreamingService>>(),
+            shardIndex: 0,
+            StreamingOptionsFor(1)))
             .Throws<ArgumentNullException>();
     }
 
@@ -1013,6 +1180,22 @@ public class MachineStateStreamingServiceTests
             Substitute.For<ISqlDialect>(),
             Substitute.For<IAdvisoryLockProvider>(),
             Substitute.For<IServerSettingsCache>(),
+            null!,
+            shardIndex: 0,
+            StreamingOptionsFor(1)))
+            .Throws<ArgumentNullException>();
+    }
+
+    [Test]
+    public async Task Constructor_NullStreamingOptions_ThrowsArgumentNullException()
+    {
+        await Assert.That(() => new MachineStateStreamingService(
+            Substitute.For<IServiceScopeFactory>(),
+            Substitute.For<ISqlDialect>(),
+            Substitute.For<IAdvisoryLockProvider>(),
+            Substitute.For<IServerSettingsCache>(),
+            Substitute.For<ILogger<MachineStateStreamingService>>(),
+            shardIndex: 0,
             null!))
             .Throws<ArgumentNullException>();
     }
