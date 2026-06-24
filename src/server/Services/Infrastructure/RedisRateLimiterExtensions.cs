@@ -14,6 +14,36 @@ namespace Framlux.FleetManagement.Server.Services.Infrastructure;
 public static class RedisRateLimiterExtensions
 {
     /// <summary>
+    /// Redis key prefix for the OAuth/OIDC callback rate limiter.
+    /// </summary>
+    public const string CallbackKeyPrefix = "ratelimit:callback";
+
+    /// <summary>
+    /// Maximum number of callback requests permitted per IP within
+    /// <see cref="CallbackWindow"/>. Callbacks are a sensitive surface (correlation/nonce
+    /// guessing, token replay), so the limit is strict.
+    /// </summary>
+    public const int CallbackPermitLimit = 10;
+
+    /// <summary>
+    /// The fixed window over which <see cref="CallbackPermitLimit"/> callback requests
+    /// are counted per IP.
+    /// </summary>
+    public static readonly TimeSpan CallbackWindow = TimeSpan.FromMinutes(5);
+
+    /// <summary>
+    /// Creates the Redis-backed fixed-window limiter used for OAuth/OIDC callbacks. The
+    /// named <c>callback</c> policy and <c>CallbackRateLimitMiddleware</c> share this
+    /// factory so they enforce identical limits.
+    /// </summary>
+    /// <param name="redis">The Redis connection multiplexer.</param>
+    /// <returns>A fixed-window limiter configured for the callback surface.</returns>
+    public static RedisFixedWindowRateLimiter CreateCallbackLimiter(IConnectionMultiplexer redis)
+    {
+        return new RedisFixedWindowRateLimiter(redis, CallbackKeyPrefix, CallbackPermitLimit, CallbackWindow);
+    }
+
+    /// <summary>
     /// Configures Redis-backed rate limiting for the application, replacing in-memory rate limiting
     /// so counters are shared across Kubernetes replicas. The <see cref="IConnectionMultiplexer"/>
     /// is resolved lazily from DI, allowing tests to replace it before any connection is established.
@@ -39,6 +69,15 @@ public static class RedisRateLimiterExtensions
                 // download). 30/min per IP — tighter than global because a single IP brute-forcing
                 // 64-hex tokens is cheap to mount and the only response we can offer is to slow them.
                 RedisFixedWindowRateLimiter anonymousTokenLimiter = new(redis, "ratelimit:anonymous-token", 30, TimeSpan.FromMinutes(1));
+                // Strict policy for the OAuth/OIDC callback paths. Note this named "callback"
+                // policy does NOT enforce the callback limit: the OAuth/OIDC callbacks are
+                // authentication-scheme middleware mappings, not FastEndpoints, so nothing can
+                // attach RequireRateLimiting("callback") to them. Actual enforcement is done by
+                // CallbackRateLimitMiddleware (which shares the identical limit via
+                // CreateCallbackLimiter). The policy is registered only for parity and
+                // observability, so the callback surface appears alongside the other named
+                // policies; do not assume it throttles the callbacks on its own.
+                RedisFixedWindowRateLimiter callbackLimiter = CreateCallbackLimiter(redis);
 
                 options.GlobalLimiter = PartitionedRateLimiter.Create<HttpContext, string>(context =>
                 {
@@ -62,6 +101,14 @@ public static class RedisRateLimiterExtensions
 
                     return RateLimitPartition.Get(partitionKey, key =>
                         new RedisPartitionedRateLimiter(anonymousTokenLimiter, key));
+                });
+
+                options.AddPolicy("callback", context =>
+                {
+                    string partitionKey = context.Connection.RemoteIpAddress?.ToString() ?? "unknown";
+
+                    return RateLimitPartition.Get(partitionKey, key =>
+                        new RedisPartitionedRateLimiter(callbackLimiter, key));
                 });
             });
         });

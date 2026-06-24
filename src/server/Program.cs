@@ -338,6 +338,17 @@ app.UseForwardedHeaders();
 app.UseMiddleware<Framlux.FleetManagement.Server.Middleware.SecurityHeadersMiddleware>();
 app.UseCors();
 app.UseRateLimiter();
+
+// Strict per-IP rate limit on the OAuth/OIDC callback paths. These callbacks are
+// authentication-scheme middleware mappings (not FastEndpoints), so the endpoint-level
+// limiter cannot reach them and the global limiter is too loose for this surface. The
+// branch runs before UseAuthentication so a throttled request is rejected with 429 before
+// the auth handler processes the correlation/nonce state.
+app.UseWhen(
+    context => context.Request.Path.StartsWithSegments(
+        Framlux.FleetManagement.Server.Middleware.CallbackRateLimitMiddleware.CallbackPathPrefix),
+    branch => branch.UseMiddleware<Framlux.FleetManagement.Server.Middleware.CallbackRateLimitMiddleware>());
+
 app.UseAuthentication()
     .UseAuthorization();
 

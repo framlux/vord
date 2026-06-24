@@ -8,6 +8,8 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using NSubstitute;
 using StackExchange.Redis;
+using System.Collections;
+using System.Reflection;
 
 namespace Framlux.FleetManagement.Test.Services;
 
@@ -136,8 +138,93 @@ public class RedisRateLimiterExtensionsTests
             configOption.Configure(options);
         }
 
-        // Verify the "login" policy was added by checking the unresolved policy count
-        // The login policy is added via AddPolicy, so it should be in the policy map
-        await Assert.That(options.GlobalLimiter).IsNotNull();
+        await Assert.That(GetPolicyNames(options)).Contains("login");
+    }
+
+    /// <summary>
+    /// Verifies that AddRedisRateLimiting registers the callback rate limit policy used to
+    /// protect the OAuth/OIDC callback paths.
+    /// </summary>
+    [Test]
+    public async Task AddRedisRateLimiting_RegistersCallbackPolicy()
+    {
+        ServiceCollection services = new();
+        IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
+        IDatabase db = Substitute.For<IDatabase>();
+        redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(db);
+        services.AddSingleton(redis);
+        services.AddLogging();
+
+        services.AddRedisRateLimiting();
+
+        ServiceProvider provider = services.BuildServiceProvider();
+
+        IEnumerable<IConfigureOptions<RateLimiterOptions>> allOptions =
+            provider.GetServices<IConfigureOptions<RateLimiterOptions>>();
+
+        RateLimiterOptions options = new();
+        foreach (IConfigureOptions<RateLimiterOptions> configOption in allOptions)
+        {
+            configOption.Configure(options);
+        }
+
+        await Assert.That(GetPolicyNames(options)).Contains("callback");
+    }
+
+    /// <summary>
+    /// Verifies that <see cref="RedisRateLimiterExtensions.CreateCallbackLimiter"/> builds a
+    /// strict limiter that blocks once its permit count is exceeded within the window. The
+    /// limiter is driven by request count, never by wall-clock time.
+    /// </summary>
+    [Test]
+    public async Task CreateCallbackLimiter_BlocksAfterPermitLimit()
+    {
+        long count = 0;
+        IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
+        IDatabase db = Substitute.For<IDatabase>();
+        db.ScriptEvaluateAsync(Arg.Any<string>(), Arg.Any<RedisKey[]>(), Arg.Any<RedisValue[]>(), Arg.Any<CommandFlags>())
+            .Returns(_ => RedisResult.Create((RedisValue)System.Threading.Interlocked.Increment(ref count)));
+        redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(db);
+
+        RedisFixedWindowRateLimiter limiter = RedisRateLimiterExtensions.CreateCallbackLimiter(redis);
+
+        for (int i = 0; i < RedisRateLimiterExtensions.CallbackPermitLimit; i++)
+        {
+            bool allowed = await limiter.IsAllowedAsync("198.51.100.7");
+            await Assert.That(allowed).IsTrue();
+        }
+
+        bool blocked = await limiter.IsAllowedAsync("198.51.100.7");
+
+        await Assert.That(blocked).IsFalse();
+    }
+
+    /// <summary>
+    /// Reads the names of the policies registered on the supplied options. The policy map is
+    /// an internal framework dictionary, so it is read via reflection.
+    /// </summary>
+    private static IReadOnlyCollection<string> GetPolicyNames(RateLimiterOptions options)
+    {
+        PropertyInfo policyMapProperty = typeof(RateLimiterOptions).GetProperty(
+            "PolicyMap",
+            BindingFlags.Instance | BindingFlags.NonPublic | BindingFlags.Public)
+            ?? throw new InvalidOperationException("RateLimiterOptions.PolicyMap was not found.");
+
+        object? policyMap = policyMapProperty.GetValue(options);
+        if (policyMap is not IDictionary dictionary)
+        {
+            throw new InvalidOperationException("RateLimiterOptions.PolicyMap was not a dictionary.");
+        }
+
+        List<string> names = new();
+        foreach (object? key in dictionary.Keys)
+        {
+            if (key is string name)
+            {
+                names.Add(name);
+            }
+        }
+
+        return names;
     }
 }
