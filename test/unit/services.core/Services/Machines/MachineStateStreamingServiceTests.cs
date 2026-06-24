@@ -786,23 +786,43 @@ public class MachineStateStreamingServiceTests
         }).ThrowsNothing();
     }
 
-    // ========== Final high-water mark is durably persisted on shutdown ==========
+    // ========== Final high-water mark is flushed under the shard lock on shutdown ==========
 
     [Test]
-    public async Task StopAsync_AfterMarkLoaded_PersistsFinalMarkWithNonCancelledToken()
+    public async Task Shutdown_AfterBatchAdvancedMark_FlushesAdvancedMarkWithNonCancelledToken()
     {
-        // Intent: even when the stopping token is already cancelled, StopAsync must persist the
-        // in-memory high-water mark using CancellationToken.None so the shard does not needlessly
-        // re-process its last batch on next start. Drives the loop until the cursor is loaded, then
-        // stops with an already-cancelled token and asserts the durable write used a live token.
+        // Intent: the final high-water mark is persisted while the shard lock is still held and with
+        // a non-cancellable token, EVEN THOUGH the loop's stopping token is cancelled on shutdown.
+        // Drive one batch through the mocked repository so the mark advances to the last row's Id,
+        // then cancel and stop; assert the durable write carried the advanced mark and used a live
+        // token (CancellationToken.None), proving the flush-under-lock path on the stop race.
         IMachineStateRepository spy = Substitute.For<IMachineStateRepository>();
-        spy.GetProjectionCursorAsync(0, Arg.Any<CancellationToken>()).Returns(7L);
-        spy.GetTelemetryBatchAsync(Arg.Any<long>(), Arg.Any<DateTimeOffset>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
-            .Returns([], []);
+        spy.GetProjectionCursorAsync(0, Arg.Any<CancellationToken>()).Returns(0L);
 
-        TaskCompletionSource markLoaded = new(TaskCreationOptions.RunContinuationsAsynchronously);
-        spy.When(r => r.GetProjectionCursorAsync(0, Arg.Any<CancellationToken>()))
-            .Do(_ => markLoaded.TrySetResult());
+        List<MachineTelemetry> batch =
+        [
+            Row(41, 100, TelemetryTypeIds.CpuUsage, """{ "cpu_usage_percent": 50 }""", RecentBase),
+            Row(42, 100, TelemetryTypeIds.CpuUsage, """{ "cpu_usage_percent": 55 }""", RecentBase),
+        ];
+
+        // First poll yields the batch (advancing the mark to 42), every later poll is empty so the
+        // loop idles deterministically on the FixedTimeProvider until cancellation unwinds it.
+        spy.GetTelemetryBatchAsync(Arg.Any<long>(), Arg.Any<DateTimeOffset>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns(batch, []);
+
+        // Completion is gated on the loop's SECOND poll, which only fires after the batch was
+        // applied and the mark advanced — a deterministic, wall-clock-independent signal.
+        TaskCompletionSource batchConsumed = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        int polls = 0;
+        spy.When(r => r.GetTelemetryBatchAsync(
+                Arg.Any<long>(), Arg.Any<DateTimeOffset>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>()))
+            .Do(_ =>
+            {
+                if (Interlocked.Increment(ref polls) == 2)
+                {
+                    batchConsumed.TrySetResult();
+                }
+            });
 
         Dictionary<Type, object> services = new() { [typeof(IMachineStateRepository)] = spy };
         TestServiceScopeFactory scopeFactory = new(NoopContext(), services);
@@ -811,23 +831,24 @@ public class MachineStateStreamingServiceTests
 
         using CancellationTokenSource cts = new();
         await service.StartAsync(cts.Token);
-        await markLoaded.Task;
+        await batchConsumed.Task;
 
-        // Cancel before stopping so the stopping token is already cancelled, reproducing the race.
+        // Cancel before stopping so the loop's stopping token is already cancelled, reproducing the
+        // race the flush-under-lock finally closes.
         await cts.CancelAsync();
         await service.StopAsync(CancellationToken.None);
 
-        // The final persist must use a non-cancelled token (CancellationToken.None), not the
-        // already-cancelled stopping token, and carry the loaded mark for this shard.
+        // The final flush must carry the advanced mark (42, the last row's Id) and use a
+        // non-cancelled token (CancellationToken.None), not the already-cancelled stopping token.
         await spy.Received().SetProjectionCursorAsync(
-            0, 7L, Arg.Is<CancellationToken>(t => t.IsCancellationRequested == false));
+            0, 42L, Arg.Is<CancellationToken>(t => t.IsCancellationRequested == false));
     }
 
     [Test]
-    public async Task StopAsync_WithoutMarkEverLoaded_DoesNotPersist()
+    public async Task Shutdown_WithoutLockEverAcquired_DoesNotPersist()
     {
-        // Intent: if the service stopped before it ever loaded a high-water mark (the loop never
-        // acquired the lock), StopAsync must not write a spurious mark over the durable value.
+        // Intent: if the loop never acquired the shard lock, no mark was ever loaded, so the
+        // flush-under-lock guard must skip the write and never clobber the durable value.
         IMachineStateRepository spy = Substitute.For<IMachineStateRepository>();
         Dictionary<Type, object> services = new() { [typeof(IMachineStateRepository)] = spy };
         TestServiceScopeFactory scopeFactory = new(NoopContext(), services);
