@@ -9,6 +9,7 @@ using Framlux.FleetManagement.Server.Auth;
 using Framlux.FleetManagement.Services.Core.Models.Users;
 using Framlux.FleetManagement.Services.Core.Handlers;
 using Framlux.FleetManagement.Services.Core.Infrastructure;
+using Microsoft.AspNetCore.Antiforgery;
 
 namespace Framlux.FleetManagement.Server.Endpoints.Web.Auth;
 
@@ -18,16 +19,19 @@ namespace Framlux.FleetManagement.Server.Endpoints.Web.Auth;
 public sealed class AuthMeEndpoint : EndpointWithoutRequest<ApiResponse<UserDto>>
 {
     private readonly IAuthMeHandler _handler;
+    private readonly IAntiforgery _antiforgery;
     private readonly ILogger<AuthMeEndpoint> _logger;
 
     /// <summary>
     /// Creates a new instance of the <see cref="AuthMeEndpoint"/> class.
     /// </summary>
     /// <param name="handler">The auth me handler instance.</param>
+    /// <param name="antiforgery">The antiforgery service used to issue the double-submit token.</param>
     /// <param name="logger">The logger instance.</param>
-    public AuthMeEndpoint(IAuthMeHandler handler, ILogger<AuthMeEndpoint> logger)
+    public AuthMeEndpoint(IAuthMeHandler handler, IAntiforgery antiforgery, ILogger<AuthMeEndpoint> logger)
     {
         _handler = handler;
+        _antiforgery = antiforgery;
         _logger = logger;
     }
 
@@ -81,6 +85,14 @@ public sealed class AuthMeEndpoint : EndpointWithoutRequest<ApiResponse<UserDto>
         dto.Tenants.AddRange(result.Data!.Tenants);
         dto.NeedsOnboarding = result.Data!.NeedsOnboarding;
         dto.ActiveTenantId = TenantClaimHelper.GetTenantIdFromClaims(User, HttpContext);
+
+        // Issue the double-submit antiforgery pair on this authenticated GET: GetAndStoreTokens
+        // writes the antiforgery cookie onto the response and returns the matching request token.
+        // The client echoes the request token in the X-CSRF-TOKEN header on state-changing
+        // requests, which the server validates against the cookie. This is the single issuance
+        // path for the cookie-authenticated web flow.
+        AntiforgeryTokenSet tokens = _antiforgery.GetAndStoreTokens(HttpContext);
+        dto.CsrfToken = tokens.RequestToken;
 
         await Send.OkAsync(ApiResponse<UserDto>.Ok(dto), cancellation: ct);
     }

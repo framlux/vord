@@ -164,6 +164,79 @@ public sealed class AntiforgeryStartupTests
             .Throws<ArgumentNullException>();
     }
 
+    [Test]
+    public async Task ShouldSkipAntiforgery_WithAuthCookie_DoesNotSkip()
+    {
+        DefaultHttpContext ctx = new();
+        ctx.Request.Headers["Cookie"] = "vord_auth=abc";
+
+        bool skip = AntiforgeryStartup.ShouldSkipAntiforgery(ctx);
+
+        await Assert.That(skip).IsFalse();
+    }
+
+    // =================== RequiresJsonCsrfCheck ===================
+
+    [Test]
+    public async Task RequiresJsonCsrfCheck_PostWithAuthCookie_ReturnsTrue()
+    {
+        DefaultHttpContext ctx = new();
+        ctx.Request.Method = "POST";
+        ctx.Request.Headers.Cookie = new StringValues("vord_auth=abc");
+
+        bool result = AntiforgeryStartup.RequiresJsonCsrfCheck(ctx);
+
+        await Assert.That(result).IsTrue();
+    }
+
+    [Test]
+    public async Task RequiresJsonCsrfCheck_PostWithoutAuthCookie_ReturnsFalse()
+    {
+        DefaultHttpContext ctx = new();
+        ctx.Request.Method = "POST";
+
+        bool result = AntiforgeryStartup.RequiresJsonCsrfCheck(ctx);
+
+        await Assert.That(result).IsFalse();
+    }
+
+    [Test]
+    [Arguments("GET")]
+    [Arguments("HEAD")]
+    [Arguments("OPTIONS")]
+    public async Task RequiresJsonCsrfCheck_SafeVerbWithAuthCookie_ReturnsFalse(string method)
+    {
+        DefaultHttpContext ctx = new();
+        ctx.Request.Method = method;
+        ctx.Request.Headers.Cookie = new StringValues("vord_auth=abc");
+
+        bool result = AntiforgeryStartup.RequiresJsonCsrfCheck(ctx);
+
+        await Assert.That(result).IsFalse();
+    }
+
+    [Test]
+    [Arguments("PUT")]
+    [Arguments("DELETE")]
+    [Arguments("PATCH")]
+    public async Task RequiresJsonCsrfCheck_OtherNonSafeVerbWithAuthCookie_ReturnsTrue(string method)
+    {
+        DefaultHttpContext ctx = new();
+        ctx.Request.Method = method;
+        ctx.Request.Headers.Cookie = new StringValues("vord_auth=abc");
+
+        bool result = AntiforgeryStartup.RequiresJsonCsrfCheck(ctx);
+
+        await Assert.That(result).IsTrue();
+    }
+
+    [Test]
+    public async Task RequiresJsonCsrfCheck_NullHttpContext_Throws()
+    {
+        await Assert.That(() => AntiforgeryStartup.RequiresJsonCsrfCheck(null!))
+            .Throws<ArgumentNullException>();
+    }
+
     // =================== EnableAntiforgeryIfApplicable ===================
 
     [Test]

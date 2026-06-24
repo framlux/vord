@@ -121,6 +121,27 @@ public static class AntiforgeryStartup
     }
 
     /// <summary>
+    /// Returns whether the request is a cookie-authenticated, state-changing request that the
+    /// form-only antiforgery middleware would otherwise let through (JSON / fetch bodies). These
+    /// must present a valid X-CSRF-TOKEN header matching the antiforgery cookie.
+    /// </summary>
+    /// <param name="httpContext">The current HTTP context.</param>
+    /// <returns>True when an explicit antiforgery validation must be performed.</returns>
+    public static bool RequiresJsonCsrfCheck(HttpContext httpContext)
+    {
+        ArgumentNullException.ThrowIfNull(httpContext);
+
+        string method = httpContext.Request.Method;
+        bool safe = HttpMethods.IsGet(method) || HttpMethods.IsHead(method) || HttpMethods.IsOptions(method);
+        if (safe)
+        {
+            return false;
+        }
+
+        return ShouldSkipAntiforgery(httpContext) == false;
+    }
+
+    /// <summary>
     /// Static reference to the cookie auth scheme name. Exposed so callers can match the
     /// project's chosen scheme without importing <c>Microsoft.AspNetCore.Authentication.Cookies</c>
     /// directly. Currently unused outside this file, but kept for symmetry with the other

@@ -2,7 +2,7 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
-import { createServerApiClient } from '$lib/api/server';
+import { createServerApiClient, csrfFor } from '$lib/api/server';
 import { ApiError } from '$lib/api/client';
 import { parsePaginationParams } from '$lib/utils/pagination';
 import { canAdminTenant, canAdminMachines } from '$lib/utils/roles';
@@ -61,7 +61,7 @@ export const actions: Actions = {
 			return fail(403, { message: 'Access denied' });
 		}
 
-		const api = createServerApiClient(fetch, cookies.get('vord_auth'), cookies.get('vord_tenant'));
+		const api = createServerApiClient(fetch, cookies.get('vord_auth'), cookies.get('vord_tenant'), undefined, csrfFor(cookies, locals));
 		const data = await request.formData();
 
 		const machineIds = data.getAll('machineIds').map((v) => parseInt(v as string)).filter((v) => Number.isNaN(v) === false);
@@ -95,7 +95,7 @@ export const actions: Actions = {
 			return fail(403, { message: 'Access denied' });
 		}
 
-		const api = createServerApiClient(fetch, cookies.get('vord_auth'), cookies.get('vord_tenant'));
+		const api = createServerApiClient(fetch, cookies.get('vord_auth'), cookies.get('vord_tenant'), undefined, csrfFor(cookies, locals));
 		const data = await request.formData();
 		const id = parseRequiredInt(data, 'id');
 		if (id === null) {
@@ -133,7 +133,7 @@ export const actions: Actions = {
 			return fail(403, { message: 'Access denied' });
 		}
 
-		const api = createServerApiClient(fetch, cookies.get('vord_auth'), cookies.get('vord_tenant'));
+		const api = createServerApiClient(fetch, cookies.get('vord_auth'), cookies.get('vord_tenant'), undefined, csrfFor(cookies, locals));
 		const data = await request.formData();
 		const id = parseRequiredInt(data, 'id');
 		if (id === null) {
@@ -158,7 +158,7 @@ export const actions: Actions = {
 			return fail(403, { message: 'Access denied' });
 		}
 
-		const api = createServerApiClient(fetch, cookies.get('vord_auth'), cookies.get('vord_tenant'));
+		const api = createServerApiClient(fetch, cookies.get('vord_auth'), cookies.get('vord_tenant'), undefined, csrfFor(cookies, locals));
 		const data = await request.formData();
 		const id = parseRequiredInt(data, 'id');
 		if (id === null) {
@@ -183,7 +183,7 @@ export const actions: Actions = {
 			return fail(403, { message: 'Access denied' });
 		}
 
-		const api = createServerApiClient(fetch, cookies.get('vord_auth'), cookies.get('vord_tenant'));
+		const api = createServerApiClient(fetch, cookies.get('vord_auth'), cookies.get('vord_tenant'), undefined, csrfFor(cookies, locals));
 		const data = await request.formData();
 
 		const provider = data.get('provider') as string;
@@ -215,7 +215,7 @@ export const actions: Actions = {
 			return fail(403, { message: 'Access denied' });
 		}
 
-		const api = createServerApiClient(fetch, cookies.get('vord_auth'), cookies.get('vord_tenant'));
+		const api = createServerApiClient(fetch, cookies.get('vord_auth'), cookies.get('vord_tenant'), undefined, csrfFor(cookies, locals));
 		const data = await request.formData();
 		const id = parseRequiredInt(data, 'id');
 		if (id === null) {
@@ -243,7 +243,7 @@ export const actions: Actions = {
 			return fail(403, { message: 'Access denied' });
 		}
 
-		const api = createServerApiClient(fetch, cookies.get('vord_auth'), cookies.get('vord_tenant'));
+		const api = createServerApiClient(fetch, cookies.get('vord_auth'), cookies.get('vord_tenant'), undefined, csrfFor(cookies, locals));
 		const data = await request.formData();
 		const id = parseRequiredInt(data, 'id');
 		if (id === null) {
@@ -268,7 +268,7 @@ export const actions: Actions = {
 			return fail(403, { message: 'Access denied' });
 		}
 
-		const api = createServerApiClient(fetch, cookies.get('vord_auth'), cookies.get('vord_tenant'));
+		const api = createServerApiClient(fetch, cookies.get('vord_auth'), cookies.get('vord_tenant'), undefined, csrfFor(cookies, locals));
 		const data = await request.formData();
 		const id = parseRequiredInt(data, 'id');
 		if (id === null) {
@@ -293,7 +293,7 @@ export const actions: Actions = {
 			return fail(403, { message: 'Access denied' });
 		}
 
-		const api = createServerApiClient(fetch, cookies.get('vord_auth'), cookies.get('vord_tenant'));
+		const api = createServerApiClient(fetch, cookies.get('vord_auth'), cookies.get('vord_tenant'), undefined, csrfFor(cookies, locals));
 		const data = await request.formData();
 		const id = parseRequiredInt(data, 'id');
 		if (id === null) {

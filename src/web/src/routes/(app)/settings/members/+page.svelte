@@ -39,7 +39,7 @@
   let confirmRemoveUserId = $state<number | null>(null);
   let revokeInviteConfirm = $state<{ open: boolean; id: number | null }>({ open: false, id: null });
 
-  const client = new ApiClient("");
+  const client = new ApiClient("", fetch);
 
   async function sendInvitation() {
     inviteError = "";
@@ -53,6 +53,7 @@
 
     inviteLoading = true;
     try {
+      if (data.user?.csrfToken) client.setCsrfToken(data.user.csrfToken);
       const roleToSend = isTeamTier ? inviteRole : "TenantAdmin";
       const result = await client.createInvitation(
         inviteEmail.trim(),
@@ -72,6 +73,7 @@
 
   async function changeMemberRole(userId: number, role: string) {
     try {
+      if (data.user?.csrfToken) client.setCsrfToken(data.user.csrfToken);
       await client.changeMemberRole(userId, role);
       await invalidateAll();
     } catch (err: unknown) {
@@ -82,6 +84,7 @@
 
   async function revokeInvitation(id: number) {
     try {
+      if (data.user?.csrfToken) client.setCsrfToken(data.user.csrfToken);
       await client.revokeInvitation(id);
       await invalidateAll();
     } catch (err: unknown) {
@@ -92,6 +95,7 @@
 
   async function resendInvitation(id: number) {
     try {
+      if (data.user?.csrfToken) client.setCsrfToken(data.user.csrfToken);
       await client.resendInvitation(id);
       await invalidateAll();
       inviteSuccess = "Invitation resent successfully";
@@ -103,6 +107,7 @@
 
   async function removeMember(userId: number) {
     try {
+      if (data.user?.csrfToken) client.setCsrfToken(data.user.csrfToken);
       await client.removeMember(userId);
       confirmRemoveUserId = null;
       await invalidateAll();

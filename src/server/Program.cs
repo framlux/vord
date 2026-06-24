@@ -14,6 +14,7 @@ using Framlux.FleetManagement.Services.Core.Extensions;
 using Framlux.FleetManagement.Services.Core.Hangfire;
 using Framlux.FleetManagement.Services.Core.Infrastructure;
 using Framlux.FleetManagement.Services.Core.Options;
+using Microsoft.AspNetCore.Antiforgery;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.Cookies;
 using Microsoft.AspNetCore.Authorization;
@@ -344,6 +345,34 @@ app.UseAuthentication()
 // inside UseHangfireAdminDashboard. Mounted before FastEndpoints so its routes are not
 // captured by FastEndpoints' terminal middleware.
 app.UseHangfireAdminDashboard();
+
+// JSON antiforgery gate. The FastEndpoints antiforgery middleware below enforces only on
+// form-encoded and multipart bodies, so a cookie-authenticated JSON/fetch mutation would
+// otherwise pass through unchecked with SameSite=Lax as the only defense. This inline
+// middleware closes that gap: for non-safe verbs carrying the auth cookie it runs the
+// framework antiforgery validation directly and returns 400 when the X-CSRF-TOKEN header
+// does not match the antiforgery cookie. Non-cookie callers (API key, gRPC, webhooks) are
+// not gated because RequiresJsonCsrfCheck returns false when the auth cookie is absent.
+app.Use(async (context, next) =>
+{
+    if (AntiforgeryStartup.RequiresJsonCsrfCheck(context))
+    {
+        IAntiforgery antiforgery = context.RequestServices.GetRequiredService<IAntiforgery>();
+        try
+        {
+            await antiforgery.ValidateRequestAsync(context);
+        }
+        catch (AntiforgeryValidationException)
+        {
+            context.Response.StatusCode = 400;
+            await context.Response.WriteAsync("""{"error":"Antiforgery validation failed."}""");
+
+            return;
+        }
+    }
+
+    await next();
+});
 
 // Antiforgery middleware. Skip predicate keys on the presence of the auth cookie so callers
 // without a session (API key, anonymous) are not gated by a token they cannot mint. See

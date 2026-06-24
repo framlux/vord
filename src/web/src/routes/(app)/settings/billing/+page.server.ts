@@ -2,18 +2,22 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
-import { createServerApiClient } from '$lib/api/server';
+import { createServerApiClient, csrfFor } from '$lib/api/server';
 import { ApiError } from '$lib/api/client';
 import { canAdminTenant } from '$lib/utils/roles';
 import { redirect, error, fail, isRedirect } from '@sveltejs/kit';
 import type { PageServerLoad, Actions } from './$types';
 import { env } from '$env/dynamic/public';
 
-function createBillingClient(fetch: typeof globalThis.fetch, cookies: { get(name: string): string | undefined }) {
+function createBillingClient(
+	fetch: typeof globalThis.fetch,
+	cookies: { get(name: string): string | undefined },
+	locals: App.Locals
+) {
 	const billingUrl = env.PUBLIC_BILLING_URL;
 	if (!billingUrl) return null;
 
-	return createServerApiClient(fetch, cookies.get('vord_auth'), cookies.get('vord_tenant'), billingUrl);
+	return createServerApiClient(fetch, cookies.get('vord_auth'), cookies.get('vord_tenant'), billingUrl, csrfFor(cookies, locals));
 }
 
 export const load: PageServerLoad = async ({ fetch, cookies, locals }) => {
@@ -51,7 +55,7 @@ export const actions: Actions = {
 			return fail(403, { message: 'Access denied' });
 		}
 
-		const billingApi = createBillingClient(fetch, cookies);
+		const billingApi = createBillingClient(fetch, cookies, locals);
 		if (billingApi === null) return fail(500, { message: 'Billing service not configured' });
 
 		const formData = await request.formData();
@@ -84,7 +88,7 @@ export const actions: Actions = {
 			return fail(403, { message: 'Access denied' });
 		}
 
-		const billingApi = createBillingClient(fetch, cookies);
+		const billingApi = createBillingClient(fetch, cookies, locals);
 		if (billingApi === null) return fail(500, { message: 'Billing service not configured' });
 
 		try {
@@ -117,7 +121,9 @@ export const actions: Actions = {
 		const api = createServerApiClient(
 			fetch,
 			cookies.get('vord_auth'),
-			cookies.get('vord_tenant')
+			cookies.get('vord_tenant'),
+			undefined,
+			csrfFor(cookies, locals)
 		);
 
 		try {
@@ -139,7 +145,9 @@ export const actions: Actions = {
 		const api = createServerApiClient(
 			fetch,
 			cookies.get('vord_auth'),
-			cookies.get('vord_tenant')
+			cookies.get('vord_tenant'),
+			undefined,
+			csrfFor(cookies, locals)
 		);
 
 		const formData = await request.formData();
@@ -164,7 +172,9 @@ export const actions: Actions = {
 		const api = createServerApiClient(
 			fetch,
 			cookies.get('vord_auth'),
-			cookies.get('vord_tenant')
+			cookies.get('vord_tenant'),
+			undefined,
+			csrfFor(cookies, locals)
 		);
 
 		try {
@@ -186,7 +196,9 @@ export const actions: Actions = {
 		const api = createServerApiClient(
 			fetch,
 			cookies.get('vord_auth'),
-			cookies.get('vord_tenant')
+			cookies.get('vord_tenant'),
+			undefined,
+			csrfFor(cookies, locals)
 		);
 
 		try {

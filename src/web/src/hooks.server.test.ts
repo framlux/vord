@@ -10,9 +10,9 @@ import { describe, it, expect, vi, beforeEach } from 'vitest';
 vi.mock('$app/environment', () => ({ dev: true }));
 vi.mock('$env/dynamic/private', () => ({ env: { VORD_API_MOCK: 'false' } }));
 
-const getMeMock = vi.fn();
+const getMeBootstrapMock = vi.fn();
 vi.mock('$lib/api/server', () => ({
-    createServerApiClient: () => ({ getMe: getMeMock })
+    createServerApiClient: () => ({ getMeBootstrap: getMeBootstrapMock })
 }));
 
 import { handle } from './hooks.server';
@@ -40,7 +40,7 @@ describe('hooks.server handle — vord_tenant auto-set cookie', () => {
     });
 
     it('auto-sets vord_tenant with secure:false in a dev (non-HTTPS) build', async () => {
-        getMeMock.mockResolvedValue({ activeTenantId: 7 } as App.Locals['user']);
+        getMeBootstrapMock.mockResolvedValue({ user: { activeTenantId: 7 }, csrfCookie: undefined });
 
         const sets: CookieSet[] = [];
         const event = makeEvent({ vord_auth: 'token-abc' }, sets);
@@ -59,7 +59,7 @@ describe('hooks.server handle — vord_tenant auto-set cookie', () => {
     });
 
     it('does not auto-set vord_tenant when one is already present', async () => {
-        getMeMock.mockResolvedValue({ activeTenantId: 7 } as App.Locals['user']);
+        getMeBootstrapMock.mockResolvedValue({ user: { activeTenantId: 7 }, csrfCookie: undefined });
 
         const sets: CookieSet[] = [];
         const event = makeEvent({ vord_auth: 'token-abc', vord_tenant: '7' }, sets);
@@ -67,5 +67,38 @@ describe('hooks.server handle — vord_tenant auto-set cookie', () => {
         await handle({ event, resolve });
 
         expect(sets.find((s) => s.name === 'vord_tenant')).toBeUndefined();
+    });
+
+    it('mirrors the vord_csrf antiforgery cookie onto the browser', async () => {
+        getMeBootstrapMock.mockResolvedValue({
+            user: { activeTenantId: 7 },
+            csrfCookie: 'csrf-cookie-value'
+        });
+
+        const sets: CookieSet[] = [];
+        // Unique auth token so the module-level session cache (which persists across tests in
+        // this suite) does not serve a stale, csrf-less entry from an earlier case.
+        const event = makeEvent({ vord_auth: 'token-csrf-mirror', vord_tenant: '7' }, sets);
+
+        await handle({ event, resolve });
+
+        const csrfSet = sets.find((s) => s.name === 'vord_csrf');
+        expect(csrfSet).toBeDefined();
+        expect(csrfSet?.value).toBe('csrf-cookie-value');
+        expect(csrfSet?.opts.httpOnly).toBe(true);
+        expect(csrfSet?.opts.sameSite).toBe('strict');
+        expect(csrfSet?.opts.secure).toBe(false);
+        expect(csrfSet?.opts.path).toBe('/');
+    });
+
+    it('does not set vord_csrf when the backend issued no antiforgery cookie', async () => {
+        getMeBootstrapMock.mockResolvedValue({ user: { activeTenantId: 7 }, csrfCookie: undefined });
+
+        const sets: CookieSet[] = [];
+        const event = makeEvent({ vord_auth: 'token-csrf-absent', vord_tenant: '7' }, sets);
+
+        await handle({ event, resolve });
+
+        expect(sets.find((s) => s.name === 'vord_csrf')).toBeUndefined();
     });
 });

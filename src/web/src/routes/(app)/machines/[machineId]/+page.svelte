@@ -101,7 +101,7 @@
 		saving = true;
 		saveError = '';
 		try {
-			const api = new ApiClient('');
+			const api = new ApiClient('', fetch, data.user?.csrfToken ?? undefined);
 			await api.updateMachine(machine.id, {
 				name: editName,
 				description: editDescription || null,
@@ -301,7 +301,7 @@
 
 		sendingCommand = true;
 		try {
-			const api = new ApiClient('');
+			const api = new ApiClient('', fetch, data.user?.csrfToken ?? undefined);
 			const cmdId = crypto.randomUUID();
 			const nonce = generateNonce();
 			const now = new Date();
@@ -406,7 +406,7 @@
 
 		authorizingInProgress = true;
 		try {
-			const api = new ApiClient('');
+			const api = new ApiClient('', fetch, data.user?.csrfToken ?? undefined);
 			await api.authorizeMachineKey(machine.id, selectedKeyToAuthorize);
 			selectedKeyToAuthorize = null;
 			await loadAuthorizedKeys();
@@ -420,7 +420,7 @@
 	async function revokeAuthorization(keyId: number) {
 		revokingKeyId = keyId;
 		try {
-			const api = new ApiClient('');
+			const api = new ApiClient('', fetch, data.user?.csrfToken ?? undefined);
 			await api.revokeMachineKeyAuthorization(machine.id, keyId);
 			await loadAuthorizedKeys();
 		} catch {

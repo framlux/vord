@@ -57,6 +57,13 @@ public sealed class UserDto
     public int? ActiveTenantId { get; set; }
 
     /// <summary>
+    /// The double-submit antiforgery request token issued alongside this response. The client
+    /// echoes this value in the <c>X-CSRF-TOKEN</c> header on state-changing requests so the
+    /// server can validate it against the antiforgery cookie. Null when no token was issued.
+    /// </summary>
+    public string? CsrfToken { get; set; }
+
+    /// <summary>
     /// Helper to map from a <see cref="ClaimsPrincipal"/>.
     /// </summary>
     public static UserDto FromPrincipal(ClaimsPrincipal user, ILogger logger)

@@ -812,6 +812,75 @@ describe('ApiClient', () => {
         });
     });
 
+    describe('CSRF token header', () => {
+        it('should attach X-CSRF-TOKEN on POST when a token is set', async () => {
+            const csrfClient = new ApiClient(
+                'http://localhost:12233',
+                fetchFn as unknown as typeof fetch,
+                'csrf-token-abc'
+            );
+            fetchFn.mockResolvedValue({
+                ok: true,
+                status: 200,
+                json: () => Promise.resolve({ success: true, data: { tenantId: 1 }, message: null, errors: null })
+            });
+
+            await csrfClient.switchTenant(1);
+
+            const init = fetchFn.mock.calls[0][1] as RequestInit;
+            const headers = init.headers as Record<string, string>;
+            expect(headers['X-CSRF-TOKEN']).toBe('csrf-token-abc');
+        });
+
+        it('should not attach X-CSRF-TOKEN on GET requests', async () => {
+            const csrfClient = new ApiClient(
+                'http://localhost:12233',
+                fetchFn as unknown as typeof fetch,
+                'csrf-token-abc'
+            );
+            fetchFn.mockResolvedValue({
+                ok: true,
+                status: 200,
+                json: () => Promise.resolve({ success: true, data: [], message: null, errors: null })
+            });
+
+            await csrfClient.getTenants();
+
+            const init = fetchFn.mock.calls[0][1] as RequestInit;
+            const headers = init.headers as Record<string, string>;
+            expect(headers['X-CSRF-TOKEN']).toBeUndefined();
+        });
+
+        it('should not attach X-CSRF-TOKEN when no token is configured', async () => {
+            fetchFn.mockResolvedValue({
+                ok: true,
+                status: 200,
+                json: () => Promise.resolve({ success: true, data: {}, message: null, errors: null })
+            });
+
+            await client.switchTenant(1);
+
+            const init = fetchFn.mock.calls[0][1] as RequestInit;
+            const headers = init.headers as Record<string, string>;
+            expect(headers['X-CSRF-TOKEN']).toBeUndefined();
+        });
+
+        it('should attach X-CSRF-TOKEN after setCsrfToken is called', async () => {
+            client.setCsrfToken('late-token');
+            fetchFn.mockResolvedValue({
+                ok: true,
+                status: 200,
+                json: () => Promise.resolve({ success: true, data: {}, message: null, errors: null })
+            });
+
+            await client.switchTenant(1);
+
+            const init = fetchFn.mock.calls[0][1] as RequestInit;
+            const headers = init.headers as Record<string, string>;
+            expect(headers['X-CSRF-TOKEN']).toBe('late-token');
+        });
+    });
+
     describe('retry behavior', () => {
         it('should succeed on second attempt after transient 500', async () => {
             const userData = {
