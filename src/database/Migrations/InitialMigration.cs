@@ -763,7 +763,7 @@ public sealed class InitialMigration : Migration
             .WithColumn("MemberLimit").AsInt32().NotNullable()
             .WithColumn("UpdatedAt").AsDateTimeOffset().NotNullable();
 
-        // Default per-tier feature limits (Free=1, Pro=2, Team=3).
+        // Seed one row per tier (Tier column: Free=1, Pro=2, Team=3).
         Insert.IntoTable("TierFeatureLimits").Row(new
         {
             Tier = 1,

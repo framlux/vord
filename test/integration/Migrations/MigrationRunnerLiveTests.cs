@@ -327,7 +327,7 @@ public sealed class MigrationRunnerLiveTests
             FROM ""TierFeatureLimits"" WHERE ""Tier"" = @tier";
         cmd.Parameters.AddWithValue("@tier", tier);
         await using NpgsqlDataReader reader = await cmd.ExecuteReaderAsync();
-        if (false == await reader.ReadAsync())
+        if (await reader.ReadAsync() == false)
         {
             return string.Empty;
         }

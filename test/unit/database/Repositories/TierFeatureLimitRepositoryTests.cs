@@ -9,7 +9,7 @@ using Framlux.FleetManagement.Test.Infrastructure;
 using LinqToDB;
 using Microsoft.Extensions.Logging.Abstractions;
 
-namespace Framlux.FleetManagement.Test.QueryCache;
+namespace Framlux.FleetManagement.Test.Repositories;
 
 /// <summary>
 /// Tests for <see cref="DatabaseRepository.UpdateLimitsForTierAsync"/>, verifying that the
