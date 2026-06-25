@@ -1216,6 +1216,61 @@ public class SubscriptionServiceTests
     }
 
     [Test]
+    public async Task CanAddMember_NoTierLimitRow_UsesConfigMemberLimit()
+    {
+        // No TierFeatureLimit row exists, so the member-limit resolution falls through to the
+        // configuration default (Pro => 5). 4 members are under that config cap, so a member can
+        // still be added — this exercises the config-fallback selector for the member limit.
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+
+        ISubscriptionRepository subscriptionRepo = Substitute.For<ISubscriptionRepository>();
+        subscriptionRepo.GetSubscriptionForTenantAsync(Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<TenantSubscription?>(new TenantSubscription
+            {
+                TenantId = 1,
+                Tier = SubscriptionTier.Pro,
+                Status = SubscriptionStatus.Active,
+                CreatedAt = now,
+                UpdatedAt = now,
+            }));
+
+        ITierFeatureLimitRepository tierLimitRepo = Substitute.For<ITierFeatureLimitRepository>();
+        tierLimitRepo.GetLimitsForTierAsync(Arg.Any<SubscriptionTier>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<TierFeatureLimit?>(null));
+
+        ITenantSubscriptionOverrideRepository overrideRepo = Substitute.For<ITenantSubscriptionOverrideRepository>();
+        overrideRepo.GetOverrideForTenantAsync(Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<TenantSubscriptionOverride?>(null));
+
+        ITenantRepository tenantRepo = Substitute.For<ITenantRepository>();
+        tenantRepo.CountActiveMembersAsync(Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(4));
+
+        IInvitationRepository invitationRepo = Substitute.For<IInvitationRepository>();
+        invitationRepo.CountPendingInvitationsAsync(Arg.Any<int>(), Arg.Any<DateTimeOffset>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(0));
+
+        IMachineRepository machineRepo = Substitute.For<IMachineRepository>();
+        IAlertRuleRepository alertRuleRepo = Substitute.For<IAlertRuleRepository>();
+        IIntegrationRepository integrationRepo = Substitute.For<IIntegrationRepository>();
+
+        IOptions<TierDefaultOptions> tierDefaults = Options.Create(new TierDefaultOptions
+        {
+            Free = new() { MachineLimit = 3, RetentionDays = 1, AlertRuleLimit = 0, WebhookLimit = 0, MemberLimit = 1 },
+            Pro = new() { MachineLimit = 1000, RetentionDays = 60, AlertRuleLimit = 10, WebhookLimit = 5, MemberLimit = 5 },
+            Team = new() { MachineLimit = 10000, RetentionDays = 365, AlertRuleLimit = 25, WebhookLimit = 15, MemberLimit = int.MaxValue },
+        });
+
+        SubscriptionService service = new(
+            subscriptionRepo, machineRepo, alertRuleRepo, integrationRepo, tierLimitRepo, overrideRepo,
+            tenantRepo, invitationRepo, tierDefaults, TimeProvider.System, new NullLogger<SubscriptionService>());
+
+        bool result = await service.CanAddMemberAsync(1, CancellationToken.None);
+
+        await Assert.That(result).IsTrue();
+    }
+
+    [Test]
     public async Task GetEffectiveLimits_NoOverride_IncludesTierMemberLimit()
     {
         (DatabaseRepository repo, TestDatabaseFactory dbFactory) = BuildRepoAndFactory();

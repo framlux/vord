@@ -112,4 +112,17 @@ public sealed class AlertEmailContentTests
 
         await Assert.That(content.HtmlBody).Contains("90.5");
     }
+
+    [Test]
+    public async Task Build_NullBaseUrl_ProducesHostLinkWithoutThrowing()
+    {
+        AlertRule rule = BuildRule();
+        AlertEvent alertEvent = BuildEvent();
+
+        AlertEmailContent content = AlertEmailContent.Build(alertEvent, rule, null!);
+
+        // The null-conditional on appBaseUrl means a missing base URL yields a relative host link
+        // rather than throwing — the email still renders.
+        await Assert.That(content.HtmlBody).Contains("/machines/42");
+    }
 }
