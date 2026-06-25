@@ -93,7 +93,7 @@ public sealed class AlertDeliveryService : IAlertDeliveryService
         {
             if (alreadyClaimed.Contains(recipient))
             {
-                _logger.LogDebug("Email recipient already attempted for event {EventId}; skipping", alertEvent.Id);
+                _logger.LogDebug("Email to {Recipient} already attempted for event {EventId}; skipping", recipient, alertEvent.Id);
 
                 continue;
             }
@@ -111,7 +111,7 @@ public sealed class AlertDeliveryService : IAlertDeliveryService
             try
             {
                 bool sent = await emailService.SendAlertEmailAsync(recipient, content.Subject, content.HtmlBody, ct);
-                if (sent)
+                if (sent == true)
                 {
                     await attemptRepo.MarkAttemptSucceededAsync(alertEvent.Id, recipient, DateTimeOffset.UtcNow, ct);
                 }
