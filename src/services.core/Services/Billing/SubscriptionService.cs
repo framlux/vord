@@ -21,7 +21,10 @@ public sealed class SubscriptionService : ISubscriptionService
     private readonly IIntegrationRepository _integrationRepo;
     private readonly ITierFeatureLimitRepository _tierLimitRepo;
     private readonly ITenantSubscriptionOverrideRepository _overrideRepo;
+    private readonly ITenantRepository _tenantRepo;
+    private readonly IInvitationRepository _invitationRepo;
     private readonly TierDefaultOptions _tierDefaults;
+    private readonly TimeProvider _timeProvider;
     private readonly ILogger<SubscriptionService> _logger;
 
     /// <summary>
@@ -34,7 +37,10 @@ public sealed class SubscriptionService : ISubscriptionService
         IIntegrationRepository integrationRepo,
         ITierFeatureLimitRepository tierLimitRepo,
         ITenantSubscriptionOverrideRepository overrideRepo,
+        ITenantRepository tenantRepo,
+        IInvitationRepository invitationRepo,
         IOptions<TierDefaultOptions> tierDefaults,
+        TimeProvider timeProvider,
         ILogger<SubscriptionService> logger)
     {
         ArgumentNullException.ThrowIfNull(subscriptionRepo);
@@ -43,7 +49,10 @@ public sealed class SubscriptionService : ISubscriptionService
         ArgumentNullException.ThrowIfNull(integrationRepo);
         ArgumentNullException.ThrowIfNull(tierLimitRepo);
         ArgumentNullException.ThrowIfNull(overrideRepo);
+        ArgumentNullException.ThrowIfNull(tenantRepo);
+        ArgumentNullException.ThrowIfNull(invitationRepo);
         ArgumentNullException.ThrowIfNull(tierDefaults);
+        ArgumentNullException.ThrowIfNull(timeProvider);
         ArgumentNullException.ThrowIfNull(logger);
 
         _subscriptionRepo = subscriptionRepo;
@@ -52,7 +61,10 @@ public sealed class SubscriptionService : ISubscriptionService
         _integrationRepo = integrationRepo;
         _tierLimitRepo = tierLimitRepo;
         _overrideRepo = overrideRepo;
+        _tenantRepo = tenantRepo;
+        _invitationRepo = invitationRepo;
         _tierDefaults = tierDefaults.Value;
+        _timeProvider = timeProvider;
         _logger = logger;
     }
 
@@ -224,6 +236,29 @@ public sealed class SubscriptionService : ISubscriptionService
     }
 
     /// <inheritdoc/>
+    public async Task<bool> CanAddMemberAsync(int tenantId, CancellationToken ct)
+    {
+        TenantSubscription? subscription = await _subscriptionRepo.GetSubscriptionForTenantAsync(tenantId, ct);
+
+        if (subscription is null)
+        {
+            return false;
+        }
+
+        int memberLimit = await GetEffectiveLimitAsync(
+            tenantId, subscription.Tier,
+            o => (int?)null,
+            t => t.MemberLimit,
+            tier => GetConfigDefaultsForTier(tier).MemberLimit,
+            ct);
+
+        int activeMembers = await _tenantRepo.CountActiveMembersAsync(tenantId, ct);
+        int pendingInvitations = await _invitationRepo.CountPendingInvitationsAsync(tenantId, _timeProvider.GetUtcNow(), ct);
+
+        return (activeMembers + pendingInvitations) < memberLimit;
+    }
+
+    /// <inheritdoc/>
     public async Task<int> GetMachineCountAtDateAsync(int tenantId, DateTimeOffset targetDate, CancellationToken ct)
     {
         int count = await _machineRepo.GetMachineCountAtDateAsync(tenantId, targetDate, ct);
@@ -246,6 +281,7 @@ public sealed class SubscriptionService : ISubscriptionService
                 RetentionDays = freeDefaults.RetentionDays,
                 AlertRuleLimit = freeDefaults.AlertRuleLimit,
                 WebhookLimit = freeDefaults.WebhookLimit,
+                MemberLimit = freeDefaults.MemberLimit,
             };
         }
 
@@ -260,6 +296,7 @@ public sealed class SubscriptionService : ISubscriptionService
             RetentionDays = tenantOverride?.RetentionDays ?? tierLimits?.RetentionDays ?? configDefaults.RetentionDays,
             AlertRuleLimit = tenantOverride?.AlertRuleLimit ?? tierLimits?.AlertRuleLimit ?? configDefaults.AlertRuleLimit,
             WebhookLimit = tenantOverride?.WebhookLimit ?? tierLimits?.WebhookLimit ?? configDefaults.WebhookLimit,
+            MemberLimit = tierLimits?.MemberLimit ?? configDefaults.MemberLimit,
         };
     }
 

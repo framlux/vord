@@ -64,7 +64,7 @@ public class SubscriptionCacheTests
             Team = new() { MachineLimit = 10000, RetentionDays = 365, AlertRuleLimit = 25, WebhookLimit = 15 },
         });
 
-        return new SubscriptionService(repo, repo, repo, repo, tierLimitRepo, overrideRepo, tierDefaults, new NullLogger<SubscriptionService>());
+        return new SubscriptionService(repo, repo, repo, repo, tierLimitRepo, overrideRepo, repo, repo, tierDefaults, TimeProvider.System, new NullLogger<SubscriptionService>());
     }
 
     [Test]

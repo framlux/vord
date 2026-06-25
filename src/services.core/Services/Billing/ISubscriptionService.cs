@@ -67,4 +67,12 @@ public interface ISubscriptionService
     /// Gets the effective feature limits for a tenant, considering tier defaults and per-tenant overrides.
     /// </summary>
     Task<EffectiveLimits> GetEffectiveLimitsForTenantAsync(int tenantId, CancellationToken ct = default);
+
+    /// <summary>
+    /// Checks whether the tenant can add another member within their tier limit. The limit is enforced
+    /// against active members plus pending non-expired invitations so a tenant cannot over-invite past the cap.
+    /// </summary>
+    /// <param name="tenantId">The tenant to check.</param>
+    /// <param name="ct">Cancellation token.</param>
+    Task<bool> CanAddMemberAsync(int tenantId, CancellationToken ct = default);
 }

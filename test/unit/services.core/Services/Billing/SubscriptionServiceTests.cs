@@ -69,7 +69,67 @@ public class SubscriptionServiceTests
             Team = new() { MachineLimit = 10000, RetentionDays = 365, AlertRuleLimit = 25, WebhookLimit = 15 },
         });
 
-        return new SubscriptionService(repo, repo, repo, repo, tierLimitRepo, overrideRepo, tierDefaults, new NullLogger<SubscriptionService>());
+        return new SubscriptionService(repo, repo, repo, repo, tierLimitRepo, overrideRepo, repo, repo, tierDefaults, TimeProvider.System, new NullLogger<SubscriptionService>());
+    }
+
+    private static SubscriptionService BuildServiceWithMemberCounts(
+        SubscriptionTier tier,
+        int memberLimit,
+        int activeMembers,
+        int pendingInvitations)
+    {
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+
+        ISubscriptionRepository subscriptionRepo = Substitute.For<ISubscriptionRepository>();
+        subscriptionRepo.GetSubscriptionForTenantAsync(Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<TenantSubscription?>(new TenantSubscription
+            {
+                TenantId = 1,
+                Tier = tier,
+                Status = SubscriptionStatus.Active,
+                CreatedAt = now,
+                UpdatedAt = now,
+            }));
+
+        ITierFeatureLimitRepository tierLimitRepo = Substitute.For<ITierFeatureLimitRepository>();
+        tierLimitRepo.GetLimitsForTierAsync(Arg.Any<SubscriptionTier>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<TierFeatureLimit?>(new TierFeatureLimit
+            {
+                Tier = tier,
+                MachineLimit = 1000,
+                RetentionDays = 60,
+                AlertRuleLimit = 10,
+                WebhookLimit = 5,
+                MemberLimit = memberLimit,
+                UpdatedAt = now,
+            }));
+
+        ITenantSubscriptionOverrideRepository overrideRepo = Substitute.For<ITenantSubscriptionOverrideRepository>();
+        overrideRepo.GetOverrideForTenantAsync(Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<TenantSubscriptionOverride?>(null));
+
+        ITenantRepository tenantRepo = Substitute.For<ITenantRepository>();
+        tenantRepo.CountActiveMembersAsync(Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(activeMembers));
+
+        IInvitationRepository invitationRepo = Substitute.For<IInvitationRepository>();
+        invitationRepo.CountPendingInvitationsAsync(Arg.Any<int>(), Arg.Any<DateTimeOffset>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(pendingInvitations));
+
+        IMachineRepository machineRepo = Substitute.For<IMachineRepository>();
+        IAlertRuleRepository alertRuleRepo = Substitute.For<IAlertRuleRepository>();
+        IIntegrationRepository integrationRepo = Substitute.For<IIntegrationRepository>();
+
+        IOptions<TierDefaultOptions> tierDefaults = Options.Create(new TierDefaultOptions
+        {
+            Free = new() { MachineLimit = 3, RetentionDays = 1, AlertRuleLimit = 0, WebhookLimit = 0, MemberLimit = 1 },
+            Pro = new() { MachineLimit = 1000, RetentionDays = 60, AlertRuleLimit = 10, WebhookLimit = 5, MemberLimit = 5 },
+            Team = new() { MachineLimit = 10000, RetentionDays = 365, AlertRuleLimit = 25, WebhookLimit = 15, MemberLimit = int.MaxValue },
+        });
+
+        return new SubscriptionService(
+            subscriptionRepo, machineRepo, alertRuleRepo, integrationRepo, tierLimitRepo, overrideRepo,
+            tenantRepo, invitationRepo, tierDefaults, TimeProvider.System, new NullLogger<SubscriptionService>());
     }
 
     private static (DatabaseRepository repo, TestDatabaseFactory dbFactory) BuildRepoAndFactory()
@@ -808,7 +868,7 @@ public class SubscriptionServiceTests
                 Team = new() { MachineLimit = 10000, RetentionDays = 365, AlertRuleLimit = 25, WebhookLimit = 15 },
             });
 
-            SubscriptionService service = new(repo, repo, repo, repo, tierLimitRepo, overrideRepo, tierDefaults, new NullLogger<SubscriptionService>());
+            SubscriptionService service = new(repo, repo, repo, repo, tierLimitRepo, overrideRepo, repo, repo, tierDefaults, TimeProvider.System, new NullLogger<SubscriptionService>());
 
             EffectiveLimits limits = await service.GetEffectiveLimitsForTenantAsync(1, CancellationToken.None);
 
@@ -973,8 +1033,8 @@ public class SubscriptionServiceTests
                 Team = new() { MachineLimit = 5000, RetentionDays = 180, AlertRuleLimit = 20, WebhookLimit = 10 },
             });
 
-            SubscriptionService service = new(repo, repo, repo, repo, tierLimitRepo, overrideRepo, tierDefaults,
-                new NullLogger<SubscriptionService>());
+            SubscriptionService service = new(repo, repo, repo, repo, tierLimitRepo, overrideRepo, repo, repo, tierDefaults,
+                TimeProvider.System, new NullLogger<SubscriptionService>());
 
             EffectiveLimits limits = await service.GetEffectiveLimitsForTenantAsync(1, CancellationToken.None);
 
@@ -1022,8 +1082,8 @@ public class SubscriptionServiceTests
                 Team = new() { MachineLimit = 5000, RetentionDays = 180, AlertRuleLimit = 20, WebhookLimit = 10 },
             });
 
-            SubscriptionService service = new(repo, repo, repo, repo, tierLimitRepo, overrideRepo, tierDefaults,
-                new NullLogger<SubscriptionService>());
+            SubscriptionService service = new(repo, repo, repo, repo, tierLimitRepo, overrideRepo, repo, repo, tierDefaults,
+                TimeProvider.System, new NullLogger<SubscriptionService>());
 
             bool result = await service.CanApproveMachineAsync(1, CancellationToken.None);
 
@@ -1076,6 +1136,97 @@ public class SubscriptionServiceTests
             bool result = await service.CanCreateWebhookAsync(1, CancellationToken.None);
 
             await Assert.That(result).IsFalse();
+        }
+    }
+
+    // ========== Member Limit Tests ==========
+
+    [Test]
+    public async Task CanAddMember_UnderLimit_ReturnsTrue()
+    {
+        SubscriptionService service = BuildServiceWithMemberCounts(
+            SubscriptionTier.Pro, memberLimit: 5, activeMembers: 2, pendingInvitations: 1);
+
+        bool result = await service.CanAddMemberAsync(1, CancellationToken.None);
+
+        await Assert.That(result).IsTrue();
+    }
+
+    [Test]
+    public async Task CanAddMember_AtLimit_ReturnsFalse()
+    {
+        SubscriptionService service = BuildServiceWithMemberCounts(
+            SubscriptionTier.Pro, memberLimit: 5, activeMembers: 4, pendingInvitations: 1);
+
+        bool result = await service.CanAddMemberAsync(1, CancellationToken.None);
+
+        await Assert.That(result).IsFalse();
+    }
+
+    [Test]
+    public async Task CanAddMember_AboveLimit_ReturnsFalse()
+    {
+        SubscriptionService service = BuildServiceWithMemberCounts(
+            SubscriptionTier.Pro, memberLimit: 5, activeMembers: 5, pendingInvitations: 2);
+
+        bool result = await service.CanAddMemberAsync(1, CancellationToken.None);
+
+        await Assert.That(result).IsFalse();
+    }
+
+    [Test]
+    public async Task CanAddMember_PendingInvitationsCountTowardCap_ReturnsFalse()
+    {
+        // 3 active + 2 pending = 5, which equals the limit of 5 — at cap
+        SubscriptionService service = BuildServiceWithMemberCounts(
+            SubscriptionTier.Pro, memberLimit: 5, activeMembers: 3, pendingInvitations: 2);
+
+        bool result = await service.CanAddMemberAsync(1, CancellationToken.None);
+
+        await Assert.That(result).IsFalse();
+    }
+
+    [Test]
+    public async Task CanAddMember_FreeTierOwnerOnly_ReturnsFalse()
+    {
+        // Free tier allows 1 member; the owner already occupies the single slot
+        SubscriptionService service = BuildServiceWithMemberCounts(
+            SubscriptionTier.Free, memberLimit: 1, activeMembers: 1, pendingInvitations: 0);
+
+        bool result = await service.CanAddMemberAsync(1, CancellationToken.None);
+
+        await Assert.That(result).IsFalse();
+    }
+
+    [Test]
+    public async Task CanAddMember_NoSubscription_ReturnsFalse()
+    {
+        (DatabaseRepository repo, TestDatabaseFactory dbFactory) = BuildRepoAndFactory();
+        using (dbFactory)
+        {
+            SubscriptionService service = BuildService(repo);
+
+            bool result = await service.CanAddMemberAsync(999, CancellationToken.None);
+
+            await Assert.That(result).IsFalse();
+        }
+    }
+
+    [Test]
+    public async Task GetEffectiveLimits_NoOverride_IncludesTierMemberLimit()
+    {
+        (DatabaseRepository repo, TestDatabaseFactory dbFactory) = BuildRepoAndFactory();
+        using (dbFactory)
+        {
+            TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 1, tier: SubscriptionTier.Pro);
+            sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
+
+            SubscriptionService service = BuildService(repo);
+
+            EffectiveLimits limits = await service.GetEffectiveLimitsForTenantAsync(1, CancellationToken.None);
+
+            // Pro tier MemberLimit comes from the tier limit repo mock (5)
+            await Assert.That(limits.MemberLimit).IsEqualTo(5);
         }
     }
 }
