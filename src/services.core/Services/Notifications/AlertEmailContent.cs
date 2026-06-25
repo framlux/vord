@@ -2,6 +2,7 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
+using System.Globalization;
 using System.Net;
 using Framlux.FleetManagement.Database.Models;
 
@@ -45,8 +46,8 @@ public sealed record AlertEmailContent
                 <table style="border-collapse: collapse; margin: 16px 0; font-size: 14px; color: #333;">
                     <tr><td style="padding: 4px 12px 4px 0;"><strong>Machine</strong></td><td style="padding: 4px 0;">{alertEvent.MachineId}</td></tr>
                     <tr><td style="padding: 4px 12px 4px 0;"><strong>Metric</strong></td><td style="padding: 4px 0;">{HtmlEncode(rule.Metric.ToString())}</td></tr>
-                    <tr><td style="padding: 4px 12px 4px 0;"><strong>Condition</strong></td><td style="padding: 4px 0;">{HtmlEncode(rule.Operator.ToString())} {rule.Threshold}</td></tr>
-                    <tr><td style="padding: 4px 12px 4px 0;"><strong>Threshold</strong></td><td style="padding: 4px 0;">{rule.Threshold}</td></tr>
+                    <tr><td style="padding: 4px 12px 4px 0;"><strong>Condition</strong></td><td style="padding: 4px 0;">{HtmlEncode(rule.Operator.ToString())} {rule.Threshold.ToString(CultureInfo.InvariantCulture)}</td></tr>
+                    <tr><td style="padding: 4px 12px 4px 0;"><strong>Threshold</strong></td><td style="padding: 4px 0;">{rule.Threshold.ToString(CultureInfo.InvariantCulture)}</td></tr>
                     <tr><td style="padding: 4px 12px 4px 0;"><strong>Triggered</strong></td><td style="padding: 4px 0;">{HtmlEncode(triggeredAtIso)}</td></tr>
                 </table>
                 <div style="margin: 24px 0;">

@@ -90,6 +90,26 @@ public sealed class AlertEmailContentTests
 
         await Assert.That(content.HtmlBody).Contains("&lt;script&gt;");
         await Assert.That(content.HtmlBody).Contains("&amp;");
-        await Assert.That(content.HtmlBody.Contains("<script>alert")).IsFalse();
+        await Assert.That(content.HtmlBody).DoesNotContain("<script>alert");
+    }
+
+    [Test]
+    public async Task Build_Body_FormatsDecimalThresholdWithInvariantCulture()
+    {
+        AlertRule rule = new AlertRule
+        {
+            Name = "High CPU",
+            Metric = AlertMetric.CpuUsage,
+            Operator = AlertOperator.GreaterThan,
+            Threshold = 90.5m,
+            Severity = AlertSeverity.Critical,
+            CreatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow,
+        };
+        AlertEvent alertEvent = BuildEvent();
+
+        AlertEmailContent content = AlertEmailContent.Build(alertEvent, rule, "https://app.vordfleet.com");
+
+        await Assert.That(content.HtmlBody).Contains("90.5");
     }
 }
