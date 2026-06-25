@@ -297,13 +297,15 @@ public partial class DatabaseRepository : ITenantRepository
     /// <inheritdoc/>
     public async Task<List<string>> GetTenantAdminEmailsAsync(int tenantId, CancellationToken cancellationToken)
     {
-        List<string> emails = await (from utr in _db.UserTenantRoles
-                join ua in _db.UserAccounts on utr.UserId equals ua.Id
-                where (utr.AssignedTenantId == tenantId)
-                      && (utr.Role == Enums.UserAccountRoles.TenantAdmin)
-                      && (utr.IsActive == true)
-                      && (ua.IsActive == true)
-                select ua.Username).ToListAsync(cancellationToken);
+        List<string> emails = await (
+            from utr in _db.UserTenantRoles
+            join ua in _db.UserAccounts on utr.UserId equals ua.Id
+            where utr.AssignedTenantId == tenantId &&
+                  utr.Role == Enums.UserAccountRoles.TenantAdmin &&
+                  utr.IsActive == true &&
+                  ua.IsActive == true
+            select ua.Username
+        ).ToListAsync(cancellationToken);
 
         return emails;
     }

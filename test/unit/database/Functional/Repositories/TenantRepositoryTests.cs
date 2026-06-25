@@ -2,8 +2,8 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
-using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Database.Enums;
+using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Test.Infrastructure;
 using LinqToDB;
@@ -472,5 +472,25 @@ public class TenantCacheTests
 
         await Assert.That(emails).Contains("active@x.com");
         await Assert.That(emails).DoesNotContain("revoked@x.com");
+    }
+
+    [Test]
+    public async Task GetTenantAdminEmails_ReturnsEmpty_WhenNoAdminsExist()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        ITenantRepository cache = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+
+        UserAccount user = TestDataBuilder.BuildUser(username: "viewer@nonadmin.com");
+        int userId = await dbFactory.Context.InsertWithInt32IdentityAsync(user);
+
+        Tenant tenant = TestDataBuilder.BuildTenant(name: "No Admin Tenant", createdByUserId: userId);
+        int tenantId = await dbFactory.Context.InsertWithInt32IdentityAsync(tenant);
+
+        await dbFactory.Context.InsertAsync(TestDataBuilder.BuildUserTenantRole(
+            userId: userId, tenantId: tenantId, role: UserAccountRoles.Viewer, assignedByUserId: userId));
+
+        List<string> emails = await cache.GetTenantAdminEmailsAsync(tenantId);
+
+        await Assert.That(emails.Count).IsEqualTo(0);
     }
 }
