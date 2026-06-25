@@ -171,6 +171,8 @@ public interface ITenantRepository
 
     /// <summary>
     /// Counts the active members (active UserTenantRole rows, including the owner/admin) for a tenant.
+    /// Counts active tenant-role memberships (seat occupancy); intentionally does not join UserAccount.IsActive,
+    /// to stay consistent with the serializable member-limit guard.
     /// </summary>
     /// <param name="tenantId">The tenant to count members for.</param>
     /// <param name="cancellationToken">A cancellation token.</param>

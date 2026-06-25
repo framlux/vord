@@ -2,8 +2,8 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
-using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Database.Enums;
+using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Test.Infrastructure;
 using LinqToDB;
@@ -344,6 +344,46 @@ public class InvitationCacheTests
         await dbFactory.Context.InsertWithInt32IdentityAsync(accepted);
 
         int count = await cache.CountPendingInvitationsAsync(tenantId, asOf, CancellationToken.None);
+
+        await Assert.That(count).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task CountPendingInvitationsAsync_OtherTenantInvitations_ExcludesOtherTenant()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        IInvitationRepository cache = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+
+        UserAccount user = TestDataBuilder.BuildUser();
+        int userId = await dbFactory.Context.InsertWithInt32IdentityAsync(user);
+
+        Tenant tenantA = TestDataBuilder.BuildTenant(name: "Pending Count Tenant A", createdByUserId: userId);
+        int tenantIdA = await dbFactory.Context.InsertWithInt32IdentityAsync(tenantA);
+
+        Tenant tenantB = TestDataBuilder.BuildTenant(name: "Pending Count Tenant B", createdByUserId: userId);
+        int tenantIdB = await dbFactory.Context.InsertWithInt32IdentityAsync(tenantB);
+
+        DateTimeOffset asOf = new DateTimeOffset(2026, 6, 22, 0, 0, 0, TimeSpan.Zero);
+
+        // Pending, non-expired invitation in tenant A — should be counted
+        TenantInvitation invitationA = TestDataBuilder.BuildInvitation(
+            tenantId: tenantIdA,
+            email: "member-a@example.com",
+            status: InvitationStatus.Pending,
+            invitedByUserId: userId);
+        invitationA.ExpiresAt = asOf.AddDays(1);
+        await dbFactory.Context.InsertWithInt32IdentityAsync(invitationA);
+
+        // Pending, non-expired invitation in tenant B — must not affect tenant A's count
+        TenantInvitation invitationB = TestDataBuilder.BuildInvitation(
+            tenantId: tenantIdB,
+            email: "member-b@example.com",
+            status: InvitationStatus.Pending,
+            invitedByUserId: userId);
+        invitationB.ExpiresAt = asOf.AddDays(1);
+        await dbFactory.Context.InsertWithInt32IdentityAsync(invitationB);
+
+        int count = await cache.CountPendingInvitationsAsync(tenantIdA, asOf, CancellationToken.None);
 
         await Assert.That(count).IsEqualTo(1);
     }

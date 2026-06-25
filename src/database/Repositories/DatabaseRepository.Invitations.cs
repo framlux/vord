@@ -199,6 +199,7 @@ public partial class DatabaseRepository : IInvitationRepository
                         && (i.Status == InvitationStatus.Pending)
                         && (i.ExpiresAt > asOf))
             .CountAsync(cancellationToken);
+
         return count;
     }
 

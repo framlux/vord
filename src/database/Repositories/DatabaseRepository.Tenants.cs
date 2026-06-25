@@ -434,6 +434,7 @@ public partial class DatabaseRepository : ITenantRepository
         int count = await _db.UserTenantRoles
             .Where(utr => (utr.AssignedTenantId == tenantId) && (utr.IsActive == true))
             .CountAsync(cancellationToken);
+
         return count;
     }
 
