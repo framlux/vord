@@ -5,7 +5,10 @@
 using System.Text;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
+using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Services.Core.Alerts;
+using Framlux.FleetManagement.Services.Core.Notifications;
+using Framlux.FleetManagement.Services.Core.Options;
 using Framlux.FleetManagement.Test.Infrastructure;
 using Hangfire;
 using Hangfire.Common;
@@ -14,6 +17,7 @@ using LinqToDB;
 using LinqToDB.Async;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 using NSubstitute;
 
 namespace Framlux.FleetManagement.Test.Services;
@@ -67,6 +71,33 @@ public sealed class AlertDeliveryServiceTests
         };
     }
 
+    private static AlertDeliveryService CreateService(TestServiceScopeFactory scopeFactory)
+    {
+        IHttpClientFactory httpFactory = Substitute.For<IHttpClientFactory>();
+        IBackgroundJobClient backgroundJobClient = Substitute.For<IBackgroundJobClient>();
+        IIntegrationPayloadFormatter[] formatters = [CreateCustomFormatter()];
+
+        return new AlertDeliveryService(scopeFactory, httpFactory, backgroundJobClient, formatters, new NullLogger<AlertDeliveryService>());
+    }
+
+    private static TestServiceScopeFactory CreateEmailScopeFactory(
+        TestDatabaseFactory dbFactory,
+        ITenantRepository tenantRepo,
+        IAlertEmailDeliveryAttemptRepository attemptRepo,
+        IEmailService emailService,
+        string baseUrl = "https://vord.example.com")
+    {
+        Dictionary<Type, object> services = new()
+        {
+            [typeof(ITenantRepository)] = tenantRepo,
+            [typeof(IAlertEmailDeliveryAttemptRepository)] = attemptRepo,
+            [typeof(IEmailService)] = emailService,
+            [typeof(IOptions<AppOptions>)] = Microsoft.Extensions.Options.Options.Create(new AppOptions { BaseUrl = baseUrl }),
+        };
+
+        return new TestServiceScopeFactory(dbFactory.Context, services);
+    }
+
     private static AlertEvent CreateEvent(int tenantId = 1)
     {
         return new AlertEvent
@@ -102,22 +133,145 @@ public sealed class AlertDeliveryServiceTests
     }
 
     [Test]
-    public async Task DeliverAsync_NotifyEmailOnly_NoHttpCalls()
+    public async Task DeliverAsync_NotifyEmail_SendsToTenantAdmins_WithRenderedContent()
     {
         using TestDatabaseFactory dbFactory = new();
-        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MockHttpMessageHandler handler = new();
-        IHttpClientFactory httpFactory = Substitute.For<IHttpClientFactory>();
-        httpFactory.CreateClient(Arg.Any<string>()).Returns(new HttpClient(handler));
-        IBackgroundJobClient backgroundJobClient = Substitute.For<IBackgroundJobClient>();
 
-        IIntegrationPayloadFormatter[] formatters = [CreateCustomFormatter()];
-        AlertDeliveryService service = new(scopeFactory, httpFactory, backgroundJobClient, formatters, new NullLogger<AlertDeliveryService>());
+        ITenantRepository tenantRepo = Substitute.For<ITenantRepository>();
+        tenantRepo.GetTenantAdminEmailsAsync(Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns(["admin@x.com"]);
 
-        await service.DeliverAsync(CreateEvent(), CreateRule(notifyEmail: true, notifyWebhook: false), CancellationToken.None);
+        IAlertEmailDeliveryAttemptRepository attemptRepo = Substitute.For<IAlertEmailDeliveryAttemptRepository>();
+        attemptRepo.GetClaimedRecipientsAsync(Arg.Any<long>(), Arg.Any<CancellationToken>())
+            .Returns(new HashSet<string>(StringComparer.OrdinalIgnoreCase));
+        attemptRepo.TryClaimAttemptAsync(Arg.Any<long>(), Arg.Any<string>(), Arg.Any<DateTimeOffset>(), Arg.Any<CancellationToken>())
+            .Returns(true);
 
-        // No HTTP calls for email-only (email delivery not yet implemented)
-        await Assert.That(handler.Requests.Count).IsEqualTo(0);
+        IEmailService emailService = Substitute.For<IEmailService>();
+        emailService.SendAlertEmailAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(true);
+
+        TestServiceScopeFactory scopeFactory = CreateEmailScopeFactory(dbFactory, tenantRepo, attemptRepo, emailService);
+        AlertDeliveryService service = CreateService(scopeFactory);
+
+        AlertEvent alertEvent = CreateEvent();
+        await service.DeliverAsync(alertEvent, CreateRule(notifyEmail: true), CancellationToken.None);
+
+        await emailService.Received(1).SendAlertEmailAsync(
+            "admin@x.com",
+            Arg.Is<string>(s => s.Contains(alertEvent.Severity.ToString())),
+            Arg.Is<string>(b => b.Contains($"/machines/{alertEvent.MachineId}")),
+            Arg.Any<CancellationToken>());
+        await attemptRepo.Received(1).MarkAttemptSucceededAsync(
+            alertEvent.Id, "admin@x.com", Arg.Any<DateTimeOffset>(), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task DeliverAsync_NotifyEmail_NoRecipients_NoSendNoThrow()
+    {
+        using TestDatabaseFactory dbFactory = new();
+
+        ITenantRepository tenantRepo = Substitute.For<ITenantRepository>();
+        tenantRepo.GetTenantAdminEmailsAsync(Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns([]);
+
+        IAlertEmailDeliveryAttemptRepository attemptRepo = Substitute.For<IAlertEmailDeliveryAttemptRepository>();
+        IEmailService emailService = Substitute.For<IEmailService>();
+
+        TestServiceScopeFactory scopeFactory = CreateEmailScopeFactory(dbFactory, tenantRepo, attemptRepo, emailService);
+        AlertDeliveryService service = CreateService(scopeFactory);
+
+        await service.DeliverAsync(CreateEvent(), CreateRule(notifyEmail: true), CancellationToken.None);
+
+        await emailService.DidNotReceive().SendAlertEmailAsync(
+            Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task DeliverAsync_NotifyEmail_TransientFailure_ReleasesClaimAndThrows()
+    {
+        using TestDatabaseFactory dbFactory = new();
+
+        ITenantRepository tenantRepo = Substitute.For<ITenantRepository>();
+        tenantRepo.GetTenantAdminEmailsAsync(Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns(["admin@x.com"]);
+
+        IAlertEmailDeliveryAttemptRepository attemptRepo = Substitute.For<IAlertEmailDeliveryAttemptRepository>();
+        attemptRepo.GetClaimedRecipientsAsync(Arg.Any<long>(), Arg.Any<CancellationToken>())
+            .Returns(new HashSet<string>(StringComparer.OrdinalIgnoreCase));
+        attemptRepo.TryClaimAttemptAsync(Arg.Any<long>(), Arg.Any<string>(), Arg.Any<DateTimeOffset>(), Arg.Any<CancellationToken>())
+            .Returns(true);
+
+        IEmailService emailService = Substitute.For<IEmailService>();
+        emailService.SendAlertEmailAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(false);
+
+        TestServiceScopeFactory scopeFactory = CreateEmailScopeFactory(dbFactory, tenantRepo, attemptRepo, emailService);
+        AlertDeliveryService service = CreateService(scopeFactory);
+
+        AlertEvent alertEvent = CreateEvent();
+        await Assert.ThrowsAsync<IntegrationDeliveryException>(() =>
+            service.DeliverAsync(alertEvent, CreateRule(notifyEmail: true), CancellationToken.None));
+
+        await attemptRepo.Received(1).ReleaseClaimForRetryAsync(
+            alertEvent.Id, "admin@x.com", Arg.Any<CancellationToken>());
+        await attemptRepo.DidNotReceive().MarkAttemptSucceededAsync(
+            Arg.Any<long>(), Arg.Any<string>(), Arg.Any<DateTimeOffset>(), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task DeliverAsync_NotifyEmail_PermanentFailure_NoThrowNoRelease()
+    {
+        using TestDatabaseFactory dbFactory = new();
+
+        ITenantRepository tenantRepo = Substitute.For<ITenantRepository>();
+        tenantRepo.GetTenantAdminEmailsAsync(Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns(["admin@x.com"]);
+
+        IAlertEmailDeliveryAttemptRepository attemptRepo = Substitute.For<IAlertEmailDeliveryAttemptRepository>();
+        attemptRepo.GetClaimedRecipientsAsync(Arg.Any<long>(), Arg.Any<CancellationToken>())
+            .Returns(new HashSet<string>(StringComparer.OrdinalIgnoreCase));
+        attemptRepo.TryClaimAttemptAsync(Arg.Any<long>(), Arg.Any<string>(), Arg.Any<DateTimeOffset>(), Arg.Any<CancellationToken>())
+            .Returns(true);
+
+        IEmailService emailService = Substitute.For<IEmailService>();
+        emailService.SendAlertEmailAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns<bool>(_ => throw new InvalidOperationException("transport blew up"));
+
+        TestServiceScopeFactory scopeFactory = CreateEmailScopeFactory(dbFactory, tenantRepo, attemptRepo, emailService);
+        AlertDeliveryService service = CreateService(scopeFactory);
+
+        // The exception is suppressed — DeliverAsync must complete normally.
+        await service.DeliverAsync(CreateEvent(), CreateRule(notifyEmail: true), CancellationToken.None);
+
+        await attemptRepo.DidNotReceive().ReleaseClaimForRetryAsync(
+            Arg.Any<long>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task DeliverAsync_NotifyEmail_AlreadyClaimed_Skips()
+    {
+        using TestDatabaseFactory dbFactory = new();
+
+        ITenantRepository tenantRepo = Substitute.For<ITenantRepository>();
+        tenantRepo.GetTenantAdminEmailsAsync(Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns(["admin@x.com"]);
+
+        IAlertEmailDeliveryAttemptRepository attemptRepo = Substitute.For<IAlertEmailDeliveryAttemptRepository>();
+        attemptRepo.GetClaimedRecipientsAsync(Arg.Any<long>(), Arg.Any<CancellationToken>())
+            .Returns(new HashSet<string>(["admin@x.com"], StringComparer.OrdinalIgnoreCase));
+
+        IEmailService emailService = Substitute.For<IEmailService>();
+
+        TestServiceScopeFactory scopeFactory = CreateEmailScopeFactory(dbFactory, tenantRepo, attemptRepo, emailService);
+        AlertDeliveryService service = CreateService(scopeFactory);
+
+        await service.DeliverAsync(CreateEvent(), CreateRule(notifyEmail: true), CancellationToken.None);
+
+        await attemptRepo.DidNotReceive().TryClaimAttemptAsync(
+            Arg.Any<long>(), Arg.Any<string>(), Arg.Any<DateTimeOffset>(), Arg.Any<CancellationToken>());
+        await emailService.DidNotReceive().SendAlertEmailAsync(
+            Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
     }
 
     [Test]
@@ -833,15 +987,28 @@ public sealed class AlertDeliveryServiceTests
         };
         await dbFactory.Context.InsertWithInt32IdentityAsync(integration);
 
-        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+        ITenantRepository tenantRepo = Substitute.For<ITenantRepository>();
+        tenantRepo.GetTenantAdminEmailsAsync(Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns(["admin@x.com"]);
+
+        IAlertEmailDeliveryAttemptRepository attemptRepo = Substitute.For<IAlertEmailDeliveryAttemptRepository>();
+        attemptRepo.GetClaimedRecipientsAsync(Arg.Any<long>(), Arg.Any<CancellationToken>())
+            .Returns(new HashSet<string>(StringComparer.OrdinalIgnoreCase));
+        attemptRepo.TryClaimAttemptAsync(Arg.Any<long>(), Arg.Any<string>(), Arg.Any<DateTimeOffset>(), Arg.Any<CancellationToken>())
+            .Returns(true);
+
+        IEmailService emailService = Substitute.For<IEmailService>();
+        emailService.SendAlertEmailAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(true);
+
+        TestServiceScopeFactory scopeFactory = CreateEmailScopeFactory(dbFactory, tenantRepo, attemptRepo, emailService);
         MockHttpMessageHandler handler = new();
         IHttpClientFactory httpFactory = Substitute.For<IHttpClientFactory>();
         httpFactory.CreateClient(Arg.Any<string>()).Returns(new HttpClient(handler));
         IBackgroundJobClient backgroundJobClient = Substitute.For<IBackgroundJobClient>();
-        ILogger<AlertDeliveryService> logger = Substitute.For<ILogger<AlertDeliveryService>>();
 
         IIntegrationPayloadFormatter[] formatters = [CreateCustomFormatter()];
-        AlertDeliveryService service = new(scopeFactory, httpFactory, backgroundJobClient, formatters, logger);
+        AlertDeliveryService service = new(scopeFactory, httpFactory, backgroundJobClient, formatters, new NullLogger<AlertDeliveryService>());
 
         // Both notifyEmail and notifyWebhook enabled
         await service.DeliverAsync(CreateEvent(tenantId), CreateRule(notifyEmail: true, notifyWebhook: true, tenantId: tenantId), CancellationToken.None);
@@ -849,12 +1016,8 @@ public sealed class AlertDeliveryServiceTests
         // Integration should receive an HTTP POST
         await Assert.That(handler.Requests.Count).IsEqualTo(1);
 
-        // Email path should log a message (placeholder implementation)
-        logger.Received().Log(
-            LogLevel.Information,
-            Arg.Any<EventId>(),
-            Arg.Is<object>(o => o.ToString()!.Contains("email")),
-            Arg.Any<Exception?>(),
-            Arg.Any<Func<object, Exception?, string>>());
+        // Email path should deliver to the tenant admin
+        await emailService.Received(1).SendAlertEmailAsync(
+            "admin@x.com", Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
     }
 }

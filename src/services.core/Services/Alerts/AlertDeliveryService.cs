@@ -5,6 +5,8 @@
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
+using Framlux.FleetManagement.Services.Core.Notifications;
+using Framlux.FleetManagement.Services.Core.Options;
 using Hangfire;
 
 namespace Framlux.FleetManagement.Services.Core.Alerts;
@@ -61,7 +63,89 @@ public sealed class AlertDeliveryService : IAlertDeliveryService
 
         if (rule.NotifyEmail)
         {
-            _logger.LogInformation("Email alert delivery for event {EventId} (email delivery not yet implemented)", alertEvent.Id);
+            await DeliverEmailAsync(alertEvent, rule, ct);
+        }
+    }
+
+    private async Task DeliverEmailAsync(AlertEvent alertEvent, AlertRule rule, CancellationToken ct)
+    {
+        using IServiceScope scope = _scopeFactory.CreateScope();
+        ITenantRepository tenantRepo = scope.ServiceProvider.GetRequiredService<ITenantRepository>();
+        IAlertEmailDeliveryAttemptRepository attemptRepo = scope.ServiceProvider.GetRequiredService<IAlertEmailDeliveryAttemptRepository>();
+        IEmailService emailService = scope.ServiceProvider.GetRequiredService<IEmailService>();
+        AppOptions appOptions = scope.ServiceProvider.GetRequiredService<IOptions<AppOptions>>().Value;
+
+        List<string> recipients = await tenantRepo.GetTenantAdminEmailsAsync(rule.TenantId, ct);
+        if (recipients.Count == 0)
+        {
+            _logger.LogWarning("No TenantAdmin recipients for alert email on event {EventId}, tenant {TenantId}; skipping",
+                alertEvent.Id, rule.TenantId);
+
+            return;
+        }
+
+        HashSet<string> alreadyClaimed = await attemptRepo.GetClaimedRecipientsAsync(alertEvent.Id, ct);
+        AlertEmailContent content = AlertEmailContent.Build(alertEvent, rule, appOptions.BaseUrl);
+
+        List<string> transientFailures = [];
+
+        foreach (string recipient in recipients)
+        {
+            if (alreadyClaimed.Contains(recipient))
+            {
+                _logger.LogDebug("Email recipient already attempted for event {EventId}; skipping", alertEvent.Id);
+
+                continue;
+            }
+
+            // Claim BEFORE sending. A crash or Hangfire retry between the outbound send and the
+            // success record would otherwise re-send to the recipient. The claim is recorded
+            // first; transient failures explicitly release it, permanent failures do not.
+            bool claimed = await attemptRepo.TryClaimAttemptAsync(alertEvent.Id, recipient, DateTimeOffset.UtcNow, ct);
+            if (claimed == false)
+            {
+                continue;
+            }
+
+            bool releaseForRetry = false;
+            try
+            {
+                bool sent = await emailService.SendAlertEmailAsync(recipient, content.Subject, content.HtmlBody, ct);
+                if (sent)
+                {
+                    await attemptRepo.MarkAttemptSucceededAsync(alertEvent.Id, recipient, DateTimeOffset.UtcNow, ct);
+                }
+                else
+                {
+                    // SendAlertEmailAsync returns false for both transient transport/5xx failures and the
+                    // intentional no-API-key no-op. Treat false as transient so Hangfire retries; releasing
+                    // the claim lets a later retry re-attempt. A permanently-misconfigured key drains the
+                    // retry budget and surfaces in the Failed tab, which is the correct operator signal.
+                    releaseForRetry = true;
+                    transientFailures.Add($"email to {recipient} not sent");
+                }
+            }
+            catch (Exception ex)
+            {
+                // Unexpected — likely a programming error. Log + leave the claim in place (retries
+                // will not help). Other recipients are still attempted on this pass.
+                _logger.LogError(ex, "Failed to deliver alert email for event {EventId}; suppressing retries", alertEvent.Id);
+            }
+            finally
+            {
+                if (releaseForRetry)
+                {
+                    // Use CancellationToken.None — even if the worker is shutting down, we still
+                    // want the claim released so the Hangfire retry can proceed.
+                    await attemptRepo.ReleaseClaimForRetryAsync(alertEvent.Id, recipient, CancellationToken.None);
+                }
+            }
+        }
+
+        if (transientFailures.Count > 0)
+        {
+            throw new IntegrationDeliveryException(
+                $"Transient failures during alert email delivery for event {alertEvent.Id}: {string.Join("; ", transientFailures)}");
         }
     }
 
