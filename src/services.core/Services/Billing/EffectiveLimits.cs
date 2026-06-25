@@ -20,4 +20,7 @@ public sealed record EffectiveLimits
 
     /// <summary>Maximum webhooks allowed.</summary>
     public int WebhookLimit { get; init; }
+
+    /// <summary>Maximum members (users with tenant access) allowed.</summary>
+    public int MemberLimit { get; init; }
 }

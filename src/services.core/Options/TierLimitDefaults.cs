@@ -28,4 +28,9 @@ public sealed class TierLimitDefaults
     /// Maximum number of webhook endpoints allowed.
     /// </summary>
     public int WebhookLimit { get; set; }
+
+    /// <summary>
+    /// Maximum number of members (users with tenant access) allowed.
+    /// </summary>
+    public int MemberLimit { get; set; }
 }
