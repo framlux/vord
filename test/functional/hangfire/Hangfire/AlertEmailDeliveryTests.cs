@@ -10,8 +10,8 @@ using Framlux.FleetManagement.Services.Core.Notifications;
 using Framlux.FleetManagement.Test.Infrastructure;
 using LinqToDB;
 using LinqToDB.Async;
-using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace Framlux.FleetManagement.FunctionalTest.Hangfire;
 
