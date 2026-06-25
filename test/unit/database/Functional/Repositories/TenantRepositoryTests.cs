@@ -398,4 +398,50 @@ public class TenantCacheTests
 
         await Assert.That(result).IsFalse();
     }
+
+    [Test]
+    public async Task GetTenantAdminEmails_ReturnsActiveTenantAdminsOnly()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        ITenantRepository cache = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+
+        // Seed tenant 1
+        UserAccount adminUser = TestDataBuilder.BuildUser(username: "admin@x.com");
+        int adminUserId = await dbFactory.Context.InsertWithInt32IdentityAsync(adminUser);
+
+        UserAccount viewerUser = TestDataBuilder.BuildUser(username: "viewer@x.com");
+        int viewerUserId = await dbFactory.Context.InsertWithInt32IdentityAsync(viewerUser);
+
+        UserAccount inactiveAdminUser = TestDataBuilder.BuildUser(username: "old@x.com", isActive: false);
+        int inactiveAdminUserId = await dbFactory.Context.InsertWithInt32IdentityAsync(inactiveAdminUser);
+
+        Tenant tenant1 = TestDataBuilder.BuildTenant(name: "Tenant One");
+        int tenantId1 = await dbFactory.Context.InsertWithInt32IdentityAsync(tenant1);
+
+        await dbFactory.Context.InsertAsync(TestDataBuilder.BuildUserTenantRole(
+            userId: adminUserId, tenantId: tenantId1, role: UserAccountRoles.TenantAdmin, assignedByUserId: adminUserId));
+
+        await dbFactory.Context.InsertAsync(TestDataBuilder.BuildUserTenantRole(
+            userId: viewerUserId, tenantId: tenantId1, role: UserAccountRoles.Viewer, assignedByUserId: adminUserId));
+
+        await dbFactory.Context.InsertAsync(TestDataBuilder.BuildUserTenantRole(
+            userId: inactiveAdminUserId, tenantId: tenantId1, role: UserAccountRoles.TenantAdmin, assignedByUserId: adminUserId));
+
+        // Seed a second tenant with its own admin — must not appear in tenant 1 results
+        UserAccount otherTenantAdmin = TestDataBuilder.BuildUser(username: "otheradmin@x.com");
+        int otherTenantAdminId = await dbFactory.Context.InsertWithInt32IdentityAsync(otherTenantAdmin);
+
+        Tenant tenant2 = TestDataBuilder.BuildTenant(name: "Tenant Two");
+        int tenantId2 = await dbFactory.Context.InsertWithInt32IdentityAsync(tenant2);
+
+        await dbFactory.Context.InsertAsync(TestDataBuilder.BuildUserTenantRole(
+            userId: otherTenantAdminId, tenantId: tenantId2, role: UserAccountRoles.TenantAdmin, assignedByUserId: otherTenantAdminId));
+
+        List<string> emails = await cache.GetTenantAdminEmailsAsync(tenantId1);
+
+        await Assert.That(emails).Contains("admin@x.com");
+        await Assert.That(emails).DoesNotContain("viewer@x.com");
+        await Assert.That(emails).DoesNotContain("old@x.com");
+        await Assert.That(emails).DoesNotContain("otheradmin@x.com");
+    }
 }

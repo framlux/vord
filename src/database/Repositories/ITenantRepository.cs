@@ -153,6 +153,14 @@ public interface ITenantRepository
     Task<List<UserTenantRole>> GetActiveRolesForUsersAsync(List<int> userIds, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Returns the email addresses (usernames) of all active TenantAdmin users for a tenant.
+    /// Used to resolve alert email recipients.
+    /// </summary>
+    /// <param name="tenantId">The tenant to query.</param>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    Task<List<string>> GetTenantAdminEmailsAsync(int tenantId, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Returns a paginated list of tenants with optional search, ordered by ID.
     /// </summary>
     /// <param name="search">Optional name search term.</param>
