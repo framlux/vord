@@ -5,8 +5,8 @@
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
-using Framlux.FleetManagement.Services.Core.Options;
 using Framlux.FleetManagement.Services.Core.Billing;
+using Framlux.FleetManagement.Services.Core.Options;
 using Framlux.FleetManagement.Test.Infrastructure;
 using LinqToDB;
 using LinqToDB.Async;
@@ -64,9 +64,9 @@ public class SubscriptionServiceTests
 
         IOptions<TierDefaultOptions> tierDefaults = Options.Create(new TierDefaultOptions
         {
-            Free = new() { MachineLimit = 3, RetentionDays = 1, AlertRuleLimit = 0, WebhookLimit = 0 },
-            Pro = new() { MachineLimit = 1000, RetentionDays = 60, AlertRuleLimit = 10, WebhookLimit = 5 },
-            Team = new() { MachineLimit = 10000, RetentionDays = 365, AlertRuleLimit = 25, WebhookLimit = 15 },
+            Free = new() { MachineLimit = 3, RetentionDays = 1, AlertRuleLimit = 0, WebhookLimit = 0, MemberLimit = 1 },
+            Pro = new() { MachineLimit = 1000, RetentionDays = 60, AlertRuleLimit = 10, WebhookLimit = 5, MemberLimit = 5 },
+            Team = new() { MachineLimit = 10000, RetentionDays = 365, AlertRuleLimit = 25, WebhookLimit = 15, MemberLimit = int.MaxValue },
         });
 
         return new SubscriptionService(repo, repo, repo, repo, tierLimitRepo, overrideRepo, repo, repo, tierDefaults, TimeProvider.System, new NullLogger<SubscriptionService>());
@@ -738,6 +738,7 @@ public class SubscriptionServiceTests
             await Assert.That(limits.RetentionDays).IsEqualTo(1);
             await Assert.That(limits.AlertRuleLimit).IsEqualTo(0);
             await Assert.That(limits.WebhookLimit).IsEqualTo(0);
+            await Assert.That(limits.MemberLimit).IsEqualTo(1);
         }
     }
 
@@ -863,9 +864,9 @@ public class SubscriptionServiceTests
 
             IOptions<TierDefaultOptions> tierDefaults = Options.Create(new TierDefaultOptions
             {
-                Free = new() { MachineLimit = 3, RetentionDays = 1, AlertRuleLimit = 0, WebhookLimit = 0 },
-                Pro = new() { MachineLimit = 500, RetentionDays = 30, AlertRuleLimit = 8, WebhookLimit = 4 },
-                Team = new() { MachineLimit = 10000, RetentionDays = 365, AlertRuleLimit = 25, WebhookLimit = 15 },
+                Free = new() { MachineLimit = 3, RetentionDays = 1, AlertRuleLimit = 0, WebhookLimit = 0, MemberLimit = 1 },
+                Pro = new() { MachineLimit = 500, RetentionDays = 30, AlertRuleLimit = 8, WebhookLimit = 4, MemberLimit = 5 },
+                Team = new() { MachineLimit = 10000, RetentionDays = 365, AlertRuleLimit = 25, WebhookLimit = 15, MemberLimit = int.MaxValue },
             });
 
             SubscriptionService service = new(repo, repo, repo, repo, tierLimitRepo, overrideRepo, repo, repo, tierDefaults, TimeProvider.System, new NullLogger<SubscriptionService>());
@@ -877,6 +878,7 @@ public class SubscriptionServiceTests
             await Assert.That(limits.RetentionDays).IsEqualTo(30);
             await Assert.That(limits.AlertRuleLimit).IsEqualTo(8);
             await Assert.That(limits.WebhookLimit).IsEqualTo(4);
+            await Assert.That(limits.MemberLimit).IsEqualTo(5);
         }
     }
 
@@ -1028,9 +1030,9 @@ public class SubscriptionServiceTests
 
             IOptions<TierDefaultOptions> tierDefaults = Options.Create(new TierDefaultOptions
             {
-                Free = new() { MachineLimit = 3, RetentionDays = 1, AlertRuleLimit = 0, WebhookLimit = 0 },
-                Pro = new() { MachineLimit = 1000, RetentionDays = 60, AlertRuleLimit = 10, WebhookLimit = 5 },
-                Team = new() { MachineLimit = 5000, RetentionDays = 180, AlertRuleLimit = 20, WebhookLimit = 10 },
+                Free = new() { MachineLimit = 3, RetentionDays = 1, AlertRuleLimit = 0, WebhookLimit = 0, MemberLimit = 1 },
+                Pro = new() { MachineLimit = 1000, RetentionDays = 60, AlertRuleLimit = 10, WebhookLimit = 5, MemberLimit = 5 },
+                Team = new() { MachineLimit = 5000, RetentionDays = 180, AlertRuleLimit = 20, WebhookLimit = 10, MemberLimit = int.MaxValue },
             });
 
             SubscriptionService service = new(repo, repo, repo, repo, tierLimitRepo, overrideRepo, repo, repo, tierDefaults,
@@ -1043,6 +1045,7 @@ public class SubscriptionServiceTests
             await Assert.That(limits.RetentionDays).IsEqualTo(180);
             await Assert.That(limits.AlertRuleLimit).IsEqualTo(20);
             await Assert.That(limits.WebhookLimit).IsEqualTo(10);
+            await Assert.That(limits.MemberLimit).IsEqualTo(int.MaxValue);
         }
     }
 
