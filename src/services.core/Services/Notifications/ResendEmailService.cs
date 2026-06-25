@@ -101,6 +101,52 @@ public sealed class ResendEmailService : IEmailService
         }
     }
 
+    /// <inheritdoc/>
+    public async Task<bool> SendAlertEmailAsync(string toEmail, string subject, string htmlBody, CancellationToken ct)
+    {
+        string apiKey = _resendOptions.ApiKey;
+        string fromEmail = string.IsNullOrEmpty(_resendOptions.FromEmail) == false
+            ? _resendOptions.FromEmail
+            : "Framlux Vord <alerts@vordfleet.dev>";
+
+        if (string.IsNullOrEmpty(apiKey))
+        {
+            _logger.LogWarning("Resend API key not configured — skipping alert email to {Email}", toEmail);
+
+            return false;
+        }
+
+        object payload = new { from = fromEmail, to = new[] { toEmail }, subject, html = htmlBody };
+
+        try
+        {
+            string json = JsonSerializer.Serialize(payload, JsonDefaults.CamelCase);
+            using HttpRequestMessage request = new(HttpMethod.Post, "https://api.resend.com/emails");
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", apiKey);
+            request.Content = new StringContent(json, Encoding.UTF8, "application/json");
+
+            HttpResponseMessage response = await _httpClient.SendAsync(request, ct);
+
+            if (response.IsSuccessStatusCode)
+            {
+                _logger.LogInformation("Alert email sent to {Email}", toEmail);
+
+                return true;
+            }
+
+            string responseBody = await response.Content.ReadAsStringAsync(ct);
+            _logger.LogWarning("Resend API returned {StatusCode} for alert email to {Email}: {Body}", response.StatusCode, toEmail, responseBody);
+
+            return false;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to send alert email to {Email}", toEmail);
+
+            return false;
+        }
+    }
+
     private static string HtmlEncode(string value)
     {
         return System.Net.WebUtility.HtmlEncode(value);

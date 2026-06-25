@@ -184,4 +184,86 @@ public sealed class ResendEmailServiceTests
         // The HTML body must contain the HTML-encoded form of the tenant name
         await Assert.That(htmlField).Contains("&lt;script&gt;");
     }
+
+    [Test]
+    public async Task SendAlertEmail_ValidApiKey_ReturnsTrue()
+    {
+        MockHttpMessageHandler handler = new();
+        handler.WithDefaultResponse(new HttpResponseMessage(System.Net.HttpStatusCode.OK));
+        HttpClient httpClient = new(handler);
+        IOptions<ResendOptions> options = BuildOptions(apiKey: "re_alert_ok");
+
+        ResendEmailService service = new(httpClient, options, new NullLogger<ResendEmailService>());
+
+        bool result = await service.SendAlertEmailAsync("alert@example.com", "Alert: Vehicle offline", "<p>Your vehicle is offline.</p>", CancellationToken.None);
+
+        await Assert.That(result).IsTrue();
+        await Assert.That(handler.Requests.Count).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task SendAlertEmail_NoApiKey_ReturnsFalseWithNoHttpCalls()
+    {
+        MockHttpMessageHandler handler = new();
+        HttpClient httpClient = new(handler);
+        IOptions<ResendOptions> options = BuildOptions(apiKey: null);
+
+        ResendEmailService service = new(httpClient, options, new NullLogger<ResendEmailService>());
+
+        bool result = await service.SendAlertEmailAsync("alert@example.com", "Alert", "<p>Body</p>", CancellationToken.None);
+
+        await Assert.That(result).IsFalse();
+        await Assert.That(handler.Requests.Count).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task SendAlertEmail_ResendReturns500_ReturnsFalse()
+    {
+        MockHttpMessageHandler handler = new();
+        handler.WithDefaultResponse(new HttpResponseMessage(System.Net.HttpStatusCode.InternalServerError)
+        {
+            Content = new StringContent("Server error"),
+        });
+        HttpClient httpClient = new(handler);
+        IOptions<ResendOptions> options = BuildOptions(apiKey: "re_alert_500");
+
+        ResendEmailService service = new(httpClient, options, new NullLogger<ResendEmailService>());
+
+        bool result = await service.SendAlertEmailAsync("alert@example.com", "Alert", "<p>Body</p>", CancellationToken.None);
+
+        await Assert.That(result).IsFalse();
+    }
+
+    [Test]
+    public async Task SendAlertEmail_ResendReturns400_ReturnsFalse()
+    {
+        MockHttpMessageHandler handler = new();
+        handler.WithDefaultResponse(new HttpResponseMessage(System.Net.HttpStatusCode.BadRequest)
+        {
+            Content = new StringContent("Bad request"),
+        });
+        HttpClient httpClient = new(handler);
+        IOptions<ResendOptions> options = BuildOptions(apiKey: "re_alert_400");
+
+        ResendEmailService service = new(httpClient, options, new NullLogger<ResendEmailService>());
+
+        bool result = await service.SendAlertEmailAsync("alert@example.com", "Alert", "<p>Body</p>", CancellationToken.None);
+
+        await Assert.That(result).IsFalse();
+    }
+
+    [Test]
+    public async Task SendAlertEmail_HttpException_ReturnsFalse()
+    {
+        MockHttpMessageHandler handler = new();
+        handler.WithException(new HttpRequestException("Connection failed"));
+        HttpClient httpClient = new(handler);
+        IOptions<ResendOptions> options = BuildOptions(apiKey: "re_alert_err");
+
+        ResendEmailService service = new(httpClient, options, new NullLogger<ResendEmailService>());
+
+        bool result = await service.SendAlertEmailAsync("alert@example.com", "Alert", "<p>Body</p>", CancellationToken.None);
+
+        await Assert.That(result).IsFalse();
+    }
 }

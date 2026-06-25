@@ -19,4 +19,14 @@ public interface IEmailService
     /// <param name="ct">Cancellation token.</param>
     /// <returns>Returns true if the email was sent successfully; otherwise, false.</returns>
     Task<bool> SendInvitationEmailAsync(string toEmail, string tenantName, string inviterName, string acceptUrl, CancellationToken ct);
+
+    /// <summary>
+    /// Sends a pre-rendered alert notification email to a single recipient.
+    /// </summary>
+    /// <param name="toEmail">The recipient email address.</param>
+    /// <param name="subject">The email subject line.</param>
+    /// <param name="htmlBody">The rendered HTML body.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>Returns true if the email was sent successfully; otherwise, false.</returns>
+    Task<bool> SendAlertEmailAsync(string toEmail, string subject, string htmlBody, CancellationToken ct);
 }

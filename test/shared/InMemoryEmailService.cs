@@ -12,19 +12,37 @@ namespace Framlux.FleetManagement.Test.Infrastructure;
 public sealed class InMemoryEmailService : IEmailService
 {
     /// <summary>
-    /// Record of a sent email for test assertions.
+    /// Record of a sent invitation email for test assertions.
     /// </summary>
     public sealed record SentEmail(string ToEmail, string TenantName, string InviterName, string AcceptUrl);
 
     /// <summary>
-    /// All emails sent during the test.
+    /// Record of a sent alert email for test assertions.
+    /// </summary>
+    public sealed record SentAlertEmail(string ToEmail, string Subject, string HtmlBody);
+
+    /// <summary>
+    /// All invitation emails sent during the test.
     /// </summary>
     public List<SentEmail> SentEmails { get; } = [];
+
+    /// <summary>
+    /// All alert emails sent during the test.
+    /// </summary>
+    public List<SentAlertEmail> SentAlertEmails { get; } = [];
 
     /// <inheritdoc/>
     public Task<bool> SendInvitationEmailAsync(string toEmail, string tenantName, string inviterName, string acceptUrl, CancellationToken ct)
     {
         SentEmails.Add(new SentEmail(toEmail, tenantName, inviterName, acceptUrl));
+
+        return Task.FromResult(true);
+    }
+
+    /// <inheritdoc/>
+    public Task<bool> SendAlertEmailAsync(string toEmail, string subject, string htmlBody, CancellationToken ct)
+    {
+        SentAlertEmails.Add(new SentAlertEmail(toEmail, subject, htmlBody));
 
         return Task.FromResult(true);
     }
