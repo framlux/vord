@@ -3,10 +3,9 @@
 // See LICENSE for details.
 
 using System.Text.Json;
-using Framlux.FleetManagement.Services.Core.Options;
 using Framlux.FleetManagement.Services.Core.Notifications;
+using Framlux.FleetManagement.Services.Core.Options;
 using Framlux.FleetManagement.Test.Infrastructure;
-using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 
@@ -265,5 +264,51 @@ public sealed class ResendEmailServiceTests
         bool result = await service.SendAlertEmailAsync("alert@example.com", "Alert", "<p>Body</p>", CancellationToken.None);
 
         await Assert.That(result).IsFalse();
+    }
+
+    [Test]
+    public async Task SendAlertEmail_ValidApiKey_PostsExpectedRequest()
+    {
+        MockHttpMessageHandler handler = new();
+        handler.WithDefaultResponse(new HttpResponseMessage(System.Net.HttpStatusCode.OK));
+        HttpClient httpClient = new(handler);
+        IOptions<ResendOptions> options = BuildOptions(apiKey: "re_alert_shape");
+
+        ResendEmailService service = new(httpClient, options, new NullLogger<ResendEmailService>());
+
+        await service.SendAlertEmailAsync("alert@example.com", "Alert: Vehicle offline", "<p>Your vehicle is offline.</p>", CancellationToken.None);
+
+        await Assert.That(handler.Requests.Count).IsEqualTo(1);
+        RecordedRequest request = handler.Requests[0];
+
+        await Assert.That(request.RequestUri!.ToString()).IsEqualTo("https://api.resend.com/emails");
+        await Assert.That(request.Method).IsEqualTo(HttpMethod.Post);
+
+        IEnumerable<string> authValues = request.Headers["Authorization"];
+        string authHeader = authValues.First();
+        await Assert.That(authHeader).IsEqualTo("Bearer re_alert_shape");
+
+        string? body = request.Body;
+        await Assert.That(body).IsNotNull();
+        await Assert.That(body!).Contains("\"from\":");
+        await Assert.That(body).Contains("\"to\":");
+        await Assert.That(body).Contains("\"subject\":");
+        await Assert.That(body).Contains("\"html\":");
+        await Assert.That(body).Contains("alert@example.com");
+    }
+
+    [Test]
+    public async Task SendAlertEmail_EmptyApiKey_ReturnsFalse()
+    {
+        MockHttpMessageHandler handler = new();
+        HttpClient httpClient = new(handler);
+        IOptions<ResendOptions> options = BuildOptions(apiKey: "");
+
+        ResendEmailService service = new(httpClient, options, new NullLogger<ResendEmailService>());
+
+        bool result = await service.SendAlertEmailAsync("alert@example.com", "Alert", "<p>Body</p>", CancellationToken.None);
+
+        await Assert.That(result).IsFalse();
+        await Assert.That(handler.Requests.Count).IsEqualTo(0);
     }
 }
