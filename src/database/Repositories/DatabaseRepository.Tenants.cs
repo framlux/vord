@@ -3,8 +3,10 @@
 // See LICENSE for details.
 
 using Framlux.FleetManagement.Database.Models;
+using System.Data;
 using LinqToDB;
 using LinqToDB.Async;
+using LinqToDB.Data;
 using Microsoft.Extensions.Logging;
 
 namespace Framlux.FleetManagement.Database.Repositories;
@@ -164,6 +166,35 @@ public partial class DatabaseRepository : ITenantRepository
             _logger.LogError(ex, "Failed to create UserTenantRole for user {UserId} in tenant {TenantId}", role.UserId, role.AssignedTenantId);
             throw;
         }
+    }
+
+    /// <inheritdoc/>
+    public async Task<bool> CreateUserTenantRoleWithMemberLimitAsync(UserTenantRole role, int? memberLimit, CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(role);
+
+        // Use Serializable isolation to prevent concurrent acceptances from both passing the
+        // member limit check before either inserts.
+        using DataConnectionTransaction txn = await _db.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken);
+
+        if (memberLimit.HasValue)
+        {
+            int activeMembers = await _db.UserTenantRoles
+                .Where(utr => (utr.AssignedTenantId == role.AssignedTenantId) && (utr.IsActive == true))
+                .CountAsync(cancellationToken);
+
+            if (activeMembers >= memberLimit.Value)
+            {
+                _logger.LogWarning("Tenant {TenantId} at member limit ({Limit}) — rejecting member add", role.AssignedTenantId, memberLimit.Value);
+
+                return false;
+            }
+        }
+
+        await _db.InsertAsync(role, token: cancellationToken);
+        await txn.CommitAsync(cancellationToken);
+
+        return true;
     }
 
     /// <inheritdoc/>

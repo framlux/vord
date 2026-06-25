@@ -556,4 +556,94 @@ public class TenantCacheTests
 
         await Assert.That(count).IsEqualTo(1);
     }
+
+    [Test]
+    public async Task CreateUserTenantRoleWithMemberLimit_AtLimit_ReturnsFalse()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        ITenantRepository cache = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+
+        UserAccount existingUser = TestDataBuilder.BuildUser();
+        int existingUserId = await dbFactory.Context.InsertWithInt32IdentityAsync(existingUser);
+
+        UserAccount newUser = TestDataBuilder.BuildUser();
+        int newUserId = await dbFactory.Context.InsertWithInt32IdentityAsync(newUser);
+
+        Tenant tenant = TestDataBuilder.BuildTenant(createdByUserId: existingUserId);
+        int tenantId = await dbFactory.Context.InsertWithInt32IdentityAsync(tenant);
+
+        // One active member already occupies the only seat.
+        await dbFactory.Context.InsertAsync(TestDataBuilder.BuildUserTenantRole(
+            userId: existingUserId, tenantId: tenantId, assignedByUserId: existingUserId, isActive: true));
+
+        UserTenantRole role = TestDataBuilder.BuildUserTenantRole(
+            userId: newUserId, tenantId: tenantId, assignedByUserId: existingUserId);
+
+        bool added = await cache.CreateUserTenantRoleWithMemberLimitAsync(role, memberLimit: 1, CancellationToken.None);
+
+        await Assert.That(added).IsFalse();
+
+        // The insert must have been rejected, leaving the member count unchanged.
+        int count = await cache.CountActiveMembersAsync(tenantId, CancellationToken.None);
+        await Assert.That(count).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task CreateUserTenantRoleWithMemberLimit_UnderLimit_InsertsAndReturnsTrue()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        ITenantRepository cache = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+
+        UserAccount existingUser = TestDataBuilder.BuildUser();
+        int existingUserId = await dbFactory.Context.InsertWithInt32IdentityAsync(existingUser);
+
+        UserAccount newUser = TestDataBuilder.BuildUser();
+        int newUserId = await dbFactory.Context.InsertWithInt32IdentityAsync(newUser);
+
+        Tenant tenant = TestDataBuilder.BuildTenant(createdByUserId: existingUserId);
+        int tenantId = await dbFactory.Context.InsertWithInt32IdentityAsync(tenant);
+
+        await dbFactory.Context.InsertAsync(TestDataBuilder.BuildUserTenantRole(
+            userId: existingUserId, tenantId: tenantId, assignedByUserId: existingUserId, isActive: true));
+
+        UserTenantRole role = TestDataBuilder.BuildUserTenantRole(
+            userId: newUserId, tenantId: tenantId, assignedByUserId: existingUserId);
+
+        bool added = await cache.CreateUserTenantRoleWithMemberLimitAsync(role, memberLimit: 5, CancellationToken.None);
+
+        await Assert.That(added).IsTrue();
+
+        int count = await cache.CountActiveMembersAsync(tenantId, CancellationToken.None);
+        await Assert.That(count).IsEqualTo(2);
+    }
+
+    [Test]
+    public async Task CreateUserTenantRoleWithMemberLimit_NullLimit_AlwaysInserts()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        ITenantRepository cache = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+
+        UserAccount existingUser = TestDataBuilder.BuildUser();
+        int existingUserId = await dbFactory.Context.InsertWithInt32IdentityAsync(existingUser);
+
+        UserAccount newUser = TestDataBuilder.BuildUser();
+        int newUserId = await dbFactory.Context.InsertWithInt32IdentityAsync(newUser);
+
+        Tenant tenant = TestDataBuilder.BuildTenant(createdByUserId: existingUserId);
+        int tenantId = await dbFactory.Context.InsertWithInt32IdentityAsync(tenant);
+
+        // Seed several existing members; a null limit must not reject regardless of count.
+        await dbFactory.Context.InsertAsync(TestDataBuilder.BuildUserTenantRole(
+            userId: existingUserId, tenantId: tenantId, assignedByUserId: existingUserId, isActive: true));
+
+        UserTenantRole role = TestDataBuilder.BuildUserTenantRole(
+            userId: newUserId, tenantId: tenantId, assignedByUserId: existingUserId);
+
+        bool added = await cache.CreateUserTenantRoleWithMemberLimitAsync(role, memberLimit: null, CancellationToken.None);
+
+        await Assert.That(added).IsTrue();
+
+        int count = await cache.CountActiveMembersAsync(tenantId, CancellationToken.None);
+        await Assert.That(count).IsEqualTo(2);
+    }
 }

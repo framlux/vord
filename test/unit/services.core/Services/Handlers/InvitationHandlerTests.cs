@@ -39,6 +39,10 @@ public class InvitationHandlerTests
         ITenantRepository tenantRepository = Substitute.For<ITenantRepository>();
         ISubscriptionRepository subscriptionRepository = Substitute.For<ISubscriptionRepository>();
 
+        // Default the serializable member-limit insert to succeed so happy-path acceptance tests
+        // do not have to opt in; the at-limit test overrides this to false.
+        tenantRepository.CreateUserTenantRoleWithMemberLimitAsync(Arg.Any<UserTenantRole>(), Arg.Any<int?>(), Arg.Any<CancellationToken>()).Returns(true);
+
         return (transactionProvider, auditLog, invitationRepository, tenantRepository, subscriptionRepository);
     }
 
@@ -47,7 +51,7 @@ public class InvitationHandlerTests
         return Substitute.For<IBackgroundJobClient>();
     }
 
-    private static ISubscriptionService CreateMockSubService(SubscriptionTier tier = SubscriptionTier.Pro, bool canAddMember = true)
+    private static ISubscriptionService CreateMockSubService(SubscriptionTier tier = SubscriptionTier.Pro, bool canAddMember = true, int memberLimit = 5)
     {
         ISubscriptionService svc = Substitute.For<ISubscriptionService>();
         svc.GetSubscriptionForTenantAsync(Arg.Any<int>(), Arg.Any<CancellationToken>()).Returns(new TenantSubscription
@@ -56,6 +60,10 @@ public class InvitationHandlerTests
             CreatedAt = DateTimeOffset.UtcNow, UpdatedAt = DateTimeOffset.UtcNow,
         });
         svc.CanAddMemberAsync(Arg.Any<int>(), Arg.Any<CancellationToken>()).Returns(canAddMember);
+        svc.GetEffectiveLimitsForTenantAsync(Arg.Any<int>(), Arg.Any<CancellationToken>()).Returns(new EffectiveLimits
+        {
+            MemberLimit = memberLimit,
+        });
 
         return svc;
     }
@@ -541,8 +549,10 @@ public class InvitationHandlerTests
 
         await handler.AcceptAsync("token", "user@test.com", 1, "ext-1", CancellationToken.None);
 
-        // Should have created personal tenant role + invitation tenant role = 2 calls
-        await tenantRepository.Received(2).CreateUserTenantRoleAsync(Arg.Any<UserTenantRole>(), Arg.Any<CancellationToken>());
+        // The personal tenant role is created unconditionally; the invited tenant role goes through
+        // the serializable member-limit guard.
+        await tenantRepository.Received(1).CreateUserTenantRoleAsync(Arg.Any<UserTenantRole>(), Arg.Any<CancellationToken>());
+        await tenantRepository.Received(1).CreateUserTenantRoleWithMemberLimitAsync(Arg.Any<UserTenantRole>(), Arg.Any<int?>(), Arg.Any<CancellationToken>());
     }
 
     [Test]
@@ -583,8 +593,35 @@ public class InvitationHandlerTests
 
         await handler.AcceptAsync("token", "user@test.com", 1, "ext-1", CancellationToken.None);
 
-        // Only 1 call for the invitation tenant role (no personal tenant)
-        await tenantRepository.Received(1).CreateUserTenantRoleAsync(Arg.Any<UserTenantRole>(), Arg.Any<CancellationToken>());
+        // No personal tenant for an existing user; the invited tenant role goes through the
+        // serializable member-limit guard and the plain create is never used.
+        await tenantRepository.Received(1).CreateUserTenantRoleWithMemberLimitAsync(Arg.Any<UserTenantRole>(), Arg.Any<int?>(), Arg.Any<CancellationToken>());
+        await tenantRepository.DidNotReceive().CreateUserTenantRoleAsync(Arg.Any<UserTenantRole>(), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task AcceptAsync_AtMemberLimit_Returns409AndNoRole()
+    {
+        // Intent: when the serializable guard reports the tenant is at its member limit, acceptance
+        // must fail with 409 and the invitation must not be marked accepted.
+        (IDatabaseTransactionProvider transactionProvider, IAuditLogRepository auditLog, IInvitationRepository invitationRepository, ITenantRepository tenantRepository, ISubscriptionRepository subscriptionRepository) = CreateMockRepositories();
+        invitationRepository.GetInvitationByTokenAsync("token", Arg.Any<CancellationToken>()).Returns(new TenantInvitation
+        {
+            Id = 1, TenantId = 5, Email = "user@test.com", TokenHash = "token", Role = UserAccountRoles.TenantAdmin, Status = InvitationStatus.Pending,
+            InvitedByUserId = 2, CreatedAt = DateTimeOffset.UtcNow, ExpiresAt = DateTimeOffset.UtcNow.AddDays(7)
+        });
+        tenantRepository.GetTenantsForUserAsync("ext-1", Arg.Any<CancellationToken>()).Returns(new List<UserTenantRole>
+        {
+            new() { UserId = 1, AssignedTenantId = 10, Role = UserAccountRoles.TenantAdmin, AssignedByUserId = 1, AssignedAt = DateTimeOffset.UtcNow, IsActive = true }
+        });
+        tenantRepository.CreateUserTenantRoleWithMemberLimitAsync(Arg.Any<UserTenantRole>(), Arg.Any<int?>(), Arg.Any<CancellationToken>()).Returns(false);
+        InvitationHandler handler = new(transactionProvider, auditLog, invitationRepository, tenantRepository, subscriptionRepository, CreateMockBackgroundJobClient(), CreateMockSubService(memberLimit: 1), Substitute.For<IRoleCacheInvalidator>());
+
+        ServiceResult<InvitationAcceptResult> result = await handler.AcceptAsync("token", "user@test.com", 1, "ext-1", CancellationToken.None);
+
+        await Assert.That(result.StatusCode).IsEqualTo(409);
+        await Assert.That(result.Data!.ErrorMessage).Contains("member limit");
+        await invitationRepository.DidNotReceive().UpdateInvitationStatusAsync(Arg.Any<int>(), Arg.Any<InvitationStatus>(), Arg.Any<int?>(), Arg.Any<CancellationToken>());
     }
 
     // ========== RevokeAsync tests ==========

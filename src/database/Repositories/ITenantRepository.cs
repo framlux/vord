@@ -49,6 +49,17 @@ public interface ITenantRepository
     Task CreateUserTenantRoleAsync(UserTenantRole role, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Inserts a <see cref="UserTenantRole"/> within a serializable transaction that first re-counts
+    /// active members, rejecting the insert if the tenant is already at its member limit. Returns
+    /// true if the role was inserted, false if the limit was reached. A null <paramref name="memberLimit"/>
+    /// means no limit is enforced.
+    /// </summary>
+    /// <param name="role">The role assignment to insert.</param>
+    /// <param name="memberLimit">The maximum number of active members allowed, or null for no limit.</param>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    Task<bool> CreateUserTenantRoleWithMemberLimitAsync(UserTenantRole role, int? memberLimit, CancellationToken cancellationToken);
+
+    /// <summary>
     /// Gets the OIDC configuration for a tenant.
     /// </summary>
     Task<TenantOidcConfiguration?> GetTenantOidcConfigurationAsync(int tenantId, CancellationToken cancellationToken = default);

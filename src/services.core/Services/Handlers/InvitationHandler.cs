@@ -219,6 +219,29 @@ public sealed class InvitationHandler : IInvitationHandler
         DateTimeOffset now = DateTimeOffset.UtcNow;
         bool personalTenantProvisioned = false;
 
+        // The invited-tenant role insert is the authoritative seat-claiming write. It opens its own
+        // serializable transaction to count-then-insert atomically, so it cannot be nested inside the
+        // outer transaction below — LinqToDB tracks a single transaction per connection. Perform it
+        // first as a standalone unit; only if the seat is claimed do we provision the personal tenant
+        // and mark the invitation accepted.
+        EffectiveLimits limits = await _subscriptionService.GetEffectiveLimitsForTenantAsync(invitation.TenantId, ct);
+
+        bool added = await _tenantRepository.CreateUserTenantRoleWithMemberLimitAsync(new UserTenantRole
+        {
+            UserId = userId,
+            AssignedTenantId = invitation.TenantId,
+            Role = invitation.Role,
+            AssignedByUserId = invitation.InvitedByUserId,
+            AssignedAt = now,
+            IsActive = true,
+        }, limits.MemberLimit, ct);
+
+        if (added == false)
+        {
+            return ServiceResult<InvitationAcceptResult>.Error(409,
+                new InvitationAcceptResult { ErrorMessage = "This organization has reached its member limit. Contact an admin to free up a seat." });
+        }
+
         using IDatabaseTransaction transaction = await _transactionProvider.BeginTransactionAsync(ct);
 
         if (existingRoles.Any() == false)
@@ -256,16 +279,6 @@ public sealed class InvitationHandler : IInvitationHandler
 
             personalTenantProvisioned = true;
         }
-
-        await _tenantRepository.CreateUserTenantRoleAsync(new UserTenantRole
-        {
-            UserId = userId,
-            AssignedTenantId = invitation.TenantId,
-            Role = invitation.Role,
-            AssignedByUserId = invitation.InvitedByUserId,
-            AssignedAt = now,
-            IsActive = true,
-        }, ct);
 
         await _invitationRepository.UpdateInvitationStatusAsync(invitation.Id, InvitationStatus.Accepted, userId, ct);
 
