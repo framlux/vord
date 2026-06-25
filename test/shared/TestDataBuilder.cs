@@ -117,7 +117,8 @@ public static class TestDataBuilder
         int userId = 1,
         int tenantId = 1,
         UserAccountRoles role = UserAccountRoles.TenantAdmin,
-        int assignedByUserId = 1)
+        int assignedByUserId = 1,
+        bool isActive = true)
     {
         return new UserTenantRole
         {
@@ -126,7 +127,7 @@ public static class TestDataBuilder
             Role = role,
             AssignedByUserId = assignedByUserId,
             AssignedAt = DateTimeOffset.UtcNow,
-            IsActive = true
+            IsActive = isActive
         };
     }
 

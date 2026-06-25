@@ -444,4 +444,33 @@ public class TenantCacheTests
         await Assert.That(emails).DoesNotContain("old@x.com");
         await Assert.That(emails).DoesNotContain("otheradmin@x.com");
     }
+
+    [Test]
+    public async Task GetTenantAdminEmails_ExcludesAdminWithInactiveRoleRow()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        ITenantRepository cache = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+
+        UserAccount activeAdmin = TestDataBuilder.BuildUser(username: "active@x.com");
+        int activeAdminId = await dbFactory.Context.InsertWithInt32IdentityAsync(activeAdmin);
+
+        // Active account but inactive TenantAdmin role row — must not appear in results.
+        UserAccount revokedAdmin = TestDataBuilder.BuildUser(username: "revoked@x.com");
+        int revokedAdminId = await dbFactory.Context.InsertWithInt32IdentityAsync(revokedAdmin);
+
+        Tenant tenant = TestDataBuilder.BuildTenant(name: "Role Filter Tenant");
+        int tenantId = await dbFactory.Context.InsertWithInt32IdentityAsync(tenant);
+
+        await dbFactory.Context.InsertAsync(TestDataBuilder.BuildUserTenantRole(
+            userId: activeAdminId, tenantId: tenantId, role: UserAccountRoles.TenantAdmin, assignedByUserId: activeAdminId));
+
+        await dbFactory.Context.InsertAsync(TestDataBuilder.BuildUserTenantRole(
+            userId: revokedAdminId, tenantId: tenantId, role: UserAccountRoles.TenantAdmin, assignedByUserId: activeAdminId,
+            isActive: false));
+
+        List<string> emails = await cache.GetTenantAdminEmailsAsync(tenantId);
+
+        await Assert.That(emails).Contains("active@x.com");
+        await Assert.That(emails).DoesNotContain("revoked@x.com");
+    }
 }
