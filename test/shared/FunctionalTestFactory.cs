@@ -410,17 +410,17 @@ public class FunctionalTestFactory : WebApplicationFactory<Program>
     {
         string now = DateTimeOffset.UtcNow.ToString("o");
 
-        // Free tier: MachineLimit=3, RetentionDays=1, AlertRuleLimit=0, WebhookLimit=0
-        ExecuteSql($@"INSERT INTO TierFeatureLimits (Tier, MachineLimit, RetentionDays, AlertRuleLimit, WebhookLimit, UpdatedAt)
-            VALUES ({(int)SubscriptionTier.Free}, 3, 1, 0, 0, '{now}')");
+        // Free tier: MachineLimit=3, RetentionDays=1, AlertRuleLimit=0, WebhookLimit=0, MemberLimit=1
+        ExecuteSql($@"INSERT INTO TierFeatureLimits (Tier, MachineLimit, RetentionDays, AlertRuleLimit, WebhookLimit, MemberLimit, UpdatedAt)
+            VALUES ({(int)SubscriptionTier.Free}, 3, 1, 0, 0, 1, '{now}')");
 
-        // Pro tier: MachineLimit=1000, RetentionDays=60, AlertRuleLimit=10, WebhookLimit=5
-        ExecuteSql($@"INSERT INTO TierFeatureLimits (Tier, MachineLimit, RetentionDays, AlertRuleLimit, WebhookLimit, UpdatedAt)
-            VALUES ({(int)SubscriptionTier.Pro}, 1000, 60, 10, 5, '{now}')");
+        // Pro tier: MachineLimit=1000, RetentionDays=60, AlertRuleLimit=10, WebhookLimit=5, MemberLimit=5
+        ExecuteSql($@"INSERT INTO TierFeatureLimits (Tier, MachineLimit, RetentionDays, AlertRuleLimit, WebhookLimit, MemberLimit, UpdatedAt)
+            VALUES ({(int)SubscriptionTier.Pro}, 1000, 60, 10, 5, 5, '{now}')");
 
-        // Team tier: MachineLimit=10000, RetentionDays=365, AlertRuleLimit=25, WebhookLimit=15
-        ExecuteSql($@"INSERT INTO TierFeatureLimits (Tier, MachineLimit, RetentionDays, AlertRuleLimit, WebhookLimit, UpdatedAt)
-            VALUES ({(int)SubscriptionTier.Team}, 10000, 365, 25, 15, '{now}')");
+        // Team tier: MachineLimit=10000, RetentionDays=365, AlertRuleLimit=25, WebhookLimit=15, MemberLimit=int.MaxValue
+        ExecuteSql($@"INSERT INTO TierFeatureLimits (Tier, MachineLimit, RetentionDays, AlertRuleLimit, WebhookLimit, MemberLimit, UpdatedAt)
+            VALUES ({(int)SubscriptionTier.Team}, 10000, 365, 25, 15, {int.MaxValue}, '{now}')");
     }
 
     /// <summary>
