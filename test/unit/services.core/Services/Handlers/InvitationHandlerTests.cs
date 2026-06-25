@@ -47,7 +47,7 @@ public class InvitationHandlerTests
         return Substitute.For<IBackgroundJobClient>();
     }
 
-    private static ISubscriptionService CreateMockSubService(SubscriptionTier tier = SubscriptionTier.Pro)
+    private static ISubscriptionService CreateMockSubService(SubscriptionTier tier = SubscriptionTier.Pro, bool canAddMember = true)
     {
         ISubscriptionService svc = Substitute.For<ISubscriptionService>();
         svc.GetSubscriptionForTenantAsync(Arg.Any<int>(), Arg.Any<CancellationToken>()).Returns(new TenantSubscription
@@ -55,6 +55,7 @@ public class InvitationHandlerTests
             Id = 1, TenantId = 1, Tier = tier, Status = SubscriptionStatus.Active,
             CreatedAt = DateTimeOffset.UtcNow, UpdatedAt = DateTimeOffset.UtcNow,
         });
+        svc.CanAddMemberAsync(Arg.Any<int>(), Arg.Any<CancellationToken>()).Returns(canAddMember);
 
         return svc;
     }
@@ -137,6 +138,45 @@ public class InvitationHandlerTests
 
         await Assert.That(result.StatusCode).IsEqualTo(409);
         await Assert.That(result.Data!.ErrorMessage).Contains("already a member");
+    }
+
+    [Test]
+    public async Task CreateAsync_MemberLimitReached_Returns409()
+    {
+        (IDatabaseTransactionProvider transactionProvider, IAuditLogRepository auditLog, IInvitationRepository invitationRepository, ITenantRepository tenantRepository, ISubscriptionRepository subscriptionRepository) = CreateMockRepositories();
+        invitationRepository.GetPendingInvitationByEmailAndTenantAsync("newuser@example.com", 1, Arg.Any<CancellationToken>()).Returns((TenantInvitation?)null);
+        tenantRepository.GetMembersForTenantAsync(1, Arg.Any<CancellationToken>()).Returns(Enumerable.Empty<UserTenantRole>());
+        InvitationHandler handler = new(transactionProvider, auditLog, invitationRepository, tenantRepository, subscriptionRepository, CreateMockBackgroundJobClient(), CreateMockSubService(canAddMember: false), Substitute.For<IRoleCacheInvalidator>());
+
+        ServiceResult<InvitationCreateResult> result = await handler.CreateAsync("newuser@example.com", null, 1, 1, "https://app.test", CancellationToken.None);
+
+        await Assert.That(result.StatusCode).IsEqualTo(409);
+        await Assert.That(result.Data!.ErrorMessage).Contains("member limit");
+    }
+
+    [Test]
+    public async Task CreateAsync_UnderMemberLimit_CreatesInvitation()
+    {
+        (IDatabaseTransactionProvider transactionProvider, IAuditLogRepository auditLog, IInvitationRepository invitationRepository, ITenantRepository tenantRepository, ISubscriptionRepository subscriptionRepository) = CreateMockRepositories();
+        invitationRepository.GetPendingInvitationByEmailAndTenantAsync("newuser@example.com", 1, Arg.Any<CancellationToken>()).Returns((TenantInvitation?)null);
+        tenantRepository.GetMembersForTenantAsync(1, Arg.Any<CancellationToken>()).Returns(Enumerable.Empty<UserTenantRole>());
+        invitationRepository.CreateInvitationAsync(Arg.Any<TenantInvitation>(), Arg.Any<CancellationToken>()).Returns(callInfo =>
+        {
+            TenantInvitation inv = callInfo.Arg<TenantInvitation>();
+            inv.Id = 10;
+
+            return inv;
+        });
+        tenantRepository.GetTenantByIdAsync(1, Arg.Any<CancellationToken>()).Returns(new Tenant
+        {
+            Id = 1, Name = "Test Org", ExternalId = "ext-1", CreatedAt = DateTimeOffset.UtcNow, CreatedByUserId = 1, IsActive = true, LogoUrl = ""
+        });
+        InvitationHandler handler = new(transactionProvider, auditLog, invitationRepository, tenantRepository, subscriptionRepository, CreateMockBackgroundJobClient(), CreateMockSubService(canAddMember: true), Substitute.For<IRoleCacheInvalidator>());
+
+        ServiceResult<InvitationCreateResult> result = await handler.CreateAsync("newuser@example.com", null, 1, 1, "https://app.test", CancellationToken.None);
+
+        await Assert.That(result.IsSuccess).IsTrue();
+        await invitationRepository.Received(1).CreateInvitationAsync(Arg.Any<TenantInvitation>(), Arg.Any<CancellationToken>());
     }
 
     [Test]

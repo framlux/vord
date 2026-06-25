@@ -106,6 +106,13 @@ public sealed class InvitationHandler : IInvitationHandler
                 new InvitationCreateResult { ErrorMessage = "This user is already a member of your organization" });
         }
 
+        bool canAddMember = await _subscriptionService.CanAddMemberAsync(tenantId.Value, ct);
+        if (canAddMember == false)
+        {
+            return ServiceResult<InvitationCreateResult>.Error(409,
+                new InvitationCreateResult { ErrorMessage = "Your plan's member limit has been reached. Upgrade or remove a member to invite more." });
+        }
+
         UserAccountRoles assignedRole = UserAccountRoles.Viewer;
         if (string.IsNullOrEmpty(role) == false && Enum.TryParse<UserAccountRoles>(role, true, out UserAccountRoles parsed))
         {
