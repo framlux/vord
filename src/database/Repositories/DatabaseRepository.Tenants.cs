@@ -3,11 +3,11 @@
 // See LICENSE for details.
 
 using Framlux.FleetManagement.Database.Models;
-using System.Data;
 using LinqToDB;
 using LinqToDB.Async;
 using LinqToDB.Data;
 using Microsoft.Extensions.Logging;
+using System.Data;
 
 namespace Framlux.FleetManagement.Database.Repositories;
 
@@ -173,28 +173,36 @@ public partial class DatabaseRepository : ITenantRepository
     {
         ArgumentNullException.ThrowIfNull(role);
 
-        // Use Serializable isolation to prevent concurrent acceptances from both passing the
-        // member limit check before either inserts.
-        using DataConnectionTransaction txn = await _db.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken);
-
-        if (memberLimit.HasValue)
+        try
         {
-            int activeMembers = await _db.UserTenantRoles
-                .Where(utr => (utr.AssignedTenantId == role.AssignedTenantId) && (utr.IsActive == true))
-                .CountAsync(cancellationToken);
+            // Use Serializable isolation to prevent concurrent acceptances from both passing the
+            // member limit check before either inserts.
+            using DataConnectionTransaction txn = await _db.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken);
 
-            if (activeMembers >= memberLimit.Value)
+            if (memberLimit.HasValue)
             {
-                _logger.LogWarning("Tenant {TenantId} at member limit ({Limit}) — rejecting member add", role.AssignedTenantId, memberLimit.Value);
+                int activeMembers = await _db.UserTenantRoles
+                    .Where(utr => (utr.AssignedTenantId == role.AssignedTenantId) && (utr.IsActive == true))
+                    .CountAsync(cancellationToken);
 
-                return false;
+                if (activeMembers >= memberLimit.Value)
+                {
+                    _logger.LogWarning("Tenant {TenantId} at member limit ({Limit}) — rejecting member add", role.AssignedTenantId, memberLimit.Value);
+
+                    return false;
+                }
             }
+
+            await _db.InsertAsync(role, token: cancellationToken);
+            await txn.CommitAsync(cancellationToken);
+
+            return true;
         }
-
-        await _db.InsertAsync(role, token: cancellationToken);
-        await txn.CommitAsync(cancellationToken);
-
-        return true;
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Failed to create UserTenantRole for user {UserId} in tenant {TenantId}", role.UserId, role.AssignedTenantId);
+            throw;
+        }
     }
 
     /// <inheritdoc/>
