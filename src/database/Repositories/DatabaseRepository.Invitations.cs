@@ -191,6 +191,17 @@ public partial class DatabaseRepository : IInvitationRepository
         }
     }
 
+    /// <inheritdoc/>
+    public async Task<int> CountPendingInvitationsAsync(int tenantId, DateTimeOffset asOf, CancellationToken cancellationToken)
+    {
+        int count = await _db.TenantInvitations
+            .Where(i => (i.TenantId == tenantId)
+                        && (i.Status == InvitationStatus.Pending)
+                        && (i.ExpiresAt > asOf))
+            .CountAsync(cancellationToken);
+        return count;
+    }
+
     /// <summary>
     /// Masks an email address for safe logging (e.g., "j***@example.com").
     /// </summary>

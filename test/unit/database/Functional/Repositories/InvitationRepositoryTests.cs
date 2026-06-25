@@ -305,4 +305,46 @@ public class InvitationCacheTests
         await Assert.That(result!.Status).IsEqualTo(InvitationStatus.Revoked);
         await Assert.That(result.RevokedAt).IsNotNull();
     }
+
+    [Test]
+    public async Task CountPendingInvitationsAsync_FiltersExpiredAndNonPending_CountsOnlyValidPending()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        IInvitationRepository cache = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+
+        (int userId, int tenantId) = await SeedUserAndTenantAsync(dbFactory);
+
+        DateTimeOffset asOf = new DateTimeOffset(2026, 6, 22, 0, 0, 0, TimeSpan.Zero);
+
+        // Pending, expires AFTER asOf — should be counted
+        TenantInvitation validPending = TestDataBuilder.BuildInvitation(
+            tenantId: tenantId,
+            email: "valid-pending@example.com",
+            status: InvitationStatus.Pending,
+            invitedByUserId: userId);
+        validPending.ExpiresAt = asOf.AddDays(1);
+        await dbFactory.Context.InsertWithInt32IdentityAsync(validPending);
+
+        // Pending, expires AT asOf — should be excluded (not strictly after)
+        TenantInvitation expiredAtAsOf = TestDataBuilder.BuildInvitation(
+            tenantId: tenantId,
+            email: "expired-at@example.com",
+            status: InvitationStatus.Pending,
+            invitedByUserId: userId);
+        expiredAtAsOf.ExpiresAt = asOf;
+        await dbFactory.Context.InsertWithInt32IdentityAsync(expiredAtAsOf);
+
+        // Accepted invitation — should be excluded regardless of expiry
+        TenantInvitation accepted = TestDataBuilder.BuildInvitation(
+            tenantId: tenantId,
+            email: "accepted@example.com",
+            status: InvitationStatus.Accepted,
+            invitedByUserId: userId);
+        accepted.ExpiresAt = asOf.AddDays(1);
+        await dbFactory.Context.InsertWithInt32IdentityAsync(accepted);
+
+        int count = await cache.CountPendingInvitationsAsync(tenantId, asOf, CancellationToken.None);
+
+        await Assert.That(count).IsEqualTo(1);
+    }
 }

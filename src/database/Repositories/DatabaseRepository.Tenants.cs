@@ -429,6 +429,15 @@ public partial class DatabaseRepository : ITenantRepository
     }
 
     /// <inheritdoc/>
+    public async Task<int> CountActiveMembersAsync(int tenantId, CancellationToken cancellationToken)
+    {
+        int count = await _db.UserTenantRoles
+            .Where(utr => (utr.AssignedTenantId == tenantId) && (utr.IsActive == true))
+            .CountAsync(cancellationToken);
+        return count;
+    }
+
+    /// <inheritdoc/>
     public async Task<bool> DisableUserTenantRoleAsync(int userId, int tenantId, int disabledByUserId, CancellationToken cancellationToken)
     {
         try

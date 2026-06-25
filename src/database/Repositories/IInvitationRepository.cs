@@ -41,4 +41,13 @@ public interface IInvitationRepository
     /// Revokes a tenant invitation.
     /// </summary>
     Task RevokeInvitationAsync(int invitationId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Counts pending, non-expired invitations for a tenant as of the given instant. Expired pending
+    /// invitations (ExpiresAt at or before asOf) are excluded.
+    /// </summary>
+    /// <param name="tenantId">The tenant to count pending invitations for.</param>
+    /// <param name="asOf">The reference instant; invitations expiring at or before this value are excluded.</param>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    Task<int> CountPendingInvitationsAsync(int tenantId, DateTimeOffset asOf, CancellationToken cancellationToken = default);
 }

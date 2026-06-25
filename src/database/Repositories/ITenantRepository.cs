@@ -168,4 +168,11 @@ public interface ITenantRepository
     /// <param name="take">Number of records to take.</param>
     /// <param name="cancellationToken">A cancellation token.</param>
     Task<(List<Tenant> Tenants, int TotalCount)> SearchTenantsPagedAsync(string? search, int skip, int take, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Counts the active members (active UserTenantRole rows, including the owner/admin) for a tenant.
+    /// </summary>
+    /// <param name="tenantId">The tenant to count members for.</param>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    Task<int> CountActiveMembersAsync(int tenantId, CancellationToken cancellationToken = default);
 }

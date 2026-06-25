@@ -493,4 +493,67 @@ public class TenantCacheTests
 
         await Assert.That(emails.Count).IsEqualTo(0);
     }
+
+    [Test]
+    public async Task CountActiveMembersAsync_ActiveAndInactiveRoles_CountsOnlyActive()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        ITenantRepository cache = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+
+        UserAccount user1 = TestDataBuilder.BuildUser();
+        int userId1 = await dbFactory.Context.InsertWithInt32IdentityAsync(user1);
+
+        UserAccount user2 = TestDataBuilder.BuildUser();
+        int userId2 = await dbFactory.Context.InsertWithInt32IdentityAsync(user2);
+
+        UserAccount user3 = TestDataBuilder.BuildUser();
+        int userId3 = await dbFactory.Context.InsertWithInt32IdentityAsync(user3);
+
+        Tenant tenant = TestDataBuilder.BuildTenant(createdByUserId: userId1);
+        int tenantId = await dbFactory.Context.InsertWithInt32IdentityAsync(tenant);
+
+        // Two active roles
+        await dbFactory.Context.InsertAsync(TestDataBuilder.BuildUserTenantRole(
+            userId: userId1, tenantId: tenantId, assignedByUserId: userId1, isActive: true));
+        await dbFactory.Context.InsertAsync(TestDataBuilder.BuildUserTenantRole(
+            userId: userId2, tenantId: tenantId, assignedByUserId: userId1, isActive: true));
+
+        // One inactive role
+        await dbFactory.Context.InsertAsync(TestDataBuilder.BuildUserTenantRole(
+            userId: userId3, tenantId: tenantId, assignedByUserId: userId1, isActive: false));
+
+        int count = await cache.CountActiveMembersAsync(tenantId, CancellationToken.None);
+
+        await Assert.That(count).IsEqualTo(2);
+    }
+
+    [Test]
+    public async Task CountActiveMembersAsync_OtherTenantRoles_ExcludesOtherTenant()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        ITenantRepository cache = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+
+        UserAccount user = TestDataBuilder.BuildUser();
+        int userId = await dbFactory.Context.InsertWithInt32IdentityAsync(user);
+
+        Tenant tenant1 = TestDataBuilder.BuildTenant(name: "Count Tenant Alpha", createdByUserId: userId);
+        int tenantId1 = await dbFactory.Context.InsertWithInt32IdentityAsync(tenant1);
+
+        Tenant tenant2 = TestDataBuilder.BuildTenant(name: "Count Tenant Beta", createdByUserId: userId);
+        int tenantId2 = await dbFactory.Context.InsertWithInt32IdentityAsync(tenant2);
+
+        // One active role in tenant1
+        await dbFactory.Context.InsertAsync(TestDataBuilder.BuildUserTenantRole(
+            userId: userId, tenantId: tenantId1, assignedByUserId: userId, isActive: true));
+
+        // One active role in tenant2 — must not affect tenant1's count
+        UserAccount user2 = TestDataBuilder.BuildUser();
+        int userId2 = await dbFactory.Context.InsertWithInt32IdentityAsync(user2);
+        await dbFactory.Context.InsertAsync(TestDataBuilder.BuildUserTenantRole(
+            userId: userId2, tenantId: tenantId2, assignedByUserId: userId2, isActive: true));
+
+        int count = await cache.CountActiveMembersAsync(tenantId1, CancellationToken.None);
+
+        await Assert.That(count).IsEqualTo(1);
+    }
 }
