@@ -232,6 +232,7 @@ public sealed class FleetAdminServiceTests
             RetentionDays = 60,
             AlertRuleLimit = 10,
             WebhookLimit = 5,
+            MemberLimit = 5,
             UpdatedAt = DateTimeOffset.UtcNow
         };
 
@@ -670,6 +671,7 @@ public sealed class FleetAdminServiceTests
             RetentionDays = 60,
             AlertRuleLimit = 10,
             WebhookLimit = 5,
+            MemberLimit = 5,
             UpdatedAt = DateTimeOffset.UtcNow
         };
 
@@ -829,6 +831,7 @@ public sealed class FleetAdminServiceTests
             RetentionDays = 90,
             AlertRuleLimit = 50,
             WebhookLimit = 20,
+            MemberLimit = int.MaxValue,
             UpdatedAt = DateTimeOffset.UtcNow
         };
 

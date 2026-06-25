@@ -23,8 +23,9 @@ public interface ITierFeatureLimitRepository
     Task<List<TierFeatureLimit>> GetAllLimitsAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Updates the feature limits for a specific subscription tier.
-    /// Returns the number of rows updated (0 if the tier does not exist).
+    /// Updates the feature limits for a specific subscription tier, including the
+    /// maximum number of members allowed. Returns the number of rows updated
+    /// (0 if the tier does not exist).
     /// </summary>
-    Task<int> UpdateLimitsForTierAsync(SubscriptionTier tier, int machineLimit, int retentionDays, int alertRuleLimit, int webhookLimit, CancellationToken cancellationToken = default);
+    Task<int> UpdateLimitsForTierAsync(SubscriptionTier tier, int machineLimit, int retentionDays, int alertRuleLimit, int webhookLimit, int memberLimit, CancellationToken cancellationToken = default);
 }

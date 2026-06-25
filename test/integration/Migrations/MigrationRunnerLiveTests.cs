@@ -222,10 +222,10 @@ public sealed class MigrationRunnerLiveTests
 
         await Assert.That(await CountRowsAsync(connStr, "TierFeatureLimits")).IsEqualTo(3L);
 
-        // Tier 1 (Free), Tier 2 (Pro), Tier 3 (Team): MachineLimit, RetentionDays, AlertRuleLimit, WebhookLimit.
-        await Assert.That(await ReadTierLimitsAsync(connStr, 1)).IsEqualTo("3,1,0,0");
-        await Assert.That(await ReadTierLimitsAsync(connStr, 2)).IsEqualTo("1000,60,10,5");
-        await Assert.That(await ReadTierLimitsAsync(connStr, 3)).IsEqualTo("10000,365,25,15");
+        // Tier 1 (Free), Tier 2 (Pro), Tier 3 (Team): MachineLimit, RetentionDays, AlertRuleLimit, WebhookLimit, MemberLimit.
+        await Assert.That(await ReadTierLimitsAsync(connStr, 1)).IsEqualTo("3,1,0,0,1");
+        await Assert.That(await ReadTierLimitsAsync(connStr, 2)).IsEqualTo("1000,60,10,5,5");
+        await Assert.That(await ReadTierLimitsAsync(connStr, 3)).IsEqualTo($"10000,365,25,15,{int.MaxValue}");
     }
 
     // ----- helpers -----
@@ -323,7 +323,7 @@ public sealed class MigrationRunnerLiveTests
         await using NpgsqlConnection conn = new(connStr);
         await conn.OpenAsync();
         await using NpgsqlCommand cmd = conn.CreateCommand();
-        cmd.CommandText = @"SELECT ""MachineLimit"", ""RetentionDays"", ""AlertRuleLimit"", ""WebhookLimit""
+        cmd.CommandText = @"SELECT ""MachineLimit"", ""RetentionDays"", ""AlertRuleLimit"", ""WebhookLimit"", ""MemberLimit""
             FROM ""TierFeatureLimits"" WHERE ""Tier"" = @tier";
         cmd.Parameters.AddWithValue("@tier", tier);
         await using NpgsqlDataReader reader = await cmd.ExecuteReaderAsync();
@@ -332,7 +332,7 @@ public sealed class MigrationRunnerLiveTests
             return string.Empty;
         }
 
-        return $"{Convert.ToInt64(reader.GetValue(0))},{Convert.ToInt64(reader.GetValue(1))},{Convert.ToInt64(reader.GetValue(2))},{Convert.ToInt64(reader.GetValue(3))}";
+        return $"{Convert.ToInt64(reader.GetValue(0))},{Convert.ToInt64(reader.GetValue(1))},{Convert.ToInt64(reader.GetValue(2))},{Convert.ToInt64(reader.GetValue(3))},{Convert.ToInt64(reader.GetValue(4))}";
     }
 
     private static async Task<long> CountVersionsAsync(string connStr)

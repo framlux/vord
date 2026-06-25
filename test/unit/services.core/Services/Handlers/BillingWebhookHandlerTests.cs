@@ -36,6 +36,7 @@ public class BillingWebhookHandlerTests
             RetentionDays = 1,
             AlertRuleLimit = 0,
             WebhookLimit = 0,
+            MemberLimit = 1,
             UpdatedAt = now,
         });
 
@@ -46,6 +47,7 @@ public class BillingWebhookHandlerTests
             RetentionDays = 60,
             AlertRuleLimit = 10,
             WebhookLimit = 5,
+            MemberLimit = 5,
             UpdatedAt = now,
         });
 
@@ -56,6 +58,7 @@ public class BillingWebhookHandlerTests
             RetentionDays = 365,
             AlertRuleLimit = 25,
             WebhookLimit = 15,
+            MemberLimit = int.MaxValue,
             UpdatedAt = now,
         });
     }

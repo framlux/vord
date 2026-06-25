@@ -53,6 +53,12 @@ public sealed class TierFeatureLimit
     public required int WebhookLimit { get; set; }
 
     /// <summary>
+    /// Maximum number of members (users with access to the tenant, including the owner) allowed.
+    /// </summary>
+    [Column(Name = "MemberLimit"), NotNull]
+    public required int MemberLimit { get; set; }
+
+    /// <summary>
     /// When these limits were last updated.
     /// </summary>
     [Column(Name = "UpdatedAt"), NotNull]

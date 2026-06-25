@@ -32,6 +32,7 @@ public class SubscriptionCacheTests
             RetentionDays = retentionDays,
             AlertRuleLimit = 0,
             WebhookLimit = 0,
+            MemberLimit = 1,
             UpdatedAt = now,
         });
         tierLimitRepo.GetLimitsForTierAsync(SubscriptionTier.Pro, Arg.Any<CancellationToken>()).Returns(new TierFeatureLimit
@@ -41,6 +42,7 @@ public class SubscriptionCacheTests
             RetentionDays = 60,
             AlertRuleLimit = 10,
             WebhookLimit = 5,
+            MemberLimit = 5,
             UpdatedAt = now,
         });
         tierLimitRepo.GetLimitsForTierAsync(SubscriptionTier.Team, Arg.Any<CancellationToken>()).Returns(new TierFeatureLimit
@@ -50,6 +52,7 @@ public class SubscriptionCacheTests
             RetentionDays = 365,
             AlertRuleLimit = 25,
             WebhookLimit = 15,
+            MemberLimit = int.MaxValue,
             UpdatedAt = now,
         });
         ITenantSubscriptionOverrideRepository overrideRepo = Substitute.For<ITenantSubscriptionOverrideRepository>();

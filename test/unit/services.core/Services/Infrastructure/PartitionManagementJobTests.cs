@@ -346,6 +346,7 @@ public sealed class PartitionManagementJobTests
             RetentionDays = 1,
             AlertRuleLimit = 0,
             WebhookLimit = 0,
+            MemberLimit = 1,
             UpdatedAt = DateTimeOffset.UtcNow,
         });
 
@@ -423,6 +424,7 @@ public sealed class PartitionManagementJobTests
             RetentionDays = 60,
             AlertRuleLimit = 10,
             WebhookLimit = 5,
+            MemberLimit = 5,
             UpdatedAt = DateTimeOffset.UtcNow,
         });
 

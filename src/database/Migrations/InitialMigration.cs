@@ -760,6 +760,7 @@ public sealed class InitialMigration : Migration
             .WithColumn("RetentionDays").AsInt32().NotNullable()
             .WithColumn("AlertRuleLimit").AsInt32().NotNullable()
             .WithColumn("WebhookLimit").AsInt32().NotNullable()
+            .WithColumn("MemberLimit").AsInt32().NotNullable()
             .WithColumn("UpdatedAt").AsDateTimeOffset().NotNullable();
 
         // Default per-tier feature limits (Free=1, Pro=2, Team=3).
@@ -770,6 +771,7 @@ public sealed class InitialMigration : Migration
             RetentionDays = 1,
             AlertRuleLimit = 0,
             WebhookLimit = 0,
+            MemberLimit = 1,
             UpdatedAt = DateTimeOffset.UtcNow,
         });
         Insert.IntoTable("TierFeatureLimits").Row(new
@@ -779,6 +781,7 @@ public sealed class InitialMigration : Migration
             RetentionDays = 60,
             AlertRuleLimit = 10,
             WebhookLimit = 5,
+            MemberLimit = 5,
             UpdatedAt = DateTimeOffset.UtcNow,
         });
         Insert.IntoTable("TierFeatureLimits").Row(new
@@ -788,6 +791,7 @@ public sealed class InitialMigration : Migration
             RetentionDays = 365,
             AlertRuleLimit = 25,
             WebhookLimit = 15,
+            MemberLimit = int.MaxValue,
             UpdatedAt = DateTimeOffset.UtcNow,
         });
 
