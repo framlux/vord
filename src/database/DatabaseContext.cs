@@ -122,8 +122,7 @@ public sealed class DatabaseContext(DataOptions<DatabaseContext> options) : Data
     public ITable<IntegrationDeliveryAttempt> IntegrationDeliveryAttempts => this.GetTable<IntegrationDeliveryAttempt>();
 
     /// <summary>
-    /// Per-(event, recipient) delivery-success records used by the alert email job to enforce
-    /// idempotency on Hangfire retries. A row exists if and only if the email delivery succeeded once.
+    /// Per-(AlertEventId, Recipient) idempotency rows for alert email delivery: a row is Pending while a send is claimed/in-flight (or after a permanent failure, to suppress retries) and Succeeded after a successful send.
     /// </summary>
     public ITable<AlertEmailDeliveryAttempt> AlertEmailDeliveryAttempts => this.GetTable<AlertEmailDeliveryAttempt>();
 

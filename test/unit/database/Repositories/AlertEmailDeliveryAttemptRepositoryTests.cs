@@ -170,6 +170,53 @@ public sealed class AlertEmailDeliveryAttemptRepositoryTests
     }
 
     [Test]
+    public async Task TryClaimAttemptAsync_ConcurrentCalls_ExactlyOneReturnsTrue()
+    {
+        // Intent: concurrent claim attempts must produce exactly one winner. SQLite serializes
+        // writes (the in-memory connection has a single writer at a time), but the test pins the
+        // contract regardless of backend: the unique index makes "exactly one winner" a property
+        // of the data, not the runtime. Under Postgres in production the concurrent INSERTs race
+        // and SQLSTATE 23505 surfaces to the losers.
+        using TestDatabaseFactory dbFactory = new();
+        IAlertEmailDeliveryAttemptRepository repo = CreateRepo(dbFactory);
+
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        Task<bool>[] claims =
+        [
+            repo.TryClaimAttemptAsync(50, "race@example.com", now, CancellationToken.None),
+            repo.TryClaimAttemptAsync(50, "race@example.com", now, CancellationToken.None),
+            repo.TryClaimAttemptAsync(50, "race@example.com", now, CancellationToken.None),
+        ];
+
+        bool[] results = await Task.WhenAll(claims);
+
+        int winners = results.Count(r => r);
+        int losers = results.Count(r => r == false);
+        await Assert.That(winners).IsEqualTo(1);
+        await Assert.That(losers).IsEqualTo(2);
+    }
+
+    [Test]
+    public async Task TryClaimAttempt_SetsStatusToPending_NotRelyingOnDefault()
+    {
+        // Intent: the repository's TryClaimAttemptAsync path MUST set Status explicitly so the
+        // column default is never relied on. This guards against an accidental future change that
+        // omits Status from the insert — a row inserted without an explicit Status would otherwise
+        // silently appear as already-delivered.
+        using TestDatabaseFactory dbFactory = new();
+        IAlertEmailDeliveryAttemptRepository repo = CreateRepo(dbFactory);
+
+        await repo.TryClaimAttemptAsync(alertEventId: 99, recipient: "status@example.com", DateTimeOffset.UtcNow, CancellationToken.None);
+
+        AlertEmailDeliveryAttempt? attempt = await dbFactory.Context.AlertEmailDeliveryAttempts
+            .Where(a => (a.AlertEventId == 99) && (a.Recipient == "status@example.com"))
+            .FirstOrDefaultAsync();
+        await Assert.That(attempt).IsNotNull();
+        await Assert.That(attempt!.Status).IsEqualTo(EmailDeliveryAttemptStatus.Pending);
+        await Assert.That(attempt.SucceededAt).IsNull();
+    }
+
+    [Test]
     public async Task GetClaimedRecipientsAsync_ReturnsBothPendingAndSucceeded_CaseInsensitive()
     {
         // Intent: the pre-check must treat ANY claim — Pending or Succeeded — as "do not
