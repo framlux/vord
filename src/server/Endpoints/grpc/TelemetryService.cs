@@ -15,6 +15,7 @@ using Framlux.FleetManagement.Services.Core.Infrastructure;
 using Framlux.FleetManagement.Services.Core.Options;
 using Framlux.FleetManagement.Services.Core.Telemetry;
 using Grpc.Core;
+using Hangfire;
 using Microsoft.AspNetCore.Authorization;
 using Microsoft.Extensions.Options;
 using Npgsql;
@@ -70,7 +71,7 @@ public sealed class TelemetryService : Telemetry.TelemetryBase
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly ITelemetryDeduplicationService _dedupService;
     private readonly ISubscriptionService _subscriptionService;
-    private readonly IEventAlertService _eventAlertService;
+    private readonly IBackgroundJobClient _backgroundJobs;
     private readonly ResiliencePipeline _dbPipeline;
     private readonly IConnectionMultiplexer _redis;
     private readonly TelemetryOptions _options;
@@ -99,7 +100,7 @@ public sealed class TelemetryService : Telemetry.TelemetryBase
         IServiceScopeFactory scopeFactory,
         ITelemetryDeduplicationService dedupService,
         ISubscriptionService subscriptionService,
-        IEventAlertService eventAlertService,
+        IBackgroundJobClient backgroundJobs,
         ResiliencePipeline dbPipeline,
         IConnectionMultiplexer redis,
         IOptions<TelemetryOptions> options,
@@ -109,7 +110,7 @@ public sealed class TelemetryService : Telemetry.TelemetryBase
         ArgumentNullException.ThrowIfNull(scopeFactory);
         ArgumentNullException.ThrowIfNull(dedupService);
         ArgumentNullException.ThrowIfNull(subscriptionService);
-        ArgumentNullException.ThrowIfNull(eventAlertService);
+        ArgumentNullException.ThrowIfNull(backgroundJobs);
         ArgumentNullException.ThrowIfNull(dbPipeline);
         ArgumentNullException.ThrowIfNull(redis);
         ArgumentNullException.ThrowIfNull(options);
@@ -118,7 +119,7 @@ public sealed class TelemetryService : Telemetry.TelemetryBase
         _scopeFactory = scopeFactory;
         _dedupService = dedupService;
         _subscriptionService = subscriptionService;
-        _eventAlertService = eventAlertService;
+        _backgroundJobs = backgroundJobs;
         _dbPipeline = dbPipeline;
         _redis = redis;
         _options = options.Value;
@@ -477,8 +478,9 @@ public sealed class TelemetryService : Telemetry.TelemetryBase
                     acknowledgedIds.Add(item.EventId);
                 }
 
-                // Evaluate event-based alerts for SSH sessions after persisting telemetry
-                await EvaluateSshAlertEventsAsync(tenantId, machineId, newItems, ct);
+                // Enqueue SSH alert evaluation out of band so the ack is not blocked on per-item
+                // alert evaluation; each SSH item becomes its own independently-retryable job.
+                EnqueueSshAlertEvaluations(tenantId, machineId, newItems);
             }
 
             _logger.LogDebug("Processed {Count} telemetry items for machine {MachineId} batch {BatchId}",
@@ -538,11 +540,10 @@ public sealed class TelemetryService : Telemetry.TelemetryBase
         return collected;
     }
 
-    private async Task EvaluateSshAlertEventsAsync(
+    private void EnqueueSshAlertEvaluations(
         int tenantId,
         long machineId,
-        List<(TelemetryItem Item, short Type, string Payload)> items,
-        CancellationToken ct)
+        List<(TelemetryItem Item, short Type, string Payload)> items)
     {
         foreach ((TelemetryItem item, short _, string _) in items)
         {
@@ -552,23 +553,8 @@ public sealed class TelemetryService : Telemetry.TelemetryBase
             }
 
             SshSessionRecord ssh = item.SshSession;
-
-            try
-            {
-                if (string.Equals(ssh.Action, "connect", StringComparison.OrdinalIgnoreCase))
-                {
-                    await _eventAlertService.EvaluateSshConnectAsync(
-                        tenantId, machineId, ssh.User, ssh.SourceIp, ssh.SourcePort, ssh.AuthMethod, ct);
-                }
-                else if (string.Equals(ssh.Action, "disconnect", StringComparison.OrdinalIgnoreCase))
-                {
-                    await _eventAlertService.ResolveSshDisconnectAsync(machineId, ct);
-                }
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Failed to evaluate SSH alert for machine {MachineId}", machineId);
-            }
+            _backgroundJobs.Enqueue<SshAlertEvaluationJob>(
+                job => job.RunAsync(tenantId, machineId, ssh.Action, ssh.User, ssh.SourceIp, ssh.SourcePort, ssh.AuthMethod, CancellationToken.None));
         }
     }
 

@@ -4,10 +4,10 @@
 
 using Framlux.FleetManagement.Server.Endpoints.Grpc;
 using Framlux.FleetManagement.Server.Services.Infrastructure;
-using Framlux.FleetManagement.Services.Core.Alerts;
 using Framlux.FleetManagement.Services.Core.Billing;
 using Framlux.FleetManagement.Services.Core.Options;
 using Framlux.FleetManagement.Services.Core.Telemetry;
+using Hangfire;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
@@ -32,7 +32,7 @@ public sealed class TelemetryServiceStreamCapTests
             Substitute.For<IServiceScopeFactory>(),
             Substitute.For<ITelemetryDeduplicationService>(),
             Substitute.For<ISubscriptionService>(),
-            Substitute.For<IEventAlertService>(),
+            Substitute.For<IBackgroundJobClient>(),
             ResiliencePipeline.Empty,
             redis,
             Options.Create(options),

@@ -14,6 +14,9 @@ using Framlux.FleetManagement.Services.Core.Options;
 using Framlux.FleetManagement.Services.Core.Telemetry;
 using Framlux.FleetManagement.Test.Infrastructure;
 using Grpc.Core;
+using Hangfire;
+using Hangfire.Common;
+using Hangfire.States;
 using LinqToDB;
 using LinqToDB.Async;
 using Microsoft.AspNetCore.Http;
@@ -34,7 +37,7 @@ public sealed class TelemetryServiceTests
 {
     private readonly ITelemetryDeduplicationService _dedupService;
     private readonly ISubscriptionService _subscriptionService;
-    private readonly IEventAlertService _eventAlertService = Substitute.For<IEventAlertService>();
+    private readonly IBackgroundJobClient _backgroundJobs = Substitute.For<IBackgroundJobClient>();
     private readonly ILogger<TelemetryService> _logger = Substitute.For<ILogger<TelemetryService>>();
 
     /// <summary>
@@ -103,7 +106,7 @@ public sealed class TelemetryServiceTests
 
     private TelemetryService CreateService(IServiceScopeFactory scopeFactory)
     {
-        return new TelemetryService(scopeFactory, _dedupService, _subscriptionService, _eventAlertService, NoOpPipeline, BuildTestRedis(), Options.Create(new TelemetryOptions()), new ProcessStreamSlotLimiter(5000), _logger);
+        return new TelemetryService(scopeFactory, _dedupService, _subscriptionService, _backgroundJobs, NoOpPipeline, BuildTestRedis(), Options.Create(new TelemetryOptions()), new ProcessStreamSlotLimiter(5000), _logger);
     }
 
     /// <summary>
@@ -304,7 +307,7 @@ public sealed class TelemetryServiceTests
                 return ids.ToDictionary(id => id, _ => false);
             });
 
-        TelemetryService service = new(scopeFactory, dupDedupService, _subscriptionService, _eventAlertService, NoOpPipeline, BuildTestRedis(), Options.Create(new TelemetryOptions()), new ProcessStreamSlotLimiter(5000), _logger);
+        TelemetryService service = new(scopeFactory, dupDedupService, _subscriptionService, _backgroundJobs, NoOpPipeline, BuildTestRedis(), Options.Create(new TelemetryOptions()), new ProcessStreamSlotLimiter(5000), _logger);
         ServerCallContext context = CreateAuthenticatedContext(200);
 
         TelemetryEnvelope envelope = new()
@@ -411,7 +414,7 @@ public sealed class TelemetryServiceTests
                 UpdatedAt = DateTimeOffset.UtcNow,
             });
 
-        TelemetryService service = new(scopeFactory, _dedupService, inactiveSubService, _eventAlertService, NoOpPipeline, BuildTestRedis(), Options.Create(new TelemetryOptions()), new ProcessStreamSlotLimiter(5000), _logger);
+        TelemetryService service = new(scopeFactory, _dedupService, inactiveSubService, _backgroundJobs, NoOpPipeline, BuildTestRedis(), Options.Create(new TelemetryOptions()), new ProcessStreamSlotLimiter(5000), _logger);
         ServerCallContext context = CreateAuthenticatedContext(100);
 
         TelemetryEnvelope envelope = new() { AgentTimestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow), BatchId ="batch-inactive" };
@@ -505,8 +508,12 @@ public sealed class TelemetryServiceTests
         TelemetryAck ack = await service.SubmitTelemetry(envelope, context);
 
         await Assert.That(ack.Success).IsTrue();
-        await _eventAlertService.Received(1).EvaluateSshConnectAsync(
-            7, 500, "admin", "192.168.1.100", 54321, "publickey", Arg.Any<CancellationToken>());
+        // SSH evaluation is deferred: a connect job is enqueued rather than awaited inline.
+        _backgroundJobs.Received(1).Create(
+            Arg.Is<Job>(j => (j.Method.Name == nameof(SshAlertEvaluationJob.RunAsync))
+                && ((string)j.Args[2] == "connect")
+                && ((long)j.Args[1] == 500L)),
+            Arg.Any<IState>());
     }
 
     [Test]
@@ -540,12 +547,16 @@ public sealed class TelemetryServiceTests
         TelemetryAck ack = await service.SubmitTelemetry(envelope, context);
 
         await Assert.That(ack.Success).IsTrue();
-        await _eventAlertService.Received(1).ResolveSshDisconnectAsync(
-            600, Arg.Any<CancellationToken>());
+        // SSH evaluation is deferred: a disconnect job is enqueued rather than awaited inline.
+        _backgroundJobs.Received(1).Create(
+            Arg.Is<Job>(j => (j.Method.Name == nameof(SshAlertEvaluationJob.RunAsync))
+                && ((string)j.Args[2] == "disconnect")
+                && ((long)j.Args[1] == 600L)),
+            Arg.Any<IState>());
     }
 
     [Test]
-    public async Task SubmitTelemetry_NonSshTelemetry_DoesNotInvokeEventAlertService()
+    public async Task SubmitTelemetry_NonSshTelemetry_DoesNotEnqueueSshEvaluation()
     {
         using TestDatabaseFactory dbFactory = new();
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
@@ -567,25 +578,17 @@ public sealed class TelemetryServiceTests
         TelemetryAck ack = await service.SubmitTelemetry(envelope, context);
 
         await Assert.That(ack.Success).IsTrue();
-        await _eventAlertService.DidNotReceive().EvaluateSshConnectAsync(
-            Arg.Any<int>(), Arg.Any<long>(), Arg.Any<string>(), Arg.Any<string>(),
-            Arg.Any<int>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
-        await _eventAlertService.DidNotReceive().ResolveSshDisconnectAsync(
-            Arg.Any<long>(), Arg.Any<CancellationToken>());
+        // No SSH item present, so no SSH evaluation job should be enqueued.
+        _backgroundJobs.DidNotReceive().Create(Arg.Any<Job>(), Arg.Any<IState>());
     }
 
     [Test]
-    public async Task SubmitTelemetry_SshAlertServiceThrows_TelemetryStillProcessed()
+    public async Task SubmitTelemetry_SshConnectEvent_AcksImmediatelyAndDefersEvaluation()
     {
         using TestDatabaseFactory dbFactory = new();
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
         TelemetryService service = CreateService(scopeFactory);
         ServerCallContext context = CreateAuthenticatedContext(800, tenantId: 10);
-
-        _eventAlertService.EvaluateSshConnectAsync(
-            Arg.Any<int>(), Arg.Any<long>(), Arg.Any<string>(), Arg.Any<string>(),
-            Arg.Any<int>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
-            .Returns<Task>(callInfo => throw new InvalidOperationException("Alert service failure"));
 
         TelemetryEnvelope envelope = new()
         {
@@ -612,6 +615,10 @@ public sealed class TelemetryServiceTests
         await Assert.That(ack.Success).IsTrue();
         await Assert.That(ack.AcknowledgedEventIds.Count).IsEqualTo(1);
         await Assert.That(ack.AcknowledgedEventIds[0]).IsEqualTo("event-ssh-throws-1");
+        // The ack does not wait on alert evaluation — the work is enqueued for out-of-band handling.
+        _backgroundJobs.Received(1).Create(
+            Arg.Is<Job>(j => j.Method.Name == nameof(SshAlertEvaluationJob.RunAsync)),
+            Arg.Any<IState>());
     }
 
     // ========================================================================
@@ -672,7 +679,7 @@ public sealed class TelemetryServiceTests
                 UpdatedAt = DateTimeOffset.UtcNow,
             });
 
-        TelemetryService service = new(scopeFactory, _dedupService, inactiveSubService, _eventAlertService, NoOpPipeline, BuildTestRedis(), Options.Create(new TelemetryOptions()), new ProcessStreamSlotLimiter(5000), _logger);
+        TelemetryService service = new(scopeFactory, _dedupService, inactiveSubService, _backgroundJobs, NoOpPipeline, BuildTestRedis(), Options.Create(new TelemetryOptions()), new ProcessStreamSlotLimiter(5000), _logger);
         ServerCallContext context = CreateAuthenticatedContext(100);
 
         FakeAsyncStreamReader<TelemetryEnvelope> requestStream = new([]);
@@ -974,7 +981,7 @@ public sealed class TelemetryServiceTests
         });
 
         // Use a no-op pipeline so the BrokenCircuitException propagates out unhandled by Polly.
-        TelemetryService service = new(scopeFactory, _dedupService, _subscriptionService, _eventAlertService, NoOpPipeline, BuildTestRedis(), Options.Create(new TelemetryOptions()), new ProcessStreamSlotLimiter(5000), _logger);
+        TelemetryService service = new(scopeFactory, _dedupService, _subscriptionService, _backgroundJobs, NoOpPipeline, BuildTestRedis(), Options.Create(new TelemetryOptions()), new ProcessStreamSlotLimiter(5000), _logger);
         ServerCallContext context = CreateAuthenticatedContext(100);
 
         TelemetryEnvelope envelope = new()
@@ -1011,7 +1018,7 @@ public sealed class TelemetryServiceTests
             { typeof(Database.Repositories.IMachineStateRepository), throwingRepo }
         });
 
-        TelemetryService service = new(scopeFactory, _dedupService, _subscriptionService, _eventAlertService, NoOpPipeline, BuildTestRedis(), Options.Create(new TelemetryOptions()), new ProcessStreamSlotLimiter(5000), _logger);
+        TelemetryService service = new(scopeFactory, _dedupService, _subscriptionService, _backgroundJobs, NoOpPipeline, BuildTestRedis(), Options.Create(new TelemetryOptions()), new ProcessStreamSlotLimiter(5000), _logger);
         ServerCallContext context = CreateAuthenticatedContext(100);
 
         TelemetryEnvelope envelope = new()
@@ -1048,7 +1055,7 @@ public sealed class TelemetryServiceTests
             { typeof(Database.Repositories.IMachineStateRepository), throwingRepo }
         });
 
-        TelemetryService service = new(scopeFactory, _dedupService, _subscriptionService, _eventAlertService, NoOpPipeline, BuildTestRedis(), Options.Create(new TelemetryOptions()), new ProcessStreamSlotLimiter(5000), _logger);
+        TelemetryService service = new(scopeFactory, _dedupService, _subscriptionService, _backgroundJobs, NoOpPipeline, BuildTestRedis(), Options.Create(new TelemetryOptions()), new ProcessStreamSlotLimiter(5000), _logger);
         ServerCallContext context = CreateAuthenticatedContext(100);
 
         TelemetryEnvelope envelope = new()
@@ -1079,7 +1086,7 @@ public sealed class TelemetryServiceTests
         using TestDatabaseFactory dbFactory = new();
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
 
-        TelemetryService service = new(scopeFactory, _dedupService, _subscriptionService, _eventAlertService, NoOpPipeline, BuildTestRedis(), Options.Create(new TelemetryOptions()), new ProcessStreamSlotLimiter(5000), _logger);
+        TelemetryService service = new(scopeFactory, _dedupService, _subscriptionService, _backgroundJobs, NoOpPipeline, BuildTestRedis(), Options.Create(new TelemetryOptions()), new ProcessStreamSlotLimiter(5000), _logger);
 
         // Context with a valid MachineId claim but no TenantId claim — IsSubscriptionActiveAsync returns false.
         DefaultHttpContext httpContext = new();

@@ -333,6 +333,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<HealthSweepTenantJob>();
         services.AddScoped<HealthSweepCoordinatorJob>();
         services.AddScoped<AlertEvaluationJob>();
+        services.AddScoped<SshAlertEvaluationJob>();
         services.AddScoped<AlertConditionStateCleanupJob>();
         services.AddScoped<IntegrationDeliveryJob>();
         services.AddScoped<SendInvitationEmailJob>();
