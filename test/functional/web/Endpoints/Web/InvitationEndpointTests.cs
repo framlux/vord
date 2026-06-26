@@ -444,6 +444,34 @@ public sealed class InvitationEndpointTests
         await Assert.That(message).Contains("pending invitation already exists");
     }
 
+    [Test]
+    public async Task CreateInvitation_AcceptLink_UsesConfiguredBaseUrl()
+    {
+        // The accept URL in the response must be absolute and rooted at the configured
+        // App:BaseUrl ("https://app.vordfleet.dev"), not a relative path or the test-host
+        // address. This locks in the BaseUrl wiring so a future regression is caught immediately.
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId) = await SeedInvitationEnvironment(db);
+        HttpClient client = BuildClient(factory, tenantId, userId);
+
+        HttpResponseMessage response = await client.PostAsJsonAsync("/api/v1/invitations", new
+        {
+            Email = "baseurl-check@example.com",
+        });
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
+        string body = await response.Content.ReadAsStringAsync();
+        using JsonDocument doc = JsonDocument.Parse(body);
+        JsonElement root = doc.RootElement;
+        bool success = root.GetProperty("success").GetBoolean();
+        await Assert.That(success).IsTrue();
+
+        string acceptUrl = root.GetProperty("data").GetProperty("acceptUrl").GetString() ?? string.Empty;
+        await Assert.That(acceptUrl).IsNotEmpty();
+        await Assert.That(acceptUrl).StartsWith("https://app.vordfleet.dev/invitations/accept?token=");
+    }
+
     // --- InvitationDetailEndpoint Tests ---
 
     [Test]
