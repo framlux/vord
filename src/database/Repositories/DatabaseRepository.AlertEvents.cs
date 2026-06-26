@@ -238,4 +238,16 @@ public partial class DatabaseRepository : IAlertEventRepository
 
         return events;
     }
+
+    /// <inheritdoc/>
+    public async Task<HashSet<long>> GetMachineIdsWithActiveEventsForRuleAsync(int ruleId, CancellationToken cancellationToken)
+    {
+        List<long> machineIds = await _db.AlertEvents
+            .Where(e => (e.AlertRuleId == ruleId) && (e.Status != AlertEventStatus.Resolved))
+            .Select(e => e.MachineId)
+            .Distinct()
+            .ToListAsync(cancellationToken);
+
+        return machineIds.ToHashSet();
+    }
 }

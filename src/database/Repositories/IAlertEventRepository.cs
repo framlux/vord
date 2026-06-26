@@ -120,4 +120,12 @@ public interface IAlertEventRepository
         DateTimeOffset triggeredNotAfter,
         DateTimeOffset triggeredNotBefore,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Returns the set of machine IDs that currently have a non-resolved event for the given rule.
+    /// One query replaces a per-machine existence probe during alert evaluation.
+    /// </summary>
+    /// <param name="ruleId">The alert rule.</param>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    Task<HashSet<long>> GetMachineIdsWithActiveEventsForRuleAsync(int ruleId, CancellationToken cancellationToken = default);
 }

@@ -259,6 +259,28 @@ public class AlertEventRepositoryTests
     }
 
     [Test]
+    public async Task GetMachineIdsWithActiveEventsForRuleAsync_ReturnsOnlyUnresolved()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        IAlertEventRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+
+        (int _, int tenantId, long machineId, int ruleId) = await SeedPrerequisitesAsync(dbFactory);
+
+        await dbFactory.Context.InsertWithInt64IdentityAsync(
+            TestDataBuilder.BuildAlertEvent(alertRuleId: ruleId, tenantId: tenantId, machineId: machineId, status: AlertEventStatus.Triggered));
+        await dbFactory.Context.InsertWithInt64IdentityAsync(
+            TestDataBuilder.BuildAlertEvent(alertRuleId: ruleId, tenantId: tenantId, machineId: machineId + 1, status: AlertEventStatus.Resolved));
+        await dbFactory.Context.InsertWithInt64IdentityAsync(
+            TestDataBuilder.BuildAlertEvent(alertRuleId: ruleId, tenantId: tenantId, machineId: machineId + 2, status: AlertEventStatus.Acknowledged));
+
+        HashSet<long> active = await repo.GetMachineIdsWithActiveEventsForRuleAsync(ruleId);
+
+        await Assert.That(active.Contains(machineId)).IsTrue();       // Triggered
+        await Assert.That(active.Contains(machineId + 2)).IsTrue();   // Acknowledged (not resolved)
+        await Assert.That(active.Contains(machineId + 1)).IsFalse();  // Resolved
+    }
+
+    [Test]
     public async Task GetAlertEventsForTenantAsync_SeverityFilter_ReturnsOnlyMatchingSeverity()
     {
         using TestDatabaseFactory dbFactory = new();

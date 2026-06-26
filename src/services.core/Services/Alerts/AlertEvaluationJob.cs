@@ -133,9 +133,15 @@ public sealed class AlertEvaluationJob
                             .Where(s => assignedSet.Contains(s.MachineId))
                             .ToList();
 
+                        // Load the set of machines that already have an active event for this rule
+                        // once, so the per-machine duplicate check is an in-memory lookup instead of
+                        // a DB round-trip per machine.
+                        HashSet<long> machinesWithActiveEvents =
+                            await _alertEventRepository.GetMachineIdsWithActiveEventsForRuleAsync(rule.Id, ct);
+
                         foreach (MachineStateSummary state in scopedStates)
                         {
-                            await EvaluateRuleForMachineAsync(rule, state, ct);
+                            await EvaluateRuleForMachineAsync(rule, state, machinesWithActiveEvents, ct);
                         }
                     }
                 }
@@ -193,7 +199,7 @@ public sealed class AlertEvaluationJob
         }
     }
 
-    internal async Task EvaluateRuleForMachineAsync(AlertRule rule, MachineStateSummary state, CancellationToken ct)
+    internal async Task EvaluateRuleForMachineAsync(AlertRule rule, MachineStateSummary state, HashSet<long> machinesWithActiveEvents, CancellationToken ct)
     {
         decimal? currentValue = GetMetricValue(rule.Metric, state);
         if (currentValue is null)
@@ -229,6 +235,13 @@ public sealed class AlertEvaluationJob
             {
                 return;
             }
+        }
+
+        // An active event already exists for this rule+machine (known from the per-rule batch load);
+        // nothing to create. CreateEventIfNotExistsAsync remains the authoritative race-safe guard.
+        if (machinesWithActiveEvents.Contains(state.MachineId))
+        {
+            return;
         }
 
         AlertEvent alertEvent = new()

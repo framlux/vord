@@ -279,7 +279,7 @@ public sealed class AlertEvaluationJobTests
         // CPU now below threshold — condition not met.
         MachineStateSummary state = new() { MachineId = machine.Id, CpuUsagePercent = 50, LastSeenAt = DateTimeOffset.UtcNow };
 
-        await job.EvaluateRuleForMachineAsync(rule, state, CancellationToken.None);
+        await job.EvaluateRuleForMachineAsync(rule, state, new HashSet<long>(), CancellationToken.None);
 
         AlertConditionState? stateRow = await db.AlertConditionStates
             .Where(s => (s.AlertRuleId == rule.Id) && (s.MachineId == machine.Id))
@@ -303,7 +303,7 @@ public sealed class AlertEvaluationJobTests
 
         MachineStateSummary state = new() { MachineId = 1, LastSeenAt = DateTimeOffset.UtcNow };
 
-        await job.EvaluateRuleForMachineAsync(rule, state, CancellationToken.None);
+        await job.EvaluateRuleForMachineAsync(rule, state, new HashSet<long>(), CancellationToken.None);
 
         int events = await db.AlertEvents.CountAsync();
         int conditionRows = await db.AlertConditionStates.CountAsync();
@@ -329,7 +329,7 @@ public sealed class AlertEvaluationJobTests
 
         MachineStateSummary state = new() { MachineId = machine.Id, CpuUsagePercent = 95, LastSeenAt = DateTimeOffset.UtcNow };
 
-        await job.EvaluateRuleForMachineAsync(rule, state, CancellationToken.None);
+        await job.EvaluateRuleForMachineAsync(rule, state, new HashSet<long>(), CancellationToken.None);
 
         List<AlertEvent> events = await db.AlertEvents.Where(e => e.AlertRuleId == rule.Id).ToListAsync();
         await Assert.That(events.Count).IsEqualTo(1);
@@ -359,7 +359,8 @@ public sealed class AlertEvaluationJobTests
 
         MachineStateSummary state = new() { MachineId = machine.Id, CpuUsagePercent = 95, LastSeenAt = DateTimeOffset.UtcNow };
 
-        await job.EvaluateRuleForMachineAsync(rule, state, CancellationToken.None);
+        // The per-rule active-event set already contains this machine, so the create is short-circuited.
+        await job.EvaluateRuleForMachineAsync(rule, state, new HashSet<long> { machine.Id }, CancellationToken.None);
 
         int totalEvents = await db.AlertEvents.Where(e => e.AlertRuleId == rule.Id).CountAsync();
         await Assert.That(totalEvents).IsEqualTo(1);
@@ -380,7 +381,7 @@ public sealed class AlertEvaluationJobTests
 
         MachineStateSummary state = new() { MachineId = 1, CpuUsagePercent = 90, LastSeenAt = DateTimeOffset.UtcNow };
 
-        await job.EvaluateRuleForMachineAsync(rule, state, CancellationToken.None);
+        await job.EvaluateRuleForMachineAsync(rule, state, new HashSet<long>(), CancellationToken.None);
 
         AlertConditionState? row = await db.AlertConditionStates
             .Where(s => (s.AlertRuleId == rule.Id) && (s.MachineId == 1))
@@ -415,7 +416,7 @@ public sealed class AlertEvaluationJobTests
 
         MachineStateSummary state = new() { MachineId = 1, CpuUsagePercent = 90, LastSeenAt = DateTimeOffset.UtcNow };
 
-        await job.EvaluateRuleForMachineAsync(rule, state, CancellationToken.None);
+        await job.EvaluateRuleForMachineAsync(rule, state, new HashSet<long>(), CancellationToken.None);
 
         AlertConditionState? row = await db.AlertConditionStates
             .Where(s => (s.AlertRuleId == rule.Id) && (s.MachineId == 1))
@@ -454,7 +455,7 @@ public sealed class AlertEvaluationJobTests
 
         MachineStateSummary state = new() { MachineId = machine.Id, CpuUsagePercent = 95, LastSeenAt = DateTimeOffset.UtcNow };
 
-        await job.EvaluateRuleForMachineAsync(rule, state, CancellationToken.None);
+        await job.EvaluateRuleForMachineAsync(rule, state, new HashSet<long>(), CancellationToken.None);
 
         // Alert event created.
         List<AlertEvent> events = await db.AlertEvents.Where(e => e.AlertRuleId == rule.Id).ToListAsync();
@@ -669,7 +670,7 @@ public sealed class AlertEvaluationJobTests
         // Machine is now back online (HealthStatus = 0 → metric value 0, fails threshold > 0).
         MachineStateSummary state = new() { MachineId = machine.Id, HealthStatus = 0, LastSeenAt = DateTimeOffset.UtcNow };
 
-        await job.EvaluateRuleForMachineAsync(rule, state, CancellationToken.None);
+        await job.EvaluateRuleForMachineAsync(rule, state, new HashSet<long>(), CancellationToken.None);
 
         // Condition-state row must be cleared.
         AlertConditionState? row = await db.AlertConditionStates
@@ -712,7 +713,7 @@ public sealed class AlertEvaluationJobTests
 
         MachineStateSummary state = new() { MachineId = machine.Id, CpuUsagePercent = 95, LastSeenAt = DateTimeOffset.UtcNow };
 
-        await job.EvaluateRuleForMachineAsync(rule, state, CancellationToken.None);
+        await job.EvaluateRuleForMachineAsync(rule, state, new HashSet<long>(), CancellationToken.None);
 
         // Still exactly one event — the acknowledged one. No new row was inserted.
         List<AlertEvent> events = await db.AlertEvents.Where(e => e.AlertRuleId == rule.Id).ToListAsync();
