@@ -83,38 +83,47 @@ public partial class DatabaseRepository : IMachineRepository
         string apiKeyHash = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(plaintextApiKey)));
         machine.ApiKeyHash = apiKeyHash;
 
-        try
+        const int maxAttempts = 3;
+        for (int attempt = 1; ; attempt++)
         {
-            _logger.LogInformation("Creating Machine with Serial Number {SerialNumber}", machine.SerialNumber);
-            // Use Serializable isolation to prevent concurrent registrations
-            // from both passing the machine limit check before either inserts.
-            using DataConnectionTransaction txn = await _db.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken);
-
-            if (machineLimit.HasValue)
+            try
             {
-                int activeMachineCount = await _db.Machines
-                    .Where(m => (m.TenantId == machine.TenantId) && (m.IsDeleted == false))
-                    .CountAsync(cancellationToken);
+                _logger.LogInformation("Creating Machine with Serial Number {SerialNumber}", machine.SerialNumber);
+                // Use Serializable isolation to prevent concurrent registrations
+                // from both passing the machine limit check before either inserts.
+                using DataConnectionTransaction txn = await _db.BeginTransactionAsync(IsolationLevel.Serializable, cancellationToken);
 
-                if (activeMachineCount >= machineLimit.Value)
+                if (machineLimit.HasValue)
                 {
-                    _logger.LogWarning("Tenant {TenantId} at machine limit ({Limit}) — rejecting machine creation", machine.TenantId, machineLimit.Value);
+                    int activeMachineCount = await _db.Machines
+                        .Where(m => (m.TenantId == machine.TenantId) && (m.IsDeleted == false))
+                        .CountAsync(cancellationToken);
 
-                    return (null, null);
+                    if (activeMachineCount >= machineLimit.Value)
+                    {
+                        _logger.LogWarning("Tenant {TenantId} at machine limit ({Limit}) — rejecting machine creation", machine.TenantId, machineLimit.Value);
+
+                        return (null, null);
+                    }
                 }
+
+                machine.Id = await _db.InsertWithInt64IdentityAsync(machine, token: cancellationToken);
+                await txn.CommitAsync(cancellationToken);
+                _logger.LogInformation("Created Machine with Serial Number {SerialNumber}, ID {MachineId}", machine.SerialNumber, machine.Id);
+
+                return (machine, plaintextApiKey);
             }
-
-            machine.Id = await _db.InsertWithInt64IdentityAsync(machine, token: cancellationToken);
-            await txn.CommitAsync(cancellationToken);
-            _logger.LogInformation("Created Machine with Serial Number {SerialNumber}, ID {MachineId}", machine.SerialNumber, machine.Id);
+            catch (Exception ex) when (IsSerializationFailure(ex) && (attempt < maxAttempts))
+            {
+                // A committed conflicting transaction aborted this one; retry immediately against fresh state.
+                _logger.LogWarning("Serializable conflict creating Machine with Serial Number {SerialNumber} (attempt {Attempt}/{Max}) — retrying", machine.SerialNumber, attempt, maxAttempts);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Failed to create Machine with Serial Number {SerialNumber}", machine.SerialNumber);
+                throw;
+            }
         }
-        catch (Exception ex)
-        {
-            _logger.LogError(ex, "Failed to create Machine with Serial Number {SerialNumber}", machine.SerialNumber);
-            throw;
-        }
-
-        return (machine, plaintextApiKey);
     }
 
     /// <inheritdoc/>

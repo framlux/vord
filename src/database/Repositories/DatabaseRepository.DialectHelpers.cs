@@ -44,4 +44,15 @@ public partial class DatabaseRepository
 
         return false;
     }
+
+    /// <summary>
+    /// Returns true if the exception is a Postgres serialization failure (SQLSTATE 40001),
+    /// which indicates a serializable-isolation conflict that should be retried.
+    /// </summary>
+    /// <param name="ex">The exception thrown by the database driver.</param>
+    /// <returns><c>true</c> when the exception represents a serialization failure.</returns>
+    private static bool IsSerializationFailure(Exception ex)
+    {
+        return (ex is PostgresException pg) && (pg.SqlState == PostgresErrorCodes.SerializationFailure);
+    }
 }
