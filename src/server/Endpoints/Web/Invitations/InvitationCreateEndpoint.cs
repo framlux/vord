@@ -108,9 +108,7 @@ public sealed class InvitationCreateEndpoint : Endpoint<CreateInvitationRequest,
             return;
         }
 
-        string baseUrl = string.IsNullOrEmpty(_appOptions.BaseUrl) == false
-            ? _appOptions.BaseUrl
-            : $"{HttpContext.Request.Scheme}://{HttpContext.Request.Host}";
+        string baseUrl = _appOptions.BaseUrl;
 
         ServiceResult<InvitationCreateResult> result = await _handler.CreateAsync(req.Email, req.Role, tenantId, userId.Value, baseUrl, ct);
 

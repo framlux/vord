@@ -59,9 +59,7 @@ public sealed class InvitationResendEndpoint : EndpointWithoutRequest<ApiRespons
         }
 
         string inviterEmail = User.FindFirstValue(ClaimTypes.Email) ?? "A team member";
-        string baseUrl = string.IsNullOrEmpty(_appOptions.BaseUrl) == false
-            ? _appOptions.BaseUrl
-            : $"{HttpContext.Request.Scheme}://{HttpContext.Request.Host}";
+        string baseUrl = _appOptions.BaseUrl;
 
         ServiceResult<InvitationResendResult> result = await _handler.ResendAsync(invitationId, tenantId, userId.Value, inviterEmail, baseUrl, ct);
 
