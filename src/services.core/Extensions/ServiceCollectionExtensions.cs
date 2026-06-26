@@ -114,23 +114,7 @@ public static class ServiceCollectionExtensions
         DatabaseOptions dbOpts,
         string applicationName)
     {
-        // KeepAlive/TcpKeepAlive ensure Postgres detects dead worker connections within ~1 minute
-        // instead of waiting on Linux default tcp_keepalive_time (2 hours). This is critical for
-        // PostgresAdvisoryLockProvider — a SIGKILLed/OOM-killed worker holds its advisory lock
-        // until Postgres notices the dead TCP connection. See IAdvisoryLockProvider remarks.
-        string connectionString = (new NpgsqlConnectionStringBuilder()
-        {
-            ApplicationName = applicationName,
-            GssEncryptionMode = GssEncryptionMode.Disable,
-            Database = dbOpts.Db,
-            Username = dbOpts.User,
-            Password = dbOpts.Password,
-            Host = dbOpts.Hostname,
-            MaxPoolSize = 50,
-            MinPoolSize = 5,
-            KeepAlive = 30,
-            TcpKeepAlive = true
-        }).ConnectionString;
+        string connectionString = BuildConnectionString(dbOpts, applicationName);
 
         services.AddNpgsqlDataSource(connectionString);
         services.AddLinqToDBContext<DatabaseContext>((provider, options) => options.UsePostgreSQL(connectionString: connectionString)
@@ -430,8 +414,8 @@ public static class ServiceCollectionExtensions
             Username = dbOpts.User,
             Password = dbOpts.Password,
             Host = dbOpts.Hostname,
-            MaxPoolSize = 50,
-            MinPoolSize = 5,
+            MaxPoolSize = dbOpts.MaxPoolSize,
+            MinPoolSize = dbOpts.MinPoolSize,
             KeepAlive = 30,
             TcpKeepAlive = true
         }).ConnectionString;
