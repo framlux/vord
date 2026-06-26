@@ -305,12 +305,20 @@ public partial class DatabaseRepository : IMachineStateRepository
     }
 
     /// <inheritdoc/>
-    public async Task<List<MachineTelemetry>> GetTelemetryByMachineIdsAndTypeAsync(List<long> machineIds, short telemetryType, CancellationToken cancellationToken)
+    public async Task<List<MachineTelemetry>> GetTelemetryByMachineIdsAndTypeAsync(
+        List<long> machineIds, short telemetryType, DateTimeOffset receivedSince, int limit, CancellationToken cancellationToken)
     {
+        if (machineIds.Count == 0)
+        {
+            return [];
+        }
+
         return await _db.MachineTelemetry
             .Where(t => machineIds.Contains(t.MachineId) &&
-                        t.TelemetryType == telemetryType)
+                        (t.TelemetryType == telemetryType) &&
+                        (t.ReceivedAt >= receivedSince))
             .OrderByDescending(t => t.ReceivedAt)
+            .Take(limit)
             .ToListAsync(cancellationToken);
     }
 

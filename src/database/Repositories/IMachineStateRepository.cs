@@ -117,13 +117,16 @@ public interface IMachineStateRepository
     Task<List<MachineTelemetry>> GetTelemetryBatchAsync(long highWaterMark, DateTimeOffset streamingWindow, int batchSize, int shardIndex, int shardCount, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Returns telemetry rows for the specified machine IDs and telemetry type,
-    /// ordered by ReceivedAt descending.
+    /// Returns the newest telemetry rows of the given type for the specified machines within the
+    /// time window, ordered by ReceivedAt descending and capped at <paramref name="limit"/> rows.
+    /// Bounded so the query can never scan an unbounded slice of the partitioned telemetry table.
     /// </summary>
-    /// <param name="machineIds">The machine IDs to filter by.</param>
+    /// <param name="machineIds">The machine IDs to filter by; an empty list returns no rows.</param>
     /// <param name="telemetryType">The telemetry type identifier.</param>
+    /// <param name="receivedSince">Inclusive lower bound on ReceivedAt.</param>
+    /// <param name="limit">Maximum number of rows to return.</param>
     /// <param name="cancellationToken">A cancellation token.</param>
-    Task<List<MachineTelemetry>> GetTelemetryByMachineIdsAndTypeAsync(List<long> machineIds, short telemetryType, CancellationToken cancellationToken = default);
+    Task<List<MachineTelemetry>> GetTelemetryByMachineIdsAndTypeAsync(List<long> machineIds, short telemetryType, DateTimeOffset receivedSince, int limit, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Returns a single page of telemetry rows for the specified machine IDs and telemetry type,
