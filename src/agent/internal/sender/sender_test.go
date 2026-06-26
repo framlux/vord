@@ -14,6 +14,7 @@ import (
 	"google.golang.org/grpc/metadata"
 
 	"github.com/framlux/vord/internal/db"
+	"github.com/framlux/vord/internal/jitter"
 	pb "github.com/framlux/vord/internal/proto/agent"
 	"github.com/framlux/vord/internal/state"
 )
@@ -222,7 +223,7 @@ func TestPayloadDispatch_NoMissingTypes(t *testing.T) {
 func TestSetPayload_UnknownType(t *testing.T) {
 	store := newTestStore(t)
 	client := &mockTelemetryClient{}
-	s := New(store, client, state.New())
+	s := New(store, client, state.New(), jitter.NewDefault())
 
 	telItem := &pb.TelemetryItem{}
 	item := db.TelemetryQueueItem{
@@ -244,7 +245,7 @@ func TestSetPayload_UnknownType(t *testing.T) {
 func TestSetPayload_MalformedJSON(t *testing.T) {
 	store := newTestStore(t)
 	client := &mockTelemetryClient{}
-	s := New(store, client, state.New())
+	s := New(store, client, state.New(), jitter.NewDefault())
 
 	telItem := &pb.TelemetryItem{}
 	item := db.TelemetryQueueItem{
@@ -266,7 +267,7 @@ func TestSetPayload_MalformedJSON(t *testing.T) {
 func TestSetPayload_CpuUsage(t *testing.T) {
 	store := newTestStore(t)
 	client := &mockTelemetryClient{}
-	s := New(store, client, state.New())
+	s := New(store, client, state.New(), jitter.NewDefault())
 
 	telItem := &pb.TelemetryItem{}
 	item := db.TelemetryQueueItem{
@@ -290,7 +291,7 @@ func TestSetPayload_CpuUsage(t *testing.T) {
 func TestSetPayload_MemoryUsage(t *testing.T) {
 	store := newTestStore(t)
 	client := &mockTelemetryClient{}
-	s := New(store, client, state.New())
+	s := New(store, client, state.New(), jitter.NewDefault())
 
 	telItem := &pb.TelemetryItem{}
 	item := db.TelemetryQueueItem{
@@ -311,7 +312,7 @@ func TestSetPayload_MemoryUsage(t *testing.T) {
 func TestSetPayload_SystemInfo(t *testing.T) {
 	store := newTestStore(t)
 	client := &mockTelemetryClient{}
-	s := New(store, client, state.New())
+	s := New(store, client, state.New(), jitter.NewDefault())
 
 	telItem := &pb.TelemetryItem{}
 	item := db.TelemetryQueueItem{
@@ -337,7 +338,7 @@ func TestSetPayload_SystemInfo(t *testing.T) {
 func TestBuildEnvelope_AllTelemetryTypes(t *testing.T) {
 	store := newTestStore(t)
 	client := &mockTelemetryClient{}
-	s := New(store, client, state.New())
+	s := New(store, client, state.New(), jitter.NewDefault())
 
 	items := []db.TelemetryQueueItem{
 		{
@@ -378,7 +379,7 @@ func TestBuildEnvelope_AllTelemetryTypes(t *testing.T) {
 func TestBuildEnvelope_InvalidType(t *testing.T) {
 	store := newTestStore(t)
 	client := &mockTelemetryClient{}
-	s := New(store, client, state.New())
+	s := New(store, client, state.New(), jitter.NewDefault())
 
 	items := []db.TelemetryQueueItem{
 		{
@@ -405,7 +406,7 @@ func TestBuildEnvelope_InvalidType(t *testing.T) {
 func TestNewSender_Defaults(t *testing.T) {
 	store := newTestStore(t)
 	client := &mockTelemetryClient{}
-	s := New(store, client, state.New())
+	s := New(store, client, state.New(), jitter.NewDefault())
 
 	if s.store != store {
 		t.Error("expected store to be set")
@@ -430,7 +431,7 @@ func TestNewSender_Defaults(t *testing.T) {
 func TestSendBatch_EmptyQueue(t *testing.T) {
 	store := newTestStore(t)
 	client := &mockTelemetryClient{}
-	s := New(store, client, state.New())
+	s := New(store, client, state.New(), jitter.NewDefault())
 
 	s.sendBatch(context.Background(), "fast", FastTypes)
 
@@ -460,7 +461,7 @@ func TestSendBatch_ServerAck(t *testing.T) {
 			return &pb.TelemetryAck{Success: true}, nil
 		},
 	}
-	s := New(store, client, state.New())
+	s := New(store, client, state.New(), jitter.NewDefault())
 
 	s.sendBatch(context.Background(), "fast", FastTypes)
 
@@ -490,7 +491,7 @@ func TestSendBatch_ServerReject(t *testing.T) {
 			return &pb.TelemetryAck{Success: false, ErrorMessage: "rejected"}, nil
 		},
 	}
-	s := New(store, client, state.New())
+	s := New(store, client, state.New(), jitter.NewDefault())
 
 	s.sendBatch(context.Background(), "fast", FastTypes)
 
@@ -527,7 +528,7 @@ func TestSendBatch_StreamFallbackToUnary(t *testing.T) {
 			return &pb.TelemetryAck{Success: true}, nil
 		},
 	}
-	s := New(store, client, state.New())
+	s := New(store, client, state.New(), jitter.NewDefault())
 
 	s.sendBatch(context.Background(), "fast", FastTypes)
 
@@ -547,7 +548,7 @@ func TestSendViaUnary_FirstAttemptSuccess(t *testing.T) {
 			return &pb.TelemetryAck{Success: true}, nil
 		},
 	}
-	s := New(store, client, state.New())
+	s := New(store, client, state.New(), jitter.NewDefault())
 
 	envelope := &pb.TelemetryEnvelope{BatchId: "test-batch"}
 	ack, err := s.sendViaUnary(context.Background(), envelope)
@@ -570,7 +571,7 @@ func TestSendViaUnary_ContextCancelled(t *testing.T) {
 			return nil, fmt.Errorf("transient error")
 		},
 	}
-	s := New(store, client, state.New())
+	s := New(store, client, state.New(), jitter.NewDefault())
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // Cancel immediately.
@@ -602,7 +603,7 @@ func TestSendViaStream_Success(t *testing.T) {
 			return stream, nil
 		},
 	}
-	s := New(store, client, state.New())
+	s := New(store, client, state.New(), jitter.NewDefault())
 
 	envelope := &pb.TelemetryEnvelope{BatchId: "batch-1"}
 	ack, err := s.sendViaStream(context.Background(), "fast", envelope)
@@ -629,7 +630,7 @@ func TestSendViaStream_SendFailure(t *testing.T) {
 			return stream, nil
 		},
 	}
-	s := New(store, client, state.New())
+	s := New(store, client, state.New(), jitter.NewDefault())
 
 	envelope := &pb.TelemetryEnvelope{BatchId: "batch-1"}
 	_, err := s.sendViaStream(context.Background(), "fast", envelope)
@@ -717,7 +718,7 @@ func TestSendBatch_RespectsMaxBatchSize(t *testing.T) {
 			return &pb.TelemetryAck{Success: true}, nil
 		},
 	}
-	s := New(store, client, state.New())
+	s := New(store, client, state.New(), jitter.NewDefault())
 
 	s.sendBatch(context.Background(), "fast", FastTypes)
 
@@ -743,7 +744,7 @@ func TestSendBatch_AllRPCsFail_ItemsReturnToPending(t *testing.T) {
 			return nil, fmt.Errorf("unary failed")
 		},
 	}
-	s := New(store, client, state.New())
+	s := New(store, client, state.New(), jitter.NewDefault())
 
 	// Use a short-lived context to avoid waiting for retry backoffs.
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)

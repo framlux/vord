@@ -20,6 +20,7 @@ import (
 	"github.com/framlux/vord/internal/config"
 	"github.com/framlux/vord/internal/db"
 	"github.com/framlux/vord/internal/grpcclient"
+	"github.com/framlux/vord/internal/jitter"
 	pb "github.com/framlux/vord/internal/proto/agent"
 	"github.com/framlux/vord/internal/registration"
 	"github.com/framlux/vord/internal/sender"
@@ -104,9 +105,13 @@ func main() {
 		cancel()
 	}()
 
+	// Shared jitter source so background loops and the registration backoff do not fire on
+	// identical schedules across a fleet of agents (thundering herd).
+	jit := jitter.NewDefault()
+
 	// Registration flow with exponential backoff retry.
 	regManager := registration.NewManager(grpcClient.Registration, grpcClient.Configuration, store, runtimeState, cfg.RegistrationToken)
-	if err := registerWithRetry(ctx, regManager); err != nil {
+	if err := registerWithRetry(ctx, regManager, jit); err != nil {
 		slog.Error("registration failed after all retries", "error", err)
 		os.Exit(1)
 	}
@@ -150,7 +155,7 @@ func main() {
 	go func() {
 		defer wg.Done()
 		defer recoverPanic("heartbeat")
-		runHeartbeat(ctx, regManager, runtimeState)
+		runHeartbeat(ctx, regManager, runtimeState, jit)
 	}()
 
 	// Start config refresh loop in background.
@@ -158,7 +163,7 @@ func main() {
 	go func() {
 		defer wg.Done()
 		defer recoverPanic("config-refresh")
-		runConfigRefresh(ctx, regManager, runtimeState)
+		runConfigRefresh(ctx, regManager, runtimeState, jit)
 	}()
 
 	// Start command poll loop in background (opt-in only).
@@ -167,14 +172,14 @@ func main() {
 		go func() {
 			defer wg.Done()
 			defer recoverPanic("command-poll")
-			runCommandPoll(ctx, grpcClient.Configuration, cmdProcessor, runtimeState)
+			runCommandPoll(ctx, grpcClient.Configuration, cmdProcessor, runtimeState, jit)
 		}()
 	} else {
 		slog.Info("remote command polling disabled by configuration")
 	}
 
 	// Start telemetry sender in background.
-	telemetrySender := sender.New(store, grpcClient.Telemetry, runtimeState)
+	telemetrySender := sender.New(store, grpcClient.Telemetry, runtimeState, jit)
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -222,7 +227,7 @@ func recoverPanic(component string) {
 // registerWithRetry attempts registration with exponential backoff.
 // Backoff intervals: 5s, 10s, 30s, 60s, 120s (repeating last value).
 // Up to 10 attempts before giving up. Each attempt has a 2-minute timeout.
-func registerWithRetry(ctx context.Context, regManager *registration.Manager) error {
+func registerWithRetry(ctx context.Context, regManager *registration.Manager, jit *jitter.Jitter) error {
 	backoffs := []time.Duration{
 		5 * time.Second,
 		10 * time.Second,
@@ -264,7 +269,7 @@ func registerWithRetry(ctx context.Context, regManager *registration.Manager) er
 			select {
 			case <-ctx.Done():
 				return fmt.Errorf("registration cancelled during backoff: %w", ctx.Err())
-			case <-time.After(backoff):
+			case <-time.After(jit.Apply(backoff, 0.2)):
 				// Continue to next attempt.
 			}
 		} else {
@@ -297,16 +302,18 @@ func setupLogging(level string) {
 	slog.SetDefault(slog.New(handler))
 }
 
-func runHeartbeat(ctx context.Context, reg *registration.Manager, runtimeState *state.RuntimeState) {
+func runHeartbeat(ctx context.Context, reg *registration.Manager, runtimeState *state.RuntimeState, jit *jitter.Jitter) {
 	interval := runtimeState.PingInterval()
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
+	// The first fire is offset by a random startup phase; subsequent fires are jittered around the
+	// interval so a fleet of agents does not all ping at the same instant.
+	timer := time.NewTimer(jit.StartupPhase(interval))
+	defer timer.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-ticker.C:
+		case <-timer.C:
 			if err := reg.Ping(ctx); err != nil {
 				slog.Warn("heartbeat ping failed", "error", err)
 			} else {
@@ -316,22 +323,22 @@ func runHeartbeat(ctx context.Context, reg *registration.Manager, runtimeState *
 			if newInterval := runtimeState.PingInterval(); newInterval != interval {
 				slog.Info("heartbeat interval changed", "old", interval.String(), "new", newInterval.String())
 				interval = newInterval
-				ticker.Reset(interval)
 			}
+			timer.Reset(jit.Apply(interval, 0.15))
 		}
 	}
 }
 
-func runConfigRefresh(ctx context.Context, reg *registration.Manager, runtimeState *state.RuntimeState) {
+func runConfigRefresh(ctx context.Context, reg *registration.Manager, runtimeState *state.RuntimeState, jit *jitter.Jitter) {
 	interval := runtimeState.ConfigRefreshInterval()
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
+	timer := time.NewTimer(jit.StartupPhase(interval))
+	defer timer.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-ticker.C:
+		case <-timer.C:
 			if err := reg.FetchConfiguration(ctx); err != nil {
 				slog.Warn("config refresh failed", "error", err)
 			} else {
@@ -341,22 +348,22 @@ func runConfigRefresh(ctx context.Context, reg *registration.Manager, runtimeSta
 			if newInterval := runtimeState.ConfigRefreshInterval(); newInterval != interval {
 				slog.Info("config refresh interval changed", "old", interval.String(), "new", newInterval.String())
 				interval = newInterval
-				ticker.Reset(interval)
 			}
+			timer.Reset(jit.Apply(interval, 0.15))
 		}
 	}
 }
 
-func runCommandPoll(ctx context.Context, cfgClient pb.ConfigurationClient, processor *commands.Processor, rs *state.RuntimeState) {
+func runCommandPoll(ctx context.Context, cfgClient pb.ConfigurationClient, processor *commands.Processor, rs *state.RuntimeState, jit *jitter.Jitter) {
 	interval := rs.CommandPollInterval()
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
+	timer := time.NewTimer(jit.StartupPhase(interval))
+	defer timer.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
 			return
-		case <-ticker.C:
+		case <-timer.C:
 			resp, err := cfgClient.GetPendingCommands(ctx, &pb.GetPendingCommandsRequest{
 				MachineId: rs.MachineID(),
 			})
@@ -383,8 +390,8 @@ func runCommandPoll(ctx context.Context, cfgClient pb.ConfigurationClient, proce
 
 			if newInterval := rs.CommandPollInterval(); newInterval != interval {
 				interval = newInterval
-				ticker.Reset(interval)
 			}
+			timer.Reset(jit.Apply(interval, 0.15))
 		}
 	}
 }

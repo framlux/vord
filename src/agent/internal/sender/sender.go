@@ -20,6 +20,7 @@ import (
 
 	"github.com/framlux/vord/internal/db"
 	"github.com/framlux/vord/internal/id"
+	"github.com/framlux/vord/internal/jitter"
 	pb "github.com/framlux/vord/internal/proto/agent"
 	"github.com/framlux/vord/internal/state"
 )
@@ -62,17 +63,19 @@ type Sender struct {
 	client  pb.TelemetryClient
 	rs      *state.RuntimeState
 	logger  *slog.Logger
+	jit     *jitter.Jitter
 
 	streams map[string]*tierStream
 }
 
 // New creates a new Sender.
-func New(store *db.Store, client pb.TelemetryClient, rs *state.RuntimeState) *Sender {
+func New(store *db.Store, client pb.TelemetryClient, rs *state.RuntimeState, jit *jitter.Jitter) *Sender {
 	return &Sender{
 		store:  store,
 		client: client,
 		rs:     rs,
 		logger: slog.Default().With("component", "sender"),
+		jit:    jit,
 		streams: map[string]*tierStream{
 			"fast": {},
 			"slow": {},
@@ -124,11 +127,11 @@ func (s *Sender) Run(ctx context.Context) {
 func (s *Sender) runTier(ctx context.Context, tier string, types []db.TelemetryType, getInterval func() time.Duration, initialInterval time.Duration) {
 	interval := initialInterval
 
-	// Do an initial send immediately.
-	s.sendBatch(ctx, tier, types)
-
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
+	// The first send is offset by a random startup phase (bounded by the interval) and subsequent
+	// sends are jittered around the interval so a fleet of agents does not all send at the same
+	// instant. The shutdown branch below still flushes any queued telemetry.
+	timer := time.NewTimer(s.jit.StartupPhase(interval))
+	defer timer.Stop()
 
 	for {
 		select {
@@ -159,14 +162,14 @@ func (s *Sender) runTier(ctx context.Context, tier string, types []db.TelemetryT
 			ts.mu.Unlock()
 
 			return
-		case <-ticker.C:
+		case <-timer.C:
 			s.sendBatch(ctx, tier, types)
 
 			if newInterval := getInterval(); newInterval != interval {
 				s.logger.Info("send interval changed", "tier", tier, "old", interval.String(), "new", newInterval.String())
 				interval = newInterval
-				ticker.Reset(interval)
 			}
+			timer.Reset(s.jit.Apply(interval, 0.15))
 		}
 	}
 }
