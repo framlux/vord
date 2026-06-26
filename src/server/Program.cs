@@ -9,6 +9,7 @@ using Framlux.FleetManagement.Server.Auth;
 using Framlux.FleetManagement.Server.Endpoints.Grpc;
 using Framlux.FleetManagement.Server.Endpoints.Web;
 using Framlux.FleetManagement.Server.Endpoints.Web.Machines.History;
+using Framlux.FleetManagement.Server.Options;
 using Framlux.FleetManagement.Server.Startup;
 using Framlux.FleetManagement.Services.Core.Extensions;
 using Framlux.FleetManagement.Services.Core.Hangfire;
@@ -34,9 +35,14 @@ builder.Host.UseDefaultServiceProvider(options =>
     options.ValidateScopes = true;
     options.ValidateOnBuild = true;
 });
+// ConfigureKestrel runs before the container is built, so read the typed limits from configuration
+// directly rather than from DI.
+KestrelHttp2Options kestrelLimits = builder.Configuration.GetSection("KestrelLimits").Get<KestrelHttp2Options>() ?? new();
 builder.WebHost.ConfigureKestrel(options =>
 {
     options.Limits.MaxRequestBodySize = 1 * 1024 * 1024; // 1 MB
+    options.Limits.MaxConcurrentConnections = kestrelLimits.MaxConcurrentConnections;
+    options.Limits.Http2.MaxStreamsPerConnection = kestrelLimits.MaxStreamsPerConnection;
 });
 string environment = builder.Environment.EnvironmentName;
 builder.Configuration
@@ -51,6 +57,9 @@ builder.Host.AddCoreSerilog();
 builder.Services.AddCoreOptions(builder.Configuration);
 
 // Server-specific configuration options
+builder.Services.AddOptions<KestrelHttp2Options>()
+    .Bind(builder.Configuration.GetSection("KestrelLimits"));
+
 builder.Services.AddOptions<AuthCookieOptions>()
     .Bind(builder.Configuration.GetSection("Auth"));
 
