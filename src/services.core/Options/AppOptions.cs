@@ -2,6 +2,8 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
+using System.ComponentModel.DataAnnotations;
+
 namespace Framlux.FleetManagement.Services.Core.Options;
 
 /// <summary>
@@ -10,8 +12,12 @@ namespace Framlux.FleetManagement.Services.Core.Options;
 public sealed class AppOptions
 {
     /// <summary>
-    /// The base URL of the application, used for generating invitation links.
+    /// The absolute base URL of the application, used for generating alert and invitation
+    /// email links. Must be a valid absolute URL; validated at startup so a missing or
+    /// malformed value fails fast rather than producing broken relative links in emails.
     /// </summary>
+    [Required]
+    [Url]
     public string BaseUrl { get; set; } = string.Empty;
 
     /// <summary>

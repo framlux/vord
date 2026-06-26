@@ -99,7 +99,9 @@ public static class ServiceCollectionExtensions
             .Bind(configuration.GetSection("Resend"));
 
         services.AddOptions<AppOptions>()
-            .Bind(configuration.GetSection("App"));
+            .Bind(configuration.GetSection("App"))
+            .ValidateDataAnnotations()
+            .ValidateOnStart();
 
         return services;
     }
