@@ -313,6 +313,22 @@ public sealed class InitialMigration : Migration
             .OnTable(TableNames.MachineStateSummary)
             .OnColumn("FailedServices").Ascending();
 
+        // pg_trgm GIN indexes for fleet substring search (LOWER(col) LIKE '%term%').
+        // Postgres-only: SQLite has no pg_trgm extension, so this DDL is skipped on the SQLite test
+        // database and the migration still applies cleanly there.
+        IfDatabase("PostgreSQL").Execute.Sql("""
+            CREATE EXTENSION IF NOT EXISTS pg_trgm;
+
+            CREATE INDEX IF NOT EXISTS "IX_MachineStateSummary_Name_Trgm"
+                ON "MachineStateSummary" USING gin (LOWER("Name") gin_trgm_ops);
+
+            CREATE INDEX IF NOT EXISTS "IX_MachineStateSummary_Hostname_Trgm"
+                ON "MachineStateSummary" USING gin (LOWER("Hostname") gin_trgm_ops);
+
+            CREATE INDEX IF NOT EXISTS "IX_MachineStateSummary_HardwareModel_Trgm"
+                ON "MachineStateSummary" USING gin (LOWER("HardwareModel") gin_trgm_ops);
+            """);
+
         // Cold detail table for single-machine views. No secondary indexes.
         Create.Table(TableNames.MachineStateDetail)
             .WithColumn("MachineId").AsInt64().PrimaryKey().NotNullable().ForeignKey(TableNames.Machines, "Id")
