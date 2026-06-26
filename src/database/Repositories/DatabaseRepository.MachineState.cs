@@ -73,8 +73,11 @@ public partial class DatabaseRepository : IMachineStateRepository
     /// <inheritdoc/>
     public async Task<List<MachineStateSummary>> GetSummariesForTenantMachinesAsync(int tenantId, CancellationToken cancellationToken)
     {
+        // Filter directly on the denormalized TenantId column instead of a correlated subquery into
+        // Machines. Summaries for deleted machines are removed by the machine soft-delete path, so a
+        // tenant's summary set already excludes deleted machines without an Any()/join per row.
         return await _db.MachineStateSummaries
-            .Where(s => _db.Machines.Any(m => (m.Id == s.MachineId) && (m.TenantId == tenantId) && (m.IsDeleted == false)))
+            .Where(s => s.TenantId == tenantId)
             .ToListAsync(cancellationToken);
     }
 

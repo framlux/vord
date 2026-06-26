@@ -203,6 +203,15 @@ public partial class DatabaseRepository : IMachineRepository
             .Set(m => m.DeletedByUserId, userId)
             .UpdateAsync(cancellationToken);
 
+        // Remove the machine's state summary so it no longer appears in the tenant's summary list.
+        // A deleted machine can no longer authenticate, so the projection cannot recreate the row.
+        if (updated > 0)
+        {
+            await _db.MachineStateSummaries
+                .Where(s => s.MachineId == machineId)
+                .DeleteAsync(cancellationToken);
+        }
+
         return updated;
     }
 

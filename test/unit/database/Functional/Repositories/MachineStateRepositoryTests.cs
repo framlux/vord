@@ -251,29 +251,48 @@ public class MachineStateRepositoryTests
     }
 
     [Test]
-    public async Task GetSummariesForTenantMachinesAsync_DeletedMachines_ExcludesDeleted()
+    public async Task GetSummariesForTenantMachines_FiltersByDenormalizedTenantId()
     {
         using TestDatabaseFactory dbFactory = new();
         IMachineStateRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+
+        // Summaries are filtered purely by their denormalized TenantId; no backing Machines rows
+        // are needed for the query to return them.
+        await dbFactory.Context.InsertAsync(TestDataBuilder.BuildMachineStateSummary(machineId: 1, tenantId: 7));
+        await dbFactory.Context.InsertAsync(TestDataBuilder.BuildMachineStateSummary(machineId: 2, tenantId: 7));
+        await dbFactory.Context.InsertAsync(TestDataBuilder.BuildMachineStateSummary(machineId: 3, tenantId: 9));
+
+        List<MachineStateSummary> result = await repo.GetSummariesForTenantMachinesAsync(7);
+
+        await Assert.That(result.Count).IsEqualTo(2);
+        await Assert.That(result.All(s => s.TenantId == 7)).IsTrue();
+    }
+
+    [Test]
+    public async Task GetSummariesForTenantMachinesAsync_SoftDeletedMachine_SummaryRemovedAndExcluded()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        Database.Repositories.DatabaseRepository repo = new(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
 
         UserAccount user = TestDataBuilder.BuildUser();
         int userId = await dbFactory.Context.InsertWithInt32IdentityAsync(user);
         Tenant tenant = TestDataBuilder.BuildTenant(createdByUserId: userId);
         int tenantId = await dbFactory.Context.InsertWithInt32IdentityAsync(tenant);
 
-        // Active machine with state summary
+        // Active machine with state summary.
         Machine activeMachine = TestDataBuilder.BuildMachine(tenantId: tenantId);
         long activeMachineId = await dbFactory.Context.InsertWithInt64IdentityAsync(activeMachine);
         await dbFactory.Context.InsertAsync(TestDataBuilder.BuildMachineStateSummary(machineId: activeMachineId, tenantId: tenantId));
 
-        // Deleted machine with state summary
-        Machine deletedMachine = TestDataBuilder.BuildMachine(tenantId: tenantId);
-        deletedMachine.IsDeleted = true;
-        long deletedMachineId = await dbFactory.Context.InsertWithInt64IdentityAsync(deletedMachine);
-        await dbFactory.Context.InsertAsync(TestDataBuilder.BuildMachineStateSummary(machineId: deletedMachineId, tenantId: tenantId));
+        // Second machine with a summary that will be soft-deleted.
+        Machine doomedMachine = TestDataBuilder.BuildMachine(tenantId: tenantId);
+        long doomedMachineId = await dbFactory.Context.InsertWithInt64IdentityAsync(doomedMachine);
+        await dbFactory.Context.InsertAsync(TestDataBuilder.BuildMachineStateSummary(machineId: doomedMachineId, tenantId: tenantId));
 
-        List<MachineStateSummary> result = await repo.GetSummariesForTenantMachinesAsync(tenantId);
+        int deleted = await repo.SoftDeleteMachineAsync(doomedMachineId, tenantId, userId, CancellationToken.None);
 
+        await Assert.That(deleted).IsEqualTo(1);
+        List<MachineStateSummary> result = await repo.GetSummariesForTenantMachinesAsync(tenantId, CancellationToken.None);
         await Assert.That(result.Count).IsEqualTo(1);
         await Assert.That(result[0].MachineId).IsEqualTo(activeMachineId);
     }

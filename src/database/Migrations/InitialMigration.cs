@@ -409,6 +409,10 @@ public sealed class InitialMigration : Migration
             .OnColumn("TenantId").Ascending()
             .OnColumn("Timestamp").Descending();
 
+        Create.Index("IX_AuditLog_MachineId")
+            .OnTable(TableNames.AuditLog)
+            .OnColumn("MachineId").Ascending();
+
         Create.Table(TableNames.AlertRules)
             .WithColumn("Id").AsInt32().PrimaryKey().Identity().NotNullable()
             .WithColumn("TenantId").AsInt32().NotNullable().ForeignKey(TableNames.Tenants, "Id").Indexed()
