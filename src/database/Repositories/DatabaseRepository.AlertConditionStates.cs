@@ -5,6 +5,7 @@
 using Framlux.FleetManagement.Database.Models;
 using LinqToDB;
 using LinqToDB.Async;
+using LinqToDB.Data;
 
 namespace Framlux.FleetManagement.Database.Repositories;
 
@@ -22,29 +23,33 @@ public partial class DatabaseRepository : IAlertConditionStateRepository
     /// <inheritdoc/>
     public async Task<DateTimeOffset> UpsertObservationAsync(int alertRuleId, long machineId, DateTimeOffset now, CancellationToken cancellationToken)
     {
-        // Atomic insert-or-update. The unique index on (AlertRuleId, MachineId) guarantees at
-        // most one row exists per pair; under contention one INSERT wins and the loser falls
-        // through to the UPDATE branch. Returns the stable FirstTriggeredAt for the surviving
-        // row so duration-window calculations remain anchored to the original trigger time.
-        try
+        // Single round-trip atomic upsert on Postgres. INSERT ... ON CONFLICT DO UPDATE ... RETURNING
+        // returns the surviving row's FirstTriggeredAt so duration windows stay anchored to the
+        // original trigger time. The unique index on (AlertRuleId, MachineId) is the conflict target.
+        if (_db.DataProvider.Name.Contains("PostgreSQL"))
         {
-            AlertConditionState row = new()
-            {
-                AlertRuleId = alertRuleId,
-                MachineId = machineId,
-                FirstTriggeredAt = now,
-                LastObservedAt = now,
-            };
-            row.Id = await _db.InsertWithInt64IdentityAsync(row, token: cancellationToken);
+            List<DateTimeOffset> firstTriggered = await _db.QueryToListAsync<DateTimeOffset>(
+                """
+                INSERT INTO "AlertConditionStates" ("AlertRuleId", "MachineId", "FirstTriggeredAt", "LastObservedAt")
+                VALUES (@ruleId, @machineId, @now, @now)
+                ON CONFLICT ("AlertRuleId", "MachineId")
+                DO UPDATE SET "LastObservedAt" = EXCLUDED."LastObservedAt"
+                RETURNING "FirstTriggeredAt"
+                """,
+                new DataParameter("@ruleId", alertRuleId),
+                new DataParameter("@machineId", machineId),
+                new DataParameter("@now", now));
 
-            return now;
+            return firstTriggered.Single();
         }
-        catch (Exception ex) when (IsUniqueViolation(ex))
-        {
-            AlertConditionState existing = await _db.AlertConditionStates
-                .Where(s => (s.AlertRuleId == alertRuleId) && (s.MachineId == machineId))
-                .FirstAsync(cancellationToken);
 
+        // SQLite test path: insert-or-update without ON CONFLICT RETURNING.
+        AlertConditionState? existing = await _db.AlertConditionStates
+            .Where(s => (s.AlertRuleId == alertRuleId) && (s.MachineId == machineId))
+            .FirstOrDefaultAsync(cancellationToken);
+
+        if (existing is not null)
+        {
             await _db.AlertConditionStates
                 .Where(s => s.Id == existing.Id)
                 .Set(s => s.LastObservedAt, now)
@@ -52,6 +57,17 @@ public partial class DatabaseRepository : IAlertConditionStateRepository
 
             return existing.FirstTriggeredAt;
         }
+
+        AlertConditionState row = new()
+        {
+            AlertRuleId = alertRuleId,
+            MachineId = machineId,
+            FirstTriggeredAt = now,
+            LastObservedAt = now,
+        };
+        row.Id = await _db.InsertWithInt64IdentityAsync(row, token: cancellationToken);
+
+        return now;
     }
 
     /// <inheritdoc/>
