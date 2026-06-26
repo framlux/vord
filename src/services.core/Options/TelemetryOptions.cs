@@ -36,6 +36,14 @@ public sealed class TelemetryOptions
     public int MaxConcurrentStreamsPerMachine { get; set; } = 1;
 
     /// <summary>
+    /// Maximum number of concurrent telemetry streams a single server replica will accept when the
+    /// Redis-backed per-machine cap is unavailable. Default 5000. This is the fail-closed ceiling
+    /// that bounds a replica during a Redis outage instead of accepting unbounded streams.
+    /// </summary>
+    [Range(1, 1_000_000)]
+    public int MaxConcurrentStreamsPerProcess { get; set; } = 5000;
+
+    /// <summary>
     /// Cadence (seconds) for re-checking the tenant's subscription status inside a long-running
     /// stream. Default 30. Streams continue to ingest until the next interval check; choose
     /// a value that balances enforcement responsiveness against DB load.

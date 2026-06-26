@@ -8,6 +8,7 @@ using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Grpc.AgentTelemetry;
 using Framlux.FleetManagement.Server.Auth;
+using Framlux.FleetManagement.Server.Services.Infrastructure;
 using Framlux.FleetManagement.Services.Core.Alerts;
 using Framlux.FleetManagement.Services.Core.Billing;
 using Framlux.FleetManagement.Services.Core.Infrastructure;
@@ -73,6 +74,7 @@ public sealed class TelemetryService : Telemetry.TelemetryBase
     private readonly ResiliencePipeline _dbPipeline;
     private readonly IConnectionMultiplexer _redis;
     private readonly TelemetryOptions _options;
+    private readonly ProcessStreamSlotLimiter _processSlotLimiter;
     private readonly ILogger<TelemetryService> _logger;
 
     /// <summary>
@@ -101,6 +103,7 @@ public sealed class TelemetryService : Telemetry.TelemetryBase
         ResiliencePipeline dbPipeline,
         IConnectionMultiplexer redis,
         IOptions<TelemetryOptions> options,
+        ProcessStreamSlotLimiter processSlotLimiter,
         ILogger<TelemetryService> logger)
     {
         ArgumentNullException.ThrowIfNull(scopeFactory);
@@ -110,6 +113,7 @@ public sealed class TelemetryService : Telemetry.TelemetryBase
         ArgumentNullException.ThrowIfNull(dbPipeline);
         ArgumentNullException.ThrowIfNull(redis);
         ArgumentNullException.ThrowIfNull(options);
+        ArgumentNullException.ThrowIfNull(processSlotLimiter);
         ArgumentNullException.ThrowIfNull(logger);
         _scopeFactory = scopeFactory;
         _dedupService = dedupService;
@@ -118,6 +122,7 @@ public sealed class TelemetryService : Telemetry.TelemetryBase
         _dbPipeline = dbPipeline;
         _redis = redis;
         _options = options.Value;
+        _processSlotLimiter = processSlotLimiter;
         _logger = logger;
     }
 
@@ -151,8 +156,8 @@ public sealed class TelemetryService : Telemetry.TelemetryBase
         // Cap concurrent streams per machine. A misbehaving agent (or a malicious holder of
         // a stolen API key) cannot pin many simultaneous streams against the server.
         TimeSpan slotTtl = MaxStreamDuration + TimeSpan.FromSeconds(60);
-        bool acquired = await TryAcquireStreamSlotAsync(machineId, slotTtl);
-        if (acquired == false)
+        StreamSlotSource? slotSource = await TryAcquireStreamSlotAsync(machineId, slotTtl);
+        if (slotSource is null)
         {
             context.Status = new Status(StatusCode.ResourceExhausted,
                 $"Machine {machineId} has reached the concurrent-stream limit");
@@ -209,7 +214,7 @@ public sealed class TelemetryService : Telemetry.TelemetryBase
         finally
         {
             // Always release the slot — both graceful close and timeout/cancellation paths.
-            await ReleaseStreamSlotAsync(machineId);
+            await ReleaseStreamSlotAsync(machineId, slotSource.Value);
         }
 
         _logger.LogInformation("Telemetry stream closed for machine {MachineId} after {Count} envelopes", machineId, envelopeCount);
@@ -222,7 +227,7 @@ public sealed class TelemetryService : Telemetry.TelemetryBase
     /// so the very first slot for a machine sees count==1 and we set the TTL accordingly.
     /// Subsequent slots over the cap immediately DECR and return false so the count stays bounded.
     /// </summary>
-    internal async Task<bool> TryAcquireStreamSlotAsync(long machineId, TimeSpan slotTtl)
+    internal async Task<StreamSlotSource?> TryAcquireStreamSlotAsync(long machineId, TimeSpan slotTtl)
     {
         try
         {
@@ -238,28 +243,35 @@ public sealed class TelemetryService : Telemetry.TelemetryBase
             {
                 await db.StringDecrementAsync(key);
 
-                return false;
+                return null;
             }
 
-            return true;
+            return StreamSlotSource.Redis;
         }
         catch (RedisException ex)
         {
-            // Fail-open on Redis outage — telemetry ingest must keep working even if the cap
-            // is unenforceable at the moment. The global rate limiter and per-stream limits
-            // provide secondary protection.
-            _logger.LogWarning(ex, "Telemetry stream-slot acquire failed for machine {MachineId}; allowing", machineId);
+            // Redis is unavailable: fall back to a conservative per-process cap so a single replica
+            // cannot accept unbounded concurrent streams while the distributed cap is unenforceable.
+            _logger.LogWarning(ex, "Telemetry stream-slot acquire via Redis failed for machine {MachineId}; using per-process fallback", machineId);
 
-            return true;
+            return _processSlotLimiter.TryAcquire() ? StreamSlotSource.Process : null;
         }
     }
 
     /// <summary>
-    /// Releases a previously-acquired stream slot. If the count reaches zero, the key is
-    /// deleted to keep Redis tidy.
+    /// Releases a previously-acquired stream slot, returning it to the limiter that granted it.
+    /// A process-fallback slot is returned locally; a Redis slot is decremented and, if the count
+    /// reaches zero, the key is deleted to keep Redis tidy.
     /// </summary>
-    internal async Task ReleaseStreamSlotAsync(long machineId)
+    internal async Task ReleaseStreamSlotAsync(long machineId, StreamSlotSource source)
     {
+        if (source == StreamSlotSource.Process)
+        {
+            _processSlotLimiter.Release();
+
+            return;
+        }
+
         try
         {
             IDatabase db = _redis.GetDatabase();

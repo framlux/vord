@@ -3,6 +3,7 @@
 // See LICENSE for details.
 
 using Framlux.FleetManagement.Server.Endpoints.Grpc;
+using Framlux.FleetManagement.Server.Services.Infrastructure;
 using Framlux.FleetManagement.Services.Core.Alerts;
 using Framlux.FleetManagement.Services.Core.Billing;
 using Framlux.FleetManagement.Services.Core.Options;
@@ -19,12 +20,13 @@ namespace Framlux.FleetManagement.Test.Endpoints.Grpc;
 /// <summary>
 /// M1 + M2 regression tests for <see cref="TelemetryService"/>. Exercises the
 /// internal-static slot helpers (<c>TryAcquireStreamSlotAsync</c>, <c>ReleaseStreamSlotAsync</c>)
-/// directly so the Redis-key shape, cap math, and Redis-outage fail-open behavior are pinned
+/// directly so the Redis-key shape, cap math, and Redis-outage fail-closed behavior are pinned
 /// without needing a real Redis or a full streaming functional setup.
 /// </summary>
 public sealed class TelemetryServiceStreamCapTests
 {
-    private static TelemetryService BuildService(IConnectionMultiplexer redis, TelemetryOptions options)
+    private static TelemetryService BuildService(
+        IConnectionMultiplexer redis, TelemetryOptions options, ProcessStreamSlotLimiter? processLimiter = null)
     {
         return new TelemetryService(
             Substitute.For<IServiceScopeFactory>(),
@@ -34,6 +36,7 @@ public sealed class TelemetryServiceStreamCapTests
             ResiliencePipeline.Empty,
             redis,
             Options.Create(options),
+            processLimiter ?? new ProcessStreamSlotLimiter(5000),
             NullLogger<TelemetryService>.Instance);
     }
 
@@ -48,9 +51,9 @@ public sealed class TelemetryServiceStreamCapTests
 
         TelemetryService svc = BuildService(redis, new TelemetryOptions { MaxConcurrentStreamsPerMachine = 1 });
 
-        bool acquired = await svc.TryAcquireStreamSlotAsync(42, TimeSpan.FromMinutes(6));
+        StreamSlotSource? acquired = await svc.TryAcquireStreamSlotAsync(42, TimeSpan.FromMinutes(6));
 
-        await Assert.That(acquired).IsTrue();
+        await Assert.That(acquired).IsEqualTo(StreamSlotSource.Redis);
         await db.Received(1).KeyExpireAsync(
             Arg.Is<RedisKey>(k => k.ToString() == "telemetry:stream:42"),
             Arg.Any<TimeSpan?>(),
@@ -72,9 +75,9 @@ public sealed class TelemetryServiceStreamCapTests
 
         TelemetryService svc = BuildService(redis, new TelemetryOptions { MaxConcurrentStreamsPerMachine = 1 });
 
-        bool acquired = await svc.TryAcquireStreamSlotAsync(42, TimeSpan.FromMinutes(6));
+        StreamSlotSource? acquired = await svc.TryAcquireStreamSlotAsync(42, TimeSpan.FromMinutes(6));
 
-        await Assert.That(acquired).IsFalse();
+        await Assert.That(acquired).IsNull();
         await db.Received(1).StringDecrementAsync(
             Arg.Is<RedisKey>(k => k.ToString() == "telemetry:stream:42"),
             Arg.Any<long>(),
@@ -93,15 +96,15 @@ public sealed class TelemetryServiceStreamCapTests
 
         TelemetryService svc = BuildService(redis, new TelemetryOptions { MaxConcurrentStreamsPerMachine = 2 });
 
-        bool first = await svc.TryAcquireStreamSlotAsync(42, TimeSpan.FromMinutes(6));
-        bool second = await svc.TryAcquireStreamSlotAsync(42, TimeSpan.FromMinutes(6));
+        StreamSlotSource? first = await svc.TryAcquireStreamSlotAsync(42, TimeSpan.FromMinutes(6));
+        StreamSlotSource? second = await svc.TryAcquireStreamSlotAsync(42, TimeSpan.FromMinutes(6));
 
-        await Assert.That(first).IsTrue();
-        await Assert.That(second).IsTrue();
+        await Assert.That(first).IsEqualTo(StreamSlotSource.Redis);
+        await Assert.That(second).IsEqualTo(StreamSlotSource.Redis);
     }
 
     [Test]
-    public async Task TryAcquireStreamSlot_RedisException_FailsOpen()
+    public async Task TryAcquireStreamSlot_RedisException_FailsClosedToProcessCap()
     {
         IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
         IDatabase db = Substitute.For<IDatabase>();
@@ -109,12 +112,17 @@ public sealed class TelemetryServiceStreamCapTests
         db.StringIncrementAsync(Arg.Any<RedisKey>(), Arg.Any<long>(), Arg.Any<CommandFlags>())
             .Returns<Task<long>>(_ => throw new RedisException("connection lost"));
 
-        TelemetryService svc = BuildService(redis, new TelemetryOptions { MaxConcurrentStreamsPerMachine = 1 });
+        // A per-process ceiling of 1: the first acquire during the outage falls back to the
+        // process limiter, the second must be rejected — proving the cap fails closed, not open.
+        ProcessStreamSlotLimiter processLimiter = new(maxPerProcess: 1);
+        TelemetryService svc = BuildService(
+            redis, new TelemetryOptions { MaxConcurrentStreamsPerMachine = 1 }, processLimiter);
 
-        bool acquired = await svc.TryAcquireStreamSlotAsync(42, TimeSpan.FromMinutes(6));
+        StreamSlotSource? first = await svc.TryAcquireStreamSlotAsync(42, TimeSpan.FromMinutes(6));
+        StreamSlotSource? second = await svc.TryAcquireStreamSlotAsync(43, TimeSpan.FromMinutes(6));
 
-        // Fail-open: a Redis outage must NOT block telemetry ingest.
-        await Assert.That(acquired).IsTrue();
+        await Assert.That(first).IsEqualTo(StreamSlotSource.Process);
+        await Assert.That(second).IsNull();
     }
 
     [Test]
@@ -128,7 +136,7 @@ public sealed class TelemetryServiceStreamCapTests
 
         TelemetryService svc = BuildService(redis, new TelemetryOptions());
 
-        await svc.ReleaseStreamSlotAsync(42);
+        await svc.ReleaseStreamSlotAsync(42, StreamSlotSource.Redis);
 
         await db.Received(1).KeyDeleteAsync(
             Arg.Is<RedisKey>(k => k.ToString() == "telemetry:stream:42"),
@@ -146,7 +154,7 @@ public sealed class TelemetryServiceStreamCapTests
 
         TelemetryService svc = BuildService(redis, new TelemetryOptions());
 
-        await svc.ReleaseStreamSlotAsync(42);
+        await svc.ReleaseStreamSlotAsync(42, StreamSlotSource.Redis);
 
         await db.DidNotReceive().KeyDeleteAsync(
             Arg.Any<RedisKey>(),
@@ -167,7 +175,7 @@ public sealed class TelemetryServiceStreamCapTests
         Exception? caught = null;
         try
         {
-            await svc.ReleaseStreamSlotAsync(42);
+            await svc.ReleaseStreamSlotAsync(42, StreamSlotSource.Redis);
         }
         catch (Exception ex)
         {
@@ -188,11 +196,11 @@ public sealed class TelemetryServiceStreamCapTests
 
         TelemetryService svc = BuildService(redis, new TelemetryOptions { MaxConcurrentStreamsPerMachine = 1 });
 
-        bool a = await svc.TryAcquireStreamSlotAsync(1, TimeSpan.FromMinutes(6));
-        bool b = await svc.TryAcquireStreamSlotAsync(2, TimeSpan.FromMinutes(6));
+        StreamSlotSource? a = await svc.TryAcquireStreamSlotAsync(1, TimeSpan.FromMinutes(6));
+        StreamSlotSource? b = await svc.TryAcquireStreamSlotAsync(2, TimeSpan.FromMinutes(6));
 
-        await Assert.That(a).IsTrue();
-        await Assert.That(b).IsTrue();
+        await Assert.That(a).IsEqualTo(StreamSlotSource.Redis);
+        await Assert.That(b).IsEqualTo(StreamSlotSource.Redis);
         // Distinct keys used.
         await db.Received(1).StringIncrementAsync(
             Arg.Is<RedisKey>(k => k.ToString() == "telemetry:stream:1"),

@@ -289,6 +289,8 @@ builder.Services.AddGrpc(options =>
     options.Interceptors.Add<GrpcRateLimitingInterceptor>();
 });
 builder.Services.AddSingleton<GrpcRateLimitingInterceptor>();
+builder.Services.AddSingleton(sp => new ProcessStreamSlotLimiter(
+    sp.GetRequiredService<IOptions<TelemetryOptions>>().Value.MaxConcurrentStreamsPerProcess));
 builder.Services.AddScoped<CookiePrincipalValidator>();
 builder.Services.AddHttpContextAccessor();
 

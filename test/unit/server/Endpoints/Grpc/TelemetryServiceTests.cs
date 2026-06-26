@@ -6,6 +6,7 @@ using Framlux.FleetManagement.Database;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Grpc.AgentTelemetry;
 using Framlux.FleetManagement.Server.Endpoints.Grpc;
+using Framlux.FleetManagement.Server.Services.Infrastructure;
 using Framlux.FleetManagement.Services.Core.Alerts;
 using Framlux.FleetManagement.Services.Core.Billing;
 using Framlux.FleetManagement.Services.Core.Machines;
@@ -102,7 +103,7 @@ public sealed class TelemetryServiceTests
 
     private TelemetryService CreateService(IServiceScopeFactory scopeFactory)
     {
-        return new TelemetryService(scopeFactory, _dedupService, _subscriptionService, _eventAlertService, NoOpPipeline, BuildTestRedis(), Options.Create(new TelemetryOptions()), _logger);
+        return new TelemetryService(scopeFactory, _dedupService, _subscriptionService, _eventAlertService, NoOpPipeline, BuildTestRedis(), Options.Create(new TelemetryOptions()), new ProcessStreamSlotLimiter(5000), _logger);
     }
 
     /// <summary>
@@ -303,7 +304,7 @@ public sealed class TelemetryServiceTests
                 return ids.ToDictionary(id => id, _ => false);
             });
 
-        TelemetryService service = new(scopeFactory, dupDedupService, _subscriptionService, _eventAlertService, NoOpPipeline, BuildTestRedis(), Options.Create(new TelemetryOptions()), _logger);
+        TelemetryService service = new(scopeFactory, dupDedupService, _subscriptionService, _eventAlertService, NoOpPipeline, BuildTestRedis(), Options.Create(new TelemetryOptions()), new ProcessStreamSlotLimiter(5000), _logger);
         ServerCallContext context = CreateAuthenticatedContext(200);
 
         TelemetryEnvelope envelope = new()
@@ -410,7 +411,7 @@ public sealed class TelemetryServiceTests
                 UpdatedAt = DateTimeOffset.UtcNow,
             });
 
-        TelemetryService service = new(scopeFactory, _dedupService, inactiveSubService, _eventAlertService, NoOpPipeline, BuildTestRedis(), Options.Create(new TelemetryOptions()), _logger);
+        TelemetryService service = new(scopeFactory, _dedupService, inactiveSubService, _eventAlertService, NoOpPipeline, BuildTestRedis(), Options.Create(new TelemetryOptions()), new ProcessStreamSlotLimiter(5000), _logger);
         ServerCallContext context = CreateAuthenticatedContext(100);
 
         TelemetryEnvelope envelope = new() { AgentTimestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow), BatchId ="batch-inactive" };
@@ -671,7 +672,7 @@ public sealed class TelemetryServiceTests
                 UpdatedAt = DateTimeOffset.UtcNow,
             });
 
-        TelemetryService service = new(scopeFactory, _dedupService, inactiveSubService, _eventAlertService, NoOpPipeline, BuildTestRedis(), Options.Create(new TelemetryOptions()), _logger);
+        TelemetryService service = new(scopeFactory, _dedupService, inactiveSubService, _eventAlertService, NoOpPipeline, BuildTestRedis(), Options.Create(new TelemetryOptions()), new ProcessStreamSlotLimiter(5000), _logger);
         ServerCallContext context = CreateAuthenticatedContext(100);
 
         FakeAsyncStreamReader<TelemetryEnvelope> requestStream = new([]);
@@ -973,7 +974,7 @@ public sealed class TelemetryServiceTests
         });
 
         // Use a no-op pipeline so the BrokenCircuitException propagates out unhandled by Polly.
-        TelemetryService service = new(scopeFactory, _dedupService, _subscriptionService, _eventAlertService, NoOpPipeline, BuildTestRedis(), Options.Create(new TelemetryOptions()), _logger);
+        TelemetryService service = new(scopeFactory, _dedupService, _subscriptionService, _eventAlertService, NoOpPipeline, BuildTestRedis(), Options.Create(new TelemetryOptions()), new ProcessStreamSlotLimiter(5000), _logger);
         ServerCallContext context = CreateAuthenticatedContext(100);
 
         TelemetryEnvelope envelope = new()
@@ -1010,7 +1011,7 @@ public sealed class TelemetryServiceTests
             { typeof(Database.Repositories.IMachineStateRepository), throwingRepo }
         });
 
-        TelemetryService service = new(scopeFactory, _dedupService, _subscriptionService, _eventAlertService, NoOpPipeline, BuildTestRedis(), Options.Create(new TelemetryOptions()), _logger);
+        TelemetryService service = new(scopeFactory, _dedupService, _subscriptionService, _eventAlertService, NoOpPipeline, BuildTestRedis(), Options.Create(new TelemetryOptions()), new ProcessStreamSlotLimiter(5000), _logger);
         ServerCallContext context = CreateAuthenticatedContext(100);
 
         TelemetryEnvelope envelope = new()
@@ -1047,7 +1048,7 @@ public sealed class TelemetryServiceTests
             { typeof(Database.Repositories.IMachineStateRepository), throwingRepo }
         });
 
-        TelemetryService service = new(scopeFactory, _dedupService, _subscriptionService, _eventAlertService, NoOpPipeline, BuildTestRedis(), Options.Create(new TelemetryOptions()), _logger);
+        TelemetryService service = new(scopeFactory, _dedupService, _subscriptionService, _eventAlertService, NoOpPipeline, BuildTestRedis(), Options.Create(new TelemetryOptions()), new ProcessStreamSlotLimiter(5000), _logger);
         ServerCallContext context = CreateAuthenticatedContext(100);
 
         TelemetryEnvelope envelope = new()
@@ -1078,7 +1079,7 @@ public sealed class TelemetryServiceTests
         using TestDatabaseFactory dbFactory = new();
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
 
-        TelemetryService service = new(scopeFactory, _dedupService, _subscriptionService, _eventAlertService, NoOpPipeline, BuildTestRedis(), Options.Create(new TelemetryOptions()), _logger);
+        TelemetryService service = new(scopeFactory, _dedupService, _subscriptionService, _eventAlertService, NoOpPipeline, BuildTestRedis(), Options.Create(new TelemetryOptions()), new ProcessStreamSlotLimiter(5000), _logger);
 
         // Context with a valid MachineId claim but no TenantId claim — IsSubscriptionActiveAsync returns false.
         DefaultHttpContext httpContext = new();
