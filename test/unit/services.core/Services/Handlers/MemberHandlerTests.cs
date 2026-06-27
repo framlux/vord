@@ -75,6 +75,7 @@ public class MemberHandlerTests
         IAuditLogRepository auditLog = Substitute.For<IAuditLogRepository>();
         ITenantRepository tenantRepository = Substitute.For<ITenantRepository>();
         tenantRepository.DisableUserTenantRoleAsync(2, 1, 1, Arg.Any<CancellationToken>()).Returns(true);
+        tenantRepository.HasNonOidcTenantAdminAsync(1, Arg.Any<CancellationToken>()).Returns(true);
         ISubscriptionService subService = Substitute.For<ISubscriptionService>();
         IRoleCacheInvalidator roleCacheInvalidator = Substitute.For<IRoleCacheInvalidator>();
         IUserSecurityStampService stampService = Substitute.For<IUserSecurityStampService>();
@@ -191,6 +192,7 @@ public class MemberHandlerTests
         IAuditLogRepository auditLog = Substitute.For<IAuditLogRepository>();
         ITenantRepository tenantRepository = Substitute.For<ITenantRepository>();
         tenantRepository.DisableUserTenantRoleAsync(2, 1, 1, Arg.Any<CancellationToken>()).Returns(true);
+        tenantRepository.HasNonOidcTenantAdminAsync(1, Arg.Any<CancellationToken>()).Returns(true);
         ISubscriptionService subService = Substitute.For<ISubscriptionService>();
         subService.GetSubscriptionForTenantAsync(1, Arg.Any<CancellationToken>()).Returns(new TenantSubscription
         {
@@ -232,5 +234,117 @@ public class MemberHandlerTests
         ServiceResult<ApiResponse<object>> result = await handler.ChangeRoleAsync(2, 1, 1, "Viewer", CancellationToken.None);
 
         await Assert.That(result.IsNotFound).IsTrue();
+    }
+
+    // ========== Last non-OIDC TenantAdmin guard tests ==========
+
+    [Test]
+    public async Task RemoveAsync_LastNonOidcAdmin_Returns409AndDoesNotCommit()
+    {
+        IDatabaseTransactionProvider transactionProvider = Substitute.For<IDatabaseTransactionProvider>();
+        IDatabaseTransaction mockTransaction = Substitute.For<IDatabaseTransaction>();
+        transactionProvider.BeginTransactionAsync(Arg.Any<CancellationToken>()).Returns(mockTransaction);
+        IAuditLogRepository auditLog = Substitute.For<IAuditLogRepository>();
+        ITenantRepository tenantRepository = Substitute.For<ITenantRepository>();
+        tenantRepository.DisableUserTenantRoleAsync(2, 1, 1, Arg.Any<CancellationToken>()).Returns(true);
+        tenantRepository.HasNonOidcTenantAdminAsync(1, Arg.Any<CancellationToken>()).Returns(false);
+        ISubscriptionService subService = Substitute.For<ISubscriptionService>();
+        IRoleCacheInvalidator roleCacheInvalidator = Substitute.For<IRoleCacheInvalidator>();
+        IUserSecurityStampService stampService = Substitute.For<IUserSecurityStampService>();
+        MemberHandler handler = new(transactionProvider, auditLog, tenantRepository, subService, roleCacheInvalidator, stampService);
+
+        ServiceResult<ApiResponse<object>> result = await handler.RemoveAsync(2, 1, 1, CancellationToken.None);
+
+        await Assert.That(result.StatusCode).IsEqualTo(409);
+        await Assert.That(result.IsSuccess).IsFalse();
+        await Assert.That(result.Data!.Message).Contains("last administrator");
+
+        // The guard rejects after the disable write, so the transaction must never commit
+        // (dispose-without-commit rolls the disable back) and no post-commit side effects run.
+        await mockTransaction.DidNotReceive().CommitAsync(Arg.Any<CancellationToken>());
+        await roleCacheInvalidator.DidNotReceive().InvalidateAsync(Arg.Any<int>(), Arg.Any<CancellationToken>());
+        await roleCacheInvalidator.DidNotReceive().InvalidateUserStateAsync(Arg.Any<int>(), Arg.Any<CancellationToken>());
+        await stampService.DidNotReceive().BumpAsync(Arg.Any<int>(), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task RemoveAsync_AnotherNonOidcAdminRemains_Returns200AndCommits()
+    {
+        IDatabaseTransactionProvider transactionProvider = Substitute.For<IDatabaseTransactionProvider>();
+        IDatabaseTransaction mockTransaction = Substitute.For<IDatabaseTransaction>();
+        transactionProvider.BeginTransactionAsync(Arg.Any<CancellationToken>()).Returns(mockTransaction);
+        IAuditLogRepository auditLog = Substitute.For<IAuditLogRepository>();
+        ITenantRepository tenantRepository = Substitute.For<ITenantRepository>();
+        tenantRepository.DisableUserTenantRoleAsync(2, 1, 1, Arg.Any<CancellationToken>()).Returns(true);
+        tenantRepository.HasNonOidcTenantAdminAsync(1, Arg.Any<CancellationToken>()).Returns(true);
+        ISubscriptionService subService = Substitute.For<ISubscriptionService>();
+        IRoleCacheInvalidator roleCacheInvalidator = Substitute.For<IRoleCacheInvalidator>();
+        IUserSecurityStampService stampService = Substitute.For<IUserSecurityStampService>();
+        MemberHandler handler = new(transactionProvider, auditLog, tenantRepository, subService, roleCacheInvalidator, stampService);
+
+        ServiceResult<ApiResponse<object>> result = await handler.RemoveAsync(2, 1, 1, CancellationToken.None);
+
+        await Assert.That(result.IsSuccess).IsTrue();
+        await mockTransaction.Received(1).CommitAsync(Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task ChangeRoleAsync_DemotesLastNonOidcAdmin_Returns409AndDoesNotCommit()
+    {
+        IDatabaseTransactionProvider transactionProvider = Substitute.For<IDatabaseTransactionProvider>();
+        IDatabaseTransaction mockTransaction = Substitute.For<IDatabaseTransaction>();
+        transactionProvider.BeginTransactionAsync(Arg.Any<CancellationToken>()).Returns(mockTransaction);
+        IAuditLogRepository auditLog = Substitute.For<IAuditLogRepository>();
+        ITenantRepository tenantRepository = Substitute.For<ITenantRepository>();
+        tenantRepository.DisableUserTenantRoleAsync(2, 1, 1, Arg.Any<CancellationToken>()).Returns(true);
+        tenantRepository.HasNonOidcTenantAdminAsync(1, Arg.Any<CancellationToken>()).Returns(false);
+        ISubscriptionService subService = Substitute.For<ISubscriptionService>();
+        subService.GetSubscriptionForTenantAsync(1, Arg.Any<CancellationToken>()).Returns(new TenantSubscription
+        {
+            Id = 1, TenantId = 1, Tier = SubscriptionTier.Team, Status = SubscriptionStatus.Active,
+            CreatedAt = DateTimeOffset.UtcNow, UpdatedAt = DateTimeOffset.UtcNow,
+        });
+        IRoleCacheInvalidator roleCacheInvalidator = Substitute.For<IRoleCacheInvalidator>();
+        IUserSecurityStampService stampService = Substitute.For<IUserSecurityStampService>();
+        MemberHandler handler = new(transactionProvider, auditLog, tenantRepository, subService, roleCacheInvalidator, stampService);
+
+        ServiceResult<ApiResponse<object>> result = await handler.ChangeRoleAsync(2, 1, 1, "Viewer", CancellationToken.None);
+
+        await Assert.That(result.StatusCode).IsEqualTo(409);
+        await Assert.That(result.IsSuccess).IsFalse();
+        await Assert.That(result.Data!.Message).Contains("last administrator");
+
+        // The guard runs after both role writes, so the change must never commit and no
+        // post-commit side effects run.
+        await mockTransaction.DidNotReceive().CommitAsync(Arg.Any<CancellationToken>());
+        await roleCacheInvalidator.DidNotReceive().InvalidateAsync(Arg.Any<int>(), Arg.Any<CancellationToken>());
+        await roleCacheInvalidator.DidNotReceive().InvalidateUserStateAsync(Arg.Any<int>(), Arg.Any<CancellationToken>());
+        await stampService.DidNotReceive().BumpAsync(Arg.Any<int>(), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task ChangeRoleAsync_DemotesAdminWhenAnotherRemains_Returns200AndCommits()
+    {
+        IDatabaseTransactionProvider transactionProvider = Substitute.For<IDatabaseTransactionProvider>();
+        IDatabaseTransaction mockTransaction = Substitute.For<IDatabaseTransaction>();
+        transactionProvider.BeginTransactionAsync(Arg.Any<CancellationToken>()).Returns(mockTransaction);
+        IAuditLogRepository auditLog = Substitute.For<IAuditLogRepository>();
+        ITenantRepository tenantRepository = Substitute.For<ITenantRepository>();
+        tenantRepository.DisableUserTenantRoleAsync(2, 1, 1, Arg.Any<CancellationToken>()).Returns(true);
+        tenantRepository.HasNonOidcTenantAdminAsync(1, Arg.Any<CancellationToken>()).Returns(true);
+        ISubscriptionService subService = Substitute.For<ISubscriptionService>();
+        subService.GetSubscriptionForTenantAsync(1, Arg.Any<CancellationToken>()).Returns(new TenantSubscription
+        {
+            Id = 1, TenantId = 1, Tier = SubscriptionTier.Team, Status = SubscriptionStatus.Active,
+            CreatedAt = DateTimeOffset.UtcNow, UpdatedAt = DateTimeOffset.UtcNow,
+        });
+        IRoleCacheInvalidator roleCacheInvalidator = Substitute.For<IRoleCacheInvalidator>();
+        IUserSecurityStampService stampService = Substitute.For<IUserSecurityStampService>();
+        MemberHandler handler = new(transactionProvider, auditLog, tenantRepository, subService, roleCacheInvalidator, stampService);
+
+        ServiceResult<ApiResponse<object>> result = await handler.ChangeRoleAsync(2, 1, 1, "Viewer", CancellationToken.None);
+
+        await Assert.That(result.IsSuccess).IsTrue();
+        await mockTransaction.Received(1).CommitAsync(Arg.Any<CancellationToken>());
     }
 }

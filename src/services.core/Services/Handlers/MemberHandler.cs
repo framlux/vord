@@ -77,6 +77,17 @@ public sealed class MemberHandler : IMemberHandler
             return ServiceResult<ApiResponse<object>>.NotFound();
         }
 
+        // Evaluate the guard against the post-disable state so a tenant cannot be operationally
+        // orphaned by removing its last active, non-CustomOidc TenantAdmin. Returning before the
+        // commit disposes the transaction without committing, which rolls the disable back.
+        bool hasAdminRemaining = await _tenantRepository.HasNonOidcTenantAdminAsync(tenantId.Value, ct);
+        if (hasAdminRemaining == false)
+        {
+            return ServiceResult<ApiResponse<object>>.Error(
+                409,
+                ApiResponse<object>.Error("Cannot remove the last administrator from the organization"));
+        }
+
         await _auditLog.InsertAuditLogAsync(AuditHelper.Create(
             tenantId, currentUserId, null,
             AuditAction.MemberRemoved, AuditResourceType.User,
@@ -135,6 +146,18 @@ public sealed class MemberHandler : IMemberHandler
             AssignedAt = DateTimeOffset.UtcNow,
             IsActive = true,
         }, ct);
+
+        // Evaluate the guard after both role writes so the new role is reflected. This allows
+        // demoting a TenantAdmin when another active, non-CustomOidc TenantAdmin remains, and
+        // rejects the change when it would leave the tenant with no such administrator. Returning
+        // before the commit disposes the transaction without committing, rolling both writes back.
+        bool hasAdminRemaining = await _tenantRepository.HasNonOidcTenantAdminAsync(tenantId.Value, ct);
+        if (hasAdminRemaining == false)
+        {
+            return ServiceResult<ApiResponse<object>>.Error(
+                409,
+                ApiResponse<object>.Error("Cannot change the role of the last administrator in the organization"));
+        }
 
         await _auditLog.InsertAuditLogAsync(AuditHelper.Create(
             tenantId, currentUserId, null,
