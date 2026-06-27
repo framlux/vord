@@ -224,12 +224,13 @@ public sealed class RegistrationTokenSingleUseLiveTests
     }
 
     [Test]
-    public async Task ConcurrentDoubleUse_OnlyOneConsumeSucceeds_AffectedRowsSemantics()
+    public async Task DoubleConsume_AffectedRowsSemantics_OnlyOneSucceeds()
     {
-        // Intent: drive the race deterministically against the conditional-update affected-rows
-        // contract that makes the consume safe. Against a token already stamped ConsumedAt the
-        // consume must affect zero rows (loser); against a fresh token it must affect exactly one
-        // (winner). Two concurrent registrations therefore cannot both win.
+        // Intent: exercise the conditional-update affected-rows contract that makes the consume
+        // safe, driving the two consumes sequentially rather than truly concurrently. Against a
+        // token already stamped ConsumedAt the consume must affect zero rows (loser); against a
+        // fresh token it must affect exactly one (winner). This affected-rows guarantee is what
+        // ensures two registrations against the same token can never both win.
         await using DatabaseContext db = CreateContext();
 
         (int _, long consumedTokenId) = await SeedTenantAndTokenAsync(db, consumedAt: ReferenceNow);

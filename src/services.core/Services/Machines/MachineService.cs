@@ -79,7 +79,12 @@ public sealed class MachineService : IMachineService
         IRegistrationTokenRepository tokenRepo = scope.ServiceProvider.GetRequiredService<IRegistrationTokenRepository>();
         IMachineRepository machineRepo = scope.ServiceProvider.GetRequiredService<IMachineRepository>();
 
-        // Validate the registration token exists
+        // Validate the registration token exists.
+        // Note: a consumed (single-use) token is deliberately NOT rejected here. After a token is
+        // consumed during RegisterSystemAsync, the agent must still poll status to retrieve its
+        // API key, so a consumed token remains valid for status polling so the registered machine
+        // can fetch its key. ExpiresAt and IsRevoked still apply below, and cross-machine reuse is
+        // blocked by the serial-number / system-id match against the token's tenant.
         RegistrationToken? token = await tokenRepo.GetTokenByHashAsync(tokenHash, cancellationToken);
 
         if (token is null)
@@ -292,7 +297,7 @@ public sealed class MachineService : IMachineService
             // tenant is at its machine limit. Reload the token to disambiguate the message.
             RegistrationToken? reloadedToken = await tokenRepo.GetTokenByHashAsync(tokenHash, cancellationToken);
 
-            if ((reloadedToken?.ConsumedAt is not null) && (reloadedToken.ConsumedByMachineId != machine.Id))
+            if (reloadedToken?.ConsumedAt is not null)
             {
                 _logger.LogWarning("Registration token {TokenId} was consumed by a concurrent registration", token.Id);
 

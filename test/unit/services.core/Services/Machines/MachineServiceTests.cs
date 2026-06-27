@@ -29,12 +29,18 @@ public class MachineServiceTests
 {
     private const string TestTokenValue = "test-reg-token";
 
+    /// <summary>
+    /// Fixed deterministic instant used by tests that do not otherwise inject their own clock,
+    /// so seeded token timestamps never depend on wall-clock time.
+    /// </summary>
+    private static readonly DateTimeOffset FixedNow = new(2026, 06, 26, 12, 0, 0, TimeSpan.Zero);
+
     private static string ComputeTokenHash(string token)
     {
         return Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(token)));
     }
 
-    private static async Task<RegistrationToken> SeedValidRegistrationToken(TestDatabaseFactory dbFactory, int tenantId = 1)
+    private static async Task<RegistrationToken> SeedValidRegistrationToken(TestDatabaseFactory dbFactory, DateTimeOffset now, int tenantId = 1)
     {
         RegistrationToken token = new()
         {
@@ -42,8 +48,8 @@ public class MachineServiceTests
             TokenHash = ComputeTokenHash(TestTokenValue),
             Name = "Test Token",
             CreatedByUserId = 1,
-            CreatedAt = DateTimeOffset.UtcNow,
-            ExpiresAt = DateTimeOffset.UtcNow.AddDays(7),
+            CreatedAt = now,
+            ExpiresAt = now.AddDays(7),
             IsRevoked = false,
         };
         token.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(token);
@@ -74,8 +80,8 @@ public class MachineServiceTests
                     TenantId = 1,
                     Tier = SubscriptionTier.Free,
                     Status = SubscriptionStatus.Active,
-                    CreatedAt = DateTimeOffset.UtcNow,
-                    UpdatedAt = DateTimeOffset.UtcNow,
+                    CreatedAt = FixedNow,
+                    UpdatedAt = FixedNow,
                 });
             defaultSubService.GetEffectiveLimitsForTenantAsync(Arg.Any<int>(), Arg.Any<CancellationToken>())
                 .Returns(new EffectiveLimits { MachineLimit = 3, RetentionDays = 1 });
@@ -112,7 +118,7 @@ public class MachineServiceTests
     public async Task GetRegistrationStatus_NoMachineFound_ReturnsUnknown()
     {
         using TestDatabaseFactory dbFactory = new();
-        await SeedValidRegistrationToken(dbFactory);
+        await SeedValidRegistrationToken(dbFactory, FixedNow);
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
         ILogger<MachineService> logger = new NullLogger<MachineService>();
         IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
@@ -132,7 +138,7 @@ public class MachineServiceTests
     public async Task GetRegistrationStatus_ActiveMachine_WithCachedKey_ReturnsActiveWithKey()
     {
         using TestDatabaseFactory dbFactory = new();
-        RegistrationToken token = await SeedValidRegistrationToken(dbFactory);
+        RegistrationToken token = await SeedValidRegistrationToken(dbFactory, FixedNow);
 
         Machine machine = TestDataBuilder.BuildMachine(tenantId: token.TenantId, registrationTokenId: token.Id);
         machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
@@ -168,7 +174,7 @@ public class MachineServiceTests
     public async Task GetRegistrationStatus_ActiveMachine_NoCachedKey_ReturnsActiveWithNullKey()
     {
         using TestDatabaseFactory dbFactory = new();
-        RegistrationToken token = await SeedValidRegistrationToken(dbFactory);
+        RegistrationToken token = await SeedValidRegistrationToken(dbFactory, FixedNow);
 
         Machine machine = TestDataBuilder.BuildMachine(tenantId: token.TenantId, registrationTokenId: token.Id);
         machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
@@ -210,7 +216,7 @@ public class MachineServiceTests
     public async Task GetRegistrationStatus_NeedsApiKey_CacheExpired_ReissuesNewKey()
     {
         using TestDatabaseFactory dbFactory = new();
-        RegistrationToken token = await SeedValidRegistrationToken(dbFactory);
+        RegistrationToken token = await SeedValidRegistrationToken(dbFactory, FixedNow);
 
         Machine machine = TestDataBuilder.BuildMachine(tenantId: token.TenantId, registrationTokenId: token.Id);
         machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
@@ -250,7 +256,7 @@ public class MachineServiceTests
     public async Task GetRegistrationStatus_NeedsApiKeyFalse_NoCachedKey_ReturnsNullKey()
     {
         using TestDatabaseFactory dbFactory = new();
-        RegistrationToken token = await SeedValidRegistrationToken(dbFactory);
+        RegistrationToken token = await SeedValidRegistrationToken(dbFactory, FixedNow);
 
         Machine machine = TestDataBuilder.BuildMachine(tenantId: token.TenantId, registrationTokenId: token.Id);
         machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
@@ -277,11 +283,11 @@ public class MachineServiceTests
     public async Task GetRegistrationStatus_RevokedToken_NeedsApiKey_ReturnsUnknown()
     {
         using TestDatabaseFactory dbFactory = new();
-        RegistrationToken token = await SeedValidRegistrationToken(dbFactory);
+        RegistrationToken token = await SeedValidRegistrationToken(dbFactory, FixedNow);
         await dbFactory.Context.RegistrationTokens
             .Where(t => t.Id == token.Id)
             .Set(t => t.IsRevoked, true)
-            .Set(t => t.RevokedAt, DateTimeOffset.UtcNow)
+            .Set(t => t.RevokedAt, FixedNow)
             .UpdateAsync();
 
         Machine machine = TestDataBuilder.BuildMachine(tenantId: token.TenantId, registrationTokenId: token.Id);
@@ -305,11 +311,11 @@ public class MachineServiceTests
     public async Task GetRegistrationStatus_ExpiredToken_NeedsApiKey_ReturnsUnknown()
     {
         using TestDatabaseFactory dbFactory = new();
-        RegistrationToken token = await SeedValidRegistrationToken(dbFactory);
+        RegistrationToken token = await SeedValidRegistrationToken(dbFactory, FixedNow);
         // Force the token to be expired in the past while leaving it un-revoked.
         await dbFactory.Context.RegistrationTokens
             .Where(t => t.Id == token.Id)
-            .Set(t => t.ExpiresAt, DateTimeOffset.UtcNow.AddDays(-1))
+            .Set(t => t.ExpiresAt, FixedNow.AddDays(-1))
             .UpdateAsync();
 
         Machine machine = TestDataBuilder.BuildMachine(tenantId: token.TenantId, registrationTokenId: token.Id);
@@ -395,11 +401,11 @@ public class MachineServiceTests
     public async Task RegisterSystem_RevokedToken_ReturnsError()
     {
         using TestDatabaseFactory dbFactory = new();
-        RegistrationToken token = await SeedValidRegistrationToken(dbFactory);
+        RegistrationToken token = await SeedValidRegistrationToken(dbFactory, FixedNow);
         await dbFactory.Context.RegistrationTokens
             .Where(t => t.Id == token.Id)
             .Set(t => t.IsRevoked, true)
-            .Set(t => t.RevokedAt, DateTimeOffset.UtcNow)
+            .Set(t => t.RevokedAt, FixedNow)
             .UpdateAsync();
 
         IMachineRepository machineRepo = Substitute.For<IMachineRepository>();
@@ -432,11 +438,11 @@ public class MachineServiceTests
     public async Task RegisterSystem_ExpiredToken_ReturnsError()
     {
         using TestDatabaseFactory dbFactory = new();
-        RegistrationToken token = await SeedValidRegistrationToken(dbFactory);
+        RegistrationToken token = await SeedValidRegistrationToken(dbFactory, FixedNow);
         // Force the token to be expired while leaving it un-revoked.
         await dbFactory.Context.RegistrationTokens
             .Where(t => t.Id == token.Id)
-            .Set(t => t.ExpiresAt, DateTimeOffset.UtcNow.AddDays(-1))
+            .Set(t => t.ExpiresAt, FixedNow.AddDays(-1))
             .UpdateAsync();
 
         IMachineRepository machineRepo = Substitute.For<IMachineRepository>();
@@ -469,7 +475,7 @@ public class MachineServiceTests
     public async Task RegisterSystem_ValidToken_ReturnsMachineIdAndApiKey()
     {
         using TestDatabaseFactory dbFactory = new();
-        RegistrationToken token = await SeedValidRegistrationToken(dbFactory, tenantId: 5);
+        RegistrationToken token = await SeedValidRegistrationToken(dbFactory, FixedNow, tenantId: 5);
 
         IMachineRepository machineRepo = Substitute.For<IMachineRepository>();
         machineRepo.DoesMachineExistAsync(
@@ -510,7 +516,7 @@ public class MachineServiceTests
     public async Task RegisterSystem_ValidToken_CreatesMachineWithTokenTenantId()
     {
         using TestDatabaseFactory dbFactory = new();
-        RegistrationToken token = await SeedValidRegistrationToken(dbFactory, tenantId: 5);
+        RegistrationToken token = await SeedValidRegistrationToken(dbFactory, FixedNow, tenantId: 5);
 
         IMachineRepository machineRepo = Substitute.For<IMachineRepository>();
         machineRepo.DoesMachineExistAsync(
@@ -553,7 +559,7 @@ public class MachineServiceTests
     public async Task RegisterSystem_ExistingMachine_ReturnsError()
     {
         using TestDatabaseFactory dbFactory = new();
-        await SeedValidRegistrationToken(dbFactory);
+        await SeedValidRegistrationToken(dbFactory, FixedNow);
 
         IMachineRepository machineRepo = Substitute.For<IMachineRepository>();
         machineRepo.DoesMachineExistAsync(
@@ -786,7 +792,7 @@ public class MachineServiceTests
     public async Task RegisterSystem_PaidTier_CallsReportMachineUsageWithCorrectCount()
     {
         using TestDatabaseFactory dbFactory = new();
-        RegistrationToken token = await SeedValidRegistrationToken(dbFactory, tenantId: 1);
+        RegistrationToken token = await SeedValidRegistrationToken(dbFactory, FixedNow, tenantId: 1);
 
         // Seed a tenant with an external ID so the billing client can be called
         Tenant tenant = TestDataBuilder.BuildTenant(externalId: "ext-tenant-billing");
@@ -860,7 +866,7 @@ public class MachineServiceTests
     public async Task RegisterSystem_FreeTier_DoesNotCallReportMachineUsage()
     {
         using TestDatabaseFactory dbFactory = new();
-        RegistrationToken token = await SeedValidRegistrationToken(dbFactory, tenantId: 1);
+        RegistrationToken token = await SeedValidRegistrationToken(dbFactory, FixedNow, tenantId: 1);
 
         // Seed a Free subscription so billing is skipped
         TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 1, tier: SubscriptionTier.Free);
@@ -920,7 +926,7 @@ public class MachineServiceTests
     public async Task RegisterSystem_BillingFailure_DoesNotPreventRegistration()
     {
         using TestDatabaseFactory dbFactory = new();
-        RegistrationToken token = await SeedValidRegistrationToken(dbFactory, tenantId: 1);
+        RegistrationToken token = await SeedValidRegistrationToken(dbFactory, FixedNow, tenantId: 1);
 
         Tenant tenant = TestDataBuilder.BuildTenant(externalId: "ext-tenant-fail");
         tenant.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(tenant);
@@ -998,7 +1004,7 @@ public class MachineServiceTests
         // If KeyDeleteAsync failed, the stale cache entry allowed duplicate delivery.
         // Fix: KeyDeleteAsync runs first so the cache is cleared even if MarkKeyDelivered fails.
         using TestDatabaseFactory dbFactory = new();
-        RegistrationToken token = await SeedValidRegistrationToken(dbFactory);
+        RegistrationToken token = await SeedValidRegistrationToken(dbFactory, FixedNow);
 
         Machine machine = TestDataBuilder.BuildMachine(tenantId: token.TenantId, registrationTokenId: token.Id);
         machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
@@ -1042,7 +1048,7 @@ public class MachineServiceTests
     public async Task GetRegistrationStatus_CachedKey_ConcurrentDelivery_LogsWarningAndReissuesKey()
     {
         using TestDatabaseFactory dbFactory = new();
-        RegistrationToken token = await SeedValidRegistrationToken(dbFactory);
+        RegistrationToken token = await SeedValidRegistrationToken(dbFactory, FixedNow);
 
         Machine machine = TestDataBuilder.BuildMachine(tenantId: token.TenantId, registrationTokenId: token.Id);
         machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
@@ -1082,7 +1088,7 @@ public class MachineServiceTests
     public async Task GetRegistrationStatus_NoCacheAndReissueReturnsNull_ReturnsNullApiKey()
     {
         using TestDatabaseFactory dbFactory = new();
-        RegistrationToken token = await SeedValidRegistrationToken(dbFactory);
+        RegistrationToken token = await SeedValidRegistrationToken(dbFactory, FixedNow);
 
         Machine machine = TestDataBuilder.BuildMachine(tenantId: token.TenantId, registrationTokenId: token.Id);
         machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
@@ -1117,7 +1123,7 @@ public class MachineServiceTests
     public async Task RegisterSystem_DesktopMachineType_ConvertsCorrectly()
     {
         using TestDatabaseFactory dbFactory = new();
-        RegistrationToken token = await SeedValidRegistrationToken(dbFactory);
+        RegistrationToken token = await SeedValidRegistrationToken(dbFactory, FixedNow);
 
         IMachineRepository machineRepo = Substitute.For<IMachineRepository>();
         machineRepo.DoesMachineExistAsync(
@@ -1160,7 +1166,7 @@ public class MachineServiceTests
     public async Task RegisterSystem_LaptopMachineType_ConvertsCorrectly()
     {
         using TestDatabaseFactory dbFactory = new();
-        RegistrationToken token = await SeedValidRegistrationToken(dbFactory);
+        RegistrationToken token = await SeedValidRegistrationToken(dbFactory, FixedNow);
 
         IMachineRepository machineRepo = Substitute.For<IMachineRepository>();
         machineRepo.DoesMachineExistAsync(
@@ -1203,7 +1209,7 @@ public class MachineServiceTests
     public async Task RegisterSystem_VirtualMachineType_ConvertsCorrectly()
     {
         using TestDatabaseFactory dbFactory = new();
-        RegistrationToken token = await SeedValidRegistrationToken(dbFactory);
+        RegistrationToken token = await SeedValidRegistrationToken(dbFactory, FixedNow);
 
         IMachineRepository machineRepo = Substitute.For<IMachineRepository>();
         machineRepo.DoesMachineExistAsync(
@@ -1246,7 +1252,7 @@ public class MachineServiceTests
     public async Task RegisterSystem_WindowsOs_ConvertsCorrectly()
     {
         using TestDatabaseFactory dbFactory = new();
-        RegistrationToken token = await SeedValidRegistrationToken(dbFactory);
+        RegistrationToken token = await SeedValidRegistrationToken(dbFactory, FixedNow);
 
         IMachineRepository machineRepo = Substitute.For<IMachineRepository>();
         machineRepo.DoesMachineExistAsync(
@@ -1289,7 +1295,7 @@ public class MachineServiceTests
     public async Task RegisterSystem_DebianOs_ConvertsCorrectly()
     {
         using TestDatabaseFactory dbFactory = new();
-        RegistrationToken token = await SeedValidRegistrationToken(dbFactory);
+        RegistrationToken token = await SeedValidRegistrationToken(dbFactory, FixedNow);
 
         IMachineRepository machineRepo = Substitute.For<IMachineRepository>();
         machineRepo.DoesMachineExistAsync(
@@ -1332,7 +1338,7 @@ public class MachineServiceTests
     public async Task RegisterSystem_MachineLimit_ReturnsError()
     {
         using TestDatabaseFactory dbFactory = new();
-        RegistrationToken token = await SeedValidRegistrationToken(dbFactory);
+        RegistrationToken token = await SeedValidRegistrationToken(dbFactory, FixedNow);
 
         IMachineRepository machineRepo = Substitute.For<IMachineRepository>();
         machineRepo.DoesMachineExistAsync(
@@ -1370,7 +1376,7 @@ public class MachineServiceTests
     public async Task RegisterSystem_PaidTier_TenantNotFound_SkipsBillingGracefully()
     {
         using TestDatabaseFactory dbFactory = new();
-        RegistrationToken token = await SeedValidRegistrationToken(dbFactory, tenantId: 1);
+        RegistrationToken token = await SeedValidRegistrationToken(dbFactory, FixedNow, tenantId: 1);
 
         TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 1, tier: SubscriptionTier.Pro);
         sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
@@ -1430,7 +1436,7 @@ public class MachineServiceTests
     public async Task RegisterSystem_NullSubscription_SkipsBilling()
     {
         using TestDatabaseFactory dbFactory = new();
-        RegistrationToken token = await SeedValidRegistrationToken(dbFactory, tenantId: 1);
+        RegistrationToken token = await SeedValidRegistrationToken(dbFactory, FixedNow, tenantId: 1);
 
         IMachineRepository machineRepo = Substitute.For<IMachineRepository>();
         machineRepo.DoesMachineExistAsync(
@@ -1480,7 +1486,7 @@ public class MachineServiceTests
 
     private static async Task SeedTierFeatureLimitsAsync(TestDatabaseFactory dbFactory)
     {
-        DateTimeOffset now = DateTimeOffset.UtcNow;
+        DateTimeOffset now = FixedNow;
 
         await dbFactory.Context.InsertAsync(new TierFeatureLimit
         {
@@ -1528,7 +1534,7 @@ public class MachineServiceTests
     public async Task RegisterSystem_PendingApiKey_StoredEncrypted_NotPlaintext()
     {
         using TestDatabaseFactory dbFactory = new();
-        RegistrationToken token = await SeedValidRegistrationToken(dbFactory);
+        RegistrationToken token = await SeedValidRegistrationToken(dbFactory, FixedNow);
 
         const string plaintext = "raw-secret-not-in-redis";
         IMachineRepository machineRepo = Substitute.For<IMachineRepository>();
@@ -1576,7 +1582,7 @@ public class MachineServiceTests
     public async Task RegisterSystem_PendingApiKey_TtlIsOneHour()
     {
         using TestDatabaseFactory dbFactory = new();
-        RegistrationToken token = await SeedValidRegistrationToken(dbFactory);
+        RegistrationToken token = await SeedValidRegistrationToken(dbFactory, FixedNow);
 
         IMachineRepository machineRepo = Substitute.For<IMachineRepository>();
         machineRepo.DoesMachineExistAsync(
@@ -1621,7 +1627,7 @@ public class MachineServiceTests
     public async Task RegisterSystem_PendingApiKey_RoundTripsThroughProtector()
     {
         using TestDatabaseFactory dbFactory = new();
-        RegistrationToken token = await SeedValidRegistrationToken(dbFactory);
+        RegistrationToken token = await SeedValidRegistrationToken(dbFactory, FixedNow);
 
         const string plaintext = "round-trip-secret";
         IMachineRepository machineRepo = Substitute.For<IMachineRepository>();
