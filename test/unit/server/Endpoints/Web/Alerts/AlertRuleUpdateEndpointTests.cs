@@ -3,6 +3,7 @@
 // See LICENSE for details.
 
 using Framlux.FleetManagement.Database.Enums;
+using Framlux.FleetManagement.Services.Core.Alerts;
 using Framlux.FleetManagement.Services.Core.Models.Alerts;
 
 namespace Framlux.FleetManagement.Test.Endpoints.Web.Alerts;
@@ -121,7 +122,7 @@ public sealed class AlertRuleUpdateEndpointTests
     {
         string? result = AlertRuleUpdateEndpoint.ValidateMetricConstraints(AlertMetric.SshConnection, 1, -1);
 
-        await Assert.That(result).IsNotNull();
+        await Assert.That(result).IsEqualTo("Duration must be zero for event-based metrics");
     }
 
     // --- Volatile Metric Duration Validation ---
@@ -131,7 +132,7 @@ public sealed class AlertRuleUpdateEndpointTests
     {
         string? result = AlertRuleUpdateEndpoint.ValidateMetricConstraints(AlertMetric.CpuUsage, 80, 4);
 
-        await Assert.That(result).IsEqualTo("Duration must be at least 5 minutes for CpuUsage alerts");
+        await Assert.That(result).IsEqualTo("Duration for CpuUsage alerts must be between 5 and 1440 minutes");
     }
 
     [Test]
@@ -155,7 +156,7 @@ public sealed class AlertRuleUpdateEndpointTests
     {
         string? result = AlertRuleUpdateEndpoint.ValidateMetricConstraints(AlertMetric.CpuUsage, 80, 0);
 
-        await Assert.That(result).IsEqualTo("Duration must be at least 5 minutes for CpuUsage alerts");
+        await Assert.That(result).IsEqualTo("Duration for CpuUsage alerts must be between 5 and 1440 minutes");
     }
 
     [Test]
@@ -163,7 +164,7 @@ public sealed class AlertRuleUpdateEndpointTests
     {
         string? result = AlertRuleUpdateEndpoint.ValidateMetricConstraints(AlertMetric.MemoryUsage, 80, 3);
 
-        await Assert.That(result).IsEqualTo("Duration must be at least 5 minutes for MemoryUsage alerts");
+        await Assert.That(result).IsEqualTo("Duration for MemoryUsage alerts must be between 5 and 1440 minutes");
     }
 
     [Test]
@@ -171,7 +172,7 @@ public sealed class AlertRuleUpdateEndpointTests
     {
         string? result = AlertRuleUpdateEndpoint.ValidateMetricConstraints(AlertMetric.DiskUsage, 80, 2);
 
-        await Assert.That(result).IsEqualTo("Duration must be at least 5 minutes for DiskUsage alerts");
+        await Assert.That(result).IsEqualTo("Duration for DiskUsage alerts must be between 5 and 1440 minutes");
     }
 
     // --- State Metric Duration Validation ---
@@ -181,7 +182,7 @@ public sealed class AlertRuleUpdateEndpointTests
     {
         string? result = AlertRuleUpdateEndpoint.ValidateMetricConstraints(AlertMetric.MachineOffline, 1, 0);
 
-        await Assert.That(result).IsEqualTo("Duration must be at least 1 minutes for MachineOffline alerts");
+        await Assert.That(result).IsEqualTo("Duration for MachineOffline alerts must be between 1 and 1440 minutes");
     }
 
     [Test]
@@ -197,7 +198,7 @@ public sealed class AlertRuleUpdateEndpointTests
     {
         string? result = AlertRuleUpdateEndpoint.ValidateMetricConstraints(AlertMetric.FailedServices, 0, 0);
 
-        await Assert.That(result).IsEqualTo("Duration must be at least 1 minutes for FailedServices alerts");
+        await Assert.That(result).IsEqualTo("Duration for FailedServices alerts must be between 1 and 1440 minutes");
     }
 
     [Test]
@@ -223,7 +224,7 @@ public sealed class AlertRuleUpdateEndpointTests
     {
         string? result = AlertRuleUpdateEndpoint.ValidateMetricConstraints(AlertMetric.CpuUsage, 80, -1);
 
-        await Assert.That(result).IsEqualTo("Duration must be at least 5 minutes for CpuUsage alerts");
+        await Assert.That(result).IsEqualTo("Duration for CpuUsage alerts must be between 5 and 1440 minutes");
     }
 
     [Test]
@@ -231,6 +232,32 @@ public sealed class AlertRuleUpdateEndpointTests
     {
         string? result = AlertRuleUpdateEndpoint.ValidateMetricConstraints(AlertMetric.MachineOffline, 1, -5);
 
-        await Assert.That(result).IsEqualTo("Duration must be at least 1 minutes for MachineOffline alerts");
+        await Assert.That(result).IsEqualTo("Duration for MachineOffline alerts must be between 1 and 1440 minutes");
+    }
+
+    // --- Boundary: Maximum Duration ---
+
+    [Test]
+    public async Task ValidateMetricConstraints_CpuUsage_DurationAtMaximum_ReturnsNull()
+    {
+        string? result = AlertRuleUpdateEndpoint.ValidateMetricConstraints(AlertMetric.CpuUsage, 80, AlertConstants.MaxRuleDurationMinutes);
+
+        await Assert.That(result).IsNull();
+    }
+
+    [Test]
+    public async Task ValidateMetricConstraints_CpuUsage_DurationOneAboveMaximum_ReturnsError()
+    {
+        string? result = AlertRuleUpdateEndpoint.ValidateMetricConstraints(AlertMetric.CpuUsage, 80, AlertConstants.MaxRuleDurationMinutes + 1);
+
+        await Assert.That(result).IsEqualTo("Duration for CpuUsage alerts must be between 5 and 1440 minutes");
+    }
+
+    [Test]
+    public async Task ValidateMetricConstraints_CpuUsage_DurationFarAboveMaximum_ReturnsError()
+    {
+        string? result = AlertRuleUpdateEndpoint.ValidateMetricConstraints(AlertMetric.CpuUsage, 80, 5000);
+
+        await Assert.That(result).IsEqualTo("Duration for CpuUsage alerts must be between 5 and 1440 minutes");
     }
 }

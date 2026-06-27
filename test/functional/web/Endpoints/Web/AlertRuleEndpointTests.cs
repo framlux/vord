@@ -1002,7 +1002,32 @@ public sealed class AlertRuleEndpointTests
 
         await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.BadRequest);
         string body = await response.Content.ReadAsStringAsync();
-        await Assert.That(body).Contains("Duration must be at least 5 minutes for CpuUsage alerts");
+        await Assert.That(body).Contains("Duration for CpuUsage alerts must be between 5 and 1440 minutes");
+    }
+
+    [Test]
+    public async Task CreateRule_DurationAboveMaximum_Returns400()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId, long machineId) = await SeedAlertEnvironment(db, SubscriptionTier.Pro);
+
+        HttpClient client = BuildClient(factory, tenantId, userId);
+
+        HttpResponseMessage response = await client.PostAsJsonAsync("/api/v1/alert-rules", new
+        {
+            Name = "Excessive duration",
+            Metric = "CpuUsage",
+            Operator = "GreaterThan",
+            Threshold = 80,
+            DurationMinutes = 1441,
+            Severity = "Warning",
+            MachineIds = new long[] { machineId },
+        });
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.BadRequest);
+        string body = await response.Content.ReadAsStringAsync();
+        await Assert.That(body).Contains("Duration for CpuUsage alerts must be between 5 and 1440 minutes");
     }
 
     // --- WS-4: EqualTo Operator Tests ---
@@ -1590,7 +1615,7 @@ public sealed class AlertRuleEndpointTests
 
         await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.BadRequest);
         string body = await response.Content.ReadAsStringAsync();
-        await Assert.That(body).Contains("Duration must be at least 5 minutes");
+        await Assert.That(body).Contains("Duration for CpuUsage alerts must be between 5 and 1440 minutes");
     }
 
     [Test]
@@ -1683,7 +1708,7 @@ public sealed class AlertRuleEndpointTests
 
         await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.BadRequest);
         string body = await response.Content.ReadAsStringAsync();
-        await Assert.That(body).Contains("Duration must be at least 1 minutes");
+        await Assert.That(body).Contains("Duration for MachineOffline alerts must be between 1 and 1440 minutes");
     }
 
     [Test]

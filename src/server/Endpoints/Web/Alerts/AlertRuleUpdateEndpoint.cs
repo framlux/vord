@@ -231,9 +231,9 @@ public sealed class AlertRuleUpdateEndpoint : Endpoint<UpdateAlertRuleRequest, A
         }
 
         int minimumDuration = AlertConstants.GetMinimumDurationMinutes(metric);
-        if (durationMinutes < minimumDuration)
+        if ((durationMinutes < minimumDuration) || (durationMinutes > AlertConstants.MaxRuleDurationMinutes))
         {
-            return $"Duration must be at least {minimumDuration} minutes for {metric} alerts";
+            return $"Duration for {metric} alerts must be between {minimumDuration} and {AlertConstants.MaxRuleDurationMinutes} minutes";
         }
 
         return null;

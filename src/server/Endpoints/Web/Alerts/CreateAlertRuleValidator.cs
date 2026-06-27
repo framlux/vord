@@ -78,7 +78,8 @@ public sealed class CreateAlertRuleValidator : Validator<CreateAlertRuleRequest>
             return duration == 0;
         }
 
-        return duration >= AlertConstants.GetMinimumDurationMinutes(parsed);
+        return (duration >= AlertConstants.GetMinimumDurationMinutes(parsed)) &&
+               (duration <= AlertConstants.MaxRuleDurationMinutes);
     }
 
     private static string GetDurationValidationMessage(string? metric)
@@ -95,7 +96,7 @@ public sealed class CreateAlertRuleValidator : Validator<CreateAlertRuleRequest>
 
         int minimum = AlertConstants.GetMinimumDurationMinutes(parsed);
 
-        return $"Duration must be at least {minimum} minutes for {parsed} alerts";
+        return $"Duration for {parsed} alerts must be between {minimum} and {AlertConstants.MaxRuleDurationMinutes} minutes";
     }
 
     private static bool IsPercentageMetric(string? metric)

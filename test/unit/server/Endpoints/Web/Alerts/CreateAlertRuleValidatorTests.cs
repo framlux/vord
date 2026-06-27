@@ -3,6 +3,7 @@
 // See LICENSE for details.
 
 using FluentValidation.Results;
+using Framlux.FleetManagement.Services.Core.Alerts;
 using Framlux.FleetManagement.Services.Core.Models.Alerts;
 
 namespace Framlux.FleetManagement.Test.Endpoints.Web.Alerts;
@@ -118,7 +119,7 @@ public sealed class CreateAlertRuleValidatorTests
         ValidationResult result = await _validator.ValidateAsync(request);
 
         await Assert.That(result.IsValid).IsFalse();
-        await Assert.That(result.Errors.Any(e => e.ErrorMessage == "Duration must be at least 5 minutes for CpuUsage alerts")).IsTrue();
+        await Assert.That(result.Errors.Any(e => e.ErrorMessage == "Duration for CpuUsage alerts must be between 5 and 1440 minutes")).IsTrue();
     }
 
     [Test]
@@ -131,6 +132,44 @@ public sealed class CreateAlertRuleValidatorTests
         ValidationResult result = await _validator.ValidateAsync(request);
 
         await Assert.That(result.IsValid).IsTrue();
+    }
+
+    [Test]
+    public async Task NonEventMetric_DurationAtMaximum_PassesValidation()
+    {
+        CreateAlertRuleRequest request = ValidRequest();
+        request.Metric = "CpuUsage";
+        request.DurationMinutes = AlertConstants.MaxRuleDurationMinutes;
+
+        ValidationResult result = await _validator.ValidateAsync(request);
+
+        await Assert.That(result.IsValid).IsTrue();
+    }
+
+    [Test]
+    public async Task NonEventMetric_DurationOneAboveMaximum_FailsValidation()
+    {
+        CreateAlertRuleRequest request = ValidRequest();
+        request.Metric = "CpuUsage";
+        request.DurationMinutes = AlertConstants.MaxRuleDurationMinutes + 1;
+
+        ValidationResult result = await _validator.ValidateAsync(request);
+
+        await Assert.That(result.IsValid).IsFalse();
+        await Assert.That(result.Errors.Any(e => e.ErrorMessage == "Duration for CpuUsage alerts must be between 5 and 1440 minutes")).IsTrue();
+    }
+
+    [Test]
+    public async Task NonEventMetric_DurationFarAboveMaximum_FailsValidation()
+    {
+        CreateAlertRuleRequest request = ValidRequest();
+        request.Metric = "CpuUsage";
+        request.DurationMinutes = 5000;
+
+        ValidationResult result = await _validator.ValidateAsync(request);
+
+        await Assert.That(result.IsValid).IsFalse();
+        await Assert.That(result.Errors.Any(e => e.ErrorMessage == "Duration for CpuUsage alerts must be between 5 and 1440 minutes")).IsTrue();
     }
 
     [Test]
