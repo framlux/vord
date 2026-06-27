@@ -6,6 +6,7 @@ using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Test.Infrastructure;
 using LinqToDB;
+using LinqToDB.Async;
 using Microsoft.Extensions.Logging.Abstractions;
 using System.Security.Cryptography;
 using System.Text;
@@ -90,15 +91,37 @@ public class MachineCacheTests
 
     // ========== CreateMachineWithKeyAsync tests ==========
 
+    // A fixed reference instant so the single-use token ExpiresAt > now check is deterministic.
+    private static readonly DateTimeOffset ReferenceNow = new(2026, 06, 26, 12, 0, 0, TimeSpan.Zero);
+
+    /// <summary>
+    /// Seeds an available (non-consumed, non-revoked, future-dated) single-use registration token
+    /// and returns its id so the atomic consume inside CreateMachineWithKeyAsync can succeed.
+    /// </summary>
+    private static async Task<long> SeedAvailableTokenAsync(TestDatabaseFactory dbFactory)
+    {
+        return await dbFactory.Context.InsertWithInt64IdentityAsync(new RegistrationToken
+        {
+            TenantId = 1,
+            TokenHash = Guid.NewGuid().ToString("N"),
+            Name = "Token",
+            CreatedByUserId = 1,
+            CreatedAt = ReferenceNow,
+            ExpiresAt = ReferenceNow.AddDays(7),
+            IsRevoked = false,
+        });
+    }
+
     [Test]
-    public async Task CreateMachineWithKeyAsync_WithinLimit_ReturnsMachineAndKey()
+    public async Task CreateMachineWithKeyAsync_WithinLimit_ReturnsMachineAndKey_AndConsumesToken()
     {
         using TestDatabaseFactory dbFactory = new();
         IMachineRepository cache = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
 
-        Machine machine = TestDataBuilder.BuildMachine();
+        long tokenId = await SeedAvailableTokenAsync(dbFactory);
+        Machine machine = TestDataBuilder.BuildMachine(registrationTokenId: tokenId);
 
-        (Machine? created, string? plaintextApiKey) = await cache.CreateMachineWithKeyAsync(machine, machineLimit: 5);
+        (Machine? created, string? plaintextApiKey) = await cache.CreateMachineWithKeyAsync(machine, tokenId, ReferenceNow, machineLimit: 5);
 
         await Assert.That(created).IsNotNull();
         await Assert.That(plaintextApiKey).IsNotNull();
@@ -106,10 +129,14 @@ public class MachineCacheTests
         await Assert.That(created.TenantId).IsEqualTo(1);
         await Assert.That(created.IsDeleted).IsFalse();
         await Assert.That(created.Name).IsEqualTo(machine.Name);
+
+        RegistrationToken token = await dbFactory.Context.RegistrationTokens.FirstAsync(t => t.Id == tokenId);
+        await Assert.That(token.ConsumedAt).IsEqualTo(ReferenceNow);
+        await Assert.That(token.ConsumedByMachineId).IsEqualTo(created.Id);
     }
 
     [Test]
-    public async Task CreateMachineWithKeyAsync_AtLimit_ReturnsNulls()
+    public async Task CreateMachineWithKeyAsync_AtLimit_ReturnsNulls_AndDoesNotConsumeToken()
     {
         using TestDatabaseFactory dbFactory = new();
         IMachineRepository cache = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
@@ -118,12 +145,17 @@ public class MachineCacheTests
         Machine existingMachine = TestDataBuilder.BuildMachine();
         await dbFactory.Context.InsertWithInt64IdentityAsync(existingMachine);
 
-        Machine newMachine = TestDataBuilder.BuildMachine();
+        long tokenId = await SeedAvailableTokenAsync(dbFactory);
+        Machine newMachine = TestDataBuilder.BuildMachine(registrationTokenId: tokenId);
 
-        (Machine? created, string? plaintextApiKey) = await cache.CreateMachineWithKeyAsync(newMachine, machineLimit: 1);
+        (Machine? created, string? plaintextApiKey) = await cache.CreateMachineWithKeyAsync(newMachine, tokenId, ReferenceNow, machineLimit: 1);
 
         await Assert.That(created).IsNull();
         await Assert.That(plaintextApiKey).IsNull();
+
+        // The limit guard returns before the consume, so the token must remain available.
+        RegistrationToken token = await dbFactory.Context.RegistrationTokens.FirstAsync(t => t.Id == tokenId);
+        await Assert.That(token.ConsumedAt).IsNull();
     }
 
     [Test]
@@ -132,13 +164,38 @@ public class MachineCacheTests
         using TestDatabaseFactory dbFactory = new();
         IMachineRepository cache = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
 
-        Machine machine = TestDataBuilder.BuildMachine();
+        long tokenId = await SeedAvailableTokenAsync(dbFactory);
+        Machine machine = TestDataBuilder.BuildMachine(registrationTokenId: tokenId);
 
-        (Machine? created, string? plaintextApiKey) = await cache.CreateMachineWithKeyAsync(machine, machineLimit: null);
+        (Machine? created, string? plaintextApiKey) = await cache.CreateMachineWithKeyAsync(machine, tokenId, ReferenceNow, machineLimit: null);
 
         await Assert.That(created).IsNotNull();
         await Assert.That(plaintextApiKey).IsNotNull();
         await Assert.That(created!.Id).IsNotEqualTo(0L);
+    }
+
+    [Test]
+    public async Task CreateMachineWithKeyAsync_ConsumedToken_ReturnsNulls_AndCreatesNoMachine()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        IMachineRepository cache = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+
+        long tokenId = await SeedAvailableTokenAsync(dbFactory);
+
+        // First registration consumes the single-use token.
+        Machine first = TestDataBuilder.BuildMachine(registrationTokenId: tokenId);
+        (Machine? firstCreated, string? _) = await cache.CreateMachineWithKeyAsync(first, tokenId, ReferenceNow, machineLimit: null);
+        await Assert.That(firstCreated).IsNotNull();
+
+        // Second registration with the same token must be rejected and roll back.
+        Machine second = TestDataBuilder.BuildMachine(registrationTokenId: tokenId);
+        (Machine? secondCreated, string? secondKey) = await cache.CreateMachineWithKeyAsync(second, tokenId, ReferenceNow, machineLimit: null);
+
+        await Assert.That(secondCreated).IsNull();
+        await Assert.That(secondKey).IsNull();
+
+        int machineCount = await dbFactory.Context.Machines.CountAsync(m => m.RegistrationTokenId == tokenId);
+        await Assert.That(machineCount).IsEqualTo(1);
     }
 
     // ========== GetMachineAsync tests ==========

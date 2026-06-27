@@ -12,9 +12,11 @@ using Framlux.FleetManagement.Services.Core.Billing;
 using Framlux.FleetManagement.Services.Core.Machines;
 using Framlux.FleetManagement.Test.Infrastructure;
 using LinqToDB;
+using LinqToDB.Async;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Time.Testing;
 using NSubstitute;
 using StackExchange.Redis;
 
@@ -96,7 +98,7 @@ public class MachineServiceTests
         IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
         redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(Substitute.For<IDatabase>());
         IBillingApiClient billingApiClient = Substitute.For<IBillingApiClient>();
-        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider());
+        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider(), TimeProvider.System);
 
         (RegistrationStatus status, long? id, string? apiKey) result =
             await service.GetRegistrationStatusAsync("UNKNOWN-SN", "UNKNOWN-SID", "", true, CancellationToken.None);
@@ -116,7 +118,7 @@ public class MachineServiceTests
         IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
         redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(Substitute.For<IDatabase>());
         IBillingApiClient billingApiClient = Substitute.For<IBillingApiClient>();
-        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider());
+        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider(), TimeProvider.System);
 
         (RegistrationStatus status, long? id, string? apiKey) result =
             await service.GetRegistrationStatusAsync("NON-EXISTENT-SN", "NON-EXISTENT-SID", TestTokenValue, true, CancellationToken.None);
@@ -152,7 +154,7 @@ public class MachineServiceTests
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
         ILogger<MachineService> logger = new NullLogger<MachineService>();
         IBillingApiClient billingApiClient = Substitute.For<IBillingApiClient>();
-        MachineService service = new(scopeFactory, logger, redis, billingApiClient, provider);
+        MachineService service = new(scopeFactory, logger, redis, billingApiClient, provider, TimeProvider.System);
 
         (RegistrationStatus status, long? id, string? apiKey) result =
             await service.GetRegistrationStatusAsync(machine.SerialNumber, machine.SystemId, TestTokenValue, true, CancellationToken.None);
@@ -176,7 +178,7 @@ public class MachineServiceTests
         IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
         redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(Substitute.For<IDatabase>());
         IBillingApiClient billingApiClient = Substitute.For<IBillingApiClient>();
-        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider());
+        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider(), TimeProvider.System);
 
         (RegistrationStatus status, long? id, string? apiKey) result =
             await service.GetRegistrationStatusAsync(machine.SerialNumber, machine.SystemId, TestTokenValue, false, CancellationToken.None);
@@ -195,7 +197,7 @@ public class MachineServiceTests
         IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
         redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(Substitute.For<IDatabase>());
         IBillingApiClient billingApiClient = Substitute.For<IBillingApiClient>();
-        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider());
+        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider(), TimeProvider.System);
 
         (RegistrationStatus status, long? id, string? apiKey) result =
             await service.GetRegistrationStatusAsync("SN-001", "SID-001", "invalid-token", true, CancellationToken.None);
@@ -228,7 +230,7 @@ public class MachineServiceTests
         TestServiceScopeFactory scopeFactory = CreateScopeFactory(dbFactory, machineRepo);
         ILogger<MachineService> logger = new NullLogger<MachineService>();
         IBillingApiClient billingApiClient = Substitute.For<IBillingApiClient>();
-        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider());
+        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider(), TimeProvider.System);
 
         (RegistrationStatus status, long? id, string? apiKey) result =
             await service.GetRegistrationStatusAsync(machine.SerialNumber, machine.SystemId, TestTokenValue, true, CancellationToken.None);
@@ -261,7 +263,7 @@ public class MachineServiceTests
         redisDb.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
             .Returns(Task.FromResult<RedisValue>(RedisValue.Null));
         IBillingApiClient billingApiClient = Substitute.For<IBillingApiClient>();
-        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider());
+        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider(), TimeProvider.System);
 
         (RegistrationStatus status, long? id, string? apiKey) result =
             await service.GetRegistrationStatusAsync(machine.SerialNumber, machine.SystemId, TestTokenValue, false, CancellationToken.None);
@@ -290,7 +292,7 @@ public class MachineServiceTests
         IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
         redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(Substitute.For<IDatabase>());
         IBillingApiClient billingApiClient = Substitute.For<IBillingApiClient>();
-        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider());
+        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider(), TimeProvider.System);
 
         (RegistrationStatus status, long? id, string? apiKey) result =
             await service.GetRegistrationStatusAsync(machine.SerialNumber, machine.SystemId, TestTokenValue, true, CancellationToken.None);
@@ -318,7 +320,7 @@ public class MachineServiceTests
         IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
         redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(Substitute.For<IDatabase>());
         IBillingApiClient billingApiClient = Substitute.For<IBillingApiClient>();
-        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider());
+        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider(), TimeProvider.System);
 
         (RegistrationStatus status, long? id, string? apiKey) result =
             await service.GetRegistrationStatusAsync(machine.SerialNumber, machine.SystemId, TestTokenValue, true, CancellationToken.None);
@@ -339,7 +341,7 @@ public class MachineServiceTests
         IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
         redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(Substitute.For<IDatabase>());
         IBillingApiClient billingApiClient = Substitute.For<IBillingApiClient>();
-        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider());
+        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider(), TimeProvider.System);
 
         RegisterSystemRequest request = new()
         {
@@ -369,7 +371,7 @@ public class MachineServiceTests
         IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
         redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(Substitute.For<IDatabase>());
         IBillingApiClient billingApiClient = Substitute.For<IBillingApiClient>();
-        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider());
+        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider(), TimeProvider.System);
 
         RegisterSystemRequest request = new()
         {
@@ -406,7 +408,7 @@ public class MachineServiceTests
         IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
         redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(Substitute.For<IDatabase>());
         IBillingApiClient billingApiClient = Substitute.For<IBillingApiClient>();
-        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider());
+        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider(), TimeProvider.System);
 
         RegisterSystemRequest request = new()
         {
@@ -443,7 +445,7 @@ public class MachineServiceTests
         IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
         redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(Substitute.For<IDatabase>());
         IBillingApiClient billingApiClient = Substitute.For<IBillingApiClient>();
-        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider());
+        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider(), TimeProvider.System);
 
         RegisterSystemRequest request = new()
         {
@@ -476,7 +478,7 @@ public class MachineServiceTests
 
         Machine createdMachine = TestDataBuilder.BuildMachine(tenantId: 5, registrationTokenId: token.Id);
         createdMachine.Id = 100;
-        machineRepo.CreateMachineWithKeyAsync(Arg.Any<Machine>(), Arg.Any<int?>(), Arg.Any<CancellationToken>())
+        machineRepo.CreateMachineWithKeyAsync(Arg.Any<Machine>(), Arg.Any<long>(), Arg.Any<DateTimeOffset>(), Arg.Any<int?>(), Arg.Any<CancellationToken>())
             .Returns((createdMachine, "plaintext-api-key-123"));
 
         TestServiceScopeFactory scopeFactory = CreateScopeFactory(dbFactory, machineRepo);
@@ -484,7 +486,7 @@ public class MachineServiceTests
         IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
         redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(Substitute.For<IDatabase>());
         IBillingApiClient billingApiClient = Substitute.For<IBillingApiClient>();
-        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider());
+        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider(), TimeProvider.System);
 
         RegisterSystemRequest request = new()
         {
@@ -517,7 +519,7 @@ public class MachineServiceTests
 
         Machine createdMachine = TestDataBuilder.BuildMachine(tenantId: 5, registrationTokenId: token.Id);
         createdMachine.Id = 100;
-        machineRepo.CreateMachineWithKeyAsync(Arg.Any<Machine>(), Arg.Any<int?>(), Arg.Any<CancellationToken>())
+        machineRepo.CreateMachineWithKeyAsync(Arg.Any<Machine>(), Arg.Any<long>(), Arg.Any<DateTimeOffset>(), Arg.Any<int?>(), Arg.Any<CancellationToken>())
             .Returns((createdMachine, "plaintext-api-key-123"));
 
         TestServiceScopeFactory scopeFactory = CreateScopeFactory(dbFactory, machineRepo);
@@ -525,7 +527,7 @@ public class MachineServiceTests
         IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
         redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(Substitute.For<IDatabase>());
         IBillingApiClient billingApiClient = Substitute.For<IBillingApiClient>();
-        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider());
+        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider(), TimeProvider.System);
 
         RegisterSystemRequest request = new()
         {
@@ -541,6 +543,8 @@ public class MachineServiceTests
 
         await machineRepo.Received(1).CreateMachineWithKeyAsync(
             Arg.Is<Machine>(m => m.TenantId == 5),
+            Arg.Any<long>(),
+            Arg.Any<DateTimeOffset>(),
             Arg.Any<int?>(),
             Arg.Any<CancellationToken>());
     }
@@ -561,7 +565,7 @@ public class MachineServiceTests
         IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
         redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(Substitute.For<IDatabase>());
         IBillingApiClient billingApiClient = Substitute.For<IBillingApiClient>();
-        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider());
+        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider(), TimeProvider.System);
 
         RegisterSystemRequest request = new()
         {
@@ -579,6 +583,201 @@ public class MachineServiceTests
         await Assert.That(result.machineId).IsNull();
         await Assert.That(result.apiKey).IsNull();
         await Assert.That(result.errorMessage).IsEqualTo("Machine already exists");
+    }
+
+    // ========== RegisterSystem — single-use token validation (FakeTimeProvider) ==========
+
+    private const string SingleUseTokenValue = "single-use-token";
+
+    /// <summary>
+    /// Seeds a registration token whose availability is expressed relative to the supplied
+    /// <paramref name="now"/> so single-use validation can be exercised deterministically without
+    /// wall-clock time. <paramref name="consumed"/> stamps ConsumedAt; <paramref name="revoked"/>
+    /// marks it revoked; <paramref name="expired"/> dates ExpiresAt before <paramref name="now"/>.
+    /// </summary>
+    private static async Task SeedSingleUseToken(
+        TestDatabaseFactory dbFactory,
+        DateTimeOffset now,
+        bool consumed = false,
+        bool revoked = false,
+        bool expired = false)
+    {
+        RegistrationToken token = new()
+        {
+            TenantId = 1,
+            TokenHash = ComputeTokenHash(SingleUseTokenValue),
+            Name = "Single Use Token",
+            CreatedByUserId = 1,
+            CreatedAt = now.AddDays(-1),
+            ExpiresAt = expired ? now.AddMinutes(-1) : now.AddDays(7),
+            IsRevoked = revoked,
+            RevokedAt = revoked ? now : null,
+            ConsumedAt = consumed ? now : null,
+            ConsumedByMachineId = consumed ? 5L : null,
+        };
+        await dbFactory.Context.InsertWithInt64IdentityAsync(token);
+    }
+
+    private static MachineService BuildServiceWithTime(TestServiceScopeFactory scopeFactory, TimeProvider timeProvider)
+    {
+        IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
+        redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(Substitute.For<IDatabase>());
+        IBillingApiClient billingApiClient = Substitute.For<IBillingApiClient>();
+
+        return new MachineService(scopeFactory, new NullLogger<MachineService>(), redis, billingApiClient, new EphemeralDataProtectionProvider(), timeProvider);
+    }
+
+    private static RegisterSystemRequest BuildSingleUseRequest()
+    {
+        return new RegisterSystemRequest
+        {
+            SerialNumber = "SN-SINGLE",
+            SystemId = "SID-SINGLE",
+            Hostname = "single-host",
+            MachineType = Grpc.AgentRegistration.MachineType.BareMetalServerType,
+            Os = OperatingSystemType.UbuntuOs,
+            RegistrationToken = SingleUseTokenValue,
+        };
+    }
+
+    [Test]
+    public async Task RegisterSystem_ConsumedToken_ReturnsAlreadyUsedError()
+    {
+        DateTimeOffset now = new(2026, 06, 26, 12, 0, 0, TimeSpan.Zero);
+        FakeTimeProvider timeProvider = new(now);
+
+        using TestDatabaseFactory dbFactory = new();
+        await SeedSingleUseToken(dbFactory, now, consumed: true);
+
+        IMachineRepository machineRepo = Substitute.For<IMachineRepository>();
+        TestServiceScopeFactory scopeFactory = CreateScopeFactory(dbFactory, machineRepo);
+        MachineService service = BuildServiceWithTime(scopeFactory, timeProvider);
+
+        (long? machineId, string? apiKey, string errorMessage) result =
+            await service.RegisterSystemAsync(BuildSingleUseRequest(), CancellationToken.None);
+
+        await Assert.That(result.machineId).IsNull();
+        await Assert.That(result.apiKey).IsNull();
+        await Assert.That(result.errorMessage).IsEqualTo("Registration token has already been used");
+
+        await machineRepo.DidNotReceive().CreateMachineWithKeyAsync(
+            Arg.Any<Machine>(), Arg.Any<long>(), Arg.Any<DateTimeOffset>(), Arg.Any<int?>(), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task RegisterSystem_ExpiredToken_ViaTimeProvider_ReturnsExpiredError()
+    {
+        DateTimeOffset now = new(2026, 06, 26, 12, 0, 0, TimeSpan.Zero);
+        FakeTimeProvider timeProvider = new(now);
+
+        using TestDatabaseFactory dbFactory = new();
+        await SeedSingleUseToken(dbFactory, now, expired: true);
+
+        IMachineRepository machineRepo = Substitute.For<IMachineRepository>();
+        TestServiceScopeFactory scopeFactory = CreateScopeFactory(dbFactory, machineRepo);
+        MachineService service = BuildServiceWithTime(scopeFactory, timeProvider);
+
+        (long? machineId, string? apiKey, string errorMessage) result =
+            await service.RegisterSystemAsync(BuildSingleUseRequest(), CancellationToken.None);
+
+        await Assert.That(result.machineId).IsNull();
+        await Assert.That(result.errorMessage).IsEqualTo("Registration token has expired");
+    }
+
+    [Test]
+    public async Task RegisterSystem_RevokedToken_ViaTimeProvider_ReturnsRevokedError()
+    {
+        DateTimeOffset now = new(2026, 06, 26, 12, 0, 0, TimeSpan.Zero);
+        FakeTimeProvider timeProvider = new(now);
+
+        using TestDatabaseFactory dbFactory = new();
+        await SeedSingleUseToken(dbFactory, now, revoked: true);
+
+        IMachineRepository machineRepo = Substitute.For<IMachineRepository>();
+        TestServiceScopeFactory scopeFactory = CreateScopeFactory(dbFactory, machineRepo);
+        MachineService service = BuildServiceWithTime(scopeFactory, timeProvider);
+
+        (long? machineId, string? apiKey, string errorMessage) result =
+            await service.RegisterSystemAsync(BuildSingleUseRequest(), CancellationToken.None);
+
+        await Assert.That(result.machineId).IsNull();
+        await Assert.That(result.errorMessage).IsEqualTo("Registration token has been revoked");
+    }
+
+    [Test]
+    public async Task RegisterSystem_FreshSingleUseToken_PassesValidation_AndConsumesTokenId()
+    {
+        DateTimeOffset now = new(2026, 06, 26, 12, 0, 0, TimeSpan.Zero);
+        FakeTimeProvider timeProvider = new(now);
+
+        using TestDatabaseFactory dbFactory = new();
+        await SeedSingleUseToken(dbFactory, now);
+
+        RegistrationToken seeded = await dbFactory.Context.RegistrationTokens
+            .FirstAsync(t => t.TokenHash == ComputeTokenHash(SingleUseTokenValue));
+
+        IMachineRepository machineRepo = Substitute.For<IMachineRepository>();
+        machineRepo.DoesMachineExistAsync(
+            Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns(false);
+        Machine createdMachine = TestDataBuilder.BuildMachine(tenantId: 1, registrationTokenId: seeded.Id);
+        createdMachine.Id = 777;
+        machineRepo.CreateMachineWithKeyAsync(Arg.Any<Machine>(), Arg.Any<long>(), Arg.Any<DateTimeOffset>(), Arg.Any<int?>(), Arg.Any<CancellationToken>())
+            .Returns((createdMachine, "fresh-key"));
+
+        TestServiceScopeFactory scopeFactory = CreateScopeFactory(dbFactory, machineRepo);
+        MachineService service = BuildServiceWithTime(scopeFactory, timeProvider);
+
+        (long? machineId, string? apiKey, string errorMessage) result =
+            await service.RegisterSystemAsync(BuildSingleUseRequest(), CancellationToken.None);
+
+        await Assert.That(result.machineId).IsEqualTo(777L);
+        await Assert.That(result.errorMessage).IsEqualTo(string.Empty);
+
+        await machineRepo.Received(1).CreateMachineWithKeyAsync(
+            Arg.Any<Machine>(),
+            seeded.Id,
+            now,
+            Arg.Any<int?>(),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task RegisterSystem_RaceLostToConsume_ReturnsAlreadyUsedError()
+    {
+        DateTimeOffset now = new(2026, 06, 26, 12, 0, 0, TimeSpan.Zero);
+        FakeTimeProvider timeProvider = new(now);
+
+        using TestDatabaseFactory dbFactory = new();
+        await SeedSingleUseToken(dbFactory, now);
+
+        RegistrationToken seeded = await dbFactory.Context.RegistrationTokens
+            .FirstAsync(t => t.TokenHash == ComputeTokenHash(SingleUseTokenValue));
+
+        IMachineRepository machineRepo = Substitute.For<IMachineRepository>();
+        machineRepo.DoesMachineExistAsync(
+            Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns(false);
+        machineRepo.CreateMachineWithKeyAsync(Arg.Any<Machine>(), Arg.Any<long>(), Arg.Any<DateTimeOffset>(), Arg.Any<int?>(), Arg.Any<CancellationToken>())
+            .Returns(callInfo =>
+            {
+                dbFactory.Context.RegistrationTokens
+                    .Where(t => t.Id == seeded.Id)
+                    .Set(t => t.ConsumedAt, now)
+                    .Set(t => t.ConsumedByMachineId, 9999L)
+                    .Update();
+
+                return ((Machine?)null, (string?)null);
+            });
+
+        TestServiceScopeFactory scopeFactory = CreateScopeFactory(dbFactory, machineRepo);
+        MachineService service = BuildServiceWithTime(scopeFactory, timeProvider);
+
+        (long? machineId, string? apiKey, string errorMessage) result =
+            await service.RegisterSystemAsync(BuildSingleUseRequest(), CancellationToken.None);
+
+        await Assert.That(result.machineId).IsNull();
+        await Assert.That(result.errorMessage).IsEqualTo("Registration token has already been used");
     }
 
     // ========== ReportMachineUsage called on machine registration ==========
@@ -607,7 +806,7 @@ public class MachineServiceTests
 
         Machine createdMachine = TestDataBuilder.BuildMachine(tenantId: 1, registrationTokenId: token.Id);
         createdMachine.Id = 200;
-        machineRepo.CreateMachineWithKeyAsync(Arg.Any<Machine>(), Arg.Any<int?>(), Arg.Any<CancellationToken>())
+        machineRepo.CreateMachineWithKeyAsync(Arg.Any<Machine>(), Arg.Any<long>(), Arg.Any<DateTimeOffset>(), Arg.Any<int?>(), Arg.Any<CancellationToken>())
             .Returns((createdMachine, "api-key-billing-test"));
         machineRepo.GetActiveMachineCountAsync(1, Arg.Any<CancellationToken>())
             .Returns(7);
@@ -634,7 +833,7 @@ public class MachineServiceTests
         billingApiClient.ReportMachineUsageAsync(Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
             .Returns(true);
 
-        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider());
+        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider(), TimeProvider.System);
 
         RegisterSystemRequest request = new()
         {
@@ -676,7 +875,7 @@ public class MachineServiceTests
 
         Machine createdMachine = TestDataBuilder.BuildMachine(tenantId: 1, registrationTokenId: token.Id);
         createdMachine.Id = 201;
-        machineRepo.CreateMachineWithKeyAsync(Arg.Any<Machine>(), Arg.Any<int?>(), Arg.Any<CancellationToken>())
+        machineRepo.CreateMachineWithKeyAsync(Arg.Any<Machine>(), Arg.Any<long>(), Arg.Any<DateTimeOffset>(), Arg.Any<int?>(), Arg.Any<CancellationToken>())
             .Returns((createdMachine, "api-key-free-test"));
 
         ISubscriptionService subscriptionService = Substitute.For<ISubscriptionService>();
@@ -695,7 +894,7 @@ public class MachineServiceTests
         redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(Substitute.For<IDatabase>());
         IBillingApiClient billingApiClient = Substitute.For<IBillingApiClient>();
 
-        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider());
+        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider(), TimeProvider.System);
 
         RegisterSystemRequest request = new()
         {
@@ -738,7 +937,7 @@ public class MachineServiceTests
 
         Machine createdMachine = TestDataBuilder.BuildMachine(tenantId: 1, registrationTokenId: token.Id);
         createdMachine.Id = 202;
-        machineRepo.CreateMachineWithKeyAsync(Arg.Any<Machine>(), Arg.Any<int?>(), Arg.Any<CancellationToken>())
+        machineRepo.CreateMachineWithKeyAsync(Arg.Any<Machine>(), Arg.Any<long>(), Arg.Any<DateTimeOffset>(), Arg.Any<int?>(), Arg.Any<CancellationToken>())
             .Returns((createdMachine, "api-key-fail-test"));
         machineRepo.GetActiveMachineCountAsync(1, Arg.Any<CancellationToken>())
             .Returns(3);
@@ -767,7 +966,7 @@ public class MachineServiceTests
         billingApiClient.ReportMachineUsageAsync(Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
             .Returns<bool>(_ => throw new InvalidOperationException("Billing service unavailable"));
 
-        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider());
+        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider(), TimeProvider.System);
 
         RegisterSystemRequest request = new()
         {
@@ -828,7 +1027,7 @@ public class MachineServiceTests
         TestServiceScopeFactory scopeFactory = CreateScopeFactory(dbFactory, machineRepo);
         ILogger<MachineService> logger = new NullLogger<MachineService>();
         IBillingApiClient billingApiClient = Substitute.For<IBillingApiClient>();
-        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider());
+        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider(), TimeProvider.System);
 
         await service.GetRegistrationStatusAsync(machine.SerialNumber, machine.SystemId, TestTokenValue, true, CancellationToken.None);
 
@@ -867,7 +1066,7 @@ public class MachineServiceTests
         TestServiceScopeFactory scopeFactory = CreateScopeFactory(dbFactory, machineRepo);
         ILogger<MachineService> logger = new NullLogger<MachineService>();
         IBillingApiClient billingApiClient = Substitute.For<IBillingApiClient>();
-        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider());
+        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider(), TimeProvider.System);
 
         (RegistrationStatus status, long? id, string? apiKey) result =
             await service.GetRegistrationStatusAsync(machine.SerialNumber, machine.SystemId, TestTokenValue, true, CancellationToken.None);
@@ -903,7 +1102,7 @@ public class MachineServiceTests
         TestServiceScopeFactory scopeFactory = CreateScopeFactory(dbFactory, machineRepo);
         ILogger<MachineService> logger = new NullLogger<MachineService>();
         IBillingApiClient billingApiClient = Substitute.For<IBillingApiClient>();
-        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider());
+        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider(), TimeProvider.System);
 
         (RegistrationStatus status, long? id, string? apiKey) result =
             await service.GetRegistrationStatusAsync(machine.SerialNumber, machine.SystemId, TestTokenValue, true, CancellationToken.None);
@@ -927,7 +1126,7 @@ public class MachineServiceTests
 
         Machine createdMachine = TestDataBuilder.BuildMachine(tenantId: token.TenantId, registrationTokenId: token.Id);
         createdMachine.Id = 301;
-        machineRepo.CreateMachineWithKeyAsync(Arg.Any<Machine>(), Arg.Any<int?>(), Arg.Any<CancellationToken>())
+        machineRepo.CreateMachineWithKeyAsync(Arg.Any<Machine>(), Arg.Any<long>(), Arg.Any<DateTimeOffset>(), Arg.Any<int?>(), Arg.Any<CancellationToken>())
             .Returns((createdMachine, "desktop-key"));
 
         TestServiceScopeFactory scopeFactory = CreateScopeFactory(dbFactory, machineRepo);
@@ -935,7 +1134,7 @@ public class MachineServiceTests
         IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
         redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(Substitute.For<IDatabase>());
         IBillingApiClient billingApiClient = Substitute.For<IBillingApiClient>();
-        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider());
+        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider(), TimeProvider.System);
 
         RegisterSystemRequest request = new()
         {
@@ -951,6 +1150,8 @@ public class MachineServiceTests
 
         await machineRepo.Received(1).CreateMachineWithKeyAsync(
             Arg.Is<Machine>(m => m.MachineType == MachineTypes.Desktop && m.OperatingSystem == OperatingSystems.Fedora),
+            Arg.Any<long>(),
+            Arg.Any<DateTimeOffset>(),
             Arg.Any<int?>(),
             Arg.Any<CancellationToken>());
     }
@@ -968,7 +1169,7 @@ public class MachineServiceTests
 
         Machine createdMachine = TestDataBuilder.BuildMachine(tenantId: token.TenantId, registrationTokenId: token.Id);
         createdMachine.Id = 302;
-        machineRepo.CreateMachineWithKeyAsync(Arg.Any<Machine>(), Arg.Any<int?>(), Arg.Any<CancellationToken>())
+        machineRepo.CreateMachineWithKeyAsync(Arg.Any<Machine>(), Arg.Any<long>(), Arg.Any<DateTimeOffset>(), Arg.Any<int?>(), Arg.Any<CancellationToken>())
             .Returns((createdMachine, "laptop-key"));
 
         TestServiceScopeFactory scopeFactory = CreateScopeFactory(dbFactory, machineRepo);
@@ -976,7 +1177,7 @@ public class MachineServiceTests
         IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
         redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(Substitute.For<IDatabase>());
         IBillingApiClient billingApiClient = Substitute.For<IBillingApiClient>();
-        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider());
+        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider(), TimeProvider.System);
 
         RegisterSystemRequest request = new()
         {
@@ -992,6 +1193,8 @@ public class MachineServiceTests
 
         await machineRepo.Received(1).CreateMachineWithKeyAsync(
             Arg.Is<Machine>(m => m.MachineType == MachineTypes.Laptop && m.OperatingSystem == OperatingSystems.MacOS),
+            Arg.Any<long>(),
+            Arg.Any<DateTimeOffset>(),
             Arg.Any<int?>(),
             Arg.Any<CancellationToken>());
     }
@@ -1009,7 +1212,7 @@ public class MachineServiceTests
 
         Machine createdMachine = TestDataBuilder.BuildMachine(tenantId: token.TenantId, registrationTokenId: token.Id);
         createdMachine.Id = 303;
-        machineRepo.CreateMachineWithKeyAsync(Arg.Any<Machine>(), Arg.Any<int?>(), Arg.Any<CancellationToken>())
+        machineRepo.CreateMachineWithKeyAsync(Arg.Any<Machine>(), Arg.Any<long>(), Arg.Any<DateTimeOffset>(), Arg.Any<int?>(), Arg.Any<CancellationToken>())
             .Returns((createdMachine, "vm-key"));
 
         TestServiceScopeFactory scopeFactory = CreateScopeFactory(dbFactory, machineRepo);
@@ -1017,7 +1220,7 @@ public class MachineServiceTests
         IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
         redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(Substitute.For<IDatabase>());
         IBillingApiClient billingApiClient = Substitute.For<IBillingApiClient>();
-        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider());
+        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider(), TimeProvider.System);
 
         RegisterSystemRequest request = new()
         {
@@ -1033,6 +1236,8 @@ public class MachineServiceTests
 
         await machineRepo.Received(1).CreateMachineWithKeyAsync(
             Arg.Is<Machine>(m => m.MachineType == MachineTypes.VirtualMachine && m.OperatingSystem == OperatingSystems.RedHat),
+            Arg.Any<long>(),
+            Arg.Any<DateTimeOffset>(),
             Arg.Any<int?>(),
             Arg.Any<CancellationToken>());
     }
@@ -1050,7 +1255,7 @@ public class MachineServiceTests
 
         Machine createdMachine = TestDataBuilder.BuildMachine(tenantId: token.TenantId, registrationTokenId: token.Id);
         createdMachine.Id = 304;
-        machineRepo.CreateMachineWithKeyAsync(Arg.Any<Machine>(), Arg.Any<int?>(), Arg.Any<CancellationToken>())
+        machineRepo.CreateMachineWithKeyAsync(Arg.Any<Machine>(), Arg.Any<long>(), Arg.Any<DateTimeOffset>(), Arg.Any<int?>(), Arg.Any<CancellationToken>())
             .Returns((createdMachine, "win-key"));
 
         TestServiceScopeFactory scopeFactory = CreateScopeFactory(dbFactory, machineRepo);
@@ -1058,7 +1263,7 @@ public class MachineServiceTests
         IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
         redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(Substitute.For<IDatabase>());
         IBillingApiClient billingApiClient = Substitute.For<IBillingApiClient>();
-        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider());
+        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider(), TimeProvider.System);
 
         RegisterSystemRequest request = new()
         {
@@ -1074,6 +1279,8 @@ public class MachineServiceTests
 
         await machineRepo.Received(1).CreateMachineWithKeyAsync(
             Arg.Is<Machine>(m => m.MachineType == MachineTypes.Unknown && m.OperatingSystem == OperatingSystems.Windows),
+            Arg.Any<long>(),
+            Arg.Any<DateTimeOffset>(),
             Arg.Any<int?>(),
             Arg.Any<CancellationToken>());
     }
@@ -1091,7 +1298,7 @@ public class MachineServiceTests
 
         Machine createdMachine = TestDataBuilder.BuildMachine(tenantId: token.TenantId, registrationTokenId: token.Id);
         createdMachine.Id = 305;
-        machineRepo.CreateMachineWithKeyAsync(Arg.Any<Machine>(), Arg.Any<int?>(), Arg.Any<CancellationToken>())
+        machineRepo.CreateMachineWithKeyAsync(Arg.Any<Machine>(), Arg.Any<long>(), Arg.Any<DateTimeOffset>(), Arg.Any<int?>(), Arg.Any<CancellationToken>())
             .Returns((createdMachine, "debian-key"));
 
         TestServiceScopeFactory scopeFactory = CreateScopeFactory(dbFactory, machineRepo);
@@ -1099,7 +1306,7 @@ public class MachineServiceTests
         IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
         redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(Substitute.For<IDatabase>());
         IBillingApiClient billingApiClient = Substitute.For<IBillingApiClient>();
-        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider());
+        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider(), TimeProvider.System);
 
         RegisterSystemRequest request = new()
         {
@@ -1115,6 +1322,8 @@ public class MachineServiceTests
 
         await machineRepo.Received(1).CreateMachineWithKeyAsync(
             Arg.Is<Machine>(m => m.MachineType == MachineTypes.BareMetalServer && m.OperatingSystem == OperatingSystems.Debian),
+            Arg.Any<long>(),
+            Arg.Any<DateTimeOffset>(),
             Arg.Any<int?>(),
             Arg.Any<CancellationToken>());
     }
@@ -1129,7 +1338,7 @@ public class MachineServiceTests
         machineRepo.DoesMachineExistAsync(
             Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
             .Returns(false);
-        machineRepo.CreateMachineWithKeyAsync(Arg.Any<Machine>(), Arg.Any<int?>(), Arg.Any<CancellationToken>())
+        machineRepo.CreateMachineWithKeyAsync(Arg.Any<Machine>(), Arg.Any<long>(), Arg.Any<DateTimeOffset>(), Arg.Any<int?>(), Arg.Any<CancellationToken>())
             .Returns(((Machine?)null, (string?)null));
 
         TestServiceScopeFactory scopeFactory = CreateScopeFactory(dbFactory, machineRepo);
@@ -1137,7 +1346,7 @@ public class MachineServiceTests
         IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
         redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(Substitute.For<IDatabase>());
         IBillingApiClient billingApiClient = Substitute.For<IBillingApiClient>();
-        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider());
+        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider(), TimeProvider.System);
 
         RegisterSystemRequest request = new()
         {
@@ -1173,7 +1382,7 @@ public class MachineServiceTests
 
         Machine createdMachine = TestDataBuilder.BuildMachine(tenantId: 1, registrationTokenId: token.Id);
         createdMachine.Id = 305;
-        machineRepo.CreateMachineWithKeyAsync(Arg.Any<Machine>(), Arg.Any<int?>(), Arg.Any<CancellationToken>())
+        machineRepo.CreateMachineWithKeyAsync(Arg.Any<Machine>(), Arg.Any<long>(), Arg.Any<DateTimeOffset>(), Arg.Any<int?>(), Arg.Any<CancellationToken>())
             .Returns((createdMachine, "api-key-no-tenant"));
 
         ITenantRepository tenantRepo = Substitute.For<ITenantRepository>();
@@ -1195,7 +1404,7 @@ public class MachineServiceTests
         IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
         redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(Substitute.For<IDatabase>());
         IBillingApiClient billingApiClient = Substitute.For<IBillingApiClient>();
-        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider());
+        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider(), TimeProvider.System);
 
         RegisterSystemRequest request = new()
         {
@@ -1230,7 +1439,7 @@ public class MachineServiceTests
 
         Machine createdMachine = TestDataBuilder.BuildMachine(tenantId: 1, registrationTokenId: token.Id);
         createdMachine.Id = 306;
-        machineRepo.CreateMachineWithKeyAsync(Arg.Any<Machine>(), Arg.Any<int?>(), Arg.Any<CancellationToken>())
+        machineRepo.CreateMachineWithKeyAsync(Arg.Any<Machine>(), Arg.Any<long>(), Arg.Any<DateTimeOffset>(), Arg.Any<int?>(), Arg.Any<CancellationToken>())
             .Returns((createdMachine, "api-key-nosub"));
 
         ISubscriptionService subscriptionService = Substitute.For<ISubscriptionService>();
@@ -1248,7 +1457,7 @@ public class MachineServiceTests
         IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
         redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(Substitute.For<IDatabase>());
         IBillingApiClient billingApiClient = Substitute.For<IBillingApiClient>();
-        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider());
+        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider(), TimeProvider.System);
 
         RegisterSystemRequest request = new()
         {
@@ -1328,7 +1537,7 @@ public class MachineServiceTests
             .Returns(false);
         Machine createdMachine = TestDataBuilder.BuildMachine(tenantId: token.TenantId, registrationTokenId: token.Id);
         createdMachine.Id = 999;
-        machineRepo.CreateMachineWithKeyAsync(Arg.Any<Machine>(), Arg.Any<int?>(), Arg.Any<CancellationToken>())
+        machineRepo.CreateMachineWithKeyAsync(Arg.Any<Machine>(), Arg.Any<long>(), Arg.Any<DateTimeOffset>(), Arg.Any<int?>(), Arg.Any<CancellationToken>())
             .Returns((createdMachine, plaintext));
 
         TestServiceScopeFactory scopeFactory = CreateScopeFactory(dbFactory, machineRepo);
@@ -1337,7 +1546,7 @@ public class MachineServiceTests
         IDatabase redisDb = Substitute.For<IDatabase>();
         redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(redisDb);
         IBillingApiClient billingApiClient = Substitute.For<IBillingApiClient>();
-        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider());
+        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider(), TimeProvider.System);
 
         RegisterSystemRequest request = new()
         {
@@ -1375,7 +1584,7 @@ public class MachineServiceTests
             .Returns(false);
         Machine createdMachine = TestDataBuilder.BuildMachine(tenantId: token.TenantId, registrationTokenId: token.Id);
         createdMachine.Id = 1000;
-        machineRepo.CreateMachineWithKeyAsync(Arg.Any<Machine>(), Arg.Any<int?>(), Arg.Any<CancellationToken>())
+        machineRepo.CreateMachineWithKeyAsync(Arg.Any<Machine>(), Arg.Any<long>(), Arg.Any<DateTimeOffset>(), Arg.Any<int?>(), Arg.Any<CancellationToken>())
             .Returns((createdMachine, "k"));
 
         TestServiceScopeFactory scopeFactory = CreateScopeFactory(dbFactory, machineRepo);
@@ -1384,7 +1593,7 @@ public class MachineServiceTests
         IDatabase redisDb = Substitute.For<IDatabase>();
         redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(redisDb);
         IBillingApiClient billingApiClient = Substitute.For<IBillingApiClient>();
-        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider());
+        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider(), TimeProvider.System);
 
         RegisterSystemRequest request = new()
         {
@@ -1421,7 +1630,7 @@ public class MachineServiceTests
             .Returns(false);
         Machine createdMachine = TestDataBuilder.BuildMachine(tenantId: token.TenantId, registrationTokenId: token.Id);
         createdMachine.Id = 1001;
-        machineRepo.CreateMachineWithKeyAsync(Arg.Any<Machine>(), Arg.Any<int?>(), Arg.Any<CancellationToken>())
+        machineRepo.CreateMachineWithKeyAsync(Arg.Any<Machine>(), Arg.Any<long>(), Arg.Any<DateTimeOffset>(), Arg.Any<int?>(), Arg.Any<CancellationToken>())
             .Returns((createdMachine, plaintext));
 
         TestServiceScopeFactory scopeFactory = CreateScopeFactory(dbFactory, machineRepo);
@@ -1431,7 +1640,7 @@ public class MachineServiceTests
         redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(redisDb);
         IBillingApiClient billingApiClient = Substitute.For<IBillingApiClient>();
         EphemeralDataProtectionProvider provider = new();
-        MachineService service = new(scopeFactory, logger, redis, billingApiClient, provider);
+        MachineService service = new(scopeFactory, logger, redis, billingApiClient, provider, TimeProvider.System);
 
         RegisterSystemRequest request = new()
         {
@@ -1471,7 +1680,8 @@ public class MachineServiceTests
                 new NullLogger<MachineService>(),
                 redis,
                 billing,
-                null!);
+                null!,
+                TimeProvider.System);
 
             return Task.CompletedTask;
         });

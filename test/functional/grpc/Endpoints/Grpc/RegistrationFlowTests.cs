@@ -135,11 +135,13 @@ public sealed class RegistrationFlowTests
     [Test]
     public async Task RegisterSystem_MachineLimitExceeded_ReturnsError()
     {
-        // Arrange — the Free tier allows 3 machines (defined in TierFeatureLimits seed data)
+        // Arrange — the Free tier allows 3 machines (defined in TierFeatureLimits seed data).
+        // Registration tokens are single-use, so each fill machine needs its own token; the
+        // over-limit machine gets a fresh token too, isolating the failure to the limit guard.
         using FunctionalTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
 
-        (int tenantId, long tokenId) = await SeedTenantWithToken(db);
+        int tenantId = await SeedTenant(db);
 
         TenantSubscription subscription = new()
         {
@@ -154,15 +156,17 @@ public sealed class RegistrationFlowTests
         using GrpcChannel channel = CreateChannel(factory);
         Registration.RegistrationClient client = new(channel);
 
-        // Register 3 machines to fill the Free tier limit
+        // Register 3 machines, each with its own single-use token, to fill the Free tier limit
         for (int i = 1; i <= 3; i++)
         {
+            string fillToken = $"limit-fill-token-{i}";
+            await SeedToken(db, tenantId, fillToken);
             RegisterSystemRequest fillRequest = new()
             {
                 Hostname = $"fill-host-{i}",
                 SerialNumber = $"sn-limit-{i:D3}",
                 SystemId = $"sys-limit-{i:D3}",
-                RegistrationToken = "test-registration-token",
+                RegistrationToken = fillToken,
                 MachineType = MachineType.BareMetalServerType,
                 Os = OperatingSystemType.UbuntuOs
             };
@@ -170,13 +174,14 @@ public sealed class RegistrationFlowTests
             await Assert.That(fillResponse.MachineId).IsGreaterThan(0);
         }
 
-        // Act — register a 4th machine (should fail because limit is 3)
+        // Act — register a 4th machine with a fresh token (should fail because limit is 3)
+        await SeedToken(db, tenantId, "limit-over-token");
         RegisterSystemRequest overLimitRequest = new()
         {
             Hostname = "over-limit-host",
             SerialNumber = "sn-limit-004",
             SystemId = "sys-limit-004",
-            RegistrationToken = "test-registration-token",
+            RegistrationToken = "limit-over-token",
             MachineType = MachineType.BareMetalServerType,
             Os = OperatingSystemType.UbuntuOs
         };
@@ -186,6 +191,60 @@ public sealed class RegistrationFlowTests
             async () => await client.RegisterSystemAsync(overLimitRequest));
         await Assert.That(ex!.StatusCode).IsEqualTo(StatusCode.InvalidArgument);
         await Assert.That(ex.Status.Detail).Contains("limit");
+    }
+
+    [Test]
+    public async Task RegisterSystem_SingleUseToken_RegistersOneMachine_ThenRejectsReuse()
+    {
+        // Arrange — a registration token is single-use: it registers exactly one machine, then is
+        // permanently consumed. A second registration with the same token must be rejected.
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+
+        (int tenantId, long _) = await SeedTenantWithToken(db);
+        await SeedActiveSubscription(db, tenantId);
+
+        using GrpcChannel channel = CreateChannel(factory);
+        Registration.RegistrationClient client = new(channel);
+
+        RegisterSystemRequest firstRequest = new()
+        {
+            Hostname = "single-use-host-1",
+            SerialNumber = "sn-single-001",
+            SystemId = "sys-single-001",
+            RegistrationToken = "test-registration-token",
+            MachineType = MachineType.BareMetalServerType,
+            Os = OperatingSystemType.UbuntuOs
+        };
+
+        // Act — first registration succeeds
+        RegisterSystemResponse firstResponse = await client.RegisterSystemAsync(firstRequest);
+        await Assert.That(firstResponse.MachineId).IsGreaterThan(0);
+
+        // The token row must now be consumed by the created machine
+        RegistrationToken consumed = await db.RegistrationTokens
+            .FirstAsync(t => t.TokenHash == ComputeHash("test-registration-token"));
+        await Assert.That(consumed.ConsumedAt).IsNotNull();
+        await Assert.That(consumed.ConsumedByMachineId).IsEqualTo(firstResponse.MachineId);
+
+        // Act & Assert — a second registration with the SAME token must be rejected
+        RegisterSystemRequest secondRequest = new()
+        {
+            Hostname = "single-use-host-2",
+            SerialNumber = "sn-single-002",
+            SystemId = "sys-single-002",
+            RegistrationToken = "test-registration-token",
+            MachineType = MachineType.BareMetalServerType,
+            Os = OperatingSystemType.UbuntuOs
+        };
+        RpcException? ex = await Assert.ThrowsAsync<RpcException>(
+            async () => await client.RegisterSystemAsync(secondRequest));
+        await Assert.That(ex!.StatusCode).IsEqualTo(StatusCode.InvalidArgument);
+        await Assert.That(ex.Status.Detail).Contains("already been used");
+
+        // Only one machine may exist for that token
+        int machineCount = await db.Machines.CountAsync(m => m.RegistrationTokenId == consumed.Id);
+        await Assert.That(machineCount).IsEqualTo(1);
     }
 
     [Test]
@@ -643,21 +702,25 @@ public sealed class RegistrationFlowTests
     private static async Task<(int tenantId, long tokenId)> SeedTenantWithToken(DatabaseContext db)
     {
         int tenantId = await SeedTenant(db);
+        long tokenId = await SeedToken(db, tenantId, "test-registration-token");
 
-        string tokenHash = ComputeHash("test-registration-token");
+        return (tenantId, tokenId);
+    }
+
+    private static async Task<long> SeedToken(DatabaseContext db, int tenantId, string tokenPlaintext)
+    {
         RegistrationToken token = new()
         {
             TenantId = tenantId,
-            TokenHash = tokenHash,
+            TokenHash = ComputeHash(tokenPlaintext),
             Name = "Test Token",
             CreatedByUserId = 1,
             CreatedAt = DateTimeOffset.UtcNow,
             ExpiresAt = DateTimeOffset.UtcNow.AddDays(7),
             IsRevoked = false
         };
-        long tokenId = (long)await db.InsertWithIdentityAsync(token);
 
-        return (tenantId, tokenId);
+        return (long)await db.InsertWithIdentityAsync(token);
     }
 
     private static async Task SeedActiveSubscription(DatabaseContext db, int tenantId)

@@ -31,6 +31,7 @@ public sealed class MachineService : IMachineService
     private readonly IConnectionMultiplexer _redis;
     private readonly IBillingApiClient _billingApiClient;
     private readonly IDataProtector _pendingApiKeyProtector;
+    private readonly TimeProvider _timeProvider;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="MachineService"/> class.
@@ -40,24 +41,28 @@ public sealed class MachineService : IMachineService
     /// <param name="redis">Redis connection for cross-replica API key delivery cache.</param>
     /// <param name="billingApiClient">Client for communicating billing updates to Stripe.</param>
     /// <param name="dataProtectionProvider">Data protection provider for encrypting pending API keys at rest in Redis.</param>
+    /// <param name="timeProvider">Time provider used for token expiry and consumption time checks.</param>
     /// <exception cref="ArgumentNullException">Thrown when a required parameter is null.</exception>
     public MachineService(
         IServiceScopeFactory scopeFactory,
         ILogger<MachineService> logger,
         IConnectionMultiplexer redis,
         IBillingApiClient billingApiClient,
-        IDataProtectionProvider dataProtectionProvider)
+        IDataProtectionProvider dataProtectionProvider,
+        TimeProvider timeProvider)
     {
         ArgumentNullException.ThrowIfNull(scopeFactory);
         ArgumentNullException.ThrowIfNull(logger);
         ArgumentNullException.ThrowIfNull(redis);
         ArgumentNullException.ThrowIfNull(billingApiClient);
         ArgumentNullException.ThrowIfNull(dataProtectionProvider);
+        ArgumentNullException.ThrowIfNull(timeProvider);
         _serviceScopeFactory = scopeFactory;
         _logger = logger;
         _redis = redis;
         _billingApiClient = billingApiClient;
         _pendingApiKeyProtector = dataProtectionProvider.CreateProtector(PendingApiKeyProtectorPurpose);
+        _timeProvider = timeProvider;
     }
 
     /// <inheritdoc/>
@@ -89,7 +94,7 @@ public sealed class MachineService : IMachineService
             return (RegistrationStatus.UnknownRegistration, null, null);
         }
 
-        if (IsTokenExpired(token, DateTimeOffset.UtcNow))
+        if (IsTokenExpired(token, _timeProvider.GetUtcNow()))
         {
             _logger.LogWarning("GetRegistrationStatus: token {TokenId} is expired", token.Id);
 
@@ -224,11 +229,23 @@ public sealed class MachineService : IMachineService
             return (null, null, "Registration token has been revoked");
         }
 
-        if (IsTokenExpired(token, DateTimeOffset.UtcNow))
+        DateTimeOffset now = _timeProvider.GetUtcNow();
+
+        if (IsTokenExpired(token, now))
         {
             _logger.LogWarning("Registration attempt with expired token {TokenId}", token.Id);
 
             return (null, null, "Registration token has expired");
+        }
+
+        // Single-use tokens: a token that has already registered its one machine is permanently
+        // consumed. The atomic consume in CreateMachineWithKeyAsync is the race-safe guard; this
+        // pre-check rejects the common already-used case early with a clear message.
+        if (token.ConsumedAt is not null)
+        {
+            _logger.LogWarning("Registration attempt with already-consumed token {TokenId}", token.Id);
+
+            return (null, null, "Registration token has already been used");
         }
 
         IMachineRepository machineRepository = scope.ServiceProvider.GetRequiredService<IMachineRepository>();
@@ -261,15 +278,27 @@ public sealed class MachineService : IMachineService
             MachineType = ConvertRpcMachineTypeToDatabaseMachineType(request.MachineType),
             OperatingSystem = ConvertRpcOsTypeToDatabaseOsType(request.Os),
             RegistrationTokenId = token.Id,
-            RegisteredOn = DateTimeOffset.UtcNow,
+            RegisteredOn = now,
             IsDeleted = false,
             TenantId = token.TenantId,
         };
 
-        (Machine? createdMachine, string? plaintextApiKey) = await machineRepository.CreateMachineWithKeyAsync(machine, machineLimit, cancellationToken);
+        (Machine? createdMachine, string? plaintextApiKey) = await machineRepository.CreateMachineWithKeyAsync(machine, token.Id, now, machineLimit, cancellationToken);
 
         if (createdMachine is null)
         {
+            // CreateMachineWithKeyAsync rejected before commit for one of two reasons: the token was
+            // consumed/revoked/expired by a concurrent registration since the pre-check, or the
+            // tenant is at its machine limit. Reload the token to disambiguate the message.
+            RegistrationToken? reloadedToken = await tokenRepo.GetTokenByHashAsync(tokenHash, cancellationToken);
+
+            if ((reloadedToken?.ConsumedAt is not null) && (reloadedToken.ConsumedByMachineId != machine.Id))
+            {
+                _logger.LogWarning("Registration token {TokenId} was consumed by a concurrent registration", token.Id);
+
+                return (null, null, "Registration token has already been used");
+            }
+
             _logger.LogWarning("Machine limit exceeded for tenant {TenantId}", token.TenantId);
 
             return (null, null, "Machine limit exceeded");

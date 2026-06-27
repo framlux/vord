@@ -43,9 +43,19 @@ public interface IMachineRepository
     Task<bool> DoesMachineExistAsync(string serialNumber, string systemId, string assetTag, int tenantId, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Creates a new Machine with a hashed API key and returns the plaintext key.
+    /// Creates a new Machine with a hashed API key and returns the plaintext key. Inside the same
+    /// Serializable transaction the supplied single-use registration token is atomically consumed
+    /// (marked with <c>ConsumedAt</c> and <c>ConsumedByMachineId</c>) only if it is still available
+    /// (not consumed, not revoked, not expired as of <paramref name="now"/>). If the token has
+    /// already been consumed, revoked, or expired the registration is rejected and the transaction
+    /// rolls back, returning <c>(null, null)</c>.
     /// </summary>
-    Task<(Machine? machine, string? plaintextApiKey)> CreateMachineWithKeyAsync(Machine machine, int? machineLimit = null, CancellationToken cancellationToken = default);
+    /// <param name="machine">The machine to create.</param>
+    /// <param name="registrationTokenId">The id of the single-use registration token to consume.</param>
+    /// <param name="now">The current instant used for the token expiry check, in UTC.</param>
+    /// <param name="machineLimit">Optional active-machine limit for the tenant; null means unlimited.</param>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    Task<(Machine? machine, string? plaintextApiKey)> CreateMachineWithKeyAsync(Machine machine, long registrationTokenId, DateTimeOffset now, int? machineLimit = null, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Generates a new API key for an existing machine, replacing the old one.

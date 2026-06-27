@@ -75,7 +75,7 @@ public partial class DatabaseRepository : IMachineRepository
     }
 
     /// <inheritdoc/>
-    public async Task<(Machine? machine, string? plaintextApiKey)> CreateMachineWithKeyAsync(Machine machine, int? machineLimit, CancellationToken cancellationToken)
+    public async Task<(Machine? machine, string? plaintextApiKey)> CreateMachineWithKeyAsync(Machine machine, long registrationTokenId, DateTimeOffset now, int? machineLimit, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(machine);
 
@@ -107,7 +107,31 @@ public partial class DatabaseRepository : IMachineRepository
                     }
                 }
 
+                // Insert the machine first so its id is available for the token-consume stamp.
                 machine.Id = await _db.InsertWithInt64IdentityAsync(machine, token: cancellationToken);
+
+                // Atomically consume the single-use registration token. The predicate re-asserts
+                // every usability condition (available, not revoked, not expired) so that two
+                // concurrent registrations on the same token cannot both produce a non-zero row
+                // count under Serializable isolation. A zero affected-row count means the token was
+                // consumed, revoked, or expired since the pre-check — reject and roll back by
+                // returning before CommitAsync (disposing the transaction rolls back the insert).
+                int tokenRows = await _db.RegistrationTokens
+                    .Where(t => (t.Id == registrationTokenId) &&
+                                (t.ConsumedAt == null) &&
+                                (t.IsRevoked == false) &&
+                                (t.ExpiresAt > now))
+                    .Set(t => t.ConsumedAt, now)
+                    .Set(t => t.ConsumedByMachineId, machine.Id)
+                    .UpdateAsync(cancellationToken);
+
+                if (tokenRows == 0)
+                {
+                    _logger.LogWarning("Registration token {TokenId} is already consumed, revoked, or expired — rejecting machine creation", registrationTokenId);
+
+                    return (null, null);
+                }
+
                 await txn.CommitAsync(cancellationToken);
                 _logger.LogInformation("Created Machine with Serial Number {SerialNumber}, ID {MachineId}", machine.SerialNumber, machine.Id);
 

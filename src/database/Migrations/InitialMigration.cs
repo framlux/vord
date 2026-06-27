@@ -376,6 +376,10 @@ public sealed class InitialMigration : Migration
             .WithColumn("CreatedAt").AsDateTimeOffset().NotNullable()
             .WithColumn("IsRevoked").AsBoolean().NotNullable().WithDefaultValue(false)
             .WithColumn("RevokedAt").AsDateTimeOffset().Nullable()
+            // Single-use consumption marker: ConsumedAt IS NULL means the token is still available;
+            // a non-null value means it has permanently registered its one machine.
+            .WithColumn("ConsumedAt").AsDateTimeOffset().Nullable()
+            .WithColumn("ConsumedByMachineId").AsInt64().Nullable()
             // Bounded token lifetime with a far-future default so a token without an explicit
             // expiry never silently expires.
             .WithColumn("ExpiresAt").AsDateTimeOffset().NotNullable()

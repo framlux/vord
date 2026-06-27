@@ -249,7 +249,7 @@ public class DatabaseRepositoryTests
         DatabaseRepository cache = new(dbFactory.Context, new NullLogger<DatabaseRepository>());
 
         await Assert.That(async () =>
-            await cache.CreateMachineWithKeyAsync(null!, null, CancellationToken.None))
+            await cache.CreateMachineWithKeyAsync(null!, 1L, DateTimeOffset.UtcNow, null, CancellationToken.None))
             .Throws<ArgumentNullException>();
     }
 

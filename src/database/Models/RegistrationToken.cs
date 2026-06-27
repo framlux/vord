@@ -80,4 +80,19 @@ public sealed class RegistrationToken
     /// </summary>
     [Column("RevokedAt"), Nullable]
     public DateTimeOffset? RevokedAt { get; set; }
+
+    /// <summary>
+    /// The date and time when the token was consumed by a successful machine registration. A token
+    /// is single-use: <c>null</c> means the token is still available, a non-null value means it has
+    /// been permanently consumed and may not register another machine.
+    /// </summary>
+    [Column("ConsumedAt"), Nullable]
+    public DateTimeOffset? ConsumedAt { get; set; }
+
+    /// <summary>
+    /// The identifier of the machine that consumed this token, recorded for audit and traceability.
+    /// <c>null</c> until the token is consumed.
+    /// </summary>
+    [Column("ConsumedByMachineId"), Nullable]
+    public long? ConsumedByMachineId { get; set; }
 }
