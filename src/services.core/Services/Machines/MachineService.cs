@@ -9,6 +9,7 @@ using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Grpc.AgentRegistration;
 using Framlux.FleetManagement.Services.Core.Billing;
+using Framlux.FleetManagement.Services.Core.Security;
 using Microsoft.AspNetCore.DataProtection;
 using StackExchange.Redis;
 
@@ -32,6 +33,7 @@ public sealed class MachineService : IMachineService
     private readonly IBillingApiClient _billingApiClient;
     private readonly IDataProtector _pendingApiKeyProtector;
     private readonly TimeProvider _timeProvider;
+    private readonly IApiKeyCacheInvalidator _apiKeyCacheInvalidator;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="MachineService"/> class.
@@ -42,6 +44,7 @@ public sealed class MachineService : IMachineService
     /// <param name="billingApiClient">Client for communicating billing updates to Stripe.</param>
     /// <param name="dataProtectionProvider">Data protection provider for encrypting pending API keys at rest in Redis.</param>
     /// <param name="timeProvider">Time provider used for token expiry and consumption time checks.</param>
+    /// <param name="apiKeyCacheInvalidator">Invalidates the auth cache for a replaced key on reissue.</param>
     /// <exception cref="ArgumentNullException">Thrown when a required parameter is null.</exception>
     public MachineService(
         IServiceScopeFactory scopeFactory,
@@ -49,7 +52,8 @@ public sealed class MachineService : IMachineService
         IConnectionMultiplexer redis,
         IBillingApiClient billingApiClient,
         IDataProtectionProvider dataProtectionProvider,
-        TimeProvider timeProvider)
+        TimeProvider timeProvider,
+        IApiKeyCacheInvalidator apiKeyCacheInvalidator)
     {
         ArgumentNullException.ThrowIfNull(scopeFactory);
         ArgumentNullException.ThrowIfNull(logger);
@@ -57,12 +61,14 @@ public sealed class MachineService : IMachineService
         ArgumentNullException.ThrowIfNull(billingApiClient);
         ArgumentNullException.ThrowIfNull(dataProtectionProvider);
         ArgumentNullException.ThrowIfNull(timeProvider);
+        ArgumentNullException.ThrowIfNull(apiKeyCacheInvalidator);
         _serviceScopeFactory = scopeFactory;
         _logger = logger;
         _redis = redis;
         _billingApiClient = billingApiClient;
         _pendingApiKeyProtector = dataProtectionProvider.CreateProtector(PendingApiKeyProtectorPurpose);
         _timeProvider = timeProvider;
+        _apiKeyCacheInvalidator = apiKeyCacheInvalidator;
     }
 
     /// <inheritdoc/>
@@ -163,10 +169,18 @@ public sealed class MachineService : IMachineService
         // If no cached key was available, re-issue a new one.
         if (plaintextKey is null)
         {
-            plaintextKey = await machineRepo.ReissueApiKeyAsync(machine.Id, cancellationToken);
+            (string? reissuedKey, string? oldKeyHash) = await machineRepo.ReissueApiKeyAsync(machine.Id, cancellationToken);
+            plaintextKey = reissuedKey;
 
             if (plaintextKey is not null)
             {
+                // The reissue overwrote the stored hash; clear the replaced key's auth cache entry
+                // so the old key stops authenticating immediately rather than lingering on its TTL.
+                if (string.IsNullOrEmpty(oldKeyHash) == false)
+                {
+                    await _apiKeyCacheInvalidator.InvalidateByHashAsync(oldKeyHash, cancellationToken);
+                }
+
                 // Cache the encrypted form for retry resilience and mark as delivered.
                 string protectedKey = _pendingApiKeyProtector.Protect(plaintextKey);
                 await redisDb.StringSetAsync(cacheKey, protectedKey, ApiKeyCacheTtl);

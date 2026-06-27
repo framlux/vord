@@ -251,6 +251,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IIntegrationPayloadFormatter, PagerDutyPayloadFormatter>();
         services.AddSingleton<IIntegrationPayloadFormatter, CustomPayloadFormatter>();
         services.AddSingleton<IRoleCacheInvalidator, RoleCacheInvalidator>();
+        services.AddSingleton<IApiKeyCacheInvalidator, ApiKeyCacheInvalidator>();
         services.AddSingleton<IUserSecurityStampService, UserSecurityStampService>();
         services.AddHttpClient<IEmailService, ResendEmailService>();
 

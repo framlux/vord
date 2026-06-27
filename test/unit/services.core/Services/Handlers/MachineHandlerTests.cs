@@ -10,6 +10,7 @@ using Framlux.FleetManagement.Services.Core.Models.Machines;
 using Framlux.FleetManagement.Services.Core.Billing;
 using Framlux.FleetManagement.Services.Core.Handlers;
 using Framlux.FleetManagement.Services.Core.Infrastructure;
+using Framlux.FleetManagement.Services.Core.Security;
 using Framlux.FleetManagement.Services.Core.ServerConfiguration;
 using Framlux.FleetManagement.Test.Infrastructure;
 using LinqToDB;
@@ -48,13 +49,13 @@ public class MachineHandlerTests
         return new DatabaseRepository(dbFactory.Context, new NullLogger<DatabaseRepository>());
     }
 
-    private static MachineHandler CreateHandler(TestDatabaseFactory dbFactory, InMemoryMachinePingService? pingService = null, IBillingApiClient? billingClient = null, ISubscriptionService? subscriptionService = null)
+    private static MachineHandler CreateHandler(TestDatabaseFactory dbFactory, InMemoryMachinePingService? pingService = null, IBillingApiClient? billingClient = null, ISubscriptionService? subscriptionService = null, IApiKeyCacheInvalidator? apiKeyCacheInvalidator = null)
     {
         InMemoryMachinePingService ping = pingService ?? new InMemoryMachinePingService();
         ServerConfigurationService configService = new(Substitute.For<IServerSettingsCache>(), Substitute.For<IConnectionMultiplexer>());
         DatabaseRepository repo = CreateRepo(dbFactory);
 
-        return new MachineHandler(repo, repo, repo, repo, repo, repo, ping, configService, billingClient ?? Substitute.For<IBillingApiClient>(), subscriptionService ?? Substitute.For<ISubscriptionService>(), NullLogger<MachineHandler>.Instance);
+        return new MachineHandler(repo, repo, repo, repo, repo, repo, ping, configService, billingClient ?? Substitute.For<IBillingApiClient>(), subscriptionService ?? Substitute.For<ISubscriptionService>(), apiKeyCacheInvalidator ?? Substitute.For<IApiKeyCacheInvalidator>(), NullLogger<MachineHandler>.Instance);
     }
 
     // ========== DeleteAsync tests ==========
@@ -98,6 +99,37 @@ public class MachineHandlerTests
         await Assert.That(deleted!.IsDeleted).IsTrue();
         await Assert.That(deleted.DeletedByUserId).IsEqualTo(5);
         await Assert.That(deleted.DeletedOn.HasValue).IsTrue();
+    }
+
+    [Test]
+    public async Task DeleteAsync_Success_InvalidatesDeletedKeyAuthCache()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        const string knownHash = "feedface00000000000000000000000000000000000000000000000000000000";
+        Machine machine = TestDataBuilder.BuildMachine(tenantId: 1, apiKeyHash: knownHash, hostname: "doomed-host");
+        machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
+
+        IApiKeyCacheInvalidator invalidator = Substitute.For<IApiKeyCacheInvalidator>();
+        MachineHandler handler = CreateHandler(dbFactory, apiKeyCacheInvalidator: invalidator);
+
+        ServiceResult<ApiResponse<object>> result = await handler.DeleteAsync(machine.Id, 1, 5, CancellationToken.None);
+
+        await Assert.That(result.IsSuccess).IsTrue();
+        // The deleted machine's stored hash must be evicted so its key stops authenticating at once.
+        await invalidator.Received(1).InvalidateByHashAsync(knownHash, Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task DeleteAsync_NotFound_DoesNotInvalidateAuthCache()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        IApiKeyCacheInvalidator invalidator = Substitute.For<IApiKeyCacheInvalidator>();
+        MachineHandler handler = CreateHandler(dbFactory, apiKeyCacheInvalidator: invalidator);
+
+        ServiceResult<ApiResponse<object>> result = await handler.DeleteAsync(999, 1, 1, CancellationToken.None);
+
+        await Assert.That(result.IsNotFound).IsTrue();
+        await invalidator.DidNotReceive().InvalidateByHashAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
     }
 
     // ========== ListAsync tests ==========

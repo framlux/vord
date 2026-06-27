@@ -289,9 +289,9 @@ public class MachineStateRepositoryTests
         long doomedMachineId = await dbFactory.Context.InsertWithInt64IdentityAsync(doomedMachine);
         await dbFactory.Context.InsertAsync(TestDataBuilder.BuildMachineStateSummary(machineId: doomedMachineId, tenantId: tenantId));
 
-        int deleted = await repo.SoftDeleteMachineAsync(doomedMachineId, tenantId, userId, CancellationToken.None);
+        string? deletedKeyHash = await repo.SoftDeleteMachineAsync(doomedMachineId, tenantId, userId, CancellationToken.None);
 
-        await Assert.That(deleted).IsEqualTo(1);
+        await Assert.That(deletedKeyHash).IsNotNull();
         List<MachineStateSummary> result = await repo.GetSummariesForTenantMachinesAsync(tenantId, CancellationToken.None);
         await Assert.That(result.Count).IsEqualTo(1);
         await Assert.That(result[0].MachineId).IsEqualTo(activeMachineId);

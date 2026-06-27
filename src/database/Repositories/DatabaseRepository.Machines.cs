@@ -151,7 +151,7 @@ public partial class DatabaseRepository : IMachineRepository
     }
 
     /// <inheritdoc/>
-    public async Task<string?> ReissueApiKeyAsync(long machineId, CancellationToken cancellationToken)
+    public async Task<(string? plaintextApiKey, string? oldKeyHash)> ReissueApiKeyAsync(long machineId, CancellationToken cancellationToken)
     {
         string plaintextApiKey = RandomNumberGenerator.GetHexString(64, true);
         string apiKeyHash = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(plaintextApiKey)));
@@ -159,6 +159,15 @@ public partial class DatabaseRepository : IMachineRepository
         try
         {
             _logger.LogInformation("Re-issuing API key for Machine {MachineId}", machineId);
+
+            // Capture the hash being replaced before the UPDATE overwrites it so the caller can
+            // invalidate the old key's auth cache entry. Read against the same active-machine
+            // predicate the UPDATE uses.
+            string? oldKeyHash = await _db.Machines
+                .Where(m => (m.Id == machineId) && (m.IsDeleted == false))
+                .Select(m => m.ApiKeyHash)
+                .FirstOrDefaultAsync(cancellationToken);
+
             int updated = await _db.Machines
                 .Where(m => (m.Id == machineId) && (m.IsDeleted == false))
                 .Set(m => m.ApiKeyHash, apiKeyHash)
@@ -169,18 +178,18 @@ public partial class DatabaseRepository : IMachineRepository
             {
                 _logger.LogWarning("Re-issue failed: Machine {MachineId} not found or deleted", machineId);
 
-                return null;
+                return (null, null);
             }
 
             _logger.LogInformation("API key re-issued for Machine {MachineId}", machineId);
+
+            return (plaintextApiKey, oldKeyHash);
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to re-issue API key for Machine {MachineId}", machineId);
             throw;
         }
-
-        return plaintextApiKey;
     }
 
     /// <inheritdoc/>
@@ -218,8 +227,16 @@ public partial class DatabaseRepository : IMachineRepository
     }
 
     /// <inheritdoc/>
-    public async Task<int> SoftDeleteMachineAsync(long machineId, int tenantId, int userId, CancellationToken cancellationToken)
+    public async Task<string?> SoftDeleteMachineAsync(long machineId, int tenantId, int userId, CancellationToken cancellationToken)
     {
+        // Capture the hash before the soft-delete flips IsDeleted so the caller can invalidate the
+        // deleted key's auth cache entry. The same active-machine predicate guards both the read
+        // and the UPDATE, so a null here means nothing will be updated.
+        string? deletedKeyHash = await _db.Machines
+            .Where(m => (m.Id == machineId) && (m.TenantId == tenantId) && (m.IsDeleted == false))
+            .Select(m => m.ApiKeyHash)
+            .FirstOrDefaultAsync(cancellationToken);
+
         int updated = await _db.Machines
             .Where(m => (m.Id == machineId) && (m.TenantId == tenantId) && (m.IsDeleted == false))
             .Set(m => m.IsDeleted, true)
@@ -234,9 +251,11 @@ public partial class DatabaseRepository : IMachineRepository
             await _db.MachineStateSummaries
                 .Where(s => s.MachineId == machineId)
                 .DeleteAsync(cancellationToken);
+
+            return deletedKeyHash;
         }
 
-        return updated;
+        return null;
     }
 
     /// <inheritdoc/>

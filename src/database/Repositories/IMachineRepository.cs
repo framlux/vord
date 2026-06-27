@@ -58,9 +58,14 @@ public interface IMachineRepository
     Task<(Machine? machine, string? plaintextApiKey)> CreateMachineWithKeyAsync(Machine machine, long registrationTokenId, DateTimeOffset now, int? machineLimit = null, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Generates a new API key for an existing machine, replacing the old one.
+    /// Generates a new API key for an existing machine, replacing the old one. Returns the plaintext
+    /// of the newly issued key together with the SHA-256 hash of the key being replaced so the caller
+    /// can invalidate the old key's auth cache entry. Both values are null when the machine was not
+    /// found or is deleted.
     /// </summary>
-    Task<string?> ReissueApiKeyAsync(long machineId, CancellationToken cancellationToken = default);
+    /// <param name="machineId">The machine whose key is being reissued.</param>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    Task<(string? plaintextApiKey, string? oldKeyHash)> ReissueApiKeyAsync(long machineId, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Checks if an approved machine exists, and is active, with the given ID within a tenant.
@@ -73,9 +78,15 @@ public interface IMachineRepository
     Task<Machine?> GetMachineByApiKeyAsync(string apiKey, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Soft-deletes a machine within a tenant. Returns the number of rows updated.
+    /// Soft-deletes a machine within a tenant. Returns the SHA-256 hash of the deleted machine's API
+    /// key so the caller can invalidate its auth cache entry, or null when no active machine matched
+    /// (already deleted, wrong tenant, or not found).
     /// </summary>
-    Task<int> SoftDeleteMachineAsync(long machineId, int tenantId, int userId, CancellationToken cancellationToken = default);
+    /// <param name="machineId">The machine to soft-delete.</param>
+    /// <param name="tenantId">The tenant that must own the machine.</param>
+    /// <param name="userId">The user performing the deletion, recorded for audit.</param>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    Task<string?> SoftDeleteMachineAsync(long machineId, int tenantId, int userId, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Gets the count of active (non-deleted) machines for a tenant.

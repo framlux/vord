@@ -10,6 +10,7 @@ using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Grpc.AgentRegistration;
 using Framlux.FleetManagement.Services.Core.Billing;
 using Framlux.FleetManagement.Services.Core.Machines;
+using Framlux.FleetManagement.Services.Core.Security;
 using Framlux.FleetManagement.Test.Infrastructure;
 using LinqToDB;
 using LinqToDB.Async;
@@ -104,7 +105,7 @@ public class MachineServiceTests
         IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
         redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(Substitute.For<IDatabase>());
         IBillingApiClient billingApiClient = Substitute.For<IBillingApiClient>();
-        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider(), TimeProvider.System);
+        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider(), TimeProvider.System, Substitute.For<IApiKeyCacheInvalidator>());
 
         (RegistrationStatus status, long? id, string? apiKey) result =
             await service.GetRegistrationStatusAsync("UNKNOWN-SN", "UNKNOWN-SID", "", true, CancellationToken.None);
@@ -124,7 +125,7 @@ public class MachineServiceTests
         IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
         redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(Substitute.For<IDatabase>());
         IBillingApiClient billingApiClient = Substitute.For<IBillingApiClient>();
-        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider(), TimeProvider.System);
+        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider(), TimeProvider.System, Substitute.For<IApiKeyCacheInvalidator>());
 
         (RegistrationStatus status, long? id, string? apiKey) result =
             await service.GetRegistrationStatusAsync("NON-EXISTENT-SN", "NON-EXISTENT-SID", TestTokenValue, true, CancellationToken.None);
@@ -160,7 +161,7 @@ public class MachineServiceTests
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
         ILogger<MachineService> logger = new NullLogger<MachineService>();
         IBillingApiClient billingApiClient = Substitute.For<IBillingApiClient>();
-        MachineService service = new(scopeFactory, logger, redis, billingApiClient, provider, TimeProvider.System);
+        MachineService service = new(scopeFactory, logger, redis, billingApiClient, provider, TimeProvider.System, Substitute.For<IApiKeyCacheInvalidator>());
 
         (RegistrationStatus status, long? id, string? apiKey) result =
             await service.GetRegistrationStatusAsync(machine.SerialNumber, machine.SystemId, TestTokenValue, true, CancellationToken.None);
@@ -184,7 +185,7 @@ public class MachineServiceTests
         IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
         redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(Substitute.For<IDatabase>());
         IBillingApiClient billingApiClient = Substitute.For<IBillingApiClient>();
-        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider(), TimeProvider.System);
+        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider(), TimeProvider.System, Substitute.For<IApiKeyCacheInvalidator>());
 
         (RegistrationStatus status, long? id, string? apiKey) result =
             await service.GetRegistrationStatusAsync(machine.SerialNumber, machine.SystemId, TestTokenValue, false, CancellationToken.None);
@@ -203,7 +204,7 @@ public class MachineServiceTests
         IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
         redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(Substitute.For<IDatabase>());
         IBillingApiClient billingApiClient = Substitute.For<IBillingApiClient>();
-        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider(), TimeProvider.System);
+        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider(), TimeProvider.System, Substitute.For<IApiKeyCacheInvalidator>());
 
         (RegistrationStatus status, long? id, string? apiKey) result =
             await service.GetRegistrationStatusAsync("SN-001", "SID-001", "invalid-token", true, CancellationToken.None);
@@ -231,12 +232,12 @@ public class MachineServiceTests
         machineRepo.GetMachineBySerialAndSystemIdAsync(machine.SerialNumber, machine.SystemId, token.TenantId, Arg.Any<CancellationToken>())
             .Returns(machine);
         machineRepo.ReissueApiKeyAsync(machine.Id, Arg.Any<CancellationToken>())
-            .Returns("reissued-plaintext-key");
+            .Returns(("reissued-plaintext-key", "old-key-hash"));
 
         TestServiceScopeFactory scopeFactory = CreateScopeFactory(dbFactory, machineRepo);
         ILogger<MachineService> logger = new NullLogger<MachineService>();
         IBillingApiClient billingApiClient = Substitute.For<IBillingApiClient>();
-        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider(), TimeProvider.System);
+        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider(), TimeProvider.System, Substitute.For<IApiKeyCacheInvalidator>());
 
         (RegistrationStatus status, long? id, string? apiKey) result =
             await service.GetRegistrationStatusAsync(machine.SerialNumber, machine.SystemId, TestTokenValue, true, CancellationToken.None);
@@ -250,6 +251,70 @@ public class MachineServiceTests
             Arg.Any<RedisKey>(),
             Arg.Is<RedisValue>(v => (v != "reissued-plaintext-key") && v.HasValue),
             Arg.Is<Expiration>(e => e.Equals(new Expiration(TimeSpan.FromHours(1)))));
+    }
+
+    [Test]
+    public async Task GetRegistrationStatus_Reissue_InvalidatesOldKeyAuthCache()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        RegistrationToken token = await SeedValidRegistrationToken(dbFactory, FixedNow);
+
+        Machine machine = TestDataBuilder.BuildMachine(tenantId: token.TenantId, registrationTokenId: token.Id);
+        machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
+
+        IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
+        IDatabase redisDb = Substitute.For<IDatabase>();
+        redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(redisDb);
+        redisDb.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
+            .Returns(Task.FromResult<RedisValue>(RedisValue.Null));
+
+        IMachineRepository machineRepo = Substitute.For<IMachineRepository>();
+        machineRepo.GetMachineBySerialAndSystemIdAsync(machine.SerialNumber, machine.SystemId, token.TenantId, Arg.Any<CancellationToken>())
+            .Returns(machine);
+        // The repo returns the hash of the key being replaced; the service must invalidate exactly it.
+        machineRepo.ReissueApiKeyAsync(machine.Id, Arg.Any<CancellationToken>())
+            .Returns(("reissued-plaintext-key", "deadbeefoldhash"));
+
+        IApiKeyCacheInvalidator invalidator = Substitute.For<IApiKeyCacheInvalidator>();
+
+        TestServiceScopeFactory scopeFactory = CreateScopeFactory(dbFactory, machineRepo);
+        MachineService service = new(scopeFactory, new NullLogger<MachineService>(), redis, Substitute.For<IBillingApiClient>(), new EphemeralDataProtectionProvider(), TimeProvider.System, invalidator);
+
+        await service.GetRegistrationStatusAsync(machine.SerialNumber, machine.SystemId, TestTokenValue, true, CancellationToken.None);
+
+        await invalidator.Received(1).InvalidateByHashAsync("deadbeefoldhash", Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task GetRegistrationStatus_ReissueReturnsNullOldHash_DoesNotInvalidate()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        RegistrationToken token = await SeedValidRegistrationToken(dbFactory, FixedNow);
+
+        Machine machine = TestDataBuilder.BuildMachine(tenantId: token.TenantId, registrationTokenId: token.Id);
+        machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
+
+        IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
+        IDatabase redisDb = Substitute.For<IDatabase>();
+        redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(redisDb);
+        redisDb.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
+            .Returns(Task.FromResult<RedisValue>(RedisValue.Null));
+
+        IMachineRepository machineRepo = Substitute.For<IMachineRepository>();
+        machineRepo.GetMachineBySerialAndSystemIdAsync(machine.SerialNumber, machine.SystemId, token.TenantId, Arg.Any<CancellationToken>())
+            .Returns(machine);
+        // A reissued key with no recoverable old hash must not trigger a stray invalidation.
+        machineRepo.ReissueApiKeyAsync(machine.Id, Arg.Any<CancellationToken>())
+            .Returns(("reissued-plaintext-key", (string?)null));
+
+        IApiKeyCacheInvalidator invalidator = Substitute.For<IApiKeyCacheInvalidator>();
+
+        TestServiceScopeFactory scopeFactory = CreateScopeFactory(dbFactory, machineRepo);
+        MachineService service = new(scopeFactory, new NullLogger<MachineService>(), redis, Substitute.For<IBillingApiClient>(), new EphemeralDataProtectionProvider(), TimeProvider.System, invalidator);
+
+        await service.GetRegistrationStatusAsync(machine.SerialNumber, machine.SystemId, TestTokenValue, true, CancellationToken.None);
+
+        await invalidator.DidNotReceive().InvalidateByHashAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
     }
 
     [Test]
@@ -269,7 +334,7 @@ public class MachineServiceTests
         redisDb.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
             .Returns(Task.FromResult<RedisValue>(RedisValue.Null));
         IBillingApiClient billingApiClient = Substitute.For<IBillingApiClient>();
-        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider(), TimeProvider.System);
+        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider(), TimeProvider.System, Substitute.For<IApiKeyCacheInvalidator>());
 
         (RegistrationStatus status, long? id, string? apiKey) result =
             await service.GetRegistrationStatusAsync(machine.SerialNumber, machine.SystemId, TestTokenValue, false, CancellationToken.None);
@@ -298,7 +363,7 @@ public class MachineServiceTests
         IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
         redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(Substitute.For<IDatabase>());
         IBillingApiClient billingApiClient = Substitute.For<IBillingApiClient>();
-        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider(), TimeProvider.System);
+        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider(), TimeProvider.System, Substitute.For<IApiKeyCacheInvalidator>());
 
         (RegistrationStatus status, long? id, string? apiKey) result =
             await service.GetRegistrationStatusAsync(machine.SerialNumber, machine.SystemId, TestTokenValue, true, CancellationToken.None);
@@ -326,7 +391,7 @@ public class MachineServiceTests
         IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
         redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(Substitute.For<IDatabase>());
         IBillingApiClient billingApiClient = Substitute.For<IBillingApiClient>();
-        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider(), TimeProvider.System);
+        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider(), TimeProvider.System, Substitute.For<IApiKeyCacheInvalidator>());
 
         (RegistrationStatus status, long? id, string? apiKey) result =
             await service.GetRegistrationStatusAsync(machine.SerialNumber, machine.SystemId, TestTokenValue, true, CancellationToken.None);
@@ -347,7 +412,7 @@ public class MachineServiceTests
         IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
         redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(Substitute.For<IDatabase>());
         IBillingApiClient billingApiClient = Substitute.For<IBillingApiClient>();
-        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider(), TimeProvider.System);
+        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider(), TimeProvider.System, Substitute.For<IApiKeyCacheInvalidator>());
 
         RegisterSystemRequest request = new()
         {
@@ -377,7 +442,7 @@ public class MachineServiceTests
         IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
         redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(Substitute.For<IDatabase>());
         IBillingApiClient billingApiClient = Substitute.For<IBillingApiClient>();
-        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider(), TimeProvider.System);
+        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider(), TimeProvider.System, Substitute.For<IApiKeyCacheInvalidator>());
 
         RegisterSystemRequest request = new()
         {
@@ -414,7 +479,7 @@ public class MachineServiceTests
         IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
         redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(Substitute.For<IDatabase>());
         IBillingApiClient billingApiClient = Substitute.For<IBillingApiClient>();
-        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider(), TimeProvider.System);
+        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider(), TimeProvider.System, Substitute.For<IApiKeyCacheInvalidator>());
 
         RegisterSystemRequest request = new()
         {
@@ -451,7 +516,7 @@ public class MachineServiceTests
         IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
         redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(Substitute.For<IDatabase>());
         IBillingApiClient billingApiClient = Substitute.For<IBillingApiClient>();
-        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider(), TimeProvider.System);
+        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider(), TimeProvider.System, Substitute.For<IApiKeyCacheInvalidator>());
 
         RegisterSystemRequest request = new()
         {
@@ -492,7 +557,7 @@ public class MachineServiceTests
         IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
         redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(Substitute.For<IDatabase>());
         IBillingApiClient billingApiClient = Substitute.For<IBillingApiClient>();
-        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider(), TimeProvider.System);
+        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider(), TimeProvider.System, Substitute.For<IApiKeyCacheInvalidator>());
 
         RegisterSystemRequest request = new()
         {
@@ -533,7 +598,7 @@ public class MachineServiceTests
         IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
         redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(Substitute.For<IDatabase>());
         IBillingApiClient billingApiClient = Substitute.For<IBillingApiClient>();
-        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider(), TimeProvider.System);
+        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider(), TimeProvider.System, Substitute.For<IApiKeyCacheInvalidator>());
 
         RegisterSystemRequest request = new()
         {
@@ -571,7 +636,7 @@ public class MachineServiceTests
         IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
         redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(Substitute.For<IDatabase>());
         IBillingApiClient billingApiClient = Substitute.For<IBillingApiClient>();
-        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider(), TimeProvider.System);
+        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider(), TimeProvider.System, Substitute.For<IApiKeyCacheInvalidator>());
 
         RegisterSystemRequest request = new()
         {
@@ -630,7 +695,7 @@ public class MachineServiceTests
         redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(Substitute.For<IDatabase>());
         IBillingApiClient billingApiClient = Substitute.For<IBillingApiClient>();
 
-        return new MachineService(scopeFactory, new NullLogger<MachineService>(), redis, billingApiClient, new EphemeralDataProtectionProvider(), timeProvider);
+        return new MachineService(scopeFactory, new NullLogger<MachineService>(), redis, billingApiClient, new EphemeralDataProtectionProvider(), timeProvider, Substitute.For<IApiKeyCacheInvalidator>());
     }
 
     private static RegisterSystemRequest BuildSingleUseRequest()
@@ -839,7 +904,7 @@ public class MachineServiceTests
         billingApiClient.ReportMachineUsageAsync(Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
             .Returns(true);
 
-        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider(), TimeProvider.System);
+        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider(), TimeProvider.System, Substitute.For<IApiKeyCacheInvalidator>());
 
         RegisterSystemRequest request = new()
         {
@@ -900,7 +965,7 @@ public class MachineServiceTests
         redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(Substitute.For<IDatabase>());
         IBillingApiClient billingApiClient = Substitute.For<IBillingApiClient>();
 
-        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider(), TimeProvider.System);
+        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider(), TimeProvider.System, Substitute.For<IApiKeyCacheInvalidator>());
 
         RegisterSystemRequest request = new()
         {
@@ -972,7 +1037,7 @@ public class MachineServiceTests
         billingApiClient.ReportMachineUsageAsync(Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
             .Returns<bool>(_ => throw new InvalidOperationException("Billing service unavailable"));
 
-        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider(), TimeProvider.System);
+        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider(), TimeProvider.System, Substitute.For<IApiKeyCacheInvalidator>());
 
         RegisterSystemRequest request = new()
         {
@@ -1033,7 +1098,7 @@ public class MachineServiceTests
         TestServiceScopeFactory scopeFactory = CreateScopeFactory(dbFactory, machineRepo);
         ILogger<MachineService> logger = new NullLogger<MachineService>();
         IBillingApiClient billingApiClient = Substitute.For<IBillingApiClient>();
-        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider(), TimeProvider.System);
+        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider(), TimeProvider.System, Substitute.For<IApiKeyCacheInvalidator>());
 
         await service.GetRegistrationStatusAsync(machine.SerialNumber, machine.SystemId, TestTokenValue, true, CancellationToken.None);
 
@@ -1067,12 +1132,12 @@ public class MachineServiceTests
         machineRepo.MarkKeyDeliveredAsync(machine.Id, Arg.Any<CancellationToken>())
             .Returns(0); // Concurrent delivery — key already delivered
         machineRepo.ReissueApiKeyAsync(machine.Id, Arg.Any<CancellationToken>())
-            .Returns("reissued-after-concurrent");
+            .Returns(("reissued-after-concurrent", "old-key-hash"));
 
         TestServiceScopeFactory scopeFactory = CreateScopeFactory(dbFactory, machineRepo);
         ILogger<MachineService> logger = new NullLogger<MachineService>();
         IBillingApiClient billingApiClient = Substitute.For<IBillingApiClient>();
-        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider(), TimeProvider.System);
+        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider(), TimeProvider.System, Substitute.For<IApiKeyCacheInvalidator>());
 
         (RegistrationStatus status, long? id, string? apiKey) result =
             await service.GetRegistrationStatusAsync(machine.SerialNumber, machine.SystemId, TestTokenValue, true, CancellationToken.None);
@@ -1103,12 +1168,12 @@ public class MachineServiceTests
         machineRepo.GetMachineBySerialAndSystemIdAsync(machine.SerialNumber, machine.SystemId, token.TenantId, Arg.Any<CancellationToken>())
             .Returns(machine);
         machineRepo.ReissueApiKeyAsync(machine.Id, Arg.Any<CancellationToken>())
-            .Returns((string?)null);
+            .Returns(((string?)null, (string?)null));
 
         TestServiceScopeFactory scopeFactory = CreateScopeFactory(dbFactory, machineRepo);
         ILogger<MachineService> logger = new NullLogger<MachineService>();
         IBillingApiClient billingApiClient = Substitute.For<IBillingApiClient>();
-        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider(), TimeProvider.System);
+        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider(), TimeProvider.System, Substitute.For<IApiKeyCacheInvalidator>());
 
         (RegistrationStatus status, long? id, string? apiKey) result =
             await service.GetRegistrationStatusAsync(machine.SerialNumber, machine.SystemId, TestTokenValue, true, CancellationToken.None);
@@ -1140,7 +1205,7 @@ public class MachineServiceTests
         IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
         redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(Substitute.For<IDatabase>());
         IBillingApiClient billingApiClient = Substitute.For<IBillingApiClient>();
-        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider(), TimeProvider.System);
+        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider(), TimeProvider.System, Substitute.For<IApiKeyCacheInvalidator>());
 
         RegisterSystemRequest request = new()
         {
@@ -1183,7 +1248,7 @@ public class MachineServiceTests
         IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
         redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(Substitute.For<IDatabase>());
         IBillingApiClient billingApiClient = Substitute.For<IBillingApiClient>();
-        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider(), TimeProvider.System);
+        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider(), TimeProvider.System, Substitute.For<IApiKeyCacheInvalidator>());
 
         RegisterSystemRequest request = new()
         {
@@ -1226,7 +1291,7 @@ public class MachineServiceTests
         IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
         redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(Substitute.For<IDatabase>());
         IBillingApiClient billingApiClient = Substitute.For<IBillingApiClient>();
-        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider(), TimeProvider.System);
+        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider(), TimeProvider.System, Substitute.For<IApiKeyCacheInvalidator>());
 
         RegisterSystemRequest request = new()
         {
@@ -1269,7 +1334,7 @@ public class MachineServiceTests
         IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
         redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(Substitute.For<IDatabase>());
         IBillingApiClient billingApiClient = Substitute.For<IBillingApiClient>();
-        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider(), TimeProvider.System);
+        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider(), TimeProvider.System, Substitute.For<IApiKeyCacheInvalidator>());
 
         RegisterSystemRequest request = new()
         {
@@ -1312,7 +1377,7 @@ public class MachineServiceTests
         IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
         redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(Substitute.For<IDatabase>());
         IBillingApiClient billingApiClient = Substitute.For<IBillingApiClient>();
-        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider(), TimeProvider.System);
+        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider(), TimeProvider.System, Substitute.For<IApiKeyCacheInvalidator>());
 
         RegisterSystemRequest request = new()
         {
@@ -1352,7 +1417,7 @@ public class MachineServiceTests
         IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
         redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(Substitute.For<IDatabase>());
         IBillingApiClient billingApiClient = Substitute.For<IBillingApiClient>();
-        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider(), TimeProvider.System);
+        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider(), TimeProvider.System, Substitute.For<IApiKeyCacheInvalidator>());
 
         RegisterSystemRequest request = new()
         {
@@ -1410,7 +1475,7 @@ public class MachineServiceTests
         IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
         redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(Substitute.For<IDatabase>());
         IBillingApiClient billingApiClient = Substitute.For<IBillingApiClient>();
-        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider(), TimeProvider.System);
+        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider(), TimeProvider.System, Substitute.For<IApiKeyCacheInvalidator>());
 
         RegisterSystemRequest request = new()
         {
@@ -1463,7 +1528,7 @@ public class MachineServiceTests
         IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
         redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(Substitute.For<IDatabase>());
         IBillingApiClient billingApiClient = Substitute.For<IBillingApiClient>();
-        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider(), TimeProvider.System);
+        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider(), TimeProvider.System, Substitute.For<IApiKeyCacheInvalidator>());
 
         RegisterSystemRequest request = new()
         {
@@ -1552,7 +1617,7 @@ public class MachineServiceTests
         IDatabase redisDb = Substitute.For<IDatabase>();
         redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(redisDb);
         IBillingApiClient billingApiClient = Substitute.For<IBillingApiClient>();
-        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider(), TimeProvider.System);
+        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider(), TimeProvider.System, Substitute.For<IApiKeyCacheInvalidator>());
 
         RegisterSystemRequest request = new()
         {
@@ -1599,7 +1664,7 @@ public class MachineServiceTests
         IDatabase redisDb = Substitute.For<IDatabase>();
         redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(redisDb);
         IBillingApiClient billingApiClient = Substitute.For<IBillingApiClient>();
-        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider(), TimeProvider.System);
+        MachineService service = new(scopeFactory, logger, redis, billingApiClient, new EphemeralDataProtectionProvider(), TimeProvider.System, Substitute.For<IApiKeyCacheInvalidator>());
 
         RegisterSystemRequest request = new()
         {
@@ -1646,7 +1711,7 @@ public class MachineServiceTests
         redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(redisDb);
         IBillingApiClient billingApiClient = Substitute.For<IBillingApiClient>();
         EphemeralDataProtectionProvider provider = new();
-        MachineService service = new(scopeFactory, logger, redis, billingApiClient, provider, TimeProvider.System);
+        MachineService service = new(scopeFactory, logger, redis, billingApiClient, provider, TimeProvider.System, Substitute.For<IApiKeyCacheInvalidator>());
 
         RegisterSystemRequest request = new()
         {
@@ -1687,7 +1752,8 @@ public class MachineServiceTests
                 redis,
                 billing,
                 null!,
-                TimeProvider.System);
+                TimeProvider.System,
+                Substitute.For<IApiKeyCacheInvalidator>());
 
             return Task.CompletedTask;
         });

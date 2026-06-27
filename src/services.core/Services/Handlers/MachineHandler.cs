@@ -10,6 +10,7 @@ using Framlux.FleetManagement.Services.Core.Infrastructure;
 using Framlux.FleetManagement.Services.Core.Machines;
 using Framlux.FleetManagement.Services.Core.Models;
 using Framlux.FleetManagement.Services.Core.Models.Machines;
+using Framlux.FleetManagement.Services.Core.Security;
 using Framlux.FleetManagement.Services.Core.ServerConfiguration;
 
 namespace Framlux.FleetManagement.Services.Core.Handlers;
@@ -29,6 +30,7 @@ public sealed class MachineHandler : IMachineHandler
     private readonly ServerConfigurationService _configService;
     private readonly IBillingApiClient _billingApiClient;
     private readonly ISubscriptionService _subscriptionService;
+    private readonly IApiKeyCacheInvalidator _apiKeyCacheInvalidator;
     private readonly ILogger<MachineHandler> _logger;
 
     /// <summary>
@@ -45,6 +47,7 @@ public sealed class MachineHandler : IMachineHandler
         ServerConfigurationService configService,
         IBillingApiClient billingApiClient,
         ISubscriptionService subscriptionService,
+        IApiKeyCacheInvalidator apiKeyCacheInvalidator,
         ILogger<MachineHandler> logger)
     {
         ArgumentNullException.ThrowIfNull(machineRepo);
@@ -57,6 +60,7 @@ public sealed class MachineHandler : IMachineHandler
         ArgumentNullException.ThrowIfNull(configService);
         ArgumentNullException.ThrowIfNull(billingApiClient);
         ArgumentNullException.ThrowIfNull(subscriptionService);
+        ArgumentNullException.ThrowIfNull(apiKeyCacheInvalidator);
         ArgumentNullException.ThrowIfNull(logger);
 
         _machineRepo = machineRepo;
@@ -69,6 +73,7 @@ public sealed class MachineHandler : IMachineHandler
         _configService = configService;
         _billingApiClient = billingApiClient;
         _subscriptionService = subscriptionService;
+        _apiKeyCacheInvalidator = apiKeyCacheInvalidator;
         _logger = logger;
     }
 
@@ -91,9 +96,9 @@ public sealed class MachineHandler : IMachineHandler
                 removedAssignments, machineId);
         }
 
-        int updated = await _machineRepo.SoftDeleteMachineAsync(machineId, tenantId.Value, userId, ct);
+        string? deletedKeyHash = await _machineRepo.SoftDeleteMachineAsync(machineId, tenantId.Value, userId, ct);
 
-        if (updated == 0)
+        if (deletedKeyHash is null)
         {
             return ServiceResult<ApiResponse<object>>.NotFound();
         }
@@ -104,6 +109,14 @@ public sealed class MachineHandler : IMachineHandler
             machineId.ToString(), null, null), ct);
 
         await transaction.CommitAsync(ct);
+
+        // Clear the deleted machine's cached auth result so its key stops authenticating immediately
+        // rather than lingering until the cache TTL expires. Done after commit so a rolled-back
+        // delete never evicts a still-valid cache entry.
+        if (string.IsNullOrEmpty(deletedKeyHash) == false)
+        {
+            await _apiKeyCacheInvalidator.InvalidateByHashAsync(deletedKeyHash, ct);
+        }
 
         // Report usage to billing for metered billing after deletion (best effort)
         try

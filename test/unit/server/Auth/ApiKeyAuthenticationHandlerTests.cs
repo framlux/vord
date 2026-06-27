@@ -437,4 +437,61 @@ public class ApiKeyAuthenticationHandlerTests
         await handler.InvalidateCachedKeyAsync("failing-key");
     }
 
+    [Test]
+    public async Task InvalidateCachedKeyByHashAsync_DeletesKeyedByHash()
+    {
+        (IConnectionMultiplexer redis, IDatabase redisDb) = CreateRedisMock();
+        ApiKeyAuthenticationHandler handler = CreateHandler(redis);
+
+        // The stored Machine.ApiKeyHash IS the hash the cache key is built from, so passing it
+        // through must delete exactly the same Redis key the write path produced.
+        string keyHash = ApiKeyAuthenticationHandler.ComputeKeyHash("some-api-key");
+
+        await handler.InvalidateCachedKeyByHashAsync(keyHash);
+
+        await redisDb.Received(1).KeyDeleteAsync(
+            Arg.Is<RedisKey>(k => k.ToString() == "apikey:" + keyHash),
+            Arg.Any<CommandFlags>());
+    }
+
+    [Test]
+    public async Task InvalidateCachedKeyAsync_DelegatesToHashOverload_DeletingSameKey()
+    {
+        (IConnectionMultiplexer redis, IDatabase redisDb) = CreateRedisMock();
+        ApiKeyAuthenticationHandler handler = CreateHandler(redis);
+
+        // Plaintext invalidation must target the same Redis key as the hash a soft-delete would pass.
+        await handler.InvalidateCachedKeyAsync("some-api-key");
+
+        string expectedHash = ApiKeyAuthenticationHandler.ComputeKeyHash("some-api-key");
+        await redisDb.Received(1).KeyDeleteAsync(
+            Arg.Is<RedisKey>(k => k.ToString() == "apikey:" + expectedHash),
+            Arg.Any<CommandFlags>());
+    }
+
+    [Test]
+    public async Task InvalidateCachedKeyByHashAsync_RedisException_DoesNotThrow()
+    {
+        (IConnectionMultiplexer redis, IDatabase redisDb) = CreateRedisMock();
+        redisDb.KeyDeleteAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
+            .Returns<bool>(callInfo => throw new RedisException("Delete failed"));
+
+        ApiKeyAuthenticationHandler handler = CreateHandler(redis);
+
+        // Should not throw — error is logged and swallowed
+        await handler.InvalidateCachedKeyByHashAsync("deadbeef");
+    }
+
+    [Test]
+    public async Task InvalidateCachedKeyByHashAsync_NullOrWhitespace_Throws()
+    {
+        (IConnectionMultiplexer redis, _) = CreateRedisMock();
+        ApiKeyAuthenticationHandler handler = CreateHandler(redis);
+
+        await Assert.That(async () => await handler.InvalidateCachedKeyByHashAsync(null!))
+            .Throws<ArgumentException>();
+        await Assert.That(async () => await handler.InvalidateCachedKeyByHashAsync("   "))
+            .Throws<ArgumentException>();
+    }
+
 }

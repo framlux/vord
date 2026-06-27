@@ -8,6 +8,7 @@ using System.Text;
 using System.Text.Encodings.Web;
 using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Database.Models;
+using Framlux.FleetManagement.Services.Core.Security;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Primitives;
@@ -29,7 +30,13 @@ public class ApiKeyAuthenticationHandler : AuthenticationHandler<AuthenticationS
     public const string SchemeName = "API_Key";
 
     private static readonly TimeSpan CacheTtl = TimeSpan.FromMinutes(5);
-    private const string CachePrefix = "apikey:";
+
+    /// <summary>
+    /// Redis key prefix for cached API key auth results. Shared with
+    /// <see cref="Framlux.FleetManagement.Services.Core.Security.IApiKeyCacheInvalidator"/> so the
+    /// handler (writes) and the out-of-pipeline invalidator (deletes) never drift on the prefix.
+    /// </summary>
+    private const string CachePrefix = IApiKeyCacheInvalidator.CacheKeyPrefix;
 
     private readonly IMachineRepository _machineRepository;
     private readonly IConnectionMultiplexer _redis;
@@ -162,15 +169,25 @@ public class ApiKeyAuthenticationHandler : AuthenticationHandler<AuthenticationS
     /// <param name="apiKey">The plaintext API key to invalidate from cache.</param>
     public async Task InvalidateCachedKeyAsync(string apiKey)
     {
+        await InvalidateCachedKeyByHashAsync(ComputeKeyHash(apiKey));
+    }
+
+    /// <summary>
+    /// Invalidates the cached API key entry by its SHA-256 hash. Preferred for callers that already
+    /// hold the stored hash (soft-delete, reissue of a replaced key) and never see the plaintext.
+    /// </summary>
+    /// <param name="keyHash">The lowercase SHA-256 hex hash of the API key, as stored on the machine.</param>
+    public async Task InvalidateCachedKeyByHashAsync(string keyHash)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(keyHash);
         try
         {
-            string keyHash = ComputeKeyHash(apiKey);
             IDatabase db = _redis.GetDatabase();
             await db.KeyDeleteAsync($"{CachePrefix}{keyHash}");
         }
         catch (RedisException ex)
         {
-            Logger.LogWarning(ex, "Redis cache invalidation failed for API key");
+            Logger.LogWarning(ex, "Redis cache invalidation failed for API key hash");
         }
     }
 
