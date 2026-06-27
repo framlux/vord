@@ -3,6 +3,7 @@
 // See LICENSE for details.
 
 using Framlux.FleetManagement.Services.Core.Security;
+using Microsoft.Extensions.Logging;
 using NSubstitute;
 using StackExchange.Redis;
 
@@ -14,21 +15,22 @@ namespace Framlux.FleetManagement.Test.Services.Security;
 /// </summary>
 public sealed class ApiKeyCacheInvalidatorTests
 {
-    private static (ApiKeyCacheInvalidator invalidator, IDatabase redisDb) CreateInvalidator()
+    private static (ApiKeyCacheInvalidator invalidator, IDatabase redisDb, ILogger<ApiKeyCacheInvalidator> logger) CreateInvalidator()
     {
         IDatabase redisDb = Substitute.For<IDatabase>();
         IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
         redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(redisDb);
+        ILogger<ApiKeyCacheInvalidator> logger = Substitute.For<ILogger<ApiKeyCacheInvalidator>>();
 
-        ApiKeyCacheInvalidator invalidator = new(redis);
+        ApiKeyCacheInvalidator invalidator = new(redis, logger);
 
-        return (invalidator, redisDb);
+        return (invalidator, redisDb, logger);
     }
 
     [Test]
     public async Task InvalidateByHashAsync_DeletesKeyUnderSharedPrefix()
     {
-        (ApiKeyCacheInvalidator invalidator, IDatabase redisDb) = CreateInvalidator();
+        (ApiKeyCacheInvalidator invalidator, IDatabase redisDb, _) = CreateInvalidator();
         const string keyHash = "deadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeefdeadbeef0";
 
         await invalidator.InvalidateByHashAsync(keyHash, CancellationToken.None);
@@ -42,7 +44,7 @@ public sealed class ApiKeyCacheInvalidatorTests
     [Test]
     public async Task InvalidateByHashAsync_UsesSameApikeyPrefixAsHandler()
     {
-        (ApiKeyCacheInvalidator invalidator, IDatabase redisDb) = CreateInvalidator();
+        (ApiKeyCacheInvalidator invalidator, IDatabase redisDb, _) = CreateInvalidator();
 
         await invalidator.InvalidateByHashAsync("abc123", CancellationToken.None);
 
@@ -55,7 +57,7 @@ public sealed class ApiKeyCacheInvalidatorTests
     [Test]
     public async Task InvalidateByHashAsync_NullOrWhitespace_Throws()
     {
-        (ApiKeyCacheInvalidator invalidator, _) = CreateInvalidator();
+        (ApiKeyCacheInvalidator invalidator, _, _) = CreateInvalidator();
 
         await Assert.That(async () => await invalidator.InvalidateByHashAsync(null!, CancellationToken.None))
             .Throws<ArgumentException>();
@@ -66,7 +68,7 @@ public sealed class ApiKeyCacheInvalidatorTests
     [Test]
     public async Task InvalidateByHashAsync_RedisException_DoesNotThrow()
     {
-        (ApiKeyCacheInvalidator invalidator, IDatabase redisDb) = CreateInvalidator();
+        (ApiKeyCacheInvalidator invalidator, IDatabase redisDb, _) = CreateInvalidator();
         redisDb.KeyDeleteAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
             .Returns<bool>(callInfo => throw new RedisException("Delete failed"));
 
@@ -75,8 +77,37 @@ public sealed class ApiKeyCacheInvalidatorTests
     }
 
     [Test]
+    public async Task InvalidateByHashAsync_RedisException_LogsWarning()
+    {
+        (ApiKeyCacheInvalidator invalidator, IDatabase redisDb, ILogger<ApiKeyCacheInvalidator> logger) = CreateInvalidator();
+        redisDb.KeyDeleteAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
+            .Returns<bool>(callInfo => throw new RedisException("Delete failed"));
+
+        await invalidator.InvalidateByHashAsync("somehash", CancellationToken.None);
+
+        // The security path must surface Redis faults for operational visibility, matching the
+        // auth handler's behaviour rather than failing silently.
+        logger.Received(1).Log(
+            LogLevel.Warning,
+            Arg.Any<EventId>(),
+            Arg.Any<object>(),
+            Arg.Any<RedisException>(),
+            Arg.Any<Func<object, Exception?, string>>());
+    }
+
+    [Test]
     public async Task Constructor_NullRedis_Throws()
     {
-        await Assert.That(() => new ApiKeyCacheInvalidator(null!)).Throws<ArgumentNullException>();
+        ILogger<ApiKeyCacheInvalidator> logger = Substitute.For<ILogger<ApiKeyCacheInvalidator>>();
+
+        await Assert.That(() => new ApiKeyCacheInvalidator(null!, logger)).Throws<ArgumentNullException>();
+    }
+
+    [Test]
+    public async Task Constructor_NullLogger_Throws()
+    {
+        IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
+
+        await Assert.That(() => new ApiKeyCacheInvalidator(redis, null!)).Throws<ArgumentNullException>();
     }
 }

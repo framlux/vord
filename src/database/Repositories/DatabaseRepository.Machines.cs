@@ -232,6 +232,10 @@ public partial class DatabaseRepository : IMachineRepository
         // Capture the hash before the soft-delete flips IsDeleted so the caller can invalidate the
         // deleted key's auth cache entry. The same active-machine predicate guards both the read
         // and the UPDATE, so a null here means nothing will be updated.
+        // Known, accepted best-effort limitation: this SELECT and the UPDATE below are two separate
+        // statements, so a concurrent reissue landing between them could leave the post-reissue hash
+        // cached until its TTL (we only return the pre-reissue hash to invalidate). This is acceptable
+        // because cache invalidation is best-effort and the auth-cache TTL bounds the exposure window.
         string? deletedKeyHash = await _db.Machines
             .Where(m => (m.Id == machineId) && (m.TenantId == tenantId) && (m.IsDeleted == false))
             .Select(m => m.ApiKeyHash)
