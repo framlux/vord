@@ -46,13 +46,14 @@ public sealed class TelemetryService : Telemetry.TelemetryBase
     private static readonly Meter TelemetryMeter = new(MeterName);
 
     /// <summary>
-    /// Counts envelopes accepted from agents whose clock skew exceeded <see cref="MaxClockSkew"/>.
-    /// The telemetry is still ingested; this instrument makes drifted agent clocks observable.
+    /// Records the magnitude of agent clock skew for envelopes whose skew exceeded <see cref="MaxClockSkew"/>.
+    /// The telemetry is still ingested; this instrument makes drifted agent clocks observable. Skew magnitude
+    /// is captured as a measurement value rather than a tag to keep the metric bounded in cardinality.
     /// </summary>
-    private static readonly Counter<long> ClockSkewCounter = TelemetryMeter.CreateCounter<long>(
-        "telemetry.agent.clock_skew_exceeded",
-        unit: "{envelope}",
-        description: "Count of accepted telemetry envelopes whose agent clock skew exceeded the threshold.");
+    private static readonly Histogram<double> ClockSkewHistogram = TelemetryMeter.CreateHistogram<double>(
+        "telemetry.agent.clock_skew_seconds",
+        unit: "s",
+        description: "Agent clock skew magnitude in seconds for envelopes exceeding the skew threshold.");
 
     /// <summary>
     /// PostgreSQL error code for unique constraint violation.
@@ -385,7 +386,7 @@ public sealed class TelemetryService : Telemetry.TelemetryBase
             _logger.LogWarning(
                 "Envelope {BatchId} from machine {MachineId} has agent clock skew {Skew} exceeding {Max}; accepting and recording skew",
                 envelope.BatchId, machineId, skew, MaxClockSkew);
-            RecordClockSkew(machineId, skew);
+            RecordClockSkew(skew);
         }
 
         if (envelope.Items.Count > MaxItemsPerEnvelope)
@@ -565,16 +566,14 @@ public sealed class TelemetryService : Telemetry.TelemetryBase
     }
 
     /// <summary>
-    /// Records an observed agent clock skew that exceeded <see cref="MaxClockSkew"/>. Increments the
-    /// ingest skew counter tagged by machine id so drifted agent clocks are visible to metrics
-    /// listeners without dropping the telemetry that produced the skew.
+    /// Records an observed agent clock skew that exceeded <see cref="MaxClockSkew"/>. Captures the skew
+    /// magnitude in the ingest skew histogram so drifted agent clocks are visible to metrics listeners
+    /// without dropping the telemetry that produced the skew. Per-machine detail is preserved in the
+    /// surrounding warning log; the metric carries no machine dimension to keep cardinality bounded.
     /// </summary>
-    private static void RecordClockSkew(long machineId, TimeSpan skew)
+    private static void RecordClockSkew(TimeSpan skew)
     {
-        ClockSkewCounter.Add(
-            1,
-            new KeyValuePair<string, object?>("machine_id", machineId),
-            new KeyValuePair<string, object?>("skew_seconds", (long)skew.TotalSeconds));
+        ClockSkewHistogram.Record(skew.TotalSeconds);
     }
 
     private void EnqueueSshAlertEvaluations(
