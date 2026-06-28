@@ -375,6 +375,35 @@ func TestBuildEnvelope_AllTelemetryTypes(t *testing.T) {
 	}
 }
 
+// Intent: buildEnvelope stamps AgentTimestamp from the injected clock, deterministically.
+func TestBuildEnvelope_AgentTimestampFromInjectedClock(t *testing.T) {
+	store := newTestStore(t)
+	client := &mockTelemetryClient{}
+	s := New(store, client, state.New(), jitter.NewDefault())
+
+	fixed := time.Date(2026, 6, 27, 8, 15, 30, 0, time.UTC)
+	s.clock = func() time.Time { return fixed }
+
+	items := []db.TelemetryQueueItem{
+		{
+			ID:        "item-clock",
+			ItemType:  db.TelemetryCpuUsage,
+			Payload:   `{"cpuUsagePercent": 10}`,
+			CreatedAt: "2026-06-27T08:15:30Z",
+		},
+	}
+
+	envelope := s.buildEnvelope(items)
+
+	if envelope.AgentTimestamp == nil {
+		t.Fatal("expected non-nil AgentTimestamp")
+	}
+	got := envelope.AgentTimestamp.AsTime()
+	if got.Equal(fixed) == false {
+		t.Errorf("expected AgentTimestamp %v, got %v", fixed, got)
+	}
+}
+
 // Intent: buildEnvelope with invalid type still builds envelope (unknown type just has no payload).
 func TestBuildEnvelope_InvalidType(t *testing.T) {
 	store := newTestStore(t)

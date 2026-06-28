@@ -59,11 +59,14 @@ type tierStream struct {
 
 // Sender dequeues telemetry from the local SQLite queue and sends it to the server via gRPC.
 type Sender struct {
-	store   *db.Store
-	client  pb.TelemetryClient
-	rs      *state.RuntimeState
-	logger  *slog.Logger
-	jit     *jitter.Jitter
+	store  *db.Store
+	client pb.TelemetryClient
+	rs     *state.RuntimeState
+	logger *slog.Logger
+	jit    *jitter.Jitter
+	// clock supplies the current time for stamping the envelope's AgentTimestamp. Defaults to
+	// time.Now in production; tests inject a fixed closure for deterministic timestamp assertions.
+	clock func() time.Time
 
 	streams map[string]*tierStream
 }
@@ -76,6 +79,7 @@ func New(store *db.Store, client pb.TelemetryClient, rs *state.RuntimeState, jit
 		rs:     rs,
 		logger: slog.Default().With("component", "sender"),
 		jit:    jit,
+		clock:  time.Now,
 		streams: map[string]*tierStream{
 			"fast": {},
 			"slow": {},
@@ -223,7 +227,7 @@ func (s *Sender) sendBatch(ctx context.Context, tier string, types []db.Telemetr
 func (s *Sender) buildEnvelope(items []db.TelemetryQueueItem) *pb.TelemetryEnvelope {
 	envelope := &pb.TelemetryEnvelope{
 		BatchId:        id.NewV7(),
-		AgentTimestamp: timestamppb.Now(),
+		AgentTimestamp: timestamppb.New(s.clock()),
 	}
 
 	for _, item := range items {

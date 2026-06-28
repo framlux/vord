@@ -2,6 +2,7 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
+using System.Diagnostics.Metrics;
 using System.Globalization;
 using System.Text.Json;
 using Framlux.FleetManagement.Database.Models;
@@ -33,6 +34,27 @@ public sealed class TelemetryService : Telemetry.TelemetryBase
 {
 
     /// <summary>
+    /// Meter name for telemetry-ingest instruments. Subscribe to this name from an OpenTelemetry /
+    /// metrics listener to observe agent clock-skew and other ingest signals.
+    /// </summary>
+    public const string MeterName = "Framlux.FleetManagement.Server.Telemetry";
+
+    /// <summary>
+    /// Meter that owns telemetry-ingest instruments. Static so the instrument is shared across all
+    /// per-request service instances the gRPC framework constructs.
+    /// </summary>
+    private static readonly Meter TelemetryMeter = new(MeterName);
+
+    /// <summary>
+    /// Counts envelopes accepted from agents whose clock skew exceeded <see cref="MaxClockSkew"/>.
+    /// The telemetry is still ingested; this instrument makes drifted agent clocks observable.
+    /// </summary>
+    private static readonly Counter<long> ClockSkewCounter = TelemetryMeter.CreateCounter<long>(
+        "telemetry.agent.clock_skew_exceeded",
+        unit: "{envelope}",
+        description: "Count of accepted telemetry envelopes whose agent clock skew exceeded the threshold.");
+
+    /// <summary>
     /// PostgreSQL error code for unique constraint violation.
     /// </summary>
     private const string PostgresUniqueViolation = "23505";
@@ -62,9 +84,10 @@ public sealed class TelemetryService : Telemetry.TelemetryBase
     private const int MaxPartitionLookbackDays = 7;
 
     /// <summary>
-    /// Maximum allowed clock skew between the agent's timestamp and server time.
-    /// Envelopes with an agent_timestamp outside this window are rejected — the
-    /// agent's clock is too far off to produce meaningful telemetry.
+    /// Threshold above which an agent's clock skew is logged and measured. The skew no longer
+    /// rejects telemetry — the server stamps its own authoritative receipt time and derives the
+    /// dedup/partition timestamp within its own partition window — but skew beyond this is recorded
+    /// for observability because it indicates a drifted real-time clock on the agent.
     /// </summary>
     private static readonly TimeSpan MaxClockSkew = TimeSpan.FromMinutes(5);
 
@@ -76,6 +99,7 @@ public sealed class TelemetryService : Telemetry.TelemetryBase
     private readonly IConnectionMultiplexer _redis;
     private readonly TelemetryOptions _options;
     private readonly ProcessStreamSlotLimiter _processSlotLimiter;
+    private readonly TimeProvider _timeProvider;
     private readonly ILogger<TelemetryService> _logger;
 
     /// <summary>
@@ -105,6 +129,7 @@ public sealed class TelemetryService : Telemetry.TelemetryBase
         IConnectionMultiplexer redis,
         IOptions<TelemetryOptions> options,
         ProcessStreamSlotLimiter processSlotLimiter,
+        TimeProvider timeProvider,
         ILogger<TelemetryService> logger)
     {
         ArgumentNullException.ThrowIfNull(scopeFactory);
@@ -115,6 +140,7 @@ public sealed class TelemetryService : Telemetry.TelemetryBase
         ArgumentNullException.ThrowIfNull(redis);
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(processSlotLimiter);
+        ArgumentNullException.ThrowIfNull(timeProvider);
         ArgumentNullException.ThrowIfNull(logger);
         _scopeFactory = scopeFactory;
         _dedupService = dedupService;
@@ -124,6 +150,7 @@ public sealed class TelemetryService : Telemetry.TelemetryBase
         _redis = redis;
         _options = options.Value;
         _processSlotLimiter = processSlotLimiter;
+        _timeProvider = timeProvider;
         _logger = logger;
     }
 
@@ -175,7 +202,7 @@ public sealed class TelemetryService : Telemetry.TelemetryBase
         using CancellationTokenSource linkedCts = CancellationTokenSource.CreateLinkedTokenSource(context.CancellationToken, streamTimeout.Token);
         int envelopeCount = 0;
         // Track the last subscription-check timestamp so we re-verify periodically.
-        DateTimeOffset lastSubscriptionCheck = DateTimeOffset.UtcNow;
+        DateTimeOffset lastSubscriptionCheck = _timeProvider.GetUtcNow();
 
         try
         {
@@ -183,9 +210,9 @@ public sealed class TelemetryService : Telemetry.TelemetryBase
             {
                 // Re-check subscription state mid-stream so a tenant that lapses to PastDue
                 // during a long-lived stream stops ingesting within one recheck window.
-                if ((DateTimeOffset.UtcNow - lastSubscriptionCheck) >= SubscriptionRecheckInterval)
+                if ((_timeProvider.GetUtcNow() - lastSubscriptionCheck) >= SubscriptionRecheckInterval)
                 {
-                    lastSubscriptionCheck = DateTimeOffset.UtcNow;
+                    lastSubscriptionCheck = _timeProvider.GetUtcNow();
                     if (await IsSubscriptionActiveAsync(context, linkedCts.Token) == false)
                     {
                         _logger.LogInformation(
@@ -329,11 +356,10 @@ public sealed class TelemetryService : Telemetry.TelemetryBase
         CancellationToken ct)
     {
         List<string> acknowledgedIds = [];
-        DateTimeOffset receivedAt = DateTimeOffset.UtcNow;
+        DateTimeOffset receivedAt = _timeProvider.GetUtcNow();
 
-        // Reject envelopes without a timestamp or with clocks too far from server time.
-        // A missing or skewed agent_timestamp means collected_at values are unreliable,
-        // producing misleading telemetry that would pollute dashboards.
+        // A missing agent_timestamp still indicates a broken agent — reject it. A skewed (but present)
+        // timestamp is tolerated below because the server no longer trusts the agent clock for correctness.
         if (envelope.AgentTimestamp is null)
         {
             _logger.LogWarning(
@@ -352,16 +378,14 @@ public sealed class TelemetryService : Telemetry.TelemetryBase
         TimeSpan skew = (agentTime - receivedAt).Duration();
         if (skew > MaxClockSkew)
         {
+            // Drifted real-time clocks are expected on the target hardware. The server stamps its own
+            // authoritative receipt time and derives the dedup/partition timestamp within its own
+            // partition window, so a skewed agent clock no longer threatens correctness. Record the
+            // skew for observability instead of dropping the telemetry.
             _logger.LogWarning(
-                "Envelope {BatchId} from machine {MachineId} rejected: agent clock skew {Skew} exceeds limit of {Max}",
+                "Envelope {BatchId} from machine {MachineId} has agent clock skew {Skew} exceeding {Max}; accepting and recording skew",
                 envelope.BatchId, machineId, skew, MaxClockSkew);
-
-            return new TelemetryAck
-            {
-                BatchId = envelope.BatchId,
-                Success = false,
-                ErrorMessage = $"Agent clock skew ({skew.TotalSeconds:F0}s) exceeds maximum allowed ({MaxClockSkew.TotalSeconds:F0}s)"
-            };
+            RecordClockSkew(machineId, skew);
         }
 
         if (envelope.Items.Count > MaxItemsPerEnvelope)
@@ -538,6 +562,19 @@ public sealed class TelemetryService : Telemetry.TelemetryBase
         }
 
         return collected;
+    }
+
+    /// <summary>
+    /// Records an observed agent clock skew that exceeded <see cref="MaxClockSkew"/>. Increments the
+    /// ingest skew counter tagged by machine id so drifted agent clocks are visible to metrics
+    /// listeners without dropping the telemetry that produced the skew.
+    /// </summary>
+    private static void RecordClockSkew(long machineId, TimeSpan skew)
+    {
+        ClockSkewCounter.Add(
+            1,
+            new KeyValuePair<string, object?>("machine_id", machineId),
+            new KeyValuePair<string, object?>("skew_seconds", (long)skew.TotalSeconds));
     }
 
     private void EnqueueSshAlertEvaluations(

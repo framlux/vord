@@ -23,6 +23,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using Microsoft.Extensions.Time.Testing;
 using NSubstitute;
 using Polly;
 using StackExchange.Redis;
@@ -39,6 +40,10 @@ public sealed class TelemetryServiceTests
     private readonly ISubscriptionService _subscriptionService;
     private readonly IBackgroundJobClient _backgroundJobs = Substitute.For<IBackgroundJobClient>();
     private readonly ILogger<TelemetryService> _logger = Substitute.For<ILogger<TelemetryService>>();
+    // Fixed server clock so skew assertions are deterministic. Initialized to the real current
+    // instant so the happy-path tests (which stamp AgentTimestamp from DateTimeOffset.UtcNow) stay
+    // well within the skew threshold.
+    private readonly FakeTimeProvider _timeProvider = new(DateTimeOffset.UtcNow);
 
     /// <summary>
     /// Initializes a new instance of the <see cref="TelemetryServiceTests"/> class.
@@ -106,7 +111,7 @@ public sealed class TelemetryServiceTests
 
     private TelemetryService CreateService(IServiceScopeFactory scopeFactory)
     {
-        return new TelemetryService(scopeFactory, _dedupService, _subscriptionService, _backgroundJobs, NoOpPipeline, BuildTestRedis(), Options.Create(new TelemetryOptions()), new ProcessStreamSlotLimiter(5000), _logger);
+        return new TelemetryService(scopeFactory, _dedupService, _subscriptionService, _backgroundJobs, NoOpPipeline, BuildTestRedis(), Options.Create(new TelemetryOptions()), new ProcessStreamSlotLimiter(5000), _timeProvider, _logger);
     }
 
     /// <summary>
@@ -307,7 +312,7 @@ public sealed class TelemetryServiceTests
                 return ids.ToDictionary(id => id, _ => false);
             });
 
-        TelemetryService service = new(scopeFactory, dupDedupService, _subscriptionService, _backgroundJobs, NoOpPipeline, BuildTestRedis(), Options.Create(new TelemetryOptions()), new ProcessStreamSlotLimiter(5000), _logger);
+        TelemetryService service = new(scopeFactory, dupDedupService, _subscriptionService, _backgroundJobs, NoOpPipeline, BuildTestRedis(), Options.Create(new TelemetryOptions()), new ProcessStreamSlotLimiter(5000), _timeProvider, _logger);
         ServerCallContext context = CreateAuthenticatedContext(200);
 
         TelemetryEnvelope envelope = new()
@@ -414,7 +419,7 @@ public sealed class TelemetryServiceTests
                 UpdatedAt = DateTimeOffset.UtcNow,
             });
 
-        TelemetryService service = new(scopeFactory, _dedupService, inactiveSubService, _backgroundJobs, NoOpPipeline, BuildTestRedis(), Options.Create(new TelemetryOptions()), new ProcessStreamSlotLimiter(5000), _logger);
+        TelemetryService service = new(scopeFactory, _dedupService, inactiveSubService, _backgroundJobs, NoOpPipeline, BuildTestRedis(), Options.Create(new TelemetryOptions()), new ProcessStreamSlotLimiter(5000), _timeProvider, _logger);
         ServerCallContext context = CreateAuthenticatedContext(100);
 
         TelemetryEnvelope envelope = new() { AgentTimestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow), BatchId ="batch-inactive" };
@@ -679,7 +684,7 @@ public sealed class TelemetryServiceTests
                 UpdatedAt = DateTimeOffset.UtcNow,
             });
 
-        TelemetryService service = new(scopeFactory, _dedupService, inactiveSubService, _backgroundJobs, NoOpPipeline, BuildTestRedis(), Options.Create(new TelemetryOptions()), new ProcessStreamSlotLimiter(5000), _logger);
+        TelemetryService service = new(scopeFactory, _dedupService, inactiveSubService, _backgroundJobs, NoOpPipeline, BuildTestRedis(), Options.Create(new TelemetryOptions()), new ProcessStreamSlotLimiter(5000), _timeProvider, _logger);
         ServerCallContext context = CreateAuthenticatedContext(100);
 
         FakeAsyncStreamReader<TelemetryEnvelope> requestStream = new([]);
@@ -902,15 +907,16 @@ public sealed class TelemetryServiceTests
     }
 
     [Test]
-    public async Task SubmitTelemetry_ClockSkewExceedsLimit_ReturnsError()
+    public async Task SubmitTelemetry_ClockSkewExceedsLimit_AcceptsAndInsertsTelemetry()
     {
         using TestDatabaseFactory dbFactory = new();
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
         TelemetryService service = CreateService(scopeFactory);
         ServerCallContext context = CreateAuthenticatedContext(100);
 
-        // 10 minutes in the future exceeds the 5-minute skew window.
-        DateTimeOffset skewedTime = DateTimeOffset.UtcNow.AddMinutes(10);
+        // 30 minutes ahead of the fixed server clock far exceeds the 5-minute skew threshold.
+        // Drifted RTCs are expected on the target hardware; the envelope must still be accepted.
+        DateTimeOffset skewedTime = _timeProvider.GetUtcNow().AddMinutes(30);
 
         TelemetryEnvelope envelope = new()
         {
@@ -926,24 +932,25 @@ public sealed class TelemetryServiceTests
 
         TelemetryAck ack = await service.SubmitTelemetry(envelope, context);
 
-        await Assert.That(ack.Success).IsFalse();
-        await Assert.That(ack.ErrorMessage).Contains("clock skew");
+        await Assert.That(ack.Success).IsTrue();
+        await Assert.That(ack.BatchId).IsEqualTo("batch-skew");
 
+        // The skewed telemetry is ingested rather than dropped.
         List<MachineTelemetry> telemetry = await dbFactory.Context.MachineTelemetry.ToListAsync();
 
-        await Assert.That(telemetry.Count).IsEqualTo(0);
+        await Assert.That(telemetry.Count).IsEqualTo(1);
     }
 
     [Test]
-    public async Task SubmitTelemetry_ClockSkewPastLimit_ReturnsError()
+    public async Task SubmitTelemetry_ClockSkewPastLimit_AcceptsTelemetry()
     {
         using TestDatabaseFactory dbFactory = new();
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
         TelemetryService service = CreateService(scopeFactory);
         ServerCallContext context = CreateAuthenticatedContext(100);
 
-        // 10 minutes in the past also exceeds the 5-minute skew window.
-        DateTimeOffset skewedTime = DateTimeOffset.UtcNow.AddMinutes(-10);
+        // 30 minutes behind the fixed server clock also far exceeds the skew threshold but is tolerated.
+        DateTimeOffset skewedTime = _timeProvider.GetUtcNow().AddMinutes(-30);
 
         TelemetryEnvelope envelope = new()
         {
@@ -959,8 +966,8 @@ public sealed class TelemetryServiceTests
 
         TelemetryAck ack = await service.SubmitTelemetry(envelope, context);
 
-        await Assert.That(ack.Success).IsFalse();
-        await Assert.That(ack.ErrorMessage).Contains("clock skew");
+        await Assert.That(ack.Success).IsTrue();
+        await Assert.That(ack.BatchId).IsEqualTo("batch-skew-past");
     }
 
     [Test]
@@ -981,7 +988,7 @@ public sealed class TelemetryServiceTests
         });
 
         // Use a no-op pipeline so the BrokenCircuitException propagates out unhandled by Polly.
-        TelemetryService service = new(scopeFactory, _dedupService, _subscriptionService, _backgroundJobs, NoOpPipeline, BuildTestRedis(), Options.Create(new TelemetryOptions()), new ProcessStreamSlotLimiter(5000), _logger);
+        TelemetryService service = new(scopeFactory, _dedupService, _subscriptionService, _backgroundJobs, NoOpPipeline, BuildTestRedis(), Options.Create(new TelemetryOptions()), new ProcessStreamSlotLimiter(5000), _timeProvider, _logger);
         ServerCallContext context = CreateAuthenticatedContext(100);
 
         TelemetryEnvelope envelope = new()
@@ -1018,7 +1025,7 @@ public sealed class TelemetryServiceTests
             { typeof(Database.Repositories.IMachineStateRepository), throwingRepo }
         });
 
-        TelemetryService service = new(scopeFactory, _dedupService, _subscriptionService, _backgroundJobs, NoOpPipeline, BuildTestRedis(), Options.Create(new TelemetryOptions()), new ProcessStreamSlotLimiter(5000), _logger);
+        TelemetryService service = new(scopeFactory, _dedupService, _subscriptionService, _backgroundJobs, NoOpPipeline, BuildTestRedis(), Options.Create(new TelemetryOptions()), new ProcessStreamSlotLimiter(5000), _timeProvider, _logger);
         ServerCallContext context = CreateAuthenticatedContext(100);
 
         TelemetryEnvelope envelope = new()
@@ -1055,7 +1062,7 @@ public sealed class TelemetryServiceTests
             { typeof(Database.Repositories.IMachineStateRepository), throwingRepo }
         });
 
-        TelemetryService service = new(scopeFactory, _dedupService, _subscriptionService, _backgroundJobs, NoOpPipeline, BuildTestRedis(), Options.Create(new TelemetryOptions()), new ProcessStreamSlotLimiter(5000), _logger);
+        TelemetryService service = new(scopeFactory, _dedupService, _subscriptionService, _backgroundJobs, NoOpPipeline, BuildTestRedis(), Options.Create(new TelemetryOptions()), new ProcessStreamSlotLimiter(5000), _timeProvider, _logger);
         ServerCallContext context = CreateAuthenticatedContext(100);
 
         TelemetryEnvelope envelope = new()
@@ -1086,7 +1093,7 @@ public sealed class TelemetryServiceTests
         using TestDatabaseFactory dbFactory = new();
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
 
-        TelemetryService service = new(scopeFactory, _dedupService, _subscriptionService, _backgroundJobs, NoOpPipeline, BuildTestRedis(), Options.Create(new TelemetryOptions()), new ProcessStreamSlotLimiter(5000), _logger);
+        TelemetryService service = new(scopeFactory, _dedupService, _subscriptionService, _backgroundJobs, NoOpPipeline, BuildTestRedis(), Options.Create(new TelemetryOptions()), new ProcessStreamSlotLimiter(5000), _timeProvider, _logger);
 
         // Context with a valid MachineId claim but no TenantId claim — IsSubscriptionActiveAsync returns false.
         DefaultHttpContext httpContext = new();

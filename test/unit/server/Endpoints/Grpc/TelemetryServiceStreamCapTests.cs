@@ -37,6 +37,7 @@ public sealed class TelemetryServiceStreamCapTests
             redis,
             Options.Create(options),
             processLimiter ?? new ProcessStreamSlotLimiter(5000),
+            TimeProvider.System,
             NullLogger<TelemetryService>.Instance);
     }
 

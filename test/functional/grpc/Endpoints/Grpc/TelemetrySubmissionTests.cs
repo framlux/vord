@@ -400,10 +400,11 @@ public sealed class TelemetrySubmissionTests
     }
 
     [Test]
-    public async Task SubmitTelemetry_AgentClockSkewedForward_RejectsWithClockSkewError()
+    public async Task SubmitTelemetry_AgentClockSkewedForward_AcceptsAndPersists()
     {
-        // Intent: A machine whose clock is 10 minutes ahead of server time sends
-        // unreliable timestamps. The server must reject the envelope.
+        // Intent: A machine whose clock is 10 minutes ahead of server time has a drifted RTC.
+        // The server stamps its own authoritative receipt time, so the envelope is accepted and
+        // persisted rather than dropped; the skew is logged and recorded for observability.
         using FunctionalTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
 
@@ -434,21 +435,20 @@ public sealed class TelemetrySubmissionTests
 
         TelemetryAck ack = await client.SubmitTelemetryAsync(envelope, headers: headers);
 
-        await Assert.That(ack.Success).IsFalse();
-        await Assert.That(ack.ErrorMessage).Contains("clock skew");
+        await Assert.That(ack.Success).IsTrue();
 
-        // Verify nothing was persisted
+        // The skewed telemetry is persisted rather than discarded.
         int count = await db.MachineTelemetry
             .Where(t => t.MachineId == machineId)
             .CountAsync();
-        await Assert.That(count).IsEqualTo(0);
+        await Assert.That(count).IsEqualTo(1);
     }
 
     [Test]
-    public async Task SubmitTelemetry_AgentClockSkewedBackward_RejectsWithClockSkewError()
+    public async Task SubmitTelemetry_AgentClockSkewedBackward_AcceptsAndPersists()
     {
-        // Intent: A machine whose clock is 10 minutes behind server time.
-        // Same rejection as forward skew — both directions are unreliable.
+        // Intent: A machine whose clock is 10 minutes behind server time is also tolerated.
+        // Both skew directions are accepted now that the server trusts its own receipt time.
         using FunctionalTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
 
@@ -479,8 +479,12 @@ public sealed class TelemetrySubmissionTests
 
         TelemetryAck ack = await client.SubmitTelemetryAsync(envelope, headers: headers);
 
-        await Assert.That(ack.Success).IsFalse();
-        await Assert.That(ack.ErrorMessage).Contains("clock skew");
+        await Assert.That(ack.Success).IsTrue();
+
+        int count = await db.MachineTelemetry
+            .Where(t => t.MachineId == machineId)
+            .CountAsync();
+        await Assert.That(count).IsEqualTo(1);
     }
 
     [Test]
