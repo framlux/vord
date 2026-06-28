@@ -5,7 +5,6 @@
 using FastEndpoints;
 using FluentValidation;
 using Framlux.FleetManagement.Database.Enums;
-using Framlux.FleetManagement.Services.Core.Alerts;
 
 namespace Framlux.FleetManagement.Server.Endpoints.Web.Alerts;
 
@@ -31,8 +30,8 @@ public sealed class CreateAlertRuleValidator : Validator<CreateAlertRuleRequest>
             .When(x => x.Description is not null);
 
         RuleFor(x => x.DurationMinutes)
-            .Must((req, duration) => ValidateDurationForMetric(req.Metric, duration))
-            .WithMessage(req => GetDurationValidationMessage(req.Metric));
+            .Must((req, duration) => AlertRuleMetricRules.ValidateDurationForMetric(req.Metric, duration))
+            .WithMessage(req => AlertRuleMetricRules.GetDurationValidationMessage(req.Metric));
 
         RuleFor(x => x.Metric)
             .Must(metric => Enum.TryParse<AlertMetric>(metric, true, out _))
@@ -47,75 +46,11 @@ public sealed class CreateAlertRuleValidator : Validator<CreateAlertRuleRequest>
             .WithMessage("Invalid severity");
 
         RuleFor(x => x.Threshold)
-            .InclusiveBetween(0, 100)
-            .WithMessage("Threshold for percentage metrics must be between 0 and 100")
-            .When(x => IsPercentageMetric(x.Metric));
-
-        RuleFor(x => x.Threshold)
-            .Must(threshold => (threshold == 0) || (threshold == 1))
-            .WithMessage("Threshold for this metric must be 0 or 1")
-            .When(x => IsBinaryMetric(x.Metric));
-
-        RuleFor(x => x.Threshold)
-            .GreaterThanOrEqualTo(0)
-            .WithMessage("Threshold must be zero or positive")
-            .When(x => (IsPercentageMetric(x.Metric) == false) && (IsBinaryMetric(x.Metric) == false));
+            .Must((req, threshold) => AlertRuleMetricRules.ValidateThresholdForMetric(req.Metric, threshold))
+            .WithMessage(req => AlertRuleMetricRules.GetThresholdValidationMessage(req.Metric));
 
         RuleFor(x => x.MachineIds)
             .NotEmpty()
             .WithMessage("At least one machine must be selected");
-    }
-
-    private static bool ValidateDurationForMetric(string? metric, int duration)
-    {
-        if (Enum.TryParse<AlertMetric>(metric, true, out AlertMetric parsed) == false)
-        {
-            return duration >= 0;
-        }
-
-        if (AlertConstants.IsEventMetric(parsed))
-        {
-            return duration == 0;
-        }
-
-        return (duration >= AlertConstants.GetMinimumDurationMinutes(parsed)) &&
-               (duration <= AlertConstants.MaxRuleDurationMinutes);
-    }
-
-    private static string GetDurationValidationMessage(string? metric)
-    {
-        if (Enum.TryParse<AlertMetric>(metric, true, out AlertMetric parsed) == false)
-        {
-            return "Duration must be zero or positive";
-        }
-
-        if (AlertConstants.IsEventMetric(parsed))
-        {
-            return "Duration must be zero for event-based metrics";
-        }
-
-        int minimum = AlertConstants.GetMinimumDurationMinutes(parsed);
-
-        return $"Duration for {parsed} alerts must be between {minimum} and {AlertConstants.MaxRuleDurationMinutes} minutes";
-    }
-
-    private static bool IsPercentageMetric(string? metric)
-    {
-        if (Enum.TryParse<AlertMetric>(metric, true, out AlertMetric parsed) == false)
-        {
-            return false;
-        }
-
-        return parsed is AlertMetric.CpuUsage or AlertMetric.MemoryUsage or AlertMetric.DiskUsage;
-    }
-
-    private static bool IsBinaryMetric(string? metric)
-    {
-        if (Enum.TryParse<AlertMetric>(metric, true, out AlertMetric parsed) == false)
-        {
-            return false;
-        }
-
-        return parsed is AlertMetric.MachineOffline or AlertMetric.DiskHealth;
     }
 }

@@ -126,6 +126,7 @@ public sealed class UpdateAlertRuleValidatorTests
     public async Task NegativeThreshold_FailsValidation()
     {
         UpdateAlertRuleRequest request = ValidRequest();
+        request.Metric = "FailedServices";
         request.Threshold = -1;
 
         ValidationResult result = await _validator.ValidateAsync(request);
@@ -149,7 +150,62 @@ public sealed class UpdateAlertRuleValidatorTests
     public async Task LargePositiveThreshold_PassesValidation()
     {
         UpdateAlertRuleRequest request = ValidRequest();
+        request.Metric = "FailedServices";
         request.Threshold = 999;
+
+        ValidationResult result = await _validator.ValidateAsync(request);
+
+        await Assert.That(result.IsValid).IsTrue();
+    }
+
+    // --- Per-Metric Threshold Validation ---
+
+    [Test]
+    public async Task PercentageMetric_ThresholdAboveHundred_FailsValidation()
+    {
+        UpdateAlertRuleRequest request = ValidRequest();
+        request.Metric = "CpuUsage";
+        request.Threshold = 150;
+
+        ValidationResult result = await _validator.ValidateAsync(request);
+
+        await Assert.That(result.IsValid).IsFalse();
+        await Assert.That(result.Errors.Any(e => e.ErrorMessage == "Threshold for percentage metrics must be between 0 and 100")).IsTrue();
+    }
+
+    [Test]
+    public async Task PercentageMetric_ThresholdAtHundred_PassesValidation()
+    {
+        UpdateAlertRuleRequest request = ValidRequest();
+        request.Metric = "CpuUsage";
+        request.Threshold = 100;
+
+        ValidationResult result = await _validator.ValidateAsync(request);
+
+        await Assert.That(result.IsValid).IsTrue();
+    }
+
+    [Test]
+    public async Task BinaryMetric_ThresholdAboveOne_FailsValidation()
+    {
+        UpdateAlertRuleRequest request = ValidRequest();
+        request.Metric = "MachineOffline";
+        request.Threshold = 2;
+        request.DurationMinutes = 5;
+
+        ValidationResult result = await _validator.ValidateAsync(request);
+
+        await Assert.That(result.IsValid).IsFalse();
+        await Assert.That(result.Errors.Any(e => e.ErrorMessage == "Threshold for this metric must be 0 or 1")).IsTrue();
+    }
+
+    [Test]
+    public async Task BinaryMetric_ThresholdOne_PassesValidation()
+    {
+        UpdateAlertRuleRequest request = ValidRequest();
+        request.Metric = "MachineOffline";
+        request.Threshold = 1;
+        request.DurationMinutes = 5;
 
         ValidationResult result = await _validator.ValidateAsync(request);
 

@@ -207,33 +207,14 @@ public sealed class AlertRuleUpdateEndpoint : Endpoint<UpdateAlertRuleRequest, A
     /// </summary>
     internal static string? ValidateMetricConstraints(AlertMetric metric, decimal threshold, int durationMinutes)
     {
-        bool isPercentageMetric = metric is AlertMetric.CpuUsage or AlertMetric.MemoryUsage or AlertMetric.DiskUsage;
-        bool isBinaryMetric = metric is AlertMetric.MachineOffline or AlertMetric.DiskHealth;
-
-        if (isPercentageMetric && ((threshold < 0) || (threshold > 100)))
+        if (AlertRuleMetricRules.ValidateThresholdForMetric(metric, threshold) == false)
         {
-            return "Threshold for percentage metrics must be between 0 and 100";
+            return AlertRuleMetricRules.GetThresholdValidationMessage(metric);
         }
 
-        if (isBinaryMetric && (threshold != 0) && (threshold != 1))
+        if (AlertRuleMetricRules.ValidateDurationForMetric(metric, durationMinutes) == false)
         {
-            return "Threshold for this metric must be 0 or 1";
-        }
-
-        if ((isPercentageMetric == false) && (isBinaryMetric == false) && (threshold < 0))
-        {
-            return "Threshold must be zero or positive";
-        }
-
-        if (AlertConstants.IsEventMetric(metric) && (durationMinutes != 0))
-        {
-            return "Duration must be zero for event-based metrics";
-        }
-
-        int minimumDuration = AlertConstants.GetMinimumDurationMinutes(metric);
-        if ((durationMinutes < minimumDuration) || (durationMinutes > AlertConstants.MaxRuleDurationMinutes))
-        {
-            return $"Duration for {metric} alerts must be between {minimumDuration} and {AlertConstants.MaxRuleDurationMinutes} minutes";
+            return AlertRuleMetricRules.GetDurationValidationMessage(metric);
         }
 
         return null;
