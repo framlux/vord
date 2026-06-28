@@ -163,6 +163,11 @@ public partial class DatabaseRepository : IMachineRepository
             // Capture the hash being replaced before the UPDATE overwrites it so the caller can
             // invalidate the old key's auth cache entry. Read against the same active-machine
             // predicate the UPDATE uses.
+            // Known, accepted best-effort limitation (mirrors SoftDeleteMachineAsync): this SELECT and
+            // the UPDATE below are two separate statements, so a concurrent soft-delete landing between
+            // them makes the UPDATE affect zero rows — the updated == 0 guard then returns before any
+            // invalidation, so a stale hash is never acted on. This is safe because cache invalidation
+            // is best-effort and the auth-cache TTL bounds any residual exposure window.
             string? oldKeyHash = await _db.Machines
                 .Where(m => (m.Id == machineId) && (m.IsDeleted == false))
                 .Select(m => m.ApiKeyHash)
