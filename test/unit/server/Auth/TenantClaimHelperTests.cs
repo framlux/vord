@@ -14,56 +14,6 @@ namespace Framlux.FleetManagement.Test.Auth;
 public class TenantClaimHelperTests
 {
     [Test]
-    public async Task GetTenantIdFromClaims_WithoutHttpContext_ExtractsFromFirstRoleClaim()
-    {
-        ClaimsIdentity identity = new(
-            [new Claim(ClaimTypes.Role, "42:1")],
-            authenticationType: "test");
-        ClaimsPrincipal user = new(identity);
-
-        int? result = TenantClaimHelper.GetTenantIdFromClaims(user);
-
-        await Assert.That(result).IsEqualTo(42);
-    }
-
-    [Test]
-    public async Task GetTenantIdFromClaims_WithoutHttpContext_NoClaims_ReturnsNull()
-    {
-        ClaimsIdentity identity = new(authenticationType: "test");
-        ClaimsPrincipal user = new(identity);
-
-        int? result = TenantClaimHelper.GetTenantIdFromClaims(user);
-
-        await Assert.That(result).IsNull();
-    }
-
-    [Test]
-    public async Task GetTenantIdFromClaims_WithoutHttpContext_MalformedClaim_ReturnsNull()
-    {
-        ClaimsIdentity identity = new(
-            [new Claim(ClaimTypes.Role, "not-valid")],
-            authenticationType: "test");
-        ClaimsPrincipal user = new(identity);
-
-        int? result = TenantClaimHelper.GetTenantIdFromClaims(user);
-
-        await Assert.That(result).IsNull();
-    }
-
-    [Test]
-    public async Task GetTenantIdFromClaims_WithoutHttpContext_NonNumericTenantId_ReturnsNull()
-    {
-        ClaimsIdentity identity = new(
-            [new Claim(ClaimTypes.Role, "abc:1")],
-            authenticationType: "test");
-        ClaimsPrincipal user = new(identity);
-
-        int? result = TenantClaimHelper.GetTenantIdFromClaims(user);
-
-        await Assert.That(result).IsNull();
-    }
-
-    [Test]
     public async Task GetTenantIdFromClaims_WithHttpContext_CookieOverridesDefault()
     {
         ClaimsIdentity identity = new(

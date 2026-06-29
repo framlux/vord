@@ -70,25 +70,4 @@ public static class TenantClaimHelper
 
         return null;
     }
-
-    /// <summary>
-    /// Extracts the tenant ID from the user's role claims (without cookie support).
-    /// Role claims are stored as "{tenantId}:{roleId}".
-    /// </summary>
-    /// <param name="user">The claims principal.</param>
-    /// <returns>Returns the tenant ID if found; otherwise, null.</returns>
-    public static int? GetTenantIdFromClaims(ClaimsPrincipal user)
-    {
-        Claim? roleClaim = user.FindFirst(ClaimTypes.Role);
-        if (roleClaim is not null && roleClaim.Value.Contains(':'))
-        {
-            string tenantIdStr = roleClaim.Value.Split(':')[0];
-            if (int.TryParse(tenantIdStr, out int tid))
-            {
-                return tid;
-            }
-        }
-
-        return null;
-    }
 }
