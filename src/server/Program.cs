@@ -276,6 +276,9 @@ builder.Services.AddHangfireJobTypes(
 
 // Server-specific handler registrations (have Auth dependencies that stay in server)
 builder.Services.AddScoped<Framlux.FleetManagement.Server.Services.Handlers.ITenantOidcHandler, Framlux.FleetManagement.Server.Services.Handlers.TenantOidcHandler>();
+builder.Services.AddScoped<Framlux.FleetManagement.Server.Auth.TenantContext>();
+builder.Services.AddScoped<Framlux.FleetManagement.Server.Auth.ITenantContext>(
+    sp => sp.GetRequiredService<Framlux.FleetManagement.Server.Auth.TenantContext>());
 
 // Shared endpoint validators (scoped — depend on scoped repositories)
 builder.Services.AddScoped<HistoryRequestValidator>();
@@ -416,6 +419,7 @@ app.UseFastEndpoints(options =>
         options.Versioning.Prefix = "api/v";
         options.Endpoints.Configurator = ep =>
         {
+            ep.PreProcessor<Framlux.FleetManagement.Server.Services.Tenancy.TenantContextPreProcessor>(FastEndpoints.Order.Before);
             ep.PreProcessor<SubscriptionStatusPreProcessor>(FastEndpoints.Order.Before);
             ep.PreProcessor<ProSubscriptionPreProcessor>(FastEndpoints.Order.Before);
 
