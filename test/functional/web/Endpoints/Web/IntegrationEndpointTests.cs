@@ -799,6 +799,24 @@ public sealed class IntegrationEndpointTests
         await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.NotFound);
     }
 
+    [Test]
+    public async Task Update_OtherTenantIntegration_Returns404_AndDoesNotMutate()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantIdA, int userIdA) = await SeedTenantAndUser(db);
+        (int tenantIdB, int userIdB) = await SeedTenantAndUser(db);
+        int integrationId = await SeedIntegration(db, tenantIdA, userIdA, IntegrationProvider.Slack, "A Original");
+
+        HttpClient clientB = BuildClient(factory, tenantIdB, userIdB);
+        HttpResponseMessage response = await clientB.PutAsJsonAsync($"/api/v1/integrations/{integrationId}", new { name = "Hijacked" });
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.NotFound);
+
+        IntegrationEndpoint row = await db.IntegrationEndpoints.FirstAsync(i => i.Id == integrationId);
+        await Assert.That(row.Name).IsEqualTo("A Original");
+    }
+
     // --- Transactional Audit Log Tests ---
 
     [Test]

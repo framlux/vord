@@ -212,7 +212,7 @@ public sealed class IntegrationRepositoryTests
         IntegrationEndpoint integration = BuildIntegration(tenantId, userId, isEnabled: true);
         integration.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(integration);
 
-        await repo.UpdateIntegrationEnabledAsync(integration.Id, false);
+        await repo.UpdateIntegrationEnabledAsync(integration.Id, tenantId, false);
 
         IntegrationEndpoint? updated = await dbFactory.Context.IntegrationEndpoints
             .FirstOrDefaultAsync(i => i.Id == integration.Id);
@@ -277,7 +277,7 @@ public sealed class IntegrationRepositoryTests
         IntegrationEndpoint integration = BuildIntegration(tenantId, userId, name: "Original Name");
         integration.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(integration);
 
-        await repo.UpdateIntegrationNameAsync(integration.Id, "Updated Name");
+        await repo.UpdateIntegrationNameAsync(integration.Id, tenantId, "Updated Name");
 
         IntegrationEndpoint? updated = await dbFactory.Context.IntegrationEndpoints
             .FirstOrDefaultAsync(i => i.Id == integration.Id);
@@ -299,7 +299,7 @@ public sealed class IntegrationRepositoryTests
         integration.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(integration);
 
         string newConfig = """{"url":"https://hooks.example.com/updated","secret":"new-encrypted-secret"}""";
-        await repo.UpdateIntegrationConfigurationAsync(integration.Id, newConfig);
+        await repo.UpdateIntegrationConfigurationAsync(integration.Id, tenantId, newConfig);
 
         IntegrationEndpoint? updated = await dbFactory.Context.IntegrationEndpoints
             .FirstOrDefaultAsync(i => i.Id == integration.Id);
@@ -321,7 +321,7 @@ public sealed class IntegrationRepositoryTests
         integration.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(integration);
 
         string newConfig = """{"url":"https://hooks.example.com/multi","secret":"updated-secret"}""";
-        await repo.UpdateIntegrationAsync(integration.Id, "Multi Update", false, newConfig);
+        await repo.UpdateIntegrationAsync(integration.Id, tenantId, "Multi Update", false, newConfig);
 
         IntegrationEndpoint? updated = await dbFactory.Context.IntegrationEndpoints
             .FirstOrDefaultAsync(i => i.Id == integration.Id);
@@ -331,6 +331,48 @@ public sealed class IntegrationRepositoryTests
         await Assert.That(updated.IsEnabled).IsFalse();
         await Assert.That(updated.Configuration).IsEqualTo(newConfig);
         await Assert.That(updated.UpdatedAt).IsNotNull();
+    }
+
+    [Test]
+    public async Task UpdateIntegrationAsync_WrongTenant_ReturnsFalse_AndNoChange()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        IIntegrationRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+
+        (int userId, int tenantId) = await SeedUserAndTenantAsync(dbFactory);
+
+        Tenant otherTenant = TestDataBuilder.BuildTenant(createdByUserId: userId);
+        int otherTenantId = await dbFactory.Context.InsertWithInt32IdentityAsync(otherTenant);
+
+        IntegrationEndpoint integration = BuildIntegration(tenantId, userId, name: "Original", isEnabled: true);
+        integration.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(integration);
+
+        bool updated = await repo.UpdateIntegrationAsync(integration.Id, otherTenantId, "Hijacked", false, null);
+
+        await Assert.That(updated).IsFalse();
+
+        IntegrationEndpoint? rawRecord = await dbFactory.Context.IntegrationEndpoints
+            .FirstOrDefaultAsync(i => i.Id == integration.Id);
+
+        await Assert.That(rawRecord).IsNotNull();
+        await Assert.That(rawRecord!.Name).IsEqualTo("Original");
+        await Assert.That(rawRecord.IsEnabled).IsTrue();
+    }
+
+    [Test]
+    public async Task UpdateIntegrationAsync_CorrectTenant_ReturnsTrue()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        IIntegrationRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+
+        (int userId, int tenantId) = await SeedUserAndTenantAsync(dbFactory);
+
+        IntegrationEndpoint integration = BuildIntegration(tenantId, userId, name: "Original");
+        integration.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(integration);
+
+        bool updated = await repo.UpdateIntegrationAsync(integration.Id, tenantId, "Renamed", null, null);
+
+        await Assert.That(updated).IsTrue();
     }
 
     [Test]
@@ -395,7 +437,7 @@ public sealed class IntegrationRepositoryTests
         integration.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(integration);
 
         string newConfig = """{"url":"https://new.example.com"}""";
-        await repo.UpdateIntegrationAsync(integration.Id, "New Name", false, newConfig);
+        await repo.UpdateIntegrationAsync(integration.Id, tenantId, "New Name", false, newConfig);
 
         // Bypass the repository's soft-delete filter to get the raw record
         IntegrationEndpoint? rawRecord = await dbFactory.Context.IntegrationEndpoints

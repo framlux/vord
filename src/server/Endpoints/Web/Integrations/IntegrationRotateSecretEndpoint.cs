@@ -102,7 +102,7 @@ public sealed class IntegrationRotateSecretEndpoint : EndpointWithoutRequest<Api
         config["secret"] = encryptedSecret;
 
         string updatedConfigJson = JsonSerializer.Serialize(config, JsonDefaults.CamelCase);
-        await _integrationRepo.UpdateIntegrationConfigurationAsync(integrationId, updatedConfigJson, ct);
+        await _integrationRepo.UpdateIntegrationConfigurationAsync(integrationId, tenantId.Value, updatedConfigJson, ct);
 
         await _auditLog.InsertAuditLogAsync(AuditHelper.Create(
             tenantId.Value, userId.Value, null,

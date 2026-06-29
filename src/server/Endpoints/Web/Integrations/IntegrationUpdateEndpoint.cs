@@ -112,7 +112,7 @@ public sealed class IntegrationUpdateEndpoint : Endpoint<UpdateIntegrationReques
         }
 
         // Apply all changes in a single query
-        await _integrationRepo.UpdateIntegrationAsync(integrationId, trimmedName, req.IsEnabled, configurationJson, ct);
+        await _integrationRepo.UpdateIntegrationAsync(integrationId, tenantId.Value, trimmedName, req.IsEnabled, configurationJson, ct);
 
         if (trimmedName is not null)
         {

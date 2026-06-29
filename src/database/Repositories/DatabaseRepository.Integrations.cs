@@ -63,44 +63,50 @@ public partial class DatabaseRepository : IIntegrationRepository
     }
 
     /// <inheritdoc/>
-    public async Task UpdateIntegrationEnabledAsync(int integrationId, bool isEnabled, CancellationToken cancellationToken)
+    public async Task<bool> UpdateIntegrationEnabledAsync(int integrationId, int tenantId, bool isEnabled, CancellationToken cancellationToken)
     {
-        await _db.IntegrationEndpoints
-            .Where(i => (i.Id == integrationId) && (i.DeletedAt == null))
+        int affected = await _db.IntegrationEndpoints
+            .Where(i => (i.Id == integrationId) && (i.TenantId == tenantId) && (i.DeletedAt == null))
             .Set(i => i.IsEnabled, isEnabled)
             .Set(i => i.UpdatedAt, DateTimeOffset.UtcNow)
             .UpdateAsync(cancellationToken);
+
+        return affected > 0;
     }
 
     /// <inheritdoc/>
-    public async Task UpdateIntegrationNameAsync(int integrationId, string name, CancellationToken cancellationToken)
+    public async Task<bool> UpdateIntegrationNameAsync(int integrationId, int tenantId, string name, CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(name);
 
-        await _db.IntegrationEndpoints
-            .Where(i => (i.Id == integrationId) && (i.DeletedAt == null))
+        int affected = await _db.IntegrationEndpoints
+            .Where(i => (i.Id == integrationId) && (i.TenantId == tenantId) && (i.DeletedAt == null))
             .Set(i => i.Name, name)
             .Set(i => i.UpdatedAt, DateTimeOffset.UtcNow)
             .UpdateAsync(cancellationToken);
+
+        return affected > 0;
     }
 
     /// <inheritdoc/>
-    public async Task UpdateIntegrationConfigurationAsync(int integrationId, string configuration, CancellationToken cancellationToken)
+    public async Task<bool> UpdateIntegrationConfigurationAsync(int integrationId, int tenantId, string configuration, CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(configuration);
 
-        await _db.IntegrationEndpoints
-            .Where(i => (i.Id == integrationId) && (i.DeletedAt == null))
+        int affected = await _db.IntegrationEndpoints
+            .Where(i => (i.Id == integrationId) && (i.TenantId == tenantId) && (i.DeletedAt == null))
             .Set(i => i.Configuration, configuration)
             .Set(i => i.UpdatedAt, DateTimeOffset.UtcNow)
             .UpdateAsync(cancellationToken);
+
+        return affected > 0;
     }
 
     /// <inheritdoc/>
-    public async Task UpdateIntegrationAsync(int integrationId, string? name, bool? isEnabled, string? configuration, CancellationToken cancellationToken)
+    public async Task<bool> UpdateIntegrationAsync(int integrationId, int tenantId, string? name, bool? isEnabled, string? configuration, CancellationToken cancellationToken)
     {
         IUpdatable<IntegrationEndpoint> query = _db.IntegrationEndpoints
-            .Where(i => (i.Id == integrationId) && (i.DeletedAt == null))
+            .Where(i => (i.Id == integrationId) && (i.TenantId == tenantId) && (i.DeletedAt == null))
             .AsUpdatable();
 
         if (name is not null)
@@ -120,7 +126,9 @@ public partial class DatabaseRepository : IIntegrationRepository
 
         query = query.Set(i => i.UpdatedAt, DateTimeOffset.UtcNow);
 
-        await query.UpdateAsync(cancellationToken);
+        int affected = await query.UpdateAsync(cancellationToken);
+
+        return affected > 0;
     }
 
     /// <inheritdoc/>

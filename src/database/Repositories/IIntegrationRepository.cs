@@ -33,25 +33,29 @@ public interface IIntegrationRepository
     Task<int> SoftDeleteIntegrationAsync(int integrationId, int tenantId, int deletedByUserId, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Updates the enabled flag on an integration endpoint.
+    /// Updates the enabled flag on an integration endpoint, scoped to the specified tenant.
+    /// Returns true when a row was updated, false when no matching row exists for the tenant.
     /// </summary>
-    Task UpdateIntegrationEnabledAsync(int integrationId, bool isEnabled, CancellationToken cancellationToken = default);
+    Task<bool> UpdateIntegrationEnabledAsync(int integrationId, int tenantId, bool isEnabled, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Updates the name of an integration endpoint.
+    /// Updates the name of an integration endpoint, scoped to the specified tenant.
+    /// Returns true when a row was updated, false when no matching row exists for the tenant.
     /// </summary>
-    Task UpdateIntegrationNameAsync(int integrationId, string name, CancellationToken cancellationToken = default);
+    Task<bool> UpdateIntegrationNameAsync(int integrationId, int tenantId, string name, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Updates the configuration JSON of an integration endpoint.
+    /// Updates the configuration JSON of an integration endpoint, scoped to the specified tenant.
+    /// Returns true when a row was updated, false when no matching row exists for the tenant.
     /// </summary>
-    Task UpdateIntegrationConfigurationAsync(int integrationId, string configuration, CancellationToken cancellationToken = default);
+    Task<bool> UpdateIntegrationConfigurationAsync(int integrationId, int tenantId, string configuration, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Updates multiple fields on an integration endpoint in a single query.
-    /// Only non-null parameters are applied. Sets UpdatedAt automatically.
+    /// Updates multiple fields on an integration endpoint in a single query, scoped to the specified tenant.
+    /// Only non-null parameters are applied. Sets UpdatedAt automatically. Returns true when a row was
+    /// updated, false when no matching row exists for the tenant.
     /// </summary>
-    Task UpdateIntegrationAsync(int integrationId, string? name, bool? isEnabled, string? configuration, CancellationToken cancellationToken = default);
+    Task<bool> UpdateIntegrationAsync(int integrationId, int tenantId, string? name, bool? isEnabled, string? configuration, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Returns the count of non-deleted integration endpoints for a tenant.
