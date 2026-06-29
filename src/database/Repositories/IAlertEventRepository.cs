@@ -50,12 +50,15 @@ public interface IAlertEventRepository
     Task<AlertEvent?> GetAlertEventByIdAsync(long eventId, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Acknowledges an alert event by setting its status, timestamp, and user ID.
+    /// Acknowledges an alert event by setting its status, timestamp, and user ID, scoped to the
+    /// specified tenant. Returns true when a row was updated, false when no matching row exists for
+    /// the tenant.
     /// </summary>
     /// <param name="eventId">The alert event ID.</param>
+    /// <param name="tenantId">The tenant that owns the event.</param>
     /// <param name="userId">The user who acknowledged the event.</param>
     /// <param name="cancellationToken">A cancellation token.</param>
-    Task AcknowledgeAlertEventAsync(long eventId, int? userId, CancellationToken cancellationToken = default);
+    Task<bool> AcknowledgeAlertEventAsync(long eventId, int tenantId, int? userId, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Resolves all active (non-resolved) events for a specific rule and machine pair.

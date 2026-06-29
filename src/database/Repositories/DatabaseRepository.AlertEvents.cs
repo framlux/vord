@@ -90,16 +90,21 @@ public partial class DatabaseRepository : IAlertEventRepository
     }
 
     /// <inheritdoc/>
-    public async Task AcknowledgeAlertEventAsync(long eventId, int? userId, CancellationToken cancellationToken)
+    public async Task<bool> AcknowledgeAlertEventAsync(long eventId, int tenantId, int? userId, CancellationToken cancellationToken)
     {
-        await _db.AlertEvents
-            .Where(e => e.Id == eventId)
+        int affected = await _db.AlertEvents
+            .Where(e => (e.Id == eventId) && (e.TenantId == tenantId))
             .Set(e => e.Status, AlertEventStatus.Acknowledged)
             .Set(e => e.AcknowledgedAt, DateTimeOffset.UtcNow)
             .Set(e => e.AcknowledgedByUserId, userId)
             .UpdateAsync(cancellationToken);
 
-        _logger.LogDebug("Acknowledged alert event {EventId} by user {UserId}", eventId, userId);
+        if (affected > 0)
+        {
+            _logger.LogDebug("Acknowledged alert event {EventId} by user {UserId}", eventId, userId);
+        }
+
+        return affected > 0;
     }
 
     /// <inheritdoc/>

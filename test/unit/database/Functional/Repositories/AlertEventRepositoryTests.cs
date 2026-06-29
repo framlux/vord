@@ -122,7 +122,7 @@ public class AlertEventRepositoryTests
             alertRuleId: ruleId, tenantId: tenantId, machineId: machineId);
         AlertEvent? created = await repo.CreateEventIfNotExistsAsync(firstEvent);
         await Assert.That(created).IsNotNull();
-        await repo.AcknowledgeAlertEventAsync(created!.Id, userId);
+        await repo.AcknowledgeAlertEventAsync(created!.Id, tenantId, userId);
 
         // Attempt to create a new event for the same rule/machine while the prior one is still
         // Acknowledged (not Resolved). This must return null — no duplicate row, no new alert
@@ -487,7 +487,7 @@ public class AlertEventRepositoryTests
         AlertEvent evt = TestDataBuilder.BuildAlertEvent(alertRuleId: ruleId, tenantId: tenantId, machineId: machineId);
         evt.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(evt);
 
-        await repo.AcknowledgeAlertEventAsync(evt.Id, userId);
+        await repo.AcknowledgeAlertEventAsync(evt.Id, tenantId, userId);
 
         AlertEvent? result = await repo.GetAlertEventByIdAsync(evt.Id);
 
@@ -504,12 +504,37 @@ public class AlertEventRepositoryTests
         IAlertEventRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
 
         // Acknowledging a non-existent event should not throw; it simply updates zero rows.
-        await repo.AcknowledgeAlertEventAsync(99999, 1);
+        bool acked = await repo.AcknowledgeAlertEventAsync(99999, tenantId: 1, userId: 1);
+
+        await Assert.That(acked).IsFalse();
 
         // Verify no side-effects by checking that the event still does not exist.
         AlertEvent? result = await repo.GetAlertEventByIdAsync(99999);
 
         await Assert.That(result).IsNull();
+    }
+
+    [Test]
+    public async Task AcknowledgeAlertEventAsync_WrongTenant_ReturnsFalse_AndStaysTriggered()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        IAlertEventRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+
+        (int userId, int tenantId, long machineId, int ruleId) = await SeedPrerequisitesAsync(dbFactory);
+
+        AlertEvent evt = TestDataBuilder.BuildAlertEvent(alertRuleId: ruleId, tenantId: tenantId, machineId: machineId);
+        evt.Status = AlertEventStatus.Triggered;
+        evt.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(evt);
+
+        bool acked = await repo.AcknowledgeAlertEventAsync(evt.Id, tenantId + 999, userId);
+
+        await Assert.That(acked).IsFalse();
+
+        AlertEvent? result = await repo.GetAlertEventByIdAsync(evt.Id);
+
+        await Assert.That(result).IsNotNull();
+        await Assert.That(result!.Status).IsEqualTo(AlertEventStatus.Triggered);
+        await Assert.That(result.AcknowledgedAt).IsNull();
     }
 
     // ========== ResolveEventsForRuleMachineAsync tests ==========

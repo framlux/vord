@@ -75,7 +75,7 @@ public sealed class AlertEventAcknowledgeEndpoint : EndpointWithoutRequest<ApiRe
 
         int? userId = TenantClaimHelper.GetUserIdFromClaims(User);
 
-        await _alertEventRepo.AcknowledgeAlertEventAsync(eventId, userId, ct);
+        await _alertEventRepo.AcknowledgeAlertEventAsync(eventId, tenantId.Value, userId, ct);
 
         await _auditLog.InsertAuditLogAsync(AuditHelper.Create(
             tenantId.Value, userId, null,
