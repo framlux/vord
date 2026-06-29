@@ -817,6 +817,35 @@ public sealed class IntegrationEndpointTests
         await Assert.That(row.Name).IsEqualTo("A Original");
     }
 
+    [Test]
+    public async Task Update_CustomProvider_PreservesStoredSecret()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId) = await SeedTenantAndUser(db);
+        int integrationId = await SeedIntegration(db, tenantId, userId, IntegrationProvider.Custom, "Custom Hook");
+
+        IntegrationEndpoint before = await db.IntegrationEndpoints.FirstAsync(i => i.Id == integrationId);
+        string originalSecret = JsonDocument.Parse(before.Configuration).RootElement.GetProperty("secret").GetString()!;
+
+        HttpClient client = BuildClient(factory, tenantId, userId);
+        HttpResponseMessage response = await client.PutAsJsonAsync($"/api/v1/integrations/{integrationId}", new
+        {
+            configuration = new Dictionary<string, string>
+            {
+                ["url"] = "https://new.example.com/webhook",
+                ["secret"] = "attacker-supplied"
+            }
+        });
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
+
+        IntegrationEndpoint after = await db.IntegrationEndpoints.FirstAsync(i => i.Id == integrationId);
+        string persistedSecret = JsonDocument.Parse(after.Configuration).RootElement.GetProperty("secret").GetString()!;
+        await Assert.That(persistedSecret).IsEqualTo(originalSecret);
+        await Assert.That(JsonDocument.Parse(after.Configuration).RootElement.GetProperty("url").GetString()).IsEqualTo("https://new.example.com/webhook");
+    }
+
     // --- Transactional Audit Log Tests ---
 
     [Test]

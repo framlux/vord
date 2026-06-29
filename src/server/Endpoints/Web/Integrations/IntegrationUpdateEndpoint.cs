@@ -98,7 +98,20 @@ public sealed class IntegrationUpdateEndpoint : Endpoint<UpdateIntegrationReques
         string? configurationJson = null;
         if (req.Configuration is not null)
         {
-            string? configError = IntegrationConfigValidator.ValidateProviderConfiguration(integration.Provider, req.Configuration);
+            // The webhook secret is never accepted on update; it is encrypted at rest and rotated
+            // only through the dedicated rotate-secret endpoint. Strip any client-supplied value and
+            // re-inject the stored encrypted secret so a partial update cannot destroy it.
+            Dictionary<string, string> incoming = new(req.Configuration);
+            incoming.Remove("secret");
+
+            using JsonDocument existingConfig = JsonDocument.Parse(integration.Configuration);
+            if (existingConfig.RootElement.TryGetProperty("secret", out JsonElement existingSecret) &&
+                (existingSecret.ValueKind == JsonValueKind.String))
+            {
+                incoming["secret"] = existingSecret.GetString()!;
+            }
+
+            string? configError = IntegrationConfigValidator.ValidateProviderConfiguration(integration.Provider, incoming);
             if (configError is not null)
             {
                 HttpContext.Response.StatusCode = 400;
@@ -108,7 +121,7 @@ public sealed class IntegrationUpdateEndpoint : Endpoint<UpdateIntegrationReques
                 return;
             }
 
-            configurationJson = JsonSerializer.Serialize(req.Configuration, JsonDefaults.CamelCase);
+            configurationJson = JsonSerializer.Serialize(incoming, JsonDefaults.CamelCase);
         }
 
         // Apply all changes in a single query
