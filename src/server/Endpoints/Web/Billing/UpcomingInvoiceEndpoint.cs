@@ -75,14 +75,16 @@ public sealed class UpcomingInvoiceEndpoint : EndpointWithoutRequest<ApiResponse
 {
     private readonly ITenantRepository _tenantRepository;
     private readonly IBillingApiClient _billingApiClient;
+    private readonly ITenantContext _tenantContext;
 
     /// <summary>
     /// Creates a new instance of the <see cref="UpcomingInvoiceEndpoint"/> class.
     /// </summary>
-    public UpcomingInvoiceEndpoint(ITenantRepository tenantRepository, IBillingApiClient billingApiClient)
+    public UpcomingInvoiceEndpoint(ITenantRepository tenantRepository, IBillingApiClient billingApiClient, ITenantContext tenantContext)
     {
         _tenantRepository = tenantRepository;
         _billingApiClient = billingApiClient;
+        _tenantContext = tenantContext;
     }
 
     /// <inheritdoc/>
@@ -96,7 +98,7 @@ public sealed class UpcomingInvoiceEndpoint : EndpointWithoutRequest<ApiResponse
     /// <inheritdoc/>
     public override async Task HandleAsync(CancellationToken ct)
     {
-        int? tenantId = TenantClaimHelper.GetTenantIdFromClaims(User, HttpContext);
+        int? tenantId = _tenantContext.TenantId;
         if (tenantId is null)
         {
             HttpContext.Response.StatusCode = 401;

@@ -40,14 +40,16 @@ public sealed class AlertEventListEndpoint : Endpoint<AlertEventListRequest, Api
 {
     private readonly IAlertEventRepository _alertEventRepo;
     private readonly IMachineStateRepository _machineStateRepo;
+    private readonly ITenantContext _tenantContext;
 
     /// <summary>
     /// Creates a new instance of the <see cref="AlertEventListEndpoint"/> class.
     /// </summary>
-    public AlertEventListEndpoint(IAlertEventRepository alertEventRepo, IMachineStateRepository machineStateRepo)
+    public AlertEventListEndpoint(IAlertEventRepository alertEventRepo, IMachineStateRepository machineStateRepo, ITenantContext tenantContext)
     {
         _alertEventRepo = alertEventRepo;
         _machineStateRepo = machineStateRepo;
+        _tenantContext = tenantContext;
     }
 
     /// <inheritdoc/>
@@ -62,7 +64,7 @@ public sealed class AlertEventListEndpoint : Endpoint<AlertEventListRequest, Api
     /// <inheritdoc/>
     public override async Task HandleAsync(AlertEventListRequest req, CancellationToken ct)
     {
-        int? tenantId = TenantClaimHelper.GetTenantIdFromClaims(User, HttpContext);
+        int? tenantId = _tenantContext.TenantId;
         if (tenantId is null)
         {
             HttpContext.Response.StatusCode = 401;

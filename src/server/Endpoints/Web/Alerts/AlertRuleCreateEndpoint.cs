@@ -22,6 +22,7 @@ public sealed class AlertRuleCreateEndpoint : Endpoint<CreateAlertRuleRequest, A
     private readonly IMachineRepository _machineRepo;
     private readonly ISubscriptionService _subscriptionService;
     private readonly IAuditLogRepository _auditLog;
+    private readonly ITenantContext _tenantContext;
     private readonly IDatabaseTransactionProvider _transactionProvider;
 
     /// <summary>
@@ -32,12 +33,14 @@ public sealed class AlertRuleCreateEndpoint : Endpoint<CreateAlertRuleRequest, A
         IMachineRepository machineRepo,
         ISubscriptionService subscriptionService,
         IAuditLogRepository auditLog,
+        ITenantContext tenantContext,
         IDatabaseTransactionProvider transactionProvider)
     {
         _alertRuleRepo = alertRuleRepo;
         _machineRepo = machineRepo;
         _subscriptionService = subscriptionService;
         _auditLog = auditLog;
+        _tenantContext = tenantContext;
         _transactionProvider = transactionProvider;
     }
 
@@ -53,7 +56,7 @@ public sealed class AlertRuleCreateEndpoint : Endpoint<CreateAlertRuleRequest, A
     /// <inheritdoc/>
     public override async Task HandleAsync(CreateAlertRuleRequest req, CancellationToken ct)
     {
-        int? tenantId = TenantClaimHelper.GetTenantIdFromClaims(User, HttpContext);
+        int? tenantId = _tenantContext.TenantId;
         if (tenantId is null)
         {
             HttpContext.Response.StatusCode = 401;
@@ -113,7 +116,7 @@ public sealed class AlertRuleCreateEndpoint : Endpoint<CreateAlertRuleRequest, A
             return;
         }
 
-        int? userId = TenantClaimHelper.GetUserIdFromClaims(User);
+        int? userId = _tenantContext.UserId;
         if (userId is null)
         {
             HttpContext.Response.StatusCode = 401;

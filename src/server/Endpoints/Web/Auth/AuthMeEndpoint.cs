@@ -21,6 +21,7 @@ public sealed class AuthMeEndpoint : EndpointWithoutRequest<ApiResponse<UserDto>
     private readonly IAuthMeHandler _handler;
     private readonly IAntiforgery _antiforgery;
     private readonly ILogger<AuthMeEndpoint> _logger;
+    private readonly ITenantContext _tenantContext;
 
     /// <summary>
     /// Creates a new instance of the <see cref="AuthMeEndpoint"/> class.
@@ -28,11 +29,13 @@ public sealed class AuthMeEndpoint : EndpointWithoutRequest<ApiResponse<UserDto>
     /// <param name="handler">The auth me handler instance.</param>
     /// <param name="antiforgery">The antiforgery service used to issue the double-submit token.</param>
     /// <param name="logger">The logger instance.</param>
-    public AuthMeEndpoint(IAuthMeHandler handler, IAntiforgery antiforgery, ILogger<AuthMeEndpoint> logger)
+    /// <param name="tenantContext">Provides the resolved tenant and user identity for the current request.</param>
+    public AuthMeEndpoint(IAuthMeHandler handler, IAntiforgery antiforgery, ILogger<AuthMeEndpoint> logger, ITenantContext tenantContext)
     {
         _handler = handler;
         _antiforgery = antiforgery;
         _logger = logger;
+        _tenantContext = tenantContext;
     }
 
     /// <inheritdoc/>
@@ -84,7 +87,7 @@ public sealed class AuthMeEndpoint : EndpointWithoutRequest<ApiResponse<UserDto>
         dto.IsGlobalAdmin = result.Data!.IsGlobalAdmin;
         dto.Tenants.AddRange(result.Data!.Tenants);
         dto.NeedsOnboarding = result.Data!.NeedsOnboarding;
-        dto.ActiveTenantId = TenantClaimHelper.GetTenantIdFromClaims(User, HttpContext);
+        dto.ActiveTenantId = _tenantContext.TenantId;
 
         // Issue the double-submit antiforgery pair on this authenticated GET: GetAndStoreTokens
         // writes the antiforgery cookie onto the response and returns the matching request token.

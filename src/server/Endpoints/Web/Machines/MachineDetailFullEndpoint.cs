@@ -25,13 +25,15 @@ public sealed class MachineDetailFullRequest
 public sealed class MachineDetailFullEndpoint : Endpoint<MachineDetailFullRequest, ApiResponse<MachineDetailDto>>
 {
     private readonly IMachineDetailHandler _handler;
+    private readonly ITenantContext _tenantContext;
 
     /// <summary>
     /// Creates a new instance of the <see cref="MachineDetailFullEndpoint"/> class.
     /// </summary>
-    public MachineDetailFullEndpoint(IMachineDetailHandler handler)
+    public MachineDetailFullEndpoint(IMachineDetailHandler handler, ITenantContext tenantContext)
     {
         _handler = handler;
+        _tenantContext = tenantContext;
     }
 
     /// <inheritdoc/>
@@ -45,7 +47,7 @@ public sealed class MachineDetailFullEndpoint : Endpoint<MachineDetailFullReques
     /// <inheritdoc/>
     public override async Task HandleAsync(MachineDetailFullRequest req, CancellationToken ct)
     {
-        int? tenantId = TenantClaimHelper.GetTenantIdFromClaims(User, HttpContext);
+        int? tenantId = _tenantContext.TenantId;
 
         ServiceResult<MachineDetailDto> result = await _handler.GetFullDetailAsync(req.Id, tenantId, ct);
 

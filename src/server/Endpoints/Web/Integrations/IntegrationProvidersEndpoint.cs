@@ -148,6 +148,16 @@ public sealed class IntegrationProvidersEndpoint : EndpointWithoutRequest<ApiRes
         },
     ];
 
+    private readonly ITenantContext _tenantContext;
+
+    /// <summary>
+    /// Creates a new instance of the <see cref="IntegrationProvidersEndpoint"/> class.
+    /// </summary>
+    public IntegrationProvidersEndpoint(ITenantContext tenantContext)
+    {
+        _tenantContext = tenantContext;
+    }
+
     /// <inheritdoc/>
     public override void Configure()
     {
@@ -159,7 +169,7 @@ public sealed class IntegrationProvidersEndpoint : EndpointWithoutRequest<ApiRes
     /// <inheritdoc/>
     public override async Task HandleAsync(CancellationToken ct)
     {
-        int? tenantId = TenantClaimHelper.GetTenantIdFromClaims(User, HttpContext);
+        int? tenantId = _tenantContext.TenantId;
         if (tenantId is null)
         {
             HttpContext.Response.StatusCode = 401;

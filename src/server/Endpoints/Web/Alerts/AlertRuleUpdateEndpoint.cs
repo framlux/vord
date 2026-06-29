@@ -62,6 +62,7 @@ public sealed class AlertRuleUpdateEndpoint : Endpoint<UpdateAlertRuleRequest, A
     private readonly IMachineRepository _machineRepo;
     private readonly ISubscriptionService _subscriptionService;
     private readonly IAuditLogRepository _auditLog;
+    private readonly ITenantContext _tenantContext;
 
     /// <summary>
     /// Creates a new instance of the <see cref="AlertRuleUpdateEndpoint"/> class.
@@ -70,12 +71,14 @@ public sealed class AlertRuleUpdateEndpoint : Endpoint<UpdateAlertRuleRequest, A
         IAlertRuleRepository alertRuleRepo,
         IMachineRepository machineRepo,
         ISubscriptionService subscriptionService,
-        IAuditLogRepository auditLog)
+        IAuditLogRepository auditLog,
+        ITenantContext tenantContext)
     {
         _alertRuleRepo = alertRuleRepo;
         _machineRepo = machineRepo;
         _subscriptionService = subscriptionService;
         _auditLog = auditLog;
+        _tenantContext = tenantContext;
     }
 
     /// <inheritdoc/>
@@ -90,7 +93,7 @@ public sealed class AlertRuleUpdateEndpoint : Endpoint<UpdateAlertRuleRequest, A
     /// <inheritdoc/>
     public override async Task HandleAsync(UpdateAlertRuleRequest req, CancellationToken ct)
     {
-        int? tenantId = TenantClaimHelper.GetTenantIdFromClaims(User, HttpContext);
+        int? tenantId = _tenantContext.TenantId;
         if (tenantId is null)
         {
             HttpContext.Response.StatusCode = 401;
@@ -175,7 +178,7 @@ public sealed class AlertRuleUpdateEndpoint : Endpoint<UpdateAlertRuleRequest, A
 
         await _alertRuleRepo.SetMachinesForRuleAsync(ruleId, req.MachineIds, ct);
 
-        int? userId = TenantClaimHelper.GetUserIdFromClaims(User);
+        int? userId = _tenantContext.UserId;
         await _auditLog.InsertAuditLogAsync(AuditHelper.Create(
             tenantId.Value, userId, null,
             AuditAction.AlertRuleUpdated, AuditResourceType.AlertRule,

@@ -5,9 +5,9 @@
 using System.Security.Claims;
 using FastEndpoints;
 using Framlux.FleetManagement.Server.Auth;
-using Framlux.FleetManagement.Services.Core.Options;
 using Framlux.FleetManagement.Services.Core.Handlers;
 using Framlux.FleetManagement.Services.Core.Infrastructure;
+using Framlux.FleetManagement.Services.Core.Options;
 using Microsoft.Extensions.Options;
 
 namespace Framlux.FleetManagement.Server.Endpoints.Web.Invitations;
@@ -20,6 +20,7 @@ public sealed class InvitationResendEndpoint : EndpointWithoutRequest<ApiRespons
     private readonly IInvitationHandler _handler;
     private readonly AppOptions _appOptions;
     private readonly ILogger<InvitationResendEndpoint> _logger;
+    private readonly ITenantContext _tenantContext;
 
     /// <summary>
     /// Creates a new instance of the <see cref="InvitationResendEndpoint"/> class.
@@ -27,11 +28,13 @@ public sealed class InvitationResendEndpoint : EndpointWithoutRequest<ApiRespons
     public InvitationResendEndpoint(
         IInvitationHandler handler,
         IOptions<AppOptions> appOptions,
-        ILogger<InvitationResendEndpoint> logger)
+        ILogger<InvitationResendEndpoint> logger,
+        ITenantContext tenantContext)
     {
         _handler = handler;
         _appOptions = appOptions.Value;
         _logger = logger;
+        _tenantContext = tenantContext;
     }
 
     /// <inheritdoc/>
@@ -46,9 +49,9 @@ public sealed class InvitationResendEndpoint : EndpointWithoutRequest<ApiRespons
     public override async Task HandleAsync(CancellationToken ct)
     {
         int invitationId = Route<int>("id");
-        int? tenantId = TenantClaimHelper.GetTenantIdFromClaims(User, HttpContext);
+        int? tenantId = _tenantContext.TenantId;
 
-        int? userId = TenantClaimHelper.GetUserIdFromClaims(User);
+        int? userId = _tenantContext.UserId;
         if (userId is null)
         {
             HttpContext.Response.StatusCode = 401;

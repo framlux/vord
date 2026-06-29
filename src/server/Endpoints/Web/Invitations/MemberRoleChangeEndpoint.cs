@@ -32,14 +32,16 @@ public sealed class MemberRoleChangeEndpoint : Endpoint<MemberRoleChangeRequest,
 {
     private readonly IMemberHandler _handler;
     private readonly ILogger<MemberRoleChangeEndpoint> _logger;
+    private readonly ITenantContext _tenantContext;
 
     /// <summary>
     /// Creates a new instance of the <see cref="MemberRoleChangeEndpoint"/> class.
     /// </summary>
-    public MemberRoleChangeEndpoint(IMemberHandler handler, ILogger<MemberRoleChangeEndpoint> logger)
+    public MemberRoleChangeEndpoint(IMemberHandler handler, ILogger<MemberRoleChangeEndpoint> logger, ITenantContext tenantContext)
     {
         _handler = handler;
         _logger = logger;
+        _tenantContext = tenantContext;
     }
 
     /// <inheritdoc/>
@@ -53,9 +55,9 @@ public sealed class MemberRoleChangeEndpoint : Endpoint<MemberRoleChangeRequest,
     /// <inheritdoc/>
     public override async Task HandleAsync(MemberRoleChangeRequest req, CancellationToken ct)
     {
-        int? tenantId = TenantClaimHelper.GetTenantIdFromClaims(User, HttpContext);
+        int? tenantId = _tenantContext.TenantId;
 
-        int? currentUserId = TenantClaimHelper.GetUserIdFromClaims(User);
+        int? currentUserId = _tenantContext.UserId;
         if (currentUserId is null)
         {
             HttpContext.Response.StatusCode = 401;

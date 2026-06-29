@@ -15,13 +15,15 @@ namespace Framlux.FleetManagement.Server.Endpoints.Web.Dashboard;
 public sealed class DashboardFleetEndpoint : EndpointWithoutRequest<ApiResponse<PaginatedFleetOverviewDto>>
 {
     private readonly IMachineStateService _stateService;
+    private readonly ITenantContext _tenantContext;
 
     /// <summary>
     /// Creates a new instance of the <see cref="DashboardFleetEndpoint"/> class.
     /// </summary>
-    public DashboardFleetEndpoint(IMachineStateService stateService)
+    public DashboardFleetEndpoint(IMachineStateService stateService, ITenantContext tenantContext)
     {
         _stateService = stateService;
+        _tenantContext = tenantContext;
     }
 
     /// <inheritdoc/>
@@ -41,7 +43,7 @@ public sealed class DashboardFleetEndpoint : EndpointWithoutRequest<ApiResponse<
         string? statusFilter = Query<string?>("status", isRequired: false);
         string sortBy = Query<string?>("sortBy", isRequired: false) ?? "name";
         string sortDir = Query<string?>("sortDir", isRequired: false) ?? "asc";
-        int? tenantId = TenantClaimHelper.GetTenantIdFromClaims(User, HttpContext);
+        int? tenantId = _tenantContext.TenantId;
 
         PaginatedFleetOverviewDto overview = await _stateService.GetFleetOverviewAsync(
             page, pageSize, tenantId, search, statusFilter, sortBy, sortDir, ct);

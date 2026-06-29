@@ -15,13 +15,15 @@ namespace Framlux.FleetManagement.Server.Endpoints.Web.Tenants;
 public sealed class GetTenantOidcConfigEndpoint : EndpointWithoutRequest<ApiResponse<TenantOidcConfigDto>>
 {
     private readonly ITenantOidcHandler _handler;
+    private readonly ITenantContext _tenantContext;
 
     /// <summary>
     /// Creates a new instance of the <see cref="GetTenantOidcConfigEndpoint"/> class.
     /// </summary>
-    public GetTenantOidcConfigEndpoint(ITenantOidcHandler handler)
+    public GetTenantOidcConfigEndpoint(ITenantOidcHandler handler, ITenantContext tenantContext)
     {
         _handler = handler;
+        _tenantContext = tenantContext;
     }
 
     /// <inheritdoc/>
@@ -36,7 +38,7 @@ public sealed class GetTenantOidcConfigEndpoint : EndpointWithoutRequest<ApiResp
     public override async Task HandleAsync(CancellationToken ct)
     {
         int tenantId = Route<int>("id");
-        int? claimTenantId = TenantClaimHelper.GetTenantIdFromClaims(User, HttpContext);
+        int? claimTenantId = _tenantContext.TenantId;
 
         ServiceResult<TenantOidcConfigDto> result = await _handler.GetConfigAsync(tenantId, claimTenantId, ct);
 

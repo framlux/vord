@@ -30,17 +30,20 @@ public sealed class DataExportDownloadEndpoint : Endpoint<DataExportDownloadRequ
 {
     private readonly IDataExportHandler _handler;
     private readonly IObjectStorageService _objectStorageService;
+    private readonly ITenantContext _tenantContext;
 
     /// <summary>
     /// Creates a new instance of the <see cref="DataExportDownloadEndpoint"/> class.
     /// </summary>
-    public DataExportDownloadEndpoint(IDataExportHandler handler, IObjectStorageService objectStorageService)
+    public DataExportDownloadEndpoint(IDataExportHandler handler, IObjectStorageService objectStorageService, ITenantContext tenantContext)
     {
         ArgumentNullException.ThrowIfNull(handler);
         ArgumentNullException.ThrowIfNull(objectStorageService);
+        ArgumentNullException.ThrowIfNull(tenantContext);
 
         _handler = handler;
         _objectStorageService = objectStorageService;
+        _tenantContext = tenantContext;
     }
 
     /// <inheritdoc/>
@@ -54,7 +57,7 @@ public sealed class DataExportDownloadEndpoint : Endpoint<DataExportDownloadRequ
     /// <inheritdoc/>
     public override async Task HandleAsync(DataExportDownloadRequest req, CancellationToken ct)
     {
-        int? tenantId = TenantClaimHelper.GetTenantIdFromClaims(User, HttpContext);
+        int? tenantId = _tenantContext.TenantId;
 
         ServiceResult<DataExportJob> result = await _handler.GetExportJobAsync(req.Id, tenantId, ct);
 

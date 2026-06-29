@@ -15,13 +15,15 @@ namespace Framlux.FleetManagement.Server.Endpoints.Web.Machines;
 public sealed class ListRegistrationTokensEndpoint : EndpointWithoutRequest<ApiResponse<PaginatedResponse<RegistrationTokenDto>>>
 {
     private readonly IRegistrationTokenHandler _handler;
+    private readonly ITenantContext _tenantContext;
 
     /// <summary>
     /// Creates a new instance of the <see cref="ListRegistrationTokensEndpoint"/> class.
     /// </summary>
-    public ListRegistrationTokensEndpoint(IRegistrationTokenHandler handler)
+    public ListRegistrationTokensEndpoint(IRegistrationTokenHandler handler, ITenantContext tenantContext)
     {
         _handler = handler;
+        _tenantContext = tenantContext;
     }
 
     /// <inheritdoc/>
@@ -35,7 +37,7 @@ public sealed class ListRegistrationTokensEndpoint : EndpointWithoutRequest<ApiR
     /// <inheritdoc/>
     public override async Task HandleAsync(CancellationToken ct)
     {
-        int? tenantId = TenantClaimHelper.GetTenantIdFromClaims(User, HttpContext);
+        int? tenantId = _tenantContext.TenantId;
         if (tenantId is null)
         {
             HttpContext.Response.StatusCode = 401;

@@ -16,13 +16,15 @@ namespace Framlux.FleetManagement.Server.Endpoints.Web.Commands;
 public sealed class CommandDetailEndpoint : EndpointWithoutRequest<ApiResponse<CommandDto>>
 {
     private readonly IRemoteCommandService _commandService;
+    private readonly ITenantContext _tenantContext;
 
     /// <summary>
     /// Creates a new instance of the <see cref="CommandDetailEndpoint"/> class.
     /// </summary>
-    public CommandDetailEndpoint(IRemoteCommandService commandService)
+    public CommandDetailEndpoint(IRemoteCommandService commandService, ITenantContext tenantContext)
     {
         _commandService = commandService;
+        _tenantContext = tenantContext;
     }
 
     /// <inheritdoc/>
@@ -38,7 +40,7 @@ public sealed class CommandDetailEndpoint : EndpointWithoutRequest<ApiResponse<C
     {
         long commandId = Route<long>("id");
 
-        int? tenantId = TenantClaimHelper.GetTenantIdFromClaims(User, HttpContext);
+        int? tenantId = _tenantContext.TenantId;
         if (tenantId is null)
         {
             HttpContext.Response.StatusCode = 401;

@@ -15,13 +15,15 @@ namespace Framlux.FleetManagement.Server.Endpoints.Web.Machines;
 public sealed class MachineDeleteEndpoint : EndpointWithoutRequest<ApiResponse<object>>
 {
     private readonly IMachineHandler _handler;
+    private readonly ITenantContext _tenantContext;
 
     /// <summary>
     /// Creates a new instance of the <see cref="MachineDeleteEndpoint"/> class.
     /// </summary>
-    public MachineDeleteEndpoint(IMachineHandler handler)
+    public MachineDeleteEndpoint(IMachineHandler handler, ITenantContext tenantContext)
     {
         _handler = handler;
+        _tenantContext = tenantContext;
     }
 
     /// <inheritdoc/>
@@ -36,9 +38,9 @@ public sealed class MachineDeleteEndpoint : EndpointWithoutRequest<ApiResponse<o
     public override async Task HandleAsync(CancellationToken ct)
     {
         long machineId = Route<long>("id");
-        int? tenantId = TenantClaimHelper.GetTenantIdFromClaims(User, HttpContext);
+        int? tenantId = _tenantContext.TenantId;
 
-        int? userId = TenantClaimHelper.GetUserIdFromClaims(User);
+        int? userId = _tenantContext.UserId;
         if (userId is null)
         {
             HttpContext.Response.StatusCode = 401;

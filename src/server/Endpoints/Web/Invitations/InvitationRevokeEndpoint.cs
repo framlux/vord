@@ -16,14 +16,16 @@ public sealed class InvitationRevokeEndpoint : EndpointWithoutRequest<ApiRespons
 {
     private readonly IInvitationHandler _handler;
     private readonly ILogger<InvitationRevokeEndpoint> _logger;
+    private readonly ITenantContext _tenantContext;
 
     /// <summary>
     /// Creates a new instance of the <see cref="InvitationRevokeEndpoint"/> class.
     /// </summary>
-    public InvitationRevokeEndpoint(IInvitationHandler handler, ILogger<InvitationRevokeEndpoint> logger)
+    public InvitationRevokeEndpoint(IInvitationHandler handler, ILogger<InvitationRevokeEndpoint> logger, ITenantContext tenantContext)
     {
         _handler = handler;
         _logger = logger;
+        _tenantContext = tenantContext;
     }
 
     /// <inheritdoc/>
@@ -38,7 +40,7 @@ public sealed class InvitationRevokeEndpoint : EndpointWithoutRequest<ApiRespons
     public override async Task HandleAsync(CancellationToken ct)
     {
         int invitationId = Route<int>("id");
-        int? tenantId = TenantClaimHelper.GetTenantIdFromClaims(User, HttpContext);
+        int? tenantId = _tenantContext.TenantId;
 
         ServiceResult<InvitationRevokeResult> result = await _handler.RevokeAsync(invitationId, tenantId, ct);
 

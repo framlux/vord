@@ -17,13 +17,15 @@ namespace Framlux.FleetManagement.Server.Endpoints.Web.SigningKeys;
 public sealed class SigningKeyRevokeEndpoint : EndpointWithoutRequest<ApiResponse<bool>>
 {
     private readonly ISigningKeyService _signingKeyService;
+    private readonly ITenantContext _tenantContext;
 
     /// <summary>
     /// Creates a new instance of the <see cref="SigningKeyRevokeEndpoint"/> class.
     /// </summary>
-    public SigningKeyRevokeEndpoint(ISigningKeyService signingKeyService)
+    public SigningKeyRevokeEndpoint(ISigningKeyService signingKeyService, ITenantContext tenantContext)
     {
         _signingKeyService = signingKeyService;
+        _tenantContext = tenantContext;
     }
 
     /// <inheritdoc/>
@@ -39,7 +41,7 @@ public sealed class SigningKeyRevokeEndpoint : EndpointWithoutRequest<ApiRespons
     {
         int keyId = Route<int>("id");
 
-        int? tenantId = TenantClaimHelper.GetTenantIdFromClaims(User, HttpContext);
+        int? tenantId = _tenantContext.TenantId;
         if (tenantId is null)
         {
             HttpContext.Response.StatusCode = 401;
@@ -49,7 +51,7 @@ public sealed class SigningKeyRevokeEndpoint : EndpointWithoutRequest<ApiRespons
             return;
         }
 
-        int? userId = TenantClaimHelper.GetUserIdFromClaims(User);
+        int? userId = _tenantContext.UserId;
         if (userId is null)
         {
             HttpContext.Response.StatusCode = 401;

@@ -35,6 +35,7 @@ public sealed class ReactivateSubscriptionEndpoint : EndpointWithoutRequest<ApiR
     private readonly IAuditLogRepository _auditLog;
     private readonly ISubscriptionRepository _subscriptionRepository;
     private readonly ISubscriptionService _subscriptionService;
+    private readonly ITenantContext _tenantContext;
     private readonly ILogger<ReactivateSubscriptionEndpoint> _logger;
 
     /// <summary>
@@ -46,6 +47,7 @@ public sealed class ReactivateSubscriptionEndpoint : EndpointWithoutRequest<ApiR
         IAuditLogRepository auditLog,
         ISubscriptionRepository subscriptionRepository,
         ISubscriptionService subscriptionService,
+        ITenantContext tenantContext,
         ILogger<ReactivateSubscriptionEndpoint> logger)
     {
         _billingStatus = billingStatus;
@@ -53,6 +55,7 @@ public sealed class ReactivateSubscriptionEndpoint : EndpointWithoutRequest<ApiR
         _auditLog = auditLog;
         _subscriptionRepository = subscriptionRepository;
         _subscriptionService = subscriptionService;
+        _tenantContext = tenantContext;
         _logger = logger;
     }
 
@@ -76,7 +79,7 @@ public sealed class ReactivateSubscriptionEndpoint : EndpointWithoutRequest<ApiR
             return;
         }
 
-        int? tenantId = TenantClaimHelper.GetTenantIdFromClaims(User, HttpContext);
+        int? tenantId = _tenantContext.TenantId;
         if (tenantId is null)
         {
             HttpContext.Response.StatusCode = 401;

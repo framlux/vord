@@ -66,10 +66,11 @@ public sealed class FleetSshSessionsRequest
 /// </summary>
 public sealed class SshSessionsFleetEndpoint : Endpoint<FleetSshSessionsRequest, ApiResponse<PaginatedResponse<FleetSshSessionDto>>>
 {
+    private readonly ILogger<SshSessionsFleetEndpoint> _logger;
     private readonly IMachineRepository _machineRepo;
     private readonly IMachineStateRepository _machineStateRepo;
     private readonly ISubscriptionService _subscriptionService;
-    private readonly ILogger<SshSessionsFleetEndpoint> _logger;
+    private readonly ITenantContext _tenantContext;
 
     /// <summary>
     /// Creates a new instance of the <see cref="SshSessionsFleetEndpoint"/> class.
@@ -78,12 +79,14 @@ public sealed class SshSessionsFleetEndpoint : Endpoint<FleetSshSessionsRequest,
         IMachineRepository machineRepo,
         IMachineStateRepository machineStateRepo,
         ISubscriptionService subscriptionService,
-        ILogger<SshSessionsFleetEndpoint> logger)
+        ILogger<SshSessionsFleetEndpoint> logger,
+        ITenantContext tenantContext)
     {
         _machineRepo = machineRepo;
         _machineStateRepo = machineStateRepo;
         _subscriptionService = subscriptionService;
         _logger = logger;
+        _tenantContext = tenantContext;
     }
 
     /// <inheritdoc/>
@@ -97,7 +100,7 @@ public sealed class SshSessionsFleetEndpoint : Endpoint<FleetSshSessionsRequest,
     /// <inheritdoc/>
     public override async Task HandleAsync(FleetSshSessionsRequest req, CancellationToken ct)
     {
-        int? tenantId = TenantClaimHelper.GetTenantIdFromClaims(User, HttpContext);
+        int? tenantId = _tenantContext.TenantId;
         if (tenantId is null)
         {
             HttpContext.Response.StatusCode = 401;

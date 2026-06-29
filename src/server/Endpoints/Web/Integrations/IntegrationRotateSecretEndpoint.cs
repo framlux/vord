@@ -23,6 +23,7 @@ public sealed class IntegrationRotateSecretEndpoint : EndpointWithoutRequest<Api
     private readonly IIntegrationRepository _integrationRepo;
     private readonly IAuditLogRepository _auditLog;
     private readonly IDataProtectionProvider _dataProtectionProvider;
+    private readonly ITenantContext _tenantContext;
 
     /// <summary>
     /// Creates a new instance of the <see cref="IntegrationRotateSecretEndpoint"/> class.
@@ -30,11 +31,13 @@ public sealed class IntegrationRotateSecretEndpoint : EndpointWithoutRequest<Api
     public IntegrationRotateSecretEndpoint(
         IIntegrationRepository integrationRepo,
         IAuditLogRepository auditLog,
-        IDataProtectionProvider dataProtectionProvider)
+        IDataProtectionProvider dataProtectionProvider,
+        ITenantContext tenantContext)
     {
         _integrationRepo = integrationRepo;
         _auditLog = auditLog;
         _dataProtectionProvider = dataProtectionProvider;
+        _tenantContext = tenantContext;
     }
 
     /// <inheritdoc/>
@@ -48,7 +51,7 @@ public sealed class IntegrationRotateSecretEndpoint : EndpointWithoutRequest<Api
     /// <inheritdoc/>
     public override async Task HandleAsync(CancellationToken ct)
     {
-        int? tenantId = TenantClaimHelper.GetTenantIdFromClaims(User, HttpContext);
+        int? tenantId = _tenantContext.TenantId;
         if (tenantId is null)
         {
             HttpContext.Response.StatusCode = 401;
@@ -58,7 +61,7 @@ public sealed class IntegrationRotateSecretEndpoint : EndpointWithoutRequest<Api
             return;
         }
 
-        int? userId = TenantClaimHelper.GetUserIdFromClaims(User);
+        int? userId = _tenantContext.UserId;
         if (userId is null)
         {
             HttpContext.Response.StatusCode = 401;

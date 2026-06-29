@@ -59,6 +59,7 @@ public sealed class SubscriptionEndpoint : EndpointWithoutRequest<ApiResponse<Su
     private readonly IAlertRuleRepository _alertRuleRepo;
     private readonly IIntegrationRepository _integrationRepo;
     private readonly ITenantRepository _tenantRepository;
+    private readonly ITenantContext _tenantContext;
     private readonly IBillingApiClient _billingApiClient;
 
     /// <summary>
@@ -69,12 +70,14 @@ public sealed class SubscriptionEndpoint : EndpointWithoutRequest<ApiResponse<Su
         IAlertRuleRepository alertRuleRepo,
         IIntegrationRepository integrationRepo,
         ITenantRepository tenantRepository,
+        ITenantContext tenantContext,
         IBillingApiClient billingApiClient)
     {
         _subscriptionService = subscriptionService;
         _alertRuleRepo = alertRuleRepo;
         _integrationRepo = integrationRepo;
         _tenantRepository = tenantRepository;
+        _tenantContext = tenantContext;
         _billingApiClient = billingApiClient;
     }
 
@@ -89,7 +92,7 @@ public sealed class SubscriptionEndpoint : EndpointWithoutRequest<ApiResponse<Su
     /// <inheritdoc/>
     public override async Task HandleAsync(CancellationToken ct)
     {
-        int? tenantId = TenantClaimHelper.GetTenantIdFromClaims(User, HttpContext);
+        int? tenantId = _tenantContext.TenantId;
         if (tenantId is null)
         {
             HttpContext.Response.StatusCode = 401;

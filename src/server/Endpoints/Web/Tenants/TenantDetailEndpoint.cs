@@ -17,13 +17,15 @@ namespace Framlux.FleetManagement.Server.Endpoints.Web.Tenants;
 public sealed class TenantDetailEndpoint : EndpointWithoutRequest<ApiResponse<TenantDto>>
 {
     private readonly ITenantHandler _handler;
+    private readonly ITenantContext _tenantContext;
 
     /// <summary>
     /// Creates a new instance of the <see cref="TenantDetailEndpoint"/> class.
     /// </summary>
-    public TenantDetailEndpoint(ITenantHandler handler)
+    public TenantDetailEndpoint(ITenantHandler handler, ITenantContext tenantContext)
     {
         _handler = handler;
+        _tenantContext = tenantContext;
     }
 
     /// <inheritdoc/>
@@ -44,7 +46,7 @@ public sealed class TenantDetailEndpoint : EndpointWithoutRequest<ApiResponse<Te
 
         if (isGlobalAdmin == false)
         {
-            int? claimTenantId = TenantClaimHelper.GetTenantIdFromClaims(User, HttpContext);
+            int? claimTenantId = _tenantContext.TenantId;
             if ((claimTenantId is null) || (claimTenantId.Value != tenantId))
             {
                 HttpContext.Response.StatusCode = 404;

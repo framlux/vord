@@ -16,13 +16,15 @@ namespace Framlux.FleetManagement.Server.Endpoints.Web.Integrations;
 public sealed class IntegrationListEndpoint : EndpointWithoutRequest<ApiResponse<List<IntegrationEndpointDto>>>
 {
     private readonly IIntegrationRepository _integrationRepo;
+    private readonly ITenantContext _tenantContext;
 
     /// <summary>
     /// Creates a new instance of the <see cref="IntegrationListEndpoint"/> class.
     /// </summary>
-    public IntegrationListEndpoint(IIntegrationRepository integrationRepo)
+    public IntegrationListEndpoint(IIntegrationRepository integrationRepo, ITenantContext tenantContext)
     {
         _integrationRepo = integrationRepo;
+        _tenantContext = tenantContext;
     }
 
     /// <inheritdoc/>
@@ -36,7 +38,7 @@ public sealed class IntegrationListEndpoint : EndpointWithoutRequest<ApiResponse
     /// <inheritdoc/>
     public override async Task HandleAsync(CancellationToken ct)
     {
-        int? tenantId = TenantClaimHelper.GetTenantIdFromClaims(User, HttpContext);
+        int? tenantId = _tenantContext.TenantId;
         if (tenantId is null)
         {
             HttpContext.Response.StatusCode = 401;

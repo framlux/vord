@@ -46,6 +46,7 @@ public sealed class DowngradeSubscriptionEndpoint : Endpoint<DowngradeSubscripti
     private readonly ISubscriptionRepository _subscriptionRepository;
     private readonly ITenantRepository _tenantRepository;
     private readonly ISubscriptionService _subscriptionService;
+    private readonly ITenantContext _tenantContext;
     private readonly IBillingApiClient _billingApiClient;
     private readonly IDowngradeGuardService _downgradeGuardService;
     private readonly IDowngradeCleanupService _downgradeCleanupService;
@@ -62,6 +63,7 @@ public sealed class DowngradeSubscriptionEndpoint : Endpoint<DowngradeSubscripti
         ISubscriptionRepository subscriptionRepository,
         ITenantRepository tenantRepository,
         ISubscriptionService subscriptionService,
+        ITenantContext tenantContext,
         IBillingApiClient billingApiClient,
         IDowngradeGuardService downgradeGuardService,
         IDowngradeCleanupService downgradeCleanupService,
@@ -74,6 +76,7 @@ public sealed class DowngradeSubscriptionEndpoint : Endpoint<DowngradeSubscripti
         _subscriptionRepository = subscriptionRepository;
         _tenantRepository = tenantRepository;
         _subscriptionService = subscriptionService;
+        _tenantContext = tenantContext;
         _billingApiClient = billingApiClient;
         _downgradeGuardService = downgradeGuardService;
         _downgradeCleanupService = downgradeCleanupService;
@@ -101,7 +104,7 @@ public sealed class DowngradeSubscriptionEndpoint : Endpoint<DowngradeSubscripti
             return;
         }
 
-        int? tenantId = TenantClaimHelper.GetTenantIdFromClaims(User, HttpContext);
+        int? tenantId = _tenantContext.TenantId;
         if (tenantId is null)
         {
             HttpContext.Response.StatusCode = 401;

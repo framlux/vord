@@ -27,8 +27,9 @@ public sealed class UpdateMachineAlertRulesRequest
 public sealed class MachineAlertRulesUpdateEndpoint : Endpoint<UpdateMachineAlertRulesRequest, ApiResponse<object>>
 {
     private readonly IAlertRuleRepository _alertRuleRepo;
-    private readonly IMachineRepository _machineRepo;
     private readonly IAuditLogRepository _auditLog;
+    private readonly IMachineRepository _machineRepo;
+    private readonly ITenantContext _tenantContext;
 
     /// <summary>
     /// Creates a new instance of the <see cref="MachineAlertRulesUpdateEndpoint"/> class.
@@ -36,11 +37,13 @@ public sealed class MachineAlertRulesUpdateEndpoint : Endpoint<UpdateMachineAler
     public MachineAlertRulesUpdateEndpoint(
         IAlertRuleRepository alertRuleRepo,
         IMachineRepository machineRepo,
-        IAuditLogRepository auditLog)
+        IAuditLogRepository auditLog,
+        ITenantContext tenantContext)
     {
         _alertRuleRepo = alertRuleRepo;
         _machineRepo = machineRepo;
         _auditLog = auditLog;
+        _tenantContext = tenantContext;
     }
 
     /// <inheritdoc/>
@@ -54,7 +57,7 @@ public sealed class MachineAlertRulesUpdateEndpoint : Endpoint<UpdateMachineAler
     /// <inheritdoc/>
     public override async Task HandleAsync(UpdateMachineAlertRulesRequest req, CancellationToken ct)
     {
-        int? tenantId = TenantClaimHelper.GetTenantIdFromClaims(User, HttpContext);
+        int? tenantId = _tenantContext.TenantId;
         if (tenantId is null)
         {
             HttpContext.Response.StatusCode = 401;
@@ -64,7 +67,7 @@ public sealed class MachineAlertRulesUpdateEndpoint : Endpoint<UpdateMachineAler
             return;
         }
 
-        int? userId = TenantClaimHelper.GetUserIdFromClaims(User);
+        int? userId = _tenantContext.UserId;
 
         long machineId = Route<long>("machineId");
 

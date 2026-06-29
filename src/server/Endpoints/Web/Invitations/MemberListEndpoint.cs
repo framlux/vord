@@ -3,8 +3,8 @@
 // See LICENSE for details.
 
 using FastEndpoints;
-using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Database.Models;
+using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Server.Auth;
 
 namespace Framlux.FleetManagement.Server.Endpoints.Web.Invitations;
@@ -40,14 +40,16 @@ public sealed class MemberDto
 /// </summary>
 public sealed class MemberListEndpoint : EndpointWithoutRequest<ApiResponse<List<MemberDto>>>
 {
+    private readonly ITenantContext _tenantContext;
     private readonly ITenantRepository _tenantRepository;
 
     /// <summary>
     /// Creates a new instance of the <see cref="MemberListEndpoint"/> class.
     /// </summary>
-    public MemberListEndpoint(ITenantRepository tenantRepository)
+    public MemberListEndpoint(ITenantRepository tenantRepository, ITenantContext tenantContext)
     {
         _tenantRepository = tenantRepository;
+        _tenantContext = tenantContext;
     }
 
     /// <inheritdoc/>
@@ -61,7 +63,7 @@ public sealed class MemberListEndpoint : EndpointWithoutRequest<ApiResponse<List
     /// <inheritdoc/>
     public override async Task HandleAsync(CancellationToken ct)
     {
-        int? tenantId = TenantClaimHelper.GetTenantIdFromClaims(User, HttpContext);
+        int? tenantId = _tenantContext.TenantId;
         if (tenantId is null)
         {
             HttpContext.Response.StatusCode = 401;

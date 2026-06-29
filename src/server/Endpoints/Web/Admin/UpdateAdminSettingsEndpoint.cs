@@ -17,14 +17,16 @@ public sealed class UpdateAdminSettingsEndpoint : Endpoint<UpdateAdminSettingsRe
 {
     private readonly IBillingStatus _billingStatus;
     private readonly IAdminHandler _handler;
+    private readonly ITenantContext _tenantContext;
 
     /// <summary>
     /// Creates a new instance of the <see cref="UpdateAdminSettingsEndpoint"/> class.
     /// </summary>
-    public UpdateAdminSettingsEndpoint(IBillingStatus billingStatus, IAdminHandler handler)
+    public UpdateAdminSettingsEndpoint(IBillingStatus billingStatus, IAdminHandler handler, ITenantContext tenantContext)
     {
         _billingStatus = billingStatus;
         _handler = handler;
+        _tenantContext = tenantContext;
     }
 
     /// <inheritdoc/>
@@ -47,7 +49,7 @@ public sealed class UpdateAdminSettingsEndpoint : Endpoint<UpdateAdminSettingsRe
             return;
         }
 
-        int? userId = TenantClaimHelper.GetUserIdFromClaims(User);
+        int? userId = _tenantContext.UserId;
         if (userId is null)
         {
             HttpContext.Response.StatusCode = 401;

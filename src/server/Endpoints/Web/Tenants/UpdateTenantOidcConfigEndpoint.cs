@@ -16,13 +16,15 @@ namespace Framlux.FleetManagement.Server.Endpoints.Web.Tenants;
 public sealed class UpdateTenantOidcConfigEndpoint : Endpoint<TenantOidcConfigDto, ApiResponse<TenantOidcConfigDto>>
 {
     private readonly ITenantOidcHandler _handler;
+    private readonly ITenantContext _tenantContext;
 
     /// <summary>
     /// Creates a new instance of the <see cref="UpdateTenantOidcConfigEndpoint"/> class.
     /// </summary>
-    public UpdateTenantOidcConfigEndpoint(ITenantOidcHandler handler)
+    public UpdateTenantOidcConfigEndpoint(ITenantOidcHandler handler, ITenantContext tenantContext)
     {
         _handler = handler;
+        _tenantContext = tenantContext;
     }
 
     /// <inheritdoc/>
@@ -37,8 +39,8 @@ public sealed class UpdateTenantOidcConfigEndpoint : Endpoint<TenantOidcConfigDt
     public override async Task HandleAsync(TenantOidcConfigDto req, CancellationToken ct)
     {
         int tenantId = Route<int>("id");
-        int? claimTenantId = TenantClaimHelper.GetTenantIdFromClaims(User, HttpContext);
-        int? userId = TenantClaimHelper.GetUserIdFromClaims(User);
+        int? claimTenantId = _tenantContext.TenantId;
+        int? userId = _tenantContext.UserId;
 
         if (userId is null)
         {

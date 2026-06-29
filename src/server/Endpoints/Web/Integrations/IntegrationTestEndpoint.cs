@@ -35,6 +35,7 @@ public sealed class IntegrationTestEndpoint : EndpointWithoutRequest<ApiResponse
     private readonly IIntegrationRepository _integrationRepo;
     private readonly IEnumerable<IIntegrationPayloadFormatter> _formatters;
     private readonly IHttpClientFactory _httpClientFactory;
+    private readonly ITenantContext _tenantContext;
 
     /// <summary>
     /// Creates a new instance of the <see cref="IntegrationTestEndpoint"/> class.
@@ -42,11 +43,13 @@ public sealed class IntegrationTestEndpoint : EndpointWithoutRequest<ApiResponse
     public IntegrationTestEndpoint(
         IIntegrationRepository integrationRepo,
         IEnumerable<IIntegrationPayloadFormatter> formatters,
-        IHttpClientFactory httpClientFactory)
+        IHttpClientFactory httpClientFactory,
+        ITenantContext tenantContext)
     {
         _integrationRepo = integrationRepo;
         _formatters = formatters;
         _httpClientFactory = httpClientFactory;
+        _tenantContext = tenantContext;
     }
 
     /// <inheritdoc/>
@@ -60,7 +63,7 @@ public sealed class IntegrationTestEndpoint : EndpointWithoutRequest<ApiResponse
     /// <inheritdoc/>
     public override async Task HandleAsync(CancellationToken ct)
     {
-        int? tenantId = TenantClaimHelper.GetTenantIdFromClaims(User, HttpContext);
+        int? tenantId = _tenantContext.TenantId;
         if (tenantId is null)
         {
             HttpContext.Response.StatusCode = 401;

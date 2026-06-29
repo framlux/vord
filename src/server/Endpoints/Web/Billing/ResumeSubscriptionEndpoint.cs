@@ -34,6 +34,7 @@ public sealed class ResumeSubscriptionEndpoint : EndpointWithoutRequest<ApiRespo
     private readonly IAuditLogRepository _auditLog;
     private readonly ITenantRepository _tenantRepository;
     private readonly ISubscriptionService _subscriptionService;
+    private readonly ITenantContext _tenantContext;
     private readonly IBillingApiClient _billingApiClient;
     private readonly ILogger<ResumeSubscriptionEndpoint> _logger;
 
@@ -45,6 +46,7 @@ public sealed class ResumeSubscriptionEndpoint : EndpointWithoutRequest<ApiRespo
         IAuditLogRepository auditLog,
         ITenantRepository tenantRepository,
         ISubscriptionService subscriptionService,
+        ITenantContext tenantContext,
         IBillingApiClient billingApiClient,
         ILogger<ResumeSubscriptionEndpoint> logger)
     {
@@ -52,6 +54,7 @@ public sealed class ResumeSubscriptionEndpoint : EndpointWithoutRequest<ApiRespo
         _auditLog = auditLog;
         _tenantRepository = tenantRepository;
         _subscriptionService = subscriptionService;
+        _tenantContext = tenantContext;
         _billingApiClient = billingApiClient;
         _logger = logger;
     }
@@ -76,7 +79,7 @@ public sealed class ResumeSubscriptionEndpoint : EndpointWithoutRequest<ApiRespo
             return;
         }
 
-        int? tenantId = TenantClaimHelper.GetTenantIdFromClaims(User, HttpContext);
+        int? tenantId = _tenantContext.TenantId;
         if (tenantId is null)
         {
             HttpContext.Response.StatusCode = 401;

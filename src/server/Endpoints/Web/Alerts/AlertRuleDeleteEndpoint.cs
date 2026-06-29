@@ -22,6 +22,7 @@ public sealed class AlertRuleDeleteEndpoint : EndpointWithoutRequest<ApiResponse
     private readonly IAlertEventRepository _alertEventRepo;
     private readonly IAlertConditionStateRepository _alertConditionStateRepo;
     private readonly IAuditLogRepository _auditLog;
+    private readonly ITenantContext _tenantContext;
     private readonly IDatabaseTransactionProvider _transactionProvider;
 
     /// <summary>
@@ -31,24 +32,28 @@ public sealed class AlertRuleDeleteEndpoint : EndpointWithoutRequest<ApiResponse
     /// <param name="alertEventRepo">Alert event repository.</param>
     /// <param name="alertConditionStateRepo">Alert condition state repository.</param>
     /// <param name="auditLog">Audit log repository.</param>
+    /// <param name="tenantContext">Provides the resolved tenant and user identity for the current request.</param>
     /// <param name="transactionProvider">Provides the cross-repository transaction boundary.</param>
     public AlertRuleDeleteEndpoint(
         IAlertRuleRepository alertRuleRepo,
         IAlertEventRepository alertEventRepo,
         IAlertConditionStateRepository alertConditionStateRepo,
         IAuditLogRepository auditLog,
+        ITenantContext tenantContext,
         IDatabaseTransactionProvider transactionProvider)
     {
         ArgumentNullException.ThrowIfNull(alertRuleRepo);
         ArgumentNullException.ThrowIfNull(alertEventRepo);
         ArgumentNullException.ThrowIfNull(alertConditionStateRepo);
         ArgumentNullException.ThrowIfNull(auditLog);
+        ArgumentNullException.ThrowIfNull(tenantContext);
         ArgumentNullException.ThrowIfNull(transactionProvider);
 
         _alertRuleRepo = alertRuleRepo;
         _alertEventRepo = alertEventRepo;
         _alertConditionStateRepo = alertConditionStateRepo;
         _auditLog = auditLog;
+        _tenantContext = tenantContext;
         _transactionProvider = transactionProvider;
     }
 
@@ -64,7 +69,7 @@ public sealed class AlertRuleDeleteEndpoint : EndpointWithoutRequest<ApiResponse
     /// <inheritdoc/>
     public override async Task HandleAsync(CancellationToken ct)
     {
-        int? tenantId = TenantClaimHelper.GetTenantIdFromClaims(User, HttpContext);
+        int? tenantId = _tenantContext.TenantId;
         if (tenantId is null)
         {
             HttpContext.Response.StatusCode = StatusCodes.Status401Unauthorized;
@@ -94,7 +99,7 @@ public sealed class AlertRuleDeleteEndpoint : EndpointWithoutRequest<ApiResponse
             return;
         }
 
-        int? userId = TenantClaimHelper.GetUserIdFromClaims(User);
+        int? userId = _tenantContext.UserId;
 
         // Wrap the multi-table delete in a transaction so a mid-flow failure leaves the rule, its
         // events, and its condition-state rows mutually consistent (all deleted or none).

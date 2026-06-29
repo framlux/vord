@@ -40,6 +40,7 @@ public sealed class IntegrationCreateEndpoint : Endpoint<CreateIntegrationReques
     private readonly ISubscriptionService _subscriptionService;
     private readonly IAuditLogRepository _auditLog;
     private readonly IDataProtectionProvider _dataProtectionProvider;
+    private readonly ITenantContext _tenantContext;
     private readonly IDatabaseTransactionProvider _transactionProvider;
 
     /// <summary>
@@ -50,12 +51,14 @@ public sealed class IntegrationCreateEndpoint : Endpoint<CreateIntegrationReques
         ISubscriptionService subscriptionService,
         IAuditLogRepository auditLog,
         IDataProtectionProvider dataProtectionProvider,
+        ITenantContext tenantContext,
         IDatabaseTransactionProvider transactionProvider)
     {
         _integrationRepo = integrationRepo;
         _subscriptionService = subscriptionService;
         _auditLog = auditLog;
         _dataProtectionProvider = dataProtectionProvider;
+        _tenantContext = tenantContext;
         _transactionProvider = transactionProvider;
     }
 
@@ -70,7 +73,7 @@ public sealed class IntegrationCreateEndpoint : Endpoint<CreateIntegrationReques
     /// <inheritdoc/>
     public override async Task HandleAsync(CreateIntegrationRequest req, CancellationToken ct)
     {
-        int? tenantId = TenantClaimHelper.GetTenantIdFromClaims(User, HttpContext);
+        int? tenantId = _tenantContext.TenantId;
         if (tenantId is null)
         {
             HttpContext.Response.StatusCode = 401;
@@ -80,7 +83,7 @@ public sealed class IntegrationCreateEndpoint : Endpoint<CreateIntegrationReques
             return;
         }
 
-        int? userId = TenantClaimHelper.GetUserIdFromClaims(User);
+        int? userId = _tenantContext.UserId;
         if (userId is null)
         {
             HttpContext.Response.StatusCode = 401;

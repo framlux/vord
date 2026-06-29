@@ -15,13 +15,15 @@ namespace Framlux.FleetManagement.Server.Endpoints.Web.Machines;
 public sealed class MachineSearchEndpoint : EndpointWithoutRequest<ApiResponse<PaginatedResponse<FleetMachineDto>>>
 {
     private readonly IMachineSearchService _searchService;
+    private readonly ITenantContext _tenantContext;
 
     /// <summary>
     /// Creates a new instance of the <see cref="MachineSearchEndpoint"/> class.
     /// </summary>
-    public MachineSearchEndpoint(IMachineSearchService searchService)
+    public MachineSearchEndpoint(IMachineSearchService searchService, ITenantContext tenantContext)
     {
         _searchService = searchService;
+        _tenantContext = tenantContext;
     }
 
     /// <inheritdoc/>
@@ -35,7 +37,7 @@ public sealed class MachineSearchEndpoint : EndpointWithoutRequest<ApiResponse<P
     /// <inheritdoc/>
     public override async Task HandleAsync(CancellationToken ct)
     {
-        int? tenantId = TenantClaimHelper.GetTenantIdFromClaims(User, HttpContext);
+        int? tenantId = _tenantContext.TenantId;
 
         MachineSearchCriteria criteria = new()
         {

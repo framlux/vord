@@ -31,14 +31,16 @@ public sealed class MachineAuthorizedKeyAddEndpoint : Endpoint<MachineAuthorized
 {
     private readonly IMachineAuthorizedKeyService _authorizedKeyService;
     private readonly ISubscriptionService _subscriptionService;
+    private readonly ITenantContext _tenantContext;
 
     /// <summary>
     /// Creates a new instance of the <see cref="MachineAuthorizedKeyAddEndpoint"/> class.
     /// </summary>
-    public MachineAuthorizedKeyAddEndpoint(IMachineAuthorizedKeyService authorizedKeyService, ISubscriptionService subscriptionService)
+    public MachineAuthorizedKeyAddEndpoint(IMachineAuthorizedKeyService authorizedKeyService, ISubscriptionService subscriptionService, ITenantContext tenantContext)
     {
         _authorizedKeyService = authorizedKeyService;
         _subscriptionService = subscriptionService;
+        _tenantContext = tenantContext;
     }
 
     /// <inheritdoc/>
@@ -52,7 +54,7 @@ public sealed class MachineAuthorizedKeyAddEndpoint : Endpoint<MachineAuthorized
     /// <inheritdoc/>
     public override async Task HandleAsync(MachineAuthorizedKeyAddRequest req, CancellationToken ct)
     {
-        int? tenantId = TenantClaimHelper.GetTenantIdFromClaims(User, HttpContext);
+        int? tenantId = _tenantContext.TenantId;
         if (tenantId is null)
         {
             HttpContext.Response.StatusCode = 401;
@@ -75,7 +77,7 @@ public sealed class MachineAuthorizedKeyAddEndpoint : Endpoint<MachineAuthorized
 
         long machineId = Route<long>("machineId");
 
-        int? userId = TenantClaimHelper.GetUserIdFromClaims(User);
+        int? userId = _tenantContext.UserId;
         if (userId is null)
         {
             HttpContext.Response.StatusCode = 401;

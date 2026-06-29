@@ -19,16 +19,19 @@ public sealed class AlertEventAcknowledgeEndpoint : EndpointWithoutRequest<ApiRe
 {
     private readonly IAlertEventRepository _alertEventRepo;
     private readonly IAuditLogRepository _auditLog;
+    private readonly ITenantContext _tenantContext;
 
     /// <summary>
     /// Creates a new instance of the <see cref="AlertEventAcknowledgeEndpoint"/> class.
     /// </summary>
     public AlertEventAcknowledgeEndpoint(
         IAlertEventRepository alertEventRepo,
-        IAuditLogRepository auditLog)
+        IAuditLogRepository auditLog,
+        ITenantContext tenantContext)
     {
         _alertEventRepo = alertEventRepo;
         _auditLog = auditLog;
+        _tenantContext = tenantContext;
     }
 
     /// <inheritdoc/>
@@ -43,7 +46,7 @@ public sealed class AlertEventAcknowledgeEndpoint : EndpointWithoutRequest<ApiRe
     /// <inheritdoc/>
     public override async Task HandleAsync(CancellationToken ct)
     {
-        int? tenantId = TenantClaimHelper.GetTenantIdFromClaims(User, HttpContext);
+        int? tenantId = _tenantContext.TenantId;
         if (tenantId is null)
         {
             HttpContext.Response.StatusCode = 401;
@@ -73,7 +76,7 @@ public sealed class AlertEventAcknowledgeEndpoint : EndpointWithoutRequest<ApiRe
             return;
         }
 
-        int? userId = TenantClaimHelper.GetUserIdFromClaims(User);
+        int? userId = _tenantContext.UserId;
 
         await _alertEventRepo.AcknowledgeAlertEventAsync(eventId, tenantId.Value, userId, ct);
 

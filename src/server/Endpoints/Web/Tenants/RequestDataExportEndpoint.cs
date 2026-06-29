@@ -33,9 +33,10 @@ public sealed class RequestDataExportResponse
 /// </summary>
 public sealed class RequestDataExportEndpoint : EndpointWithoutRequest<RequestDataExportResponse>
 {
+    private readonly IBackgroundJobClient _backgroundJobClient;
     private readonly IDataExportHandler _handler;
     private readonly IObjectStorageService _objectStorageService;
-    private readonly IBackgroundJobClient _backgroundJobClient;
+    private readonly ITenantContext _tenantContext;
 
     /// <summary>
     /// Creates a new instance of the <see cref="RequestDataExportEndpoint"/> class.
@@ -43,15 +44,18 @@ public sealed class RequestDataExportEndpoint : EndpointWithoutRequest<RequestDa
     public RequestDataExportEndpoint(
         IDataExportHandler handler,
         IObjectStorageService objectStorageService,
-        IBackgroundJobClient backgroundJobClient)
+        IBackgroundJobClient backgroundJobClient,
+        ITenantContext tenantContext)
     {
         ArgumentNullException.ThrowIfNull(handler);
         ArgumentNullException.ThrowIfNull(objectStorageService);
         ArgumentNullException.ThrowIfNull(backgroundJobClient);
+        ArgumentNullException.ThrowIfNull(tenantContext);
 
         _handler = handler;
         _objectStorageService = objectStorageService;
         _backgroundJobClient = backgroundJobClient;
+        _tenantContext = tenantContext;
     }
 
     /// <inheritdoc/>
@@ -74,9 +78,9 @@ public sealed class RequestDataExportEndpoint : EndpointWithoutRequest<RequestDa
             return;
         }
 
-        int? tenantId = TenantClaimHelper.GetTenantIdFromClaims(User, HttpContext);
+        int? tenantId = _tenantContext.TenantId;
 
-        int? userId = TenantClaimHelper.GetUserIdFromClaims(User);
+        int? userId = _tenantContext.UserId;
         if (userId is null)
         {
             HttpContext.Response.StatusCode = StatusCodes.Status401Unauthorized;

@@ -15,13 +15,15 @@ namespace Framlux.FleetManagement.Server.Endpoints.Web.Machines;
 public sealed class CreateRegistrationTokenEndpoint : Endpoint<CreateRegistrationTokenRequest, ApiResponse<RegistrationTokenDto>>
 {
     private readonly IRegistrationTokenHandler _handler;
+    private readonly ITenantContext _tenantContext;
 
     /// <summary>
     /// Creates a new instance of the <see cref="CreateRegistrationTokenEndpoint"/> class.
     /// </summary>
-    public CreateRegistrationTokenEndpoint(IRegistrationTokenHandler handler)
+    public CreateRegistrationTokenEndpoint(IRegistrationTokenHandler handler, ITenantContext tenantContext)
     {
         _handler = handler;
+        _tenantContext = tenantContext;
     }
 
     /// <inheritdoc/>
@@ -35,7 +37,7 @@ public sealed class CreateRegistrationTokenEndpoint : Endpoint<CreateRegistratio
     /// <inheritdoc/>
     public override async Task HandleAsync(CreateRegistrationTokenRequest req, CancellationToken ct)
     {
-        int? tenantId = TenantClaimHelper.GetTenantIdFromClaims(User, HttpContext);
+        int? tenantId = _tenantContext.TenantId;
         if (tenantId is null)
         {
             HttpContext.Response.StatusCode = 401;
@@ -45,7 +47,7 @@ public sealed class CreateRegistrationTokenEndpoint : Endpoint<CreateRegistratio
             return;
         }
 
-        int? userId = TenantClaimHelper.GetUserIdFromClaims(User);
+        int? userId = _tenantContext.UserId;
         if (userId is null)
         {
             HttpContext.Response.StatusCode = 401;

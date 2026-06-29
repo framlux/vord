@@ -16,13 +16,15 @@ namespace Framlux.FleetManagement.Server.Endpoints.Web.Users;
 public sealed class UserDeactivateEndpoint : EndpointWithoutRequest<ApiResponse<object>>
 {
     private readonly IUserHandler _handler;
+    private readonly ITenantContext _tenantContext;
 
     /// <summary>
     /// Creates a new instance of the <see cref="UserDeactivateEndpoint"/> class.
     /// </summary>
-    public UserDeactivateEndpoint(IUserHandler handler)
+    public UserDeactivateEndpoint(IUserHandler handler, ITenantContext tenantContext)
     {
         _handler = handler;
+        _tenantContext = tenantContext;
     }
 
     /// <inheritdoc/>
@@ -39,7 +41,7 @@ public sealed class UserDeactivateEndpoint : EndpointWithoutRequest<ApiResponse<
         int targetUserId = Route<int>("id");
         string? currentUserIdStr = User.FindFirstValue(ClaimTypes.Actor);
         int currentUserId = int.TryParse(currentUserIdStr, out int uid) ? uid : 0;
-        int? tenantId = TenantClaimHelper.GetTenantIdFromClaims(User, HttpContext);
+        int? tenantId = _tenantContext.TenantId;
 
         ServiceResult<object> result = await _handler.DeactivateAsync(targetUserId, currentUserId, tenantId, ct);
 

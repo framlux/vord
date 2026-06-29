@@ -16,13 +16,15 @@ namespace Framlux.FleetManagement.Server.Endpoints.Web.Machines;
 public sealed class MachineListEndpoint : EndpointWithoutRequest<ApiResponse<PaginatedResponse<MachineDto>>>
 {
     private readonly IMachineHandler _handler;
+    private readonly ITenantContext _tenantContext;
 
     /// <summary>
     /// Creates a new instance of the <see cref="MachineListEndpoint"/> class.
     /// </summary>
-    public MachineListEndpoint(IMachineHandler handler)
+    public MachineListEndpoint(IMachineHandler handler, ITenantContext tenantContext)
     {
         _handler = handler;
+        _tenantContext = tenantContext;
     }
 
     /// <inheritdoc/>
@@ -44,7 +46,7 @@ public sealed class MachineListEndpoint : EndpointWithoutRequest<ApiResponse<Pag
         string? statusFilter = Query<string?>("status", isRequired: false);
         string sortBy = Query<string?>("sortBy", isRequired: false) ?? "name";
         string sortDir = Query<string?>("sortDir", isRequired: false) ?? "asc";
-        int? tenantId = TenantClaimHelper.GetTenantIdFromClaims(User, HttpContext);
+        int? tenantId = _tenantContext.TenantId;
 
         ServiceResult<PaginatedResponse<MachineDto>> result = await _handler.ListAsync(
             page, pageSize, tenantId, search, osFilter, typeFilter, statusFilter, sortBy, sortDir, ct);

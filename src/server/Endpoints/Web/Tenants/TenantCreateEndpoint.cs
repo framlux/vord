@@ -32,13 +32,15 @@ public sealed class CreateTenantRequest
 public sealed class TenantCreateEndpoint : Endpoint<CreateTenantRequest, ApiResponse<TenantDto>>
 {
     private readonly ITenantHandler _handler;
+    private readonly ITenantContext _tenantContext;
 
     /// <summary>
     /// Creates a new instance of the <see cref="TenantCreateEndpoint"/> class.
     /// </summary>
-    public TenantCreateEndpoint(ITenantHandler handler)
+    public TenantCreateEndpoint(ITenantHandler handler, ITenantContext tenantContext)
     {
         _handler = handler;
+        _tenantContext = tenantContext;
     }
 
     /// <inheritdoc/>
@@ -52,7 +54,7 @@ public sealed class TenantCreateEndpoint : Endpoint<CreateTenantRequest, ApiResp
     /// <inheritdoc/>
     public override async Task HandleAsync(CreateTenantRequest req, CancellationToken ct)
     {
-        int? userId = TenantClaimHelper.GetUserIdFromClaims(User);
+        int? userId = _tenantContext.UserId;
         if (userId is null)
         {
             HttpContext.Response.StatusCode = 401;

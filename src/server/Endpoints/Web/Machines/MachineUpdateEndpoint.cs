@@ -16,13 +16,15 @@ namespace Framlux.FleetManagement.Server.Endpoints.Web.Machines;
 public sealed class MachineUpdateEndpoint : Endpoint<UpdateMachineRequest, ApiResponse<MachineDto>>
 {
     private readonly IMachineHandler _handler;
+    private readonly ITenantContext _tenantContext;
 
     /// <summary>
     /// Creates a new instance of the <see cref="MachineUpdateEndpoint"/> class.
     /// </summary>
-    public MachineUpdateEndpoint(IMachineHandler handler)
+    public MachineUpdateEndpoint(IMachineHandler handler, ITenantContext tenantContext)
     {
         _handler = handler;
+        _tenantContext = tenantContext;
     }
 
     /// <inheritdoc/>
@@ -38,9 +40,9 @@ public sealed class MachineUpdateEndpoint : Endpoint<UpdateMachineRequest, ApiRe
     public override async Task HandleAsync(UpdateMachineRequest req, CancellationToken ct)
     {
         long machineId = Route<long>("id");
-        int? tenantId = TenantClaimHelper.GetTenantIdFromClaims(User, HttpContext);
+        int? tenantId = _tenantContext.TenantId;
 
-        int? userId = TenantClaimHelper.GetUserIdFromClaims(User);
+        int? userId = _tenantContext.UserId;
         if (userId is null)
         {
             HttpContext.Response.StatusCode = 401;

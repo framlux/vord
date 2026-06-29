@@ -19,16 +19,19 @@ public sealed class HistoryRequestValidator
 {
     private readonly IMachineRepository _machineRepo;
     private readonly ISubscriptionService _subscriptionService;
+    private readonly ITenantContext _tenantContext;
 
     /// <summary>
     /// Creates a new instance of the <see cref="HistoryRequestValidator"/> class.
     /// </summary>
     public HistoryRequestValidator(
         IMachineRepository machineRepo,
-        ISubscriptionService subscriptionService)
+        ISubscriptionService subscriptionService,
+        ITenantContext tenantContext)
     {
         _machineRepo = machineRepo;
         _subscriptionService = subscriptionService;
+        _tenantContext = tenantContext;
     }
 
     /// <summary>
@@ -47,7 +50,7 @@ public sealed class HistoryRequestValidator
         HttpContext httpContext,
         CancellationToken ct)
     {
-        int? tenantId = TenantClaimHelper.GetTenantIdFromClaims(httpContext.User, httpContext);
+        int? tenantId = _tenantContext.TenantId;
 
         if (tenantId is null)
         {

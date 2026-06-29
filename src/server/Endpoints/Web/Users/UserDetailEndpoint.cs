@@ -16,13 +16,15 @@ namespace Framlux.FleetManagement.Server.Endpoints.Web.Users;
 public sealed class UserDetailEndpoint : EndpointWithoutRequest<ApiResponse<UserAccountDto>>
 {
     private readonly IUserHandler _handler;
+    private readonly ITenantContext _tenantContext;
 
     /// <summary>
     /// Creates a new instance of the <see cref="UserDetailEndpoint"/> class.
     /// </summary>
-    public UserDetailEndpoint(IUserHandler handler)
+    public UserDetailEndpoint(IUserHandler handler, ITenantContext tenantContext)
     {
         _handler = handler;
+        _tenantContext = tenantContext;
     }
 
     /// <inheritdoc/>
@@ -37,7 +39,7 @@ public sealed class UserDetailEndpoint : EndpointWithoutRequest<ApiResponse<User
     public override async Task HandleAsync(CancellationToken ct)
     {
         int userId = Route<int>("id");
-        int? tenantId = TenantClaimHelper.GetTenantIdFromClaims(User, HttpContext);
+        int? tenantId = _tenantContext.TenantId;
 
         ServiceResult<UserAccountDto> result = await _handler.GetDetailAsync(userId, tenantId, ct);
 

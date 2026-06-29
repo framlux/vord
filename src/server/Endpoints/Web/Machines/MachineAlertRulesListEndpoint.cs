@@ -17,16 +17,19 @@ public sealed class MachineAlertRulesListEndpoint : EndpointWithoutRequest<ApiRe
 {
     private readonly IAlertRuleRepository _alertRuleRepo;
     private readonly IMachineRepository _machineRepo;
+    private readonly ITenantContext _tenantContext;
 
     /// <summary>
     /// Creates a new instance of the <see cref="MachineAlertRulesListEndpoint"/> class.
     /// </summary>
     public MachineAlertRulesListEndpoint(
         IAlertRuleRepository alertRuleRepo,
-        IMachineRepository machineRepo)
+        IMachineRepository machineRepo,
+        ITenantContext tenantContext)
     {
         _alertRuleRepo = alertRuleRepo;
         _machineRepo = machineRepo;
+        _tenantContext = tenantContext;
     }
 
     /// <inheritdoc/>
@@ -40,7 +43,7 @@ public sealed class MachineAlertRulesListEndpoint : EndpointWithoutRequest<ApiRe
     /// <inheritdoc/>
     public override async Task HandleAsync(CancellationToken ct)
     {
-        int? tenantId = TenantClaimHelper.GetTenantIdFromClaims(User, HttpContext);
+        int? tenantId = _tenantContext.TenantId;
         if (tenantId is null)
         {
             HttpContext.Response.StatusCode = 401;

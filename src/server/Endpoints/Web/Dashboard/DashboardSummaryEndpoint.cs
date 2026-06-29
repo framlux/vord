@@ -16,13 +16,15 @@ namespace Framlux.FleetManagement.Server.Endpoints.Web.Dashboard;
 public sealed class DashboardSummaryEndpoint : EndpointWithoutRequest<ApiResponse<DashboardSummaryDto>>
 {
     private readonly IDashboardHandler _handler;
+    private readonly ITenantContext _tenantContext;
 
     /// <summary>
     /// Creates a new instance of the <see cref="DashboardSummaryEndpoint"/> class.
     /// </summary>
-    public DashboardSummaryEndpoint(IDashboardHandler handler)
+    public DashboardSummaryEndpoint(IDashboardHandler handler, ITenantContext tenantContext)
     {
         _handler = handler;
+        _tenantContext = tenantContext;
     }
 
     /// <inheritdoc/>
@@ -36,7 +38,7 @@ public sealed class DashboardSummaryEndpoint : EndpointWithoutRequest<ApiRespons
     /// <inheritdoc/>
     public override async Task HandleAsync(CancellationToken ct)
     {
-        int? tenantId = TenantClaimHelper.GetTenantIdFromClaims(User, HttpContext);
+        int? tenantId = _tenantContext.TenantId;
         ServiceResult<DashboardSummaryDto> result = await _handler.GetSummaryAsync(tenantId, ct);
 
         if (result.IsSuccess == false)

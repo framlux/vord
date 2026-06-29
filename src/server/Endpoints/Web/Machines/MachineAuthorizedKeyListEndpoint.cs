@@ -16,13 +16,15 @@ namespace Framlux.FleetManagement.Server.Endpoints.Web.Machines;
 public sealed class MachineAuthorizedKeyListEndpoint : EndpointWithoutRequest<ApiResponse<List<MachineAuthorizedKeyDto>>>
 {
     private readonly IMachineAuthorizedKeyService _authorizedKeyService;
+    private readonly ITenantContext _tenantContext;
 
     /// <summary>
     /// Creates a new instance of the <see cref="MachineAuthorizedKeyListEndpoint"/> class.
     /// </summary>
-    public MachineAuthorizedKeyListEndpoint(IMachineAuthorizedKeyService authorizedKeyService)
+    public MachineAuthorizedKeyListEndpoint(IMachineAuthorizedKeyService authorizedKeyService, ITenantContext tenantContext)
     {
         _authorizedKeyService = authorizedKeyService;
+        _tenantContext = tenantContext;
     }
 
     /// <inheritdoc/>
@@ -38,7 +40,7 @@ public sealed class MachineAuthorizedKeyListEndpoint : EndpointWithoutRequest<Ap
     {
         long machineId = Route<long>("machineId");
 
-        int? tenantId = TenantClaimHelper.GetTenantIdFromClaims(User, HttpContext);
+        int? tenantId = _tenantContext.TenantId;
         if (tenantId is null)
         {
             HttpContext.Response.StatusCode = 401;

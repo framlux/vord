@@ -19,14 +19,16 @@ public sealed class CommandSendEndpoint : Endpoint<CommandSendRequest, ApiRespon
 {
     private readonly IRemoteCommandService _commandService;
     private readonly ISubscriptionService _subscriptionService;
+    private readonly ITenantContext _tenantContext;
 
     /// <summary>
     /// Creates a new instance of the <see cref="CommandSendEndpoint"/> class.
     /// </summary>
-    public CommandSendEndpoint(IRemoteCommandService commandService, ISubscriptionService subscriptionService)
+    public CommandSendEndpoint(IRemoteCommandService commandService, ISubscriptionService subscriptionService, ITenantContext tenantContext)
     {
         _commandService = commandService;
         _subscriptionService = subscriptionService;
+        _tenantContext = tenantContext;
     }
 
     /// <inheritdoc/>
@@ -40,7 +42,7 @@ public sealed class CommandSendEndpoint : Endpoint<CommandSendRequest, ApiRespon
     /// <inheritdoc/>
     public override async Task HandleAsync(CommandSendRequest req, CancellationToken ct)
     {
-        int? tenantId = TenantClaimHelper.GetTenantIdFromClaims(User, HttpContext);
+        int? tenantId = _tenantContext.TenantId;
         if (tenantId is null)
         {
             HttpContext.Response.StatusCode = 401;
@@ -60,7 +62,7 @@ public sealed class CommandSendEndpoint : Endpoint<CommandSendRequest, ApiRespon
             return;
         }
 
-        int? userId = TenantClaimHelper.GetUserIdFromClaims(User);
+        int? userId = _tenantContext.UserId;
         if (userId is null)
         {
             HttpContext.Response.StatusCode = 401;

@@ -69,15 +69,18 @@ public sealed class DataExportStatusResponse
 public sealed class DataExportStatusEndpoint : Endpoint<DataExportStatusRequest, DataExportStatusResponse>
 {
     private readonly IDataExportHandler _handler;
+    private readonly ITenantContext _tenantContext;
 
     /// <summary>
     /// Creates a new instance of the <see cref="DataExportStatusEndpoint"/> class.
     /// </summary>
-    public DataExportStatusEndpoint(IDataExportHandler handler)
+    public DataExportStatusEndpoint(IDataExportHandler handler, ITenantContext tenantContext)
     {
         ArgumentNullException.ThrowIfNull(handler);
+        ArgumentNullException.ThrowIfNull(tenantContext);
 
         _handler = handler;
+        _tenantContext = tenantContext;
     }
 
     /// <inheritdoc/>
@@ -91,7 +94,7 @@ public sealed class DataExportStatusEndpoint : Endpoint<DataExportStatusRequest,
     /// <inheritdoc/>
     public override async Task HandleAsync(DataExportStatusRequest req, CancellationToken ct)
     {
-        int? tenantId = TenantClaimHelper.GetTenantIdFromClaims(User, HttpContext);
+        int? tenantId = _tenantContext.TenantId;
 
         ServiceResult<DataExportJob> result = await _handler.GetExportJobAsync(req.Id, tenantId, ct);
 

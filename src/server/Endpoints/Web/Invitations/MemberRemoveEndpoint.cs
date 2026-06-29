@@ -16,14 +16,16 @@ public sealed class MemberRemoveEndpoint : EndpointWithoutRequest<ApiResponse<ob
 {
     private readonly IMemberHandler _handler;
     private readonly ILogger<MemberRemoveEndpoint> _logger;
+    private readonly ITenantContext _tenantContext;
 
     /// <summary>
     /// Creates a new instance of the <see cref="MemberRemoveEndpoint"/> class.
     /// </summary>
-    public MemberRemoveEndpoint(IMemberHandler handler, ILogger<MemberRemoveEndpoint> logger)
+    public MemberRemoveEndpoint(IMemberHandler handler, ILogger<MemberRemoveEndpoint> logger, ITenantContext tenantContext)
     {
         _handler = handler;
         _logger = logger;
+        _tenantContext = tenantContext;
     }
 
     /// <inheritdoc/>
@@ -38,9 +40,9 @@ public sealed class MemberRemoveEndpoint : EndpointWithoutRequest<ApiResponse<ob
     public override async Task HandleAsync(CancellationToken ct)
     {
         int targetUserId = Route<int>("userId");
-        int? tenantId = TenantClaimHelper.GetTenantIdFromClaims(User, HttpContext);
+        int? tenantId = _tenantContext.TenantId;
 
-        int? currentUserId = TenantClaimHelper.GetUserIdFromClaims(User);
+        int? currentUserId = _tenantContext.UserId;
         if (currentUserId is null)
         {
             HttpContext.Response.StatusCode = 401;

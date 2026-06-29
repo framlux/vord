@@ -35,16 +35,19 @@ public sealed class IntegrationUpdateEndpoint : Endpoint<UpdateIntegrationReques
 {
     private readonly IIntegrationRepository _integrationRepo;
     private readonly IAuditLogRepository _auditLog;
+    private readonly ITenantContext _tenantContext;
 
     /// <summary>
     /// Creates a new instance of the <see cref="IntegrationUpdateEndpoint"/> class.
     /// </summary>
     public IntegrationUpdateEndpoint(
         IIntegrationRepository integrationRepo,
-        IAuditLogRepository auditLog)
+        IAuditLogRepository auditLog,
+        ITenantContext tenantContext)
     {
         _integrationRepo = integrationRepo;
         _auditLog = auditLog;
+        _tenantContext = tenantContext;
     }
 
     /// <inheritdoc/>
@@ -58,7 +61,7 @@ public sealed class IntegrationUpdateEndpoint : Endpoint<UpdateIntegrationReques
     /// <inheritdoc/>
     public override async Task HandleAsync(UpdateIntegrationRequest req, CancellationToken ct)
     {
-        int? tenantId = TenantClaimHelper.GetTenantIdFromClaims(User, HttpContext);
+        int? tenantId = _tenantContext.TenantId;
         if (tenantId is null)
         {
             HttpContext.Response.StatusCode = 401;
@@ -144,7 +147,7 @@ public sealed class IntegrationUpdateEndpoint : Endpoint<UpdateIntegrationReques
 
         integration.UpdatedAt = DateTimeOffset.UtcNow;
 
-        int? userId = TenantClaimHelper.GetUserIdFromClaims(User);
+        int? userId = _tenantContext.UserId;
         await _auditLog.InsertAuditLogAsync(AuditHelper.Create(
             tenantId.Value, userId, null,
             AuditAction.IntegrationUpdated, AuditResourceType.Integration,

@@ -16,13 +16,15 @@ namespace Framlux.FleetManagement.Server.Endpoints.Web.Machines;
 public sealed class MachineDetailEndpoint : EndpointWithoutRequest<ApiResponse<MachineDto>>
 {
     private readonly IMachineDetailHandler _handler;
+    private readonly ITenantContext _tenantContext;
 
     /// <summary>
     /// Creates a new instance of the <see cref="MachineDetailEndpoint"/> class.
     /// </summary>
-    public MachineDetailEndpoint(IMachineDetailHandler handler)
+    public MachineDetailEndpoint(IMachineDetailHandler handler, ITenantContext tenantContext)
     {
         _handler = handler;
+        _tenantContext = tenantContext;
     }
 
     /// <inheritdoc/>
@@ -37,7 +39,7 @@ public sealed class MachineDetailEndpoint : EndpointWithoutRequest<ApiResponse<M
     public override async Task HandleAsync(CancellationToken ct)
     {
         long machineId = Route<long>("id");
-        int? tenantId = TenantClaimHelper.GetTenantIdFromClaims(User, HttpContext);
+        int? tenantId = _tenantContext.TenantId;
 
         ServiceResult<MachineDto> result = await _handler.GetDetailAsync(machineId, tenantId, ct);
 

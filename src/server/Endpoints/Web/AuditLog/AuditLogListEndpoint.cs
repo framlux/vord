@@ -45,14 +45,16 @@ public sealed class AuditLogListEndpoint : Endpoint<AuditLogListRequest, ApiResp
 {
     private readonly IAuditLogRepository _auditLogRepo;
     private readonly ISubscriptionService _subscriptionService;
+    private readonly ITenantContext _tenantContext;
 
     /// <summary>
     /// Creates a new instance of the <see cref="AuditLogListEndpoint"/> class.
     /// </summary>
-    public AuditLogListEndpoint(IAuditLogRepository auditLogRepo, ISubscriptionService subscriptionService)
+    public AuditLogListEndpoint(IAuditLogRepository auditLogRepo, ISubscriptionService subscriptionService, ITenantContext tenantContext)
     {
         _auditLogRepo = auditLogRepo;
         _subscriptionService = subscriptionService;
+        _tenantContext = tenantContext;
     }
 
     /// <inheritdoc/>
@@ -66,7 +68,7 @@ public sealed class AuditLogListEndpoint : Endpoint<AuditLogListRequest, ApiResp
     /// <inheritdoc/>
     public override async Task HandleAsync(AuditLogListRequest req, CancellationToken ct)
     {
-        int? tenantId = TenantClaimHelper.GetTenantIdFromClaims(User, HttpContext);
+        int? tenantId = _tenantContext.TenantId;
         if (tenantId is null)
         {
             HttpContext.Response.StatusCode = 401;

@@ -2,10 +2,10 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
-using System.Security.Claims;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
+using Framlux.FleetManagement.Server.Auth;
 using Framlux.FleetManagement.Server.Endpoints.Web.Machines.History;
 using Framlux.FleetManagement.Services.Core.Billing;
 using Microsoft.AspNetCore.Http;
@@ -20,6 +20,7 @@ public sealed class HistoryRequestValidatorTests
 {
     private readonly IMachineRepository _machineRepo = Substitute.For<IMachineRepository>();
     private readonly ISubscriptionService _subscriptionService = Substitute.For<ISubscriptionService>();
+    private readonly ITenantContext _tenantContext = Substitute.For<ITenantContext>();
     private readonly HistoryRequestValidator _validator;
 
     /// <summary>
@@ -27,32 +28,16 @@ public sealed class HistoryRequestValidatorTests
     /// </summary>
     public HistoryRequestValidatorTests()
     {
-        _validator = new HistoryRequestValidator(_machineRepo, _subscriptionService);
+        _validator = new HistoryRequestValidator(_machineRepo, _subscriptionService, _tenantContext);
     }
 
     /// <summary>
-    /// Creates an HttpContext with a claims principal that has the specified tenant ID
-    /// in a role claim formatted as "{tenantId}:{roleId}".
+    /// Creates a bare HttpContext for response writing. Tenant ID is provided via
+    /// <see cref="ITenantContext"/> rather than claims.
     /// </summary>
-    private static HttpContext CreateHttpContext(int? tenantId)
+    private static HttpContext CreateHttpContext()
     {
-        DefaultHttpContext httpContext = new();
-
-        if (tenantId.HasValue)
-        {
-            List<Claim> claims =
-            [
-                new Claim(ClaimTypes.Role, $"{tenantId.Value}:1")
-            ];
-            ClaimsIdentity identity = new(claims, "TestAuth");
-            httpContext.User = new ClaimsPrincipal(identity);
-        }
-        else
-        {
-            httpContext.User = new ClaimsPrincipal(new ClaimsIdentity());
-        }
-
-        return httpContext;
+        return new DefaultHttpContext();
     }
 
     /// <summary>
@@ -83,7 +68,8 @@ public sealed class HistoryRequestValidatorTests
     [Test]
     public async Task NoTenantClaim_Returns403AndNull()
     {
-        HttpContext httpContext = CreateHttpContext(tenantId: null);
+        _tenantContext.TenantId.Returns((int?)null);
+        HttpContext httpContext = CreateHttpContext();
 
         HistoryRequestContext? result = await _validator.ValidateAsync(
             machineId: 1, range: "1h", httpContext, CancellationToken.None);
@@ -99,7 +85,8 @@ public sealed class HistoryRequestValidatorTests
     [Test]
     public async Task MachineNotFound_Returns404AndNull()
     {
-        HttpContext httpContext = CreateHttpContext(tenantId: 1);
+        _tenantContext.TenantId.Returns(1);
+        HttpContext httpContext = CreateHttpContext();
         _machineRepo.GetActiveMachineByIdAsync(1, 1, Arg.Any<CancellationToken>())
             .Returns((Machine?)null);
 
@@ -117,7 +104,8 @@ public sealed class HistoryRequestValidatorTests
     [Test]
     public async Task NullRange_Returns400AndNull()
     {
-        HttpContext httpContext = CreateHttpContext(tenantId: 1);
+        _tenantContext.TenantId.Returns(1);
+        HttpContext httpContext = CreateHttpContext();
         _machineRepo.GetActiveMachineByIdAsync(1, 1, Arg.Any<CancellationToken>())
             .Returns(CreateMachine(1, 1));
         _subscriptionService.GetRetentionDaysForTenantAsync(1, Arg.Any<CancellationToken>())
@@ -133,7 +121,8 @@ public sealed class HistoryRequestValidatorTests
     [Test]
     public async Task EmptyRange_Returns400AndNull()
     {
-        HttpContext httpContext = CreateHttpContext(tenantId: 1);
+        _tenantContext.TenantId.Returns(1);
+        HttpContext httpContext = CreateHttpContext();
         _machineRepo.GetActiveMachineByIdAsync(1, 1, Arg.Any<CancellationToken>())
             .Returns(CreateMachine(1, 1));
         _subscriptionService.GetRetentionDaysForTenantAsync(1, Arg.Any<CancellationToken>())
@@ -149,7 +138,8 @@ public sealed class HistoryRequestValidatorTests
     [Test]
     public async Task UnrecognizedRange_Returns400AndNull()
     {
-        HttpContext httpContext = CreateHttpContext(tenantId: 1);
+        _tenantContext.TenantId.Returns(1);
+        HttpContext httpContext = CreateHttpContext();
         _machineRepo.GetActiveMachineByIdAsync(1, 1, Arg.Any<CancellationToken>())
             .Returns(CreateMachine(1, 1));
         _subscriptionService.GetRetentionDaysForTenantAsync(1, Arg.Any<CancellationToken>())
@@ -169,7 +159,8 @@ public sealed class HistoryRequestValidatorTests
     [Test]
     public async Task RangeExceedsRetention_Returns403AndNull()
     {
-        HttpContext httpContext = CreateHttpContext(tenantId: 1);
+        _tenantContext.TenantId.Returns(1);
+        HttpContext httpContext = CreateHttpContext();
         _machineRepo.GetActiveMachineByIdAsync(1, 1, Arg.Any<CancellationToken>())
             .Returns(CreateMachine(1, 1));
 
@@ -187,7 +178,8 @@ public sealed class HistoryRequestValidatorTests
     [Test]
     public async Task Range30dExceedsRetention7d_Returns403AndNull()
     {
-        HttpContext httpContext = CreateHttpContext(tenantId: 1);
+        _tenantContext.TenantId.Returns(1);
+        HttpContext httpContext = CreateHttpContext();
         _machineRepo.GetActiveMachineByIdAsync(1, 1, Arg.Any<CancellationToken>())
             .Returns(CreateMachine(1, 1));
         _subscriptionService.GetRetentionDaysForTenantAsync(1, Arg.Any<CancellationToken>())
@@ -207,7 +199,8 @@ public sealed class HistoryRequestValidatorTests
     [Test]
     public async Task ValidRequest_ReturnsContext()
     {
-        HttpContext httpContext = CreateHttpContext(tenantId: 5);
+        _tenantContext.TenantId.Returns(5);
+        HttpContext httpContext = CreateHttpContext();
         _machineRepo.GetActiveMachineByIdAsync(42, 5, Arg.Any<CancellationToken>())
             .Returns(CreateMachine(42, 5));
         _subscriptionService.GetRetentionDaysForTenantAsync(5, Arg.Any<CancellationToken>())
@@ -225,7 +218,8 @@ public sealed class HistoryRequestValidatorTests
     [Test]
     public async Task ValidRequest1hRange_ReturnsContextWithCorrectWindow()
     {
-        HttpContext httpContext = CreateHttpContext(tenantId: 1);
+        _tenantContext.TenantId.Returns(1);
+        HttpContext httpContext = CreateHttpContext();
         _machineRepo.GetActiveMachineByIdAsync(1, 1, Arg.Any<CancellationToken>())
             .Returns(CreateMachine(1, 1));
         _subscriptionService.GetRetentionDaysForTenantAsync(1, Arg.Any<CancellationToken>())
@@ -245,7 +239,8 @@ public sealed class HistoryRequestValidatorTests
     [Test]
     public async Task RangeExactlyAtRetentionLimit_ReturnsContext()
     {
-        HttpContext httpContext = CreateHttpContext(tenantId: 1);
+        _tenantContext.TenantId.Returns(1);
+        HttpContext httpContext = CreateHttpContext();
         _machineRepo.GetActiveMachineByIdAsync(1, 1, Arg.Any<CancellationToken>())
             .Returns(CreateMachine(1, 1));
 

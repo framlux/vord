@@ -35,6 +35,7 @@ public sealed class UsageHistoryEndpoint : EndpointWithoutRequest<ApiResponse<Li
     private readonly ITenantRepository _tenantRepository;
     private readonly IBillingApiClient _billingApiClient;
     private readonly ISubscriptionService _subscriptionService;
+    private readonly ITenantContext _tenantContext;
 
     /// <summary>
     /// Creates a new instance of the <see cref="UsageHistoryEndpoint"/> class.
@@ -42,11 +43,13 @@ public sealed class UsageHistoryEndpoint : EndpointWithoutRequest<ApiResponse<Li
     public UsageHistoryEndpoint(
         ITenantRepository tenantRepository,
         IBillingApiClient billingApiClient,
-        ISubscriptionService subscriptionService)
+        ISubscriptionService subscriptionService,
+        ITenantContext tenantContext)
     {
         _tenantRepository = tenantRepository;
         _billingApiClient = billingApiClient;
         _subscriptionService = subscriptionService;
+        _tenantContext = tenantContext;
     }
 
     /// <inheritdoc/>
@@ -60,7 +63,7 @@ public sealed class UsageHistoryEndpoint : EndpointWithoutRequest<ApiResponse<Li
     /// <inheritdoc/>
     public override async Task HandleAsync(CancellationToken ct)
     {
-        int? tenantId = TenantClaimHelper.GetTenantIdFromClaims(User, HttpContext);
+        int? tenantId = _tenantContext.TenantId;
         if (tenantId is null)
         {
             HttpContext.Response.StatusCode = 401;

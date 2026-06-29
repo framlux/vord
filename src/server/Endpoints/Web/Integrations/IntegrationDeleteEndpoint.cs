@@ -19,16 +19,19 @@ public sealed class IntegrationDeleteEndpoint : EndpointWithoutRequest
 {
     private readonly IIntegrationRepository _integrationRepo;
     private readonly IAuditLogRepository _auditLog;
+    private readonly ITenantContext _tenantContext;
 
     /// <summary>
     /// Creates a new instance of the <see cref="IntegrationDeleteEndpoint"/> class.
     /// </summary>
     public IntegrationDeleteEndpoint(
         IIntegrationRepository integrationRepo,
-        IAuditLogRepository auditLog)
+        IAuditLogRepository auditLog,
+        ITenantContext tenantContext)
     {
         _integrationRepo = integrationRepo;
         _auditLog = auditLog;
+        _tenantContext = tenantContext;
     }
 
     /// <inheritdoc/>
@@ -42,7 +45,7 @@ public sealed class IntegrationDeleteEndpoint : EndpointWithoutRequest
     /// <inheritdoc/>
     public override async Task HandleAsync(CancellationToken ct)
     {
-        int? tenantId = TenantClaimHelper.GetTenantIdFromClaims(User, HttpContext);
+        int? tenantId = _tenantContext.TenantId;
         if (tenantId is null)
         {
             HttpContext.Response.StatusCode = 401;
@@ -52,7 +55,7 @@ public sealed class IntegrationDeleteEndpoint : EndpointWithoutRequest
             return;
         }
 
-        int? userId = TenantClaimHelper.GetUserIdFromClaims(User);
+        int? userId = _tenantContext.UserId;
         if (userId is null)
         {
             HttpContext.Response.StatusCode = 401;

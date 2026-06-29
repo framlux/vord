@@ -36,13 +36,15 @@ public sealed class SigningKeyListResponse
 public sealed class SigningKeyListEndpoint : EndpointWithoutRequest<ApiResponse<SigningKeyListResponse>>
 {
     private readonly ISigningKeyService _signingKeyService;
+    private readonly ITenantContext _tenantContext;
 
     /// <summary>
     /// Creates a new instance of the <see cref="SigningKeyListEndpoint"/> class.
     /// </summary>
-    public SigningKeyListEndpoint(ISigningKeyService signingKeyService)
+    public SigningKeyListEndpoint(ISigningKeyService signingKeyService, ITenantContext tenantContext)
     {
         _signingKeyService = signingKeyService;
+        _tenantContext = tenantContext;
     }
 
     /// <inheritdoc/>
@@ -56,7 +58,7 @@ public sealed class SigningKeyListEndpoint : EndpointWithoutRequest<ApiResponse<
     /// <inheritdoc/>
     public override async Task HandleAsync(CancellationToken ct)
     {
-        int? tenantId = TenantClaimHelper.GetTenantIdFromClaims(User, HttpContext);
+        int? tenantId = _tenantContext.TenantId;
         if (tenantId is null)
         {
             HttpContext.Response.StatusCode = 401;
@@ -66,7 +68,7 @@ public sealed class SigningKeyListEndpoint : EndpointWithoutRequest<ApiResponse<
             return;
         }
 
-        int? userId = TenantClaimHelper.GetUserIdFromClaims(User);
+        int? userId = _tenantContext.UserId;
         if (userId is null)
         {
             HttpContext.Response.StatusCode = 401;

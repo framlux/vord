@@ -16,13 +16,15 @@ namespace Framlux.FleetManagement.Server.Endpoints.Web.Users;
 public sealed class UserListEndpoint : EndpointWithoutRequest<ApiResponse<List<UserAccountDto>>>
 {
     private readonly IUserHandler _handler;
+    private readonly ITenantContext _tenantContext;
 
     /// <summary>
     /// Creates a new instance of the <see cref="UserListEndpoint"/> class.
     /// </summary>
-    public UserListEndpoint(IUserHandler handler)
+    public UserListEndpoint(IUserHandler handler, ITenantContext tenantContext)
     {
         _handler = handler;
+        _tenantContext = tenantContext;
     }
 
     /// <inheritdoc/>
@@ -36,7 +38,7 @@ public sealed class UserListEndpoint : EndpointWithoutRequest<ApiResponse<List<U
     /// <inheritdoc/>
     public override async Task HandleAsync(CancellationToken ct)
     {
-        int? tenantId = TenantClaimHelper.GetTenantIdFromClaims(User, HttpContext);
+        int? tenantId = _tenantContext.TenantId;
 
         ServiceResult<List<UserAccountDto>> result = await _handler.ListAsync(tenantId, ct);
 
