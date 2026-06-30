@@ -17,6 +17,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using NSubstitute;
+using StackExchange.Redis;
 
 namespace Framlux.FleetManagement.UnitTest.Endpoints.Grpc;
 
@@ -452,15 +453,17 @@ public sealed class FleetAdminServiceTests
     private static FleetAdminService CreateFleetAdminService(
         IServiceScopeFactory scopeFactory,
         string configuredKey = ValidInternalKey,
-        IOidcSecretProtector? oidcSecretProtector = null)
+        IOidcSecretProtector? oidcSecretProtector = null,
+        IConnectionMultiplexer? redis = null)
     {
         InternalApiOptions options = new InternalApiOptions { Key = configuredKey };
         IOptions<InternalApiOptions> wrappedOptions = Options.Create(options);
         ILogger<FleetAdminService> logger = Substitute.For<ILogger<FleetAdminService>>();
         IOidcSecretProtector resolvedProtector = oidcSecretProtector
             ?? new OidcSecretProtector(new EphemeralDataProtectionProvider());
+        IConnectionMultiplexer resolvedRedis = redis ?? Substitute.For<IConnectionMultiplexer>();
 
-        return new FleetAdminService(scopeFactory, wrappedOptions, resolvedProtector, logger);
+        return new FleetAdminService(scopeFactory, wrappedOptions, resolvedProtector, logger, resolvedRedis);
     }
 
     private static IServiceScopeFactory CreateScopeFactoryWithServices(Dictionary<Type, object> services)

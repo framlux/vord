@@ -12,6 +12,8 @@ using Grpc.Core;
 using Grpc.Net.Client;
 using LinqToDB;
 using LinqToDB.Async;
+using Microsoft.Extensions.DependencyInjection;
+using StackExchange.Redis;
 
 namespace Framlux.FleetManagement.FunctionalTest.Endpoints.Grpc;
 
@@ -591,6 +593,44 @@ public sealed class FleetAdminServiceTests
 
         // The FleetAdmin gRPC endpoint returns success=false when the row is not found
         await Assert.That(response.Success).IsFalse();
+    }
+
+    [Test]
+    public async Task UpdateServerSetting_ValidKey_EvictsSharedRedisCacheEntry()
+    {
+        using FunctionalTestFactory factory = new();
+        factory.WithInternalApiKey("test-key");
+        using DatabaseContext db = factory.CreateDbContext();
+
+        await SeedServerSetting(db, ServerConfigurationSettingKeys.OnlineThresholdSeconds, "60");
+
+        // Pre-seed the Redis cache entry that other replicas would serve until evicted.
+        // The key format matches what ServerConfigurationService and AdminHandler use.
+        IConnectionMultiplexer redis = factory.Services.GetRequiredService<IConnectionMultiplexer>();
+        string redisKey = $"config:{ServerConfigurationSettingKeys.OnlineThresholdSeconds}";
+
+        // Use the 6-argument overload that the FakeRedisConnection stub intercepts.
+        await redis.GetDatabase().StringSetAsync(redisKey, "60", null, false, When.Always, CommandFlags.None);
+
+        RedisValue cachedBefore = await redis.GetDatabase().StringGetAsync(redisKey);
+        await Assert.That(cachedBefore.IsNull).IsFalse();
+
+        using GrpcChannel channel = CreateChannel(factory);
+        FleetAdmin.FleetAdminClient client = new(channel);
+
+        UpdateServerSettingResponse response = await client.UpdateServerSettingAsync(
+            new UpdateServerSettingRequest
+            {
+                Key = (int)ServerConfigurationSettingKeys.OnlineThresholdSeconds,
+                Value = "90"
+            },
+            Headers("test-key"));
+
+        await Assert.That(response.Success).IsTrue();
+
+        // The cache entry must have been deleted so other replicas re-read from the database.
+        RedisValue cachedAfter = await redis.GetDatabase().StringGetAsync(redisKey);
+        await Assert.That(cachedAfter.IsNull).IsTrue();
     }
 
     [Test]

@@ -23,6 +23,7 @@ public sealed class ServerSettingsCache : IServerSettingsCache
     private readonly ConcurrentDictionary<ServerConfigurationSettingKeys, ServerConfigurationSettings> _cache = [];
     private readonly IServiceScopeFactory _serviceScopeFactory;
     private readonly ILogger<ServerSettingsCache> _logger;
+    private readonly TimeProvider _timeProvider;
     private long _cacheRefreshedAtTicks = DateTimeOffset.MinValue.Ticks;
 
     /// <summary>
@@ -30,10 +31,12 @@ public sealed class ServerSettingsCache : IServerSettingsCache
     /// </summary>
     /// <param name="serviceScopeFactory">Factory used to create DI scopes for database access</param>
     /// <param name="logger">Internal structured logger</param>
-    public ServerSettingsCache(IServiceScopeFactory serviceScopeFactory, ILogger<ServerSettingsCache> logger)
+    /// <param name="timeProvider">Time provider used for TTL expiry calculations</param>
+    public ServerSettingsCache(IServiceScopeFactory serviceScopeFactory, ILogger<ServerSettingsCache> logger, TimeProvider timeProvider)
     {
         _serviceScopeFactory = serviceScopeFactory ?? throw new ArgumentNullException(nameof(serviceScopeFactory));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        _timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
     }
 
     /// <inheritdoc/>
@@ -41,7 +44,7 @@ public sealed class ServerSettingsCache : IServerSettingsCache
     {
         // Expire the settings cache after the TTL so DB changes propagate without restart.
         // Uses Interlocked.CompareExchange to avoid a TOCTOU race between check and clear.
-        long nowTicks = DateTimeOffset.UtcNow.Ticks;
+        long nowTicks = _timeProvider.GetUtcNow().Ticks;
         long lastRefreshTicks = Interlocked.Read(ref _cacheRefreshedAtTicks);
         if (((nowTicks - lastRefreshTicks) > SettingsCacheTtlTicks) &&
             (Interlocked.CompareExchange(ref _cacheRefreshedAtTicks, nowTicks, lastRefreshTicks) == lastRefreshTicks))

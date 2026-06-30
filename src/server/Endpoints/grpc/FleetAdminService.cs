@@ -14,6 +14,7 @@ using Framlux.Vord.BillingGrpc;
 using Google.Protobuf.WellKnownTypes;
 using Grpc.Core;
 using Microsoft.Extensions.Options;
+using StackExchange.Redis;
 
 namespace Framlux.FleetManagement.Server.Endpoints.Grpc;
 
@@ -29,6 +30,7 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
     private readonly InternalApiOptions _internalApiOptions;
     private readonly IOidcSecretProtector _oidcSecretProtector;
     private readonly ILogger<FleetAdminService> _logger;
+    private readonly IConnectionMultiplexer _redis;
 
     /// <summary>
     /// Creates a new instance of the <see cref="FleetAdminService"/> class.
@@ -37,16 +39,19 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
         IServiceScopeFactory scopeFactory,
         IOptions<InternalApiOptions> internalApiOptions,
         IOidcSecretProtector oidcSecretProtector,
-        ILogger<FleetAdminService> logger)
+        ILogger<FleetAdminService> logger,
+        IConnectionMultiplexer redis)
     {
         ArgumentNullException.ThrowIfNull(scopeFactory);
         ArgumentNullException.ThrowIfNull(internalApiOptions);
         ArgumentNullException.ThrowIfNull(oidcSecretProtector);
         ArgumentNullException.ThrowIfNull(logger);
+        ArgumentNullException.ThrowIfNull(redis);
         _scopeFactory = scopeFactory;
         _internalApiOptions = internalApiOptions.Value;
         _oidcSecretProtector = oidcSecretProtector;
         _logger = logger;
+        _redis = redis;
     }
 
     /// <summary>
@@ -397,6 +402,11 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
                 Message = $"Setting with key '{key}' not found"
             };
         }
+
+        // Evict the shared Redis cache entry so other replicas re-read from the database
+        // on their next request, matching the same invalidation the REST admin path performs.
+        string redisKey = $"config:{key}";
+        await _redis.GetDatabase().KeyDeleteAsync(redisKey);
 
         _logger.LogInformation(
             "FleetAdmin: server setting {Key} updated to '{Value}'", key, request.Value);
