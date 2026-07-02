@@ -140,28 +140,27 @@ const mockMutation: RequestHandler = async () => {
 	return ok({ success: true });
 };
 
-// Production / non-mock dev: proxy to the real backend, forwarding method, headers,
-// cookies, and body. Strips `host` so the upstream sees its own host header.
+// Only these request headers are forwarded upstream. Everything else — including client-supplied
+// x-forwarded-*, authorization, host, and content-length — is dropped so a browser can neither spoof
+// the client address the backend derives from its trusted proxy nor inject an Authorization header.
+const FORWARDABLE_HEADERS = new Set(['content-type', 'accept', 'cookie']);
+
+// Production / non-mock dev: proxy to the real backend, forwarding method, an allowlisted set of
+// headers (cookies included), and the body. The response is mirrored verbatim.
 async function proxy(event: Parameters<RequestHandler>[0]): Promise<Response> {
 	const path = event.params.path ?? '';
+	if (path.split('/').includes('..')) {
+		throw error(400, 'Invalid path');
+	}
+
 	const search = event.url.search;
 	const upstreamUrl = `${API_BASE}/api/v1/${path}${search}`;
 
 	const upstreamHeaders = new Headers();
 	for (const [k, v] of event.request.headers) {
-		const lower = k.toLowerCase();
-		if (lower === 'host' || lower === 'content-length') {
-			continue;
+		if (FORWARDABLE_HEADERS.has(k.toLowerCase())) {
+			upstreamHeaders.set(k, v);
 		}
-		upstreamHeaders.set(k, v);
-	}
-
-	// Always include the user's cookies — same-origin from the browser to SvelteKit
-	// already carries them, but Node's fetch does not echo them back upstream
-	// unless we explicitly include them via the Cookie header on the upstream call.
-	const cookieHeader = event.request.headers.get('cookie');
-	if (cookieHeader) {
-		upstreamHeaders.set('cookie', cookieHeader);
 	}
 
 	const init: RequestInit = {
