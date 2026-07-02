@@ -22,14 +22,12 @@ public sealed class MachineHandler : IMachineHandler
 {
     private readonly IMachineRepository _machineRepo;
     private readonly IMachineStateRepository _machineStateRepo;
-    private readonly ITenantRepository _tenantRepo;
     private readonly IAlertRuleRepository _alertRuleRepo;
     private readonly IDatabaseTransactionProvider _transactionProvider;
     private readonly IAuditLogRepository _auditLog;
     private readonly IMachinePingService _pingService;
     private readonly ServerConfigurationService _configService;
-    private readonly IBillingApiClient _billingApiClient;
-    private readonly ISubscriptionService _subscriptionService;
+    private readonly IMachineBillingSync _machineBillingSync;
     private readonly IApiKeyCacheInvalidator _apiKeyCacheInvalidator;
     private readonly ILogger<MachineHandler> _logger;
 
@@ -39,40 +37,34 @@ public sealed class MachineHandler : IMachineHandler
     public MachineHandler(
         IMachineRepository machineRepo,
         IMachineStateRepository machineStateRepo,
-        ITenantRepository tenantRepo,
         IAlertRuleRepository alertRuleRepo,
         IDatabaseTransactionProvider transactionProvider,
         IAuditLogRepository auditLog,
         IMachinePingService pingService,
         ServerConfigurationService configService,
-        IBillingApiClient billingApiClient,
-        ISubscriptionService subscriptionService,
+        IMachineBillingSync machineBillingSync,
         IApiKeyCacheInvalidator apiKeyCacheInvalidator,
         ILogger<MachineHandler> logger)
     {
         ArgumentNullException.ThrowIfNull(machineRepo);
         ArgumentNullException.ThrowIfNull(machineStateRepo);
-        ArgumentNullException.ThrowIfNull(tenantRepo);
         ArgumentNullException.ThrowIfNull(alertRuleRepo);
         ArgumentNullException.ThrowIfNull(transactionProvider);
         ArgumentNullException.ThrowIfNull(auditLog);
         ArgumentNullException.ThrowIfNull(pingService);
         ArgumentNullException.ThrowIfNull(configService);
-        ArgumentNullException.ThrowIfNull(billingApiClient);
-        ArgumentNullException.ThrowIfNull(subscriptionService);
+        ArgumentNullException.ThrowIfNull(machineBillingSync);
         ArgumentNullException.ThrowIfNull(apiKeyCacheInvalidator);
         ArgumentNullException.ThrowIfNull(logger);
 
         _machineRepo = machineRepo;
         _machineStateRepo = machineStateRepo;
-        _tenantRepo = tenantRepo;
         _alertRuleRepo = alertRuleRepo;
         _transactionProvider = transactionProvider;
         _auditLog = auditLog;
         _pingService = pingService;
         _configService = configService;
-        _billingApiClient = billingApiClient;
-        _subscriptionService = subscriptionService;
+        _machineBillingSync = machineBillingSync;
         _apiKeyCacheInvalidator = apiKeyCacheInvalidator;
         _logger = logger;
     }
@@ -119,28 +111,7 @@ public sealed class MachineHandler : IMachineHandler
         }
 
         // Report usage to billing for metered billing after deletion (best effort)
-        try
-        {
-            TenantSubscription? subscription = await _subscriptionService.GetSubscriptionForTenantAsync(tenantId.Value, ct);
-
-            // Only report usage for paid tiers; Free tier has no Stripe subscription
-            if ((subscription is not null) && (subscription.Tier != SubscriptionTier.Free))
-            {
-                Tenant? tenant = await _tenantRepo.GetTenantByIdAsync(tenantId.Value, ct);
-
-                if (tenant is not null)
-                {
-                    int activeMachineCount = await _machineRepo.GetActiveMachineCountAsync(tenantId.Value, ct);
-                    await _billingApiClient.ReportMachineUsageAsync(tenant.ExternalId, activeMachineCount, ct);
-                }
-            }
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex,
-                "Failed to report machine usage to billing after deleting machine {MachineId} for tenant {TenantId}",
-                machineId, tenantId.Value);
-        }
+        await _machineBillingSync.ReportActiveMachineUsageAsync(tenantId.Value, ct);
 
         return ServiceResult<ApiResponse<object>>.Ok(ApiResponse<object>.Ok(new { }, "Machine deleted successfully"));
     }

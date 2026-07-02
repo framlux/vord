@@ -263,6 +263,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IInvitationHandler, InvitationHandler>();
         services.AddScoped<IMemberHandler, MemberHandler>();
         services.AddScoped<IOnboardingHandler, OnboardingHandler>();
+        services.AddScoped<IMachineBillingSync, MachineBillingSync>();
         services.AddScoped<IMachineHandler, MachineHandler>();
         services.AddScoped<IDashboardHandler, DashboardHandler>();
         services.AddScoped<IAuthMeHandler, AuthMeHandler>();

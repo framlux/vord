@@ -7,7 +7,7 @@ using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Server.Endpoints.Web;
 using Framlux.FleetManagement.Services.Core.Models.Machines;
-using Framlux.FleetManagement.Services.Core.Billing;
+using Framlux.FleetManagement.Services.Core.Machines;
 using Framlux.FleetManagement.Services.Core.Handlers;
 using Framlux.FleetManagement.Services.Core.Infrastructure;
 using Framlux.FleetManagement.Services.Core.Security;
@@ -38,7 +38,7 @@ public class MachineHandlerUpdateTests
         ServerConfigurationService configService = new(Substitute.For<IServerSettingsCache>(), Substitute.For<IConnectionMultiplexer>());
         DatabaseRepository repo = CreateRepo(dbFactory);
 
-        return new MachineHandler(repo, repo, repo, repo, repo, repo, ping, configService, Substitute.For<IBillingApiClient>(), Substitute.For<ISubscriptionService>(), Substitute.For<IApiKeyCacheInvalidator>(), NullLogger<MachineHandler>.Instance);
+        return new MachineHandler(repo, repo, repo, repo, repo, ping, configService, Substitute.For<IMachineBillingSync>(), Substitute.For<IApiKeyCacheInvalidator>(), NullLogger<MachineHandler>.Instance);
     }
 
     private static async Task<long> SeedMachine(

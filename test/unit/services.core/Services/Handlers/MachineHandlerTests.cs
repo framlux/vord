@@ -7,9 +7,9 @@ using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Server.Endpoints.Web;
 using Framlux.FleetManagement.Services.Core.Models.Machines;
-using Framlux.FleetManagement.Services.Core.Billing;
 using Framlux.FleetManagement.Services.Core.Handlers;
 using Framlux.FleetManagement.Services.Core.Infrastructure;
+using Framlux.FleetManagement.Services.Core.Machines;
 using Framlux.FleetManagement.Services.Core.Security;
 using Framlux.FleetManagement.Services.Core.ServerConfiguration;
 using Framlux.FleetManagement.Test.Infrastructure;
@@ -49,13 +49,13 @@ public class MachineHandlerTests
         return new DatabaseRepository(dbFactory.Context, new NullLogger<DatabaseRepository>());
     }
 
-    private static MachineHandler CreateHandler(TestDatabaseFactory dbFactory, InMemoryMachinePingService? pingService = null, IBillingApiClient? billingClient = null, ISubscriptionService? subscriptionService = null, IApiKeyCacheInvalidator? apiKeyCacheInvalidator = null)
+    private static MachineHandler CreateHandler(TestDatabaseFactory dbFactory, InMemoryMachinePingService? pingService = null, IMachineBillingSync? machineBillingSync = null, IApiKeyCacheInvalidator? apiKeyCacheInvalidator = null)
     {
         InMemoryMachinePingService ping = pingService ?? new InMemoryMachinePingService();
         ServerConfigurationService configService = new(Substitute.For<IServerSettingsCache>(), Substitute.For<IConnectionMultiplexer>());
         DatabaseRepository repo = CreateRepo(dbFactory);
 
-        return new MachineHandler(repo, repo, repo, repo, repo, repo, ping, configService, billingClient ?? Substitute.For<IBillingApiClient>(), subscriptionService ?? Substitute.For<ISubscriptionService>(), apiKeyCacheInvalidator ?? Substitute.For<IApiKeyCacheInvalidator>(), NullLogger<MachineHandler>.Instance);
+        return new MachineHandler(repo, repo, repo, repo, repo, ping, configService, machineBillingSync ?? Substitute.For<IMachineBillingSync>(), apiKeyCacheInvalidator ?? Substitute.For<IApiKeyCacheInvalidator>(), NullLogger<MachineHandler>.Instance);
     }
 
     // ========== DeleteAsync tests ==========
@@ -651,102 +651,47 @@ public class MachineHandlerTests
         await Assert.That(result.Data!.Page).IsEqualTo(1);
     }
 
-    // ========== ReportMachineUsage called on machine deletion ==========
+    // ========== Billing sync delegated on machine deletion ==========
 
     [Test]
-    public async Task DeleteAsync_PaidTier_CallsReportMachineUsageWithUpdatedCount()
+    public async Task DeleteAsync_Success_ReportsActiveMachineUsageForTenant()
     {
         using TestDatabaseFactory dbFactory = new();
 
-        // Seed a tenant with an external ID
         Tenant tenant = TestDataBuilder.BuildTenant(externalId: "ext-tenant-delete");
         tenant.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(tenant);
 
         long machineId = await SeedMachine(dbFactory, tenantId: tenant.Id);
 
-        // Seed a Pro subscription so the billing path executes
-        TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: tenant.Id, tier: SubscriptionTier.Pro);
-        sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
+        IMachineBillingSync machineBillingSync = Substitute.For<IMachineBillingSync>();
 
-        ISubscriptionService subscriptionService = Substitute.For<ISubscriptionService>();
-        subscriptionService.GetSubscriptionForTenantAsync(tenant.Id, Arg.Any<CancellationToken>()).Returns(sub);
-
-        IBillingApiClient billingClient = Substitute.For<IBillingApiClient>();
-        billingClient.ReportMachineUsageAsync(Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
-            .Returns(true);
-
-        MachineHandler handler = CreateHandler(dbFactory, billingClient: billingClient, subscriptionService: subscriptionService);
+        MachineHandler handler = CreateHandler(dbFactory, machineBillingSync: machineBillingSync);
 
         ServiceResult<ApiResponse<object>> result = await handler.DeleteAsync(machineId, tenant.Id, 1, CancellationToken.None);
 
         await Assert.That(result.IsSuccess).IsTrue();
 
-        // Verify billing was called with the tenant's external ID
-        // The count is 0 because after soft-delete, GetActiveMachineCountAsync returns 0 for this tenant
-        await billingClient.Received(1).ReportMachineUsageAsync(
-            "ext-tenant-delete", 0, Arg.Any<CancellationToken>());
+        // The handler delegates the metered-billing report to the billing-sync collaborator;
+        // the tier gating and best-effort semantics are covered by MachineBillingSyncTests.
+        await machineBillingSync.Received(1).ReportActiveMachineUsageAsync(tenant.Id, Arg.Any<CancellationToken>());
     }
 
     [Test]
-    public async Task DeleteAsync_FreeTier_DoesNotCallReportMachineUsage()
+    public async Task DeleteAsync_NotFound_DoesNotReportBillingUsage()
     {
         using TestDatabaseFactory dbFactory = new();
 
-        Tenant tenant = TestDataBuilder.BuildTenant(externalId: "ext-tenant-free-del");
+        Tenant tenant = TestDataBuilder.BuildTenant(externalId: "ext-tenant-missing");
         tenant.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(tenant);
 
-        long machineId = await SeedMachine(dbFactory, tenantId: tenant.Id);
+        IMachineBillingSync machineBillingSync = Substitute.For<IMachineBillingSync>();
 
-        // Free tier subscription
-        TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: tenant.Id, tier: SubscriptionTier.Free);
-        sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
+        MachineHandler handler = CreateHandler(dbFactory, machineBillingSync: machineBillingSync);
 
-        ISubscriptionService subscriptionService = Substitute.For<ISubscriptionService>();
-        subscriptionService.GetSubscriptionForTenantAsync(tenant.Id, Arg.Any<CancellationToken>()).Returns(sub);
+        ServiceResult<ApiResponse<object>> result = await handler.DeleteAsync(999999, tenant.Id, 1, CancellationToken.None);
 
-        IBillingApiClient billingClient = Substitute.For<IBillingApiClient>();
+        await Assert.That(result.IsNotFound).IsTrue();
 
-        MachineHandler handler = CreateHandler(dbFactory, billingClient: billingClient, subscriptionService: subscriptionService);
-
-        ServiceResult<ApiResponse<object>> result = await handler.DeleteAsync(machineId, tenant.Id, 1, CancellationToken.None);
-
-        await Assert.That(result.IsSuccess).IsTrue();
-
-        // Free tier should NOT trigger billing usage report
-        await billingClient.DidNotReceive().ReportMachineUsageAsync(
-            Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>());
-    }
-
-    [Test]
-    public async Task DeleteAsync_BillingFailure_DoesNotPreventDeletion()
-    {
-        using TestDatabaseFactory dbFactory = new();
-
-        Tenant tenant = TestDataBuilder.BuildTenant(externalId: "ext-tenant-del-fail");
-        tenant.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(tenant);
-
-        long machineId = await SeedMachine(dbFactory, tenantId: tenant.Id);
-
-        TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: tenant.Id, tier: SubscriptionTier.Pro);
-        sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
-
-        ISubscriptionService subscriptionService = Substitute.For<ISubscriptionService>();
-        subscriptionService.GetSubscriptionForTenantAsync(tenant.Id, Arg.Any<CancellationToken>()).Returns(sub);
-
-        IBillingApiClient billingClient = Substitute.For<IBillingApiClient>();
-        billingClient.ReportMachineUsageAsync(Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
-            .Returns<bool>(_ => throw new InvalidOperationException("Billing unavailable"));
-
-        MachineHandler handler = CreateHandler(dbFactory, billingClient: billingClient, subscriptionService: subscriptionService);
-
-        // Deletion should succeed even when billing call fails (best-effort pattern)
-        ServiceResult<ApiResponse<object>> result = await handler.DeleteAsync(machineId, tenant.Id, 1, CancellationToken.None);
-
-        await Assert.That(result.IsSuccess).IsTrue();
-
-        // Verify the machine was still soft-deleted
-        Machine? deleted = await dbFactory.Context.Machines.FirstOrDefaultAsync(m => m.Id == machineId);
-        await Assert.That(deleted).IsNotNull();
-        await Assert.That(deleted!.IsDeleted).IsTrue();
+        await machineBillingSync.DidNotReceive().ReportActiveMachineUsageAsync(Arg.Any<int>(), Arg.Any<CancellationToken>());
     }
 }
