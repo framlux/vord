@@ -10,6 +10,7 @@ using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Services.Core.Alerts;
 using Framlux.FleetManagement.Services.Core.Alerts.Formatters;
 using Microsoft.AspNetCore.DataProtection;
+using Microsoft.Extensions.Time.Testing;
 
 namespace Framlux.FleetManagement.Test.Services.Alerts.Formatters;
 
@@ -19,8 +20,9 @@ namespace Framlux.FleetManagement.Test.Services.Alerts.Formatters;
 public sealed class CustomPayloadFormatterTests
 {
     private static readonly IDataProtectionProvider TestProtectionProvider = new EphemeralDataProtectionProvider();
+    private static readonly FakeTimeProvider FixedTime = new(DateTimeOffset.Parse("2026-05-10T12:00:00+00:00"));
 
-    private readonly CustomPayloadFormatter _formatter = new(TestProtectionProvider);
+    private readonly CustomPayloadFormatter _formatter = new(TestProtectionProvider, FixedTime);
 
     private static string EncryptSecret(string plaintext)
     {
@@ -133,23 +135,58 @@ public sealed class CustomPayloadFormatterTests
     }
 
     [Test]
-    public async Task FormatRequest_SignatureIsValidHmacSha256()
+    public async Task FormatRequest_SignatureIsValidHmacSha256OverTimestampedPayload()
     {
         string secret = "my-test-secret";
         HttpRequestMessage request = _formatter.FormatRequest(CreateEvent(), CreateRule(), CreateIntegration(secret));
         string body = await request.Content!.ReadAsStringAsync();
         string signature = request.Headers.GetValues("X-Vord-Signature").First();
+        string timestamp = request.Headers.GetValues("X-Vord-Timestamp").First();
 
         // Strip the sha256= prefix
         string hexPart = signature.Substring("sha256=".Length);
 
-        // Compute the expected HMAC-SHA256
+        // The signature must cover "{timestamp}.{json}", not the bare body.
         byte[] expectedSig = HMACSHA256.HashData(
             Encoding.UTF8.GetBytes(secret),
-            Encoding.UTF8.GetBytes(body));
+            Encoding.UTF8.GetBytes($"{timestamp}.{body}"));
         string expectedHex = Convert.ToHexStringLower(expectedSig);
 
         await Assert.That(hexPart).IsEqualTo(expectedHex);
+    }
+
+    [Test]
+    public async Task FormatRequest_EmitsTimestampHeaderFromTimeProvider()
+    {
+        HttpRequestMessage request = _formatter.FormatRequest(CreateEvent(), CreateRule(), CreateIntegration());
+
+        string timestamp = request.Headers.GetValues("X-Vord-Timestamp").First();
+        long expected = FixedTime.GetUtcNow().ToUnixTimeSeconds();
+
+        await Assert.That(timestamp).IsEqualTo(expected.ToString());
+    }
+
+    [Test]
+    public async Task FormatRequest_SignatureDoesNotMatchBareBody()
+    {
+        string secret = "my-test-secret";
+        HttpRequestMessage request = _formatter.FormatRequest(CreateEvent(), CreateRule(), CreateIntegration(secret));
+        string body = await request.Content!.ReadAsStringAsync();
+        string hexPart = request.Headers.GetValues("X-Vord-Signature").First().Substring("sha256=".Length);
+
+        // A receiver that (incorrectly) signs only the body must NOT match — this proves the
+        // timestamp is genuinely part of the signed input, which is what defeats replay.
+        byte[] bareBodySig = HMACSHA256.HashData(
+            Encoding.UTF8.GetBytes(secret),
+            Encoding.UTF8.GetBytes(body));
+
+        await Assert.That(hexPart).IsNotEqualTo(Convert.ToHexStringLower(bareBodySig));
+    }
+
+    [Test]
+    public async Task FormatRequest_NullTimeProvider_ThrowsArgumentNullException()
+    {
+        await Assert.That(() => new CustomPayloadFormatter(TestProtectionProvider, null!)).ThrowsExactly<ArgumentNullException>();
     }
 
     [Test]
