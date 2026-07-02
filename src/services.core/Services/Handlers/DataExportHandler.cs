@@ -7,6 +7,7 @@ using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Migrations.Export;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
+using Framlux.FleetManagement.Services.Core.Billing;
 using Framlux.FleetManagement.Services.Core.DataExport;
 using Framlux.FleetManagement.Services.Core.Infrastructure;
 using Microsoft.Data.Sqlite;
@@ -23,7 +24,7 @@ public sealed class DataExportHandler : IDataExportHandler
     private readonly IAuditLogRepository _auditLog;
     private readonly IDatabaseTransactionProvider _transactionProvider;
     private readonly IMachineRepository _machineRepo;
-    private readonly ISubscriptionRepository _subscriptionRepo;
+    private readonly ISubscriptionService _subscriptionService;
     private readonly IMachineStateRepository _machineStateRepo;
     private readonly ILogger<DataExportHandler> _logger;
     private readonly IObjectStorageService _objectStorageService;
@@ -38,7 +39,7 @@ public sealed class DataExportHandler : IDataExportHandler
         IAuditLogRepository auditLog,
         IDatabaseTransactionProvider transactionProvider,
         IMachineRepository machineRepo,
-        ISubscriptionRepository subscriptionRepo,
+        ISubscriptionService subscriptionService,
         IMachineStateRepository machineStateRepo,
         ILogger<DataExportHandler> logger,
         IObjectStorageService objectStorageService)
@@ -47,7 +48,7 @@ public sealed class DataExportHandler : IDataExportHandler
         ArgumentNullException.ThrowIfNull(auditLog);
         ArgumentNullException.ThrowIfNull(transactionProvider);
         ArgumentNullException.ThrowIfNull(machineRepo);
-        ArgumentNullException.ThrowIfNull(subscriptionRepo);
+        ArgumentNullException.ThrowIfNull(subscriptionService);
         ArgumentNullException.ThrowIfNull(machineStateRepo);
         ArgumentNullException.ThrowIfNull(logger);
         ArgumentNullException.ThrowIfNull(objectStorageService);
@@ -56,7 +57,7 @@ public sealed class DataExportHandler : IDataExportHandler
         _auditLog = auditLog;
         _transactionProvider = transactionProvider;
         _machineRepo = machineRepo;
-        _subscriptionRepo = subscriptionRepo;
+        _subscriptionService = subscriptionService;
         _machineStateRepo = machineStateRepo;
         _logger = logger;
         _objectStorageService = objectStorageService;
@@ -157,7 +158,7 @@ public sealed class DataExportHandler : IDataExportHandler
             await ExportTelemetryAsync(sqlite, machineIds, ct);
 
             // Include audit log for Team tier subscriptions
-            TenantSubscription? subscription = await _subscriptionRepo.GetSubscriptionForTenantAsync(job.TenantId, ct);
+            TenantSubscription? subscription = await _subscriptionService.GetSubscriptionForTenantAsync(job.TenantId, ct);
 
             if (subscription is not null && subscription.Tier == SubscriptionTier.Team)
             {

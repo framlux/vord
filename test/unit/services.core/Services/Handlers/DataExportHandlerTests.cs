@@ -5,6 +5,7 @@
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
+using Framlux.FleetManagement.Services.Core.Billing;
 using Framlux.FleetManagement.Services.Core.DataExport;
 using Framlux.FleetManagement.Services.Core.Handlers;
 using Framlux.FleetManagement.Services.Core.Infrastructure;
@@ -34,7 +35,13 @@ public class DataExportHandlerTests
 
         DatabaseRepository repo = new(dbFactory.Context, NullLogger<DatabaseRepository>.Instance);
 
-        return new DataExportHandler(repo, repo, repo, repo, repo, repo, logger, objectStorage);
+        // The handler now reads the tenant subscription through the cached ISubscriptionService.
+        // Delegate the mock to the real repository so tests that seed a subscription row keep working.
+        ISubscriptionService subscriptionService = Substitute.For<ISubscriptionService>();
+        subscriptionService.GetSubscriptionForTenantAsync(Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns(callInfo => repo.GetSubscriptionForTenantAsync(callInfo.ArgAt<int>(0), callInfo.ArgAt<CancellationToken>(1)));
+
+        return new DataExportHandler(repo, repo, repo, repo, subscriptionService, repo, logger, objectStorage);
     }
 
     private static async Task<long> SeedMachine(TestDatabaseFactory dbFactory, int tenantId = 1, bool isDeleted = false, string hostname = "export-host")
