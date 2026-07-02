@@ -89,6 +89,9 @@ DatabaseOptions dbOpts = builder.Configuration.GetSection("Database").Get<Databa
     ?? throw new InvalidOperationException("Database configuration section is missing.");
 RedisOptions redisOpts = builder.Configuration.GetSection("Redis").Get<RedisOptions>()
     ?? throw new InvalidOperationException("Redis configuration section is missing.");
+
+// Fail fast in Production when critical secrets are empty or still set to shipped placeholders.
+ProductionSecretsGuard.Validate(builder.Environment.EnvironmentName, dbOpts.Password);
 BillingOptions billingOpts = builder.Configuration.GetSection("Billing").Get<BillingOptions>() ?? new();
 ObjectStorageOptions objectStorageOpts = builder.Configuration.GetSection("ObjectStorage").Get<ObjectStorageOptions>() ?? new();
 
