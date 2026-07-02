@@ -93,6 +93,9 @@ services:
     environment:
       ASPNETCORE_ENVIRONMENT: Production
       ASPNETCORE_FORWARDEDHEADERS_ENABLED: "true"
+      # Set ForwardedHeaders__KnownNetworks__0 to the real proxy/pod CIDR that fronts this service
+      # (required in Production). X-Forwarded-Host is NOT trusted by default; only set
+      # ForwardedHeaders__AllowForwardedHost=true if the proxy is known to rewrite the Host header.
       Database__HOSTNAME: postgres
       Database__USER: ${DB_USER}
       Database__PASSWORD: ${DB_PASSWORD}

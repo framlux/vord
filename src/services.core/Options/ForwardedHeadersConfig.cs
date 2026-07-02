@@ -25,4 +25,11 @@ public sealed class ForwardedHeadersConfig
     /// (allows one trusted proxy plus an SSL-terminating LB).
     /// </summary>
     public int ForwardLimit { get; set; } = 2;
+
+    /// <summary>
+    /// Whether to trust the <c>X-Forwarded-Host</c> header from the configured proxies. Defaults to
+    /// <c>false</c>: a client-supplied Host is a spoofing vector (cache poisoning, link rewriting), so
+    /// it is only honored when the proxy is known to rewrite Host and this flag is explicitly enabled.
+    /// </summary>
+    public bool AllowForwardedHost { get; set; }
 }

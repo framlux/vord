@@ -71,11 +71,11 @@ public sealed class ForwardedHeadersStartupTests
     }
 
     /// <summary>
-    /// XForwarded* flags must be set regardless of environment so the framework knows
-    /// which headers to honor.
+    /// By default the client-supplied Host must NOT be trusted — X-Forwarded-Host is a spoofing
+    /// vector — while X-Forwarded-For and X-Forwarded-Proto are always honored.
     /// </summary>
     [Test]
-    public async Task Configure_AnyEnvironment_SetsExpectedForwardedHeaderFlags()
+    public async Task Configure_DefaultDoesNotTrustForwardedHost()
     {
         ForwardedHeadersOptions options = new();
         ForwardedHeadersConfig config = new()
@@ -85,11 +85,28 @@ public sealed class ForwardedHeadersStartupTests
 
         ForwardedHeadersStartup.Configure(options, config, "Production");
 
-        ForwardedHeaders expected =
-            ForwardedHeaders.XForwardedFor
-            | ForwardedHeaders.XForwardedProto
-            | ForwardedHeaders.XForwardedHost;
-        await Assert.That(options.ForwardedHeaders).IsEqualTo(expected);
+        await Assert.That(options.ForwardedHeaders.HasFlag(ForwardedHeaders.XForwardedHost)).IsFalse();
+        await Assert.That(options.ForwardedHeaders.HasFlag(ForwardedHeaders.XForwardedFor)).IsTrue();
+        await Assert.That(options.ForwardedHeaders.HasFlag(ForwardedHeaders.XForwardedProto)).IsTrue();
+    }
+
+    /// <summary>
+    /// When a proxy is known to rewrite Host, operators may opt in via
+    /// <see cref="ForwardedHeadersConfig.AllowForwardedHost"/>, which sets the flag.
+    /// </summary>
+    [Test]
+    public async Task Configure_AllowForwardedHost_SetsForwardedHostFlag()
+    {
+        ForwardedHeadersOptions options = new();
+        ForwardedHeadersConfig config = new()
+        {
+            KnownNetworks = ["10.0.0.0/8"],
+            AllowForwardedHost = true,
+        };
+
+        ForwardedHeadersStartup.Configure(options, config, "Production");
+
+        await Assert.That(options.ForwardedHeaders.HasFlag(ForwardedHeaders.XForwardedHost)).IsTrue();
     }
 
     /// <summary>

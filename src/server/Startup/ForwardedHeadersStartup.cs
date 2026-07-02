@@ -30,8 +30,12 @@ public static class ForwardedHeadersStartup
 
         options.ForwardedHeaders =
             ForwardedHeaders.XForwardedFor |
-            ForwardedHeaders.XForwardedProto |
-            ForwardedHeaders.XForwardedHost;
+            ForwardedHeaders.XForwardedProto;
+
+        if (config.AllowForwardedHost)
+        {
+            options.ForwardedHeaders |= ForwardedHeaders.XForwardedHost;
+        }
 
         options.ForwardLimit = config.ForwardLimit;
         options.KnownIPNetworks.Clear();
