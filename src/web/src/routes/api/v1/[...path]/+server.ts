@@ -143,7 +143,9 @@ const mockMutation: RequestHandler = async () => {
 // Only these request headers are forwarded upstream. Everything else — including client-supplied
 // x-forwarded-*, authorization, host, and content-length — is dropped so a browser can neither spoof
 // the client address the backend derives from its trusted proxy nor inject an Authorization header.
-const FORWARDABLE_HEADERS = new Set(['content-type', 'accept', 'cookie']);
+// x-csrf-token must be forwarded: the backend's JSON antiforgery gate rejects cookie-authenticated
+// mutations that arrive without it, so dropping it would 400 every browser-side POST/PUT/DELETE.
+const FORWARDABLE_HEADERS = new Set(['content-type', 'accept', 'cookie', 'x-csrf-token']);
 
 // Production / non-mock dev: proxy to the real backend, forwarding method, an allowlisted set of
 // headers (cookies included), and the body. The response is mirrored verbatim.

@@ -47,10 +47,11 @@ describe('SSR proxy header allowlisting', () => {
 		vi.clearAllMocks();
 	});
 
-	it('forwards only allowlisted headers and strips x-forwarded-*, authorization, and host', async () => {
+	it('forwards allowlisted headers (cookie, csrf token) and strips x-forwarded-*, authorization, and host', async () => {
 		const { event, fetchMock } = makeEvent('machines', {
 			'content-type': 'application/json',
 			cookie: 'vord_auth=token; vord_tenant=7',
+			'x-csrf-token': 'csrf-token-abc',
 			'x-forwarded-for': '1.2.3.4',
 			'x-forwarded-host': 'evil.example.com',
 			authorization: 'Bearer client-supplied',
@@ -65,6 +66,8 @@ describe('SSR proxy header allowlisting', () => {
 
 		expect(forwarded.get('cookie')).toBe('vord_auth=token; vord_tenant=7');
 		expect(forwarded.get('content-type')).toBe('application/json');
+		// The backend's JSON antiforgery gate requires this header on cookie-authenticated mutations.
+		expect(forwarded.get('x-csrf-token')).toBe('csrf-token-abc');
 		expect(forwarded.get('x-forwarded-for')).toBeNull();
 		expect(forwarded.get('x-forwarded-host')).toBeNull();
 		expect(forwarded.get('authorization')).toBeNull();
