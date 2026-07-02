@@ -18,7 +18,8 @@ public static class ProductionSecretsGuard
     /// </summary>
     /// <param name="environmentName">The hosting environment name.</param>
     /// <param name="databasePassword">The configured database password.</param>
-    public static void Validate(string environmentName, string? databasePassword)
+    /// <param name="redisPassword">The configured Redis password.</param>
+    public static void Validate(string environmentName, string? databasePassword, string? redisPassword)
     {
         ArgumentNullException.ThrowIfNull(environmentName);
 
@@ -32,6 +33,12 @@ public static class ProductionSecretsGuard
         {
             throw new InvalidOperationException(
                 "Database:Password is empty or a placeholder in Production. Set a real secret before starting.");
+        }
+
+        if (IsMissingOrPlaceholder(redisPassword))
+        {
+            throw new InvalidOperationException(
+                "Redis password is empty or a placeholder in Production. Set a real secret before starting.");
         }
     }
 

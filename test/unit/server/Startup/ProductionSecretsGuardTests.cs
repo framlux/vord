@@ -7,11 +7,13 @@ using Framlux.FleetManagement.Server.Startup;
 namespace Framlux.FleetManagement.Test.Startup;
 
 /// <summary>
-/// Verifies the production secrets guard refuses to start with empty or placeholder database
-/// secrets in Production, while remaining a no-op in lower environments.
+/// Verifies the production secrets guard refuses to start with empty or placeholder database or
+/// Redis secrets in Production, while remaining a no-op in lower environments.
 /// </summary>
 public sealed class ProductionSecretsGuardTests
 {
+    private const string RealSecret = "a-real-strong-secret";
+
     [Test]
     [Arguments(null)]
     [Arguments("")]
@@ -20,25 +22,46 @@ public sealed class ProductionSecretsGuardTests
     [Arguments("changeme")]
     [Arguments("password")]
     [Arguments("REPLACE_ME")]
-    public async Task Validate_Production_MissingOrPlaceholderPassword_Throws(string? password)
+    public async Task Validate_Production_MissingOrPlaceholderDatabasePassword_Throws(string? password)
     {
         InvalidOperationException? ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
         {
-            ProductionSecretsGuard.Validate("Production", password);
+            ProductionSecretsGuard.Validate("Production", password, RealSecret);
 
             return Task.CompletedTask;
         });
 
         await Assert.That(ex).IsNotNull();
-        await Assert.That(ex!.Message).Contains("Production");
+        await Assert.That(ex!.Message).Contains("Database");
     }
 
     [Test]
-    public async Task Validate_Production_RealPassword_DoesNotThrow()
+    [Arguments(null)]
+    [Arguments("")]
+    [Arguments("   ")]
+    [Arguments("CHANGE_ME")]
+    [Arguments("changeme")]
+    [Arguments("password")]
+    [Arguments("REPLACE_ME")]
+    public async Task Validate_Production_MissingOrPlaceholderRedisPassword_Throws(string? password)
+    {
+        InvalidOperationException? ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+        {
+            ProductionSecretsGuard.Validate("Production", RealSecret, password);
+
+            return Task.CompletedTask;
+        });
+
+        await Assert.That(ex).IsNotNull();
+        await Assert.That(ex!.Message).Contains("Redis");
+    }
+
+    [Test]
+    public async Task Validate_Production_RealSecrets_DoesNotThrow()
     {
         await Assert.That(() =>
         {
-            ProductionSecretsGuard.Validate("Production", "a-real-strong-secret");
+            ProductionSecretsGuard.Validate("Production", RealSecret, "a-real-redis-secret");
 
             return Task.CompletedTask;
         }).ThrowsNothing();
@@ -48,11 +71,11 @@ public sealed class ProductionSecretsGuardTests
     [Arguments("Development")]
     [Arguments("Staging")]
     [Arguments("Test")]
-    public async Task Validate_NonProduction_PlaceholderPassword_DoesNotThrow(string environment)
+    public async Task Validate_NonProduction_PlaceholderSecrets_DoesNotThrow(string environment)
     {
         await Assert.That(() =>
         {
-            ProductionSecretsGuard.Validate(environment, "CHANGE_ME");
+            ProductionSecretsGuard.Validate(environment, "CHANGE_ME", "CHANGE_ME");
 
             return Task.CompletedTask;
         }).ThrowsNothing();
@@ -63,7 +86,7 @@ public sealed class ProductionSecretsGuardTests
     {
         await Assert.That(() =>
         {
-            ProductionSecretsGuard.Validate(null!, "secret");
+            ProductionSecretsGuard.Validate(null!, RealSecret, RealSecret);
 
             return Task.CompletedTask;
         }).Throws<ArgumentNullException>();

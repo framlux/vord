@@ -91,7 +91,8 @@ RedisOptions redisOpts = builder.Configuration.GetSection("Redis").Get<RedisOpti
     ?? throw new InvalidOperationException("Redis configuration section is missing.");
 
 // Fail fast in Production when critical secrets are empty or still set to shipped placeholders.
-ProductionSecretsGuard.Validate(builder.Environment.EnvironmentName, dbOpts.Password);
+string? redisPassword = StackExchange.Redis.ConfigurationOptions.Parse(redisOpts.ConnectionString).Password;
+ProductionSecretsGuard.Validate(builder.Environment.EnvironmentName, dbOpts.Password, redisPassword);
 BillingOptions billingOpts = builder.Configuration.GetSection("Billing").Get<BillingOptions>() ?? new();
 ObjectStorageOptions objectStorageOpts = builder.Configuration.GetSection("ObjectStorage").Get<ObjectStorageOptions>() ?? new();
 
