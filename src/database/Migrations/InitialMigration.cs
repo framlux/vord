@@ -180,6 +180,7 @@ public sealed class InitialMigration : Migration
             .WithColumn("TelemetryType").AsInt16().NotNullable()
             .WithColumn("Payload").AsString().NotNullable()
             .WithColumn("ReceivedAt").AsDateTimeOffset().NotNullable()
+            .WithColumn("ServerReceivedAt").AsDateTimeOffset().NotNullable()
             .WithColumn("SourceEventId").AsString(64).Nullable();
 
         IfDatabase("PostgreSQL").Execute.Sql("""
@@ -190,6 +191,7 @@ public sealed class InitialMigration : Migration
                 "TelemetryType" SMALLINT NOT NULL,
                 "Payload" TEXT NOT NULL,
                 "ReceivedAt" TIMESTAMPTZ NOT NULL,
+                "ServerReceivedAt" TIMESTAMPTZ NOT NULL,
                 "SourceEventId" VARCHAR(64),
                 PRIMARY KEY ("Id", "ReceivedAt")
             ) PARTITION BY RANGE ("ReceivedAt")
@@ -214,6 +216,14 @@ public sealed class InitialMigration : Migration
             .OnColumn("MachineId").Ascending()
             .OnColumn("TelemetryType").Ascending()
             .OnColumn("ReceivedAt").Descending();
+
+        // Composite index mirroring the historical index on the server-stamped receipt time, which is
+        // what the recency reads (latest-per-type, bounded window, history range) now filter and order by.
+        Create.Index("IX_MachineTelemetry_Machine_Type_ServerTime")
+            .OnTable(TableNames.MachineTelemetry)
+            .OnColumn("MachineId").Ascending()
+            .OnColumn("TelemetryType").Ascending()
+            .OnColumn("ServerReceivedAt").Descending();
 
         // Index on MachineTelemetry for tenant-scoped retention queries.
         Create.Index("IX_MachineTelemetry_TenantId_ReceivedAt")

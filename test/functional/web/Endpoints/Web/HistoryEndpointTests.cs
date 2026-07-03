@@ -117,6 +117,7 @@ public sealed class HistoryEndpointTests
             TelemetryType = 6,
             Payload = JsonSerializer.Serialize(new CpuUsagePayload { CpuUsagePercent = 45 }, JsonDefaults.SnakeCase),
             ReceivedAt = now.AddMinutes(-10),
+            ServerReceivedAt = now.AddMinutes(-10),
         };
         await db.InsertAsync(cpuTelemetry);
 
@@ -128,6 +129,7 @@ public sealed class HistoryEndpointTests
             TelemetryType = 7,
             Payload = JsonSerializer.Serialize(new MemoryUsagePayload { MemoryTotal = 16000000000, MemoryUsed = 10000000000, MemoryUsagePercent = 62 }, JsonDefaults.SnakeCase),
             ReceivedAt = now.AddMinutes(-10),
+            ServerReceivedAt = now.AddMinutes(-10),
         };
         await db.InsertAsync(memoryTelemetry);
 
@@ -155,6 +157,7 @@ public sealed class HistoryEndpointTests
                 ]
             }, JsonDefaults.SnakeCase),
             ReceivedAt = now.AddMinutes(-10),
+            ServerReceivedAt = now.AddMinutes(-10),
         };
         await db.InsertAsync(diskTelemetry);
 
@@ -174,6 +177,7 @@ public sealed class HistoryEndpointTests
                 Timestamp = "2026-05-06T10:00:00Z"
             }, JsonDefaults.SnakeCase),
             ReceivedAt = now.AddMinutes(-10),
+            ServerReceivedAt = now.AddMinutes(-10),
         };
         await db.InsertAsync(sshTelemetry);
 
@@ -192,6 +196,7 @@ public sealed class HistoryEndpointTests
                 ]
             }, JsonDefaults.SnakeCase),
             ReceivedAt = now.AddMinutes(-10),
+            ServerReceivedAt = now.AddMinutes(-10),
         };
         await db.InsertAsync(servicesTelemetry);
 

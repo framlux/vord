@@ -107,7 +107,7 @@ public class MachineStateStreamingServiceTests
         }
     }
 
-    private static MachineTelemetry Row(long id, long machineId, short telemetryType, string payload, DateTimeOffset receivedAt)
+    private static MachineTelemetry Row(long id, long machineId, short telemetryType, string payload, DateTimeOffset receivedAt, DateTimeOffset? serverReceivedAt = null)
     {
         return new MachineTelemetry
         {
@@ -117,6 +117,7 @@ public class MachineStateStreamingServiceTests
             TelemetryType = telemetryType,
             Payload = payload,
             ReceivedAt = receivedAt,
+            ServerReceivedAt = serverReceivedAt ?? receivedAt,
             SourceEventId = Guid.NewGuid().ToString("N")
         };
     }

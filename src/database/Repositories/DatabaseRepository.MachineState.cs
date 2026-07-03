@@ -319,8 +319,8 @@ public partial class DatabaseRepository : IMachineStateRepository
         return await _db.MachineTelemetry
             .Where(t => machineIds.Contains(t.MachineId) &&
                         (t.TelemetryType == telemetryType) &&
-                        (t.ReceivedAt >= receivedSince))
-            .OrderByDescending(t => t.ReceivedAt)
+                        (t.ServerReceivedAt >= receivedSince))
+            .OrderByDescending(t => t.ServerReceivedAt)
             .Take(limit)
             .ToListAsync(cancellationToken);
     }
@@ -337,8 +337,8 @@ public partial class DatabaseRepository : IMachineStateRepository
         return await _db.MachineTelemetry
             .Where(t => machineIds.Contains(t.MachineId) &&
                         (t.TelemetryType == telemetryType) &&
-                        (t.ReceivedAt >= receivedSince))
-            .OrderByDescending(t => t.ReceivedAt)
+                        (t.ServerReceivedAt >= receivedSince))
+            .OrderByDescending(t => t.ServerReceivedAt)
             .Skip(skip)
             .Take(take)
             .ToListAsync(cancellationToken);
@@ -356,7 +356,7 @@ public partial class DatabaseRepository : IMachineStateRepository
         return await _db.MachineTelemetry
             .Where(t => machineIds.Contains(t.MachineId) &&
                         (t.TelemetryType == telemetryType) &&
-                        (t.ReceivedAt >= receivedSince))
+                        (t.ServerReceivedAt >= receivedSince))
             .CountAsync(cancellationToken);
     }
 
@@ -375,9 +375,9 @@ public partial class DatabaseRepository : IMachineStateRepository
     {
         DateTimeOffset recencyCutoff = DateTimeOffset.UtcNow.AddDays(-daysBack);
         List<MachineTelemetry> latest = await _db.MachineTelemetry
-            .Where(t => (t.MachineId == machineId) && (t.ReceivedAt > recencyCutoff))
+            .Where(t => (t.MachineId == machineId) && (t.ServerReceivedAt > recencyCutoff))
             .GroupBy(t => t.TelemetryType)
-            .Select(g => g.OrderByDescending(t => t.ReceivedAt).First())
+            .Select(g => g.OrderByDescending(t => t.ServerReceivedAt).First())
             .ToListAsync(cancellationToken);
 
         return latest.ToDictionary(t => t.TelemetryType);
@@ -388,7 +388,7 @@ public partial class DatabaseRepository : IMachineStateRepository
     {
         return await _db.MachineTelemetry
             .Where(t => (t.MachineId == machineId) && (t.TelemetryType == telemetryType))
-            .OrderByDescending(t => t.ReceivedAt)
+            .OrderByDescending(t => t.ServerReceivedAt)
             .Take(limit)
             .ToListAsync(cancellationToken);
     }
@@ -399,9 +399,9 @@ public partial class DatabaseRepository : IMachineStateRepository
         return await _db.MachineTelemetry
             .Where(t => (t.MachineId == machineId) &&
                         (t.TelemetryType == telemetryType) &&
-                        (t.ReceivedAt >= rangeStart) &&
-                        (t.ReceivedAt < rangeEnd))
-            .OrderBy(t => t.ReceivedAt)
+                        (t.ServerReceivedAt >= rangeStart) &&
+                        (t.ServerReceivedAt < rangeEnd))
+            .OrderBy(t => t.ServerReceivedAt)
             .ToListAsync(cancellationToken);
     }
 

@@ -9,8 +9,10 @@ namespace Framlux.FleetManagement.Services.Core.Machines.Projection;
 
 /// <summary>
 /// Reduces a raw telemetry batch to one <see cref="MachineStatePatch"/> per machine by
-/// selecting, for each telemetry type, the latest row by (ReceivedAt, Id) and parsing it.
-/// LastSeenAt is the max ReceivedAt across all of the machine's rows. Pure: no I/O.
+/// selecting, for each telemetry type, the latest row by (ServerReceivedAt, Id) and parsing it.
+/// LastSeenAt is the max ServerReceivedAt across all of the machine's rows. Recency derives from the
+/// server-stamped receipt time, never the agent's collected-at clock, so a skewed agent cannot skew
+/// recency. Pure: no I/O.
 /// </summary>
 internal static class MachineStateBatchCollapser
 {
@@ -25,15 +27,15 @@ internal static class MachineStateBatchCollapser
         foreach (IGrouping<long, MachineTelemetry> machineGroup in batch.GroupBy(r => r.MachineId))
         {
             long machineId = machineGroup.Key;
-            DateTimeOffset lastSeenAt = machineGroup.Max(r => r.ReceivedAt);
+            DateTimeOffset lastSeenAt = machineGroup.Max(r => r.ServerReceivedAt);
 
             MachineStatePatch patch = new() { MachineId = machineId, LastSeenAt = lastSeenAt };
 
             foreach (IGrouping<short, MachineTelemetry> typeGroup in machineGroup.GroupBy(r => r.TelemetryType))
             {
-                // Latest row for this type by (ReceivedAt, Id).
+                // Latest row for this type by (ServerReceivedAt, Id).
                 MachineTelemetry winner = typeGroup
-                    .OrderBy(r => r.ReceivedAt)
+                    .OrderBy(r => r.ServerReceivedAt)
                     .ThenBy(r => r.Id)
                     .Last();
 

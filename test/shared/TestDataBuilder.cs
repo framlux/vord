@@ -162,15 +162,20 @@ public static class TestDataBuilder
         long machineId = 1,
         int tenantId = 1,
         short telemetryType = 1,
-        string? payload = null)
+        string? payload = null,
+        DateTimeOffset? receivedAt = null,
+        DateTimeOffset? serverReceivedAt = null)
     {
+        DateTimeOffset received = receivedAt ?? DateTimeOffset.UtcNow;
+
         return new MachineTelemetry
         {
             MachineId = machineId,
             TenantId = tenantId,
             TelemetryType = telemetryType,
             Payload = payload ?? """{"cpu": 42}""",
-            ReceivedAt = DateTimeOffset.UtcNow,
+            ReceivedAt = received,
+            ServerReceivedAt = serverReceivedAt ?? received,
             SourceEventId = Guid.NewGuid().ToString("N"),
         };
     }

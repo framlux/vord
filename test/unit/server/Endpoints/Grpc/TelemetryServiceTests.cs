@@ -1124,6 +1124,42 @@ public sealed class TelemetryServiceTests
         await Assert.That(telemetry.Count).IsEqualTo(0);
     }
 
+    [Test]
+    public async Task SubmitTelemetry_StampsServerReceivedAtFromServerClock_NotAgentCollectedAt()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+
+        // A clean, whole-second server clock so the SQLite round-trip compares exactly.
+        DateTimeOffset serverNow = new(2026, 6, 24, 12, 0, 0, TimeSpan.Zero);
+        FakeTimeProvider fixedClock = new(serverNow);
+        TelemetryService service = new(scopeFactory, _dedupService, _subscriptionService, _backgroundJobs, NoOpPipeline, BuildTestRedis(), Options.Create(new TelemetryOptions()), new ProcessStreamSlotLimiter(5000), fixedClock, _logger);
+        ServerCallContext context = CreateAuthenticatedContext(100);
+
+        // The item's collected-at is three days in the future — within the ±7d dedup clamp, so ReceivedAt
+        // keeps that value, but the server-stamped ServerReceivedAt must be the server clock, not the future.
+        DateTimeOffset collectedAt = serverNow.AddDays(3);
+        TelemetryEnvelope envelope = new()
+        {
+            AgentTimestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(serverNow),
+            BatchId = "batch-server-stamp",
+        };
+        envelope.Items.Add(new TelemetryItem
+        {
+            EventId = "event-server-stamp",
+            Type = TelemetryTypes.CpuUtilizationType,
+            CollectedAt = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(collectedAt),
+            CpuUtilization = new CpuUtilizationRecord { CpuUsagePercent = 50 }
+        });
+
+        await service.SubmitTelemetry(envelope, context);
+
+        MachineTelemetry row = await dbFactory.Context.MachineTelemetry.SingleAsync();
+
+        await Assert.That(row.ServerReceivedAt).IsEqualTo(serverNow);
+        await Assert.That(row.ReceivedAt).IsEqualTo(collectedAt);
+    }
+
     // ========================================================================
     // ResolveDedupTimestamp clamp boundaries
     // ========================================================================

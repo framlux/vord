@@ -45,10 +45,20 @@ public sealed class MachineTelemetry
     public required string Payload { get; set; }
 
     /// <summary>
-    /// When the telemetry was received by the consumer.
+    /// The dedup/partition timestamp derived from the agent's immutable collected-at value (clamped to
+    /// the maintained partition window). Stable across re-deliveries so duplicates collide on the unique
+    /// index. This is NOT a recency signal — a skewed agent clock can place it in the past or future.
     /// </summary>
     [Column("ReceivedAt"), NotNull]
     public required DateTimeOffset ReceivedAt { get; set; }
+
+    /// <summary>
+    /// The server wall-clock time the batch containing this row was accepted. Stamped from the server's
+    /// <see cref="TimeProvider"/> and immune to agent clock skew, so all recency semantics
+    /// (LastSeenAt, offline detection, "what's new" reads) derive from this column.
+    /// </summary>
+    [Column("ServerReceivedAt"), NotNull]
+    public required DateTimeOffset ServerReceivedAt { get; set; }
 
     /// <summary>
     /// The CloudEvent ID for deduplication.

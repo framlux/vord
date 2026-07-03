@@ -461,14 +461,17 @@ public class MachineStateRepositoryTests
         // Insert telemetry rows with explicit ReceivedAt within the streaming window
         MachineTelemetry row1 = TestDataBuilder.BuildMachineTelemetry(machineId: 1, tenantId: 1, telemetryType: 1);
         row1.ReceivedAt = now.AddMinutes(-5);
+        row1.ServerReceivedAt = now.AddMinutes(-5);
         await repo.InsertTelemetryAsync(row1);
 
         MachineTelemetry row2 = TestDataBuilder.BuildMachineTelemetry(machineId: 1, tenantId: 1, telemetryType: 2);
         row2.ReceivedAt = now.AddMinutes(-3);
+        row2.ServerReceivedAt = now.AddMinutes(-3);
         await repo.InsertTelemetryAsync(row2);
 
         MachineTelemetry row3 = TestDataBuilder.BuildMachineTelemetry(machineId: 1, tenantId: 1, telemetryType: 3);
         row3.ReceivedAt = now.AddMinutes(-1);
+        row3.ServerReceivedAt = now.AddMinutes(-1);
         await repo.InsertTelemetryAsync(row3);
 
         // Fetch batch with high water mark of 0 and a streaming window in the past
@@ -491,10 +494,12 @@ public class MachineStateRepositoryTests
 
         MachineTelemetry row1 = TestDataBuilder.BuildMachineTelemetry(machineId: 1, tenantId: 1, telemetryType: 1);
         row1.ReceivedAt = now.AddMinutes(-5);
+        row1.ServerReceivedAt = now.AddMinutes(-5);
         await repo.InsertTelemetryAsync(row1);
 
         MachineTelemetry row2 = TestDataBuilder.BuildMachineTelemetry(machineId: 1, tenantId: 1, telemetryType: 2);
         row2.ReceivedAt = now.AddMinutes(-3);
+        row2.ServerReceivedAt = now.AddMinutes(-3);
         await repo.InsertTelemetryAsync(row2);
 
         // Get all rows to discover the first row's ID
@@ -520,11 +525,13 @@ public class MachineStateRepositoryTests
         // Insert a row that is too old for the streaming window
         MachineTelemetry oldRow = TestDataBuilder.BuildMachineTelemetry(machineId: 1, tenantId: 1, telemetryType: 1);
         oldRow.ReceivedAt = now.AddHours(-2);
+        oldRow.ServerReceivedAt = now.AddHours(-2);
         await repo.InsertTelemetryAsync(oldRow);
 
         // Insert a row within the streaming window
         MachineTelemetry newRow = TestDataBuilder.BuildMachineTelemetry(machineId: 1, tenantId: 1, telemetryType: 2);
         newRow.ReceivedAt = now.AddMinutes(-5);
+        newRow.ServerReceivedAt = now.AddMinutes(-5);
         await repo.InsertTelemetryAsync(newRow);
 
         // Set the streaming window to 1 hour ago, so the old row is excluded
@@ -547,10 +554,12 @@ public class MachineStateRepositoryTests
         // Machines 10 and 11 sit in different shards under modulo-2 partitioning (10 % 2 == 0, 11 % 2 == 1).
         MachineTelemetry even = TestDataBuilder.BuildMachineTelemetry(machineId: 10, tenantId: 1, telemetryType: 1);
         even.ReceivedAt = now.AddMinutes(-5);
+        even.ServerReceivedAt = now.AddMinutes(-5);
         await repo.InsertTelemetryAsync(even);
 
         MachineTelemetry odd = TestDataBuilder.BuildMachineTelemetry(machineId: 11, tenantId: 1, telemetryType: 1);
         odd.ReceivedAt = now.AddMinutes(-4);
+        odd.ServerReceivedAt = now.AddMinutes(-4);
         await repo.InsertTelemetryAsync(odd);
 
         List<MachineTelemetry> shardZero = await repo.GetTelemetryBatchAsync(0, streamingWindow, batchSize: 10, shardIndex: 0, shardCount: 2);
@@ -573,10 +582,12 @@ public class MachineStateRepositoryTests
 
         MachineTelemetry even = TestDataBuilder.BuildMachineTelemetry(machineId: 10, tenantId: 1, telemetryType: 1);
         even.ReceivedAt = now.AddMinutes(-5);
+        even.ServerReceivedAt = now.AddMinutes(-5);
         await repo.InsertTelemetryAsync(even);
 
         MachineTelemetry odd = TestDataBuilder.BuildMachineTelemetry(machineId: 11, tenantId: 1, telemetryType: 1);
         odd.ReceivedAt = now.AddMinutes(-4);
+        odd.ServerReceivedAt = now.AddMinutes(-4);
         await repo.InsertTelemetryAsync(odd);
 
         // shardCount of 1 disables the modulo predicate, so both machines are returned.
@@ -598,15 +609,18 @@ public class MachineStateRepositoryTests
         // Two rows for type 1 - only the latest should be returned
         MachineTelemetry type1Old = TestDataBuilder.BuildMachineTelemetry(machineId: 50, tenantId: 1, telemetryType: 1, payload: """{"old":true}""");
         type1Old.ReceivedAt = now.AddMinutes(-30);
+        type1Old.ServerReceivedAt = now.AddMinutes(-30);
         await repo.InsertTelemetryAsync(type1Old);
 
         MachineTelemetry type1New = TestDataBuilder.BuildMachineTelemetry(machineId: 50, tenantId: 1, telemetryType: 1, payload: """{"old":false}""");
         type1New.ReceivedAt = now.AddMinutes(-5);
+        type1New.ServerReceivedAt = now.AddMinutes(-5);
         await repo.InsertTelemetryAsync(type1New);
 
         // One row for type 2
         MachineTelemetry type2 = TestDataBuilder.BuildMachineTelemetry(machineId: 50, tenantId: 1, telemetryType: 2, payload: """{"type":2}""");
         type2.ReceivedAt = now.AddMinutes(-10);
+        type2.ServerReceivedAt = now.AddMinutes(-10);
         await repo.InsertTelemetryAsync(type2);
 
         Dictionary<short, MachineTelemetry> result = await repo.GetLatestTelemetryPerTypeAsync(50, daysBack: 1);
@@ -629,11 +643,13 @@ public class MachineStateRepositoryTests
         // Row received 10 days ago
         MachineTelemetry oldRow = TestDataBuilder.BuildMachineTelemetry(machineId: 60, tenantId: 1, telemetryType: 1);
         oldRow.ReceivedAt = now.AddDays(-10);
+        oldRow.ServerReceivedAt = now.AddDays(-10);
         await repo.InsertTelemetryAsync(oldRow);
 
         // Row received 1 hour ago
         MachineTelemetry recentRow = TestDataBuilder.BuildMachineTelemetry(machineId: 60, tenantId: 1, telemetryType: 2);
         recentRow.ReceivedAt = now.AddHours(-1);
+        recentRow.ServerReceivedAt = now.AddHours(-1);
         await repo.InsertTelemetryAsync(recentRow);
 
         // Only look back 3 days - the 10-day-old row should be excluded
@@ -655,14 +671,17 @@ public class MachineStateRepositoryTests
 
         MachineTelemetry row1 = TestDataBuilder.BuildMachineTelemetry(machineId: 70, tenantId: 1, telemetryType: 5, payload: """{"order":1}""");
         row1.ReceivedAt = now.AddMinutes(-30);
+        row1.ServerReceivedAt = now.AddMinutes(-30);
         await repo.InsertTelemetryAsync(row1);
 
         MachineTelemetry row2 = TestDataBuilder.BuildMachineTelemetry(machineId: 70, tenantId: 1, telemetryType: 5, payload: """{"order":2}""");
         row2.ReceivedAt = now.AddMinutes(-20);
+        row2.ServerReceivedAt = now.AddMinutes(-20);
         await repo.InsertTelemetryAsync(row2);
 
         MachineTelemetry row3 = TestDataBuilder.BuildMachineTelemetry(machineId: 70, tenantId: 1, telemetryType: 5, payload: """{"order":3}""");
         row3.ReceivedAt = now.AddMinutes(-10);
+        row3.ServerReceivedAt = now.AddMinutes(-10);
         await repo.InsertTelemetryAsync(row3);
 
         List<MachineTelemetry> result = await repo.GetRecentTelemetryAsync(70, telemetryType: 5, limit: 10);
@@ -685,6 +704,7 @@ public class MachineStateRepositoryTests
         {
             MachineTelemetry row = TestDataBuilder.BuildMachineTelemetry(machineId: 80, tenantId: 1, telemetryType: 7);
             row.ReceivedAt = now.AddMinutes(-i);
+            row.ServerReceivedAt = now.AddMinutes(-i);
             await repo.InsertTelemetryAsync(row);
         }
 
@@ -721,19 +741,23 @@ public class MachineStateRepositoryTests
         // Three rows inside the window for machine 1, type 1.
         MachineTelemetry recent1 = TestDataBuilder.BuildMachineTelemetry(machineId: 1, tenantId: 1, telemetryType: 1, payload: """{"a":1}""");
         recent1.ReceivedAt = now.AddMinutes(-1);
+        recent1.ServerReceivedAt = now.AddMinutes(-1);
         await repo.InsertTelemetryAsync(recent1);
 
         MachineTelemetry recent2 = TestDataBuilder.BuildMachineTelemetry(machineId: 1, tenantId: 1, telemetryType: 1, payload: """{"a":2}""");
         recent2.ReceivedAt = now.AddMinutes(-2);
+        recent2.ServerReceivedAt = now.AddMinutes(-2);
         await repo.InsertTelemetryAsync(recent2);
 
         MachineTelemetry recent3 = TestDataBuilder.BuildMachineTelemetry(machineId: 1, tenantId: 1, telemetryType: 1, payload: """{"a":3}""");
         recent3.ReceivedAt = now.AddMinutes(-3);
+        recent3.ServerReceivedAt = now.AddMinutes(-3);
         await repo.InsertTelemetryAsync(recent3);
 
         // Outside the window — must be excluded even though it matches machine + type.
         MachineTelemetry old = TestDataBuilder.BuildMachineTelemetry(machineId: 1, tenantId: 1, telemetryType: 1, payload: """{"a":0}""");
         old.ReceivedAt = now.AddHours(-10);
+        old.ServerReceivedAt = now.AddHours(-10);
         await repo.InsertTelemetryAsync(old);
 
         List<MachineTelemetry> result = await repo.GetTelemetryByMachineIdsAndTypeAsync(
@@ -772,6 +796,7 @@ public class MachineStateRepositoryTests
         {
             MachineTelemetry row = TestDataBuilder.BuildMachineTelemetry(machineId: 1, tenantId: 1, telemetryType: 1);
             row.ReceivedAt = now.AddMinutes(-i);
+            row.ServerReceivedAt = now.AddMinutes(-i);
             await repo.InsertTelemetryAsync(row);
         }
 
@@ -1282,7 +1307,49 @@ public class MachineStateRepositoryTests
         await Assert.That(count).IsEqualTo(2);
     }
 
-    private static async Task InsertTelemetryAsync(TestDatabaseFactory dbFactory, long machineId, short telemetryType, DateTimeOffset receivedAt, long id)
+    [Test]
+    public async Task CountTelemetryByMachineIdsAndType_WindowsOnServerReceivedAt_NotAgentClock()
+    {
+        // A forward/backward skewed agent clock must not decide window membership. The bounded window
+        // filters on the server-stamped ServerReceivedAt, so an in-agent-window row whose ServerReceivedAt
+        // is outside the window is excluded.
+        using TestDatabaseFactory dbFactory = new();
+        IMachineStateRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        DateTimeOffset since = now.AddDays(-1);
+
+        // Both rows carry an in-window ReceivedAt; only the first was actually received in-window.
+        await InsertTelemetryAsync(dbFactory, machineId: 1, telemetryType: 9, receivedAt: now, id: 1, serverReceivedAt: now);
+        await InsertTelemetryAsync(dbFactory, machineId: 1, telemetryType: 9, receivedAt: now, id: 2, serverReceivedAt: now.AddDays(-5));
+
+        int count = await repo.CountTelemetryByMachineIdsAndTypeAsync([1], 9, since, CancellationToken.None);
+
+        await Assert.That(count).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task GetTelemetryPageByMachineIdsAndType_OrdersByServerReceivedAt_NotAgentClock()
+    {
+        // Ordering is newest-first by server receipt time, so a row with a future agent clock does not
+        // jump to the front of the page.
+        using TestDatabaseFactory dbFactory = new();
+        IMachineStateRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+
+        // id 2 has the newest agent clock but an older server receipt; id 1 was received most recently.
+        await InsertTelemetryAsync(dbFactory, machineId: 1, telemetryType: 9, receivedAt: now.AddMinutes(-10), id: 1, serverReceivedAt: now);
+        await InsertTelemetryAsync(dbFactory, machineId: 1, telemetryType: 9, receivedAt: now.AddDays(3), id: 2, serverReceivedAt: now.AddMinutes(-5));
+
+        List<MachineTelemetry> page = await repo.GetTelemetryPageByMachineIdsAndTypeAsync([1], 9, now.AddDays(-1), 0, 10, CancellationToken.None);
+
+        await Assert.That(page.Count).IsEqualTo(2);
+        await Assert.That(page[0].Id).IsEqualTo(1L);
+        await Assert.That(page[1].Id).IsEqualTo(2L);
+    }
+
+    private static async Task InsertTelemetryAsync(TestDatabaseFactory dbFactory, long machineId, short telemetryType, DateTimeOffset receivedAt, long id, DateTimeOffset? serverReceivedAt = null)
     {
         await dbFactory.Context.InsertAsync(new MachineTelemetry
         {
@@ -1292,6 +1359,7 @@ public class MachineStateRepositoryTests
             TelemetryType = telemetryType,
             Payload = """{"user":"x"}""",
             ReceivedAt = receivedAt,
+            ServerReceivedAt = serverReceivedAt ?? receivedAt,
             SourceEventId = Guid.NewGuid().ToString("N"),
         });
     }

@@ -119,6 +119,7 @@ public sealed class SshSessionsEndpointTests
                             TelemetryType = 9,
                             Payload = session.GetRawText(),
                             ReceivedAt = DateTimeOffset.UtcNow,
+                            ServerReceivedAt = DateTimeOffset.UtcNow,
                         };
                         await db.InsertWithInt64IdentityAsync(telemetry);
                     }
@@ -134,6 +135,7 @@ public sealed class SshSessionsEndpointTests
                     TelemetryType = 9,
                     Payload = sshSessionsJson,
                     ReceivedAt = DateTimeOffset.UtcNow,
+                    ServerReceivedAt = DateTimeOffset.UtcNow,
                 };
                 await db.InsertWithInt64IdentityAsync(telemetry);
             }
@@ -335,6 +337,7 @@ public sealed class SshSessionsEndpointTests
                 TelemetryType = 9,
                 Payload = $$"""{"user":"u{{i}}","source_ip":"10.0.0.{{i}}","action":"connect","auth_method":"publickey","timestamp":"2026-01-01T00:0{{i}}:00Z"}""",
                 ReceivedAt = DateTimeOffset.UtcNow.AddMinutes(-i),
+                ServerReceivedAt = DateTimeOffset.UtcNow.AddMinutes(-i),
             };
             await db.InsertWithInt64IdentityAsync(telemetry);
         }
@@ -373,6 +376,7 @@ public sealed class SshSessionsEndpointTests
             TelemetryType = 9,
             Payload = """{"user":"recent","source_ip":"10.0.0.1","action":"connect","auth_method":"publickey","timestamp":"2026-06-15T00:00:00Z"}""",
             ReceivedAt = DateTimeOffset.UtcNow,
+            ServerReceivedAt = DateTimeOffset.UtcNow,
         });
         await db.InsertWithInt64IdentityAsync(new MachineTelemetry
         {
@@ -381,6 +385,7 @@ public sealed class SshSessionsEndpointTests
             TelemetryType = 9,
             Payload = """{"user":"ancient","source_ip":"10.0.0.2","action":"connect","auth_method":"publickey","timestamp":"2016-01-01T00:00:00Z"}""",
             ReceivedAt = DateTimeOffset.UtcNow.AddYears(-10),
+            ServerReceivedAt = DateTimeOffset.UtcNow.AddYears(-10),
         });
 
         HttpClient client = BuildClient(factory, tenantId, userId);

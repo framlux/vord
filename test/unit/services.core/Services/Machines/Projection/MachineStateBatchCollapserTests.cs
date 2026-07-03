@@ -92,6 +92,30 @@ public class MachineStateBatchCollapserTests
     }
 
     [Test]
+    public async Task Collapse_ServerReceivedAt_DrivesLastSeenAndWinnerNotAgentClock()
+    {
+        // Intent: recency semantics derive from the server-stamped ServerReceivedAt, never the agent's
+        // collected-at clock. A forward-skewed agent (ReceivedAt far in the future) must not push
+        // LastSeenAt forward, and the per-type winner is decided by (ServerReceivedAt, Id).
+        DateTimeOffset t0 = DateTimeOffset.UnixEpoch;
+        List<MachineTelemetry> batch =
+        [
+            Row(1, 100, TelemetryTypeIds.CpuUsage, """{ "cpu_usage_percent": 10 }""", receivedAt: t0.AddDays(3), serverReceivedAt: t0.AddMinutes(2)),
+            Row(2, 100, TelemetryTypeIds.CpuUsage, """{ "cpu_usage_percent": 90 }""", receivedAt: t0.AddHours(1), serverReceivedAt: t0.AddMinutes(5)),
+        ];
+
+        CollapseResult result = MachineStateBatchCollapser.Collapse(batch);
+
+        MachineStatePatch patch = result.Patches.Single();
+
+        // Winner is the row with the highest ServerReceivedAt (t0+5m), not the highest agent time (t0+3d).
+        await Assert.That(patch.CpuUsage!.CpuUsagePercent).IsEqualTo(90);
+
+        // LastSeenAt is the max ServerReceivedAt, never the future agent timestamp.
+        await Assert.That(patch.LastSeenAt).IsEqualTo(t0.AddMinutes(5));
+    }
+
+    [Test]
     public async Task Collapse_MultipleMachines_ProducesOnePatchEach()
     {
         DateTimeOffset t0 = DateTimeOffset.UnixEpoch;
@@ -240,7 +264,7 @@ public class MachineStateBatchCollapserTests
         await Assert.That(patch.LastSeenAt).IsEqualTo(t0);
     }
 
-    private static MachineTelemetry Row(long id, long machineId, short type, string payload, DateTimeOffset receivedAt) =>
+    private static MachineTelemetry Row(long id, long machineId, short type, string payload, DateTimeOffset receivedAt, DateTimeOffset? serverReceivedAt = null) =>
         new()
         {
             Id = id,
@@ -249,5 +273,6 @@ public class MachineStateBatchCollapserTests
             TelemetryType = type,
             Payload = payload,
             ReceivedAt = receivedAt,
+            ServerReceivedAt = serverReceivedAt ?? receivedAt,
         };
 }

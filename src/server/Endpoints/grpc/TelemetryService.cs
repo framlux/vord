@@ -446,6 +446,7 @@ public sealed class TelemetryService : Telemetry.TelemetryBase
                     TelemetryType = n.Type,
                     Payload = n.Payload,
                     ReceivedAt = ResolveDedupTimestamp(n.Item, receivedAt),
+                    ServerReceivedAt = receivedAt,
                     SourceEventId = n.Item.EventId,
                 }).ToList();
 

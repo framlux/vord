@@ -170,7 +170,8 @@ public class HistoryEndpointUnitTests
             TenantId = 1,
             TelemetryType = telemetryType,
             Payload = JsonSerializer.Serialize(payload, JsonDefaults.SnakeCase),
-            ReceivedAt = receivedAt
+            ReceivedAt = receivedAt,
+            ServerReceivedAt = receivedAt
         };
     }
 
@@ -227,7 +228,8 @@ public class HistoryEndpointUnitTests
                 TenantId = 1,
                 TelemetryType = TelemetryTypeIds.CpuUsage,
                 Payload = "null",
-                ReceivedAt = BaseTime
+                ReceivedAt = BaseTime,
+                ServerReceivedAt = BaseTime
             },
             CreateRow(new CpuUsagePayload { CpuUsagePercent = 55 }, BaseTime.AddSeconds(30), TelemetryTypeIds.CpuUsage)
         ];
@@ -313,7 +315,8 @@ public class HistoryEndpointUnitTests
                 TenantId = 1,
                 TelemetryType = TelemetryTypeIds.MemoryUsage,
                 Payload = "null",
-                ReceivedAt = BaseTime
+                ReceivedAt = BaseTime,
+                ServerReceivedAt = BaseTime
             }
         ];
 
@@ -420,7 +423,8 @@ public class HistoryEndpointUnitTests
                 TenantId = 1,
                 TelemetryType = TelemetryTypeIds.DiskUsage,
                 Payload = "null",
-                ReceivedAt = BaseTime
+                ReceivedAt = BaseTime,
+                ServerReceivedAt = BaseTime
             }
         ];
 
@@ -628,7 +632,8 @@ public class HistoryEndpointUnitTests
                 TenantId = 1,
                 TelemetryType = TelemetryTypeIds.ServiceStatus,
                 Payload = "null",
-                ReceivedAt = BaseTime
+                ReceivedAt = BaseTime,
+                ServerReceivedAt = BaseTime
             }
         ];
 
@@ -769,7 +774,8 @@ public class HistoryEndpointUnitTests
                 TenantId = 1,
                 TelemetryType = TelemetryTypeIds.SshSessions,
                 Payload = "null",
-                ReceivedAt = BaseTime
+                ReceivedAt = BaseTime,
+                ServerReceivedAt = BaseTime
             }
         ];
 

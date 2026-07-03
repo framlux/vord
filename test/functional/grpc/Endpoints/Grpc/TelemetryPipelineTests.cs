@@ -503,6 +503,7 @@ public sealed class TelemetryPipelineTests
             TelemetryType = TelemetryTypeIds.CpuUsage,
             Payload = "{\"cpu_usage_percent\":99}",
             ReceivedAt = DateTimeOffset.UtcNow.AddDays(-5),
+            ServerReceivedAt = DateTimeOffset.UtcNow.AddDays(-5),
             SourceEventId = oldEventId
         };
         await db.InsertAsync(oldRow);
@@ -731,6 +732,7 @@ public sealed class TelemetryPipelineTests
             TelemetryType = TelemetryTypeIds.DiskUsage,
             Payload = "{\"disks\":[{\"device\":\"/dev/sda1\",\"path\":\"/\",\"usage_percent\":88}]}",
             ReceivedAt = DateTimeOffset.UtcNow.AddDays(-5),
+            ServerReceivedAt = DateTimeOffset.UtcNow.AddDays(-5),
             SourceEventId = oldDiskEventId
         };
         await db.InsertAsync(oldRow);
