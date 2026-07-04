@@ -250,11 +250,28 @@ public sealed class TelemetryService : Telemetry.TelemetryBase
     }
 
     /// <summary>
-    /// Tries to claim a concurrent-stream slot for the given machine. Returns
-    /// <see langword="true"/> on success; <see langword="false"/> if the cap is reached.
-    /// Slot key is <c>telemetry:stream:{machineId}</c>; INCR returns the post-increment value,
-    /// so the very first slot for a machine sees count==1 and we set the TTL accordingly.
-    /// Subsequent slots over the cap immediately DECR and return false so the count stays bounded.
+    /// Lua script that claims a concurrent-stream slot atomically: INCR, cap-check (self-DECR and deny
+    /// when over cap), then (re)set the TTL on every successful acquire. Single round-trip and
+    /// all-or-nothing, so a failed call never leaves the count incremented without a TTL — the bug that
+    /// could otherwise strand a machine's slot count above zero and lock it out of streaming. Returns 1
+    /// when the slot is granted, 0 when the cap is reached.
+    /// </summary>
+    private const string AcquireStreamSlotScript = """
+        local count = redis.call("INCR", KEYS[1])
+        if count > tonumber(ARGV[1]) then
+            redis.call("DECR", KEYS[1])
+            return 0
+        end
+        redis.call("EXPIRE", KEYS[1], ARGV[2])
+        return 1
+        """;
+
+    /// <summary>
+    /// Tries to claim a concurrent-stream slot for the given machine. Returns the granting source on
+    /// success or <see langword="null"/> when the per-machine cap is reached. The Redis path runs the
+    /// atomic <see cref="AcquireStreamSlotScript"/>; if Redis is unavailable the call falls back to the
+    /// per-process limiter. The TTL is refreshed on every successful acquire so overlapping streams
+    /// cannot let the key expire mid-stream.
     /// </summary>
     internal async Task<StreamSlotSource?> TryAcquireStreamSlotAsync(long machineId, TimeSpan slotTtl)
     {
@@ -262,25 +279,20 @@ public sealed class TelemetryService : Telemetry.TelemetryBase
         {
             IDatabase db = _redis.GetDatabase();
             string key = StreamCountKeyPrefix + machineId.ToString(CultureInfo.InvariantCulture);
-            long count = await db.StringIncrementAsync(key);
-            if (count == 1)
-            {
-                await db.KeyExpireAsync(key, slotTtl);
-            }
+            long ttlSeconds = Math.Max(1, (long)slotTtl.TotalSeconds);
 
-            if (count > _options.MaxConcurrentStreamsPerMachine)
-            {
-                await db.StringDecrementAsync(key);
+            RedisResult result = await db.ScriptEvaluateAsync(
+                AcquireStreamSlotScript,
+                [(RedisKey)key],
+                [(RedisValue)_options.MaxConcurrentStreamsPerMachine, (RedisValue)ttlSeconds]);
 
-                return null;
-            }
-
-            return StreamSlotSource.Redis;
+            return (long)result == 1 ? StreamSlotSource.Redis : null;
         }
         catch (RedisException ex)
         {
             // Redis is unavailable: fall back to a conservative per-process cap so a single replica
-            // cannot accept unbounded concurrent streams while the distributed cap is unenforceable.
+            // cannot accept unbounded concurrent streams while the distributed cap is unenforceable. The
+            // script is all-or-nothing, so nothing was mutated in Redis and no compensation is needed.
             _logger.LogWarning(ex, "Telemetry stream-slot acquire via Redis failed for machine {MachineId}; using per-process fallback", machineId);
 
             return _processSlotLimiter.TryAcquire() ? StreamSlotSource.Process : null;

@@ -41,48 +41,51 @@ public sealed class TelemetryServiceStreamCapTests
             NullLogger<TelemetryService>.Instance);
     }
 
+    private static void MockAcquireScript(IDatabase db, params long[] returns)
+    {
+        RedisResult[] results = returns.Select(r => RedisResult.Create((RedisValue)r)).ToArray();
+        db.ScriptEvaluateAsync(Arg.Any<string>(), Arg.Any<RedisKey[]>(), Arg.Any<RedisValue[]>(), Arg.Any<CommandFlags>())
+            .Returns(results[0], results.Skip(1).ToArray());
+    }
+
     [Test]
-    public async Task TryAcquireStreamSlot_FirstStreamUnderCap_ReturnsTrue()
+    public async Task TryAcquireStreamSlot_ScriptGrants_ReturnsRedisSource()
     {
         IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
         IDatabase db = Substitute.For<IDatabase>();
         redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(db);
-        db.StringIncrementAsync(Arg.Any<RedisKey>(), Arg.Any<long>(), Arg.Any<CommandFlags>())
-            .Returns(1L);
+        MockAcquireScript(db, 1L);
 
         TelemetryService svc = BuildService(redis, new TelemetryOptions { MaxConcurrentStreamsPerMachine = 1 });
 
         StreamSlotSource? acquired = await svc.TryAcquireStreamSlotAsync(42, TimeSpan.FromMinutes(6));
 
         await Assert.That(acquired).IsEqualTo(StreamSlotSource.Redis);
-        await db.Received(1).KeyExpireAsync(
-            Arg.Is<RedisKey>(k => k.ToString() == "telemetry:stream:42"),
-            Arg.Any<TimeSpan?>(),
-            Arg.Any<ExpireWhen>(),
+        // The atomic acquire runs as a single Lua script (INCR + cap-check + EXPIRE), not a separate
+        // INCR then EXPIRE — so no bare StringIncrement/KeyExpire round-trips are issued.
+        await db.Received(1).ScriptEvaluateAsync(
+            Arg.Any<string>(),
+            Arg.Is<RedisKey[]>(keys => keys.Length == 1 && keys[0].ToString() == "telemetry:stream:42"),
+            Arg.Is<RedisValue[]>(vals => vals.Length == 2),
             Arg.Any<CommandFlags>());
+        await db.DidNotReceive().StringIncrementAsync(Arg.Any<RedisKey>(), Arg.Any<long>(), Arg.Any<CommandFlags>());
     }
 
     [Test]
-    public async Task TryAcquireStreamSlot_OverCap_ReturnsFalse_AndDecrements()
+    public async Task TryAcquireStreamSlot_ScriptDenies_ReturnsNull()
     {
         IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
         IDatabase db = Substitute.For<IDatabase>();
         redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(db);
-        // INCR returns 2 — already at cap; the slot must be rejected and DECR'd.
-        db.StringIncrementAsync(Arg.Any<RedisKey>(), Arg.Any<long>(), Arg.Any<CommandFlags>())
-            .Returns(2L);
-        db.StringDecrementAsync(Arg.Any<RedisKey>(), Arg.Any<long>(), Arg.Any<CommandFlags>())
-            .Returns(1L);
+        // Over cap: the script self-DECRs and returns 0. No compensating DECR is issued from C#.
+        MockAcquireScript(db, 0L);
 
         TelemetryService svc = BuildService(redis, new TelemetryOptions { MaxConcurrentStreamsPerMachine = 1 });
 
         StreamSlotSource? acquired = await svc.TryAcquireStreamSlotAsync(42, TimeSpan.FromMinutes(6));
 
         await Assert.That(acquired).IsNull();
-        await db.Received(1).StringDecrementAsync(
-            Arg.Is<RedisKey>(k => k.ToString() == "telemetry:stream:42"),
-            Arg.Any<long>(),
-            Arg.Any<CommandFlags>());
+        await db.DidNotReceive().StringDecrementAsync(Arg.Any<RedisKey>(), Arg.Any<long>(), Arg.Any<CommandFlags>());
     }
 
     [Test]
@@ -91,9 +94,7 @@ public sealed class TelemetryServiceStreamCapTests
         IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
         IDatabase db = Substitute.For<IDatabase>();
         redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(db);
-        // Returns 1 then 2 to simulate two sequential acquires.
-        db.StringIncrementAsync(Arg.Any<RedisKey>(), Arg.Any<long>(), Arg.Any<CommandFlags>())
-            .Returns(1L, 2L);
+        MockAcquireScript(db, 1L, 1L);
 
         TelemetryService svc = BuildService(redis, new TelemetryOptions { MaxConcurrentStreamsPerMachine = 2 });
 
@@ -110,8 +111,8 @@ public sealed class TelemetryServiceStreamCapTests
         IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
         IDatabase db = Substitute.For<IDatabase>();
         redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(db);
-        db.StringIncrementAsync(Arg.Any<RedisKey>(), Arg.Any<long>(), Arg.Any<CommandFlags>())
-            .Returns<Task<long>>(_ => throw new RedisException("connection lost"));
+        db.ScriptEvaluateAsync(Arg.Any<string>(), Arg.Any<RedisKey[]>(), Arg.Any<RedisValue[]>(), Arg.Any<CommandFlags>())
+            .Returns<RedisResult>(_ => throw new RedisException("connection lost"));
 
         // A per-process ceiling of 1: the first acquire during the outage falls back to the
         // process limiter, the second must be rejected — proving the cap fails closed, not open.
@@ -192,8 +193,7 @@ public sealed class TelemetryServiceStreamCapTests
         IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
         IDatabase db = Substitute.For<IDatabase>();
         redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(db);
-        db.StringIncrementAsync(Arg.Any<RedisKey>(), Arg.Any<long>(), Arg.Any<CommandFlags>())
-            .Returns(1L);
+        MockAcquireScript(db, 1L, 1L);
 
         TelemetryService svc = BuildService(redis, new TelemetryOptions { MaxConcurrentStreamsPerMachine = 1 });
 
@@ -203,13 +203,15 @@ public sealed class TelemetryServiceStreamCapTests
         await Assert.That(a).IsEqualTo(StreamSlotSource.Redis);
         await Assert.That(b).IsEqualTo(StreamSlotSource.Redis);
         // Distinct keys used.
-        await db.Received(1).StringIncrementAsync(
-            Arg.Is<RedisKey>(k => k.ToString() == "telemetry:stream:1"),
-            Arg.Any<long>(),
+        await db.Received(1).ScriptEvaluateAsync(
+            Arg.Any<string>(),
+            Arg.Is<RedisKey[]>(keys => keys.Length == 1 && keys[0].ToString() == "telemetry:stream:1"),
+            Arg.Any<RedisValue[]>(),
             Arg.Any<CommandFlags>());
-        await db.Received(1).StringIncrementAsync(
-            Arg.Is<RedisKey>(k => k.ToString() == "telemetry:stream:2"),
-            Arg.Any<long>(),
+        await db.Received(1).ScriptEvaluateAsync(
+            Arg.Any<string>(),
+            Arg.Is<RedisKey[]>(keys => keys.Length == 1 && keys[0].ToString() == "telemetry:stream:2"),
+            Arg.Any<RedisValue[]>(),
             Arg.Any<CommandFlags>());
     }
 }

@@ -123,8 +123,10 @@ public sealed class TelemetryServiceTests
         IConnectionMultiplexer mux = Substitute.For<IConnectionMultiplexer>();
         IDatabase db = Substitute.For<IDatabase>();
         mux.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(db);
-        // INCR returns 1 (slot acquired); DECR returns 0 (slot released, key gets deleted).
-        db.StringIncrementAsync(Arg.Any<RedisKey>(), Arg.Any<long>(), Arg.Any<CommandFlags>()).Returns(1L);
+        // The stream-slot acquire runs as an atomic Lua script that returns 1 when the slot is granted.
+        db.ScriptEvaluateAsync(Arg.Any<string>(), Arg.Any<RedisKey[]>(), Arg.Any<RedisValue[]>(), Arg.Any<CommandFlags>())
+            .Returns(RedisResult.Create((RedisValue)1L));
+        // DECR returns 0 (slot released, key gets deleted).
         db.StringDecrementAsync(Arg.Any<RedisKey>(), Arg.Any<long>(), Arg.Any<CommandFlags>()).Returns(0L);
 
         return mux;
