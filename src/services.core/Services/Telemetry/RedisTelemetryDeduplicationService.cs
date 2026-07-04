@@ -100,4 +100,31 @@ public sealed class RedisTelemetryDeduplicationService : ITelemetryDeduplication
             return ids.ToDictionary(id => id, _ => true);
         }
     }
+
+    /// <inheritdoc/>
+    public async Task UnmarkSeenBatchAsync(IReadOnlyList<string> eventIds)
+    {
+        if ((eventIds is null) || (eventIds.Count == 0))
+        {
+            return;
+        }
+
+        try
+        {
+            IDatabase db = _redis.GetDatabase();
+            RedisKey[] keys = new RedisKey[eventIds.Count];
+            for (int i = 0; i < eventIds.Count; i++)
+            {
+                keys[i] = KeyPrefix + eventIds[i];
+            }
+
+            await db.KeyDeleteAsync(keys);
+        }
+        catch (Exception ex) when (ex is RedisConnectionException or RedisTimeoutException)
+        {
+            // Best-effort compensation: if Redis is unreachable the markers will lapse on their own TTL,
+            // so swallow connectivity failures rather than turning a retryable NACK into a hard error.
+            _logger.LogWarning(ex, "Redis unavailable while unmarking {Count} telemetry dedup keys; markers will expire on TTL", eventIds.Count);
+        }
+    }
 }

@@ -258,6 +258,69 @@ public sealed class TelemetryDeduplicationServiceTests
     }
 
     [Test]
+    public async Task UnmarkSeenBatchAsync_DeletesPrefixedKeys()
+    {
+        IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
+        IDatabase db = Substitute.For<IDatabase>();
+        redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(db);
+        db.KeyDeleteAsync(Arg.Any<RedisKey[]>(), Arg.Any<CommandFlags>()).Returns(2L);
+
+        RedisTelemetryDeduplicationService service = new(redis, CreateConfigService(), NullLogger<RedisTelemetryDeduplicationService>.Instance);
+
+        await service.UnmarkSeenBatchAsync(["event-a", "event-b"]);
+
+        await db.Received(1).KeyDeleteAsync(
+            Arg.Is<RedisKey[]>(keys => keys.Length == 2
+                && keys[0].ToString() == "telemetry:dedup:event-a"
+                && keys[1].ToString() == "telemetry:dedup:event-b"),
+            Arg.Any<CommandFlags>());
+    }
+
+    [Test]
+    public async Task UnmarkSeenBatchAsync_EmptyList_DoesNotCallRedis()
+    {
+        IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
+        IDatabase db = Substitute.For<IDatabase>();
+        redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(db);
+
+        RedisTelemetryDeduplicationService service = new(redis, CreateConfigService(), NullLogger<RedisTelemetryDeduplicationService>.Instance);
+
+        await service.UnmarkSeenBatchAsync([]);
+
+        await db.DidNotReceive().KeyDeleteAsync(Arg.Any<RedisKey[]>(), Arg.Any<CommandFlags>());
+    }
+
+    [Test]
+    public async Task UnmarkSeenBatchAsync_NullList_DoesNotThrow()
+    {
+        IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
+        IDatabase db = Substitute.For<IDatabase>();
+        redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(db);
+
+        RedisTelemetryDeduplicationService service = new(redis, CreateConfigService(), NullLogger<RedisTelemetryDeduplicationService>.Instance);
+
+        // Null input is a documented no-op that must not throw.
+        await service.UnmarkSeenBatchAsync(null!);
+
+        await db.DidNotReceive().KeyDeleteAsync(Arg.Any<RedisKey[]>(), Arg.Any<CommandFlags>());
+    }
+
+    [Test]
+    public async Task UnmarkSeenBatchAsync_ConnectivityFailure_IsSwallowed()
+    {
+        IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
+        IDatabase db = Substitute.For<IDatabase>();
+        redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(db);
+        db.KeyDeleteAsync(Arg.Any<RedisKey[]>(), Arg.Any<CommandFlags>())
+            .Returns<long>(_ => throw new RedisConnectionException(ConnectionFailureType.UnableToConnect, "down"));
+
+        RedisTelemetryDeduplicationService service = new(redis, CreateConfigService(), NullLogger<RedisTelemetryDeduplicationService>.Instance);
+
+        // Best-effort compensation: a connectivity failure while unmarking must not throw.
+        await service.UnmarkSeenBatchAsync(["event-a"]);
+    }
+
+    [Test]
     public async Task TryMarkSeenBatchAsync_NonConnectivityError_Propagates()
     {
         // A programming error (not a connectivity failure) must not be swallowed by the fail-open path.

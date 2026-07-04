@@ -402,6 +402,10 @@ public sealed class TelemetryService : Telemetry.TelemetryBase
             };
         }
 
+        // Event IDs this call newly marked in Redis. If the insert fails we must unmark them so the
+        // agent's retry is not classified a duplicate and silently dropped. Populated after the mark.
+        List<string> markedEventIds = [];
+
         try
         {
             // Layer 1: Redis dedup — batch check all event IDs in one round-trip.
@@ -413,6 +417,8 @@ public sealed class TelemetryService : Telemetry.TelemetryBase
             Dictionary<string, bool> dedupResults = eventIdsToCheck.Count > 0
                 ? await _dedupService.TryMarkSeenBatchAsync(eventIdsToCheck)
                 : [];
+
+            markedEventIds = dedupResults.Where(kv => kv.Value).Select(kv => kv.Key).ToList();
 
             // Build the list of new items (not duplicates).
             List<(TelemetryItem Item, short Type, string Payload)> newItems = [];
@@ -461,6 +467,10 @@ public sealed class TelemetryService : Telemetry.TelemetryBase
                 {
                     _logger.LogWarning("Circuit breaker open for telemetry writes, signaling backpressure to machine {MachineId}", machineId);
 
+                    // Compensate before NACKing so the retry (which arrives within the dedup TTL) is not
+                    // classified a duplicate and dropped. Unmark must complete before the NACK is returned.
+                    await _dedupService.UnmarkSeenBatchAsync(markedEventIds);
+
                     return new TelemetryAck
                     {
                         BatchId = envelope.BatchId,
@@ -472,6 +482,8 @@ public sealed class TelemetryService : Telemetry.TelemetryBase
                 catch (TimeoutRejectedException)
                 {
                     _logger.LogWarning("Telemetry write timed out for machine {MachineId} batch {BatchId}", machineId, envelope.BatchId);
+
+                    await _dedupService.UnmarkSeenBatchAsync(markedEventIds);
 
                     return new TelemetryAck
                     {
@@ -523,6 +535,10 @@ public sealed class TelemetryService : Telemetry.TelemetryBase
         {
             _logger.LogError(ex, "Error processing telemetry batch {BatchId} for machine {MachineId}",
                 envelope.BatchId, machineId);
+
+            // A failure anywhere between marking and a successful insert is a retryable NACK, so unmark
+            // the event IDs we marked (best-effort) before returning so the retry is reprocessed.
+            await _dedupService.UnmarkSeenBatchAsync(markedEventIds);
 
             return new TelemetryAck
             {

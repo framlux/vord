@@ -1007,6 +1007,10 @@ public sealed class TelemetryServiceTests
 
         await Assert.That(ack.Success).IsFalse();
         await Assert.That(ack.ErrorMessage).Contains("temporarily unavailable");
+
+        // The dedup marker for the failed event must be unmarked so the agent's retry is reprocessed.
+        await _dedupService.Received(1).UnmarkSeenBatchAsync(
+            Arg.Is<IReadOnlyList<string>>(l => l.Count == 1 && l[0] == "event-circuit"));
     }
 
     [Test]
@@ -1044,6 +1048,9 @@ public sealed class TelemetryServiceTests
 
         await Assert.That(ack.Success).IsFalse();
         await Assert.That(ack.ErrorMessage).Contains("timed out");
+
+        await _dedupService.Received(1).UnmarkSeenBatchAsync(
+            Arg.Is<IReadOnlyList<string>>(l => l.Count == 1 && l[0] == "event-timeout"));
     }
 
     [Test]
@@ -1081,6 +1088,70 @@ public sealed class TelemetryServiceTests
 
         await Assert.That(ack.Success).IsFalse();
         await Assert.That(ack.ErrorMessage).IsEqualTo("Internal server error");
+    }
+
+    [Test]
+    public async Task SubmitTelemetry_FailedInsertThenRetry_InsertsRowsExactlyOnce()
+    {
+        // Regression: mark-before-insert plus a failed insert must not swallow the agent's retry. A
+        // stateful dedup (mark adds, unmark removes) proves the retry is reprocessed and inserts once.
+        using TestDatabaseFactory dbFactory = new();
+
+        HashSet<string> seen = new();
+        ITelemetryDeduplicationService statefulDedup = Substitute.For<ITelemetryDeduplicationService>();
+        statefulDedup.TryMarkSeenBatchAsync(Arg.Any<IEnumerable<string>>())
+            .Returns(callInfo => callInfo.Arg<IEnumerable<string>>().ToDictionary(id => id, id => seen.Add(id)));
+        statefulDedup.UnmarkSeenBatchAsync(Arg.Any<IReadOnlyList<string>>())
+            .Returns(callInfo =>
+            {
+                foreach (string id in callInfo.Arg<IReadOnlyList<string>>())
+                {
+                    seen.Remove(id);
+                }
+
+                return Task.CompletedTask;
+            });
+
+        TelemetryEnvelope BuildEnvelope() =>
+            new TelemetryEnvelope
+            {
+                AgentTimestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+                BatchId = "batch-retry",
+                Items =
+                {
+                    new TelemetryItem
+                    {
+                        EventId = "event-retry",
+                        Type = TelemetryTypes.CpuUtilizationType,
+                        CpuUtilization = new CpuUtilizationRecord { CpuUsagePercent = 50 },
+                    },
+                },
+            };
+
+        // First attempt: the DB write trips the circuit breaker, so the batch is NACKed and the mark
+        // is compensated (unmarked).
+        Database.Repositories.IMachineStateRepository throwingRepo = Substitute.For<Database.Repositories.IMachineStateRepository>();
+        throwingRepo.BulkInsertTelemetryAsync(Arg.Any<List<MachineTelemetry>>(), Arg.Any<CancellationToken>())
+            .Returns<Task>(_ => throw new Polly.CircuitBreaker.BrokenCircuitException("Circuit open"));
+        TestServiceScopeFactory throwingScope = new(dbFactory.Context, new Dictionary<Type, object>
+        {
+            { typeof(Database.Repositories.IMachineStateRepository), throwingRepo },
+        });
+        TelemetryService failingService = new(throwingScope, statefulDedup, _subscriptionService, _backgroundJobs, NoOpPipeline, BuildTestRedis(), Options.Create(new TelemetryOptions()), new ProcessStreamSlotLimiter(5000), _timeProvider, _logger);
+
+        TelemetryAck firstAck = await failingService.SubmitTelemetry(BuildEnvelope(), CreateAuthenticatedContext(100));
+        await Assert.That(firstAck.Success).IsFalse();
+
+        // Second attempt: the write succeeds. Because the first attempt unmarked the event, the retry is
+        // treated as new and the row is inserted.
+        TestServiceScopeFactory workingScope = new(dbFactory.Context);
+        TelemetryService workingService = new(workingScope, statefulDedup, _subscriptionService, _backgroundJobs, NoOpPipeline, BuildTestRedis(), Options.Create(new TelemetryOptions()), new ProcessStreamSlotLimiter(5000), _timeProvider, _logger);
+
+        TelemetryAck secondAck = await workingService.SubmitTelemetry(BuildEnvelope(), CreateAuthenticatedContext(100));
+        await Assert.That(secondAck.Success).IsTrue();
+
+        List<MachineTelemetry> telemetry = await dbFactory.Context.MachineTelemetry.ToListAsync();
+        await Assert.That(telemetry.Count).IsEqualTo(1);
     }
 
     // ========================================================================

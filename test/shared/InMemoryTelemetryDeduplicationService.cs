@@ -34,4 +34,20 @@ public sealed class InMemoryTelemetryDeduplicationService : ITelemetryDeduplicat
 
         return Task.FromResult(results);
     }
+
+    /// <inheritdoc/>
+    public Task UnmarkSeenBatchAsync(IReadOnlyList<string> eventIds)
+    {
+        if (eventIds is null)
+        {
+            return Task.CompletedTask;
+        }
+
+        foreach (string eventId in eventIds)
+        {
+            _seen.TryRemove(eventId, out _);
+        }
+
+        return Task.CompletedTask;
+    }
 }
