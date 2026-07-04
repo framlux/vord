@@ -176,6 +176,90 @@ public sealed class MemberEndpointTests
         await Assert.That(updatedRole!.IsActive).IsFalse();
     }
 
+    [Test]
+    public async Task RemoveMember_ViewerInAllSsoTenant_Succeeds()
+    {
+        // Regression: a Team tenant whose admin signs in via tenant SSO (CustomOidc) has no
+        // non-CustomOidc admin, so the last-admin guard would previously misfire on any removal.
+        // Removing a non-admin (Viewer) must succeed and not consult the admin guard.
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+
+        Tenant tenant = new()
+        {
+            ExternalId = Guid.NewGuid().ToString("N"),
+            Name = $"SSO Tenant {Guid.NewGuid():N}",
+            CreatedAt = DateTimeOffset.UtcNow,
+            CreatedByUserId = 1,
+            IsActive = true,
+            LogoUrl = "",
+        };
+        tenant.Id = await db.InsertWithInt32IdentityAsync(tenant);
+
+        await db.InsertWithInt32IdentityAsync(new TenantSubscription
+        {
+            TenantId = tenant.Id,
+            Tier = SubscriptionTier.Team,
+            Status = SubscriptionStatus.Active,
+            CreatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow,
+        });
+
+        UserAccount admin = new()
+        {
+            ExternalId = $"ext-sso-admin-{Guid.NewGuid():N}",
+            Username = $"sso-admin-{Guid.NewGuid():N}@example.com",
+            CreatedAt = DateTimeOffset.UtcNow,
+            CreatedByUserId = 1,
+            IsActive = true,
+            IsSystem = false,
+            IsGlobalAdmin = false,
+            AuthProvider = AuthProviderType.CustomOidc,
+        };
+        admin.Id = await db.InsertWithInt32IdentityAsync(admin);
+        await db.InsertAsync(new UserTenantRole
+        {
+            UserId = admin.Id,
+            AssignedTenantId = tenant.Id,
+            Role = UserAccountRoles.TenantAdmin,
+            AssignedByUserId = admin.Id,
+            AssignedAt = DateTimeOffset.UtcNow,
+            IsActive = true,
+        });
+
+        UserAccount viewer = new()
+        {
+            ExternalId = $"ext-sso-viewer-{Guid.NewGuid():N}",
+            Username = $"sso-viewer-{Guid.NewGuid():N}@example.com",
+            CreatedAt = DateTimeOffset.UtcNow,
+            CreatedByUserId = 1,
+            IsActive = true,
+            IsSystem = false,
+            IsGlobalAdmin = false,
+            AuthProvider = AuthProviderType.CustomOidc,
+        };
+        viewer.Id = await db.InsertWithInt32IdentityAsync(viewer);
+        await db.InsertAsync(new UserTenantRole
+        {
+            UserId = viewer.Id,
+            AssignedTenantId = tenant.Id,
+            Role = UserAccountRoles.Viewer,
+            AssignedByUserId = admin.Id,
+            AssignedAt = DateTimeOffset.UtcNow,
+            IsActive = true,
+        });
+
+        HttpClient client = BuildClient(factory, tenant.Id, admin.Id);
+
+        HttpResponseMessage response = await client.PostAsync($"/api/v1/members/{viewer.Id}/remove", null);
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
+
+        UserTenantRole? removed = await db.UserTenantRoles
+            .FirstOrDefaultAsync(r => r.UserId == viewer.Id && r.AssignedTenantId == tenant.Id);
+        await Assert.That(removed!.IsActive).IsFalse();
+    }
+
     // --- MemberRoleChangeEndpoint Tests ---
 
     [Test]

@@ -3,6 +3,7 @@
 // See LICENSE for details.
 
 using Microsoft.Extensions.Logging;
+using System.Data;
 
 namespace Framlux.FleetManagement.Database.Repositories;
 
@@ -40,5 +41,19 @@ public partial class DatabaseRepository : IDatabaseTransactionProvider
         LinqToDB.Data.DataConnectionTransaction inner = await _db.BeginTransactionAsync(cancellationToken);
 
         return new DatabaseTransaction(inner);
+    }
+
+    /// <inheritdoc/>
+    public async Task<IDatabaseTransaction> BeginTransactionAsync(IsolationLevel isolationLevel, CancellationToken cancellationToken)
+    {
+        LinqToDB.Data.DataConnectionTransaction inner = await _db.BeginTransactionAsync(isolationLevel, cancellationToken);
+
+        return new DatabaseTransaction(inner);
+    }
+
+    /// <inheritdoc/>
+    public bool IsSerializationConflict(Exception exception)
+    {
+        return IsSerializationFailure(exception);
     }
 }

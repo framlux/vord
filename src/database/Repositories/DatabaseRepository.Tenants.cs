@@ -487,6 +487,20 @@ public partial class DatabaseRepository : ITenantRepository
     }
 
     /// <inheritdoc/>
+    public async Task<Enums.UserAccountRoles?> GetActiveUserRoleAsync(int userId, int tenantId, CancellationToken cancellationToken)
+    {
+        List<Enums.UserAccountRoles> roles = await _db.UserTenantRoles
+            .Where(utr => (utr.UserId == userId) &&
+                          (utr.AssignedTenantId == tenantId) &&
+                          (utr.IsActive == true))
+            .Select(utr => utr.Role)
+            .Take(1)
+            .ToListAsync(cancellationToken);
+
+        return roles.Count > 0 ? roles[0] : null;
+    }
+
+    /// <inheritdoc/>
     public async Task<bool> DisableUserTenantRoleAsync(int userId, int tenantId, int disabledByUserId, CancellationToken cancellationToken)
     {
         try

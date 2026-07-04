@@ -400,6 +400,52 @@ public class TenantCacheTests
     }
 
     [Test]
+    public async Task GetActiveUserRoleAsync_ActiveRole_ReturnsRole()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        ITenantRepository cache = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+
+        int userId = await dbFactory.Context.InsertWithInt32IdentityAsync(TestDataBuilder.BuildUser());
+        int tenantId = await dbFactory.Context.InsertWithInt32IdentityAsync(TestDataBuilder.BuildTenant(createdByUserId: userId));
+        await dbFactory.Context.InsertAsync(TestDataBuilder.BuildUserTenantRole(userId: userId, tenantId: tenantId, role: UserAccountRoles.MachineAdmin, assignedByUserId: userId));
+
+        UserAccountRoles? role = await cache.GetActiveUserRoleAsync(userId, tenantId, CancellationToken.None);
+
+        await Assert.That(role).IsEqualTo(UserAccountRoles.MachineAdmin);
+    }
+
+    [Test]
+    public async Task GetActiveUserRoleAsync_RoleInDifferentTenant_ReturnsNull()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        ITenantRepository cache = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+
+        int userId = await dbFactory.Context.InsertWithInt32IdentityAsync(TestDataBuilder.BuildUser());
+        int tenantId = await dbFactory.Context.InsertWithInt32IdentityAsync(TestDataBuilder.BuildTenant(createdByUserId: userId));
+        await dbFactory.Context.InsertAsync(TestDataBuilder.BuildUserTenantRole(userId: userId, tenantId: tenantId, role: UserAccountRoles.TenantAdmin, assignedByUserId: userId));
+
+        // Querying a different tenant the user is not a member of returns null.
+        UserAccountRoles? role = await cache.GetActiveUserRoleAsync(userId, tenantId + 1000, CancellationToken.None);
+
+        await Assert.That(role).IsNull();
+    }
+
+    [Test]
+    public async Task GetActiveUserRoleAsync_InactiveRole_ReturnsNull()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        ITenantRepository cache = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+
+        int userId = await dbFactory.Context.InsertWithInt32IdentityAsync(TestDataBuilder.BuildUser());
+        int tenantId = await dbFactory.Context.InsertWithInt32IdentityAsync(TestDataBuilder.BuildTenant(createdByUserId: userId));
+        await dbFactory.Context.InsertAsync(TestDataBuilder.BuildUserTenantRole(userId: userId, tenantId: tenantId, role: UserAccountRoles.TenantAdmin, assignedByUserId: userId, isActive: false));
+
+        UserAccountRoles? role = await cache.GetActiveUserRoleAsync(userId, tenantId, CancellationToken.None);
+
+        await Assert.That(role).IsNull();
+    }
+
+    [Test]
     public async Task GetTenantAdminEmails_ReturnsActiveTenantAdminsOnly()
     {
         using TestDatabaseFactory dbFactory = new();

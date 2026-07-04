@@ -2,6 +2,7 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
+using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 
 namespace Framlux.FleetManagement.Database.Repositories;
@@ -78,6 +79,13 @@ public interface ITenantRepository
     /// Disables a user-tenant role assignment (removes a member from a tenant).
     /// </summary>
     Task<bool> DisableUserTenantRoleAsync(int userId, int tenantId, int disabledByUserId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Gets the user's current active role in the tenant, or <c>null</c> when the user has no active
+    /// membership there. Used to decide whether a member mutation touches a TenantAdmin before the
+    /// last-administrator guard is worth evaluating.
+    /// </summary>
+    Task<UserAccountRoles?> GetActiveUserRoleAsync(int userId, int tenantId, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Lists all tenants ordered by name.

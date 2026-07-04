@@ -11,6 +11,7 @@ using Framlux.FleetManagement.Services.Core.Handlers;
 using Framlux.FleetManagement.Services.Core.Infrastructure;
 using Framlux.FleetManagement.Services.Core.Security;
 using NSubstitute;
+using System.Data;
 
 namespace Framlux.FleetManagement.Test.Services.Handlers;
 
@@ -54,7 +55,7 @@ public class MemberHandlerTests
     {
         IDatabaseTransactionProvider transactionProvider = Substitute.For<IDatabaseTransactionProvider>();
         IDatabaseTransaction mockTransaction = Substitute.For<IDatabaseTransaction>();
-        transactionProvider.BeginTransactionAsync(Arg.Any<CancellationToken>()).Returns(mockTransaction);
+        transactionProvider.BeginTransactionAsync(Arg.Any<IsolationLevel>(), Arg.Any<CancellationToken>()).Returns(mockTransaction);
         IAuditLogRepository auditLog = Substitute.For<IAuditLogRepository>();
         ITenantRepository tenantRepository = Substitute.For<ITenantRepository>();
         tenantRepository.DisableUserTenantRoleAsync(2, 1, 1, Arg.Any<CancellationToken>()).Returns(false);
@@ -71,10 +72,11 @@ public class MemberHandlerTests
     {
         IDatabaseTransactionProvider transactionProvider = Substitute.For<IDatabaseTransactionProvider>();
         IDatabaseTransaction mockTransaction = Substitute.For<IDatabaseTransaction>();
-        transactionProvider.BeginTransactionAsync(Arg.Any<CancellationToken>()).Returns(mockTransaction);
+        transactionProvider.BeginTransactionAsync(Arg.Any<IsolationLevel>(), Arg.Any<CancellationToken>()).Returns(mockTransaction);
         IAuditLogRepository auditLog = Substitute.For<IAuditLogRepository>();
         ITenantRepository tenantRepository = Substitute.For<ITenantRepository>();
         tenantRepository.DisableUserTenantRoleAsync(2, 1, 1, Arg.Any<CancellationToken>()).Returns(true);
+        tenantRepository.GetActiveUserRoleAsync(2, 1, Arg.Any<CancellationToken>()).Returns(UserAccountRoles.TenantAdmin);
         tenantRepository.HasNonOidcTenantAdminAsync(1, Arg.Any<CancellationToken>()).Returns(true);
         ISubscriptionService subService = Substitute.For<ISubscriptionService>();
         IRoleCacheInvalidator roleCacheInvalidator = Substitute.For<IRoleCacheInvalidator>();
@@ -188,10 +190,11 @@ public class MemberHandlerTests
     {
         IDatabaseTransactionProvider transactionProvider = Substitute.For<IDatabaseTransactionProvider>();
         IDatabaseTransaction mockTransaction = Substitute.For<IDatabaseTransaction>();
-        transactionProvider.BeginTransactionAsync(Arg.Any<CancellationToken>()).Returns(mockTransaction);
+        transactionProvider.BeginTransactionAsync(Arg.Any<IsolationLevel>(), Arg.Any<CancellationToken>()).Returns(mockTransaction);
         IAuditLogRepository auditLog = Substitute.For<IAuditLogRepository>();
         ITenantRepository tenantRepository = Substitute.For<ITenantRepository>();
         tenantRepository.DisableUserTenantRoleAsync(2, 1, 1, Arg.Any<CancellationToken>()).Returns(true);
+        tenantRepository.GetActiveUserRoleAsync(2, 1, Arg.Any<CancellationToken>()).Returns(UserAccountRoles.TenantAdmin);
         tenantRepository.HasNonOidcTenantAdminAsync(1, Arg.Any<CancellationToken>()).Returns(true);
         ISubscriptionService subService = Substitute.For<ISubscriptionService>();
         subService.GetSubscriptionForTenantAsync(1, Arg.Any<CancellationToken>()).Returns(new TenantSubscription
@@ -219,7 +222,7 @@ public class MemberHandlerTests
     {
         IDatabaseTransactionProvider transactionProvider = Substitute.For<IDatabaseTransactionProvider>();
         IDatabaseTransaction mockTransaction = Substitute.For<IDatabaseTransaction>();
-        transactionProvider.BeginTransactionAsync(Arg.Any<CancellationToken>()).Returns(mockTransaction);
+        transactionProvider.BeginTransactionAsync(Arg.Any<IsolationLevel>(), Arg.Any<CancellationToken>()).Returns(mockTransaction);
         IAuditLogRepository auditLog = Substitute.For<IAuditLogRepository>();
         ITenantRepository tenantRepository = Substitute.For<ITenantRepository>();
         tenantRepository.DisableUserTenantRoleAsync(2, 1, 1, Arg.Any<CancellationToken>()).Returns(false);
@@ -243,10 +246,11 @@ public class MemberHandlerTests
     {
         IDatabaseTransactionProvider transactionProvider = Substitute.For<IDatabaseTransactionProvider>();
         IDatabaseTransaction mockTransaction = Substitute.For<IDatabaseTransaction>();
-        transactionProvider.BeginTransactionAsync(Arg.Any<CancellationToken>()).Returns(mockTransaction);
+        transactionProvider.BeginTransactionAsync(Arg.Any<IsolationLevel>(), Arg.Any<CancellationToken>()).Returns(mockTransaction);
         IAuditLogRepository auditLog = Substitute.For<IAuditLogRepository>();
         ITenantRepository tenantRepository = Substitute.For<ITenantRepository>();
         tenantRepository.DisableUserTenantRoleAsync(2, 1, 1, Arg.Any<CancellationToken>()).Returns(true);
+        tenantRepository.GetActiveUserRoleAsync(2, 1, Arg.Any<CancellationToken>()).Returns(UserAccountRoles.TenantAdmin);
         tenantRepository.HasNonOidcTenantAdminAsync(1, Arg.Any<CancellationToken>()).Returns(false);
         ISubscriptionService subService = Substitute.For<ISubscriptionService>();
         IRoleCacheInvalidator roleCacheInvalidator = Substitute.For<IRoleCacheInvalidator>();
@@ -272,10 +276,11 @@ public class MemberHandlerTests
     {
         IDatabaseTransactionProvider transactionProvider = Substitute.For<IDatabaseTransactionProvider>();
         IDatabaseTransaction mockTransaction = Substitute.For<IDatabaseTransaction>();
-        transactionProvider.BeginTransactionAsync(Arg.Any<CancellationToken>()).Returns(mockTransaction);
+        transactionProvider.BeginTransactionAsync(Arg.Any<IsolationLevel>(), Arg.Any<CancellationToken>()).Returns(mockTransaction);
         IAuditLogRepository auditLog = Substitute.For<IAuditLogRepository>();
         ITenantRepository tenantRepository = Substitute.For<ITenantRepository>();
         tenantRepository.DisableUserTenantRoleAsync(2, 1, 1, Arg.Any<CancellationToken>()).Returns(true);
+        tenantRepository.GetActiveUserRoleAsync(2, 1, Arg.Any<CancellationToken>()).Returns(UserAccountRoles.TenantAdmin);
         tenantRepository.HasNonOidcTenantAdminAsync(1, Arg.Any<CancellationToken>()).Returns(true);
         ISubscriptionService subService = Substitute.For<ISubscriptionService>();
         IRoleCacheInvalidator roleCacheInvalidator = Substitute.For<IRoleCacheInvalidator>();
@@ -293,10 +298,11 @@ public class MemberHandlerTests
     {
         IDatabaseTransactionProvider transactionProvider = Substitute.For<IDatabaseTransactionProvider>();
         IDatabaseTransaction mockTransaction = Substitute.For<IDatabaseTransaction>();
-        transactionProvider.BeginTransactionAsync(Arg.Any<CancellationToken>()).Returns(mockTransaction);
+        transactionProvider.BeginTransactionAsync(Arg.Any<IsolationLevel>(), Arg.Any<CancellationToken>()).Returns(mockTransaction);
         IAuditLogRepository auditLog = Substitute.For<IAuditLogRepository>();
         ITenantRepository tenantRepository = Substitute.For<ITenantRepository>();
         tenantRepository.DisableUserTenantRoleAsync(2, 1, 1, Arg.Any<CancellationToken>()).Returns(true);
+        tenantRepository.GetActiveUserRoleAsync(2, 1, Arg.Any<CancellationToken>()).Returns(UserAccountRoles.TenantAdmin);
         tenantRepository.HasNonOidcTenantAdminAsync(1, Arg.Any<CancellationToken>()).Returns(false);
         ISubscriptionService subService = Substitute.For<ISubscriptionService>();
         subService.GetSubscriptionForTenantAsync(1, Arg.Any<CancellationToken>()).Returns(new TenantSubscription
@@ -327,10 +333,11 @@ public class MemberHandlerTests
     {
         IDatabaseTransactionProvider transactionProvider = Substitute.For<IDatabaseTransactionProvider>();
         IDatabaseTransaction mockTransaction = Substitute.For<IDatabaseTransaction>();
-        transactionProvider.BeginTransactionAsync(Arg.Any<CancellationToken>()).Returns(mockTransaction);
+        transactionProvider.BeginTransactionAsync(Arg.Any<IsolationLevel>(), Arg.Any<CancellationToken>()).Returns(mockTransaction);
         IAuditLogRepository auditLog = Substitute.For<IAuditLogRepository>();
         ITenantRepository tenantRepository = Substitute.For<ITenantRepository>();
         tenantRepository.DisableUserTenantRoleAsync(2, 1, 1, Arg.Any<CancellationToken>()).Returns(true);
+        tenantRepository.GetActiveUserRoleAsync(2, 1, Arg.Any<CancellationToken>()).Returns(UserAccountRoles.TenantAdmin);
         tenantRepository.HasNonOidcTenantAdminAsync(1, Arg.Any<CancellationToken>()).Returns(true);
         ISubscriptionService subService = Substitute.For<ISubscriptionService>();
         subService.GetSubscriptionForTenantAsync(1, Arg.Any<CancellationToken>()).Returns(new TenantSubscription
@@ -346,5 +353,76 @@ public class MemberHandlerTests
 
         await Assert.That(result.IsSuccess).IsTrue();
         await mockTransaction.Received(1).CommitAsync(Arg.Any<CancellationToken>());
+    }
+
+    // ========== Guard is scoped to admin mutations (regression) ==========
+
+    [Test]
+    public async Task RemoveAsync_NonAdminMember_SkipsGuardAndSucceeds()
+    {
+        // An all-SSO Team tenant has no non-CustomOidc admin, so the guard would misfire on every
+        // removal. Removing a Viewer must succeed without ever consulting the guard.
+        IDatabaseTransactionProvider transactionProvider = Substitute.For<IDatabaseTransactionProvider>();
+        IDatabaseTransaction mockTransaction = Substitute.For<IDatabaseTransaction>();
+        transactionProvider.BeginTransactionAsync(Arg.Any<IsolationLevel>(), Arg.Any<CancellationToken>()).Returns(mockTransaction);
+        IAuditLogRepository auditLog = Substitute.For<IAuditLogRepository>();
+        ITenantRepository tenantRepository = Substitute.For<ITenantRepository>();
+        tenantRepository.GetActiveUserRoleAsync(2, 1, Arg.Any<CancellationToken>()).Returns(UserAccountRoles.Viewer);
+        tenantRepository.DisableUserTenantRoleAsync(2, 1, 1, Arg.Any<CancellationToken>()).Returns(true);
+        // Simulate an all-SSO tenant: no non-CustomOidc admin. This must never be consulted.
+        tenantRepository.HasNonOidcTenantAdminAsync(1, Arg.Any<CancellationToken>()).Returns(false);
+        ISubscriptionService subService = Substitute.For<ISubscriptionService>();
+        MemberHandler handler = new(transactionProvider, auditLog, tenantRepository, subService, Substitute.For<IRoleCacheInvalidator>(), Substitute.For<IUserSecurityStampService>());
+
+        ServiceResult<ApiResponse<object>> result = await handler.RemoveAsync(2, 1, 1, CancellationToken.None);
+
+        await Assert.That(result.IsSuccess).IsTrue();
+        await mockTransaction.Received(1).CommitAsync(Arg.Any<CancellationToken>());
+        await tenantRepository.DidNotReceive().HasNonOidcTenantAdminAsync(Arg.Any<int>(), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task ChangeRoleAsync_NonAdminMember_SkipsGuardAndSucceeds()
+    {
+        // Demoting a non-admin (MachineAdmin -> Viewer) in an all-SSO tenant must not trip the guard.
+        IDatabaseTransactionProvider transactionProvider = Substitute.For<IDatabaseTransactionProvider>();
+        IDatabaseTransaction mockTransaction = Substitute.For<IDatabaseTransaction>();
+        transactionProvider.BeginTransactionAsync(Arg.Any<IsolationLevel>(), Arg.Any<CancellationToken>()).Returns(mockTransaction);
+        IAuditLogRepository auditLog = Substitute.For<IAuditLogRepository>();
+        ITenantRepository tenantRepository = Substitute.For<ITenantRepository>();
+        tenantRepository.GetActiveUserRoleAsync(2, 1, Arg.Any<CancellationToken>()).Returns(UserAccountRoles.MachineAdmin);
+        tenantRepository.DisableUserTenantRoleAsync(2, 1, 1, Arg.Any<CancellationToken>()).Returns(true);
+        tenantRepository.HasNonOidcTenantAdminAsync(1, Arg.Any<CancellationToken>()).Returns(false);
+        ISubscriptionService subService = Substitute.For<ISubscriptionService>();
+        subService.GetSubscriptionForTenantAsync(1, Arg.Any<CancellationToken>()).Returns(new TenantSubscription
+        {
+            Id = 1, TenantId = 1, Tier = SubscriptionTier.Team, Status = SubscriptionStatus.Active,
+            CreatedAt = DateTimeOffset.UtcNow, UpdatedAt = DateTimeOffset.UtcNow,
+        });
+        MemberHandler handler = new(transactionProvider, auditLog, tenantRepository, subService, Substitute.For<IRoleCacheInvalidator>(), Substitute.For<IUserSecurityStampService>());
+
+        ServiceResult<ApiResponse<object>> result = await handler.ChangeRoleAsync(2, 1, 1, "Viewer", CancellationToken.None);
+
+        await Assert.That(result.IsSuccess).IsTrue();
+        await tenantRepository.DidNotReceive().HasNonOidcTenantAdminAsync(Arg.Any<int>(), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task RemoveAsync_UsesSerializableIsolation()
+    {
+        IDatabaseTransactionProvider transactionProvider = Substitute.For<IDatabaseTransactionProvider>();
+        IDatabaseTransaction mockTransaction = Substitute.For<IDatabaseTransaction>();
+        transactionProvider.BeginTransactionAsync(Arg.Any<IsolationLevel>(), Arg.Any<CancellationToken>()).Returns(mockTransaction);
+        IAuditLogRepository auditLog = Substitute.For<IAuditLogRepository>();
+        ITenantRepository tenantRepository = Substitute.For<ITenantRepository>();
+        tenantRepository.GetActiveUserRoleAsync(2, 1, Arg.Any<CancellationToken>()).Returns(UserAccountRoles.TenantAdmin);
+        tenantRepository.DisableUserTenantRoleAsync(2, 1, 1, Arg.Any<CancellationToken>()).Returns(true);
+        tenantRepository.HasNonOidcTenantAdminAsync(1, Arg.Any<CancellationToken>()).Returns(true);
+        ISubscriptionService subService = Substitute.For<ISubscriptionService>();
+        MemberHandler handler = new(transactionProvider, auditLog, tenantRepository, subService, Substitute.For<IRoleCacheInvalidator>(), Substitute.For<IUserSecurityStampService>());
+
+        await handler.RemoveAsync(2, 1, 1, CancellationToken.None);
+
+        await transactionProvider.Received().BeginTransactionAsync(IsolationLevel.Serializable, Arg.Any<CancellationToken>());
     }
 }

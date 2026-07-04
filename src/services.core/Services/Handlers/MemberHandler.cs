@@ -9,6 +9,7 @@ using Framlux.FleetManagement.Services.Core.Billing;
 using Framlux.FleetManagement.Services.Core.Infrastructure;
 using Framlux.FleetManagement.Services.Core.Models;
 using Framlux.FleetManagement.Services.Core.Security;
+using System.Data;
 
 namespace Framlux.FleetManagement.Services.Core.Handlers;
 
@@ -69,31 +70,56 @@ public sealed class MemberHandler : IMemberHandler
             return ServiceResult<ApiResponse<object>>.Error(400, ApiResponse<object>.Error("You cannot remove yourself from the organization"));
         }
 
-        using IDatabaseTransaction transaction = await _transactionProvider.BeginTransactionAsync(ct);
-
-        bool removed = await _tenantRepository.DisableUserTenantRoleAsync(targetUserId, tenantId.Value, currentUserId, ct);
-        if (removed == false)
+        // The disable and the last-admin guard run in a single Serializable transaction with a bounded
+        // 40001 retry so two concurrent admin removals cannot both observe the other still present and
+        // both commit, orphaning the tenant.
+        const int maxAttempts = 3;
+        for (int attempt = 1; ; attempt++)
         {
-            return ServiceResult<ApiResponse<object>>.NotFound();
+            try
+            {
+                using IDatabaseTransaction transaction = await _transactionProvider.BeginTransactionAsync(IsolationLevel.Serializable, ct);
+
+                UserAccountRoles? priorRole = await _tenantRepository.GetActiveUserRoleAsync(targetUserId, tenantId.Value, ct);
+                if (priorRole is null)
+                {
+                    return ServiceResult<ApiResponse<object>>.NotFound();
+                }
+
+                bool removed = await _tenantRepository.DisableUserTenantRoleAsync(targetUserId, tenantId.Value, currentUserId, ct);
+                if (removed == false)
+                {
+                    return ServiceResult<ApiResponse<object>>.NotFound();
+                }
+
+                // Only removing a TenantAdmin can strip the tenant of its last sign-in-capable admin, so
+                // the guard is evaluated only for that case. Returning before the commit disposes the
+                // transaction without committing, which rolls the disable back.
+                if (priorRole == UserAccountRoles.TenantAdmin)
+                {
+                    bool hasAdminRemaining = await _tenantRepository.HasNonOidcTenantAdminAsync(tenantId.Value, ct);
+                    if (hasAdminRemaining == false)
+                    {
+                        return ServiceResult<ApiResponse<object>>.Error(
+                            409,
+                            ApiResponse<object>.Error("Cannot remove the last administrator able to sign in without tenant SSO"));
+                    }
+                }
+
+                await _auditLog.InsertAuditLogAsync(AuditHelper.Create(
+                    tenantId, currentUserId, null,
+                    AuditAction.MemberRemoved, AuditResourceType.User,
+                    targetUserId.ToString(), null, null), ct);
+
+                await transaction.CommitAsync(ct);
+
+                break;
+            }
+            catch (Exception ex) when (_transactionProvider.IsSerializationConflict(ex) && (attempt < maxAttempts))
+            {
+                // A committed concurrent removal aborted this one; retry against fresh state.
+            }
         }
-
-        // Evaluate the guard against the post-disable state so a tenant cannot be operationally
-        // orphaned by removing its last active, non-CustomOidc TenantAdmin. Returning before the
-        // commit disposes the transaction without committing, which rolls the disable back.
-        bool hasAdminRemaining = await _tenantRepository.HasNonOidcTenantAdminAsync(tenantId.Value, ct);
-        if (hasAdminRemaining == false)
-        {
-            return ServiceResult<ApiResponse<object>>.Error(
-                409,
-                ApiResponse<object>.Error("Cannot remove the last administrator from the organization"));
-        }
-
-        await _auditLog.InsertAuditLogAsync(AuditHelper.Create(
-            tenantId, currentUserId, null,
-            AuditAction.MemberRemoved, AuditResourceType.User,
-            targetUserId.ToString(), null, null), ct);
-
-        await transaction.CommitAsync(ct);
 
         // Invalidate the removed user's cached role claims, drop their cached privilege state, and
         // rotate their security stamp after the transaction commits so any existing cookie is
@@ -129,42 +155,65 @@ public sealed class MemberHandler : IMemberHandler
             return ServiceResult<ApiResponse<object>>.Error(400, ApiResponse<object>.Error("You cannot change your own role"));
         }
 
-        using IDatabaseTransaction transaction = await _transactionProvider.BeginTransactionAsync(ct);
-
-        bool disabled = await _tenantRepository.DisableUserTenantRoleAsync(targetUserId, tenantId.Value, currentUserId, ct);
-        if (disabled == false)
+        // The two role writes and the last-admin guard run in a single Serializable transaction with a
+        // bounded 40001 retry so concurrent demotions cannot both pass the guard and orphan the tenant.
+        const int maxAttempts = 3;
+        for (int attempt = 1; ; attempt++)
         {
-            return ServiceResult<ApiResponse<object>>.NotFound();
+            try
+            {
+                using IDatabaseTransaction transaction = await _transactionProvider.BeginTransactionAsync(IsolationLevel.Serializable, ct);
+
+                UserAccountRoles? priorRole = await _tenantRepository.GetActiveUserRoleAsync(targetUserId, tenantId.Value, ct);
+                if (priorRole is null)
+                {
+                    return ServiceResult<ApiResponse<object>>.NotFound();
+                }
+
+                bool disabled = await _tenantRepository.DisableUserTenantRoleAsync(targetUserId, tenantId.Value, currentUserId, ct);
+                if (disabled == false)
+                {
+                    return ServiceResult<ApiResponse<object>>.NotFound();
+                }
+
+                await _tenantRepository.CreateUserTenantRoleAsync(new UserTenantRole
+                {
+                    UserId = targetUserId,
+                    AssignedTenantId = tenantId.Value,
+                    Role = parsedRole,
+                    AssignedByUserId = currentUserId,
+                    AssignedAt = DateTimeOffset.UtcNow,
+                    IsActive = true,
+                }, ct);
+
+                // Only a demotion away from TenantAdmin can strip the tenant of its last sign-in-capable
+                // admin, so the guard is evaluated only for that case. Returning before the commit disposes
+                // the transaction without committing, rolling both writes back.
+                if ((priorRole == UserAccountRoles.TenantAdmin) && (parsedRole != UserAccountRoles.TenantAdmin))
+                {
+                    bool hasAdminRemaining = await _tenantRepository.HasNonOidcTenantAdminAsync(tenantId.Value, ct);
+                    if (hasAdminRemaining == false)
+                    {
+                        return ServiceResult<ApiResponse<object>>.Error(
+                            409,
+                            ApiResponse<object>.Error("Cannot change the role of the last administrator able to sign in without tenant SSO"));
+                    }
+                }
+
+                await _auditLog.InsertAuditLogAsync(AuditHelper.Create(
+                    tenantId, currentUserId, null,
+                    AuditAction.MemberRoleChanged, AuditResourceType.User,
+                    targetUserId.ToString(), new { NewRole = newRole }, null), ct);
+
+                await transaction.CommitAsync(ct);
+
+                break;
+            }
+            catch (Exception ex) when (_transactionProvider.IsSerializationConflict(ex) && (attempt < maxAttempts))
+            {
+                // A committed concurrent role change aborted this one; retry against fresh state.
+            }
         }
-
-        await _tenantRepository.CreateUserTenantRoleAsync(new UserTenantRole
-        {
-            UserId = targetUserId,
-            AssignedTenantId = tenantId.Value,
-            Role = parsedRole,
-            AssignedByUserId = currentUserId,
-            AssignedAt = DateTimeOffset.UtcNow,
-            IsActive = true,
-        }, ct);
-
-        // Evaluate the guard after both role writes so the new role is reflected. This allows
-        // demoting a TenantAdmin when another active, non-CustomOidc TenantAdmin remains, and
-        // rejects the change when it would leave the tenant with no such administrator. Returning
-        // before the commit disposes the transaction without committing, rolling both writes back.
-        bool hasAdminRemaining = await _tenantRepository.HasNonOidcTenantAdminAsync(tenantId.Value, ct);
-        if (hasAdminRemaining == false)
-        {
-            return ServiceResult<ApiResponse<object>>.Error(
-                409,
-                ApiResponse<object>.Error("Cannot change the role of the last administrator in the organization"));
-        }
-
-        await _auditLog.InsertAuditLogAsync(AuditHelper.Create(
-            tenantId, currentUserId, null,
-            AuditAction.MemberRoleChanged, AuditResourceType.User,
-            targetUserId.ToString(), new { NewRole = newRole }, null), ct);
-
-        await transaction.CommitAsync(ct);
 
         // Invalidate the target user's cached role claims, drop their cached privilege state, and
         // rotate their security stamp after the transaction commits so any existing cookie is
