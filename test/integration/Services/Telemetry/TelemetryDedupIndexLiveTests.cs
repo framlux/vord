@@ -160,13 +160,14 @@ public sealed class TelemetryDedupIndexLiveTests
         {
             await using NpgsqlCommand cmd = _dataSource.CreateCommand(
                 @"INSERT INTO ""MachineTelemetry""
-                    (""MachineId"", ""TenantId"", ""TelemetryType"", ""Payload"", ""ReceivedAt"", ""SourceEventId"")
-                  VALUES (@machineId, @tenantId, @type, @payload, @receivedAt, @sourceEventId)");
+                    (""MachineId"", ""TenantId"", ""TelemetryType"", ""Payload"", ""ReceivedAt"", ""ServerReceivedAt"", ""SourceEventId"")
+                  VALUES (@machineId, @tenantId, @type, @payload, @receivedAt, @serverReceivedAt, @sourceEventId)");
             cmd.Parameters.AddWithValue("machineId", TestMachineId);
             cmd.Parameters.AddWithValue("tenantId", TestTenantId);
             cmd.Parameters.AddWithValue("type", (short)1);
             cmd.Parameters.AddWithValue("payload", "{}");
             cmd.Parameters.AddWithValue("receivedAt", receivedAt);
+            cmd.Parameters.AddWithValue("serverReceivedAt", receivedAt);
             cmd.Parameters.AddWithValue("sourceEventId", sourceEventId);
 
             await cmd.ExecuteNonQueryAsync();

@@ -15,10 +15,11 @@ namespace Framlux.FleetManagement.Services.Core.Machines;
 /// MachineStateSummary and MachineStateDetail. Each batch is collapsed to one
 /// <see cref="MachineStatePatch"/> per machine via <see cref="MachineStateBatchCollapser"/>,
 /// so the service issues at most one UPDATE per table per machine rather than one per row.
-/// For each telemetry type the latest row by (ReceivedAt, Id) wins, so a backfilled row that
-/// arrives with a higher Id but an older ReceivedAt can never overwrite a fresher reading.
-/// LastSeenAt is set to MAX(ReceivedAt) across the machine's batch rows and is monotonic —
-/// the apply never moves an already-stored LastSeenAt backward.
+/// For each telemetry type the latest row by (ServerReceivedAt, Id) wins, so a backfilled row that
+/// arrives with a higher Id but an older server receipt can never overwrite a fresher reading.
+/// LastSeenAt is set to MAX(ServerReceivedAt) across the machine's batch rows and is monotonic —
+/// the apply never moves an already-stored LastSeenAt backward. ServerReceivedAt is the server-stamped
+/// receipt time, so recency is immune to agent clock skew.
 /// Does not compute health — that is handled by HealthSweepCoordinatorJob + HealthSweepTenantJob.
 /// The raw MachineTelemetry table is never modified, so history/detail read paths are untouched.
 /// </summary>
