@@ -25,7 +25,7 @@ public sealed class GrpcRateLimitingInterceptor : Interceptor
     /// <param name="logger">The logger instance.</param>
     public GrpcRateLimitingInterceptor(IConnectionMultiplexer redis, ILogger<GrpcRateLimitingInterceptor> logger)
     {
-        _limiter = new RedisFixedWindowRateLimiter(redis, "ratelimit:grpc", 100, TimeSpan.FromMinutes(1));
+        _limiter = new RedisFixedWindowRateLimiter(redis, "ratelimit:grpc", 100, TimeSpan.FromMinutes(1), logger);
         _logger = logger;
     }
 

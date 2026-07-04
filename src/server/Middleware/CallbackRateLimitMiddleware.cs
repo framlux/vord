@@ -39,7 +39,7 @@ public sealed class CallbackRateLimitMiddleware
     public CallbackRateLimitMiddleware(RequestDelegate next, IConnectionMultiplexer redis, ILogger<CallbackRateLimitMiddleware> logger)
     {
         _next = next;
-        _limiter = RedisRateLimiterExtensions.CreateCallbackLimiter(redis);
+        _limiter = RedisRateLimiterExtensions.CreateCallbackLimiter(redis, logger);
         _logger = logger;
     }
 

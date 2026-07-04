@@ -3,6 +3,7 @@
 // See LICENSE for details.
 
 using Framlux.FleetManagement.Services.Core.Infrastructure;
+using Microsoft.Extensions.Logging;
 using NSubstitute;
 using StackExchange.Redis;
 
@@ -133,16 +134,59 @@ public class RedisRateLimiterTests
     // --- Error and isolation tests ---
 
     /// <summary>
-    /// Verifies that a Redis connection failure propagates as an exception.
+    /// Verifies that a Redis connection failure fails open — the request is admitted rather than the
+    /// limiter throwing and taking the request path down.
     /// </summary>
     [Test]
-    public async Task IsAllowedAsync_RedisConnectionFailure_PropagatesException()
+    public async Task IsAllowedAsync_RedisConnectionFailure_FailsOpenAndLogsWarning()
     {
-        (RedisFixedWindowRateLimiter limiter, IDatabase db) = CreateLimiter(permitLimit: 10);
+        IDatabase db = Substitute.For<IDatabase>();
+        IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
+        redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(db);
+        ILogger logger = Substitute.For<ILogger>();
+        RedisFixedWindowRateLimiter limiter = new(redis, "ratelimit:test", 10, TimeSpan.FromMinutes(1), logger);
+
         db.ScriptEvaluateAsync(Arg.Any<string>(), Arg.Any<RedisKey[]>(), Arg.Any<RedisValue[]>(), Arg.Any<CommandFlags>())
             .Returns<RedisResult>(_ => throw new RedisConnectionException(ConnectionFailureType.UnableToConnect, "Connection refused"));
 
-        await Assert.ThrowsAsync<RedisConnectionException>(async () =>
+        bool result = await limiter.IsAllowedAsync("127.0.0.1");
+
+        await Assert.That(result).IsTrue();
+        logger.Received().Log(
+            LogLevel.Warning,
+            Arg.Any<EventId>(),
+            Arg.Any<object>(),
+            Arg.Any<RedisConnectionException>(),
+            Arg.Any<Func<object, Exception?, string>>());
+    }
+
+    /// <summary>
+    /// Verifies that a Redis timeout also fails open.
+    /// </summary>
+    [Test]
+    public async Task IsAllowedAsync_RedisTimeout_FailsOpen()
+    {
+        (RedisFixedWindowRateLimiter limiter, IDatabase db) = CreateLimiter(permitLimit: 10);
+        db.ScriptEvaluateAsync(Arg.Any<string>(), Arg.Any<RedisKey[]>(), Arg.Any<RedisValue[]>(), Arg.Any<CommandFlags>())
+            .Returns<RedisResult>(_ => throw new RedisTimeoutException("timed out", CommandStatus.Unknown));
+
+        bool result = await limiter.IsAllowedAsync("127.0.0.1");
+
+        await Assert.That(result).IsTrue();
+    }
+
+    /// <summary>
+    /// Verifies that a non-connectivity error (e.g. a Lua script bug) still propagates — only Redis
+    /// connectivity failures fail open.
+    /// </summary>
+    [Test]
+    public async Task IsAllowedAsync_NonConnectivityException_Propagates()
+    {
+        (RedisFixedWindowRateLimiter limiter, IDatabase db) = CreateLimiter(permitLimit: 10);
+        db.ScriptEvaluateAsync(Arg.Any<string>(), Arg.Any<RedisKey[]>(), Arg.Any<RedisValue[]>(), Arg.Any<CommandFlags>())
+            .Returns<RedisResult>(_ => throw new InvalidOperationException("script error"));
+
+        await Assert.ThrowsAsync<InvalidOperationException>(async () =>
         {
             await limiter.IsAllowedAsync("127.0.0.1");
         });
@@ -568,18 +612,18 @@ public class RedisRateLimiterTests
     }
 
     /// <summary>
-    /// Verifies that when Redis throws during AcquireAsync, the exception propagates.
+    /// Verifies that when Redis is down during AcquireAsync, the partitioned limiter fails open and
+    /// returns an acquired lease (inheriting the inner limiter's fail-open behavior).
     /// </summary>
     [Test]
-    public async Task Partitioned_AcquireAsync_RedisFailure_PropagatesException()
+    public async Task Partitioned_AcquireAsync_RedisFailure_FailsOpen()
     {
         (RedisPartitionedRateLimiter partitioned, IDatabase db) = CreatePartitionedLimiter();
         db.ScriptEvaluateAsync(Arg.Any<string>(), Arg.Any<RedisKey[]>(), Arg.Any<RedisValue[]>(), Arg.Any<CommandFlags>())
             .Returns<RedisResult>(_ => throw new RedisConnectionException(ConnectionFailureType.UnableToConnect, "Connection refused"));
 
-        await Assert.ThrowsAsync<RedisConnectionException>(async () =>
-        {
-            await partitioned.AcquireAsync();
-        });
+        System.Threading.RateLimiting.RateLimitLease lease = await partitioned.AcquireAsync();
+
+        await Assert.That(lease.IsAcquired).IsTrue();
     }
 }

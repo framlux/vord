@@ -2,6 +2,7 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using StackExchange.Redis;
 using System.Threading.RateLimiting;
@@ -37,10 +38,11 @@ public static class RedisRateLimiterExtensions
     /// factory so they enforce identical limits.
     /// </summary>
     /// <param name="redis">The Redis connection multiplexer.</param>
+    /// <param name="logger">Optional logger used to warn when the limiter fails open on a Redis outage.</param>
     /// <returns>A fixed-window limiter configured for the callback surface.</returns>
-    public static RedisFixedWindowRateLimiter CreateCallbackLimiter(IConnectionMultiplexer redis)
+    public static RedisFixedWindowRateLimiter CreateCallbackLimiter(IConnectionMultiplexer redis, ILogger? logger = null)
     {
-        return new RedisFixedWindowRateLimiter(redis, CallbackKeyPrefix, CallbackPermitLimit, CallbackWindow);
+        return new RedisFixedWindowRateLimiter(redis, CallbackKeyPrefix, CallbackPermitLimit, CallbackWindow, logger);
     }
 
     /// <summary>
@@ -60,15 +62,16 @@ public static class RedisRateLimiterExtensions
         services.AddSingleton<IConfigureOptions<Microsoft.AspNetCore.RateLimiting.RateLimiterOptions>>(sp =>
         {
             IConnectionMultiplexer redis = sp.GetRequiredService<IConnectionMultiplexer>();
+            ILogger limiterLogger = sp.GetRequiredService<ILoggerFactory>().CreateLogger(RedisFixedWindowRateLimiter.MeterName);
 
             return new ConfigureOptions<Microsoft.AspNetCore.RateLimiting.RateLimiterOptions>(options =>
             {
-                RedisFixedWindowRateLimiter globalLimiter = new(redis, "ratelimit:global", 100, TimeSpan.FromMinutes(1));
-                RedisFixedWindowRateLimiter loginLimiter = new(redis, "ratelimit:login", 10, TimeSpan.FromMinutes(5));
+                RedisFixedWindowRateLimiter globalLimiter = new(redis, "ratelimit:global", 100, TimeSpan.FromMinutes(1), limiterLogger);
+                RedisFixedWindowRateLimiter loginLimiter = new(redis, "ratelimit:login", 10, TimeSpan.FromMinutes(5), limiterLogger);
                 // Dedicated policy for anonymous token-authenticated endpoints (data-export
                 // download). 30/min per IP — tighter than global because a single IP brute-forcing
                 // 64-hex tokens is cheap to mount and the only response we can offer is to slow them.
-                RedisFixedWindowRateLimiter anonymousTokenLimiter = new(redis, "ratelimit:anonymous-token", 30, TimeSpan.FromMinutes(1));
+                RedisFixedWindowRateLimiter anonymousTokenLimiter = new(redis, "ratelimit:anonymous-token", 30, TimeSpan.FromMinutes(1), limiterLogger);
                 // Strict policy for the OAuth/OIDC callback paths. Note this named "callback"
                 // policy does NOT enforce the callback limit: the OAuth/OIDC callbacks are
                 // authentication-scheme middleware mappings, not FastEndpoints, so nothing can
@@ -77,7 +80,7 @@ public static class RedisRateLimiterExtensions
                 // CreateCallbackLimiter). The policy is registered only for parity and
                 // observability, so the callback surface appears alongside the other named
                 // policies; do not assume it throttles the callbacks on its own.
-                RedisFixedWindowRateLimiter callbackLimiter = CreateCallbackLimiter(redis);
+                RedisFixedWindowRateLimiter callbackLimiter = CreateCallbackLimiter(redis, limiterLogger);
 
                 options.GlobalLimiter = PartitionedRateLimiter.Create<HttpContext, string>(context =>
                 {

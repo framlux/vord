@@ -378,20 +378,27 @@ public class GrpcRateLimitingInterceptorTests
     }
 
     /// <summary>
-    /// Verifies that when Redis throws an error during gRPC rate limiting, it propagates.
+    /// Verifies that when Redis is down during gRPC rate limiting, the interceptor fails open: the call
+    /// is admitted and the continuation runs rather than the connectivity error taking the gRPC call down.
     /// </summary>
     [Test]
-    public async Task UnaryServerHandler_RedisFailure_PropagatesException()
+    public async Task UnaryServerHandler_RedisFailure_FailsOpenAndInvokesContinuation()
     {
         (GrpcRateLimitingInterceptor interceptor, IDatabase db) = CreateInterceptor();
         db.ScriptEvaluateAsync(Arg.Any<string>(), Arg.Any<RedisKey[]>(), Arg.Any<RedisValue[]>(), Arg.Any<CommandFlags>())
             .Returns<RedisResult>(_ => throw new RedisConnectionException(ConnectionFailureType.UnableToConnect, "Connection refused"));
         ServerCallContext context = CreateTestContext();
-        UnaryServerMethod<string, string> continuation = (req, ctx) => Task.FromResult("response");
-
-        await Assert.ThrowsAsync<RedisConnectionException>(async () =>
+        bool continuationRan = false;
+        UnaryServerMethod<string, string> continuation = (req, ctx) =>
         {
-            await interceptor.UnaryServerHandler("request", context, continuation);
-        });
+            continuationRan = true;
+
+            return Task.FromResult("response");
+        };
+
+        string result = await interceptor.UnaryServerHandler("request", context, continuation);
+
+        await Assert.That(continuationRan).IsTrue();
+        await Assert.That(result).IsEqualTo("response");
     }
 }

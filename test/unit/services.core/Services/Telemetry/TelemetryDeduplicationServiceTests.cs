@@ -5,6 +5,7 @@
 using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Services.Core.ServerConfiguration;
 using Framlux.FleetManagement.Services.Core.Telemetry;
+using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
 using StackExchange.Redis;
 
@@ -35,7 +36,7 @@ public sealed class TelemetryDeduplicationServiceTests
             Arg.Any<When>())
             .Returns(true);
 
-        RedisTelemetryDeduplicationService service = new(redis, CreateConfigService());
+        RedisTelemetryDeduplicationService service = new(redis, CreateConfigService(), NullLogger<RedisTelemetryDeduplicationService>.Instance);
 
         bool result = await service.TryMarkSeenAsync("new-event-1");
 
@@ -56,7 +57,7 @@ public sealed class TelemetryDeduplicationServiceTests
             Arg.Any<When>())
             .Returns(false);
 
-        RedisTelemetryDeduplicationService service = new(redis, CreateConfigService());
+        RedisTelemetryDeduplicationService service = new(redis, CreateConfigService(), NullLogger<RedisTelemetryDeduplicationService>.Instance);
 
         bool result = await service.TryMarkSeenAsync("dup-event-1");
 
@@ -77,7 +78,7 @@ public sealed class TelemetryDeduplicationServiceTests
             Arg.Any<When>())
             .Returns(true);
 
-        RedisTelemetryDeduplicationService service = new(redis, CreateConfigService());
+        RedisTelemetryDeduplicationService service = new(redis, CreateConfigService(), NullLogger<RedisTelemetryDeduplicationService>.Instance);
 
         await service.TryMarkSeenAsync("test-event");
 
@@ -103,7 +104,7 @@ public sealed class TelemetryDeduplicationServiceTests
             Arg.Any<When>())
             .Returns(true);
 
-        RedisTelemetryDeduplicationService service = new(redis, CreateConfigService());
+        RedisTelemetryDeduplicationService service = new(redis, CreateConfigService(), NullLogger<RedisTelemetryDeduplicationService>.Instance);
 
         await service.TryMarkSeenAsync("ttl-event");
 
@@ -139,7 +140,7 @@ public sealed class TelemetryDeduplicationServiceTests
             Arg.Any<When>())
             .Returns(Task.FromResult(false));
 
-        RedisTelemetryDeduplicationService service = new(redis, CreateConfigService());
+        RedisTelemetryDeduplicationService service = new(redis, CreateConfigService(), NullLogger<RedisTelemetryDeduplicationService>.Instance);
 
         Dictionary<string, bool> result = await service.TryMarkSeenBatchAsync(["event-a", "event-b"]);
 
@@ -157,7 +158,7 @@ public sealed class TelemetryDeduplicationServiceTests
         IBatch batch = Substitute.For<IBatch>();
         db.CreateBatch(Arg.Any<object>()).Returns(batch);
 
-        RedisTelemetryDeduplicationService service = new(redis, CreateConfigService());
+        RedisTelemetryDeduplicationService service = new(redis, CreateConfigService(), NullLogger<RedisTelemetryDeduplicationService>.Instance);
 
         Dictionary<string, bool> result = await service.TryMarkSeenBatchAsync([]);
 
@@ -178,7 +179,7 @@ public sealed class TelemetryDeduplicationServiceTests
             Arg.Any<When>())
             .Returns(true);
 
-        RedisTelemetryDeduplicationService service = new(redis, CreateConfigService());
+        RedisTelemetryDeduplicationService service = new(redis, CreateConfigService(), NullLogger<RedisTelemetryDeduplicationService>.Instance);
 
         bool result = await service.TryMarkSeenAsync("");
 
@@ -194,7 +195,7 @@ public sealed class TelemetryDeduplicationServiceTests
     [Test]
     public async Task Constructor_NullRedis_ThrowsArgumentNullException()
     {
-        await Assert.That(() => new RedisTelemetryDeduplicationService(null!, CreateConfigService()))
+        await Assert.That(() => new RedisTelemetryDeduplicationService(null!, CreateConfigService(), NullLogger<RedisTelemetryDeduplicationService>.Instance))
             .Throws<ArgumentNullException>();
     }
 
@@ -203,7 +204,74 @@ public sealed class TelemetryDeduplicationServiceTests
     {
         IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
 
-        await Assert.That(() => new RedisTelemetryDeduplicationService(redis, null!))
+        await Assert.That(() => new RedisTelemetryDeduplicationService(redis, null!, NullLogger<RedisTelemetryDeduplicationService>.Instance))
             .Throws<ArgumentNullException>();
+    }
+
+    [Test]
+    public async Task Constructor_NullLogger_ThrowsArgumentNullException()
+    {
+        IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
+
+        await Assert.That(() => new RedisTelemetryDeduplicationService(redis, CreateConfigService(), null!))
+            .Throws<ArgumentNullException>();
+    }
+
+    [Test]
+    public async Task TryMarkSeenBatchAsync_RedisConnectionFailure_ReturnsAllUnseen()
+    {
+        // With Redis unreachable the service fails open — every id reports unseen (true) so processing
+        // proceeds and the Postgres unique index dedups any real duplicate at insert time.
+        IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
+        IDatabase db = Substitute.For<IDatabase>();
+        redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(db);
+        IBatch batch = Substitute.For<IBatch>();
+        db.CreateBatch(Arg.Any<object>()).Returns(batch);
+        batch.StringSetAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<TimeSpan?>(), Arg.Any<When>())
+            .Returns(Task.FromException<bool>(new RedisConnectionException(ConnectionFailureType.UnableToConnect, "down")));
+
+        RedisTelemetryDeduplicationService service = new(redis, CreateConfigService(), NullLogger<RedisTelemetryDeduplicationService>.Instance);
+
+        Dictionary<string, bool> result = await service.TryMarkSeenBatchAsync(["event-a", "event-b"]);
+
+        await Assert.That(result.Count).IsEqualTo(2);
+        await Assert.That(result["event-a"]).IsTrue();
+        await Assert.That(result["event-b"]).IsTrue();
+    }
+
+    [Test]
+    public async Task TryMarkSeenBatchAsync_RedisTimeout_ReturnsAllUnseen()
+    {
+        IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
+        IDatabase db = Substitute.For<IDatabase>();
+        redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(db);
+        IBatch batch = Substitute.For<IBatch>();
+        db.CreateBatch(Arg.Any<object>()).Returns(batch);
+        batch.StringSetAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<TimeSpan?>(), Arg.Any<When>())
+            .Returns(Task.FromException<bool>(new RedisTimeoutException("slow", CommandStatus.Unknown)));
+
+        RedisTelemetryDeduplicationService service = new(redis, CreateConfigService(), NullLogger<RedisTelemetryDeduplicationService>.Instance);
+
+        Dictionary<string, bool> result = await service.TryMarkSeenBatchAsync(["only-event"]);
+
+        await Assert.That(result["only-event"]).IsTrue();
+    }
+
+    [Test]
+    public async Task TryMarkSeenBatchAsync_NonConnectivityError_Propagates()
+    {
+        // A programming error (not a connectivity failure) must not be swallowed by the fail-open path.
+        IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
+        IDatabase db = Substitute.For<IDatabase>();
+        redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(db);
+        IBatch batch = Substitute.For<IBatch>();
+        db.CreateBatch(Arg.Any<object>()).Returns(batch);
+        batch.StringSetAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<TimeSpan?>(), Arg.Any<When>())
+            .Returns(Task.FromException<bool>(new InvalidOperationException("bug")));
+
+        RedisTelemetryDeduplicationService service = new(redis, CreateConfigService(), NullLogger<RedisTelemetryDeduplicationService>.Instance);
+
+        await Assert.That(async () => await service.TryMarkSeenBatchAsync(["event-a"]))
+            .Throws<InvalidOperationException>();
     }
 }
