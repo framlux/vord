@@ -33,11 +33,11 @@ public interface IAdvisoryLockProvider
 {
     /// <summary>
     /// Tries to acquire an exclusive advisory lock identified by <paramref name="lockName"/>.
-    /// Returns an <see cref="IAsyncDisposable"/> that releases the lock when disposed, or
-    /// <see langword="null"/> if another holder already owns the lock.
+    /// Returns an <see cref="IAdvisoryLock"/> that releases the lock when disposed and can be probed for
+    /// liveness, or <see langword="null"/> if another holder already owns the lock.
     /// </summary>
     /// <param name="lockName">Unique identifier for the lock (caller composes per-resource keys).</param>
     /// <param name="ct">Cancellation token.</param>
-    /// <returns>A disposable holding the lock, or <see langword="null"/> if not acquired.</returns>
-    Task<IAsyncDisposable?> TryAcquireAsync(string lockName, CancellationToken ct);
+    /// <returns>A lock handle, or <see langword="null"/> if not acquired.</returns>
+    Task<IAdvisoryLock?> TryAcquireAsync(string lockName, CancellationToken ct);
 }

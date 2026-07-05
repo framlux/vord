@@ -78,8 +78,10 @@ public class MachineStateStreamingServiceTests
     private static IAdvisoryLockProvider AcquiringAdvisoryLockProvider()
     {
         IAdvisoryLockProvider provider = Substitute.For<IAdvisoryLockProvider>();
+        IAdvisoryLock handle = Substitute.For<IAdvisoryLock>();
+        handle.IsAliveAsync(Arg.Any<CancellationToken>()).Returns(true);
         provider.TryAcquireAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
-            .Returns(Substitute.For<IAsyncDisposable>());
+            .Returns(handle);
 
         return provider;
     }
@@ -88,7 +90,7 @@ public class MachineStateStreamingServiceTests
     {
         IAdvisoryLockProvider provider = Substitute.For<IAdvisoryLockProvider>();
         provider.TryAcquireAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
-            .Returns((IAsyncDisposable?)null);
+            .Returns((IAdvisoryLock?)null);
 
         return provider;
     }
@@ -240,6 +242,53 @@ public class MachineStateStreamingServiceTests
         TestDatabaseFactory factory = new();
 
         return factory.Context;
+    }
+
+    [Test]
+    public async Task StreamLoop_LockReportedDead_AbandonsShardWithoutPersistingCursor_AndReacquires()
+    {
+        // Intent: a silently-dropped lock session must be detected each iteration. The service abandons
+        // the shard without persisting (or flushing) its cursor — so it cannot clobber a successor — and
+        // re-enters the acquisition loop.
+        TaskCompletionSource reacquired = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        int acquires = 0;
+
+        IAdvisoryLock deadHandle = Substitute.For<IAdvisoryLock>();
+        deadHandle.IsAliveAsync(Arg.Any<CancellationToken>()).Returns(false);
+
+        IAdvisoryLockProvider provider = Substitute.For<IAdvisoryLockProvider>();
+        provider.TryAcquireAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(_ =>
+            {
+                if (Interlocked.Increment(ref acquires) == 2)
+                {
+                    reacquired.TrySetResult();
+                }
+
+                return deadHandle;
+            });
+
+        IMachineStateRepository repo = Substitute.For<IMachineStateRepository>();
+        Dictionary<Type, object> services = new() { [typeof(IMachineStateRepository)] = repo };
+        TestServiceScopeFactory scopeFactory = new(NoopContext(), services);
+
+        FixedTimeProvider clock = new(FixedClock);
+        MachineStateStreamingService service = CreateService(scopeFactory, advisoryLockProvider: provider, timeProvider: clock);
+
+        using CancellationTokenSource cts = new();
+        await service.StartAsync(cts.Token);
+        await reacquired.Task;
+        await cts.CancelAsync();
+        await service.StopAsync(CancellationToken.None);
+
+        // Each dead-lock iteration abandons the shard before reading a batch, then re-enters the
+        // acquisition loop (proven by the >=2 acquires the reacquired gate waited for). The
+        // no-clobber-of-a-successor's-cursor guarantee is proven end-to-end by the live
+        // pg_terminate_backend integration test, which a mocked lock cannot reproduce.
+        await repo.DidNotReceive().GetTelemetryBatchAsync(
+            Arg.Any<long>(), Arg.Any<DateTimeOffset>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>());
+        await Assert.That(acquires).IsGreaterThanOrEqualTo(2);
+        await deadHandle.Received().IsAliveAsync(Arg.Any<CancellationToken>());
     }
 
     // ========== One update per machine, not per row ==========

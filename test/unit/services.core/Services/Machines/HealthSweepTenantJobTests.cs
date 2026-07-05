@@ -36,7 +36,7 @@ public sealed class HealthSweepTenantJobTests
     private static IAdvisoryLockProvider AcquiringLockProvider()
     {
         IAdvisoryLockProvider provider = Substitute.For<IAdvisoryLockProvider>();
-        IAsyncDisposable handle = Substitute.For<IAsyncDisposable>();
+        IAdvisoryLock handle = Substitute.For<IAdvisoryLock>();
         provider.TryAcquireAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns(handle);
 
@@ -47,7 +47,7 @@ public sealed class HealthSweepTenantJobTests
     {
         IAdvisoryLockProvider provider = Substitute.For<IAdvisoryLockProvider>();
         provider.TryAcquireAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
-            .Returns((IAsyncDisposable?)null);
+            .Returns((IAdvisoryLock?)null);
 
         return provider;
     }
@@ -85,7 +85,7 @@ public sealed class HealthSweepTenantJobTests
         // Intent: the disposable returned by TryAcquireAsync must be disposed exactly once
         // after the sweep work (or after the work throws) so the lock does not leak.
         IAdvisoryLockProvider provider = Substitute.For<IAdvisoryLockProvider>();
-        IAsyncDisposable handle = Substitute.For<IAsyncDisposable>();
+        IAdvisoryLock handle = Substitute.For<IAdvisoryLock>();
         provider.TryAcquireAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns(handle);
 
@@ -131,7 +131,7 @@ public sealed class HealthSweepTenantJobTests
         // Intent: the lock key must vary per tenant so different tenants run concurrently.
         IAdvisoryLockProvider provider = Substitute.For<IAdvisoryLockProvider>();
         provider.TryAcquireAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
-            .Returns((IAsyncDisposable?)null);
+            .Returns((IAdvisoryLock?)null);
 
         IMachineStateRepository repo = Substitute.For<IMachineStateRepository>();
 
@@ -190,7 +190,7 @@ public sealed class HealthSweepTenantJobTests
         // failure (and applies the [AutomaticRetry] policy), AND the lock must still be released
         // via the disposable's finally/await-using semantics so the next replica isn't blocked.
         IAdvisoryLockProvider provider = Substitute.For<IAdvisoryLockProvider>();
-        IAsyncDisposable handle = Substitute.For<IAsyncDisposable>();
+        IAdvisoryLock handle = Substitute.For<IAdvisoryLock>();
         provider.TryAcquireAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns(handle);
 
@@ -243,7 +243,7 @@ public sealed class HealthSweepTenantJobTests
 
         IAdvisoryLockProvider provider = Substitute.For<IAdvisoryLockProvider>();
         provider.TryAcquireAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
-            .Returns(Substitute.For<IAsyncDisposable>());
+            .Returns(Substitute.For<IAdvisoryLock>());
 
         IMachineStateRepository repo = Substitute.For<IMachineStateRepository>();
 

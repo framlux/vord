@@ -30,7 +30,7 @@ public sealed class UsageHeartbeatJobTests
     {
         IAdvisoryLockProvider provider = Substitute.For<IAdvisoryLockProvider>();
         provider.TryAcquireAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
-            .Returns(Substitute.For<IAsyncDisposable>());
+            .Returns(Substitute.For<IAdvisoryLock>());
 
         return provider;
     }
@@ -528,7 +528,7 @@ public sealed class UsageHeartbeatJobTests
     {
         IAdvisoryLockProvider lockProvider = Substitute.For<IAdvisoryLockProvider>();
         lockProvider.TryAcquireAsync(UsageHeartbeatJob.LockName, Arg.Any<CancellationToken>())
-            .Returns((IAsyncDisposable?)null);
+            .Returns((IAdvisoryLock?)null);
 
         ISubscriptionRepository subscriptionRepo = Substitute.For<ISubscriptionRepository>();
         ITenantRepository tenantRepo = Substitute.For<ITenantRepository>();
@@ -549,7 +549,7 @@ public sealed class UsageHeartbeatJobTests
     public async Task RunAsync_LockAcquired_BodyExecutes()
     {
         IAdvisoryLockProvider lockProvider = Substitute.For<IAdvisoryLockProvider>();
-        IAsyncDisposable handle = Substitute.For<IAsyncDisposable>();
+        IAdvisoryLock handle = Substitute.For<IAdvisoryLock>();
         lockProvider.TryAcquireAsync(UsageHeartbeatJob.LockName, Arg.Any<CancellationToken>())
             .Returns(handle);
 

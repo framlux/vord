@@ -112,7 +112,7 @@ public sealed class MachineStateStreamingService : BackgroundService
         {
             try
             {
-                await using IAsyncDisposable? lockHandle = await _advisoryLockProvider.TryAcquireAsync(_lockKey, stoppingToken);
+                await using IAdvisoryLock? lockHandle = await _advisoryLockProvider.TryAcquireAsync(_lockKey, stoppingToken);
                 if (lockHandle is null)
                 {
                     _logger.LogDebug("State streaming: another instance holds the lock, waiting");
@@ -121,19 +121,30 @@ public sealed class MachineStateStreamingService : BackgroundService
                     continue;
                 }
 
+                bool lockLost = false;
                 try
                 {
                     await LoadHighWaterMarkAsync(stoppingToken);
-                    await StreamLoopAsync(stoppingToken);
+                    lockLost = await StreamLoopAsync(lockHandle, stoppingToken);
                 }
                 finally
                 {
-                    // Flush the final high-water mark while the per-shard advisory lock is STILL held
-                    // (lockHandle has not yet disposed) and with a non-cancellable token. This ensures a
-                    // cancelled stopping token cannot skip the final write, and the write completes before
-                    // the lock is released — so a successor replica that takes over the shard can never be
-                    // clobbered by this process's stale cursor.
-                    await FlushHighWaterMarkAsync();
+                    if (lockLost == false)
+                    {
+                        // Flush the final high-water mark while the per-shard advisory lock is verified
+                        // STILL held, with a non-cancellable token. This ensures a cancelled stopping token
+                        // cannot skip the final write, and the write completes before the lock is released —
+                        // so a successor that takes over the shard is not clobbered by this cursor. If the
+                        // lock was lost mid-stream a successor may already own the shard and have advanced
+                        // the cursor further, so we deliberately do NOT flush.
+                        await FlushHighWaterMarkAsync();
+                    }
+                    else
+                    {
+                        _logger.LogWarning(
+                            "State streaming: shard {ShardIndex} lock lost; abandoning the shard without a final cursor flush to avoid clobbering the successor",
+                            _shardIndex);
+                    }
                 }
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
@@ -177,10 +188,19 @@ public sealed class MachineStateStreamingService : BackgroundService
     /// batch to one <see cref="MachineStatePatch"/> per machine, and applies at most one UPDATE
     /// per table per machine. Machines are applied concurrently for throughput.
     /// </summary>
-    private async Task StreamLoopAsync(CancellationToken ct)
+    private async Task<bool> StreamLoopAsync(IAdvisoryLock lockHandle, CancellationToken ct)
     {
         while (ct.IsCancellationRequested == false)
         {
+            // Verify the shard lock's session is still alive before doing any work this iteration. A
+            // silently-dropped lock session (failover, partition, idle-in-transaction timeout) would
+            // otherwise let this process keep projecting while a successor also owns the shard; returning
+            // true abandons the shard without a final flush so we cannot clobber the successor's cursor.
+            if (await lockHandle.IsAliveAsync(ct) == false)
+            {
+                return true;
+            }
+
             using IServiceScope scope = _scopeFactory.CreateScope();
             IMachineStateRepository repo = scope.ServiceProvider.GetRequiredService<IMachineStateRepository>();
 
@@ -228,6 +248,9 @@ public sealed class MachineStateStreamingService : BackgroundService
             _highWaterMark = batch[^1].Id;
             await PersistHighWaterMarkAsync(ct);
         }
+
+        // Normal exit (stopping token cancelled) — the lock is still held, so the caller flushes.
+        return false;
     }
 
     /// <summary>

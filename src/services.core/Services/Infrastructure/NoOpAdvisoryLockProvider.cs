@@ -12,16 +12,19 @@ namespace Framlux.FleetManagement.Services.Core.Infrastructure;
 public sealed class NoOpAdvisoryLockProvider : IAdvisoryLockProvider
 {
     /// <inheritdoc/>
-    public Task<IAsyncDisposable?> TryAcquireAsync(string lockName, CancellationToken ct)
+    public Task<IAdvisoryLock?> TryAcquireAsync(string lockName, CancellationToken ct)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(lockName);
 
-        return Task.FromResult<IAsyncDisposable?>(NoOpHandle.Instance);
+        return Task.FromResult<IAdvisoryLock?>(NoOpHandle.Instance);
     }
 
-    private sealed class NoOpHandle : IAsyncDisposable
+    private sealed class NoOpHandle : IAdvisoryLock
     {
         public static readonly NoOpHandle Instance = new();
+
+        // With no real lock there is nothing to lose; the single-holder assumption always holds.
+        public Task<bool> IsAliveAsync(CancellationToken ct) => Task.FromResult(true);
 
         public ValueTask DisposeAsync()
         {

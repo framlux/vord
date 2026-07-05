@@ -40,7 +40,7 @@ public sealed class PostgresAdvisoryLockProvider : IAdvisoryLockProvider
     }
 
     /// <inheritdoc/>
-    public async Task<IAsyncDisposable?> TryAcquireAsync(string lockName, CancellationToken ct)
+    public async Task<IAdvisoryLock?> TryAcquireAsync(string lockName, CancellationToken ct)
     {
         long key = HashLockName(lockName);
         NpgsqlConnection connection = await _dataSource.OpenConnectionAsync(ct);
@@ -96,7 +96,7 @@ public sealed class PostgresAdvisoryLockProvider : IAdvisoryLockProvider
         return BinaryPrimitives.ReadInt64LittleEndian(hash.AsSpan(0, 8));
     }
 
-    private sealed class AdvisoryLockHandle : IAsyncDisposable
+    private sealed class AdvisoryLockHandle : IAdvisoryLock
     {
         private readonly NpgsqlConnection _connection;
         private readonly NpgsqlTransaction _transaction;
@@ -110,6 +110,33 @@ public sealed class PostgresAdvisoryLockProvider : IAdvisoryLockProvider
             _transaction = transaction;
             _key = key;
             _logger = logger;
+        }
+
+        public async Task<bool> IsAliveAsync(CancellationToken ct)
+        {
+            if (Volatile.Read(ref _disposed) != 0)
+            {
+                return false;
+            }
+
+            try
+            {
+                // Round-trip a trivial query on the lock's OWN connection/transaction. Success proves the
+                // session that holds pg_try_advisory_xact_lock is still connected; it also keeps the
+                // session non-idle, neutralizing any idle_in_transaction_session_timeout on the role.
+                await using NpgsqlCommand cmd = _connection.CreateCommand();
+                cmd.Transaction = _transaction;
+                cmd.CommandText = "SELECT 1";
+                await cmd.ExecuteScalarAsync(ct);
+
+                return true;
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Advisory lock liveness check failed for key {Key}; treating the lock as lost", _key);
+
+                return false;
+            }
         }
 
         public async ValueTask DisposeAsync()
