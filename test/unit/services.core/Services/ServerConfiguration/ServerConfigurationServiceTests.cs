@@ -38,7 +38,7 @@ public class ServerConfigurationServiceTests
         int result = await service.GetAgentHeartbeatSecondsAsync(CancellationToken.None);
 
         await Assert.That(result).IsEqualTo(600);
-        await cache.DidNotReceive().GetSettingAsync(Arg.Any<ServerConfigurationSettingKeys>(), Arg.Any<CancellationToken>());
+        await cache.DidNotReceive().GetSettingFromDatabaseAsync(Arg.Any<ServerConfigurationSettingKeys>(), Arg.Any<CancellationToken>());
     }
 
     [Test]
@@ -47,7 +47,7 @@ public class ServerConfigurationServiceTests
         (ServerConfigurationService service, IServerSettingsCache cache, IDatabase redisDb) = CreateService();
         redisDb.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
             .Returns(Task.FromResult<RedisValue>(RedisValue.Null));
-        cache.GetSettingAsync(ServerConfigurationSettingKeys.AgentHeartbeatSeconds, Arg.Any<CancellationToken>())
+        cache.GetSettingFromDatabaseAsync(ServerConfigurationSettingKeys.AgentHeartbeatSeconds, Arg.Any<CancellationToken>())
             .Returns("900");
 
         int result = await service.GetAgentHeartbeatSecondsAsync(CancellationToken.None);
@@ -61,7 +61,7 @@ public class ServerConfigurationServiceTests
         (ServerConfigurationService service, IServerSettingsCache cache, IDatabase redisDb) = CreateService();
         redisDb.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
             .Returns(Task.FromResult<RedisValue>(RedisValue.Null));
-        cache.GetSettingAsync(ServerConfigurationSettingKeys.AgentHeartbeatSeconds, Arg.Any<CancellationToken>())
+        cache.GetSettingFromDatabaseAsync(ServerConfigurationSettingKeys.AgentHeartbeatSeconds, Arg.Any<CancellationToken>())
             .Returns("900");
 
         await service.GetAgentHeartbeatSecondsAsync(CancellationToken.None);
@@ -78,7 +78,7 @@ public class ServerConfigurationServiceTests
         (ServerConfigurationService service, IServerSettingsCache cache, IDatabase redisDb) = CreateService();
         redisDb.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
             .Returns(Task.FromResult<RedisValue>(RedisValue.Null));
-        cache.GetSettingAsync(ServerConfigurationSettingKeys.AgentHeartbeatSeconds, Arg.Any<CancellationToken>())
+        cache.GetSettingFromDatabaseAsync(ServerConfigurationSettingKeys.AgentHeartbeatSeconds, Arg.Any<CancellationToken>())
             .Returns((string?)null);
 
         int result = await service.GetAgentHeartbeatSecondsAsync(CancellationToken.None);
@@ -92,7 +92,7 @@ public class ServerConfigurationServiceTests
         (ServerConfigurationService service, IServerSettingsCache cache, IDatabase redisDb) = CreateService();
         redisDb.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
             .Returns(Task.FromResult<RedisValue>("not-a-number"));
-        cache.GetSettingAsync(ServerConfigurationSettingKeys.AgentHeartbeatSeconds, Arg.Any<CancellationToken>())
+        cache.GetSettingFromDatabaseAsync(ServerConfigurationSettingKeys.AgentHeartbeatSeconds, Arg.Any<CancellationToken>())
             .Returns("450");
 
         int result = await service.GetAgentHeartbeatSecondsAsync(CancellationToken.None);
@@ -106,7 +106,7 @@ public class ServerConfigurationServiceTests
         (ServerConfigurationService service, IServerSettingsCache cache, IDatabase redisDb) = CreateService();
         redisDb.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
             .Returns(Task.FromResult<RedisValue>("-5"));
-        cache.GetSettingAsync(ServerConfigurationSettingKeys.AgentHeartbeatSeconds, Arg.Any<CancellationToken>())
+        cache.GetSettingFromDatabaseAsync(ServerConfigurationSettingKeys.AgentHeartbeatSeconds, Arg.Any<CancellationToken>())
             .Returns((string?)null);
 
         int result = await service.GetAgentHeartbeatSecondsAsync(CancellationToken.None);
@@ -120,7 +120,7 @@ public class ServerConfigurationServiceTests
         (ServerConfigurationService service, IServerSettingsCache cache, IDatabase redisDb) = CreateService();
         redisDb.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
             .Returns(Task.FromResult<RedisValue>(RedisValue.Null));
-        cache.GetSettingAsync(ServerConfigurationSettingKeys.AgentHeartbeatSeconds, Arg.Any<CancellationToken>())
+        cache.GetSettingFromDatabaseAsync(ServerConfigurationSettingKeys.AgentHeartbeatSeconds, Arg.Any<CancellationToken>())
             .Returns("invalid");
 
         int result = await service.GetAgentHeartbeatSecondsAsync(CancellationToken.None);
@@ -134,7 +134,7 @@ public class ServerConfigurationServiceTests
         (ServerConfigurationService service, IServerSettingsCache cache, IDatabase redisDb) = CreateService();
         redisDb.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
             .Returns(Task.FromResult<RedisValue>("0"));
-        cache.GetSettingAsync(ServerConfigurationSettingKeys.AgentHeartbeatSeconds, Arg.Any<CancellationToken>())
+        cache.GetSettingFromDatabaseAsync(ServerConfigurationSettingKeys.AgentHeartbeatSeconds, Arg.Any<CancellationToken>())
             .Returns("120");
 
         int result = await service.GetAgentHeartbeatSecondsAsync(CancellationToken.None);
@@ -204,7 +204,7 @@ public class ServerConfigurationServiceTests
         (ServerConfigurationService service, IServerSettingsCache cache, IDatabase redisDb) = CreateService();
         redisDb.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
             .Returns(Task.FromResult<RedisValue>(RedisValue.Null));
-        cache.GetSettingAsync(ServerConfigurationSettingKeys.ServiceStatusSeconds, Arg.Any<CancellationToken>())
+        cache.GetSettingFromDatabaseAsync(ServerConfigurationSettingKeys.ServiceStatusSeconds, Arg.Any<CancellationToken>())
             .Returns((string?)null);
 
         int result = await service.GetServiceStatusSecondsAsync(CancellationToken.None);
@@ -218,7 +218,7 @@ public class ServerConfigurationServiceTests
         (ServerConfigurationService service, IServerSettingsCache cache, IDatabase redisDb) = CreateService();
         redisDb.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
             .Returns(Task.FromResult<RedisValue>(RedisValue.Null));
-        cache.GetSettingAsync(ServerConfigurationSettingKeys.ServiceStatusSeconds, Arg.Any<CancellationToken>())
+        cache.GetSettingFromDatabaseAsync(ServerConfigurationSettingKeys.ServiceStatusSeconds, Arg.Any<CancellationToken>())
             .Returns("1800");
 
         int result = await service.GetServiceStatusSecondsAsync(CancellationToken.None);
@@ -232,7 +232,7 @@ public class ServerConfigurationServiceTests
         (ServerConfigurationService service, IServerSettingsCache cache, IDatabase redisDb) = CreateService();
         redisDb.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
             .Returns(Task.FromResult<RedisValue>(RedisValue.Null));
-        cache.GetSettingAsync(ServerConfigurationSettingKeys.ServiceStatusSeconds, Arg.Any<CancellationToken>())
+        cache.GetSettingFromDatabaseAsync(ServerConfigurationSettingKeys.ServiceStatusSeconds, Arg.Any<CancellationToken>())
             .Returns("0");
 
         int result = await service.GetServiceStatusSecondsAsync(CancellationToken.None);
@@ -246,7 +246,7 @@ public class ServerConfigurationServiceTests
         (ServerConfigurationService service, IServerSettingsCache cache, IDatabase redisDb) = CreateService();
         redisDb.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
             .Returns(Task.FromResult<RedisValue>(RedisValue.Null));
-        cache.GetSettingAsync(ServerConfigurationSettingKeys.ServiceStatusSeconds, Arg.Any<CancellationToken>())
+        cache.GetSettingFromDatabaseAsync(ServerConfigurationSettingKeys.ServiceStatusSeconds, Arg.Any<CancellationToken>())
             .Returns("-1");
 
         int result = await service.GetServiceStatusSecondsAsync(CancellationToken.None);
@@ -260,7 +260,7 @@ public class ServerConfigurationServiceTests
         (ServerConfigurationService service, IServerSettingsCache cache, IDatabase redisDb) = CreateService();
         redisDb.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
             .Returns(Task.FromResult<RedisValue>(RedisValue.Null));
-        cache.GetSettingAsync(ServerConfigurationSettingKeys.ServiceStatusSeconds, Arg.Any<CancellationToken>())
+        cache.GetSettingFromDatabaseAsync(ServerConfigurationSettingKeys.ServiceStatusSeconds, Arg.Any<CancellationToken>())
             .Returns("abc");
 
         int result = await service.GetServiceStatusSecondsAsync(CancellationToken.None);
@@ -278,7 +278,7 @@ public class ServerConfigurationServiceTests
         int result = await service.GetServiceStatusSecondsAsync(CancellationToken.None);
 
         await Assert.That(result).IsEqualTo(7200);
-        await cache.DidNotReceive().GetSettingAsync(Arg.Any<ServerConfigurationSettingKeys>(), Arg.Any<CancellationToken>());
+        await cache.DidNotReceive().GetSettingFromDatabaseAsync(Arg.Any<ServerConfigurationSettingKeys>(), Arg.Any<CancellationToken>());
     }
 
     [Test]
@@ -287,7 +287,7 @@ public class ServerConfigurationServiceTests
         (ServerConfigurationService service, IServerSettingsCache cache, IDatabase redisDb) = CreateService();
         redisDb.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
             .Returns(Task.FromResult<RedisValue>(RedisValue.Null));
-        cache.GetSettingAsync(ServerConfigurationSettingKeys.ServiceStatusSeconds, Arg.Any<CancellationToken>())
+        cache.GetSettingFromDatabaseAsync(ServerConfigurationSettingKeys.ServiceStatusSeconds, Arg.Any<CancellationToken>())
             .Returns("1800");
 
         await service.GetServiceStatusSecondsAsync(CancellationToken.None);
@@ -296,5 +296,50 @@ public class ServerConfigurationServiceTests
             Arg.Any<RedisKey>(),
             Arg.Is<RedisValue>(v => v == "1800"),
             Arg.Is<Expiration>(e => e.Equals(new Expiration(TimeSpan.FromMinutes(5)))));
+    }
+
+    // ========== GetAllowUserSignupAsync (shared read-through) tests ==========
+
+    [Test]
+    public async Task GetAllowUserSignupAsync_RedisSaysFalse_ReturnsFalse_WithoutDbRead()
+    {
+        (ServerConfigurationService service, IServerSettingsCache cache, IDatabase redisDb) = CreateService();
+        redisDb.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
+            .Returns(Task.FromResult<RedisValue>("false"));
+
+        bool allowed = await service.GetAllowUserSignupAsync(CancellationToken.None);
+
+        await Assert.That(allowed).IsFalse();
+        await cache.DidNotReceive().GetSettingFromDatabaseAsync(Arg.Any<ServerConfigurationSettingKeys>(), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task GetAllowUserSignupAsync_RedisMiss_DbSaysFalse_ReturnsFalse()
+    {
+        (ServerConfigurationService service, IServerSettingsCache cache, IDatabase redisDb) = CreateService();
+        redisDb.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
+            .Returns(Task.FromResult<RedisValue>(RedisValue.Null));
+        cache.GetSettingFromDatabaseAsync(ServerConfigurationSettingKeys.AllowUserSignup, Arg.Any<CancellationToken>())
+            .Returns("false");
+
+        bool allowed = await service.GetAllowUserSignupAsync(CancellationToken.None);
+
+        await Assert.That(allowed).IsFalse();
+        // The authoritative DB value is written back to the shared Redis cache for other replicas.
+        await redisDb.Received(1).StringSetAsync(Arg.Any<RedisKey>(), Arg.Is<RedisValue>(v => v == "false"), Arg.Any<Expiration>());
+    }
+
+    [Test]
+    public async Task GetAllowUserSignupAsync_Unset_DefaultsToAllowed()
+    {
+        (ServerConfigurationService service, IServerSettingsCache cache, IDatabase redisDb) = CreateService();
+        redisDb.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
+            .Returns(Task.FromResult<RedisValue>(RedisValue.Null));
+        cache.GetSettingFromDatabaseAsync(ServerConfigurationSettingKeys.AllowUserSignup, Arg.Any<CancellationToken>())
+            .Returns((string?)null);
+
+        bool allowed = await service.GetAllowUserSignupAsync(CancellationToken.None);
+
+        await Assert.That(allowed).IsTrue();
     }
 }

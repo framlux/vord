@@ -12,6 +12,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
 using NSubstitute;
+using StackExchange.Redis;
 
 namespace Framlux.FleetManagement.Test.Repositories;
 
@@ -39,7 +40,7 @@ public sealed class ServerSettingsCacheTests
 
         FakeTimeProvider timeProvider = new(DateTimeOffset.UtcNow);
         IServiceScopeFactory scopeFactory = CreateScopeFactory(dbFactory.Context);
-        ServerSettingsCache cache = new(scopeFactory, NullLogger<ServerSettingsCache>.Instance, timeProvider);
+        ServerSettingsCache cache = new(scopeFactory, NullLogger<ServerSettingsCache>.Instance, timeProvider, Substitute.For<IConnectionMultiplexer>());
 
         // First read — populates the in-memory cache.
         string? firstRead = await cache.GetSettingAsync(ServerConfigurationSettingKeys.AgentHeartbeatSeconds, CancellationToken.None);
@@ -76,7 +77,7 @@ public sealed class ServerSettingsCacheTests
 
         FakeTimeProvider timeProvider = new(DateTimeOffset.UtcNow);
         IServiceScopeFactory scopeFactory = CreateScopeFactory(dbFactory.Context);
-        ServerSettingsCache cache = new(scopeFactory, NullLogger<ServerSettingsCache>.Instance, timeProvider);
+        ServerSettingsCache cache = new(scopeFactory, NullLogger<ServerSettingsCache>.Instance, timeProvider, Substitute.For<IConnectionMultiplexer>());
 
         // Populate the cache.
         string? firstRead = await cache.GetSettingAsync(ServerConfigurationSettingKeys.AgentHeartbeatSeconds, CancellationToken.None);
@@ -97,6 +98,79 @@ public sealed class ServerSettingsCacheTests
         await Assert.That(postTtlRead).IsEqualTo("99");
     }
 
+    [Test]
+    public async Task InvalidationMessage_ClearsExactlyThatCacheEntry()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        await dbFactory.Context.InsertAsync(new ServerConfigurationSettings
+        {
+            Key = ServerConfigurationSettingKeys.AgentHeartbeatSeconds,
+            Value = "30",
+            Version = 1,
+        });
+
+        FakeTimeProvider timeProvider = new(DateTimeOffset.UtcNow);
+        IServiceScopeFactory scopeFactory = CreateScopeFactory(dbFactory.Context);
+
+        IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
+        ISubscriber subscriber = Substitute.For<ISubscriber>();
+        redis.GetSubscriber(Arg.Any<object>()).Returns(subscriber);
+        Action<RedisChannel, RedisValue>? handler = null;
+        subscriber.When(s => s.Subscribe(Arg.Any<RedisChannel>(), Arg.Any<Action<RedisChannel, RedisValue>>(), Arg.Any<CommandFlags>()))
+            .Do(ci => handler = ci.Arg<Action<RedisChannel, RedisValue>>());
+
+        ServerSettingsCache cache = new(scopeFactory, NullLogger<ServerSettingsCache>.Instance, timeProvider, redis);
+
+        // Warm the cache, then change the DB row while the cache is still within its TTL.
+        await Assert.That(await cache.GetSettingAsync(ServerConfigurationSettingKeys.AgentHeartbeatSeconds, CancellationToken.None)).IsEqualTo("30");
+        await dbFactory.Context.ServerConfigurationSettings
+            .Where(s => s.Key == ServerConfigurationSettingKeys.AgentHeartbeatSeconds)
+            .Set(s => s.Value, "99")
+            .UpdateAsync();
+
+        // Deliver a pub/sub invalidation for that key.
+        await Assert.That(handler).IsNotNull();
+        handler!(RedisChannel.Literal(ServerSettingsCache.InvalidationChannel), (RedisValue)((int)ServerConfigurationSettingKeys.AgentHeartbeatSeconds).ToString());
+
+        // The entry was evicted, so the next read (still within TTL) returns the fresh DB value.
+        await Assert.That(await cache.GetSettingAsync(ServerConfigurationSettingKeys.AgentHeartbeatSeconds, CancellationToken.None)).IsEqualTo("99");
+    }
+
+    [Test]
+    public async Task InvalidationMessage_ForDifferentKey_LeavesEntryCached()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        await dbFactory.Context.InsertAsync(new ServerConfigurationSettings
+        {
+            Key = ServerConfigurationSettingKeys.AgentHeartbeatSeconds,
+            Value = "30",
+            Version = 1,
+        });
+
+        FakeTimeProvider timeProvider = new(DateTimeOffset.UtcNow);
+        IServiceScopeFactory scopeFactory = CreateScopeFactory(dbFactory.Context);
+
+        IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
+        ISubscriber subscriber = Substitute.For<ISubscriber>();
+        redis.GetSubscriber(Arg.Any<object>()).Returns(subscriber);
+        Action<RedisChannel, RedisValue>? handler = null;
+        subscriber.When(s => s.Subscribe(Arg.Any<RedisChannel>(), Arg.Any<Action<RedisChannel, RedisValue>>(), Arg.Any<CommandFlags>()))
+            .Do(ci => handler = ci.Arg<Action<RedisChannel, RedisValue>>());
+
+        ServerSettingsCache cache = new(scopeFactory, NullLogger<ServerSettingsCache>.Instance, timeProvider, redis);
+
+        await Assert.That(await cache.GetSettingAsync(ServerConfigurationSettingKeys.AgentHeartbeatSeconds, CancellationToken.None)).IsEqualTo("30");
+        await dbFactory.Context.ServerConfigurationSettings
+            .Where(s => s.Key == ServerConfigurationSettingKeys.AgentHeartbeatSeconds)
+            .Set(s => s.Value, "99")
+            .UpdateAsync();
+
+        // Invalidate a different key — the heartbeat entry must remain cached at its old value.
+        handler!(RedisChannel.Literal(ServerSettingsCache.InvalidationChannel), (RedisValue)((int)ServerConfigurationSettingKeys.OnlineThresholdSeconds).ToString());
+
+        await Assert.That(await cache.GetSettingAsync(ServerConfigurationSettingKeys.AgentHeartbeatSeconds, CancellationToken.None)).IsEqualTo("30");
+    }
+
     /// <summary>
     /// Constructor must reject a null <see cref="TimeProvider"/> argument so misconfigured
     /// DI composition fails fast at startup rather than silently at runtime.
@@ -107,7 +181,7 @@ public sealed class ServerSettingsCacheTests
         IServiceScopeFactory scopeFactory = Substitute.For<IServiceScopeFactory>();
 
         await Assert.That(() =>
-            new ServerSettingsCache(scopeFactory, NullLogger<ServerSettingsCache>.Instance, null!))
+            new ServerSettingsCache(scopeFactory, NullLogger<ServerSettingsCache>.Instance, null!, Substitute.For<IConnectionMultiplexer>()))
             .Throws<ArgumentNullException>();
     }
 
@@ -118,7 +192,7 @@ public sealed class ServerSettingsCacheTests
     public async Task Constructor_NullScopeFactory_ThrowsArgumentNullException()
     {
         await Assert.That(() =>
-            new ServerSettingsCache(null!, NullLogger<ServerSettingsCache>.Instance, TimeProvider.System))
+            new ServerSettingsCache(null!, NullLogger<ServerSettingsCache>.Instance, TimeProvider.System, Substitute.For<IConnectionMultiplexer>()))
             .Throws<ArgumentNullException>();
     }
 
@@ -131,7 +205,7 @@ public sealed class ServerSettingsCacheTests
         IServiceScopeFactory scopeFactory = Substitute.For<IServiceScopeFactory>();
 
         await Assert.That(() =>
-            new ServerSettingsCache(scopeFactory, null!, TimeProvider.System))
+            new ServerSettingsCache(scopeFactory, null!, TimeProvider.System, Substitute.For<IConnectionMultiplexer>()))
             .Throws<ArgumentNullException>();
     }
 

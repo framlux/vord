@@ -20,6 +20,15 @@ public interface IServerSettingsCache
     Task<string?> GetSettingAsync(ServerConfigurationSettingKeys key, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Reads a setting directly from the database, bypassing the in-memory cache. Used by the shared
+    /// Redis read-through so a just-invalidated Redis key is never re-seeded from a stale local cache.
+    /// </summary>
+    /// <param name="key">The configuration setting key to retrieve.</param>
+    /// <param name="cancellationToken">Token used to cancel async calls.</param>
+    /// <returns>The current value from the database, or null when unset.</returns>
+    Task<string?> GetSettingFromDatabaseAsync(ServerConfigurationSettingKeys key, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Upserts a server configuration setting by key. Inserts a new row if no row exists
     /// for the key, or updates the existing row's value and increments the version.
     /// Also updates the in-memory cache.

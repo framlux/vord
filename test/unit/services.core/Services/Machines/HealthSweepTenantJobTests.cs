@@ -21,7 +21,7 @@ public sealed class HealthSweepTenantJobTests
     private static ServerConfigurationService CreateConfigService(int onlineThresholdSeconds = 300)
     {
         IServerSettingsCache cache = Substitute.For<IServerSettingsCache>();
-        cache.GetSettingAsync(Arg.Any<ServerConfigurationSettingKeys>(), Arg.Any<CancellationToken>())
+        cache.GetSettingFromDatabaseAsync(Arg.Any<ServerConfigurationSettingKeys>(), Arg.Any<CancellationToken>())
             .Returns(onlineThresholdSeconds.ToString());
 
         IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();

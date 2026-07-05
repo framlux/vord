@@ -6,6 +6,7 @@ using System.Security.Claims;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
+using Framlux.FleetManagement.Services.Core.ServerConfiguration;
 using Framlux.FleetManagement.Services.Core.Auth;
 using Framlux.FleetManagement.Services.Core.Security;
 using Microsoft.AspNetCore.Authentication.OAuth;
@@ -117,10 +118,11 @@ public static class SocialAuthEvents
         UserAccount? user = await userRepository.GetUserByExternalIdForProviderAsync(authProvider, uniqueId, ct);
         if (user is null)
         {
-            // Check whether self-signup is enabled before auto-creating a new account
-            IServerSettingsCache settingsCache = httpContext.RequestServices.GetRequiredService<IServerSettingsCache>();
-            string? allowSignup = await settingsCache.GetSettingAsync(ServerConfigurationSettingKeys.AllowUserSignup, ct);
-            if (string.Equals(allowSignup, "false", StringComparison.OrdinalIgnoreCase))
+            // Check whether self-signup is enabled before auto-creating a new account. Read through the
+            // shared Redis cache so an admin's kill-switch flip on any replica takes effect here promptly
+            // instead of being masked by this replica's stale in-memory copy.
+            ServerConfigurationService configService = httpContext.RequestServices.GetRequiredService<ServerConfigurationService>();
+            if (await configService.GetAllowUserSignupAsync(ct) == false)
             {
                 return false;
             }

@@ -71,9 +71,9 @@ public sealed class ConfigurationServiceTests
     public async Task GetConfiguration_WithDbSettings_ReturnsConfiguredValues()
     {
         IServerSettingsCache settingsCache = Substitute.For<IServerSettingsCache>();
-        settingsCache.GetSettingAsync(ServerConfigurationSettingKeys.AgentHeartbeatSeconds, Arg.Any<CancellationToken>())
+        settingsCache.GetSettingFromDatabaseAsync(ServerConfigurationSettingKeys.AgentHeartbeatSeconds, Arg.Any<CancellationToken>())
             .Returns("60");
-        settingsCache.GetSettingAsync(ServerConfigurationSettingKeys.AgentConfigRefreshSeconds, Arg.Any<CancellationToken>())
+        settingsCache.GetSettingFromDatabaseAsync(ServerConfigurationSettingKeys.AgentConfigRefreshSeconds, Arg.Any<CancellationToken>())
             .Returns("3600");
 
         ConfigurationService service = CreateService(settingsCache: settingsCache);
@@ -103,7 +103,7 @@ public sealed class ConfigurationServiceTests
     public async Task GetConfiguration_WithServiceStatusSetting_ReturnsConfiguredValue()
     {
         IServerSettingsCache settingsCache = Substitute.For<IServerSettingsCache>();
-        settingsCache.GetSettingAsync(ServerConfigurationSettingKeys.ServiceStatusSeconds, Arg.Any<CancellationToken>())
+        settingsCache.GetSettingFromDatabaseAsync(ServerConfigurationSettingKeys.ServiceStatusSeconds, Arg.Any<CancellationToken>())
             .Returns("1800");
 
         ConfigurationService service = CreateService(settingsCache: settingsCache);

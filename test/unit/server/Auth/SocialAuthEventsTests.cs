@@ -6,9 +6,11 @@ using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Server.Auth;
 using Framlux.FleetManagement.Services.Core.Security;
+using Framlux.FleetManagement.Services.Core.ServerConfiguration;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
 using NSubstitute;
+using StackExchange.Redis;
 using System.Security.Claims;
 
 namespace Framlux.FleetManagement.Test.Auth;
@@ -18,6 +20,19 @@ namespace Framlux.FleetManagement.Test.Auth;
 /// </summary>
 public sealed class SocialAuthEventsTests
 {
+    // Registers a real ServerConfigurationService backed by the given settings cache and a mocked Redis
+    // (always a cache miss), so the AllowUserSignup read-through resolves and falls through to the cache's
+    // GetSettingFromDatabaseAsync — which the signup tests drive.
+    private static void AddConfigService(ServiceCollection services)
+    {
+        IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
+        IDatabase redisDb = Substitute.For<IDatabase>();
+        redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(redisDb);
+        redisDb.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>()).Returns(RedisValue.Null);
+        services.AddSingleton(redis);
+        services.AddSingleton<ServerConfigurationService>();
+    }
+
     private static (DefaultHttpContext HttpContext, IUserRepository UserRepo, ITenantRepository TenantRepo) CreateTestContext()
     {
         IUserRepository userRepo = Substitute.For<IUserRepository>();
@@ -30,6 +45,7 @@ public sealed class SocialAuthEventsTests
         services.AddSingleton(userRepo);
         services.AddSingleton(tenantRepo);
         services.AddSingleton(settingsCache);
+        AddConfigService(services);
         services.AddSingleton(stampService);
         ServiceProvider provider = services.BuildServiceProvider();
 
@@ -591,13 +607,14 @@ public sealed class SocialAuthEventsTests
         IUserRepository userRepo = Substitute.For<IUserRepository>();
         ITenantRepository tenantRepo = Substitute.For<ITenantRepository>();
         IServerSettingsCache settingsCache = Substitute.For<IServerSettingsCache>();
-        settingsCache.GetSettingAsync(Database.Enums.ServerConfigurationSettingKeys.AllowUserSignup, Arg.Any<CancellationToken>())
+        settingsCache.GetSettingFromDatabaseAsync(Database.Enums.ServerConfigurationSettingKeys.AllowUserSignup, Arg.Any<CancellationToken>())
             .Returns("false");
 
         ServiceCollection services = new();
         services.AddSingleton(userRepo);
         services.AddSingleton(tenantRepo);
         services.AddSingleton(settingsCache);
+        AddConfigService(services);
         ServiceProvider provider = services.BuildServiceProvider();
 
         DefaultHttpContext httpContext = new()
@@ -696,6 +713,7 @@ public sealed class SocialAuthEventsTests
         services.AddSingleton(userRepo);
         services.AddSingleton(tenantRepo);
         services.AddSingleton(settingsCache);
+        AddConfigService(services);
         services.AddSingleton(stampService);
         DefaultHttpContext httpContext = new() { RequestServices = services.BuildServiceProvider() };
 

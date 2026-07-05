@@ -9,6 +9,8 @@ using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Services.Core.Infrastructure;
 using Framlux.FleetManagement.Services.Core.Models.Admin;
 using Framlux.FleetManagement.Services.Core.Models.Users;
+using Framlux.FleetManagement.Services.Core.ServerConfiguration;
+using Microsoft.Extensions.Logging;
 using StackExchange.Redis;
 
 namespace Framlux.FleetManagement.Services.Core.Handlers;
@@ -36,27 +38,13 @@ public sealed class AdminHandler : IAdminHandler
         [ServerConfigurationSettingKeys.ServiceStatusSeconds] = "How often agents collect systemd service status, in seconds (60-86400).",
     };
 
-    /// <summary>
-    /// Valid min/max bounds for each numeric server configuration setting key.
-    /// </summary>
-    public static readonly Dictionary<ServerConfigurationSettingKeys, (int Min, int Max)> SettingBounds = new()
-    {
-        [ServerConfigurationSettingKeys.AgentHeartbeatSeconds] = (10, 600),
-        [ServerConfigurationSettingKeys.AgentConfigRefreshSeconds] = (60, 86400),
-        [ServerConfigurationSettingKeys.AgentCommandPollSeconds] = (10, 300),
-        [ServerConfigurationSettingKeys.TelemetryCollectFastSeconds] = (10, 300),
-        [ServerConfigurationSettingKeys.TelemetryCollectSlowSeconds] = (60, 3600),
-        [ServerConfigurationSettingKeys.TelemetrySendFastSeconds] = (5, 120),
-        [ServerConfigurationSettingKeys.TelemetrySendSlowSeconds] = (30, 1800),
-        [ServerConfigurationSettingKeys.ServiceStatusSeconds] = (60, 86400),
-    };
-
     private readonly IServerConfigurationRepository _configRepo;
     private readonly IUserRepository _userRepo;
     private readonly IServerSettingsCache _settingsCache;
     private readonly IConnectionMultiplexer _redis;
     private readonly IDatabaseTransactionProvider _transactionProvider;
     private readonly IAuditLogRepository _auditLog;
+    private readonly ILogger<AdminHandler> _logger;
 
     /// <summary>
     /// Creates a new instance of the <see cref="AdminHandler"/> class.
@@ -67,7 +55,8 @@ public sealed class AdminHandler : IAdminHandler
         IServerSettingsCache settingsCache,
         IConnectionMultiplexer redis,
         IDatabaseTransactionProvider transactionProvider,
-        IAuditLogRepository auditLog)
+        IAuditLogRepository auditLog,
+        ILogger<AdminHandler> logger)
     {
         ArgumentNullException.ThrowIfNull(configRepo);
         ArgumentNullException.ThrowIfNull(userRepo);
@@ -75,6 +64,7 @@ public sealed class AdminHandler : IAdminHandler
         ArgumentNullException.ThrowIfNull(redis);
         ArgumentNullException.ThrowIfNull(transactionProvider);
         ArgumentNullException.ThrowIfNull(auditLog);
+        ArgumentNullException.ThrowIfNull(logger);
 
         _configRepo = configRepo;
         _userRepo = userRepo;
@@ -82,6 +72,7 @@ public sealed class AdminHandler : IAdminHandler
         _redis = redis;
         _transactionProvider = transactionProvider;
         _auditLog = auditLog;
+        _logger = logger;
     }
 
     /// <inheritdoc/>
@@ -91,7 +82,7 @@ public sealed class AdminHandler : IAdminHandler
 
         List<SettingEntry> entries = settings.Select(s =>
         {
-            SettingBounds.TryGetValue(s.Key, out (int Min, int Max) bounds);
+            ServerSettingValidation.Bounds.TryGetValue(s.Key, out (int Min, int Max) bounds);
 
             return new SettingEntry
             {
@@ -114,46 +105,12 @@ public sealed class AdminHandler : IAdminHandler
         foreach (SettingUpdateEntry update in updates)
         {
             ServerConfigurationSettingKeys keyEnum = (ServerConfigurationSettingKeys)update.Key;
-            if (Enum.IsDefined(keyEnum) == false ||
-                keyEnum == ServerConfigurationSettingKeys.None)
+            string? validationError = ServerSettingValidation.Validate(keyEnum, update.Value);
+            if (validationError is not null)
             {
-                return ServiceResult<List<SettingEntry>>.BadRequest($"Invalid setting key: {update.Key}");
-            }
-
-            if (string.IsNullOrWhiteSpace(update.Value))
-            {
-                return ServiceResult<List<SettingEntry>>.BadRequest($"Value must not be empty for key: {update.Key}");
-            }
-
-            if (keyEnum == ServerConfigurationSettingKeys.AllowUserSignup)
-            {
-                if (string.Equals(update.Value, "true", StringComparison.OrdinalIgnoreCase) == false &&
-                    string.Equals(update.Value, "false", StringComparison.OrdinalIgnoreCase) == false)
-                {
-                    return ServiceResult<List<SettingEntry>>.BadRequest("AllowUserSignup must be 'true' or 'false'.");
-                }
-            }
-            else
-            {
-                string name = Enum.GetName(keyEnum) ?? keyEnum.ToString();
-
-                if (int.TryParse(update.Value, out int parsed) == false || parsed <= 0)
-                {
-                    return ServiceResult<List<SettingEntry>>.BadRequest($"{name} must be a positive integer.");
-                }
-
-                if (SettingBounds.TryGetValue(keyEnum, out (int Min, int Max) bounds))
-                {
-                    if ((parsed < bounds.Min) || (parsed > bounds.Max))
-                    {
-                        return ServiceResult<List<SettingEntry>>.BadRequest(
-                            $"{name} must be between {bounds.Min} and {bounds.Max}.");
-                    }
-                }
+                return ServiceResult<List<SettingEntry>>.BadRequest(validationError);
             }
         }
-
-        IDatabase redisDb = _redis.GetDatabase();
 
         using IDatabaseTransaction transaction = await _transactionProvider.BeginTransactionAsync(ct);
 
@@ -172,14 +129,19 @@ public sealed class AdminHandler : IAdminHandler
                 key.ToString(),
                 new { Key = key.ToString(), Value = update.Value },
                 ipAddress: null), ct);
-
-            string redisKey = $"config:{key}";
-            await redisDb.KeyDeleteAsync(redisKey);
         }
 
         await transaction.CommitAsync(ct);
 
+        // Invalidate the shared Redis read-through entry and fan out a per-key invalidation to every
+        // replica's in-memory cache — only AFTER the commit, so a reader between the delete and the
+        // commit cannot re-cache the old value.
         _settingsCache.InvalidateCache();
+        foreach (SettingUpdateEntry update in updates)
+        {
+            ServerConfigurationSettingKeys key = (ServerConfigurationSettingKeys)update.Key;
+            await ServerSettingsInvalidation.PublishAsync(_redis, key, _logger);
+        }
 
         return await GetSettingsAsync(ct);
     }

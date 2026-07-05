@@ -9,15 +9,26 @@ using LinqToDB;
 using LinqToDB.Async;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using StackExchange.Redis;
 
 namespace Framlux.FleetManagement.Database.Repositories;
 
 /// <summary>
 /// Singleton cache for server configuration settings.
 /// Uses IServiceScopeFactory internally to create scoped DatabaseContext instances.
+/// A 5-minute TTL is the correctness backstop; a Redis pub/sub subscription on
+/// <see cref="InvalidationChannel"/> clears individual entries promptly across replicas when a setting
+/// changes. Pub/sub is best-effort — if the subscription cannot be established the TTL still bounds
+/// staleness.
 /// </summary>
 public sealed class ServerSettingsCache : IServerSettingsCache
 {
+    /// <summary>
+    /// Redis pub/sub channel carrying per-key settings invalidations. The message body is the integer
+    /// setting key; on receipt the named entry is cleared from the in-memory cache.
+    /// </summary>
+    public const string InvalidationChannel = "config:invalidate";
+
     private static readonly long SettingsCacheTtlTicks = TimeSpan.FromMinutes(5).Ticks;
 
     private readonly ConcurrentDictionary<ServerConfigurationSettingKeys, ServerConfigurationSettings> _cache = [];
@@ -32,11 +43,37 @@ public sealed class ServerSettingsCache : IServerSettingsCache
     /// <param name="serviceScopeFactory">Factory used to create DI scopes for database access</param>
     /// <param name="logger">Internal structured logger</param>
     /// <param name="timeProvider">Time provider used for TTL expiry calculations</param>
-    public ServerSettingsCache(IServiceScopeFactory serviceScopeFactory, ILogger<ServerSettingsCache> logger, TimeProvider timeProvider)
+    /// <param name="redis">Redis connection used to subscribe to cross-replica invalidations.</param>
+    public ServerSettingsCache(IServiceScopeFactory serviceScopeFactory, ILogger<ServerSettingsCache> logger, TimeProvider timeProvider, IConnectionMultiplexer redis)
     {
         _serviceScopeFactory = serviceScopeFactory ?? throw new ArgumentNullException(nameof(serviceScopeFactory));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
+        ArgumentNullException.ThrowIfNull(redis);
+
+        SubscribeToInvalidations(redis);
+    }
+
+    private void SubscribeToInvalidations(IConnectionMultiplexer redis)
+    {
+        try
+        {
+            redis.GetSubscriber().Subscribe(
+                RedisChannel.Literal(InvalidationChannel),
+                (channel, message) =>
+                {
+                    if (int.TryParse(message.ToString(), out int rawKey) &&
+                        Enum.IsDefined((ServerConfigurationSettingKeys)rawKey))
+                    {
+                        _cache.TryRemove((ServerConfigurationSettingKeys)rawKey, out ServerConfigurationSettings? _);
+                    }
+                });
+        }
+        catch (Exception ex) when (ex is RedisConnectionException or RedisTimeoutException)
+        {
+            // Best-effort: without the subscription the 5-minute TTL still bounds staleness.
+            _logger.LogWarning(ex, "Could not subscribe to settings invalidation channel; relying on the cache TTL");
+        }
     }
 
     /// <inheritdoc/>
@@ -76,6 +113,23 @@ public sealed class ServerSettingsCache : IServerSettingsCache
         }
 
         return configSetting.Value;
+    }
+
+    /// <inheritdoc/>
+    public async Task<string?> GetSettingFromDatabaseAsync(ServerConfigurationSettingKeys key, CancellationToken cancellationToken = default)
+    {
+        // Deliberately bypasses the in-memory cache: the shared Redis read-through repopulation must
+        // never seed Redis from a possibly-stale local cache, or a just-cleared Redis key could be
+        // re-filled with the old value on another replica.
+        using IServiceScope scope = _serviceScopeFactory.CreateScope();
+        DatabaseContext dbContext = scope.ServiceProvider.GetRequiredService<DatabaseContext>();
+
+        ServerConfigurationSettings? configSetting = await dbContext.ServerConfigurationSettings
+            .Where(s => s.Key == key)
+            .OrderByDescending(s => s.Version)
+            .FirstOrDefaultAsync(cancellationToken);
+
+        return string.IsNullOrEmpty(configSetting?.Value) ? null : configSetting.Value;
     }
 
     /// <inheritdoc/>

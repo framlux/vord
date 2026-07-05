@@ -1165,7 +1165,8 @@ public sealed class FleetAdminServiceTests
 
         IServiceScopeFactory scopeFactory = CreateScopeFactoryWithServices(new Dictionary<Type, object>
         {
-            { typeof(IServerConfigurationRepository), configRepo }
+            { typeof(IServerConfigurationRepository), configRepo },
+            { typeof(IServerSettingsCache), Substitute.For<IServerSettingsCache>() }
         });
 
         FleetAdminService service = CreateFleetAdminService(scopeFactory);
@@ -1180,6 +1181,36 @@ public sealed class FleetAdminServiceTests
 
         await Assert.That(response.Success).IsTrue();
         await Assert.That(response.Message).IsEqualTo("OK");
+    }
+
+    /// <summary>
+    /// UpdateServerSetting rejects an out-of-range value with InvalidArgument and never writes it, so the
+    /// gRPC path can no longer persist values the REST admin path would reject.
+    /// </summary>
+    [Test]
+    public async Task UpdateServerSetting_OutOfRangeValue_ThrowsInvalidArgumentAndDoesNotWrite()
+    {
+        IServerConfigurationRepository configRepo = Substitute.For<IServerConfigurationRepository>();
+        IServiceScopeFactory scopeFactory = CreateScopeFactoryWithServices(new Dictionary<Type, object>
+        {
+            { typeof(IServerConfigurationRepository), configRepo }
+        });
+
+        FleetAdminService service = CreateFleetAdminService(scopeFactory);
+        ServerCallContext context = CreateContext();
+
+        // AgentHeartbeatSeconds bounds are 10-600; 99999 is out of range.
+        RpcException? exception = await Assert.ThrowsAsync<RpcException>(
+            async () => await service.UpdateServerSetting(
+                new UpdateServerSettingRequest
+                {
+                    Key = (int)ServerConfigurationSettingKeys.AgentHeartbeatSeconds,
+                    Value = "99999"
+                }, context));
+
+        await Assert.That(exception!.StatusCode).IsEqualTo(StatusCode.InvalidArgument);
+        await configRepo.DidNotReceive().UpdateSettingAsync(
+            Arg.Any<ServerConfigurationSettingKeys>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
     }
 
     // ── UpdateTenantSubscription ──

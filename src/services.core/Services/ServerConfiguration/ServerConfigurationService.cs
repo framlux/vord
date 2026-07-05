@@ -125,6 +125,19 @@ public sealed class ServerConfigurationService
         return await GetIntSettingAsync(ServerConfigurationSettingKeys.ServiceStatusSeconds, DefaultServiceStatusSeconds, ct);
     }
 
+    /// <summary>
+    /// Gets whether new users may self-register via social login. Read through the shared Redis cache
+    /// so a flip on any replica is visible to all others promptly (immediately on invalidation, else
+    /// within the Redis TTL) rather than each replica honoring its own stale in-memory copy. Defaults
+    /// to allowed unless the setting is explicitly "false".
+    /// </summary>
+    public async Task<bool> GetAllowUserSignupAsync(CancellationToken ct = default)
+    {
+        string? value = await GetStringSettingAsync(ServerConfigurationSettingKeys.AllowUserSignup, ct);
+
+        return string.Equals(value, "false", StringComparison.OrdinalIgnoreCase) == false;
+    }
+
     private async Task<int> GetIntSettingAsync(ServerConfigurationSettingKeys key, int defaultValue, CancellationToken ct)
     {
         string redisKey = $"config:{key}";
@@ -137,8 +150,9 @@ public sealed class ServerConfigurationService
             return cachedValue;
         }
 
-        // Fall back to database via the existing cache layer.
-        string? value = await _cache.GetSettingAsync(key, ct);
+        // Fall back to the database directly — never the local cache — so a just-invalidated Redis key
+        // is not re-seeded from another replica's stale in-memory value.
+        string? value = await _cache.GetSettingFromDatabaseAsync(key, ct);
         if (value is not null && int.TryParse(value, out int parsed) && parsed > 0)
         {
             // Store in Redis so other replicas can read it.
@@ -148,5 +162,27 @@ public sealed class ServerConfigurationService
         }
 
         return defaultValue;
+    }
+
+    private async Task<string?> GetStringSettingAsync(ServerConfigurationSettingKeys key, CancellationToken ct)
+    {
+        string redisKey = $"config:{key}";
+        IDatabase db = _redis.GetDatabase();
+
+        RedisValue cached = await db.StringGetAsync(redisKey);
+        if (cached.HasValue)
+        {
+            return cached.ToString();
+        }
+
+        // Authoritative read from the database (not the local cache) so a cleared Redis key is not
+        // re-seeded stale, then repopulate the shared cache for other replicas.
+        string? value = await _cache.GetSettingFromDatabaseAsync(key, ct);
+        if (value is not null)
+        {
+            await db.StringSetAsync(redisKey, value, CacheTtl);
+        }
+
+        return value;
     }
 }

@@ -10,6 +10,7 @@ using Framlux.FleetManagement.Services.Core.Handlers;
 using Framlux.FleetManagement.Services.Core.Infrastructure;
 using Framlux.FleetManagement.Services.Core.Options;
 using Framlux.FleetManagement.Services.Core.Security;
+using Framlux.FleetManagement.Services.Core.ServerConfiguration;
 using Framlux.Vord.BillingGrpc;
 using Google.Protobuf.WellKnownTypes;
 using Grpc.Core;
@@ -354,7 +355,7 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
 
         foreach (ServerConfigurationSettings setting in settings)
         {
-            AdminHandler.SettingBounds.TryGetValue(setting.Key, out (int Min, int Max) bounds);
+            ServerSettingValidation.Bounds.TryGetValue(setting.Key, out (int Min, int Max) bounds);
 
             response.Settings.Add(new ServerSetting
             {
@@ -379,15 +380,15 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
     {
         ValidateInternalKey(context);
 
-        if (System.Enum.IsDefined(typeof(ServerConfigurationSettingKeys), request.Key) == false ||
-            request.Key == (int)ServerConfigurationSettingKeys.None)
-        {
-            throw new RpcException(new Status(
-                StatusCode.InvalidArgument,
-                $"Invalid server setting key: {request.Key}"));
-        }
-
         ServerConfigurationSettingKeys key = (ServerConfigurationSettingKeys)request.Key;
+
+        // Validate the value with the same rules the REST admin path enforces so the gRPC path can no
+        // longer persist values the REST path would reject.
+        string? validationError = ServerSettingValidation.Validate(key, request.Value);
+        if (validationError is not null)
+        {
+            throw new RpcException(new Status(StatusCode.InvalidArgument, validationError));
+        }
 
         using IServiceScope scope = _scopeFactory.CreateScope();
         IServerConfigurationRepository configRepo = scope.ServiceProvider.GetRequiredService<IServerConfigurationRepository>();
@@ -403,10 +404,10 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
             };
         }
 
-        // Evict the shared Redis cache entry so other replicas re-read from the database
-        // on their next request, matching the same invalidation the REST admin path performs.
-        string redisKey = $"config:{key}";
-        await _redis.GetDatabase().KeyDeleteAsync(redisKey);
+        // Clear this replica's in-memory cache and fan out the eviction (Redis key delete + pub/sub) so
+        // every replica re-reads from the database, matching the REST admin path.
+        scope.ServiceProvider.GetRequiredService<IServerSettingsCache>().InvalidateCache();
+        await ServerSettingsInvalidation.PublishAsync(_redis, key, _logger);
 
         _logger.LogInformation(
             "FleetAdmin: server setting {Key} updated to '{Value}'", key, request.Value);
