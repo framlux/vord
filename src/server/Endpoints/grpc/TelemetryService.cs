@@ -618,6 +618,15 @@ public sealed class TelemetryService : Telemetry.TelemetryBase
             }
 
             SshSessionRecord ssh = item.SshSession;
+
+            // Only enqueue for actions the job actually evaluates. The agent emits "failed" for every
+            // failed auth attempt; under brute force that would flood the Postgres-backed critical queue
+            // with no-op jobs. The job keeps its own guard as defense in depth.
+            if (SshAlertEvaluationJob.IsEvaluatedAction(ssh.Action) == false)
+            {
+                continue;
+            }
+
             _backgroundJobs.Enqueue<SshAlertEvaluationJob>(
                 job => job.RunAsync(tenantId, machineId, ssh.Action, ssh.User, ssh.SourceIp, ssh.SourcePort, ssh.AuthMethod, CancellationToken.None));
         }

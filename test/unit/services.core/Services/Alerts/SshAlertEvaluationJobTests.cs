@@ -48,4 +48,28 @@ public class SshAlertEvaluationJobTests
             Arg.Any<int>(), Arg.Any<long>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<int>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
         await svc.DidNotReceive().ResolveSshDisconnectAsync(Arg.Any<long>(), Arg.Any<CancellationToken>());
     }
+
+    [Test]
+    public async Task RunAsync_FailedAction_DoesNothing()
+    {
+        // A "failed" item that somehow reaches the job (defense in depth) is still a no-op.
+        IEventAlertService svc = Substitute.For<IEventAlertService>();
+        SshAlertEvaluationJob job = new(svc, NullLogger<SshAlertEvaluationJob>.Instance);
+
+        await job.RunAsync(7, 42, "failed", "root", "1.2.3.4", 22, "password", CancellationToken.None);
+
+        await svc.DidNotReceive().EvaluateSshConnectAsync(
+            Arg.Any<int>(), Arg.Any<long>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<int>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
+        await svc.DidNotReceive().ResolveSshDisconnectAsync(Arg.Any<long>(), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task IsEvaluatedAction_OnlyConnectAndDisconnect_CaseInsensitive()
+    {
+        await Assert.That(SshAlertEvaluationJob.IsEvaluatedAction("connect")).IsTrue();
+        await Assert.That(SshAlertEvaluationJob.IsEvaluatedAction("disconnect")).IsTrue();
+        await Assert.That(SshAlertEvaluationJob.IsEvaluatedAction("CONNECT")).IsTrue();
+        await Assert.That(SshAlertEvaluationJob.IsEvaluatedAction("failed")).IsFalse();
+        await Assert.That(SshAlertEvaluationJob.IsEvaluatedAction("rekey")).IsFalse();
+    }
 }

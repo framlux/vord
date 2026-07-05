@@ -15,6 +15,25 @@ namespace Framlux.FleetManagement.Services.Core.Alerts;
 /// </summary>
 public sealed class SshAlertEvaluationJob
 {
+    /// <summary>The SSH action that opens a session and is evaluated for connect alerts.</summary>
+    public const string ConnectAction = "connect";
+
+    /// <summary>The SSH action that closes a session and resolves an open connect alert.</summary>
+    public const string DisconnectAction = "disconnect";
+
+    /// <summary>
+    /// The SSH actions this job actually acts on. Any other action (e.g. <c>failed</c>, emitted for
+    /// every failed auth attempt) is a no-op, so the ingest path must not enqueue a job for it. This is
+    /// the single source of truth shared by the enqueue filter and the job's own guard.
+    /// </summary>
+    public static readonly IReadOnlySet<string> EvaluatedActions =
+        new HashSet<string>(StringComparer.OrdinalIgnoreCase) { ConnectAction, DisconnectAction };
+
+    /// <summary>Returns true when the given SSH action produces alert work worth enqueuing.</summary>
+    /// <param name="action">The SSH session action.</param>
+    /// <returns><c>true</c> when the action is evaluated; otherwise <c>false</c>.</returns>
+    public static bool IsEvaluatedAction(string action) => EvaluatedActions.Contains(action);
+
     private readonly IEventAlertService _eventAlertService;
     private readonly ILogger<SshAlertEvaluationJob> _logger;
 
@@ -35,11 +54,11 @@ public sealed class SshAlertEvaluationJob
         string user, string sourceIp, int sourcePort, string authMethod,
         CancellationToken ct)
     {
-        if (string.Equals(action, "connect", StringComparison.OrdinalIgnoreCase))
+        if (string.Equals(action, ConnectAction, StringComparison.OrdinalIgnoreCase))
         {
             await _eventAlertService.EvaluateSshConnectAsync(tenantId, machineId, user, sourceIp, sourcePort, authMethod, ct);
         }
-        else if (string.Equals(action, "disconnect", StringComparison.OrdinalIgnoreCase))
+        else if (string.Equals(action, DisconnectAction, StringComparison.OrdinalIgnoreCase))
         {
             await _eventAlertService.ResolveSshDisconnectAsync(machineId, ct);
         }

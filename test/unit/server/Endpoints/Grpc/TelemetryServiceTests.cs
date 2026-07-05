@@ -563,6 +563,50 @@ public sealed class TelemetryServiceTests
     }
 
     [Test]
+    public async Task SubmitTelemetry_MixedSshActions_EnqueuesOnlyEvaluatedActions()
+    {
+        // "failed" (emitted for every failed auth attempt) must not enqueue a no-op job; only connect
+        // and disconnect — the actions the job acts on — are enqueued.
+        using TestDatabaseFactory dbFactory = new();
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+        TelemetryService service = CreateService(scopeFactory);
+        ServerCallContext context = CreateAuthenticatedContext(900, tenantId: 11);
+
+        TelemetryEnvelope envelope = new()
+        {
+            AgentTimestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            BatchId = "batch-ssh-mixed",
+        };
+        foreach ((string action, string eventId) in new[] { ("failed", "e-failed"), ("connect", "e-connect"), ("disconnect", "e-disconnect") })
+        {
+            envelope.Items.Add(new TelemetryItem
+            {
+                EventId = eventId,
+                Type = TelemetryTypes.SshSessionType,
+                SshSession = new SshSessionRecord
+                {
+                    User = "root",
+                    SourceIp = "10.0.0.9",
+                    SourcePort = 22,
+                    Action = action,
+                    AuthMethod = "password",
+                    Timestamp = DateTimeOffset.UtcNow.ToString("o"),
+                },
+            });
+        }
+
+        TelemetryAck ack = await service.SubmitTelemetry(envelope, context);
+
+        await Assert.That(ack.Success).IsTrue();
+        _backgroundJobs.Received(1).Create(
+            Arg.Is<Job>(j => (j.Method.Name == nameof(SshAlertEvaluationJob.RunAsync)) && ((string)j.Args[2] == "connect")), Arg.Any<IState>());
+        _backgroundJobs.Received(1).Create(
+            Arg.Is<Job>(j => (j.Method.Name == nameof(SshAlertEvaluationJob.RunAsync)) && ((string)j.Args[2] == "disconnect")), Arg.Any<IState>());
+        _backgroundJobs.DidNotReceive().Create(
+            Arg.Is<Job>(j => (j.Method.Name == nameof(SshAlertEvaluationJob.RunAsync)) && ((string)j.Args[2] == "failed")), Arg.Any<IState>());
+    }
+
+    [Test]
     public async Task SubmitTelemetry_NonSshTelemetry_DoesNotEnqueueSshEvaluation()
     {
         using TestDatabaseFactory dbFactory = new();
