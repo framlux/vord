@@ -77,6 +77,16 @@ public sealed class SubscriptionService : ISubscriptionService
     }
 
     /// <inheritdoc/>
+    public async Task<bool> IsIngestEligibleAsync(int tenantId, CancellationToken ct)
+    {
+        TenantSubscription? subscription = await _subscriptionRepo.GetSubscriptionForTenantAsync(tenantId, ct);
+
+        // Ingest policy lives here so it has a single home. Current policy: only an Active subscription
+        // may ingest telemetry.
+        return (subscription is not null) && (subscription.Status == SubscriptionStatus.Active);
+    }
+
+    /// <inheritdoc/>
     public async Task<bool> CanApproveMachineAsync(int tenantId, CancellationToken ct)
     {
         TenantSubscription? subscription = await _subscriptionRepo.GetSubscriptionForTenantAsync(tenantId, ct);

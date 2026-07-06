@@ -61,7 +61,7 @@ public sealed class TelemetryServiceTests
             });
 
         _subscriptionService = Substitute.For<ISubscriptionService>();
-        // Default: subscription is active.
+        // Default: subscription is active and ingest-eligible.
         _subscriptionService.GetSubscriptionForTenantAsync(Arg.Any<int>(), Arg.Any<CancellationToken>())
             .Returns(new Database.Models.TenantSubscription
             {
@@ -71,6 +71,7 @@ public sealed class TelemetryServiceTests
                 CreatedAt = DateTimeOffset.UtcNow,
                 UpdatedAt = DateTimeOffset.UtcNow,
             });
+        _subscriptionService.IsIngestEligibleAsync(Arg.Any<int>(), Arg.Any<CancellationToken>()).Returns(true);
     }
 
     /// <summary>

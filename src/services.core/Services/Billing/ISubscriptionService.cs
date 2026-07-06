@@ -17,6 +17,15 @@ public interface ISubscriptionService
     Task<TenantSubscription?> GetSubscriptionForTenantAsync(int tenantId, CancellationToken ct = default);
 
     /// <summary>
+    /// The single source of truth for whether a tenant's machines may ingest telemetry right now. The
+    /// telemetry paths (unary and the mid-stream recheck) call this so ingest policy lives in one place.
+    /// </summary>
+    /// <param name="tenantId">The tenant that owns the ingesting machine.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns><see langword="true"/> when telemetry ingest is allowed for the tenant.</returns>
+    Task<bool> IsIngestEligibleAsync(int tenantId, CancellationToken ct = default);
+
+    /// <summary>
     /// Checks if a tenant can approve another machine.
     /// </summary>
     Task<bool> CanApproveMachineAsync(int tenantId, CancellationToken ct = default);

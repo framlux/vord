@@ -182,6 +182,57 @@ public class SubscriptionServiceTests
     }
 
     [Test]
+    public async Task IsIngestEligible_ActiveSubscription_ReturnsTrue()
+    {
+        (DatabaseRepository repo, TestDatabaseFactory dbFactory) = BuildRepoAndFactory();
+        using (dbFactory)
+        {
+            await dbFactory.Context.InsertWithInt32IdentityAsync(TestDataBuilder.BuildSubscription(tenantId: 1, status: SubscriptionStatus.Active));
+            SubscriptionService service = BuildService(repo);
+
+            await Assert.That(await service.IsIngestEligibleAsync(1, CancellationToken.None)).IsTrue();
+        }
+    }
+
+    [Test]
+    public async Task IsIngestEligible_PastDueSubscription_ReturnsFalse()
+    {
+        (DatabaseRepository repo, TestDatabaseFactory dbFactory) = BuildRepoAndFactory();
+        using (dbFactory)
+        {
+            await dbFactory.Context.InsertWithInt32IdentityAsync(TestDataBuilder.BuildSubscription(tenantId: 1, status: SubscriptionStatus.PastDue));
+            SubscriptionService service = BuildService(repo);
+
+            await Assert.That(await service.IsIngestEligibleAsync(1, CancellationToken.None)).IsFalse();
+        }
+    }
+
+    [Test]
+    public async Task IsIngestEligible_CanceledSubscription_ReturnsFalse()
+    {
+        (DatabaseRepository repo, TestDatabaseFactory dbFactory) = BuildRepoAndFactory();
+        using (dbFactory)
+        {
+            await dbFactory.Context.InsertWithInt32IdentityAsync(TestDataBuilder.BuildSubscription(tenantId: 1, status: SubscriptionStatus.Canceled));
+            SubscriptionService service = BuildService(repo);
+
+            await Assert.That(await service.IsIngestEligibleAsync(1, CancellationToken.None)).IsFalse();
+        }
+    }
+
+    [Test]
+    public async Task IsIngestEligible_NoSubscription_ReturnsFalse()
+    {
+        (DatabaseRepository repo, TestDatabaseFactory dbFactory) = BuildRepoAndFactory();
+        using (dbFactory)
+        {
+            SubscriptionService service = BuildService(repo);
+
+            await Assert.That(await service.IsIngestEligibleAsync(999, CancellationToken.None)).IsFalse();
+        }
+    }
+
+    [Test]
     public async Task CanApproveMachine_UnlimitedMachines_ReturnsTrue()
     {
         (DatabaseRepository repo, TestDatabaseFactory dbFactory) = BuildRepoAndFactory();

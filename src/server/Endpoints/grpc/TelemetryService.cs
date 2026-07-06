@@ -664,9 +664,8 @@ public sealed class TelemetryService : Telemetry.TelemetryBase
             return false;
         }
 
-        Database.Models.TenantSubscription? subscription = await _subscriptionService.GetSubscriptionForTenantAsync(tenantId, ct);
-
-        return subscription is not null && subscription.Status == Database.Enums.SubscriptionStatus.Active;
+        // The single ingest-eligibility gate owns the policy (Active-only today).
+        return await _subscriptionService.IsIngestEligibleAsync(tenantId, ct);
     }
 
     private static int ExtractTenantId(ServerCallContext context)
