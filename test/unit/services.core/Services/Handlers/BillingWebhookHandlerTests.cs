@@ -8,6 +8,7 @@ using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Services.Core.Billing;
 using Framlux.FleetManagement.Services.Core.Handlers;
+using Framlux.FleetManagement.Services.Core.Security;
 using Framlux.FleetManagement.Test.Infrastructure;
 using LinqToDB;
 using LinqToDB.Async;
@@ -157,6 +158,42 @@ public class BillingWebhookHandlerTests
         await Assert.That(updated!.Tier).IsEqualTo(SubscriptionTier.Free);
         await Assert.That(updated.Status).IsEqualTo(SubscriptionStatus.Active);
         await cleanupService.Received(1).CleanupForFreeTierAsync(1, Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task HandleSubscriptionDeletedAsync_EndToEnd_TrimsMachinesToFreeLimit()
+    {
+        // The full subscription.deleted flow with a real cleanup service must leave the tenant Free with
+        // no more active machines than the Free limit (3), keeping the oldest and trimming the newest.
+        using TestDatabaseFactory dbFactory = new();
+        await SeedTierFeatureLimitsAsync(dbFactory.Context);
+        await dbFactory.Context.InsertWithInt32IdentityAsync(TestDataBuilder.BuildSubscription(tenantId: 1, tier: SubscriptionTier.Pro));
+
+        DateTimeOffset t0 = DateTimeOffset.UtcNow.AddDays(-10);
+        long[] ids = new long[5];
+        for (int i = 0; i < 5; i++)
+        {
+            Machine m = TestDataBuilder.BuildMachine(tenantId: 1);
+            m.RegisteredOn = t0.AddDays(i); // ids[0] oldest ... ids[4] newest
+            ids[i] = await dbFactory.Context.InsertWithInt64IdentityAsync(m);
+        }
+
+        DatabaseRepository repo = new(dbFactory.Context, new NullLogger<DatabaseRepository>());
+        IApiKeyCacheInvalidator invalidator = Substitute.For<IApiKeyCacheInvalidator>();
+        DowngradeCleanupService cleanup = new(repo, repo, repo, repo, repo, repo, invalidator, new NullLogger<DowngradeCleanupService>());
+        BillingWebhookHandler handler = CreateHandler(dbFactory, cleanupService: cleanup);
+
+        await handler.HandleSubscriptionDeletedAsync(1, CancellationToken.None);
+
+        TenantSubscription reverted = await dbFactory.Context.TenantSubscriptions.FirstAsync(s => s.TenantId == 1);
+        await Assert.That(reverted.Tier).IsEqualTo(SubscriptionTier.Free);
+
+        int active = await dbFactory.Context.Machines.CountAsync(m => (m.TenantId == 1) && (m.IsDeleted == false));
+        await Assert.That(active).IsEqualTo(3);
+        // The three oldest survive and can still authenticate; the two newest were trimmed.
+        await Assert.That((await dbFactory.Context.Machines.FirstAsync(m => m.Id == ids[0])).IsDeleted).IsFalse();
+        await Assert.That((await dbFactory.Context.Machines.FirstAsync(m => m.Id == ids[4])).IsDeleted).IsTrue();
+        await invalidator.Received(2).InvalidateByHashAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
     }
 
     [Test]

@@ -6,10 +6,12 @@ using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Services.Core.Billing;
+using Framlux.FleetManagement.Services.Core.Security;
 using Framlux.FleetManagement.Test.Infrastructure;
 using LinqToDB;
 using LinqToDB.Async;
 using Microsoft.Extensions.Logging.Abstractions;
+using NSubstitute;
 
 namespace Framlux.FleetManagement.Test.Services.Billing;
 
@@ -37,7 +39,7 @@ public class DowngradeCleanupServiceTests
             TenantOidcConfiguration oidcConfig = TestDataBuilder.BuildTenantOidcConfiguration(tenantId: 1, isEnabled: true);
             oidcConfig.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(oidcConfig);
 
-            DowngradeCleanupService service = new(repo, repo, repo, new NullLogger<DowngradeCleanupService>());
+            DowngradeCleanupService service = new(repo, repo, repo, repo, repo, repo, Substitute.For<IApiKeyCacheInvalidator>(), new NullLogger<DowngradeCleanupService>());
 
             await service.CleanupForProTierAsync(1, CancellationToken.None);
 
@@ -58,7 +60,7 @@ public class DowngradeCleanupServiceTests
                 tenantId: 1, isCustom: true, isEnabled: true);
             customRule.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(customRule);
 
-            DowngradeCleanupService service = new(repo, repo, repo, new NullLogger<DowngradeCleanupService>());
+            DowngradeCleanupService service = new(repo, repo, repo, repo, repo, repo, Substitute.For<IApiKeyCacheInvalidator>(), new NullLogger<DowngradeCleanupService>());
 
             await service.CleanupForProTierAsync(1, CancellationToken.None);
 
@@ -85,7 +87,7 @@ public class DowngradeCleanupServiceTests
                 tenantId: 1, isCustom: true, isEnabled: true);
             customRule.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(customRule);
 
-            DowngradeCleanupService service = new(repo, repo, repo, new NullLogger<DowngradeCleanupService>());
+            DowngradeCleanupService service = new(repo, repo, repo, repo, repo, repo, Substitute.For<IApiKeyCacheInvalidator>(), new NullLogger<DowngradeCleanupService>());
 
             await service.CleanupForProTierAsync(1, CancellationToken.None);
 
@@ -120,7 +122,7 @@ public class DowngradeCleanupServiceTests
                 tenantId: 2, isCustom: true, isEnabled: true);
             ruleTenant2.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(ruleTenant2);
 
-            DowngradeCleanupService service = new(repo, repo, repo, new NullLogger<DowngradeCleanupService>());
+            DowngradeCleanupService service = new(repo, repo, repo, repo, repo, repo, Substitute.For<IApiKeyCacheInvalidator>(), new NullLogger<DowngradeCleanupService>());
 
             await service.CleanupForProTierAsync(1, CancellationToken.None);
 
@@ -145,7 +147,7 @@ public class DowngradeCleanupServiceTests
             TenantOidcConfiguration oidcConfig = TestDataBuilder.BuildTenantOidcConfiguration(tenantId: 1, isEnabled: false);
             oidcConfig.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(oidcConfig);
 
-            DowngradeCleanupService service = new(repo, repo, repo, new NullLogger<DowngradeCleanupService>());
+            DowngradeCleanupService service = new(repo, repo, repo, repo, repo, repo, Substitute.For<IApiKeyCacheInvalidator>(), new NullLogger<DowngradeCleanupService>());
 
             // Should complete without error even when nothing needs disabling
             await service.CleanupForProTierAsync(1, CancellationToken.None);
@@ -173,7 +175,7 @@ public class DowngradeCleanupServiceTests
                 tenantId: 1, isCustom: true, isEnabled: true);
             customRule.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(customRule);
 
-            DowngradeCleanupService service = new(repo, repo, repo, new NullLogger<DowngradeCleanupService>());
+            DowngradeCleanupService service = new(repo, repo, repo, repo, repo, repo, Substitute.For<IApiKeyCacheInvalidator>(), new NullLogger<DowngradeCleanupService>());
 
             await service.CleanupForFreeTierAsync(1, CancellationToken.None);
 
@@ -194,7 +196,7 @@ public class DowngradeCleanupServiceTests
             TenantOidcConfiguration oidcConfig = TestDataBuilder.BuildTenantOidcConfiguration(tenantId: 1, isEnabled: true);
             oidcConfig.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(oidcConfig);
 
-            DowngradeCleanupService service = new(repo, repo, repo, new NullLogger<DowngradeCleanupService>());
+            DowngradeCleanupService service = new(repo, repo, repo, repo, repo, repo, Substitute.For<IApiKeyCacheInvalidator>(), new NullLogger<DowngradeCleanupService>());
 
             await service.CleanupForFreeTierAsync(1, CancellationToken.None);
 
@@ -223,7 +225,7 @@ public class DowngradeCleanupServiceTests
             };
             integration.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(integration);
 
-            DowngradeCleanupService service = new(repo, repo, repo, new NullLogger<DowngradeCleanupService>());
+            DowngradeCleanupService service = new(repo, repo, repo, repo, repo, repo, Substitute.For<IApiKeyCacheInvalidator>(), new NullLogger<DowngradeCleanupService>());
 
             await service.CleanupForFreeTierAsync(1, CancellationToken.None);
 
@@ -260,7 +262,7 @@ public class DowngradeCleanupServiceTests
             };
             integrationTenant2.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(integrationTenant2);
 
-            DowngradeCleanupService service = new(repo, repo, repo, new NullLogger<DowngradeCleanupService>());
+            DowngradeCleanupService service = new(repo, repo, repo, repo, repo, repo, Substitute.For<IApiKeyCacheInvalidator>(), new NullLogger<DowngradeCleanupService>());
 
             await service.CleanupForFreeTierAsync(1, CancellationToken.None);
 
@@ -287,7 +289,7 @@ public class DowngradeCleanupServiceTests
         (DatabaseRepository repo, TestDatabaseFactory dbFactory) = BuildRepoAndFactory();
         using (dbFactory)
         {
-            DowngradeCleanupService service = new(repo, repo, repo, new NullLogger<DowngradeCleanupService>());
+            DowngradeCleanupService service = new(repo, repo, repo, repo, repo, repo, Substitute.For<IApiKeyCacheInvalidator>(), new NullLogger<DowngradeCleanupService>());
 
             // Should not throw when no resources exist for the tenant
             await service.CleanupForFreeTierAsync(1, CancellationToken.None);
@@ -312,7 +314,7 @@ public class DowngradeCleanupServiceTests
             };
             integration.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(integration);
 
-            DowngradeCleanupService service = new(repo, repo, repo, new NullLogger<DowngradeCleanupService>());
+            DowngradeCleanupService service = new(repo, repo, repo, repo, repo, repo, Substitute.For<IApiKeyCacheInvalidator>(), new NullLogger<DowngradeCleanupService>());
 
             // Should complete without error when integration is already disabled
             await service.CleanupForFreeTierAsync(1, CancellationToken.None);
@@ -321,6 +323,99 @@ public class DowngradeCleanupServiceTests
                 .FirstOrDefaultAsync(i => i.Id == integration.Id);
             await Assert.That(updated).IsNotNull();
             await Assert.That(updated!.IsEnabled).IsFalse();
+        }
+    }
+
+    // --- Machine trimming to the Free limit ---
+
+    private static async Task SeedFreeMachineLimitAsync(TestDatabaseFactory dbFactory, int machineLimit)
+    {
+        await dbFactory.Context.InsertAsync(new TierFeatureLimit
+        {
+            Tier = SubscriptionTier.Free,
+            MachineLimit = machineLimit,
+            RetentionDays = 1,
+            AlertRuleLimit = 0,
+            WebhookLimit = 0,
+            MemberLimit = 1,
+            UpdatedAt = DateTimeOffset.UtcNow,
+        });
+    }
+
+    [Test]
+    public async Task CleanupForFreeTier_OverLimit_SoftDeletesNewestMachines_KeepsOldest()
+    {
+        (DatabaseRepository repo, TestDatabaseFactory dbFactory) = BuildRepoAndFactory();
+        using (dbFactory)
+        {
+            await SeedFreeMachineLimitAsync(dbFactory, machineLimit: 1);
+
+            DateTimeOffset t0 = DateTimeOffset.UtcNow.AddDays(-10);
+            long[] ids = new long[4];
+            for (int i = 0; i < 4; i++)
+            {
+                Machine m = TestDataBuilder.BuildMachine(tenantId: 1);
+                m.RegisteredOn = t0.AddDays(i); // ids[0] oldest, ids[3] newest
+                ids[i] = await dbFactory.Context.InsertWithInt64IdentityAsync(m);
+            }
+
+            IApiKeyCacheInvalidator invalidator = Substitute.For<IApiKeyCacheInvalidator>();
+            DowngradeCleanupService service = new(repo, repo, repo, repo, repo, repo, invalidator, new NullLogger<DowngradeCleanupService>());
+
+            await service.CleanupForFreeTierAsync(1, CancellationToken.None);
+
+            // The oldest-registered machine survives; the three newest are soft-deleted.
+            await Assert.That((await dbFactory.Context.Machines.FirstAsync(m => m.Id == ids[0])).IsDeleted).IsFalse();
+            for (int i = 1; i < 4; i++)
+            {
+                await Assert.That((await dbFactory.Context.Machines.FirstAsync(m => m.Id == ids[i])).IsDeleted).IsTrue();
+            }
+
+            // One API-key cache invalidation and one audit entry per trimmed machine.
+            await invalidator.Received(3).InvalidateByHashAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
+            int trimAudits = await dbFactory.Context.AuditLog.CountAsync(a => a.Action == AuditAction.MachineDeleted);
+            await Assert.That(trimAudits).IsEqualTo(3);
+        }
+    }
+
+    [Test]
+    public async Task CleanupForFreeTier_AtLimit_TrimsNothing()
+    {
+        (DatabaseRepository repo, TestDatabaseFactory dbFactory) = BuildRepoAndFactory();
+        using (dbFactory)
+        {
+            await SeedFreeMachineLimitAsync(dbFactory, machineLimit: 2);
+
+            for (int i = 0; i < 2; i++)
+            {
+                await dbFactory.Context.InsertWithInt64IdentityAsync(TestDataBuilder.BuildMachine(tenantId: 1));
+            }
+
+            IApiKeyCacheInvalidator invalidator = Substitute.For<IApiKeyCacheInvalidator>();
+            DowngradeCleanupService service = new(repo, repo, repo, repo, repo, repo, invalidator, new NullLogger<DowngradeCleanupService>());
+
+            await service.CleanupForFreeTierAsync(1, CancellationToken.None);
+
+            int active = await dbFactory.Context.Machines.CountAsync(m => (m.TenantId == 1) && (m.IsDeleted == false));
+            await Assert.That(active).IsEqualTo(2);
+            await invalidator.DidNotReceive().InvalidateByHashAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
+        }
+    }
+
+    [Test]
+    public async Task CleanupForFreeTier_ZeroMachines_IsNoOp()
+    {
+        (DatabaseRepository repo, TestDatabaseFactory dbFactory) = BuildRepoAndFactory();
+        using (dbFactory)
+        {
+            await SeedFreeMachineLimitAsync(dbFactory, machineLimit: 1);
+
+            IApiKeyCacheInvalidator invalidator = Substitute.For<IApiKeyCacheInvalidator>();
+            DowngradeCleanupService service = new(repo, repo, repo, repo, repo, repo, invalidator, new NullLogger<DowngradeCleanupService>());
+
+            await service.CleanupForFreeTierAsync(1, CancellationToken.None);
+
+            await invalidator.DidNotReceive().InvalidateByHashAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
         }
     }
 }
