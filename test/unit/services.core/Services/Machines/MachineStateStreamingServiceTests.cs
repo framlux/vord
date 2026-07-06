@@ -249,6 +249,31 @@ public class MachineStateStreamingServiceTests
     }
 
     [Test]
+    public async Task Startup_ShardCountMismatch_RefusesToStart()
+    {
+        // Cursors were written under 3 shards but this worker is configured for 1 (the default). The
+        // service must refuse to run rather than silently skip telemetry across the re-partitioned shards.
+        IMachineStateRepository spy = Substitute.For<IMachineStateRepository>();
+        spy.GetPersistedShardCountAsync(Arg.Any<CancellationToken>()).Returns(3);
+        Dictionary<Type, object> services = new() { [typeof(IMachineStateRepository)] = spy };
+        TestServiceScopeFactory scopeFactory = new(NoopContext(), services);
+        FixedTimeProvider clock = new(FixedClock);
+        MachineStateStreamingService service = CreateService(scopeFactory, timeProvider: clock, shardCount: 1);
+
+        using CancellationTokenSource cts = new();
+        await service.StartAsync(cts.Token);
+
+        InvalidOperationException? ex = await Assert.ThrowsAsync<InvalidOperationException>(async () => await service.ExecuteTask!);
+        await Assert.That(ex!.Message).Contains("shard count changed");
+        await Assert.That(ex.Message).Contains("MachineStateProjectionCursor");
+
+        await service.StopAsync(CancellationToken.None);
+        // The guard aborts before any batch read.
+        await spy.DidNotReceive().GetTelemetryBatchAsync(
+            Arg.Any<long>(), Arg.Any<DateTimeOffset>(), Arg.Any<DateTimeOffset>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
     public async Task StreamLoop_ReadsBatchBehindTheConfiguredVisibilityLag()
     {
         // The service must ask the repository for rows no newer than now minus the configured lag, so a
@@ -938,7 +963,7 @@ public class MachineStateStreamingServiceTests
         // The final flush must carry the advanced mark (42, the last row's Id) and use a
         // non-cancelled token (CancellationToken.None), not the already-cancelled stopping token.
         await spy.Received().SetProjectionCursorAsync(
-            0, 42L, Arg.Is<CancellationToken>(t => t.IsCancellationRequested == false));
+            Arg.Is(0), Arg.Is(42L), Arg.Any<int>(), Arg.Is<CancellationToken>(t => t.IsCancellationRequested == false));
     }
 
     [Test]
@@ -961,7 +986,7 @@ public class MachineStateStreamingServiceTests
         await service.StopAsync(CancellationToken.None);
 
         await spy.DidNotReceive().SetProjectionCursorAsync(
-            Arg.Any<int>(), Arg.Any<long>(), Arg.Any<CancellationToken>());
+            Arg.Any<int>(), Arg.Any<long>(), Arg.Any<int>(), Arg.Any<CancellationToken>());
     }
 
     // ========== ComputeMaxDiskUsagePercent (logic now lives in TelemetryPayloadParser) ==========

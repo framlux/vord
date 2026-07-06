@@ -110,6 +110,12 @@ public sealed class MachineStateStreamingService : BackgroundService
         _logger.LogInformation(
             "Machine state streaming service started for shard {ShardIndex} of {ShardCount}", _shardIndex, _shardCount);
 
+        // Refuse to run when the configured shard count differs from the one the persisted cursors were
+        // written under: a shard-count change re-partitions machines across shard indices while per-index
+        // cursors stay put, which would silently skip telemetry. This throws out of ExecuteAsync so the
+        // misconfiguration is loud rather than silently corrupting projection.
+        await EnsureShardCountUnchangedAsync(stoppingToken);
+
         while (stoppingToken.IsCancellationRequested == false)
         {
             try
@@ -349,6 +355,21 @@ public sealed class MachineStateStreamingService : BackgroundService
         using IServiceScope scope = _scopeFactory.CreateScope();
         IMachineStateRepository repo = scope.ServiceProvider.GetRequiredService<IMachineStateRepository>();
 
-        await repo.SetProjectionCursorAsync(_shardIndex, _highWaterMark, ct);
+        await repo.SetProjectionCursorAsync(_shardIndex, _highWaterMark, _shardCount, ct);
+    }
+
+    private async Task EnsureShardCountUnchangedAsync(CancellationToken ct)
+    {
+        using IServiceScope scope = _scopeFactory.CreateScope();
+        IMachineStateRepository repo = scope.ServiceProvider.GetRequiredService<IMachineStateRepository>();
+
+        int? persisted = await repo.GetPersistedShardCountAsync(ct);
+        if (persisted.HasValue && (persisted.Value != _shardCount))
+        {
+            throw new InvalidOperationException(
+                $"Projection shard count changed: cursors were written under {persisted.Value} shards but this worker is configured for {_shardCount}. " +
+                "Changing Streaming:ShardCount re-partitions machines across shard indices while per-index cursors stay put, which would silently skip telemetry. " +
+                "To apply the change, stop all projection workers, truncate the MachineStateProjectionCursor table (accepting a bounded re-projection within the 2-day streaming window), then restart.");
+        }
     }
 }

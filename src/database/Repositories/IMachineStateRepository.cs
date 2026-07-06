@@ -238,10 +238,20 @@ public interface IMachineStateRepository
 
     /// <summary>
     /// Upserts the projection cursor for the given shard, inserting a row when none exists or
-    /// advancing the stored position and update timestamp otherwise.
+    /// advancing the stored position and update timestamp otherwise. Records the shard count in
+    /// effect so a later shard-count change can be detected and refused at startup.
     /// </summary>
     /// <param name="shardIndex">The projection shard's zero-based index.</param>
     /// <param name="position">The last <see cref="Models.MachineTelemetry.Id"/> this shard has projected.</param>
+    /// <param name="shardCount">The total shard count in effect for this cursor.</param>
     /// <param name="cancellationToken">A cancellation token.</param>
-    Task SetProjectionCursorAsync(int shardIndex, long position, CancellationToken cancellationToken = default);
+    Task SetProjectionCursorAsync(int shardIndex, long position, int shardCount, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Returns the shard count recorded on any persisted cursor, or <see langword="null"/> when no
+    /// cursor rows exist yet (a first-ever start). Used by the streaming service to refuse to run when
+    /// the configured shard count differs from the one the cursors were written under.
+    /// </summary>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    Task<int?> GetPersistedShardCountAsync(CancellationToken cancellationToken = default);
 }

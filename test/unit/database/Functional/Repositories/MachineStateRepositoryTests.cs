@@ -1417,7 +1417,7 @@ public class MachineStateRepositoryTests
         using TestDatabaseFactory dbFactory = new();
         IMachineStateRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
 
-        await repo.SetProjectionCursorAsync(0, 42);
+        await repo.SetProjectionCursorAsync(0, 42, 1);
 
         long? position = await repo.GetProjectionCursorAsync(0);
 
@@ -1430,8 +1430,8 @@ public class MachineStateRepositoryTests
         using TestDatabaseFactory dbFactory = new();
         IMachineStateRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
 
-        await repo.SetProjectionCursorAsync(0, 42);
-        await repo.SetProjectionCursorAsync(0, 100);
+        await repo.SetProjectionCursorAsync(0, 42, 1);
+        await repo.SetProjectionCursorAsync(0, 100, 1);
 
         long? position = await repo.GetProjectionCursorAsync(0);
         await Assert.That(position).IsEqualTo(100L);
@@ -1449,15 +1449,50 @@ public class MachineStateRepositoryTests
         using TestDatabaseFactory dbFactory = new();
         IMachineStateRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
 
-        await repo.SetProjectionCursorAsync(0, 10);
-        await repo.SetProjectionCursorAsync(1, 20);
+        await repo.SetProjectionCursorAsync(0, 10, 2);
+        await repo.SetProjectionCursorAsync(1, 20, 2);
 
         await Assert.That(await repo.GetProjectionCursorAsync(0)).IsEqualTo(10L);
         await Assert.That(await repo.GetProjectionCursorAsync(1)).IsEqualTo(20L);
 
         // Advancing one shard must not move the other.
-        await repo.SetProjectionCursorAsync(0, 11);
+        await repo.SetProjectionCursorAsync(0, 11, 2);
         await Assert.That(await repo.GetProjectionCursorAsync(0)).IsEqualTo(11L);
         await Assert.That(await repo.GetProjectionCursorAsync(1)).IsEqualTo(20L);
+    }
+
+    [Test]
+    public async Task GetPersistedShardCountAsync_NoCursors_ReturnsNull()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        IMachineStateRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+
+        await Assert.That(await repo.GetPersistedShardCountAsync(CancellationToken.None)).IsNull();
+    }
+
+    [Test]
+    public async Task SetProjectionCursorAsync_PersistsShardCount_AndGetPersistedReturnsIt()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        IMachineStateRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+
+        await repo.SetProjectionCursorAsync(0, 5, shardCount: 4);
+
+        await Assert.That(await repo.GetPersistedShardCountAsync(CancellationToken.None)).IsEqualTo(4);
+    }
+
+    [Test]
+    public async Task SetProjectionCursorAsync_DoubleWriteNewShard_DoesNotThrow()
+    {
+        // Two writes to a brand-new shard must upsert without a primary-key violation (the old
+        // update-then-insert could race on the insert). Sequential double-call is an adequate SQLite
+        // proxy; the real ON CONFLICT round-trip is asserted in the integration project.
+        using TestDatabaseFactory dbFactory = new();
+        IMachineStateRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+
+        await repo.SetProjectionCursorAsync(0, 5, shardCount: 1);
+        await repo.SetProjectionCursorAsync(0, 9, shardCount: 1);
+
+        await Assert.That(await repo.GetProjectionCursorAsync(0)).IsEqualTo(9L);
     }
 }

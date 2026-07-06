@@ -652,12 +652,36 @@ public partial class DatabaseRepository : IMachineStateRepository
     }
 
     /// <inheritdoc/>
-    public async Task SetProjectionCursorAsync(int shardIndex, long position, CancellationToken cancellationToken)
+    public async Task SetProjectionCursorAsync(int shardIndex, long position, int shardCount, CancellationToken cancellationToken)
     {
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+
+        // Atomic upsert so two replicas advancing a brand-new shard's cursor cannot race on a
+        // primary-key violation (the previous update-then-insert could).
+        if (_db.DataProvider.Name.Contains("PostgreSQL"))
+        {
+            await _db.ExecuteAsync(
+                """
+                INSERT INTO "MachineStateProjectionCursor" ("ShardIndex", "Position", "ShardCount", "UpdatedAt")
+                VALUES (@shardIndex, @position, @shardCount, @updatedAt)
+                ON CONFLICT ("ShardIndex")
+                DO UPDATE SET "Position" = EXCLUDED."Position", "ShardCount" = EXCLUDED."ShardCount", "UpdatedAt" = EXCLUDED."UpdatedAt"
+                """,
+                cancellationToken,
+                new DataParameter("@shardIndex", shardIndex),
+                new DataParameter("@position", position),
+                new DataParameter("@shardCount", shardCount),
+                new DataParameter("@updatedAt", now));
+
+            return;
+        }
+
+        // SQLite test path: update-then-insert (single-writer, so no PK race).
         int updated = await _db.MachineStateProjectionCursors
             .Where(c => c.ShardIndex == shardIndex)
             .Set(c => c.Position, position)
-            .Set(c => c.UpdatedAt, DateTimeOffset.UtcNow)
+            .Set(c => c.ShardCount, shardCount)
+            .Set(c => c.UpdatedAt, now)
             .UpdateAsync(cancellationToken);
 
         if (updated == 0)
@@ -666,9 +690,21 @@ public partial class DatabaseRepository : IMachineStateRepository
             {
                 ShardIndex = shardIndex,
                 Position = position,
-                UpdatedAt = DateTimeOffset.UtcNow,
+                ShardCount = shardCount,
+                UpdatedAt = now,
             }, token: cancellationToken);
         }
+    }
+
+    /// <inheritdoc/>
+    public async Task<int?> GetPersistedShardCountAsync(CancellationToken cancellationToken)
+    {
+        List<int> counts = await _db.MachineStateProjectionCursors
+            .Select(c => c.ShardCount)
+            .Take(1)
+            .ToListAsync(cancellationToken);
+
+        return counts.Count > 0 ? counts[0] : null;
     }
 
     private IQueryable<FleetMachineRow> BuildFleetBaseQuery(int tenantId)

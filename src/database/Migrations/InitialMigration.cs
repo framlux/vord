@@ -373,6 +373,7 @@ public sealed class InitialMigration : Migration
         Create.Table(TableNames.MachineStateProjectionCursor)
             .WithColumn("ShardIndex").AsInt32().PrimaryKey().NotNullable()
             .WithColumn("Position").AsInt64().NotNullable()
+            .WithColumn("ShardCount").AsInt32().NotNullable().WithDefaultValue(1)
             .WithColumn("UpdatedAt").AsDateTimeOffset().NotNullable();
 
         Create.Table(TableNames.RegistrationTokens)

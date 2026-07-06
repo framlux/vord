@@ -29,6 +29,14 @@ public sealed class MachineStateProjectionCursor
     public long Position { get; set; }
 
     /// <summary>
+    /// The total shard count in effect when this cursor was written. Machines are partitioned across
+    /// shard indices by <c>MachineId % ShardCount</c>, so changing the count re-partitions machines while
+    /// cursors stay per-index; a startup guard refuses to run when this differs from the configured count.
+    /// </summary>
+    [Column("ShardCount"), NotNull]
+    public int ShardCount { get; set; }
+
+    /// <summary>
     /// When this cursor was last advanced.
     /// </summary>
     [Column("UpdatedAt"), NotNull]
