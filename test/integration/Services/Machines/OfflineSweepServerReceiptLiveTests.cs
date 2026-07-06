@@ -144,7 +144,8 @@ public sealed class OfflineSweepServerReceiptLiveTests
         DateTimeOffset now = DateTimeOffset.UtcNow;
 
         // The agent's clock is three days fast (ReceivedAt in the future), but the server actually
-        // received these rows well beyond the offline threshold ago (ServerReceivedAt an hour back).
+        // received these rows well beyond the offline threshold ago. A full day back keeps the machine
+        // decisively offline against Postgres NOW() even if the container clock is skewed from the host.
         MachineTelemetry skewed1 = new()
         {
             MachineId = machineId,
@@ -152,7 +153,7 @@ public sealed class OfflineSweepServerReceiptLiveTests
             TelemetryType = 6,
             Payload = """{ "cpu_usage_percent": 10 }""",
             ReceivedAt = now.AddDays(3),
-            ServerReceivedAt = now.AddHours(-1),
+            ServerReceivedAt = now.AddDays(-1),
             SourceEventId = Guid.NewGuid().ToString("N"),
         };
         MachineTelemetry skewed2 = new()
@@ -162,7 +163,7 @@ public sealed class OfflineSweepServerReceiptLiveTests
             TelemetryType = 7,
             Payload = """{ "memory_usage_percent": 20 }""",
             ReceivedAt = now.AddDays(3).AddMinutes(1),
-            ServerReceivedAt = now.AddHours(-1).AddMinutes(1),
+            ServerReceivedAt = now.AddDays(-1).AddMinutes(1),
             SourceEventId = Guid.NewGuid().ToString("N"),
         };
         await db.InsertAsync(skewed1);
@@ -179,9 +180,9 @@ public sealed class OfflineSweepServerReceiptLiveTests
             new MachineSummaryPatch { MachineId = machineId, LastSeenAt = statePatch.LastSeenAt },
             CancellationToken.None);
 
-        // The projected LastSeenAt must be the max server receipt (an hour ago), not the future agent time.
+        // The projected LastSeenAt must be the max server receipt (a day ago), not the future agent time.
         MachineStateSummary projected = await db.GetTable<MachineStateSummary>().FirstAsync(x => x.MachineId == machineId);
-        await Assert.That(projected.LastSeenAt).IsEqualTo(now.AddHours(-1).AddMinutes(1));
+        await Assert.That(projected.LastSeenAt).IsEqualTo(now.AddDays(-1).AddMinutes(1));
 
         // Run the real per-tenant offline sweep with a 5-minute threshold.
         await repo.SweepHealthStatusAsync(
