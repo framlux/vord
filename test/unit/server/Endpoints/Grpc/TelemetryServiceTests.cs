@@ -412,15 +412,9 @@ public sealed class TelemetryServiceTests
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
 
         ISubscriptionService inactiveSubService = Substitute.For<ISubscriptionService>();
-        inactiveSubService.GetSubscriptionForTenantAsync(Arg.Any<int>(), Arg.Any<CancellationToken>())
-            .Returns(new TenantSubscription
-            {
-                TenantId = 1,
-                Tier = Database.Enums.SubscriptionTier.Free,
-                Status = Database.Enums.SubscriptionStatus.PastDue,
-                CreatedAt = DateTimeOffset.UtcNow,
-                UpdatedAt = DateTimeOffset.UtcNow,
-            });
+        // The tenant is not ingest-eligible (e.g. Canceled). The gate is the single policy home; here we
+        // drive it directly so this test pins the gate wiring, not the specific status-to-eligibility map.
+        inactiveSubService.IsIngestEligibleAsync(Arg.Any<int>(), Arg.Any<CancellationToken>()).Returns(false);
 
         TelemetryService service = new(scopeFactory, _dedupService, inactiveSubService, _backgroundJobs, NoOpPipeline, BuildTestRedis(), Options.Create(new TelemetryOptions()), new ProcessStreamSlotLimiter(5000), _timeProvider, _logger);
         ServerCallContext context = CreateAuthenticatedContext(100);
@@ -721,15 +715,9 @@ public sealed class TelemetryServiceTests
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
 
         ISubscriptionService inactiveSubService = Substitute.For<ISubscriptionService>();
-        inactiveSubService.GetSubscriptionForTenantAsync(Arg.Any<int>(), Arg.Any<CancellationToken>())
-            .Returns(new TenantSubscription
-            {
-                TenantId = 1,
-                Tier = Database.Enums.SubscriptionTier.Free,
-                Status = Database.Enums.SubscriptionStatus.PastDue,
-                CreatedAt = DateTimeOffset.UtcNow,
-                UpdatedAt = DateTimeOffset.UtcNow,
-            });
+        // The tenant is not ingest-eligible (e.g. Canceled). The gate is the single policy home; here we
+        // drive it directly so this test pins the gate wiring, not the specific status-to-eligibility map.
+        inactiveSubService.IsIngestEligibleAsync(Arg.Any<int>(), Arg.Any<CancellationToken>()).Returns(false);
 
         TelemetryService service = new(scopeFactory, _dedupService, inactiveSubService, _backgroundJobs, NoOpPipeline, BuildTestRedis(), Options.Create(new TelemetryOptions()), new ProcessStreamSlotLimiter(5000), _timeProvider, _logger);
         ServerCallContext context = CreateAuthenticatedContext(100);

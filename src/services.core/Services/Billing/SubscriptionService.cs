@@ -81,9 +81,12 @@ public sealed class SubscriptionService : ISubscriptionService
     {
         TenantSubscription? subscription = await _subscriptionRepo.GetSubscriptionForTenantAsync(tenantId, ct);
 
-        // Ingest policy lives here so it has a single home. Current policy: only an Active subscription
-        // may ingest telemetry.
-        return (subscription is not null) && (subscription.Status == SubscriptionStatus.Active);
+        // Ingest policy lives here so it has a single home. PastDue is treated as a grace period —
+        // ingest continues during Stripe dunning, matching the web app's "PastDue keeps access" behavior.
+        // Dunning ends in either recovery (Active) or customer.subscription.deleted, which deactivates and
+        // stops ingest. Canceled and no-subscription are not eligible.
+        return (subscription is not null) &&
+               ((subscription.Status == SubscriptionStatus.Active) || (subscription.Status == SubscriptionStatus.PastDue));
     }
 
     /// <inheritdoc/>

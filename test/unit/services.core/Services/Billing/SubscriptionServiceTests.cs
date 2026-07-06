@@ -195,15 +195,16 @@ public class SubscriptionServiceTests
     }
 
     [Test]
-    public async Task IsIngestEligible_PastDueSubscription_ReturnsFalse()
+    public async Task IsIngestEligible_PastDueSubscription_ReturnsTrue_GracePeriod()
     {
+        // PastDue is a Stripe dunning grace period — ingest continues, matching web access.
         (DatabaseRepository repo, TestDatabaseFactory dbFactory) = BuildRepoAndFactory();
         using (dbFactory)
         {
             await dbFactory.Context.InsertWithInt32IdentityAsync(TestDataBuilder.BuildSubscription(tenantId: 1, status: SubscriptionStatus.PastDue));
             SubscriptionService service = BuildService(repo);
 
-            await Assert.That(await service.IsIngestEligibleAsync(1, CancellationToken.None)).IsFalse();
+            await Assert.That(await service.IsIngestEligibleAsync(1, CancellationToken.None)).IsTrue();
         }
     }
 

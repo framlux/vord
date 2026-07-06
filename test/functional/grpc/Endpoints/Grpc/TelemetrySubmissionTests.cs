@@ -113,9 +113,9 @@ public sealed class TelemetrySubmissionTests
     }
 
     [Test]
-    public async Task SubmitTelemetry_PastDueSubscription_ReturnsSubscriptionNotActiveError()
+    public async Task SubmitTelemetry_PastDueSubscription_IsAccepted_GracePeriod()
     {
-        // Arrange — PastDue subscriptions should also be rejected since only Active is accepted
+        // Arrange — PastDue is a Stripe dunning grace period; ingest continues, matching web access.
         using FunctionalTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
 
@@ -147,10 +147,12 @@ public sealed class TelemetrySubmissionTests
         // Act
         TelemetryAck ack = await client.SubmitTelemetryAsync(envelope, headers: headers);
 
-        // Assert — PastDue is not Active, so telemetry should be rejected
-        await Assert.That(ack.Success).IsFalse();
+        // Assert — PastDue is a grace period, so telemetry is accepted and persisted.
+        await Assert.That(ack.Success).IsTrue();
         await Assert.That(ack.BatchId).IsEqualTo(batchId);
-        await Assert.That(ack.ErrorMessage).IsEqualTo("Tenant subscription is not active");
+
+        int storedRows = await db.MachineTelemetry.CountAsync(t => t.MachineId == machineId);
+        await Assert.That(storedRows).IsEqualTo(1);
     }
 
     [Test]
