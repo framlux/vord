@@ -51,6 +51,7 @@ public sealed class MachineStateStreamingService : BackgroundService
     private readonly int _shardIndex;
     private readonly int _shardCount;
     private readonly int _batchSize;
+    private readonly TimeSpan _visibilityLag;
     private readonly string _lockKey;
 
     private long _highWaterMark;
@@ -94,6 +95,7 @@ public sealed class MachineStateStreamingService : BackgroundService
         _shardIndex = shardIndex;
         _shardCount = options.ShardCount;
         _batchSize = options.BatchSize;
+        _visibilityLag = TimeSpan.FromSeconds(Math.Max(0, options.VisibilityLagSeconds));
         _lockKey = StreamingShardCalculator.LockNameForShard(_shardIndex);
     }
 
@@ -204,9 +206,11 @@ public sealed class MachineStateStreamingService : BackgroundService
             using IServiceScope scope = _scopeFactory.CreateScope();
             IMachineStateRepository repo = scope.ServiceProvider.GetRequiredService<IMachineStateRepository>();
 
-            DateTimeOffset streamingWindow = _timeProvider.GetUtcNow().AddDays(-2);
+            DateTimeOffset now = _timeProvider.GetUtcNow();
+            DateTimeOffset streamingWindow = now.AddDays(-2);
+            DateTimeOffset visibilityCutoff = now - _visibilityLag;
             List<MachineTelemetry> batch = await repo.GetTelemetryBatchAsync(
-                _highWaterMark, streamingWindow, _batchSize, _shardIndex, _shardCount, ct);
+                _highWaterMark, streamingWindow, visibilityCutoff, _batchSize, _shardIndex, _shardCount, ct);
 
             if (batch.Count == 0)
             {

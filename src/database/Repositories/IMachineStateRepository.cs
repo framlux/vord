@@ -113,8 +113,10 @@ public interface IMachineStateRepository
     /// <summary>
     /// Fetches the next batch of telemetry rows past the high-water mark within the streaming
     /// window, restricted to the machines owned by the given shard under modulo partitioning.
+    /// Only rows whose server receipt time is at or before <paramref name="visibilityCutoff"/> are
+    /// returned, giving out-of-order commits time to become visible before the cursor passes them.
     /// </summary>
-    Task<List<MachineTelemetry>> GetTelemetryBatchAsync(long highWaterMark, DateTimeOffset streamingWindow, int batchSize, int shardIndex, int shardCount, CancellationToken cancellationToken = default);
+    Task<List<MachineTelemetry>> GetTelemetryBatchAsync(long highWaterMark, DateTimeOffset streamingWindow, DateTimeOffset visibilityCutoff, int batchSize, int shardIndex, int shardCount, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Returns the newest telemetry rows of the given type for the specified machines within the

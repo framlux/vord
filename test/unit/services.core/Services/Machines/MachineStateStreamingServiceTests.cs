@@ -72,6 +72,10 @@ public class MachineStateStreamingServiceTests
         {
             ShardCount = shardCount,
             BatchSize = 200,
+            // Disable the visibility lag for the projection-correctness tests, which seed rows at the
+            // fixed "now"; the lag itself is exercised by GetTelemetryBatchAsync's repository test and
+            // the dedicated cutoff-wiring test below.
+            VisibilityLagSeconds = 0,
         });
     }
 
@@ -137,7 +141,7 @@ public class MachineStateStreamingServiceTests
 
         // The second GetTelemetryBatchAsync call signals that the first batch is fully applied.
         spy.When(r => r.GetTelemetryBatchAsync(
-                Arg.Any<long>(), Arg.Any<DateTimeOffset>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>()))
+                Arg.Any<long>(), Arg.Any<DateTimeOffset>(), Arg.Any<DateTimeOffset>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>()))
             .Do(_ =>
             {
                 if (Interlocked.Increment(ref polls) == 2)
@@ -174,7 +178,7 @@ public class MachineStateStreamingServiceTests
         // Forward the three loop-used calls to the real repository; the loop's second telemetry
         // poll only happens after the high-water mark advances (i.e. after every patch is applied),
         // so completing the signal there yields a deterministic, wall-clock-independent wait.
-        repo.GetTelemetryBatchAsync(Arg.Any<long>(), Arg.Any<DateTimeOffset>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+        repo.GetTelemetryBatchAsync(Arg.Any<long>(), Arg.Any<DateTimeOffset>(), Arg.Any<DateTimeOffset>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
             .Returns(ci =>
             {
                 if (Interlocked.Increment(ref polls) == 2)
@@ -183,7 +187,7 @@ public class MachineStateStreamingServiceTests
                 }
 
                 return real.GetTelemetryBatchAsync(
-                    ci.Arg<long>(), ci.Arg<DateTimeOffset>(), ci.ArgAt<int>(2), ci.ArgAt<int>(3), ci.ArgAt<int>(4), ci.Arg<CancellationToken>());
+                    ci.Arg<long>(), ci.ArgAt<DateTimeOffset>(1), ci.ArgAt<DateTimeOffset>(2), ci.ArgAt<int>(3), ci.ArgAt<int>(4), ci.ArgAt<int>(5), ci.Arg<CancellationToken>());
             });
         repo.ApplySummaryPatchAsync(Arg.Any<MachineSummaryPatch>(), Arg.Any<CancellationToken>())
             .Returns(ci => real.ApplySummaryPatchAsync(ci.Arg<MachineSummaryPatch>(), ci.Arg<CancellationToken>()));
@@ -222,7 +226,7 @@ public class MachineStateStreamingServiceTests
         int polls = 0;
 
         spy.When(r => r.GetTelemetryBatchAsync(
-                Arg.Any<long>(), Arg.Any<DateTimeOffset>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>()))
+                Arg.Any<long>(), Arg.Any<DateTimeOffset>(), Arg.Any<DateTimeOffset>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>()))
             .Do(_ =>
             {
                 if (Interlocked.Increment(ref polls) == 2)
@@ -242,6 +246,49 @@ public class MachineStateStreamingServiceTests
         TestDatabaseFactory factory = new();
 
         return factory.Context;
+    }
+
+    [Test]
+    public async Task StreamLoop_ReadsBatchBehindTheConfiguredVisibilityLag()
+    {
+        // The service must ask the repository for rows no newer than now minus the configured lag, so a
+        // just-committed out-of-order row is held back rather than skipped by the advancing cursor.
+        const int lagSeconds = 5;
+        TaskCompletionSource captured = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        DateTimeOffset observedCutoff = default;
+
+        IMachineStateRepository spy = Substitute.For<IMachineStateRepository>();
+        spy.GetTelemetryBatchAsync(
+                Arg.Any<long>(), Arg.Any<DateTimeOffset>(), Arg.Any<DateTimeOffset>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns(ci =>
+            {
+                observedCutoff = ci.ArgAt<DateTimeOffset>(2);
+                captured.TrySetResult();
+
+                return Task.FromResult(new List<MachineTelemetry>());
+            });
+
+        Dictionary<Type, object> services = new() { [typeof(IMachineStateRepository)] = spy };
+        TestServiceScopeFactory scopeFactory = new(NoopContext(), services);
+
+        FixedTimeProvider clock = new(FixedClock);
+        MachineStateStreamingService service = new(
+            scopeFactory,
+            Substitute.For<ISqlDialect>(),
+            AcquiringAdvisoryLockProvider(),
+            Substitute.For<ILogger<MachineStateStreamingService>>(),
+            0,
+            Microsoft.Extensions.Options.Options.Create(new StreamingOptions { ShardCount = 1, BatchSize = 200, VisibilityLagSeconds = lagSeconds }),
+            clock,
+            FastStartupDelay);
+
+        using CancellationTokenSource cts = new();
+        await service.StartAsync(cts.Token);
+        await captured.Task;
+        await cts.CancelAsync();
+        await service.StopAsync(CancellationToken.None);
+
+        await Assert.That(observedCutoff).IsEqualTo(FixedClock.AddSeconds(-lagSeconds));
     }
 
     [Test]
@@ -286,7 +333,7 @@ public class MachineStateStreamingServiceTests
         // no-clobber-of-a-successor's-cursor guarantee is proven end-to-end by the live
         // pg_terminate_backend integration test, which a mocked lock cannot reproduce.
         await repo.DidNotReceive().GetTelemetryBatchAsync(
-            Arg.Any<long>(), Arg.Any<DateTimeOffset>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>());
+                Arg.Any<long>(), Arg.Any<DateTimeOffset>(), Arg.Any<DateTimeOffset>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>());
         await Assert.That(acquires).IsGreaterThanOrEqualTo(2);
         await deadHandle.Received().IsAliveAsync(Arg.Any<CancellationToken>());
     }
@@ -302,7 +349,7 @@ public class MachineStateStreamingServiceTests
         List<MachineTelemetry> batch = Enumerable.Range(1, 5)
             .Select(i => Row(i, 100, TelemetryTypeIds.CpuUsage, $$"""{ "cpu_usage_percent": {{i}} }""", t0.AddMinutes(i)))
             .ToList();
-        spy.GetTelemetryBatchAsync(Arg.Any<long>(), Arg.Any<DateTimeOffset>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+        spy.GetTelemetryBatchAsync(Arg.Any<long>(), Arg.Any<DateTimeOffset>(), Arg.Any<DateTimeOffset>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
             .Returns(batch, []); // first poll returns the batch, then empty
 
         await RunOneLoopIterationAsync(spy);
@@ -320,13 +367,13 @@ public class MachineStateStreamingServiceTests
         // Intent: a shard-1-of-2 service must fetch using its own shard predicate, so the repository
         // only returns the rows this shard owns.
         IMachineStateRepository spy = Substitute.For<IMachineStateRepository>();
-        spy.GetTelemetryBatchAsync(Arg.Any<long>(), Arg.Any<DateTimeOffset>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+        spy.GetTelemetryBatchAsync(Arg.Any<long>(), Arg.Any<DateTimeOffset>(), Arg.Any<DateTimeOffset>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
             .Returns([], []);
 
         await RunOneLoopIterationAsync(spy, shardIndex: 1, shardCount: 2);
 
         await spy.Received().GetTelemetryBatchAsync(
-            Arg.Any<long>(), Arg.Any<DateTimeOffset>(), Arg.Any<int>(), 1, 2, Arg.Any<CancellationToken>());
+                Arg.Any<long>(), Arg.Any<DateTimeOffset>(), Arg.Any<DateTimeOffset>(), Arg.Any<int>(), 1, 2, Arg.Any<CancellationToken>());
     }
 
     [Test]
@@ -456,7 +503,7 @@ public class MachineStateStreamingServiceTests
             Row(1, 100, TelemetryTypeIds.CpuUsage, """{ "cpu_usage_percent": "high" }""", t0),
             Row(2, 100, TelemetryTypeIds.MemoryUsage, """{ "memory_usage_percent": 25 }""", t0),
         ];
-        spy.GetTelemetryBatchAsync(Arg.Any<long>(), Arg.Any<DateTimeOffset>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+        spy.GetTelemetryBatchAsync(Arg.Any<long>(), Arg.Any<DateTimeOffset>(), Arg.Any<DateTimeOffset>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
             .Returns(batch, []); // first poll returns the batch, then empty
 
         await RunOneLoopIterationAsync(spy);
@@ -469,7 +516,7 @@ public class MachineStateStreamingServiceTests
         // The loop polled a second time using the advanced high-water mark (the last row's Id),
         // which only happens after the batch completed and the mark advanced — no infinite re-fetch.
         await spy.Received().GetTelemetryBatchAsync(
-            2, Arg.Any<DateTimeOffset>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>());
+            2, Arg.Any<DateTimeOffset>(), Arg.Any<DateTimeOffset>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>());
     }
 
     // ========== Per-type projection correctness (drives the public loop) ==========
@@ -857,7 +904,7 @@ public class MachineStateStreamingServiceTests
 
         // First poll yields the batch (advancing the mark to 42), every later poll is empty so the
         // loop idles deterministically on the FixedTimeProvider until cancellation unwinds it.
-        spy.GetTelemetryBatchAsync(Arg.Any<long>(), Arg.Any<DateTimeOffset>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+        spy.GetTelemetryBatchAsync(Arg.Any<long>(), Arg.Any<DateTimeOffset>(), Arg.Any<DateTimeOffset>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
             .Returns(batch, []);
 
         // Completion is gated on the loop's SECOND poll, which only fires after the batch was
@@ -865,7 +912,7 @@ public class MachineStateStreamingServiceTests
         TaskCompletionSource batchConsumed = new(TaskCreationOptions.RunContinuationsAsynchronously);
         int polls = 0;
         spy.When(r => r.GetTelemetryBatchAsync(
-                Arg.Any<long>(), Arg.Any<DateTimeOffset>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>()))
+                Arg.Any<long>(), Arg.Any<DateTimeOffset>(), Arg.Any<DateTimeOffset>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>()))
             .Do(_ =>
             {
                 if (Interlocked.Increment(ref polls) == 2)

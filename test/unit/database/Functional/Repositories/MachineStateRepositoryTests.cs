@@ -476,7 +476,7 @@ public class MachineStateRepositoryTests
 
         // Fetch batch with high water mark of 0 and a streaming window in the past
         DateTimeOffset streamingWindow = now.AddMinutes(-10);
-        List<MachineTelemetry> batch = await repo.GetTelemetryBatchAsync(0, streamingWindow, batchSize: 10, shardIndex: 0, shardCount: 1);
+        List<MachineTelemetry> batch = await repo.GetTelemetryBatchAsync(0, streamingWindow, DateTimeOffset.UtcNow.AddDays(1), batchSize: 10, shardIndex: 0, shardCount: 1);
 
         await Assert.That(batch.Count).IsEqualTo(3);
         // Verify ascending order by Id
@@ -504,11 +504,11 @@ public class MachineStateRepositoryTests
 
         // Get all rows to discover the first row's ID
         DateTimeOffset streamingWindow = now.AddMinutes(-10);
-        List<MachineTelemetry> allRows = await repo.GetTelemetryBatchAsync(0, streamingWindow, batchSize: 10, shardIndex: 0, shardCount: 1);
+        List<MachineTelemetry> allRows = await repo.GetTelemetryBatchAsync(0, streamingWindow, DateTimeOffset.UtcNow.AddDays(1), batchSize: 10, shardIndex: 0, shardCount: 1);
         long firstRowId = allRows[0].Id;
 
         // Fetch batch using first row's ID as the high water mark
-        List<MachineTelemetry> batch = await repo.GetTelemetryBatchAsync(firstRowId, streamingWindow, batchSize: 10, shardIndex: 0, shardCount: 1);
+        List<MachineTelemetry> batch = await repo.GetTelemetryBatchAsync(firstRowId, streamingWindow, DateTimeOffset.UtcNow.AddDays(1), batchSize: 10, shardIndex: 0, shardCount: 1);
 
         await Assert.That(batch.Count).IsEqualTo(1);
         await Assert.That(batch[0].Id > firstRowId).IsTrue();
@@ -536,7 +536,7 @@ public class MachineStateRepositoryTests
 
         // Set the streaming window to 1 hour ago, so the old row is excluded
         DateTimeOffset streamingWindow = now.AddHours(-1);
-        List<MachineTelemetry> batch = await repo.GetTelemetryBatchAsync(0, streamingWindow, batchSize: 10, shardIndex: 0, shardCount: 1);
+        List<MachineTelemetry> batch = await repo.GetTelemetryBatchAsync(0, streamingWindow, DateTimeOffset.UtcNow.AddDays(1), batchSize: 10, shardIndex: 0, shardCount: 1);
 
         await Assert.That(batch.Count).IsEqualTo(1);
         await Assert.That(batch[0].TelemetryType).IsEqualTo((short)2);
@@ -562,13 +562,37 @@ public class MachineStateRepositoryTests
         odd.ServerReceivedAt = now.AddMinutes(-4);
         await repo.InsertTelemetryAsync(odd);
 
-        List<MachineTelemetry> shardZero = await repo.GetTelemetryBatchAsync(0, streamingWindow, batchSize: 10, shardIndex: 0, shardCount: 2);
-        List<MachineTelemetry> shardOne = await repo.GetTelemetryBatchAsync(0, streamingWindow, batchSize: 10, shardIndex: 1, shardCount: 2);
+        List<MachineTelemetry> shardZero = await repo.GetTelemetryBatchAsync(0, streamingWindow, DateTimeOffset.UtcNow.AddDays(1), batchSize: 10, shardIndex: 0, shardCount: 2);
+        List<MachineTelemetry> shardOne = await repo.GetTelemetryBatchAsync(0, streamingWindow, DateTimeOffset.UtcNow.AddDays(1), batchSize: 10, shardIndex: 1, shardCount: 2);
 
         await Assert.That(shardZero.Count).IsEqualTo(1);
         await Assert.That(shardZero[0].MachineId).IsEqualTo(10L);
         await Assert.That(shardOne.Count).IsEqualTo(1);
         await Assert.That(shardOne[0].MachineId).IsEqualTo(11L);
+    }
+
+    [Test]
+    public async Task GetTelemetryBatchAsync_ExcludesRowsNewerThanVisibilityCutoff()
+    {
+        // A row whose server receipt is within the safety-lag window (ServerReceivedAt > cutoff) is held
+        // back even when Id > hwm; rows at or before the cutoff are projected. This gives out-of-order
+        // commits time to become visible before the cursor passes them.
+        using TestDatabaseFactory dbFactory = new();
+        IMachineStateRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        DateTimeOffset streamingWindow = now.AddDays(-1);
+        DateTimeOffset cutoff = now.AddSeconds(-5); // 5-second visibility lag
+
+        // All rows carry a recent (in-window) ReceivedAt; they differ only in ServerReceivedAt.
+        await InsertTelemetryAsync(dbFactory, machineId: 1, telemetryType: 1, receivedAt: now, id: 1, serverReceivedAt: now);                 // too new — excluded
+        await InsertTelemetryAsync(dbFactory, machineId: 1, telemetryType: 1, receivedAt: now, id: 2, serverReceivedAt: now.AddSeconds(-6));  // older than lag — included
+        await InsertTelemetryAsync(dbFactory, machineId: 1, telemetryType: 1, receivedAt: now, id: 3, serverReceivedAt: cutoff);              // exactly at cutoff — included (<=)
+
+        List<MachineTelemetry> batch = await repo.GetTelemetryBatchAsync(0, streamingWindow, cutoff, batchSize: 10, shardIndex: 0, shardCount: 1);
+
+        List<long> ids = batch.Select(r => r.Id).OrderBy(id => id).ToList();
+        await Assert.That(ids).IsEquivalentTo(new List<long> { 2L, 3L });
     }
 
     [Test]
@@ -591,7 +615,7 @@ public class MachineStateRepositoryTests
         await repo.InsertTelemetryAsync(odd);
 
         // shardCount of 1 disables the modulo predicate, so both machines are returned.
-        List<MachineTelemetry> batch = await repo.GetTelemetryBatchAsync(0, streamingWindow, batchSize: 10, shardIndex: 0, shardCount: 1);
+        List<MachineTelemetry> batch = await repo.GetTelemetryBatchAsync(0, streamingWindow, DateTimeOffset.UtcNow.AddDays(1), batchSize: 10, shardIndex: 0, shardCount: 1);
 
         await Assert.That(batch.Count).IsEqualTo(2);
     }

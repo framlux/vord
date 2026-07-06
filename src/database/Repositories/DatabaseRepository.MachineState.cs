@@ -290,10 +290,13 @@ public partial class DatabaseRepository : IMachineStateRepository
 
     /// <inheritdoc/>
     public async Task<List<MachineTelemetry>> GetTelemetryBatchAsync(
-        long highWaterMark, DateTimeOffset streamingWindow, int batchSize, int shardIndex, int shardCount, CancellationToken cancellationToken)
+        long highWaterMark, DateTimeOffset streamingWindow, DateTimeOffset visibilityCutoff, int batchSize, int shardIndex, int shardCount, CancellationToken cancellationToken)
     {
+        // Only project rows that have been visible for the safety lag (ServerReceivedAt <= now - lag), so
+        // a lower-Id row that committed after the high-water mark passed it is still picked up instead of
+        // being skipped forever.
         IQueryable<MachineTelemetry> query = _db.MachineTelemetry
-            .Where(t => (t.Id > highWaterMark) && (t.ReceivedAt > streamingWindow));
+            .Where(t => (t.Id > highWaterMark) && (t.ReceivedAt > streamingWindow) && (t.ServerReceivedAt <= visibilityCutoff));
 
         // MachineId references the positive Machine.Id identity column, so signed SQL modulo is safe.
         if (shardCount > 1)
