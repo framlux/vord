@@ -242,4 +242,81 @@ public class UserCacheTests
         await Assert.That(updated!.Id).IsEqualTo(userId);
         await Assert.That(updated.Username).IsEqualTo("new@example.com");
     }
+
+    // ========== DeactivateUserAccountAsync cross-tenant hardening tests ==========
+
+    [Test]
+    public async Task DeactivateUserAccountAsync_WrongTenant_ReturnsFalse_AndNoChange()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        IUserRepository cache = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+
+        UserAccount user = TestDataBuilder.BuildUser();
+        int userId = await dbFactory.Context.InsertWithInt32IdentityAsync(user);
+
+        // The user belonged to tenant 1 (role now inactive) but never to tenant 999. An acting tenant
+        // the user never belonged to must not be able to deactivate the cross-tenant account.
+        UserTenantRole role = TestDataBuilder.BuildUserTenantRole(userId: userId, tenantId: 1, isActive: false);
+        await dbFactory.Context.InsertWithInt32IdentityAsync(role);
+
+        bool result = await cache.DeactivateUserAccountAsync(userId, 999, currentUserId: userId);
+
+        await Assert.That(result).IsFalse();
+
+        UserAccount? unchanged = await cache.GetUserByIdAsync(userId);
+        await Assert.That(unchanged).IsNotNull();
+        await Assert.That(unchanged!.IsActive).IsTrue();
+        await Assert.That(unchanged.DeletedOn).IsNull();
+    }
+
+    [Test]
+    public async Task DeactivateUserAccountAsync_CorrectTenant_ReturnsTrue_AndChanges()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        IUserRepository cache = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+
+        UserAccount user = TestDataBuilder.BuildUser();
+        int userId = await dbFactory.Context.InsertWithInt32IdentityAsync(user);
+
+        // The user belonged to tenant 1 and now has no active role anywhere, mirroring the caller's
+        // last-role invariant, so the account-level deactivation is allowed for the acting tenant.
+        UserTenantRole role = TestDataBuilder.BuildUserTenantRole(userId: userId, tenantId: 1, isActive: false);
+        await dbFactory.Context.InsertWithInt32IdentityAsync(role);
+
+        bool result = await cache.DeactivateUserAccountAsync(userId, 1, currentUserId: userId);
+
+        await Assert.That(result).IsTrue();
+
+        UserAccount? changed = await cache.GetUserByIdAsync(userId);
+        await Assert.That(changed).IsNotNull();
+        await Assert.That(changed!.IsActive).IsFalse();
+        await Assert.That(changed.DeletedOn).IsNotNull();
+        await Assert.That(changed.DeletedByUserId).IsEqualTo(userId);
+    }
+
+    [Test]
+    public async Task DeactivateUserAccountAsync_UserStillHasActiveRole_ReturnsFalse_AndNoChange()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        IUserRepository cache = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+
+        UserAccount user = TestDataBuilder.BuildUser();
+        int userId = await dbFactory.Context.InsertWithInt32IdentityAsync(user);
+
+        // The user still holds an active role in another tenant, so the platform-wide account
+        // deactivation must not fire even for a tenant the user belonged to.
+        UserTenantRole actingTenantRole = TestDataBuilder.BuildUserTenantRole(userId: userId, tenantId: 1, isActive: false);
+        await dbFactory.Context.InsertWithInt32IdentityAsync(actingTenantRole);
+
+        UserTenantRole otherActiveRole = TestDataBuilder.BuildUserTenantRole(userId: userId, tenantId: 2, isActive: true);
+        await dbFactory.Context.InsertWithInt32IdentityAsync(otherActiveRole);
+
+        bool result = await cache.DeactivateUserAccountAsync(userId, 1, currentUserId: userId);
+
+        await Assert.That(result).IsFalse();
+
+        UserAccount? unchanged = await cache.GetUserByIdAsync(userId);
+        await Assert.That(unchanged).IsNotNull();
+        await Assert.That(unchanged!.IsActive).IsTrue();
+    }
 }

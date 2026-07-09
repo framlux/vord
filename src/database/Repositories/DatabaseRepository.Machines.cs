@@ -287,14 +287,16 @@ public partial class DatabaseRepository : IMachineRepository
     }
 
     /// <inheritdoc/>
-    public async Task UpdateMachineFieldsAsync(long machineId, string name, string? description, string? location, CancellationToken cancellationToken)
+    public async Task<bool> UpdateMachineFieldsAsync(long machineId, int tenantId, string name, string? description, string? location, CancellationToken cancellationToken)
     {
-        await _db.Machines
-            .Where(m => m.Id == machineId)
+        int affected = await _db.Machines
+            .Where(m => (m.Id == machineId) && (m.TenantId == tenantId) && (m.IsDeleted == false))
             .Set(m => m.Name, name)
             .Set(m => m.Description, description)
             .Set(m => m.Location, location)
             .UpdateAsync(cancellationToken);
+
+        return affected > 0;
     }
 
     /// <inheritdoc/>

@@ -208,18 +208,45 @@ public partial class DatabaseRepository : IAlertRuleRepository
     }
 
     /// <inheritdoc/>
-    public async Task SetMachinesForRuleAsync(int ruleId, IReadOnlyList<long> machineIds, CancellationToken cancellationToken)
+    public async Task<bool> SetMachinesForRuleAsync(int ruleId, int tenantId, IReadOnlyList<long> machineIds, CancellationToken cancellationToken)
     {
+        // The rule must belong to the tenant for any assignment change to apply. If it does not, the
+        // whole operation is a no-op so a caller from another tenant cannot mutate the rule's assignments.
+        bool ruleInTenant = await _db.AlertRules
+            .AnyAsync(r => (r.Id == ruleId) && (r.TenantId == tenantId), cancellationToken);
+
+        if (ruleInTenant == false)
+        {
+            _logger.LogWarning(
+                "Skipped machine assignment for alert rule {AlertRuleId}: rule not found in tenant {TenantId}",
+                ruleId, tenantId);
+
+            return false;
+        }
+
         await _db.AlertRuleMachines
             .Where(arm => arm.AlertRuleId == ruleId)
             .DeleteAsync(cancellationToken);
 
         List<long> distinctMachineIds = machineIds.Distinct().ToList();
 
+        // Only assign machines that belong to the same tenant as the rule. Any machine id that is not a
+        // valid active machine in the tenant is silently dropped rather than assigned cross-tenant.
+        List<long> tenantMachineIds = [];
         if (distinctMachineIds.Count > 0)
         {
+            tenantMachineIds = await _db.Machines
+                .Where(m => (m.TenantId == tenantId) &&
+                            (m.IsDeleted == false) &&
+                            distinctMachineIds.Contains(m.Id))
+                .Select(m => m.Id)
+                .ToListAsync(cancellationToken);
+        }
+
+        if (tenantMachineIds.Count > 0)
+        {
             DateTimeOffset now = DateTimeOffset.UtcNow;
-            List<AlertRuleMachine> assignments = distinctMachineIds
+            List<AlertRuleMachine> assignments = tenantMachineIds
                 .Select(machineId => new AlertRuleMachine
                 {
                     AlertRuleId = ruleId,
@@ -232,8 +259,10 @@ public partial class DatabaseRepository : IAlertRuleRepository
         }
 
         _logger.LogDebug(
-            "Set {Count} machine assignments for alert rule {AlertRuleId}",
-            distinctMachineIds.Count, ruleId);
+            "Set {Count} machine assignments for alert rule {AlertRuleId} in tenant {TenantId}",
+            tenantMachineIds.Count, ruleId, tenantId);
+
+        return true;
     }
 
     /// <inheritdoc/>
@@ -249,8 +278,22 @@ public partial class DatabaseRepository : IAlertRuleRepository
     }
 
     /// <inheritdoc/>
-    public async Task SetRulesForMachineAsync(long machineId, int tenantId, IReadOnlyList<int> ruleIds, CancellationToken cancellationToken)
+    public async Task<bool> SetRulesForMachineAsync(long machineId, int tenantId, IReadOnlyList<int> ruleIds, CancellationToken cancellationToken)
     {
+        // The machine must belong to the tenant for any assignment change to apply. If it does not, the
+        // whole operation is a no-op so a caller from another tenant cannot bind rules to the machine.
+        bool machineInTenant = await _db.Machines
+            .AnyAsync(m => (m.Id == machineId) && (m.TenantId == tenantId) && (m.IsDeleted == false), cancellationToken);
+
+        if (machineInTenant == false)
+        {
+            _logger.LogWarning(
+                "Skipped rule assignment for machine {MachineId}: machine not found in tenant {TenantId}",
+                machineId, tenantId);
+
+            return false;
+        }
+
         // Get existing rule IDs for this machine within the tenant
         List<int> existingRuleIds = await GetRuleIdsForMachineAsync(machineId, tenantId, cancellationToken);
 
@@ -264,10 +307,21 @@ public partial class DatabaseRepository : IAlertRuleRepository
 
         List<int> distinctRuleIds = ruleIds.Distinct().ToList();
 
+        // Only assign rules that belong to the tenant. Any rule id that is not owned by the tenant is
+        // silently dropped rather than assigned cross-tenant.
+        List<int> tenantRuleIds = [];
         if (distinctRuleIds.Count > 0)
         {
+            tenantRuleIds = await _db.AlertRules
+                .Where(r => (r.TenantId == tenantId) && distinctRuleIds.Contains(r.Id))
+                .Select(r => r.Id)
+                .ToListAsync(cancellationToken);
+        }
+
+        if (tenantRuleIds.Count > 0)
+        {
             DateTimeOffset now = DateTimeOffset.UtcNow;
-            List<AlertRuleMachine> assignments = distinctRuleIds
+            List<AlertRuleMachine> assignments = tenantRuleIds
                 .Select(ruleId => new AlertRuleMachine
                 {
                     AlertRuleId = ruleId,
@@ -281,7 +335,9 @@ public partial class DatabaseRepository : IAlertRuleRepository
 
         _logger.LogDebug(
             "Set {Count} rule assignments for machine {MachineId} in tenant {TenantId}",
-            distinctRuleIds.Count, machineId, tenantId);
+            tenantRuleIds.Count, machineId, tenantId);
+
+        return true;
     }
 
     /// <inheritdoc/>

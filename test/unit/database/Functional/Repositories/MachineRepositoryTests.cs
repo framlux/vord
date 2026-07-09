@@ -394,4 +394,47 @@ public class MachineCacheTests
         await Assert.That(counts.ContainsKey(2)).IsFalse();
         await Assert.That(counts[1]).IsEqualTo(1);
     }
+
+    // ========== UpdateMachineFieldsAsync cross-tenant hardening tests ==========
+
+    [Test]
+    public async Task UpdateMachineFieldsAsync_WrongTenant_ReturnsFalse_AndNoChange()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        IMachineRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+
+        Machine machine = TestDataBuilder.BuildMachine(tenantId: 1);
+        machine.Name = "original-name";
+        machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
+
+        bool result = await repo.UpdateMachineFieldsAsync(machine.Id, 999, "renamed", "desc", "loc");
+
+        await Assert.That(result).IsFalse();
+
+        Machine? unchanged = await repo.GetMachineAsync(machine.Id, 1);
+        await Assert.That(unchanged).IsNotNull();
+        await Assert.That(unchanged!.Name).IsEqualTo("original-name");
+        await Assert.That(unchanged.Description).IsNull();
+    }
+
+    [Test]
+    public async Task UpdateMachineFieldsAsync_CorrectTenant_ReturnsTrue_AndChanges()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        IMachineRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+
+        Machine machine = TestDataBuilder.BuildMachine(tenantId: 1);
+        machine.Name = "original-name";
+        machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
+
+        bool result = await repo.UpdateMachineFieldsAsync(machine.Id, 1, "renamed", "desc", "loc");
+
+        await Assert.That(result).IsTrue();
+
+        Machine? changed = await repo.GetMachineAsync(machine.Id, 1);
+        await Assert.That(changed).IsNotNull();
+        await Assert.That(changed!.Name).IsEqualTo("renamed");
+        await Assert.That(changed.Description).IsEqualTo("desc");
+        await Assert.That(changed.Location).IsEqualTo("loc");
+    }
 }

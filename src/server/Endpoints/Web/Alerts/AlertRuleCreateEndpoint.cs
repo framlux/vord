@@ -160,7 +160,14 @@ public sealed class AlertRuleCreateEndpoint : Endpoint<CreateAlertRuleRequest, A
         using IDatabaseTransaction transaction = await _transactionProvider.BeginTransactionAsync(ct);
 
         rule = await _alertRuleRepo.CreateAlertRuleAsync(rule, ct);
-        await _alertRuleRepo.SetMachinesForRuleAsync(rule.Id, req.MachineIds, ct);
+
+        bool assigned = await _alertRuleRepo.SetMachinesForRuleAsync(rule.Id, tenantId.Value, req.MachineIds, ct);
+        if (assigned == false)
+        {
+            await Send.NotFoundAsync(ct);
+
+            return;
+        }
 
         await _auditLog.InsertAuditLogAsync(AuditHelper.Create(
             tenantId.Value, userId.Value, null,

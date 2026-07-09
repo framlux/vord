@@ -156,9 +156,16 @@ public sealed class MachineHandler : IMachineHandler
 
         using IDatabaseTransaction transaction = await _transactionProvider.BeginTransactionAsync(ct);
 
-        await _machineRepo.UpdateMachineFieldsAsync(machineId, trimmedName, description, location, ct);
+        bool machineUpdated = await _machineRepo.UpdateMachineFieldsAsync(machineId, tenantId.Value, trimmedName, description, location, ct);
 
-        await _machineStateRepo.UpdateSummaryNameAsync(machineId, trimmedName, ct);
+        if (machineUpdated == false)
+        {
+            return ServiceResult<ApiResponse<MachineDto>>.NotFound();
+        }
+
+        // A missing summary row is a legitimate state — a machine that has never reported telemetry
+        // has no summary yet — so the false return is not treated as a not-found condition.
+        await _machineStateRepo.UpdateSummaryNameAsync(machineId, tenantId.Value, trimmedName, ct);
 
         await _auditLog.InsertAuditLogAsync(AuditHelper.Create(
             tenantId, userId, machineId,

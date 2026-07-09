@@ -88,9 +88,14 @@ public interface IMachineStateRepository
     Task<List<MachineStateSummary>> GetSummaryListByMachineIdsAsync(List<long> machineIds, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Updates the Name column on the machine state summary for a given machine.
+    /// Updates the Name column on the machine state summary for a given machine, scoped to the owning tenant.
     /// </summary>
-    Task UpdateSummaryNameAsync(long machineId, string name, CancellationToken cancellationToken = default);
+    /// <param name="machineId">The machine ID.</param>
+    /// <param name="tenantId">The tenant that must own the summary for the update to apply.</param>
+    /// <param name="name">The new name.</param>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    /// <returns><c>true</c> if a matching summary in the tenant was updated; otherwise <c>false</c>.</returns>
+    Task<bool> UpdateSummaryNameAsync(long machineId, int tenantId, string name, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Applies a combined machine state summary patch as a single UPDATE. Sets only the columns

@@ -32,9 +32,14 @@ public interface ISigningKeyRepository
     Task<UserSigningKey?> GetSigningKeyByIdAsync(int keyId, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Revokes a signing key.
+    /// Revokes a signing key scoped to the owning tenant.
     /// </summary>
-    Task RevokeSigningKeyAsync(int keyId, int revokedByUserId, CancellationToken cancellationToken = default);
+    /// <param name="keyId">The signing key ID.</param>
+    /// <param name="tenantId">The tenant that must own the key for the revocation to apply.</param>
+    /// <param name="revokedByUserId">The user performing the revocation.</param>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    /// <returns><c>true</c> if a matching key in the tenant was revoked; otherwise <c>false</c>.</returns>
+    Task<bool> RevokeSigningKeyAsync(int keyId, int tenantId, int revokedByUserId, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Creates a new machine authorization record in the database.
@@ -57,9 +62,16 @@ public interface ISigningKeyRepository
     Task<bool> IsKeyAuthorizedForMachineAsync(int signingKeyId, long machineId, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Revokes a machine authorization by setting RevokedAt and RevokedByUserId on the active record.
+    /// Revokes a machine authorization by setting RevokedAt and RevokedByUserId on the active record,
+    /// scoped to the owning tenant.
     /// </summary>
-    Task RevokeMachineAuthorizationAsync(long machineId, int signingKeyId, int revokedByUserId, CancellationToken cancellationToken = default);
+    /// <param name="machineId">The machine ID.</param>
+    /// <param name="signingKeyId">The signing key ID.</param>
+    /// <param name="tenantId">The tenant that must own the authorization for the revocation to apply.</param>
+    /// <param name="revokedByUserId">The user performing the revocation.</param>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    /// <returns><c>true</c> if a matching active authorization in the tenant was revoked; otherwise <c>false</c>.</returns>
+    Task<bool> RevokeMachineAuthorizationAsync(long machineId, int signingKeyId, int tenantId, int revokedByUserId, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Returns a previously-revoked authorization for a machine and signing key, or null if none exists.
@@ -71,12 +83,15 @@ public interface ISigningKeyRepository
     Task<MachineAuthorizedKey?> GetRevokedAuthorizationAsync(long machineId, int signingKeyId, int tenantId, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Re-activates a previously revoked authorization by clearing revocation fields and updating authorization fields.
+    /// Re-activates a previously revoked authorization by clearing revocation fields and updating
+    /// authorization fields, scoped to the owning tenant.
     /// </summary>
     /// <param name="authorizationId">The authorization record ID.</param>
+    /// <param name="tenantId">The tenant that must own the authorization for the re-activation to apply.</param>
     /// <param name="userId">The user re-activating the authorization.</param>
     /// <param name="cancellationToken">A cancellation token.</param>
-    Task ReactivateAuthorizationAsync(int authorizationId, int userId, CancellationToken cancellationToken = default);
+    /// <returns><c>true</c> if a matching authorization in the tenant was re-activated; otherwise <c>false</c>.</returns>
+    Task<bool> ReactivateAuthorizationAsync(int authorizationId, int tenantId, int userId, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Returns the active (non-revoked) authorization for a machine and signing key, or null if none exists.

@@ -96,7 +96,15 @@ public sealed class MachineAlertRulesUpdateEndpoint : Endpoint<UpdateMachineAler
             }
         }
 
-        await _alertRuleRepo.SetRulesForMachineAsync(machineId, tenantId.Value, req.RuleIds, ct);
+        bool assigned = await _alertRuleRepo.SetRulesForMachineAsync(machineId, tenantId.Value, req.RuleIds, ct);
+        if (assigned == false)
+        {
+            HttpContext.Response.StatusCode = 404;
+            await HttpContext.Response.WriteAsJsonAsync(
+                ApiResponse<object>.Error("Machine not found"), ct);
+
+            return;
+        }
 
         await _auditLog.InsertAuditLogAsync(AuditHelper.Create(
             tenantId.Value, userId, machineId,

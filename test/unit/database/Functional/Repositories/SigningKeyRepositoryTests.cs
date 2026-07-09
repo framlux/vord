@@ -129,7 +129,7 @@ public class SigningKeyRepositoryTests
         // Create one revoked key
         UserSigningKey revokedKey = TestDataBuilder.BuildSigningKey(userId: userId, tenantId: tenantId);
         UserSigningKey createdRevoked = await repo.CreateSigningKeyAsync(revokedKey);
-        await repo.RevokeSigningKeyAsync(createdRevoked.Id, userId);
+        await repo.RevokeSigningKeyAsync(createdRevoked.Id, tenantId, userId);
 
         int count = await repo.GetActiveSigningKeyCountAsync(userId, tenantId);
 
@@ -157,7 +157,7 @@ public class SigningKeyRepositoryTests
 
         UserSigningKey key = TestDataBuilder.BuildSigningKey(userId: userId, tenantId: tenantId);
         UserSigningKey created = await repo.CreateSigningKeyAsync(key);
-        await repo.RevokeSigningKeyAsync(created.Id, userId);
+        await repo.RevokeSigningKeyAsync(created.Id, tenantId, userId);
 
         int count = await repo.GetActiveSigningKeyCountAsync(userId, tenantId);
 
@@ -216,7 +216,7 @@ public class SigningKeyRepositoryTests
         await Assert.That(beforeRevoke!.RevokedAt).IsNull();
         await Assert.That(beforeRevoke.RevokedByUserId).IsNull();
 
-        await repo.RevokeSigningKeyAsync(created.Id, userId);
+        await repo.RevokeSigningKeyAsync(created.Id, tenantId, userId);
 
         UserSigningKey? afterRevoke = await repo.GetSigningKeyByIdAsync(created.Id);
 
@@ -275,7 +275,7 @@ public class SigningKeyRepositoryTests
             machineId: machineId, signingKeyId: createdKey1.Id, tenantId: tenantId, authorizedByUserId: userId);
         olderAuth.AuthorizedAt = DateTimeOffset.UtcNow.AddHours(-2);
         await repo.CreateMachineAuthorizationAsync(olderAuth);
-        await repo.RevokeMachineAuthorizationAsync(machineId, createdKey1.Id, userId);
+        await repo.RevokeMachineAuthorizationAsync(machineId, createdKey1.Id, tenantId, userId);
 
         // Create a newer active authorization
         MachineAuthorizedKey newerAuth = TestDataBuilder.BuildMachineAuthorizedKey(
@@ -341,7 +341,7 @@ public class SigningKeyRepositoryTests
         await repo.CreateMachineAuthorizationAsync(auth);
 
         // Revoke the authorization
-        await repo.RevokeMachineAuthorizationAsync(machineId, createdKey.Id, userId);
+        await repo.RevokeMachineAuthorizationAsync(machineId, createdKey.Id, tenantId, userId);
 
         List<UserSigningKey> result = await repo.GetActiveSigningKeysForMachineAsync(machineId);
 
@@ -364,7 +364,7 @@ public class SigningKeyRepositoryTests
         await repo.CreateMachineAuthorizationAsync(auth);
 
         // Revoke the signing key itself (not the authorization)
-        await repo.RevokeSigningKeyAsync(createdKey.Id, userId);
+        await repo.RevokeSigningKeyAsync(createdKey.Id, tenantId, userId);
 
         List<UserSigningKey> result = await repo.GetActiveSigningKeysForMachineAsync(machineId);
 
@@ -419,7 +419,7 @@ public class SigningKeyRepositoryTests
             machineId: machineId, signingKeyId: createdKey.Id, tenantId: tenantId, authorizedByUserId: userId);
         await repo.CreateMachineAuthorizationAsync(auth);
 
-        await repo.RevokeMachineAuthorizationAsync(machineId, createdKey.Id, userId);
+        await repo.RevokeMachineAuthorizationAsync(machineId, createdKey.Id, tenantId, userId);
 
         bool result = await repo.IsKeyAuthorizedForMachineAsync(createdKey.Id, machineId);
 
@@ -458,7 +458,7 @@ public class SigningKeyRepositoryTests
         bool isAuthorizedBefore = await repo.IsKeyAuthorizedForMachineAsync(createdKey.Id, machineId);
         await Assert.That(isAuthorizedBefore).IsTrue();
 
-        await repo.RevokeMachineAuthorizationAsync(machineId, createdKey.Id, userId);
+        await repo.RevokeMachineAuthorizationAsync(machineId, createdKey.Id, tenantId, userId);
 
         // Verify the authorization is no longer active
         bool isAuthorizedAfter = await repo.IsKeyAuthorizedForMachineAsync(createdKey.Id, machineId);
@@ -487,7 +487,7 @@ public class SigningKeyRepositoryTests
         await repo.CreateMachineAuthorizationAsync(auth);
 
         // Revoke once
-        await repo.RevokeMachineAuthorizationAsync(machineId, createdKey.Id, userId);
+        await repo.RevokeMachineAuthorizationAsync(machineId, createdKey.Id, tenantId, userId);
 
         MachineAuthorizedKey? firstRevoke = await repo.GetRevokedAuthorizationAsync(machineId, createdKey.Id, tenantId);
         await Assert.That(firstRevoke).IsNotNull();
@@ -498,7 +498,7 @@ public class SigningKeyRepositoryTests
         int secondUserId = await dbFactory.Context.InsertWithInt32IdentityAsync(secondUser);
 
         // Revoke again with different user -- should not update because the WHERE clause requires RevokedAt == null
-        await repo.RevokeMachineAuthorizationAsync(machineId, createdKey.Id, secondUserId);
+        await repo.RevokeMachineAuthorizationAsync(machineId, createdKey.Id, tenantId, secondUserId);
 
         MachineAuthorizedKey? secondRevoke = await repo.GetRevokedAuthorizationAsync(machineId, createdKey.Id, tenantId);
         await Assert.That(secondRevoke).IsNotNull();
@@ -523,7 +523,7 @@ public class SigningKeyRepositoryTests
             machineId: machineId, signingKeyId: createdKey.Id, tenantId: tenantId, authorizedByUserId: userId);
         await repo.CreateMachineAuthorizationAsync(auth);
 
-        await repo.RevokeMachineAuthorizationAsync(machineId, createdKey.Id, userId);
+        await repo.RevokeMachineAuthorizationAsync(machineId, createdKey.Id, tenantId, userId);
 
         MachineAuthorizedKey? result = await repo.GetRevokedAuthorizationAsync(machineId, createdKey.Id, tenantId);
 
@@ -571,7 +571,7 @@ public class SigningKeyRepositoryTests
             machineId: machineId, signingKeyId: createdKey.Id, tenantId: tenantId, authorizedByUserId: userId);
         await repo.CreateMachineAuthorizationAsync(auth);
 
-        await repo.RevokeMachineAuthorizationAsync(machineId, createdKey.Id, userId);
+        await repo.RevokeMachineAuthorizationAsync(machineId, createdKey.Id, tenantId, userId);
 
         int otherTenantId = tenantId + 1000;
         MachineAuthorizedKey? result = await repo.GetRevokedAuthorizationAsync(machineId, createdKey.Id, otherTenantId);
@@ -597,14 +597,14 @@ public class SigningKeyRepositoryTests
         MachineAuthorizedKey createdAuth = await repo.CreateMachineAuthorizationAsync(auth);
 
         // Revoke the authorization
-        await repo.RevokeMachineAuthorizationAsync(machineId, createdKey.Id, userId);
+        await repo.RevokeMachineAuthorizationAsync(machineId, createdKey.Id, tenantId, userId);
 
         // Create a second user for reactivation
         UserAccount reactivator = TestDataBuilder.BuildUser();
         int reactivatorId = await dbFactory.Context.InsertWithInt32IdentityAsync(reactivator);
 
         // Reactivate with a different user
-        await repo.ReactivateAuthorizationAsync(createdAuth.Id, reactivatorId);
+        await repo.ReactivateAuthorizationAsync(createdAuth.Id, tenantId, reactivatorId);
 
         // Verify that the authorization is active again
         MachineAuthorizedKey? reactivated = await repo.GetActiveAuthorizationAsync(machineId, createdKey.Id, tenantId);
@@ -659,7 +659,7 @@ public class SigningKeyRepositoryTests
             machineId: machineId, signingKeyId: createdKey.Id, tenantId: tenantId, authorizedByUserId: userId);
         await repo.CreateMachineAuthorizationAsync(auth);
 
-        await repo.RevokeMachineAuthorizationAsync(machineId, createdKey.Id, userId);
+        await repo.RevokeMachineAuthorizationAsync(machineId, createdKey.Id, tenantId, userId);
 
         MachineAuthorizedKey? result = await repo.GetActiveAuthorizationAsync(machineId, createdKey.Id, tenantId);
 
@@ -696,5 +696,152 @@ public class SigningKeyRepositoryTests
         MachineAuthorizedKey? result = await repo.GetActiveAuthorizationAsync(99999, 99999, 99999);
 
         await Assert.That(result).IsNull();
+    }
+
+    // ========== Cross-tenant hardening tests ==========
+
+    [Test]
+    public async Task RevokeSigningKeyAsync_WrongTenant_ReturnsFalse_AndNoChange()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        ISigningKeyRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+
+        (int userId, int tenantId, long _) = await SeedUserTenantMachineAsync(dbFactory);
+
+        UserSigningKey key = TestDataBuilder.BuildSigningKey(userId: userId, tenantId: tenantId);
+        UserSigningKey created = await repo.CreateSigningKeyAsync(key);
+
+        int otherTenantId = tenantId + 1000;
+        bool result = await repo.RevokeSigningKeyAsync(created.Id, otherTenantId, userId);
+
+        await Assert.That(result).IsFalse();
+
+        UserSigningKey? unchanged = await repo.GetSigningKeyByIdAsync(created.Id);
+        await Assert.That(unchanged).IsNotNull();
+        await Assert.That(unchanged!.RevokedAt).IsNull();
+        await Assert.That(unchanged.RevokedByUserId).IsNull();
+    }
+
+    [Test]
+    public async Task RevokeSigningKeyAsync_CorrectTenant_ReturnsTrue_AndChanges()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        ISigningKeyRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+
+        (int userId, int tenantId, long _) = await SeedUserTenantMachineAsync(dbFactory);
+
+        UserSigningKey key = TestDataBuilder.BuildSigningKey(userId: userId, tenantId: tenantId);
+        UserSigningKey created = await repo.CreateSigningKeyAsync(key);
+
+        bool result = await repo.RevokeSigningKeyAsync(created.Id, tenantId, userId);
+
+        await Assert.That(result).IsTrue();
+
+        UserSigningKey? changed = await repo.GetSigningKeyByIdAsync(created.Id);
+        await Assert.That(changed).IsNotNull();
+        await Assert.That(changed!.RevokedAt).IsNotNull();
+        await Assert.That(changed.RevokedByUserId).IsEqualTo(userId);
+    }
+
+    [Test]
+    public async Task RevokeMachineAuthorizationAsync_WrongTenant_ReturnsFalse_AndNoChange()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        ISigningKeyRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+
+        (int userId, int tenantId, long machineId) = await SeedUserTenantMachineAsync(dbFactory);
+
+        UserSigningKey key = TestDataBuilder.BuildSigningKey(userId: userId, tenantId: tenantId);
+        UserSigningKey createdKey = await repo.CreateSigningKeyAsync(key);
+
+        MachineAuthorizedKey auth = TestDataBuilder.BuildMachineAuthorizedKey(
+            machineId: machineId, signingKeyId: createdKey.Id, tenantId: tenantId, authorizedByUserId: userId);
+        await repo.CreateMachineAuthorizationAsync(auth);
+
+        int otherTenantId = tenantId + 1000;
+        bool result = await repo.RevokeMachineAuthorizationAsync(machineId, createdKey.Id, otherTenantId, userId);
+
+        await Assert.That(result).IsFalse();
+
+        // The authorization must remain active because the wrong-tenant predicate matched no rows.
+        bool stillActive = await repo.IsKeyAuthorizedForMachineAsync(createdKey.Id, machineId);
+        await Assert.That(stillActive).IsTrue();
+    }
+
+    [Test]
+    public async Task RevokeMachineAuthorizationAsync_CorrectTenant_ReturnsTrue_AndChanges()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        ISigningKeyRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+
+        (int userId, int tenantId, long machineId) = await SeedUserTenantMachineAsync(dbFactory);
+
+        UserSigningKey key = TestDataBuilder.BuildSigningKey(userId: userId, tenantId: tenantId);
+        UserSigningKey createdKey = await repo.CreateSigningKeyAsync(key);
+
+        MachineAuthorizedKey auth = TestDataBuilder.BuildMachineAuthorizedKey(
+            machineId: machineId, signingKeyId: createdKey.Id, tenantId: tenantId, authorizedByUserId: userId);
+        await repo.CreateMachineAuthorizationAsync(auth);
+
+        bool result = await repo.RevokeMachineAuthorizationAsync(machineId, createdKey.Id, tenantId, userId);
+
+        await Assert.That(result).IsTrue();
+
+        bool stillActive = await repo.IsKeyAuthorizedForMachineAsync(createdKey.Id, machineId);
+        await Assert.That(stillActive).IsFalse();
+    }
+
+    [Test]
+    public async Task ReactivateAuthorizationAsync_WrongTenant_ReturnsFalse_AndNoChange()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        ISigningKeyRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+
+        (int userId, int tenantId, long machineId) = await SeedUserTenantMachineAsync(dbFactory);
+
+        UserSigningKey key = TestDataBuilder.BuildSigningKey(userId: userId, tenantId: tenantId);
+        UserSigningKey createdKey = await repo.CreateSigningKeyAsync(key);
+
+        MachineAuthorizedKey auth = TestDataBuilder.BuildMachineAuthorizedKey(
+            machineId: machineId, signingKeyId: createdKey.Id, tenantId: tenantId, authorizedByUserId: userId);
+        MachineAuthorizedKey createdAuth = await repo.CreateMachineAuthorizationAsync(auth);
+
+        await repo.RevokeMachineAuthorizationAsync(machineId, createdKey.Id, tenantId, userId);
+
+        int otherTenantId = tenantId + 1000;
+        bool result = await repo.ReactivateAuthorizationAsync(createdAuth.Id, otherTenantId, userId);
+
+        await Assert.That(result).IsFalse();
+
+        // The authorization must remain revoked because the wrong-tenant predicate matched no rows.
+        MachineAuthorizedKey? stillRevoked = await repo.GetRevokedAuthorizationAsync(machineId, createdKey.Id, tenantId);
+        await Assert.That(stillRevoked).IsNotNull();
+        await Assert.That(stillRevoked!.RevokedAt).IsNotNull();
+    }
+
+    [Test]
+    public async Task ReactivateAuthorizationAsync_CorrectTenant_ReturnsTrue_AndChanges()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        ISigningKeyRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+
+        (int userId, int tenantId, long machineId) = await SeedUserTenantMachineAsync(dbFactory);
+
+        UserSigningKey key = TestDataBuilder.BuildSigningKey(userId: userId, tenantId: tenantId);
+        UserSigningKey createdKey = await repo.CreateSigningKeyAsync(key);
+
+        MachineAuthorizedKey auth = TestDataBuilder.BuildMachineAuthorizedKey(
+            machineId: machineId, signingKeyId: createdKey.Id, tenantId: tenantId, authorizedByUserId: userId);
+        MachineAuthorizedKey createdAuth = await repo.CreateMachineAuthorizationAsync(auth);
+
+        await repo.RevokeMachineAuthorizationAsync(machineId, createdKey.Id, tenantId, userId);
+
+        bool result = await repo.ReactivateAuthorizationAsync(createdAuth.Id, tenantId, userId);
+
+        await Assert.That(result).IsTrue();
+
+        MachineAuthorizedKey? reactivated = await repo.GetActiveAuthorizationAsync(machineId, createdKey.Id, tenantId);
+        await Assert.That(reactivated).IsNotNull();
+        await Assert.That(reactivated!.RevokedAt).IsNull();
     }
 }

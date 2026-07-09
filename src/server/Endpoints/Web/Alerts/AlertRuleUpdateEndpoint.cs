@@ -176,7 +176,13 @@ public sealed class AlertRuleUpdateEndpoint : Endpoint<UpdateAlertRuleRequest, A
             return;
         }
 
-        await _alertRuleRepo.SetMachinesForRuleAsync(ruleId, req.MachineIds, ct);
+        bool assigned = await _alertRuleRepo.SetMachinesForRuleAsync(ruleId, tenantId.Value, req.MachineIds, ct);
+        if (assigned == false)
+        {
+            await Send.NotFoundAsync(ct);
+
+            return;
+        }
 
         int? userId = _tenantContext.UserId;
         await _auditLog.InsertAuditLogAsync(AuditHelper.Create(

@@ -133,7 +133,7 @@ public sealed class SigningKeyService : ISigningKeyService
 
         using IDatabaseTransaction transaction = await _transactionProvider.BeginTransactionAsync(cancellationToken);
 
-        await _signingKeyRepository.RevokeSigningKeyAsync(keyId, userId, cancellationToken);
+        await _signingKeyRepository.RevokeSigningKeyAsync(keyId, tenantId, userId, cancellationToken);
 
         await _auditLog.InsertAuditLogAsync(new AuditLogEntry
         {

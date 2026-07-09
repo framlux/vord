@@ -210,8 +210,8 @@ public sealed class SigningKeyServiceTests
             CreatedAt = DateTimeOffset.UtcNow,
         };
         _signingKeyRepository.GetSigningKeyByIdAsync(1, Arg.Any<CancellationToken>()).Returns(otherUsersKey);
-        _signingKeyRepository.RevokeSigningKeyAsync(Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
-            .Returns(Task.CompletedTask);
+        _signingKeyRepository.RevokeSigningKeyAsync(Arg.Any<int>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns(true);
         _auditLog.InsertAuditLogAsync(Arg.Any<AuditLogEntry>(), Arg.Any<CancellationToken>())
             .Returns(Task.CompletedTask);
 
@@ -236,8 +236,8 @@ public sealed class SigningKeyServiceTests
             CreatedAt = DateTimeOffset.UtcNow,
         };
         _signingKeyRepository.GetSigningKeyByIdAsync(1, Arg.Any<CancellationToken>()).Returns(ownKey);
-        _signingKeyRepository.RevokeSigningKeyAsync(Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
-            .Returns(Task.CompletedTask);
+        _signingKeyRepository.RevokeSigningKeyAsync(Arg.Any<int>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns(true);
         _auditLog.InsertAuditLogAsync(Arg.Any<AuditLogEntry>(), Arg.Any<CancellationToken>())
             .Returns(Task.CompletedTask);
 

@@ -33,14 +33,24 @@ public interface IInvitationRepository
     Task<TenantInvitation?> GetPendingInvitationByEmailAndTenantAsync(string email, int tenantId, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Updates the status of a tenant invitation.
+    /// Updates the status of a tenant invitation, scoped to the owning tenant.
     /// </summary>
-    Task UpdateInvitationStatusAsync(int invitationId, InvitationStatus status, int? acceptedByUserId = null, CancellationToken cancellationToken = default);
+    /// <param name="invitationId">The invitation ID.</param>
+    /// <param name="tenantId">The tenant that must own the invitation for the update to apply.</param>
+    /// <param name="status">The new invitation status.</param>
+    /// <param name="acceptedByUserId">The accepting user, when transitioning to Accepted; otherwise null.</param>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    /// <returns><c>true</c> if a matching invitation in the tenant was updated; otherwise <c>false</c>.</returns>
+    Task<bool> UpdateInvitationStatusAsync(int invitationId, int tenantId, InvitationStatus status, int? acceptedByUserId = null, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Revokes a tenant invitation.
+    /// Revokes a tenant invitation, scoped to the owning tenant.
     /// </summary>
-    Task RevokeInvitationAsync(int invitationId, CancellationToken cancellationToken = default);
+    /// <param name="invitationId">The invitation ID.</param>
+    /// <param name="tenantId">The tenant that must own the invitation for the revocation to apply.</param>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    /// <returns><c>true</c> if a matching invitation in the tenant was revoked; otherwise <c>false</c>.</returns>
+    Task<bool> RevokeInvitationAsync(int invitationId, int tenantId, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Counts pending, non-expired invitations for a tenant as of the given instant. Expired pending

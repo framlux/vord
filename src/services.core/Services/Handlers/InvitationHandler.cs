@@ -280,7 +280,7 @@ public sealed class InvitationHandler : IInvitationHandler
             personalTenantProvisioned = true;
         }
 
-        await _invitationRepository.UpdateInvitationStatusAsync(invitation.Id, InvitationStatus.Accepted, userId, ct);
+        await _invitationRepository.UpdateInvitationStatusAsync(invitation.Id, invitation.TenantId, InvitationStatus.Accepted, userId, ct);
 
         await _auditLog.InsertAuditLogAsync(AuditHelper.Create(
             invitation.TenantId, userId, null,
@@ -327,7 +327,12 @@ public sealed class InvitationHandler : IInvitationHandler
 
         using IDatabaseTransaction transaction = await _transactionProvider.BeginTransactionAsync(ct);
 
-        await _invitationRepository.RevokeInvitationAsync(invitationId, ct);
+        bool revoked = await _invitationRepository.RevokeInvitationAsync(invitationId, tenantId.Value, ct);
+
+        if (revoked == false)
+        {
+            return ServiceResult<InvitationRevokeResult>.NotFound();
+        }
 
         await _auditLog.InsertAuditLogAsync(AuditHelper.Create(
             tenantId, null, null,
@@ -374,7 +379,12 @@ public sealed class InvitationHandler : IInvitationHandler
 
         using IDatabaseTransaction transaction = await _transactionProvider.BeginTransactionAsync(ct);
 
-        await _invitationRepository.RevokeInvitationAsync(invitationId, ct);
+        bool revoked = await _invitationRepository.RevokeInvitationAsync(invitationId, tenantId.Value, ct);
+
+        if (revoked == false)
+        {
+            return ServiceResult<InvitationResendResult>.NotFound();
+        }
 
         TenantInvitation newInvitation = await _invitationRepository.CreateInvitationAsync(new TenantInvitation
         {

@@ -217,7 +217,7 @@ public class InvitationCacheTests
         invitation.TokenHash = HashToken(plaintextToken);
         invitation.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(invitation);
 
-        await cache.UpdateInvitationStatusAsync(invitation.Id, InvitationStatus.Accepted, acceptedByUserId: userId);
+        await cache.UpdateInvitationStatusAsync(invitation.Id, tenantId, InvitationStatus.Accepted, acceptedByUserId: userId);
 
         TenantInvitation? result = await cache.GetInvitationByTokenAsync(plaintextToken);
 
@@ -244,7 +244,7 @@ public class InvitationCacheTests
         invitation.TokenHash = HashToken(plaintextToken);
         invitation.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(invitation);
 
-        await cache.UpdateInvitationStatusAsync(invitation.Id, InvitationStatus.Expired);
+        await cache.UpdateInvitationStatusAsync(invitation.Id, tenantId, InvitationStatus.Expired);
 
         TenantInvitation? result = await cache.GetInvitationByTokenAsync(plaintextToken);
 
@@ -271,7 +271,7 @@ public class InvitationCacheTests
         invitation.TokenHash = HashToken(plaintextToken);
         invitation.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(invitation);
 
-        await cache.RevokeInvitationAsync(invitation.Id);
+        await cache.RevokeInvitationAsync(invitation.Id, tenantId);
 
         TenantInvitation? result = await cache.GetInvitationByTokenAsync(plaintextToken);
 
@@ -297,7 +297,7 @@ public class InvitationCacheTests
         invitation.TokenHash = HashToken(plaintextToken);
         invitation.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(invitation);
 
-        await cache.RevokeInvitationAsync(invitation.Id);
+        await cache.RevokeInvitationAsync(invitation.Id, tenantId);
 
         TenantInvitation? result = await cache.GetInvitationByTokenAsync(plaintextToken);
 
@@ -386,5 +386,117 @@ public class InvitationCacheTests
         int count = await cache.CountPendingInvitationsAsync(tenantIdA, asOf, CancellationToken.None);
 
         await Assert.That(count).IsEqualTo(1);
+    }
+
+    // ========== Cross-tenant hardening tests ==========
+
+    [Test]
+    public async Task RevokeInvitationAsync_WrongTenant_ReturnsFalse_AndNoChange()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        IInvitationRepository cache = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+
+        (int userId, int tenantId) = await SeedUserAndTenantAsync(dbFactory);
+
+        string plaintextToken = "revoke-wrong-tenant-token";
+        TenantInvitation invitation = TestDataBuilder.BuildInvitation(
+            tenantId: tenantId,
+            email: "wrong-tenant@example.com",
+            status: InvitationStatus.Pending,
+            invitedByUserId: userId);
+        invitation.TokenHash = HashToken(plaintextToken);
+        invitation.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(invitation);
+
+        int otherTenantId = tenantId + 1000;
+        bool result = await cache.RevokeInvitationAsync(invitation.Id, otherTenantId);
+
+        await Assert.That(result).IsFalse();
+
+        TenantInvitation? unchanged = await cache.GetInvitationByTokenAsync(plaintextToken);
+        await Assert.That(unchanged).IsNotNull();
+        await Assert.That(unchanged!.Status).IsEqualTo(InvitationStatus.Pending);
+        await Assert.That(unchanged.RevokedAt).IsNull();
+    }
+
+    [Test]
+    public async Task RevokeInvitationAsync_CorrectTenant_ReturnsTrue_AndChanges()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        IInvitationRepository cache = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+
+        (int userId, int tenantId) = await SeedUserAndTenantAsync(dbFactory);
+
+        string plaintextToken = "revoke-correct-tenant-token";
+        TenantInvitation invitation = TestDataBuilder.BuildInvitation(
+            tenantId: tenantId,
+            email: "correct-tenant@example.com",
+            status: InvitationStatus.Pending,
+            invitedByUserId: userId);
+        invitation.TokenHash = HashToken(plaintextToken);
+        invitation.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(invitation);
+
+        bool result = await cache.RevokeInvitationAsync(invitation.Id, tenantId);
+
+        await Assert.That(result).IsTrue();
+
+        TenantInvitation? changed = await cache.GetInvitationByTokenAsync(plaintextToken);
+        await Assert.That(changed).IsNotNull();
+        await Assert.That(changed!.Status).IsEqualTo(InvitationStatus.Revoked);
+        await Assert.That(changed.RevokedAt).IsNotNull();
+    }
+
+    [Test]
+    public async Task UpdateInvitationStatusAsync_WrongTenant_ReturnsFalse_AndNoChange()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        IInvitationRepository cache = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+
+        (int userId, int tenantId) = await SeedUserAndTenantAsync(dbFactory);
+
+        string plaintextToken = "status-wrong-tenant-token";
+        TenantInvitation invitation = TestDataBuilder.BuildInvitation(
+            tenantId: tenantId,
+            email: "status-wrong@example.com",
+            status: InvitationStatus.Pending,
+            invitedByUserId: userId);
+        invitation.TokenHash = HashToken(plaintextToken);
+        invitation.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(invitation);
+
+        int otherTenantId = tenantId + 1000;
+        bool result = await cache.UpdateInvitationStatusAsync(invitation.Id, otherTenantId, InvitationStatus.Accepted, acceptedByUserId: userId);
+
+        await Assert.That(result).IsFalse();
+
+        TenantInvitation? unchanged = await cache.GetInvitationByTokenAsync(plaintextToken);
+        await Assert.That(unchanged).IsNotNull();
+        await Assert.That(unchanged!.Status).IsEqualTo(InvitationStatus.Pending);
+        await Assert.That(unchanged.AcceptedByUserId).IsNull();
+    }
+
+    [Test]
+    public async Task UpdateInvitationStatusAsync_CorrectTenant_ReturnsTrue_AndChanges()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        IInvitationRepository cache = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+
+        (int userId, int tenantId) = await SeedUserAndTenantAsync(dbFactory);
+
+        string plaintextToken = "status-correct-tenant-token";
+        TenantInvitation invitation = TestDataBuilder.BuildInvitation(
+            tenantId: tenantId,
+            email: "status-correct@example.com",
+            status: InvitationStatus.Pending,
+            invitedByUserId: userId);
+        invitation.TokenHash = HashToken(plaintextToken);
+        invitation.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(invitation);
+
+        bool result = await cache.UpdateInvitationStatusAsync(invitation.Id, tenantId, InvitationStatus.Accepted, acceptedByUserId: userId);
+
+        await Assert.That(result).IsTrue();
+
+        TenantInvitation? changed = await cache.GetInvitationByTokenAsync(plaintextToken);
+        await Assert.That(changed).IsNotNull();
+        await Assert.That(changed!.Status).IsEqualTo(InvitationStatus.Accepted);
+        await Assert.That(changed.AcceptedByUserId).IsEqualTo(userId);
     }
 }

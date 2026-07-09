@@ -149,9 +149,18 @@ public sealed class UserHandler : IUserHandler
 
         if (hasActiveRoles == false)
         {
-            await _userRepo.DeactivateUserAccountAsync(targetUserId, currentUserId, ct);
+            bool deactivated = await _userRepo.DeactivateUserAccountAsync(targetUserId, tenantId.Value, currentUserId, ct);
 
-            _logger.LogInformation("User {TargetUserId} fully deactivated (no active roles remain) by user {CurrentUserId}", targetUserId, currentUserId);
+            if (deactivated == true)
+            {
+                _logger.LogInformation("User {TargetUserId} fully deactivated (no active roles remain) by user {CurrentUserId}", targetUserId, currentUserId);
+            }
+            else
+            {
+                // A role was concurrently granted between the HasActiveRoles check and the guarded
+                // deactivation, so the account was left active. Removal from this tenant still stands.
+                _logger.LogInformation("User {TargetUserId} left active (a role was concurrently granted) after removal from tenant {TenantId} by user {CurrentUserId}", targetUserId, tenantId.Value, currentUserId);
+            }
         }
         else
         {

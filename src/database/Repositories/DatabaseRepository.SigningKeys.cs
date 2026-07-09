@@ -49,13 +49,15 @@ public partial class DatabaseRepository : ISigningKeyRepository
     }
 
     /// <inheritdoc/>
-    public async Task RevokeSigningKeyAsync(int keyId, int revokedByUserId, CancellationToken cancellationToken = default)
+    public async Task<bool> RevokeSigningKeyAsync(int keyId, int tenantId, int revokedByUserId, CancellationToken cancellationToken = default)
     {
-        await _db.UserSigningKeys
-            .Where(k => k.Id == keyId)
+        int affected = await _db.UserSigningKeys
+            .Where(k => (k.Id == keyId) && (k.TenantId == tenantId))
             .Set(k => k.RevokedAt, DateTimeOffset.UtcNow)
             .Set(k => k.RevokedByUserId, revokedByUserId)
             .UpdateAsync(cancellationToken);
+
+        return affected > 0;
     }
 
     /// <inheritdoc/>
@@ -99,15 +101,18 @@ public partial class DatabaseRepository : ISigningKeyRepository
     }
 
     /// <inheritdoc/>
-    public async Task RevokeMachineAuthorizationAsync(long machineId, int signingKeyId, int revokedByUserId, CancellationToken cancellationToken = default)
+    public async Task<bool> RevokeMachineAuthorizationAsync(long machineId, int signingKeyId, int tenantId, int revokedByUserId, CancellationToken cancellationToken = default)
     {
-        await _db.MachineAuthorizedKeys
+        int affected = await _db.MachineAuthorizedKeys
             .Where(a => (a.MachineId == machineId) &&
                         (a.SigningKeyId == signingKeyId) &&
+                        (a.TenantId == tenantId) &&
                         (a.RevokedAt == null))
             .Set(a => a.RevokedAt, DateTimeOffset.UtcNow)
             .Set(a => a.RevokedByUserId, revokedByUserId)
             .UpdateAsync(cancellationToken);
+
+        return affected > 0;
     }
 
     /// <inheritdoc/>
@@ -123,16 +128,18 @@ public partial class DatabaseRepository : ISigningKeyRepository
     }
 
     /// <inheritdoc/>
-    public async Task ReactivateAuthorizationAsync(int authorizationId, int userId, CancellationToken cancellationToken = default)
+    public async Task<bool> ReactivateAuthorizationAsync(int authorizationId, int tenantId, int userId, CancellationToken cancellationToken = default)
     {
         DateTimeOffset now = DateTimeOffset.UtcNow;
-        await _db.MachineAuthorizedKeys
-            .Where(a => a.Id == authorizationId)
+        int affected = await _db.MachineAuthorizedKeys
+            .Where(a => (a.Id == authorizationId) && (a.TenantId == tenantId))
             .Set(a => a.RevokedAt, (DateTimeOffset?)null)
             .Set(a => a.RevokedByUserId, (int?)null)
             .Set(a => a.AuthorizedAt, now)
             .Set(a => a.AuthorizedByUserId, userId)
             .UpdateAsync(cancellationToken);
+
+        return affected > 0;
     }
 
     /// <inheritdoc/>

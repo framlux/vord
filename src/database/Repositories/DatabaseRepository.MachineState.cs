@@ -134,12 +134,14 @@ public partial class DatabaseRepository : IMachineStateRepository
     }
 
     /// <inheritdoc/>
-    public async Task UpdateSummaryNameAsync(long machineId, string name, CancellationToken cancellationToken)
+    public async Task<bool> UpdateSummaryNameAsync(long machineId, int tenantId, string name, CancellationToken cancellationToken)
     {
-        await _db.MachineStateSummaries
-            .Where(s => s.MachineId == machineId)
+        int affected = await _db.MachineStateSummaries
+            .Where(s => (s.MachineId == machineId) && (s.TenantId == tenantId))
             .Set(s => s.Name, name)
             .UpdateAsync(cancellationToken);
+
+        return affected > 0;
     }
 
     /// <inheritdoc/>

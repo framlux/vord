@@ -99,9 +99,16 @@ public interface IMachineRepository
     Task<Machine?> GetActiveMachineByIdAsync(long machineId, int tenantId, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Updates a machine's user-editable fields (name, description, location).
+    /// Updates a machine's user-editable fields (name, description, location), scoped to the owning tenant.
     /// </summary>
-    Task UpdateMachineFieldsAsync(long machineId, string name, string? description, string? location, CancellationToken cancellationToken = default);
+    /// <param name="machineId">The machine ID.</param>
+    /// <param name="tenantId">The tenant that must own the machine for the update to apply.</param>
+    /// <param name="name">The new machine name.</param>
+    /// <param name="description">The new description, or null.</param>
+    /// <param name="location">The new location, or null.</param>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    /// <returns><c>true</c> if a matching active machine in the tenant was updated; otherwise <c>false</c>.</returns>
+    Task<bool> UpdateMachineFieldsAsync(long machineId, int tenantId, string name, string? description, string? location, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Gets the IDs of all active (non-deleted) machines for a tenant.

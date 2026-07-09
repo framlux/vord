@@ -43,6 +43,11 @@ public class InvitationHandlerTests
         // do not have to opt in; the at-limit test overrides this to false.
         tenantRepository.CreateUserTenantRoleWithMemberLimitAsync(Arg.Any<UserTenantRole>(), Arg.Any<int?>(), Arg.Any<CancellationToken>()).Returns(true);
 
+        // Default the tenant-scoped invitation writes to report a matching row so happy-path tests do
+        // not have to opt in; not-found tests override these to false.
+        invitationRepository.RevokeInvitationAsync(Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>()).Returns(true);
+        invitationRepository.UpdateInvitationStatusAsync(Arg.Any<int>(), Arg.Any<int>(), Arg.Any<InvitationStatus>(), Arg.Any<int?>(), Arg.Any<CancellationToken>()).Returns(true);
+
         return (transactionProvider, auditLog, invitationRepository, tenantRepository, subscriptionRepository);
     }
 
@@ -621,7 +626,7 @@ public class InvitationHandlerTests
 
         await Assert.That(result.StatusCode).IsEqualTo(409);
         await Assert.That(result.Data!.ErrorMessage).Contains("member limit");
-        await invitationRepository.DidNotReceive().UpdateInvitationStatusAsync(Arg.Any<int>(), Arg.Any<InvitationStatus>(), Arg.Any<int?>(), Arg.Any<CancellationToken>());
+        await invitationRepository.DidNotReceive().UpdateInvitationStatusAsync(Arg.Any<int>(), Arg.Any<int>(), Arg.Any<InvitationStatus>(), Arg.Any<int?>(), Arg.Any<CancellationToken>());
     }
 
     // ========== RevokeAsync tests ==========
@@ -692,7 +697,7 @@ public class InvitationHandlerTests
 
         await handler.RevokeAsync(1, 1, CancellationToken.None);
 
-        await invitationRepository.Received(1).RevokeInvitationAsync(1, Arg.Any<CancellationToken>());
+        await invitationRepository.Received(1).RevokeInvitationAsync(1, 1, Arg.Any<CancellationToken>());
     }
 
     // ========== ResendAsync tests ==========
@@ -789,7 +794,7 @@ public class InvitationHandlerTests
 
         await handler.ResendAsync(1, 1, 1, "inviter@test.com", "https://app.test", CancellationToken.None);
 
-        await invitationRepository.Received(1).RevokeInvitationAsync(1, Arg.Any<CancellationToken>());
+        await invitationRepository.Received(1).RevokeInvitationAsync(1, 1, Arg.Any<CancellationToken>());
         backgroundJobClient.Received(1).Create(
             Arg.Is<Job>(j => j.Type == typeof(SendInvitationEmailJob) && j.Method.Name == nameof(SendInvitationEmailJob.SendAsync)),
             Arg.Any<EnqueuedState>());

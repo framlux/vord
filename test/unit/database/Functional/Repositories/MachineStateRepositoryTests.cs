@@ -438,12 +438,51 @@ public class MachineStateRepositoryTests
         using TestDatabaseFactory dbFactory = new();
         IMachineStateRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
 
-        (int _, int _, long machineId) = await SeedMachineWithStateAsync(dbFactory);
+        (int _, int tenantId, long machineId) = await SeedMachineWithStateAsync(dbFactory);
 
-        await repo.UpdateSummaryNameAsync(machineId, "renamed-box");
+        await repo.UpdateSummaryNameAsync(machineId, tenantId, "renamed-box");
 
         MachineStateSummary? updated = await repo.GetSummaryForMachineAsync(machineId);
 
+        await Assert.That(updated).IsNotNull();
+        await Assert.That(updated!.Name).IsEqualTo("renamed-box");
+    }
+
+    [Test]
+    public async Task UpdateSummaryNameAsync_WrongTenant_ReturnsFalse_AndNoChange()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        IMachineStateRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+
+        (int _, int tenantId, long machineId) = await SeedMachineWithStateAsync(dbFactory);
+
+        MachineStateSummary? before = await repo.GetSummaryForMachineAsync(machineId);
+        await Assert.That(before).IsNotNull();
+        string originalName = before!.Name;
+
+        int otherTenantId = tenantId + 1000;
+        bool result = await repo.UpdateSummaryNameAsync(machineId, otherTenantId, "renamed-box");
+
+        await Assert.That(result).IsFalse();
+
+        MachineStateSummary? unchanged = await repo.GetSummaryForMachineAsync(machineId);
+        await Assert.That(unchanged).IsNotNull();
+        await Assert.That(unchanged!.Name).IsEqualTo(originalName);
+    }
+
+    [Test]
+    public async Task UpdateSummaryNameAsync_CorrectTenant_ReturnsTrue_AndChanges()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        IMachineStateRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+
+        (int _, int tenantId, long machineId) = await SeedMachineWithStateAsync(dbFactory);
+
+        bool result = await repo.UpdateSummaryNameAsync(machineId, tenantId, "renamed-box");
+
+        await Assert.That(result).IsTrue();
+
+        MachineStateSummary? updated = await repo.GetSummaryForMachineAsync(machineId);
         await Assert.That(updated).IsNotNull();
         await Assert.That(updated!.Name).IsEqualTo("renamed-box");
     }

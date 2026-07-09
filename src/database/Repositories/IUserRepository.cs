@@ -76,10 +76,17 @@ public interface IUserRepository
     Task<bool> HasActiveRolesAsync(int userId, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Deactivates a user account by marking it as inactive and recording who deleted it.
-    /// Only applies to non-system, currently active accounts.
+    /// Deactivates a user account by marking it as inactive and recording who deleted it. Only applies
+    /// to non-system, currently active accounts. Because a user account is cross-tenant, the deactivation
+    /// is scoped defensively: it only applies when the acting <paramref name="tenantId"/> is a tenant the
+    /// user belonged to and the user has no remaining active role in any tenant.
     /// </summary>
-    Task DeactivateUserAccountAsync(int userId, int currentUserId, CancellationToken cancellationToken = default);
+    /// <param name="userId">The target user to deactivate.</param>
+    /// <param name="tenantId">The acting tenant, which must be one the user belonged to.</param>
+    /// <param name="currentUserId">The user performing the deactivation.</param>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    /// <returns><c>true</c> if the account was deactivated; otherwise <c>false</c>.</returns>
+    Task<bool> DeactivateUserAccountAsync(int userId, int tenantId, int currentUserId, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Lists all user accounts with their active tenant roles, ordered by username.

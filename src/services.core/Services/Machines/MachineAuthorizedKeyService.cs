@@ -99,7 +99,7 @@ public sealed class MachineAuthorizedKeyService : IMachineAuthorizedKeyService
         if (existingRevoked is not null)
         {
             // Re-activate the existing revoked authorization.
-            await _signingKeyRepository.ReactivateAuthorizationAsync(existingRevoked.Id, userId, cancellationToken);
+            await _signingKeyRepository.ReactivateAuthorizationAsync(existingRevoked.Id, tenantId, userId, cancellationToken);
 
             existingRevoked.RevokedAt = null;
             existingRevoked.RevokedByUserId = null;
@@ -154,7 +154,7 @@ public sealed class MachineAuthorizedKeyService : IMachineAuthorizedKeyService
 
         using IDatabaseTransaction transaction = await _transactionProvider.BeginTransactionAsync(cancellationToken);
 
-        await _signingKeyRepository.RevokeMachineAuthorizationAsync(machineId, signingKeyId, userId, cancellationToken);
+        await _signingKeyRepository.RevokeMachineAuthorizationAsync(machineId, signingKeyId, tenantId, userId, cancellationToken);
 
         await _auditLog.InsertAuditLogAsync(new AuditLogEntry
         {

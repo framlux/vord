@@ -167,14 +167,29 @@ public partial class DatabaseRepository : IUserRepository
     }
 
     /// <inheritdoc/>
-    public async Task DeactivateUserAccountAsync(int userId, int currentUserId, CancellationToken cancellationToken)
+    public async Task<bool> DeactivateUserAccountAsync(int userId, int tenantId, int currentUserId, CancellationToken cancellationToken)
     {
-        await _db.UserAccounts
-            .Where(u => u.Id == userId && u.IsActive && u.IsSystem == false)
+        // A UserAccount is a cross-tenant entity, so a raw TenantId predicate cannot be applied to it.
+        // The account-level deactivation is a platform-wide action that must only fire once the user has
+        // no active membership anywhere. Two conditions are enforced in the same statement as
+        // defense-in-depth:
+        //  - The acting tenant must be one the target actually belonged to (a UserTenantRole row for the
+        //    tenant exists, active or not), so a caller from an unrelated tenant cannot deactivate the
+        //    account even if it were to reach this method.
+        //  - The target must have no remaining active UserTenantRole rows in any tenant, mirroring the
+        //    caller's last-role invariant so a concurrent role grant cannot orphan an active membership.
+        int affected = await _db.UserAccounts
+            .Where(u => (u.Id == userId) &&
+                        u.IsActive &&
+                        (u.IsSystem == false) &&
+                        _db.UserTenantRoles.Any(r => (r.UserId == userId) && (r.AssignedTenantId == tenantId)) &&
+                        (_db.UserTenantRoles.Any(r => (r.UserId == userId) && r.IsActive) == false))
             .Set(u => u.IsActive, false)
             .Set(u => u.DeletedOn, DateTimeOffset.UtcNow)
             .Set(u => u.DeletedByUserId, currentUserId)
             .UpdateAsync(cancellationToken);
+
+        return affected > 0;
     }
 
     /// <inheritdoc/>

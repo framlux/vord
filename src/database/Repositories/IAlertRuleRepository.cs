@@ -136,13 +136,17 @@ public interface IAlertRuleRepository
     Task<List<long>> GetMachineIdsForRuleAsync(int ruleId, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Replaces the set of machines assigned to an alert rule. Existing assignments are deleted
-    /// and the provided machine IDs are inserted (deduplicated).
+    /// Replaces the set of machines assigned to an alert rule, scoped to the owning tenant. The
+    /// operation is a no-op when the rule does not belong to <paramref name="tenantId"/>. Existing
+    /// assignments are deleted and only the provided machine IDs that belong to the tenant are inserted
+    /// (deduplicated); machine IDs outside the tenant are silently dropped.
     /// </summary>
     /// <param name="ruleId">The alert rule ID.</param>
+    /// <param name="tenantId">The tenant that must own the rule and the assigned machines.</param>
     /// <param name="machineIds">The machine IDs to assign.</param>
     /// <param name="cancellationToken">A cancellation token.</param>
-    Task SetMachinesForRuleAsync(int ruleId, IReadOnlyList<long> machineIds, CancellationToken cancellationToken = default);
+    /// <returns><c>true</c> if the rule belongs to the tenant and assignments were applied; otherwise <c>false</c>.</returns>
+    Task<bool> SetMachinesForRuleAsync(int ruleId, int tenantId, IReadOnlyList<long> machineIds, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Returns the alert rule IDs assigned to a machine within a specific tenant.
@@ -153,15 +157,17 @@ public interface IAlertRuleRepository
     Task<List<int>> GetRuleIdsForMachineAsync(long machineId, int tenantId, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Replaces the set of alert rules assigned to a machine within a tenant. Existing
-    /// assignments for the machine within the tenant are deleted and the provided rule IDs
-    /// are inserted (deduplicated).
+    /// Replaces the set of alert rules assigned to a machine within a tenant. No-ops and returns
+    /// <c>false</c> when the machine does not belong to the tenant. Otherwise existing assignments for the
+    /// machine are deleted and only the provided rule IDs that belong to the tenant are inserted
+    /// (deduplicated); rule IDs outside the tenant are silently dropped.
     /// </summary>
     /// <param name="machineId">The machine ID.</param>
     /// <param name="tenantId">The tenant ID.</param>
     /// <param name="ruleIds">The rule IDs to assign.</param>
     /// <param name="cancellationToken">A cancellation token.</param>
-    Task SetRulesForMachineAsync(long machineId, int tenantId, IReadOnlyList<int> ruleIds, CancellationToken cancellationToken = default);
+    /// <returns><c>true</c> if the machine belonged to the tenant and assignments were replaced; otherwise <c>false</c>.</returns>
+    Task<bool> SetRulesForMachineAsync(long machineId, int tenantId, IReadOnlyList<int> ruleIds, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Removes all machine assignments for a given machine across all rules.

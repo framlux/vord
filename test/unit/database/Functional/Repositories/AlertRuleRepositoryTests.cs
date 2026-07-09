@@ -7,6 +7,7 @@ using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Test.Infrastructure;
 using LinqToDB;
+using LinqToDB.Async;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Framlux.FleetManagement.Test.Functional.DatabaseRepository;
@@ -605,5 +606,179 @@ public class AlertRuleRepositoryTests
             .ThrowsException()
             .And
             .IsTypeOf<ArgumentNullException>();
+    }
+
+    // ========== SetMachinesForRuleAsync cross-tenant hardening tests ==========
+
+    [Test]
+    public async Task SetMachinesForRuleAsync_WrongTenant_ReturnsFalse_AndNoChange()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        IAlertRuleRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+
+        (int userId, int tenantId) = await SeedUserAndTenantAsync(dbFactory);
+
+        AlertRule rule = TestDataBuilder.BuildAlertRule(tenantId: tenantId, createdByUserId: userId);
+        int ruleId = await dbFactory.Context.InsertWithInt32IdentityAsync(rule);
+
+        Machine machine = TestDataBuilder.BuildMachine(tenantId: tenantId);
+        long machineId = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
+
+        int otherTenantId = tenantId + 1000;
+        bool result = await repo.SetMachinesForRuleAsync(ruleId, otherTenantId, new List<long> { machineId });
+
+        await Assert.That(result).IsFalse();
+
+        // Because the rule is not owned by the acting tenant, no assignment rows may be written.
+        List<long> assigned = await repo.GetMachineIdsForRuleAsync(ruleId);
+        await Assert.That(assigned.Count).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task SetMachinesForRuleAsync_CorrectTenant_ReturnsTrue_AndChanges()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        IAlertRuleRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+
+        (int userId, int tenantId) = await SeedUserAndTenantAsync(dbFactory);
+
+        AlertRule rule = TestDataBuilder.BuildAlertRule(tenantId: tenantId, createdByUserId: userId);
+        int ruleId = await dbFactory.Context.InsertWithInt32IdentityAsync(rule);
+
+        Machine machine = TestDataBuilder.BuildMachine(tenantId: tenantId);
+        long machineId = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
+
+        bool result = await repo.SetMachinesForRuleAsync(ruleId, tenantId, new List<long> { machineId });
+
+        await Assert.That(result).IsTrue();
+
+        List<long> assigned = await repo.GetMachineIdsForRuleAsync(ruleId);
+        await Assert.That(assigned.Count).IsEqualTo(1);
+        await Assert.That(assigned[0]).IsEqualTo(machineId);
+    }
+
+    [Test]
+    public async Task SetMachinesForRuleAsync_MixedTenantMachineIds_AssignsOnlyInTenantMachine()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        IAlertRuleRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+
+        (int userId, int tenantId) = await SeedUserAndTenantAsync(dbFactory);
+        (int _, int otherTenantId) = await SeedUserAndTenantAsync(dbFactory);
+
+        AlertRule rule = TestDataBuilder.BuildAlertRule(tenantId: tenantId, createdByUserId: userId);
+        int ruleId = await dbFactory.Context.InsertWithInt32IdentityAsync(rule);
+
+        Machine inTenantMachine = TestDataBuilder.BuildMachine(tenantId: tenantId);
+        long inTenantMachineId = await dbFactory.Context.InsertWithInt64IdentityAsync(inTenantMachine);
+
+        Machine foreignMachine = TestDataBuilder.BuildMachine(tenantId: otherTenantId);
+        long foreignMachineId = await dbFactory.Context.InsertWithInt64IdentityAsync(foreignMachine);
+
+        // Semantic: affect only the valid (in-tenant) rows. The foreign machine id is silently dropped
+        // rather than assigned cross-tenant, and the operation still succeeds for the valid subset.
+        bool result = await repo.SetMachinesForRuleAsync(ruleId, tenantId, new List<long> { inTenantMachineId, foreignMachineId });
+
+        await Assert.That(result).IsTrue();
+
+        List<long> assigned = await repo.GetMachineIdsForRuleAsync(ruleId);
+        await Assert.That(assigned.Count).IsEqualTo(1);
+        await Assert.That(assigned[0]).IsEqualTo(inTenantMachineId);
+    }
+
+    // ========== SetRulesForMachineAsync cross-tenant hardening tests ==========
+
+    [Test]
+    public async Task SetRulesForMachineAsync_WrongTenantRuleIds_AssignsNothing()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        IAlertRuleRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+
+        (int userId, int tenantId) = await SeedUserAndTenantAsync(dbFactory);
+        (int otherUserId, int otherTenantId) = await SeedUserAndTenantAsync(dbFactory);
+
+        Machine machine = TestDataBuilder.BuildMachine(tenantId: tenantId);
+        long machineId = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
+
+        // A rule owned by a different tenant must never be assigned to this tenant's machine.
+        AlertRule foreignRule = TestDataBuilder.BuildAlertRule(tenantId: otherTenantId, createdByUserId: otherUserId);
+        int foreignRuleId = await dbFactory.Context.InsertWithInt32IdentityAsync(foreignRule);
+
+        await repo.SetRulesForMachineAsync(machineId, tenantId, new List<int> { foreignRuleId });
+
+        List<int> assigned = await repo.GetRuleIdsForMachineAsync(machineId, tenantId);
+        await Assert.That(assigned.Count).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task SetRulesForMachineAsync_CorrectTenant_AssignsRule()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        IAlertRuleRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+
+        (int userId, int tenantId) = await SeedUserAndTenantAsync(dbFactory);
+
+        Machine machine = TestDataBuilder.BuildMachine(tenantId: tenantId);
+        long machineId = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
+
+        AlertRule rule = TestDataBuilder.BuildAlertRule(tenantId: tenantId, createdByUserId: userId);
+        int ruleId = await dbFactory.Context.InsertWithInt32IdentityAsync(rule);
+
+        bool result = await repo.SetRulesForMachineAsync(machineId, tenantId, new List<int> { ruleId });
+
+        await Assert.That(result).IsTrue();
+        List<int> assigned = await repo.GetRuleIdsForMachineAsync(machineId, tenantId);
+        await Assert.That(assigned.Count).IsEqualTo(1);
+        await Assert.That(assigned[0]).IsEqualTo(ruleId);
+    }
+
+    [Test]
+    public async Task SetRulesForMachineAsync_ForeignMachine_ReturnsFalse_AndAssignsNothing()
+    {
+        // Defense-in-depth: even with the acting tenant's own rule ids, a machine owned by another
+        // tenant must not receive any rule assignments; the write is a no-op that returns false.
+        using TestDatabaseFactory dbFactory = new();
+        IAlertRuleRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+
+        (int userId, int tenantId) = await SeedUserAndTenantAsync(dbFactory);
+        (int otherUserId, int otherTenantId) = await SeedUserAndTenantAsync(dbFactory);
+
+        Machine foreignMachine = TestDataBuilder.BuildMachine(tenantId: otherTenantId);
+        long foreignMachineId = await dbFactory.Context.InsertWithInt64IdentityAsync(foreignMachine);
+
+        AlertRule rule = TestDataBuilder.BuildAlertRule(tenantId: tenantId, createdByUserId: userId);
+        int ruleId = await dbFactory.Context.InsertWithInt32IdentityAsync(rule);
+
+        bool result = await repo.SetRulesForMachineAsync(foreignMachineId, tenantId, new List<int> { ruleId });
+
+        await Assert.That(result).IsFalse();
+        int junctionCount = await dbFactory.Context.AlertRuleMachines.CountAsync(arm => arm.MachineId == foreignMachineId);
+        await Assert.That(junctionCount).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task SetRulesForMachineAsync_MixedTenantRuleIds_AssignsOnlyInTenantRule()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        IAlertRuleRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+
+        (int userId, int tenantId) = await SeedUserAndTenantAsync(dbFactory);
+        (int otherUserId, int otherTenantId) = await SeedUserAndTenantAsync(dbFactory);
+
+        Machine machine = TestDataBuilder.BuildMachine(tenantId: tenantId);
+        long machineId = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
+
+        AlertRule inTenantRule = TestDataBuilder.BuildAlertRule(tenantId: tenantId, createdByUserId: userId);
+        int inTenantRuleId = await dbFactory.Context.InsertWithInt32IdentityAsync(inTenantRule);
+
+        AlertRule foreignRule = TestDataBuilder.BuildAlertRule(tenantId: otherTenantId, createdByUserId: otherUserId);
+        int foreignRuleId = await dbFactory.Context.InsertWithInt32IdentityAsync(foreignRule);
+
+        // Semantic: affect only the valid (in-tenant) rows. The foreign rule id is silently dropped.
+        await repo.SetRulesForMachineAsync(machineId, tenantId, new List<int> { inTenantRuleId, foreignRuleId });
+
+        List<int> assigned = await repo.GetRuleIdsForMachineAsync(machineId, tenantId);
+        await Assert.That(assigned.Count).IsEqualTo(1);
+        await Assert.That(assigned[0]).IsEqualTo(inTenantRuleId);
     }
 }

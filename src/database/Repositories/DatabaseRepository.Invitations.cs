@@ -139,16 +139,17 @@ public partial class DatabaseRepository : IInvitationRepository
     }
 
     /// <inheritdoc/>
-    public async Task UpdateInvitationStatusAsync(int invitationId, InvitationStatus status, int? acceptedByUserId, CancellationToken cancellationToken)
+    public async Task<bool> UpdateInvitationStatusAsync(int invitationId, int tenantId, InvitationStatus status, int? acceptedByUserId, CancellationToken cancellationToken)
     {
         try
         {
             _logger.LogDebug("Updating invitation {InvitationId} to status {Status}", invitationId, status);
 
+            int affected;
             if (status == InvitationStatus.Accepted)
             {
-                await _db.TenantInvitations
-                    .Where(i => i.Id == invitationId)
+                affected = await _db.TenantInvitations
+                    .Where(i => (i.Id == invitationId) && (i.TenantId == tenantId))
                     .Set(i => i.Status, status)
                     .Set(i => i.AcceptedByUserId, acceptedByUserId)
                     .Set(i => i.AcceptedAt, DateTimeOffset.UtcNow)
@@ -156,13 +157,15 @@ public partial class DatabaseRepository : IInvitationRepository
             }
             else
             {
-                await _db.TenantInvitations
-                    .Where(i => i.Id == invitationId)
+                affected = await _db.TenantInvitations
+                    .Where(i => (i.Id == invitationId) && (i.TenantId == tenantId))
                     .Set(i => i.Status, status)
                     .UpdateAsync(cancellationToken);
             }
 
             _logger.LogInformation("Updated invitation {InvitationId} to status {Status}", invitationId, status);
+
+            return affected > 0;
         }
         catch (Exception ex)
         {
@@ -172,17 +175,19 @@ public partial class DatabaseRepository : IInvitationRepository
     }
 
     /// <inheritdoc/>
-    public async Task RevokeInvitationAsync(int invitationId, CancellationToken cancellationToken)
+    public async Task<bool> RevokeInvitationAsync(int invitationId, int tenantId, CancellationToken cancellationToken)
     {
         try
         {
             _logger.LogDebug("Revoking invitation {InvitationId}", invitationId);
-            await _db.TenantInvitations
-                .Where(i => i.Id == invitationId)
+            int affected = await _db.TenantInvitations
+                .Where(i => (i.Id == invitationId) && (i.TenantId == tenantId))
                 .Set(i => i.Status, InvitationStatus.Revoked)
                 .Set(i => i.RevokedAt, DateTimeOffset.UtcNow)
                 .UpdateAsync(cancellationToken);
             _logger.LogInformation("Revoked invitation {InvitationId}", invitationId);
+
+            return affected > 0;
         }
         catch (Exception ex)
         {
