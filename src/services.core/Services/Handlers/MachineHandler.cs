@@ -79,20 +79,22 @@ public sealed class MachineHandler : IMachineHandler
 
         using IDatabaseTransaction transaction = await _transactionProvider.BeginTransactionAsync(ct);
 
-        // Remove alert rule machine assignments before deletion
-        int removedAssignments = await _alertRuleRepo.RemoveAllMachineAssignmentsAsync(machineId, ct);
-        if (removedAssignments > 0)
-        {
-            _logger.LogInformation(
-                "Removed {Count} alert rule assignments for machine {MachineId} during deletion",
-                removedAssignments, machineId);
-        }
-
+        // Soft-delete first: this is the tenant-scoped write that proves the caller owns the machine.
+        // Only once ownership is established do we touch the id-keyed assignment rows, so a foreign
+        // machine id has no side effects even before the transaction would roll back.
         string? deletedKeyHash = await _machineRepo.SoftDeleteMachineAsync(machineId, tenantId.Value, userId, ct);
 
         if (deletedKeyHash is null)
         {
             return ServiceResult<ApiResponse<object>>.NotFound();
+        }
+
+        int removedAssignments = await _alertRuleRepo.RemoveAllMachineAssignmentsAsync(machineId, tenantId.Value, ct);
+        if (removedAssignments > 0)
+        {
+            _logger.LogInformation(
+                "Removed {Count} alert rule assignments for machine {MachineId} during deletion",
+                removedAssignments, machineId);
         }
 
         await _auditLog.InsertAuditLogAsync(AuditHelper.Create(

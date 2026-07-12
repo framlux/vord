@@ -132,6 +132,48 @@ public class MachineHandlerTests
         await invalidator.DidNotReceive().InvalidateByHashAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
     }
 
+    [Test]
+    public async Task DeleteAsync_Success_RemovesAlertRuleAssignments()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        DatabaseRepository repo = CreateRepo(dbFactory);
+        long machineId = await SeedMachine(dbFactory);
+
+        AlertRule rule = TestDataBuilder.BuildAlertRule(tenantId: 1, createdByUserId: 1);
+        int ruleId = await dbFactory.Context.InsertWithInt32IdentityAsync(rule);
+        await repo.SetRulesForMachineAsync(machineId, 1, new List<int> { ruleId }, CancellationToken.None);
+
+        MachineHandler handler = CreateHandler(dbFactory);
+
+        ServiceResult<ApiResponse<object>> result = await handler.DeleteAsync(machineId, 1, 5, CancellationToken.None);
+
+        await Assert.That(result.IsSuccess).IsTrue();
+        int remaining = await dbFactory.Context.AlertRuleMachines.CountAsync(arm => arm.MachineId == machineId);
+        await Assert.That(remaining).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task DeleteAsync_WrongTenant_LeavesAlertRuleAssignments()
+    {
+        // A foreign-tenant delete must have zero side effects: the soft-delete proves ownership first,
+        // so the assignment removal never runs for a machine the caller does not own.
+        using TestDatabaseFactory dbFactory = new();
+        DatabaseRepository repo = CreateRepo(dbFactory);
+        long machineId = await SeedMachine(dbFactory, tenantId: 2);
+
+        AlertRule rule = TestDataBuilder.BuildAlertRule(tenantId: 2, createdByUserId: 1);
+        int ruleId = await dbFactory.Context.InsertWithInt32IdentityAsync(rule);
+        await repo.SetRulesForMachineAsync(machineId, 2, new List<int> { ruleId }, CancellationToken.None);
+
+        MachineHandler handler = CreateHandler(dbFactory);
+
+        ServiceResult<ApiResponse<object>> result = await handler.DeleteAsync(machineId, 1, 5, CancellationToken.None);
+
+        await Assert.That(result.IsNotFound).IsTrue();
+        int remaining = await dbFactory.Context.AlertRuleMachines.CountAsync(arm => arm.MachineId == machineId);
+        await Assert.That(remaining).IsEqualTo(1);
+    }
+
     // ========== ListAsync tests ==========
 
     [Test]

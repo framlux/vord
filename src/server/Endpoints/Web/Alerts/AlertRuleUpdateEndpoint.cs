@@ -158,14 +158,8 @@ public sealed class AlertRuleUpdateEndpoint : Endpoint<UpdateAlertRuleRequest, A
             return;
         }
 
-        await _alertRuleRepo.UpdateAlertRuleAsync(
-            ruleId, tenantId.Value,
-            req.Name, req.Description,
-            req.Threshold, req.DurationMinutes,
-            severity, req.IsEnabled,
-            req.NotifyEmail, req.NotifyWebhook, ct);
-
-        // Validate and update machine assignments
+        // Validate machine assignments before any write so an invalid machine id fails the whole
+        // request with the rule row untouched, matching the create path's validate-first ordering.
         List<long> validMachineIds = await _machineRepo.GetActiveMachineIdsForTenantAsync(tenantId.Value, req.MachineIds, ct);
         if (validMachineIds.Count != req.MachineIds.Distinct().Count())
         {
@@ -175,6 +169,13 @@ public sealed class AlertRuleUpdateEndpoint : Endpoint<UpdateAlertRuleRequest, A
 
             return;
         }
+
+        await _alertRuleRepo.UpdateAlertRuleAsync(
+            ruleId, tenantId.Value,
+            req.Name, req.Description,
+            req.Threshold, req.DurationMinutes,
+            severity, req.IsEnabled,
+            req.NotifyEmail, req.NotifyWebhook, ct);
 
         bool assigned = await _alertRuleRepo.SetMachinesForRuleAsync(ruleId, tenantId.Value, req.MachineIds, ct);
         if (assigned == false)

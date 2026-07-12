@@ -60,13 +60,7 @@ public sealed class ConfigurationService : Configuration.ConfigurationBase
     /// <returns>Returns a configuration response</returns>
     public override async Task<GetConfigurationResponse> GetConfiguration(GetConfigurationRequest request, ServerCallContext context)
     {
-        long claimMachineId = ExtractMachineIdFromClaims(context);
-        if ((claimMachineId > 0) && (request.MachineId != claimMachineId))
-        {
-            _logger.LogWarning("GetConfiguration: request MachineId={RequestId} does not match authenticated MachineId={ClaimId}",
-                request.MachineId, claimMachineId);
-            throw new RpcException(new Status(StatusCode.PermissionDenied, "Machine ID mismatch"));
-        }
+        long machineId = ResolveMachineId(context, request.MachineId, "GetConfiguration");
 
         int heartbeatSeconds = await _configService.GetAgentHeartbeatSecondsAsync(context.CancellationToken);
         int configRefreshSeconds = await _configService.GetAgentConfigRefreshSecondsAsync(context.CancellationToken);
@@ -95,8 +89,6 @@ public sealed class ConfigurationService : Configuration.ConfigurationBase
             },
             TenantId = tenantId,
         };
-        // Store the agent's reported capabilities so the UI can reflect them.
-        long machineId = claimMachineId > 0 ? claimMachineId : request.MachineId;
 
         if (tenantId > 0)
         {
@@ -125,15 +117,7 @@ public sealed class ConfigurationService : Configuration.ConfigurationBase
     /// <returns>Returns a response indicating the success of the ping</returns>
     public override async Task<AgentPingResponse> AgentPing(AgentPingRequest request, ServerCallContext context)
     {
-        long claimMachineId = ExtractMachineIdFromClaims(context);
-        if ((claimMachineId > 0) && (request.MachineId != claimMachineId))
-        {
-            _logger.LogWarning("AgentPing: request MachineId={RequestId} does not match authenticated MachineId={ClaimId}",
-                request.MachineId, claimMachineId);
-            throw new RpcException(new Status(StatusCode.PermissionDenied, "Machine ID mismatch"));
-        }
-
-        long machineId = claimMachineId > 0 ? claimMachineId : request.MachineId;
+        long machineId = ResolveMachineId(context, request.MachineId, "AgentPing");
         _logger.LogInformation("Received AgentPing from machine ID {MachineId}", machineId);
 
         try
@@ -159,15 +143,7 @@ public sealed class ConfigurationService : Configuration.ConfigurationBase
     /// <returns>Returns a response with pending commands</returns>
     public override async Task<GetPendingCommandsResponse> GetPendingCommands(GetPendingCommandsRequest request, ServerCallContext context)
     {
-        long claimMachineId = ExtractMachineIdFromClaims(context);
-        if ((claimMachineId > 0) && (request.MachineId != claimMachineId))
-        {
-            _logger.LogWarning("GetPendingCommands: request MachineId={RequestId} does not match authenticated MachineId={ClaimId}",
-                request.MachineId, claimMachineId);
-            throw new RpcException(new Status(StatusCode.PermissionDenied, "Machine ID mismatch"));
-        }
-
-        long machineId = claimMachineId > 0 ? claimMachineId : request.MachineId;
+        long machineId = ResolveMachineId(context, request.MachineId, "GetPendingCommands");
         int tenantId = ExtractTenantIdFromClaims(context);
 
         List<RemoteCommand> pendingCommands = await _remoteCommandRepository.GetPendingCommandsForMachineAsync(machineId, tenantId, context.CancellationToken);
@@ -223,15 +199,7 @@ public sealed class ConfigurationService : Configuration.ConfigurationBase
     /// <returns>Returns success.</returns>
     public override async Task<AcknowledgeCommandResponse> AcknowledgeCommand(AcknowledgeCommandRequest request, ServerCallContext context)
     {
-        long claimMachineId = ExtractMachineIdFromClaims(context);
-        if ((claimMachineId > 0) && (request.MachineId != claimMachineId))
-        {
-            _logger.LogWarning("AcknowledgeCommand: request MachineId={RequestId} does not match authenticated MachineId={ClaimId}",
-                request.MachineId, claimMachineId);
-            throw new RpcException(new Status(StatusCode.PermissionDenied, "Machine ID mismatch"));
-        }
-
-        long machineId = claimMachineId > 0 ? claimMachineId : request.MachineId;
+        long machineId = ResolveMachineId(context, request.MachineId, "AcknowledgeCommand");
 
         CommandResult? result = request.Result;
         _logger.LogInformation(
@@ -267,6 +235,37 @@ public sealed class ConfigurationService : Configuration.ConfigurationBase
             context.CancellationToken);
 
         return new AcknowledgeCommandResponse { Success = true };
+    }
+
+    /// <summary>
+    /// Resolves the machine identity for a configuration RPC from the authenticated API-key claim,
+    /// never from the client-supplied request value. A missing or unparseable claim is rejected as
+    /// <see cref="StatusCode.Unauthenticated"/> rather than silently falling back to the request, so
+    /// no code path can ever act on a machine id the caller was not authenticated for. When the
+    /// request carries its own machine id it must match the claim, otherwise the call is
+    /// <see cref="StatusCode.PermissionDenied"/>.
+    /// </summary>
+    /// <param name="context">The gRPC call context carrying the authenticated principal.</param>
+    /// <param name="requestMachineId">The machine id supplied in the request body.</param>
+    /// <param name="operation">The RPC name, used only for diagnostic logging.</param>
+    /// <returns>The authenticated machine id.</returns>
+    private long ResolveMachineId(ServerCallContext context, long requestMachineId, string operation)
+    {
+        long claimMachineId = ExtractMachineIdFromClaims(context);
+        if (claimMachineId <= 0)
+        {
+            _logger.LogWarning("{Operation}: request rejected because the authenticated principal carries no machine claim", operation);
+            throw new RpcException(new Status(StatusCode.Unauthenticated, "Could not determine machine identity"));
+        }
+
+        if (requestMachineId != claimMachineId)
+        {
+            _logger.LogWarning("{Operation}: request MachineId={RequestId} does not match authenticated MachineId={ClaimId}",
+                operation, requestMachineId, claimMachineId);
+            throw new RpcException(new Status(StatusCode.PermissionDenied, "Machine ID mismatch"));
+        }
+
+        return claimMachineId;
     }
 
     private static long ExtractMachineIdFromClaims(ServerCallContext context)

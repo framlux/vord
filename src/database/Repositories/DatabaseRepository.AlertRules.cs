@@ -341,10 +341,11 @@ public partial class DatabaseRepository : IAlertRuleRepository
     }
 
     /// <inheritdoc/>
-    public async Task<int> RemoveAllMachineAssignmentsAsync(long machineId, CancellationToken cancellationToken)
+    public async Task<int> RemoveAllMachineAssignmentsAsync(long machineId, int tenantId, CancellationToken cancellationToken)
     {
         int deleted = await _db.AlertRuleMachines
-            .Where(arm => arm.MachineId == machineId)
+            .Where(arm => (arm.MachineId == machineId)
+                && _db.Machines.Any(m => (m.Id == arm.MachineId) && (m.TenantId == tenantId)))
             .DeleteAsync(cancellationToken);
 
         if (deleted > 0)

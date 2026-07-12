@@ -781,4 +781,53 @@ public class AlertRuleRepositoryTests
         await Assert.That(assigned.Count).IsEqualTo(1);
         await Assert.That(assigned[0]).IsEqualTo(inTenantRuleId);
     }
+
+    [Test]
+    public async Task RemoveAllMachineAssignmentsAsync_CorrectTenant_RemovesAssignments()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        IAlertRuleRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+
+        (int userId, int tenantId) = await SeedUserAndTenantAsync(dbFactory);
+
+        Machine machine = TestDataBuilder.BuildMachine(tenantId: tenantId);
+        long machineId = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
+
+        AlertRule rule = TestDataBuilder.BuildAlertRule(tenantId: tenantId, createdByUserId: userId);
+        int ruleId = await dbFactory.Context.InsertWithInt32IdentityAsync(rule);
+
+        await repo.SetRulesForMachineAsync(machineId, tenantId, new List<int> { ruleId });
+
+        int removed = await repo.RemoveAllMachineAssignmentsAsync(machineId, tenantId);
+
+        await Assert.That(removed).IsEqualTo(1);
+        int remaining = await dbFactory.Context.AlertRuleMachines.CountAsync(arm => arm.MachineId == machineId);
+        await Assert.That(remaining).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task RemoveAllMachineAssignmentsAsync_ForeignTenant_RemovesNothing()
+    {
+        // Defense-in-depth: passing another tenant's id must not strip a machine's assignments even
+        // though the deletion is keyed on the machine id — the tenant join makes it a no-op.
+        using TestDatabaseFactory dbFactory = new();
+        IAlertRuleRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+
+        (int userId, int tenantId) = await SeedUserAndTenantAsync(dbFactory);
+        (int otherUserId, int otherTenantId) = await SeedUserAndTenantAsync(dbFactory);
+
+        Machine machine = TestDataBuilder.BuildMachine(tenantId: tenantId);
+        long machineId = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
+
+        AlertRule rule = TestDataBuilder.BuildAlertRule(tenantId: tenantId, createdByUserId: userId);
+        int ruleId = await dbFactory.Context.InsertWithInt32IdentityAsync(rule);
+
+        await repo.SetRulesForMachineAsync(machineId, tenantId, new List<int> { ruleId });
+
+        int removed = await repo.RemoveAllMachineAssignmentsAsync(machineId, otherTenantId);
+
+        await Assert.That(removed).IsEqualTo(0);
+        int remaining = await dbFactory.Context.AlertRuleMachines.CountAsync(arm => arm.MachineId == machineId);
+        await Assert.That(remaining).IsEqualTo(1);
+    }
 }

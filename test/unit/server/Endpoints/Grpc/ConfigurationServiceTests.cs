@@ -53,6 +53,16 @@ public sealed class ConfigurationServiceTests
         return new TestServerCallContext(httpContext, new Metadata());
     }
 
+    private static ServerCallContext CreateContextWithoutMachineClaim(int tenantId = 1)
+    {
+        DefaultHttpContext httpContext = new();
+        ClaimsIdentity identity = new("ApiKey");
+        identity.AddClaim(new Claim("TenantId", tenantId.ToString()));
+        httpContext.User = new ClaimsPrincipal(identity);
+
+        return new TestServerCallContext(httpContext, new Metadata());
+    }
+
     [Test]
     public async Task GetConfiguration_NoDbSettings_ReturnsDefaults()
     {
@@ -474,6 +484,102 @@ public sealed class ConfigurationServiceTests
         await Assert.That(response.SigningKeys.Count).IsEqualTo(0);
         await signingKeyRepo.DidNotReceive().GetActiveSigningKeysForMachineAsync(
             Arg.Any<long>(), Arg.Any<CancellationToken>());
+    }
+
+    // ========== Missing machine claim must be rejected, never falling back to the request ==========
+
+    [Test]
+    public async Task GetConfiguration_NoMachineClaim_ThrowsUnauthenticated()
+    {
+        ISigningKeyRepository signingKeyRepo = Substitute.For<ISigningKeyRepository>();
+        ConfigurationService service = CreateService(signingKeyRepo: signingKeyRepo);
+        ServerCallContext context = CreateContextWithoutMachineClaim();
+
+        // A caller-supplied MachineId must never be trusted when the authenticated principal lacks
+        // the claim; the request id (99) must not be consulted for any downstream work.
+        GetConfigurationRequest request = new() { MachineId = 99 };
+
+        try
+        {
+            await service.GetConfiguration(request, context);
+            Assert.Fail("Expected RpcException");
+        }
+        catch (RpcException ex)
+        {
+            await Assert.That(ex.StatusCode).IsEqualTo(StatusCode.Unauthenticated);
+        }
+
+        await signingKeyRepo.DidNotReceive().GetActiveSigningKeysForMachineAsync(Arg.Any<long>(), Arg.Any<CancellationToken>());
+        await _pingService.DidNotReceive().SetAgentCapabilitiesAsync(Arg.Any<long>(), Arg.Any<ulong>());
+    }
+
+    [Test]
+    public async Task AgentPing_NoMachineClaim_ThrowsUnauthenticated()
+    {
+        ConfigurationService service = CreateService();
+        ServerCallContext context = CreateContextWithoutMachineClaim();
+
+        AgentPingRequest request = new() { MachineId = 99 };
+
+        try
+        {
+            await service.AgentPing(request, context);
+            Assert.Fail("Expected RpcException");
+        }
+        catch (RpcException ex)
+        {
+            await Assert.That(ex.StatusCode).IsEqualTo(StatusCode.Unauthenticated);
+        }
+
+        await _pingService.DidNotReceive().RecordPingAsync(Arg.Any<long>());
+    }
+
+    [Test]
+    public async Task GetPendingCommands_NoMachineClaim_ThrowsUnauthenticated()
+    {
+        IRemoteCommandRepository remoteCommandRepo = Substitute.For<IRemoteCommandRepository>();
+        ConfigurationService service = CreateService(remoteCommandRepo: remoteCommandRepo);
+        ServerCallContext context = CreateContextWithoutMachineClaim();
+
+        GetPendingCommandsRequest request = new() { MachineId = 99 };
+
+        try
+        {
+            await service.GetPendingCommands(request, context);
+            Assert.Fail("Expected RpcException");
+        }
+        catch (RpcException ex)
+        {
+            await Assert.That(ex.StatusCode).IsEqualTo(StatusCode.Unauthenticated);
+        }
+
+        await remoteCommandRepo.DidNotReceive().GetPendingCommandsForMachineAsync(
+            Arg.Any<long>(), Arg.Any<int>(), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task AcknowledgeCommand_NoMachineClaim_ThrowsUnauthenticated()
+    {
+        IRemoteCommandRepository remoteCommandRepo = Substitute.For<IRemoteCommandRepository>();
+        ConfigurationService service = CreateService(remoteCommandRepo: remoteCommandRepo);
+        ServerCallContext context = CreateContextWithoutMachineClaim();
+
+        AcknowledgeCommandRequest request = new() { MachineId = 99, CommandId = "cmd-1" };
+
+        try
+        {
+            await service.AcknowledgeCommand(request, context);
+            Assert.Fail("Expected RpcException");
+        }
+        catch (RpcException ex)
+        {
+            await Assert.That(ex.StatusCode).IsEqualTo(StatusCode.Unauthenticated);
+        }
+
+        await remoteCommandRepo.DidNotReceive().UpdateRemoteCommandStatusAsync(
+            Arg.Any<string>(), Arg.Any<long>(), Arg.Any<Database.Enums.RemoteCommandStatus>(),
+            Arg.Any<int?>(), Arg.Any<string?>(), Arg.Any<string?>(), Arg.Any<string?>(),
+            Arg.Any<CancellationToken>());
     }
 
     /// <summary>

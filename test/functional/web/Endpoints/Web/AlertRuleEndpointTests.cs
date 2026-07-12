@@ -570,6 +570,63 @@ public sealed class AlertRuleEndpointTests
     }
 
     [Test]
+    public async Task UpdateAlertRule_InvalidMachineId_Returns400_AndLeavesRuleUnchanged()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId, long machineId) = await SeedAlertEnvironment(db, SubscriptionTier.Pro);
+
+        AlertRule rule = new()
+        {
+            TenantId = tenantId,
+            Name = "Original Name",
+            Description = "Original Desc",
+            Metric = AlertMetric.CpuUsage,
+            Operator = AlertOperator.GreaterThan,
+            Threshold = 80,
+            DurationMinutes = 5,
+            Severity = AlertSeverity.Warning,
+            IsEnabled = true,
+            NotifyEmail = false,
+            NotifyWebhook = false,
+            IsCustom = false,
+            CreatedByUserId = userId,
+            CreatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow.AddHours(-1),
+        };
+        rule.Id = await db.InsertWithInt32IdentityAsync(rule);
+
+        HttpClient client = BuildClient(factory, tenantId, userId);
+
+        // One valid machine id and one that does not belong to the tenant. The update must be
+        // all-or-nothing: the request fails and the rule row's mutable fields are left untouched.
+        HttpResponseMessage response = await client.PutAsJsonAsync($"/api/v1/alert-rules/{rule.Id}", new
+        {
+            Name = "Updated Name",
+            Description = "Updated Desc",
+            Metric = "CpuUsage",
+            Threshold = 95,
+            DurationMinutes = 10,
+            Severity = "Critical",
+            IsEnabled = false,
+            NotifyEmail = true,
+            NotifyWebhook = true,
+            MachineIds = new long[] { machineId, 999999 },
+        });
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.BadRequest);
+
+        AlertRule? unchanged = await db.AlertRules.FirstOrDefaultAsync(r => r.Id == rule.Id);
+        await Assert.That(unchanged!.Name).IsEqualTo("Original Name");
+        await Assert.That(unchanged.Threshold).IsEqualTo(80m);
+        await Assert.That(unchanged.DurationMinutes).IsEqualTo(5);
+        await Assert.That(unchanged.Severity).IsEqualTo(AlertSeverity.Warning);
+        await Assert.That(unchanged.IsEnabled).IsTrue();
+        await Assert.That(unchanged.NotifyEmail).IsFalse();
+        await Assert.That(unchanged.NotifyWebhook).IsFalse();
+    }
+
+    [Test]
     public async Task UpdateAlertRule_DoesNotChangeMetricOrOperator()
     {
         using FunctionalTestFactory factory = new();

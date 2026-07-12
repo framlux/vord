@@ -170,12 +170,14 @@ public interface IAlertRuleRepository
     Task<bool> SetRulesForMachineAsync(long machineId, int tenantId, IReadOnlyList<int> ruleIds, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Removes all machine assignments for a given machine across all rules.
-    /// Returns the number of rows deleted.
+    /// Removes all machine assignments for a given machine across all rules, scoped to the owning
+    /// tenant. Assignments are only deleted when the machine belongs to <paramref name="tenantId"/>;
+    /// a machine outside the tenant is a no-op. Returns the number of rows deleted.
     /// </summary>
     /// <param name="machineId">The machine ID.</param>
+    /// <param name="tenantId">The tenant that must own the machine.</param>
     /// <param name="cancellationToken">A cancellation token.</param>
-    Task<int> RemoveAllMachineAssignmentsAsync(long machineId, CancellationToken cancellationToken = default);
+    Task<int> RemoveAllMachineAssignmentsAsync(long machineId, int tenantId, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Returns enabled alert rules of a specific metric type that are assigned to a machine
