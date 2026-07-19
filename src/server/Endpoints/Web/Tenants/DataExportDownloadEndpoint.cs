@@ -63,9 +63,7 @@ public sealed class DataExportDownloadEndpoint : Endpoint<DataExportDownloadRequ
 
         if (result.IsNotFound)
         {
-            HttpContext.Response.StatusCode = 404;
-            await HttpContext.Response.WriteAsJsonAsync(
-                ApiResponse<object>.Error("Export not found"), ct);
+            await HttpContext.SendApiErrorAsync(404, "Export not found", ct);
 
             return;
         }
@@ -74,27 +72,21 @@ public sealed class DataExportDownloadEndpoint : Endpoint<DataExportDownloadRequ
 
         if (job.Status != DataExportJobStatus.Complete)
         {
-            HttpContext.Response.StatusCode = 409;
-            await HttpContext.Response.WriteAsJsonAsync(
-                new { message = "Export is not ready for download", status = job.Status.ToString() }, ct);
+            await HttpContext.SendApiErrorAsync(409, $"Export is not ready for download (status: {job.Status})", ct);
 
             return;
         }
 
         if (job.ExpiresAt < DateTimeOffset.UtcNow)
         {
-            HttpContext.Response.StatusCode = 410;
-            await HttpContext.Response.WriteAsJsonAsync(
-                new { message = "Export has expired" }, ct);
+            await HttpContext.SendApiErrorAsync(410, "Export has expired", ct);
 
             return;
         }
 
         if (string.IsNullOrEmpty(job.ObjectKey))
         {
-            HttpContext.Response.StatusCode = 500;
-            await HttpContext.Response.WriteAsJsonAsync(
-                new { message = "Export file not found" }, ct);
+            await HttpContext.SendApiErrorAsync(500, "Export file not found", ct);
 
             return;
         }

@@ -119,9 +119,15 @@ public sealed class TenantDataExportTests
 
         await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
 
+        // The response is the standard ApiResponse envelope; the web client unwraps
+        // "data" to obtain the job, so the shape here is load-bearing.
         string body = await response.Content.ReadAsStringAsync();
-        await Assert.That(body).Contains("\"jobId\"");
-        await Assert.That(body).Contains("\"status\":\"Pending\"");
+        using JsonDocument doc = JsonDocument.Parse(body);
+        await Assert.That(doc.RootElement.GetProperty("success").GetBoolean()).IsTrue();
+
+        JsonElement data = doc.RootElement.GetProperty("data");
+        await Assert.That(data.GetProperty("jobId").GetInt32()).IsGreaterThan(0);
+        await Assert.That(data.GetProperty("status").GetString()).IsEqualTo("Pending");
     }
 
     [Test]
@@ -148,7 +154,7 @@ public sealed class TenantDataExportTests
 
         string body = await response.Content.ReadAsStringAsync();
         using JsonDocument doc = JsonDocument.Parse(body);
-        int jobId = doc.RootElement.GetProperty("jobId").GetInt32();
+        int jobId = doc.RootElement.GetProperty("data").GetProperty("jobId").GetInt32();
 
         // Database row was created and is associated with the requesting tenant.
         DataExportJob? row = await db.DataExportJobs.FirstOrDefaultAsync(j => j.Id == jobId);
@@ -190,7 +196,7 @@ public sealed class TenantDataExportTests
 
         // Extract jobId from response using proper JSON deserialization.
         using JsonDocument createDoc = JsonDocument.Parse(createBody);
-        int jobId = createDoc.RootElement.GetProperty("jobId").GetInt32();
+        int jobId = createDoc.RootElement.GetProperty("data").GetProperty("jobId").GetInt32();
         string jobIdStr = jobId.ToString();
 
         // Try to access from tenant 2
@@ -230,7 +236,7 @@ public sealed class TenantDataExportTests
 
         // Extract jobId from response using proper JSON deserialization.
         using JsonDocument createDoc = JsonDocument.Parse(createBody);
-        int jobId = createDoc.RootElement.GetProperty("jobId").GetInt32();
+        int jobId = createDoc.RootElement.GetProperty("data").GetProperty("jobId").GetInt32();
         string jobIdStr = jobId.ToString();
 
         HttpResponseMessage statusResponse = await client.GetAsync($"/api/v1/tenants/export/{jobIdStr}");
@@ -270,6 +276,138 @@ public sealed class TenantDataExportTests
         // No export job was created on a NotFound path.
         bool anyJob = await db.DataExportJobs.AnyAsync(j => j.TenantId == tenantId);
         await Assert.That(anyJob).IsFalse();
+    }
+
+    // ========== Error envelope tests ==========
+
+    [Test]
+    public async Task RequestExport_ObjectStorageNotConfigured_Returns501ErrorEnvelope()
+    {
+        using ObjectStorageDisabledTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+
+        int tenantId = await SeedTenantWithSubscription(db, "No Storage Tenant");
+
+        HttpClient client = new AuthenticatedClientBuilder(factory)
+            .WithUserId(1)
+            .WithRole(tenantId, (int)UserAccountRoles.TenantAdmin)
+            .WithActiveTenant(tenantId)
+            .Build();
+
+        HttpResponseMessage response = await client.PostAsync("/api/v1/tenants/export", null);
+
+        await Assert.That((int)response.StatusCode).IsEqualTo(501);
+
+        string body = await response.Content.ReadAsStringAsync();
+        using JsonDocument doc = JsonDocument.Parse(body);
+        await Assert.That(doc.RootElement.GetProperty("success").GetBoolean()).IsFalse();
+        await Assert.That(doc.RootElement.GetProperty("message").GetString())
+            .IsEqualTo("Data export is not available on this server");
+    }
+
+    [Test]
+    public async Task RequestExport_AlreadyInProgress_Returns409ErrorEnvelope()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+
+        int tenantId = await SeedTenantWithSubscription(db, "Duplicate Export Tenant");
+        await SeedMachine(db, tenantId, "duplicate-host");
+
+        HttpClient client = new AuthenticatedClientBuilder(factory)
+            .WithUserId(1)
+            .WithRole(tenantId, (int)UserAccountRoles.TenantAdmin)
+            .WithActiveTenant(tenantId)
+            .Build();
+
+        HttpResponseMessage firstResponse = await client.PostAsync("/api/v1/tenants/export", null);
+        await Assert.That(firstResponse.StatusCode).IsEqualTo(HttpStatusCode.OK);
+
+        HttpResponseMessage secondResponse = await client.PostAsync("/api/v1/tenants/export", null);
+
+        await Assert.That((int)secondResponse.StatusCode).IsEqualTo(409);
+
+        string body = await secondResponse.Content.ReadAsStringAsync();
+        using JsonDocument doc = JsonDocument.Parse(body);
+        await Assert.That(doc.RootElement.GetProperty("success").GetBoolean()).IsFalse();
+        await Assert.That(doc.RootElement.GetProperty("message").GetString())
+            .IsEqualTo("A data export is already in progress");
+    }
+
+    [Test]
+    public async Task ExportDownload_JobNotReady_Returns409ErrorEnvelope()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+
+        int tenantId = await SeedTenantWithSubscription(db, "Pending Download Tenant");
+        await SeedMachine(db, tenantId, "pending-host");
+
+        HttpClient client = new AuthenticatedClientBuilder(factory)
+            .WithUserId(1)
+            .WithRole(tenantId, (int)UserAccountRoles.TenantAdmin)
+            .WithActiveTenant(tenantId)
+            .Build();
+
+        HttpResponseMessage createResponse = await client.PostAsync("/api/v1/tenants/export", null);
+        string createBody = await createResponse.Content.ReadAsStringAsync();
+        using JsonDocument createDoc = JsonDocument.Parse(createBody);
+        int jobId = createDoc.RootElement.GetProperty("data").GetProperty("jobId").GetInt32();
+
+        HttpResponseMessage downloadResponse = await client.GetAsync($"/api/v1/tenants/export/{jobId}/download");
+
+        await Assert.That((int)downloadResponse.StatusCode).IsEqualTo(409);
+
+        string body = await downloadResponse.Content.ReadAsStringAsync();
+        using JsonDocument doc = JsonDocument.Parse(body);
+        await Assert.That(doc.RootElement.GetProperty("success").GetBoolean()).IsFalse();
+
+        string? message = doc.RootElement.GetProperty("message").GetString();
+        await Assert.That(message).IsNotNull();
+        await Assert.That(message!).Contains("Export is not ready for download");
+    }
+
+    [Test]
+    public async Task ExportStatus_CompleteJob_ReturnsRoutePrefixedDownloadUrls()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+
+        int tenantId = await SeedTenantWithSubscription(db, "Complete Job Tenant");
+
+        DataExportJob job = new()
+        {
+            TenantId = tenantId,
+            Status = DataExportJobStatus.Complete,
+            RequestedByUserId = 1,
+            RequestedAt = DateTimeOffset.UtcNow.AddMinutes(-5),
+            CompletedAt = DateTimeOffset.UtcNow,
+            ObjectKey = "exports/complete-job-tenant.zip",
+            ExpiresAt = DateTimeOffset.UtcNow.AddDays(1),
+            DownloadToken = Guid.NewGuid().ToString("N"),
+            FileSizeBytes = 1024,
+        };
+        job.Id = await db.InsertWithInt32IdentityAsync(job);
+
+        HttpClient client = new AuthenticatedClientBuilder(factory)
+            .WithUserId(1)
+            .WithRole(tenantId, (int)UserAccountRoles.TenantAdmin)
+            .WithActiveTenant(tenantId)
+            .Build();
+
+        HttpResponseMessage response = await client.GetAsync($"/api/v1/tenants/export/{job.Id}");
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
+
+        // The download URLs must carry the real route prefix (api/v1) or the links the UI
+        // renders will 404.
+        string body = await response.Content.ReadAsStringAsync();
+        using JsonDocument doc = JsonDocument.Parse(body);
+        JsonElement data = doc.RootElement.GetProperty("data");
+        await Assert.That(data.GetProperty("downloadUrl").GetString())
+            .IsEqualTo($"/api/v1/tenants/export/{job.Id}/download");
+        await Assert.That(data.GetProperty("shareableUrl").GetString())
+            .IsEqualTo($"/api/v1/exports/download?token={job.DownloadToken}");
     }
 
     // ========== Seed helpers ==========

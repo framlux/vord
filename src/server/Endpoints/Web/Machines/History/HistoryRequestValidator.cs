@@ -54,18 +54,14 @@ public sealed class HistoryRequestValidator
 
         if (tenantId is null)
         {
-            httpContext.Response.StatusCode = 403;
-            await httpContext.Response.WriteAsJsonAsync(
-                ApiResponse<object>.Error("Forbidden"), ct);
+            await httpContext.SendApiErrorAsync(403, "Forbidden", ct);
 
             return null;
         }
 
         if (await _machineRepo.GetActiveMachineByIdAsync(machineId, tenantId.Value, ct) is null)
         {
-            httpContext.Response.StatusCode = 404;
-            await httpContext.Response.WriteAsJsonAsync(
-                ApiResponse<object>.Error("Machine not found"), ct);
+            await httpContext.SendApiErrorAsync(404, "Machine not found", ct);
 
             return null;
         }
@@ -79,22 +75,14 @@ public sealed class HistoryRequestValidator
 
         if (rangeResult == HistoryRangeResult.InvalidRange)
         {
-            httpContext.Response.StatusCode = 400;
-            await httpContext.Response.WriteAsJsonAsync(
-                ApiResponse<object>.Error(rangeError), ct);
+            await httpContext.SendApiErrorAsync(400, rangeError, ct);
 
             return null;
         }
 
         if (rangeResult == HistoryRangeResult.RetentionExceeded)
         {
-            httpContext.Response.StatusCode = 403;
-            await httpContext.Response.WriteAsJsonAsync(new HistoryRetentionErrorDto
-            {
-                Message = rangeError,
-                UpgradeRequired = true,
-                CurrentRetentionDays = retentionDays
-            }, ct);
+            await httpContext.SendApiErrorAsync(403, rangeError, ct);
 
             return null;
         }

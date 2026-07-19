@@ -31,7 +31,7 @@ public sealed class RequestDataExportResponse
 /// <summary>
 /// Creates a pending data export job for the current tenant.
 /// </summary>
-public sealed class RequestDataExportEndpoint : EndpointWithoutRequest<RequestDataExportResponse>
+public sealed class RequestDataExportEndpoint : EndpointWithoutRequest<ApiResponse<RequestDataExportResponse>>
 {
     private readonly IBackgroundJobClient _backgroundJobClient;
     private readonly IDataExportHandler _handler;
@@ -71,9 +71,7 @@ public sealed class RequestDataExportEndpoint : EndpointWithoutRequest<RequestDa
     {
         if (_objectStorageService is NoOpObjectStorageService)
         {
-            HttpContext.Response.StatusCode = StatusCodes.Status501NotImplemented;
-            await HttpContext.Response.WriteAsJsonAsync(
-                new RequestDataExportResponse { JobId = 0, Status = "NotAvailable" }, ct);
+            await HttpContext.SendApiErrorAsync(StatusCodes.Status501NotImplemented, "Data export is not available on this server", ct);
 
             return;
         }
@@ -83,9 +81,7 @@ public sealed class RequestDataExportEndpoint : EndpointWithoutRequest<RequestDa
         int? userId = _tenantContext.UserId;
         if (userId is null)
         {
-            HttpContext.Response.StatusCode = StatusCodes.Status401Unauthorized;
-            await HttpContext.Response.WriteAsJsonAsync(
-                ApiResponse<RequestDataExportResponse>.Error("Unable to identify user"), ct);
+            await HttpContext.SendApiErrorAsync(StatusCodes.Status401Unauthorized, "Unable to identify user", ct);
 
             return;
         }
@@ -94,18 +90,14 @@ public sealed class RequestDataExportEndpoint : EndpointWithoutRequest<RequestDa
 
         if (result.IsNotFound)
         {
-            HttpContext.Response.StatusCode = StatusCodes.Status404NotFound;
-            await HttpContext.Response.WriteAsJsonAsync(
-                ApiResponse<RequestDataExportResponse>.Error("Tenant not found"), ct);
+            await HttpContext.SendApiErrorAsync(StatusCodes.Status404NotFound, "Tenant not found", ct);
 
             return;
         }
 
         if (result.StatusCode == StatusCodes.Status409Conflict)
         {
-            HttpContext.Response.StatusCode = StatusCodes.Status409Conflict;
-            await HttpContext.Response.WriteAsJsonAsync(
-                new RequestDataExportResponse { JobId = 0, Status = "AlreadyInProgress" }, ct);
+            await HttpContext.SendApiErrorAsync(StatusCodes.Status409Conflict, "A data export is already in progress", ct);
 
             return;
         }
@@ -114,6 +106,8 @@ public sealed class RequestDataExportEndpoint : EndpointWithoutRequest<RequestDa
         // The recurring DataExportProcessingJob.RunAsync continues to run as the orphan reaper.
         _backgroundJobClient.Enqueue<DataExportProcessingJob>(job => job.ProcessSingleAsync(result.Data, CancellationToken.None));
 
-        await Send.OkAsync(new RequestDataExportResponse { JobId = result.Data, Status = "Pending" }, cancellation: ct);
+        await Send.OkAsync(
+            ApiResponse<RequestDataExportResponse>.Ok(new RequestDataExportResponse { JobId = result.Data, Status = "Pending" }),
+            cancellation: ct);
     }
 }

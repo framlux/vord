@@ -66,7 +66,7 @@ public sealed class DataExportStatusResponse
 /// <summary>
 /// Returns the status and download URLs for a data export job.
 /// </summary>
-public sealed class DataExportStatusEndpoint : Endpoint<DataExportStatusRequest, DataExportStatusResponse>
+public sealed class DataExportStatusEndpoint : Endpoint<DataExportStatusRequest, ApiResponse<DataExportStatusResponse>>
 {
     private readonly IDataExportHandler _handler;
     private readonly ITenantContext _tenantContext;
@@ -100,9 +100,7 @@ public sealed class DataExportStatusEndpoint : Endpoint<DataExportStatusRequest,
 
         if (result.IsNotFound)
         {
-            HttpContext.Response.StatusCode = 404;
-            await HttpContext.Response.WriteAsJsonAsync(
-                ApiResponse<DataExportStatusResponse>.Error("Export job not found"), ct);
+            await HttpContext.SendApiErrorAsync(404, "Export job not found", ct);
 
             return;
         }
@@ -114,11 +112,11 @@ public sealed class DataExportStatusEndpoint : Endpoint<DataExportStatusRequest,
 
         if (job.Status == DataExportJobStatus.Complete)
         {
-            downloadUrl = $"/v1/api/tenants/export/{job.Id}/download";
-            shareableUrl = $"/v1/api/exports/download?token={job.DownloadToken}";
+            downloadUrl = $"/api/v1/tenants/export/{job.Id}/download";
+            shareableUrl = $"/api/v1/exports/download?token={job.DownloadToken}";
         }
 
-        await Send.OkAsync(new DataExportStatusResponse
+        await Send.OkAsync(ApiResponse<DataExportStatusResponse>.Ok(new DataExportStatusResponse
         {
             JobId = job.Id,
             Status = job.Status.ToString(),
@@ -127,6 +125,6 @@ public sealed class DataExportStatusEndpoint : Endpoint<DataExportStatusRequest,
             ExpiresAt = job.ExpiresAt,
             ErrorMessage = job.ErrorMessage,
             FileSizeBytes = job.FileSizeBytes
-        }, cancellation: ct);
+        }), cancellation: ct);
     }
 }

@@ -662,9 +662,8 @@ public sealed class HistoryEndpointTests
         using JsonDocument doc = JsonDocument.Parse(body);
         JsonElement root = doc.RootElement;
 
-        // Verify the retention error response structure
-        await Assert.That(root.GetProperty("upgradeRequired").GetBoolean()).IsTrue();
-        await Assert.That(root.GetProperty("currentRetentionDays").GetInt32()).IsEqualTo(1);
+        // Verify the standard error envelope shape
+        await Assert.That(root.GetProperty("success").GetBoolean()).IsFalse();
 
         string? message = root.GetProperty("message").GetString();
         await Assert.That(message).IsNotNull();
@@ -740,9 +739,8 @@ public sealed class HistoryEndpointTests
         using JsonDocument doc = JsonDocument.Parse(body);
         JsonElement root = doc.RootElement;
 
-        // Verify the retention error response structure
-        await Assert.That(root.GetProperty("upgradeRequired").GetBoolean()).IsTrue();
-        await Assert.That(root.GetProperty("currentRetentionDays").GetInt32()).IsEqualTo(1);
+        // Verify the standard error envelope shape
+        await Assert.That(root.GetProperty("success").GetBoolean()).IsFalse();
 
         string? message = root.GetProperty("message").GetString();
         await Assert.That(message).IsNotNull();
@@ -791,9 +789,8 @@ public sealed class HistoryEndpointTests
         using JsonDocument doc = JsonDocument.Parse(body);
         JsonElement root = doc.RootElement;
 
-        // Verify the retention error response structure
-        await Assert.That(root.GetProperty("upgradeRequired").GetBoolean()).IsTrue();
-        await Assert.That(root.GetProperty("currentRetentionDays").GetInt32()).IsEqualTo(1);
+        // Verify the standard error envelope shape
+        await Assert.That(root.GetProperty("success").GetBoolean()).IsFalse();
 
         string? message = root.GetProperty("message").GetString();
         await Assert.That(message).IsNotNull();
@@ -842,9 +839,8 @@ public sealed class HistoryEndpointTests
         using JsonDocument doc = JsonDocument.Parse(body);
         JsonElement root = doc.RootElement;
 
-        // Verify the retention error response structure
-        await Assert.That(root.GetProperty("upgradeRequired").GetBoolean()).IsTrue();
-        await Assert.That(root.GetProperty("currentRetentionDays").GetInt32()).IsEqualTo(1);
+        // Verify the standard error envelope shape
+        await Assert.That(root.GetProperty("success").GetBoolean()).IsFalse();
 
         string? message = root.GetProperty("message").GetString();
         await Assert.That(message).IsNotNull();
@@ -893,9 +889,8 @@ public sealed class HistoryEndpointTests
         using JsonDocument doc = JsonDocument.Parse(body);
         JsonElement root = doc.RootElement;
 
-        // Verify the retention error response structure
-        await Assert.That(root.GetProperty("upgradeRequired").GetBoolean()).IsTrue();
-        await Assert.That(root.GetProperty("currentRetentionDays").GetInt32()).IsEqualTo(1);
+        // Verify the standard error envelope shape
+        await Assert.That(root.GetProperty("success").GetBoolean()).IsFalse();
 
         string? message = root.GetProperty("message").GetString();
         await Assert.That(message).IsNotNull();
