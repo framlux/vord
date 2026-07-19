@@ -152,6 +152,7 @@ pnpm -C src/web test      # also: pnpm -C src/web check  /  pnpm -C src/web buil
 - When working with Svelte 5, use `$derived` for reactive state and avoid Svelte 4 patterns. When working with Skeleton UI dark mode, use `&:where(.dark, .dark *)` not `&.dark`.
 
 ## .NET / C#
+- For symbol lookup — verifying callers, finding definitions/implementations, rename/removal impact — use the **csharp-lsp** (the `LSP` tool: `findReferences`, `goToDefinition`, `incomingCalls`, `goToImplementation`, `workspaceSymbol`), not `grep`. LSP resolves the actual symbol, so it avoids text-match footguns like a singular method name matching its plural (`GetMachineIdsForRuleAsync` vs `GetMachineIdsForRulesAsync`) or a prefix collision (`GetUserByExternalIdAsync` vs `GetUserByExternalIdForProviderAsync`). Reserve `grep` for text/comment/config sweeps where there is no symbol to resolve.
 - For .NET/FastEndpoints: Use `Send.NotFoundAsync` not `SendNotFoundAsync`.
 - Verify NuGet package versions match what's in the .csproj.
 - For LinqToDB, check async extension imports and IUpdatable API signatures. DatabaseContext properties may require `this.` qualifier — do not remove it.
