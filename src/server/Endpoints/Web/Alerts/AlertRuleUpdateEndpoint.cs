@@ -96,8 +96,7 @@ public sealed class AlertRuleUpdateEndpoint : Endpoint<UpdateAlertRuleRequest, A
         int? tenantId = _tenantContext.TenantId;
         if (tenantId is null)
         {
-            HttpContext.Response.StatusCode = 401;
-            await HttpContext.Response.WriteAsJsonAsync(ApiResponse<AlertRuleDto>.Error("Unauthorized"), ct);
+            await HttpContext.SendApiErrorAsync(401, "Unauthorized", ct);
 
             return;
         }
@@ -113,8 +112,7 @@ public sealed class AlertRuleUpdateEndpoint : Endpoint<UpdateAlertRuleRequest, A
 
         if (rule is null)
         {
-            HttpContext.Response.StatusCode = 404;
-            await HttpContext.Response.WriteAsJsonAsync(ApiResponse<AlertRuleDto>.Error("Alert rule not found"), ct);
+            await HttpContext.SendApiErrorAsync(404, "Alert rule not found", ct);
 
             return;
         }
@@ -122,27 +120,21 @@ public sealed class AlertRuleUpdateEndpoint : Endpoint<UpdateAlertRuleRequest, A
         // Verify the metric in the request matches the DB-stored metric (metric is immutable)
         if (Enum.TryParse<AlertMetric>(req.Metric, true, out AlertMetric requestMetric) == false || requestMetric != rule.Metric)
         {
-            HttpContext.Response.StatusCode = 400;
-            await HttpContext.Response.WriteAsJsonAsync(
-                ApiResponse<AlertRuleDto>.Error("Metric in request does not match the rule's metric"), ct);
+            await HttpContext.SendApiErrorAsync(400, "Metric in request does not match the rule's metric", ct);
 
             return;
         }
 
         if (rule.IsCustom && ((subscription is null) || (subscription.Tier != SubscriptionTier.Team)))
         {
-            HttpContext.Response.StatusCode = 403;
-            await HttpContext.Response.WriteAsJsonAsync(
-                ApiResponse<AlertRuleDto>.Error("Custom rules can only be modified with a Team subscription"), ct);
+            await HttpContext.SendApiErrorAsync(403, "Custom rules can only be modified with a Team subscription", ct);
 
             return;
         }
 
         if (Enum.TryParse<AlertSeverity>(req.Severity, true, out AlertSeverity severity) == false)
         {
-            HttpContext.Response.StatusCode = 400;
-            await HttpContext.Response.WriteAsJsonAsync(
-                ApiResponse<AlertRuleDto>.Error($"Invalid severity value: {req.Severity}"), ct);
+            await HttpContext.SendApiErrorAsync(400, $"Invalid severity value: {req.Severity}", ct);
 
             return;
         }
@@ -151,9 +143,7 @@ public sealed class AlertRuleUpdateEndpoint : Endpoint<UpdateAlertRuleRequest, A
         string? validationError = ValidateMetricConstraints(rule.Metric, req.Threshold, req.DurationMinutes);
         if (validationError is not null)
         {
-            HttpContext.Response.StatusCode = 400;
-            await HttpContext.Response.WriteAsJsonAsync(
-                ApiResponse<AlertRuleDto>.Error(validationError), ct);
+            await HttpContext.SendApiErrorAsync(400, validationError, ct);
 
             return;
         }
@@ -163,9 +153,7 @@ public sealed class AlertRuleUpdateEndpoint : Endpoint<UpdateAlertRuleRequest, A
         List<long> validMachineIds = await _machineRepo.GetActiveMachineIdsForTenantAsync(tenantId.Value, req.MachineIds, ct);
         if (validMachineIds.Count != req.MachineIds.Distinct().Count())
         {
-            HttpContext.Response.StatusCode = 400;
-            await HttpContext.Response.WriteAsJsonAsync(
-                ApiResponse<AlertRuleDto>.Error("One or more machine IDs are invalid or do not belong to this tenant"), ct);
+            await HttpContext.SendApiErrorAsync(400, "One or more machine IDs are invalid or do not belong to this tenant", ct);
 
             return;
         }

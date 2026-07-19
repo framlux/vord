@@ -57,9 +57,7 @@ public sealed class TenantCreateEndpoint : Endpoint<CreateTenantRequest, ApiResp
         int? userId = _tenantContext.UserId;
         if (userId is null)
         {
-            HttpContext.Response.StatusCode = 401;
-            await HttpContext.Response.WriteAsJsonAsync(
-                ApiResponse<TenantDto>.Error("Unable to identify user"), ct);
+            await HttpContext.SendApiErrorAsync(401, "Unable to identify user", ct);
 
             return;
         }

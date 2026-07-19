@@ -60,9 +60,7 @@ public sealed class MachineAlertRulesUpdateEndpoint : Endpoint<UpdateMachineAler
         int? tenantId = _tenantContext.TenantId;
         if (tenantId is null)
         {
-            HttpContext.Response.StatusCode = 401;
-            await HttpContext.Response.WriteAsJsonAsync(
-                ApiResponse<object>.Error("Unauthorized"), ct);
+            await HttpContext.SendApiErrorAsync(401, "Unauthorized", ct);
 
             return;
         }
@@ -74,9 +72,7 @@ public sealed class MachineAlertRulesUpdateEndpoint : Endpoint<UpdateMachineAler
         Machine? machine = await _machineRepo.GetActiveMachineByIdAsync(machineId, tenantId.Value, ct);
         if (machine is null)
         {
-            HttpContext.Response.StatusCode = 404;
-            await HttpContext.Response.WriteAsJsonAsync(
-                ApiResponse<object>.Error("Machine not found"), ct);
+            await HttpContext.SendApiErrorAsync(404, "Machine not found", ct);
 
             return;
         }
@@ -88,9 +84,7 @@ public sealed class MachineAlertRulesUpdateEndpoint : Endpoint<UpdateMachineAler
 
             if (invalidIds.Count > 0)
             {
-                HttpContext.Response.StatusCode = 400;
-                await HttpContext.Response.WriteAsJsonAsync(
-                    ApiResponse<object>.Error("One or more rule IDs are invalid or do not belong to this tenant"), ct);
+                await HttpContext.SendApiErrorAsync(400, "One or more rule IDs are invalid or do not belong to this tenant", ct);
 
                 return;
             }
@@ -99,9 +93,7 @@ public sealed class MachineAlertRulesUpdateEndpoint : Endpoint<UpdateMachineAler
         bool assigned = await _alertRuleRepo.SetRulesForMachineAsync(machineId, tenantId.Value, req.RuleIds, ct);
         if (assigned == false)
         {
-            HttpContext.Response.StatusCode = 404;
-            await HttpContext.Response.WriteAsJsonAsync(
-                ApiResponse<object>.Error("Machine not found"), ct);
+            await HttpContext.SendApiErrorAsync(404, "Machine not found", ct);
 
             return;
         }

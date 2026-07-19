@@ -97,9 +97,7 @@ public sealed class DowngradeSubscriptionEndpoint : Endpoint<DowngradeSubscripti
     {
         if (_billingStatus.IsEnabled == false)
         {
-            HttpContext.Response.StatusCode = 404;
-            await HttpContext.Response.WriteAsJsonAsync(
-                ApiResponse<DowngradeSubscriptionResponse>.Error("Billing is not enabled"), ct);
+            await HttpContext.SendApiErrorAsync(404, "Billing is not enabled", ct);
 
             return;
         }
@@ -107,9 +105,7 @@ public sealed class DowngradeSubscriptionEndpoint : Endpoint<DowngradeSubscripti
         int? tenantId = _tenantContext.TenantId;
         if (tenantId is null)
         {
-            HttpContext.Response.StatusCode = 401;
-            await HttpContext.Response.WriteAsJsonAsync(
-                ApiResponse<DowngradeSubscriptionResponse>.Error("Unauthorized"), ct);
+            await HttpContext.SendApiErrorAsync(401, "Unauthorized", ct);
 
             return;
         }
@@ -117,16 +113,14 @@ public sealed class DowngradeSubscriptionEndpoint : Endpoint<DowngradeSubscripti
         TenantSubscription? subscription = await _subscriptionService.GetSubscriptionForTenantAsync(tenantId.Value, ct);
         if (subscription is null)
         {
-            HttpContext.Response.StatusCode = 404;
-            await HttpContext.Response.WriteAsJsonAsync(
-                ApiResponse<DowngradeSubscriptionResponse>.Error("Subscription not found"), ct);
+            await HttpContext.SendApiErrorAsync(404, "Subscription not found", ct);
 
             return;
         }
 
         if (subscription.Status == SubscriptionStatus.Canceled)
         {
-            await SendErrorResponse(400, "Cannot downgrade a canceled subscription.", ct);
+            await HttpContext.SendApiErrorAsync(400, "Cannot downgrade a canceled subscription.", ct);
 
             return;
         }
@@ -141,14 +135,14 @@ public sealed class DowngradeSubscriptionEndpoint : Endpoint<DowngradeSubscripti
 
         if (currentTier == SubscriptionTier.Free)
         {
-            await SendErrorResponse(400, "Already on the Free tier. Cannot downgrade further.", ct);
+            await HttpContext.SendApiErrorAsync(400, "Already on the Free tier. Cannot downgrade further.", ct);
 
             return;
         }
 
         if ((currentTier == SubscriptionTier.Pro) && isDowngradeToPro)
         {
-            await SendErrorResponse(400, "Already on the Pro tier.", ct);
+            await HttpContext.SendApiErrorAsync(400, "Already on the Pro tier.", ct);
 
             return;
         }
@@ -159,7 +153,7 @@ public sealed class DowngradeSubscriptionEndpoint : Endpoint<DowngradeSubscripti
             bool canDowngrade = await _downgradeGuardService.CanDowngradeFromTeamAsync(tenantId.Value, ct);
             if (canDowngrade == false)
             {
-                await SendErrorResponse(400,
+                await HttpContext.SendApiErrorAsync(400,
                     "Cannot downgrade: at least one Tenant Admin must log in with a social provider (GitHub, Google, or Microsoft) before downgrading from Team tier.",
                     ct);
 
@@ -183,7 +177,7 @@ public sealed class DowngradeSubscriptionEndpoint : Endpoint<DowngradeSubscripti
             return;
         }
 
-        await SendErrorResponse(400, "Invalid downgrade path.", ct);
+        await HttpContext.SendApiErrorAsync(400, "Invalid downgrade path.", ct);
     }
 
     private async Task HandleTeamToProDowngradeAsync(int tenantId, CancellationToken ct)
@@ -234,7 +228,7 @@ public sealed class DowngradeSubscriptionEndpoint : Endpoint<DowngradeSubscripti
         int freeTierLimit = freeTierLimits?.MachineLimit ?? 3;
         if (machineCount > freeTierLimit)
         {
-            await SendErrorResponse(400,
+            await HttpContext.SendApiErrorAsync(400,
                 $"Cannot downgrade to Free: you have {machineCount} active machines but the Free tier allows {freeTierLimit}. Please remove machines before downgrading.",
                 ct);
 
@@ -245,7 +239,7 @@ public sealed class DowngradeSubscriptionEndpoint : Endpoint<DowngradeSubscripti
         Tenant? tenant = await _tenantRepository.GetTenantByIdAsync(tenantId, ct);
         if (tenant is null)
         {
-            await SendErrorResponse(404, "Tenant not found.", ct);
+            await HttpContext.SendApiErrorAsync(404, "Tenant not found.", ct);
 
             return;
         }
@@ -254,7 +248,7 @@ public sealed class DowngradeSubscriptionEndpoint : Endpoint<DowngradeSubscripti
         if (success == false)
         {
             _logger.LogWarning("Failed to cancel Stripe subscription for tenant {TenantId} during downgrade to Free", tenantId);
-            await SendErrorResponse(502, "Failed to process downgrade. Please try again.", ct);
+            await HttpContext.SendApiErrorAsync(502, "Failed to process downgrade. Please try again.", ct);
 
             return;
         }
@@ -269,12 +263,5 @@ public sealed class DowngradeSubscriptionEndpoint : Endpoint<DowngradeSubscripti
             Success = true,
             Message = "Subscription will be downgraded to Free at the end of the current billing period."
         }), cancellation: ct);
-    }
-
-    private async Task SendErrorResponse(int statusCode, string message, CancellationToken ct)
-    {
-        HttpContext.Response.StatusCode = statusCode;
-        await HttpContext.Response.WriteAsJsonAsync(
-            ApiResponse<DowngradeSubscriptionResponse>.Error(message), ct);
     }
 }

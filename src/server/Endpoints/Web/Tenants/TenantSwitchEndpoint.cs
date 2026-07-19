@@ -51,9 +51,7 @@ public sealed class TenantSwitchEndpoint : Endpoint<TenantSwitchRequest, ApiResp
 
         if (hasAccess == false)
         {
-            HttpContext.Response.StatusCode = 403;
-            await HttpContext.Response.WriteAsJsonAsync(
-                ApiResponse<object>.Error("You do not have access to this tenant"), ct);
+            await HttpContext.SendApiErrorAsync(403, "You do not have access to this tenant", ct);
 
             return;
         }

@@ -54,9 +54,7 @@ public sealed class InvitationResendEndpoint : EndpointWithoutRequest<ApiRespons
         int? userId = _tenantContext.UserId;
         if (userId is null)
         {
-            HttpContext.Response.StatusCode = 401;
-            await HttpContext.Response.WriteAsJsonAsync(
-                ApiResponse<InvitationResponse>.Error("Unable to identify user"), ct);
+            await HttpContext.SendApiErrorAsync(401, "Unable to identify user", ct);
 
             return;
         }
@@ -68,17 +66,14 @@ public sealed class InvitationResendEndpoint : EndpointWithoutRequest<ApiRespons
 
         if (result.IsNotFound)
         {
-            HttpContext.Response.StatusCode = 404;
-            await HttpContext.Response.WriteAsJsonAsync(
-                ApiResponse<InvitationResponse>.Error("Invitation not found"), ct);
+            await HttpContext.SendApiErrorAsync(404, "Invitation not found", ct);
 
             return;
         }
 
         if (result.IsSuccess == false)
         {
-            HttpContext.Response.StatusCode = result.StatusCode;
-            await HttpContext.Response.WriteAsJsonAsync(ApiResponse<InvitationResponse>.Error(result.Data?.ErrorMessage ?? "Unknown error"), ct);
+            await HttpContext.SendApiErrorAsync(result.StatusCode, result.Data?.ErrorMessage ?? "Unknown error", ct);
 
             return;
         }

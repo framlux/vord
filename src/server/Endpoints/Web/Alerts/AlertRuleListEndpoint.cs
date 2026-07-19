@@ -47,8 +47,7 @@ public sealed class AlertRuleListEndpoint : EndpointWithoutRequest<ApiResponse<L
         int? tenantId = _tenantContext.TenantId;
         if (tenantId is null)
         {
-            HttpContext.Response.StatusCode = 401;
-            await HttpContext.Response.WriteAsJsonAsync(ApiResponse<List<AlertRuleDto>>.Error("Unauthorized"), ct);
+            await HttpContext.SendApiErrorAsync(401, "Unauthorized", ct);
 
             return;
         }

@@ -49,9 +49,7 @@ public sealed class TenantDetailEndpoint : EndpointWithoutRequest<ApiResponse<Te
             int? claimTenantId = _tenantContext.TenantId;
             if ((claimTenantId is null) || (claimTenantId.Value != tenantId))
             {
-                HttpContext.Response.StatusCode = 404;
-                await HttpContext.Response.WriteAsJsonAsync(
-                    ApiResponse<TenantDto>.Error("Tenant not found"), ct);
+                await HttpContext.SendApiErrorAsync(404, "Tenant not found", ct);
 
                 return;
             }
@@ -60,9 +58,7 @@ public sealed class TenantDetailEndpoint : EndpointWithoutRequest<ApiResponse<Te
         ServiceResult<TenantDto> result = await _handler.GetDetailAsync(tenantId, ct);
         if (result.IsNotFound)
         {
-            HttpContext.Response.StatusCode = 404;
-            await HttpContext.Response.WriteAsJsonAsync(
-                ApiResponse<TenantDto>.Error("Tenant not found"), ct);
+            await HttpContext.SendApiErrorAsync(404, "Tenant not found", ct);
 
             return;
         }

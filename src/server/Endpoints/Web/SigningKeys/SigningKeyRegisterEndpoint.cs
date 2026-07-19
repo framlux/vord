@@ -93,9 +93,7 @@ public sealed class SigningKeyRegisterEndpoint : Endpoint<SigningKeyRegisterRequ
         int? tenantId = _tenantContext.TenantId;
         if (tenantId is null)
         {
-            HttpContext.Response.StatusCode = 401;
-            await HttpContext.Response.WriteAsJsonAsync(
-                ApiResponse<SigningKeyDto>.Error("Unable to identify tenant"), ct);
+            await HttpContext.SendApiErrorAsync(401, "Unable to identify tenant", ct);
 
             return;
         }
@@ -103,9 +101,7 @@ public sealed class SigningKeyRegisterEndpoint : Endpoint<SigningKeyRegisterRequ
         int? userId = _tenantContext.UserId;
         if (userId is null)
         {
-            HttpContext.Response.StatusCode = 401;
-            await HttpContext.Response.WriteAsJsonAsync(
-                ApiResponse<SigningKeyDto>.Error("Unable to identify user"), ct);
+            await HttpContext.SendApiErrorAsync(401, "Unable to identify user", ct);
 
             return;
         }
@@ -115,18 +111,14 @@ public sealed class SigningKeyRegisterEndpoint : Endpoint<SigningKeyRegisterRequ
 
         if (result.StatusCode == 409)
         {
-            HttpContext.Response.StatusCode = 409;
-            await HttpContext.Response.WriteAsJsonAsync(
-                ApiResponse<SigningKeyDto>.Error("Maximum active signing keys reached (5 per user per tenant)"), ct);
+            await HttpContext.SendApiErrorAsync(409, "Maximum active signing keys reached (5 per user per tenant)", ct);
 
             return;
         }
 
         if (result.IsSuccess == false)
         {
-            HttpContext.Response.StatusCode = result.StatusCode;
-            await HttpContext.Response.WriteAsJsonAsync(
-                ApiResponse<SigningKeyDto>.Error("Invalid public key"), ct);
+            await HttpContext.SendApiErrorAsync(result.StatusCode, "Invalid public key", ct);
 
             return;
         }

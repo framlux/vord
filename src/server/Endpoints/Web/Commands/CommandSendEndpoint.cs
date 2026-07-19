@@ -45,9 +45,7 @@ public sealed class CommandSendEndpoint : Endpoint<CommandSendRequest, ApiRespon
         int? tenantId = _tenantContext.TenantId;
         if (tenantId is null)
         {
-            HttpContext.Response.StatusCode = 401;
-            await HttpContext.Response.WriteAsJsonAsync(
-                ApiResponse<CommandDto>.Error("Unable to identify tenant"), ct);
+            await HttpContext.SendApiErrorAsync(401, "Unable to identify tenant", ct);
 
             return;
         }
@@ -55,9 +53,7 @@ public sealed class CommandSendEndpoint : Endpoint<CommandSendRequest, ApiRespon
         TenantSubscription? subscription = await _subscriptionService.GetSubscriptionForTenantAsync(tenantId.Value, ct);
         if ((subscription is null) || (subscription.Tier != SubscriptionTier.Team))
         {
-            HttpContext.Response.StatusCode = 403;
-            await HttpContext.Response.WriteAsJsonAsync(
-                ApiResponse<CommandDto>.Error("Remote commands require a Team subscription"), ct);
+            await HttpContext.SendApiErrorAsync(403, "Remote commands require a Team subscription", ct);
 
             return;
         }
@@ -65,9 +61,7 @@ public sealed class CommandSendEndpoint : Endpoint<CommandSendRequest, ApiRespon
         int? userId = _tenantContext.UserId;
         if (userId is null)
         {
-            HttpContext.Response.StatusCode = 401;
-            await HttpContext.Response.WriteAsJsonAsync(
-                ApiResponse<CommandDto>.Error("Unable to identify user"), ct);
+            await HttpContext.SendApiErrorAsync(401, "Unable to identify user", ct);
 
             return;
         }
@@ -94,9 +88,7 @@ public sealed class CommandSendEndpoint : Endpoint<CommandSendRequest, ApiRespon
 
         if (result.IsSuccess == false)
         {
-            HttpContext.Response.StatusCode = result.StatusCode;
-            await HttpContext.Response.WriteAsJsonAsync(
-                ApiResponse<CommandDto>.Error("Command submission failed"), ct);
+            await HttpContext.SendApiErrorAsync(result.StatusCode, "Command submission failed", ct);
 
             return;
         }

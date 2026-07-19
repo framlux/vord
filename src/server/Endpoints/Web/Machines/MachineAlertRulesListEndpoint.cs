@@ -46,9 +46,7 @@ public sealed class MachineAlertRulesListEndpoint : EndpointWithoutRequest<ApiRe
         int? tenantId = _tenantContext.TenantId;
         if (tenantId is null)
         {
-            HttpContext.Response.StatusCode = 401;
-            await HttpContext.Response.WriteAsJsonAsync(
-                ApiResponse<List<AlertRuleDto>>.Error("Unauthorized"), ct);
+            await HttpContext.SendApiErrorAsync(401, "Unauthorized", ct);
 
             return;
         }
@@ -58,9 +56,7 @@ public sealed class MachineAlertRulesListEndpoint : EndpointWithoutRequest<ApiRe
         Machine? machine = await _machineRepo.GetActiveMachineByIdAsync(machineId, tenantId.Value, ct);
         if (machine is null)
         {
-            HttpContext.Response.StatusCode = 404;
-            await HttpContext.Response.WriteAsJsonAsync(
-                ApiResponse<List<AlertRuleDto>>.Error("Machine not found"), ct);
+            await HttpContext.SendApiErrorAsync(404, "Machine not found", ct);
 
             return;
         }

@@ -45,9 +45,7 @@ public sealed class UserDetailEndpoint : EndpointWithoutRequest<ApiResponse<User
 
         if (result.IsNotFound)
         {
-            HttpContext.Response.StatusCode = 404;
-            await HttpContext.Response.WriteAsJsonAsync(
-                ApiResponse<UserAccountDto>.Error("User not found"), ct);
+            await HttpContext.SendApiErrorAsync(404, "User not found", ct);
 
             return;
         }

@@ -53,9 +53,7 @@ public sealed class MachineDetailFullEndpoint : Endpoint<MachineDetailFullReques
 
         if (result.IsNotFound)
         {
-            HttpContext.Response.StatusCode = 404;
-            await HttpContext.Response.WriteAsJsonAsync(
-                ApiResponse<MachineDetailDto>.Error("Machine not found"), ct);
+            await HttpContext.SendApiErrorAsync(404, "Machine not found", ct);
 
             return;
         }

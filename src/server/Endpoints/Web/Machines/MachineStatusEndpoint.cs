@@ -45,9 +45,7 @@ public sealed class MachineStatusEndpoint : EndpointWithoutRequest<ApiResponse<M
 
         if (result.IsNotFound)
         {
-            HttpContext.Response.StatusCode = 404;
-            await HttpContext.Response.WriteAsJsonAsync(
-                ApiResponse<MachineStatusDto>.Error("Machine not found"), ct);
+            await HttpContext.SendApiErrorAsync(404, "Machine not found", ct);
 
             return;
         }

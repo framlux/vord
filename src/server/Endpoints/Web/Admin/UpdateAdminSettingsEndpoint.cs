@@ -42,9 +42,7 @@ public sealed class UpdateAdminSettingsEndpoint : Endpoint<UpdateAdminSettingsRe
     {
         if (_billingStatus.IsEnabled)
         {
-            HttpContext.Response.StatusCode = 404;
-            await HttpContext.Response.WriteAsJsonAsync(
-                ApiResponse<ServerSettingsDto>.Error("Endpoint not available when billing is enabled"), ct);
+            await HttpContext.SendApiErrorAsync(404, "Endpoint not available when billing is enabled", ct);
 
             return;
         }
@@ -52,9 +50,7 @@ public sealed class UpdateAdminSettingsEndpoint : Endpoint<UpdateAdminSettingsRe
         int? userId = _tenantContext.UserId;
         if (userId is null)
         {
-            HttpContext.Response.StatusCode = 401;
-            await HttpContext.Response.WriteAsJsonAsync(
-                ApiResponse<ServerSettingsDto>.Error("Unable to identify user"), ct);
+            await HttpContext.SendApiErrorAsync(401, "Unable to identify user", ct);
 
             return;
         }
@@ -63,9 +59,7 @@ public sealed class UpdateAdminSettingsEndpoint : Endpoint<UpdateAdminSettingsRe
 
         if (result.IsSuccess == false)
         {
-            HttpContext.Response.StatusCode = result.StatusCode;
-            await HttpContext.Response.WriteAsJsonAsync(
-                ApiResponse<ServerSettingsDto>.Error(result.ErrorMessage ?? "Unknown error"), ct);
+            await HttpContext.SendApiErrorAsync(result.StatusCode, result.ErrorMessage ?? "Unknown error", ct);
 
             return;
         }

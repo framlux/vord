@@ -44,9 +44,7 @@ public sealed class CommandListEndpoint : EndpointWithoutRequest<ApiResponse<Lis
         int? tenantId = _tenantContext.TenantId;
         if (tenantId is null)
         {
-            HttpContext.Response.StatusCode = 401;
-            await HttpContext.Response.WriteAsJsonAsync(
-                ApiResponse<List<CommandDto>>.Error("Unable to identify tenant"), ct);
+            await HttpContext.SendApiErrorAsync(401, "Unable to identify tenant", ct);
 
             return;
         }

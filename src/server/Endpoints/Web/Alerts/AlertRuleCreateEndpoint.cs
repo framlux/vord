@@ -59,8 +59,7 @@ public sealed class AlertRuleCreateEndpoint : Endpoint<CreateAlertRuleRequest, A
         int? tenantId = _tenantContext.TenantId;
         if (tenantId is null)
         {
-            HttpContext.Response.StatusCode = 401;
-            await HttpContext.Response.WriteAsJsonAsync(ApiResponse<AlertRuleDto>.Error("Unauthorized"), ct);
+            await HttpContext.SendApiErrorAsync(401, "Unauthorized", ct);
 
             return;
         }
@@ -73,8 +72,7 @@ public sealed class AlertRuleCreateEndpoint : Endpoint<CreateAlertRuleRequest, A
         // Only Team tier can create custom rules
         if ((subscription is null) || (subscription.Tier != SubscriptionTier.Team))
         {
-            HttpContext.Response.StatusCode = 403;
-            await HttpContext.Response.WriteAsJsonAsync(ApiResponse<AlertRuleDto>.Error("Custom alert rules require a Team subscription"), ct);
+            await HttpContext.SendApiErrorAsync(403, "Custom alert rules require a Team subscription", ct);
 
             return;
         }
@@ -82,36 +80,28 @@ public sealed class AlertRuleCreateEndpoint : Endpoint<CreateAlertRuleRequest, A
         bool canCreate = await _subscriptionService.CanCreateAlertRuleAsync(tenantId.Value, ct);
         if (canCreate == false)
         {
-            HttpContext.Response.StatusCode = 403;
-            await HttpContext.Response.WriteAsJsonAsync(
-                ApiResponse<AlertRuleDto>.Error("Alert rule limit reached for your subscription tier"), ct);
+            await HttpContext.SendApiErrorAsync(403, "Alert rule limit reached for your subscription tier", ct);
 
             return;
         }
 
         if (Enum.TryParse<AlertMetric>(req.Metric, true, out AlertMetric metric) == false)
         {
-            HttpContext.Response.StatusCode = 400;
-            await HttpContext.Response.WriteAsJsonAsync(
-                ApiResponse<AlertRuleDto>.Error($"Invalid metric value: {req.Metric}"), ct);
+            await HttpContext.SendApiErrorAsync(400, $"Invalid metric value: {req.Metric}", ct);
 
             return;
         }
 
         if (Enum.TryParse<AlertOperator>(req.Operator, true, out AlertOperator op) == false)
         {
-            HttpContext.Response.StatusCode = 400;
-            await HttpContext.Response.WriteAsJsonAsync(
-                ApiResponse<AlertRuleDto>.Error($"Invalid operator value: {req.Operator}"), ct);
+            await HttpContext.SendApiErrorAsync(400, $"Invalid operator value: {req.Operator}", ct);
 
             return;
         }
 
         if (Enum.TryParse<AlertSeverity>(req.Severity, true, out AlertSeverity severity) == false)
         {
-            HttpContext.Response.StatusCode = 400;
-            await HttpContext.Response.WriteAsJsonAsync(
-                ApiResponse<AlertRuleDto>.Error($"Invalid severity value: {req.Severity}"), ct);
+            await HttpContext.SendApiErrorAsync(400, $"Invalid severity value: {req.Severity}", ct);
 
             return;
         }
@@ -119,9 +109,7 @@ public sealed class AlertRuleCreateEndpoint : Endpoint<CreateAlertRuleRequest, A
         int? userId = _tenantContext.UserId;
         if (userId is null)
         {
-            HttpContext.Response.StatusCode = 401;
-            await HttpContext.Response.WriteAsJsonAsync(
-                ApiResponse<AlertRuleDto>.Error("Unable to identify user"), ct);
+            await HttpContext.SendApiErrorAsync(401, "Unable to identify user", ct);
 
             return;
         }
@@ -150,9 +138,7 @@ public sealed class AlertRuleCreateEndpoint : Endpoint<CreateAlertRuleRequest, A
         List<long> validMachineIds = await _machineRepo.GetActiveMachineIdsForTenantAsync(tenantId.Value, req.MachineIds, ct);
         if (validMachineIds.Count != req.MachineIds.Distinct().Count())
         {
-            HttpContext.Response.StatusCode = 400;
-            await HttpContext.Response.WriteAsJsonAsync(
-                ApiResponse<AlertRuleDto>.Error("One or more machine IDs are invalid or do not belong to this tenant"), ct);
+            await HttpContext.SendApiErrorAsync(400, "One or more machine IDs are invalid or do not belong to this tenant", ct);
 
             return;
         }

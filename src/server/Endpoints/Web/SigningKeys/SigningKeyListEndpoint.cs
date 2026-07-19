@@ -61,9 +61,7 @@ public sealed class SigningKeyListEndpoint : EndpointWithoutRequest<ApiResponse<
         int? tenantId = _tenantContext.TenantId;
         if (tenantId is null)
         {
-            HttpContext.Response.StatusCode = 401;
-            await HttpContext.Response.WriteAsJsonAsync(
-                ApiResponse<SigningKeyListResponse>.Error("Unable to identify tenant"), ct);
+            await HttpContext.SendApiErrorAsync(401, "Unable to identify tenant", ct);
 
             return;
         }
@@ -71,9 +69,7 @@ public sealed class SigningKeyListEndpoint : EndpointWithoutRequest<ApiResponse<
         int? userId = _tenantContext.UserId;
         if (userId is null)
         {
-            HttpContext.Response.StatusCode = 401;
-            await HttpContext.Response.WriteAsJsonAsync(
-                ApiResponse<SigningKeyListResponse>.Error("Unable to identify user"), ct);
+            await HttpContext.SendApiErrorAsync(401, "Unable to identify user", ct);
 
             return;
         }

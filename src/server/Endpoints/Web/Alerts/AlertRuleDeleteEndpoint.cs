@@ -72,8 +72,7 @@ public sealed class AlertRuleDeleteEndpoint : EndpointWithoutRequest<ApiResponse
         int? tenantId = _tenantContext.TenantId;
         if (tenantId is null)
         {
-            HttpContext.Response.StatusCode = StatusCodes.Status401Unauthorized;
-            await HttpContext.Response.WriteAsJsonAsync(ApiResponse<bool>.Error("Unauthorized"), ct);
+            await HttpContext.SendApiErrorAsync(StatusCodes.Status401Unauthorized, "Unauthorized", ct);
 
             return;
         }
@@ -85,16 +84,14 @@ public sealed class AlertRuleDeleteEndpoint : EndpointWithoutRequest<ApiResponse
 
         if (rule is null)
         {
-            HttpContext.Response.StatusCode = StatusCodes.Status404NotFound;
-            await HttpContext.Response.WriteAsJsonAsync(ApiResponse<bool>.Error("Alert rule not found"), ct);
+            await HttpContext.SendApiErrorAsync(StatusCodes.Status404NotFound, "Alert rule not found", ct);
 
             return;
         }
 
         if (rule.IsCustom == false)
         {
-            HttpContext.Response.StatusCode = StatusCodes.Status400BadRequest;
-            await HttpContext.Response.WriteAsJsonAsync(ApiResponse<bool>.Error("Default rules cannot be deleted. Disable them instead."), ct);
+            await HttpContext.SendApiErrorAsync(StatusCodes.Status400BadRequest, "Default rules cannot be deleted. Disable them instead.", ct);
 
             return;
         }

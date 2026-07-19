@@ -66,9 +66,7 @@ public sealed class IntegrationTestEndpoint : EndpointWithoutRequest<ApiResponse
         int? tenantId = _tenantContext.TenantId;
         if (tenantId is null)
         {
-            HttpContext.Response.StatusCode = 401;
-            await HttpContext.Response.WriteAsJsonAsync(
-                ApiResponse<IntegrationTestResultDto>.Error("Unauthorized"), ct);
+            await HttpContext.SendApiErrorAsync(401, "Unauthorized", ct);
 
             return;
         }
@@ -78,9 +76,7 @@ public sealed class IntegrationTestEndpoint : EndpointWithoutRequest<ApiResponse
         IntegrationEndpoint? integration = await _integrationRepo.GetIntegrationByIdAsync(integrationId, tenantId.Value, ct);
         if (integration is null)
         {
-            HttpContext.Response.StatusCode = 404;
-            await HttpContext.Response.WriteAsJsonAsync(
-                ApiResponse<IntegrationTestResultDto>.Error("Integration not found"), ct);
+            await HttpContext.SendApiErrorAsync(404, "Integration not found", ct);
 
             return;
         }
@@ -88,9 +84,7 @@ public sealed class IntegrationTestEndpoint : EndpointWithoutRequest<ApiResponse
         IIntegrationPayloadFormatter? formatter = _formatters.FirstOrDefault(f => f.Provider == integration.Provider);
         if (formatter is null)
         {
-            HttpContext.Response.StatusCode = 500;
-            await HttpContext.Response.WriteAsJsonAsync(
-                ApiResponse<IntegrationTestResultDto>.Error("No formatter available for this provider"), ct);
+            await HttpContext.SendApiErrorAsync(500, "No formatter available for this provider", ct);
 
             return;
         }

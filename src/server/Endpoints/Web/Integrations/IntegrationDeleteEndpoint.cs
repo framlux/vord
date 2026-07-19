@@ -48,9 +48,7 @@ public sealed class IntegrationDeleteEndpoint : EndpointWithoutRequest
         int? tenantId = _tenantContext.TenantId;
         if (tenantId is null)
         {
-            HttpContext.Response.StatusCode = 401;
-            await HttpContext.Response.WriteAsJsonAsync(
-                ApiResponse<object>.Error("Unauthorized"), ct);
+            await HttpContext.SendApiErrorAsync(401, "Unauthorized", ct);
 
             return;
         }
@@ -58,9 +56,7 @@ public sealed class IntegrationDeleteEndpoint : EndpointWithoutRequest
         int? userId = _tenantContext.UserId;
         if (userId is null)
         {
-            HttpContext.Response.StatusCode = 401;
-            await HttpContext.Response.WriteAsJsonAsync(
-                ApiResponse<object>.Error("Unable to identify user"), ct);
+            await HttpContext.SendApiErrorAsync(401, "Unable to identify user", ct);
 
             return;
         }
@@ -70,9 +66,7 @@ public sealed class IntegrationDeleteEndpoint : EndpointWithoutRequest
         IntegrationEndpoint? integration = await _integrationRepo.GetIntegrationByIdAsync(integrationId, tenantId.Value, ct);
         if (integration is null)
         {
-            HttpContext.Response.StatusCode = 404;
-            await HttpContext.Response.WriteAsJsonAsync(
-                ApiResponse<object>.Error("Integration not found"), ct);
+            await HttpContext.SendApiErrorAsync(404, "Integration not found", ct);
 
             return;
         }

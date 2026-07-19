@@ -54,9 +54,7 @@ public sealed class IntegrationRotateSecretEndpoint : EndpointWithoutRequest<Api
         int? tenantId = _tenantContext.TenantId;
         if (tenantId is null)
         {
-            HttpContext.Response.StatusCode = 401;
-            await HttpContext.Response.WriteAsJsonAsync(
-                ApiResponse<IntegrationEndpointDto>.Error("Unauthorized"), ct);
+            await HttpContext.SendApiErrorAsync(401, "Unauthorized", ct);
 
             return;
         }
@@ -64,9 +62,7 @@ public sealed class IntegrationRotateSecretEndpoint : EndpointWithoutRequest<Api
         int? userId = _tenantContext.UserId;
         if (userId is null)
         {
-            HttpContext.Response.StatusCode = 401;
-            await HttpContext.Response.WriteAsJsonAsync(
-                ApiResponse<IntegrationEndpointDto>.Error("Unable to identify user"), ct);
+            await HttpContext.SendApiErrorAsync(401, "Unable to identify user", ct);
 
             return;
         }
@@ -76,18 +72,14 @@ public sealed class IntegrationRotateSecretEndpoint : EndpointWithoutRequest<Api
         IntegrationEndpoint? integration = await _integrationRepo.GetIntegrationByIdAsync(integrationId, tenantId.Value, ct);
         if (integration is null)
         {
-            HttpContext.Response.StatusCode = 404;
-            await HttpContext.Response.WriteAsJsonAsync(
-                ApiResponse<IntegrationEndpointDto>.Error("Integration not found"), ct);
+            await HttpContext.SendApiErrorAsync(404, "Integration not found", ct);
 
             return;
         }
 
         if (integration.Provider != IntegrationProvider.Custom)
         {
-            HttpContext.Response.StatusCode = 400;
-            await HttpContext.Response.WriteAsJsonAsync(
-                ApiResponse<IntegrationEndpointDto>.Error("Secret rotation is only available for Custom provider integrations"), ct);
+            await HttpContext.SendApiErrorAsync(400, "Secret rotation is only available for Custom provider integrations", ct);
 
             return;
         }

@@ -50,8 +50,7 @@ public sealed class AuthMeEndpoint : EndpointWithoutRequest<ApiResponse<UserDto>
     {
         if (User?.Identity?.IsAuthenticated != true)
         {
-            HttpContext.Response.StatusCode = 401;
-            await HttpContext.Response.WriteAsJsonAsync(ApiResponse<UserDto>.Error("Unauthorized"), ct);
+            await HttpContext.SendApiErrorAsync(401, "Unauthorized", ct);
 
             return;
         }
@@ -69,16 +68,14 @@ public sealed class AuthMeEndpoint : EndpointWithoutRequest<ApiResponse<UserDto>
         if (result.IsNotFound)
         {
             _logger.LogWarning("Authenticated user {UniqueId} not found in database", dto.UniqueId);
-            HttpContext.Response.StatusCode = 404;
-            await HttpContext.Response.WriteAsJsonAsync(ApiResponse<UserDto>.Error("User not found"), ct);
+            await HttpContext.SendApiErrorAsync(404, "User not found", ct);
 
             return;
         }
 
         if (result.IsSuccess == false)
         {
-            HttpContext.Response.StatusCode = result.StatusCode;
-            await HttpContext.Response.WriteAsJsonAsync(ApiResponse<UserDto>.Error("An error occurred"), ct);
+            await HttpContext.SendApiErrorAsync(result.StatusCode, "An error occurred", ct);
 
             return;
         }

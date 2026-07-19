@@ -40,9 +40,7 @@ public sealed class ListRegistrationTokensEndpoint : EndpointWithoutRequest<ApiR
         int? tenantId = _tenantContext.TenantId;
         if (tenantId is null)
         {
-            HttpContext.Response.StatusCode = 401;
-            await HttpContext.Response.WriteAsJsonAsync(
-                ApiResponse<PaginatedResponse<RegistrationTokenDto>>.Error("Unable to identify tenant"), ct);
+            await HttpContext.SendApiErrorAsync(401, "Unable to identify tenant", ct);
 
             return;
         }
@@ -54,9 +52,7 @@ public sealed class ListRegistrationTokensEndpoint : EndpointWithoutRequest<ApiR
 
         if (result.IsSuccess == false)
         {
-            HttpContext.Response.StatusCode = result.StatusCode;
-            await HttpContext.Response.WriteAsJsonAsync(
-                ApiResponse<PaginatedResponse<RegistrationTokenDto>>.Error("Failed to retrieve tokens"), ct);
+            await HttpContext.SendApiErrorAsync(result.StatusCode, "Failed to retrieve tokens", ct);
 
             return;
         }

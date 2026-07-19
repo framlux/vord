@@ -47,17 +47,14 @@ public sealed class UserDeactivateEndpoint : EndpointWithoutRequest<ApiResponse<
 
         if (result.IsNotFound)
         {
-            HttpContext.Response.StatusCode = 404;
-            await HttpContext.Response.WriteAsJsonAsync(
-                ApiResponse<object>.Error("User not found"), ct);
+            await HttpContext.SendApiErrorAsync(404, "User not found", ct);
 
             return;
         }
 
         if (result.IsSuccess == false)
         {
-            HttpContext.Response.StatusCode = result.StatusCode;
-            await HttpContext.Response.WriteAsJsonAsync(ApiResponse<object>.Error("You cannot deactivate your own account"), ct);
+            await HttpContext.SendApiErrorAsync(result.StatusCode, "You cannot deactivate your own account", ct);
 
             return;
         }

@@ -43,9 +43,7 @@ public sealed class CommandDetailEndpoint : EndpointWithoutRequest<ApiResponse<C
         int? tenantId = _tenantContext.TenantId;
         if (tenantId is null)
         {
-            HttpContext.Response.StatusCode = 401;
-            await HttpContext.Response.WriteAsJsonAsync(
-                ApiResponse<CommandDto>.Error("Unable to identify tenant"), ct);
+            await HttpContext.SendApiErrorAsync(401, "Unable to identify tenant", ct);
 
             return;
         }
@@ -53,9 +51,7 @@ public sealed class CommandDetailEndpoint : EndpointWithoutRequest<ApiResponse<C
         ServiceResult<RemoteCommand> result = await _commandService.GetCommandDetailAsync(commandId, tenantId.Value, ct);
         if (result.IsNotFound)
         {
-            HttpContext.Response.StatusCode = 404;
-            await HttpContext.Response.WriteAsJsonAsync(
-                ApiResponse<CommandDto>.Error("Command not found"), ct);
+            await HttpContext.SendApiErrorAsync(404, "Command not found", ct);
 
             return;
         }

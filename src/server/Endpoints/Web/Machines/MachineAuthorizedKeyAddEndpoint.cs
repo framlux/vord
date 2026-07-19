@@ -57,9 +57,7 @@ public sealed class MachineAuthorizedKeyAddEndpoint : Endpoint<MachineAuthorized
         int? tenantId = _tenantContext.TenantId;
         if (tenantId is null)
         {
-            HttpContext.Response.StatusCode = 401;
-            await HttpContext.Response.WriteAsJsonAsync(
-                ApiResponse<MachineAuthorizedKeyDto>.Error("Unable to identify tenant"), ct);
+            await HttpContext.SendApiErrorAsync(401, "Unable to identify tenant", ct);
 
             return;
         }
@@ -68,9 +66,7 @@ public sealed class MachineAuthorizedKeyAddEndpoint : Endpoint<MachineAuthorized
         TenantSubscription? subscription = await _subscriptionService.GetSubscriptionForTenantAsync(tenantId.Value, ct);
         if ((subscription is null) || (subscription.Tier != SubscriptionTier.Team))
         {
-            HttpContext.Response.StatusCode = 403;
-            await HttpContext.Response.WriteAsJsonAsync(
-                ApiResponse<MachineAuthorizedKeyDto>.Error("Remote commands require a Team subscription"), ct);
+            await HttpContext.SendApiErrorAsync(403, "Remote commands require a Team subscription", ct);
 
             return;
         }
@@ -80,9 +76,7 @@ public sealed class MachineAuthorizedKeyAddEndpoint : Endpoint<MachineAuthorized
         int? userId = _tenantContext.UserId;
         if (userId is null)
         {
-            HttpContext.Response.StatusCode = 401;
-            await HttpContext.Response.WriteAsJsonAsync(
-                ApiResponse<MachineAuthorizedKeyDto>.Error("Unable to identify user"), ct);
+            await HttpContext.SendApiErrorAsync(401, "Unable to identify user", ct);
 
             return;
         }
@@ -92,27 +86,21 @@ public sealed class MachineAuthorizedKeyAddEndpoint : Endpoint<MachineAuthorized
 
         if (result.IsNotFound)
         {
-            HttpContext.Response.StatusCode = 404;
-            await HttpContext.Response.WriteAsJsonAsync(
-                ApiResponse<MachineAuthorizedKeyDto>.Error("Machine or signing key not found"), ct);
+            await HttpContext.SendApiErrorAsync(404, "Machine or signing key not found", ct);
 
             return;
         }
 
         if (result.IsSuccess == false)
         {
-            HttpContext.Response.StatusCode = result.StatusCode;
-            await HttpContext.Response.WriteAsJsonAsync(
-                ApiResponse<MachineAuthorizedKeyDto>.Error(result.ErrorMessage ?? "Authorization failed"), ct);
+            await HttpContext.SendApiErrorAsync(result.StatusCode, result.ErrorMessage ?? "Authorization failed", ct);
 
             return;
         }
 
         if (result.Data is null)
         {
-            HttpContext.Response.StatusCode = 500;
-            await HttpContext.Response.WriteAsJsonAsync(
-                ApiResponse<MachineAuthorizedKeyDto>.Error("Unexpected null result"), ct);
+            await HttpContext.SendApiErrorAsync(500, "Unexpected null result", ct);
 
             return;
         }

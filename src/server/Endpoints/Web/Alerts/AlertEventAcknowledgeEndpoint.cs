@@ -49,8 +49,7 @@ public sealed class AlertEventAcknowledgeEndpoint : EndpointWithoutRequest<ApiRe
         int? tenantId = _tenantContext.TenantId;
         if (tenantId is null)
         {
-            HttpContext.Response.StatusCode = 401;
-            await HttpContext.Response.WriteAsJsonAsync(ApiResponse<bool>.Error("Unauthorized"), ct);
+            await HttpContext.SendApiErrorAsync(401, "Unauthorized", ct);
 
             return;
         }
@@ -62,16 +61,14 @@ public sealed class AlertEventAcknowledgeEndpoint : EndpointWithoutRequest<ApiRe
 
         if (alertEvent is null)
         {
-            HttpContext.Response.StatusCode = 404;
-            await HttpContext.Response.WriteAsJsonAsync(ApiResponse<bool>.Error("Alert event not found"), ct);
+            await HttpContext.SendApiErrorAsync(404, "Alert event not found", ct);
 
             return;
         }
 
         if (alertEvent.Status != AlertEventStatus.Triggered)
         {
-            HttpContext.Response.StatusCode = 400;
-            await HttpContext.Response.WriteAsJsonAsync(ApiResponse<bool>.Error("Only triggered alerts can be acknowledged"), ct);
+            await HttpContext.SendApiErrorAsync(400, "Only triggered alerts can be acknowledged", ct);
 
             return;
         }

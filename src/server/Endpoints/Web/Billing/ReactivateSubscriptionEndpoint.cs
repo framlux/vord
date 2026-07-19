@@ -72,9 +72,7 @@ public sealed class ReactivateSubscriptionEndpoint : EndpointWithoutRequest<ApiR
     {
         if (_billingStatus.IsEnabled == false)
         {
-            HttpContext.Response.StatusCode = 404;
-            await HttpContext.Response.WriteAsJsonAsync(
-                ApiResponse<ReactivateSubscriptionResponse>.Error("Billing is not enabled"), ct);
+            await HttpContext.SendApiErrorAsync(404, "Billing is not enabled", ct);
 
             return;
         }
@@ -82,9 +80,7 @@ public sealed class ReactivateSubscriptionEndpoint : EndpointWithoutRequest<ApiR
         int? tenantId = _tenantContext.TenantId;
         if (tenantId is null)
         {
-            HttpContext.Response.StatusCode = 401;
-            await HttpContext.Response.WriteAsJsonAsync(
-                ApiResponse<ReactivateSubscriptionResponse>.Error("Unauthorized"), ct);
+            await HttpContext.SendApiErrorAsync(401, "Unauthorized", ct);
 
             return;
         }
@@ -92,19 +88,14 @@ public sealed class ReactivateSubscriptionEndpoint : EndpointWithoutRequest<ApiR
         TenantSubscription? subscription = await _subscriptionService.GetSubscriptionForTenantAsync(tenantId.Value, ct);
         if (subscription is null)
         {
-            HttpContext.Response.StatusCode = 404;
-            await HttpContext.Response.WriteAsJsonAsync(
-                ApiResponse<ReactivateSubscriptionResponse>.Error("Subscription not found"), ct);
+            await HttpContext.SendApiErrorAsync(404, "Subscription not found", ct);
 
             return;
         }
 
         if (subscription.Status != SubscriptionStatus.Canceled)
         {
-            HttpContext.Response.StatusCode = 400;
-            await HttpContext.Response.WriteAsJsonAsync(
-                ApiResponse<ReactivateSubscriptionResponse>.Error(
-                    "Subscription is not canceled. No reactivation needed."), ct);
+            await HttpContext.SendApiErrorAsync(400, "Subscription is not canceled. No reactivation needed.", ct);
 
             return;
         }

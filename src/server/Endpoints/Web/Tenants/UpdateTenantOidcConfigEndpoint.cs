@@ -44,9 +44,7 @@ public sealed class UpdateTenantOidcConfigEndpoint : Endpoint<TenantOidcConfigDt
 
         if (userId is null)
         {
-            HttpContext.Response.StatusCode = 401;
-            await HttpContext.Response.WriteAsJsonAsync(
-                ApiResponse<TenantOidcConfigDto>.Error("Unable to identify user"), ct);
+            await HttpContext.SendApiErrorAsync(401, "Unable to identify user", ct);
 
             return;
         }
@@ -55,27 +53,21 @@ public sealed class UpdateTenantOidcConfigEndpoint : Endpoint<TenantOidcConfigDt
 
         if (result.IsNotFound)
         {
-            HttpContext.Response.StatusCode = 404;
-            await HttpContext.Response.WriteAsJsonAsync(
-                ApiResponse<TenantOidcConfigDto>.Error("Tenant not found"), ct);
+            await HttpContext.SendApiErrorAsync(404, "Tenant not found", ct);
 
             return;
         }
 
         if (result.StatusCode == 403)
         {
-            HttpContext.Response.StatusCode = 403;
-            await HttpContext.Response.WriteAsJsonAsync(
-                ApiResponse<TenantOidcConfigDto>.Error("Custom OIDC is only available on the Team tier"), ct);
+            await HttpContext.SendApiErrorAsync(403, "Custom OIDC is only available on the Team tier", ct);
 
             return;
         }
 
         if (result.StatusCode == 400)
         {
-            HttpContext.Response.StatusCode = 400;
-            await HttpContext.Response.WriteAsJsonAsync(
-                ApiResponse<TenantOidcConfigDto>.Error("Authority URL must be a valid HTTPS URL pointing to a public address"), ct);
+            await HttpContext.SendApiErrorAsync(400, "Authority URL must be a valid HTTPS URL pointing to a public address", ct);
 
             return;
         }

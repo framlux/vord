@@ -44,18 +44,14 @@ public sealed class GetTenantOidcConfigEndpoint : EndpointWithoutRequest<ApiResp
 
         if (result.IsNotFound)
         {
-            HttpContext.Response.StatusCode = 404;
-            await HttpContext.Response.WriteAsJsonAsync(
-                ApiResponse<TenantOidcConfigDto>.Error("Tenant not found"), ct);
+            await HttpContext.SendApiErrorAsync(404, "Tenant not found", ct);
 
             return;
         }
 
         if (result.StatusCode == 403)
         {
-            HttpContext.Response.StatusCode = 403;
-            await HttpContext.Response.WriteAsJsonAsync(
-                ApiResponse<TenantOidcConfigDto>.Error("Custom OIDC is only available on the Team tier"), ct);
+            await HttpContext.SendApiErrorAsync(403, "Custom OIDC is only available on the Team tier", ct);
 
             return;
         }

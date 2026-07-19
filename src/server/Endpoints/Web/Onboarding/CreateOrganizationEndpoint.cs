@@ -73,9 +73,7 @@ public sealed class CreateOrganizationEndpoint : Endpoint<CreateOrganizationRequ
         ServiceResult<OnboardingResult> result = await _handler.CreateOrganizationAsync(req.OrganizationName, "free", userId, uniqueId ?? string.Empty, ct);
         if (result.IsSuccess == false)
         {
-            HttpContext.Response.StatusCode = result.StatusCode;
-            await HttpContext.Response.WriteAsJsonAsync(
-                ApiResponse<CreateOrganizationResponse>.Error(result.Data?.ErrorMessage ?? "Unknown error"), ct);
+            await HttpContext.SendApiErrorAsync(result.StatusCode, result.Data?.ErrorMessage ?? "Unknown error", ct);
 
             return;
         }

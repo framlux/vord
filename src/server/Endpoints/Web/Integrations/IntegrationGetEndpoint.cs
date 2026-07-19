@@ -41,9 +41,7 @@ public sealed class IntegrationGetEndpoint : EndpointWithoutRequest<ApiResponse<
         int? tenantId = _tenantContext.TenantId;
         if (tenantId is null)
         {
-            HttpContext.Response.StatusCode = 401;
-            await HttpContext.Response.WriteAsJsonAsync(
-                ApiResponse<IntegrationEndpointDto>.Error("Unauthorized"), ct);
+            await HttpContext.SendApiErrorAsync(401, "Unauthorized", ct);
 
             return;
         }
@@ -53,9 +51,7 @@ public sealed class IntegrationGetEndpoint : EndpointWithoutRequest<ApiResponse<
         IntegrationEndpoint? integration = await _integrationRepo.GetIntegrationByIdAsync(integrationId, tenantId.Value, ct);
         if (integration is null)
         {
-            HttpContext.Response.StatusCode = 404;
-            await HttpContext.Response.WriteAsJsonAsync(
-                ApiResponse<IntegrationEndpointDto>.Error("Integration not found"), ct);
+            await HttpContext.SendApiErrorAsync(404, "Integration not found", ct);
 
             return;
         }

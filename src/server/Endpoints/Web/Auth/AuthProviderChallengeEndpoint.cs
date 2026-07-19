@@ -61,8 +61,7 @@ public sealed class AuthProviderChallengeEndpoint : EndpointWithoutRequest<ApiRe
 
         if (ValidProviders.Contains(provider) == false)
         {
-            HttpContext.Response.StatusCode = 400;
-            await HttpContext.Response.WriteAsJsonAsync(ApiResponse<object>.Error("Invalid authentication provider"), ct);
+            await HttpContext.SendApiErrorAsync(400, "Invalid authentication provider", ct);
 
             return;
         }
@@ -89,8 +88,7 @@ public sealed class AuthProviderChallengeEndpoint : EndpointWithoutRequest<ApiRe
             IDataProtector protector = _dataProtectionProvider.CreateProtector(TenantSsoSlug.Purpose);
             if (TenantSsoSlug.TryResolve(protector, slug, out int tenantId) == false)
             {
-                HttpContext.Response.StatusCode = 400;
-                await HttpContext.Response.WriteAsJsonAsync(ApiResponse<object>.Error("Custom SSO is not available for this organization"), ct);
+                await HttpContext.SendApiErrorAsync(400, "Custom SSO is not available for this organization", ct);
 
                 return;
             }
@@ -100,8 +98,7 @@ public sealed class AuthProviderChallengeEndpoint : EndpointWithoutRequest<ApiRe
             bool teamTier = (subscription is not null) && (subscription.Tier == SubscriptionTier.Team);
             if ((SsoOidcEvents.IsConfigUsable(oidcConfig) == false) || (teamTier == false))
             {
-                HttpContext.Response.StatusCode = 400;
-                await HttpContext.Response.WriteAsJsonAsync(ApiResponse<object>.Error("Custom SSO is not available for this organization"), ct);
+                await HttpContext.SendApiErrorAsync(400, "Custom SSO is not available for this organization", ct);
 
                 return;
             }

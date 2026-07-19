@@ -95,8 +95,7 @@ public sealed class SubscriptionEndpoint : EndpointWithoutRequest<ApiResponse<Su
         int? tenantId = _tenantContext.TenantId;
         if (tenantId is null)
         {
-            HttpContext.Response.StatusCode = 401;
-            await HttpContext.Response.WriteAsJsonAsync(ApiResponse<SubscriptionDto>.Error("Unauthorized"), ct);
+            await HttpContext.SendApiErrorAsync(401, "Unauthorized", ct);
 
             return;
         }
@@ -104,9 +103,7 @@ public sealed class SubscriptionEndpoint : EndpointWithoutRequest<ApiResponse<Su
         TenantSubscription? subscription = await _subscriptionService.GetSubscriptionForTenantAsync(tenantId.Value, ct);
         if (subscription is null)
         {
-            HttpContext.Response.StatusCode = 404;
-            await HttpContext.Response.WriteAsJsonAsync(
-                ApiResponse<SubscriptionDto>.Error("Subscription not found"), ct);
+            await HttpContext.SendApiErrorAsync(404, "Subscription not found", ct);
 
             return;
         }

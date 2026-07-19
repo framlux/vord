@@ -76,9 +76,7 @@ public sealed class IntegrationCreateEndpoint : Endpoint<CreateIntegrationReques
         int? tenantId = _tenantContext.TenantId;
         if (tenantId is null)
         {
-            HttpContext.Response.StatusCode = 401;
-            await HttpContext.Response.WriteAsJsonAsync(
-                ApiResponse<IntegrationEndpointDto>.Error("Unauthorized"), ct);
+            await HttpContext.SendApiErrorAsync(401, "Unauthorized", ct);
 
             return;
         }
@@ -86,9 +84,7 @@ public sealed class IntegrationCreateEndpoint : Endpoint<CreateIntegrationReques
         int? userId = _tenantContext.UserId;
         if (userId is null)
         {
-            HttpContext.Response.StatusCode = 401;
-            await HttpContext.Response.WriteAsJsonAsync(
-                ApiResponse<IntegrationEndpointDto>.Error("Unable to identify user"), ct);
+            await HttpContext.SendApiErrorAsync(401, "Unable to identify user", ct);
 
             return;
         }
@@ -96,9 +92,7 @@ public sealed class IntegrationCreateEndpoint : Endpoint<CreateIntegrationReques
         TenantSubscription? subscription = await _subscriptionService.GetSubscriptionForTenantAsync(tenantId.Value, ct);
         if ((subscription is null) || (subscription.Tier == SubscriptionTier.Free) || (subscription.Status != SubscriptionStatus.Active))
         {
-            HttpContext.Response.StatusCode = 403;
-            await HttpContext.Response.WriteAsJsonAsync(
-                ApiResponse<IntegrationEndpointDto>.Error("Integrations require a Pro or Team subscription"), ct);
+            await HttpContext.SendApiErrorAsync(403, "Integrations require a Pro or Team subscription", ct);
 
             return;
         }
@@ -106,27 +100,21 @@ public sealed class IntegrationCreateEndpoint : Endpoint<CreateIntegrationReques
         bool canCreate = await _subscriptionService.CanCreateWebhookAsync(tenantId.Value, ct);
         if (canCreate == false)
         {
-            HttpContext.Response.StatusCode = 403;
-            await HttpContext.Response.WriteAsJsonAsync(
-                ApiResponse<IntegrationEndpointDto>.Error("Integration endpoint limit reached for your subscription tier"), ct);
+            await HttpContext.SendApiErrorAsync(403, "Integration endpoint limit reached for your subscription tier", ct);
 
             return;
         }
 
         if (Enum.TryParse<IntegrationProvider>(req.Provider, true, out IntegrationProvider provider) == false)
         {
-            HttpContext.Response.StatusCode = 400;
-            await HttpContext.Response.WriteAsJsonAsync(
-                ApiResponse<IntegrationEndpointDto>.Error($"Invalid provider value: {req.Provider}"), ct);
+            await HttpContext.SendApiErrorAsync(400, $"Invalid provider value: {req.Provider}", ct);
 
             return;
         }
 
         if (provider == IntegrationProvider.None)
         {
-            HttpContext.Response.StatusCode = 400;
-            await HttpContext.Response.WriteAsJsonAsync(
-                ApiResponse<IntegrationEndpointDto>.Error("Provider cannot be None"), ct);
+            await HttpContext.SendApiErrorAsync(400, "Provider cannot be None", ct);
 
             return;
         }
@@ -135,9 +123,7 @@ public sealed class IntegrationCreateEndpoint : Endpoint<CreateIntegrationReques
         string? validationError = IntegrationConfigValidator.ValidateProviderConfiguration(provider, req.Configuration);
         if (validationError is not null)
         {
-            HttpContext.Response.StatusCode = 400;
-            await HttpContext.Response.WriteAsJsonAsync(
-                ApiResponse<IntegrationEndpointDto>.Error(validationError), ct);
+            await HttpContext.SendApiErrorAsync(400, validationError, ct);
 
             return;
         }
@@ -149,9 +135,7 @@ public sealed class IntegrationCreateEndpoint : Endpoint<CreateIntegrationReques
 
         if ((name.Length < 1) || (name.Length > 100))
         {
-            HttpContext.Response.StatusCode = 400;
-            await HttpContext.Response.WriteAsJsonAsync(
-                ApiResponse<IntegrationEndpointDto>.Error("Name must be between 1 and 100 characters"), ct);
+            await HttpContext.SendApiErrorAsync(400, "Name must be between 1 and 100 characters", ct);
 
             return;
         }

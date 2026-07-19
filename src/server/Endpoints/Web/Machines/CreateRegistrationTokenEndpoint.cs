@@ -40,9 +40,7 @@ public sealed class CreateRegistrationTokenEndpoint : Endpoint<CreateRegistratio
         int? tenantId = _tenantContext.TenantId;
         if (tenantId is null)
         {
-            HttpContext.Response.StatusCode = 401;
-            await HttpContext.Response.WriteAsJsonAsync(
-                ApiResponse<RegistrationTokenDto>.Error("Unable to identify tenant"), ct);
+            await HttpContext.SendApiErrorAsync(401, "Unable to identify tenant", ct);
 
             return;
         }
@@ -50,9 +48,7 @@ public sealed class CreateRegistrationTokenEndpoint : Endpoint<CreateRegistratio
         int? userId = _tenantContext.UserId;
         if (userId is null)
         {
-            HttpContext.Response.StatusCode = 401;
-            await HttpContext.Response.WriteAsJsonAsync(
-                ApiResponse<RegistrationTokenDto>.Error("Unable to identify user"), ct);
+            await HttpContext.SendApiErrorAsync(401, "Unable to identify user", ct);
 
             return;
         }
@@ -62,8 +58,7 @@ public sealed class CreateRegistrationTokenEndpoint : Endpoint<CreateRegistratio
 
         if (result.IsSuccess == false)
         {
-            HttpContext.Response.StatusCode = result.StatusCode;
-            await HttpContext.Response.WriteAsJsonAsync(ApiResponse<RegistrationTokenDto>.Error("Validation failed"), ct);
+            await HttpContext.SendApiErrorAsync(result.StatusCode, "Validation failed", ct);
 
             return;
         }

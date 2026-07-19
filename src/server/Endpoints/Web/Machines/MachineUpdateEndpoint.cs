@@ -45,9 +45,7 @@ public sealed class MachineUpdateEndpoint : Endpoint<UpdateMachineRequest, ApiRe
         int? userId = _tenantContext.UserId;
         if (userId is null)
         {
-            HttpContext.Response.StatusCode = 401;
-            await HttpContext.Response.WriteAsJsonAsync(
-                ApiResponse<MachineDto>.Error("Unable to identify user"), ct);
+            await HttpContext.SendApiErrorAsync(401, "Unable to identify user", ct);
 
             return;
         }
@@ -57,18 +55,14 @@ public sealed class MachineUpdateEndpoint : Endpoint<UpdateMachineRequest, ApiRe
 
         if (result.IsNotFound)
         {
-            HttpContext.Response.StatusCode = 404;
-            await HttpContext.Response.WriteAsJsonAsync(
-                ApiResponse<MachineDto>.Error("Machine not found"), ct);
+            await HttpContext.SendApiErrorAsync(404, "Machine not found", ct);
 
             return;
         }
 
         if (result.StatusCode == 400)
         {
-            HttpContext.Response.StatusCode = 400;
-            await HttpContext.Response.WriteAsJsonAsync(
-                ApiResponse<MachineDto>.Error(result.ErrorMessage ?? "Invalid request"), ct);
+            await HttpContext.SendApiErrorAsync(400, result.ErrorMessage ?? "Invalid request", ct);
 
             return;
         }
