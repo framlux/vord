@@ -45,19 +45,14 @@ public sealed class IntegrationRotateSecretEndpoint : EndpointWithoutRequest<Api
     {
         Post("/integrations/{id:int}/rotate-secret");
         Policies("TenantAdmin");
+        Tags(EndpointTags.RequiresTenant);
         Version(1);
     }
 
     /// <inheritdoc/>
     public override async Task HandleAsync(CancellationToken ct)
     {
-        int? tenantId = _tenantContext.TenantId;
-        if (tenantId is null)
-        {
-            await HttpContext.SendApiErrorAsync(401, "Unauthorized", ct);
-
-            return;
-        }
+        int tenantId = _tenantContext.RequireTenantId();
 
         int? userId = _tenantContext.UserId;
         if (userId is null)
@@ -69,7 +64,7 @@ public sealed class IntegrationRotateSecretEndpoint : EndpointWithoutRequest<Api
 
         int integrationId = Route<int>("id");
 
-        IntegrationEndpoint? integration = await _integrationRepo.GetIntegrationByIdAsync(integrationId, tenantId.Value, ct);
+        IntegrationEndpoint? integration = await _integrationRepo.GetIntegrationByIdAsync(integrationId, tenantId, ct);
         if (integration is null)
         {
             await HttpContext.SendApiErrorAsync(404, "Integration not found", ct);
@@ -97,10 +92,10 @@ public sealed class IntegrationRotateSecretEndpoint : EndpointWithoutRequest<Api
         config["secret"] = encryptedSecret;
 
         string updatedConfigJson = JsonSerializer.Serialize(config, JsonDefaults.CamelCase);
-        await _integrationRepo.UpdateIntegrationConfigurationAsync(integrationId, tenantId.Value, updatedConfigJson, ct);
+        await _integrationRepo.UpdateIntegrationConfigurationAsync(integrationId, tenantId, updatedConfigJson, ct);
 
         await _auditLog.InsertAuditLogAsync(AuditHelper.Create(
-            tenantId.Value, userId.Value, null,
+            tenantId, userId.Value, null,
             AuditAction.IntegrationSecretRotated, AuditResourceType.Integration,
             integrationId.ToString(), integration.Name, null), ct);
 

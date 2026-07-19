@@ -32,6 +32,7 @@ public sealed class MachineAuthorizedKeyListEndpoint : EndpointWithoutRequest<Ap
     {
         Get("/machines/{machineId}/authorized-keys");
         Policies("ViewOnly");
+        Tags(EndpointTags.RequiresTenant);
         Version(1);
     }
 
@@ -40,16 +41,10 @@ public sealed class MachineAuthorizedKeyListEndpoint : EndpointWithoutRequest<Ap
     {
         long machineId = Route<long>("machineId");
 
-        int? tenantId = _tenantContext.TenantId;
-        if (tenantId is null)
-        {
-            await HttpContext.SendApiErrorAsync(401, "Unable to identify tenant", ct);
-
-            return;
-        }
+        int tenantId = _tenantContext.RequireTenantId();
 
         ServiceResult<List<MachineAuthorizedKeyDto>> result = await _authorizedKeyService.ListAuthorizedKeysAsync(
-            machineId, tenantId.Value, ct);
+            machineId, tenantId, ct);
 
         if (result.IsNotFound)
         {

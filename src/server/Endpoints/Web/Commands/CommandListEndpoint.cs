@@ -31,6 +31,7 @@ public sealed class CommandListEndpoint : EndpointWithoutRequest<ApiResponse<Lis
     {
         Get("/machines/{id}/commands");
         Policies("ViewOnly");
+        Tags(EndpointTags.RequiresTenant);
         Version(1);
     }
 
@@ -41,15 +42,9 @@ public sealed class CommandListEndpoint : EndpointWithoutRequest<ApiResponse<Lis
         int page = Math.Max(1, Query<int?>("page", isRequired: false) ?? 1);
         int pageSize = Math.Clamp(Query<int?>("pageSize", isRequired: false) ?? 25, 1, 100);
 
-        int? tenantId = _tenantContext.TenantId;
-        if (tenantId is null)
-        {
-            await HttpContext.SendApiErrorAsync(401, "Unable to identify tenant", ct);
+        int tenantId = _tenantContext.RequireTenantId();
 
-            return;
-        }
-
-        List<RemoteCommand> commands = await _commandService.GetCommandHistoryAsync(machineId, tenantId.Value, page, pageSize, ct);
+        List<RemoteCommand> commands = await _commandService.GetCommandHistoryAsync(machineId, tenantId, page, pageSize, ct);
 
         List<CommandDto> dtos = commands.Select(c => new CommandDto
         {

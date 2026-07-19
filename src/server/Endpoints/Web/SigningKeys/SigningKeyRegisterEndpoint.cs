@@ -84,19 +84,14 @@ public sealed class SigningKeyRegisterEndpoint : Endpoint<SigningKeyRegisterRequ
     {
         Post("/signing-keys");
         Policies("MachineAdmin");
+        Tags(EndpointTags.RequiresTenant);
         Version(1);
     }
 
     /// <inheritdoc/>
     public override async Task HandleAsync(SigningKeyRegisterRequest req, CancellationToken ct)
     {
-        int? tenantId = _tenantContext.TenantId;
-        if (tenantId is null)
-        {
-            await HttpContext.SendApiErrorAsync(401, "Unable to identify tenant", ct);
-
-            return;
-        }
+        int tenantId = _tenantContext.RequireTenantId();
 
         int? userId = _tenantContext.UserId;
         if (userId is null)
@@ -107,7 +102,7 @@ public sealed class SigningKeyRegisterEndpoint : Endpoint<SigningKeyRegisterRequ
         }
 
         ServiceResult<UserSigningKey> result = await _signingKeyService.RegisterKeyAsync(
-            userId.Value, tenantId.Value, req.Label, req.PublicKey, ct);
+            userId.Value, tenantId, req.Label, req.PublicKey, ct);
 
         if (result.StatusCode == 409)
         {

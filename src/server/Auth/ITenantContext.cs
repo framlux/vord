@@ -20,4 +20,13 @@ public interface ITenantContext
 
     /// <summary>The authenticated user ID for the current request, or null when unauthenticated.</summary>
     int? UserId { get; }
+
+    /// <summary>
+    /// Returns the current tenant id, throwing if the request carries no tenant scope.
+    /// Only call from endpoints tagged <c>EndpointTags.RequiresTenant</c>, where the
+    /// pre-processor has already rejected tenant-less requests with a 401.
+    /// </summary>
+    /// <returns>The tenant id for the current request.</returns>
+    /// <exception cref="InvalidOperationException">No tenant is set on this request.</exception>
+    int RequireTenantId();
 }

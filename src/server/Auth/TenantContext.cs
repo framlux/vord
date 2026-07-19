@@ -19,6 +19,18 @@ public sealed class TenantContext : ITenantContext
     /// <inheritdoc/>
     public int? UserId { get; private set; }
 
+    /// <inheritdoc/>
+    public int RequireTenantId()
+    {
+        if (TenantId is null)
+        {
+            throw new InvalidOperationException(
+                "No tenant scope on this request. Tag the endpoint with EndpointTags.RequiresTenant so the pre-processor rejects tenant-less requests before the handler runs.");
+        }
+
+        return TenantId.Value;
+    }
+
     /// <summary>
     /// Records the resolved tenant and user for the current request. Called once by the tenant
     /// context pre-processor.

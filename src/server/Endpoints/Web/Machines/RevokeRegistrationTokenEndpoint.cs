@@ -31,6 +31,7 @@ public sealed class RevokeRegistrationTokenEndpoint : EndpointWithoutRequest<Api
     {
         Delete("/machines/registration-tokens/{id}");
         Policies("MachineAdmin");
+        Tags(EndpointTags.RequiresTenant);
         Version(1);
     }
 
@@ -38,14 +39,7 @@ public sealed class RevokeRegistrationTokenEndpoint : EndpointWithoutRequest<Api
     public override async Task HandleAsync(CancellationToken ct)
     {
         long tokenId = Route<long>("id");
-        int? tenantId = _tenantContext.TenantId;
-
-        if (tenantId is null)
-        {
-            await HttpContext.SendApiErrorAsync(401, "Unable to identify tenant", ct);
-
-            return;
-        }
+        int tenantId = _tenantContext.RequireTenantId();
 
         int? userId = _tenantContext.UserId;
         if (userId is null)
@@ -55,7 +49,7 @@ public sealed class RevokeRegistrationTokenEndpoint : EndpointWithoutRequest<Api
             return;
         }
 
-        ServiceResult<object> result = await _handler.RevokeAsync(tokenId, tenantId.Value, userId.Value, ct);
+        ServiceResult<object> result = await _handler.RevokeAsync(tokenId, tenantId, userId.Value, ct);
 
         if (result.IsNotFound)
         {

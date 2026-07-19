@@ -52,19 +52,14 @@ public sealed class SigningKeyListEndpoint : EndpointWithoutRequest<ApiResponse<
     {
         Get("/signing-keys");
         Policies("MachineAdmin");
+        Tags(EndpointTags.RequiresTenant);
         Version(1);
     }
 
     /// <inheritdoc/>
     public override async Task HandleAsync(CancellationToken ct)
     {
-        int? tenantId = _tenantContext.TenantId;
-        if (tenantId is null)
-        {
-            await HttpContext.SendApiErrorAsync(401, "Unable to identify tenant", ct);
-
-            return;
-        }
+        int tenantId = _tenantContext.RequireTenantId();
 
         int? userId = _tenantContext.UserId;
         if (userId is null)
@@ -74,7 +69,7 @@ public sealed class SigningKeyListEndpoint : EndpointWithoutRequest<ApiResponse<
             return;
         }
 
-        List<UserSigningKey> keys = await _signingKeyService.ListKeysAsync(userId.Value, tenantId.Value, ct);
+        List<UserSigningKey> keys = await _signingKeyService.ListKeysAsync(userId.Value, tenantId, ct);
         int activeCount = keys.Count(k => k.RevokedAt is null);
 
         SigningKeyListResponse response = new()

@@ -86,29 +86,23 @@ public sealed class AlertRuleUpdateEndpoint : Endpoint<UpdateAlertRuleRequest, A
     {
         Put("/alert-rules/{id}");
         Policies("TenantAdmin");
-        Tags(Services.Billing.EndpointTags.RequiresProSubscription);
+        Tags(Services.Billing.EndpointTags.RequiresProSubscription, EndpointTags.RequiresTenant);
         Version(1);
     }
 
     /// <inheritdoc/>
     public override async Task HandleAsync(UpdateAlertRuleRequest req, CancellationToken ct)
     {
-        int? tenantId = _tenantContext.TenantId;
-        if (tenantId is null)
-        {
-            await HttpContext.SendApiErrorAsync(401, "Unauthorized", ct);
-
-            return;
-        }
+        int tenantId = _tenantContext.RequireTenantId();
 
         // Pro+ gating (null/Free/non-Active → 403) is enforced by ProSubscriptionPreProcessor via
         // the RequiresProSubscription tag. The subscription is still loaded here for the custom-rule
         // Team-tier check below.
-        TenantSubscription? subscription = await _subscriptionService.GetSubscriptionForTenantAsync(tenantId.Value, ct);
+        TenantSubscription? subscription = await _subscriptionService.GetSubscriptionForTenantAsync(tenantId, ct);
 
         int ruleId = Route<int>("id");
 
-        AlertRule? rule = await _alertRuleRepo.GetAlertRuleByIdAsync(ruleId, tenantId.Value, ct);
+        AlertRule? rule = await _alertRuleRepo.GetAlertRuleByIdAsync(ruleId, tenantId, ct);
 
         if (rule is null)
         {
@@ -150,7 +144,7 @@ public sealed class AlertRuleUpdateEndpoint : Endpoint<UpdateAlertRuleRequest, A
 
         // Validate machine assignments before any write so an invalid machine id fails the whole
         // request with the rule row untouched, matching the create path's validate-first ordering.
-        List<long> validMachineIds = await _machineRepo.GetActiveMachineIdsForTenantAsync(tenantId.Value, req.MachineIds, ct);
+        List<long> validMachineIds = await _machineRepo.GetActiveMachineIdsForTenantAsync(tenantId, req.MachineIds, ct);
         if (validMachineIds.Count != req.MachineIds.Distinct().Count())
         {
             await HttpContext.SendApiErrorAsync(400, "One or more machine IDs are invalid or do not belong to this tenant", ct);
@@ -159,13 +153,13 @@ public sealed class AlertRuleUpdateEndpoint : Endpoint<UpdateAlertRuleRequest, A
         }
 
         await _alertRuleRepo.UpdateAlertRuleAsync(
-            ruleId, tenantId.Value,
+            ruleId, tenantId,
             req.Name, req.Description,
             req.Threshold, req.DurationMinutes,
             severity, req.IsEnabled,
             req.NotifyEmail, req.NotifyWebhook, ct);
 
-        bool assigned = await _alertRuleRepo.SetMachinesForRuleAsync(ruleId, tenantId.Value, req.MachineIds, ct);
+        bool assigned = await _alertRuleRepo.SetMachinesForRuleAsync(ruleId, tenantId, req.MachineIds, ct);
         if (assigned == false)
         {
             await Send.NotFoundAsync(ct);
@@ -175,7 +169,7 @@ public sealed class AlertRuleUpdateEndpoint : Endpoint<UpdateAlertRuleRequest, A
 
         int? userId = _tenantContext.UserId;
         await _auditLog.InsertAuditLogAsync(AuditHelper.Create(
-            tenantId.Value, userId, null,
+            tenantId, userId, null,
             AuditAction.AlertRuleUpdated, AuditResourceType.AlertRule,
             ruleId.ToString(), req.Name, null), ct);
 

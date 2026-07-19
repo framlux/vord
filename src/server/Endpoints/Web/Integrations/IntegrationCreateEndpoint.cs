@@ -67,19 +67,14 @@ public sealed class IntegrationCreateEndpoint : Endpoint<CreateIntegrationReques
     {
         Post("/integrations");
         Policies("TenantAdmin");
+        Tags(EndpointTags.RequiresTenant);
         Version(1);
     }
 
     /// <inheritdoc/>
     public override async Task HandleAsync(CreateIntegrationRequest req, CancellationToken ct)
     {
-        int? tenantId = _tenantContext.TenantId;
-        if (tenantId is null)
-        {
-            await HttpContext.SendApiErrorAsync(401, "Unauthorized", ct);
-
-            return;
-        }
+        int tenantId = _tenantContext.RequireTenantId();
 
         int? userId = _tenantContext.UserId;
         if (userId is null)
@@ -89,7 +84,7 @@ public sealed class IntegrationCreateEndpoint : Endpoint<CreateIntegrationReques
             return;
         }
 
-        TenantSubscription? subscription = await _subscriptionService.GetSubscriptionForTenantAsync(tenantId.Value, ct);
+        TenantSubscription? subscription = await _subscriptionService.GetSubscriptionForTenantAsync(tenantId, ct);
         if ((subscription is null) || (subscription.Tier == SubscriptionTier.Free) || (subscription.Status != SubscriptionStatus.Active))
         {
             await HttpContext.SendApiErrorAsync(403, "Integrations require a Pro or Team subscription", ct);
@@ -97,7 +92,7 @@ public sealed class IntegrationCreateEndpoint : Endpoint<CreateIntegrationReques
             return;
         }
 
-        bool canCreate = await _subscriptionService.CanCreateWebhookAsync(tenantId.Value, ct);
+        bool canCreate = await _subscriptionService.CanCreateWebhookAsync(tenantId, ct);
         if (canCreate == false)
         {
             await HttpContext.SendApiErrorAsync(403, "Integration endpoint limit reached for your subscription tier", ct);
@@ -159,7 +154,7 @@ public sealed class IntegrationCreateEndpoint : Endpoint<CreateIntegrationReques
         DateTimeOffset now = DateTimeOffset.UtcNow;
         IntegrationEndpoint integration = new()
         {
-            TenantId = tenantId.Value,
+            TenantId = tenantId,
             Provider = provider,
             Name = name,
             Configuration = configurationJson,
@@ -173,7 +168,7 @@ public sealed class IntegrationCreateEndpoint : Endpoint<CreateIntegrationReques
         integration = await _integrationRepo.CreateIntegrationAsync(integration, ct);
 
         await _auditLog.InsertAuditLogAsync(AuditHelper.Create(
-            tenantId.Value, userId.Value, null,
+            tenantId, userId.Value, null,
             AuditAction.IntegrationCreated, AuditResourceType.Integration,
             integration.Id.ToString(), name, null), ct);
 

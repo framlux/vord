@@ -92,20 +92,16 @@ public sealed class UpcomingInvoiceEndpoint : EndpointWithoutRequest<ApiResponse
     {
         Get("/billing/upcoming-invoice");
         Policies("ViewOnly");
+        Tags(EndpointTags.RequiresTenant);
         Version(1);
     }
 
     /// <inheritdoc/>
     public override async Task HandleAsync(CancellationToken ct)
     {
-        int? tenantId = _tenantContext.TenantId;
-        if (tenantId is null)
-        {
-            await HttpContext.SendApiErrorAsync(401, "Unauthorized", ct);
-            return;
-        }
+        int tenantId = _tenantContext.RequireTenantId();
 
-        Tenant? tenant = await _tenantRepository.GetTenantByIdAsync(tenantId.Value, ct);
+        Tenant? tenant = await _tenantRepository.GetTenantByIdAsync(tenantId, ct);
         if (tenant is null)
         {
             await HttpContext.SendApiErrorAsync(404, "Tenant not found", ct);

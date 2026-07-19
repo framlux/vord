@@ -94,25 +94,20 @@ public sealed class SshSessionsFleetEndpoint : Endpoint<FleetSshSessionsRequest,
     {
         Get("/machines/ssh-sessions");
         Policies("ViewOnly");
+        Tags(EndpointTags.RequiresTenant);
         Version(1);
     }
 
     /// <inheritdoc/>
     public override async Task HandleAsync(FleetSshSessionsRequest req, CancellationToken ct)
     {
-        int? tenantId = _tenantContext.TenantId;
-        if (tenantId is null)
-        {
-            await HttpContext.SendApiErrorAsync(401, "Unauthorized", ct);
-
-            return;
-        }
+        int tenantId = _tenantContext.RequireTenantId();
 
         int page = req.Page < 1 ? 1 : req.Page;
         int pageSize = (req.PageSize < 1) || (req.PageSize > 100) ? 50 : req.PageSize;
 
         // Build a lookup of machine names for tenant machines.
-        Dictionary<long, string> machineNames = await _machineRepo.GetMachineNameMapForTenantAsync(tenantId.Value, ct);
+        Dictionary<long, string> machineNames = await _machineRepo.GetMachineNameMapForTenantAsync(tenantId, ct);
 
         // Resolve any machine-name search to a concrete machine-id set BEFORE the telemetry query
         // so the filter is a SQL predicate rather than an in-memory pass over the whole history.
@@ -134,7 +129,7 @@ public sealed class SshSessionsFleetEndpoint : Endpoint<FleetSshSessionsRequest,
         }
 
         // Bound the query to the tenant's retention window so we never scan unbounded history.
-        int retentionDays = await _subscriptionService.GetRetentionDaysForTenantAsync(tenantId.Value, ct);
+        int retentionDays = await _subscriptionService.GetRetentionDaysForTenantAsync(tenantId, ct);
         DateTimeOffset receivedSince = DateTimeOffset.UtcNow.AddDays(-retentionDays);
 
         // Total count and the requested page are both computed in SQL (Skip/Take/Count) so memory
@@ -184,7 +179,7 @@ public sealed class SshSessionsFleetEndpoint : Endpoint<FleetSshSessionsRequest,
 
         if (malformedCount > 0)
         {
-            _logger.LogWarning("Skipped {MalformedCount} malformed SSH session telemetry rows for tenant {TenantId}", malformedCount, tenantId.Value);
+            _logger.LogWarning("Skipped {MalformedCount} malformed SSH session telemetry rows for tenant {TenantId}", malformedCount, tenantId);
         }
 
         PaginatedResponse<FleetSshSessionDto> response = new()

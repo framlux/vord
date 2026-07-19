@@ -33,6 +33,7 @@ public sealed class SigningKeyRevokeEndpoint : EndpointWithoutRequest<ApiRespons
     {
         Delete("/signing-keys/{id}");
         Policies("MachineAdmin");
+        Tags(EndpointTags.RequiresTenant);
         Version(1);
     }
 
@@ -41,13 +42,7 @@ public sealed class SigningKeyRevokeEndpoint : EndpointWithoutRequest<ApiRespons
     {
         int keyId = Route<int>("id");
 
-        int? tenantId = _tenantContext.TenantId;
-        if (tenantId is null)
-        {
-            await HttpContext.SendApiErrorAsync(401, "Unable to identify tenant", ct);
-
-            return;
-        }
+        int tenantId = _tenantContext.RequireTenantId();
 
         int? userId = _tenantContext.UserId;
         if (userId is null)
@@ -63,7 +58,7 @@ public sealed class SigningKeyRevokeEndpoint : EndpointWithoutRequest<ApiRespons
             .Any(c => c.Value.EndsWith(":1")); // :1 = TenantAdmin role
 
         ServiceResult<bool> result = await _signingKeyService.RevokeKeyAsync(
-            keyId, userId.Value, tenantId.Value, isAdmin || isTenantAdmin, ct);
+            keyId, userId.Value, tenantId, isAdmin || isTenantAdmin, ct);
 
         if (result.IsNotFound)
         {

@@ -39,25 +39,19 @@ public sealed class AlertEventAcknowledgeEndpoint : EndpointWithoutRequest<ApiRe
     {
         Post("/alert-events/{id}/acknowledge");
         Policies("MachineAdmin");
-        Tags(Services.Billing.EndpointTags.RequiresProSubscription);
+        Tags(Services.Billing.EndpointTags.RequiresProSubscription, EndpointTags.RequiresTenant);
         Version(1);
     }
 
     /// <inheritdoc/>
     public override async Task HandleAsync(CancellationToken ct)
     {
-        int? tenantId = _tenantContext.TenantId;
-        if (tenantId is null)
-        {
-            await HttpContext.SendApiErrorAsync(401, "Unauthorized", ct);
-
-            return;
-        }
+        int tenantId = _tenantContext.RequireTenantId();
 
         // Pro+ gating is enforced by ProSubscriptionPreProcessor via the RequiresProSubscription tag.
         long eventId = Route<long>("id");
 
-        AlertEvent? alertEvent = await _alertEventRepo.GetAlertEventByIdAsync(eventId, tenantId.Value, ct);
+        AlertEvent? alertEvent = await _alertEventRepo.GetAlertEventByIdAsync(eventId, tenantId, ct);
 
         if (alertEvent is null)
         {
@@ -75,10 +69,10 @@ public sealed class AlertEventAcknowledgeEndpoint : EndpointWithoutRequest<ApiRe
 
         int? userId = _tenantContext.UserId;
 
-        await _alertEventRepo.AcknowledgeAlertEventAsync(eventId, tenantId.Value, userId, ct);
+        await _alertEventRepo.AcknowledgeAlertEventAsync(eventId, tenantId, userId, ct);
 
         await _auditLog.InsertAuditLogAsync(AuditHelper.Create(
-            tenantId.Value, userId, null,
+            tenantId, userId, null,
             AuditAction.AlertEventAcknowledged, AuditResourceType.AlertEvent,
             eventId.ToString(), null, null), ct);
 

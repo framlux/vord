@@ -55,23 +55,18 @@ public sealed class IntegrationUpdateEndpoint : Endpoint<UpdateIntegrationReques
     {
         Put("/integrations/{id:int}");
         Policies("TenantAdmin");
+        Tags(EndpointTags.RequiresTenant);
         Version(1);
     }
 
     /// <inheritdoc/>
     public override async Task HandleAsync(UpdateIntegrationRequest req, CancellationToken ct)
     {
-        int? tenantId = _tenantContext.TenantId;
-        if (tenantId is null)
-        {
-            await HttpContext.SendApiErrorAsync(401, "Unauthorized", ct);
-
-            return;
-        }
+        int tenantId = _tenantContext.RequireTenantId();
 
         int integrationId = Route<int>("id");
 
-        IntegrationEndpoint? integration = await _integrationRepo.GetIntegrationByIdAsync(integrationId, tenantId.Value, ct);
+        IntegrationEndpoint? integration = await _integrationRepo.GetIntegrationByIdAsync(integrationId, tenantId, ct);
         if (integration is null)
         {
             await HttpContext.SendApiErrorAsync(404, "Integration not found", ct);
@@ -120,7 +115,7 @@ public sealed class IntegrationUpdateEndpoint : Endpoint<UpdateIntegrationReques
         }
 
         // Apply all changes in a single query
-        await _integrationRepo.UpdateIntegrationAsync(integrationId, tenantId.Value, trimmedName, req.IsEnabled, configurationJson, ct);
+        await _integrationRepo.UpdateIntegrationAsync(integrationId, tenantId, trimmedName, req.IsEnabled, configurationJson, ct);
 
         if (trimmedName is not null)
         {
@@ -141,7 +136,7 @@ public sealed class IntegrationUpdateEndpoint : Endpoint<UpdateIntegrationReques
 
         int? userId = _tenantContext.UserId;
         await _auditLog.InsertAuditLogAsync(AuditHelper.Create(
-            tenantId.Value, userId, null,
+            tenantId, userId, null,
             AuditAction.IntegrationUpdated, AuditResourceType.Integration,
             integrationId.ToString(), integration.Name, null), ct);
 

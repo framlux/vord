@@ -57,23 +57,18 @@ public sealed class IntegrationTestEndpoint : EndpointWithoutRequest<ApiResponse
     {
         Post("/integrations/{id:int}/test");
         Policies("TenantAdmin");
+        Tags(EndpointTags.RequiresTenant);
         Version(1);
     }
 
     /// <inheritdoc/>
     public override async Task HandleAsync(CancellationToken ct)
     {
-        int? tenantId = _tenantContext.TenantId;
-        if (tenantId is null)
-        {
-            await HttpContext.SendApiErrorAsync(401, "Unauthorized", ct);
-
-            return;
-        }
+        int tenantId = _tenantContext.RequireTenantId();
 
         int integrationId = Route<int>("id");
 
-        IntegrationEndpoint? integration = await _integrationRepo.GetIntegrationByIdAsync(integrationId, tenantId.Value, ct);
+        IntegrationEndpoint? integration = await _integrationRepo.GetIntegrationByIdAsync(integrationId, tenantId, ct);
         if (integration is null)
         {
             await HttpContext.SendApiErrorAsync(404, "Integration not found", ct);
@@ -93,7 +88,7 @@ public sealed class IntegrationTestEndpoint : EndpointWithoutRequest<ApiResponse
         {
             Id = 0,
             AlertRuleId = 0,
-            TenantId = tenantId.Value,
+            TenantId = tenantId,
             MachineId = 0,
             Severity = AlertSeverity.Info,
             Message = "This is a test notification from Vord to verify your integration is configured correctly.",
@@ -105,7 +100,7 @@ public sealed class IntegrationTestEndpoint : EndpointWithoutRequest<ApiResponse
         AlertRule testRule = new()
         {
             Id = 0,
-            TenantId = tenantId.Value,
+            TenantId = tenantId,
             Name = "Test Alert",
             Metric = AlertMetric.CpuUsage,
             Operator = AlertOperator.GreaterThan,

@@ -31,24 +31,19 @@ public sealed class ListRegistrationTokensEndpoint : EndpointWithoutRequest<ApiR
     {
         Get("/machines/registration-tokens");
         Policies("MachineAdmin");
+        Tags(EndpointTags.RequiresTenant);
         Version(1);
     }
 
     /// <inheritdoc/>
     public override async Task HandleAsync(CancellationToken ct)
     {
-        int? tenantId = _tenantContext.TenantId;
-        if (tenantId is null)
-        {
-            await HttpContext.SendApiErrorAsync(401, "Unable to identify tenant", ct);
-
-            return;
-        }
+        int tenantId = _tenantContext.RequireTenantId();
 
         int page = Math.Max(1, Query<int?>("page", isRequired: false) ?? 1);
         int pageSize = Math.Clamp(Query<int?>("pageSize", isRequired: false) ?? 25, 1, 100);
 
-        ServiceResult<PaginatedResponse<RegistrationTokenDto>> result = await _handler.ListAsync(tenantId.Value, page, pageSize, ct);
+        ServiceResult<PaginatedResponse<RegistrationTokenDto>> result = await _handler.ListAsync(tenantId, page, pageSize, ct);
 
         if (result.IsSuccess == false)
         {

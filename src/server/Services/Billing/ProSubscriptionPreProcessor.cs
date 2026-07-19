@@ -6,6 +6,7 @@ using FastEndpoints;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Server.Auth;
+using Framlux.FleetManagement.Server.Endpoints;
 using Framlux.FleetManagement.Server.Endpoints.Web;
 using Framlux.FleetManagement.Services.Core.Billing;
 
@@ -58,8 +59,7 @@ public sealed class ProSubscriptionPreProcessor : IGlobalPreProcessor
 
         if (RequiresProGate(subscription))
         {
-            httpContext.Response.StatusCode = 403;
-            await httpContext.Response.WriteAsJsonAsync(ApiResponse<object>.Error(RequiresProMessage), ct);
+            await httpContext.SendApiErrorAsync(403, RequiresProMessage, ct);
 
             context.HttpContext.MarkResponseStart();
         }

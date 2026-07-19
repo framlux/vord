@@ -62,21 +62,16 @@ public sealed class AuditLogListEndpoint : Endpoint<AuditLogListRequest, ApiResp
     {
         Get("/audit-log");
         Policies("TenantAdmin");
+        Tags(EndpointTags.RequiresTenant);
         Version(1);
     }
 
     /// <inheritdoc/>
     public override async Task HandleAsync(AuditLogListRequest req, CancellationToken ct)
     {
-        int? tenantId = _tenantContext.TenantId;
-        if (tenantId is null)
-        {
-            await HttpContext.SendApiErrorAsync(401, "Unauthorized", ct);
+        int tenantId = _tenantContext.RequireTenantId();
 
-            return;
-        }
-
-        TenantSubscription? subscription = await _subscriptionService.GetSubscriptionForTenantAsync(tenantId.Value, ct);
+        TenantSubscription? subscription = await _subscriptionService.GetSubscriptionForTenantAsync(tenantId, ct);
         if ((subscription is null) || (subscription.Tier != SubscriptionTier.Team))
         {
             await HttpContext.SendApiErrorAsync(403, "Audit log requires a Team subscription", ct);
@@ -93,10 +88,10 @@ public sealed class AuditLogListEndpoint : Endpoint<AuditLogListRequest, ApiResp
             actionFilter = parsed;
         }
 
-        int totalCount = await _auditLogRepo.CountAuditLogEntriesForTenantAsync(tenantId.Value, actionFilter, req.From, req.To, ct);
+        int totalCount = await _auditLogRepo.CountAuditLogEntriesForTenantAsync(tenantId, actionFilter, req.From, req.To, ct);
 
         List<AuditLogEntry> entries = await _auditLogRepo.GetAuditLogEntriesForTenantAsync(
-            tenantId.Value, (page - 1) * pageSize, pageSize, actionFilter, req.From, req.To, ct);
+            tenantId, (page - 1) * pageSize, pageSize, actionFilter, req.From, req.To, ct);
 
         List<AuditLogEntryDto> dtos = entries.Select(e => new AuditLogEntryDto
         {

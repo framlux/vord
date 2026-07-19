@@ -31,19 +31,14 @@ public sealed class CreateRegistrationTokenEndpoint : Endpoint<CreateRegistratio
     {
         Post("/machines/registration-tokens");
         Policies("MachineAdmin");
+        Tags(EndpointTags.RequiresTenant);
         Version(1);
     }
 
     /// <inheritdoc/>
     public override async Task HandleAsync(CreateRegistrationTokenRequest req, CancellationToken ct)
     {
-        int? tenantId = _tenantContext.TenantId;
-        if (tenantId is null)
-        {
-            await HttpContext.SendApiErrorAsync(401, "Unable to identify tenant", ct);
-
-            return;
-        }
+        int tenantId = _tenantContext.RequireTenantId();
 
         int? userId = _tenantContext.UserId;
         if (userId is null)
@@ -54,7 +49,7 @@ public sealed class CreateRegistrationTokenEndpoint : Endpoint<CreateRegistratio
         }
 
         ServiceResult<RegistrationTokenDto> result = await _handler.CreateAsync(
-            tenantId.Value, userId.Value, req.Name, ct);
+            tenantId, userId.Value, req.Name, ct);
 
         if (result.IsSuccess == false)
         {

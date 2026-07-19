@@ -64,6 +64,7 @@ public sealed class ResumeSubscriptionEndpoint : EndpointWithoutRequest<ApiRespo
     {
         Post("/billing/resume");
         Policies("TenantAdmin");
+        Tags(EndpointTags.RequiresTenant);
         Version(1);
     }
 
@@ -77,15 +78,9 @@ public sealed class ResumeSubscriptionEndpoint : EndpointWithoutRequest<ApiRespo
             return;
         }
 
-        int? tenantId = _tenantContext.TenantId;
-        if (tenantId is null)
-        {
-            await HttpContext.SendApiErrorAsync(401, "Unauthorized", ct);
+        int tenantId = _tenantContext.RequireTenantId();
 
-            return;
-        }
-
-        TenantSubscription? subscription = await _subscriptionService.GetSubscriptionForTenantAsync(tenantId.Value, ct);
+        TenantSubscription? subscription = await _subscriptionService.GetSubscriptionForTenantAsync(tenantId, ct);
         if (subscription is null)
         {
             await HttpContext.SendApiErrorAsync(404, "Subscription not found", ct);
@@ -100,7 +95,7 @@ public sealed class ResumeSubscriptionEndpoint : EndpointWithoutRequest<ApiRespo
             return;
         }
 
-        Tenant? tenant = await _tenantRepository.GetTenantByIdAsync(tenantId.Value, ct);
+        Tenant? tenant = await _tenantRepository.GetTenantByIdAsync(tenantId, ct);
         if (tenant is null)
         {
             await HttpContext.SendApiErrorAsync(404, "Tenant not found", ct);
@@ -125,16 +120,16 @@ public sealed class ResumeSubscriptionEndpoint : EndpointWithoutRequest<ApiRespo
         bool success = await _billingApiClient.ResumeSubscriptionAsync(tenant.ExternalId, ct);
         if (success == false)
         {
-            _logger.LogWarning("Failed to resume subscription with billing-api for tenant {TenantId}", tenantId.Value);
+            _logger.LogWarning("Failed to resume subscription with billing-api for tenant {TenantId}", tenantId);
             await HttpContext.SendApiErrorAsync(502, "Failed to resume subscription. Please try again.", ct);
 
             return;
         }
 
         await _auditLog.InsertAuditLogAsync(AuditHelper.Create(
-            tenantId.Value, null, null,
+            tenantId, null, null,
             AuditAction.SubscriptionResumed, AuditResourceType.Subscription,
-            tenantId.Value.ToString(), null, null), ct);
+            tenantId.ToString(), null, null), ct);
 
         await Send.OkAsync(ApiResponse<ResumeSubscriptionResponse>.Ok(new ResumeSubscriptionResponse
         {

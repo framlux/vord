@@ -37,23 +37,18 @@ public sealed class MachineAlertRulesListEndpoint : EndpointWithoutRequest<ApiRe
     {
         Get("/machines/{machineId}/alert-rules");
         Policies("ViewOnly");
+        Tags(EndpointTags.RequiresTenant);
         Version(1);
     }
 
     /// <inheritdoc/>
     public override async Task HandleAsync(CancellationToken ct)
     {
-        int? tenantId = _tenantContext.TenantId;
-        if (tenantId is null)
-        {
-            await HttpContext.SendApiErrorAsync(401, "Unauthorized", ct);
-
-            return;
-        }
+        int tenantId = _tenantContext.RequireTenantId();
 
         long machineId = Route<long>("machineId");
 
-        Machine? machine = await _machineRepo.GetActiveMachineByIdAsync(machineId, tenantId.Value, ct);
+        Machine? machine = await _machineRepo.GetActiveMachineByIdAsync(machineId, tenantId, ct);
         if (machine is null)
         {
             await HttpContext.SendApiErrorAsync(404, "Machine not found", ct);
@@ -61,9 +56,9 @@ public sealed class MachineAlertRulesListEndpoint : EndpointWithoutRequest<ApiRe
             return;
         }
 
-        List<int> ruleIds = await _alertRuleRepo.GetRuleIdsForMachineAsync(machineId, tenantId.Value, ct);
+        List<int> ruleIds = await _alertRuleRepo.GetRuleIdsForMachineAsync(machineId, tenantId, ct);
 
-        List<AlertRule> tenantRules = await _alertRuleRepo.GetAlertRulesForTenantAsync(tenantId.Value, ct);
+        List<AlertRule> tenantRules = await _alertRuleRepo.GetAlertRulesForTenantAsync(tenantId, ct);
 
         HashSet<int> assignedRuleIds = new(ruleIds);
         List<AlertRuleDto> dtos = tenantRules

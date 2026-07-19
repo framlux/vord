@@ -6,6 +6,7 @@ using FastEndpoints;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Server.Auth;
+using Framlux.FleetManagement.Server.Endpoints;
 using Framlux.FleetManagement.Services.Core.Billing;
 
 namespace Framlux.FleetManagement.Server.Services.Billing;
@@ -69,12 +70,10 @@ public sealed class SubscriptionStatusPreProcessor : IGlobalPreProcessor
 
         if (subscription.Status == SubscriptionStatus.Canceled)
         {
-            httpContext.Response.StatusCode = 403;
-            await httpContext.Response.WriteAsJsonAsync(new
-            {
-                success = false,
-                message = "Subscription is canceled. Your account is in read-only mode. Please reactivate from the billing page."
-            }, ct);
+            await httpContext.SendApiErrorAsync(
+                403,
+                "Subscription is canceled. Your account is in read-only mode. Please reactivate from the billing page.",
+                ct);
 
             context.HttpContext.MarkResponseStart();
         }

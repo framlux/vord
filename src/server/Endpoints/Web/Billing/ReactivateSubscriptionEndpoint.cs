@@ -64,6 +64,7 @@ public sealed class ReactivateSubscriptionEndpoint : EndpointWithoutRequest<ApiR
     {
         Post("/billing/reactivate");
         Policies("TenantAdmin");
+        Tags(EndpointTags.RequiresTenant);
         Version(1);
     }
 
@@ -77,15 +78,9 @@ public sealed class ReactivateSubscriptionEndpoint : EndpointWithoutRequest<ApiR
             return;
         }
 
-        int? tenantId = _tenantContext.TenantId;
-        if (tenantId is null)
-        {
-            await HttpContext.SendApiErrorAsync(401, "Unauthorized", ct);
+        int tenantId = _tenantContext.RequireTenantId();
 
-            return;
-        }
-
-        TenantSubscription? subscription = await _subscriptionService.GetSubscriptionForTenantAsync(tenantId.Value, ct);
+        TenantSubscription? subscription = await _subscriptionService.GetSubscriptionForTenantAsync(tenantId, ct);
         if (subscription is null)
         {
             await HttpContext.SendApiErrorAsync(404, "Subscription not found", ct);
@@ -103,18 +98,18 @@ public sealed class ReactivateSubscriptionEndpoint : EndpointWithoutRequest<ApiR
         using IDatabaseTransaction transaction = await _transactionProvider.BeginTransactionAsync(ct);
 
         // Reactivate by reverting to Free tier with Active status
-        await _subscriptionRepository.RevertSubscriptionToFreeAsync(tenantId.Value, ct);
+        await _subscriptionRepository.RevertSubscriptionToFreeAsync(tenantId, ct);
 
         await _auditLog.InsertAuditLogAsync(AuditHelper.Create(
-            tenantId.Value, null, null,
+            tenantId, null, null,
             AuditAction.SubscriptionUpgraded, AuditResourceType.Subscription,
-            tenantId.Value.ToString(), "Account reactivated to Free tier from canceled state", null), ct);
+            tenantId.ToString(), "Account reactivated to Free tier from canceled state", null), ct);
 
         await transaction.CommitAsync(ct);
 
         _logger.LogInformation(
             "Subscription reactivated to Free tier for tenant {TenantId}",
-            tenantId.Value);
+            tenantId);
 
         await Send.OkAsync(ApiResponse<ReactivateSubscriptionResponse>.Ok(new ReactivateSubscriptionResponse
         {

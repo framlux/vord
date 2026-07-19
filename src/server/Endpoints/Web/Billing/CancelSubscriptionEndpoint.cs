@@ -71,6 +71,7 @@ public sealed class CancelSubscriptionEndpoint : EndpointWithoutRequest<ApiRespo
     {
         Post("/billing/cancel");
         Policies("TenantAdmin");
+        Tags(EndpointTags.RequiresTenant);
         Version(1);
     }
 
@@ -84,15 +85,9 @@ public sealed class CancelSubscriptionEndpoint : EndpointWithoutRequest<ApiRespo
             return;
         }
 
-        int? tenantId = _tenantContext.TenantId;
-        if (tenantId is null)
-        {
-            await HttpContext.SendApiErrorAsync(401, "Unauthorized", ct);
+        int tenantId = _tenantContext.RequireTenantId();
 
-            return;
-        }
-
-        TenantSubscription? subscription = await _subscriptionService.GetSubscriptionForTenantAsync(tenantId.Value, ct);
+        TenantSubscription? subscription = await _subscriptionService.GetSubscriptionForTenantAsync(tenantId, ct);
         if (subscription is null)
         {
             await HttpContext.SendApiErrorAsync(404, "Subscription not found", ct);
@@ -116,12 +111,12 @@ public sealed class CancelSubscriptionEndpoint : EndpointWithoutRequest<ApiRespo
         {
             using IDatabaseTransaction transaction = await _transactionProvider.BeginTransactionAsync(ct);
 
-            await _subscriptionRepository.DeactivateSubscriptionAsync(tenantId.Value, ct);
+            await _subscriptionRepository.DeactivateSubscriptionAsync(tenantId, ct);
 
             await _auditLog.InsertAuditLogAsync(AuditHelper.Create(
-                tenantId.Value, null, null,
+                tenantId, null, null,
                 AuditAction.SubscriptionCancelRequested, AuditResourceType.Subscription,
-                tenantId.Value.ToString(), "Free tier account canceled immediately", null), ct);
+                tenantId.ToString(), "Free tier account canceled immediately", null), ct);
 
             await transaction.CommitAsync(ct);
 
@@ -135,7 +130,7 @@ public sealed class CancelSubscriptionEndpoint : EndpointWithoutRequest<ApiRespo
         }
 
         // For paid tiers, delegate cancellation to the billing-api which manages Stripe state
-        Tenant? tenant = await _tenantRepository.GetTenantByIdAsync(tenantId.Value, ct);
+        Tenant? tenant = await _tenantRepository.GetTenantByIdAsync(tenantId, ct);
         if (tenant is null)
         {
             await HttpContext.SendApiErrorAsync(404, "Tenant not found", ct);
@@ -159,16 +154,16 @@ public sealed class CancelSubscriptionEndpoint : EndpointWithoutRequest<ApiRespo
         bool success = await _billingApiClient.CancelSubscriptionAsync(tenant.ExternalId, PendingActionType.CancelAccount, ct);
         if (success == false)
         {
-            _logger.LogWarning("Failed to cancel subscription with billing-api for tenant {TenantId}", tenantId.Value);
+            _logger.LogWarning("Failed to cancel subscription with billing-api for tenant {TenantId}", tenantId);
             await HttpContext.SendApiErrorAsync(502, "Failed to process cancellation. Please try again.", ct);
 
             return;
         }
 
         await _auditLog.InsertAuditLogAsync(AuditHelper.Create(
-            tenantId.Value, null, null,
+            tenantId, null, null,
             AuditAction.SubscriptionCancelRequested, AuditResourceType.Subscription,
-            tenantId.Value.ToString(), null, null), ct);
+            tenantId.ToString(), null, null), ct);
 
         await Send.OkAsync(ApiResponse<CancelSubscriptionResponse>.Ok(new CancelSubscriptionResponse
         {

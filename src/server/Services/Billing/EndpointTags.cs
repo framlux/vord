@@ -5,8 +5,8 @@
 namespace Framlux.FleetManagement.Server.Services.Billing;
 
 /// <summary>
-/// Tag applied to endpoints that are exempt from subscription enforcement.
-/// Apply this tag in Configure() to allow access regardless of subscription status.
+/// Tags applied to endpoints in Configure() to opt in or out of the behavior enforced by the
+/// global pre-processors (subscription gating, tenant-scope enforcement).
 /// </summary>
 public static class EndpointTags
 {
@@ -21,4 +21,12 @@ public static class EndpointTags
     /// subscription, or whose subscription is not Active.
     /// </summary>
     public const string RequiresProSubscription = "RequiresProSubscription";
+
+    /// <summary>
+    /// Endpoints with this tag require a tenant scope on the request. The
+    /// <see cref="Tenancy.TenantContextPreProcessor"/> rejects tenant-less requests with a
+    /// 401 before the handler runs, so tagged handlers may call
+    /// <c>ITenantContext.RequireTenantId()</c> without a null check.
+    /// </summary>
+    public const string RequiresTenant = "RequiresTenant";
 }

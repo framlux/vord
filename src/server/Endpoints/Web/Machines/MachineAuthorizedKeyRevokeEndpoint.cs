@@ -31,6 +31,7 @@ public sealed class MachineAuthorizedKeyRevokeEndpoint : EndpointWithoutRequest<
     {
         Delete("/machines/{machineId}/authorized-keys/{keyId:int}");
         Policies("MachineAdmin");
+        Tags(EndpointTags.RequiresTenant);
         Version(1);
     }
 
@@ -40,13 +41,7 @@ public sealed class MachineAuthorizedKeyRevokeEndpoint : EndpointWithoutRequest<
         long machineId = Route<long>("machineId");
         int keyId = Route<int>("keyId");
 
-        int? tenantId = _tenantContext.TenantId;
-        if (tenantId is null)
-        {
-            await HttpContext.SendApiErrorAsync(401, "Unable to identify tenant", ct);
-
-            return;
-        }
+        int tenantId = _tenantContext.RequireTenantId();
 
         int? userId = _tenantContext.UserId;
         if (userId is null)
@@ -57,7 +52,7 @@ public sealed class MachineAuthorizedKeyRevokeEndpoint : EndpointWithoutRequest<
         }
 
         ServiceResult<bool> result = await _authorizedKeyService.RevokeAuthorizationAsync(
-            machineId, keyId, userId.Value, tenantId.Value, ct);
+            machineId, keyId, userId.Value, tenantId, ct);
 
         if (result.IsNotFound)
         {

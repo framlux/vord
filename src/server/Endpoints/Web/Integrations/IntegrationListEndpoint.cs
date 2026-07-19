@@ -32,21 +32,16 @@ public sealed class IntegrationListEndpoint : EndpointWithoutRequest<ApiResponse
     {
         Get("/integrations");
         Policies("TenantAdmin");
+        Tags(EndpointTags.RequiresTenant);
         Version(1);
     }
 
     /// <inheritdoc/>
     public override async Task HandleAsync(CancellationToken ct)
     {
-        int? tenantId = _tenantContext.TenantId;
-        if (tenantId is null)
-        {
-            await HttpContext.SendApiErrorAsync(401, "Unauthorized", ct);
+        int tenantId = _tenantContext.RequireTenantId();
 
-            return;
-        }
-
-        List<IntegrationEndpoint> integrations = await _integrationRepo.GetIntegrationsForTenantAsync(tenantId.Value, ct);
+        List<IntegrationEndpoint> integrations = await _integrationRepo.GetIntegrationsForTenantAsync(tenantId, ct);
 
         List<IntegrationEndpointDto> dtos = integrations.Select(i => new IntegrationEndpointDto
         {

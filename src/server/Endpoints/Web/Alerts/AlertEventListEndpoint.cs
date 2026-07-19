@@ -57,20 +57,14 @@ public sealed class AlertEventListEndpoint : Endpoint<AlertEventListRequest, Api
     {
         Get("/alert-events");
         Policies("ViewOnly");
-        Tags(Services.Billing.EndpointTags.RequiresProSubscription);
+        Tags(Services.Billing.EndpointTags.RequiresProSubscription, EndpointTags.RequiresTenant);
         Version(1);
     }
 
     /// <inheritdoc/>
     public override async Task HandleAsync(AlertEventListRequest req, CancellationToken ct)
     {
-        int? tenantId = _tenantContext.TenantId;
-        if (tenantId is null)
-        {
-            await HttpContext.SendApiErrorAsync(401, "Unauthorized", ct);
-
-            return;
-        }
+        int tenantId = _tenantContext.RequireTenantId();
 
         // Pro+ gating is enforced by ProSubscriptionPreProcessor via the RequiresProSubscription tag.
         int page = req.Page < 1 ? 1 : req.Page;
@@ -88,10 +82,10 @@ public sealed class AlertEventListEndpoint : Endpoint<AlertEventListRequest, Api
             severityFilter = parsedSeverity;
         }
 
-        int totalCount = await _alertEventRepo.CountAlertEventsForTenantAsync(tenantId.Value, statusFilter, severityFilter, ct);
+        int totalCount = await _alertEventRepo.CountAlertEventsForTenantAsync(tenantId, statusFilter, severityFilter, ct);
 
         int skip = (page - 1) * pageSize;
-        List<AlertEvent> events = await _alertEventRepo.GetAlertEventsForTenantAsync(tenantId.Value, skip, pageSize, statusFilter, severityFilter, ct);
+        List<AlertEvent> events = await _alertEventRepo.GetAlertEventsForTenantAsync(tenantId, skip, pageSize, statusFilter, severityFilter, ct);
 
         List<long> machineIds = events.Select(e => e.MachineId).Distinct().ToList();
         Dictionary<long, string> machineNames = await _machineStateRepo.GetNameMapAsync(machineIds, ct);

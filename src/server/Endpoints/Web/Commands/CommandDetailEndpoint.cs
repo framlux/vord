@@ -32,6 +32,7 @@ public sealed class CommandDetailEndpoint : EndpointWithoutRequest<ApiResponse<C
     {
         Get("/commands/{id}");
         Policies("ViewOnly");
+        Tags(EndpointTags.RequiresTenant);
         Version(1);
     }
 
@@ -40,15 +41,9 @@ public sealed class CommandDetailEndpoint : EndpointWithoutRequest<ApiResponse<C
     {
         long commandId = Route<long>("id");
 
-        int? tenantId = _tenantContext.TenantId;
-        if (tenantId is null)
-        {
-            await HttpContext.SendApiErrorAsync(401, "Unable to identify tenant", ct);
+        int tenantId = _tenantContext.RequireTenantId();
 
-            return;
-        }
-
-        ServiceResult<RemoteCommand> result = await _commandService.GetCommandDetailAsync(commandId, tenantId.Value, ct);
+        ServiceResult<RemoteCommand> result = await _commandService.GetCommandDetailAsync(commandId, tenantId, ct);
         if (result.IsNotFound)
         {
             await HttpContext.SendApiErrorAsync(404, "Command not found", ct);

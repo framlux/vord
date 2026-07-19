@@ -48,22 +48,17 @@ public sealed class MachineAuthorizedKeyAddEndpoint : Endpoint<MachineAuthorized
     {
         Post("/machines/{machineId}/authorized-keys");
         Policies("MachineAdmin");
+        Tags(EndpointTags.RequiresTenant);
         Version(1);
     }
 
     /// <inheritdoc/>
     public override async Task HandleAsync(MachineAuthorizedKeyAddRequest req, CancellationToken ct)
     {
-        int? tenantId = _tenantContext.TenantId;
-        if (tenantId is null)
-        {
-            await HttpContext.SendApiErrorAsync(401, "Unable to identify tenant", ct);
-
-            return;
-        }
+        int tenantId = _tenantContext.RequireTenantId();
 
         // Remote commands require a Team subscription.
-        TenantSubscription? subscription = await _subscriptionService.GetSubscriptionForTenantAsync(tenantId.Value, ct);
+        TenantSubscription? subscription = await _subscriptionService.GetSubscriptionForTenantAsync(tenantId, ct);
         if ((subscription is null) || (subscription.Tier != SubscriptionTier.Team))
         {
             await HttpContext.SendApiErrorAsync(403, "Remote commands require a Team subscription", ct);
@@ -82,7 +77,7 @@ public sealed class MachineAuthorizedKeyAddEndpoint : Endpoint<MachineAuthorized
         }
 
         ServiceResult<MachineAuthorizedKey> result = await _authorizedKeyService.AuthorizeKeyAsync(
-            machineId, req.SigningKeyId, userId.Value, tenantId.Value, ct);
+            machineId, req.SigningKeyId, userId.Value, tenantId, ct);
 
         if (result.IsNotFound)
         {
@@ -107,7 +102,7 @@ public sealed class MachineAuthorizedKeyAddEndpoint : Endpoint<MachineAuthorized
 
         // Re-fetch the full list for this machine to get joined display data for the response.
         ServiceResult<List<MachineAuthorizedKeyDto>> listResult = await _authorizedKeyService.ListAuthorizedKeysAsync(
-            machineId, tenantId.Value, ct);
+            machineId, tenantId, ct);
 
         MachineAuthorizedKeyDto? dto = listResult.Data?.Find(k => k.Id == result.Data.Id);
         if (dto is null)

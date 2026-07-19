@@ -37,23 +37,17 @@ public sealed class AlertRuleListEndpoint : EndpointWithoutRequest<ApiResponse<L
     {
         Get("/alert-rules");
         Policies("ViewOnly");
-        Tags(Services.Billing.EndpointTags.RequiresProSubscription);
+        Tags(Services.Billing.EndpointTags.RequiresProSubscription, EndpointTags.RequiresTenant);
         Version(1);
     }
 
     /// <inheritdoc/>
     public override async Task HandleAsync(CancellationToken ct)
     {
-        int? tenantId = _tenantContext.TenantId;
-        if (tenantId is null)
-        {
-            await HttpContext.SendApiErrorAsync(401, "Unauthorized", ct);
-
-            return;
-        }
+        int tenantId = _tenantContext.RequireTenantId();
 
         // Pro+ gating is enforced by ProSubscriptionPreProcessor via the RequiresProSubscription tag.
-        List<AlertRule> rules = await _alertRuleRepo.GetAlertRulesForTenantAsync(tenantId.Value, ct);
+        List<AlertRule> rules = await _alertRuleRepo.GetAlertRulesForTenantAsync(tenantId, ct);
 
         // Fetch machine assignments for all rules in one query
         List<int> ruleIds = rules.Select(r => r.Id).ToList();

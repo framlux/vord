@@ -39,19 +39,14 @@ public sealed class IntegrationDeleteEndpoint : EndpointWithoutRequest
     {
         Delete("/integrations/{id:int}");
         Policies("TenantAdmin");
+        Tags(EndpointTags.RequiresTenant);
         Version(1);
     }
 
     /// <inheritdoc/>
     public override async Task HandleAsync(CancellationToken ct)
     {
-        int? tenantId = _tenantContext.TenantId;
-        if (tenantId is null)
-        {
-            await HttpContext.SendApiErrorAsync(401, "Unauthorized", ct);
-
-            return;
-        }
+        int tenantId = _tenantContext.RequireTenantId();
 
         int? userId = _tenantContext.UserId;
         if (userId is null)
@@ -63,7 +58,7 @@ public sealed class IntegrationDeleteEndpoint : EndpointWithoutRequest
 
         int integrationId = Route<int>("id");
 
-        IntegrationEndpoint? integration = await _integrationRepo.GetIntegrationByIdAsync(integrationId, tenantId.Value, ct);
+        IntegrationEndpoint? integration = await _integrationRepo.GetIntegrationByIdAsync(integrationId, tenantId, ct);
         if (integration is null)
         {
             await HttpContext.SendApiErrorAsync(404, "Integration not found", ct);
@@ -71,10 +66,10 @@ public sealed class IntegrationDeleteEndpoint : EndpointWithoutRequest
             return;
         }
 
-        await _integrationRepo.SoftDeleteIntegrationAsync(integrationId, tenantId.Value, userId.Value, ct);
+        await _integrationRepo.SoftDeleteIntegrationAsync(integrationId, tenantId, userId.Value, ct);
 
         await _auditLog.InsertAuditLogAsync(AuditHelper.Create(
-            tenantId.Value, userId.Value, null,
+            tenantId, userId.Value, null,
             AuditAction.IntegrationDeleted, AuditResourceType.Integration,
             integrationId.ToString(), null, null), ct);
 

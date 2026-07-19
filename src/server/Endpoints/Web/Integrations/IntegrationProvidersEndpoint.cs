@@ -163,19 +163,14 @@ public sealed class IntegrationProvidersEndpoint : EndpointWithoutRequest<ApiRes
     {
         Get("/integrations/providers");
         Policies("ViewOnly");
+        Tags(EndpointTags.RequiresTenant);
         Version(1);
     }
 
     /// <inheritdoc/>
     public override async Task HandleAsync(CancellationToken ct)
     {
-        int? tenantId = _tenantContext.TenantId;
-        if (tenantId is null)
-        {
-            await HttpContext.SendApiErrorAsync(401, "Unauthorized", ct);
-
-            return;
-        }
+        int tenantId = _tenantContext.RequireTenantId();
 
         await Send.OkAsync(ApiResponse<List<IntegrationProviderDto>>.Ok(Providers), cancellation: ct);
     }

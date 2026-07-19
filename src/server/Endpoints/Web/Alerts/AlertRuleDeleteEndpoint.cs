@@ -62,25 +62,19 @@ public sealed class AlertRuleDeleteEndpoint : EndpointWithoutRequest<ApiResponse
     {
         Delete("/alert-rules/{id}");
         Policies("TenantAdmin");
-        Tags(Services.Billing.EndpointTags.RequiresProSubscription);
+        Tags(Services.Billing.EndpointTags.RequiresProSubscription, EndpointTags.RequiresTenant);
         Version(1);
     }
 
     /// <inheritdoc/>
     public override async Task HandleAsync(CancellationToken ct)
     {
-        int? tenantId = _tenantContext.TenantId;
-        if (tenantId is null)
-        {
-            await HttpContext.SendApiErrorAsync(StatusCodes.Status401Unauthorized, "Unauthorized", ct);
-
-            return;
-        }
+        int tenantId = _tenantContext.RequireTenantId();
 
         // Pro+ gating is enforced by ProSubscriptionPreProcessor via the RequiresProSubscription tag.
         int ruleId = Route<int>("id");
 
-        AlertRule? rule = await _alertRuleRepo.GetAlertRuleByIdAsync(ruleId, tenantId.Value, ct);
+        AlertRule? rule = await _alertRuleRepo.GetAlertRuleByIdAsync(ruleId, tenantId, ct);
 
         if (rule is null)
         {
@@ -104,9 +98,9 @@ public sealed class AlertRuleDeleteEndpoint : EndpointWithoutRequest<ApiResponse
         {
             await _alertEventRepo.ResolveEventsForRuleAsync(ruleId, ct);
             await _alertConditionStateRepo.DeleteForRuleAsync(ruleId, ct);
-            await _alertRuleRepo.DeleteAlertRuleAsync(ruleId, tenantId.Value, ct);
+            await _alertRuleRepo.DeleteAlertRuleAsync(ruleId, tenantId, ct);
             await _auditLog.InsertAuditLogAsync(AuditHelper.Create(
-                tenantId.Value, userId, null,
+                tenantId, userId, null,
                 AuditAction.AlertRuleDeleted, AuditResourceType.AlertRule,
                 ruleId.ToString(), rule.Name, null), ct);
 

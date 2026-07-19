@@ -89,6 +89,7 @@ public sealed class DowngradeSubscriptionEndpoint : Endpoint<DowngradeSubscripti
     {
         Post("/billing/downgrade");
         Policies("TenantAdmin");
+        Tags(EndpointTags.RequiresTenant);
         Version(1);
     }
 
@@ -102,15 +103,9 @@ public sealed class DowngradeSubscriptionEndpoint : Endpoint<DowngradeSubscripti
             return;
         }
 
-        int? tenantId = _tenantContext.TenantId;
-        if (tenantId is null)
-        {
-            await HttpContext.SendApiErrorAsync(401, "Unauthorized", ct);
+        int tenantId = _tenantContext.RequireTenantId();
 
-            return;
-        }
-
-        TenantSubscription? subscription = await _subscriptionService.GetSubscriptionForTenantAsync(tenantId.Value, ct);
+        TenantSubscription? subscription = await _subscriptionService.GetSubscriptionForTenantAsync(tenantId, ct);
         if (subscription is null)
         {
             await HttpContext.SendApiErrorAsync(404, "Subscription not found", ct);
@@ -150,7 +145,7 @@ public sealed class DowngradeSubscriptionEndpoint : Endpoint<DowngradeSubscripti
         // OIDC lockout guard for downgrades from Team
         if (currentTier == SubscriptionTier.Team)
         {
-            bool canDowngrade = await _downgradeGuardService.CanDowngradeFromTeamAsync(tenantId.Value, ct);
+            bool canDowngrade = await _downgradeGuardService.CanDowngradeFromTeamAsync(tenantId, ct);
             if (canDowngrade == false)
             {
                 await HttpContext.SendApiErrorAsync(400,
@@ -164,7 +159,7 @@ public sealed class DowngradeSubscriptionEndpoint : Endpoint<DowngradeSubscripti
         // Team -> Pro: immediate price swap
         if ((currentTier == SubscriptionTier.Team) && isDowngradeToPro)
         {
-            await HandleTeamToProDowngradeAsync(tenantId.Value, ct);
+            await HandleTeamToProDowngradeAsync(tenantId, ct);
 
             return;
         }
@@ -172,7 +167,7 @@ public sealed class DowngradeSubscriptionEndpoint : Endpoint<DowngradeSubscripti
         // Any -> Free: cancel at period end with DowngradeToFree pending action
         if (isDowngradeToFree)
         {
-            await HandleDowngradeToFreeAsync(tenantId.Value, ct);
+            await HandleDowngradeToFreeAsync(tenantId, ct);
 
             return;
         }

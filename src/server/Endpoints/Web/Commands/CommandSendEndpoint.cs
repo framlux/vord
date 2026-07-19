@@ -36,21 +36,16 @@ public sealed class CommandSendEndpoint : Endpoint<CommandSendRequest, ApiRespon
     {
         Post("/commands");
         Policies("MachineAdmin");
+        Tags(EndpointTags.RequiresTenant);
         Version(1);
     }
 
     /// <inheritdoc/>
     public override async Task HandleAsync(CommandSendRequest req, CancellationToken ct)
     {
-        int? tenantId = _tenantContext.TenantId;
-        if (tenantId is null)
-        {
-            await HttpContext.SendApiErrorAsync(401, "Unable to identify tenant", ct);
+        int tenantId = _tenantContext.RequireTenantId();
 
-            return;
-        }
-
-        TenantSubscription? subscription = await _subscriptionService.GetSubscriptionForTenantAsync(tenantId.Value, ct);
+        TenantSubscription? subscription = await _subscriptionService.GetSubscriptionForTenantAsync(tenantId, ct);
         if ((subscription is null) || (subscription.Tier != SubscriptionTier.Team))
         {
             await HttpContext.SendApiErrorAsync(403, "Remote commands require a Team subscription", ct);
@@ -69,7 +64,7 @@ public sealed class CommandSendEndpoint : Endpoint<CommandSendRequest, ApiRespon
         RemoteCommand command = new()
         {
             CommandId = req.CommandId,
-            TenantId = tenantId.Value,
+            TenantId = tenantId,
             MachineId = req.MachineId,
             UserId = userId.Value,
             SigningKeyId = req.SigningKeyId,

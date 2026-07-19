@@ -49,25 +49,19 @@ public sealed class AlertRuleCreateEndpoint : Endpoint<CreateAlertRuleRequest, A
     {
         Post("/alert-rules");
         Policies("TenantAdmin");
-        Tags(Services.Billing.EndpointTags.RequiresProSubscription);
+        Tags(Services.Billing.EndpointTags.RequiresProSubscription, EndpointTags.RequiresTenant);
         Version(1);
     }
 
     /// <inheritdoc/>
     public override async Task HandleAsync(CreateAlertRuleRequest req, CancellationToken ct)
     {
-        int? tenantId = _tenantContext.TenantId;
-        if (tenantId is null)
-        {
-            await HttpContext.SendApiErrorAsync(401, "Unauthorized", ct);
-
-            return;
-        }
+        int tenantId = _tenantContext.RequireTenantId();
 
         // Pro+ gating (null/Free/non-Active → 403) is enforced by ProSubscriptionPreProcessor via
         // the RequiresProSubscription tag. The subscription is still loaded here for the Team-tier
         // check below. The pre-processor guarantees a non-null, Active, non-Free subscription.
-        TenantSubscription? subscription = await _subscriptionService.GetSubscriptionForTenantAsync(tenantId.Value, ct);
+        TenantSubscription? subscription = await _subscriptionService.GetSubscriptionForTenantAsync(tenantId, ct);
 
         // Only Team tier can create custom rules
         if ((subscription is null) || (subscription.Tier != SubscriptionTier.Team))
@@ -77,7 +71,7 @@ public sealed class AlertRuleCreateEndpoint : Endpoint<CreateAlertRuleRequest, A
             return;
         }
 
-        bool canCreate = await _subscriptionService.CanCreateAlertRuleAsync(tenantId.Value, ct);
+        bool canCreate = await _subscriptionService.CanCreateAlertRuleAsync(tenantId, ct);
         if (canCreate == false)
         {
             await HttpContext.SendApiErrorAsync(403, "Alert rule limit reached for your subscription tier", ct);
@@ -117,7 +111,7 @@ public sealed class AlertRuleCreateEndpoint : Endpoint<CreateAlertRuleRequest, A
         DateTimeOffset now = DateTimeOffset.UtcNow;
         AlertRule rule = new()
         {
-            TenantId = tenantId.Value,
+            TenantId = tenantId,
             Name = req.Name,
             Description = req.Description,
             Metric = metric,
@@ -135,7 +129,7 @@ public sealed class AlertRuleCreateEndpoint : Endpoint<CreateAlertRuleRequest, A
         };
 
         // Validate machine IDs belong to this tenant before opening the transaction
-        List<long> validMachineIds = await _machineRepo.GetActiveMachineIdsForTenantAsync(tenantId.Value, req.MachineIds, ct);
+        List<long> validMachineIds = await _machineRepo.GetActiveMachineIdsForTenantAsync(tenantId, req.MachineIds, ct);
         if (validMachineIds.Count != req.MachineIds.Distinct().Count())
         {
             await HttpContext.SendApiErrorAsync(400, "One or more machine IDs are invalid or do not belong to this tenant", ct);
@@ -147,7 +141,7 @@ public sealed class AlertRuleCreateEndpoint : Endpoint<CreateAlertRuleRequest, A
 
         rule = await _alertRuleRepo.CreateAlertRuleAsync(rule, ct);
 
-        bool assigned = await _alertRuleRepo.SetMachinesForRuleAsync(rule.Id, tenantId.Value, req.MachineIds, ct);
+        bool assigned = await _alertRuleRepo.SetMachinesForRuleAsync(rule.Id, tenantId, req.MachineIds, ct);
         if (assigned == false)
         {
             await Send.NotFoundAsync(ct);
@@ -156,7 +150,7 @@ public sealed class AlertRuleCreateEndpoint : Endpoint<CreateAlertRuleRequest, A
         }
 
         await _auditLog.InsertAuditLogAsync(AuditHelper.Create(
-            tenantId.Value, userId.Value, null,
+            tenantId, userId.Value, null,
             AuditAction.AlertRuleCreated, AuditResourceType.AlertRule,
             rule.Id.ToString(), rule.Name, null), ct);
 

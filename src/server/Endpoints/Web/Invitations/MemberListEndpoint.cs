@@ -57,21 +57,16 @@ public sealed class MemberListEndpoint : EndpointWithoutRequest<ApiResponse<List
     {
         Get("/members");
         Policies("TenantAdmin");
+        Tags(EndpointTags.RequiresTenant);
         Version(1);
     }
 
     /// <inheritdoc/>
     public override async Task HandleAsync(CancellationToken ct)
     {
-        int? tenantId = _tenantContext.TenantId;
-        if (tenantId is null)
-        {
-            await HttpContext.SendApiErrorAsync(401, "Unauthorized", ct);
+        int tenantId = _tenantContext.RequireTenantId();
 
-            return;
-        }
-
-        IEnumerable<UserTenantRole> members = await _tenantRepository.GetMembersForTenantAsync(tenantId.Value, ct);
+        IEnumerable<UserTenantRole> members = await _tenantRepository.GetMembersForTenantAsync(tenantId, ct);
         List<MemberDto> dtos = members.Select(m => new MemberDto
         {
             UserId = m.UserId,

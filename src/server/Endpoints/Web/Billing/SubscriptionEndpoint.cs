@@ -86,21 +86,16 @@ public sealed class SubscriptionEndpoint : EndpointWithoutRequest<ApiResponse<Su
     {
         Get("/billing/subscription");
         Policies("ViewOnly");
+        Tags(EndpointTags.RequiresTenant);
         Version(1);
     }
 
     /// <inheritdoc/>
     public override async Task HandleAsync(CancellationToken ct)
     {
-        int? tenantId = _tenantContext.TenantId;
-        if (tenantId is null)
-        {
-            await HttpContext.SendApiErrorAsync(401, "Unauthorized", ct);
+        int tenantId = _tenantContext.RequireTenantId();
 
-            return;
-        }
-
-        TenantSubscription? subscription = await _subscriptionService.GetSubscriptionForTenantAsync(tenantId.Value, ct);
+        TenantSubscription? subscription = await _subscriptionService.GetSubscriptionForTenantAsync(tenantId, ct);
         if (subscription is null)
         {
             await HttpContext.SendApiErrorAsync(404, "Subscription not found", ct);
@@ -108,16 +103,16 @@ public sealed class SubscriptionEndpoint : EndpointWithoutRequest<ApiResponse<Su
             return;
         }
 
-        int machineCount = await _subscriptionService.GetMachineCountForTenantAsync(tenantId.Value, ct);
-        int alertRuleCount = await _alertRuleRepo.CountAlertRulesForTenantAsync(tenantId.Value, ct);
-        int webhookCount = await _integrationRepo.CountIntegrationsForTenantAsync(tenantId.Value, ct);
-        EffectiveLimits limits = await _subscriptionService.GetEffectiveLimitsForTenantAsync(tenantId.Value, ct);
+        int machineCount = await _subscriptionService.GetMachineCountForTenantAsync(tenantId, ct);
+        int alertRuleCount = await _alertRuleRepo.CountAlertRulesForTenantAsync(tenantId, ct);
+        int webhookCount = await _integrationRepo.CountIntegrationsForTenantAsync(tenantId, ct);
+        EffectiveLimits limits = await _subscriptionService.GetEffectiveLimitsForTenantAsync(tenantId, ct);
 
         // Retrieve cancellation state from billing-api (source of truth for Stripe state)
         bool cancelAtPeriodEnd = false;
         if (subscription.Tier != SubscriptionTier.Free)
         {
-            Tenant? tenant = await _tenantRepository.GetTenantByIdAsync(tenantId.Value, ct);
+            Tenant? tenant = await _tenantRepository.GetTenantByIdAsync(tenantId, ct);
             if (tenant is not null)
             {
                 StripeSubscriptionStatus stripeStatus = await _billingApiClient.GetSubscriptionStatusAsync(tenant.ExternalId, ct);

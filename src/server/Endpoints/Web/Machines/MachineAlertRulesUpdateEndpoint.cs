@@ -51,25 +51,20 @@ public sealed class MachineAlertRulesUpdateEndpoint : Endpoint<UpdateMachineAler
     {
         Put("/machines/{machineId}/alert-rules");
         Policies("TenantAdmin");
+        Tags(EndpointTags.RequiresTenant);
         Version(1);
     }
 
     /// <inheritdoc/>
     public override async Task HandleAsync(UpdateMachineAlertRulesRequest req, CancellationToken ct)
     {
-        int? tenantId = _tenantContext.TenantId;
-        if (tenantId is null)
-        {
-            await HttpContext.SendApiErrorAsync(401, "Unauthorized", ct);
-
-            return;
-        }
+        int tenantId = _tenantContext.RequireTenantId();
 
         int? userId = _tenantContext.UserId;
 
         long machineId = Route<long>("machineId");
 
-        Machine? machine = await _machineRepo.GetActiveMachineByIdAsync(machineId, tenantId.Value, ct);
+        Machine? machine = await _machineRepo.GetActiveMachineByIdAsync(machineId, tenantId, ct);
         if (machine is null)
         {
             await HttpContext.SendApiErrorAsync(404, "Machine not found", ct);
@@ -79,7 +74,7 @@ public sealed class MachineAlertRulesUpdateEndpoint : Endpoint<UpdateMachineAler
 
         if (req.RuleIds.Length > 0)
         {
-            List<AlertRule> tenantRules = await _alertRuleRepo.GetAlertRulesForTenantAsync(tenantId.Value, ct);
+            List<AlertRule> tenantRules = await _alertRuleRepo.GetAlertRulesForTenantAsync(tenantId, ct);
             List<int> invalidIds = FindInvalidRuleIds(req.RuleIds, tenantRules);
 
             if (invalidIds.Count > 0)
@@ -90,7 +85,7 @@ public sealed class MachineAlertRulesUpdateEndpoint : Endpoint<UpdateMachineAler
             }
         }
 
-        bool assigned = await _alertRuleRepo.SetRulesForMachineAsync(machineId, tenantId.Value, req.RuleIds, ct);
+        bool assigned = await _alertRuleRepo.SetRulesForMachineAsync(machineId, tenantId, req.RuleIds, ct);
         if (assigned == false)
         {
             await HttpContext.SendApiErrorAsync(404, "Machine not found", ct);
@@ -99,7 +94,7 @@ public sealed class MachineAlertRulesUpdateEndpoint : Endpoint<UpdateMachineAler
         }
 
         await _auditLog.InsertAuditLogAsync(AuditHelper.Create(
-            tenantId.Value, userId, machineId,
+            tenantId, userId, machineId,
             AuditAction.MachineAlertRulesUpdated, AuditResourceType.Machine,
             machineId.ToString(), new { RuleIds = req.RuleIds }, null), ct);
 
