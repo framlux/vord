@@ -202,27 +202,6 @@ public sealed class IntegrationRepositoryTests
     }
 
     [Test]
-    public async Task UpdateIntegrationEnabledAsync_UpdatesFlagAndUpdatedAt()
-    {
-        using TestDatabaseFactory dbFactory = new();
-        IIntegrationRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
-
-        (int userId, int tenantId) = await SeedUserAndTenantAsync(dbFactory);
-
-        IntegrationEndpoint integration = BuildIntegration(tenantId, userId, isEnabled: true);
-        integration.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(integration);
-
-        await repo.UpdateIntegrationEnabledAsync(integration.Id, tenantId, false);
-
-        IntegrationEndpoint? updated = await dbFactory.Context.IntegrationEndpoints
-            .FirstOrDefaultAsync(i => i.Id == integration.Id);
-
-        await Assert.That(updated).IsNotNull();
-        await Assert.That(updated!.IsEnabled).IsFalse();
-        await Assert.That(updated.UpdatedAt).IsNotNull();
-    }
-
-    [Test]
     public async Task DisableIntegrationsForTenantAsync_DisablesAllEnabledIntegrations()
     {
         using TestDatabaseFactory dbFactory = new();
@@ -264,27 +243,6 @@ public sealed class IntegrationRepositoryTests
         int updated = await repo.DisableIntegrationsForTenantAsync(tenantId);
 
         await Assert.That(updated).IsEqualTo(0);
-    }
-
-    [Test]
-    public async Task UpdateIntegrationNameAsync_UpdatesName()
-    {
-        using TestDatabaseFactory dbFactory = new();
-        IIntegrationRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
-
-        (int userId, int tenantId) = await SeedUserAndTenantAsync(dbFactory);
-
-        IntegrationEndpoint integration = BuildIntegration(tenantId, userId, name: "Original Name");
-        integration.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(integration);
-
-        await repo.UpdateIntegrationNameAsync(integration.Id, tenantId, "Updated Name");
-
-        IntegrationEndpoint? updated = await dbFactory.Context.IntegrationEndpoints
-            .FirstOrDefaultAsync(i => i.Id == integration.Id);
-
-        await Assert.That(updated).IsNotNull();
-        await Assert.That(updated!.Name).IsEqualTo("Updated Name");
-        await Assert.That(updated.UpdatedAt).IsNotNull();
     }
 
     [Test]

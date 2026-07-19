@@ -491,7 +491,6 @@ public sealed class SocialAuthEventsTests
 
         await Assert.That(result).IsTrue();
         await userRepo.Received(1).GetUserByExternalIdForProviderAsync(Database.Enums.AuthProviderType.Google, "shared-sub", Arg.Any<CancellationToken>());
-        await userRepo.DidNotReceive().GetUserByExternalIdAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
     }
 
     // --- Auth provider update tests ---

@@ -33,9 +33,8 @@ public static class RedisRateLimiterExtensions
     public static readonly TimeSpan CallbackWindow = TimeSpan.FromMinutes(5);
 
     /// <summary>
-    /// Creates the Redis-backed fixed-window limiter used for OAuth/OIDC callbacks. The
-    /// named <c>callback</c> policy and <c>CallbackRateLimitMiddleware</c> share this
-    /// factory so they enforce identical limits.
+    /// Creates the Redis-backed fixed-window limiter used for OAuth/OIDC callbacks.
+    /// <c>CallbackRateLimitMiddleware</c> uses this factory to enforce the callback limit.
     /// </summary>
     /// <param name="redis">The Redis connection multiplexer.</param>
     /// <param name="logger">Optional logger used to warn when the limiter fails open on a Redis outage.</param>
@@ -72,15 +71,6 @@ public static class RedisRateLimiterExtensions
                 // download). 30/min per IP — tighter than global because a single IP brute-forcing
                 // 64-hex tokens is cheap to mount and the only response we can offer is to slow them.
                 RedisFixedWindowRateLimiter anonymousTokenLimiter = new(redis, "ratelimit:anonymous-token", 30, TimeSpan.FromMinutes(1), limiterLogger);
-                // Strict policy for the OAuth/OIDC callback paths. Note this named "callback"
-                // policy does NOT enforce the callback limit: the OAuth/OIDC callbacks are
-                // authentication-scheme middleware mappings, not FastEndpoints, so nothing can
-                // attach RequireRateLimiting("callback") to them. Actual enforcement is done by
-                // CallbackRateLimitMiddleware (which shares the identical limit via
-                // CreateCallbackLimiter). The policy is registered only for parity and
-                // observability, so the callback surface appears alongside the other named
-                // policies; do not assume it throttles the callbacks on its own.
-                RedisFixedWindowRateLimiter callbackLimiter = CreateCallbackLimiter(redis, limiterLogger);
 
                 options.GlobalLimiter = PartitionedRateLimiter.Create<HttpContext, string>(context =>
                 {
@@ -104,14 +94,6 @@ public static class RedisRateLimiterExtensions
 
                     return RateLimitPartition.Get(partitionKey, key =>
                         new RedisPartitionedRateLimiter(anonymousTokenLimiter, key));
-                });
-
-                options.AddPolicy("callback", context =>
-                {
-                    string partitionKey = context.Connection.RemoteIpAddress?.ToString() ?? "unknown";
-
-                    return RateLimitPartition.Get(partitionKey, key =>
-                        new RedisPartitionedRateLimiter(callbackLimiter, key));
                 });
             });
         });

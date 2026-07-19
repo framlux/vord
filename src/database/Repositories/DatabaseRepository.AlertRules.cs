@@ -197,17 +197,6 @@ public partial class DatabaseRepository : IAlertRuleRepository
     }
 
     /// <inheritdoc/>
-    public async Task<List<long>> GetMachineIdsForRuleAsync(int ruleId, CancellationToken cancellationToken)
-    {
-        List<long> machineIds = await _db.AlertRuleMachines
-            .Where(arm => arm.AlertRuleId == ruleId)
-            .Select(arm => arm.MachineId)
-            .ToListAsync(cancellationToken);
-
-        return machineIds;
-    }
-
-    /// <inheritdoc/>
     public async Task<bool> SetMachinesForRuleAsync(int ruleId, int tenantId, IReadOnlyList<long> machineIds, CancellationToken cancellationToken)
     {
         // The rule must belong to the tenant for any assignment change to apply. If it does not, the

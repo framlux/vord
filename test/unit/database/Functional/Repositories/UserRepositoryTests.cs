@@ -33,47 +33,6 @@ public class UserCacheTests
     }
 
     [Test]
-    public async Task GetUserByExternalIdAsync_ExistingActiveUser_ReturnsUser()
-    {
-        using TestDatabaseFactory dbFactory = new();
-        IUserRepository cache = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
-
-        UserAccount user = TestDataBuilder.BuildUser(externalId: "ext-lookup-1");
-        int userId = await dbFactory.Context.InsertWithInt32IdentityAsync(user);
-
-        UserAccount? result = await cache.GetUserByExternalIdAsync("ext-lookup-1");
-
-        await Assert.That(result).IsNotNull();
-        await Assert.That(result!.Id).IsEqualTo(userId);
-        await Assert.That(result.ExternalId).IsEqualTo("ext-lookup-1");
-    }
-
-    [Test]
-    public async Task GetUserByExternalIdAsync_NonExistentExternalId_ReturnsNull()
-    {
-        using TestDatabaseFactory dbFactory = new();
-        IUserRepository cache = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
-
-        UserAccount? result = await cache.GetUserByExternalIdAsync("does-not-exist");
-
-        await Assert.That(result).IsNull();
-    }
-
-    [Test]
-    public async Task GetUserByExternalIdAsync_InactiveUser_ReturnsNull()
-    {
-        using TestDatabaseFactory dbFactory = new();
-        IUserRepository cache = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
-
-        UserAccount user = TestDataBuilder.BuildUser(externalId: "ext-inactive-1", isActive: false);
-        await dbFactory.Context.InsertWithInt32IdentityAsync(user);
-
-        UserAccount? result = await cache.GetUserByExternalIdAsync("ext-inactive-1");
-
-        await Assert.That(result).IsNull();
-    }
-
-    [Test]
     public async Task GetUserByExternalIdForProviderAsync_MatchingProviderAndExternalId_ReturnsUser()
     {
         using TestDatabaseFactory dbFactory = new();
@@ -131,101 +90,6 @@ public class UserCacheTests
     }
 
     [Test]
-    public async Task GetUserByEmailAsync_ExistingActiveUser_ReturnsUser()
-    {
-        using TestDatabaseFactory dbFactory = new();
-        IUserRepository cache = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
-
-        UserAccount user = TestDataBuilder.BuildUser(username: "email-lookup@example.com");
-        int userId = await dbFactory.Context.InsertWithInt32IdentityAsync(user);
-
-        UserAccount? result = await cache.GetUserByEmailAsync("email-lookup@example.com");
-
-        await Assert.That(result).IsNotNull();
-        await Assert.That(result!.Id).IsEqualTo(userId);
-        await Assert.That(result.Username).IsEqualTo("email-lookup@example.com");
-    }
-
-    [Test]
-    public async Task GetUserByEmailAsync_CaseInsensitiveMatch_ReturnsUser()
-    {
-        using TestDatabaseFactory dbFactory = new();
-        IUserRepository cache = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
-
-        UserAccount user = TestDataBuilder.BuildUser(username: "CaseMix@Example.COM");
-        await dbFactory.Context.InsertWithInt32IdentityAsync(user);
-
-        UserAccount? result = await cache.GetUserByEmailAsync("casemix@example.com");
-
-        await Assert.That(result).IsNotNull();
-        await Assert.That(result!.Username).IsEqualTo("CaseMix@Example.COM");
-    }
-
-    [Test]
-    public async Task GetUserByEmailAsync_InactiveUser_ReturnsNull()
-    {
-        using TestDatabaseFactory dbFactory = new();
-        IUserRepository cache = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
-
-        UserAccount user = TestDataBuilder.BuildUser(username: "inactive-email@example.com", isActive: false);
-        await dbFactory.Context.InsertWithInt32IdentityAsync(user);
-
-        UserAccount? result = await cache.GetUserByEmailAsync("inactive-email@example.com");
-
-        await Assert.That(result).IsNull();
-    }
-
-    [Test]
-    public async Task GetUserByEmailAsync_NonExistentEmail_ReturnsNull()
-    {
-        using TestDatabaseFactory dbFactory = new();
-        IUserRepository cache = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
-
-        UserAccount? result = await cache.GetUserByEmailAsync("nobody@nowhere.com");
-
-        await Assert.That(result).IsNull();
-    }
-
-    [Test]
-    public async Task DoAnyUsersExistAsync_NoUsers_ReturnsFalse()
-    {
-        using TestDatabaseFactory dbFactory = new();
-        IUserRepository cache = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
-
-        bool result = await cache.DoAnyUsersExistAsync();
-
-        await Assert.That(result).IsFalse();
-    }
-
-    [Test]
-    public async Task DoAnyUsersExistAsync_ActiveNonSystemUser_ReturnsTrue()
-    {
-        using TestDatabaseFactory dbFactory = new();
-        IUserRepository cache = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
-
-        UserAccount user = TestDataBuilder.BuildUser();
-        await dbFactory.Context.InsertWithInt32IdentityAsync(user);
-
-        bool result = await cache.DoAnyUsersExistAsync();
-
-        await Assert.That(result).IsTrue();
-    }
-
-    [Test]
-    public async Task DoAnyUsersExistAsync_OnlyInactiveUsers_ReturnsFalse()
-    {
-        using TestDatabaseFactory dbFactory = new();
-        IUserRepository cache = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
-
-        UserAccount user = TestDataBuilder.BuildUser(isActive: false);
-        await dbFactory.Context.InsertWithInt32IdentityAsync(user);
-
-        bool result = await cache.DoAnyUsersExistAsync();
-
-        await Assert.That(result).IsFalse();
-    }
-
-    [Test]
     public async Task UpdateUserEmailAsync_ExistingUser_UpdatesEmail()
     {
         using TestDatabaseFactory dbFactory = new();
@@ -236,7 +100,7 @@ public class UserCacheTests
 
         await cache.UpdateUserEmailAsync(userId, "new@example.com");
 
-        UserAccount? updated = await cache.GetUserByEmailAsync("new@example.com");
+        UserAccount? updated = await cache.GetUserByIdAsync(userId);
 
         await Assert.That(updated).IsNotNull();
         await Assert.That(updated!.Id).IsEqualTo(userId);

@@ -13,11 +13,6 @@ namespace Framlux.FleetManagement.Database.Repositories;
 public interface IUserRepository
 {
     /// <summary>
-    /// Get a user by their external ID.
-    /// </summary>
-    Task<UserAccount?> GetUserByExternalIdAsync(string externalId, CancellationToken cancellationToken = default);
-
-    /// <summary>
     /// Gets an active user by the composite identity of authentication provider and external ID.
     /// This is the takeover-safe lookup: a subject identifier is only unique within one provider,
     /// so identity must be resolved on the pair rather than the external ID alone.
@@ -38,16 +33,6 @@ public interface IUserRepository
     /// Updates a user's authentication provider in the database.
     /// </summary>
     Task UpdateUserAuthProviderAsync(int userId, AuthProviderType authProvider, CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// Determines if any user accounts exist in the database.
-    /// </summary>
-    Task<bool> DoAnyUsersExistAsync(CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// Gets a user account by email address.
-    /// </summary>
-    Task<UserAccount?> GetUserByEmailAsync(string email, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Gets a user account by its primary key.
@@ -93,15 +78,6 @@ public interface IUserRepository
     /// Used for admin panel views.
     /// </summary>
     Task<(List<UserAccount> Users, Dictionary<int, List<UserTenantRole>> RolesByUser)> GetAllUsersWithRolesAsync(CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// Returns a paginated list of user accounts with optional search filter, ordered by ID.
-    /// </summary>
-    /// <param name="search">Optional username search term.</param>
-    /// <param name="skip">Number of records to skip.</param>
-    /// <param name="take">Number of records to take.</param>
-    /// <param name="cancellationToken">A cancellation token.</param>
-    Task<(List<UserAccount> Users, int TotalCount)> QueryUsersAsync(string? search, int skip, int take, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Returns user accounts for the specified user IDs.

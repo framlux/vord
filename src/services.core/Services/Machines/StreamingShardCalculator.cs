@@ -14,20 +14,6 @@ namespace Framlux.FleetManagement.Services.Core.Machines;
 /// </summary>
 internal static class StreamingShardCalculator
 {
-    /// <summary>True when the given shard owns the machine under modulo partitioning.</summary>
-    internal static bool OwnsMachine(long machineId, int shardIndex, int shardCount)
-    {
-        if (shardCount <= 1)
-        {
-            return true;
-        }
-
-        // Math.Abs of long.MinValue would overflow; map via unsigned to keep a stable bucket.
-        long bucket = (long)((ulong)machineId % (ulong)shardCount);
-
-        return bucket == shardIndex;
-    }
-
     /// <summary>The advisory-lock name for the given shard index.</summary>
     internal static string LockNameForShard(int shardIndex)
     {

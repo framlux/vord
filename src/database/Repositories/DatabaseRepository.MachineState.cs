@@ -108,19 +108,6 @@ public partial class DatabaseRepository : IMachineStateRepository
     }
 
     /// <inheritdoc/>
-    public async Task<Dictionary<long, MachineStateSummary>> GetSummariesByMachineIdsAsync(List<long> machineIds, CancellationToken cancellationToken)
-    {
-        if (machineIds.Count == 0)
-        {
-            return new Dictionary<long, MachineStateSummary>();
-        }
-
-        return await _db.MachineStateSummaries
-            .Where(s => machineIds.Contains(s.MachineId))
-            .ToDictionaryAsync(s => s.MachineId, cancellationToken);
-    }
-
-    /// <inheritdoc/>
     public async Task<List<MachineStateSummary>> GetSummaryListByMachineIdsAsync(List<long> machineIds, CancellationToken cancellationToken)
     {
         if (machineIds.Count == 0)
@@ -309,24 +296,6 @@ public partial class DatabaseRepository : IMachineStateRepository
         return await query
             .OrderBy(t => t.Id)
             .Take(batchSize)
-            .ToListAsync(cancellationToken);
-    }
-
-    /// <inheritdoc/>
-    public async Task<List<MachineTelemetry>> GetTelemetryByMachineIdsAndTypeAsync(
-        List<long> machineIds, short telemetryType, DateTimeOffset receivedSince, int limit, CancellationToken cancellationToken)
-    {
-        if (machineIds.Count == 0)
-        {
-            return [];
-        }
-
-        return await _db.MachineTelemetry
-            .Where(t => machineIds.Contains(t.MachineId) &&
-                        (t.TelemetryType == telemetryType) &&
-                        (t.ServerReceivedAt >= receivedSince))
-            .OrderByDescending(t => t.ServerReceivedAt)
-            .Take(limit)
             .ToListAsync(cancellationToken);
     }
 

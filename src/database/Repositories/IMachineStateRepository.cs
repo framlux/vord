@@ -78,11 +78,6 @@ public interface IMachineStateRepository
     Task<Dictionary<long, string>> GetNameMapAsync(List<long> machineIds, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Returns state summaries keyed by machine ID for the specified machine IDs.
-    /// </summary>
-    Task<Dictionary<long, MachineStateSummary>> GetSummariesByMachineIdsAsync(List<long> machineIds, CancellationToken cancellationToken = default);
-
-    /// <summary>
     /// Returns state summaries for the specified machine IDs as a list.
     /// </summary>
     Task<List<MachineStateSummary>> GetSummaryListByMachineIdsAsync(List<long> machineIds, CancellationToken cancellationToken = default);
@@ -122,18 +117,6 @@ public interface IMachineStateRepository
     /// returned, giving out-of-order commits time to become visible before the cursor passes them.
     /// </summary>
     Task<List<MachineTelemetry>> GetTelemetryBatchAsync(long highWaterMark, DateTimeOffset streamingWindow, DateTimeOffset visibilityCutoff, int batchSize, int shardIndex, int shardCount, CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// Returns the newest telemetry rows of the given type for the specified machines within the
-    /// time window, ordered by ReceivedAt descending and capped at <paramref name="limit"/> rows.
-    /// Bounded so the query can never scan an unbounded slice of the partitioned telemetry table.
-    /// </summary>
-    /// <param name="machineIds">The machine IDs to filter by; an empty list returns no rows.</param>
-    /// <param name="telemetryType">The telemetry type identifier.</param>
-    /// <param name="receivedSince">Inclusive lower bound on ReceivedAt.</param>
-    /// <param name="limit">Maximum number of rows to return.</param>
-    /// <param name="cancellationToken">A cancellation token.</param>
-    Task<List<MachineTelemetry>> GetTelemetryByMachineIdsAndTypeAsync(List<long> machineIds, short telemetryType, DateTimeOffset receivedSince, int limit, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Returns a single page of telemetry rows for the specified machine IDs and telemetry type,

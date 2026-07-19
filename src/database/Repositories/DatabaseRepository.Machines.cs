@@ -311,16 +311,6 @@ public partial class DatabaseRepository : IMachineRepository
     }
 
     /// <inheritdoc/>
-    public async Task<Tenant?> GetTenantForMachineAsync(int tenantId, CancellationToken cancellationToken)
-    {
-        Tenant? tenant = await _db.Tenants
-            .Where(t => t.Id == tenantId)
-            .FirstOrDefaultAsync(cancellationToken);
-
-        return tenant;
-    }
-
-    /// <inheritdoc/>
     public async Task<int> GetMachineCountAtDateAsync(int tenantId, DateTimeOffset targetDate, CancellationToken cancellationToken)
     {
         int count = await _db.Machines

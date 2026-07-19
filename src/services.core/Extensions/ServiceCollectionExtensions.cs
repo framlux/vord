@@ -43,18 +43,13 @@ namespace Framlux.FleetManagement.Services.Core.Extensions;
 public static class ServiceCollectionExtensions
 {
     /// <summary>
-    /// Registers Serilog structured logging with compact JSON output and the
-    /// <see cref="Framlux.FleetManagement.Services.Core.Logging.SensitiveDestructuringPolicy"/>
-    /// so properties tagged with
-    /// <see cref="Framlux.FleetManagement.Services.Core.Logging.SensitiveAttribute"/> are
-    /// redacted from every log event.
+    /// Registers Serilog structured logging with compact JSON output written to the console.
     /// </summary>
     public static IHostBuilder AddCoreSerilog(this IHostBuilder hostBuilder)
     {
         hostBuilder.UseSerilog((context, configuration) =>
             configuration
                 .ReadFrom.Configuration(context.Configuration)
-                .Destructure.With<Framlux.FleetManagement.Services.Core.Logging.SensitiveDestructuringPolicy>()
                 .WriteTo.Console(new RenderedCompactJsonFormatter()));
 
         return hostBuilder;

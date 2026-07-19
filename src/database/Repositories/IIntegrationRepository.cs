@@ -33,18 +33,6 @@ public interface IIntegrationRepository
     Task<int> SoftDeleteIntegrationAsync(int integrationId, int tenantId, int deletedByUserId, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Updates the enabled flag on an integration endpoint, scoped to the specified tenant.
-    /// Returns true when a row was updated, false when no matching row exists for the tenant.
-    /// </summary>
-    Task<bool> UpdateIntegrationEnabledAsync(int integrationId, int tenantId, bool isEnabled, CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// Updates the name of an integration endpoint, scoped to the specified tenant.
-    /// Returns true when a row was updated, false when no matching row exists for the tenant.
-    /// </summary>
-    Task<bool> UpdateIntegrationNameAsync(int integrationId, int tenantId, string name, CancellationToken cancellationToken = default);
-
-    /// <summary>
     /// Updates the configuration JSON of an integration endpoint, scoped to the specified tenant.
     /// Returns true when a row was updated, false when no matching row exists for the tenant.
     /// </summary>

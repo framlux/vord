@@ -85,28 +85,6 @@ public class DatabaseRepositoryTests
     }
 
     [Test]
-    public async Task GetUserByExternalIdAsync_NullId_ThrowsArgumentException()
-    {
-        using TestDatabaseFactory dbFactory = new();
-        DatabaseRepository cache = new(dbFactory.Context, new NullLogger<DatabaseRepository>());
-
-        await Assert.That(async () =>
-            await cache.GetUserByExternalIdAsync(null!, CancellationToken.None))
-            .Throws<ArgumentException>();
-    }
-
-    [Test]
-    public async Task GetUserByEmailAsync_NullEmail_ThrowsArgumentException()
-    {
-        using TestDatabaseFactory dbFactory = new();
-        DatabaseRepository cache = new(dbFactory.Context, new NullLogger<DatabaseRepository>());
-
-        await Assert.That(async () =>
-            await cache.GetUserByEmailAsync(null!, CancellationToken.None))
-            .Throws<ArgumentException>();
-    }
-
-    [Test]
     public async Task GetInvitationByTokenAsync_NullToken_ThrowsArgumentException()
     {
         using TestDatabaseFactory dbFactory = new();
@@ -171,17 +149,6 @@ public class DatabaseRepositoryTests
 
         await Assert.That(async () =>
             await cache.GetTenantByNameAsync("   ", CancellationToken.None))
-            .Throws<ArgumentException>();
-    }
-
-    [Test]
-    public async Task GetUserByEmailAsync_EmptyEmail_ThrowsArgumentException()
-    {
-        using TestDatabaseFactory dbFactory = new();
-        DatabaseRepository cache = new(dbFactory.Context, new NullLogger<DatabaseRepository>());
-
-        await Assert.That(async () =>
-            await cache.GetUserByEmailAsync("", CancellationToken.None))
             .Throws<ArgumentException>();
     }
 

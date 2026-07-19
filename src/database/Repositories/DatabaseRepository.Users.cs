@@ -13,18 +13,6 @@ namespace Framlux.FleetManagement.Database.Repositories;
 public partial class DatabaseRepository : IUserRepository
 {
     /// <inheritdoc/>
-    public async Task<UserAccount?> GetUserByExternalIdAsync(string externalId, CancellationToken cancellationToken)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(externalId);
-
-        UserAccount? user = await _db.UserAccounts
-            .Where(u => u.ExternalId == externalId && u.IsActive)
-            .FirstOrDefaultAsync(cancellationToken);
-
-        return user;
-    }
-
-    /// <inheritdoc/>
     public async Task<UserAccount?> GetUserByExternalIdForProviderAsync(AuthProviderType authProvider, string externalId, CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(externalId);
@@ -49,16 +37,6 @@ public partial class DatabaseRepository : IUserRepository
 
     private Task<int> InternalCreateUserAccountAsync(UserAccount user, CancellationToken cancellationToken)
         => _db.InsertWithInt32IdentityAsync(user, token: cancellationToken);
-
-    /// <inheritdoc/>
-    public async Task<bool> DoAnyUsersExistAsync(CancellationToken cancellationToken)
-    {
-        bool anyUsersExist = await _db.UserAccounts
-            .Where(u => u.IsSystem == false)
-            .AnyAsync(u => u.IsActive, cancellationToken);
-
-        return anyUsersExist;
-    }
 
     /// <inheritdoc/>
     public async Task UpdateUserEmailAsync(int userId, string newEmail, CancellationToken cancellationToken)
@@ -212,28 +190,6 @@ public partial class DatabaseRepository : IUserRepository
     }
 
     /// <inheritdoc/>
-    public async Task<(List<UserAccount> Users, int TotalCount)> QueryUsersAsync(string? search, int skip, int take, CancellationToken cancellationToken)
-    {
-        IQueryable<UserAccount> query = _db.UserAccounts;
-
-        if (string.IsNullOrWhiteSpace(search) == false)
-        {
-            string searchTrimmed = search.Trim();
-            query = query.Where(u => u.Username.Contains(searchTrimmed));
-        }
-
-        int totalCount = await query.CountAsync(cancellationToken);
-
-        List<UserAccount> users = await query
-            .OrderBy(u => u.Id)
-            .Skip(skip)
-            .Take(take)
-            .ToListAsync(cancellationToken);
-
-        return (users, totalCount);
-    }
-
-    /// <inheritdoc/>
     public async Task<List<UserAccount>> GetUsersByIdsAsync(List<int> userIds, CancellationToken cancellationToken)
     {
         List<UserAccount> users = await _db.UserAccounts
@@ -263,17 +219,5 @@ public partial class DatabaseRepository : IUserRepository
             .ToListAsync(cancellationToken);
 
         return (users, totalCount);
-    }
-
-    /// <inheritdoc/>
-    public async Task<UserAccount?> GetUserByEmailAsync(string email, CancellationToken cancellationToken)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(email);
-
-        UserAccount? user = await _db.UserAccounts
-            .Where(u => (u.Username.ToLower() == email.ToLower()) && (u.IsActive == true))
-            .FirstOrDefaultAsync(cancellationToken);
-
-        return user;
     }
 }

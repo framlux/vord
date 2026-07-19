@@ -116,11 +116,6 @@ public interface IMachineRepository
     Task<List<long>> GetActiveMachineIdsForTenantAsync(int tenantId, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Gets the tenant associated with a machine's tenant ID.
-    /// </summary>
-    Task<Tenant?> GetTenantForMachineAsync(int tenantId, CancellationToken cancellationToken = default);
-
-    /// <summary>
     /// Gets the count of active machines for a tenant at a specific date,
     /// including machines registered before that date that were not yet deleted.
     /// </summary>

@@ -133,45 +133,6 @@ public sealed class ServerSettingsCache : IServerSettingsCache
     }
 
     /// <inheritdoc/>
-    public async Task SetSettingAsync(ServerConfigurationSettingKeys key, string value, CancellationToken cancellationToken)
-    {
-        using IServiceScope scope = _serviceScopeFactory.CreateScope();
-        DatabaseContext dbContext = scope.ServiceProvider.GetRequiredService<DatabaseContext>();
-
-        ServerConfigurationSettings? existing = await dbContext.ServerConfigurationSettings
-            .Where(s => s.Key == key)
-            .OrderByDescending(s => s.Version)
-            .FirstOrDefaultAsync(cancellationToken);
-
-        if (existing is null)
-        {
-            await dbContext.InsertAsync(new ServerConfigurationSettings
-            {
-                Key = key,
-                Value = value,
-                Version = 1,
-            }, token: cancellationToken);
-        }
-        else
-        {
-            await dbContext.ServerConfigurationSettings
-                .Where(s => s.Id == existing.Id)
-                .Set(s => s.Value, value)
-                .Set(s => s.Version, existing.Version + 1)
-                .UpdateAsync(cancellationToken);
-        }
-
-        // Update the in-memory cache entry.
-        ServerConfigurationSettings cached = new ServerConfigurationSettings
-        {
-            Key = key,
-            Value = value,
-            Version = (existing?.Version ?? 0) + 1,
-        };
-        _cache.AddOrUpdate(key, cached, (_, _) => cached);
-    }
-
-    /// <inheritdoc/>
     public void InvalidateCache()
     {
         _cache.Clear();

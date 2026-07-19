@@ -140,17 +140,6 @@ public partial class DatabaseRepository : IAlertEventRepository
     }
 
     /// <inheritdoc/>
-    public async Task<bool> HasActiveEventForRuleMachineAsync(int ruleId, long machineId, CancellationToken cancellationToken)
-    {
-        bool hasActive = await _db.AlertEvents
-            .AnyAsync(e => (e.AlertRuleId == ruleId) &&
-                          (e.MachineId == machineId) &&
-                          (e.Status != AlertEventStatus.Resolved), cancellationToken);
-
-        return hasActive;
-    }
-
-    /// <inheritdoc/>
     public async Task ResolveEventsForMachineByMetricAsync(long machineId, AlertMetric metric, CancellationToken cancellationToken)
     {
         int resolved = await (from e in _db.AlertEvents

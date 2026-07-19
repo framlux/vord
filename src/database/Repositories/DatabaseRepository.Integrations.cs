@@ -63,32 +63,6 @@ public partial class DatabaseRepository : IIntegrationRepository
     }
 
     /// <inheritdoc/>
-    public async Task<bool> UpdateIntegrationEnabledAsync(int integrationId, int tenantId, bool isEnabled, CancellationToken cancellationToken)
-    {
-        int affected = await _db.IntegrationEndpoints
-            .Where(i => (i.Id == integrationId) && (i.TenantId == tenantId) && (i.DeletedAt == null))
-            .Set(i => i.IsEnabled, isEnabled)
-            .Set(i => i.UpdatedAt, DateTimeOffset.UtcNow)
-            .UpdateAsync(cancellationToken);
-
-        return affected > 0;
-    }
-
-    /// <inheritdoc/>
-    public async Task<bool> UpdateIntegrationNameAsync(int integrationId, int tenantId, string name, CancellationToken cancellationToken)
-    {
-        ArgumentException.ThrowIfNullOrWhiteSpace(name);
-
-        int affected = await _db.IntegrationEndpoints
-            .Where(i => (i.Id == integrationId) && (i.TenantId == tenantId) && (i.DeletedAt == null))
-            .Set(i => i.Name, name)
-            .Set(i => i.UpdatedAt, DateTimeOffset.UtcNow)
-            .UpdateAsync(cancellationToken);
-
-        return affected > 0;
-    }
-
-    /// <inheritdoc/>
     public async Task<bool> UpdateIntegrationConfigurationAsync(int integrationId, int tenantId, string configuration, CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(configuration);

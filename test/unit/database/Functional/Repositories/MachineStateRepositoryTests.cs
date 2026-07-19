@@ -374,35 +374,6 @@ public class MachineStateRepositoryTests
         await Assert.That(result.Count).IsEqualTo(0);
     }
 
-    // ========== GetSummariesByMachineIdsAsync tests ==========
-
-    [Test]
-    public async Task GetSummariesByMachineIdsAsync_WithData_ReturnsDictionaryKeyedByMachineId()
-    {
-        using TestDatabaseFactory dbFactory = new();
-        IMachineStateRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
-
-        await dbFactory.Context.InsertAsync(TestDataBuilder.BuildMachineStateSummary(machineId: 11, tenantId: 1, name: "alpha"));
-        await dbFactory.Context.InsertAsync(TestDataBuilder.BuildMachineStateSummary(machineId: 12, tenantId: 1, name: "beta"));
-
-        Dictionary<long, MachineStateSummary> result = await repo.GetSummariesByMachineIdsAsync(new List<long> { 11, 12 });
-
-        await Assert.That(result.Count).IsEqualTo(2);
-        await Assert.That(result[11].Name).IsEqualTo("alpha");
-        await Assert.That(result[12].Name).IsEqualTo("beta");
-    }
-
-    [Test]
-    public async Task GetSummariesByMachineIdsAsync_EmptyList_ReturnsEmptyDictionary()
-    {
-        using TestDatabaseFactory dbFactory = new();
-        IMachineStateRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
-
-        Dictionary<long, MachineStateSummary> result = await repo.GetSummariesByMachineIdsAsync(new List<long>());
-
-        await Assert.That(result.Count).IsEqualTo(0);
-    }
-
     // ========== GetSummaryListByMachineIdsAsync tests ==========
 
     [Test]
@@ -787,59 +758,6 @@ public class MachineStateRepositoryTests
 
         // Query for a different telemetry type than what was inserted
         List<MachineTelemetry> result = await repo.GetRecentTelemetryAsync(90, telemetryType: 99, limit: 10);
-
-        await Assert.That(result.Count).IsEqualTo(0);
-    }
-
-    // ========== GetTelemetryByMachineIdsAndTypeAsync tests ==========
-
-    [Test]
-    public async Task GetTelemetryByMachineIdsAndTypeAsync_AppliesWindowAndLimit_ReturnsNewestFirst()
-    {
-        using TestDatabaseFactory dbFactory = new();
-        IMachineStateRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
-
-        DateTimeOffset now = DateTimeOffset.UnixEpoch.AddHours(100);
-
-        // Three rows inside the window for machine 1, type 1.
-        MachineTelemetry recent1 = TestDataBuilder.BuildMachineTelemetry(machineId: 1, tenantId: 1, telemetryType: 1, payload: """{"a":1}""");
-        recent1.ReceivedAt = now.AddMinutes(-1);
-        recent1.ServerReceivedAt = now.AddMinutes(-1);
-        await repo.InsertTelemetryAsync(recent1);
-
-        MachineTelemetry recent2 = TestDataBuilder.BuildMachineTelemetry(machineId: 1, tenantId: 1, telemetryType: 1, payload: """{"a":2}""");
-        recent2.ReceivedAt = now.AddMinutes(-2);
-        recent2.ServerReceivedAt = now.AddMinutes(-2);
-        await repo.InsertTelemetryAsync(recent2);
-
-        MachineTelemetry recent3 = TestDataBuilder.BuildMachineTelemetry(machineId: 1, tenantId: 1, telemetryType: 1, payload: """{"a":3}""");
-        recent3.ReceivedAt = now.AddMinutes(-3);
-        recent3.ServerReceivedAt = now.AddMinutes(-3);
-        await repo.InsertTelemetryAsync(recent3);
-
-        // Outside the window — must be excluded even though it matches machine + type.
-        MachineTelemetry old = TestDataBuilder.BuildMachineTelemetry(machineId: 1, tenantId: 1, telemetryType: 1, payload: """{"a":0}""");
-        old.ReceivedAt = now.AddHours(-10);
-        old.ServerReceivedAt = now.AddHours(-10);
-        await repo.InsertTelemetryAsync(old);
-
-        List<MachineTelemetry> result = await repo.GetTelemetryByMachineIdsAndTypeAsync(
-            new List<long> { 1 }, 1, now.AddHours(-1), 2);
-
-        // Limit caps to 2; the out-of-window row is excluded; newest first.
-        await Assert.That(result.Count).IsEqualTo(2);
-        await Assert.That(result[0].ReceivedAt).IsEqualTo(now.AddMinutes(-1));
-        await Assert.That(result[1].ReceivedAt).IsEqualTo(now.AddMinutes(-2));
-    }
-
-    [Test]
-    public async Task GetTelemetryByMachineIdsAndTypeAsync_EmptyMachineList_ReturnsEmpty()
-    {
-        using TestDatabaseFactory dbFactory = new();
-        IMachineStateRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
-
-        List<MachineTelemetry> result = await repo.GetTelemetryByMachineIdsAndTypeAsync(
-            new List<long>(), 1, DateTimeOffset.UnixEpoch, 10);
 
         await Assert.That(result.Count).IsEqualTo(0);
     }

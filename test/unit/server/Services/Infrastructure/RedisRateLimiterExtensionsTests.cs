@@ -142,36 +142,6 @@ public class RedisRateLimiterExtensionsTests
     }
 
     /// <summary>
-    /// Verifies that AddRedisRateLimiting registers the callback rate limit policy used to
-    /// protect the OAuth/OIDC callback paths.
-    /// </summary>
-    [Test]
-    public async Task AddRedisRateLimiting_RegistersCallbackPolicy()
-    {
-        ServiceCollection services = new();
-        IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
-        IDatabase db = Substitute.For<IDatabase>();
-        redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(db);
-        services.AddSingleton(redis);
-        services.AddLogging();
-
-        services.AddRedisRateLimiting();
-
-        ServiceProvider provider = services.BuildServiceProvider();
-
-        IEnumerable<IConfigureOptions<RateLimiterOptions>> allOptions =
-            provider.GetServices<IConfigureOptions<RateLimiterOptions>>();
-
-        RateLimiterOptions options = new();
-        foreach (IConfigureOptions<RateLimiterOptions> configOption in allOptions)
-        {
-            configOption.Configure(options);
-        }
-
-        await Assert.That(GetPolicyNames(options)).Contains("callback");
-    }
-
-    /// <summary>
     /// Verifies that <see cref="RedisRateLimiterExtensions.CreateCallbackLimiter"/> builds a
     /// strict limiter that blocks once its permit count is exceeded within the window. The
     /// limiter is driven by request count, never by wall-clock time.

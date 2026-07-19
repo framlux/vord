@@ -630,7 +630,10 @@ public class AlertRuleRepositoryTests
         await Assert.That(result).IsFalse();
 
         // Because the rule is not owned by the acting tenant, no assignment rows may be written.
-        List<long> assigned = await repo.GetMachineIdsForRuleAsync(ruleId);
+        List<long> assigned = await dbFactory.Context.AlertRuleMachines
+            .Where(arm => arm.AlertRuleId == ruleId)
+            .Select(arm => arm.MachineId)
+            .ToListAsync();
         await Assert.That(assigned.Count).IsEqualTo(0);
     }
 
@@ -652,7 +655,10 @@ public class AlertRuleRepositoryTests
 
         await Assert.That(result).IsTrue();
 
-        List<long> assigned = await repo.GetMachineIdsForRuleAsync(ruleId);
+        List<long> assigned = await dbFactory.Context.AlertRuleMachines
+            .Where(arm => arm.AlertRuleId == ruleId)
+            .Select(arm => arm.MachineId)
+            .ToListAsync();
         await Assert.That(assigned.Count).IsEqualTo(1);
         await Assert.That(assigned[0]).IsEqualTo(machineId);
     }
@@ -681,7 +687,10 @@ public class AlertRuleRepositoryTests
 
         await Assert.That(result).IsTrue();
 
-        List<long> assigned = await repo.GetMachineIdsForRuleAsync(ruleId);
+        List<long> assigned = await dbFactory.Context.AlertRuleMachines
+            .Where(arm => arm.AlertRuleId == ruleId)
+            .Select(arm => arm.MachineId)
+            .ToListAsync();
         await Assert.That(assigned.Count).IsEqualTo(1);
         await Assert.That(assigned[0]).IsEqualTo(inTenantMachineId);
     }

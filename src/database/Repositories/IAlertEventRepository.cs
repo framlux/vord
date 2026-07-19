@@ -76,14 +76,6 @@ public interface IAlertEventRepository
     Task ResolveEventsForRuleAsync(int ruleId, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Returns true if there is an active (non-resolved) event for a rule and machine pair.
-    /// </summary>
-    /// <param name="ruleId">The alert rule ID.</param>
-    /// <param name="machineId">The machine ID.</param>
-    /// <param name="cancellationToken">A cancellation token.</param>
-    Task<bool> HasActiveEventForRuleMachineAsync(int ruleId, long machineId, CancellationToken cancellationToken = default);
-
-    /// <summary>
     /// Resolves all active (non-resolved) events for a specific metric type and machine pair.
     /// Used for event-based alert auto-resolution (e.g., resolving SSH alerts on disconnect).
     /// </summary>

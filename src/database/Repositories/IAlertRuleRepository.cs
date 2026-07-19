@@ -129,13 +129,6 @@ public interface IAlertRuleRepository
     Task<Dictionary<int, List<long>>> GetMachineIdsForRulesAsync(List<int> ruleIds, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Returns the machine IDs assigned to a single alert rule.
-    /// </summary>
-    /// <param name="ruleId">The alert rule ID.</param>
-    /// <param name="cancellationToken">A cancellation token.</param>
-    Task<List<long>> GetMachineIdsForRuleAsync(int ruleId, CancellationToken cancellationToken = default);
-
-    /// <summary>
     /// Replaces the set of machines assigned to an alert rule, scoped to the owning tenant. The
     /// operation is a no-op when the rule does not belong to <paramref name="tenantId"/>. Existing
     /// assignments are deleted and only the provided machine IDs that belong to the tenant are inserted

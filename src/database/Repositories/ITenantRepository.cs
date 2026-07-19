@@ -142,15 +142,6 @@ public interface ITenantRepository
     Task<bool> HasNonOidcTenantAdminAsync(int tenantId, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Returns a paginated list of tenants with optional search filter, ordered by ID.
-    /// </summary>
-    /// <param name="search">Optional name search term.</param>
-    /// <param name="skip">Number of records to skip.</param>
-    /// <param name="take">Number of records to take.</param>
-    /// <param name="cancellationToken">A cancellation token.</param>
-    Task<(List<Tenant> Tenants, int TotalCount)> QueryTenantsAsync(string? search, int skip, int take, CancellationToken cancellationToken = default);
-
-    /// <summary>
     /// Returns active tenant role records for the specified tenant IDs.
     /// </summary>
     /// <param name="tenantIds">The tenant IDs to query.</param>
