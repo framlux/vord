@@ -5,12 +5,12 @@
 namespace Framlux.FleetManagement.Services.Core.Handlers;
 
 /// <summary>
-/// Result of invitation creation.
+/// Result of creating or resending an invitation.
 /// </summary>
-public sealed class InvitationCreateResult
+public sealed class InvitationDeliveryResult
 {
     /// <summary>
-    /// The created invitation ID.
+    /// The invitation ID.
     /// </summary>
     public int Id { get; init; }
 

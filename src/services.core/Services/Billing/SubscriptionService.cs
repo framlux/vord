@@ -99,16 +99,10 @@ public sealed class SubscriptionService : ISubscriptionService
             return false;
         }
 
-        int machineLimit = await GetEffectiveLimitAsync(
-            tenantId, subscription.Tier,
-            o => o.MachineLimit,
-            t => t.MachineLimit,
-            tier => GetConfigDefaultsForTier(tier).MachineLimit,
-            ct);
-
+        EffectiveLimits limits = await GetEffectiveLimitsForTenantAsync(tenantId, ct);
         int activeMachineCount = await _machineRepo.GetActiveMachineCountAsync(tenantId, ct);
 
-        return activeMachineCount < machineLimit;
+        return activeMachineCount < limits.MachineLimit;
     }
 
     /// <inheritdoc/>
@@ -214,16 +208,10 @@ public sealed class SubscriptionService : ISubscriptionService
             return false;
         }
 
-        int alertRuleLimit = await GetEffectiveLimitAsync(
-            tenantId, subscription.Tier,
-            o => o.AlertRuleLimit,
-            t => t.AlertRuleLimit,
-            tier => GetConfigDefaultsForTier(tier).AlertRuleLimit,
-            ct);
-
+        EffectiveLimits limits = await GetEffectiveLimitsForTenantAsync(tenantId, ct);
         int count = await _alertRuleRepo.CountAlertRulesForTenantAsync(tenantId, ct);
 
-        return count < alertRuleLimit;
+        return count < limits.AlertRuleLimit;
     }
 
     /// <inheritdoc/>
@@ -236,16 +224,10 @@ public sealed class SubscriptionService : ISubscriptionService
             return false;
         }
 
-        int webhookLimit = await GetEffectiveLimitAsync(
-            tenantId, subscription.Tier,
-            o => o.WebhookLimit,
-            t => t.WebhookLimit,
-            tier => GetConfigDefaultsForTier(tier).WebhookLimit,
-            ct);
-
+        EffectiveLimits limits = await GetEffectiveLimitsForTenantAsync(tenantId, ct);
         int count = await _integrationRepo.CountIntegrationsForTenantAsync(tenantId, ct);
 
-        return count < webhookLimit;
+        return count < limits.WebhookLimit;
     }
 
     /// <inheritdoc/>
@@ -258,17 +240,11 @@ public sealed class SubscriptionService : ISubscriptionService
             return false;
         }
 
-        int memberLimit = await GetEffectiveLimitAsync(
-            tenantId, subscription.Tier,
-            o => (int?)null,
-            t => t.MemberLimit,
-            tier => GetConfigDefaultsForTier(tier).MemberLimit,
-            ct);
-
+        EffectiveLimits limits = await GetEffectiveLimitsForTenantAsync(tenantId, ct);
         int activeMembers = await _tenantRepo.CountActiveMembersAsync(tenantId, ct);
         int pendingInvitations = await _invitationRepo.CountPendingInvitationsAsync(tenantId, _timeProvider.GetUtcNow(), ct);
 
-        return (activeMembers + pendingInvitations) < memberLimit;
+        return (activeMembers + pendingInvitations) < limits.MemberLimit;
     }
 
     /// <inheritdoc/>
@@ -301,6 +277,12 @@ public sealed class SubscriptionService : ISubscriptionService
         TierFeatureLimit? tierLimits = await _tierLimitRepo.GetLimitsForTierAsync(subscription.Tier, ct);
         TenantSubscriptionOverride? tenantOverride = await _overrideRepo.GetOverrideForTenantAsync(tenantId, ct);
 
+        if (tierLimits is null)
+        {
+            // Fallback to configuration defaults when the database row is missing
+            _logger.LogWarning("No TierFeatureLimits found for tier {Tier}, using configuration defaults", subscription.Tier);
+        }
+
         TierLimitDefaults configDefaults = GetConfigDefaultsForTier(subscription.Tier);
 
         return new EffectiveLimits
@@ -311,40 +293,6 @@ public sealed class SubscriptionService : ISubscriptionService
             WebhookLimit = tenantOverride?.WebhookLimit ?? tierLimits?.WebhookLimit ?? configDefaults.WebhookLimit,
             MemberLimit = tierLimits?.MemberLimit ?? configDefaults.MemberLimit,
         };
-    }
-
-    /// <summary>
-    /// Gets the effective limit for a tenant by checking overrides first, then tier defaults,
-    /// then configuration fallback.
-    /// </summary>
-    private async Task<int> GetEffectiveLimitAsync(
-        int tenantId,
-        SubscriptionTier tier,
-        Func<TenantSubscriptionOverride, int?> overrideSelector,
-        Func<TierFeatureLimit, int> tierSelector,
-        Func<SubscriptionTier, int> configFallbackSelector,
-        CancellationToken ct)
-    {
-        TenantSubscriptionOverride? tenantOverride = await _overrideRepo.GetOverrideForTenantAsync(tenantId, ct);
-        if (tenantOverride is not null)
-        {
-            int? overrideValue = overrideSelector(tenantOverride);
-            if (overrideValue is not null)
-            {
-                return overrideValue.Value;
-            }
-        }
-
-        TierFeatureLimit? tierLimits = await _tierLimitRepo.GetLimitsForTierAsync(tier, ct);
-        if (tierLimits is not null)
-        {
-            return tierSelector(tierLimits);
-        }
-
-        // Fallback to configuration defaults when the database row is missing
-        _logger.LogWarning("No TierFeatureLimits found for tier {Tier}, using configuration defaults", tier);
-
-        return configFallbackSelector(tier);
     }
 
     /// <summary>

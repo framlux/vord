@@ -23,22 +23,10 @@ public sealed class DowngradeSubscriptionRequest
 }
 
 /// <summary>
-/// Response for downgrade subscription request.
-/// </summary>
-public sealed class DowngradeSubscriptionResponse
-{
-    /// <summary>Whether the downgrade was initiated successfully.</summary>
-    public bool Success { get; set; }
-
-    /// <summary>Message describing the result.</summary>
-    public string Message { get; set; } = string.Empty;
-}
-
-/// <summary>
 /// Downgrades the tenant's subscription to a lower tier.
 /// Team to Pro is an immediate price swap. Any downgrade to Free takes effect at period end.
 /// </summary>
-public sealed class DowngradeSubscriptionEndpoint : Endpoint<DowngradeSubscriptionRequest, ApiResponse<DowngradeSubscriptionResponse>>
+public sealed class DowngradeSubscriptionEndpoint : Endpoint<DowngradeSubscriptionRequest, ApiResponse<BillingActionResponse>>
 {
     private readonly BillingStatus _billingStatus;
     private readonly IDatabaseTransactionProvider _transactionProvider;
@@ -96,20 +84,12 @@ public sealed class DowngradeSubscriptionEndpoint : Endpoint<DowngradeSubscripti
     /// <inheritdoc/>
     public override async Task HandleAsync(DowngradeSubscriptionRequest req, CancellationToken ct)
     {
-        if (_billingStatus.IsEnabled == false)
-        {
-            await HttpContext.SendApiErrorAsync(404, "Billing is not enabled", ct);
-
-            return;
-        }
-
         int tenantId = _tenantContext.RequireTenantId();
 
-        TenantSubscription? subscription = await _subscriptionService.GetSubscriptionForTenantAsync(tenantId, ct);
+        TenantSubscription? subscription = await BillingEndpointGuards.LoadGatedSubscriptionAsync(
+            HttpContext, _billingStatus, _subscriptionService, tenantId, ct);
         if (subscription is null)
         {
-            await HttpContext.SendApiErrorAsync(404, "Subscription not found", ct);
-
             return;
         }
 
@@ -208,7 +188,7 @@ public sealed class DowngradeSubscriptionEndpoint : Endpoint<DowngradeSubscripti
             }
         }
 
-        await Send.OkAsync(ApiResponse<DowngradeSubscriptionResponse>.Ok(new DowngradeSubscriptionResponse
+        await Send.OkAsync(ApiResponse<BillingActionResponse>.Ok(new BillingActionResponse
         {
             Success = true,
             Message = "Subscription has been downgraded to Pro."
@@ -253,7 +233,7 @@ public sealed class DowngradeSubscriptionEndpoint : Endpoint<DowngradeSubscripti
             AuditAction.SubscriptionDowngradeRequested, AuditResourceType.Subscription,
             tenantId.ToString(), "Downgrade to Free at period end", null), ct);
 
-        await Send.OkAsync(ApiResponse<DowngradeSubscriptionResponse>.Ok(new DowngradeSubscriptionResponse
+        await Send.OkAsync(ApiResponse<BillingActionResponse>.Ok(new BillingActionResponse
         {
             Success = true,
             Message = "Subscription will be downgraded to Free at the end of the current billing period."

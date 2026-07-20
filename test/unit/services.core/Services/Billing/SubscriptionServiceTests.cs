@@ -1017,9 +1017,9 @@ public class SubscriptionServiceTests
 
     /// <summary>
     /// Verifies that when a tenant override exists but the override's specific field (MachineLimit)
-    /// is null, GetEffectiveLimitAsync falls through to the tier-based limit rather than
+    /// is null, GetEffectiveLimitsForTenantAsync falls through to the tier-based limit rather than
     /// treating the override as a hard cap. This exercises the overrideValue-is-null branch
-    /// inside GetEffectiveLimitAsync.
+    /// inside GetEffectiveLimitsForTenantAsync.
     /// </summary>
     [Test]
     public async Task CanApproveMachine_OverrideExistsButMachineLimitNull_FallsBackToTierLimit()
@@ -1102,9 +1102,9 @@ public class SubscriptionServiceTests
     }
 
     /// <summary>
-    /// Verifies that GetEffectiveLimitAsync (via CanApproveMachineAsync) falls back to config
-    /// defaults when no DB tier limits exist, exercising the config fallback branch with
-    /// a warning log. This tests the private method via a public method for Pro tier.
+    /// Verifies that GetEffectiveLimitsForTenantAsync (via CanApproveMachineAsync) falls back to
+    /// config defaults when no DB tier limits exist, exercising the config fallback branch with
+    /// a warning log for Pro tier.
     /// </summary>
     [Test]
     public async Task CanApproveMachine_NullTierLimits_FallsBackToConfigDefault()

@@ -13,22 +13,10 @@ using Framlux.FleetManagement.Services.Core.Infrastructure;
 namespace Framlux.FleetManagement.Server.Endpoints.Web.Billing;
 
 /// <summary>
-/// Response for reactivate subscription request.
-/// </summary>
-public sealed class ReactivateSubscriptionResponse
-{
-    /// <summary>Whether the reactivation was successful.</summary>
-    public bool Success { get; set; }
-
-    /// <summary>Message describing the result.</summary>
-    public string Message { get; set; } = string.Empty;
-}
-
-/// <summary>
 /// Reactivates a canceled subscription by resetting it to the Free tier with Active status.
 /// This allows tenants to regain access after full cancellation without going through Stripe checkout.
 /// </summary>
-public sealed class ReactivateSubscriptionEndpoint : EndpointWithoutRequest<ApiResponse<ReactivateSubscriptionResponse>>
+public sealed class ReactivateSubscriptionEndpoint : EndpointWithoutRequest<ApiResponse<BillingActionResponse>>
 {
     private readonly BillingStatus _billingStatus;
     private readonly IDatabaseTransactionProvider _transactionProvider;
@@ -71,20 +59,12 @@ public sealed class ReactivateSubscriptionEndpoint : EndpointWithoutRequest<ApiR
     /// <inheritdoc/>
     public override async Task HandleAsync(CancellationToken ct)
     {
-        if (_billingStatus.IsEnabled == false)
-        {
-            await HttpContext.SendApiErrorAsync(404, "Billing is not enabled", ct);
-
-            return;
-        }
-
         int tenantId = _tenantContext.RequireTenantId();
 
-        TenantSubscription? subscription = await _subscriptionService.GetSubscriptionForTenantAsync(tenantId, ct);
+        TenantSubscription? subscription = await BillingEndpointGuards.LoadGatedSubscriptionAsync(
+            HttpContext, _billingStatus, _subscriptionService, tenantId, ct);
         if (subscription is null)
         {
-            await HttpContext.SendApiErrorAsync(404, "Subscription not found", ct);
-
             return;
         }
 
@@ -111,7 +91,7 @@ public sealed class ReactivateSubscriptionEndpoint : EndpointWithoutRequest<ApiR
             "Subscription reactivated to Free tier for tenant {TenantId}",
             tenantId);
 
-        await Send.OkAsync(ApiResponse<ReactivateSubscriptionResponse>.Ok(new ReactivateSubscriptionResponse
+        await Send.OkAsync(ApiResponse<BillingActionResponse>.Ok(new BillingActionResponse
         {
             Success = true,
             Message = "Your account has been reactivated on the Free tier."

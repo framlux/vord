@@ -7,6 +7,8 @@ using Framlux.FleetManagement.Services.Core.Machines;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
+using Polly;
+using Polly.Registry;
 using StackExchange.Redis;
 
 namespace Framlux.FleetManagement.Test.Services;
@@ -16,13 +18,28 @@ namespace Framlux.FleetManagement.Test.Services;
 /// </summary>
 public class RedisMachinePingServiceTests
 {
+    /// <summary>
+    /// Builds a real "redis-ping" resilience pipeline registration using the same
+    /// <see cref="RedisRetryPipelineOptions.Create"/> factory the production registration
+    /// in ServiceCollectionExtensions calls, so a change to the production retry semantics
+    /// is automatically exercised here too. Only the delay is shortened for test speed.
+    /// </summary>
+    private static ResiliencePipelineProvider<string> CreatePipelineProvider(int delayMs = 1)
+    {
+        ServiceCollection services = new();
+        services.AddResiliencePipeline("redis-ping", builder =>
+            builder.AddRetry(RedisRetryPipelineOptions.Create(TimeSpan.FromMilliseconds(delayMs), NullLogger.Instance)));
+
+        return services.BuildServiceProvider().GetRequiredService<ResiliencePipelineProvider<string>>();
+    }
+
     private static (RedisMachinePingService service, IDatabase redisDb) CreateService()
     {
         IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
         IDatabase redisDb = Substitute.For<IDatabase>();
         redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(redisDb);
         NullLogger<RedisMachinePingService> logger = new();
-        RedisMachinePingService service = new(redis, logger);
+        RedisMachinePingService service = new(redis, logger, CreatePipelineProvider());
 
         return (service, redisDb);
     }
@@ -226,7 +243,7 @@ public class RedisMachinePingServiceTests
         IDatabase redisDb = Substitute.For<IDatabase>();
         redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(redisDb);
         NullLogger<RedisMachinePingService> logger = new();
-        RedisMachinePingService service = new(redis, logger);
+        RedisMachinePingService service = new(redis, logger, CreatePipelineProvider());
 
         IBatch batch = Substitute.For<IBatch>();
         redisDb.CreateBatch(Arg.Any<object>()).Returns(batch);
@@ -271,7 +288,7 @@ public class RedisMachinePingServiceTests
         IDatabase redisDb = Substitute.For<IDatabase>();
         redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(redisDb);
         NullLogger<RedisMachinePingService> logger = new();
-        RedisMachinePingService service = new(redis, logger);
+        RedisMachinePingService service = new(redis, logger, CreatePipelineProvider());
 
         IBatch batch = Substitute.For<IBatch>();
         redisDb.CreateBatch(Arg.Any<object>()).Returns(batch);
@@ -303,7 +320,7 @@ public class RedisMachinePingServiceTests
         IDatabase redisDb = Substitute.For<IDatabase>();
         redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(redisDb);
         NullLogger<RedisMachinePingService> logger = new();
-        RedisMachinePingService service = new(redis, logger);
+        RedisMachinePingService service = new(redis, logger, CreatePipelineProvider());
 
         IBatch batch = Substitute.For<IBatch>();
         redisDb.CreateBatch(Arg.Any<object>()).Returns(batch);
@@ -320,7 +337,7 @@ public class RedisMachinePingServiceTests
         IDatabase redisDb = Substitute.For<IDatabase>();
         redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(redisDb);
         NullLogger<RedisMachinePingService> logger = new();
-        RedisMachinePingService service = new(redis, logger);
+        RedisMachinePingService service = new(redis, logger, CreatePipelineProvider());
 
         IBatch batch = Substitute.For<IBatch>();
         redisDb.CreateBatch(Arg.Any<object>()).Returns(batch);
@@ -411,7 +428,7 @@ public class RedisMachinePingServiceTests
         IDatabase redisDb = Substitute.For<IDatabase>();
         redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(redisDb);
         NullLogger<RedisMachinePingService> logger = new();
-        RedisMachinePingService service = new(redis, logger);
+        RedisMachinePingService service = new(redis, logger, CreatePipelineProvider());
 
         IBatch batch = Substitute.For<IBatch>();
         redisDb.CreateBatch(Arg.Any<object>()).Returns(batch);
@@ -448,7 +465,7 @@ public class RedisMachinePingServiceTests
         IDatabase redisDb = Substitute.For<IDatabase>();
         redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(redisDb);
         NullLogger<RedisMachinePingService> logger = new();
-        RedisMachinePingService service = new(redis, logger);
+        RedisMachinePingService service = new(redis, logger, CreatePipelineProvider());
 
         IBatch batch = Substitute.For<IBatch>();
         redisDb.CreateBatch(Arg.Any<object>()).Returns(batch);
@@ -456,5 +473,95 @@ public class RedisMachinePingServiceTests
         Dictionary<long, ulong> result = await service.GetAgentCapabilitiesBatchAsync([]);
 
         await Assert.That(result.Count).IsEqualTo(0);
+    }
+
+    // ========== Retry pipeline semantics ==========
+
+    [Test]
+    public async Task RecordPingAsync_TransientRedisFailure_RetriesUntilSuccess()
+    {
+        // Pins the retry semantics carried over from the deleted RetryHelper: transient
+        // failures are retried by the "redis-ping" pipeline until the call succeeds.
+        IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
+        IDatabase redisDb = Substitute.For<IDatabase>();
+        redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(redisDb);
+        NullLogger<RedisMachinePingService> logger = new();
+        RedisMachinePingService service = new(redis, logger, CreatePipelineProvider());
+
+        int callCount = 0;
+        redisDb.SortedSetAddAsync(
+            Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<double>(), Arg.Any<SortedSetWhen>(), Arg.Any<CommandFlags>())
+            .Returns(_ =>
+            {
+                callCount++;
+                if (callCount < 3)
+                {
+                    throw new TimeoutException("transient redis timeout");
+                }
+
+                return Task.FromResult(true);
+            });
+
+        await service.RecordPingAsync(7);
+
+        await Assert.That(callCount).IsEqualTo(3);
+    }
+
+    [Test]
+    public async Task SetAgentCapabilitiesAsync_ExhaustsRetries_ThrowsFinalException()
+    {
+        // With three retry attempts configured, a permanently failing operation makes
+        // exactly four calls (the initial attempt plus three retries) then throws.
+        IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
+        IDatabase redisDb = Substitute.For<IDatabase>();
+        redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(redisDb);
+        NullLogger<RedisMachinePingService> logger = new();
+        RedisMachinePingService service = new(redis, logger, CreatePipelineProvider());
+
+        int callCount = 0;
+        redisDb.StringSetAsync(
+            Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<Expiration>(), Arg.Any<ValueCondition>(), Arg.Any<CommandFlags>())
+            .Returns<bool>(_ =>
+            {
+                callCount++;
+
+                throw new TimeoutException("permanent redis timeout");
+            });
+
+        await Assert.ThrowsAsync<TimeoutException>(async () =>
+        {
+            await service.SetAgentCapabilitiesAsync(8, 1);
+        });
+
+        await Assert.That(callCount).IsEqualTo(4);
+    }
+
+    [Test]
+    public async Task RecordPingAsync_OperationCanceledException_NeverRetried()
+    {
+        // OperationCanceledException must propagate immediately without being retried,
+        // matching the deleted RetryHelper's cancellation-never-retried behavior.
+        IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
+        IDatabase redisDb = Substitute.For<IDatabase>();
+        redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(redisDb);
+        NullLogger<RedisMachinePingService> logger = new();
+        RedisMachinePingService service = new(redis, logger, CreatePipelineProvider());
+
+        int callCount = 0;
+        redisDb.SortedSetAddAsync(
+            Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<double>(), Arg.Any<SortedSetWhen>(), Arg.Any<CommandFlags>())
+            .Returns<bool>(_ =>
+            {
+                callCount++;
+
+                throw new OperationCanceledException();
+            });
+
+        await Assert.ThrowsAsync<OperationCanceledException>(async () =>
+        {
+            await service.RecordPingAsync(9);
+        });
+
+        await Assert.That(callCount).IsEqualTo(1);
     }
 }

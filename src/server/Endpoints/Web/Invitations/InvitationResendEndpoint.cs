@@ -62,7 +62,7 @@ public sealed class InvitationResendEndpoint : EndpointWithoutRequest<ApiRespons
         string inviterEmail = User.FindFirstValue(ClaimTypes.Email) ?? "A team member";
         string baseUrl = _appOptions.BaseUrl;
 
-        ServiceResult<InvitationResendResult> result = await _handler.ResendAsync(invitationId, tenantId, userId.Value, inviterEmail, baseUrl, ct);
+        ServiceResult<InvitationDeliveryResult> result = await _handler.ResendAsync(invitationId, tenantId, userId.Value, inviterEmail, baseUrl, ct);
 
         if (result.IsNotFound)
         {
@@ -80,15 +80,7 @@ public sealed class InvitationResendEndpoint : EndpointWithoutRequest<ApiRespons
 
         _logger.LogInformation("Invitation resent for email {Email} in tenant {TenantId}", result.Data!.Email, tenantId);
 
-        InvitationResponse response = new()
-        {
-            Id = result.Data!.Id,
-            Email = result.Data!.Email,
-            Token = result.Data!.Token,
-            AcceptUrl = result.Data!.AcceptUrl,
-            ExpiresAt = result.Data!.ExpiresAt,
-            Status = result.Data!.Status,
-        };
+        InvitationResponse response = InvitationResponseMapper.ToResponse(result.Data!);
 
         await Send.OkAsync(ApiResponse<InvitationResponse>.Ok(response), cancellation: ct);
     }

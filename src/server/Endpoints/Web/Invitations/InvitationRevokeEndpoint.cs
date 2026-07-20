@@ -42,7 +42,7 @@ public sealed class InvitationRevokeEndpoint : EndpointWithoutRequest<ApiRespons
         int invitationId = Route<int>("id");
         int? tenantId = _tenantContext.TenantId;
 
-        ServiceResult<InvitationRevokeResult> result = await _handler.RevokeAsync(invitationId, tenantId, ct);
+        ServiceResult<ApiResponse<object>> result = await _handler.RevokeAsync(invitationId, tenantId, ct);
 
         if (result.IsNotFound)
         {
@@ -53,13 +53,14 @@ public sealed class InvitationRevokeEndpoint : EndpointWithoutRequest<ApiRespons
 
         if (result.IsSuccess == false)
         {
-            await HttpContext.SendApiErrorAsync(result.StatusCode, result.Data?.ErrorMessage ?? "Unknown error", ct);
+            HttpContext.Response.StatusCode = result.StatusCode;
+            await HttpContext.Response.WriteAsJsonAsync(result.Data!, ct);
 
             return;
         }
 
         _logger.LogInformation("Invitation {InvitationId} revoked in tenant {TenantId}", invitationId, tenantId);
 
-        await Send.OkAsync(ApiResponse<object>.Ok(new { }, "Invitation revoked"), cancellation: ct);
+        await Send.OkAsync(result.Data!, cancellation: ct);
     }
 }

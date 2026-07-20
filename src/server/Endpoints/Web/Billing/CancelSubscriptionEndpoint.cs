@@ -14,22 +14,10 @@ using Framlux.Vord.BillingGrpc;
 namespace Framlux.FleetManagement.Server.Endpoints.Web.Billing;
 
 /// <summary>
-/// Response for cancel subscription request.
-/// </summary>
-public sealed class CancelSubscriptionResponse
-{
-    /// <summary>Whether the cancellation intent was recorded.</summary>
-    public bool Success { get; set; }
-
-    /// <summary>Message describing the result.</summary>
-    public string Message { get; set; } = string.Empty;
-}
-
-/// <summary>
 /// Cancels the tenant's subscription at the end of the current billing period.
 /// Delegates cancellation to the billing-api which manages Stripe state and pending actions.
 /// </summary>
-public sealed class CancelSubscriptionEndpoint : EndpointWithoutRequest<ApiResponse<CancelSubscriptionResponse>>
+public sealed class CancelSubscriptionEndpoint : EndpointWithoutRequest<ApiResponse<BillingActionResponse>>
 {
     private readonly BillingStatus _billingStatus;
     private readonly IDatabaseTransactionProvider _transactionProvider;
@@ -78,26 +66,18 @@ public sealed class CancelSubscriptionEndpoint : EndpointWithoutRequest<ApiRespo
     /// <inheritdoc/>
     public override async Task HandleAsync(CancellationToken ct)
     {
-        if (_billingStatus.IsEnabled == false)
-        {
-            await HttpContext.SendApiErrorAsync(404, "Billing is not enabled", ct);
-
-            return;
-        }
-
         int tenantId = _tenantContext.RequireTenantId();
 
-        TenantSubscription? subscription = await _subscriptionService.GetSubscriptionForTenantAsync(tenantId, ct);
+        TenantSubscription? subscription = await BillingEndpointGuards.LoadGatedSubscriptionAsync(
+            HttpContext, _billingStatus, _subscriptionService, tenantId, ct);
         if (subscription is null)
         {
-            await HttpContext.SendApiErrorAsync(404, "Subscription not found", ct);
-
             return;
         }
 
         if (subscription.Status == SubscriptionStatus.Canceled)
         {
-            await Send.OkAsync(ApiResponse<CancelSubscriptionResponse>.Ok(new CancelSubscriptionResponse
+            await Send.OkAsync(ApiResponse<BillingActionResponse>.Ok(new BillingActionResponse
             {
                 Success = true,
                 Message = "Subscription is already canceled."
@@ -120,7 +100,7 @@ public sealed class CancelSubscriptionEndpoint : EndpointWithoutRequest<ApiRespo
 
             await transaction.CommitAsync(ct);
 
-            await Send.OkAsync(ApiResponse<CancelSubscriptionResponse>.Ok(new CancelSubscriptionResponse
+            await Send.OkAsync(ApiResponse<BillingActionResponse>.Ok(new BillingActionResponse
             {
                 Success = true,
                 Message = "Account has been canceled."
@@ -142,7 +122,7 @@ public sealed class CancelSubscriptionEndpoint : EndpointWithoutRequest<ApiRespo
         StripeSubscriptionStatus stripeStatus = await _billingApiClient.GetSubscriptionStatusAsync(tenant.ExternalId, ct);
         if (stripeStatus.CancelAtPeriodEnd)
         {
-            await Send.OkAsync(ApiResponse<CancelSubscriptionResponse>.Ok(new CancelSubscriptionResponse
+            await Send.OkAsync(ApiResponse<BillingActionResponse>.Ok(new BillingActionResponse
             {
                 Success = true,
                 Message = "Subscription is already set to cancel at the end of the billing period."
@@ -165,7 +145,7 @@ public sealed class CancelSubscriptionEndpoint : EndpointWithoutRequest<ApiRespo
             AuditAction.SubscriptionCancelRequested, AuditResourceType.Subscription,
             tenantId.ToString(), null, null), ct);
 
-        await Send.OkAsync(ApiResponse<CancelSubscriptionResponse>.Ok(new CancelSubscriptionResponse
+        await Send.OkAsync(ApiResponse<BillingActionResponse>.Ok(new BillingActionResponse
         {
             Success = true,
             Message = "Subscription will be canceled at the end of the current billing period."

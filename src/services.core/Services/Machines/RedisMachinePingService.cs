@@ -2,7 +2,8 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
-using Framlux.FleetManagement.Services.Core.Infrastructure;
+using Polly;
+using Polly.Registry;
 using StackExchange.Redis;
 
 namespace Framlux.FleetManagement.Services.Core.Machines;
@@ -17,16 +18,21 @@ public sealed class RedisMachinePingService : IMachinePingService
 
     private readonly IConnectionMultiplexer _redis;
     private readonly ILogger<RedisMachinePingService> _logger;
+    private readonly ResiliencePipeline _retryPipeline;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="RedisMachinePingService"/> class.
     /// </summary>
     public RedisMachinePingService(
         IConnectionMultiplexer redis,
-        ILogger<RedisMachinePingService> logger)
+        ILogger<RedisMachinePingService> logger,
+        ResiliencePipelineProvider<string> pipelineProvider)
     {
+        ArgumentNullException.ThrowIfNull(pipelineProvider);
+
         _redis = redis ?? throw new ArgumentNullException(nameof(redis));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
+        _retryPipeline = pipelineProvider.GetPipeline("redis-ping");
     }
 
     /// <inheritdoc/>
@@ -34,7 +40,7 @@ public sealed class RedisMachinePingService : IMachinePingService
     {
         DateTimeOffset now = DateTimeOffset.UtcNow;
 
-        await RetryHelper.ExecuteWithRetryAsync(async () =>
+        await ExecuteWithRetryAsync("RecordPing", async () =>
         {
             IDatabase db = _redis.GetDatabase();
             string key = GetKey(machineId);
@@ -44,7 +50,7 @@ public sealed class RedisMachinePingService : IMachinePingService
 
             double cutoffMs = now.Subtract(RetentionWindow).ToUnixTimeMilliseconds();
             await db.SortedSetRemoveRangeByScoreAsync(key, double.NegativeInfinity, cutoffMs);
-        }, logger: _logger, operationName: "RecordPing");
+        });
     }
 
     /// <inheritdoc/>
@@ -145,12 +151,12 @@ public sealed class RedisMachinePingService : IMachinePingService
     /// <inheritdoc/>
     public async Task SetAgentCapabilitiesAsync(long machineId, ulong capabilities)
     {
-        await RetryHelper.ExecuteWithRetryAsync(async () =>
+        await ExecuteWithRetryAsync("SetAgentCapabilities", async () =>
         {
             IDatabase db = _redis.GetDatabase();
             string key = GetCapabilitiesKey(machineId);
             await db.StringSetAsync(key, capabilities.ToString(), RetentionWindow);
-        }, logger: _logger, operationName: "SetAgentCapabilities");
+        });
     }
 
     /// <inheritdoc/>
@@ -197,6 +203,25 @@ public sealed class RedisMachinePingService : IMachinePingService
         }
 
         return result;
+    }
+
+    /// <summary>
+    /// Runs <paramref name="action"/> through the shared "redis-ping" retry pipeline,
+    /// threading <paramref name="operationName"/> through the <see cref="ResilienceContext"/>
+    /// so retry warnings are attributed to the calling operation, matching the deleted
+    /// RetryHelper's operationName parameter.
+    /// </summary>
+    private async Task ExecuteWithRetryAsync(string operationName, Func<ValueTask> action)
+    {
+        ResilienceContext context = ResilienceContextPool.Shared.Get(operationName, CancellationToken.None);
+        try
+        {
+            await _retryPipeline.ExecuteAsync(_ => action(), context);
+        }
+        finally
+        {
+            ResilienceContextPool.Shared.Return(context);
+        }
     }
 
     private static string GetKey(long machineId)

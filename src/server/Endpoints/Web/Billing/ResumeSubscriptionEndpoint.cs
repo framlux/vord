@@ -13,22 +13,10 @@ using Framlux.FleetManagement.Services.Core.Infrastructure;
 namespace Framlux.FleetManagement.Server.Endpoints.Web.Billing;
 
 /// <summary>
-/// Response for resume subscription request.
-/// </summary>
-public sealed class ResumeSubscriptionResponse
-{
-    /// <summary>Whether the resume was successful.</summary>
-    public bool Success { get; set; }
-
-    /// <summary>Message describing the result.</summary>
-    public string Message { get; set; } = string.Empty;
-}
-
-/// <summary>
 /// Resumes a subscription that was set to cancel or downgrade at the end of the billing period.
 /// Tells the billing-api to remove cancel_at_period_end from Stripe and clear pending actions.
 /// </summary>
-public sealed class ResumeSubscriptionEndpoint : EndpointWithoutRequest<ApiResponse<ResumeSubscriptionResponse>>
+public sealed class ResumeSubscriptionEndpoint : EndpointWithoutRequest<ApiResponse<BillingActionResponse>>
 {
     private readonly BillingStatus _billingStatus;
     private readonly IAuditLogRepository _auditLog;
@@ -71,20 +59,12 @@ public sealed class ResumeSubscriptionEndpoint : EndpointWithoutRequest<ApiRespo
     /// <inheritdoc/>
     public override async Task HandleAsync(CancellationToken ct)
     {
-        if (_billingStatus.IsEnabled == false)
-        {
-            await HttpContext.SendApiErrorAsync(404, "Billing is not enabled", ct);
-
-            return;
-        }
-
         int tenantId = _tenantContext.RequireTenantId();
 
-        TenantSubscription? subscription = await _subscriptionService.GetSubscriptionForTenantAsync(tenantId, ct);
+        TenantSubscription? subscription = await BillingEndpointGuards.LoadGatedSubscriptionAsync(
+            HttpContext, _billingStatus, _subscriptionService, tenantId, ct);
         if (subscription is null)
         {
-            await HttpContext.SendApiErrorAsync(404, "Subscription not found", ct);
-
             return;
         }
 
@@ -107,7 +87,7 @@ public sealed class ResumeSubscriptionEndpoint : EndpointWithoutRequest<ApiRespo
         StripeSubscriptionStatus stripeStatus = await _billingApiClient.GetSubscriptionStatusAsync(tenant.ExternalId, ct);
         if (stripeStatus.CancelAtPeriodEnd == false)
         {
-            await Send.OkAsync(ApiResponse<ResumeSubscriptionResponse>.Ok(new ResumeSubscriptionResponse
+            await Send.OkAsync(ApiResponse<BillingActionResponse>.Ok(new BillingActionResponse
             {
                 Success = true,
                 Message = "Subscription is not pending cancellation or downgrade."
@@ -131,7 +111,7 @@ public sealed class ResumeSubscriptionEndpoint : EndpointWithoutRequest<ApiRespo
             AuditAction.SubscriptionResumed, AuditResourceType.Subscription,
             tenantId.ToString(), null, null), ct);
 
-        await Send.OkAsync(ApiResponse<ResumeSubscriptionResponse>.Ok(new ResumeSubscriptionResponse
+        await Send.OkAsync(ApiResponse<BillingActionResponse>.Ok(new BillingActionResponse
         {
             Success = true,
             Message = "Subscription has been resumed."

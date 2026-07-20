@@ -111,7 +111,7 @@ public sealed class InvitationCreateEndpoint : Endpoint<CreateInvitationRequest,
 
         string baseUrl = _appOptions.BaseUrl;
 
-        ServiceResult<InvitationCreateResult> result = await _handler.CreateAsync(req.Email, req.Role, tenantId, userId.Value, baseUrl, ct);
+        ServiceResult<InvitationDeliveryResult> result = await _handler.CreateAsync(req.Email, req.Role, tenantId, userId.Value, baseUrl, ct);
 
         if (result.IsSuccess == false)
         {
@@ -122,15 +122,7 @@ public sealed class InvitationCreateEndpoint : Endpoint<CreateInvitationRequest,
 
         _logger.LogInformation("Invitation created for email {Email} in tenant {TenantId} by user {UserId}", req.Email, tenantId, userId.Value);
 
-        InvitationResponse response = new()
-        {
-            Id = result.Data!.Id,
-            Email = result.Data!.Email,
-            Token = result.Data!.Token,
-            AcceptUrl = result.Data!.AcceptUrl,
-            ExpiresAt = result.Data!.ExpiresAt,
-            Status = result.Data!.Status,
-        };
+        InvitationResponse response = InvitationResponseMapper.ToResponse(result.Data!);
 
         await Send.OkAsync(ApiResponse<InvitationResponse>.Ok(response), cancellation: ct);
     }

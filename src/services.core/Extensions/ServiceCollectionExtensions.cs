@@ -187,6 +187,19 @@ public static class ServiceCollectionExtensions
                 })
                 .Build());
 
+        // Retry pipeline for transient Redis ping-service failures — three retries with
+        // exponential backoff and jitter starting at 200ms, never retrying cancellation.
+        // Options are built by RedisRetryPipelineOptions so production and its unit tests
+        // share the same retry semantics.
+        services.AddResiliencePipeline("redis-ping", (pipelineBuilder, context) =>
+        {
+            Microsoft.Extensions.Logging.ILogger logger = context.ServiceProvider
+                .GetRequiredService<ILoggerFactory>()
+                .CreateLogger("Framlux.FleetManagement.Services.Core.Machines.RedisMachinePingService");
+
+            pipelineBuilder.AddRetry(RedisRetryPipelineOptions.Create(TimeSpan.FromMilliseconds(200), logger));
+        });
+
         // Health checks for PostgreSQL and Redis
         services.AddHealthChecks()
             .AddNpgSql(postgresConnectionString, name: "postgresql", failureStatus: HealthStatus.Unhealthy)

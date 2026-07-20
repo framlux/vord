@@ -2,7 +2,7 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
-using Framlux.FleetManagement.Services.Core.Infrastructure;
+using Framlux.FleetManagement.Test.Infrastructure;
 
 namespace Framlux.FleetManagement.Test.Services.Infrastructure;
 

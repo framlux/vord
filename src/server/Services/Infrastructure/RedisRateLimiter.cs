@@ -5,7 +5,6 @@
 using Microsoft.Extensions.Logging;
 using StackExchange.Redis;
 using System.Diagnostics.Metrics;
-using System.Threading.RateLimiting;
 
 namespace Framlux.FleetManagement.Server.Services.Infrastructure;
 
@@ -13,7 +12,7 @@ namespace Framlux.FleetManagement.Server.Services.Infrastructure;
 /// A Redis-backed fixed window rate limiter that works across Kubernetes replicas.
 /// Uses INCR + EXPIRE for atomic counter management per partition key.
 /// </summary>
-public sealed class RedisFixedWindowRateLimiter : RateLimiter
+public sealed class RedisFixedWindowRateLimiter
 {
     /// <summary>
     /// Meter name for rate-limiter instruments. Subscribe from an OpenTelemetry collector to observe
@@ -53,31 +52,6 @@ public sealed class RedisFixedWindowRateLimiter : RateLimiter
         _permitLimit = permitLimit;
         _window = window;
         _logger = logger;
-    }
-
-    /// <inheritdoc/>
-    public override TimeSpan? IdleDuration => null;
-
-    /// <inheritdoc/>
-    public override RateLimiterStatistics? GetStatistics()
-    {
-        return null;
-    }
-
-    /// <inheritdoc/>
-    protected override RateLimitLease AttemptAcquireCore(int permitCount)
-    {
-        // Synchronous acquire is not supported for Redis-backed limiter.
-        // Return failure to force callers through the async path.
-        return new RedisRateLimitLease(false);
-    }
-
-    /// <inheritdoc/>
-    protected override async ValueTask<RateLimitLease> AcquireAsyncCore(int permitCount, CancellationToken cancellationToken)
-    {
-        bool allowed = await IsAllowedAsync("unknown");
-
-        return new RedisRateLimitLease(allowed);
     }
 
     /// <summary>
@@ -126,44 +100,6 @@ public sealed class RedisFixedWindowRateLimiter : RateLimiter
             _logger?.LogWarning(ex, "Redis unavailable for rate limiting on {KeyPrefix}; failing open and admitting the request", _keyPrefix);
 
             return true;
-        }
-    }
-
-    /// <inheritdoc/>
-    protected override void Dispose(bool disposing)
-    {
-        // No resources to dispose
-    }
-
-    /// <inheritdoc/>
-    protected override ValueTask DisposeAsyncCore()
-    {
-        return ValueTask.CompletedTask;
-    }
-
-    private sealed class RedisRateLimitLease : RateLimitLease
-    {
-        /// <inheritdoc/>
-        public override bool IsAcquired { get; }
-
-        /// <summary>
-        /// Creates a new rate limit lease.
-        /// </summary>
-        /// <param name="isAcquired">Whether the lease was acquired.</param>
-        public RedisRateLimitLease(bool isAcquired)
-        {
-            IsAcquired = isAcquired;
-        }
-
-        /// <inheritdoc/>
-        public override IEnumerable<string> MetadataNames => [];
-
-        /// <inheritdoc/>
-        public override bool TryGetMetadata(string metadataName, out object? metadata)
-        {
-            metadata = null;
-
-            return false;
         }
     }
 }

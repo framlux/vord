@@ -2,14 +2,10 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
-using System.Text.Json;
 using FastEndpoints;
-using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Services.Core.Models.History;
 using Framlux.FleetManagement.Services.Core.Models.Telemetry;
-using Framlux.FleetManagement.Services.Core.History;
-using Framlux.FleetManagement.Services.Core.Infrastructure;
 using Framlux.FleetManagement.Services.Core.Telemetry;
 
 namespace Framlux.FleetManagement.Server.Endpoints.Web.Machines.History;
@@ -47,50 +43,14 @@ public sealed class MemoryHistoryEndpoint : EndpointWithoutRequest
         long machineId = Route<long>("id");
         string? range = Query<string?>("range", isRequired: false) ?? "24h";
 
-        HistoryRequestContext? context = await _validator.ValidateAsync(
-            machineId, range, HttpContext, ct);
+        HistoryResponseDto? response = await ScalarHistoryHandler.HandleScalarHistoryAsync<MemoryUsagePayload>(
+            machineId, range, TelemetryTypeIds.MemoryUsage, payload => payload.MemoryUsagePercent,
+            _validator, _stateRepo, HttpContext, ct);
 
-        if (context is null)
+        if (response is null)
         {
             return;
         }
-
-        List<MachineTelemetry> rows = await _stateRepo.GetTelemetryHistoryAsync(
-            context.MachineId, TelemetryTypeIds.MemoryUsage, context.RangeStart, context.RangeEnd, ct);
-
-        List<TimestampedValue> values = [];
-        foreach (MachineTelemetry row in rows)
-        {
-            MemoryUsagePayload? payload = JsonSerializer.Deserialize<MemoryUsagePayload>(row.Payload, JsonDefaults.SnakeCase);
-            if (payload is not null)
-            {
-                values.Add(new TimestampedValue
-                {
-                    Timestamp = row.ReceivedAt,
-                    Value = payload.MemoryUsagePercent
-                });
-            }
-        }
-
-        AggregatedSeries series = TelemetryAggregator.Aggregate(values, context.RangeStart, context.RangeEnd);
-
-        HistoryResponseDto response = new()
-        {
-            Points = series.Points.Select(p => new HistoryPointDto
-            {
-                Timestamp = p.Timestamp,
-                Value = p.Value
-            }).ToList(),
-            Stats = new HistoryStatsDto
-            {
-                Min = series.Stats.Min,
-                Avg = series.Stats.Avg,
-                Max = series.Stats.Max,
-                P95 = series.Stats.P95
-            },
-            BucketSeconds = series.BucketSeconds,
-            RawPointCount = series.RawPointCount
-        };
 
         await Send.OkAsync(ApiResponse<HistoryResponseDto>.Ok(response), cancellation: ct);
     }

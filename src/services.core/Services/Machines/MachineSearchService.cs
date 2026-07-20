@@ -6,6 +6,7 @@ using System.Text.Json;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
+using Framlux.FleetManagement.Services.Core.Infrastructure;
 using Framlux.FleetManagement.Services.Core.Models;
 using Framlux.FleetManagement.Services.Core.Models.Machines;
 using Framlux.FleetManagement.Services.Core.ServerConfiguration;
@@ -214,43 +215,18 @@ public sealed class MachineSearchService
             }
 
             bool isOnline = onlineMap.GetValueOrDefault(dto.Id, false);
-            dto.HealthStatus = ComputeDetailedHealth(isOnline, row, dto);
-        }
-    }
+            MachineStateSummary summary = new()
+            {
+                CpuUsagePercent = row.CpuUsagePercent,
+                MemoryUsagePercent = row.MemoryUsagePercent,
+                FailedServices = row.FailedServices,
+                MaxDiskUsagePercent = row.MaxDiskUsagePercent,
+                HasDiskHealthIssue = row.HasDiskHealthIssue,
+                HasHardwareIssue = row.HasHardwareIssue,
+            };
 
-    private static MachineHealthStatus ComputeDetailedHealth(
-        bool isOnline, FleetMachineRow row, FleetMachineDto dto)
-    {
-        if (isOnline == false)
-        {
-            return MachineHealthStatus.Offline;
+            dto.HealthStatus = HealthComputer.Compute(summary, isOnline);
         }
-
-        // Critical checks.
-        if ((row.FailedServices > 0) ||
-            (row.CpuUsagePercent >= 95) ||
-            (row.MemoryUsagePercent >= 95))
-        {
-            return MachineHealthStatus.Critical;
-        }
-
-        if ((dto.MaxDiskUsagePercent >= 95) || (dto.HasDiskHealthIssue == true) || (dto.HasHardwareIssue == true))
-        {
-            return MachineHealthStatus.Critical;
-        }
-
-        // Warning checks.
-        if ((row.CpuUsagePercent >= 80) || (row.MemoryUsagePercent >= 80))
-        {
-            return MachineHealthStatus.Warning;
-        }
-
-        if (dto.MaxDiskUsagePercent >= 80)
-        {
-            return MachineHealthStatus.Warning;
-        }
-
-        return MachineHealthStatus.Healthy;
     }
 
     private static HashSet<MachineHealthStatus> ParseHealthStatuses(string healthStatusFilter)

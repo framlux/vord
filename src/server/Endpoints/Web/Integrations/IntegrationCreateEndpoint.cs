@@ -9,6 +9,7 @@ using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Server.Auth;
+using Framlux.FleetManagement.Server.Services.Billing;
 using Framlux.FleetManagement.Services.Core.Billing;
 using Framlux.FleetManagement.Services.Core.Infrastructure;
 using Microsoft.AspNetCore.DataProtection;
@@ -67,7 +68,7 @@ public sealed class IntegrationCreateEndpoint : Endpoint<CreateIntegrationReques
     {
         Post("/integrations");
         Policies("TenantAdmin");
-        Tags(EndpointTags.RequiresTenant);
+        Tags(EndpointTags.RequiresTenant, EndpointTags.RequiresProSubscription);
         Version(1);
     }
 
@@ -84,14 +85,6 @@ public sealed class IntegrationCreateEndpoint : Endpoint<CreateIntegrationReques
             return;
         }
 
-        TenantSubscription? subscription = await _subscriptionService.GetSubscriptionForTenantAsync(tenantId, ct);
-        if ((subscription is null) || (subscription.Tier == SubscriptionTier.Free) || (subscription.Status != SubscriptionStatus.Active))
-        {
-            await HttpContext.SendApiErrorAsync(403, "Integrations require a Pro or Team subscription", ct);
-
-            return;
-        }
-
         bool canCreate = await _subscriptionService.CanCreateWebhookAsync(tenantId, ct);
         if (canCreate == false)
         {
@@ -100,12 +93,9 @@ public sealed class IntegrationCreateEndpoint : Endpoint<CreateIntegrationReques
             return;
         }
 
-        if (Enum.TryParse<IntegrationProvider>(req.Provider, true, out IntegrationProvider provider) == false)
-        {
-            await HttpContext.SendApiErrorAsync(400, $"Invalid provider value: {req.Provider}", ct);
-
-            return;
-        }
+        // CreateIntegrationValidator has already confirmed req.Provider parses to a valid
+        // IntegrationProvider value; re-parse here to obtain that value.
+        Enum.TryParse(req.Provider, true, out IntegrationProvider provider);
 
         if (provider == IntegrationProvider.None)
         {
@@ -127,13 +117,6 @@ public sealed class IntegrationCreateEndpoint : Endpoint<CreateIntegrationReques
         string name = string.IsNullOrWhiteSpace(req.Name)
             ? GenerateDefaultName(provider)
             : req.Name.Trim();
-
-        if ((name.Length < 1) || (name.Length > 100))
-        {
-            await HttpContext.SendApiErrorAsync(400, "Name must be between 1 and 100 characters", ct);
-
-            return;
-        }
 
         // For Custom provider, generate and encrypt a secret
         string? plaintextSecret = null;

@@ -10,6 +10,11 @@ namespace Framlux.FleetManagement.Services.Core.Infrastructure;
 /// <summary>
 /// Computes machine health status from MachineStateSummary pre-computed scalars.
 /// Extracted for testability.
+/// This is the single source of truth for the CPU/memory/disk critical (95) and
+/// warning (80) thresholds in application code. The database-side health computation
+/// duplicates these same thresholds in SQL for its own pre-computed HealthStatus column —
+/// see <c>PostgresSqlDialect</c> in this same directory and <c>SqliteSqlDialect</c> in
+/// <c>test/shared</c>. Any change to the thresholds here must be mirrored in both of those files.
 /// </summary>
 public static class HealthComputer
 {

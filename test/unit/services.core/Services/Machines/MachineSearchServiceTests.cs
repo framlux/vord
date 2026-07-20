@@ -2157,4 +2157,118 @@ public class MachineSearchServiceTests
         await Assert.That(result.Items[0].MemoryUsagePercent).IsEqualTo(15);
         await Assert.That(result.Items[1].MemoryUsagePercent).IsEqualTo(75);
     }
+
+    // ========== Health enrichment delegates to HealthComputer ==========
+
+    [Test]
+    public async Task SearchAsync_HealthEnrichment_DelegatesToHealthComputerVerdict()
+    {
+        // The DB-computed HealthStatus column says Critical (stale sweep result), but the
+        // current raw metrics on the row are all within healthy range. The search result
+        // must report whatever HealthComputer computes from those raw metrics for an online
+        // machine — not the stale DB value, and not a second hand-rolled threshold check.
+        using TestDatabaseFactory dbFactory = new();
+        Machine machine = TestDataBuilder.BuildMachine(tenantId: 1);
+        machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
+
+        MachineStateSummary state = TestDataBuilder.BuildMachineStateSummary(
+            machineId: machine.Id, cpuPercent: 10, memoryPercent: 10, healthStatus: 2);
+        state.FailedServices = 0;
+        state.MaxDiskUsagePercent = 5;
+        state.HasDiskHealthIssue = false;
+        state.HasHardwareIssue = false;
+        await dbFactory.Context.InsertAsync(state);
+
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+        MachineSearchService service = new(scopeFactory, CreateMockPingService(online: true), CreateConfigService());
+
+        PaginatedResponse<FleetMachineDto> result = await service.SearchAsync(
+            DefaultCriteria(), 1, CancellationToken.None);
+
+        MachineHealthStatus expected = HealthComputer.Compute(state, isOnline: true);
+
+        await Assert.That(expected).IsEqualTo(MachineHealthStatus.Healthy);
+        await Assert.That(result.Items[0].HealthStatus).IsEqualTo(expected);
+    }
+
+    [Test]
+    public async Task SearchAsync_HealthEnrichment_OfflineOverridesRawMetrics()
+    {
+        // Even when raw metrics would otherwise imply Critical, a machine that is offline
+        // per Redis must still report Offline — the online override HealthComputer applies
+        // must take precedence over the metric-based checks.
+        using TestDatabaseFactory dbFactory = new();
+        Machine machine = TestDataBuilder.BuildMachine(tenantId: 1);
+        machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
+
+        MachineStateSummary state = TestDataBuilder.BuildMachineStateSummary(
+            machineId: machine.Id, cpuPercent: 99, memoryPercent: 99, healthStatus: 0);
+        await dbFactory.Context.InsertAsync(state);
+
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+        MachineSearchService service = new(scopeFactory, CreateMockPingService(online: false), CreateConfigService());
+
+        PaginatedResponse<FleetMachineDto> result = await service.SearchAsync(
+            DefaultCriteria(), 1, CancellationToken.None);
+
+        await Assert.That(result.Items[0].HealthStatus).IsEqualTo(MachineHealthStatus.Offline);
+    }
+
+    [Test]
+    // Interior/healthy baseline.
+    [Arguments(10, 10, 10, 0, false, false)]
+    // CPU warning boundary: 79 (below), 80 (at), 94 (below critical), 95 (at critical).
+    [Arguments(79, 10, 10, 0, false, false)]
+    [Arguments(80, 10, 10, 0, false, false)]
+    [Arguments(94, 10, 10, 0, false, false)]
+    [Arguments(95, 10, 10, 0, false, false)]
+    // Memory warning/critical boundary, same four values.
+    [Arguments(10, 79, 10, 0, false, false)]
+    [Arguments(10, 80, 10, 0, false, false)]
+    [Arguments(10, 94, 10, 0, false, false)]
+    [Arguments(10, 95, 10, 0, false, false)]
+    // Disk warning/critical boundary, same four values.
+    [Arguments(10, 10, 79, 0, false, false)]
+    [Arguments(10, 10, 80, 0, false, false)]
+    [Arguments(10, 10, 94, 0, false, false)]
+    [Arguments(10, 10, 95, 0, false, false)]
+    // FailedServices and each issue flag, each in isolation.
+    [Arguments(10, 10, 10, 1, false, false)]
+    [Arguments(10, 10, 10, 0, true, false)]
+    [Arguments(10, 10, 10, 0, false, true)]
+    public async Task SearchAsync_HealthEnrichment_BoundaryMatrix_MatchesHealthComputer(
+        int cpuPercent, int memoryPercent, int maxDiskUsagePercent, int failedServices,
+        bool hasDiskHealthIssue, bool hasHardwareIssue)
+    {
+        // A single interior data point cannot distinguish a correct delegation to
+        // HealthComputer from an inline copy whose thresholds have silently drifted — both
+        // agree deep inside a band. This matrix walks every critical(95)/warning(80)
+        // boundary on CPU, memory, and disk, plus the FailedServices/disk-issue/hardware-
+        // issue flags in isolation, and asserts the service's result matches whatever
+        // HealthComputer computes for the exact same inputs. The DB-computed HealthStatus
+        // column is deliberately seeded as Healthy (0) so a search result that merely
+        // echoed the stale DB value — rather than truly recomputing via HealthComputer —
+        // would fail every case above the Healthy band.
+        using TestDatabaseFactory dbFactory = new();
+        Machine machine = TestDataBuilder.BuildMachine(tenantId: 1);
+        machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
+
+        MachineStateSummary state = TestDataBuilder.BuildMachineStateSummary(
+            machineId: machine.Id, cpuPercent: cpuPercent, memoryPercent: memoryPercent, healthStatus: 0);
+        state.FailedServices = failedServices;
+        state.MaxDiskUsagePercent = maxDiskUsagePercent;
+        state.HasDiskHealthIssue = hasDiskHealthIssue;
+        state.HasHardwareIssue = hasHardwareIssue;
+        await dbFactory.Context.InsertAsync(state);
+
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+        MachineSearchService service = new(scopeFactory, CreateMockPingService(online: true), CreateConfigService());
+
+        PaginatedResponse<FleetMachineDto> result = await service.SearchAsync(
+            DefaultCriteria(), 1, CancellationToken.None);
+
+        MachineHealthStatus expected = HealthComputer.Compute(state, isOnline: true);
+
+        await Assert.That(result.Items[0].HealthStatus).IsEqualTo(expected);
+    }
 }

@@ -8,6 +8,7 @@ using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Services.Core.Billing;
 using Framlux.FleetManagement.Services.Core.Handlers;
 using Framlux.FleetManagement.Services.Core.Infrastructure;
+using Framlux.FleetManagement.Services.Core.Models;
 using Framlux.FleetManagement.Services.Core.Notifications;
 using Framlux.FleetManagement.Services.Core.Security;
 using Hangfire;
@@ -101,7 +102,7 @@ public class InvitationHandlerTests
     {
         InvitationHandler handler = BuildHandler();
 
-        ServiceResult<InvitationCreateResult> result = await handler.CreateAsync("notanemail", null, 1, 1, "https://app.test", CancellationToken.None);
+        ServiceResult<InvitationDeliveryResult> result = await handler.CreateAsync("notanemail", null, 1, 1, "https://app.test", CancellationToken.None);
 
         await Assert.That(result.StatusCode).IsEqualTo(400);
         await Assert.That(result.Data!.ErrorMessage).Contains("valid email");
@@ -112,7 +113,7 @@ public class InvitationHandlerTests
     {
         InvitationHandler handler = BuildHandler();
 
-        ServiceResult<InvitationCreateResult> result = await handler.CreateAsync("", null, 1, 1, "https://app.test", CancellationToken.None);
+        ServiceResult<InvitationDeliveryResult> result = await handler.CreateAsync("", null, 1, 1, "https://app.test", CancellationToken.None);
 
         await Assert.That(result.StatusCode).IsEqualTo(400);
     }
@@ -122,7 +123,7 @@ public class InvitationHandlerTests
     {
         InvitationHandler handler = BuildHandler();
 
-        ServiceResult<InvitationCreateResult> result = await handler.CreateAsync("user@example.com", null, null, 1, "https://app.test", CancellationToken.None);
+        ServiceResult<InvitationDeliveryResult> result = await handler.CreateAsync("user@example.com", null, null, 1, "https://app.test", CancellationToken.None);
 
         await Assert.That(result.StatusCode).IsEqualTo(401);
     }
@@ -132,7 +133,7 @@ public class InvitationHandlerTests
     {
         InvitationHandler handler = BuildHandler(subscriptionService: CreateMockSubService(SubscriptionTier.Free));
 
-        ServiceResult<InvitationCreateResult> result = await handler.CreateAsync("user@example.com", null, 1, 1, "https://app.test", CancellationToken.None);
+        ServiceResult<InvitationDeliveryResult> result = await handler.CreateAsync("user@example.com", null, 1, 1, "https://app.test", CancellationToken.None);
 
         await Assert.That(result.StatusCode).IsEqualTo(402);
         await Assert.That(result.Data!.ErrorMessage).Contains("Upgrade");
@@ -146,7 +147,7 @@ public class InvitationHandlerTests
             .Returns(new TenantInvitation { Id = 1, Email = "user@example.com", TenantId = 1, TokenHash = "abc", Role = UserAccountRoles.Viewer, Status = InvitationStatus.Pending, InvitedByUserId = 1, CreatedAt = DateTimeOffset.UtcNow, ExpiresAt = DateTimeOffset.UtcNow.AddDays(7) });
         InvitationHandler handler = BuildHandler(invitationRepository: invitationRepository);
 
-        ServiceResult<InvitationCreateResult> result = await handler.CreateAsync("user@example.com", null, 1, 1, "https://app.test", CancellationToken.None);
+        ServiceResult<InvitationDeliveryResult> result = await handler.CreateAsync("user@example.com", null, 1, 1, "https://app.test", CancellationToken.None);
 
         await Assert.That(result.StatusCode).IsEqualTo(409);
         await Assert.That(result.Data!.ErrorMessage).Contains("pending invitation already exists");
@@ -165,7 +166,7 @@ public class InvitationHandlerTests
         });
         InvitationHandler handler = BuildHandler(invitationRepository: invitationRepository, tenantRepository: tenantRepository);
 
-        ServiceResult<InvitationCreateResult> result = await handler.CreateAsync("user@example.com", null, 1, 1, "https://app.test", CancellationToken.None);
+        ServiceResult<InvitationDeliveryResult> result = await handler.CreateAsync("user@example.com", null, 1, 1, "https://app.test", CancellationToken.None);
 
         await Assert.That(result.StatusCode).IsEqualTo(409);
         await Assert.That(result.Data!.ErrorMessage).Contains("already a member");
@@ -183,7 +184,7 @@ public class InvitationHandlerTests
             tenantRepository: tenantRepository,
             subscriptionService: CreateMockSubService(canAddMember: false));
 
-        ServiceResult<InvitationCreateResult> result = await handler.CreateAsync("newuser@example.com", null, 1, 1, "https://app.test", CancellationToken.None);
+        ServiceResult<InvitationDeliveryResult> result = await handler.CreateAsync("newuser@example.com", null, 1, 1, "https://app.test", CancellationToken.None);
 
         await Assert.That(result.StatusCode).IsEqualTo(409);
         await Assert.That(result.Data!.ErrorMessage).Contains("member limit");
@@ -209,7 +210,7 @@ public class InvitationHandlerTests
         });
         InvitationHandler handler = BuildHandler(invitationRepository: invitationRepository, tenantRepository: tenantRepository);
 
-        ServiceResult<InvitationCreateResult> result = await handler.CreateAsync("newuser@example.com", null, 1, 1, "https://app.test", CancellationToken.None);
+        ServiceResult<InvitationDeliveryResult> result = await handler.CreateAsync("newuser@example.com", null, 1, 1, "https://app.test", CancellationToken.None);
 
         await Assert.That(result.IsSuccess).IsTrue();
         await invitationRepository.Received(1).CreateInvitationAsync(Arg.Any<TenantInvitation>(), Arg.Any<CancellationToken>());
@@ -235,7 +236,7 @@ public class InvitationHandlerTests
         });
         InvitationHandler handler = BuildHandler(invitationRepository: invitationRepository, tenantRepository: tenantRepository);
 
-        ServiceResult<InvitationCreateResult> result = await handler.CreateAsync("newuser@example.com", null, 1, 1, "https://app.test", CancellationToken.None);
+        ServiceResult<InvitationDeliveryResult> result = await handler.CreateAsync("newuser@example.com", null, 1, 1, "https://app.test", CancellationToken.None);
 
         await Assert.That(result.IsSuccess).IsTrue();
         await Assert.That(result.Data!.Id).IsEqualTo(10);
@@ -702,7 +703,7 @@ public class InvitationHandlerTests
     {
         InvitationHandler handler = BuildHandler();
 
-        ServiceResult<InvitationRevokeResult> result = await handler.RevokeAsync(1, null, CancellationToken.None);
+        ServiceResult<ApiResponse<object>> result = await handler.RevokeAsync(1, null, CancellationToken.None);
 
         await Assert.That(result.StatusCode).IsEqualTo(401);
     }
@@ -714,7 +715,7 @@ public class InvitationHandlerTests
         invitationRepository.GetInvitationsForTenantAsync(1, Arg.Any<CancellationToken>()).Returns(Enumerable.Empty<TenantInvitation>());
         InvitationHandler handler = BuildHandler(invitationRepository: invitationRepository);
 
-        ServiceResult<InvitationRevokeResult> result = await handler.RevokeAsync(99, 1, CancellationToken.None);
+        ServiceResult<ApiResponse<object>> result = await handler.RevokeAsync(99, 1, CancellationToken.None);
 
         await Assert.That(result.IsNotFound).IsTrue();
     }
@@ -729,10 +730,10 @@ public class InvitationHandlerTests
         });
         InvitationHandler handler = BuildHandler(invitationRepository: invitationRepository);
 
-        ServiceResult<InvitationRevokeResult> result = await handler.RevokeAsync(1, 1, CancellationToken.None);
+        ServiceResult<ApiResponse<object>> result = await handler.RevokeAsync(1, 1, CancellationToken.None);
 
         await Assert.That(result.StatusCode).IsEqualTo(400);
-        await Assert.That(result.Data!.ErrorMessage).Contains("pending");
+        await Assert.That(result.Data!.Message).Contains("pending");
     }
 
     [Test]
@@ -745,7 +746,7 @@ public class InvitationHandlerTests
         });
         InvitationHandler handler = BuildHandler(invitationRepository: invitationRepository);
 
-        ServiceResult<InvitationRevokeResult> result = await handler.RevokeAsync(1, 1, CancellationToken.None);
+        ServiceResult<ApiResponse<object>> result = await handler.RevokeAsync(1, 1, CancellationToken.None);
 
         await Assert.That(result.IsSuccess).IsTrue();
     }
@@ -772,7 +773,7 @@ public class InvitationHandlerTests
     {
         InvitationHandler handler = BuildHandler();
 
-        ServiceResult<InvitationResendResult> result = await handler.ResendAsync(1, null, 1, "inviter@test.com", "https://app.test", CancellationToken.None);
+        ServiceResult<InvitationDeliveryResult> result = await handler.ResendAsync(1, null, 1, "inviter@test.com", "https://app.test", CancellationToken.None);
 
         await Assert.That(result.StatusCode).IsEqualTo(401);
     }
@@ -784,7 +785,7 @@ public class InvitationHandlerTests
         invitationRepository.GetInvitationsForTenantAsync(1, Arg.Any<CancellationToken>()).Returns(Enumerable.Empty<TenantInvitation>());
         InvitationHandler handler = BuildHandler(invitationRepository: invitationRepository);
 
-        ServiceResult<InvitationResendResult> result = await handler.ResendAsync(99, 1, 1, "inviter@test.com", "https://app.test", CancellationToken.None);
+        ServiceResult<InvitationDeliveryResult> result = await handler.ResendAsync(99, 1, 1, "inviter@test.com", "https://app.test", CancellationToken.None);
 
         await Assert.That(result.IsNotFound).IsTrue();
     }
@@ -799,7 +800,7 @@ public class InvitationHandlerTests
         });
         InvitationHandler handler = BuildHandler(invitationRepository: invitationRepository);
 
-        ServiceResult<InvitationResendResult> result = await handler.ResendAsync(1, 1, 1, "inviter@test.com", "https://app.test", CancellationToken.None);
+        ServiceResult<InvitationDeliveryResult> result = await handler.ResendAsync(1, 1, 1, "inviter@test.com", "https://app.test", CancellationToken.None);
 
         await Assert.That(result.StatusCode).IsEqualTo(400);
     }
@@ -826,7 +827,7 @@ public class InvitationHandlerTests
         });
         InvitationHandler handler = BuildHandler(invitationRepository: invitationRepository, tenantRepository: tenantRepository);
 
-        ServiceResult<InvitationResendResult> result = await handler.ResendAsync(1, 1, 1, "inviter@test.com", "https://app.test", CancellationToken.None);
+        ServiceResult<InvitationDeliveryResult> result = await handler.ResendAsync(1, 1, 1, "inviter@test.com", "https://app.test", CancellationToken.None);
 
         await Assert.That(result.IsSuccess).IsTrue();
         await Assert.That(result.Data!.Id).IsEqualTo(20);

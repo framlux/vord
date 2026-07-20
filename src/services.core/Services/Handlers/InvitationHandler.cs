@@ -9,6 +9,7 @@ using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Services.Core.Billing;
 using Framlux.FleetManagement.Services.Core.Infrastructure;
+using Framlux.FleetManagement.Services.Core.Models;
 using Framlux.FleetManagement.Services.Core.Notifications;
 using Framlux.FleetManagement.Services.Core.Security;
 using Hangfire;
@@ -64,7 +65,7 @@ public sealed class InvitationHandler
     /// <summary>
     /// Creates a new tenant invitation.
     /// </summary>
-    public async Task<ServiceResult<InvitationCreateResult>> CreateAsync(
+    public async Task<ServiceResult<InvitationDeliveryResult>> CreateAsync(
         string email,
         string? role,
         int? tenantId,
@@ -75,28 +76,28 @@ public sealed class InvitationHandler
         string normalizedEmail = email?.Trim().ToLowerInvariant() ?? string.Empty;
         if (string.IsNullOrEmpty(normalizedEmail) || normalizedEmail.Contains('@') == false)
         {
-            return ServiceResult<InvitationCreateResult>.Error(400,
-                new InvitationCreateResult { ErrorMessage = "A valid email address is required" });
+            return ServiceResult<InvitationDeliveryResult>.Error(400,
+                new InvitationDeliveryResult { ErrorMessage = "A valid email address is required" });
         }
 
         if (tenantId is null)
         {
-            return ServiceResult<InvitationCreateResult>.Error(401,
-                new InvitationCreateResult { ErrorMessage = "Unauthorized" });
+            return ServiceResult<InvitationDeliveryResult>.Error(401,
+                new InvitationDeliveryResult { ErrorMessage = "Unauthorized" });
         }
 
         TenantSubscription? subscription = await _subscriptionService.GetSubscriptionForTenantAsync(tenantId.Value, ct);
         if ((subscription is null) || (subscription.Tier == SubscriptionTier.Free))
         {
-            return ServiceResult<InvitationCreateResult>.Error(402,
-                new InvitationCreateResult { ErrorMessage = "Upgrade to Pro or Team to invite team members" });
+            return ServiceResult<InvitationDeliveryResult>.Error(402,
+                new InvitationDeliveryResult { ErrorMessage = "Upgrade to Pro or Team to invite team members" });
         }
 
         TenantInvitation? existing = await _invitationRepository.GetPendingInvitationByEmailAndTenantAsync(normalizedEmail, tenantId.Value, ct);
         if (existing is not null)
         {
-            return ServiceResult<InvitationCreateResult>.Error(409,
-                new InvitationCreateResult { ErrorMessage = "A pending invitation already exists for this email" });
+            return ServiceResult<InvitationDeliveryResult>.Error(409,
+                new InvitationDeliveryResult { ErrorMessage = "A pending invitation already exists for this email" });
         }
 
         IEnumerable<UserTenantRole> members = await _tenantRepository.GetMembersForTenantAsync(tenantId.Value, ct);
@@ -104,15 +105,15 @@ public sealed class InvitationHandler
             string.Equals(m.User.Username, normalizedEmail, StringComparison.OrdinalIgnoreCase));
         if (alreadyMember)
         {
-            return ServiceResult<InvitationCreateResult>.Error(409,
-                new InvitationCreateResult { ErrorMessage = "This user is already a member of your organization" });
+            return ServiceResult<InvitationDeliveryResult>.Error(409,
+                new InvitationDeliveryResult { ErrorMessage = "This user is already a member of your organization" });
         }
 
         bool canAddMember = await _subscriptionService.CanAddMemberAsync(tenantId.Value, ct);
         if (canAddMember == false)
         {
-            return ServiceResult<InvitationCreateResult>.Error(409,
-                new InvitationCreateResult { ErrorMessage = "Your plan's member limit has been reached. Upgrade or remove a member to invite more." });
+            return ServiceResult<InvitationDeliveryResult>.Error(409,
+                new InvitationDeliveryResult { ErrorMessage = "Your plan's member limit has been reached. Upgrade or remove a member to invite more." });
         }
 
         UserAccountRoles assignedRole = UserAccountRoles.Viewer;
@@ -161,7 +162,7 @@ public sealed class InvitationHandler
         // The job retries on failure via Hangfire so a transient Resend outage does not silently drop the email.
         _backgroundJobClient.Enqueue<SendInvitationEmailJob>(j => j.SendAsync(normalizedEmail, tenantName, "A team member", acceptUrl, CancellationToken.None));
 
-        return ServiceResult<InvitationCreateResult>.Ok(new InvitationCreateResult
+        return ServiceResult<InvitationDeliveryResult>.Ok(new InvitationDeliveryResult
         {
             Id = invitation.Id,
             Email = invitation.Email,
@@ -306,15 +307,14 @@ public sealed class InvitationHandler
     /// <summary>
     /// Revokes a pending invitation.
     /// </summary>
-    public async Task<ServiceResult<InvitationRevokeResult>> RevokeAsync(
+    public async Task<ServiceResult<ApiResponse<object>>> RevokeAsync(
         int invitationId,
         int? tenantId,
         CancellationToken ct)
     {
         if (tenantId is null)
         {
-            return ServiceResult<InvitationRevokeResult>.Error(401,
-                new InvitationRevokeResult { ErrorMessage = "Unauthorized" });
+            return ServiceResult<ApiResponse<object>>.Error(401, ApiResponse<object>.Error("Unauthorized"));
         }
 
         IEnumerable<TenantInvitation> invitations = await _invitationRepository.GetInvitationsForTenantAsync(tenantId.Value, ct);
@@ -322,13 +322,12 @@ public sealed class InvitationHandler
 
         if (invitation is null)
         {
-            return ServiceResult<InvitationRevokeResult>.NotFound();
+            return ServiceResult<ApiResponse<object>>.NotFound();
         }
 
         if (invitation.Status != InvitationStatus.Pending)
         {
-            return ServiceResult<InvitationRevokeResult>.Error(400,
-                new InvitationRevokeResult { ErrorMessage = "Only pending invitations can be revoked" });
+            return ServiceResult<ApiResponse<object>>.Error(400, ApiResponse<object>.Error("Only pending invitations can be revoked"));
         }
 
         using IDatabaseTransaction transaction = await _transactionProvider.BeginTransactionAsync(ct);
@@ -337,7 +336,7 @@ public sealed class InvitationHandler
 
         if (revoked == false)
         {
-            return ServiceResult<InvitationRevokeResult>.NotFound();
+            return ServiceResult<ApiResponse<object>>.NotFound();
         }
 
         await _auditLog.InsertAuditLogAsync(AuditHelper.Create(
@@ -347,13 +346,13 @@ public sealed class InvitationHandler
 
         await transaction.CommitAsync(ct);
 
-        return ServiceResult<InvitationRevokeResult>.Ok(new InvitationRevokeResult());
+        return ServiceResult<ApiResponse<object>>.Ok(ApiResponse<object>.Ok(new { }, "Invitation revoked"));
     }
 
     /// <summary>
     /// Resends an invitation by revoking the old one and creating a fresh one.
     /// </summary>
-    public async Task<ServiceResult<InvitationResendResult>> ResendAsync(
+    public async Task<ServiceResult<InvitationDeliveryResult>> ResendAsync(
         int invitationId,
         int? tenantId,
         int userId,
@@ -363,8 +362,8 @@ public sealed class InvitationHandler
     {
         if (tenantId is null)
         {
-            return ServiceResult<InvitationResendResult>.Error(401,
-                new InvitationResendResult { ErrorMessage = "Unauthorized" });
+            return ServiceResult<InvitationDeliveryResult>.Error(401,
+                new InvitationDeliveryResult { ErrorMessage = "Unauthorized" });
         }
 
         IEnumerable<TenantInvitation> invitations = await _invitationRepository.GetInvitationsForTenantAsync(tenantId.Value, ct);
@@ -372,13 +371,13 @@ public sealed class InvitationHandler
 
         if (oldInvitation is null)
         {
-            return ServiceResult<InvitationResendResult>.NotFound();
+            return ServiceResult<InvitationDeliveryResult>.NotFound();
         }
 
         if (oldInvitation.Status != InvitationStatus.Pending)
         {
-            return ServiceResult<InvitationResendResult>.Error(400,
-                new InvitationResendResult { ErrorMessage = "Only pending invitations can be resent" });
+            return ServiceResult<InvitationDeliveryResult>.Error(400,
+                new InvitationDeliveryResult { ErrorMessage = "Only pending invitations can be resent" });
         }
 
         string token = RandomNumberGenerator.GetHexString(64, true);
@@ -391,7 +390,7 @@ public sealed class InvitationHandler
 
         if (revoked == false)
         {
-            return ServiceResult<InvitationResendResult>.NotFound();
+            return ServiceResult<InvitationDeliveryResult>.NotFound();
         }
 
         TenantInvitation newInvitation = await _invitationRepository.CreateInvitationAsync(new TenantInvitation
@@ -417,7 +416,7 @@ public sealed class InvitationHandler
         // The job retries on failure via Hangfire so a transient Resend outage does not silently drop the email.
         _backgroundJobClient.Enqueue<SendInvitationEmailJob>(j => j.SendAsync(oldInvitation.Email, tenantName, inviterEmail, acceptUrl, CancellationToken.None));
 
-        return ServiceResult<InvitationResendResult>.Ok(new InvitationResendResult
+        return ServiceResult<InvitationDeliveryResult>.Ok(new InvitationDeliveryResult
         {
             Id = newInvitation.Id,
             Email = newInvitation.Email,

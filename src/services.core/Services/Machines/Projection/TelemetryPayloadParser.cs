@@ -19,340 +19,85 @@ internal static class TelemetryPayloadParser
     /// <param name="payload">The raw SystemInfo telemetry payload.</param>
     /// <param name="fragment">The parsed fragment, or null when the payload is malformed.</param>
     /// <returns>True when parsing succeeded; otherwise false.</returns>
-    internal static bool TryParseSystemInfo(string payload, out SystemInfoFragment? fragment)
-    {
-        try
-        {
-            using JsonDocument doc = JsonDocument.Parse(payload);
-            JsonElement root = doc.RootElement;
-
-            fragment = new SystemInfoFragment(
-                Hostname: ReadString(root, "hostname"),
-                HardwareModel: ReadString(root, "hardware_model"),
-                IpAddresses: root.TryGetProperty("ip_addresses", out JsonElement ip) ? ip.GetRawText() : null,
-                HardwareVendor: ReadString(root, "hardware_vendor"),
-                HardwareSerial: ReadString(root, "hardware_serial"),
-                CpuBrand: ReadString(root, "cpu_brand"),
-                CpuCores: ReadInt(root, "cpu_cores"),
-                MemoryTotalBytes: ReadLong(root, "memory_total_bytes"),
-                UptimeSeconds: ReadLong(root, "uptime_seconds"),
-                BiosVersion: ReadString(root, "bios_version"));
-
-            return true;
-        }
-        catch (Exception ex) when (ex is JsonException or InvalidOperationException or FormatException)
-        {
-            // Structurally valid JSON whose field has the wrong type (e.g. a string where an int is
-            // expected) makes the typed accessors throw InvalidOperationException/FormatException.
-            // Treat that the same as malformed JSON: skip the poison row rather than wedge the batch.
-            fragment = null;
-
-            return false;
-        }
-    }
+    internal static bool TryParseSystemInfo(string payload, out SystemInfoFragment? fragment) =>
+        TryParse(payload, ParseSystemInfoCore, out fragment);
 
     /// <summary>Parses an OsVersion payload into a fragment. Returns false on malformed JSON.</summary>
     /// <param name="payload">The raw OsVersion telemetry payload.</param>
     /// <param name="fragment">The parsed fragment, or null when the payload is malformed.</param>
     /// <returns>True when parsing succeeded; otherwise false.</returns>
-    internal static bool TryParseOsVersion(string payload, out OsVersionFragment? fragment)
-    {
-        try
-        {
-            using JsonDocument doc = JsonDocument.Parse(payload);
-            JsonElement root = doc.RootElement;
-
-            fragment = new OsVersionFragment(
-                OsName: ReadString(root, "os_name"),
-                OsVersion: ReadString(root, "os_version"),
-                Kernel: ReadString(root, "kernel"));
-
-            return true;
-        }
-        catch (Exception ex) when (ex is JsonException or InvalidOperationException or FormatException)
-        {
-            // Structurally valid JSON whose field has the wrong type (e.g. a string where an int is
-            // expected) makes the typed accessors throw InvalidOperationException/FormatException.
-            // Treat that the same as malformed JSON: skip the poison row rather than wedge the batch.
-            fragment = null;
-
-            return false;
-        }
-    }
+    internal static bool TryParseOsVersion(string payload, out OsVersionFragment? fragment) =>
+        TryParse(payload, ParseOsVersionCore, out fragment);
 
     /// <summary>Parses a CpuInfo payload into a fragment. Returns false on malformed JSON.</summary>
     /// <param name="payload">The raw CpuInfo telemetry payload.</param>
     /// <param name="fragment">The parsed fragment, or null when the payload is malformed.</param>
     /// <returns>True when parsing succeeded; otherwise false.</returns>
-    internal static bool TryParseCpuInfo(string payload, out CpuInfoFragment? fragment)
-    {
-        try
-        {
-            using JsonDocument doc = JsonDocument.Parse(payload);
-            JsonElement root = doc.RootElement;
-
-            fragment = new CpuInfoFragment(
-                CpuType: ReadString(root, "cpu_type"),
-                CpuPhysicalCpus: ReadInt(root, "physical_cpus"),
-                CpuLogicalCpus: ReadInt(root, "logical_cpus"));
-
-            return true;
-        }
-        catch (Exception ex) when (ex is JsonException or InvalidOperationException or FormatException)
-        {
-            // Structurally valid JSON whose field has the wrong type (e.g. a string where an int is
-            // expected) makes the typed accessors throw InvalidOperationException/FormatException.
-            // Treat that the same as malformed JSON: skip the poison row rather than wedge the batch.
-            fragment = null;
-
-            return false;
-        }
-    }
+    internal static bool TryParseCpuInfo(string payload, out CpuInfoFragment? fragment) =>
+        TryParse(payload, ParseCpuInfoCore, out fragment);
 
     /// <summary>Parses a MemoryInfo payload into a fragment. Returns false on malformed JSON.</summary>
     /// <param name="payload">The raw MemoryInfo telemetry payload.</param>
     /// <param name="fragment">The parsed fragment, or null when the payload is malformed.</param>
     /// <returns>True when parsing succeeded; otherwise false.</returns>
-    internal static bool TryParseMemoryInfo(string payload, out MemoryInfoFragment? fragment)
-    {
-        try
-        {
-            using JsonDocument doc = JsonDocument.Parse(payload);
-            JsonElement root = doc.RootElement;
-
-            fragment = new MemoryInfoFragment(
-                SwapTotalBytes: ReadLong(root, "swap_total_bytes"),
-                SwapFreeBytes: ReadLong(root, "swap_free_bytes"));
-
-            return true;
-        }
-        catch (Exception ex) when (ex is JsonException or InvalidOperationException or FormatException)
-        {
-            // Structurally valid JSON whose field has the wrong type (e.g. a string where an int is
-            // expected) makes the typed accessors throw InvalidOperationException/FormatException.
-            // Treat that the same as malformed JSON: skip the poison row rather than wedge the batch.
-            fragment = null;
-
-            return false;
-        }
-    }
+    internal static bool TryParseMemoryInfo(string payload, out MemoryInfoFragment? fragment) =>
+        TryParse(payload, ParseMemoryInfoCore, out fragment);
 
     /// <summary>Parses a DiskInfo payload into a fragment. The raw payload is stored verbatim.</summary>
     /// <param name="payload">The raw DiskInfo telemetry payload.</param>
     /// <param name="fragment">The parsed fragment, or null when the payload is malformed.</param>
     /// <returns>True when parsing succeeded; otherwise false.</returns>
-    internal static bool TryParseDiskInfo(string payload, out DiskInfoFragment? fragment)
-    {
-        try
-        {
-            using JsonDocument doc = JsonDocument.Parse(payload);
-
-            fragment = new DiskInfoFragment(DiskInfos: payload);
-
-            return true;
-        }
-        catch (Exception ex) when (ex is JsonException or InvalidOperationException or FormatException)
-        {
-            // Structurally valid JSON whose field has the wrong type (e.g. a string where an int is
-            // expected) makes the typed accessors throw InvalidOperationException/FormatException.
-            // Treat that the same as malformed JSON: skip the poison row rather than wedge the batch.
-            fragment = null;
-
-            return false;
-        }
-    }
+    internal static bool TryParseDiskInfo(string payload, out DiskInfoFragment? fragment) =>
+        TryParse(payload, _ => ParseDiskInfoCore(payload), out fragment);
 
     /// <summary>Parses a CpuUsage payload into a fragment. Returns false on malformed JSON.</summary>
     /// <param name="payload">The raw CpuUsage telemetry payload.</param>
     /// <param name="fragment">The parsed fragment, or null when the payload is malformed.</param>
     /// <returns>True when parsing succeeded; otherwise false.</returns>
-    internal static bool TryParseCpuUsage(string payload, out CpuUsageFragment? fragment)
-    {
-        try
-        {
-            using JsonDocument doc = JsonDocument.Parse(payload);
-            JsonElement root = doc.RootElement;
-
-            fragment = new CpuUsageFragment(CpuUsagePercent: ReadInt(root, "cpu_usage_percent"));
-
-            return true;
-        }
-        catch (Exception ex) when (ex is JsonException or InvalidOperationException or FormatException)
-        {
-            // Structurally valid JSON whose field has the wrong type (e.g. a string where an int is
-            // expected) makes the typed accessors throw InvalidOperationException/FormatException.
-            // Treat that the same as malformed JSON: skip the poison row rather than wedge the batch.
-            fragment = null;
-
-            return false;
-        }
-    }
+    internal static bool TryParseCpuUsage(string payload, out CpuUsageFragment? fragment) =>
+        TryParse(payload, ParseCpuUsageCore, out fragment);
 
     /// <summary>Parses a MemoryUsage payload into a fragment. Returns false on malformed JSON.</summary>
     /// <param name="payload">The raw MemoryUsage telemetry payload.</param>
     /// <param name="fragment">The parsed fragment, or null when the payload is malformed.</param>
     /// <returns>True when parsing succeeded; otherwise false.</returns>
-    internal static bool TryParseMemoryUsage(string payload, out MemoryUsageFragment? fragment)
-    {
-        try
-        {
-            using JsonDocument doc = JsonDocument.Parse(payload);
-            JsonElement root = doc.RootElement;
-
-            fragment = new MemoryUsageFragment(
-                MemoryUsagePercent: ReadInt(root, "memory_usage_percent"),
-                MemoryUsedBytes: ReadLong(root, "memory_used"));
-
-            return true;
-        }
-        catch (Exception ex) when (ex is JsonException or InvalidOperationException or FormatException)
-        {
-            // Structurally valid JSON whose field has the wrong type (e.g. a string where an int is
-            // expected) makes the typed accessors throw InvalidOperationException/FormatException.
-            // Treat that the same as malformed JSON: skip the poison row rather than wedge the batch.
-            fragment = null;
-
-            return false;
-        }
-    }
+    internal static bool TryParseMemoryUsage(string payload, out MemoryUsageFragment? fragment) =>
+        TryParse(payload, ParseMemoryUsageCore, out fragment);
 
     /// <summary>Parses a DiskUsage payload into a fragment, computing the maximum disk usage. Returns false on malformed JSON.</summary>
     /// <param name="payload">The raw DiskUsage telemetry payload.</param>
     /// <param name="fragment">The parsed fragment, or null when the payload is malformed.</param>
     /// <returns>True when parsing succeeded; otherwise false.</returns>
-    internal static bool TryParseDiskUsage(string payload, out DiskUsageFragment? fragment)
-    {
-        try
-        {
-            using JsonDocument doc = JsonDocument.Parse(payload);
-
-            fragment = new DiskUsageFragment(
-                MaxDiskUsagePercent: ComputeMaxDiskUsagePercent(payload),
-                DiskUsages: payload);
-
-            return true;
-        }
-        catch (Exception ex) when (ex is JsonException or InvalidOperationException or FormatException)
-        {
-            // Structurally valid JSON whose field has the wrong type (e.g. a string where an int is
-            // expected) makes the typed accessors throw InvalidOperationException/FormatException.
-            // Treat that the same as malformed JSON: skip the poison row rather than wedge the batch.
-            fragment = null;
-
-            return false;
-        }
-    }
+    internal static bool TryParseDiskUsage(string payload, out DiskUsageFragment? fragment) =>
+        TryParse(payload, _ => ParseDiskUsageCore(payload), out fragment);
 
     /// <summary>Parses an SshSessions payload into a fragment. The raw payload is stored verbatim.</summary>
     /// <param name="payload">The raw SshSessions telemetry payload.</param>
     /// <param name="fragment">The parsed fragment, or null when the payload is malformed.</param>
     /// <returns>True when parsing succeeded; otherwise false.</returns>
-    internal static bool TryParseSshSessions(string payload, out SshSessionsFragment? fragment)
-    {
-        try
-        {
-            using JsonDocument doc = JsonDocument.Parse(payload);
-
-            fragment = new SshSessionsFragment(SshSessions: payload);
-
-            return true;
-        }
-        catch (Exception ex) when (ex is JsonException or InvalidOperationException or FormatException)
-        {
-            // Structurally valid JSON whose field has the wrong type (e.g. a string where an int is
-            // expected) makes the typed accessors throw InvalidOperationException/FormatException.
-            // Treat that the same as malformed JSON: skip the poison row rather than wedge the batch.
-            fragment = null;
-
-            return false;
-        }
-    }
+    internal static bool TryParseSshSessions(string payload, out SshSessionsFragment? fragment) =>
+        TryParse(payload, _ => ParseSshSessionsCore(payload), out fragment);
 
     /// <summary>Parses a HardwareHealth payload into a fragment, computing the health flags. Returns false on malformed JSON.</summary>
     /// <param name="payload">The raw HardwareHealth telemetry payload.</param>
     /// <param name="fragment">The parsed fragment, or null when the payload is malformed.</param>
     /// <returns>True when parsing succeeded; otherwise false.</returns>
-    internal static bool TryParseHardwareHealth(string payload, out HardwareHealthFragment? fragment)
-    {
-        try
-        {
-            using JsonDocument doc = JsonDocument.Parse(payload);
-
-            (bool hasDiskIssue, bool hasHardwareIssue) = ComputeHardwareHealthFlags(payload);
-
-            fragment = new HardwareHealthFragment(
-                HasDiskHealthIssue: hasDiskIssue,
-                HasHardwareIssue: hasHardwareIssue,
-                HardwareHealth: payload);
-
-            return true;
-        }
-        catch (Exception ex) when (ex is JsonException or InvalidOperationException or FormatException)
-        {
-            // Structurally valid JSON whose field has the wrong type (e.g. a string where an int is
-            // expected) makes the typed accessors throw InvalidOperationException/FormatException.
-            // Treat that the same as malformed JSON: skip the poison row rather than wedge the batch.
-            fragment = null;
-
-            return false;
-        }
-    }
+    internal static bool TryParseHardwareHealth(string payload, out HardwareHealthFragment? fragment) =>
+        TryParse(payload, _ => ParseHardwareHealthCore(payload), out fragment);
 
     /// <summary>Parses a PackageUpdates payload into a fragment. Returns false on malformed JSON.</summary>
     /// <param name="payload">The raw PackageUpdates telemetry payload.</param>
     /// <param name="fragment">The parsed fragment, or null when the payload is malformed.</param>
     /// <returns>True when parsing succeeded; otherwise false.</returns>
-    internal static bool TryParsePackageUpdates(string payload, out PackageUpdatesFragment? fragment)
-    {
-        try
-        {
-            using JsonDocument doc = JsonDocument.Parse(payload);
-            JsonElement root = doc.RootElement;
-
-            fragment = new PackageUpdatesFragment(
-                PendingUpdates: ReadInt(root, "pending_updates"),
-                SecurityUpdates: ReadInt(root, "security_updates"));
-
-            return true;
-        }
-        catch (Exception ex) when (ex is JsonException or InvalidOperationException or FormatException)
-        {
-            // Structurally valid JSON whose field has the wrong type (e.g. a string where an int is
-            // expected) makes the typed accessors throw InvalidOperationException/FormatException.
-            // Treat that the same as malformed JSON: skip the poison row rather than wedge the batch.
-            fragment = null;
-
-            return false;
-        }
-    }
+    internal static bool TryParsePackageUpdates(string payload, out PackageUpdatesFragment? fragment) =>
+        TryParse(payload, ParsePackageUpdatesCore, out fragment);
 
     /// <summary>Parses a ServiceStatus payload into a fragment. Returns false on malformed JSON.</summary>
     /// <param name="payload">The raw ServiceStatus telemetry payload.</param>
     /// <param name="fragment">The parsed fragment, or null when the payload is malformed.</param>
     /// <returns>True when parsing succeeded; otherwise false.</returns>
-    internal static bool TryParseServiceStatus(string payload, out ServiceStatusFragment? fragment)
-    {
-        try
-        {
-            using JsonDocument doc = JsonDocument.Parse(payload);
-            JsonElement root = doc.RootElement;
-
-            fragment = new ServiceStatusFragment(
-                TotalServices: ReadInt(root, "total_services"),
-                FailedServices: ReadInt(root, "failed_services"));
-
-            return true;
-        }
-        catch (Exception ex) when (ex is JsonException or InvalidOperationException or FormatException)
-        {
-            // Structurally valid JSON whose field has the wrong type (e.g. a string where an int is
-            // expected) makes the typed accessors throw InvalidOperationException/FormatException.
-            // Treat that the same as malformed JSON: skip the poison row rather than wedge the batch.
-            fragment = null;
-
-            return false;
-        }
-    }
+    internal static bool TryParseServiceStatus(string payload, out ServiceStatusFragment? fragment) =>
+        TryParse(payload, ParseServiceStatusCore, out fragment);
 
     /// <summary>
     /// Computes the maximum disk usage percentage across all disks in the JSONB payload.
@@ -471,6 +216,105 @@ internal static class TelemetryPayloadParser
 
         return (hasDiskIssue, hasHardwareIssue);
     }
+
+    /// <summary>
+    /// Parses a payload as JSON and maps its root element into a fragment, treating any
+    /// exception raised by malformed JSON or a wrong-typed field the same way: return false
+    /// rather than throw, so a poison row can be skipped without aborting the batch.
+    /// </summary>
+    /// <typeparam name="T">The fragment type produced by <paramref name="parse"/>.</typeparam>
+    /// <param name="payload">The raw telemetry payload.</param>
+    /// <param name="parse">Maps the parsed JSON root element to a fragment.</param>
+    /// <param name="result">The parsed fragment, or the default value when the payload is malformed.</param>
+    /// <returns>True when parsing succeeded; otherwise false.</returns>
+    private static bool TryParse<T>(string payload, Func<JsonElement, T> parse, out T? result)
+    {
+        result = default;
+
+        try
+        {
+            using JsonDocument document = JsonDocument.Parse(payload);
+            result = parse(document.RootElement);
+
+            return true;
+        }
+        catch (Exception ex) when (ex is JsonException or InvalidOperationException or FormatException)
+        {
+            // Structurally valid JSON whose field has the wrong type (e.g. a string where an int is
+            // expected) makes the typed accessors throw InvalidOperationException/FormatException.
+            // Treat that the same as malformed JSON: skip the poison row rather than wedge the batch.
+            return false;
+        }
+    }
+
+    private static SystemInfoFragment ParseSystemInfoCore(JsonElement root) =>
+        new SystemInfoFragment(
+            Hostname: ReadString(root, "hostname"),
+            HardwareModel: ReadString(root, "hardware_model"),
+            IpAddresses: root.TryGetProperty("ip_addresses", out JsonElement ip) ? ip.GetRawText() : null,
+            HardwareVendor: ReadString(root, "hardware_vendor"),
+            HardwareSerial: ReadString(root, "hardware_serial"),
+            CpuBrand: ReadString(root, "cpu_brand"),
+            CpuCores: ReadInt(root, "cpu_cores"),
+            MemoryTotalBytes: ReadLong(root, "memory_total_bytes"),
+            UptimeSeconds: ReadLong(root, "uptime_seconds"),
+            BiosVersion: ReadString(root, "bios_version"));
+
+    private static OsVersionFragment ParseOsVersionCore(JsonElement root) =>
+        new OsVersionFragment(
+            OsName: ReadString(root, "os_name"),
+            OsVersion: ReadString(root, "os_version"),
+            Kernel: ReadString(root, "kernel"));
+
+    private static CpuInfoFragment ParseCpuInfoCore(JsonElement root) =>
+        new CpuInfoFragment(
+            CpuType: ReadString(root, "cpu_type"),
+            CpuPhysicalCpus: ReadInt(root, "physical_cpus"),
+            CpuLogicalCpus: ReadInt(root, "logical_cpus"));
+
+    private static MemoryInfoFragment ParseMemoryInfoCore(JsonElement root) =>
+        new MemoryInfoFragment(
+            SwapTotalBytes: ReadLong(root, "swap_total_bytes"),
+            SwapFreeBytes: ReadLong(root, "swap_free_bytes"));
+
+    private static DiskInfoFragment ParseDiskInfoCore(string payload) =>
+        new DiskInfoFragment(DiskInfos: payload);
+
+    private static CpuUsageFragment ParseCpuUsageCore(JsonElement root) =>
+        new CpuUsageFragment(CpuUsagePercent: ReadInt(root, "cpu_usage_percent"));
+
+    private static MemoryUsageFragment ParseMemoryUsageCore(JsonElement root) =>
+        new MemoryUsageFragment(
+            MemoryUsagePercent: ReadInt(root, "memory_usage_percent"),
+            MemoryUsedBytes: ReadLong(root, "memory_used"));
+
+    private static DiskUsageFragment ParseDiskUsageCore(string payload) =>
+        new DiskUsageFragment(
+            MaxDiskUsagePercent: ComputeMaxDiskUsagePercent(payload),
+            DiskUsages: payload);
+
+    private static SshSessionsFragment ParseSshSessionsCore(string payload) =>
+        new SshSessionsFragment(SshSessions: payload);
+
+    private static HardwareHealthFragment ParseHardwareHealthCore(string payload)
+    {
+        (bool hasDiskIssue, bool hasHardwareIssue) = ComputeHardwareHealthFlags(payload);
+
+        return new HardwareHealthFragment(
+            HasDiskHealthIssue: hasDiskIssue,
+            HasHardwareIssue: hasHardwareIssue,
+            HardwareHealth: payload);
+    }
+
+    private static PackageUpdatesFragment ParsePackageUpdatesCore(JsonElement root) =>
+        new PackageUpdatesFragment(
+            PendingUpdates: ReadInt(root, "pending_updates"),
+            SecurityUpdates: ReadInt(root, "security_updates"));
+
+    private static ServiceStatusFragment ParseServiceStatusCore(JsonElement root) =>
+        new ServiceStatusFragment(
+            TotalServices: ReadInt(root, "total_services"),
+            FailedServices: ReadInt(root, "failed_services"));
 
     private static string? ReadString(JsonElement root, string name) =>
         root.TryGetProperty(name, out JsonElement e) ? e.GetString() : null;

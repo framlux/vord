@@ -2,7 +2,9 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
-namespace Framlux.FleetManagement.Services.Core.Infrastructure;
+using Framlux.FleetManagement.Services.Core.Infrastructure;
+
+namespace Framlux.FleetManagement.Test.Infrastructure;
 
 /// <summary>
 /// No-op advisory lock provider used in environments without PostgreSQL (notably the SQLite

@@ -4,7 +4,6 @@
 
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
-using Framlux.FleetManagement.Services.Core.Infrastructure;
 using Framlux.FleetManagement.Test.Infrastructure;
 using LinqToDB;
 using LinqToDB.Async;
