@@ -6,6 +6,7 @@ using FastEndpoints;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Server.Auth;
+using Framlux.FleetManagement.Server.Services.Billing;
 
 namespace Framlux.FleetManagement.Server.Endpoints.Web.Alerts;
 
@@ -38,6 +39,7 @@ public sealed class AlertRuleListEndpoint : EndpointWithoutRequest<ApiResponse<L
         Get("/alert-rules");
         Policies("ViewOnly");
         Tags(Services.Billing.EndpointTags.RequiresProSubscription, EndpointTags.RequiresTenant);
+        Options(b => b.WithMetadata(new RequiresProFeatureMessage(ProFeatureMessages.Alerting)));
         Version(1);
     }
 

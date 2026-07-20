@@ -22,8 +22,11 @@ namespace Framlux.FleetManagement.Server.Services.Billing;
 /// </summary>
 public sealed class ProSubscriptionPreProcessor : IGlobalPreProcessor
 {
-    /// <summary>The message returned when a tenant lacks an active Pro or Team subscription.</summary>
-    public const string RequiresProMessage = "Alerting requires a Pro or Team subscription";
+    /// <summary>
+    /// The feature-neutral message returned when a gated endpoint has not attached a
+    /// <see cref="RequiresProFeatureMessage"/> describing its own feature.
+    /// </summary>
+    public const string DefaultRequiresProMessage = "This feature requires a Pro or Team subscription";
 
     /// <inheritdoc/>
     public async Task PreProcessAsync(IPreProcessorContext context, CancellationToken ct)
@@ -59,7 +62,10 @@ public sealed class ProSubscriptionPreProcessor : IGlobalPreProcessor
 
         if (RequiresProGate(subscription))
         {
-            await httpContext.SendApiErrorAsync(403, RequiresProMessage, ct);
+            RequiresProFeatureMessage? featureMessage = endpoint?.Metadata?.GetMetadata<RequiresProFeatureMessage>();
+            string message = ResolveMessage(featureMessage);
+
+            await httpContext.SendApiErrorAsync(403, message, ct);
 
             context.HttpContext.MarkResponseStart();
         }
@@ -77,5 +83,17 @@ public sealed class ProSubscriptionPreProcessor : IGlobalPreProcessor
         return (subscription is null) ||
                (subscription.Tier == SubscriptionTier.Free) ||
                (subscription.Status != SubscriptionStatus.Active);
+    }
+
+    /// <summary>
+    /// Selects the 403 message to return: the gated endpoint's own <see cref="RequiresProFeatureMessage"/>
+    /// when it attached one, otherwise the feature-neutral <see cref="DefaultRequiresProMessage"/>.
+    /// Extracted as an <c>internal static</c> method so message selection can be unit-tested directly.
+    /// </summary>
+    /// <param name="featureMessage">The endpoint's attached feature message metadata, if any.</param>
+    /// <returns>The message to return in the 403 response body.</returns>
+    internal static string ResolveMessage(RequiresProFeatureMessage? featureMessage)
+    {
+        return featureMessage?.Message ?? DefaultRequiresProMessage;
     }
 }

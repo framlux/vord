@@ -7,6 +7,7 @@ using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Server.Auth;
+using Framlux.FleetManagement.Server.Services.Billing;
 
 namespace Framlux.FleetManagement.Server.Endpoints.Web.Alerts;
 
@@ -58,6 +59,7 @@ public sealed class AlertEventListEndpoint : Endpoint<AlertEventListRequest, Api
         Get("/alert-events");
         Policies("ViewOnly");
         Tags(Services.Billing.EndpointTags.RequiresProSubscription, EndpointTags.RequiresTenant);
+        Options(b => b.WithMetadata(new RequiresProFeatureMessage(ProFeatureMessages.Alerting)));
         Version(1);
     }
 

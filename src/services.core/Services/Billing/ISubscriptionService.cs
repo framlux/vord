@@ -26,11 +26,6 @@ public interface ISubscriptionService
     Task<bool> IsIngestEligibleAsync(int tenantId, CancellationToken ct = default);
 
     /// <summary>
-    /// Checks if a tenant can approve another machine.
-    /// </summary>
-    Task<bool> CanApproveMachineAsync(int tenantId, CancellationToken ct = default);
-
-    /// <summary>
     /// Creates a Free-tier subscription for a tenant.
     /// </summary>
     Task<TenantSubscription> ProvisionFreeSubscriptionAsync(int tenantId, CancellationToken ct = default);

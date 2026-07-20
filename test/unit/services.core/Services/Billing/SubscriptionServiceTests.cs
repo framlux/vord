@@ -141,47 +141,6 @@ public class SubscriptionServiceTests
     }
 
     [Test]
-    public async Task CanApproveMachine_UnderLimit_ReturnsTrue()
-    {
-        (DatabaseRepository repo, TestDatabaseFactory dbFactory) = BuildRepoAndFactory();
-        using (dbFactory)
-        {
-            TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 1);
-            sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
-
-            SubscriptionService service = BuildService(repo);
-
-            bool result = await service.CanApproveMachineAsync(1, CancellationToken.None);
-
-            await Assert.That(result).IsTrue();
-        }
-    }
-
-    [Test]
-    public async Task CanApproveMachine_AtLimit_ReturnsFalse()
-    {
-        (DatabaseRepository repo, TestDatabaseFactory dbFactory) = BuildRepoAndFactory();
-        using (dbFactory)
-        {
-            TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 1, tier: SubscriptionTier.Free);
-            sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
-
-            // Insert 2 active machines to reach the limit
-            Machine m1 = TestDataBuilder.BuildMachine(tenantId: 1);
-            m1.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(m1);
-
-            Machine m2 = TestDataBuilder.BuildMachine(tenantId: 1);
-            m2.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(m2);
-
-            SubscriptionService service = BuildService(repo, machineLimit: 2);
-
-            bool result = await service.CanApproveMachineAsync(1, CancellationToken.None);
-
-            await Assert.That(result).IsFalse();
-        }
-    }
-
-    [Test]
     public async Task IsIngestEligible_ActiveSubscription_ReturnsTrue()
     {
         (DatabaseRepository repo, TestDatabaseFactory dbFactory) = BuildRepoAndFactory();
@@ -230,37 +189,6 @@ public class SubscriptionServiceTests
             SubscriptionService service = BuildService(repo);
 
             await Assert.That(await service.IsIngestEligibleAsync(999, CancellationToken.None)).IsFalse();
-        }
-    }
-
-    [Test]
-    public async Task CanApproveMachine_UnlimitedMachines_ReturnsTrue()
-    {
-        (DatabaseRepository repo, TestDatabaseFactory dbFactory) = BuildRepoAndFactory();
-        using (dbFactory)
-        {
-            TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 1);
-            sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
-
-            SubscriptionService service = BuildService(repo);
-
-            bool result = await service.CanApproveMachineAsync(1, CancellationToken.None);
-
-            await Assert.That(result).IsTrue();
-        }
-    }
-
-    [Test]
-    public async Task CanApproveMachine_NoSubscription_ReturnsFalse()
-    {
-        (DatabaseRepository repo, TestDatabaseFactory dbFactory) = BuildRepoAndFactory();
-        using (dbFactory)
-        {
-            SubscriptionService service = BuildService(repo);
-
-            bool result = await service.CanApproveMachineAsync(999, CancellationToken.None);
-
-            await Assert.That(result).IsFalse();
         }
     }
 
@@ -646,24 +574,23 @@ public class SubscriptionServiceTests
 
     // ========== Override Precedence Tests ==========
 
+    /// <summary>
+    /// Verifies that a per-tenant MachineLimit override takes precedence over the tier default
+    /// when resolving effective limits. Previously exercised indirectly through the now-removed
+    /// CanApproveMachineAsync; ported here to call GetEffectiveLimitsForTenantAsync directly since
+    /// no surviving Can* method reads MachineLimit.
+    /// </summary>
     [Test]
-    public async Task CanApproveMachine_OverrideTakesPrecedenceOverTierDefault()
+    public async Task GetEffectiveLimits_MachineLimitOverrideTakesPrecedenceOverTierDefault()
     {
         (DatabaseRepository repo, TestDatabaseFactory dbFactory) = BuildRepoAndFactory();
         using (dbFactory)
         {
-            // Pro tier has unlimited machines (null MachineLimit)
+            // Pro tier default MachineLimit is 1000
             TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 1, tier: SubscriptionTier.Pro);
             sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
 
-            // Seed 3 machines
-            for (int i = 0; i < 3; i++)
-            {
-                Machine machine = TestDataBuilder.BuildMachine(tenantId: 1);
-                await dbFactory.Context.InsertWithInt32IdentityAsync(machine);
-            }
-
-            // Set a per-tenant override of 3 machines — should block the 4th
+            // Set a per-tenant override of 3 machines
             await dbFactory.Context.InsertAsync(new TenantSubscriptionOverride
             {
                 TenantId = 1,
@@ -674,35 +601,9 @@ public class SubscriptionServiceTests
 
             SubscriptionService service = BuildService(repo, useRealOverrideRepo: true);
 
-            bool result = await service.CanApproveMachineAsync(1, CancellationToken.None);
+            EffectiveLimits limits = await service.GetEffectiveLimitsForTenantAsync(1, CancellationToken.None);
 
-            await Assert.That(result).IsFalse();
-        }
-    }
-
-    [Test]
-    public async Task CanApproveMachine_NoOverride_UsesTierDefault()
-    {
-        (DatabaseRepository repo, TestDatabaseFactory dbFactory) = BuildRepoAndFactory();
-        using (dbFactory)
-        {
-            // Free tier has MachineLimit=3 from TierFeatureLimits
-            TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 1, tier: SubscriptionTier.Free);
-            sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
-
-            // Seed 2 machines — under the limit
-            for (int i = 0; i < 2; i++)
-            {
-                Machine machine = TestDataBuilder.BuildMachine(tenantId: 1);
-                await dbFactory.Context.InsertWithInt32IdentityAsync(machine);
-            }
-
-            // No override inserted — tier default of 3 should allow the 3rd machine
-            SubscriptionService service = BuildService(repo);
-
-            bool result = await service.CanApproveMachineAsync(1, CancellationToken.None);
-
-            await Assert.That(result).IsTrue();
+            await Assert.That(limits.MachineLimit).IsEqualTo(3);
         }
     }
 
@@ -1016,49 +917,6 @@ public class SubscriptionServiceTests
     }
 
     /// <summary>
-    /// Verifies that when a tenant override exists but the override's specific field (MachineLimit)
-    /// is null, GetEffectiveLimitsForTenantAsync falls through to the tier-based limit rather than
-    /// treating the override as a hard cap. This exercises the overrideValue-is-null branch
-    /// inside GetEffectiveLimitsForTenantAsync.
-    /// </summary>
-    [Test]
-    public async Task CanApproveMachine_OverrideExistsButMachineLimitNull_FallsBackToTierLimit()
-    {
-        (DatabaseRepository repo, TestDatabaseFactory dbFactory) = BuildRepoAndFactory();
-        using (dbFactory)
-        {
-            // Pro tier allows 1000 machines
-            TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 1, tier: SubscriptionTier.Pro);
-            sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
-
-            // Seed 5 machines — well under the Pro limit of 1000
-            for (int i = 0; i < 5; i++)
-            {
-                Machine machine = TestDataBuilder.BuildMachine(tenantId: 1);
-                await dbFactory.Context.InsertWithInt32IdentityAsync(machine);
-            }
-
-            // Insert an override that sets RetentionDays but leaves MachineLimit null
-            // This means MachineLimit should fall through to the tier default (1000)
-            await dbFactory.Context.InsertAsync(new TenantSubscriptionOverride
-            {
-                TenantId = 1,
-                MachineLimit = null,
-                RetentionDays = 180,
-                CreatedAt = DateTimeOffset.UtcNow,
-                UpdatedAt = DateTimeOffset.UtcNow,
-            });
-
-            SubscriptionService service = BuildService(repo, useRealOverrideRepo: true);
-
-            bool result = await service.CanApproveMachineAsync(1, CancellationToken.None);
-
-            // 5 machines < 1000 tier limit, so should be allowed
-            await Assert.That(result).IsTrue();
-        }
-    }
-
-    /// <summary>
     /// Verifies that GetEffectiveLimitsForTenantAsync falls back to configuration defaults
     /// for the Team tier when no DB tier limits exist, testing the GetConfigDefaultsForTier
     /// Team branch.
@@ -1098,52 +956,6 @@ public class SubscriptionServiceTests
             await Assert.That(limits.AlertRuleLimit).IsEqualTo(20);
             await Assert.That(limits.WebhookLimit).IsEqualTo(10);
             await Assert.That(limits.MemberLimit).IsEqualTo(int.MaxValue);
-        }
-    }
-
-    /// <summary>
-    /// Verifies that GetEffectiveLimitsForTenantAsync (via CanApproveMachineAsync) falls back to
-    /// config defaults when no DB tier limits exist, exercising the config fallback branch with
-    /// a warning log for Pro tier.
-    /// </summary>
-    [Test]
-    public async Task CanApproveMachine_NullTierLimits_FallsBackToConfigDefault()
-    {
-        (DatabaseRepository repo, TestDatabaseFactory dbFactory) = BuildRepoAndFactory();
-        using (dbFactory)
-        {
-            TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 1, tier: SubscriptionTier.Pro);
-            sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
-
-            // 2 machines — under any reasonable limit
-            for (int i = 0; i < 2; i++)
-            {
-                Machine machine = TestDataBuilder.BuildMachine(tenantId: 1);
-                await dbFactory.Context.InsertWithInt32IdentityAsync(machine);
-            }
-
-            ITierFeatureLimitRepository tierLimitRepo = Substitute.For<ITierFeatureLimitRepository>();
-            tierLimitRepo.GetLimitsForTierAsync(Arg.Any<SubscriptionTier>(), Arg.Any<CancellationToken>())
-                .Returns(Task.FromResult<TierFeatureLimit?>(null));
-
-            ITenantSubscriptionOverrideRepository overrideRepo = Substitute.For<ITenantSubscriptionOverrideRepository>();
-            overrideRepo.GetOverrideForTenantAsync(Arg.Any<int>(), Arg.Any<CancellationToken>())
-                .Returns(Task.FromResult<TenantSubscriptionOverride?>(null));
-
-            IOptions<TierDefaultOptions> tierDefaults = Options.Create(new TierDefaultOptions
-            {
-                Free = new() { MachineLimit = 3, RetentionDays = 1, AlertRuleLimit = 0, WebhookLimit = 0 },
-                Pro = new() { MachineLimit = 500, RetentionDays = 60, AlertRuleLimit = 10, WebhookLimit = 5 },
-                Team = new() { MachineLimit = 5000, RetentionDays = 180, AlertRuleLimit = 20, WebhookLimit = 10 },
-            });
-
-            SubscriptionService service = new(repo, repo, repo, repo, tierLimitRepo, overrideRepo, repo, repo, tierDefaults,
-                TimeProvider.System, new NullLogger<SubscriptionService>());
-
-            bool result = await service.CanApproveMachineAsync(1, CancellationToken.None);
-
-            // 2 machines < 500 Pro config default, so should allow
-            await Assert.That(result).IsTrue();
         }
     }
 

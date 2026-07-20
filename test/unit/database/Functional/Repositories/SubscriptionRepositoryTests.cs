@@ -193,31 +193,4 @@ public class SubscriptionCacheTests
         await Assert.That(result).IsEqualTo(1);
     }
 
-    [Test]
-    public async Task CanApproveMachine_NoSubscription_ReturnsFalse()
-    {
-        using TestDatabaseFactory dbFactory = new();
-        Database.Repositories.DatabaseRepository repo = new(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
-        SubscriptionService service = BuildService(repo);
-
-        bool result = await service.CanApproveMachineAsync(88888, CancellationToken.None);
-
-        await Assert.That(result).IsFalse();
-    }
-
-    [Test]
-    public async Task CanApproveMachine_UnlimitedMachines_ReturnsTrue()
-    {
-        using TestDatabaseFactory dbFactory = new();
-
-        TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 70);
-        sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
-
-        Database.Repositories.DatabaseRepository repo = new(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
-        SubscriptionService service = BuildService(repo);
-
-        bool result = await service.CanApproveMachineAsync(70, CancellationToken.None);
-
-        await Assert.That(result).IsTrue();
-    }
 }

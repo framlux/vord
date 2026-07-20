@@ -16,7 +16,14 @@ namespace Framlux.FleetManagement.Services.Core.Infrastructure;
 public static class RedisRetryPipelineOptions
 {
     /// <summary>
-    /// Builds retry strategy options equivalent to the deleted RetryHelper: three retries,
+    /// The number of retry attempts applied by the pipeline, shared between the retry strategy's
+    /// MaxRetryAttempts configuration and the {MaxRetries} value logged on each retry so the two
+    /// can never drift apart.
+    /// </summary>
+    internal const int MaxAttempts = 3;
+
+    /// <summary>
+    /// Builds retry strategy options equivalent to the deleted RetryHelper: <see cref="MaxAttempts"/> retries,
     /// exponential backoff starting at <paramref name="baseDelay"/> with jitter, never
     /// retrying cancellation. Logs a warning naming the operation on each retry, using
     /// <see cref="ResilienceContext.OperationKey"/> so callers can attribute the retry to
@@ -32,7 +39,7 @@ public static class RedisRetryPipelineOptions
         return new RetryStrategyOptions
         {
             ShouldHandle = new PredicateBuilder().Handle<Exception>(ex => ex is not OperationCanceledException),
-            MaxRetryAttempts = 3,
+            MaxRetryAttempts = MaxAttempts,
             Delay = baseDelay,
             BackoffType = DelayBackoffType.Exponential,
             UseJitter = true,
@@ -48,7 +55,7 @@ public static class RedisRetryPipelineOptions
                     operationName,
                     args.RetryDelay.TotalMilliseconds,
                     args.AttemptNumber + 1,
-                    3);
+                    MaxAttempts);
 
                 return default;
             },

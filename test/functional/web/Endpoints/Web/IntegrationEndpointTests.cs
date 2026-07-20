@@ -269,7 +269,11 @@ public sealed class IntegrationEndpointTests
 
         await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.Forbidden);
         string body = await response.Content.ReadAsStringAsync();
-        await Assert.That(body).Contains("Pro or Team subscription");
+        await Assert.That(body).Contains("\"success\":false");
+
+        // Pins the integrations-specific wording restored by per-feature Pro-subscription
+        // messages — this endpoint's message must not read the shared alerting wording.
+        await Assert.That(body).Contains("Integrations require a Pro or Team subscription");
     }
 
     // --- List Endpoint Tests ---

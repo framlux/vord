@@ -90,22 +90,6 @@ public sealed class SubscriptionService : ISubscriptionService
     }
 
     /// <inheritdoc/>
-    public async Task<bool> CanApproveMachineAsync(int tenantId, CancellationToken ct)
-    {
-        TenantSubscription? subscription = await _subscriptionRepo.GetSubscriptionForTenantAsync(tenantId, ct);
-
-        if (subscription is null)
-        {
-            return false;
-        }
-
-        EffectiveLimits limits = await GetEffectiveLimitsForTenantAsync(tenantId, ct);
-        int activeMachineCount = await _machineRepo.GetActiveMachineCountAsync(tenantId, ct);
-
-        return activeMachineCount < limits.MachineLimit;
-    }
-
-    /// <inheritdoc/>
     public async Task<TenantSubscription> ProvisionFreeSubscriptionAsync(int tenantId, CancellationToken ct)
     {
         DateTimeOffset now = DateTimeOffset.UtcNow;

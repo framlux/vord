@@ -62,4 +62,22 @@ public sealed class ProSubscriptionPreProcessorTests
     {
         await Assert.That(ProSubscriptionPreProcessor.RequiresProGate(Build(SubscriptionTier.Pro, SubscriptionStatus.PastDue))).IsTrue();
     }
+
+    [Test]
+    public async Task ResolveMessage_FeatureMessagePresent_ReturnsFeatureMessage()
+    {
+        RequiresProFeatureMessage featureMessage = new("Alerting requires a Pro or Team subscription");
+
+        string result = ProSubscriptionPreProcessor.ResolveMessage(featureMessage);
+
+        await Assert.That(result).IsEqualTo("Alerting requires a Pro or Team subscription");
+    }
+
+    [Test]
+    public async Task ResolveMessage_NoFeatureMessage_ReturnsNeutralDefault()
+    {
+        string result = ProSubscriptionPreProcessor.ResolveMessage(null);
+
+        await Assert.That(result).IsEqualTo(ProSubscriptionPreProcessor.DefaultRequiresProMessage);
+    }
 }
