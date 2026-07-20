@@ -111,7 +111,7 @@ public sealed class CancelSubscriptionEndpoint : EndpointWithoutRequest<ApiRespo
         {
             using IDatabaseTransaction transaction = await _transactionProvider.BeginTransactionAsync(ct);
 
-            await _subscriptionRepository.DeactivateSubscriptionAsync(tenantId, ct);
+            await _subscriptionRepository.UpdateSubscriptionStateAsync(tenantId, tier: null, SubscriptionStatus.Canceled, cancellationToken: ct);
 
             await _auditLog.InsertAuditLogAsync(AuditHelper.Create(
                 tenantId, null, null,

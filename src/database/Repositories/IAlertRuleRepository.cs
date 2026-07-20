@@ -100,14 +100,6 @@ public interface IAlertRuleRepository
     Task<int> DisableAlertRulesForTenantAsync(int tenantId, bool customOnly, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Disables only custom alert rules for a tenant. Convenience wrapper around
-    /// <see cref="DisableAlertRulesForTenantAsync"/> with customOnly set to true.
-    /// </summary>
-    /// <param name="tenantId">The tenant ID.</param>
-    /// <param name="cancellationToken">A cancellation token.</param>
-    Task<int> DisableCustomAlertRulesForTenantAsync(int tenantId, CancellationToken cancellationToken = default);
-
-    /// <summary>
     /// Checks whether a tenant already has non-custom (default) alert rules provisioned.
     /// </summary>
     /// <param name="tenantId">The tenant ID.</param>

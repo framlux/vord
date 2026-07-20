@@ -147,12 +147,6 @@ public partial class DatabaseRepository : IAlertRuleRepository
     }
 
     /// <inheritdoc/>
-    public async Task<int> DisableCustomAlertRulesForTenantAsync(int tenantId, CancellationToken cancellationToken)
-    {
-        return await DisableAlertRulesForTenantAsync(tenantId, customOnly: true, cancellationToken);
-    }
-
-    /// <inheritdoc/>
     public async Task<bool> HasDefaultAlertRulesAsync(int tenantId, CancellationToken cancellationToken)
     {
         bool hasRules = await _db.AlertRules

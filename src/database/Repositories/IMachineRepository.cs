@@ -31,13 +31,6 @@ public interface IMachineRepository
     Task<int> MarkKeyDeliveredAsync(long machineId, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Marks a machine's API key as delivered unconditionally.
-    /// </summary>
-    /// <param name="machineId">The machine ID.</param>
-    /// <param name="cancellationToken">A cancellation token.</param>
-    Task SetKeyDeliveredAsync(long machineId, CancellationToken cancellationToken = default);
-
-    /// <summary>
     /// Checks if an active (non-deleted) machine exists based on the serial number, system ID, or asset tag number.
     /// </summary>
     Task<bool> DoesMachineExistAsync(string serialNumber, string systemId, string assetTag, int tenantId, CancellationToken cancellationToken = default);
@@ -66,11 +59,6 @@ public interface IMachineRepository
     /// <param name="machineId">The machine whose key is being reissued.</param>
     /// <param name="cancellationToken">A cancellation token.</param>
     Task<(string? plaintextApiKey, string? oldKeyHash)> ReissueApiKeyAsync(long machineId, CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// Checks if an approved machine exists, and is active, with the given ID within a tenant.
-    /// </summary>
-    Task<Machine?> GetMachineAsync(long machineId, int tenantId, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Gets a machine by its API key.
@@ -120,11 +108,6 @@ public interface IMachineRepository
     /// including machines registered before that date that were not yet deleted.
     /// </summary>
     Task<int> GetMachineCountAtDateAsync(int tenantId, DateTimeOffset targetDate, CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// Gets a dictionary mapping machine IDs to machine names for active machines in a tenant.
-    /// </summary>
-    Task<Dictionary<long, string>> GetMachineNameMapForTenantAsync(int tenantId, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Lists active machines for a tenant as a queryable for complex filtering and pagination.

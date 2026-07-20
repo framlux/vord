@@ -92,10 +92,17 @@ public sealed class CachingSubscriptionRepository : ISubscriptionRepository
     }
 
     /// <inheritdoc/>
-    public async Task UpdateSubscriptionOnCheckoutAsync(int tenantId, SubscriptionTier tier, CancellationToken cancellationToken = default)
+    public async Task<int> UpdateSubscriptionStateAsync(
+        int tenantId,
+        SubscriptionTier? tier,
+        SubscriptionStatus status,
+        bool clearCurrentPeriodEnd = false,
+        CancellationToken cancellationToken = default)
     {
-        await _inner.UpdateSubscriptionOnCheckoutAsync(tenantId, tier, cancellationToken);
+        int updated = await _inner.UpdateSubscriptionStateAsync(tenantId, tier, status, clearCurrentPeriodEnd, cancellationToken);
         await InvalidateAsync(tenantId);
+
+        return updated;
     }
 
     /// <inheritdoc/>
@@ -106,71 +113,9 @@ public sealed class CachingSubscriptionRepository : ISubscriptionRepository
     }
 
     /// <inheritdoc/>
-    public async Task RevertSubscriptionToFreeAsync(int tenantId, CancellationToken cancellationToken = default)
-    {
-        await _inner.RevertSubscriptionToFreeAsync(tenantId, cancellationToken);
-        await InvalidateAsync(tenantId);
-    }
-
-    /// <inheritdoc/>
-    public async Task SetSubscriptionPastDueAsync(int tenantId, CancellationToken cancellationToken = default)
-    {
-        await _inner.SetSubscriptionPastDueAsync(tenantId, cancellationToken);
-        await InvalidateAsync(tenantId);
-    }
-
-    /// <inheritdoc/>
-    public async Task SetSubscriptionActiveAsync(int tenantId, CancellationToken cancellationToken = default)
-    {
-        await _inner.SetSubscriptionActiveAsync(tenantId, cancellationToken);
-        await InvalidateAsync(tenantId);
-    }
-
-    /// <inheritdoc/>
-    public async Task DowngradeSubscriptionToProAsync(int tenantId, CancellationToken cancellationToken = default)
-    {
-        await _inner.DowngradeSubscriptionToProAsync(tenantId, cancellationToken);
-        await InvalidateAsync(tenantId);
-    }
-
-    /// <inheritdoc/>
-    public async Task DeactivateSubscriptionAsync(int tenantId, CancellationToken cancellationToken = default)
-    {
-        await _inner.DeactivateSubscriptionAsync(tenantId, cancellationToken);
-        await InvalidateAsync(tenantId);
-    }
-
-    /// <inheritdoc/>
     public async Task<List<TenantSubscription>> GetPaidSubscriptionsAsync(CancellationToken cancellationToken = default)
     {
         return await _inner.GetPaidSubscriptionsAsync(cancellationToken);
-    }
-
-    /// <inheritdoc/>
-    public async Task<TenantSubscription> InsertSubscriptionAsync(TenantSubscription subscription, CancellationToken cancellationToken = default)
-    {
-        ArgumentNullException.ThrowIfNull(subscription);
-        TenantSubscription result = await _inner.InsertSubscriptionAsync(subscription, cancellationToken);
-        await InvalidateAsync(subscription.TenantId);
-
-        return result;
-    }
-
-    /// <inheritdoc/>
-    public async Task ReactivateFreeSubscriptionAsync(int subscriptionId, CancellationToken cancellationToken = default)
-    {
-        // This mutation is keyed by subscription ID, not tenant ID, so the specific tenant cache
-        // key cannot be derived cheaply. Staleness here is bounded by the short TTL.
-        await _inner.ReactivateFreeSubscriptionAsync(subscriptionId, cancellationToken);
-    }
-
-    /// <inheritdoc/>
-    public async Task<int> UpdateSubscriptionAdminAsync(int tenantId, SubscriptionTier tier, SubscriptionStatus status, CancellationToken cancellationToken = default)
-    {
-        int updated = await _inner.UpdateSubscriptionAdminAsync(tenantId, tier, status, cancellationToken);
-        await InvalidateAsync(tenantId);
-
-        return updated;
     }
 
     /// <inheritdoc/>

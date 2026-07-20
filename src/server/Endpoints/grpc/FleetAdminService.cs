@@ -175,7 +175,7 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
             tenantRepo, request.TenantExternalId, context.CancellationToken);
 
         // Load users via tenant roles
-        List<UserTenantRole> roles = await tenantRepo.GetActiveRolesForTenantAsync(tenant.Id, context.CancellationToken);
+        List<UserTenantRole> roles = await tenantRepo.GetActiveRolesForTenantsAsync(new List<int> { tenant.Id }, context.CancellationToken);
 
         List<int> userIds = roles.Select(r => r.UserId).Distinct().ToList();
         List<UserAccount> users = await userRepo.GetUsersByIdsAsync(userIds, context.CancellationToken);
@@ -349,7 +349,7 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
         using IServiceScope scope = _scopeFactory.CreateScope();
         IServerConfigurationRepository configRepo = scope.ServiceProvider.GetRequiredService<IServerConfigurationRepository>();
 
-        List<ServerConfigurationSettings> settings = await configRepo.GetAllSettingsAsync(context.CancellationToken);
+        List<ServerConfigurationSettings> settings = await configRepo.ListAllSettingsAsync(context.CancellationToken);
 
         GetServerSettingsResponse response = new GetServerSettingsResponse();
 
@@ -359,7 +359,7 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
 
             response.Settings.Add(new ServerSetting
             {
-                Key = (int)setting.Key,
+                Key = (ServerSettingKey)(int)setting.Key,
                 KeyName = setting.Key.ToString(),
                 Value = setting.Value,
                 Version = setting.Version,
@@ -380,7 +380,7 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
     {
         ValidateInternalKey(context);
 
-        ServerConfigurationSettingKeys key = (ServerConfigurationSettingKeys)request.Key;
+        ServerConfigurationSettingKeys key = (ServerConfigurationSettingKeys)(int)request.Key;
 
         // Validate the value with the same rules the REST admin path enforces so the gRPC path can no
         // longer persist values the REST path would reject.
@@ -393,16 +393,9 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
         using IServiceScope scope = _scopeFactory.CreateScope();
         IServerConfigurationRepository configRepo = scope.ServiceProvider.GetRequiredService<IServerConfigurationRepository>();
 
-        int updated = await configRepo.UpdateSettingAsync(key, request.Value, context.CancellationToken);
-
-        if (updated == 0)
-        {
-            return new UpdateServerSettingResponse
-            {
-                Success = false,
-                Message = $"Setting with key '{key}' not found"
-            };
-        }
+        // Upsert so a valid key always persists, matching the REST admin path. Validation above
+        // already rejected unknown keys, so there is no missing-row case left to report.
+        await configRepo.UpsertSettingAsync(key, request.Value, context.CancellationToken);
 
         // Clear this replica's in-memory cache and fan out the eviction (Redis key delete + pub/sub) so
         // every replica re-reads from the database, matching the REST admin path.
@@ -449,8 +442,8 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
         Tenant tenant = await ResolveTenantByExternalIdAsync(
             tenantRepo, request.TenantExternalId, context.CancellationToken);
 
-        int updated = await subscriptionRepo.UpdateSubscriptionAdminAsync(
-            tenant.Id, tier.Value, status, context.CancellationToken);
+        int updated = await subscriptionRepo.UpdateSubscriptionStateAsync(
+            tenant.Id, tier.Value, status, cancellationToken: context.CancellationToken);
 
         if (updated == 0)
         {

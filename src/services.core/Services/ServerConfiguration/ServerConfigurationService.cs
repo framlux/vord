@@ -2,6 +2,7 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
+using Framlux.FleetManagement.Database;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Repositories;
 using StackExchange.Redis;
@@ -15,16 +16,6 @@ namespace Framlux.FleetManagement.Services.Core.ServerConfiguration;
 /// </summary>
 public sealed class ServerConfigurationService
 {
-    private const int DefaultAgentHeartbeatSeconds = 300;
-    private const int DefaultAgentConfigRefreshSeconds = 900;
-    private const int DefaultOnlineThresholdSeconds = 300;
-    private const int DefaultDeduplicationTtlSeconds = 300;
-    private const int DefaultAgentCommandPollSeconds = 30;
-    private const int DefaultTelemetryCollectFastSeconds = 60;
-    private const int DefaultTelemetryCollectSlowSeconds = 900;
-    private const int DefaultTelemetrySendFastSeconds = 15;
-    private const int DefaultTelemetrySendSlowSeconds = 300;
-    private const int DefaultServiceStatusSeconds = 3600;
     private static readonly TimeSpan CacheTtl = TimeSpan.FromMinutes(5);
 
     private readonly IServerSettingsCache _cache;
@@ -46,7 +37,7 @@ public sealed class ServerConfigurationService
     /// </summary>
     public async Task<int> GetAgentHeartbeatSecondsAsync(CancellationToken ct = default)
     {
-        return await GetIntSettingAsync(ServerConfigurationSettingKeys.AgentHeartbeatSeconds, DefaultAgentHeartbeatSeconds, ct);
+        return await GetIntSettingAsync(ServerConfigurationSettingKeys.AgentHeartbeatSeconds, ServerSettingDefaults.AgentHeartbeatSeconds, ct);
     }
 
     /// <summary>
@@ -54,7 +45,7 @@ public sealed class ServerConfigurationService
     /// </summary>
     public async Task<int> GetAgentConfigRefreshSecondsAsync(CancellationToken ct = default)
     {
-        return await GetIntSettingAsync(ServerConfigurationSettingKeys.AgentConfigRefreshSeconds, DefaultAgentConfigRefreshSeconds, ct);
+        return await GetIntSettingAsync(ServerConfigurationSettingKeys.AgentConfigRefreshSeconds, ServerSettingDefaults.AgentConfigRefreshSeconds, ct);
     }
 
     /// <summary>
@@ -62,7 +53,7 @@ public sealed class ServerConfigurationService
     /// </summary>
     public async Task<TimeSpan> GetOnlineThresholdAsync(CancellationToken ct = default)
     {
-        int seconds = await GetIntSettingAsync(ServerConfigurationSettingKeys.OnlineThresholdSeconds, DefaultOnlineThresholdSeconds, ct);
+        int seconds = await GetIntSettingAsync(ServerConfigurationSettingKeys.OnlineThresholdSeconds, ServerSettingDefaults.OnlineThresholdSeconds, ct);
 
         return TimeSpan.FromSeconds(seconds);
     }
@@ -72,7 +63,7 @@ public sealed class ServerConfigurationService
     /// </summary>
     public async Task<TimeSpan> GetDeduplicationTtlAsync(CancellationToken ct = default)
     {
-        int seconds = await GetIntSettingAsync(ServerConfigurationSettingKeys.DeduplicationTtlSeconds, DefaultDeduplicationTtlSeconds, ct);
+        int seconds = await GetIntSettingAsync(ServerConfigurationSettingKeys.DeduplicationTtlSeconds, ServerSettingDefaults.DeduplicationTtlSeconds, ct);
 
         return TimeSpan.FromSeconds(seconds);
     }
@@ -82,7 +73,7 @@ public sealed class ServerConfigurationService
     /// </summary>
     public async Task<int> GetAgentCommandPollSecondsAsync(CancellationToken ct = default)
     {
-        return await GetIntSettingAsync(ServerConfigurationSettingKeys.AgentCommandPollSeconds, DefaultAgentCommandPollSeconds, ct);
+        return await GetIntSettingAsync(ServerConfigurationSettingKeys.AgentCommandPollSeconds, ServerSettingDefaults.AgentCommandPollSeconds, ct);
     }
 
     /// <summary>
@@ -90,7 +81,7 @@ public sealed class ServerConfigurationService
     /// </summary>
     public async Task<int> GetTelemetryCollectFastSecondsAsync(CancellationToken ct = default)
     {
-        return await GetIntSettingAsync(ServerConfigurationSettingKeys.TelemetryCollectFastSeconds, DefaultTelemetryCollectFastSeconds, ct);
+        return await GetIntSettingAsync(ServerConfigurationSettingKeys.TelemetryCollectFastSeconds, ServerSettingDefaults.TelemetryCollectFastSeconds, ct);
     }
 
     /// <summary>
@@ -98,7 +89,7 @@ public sealed class ServerConfigurationService
     /// </summary>
     public async Task<int> GetTelemetryCollectSlowSecondsAsync(CancellationToken ct = default)
     {
-        return await GetIntSettingAsync(ServerConfigurationSettingKeys.TelemetryCollectSlowSeconds, DefaultTelemetryCollectSlowSeconds, ct);
+        return await GetIntSettingAsync(ServerConfigurationSettingKeys.TelemetryCollectSlowSeconds, ServerSettingDefaults.TelemetryCollectSlowSeconds, ct);
     }
 
     /// <summary>
@@ -106,7 +97,7 @@ public sealed class ServerConfigurationService
     /// </summary>
     public async Task<int> GetTelemetrySendFastSecondsAsync(CancellationToken ct = default)
     {
-        return await GetIntSettingAsync(ServerConfigurationSettingKeys.TelemetrySendFastSeconds, DefaultTelemetrySendFastSeconds, ct);
+        return await GetIntSettingAsync(ServerConfigurationSettingKeys.TelemetrySendFastSeconds, ServerSettingDefaults.TelemetrySendFastSeconds, ct);
     }
 
     /// <summary>
@@ -114,7 +105,7 @@ public sealed class ServerConfigurationService
     /// </summary>
     public async Task<int> GetTelemetrySendSlowSecondsAsync(CancellationToken ct = default)
     {
-        return await GetIntSettingAsync(ServerConfigurationSettingKeys.TelemetrySendSlowSeconds, DefaultTelemetrySendSlowSeconds, ct);
+        return await GetIntSettingAsync(ServerConfigurationSettingKeys.TelemetrySendSlowSeconds, ServerSettingDefaults.TelemetrySendSlowSeconds, ct);
     }
 
     /// <summary>
@@ -122,7 +113,7 @@ public sealed class ServerConfigurationService
     /// </summary>
     public async Task<int> GetServiceStatusSecondsAsync(CancellationToken ct = default)
     {
-        return await GetIntSettingAsync(ServerConfigurationSettingKeys.ServiceStatusSeconds, DefaultServiceStatusSeconds, ct);
+        return await GetIntSettingAsync(ServerConfigurationSettingKeys.ServiceStatusSeconds, ServerSettingDefaults.ServiceStatusSeconds, ct);
     }
 
     /// <summary>

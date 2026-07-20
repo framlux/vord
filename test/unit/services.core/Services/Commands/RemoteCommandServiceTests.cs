@@ -222,7 +222,7 @@ public sealed class RemoteCommandServiceTests
     private void SetupValidCommandMocks(UserSigningKey key, long machineId = 1)
     {
         _signingKeyRepository.GetSigningKeyByIdAsync(key.Id, Arg.Any<CancellationToken>()).Returns(key);
-        _machineRepository.GetMachineAsync(Arg.Any<long>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+        _machineRepository.GetActiveMachineByIdAsync(Arg.Any<long>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
             .Returns(new Machine
             {
                 Id = machineId,
@@ -360,7 +360,7 @@ public sealed class RemoteCommandServiceTests
     {
         (UserSigningKey key, NSec.Cryptography.Key privateKey) = BuildSignedKey();
         _signingKeyRepository.GetSigningKeyByIdAsync(1, Arg.Any<CancellationToken>()).Returns(key);
-        _machineRepository.GetMachineAsync(Arg.Any<long>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+        _machineRepository.GetActiveMachineByIdAsync(Arg.Any<long>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
             .Returns((Machine?)null);
 
         RemoteCommand command = BuildSignedCommand(privateKey);
@@ -501,7 +501,7 @@ public sealed class RemoteCommandServiceTests
     {
         (UserSigningKey key, NSec.Cryptography.Key privateKey) = BuildSignedKey();
         _signingKeyRepository.GetSigningKeyByIdAsync(key.Id, Arg.Any<CancellationToken>()).Returns(key);
-        _machineRepository.GetMachineAsync(Arg.Any<long>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+        _machineRepository.GetActiveMachineByIdAsync(Arg.Any<long>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
             .Returns(new Machine
             {
                 Id = 1,
@@ -552,7 +552,7 @@ public sealed class RemoteCommandServiceTests
         // for the target machine. Submitting without that authorization must be rejected.
         (UserSigningKey key, NSec.Cryptography.Key privateKey) = BuildSignedKey();
         _signingKeyRepository.GetSigningKeyByIdAsync(key.Id, Arg.Any<CancellationToken>()).Returns(key);
-        _machineRepository.GetMachineAsync(Arg.Any<long>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+        _machineRepository.GetActiveMachineByIdAsync(Arg.Any<long>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
             .Returns(new Machine
             {
                 Id = 1,

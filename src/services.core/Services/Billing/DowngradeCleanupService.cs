@@ -71,7 +71,7 @@ public sealed class DowngradeCleanupService : IDowngradeCleanupService
         }
 
         // Disable custom alert rules (keep default/system rules active)
-        int rulesDisabled = await _alertRuleRepo.DisableCustomAlertRulesForTenantAsync(tenantId, ct);
+        int rulesDisabled = await _alertRuleRepo.DisableAlertRulesForTenantAsync(tenantId, customOnly: true, ct);
 
         if (rulesDisabled > 0)
         {

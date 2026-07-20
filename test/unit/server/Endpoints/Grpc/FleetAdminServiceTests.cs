@@ -738,7 +738,7 @@ public sealed class FleetAdminServiceTests
 
         tenantRepo.GetTenantByExternalIdAsync(TenantExternalId, Arg.Any<CancellationToken>())
             .Returns(tenant);
-        tenantRepo.GetActiveRolesForTenantAsync(TenantInternalId, Arg.Any<CancellationToken>())
+        tenantRepo.GetActiveRolesForTenantsAsync(Arg.Is<List<int>>(ids => (ids.Count == 1) && (ids[0] == TenantInternalId)), Arg.Any<CancellationToken>())
             .Returns(new List<UserTenantRole>());
         userRepo.GetUsersByIdsAsync(Arg.Any<List<int>>(), Arg.Any<CancellationToken>())
             .Returns(new List<UserAccount>());
@@ -840,7 +840,7 @@ public sealed class FleetAdminServiceTests
 
         tenantRepo.GetTenantByExternalIdAsync(TenantExternalId, Arg.Any<CancellationToken>())
             .Returns(tenant);
-        tenantRepo.GetActiveRolesForTenantAsync(TenantInternalId, Arg.Any<CancellationToken>())
+        tenantRepo.GetActiveRolesForTenantsAsync(Arg.Is<List<int>>(ids => (ids.Count == 1) && (ids[0] == TenantInternalId)), Arg.Any<CancellationToken>())
             .Returns(new List<UserTenantRole>());
         userRepo.GetUsersByIdsAsync(Arg.Any<List<int>>(), Arg.Any<CancellationToken>())
             .Returns(new List<UserAccount>());
@@ -1047,7 +1047,7 @@ public sealed class FleetAdminServiceTests
     {
         IServerConfigurationRepository configRepo = Substitute.For<IServerConfigurationRepository>();
 
-        configRepo.GetAllSettingsAsync(Arg.Any<CancellationToken>())
+        configRepo.ListAllSettingsAsync(Arg.Any<CancellationToken>())
             .Returns(new List<ServerConfigurationSettings>
             {
                 new ServerConfigurationSettings
@@ -1093,11 +1093,11 @@ public sealed class FleetAdminServiceTests
 
         RpcException? exception = await Assert.ThrowsAsync<RpcException>(
             async () => await service.UpdateServerSetting(
-                new UpdateServerSettingRequest { Key = 9999, Value = "x" }, context));
+                new UpdateServerSettingRequest { Key = (ServerSettingKey)9999, Value = "x" }, context));
 
         await Assert.That(exception).IsNotNull();
         await Assert.That(exception!.StatusCode).IsEqualTo(StatusCode.InvalidArgument);
-        await configRepo.DidNotReceive().UpdateSettingAsync(
+        await configRepo.DidNotReceive().UpsertSettingAsync(
             Arg.Any<ServerConfigurationSettingKeys>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
     }
 
@@ -1128,40 +1128,9 @@ public sealed class FleetAdminServiceTests
     /// UpdateServerSetting when no rows are updated returns a non-success response.
     /// </summary>
     [Test]
-    public async Task UpdateServerSetting_KeyNotFound_ReturnsFailure()
+    public async Task UpdateServerSetting_ValidKey_UpsertsAndReturnsSuccess()
     {
         IServerConfigurationRepository configRepo = Substitute.For<IServerConfigurationRepository>();
-        configRepo.UpdateSettingAsync(Arg.Any<ServerConfigurationSettingKeys>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
-            .Returns(0);
-
-        IServiceScopeFactory scopeFactory = CreateScopeFactoryWithServices(new Dictionary<Type, object>
-        {
-            { typeof(IServerConfigurationRepository), configRepo }
-        });
-
-        FleetAdminService service = CreateFleetAdminService(scopeFactory);
-        ServerCallContext context = CreateContext();
-
-        UpdateServerSettingResponse response = await service.UpdateServerSetting(
-            new UpdateServerSettingRequest
-            {
-                Key = (int)ServerConfigurationSettingKeys.AgentHeartbeatSeconds,
-                Value = "60"
-            }, context);
-
-        await Assert.That(response.Success).IsFalse();
-        await Assert.That(response.Message).Contains("not found");
-    }
-
-    /// <summary>
-    /// UpdateServerSetting when a row is updated returns a success response.
-    /// </summary>
-    [Test]
-    public async Task UpdateServerSetting_ValidKey_ReturnsSuccess()
-    {
-        IServerConfigurationRepository configRepo = Substitute.For<IServerConfigurationRepository>();
-        configRepo.UpdateSettingAsync(Arg.Any<ServerConfigurationSettingKeys>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
-            .Returns(1);
 
         IServiceScopeFactory scopeFactory = CreateScopeFactoryWithServices(new Dictionary<Type, object>
         {
@@ -1175,12 +1144,17 @@ public sealed class FleetAdminServiceTests
         UpdateServerSettingResponse response = await service.UpdateServerSetting(
             new UpdateServerSettingRequest
             {
-                Key = (int)ServerConfigurationSettingKeys.AgentHeartbeatSeconds,
+                Key = (ServerSettingKey)(int)ServerConfigurationSettingKeys.AgentHeartbeatSeconds,
                 Value = "120"
             }, context);
 
         await Assert.That(response.Success).IsTrue();
         await Assert.That(response.Message).IsEqualTo("OK");
+
+        // The write goes through the same upsert the REST admin path uses, so a valid key
+        // persists even if its row is missing — there is no "setting not found" failure mode.
+        await configRepo.Received(1).UpsertSettingAsync(
+            ServerConfigurationSettingKeys.AgentHeartbeatSeconds, "120", Arg.Any<CancellationToken>());
     }
 
     /// <summary>
@@ -1204,12 +1178,12 @@ public sealed class FleetAdminServiceTests
             async () => await service.UpdateServerSetting(
                 new UpdateServerSettingRequest
                 {
-                    Key = (int)ServerConfigurationSettingKeys.AgentHeartbeatSeconds,
+                    Key = (ServerSettingKey)(int)ServerConfigurationSettingKeys.AgentHeartbeatSeconds,
                     Value = "99999"
                 }, context));
 
         await Assert.That(exception!.StatusCode).IsEqualTo(StatusCode.InvalidArgument);
-        await configRepo.DidNotReceive().UpdateSettingAsync(
+        await configRepo.DidNotReceive().UpsertSettingAsync(
             Arg.Any<ServerConfigurationSettingKeys>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
     }
 
@@ -1275,7 +1249,7 @@ public sealed class FleetAdminServiceTests
         Tenant tenant = MakeTenant();
         tenantRepo.GetTenantByExternalIdAsync(TenantExternalId, Arg.Any<CancellationToken>())
             .Returns(tenant);
-        subscriptionRepo.UpdateSubscriptionAdminAsync(TenantInternalId, Arg.Any<SubscriptionTier>(), Arg.Any<SubscriptionStatus>(), Arg.Any<CancellationToken>())
+        subscriptionRepo.UpdateSubscriptionStateAsync(TenantInternalId, Arg.Any<SubscriptionTier?>(), Arg.Any<SubscriptionStatus>(), Arg.Any<bool>(), Arg.Any<CancellationToken>())
             .Returns(0);
 
         IServiceScopeFactory scopeFactory = CreateScopeFactoryWithServices(new Dictionary<Type, object>
@@ -1310,7 +1284,7 @@ public sealed class FleetAdminServiceTests
         Tenant tenant = MakeTenant();
         tenantRepo.GetTenantByExternalIdAsync(TenantExternalId, Arg.Any<CancellationToken>())
             .Returns(tenant);
-        subscriptionRepo.UpdateSubscriptionAdminAsync(TenantInternalId, SubscriptionTier.Pro, SubscriptionStatus.Active, Arg.Any<CancellationToken>())
+        subscriptionRepo.UpdateSubscriptionStateAsync(TenantInternalId, SubscriptionTier.Pro, SubscriptionStatus.Active, false, Arg.Any<CancellationToken>())
             .Returns(1);
 
         IServiceScopeFactory scopeFactory = CreateScopeFactoryWithServices(new Dictionary<Type, object>

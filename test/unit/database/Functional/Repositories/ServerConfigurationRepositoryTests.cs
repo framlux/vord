@@ -18,45 +18,12 @@ public class ServerConfigurationRepositoryTests
 {
     // ========== ListAllSettingsAsync tests ==========
 
-    [Test]
-    public async Task ListAllSettingsAsync_SettingsExist_ReturnsAllSettings()
-    {
-        using TestDatabaseFactory dbFactory = new();
-        IServerConfigurationRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
 
-        await dbFactory.Context.InsertAsync(new ServerConfigurationSettings
-        {
-            Key = ServerConfigurationSettingKeys.AgentHeartbeatSeconds,
-            Value = "300",
-            Version = 1,
-        });
-        await dbFactory.Context.InsertAsync(new ServerConfigurationSettings
-        {
-            Key = ServerConfigurationSettingKeys.OnlineThresholdSeconds,
-            Value = "600",
-            Version = 1,
-        });
 
-        List<ServerConfigurationSettings> result = await repo.ListAllSettingsAsync();
-
-        await Assert.That(result.Count).IsEqualTo(2);
-    }
+    // ========== ListAllSettingsAsync tests ==========
 
     [Test]
-    public async Task ListAllSettingsAsync_NoSettings_ReturnsEmptyList()
-    {
-        using TestDatabaseFactory dbFactory = new();
-        IServerConfigurationRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
-
-        List<ServerConfigurationSettings> result = await repo.ListAllSettingsAsync();
-
-        await Assert.That(result.Count).IsEqualTo(0);
-    }
-
-    // ========== GetAllSettingsAsync tests ==========
-
-    [Test]
-    public async Task GetAllSettingsAsync_MultipleSettings_ReturnsOrderedByKey()
+    public async Task ListAllSettingsAsync_MultipleSettings_ReturnsOrderedByKey()
     {
         using TestDatabaseFactory dbFactory = new();
         IServerConfigurationRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
@@ -81,7 +48,7 @@ public class ServerConfigurationRepositoryTests
             Version = 1,
         });
 
-        List<ServerConfigurationSettings> result = await repo.GetAllSettingsAsync();
+        List<ServerConfigurationSettings> result = await repo.ListAllSettingsAsync();
 
         await Assert.That(result.Count).IsEqualTo(3);
         // AgentHeartbeatSeconds (1) < OnlineThresholdSeconds (3) < DeduplicationTtlSeconds (6)
@@ -91,12 +58,12 @@ public class ServerConfigurationRepositoryTests
     }
 
     [Test]
-    public async Task GetAllSettingsAsync_NoSettings_ReturnsEmptyList()
+    public async Task ListAllSettingsAsync_NoSettings_ReturnsEmptyList()
     {
         using TestDatabaseFactory dbFactory = new();
         IServerConfigurationRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
 
-        List<ServerConfigurationSettings> result = await repo.GetAllSettingsAsync();
+        List<ServerConfigurationSettings> result = await repo.ListAllSettingsAsync();
 
         await Assert.That(result.Count).IsEqualTo(0);
     }
@@ -135,10 +102,8 @@ public class ServerConfigurationRepositoryTests
         await Assert.That(allSettings[0].Version).IsEqualTo(2);
     }
 
-    // ========== UpdateSettingAsync tests ==========
-
     [Test]
-    public async Task UpdateSettingAsync_ExistingKey_ReturnsOneAndUpdatesValue()
+    public async Task ListAllSettingsAsync_RowsForRemovedEnumKeys_AreFilteredOut()
     {
         using TestDatabaseFactory dbFactory = new();
         IServerConfigurationRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
@@ -150,24 +115,18 @@ public class ServerConfigurationRepositoryTests
             Version = 1,
         });
 
-        int updated = await repo.UpdateSettingAsync(ServerConfigurationSettingKeys.AgentHeartbeatSeconds, "600");
+        // Deployed databases can contain rows whose keys were later removed from the enum
+        // (keys 4 and 5 were seeded by early migrations). They must not surface in the list.
+        await dbFactory.Context.InsertAsync(new ServerConfigurationSettings
+        {
+            Key = (ServerConfigurationSettingKeys)4,
+            Value = "30",
+            Version = 1,
+        });
 
-        await Assert.That(updated).IsEqualTo(1);
+        List<ServerConfigurationSettings> result = await repo.ListAllSettingsAsync();
 
-        List<ServerConfigurationSettings> allSettings = await repo.ListAllSettingsAsync();
-
-        await Assert.That(allSettings[0].Value).IsEqualTo("600");
-        await Assert.That(allSettings[0].Version).IsEqualTo(2);
-    }
-
-    [Test]
-    public async Task UpdateSettingAsync_NonExistentKey_ReturnsZero()
-    {
-        using TestDatabaseFactory dbFactory = new();
-        IServerConfigurationRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
-
-        int updated = await repo.UpdateSettingAsync(ServerConfigurationSettingKeys.AgentHeartbeatSeconds, "999");
-
-        await Assert.That(updated).IsEqualTo(0);
+        await Assert.That(result.Count).IsEqualTo(1);
+        await Assert.That(result[0].Key).IsEqualTo(ServerConfigurationSettingKeys.AgentHeartbeatSeconds);
     }
 }

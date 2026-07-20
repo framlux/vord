@@ -40,15 +40,6 @@ public partial class DatabaseRepository : IMachineRepository
         return updated;
     }
 
-    /// <inheritdoc/>
-    public async Task SetKeyDeliveredAsync(long machineId, CancellationToken cancellationToken)
-    {
-        await _db.Machines
-            .Where(m => m.Id == machineId)
-            .Set(m => m.KeyDeliveredAt, DateTimeOffset.UtcNow)
-            .UpdateAsync(cancellationToken);
-    }
-
     /// <inheritdoc />
     public async Task<bool> DoesMachineExistAsync(string serialNumber, string systemId, string assetTag, int tenantId, CancellationToken cancellationToken)
     {
@@ -198,22 +189,6 @@ public partial class DatabaseRepository : IMachineRepository
     }
 
     /// <inheritdoc/>
-    public async Task<Machine?> GetMachineAsync(long machineId, int tenantId, CancellationToken cancellationToken)
-    {
-        // A DB fault must propagate rather than be swallowed into a null (treated as
-        // "not found") result by callers. Let the exception surface.
-        _logger.LogInformation("Checking for Machine with ID {MachineId} in tenant {TenantId}", machineId, tenantId);
-        Machine? machine = await _db.Machines
-                                  .Where(m => (m.Id == machineId) &&
-                                              (m.TenantId == tenantId) &&
-                                              (m.IsDeleted == false))
-                                  .SingleOrDefaultAsync(cancellationToken);
-        _logger.LogInformation("Found Machine with ID {MachineId}: {Found}", machineId, machine is not null);
-
-        return machine;
-    }
-
-    /// <inheritdoc/>
     public async Task<Machine?> GetMachineByApiKeyAsync(string apiKey, CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(apiKey);
@@ -320,16 +295,6 @@ public partial class DatabaseRepository : IMachineRepository
             .CountAsync(cancellationToken);
 
         return count;
-    }
-
-    /// <inheritdoc/>
-    public async Task<Dictionary<long, string>> GetMachineNameMapForTenantAsync(int tenantId, CancellationToken cancellationToken)
-    {
-        Dictionary<long, string> nameMap = await _db.Machines
-            .Where(m => (m.TenantId == tenantId) && (m.IsDeleted == false))
-            .ToDictionaryAsync(m => m.Id, m => m.Name, cancellationToken);
-
-        return nameMap;
     }
 
     /// <inheritdoc/>

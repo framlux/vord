@@ -198,10 +198,66 @@ public class MachineCacheTests
         await Assert.That(machineCount).IsEqualTo(1);
     }
 
-    // ========== GetMachineAsync tests ==========
+    // ========== GetMachineNamesAsync tests ==========
 
     [Test]
-    public async Task GetMachineAsync_ExistingActiveMachine_ReturnsMachine()
+    public async Task GetMachineNamesAsync_ReturnsNamesForRequestedIds()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        IMachineRepository cache = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+
+        Machine web = TestDataBuilder.BuildMachine(tenantId: 1);
+        web.Name = "web-server";
+        web.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(web);
+
+        Machine db = TestDataBuilder.BuildMachine(tenantId: 1);
+        db.Name = "db-server";
+        db.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(db);
+
+        Machine unrequested = TestDataBuilder.BuildMachine(tenantId: 1);
+        unrequested.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(unrequested);
+
+        Dictionary<long, string> result = await cache.GetMachineNamesAsync(new List<long> { web.Id, db.Id });
+
+        await Assert.That(result.Count).IsEqualTo(2);
+        await Assert.That(result[web.Id]).IsEqualTo("web-server");
+        await Assert.That(result[db.Id]).IsEqualTo("db-server");
+    }
+
+    [Test]
+    public async Task GetMachineNamesAsync_SoftDeletedMachine_StillResolvesName()
+    {
+        // Callers pass ids taken from historical rows (alert events, rules), so a
+        // soft-deleted machine's name must still resolve for display purposes.
+        using TestDatabaseFactory dbFactory = new();
+        IMachineRepository cache = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+
+        Machine deleted = TestDataBuilder.BuildMachine(tenantId: 1);
+        deleted.Name = "retired-host";
+        deleted.IsDeleted = true;
+        deleted.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(deleted);
+
+        Dictionary<long, string> result = await cache.GetMachineNamesAsync(new List<long> { deleted.Id });
+
+        await Assert.That(result.Count).IsEqualTo(1);
+        await Assert.That(result[deleted.Id]).IsEqualTo("retired-host");
+    }
+
+    [Test]
+    public async Task GetMachineNamesAsync_EmptyIdList_ReturnsEmptyDictionary()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        IMachineRepository cache = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+
+        Dictionary<long, string> result = await cache.GetMachineNamesAsync(new List<long>());
+
+        await Assert.That(result.Count).IsEqualTo(0);
+    }
+
+    // ========== GetActiveMachineByIdAsync tests ==========
+
+    [Test]
+    public async Task GetActiveMachineByIdAsync_ExistingActiveMachine_ReturnsMachine()
     {
         using TestDatabaseFactory dbFactory = new();
         IMachineRepository cache = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
@@ -209,7 +265,7 @@ public class MachineCacheTests
         Machine machine = TestDataBuilder.BuildMachine(tenantId: 1);
         machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
 
-        Machine? result = await cache.GetMachineAsync(machine.Id, 1);
+        Machine? result = await cache.GetActiveMachineByIdAsync(machine.Id, 1);
 
         await Assert.That(result).IsNotNull();
         await Assert.That(result!.Id).IsEqualTo(machine.Id);
@@ -218,7 +274,7 @@ public class MachineCacheTests
     }
 
     [Test]
-    public async Task GetMachineAsync_DeletedMachine_ReturnsNull()
+    public async Task GetActiveMachineByIdAsync_DeletedMachine_ReturnsNull()
     {
         using TestDatabaseFactory dbFactory = new();
         IMachineRepository cache = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
@@ -227,13 +283,13 @@ public class MachineCacheTests
         machine.IsDeleted = true;
         machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
 
-        Machine? result = await cache.GetMachineAsync(machine.Id, 1);
+        Machine? result = await cache.GetActiveMachineByIdAsync(machine.Id, 1);
 
         await Assert.That(result).IsNull();
     }
 
     [Test]
-    public async Task GetMachineAsync_WrongTenant_ReturnsNull()
+    public async Task GetActiveMachineByIdAsync_WrongTenant_ReturnsNull()
     {
         using TestDatabaseFactory dbFactory = new();
         IMachineRepository cache = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
@@ -241,18 +297,18 @@ public class MachineCacheTests
         Machine machine = TestDataBuilder.BuildMachine(tenantId: 1);
         machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
 
-        Machine? result = await cache.GetMachineAsync(machine.Id, 999);
+        Machine? result = await cache.GetActiveMachineByIdAsync(machine.Id, 999);
 
         await Assert.That(result).IsNull();
     }
 
     [Test]
-    public async Task GetMachineAsync_NonExistentId_ReturnsNull()
+    public async Task GetActiveMachineByIdAsync_NonExistentId_ReturnsNull()
     {
         using TestDatabaseFactory dbFactory = new();
         IMachineRepository cache = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
 
-        Machine? result = await cache.GetMachineAsync(99999, 1);
+        Machine? result = await cache.GetActiveMachineByIdAsync(99999, 1);
 
         await Assert.That(result).IsNull();
     }
@@ -338,13 +394,13 @@ public class MachineCacheTests
     }
 
     [Test]
-    public async Task GetMachineAsync_DatabaseFault_PropagatesInsteadOfReturningNull()
+    public async Task GetActiveMachineByIdAsync_DatabaseFault_PropagatesInsteadOfReturningNull()
     {
         TestDatabaseFactory dbFactory = new();
         IMachineRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
         dbFactory.Dispose();
 
-        await Assert.That(async () => await repo.GetMachineAsync(1, 1))
+        await Assert.That(async () => await repo.GetActiveMachineByIdAsync(1, 1))
             .Throws<Exception>();
     }
 
@@ -411,7 +467,7 @@ public class MachineCacheTests
 
         await Assert.That(result).IsFalse();
 
-        Machine? unchanged = await repo.GetMachineAsync(machine.Id, 1);
+        Machine? unchanged = await repo.GetActiveMachineByIdAsync(machine.Id, 1);
         await Assert.That(unchanged).IsNotNull();
         await Assert.That(unchanged!.Name).IsEqualTo("original-name");
         await Assert.That(unchanged.Description).IsNull();
@@ -431,7 +487,7 @@ public class MachineCacheTests
 
         await Assert.That(result).IsTrue();
 
-        Machine? changed = await repo.GetMachineAsync(machine.Id, 1);
+        Machine? changed = await repo.GetActiveMachineByIdAsync(machine.Id, 1);
         await Assert.That(changed).IsNotNull();
         await Assert.That(changed!.Name).IsEqualTo("renamed");
         await Assert.That(changed.Description).IsEqualTo("desc");

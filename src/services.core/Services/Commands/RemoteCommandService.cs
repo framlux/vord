@@ -120,7 +120,7 @@ public sealed class RemoteCommandService : IRemoteCommandService
         }
 
         // Validate target machine belongs to user's tenant.
-        Machine? machine = await _machineRepository.GetMachineAsync(command.MachineId, command.TenantId, cancellationToken);
+        Machine? machine = await _machineRepository.GetActiveMachineByIdAsync(command.MachineId, command.TenantId, cancellationToken);
         if (machine is null)
         {
             return ServiceResult<RemoteCommand>.BadRequest("Target machine not found or does not belong to tenant");

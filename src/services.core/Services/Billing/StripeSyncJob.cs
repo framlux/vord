@@ -198,17 +198,17 @@ public sealed class StripeSyncJob
             switch (mappedStatus.Value)
             {
                 case SubscriptionStatus.Active:
-                    await _subscriptionRepository.SetSubscriptionActiveAsync(subscription.TenantId, ct);
+                    await _subscriptionRepository.UpdateSubscriptionStateAsync(subscription.TenantId, tier: null, SubscriptionStatus.Active, cancellationToken: ct);
 
                     break;
 
                 case SubscriptionStatus.PastDue:
-                    await _subscriptionRepository.SetSubscriptionPastDueAsync(subscription.TenantId, ct);
+                    await _subscriptionRepository.UpdateSubscriptionStateAsync(subscription.TenantId, tier: null, SubscriptionStatus.PastDue, cancellationToken: ct);
 
                     break;
 
                 case SubscriptionStatus.Canceled:
-                    await _subscriptionRepository.DeactivateSubscriptionAsync(subscription.TenantId, ct);
+                    await _subscriptionRepository.UpdateSubscriptionStateAsync(subscription.TenantId, tier: null, SubscriptionStatus.Canceled, cancellationToken: ct);
 
                     break;
             }

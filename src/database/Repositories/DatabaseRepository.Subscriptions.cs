@@ -6,6 +6,7 @@ using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using LinqToDB;
 using LinqToDB.Async;
+using LinqToDB.Linq;
 using Microsoft.Extensions.Logging;
 
 namespace Framlux.FleetManagement.Database.Repositories;
@@ -35,15 +36,33 @@ public partial class DatabaseRepository : ISubscriptionRepository
     }
 
     /// <inheritdoc/>
-    public async Task UpdateSubscriptionOnCheckoutAsync(int tenantId, SubscriptionTier tier, CancellationToken cancellationToken)
+    public async Task<int> UpdateSubscriptionStateAsync(
+        int tenantId,
+        SubscriptionTier? tier,
+        SubscriptionStatus status,
+        bool clearCurrentPeriodEnd = false,
+        CancellationToken cancellationToken = default)
     {
         DateTimeOffset now = DateTimeOffset.UtcNow;
-        await _db.TenantSubscriptions
+        IUpdatable<TenantSubscription> update = _db.TenantSubscriptions
             .Where(s => s.TenantId == tenantId)
-            .Set(s => s.Tier, tier)
-            .Set(s => s.Status, SubscriptionStatus.Active)
-            .Set(s => s.UpdatedAt, now)
-            .UpdateAsync(cancellationToken);
+            .AsUpdatable()
+            .Set(s => s.Status, status)
+            .Set(s => s.UpdatedAt, now);
+
+        if (tier is not null)
+        {
+            update = update.Set(s => s.Tier, tier.Value);
+        }
+
+        if (clearCurrentPeriodEnd)
+        {
+            update = update.Set(s => s.CurrentPeriodEnd, (DateTimeOffset?)null);
+        }
+
+        int updated = await update.UpdateAsync(cancellationToken);
+
+        return updated;
     }
 
     /// <inheritdoc/>
@@ -53,30 +72,6 @@ public partial class DatabaseRepository : ISubscriptionRepository
         await _db.TenantSubscriptions
             .Where(s => s.TenantId == tenantId)
             .Set(s => s.CurrentPeriodEnd, currentPeriodEnd)
-            .Set(s => s.UpdatedAt, now)
-            .UpdateAsync(cancellationToken);
-    }
-
-    /// <inheritdoc/>
-    public async Task RevertSubscriptionToFreeAsync(int tenantId, CancellationToken cancellationToken)
-    {
-        DateTimeOffset now = DateTimeOffset.UtcNow;
-        await _db.TenantSubscriptions
-            .Where(s => s.TenantId == tenantId)
-            .Set(s => s.Tier, SubscriptionTier.Free)
-            .Set(s => s.Status, SubscriptionStatus.Active)
-            .Set(s => s.CurrentPeriodEnd, (DateTimeOffset?)null)
-            .Set(s => s.UpdatedAt, now)
-            .UpdateAsync(cancellationToken);
-    }
-
-    /// <inheritdoc/>
-    public async Task SetSubscriptionPastDueAsync(int tenantId, CancellationToken cancellationToken)
-    {
-        DateTimeOffset now = DateTimeOffset.UtcNow;
-        await _db.TenantSubscriptions
-            .Where(s => s.TenantId == tenantId)
-            .Set(s => s.Status, SubscriptionStatus.PastDue)
             .Set(s => s.UpdatedAt, now)
             .UpdateAsync(cancellationToken);
     }
@@ -92,41 +87,6 @@ public partial class DatabaseRepository : ISubscriptionRepository
     }
 
     /// <inheritdoc/>
-    public async Task SetSubscriptionActiveAsync(int tenantId, CancellationToken cancellationToken)
-    {
-        DateTimeOffset now = DateTimeOffset.UtcNow;
-        await _db.TenantSubscriptions
-            .Where(s => s.TenantId == tenantId)
-            .Set(s => s.Status, SubscriptionStatus.Active)
-            .Set(s => s.UpdatedAt, now)
-            .UpdateAsync(cancellationToken);
-    }
-
-    /// <inheritdoc/>
-    public async Task DowngradeSubscriptionToProAsync(int tenantId, CancellationToken cancellationToken)
-    {
-        DateTimeOffset now = DateTimeOffset.UtcNow;
-        await _db.TenantSubscriptions
-            .Where(s => s.TenantId == tenantId)
-            .Set(s => s.Tier, SubscriptionTier.Pro)
-            .Set(s => s.Status, SubscriptionStatus.Active)
-            .Set(s => s.CurrentPeriodEnd, (DateTimeOffset?)null)
-            .Set(s => s.UpdatedAt, now)
-            .UpdateAsync(cancellationToken);
-    }
-
-    /// <inheritdoc/>
-    public async Task DeactivateSubscriptionAsync(int tenantId, CancellationToken cancellationToken)
-    {
-        DateTimeOffset now = DateTimeOffset.UtcNow;
-        await _db.TenantSubscriptions
-            .Where(s => s.TenantId == tenantId)
-            .Set(s => s.Status, SubscriptionStatus.Canceled)
-            .Set(s => s.UpdatedAt, now)
-            .UpdateAsync(cancellationToken);
-    }
-
-    /// <inheritdoc/>
     public async Task<List<TenantSubscription>> GetPaidSubscriptionsAsync(CancellationToken cancellationToken)
     {
         List<TenantSubscription> subscriptions = await _db.TenantSubscriptions
@@ -134,39 +94,6 @@ public partial class DatabaseRepository : ISubscriptionRepository
             .ToListAsync(cancellationToken);
 
         return subscriptions;
-    }
-
-    /// <inheritdoc/>
-    public async Task<TenantSubscription> InsertSubscriptionAsync(TenantSubscription subscription, CancellationToken cancellationToken)
-    {
-        ArgumentNullException.ThrowIfNull(subscription);
-
-        subscription.Id = await _db.InsertWithInt32IdentityAsync(subscription, token: cancellationToken);
-
-        return subscription;
-    }
-
-    /// <inheritdoc/>
-    public async Task ReactivateFreeSubscriptionAsync(int subscriptionId, CancellationToken cancellationToken)
-    {
-        await _db.TenantSubscriptions
-            .Where(s => s.Id == subscriptionId)
-            .Set(s => s.Status, SubscriptionStatus.Active)
-            .Set(s => s.UpdatedAt, DateTimeOffset.UtcNow)
-            .UpdateAsync(cancellationToken);
-    }
-
-    /// <inheritdoc/>
-    public async Task<int> UpdateSubscriptionAdminAsync(int tenantId, SubscriptionTier tier, SubscriptionStatus status, CancellationToken cancellationToken)
-    {
-        int updated = await _db.TenantSubscriptions
-            .Where(s => s.TenantId == tenantId)
-            .Set(s => s.Tier, tier)
-            .Set(s => s.Status, status)
-            .Set(s => s.UpdatedAt, DateTimeOffset.UtcNow)
-            .UpdateAsync(cancellationToken);
-
-        return updated;
     }
 
     /// <inheritdoc/>

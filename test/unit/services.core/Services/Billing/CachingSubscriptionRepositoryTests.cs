@@ -118,7 +118,7 @@ public sealed class CachingSubscriptionRepositoryTests
         await repo.GetSubscriptionForTenantAsync(5, CancellationToken.None);
 
         // A mutation must invalidate the cache for that tenant.
-        await repo.SetSubscriptionPastDueAsync(5, CancellationToken.None);
+        await repo.UpdateSubscriptionStateAsync(5, null, SubscriptionStatus.PastDue, cancellationToken: CancellationToken.None);
         inner.GetSubscriptionForTenantAsync(5, Arg.Any<CancellationToken>())
             .Returns(BuildSubscription(5, SubscriptionStatus.PastDue));
 
@@ -139,10 +139,10 @@ public sealed class CachingSubscriptionRepositoryTests
         CachingSubscriptionRepository repo = Create(inner, redis);
 
         await repo.GetSubscriptionForTenantAsync(8, CancellationToken.None);
-        await repo.UpdateSubscriptionOnCheckoutAsync(8, SubscriptionTier.Team, CancellationToken.None);
+        await repo.UpdateSubscriptionStateAsync(8, SubscriptionTier.Team, SubscriptionStatus.Active, cancellationToken: CancellationToken.None);
         await repo.GetSubscriptionForTenantAsync(8, CancellationToken.None);
 
-        await inner.Received(1).UpdateSubscriptionOnCheckoutAsync(8, SubscriptionTier.Team, Arg.Any<CancellationToken>());
+        await inner.Received(1).UpdateSubscriptionStateAsync(8, SubscriptionTier.Team, SubscriptionStatus.Active, false, Arg.Any<CancellationToken>());
         await inner.Received(2).GetSubscriptionForTenantAsync(8, Arg.Any<CancellationToken>());
     }
 
@@ -159,7 +159,7 @@ public sealed class CachingSubscriptionRepositoryTests
         await repo.GetSubscriptionForTenantAsync(2, CancellationToken.None);
 
         // Mutate tenant 1 only.
-        await repo.DeactivateSubscriptionAsync(1, CancellationToken.None);
+        await repo.UpdateSubscriptionStateAsync(1, null, SubscriptionStatus.Canceled, cancellationToken: CancellationToken.None);
 
         // Tenant 2's cache entry must survive; reading it again must not hit the DB a second time.
         await repo.GetSubscriptionForTenantAsync(2, CancellationToken.None);
@@ -191,5 +191,36 @@ public sealed class CachingSubscriptionRepositoryTests
 
         await Assert.That(() => new CachingSubscriptionRepository(null!, redis, options))
             .Throws<ArgumentNullException>();
+    }
+
+    [Test]
+    public async Task UpdateSubscriptionState_ForwardsExactArgumentsAndReturnsInnerResult()
+    {
+        ISubscriptionRepository inner = Substitute.For<ISubscriptionRepository>();
+        inner.UpdateSubscriptionStateAsync(6, SubscriptionTier.Free, SubscriptionStatus.Active, true, Arg.Any<CancellationToken>())
+            .Returns(1);
+        IConnectionMultiplexer redis = FakeRedisConnection.Create();
+        CachingSubscriptionRepository repo = Create(inner, redis);
+
+        int updated = await repo.UpdateSubscriptionStateAsync(6, SubscriptionTier.Free, SubscriptionStatus.Active, clearCurrentPeriodEnd: true, CancellationToken.None);
+
+        await Assert.That(updated).IsEqualTo(1);
+        await inner.Received(1).UpdateSubscriptionStateAsync(6, SubscriptionTier.Free, SubscriptionStatus.Active, true, Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task UpdateSubscriptionState_InvalidatesTenantCacheEntry()
+    {
+        ISubscriptionRepository inner = Substitute.For<ISubscriptionRepository>();
+        inner.GetSubscriptionForTenantAsync(9, Arg.Any<CancellationToken>()).Returns(BuildSubscription(9));
+        IConnectionMultiplexer redis = FakeRedisConnection.Create();
+        CachingSubscriptionRepository repo = Create(inner, redis);
+
+        // Prime the cache, mutate, then read again — the second read must miss the cache.
+        await repo.GetSubscriptionForTenantAsync(9, CancellationToken.None);
+        await repo.UpdateSubscriptionStateAsync(9, null, SubscriptionStatus.Canceled, cancellationToken: CancellationToken.None);
+        await repo.GetSubscriptionForTenantAsync(9, CancellationToken.None);
+
+        await inner.Received(2).GetSubscriptionForTenantAsync(9, Arg.Any<CancellationToken>());
     }
 }

@@ -149,13 +149,6 @@ public interface ITenantRepository
     Task<List<UserTenantRole>> GetActiveRolesForTenantsAsync(List<int> tenantIds, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Returns active tenant role records for a specific tenant.
-    /// </summary>
-    /// <param name="tenantId">The tenant ID.</param>
-    /// <param name="cancellationToken">A cancellation token.</param>
-    Task<List<UserTenantRole>> GetActiveRolesForTenantAsync(int tenantId, CancellationToken cancellationToken = default);
-
-    /// <summary>
     /// Returns active user-tenant roles for the specified user IDs.
     /// </summary>
     /// <param name="userIds">The user IDs to query.</param>

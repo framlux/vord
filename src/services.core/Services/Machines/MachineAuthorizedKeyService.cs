@@ -63,7 +63,7 @@ public sealed class MachineAuthorizedKeyService : IMachineAuthorizedKeyService
         }
 
         // Verify the machine exists, belongs to the tenant, and is not deleted.
-        Machine? machine = await _machineRepository.GetMachineAsync(machineId, tenantId, cancellationToken);
+        Machine? machine = await _machineRepository.GetActiveMachineByIdAsync(machineId, tenantId, cancellationToken);
         if (machine is null)
         {
             return ServiceResult<MachineAuthorizedKey>.NotFound();
@@ -180,7 +180,7 @@ public sealed class MachineAuthorizedKeyService : IMachineAuthorizedKeyService
     public async Task<ServiceResult<List<MachineAuthorizedKeyDto>>> ListAuthorizedKeysAsync(long machineId, int tenantId, CancellationToken cancellationToken = default)
     {
         // Verify the machine exists in the tenant.
-        Machine? machine = await _machineRepository.GetMachineAsync(machineId, tenantId, cancellationToken);
+        Machine? machine = await _machineRepository.GetActiveMachineByIdAsync(machineId, tenantId, cancellationToken);
         if (machine is null)
         {
             return ServiceResult<List<MachineAuthorizedKeyDto>>.NotFound();

@@ -184,7 +184,7 @@ public sealed class MachineService : IMachineService
                 // Cache the encrypted form for retry resilience and mark as delivered.
                 string protectedKey = _pendingApiKeyProtector.Protect(plaintextKey);
                 await redisDb.StringSetAsync(cacheKey, protectedKey, ApiKeyCacheTtl);
-                await machineRepo.SetKeyDeliveredAsync(machine.Id, cancellationToken);
+                await machineRepo.MarkKeyDeliveredAsync(machine.Id, cancellationToken);
                 _logger.LogInformation("API key re-issued for machine {MachineId} in tenant {TenantId}", machine.Id, token.TenantId);
             }
             else

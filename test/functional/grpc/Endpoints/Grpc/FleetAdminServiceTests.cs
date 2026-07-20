@@ -478,7 +478,7 @@ public sealed class FleetAdminServiceTests
 
         await Assert.That(heartbeat).IsNotNull();
         await Assert.That(heartbeat!.Value).IsEqualTo("30");
-        await Assert.That(heartbeat.Key).IsEqualTo((int)ServerConfigurationSettingKeys.AgentHeartbeatSeconds);
+        await Assert.That(heartbeat.Key).IsEqualTo((ServerSettingKey)(int)ServerConfigurationSettingKeys.AgentHeartbeatSeconds);
     }
 
     [Test]
@@ -499,7 +499,7 @@ public sealed class FleetAdminServiceTests
         ServerSetting? serviceStatus = null;
         foreach (ServerSetting s in response.Settings)
         {
-            if (s.Key == (int)ServerConfigurationSettingKeys.ServiceStatusSeconds)
+            if (s.Key == (ServerSettingKey)(int)ServerConfigurationSettingKeys.ServiceStatusSeconds)
             {
                 serviceStatus = s;
             }
@@ -527,7 +527,7 @@ public sealed class FleetAdminServiceTests
         UpdateServerSettingResponse response = await client.UpdateServerSettingAsync(
             new UpdateServerSettingRequest
             {
-                Key = (int)ServerConfigurationSettingKeys.AgentHeartbeatSeconds,
+                Key = (ServerSettingKey)(int)ServerConfigurationSettingKeys.AgentHeartbeatSeconds,
                 Value = "45"
             },
             Headers("test-key"));
@@ -558,7 +558,7 @@ public sealed class FleetAdminServiceTests
         UpdateServerSettingResponse response = await client.UpdateServerSettingAsync(
             new UpdateServerSettingRequest
             {
-                Key = (int)ServerConfigurationSettingKeys.ServiceStatusSeconds,
+                Key = (ServerSettingKey)(int)ServerConfigurationSettingKeys.ServiceStatusSeconds,
                 Value = "1800"
             },
             Headers("test-key"));
@@ -575,24 +575,33 @@ public sealed class FleetAdminServiceTests
     }
 
     [Test]
-    public async Task UpdateServerSetting_ServiceStatus_NonexistentRow_ReturnsNotFound()
+    public async Task UpdateServerSetting_ServiceStatus_NonexistentRow_CreatesSetting()
     {
         using FunctionalTestFactory factory = new();
         factory.WithInternalApiKey("test-key");
+        using DatabaseContext db = factory.CreateDbContext();
         using GrpcChannel channel = CreateChannel(factory);
         FleetAdmin.FleetAdminClient client = new(channel);
 
-        // No seed row for ServiceStatusSeconds -- the update targets a row that does not exist
+        // No seed row for ServiceStatusSeconds — the write must create it, matching the REST
+        // admin path's upsert semantics, so a valid key never fails on a missing row.
         UpdateServerSettingResponse response = await client.UpdateServerSettingAsync(
             new UpdateServerSettingRequest
             {
-                Key = (int)ServerConfigurationSettingKeys.ServiceStatusSeconds,
+                Key = (ServerSettingKey)(int)ServerConfigurationSettingKeys.ServiceStatusSeconds,
                 Value = "1800"
             },
             Headers("test-key"));
 
-        // The FleetAdmin gRPC endpoint returns success=false when the row is not found
-        await Assert.That(response.Success).IsFalse();
+        await Assert.That(response.Success).IsTrue();
+
+        ServerConfigurationSettings? created = await db.ServerConfigurationSettings
+            .Where(s => s.Key == ServerConfigurationSettingKeys.ServiceStatusSeconds)
+            .FirstOrDefaultAsync();
+
+        await Assert.That(created).IsNotNull();
+        await Assert.That(created!.Value).IsEqualTo("1800");
+        await Assert.That(created.Version).IsEqualTo(1);
     }
 
     [Test]
@@ -621,7 +630,7 @@ public sealed class FleetAdminServiceTests
         UpdateServerSettingResponse response = await client.UpdateServerSettingAsync(
             new UpdateServerSettingRequest
             {
-                Key = (int)ServerConfigurationSettingKeys.OnlineThresholdSeconds,
+                Key = (ServerSettingKey)(int)ServerConfigurationSettingKeys.OnlineThresholdSeconds,
                 Value = "90"
             },
             Headers("test-key"));
@@ -645,7 +654,7 @@ public sealed class FleetAdminServiceTests
         try
         {
             await client.UpdateServerSettingAsync(
-                new UpdateServerSettingRequest { Key = 999, Value = "bad" },
+                new UpdateServerSettingRequest { Key = (ServerSettingKey)999, Value = "bad" },
                 Headers("test-key"));
         }
         catch (RpcException ex)

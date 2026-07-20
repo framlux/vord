@@ -15,8 +15,16 @@ public partial class DatabaseRepository : IServerConfigurationRepository
     /// <inheritdoc/>
     public async Task<List<ServerConfigurationSettings>> ListAllSettingsAsync(CancellationToken cancellationToken)
     {
-        return await _db.ServerConfigurationSettings
+        List<ServerConfigurationSettings> settings = await _db.ServerConfigurationSettings
+            .OrderBy(s => s.Key)
             .ToListAsync(cancellationToken);
+
+        // Deployed databases can hold rows for setting keys that were later removed from the
+        // enum (e.g. certificate expiry warnings). Those rows have no name, no description, and
+        // fail validation on save, so they must never surface to the admin panels.
+        settings.RemoveAll(s => (Enum.IsDefined(s.Key) == false) || (s.Key == ServerConfigurationSettingKeys.None));
+
+        return settings;
     }
 
     /// <inheritdoc/>
@@ -41,27 +49,5 @@ public partial class DatabaseRepository : IServerConfigurationRepository
                 .Value(s => s.Version, 1)
                 .InsertAsync(cancellationToken);
         }
-    }
-
-    /// <inheritdoc/>
-    public async Task<int> UpdateSettingAsync(ServerConfigurationSettingKeys key, string value, CancellationToken cancellationToken)
-    {
-        int updated = await _db.ServerConfigurationSettings
-            .Where(s => s.Key == key)
-            .Set(s => s.Value, value)
-            .Set(s => s.Version, s => s.Version + 1)
-            .UpdateAsync(cancellationToken);
-
-        return updated;
-    }
-
-    /// <inheritdoc/>
-    public async Task<List<ServerConfigurationSettings>> GetAllSettingsAsync(CancellationToken cancellationToken)
-    {
-        List<ServerConfigurationSettings> settings = await _db.ServerConfigurationSettings
-            .OrderBy(s => s.Key)
-            .ToListAsync(cancellationToken);
-
-        return settings;
     }
 }

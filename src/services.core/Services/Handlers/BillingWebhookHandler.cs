@@ -49,7 +49,7 @@ public sealed class BillingWebhookHandler : IBillingWebhookHandler
     {
         using IDatabaseTransaction transaction = await _transactionProvider.BeginTransactionAsync(ct);
 
-        await _subscriptionRepo.UpdateSubscriptionOnCheckoutAsync(tenantId, tier, ct);
+        await _subscriptionRepo.UpdateSubscriptionStateAsync(tenantId, tier, SubscriptionStatus.Active, cancellationToken: ct);
 
         await _auditLog.InsertAuditLogAsync(AuditHelper.Create(
             tenantId, null, null,
@@ -230,7 +230,7 @@ public sealed class BillingWebhookHandler : IBillingWebhookHandler
         // the subscription is deactivated entirely.
         using IDatabaseTransaction transaction = await _transactionProvider.BeginTransactionAsync(ct);
 
-        await _subscriptionRepo.RevertSubscriptionToFreeAsync(tenantId, ct);
+        await _subscriptionRepo.UpdateSubscriptionStateAsync(tenantId, SubscriptionTier.Free, SubscriptionStatus.Active, clearCurrentPeriodEnd: true, cancellationToken: ct);
         await _auditLog.InsertAuditLogAsync(AuditHelper.Create(
             tenantId, null, null,
             AuditAction.SubscriptionDowngraded, AuditResourceType.Subscription,
@@ -244,7 +244,7 @@ public sealed class BillingWebhookHandler : IBillingWebhookHandler
     /// <inheritdoc/>
     public async Task HandlePaymentFailedAsync(int tenantId, CancellationToken ct)
     {
-        await _subscriptionRepo.SetSubscriptionPastDueAsync(tenantId, ct);
+        await _subscriptionRepo.UpdateSubscriptionStateAsync(tenantId, tier: null, SubscriptionStatus.PastDue, cancellationToken: ct);
     }
 
     /// <inheritdoc/>
@@ -252,7 +252,7 @@ public sealed class BillingWebhookHandler : IBillingWebhookHandler
     {
         using IDatabaseTransaction transaction = await _transactionProvider.BeginTransactionAsync(ct);
 
-        await _subscriptionRepo.SetSubscriptionActiveAsync(tenantId, ct);
+        await _subscriptionRepo.UpdateSubscriptionStateAsync(tenantId, tier: null, SubscriptionStatus.Active, cancellationToken: ct);
 
         await _auditLog.InsertAuditLogAsync(AuditHelper.Create(
             tenantId, null, null,
@@ -267,7 +267,7 @@ public sealed class BillingWebhookHandler : IBillingWebhookHandler
     {
         using IDatabaseTransaction transaction = await _transactionProvider.BeginTransactionAsync(ct);
 
-        await _subscriptionRepo.DowngradeSubscriptionToProAsync(tenantId, ct);
+        await _subscriptionRepo.UpdateSubscriptionStateAsync(tenantId, SubscriptionTier.Pro, SubscriptionStatus.Active, clearCurrentPeriodEnd: true, cancellationToken: ct);
 
         await _auditLog.InsertAuditLogAsync(AuditHelper.Create(
             tenantId, null, null,
@@ -282,7 +282,7 @@ public sealed class BillingWebhookHandler : IBillingWebhookHandler
     {
         using IDatabaseTransaction transaction = await _transactionProvider.BeginTransactionAsync(ct);
 
-        await _subscriptionRepo.UpdateSubscriptionOnCheckoutAsync(tenantId, tier, ct);
+        await _subscriptionRepo.UpdateSubscriptionStateAsync(tenantId, tier, SubscriptionStatus.Active, cancellationToken: ct);
 
         await _auditLog.InsertAuditLogAsync(AuditHelper.Create(
             tenantId, null, null,
@@ -297,7 +297,7 @@ public sealed class BillingWebhookHandler : IBillingWebhookHandler
     {
         using IDatabaseTransaction transaction = await _transactionProvider.BeginTransactionAsync(ct);
 
-        await _subscriptionRepo.DeactivateSubscriptionAsync(tenantId, ct);
+        await _subscriptionRepo.UpdateSubscriptionStateAsync(tenantId, tier: null, SubscriptionStatus.Canceled, cancellationToken: ct);
 
         await _auditLog.InsertAuditLogAsync(AuditHelper.Create(
             tenantId, null, null,

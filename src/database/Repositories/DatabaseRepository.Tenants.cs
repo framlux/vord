@@ -393,16 +393,6 @@ public partial class DatabaseRepository : ITenantRepository
     }
 
     /// <inheritdoc/>
-    public async Task<List<UserTenantRole>> GetActiveRolesForTenantAsync(int tenantId, CancellationToken cancellationToken)
-    {
-        List<UserTenantRole> roles = await _db.UserTenantRoles
-            .Where(r => (r.AssignedTenantId == tenantId) && (r.IsActive == true))
-            .ToListAsync(cancellationToken);
-
-        return roles;
-    }
-
-    /// <inheritdoc/>
     public async Task<List<UserTenantRole>> GetActiveRolesForUsersAsync(List<int> userIds, CancellationToken cancellationToken)
     {
         List<UserTenantRole> roles = await _db.UserTenantRoles

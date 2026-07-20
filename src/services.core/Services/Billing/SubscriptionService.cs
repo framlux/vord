@@ -124,7 +124,7 @@ public sealed class SubscriptionService : ISubscriptionService
             UpdatedAt = now,
         };
 
-        subscription = await _subscriptionRepo.InsertSubscriptionAsync(subscription, ct);
+        subscription = await _subscriptionRepo.CreateTenantSubscriptionAsync(subscription, ct);
         _logger.LogInformation("Provisioned Free subscription for tenant {TenantId}", tenantId);
 
         return subscription;
@@ -181,7 +181,7 @@ public sealed class SubscriptionService : ISubscriptionService
 
         if (subscription is not null && subscription.Tier == SubscriptionTier.Free && subscription.Status != SubscriptionStatus.Active)
         {
-            await _subscriptionRepo.ReactivateFreeSubscriptionAsync(subscription.Id, ct);
+            await _subscriptionRepo.UpdateSubscriptionStateAsync(subscription.TenantId, tier: null, SubscriptionStatus.Active, cancellationToken: ct);
 
             _logger.LogInformation("Reactivated Free subscription for tenant {TenantId}", tenantId);
 
@@ -191,7 +191,7 @@ public sealed class SubscriptionService : ISubscriptionService
         // Canceled paid subscription — Stripe subscription is gone, revert to Free
         if (subscription is not null && subscription.Status == SubscriptionStatus.Canceled)
         {
-            await _subscriptionRepo.RevertSubscriptionToFreeAsync(tenantId, ct);
+            await _subscriptionRepo.UpdateSubscriptionStateAsync(tenantId, SubscriptionTier.Free, SubscriptionStatus.Active, clearCurrentPeriodEnd: true, cancellationToken: ct);
 
             _logger.LogInformation("Reverted canceled paid subscription to Free for tenant {TenantId}", tenantId);
 

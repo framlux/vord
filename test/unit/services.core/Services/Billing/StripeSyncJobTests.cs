@@ -159,7 +159,7 @@ public sealed class StripeSyncJobTests
 
         await sut.Job.RunAsync(CancellationToken.None);
 
-        await sut.SubscriptionRepo.Received(1).SetSubscriptionPastDueAsync(1, Arg.Any<CancellationToken>());
+        await sut.SubscriptionRepo.Received(1).UpdateSubscriptionStateAsync(1, null, SubscriptionStatus.PastDue, false, Arg.Any<CancellationToken>());
     }
 
     [Test]
@@ -177,7 +177,7 @@ public sealed class StripeSyncJobTests
 
         await sut.Job.RunAsync(CancellationToken.None);
 
-        await sut.SubscriptionRepo.Received(1).DeactivateSubscriptionAsync(1, Arg.Any<CancellationToken>());
+        await sut.SubscriptionRepo.Received(1).UpdateSubscriptionStateAsync(1, null, SubscriptionStatus.Canceled, false, Arg.Any<CancellationToken>());
     }
 
     [Test]
@@ -819,7 +819,7 @@ public sealed class StripeSyncJobTests
 
         await sut.Job.RunAsync(CancellationToken.None);
 
-        await sut.SubscriptionRepo.Received(1).SetSubscriptionActiveAsync(1, Arg.Any<CancellationToken>());
+        await sut.SubscriptionRepo.Received(1).UpdateSubscriptionStateAsync(1, null, SubscriptionStatus.Active, false, Arg.Any<CancellationToken>());
     }
 
     [Test]
@@ -842,7 +842,7 @@ public sealed class StripeSyncJobTests
 
         await sut.Job.RunAsync(CancellationToken.None);
 
-        await sut.SubscriptionRepo.Received(1).SetSubscriptionActiveAsync(1, Arg.Any<CancellationToken>());
+        await sut.SubscriptionRepo.Received(1).UpdateSubscriptionStateAsync(1, null, SubscriptionStatus.Active, false, Arg.Any<CancellationToken>());
     }
 
     // ========== Period end anti-thrash ==========

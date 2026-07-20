@@ -347,32 +347,7 @@ public class MachineStateRepositoryTests
 
     // ========== GetNameMapAsync tests ==========
 
-    [Test]
-    public async Task GetNameMapAsync_WithData_ReturnsMachineIdToNameMapping()
-    {
-        using TestDatabaseFactory dbFactory = new();
-        IMachineStateRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
 
-        await dbFactory.Context.InsertAsync(TestDataBuilder.BuildMachineStateSummary(machineId: 5, tenantId: 1, name: "web-server"));
-        await dbFactory.Context.InsertAsync(TestDataBuilder.BuildMachineStateSummary(machineId: 6, tenantId: 1, name: "db-server"));
-
-        Dictionary<long, string> result = await repo.GetNameMapAsync(new List<long> { 5, 6 });
-
-        await Assert.That(result.Count).IsEqualTo(2);
-        await Assert.That(result[5]).IsEqualTo("web-server");
-        await Assert.That(result[6]).IsEqualTo("db-server");
-    }
-
-    [Test]
-    public async Task GetNameMapAsync_EmptyList_ReturnsEmptyDictionary()
-    {
-        using TestDatabaseFactory dbFactory = new();
-        IMachineStateRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
-
-        Dictionary<long, string> result = await repo.GetNameMapAsync(new List<long>());
-
-        await Assert.That(result.Count).IsEqualTo(0);
-    }
 
     // ========== GetSummaryListByMachineIdsAsync tests ==========
 
@@ -870,10 +845,10 @@ public class MachineStateRepositoryTests
         await Assert.That(totalSecurityUpdates).IsEqualTo(0);
     }
 
-    // ========== GetFleetMachinePageAsync tests ==========
+    // ========== SearchFleetMachinesAsync paging/sort tests (ported from the removed fleet-page method) ==========
 
     [Test]
-    public async Task GetFleetMachinePageAsync_BasicPagination_ReturnsTotalCountAndRequestedPage()
+    public async Task SearchFleetMachinesAsync_BasicPagination_ReturnsTotalCountAndRequestedPage()
     {
         using TestDatabaseFactory dbFactory = new();
         IMachineStateRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
@@ -891,14 +866,15 @@ public class MachineStateRepositoryTests
             await dbFactory.Context.InsertAsync(TestDataBuilder.BuildMachineStateSummary(machineId: machineId, tenantId: tenantId));
         }
 
-        (List<FleetMachineRow> rows, int totalCount) = await repo.GetFleetMachinePageAsync(tenantId, null, null, "name", false, 0, 2);
+        (List<FleetMachineRow> rows, int totalCount) = await repo.SearchFleetMachinesAsync(
+            tenantId, new FleetSearchParameters { SortBy = "name", Skip = 0, Take = 2 });
 
         await Assert.That(totalCount).IsEqualTo(5);
         await Assert.That(rows.Count).IsEqualTo(2);
     }
 
     [Test]
-    public async Task GetFleetMachinePageAsync_StatusFilter_ReturnsOnlyMatchingHealth()
+    public async Task SearchFleetMachinesAsync_SingleHealthStatusValue_ReturnsOnlyMatchingHealth()
     {
         using TestDatabaseFactory dbFactory = new();
         IMachineStateRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
@@ -923,7 +899,8 @@ public class MachineStateRepositoryTests
         long criticalId = await dbFactory.Context.InsertWithInt64IdentityAsync(critical);
         await dbFactory.Context.InsertAsync(TestDataBuilder.BuildMachineStateSummary(machineId: criticalId, tenantId: tenantId, healthStatus: 2));
 
-        (List<FleetMachineRow> rows, int totalCount) = await repo.GetFleetMachinePageAsync(tenantId, "healthy", null, "name", false, 0, 10);
+        (List<FleetMachineRow> rows, int totalCount) = await repo.SearchFleetMachinesAsync(
+            tenantId, new FleetSearchParameters { HealthStatusValues = [0], SortBy = "name", Skip = 0, Take = 10 });
 
         await Assert.That(totalCount).IsEqualTo(1);
         await Assert.That(rows.Count).IsEqualTo(1);
@@ -931,7 +908,7 @@ public class MachineStateRepositoryTests
     }
 
     [Test]
-    public async Task GetFleetMachinePageAsync_TextSearch_ReturnsMatchingMachines()
+    public async Task SearchFleetMachinesAsync_TextSearch_ReturnsMatchingMachines()
     {
         using TestDatabaseFactory dbFactory = new();
         IMachineStateRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
@@ -951,7 +928,8 @@ public class MachineStateRepositoryTests
         long dbId = await dbFactory.Context.InsertWithInt64IdentityAsync(dbServer);
         await dbFactory.Context.InsertAsync(TestDataBuilder.BuildMachineStateSummary(machineId: dbId, tenantId: tenantId, name: "db-prod-01"));
 
-        (List<FleetMachineRow> rows, int totalCount) = await repo.GetFleetMachinePageAsync(tenantId, null, "web", "name", false, 0, 10);
+        (List<FleetMachineRow> rows, int totalCount) = await repo.SearchFleetMachinesAsync(
+            tenantId, new FleetSearchParameters { Search = "web", SortBy = "name", Skip = 0, Take = 10 });
 
         await Assert.That(totalCount).IsEqualTo(1);
         await Assert.That(rows.Count).IsEqualTo(1);
@@ -959,7 +937,7 @@ public class MachineStateRepositoryTests
     }
 
     [Test]
-    public async Task GetFleetMachinePageAsync_SortByCpuDescending_ReturnsMachinesInDescendingCpuOrder()
+    public async Task SearchFleetMachinesAsync_SortByCpuDescending_ReturnsMachinesInDescendingCpuOrder()
     {
         using TestDatabaseFactory dbFactory = new();
         IMachineStateRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
@@ -984,7 +962,8 @@ public class MachineStateRepositoryTests
         long midId = await dbFactory.Context.InsertWithInt64IdentityAsync(midCpu);
         await dbFactory.Context.InsertAsync(TestDataBuilder.BuildMachineStateSummary(machineId: midId, tenantId: tenantId, cpuPercent: 50));
 
-        (List<FleetMachineRow> rows, int totalCount) = await repo.GetFleetMachinePageAsync(tenantId, null, null, "cpu", true, 0, 10);
+        (List<FleetMachineRow> rows, int totalCount) = await repo.SearchFleetMachinesAsync(
+            tenantId, new FleetSearchParameters { SortBy = "cpu", SortDescending = true, Skip = 0, Take = 10 });
 
         await Assert.That(totalCount).IsEqualTo(3);
         await Assert.That(rows.Count).IsEqualTo(3);

@@ -107,7 +107,8 @@ public sealed class SshSessionsFleetEndpoint : Endpoint<FleetSshSessionsRequest,
         int pageSize = (req.PageSize < 1) || (req.PageSize > 100) ? 50 : req.PageSize;
 
         // Build a lookup of machine names for tenant machines.
-        Dictionary<long, string> machineNames = await _machineRepo.GetMachineNameMapForTenantAsync(tenantId, ct);
+        List<Machine> tenantMachines = await _machineRepo.ListActiveMachinesForTenantAsync(tenantId, ct);
+        Dictionary<long, string> machineNames = tenantMachines.ToDictionary(m => m.Id, m => m.Name);
 
         // Resolve any machine-name search to a concrete machine-id set BEFORE the telemetry query
         // so the filter is a SQL predicate rather than an in-memory pass over the whole history.

@@ -73,11 +73,6 @@ public interface IMachineStateRepository
     Task<Dictionary<long, string?>> GetHostnameMapAsync(List<long> machineIds, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Returns a dictionary mapping machine IDs to their display names from state summaries.
-    /// </summary>
-    Task<Dictionary<long, string>> GetNameMapAsync(List<long> machineIds, CancellationToken cancellationToken = default);
-
-    /// <summary>
     /// Returns state summaries for the specified machine IDs as a list.
     /// </summary>
     Task<List<MachineStateSummary>> GetSummaryListByMachineIdsAsync(List<long> machineIds, CancellationToken cancellationToken = default);
@@ -192,20 +187,6 @@ public interface IMachineStateRepository
     /// <param name="tenantId">The tenant ID.</param>
     /// <param name="cancellationToken">A cancellation token.</param>
     Task<(List<(short HealthStatus, int Count)> HealthCounts, int TotalSecurityUpdates)> GetFleetHealthAggregationAsync(int tenantId, CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// Returns a filtered, sorted, paginated fleet overview joining Machines and MachineStateSummaries.
-    /// Includes machine name, hostname, IP addresses, hardware model, CPU/memory usage, health status, etc.
-    /// </summary>
-    /// <param name="tenantId">The tenant ID.</param>
-    /// <param name="statusFilter">Optional health status filter (healthy/warning/critical/offline).</param>
-    /// <param name="search">Optional search term for name/hostname/hardware model.</param>
-    /// <param name="sortBy">Sort field name.</param>
-    /// <param name="sortDescending">True for descending sort.</param>
-    /// <param name="skip">Number of rows to skip.</param>
-    /// <param name="take">Number of rows to return.</param>
-    /// <param name="cancellationToken">A cancellation token.</param>
-    Task<(List<FleetMachineRow> Rows, int TotalCount)> GetFleetMachinePageAsync(int tenantId, string? statusFilter, string? search, string sortBy, bool sortDescending, int skip, int take, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Searches fleet machines with comprehensive SQL-level filtering, sorting, and pagination.

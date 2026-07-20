@@ -42,31 +42,7 @@ public sealed class TestDatabaseFactory : IDisposable
         // Run FluentMigrator migrations on a temp file then copy schema to in-memory DB.
         // FluentMigrator manages its own connections, so we use a temp file approach.
         string tempFile = Path.Combine(Path.GetTempPath(), $"test_{Guid.NewGuid():N}.db");
-
-        ServiceCollection migrationServices = new();
-        migrationServices.AddFluentMigratorCore()
-                .ConfigureRunner(r =>
-                {
-                    r.AddSQLite()
-                     .WithGlobalConnectionString($"Data Source={tempFile}")
-                     .ScanIn(typeof(MigrationVersion).Assembly);
-                });
-
-        ServiceProvider migrationProvider = migrationServices.BuildServiceProvider();
-        using (IServiceScope migrationScope = migrationProvider.CreateScope())
-        {
-            // FluentMigrator's SQLiteTypeMap does not include DateTimeOffset.
-            // Patch the live type map instance via reflection before running migrations.
-            // Path: SQLiteGenerator → GeneratorBase._column → ColumnBase._typeMap → SetTypeMap(DateTimeOffset, "TEXT")
-            SQLiteGenerator generator = migrationScope.ServiceProvider.GetRequiredService<SQLiteGenerator>();
-            generator.CompatibilityMode = CompatibilityMode.LOOSE;
-            PatchTypeMap(generator);
-
-            IMigrationRunner migrationRunner = migrationScope.ServiceProvider.GetRequiredService<IMigrationRunner>();
-            migrationRunner.MigrateUp();
-        }
-
-        migrationProvider.Dispose();
+        ApplyMigrations(tempFile);
 
         // Read schema from temp file and apply to in-memory DB.
         using (SqliteConnection tempConn = new($"Data Source={tempFile};Mode=ReadOnly"))
@@ -110,6 +86,37 @@ public sealed class TestDatabaseFactory : IDisposable
                 .UseConnection(SQLiteTools.GetDataProvider(SQLiteProvider.Microsoft), _connection, false));
 
         Context = new DatabaseContext(dataOptions);
+    }
+
+    /// <summary>
+    /// Runs all FluentMigrator migrations against a SQLite database file. Exposed so tests can
+    /// migrate a standalone file and inspect the migrated state — including seed data, which the
+    /// factory's schema-only copy into the in-memory database does not carry over.
+    /// </summary>
+    /// <param name="databaseFilePath">Path of the SQLite database file to migrate.</param>
+    public static void ApplyMigrations(string databaseFilePath)
+    {
+        ServiceCollection migrationServices = new();
+        migrationServices.AddFluentMigratorCore()
+                .ConfigureRunner(r =>
+                {
+                    r.AddSQLite()
+                     .WithGlobalConnectionString($"Data Source={databaseFilePath}")
+                     .ScanIn(typeof(MigrationVersion).Assembly);
+                });
+
+        using ServiceProvider migrationProvider = migrationServices.BuildServiceProvider();
+        using IServiceScope migrationScope = migrationProvider.CreateScope();
+
+        // FluentMigrator's SQLiteTypeMap does not include DateTimeOffset.
+        // Patch the live type map instance via reflection before running migrations.
+        // Path: SQLiteGenerator → GeneratorBase._column → ColumnBase._typeMap → SetTypeMap(DateTimeOffset, "TEXT")
+        SQLiteGenerator generator = migrationScope.ServiceProvider.GetRequiredService<SQLiteGenerator>();
+        generator.CompatibilityMode = CompatibilityMode.LOOSE;
+        PatchTypeMap(generator);
+
+        IMigrationRunner migrationRunner = migrationScope.ServiceProvider.GetRequiredService<IMigrationRunner>();
+        migrationRunner.MigrateUp();
     }
 
     /// <summary>

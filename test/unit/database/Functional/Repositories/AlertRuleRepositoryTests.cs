@@ -483,7 +483,7 @@ public class AlertRuleRepositoryTests
     // ========== DisableCustomAlertRulesForTenantAsync tests ==========
 
     [Test]
-    public async Task DisableCustomAlertRulesForTenantAsync_DisablesOnlyCustom()
+    public async Task DisableAlertRulesForTenantAsync_CustomOnly_DisablesOnlyCustom()
     {
         using TestDatabaseFactory dbFactory = new();
         IAlertRuleRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
@@ -496,7 +496,7 @@ public class AlertRuleRepositoryTests
         AlertRule defaultEnabled = TestDataBuilder.BuildAlertRule(tenantId: tenantId, createdByUserId: userId, isCustom: false, isEnabled: true);
         defaultEnabled.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(defaultEnabled);
 
-        int disabled = await repo.DisableCustomAlertRulesForTenantAsync(tenantId);
+        int disabled = await repo.DisableAlertRulesForTenantAsync(tenantId, customOnly: true);
 
         await Assert.That(disabled).IsEqualTo(1);
 

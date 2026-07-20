@@ -180,7 +180,7 @@ public sealed class DowngradeSubscriptionEndpoint : Endpoint<DowngradeSubscripti
         using IDatabaseTransaction transaction = await _transactionProvider.BeginTransactionAsync(ct);
 
         // Proactively update local subscription to avoid stale data before webhook arrives
-        await _subscriptionRepository.DowngradeSubscriptionToProAsync(tenantId, ct);
+        await _subscriptionRepository.UpdateSubscriptionStateAsync(tenantId, SubscriptionTier.Pro, SubscriptionStatus.Active, clearCurrentPeriodEnd: true, cancellationToken: ct);
 
         await _auditLog.InsertAuditLogAsync(AuditHelper.Create(
             tenantId, null, null,

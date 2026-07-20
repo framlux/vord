@@ -93,10 +93,29 @@ public sealed class MachineStateService : IMachineStateService
             SecurityUpdates = totalSecurityUpdates,
         };
 
-        // Step 2: SQL-level filtering, sorting, and pagination via repository.
+        // Step 2: SQL-level filtering, sorting, and pagination via the fleet search pipeline.
+        // The dashboard's named status filter maps onto the search path's HealthStatusValues;
+        // an unrecognized value applies no filter, matching the previous behavior.
         bool desc = string.Equals(sortDir, "desc", StringComparison.OrdinalIgnoreCase);
-        (List<FleetMachineRow> pagedRows, int totalCount) = await machineStateRepo.GetFleetMachinePageAsync(
-            tenantId.Value, statusFilter, search, sortBy, desc, (page - 1) * pageSize, pageSize, ct);
+        List<short>? statusValues = statusFilter?.ToLowerInvariant() switch
+        {
+            "healthy" => [0],
+            "warning" => [1],
+            "critical" => [2],
+            "offline" => [3],
+            _ => null,
+        };
+        FleetSearchParameters parameters = new()
+        {
+            Search = search,
+            HealthStatusValues = statusValues,
+            SortBy = sortBy,
+            SortDescending = desc,
+            Skip = (page - 1) * pageSize,
+            Take = pageSize,
+        };
+        (List<FleetMachineRow> pagedRows, int totalCount) = await machineStateRepo.SearchFleetMachinesAsync(
+            tenantId.Value, parameters, ct);
 
         // Step 3: Build DTOs from paged subset only.
         List<FleetMachineDto> pagedDtos = pagedRows.Select(row => new FleetMachineDto
@@ -142,7 +161,7 @@ public sealed class MachineStateService : IMachineStateService
         IMachineRepository machineRepo = scope.ServiceProvider.GetRequiredService<IMachineRepository>();
         IMachineStateRepository machineStateRepo = scope.ServiceProvider.GetRequiredService<IMachineStateRepository>();
 
-        Machine? machine = await machineRepo.GetMachineAsync(machineId, tenantId.Value, ct);
+        Machine? machine = await machineRepo.GetActiveMachineByIdAsync(machineId, tenantId.Value, ct);
 
         if (machine is null)
         {

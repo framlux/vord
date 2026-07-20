@@ -39,16 +39,16 @@ public sealed class AlertEventListRequest
 public sealed class AlertEventListEndpoint : Endpoint<AlertEventListRequest, ApiResponse<PaginatedResponse<AlertEventDto>>>
 {
     private readonly IAlertEventRepository _alertEventRepo;
-    private readonly IMachineStateRepository _machineStateRepo;
+    private readonly IMachineRepository _machineRepo;
     private readonly ITenantContext _tenantContext;
 
     /// <summary>
     /// Creates a new instance of the <see cref="AlertEventListEndpoint"/> class.
     /// </summary>
-    public AlertEventListEndpoint(IAlertEventRepository alertEventRepo, IMachineStateRepository machineStateRepo, ITenantContext tenantContext)
+    public AlertEventListEndpoint(IAlertEventRepository alertEventRepo, IMachineRepository machineRepo, ITenantContext tenantContext)
     {
         _alertEventRepo = alertEventRepo;
-        _machineStateRepo = machineStateRepo;
+        _machineRepo = machineRepo;
         _tenantContext = tenantContext;
     }
 
@@ -88,7 +88,7 @@ public sealed class AlertEventListEndpoint : Endpoint<AlertEventListRequest, Api
         List<AlertEvent> events = await _alertEventRepo.GetAlertEventsForTenantAsync(tenantId, skip, pageSize, statusFilter, severityFilter, ct);
 
         List<long> machineIds = events.Select(e => e.MachineId).Distinct().ToList();
-        Dictionary<long, string> machineNames = await _machineStateRepo.GetNameMapAsync(machineIds, ct);
+        Dictionary<long, string> machineNames = await _machineRepo.GetMachineNamesAsync(machineIds, ct);
 
         List<AlertEventDto> dtos = events.Select(e => new AlertEventDto
         {

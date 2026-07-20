@@ -18,9 +18,22 @@ public interface ISubscriptionRepository
     Task<TenantSubscription> CreateTenantSubscriptionAsync(TenantSubscription subscription, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Updates a subscription after a checkout completes.
+    /// Updates the state of a tenant's subscription in a single parameterized UPDATE. Replaces
+    /// the previous per-transition mutators (checkout, revert-to-free, past-due, reactivate,
+    /// downgrade-to-pro, deactivate, admin update).
     /// </summary>
-    Task UpdateSubscriptionOnCheckoutAsync(int tenantId, SubscriptionTier tier, CancellationToken cancellationToken = default);
+    /// <param name="tenantId">The tenant whose subscription is updated.</param>
+    /// <param name="tier">The new tier, or null to leave the tier unchanged.</param>
+    /// <param name="status">The new subscription status.</param>
+    /// <param name="clearCurrentPeriodEnd">When true, sets <see cref="TenantSubscription.CurrentPeriodEnd"/> to null; otherwise the column is left unchanged.</param>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    /// <returns>The number of rows updated (0 when the tenant has no subscription).</returns>
+    Task<int> UpdateSubscriptionStateAsync(
+        int tenantId,
+        SubscriptionTier? tier,
+        SubscriptionStatus status,
+        bool clearCurrentPeriodEnd = false,
+        CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Updates the current period end of a subscription.
@@ -28,60 +41,14 @@ public interface ISubscriptionRepository
     Task UpdateSubscriptionPeriodEndAsync(int tenantId, DateTimeOffset currentPeriodEnd, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Reverts a subscription to the Free tier after cancellation.
-    /// </summary>
-    Task RevertSubscriptionToFreeAsync(int tenantId, CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// Sets a subscription status to PastDue after a payment failure.
-    /// </summary>
-    Task SetSubscriptionPastDueAsync(int tenantId, CancellationToken cancellationToken = default);
-
-    /// <summary>
     /// Gets the subscription for a tenant.
     /// </summary>
     Task<TenantSubscription?> GetSubscriptionForTenantAsync(int tenantId, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Sets a subscription status to Active after a successful payment recovery.
-    /// </summary>
-    Task SetSubscriptionActiveAsync(int tenantId, CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// Downgrades a subscription from Team to Pro tier.
-    /// </summary>
-    Task DowngradeSubscriptionToProAsync(int tenantId, CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// Deactivates a subscription by setting its status to Canceled.
-    /// </summary>
-    Task DeactivateSubscriptionAsync(int tenantId, CancellationToken cancellationToken = default);
-
-    /// <summary>
     /// Gets all subscriptions where the tier is not Free (i.e., paid subscriptions that have a Stripe counterpart).
     /// </summary>
     Task<List<TenantSubscription>> GetPaidSubscriptionsAsync(CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// Provisions a new Free tier subscription for a tenant with the specified limits.
-    /// </summary>
-    Task<TenantSubscription> InsertSubscriptionAsync(TenantSubscription subscription, CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// Reactivates a Free tier subscription by setting it to Active with updated limits.
-    /// </summary>
-    Task ReactivateFreeSubscriptionAsync(int subscriptionId, CancellationToken cancellationToken = default);
-
-    /// <summary>
-    /// Updates a subscription's tier and status.
-    /// Used by admin interfaces for direct subscription management.
-    /// </summary>
-    /// <param name="tenantId">The tenant ID.</param>
-    /// <param name="tier">The new subscription tier.</param>
-    /// <param name="status">The new subscription status.</param>
-    /// <param name="cancellationToken">A cancellation token.</param>
-    /// <returns>The number of rows updated.</returns>
-    Task<int> UpdateSubscriptionAdminAsync(int tenantId, SubscriptionTier tier, SubscriptionStatus status, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Returns subscriptions for the given tenant IDs.

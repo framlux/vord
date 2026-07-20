@@ -98,7 +98,7 @@ public sealed class ReactivateSubscriptionEndpoint : EndpointWithoutRequest<ApiR
         using IDatabaseTransaction transaction = await _transactionProvider.BeginTransactionAsync(ct);
 
         // Reactivate by reverting to Free tier with Active status
-        await _subscriptionRepository.RevertSubscriptionToFreeAsync(tenantId, ct);
+        await _subscriptionRepository.UpdateSubscriptionStateAsync(tenantId, SubscriptionTier.Free, SubscriptionStatus.Active, clearCurrentPeriodEnd: true, cancellationToken: ct);
 
         await _auditLog.InsertAuditLogAsync(AuditHelper.Create(
             tenantId, null, null,

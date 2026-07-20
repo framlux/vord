@@ -31,21 +31,22 @@ public sealed class InitialMigration : Migration
             .WithColumn("Value").AsString().NotNullable()
             .WithColumn("Version").AsInt32().NotNullable();
 
-        // Seed default configuration values so the admin panel displays settings before manual edits.
+        // Seed default configuration values so the admin panel displays settings before manual
+        // edits. Values are frozen literals — this migration is a snapshot, not a projection of
+        // current code. A repository test asserts these rows stay aligned with the enum and with
+        // the runtime defaults in ServerSettingDefaults.
         Insert.IntoTable(TableNames.ServerConfigurationSettings)
-            .Row(new { Key = 1, Value = "300", Version = 1 })
-            .Row(new { Key = 2, Value = "900", Version = 1 })
-            .Row(new { Key = 3, Value = "300", Version = 1 })
-            .Row(new { Key = 4, Value = "30", Version = 1 })
-            .Row(new { Key = 5, Value = "7", Version = 1 })
-            .Row(new { Key = 6, Value = "300", Version = 1 })
-            .Row(new { Key = 7, Value = "30", Version = 1 })
-            .Row(new { Key = 8, Value = "true", Version = 1 })
-            .Row(new { Key = 9, Value = "60", Version = 1 })
-            .Row(new { Key = 10, Value = "900", Version = 1 })
-            .Row(new { Key = 11, Value = "15", Version = 1 })
-            .Row(new { Key = 12, Value = "300", Version = 1 })
-            .Row(new { Key = 14, Value = "3600", Version = 1 });
+            .Row(new { Key = (int)Enums.ServerConfigurationSettingKeys.AgentHeartbeatSeconds, Value = "300", Version = 1 })
+            .Row(new { Key = (int)Enums.ServerConfigurationSettingKeys.AgentConfigRefreshSeconds, Value = "900", Version = 1 })
+            .Row(new { Key = (int)Enums.ServerConfigurationSettingKeys.OnlineThresholdSeconds, Value = "300", Version = 1 })
+            .Row(new { Key = (int)Enums.ServerConfigurationSettingKeys.DeduplicationTtlSeconds, Value = "300", Version = 1 })
+            .Row(new { Key = (int)Enums.ServerConfigurationSettingKeys.AgentCommandPollSeconds, Value = "30", Version = 1 })
+            .Row(new { Key = (int)Enums.ServerConfigurationSettingKeys.AllowUserSignup, Value = "true", Version = 1 })
+            .Row(new { Key = (int)Enums.ServerConfigurationSettingKeys.TelemetryCollectFastSeconds, Value = "60", Version = 1 })
+            .Row(new { Key = (int)Enums.ServerConfigurationSettingKeys.TelemetryCollectSlowSeconds, Value = "900", Version = 1 })
+            .Row(new { Key = (int)Enums.ServerConfigurationSettingKeys.TelemetrySendFastSeconds, Value = "15", Version = 1 })
+            .Row(new { Key = (int)Enums.ServerConfigurationSettingKeys.TelemetrySendSlowSeconds, Value = "300", Version = 1 })
+            .Row(new { Key = (int)Enums.ServerConfigurationSettingKeys.ServiceStatusSeconds, Value = "3600", Version = 1 });
 
         Create.Table(TableNames.Users)
             .WithColumn("Id").AsInt32().PrimaryKey().Identity().NotNullable()

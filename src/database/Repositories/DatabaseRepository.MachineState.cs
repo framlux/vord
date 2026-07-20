@@ -95,19 +95,6 @@ public partial class DatabaseRepository : IMachineStateRepository
     }
 
     /// <inheritdoc/>
-    public async Task<Dictionary<long, string>> GetNameMapAsync(List<long> machineIds, CancellationToken cancellationToken)
-    {
-        if (machineIds.Count == 0)
-        {
-            return new Dictionary<long, string>();
-        }
-
-        return await _db.MachineStateSummaries
-            .Where(s => machineIds.Contains(s.MachineId))
-            .ToDictionaryAsync(s => s.MachineId, s => s.Name, cancellationToken);
-    }
-
-    /// <inheritdoc/>
     public async Task<List<MachineStateSummary>> GetSummaryListByMachineIdsAsync(List<long> machineIds, CancellationToken cancellationToken)
     {
         if (machineIds.Count == 0)
@@ -397,64 +384,6 @@ public partial class DatabaseRepository : IMachineStateRepository
         int totalSecurityUpdates = await baseQuery.SumAsync(r => r.SecurityUpdates ?? 0, cancellationToken);
 
         return (healthCounts, totalSecurityUpdates);
-    }
-
-    /// <inheritdoc/>
-    public async Task<(List<FleetMachineRow> Rows, int TotalCount)> GetFleetMachinePageAsync(
-        int tenantId, string? statusFilter, string? search, string sortBy, bool sortDescending, int skip, int take, CancellationToken cancellationToken)
-    {
-        IQueryable<FleetMachineRow> query = BuildFleetBaseQuery(tenantId);
-
-        if (string.IsNullOrWhiteSpace(statusFilter) == false)
-        {
-            short? targetStatus = statusFilter.ToLowerInvariant() switch
-            {
-                "healthy" => 0,
-                "warning" => 1,
-                "critical" => 2,
-                "offline" => 3,
-                _ => null,
-            };
-
-            if (targetStatus.HasValue)
-            {
-                query = query.Where(r => r.HealthStatus == targetStatus.Value);
-            }
-        }
-
-        if (string.IsNullOrWhiteSpace(search) == false)
-        {
-            string q = search.ToLowerInvariant();
-            query = query.Where(r =>
-                r.Name.ToLower().Contains(q) ||
-                ((r.Hostname != null) && r.Hostname.ToLower().Contains(q)) ||
-                ((r.HardwareModel != null) && r.HardwareModel.ToLower().Contains(q)));
-        }
-
-        int totalCount = await query.CountAsync(cancellationToken);
-
-        IQueryable<FleetMachineRow> sortedQuery = sortBy.ToLowerInvariant() switch
-        {
-            "status" => sortDescending
-                ? query.OrderByDescending(r => r.HealthStatus)
-                : query.OrderBy(r => r.HealthStatus),
-            "cpu" => sortDescending
-                ? query.OrderByDescending(r => r.CpuUsagePercent ?? 0)
-                : query.OrderBy(r => r.CpuUsagePercent ?? 0),
-            "memory" => sortDescending
-                ? query.OrderByDescending(r => r.MemoryUsagePercent ?? 0)
-                : query.OrderBy(r => r.MemoryUsagePercent ?? 0),
-            _ => sortDescending
-                ? query.OrderByDescending(r => r.Name)
-                : query.OrderBy(r => r.Name),
-        };
-
-        List<FleetMachineRow> rows = await sortedQuery
-            .Skip(skip)
-            .Take(take)
-            .ToListAsync(cancellationToken);
-
-        return (rows, totalCount);
     }
 
     /// <inheritdoc/>
