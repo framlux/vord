@@ -14,13 +14,13 @@ namespace Framlux.FleetManagement.Server.Endpoints.Web.Machines;
 /// </summary>
 public sealed class RevokeRegistrationTokenEndpoint : EndpointWithoutRequest<ApiResponse<object>>
 {
-    private readonly IRegistrationTokenHandler _handler;
+    private readonly RegistrationTokenHandler _handler;
     private readonly ITenantContext _tenantContext;
 
     /// <summary>
     /// Creates a new instance of the <see cref="RevokeRegistrationTokenEndpoint"/> class.
     /// </summary>
-    public RevokeRegistrationTokenEndpoint(IRegistrationTokenHandler handler, ITenantContext tenantContext)
+    public RevokeRegistrationTokenEndpoint(RegistrationTokenHandler handler, ITenantContext tenantContext)
     {
         _handler = handler;
         _tenantContext = tenantContext;

@@ -37,14 +37,14 @@ public sealed class CreateOrganizationResponse
 /// </summary>
 public sealed class CreateOrganizationEndpoint : Endpoint<CreateOrganizationRequest, ApiResponse<CreateOrganizationResponse>>
 {
-    private readonly IOnboardingHandler _handler;
+    private readonly OnboardingHandler _handler;
     private readonly ILogger<CreateOrganizationEndpoint> _logger;
 
     /// <summary>
     /// Creates a new instance of the <see cref="CreateOrganizationEndpoint"/> class.
     /// </summary>
     public CreateOrganizationEndpoint(
-        IOnboardingHandler handler,
+        OnboardingHandler handler,
         ILogger<CreateOrganizationEndpoint> logger)
     {
         _handler = handler;

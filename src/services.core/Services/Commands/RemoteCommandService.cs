@@ -13,7 +13,7 @@ namespace Framlux.FleetManagement.Services.Core.Commands;
 /// <summary>
 /// Implementation of remote command management.
 /// </summary>
-public sealed class RemoteCommandService : IRemoteCommandService
+public sealed class RemoteCommandService
 {
     private const ulong CapabilityRemoteCommands = 1UL;
 
@@ -62,7 +62,12 @@ public sealed class RemoteCommandService : IRemoteCommandService
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
-    /// <inheritdoc/>
+    /// <summary>
+    /// Submits a signed remote command. The server verifies the Ed25519 signature, command type, machine ownership, and nonce uniqueness.
+    /// </summary>
+    /// <param name="command">The remote command to submit</param>
+    /// <param name="cancellationToken">Token used to cancel async calls</param>
+    /// <returns>Returns the created command, or an error result</returns>
     public async Task<ServiceResult<RemoteCommand>> SubmitCommandAsync(RemoteCommand command, CancellationToken cancellationToken = default)
     {
         // Validate command type against allowlist.
@@ -180,13 +185,27 @@ public sealed class RemoteCommandService : IRemoteCommandService
         return ServiceResult<RemoteCommand>.Ok(created);
     }
 
-    /// <inheritdoc/>
+    /// <summary>
+    /// Gets command history for a machine.
+    /// </summary>
+    /// <param name="machineId">The machine ID</param>
+    /// <param name="tenantId">The tenant ID</param>
+    /// <param name="page">Page number (1-based)</param>
+    /// <param name="pageSize">Page size</param>
+    /// <param name="cancellationToken">Token used to cancel async calls</param>
+    /// <returns>Returns a list of remote commands</returns>
     public async Task<List<RemoteCommand>> GetCommandHistoryAsync(long machineId, int tenantId, int page, int pageSize, CancellationToken cancellationToken = default)
     {
         return await _remoteCommandRepository.GetCommandsForMachineAsync(machineId, tenantId, page, pageSize, cancellationToken);
     }
 
-    /// <inheritdoc/>
+    /// <summary>
+    /// Gets a single command by its database ID.
+    /// </summary>
+    /// <param name="id">The command database ID</param>
+    /// <param name="tenantId">The tenant ID for authorization</param>
+    /// <param name="cancellationToken">Token used to cancel async calls</param>
+    /// <returns>Returns the command if found</returns>
     public async Task<ServiceResult<RemoteCommand>> GetCommandDetailAsync(long id, int tenantId, CancellationToken cancellationToken = default)
     {
         RemoteCommand? command = await _remoteCommandRepository.GetRemoteCommandByIdAsync(id, tenantId, cancellationToken);

@@ -18,7 +18,7 @@ namespace Framlux.FleetManagement.Services.Core.Handlers;
 /// <summary>
 /// Handles admin panel operations.
 /// </summary>
-public sealed class AdminHandler : IAdminHandler
+public sealed class AdminHandler
 {
     /// <summary>
     /// Human-readable descriptions for each server configuration setting key.
@@ -75,7 +75,11 @@ public sealed class AdminHandler : IAdminHandler
         _logger = logger;
     }
 
-    /// <inheritdoc/>
+    /// <summary>
+    /// Returns all server configuration settings.
+    /// </summary>
+    /// <param name="ct">A cancellation token.</param>
+    /// <returns>A service result containing the list of settings.</returns>
     public async Task<ServiceResult<List<SettingEntry>>> GetSettingsAsync(CancellationToken ct)
     {
         List<ServerConfigurationSettings> settings = await _configRepo.ListAllSettingsAsync(ct);
@@ -98,7 +102,13 @@ public sealed class AdminHandler : IAdminHandler
         return ServiceResult<List<SettingEntry>>.Ok(entries);
     }
 
-    /// <inheritdoc/>
+    /// <summary>
+    /// Updates one or more server configuration settings.
+    /// </summary>
+    /// <param name="updates">The settings to update.</param>
+    /// <param name="userId">The ID of the global admin performing the update.</param>
+    /// <param name="ct">A cancellation token.</param>
+    /// <returns>A service result containing the full updated list of settings.</returns>
     public async Task<ServiceResult<List<SettingEntry>>> UpdateSettingsAsync(
         List<SettingUpdateEntry> updates, int userId, CancellationToken ct)
     {
@@ -146,7 +156,11 @@ public sealed class AdminHandler : IAdminHandler
         return await GetSettingsAsync(ct);
     }
 
-    /// <inheritdoc/>
+    /// <summary>
+    /// Returns all user accounts with their tenant roles.
+    /// </summary>
+    /// <param name="ct">A cancellation token.</param>
+    /// <returns>A service result containing the list of user account DTOs.</returns>
     public async Task<ServiceResult<List<UserAccountDto>>> GetAllUsersAsync(CancellationToken ct)
     {
         (List<UserAccount> users, Dictionary<int, List<UserTenantRole>> rolesByUser) =

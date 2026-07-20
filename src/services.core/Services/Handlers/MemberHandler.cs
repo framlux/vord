@@ -16,7 +16,7 @@ namespace Framlux.FleetManagement.Services.Core.Handlers;
 /// <summary>
 /// Handles operations for managing tenant members.
 /// </summary>
-public sealed class MemberHandler : IMemberHandler
+public sealed class MemberHandler
 {
     private readonly IDatabaseTransactionProvider _transactionProvider;
     private readonly IAuditLogRepository _auditLog;
@@ -57,7 +57,14 @@ public sealed class MemberHandler : IMemberHandler
         _securityStampService = securityStampService;
     }
 
-    /// <inheritdoc/>
+    /// <summary>
+    /// Removes a member from the specified tenant.
+    /// </summary>
+    /// <param name="targetUserId">The ID of the user to remove.</param>
+    /// <param name="tenantId">The tenant ID, or null if not available.</param>
+    /// <param name="currentUserId">The ID of the user performing the removal.</param>
+    /// <param name="ct">A cancellation token.</param>
+    /// <returns>A service result containing the API response.</returns>
     public async Task<ServiceResult<ApiResponse<object>>> RemoveAsync(int targetUserId, int? tenantId, int currentUserId, CancellationToken ct)
     {
         if (tenantId is null)
@@ -131,7 +138,15 @@ public sealed class MemberHandler : IMemberHandler
         return ServiceResult<ApiResponse<object>>.Ok(ApiResponse<object>.Ok(new { }, "Member removed"));
     }
 
-    /// <inheritdoc/>
+    /// <summary>
+    /// Changes the role of a member in the specified tenant.
+    /// </summary>
+    /// <param name="targetUserId">The ID of the user whose role is being changed.</param>
+    /// <param name="tenantId">The tenant ID, or null if not available.</param>
+    /// <param name="currentUserId">The ID of the user performing the role change.</param>
+    /// <param name="newRole">The new role to assign as a string.</param>
+    /// <param name="ct">A cancellation token.</param>
+    /// <returns>A service result containing the API response.</returns>
     public async Task<ServiceResult<ApiResponse<object>>> ChangeRoleAsync(int targetUserId, int? tenantId, int currentUserId, string newRole, CancellationToken ct)
     {
         if (tenantId is null)

@@ -14,7 +14,7 @@ namespace Framlux.FleetManagement.Services.Core.Handlers;
 /// <summary>
 /// Handles machine detail operations.
 /// </summary>
-public sealed class MachineDetailHandler : IMachineDetailHandler
+public sealed class MachineDetailHandler
 {
     private const ulong CapabilityRemoteCommands = 1UL;
 
@@ -47,7 +47,9 @@ public sealed class MachineDetailHandler : IMachineDetailHandler
         _stateService = stateService;
     }
 
-    /// <inheritdoc/>
+    /// <summary>
+    /// Gets the basic detail for a machine.
+    /// </summary>
     public async Task<ServiceResult<MachineDto>> GetDetailAsync(long machineId, int? tenantId, CancellationToken ct)
     {
         if (tenantId is null)
@@ -90,7 +92,9 @@ public sealed class MachineDetailHandler : IMachineDetailHandler
         return ServiceResult<MachineDto>.Ok(dto);
     }
 
-    /// <inheritdoc/>
+    /// <summary>
+    /// Gets the full detail for a machine (delegates to IMachineStateService).
+    /// </summary>
     public async Task<ServiceResult<MachineDetailDto>> GetFullDetailAsync(long machineId, int? tenantId, CancellationToken ct)
     {
         MachineDetailDto? detail = await _stateService.GetMachineDetailAsync(machineId, tenantId, ct);
@@ -102,7 +106,9 @@ public sealed class MachineDetailHandler : IMachineDetailHandler
         return ServiceResult<MachineDetailDto>.Ok(detail);
     }
 
-    /// <inheritdoc/>
+    /// <summary>
+    /// Gets the online/offline status for a machine.
+    /// </summary>
     public async Task<ServiceResult<MachineStatusDto>> GetStatusAsync(long machineId, int? tenantId, CancellationToken ct)
     {
         if (tenantId is null)

@@ -14,14 +14,14 @@ namespace Framlux.FleetManagement.Server.Endpoints.Web.Invitations;
 /// </summary>
 public sealed class InvitationRevokeEndpoint : EndpointWithoutRequest<ApiResponse<object>>
 {
-    private readonly IInvitationHandler _handler;
+    private readonly InvitationHandler _handler;
     private readonly ILogger<InvitationRevokeEndpoint> _logger;
     private readonly ITenantContext _tenantContext;
 
     /// <summary>
     /// Creates a new instance of the <see cref="InvitationRevokeEndpoint"/> class.
     /// </summary>
-    public InvitationRevokeEndpoint(IInvitationHandler handler, ILogger<InvitationRevokeEndpoint> logger, ITenantContext tenantContext)
+    public InvitationRevokeEndpoint(InvitationHandler handler, ILogger<InvitationRevokeEndpoint> logger, ITenantContext tenantContext)
     {
         _handler = handler;
         _logger = logger;

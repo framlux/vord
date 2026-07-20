@@ -18,7 +18,7 @@ namespace Framlux.FleetManagement.Services.Core.Handlers;
 /// <summary>
 /// Handles invitation business logic.
 /// </summary>
-public sealed class InvitationHandler : IInvitationHandler
+public sealed class InvitationHandler
 {
     private readonly IDatabaseTransactionProvider _transactionProvider;
     private readonly IAuditLogRepository _auditLog;
@@ -61,7 +61,9 @@ public sealed class InvitationHandler : IInvitationHandler
         _roleCacheInvalidator = roleCacheInvalidator;
     }
 
-    /// <inheritdoc/>
+    /// <summary>
+    /// Creates a new tenant invitation.
+    /// </summary>
     public async Task<ServiceResult<InvitationCreateResult>> CreateAsync(
         string email,
         string? role,
@@ -170,7 +172,9 @@ public sealed class InvitationHandler : IInvitationHandler
         });
     }
 
-    /// <inheritdoc/>
+    /// <summary>
+    /// Accepts a tenant invitation.
+    /// </summary>
     public async Task<ServiceResult<InvitationAcceptResult>> AcceptAsync(
         string token,
         string userEmail,
@@ -299,7 +303,9 @@ public sealed class InvitationHandler : IInvitationHandler
         });
     }
 
-    /// <inheritdoc/>
+    /// <summary>
+    /// Revokes a pending invitation.
+    /// </summary>
     public async Task<ServiceResult<InvitationRevokeResult>> RevokeAsync(
         int invitationId,
         int? tenantId,
@@ -344,7 +350,9 @@ public sealed class InvitationHandler : IInvitationHandler
         return ServiceResult<InvitationRevokeResult>.Ok(new InvitationRevokeResult());
     }
 
-    /// <inheritdoc/>
+    /// <summary>
+    /// Resends an invitation by revoking the old one and creating a fresh one.
+    /// </summary>
     public async Task<ServiceResult<InvitationResendResult>> ResendAsync(
         int invitationId,
         int? tenantId,

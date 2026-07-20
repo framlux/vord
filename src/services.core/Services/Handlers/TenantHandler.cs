@@ -14,7 +14,7 @@ namespace Framlux.FleetManagement.Services.Core.Handlers;
 /// <summary>
 /// Handles tenant management operations.
 /// </summary>
-public sealed partial class TenantHandler : ITenantHandler
+public sealed partial class TenantHandler
 {
     private const int MinNameLength = 5;
     private const int MaxNameLength = 100;
@@ -51,7 +51,14 @@ public sealed partial class TenantHandler : ITenantHandler
         _logger = logger;
     }
 
-    /// <inheritdoc/>
+    /// <summary>
+    /// Creates a new tenant.
+    /// </summary>
+    /// <param name="name">The tenant name.</param>
+    /// <param name="logoUrl">The tenant logo URL.</param>
+    /// <param name="userId">The ID of the creating user.</param>
+    /// <param name="ct">A cancellation token.</param>
+    /// <returns>A service result containing the created tenant DTO.</returns>
     public async Task<ServiceResult<TenantDto>> CreateAsync(string name, string logoUrl, int userId, CancellationToken ct)
     {
         if (string.IsNullOrWhiteSpace(name))
@@ -114,7 +121,12 @@ public sealed partial class TenantHandler : ITenantHandler
         return ServiceResult<TenantDto>.Ok(dto);
     }
 
-    /// <inheritdoc/>
+    /// <summary>
+    /// Gets the detail of a specific tenant.
+    /// </summary>
+    /// <param name="tenantId">The tenant ID.</param>
+    /// <param name="ct">A cancellation token.</param>
+    /// <returns>A service result containing the tenant DTO.</returns>
     public async Task<ServiceResult<TenantDto>> GetDetailAsync(int tenantId, CancellationToken ct)
     {
         Tenant? tenant = await _tenantRepo.GetTenantByIdAsync(tenantId, ct);
@@ -134,7 +146,13 @@ public sealed partial class TenantHandler : ITenantHandler
         return ServiceResult<TenantDto>.Ok(dto);
     }
 
-    /// <inheritdoc/>
+    /// <summary>
+    /// Lists tenants visible to a user.
+    /// </summary>
+    /// <param name="isGlobalAdmin">Whether the user is a global admin.</param>
+    /// <param name="tenantIds">The tenant IDs the user has roles in.</param>
+    /// <param name="ct">A cancellation token.</param>
+    /// <returns>A service result containing the list of tenant DTOs.</returns>
     public async Task<ServiceResult<List<TenantDto>>> ListForUserAsync(bool isGlobalAdmin, List<int> tenantIds, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(tenantIds);

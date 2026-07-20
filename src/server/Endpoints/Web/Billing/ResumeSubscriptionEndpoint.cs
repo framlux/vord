@@ -30,7 +30,7 @@ public sealed class ResumeSubscriptionResponse
 /// </summary>
 public sealed class ResumeSubscriptionEndpoint : EndpointWithoutRequest<ApiResponse<ResumeSubscriptionResponse>>
 {
-    private readonly IBillingStatus _billingStatus;
+    private readonly BillingStatus _billingStatus;
     private readonly IAuditLogRepository _auditLog;
     private readonly ITenantRepository _tenantRepository;
     private readonly ISubscriptionService _subscriptionService;
@@ -42,7 +42,7 @@ public sealed class ResumeSubscriptionEndpoint : EndpointWithoutRequest<ApiRespo
     /// Creates a new instance of the <see cref="ResumeSubscriptionEndpoint"/> class.
     /// </summary>
     public ResumeSubscriptionEndpoint(
-        IBillingStatus billingStatus,
+        BillingStatus billingStatus,
         IAuditLogRepository auditLog,
         ITenantRepository tenantRepository,
         ISubscriptionService subscriptionService,

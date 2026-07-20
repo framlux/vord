@@ -14,13 +14,13 @@ namespace Framlux.FleetManagement.Server.Endpoints.Web.Machines;
 /// </summary>
 public sealed class MachineAuthorizedKeyRevokeEndpoint : EndpointWithoutRequest<ApiResponse<bool>>
 {
-    private readonly IMachineAuthorizedKeyService _authorizedKeyService;
+    private readonly MachineAuthorizedKeyService _authorizedKeyService;
     private readonly ITenantContext _tenantContext;
 
     /// <summary>
     /// Creates a new instance of the <see cref="MachineAuthorizedKeyRevokeEndpoint"/> class.
     /// </summary>
-    public MachineAuthorizedKeyRevokeEndpoint(IMachineAuthorizedKeyService authorizedKeyService, ITenantContext tenantContext)
+    public MachineAuthorizedKeyRevokeEndpoint(MachineAuthorizedKeyService authorizedKeyService, ITenantContext tenantContext)
     {
         _authorizedKeyService = authorizedKeyService;
         _tenantContext = tenantContext;

@@ -14,13 +14,13 @@ namespace Framlux.FleetManagement.Server.Endpoints.Web.Tenants;
 /// </summary>
 public sealed class GetTenantOidcConfigEndpoint : EndpointWithoutRequest<ApiResponse<TenantOidcConfigDto>>
 {
-    private readonly ITenantOidcHandler _handler;
+    private readonly TenantOidcHandler _handler;
     private readonly ITenantContext _tenantContext;
 
     /// <summary>
     /// Creates a new instance of the <see cref="GetTenantOidcConfigEndpoint"/> class.
     /// </summary>
-    public GetTenantOidcConfigEndpoint(ITenantOidcHandler handler, ITenantContext tenantContext)
+    public GetTenantOidcConfigEndpoint(TenantOidcHandler handler, ITenantContext tenantContext)
     {
         _handler = handler;
         _tenantContext = tenantContext;

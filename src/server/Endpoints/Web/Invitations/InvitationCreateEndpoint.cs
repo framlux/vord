@@ -68,7 +68,7 @@ public sealed class InvitationResponse
 /// </summary>
 public sealed class InvitationCreateEndpoint : Endpoint<CreateInvitationRequest, ApiResponse<InvitationResponse>>
 {
-    private readonly IInvitationHandler _handler;
+    private readonly InvitationHandler _handler;
     private readonly AppOptions _appOptions;
     private readonly ILogger<InvitationCreateEndpoint> _logger;
     private readonly ITenantContext _tenantContext;
@@ -77,7 +77,7 @@ public sealed class InvitationCreateEndpoint : Endpoint<CreateInvitationRequest,
     /// Creates a new instance of the <see cref="InvitationCreateEndpoint"/> class.
     /// </summary>
     public InvitationCreateEndpoint(
-        IInvitationHandler handler,
+        InvitationHandler handler,
         IOptions<AppOptions> appOptions,
         ILogger<InvitationCreateEndpoint> logger,
         ITenantContext tenantContext)

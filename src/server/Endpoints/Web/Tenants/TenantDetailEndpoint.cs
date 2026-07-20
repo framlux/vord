@@ -16,13 +16,13 @@ namespace Framlux.FleetManagement.Server.Endpoints.Web.Tenants;
 /// </summary>
 public sealed class TenantDetailEndpoint : EndpointWithoutRequest<ApiResponse<TenantDto>>
 {
-    private readonly ITenantHandler _handler;
+    private readonly TenantHandler _handler;
     private readonly ITenantContext _tenantContext;
 
     /// <summary>
     /// Creates a new instance of the <see cref="TenantDetailEndpoint"/> class.
     /// </summary>
-    public TenantDetailEndpoint(ITenantHandler handler, ITenantContext tenantContext)
+    public TenantDetailEndpoint(TenantHandler handler, ITenantContext tenantContext)
     {
         _handler = handler;
         _tenantContext = tenantContext;

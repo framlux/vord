@@ -10,9 +10,11 @@ namespace Framlux.FleetManagement.Services.Core.Billing;
 /// <summary>
 /// Singleton service that caches the Billing:Enabled configuration value.
 /// </summary>
-public sealed class BillingStatus : IBillingStatus
+public sealed class BillingStatus
 {
-    /// <inheritdoc/>
+    /// <summary>
+    /// Whether billing integration is enabled for this deployment.
+    /// </summary>
     public bool IsEnabled { get; }
 
     /// <summary>

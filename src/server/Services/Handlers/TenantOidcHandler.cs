@@ -16,7 +16,7 @@ namespace Framlux.FleetManagement.Server.Services.Handlers;
 /// <summary>
 /// Handles tenant OIDC configuration operations.
 /// </summary>
-public sealed class TenantOidcHandler : ITenantOidcHandler
+public sealed class TenantOidcHandler
 {
     private readonly ITenantRepository _tenantRepo;
     private readonly ISubscriptionService _subscriptionService;
@@ -47,7 +47,13 @@ public sealed class TenantOidcHandler : ITenantOidcHandler
         _auditLog = auditLog;
     }
 
-    /// <inheritdoc/>
+    /// <summary>
+    /// Gets the OIDC configuration for a tenant.
+    /// </summary>
+    /// <param name="tenantId">The tenant ID.</param>
+    /// <param name="claimTenantId">The tenant ID from the user's claims.</param>
+    /// <param name="ct">A cancellation token.</param>
+    /// <returns>A service result containing the OIDC config DTO.</returns>
     public async Task<ServiceResult<TenantOidcConfigDto>> GetConfigAsync(int tenantId, int? claimTenantId, CancellationToken ct)
     {
         if ((claimTenantId is null) || (claimTenantId.Value != tenantId))
@@ -81,7 +87,15 @@ public sealed class TenantOidcHandler : ITenantOidcHandler
         return ServiceResult<TenantOidcConfigDto>.Ok(dto);
     }
 
-    /// <inheritdoc/>
+    /// <summary>
+    /// Updates the OIDC configuration for a tenant.
+    /// </summary>
+    /// <param name="tenantId">The tenant ID.</param>
+    /// <param name="claimTenantId">The tenant ID from the user's claims.</param>
+    /// <param name="userId">The ID of the user performing the update.</param>
+    /// <param name="request">The OIDC configuration to apply.</param>
+    /// <param name="ct">A cancellation token.</param>
+    /// <returns>A service result containing the updated OIDC config DTO.</returns>
     public async Task<ServiceResult<TenantOidcConfigDto>> UpdateConfigAsync(int tenantId, int? claimTenantId, int userId, TenantOidcConfigDto request, CancellationToken ct)
     {
         if ((claimTenantId is null) || (claimTenantId.Value != tenantId))

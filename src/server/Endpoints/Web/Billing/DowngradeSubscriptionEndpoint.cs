@@ -40,7 +40,7 @@ public sealed class DowngradeSubscriptionResponse
 /// </summary>
 public sealed class DowngradeSubscriptionEndpoint : Endpoint<DowngradeSubscriptionRequest, ApiResponse<DowngradeSubscriptionResponse>>
 {
-    private readonly IBillingStatus _billingStatus;
+    private readonly BillingStatus _billingStatus;
     private readonly IDatabaseTransactionProvider _transactionProvider;
     private readonly IAuditLogRepository _auditLog;
     private readonly ISubscriptionRepository _subscriptionRepository;
@@ -48,7 +48,7 @@ public sealed class DowngradeSubscriptionEndpoint : Endpoint<DowngradeSubscripti
     private readonly ISubscriptionService _subscriptionService;
     private readonly ITenantContext _tenantContext;
     private readonly IBillingApiClient _billingApiClient;
-    private readonly IDowngradeGuardService _downgradeGuardService;
+    private readonly DowngradeGuardService _downgradeGuardService;
     private readonly IDowngradeCleanupService _downgradeCleanupService;
     private readonly ITierFeatureLimitRepository _tierLimitRepo;
     private readonly ILogger<DowngradeSubscriptionEndpoint> _logger;
@@ -57,7 +57,7 @@ public sealed class DowngradeSubscriptionEndpoint : Endpoint<DowngradeSubscripti
     /// Creates a new instance of the <see cref="DowngradeSubscriptionEndpoint"/> class.
     /// </summary>
     public DowngradeSubscriptionEndpoint(
-        IBillingStatus billingStatus,
+        BillingStatus billingStatus,
         IDatabaseTransactionProvider transactionProvider,
         IAuditLogRepository auditLog,
         ISubscriptionRepository subscriptionRepository,
@@ -65,7 +65,7 @@ public sealed class DowngradeSubscriptionEndpoint : Endpoint<DowngradeSubscripti
         ISubscriptionService subscriptionService,
         ITenantContext tenantContext,
         IBillingApiClient billingApiClient,
-        IDowngradeGuardService downgradeGuardService,
+        DowngradeGuardService downgradeGuardService,
         IDowngradeCleanupService downgradeCleanupService,
         ITierFeatureLimitRepository tierLimitRepo,
         ILogger<DowngradeSubscriptionEndpoint> logger)

@@ -30,7 +30,7 @@ public sealed class ReactivateSubscriptionResponse
 /// </summary>
 public sealed class ReactivateSubscriptionEndpoint : EndpointWithoutRequest<ApiResponse<ReactivateSubscriptionResponse>>
 {
-    private readonly IBillingStatus _billingStatus;
+    private readonly BillingStatus _billingStatus;
     private readonly IDatabaseTransactionProvider _transactionProvider;
     private readonly IAuditLogRepository _auditLog;
     private readonly ISubscriptionRepository _subscriptionRepository;
@@ -42,7 +42,7 @@ public sealed class ReactivateSubscriptionEndpoint : EndpointWithoutRequest<ApiR
     /// Creates a new instance of the <see cref="ReactivateSubscriptionEndpoint"/> class.
     /// </summary>
     public ReactivateSubscriptionEndpoint(
-        IBillingStatus billingStatus,
+        BillingStatus billingStatus,
         IDatabaseTransactionProvider transactionProvider,
         IAuditLogRepository auditLog,
         ISubscriptionRepository subscriptionRepository,

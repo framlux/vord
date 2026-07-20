@@ -17,7 +17,7 @@ namespace Framlux.FleetManagement.Server.Endpoints.Web.Invitations;
 /// </summary>
 public sealed class InvitationResendEndpoint : EndpointWithoutRequest<ApiResponse<InvitationResponse>>
 {
-    private readonly IInvitationHandler _handler;
+    private readonly InvitationHandler _handler;
     private readonly AppOptions _appOptions;
     private readonly ILogger<InvitationResendEndpoint> _logger;
     private readonly ITenantContext _tenantContext;
@@ -26,7 +26,7 @@ public sealed class InvitationResendEndpoint : EndpointWithoutRequest<ApiRespons
     /// Creates a new instance of the <see cref="InvitationResendEndpoint"/> class.
     /// </summary>
     public InvitationResendEndpoint(
-        IInvitationHandler handler,
+        InvitationHandler handler,
         IOptions<AppOptions> appOptions,
         ILogger<InvitationResendEndpoint> logger,
         ITenantContext tenantContext)

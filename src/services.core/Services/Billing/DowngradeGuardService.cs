@@ -6,8 +6,11 @@ using Framlux.FleetManagement.Database.Repositories;
 
 namespace Framlux.FleetManagement.Services.Core.Billing;
 
-/// <inheritdoc/>
-public sealed class DowngradeGuardService : IDowngradeGuardService
+/// <summary>
+/// Validates whether a downgrade from Team tier is safe by ensuring at least one
+/// TenantAdmin can still log in after custom OIDC is disabled.
+/// </summary>
+public sealed class DowngradeGuardService
 {
     private readonly ITenantRepository _tenantRepository;
 
@@ -21,7 +24,13 @@ public sealed class DowngradeGuardService : IDowngradeGuardService
         _tenantRepository = tenantRepository;
     }
 
-    /// <inheritdoc/>
+    /// <summary>
+    /// Checks whether a downgrade from Team tier is safe for the specified tenant.
+    /// Returns true if at least one active TenantAdmin uses a social login provider.
+    /// </summary>
+    /// <param name="tenantId">The tenant ID to check.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>True if the downgrade is safe; otherwise, false.</returns>
     public async Task<bool> CanDowngradeFromTeamAsync(int tenantId, CancellationToken ct)
     {
         bool hasNonOidcAdmin = await _tenantRepository.HasNonOidcTenantAdminAsync(tenantId, ct);

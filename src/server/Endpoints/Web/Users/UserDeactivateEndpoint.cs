@@ -15,13 +15,13 @@ namespace Framlux.FleetManagement.Server.Endpoints.Web.Users;
 /// </summary>
 public sealed class UserDeactivateEndpoint : EndpointWithoutRequest<ApiResponse<object>>
 {
-    private readonly IUserHandler _handler;
+    private readonly UserHandler _handler;
     private readonly ITenantContext _tenantContext;
 
     /// <summary>
     /// Creates a new instance of the <see cref="UserDeactivateEndpoint"/> class.
     /// </summary>
-    public UserDeactivateEndpoint(IUserHandler handler, ITenantContext tenantContext)
+    public UserDeactivateEndpoint(UserHandler handler, ITenantContext tenantContext)
     {
         _handler = handler;
         _tenantContext = tenantContext;

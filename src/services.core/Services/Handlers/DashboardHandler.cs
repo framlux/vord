@@ -14,7 +14,7 @@ namespace Framlux.FleetManagement.Services.Core.Handlers;
 /// <summary>
 /// Handles dashboard summary data retrieval.
 /// </summary>
-public sealed class DashboardHandler : IDashboardHandler
+public sealed class DashboardHandler
 {
     private readonly IMachineRepository _machineRepo;
     private readonly IMachinePingService _pingService;
@@ -34,7 +34,12 @@ public sealed class DashboardHandler : IDashboardHandler
         _configService = configService;
     }
 
-    /// <inheritdoc/>
+    /// <summary>
+    /// Gets the dashboard summary statistics.
+    /// </summary>
+    /// <param name="tenantId">The tenant ID of the requesting user.</param>
+    /// <param name="ct">A cancellation token.</param>
+    /// <returns>A service result containing the dashboard summary data.</returns>
     public async Task<ServiceResult<DashboardSummaryDto>> GetSummaryAsync(int? tenantId, CancellationToken ct)
     {
         if (tenantId is null)

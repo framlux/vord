@@ -279,7 +279,7 @@ builder.Services.AddHangfireJobTypes(
     objectStorageEnabled: string.IsNullOrEmpty(objectStorageOpts.BucketName) == false);
 
 // Server-specific handler registrations (have Auth dependencies that stay in server)
-builder.Services.AddScoped<Framlux.FleetManagement.Server.Services.Handlers.ITenantOidcHandler, Framlux.FleetManagement.Server.Services.Handlers.TenantOidcHandler>();
+builder.Services.AddScoped<Framlux.FleetManagement.Server.Services.Handlers.TenantOidcHandler>();
 builder.Services.AddScoped<Framlux.FleetManagement.Server.Auth.TenantContext>();
 builder.Services.AddScoped<Framlux.FleetManagement.Server.Auth.ITenantContext>(
     sp => sp.GetRequiredService<Framlux.FleetManagement.Server.Auth.TenantContext>());

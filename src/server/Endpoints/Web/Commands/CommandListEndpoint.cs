@@ -14,13 +14,13 @@ namespace Framlux.FleetManagement.Server.Endpoints.Web.Commands;
 /// </summary>
 public sealed class CommandListEndpoint : EndpointWithoutRequest<ApiResponse<List<CommandDto>>>
 {
-    private readonly IRemoteCommandService _commandService;
+    private readonly RemoteCommandService _commandService;
     private readonly ITenantContext _tenantContext;
 
     /// <summary>
     /// Creates a new instance of the <see cref="CommandListEndpoint"/> class.
     /// </summary>
-    public CommandListEndpoint(IRemoteCommandService commandService, ITenantContext tenantContext)
+    public CommandListEndpoint(RemoteCommandService commandService, ITenantContext tenantContext)
     {
         _commandService = commandService;
         _tenantContext = tenantContext;

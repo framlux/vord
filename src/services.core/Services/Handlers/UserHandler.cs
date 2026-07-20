@@ -13,7 +13,7 @@ namespace Framlux.FleetManagement.Services.Core.Handlers;
 /// <summary>
 /// Handles user management operations.
 /// </summary>
-public sealed class UserHandler : IUserHandler
+public sealed class UserHandler
 {
     private readonly IUserRepository _userRepo;
     private readonly IRoleCacheInvalidator _roleCacheInvalidator;
@@ -44,7 +44,12 @@ public sealed class UserHandler : IUserHandler
         _logger = logger;
     }
 
-    /// <inheritdoc/>
+    /// <summary>
+    /// Lists users in a tenant.
+    /// </summary>
+    /// <param name="tenantId">The tenant ID to scope the query.</param>
+    /// <param name="ct">A cancellation token.</param>
+    /// <returns>A service result containing the list of user DTOs.</returns>
     public async Task<ServiceResult<List<UserAccountDto>>> ListAsync(int? tenantId, CancellationToken ct)
     {
         if (tenantId is null)
@@ -82,7 +87,13 @@ public sealed class UserHandler : IUserHandler
         return ServiceResult<List<UserAccountDto>>.Ok(dtos);
     }
 
-    /// <inheritdoc/>
+    /// <summary>
+    /// Gets detail for a user in a tenant.
+    /// </summary>
+    /// <param name="userId">The target user ID.</param>
+    /// <param name="tenantId">The tenant ID to scope the query.</param>
+    /// <param name="ct">A cancellation token.</param>
+    /// <returns>A service result containing the user DTO.</returns>
     public async Task<ServiceResult<UserAccountDto>> GetDetailAsync(int userId, int? tenantId, CancellationToken ct)
     {
         if (tenantId is null)
@@ -116,7 +127,14 @@ public sealed class UserHandler : IUserHandler
         return ServiceResult<UserAccountDto>.Ok(dto);
     }
 
-    /// <inheritdoc/>
+    /// <summary>
+    /// Deactivates a user from a tenant.
+    /// </summary>
+    /// <param name="targetUserId">The user to deactivate.</param>
+    /// <param name="currentUserId">The user performing the action.</param>
+    /// <param name="tenantId">The tenant ID to scope the deactivation.</param>
+    /// <param name="ct">A cancellation token.</param>
+    /// <returns>A service result.</returns>
     public async Task<ServiceResult<object>> DeactivateAsync(int targetUserId, int currentUserId, int? tenantId, CancellationToken ct)
     {
         if (targetUserId == currentUserId)

@@ -18,7 +18,7 @@ namespace Framlux.FleetManagement.Server.Endpoints.Web.Auth;
 /// </summary>
 public sealed class AuthMeEndpoint : EndpointWithoutRequest<ApiResponse<UserDto>>
 {
-    private readonly IAuthMeHandler _handler;
+    private readonly AuthMeHandler _handler;
     private readonly IAntiforgery _antiforgery;
     private readonly ILogger<AuthMeEndpoint> _logger;
     private readonly ITenantContext _tenantContext;
@@ -30,7 +30,7 @@ public sealed class AuthMeEndpoint : EndpointWithoutRequest<ApiResponse<UserDto>
     /// <param name="antiforgery">The antiforgery service used to issue the double-submit token.</param>
     /// <param name="logger">The logger instance.</param>
     /// <param name="tenantContext">Provides the resolved tenant and user identity for the current request.</param>
-    public AuthMeEndpoint(IAuthMeHandler handler, IAntiforgery antiforgery, ILogger<AuthMeEndpoint> logger, ITenantContext tenantContext)
+    public AuthMeEndpoint(AuthMeHandler handler, IAntiforgery antiforgery, ILogger<AuthMeEndpoint> logger, ITenantContext tenantContext)
     {
         _handler = handler;
         _antiforgery = antiforgery;

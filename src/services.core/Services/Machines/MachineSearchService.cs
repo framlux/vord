@@ -19,7 +19,7 @@ namespace Framlux.FleetManagement.Services.Core.Machines;
 /// JSONB filters (disk, hardware) cannot be pushed to SQL on the current dialect (SQLite).
 /// On PostgreSQL, all filters and sorts are handled at the SQL level.
 /// </summary>
-public sealed class MachineSearchService : IMachineSearchService
+public sealed class MachineSearchService
 {
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly IMachinePingService _pingService;
@@ -42,7 +42,12 @@ public sealed class MachineSearchService : IMachineSearchService
         _configService = configService;
     }
 
-    /// <inheritdoc/>
+    /// <summary>
+    /// Searches machines using the provided criteria and returns a paginated result.
+    /// </summary>
+    /// <param name="criteria">The search criteria containing filters, pagination, and sort options.</param>
+    /// <param name="tenantId">The tenant ID of the requesting user.</param>
+    /// <param name="ct">Cancellation token.</param>
     public async Task<PaginatedResponse<FleetMachineDto>> SearchAsync(
         MachineSearchCriteria criteria,
         int? tenantId,

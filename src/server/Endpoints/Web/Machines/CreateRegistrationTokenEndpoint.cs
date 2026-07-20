@@ -14,13 +14,13 @@ namespace Framlux.FleetManagement.Server.Endpoints.Web.Machines;
 /// </summary>
 public sealed class CreateRegistrationTokenEndpoint : Endpoint<CreateRegistrationTokenRequest, ApiResponse<RegistrationTokenDto>>
 {
-    private readonly IRegistrationTokenHandler _handler;
+    private readonly RegistrationTokenHandler _handler;
     private readonly ITenantContext _tenantContext;
 
     /// <summary>
     /// Creates a new instance of the <see cref="CreateRegistrationTokenEndpoint"/> class.
     /// </summary>
-    public CreateRegistrationTokenEndpoint(IRegistrationTokenHandler handler, ITenantContext tenantContext)
+    public CreateRegistrationTokenEndpoint(RegistrationTokenHandler handler, ITenantContext tenantContext)
     {
         _handler = handler;
         _tenantContext = tenantContext;

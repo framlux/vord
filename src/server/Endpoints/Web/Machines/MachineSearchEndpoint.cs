@@ -14,13 +14,13 @@ namespace Framlux.FleetManagement.Server.Endpoints.Web.Machines;
 /// </summary>
 public sealed class MachineSearchEndpoint : EndpointWithoutRequest<ApiResponse<PaginatedResponse<FleetMachineDto>>>
 {
-    private readonly IMachineSearchService _searchService;
+    private readonly MachineSearchService _searchService;
     private readonly ITenantContext _tenantContext;
 
     /// <summary>
     /// Creates a new instance of the <see cref="MachineSearchEndpoint"/> class.
     /// </summary>
-    public MachineSearchEndpoint(IMachineSearchService searchService, ITenantContext tenantContext)
+    public MachineSearchEndpoint(MachineSearchService searchService, ITenantContext tenantContext)
     {
         _searchService = searchService;
         _tenantContext = tenantContext;

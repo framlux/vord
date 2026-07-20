@@ -14,12 +14,12 @@ namespace Framlux.FleetManagement.Server.Endpoints.Web.Admin;
 /// </summary>
 public sealed class AdminUsersEndpoint : EndpointWithoutRequest<ApiResponse<List<UserAccountDto>>>
 {
-    private readonly IAdminHandler _handler;
+    private readonly AdminHandler _handler;
 
     /// <summary>
     /// Creates a new instance of the <see cref="AdminUsersEndpoint"/> class.
     /// </summary>
-    public AdminUsersEndpoint(IAdminHandler handler)
+    public AdminUsersEndpoint(AdminHandler handler)
     {
         _handler = handler;
     }

@@ -14,14 +14,14 @@ namespace Framlux.FleetManagement.Server.Endpoints.Web.Invitations;
 /// </summary>
 public sealed class MemberRemoveEndpoint : EndpointWithoutRequest<ApiResponse<object>>
 {
-    private readonly IMemberHandler _handler;
+    private readonly MemberHandler _handler;
     private readonly ILogger<MemberRemoveEndpoint> _logger;
     private readonly ITenantContext _tenantContext;
 
     /// <summary>
     /// Creates a new instance of the <see cref="MemberRemoveEndpoint"/> class.
     /// </summary>
-    public MemberRemoveEndpoint(IMemberHandler handler, ILogger<MemberRemoveEndpoint> logger, ITenantContext tenantContext)
+    public MemberRemoveEndpoint(MemberHandler handler, ILogger<MemberRemoveEndpoint> logger, ITenantContext tenantContext)
     {
         _handler = handler;
         _logger = logger;

@@ -31,7 +31,7 @@ public sealed class InvitationAcceptResponse
 /// </summary>
 public sealed class InvitationAcceptEndpoint : EndpointWithoutRequest<ApiResponse<InvitationAcceptResponse>>
 {
-    private readonly IInvitationHandler _handler;
+    private readonly InvitationHandler _handler;
     private readonly AuthCookieOptions _authCookieOptions;
     private readonly ILogger<InvitationAcceptEndpoint> _logger;
 
@@ -39,7 +39,7 @@ public sealed class InvitationAcceptEndpoint : EndpointWithoutRequest<ApiRespons
     /// Creates a new instance of the <see cref="InvitationAcceptEndpoint"/> class.
     /// </summary>
     public InvitationAcceptEndpoint(
-        IInvitationHandler handler,
+        InvitationHandler handler,
         IOptions<AuthCookieOptions> authCookieOptions,
         ILogger<InvitationAcceptEndpoint> logger)
     {

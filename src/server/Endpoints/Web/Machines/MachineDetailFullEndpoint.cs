@@ -24,13 +24,13 @@ public sealed class MachineDetailFullRequest
 /// </summary>
 public sealed class MachineDetailFullEndpoint : Endpoint<MachineDetailFullRequest, ApiResponse<MachineDetailDto>>
 {
-    private readonly IMachineDetailHandler _handler;
+    private readonly MachineDetailHandler _handler;
     private readonly ITenantContext _tenantContext;
 
     /// <summary>
     /// Creates a new instance of the <see cref="MachineDetailFullEndpoint"/> class.
     /// </summary>
-    public MachineDetailFullEndpoint(IMachineDetailHandler handler, ITenantContext tenantContext)
+    public MachineDetailFullEndpoint(MachineDetailHandler handler, ITenantContext tenantContext)
     {
         _handler = handler;
         _tenantContext = tenantContext;

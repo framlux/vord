@@ -15,13 +15,13 @@ namespace Framlux.FleetManagement.Server.Endpoints.Web.Machines;
 /// </summary>
 public sealed class MachineDetailEndpoint : EndpointWithoutRequest<ApiResponse<MachineDto>>
 {
-    private readonly IMachineDetailHandler _handler;
+    private readonly MachineDetailHandler _handler;
     private readonly ITenantContext _tenantContext;
 
     /// <summary>
     /// Creates a new instance of the <see cref="MachineDetailEndpoint"/> class.
     /// </summary>
-    public MachineDetailEndpoint(IMachineDetailHandler handler, ITenantContext tenantContext)
+    public MachineDetailEndpoint(MachineDetailHandler handler, ITenantContext tenantContext)
     {
         _handler = handler;
         _tenantContext = tenantContext;

@@ -30,14 +30,14 @@ public sealed class MemberRoleChangeRequest
 /// </summary>
 public sealed class MemberRoleChangeEndpoint : Endpoint<MemberRoleChangeRequest, ApiResponse<object>>
 {
-    private readonly IMemberHandler _handler;
+    private readonly MemberHandler _handler;
     private readonly ILogger<MemberRoleChangeEndpoint> _logger;
     private readonly ITenantContext _tenantContext;
 
     /// <summary>
     /// Creates a new instance of the <see cref="MemberRoleChangeEndpoint"/> class.
     /// </summary>
-    public MemberRoleChangeEndpoint(IMemberHandler handler, ILogger<MemberRoleChangeEndpoint> logger, ITenantContext tenantContext)
+    public MemberRoleChangeEndpoint(MemberHandler handler, ILogger<MemberRoleChangeEndpoint> logger, ITenantContext tenantContext)
     {
         _handler = handler;
         _logger = logger;

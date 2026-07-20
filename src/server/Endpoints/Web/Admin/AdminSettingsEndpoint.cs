@@ -13,12 +13,12 @@ namespace Framlux.FleetManagement.Server.Endpoints.Web.Admin;
 /// </summary>
 public sealed class AdminSettingsEndpoint : EndpointWithoutRequest<ApiResponse<ServerSettingsDto>>
 {
-    private readonly IAdminHandler _handler;
+    private readonly AdminHandler _handler;
 
     /// <summary>
     /// Creates a new instance of the <see cref="AdminSettingsEndpoint"/> class.
     /// </summary>
-    public AdminSettingsEndpoint(IAdminHandler handler)
+    public AdminSettingsEndpoint(AdminHandler handler)
     {
         _handler = handler;
     }

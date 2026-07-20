@@ -31,13 +31,13 @@ public sealed class CreateTenantRequest
 /// </summary>
 public sealed class TenantCreateEndpoint : Endpoint<CreateTenantRequest, ApiResponse<TenantDto>>
 {
-    private readonly ITenantHandler _handler;
+    private readonly TenantHandler _handler;
     private readonly ITenantContext _tenantContext;
 
     /// <summary>
     /// Creates a new instance of the <see cref="TenantCreateEndpoint"/> class.
     /// </summary>
-    public TenantCreateEndpoint(ITenantHandler handler, ITenantContext tenantContext)
+    public TenantCreateEndpoint(TenantHandler handler, ITenantContext tenantContext)
     {
         _handler = handler;
         _tenantContext = tenantContext;

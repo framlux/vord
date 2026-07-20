@@ -14,13 +14,13 @@ namespace Framlux.FleetManagement.Server.Endpoints.Web.Machines;
 /// </summary>
 public sealed class MachineDeleteEndpoint : EndpointWithoutRequest<ApiResponse<object>>
 {
-    private readonly IMachineHandler _handler;
+    private readonly MachineHandler _handler;
     private readonly ITenantContext _tenantContext;
 
     /// <summary>
     /// Creates a new instance of the <see cref="MachineDeleteEndpoint"/> class.
     /// </summary>
-    public MachineDeleteEndpoint(IMachineHandler handler, ITenantContext tenantContext)
+    public MachineDeleteEndpoint(MachineHandler handler, ITenantContext tenantContext)
     {
         _handler = handler;
         _tenantContext = tenantContext;

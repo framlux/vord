@@ -15,13 +15,13 @@ namespace Framlux.FleetManagement.Server.Endpoints.Web.Dashboard;
 /// </summary>
 public sealed class DashboardSummaryEndpoint : EndpointWithoutRequest<ApiResponse<DashboardSummaryDto>>
 {
-    private readonly IDashboardHandler _handler;
+    private readonly DashboardHandler _handler;
     private readonly ITenantContext _tenantContext;
 
     /// <summary>
     /// Creates a new instance of the <see cref="DashboardSummaryEndpoint"/> class.
     /// </summary>
-    public DashboardSummaryEndpoint(IDashboardHandler handler, ITenantContext tenantContext)
+    public DashboardSummaryEndpoint(DashboardHandler handler, ITenantContext tenantContext)
     {
         _handler = handler;
         _tenantContext = tenantContext;

@@ -15,14 +15,14 @@ namespace Framlux.FleetManagement.Server.Endpoints.Web.Admin;
 /// </summary>
 public sealed class UpdateAdminSettingsEndpoint : Endpoint<UpdateAdminSettingsRequest, ApiResponse<ServerSettingsDto>>
 {
-    private readonly IBillingStatus _billingStatus;
-    private readonly IAdminHandler _handler;
+    private readonly BillingStatus _billingStatus;
+    private readonly AdminHandler _handler;
     private readonly ITenantContext _tenantContext;
 
     /// <summary>
     /// Creates a new instance of the <see cref="UpdateAdminSettingsEndpoint"/> class.
     /// </summary>
-    public UpdateAdminSettingsEndpoint(IBillingStatus billingStatus, IAdminHandler handler, ITenantContext tenantContext)
+    public UpdateAdminSettingsEndpoint(BillingStatus billingStatus, AdminHandler handler, ITenantContext tenantContext)
     {
         _billingStatus = billingStatus;
         _handler = handler;

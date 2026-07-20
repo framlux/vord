@@ -18,7 +18,7 @@ namespace Framlux.FleetManagement.Services.Core.Handlers;
 /// <summary>
 /// Handles machine management operations.
 /// </summary>
-public sealed class MachineHandler : IMachineHandler
+public sealed class MachineHandler
 {
     private readonly IMachineRepository _machineRepo;
     private readonly IMachineStateRepository _machineStateRepo;
@@ -69,7 +69,14 @@ public sealed class MachineHandler : IMachineHandler
         _logger = logger;
     }
 
-    /// <inheritdoc/>
+    /// <summary>
+    /// Soft-deletes a machine.
+    /// </summary>
+    /// <param name="machineId">The machine ID to delete.</param>
+    /// <param name="tenantId">The tenant ID of the requesting user.</param>
+    /// <param name="userId">The user performing the deletion.</param>
+    /// <param name="ct">A cancellation token.</param>
+    /// <returns>A service result containing the API response.</returns>
     public async Task<ServiceResult<ApiResponse<object>>> DeleteAsync(long machineId, int? tenantId, int userId, CancellationToken ct)
     {
         if (tenantId is null)
@@ -118,7 +125,17 @@ public sealed class MachineHandler : IMachineHandler
         return ServiceResult<ApiResponse<object>>.Ok(ApiResponse<object>.Ok(new { }, "Machine deleted successfully"));
     }
 
-    /// <inheritdoc/>
+    /// <summary>
+    /// Updates a machine's editable metadata (name, description, location).
+    /// </summary>
+    /// <param name="machineId">The machine ID to update.</param>
+    /// <param name="tenantId">The tenant ID of the requesting user.</param>
+    /// <param name="userId">The user performing the update.</param>
+    /// <param name="name">The new machine display name.</param>
+    /// <param name="description">The new description (null to clear).</param>
+    /// <param name="location">The new location (null to clear).</param>
+    /// <param name="ct">A cancellation token.</param>
+    /// <returns>A service result containing the updated machine DTO.</returns>
     public async Task<ServiceResult<ApiResponse<MachineDto>>> UpdateAsync(
         long machineId,
         int? tenantId,
@@ -192,7 +209,20 @@ public sealed class MachineHandler : IMachineHandler
             ApiResponse<MachineDto>.Ok(dto, "Machine updated successfully"));
     }
 
-    /// <inheritdoc/>
+    /// <summary>
+    /// Returns a paginated, filtered, and sorted list of machines.
+    /// </summary>
+    /// <param name="page">The page number (1-based).</param>
+    /// <param name="pageSize">The number of items per page.</param>
+    /// <param name="tenantId">The tenant ID of the requesting user.</param>
+    /// <param name="search">Optional search term for hostname/name.</param>
+    /// <param name="osFilter">Optional OS filter.</param>
+    /// <param name="typeFilter">Optional machine type filter.</param>
+    /// <param name="statusFilter">Optional online/offline status filter.</param>
+    /// <param name="sortBy">The field to sort by.</param>
+    /// <param name="sortDir">The sort direction (asc/desc).</param>
+    /// <param name="ct">A cancellation token.</param>
+    /// <returns>A service result containing the paginated machine list.</returns>
     public async Task<ServiceResult<PaginatedResponse<MachineDto>>> ListAsync(
         int page,
         int pageSize,

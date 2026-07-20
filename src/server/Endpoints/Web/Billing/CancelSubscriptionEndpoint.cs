@@ -31,7 +31,7 @@ public sealed class CancelSubscriptionResponse
 /// </summary>
 public sealed class CancelSubscriptionEndpoint : EndpointWithoutRequest<ApiResponse<CancelSubscriptionResponse>>
 {
-    private readonly IBillingStatus _billingStatus;
+    private readonly BillingStatus _billingStatus;
     private readonly IDatabaseTransactionProvider _transactionProvider;
     private readonly IAuditLogRepository _auditLog;
     private readonly ISubscriptionRepository _subscriptionRepository;
@@ -45,7 +45,7 @@ public sealed class CancelSubscriptionEndpoint : EndpointWithoutRequest<ApiRespo
     /// Creates a new instance of the <see cref="CancelSubscriptionEndpoint"/> class.
     /// </summary>
     public CancelSubscriptionEndpoint(
-        IBillingStatus billingStatus,
+        BillingStatus billingStatus,
         IDatabaseTransactionProvider transactionProvider,
         IAuditLogRepository auditLog,
         ISubscriptionRepository subscriptionRepository,

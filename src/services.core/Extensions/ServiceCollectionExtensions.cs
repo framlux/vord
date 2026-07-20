@@ -232,12 +232,12 @@ public static class ServiceCollectionExtensions
     {
         services.AddSingleton<IMachineService, MachineService>()
                 .AddSingleton<IMachineStateService, MachineStateService>()
-                .AddSingleton<IMachineSearchService, MachineSearchService>()
+                .AddSingleton<MachineSearchService>()
                 .AddSingleton<ISqlDialect, PostgresSqlDialect>();
 
         services.AddSingleton<ServerConfigurationService>();
         services.AddScoped<ISubscriptionService, SubscriptionService>();
-        services.AddScoped<IDowngradeGuardService, DowngradeGuardService>();
+        services.AddScoped<DowngradeGuardService>();
         services.AddScoped<IDowngradeCleanupService, DowngradeCleanupService>();
         services.AddSingleton<IOidcSecretProtector, OidcSecretProtector>();
         services.AddSingleton<IIntegrationPayloadFormatter, SlackPayloadFormatter>();
@@ -255,22 +255,22 @@ public static class ServiceCollectionExtensions
         services.AddSingleton(TimeProvider.System);
 
         // Handler services for extracted endpoint business logic (scoped to share DatabaseContext)
-        services.AddScoped<IInvitationHandler, InvitationHandler>();
-        services.AddScoped<IMemberHandler, MemberHandler>();
-        services.AddScoped<IOnboardingHandler, OnboardingHandler>();
+        services.AddScoped<InvitationHandler>();
+        services.AddScoped<MemberHandler>();
+        services.AddScoped<OnboardingHandler>();
         services.AddScoped<IMachineBillingSync, MachineBillingSync>();
-        services.AddScoped<IMachineHandler, MachineHandler>();
-        services.AddScoped<IDashboardHandler, DashboardHandler>();
-        services.AddScoped<IAuthMeHandler, AuthMeHandler>();
-        services.AddScoped<IAdminHandler, AdminHandler>();
-        services.AddScoped<ITenantHandler, TenantHandler>();
-        services.AddScoped<IRegistrationTokenHandler, RegistrationTokenHandler>();
-        services.AddScoped<IUserHandler, UserHandler>();
-        services.AddScoped<IMachineDetailHandler, MachineDetailHandler>();
+        services.AddScoped<MachineHandler>();
+        services.AddScoped<DashboardHandler>();
+        services.AddScoped<AuthMeHandler>();
+        services.AddScoped<AdminHandler>();
+        services.AddScoped<TenantHandler>();
+        services.AddScoped<RegistrationTokenHandler>();
+        services.AddScoped<UserHandler>();
+        services.AddScoped<MachineDetailHandler>();
         services.AddScoped<IDataExportHandler, DataExportHandler>();
         services.AddScoped<ISigningKeyService, SigningKeyService>();
-        services.AddScoped<IMachineAuthorizedKeyService, MachineAuthorizedKeyService>();
-        services.AddScoped<IRemoteCommandService, RemoteCommandService>();
+        services.AddScoped<MachineAuthorizedKeyService>();
+        services.AddScoped<RemoteCommandService>();
 
         if (string.IsNullOrEmpty(objectStorageOpts.BucketName) == false)
         {
@@ -285,7 +285,7 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IEventAlertService, EventAlertService>();
 
         // Billing configuration: explicit opt-in via Billing:Enabled flag
-        services.AddSingleton<IBillingStatus, BillingStatus>();
+        services.AddSingleton<BillingStatus>();
 
         if (billingOpts.Enabled)
         {

@@ -29,14 +29,14 @@ public sealed class MachineAuthorizedKeyAddRequest
 /// </summary>
 public sealed class MachineAuthorizedKeyAddEndpoint : Endpoint<MachineAuthorizedKeyAddRequest, ApiResponse<MachineAuthorizedKeyDto>>
 {
-    private readonly IMachineAuthorizedKeyService _authorizedKeyService;
+    private readonly MachineAuthorizedKeyService _authorizedKeyService;
     private readonly ISubscriptionService _subscriptionService;
     private readonly ITenantContext _tenantContext;
 
     /// <summary>
     /// Creates a new instance of the <see cref="MachineAuthorizedKeyAddEndpoint"/> class.
     /// </summary>
-    public MachineAuthorizedKeyAddEndpoint(IMachineAuthorizedKeyService authorizedKeyService, ISubscriptionService subscriptionService, ITenantContext tenantContext)
+    public MachineAuthorizedKeyAddEndpoint(MachineAuthorizedKeyService authorizedKeyService, ISubscriptionService subscriptionService, ITenantContext tenantContext)
     {
         _authorizedKeyService = authorizedKeyService;
         _subscriptionService = subscriptionService;
