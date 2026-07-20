@@ -17,6 +17,19 @@ namespace Framlux.FleetManagement.Test.Services;
 
 public sealed class IntegrationDeliveryJobTests
 {
+    private static IntegrationDeliveryJob BuildJob(
+        IAlertEventRepository? alertEventRepository = null,
+        IAlertRuleRepository? alertRuleRepository = null,
+        IAlertDeliveryService? deliveryService = null,
+        ILogger<IntegrationDeliveryJob>? logger = null)
+    {
+        return new IntegrationDeliveryJob(
+            alertEventRepository ?? Substitute.For<IAlertEventRepository>(),
+            alertRuleRepository ?? Substitute.For<IAlertRuleRepository>(),
+            deliveryService ?? Substitute.For<IAlertDeliveryService>(),
+            logger ?? Substitute.For<ILogger<IntegrationDeliveryJob>>());
+    }
+
     private static AlertEvent BuildEvent(long id, int ruleId = 1, int tenantId = 1, long machineId = 1)
     {
         return new AlertEvent
@@ -58,7 +71,6 @@ public sealed class IntegrationDeliveryJobTests
         IAlertEventRepository eventRepo = Substitute.For<IAlertEventRepository>();
         IAlertRuleRepository ruleRepo = Substitute.For<IAlertRuleRepository>();
         IAlertDeliveryService delivery = Substitute.For<IAlertDeliveryService>();
-        ILogger<IntegrationDeliveryJob> logger = Substitute.For<ILogger<IntegrationDeliveryJob>>();
 
         AlertEvent evt = BuildEvent(id: 42, ruleId: 7, tenantId: 3);
         AlertRule rule = BuildRule(id: 7, tenantId: 3);
@@ -66,7 +78,7 @@ public sealed class IntegrationDeliveryJobTests
         eventRepo.GetAlertEventByIdAsync(42, Arg.Any<CancellationToken>()).Returns(evt);
         ruleRepo.GetAlertRuleByIdAsync(7, Arg.Any<CancellationToken>()).Returns(rule);
 
-        IntegrationDeliveryJob job = new(eventRepo, ruleRepo, delivery, logger);
+        IntegrationDeliveryJob job = BuildJob(alertEventRepository: eventRepo, alertRuleRepository: ruleRepo, deliveryService: delivery);
 
         await job.DeliverAsync(eventId: 42, ruleId: 7, tenantId: 3, CancellationToken.None);
 
@@ -81,11 +93,10 @@ public sealed class IntegrationDeliveryJobTests
         IAlertEventRepository eventRepo = Substitute.For<IAlertEventRepository>();
         IAlertRuleRepository ruleRepo = Substitute.For<IAlertRuleRepository>();
         IAlertDeliveryService delivery = Substitute.For<IAlertDeliveryService>();
-        ILogger<IntegrationDeliveryJob> logger = Substitute.For<ILogger<IntegrationDeliveryJob>>();
 
         eventRepo.GetAlertEventByIdAsync(99, Arg.Any<CancellationToken>()).Returns((AlertEvent?)null);
 
-        IntegrationDeliveryJob job = new(eventRepo, ruleRepo, delivery, logger);
+        IntegrationDeliveryJob job = BuildJob(alertEventRepository: eventRepo, alertRuleRepository: ruleRepo, deliveryService: delivery);
 
         await job.DeliverAsync(eventId: 99, ruleId: 1, tenantId: 1, CancellationToken.None);
 
@@ -101,13 +112,12 @@ public sealed class IntegrationDeliveryJobTests
         IAlertEventRepository eventRepo = Substitute.For<IAlertEventRepository>();
         IAlertRuleRepository ruleRepo = Substitute.For<IAlertRuleRepository>();
         IAlertDeliveryService delivery = Substitute.For<IAlertDeliveryService>();
-        ILogger<IntegrationDeliveryJob> logger = Substitute.For<ILogger<IntegrationDeliveryJob>>();
 
         AlertEvent evt = BuildEvent(id: 1, ruleId: 99);
         eventRepo.GetAlertEventByIdAsync(1, Arg.Any<CancellationToken>()).Returns(evt);
         ruleRepo.GetAlertRuleByIdAsync(99, Arg.Any<CancellationToken>()).Returns((AlertRule?)null);
 
-        IntegrationDeliveryJob job = new(eventRepo, ruleRepo, delivery, logger);
+        IntegrationDeliveryJob job = BuildJob(alertEventRepository: eventRepo, alertRuleRepository: ruleRepo, deliveryService: delivery);
 
         await job.DeliverAsync(eventId: 1, ruleId: 99, tenantId: 1, CancellationToken.None);
 
@@ -123,7 +133,6 @@ public sealed class IntegrationDeliveryJobTests
         IAlertEventRepository eventRepo = Substitute.For<IAlertEventRepository>();
         IAlertRuleRepository ruleRepo = Substitute.For<IAlertRuleRepository>();
         IAlertDeliveryService delivery = Substitute.For<IAlertDeliveryService>();
-        ILogger<IntegrationDeliveryJob> logger = Substitute.For<ILogger<IntegrationDeliveryJob>>();
 
         AlertEvent evt = BuildEvent(id: 1);
         AlertRule rule = BuildRule(id: 1);
@@ -132,7 +141,7 @@ public sealed class IntegrationDeliveryJobTests
         delivery.DeliverAsync(Arg.Any<AlertEvent>(), Arg.Any<AlertRule>(), Arg.Any<CancellationToken>())
             .ThrowsAsync(new InvalidOperationException("webhook 503"));
 
-        IntegrationDeliveryJob job = new(eventRepo, ruleRepo, delivery, logger);
+        IntegrationDeliveryJob job = BuildJob(alertEventRepository: eventRepo, alertRuleRepository: ruleRepo, deliveryService: delivery);
 
         InvalidOperationException? ex = await Assert.ThrowsAsync<InvalidOperationException>(
             () => job.DeliverAsync(eventId: 1, ruleId: 1, tenantId: 1, CancellationToken.None));
@@ -149,14 +158,13 @@ public sealed class IntegrationDeliveryJobTests
         IAlertEventRepository eventRepo = Substitute.For<IAlertEventRepository>();
         IAlertRuleRepository ruleRepo = Substitute.For<IAlertRuleRepository>();
         IAlertDeliveryService delivery = Substitute.For<IAlertDeliveryService>();
-        ILogger<IntegrationDeliveryJob> logger = Substitute.For<ILogger<IntegrationDeliveryJob>>();
 
         AlertEvent evt = BuildEvent(id: 1);
         AlertRule rule = BuildRule(id: 1);
         eventRepo.GetAlertEventByIdAsync(1, Arg.Any<CancellationToken>()).Returns(evt);
         ruleRepo.GetAlertRuleByIdAsync(1, Arg.Any<CancellationToken>()).Returns(rule);
 
-        IntegrationDeliveryJob job = new(eventRepo, ruleRepo, delivery, logger);
+        IntegrationDeliveryJob job = BuildJob(alertEventRepository: eventRepo, alertRuleRepository: ruleRepo, deliveryService: delivery);
 
         await job.DeliverAsync(eventId: 1, ruleId: 1, tenantId: 1, cts.Token);
 
@@ -305,15 +313,6 @@ public sealed class IntegrationDeliveryJobTests
         await Assert.That(ex!.ParamName).IsEqualTo("logger");
     }
 
-    private static IntegrationDeliveryJob BuildJob()
-    {
-        return new IntegrationDeliveryJob(
-            Substitute.For<IAlertEventRepository>(),
-            Substitute.For<IAlertRuleRepository>(),
-            Substitute.For<IAlertDeliveryService>(),
-            Substitute.For<ILogger<IntegrationDeliveryJob>>());
-    }
-
     [Test]
     public async Task DeliverAsync_RetryAttribute_UsesCorrectDelays()
     {
@@ -344,7 +343,6 @@ public sealed class IntegrationDeliveryJobTests
         IAlertEventRepository eventRepo = Substitute.For<IAlertEventRepository>();
         IAlertRuleRepository ruleRepo = Substitute.For<IAlertRuleRepository>();
         IAlertDeliveryService delivery = Substitute.For<IAlertDeliveryService>();
-        ILogger<IntegrationDeliveryJob> logger = Substitute.For<ILogger<IntegrationDeliveryJob>>();
 
         AlertEvent evt = BuildEvent(id: 1);
         AlertRule rule = BuildRule(id: 1);
@@ -353,7 +351,7 @@ public sealed class IntegrationDeliveryJobTests
         delivery.DeliverAsync(Arg.Any<AlertEvent>(), Arg.Any<AlertRule>(), Arg.Any<CancellationToken>())
             .ThrowsAsync(new InvalidOperationException("permanent webhook 410"));
 
-        IntegrationDeliveryJob job = new(eventRepo, ruleRepo, delivery, logger);
+        IntegrationDeliveryJob job = BuildJob(alertEventRepository: eventRepo, alertRuleRepository: ruleRepo, deliveryService: delivery);
 
         // Same exception type, every invocation. The handler does not catch on a hypothetical
         // "last attempt" — it has no way to know which attempt it is on, by design.

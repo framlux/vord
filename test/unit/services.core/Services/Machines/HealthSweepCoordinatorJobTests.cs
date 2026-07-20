@@ -17,6 +17,17 @@ namespace Framlux.FleetManagement.Test.Services.Machines;
 
 public sealed class HealthSweepCoordinatorJobTests
 {
+    private static HealthSweepCoordinatorJob BuildJob(
+        IMachineStateRepository? machineStateRepository = null,
+        IBackgroundJobClient? backgroundJobClient = null,
+        ILogger<HealthSweepCoordinatorJob>? logger = null)
+    {
+        return new HealthSweepCoordinatorJob(
+            machineStateRepository ?? Substitute.For<IMachineStateRepository>(),
+            backgroundJobClient ?? Substitute.For<IBackgroundJobClient>(),
+            logger ?? Substitute.For<ILogger<HealthSweepCoordinatorJob>>());
+    }
+
     [Test]
     public async Task RunAsync_ActiveTenants_EnqueuesOnePerTenantJob()
     {
@@ -25,9 +36,8 @@ public sealed class HealthSweepCoordinatorJobTests
             .Returns(new List<int> { 7, 42, 99 });
 
         IBackgroundJobClient backgroundJobClient = Substitute.For<IBackgroundJobClient>();
-        ILogger<HealthSweepCoordinatorJob> logger = Substitute.For<ILogger<HealthSweepCoordinatorJob>>();
 
-        HealthSweepCoordinatorJob job = new(repo, backgroundJobClient, logger);
+        HealthSweepCoordinatorJob job = BuildJob(machineStateRepository: repo, backgroundJobClient: backgroundJobClient);
 
         await job.RunAsync(CancellationToken.None);
 
@@ -53,7 +63,7 @@ public sealed class HealthSweepCoordinatorJobTests
             .Returns(new List<int>());
 
         IBackgroundJobClient backgroundJobClient = Substitute.For<IBackgroundJobClient>();
-        HealthSweepCoordinatorJob job = new(repo, backgroundJobClient, Substitute.For<ILogger<HealthSweepCoordinatorJob>>());
+        HealthSweepCoordinatorJob job = BuildJob(machineStateRepository: repo, backgroundJobClient: backgroundJobClient);
 
         await job.RunAsync(CancellationToken.None);
 
@@ -72,7 +82,7 @@ public sealed class HealthSweepCoordinatorJobTests
             .Returns<Task<List<int>>>(_ => throw new InvalidOperationException("DB down"));
 
         IBackgroundJobClient backgroundJobClient = Substitute.For<IBackgroundJobClient>();
-        HealthSweepCoordinatorJob job = new(repo, backgroundJobClient, Substitute.For<ILogger<HealthSweepCoordinatorJob>>());
+        HealthSweepCoordinatorJob job = BuildJob(machineStateRepository: repo, backgroundJobClient: backgroundJobClient);
 
         InvalidOperationException? ex = await Assert.ThrowsAsync<InvalidOperationException>(
             () => job.RunAsync(CancellationToken.None));
@@ -112,7 +122,7 @@ public sealed class HealthSweepCoordinatorJobTests
                 return "job-id";
             });
 
-        HealthSweepCoordinatorJob job = new(repo, backgroundJobClient, Substitute.For<ILogger<HealthSweepCoordinatorJob>>());
+        HealthSweepCoordinatorJob job = BuildJob(machineStateRepository: repo, backgroundJobClient: backgroundJobClient);
 
         await job.RunAsync(CancellationToken.None);
 
@@ -131,10 +141,7 @@ public sealed class HealthSweepCoordinatorJobTests
         repo.GetDistinctTenantIdsAsync(Arg.Any<CancellationToken>())
             .Returns(new List<int>());
 
-        HealthSweepCoordinatorJob job = new(
-            repo,
-            Substitute.For<IBackgroundJobClient>(),
-            Substitute.For<ILogger<HealthSweepCoordinatorJob>>());
+        HealthSweepCoordinatorJob job = BuildJob(machineStateRepository: repo);
 
         await job.RunAsync(cts.Token);
 
@@ -203,9 +210,8 @@ public sealed class HealthSweepCoordinatorJobTests
         repo.GetDistinctTenantIdsAsync(Arg.Any<CancellationToken>()).Returns(new List<int>());
 
         IBackgroundJobClient backgroundJobClient = Substitute.For<IBackgroundJobClient>();
-        ILogger<HealthSweepCoordinatorJob> logger = Substitute.For<ILogger<HealthSweepCoordinatorJob>>();
 
-        HealthSweepCoordinatorJob job = new(repo, backgroundJobClient, logger);
+        HealthSweepCoordinatorJob job = BuildJob(machineStateRepository: repo, backgroundJobClient: backgroundJobClient);
 
         await job.RunAsync(CancellationToken.None);
 
@@ -260,9 +266,8 @@ public sealed class HealthSweepCoordinatorJobTests
         repo.GetDistinctTenantIdsAsync(Arg.Any<CancellationToken>()).Returns(new List<int> { 1 });
 
         IBackgroundJobClient backgroundJobClient = Substitute.For<IBackgroundJobClient>();
-        ILogger<HealthSweepCoordinatorJob> logger = Substitute.For<ILogger<HealthSweepCoordinatorJob>>();
 
-        HealthSweepCoordinatorJob job = new(repo, backgroundJobClient, logger);
+        HealthSweepCoordinatorJob job = BuildJob(machineStateRepository: repo, backgroundJobClient: backgroundJobClient);
 
         await job.FanOutAsync(CancellationToken.None);
 
@@ -316,7 +321,7 @@ public sealed class HealthSweepCoordinatorJobTests
             .Returns<Task<List<int>>>(_ => throw new InvalidOperationException("DB down"));
 
         IBackgroundJobClient backgroundJobClient = Substitute.For<IBackgroundJobClient>();
-        HealthSweepCoordinatorJob job = new(repo, backgroundJobClient, Substitute.For<ILogger<HealthSweepCoordinatorJob>>());
+        HealthSweepCoordinatorJob job = BuildJob(machineStateRepository: repo, backgroundJobClient: backgroundJobClient);
 
         await Assert.ThrowsAsync<InvalidOperationException>(() => job.RunAsync(CancellationToken.None));
 
@@ -347,7 +352,7 @@ public sealed class HealthSweepCoordinatorJobTests
             Arg.Any<IState>())
             .Returns("ok");
 
-        HealthSweepCoordinatorJob job = new(repo, backgroundJobClient, Substitute.For<ILogger<HealthSweepCoordinatorJob>>());
+        HealthSweepCoordinatorJob job = BuildJob(machineStateRepository: repo, backgroundJobClient: backgroundJobClient);
 
         // RunAsync must not throw.
         await job.RunAsync(CancellationToken.None);

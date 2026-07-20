@@ -18,6 +18,21 @@ namespace Framlux.FleetManagement.Test.Services.Machines;
 
 public sealed class HealthSweepTenantJobTests
 {
+    private static HealthSweepTenantJob BuildJob(
+        IMachineStateRepository? machineStateRepository = null,
+        ISqlDialect? dialect = null,
+        ServerConfigurationService? configService = null,
+        IAdvisoryLockProvider? advisoryLockProvider = null,
+        ILogger<HealthSweepTenantJob>? logger = null)
+    {
+        return new HealthSweepTenantJob(
+            machineStateRepository ?? Substitute.For<IMachineStateRepository>(),
+            dialect ?? SweepDialect(),
+            configService ?? CreateConfigService(),
+            advisoryLockProvider ?? AcquiringLockProvider(),
+            logger ?? Substitute.For<ILogger<HealthSweepTenantJob>>());
+    }
+
     private static ServerConfigurationService CreateConfigService(int onlineThresholdSeconds = 300)
     {
         IServerSettingsCache cache = Substitute.For<IServerSettingsCache>();
@@ -67,12 +82,10 @@ public sealed class HealthSweepTenantJobTests
         repo.SweepHealthStatusAsync(Arg.Any<string>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
             .Returns(7);
 
-        HealthSweepTenantJob job = new(
-            repo,
-            SweepDialect("SELECT 1"),
-            CreateConfigService(onlineThresholdSeconds: 120),
-            AcquiringLockProvider(),
-            Substitute.For<ILogger<HealthSweepTenantJob>>());
+        HealthSweepTenantJob job = BuildJob(
+            machineStateRepository: repo,
+            dialect: SweepDialect("SELECT 1"),
+            configService: CreateConfigService(onlineThresholdSeconds: 120));
 
         await job.RunAsync(tenantId: 42, CancellationToken.None);
 
@@ -93,12 +106,7 @@ public sealed class HealthSweepTenantJobTests
         repo.SweepHealthStatusAsync(Arg.Any<string>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
             .Returns(0);
 
-        HealthSweepTenantJob job = new(
-            repo,
-            SweepDialect(),
-            CreateConfigService(),
-            provider,
-            Substitute.For<ILogger<HealthSweepTenantJob>>());
+        HealthSweepTenantJob job = BuildJob(machineStateRepository: repo, advisoryLockProvider: provider);
 
         await job.RunAsync(tenantId: 1, CancellationToken.None);
 
@@ -112,12 +120,7 @@ public sealed class HealthSweepTenantJobTests
         // The recurring tick (every 15s) means missing one cycle is harmless.
         IMachineStateRepository repo = Substitute.For<IMachineStateRepository>();
 
-        HealthSweepTenantJob job = new(
-            repo,
-            SweepDialect(),
-            CreateConfigService(),
-            BlockingLockProvider(),
-            Substitute.For<ILogger<HealthSweepTenantJob>>());
+        HealthSweepTenantJob job = BuildJob(machineStateRepository: repo, advisoryLockProvider: BlockingLockProvider());
 
         await job.RunAsync(tenantId: 1, CancellationToken.None);
 
@@ -133,14 +136,7 @@ public sealed class HealthSweepTenantJobTests
         provider.TryAcquireAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns((IAdvisoryLock?)null);
 
-        IMachineStateRepository repo = Substitute.For<IMachineStateRepository>();
-
-        HealthSweepTenantJob job = new(
-            repo,
-            SweepDialect(),
-            CreateConfigService(),
-            provider,
-            Substitute.For<ILogger<HealthSweepTenantJob>>());
+        HealthSweepTenantJob job = BuildJob(advisoryLockProvider: provider);
 
         await job.RunAsync(tenantId: 1234, CancellationToken.None);
 
@@ -152,12 +148,7 @@ public sealed class HealthSweepTenantJobTests
     [Test]
     public async Task RunAsync_TenantIdZero_Throws()
     {
-        HealthSweepTenantJob job = new(
-            Substitute.For<IMachineStateRepository>(),
-            SweepDialect(),
-            CreateConfigService(),
-            AcquiringLockProvider(),
-            Substitute.For<ILogger<HealthSweepTenantJob>>());
+        HealthSweepTenantJob job = BuildJob();
 
         ArgumentOutOfRangeException? ex = await Assert.ThrowsAsync<ArgumentOutOfRangeException>(
             () => job.RunAsync(tenantId: 0, CancellationToken.None));
@@ -169,12 +160,7 @@ public sealed class HealthSweepTenantJobTests
     [Test]
     public async Task RunAsync_TenantIdNegative_Throws()
     {
-        HealthSweepTenantJob job = new(
-            Substitute.For<IMachineStateRepository>(),
-            SweepDialect(),
-            CreateConfigService(),
-            AcquiringLockProvider(),
-            Substitute.For<ILogger<HealthSweepTenantJob>>());
+        HealthSweepTenantJob job = BuildJob();
 
         ArgumentOutOfRangeException? ex = await Assert.ThrowsAsync<ArgumentOutOfRangeException>(
             () => job.RunAsync(tenantId: -5, CancellationToken.None));
@@ -198,12 +184,7 @@ public sealed class HealthSweepTenantJobTests
         repo.SweepHealthStatusAsync(Arg.Any<string>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
             .ThrowsAsync(new InvalidOperationException("DB down"));
 
-        HealthSweepTenantJob job = new(
-            repo,
-            SweepDialect(),
-            CreateConfigService(),
-            provider,
-            Substitute.For<ILogger<HealthSweepTenantJob>>());
+        HealthSweepTenantJob job = BuildJob(machineStateRepository: repo, advisoryLockProvider: provider);
 
         InvalidOperationException? ex = await Assert.ThrowsAsync<InvalidOperationException>(
             () => job.RunAsync(tenantId: 1, CancellationToken.None));
@@ -222,12 +203,7 @@ public sealed class HealthSweepTenantJobTests
         provider.TryAcquireAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
             .ThrowsAsync(new InvalidOperationException("postgres unavailable"));
 
-        HealthSweepTenantJob job = new(
-            Substitute.For<IMachineStateRepository>(),
-            SweepDialect(),
-            CreateConfigService(),
-            provider,
-            Substitute.For<ILogger<HealthSweepTenantJob>>());
+        HealthSweepTenantJob job = BuildJob(advisoryLockProvider: provider);
 
         InvalidOperationException? ex = await Assert.ThrowsAsync<InvalidOperationException>(
             () => job.RunAsync(tenantId: 1, CancellationToken.None));
@@ -247,12 +223,7 @@ public sealed class HealthSweepTenantJobTests
 
         IMachineStateRepository repo = Substitute.For<IMachineStateRepository>();
 
-        HealthSweepTenantJob job = new(
-            repo,
-            SweepDialect(),
-            CreateConfigService(),
-            provider,
-            Substitute.For<ILogger<HealthSweepTenantJob>>());
+        HealthSweepTenantJob job = BuildJob(machineStateRepository: repo, advisoryLockProvider: provider);
 
         await job.RunAsync(tenantId: 7, cts.Token);
 
@@ -370,12 +341,7 @@ public sealed class HealthSweepTenantJobTests
 
         ILogger<HealthSweepTenantJob> logger = Substitute.For<ILogger<HealthSweepTenantJob>>();
 
-        HealthSweepTenantJob job = new(
-            repo,
-            SweepDialect(),
-            CreateConfigService(),
-            AcquiringLockProvider(),
-            logger);
+        HealthSweepTenantJob job = BuildJob(machineStateRepository: repo, logger: logger);
 
         await job.RunAsync(tenantId: 1, CancellationToken.None);
 
@@ -403,12 +369,7 @@ public sealed class HealthSweepTenantJobTests
 
         ILogger<HealthSweepTenantJob> logger = Substitute.For<ILogger<HealthSweepTenantJob>>();
 
-        HealthSweepTenantJob job = new(
-            repo,
-            SweepDialect(),
-            CreateConfigService(),
-            AcquiringLockProvider(),
-            logger);
+        HealthSweepTenantJob job = BuildJob(machineStateRepository: repo, logger: logger);
 
         await job.RunAsync(tenantId: 1, CancellationToken.None);
 

@@ -20,6 +20,17 @@ namespace Framlux.FleetManagement.Test.Services;
 
 public sealed class DataExportCleanupJobTests
 {
+    private static DataExportCleanupJob BuildJob(
+        IDataExportRepository? dataExportRepository = null,
+        IObjectStorageService? objectStorageService = null,
+        ILogger<DataExportCleanupJob>? logger = null)
+    {
+        return new DataExportCleanupJob(
+            dataExportRepository ?? Substitute.For<IDataExportRepository>(),
+            objectStorageService ?? Substitute.For<IObjectStorageService>(),
+            logger ?? Substitute.For<ILogger<DataExportCleanupJob>>());
+    }
+
     private static DataExportJob BuildExpiredJob(int id, int tenantId = 1, string objectKey = "exports/test.zip")
     {
         return new DataExportJob
@@ -41,12 +52,11 @@ public sealed class DataExportCleanupJobTests
     {
         IDataExportRepository repo = Substitute.For<IDataExportRepository>();
         IObjectStorageService storage = Substitute.For<IObjectStorageService>();
-        ILogger<DataExportCleanupJob> logger = Substitute.For<ILogger<DataExportCleanupJob>>();
 
         repo.GetExpiredExportJobsAsync(Arg.Any<CancellationToken>())
             .Returns(new List<DataExportJob>());
 
-        DataExportCleanupJob job = new(repo, storage, logger);
+        DataExportCleanupJob job = BuildJob(dataExportRepository: repo, objectStorageService: storage);
 
         await job.RunAsync(CancellationToken.None);
 
@@ -62,13 +72,12 @@ public sealed class DataExportCleanupJobTests
         // missing object (the user could retry the broken download). This ordering must be preserved.
         IDataExportRepository repo = Substitute.For<IDataExportRepository>();
         IObjectStorageService storage = Substitute.For<IObjectStorageService>();
-        ILogger<DataExportCleanupJob> logger = Substitute.For<ILogger<DataExportCleanupJob>>();
 
         DataExportJob expired = BuildExpiredJob(id: 42, objectKey: "exports/data-42.zip");
         repo.GetExpiredExportJobsAsync(Arg.Any<CancellationToken>())
             .Returns(new List<DataExportJob> { expired });
 
-        DataExportCleanupJob job = new(repo, storage, logger);
+        DataExportCleanupJob job = BuildJob(dataExportRepository: repo, objectStorageService: storage);
 
         await job.RunAsync(CancellationToken.None);
 
@@ -86,13 +95,12 @@ public sealed class DataExportCleanupJobTests
         // to Expired, but no S3 call must be made because there is nothing to delete.
         IDataExportRepository repo = Substitute.For<IDataExportRepository>();
         IObjectStorageService storage = Substitute.For<IObjectStorageService>();
-        ILogger<DataExportCleanupJob> logger = Substitute.For<ILogger<DataExportCleanupJob>>();
 
         DataExportJob expired = BuildExpiredJob(id: 7, objectKey: "");
         repo.GetExpiredExportJobsAsync(Arg.Any<CancellationToken>())
             .Returns(new List<DataExportJob> { expired });
 
-        DataExportCleanupJob job = new(repo, storage, logger);
+        DataExportCleanupJob job = BuildJob(dataExportRepository: repo, objectStorageService: storage);
 
         await job.RunAsync(CancellationToken.None);
 
@@ -108,7 +116,6 @@ public sealed class DataExportCleanupJobTests
         // logged a warning and continued to the next job; this must be preserved.
         IDataExportRepository repo = Substitute.For<IDataExportRepository>();
         IObjectStorageService storage = Substitute.For<IObjectStorageService>();
-        ILogger<DataExportCleanupJob> logger = Substitute.For<ILogger<DataExportCleanupJob>>();
 
         DataExportJob first = BuildExpiredJob(id: 1, objectKey: "exports/fail.zip");
         DataExportJob second = BuildExpiredJob(id: 2, objectKey: "exports/ok.zip");
@@ -120,7 +127,7 @@ public sealed class DataExportCleanupJobTests
         storage.DeleteObjectAsync("exports/ok.zip", Arg.Any<CancellationToken>())
             .Returns(Task.CompletedTask);
 
-        DataExportCleanupJob job = new(repo, storage, logger);
+        DataExportCleanupJob job = BuildJob(dataExportRepository: repo, objectStorageService: storage);
 
         await job.RunAsync(CancellationToken.None);
 
@@ -138,7 +145,6 @@ public sealed class DataExportCleanupJobTests
         // see a top-level failure for one bad row.
         IDataExportRepository repo = Substitute.For<IDataExportRepository>();
         IObjectStorageService storage = Substitute.For<IObjectStorageService>();
-        ILogger<DataExportCleanupJob> logger = Substitute.For<ILogger<DataExportCleanupJob>>();
 
         DataExportJob first = BuildExpiredJob(id: 1, objectKey: "exports/1.zip");
         DataExportJob second = BuildExpiredJob(id: 2, objectKey: "exports/2.zip");
@@ -148,7 +154,7 @@ public sealed class DataExportCleanupJobTests
         repo.ExpireExportJobAsync(1, Arg.Any<CancellationToken>())
             .ThrowsAsync(new InvalidOperationException("DB error on job 1"));
 
-        DataExportCleanupJob job = new(repo, storage, logger);
+        DataExportCleanupJob job = BuildJob(dataExportRepository: repo, objectStorageService: storage);
 
         await job.RunAsync(CancellationToken.None);
 
@@ -167,12 +173,11 @@ public sealed class DataExportCleanupJobTests
         // records the run as failed and surfaces in the dashboard.
         IDataExportRepository repo = Substitute.For<IDataExportRepository>();
         IObjectStorageService storage = Substitute.For<IObjectStorageService>();
-        ILogger<DataExportCleanupJob> logger = Substitute.For<ILogger<DataExportCleanupJob>>();
 
         repo.GetExpiredExportJobsAsync(Arg.Any<CancellationToken>())
             .Returns<Task<List<DataExportJob>>>(_ => throw new InvalidOperationException("DB down"));
 
-        DataExportCleanupJob job = new(repo, storage, logger);
+        DataExportCleanupJob job = BuildJob(dataExportRepository: repo, objectStorageService: storage);
 
         InvalidOperationException? ex = await Assert.ThrowsAsync<InvalidOperationException>(
             () => job.RunAsync(CancellationToken.None));
@@ -191,8 +196,6 @@ public sealed class DataExportCleanupJobTests
         using CancellationTokenSource cts = new();
 
         IDataExportRepository repo = Substitute.For<IDataExportRepository>();
-        IObjectStorageService storage = Substitute.For<IObjectStorageService>();
-        ILogger<DataExportCleanupJob> logger = Substitute.For<ILogger<DataExportCleanupJob>>();
 
         repo.GetExpiredExportJobsAsync(Arg.Any<CancellationToken>())
             .Returns(new List<DataExportJob>
@@ -210,7 +213,7 @@ public sealed class DataExportCleanupJobTests
                 return Task.CompletedTask;
             });
 
-        DataExportCleanupJob job = new(repo, storage, logger);
+        DataExportCleanupJob job = BuildJob(dataExportRepository: repo);
 
         await job.RunAsync(cts.Token);
 
@@ -224,13 +227,12 @@ public sealed class DataExportCleanupJobTests
 
         IDataExportRepository repo = Substitute.For<IDataExportRepository>();
         IObjectStorageService storage = Substitute.For<IObjectStorageService>();
-        ILogger<DataExportCleanupJob> logger = Substitute.For<ILogger<DataExportCleanupJob>>();
 
         DataExportJob expired = BuildExpiredJob(id: 9, objectKey: "exports/9.zip");
         repo.GetExpiredExportJobsAsync(Arg.Any<CancellationToken>())
             .Returns(new List<DataExportJob> { expired });
 
-        DataExportCleanupJob job = new(repo, storage, logger);
+        DataExportCleanupJob job = BuildJob(dataExportRepository: repo, objectStorageService: storage);
 
         await job.RunAsync(cts.Token);
 
@@ -371,9 +373,8 @@ public sealed class DataExportCleanupJobTests
         ILogger<DatabaseRepository> repoLogger = Substitute.For<ILogger<DatabaseRepository>>();
         DatabaseRepository repository = new(db, repoLogger);
         IObjectStorageService storage = Substitute.For<IObjectStorageService>();
-        ILogger<DataExportCleanupJob> logger = Substitute.For<ILogger<DataExportCleanupJob>>();
 
-        DataExportCleanupJob job = new(repository, storage, logger);
+        DataExportCleanupJob job = BuildJob(dataExportRepository: repository, objectStorageService: storage);
 
         await job.RunAsync(CancellationToken.None);
 
@@ -401,7 +402,6 @@ public sealed class DataExportCleanupJobTests
         // Either way, the loop must move on to the next job.
         IDataExportRepository repo = Substitute.For<IDataExportRepository>();
         IObjectStorageService storage = Substitute.For<IObjectStorageService>();
-        ILogger<DataExportCleanupJob> logger = Substitute.For<ILogger<DataExportCleanupJob>>();
 
         DataExportJob first = BuildExpiredJob(id: 1, objectKey: "exports/1.zip");
         DataExportJob second = BuildExpiredJob(id: 2, objectKey: "exports/2.zip");
@@ -415,7 +415,7 @@ public sealed class DataExportCleanupJobTests
         repo.ExpireExportJobAsync(1, Arg.Any<CancellationToken>())
             .ThrowsAsync(new InvalidOperationException("DB write failed on job 1"));
 
-        DataExportCleanupJob job = new(repo, storage, logger);
+        DataExportCleanupJob job = BuildJob(dataExportRepository: repo, objectStorageService: storage);
 
         await job.RunAsync(CancellationToken.None);
 
@@ -465,9 +465,8 @@ public sealed class DataExportCleanupJobTests
         ILogger<DatabaseRepository> repoLogger = Substitute.For<ILogger<DatabaseRepository>>();
         DatabaseRepository repository = new(db, repoLogger);
         IObjectStorageService storage = Substitute.For<IObjectStorageService>();
-        ILogger<DataExportCleanupJob> logger = Substitute.For<ILogger<DataExportCleanupJob>>();
 
-        DataExportCleanupJob job = new(repository, storage, logger);
+        DataExportCleanupJob job = BuildJob(dataExportRepository: repository, objectStorageService: storage);
 
         await job.RunAsync(CancellationToken.None);
 
@@ -511,9 +510,8 @@ public sealed class DataExportCleanupJobTests
         IObjectStorageService storage = Substitute.For<IObjectStorageService>();
         storage.DeleteObjectAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns(Task.CompletedTask);
-        ILogger<DataExportCleanupJob> logger = Substitute.For<ILogger<DataExportCleanupJob>>();
 
-        DataExportCleanupJob job = new(repository, storage, logger);
+        DataExportCleanupJob job = BuildJob(dataExportRepository: repository, objectStorageService: storage);
 
         await job.RunAsync(CancellationToken.None);
 
@@ -555,9 +553,8 @@ public sealed class DataExportCleanupJobTests
         IObjectStorageService storage = Substitute.For<IObjectStorageService>();
         storage.DeleteObjectAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns(Task.CompletedTask);
-        ILogger<DataExportCleanupJob> logger = Substitute.For<ILogger<DataExportCleanupJob>>();
 
-        DataExportCleanupJob job = new(repository, storage, logger);
+        DataExportCleanupJob job = BuildJob(dataExportRepository: repository, objectStorageService: storage);
 
         await job.RunAsync(CancellationToken.None);
 

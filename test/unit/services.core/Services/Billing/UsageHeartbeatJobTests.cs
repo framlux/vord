@@ -35,6 +35,23 @@ public sealed class UsageHeartbeatJobTests
         return provider;
     }
 
+    private static UsageHeartbeatJob BuildJob(
+        ISubscriptionRepository? subscriptionRepository = null,
+        ITenantRepository? tenantRepository = null,
+        ISubscriptionService? subscriptionService = null,
+        IBillingApiClient? billingApiClient = null,
+        IAdvisoryLockProvider? lockProvider = null,
+        ILogger<UsageHeartbeatJob>? logger = null)
+    {
+        return new UsageHeartbeatJob(
+            subscriptionRepository ?? Substitute.For<ISubscriptionRepository>(),
+            tenantRepository ?? Substitute.For<ITenantRepository>(),
+            subscriptionService ?? Substitute.For<ISubscriptionService>(),
+            billingApiClient ?? Substitute.For<IBillingApiClient>(),
+            lockProvider ?? CreateAcquiredLockProvider(),
+            logger ?? Substitute.For<ILogger<UsageHeartbeatJob>>());
+    }
+
     [Test]
     public async Task RunAsync_NoPaidSubscriptions_DoesNotCallBillingApi()
     {
@@ -42,12 +59,9 @@ public sealed class UsageHeartbeatJobTests
         subscriptionRepo.GetPaidSubscriptionsAsync(Arg.Any<CancellationToken>())
             .Returns(new List<TenantSubscription>());
 
-        ITenantRepository tenantRepo = Substitute.For<ITenantRepository>();
-        ISubscriptionService subscriptionService = Substitute.For<ISubscriptionService>();
         IBillingApiClient billingApi = Substitute.For<IBillingApiClient>();
-        ILogger<UsageHeartbeatJob> logger = Substitute.For<ILogger<UsageHeartbeatJob>>();
 
-        UsageHeartbeatJob job = new(subscriptionRepo, tenantRepo, subscriptionService, billingApi, CreateAcquiredLockProvider(), logger);
+        UsageHeartbeatJob job = BuildJob(subscriptionRepository: subscriptionRepo, billingApiClient: billingApi);
 
         await job.RunAsync(CancellationToken.None);
 
@@ -74,9 +88,11 @@ public sealed class UsageHeartbeatJobTests
         IBillingApiClient billingApi = Substitute.For<IBillingApiClient>();
         billingApi.ReportMachineUsageAsync("ext-tenant-7", 42, Arg.Any<CancellationToken>()).Returns(true);
 
-        ILogger<UsageHeartbeatJob> logger = Substitute.For<ILogger<UsageHeartbeatJob>>();
-
-        UsageHeartbeatJob job = new(subscriptionRepo, tenantRepo, subscriptionService, billingApi, CreateAcquiredLockProvider(), logger);
+        UsageHeartbeatJob job = BuildJob(
+            subscriptionRepository: subscriptionRepo,
+            tenantRepository: tenantRepo,
+            subscriptionService: subscriptionService,
+            billingApiClient: billingApi);
 
         await job.RunAsync(CancellationToken.None);
 
@@ -113,9 +129,11 @@ public sealed class UsageHeartbeatJobTests
         billingApi.ReportMachineUsageAsync(Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
             .Returns(true);
 
-        ILogger<UsageHeartbeatJob> logger = Substitute.For<ILogger<UsageHeartbeatJob>>();
-
-        UsageHeartbeatJob job = new(subscriptionRepo, tenantRepo, subscriptionService, billingApi, CreateAcquiredLockProvider(), logger);
+        UsageHeartbeatJob job = BuildJob(
+            subscriptionRepository: subscriptionRepo,
+            tenantRepository: tenantRepo,
+            subscriptionService: subscriptionService,
+            billingApiClient: billingApi);
 
         await job.RunAsync(CancellationToken.None);
 
@@ -149,9 +167,11 @@ public sealed class UsageHeartbeatJobTests
         IBillingApiClient billingApi = Substitute.For<IBillingApiClient>();
         billingApi.ReportMachineUsageAsync("ext-200", 5, Arg.Any<CancellationToken>()).Returns(true);
 
-        ILogger<UsageHeartbeatJob> logger = Substitute.For<ILogger<UsageHeartbeatJob>>();
-
-        UsageHeartbeatJob job = new(subscriptionRepo, tenantRepo, subscriptionService, billingApi, CreateAcquiredLockProvider(), logger);
+        UsageHeartbeatJob job = BuildJob(
+            subscriptionRepository: subscriptionRepo,
+            tenantRepository: tenantRepo,
+            subscriptionService: subscriptionService,
+            billingApiClient: billingApi);
 
         await job.RunAsync(CancellationToken.None);
 
@@ -189,9 +209,11 @@ public sealed class UsageHeartbeatJobTests
         billingApi.ReportMachineUsageAsync("ext-1", Arg.Any<int>(), Arg.Any<CancellationToken>()).Returns(false);
         billingApi.ReportMachineUsageAsync("ext-2", Arg.Any<int>(), Arg.Any<CancellationToken>()).Returns(true);
 
-        ILogger<UsageHeartbeatJob> logger = Substitute.For<ILogger<UsageHeartbeatJob>>();
-
-        UsageHeartbeatJob job = new(subscriptionRepo, tenantRepo, subscriptionService, billingApi, CreateAcquiredLockProvider(), logger);
+        UsageHeartbeatJob job = BuildJob(
+            subscriptionRepository: subscriptionRepo,
+            tenantRepository: tenantRepo,
+            subscriptionService: subscriptionService,
+            billingApiClient: billingApi);
 
         await Assert.That(async () => await job.RunAsync(CancellationToken.None)).ThrowsNothing();
 
@@ -229,9 +251,11 @@ public sealed class UsageHeartbeatJobTests
         billingApi.ReportMachineUsageAsync("ext-2", Arg.Any<int>(), Arg.Any<CancellationToken>())
             .Returns(true);
 
-        ILogger<UsageHeartbeatJob> logger = Substitute.For<ILogger<UsageHeartbeatJob>>();
-
-        UsageHeartbeatJob job = new(subscriptionRepo, tenantRepo, subscriptionService, billingApi, CreateAcquiredLockProvider(), logger);
+        UsageHeartbeatJob job = BuildJob(
+            subscriptionRepository: subscriptionRepo,
+            tenantRepository: tenantRepo,
+            subscriptionService: subscriptionService,
+            billingApiClient: billingApi);
 
         await Assert.That(async () => await job.RunAsync(CancellationToken.None)).ThrowsNothing();
 
@@ -248,12 +272,7 @@ public sealed class UsageHeartbeatJobTests
         subscriptionRepo.GetPaidSubscriptionsAsync(Arg.Any<CancellationToken>())
             .Returns<Task<List<TenantSubscription>>>(_ => throw new InvalidOperationException("DB down"));
 
-        ITenantRepository tenantRepo = Substitute.For<ITenantRepository>();
-        ISubscriptionService subscriptionService = Substitute.For<ISubscriptionService>();
-        IBillingApiClient billingApi = Substitute.For<IBillingApiClient>();
-        ILogger<UsageHeartbeatJob> logger = Substitute.For<ILogger<UsageHeartbeatJob>>();
-
-        UsageHeartbeatJob job = new(subscriptionRepo, tenantRepo, subscriptionService, billingApi, CreateAcquiredLockProvider(), logger);
+        UsageHeartbeatJob job = BuildJob(subscriptionRepository: subscriptionRepo);
 
         InvalidOperationException? ex = await Assert.ThrowsAsync<InvalidOperationException>(
             () => job.RunAsync(CancellationToken.None));
@@ -395,12 +414,13 @@ public sealed class UsageHeartbeatJobTests
         subscriptionRepo.GetPaidSubscriptionsAsync(Arg.Any<CancellationToken>())
             .Returns(new List<TenantSubscription>());
 
-        ITenantRepository tenantRepo = Substitute.For<ITenantRepository>();
         ISubscriptionService subscriptionService = Substitute.For<ISubscriptionService>();
         IBillingApiClient billingApi = Substitute.For<IBillingApiClient>();
-        ILogger<UsageHeartbeatJob> logger = Substitute.For<ILogger<UsageHeartbeatJob>>();
 
-        UsageHeartbeatJob job = new(subscriptionRepo, tenantRepo, subscriptionService, billingApi, CreateAcquiredLockProvider(), logger);
+        UsageHeartbeatJob job = BuildJob(
+            subscriptionRepository: subscriptionRepo,
+            subscriptionService: subscriptionService,
+            billingApiClient: billingApi);
 
         await job.RunAsync(CancellationToken.None);
 
@@ -440,7 +460,12 @@ public sealed class UsageHeartbeatJobTests
 
         ILogger<UsageHeartbeatJob> logger = Substitute.For<ILogger<UsageHeartbeatJob>>();
 
-        UsageHeartbeatJob job = new(subscriptionRepo, tenantRepo, subscriptionService, billingApi, CreateAcquiredLockProvider(), logger);
+        UsageHeartbeatJob job = BuildJob(
+            subscriptionRepository: subscriptionRepo,
+            tenantRepository: tenantRepo,
+            subscriptionService: subscriptionService,
+            billingApiClient: billingApi,
+            logger: logger);
 
         await Assert.That(async () => await job.RunAsync(CancellationToken.None)).ThrowsNothing();
 
@@ -491,9 +516,11 @@ public sealed class UsageHeartbeatJobTests
         billingApi.ReportMachineUsageAsync(Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
             .Returns(true);
 
-        ILogger<UsageHeartbeatJob> logger = Substitute.For<ILogger<UsageHeartbeatJob>>();
-
-        UsageHeartbeatJob job = new(subscriptionRepo, tenantRepo, subscriptionService, billingApi, CreateAcquiredLockProvider(), logger);
+        UsageHeartbeatJob job = BuildJob(
+            subscriptionRepository: subscriptionRepo,
+            tenantRepository: tenantRepo,
+            subscriptionService: subscriptionService,
+            billingApiClient: billingApi);
 
         await job.RunAsync(CancellationToken.None);
 
@@ -531,11 +558,12 @@ public sealed class UsageHeartbeatJobTests
             .Returns((IAdvisoryLock?)null);
 
         ISubscriptionRepository subscriptionRepo = Substitute.For<ISubscriptionRepository>();
-        ITenantRepository tenantRepo = Substitute.For<ITenantRepository>();
-        ISubscriptionService subscriptionService = Substitute.For<ISubscriptionService>();
         IBillingApiClient billingApi = Substitute.For<IBillingApiClient>();
-        ILogger<UsageHeartbeatJob> logger = Substitute.For<ILogger<UsageHeartbeatJob>>();
-        UsageHeartbeatJob job = new(subscriptionRepo, tenantRepo, subscriptionService, billingApi, lockProvider, logger);
+
+        UsageHeartbeatJob job = BuildJob(
+            subscriptionRepository: subscriptionRepo,
+            billingApiClient: billingApi,
+            lockProvider: lockProvider);
 
         await job.RunAsync(CancellationToken.None);
 
@@ -556,11 +584,8 @@ public sealed class UsageHeartbeatJobTests
         ISubscriptionRepository subscriptionRepo = Substitute.For<ISubscriptionRepository>();
         subscriptionRepo.GetPaidSubscriptionsAsync(Arg.Any<CancellationToken>())
             .Returns(new List<TenantSubscription>());
-        ITenantRepository tenantRepo = Substitute.For<ITenantRepository>();
-        ISubscriptionService subscriptionService = Substitute.For<ISubscriptionService>();
-        IBillingApiClient billingApi = Substitute.For<IBillingApiClient>();
-        ILogger<UsageHeartbeatJob> logger = Substitute.For<ILogger<UsageHeartbeatJob>>();
-        UsageHeartbeatJob job = new(subscriptionRepo, tenantRepo, subscriptionService, billingApi, lockProvider, logger);
+
+        UsageHeartbeatJob job = BuildJob(subscriptionRepository: subscriptionRepo, lockProvider: lockProvider);
 
         await job.RunAsync(CancellationToken.None);
 

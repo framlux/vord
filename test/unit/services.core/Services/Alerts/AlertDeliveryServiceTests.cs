@@ -27,6 +27,21 @@ namespace Framlux.FleetManagement.Test.Services;
 /// </summary>
 public sealed class AlertDeliveryServiceTests
 {
+    private static AlertDeliveryService BuildService(
+        TestServiceScopeFactory scopeFactory,
+        IHttpClientFactory? httpFactory = null,
+        IBackgroundJobClient? backgroundJobClient = null,
+        IIntegrationPayloadFormatter[]? formatters = null,
+        ILogger<AlertDeliveryService>? logger = null)
+    {
+        return new AlertDeliveryService(
+            scopeFactory,
+            httpFactory ?? Substitute.For<IHttpClientFactory>(),
+            backgroundJobClient ?? Substitute.For<IBackgroundJobClient>(),
+            formatters ?? [CreateCustomFormatter()],
+            logger ?? new NullLogger<AlertDeliveryService>());
+    }
+
     private static IIntegrationPayloadFormatter CreateCustomFormatter()
     {
         IIntegrationPayloadFormatter customFormatter = Substitute.For<IIntegrationPayloadFormatter>();
@@ -71,15 +86,6 @@ public sealed class AlertDeliveryServiceTests
         };
     }
 
-    private static AlertDeliveryService CreateService(TestServiceScopeFactory scopeFactory)
-    {
-        IHttpClientFactory httpFactory = Substitute.For<IHttpClientFactory>();
-        IBackgroundJobClient backgroundJobClient = Substitute.For<IBackgroundJobClient>();
-        IIntegrationPayloadFormatter[] formatters = [CreateCustomFormatter()];
-
-        return new AlertDeliveryService(scopeFactory, httpFactory, backgroundJobClient, formatters, new NullLogger<AlertDeliveryService>());
-    }
-
     private static TestServiceScopeFactory CreateEmailScopeFactory(
         TestDatabaseFactory dbFactory,
         ITenantRepository tenantRepo,
@@ -122,10 +128,7 @@ public sealed class AlertDeliveryServiceTests
         MockHttpMessageHandler handler = new();
         IHttpClientFactory httpFactory = Substitute.For<IHttpClientFactory>();
         httpFactory.CreateClient(Arg.Any<string>()).Returns(new HttpClient(handler));
-
-        IBackgroundJobClient backgroundJobClient = Substitute.For<IBackgroundJobClient>();
-        IIntegrationPayloadFormatter[] formatters = [CreateCustomFormatter()];
-        AlertDeliveryService service = new(scopeFactory, httpFactory, backgroundJobClient, formatters, new NullLogger<AlertDeliveryService>());
+        AlertDeliveryService service = BuildService(scopeFactory, httpFactory: httpFactory);
 
         await service.DeliverAsync(CreateEvent(), CreateRule(notifyEmail: false, notifyWebhook: false), CancellationToken.None);
 
@@ -152,7 +155,7 @@ public sealed class AlertDeliveryServiceTests
             .Returns(true);
 
         TestServiceScopeFactory scopeFactory = CreateEmailScopeFactory(dbFactory, tenantRepo, attemptRepo, emailService);
-        AlertDeliveryService service = CreateService(scopeFactory);
+        AlertDeliveryService service = BuildService(scopeFactory);
 
         AlertEvent alertEvent = CreateEvent();
         await service.DeliverAsync(alertEvent, CreateRule(notifyEmail: true), CancellationToken.None);
@@ -179,7 +182,7 @@ public sealed class AlertDeliveryServiceTests
         IEmailService emailService = Substitute.For<IEmailService>();
 
         TestServiceScopeFactory scopeFactory = CreateEmailScopeFactory(dbFactory, tenantRepo, attemptRepo, emailService);
-        AlertDeliveryService service = CreateService(scopeFactory);
+        AlertDeliveryService service = BuildService(scopeFactory);
 
         await service.DeliverAsync(CreateEvent(), CreateRule(notifyEmail: true), CancellationToken.None);
 
@@ -207,7 +210,7 @@ public sealed class AlertDeliveryServiceTests
             .Returns(false);
 
         TestServiceScopeFactory scopeFactory = CreateEmailScopeFactory(dbFactory, tenantRepo, attemptRepo, emailService);
-        AlertDeliveryService service = CreateService(scopeFactory);
+        AlertDeliveryService service = BuildService(scopeFactory);
 
         AlertEvent alertEvent = CreateEvent();
         await Assert.ThrowsAsync<IntegrationDeliveryException>(() =>
@@ -239,7 +242,7 @@ public sealed class AlertDeliveryServiceTests
             .Returns<bool>(_ => throw new InvalidOperationException("transport blew up"));
 
         TestServiceScopeFactory scopeFactory = CreateEmailScopeFactory(dbFactory, tenantRepo, attemptRepo, emailService);
-        AlertDeliveryService service = CreateService(scopeFactory);
+        AlertDeliveryService service = BuildService(scopeFactory);
 
         // The exception is suppressed — DeliverAsync must complete normally.
         await service.DeliverAsync(CreateEvent(), CreateRule(notifyEmail: true), CancellationToken.None);
@@ -264,7 +267,7 @@ public sealed class AlertDeliveryServiceTests
         IEmailService emailService = Substitute.For<IEmailService>();
 
         TestServiceScopeFactory scopeFactory = CreateEmailScopeFactory(dbFactory, tenantRepo, attemptRepo, emailService);
-        AlertDeliveryService service = CreateService(scopeFactory);
+        AlertDeliveryService service = BuildService(scopeFactory);
 
         await service.DeliverAsync(CreateEvent(), CreateRule(notifyEmail: true), CancellationToken.None);
 
@@ -296,10 +299,7 @@ public sealed class AlertDeliveryServiceTests
         MockHttpMessageHandler handler = new();
         IHttpClientFactory httpFactory = Substitute.For<IHttpClientFactory>();
         httpFactory.CreateClient(Arg.Any<string>()).Returns(new HttpClient(handler));
-
-        IBackgroundJobClient backgroundJobClient = Substitute.For<IBackgroundJobClient>();
-        IIntegrationPayloadFormatter[] formatters = [CreateCustomFormatter()];
-        AlertDeliveryService service = new(scopeFactory, httpFactory, backgroundJobClient, formatters, new NullLogger<AlertDeliveryService>());
+        AlertDeliveryService service = BuildService(scopeFactory, httpFactory: httpFactory);
 
         await service.DeliverAsync(CreateEvent(tenantId), CreateRule(notifyWebhook: true, tenantId: tenantId), CancellationToken.None);
 
@@ -330,10 +330,7 @@ public sealed class AlertDeliveryServiceTests
         MockHttpMessageHandler handler = new();
         IHttpClientFactory httpFactory = Substitute.For<IHttpClientFactory>();
         httpFactory.CreateClient(Arg.Any<string>()).Returns(new HttpClient(handler));
-
-        IBackgroundJobClient backgroundJobClient = Substitute.For<IBackgroundJobClient>();
-        IIntegrationPayloadFormatter[] formatters = [CreateCustomFormatter()];
-        AlertDeliveryService service = new(scopeFactory, httpFactory, backgroundJobClient, formatters, new NullLogger<AlertDeliveryService>());
+        AlertDeliveryService service = BuildService(scopeFactory, httpFactory: httpFactory);
 
         await service.DeliverAsync(CreateEvent(tenantId), CreateRule(notifyWebhook: true, tenantId: tenantId), CancellationToken.None);
 
@@ -363,10 +360,7 @@ public sealed class AlertDeliveryServiceTests
         MockHttpMessageHandler handler = new();
         IHttpClientFactory httpFactory = Substitute.For<IHttpClientFactory>();
         httpFactory.CreateClient(Arg.Any<string>()).Returns(new HttpClient(handler));
-
-        IBackgroundJobClient backgroundJobClient = Substitute.For<IBackgroundJobClient>();
-        IIntegrationPayloadFormatter[] formatters = [CreateCustomFormatter()];
-        AlertDeliveryService service = new(scopeFactory, httpFactory, backgroundJobClient, formatters, new NullLogger<AlertDeliveryService>());
+        AlertDeliveryService service = BuildService(scopeFactory, httpFactory: httpFactory);
 
         await service.DeliverAsync(CreateEvent(tenantId), CreateRule(notifyWebhook: true, tenantId: tenantId), CancellationToken.None);
 
@@ -381,10 +375,7 @@ public sealed class AlertDeliveryServiceTests
         MockHttpMessageHandler handler = new();
         IHttpClientFactory httpFactory = Substitute.For<IHttpClientFactory>();
         httpFactory.CreateClient(Arg.Any<string>()).Returns(new HttpClient(handler));
-
-        IBackgroundJobClient backgroundJobClient = Substitute.For<IBackgroundJobClient>();
-        IIntegrationPayloadFormatter[] formatters = [CreateCustomFormatter()];
-        AlertDeliveryService service = new(scopeFactory, httpFactory, backgroundJobClient, formatters, new NullLogger<AlertDeliveryService>());
+        AlertDeliveryService service = BuildService(scopeFactory, httpFactory: httpFactory);
 
         await service.DeliverAsync(CreateEvent(), CreateRule(notifyWebhook: true), CancellationToken.None);
 
@@ -416,10 +407,7 @@ public sealed class AlertDeliveryServiceTests
         MockHttpMessageHandler handler = new();
         IHttpClientFactory httpFactory = Substitute.For<IHttpClientFactory>();
         httpFactory.CreateClient(Arg.Any<string>()).Returns(new HttpClient(handler));
-
-        IBackgroundJobClient backgroundJobClient = Substitute.For<IBackgroundJobClient>();
-        IIntegrationPayloadFormatter[] formatters = [CreateCustomFormatter()];
-        AlertDeliveryService service = new(scopeFactory, httpFactory, backgroundJobClient, formatters, new NullLogger<AlertDeliveryService>());
+        AlertDeliveryService service = BuildService(scopeFactory, httpFactory: httpFactory);
 
         await service.DeliverAsync(CreateEvent(tenantId), CreateRule(notifyWebhook: true, tenantId: tenantId), CancellationToken.None);
 
@@ -454,10 +442,7 @@ public sealed class AlertDeliveryServiceTests
         handler.WithDefaultResponse(new HttpResponseMessage(System.Net.HttpStatusCode.InternalServerError));
         IHttpClientFactory httpFactory = Substitute.For<IHttpClientFactory>();
         httpFactory.CreateClient(Arg.Any<string>()).Returns(new HttpClient(handler));
-
-        IBackgroundJobClient backgroundJobClient = Substitute.For<IBackgroundJobClient>();
-        IIntegrationPayloadFormatter[] formatters = [CreateCustomFormatter()];
-        AlertDeliveryService service = new(scopeFactory, httpFactory, backgroundJobClient, formatters, new NullLogger<AlertDeliveryService>());
+        AlertDeliveryService service = BuildService(scopeFactory, httpFactory: httpFactory);
 
         await Assert.ThrowsAsync<IntegrationDeliveryException>(() =>
             service.DeliverAsync(alertEvent, CreateRule(notifyWebhook: true, tenantId: tenantId), CancellationToken.None));
@@ -492,10 +477,7 @@ public sealed class AlertDeliveryServiceTests
         handler.WithException(new HttpRequestException("Connection refused"));
         IHttpClientFactory httpFactory = Substitute.For<IHttpClientFactory>();
         httpFactory.CreateClient(Arg.Any<string>()).Returns(new HttpClient(handler));
-
-        IBackgroundJobClient backgroundJobClient = Substitute.For<IBackgroundJobClient>();
-        IIntegrationPayloadFormatter[] formatters = [CreateCustomFormatter()];
-        AlertDeliveryService service = new(scopeFactory, httpFactory, backgroundJobClient, formatters, new NullLogger<AlertDeliveryService>());
+        AlertDeliveryService service = BuildService(scopeFactory, httpFactory: httpFactory);
 
         await Assert.ThrowsAsync<IntegrationDeliveryException>(() =>
             service.DeliverAsync(alertEvent, CreateRule(notifyWebhook: true, tenantId: tenantId), CancellationToken.None));
@@ -530,10 +512,7 @@ public sealed class AlertDeliveryServiceTests
         handler.WithDefaultResponse(new HttpResponseMessage(System.Net.HttpStatusCode.Unauthorized));
         IHttpClientFactory httpFactory = Substitute.For<IHttpClientFactory>();
         httpFactory.CreateClient(Arg.Any<string>()).Returns(new HttpClient(handler));
-
-        IBackgroundJobClient backgroundJobClient = Substitute.For<IBackgroundJobClient>();
-        IIntegrationPayloadFormatter[] formatters = [CreateCustomFormatter()];
-        AlertDeliveryService service = new(scopeFactory, httpFactory, backgroundJobClient, formatters, new NullLogger<AlertDeliveryService>());
+        AlertDeliveryService service = BuildService(scopeFactory, httpFactory: httpFactory);
 
         // 4xx must not throw.
         await service.DeliverAsync(alertEvent, CreateRule(notifyWebhook: true, tenantId: tenantId), CancellationToken.None);
@@ -570,10 +549,7 @@ public sealed class AlertDeliveryServiceTests
         handler.WithDefaultResponse(new HttpResponseMessage(System.Net.HttpStatusCode.Unauthorized));
         IHttpClientFactory httpFactory = Substitute.For<IHttpClientFactory>();
         httpFactory.CreateClient(Arg.Any<string>()).Returns(new HttpClient(handler));
-
-        IBackgroundJobClient backgroundJobClient = Substitute.For<IBackgroundJobClient>();
-        IIntegrationPayloadFormatter[] formatters = [CreateCustomFormatter()];
-        AlertDeliveryService service = new(scopeFactory, httpFactory, backgroundJobClient, formatters, new NullLogger<AlertDeliveryService>());
+        AlertDeliveryService service = BuildService(scopeFactory, httpFactory: httpFactory);
 
         await service.DeliverAsync(alertEvent, CreateRule(notifyWebhook: true, tenantId: tenantId), CancellationToken.None);
 
@@ -618,10 +594,7 @@ public sealed class AlertDeliveryServiceTests
         MockHttpMessageHandler handler = new();
         IHttpClientFactory httpFactory = Substitute.For<IHttpClientFactory>();
         httpFactory.CreateClient(Arg.Any<string>()).Returns(new HttpClient(handler));
-
-        IBackgroundJobClient backgroundJobClient = Substitute.For<IBackgroundJobClient>();
-        IIntegrationPayloadFormatter[] formatters = [CreateCustomFormatter()];
-        AlertDeliveryService service = new(scopeFactory, httpFactory, backgroundJobClient, formatters, new NullLogger<AlertDeliveryService>());
+        AlertDeliveryService service = BuildService(scopeFactory, httpFactory: httpFactory);
 
         await service.DeliverAsync(alertEvent, CreateRule(notifyWebhook: true, tenantId: tenantId), CancellationToken.None);
 
@@ -665,10 +638,7 @@ public sealed class AlertDeliveryServiceTests
         handler.WithException(new HttpRequestException("Connection refused"));
         IHttpClientFactory httpFactory = Substitute.For<IHttpClientFactory>();
         httpFactory.CreateClient(Arg.Any<string>()).Returns(new HttpClient(handler));
-
-        IBackgroundJobClient backgroundJobClient = Substitute.For<IBackgroundJobClient>();
-        IIntegrationPayloadFormatter[] formatters = [CreateCustomFormatter()];
-        AlertDeliveryService service = new(scopeFactory, httpFactory, backgroundJobClient, formatters, new NullLogger<AlertDeliveryService>());
+        AlertDeliveryService service = BuildService(scopeFactory, httpFactory: httpFactory);
 
         await Assert.ThrowsAsync<IntegrationDeliveryException>(() =>
             service.DeliverAsync(alertEvent, CreateRule(notifyWebhook: true, tenantId: tenantId), CancellationToken.None));
@@ -719,10 +689,7 @@ public sealed class AlertDeliveryServiceTests
         MockHttpMessageHandler handler = new();
         IHttpClientFactory httpFactory = Substitute.For<IHttpClientFactory>();
         httpFactory.CreateClient(Arg.Any<string>()).Returns(new HttpClient(handler));
-
-        IBackgroundJobClient backgroundJobClient = Substitute.For<IBackgroundJobClient>();
-        IIntegrationPayloadFormatter[] formatters = [CreateCustomFormatter()];
-        AlertDeliveryService service = new(scopeFactory, httpFactory, backgroundJobClient, formatters, new NullLogger<AlertDeliveryService>());
+        AlertDeliveryService service = BuildService(scopeFactory, httpFactory: httpFactory);
 
         await service.DeliverAsync(alertEvent, CreateRule(notifyWebhook: true, tenantId: tenantId), CancellationToken.None);
 
@@ -757,10 +724,7 @@ public sealed class AlertDeliveryServiceTests
         MockHttpMessageHandler handler = new();
         IHttpClientFactory httpFactory = Substitute.For<IHttpClientFactory>();
         httpFactory.CreateClient(Arg.Any<string>()).Returns(new HttpClient(handler));
-
-        IBackgroundJobClient backgroundJobClient = Substitute.For<IBackgroundJobClient>();
-        IIntegrationPayloadFormatter[] formatters = [CreateCustomFormatter()];
-        AlertDeliveryService service = new(scopeFactory, httpFactory, backgroundJobClient, formatters, new NullLogger<AlertDeliveryService>());
+        AlertDeliveryService service = BuildService(scopeFactory, httpFactory: httpFactory);
 
         await service.DeliverAsync(alertEvent, CreateRule(notifyWebhook: true, tenantId: tenantId), CancellationToken.None);
 
@@ -809,10 +773,7 @@ public sealed class AlertDeliveryServiceTests
         MockHttpMessageHandler handler = new();
         IHttpClientFactory httpFactory = Substitute.For<IHttpClientFactory>();
         httpFactory.CreateClient(Arg.Any<string>()).Returns(new HttpClient(handler));
-
-        IBackgroundJobClient backgroundJobClient = Substitute.For<IBackgroundJobClient>();
-        IIntegrationPayloadFormatter[] formatters = [CreateCustomFormatter()];
-        AlertDeliveryService service = new(scopeFactory, httpFactory, backgroundJobClient, formatters, new NullLogger<AlertDeliveryService>());
+        AlertDeliveryService service = BuildService(scopeFactory, httpFactory: httpFactory);
 
         await service.DeliverAsync(alertEvent, CreateRule(notifyWebhook: true, tenantId: tenantId), CancellationToken.None);
 
@@ -862,10 +823,7 @@ public sealed class AlertDeliveryServiceTests
         handler.WithResponse("https://hooks.example.com/fail", new HttpResponseMessage(System.Net.HttpStatusCode.BadGateway));
         IHttpClientFactory httpFactory = Substitute.For<IHttpClientFactory>();
         httpFactory.CreateClient(Arg.Any<string>()).Returns(new HttpClient(handler));
-
-        IBackgroundJobClient backgroundJobClient = Substitute.For<IBackgroundJobClient>();
-        IIntegrationPayloadFormatter[] formatters = [CreateCustomFormatter()];
-        AlertDeliveryService service = new(scopeFactory, httpFactory, backgroundJobClient, formatters, new NullLogger<AlertDeliveryService>());
+        AlertDeliveryService service = BuildService(scopeFactory, httpFactory: httpFactory);
 
         await Assert.ThrowsAsync<IntegrationDeliveryException>(() =>
             service.DeliverAsync(alertEvent, CreateRule(notifyWebhook: true, tenantId: tenantId), CancellationToken.None));
@@ -908,12 +866,8 @@ public sealed class AlertDeliveryServiceTests
         MockHttpMessageHandler handler = new();
         IHttpClientFactory httpFactory = Substitute.For<IHttpClientFactory>();
         httpFactory.CreateClient(Arg.Any<string>()).Returns(new HttpClient(handler));
-
-        IBackgroundJobClient backgroundJobClient = Substitute.For<IBackgroundJobClient>();
         // Only register Custom formatter, not Slack
-        IIntegrationPayloadFormatter[] formatters = [CreateCustomFormatter()];
-        ILogger<AlertDeliveryService> logger = Substitute.For<ILogger<AlertDeliveryService>>();
-        AlertDeliveryService service = new(scopeFactory, httpFactory, backgroundJobClient, formatters, logger);
+        AlertDeliveryService service = BuildService(scopeFactory, httpFactory: httpFactory);
 
         await service.DeliverAsync(CreateEvent(tenantId), CreateRule(notifyWebhook: true, tenantId: tenantId), CancellationToken.None);
 
@@ -930,11 +884,8 @@ public sealed class AlertDeliveryServiceTests
         // substitute records the Create(Job, IState) call that Enqueue<T> delegates to.
         using TestDatabaseFactory dbFactory = new();
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        IHttpClientFactory httpFactory = Substitute.For<IHttpClientFactory>();
         IBackgroundJobClient backgroundJobClient = Substitute.For<IBackgroundJobClient>();
-
-        IIntegrationPayloadFormatter[] formatters = [CreateCustomFormatter()];
-        AlertDeliveryService service = new(scopeFactory, httpFactory, backgroundJobClient, formatters, new NullLogger<AlertDeliveryService>());
+        AlertDeliveryService service = BuildService(scopeFactory, backgroundJobClient: backgroundJobClient);
 
         await service.EnqueueAsync(100, 1, 1, CancellationToken.None);
 
@@ -950,11 +901,8 @@ public sealed class AlertDeliveryServiceTests
         // caller passed in. A mismatch would silently deliver alerts against the wrong rule/tenant.
         using TestDatabaseFactory dbFactory = new();
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        IHttpClientFactory httpFactory = Substitute.For<IHttpClientFactory>();
         IBackgroundJobClient backgroundJobClient = Substitute.For<IBackgroundJobClient>();
-
-        IIntegrationPayloadFormatter[] formatters = [CreateCustomFormatter()];
-        AlertDeliveryService service = new(scopeFactory, httpFactory, backgroundJobClient, formatters, new NullLogger<AlertDeliveryService>());
+        AlertDeliveryService service = BuildService(scopeFactory, backgroundJobClient: backgroundJobClient);
 
         await service.EnqueueAsync(eventId: 42, ruleId: 7, tenantId: 3, CancellationToken.None);
 
@@ -1005,10 +953,7 @@ public sealed class AlertDeliveryServiceTests
         MockHttpMessageHandler handler = new();
         IHttpClientFactory httpFactory = Substitute.For<IHttpClientFactory>();
         httpFactory.CreateClient(Arg.Any<string>()).Returns(new HttpClient(handler));
-        IBackgroundJobClient backgroundJobClient = Substitute.For<IBackgroundJobClient>();
-
-        IIntegrationPayloadFormatter[] formatters = [CreateCustomFormatter()];
-        AlertDeliveryService service = new(scopeFactory, httpFactory, backgroundJobClient, formatters, new NullLogger<AlertDeliveryService>());
+        AlertDeliveryService service = BuildService(scopeFactory, httpFactory: httpFactory);
 
         // Both notifyEmail and notifyWebhook enabled
         await service.DeliverAsync(CreateEvent(tenantId), CreateRule(notifyEmail: true, notifyWebhook: true, tenantId: tenantId), CancellationToken.None);

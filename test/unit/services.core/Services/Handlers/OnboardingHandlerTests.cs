@@ -17,14 +17,25 @@ namespace Framlux.FleetManagement.Test.Services.Handlers;
 /// </summary>
 public class OnboardingHandlerTests
 {
+    private static OnboardingHandler BuildHandler(
+        IDatabaseTransactionProvider? transactionProvider = null,
+        ITenantRepository? tenantRepository = null,
+        ISubscriptionRepository? subscriptionRepository = null,
+        IAuditLogRepository? auditLog = null,
+        IRoleCacheInvalidator? roleCacheInvalidator = null)
+    {
+        return new OnboardingHandler(
+            transactionProvider ?? Substitute.For<IDatabaseTransactionProvider>(),
+            tenantRepository ?? Substitute.For<ITenantRepository>(),
+            subscriptionRepository ?? Substitute.For<ISubscriptionRepository>(),
+            auditLog ?? Substitute.For<IAuditLogRepository>(),
+            roleCacheInvalidator ?? Substitute.For<IRoleCacheInvalidator>());
+    }
+
     [Test]
     public async Task CreateOrganizationAsync_EmptyName_Returns400()
     {
-        IDatabaseTransactionProvider transactionProvider = Substitute.For<IDatabaseTransactionProvider>();
-        ITenantRepository tenantRepository = Substitute.For<ITenantRepository>();
-        ISubscriptionRepository subscriptionRepository = Substitute.For<ISubscriptionRepository>();
-        IAuditLogRepository auditLog = Substitute.For<IAuditLogRepository>();
-        OnboardingHandler handler = new(transactionProvider, tenantRepository, subscriptionRepository, auditLog, Substitute.For<IRoleCacheInvalidator>());
+        OnboardingHandler handler = BuildHandler();
 
         ServiceResult<OnboardingResult> result = await handler.CreateOrganizationAsync("", "free", 1, "ext-1", CancellationToken.None);
 
@@ -35,11 +46,7 @@ public class OnboardingHandlerTests
     [Test]
     public async Task CreateOrganizationAsync_NameTooLong_Returns400()
     {
-        IDatabaseTransactionProvider transactionProvider = Substitute.For<IDatabaseTransactionProvider>();
-        ITenantRepository tenantRepository = Substitute.For<ITenantRepository>();
-        ISubscriptionRepository subscriptionRepository = Substitute.For<ISubscriptionRepository>();
-        IAuditLogRepository auditLog = Substitute.For<IAuditLogRepository>();
-        OnboardingHandler handler = new(transactionProvider, tenantRepository, subscriptionRepository, auditLog, Substitute.For<IRoleCacheInvalidator>());
+        OnboardingHandler handler = BuildHandler();
         string longName = new('A', 101);
 
         ServiceResult<OnboardingResult> result = await handler.CreateOrganizationAsync(longName, "free", 1, "ext-1", CancellationToken.None);
@@ -50,11 +57,7 @@ public class OnboardingHandlerTests
     [Test]
     public async Task CreateOrganizationAsync_ZeroUserId_Returns401()
     {
-        IDatabaseTransactionProvider transactionProvider = Substitute.For<IDatabaseTransactionProvider>();
-        ITenantRepository tenantRepository = Substitute.For<ITenantRepository>();
-        ISubscriptionRepository subscriptionRepository = Substitute.For<ISubscriptionRepository>();
-        IAuditLogRepository auditLog = Substitute.For<IAuditLogRepository>();
-        OnboardingHandler handler = new(transactionProvider, tenantRepository, subscriptionRepository, auditLog, Substitute.For<IRoleCacheInvalidator>());
+        OnboardingHandler handler = BuildHandler();
 
         ServiceResult<OnboardingResult> result = await handler.CreateOrganizationAsync("My Org", "free", 0, "ext-1", CancellationToken.None);
 
@@ -64,11 +67,7 @@ public class OnboardingHandlerTests
     [Test]
     public async Task CreateOrganizationAsync_EmptyUniqueId_Returns401()
     {
-        IDatabaseTransactionProvider transactionProvider = Substitute.For<IDatabaseTransactionProvider>();
-        ITenantRepository tenantRepository = Substitute.For<ITenantRepository>();
-        ISubscriptionRepository subscriptionRepository = Substitute.For<ISubscriptionRepository>();
-        IAuditLogRepository auditLog = Substitute.For<IAuditLogRepository>();
-        OnboardingHandler handler = new(transactionProvider, tenantRepository, subscriptionRepository, auditLog, Substitute.For<IRoleCacheInvalidator>());
+        OnboardingHandler handler = BuildHandler();
 
         ServiceResult<OnboardingResult> result = await handler.CreateOrganizationAsync("My Org", "free", 1, "", CancellationToken.None);
 
@@ -78,15 +77,12 @@ public class OnboardingHandlerTests
     [Test]
     public async Task CreateOrganizationAsync_UserAlreadyHasTenants_Returns409()
     {
-        IDatabaseTransactionProvider transactionProvider = Substitute.For<IDatabaseTransactionProvider>();
         ITenantRepository tenantRepository = Substitute.For<ITenantRepository>();
-        ISubscriptionRepository subscriptionRepository = Substitute.For<ISubscriptionRepository>();
-        IAuditLogRepository auditLog = Substitute.For<IAuditLogRepository>();
         tenantRepository.GetTenantsForUserAsync("ext-1", Arg.Any<CancellationToken>()).Returns(new List<UserTenantRole>
         {
             new() { UserId = 1, AssignedTenantId = 1, Role = UserAccountRoles.TenantAdmin, AssignedByUserId = 1, AssignedAt = DateTimeOffset.UtcNow, IsActive = true }
         });
-        OnboardingHandler handler = new(transactionProvider, tenantRepository, subscriptionRepository, auditLog, Substitute.For<IRoleCacheInvalidator>());
+        OnboardingHandler handler = BuildHandler(tenantRepository: tenantRepository);
 
         ServiceResult<OnboardingResult> result = await handler.CreateOrganizationAsync("My Org", "free", 1, "ext-1", CancellationToken.None);
 
@@ -97,16 +93,13 @@ public class OnboardingHandlerTests
     [Test]
     public async Task CreateOrganizationAsync_NameTaken_Returns409()
     {
-        IDatabaseTransactionProvider transactionProvider = Substitute.For<IDatabaseTransactionProvider>();
         ITenantRepository tenantRepository = Substitute.For<ITenantRepository>();
-        ISubscriptionRepository subscriptionRepository = Substitute.For<ISubscriptionRepository>();
-        IAuditLogRepository auditLog = Substitute.For<IAuditLogRepository>();
         tenantRepository.GetTenantsForUserAsync("ext-1", Arg.Any<CancellationToken>()).Returns(Enumerable.Empty<UserTenantRole>());
         tenantRepository.GetTenantByNameAsync("Existing Org", Arg.Any<CancellationToken>()).Returns(new Tenant
         {
             Id = 99, Name = "Existing Org", ExternalId = "ext-99", CreatedAt = DateTimeOffset.UtcNow, CreatedByUserId = 1, IsActive = true, LogoUrl = ""
         });
-        OnboardingHandler handler = new(transactionProvider, tenantRepository, subscriptionRepository, auditLog, Substitute.For<IRoleCacheInvalidator>());
+        OnboardingHandler handler = BuildHandler(tenantRepository: tenantRepository);
 
         ServiceResult<OnboardingResult> result = await handler.CreateOrganizationAsync("Existing Org", "free", 1, "ext-1", CancellationToken.None);
 
@@ -122,7 +115,6 @@ public class OnboardingHandlerTests
         transactionProvider.BeginTransactionAsync(Arg.Any<CancellationToken>()).Returns(mockTransaction);
         ITenantRepository tenantRepository = Substitute.For<ITenantRepository>();
         ISubscriptionRepository subscriptionRepository = Substitute.For<ISubscriptionRepository>();
-        IAuditLogRepository auditLog = Substitute.For<IAuditLogRepository>();
         tenantRepository.GetTenantsForUserAsync("ext-1", Arg.Any<CancellationToken>()).Returns(Enumerable.Empty<UserTenantRole>());
         tenantRepository.GetTenantByNameAsync("New Org", Arg.Any<CancellationToken>()).Returns((Tenant?)null);
         tenantRepository.CreateTenantAsync(Arg.Any<Tenant>(), Arg.Any<CancellationToken>()).Returns(callInfo =>
@@ -139,7 +131,10 @@ public class OnboardingHandlerTests
 
             return s;
         });
-        OnboardingHandler handler = new(transactionProvider, tenantRepository, subscriptionRepository, auditLog, Substitute.For<IRoleCacheInvalidator>());
+        OnboardingHandler handler = BuildHandler(
+            transactionProvider: transactionProvider,
+            tenantRepository: tenantRepository,
+            subscriptionRepository: subscriptionRepository);
 
         ServiceResult<OnboardingResult> result = await handler.CreateOrganizationAsync("New Org", "free", 1, "ext-1", CancellationToken.None);
 
@@ -155,7 +150,6 @@ public class OnboardingHandlerTests
         transactionProvider.BeginTransactionAsync(Arg.Any<CancellationToken>()).Returns(mockTransaction);
         ITenantRepository tenantRepository = Substitute.For<ITenantRepository>();
         ISubscriptionRepository subscriptionRepository = Substitute.For<ISubscriptionRepository>();
-        IAuditLogRepository auditLog = Substitute.For<IAuditLogRepository>();
         tenantRepository.GetTenantsForUserAsync("ext-1", Arg.Any<CancellationToken>()).Returns(Enumerable.Empty<UserTenantRole>());
         tenantRepository.GetTenantByNameAsync("New Org", Arg.Any<CancellationToken>()).Returns((Tenant?)null);
         tenantRepository.CreateTenantAsync(Arg.Any<Tenant>(), Arg.Any<CancellationToken>()).Returns(callInfo =>
@@ -172,7 +166,10 @@ public class OnboardingHandlerTests
 
             return s;
         });
-        OnboardingHandler handler = new(transactionProvider, tenantRepository, subscriptionRepository, auditLog, Substitute.For<IRoleCacheInvalidator>());
+        OnboardingHandler handler = BuildHandler(
+            transactionProvider: transactionProvider,
+            tenantRepository: tenantRepository,
+            subscriptionRepository: subscriptionRepository);
 
         await handler.CreateOrganizationAsync("New Org", "free", 1, "ext-1", CancellationToken.None);
 
@@ -192,7 +189,6 @@ public class OnboardingHandlerTests
         transactionProvider.BeginTransactionAsync(Arg.Any<CancellationToken>()).Returns(mockTransaction);
         ITenantRepository tenantRepository = Substitute.For<ITenantRepository>();
         ISubscriptionRepository subscriptionRepository = Substitute.For<ISubscriptionRepository>();
-        IAuditLogRepository auditLog = Substitute.For<IAuditLogRepository>();
         tenantRepository.GetTenantsForUserAsync("ext-1", Arg.Any<CancellationToken>()).Returns(Enumerable.Empty<UserTenantRole>());
         tenantRepository.GetTenantByNameAsync("New Org", Arg.Any<CancellationToken>()).Returns((Tenant?)null);
         tenantRepository.CreateTenantAsync(Arg.Any<Tenant>(), Arg.Any<CancellationToken>()).Returns(callInfo =>
@@ -209,7 +205,10 @@ public class OnboardingHandlerTests
 
             return s;
         });
-        OnboardingHandler handler = new(transactionProvider, tenantRepository, subscriptionRepository, auditLog, Substitute.For<IRoleCacheInvalidator>());
+        OnboardingHandler handler = BuildHandler(
+            transactionProvider: transactionProvider,
+            tenantRepository: tenantRepository,
+            subscriptionRepository: subscriptionRepository);
 
         await handler.CreateOrganizationAsync("New Org", "free", 1, "ext-1", CancellationToken.None);
 
