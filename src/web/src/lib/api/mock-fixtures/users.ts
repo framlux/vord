@@ -27,6 +27,7 @@ export const mockSubscription: SubscriptionDto = {
 	retentionDays: 60,
 	currentPeriodEnd: new Date(Date.now() + 1000 * 60 * 60 * 24 * 21).toISOString(),
 	cancelAtPeriodEnd: false,
+	billingInterval: 'monthly',
 	pendingAction: null,
 	alertRuleLimit: 50,
 	alertRuleCount: 8,

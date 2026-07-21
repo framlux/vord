@@ -3,7 +3,8 @@
      See LICENSE for details. -->
 
 <script lang="ts">
-	import type { SubscriptionDto, UpcomingInvoiceDto, InvoiceDto, UsagePointDto } from '$lib/api/types';
+	import type { SubscriptionDto, UpcomingInvoiceDto, InvoiceDto, UsagePointDto, CatalogItemDto } from '$lib/api/types';
+	import { billingIntervalLabel, findCatalogPrice, monthlyEquivalentCents } from '$lib/utils/billing-state';
 	import { CreditCard, CircleArrowUp, CircleArrowDown, ExternalLink, CircleAlert, CircleX, RotateCcw, Calculator, Receipt, TrendingUp, Download, ChevronDown, Tag } from 'lucide-svelte';
 
 	let { data, form } = $props();
@@ -32,26 +33,24 @@
 	const visibleInvoices: InvoiceDto[] = $derived(invoices.slice(0, invoicesShown));
 	const hasMoreInvoices = $derived(invoicesShown < invoices.length);
 
-	// Billing interval derived from upcoming invoice period length
-	const billingInterval: string | null = $derived.by(() => {
-		if (upcomingInvoice?.periodStart === null || upcomingInvoice?.periodEnd === null) {
-			return null;
-		}
-		if (upcomingInvoice === null) {
-			return null;
-		}
-		const start = new Date(upcomingInvoice.periodStart as string);
-		const end = new Date(upcomingInvoice.periodEnd as string);
-		const days = Math.round((end.getTime() - start.getTime()) / (1000 * 60 * 60 * 24));
-		if (days >= 350 && days <= 380) {
-			return 'Annual';
-		}
-		if (days >= 27 && days <= 33) {
-			return 'Monthly';
-		}
+	// Authoritative billing interval from the subscription DTO (billing-api derives it
+	// from the live subscription's price) — replaces the old period-length heuristic.
+	const billingInterval: string | null = $derived(
+		billingIntervalLabel(subscription?.billingInterval ?? null)
+	);
 
-		return 'Custom';
-	});
+	const catalog: CatalogItemDto[] = $derived(data.catalog ?? []);
+	const catalogHasPrices = $derived(
+		findCatalogPrice(catalog, 'Pro', 'monthly') !== null ||
+		findCatalogPrice(catalog, 'Team', 'monthly') !== null
+	);
+	let selectedInterval: 'monthly' | 'annual' = $state('monthly');
+	const upgradeTiers = ['Pro', 'Team'] as const;
+
+	const tierTaglines: Record<string, string> = {
+		Pro: 'Unlimited machines, 30-day retention, default alert rules.',
+		Team: 'Everything in Pro plus custom alert rules, audit log, and SSO.'
+	};
 
 	// Projected cost: unit amount per machine times current machine count
 	const projectedCostCents: number | null = $derived.by(() => {
@@ -423,43 +422,101 @@
 			class="rounded-xl border border-surface-200 bg-surface-50 p-6 dark:border-surface-700 dark:bg-surface-800"
 		>
 			{#if isFree}
-				<!-- Free tier: upgrade options + cancel -->
+				<!-- Free tier: upgrade funnel + cancel -->
 				<div class="space-y-6">
-					<div class="flex items-start gap-4">
-						<div class="rounded-lg bg-blue-100 p-3 dark:bg-blue-900/30">
-							<CircleArrowUp class="h-6 w-6 text-blue-600 dark:text-blue-400" />
-						</div>
-						<div class="flex-1">
-							<h3 class="text-lg font-semibold text-surface-900 dark:text-surface-50">
-								Upgrade Your Plan
-							</h3>
-							<p class="mt-1 text-sm text-surface-500 dark:text-surface-400">
-								Unlock unlimited machines, extended data retention, alerting, and more.
-							</p>
-							<div class="mt-4 flex flex-wrap gap-3">
-								<form method="POST" action="?/checkout">
-									<input type="hidden" name="tier" value="pro" />
-									<button
-										type="submit"
-										class="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-5 py-2.5 text-sm font-medium text-white transition-colors hover:bg-blue-700 dark:bg-blue-500 dark:hover:bg-blue-600"
-									>
-										<CircleArrowUp class="h-4 w-4" />
-										Upgrade to Pro — $3/host/mo
-									</button>
-								</form>
-								<form method="POST" action="?/checkout">
-									<input type="hidden" name="tier" value="team" />
-									<button
-										type="submit"
-										class="inline-flex items-center gap-2 rounded-lg bg-purple-600 px-5 py-2.5 text-sm font-medium text-white transition-colors hover:bg-purple-700 dark:bg-purple-500 dark:hover:bg-purple-600"
-									>
-										<CircleArrowUp class="h-4 w-4" />
-										Upgrade to Team — $5/host/mo
-									</button>
-								</form>
+					{#if catalogHasPrices}
+						<div class="flex flex-wrap items-center justify-between gap-4">
+							<div>
+								<h3 class="text-lg font-semibold text-surface-900 dark:text-surface-50">
+									Upgrade Your Plan
+								</h3>
+								<p class="mt-1 text-sm text-surface-500 dark:text-surface-400">
+									Unlock unlimited machines, extended data retention, alerting, and more.
+								</p>
+							</div>
+							<div class="inline-flex rounded-lg border border-surface-300 p-0.5 dark:border-surface-600" role="group" aria-label="Billing interval">
+								<button
+									type="button"
+									onclick={() => selectedInterval = 'monthly'}
+									class="rounded-md px-3 py-1 text-sm font-medium transition-colors {selectedInterval === 'monthly' ? 'bg-primary-500 text-white' : 'text-surface-600 hover:text-surface-900 dark:text-surface-300 dark:hover:text-surface-100'}"
+								>
+									Monthly
+								</button>
+								<button
+									type="button"
+									onclick={() => selectedInterval = 'annual'}
+									class="rounded-md px-3 py-1 text-sm font-medium transition-colors {selectedInterval === 'annual' ? 'bg-primary-500 text-white' : 'text-surface-600 hover:text-surface-900 dark:text-surface-300 dark:hover:text-surface-100'}"
+								>
+									Annual
+								</button>
 							</div>
 						</div>
-					</div>
+						<div class="grid gap-4 sm:grid-cols-2">
+							{#each upgradeTiers as tierName}
+								{@const item = findCatalogPrice(catalog, tierName, selectedInterval)}
+								{#if item !== null}
+									<div class="flex flex-col rounded-xl border border-surface-200 bg-surface-50 p-6 dark:border-surface-700 dark:bg-surface-800">
+										<span class="inline-flex w-fit items-center rounded-full px-2.5 py-0.5 text-xs font-medium {getTierBadgeClasses(tierName)}">
+											{tierName}
+										</span>
+										<p class="mt-3 text-3xl font-bold text-surface-900 dark:text-surface-50">
+											{formatCents(monthlyEquivalentCents(item), item.currency)}<span class="text-sm font-normal text-surface-500">/host/mo</span>
+										</p>
+										{#if selectedInterval === 'annual'}
+											<p class="mt-1 text-xs text-surface-500 dark:text-surface-400">
+												Billed annually at {formatCents(item.unitAmountCents, item.currency)}/host/yr
+											</p>
+										{/if}
+										<p class="mt-3 flex-1 text-sm text-surface-500 dark:text-surface-400">
+											{tierTaglines[tierName]}
+										</p>
+										<form method="POST" action="?/checkout" class="mt-4">
+											<input type="hidden" name="tier" value={tierName.toLowerCase()} />
+											<input type="hidden" name="interval" value={selectedInterval} />
+											<button
+												type="submit"
+												class="inline-flex w-full items-center justify-center gap-2 rounded-lg px-5 py-2.5 text-sm font-medium text-white transition-colors {tierName === 'Pro' ? 'bg-blue-600 hover:bg-blue-700 dark:bg-blue-500 dark:hover:bg-blue-600' : 'bg-purple-600 hover:bg-purple-700 dark:bg-purple-500 dark:hover:bg-purple-600'}"
+											>
+												<CircleArrowUp class="h-4 w-4" />
+												Upgrade to {tierName}
+											</button>
+										</form>
+									</div>
+								{/if}
+							{/each}
+						</div>
+					{:else}
+						<!-- Catalog unavailable: keep the plain upgrade CTAs (billing-web resolves the price) -->
+						<div class="flex items-start gap-4">
+							<div class="rounded-lg bg-blue-100 p-3 dark:bg-blue-900/30">
+								<CircleArrowUp class="h-6 w-6 text-blue-600 dark:text-blue-400" />
+							</div>
+							<div class="flex-1">
+								<h3 class="text-lg font-semibold text-surface-900 dark:text-surface-50">
+									Upgrade Your Plan
+								</h3>
+								<p class="mt-1 text-sm text-surface-500 dark:text-surface-400">
+									Unlock unlimited machines, extended data retention, alerting, and more.
+								</p>
+								<div class="mt-4 flex flex-wrap gap-3">
+									<form method="POST" action="?/checkout">
+										<input type="hidden" name="tier" value="pro" />
+										<button type="submit" class="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-5 py-2.5 text-sm font-medium text-white transition-colors hover:bg-blue-700 dark:bg-blue-500 dark:hover:bg-blue-600">
+											<CircleArrowUp class="h-4 w-4" />
+											Upgrade to Pro
+										</button>
+									</form>
+									<form method="POST" action="?/checkout">
+										<input type="hidden" name="tier" value="team" />
+										<button type="submit" class="inline-flex items-center gap-2 rounded-lg bg-purple-600 px-5 py-2.5 text-sm font-medium text-white transition-colors hover:bg-purple-700 dark:bg-purple-500 dark:hover:bg-purple-600">
+											<CircleArrowUp class="h-4 w-4" />
+											Upgrade to Team
+										</button>
+									</form>
+								</div>
+							</div>
+						</div>
+					{/if}
 
 					<!-- Cancel Account (Free tier: immediate) -->
 					{#if hasPendingAction === false}

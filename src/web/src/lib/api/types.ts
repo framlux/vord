@@ -338,6 +338,7 @@ export interface SubscriptionDto {
 	retentionDays: number;
 	currentPeriodEnd: string | null;
 	cancelAtPeriodEnd: boolean;
+	billingInterval: string | null;
 	pendingAction: string | null;
 	alertRuleLimit: number;
 	alertRuleCount: number;
@@ -364,6 +365,14 @@ export interface LineItemDto {
 	periodStart: string | null;
 	periodEnd: string | null;
 	proration: boolean;
+}
+
+export interface CatalogItemDto {
+	tier: string;
+	interval: string | null;
+	unitAmountCents: number;
+	currency: string;
+	isMetered: boolean;
 }
 
 export interface InvoiceDto {

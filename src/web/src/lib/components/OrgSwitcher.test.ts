@@ -40,6 +40,7 @@ function makeSubscription(overrides: Partial<SubscriptionDto> = {}): Subscriptio
         retentionDays: 90,
         currentPeriodEnd: null,
         cancelAtPeriodEnd: false,
+        billingInterval: 'monthly',
         pendingAction: null,
         alertRuleLimit: 0,
         alertRuleCount: 0,

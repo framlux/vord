@@ -28,16 +28,18 @@ export const load: PageServerLoad = async ({ fetch, cookies, locals }) => {
 	const api = createServerApiClient(fetch, cookies.get('vord_auth'), cookies.get('vord_tenant'));
 	try {
 		// Fetch billing data in parallel
-		const [upcomingInvoice, invoices, usageHistory] = await Promise.all([
+		const [upcomingInvoice, invoices, usageHistory, catalog] = await Promise.all([
 			api.getUpcomingInvoice().catch(() => null),
 			api.getInvoices().catch(() => []),
-			api.getUsageHistory(6).catch(() => [])
+			api.getUsageHistory(6).catch(() => []),
+			api.getBillingCatalog().catch(() => [])
 		]);
 
 		return {
 			upcomingInvoice,
 			invoices,
 			usageHistory,
+			catalog,
 			billingEnabled: !!env.PUBLIC_BILLING_URL
 		};
 	} catch (e) {
@@ -60,9 +62,10 @@ export const actions: Actions = {
 
 		const formData = await request.formData();
 		const tier = (formData.get('tier') as string) || 'pro';
+		const interval = (formData.get('interval') as string) || 'monthly';
 
 		try {
-			const data = await billingApi.createCheckoutSession(tier);
+			const data = await billingApi.createCheckoutSession(tier, interval);
 			if (data.checkoutUrl) {
 				const checkoutUrlObj = new URL(data.checkoutUrl);
 				if (checkoutUrlObj.hostname.endsWith('.stripe.com')) {

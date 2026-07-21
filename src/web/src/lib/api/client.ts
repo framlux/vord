@@ -42,6 +42,7 @@ import type {
 	UpcomingInvoiceDto,
 	InvoiceDto,
 	UsagePointDto,
+	CatalogItemDto,
 	MachineSearchParams,
 	FleetMachineDto,
 	UpdateMachineRequest,
@@ -306,6 +307,11 @@ export class ApiClient {
 
 	async getUsageHistory(months: number = 6): Promise<UsagePointDto[]> {
 		const resp = await this.get<ApiResponse<UsagePointDto[]>>(`/api/v1/billing/usage-history?months=${months}`);
+		return this.unwrap(resp);
+	}
+
+	async getBillingCatalog(): Promise<CatalogItemDto[]> {
+		const resp = await this.get<ApiResponse<CatalogItemDto[]>>('/api/v1/billing/catalog');
 		return this.unwrap(resp);
 	}
 
@@ -747,8 +753,8 @@ export class ApiClient {
 	}
 
 	// Billing Checkout / Portal
-	async createCheckoutSession(tier: string): Promise<{ checkoutUrl: string }> {
-		return this.post<{ checkoutUrl: string }>('/api/v1/checkout', { tier });
+	async createCheckoutSession(tier: string, interval: string = 'monthly'): Promise<{ checkoutUrl: string }> {
+		return this.post<{ checkoutUrl: string }>('/api/v1/checkout', { tier, interval });
 	}
 
 	async createPortalSession(): Promise<{ portalUrl: string }> {
