@@ -72,4 +72,12 @@ public interface IBillingApiClient
     /// Lists recent paid invoices.
     /// </summary>
     Task<List<InvoiceResult>> ListInvoicesAsync(string tenantExternalId, int limit, CancellationToken ct);
+
+    /// <summary>
+    /// Gets the public pricing catalog (active prices with tier and interval).
+    /// Returns an empty list when the catalog is unavailable.
+    /// </summary>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>The catalog entries, or an empty list on error.</returns>
+    Task<List<CatalogItemResult>> GetPublicCatalogAsync(CancellationToken ct);
 }

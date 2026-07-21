@@ -37,6 +37,9 @@ public sealed class SubscriptionDto
     /// <summary>Whether the subscription is set to cancel at the end of the billing period.</summary>
     public bool CancelAtPeriodEnd { get; set; }
 
+    /// <summary>Billing interval of the live subscription ("monthly" or "annual"), or null when not applicable.</summary>
+    public string? BillingInterval { get; set; }
+
     /// <summary>Maximum alert rules allowed.</summary>
     public int AlertRuleLimit { get; set; }
 
@@ -108,8 +111,9 @@ public sealed class SubscriptionEndpoint : EndpointWithoutRequest<ApiResponse<Su
         int webhookCount = await _integrationRepo.CountIntegrationsForTenantAsync(tenantId, ct);
         EffectiveLimits limits = await _subscriptionService.GetEffectiveLimitsForTenantAsync(tenantId, ct);
 
-        // Retrieve cancellation state from billing-api (source of truth for Stripe state)
+        // Retrieve cancellation state and billing interval from billing-api (source of truth for Stripe state)
         bool cancelAtPeriodEnd = false;
+        string? billingInterval = null;
         if (subscription.Tier != SubscriptionTier.Free)
         {
             Tenant? tenant = await _tenantRepository.GetTenantByIdAsync(tenantId, ct);
@@ -117,6 +121,7 @@ public sealed class SubscriptionEndpoint : EndpointWithoutRequest<ApiResponse<Su
             {
                 StripeSubscriptionStatus stripeStatus = await _billingApiClient.GetSubscriptionStatusAsync(tenant.ExternalId, ct);
                 cancelAtPeriodEnd = stripeStatus.CancelAtPeriodEnd;
+                billingInterval = BillingIntervalFormat.ToWireString(stripeStatus.Interval);
             }
         }
 
@@ -129,6 +134,7 @@ public sealed class SubscriptionEndpoint : EndpointWithoutRequest<ApiResponse<Su
             RetentionDays = limits.RetentionDays,
             CurrentPeriodEnd = subscription.CurrentPeriodEnd,
             CancelAtPeriodEnd = cancelAtPeriodEnd,
+            BillingInterval = billingInterval,
             AlertRuleLimit = limits.AlertRuleLimit,
             AlertRuleCount = alertRuleCount,
             WebhookLimit = limits.WebhookLimit,

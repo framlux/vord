@@ -734,4 +734,73 @@ public sealed class BillingApiClientTests
         await Assert.That(result[0].Id).IsEqualTo("inv_456");
         await Assert.That(result[0].Created).IsEqualTo(DateTimeOffset.MinValue);
     }
+
+    // --- GetPublicCatalogAsync ---
+
+    [Test]
+    public async Task GetPublicCatalogAsync_MapsAllFields()
+    {
+        (BillingApiClient client, BillingManagement.BillingManagementClient grpc, ILogger<BillingApiClient> _) = CreateSut();
+        GetPublicCatalogResponse response = new();
+        response.Items.Add(new CatalogPriceItem
+        {
+            Tier = BillingTier.Pro,
+            Interval = BillingInterval.Monthly,
+            UnitAmountCents = 300,
+            Currency = "usd",
+            IsMetered = true,
+        });
+        response.Items.Add(new CatalogPriceItem
+        {
+            Tier = BillingTier.Team,
+            Interval = BillingInterval.Annual,
+            UnitAmountCents = 5000,
+            Currency = "usd",
+            IsMetered = false,
+        });
+        grpc.GetPublicCatalogAsync(
+                Arg.Any<GetPublicCatalogRequest>(), Arg.Any<Metadata>(), Arg.Any<DateTime?>(), Arg.Any<CancellationToken>())
+            .Returns(CreateAsyncCall(response));
+
+        List<CatalogItemResult> result = await client.GetPublicCatalogAsync(CancellationToken.None);
+
+        await Assert.That(result).Count().IsEqualTo(2);
+        await Assert.That(result[0].Tier).IsEqualTo(BillingTier.Pro);
+        await Assert.That(result[0].Interval).IsEqualTo(BillingInterval.Monthly);
+        await Assert.That(result[0].UnitAmountCents).IsEqualTo(300);
+        await Assert.That(result[0].Currency).IsEqualTo("usd");
+        await Assert.That(result[0].IsMetered).IsTrue();
+        await Assert.That(result[1].Interval).IsEqualTo(BillingInterval.Annual);
+    }
+
+    [Test]
+    public async Task GetPublicCatalogAsync_GrpcError_ReturnsEmptyList()
+    {
+        (BillingApiClient client, BillingManagement.BillingManagementClient grpc, ILogger<BillingApiClient> _) = CreateSut();
+        grpc.GetPublicCatalogAsync(
+                Arg.Any<GetPublicCatalogRequest>(), Arg.Any<Metadata>(), Arg.Any<DateTime?>(), Arg.Any<CancellationToken>())
+            .Returns(CreateFaultedCall<GetPublicCatalogResponse>(new RpcException(new Status(StatusCode.Unavailable, "down"))));
+
+        List<CatalogItemResult> result = await client.GetPublicCatalogAsync(CancellationToken.None);
+
+        await Assert.That(result).Count().IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task GetSubscriptionStatusAsync_MapsBillingInterval()
+    {
+        (BillingApiClient client, BillingManagement.BillingManagementClient grpc, ILogger<BillingApiClient> _) = CreateSut();
+        grpc.GetSubscriptionStatusAsync(
+                Arg.Any<GetSubscriptionStatusRequest>(), Arg.Any<Metadata>(), Arg.Any<DateTime?>(), Arg.Any<CancellationToken>())
+            .Returns(CreateAsyncCall(new GetSubscriptionStatusResponse
+            {
+                StripeStatus = "active",
+                Tier = BillingTier.Pro,
+                BillingInterval = BillingInterval.Annual,
+            }));
+
+        StripeSubscriptionStatus result = await client.GetSubscriptionStatusAsync("tenant-ext-1", CancellationToken.None);
+
+        await Assert.That(result.Interval).IsEqualTo(BillingInterval.Annual);
+    }
 }

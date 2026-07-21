@@ -82,4 +82,20 @@ public sealed class NoOpBillingApiClientTests
 
         await Assert.That(result).IsTrue();
     }
+
+    [Test]
+    public async Task GetSubscriptionStatusAsync_ReturnsNoneInterval()
+    {
+        StripeSubscriptionStatus status = await _client.GetSubscriptionStatusAsync("tenant-123", CancellationToken.None);
+
+        await Assert.That(status.Interval).IsEqualTo(BillingInterval.None);
+    }
+
+    [Test]
+    public async Task GetPublicCatalogAsync_ReturnsEmptyList()
+    {
+        List<CatalogItemResult> result = await _client.GetPublicCatalogAsync(CancellationToken.None);
+
+        await Assert.That(result).Count().IsEqualTo(0);
+    }
 }

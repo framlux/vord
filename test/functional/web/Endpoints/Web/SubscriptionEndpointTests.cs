@@ -7,8 +7,11 @@ using System.Text.Json;
 using Framlux.FleetManagement.Database;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
+using Framlux.FleetManagement.Services.Core.Billing;
 using Framlux.FleetManagement.Test.Infrastructure;
+using Framlux.Vord.BillingGrpc;
 using LinqToDB;
+using NSubstitute;
 
 namespace Framlux.FleetManagement.FunctionalTest.Endpoints.Web;
 
@@ -57,6 +60,40 @@ public sealed class SubscriptionEndpointTests
         await Assert.That(data.GetProperty("tier").GetString()).IsEqualTo("Pro");
         await Assert.That(data.GetProperty("retentionDays").GetInt32()).IsEqualTo(60);
         await Assert.That(data.GetProperty("machineLimit").GetInt32()).IsEqualTo(1000);
+    }
+
+    [Test]
+    public async Task GetSubscription_ProTenantWithMonthlyPrice_ReturnsBillingIntervalMonthly()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        int tenantId = await SeedTenantWithSubscription(db, SubscriptionTier.Pro, null, 60);
+
+        factory.BillingApiClientMock.GetSubscriptionStatusAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new StripeSubscriptionStatus(
+                false, "active", "price_pro_123", 3, null, BillingTier.Pro, BillingInterval.Monthly)));
+
+        HttpClient client = BuildViewerClient(factory, tenantId);
+        HttpResponseMessage response = await client.GetAsync("/api/v1/billing/subscription");
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
+        JsonElement data = await ExtractDataElement(response);
+        await Assert.That(data.GetProperty("billingInterval").GetString()).IsEqualTo("monthly");
+    }
+
+    [Test]
+    public async Task GetSubscription_FreeTier_BillingIntervalIsNull()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        int tenantId = await SeedTenantWithSubscription(db, SubscriptionTier.Free, 3, 1);
+
+        HttpClient client = BuildViewerClient(factory, tenantId);
+        HttpResponseMessage response = await client.GetAsync("/api/v1/billing/subscription");
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
+        JsonElement data = await ExtractDataElement(response);
+        await Assert.That(data.GetProperty("billingInterval").ValueKind).IsEqualTo(JsonValueKind.Null);
     }
 
     [Test]

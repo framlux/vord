@@ -154,7 +154,8 @@ public sealed class BillingApiClient : IBillingApiClient
                 response.PriceId,
                 response.Quantity,
                 currentPeriodEnd,
-                response.Tier);
+                response.Tier,
+                response.BillingInterval);
         }
         catch (Exception ex)
         {
@@ -162,7 +163,7 @@ public sealed class BillingApiClient : IBillingApiClient
                 "Error getting subscription status for tenant {TenantExternalId}",
                 tenantExternalId);
 
-            return new StripeSubscriptionStatus(false, "none", string.Empty, 0, null, BillingTier.Unspecified);
+            return new StripeSubscriptionStatus(false, "none", string.Empty, 0, null, BillingTier.Unspecified, BillingInterval.None);
         }
     }
 
@@ -300,6 +301,30 @@ public sealed class BillingApiClient : IBillingApiClient
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error listing invoices for tenant {TenantExternalId}", tenantExternalId);
+            return [];
+        }
+    }
+
+    /// <inheritdoc/>
+    public async Task<List<CatalogItemResult>> GetPublicCatalogAsync(CancellationToken ct)
+    {
+        try
+        {
+            GetPublicCatalogResponse response = await _grpcClient.GetPublicCatalogAsync(
+                new GetPublicCatalogRequest(),
+                deadline: DateTime.UtcNow.Add(GrpcDeadline),
+                cancellationToken: ct);
+
+            return response.Items.Select(i => new CatalogItemResult(
+                i.Tier,
+                i.Interval,
+                i.UnitAmountCents,
+                i.Currency,
+                i.IsMetered)).ToList();
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error getting public billing catalog");
             return [];
         }
     }

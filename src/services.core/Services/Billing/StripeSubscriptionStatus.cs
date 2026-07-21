@@ -15,10 +15,12 @@ namespace Framlux.FleetManagement.Services.Core.Billing;
 /// <param name="Quantity">The quantity on the current subscription item.</param>
 /// <param name="CurrentPeriodEnd">The end of the current billing period, if available.</param>
 /// <param name="Tier">The billing tier resolved from TierMappings in the billing database, or Unspecified if not resolved.</param>
+/// <param name="Interval">The billing interval of the live subscription's price, or None when unresolved.</param>
 public sealed record StripeSubscriptionStatus(
     bool CancelAtPeriodEnd,
     string StripeStatus,
     string PriceId,
     int Quantity,
     DateTimeOffset? CurrentPeriodEnd,
-    BillingTier Tier);
+    BillingTier Tier,
+    BillingInterval Interval);

@@ -507,7 +507,7 @@ public class FunctionalTestFactory : WebApplicationFactory<Program>
         mock.CancelSubscriptionAsync(Arg.Any<string>(), Arg.Any<PendingActionType>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(true));
         mock.GetSubscriptionStatusAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(new StripeSubscriptionStatus(false, "none", string.Empty, 0, null, BillingTier.Unspecified)));
+            .Returns(Task.FromResult(new StripeSubscriptionStatus(false, "none", string.Empty, 0, null, BillingTier.Unspecified, BillingInterval.None)));
         mock.SwapSubscriptionPriceAsync(Arg.Any<string>(), Arg.Any<BillingTier>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(true));
         mock.ResumeSubscriptionAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
@@ -516,6 +516,8 @@ public class FunctionalTestFactory : WebApplicationFactory<Program>
             .Returns(Task.FromResult<UpcomingInvoiceResult?>(null));
         mock.ListInvoicesAsync(Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult<List<InvoiceResult>>([]));
+        mock.GetPublicCatalogAsync(Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<List<CatalogItemResult>>([]));
 
         return mock;
     }
