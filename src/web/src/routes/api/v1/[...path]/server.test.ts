@@ -26,7 +26,7 @@ type HeaderPairs = Record<string, string>;
 
 function makeEvent(path: string, headers: HeaderPairs, method = 'GET') {
 	const requestHeaders = new Map<string, string>(Object.entries(headers));
-	const fetchMock = vi.fn(async () => new Response('{}', { status: 200 }));
+	const fetchMock = vi.fn<typeof fetch>(async () => new Response('{}', { status: 200 }));
 
 	const event = {
 		params: { path },
