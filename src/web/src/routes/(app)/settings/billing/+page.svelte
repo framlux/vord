@@ -47,6 +47,11 @@
 	let selectedInterval: 'monthly' | 'annual' = $state('monthly');
 	const upgradeTiers = ['Pro', 'Team'] as const;
 
+	// Catalog-backed monthly per-machine prices with legacy fallbacks for installs
+	// that have not synced a catalog yet.
+	const proMonthlyCents = $derived(findCatalogPrice(catalog, 'Pro', 'monthly')?.unitAmountCents ?? 300);
+	const teamMonthlyCents = $derived(findCatalogPrice(catalog, 'Team', 'monthly')?.unitAmountCents ?? 500);
+
 	const tierTaglines: Record<string, string> = {
 		Pro: 'Unlimited machines, 30-day retention, default alert rules.',
 		Team: 'Everything in Pro plus custom alert rules, audit log, and SSO.'
@@ -327,9 +332,24 @@
 	<div
 		class="rounded-xl border border-surface-200 bg-surface-50 p-6 dark:border-surface-700 dark:bg-surface-800"
 	>
-		<div class="mb-6 flex items-center gap-3">
-			<CreditCard class="h-5 w-5 text-surface-400 dark:text-surface-500" />
-			<h2 class="text-lg font-semibold text-surface-900 dark:text-surface-50">Current Plan</h2>
+		<div class="mb-6 flex flex-wrap items-start justify-between gap-4">
+			<div class="flex items-center gap-3">
+				<CreditCard class="h-5 w-5 text-surface-400 dark:text-surface-500" />
+				<h2 class="text-lg font-semibold text-surface-900 dark:text-surface-50">Your Plan</h2>
+			</div>
+			{#if upcomingInvoice?.hasInvoice}
+				<div class="text-right">
+					<p class="text-xs text-surface-500 dark:text-surface-400">Next invoice</p>
+					<p class="text-2xl font-bold text-surface-900 dark:text-surface-50">
+						{formatCents(upcomingInvoice.amountDueCents, upcomingInvoice.currency)}
+					</p>
+					{#if upcomingInvoice.nextPaymentAttempt}
+						<p class="text-xs text-surface-500 dark:text-surface-400">
+							on {formatShortDate(upcomingInvoice.nextPaymentAttempt)}
+						</p>
+					{/if}
+				</div>
+			{/if}
 		</div>
 
 		{#if subscription === null}
@@ -763,26 +783,37 @@
 				Current Period
 			</div>
 
-			<div class="mt-4 flex flex-wrap items-baseline gap-x-6 gap-y-2">
-				<span class="text-3xl font-bold text-surface-900 dark:text-surface-50">
-					{formatCents(upcomingInvoice.amountDueCents, upcomingInvoice.currency)}
-				</span>
+			<div class="mt-4 grid gap-4 sm:grid-cols-3">
+				<div>
+					<p class="text-xs text-surface-500 dark:text-surface-400">Amount due this period</p>
+					<p class="mt-1 text-2xl font-bold text-surface-900 dark:text-surface-50">
+						{formatCents(upcomingInvoice.amountDueCents, upcomingInvoice.currency)}
+					</p>
+				</div>
 				{#if upcomingInvoice.unitAmountCents > 0}
-					<span class="text-sm text-surface-500">
-						{formatCents(upcomingInvoice.unitAmountCents, upcomingInvoice.currency)}/host/mo
-					</span>
+					<div>
+						<p class="text-xs text-surface-500 dark:text-surface-400">Per machine</p>
+						<p class="mt-1 text-2xl font-bold text-surface-900 dark:text-surface-50">
+							{formatCents(upcomingInvoice.unitAmountCents, upcomingInvoice.currency)}<span class="text-sm font-normal text-surface-500">/mo</span>
+						</p>
+					</div>
 				{/if}
 				{#if projectedCostCents !== null}
-					<span class="text-sm text-surface-500">
-						Projected: {formatCents(projectedCostCents, upcomingInvoice.currency)} ({subscription?.machineCount ?? 0} {subscription?.machineCount === 1 ? 'machine' : 'machines'})
-					</span>
-				{/if}
-				{#if upcomingInvoice.nextPaymentAttempt}
-					<span class="text-sm text-surface-500">
-						Next charge: {formatShortDate(upcomingInvoice.nextPaymentAttempt)}
-					</span>
+					<div>
+						<p class="text-xs text-surface-500 dark:text-surface-400">
+							Current run rate ({subscription?.machineCount ?? 0} {subscription?.machineCount === 1 ? 'machine' : 'machines'})
+						</p>
+						<p class="mt-1 text-2xl font-bold text-surface-900 dark:text-surface-50">
+							{formatCents(projectedCostCents, upcomingInvoice.currency)}<span class="text-sm font-normal text-surface-500">/mo</span>
+						</p>
+					</div>
 				{/if}
 			</div>
+			{#if upcomingInvoice.nextPaymentAttempt}
+				<p class="mt-3 text-sm text-surface-500 dark:text-surface-400">
+					Next charge: {formatShortDate(upcomingInvoice.nextPaymentAttempt)}
+				</p>
+			{/if}
 
 			<!-- Active credits or discounts -->
 			{#if hasDiscount}
@@ -981,8 +1012,8 @@
 					<tr>
 						<td class="py-3 pr-4 text-surface-900 dark:text-surface-100">Price</td>
 						<td class="px-4 py-3 text-center font-medium text-surface-900 dark:text-surface-100">$0</td>
-						<td class="px-4 py-3 text-center font-medium text-surface-900 dark:text-surface-100">$3/host/mo</td>
-						<td class="px-4 py-3 text-center font-medium text-surface-900 dark:text-surface-100">$5/host/mo</td>
+						<td class="px-4 py-3 text-center font-medium text-surface-900 dark:text-surface-100">{formatCents(proMonthlyCents)}/host/mo</td>
+						<td class="px-4 py-3 text-center font-medium text-surface-900 dark:text-surface-100">{formatCents(teamMonthlyCents)}/host/mo</td>
 					</tr>
 				</tbody>
 			</table>
@@ -1015,13 +1046,13 @@
 				<div>
 					<p class="text-sm text-surface-500 dark:text-surface-400">Pro</p>
 					<p class="text-2xl font-bold text-blue-600 dark:text-blue-400">
-						${machineCount * 3}<span class="text-sm font-normal">/mo</span>
+						{formatCents(machineCount * proMonthlyCents)}<span class="text-sm font-normal">/mo</span>
 					</p>
 				</div>
 				<div>
 					<p class="text-sm text-surface-500 dark:text-surface-400">Team</p>
 					<p class="text-2xl font-bold text-purple-600 dark:text-purple-400">
-						${machineCount * 5}<span class="text-sm font-normal">/mo</span>
+						{formatCents(machineCount * teamMonthlyCents)}<span class="text-sm font-normal">/mo</span>
 					</p>
 				</div>
 			</div>
