@@ -276,23 +276,23 @@ export class ApiClient {
 	}
 
 	async cancelSubscription(): Promise<{ success: boolean; message: string }> {
-		const resp = await this.post<ApiResponse<{ success: boolean; message: string }>>('/api/v1/billing/cancel');
-		return this.unwrap(resp);
+		const resp = await this.post<ApiResponse<null>>('/api/v1/billing/cancel');
+		return { success: resp.success, message: resp.message ?? '' };
 	}
 
 	async downgradeSubscription(targetTier: string): Promise<{ success: boolean; message: string }> {
-		const resp = await this.post<ApiResponse<{ success: boolean; message: string }>>('/api/v1/billing/downgrade', { targetTier });
-		return this.unwrap(resp);
+		const resp = await this.post<ApiResponse<null>>('/api/v1/billing/downgrade', { targetTier });
+		return { success: resp.success, message: resp.message ?? '' };
 	}
 
 	async resumeSubscription(): Promise<{ success: boolean; message: string }> {
-		const resp = await this.post<ApiResponse<{ success: boolean; message: string }>>('/api/v1/billing/resume');
-		return this.unwrap(resp);
+		const resp = await this.post<ApiResponse<null>>('/api/v1/billing/resume');
+		return { success: resp.success, message: resp.message ?? '' };
 	}
 
 	async reactivateSubscription(): Promise<{ success: boolean; message: string }> {
-		const resp = await this.post<ApiResponse<{ success: boolean; message: string }>>('/api/v1/billing/reactivate');
-		return this.unwrap(resp);
+		const resp = await this.post<ApiResponse<null>>('/api/v1/billing/reactivate');
+		return { success: resp.success, message: resp.message ?? '' };
 	}
 
 	async getUpcomingInvoice(): Promise<UpcomingInvoiceDto> {

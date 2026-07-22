@@ -16,7 +16,7 @@ namespace Framlux.FleetManagement.Server.Endpoints.Web.Billing;
 /// Resumes a subscription that was set to cancel or downgrade at the end of the billing period.
 /// Tells the billing-api to remove cancel_at_period_end from Stripe and clear pending actions.
 /// </summary>
-public sealed class ResumeSubscriptionEndpoint : EndpointWithoutRequest<ApiResponse<BillingActionResponse>>
+public sealed class ResumeSubscriptionEndpoint : EndpointWithoutRequest<ApiResponse<object>>
 {
     private readonly BillingStatus _billingStatus;
     private readonly IAuditLogRepository _auditLog;
@@ -87,11 +87,11 @@ public sealed class ResumeSubscriptionEndpoint : EndpointWithoutRequest<ApiRespo
         StripeSubscriptionStatus stripeStatus = await _billingApiClient.GetSubscriptionStatusAsync(tenant.ExternalId, ct);
         if (stripeStatus.CancelAtPeriodEnd == false)
         {
-            await Send.OkAsync(ApiResponse<BillingActionResponse>.Ok(new BillingActionResponse
+            await Send.OkAsync(new ApiResponse<object>
             {
                 Success = true,
                 Message = "Subscription is not pending cancellation or downgrade."
-            }), cancellation: ct);
+            }, cancellation: ct);
 
             return;
         }
@@ -111,10 +111,10 @@ public sealed class ResumeSubscriptionEndpoint : EndpointWithoutRequest<ApiRespo
             AuditAction.SubscriptionResumed, AuditResourceType.Subscription,
             tenantId.ToString(), null, null), ct);
 
-        await Send.OkAsync(ApiResponse<BillingActionResponse>.Ok(new BillingActionResponse
+        await Send.OkAsync(new ApiResponse<object>
         {
             Success = true,
             Message = "Subscription has been resumed."
-        }), cancellation: ct);
+        }, cancellation: ct);
     }
 }

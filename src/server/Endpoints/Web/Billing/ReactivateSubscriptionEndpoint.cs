@@ -16,7 +16,7 @@ namespace Framlux.FleetManagement.Server.Endpoints.Web.Billing;
 /// Reactivates a canceled subscription by resetting it to the Free tier with Active status.
 /// This allows tenants to regain access after full cancellation without going through Stripe checkout.
 /// </summary>
-public sealed class ReactivateSubscriptionEndpoint : EndpointWithoutRequest<ApiResponse<BillingActionResponse>>
+public sealed class ReactivateSubscriptionEndpoint : EndpointWithoutRequest<ApiResponse<object>>
 {
     private readonly BillingStatus _billingStatus;
     private readonly IDatabaseTransactionProvider _transactionProvider;
@@ -91,10 +91,10 @@ public sealed class ReactivateSubscriptionEndpoint : EndpointWithoutRequest<ApiR
             "Subscription reactivated to Free tier for tenant {TenantId}",
             tenantId);
 
-        await Send.OkAsync(ApiResponse<BillingActionResponse>.Ok(new BillingActionResponse
+        await Send.OkAsync(new ApiResponse<object>
         {
             Success = true,
             Message = "Your account has been reactivated on the Free tier."
-        }), cancellation: ct);
+        }, cancellation: ct);
     }
 }

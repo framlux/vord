@@ -37,9 +37,7 @@ public sealed class ResumeSubscriptionEndpointTests
         bool outerSuccess = root.GetProperty("success").GetBoolean();
         await Assert.That(outerSuccess).IsTrue();
 
-        JsonElement data = root.GetProperty("data");
-        bool dataSuccess = data.GetProperty("success").GetBoolean();
-        await Assert.That(dataSuccess).IsTrue();
+        await Assert.That(root.GetProperty("data").ValueKind).IsEqualTo(JsonValueKind.Null);
     }
 
     [Test]
@@ -62,9 +60,7 @@ public sealed class ResumeSubscriptionEndpointTests
         bool outerSuccess = root.GetProperty("success").GetBoolean();
         await Assert.That(outerSuccess).IsTrue();
 
-        JsonElement data = root.GetProperty("data");
-        bool dataSuccess = data.GetProperty("success").GetBoolean();
-        await Assert.That(dataSuccess).IsTrue();
+        await Assert.That(root.GetProperty("data").ValueKind).IsEqualTo(JsonValueKind.Null);
     }
 
     [Test]
@@ -88,11 +84,9 @@ public sealed class ResumeSubscriptionEndpointTests
         bool outerSuccess = root.GetProperty("success").GetBoolean();
         await Assert.That(outerSuccess).IsTrue();
 
-        JsonElement data = root.GetProperty("data");
-        bool dataSuccess = data.GetProperty("success").GetBoolean();
-        await Assert.That(dataSuccess).IsTrue();
+        await Assert.That(root.GetProperty("data").ValueKind).IsEqualTo(JsonValueKind.Null);
 
-        string message = data.GetProperty("message").GetString()!;
+        string message = root.GetProperty("message").GetString()!;
         await Assert.That(message).IsEqualTo("Subscription is not pending cancellation or downgrade.");
     }
 

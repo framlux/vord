@@ -122,11 +122,9 @@ public sealed class BillingEndpointTests
         bool outerSuccess = root.GetProperty("success").GetBoolean();
         await Assert.That(outerSuccess).IsTrue();
 
-        JsonElement data = root.GetProperty("data");
-        bool dataSuccess = data.GetProperty("success").GetBoolean();
-        await Assert.That(dataSuccess).IsTrue();
+        await Assert.That(root.GetProperty("data").ValueKind).IsEqualTo(JsonValueKind.Null);
 
-        string message = data.GetProperty("message").GetString()!;
+        string message = root.GetProperty("message").GetString()!;
         await Assert.That(message).Contains("already set to cancel");
     }
 
@@ -149,11 +147,9 @@ public sealed class BillingEndpointTests
         bool outerSuccess = root.GetProperty("success").GetBoolean();
         await Assert.That(outerSuccess).IsTrue();
 
-        JsonElement data = root.GetProperty("data");
-        bool dataSuccess = data.GetProperty("success").GetBoolean();
-        await Assert.That(dataSuccess).IsTrue();
+        await Assert.That(root.GetProperty("data").ValueKind).IsEqualTo(JsonValueKind.Null);
 
-        string message = data.GetProperty("message").GetString()!;
+        string message = root.GetProperty("message").GetString()!;
         await Assert.That(message).Contains("canceled at the end of the current billing period");
     }
 
@@ -211,11 +207,9 @@ public sealed class BillingEndpointTests
         bool outerSuccess = root.GetProperty("success").GetBoolean();
         await Assert.That(outerSuccess).IsTrue();
 
-        JsonElement data = root.GetProperty("data");
-        bool dataSuccess = data.GetProperty("success").GetBoolean();
-        await Assert.That(dataSuccess).IsTrue();
+        await Assert.That(root.GetProperty("data").ValueKind).IsEqualTo(JsonValueKind.Null);
 
-        string message = data.GetProperty("message").GetString()!;
+        string message = root.GetProperty("message").GetString()!;
         await Assert.That(message).Contains("already canceled");
     }
 
@@ -242,11 +236,9 @@ public sealed class BillingEndpointTests
         bool outerSuccess = root.GetProperty("success").GetBoolean();
         await Assert.That(outerSuccess).IsTrue();
 
-        JsonElement data = root.GetProperty("data");
-        bool dataSuccess = data.GetProperty("success").GetBoolean();
-        await Assert.That(dataSuccess).IsTrue();
+        await Assert.That(root.GetProperty("data").ValueKind).IsEqualTo(JsonValueKind.Null);
 
-        string message = data.GetProperty("message").GetString()!;
+        string message = root.GetProperty("message").GetString()!;
         await Assert.That(message).Contains("canceled at the end of the current billing period");
     }
 
@@ -302,18 +294,15 @@ public sealed class BillingEndpointTests
         // Verify top-level ApiResponse fields exist
         await Assert.That(root.TryGetProperty("success", out _)).IsTrue();
         await Assert.That(root.TryGetProperty("data", out _)).IsTrue();
+        await Assert.That(root.TryGetProperty("message", out _)).IsTrue();
 
-        // Verify nested CancelSubscriptionResponse fields exist
-        JsonElement data = root.GetProperty("data");
-        await Assert.That(data.TryGetProperty("success", out _)).IsTrue();
-        await Assert.That(data.TryGetProperty("message", out _)).IsTrue();
+        // The flat envelope carries a null data payload with the message at the top level
+        await Assert.That(root.GetProperty("data").ValueKind).IsEqualTo(JsonValueKind.Null);
+        await Assert.That(root.GetProperty("message").ValueKind).IsEqualTo(JsonValueKind.String);
 
-        // Verify the outer success flag and inner success flag are both true
+        // Verify the outer success flag is true
         bool outerSuccess = root.GetProperty("success").GetBoolean();
         await Assert.That(outerSuccess).IsTrue();
-
-        bool dataSuccess = data.GetProperty("success").GetBoolean();
-        await Assert.That(dataSuccess).IsTrue();
     }
 
     [Test]
@@ -460,11 +449,9 @@ public sealed class BillingEndpointTests
         bool outerSuccess = root.GetProperty("success").GetBoolean();
         await Assert.That(outerSuccess).IsTrue();
 
-        JsonElement data = root.GetProperty("data");
-        bool dataSuccess = data.GetProperty("success").GetBoolean();
-        await Assert.That(dataSuccess).IsTrue();
+        await Assert.That(root.GetProperty("data").ValueKind).IsEqualTo(JsonValueKind.Null);
 
-        string message = data.GetProperty("message").GetString()!;
+        string message = root.GetProperty("message").GetString()!;
         await Assert.That(message).Contains("canceled");
 
         // The billing-api should not have been called for a free-tier cancellation

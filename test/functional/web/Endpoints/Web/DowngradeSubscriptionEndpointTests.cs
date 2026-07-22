@@ -111,11 +111,9 @@ public sealed class DowngradeSubscriptionEndpointTests
         bool outerSuccess = root.GetProperty("success").GetBoolean();
         await Assert.That(outerSuccess).IsTrue();
 
-        JsonElement data = root.GetProperty("data");
-        bool dataSuccess = data.GetProperty("success").GetBoolean();
-        await Assert.That(dataSuccess).IsTrue();
+        await Assert.That(root.GetProperty("data").ValueKind).IsEqualTo(JsonValueKind.Null);
 
-        string message = data.GetProperty("message").GetString()!;
+        string message = root.GetProperty("message").GetString()!;
         await Assert.That(message).Contains("downgraded to Pro");
     }
 
@@ -142,11 +140,9 @@ public sealed class DowngradeSubscriptionEndpointTests
         bool outerSuccess = root.GetProperty("success").GetBoolean();
         await Assert.That(outerSuccess).IsTrue();
 
-        JsonElement data = root.GetProperty("data");
-        bool dataSuccess = data.GetProperty("success").GetBoolean();
-        await Assert.That(dataSuccess).IsTrue();
+        await Assert.That(root.GetProperty("data").ValueKind).IsEqualTo(JsonValueKind.Null);
 
-        string message = data.GetProperty("message").GetString()!;
+        string message = root.GetProperty("message").GetString()!;
         await Assert.That(message).Contains("end of the current billing period");
     }
 
@@ -173,11 +169,9 @@ public sealed class DowngradeSubscriptionEndpointTests
         bool outerSuccess = root.GetProperty("success").GetBoolean();
         await Assert.That(outerSuccess).IsTrue();
 
-        JsonElement data = root.GetProperty("data");
-        bool dataSuccess = data.GetProperty("success").GetBoolean();
-        await Assert.That(dataSuccess).IsTrue();
+        await Assert.That(root.GetProperty("data").ValueKind).IsEqualTo(JsonValueKind.Null);
 
-        string message = data.GetProperty("message").GetString()!;
+        string message = root.GetProperty("message").GetString()!;
         await Assert.That(message).Contains("end of the current billing period");
     }
 

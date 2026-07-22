@@ -26,7 +26,7 @@ public sealed class DowngradeSubscriptionRequest
 /// Downgrades the tenant's subscription to a lower tier.
 /// Team to Pro is an immediate price swap. Any downgrade to Free takes effect at period end.
 /// </summary>
-public sealed class DowngradeSubscriptionEndpoint : Endpoint<DowngradeSubscriptionRequest, ApiResponse<BillingActionResponse>>
+public sealed class DowngradeSubscriptionEndpoint : Endpoint<DowngradeSubscriptionRequest, ApiResponse<object>>
 {
     private readonly BillingStatus _billingStatus;
     private readonly IDatabaseTransactionProvider _transactionProvider;
@@ -188,11 +188,11 @@ public sealed class DowngradeSubscriptionEndpoint : Endpoint<DowngradeSubscripti
             }
         }
 
-        await Send.OkAsync(ApiResponse<BillingActionResponse>.Ok(new BillingActionResponse
+        await Send.OkAsync(new ApiResponse<object>
         {
             Success = true,
             Message = "Subscription has been downgraded to Pro."
-        }), cancellation: ct);
+        }, cancellation: ct);
     }
 
     private async Task HandleDowngradeToFreeAsync(int tenantId, CancellationToken ct)
@@ -233,10 +233,10 @@ public sealed class DowngradeSubscriptionEndpoint : Endpoint<DowngradeSubscripti
             AuditAction.SubscriptionDowngradeRequested, AuditResourceType.Subscription,
             tenantId.ToString(), "Downgrade to Free at period end", null), ct);
 
-        await Send.OkAsync(ApiResponse<BillingActionResponse>.Ok(new BillingActionResponse
+        await Send.OkAsync(new ApiResponse<object>
         {
             Success = true,
             Message = "Subscription will be downgraded to Free at the end of the current billing period."
-        }), cancellation: ct);
+        }, cancellation: ct);
     }
 }
