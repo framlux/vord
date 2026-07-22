@@ -64,13 +64,6 @@ string hangfireConnString = Framlux.FleetManagement.Services.Core.Extensions.Ser
 await Framlux.FleetManagement.Services.Core.Hangfire.HangfireSchemaReadinessProbe
     .WaitForHangfireSchemaAsync(hangfireConnString, TimeSpan.FromSeconds(60));
 
-// One-shot startup task — keep singleton; it has no per-request state.
-builder.Services.AddSingleton<LegacyRedisKeyCleanup>();
-
-// One-shot legacy OIDC secret migration job. Scoped because it depends on the scoped
-// ITenantRepository.
-builder.Services.AddScoped<EncryptLegacyTenantOidcSecretsJob>();
-
 // Hangfire processing server — runs the recurring jobs registered by RecurringJobRegistry
 builder.Services.AddHangfireServerForWorker();
 
@@ -88,53 +81,6 @@ using (IServiceScope startupScope = app.Services.CreateScope())
         billingEnabled: billingOpts.Enabled,
         objectStorageEnabled: string.IsNullOrEmpty(objectStorageOpts.BucketName) == false);
 }
-
-// One-time idempotent flush of Redis keys left behind by the pre-Hangfire background services
-// and the former Redis-list delivery queue. Fire-and-forget with a 60-second outer timeout so
-// worker readiness is NEVER blocked on Redis availability or scan duration. The cleanup is
-// idempotent and sentinel-gated; partial failure is acceptable.
-LegacyRedisKeyCleanup legacyCleanup = app.Services.GetRequiredService<LegacyRedisKeyCleanup>();
-_ = Task.Run(async () =>
-{
-    using CancellationTokenSource cleanupCts = CancellationTokenSource.CreateLinkedTokenSource(app.Lifetime.ApplicationStopping);
-    cleanupCts.CancelAfter(TimeSpan.FromSeconds(60));
-    try
-    {
-        await legacyCleanup.RunAsync(cleanupCts.Token);
-    }
-    catch (OperationCanceledException)
-    {
-        Log.Information("Legacy Redis key cleanup cancelled by timeout or shutdown");
-    }
-    catch (Exception ex)
-    {
-        Log.Warning(ex, "Legacy Redis key cleanup failed; worker boot continues");
-    }
-});
-
-// One-time encryption of legacy plaintext OIDC client secrets. Idempotent (rows already
-// carrying the protected-marker prefix are skipped). Fire-and-forget with a 60s timeout so
-// worker readiness is not blocked.
-_ = Task.Run(async () =>
-{
-    using CancellationTokenSource oidcCts = CancellationTokenSource.CreateLinkedTokenSource(app.Lifetime.ApplicationStopping);
-    oidcCts.CancelAfter(TimeSpan.FromSeconds(60));
-    try
-    {
-        using IServiceScope oidcScope = app.Services.CreateScope();
-        EncryptLegacyTenantOidcSecretsJob oidcMigration =
-            oidcScope.ServiceProvider.GetRequiredService<EncryptLegacyTenantOidcSecretsJob>();
-        await oidcMigration.RunAsync(oidcCts.Token);
-    }
-    catch (OperationCanceledException)
-    {
-        Log.Information("Legacy OIDC secret migration cancelled by timeout or shutdown");
-    }
-    catch (Exception ex)
-    {
-        Log.Warning(ex, "Legacy OIDC secret migration failed; worker boot continues");
-    }
-});
 
 // Health check endpoint for Kubernetes probes
 app.MapHealthChecks("/healthz", new HealthCheckOptions
