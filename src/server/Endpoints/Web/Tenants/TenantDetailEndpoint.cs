@@ -32,7 +32,7 @@ public sealed class TenantDetailEndpoint : EndpointWithoutRequest<ApiResponse<Te
     public override void Configure()
     {
         Get("/tenants/{id}");
-        Policies("TenantAdmin");
+        Policies(AuthorizationPolicies.TenantAdmin);
         Version(1);
     }
 

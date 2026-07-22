@@ -30,7 +30,7 @@ public sealed class DashboardFleetEndpoint : EndpointWithoutRequest<ApiResponse<
     public override void Configure()
     {
         Get("/dashboard/fleet");
-        Policies("ViewOnly");
+        Policies(AuthorizationPolicies.ViewOnly);
         Version(1);
     }
 

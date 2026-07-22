@@ -30,7 +30,7 @@ public sealed class GetTenantOidcConfigEndpoint : EndpointWithoutRequest<ApiResp
     public override void Configure()
     {
         Get("/tenants/{id}/oidc");
-        Policies("TenantAdmin");
+        Policies(AuthorizationPolicies.TenantAdmin);
         Version(1);
     }
 

@@ -31,7 +31,7 @@ public sealed class UserListEndpoint : EndpointWithoutRequest<ApiResponse<List<U
     public override void Configure()
     {
         Get("/users");
-        Policies("TenantAdmin");
+        Policies(AuthorizationPolicies.TenantAdmin);
         Version(1);
     }
 

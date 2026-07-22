@@ -66,7 +66,7 @@ public sealed class InvitationListEndpoint : EndpointWithoutRequest<ApiResponse<
     public override void Configure()
     {
         Get("/invitations");
-        Policies("TenantAdmin");
+        Policies(AuthorizationPolicies.TenantAdmin);
         Tags(EndpointTags.RequiresTenant);
         Version(1);
     }

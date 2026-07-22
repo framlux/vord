@@ -39,7 +39,7 @@ public sealed class AlertEventAcknowledgeEndpoint : EndpointWithoutRequest<ApiRe
     public override void Configure()
     {
         Post("/alert-events/{id}/acknowledge");
-        Policies("MachineAdmin");
+        Policies(AuthorizationPolicies.MachineAdmin);
         Tags(Services.Billing.EndpointTags.RequiresProSubscription, EndpointTags.RequiresTenant);
         Options(b => b.WithMetadata(new RequiresProFeatureMessage(ProFeatureMessages.Alerting)));
         Version(1);

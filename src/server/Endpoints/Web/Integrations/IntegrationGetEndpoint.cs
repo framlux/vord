@@ -31,7 +31,7 @@ public sealed class IntegrationGetEndpoint : EndpointWithoutRequest<ApiResponse<
     public override void Configure()
     {
         Get("/integrations/{id:int}");
-        Policies("TenantAdmin");
+        Policies(AuthorizationPolicies.TenantAdmin);
         Tags(EndpointTags.RequiresTenant);
         Version(1);
     }

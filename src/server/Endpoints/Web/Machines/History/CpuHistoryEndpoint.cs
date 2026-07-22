@@ -4,6 +4,7 @@
 
 using FastEndpoints;
 using Framlux.FleetManagement.Database.Repositories;
+using Framlux.FleetManagement.Server.Auth;
 using Framlux.FleetManagement.Services.Core.Models.History;
 using Framlux.FleetManagement.Services.Core.Models.Telemetry;
 using Framlux.FleetManagement.Services.Core.Telemetry;
@@ -33,7 +34,7 @@ public sealed class CpuHistoryEndpoint : EndpointWithoutRequest
     public override void Configure()
     {
         Get("/machines/{id}/history/cpu");
-        Policies("ViewOnly");
+        Policies(AuthorizationPolicies.ViewOnly);
         Version(1);
     }
 

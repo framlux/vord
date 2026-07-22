@@ -51,7 +51,7 @@ public sealed class ResumeSubscriptionEndpoint : EndpointWithoutRequest<ApiRespo
     public override void Configure()
     {
         Post("/billing/resume");
-        Policies("TenantAdmin");
+        Policies(AuthorizationPolicies.TenantAdmin);
         Tags(EndpointTags.RequiresTenant);
         Version(1);
     }

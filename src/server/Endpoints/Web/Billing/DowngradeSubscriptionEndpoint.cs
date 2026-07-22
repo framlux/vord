@@ -76,7 +76,7 @@ public sealed class DowngradeSubscriptionEndpoint : Endpoint<DowngradeSubscripti
     public override void Configure()
     {
         Post("/billing/downgrade");
-        Policies("TenantAdmin");
+        Policies(AuthorizationPolicies.TenantAdmin);
         Tags(EndpointTags.RequiresTenant);
         Version(1);
     }

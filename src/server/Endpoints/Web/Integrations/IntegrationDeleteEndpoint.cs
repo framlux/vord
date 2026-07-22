@@ -38,7 +38,7 @@ public sealed class IntegrationDeleteEndpoint : EndpointWithoutRequest
     public override void Configure()
     {
         Delete("/integrations/{id:int}");
-        Policies("TenantAdmin");
+        Policies(AuthorizationPolicies.TenantAdmin);
         Tags(EndpointTags.RequiresTenant);
         Version(1);
     }

@@ -91,7 +91,7 @@ public sealed class UpcomingInvoiceEndpoint : EndpointWithoutRequest<ApiResponse
     public override void Configure()
     {
         Get("/billing/upcoming-invoice");
-        Policies("ViewOnly");
+        Policies(AuthorizationPolicies.ViewOnly);
         Tags(EndpointTags.RequiresTenant);
         Version(1);
     }

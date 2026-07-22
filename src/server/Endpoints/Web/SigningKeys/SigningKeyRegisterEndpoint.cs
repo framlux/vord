@@ -83,7 +83,7 @@ public sealed class SigningKeyRegisterEndpoint : Endpoint<SigningKeyRegisterRequ
     public override void Configure()
     {
         Post("/signing-keys");
-        Policies("MachineAdmin");
+        Policies(AuthorizationPolicies.MachineAdmin);
         Tags(EndpointTags.RequiresTenant);
         Version(1);
     }

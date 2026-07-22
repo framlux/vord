@@ -3,6 +3,7 @@
 // See LICENSE for details.
 
 using FastEndpoints;
+using Framlux.FleetManagement.Server.Auth;
 using Framlux.FleetManagement.Services.Core.Models.Users;
 using Framlux.FleetManagement.Services.Core.Handlers;
 using Framlux.FleetManagement.Services.Core.Infrastructure;
@@ -28,7 +29,7 @@ public sealed class AdminUsersEndpoint : EndpointWithoutRequest<ApiResponse<List
     public override void Configure()
     {
         Get("/admin/users");
-        Policies("Admin");
+        Policies(AuthorizationPolicies.Admin);
         Version(1);
     }
 

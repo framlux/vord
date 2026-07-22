@@ -7,6 +7,7 @@ using System.Text.Json;
 using FastEndpoints;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
+using Framlux.FleetManagement.Server.Auth;
 using Framlux.FleetManagement.Services.Core.Models.History;
 using Framlux.FleetManagement.Services.Core.Models.Telemetry;
 using Framlux.FleetManagement.Services.Core.Infrastructure;
@@ -42,7 +43,7 @@ public sealed class SshHistoryEndpoint : EndpointWithoutRequest
     public override void Configure()
     {
         Get("/machines/{id}/history/ssh");
-        Policies("ViewOnly");
+        Policies(AuthorizationPolicies.ViewOnly);
         Version(1);
     }
 

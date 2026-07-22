@@ -51,7 +51,7 @@ public sealed class SigningKeyListEndpoint : EndpointWithoutRequest<ApiResponse<
     public override void Configure()
     {
         Get("/signing-keys");
-        Policies("MachineAdmin");
+        Policies(AuthorizationPolicies.MachineAdmin);
         Tags(EndpointTags.RequiresTenant);
         Version(1);
     }

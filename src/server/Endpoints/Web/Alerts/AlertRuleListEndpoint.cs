@@ -37,7 +37,7 @@ public sealed class AlertRuleListEndpoint : EndpointWithoutRequest<ApiResponse<L
     public override void Configure()
     {
         Get("/alert-rules");
-        Policies("ViewOnly");
+        Policies(AuthorizationPolicies.ViewOnly);
         Tags(Services.Billing.EndpointTags.RequiresProSubscription, EndpointTags.RequiresTenant);
         Options(b => b.WithMetadata(new RequiresProFeatureMessage(ProFeatureMessages.Alerting)));
         Version(1);

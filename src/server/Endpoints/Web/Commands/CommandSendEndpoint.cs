@@ -35,7 +35,7 @@ public sealed class CommandSendEndpoint : Endpoint<CommandSendRequest, ApiRespon
     public override void Configure()
     {
         Post("/commands");
-        Policies("MachineAdmin");
+        Policies(AuthorizationPolicies.MachineAdmin);
         Tags(EndpointTags.RequiresTenant);
         Version(1);
     }

@@ -87,7 +87,7 @@ public sealed class DataExportStatusEndpoint : Endpoint<DataExportStatusRequest,
     public override void Configure()
     {
         Get("/tenants/export/{Id}");
-        Policies("TenantAdmin");
+        Policies(AuthorizationPolicies.TenantAdmin);
         Version(1);
     }
 

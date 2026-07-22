@@ -30,7 +30,7 @@ public sealed class MachineDeleteEndpoint : EndpointWithoutRequest<ApiResponse<o
     public override void Configure()
     {
         Delete("/machines/{id}");
-        Policies("MachineAdmin");
+        Policies(AuthorizationPolicies.MachineAdmin);
         Version(1);
     }
 

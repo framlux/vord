@@ -52,7 +52,7 @@ public sealed class CatalogEndpoint : EndpointWithoutRequest<ApiResponse<List<Ca
     public override void Configure()
     {
         Get("/billing/catalog");
-        Policies("ViewOnly");
+        Policies(AuthorizationPolicies.ViewOnly);
         Tags(EndpointTags.RequiresTenant);
         Version(1);
     }

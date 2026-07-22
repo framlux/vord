@@ -162,7 +162,7 @@ public sealed class IntegrationProvidersEndpoint : EndpointWithoutRequest<ApiRes
     public override void Configure()
     {
         Get("/integrations/providers");
-        Policies("ViewOnly");
+        Policies(AuthorizationPolicies.ViewOnly);
         Tags(EndpointTags.RequiresTenant);
         Version(1);
     }

@@ -32,7 +32,7 @@ public sealed class MemberRemoveEndpoint : EndpointWithoutRequest<ApiResponse<ob
     public override void Configure()
     {
         Post("/members/{userId}/remove");
-        Policies("TenantAdmin");
+        Policies(AuthorizationPolicies.TenantAdmin);
         Version(1);
     }
 

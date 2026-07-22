@@ -88,7 +88,7 @@ public sealed class SubscriptionEndpoint : EndpointWithoutRequest<ApiResponse<Su
     public override void Configure()
     {
         Get("/billing/subscription");
-        Policies("ViewOnly");
+        Policies(AuthorizationPolicies.ViewOnly);
         Tags(EndpointTags.RequiresTenant);
         Version(1);
     }

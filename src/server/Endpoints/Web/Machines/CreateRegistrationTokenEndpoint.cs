@@ -30,7 +30,7 @@ public sealed class CreateRegistrationTokenEndpoint : Endpoint<CreateRegistratio
     public override void Configure()
     {
         Post("/machines/registration-tokens");
-        Policies("MachineAdmin");
+        Policies(AuthorizationPolicies.MachineAdmin);
         Tags(EndpointTags.RequiresTenant);
         Version(1);
     }

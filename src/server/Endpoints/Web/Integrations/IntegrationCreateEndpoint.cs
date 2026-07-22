@@ -67,7 +67,7 @@ public sealed class IntegrationCreateEndpoint : Endpoint<CreateIntegrationReques
     public override void Configure()
     {
         Post("/integrations");
-        Policies("TenantAdmin");
+        Policies(AuthorizationPolicies.TenantAdmin);
         Tags(EndpointTags.RequiresTenant, EndpointTags.RequiresProSubscription);
         Options(b => b.WithMetadata(new RequiresProFeatureMessage(ProFeatureMessages.Integrations)));
         Version(1);

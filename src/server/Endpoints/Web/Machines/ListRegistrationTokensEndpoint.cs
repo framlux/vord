@@ -30,7 +30,7 @@ public sealed class ListRegistrationTokensEndpoint : EndpointWithoutRequest<ApiR
     public override void Configure()
     {
         Get("/machines/registration-tokens");
-        Policies("MachineAdmin");
+        Policies(AuthorizationPolicies.MachineAdmin);
         Tags(EndpointTags.RequiresTenant);
         Version(1);
     }

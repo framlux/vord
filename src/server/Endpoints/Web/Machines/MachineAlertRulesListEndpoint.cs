@@ -36,7 +36,7 @@ public sealed class MachineAlertRulesListEndpoint : EndpointWithoutRequest<ApiRe
     public override void Configure()
     {
         Get("/machines/{machineId}/alert-rules");
-        Policies("ViewOnly");
+        Policies(AuthorizationPolicies.ViewOnly);
         Tags(EndpointTags.RequiresTenant);
         Version(1);
     }

@@ -32,7 +32,7 @@ public sealed class MachineUpdateEndpoint : Endpoint<UpdateMachineRequest, ApiRe
     {
         Verbs(Http.PATCH);
         Routes("/machines/{id}");
-        Policies("MachineAdmin");
+        Policies(AuthorizationPolicies.MachineAdmin);
         Version(1);
     }
 

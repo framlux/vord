@@ -33,7 +33,7 @@ public sealed class UpdateAdminSettingsEndpoint : Endpoint<UpdateAdminSettingsRe
     public override void Configure()
     {
         Put("/admin/settings");
-        Policies("Admin");
+        Policies(AuthorizationPolicies.Admin);
         Version(1);
     }
 

@@ -31,7 +31,7 @@ public sealed class UpdateTenantOidcConfigEndpoint : Endpoint<TenantOidcConfigDt
     public override void Configure()
     {
         Put("/tenants/{id}/oidc");
-        Policies("TenantAdmin");
+        Policies(AuthorizationPolicies.TenantAdmin);
         Version(1);
     }
 

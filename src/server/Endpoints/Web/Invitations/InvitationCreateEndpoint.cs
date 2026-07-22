@@ -92,7 +92,7 @@ public sealed class InvitationCreateEndpoint : Endpoint<CreateInvitationRequest,
     public override void Configure()
     {
         Post("/invitations");
-        Policies("TenantAdmin");
+        Policies(AuthorizationPolicies.TenantAdmin);
         Version(1);
     }
 

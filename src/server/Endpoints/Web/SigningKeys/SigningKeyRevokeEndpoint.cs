@@ -32,7 +32,7 @@ public sealed class SigningKeyRevokeEndpoint : EndpointWithoutRequest<ApiRespons
     public override void Configure()
     {
         Delete("/signing-keys/{id}");
-        Policies("MachineAdmin");
+        Policies(AuthorizationPolicies.MachineAdmin);
         Tags(EndpointTags.RequiresTenant);
         Version(1);
     }

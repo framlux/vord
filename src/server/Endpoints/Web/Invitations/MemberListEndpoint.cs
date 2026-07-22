@@ -56,7 +56,7 @@ public sealed class MemberListEndpoint : EndpointWithoutRequest<ApiResponse<List
     public override void Configure()
     {
         Get("/members");
-        Policies("TenantAdmin");
+        Policies(AuthorizationPolicies.TenantAdmin);
         Tags(EndpointTags.RequiresTenant);
         Version(1);
     }

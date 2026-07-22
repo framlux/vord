@@ -61,7 +61,7 @@ public sealed class AuditLogListEndpoint : Endpoint<AuditLogListRequest, ApiResp
     public override void Configure()
     {
         Get("/audit-log");
-        Policies("TenantAdmin");
+        Policies(AuthorizationPolicies.TenantAdmin);
         Tags(EndpointTags.RequiresTenant);
         Version(1);
     }

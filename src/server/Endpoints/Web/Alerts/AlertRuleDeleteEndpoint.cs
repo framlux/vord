@@ -62,7 +62,7 @@ public sealed class AlertRuleDeleteEndpoint : EndpointWithoutRequest<ApiResponse
     public override void Configure()
     {
         Delete("/alert-rules/{id}");
-        Policies("TenantAdmin");
+        Policies(AuthorizationPolicies.TenantAdmin);
         Tags(Services.Billing.EndpointTags.RequiresProSubscription, EndpointTags.RequiresTenant);
         Options(b => b.WithMetadata(new RequiresProFeatureMessage(ProFeatureMessages.Alerting)));
         Version(1);

@@ -41,7 +41,7 @@ public sealed class InvitationResendEndpoint : EndpointWithoutRequest<ApiRespons
     public override void Configure()
     {
         Post("/invitations/{id}/resend");
-        Policies("TenantAdmin");
+        Policies(AuthorizationPolicies.TenantAdmin);
         Version(1);
     }
 

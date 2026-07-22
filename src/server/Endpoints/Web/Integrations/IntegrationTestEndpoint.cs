@@ -56,7 +56,7 @@ public sealed class IntegrationTestEndpoint : EndpointWithoutRequest<ApiResponse
     public override void Configure()
     {
         Post("/integrations/{id:int}/test");
-        Policies("TenantAdmin");
+        Policies(AuthorizationPolicies.TenantAdmin);
         Tags(EndpointTags.RequiresTenant);
         Version(1);
     }

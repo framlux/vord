@@ -6,6 +6,7 @@ using System.Text.Json;
 using FastEndpoints;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
+using Framlux.FleetManagement.Server.Auth;
 using Framlux.FleetManagement.Services.Core.Models.History;
 using Framlux.FleetManagement.Services.Core.Models.Telemetry;
 using Framlux.FleetManagement.Services.Core.History;
@@ -37,7 +38,7 @@ public sealed class ServiceHistoryEndpoint : EndpointWithoutRequest
     public override void Configure()
     {
         Get("/machines/{id}/history/services");
-        Policies("ViewOnly");
+        Policies(AuthorizationPolicies.ViewOnly);
         Version(1);
     }
 

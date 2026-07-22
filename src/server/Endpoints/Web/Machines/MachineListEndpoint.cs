@@ -31,7 +31,7 @@ public sealed class MachineListEndpoint : EndpointWithoutRequest<ApiResponse<Pag
     public override void Configure()
     {
         Get("/machines");
-        Policies("ViewOnly");
+        Policies(AuthorizationPolicies.ViewOnly);
         Version(1);
     }
 

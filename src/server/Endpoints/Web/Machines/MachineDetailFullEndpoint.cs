@@ -40,7 +40,7 @@ public sealed class MachineDetailFullEndpoint : Endpoint<MachineDetailFullReques
     public override void Configure()
     {
         Get("/machines/{Id}/detail");
-        Policies("ViewOnly");
+        Policies(AuthorizationPolicies.ViewOnly);
         Version(1);
     }
 

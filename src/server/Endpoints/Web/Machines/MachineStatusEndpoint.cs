@@ -31,7 +31,7 @@ public sealed class MachineStatusEndpoint : EndpointWithoutRequest<ApiResponse<M
     public override void Configure()
     {
         Get("/machines/{id}/status");
-        Policies("ViewOnly");
+        Policies(AuthorizationPolicies.ViewOnly);
         Version(1);
     }
 

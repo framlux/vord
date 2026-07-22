@@ -31,7 +31,7 @@ public sealed class MachineAuthorizedKeyListEndpoint : EndpointWithoutRequest<Ap
     public override void Configure()
     {
         Get("/machines/{machineId}/authorized-keys");
-        Policies("ViewOnly");
+        Policies(AuthorizationPolicies.ViewOnly);
         Tags(EndpointTags.RequiresTenant);
         Version(1);
     }

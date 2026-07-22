@@ -32,7 +32,7 @@ public sealed class InvitationRevokeEndpoint : EndpointWithoutRequest<ApiRespons
     public override void Configure()
     {
         Post("/invitations/{id}/revoke");
-        Policies("TenantAdmin");
+        Policies(AuthorizationPolicies.TenantAdmin);
         Version(1);
     }
 

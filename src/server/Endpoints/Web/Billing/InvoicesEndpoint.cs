@@ -66,7 +66,7 @@ public sealed class InvoicesEndpoint : EndpointWithoutRequest<ApiResponse<List<I
     public override void Configure()
     {
         Get("/billing/invoices");
-        Policies("ViewOnly");
+        Policies(AuthorizationPolicies.ViewOnly);
         Tags(EndpointTags.RequiresTenant);
         Version(1);
     }

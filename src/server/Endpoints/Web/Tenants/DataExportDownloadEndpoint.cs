@@ -50,7 +50,7 @@ public sealed class DataExportDownloadEndpoint : Endpoint<DataExportDownloadRequ
     public override void Configure()
     {
         Get("/tenants/export/{Id}/download");
-        Policies("TenantAdmin");
+        Policies(AuthorizationPolicies.TenantAdmin);
         Version(1);
     }
 

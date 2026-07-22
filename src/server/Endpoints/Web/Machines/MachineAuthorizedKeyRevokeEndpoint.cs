@@ -30,7 +30,7 @@ public sealed class MachineAuthorizedKeyRevokeEndpoint : EndpointWithoutRequest<
     public override void Configure()
     {
         Delete("/machines/{machineId}/authorized-keys/{keyId:int}");
-        Policies("MachineAdmin");
+        Policies(AuthorizationPolicies.MachineAdmin);
         Tags(EndpointTags.RequiresTenant);
         Version(1);
     }

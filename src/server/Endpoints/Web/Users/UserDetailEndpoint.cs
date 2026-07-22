@@ -31,7 +31,7 @@ public sealed class UserDetailEndpoint : EndpointWithoutRequest<ApiResponse<User
     public override void Configure()
     {
         Get("/users/{id}");
-        Policies("TenantAdmin");
+        Policies(AuthorizationPolicies.TenantAdmin);
         Version(1);
     }
 

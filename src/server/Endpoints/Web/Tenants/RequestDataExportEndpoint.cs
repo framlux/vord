@@ -62,7 +62,7 @@ public sealed class RequestDataExportEndpoint : EndpointWithoutRequest<ApiRespon
     public override void Configure()
     {
         Post("/tenants/export");
-        Policies("TenantAdmin");
+        Policies(AuthorizationPolicies.TenantAdmin);
         Version(1);
     }
 

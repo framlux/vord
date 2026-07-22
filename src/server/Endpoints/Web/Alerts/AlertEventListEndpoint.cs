@@ -57,7 +57,7 @@ public sealed class AlertEventListEndpoint : Endpoint<AlertEventListRequest, Api
     public override void Configure()
     {
         Get("/alert-events");
-        Policies("ViewOnly");
+        Policies(AuthorizationPolicies.ViewOnly);
         Tags(Services.Billing.EndpointTags.RequiresProSubscription, EndpointTags.RequiresTenant);
         Options(b => b.WithMetadata(new RequiresProFeatureMessage(ProFeatureMessages.Alerting)));
         Version(1);

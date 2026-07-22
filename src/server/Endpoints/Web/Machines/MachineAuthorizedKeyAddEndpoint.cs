@@ -47,7 +47,7 @@ public sealed class MachineAuthorizedKeyAddEndpoint : Endpoint<MachineAuthorized
     public override void Configure()
     {
         Post("/machines/{machineId}/authorized-keys");
-        Policies("MachineAdmin");
+        Policies(AuthorizationPolicies.MachineAdmin);
         Tags(EndpointTags.RequiresTenant);
         Version(1);
     }

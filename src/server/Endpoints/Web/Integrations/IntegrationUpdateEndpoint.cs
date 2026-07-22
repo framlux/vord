@@ -54,7 +54,7 @@ public sealed class IntegrationUpdateEndpoint : Endpoint<UpdateIntegrationReques
     public override void Configure()
     {
         Put("/integrations/{id:int}");
-        Policies("TenantAdmin");
+        Policies(AuthorizationPolicies.TenantAdmin);
         Tags(EndpointTags.RequiresTenant);
         Version(1);
     }

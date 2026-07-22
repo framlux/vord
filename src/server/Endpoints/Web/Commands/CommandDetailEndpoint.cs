@@ -31,7 +31,7 @@ public sealed class CommandDetailEndpoint : EndpointWithoutRequest<ApiResponse<C
     public override void Configure()
     {
         Get("/commands/{id}");
-        Policies("ViewOnly");
+        Policies(AuthorizationPolicies.ViewOnly);
         Tags(EndpointTags.RequiresTenant);
         Version(1);
     }

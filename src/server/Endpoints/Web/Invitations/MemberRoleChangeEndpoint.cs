@@ -48,7 +48,7 @@ public sealed class MemberRoleChangeEndpoint : Endpoint<MemberRoleChangeRequest,
     public override void Configure()
     {
         Put("/members/{UserId}/role");
-        Policies("TenantAdmin");
+        Policies(AuthorizationPolicies.TenantAdmin);
         Version(1);
     }
 

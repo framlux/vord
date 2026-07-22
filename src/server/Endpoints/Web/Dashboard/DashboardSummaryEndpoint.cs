@@ -31,7 +31,7 @@ public sealed class DashboardSummaryEndpoint : EndpointWithoutRequest<ApiRespons
     public override void Configure()
     {
         Get("/dashboard/summary");
-        Policies("ViewOnly");
+        Policies(AuthorizationPolicies.ViewOnly);
         Version(1);
     }
 

@@ -30,7 +30,7 @@ public sealed class CommandListEndpoint : EndpointWithoutRequest<ApiResponse<Lis
     public override void Configure()
     {
         Get("/machines/{id}/commands");
-        Policies("ViewOnly");
+        Policies(AuthorizationPolicies.ViewOnly);
         Tags(EndpointTags.RequiresTenant);
         Version(1);
     }

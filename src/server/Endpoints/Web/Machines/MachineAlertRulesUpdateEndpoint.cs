@@ -50,7 +50,7 @@ public sealed class MachineAlertRulesUpdateEndpoint : Endpoint<UpdateMachineAler
     public override void Configure()
     {
         Put("/machines/{machineId}/alert-rules");
-        Policies("TenantAdmin");
+        Policies(AuthorizationPolicies.TenantAdmin);
         Tags(EndpointTags.RequiresTenant);
         Version(1);
     }

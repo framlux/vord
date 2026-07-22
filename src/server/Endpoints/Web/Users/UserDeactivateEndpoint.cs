@@ -31,7 +31,7 @@ public sealed class UserDeactivateEndpoint : EndpointWithoutRequest<ApiResponse<
     public override void Configure()
     {
         Post("/users/{id}/deactivate");
-        Policies("TenantAdmin");
+        Policies(AuthorizationPolicies.TenantAdmin);
         Version(1);
     }
 

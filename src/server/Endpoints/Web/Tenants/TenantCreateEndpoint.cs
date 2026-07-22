@@ -47,7 +47,7 @@ public sealed class TenantCreateEndpoint : Endpoint<CreateTenantRequest, ApiResp
     public override void Configure()
     {
         Post("/tenants");
-        Policies("Admin");
+        Policies(AuthorizationPolicies.Admin);
         Version(1);
     }
 

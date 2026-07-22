@@ -30,7 +30,7 @@ public sealed class MachineSearchEndpoint : EndpointWithoutRequest<ApiResponse<P
     public override void Configure()
     {
         Get("/machines/search");
-        Policies("ViewOnly");
+        Policies(AuthorizationPolicies.ViewOnly);
         Version(1);
     }
 

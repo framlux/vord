@@ -56,7 +56,7 @@ public sealed class UsageHistoryEndpoint : EndpointWithoutRequest<ApiResponse<Li
     public override void Configure()
     {
         Get("/billing/usage-history");
-        Policies("ViewOnly");
+        Policies(AuthorizationPolicies.ViewOnly);
         Tags(EndpointTags.RequiresTenant);
         Version(1);
     }

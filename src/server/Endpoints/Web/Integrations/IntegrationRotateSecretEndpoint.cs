@@ -44,7 +44,7 @@ public sealed class IntegrationRotateSecretEndpoint : EndpointWithoutRequest<Api
     public override void Configure()
     {
         Post("/integrations/{id:int}/rotate-secret");
-        Policies("TenantAdmin");
+        Policies(AuthorizationPolicies.TenantAdmin);
         Tags(EndpointTags.RequiresTenant);
         Version(1);
     }

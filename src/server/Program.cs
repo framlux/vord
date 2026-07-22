@@ -236,7 +236,7 @@ builder.Services.AddAuthorization(options =>
 
     // Global admin policy. iga-claim presence is delegated to AuthClaims so the value contract
     // (case-insensitive "True") stays consistent across every check site.
-    options.AddPolicy("Admin", policy =>
+    options.AddPolicy(AuthorizationPolicies.Admin, policy =>
     {
         policy.RequireAuthenticatedUser();
         policy.RequireAssertion(ctx => Framlux.FleetManagement.Services.Core.Auth.AuthClaims.IsUserGlobalAdmin(ctx.User));
@@ -244,19 +244,19 @@ builder.Services.AddAuthorization(options =>
     });
 
     // Tenant-level role policies
-    options.AddPolicy("TenantAdmin", policy =>
+    options.AddPolicy(AuthorizationPolicies.TenantAdmin, policy =>
     {
         policy.RequireAuthenticatedUser();
         policy.Requirements.Add(new AllowedRolesRequirement(UserAccountRoles.TenantAdmin));
         policy.AddAuthenticationSchemes(CookieAuthenticationDefaults.AuthenticationScheme);
     });
-    options.AddPolicy("MachineAdmin", policy =>
+    options.AddPolicy(AuthorizationPolicies.MachineAdmin, policy =>
     {
         policy.RequireAuthenticatedUser();
         policy.Requirements.Add(new AllowedRolesRequirement(UserAccountRoles.MachineAdmin, UserAccountRoles.TenantAdmin));
         policy.AddAuthenticationSchemes(CookieAuthenticationDefaults.AuthenticationScheme);
     });
-    options.AddPolicy("ViewOnly", policy =>
+    options.AddPolicy(AuthorizationPolicies.ViewOnly, policy =>
     {
         policy.RequireAuthenticatedUser();
         policy.Requirements.Add(new AllowedRolesRequirement(UserAccountRoles.Viewer, UserAccountRoles.MachineAdmin, UserAccountRoles.TenantAdmin));
