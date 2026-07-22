@@ -94,6 +94,10 @@ public sealed class SubscriptionEndpointTests
         await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
         JsonElement data = await ExtractDataElement(response);
         await Assert.That(data.GetProperty("billingInterval").ValueKind).IsEqualTo(JsonValueKind.Null);
+
+        // Free tier short-circuits before the billing-api: no Stripe status lookup happens
+        await factory.BillingApiClientMock.DidNotReceive()
+            .GetSubscriptionStatusAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
     }
 
     [Test]

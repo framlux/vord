@@ -53,6 +53,18 @@ public sealed class CreateAlertRuleValidatorTests
     }
 
     [Test]
+    public async Task WhitespaceOnlyName_FailsValidation()
+    {
+        CreateAlertRuleRequest request = ValidRequest();
+        request.Name = "   ";
+
+        ValidationResult result = await _validator.ValidateAsync(request);
+
+        await Assert.That(result.IsValid).IsFalse();
+        await Assert.That(result.Errors.Any(e => e.ErrorMessage == "Rule name is required")).IsTrue();
+    }
+
+    [Test]
     public async Task NameExactly250Characters_PassesValidation()
     {
         CreateAlertRuleRequest request = ValidRequest();
