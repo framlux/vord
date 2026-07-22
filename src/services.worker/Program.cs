@@ -6,7 +6,6 @@ using Framlux.FleetManagement.Services.Core.Extensions;
 using Framlux.FleetManagement.Services.Core.Hangfire;
 using Framlux.FleetManagement.Services.Core.Infrastructure;
 using Framlux.FleetManagement.Services.Core.Options;
-using Framlux.FleetManagement.Services.Core.Security;
 using Hangfire;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
 using Serilog;
