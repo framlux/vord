@@ -37,6 +37,24 @@ export function findCatalogPrice(
 	return catalog.find((i) => i.tier === tier && i.interval === interval) ?? null;
 }
 
+/**
+ * Finds the catalog entry for a tier, preferring the given interval but falling back to the
+ * tier's other interval so a tier with any price is never hidden. Null only when the tier
+ * has no catalog price at all.
+ */
+export function findCatalogPriceWithFallback(
+	catalog: CatalogItemDto[],
+	tier: string,
+	preferredInterval: string
+): CatalogItemDto | null {
+	const exact = findCatalogPrice(catalog, tier, preferredInterval);
+	if (exact !== null) return exact;
+
+	const otherInterval = preferredInterval === 'monthly' ? 'annual' : 'monthly';
+
+	return findCatalogPrice(catalog, tier, otherInterval);
+}
+
 /** Per-machine monthly-equivalent price in cents (annual prices divided by twelve). */
 export function monthlyEquivalentCents(item: CatalogItemDto): number {
 	if (item.interval === 'annual') {

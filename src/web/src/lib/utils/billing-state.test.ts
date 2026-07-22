@@ -7,6 +7,7 @@ import {
 	deriveBillingPageState,
 	billingIntervalLabel,
 	findCatalogPrice,
+	findCatalogPriceWithFallback,
 	monthlyEquivalentCents
 } from './billing-state';
 import type { SubscriptionDto, CatalogItemDto } from '$lib/api/types';
@@ -99,6 +100,26 @@ describe('findCatalogPrice', () => {
 
 	it('returns null for an empty catalog', () => {
 		expect(findCatalogPrice([], 'Pro', 'monthly')).toBeNull();
+	});
+});
+
+describe('findCatalogPriceWithFallback', () => {
+	it('prefers the exact interval match', () => {
+		expect(findCatalogPriceWithFallback(catalog, 'Pro', 'annual')?.unitAmountCents).toBe(3000);
+	});
+
+	it('falls back to the other interval when the preferred one has no price', () => {
+		const item = findCatalogPriceWithFallback(catalog, 'Team', 'annual');
+		expect(item?.interval).toBe('monthly');
+		expect(item?.unitAmountCents).toBe(500);
+	});
+
+	it('returns null when the tier has no price at all', () => {
+		expect(findCatalogPriceWithFallback(catalog, 'Enterprise', 'monthly')).toBeNull();
+	});
+
+	it('returns null for an empty catalog', () => {
+		expect(findCatalogPriceWithFallback([], 'Pro', 'monthly')).toBeNull();
 	});
 });
 

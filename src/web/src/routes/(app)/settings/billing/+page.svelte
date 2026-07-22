@@ -4,7 +4,7 @@
 
 <script lang="ts">
 	import type { SubscriptionDto, UpcomingInvoiceDto, InvoiceDto, UsagePointDto, CatalogItemDto } from '$lib/api/types';
-	import { billingIntervalLabel, findCatalogPrice, monthlyEquivalentCents } from '$lib/utils/billing-state';
+	import { billingIntervalLabel, findCatalogPrice, findCatalogPriceWithFallback, monthlyEquivalentCents } from '$lib/utils/billing-state';
 	import { CreditCard, CircleArrowUp, CircleArrowDown, ExternalLink, CircleAlert, CircleX, RotateCcw, Calculator, Receipt, TrendingUp, Download, ChevronDown, Tag } from 'lucide-svelte';
 
 	let { data, form } = $props();
@@ -41,8 +41,8 @@
 
 	const catalog: CatalogItemDto[] = $derived(data.catalog ?? []);
 	const catalogHasPrices = $derived(
-		findCatalogPrice(catalog, 'Pro', 'monthly') !== null ||
-		findCatalogPrice(catalog, 'Team', 'monthly') !== null
+		findCatalogPriceWithFallback(catalog, 'Pro', 'monthly') !== null ||
+		findCatalogPriceWithFallback(catalog, 'Team', 'monthly') !== null
 	);
 	let selectedInterval: 'monthly' | 'annual' = $state('monthly');
 	const upgradeTiers = ['Pro', 'Team'] as const;
@@ -473,7 +473,7 @@
 						</div>
 						<div class="grid gap-4 sm:grid-cols-2">
 							{#each upgradeTiers as tierName}
-								{@const item = findCatalogPrice(catalog, tierName, selectedInterval)}
+								{@const item = findCatalogPriceWithFallback(catalog, tierName, selectedInterval)}
 								{#if item !== null}
 									<div class="flex flex-col rounded-xl border border-surface-200 bg-surface-50 p-6 dark:border-surface-700 dark:bg-surface-800">
 										<span class="inline-flex w-fit items-center rounded-full px-2.5 py-0.5 text-xs font-medium {getTierBadgeClasses(tierName)}">
@@ -482,9 +482,14 @@
 										<p class="mt-3 text-3xl font-bold text-surface-900 dark:text-surface-50">
 											{formatCents(monthlyEquivalentCents(item), item.currency)}<span class="text-sm font-normal text-surface-500">/host/mo</span>
 										</p>
-										{#if selectedInterval === 'annual'}
+										{#if item.interval === 'annual'}
 											<p class="mt-1 text-xs text-surface-500 dark:text-surface-400">
 												Billed annually at {formatCents(item.unitAmountCents, item.currency)}/host/yr
+											</p>
+										{/if}
+										{#if (item.interval !== null) && (item.interval !== selectedInterval)}
+											<p class="mt-1 text-xs text-surface-500 dark:text-surface-400">
+												{billingIntervalLabel(item.interval)} billing only
 											</p>
 										{/if}
 										<p class="mt-3 flex-1 text-sm text-surface-500 dark:text-surface-400">
@@ -492,7 +497,7 @@
 										</p>
 										<form method="POST" action="?/checkout" class="mt-4">
 											<input type="hidden" name="tier" value={tierName.toLowerCase()} />
-											<input type="hidden" name="interval" value={selectedInterval} />
+											<input type="hidden" name="interval" value={item.interval ?? 'monthly'} />
 											<button
 												type="submit"
 												class="inline-flex w-full items-center justify-center gap-2 rounded-lg px-5 py-2.5 text-sm font-medium text-white transition-colors {tierName === 'Pro' ? 'bg-blue-600 hover:bg-blue-700 dark:bg-blue-500 dark:hover:bg-blue-600' : 'bg-purple-600 hover:bg-purple-700 dark:bg-purple-500 dark:hover:bg-purple-600'}"
