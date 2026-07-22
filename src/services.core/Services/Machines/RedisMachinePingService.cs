@@ -17,7 +17,6 @@ public sealed class RedisMachinePingService : IMachinePingService
     private static readonly TimeSpan RetentionWindow = TimeSpan.FromDays(7);
 
     private readonly IConnectionMultiplexer _redis;
-    private readonly ILogger<RedisMachinePingService> _logger;
     private readonly ResiliencePipeline _retryPipeline;
 
     /// <summary>
@@ -25,13 +24,11 @@ public sealed class RedisMachinePingService : IMachinePingService
     /// </summary>
     public RedisMachinePingService(
         IConnectionMultiplexer redis,
-        ILogger<RedisMachinePingService> logger,
         ResiliencePipelineProvider<string> pipelineProvider)
     {
         ArgumentNullException.ThrowIfNull(pipelineProvider);
 
         _redis = redis ?? throw new ArgumentNullException(nameof(redis));
-        _logger = logger ?? throw new ArgumentNullException(nameof(logger));
         _retryPipeline = pipelineProvider.GetPipeline("redis-ping");
     }
 

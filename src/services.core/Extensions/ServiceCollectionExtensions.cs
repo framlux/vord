@@ -195,7 +195,7 @@ public static class ServiceCollectionExtensions
         {
             Microsoft.Extensions.Logging.ILogger logger = context.ServiceProvider
                 .GetRequiredService<ILoggerFactory>()
-                .CreateLogger("Framlux.FleetManagement.Services.Core.Machines.RedisMachinePingService");
+                .CreateLogger<RedisMachinePingService>();
 
             pipelineBuilder.AddRetry(RedisRetryPipelineOptions.Create(TimeSpan.FromMilliseconds(200), logger));
         });
