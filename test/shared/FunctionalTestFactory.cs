@@ -507,7 +507,7 @@ public class FunctionalTestFactory : WebApplicationFactory<Program>
         mock.CancelSubscriptionAsync(Arg.Any<string>(), Arg.Any<PendingActionType>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(true));
         mock.GetSubscriptionStatusAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(new StripeSubscriptionStatus(false, "none", string.Empty, 0, null, BillingTier.Unspecified, BillingInterval.None)));
+            .Returns(Task.FromResult(new StripeSubscriptionStatus(false, "none", 0, null, BillingTier.Unspecified, BillingInterval.None)));
         mock.SwapSubscriptionPriceAsync(Arg.Any<string>(), Arg.Any<BillingTier>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(true));
         mock.ResumeSubscriptionAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())

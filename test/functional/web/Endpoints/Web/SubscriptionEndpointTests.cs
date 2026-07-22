@@ -71,7 +71,7 @@ public sealed class SubscriptionEndpointTests
 
         factory.BillingApiClientMock.GetSubscriptionStatusAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(new StripeSubscriptionStatus(
-                false, "active", "price_pro_123", 3, null, BillingTier.Pro, BillingInterval.Monthly)));
+                false, "active", 3, null, BillingTier.Pro, BillingInterval.Monthly)));
 
         HttpClient client = BuildViewerClient(factory, tenantId);
         HttpResponseMessage response = await client.GetAsync("/api/v1/billing/subscription");

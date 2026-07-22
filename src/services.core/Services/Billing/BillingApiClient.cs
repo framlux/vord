@@ -151,7 +151,6 @@ public sealed class BillingApiClient : IBillingApiClient
             return new StripeSubscriptionStatus(
                 response.CancelAtPeriodEnd,
                 response.StripeStatus,
-                response.PriceId,
                 response.Quantity,
                 currentPeriodEnd,
                 response.Tier,
@@ -163,7 +162,7 @@ public sealed class BillingApiClient : IBillingApiClient
                 "Error getting subscription status for tenant {TenantExternalId}",
                 tenantExternalId);
 
-            return new StripeSubscriptionStatus(false, "none", string.Empty, 0, null, BillingTier.Unspecified, BillingInterval.None);
+            return new StripeSubscriptionStatus(false, "none", 0, null, BillingTier.Unspecified, BillingInterval.None);
         }
     }
 

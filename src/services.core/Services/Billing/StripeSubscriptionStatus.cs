@@ -11,7 +11,6 @@ namespace Framlux.FleetManagement.Services.Core.Billing;
 /// </summary>
 /// <param name="CancelAtPeriodEnd">Whether the subscription is set to cancel at the end of the current period.</param>
 /// <param name="StripeStatus">The Stripe subscription status string (e.g., "active", "past_due", "canceled", "none").</param>
-/// <param name="PriceId">The Stripe price ID of the current subscription item.</param>
 /// <param name="Quantity">The quantity on the current subscription item.</param>
 /// <param name="CurrentPeriodEnd">The end of the current billing period, if available.</param>
 /// <param name="Tier">The billing tier resolved from TierMappings in the billing database, or Unspecified if not resolved.</param>
@@ -19,7 +18,6 @@ namespace Framlux.FleetManagement.Services.Core.Billing;
 public sealed record StripeSubscriptionStatus(
     bool CancelAtPeriodEnd,
     string StripeStatus,
-    string PriceId,
     int Quantity,
     DateTimeOffset? CurrentPeriodEnd,
     BillingTier Tier,

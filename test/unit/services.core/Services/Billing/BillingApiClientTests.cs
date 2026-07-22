@@ -224,7 +224,6 @@ public sealed class BillingApiClientTests
 
         await Assert.That(status.CancelAtPeriodEnd).IsTrue();
         await Assert.That(status.StripeStatus).IsEqualTo("active");
-        await Assert.That(status.PriceId).IsEqualTo("price_pro_123");
         await Assert.That(status.Quantity).IsEqualTo(5);
         await Assert.That(status.CurrentPeriodEnd).IsNotNull();
     }
@@ -241,7 +240,6 @@ public sealed class BillingApiClientTests
 
         await Assert.That(status.CancelAtPeriodEnd).IsFalse();
         await Assert.That(status.StripeStatus).IsEqualTo("none");
-        await Assert.That(status.PriceId).IsEqualTo(string.Empty);
         await Assert.That(status.Quantity).IsEqualTo(0);
         await Assert.That(status.CurrentPeriodEnd).IsNull();
         await Assert.That(status.Tier).IsEqualTo(BillingTier.Unspecified);

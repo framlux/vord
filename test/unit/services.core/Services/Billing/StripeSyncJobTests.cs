@@ -375,7 +375,7 @@ public sealed class StripeSyncJobTests
     }
 
     private static readonly StripeSubscriptionStatus DefaultStripeStatus =
-        new(CancelAtPeriodEnd: false, StripeStatus: "", PriceId: "",
+        new(CancelAtPeriodEnd: false, StripeStatus: "",
             Quantity: 0, CurrentPeriodEnd: null, Tier: BillingTier.Unspecified, Interval: BillingInterval.None);
 
     private static TenantSubscription BuildSub(

@@ -108,7 +108,7 @@ public sealed class BillingEndpointTests
         factory.BillingApiClientMock.GetSubscriptionStatusAsync(
             Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(
-                new StripeSubscriptionStatus(true, "active", string.Empty, 0, null, BillingTier.Unspecified, BillingInterval.None)));
+                new StripeSubscriptionStatus(true, "active", 0, null, BillingTier.Unspecified, BillingInterval.None)));
 
         // Cancel when Stripe already reflects a pending cancellation
         HttpResponseMessage response = await client.PostAsync("/api/v1/billing/cancel", null);
@@ -325,7 +325,7 @@ public sealed class BillingEndpointTests
         factory.BillingApiClientMock.GetSubscriptionStatusAsync(
             Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(
-                new StripeSubscriptionStatus(true, "active", string.Empty, 0, null, BillingTier.Unspecified, BillingInterval.None)));
+                new StripeSubscriptionStatus(true, "active", 0, null, BillingTier.Unspecified, BillingInterval.None)));
 
         // Cancel when Stripe already reflects cancellation
         HttpResponseMessage response = await client.PostAsync("/api/v1/billing/cancel", null);

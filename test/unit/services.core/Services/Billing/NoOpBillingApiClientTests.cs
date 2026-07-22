@@ -45,7 +45,6 @@ public sealed class NoOpBillingApiClientTests
 
         await Assert.That(status.CancelAtPeriodEnd).IsFalse();
         await Assert.That(status.StripeStatus).IsEqualTo("none");
-        await Assert.That(status.PriceId).IsEqualTo(string.Empty);
         await Assert.That(status.Quantity).IsEqualTo(0);
         await Assert.That(status.CurrentPeriodEnd).IsNull();
     }
