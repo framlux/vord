@@ -8,11 +8,9 @@ using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Services.Core.Billing;
 using Framlux.FleetManagement.Services.Core.Handlers;
-using Framlux.FleetManagement.Services.Core.Options;
 using Framlux.Vord.BillingGrpc;
 using Hangfire;
 using Microsoft.Extensions.Logging;
-using Microsoft.Extensions.Options;
 using NSubstitute;
 
 namespace Framlux.FleetManagement.Test.Services.Billing;
@@ -354,10 +352,6 @@ public sealed class StripeSyncJobTests
         => await AssertConstructorThrows("webhookHandler", b => b with { WebhookHandler = null! });
 
     [Test]
-    public async Task Constructor_NullBillingOptions_Throws()
-        => await AssertConstructorThrows("billingOptions", b => b with { BillingOptions = null! });
-
-    [Test]
     public async Task Constructor_NullLogger_Throws()
         => await AssertConstructorThrows("logger", b => b with { Logger = null! });
 
@@ -371,7 +365,7 @@ public sealed class StripeSyncJobTests
         {
             StripeSyncJob _ = new(
                 bundle.SubscriptionRepo, bundle.TenantRepo, bundle.SubscriptionService,
-                bundle.BillingClient, bundle.WebhookHandler, bundle.BillingOptions, bundle.Logger);
+                bundle.BillingClient, bundle.WebhookHandler, bundle.Logger);
 
             return Task.CompletedTask;
         });
@@ -422,7 +416,7 @@ public sealed class StripeSyncJobTests
         public ILogger<StripeSyncJob> Logger { get; }
         public StripeSyncJob Job { get; }
 
-        public TestSut(BillingOptions? options = null)
+        public TestSut()
         {
             SubscriptionRepo = Substitute.For<ISubscriptionRepository>();
             TenantRepo = Substitute.For<ITenantRepository>();
@@ -430,9 +424,8 @@ public sealed class StripeSyncJobTests
             BillingClient = Substitute.For<IBillingApiClient>();
             WebhookHandler = Substitute.For<IBillingWebhookHandler>();
             Logger = Substitute.For<ILogger<StripeSyncJob>>();
-            IOptions<BillingOptions> billingOptions = Options.Create(options ?? new BillingOptions());
             Job = new StripeSyncJob(SubscriptionRepo, TenantRepo, SubscriptionService,
-                BillingClient, WebhookHandler, billingOptions, Logger);
+                BillingClient, WebhookHandler, Logger);
         }
 
         public void SeedOneSubscription(
@@ -462,7 +455,6 @@ public sealed class StripeSyncJobTests
         ISubscriptionService SubscriptionService,
         IBillingApiClient BillingClient,
         IBillingWebhookHandler WebhookHandler,
-        IOptions<BillingOptions> BillingOptions,
         ILogger<StripeSyncJob> Logger)
     {
         public static ConstructorBundle AllNonNull() => new(
@@ -471,7 +463,6 @@ public sealed class StripeSyncJobTests
             Substitute.For<ISubscriptionService>(),
             Substitute.For<IBillingApiClient>(),
             Substitute.For<IBillingWebhookHandler>(),
-            Options.Create(new BillingOptions()),
             Substitute.For<ILogger<StripeSyncJob>>());
     }
 

@@ -6,10 +6,8 @@ using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Services.Core.Handlers;
-using Framlux.FleetManagement.Services.Core.Options;
 using Framlux.Vord.BillingGrpc;
 using Hangfire;
-using Microsoft.Extensions.Options;
 
 namespace Framlux.FleetManagement.Services.Core.Billing;
 
@@ -25,7 +23,6 @@ public sealed class StripeSyncJob
     private readonly ISubscriptionService _subscriptionService;
     private readonly IBillingApiClient _billingApiClient;
     private readonly IBillingWebhookHandler _webhookHandler;
-    private readonly BillingOptions _billingOptions;
     private readonly ILogger<StripeSyncJob> _logger;
 
     /// <summary>
@@ -37,7 +34,6 @@ public sealed class StripeSyncJob
         ISubscriptionService subscriptionService,
         IBillingApiClient billingApiClient,
         IBillingWebhookHandler webhookHandler,
-        IOptions<BillingOptions> billingOptions,
         ILogger<StripeSyncJob> logger)
     {
         ArgumentNullException.ThrowIfNull(subscriptionRepository);
@@ -45,7 +41,6 @@ public sealed class StripeSyncJob
         ArgumentNullException.ThrowIfNull(subscriptionService);
         ArgumentNullException.ThrowIfNull(billingApiClient);
         ArgumentNullException.ThrowIfNull(webhookHandler);
-        ArgumentNullException.ThrowIfNull(billingOptions);
         ArgumentNullException.ThrowIfNull(logger);
 
         _subscriptionRepository = subscriptionRepository;
@@ -53,7 +48,6 @@ public sealed class StripeSyncJob
         _subscriptionService = subscriptionService;
         _billingApiClient = billingApiClient;
         _webhookHandler = webhookHandler;
-        _billingOptions = billingOptions.Value;
         _logger = logger;
     }
 
