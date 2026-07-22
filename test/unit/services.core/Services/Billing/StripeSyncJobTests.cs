@@ -24,9 +24,6 @@ namespace Framlux.FleetManagement.Test.Services.Billing;
 /// </summary>
 public sealed class StripeSyncJobTests
 {
-    private const string ProPriceId = "price_pro_123";
-    private const string TeamPriceId = "price_team_456";
-
     [Test]
     public async Task RunAsync_NoPaidSubscriptions_NoSyncOperations()
     {
@@ -433,11 +430,7 @@ public sealed class StripeSyncJobTests
             BillingClient = Substitute.For<IBillingApiClient>();
             WebhookHandler = Substitute.For<IBillingWebhookHandler>();
             Logger = Substitute.For<ILogger<StripeSyncJob>>();
-            IOptions<BillingOptions> billingOptions = Options.Create(options ?? new BillingOptions
-            {
-                StripeProPriceId = ProPriceId,
-                StripeTeamPriceId = TeamPriceId,
-            });
+            IOptions<BillingOptions> billingOptions = Options.Create(options ?? new BillingOptions());
             Job = new StripeSyncJob(SubscriptionRepo, TenantRepo, SubscriptionService,
                 BillingClient, WebhookHandler, billingOptions, Logger);
         }
@@ -478,53 +471,8 @@ public sealed class StripeSyncJobTests
             Substitute.For<ISubscriptionService>(),
             Substitute.For<IBillingApiClient>(),
             Substitute.For<IBillingWebhookHandler>(),
-            Options.Create(new BillingOptions
-            {
-                StripeProPriceId = ProPriceId,
-                StripeTeamPriceId = TeamPriceId,
-            }),
+            Options.Create(new BillingOptions()),
             Substitute.For<ILogger<StripeSyncJob>>());
-    }
-
-    [Test]
-    public async Task MapPriceIdToTier_KnownProPriceId_ReturnsPro()
-    {
-        // Intent: pin the price-id-to-tier mapping so a regression to the tier resolution would
-        // be caught immediately. This was a documented business invariant in the predecessor.
-        StripeSyncJob job = new TestSut().Job;
-
-        SubscriptionTier? tier = job.MapPriceIdToTier(ProPriceId, ProPriceId, TeamPriceId);
-
-        await Assert.That(tier).IsEqualTo(SubscriptionTier.Pro);
-    }
-
-    [Test]
-    public async Task MapPriceIdToTier_UnknownPriceId_ReturnsNull_NoTierCorrection()
-    {
-        // Intent: when Stripe returns a price id the system does not recognize (a new SKU rolled
-        // out on the Stripe side before the deploy lands, or a corrupted webhook), the mapping
-        // returns null and the surrounding code must NOT downgrade the customer's tier.
-        // Without this guard, every customer on an unknown SKU would silently drop to Free.
-        // This was a regression test in the predecessor's suite; preserving it here.
-        StripeSyncJob job = new TestSut().Job;
-
-        SubscriptionTier? tier = job.MapPriceIdToTier("price_unknown_xyz", ProPriceId, TeamPriceId);
-
-        await Assert.That(tier).IsNull();
-    }
-
-    [Test]
-    public async Task MapPriceIdToTier_EmptyPriceId_ReturnsNull()
-    {
-        // Intent: a missing price id (e.g., Stripe API returned a record without a subscription
-        // item line) must be treated as unknown, not as Free or Pro by default.
-        StripeSyncJob job = new TestSut().Job;
-
-        SubscriptionTier? tier1 = job.MapPriceIdToTier("", ProPriceId, TeamPriceId);
-        SubscriptionTier? tier2 = job.MapPriceIdToTier(null!, ProPriceId, TeamPriceId);
-
-        await Assert.That(tier1).IsNull();
-        await Assert.That(tier2).IsNull();
     }
 
     [Test]
@@ -634,124 +582,6 @@ public sealed class StripeSyncJobTests
         await Assert.That(attrData!.ConstructorArguments.Count).IsEqualTo(1);
         int timeoutSeconds = (int)attrData.ConstructorArguments[0].Value!;
         await Assert.That(timeoutSeconds).IsEqualTo(480);
-    }
-
-    // ========== Fallback monthly/annual price ID mapping ==========
-
-    [Test]
-    public async Task SyncTier_MonthlyProPriceId_DetectsProTier()
-    {
-        // Intent: pin the fallback Pro monthly price ID mapping. When Stripe reports the price
-        // id alone (BillingTier.Unspecified) the job must still resolve it to Pro via the monthly
-        // SKU so a tier-drift correction fires. Without this, a paying tenant on the monthly SKU
-        // could silently keep a stale local tier when their Stripe subscription tier changes.
-        const string proMonthly = "price_pro_monthly_111";
-        TestSut sut = new(new BillingOptions
-        {
-            StripeProPriceId = ProPriceId,
-            StripeTeamPriceId = TeamPriceId,
-            StripeProMonthlyPriceId = proMonthly,
-        });
-        sut.SeedOneSubscription(
-            localTier: SubscriptionTier.Team,
-            stripeStatus: DefaultStripeStatus with
-            {
-                StripeStatus = "active",
-                PriceId = proMonthly,
-                Quantity = 5,
-                Tier = BillingTier.Unspecified,
-            });
-        sut.SubscriptionService.GetMachineCountForTenantAsync(1, Arg.Any<CancellationToken>()).Returns(5);
-
-        await sut.Job.RunAsync(CancellationToken.None);
-
-        await sut.WebhookHandler.Received(1).HandleTierCorrectionAsync(
-            1, SubscriptionTier.Pro, Arg.Any<CancellationToken>());
-    }
-
-    [Test]
-    public async Task SyncTier_AnnualProPriceId_DetectsProTier()
-    {
-        // Intent: pin the fallback Pro annual price ID mapping. The annual SKU lives on a separate
-        // option from the monthly SKU; both must resolve to Pro.
-        const string proAnnual = "price_pro_annual_333";
-        TestSut sut = new(new BillingOptions
-        {
-            StripeProPriceId = ProPriceId,
-            StripeTeamPriceId = TeamPriceId,
-            StripeProAnnualPriceId = proAnnual,
-        });
-        sut.SeedOneSubscription(
-            localTier: SubscriptionTier.Team,
-            stripeStatus: DefaultStripeStatus with
-            {
-                StripeStatus = "active",
-                PriceId = proAnnual,
-                Quantity = 5,
-                Tier = BillingTier.Unspecified,
-            });
-        sut.SubscriptionService.GetMachineCountForTenantAsync(1, Arg.Any<CancellationToken>()).Returns(5);
-
-        await sut.Job.RunAsync(CancellationToken.None);
-
-        await sut.WebhookHandler.Received(1).HandleTierCorrectionAsync(
-            1, SubscriptionTier.Pro, Arg.Any<CancellationToken>());
-    }
-
-    [Test]
-    public async Task SyncTier_MonthlyTeamPriceId_DetectsTeamTier()
-    {
-        // Intent: pin the fallback Team monthly price ID mapping.
-        const string teamMonthly = "price_team_monthly_444";
-        TestSut sut = new(new BillingOptions
-        {
-            StripeProPriceId = ProPriceId,
-            StripeTeamPriceId = TeamPriceId,
-            StripeTeamMonthlyPriceId = teamMonthly,
-        });
-        sut.SeedOneSubscription(
-            localTier: SubscriptionTier.Pro,
-            stripeStatus: DefaultStripeStatus with
-            {
-                StripeStatus = "active",
-                PriceId = teamMonthly,
-                Quantity = 5,
-                Tier = BillingTier.Unspecified,
-            });
-        sut.SubscriptionService.GetMachineCountForTenantAsync(1, Arg.Any<CancellationToken>()).Returns(5);
-
-        await sut.Job.RunAsync(CancellationToken.None);
-
-        await sut.WebhookHandler.Received(1).HandleTierCorrectionAsync(
-            1, SubscriptionTier.Team, Arg.Any<CancellationToken>());
-    }
-
-    [Test]
-    public async Task SyncTier_AnnualTeamPriceId_DetectsTeamTier()
-    {
-        // Intent: pin the fallback Team annual price ID mapping.
-        const string teamAnnual = "price_team_annual_222";
-        TestSut sut = new(new BillingOptions
-        {
-            StripeProPriceId = ProPriceId,
-            StripeTeamPriceId = TeamPriceId,
-            StripeTeamAnnualPriceId = teamAnnual,
-        });
-        sut.SeedOneSubscription(
-            localTier: SubscriptionTier.Pro,
-            stripeStatus: DefaultStripeStatus with
-            {
-                StripeStatus = "active",
-                PriceId = teamAnnual,
-                Quantity = 5,
-                Tier = BillingTier.Unspecified,
-            });
-        sut.SubscriptionService.GetMachineCountForTenantAsync(1, Arg.Any<CancellationToken>()).Returns(5);
-
-        await sut.Job.RunAsync(CancellationToken.None);
-
-        await sut.WebhookHandler.Received(1).HandleTierCorrectionAsync(
-            1, SubscriptionTier.Team, Arg.Any<CancellationToken>());
     }
 
     // ========== MapBillingTierToSubscriptionTier ==========

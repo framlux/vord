@@ -78,9 +78,6 @@ public sealed class StripeSyncJob
             return;
         }
 
-        string proPriceId = _billingOptions.StripeProPriceId;
-        string teamPriceId = _billingOptions.StripeTeamPriceId;
-
         foreach (TenantSubscription subscription in paidSubscriptions)
         {
             try
@@ -105,7 +102,7 @@ public sealed class StripeSyncJob
                 }
 
                 await SyncMachineQuantityAsync(subscription, tenant.ExternalId, stripeStatus, ct);
-                await SyncTierAsync(subscription, stripeStatus, proPriceId, teamPriceId, ct);
+                await SyncTierAsync(subscription, stripeStatus, ct);
                 await SyncStatusAsync(subscription, stripeStatus, ct);
                 await SyncPeriodEndAsync(subscription, stripeStatus, ct);
                 await SyncCancelAtPeriodEndAsync(subscription, stripeStatus, ct);
@@ -144,14 +141,9 @@ public sealed class StripeSyncJob
     internal async Task SyncTierAsync(
         TenantSubscription subscription,
         StripeSubscriptionStatus stripeStatus,
-        string proPriceId, string teamPriceId, CancellationToken ct)
+        CancellationToken ct)
     {
         SubscriptionTier? stripeTier = MapBillingTierToSubscriptionTier(stripeStatus.Tier);
-        if (stripeTier is null)
-        {
-            stripeTier = MapPriceIdToTier(stripeStatus.PriceId, proPriceId, teamPriceId);
-        }
-
         if (stripeTier is null)
         {
             return;
@@ -251,42 +243,6 @@ public sealed class StripeSyncJob
             await _subscriptionRepository.SetCancelAtPeriodEndAsync(
                 subscription.TenantId, stripeStatus.CancelAtPeriodEnd, ct);
         }
-    }
-
-    internal SubscriptionTier? MapPriceIdToTier(string priceId, string proPriceId, string teamPriceId)
-    {
-        if (string.IsNullOrEmpty(priceId))
-        {
-            return null;
-        }
-
-        if (string.Equals(priceId, proPriceId, StringComparison.Ordinal))
-        {
-            return SubscriptionTier.Pro;
-        }
-
-        if (string.Equals(priceId, teamPriceId, StringComparison.Ordinal))
-        {
-            return SubscriptionTier.Team;
-        }
-
-        if ((string.IsNullOrEmpty(_billingOptions.StripeProMonthlyPriceId) == false &&
-             string.Equals(priceId, _billingOptions.StripeProMonthlyPriceId, StringComparison.Ordinal)) ||
-            (string.IsNullOrEmpty(_billingOptions.StripeProAnnualPriceId) == false &&
-             string.Equals(priceId, _billingOptions.StripeProAnnualPriceId, StringComparison.Ordinal)))
-        {
-            return SubscriptionTier.Pro;
-        }
-
-        if ((string.IsNullOrEmpty(_billingOptions.StripeTeamMonthlyPriceId) == false &&
-             string.Equals(priceId, _billingOptions.StripeTeamMonthlyPriceId, StringComparison.Ordinal)) ||
-            (string.IsNullOrEmpty(_billingOptions.StripeTeamAnnualPriceId) == false &&
-             string.Equals(priceId, _billingOptions.StripeTeamAnnualPriceId, StringComparison.Ordinal)))
-        {
-            return SubscriptionTier.Team;
-        }
-
-        return null;
     }
 
     internal static SubscriptionTier? MapBillingTierToSubscriptionTier(BillingTier tier)
