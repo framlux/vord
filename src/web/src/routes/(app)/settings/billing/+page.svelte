@@ -4,14 +4,18 @@
 
 <script lang="ts">
 	import type { SubscriptionDto, UpcomingInvoiceDto, InvoiceDto, UsagePointDto, CatalogItemDto } from '$lib/api/types';
-	import { billingIntervalLabel, findCatalogPrice, findCatalogPriceWithFallback, monthlyEquivalentCents } from '$lib/utils/billing-state';
+	import { billingIntervalLabel, deriveBillingPageState, findCatalogPrice, findCatalogPriceWithFallback, monthlyEquivalentCents } from '$lib/utils/billing-state';
 	import { CreditCard, CircleArrowUp, CircleArrowDown, ExternalLink, CircleAlert, CircleX, RotateCcw, Calculator, Receipt, TrendingUp, Download, ChevronDown, Tag } from 'lucide-svelte';
 
 	let { data, form } = $props();
 
 	const subscription: SubscriptionDto | null = $derived(data.subscription);
 
-	const isCanceled = $derived(subscription !== null && subscription.status === 'Canceled');
+	// Precedence-collapsed page state; canceled is its highest-precedence value, so the
+	// canceled flag comes straight from it. The banner flags below stay independent of the
+	// enum because past-due and pending-change banners stack rather than exclude each other.
+	const pageState = $derived(deriveBillingPageState(subscription));
+	const isCanceled = $derived(pageState === 'canceled');
 	const isFree = $derived((subscription === null || subscription.tier === 'Free') && (isCanceled === false));
 	const isPaid = $derived(subscription !== null && (subscription.tier === 'Pro' || subscription.tier === 'Team') && (isCanceled === false));
 	const isPro = $derived(subscription !== null && subscription.tier === 'Pro');
