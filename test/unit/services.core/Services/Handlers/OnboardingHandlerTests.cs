@@ -37,7 +37,7 @@ public class OnboardingHandlerTests
     {
         OnboardingHandler handler = BuildHandler();
 
-        ServiceResult<OnboardingResult> result = await handler.CreateOrganizationAsync("", "free", 1, "ext-1", CancellationToken.None);
+        ServiceResult<OnboardingResult> result = await handler.CreateOrganizationAsync("", 1, "ext-1", CancellationToken.None);
 
         await Assert.That(result.StatusCode).IsEqualTo(400);
         await Assert.That(result.Data!.ErrorMessage).Contains("required");
@@ -49,7 +49,7 @@ public class OnboardingHandlerTests
         OnboardingHandler handler = BuildHandler();
         string longName = new('A', 101);
 
-        ServiceResult<OnboardingResult> result = await handler.CreateOrganizationAsync(longName, "free", 1, "ext-1", CancellationToken.None);
+        ServiceResult<OnboardingResult> result = await handler.CreateOrganizationAsync(longName, 1, "ext-1", CancellationToken.None);
 
         await Assert.That(result.StatusCode).IsEqualTo(400);
     }
@@ -59,7 +59,7 @@ public class OnboardingHandlerTests
     {
         OnboardingHandler handler = BuildHandler();
 
-        ServiceResult<OnboardingResult> result = await handler.CreateOrganizationAsync("My Org", "free", 0, "ext-1", CancellationToken.None);
+        ServiceResult<OnboardingResult> result = await handler.CreateOrganizationAsync("My Org", 0, "ext-1", CancellationToken.None);
 
         await Assert.That(result.StatusCode).IsEqualTo(401);
     }
@@ -69,7 +69,7 @@ public class OnboardingHandlerTests
     {
         OnboardingHandler handler = BuildHandler();
 
-        ServiceResult<OnboardingResult> result = await handler.CreateOrganizationAsync("My Org", "free", 1, "", CancellationToken.None);
+        ServiceResult<OnboardingResult> result = await handler.CreateOrganizationAsync("My Org", 1, "", CancellationToken.None);
 
         await Assert.That(result.StatusCode).IsEqualTo(401);
     }
@@ -84,7 +84,7 @@ public class OnboardingHandlerTests
         });
         OnboardingHandler handler = BuildHandler(tenantRepository: tenantRepository);
 
-        ServiceResult<OnboardingResult> result = await handler.CreateOrganizationAsync("My Org", "free", 1, "ext-1", CancellationToken.None);
+        ServiceResult<OnboardingResult> result = await handler.CreateOrganizationAsync("My Org", 1, "ext-1", CancellationToken.None);
 
         await Assert.That(result.StatusCode).IsEqualTo(409);
         await Assert.That(result.Data!.ErrorMessage).Contains("already belong");
@@ -101,7 +101,7 @@ public class OnboardingHandlerTests
         });
         OnboardingHandler handler = BuildHandler(tenantRepository: tenantRepository);
 
-        ServiceResult<OnboardingResult> result = await handler.CreateOrganizationAsync("Existing Org", "free", 1, "ext-1", CancellationToken.None);
+        ServiceResult<OnboardingResult> result = await handler.CreateOrganizationAsync("Existing Org", 1, "ext-1", CancellationToken.None);
 
         await Assert.That(result.StatusCode).IsEqualTo(409);
         await Assert.That(result.Data!.ErrorMessage).Contains("already exists");
@@ -136,7 +136,7 @@ public class OnboardingHandlerTests
             tenantRepository: tenantRepository,
             subscriptionRepository: subscriptionRepository);
 
-        ServiceResult<OnboardingResult> result = await handler.CreateOrganizationAsync("New Org", "free", 1, "ext-1", CancellationToken.None);
+        ServiceResult<OnboardingResult> result = await handler.CreateOrganizationAsync("New Org", 1, "ext-1", CancellationToken.None);
 
         await Assert.That(result.IsSuccess).IsTrue();
         await Assert.That(result.Data!.TenantId).IsEqualTo(42);
@@ -171,7 +171,7 @@ public class OnboardingHandlerTests
             tenantRepository: tenantRepository,
             subscriptionRepository: subscriptionRepository);
 
-        await handler.CreateOrganizationAsync("New Org", "free", 1, "ext-1", CancellationToken.None);
+        await handler.CreateOrganizationAsync("New Org", 1, "ext-1", CancellationToken.None);
 
         await subscriptionRepository.Received(1).CreateTenantSubscriptionAsync(
             Arg.Is<TenantSubscription>(s =>
@@ -210,7 +210,7 @@ public class OnboardingHandlerTests
             tenantRepository: tenantRepository,
             subscriptionRepository: subscriptionRepository);
 
-        await handler.CreateOrganizationAsync("New Org", "free", 1, "ext-1", CancellationToken.None);
+        await handler.CreateOrganizationAsync("New Org", 1, "ext-1", CancellationToken.None);
 
         await tenantRepository.Received(1).CreateUserTenantRoleAsync(
             Arg.Is<UserTenantRole>(r =>

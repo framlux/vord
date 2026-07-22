@@ -52,14 +52,11 @@ public sealed class OnboardingHandler
     /// <summary>
     /// Creates a new organization (tenant) with subscription and admin role.
     /// </summary>
-#pragma warning disable IDE0060 // tier is unused in the body; all callers currently pass "free". Analyzer previously exempted this as an interface-implementation method; keeping the parameter (no signature change) after interface removal.
     public async Task<ServiceResult<OnboardingResult>> CreateOrganizationAsync(
         string organizationName,
-        string tier,
         int userId,
         string uniqueId,
         CancellationToken ct)
-#pragma warning restore IDE0060
     {
         if (string.IsNullOrWhiteSpace(organizationName) || organizationName.Length > 100)
         {

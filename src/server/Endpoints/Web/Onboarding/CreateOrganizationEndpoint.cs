@@ -70,7 +70,7 @@ public sealed class CreateOrganizationEndpoint : Endpoint<CreateOrganizationRequ
 
         string? uniqueId = User.FindFirstValue(ClaimTypes.NameIdentifier);
 
-        ServiceResult<OnboardingResult> result = await _handler.CreateOrganizationAsync(req.OrganizationName, "free", userId, uniqueId ?? string.Empty, ct);
+        ServiceResult<OnboardingResult> result = await _handler.CreateOrganizationAsync(req.OrganizationName, userId, uniqueId ?? string.Empty, ct);
         if (result.IsSuccess == false)
         {
             await HttpContext.SendApiErrorAsync(result.StatusCode, result.Data?.ErrorMessage ?? "Unknown error", ct);
