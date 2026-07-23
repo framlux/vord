@@ -50,7 +50,8 @@ public static class TestDataBuilder
     public static Tenant BuildTenant(
         string? name = null,
         string? externalId = null,
-        int createdByUserId = 1)
+        int createdByUserId = 1,
+        bool isActive = true)
     {
         int n = Interlocked.Increment(ref _tenantCounter);
 
@@ -60,7 +61,7 @@ public static class TestDataBuilder
             Name = name ?? $"Test Tenant {n}",
             CreatedAt = DateTimeOffset.UtcNow,
             CreatedByUserId = createdByUserId,
-            IsActive = true,
+            IsActive = isActive,
             LogoUrl = ""
         };
     }

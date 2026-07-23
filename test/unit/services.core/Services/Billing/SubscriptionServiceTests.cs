@@ -146,6 +146,7 @@ public class SubscriptionServiceTests
         (DatabaseRepository repo, TestDatabaseFactory dbFactory) = BuildRepoAndFactory();
         using (dbFactory)
         {
+            await dbFactory.Context.InsertWithInt32IdentityAsync(TestDataBuilder.BuildTenant());
             await dbFactory.Context.InsertWithInt32IdentityAsync(TestDataBuilder.BuildSubscription(tenantId: 1, status: SubscriptionStatus.Active));
             SubscriptionService service = BuildService(repo);
 
@@ -160,6 +161,7 @@ public class SubscriptionServiceTests
         (DatabaseRepository repo, TestDatabaseFactory dbFactory) = BuildRepoAndFactory();
         using (dbFactory)
         {
+            await dbFactory.Context.InsertWithInt32IdentityAsync(TestDataBuilder.BuildTenant());
             await dbFactory.Context.InsertWithInt32IdentityAsync(TestDataBuilder.BuildSubscription(tenantId: 1, status: SubscriptionStatus.PastDue));
             SubscriptionService service = BuildService(repo);
 
@@ -173,6 +175,7 @@ public class SubscriptionServiceTests
         (DatabaseRepository repo, TestDatabaseFactory dbFactory) = BuildRepoAndFactory();
         using (dbFactory)
         {
+            await dbFactory.Context.InsertWithInt32IdentityAsync(TestDataBuilder.BuildTenant());
             await dbFactory.Context.InsertWithInt32IdentityAsync(TestDataBuilder.BuildSubscription(tenantId: 1, status: SubscriptionStatus.Canceled));
             SubscriptionService service = BuildService(repo);
 
@@ -190,6 +193,63 @@ public class SubscriptionServiceTests
 
             await Assert.That(await service.IsIngestEligibleAsync(999, CancellationToken.None)).IsFalse();
         }
+    }
+
+    [Test]
+    public async Task IsIngestEligible_InactiveTenant_ReturnsFalse_EvenWithActiveSubscription()
+    {
+        // The Free-tenant deactivation case: a Free tenant's subscription stays Active on
+        // deactivation (there is no billing reason to touch it), so the gate must consult
+        // Tenant.IsActive directly rather than relying on subscription status alone.
+        (DatabaseRepository repo, TestDatabaseFactory dbFactory) = BuildRepoAndFactory();
+        using (dbFactory)
+        {
+            await dbFactory.Context.InsertWithInt32IdentityAsync(TestDataBuilder.BuildTenant(isActive: false));
+            await dbFactory.Context.InsertWithInt32IdentityAsync(TestDataBuilder.BuildSubscription(tenantId: 1, status: SubscriptionStatus.Active));
+            SubscriptionService service = BuildService(repo);
+
+            await Assert.That(await service.IsIngestEligibleAsync(1, CancellationToken.None)).IsFalse();
+        }
+    }
+
+    // ========== IsIngestEligible static decision matrix ==========
+
+    [Test]
+    public async Task IsIngestEligibleStatic_ActiveSubscription_ActiveTenant_ReturnsTrue()
+    {
+        TenantSubscription subscription = TestDataBuilder.BuildSubscription(tenantId: 1, status: SubscriptionStatus.Active);
+
+        await Assert.That(SubscriptionService.IsIngestEligible(subscription, tenantIsActive: true)).IsTrue();
+    }
+
+    [Test]
+    public async Task IsIngestEligibleStatic_ActiveSubscription_InactiveTenant_ReturnsFalse()
+    {
+        TenantSubscription subscription = TestDataBuilder.BuildSubscription(tenantId: 1, status: SubscriptionStatus.Active);
+
+        await Assert.That(SubscriptionService.IsIngestEligible(subscription, tenantIsActive: false)).IsFalse();
+    }
+
+    [Test]
+    public async Task IsIngestEligibleStatic_PastDueSubscription_ActiveTenant_ReturnsTrue()
+    {
+        TenantSubscription subscription = TestDataBuilder.BuildSubscription(tenantId: 1, status: SubscriptionStatus.PastDue);
+
+        await Assert.That(SubscriptionService.IsIngestEligible(subscription, tenantIsActive: true)).IsTrue();
+    }
+
+    [Test]
+    public async Task IsIngestEligibleStatic_CanceledSubscription_ActiveTenant_ReturnsFalse()
+    {
+        TenantSubscription subscription = TestDataBuilder.BuildSubscription(tenantId: 1, status: SubscriptionStatus.Canceled);
+
+        await Assert.That(SubscriptionService.IsIngestEligible(subscription, tenantIsActive: true)).IsFalse();
+    }
+
+    [Test]
+    public async Task IsIngestEligibleStatic_NullSubscription_ActiveTenant_ReturnsFalse()
+    {
+        await Assert.That(SubscriptionService.IsIngestEligible(null, tenantIsActive: true)).IsFalse();
     }
 
     [Test]

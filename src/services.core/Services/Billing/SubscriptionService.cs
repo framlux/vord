@@ -76,10 +76,16 @@ public sealed class SubscriptionService : ISubscriptionService
         return subscription;
     }
 
-    /// <inheritdoc/>
-    public async Task<bool> IsIngestEligibleAsync(int tenantId, CancellationToken ct)
+    /// <summary>
+    /// Ingest eligibility: an active-or-past-due subscription AND an active tenant. A deactivated
+    /// tenant (a pending deletion) never ingests, even on a Free/Active subscription.
+    /// </summary>
+    internal static bool IsIngestEligible(TenantSubscription? subscription, bool tenantIsActive)
     {
-        TenantSubscription? subscription = await _subscriptionRepo.GetSubscriptionForTenantAsync(tenantId, ct);
+        if (tenantIsActive == false)
+        {
+            return false;
+        }
 
         // Ingest policy lives here so it has a single home. PastDue is treated as a grace period —
         // ingest continues during Stripe dunning, matching the web app's "PastDue keeps access" behavior.
@@ -87,6 +93,20 @@ public sealed class SubscriptionService : ISubscriptionService
         // stops ingest. Canceled and no-subscription are not eligible.
         return (subscription is not null) &&
                ((subscription.Status == SubscriptionStatus.Active) || (subscription.Status == SubscriptionStatus.PastDue));
+    }
+
+    /// <inheritdoc/>
+    public async Task<bool> IsIngestEligibleAsync(int tenantId, CancellationToken ct)
+    {
+        Tenant? tenant = await _tenantRepo.GetTenantByIdAsync(tenantId, ct);
+        if ((tenant is null) || (tenant.IsActive == false))
+        {
+            return false;
+        }
+
+        TenantSubscription? subscription = await _subscriptionRepo.GetSubscriptionForTenantAsync(tenantId, ct);
+
+        return IsIngestEligible(subscription, tenant.IsActive);
     }
 
     /// <inheritdoc/>
