@@ -51,6 +51,33 @@ public sealed class AuditEnumValuesTests
         await Assert.That(actual).IsEqualTo(expected);
     }
 
+    [Test]
+    public async Task AuditAction_TenantDeletionRequested_HasValue144()
+    {
+        short actual = (short)AuditAction.TenantDeletionRequested;
+        short expected = 144;
+
+        await Assert.That(actual).IsEqualTo(expected);
+    }
+
+    [Test]
+    public async Task AuditAction_TenantPurged_HasValue145()
+    {
+        short actual = (short)AuditAction.TenantPurged;
+        short expected = 145;
+
+        await Assert.That(actual).IsEqualTo(expected);
+    }
+
+    [Test]
+    public async Task AuditAction_TenantRestored_HasValue146()
+    {
+        short actual = (short)AuditAction.TenantRestored;
+        short expected = 146;
+
+        await Assert.That(actual).IsEqualTo(expected);
+    }
+
     // ========== AuditResourceType — new values added for Task C audit coverage ==========
 
     [Test]

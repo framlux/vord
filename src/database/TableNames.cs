@@ -35,4 +35,5 @@ internal static class TableNames
     public const string UserSigningKeys = "UserSigningKeys";
     public const string RemoteCommands = "RemoteCommands";
     public const string DataProtectionKeys = "DataProtectionKeys";
+    public const string TenantDeletions = "TenantDeletions";
 }

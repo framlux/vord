@@ -151,6 +151,9 @@ public sealed class DatabaseContext(DataOptions<DatabaseContext> options) : Data
     /// </summary>
     public ITable<TenantSubscriptionOverride> TenantSubscriptionOverrides => this.GetTable<TenantSubscriptionOverride>();
 
+    /// <summary>Gets the tenant deletion lifecycle records.</summary>
+    public ITable<TenantDeletion> TenantDeletions => this.GetTable<TenantDeletion>();
+
     /// <summary>
     /// Represents the ASP.NET Core Data Protection key ring, shared by api-server and
     /// services-worker replicas.

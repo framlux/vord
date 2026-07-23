@@ -99,4 +99,10 @@ public enum AuditAction : short
     TenantOidcConfigured = 142,
     /// <summary>A tenant was created by a global admin.</summary>
     TenantCreatedByAdmin = 143,
+    /// <summary>An operator requested tenant deletion (Phase 1 deactivation).</summary>
+    TenantDeletionRequested = 144,
+    /// <summary>A tenant's operational and personal data was purged (Phase 2).</summary>
+    TenantPurged = 145,
+    /// <summary>An operator restored a tenant during the deletion grace window.</summary>
+    TenantRestored = 146,
 }

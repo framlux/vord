@@ -875,6 +875,29 @@ public sealed class InitialMigration : Migration
             .WithColumn("CreatedAt").AsDateTimeOffset().NotNullable()
             .WithColumn("UpdatedAt").AsDateTimeOffset().NotNullable();
 
+        // Tenant deletion lifecycle. Never purged — persists as the permanent deletion tombstone.
+        Create.Table(TableNames.TenantDeletions)
+            .WithColumn("Id").AsInt32().PrimaryKey().Identity().NotNullable()
+            .WithColumn("TenantId").AsInt32().NotNullable().ForeignKey(TableNames.Tenants, "Id")
+            .WithColumn("TenantExternalId").AsString().NotNullable()
+            .WithColumn("TenantName").AsString().NotNullable()
+            .WithColumn("RequestedByUserId").AsInt32().NotNullable()
+            .WithColumn("RequestedAt").AsDateTimeOffset().NotNullable()
+            .WithColumn("ScheduledPurgeAt").AsDateTimeOffset().NotNullable()
+            .WithColumn("Status").AsInt16().NotNullable()
+            .WithColumn("PurgedAt").AsDateTimeOffset().Nullable()
+            .WithColumn("Reason").AsString().Nullable();
+
+        // The double-deletion guard is a partial unique index: at most one non-Restored (Deactivated
+        // or Purged) row per tenant. Status 3 = Restored is excluded so a restored tenant can be
+        // deleted again later.
+        IfDatabase("PostgreSQL").Execute.Sql(
+            @"CREATE UNIQUE INDEX ""IX_TenantDeletions_ActiveTenant""
+              ON ""TenantDeletions"" (""TenantId"") WHERE ""Status"" <> 3");
+        IfDatabase("SQLite").Execute.Sql(
+            @"CREATE UNIQUE INDEX ""IX_TenantDeletions_ActiveTenant""
+              ON ""TenantDeletions"" (""TenantId"") WHERE ""Status"" <> 3");
+
         // ASP.NET Core Data Protection key ring, shared by api-server and services-worker
         // replicas via the database instead of Redis (a Redis flush must never be able to
         // destroy the ring and the tenant OIDC secrets encrypted under it). Small table
@@ -913,6 +936,7 @@ public sealed class InitialMigration : Migration
         IfDatabase("SQLite").Execute.Sql(@"DROP INDEX IF EXISTS ""IX_IntegrationEndpoints_TenantId_Provider""");
 
         Delete.Table(TableNames.DataProtectionKeys);
+        Delete.Table(TableNames.TenantDeletions);
         Delete.Table("TenantSubscriptionOverrides");
         Delete.Table("TierFeatureLimits");
         Delete.Table(TableNames.RemoteCommands);
