@@ -4,7 +4,7 @@
 
 **Goal:** Close the owner-ruled findings from the 2026-07-22 product steelman review (`docs/reviews/2026-07-22-product-steelman-review.md`): truthful customer-facing copy, an achievable privacy promise, a written migration-freeze rule, a Postgres-persisted data-protection key ring, per-retention-class telemetry partitioning, and a working one-touch agent install.
 
-**Architecture:** Tasks 1–4 are copy/policy/documentation fixes. Task 5 replaces the Redis `IXmlRepository` with a Postgres-backed one (new table, added in place to `InitialMigration` per the pre-GA rule). Task 6 re-partitions `MachineTelemetry` as `LIST(RetentionClass)` × `RANGE(ReceivedAt)` so partition drops honor each tier's retention. Task 7 makes the documented `curl | bash` install real.
+**Architecture:** Task 1 documents the migration-freeze rule. Task 2 replaces the Redis `IXmlRepository` with a Postgres-backed one (new table, added in place to `InitialMigration` per the pre-GA rule). Task 3 re-partitions `MachineTelemetry` as `LIST(RetentionClass)` × `RANGE(ReceivedAt)` so partition drops honor each tier's retention; Task 4 adds the reclassify-on-subscription-change job so existing data follows the tenant's current plan. Task 5 makes the documented `curl | bash` install real. Tasks 6–8 are customer-facing copy/policy truth fixes.
 
 **Tech Stack:** .NET 10 / LinqToDB / FluentMigrator / TUnit; SvelteKit (vord web + vord-internal marketing).
 
@@ -108,7 +108,7 @@ The key ring currently lives only in Redis (`AddCoreDataProtection`, `src/servic
 
 ### Task 3: Retention-class telemetry partitioning
 
-Physical retention currently = `MAX(TierFeatureLimits.RetentionDays)` (365) for every row (`DatabaseRepository.Partitions.cs:15-18`). Re-partition `MachineTelemetry` as `LIST("RetentionClass")` → per-class `RANGE("ReceivedAt")` dailies so each class drops on its own schedule. Approved semantics: **retention class is stamped at write time from the tenant's tier; a mid-window tier change does not reclassify existing rows** (downgrades stay query-filtered by the existing history validator; upgrades do not resurrect dropped data).
+Physical retention currently = `MAX(TierFeatureLimits.RetentionDays)` (365) for every row (`DatabaseRepository.Partitions.cs:15-18`). Re-partition `MachineTelemetry` as `LIST("RetentionClass")` → per-class `RANGE("ReceivedAt")` dailies so each class drops on its own schedule. Approved semantics (owner ruling 2026-07-22): **retention class is stamped at write time from the tenant's current effective retention, and Task 4's reclassify job moves existing surviving rows to the new class whenever the subscription changes — data follows the current subscription in both directions.** Dropped data is never resurrected, and on a downgrade, rows older than the new window remain in their old class (query-hidden by the existing history validator) until they expire on the old schedule.
 
 **Files:**
 - Modify: `vord/src/database/Migrations/InitialMigration.cs` (in-place edit of the `MachineTelemetry` DDL, ~lines 186-198)
@@ -169,7 +169,35 @@ Existing indexes on the parent propagate to all leaves — keep them as declared
 
 ---
 
-### Task 4: One-touch install, for real
+### Task 4: Reclassify telemetry when the subscription changes
+
+Owner ruling: customers won't remember which machines ran under which plan — surviving data must follow the current subscription. On any change to a tenant's effective retention (tier change in either direction, or a retention override created/updated/removed), move that tenant's surviving rows into the new class. Runs after Task 3 (depends on its schema and class map).
+
+**Files:**
+- Create: `vord/src/services.core/Services/Infrastructure/RetentionReclassifyJob.cs` (Hangfire job)
+- Modify: `vord/src/database/Repositories/DatabaseRepository.MachineState.cs` + its interface (day-chunked reclassify update)
+- Modify: the tier-change side-effect seam — **read first, then hook every path that changes effective retention**: the billing webhook handler's tier-change path, `DowngradeSubscriptionEndpoint`'s immediate-downgrade path, the reactivate flow, `StripeSyncJob`'s tier-correction path (it delegates to the webhook handler — verify one enqueue point covers both), and `FleetAdminService`'s tenant-override create/update/delete RPCs. Prefer the narrowest set of chokepoints that provably covers all five; list them in the report.
+- Test: unit tests for the job's chunking/target logic; functional (hangfire) test if the suite pattern supports it; integration test proving real cross-partition row movement.
+
+**Interfaces:**
+- Consumes: Task 3's `RetentionClass` enum, the effective-retention→class `internal static` map, and per-class fixed windows.
+- Produces: `RetentionReclassifyJob.RunAsync(int tenantId, CancellationToken)`; repository method `Task<int> ReclassifyTelemetryForTenantAsync(int tenantId, RetentionClass target, DateTimeOffset dayStart, DateTimeOffset dayEnd, CancellationToken)` returning affected rows.
+
+**Semantics (all owner-approved):**
+- Target class = class for the tenant's CURRENT effective retention at job execution time (re-resolved inside the job, not captured at enqueue — a rapid double-change converges on the latest state).
+- Scope of movement: rows with `ReceivedAt` within the new effective window and `RetentionClass <> target`. Rows older than the new window are NOT moved (their target leaves don't exist — already expired there); on downgrade they stay in the old class, query-hidden, and expire on the old schedule. This is deliberate: it preserves the accidental-downgrade undo (re-upgrade within the old window brings history back) and never fabricates partitions for expired days.
+- Postgres moves rows between partitions on a partition-key UPDATE natively; the PK includes `RetentionClass` so the UPDATE is a keyed row movement. Chunk by day (newest first): one UPDATE per day-partition bound keeps each transaction small and lock-friendly. Upgrades only ever move rows whose target-day leaves exist (daily creation makes leaves for all three classes every day).
+- Idempotent and concurrency-safe: re-running converges (`RetentionClass <> target` guard); rows written concurrently by ingest already carry the target class (stamping reads the same effective retention).
+
+- [ ] **Step 1 (RED):** Unit tests: (a) day-chunk enumeration covers exactly the new window newest→oldest; (b) target resolution uses current effective retention (mock a changed subscription between enqueue and run — final state wins); (c) rows outside the window are excluded from every chunk's bounds. Watch them fail.
+- [ ] **Step 2:** Repository method (day-bounded UPDATE) + job (resolve target → loop day chunks → log total moved). Queue: default, not `critical`. Add `DisableConcurrentExecution` keyed per tenant if the codebase's existing per-tenant job pattern supports it — otherwise the idempotence makes overlap safe; document the choice.
+- [ ] **Step 3:** Hook the enqueue points. Each site enqueues fire-and-forget (`IBackgroundJobClient.Enqueue`) after the subscription/override commit — never inside the transaction.
+- [ ] **Step 4 (GREEN):** Unit suites green; **integration test**: seed telemetry as Free (Short), flip the tenant to Pro, run the job against real Postgres, assert rows report `RetentionClass = Medium` and remain queryable; downgrade case: seed 70-day-old Long rows plus recent Long rows, flip Team→Pro, assert recent rows became Medium and the 70-day-old rows kept Long.
+- [ ] **Step 5:** Build 0/0; commit ("Move surviving telemetry to the tenant's current retention class on plan change" + body stating the older-than-window downgrade exception and why).
+
+---
+
+### Task 5: One-touch install, for real
 
 Make `curl -fsSL https://get.vordfleet.dev | sudo bash -s -- --token YOUR_TOKEN` work as documented, unify the two drifted script variants on the keyring flow, and make the KB truthful.
 
@@ -198,7 +226,7 @@ Make `curl -fsSL https://get.vordfleet.dev | sudo bash -s -- --token YOUR_TOKEN`
 
 ---
 
-### Task 5: In-app billing page tells the truth
+### Task 6: In-app billing page tells the truth
 
 **Files:**
 - Modify: `vord/src/web/src/routes/(app)/settings/billing/+page.svelte`
@@ -215,7 +243,7 @@ Make `curl -fsSL https://get.vordfleet.dev | sudo bash -s -- --token YOUR_TOKEN`
 
 ---
 
-### Task 6: Marketing and docs stop overselling
+### Task 7: Marketing and docs stop overselling
 
 **Files:**
 - Modify: `vord-internal/src/marketing/src/routes/+page.svelte` (~line 104 feature card)
@@ -230,7 +258,7 @@ Make `curl -fsSL https://get.vordfleet.dev | sudo bash -s -- --token YOUR_TOKEN`
 
 ---
 
-### Task 7: Privacy policy matches reality
+### Task 8: Privacy policy matches reality
 
 **Files:**
 - Modify: `vord/src/web/src/routes/privacy/+page.svelte` (~lines 110, 128)
@@ -247,7 +275,7 @@ Make `curl -fsSL https://get.vordfleet.dev | sudo bash -s -- --token YOUR_TOKEN`
 
 ## Exit Criteria
 
-1. Both builds 0 errors / 0 warnings; all six vord TUnit suites green; vord integration suite green (Task 3 requires it); vord Vitest green; marketing `pnpm check`/`build` green.
+1. Both builds 0 errors / 0 warnings; all six vord TUnit suites green; vord integration suite green (Tasks 3 and 4 require it); vord Vitest green; marketing `pnpm check`/`build` green.
 2. `git grep -n "apt-key" vord/src vord/deployment` → no hits. `git grep -n "vordfleet-agent\|/etc/vordfleet/" vord-internal/src/marketing/src/content` → no hits.
 3. `MachineTelemetry` is LIST×RANGE partitioned; `GetMaxRetentionDaysAsync` no longer exists; partition job tests cover per-class create/drop + override extension.
 4. `RedisXmlRepository` no longer referenced anywhere in vord; `DataProtectionKeys` table exists in both DDL branches.
