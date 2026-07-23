@@ -16,7 +16,7 @@ namespace Framlux.FleetManagement.Test.Services.Jobs;
 /// <summary>
 /// Tests for <see cref="TenantPurgeJob"/>.
 /// </summary>
-public class TenantPurgeJobTests
+public sealed class TenantPurgeJobTests
 {
     private static readonly DateTimeOffset FixedNow = new(2026, 07, 23, 12, 0, 0, TimeSpan.Zero);
 
@@ -242,6 +242,58 @@ public class TenantPurgeJobTests
         await deletionRepo.Received(1).UpdateDeletionStatusAsync(5, TenantDeletionStatus.Purged, FixedNow, Arg.Any<CancellationToken>());
         await auditLog.Received(1).InsertAuditLogAsync(
             Arg.Is<AuditLogEntry>(e => (e.Action == AuditAction.TenantPurged) && (e.ResourceId == "11")),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task RunAsync_OneTenantThrowsDuringPurge_OtherTenantStillFullyPurgedAndNoExceptionEscapes()
+    {
+        TenantDeletion failing = BuildDeletion(id: 6, tenantId: 12, externalId: "ext-12", name: "Zeta LLC");
+        TenantDeletion succeeding = BuildDeletion(id: 7, tenantId: 13, externalId: "ext-13", name: "Eta LLC");
+
+        ITenantDeletionRepository deletionRepo = Substitute.For<ITenantDeletionRepository>();
+        deletionRepo.GetDueDeletionsAsync(FixedNow, Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new List<TenantDeletion> { failing, succeeding }));
+        deletionRepo.GetUserIdsWithAnyRoleInTenantAsync(Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new List<int>()));
+
+        // Tenant A's operational-data purge throws mid-transaction; tenant B's repo calls all succeed.
+        deletionRepo.PurgeTenantOperationalDataAsync(12, Arg.Any<CancellationToken>())
+            .Returns<Task>(_ => throw new InvalidOperationException("simulated purge failure for tenant 12"));
+        deletionRepo.PurgeTenantOperationalDataAsync(13, Arg.Any<CancellationToken>())
+            .Returns(Task.CompletedTask);
+        deletionRepo.UpdateDeletionStatusAsync(7, TenantDeletionStatus.Purged, FixedNow, Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(1));
+
+        (IDatabaseTransactionProvider transactionProvider, IDatabaseTransaction transaction) = CreateMockTransaction();
+
+        IBillingApiClient billingApiClient = Substitute.For<IBillingApiClient>();
+        billingApiClient.DeleteCustomerAsync("ext-13", Arg.Any<CancellationToken>()).Returns(Task.FromResult(true));
+
+        IAuditLogRepository auditLog = Substitute.For<IAuditLogRepository>();
+        auditLog.InsertAuditLogAsync(Arg.Any<AuditLogEntry>(), Arg.Any<CancellationToken>()).Returns(Task.CompletedTask);
+
+        TenantPurgeJob job = BuildJob(
+            deletionRepo: deletionRepo,
+            auditLog: auditLog,
+            transactionProvider: transactionProvider,
+            billingApiClient: billingApiClient);
+
+        // Must not throw out of RunAsync: the per-tenant try/catch logs tenant A's failure and continues.
+        await job.RunAsync(CancellationToken.None);
+
+        // Tenant A never reached billing or status update — its row stays Deactivated for the next tick.
+        await billingApiClient.DidNotReceive().DeleteCustomerAsync("ext-12", Arg.Any<CancellationToken>());
+        await deletionRepo.DidNotReceive().UpdateDeletionStatusAsync(
+            6, Arg.Any<TenantDeletionStatus>(), Arg.Any<DateTimeOffset?>(), Arg.Any<CancellationToken>());
+
+        // Tenant B was processed independently and reached full completion.
+        await deletionRepo.Received(1).DeleteUserTenantRolesForTenantAsync(13, Arg.Any<CancellationToken>());
+        await transaction.Received(1).CommitAsync(Arg.Any<CancellationToken>());
+        await billingApiClient.Received(1).DeleteCustomerAsync("ext-13", Arg.Any<CancellationToken>());
+        await deletionRepo.Received(1).UpdateDeletionStatusAsync(7, TenantDeletionStatus.Purged, FixedNow, Arg.Any<CancellationToken>());
+        await auditLog.Received(1).InsertAuditLogAsync(
+            Arg.Is<AuditLogEntry>(e => (e.Action == AuditAction.TenantPurged) && (e.ResourceId == "13")),
             Arg.Any<CancellationToken>());
     }
 

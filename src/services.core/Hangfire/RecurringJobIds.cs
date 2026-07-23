@@ -49,10 +49,10 @@ public static class RecurringJobIds
         HealthSweepCoordinator,
         AlertEvaluation,
         AlertConditionStateCleanup,
+        TenantPurge,
         UsageHeartbeat,
         StripeSync,
         DataExportProcessing,
         DataExportCleanup,
-        TenantPurge,
     };
 }
