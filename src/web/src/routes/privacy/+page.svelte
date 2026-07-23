@@ -107,8 +107,10 @@
 				<h2 class="text-lg font-semibold text-surface-900 dark:text-surface-50">7. Data Retention</h2>
 				<p class="mt-2 leading-relaxed">
 					We retain your data for as long as your account is active. Machine telemetry is retained
-					according to your subscription tier. If you cancel your account, we will delete your data
-					within a reasonable period, except where retention is required by law.
+					according to your subscription tier. If you cancel your account, your data becomes
+					inaccessible immediately and telemetry expires automatically, within at most one year of
+					collection. To request earlier full deletion of remaining account records, contact us at
+					the address below and we will complete it within 30 days.
 				</p>
 			</section>
 
@@ -125,9 +127,10 @@
 			<section>
 				<h2 class="text-lg font-semibold text-surface-900 dark:text-surface-50">9. Your Rights</h2>
 				<p class="mt-2 leading-relaxed">
-					You may request access to, correction of, or deletion of your personal information at any
-					time by contacting us. You can remove machines from the platform by uninstalling the agent
-					and revoking their API keys.
+					You may request a copy of your data at any time using the built-in export (Settings →
+					Data Export), and may request account deletion by contacting support; deletion requests
+					are completed within 30 days. You can remove machines from the platform by uninstalling
+					the agent and revoking their API keys.
 				</p>
 			</section>
 
