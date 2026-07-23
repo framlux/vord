@@ -53,12 +53,12 @@
 
 	// Catalog-backed monthly per-machine prices with legacy fallbacks for installs
 	// that have not synced a catalog yet.
-	const proMonthlyCents = $derived(findCatalogPrice(catalog, 'Pro', 'monthly')?.unitAmountCents ?? 300);
-	const teamMonthlyCents = $derived(findCatalogPrice(catalog, 'Team', 'monthly')?.unitAmountCents ?? 500);
+	const proMonthlyCents = $derived(findCatalogPrice(catalog, 'Pro', 'monthly')?.unitAmountCents ?? 500);
+	const teamMonthlyCents = $derived(findCatalogPrice(catalog, 'Team', 'monthly')?.unitAmountCents ?? 1000);
 
 	const tierTaglines: Record<string, string> = {
-		Pro: 'Unlimited machines, 30-day retention, default alert rules.',
-		Team: 'Everything in Pro plus custom alert rules, audit log, and SSO.'
+		Pro: 'Up to 1,000 machines, 60-day retention, built-in alert rules.',
+		Team: 'Everything in Pro plus custom alert rules, audit log, SSO, and 1-year retention.'
 	};
 
 	// Projected cost: unit amount per machine times current machine count
@@ -656,7 +656,7 @@
 												<li>Custom OIDC SSO will be disabled</li>
 												<li>Custom alert rules will be disabled (default rules remain)</li>
 												<li>Audit log access will be removed</li>
-												<li>Data retention will be reduced to 30 days</li>
+												<li>Data retention will be reduced to 60 days</li>
 											</ul>
 											<div class="mt-4 flex gap-3">
 												<form method="POST" action="?/downgrade">
@@ -991,13 +991,13 @@
 					<tr>
 						<td class="py-3 pr-4 text-surface-900 dark:text-surface-100">Machine Limit</td>
 						<td class="px-4 py-3 text-center text-surface-600 dark:text-surface-400">3</td>
-						<td class="px-4 py-3 text-center text-surface-600 dark:text-surface-400">Unlimited</td>
-						<td class="px-4 py-3 text-center text-surface-600 dark:text-surface-400">Unlimited</td>
+						<td class="px-4 py-3 text-center text-surface-600 dark:text-surface-400">1,000</td>
+						<td class="px-4 py-3 text-center text-surface-600 dark:text-surface-400">10,000</td>
 					</tr>
 					<tr>
 						<td class="py-3 pr-4 text-surface-900 dark:text-surface-100">Data Retention</td>
 						<td class="px-4 py-3 text-center text-surface-600 dark:text-surface-400">1 day</td>
-						<td class="px-4 py-3 text-center text-surface-600 dark:text-surface-400">30 days</td>
+						<td class="px-4 py-3 text-center text-surface-600 dark:text-surface-400">60 days</td>
 						<td class="px-4 py-3 text-center text-surface-600 dark:text-surface-400">365 days</td>
 					</tr>
 					<tr>
