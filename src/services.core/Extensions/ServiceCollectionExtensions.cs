@@ -24,7 +24,6 @@ using LinqToDB.Extensions.DependencyInjection;
 using LinqToDB.Extensions.Logging;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.DataProtection.KeyManagement;
-using Microsoft.AspNetCore.DataProtection.StackExchangeRedis;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
@@ -138,6 +137,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<IIntegrationRepository>(sp => sp.GetRequiredService<DatabaseRepository>());
         services.AddScoped<IIntegrationDeliveryAttemptRepository>(sp => sp.GetRequiredService<DatabaseRepository>());
         services.AddScoped<IAlertEmailDeliveryAttemptRepository>(sp => sp.GetRequiredService<DatabaseRepository>());
+        services.AddScoped<IDataProtectionKeyRepository>(sp => sp.GetRequiredService<DatabaseRepository>());
         services.AddScoped<IDataExportRepository>(sp => sp.GetRequiredService<DatabaseRepository>());
         services.AddScoped<IRegistrationTokenRepository>(sp => sp.GetRequiredService<DatabaseRepository>());
         services.AddScoped<IMachineStateRepository>(sp => sp.GetRequiredService<DatabaseRepository>());
@@ -209,10 +209,10 @@ public static class ServiceCollectionExtensions
     }
 
     /// <summary>
-    /// Registers ASP.NET Core Data Protection with keys persisted in Redis so multiple
-    /// replicas (and processes — api-server and services-worker) share the same key ring.
-    /// Must be called after <see cref="AddCoreInfrastructure"/> so that
-    /// <see cref="IConnectionMultiplexer"/> is registered.
+    /// Registers ASP.NET Core Data Protection with keys persisted in the shared Postgres
+    /// database so multiple replicas (and processes — api-server and services-worker) share
+    /// the same key ring. Persisting in Postgres rather than Redis means a Redis flush can no
+    /// longer destroy the ring and, with it, every tenant OIDC secret encrypted under it.
     /// </summary>
     public static IServiceCollection AddCoreDataProtection(
         this IServiceCollection services,
@@ -223,12 +223,11 @@ public static class ServiceCollectionExtensions
 
         services.AddSingleton<IConfigureOptions<KeyManagementOptions>>(sp =>
         {
-            IConnectionMultiplexer redis = sp.GetRequiredService<IConnectionMultiplexer>();
+            IServiceScopeFactory scopeFactory = sp.GetRequiredService<IServiceScopeFactory>();
 
             return new ConfigureOptions<KeyManagementOptions>(options =>
             {
-                options.XmlRepository = new RedisXmlRepository(
-                    () => redis.GetDatabase(), "DataProtection-Keys");
+                options.XmlRepository = new PostgresXmlRepository(scopeFactory);
             });
         });
 

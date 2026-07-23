@@ -150,4 +150,10 @@ public sealed class DatabaseContext(DataOptions<DatabaseContext> options) : Data
     /// Represents the collection of per-tenant subscription limit overrides.
     /// </summary>
     public ITable<TenantSubscriptionOverride> TenantSubscriptionOverrides => this.GetTable<TenantSubscriptionOverride>();
+
+    /// <summary>
+    /// Represents the ASP.NET Core Data Protection key ring, shared by api-server and
+    /// services-worker replicas.
+    /// </summary>
+    public ITable<DataProtectionKey> DataProtectionKeys => this.GetTable<DataProtectionKey>();
 }

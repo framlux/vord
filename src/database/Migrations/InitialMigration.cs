@@ -851,6 +851,16 @@ public sealed class InitialMigration : Migration
             .WithColumn("CreatedAt").AsDateTimeOffset().NotNullable()
             .WithColumn("UpdatedAt").AsDateTimeOffset().NotNullable();
 
+        // ASP.NET Core Data Protection key ring, shared by api-server and services-worker
+        // replicas via the database instead of Redis (a Redis flush must never be able to
+        // destroy the ring and the tenant OIDC secrets encrypted under it). Small table
+        // (dozens of rows over years), not partitioned.
+        Create.Table(TableNames.DataProtectionKeys)
+            .WithColumn("Id").AsInt32().PrimaryKey().Identity().NotNullable()
+            .WithColumn("FriendlyName").AsString(256).Nullable()
+            .WithColumn("Xml").AsString().NotNullable()
+            .WithColumn("CreatedAt").AsDateTimeOffset().NotNullable();
+
         // Create initial daily partitions and default partitions for all partitioned tables.
         CreateInitialDailyPartitions(TableNames.MachineTelemetry);
         CreateInitialDailyPartitions(TableNames.AuditLog);
@@ -874,6 +884,7 @@ public sealed class InitialMigration : Migration
         IfDatabase("PostgreSQL").Execute.Sql(@"DROP INDEX IF EXISTS ""IX_IntegrationEndpoints_TenantId_Provider""");
         IfDatabase("SQLite").Execute.Sql(@"DROP INDEX IF EXISTS ""IX_IntegrationEndpoints_TenantId_Provider""");
 
+        Delete.Table(TableNames.DataProtectionKeys);
         Delete.Table("TenantSubscriptionOverrides");
         Delete.Table("TierFeatureLimits");
         Delete.Table(TableNames.RemoteCommands);
