@@ -340,6 +340,37 @@ public class TenantDeletionHandlerTests
     }
 
     [Test]
+    public async Task RestoreAsync_AtOrPastScheduledPurgeTime_ReturnsFailureWithoutStateChange()
+    {
+        TenantDeletion deletion = new()
+        {
+            Id = 14,
+            TenantId = 4,
+            TenantExternalId = "ext-r",
+            TenantName = "Restore Corp",
+            RequestedByUserId = 1,
+            RequestedAt = FixedNow,
+            ScheduledPurgeAt = FixedNow.AddDays(30),
+            Status = TenantDeletionStatus.Deactivated,
+        };
+
+        ITenantDeletionRepository deletionRepo = Substitute.For<ITenantDeletionRepository>();
+        deletionRepo.GetActiveDeletionForTenantAsync(4, Arg.Any<CancellationToken>()).Returns(Task.FromResult<TenantDeletion?>(deletion));
+        IDatabaseTransactionProvider transactionProvider = Substitute.For<IDatabaseTransactionProvider>();
+
+        FakeTimeProvider timeProvider = new(deletion.ScheduledPurgeAt);
+        TenantDeletionHandler handler = BuildHandler(deletionRepo: deletionRepo, transactionProvider: transactionProvider, timeProvider: timeProvider);
+
+        TenantDeletionResult result = await handler.RestoreAsync(4, 2, CancellationToken.None);
+
+        await Assert.That(result.Success).IsFalse();
+        await Assert.That(result.Message).IsEqualTo("Tenant is at or past its scheduled purge time and can no longer be restored");
+        await deletionRepo.DidNotReceive().UpdateDeletionStatusAsync(Arg.Any<int>(), Arg.Any<TenantDeletionStatus>(), Arg.Any<DateTimeOffset?>(), Arg.Any<CancellationToken>());
+        await deletionRepo.DidNotReceive().SetTenantActiveAsync(Arg.Any<int>(), Arg.Any<bool>(), Arg.Any<int?>(), Arg.Any<DateTimeOffset?>(), Arg.Any<CancellationToken>());
+        await transactionProvider.DidNotReceive().BeginTransactionAsync(Arg.Any<CancellationToken>());
+    }
+
+    [Test]
     public async Task RestoreAsync_NoDeletionRow_ReturnsFailure()
     {
         ITenantDeletionRepository deletionRepo = Substitute.For<ITenantDeletionRepository>();

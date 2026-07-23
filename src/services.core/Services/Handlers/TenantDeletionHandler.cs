@@ -171,6 +171,17 @@ public sealed class TenantDeletionHandler
             return new TenantDeletionResult(false, "Tenant has already been purged and cannot be restored", null);
         }
 
+        // Restore is only safe strictly before the scheduled purge tick fires. Once that tick opens,
+        // TenantPurgeJob may have already committed the irreversible fleet-side teardown (deleted
+        // operational data, deleted roles, masked orphaned users) and be sitting in a Deactivated
+        // status only because the billing cleanup step failed and is awaiting retry. Restoring at or
+        // past that point would reactivate a hollow tenant while falsely reporting success, so refuse
+        // it even though the row has not yet flipped to Purged.
+        if (_timeProvider.GetUtcNow() >= deletion.ScheduledPurgeAt)
+        {
+            return new TenantDeletionResult(false, "Tenant is at or past its scheduled purge time and can no longer be restored", null);
+        }
+
         // Admin-panel operators have no fleet-side Users row, so 0 is a sentinel for "external admin
         // operator" here too; null it out of the audit's FK column and let the billing-api audit trail
         // carry the operator's real identity.
