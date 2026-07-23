@@ -314,6 +314,33 @@ public class TenantCacheTests
     }
 
     [Test]
+    public async Task GetTenantsForUserAsync_OneTenantDeactivated_ExcludesDeactivatedTenant()
+    {
+        // Regression for Phase-1 tenant deletion: a deactivated tenant (Tenants.IsActive=false)
+        // must drop out of the role-claim source even though its UserTenantRole rows survive
+        // until the purge.
+        using TestDatabaseFactory dbFactory = new();
+        ITenantRepository cache = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+
+        UserAccount user = TestDataBuilder.BuildUser(externalId: "ext-mixed-active-user");
+        int userId = await dbFactory.Context.InsertWithInt32IdentityAsync(user);
+
+        Tenant activeTenant = TestDataBuilder.BuildTenant(name: "Active Tenant", createdByUserId: userId, isActive: true);
+        int activeTenantId = await dbFactory.Context.InsertWithInt32IdentityAsync(activeTenant);
+
+        Tenant deactivatedTenant = TestDataBuilder.BuildTenant(name: "Deactivated Tenant", createdByUserId: userId, isActive: false);
+        int deactivatedTenantId = await dbFactory.Context.InsertWithInt32IdentityAsync(deactivatedTenant);
+
+        await dbFactory.Context.InsertAsync(TestDataBuilder.BuildUserTenantRole(userId: userId, tenantId: activeTenantId, assignedByUserId: userId));
+        await dbFactory.Context.InsertAsync(TestDataBuilder.BuildUserTenantRole(userId: userId, tenantId: deactivatedTenantId, assignedByUserId: userId));
+
+        List<UserTenantRole> result = (await cache.GetTenantsForUserAsync("ext-mixed-active-user")).ToList();
+
+        await Assert.That(result.Count).IsEqualTo(1);
+        await Assert.That(result[0].AssignedTenantId).IsEqualTo(activeTenantId);
+    }
+
+    [Test]
     public async Task GetTenantsForUserByIdAsync_UserWithMultipleTenants_ReturnsAll()
     {
         using TestDatabaseFactory dbFactory = new();
@@ -345,6 +372,30 @@ public class TenantCacheTests
         IEnumerable<UserTenantRole> result = await cache.GetTenantsForUserByIdAsync(99999);
 
         await Assert.That(result.Count()).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task GetTenantsForUserByIdAsync_OneTenantDeactivated_ExcludesDeactivatedTenant()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        ITenantRepository cache = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+
+        UserAccount user = TestDataBuilder.BuildUser();
+        int userId = await dbFactory.Context.InsertWithInt32IdentityAsync(user);
+
+        Tenant activeTenant = TestDataBuilder.BuildTenant(name: "By-Id Active Tenant", createdByUserId: userId, isActive: true);
+        int activeTenantId = await dbFactory.Context.InsertWithInt32IdentityAsync(activeTenant);
+
+        Tenant deactivatedTenant = TestDataBuilder.BuildTenant(name: "By-Id Deactivated Tenant", createdByUserId: userId, isActive: false);
+        int deactivatedTenantId = await dbFactory.Context.InsertWithInt32IdentityAsync(deactivatedTenant);
+
+        await dbFactory.Context.InsertAsync(TestDataBuilder.BuildUserTenantRole(userId: userId, tenantId: activeTenantId, assignedByUserId: userId));
+        await dbFactory.Context.InsertAsync(TestDataBuilder.BuildUserTenantRole(userId: userId, tenantId: deactivatedTenantId, assignedByUserId: userId));
+
+        List<UserTenantRole> result = (await cache.GetTenantsForUserByIdAsync(userId)).ToList();
+
+        await Assert.That(result.Count).IsEqualTo(1);
+        await Assert.That(result[0].AssignedTenantId).IsEqualTo(activeTenantId);
     }
 
     [Test]

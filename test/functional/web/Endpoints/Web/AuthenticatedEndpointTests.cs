@@ -459,6 +459,27 @@ public sealed class AuthenticatedEndpointTests
         int tenant1Id = await SeedTenantWithSubscription(db, "Tenant 1");
         int tenant2Id = await SeedTenantWithSubscription(db, "Tenant 2");
 
+        // The switch decision is authoritative against the database (not the role claims alone),
+        // so the user's membership in both tenants must be real rows.
+        await db.InsertAsync(new UserTenantRole
+        {
+            UserId = 1,
+            AssignedTenantId = tenant1Id,
+            Role = UserAccountRoles.TenantAdmin,
+            AssignedByUserId = 1,
+            AssignedAt = DateTimeOffset.UtcNow,
+            IsActive = true,
+        });
+        await db.InsertAsync(new UserTenantRole
+        {
+            UserId = 1,
+            AssignedTenantId = tenant2Id,
+            Role = UserAccountRoles.Viewer,
+            AssignedByUserId = 1,
+            AssignedAt = DateTimeOffset.UtcNow,
+            IsActive = true,
+        });
+
         HttpClient client = new AuthenticatedClientBuilder(factory)
             .WithUserId(1)
             .WithRole(tenant1Id, (int)UserAccountRoles.TenantAdmin)
