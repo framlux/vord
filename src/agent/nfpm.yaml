@@ -4,8 +4,8 @@ version: ${VERSION}
 maintainer: Framlux <info@framlux.com>
 description: Vord Agent - Machine telemetry collector and control plane agent
 vendor: Framlux
-homepage: https://github.com/framlux/machine-info
-license: Proprietary
+homepage: https://github.com/framlux/vord
+license: MIT
 
 contents:
   - src: ./publish/vord-agent-linux-${GOARCH}

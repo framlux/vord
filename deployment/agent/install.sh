@@ -4,10 +4,11 @@
 # See LICENSE for details.
 #
 # Vord Agent installer — automates repo setup, package install, and configuration.
-# Usage: curl -fsSL https://get.vordfleet.dev/install.sh | sudo bash
-# Or non-interactive:
+# Usage: curl -fsSL https://get.vordfleet.dev | sudo bash -s -- --token YOUR_TOKEN
+# Or non-interactive via env vars:
 #   VORD_SERVER_ADDRESS=grpc.app.vordfleet.dev VORD_REGISTRATION_TOKEN=xxx \
-#     curl -fsSL https://get.vordfleet.dev/install.sh | sudo bash
+#     curl -fsSL https://get.vordfleet.dev | sudo bash
+# Run with --help for the full flag reference.
 
 set -euo pipefail
 
@@ -36,6 +37,65 @@ error() {
     printf "\033[1;31mERROR:\033[0m %s\n" "$1" >&2
 }
 
+usage() {
+    cat <<EOF
+Vord Agent installer
+
+Usage:
+  install.sh [OPTIONS]
+
+Options:
+  --token <TOKEN>     Registration token for this fleet.
+                       (or set the VORD_REGISTRATION_TOKEN env var)
+  --server <ADDRESS>  gRPC server address. Default: ${DEFAULT_SERVER}
+                       (or set the VORD_SERVER_ADDRESS env var)
+  --update            Upgrade an already-installed ${PACKAGE_NAME} package and exit.
+  --help              Show this help text and exit.
+
+Examples:
+  curl -fsSL https://get.vordfleet.dev | sudo bash -s -- --token YOUR_TOKEN
+  VORD_REGISTRATION_TOKEN=YOUR_TOKEN curl -fsSL https://get.vordfleet.dev | sudo bash
+EOF
+}
+
+# --- Flag Parsing (overrides the VORD_REGISTRATION_TOKEN / VORD_SERVER_ADDRESS env vars) ---
+
+UPDATE_ONLY=0
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --token)
+            if [ $# -lt 2 ]; then
+                error "--token requires a value"
+                exit 1
+            fi
+            VORD_REGISTRATION_TOKEN="$2"
+            shift 2
+            ;;
+        --server)
+            if [ $# -lt 2 ]; then
+                error "--server requires a value"
+                exit 1
+            fi
+            VORD_SERVER_ADDRESS="$2"
+            shift 2
+            ;;
+        --update)
+            UPDATE_ONLY=1
+            shift
+            ;;
+        --help)
+            usage
+            exit 0
+            ;;
+        *)
+            error "Unknown option: $1"
+            usage
+            exit 1
+            ;;
+    esac
+done
+
 # --- Preflight Checks ---
 
 if [ "${EUID:-$(id -u)}" -ne 0 ]; then
@@ -56,6 +116,21 @@ else
 fi
 
 info "Detected package manager: ${PKG_MANAGER}"
+
+# --- Update-Only Path ---
+
+if [ "${UPDATE_ONLY}" -eq 1 ]; then
+    info "Upgrading ${PACKAGE_NAME}..."
+    if [ "${PKG_MANAGER}" = "apt" ]; then
+        apt-get update -qq
+        apt-get install -y -qq --only-upgrade "${PACKAGE_NAME}"
+    else
+        "${PKG_MANAGER}" upgrade -y -q "${PACKAGE_NAME}"
+    fi
+    success "${PACKAGE_NAME} upgraded successfully."
+    systemctl restart "${PACKAGE_NAME}"
+    exit 0
+fi
 
 # --- Import GPG Key ---
 

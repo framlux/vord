@@ -86,8 +86,11 @@ info "Detected package manager: \${PKG_MANAGER}"
 
 info "Importing Framlux GPG key..."
 
+KEYRING_PATH="/usr/share/keyrings/framlux-archive-keyring.gpg"
+
 if [ "\${PKG_MANAGER}" = "apt" ]; then
-    curl -fsSL "\${GPG_KEY_URL}" | apt-key add -
+    curl -fsSL "\${GPG_KEY_URL}" | gpg --dearmor -o "\${KEYRING_PATH}"
+    chmod 0644 "\${KEYRING_PATH}"
 else
     rpm --import "\${GPG_KEY_URL}"
 fi
@@ -98,7 +101,7 @@ info "Adding Framlux package repository..."
 
 if [ "\${PKG_MANAGER}" = "apt" ]; then
     cat > /etc/apt/sources.list.d/framlux.list <<EOF
-deb \${APT_REPO_URL} * *
+deb [signed-by=\${KEYRING_PATH}] \${APT_REPO_URL} * *
 EOF
 else
     cat > /etc/yum.repos.d/framlux.repo <<EOF
