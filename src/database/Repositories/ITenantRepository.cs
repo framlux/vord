@@ -30,6 +30,14 @@ public interface ITenantRepository
     Task<Tenant?> GetTenantByExternalIdAsync(string externalId, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Gets a tenant by its external ID regardless of its active state. Used by the tenant-deletion
+    /// lifecycle (request and restore), where the target tenant is expected to already be deactivated
+    /// on a second deletion request or a restore, unlike <see cref="GetTenantByExternalIdAsync"/> which
+    /// treats a deactivated tenant as not found.
+    /// </summary>
+    Task<Tenant?> GetTenantByExternalIdIncludingInactiveAsync(string externalId, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Gets a tenant by its unique identifier.
     /// </summary>
     Task<Tenant?> GetTenantByIdAsync(int tenantId, CancellationToken cancellationToken = default);

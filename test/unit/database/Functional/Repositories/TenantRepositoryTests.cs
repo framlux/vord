@@ -131,6 +131,56 @@ public class TenantCacheTests
     }
 
     [Test]
+    public async Task GetTenantByExternalIdIncludingInactiveAsync_ActiveTenant_ReturnsTenant()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        ITenantRepository cache = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+
+        UserAccount user = TestDataBuilder.BuildUser();
+        int userId = await dbFactory.Context.InsertWithInt32IdentityAsync(user);
+
+        Tenant tenant = TestDataBuilder.BuildTenant(externalId: "ext-tenant-including-inactive-active", createdByUserId: userId);
+        await dbFactory.Context.InsertWithInt32IdentityAsync(tenant);
+
+        Tenant? result = await cache.GetTenantByExternalIdIncludingInactiveAsync("ext-tenant-including-inactive-active");
+
+        await Assert.That(result).IsNotNull();
+        await Assert.That(result!.ExternalId).IsEqualTo("ext-tenant-including-inactive-active");
+    }
+
+    [Test]
+    public async Task GetTenantByExternalIdIncludingInactiveAsync_InactiveTenant_ReturnsTenant()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        ITenantRepository cache = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+
+        UserAccount user = TestDataBuilder.BuildUser();
+        int userId = await dbFactory.Context.InsertWithInt32IdentityAsync(user);
+
+        Tenant tenant = TestDataBuilder.BuildTenant(externalId: "ext-tenant-including-inactive-deactivated", createdByUserId: userId);
+        tenant.IsActive = false;
+        await dbFactory.Context.InsertWithInt32IdentityAsync(tenant);
+
+        // Unlike GetTenantByExternalIdAsync, a deactivated tenant must still resolve here — this is
+        // what the tenant-deletion lifecycle (repeat request, restore) relies on.
+        Tenant? result = await cache.GetTenantByExternalIdIncludingInactiveAsync("ext-tenant-including-inactive-deactivated");
+
+        await Assert.That(result).IsNotNull();
+        await Assert.That(result!.IsActive).IsFalse();
+    }
+
+    [Test]
+    public async Task GetTenantByExternalIdIncludingInactiveAsync_NonExistentExternalId_ReturnsNull()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        ITenantRepository cache = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+
+        Tenant? result = await cache.GetTenantByExternalIdIncludingInactiveAsync("does-not-exist");
+
+        await Assert.That(result).IsNull();
+    }
+
+    [Test]
     public async Task GetTenantByNameAsync_ExactMatch_ReturnsTenant()
     {
         using TestDatabaseFactory dbFactory = new();

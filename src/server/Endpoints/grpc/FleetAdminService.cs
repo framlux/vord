@@ -704,6 +704,98 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
         };
     }
 
+    /// <summary>Deactivates a tenant and schedules its purge (Phase 1 of deletion).</summary>
+    public override async Task<RequestTenantDeletionResponse> RequestTenantDeletion(
+        RequestTenantDeletionRequest request, ServerCallContext context)
+    {
+        ValidateInternalKey(context);
+
+        using IServiceScope scope = _scopeFactory.CreateScope();
+        ITenantRepository tenantRepo = scope.ServiceProvider.GetRequiredService<ITenantRepository>();
+        TenantDeletionHandler handler = scope.ServiceProvider.GetRequiredService<TenantDeletionHandler>();
+
+        // Unlike ResolveTenantByExternalIdAsync, this lookup does not filter on IsActive: a repeat
+        // request against an already-deactivated tenant must still resolve so it reaches the
+        // handler's double-delete guard instead of surfacing as a false NotFound.
+        Tenant tenant = await ResolveTenantByExternalIdIncludingInactiveAsync(
+            tenantRepo, request.TenantExternalId, context.CancellationToken);
+
+        TenantDeletionResult result = await handler.RequestDeletionAsync(
+            tenant.Id, request.RequestedByUserId, request.Reason, context.CancellationToken);
+
+        RequestTenantDeletionResponse response = new RequestTenantDeletionResponse
+        {
+            Success = result.Success,
+            Message = result.Message,
+        };
+        if (result.ScheduledPurgeAt.HasValue)
+        {
+            response.ScheduledPurgeAt = Timestamp.FromDateTimeOffset(result.ScheduledPurgeAt.Value);
+        }
+
+        return response;
+    }
+
+    /// <summary>Restores a tenant during its deletion grace window.</summary>
+    public override async Task<RestoreTenantResponse> RestoreTenant(
+        RestoreTenantRequest request, ServerCallContext context)
+    {
+        ValidateInternalKey(context);
+
+        using IServiceScope scope = _scopeFactory.CreateScope();
+        ITenantRepository tenantRepo = scope.ServiceProvider.GetRequiredService<ITenantRepository>();
+        TenantDeletionHandler handler = scope.ServiceProvider.GetRequiredService<TenantDeletionHandler>();
+
+        // A tenant being restored is, by definition, already deactivated, so this must resolve
+        // regardless of IsActive — the plain ResolveTenantByExternalIdAsync would always 404 here.
+        Tenant tenant = await ResolveTenantByExternalIdIncludingInactiveAsync(
+            tenantRepo, request.TenantExternalId, context.CancellationToken);
+
+        TenantDeletionResult result = await handler.RestoreAsync(
+            tenant.Id, request.RequestedByUserId, context.CancellationToken);
+
+        return new RestoreTenantResponse { Success = result.Success, Message = result.Message };
+    }
+
+    /// <summary>Lists tenant deletions for the admin panel.</summary>
+    public override async Task<ListTenantDeletionsResponse> ListTenantDeletions(
+        ListTenantDeletionsRequest request, ServerCallContext context)
+    {
+        ValidateInternalKey(context);
+
+        using IServiceScope scope = _scopeFactory.CreateScope();
+        ITenantDeletionRepository deletionRepo = scope.ServiceProvider.GetRequiredService<ITenantDeletionRepository>();
+
+        (int page, int pageSize) = SanitizePagination(request.Page, request.PageSize);
+        (List<TenantDeletion> deletions, int totalCount) = await deletionRepo.ListDeletionsAsync(
+            request.IncludeCompleted, (page - 1) * pageSize, pageSize, context.CancellationToken);
+
+        ListTenantDeletionsResponse response = new ListTenantDeletionsResponse { TotalCount = totalCount };
+        foreach (TenantDeletion d in deletions)
+        {
+            TenantDeletionRecord record = new TenantDeletionRecord
+            {
+                Id = d.Id,
+                TenantId = d.TenantId,
+                TenantExternalId = d.TenantExternalId,
+                TenantName = d.TenantName,
+                RequestedByUserId = d.RequestedByUserId,
+                RequestedAt = Timestamp.FromDateTimeOffset(d.RequestedAt),
+                ScheduledPurgeAt = Timestamp.FromDateTimeOffset(d.ScheduledPurgeAt),
+                Status = (int)d.Status,
+                Reason = d.Reason ?? string.Empty,
+            };
+            if (d.PurgedAt.HasValue)
+            {
+                record.PurgedAt = Timestamp.FromDateTimeOffset(d.PurgedAt.Value);
+            }
+
+            response.Deletions.Add(record);
+        }
+
+        return response;
+    }
+
     private void ValidateInternalKey(ServerCallContext context)
     {
         InternalApiKeyValidator.Validate(context, _internalApiOptions);
@@ -861,6 +953,27 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
         ITenantRepository tenantRepo, string externalId, CancellationToken cancellationToken)
     {
         Tenant? tenant = await tenantRepo.GetTenantByExternalIdAsync(externalId, cancellationToken);
+
+        if (tenant is null)
+        {
+            throw new RpcException(new Status(
+                StatusCode.NotFound,
+                $"Tenant not found for external ID: {externalId}"));
+        }
+
+        return tenant;
+    }
+
+    /// <summary>
+    /// Resolves a tenant by external ID for the tenant-deletion lifecycle, where the target tenant
+    /// may already be deactivated (a repeat deletion request or any restore). Unlike
+    /// <see cref="ResolveTenantByExternalIdAsync"/>, this does not treat a deactivated tenant as
+    /// not found.
+    /// </summary>
+    private static async Task<Tenant> ResolveTenantByExternalIdIncludingInactiveAsync(
+        ITenantRepository tenantRepo, string externalId, CancellationToken cancellationToken)
+    {
+        Tenant? tenant = await tenantRepo.GetTenantByExternalIdIncludingInactiveAsync(externalId, cancellationToken);
 
         if (tenant is null)
         {

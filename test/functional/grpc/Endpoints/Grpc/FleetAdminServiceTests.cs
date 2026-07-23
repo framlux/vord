@@ -6,6 +6,7 @@ using System.Net;
 using Framlux.FleetManagement.Database;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
+using Framlux.FleetManagement.Services.Core.Billing;
 using Framlux.FleetManagement.Test.Infrastructure;
 using Framlux.Vord.BillingGrpc;
 using Grpc.Core;
@@ -961,6 +962,396 @@ public sealed class FleetAdminServiceTests
 
         await Assert.That(exception).IsNotNull();
         await Assert.That(exception!.StatusCode).IsEqualTo(StatusCode.NotFound);
+    }
+
+    // ========== RequestTenantDeletion Tests ==========
+
+    [Test]
+    public async Task RequestTenantDeletion_ValidTenant_DeactivatesAndSchedulesPurge()
+    {
+        using FunctionalTestFactory factory = new();
+        factory.WithInternalApiKey("test-key");
+        using DatabaseContext db = factory.CreateDbContext();
+
+        string extId = $"ext-{Guid.NewGuid():N}";
+        int tenantId = await SeedTenantWithSubscription(db, extId, SubscriptionTier.Pro);
+        int userId = await SeedUser(db, "deleter", $"ext-u-{Guid.NewGuid():N}", AuthProviderType.GitHub);
+
+        using GrpcChannel channel = CreateChannel(factory);
+        FleetAdmin.FleetAdminClient client = new(channel);
+
+        DateTimeOffset beforeCall = DateTimeOffset.UtcNow;
+
+        RequestTenantDeletionResponse response = await client.RequestTenantDeletionAsync(
+            new RequestTenantDeletionRequest
+            {
+                TenantExternalId = extId,
+                RequestedByUserId = userId,
+                Reason = "customer offboarding",
+            },
+            Headers("test-key"));
+
+        await Assert.That(response.Success).IsTrue();
+
+        DateTimeOffset scheduledPurgeAt = response.ScheduledPurgeAt.ToDateTimeOffset();
+        DateTimeOffset expected = beforeCall.AddDays(30);
+        await Assert.That((scheduledPurgeAt - expected).Duration()).IsLessThan(TimeSpan.FromMinutes(1));
+
+        TenantDeletion? deletion = await db.TenantDeletions
+            .Where(d => d.TenantId == tenantId)
+            .FirstOrDefaultAsync();
+
+        await Assert.That(deletion).IsNotNull();
+        await Assert.That(deletion!.Status).IsEqualTo(TenantDeletionStatus.Deactivated);
+        await Assert.That(deletion.Reason).IsEqualTo("customer offboarding");
+
+        Tenant? tenant = await db.Tenants.Where(t => t.Id == tenantId).FirstOrDefaultAsync();
+        await Assert.That(tenant).IsNotNull();
+        await Assert.That(tenant!.IsActive).IsFalse();
+
+        List<AuditLogEntry> entries = await db.AuditLog
+            .Where(e => e.TenantId == tenantId && e.Action == AuditAction.TenantDeletionRequested)
+            .ToListAsync();
+
+        await Assert.That(entries.Count).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task RequestTenantDeletion_SecondCallForSameTenant_ReturnsFailure()
+    {
+        using FunctionalTestFactory factory = new();
+        factory.WithInternalApiKey("test-key");
+        using DatabaseContext db = factory.CreateDbContext();
+
+        string extId = $"ext-{Guid.NewGuid():N}";
+        int tenantId = await SeedTenantWithSubscription(db, extId, SubscriptionTier.Pro);
+        int userId = await SeedUser(db, "deleter2", $"ext-u-{Guid.NewGuid():N}", AuthProviderType.GitHub);
+
+        using GrpcChannel channel = CreateChannel(factory);
+        FleetAdmin.FleetAdminClient client = new(channel);
+
+        RequestTenantDeletionResponse first = await client.RequestTenantDeletionAsync(
+            new RequestTenantDeletionRequest { TenantExternalId = extId, RequestedByUserId = userId },
+            Headers("test-key"));
+
+        await Assert.That(first.Success).IsTrue();
+
+        RequestTenantDeletionResponse second = await client.RequestTenantDeletionAsync(
+            new RequestTenantDeletionRequest { TenantExternalId = extId, RequestedByUserId = userId },
+            Headers("test-key"));
+
+        await Assert.That(second.Success).IsFalse();
+
+        int deletionCount = (int)await db.TenantDeletions
+            .Where(d => d.TenantId == tenantId)
+            .CountAsync();
+
+        await Assert.That(deletionCount).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task RequestTenantDeletion_UnknownTenant_ThrowsNotFound()
+    {
+        using FunctionalTestFactory factory = new();
+        factory.WithInternalApiKey("test-key");
+        using GrpcChannel channel = CreateChannel(factory);
+        FleetAdmin.FleetAdminClient client = new(channel);
+
+        RpcException? exception = null;
+        try
+        {
+            await client.RequestTenantDeletionAsync(
+                new RequestTenantDeletionRequest { TenantExternalId = "does-not-exist", RequestedByUserId = 1 },
+                Headers("test-key"));
+        }
+        catch (RpcException ex)
+        {
+            exception = ex;
+        }
+
+        await Assert.That(exception).IsNotNull();
+        await Assert.That(exception!.StatusCode).IsEqualTo(StatusCode.NotFound);
+    }
+
+    [Test]
+    public async Task RequestTenantDeletion_MissingInternalKey_ThrowsUnauthenticated()
+    {
+        using FunctionalTestFactory factory = new();
+        factory.WithInternalApiKey("test-key");
+        using GrpcChannel channel = CreateChannel(factory);
+        FleetAdmin.FleetAdminClient client = new(channel);
+
+        RpcException? exception = null;
+        try
+        {
+            await client.RequestTenantDeletionAsync(
+                new RequestTenantDeletionRequest { TenantExternalId = "whatever", RequestedByUserId = 1 });
+        }
+        catch (RpcException ex)
+        {
+            exception = ex;
+        }
+
+        await Assert.That(exception).IsNotNull();
+        await Assert.That(exception!.StatusCode).IsEqualTo(StatusCode.Unauthenticated);
+    }
+
+    [Test]
+    public async Task RequestTenantDeletion_DeactivatesTenant_BlocksTelemetryIngest()
+    {
+        using FunctionalTestFactory factory = new();
+        factory.WithInternalApiKey("test-key");
+        using DatabaseContext db = factory.CreateDbContext();
+
+        string extId = $"ext-{Guid.NewGuid():N}";
+        int tenantId = await SeedTenantWithSubscription(db, extId, SubscriptionTier.Pro);
+        int userId = await SeedUser(db, "ingest-guard", $"ext-u-{Guid.NewGuid():N}", AuthProviderType.GitHub);
+
+        using GrpcChannel channel = CreateChannel(factory);
+        FleetAdmin.FleetAdminClient client = new(channel);
+
+        // Before deactivation, the tenant is ingest-eligible.
+        using (IServiceScope beforeScope = factory.Services.CreateScope())
+        {
+            ISubscriptionService beforeSubscriptionService = beforeScope.ServiceProvider.GetRequiredService<ISubscriptionService>();
+            await Assert.That(await beforeSubscriptionService.IsIngestEligibleAsync(tenantId, CancellationToken.None)).IsTrue();
+        }
+
+        RequestTenantDeletionResponse response = await client.RequestTenantDeletionAsync(
+            new RequestTenantDeletionRequest { TenantExternalId = extId, RequestedByUserId = userId },
+            Headers("test-key"));
+
+        await Assert.That(response.Success).IsTrue();
+
+        using IServiceScope afterScope = factory.Services.CreateScope();
+        ISubscriptionService afterSubscriptionService = afterScope.ServiceProvider.GetRequiredService<ISubscriptionService>();
+        await Assert.That(await afterSubscriptionService.IsIngestEligibleAsync(tenantId, CancellationToken.None)).IsFalse();
+    }
+
+    // ========== RestoreTenant Tests ==========
+
+    [Test]
+    public async Task RestoreTenant_DeactivatedTenant_RestoresAndReactivates()
+    {
+        using FunctionalTestFactory factory = new();
+        factory.WithInternalApiKey("test-key");
+        using DatabaseContext db = factory.CreateDbContext();
+
+        string extId = $"ext-{Guid.NewGuid():N}";
+        int tenantId = await SeedTenantWithSubscription(db, extId, SubscriptionTier.Pro);
+        int userId = await SeedUser(db, "restorer", $"ext-u-{Guid.NewGuid():N}", AuthProviderType.GitHub);
+
+        using GrpcChannel channel = CreateChannel(factory);
+        FleetAdmin.FleetAdminClient client = new(channel);
+
+        RequestTenantDeletionResponse requestResponse = await client.RequestTenantDeletionAsync(
+            new RequestTenantDeletionRequest { TenantExternalId = extId, RequestedByUserId = userId },
+            Headers("test-key"));
+
+        await Assert.That(requestResponse.Success).IsTrue();
+
+        RestoreTenantResponse restoreResponse = await client.RestoreTenantAsync(
+            new RestoreTenantRequest { TenantExternalId = extId, RequestedByUserId = userId },
+            Headers("test-key"));
+
+        await Assert.That(restoreResponse.Success).IsTrue();
+
+        Tenant? tenant = await db.Tenants.Where(t => t.Id == tenantId).FirstOrDefaultAsync();
+        await Assert.That(tenant).IsNotNull();
+        await Assert.That(tenant!.IsActive).IsTrue();
+
+        TenantDeletion? deletion = await db.TenantDeletions
+            .Where(d => d.TenantId == tenantId)
+            .FirstOrDefaultAsync();
+
+        await Assert.That(deletion).IsNotNull();
+        await Assert.That(deletion!.Status).IsEqualTo(TenantDeletionStatus.Restored);
+    }
+
+    [Test]
+    public async Task RestoreTenant_NoPendingDeletion_ReturnsFailure()
+    {
+        using FunctionalTestFactory factory = new();
+        factory.WithInternalApiKey("test-key");
+        using DatabaseContext db = factory.CreateDbContext();
+
+        string extId = $"ext-{Guid.NewGuid():N}";
+        await SeedTenantWithSubscription(db, extId, SubscriptionTier.Pro);
+
+        using GrpcChannel channel = CreateChannel(factory);
+        FleetAdmin.FleetAdminClient client = new(channel);
+
+        RestoreTenantResponse restoreResponse = await client.RestoreTenantAsync(
+            new RestoreTenantRequest { TenantExternalId = extId, RequestedByUserId = 1 },
+            Headers("test-key"));
+
+        await Assert.That(restoreResponse.Success).IsFalse();
+    }
+
+    [Test]
+    public async Task RestoreTenant_UnknownTenant_ThrowsNotFound()
+    {
+        using FunctionalTestFactory factory = new();
+        factory.WithInternalApiKey("test-key");
+        using GrpcChannel channel = CreateChannel(factory);
+        FleetAdmin.FleetAdminClient client = new(channel);
+
+        RpcException? exception = null;
+        try
+        {
+            await client.RestoreTenantAsync(
+                new RestoreTenantRequest { TenantExternalId = "does-not-exist", RequestedByUserId = 1 },
+                Headers("test-key"));
+        }
+        catch (RpcException ex)
+        {
+            exception = ex;
+        }
+
+        await Assert.That(exception).IsNotNull();
+        await Assert.That(exception!.StatusCode).IsEqualTo(StatusCode.NotFound);
+    }
+
+    [Test]
+    public async Task RestoreTenant_MissingInternalKey_ThrowsUnauthenticated()
+    {
+        using FunctionalTestFactory factory = new();
+        factory.WithInternalApiKey("test-key");
+        using GrpcChannel channel = CreateChannel(factory);
+        FleetAdmin.FleetAdminClient client = new(channel);
+
+        RpcException? exception = null;
+        try
+        {
+            await client.RestoreTenantAsync(
+                new RestoreTenantRequest { TenantExternalId = "whatever", RequestedByUserId = 1 });
+        }
+        catch (RpcException ex)
+        {
+            exception = ex;
+        }
+
+        await Assert.That(exception).IsNotNull();
+        await Assert.That(exception!.StatusCode).IsEqualTo(StatusCode.Unauthenticated);
+    }
+
+    // ========== ListTenantDeletions Tests ==========
+
+    [Test]
+    public async Task ListTenantDeletions_ExcludeCompleted_ReturnsOnlyDeactivated()
+    {
+        using FunctionalTestFactory factory = new();
+        factory.WithInternalApiKey("test-key");
+        using DatabaseContext db = factory.CreateDbContext();
+
+        string extActive = $"ext-{Guid.NewGuid():N}";
+        string extRestored = $"ext-{Guid.NewGuid():N}";
+        int tenantActive = await SeedTenantWithSubscription(db, extActive, SubscriptionTier.Pro);
+        int tenantRestored = await SeedTenantWithSubscription(db, extRestored, SubscriptionTier.Pro);
+        int userId = await SeedUser(db, "list-user", $"ext-u-{Guid.NewGuid():N}", AuthProviderType.GitHub);
+
+        using GrpcChannel channel = CreateChannel(factory);
+        FleetAdmin.FleetAdminClient client = new(channel);
+
+        await client.RequestTenantDeletionAsync(
+            new RequestTenantDeletionRequest { TenantExternalId = extActive, RequestedByUserId = userId, Reason = "still pending" },
+            Headers("test-key"));
+
+        await client.RequestTenantDeletionAsync(
+            new RequestTenantDeletionRequest { TenantExternalId = extRestored, RequestedByUserId = userId },
+            Headers("test-key"));
+        await client.RestoreTenantAsync(
+            new RestoreTenantRequest { TenantExternalId = extRestored, RequestedByUserId = userId },
+            Headers("test-key"));
+
+        ListTenantDeletionsResponse excludeCompleted = await client.ListTenantDeletionsAsync(
+            new ListTenantDeletionsRequest { IncludeCompleted = false, Page = 1, PageSize = 50 },
+            Headers("test-key"));
+
+        await Assert.That(excludeCompleted.Deletions.Count).IsEqualTo(1);
+        await Assert.That(excludeCompleted.Deletions[0].TenantExternalId).IsEqualTo(extActive);
+        await Assert.That(excludeCompleted.Deletions[0].TenantId).IsEqualTo(tenantActive);
+        await Assert.That(excludeCompleted.Deletions[0].Status).IsEqualTo((int)TenantDeletionStatus.Deactivated);
+        await Assert.That(excludeCompleted.Deletions[0].Reason).IsEqualTo("still pending");
+        await Assert.That(excludeCompleted.TotalCount).IsEqualTo(1);
+
+        ListTenantDeletionsResponse includeCompleted = await client.ListTenantDeletionsAsync(
+            new ListTenantDeletionsRequest { IncludeCompleted = true, Page = 1, PageSize = 50 },
+            Headers("test-key"));
+
+        await Assert.That(includeCompleted.TotalCount).IsEqualTo(2);
+
+        TenantDeletionRecord? restoredRecord = null;
+        foreach (TenantDeletionRecord record in includeCompleted.Deletions)
+        {
+            if (record.TenantId == tenantRestored)
+            {
+                restoredRecord = record;
+            }
+        }
+
+        await Assert.That(restoredRecord).IsNotNull();
+        await Assert.That(restoredRecord!.Status).IsEqualTo((int)TenantDeletionStatus.Restored);
+        await Assert.That(restoredRecord.Reason).IsEqualTo(string.Empty);
+    }
+
+    [Test]
+    public async Task ListTenantDeletions_Pagination_ReturnsRequestedPageAndTotalCount()
+    {
+        using FunctionalTestFactory factory = new();
+        factory.WithInternalApiKey("test-key");
+        using DatabaseContext db = factory.CreateDbContext();
+
+        int userId = await SeedUser(db, "page-user", $"ext-u-{Guid.NewGuid():N}", AuthProviderType.GitHub);
+
+        using GrpcChannel channel = CreateChannel(factory);
+        FleetAdmin.FleetAdminClient client = new(channel);
+
+        for (int i = 0; i < 3; i++)
+        {
+            string extId = $"ext-{Guid.NewGuid():N}";
+            await SeedTenantWithSubscription(db, extId, SubscriptionTier.Pro);
+            await client.RequestTenantDeletionAsync(
+                new RequestTenantDeletionRequest { TenantExternalId = extId, RequestedByUserId = userId },
+                Headers("test-key"));
+        }
+
+        ListTenantDeletionsResponse page1 = await client.ListTenantDeletionsAsync(
+            new ListTenantDeletionsRequest { IncludeCompleted = true, Page = 1, PageSize = 2 },
+            Headers("test-key"));
+
+        await Assert.That(page1.TotalCount).IsEqualTo(3);
+        await Assert.That(page1.Deletions.Count).IsEqualTo(2);
+
+        ListTenantDeletionsResponse page2 = await client.ListTenantDeletionsAsync(
+            new ListTenantDeletionsRequest { IncludeCompleted = true, Page = 2, PageSize = 2 },
+            Headers("test-key"));
+
+        await Assert.That(page2.TotalCount).IsEqualTo(3);
+        await Assert.That(page2.Deletions.Count).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task ListTenantDeletions_MissingInternalKey_ThrowsUnauthenticated()
+    {
+        using FunctionalTestFactory factory = new();
+        factory.WithInternalApiKey("test-key");
+        using GrpcChannel channel = CreateChannel(factory);
+        FleetAdmin.FleetAdminClient client = new(channel);
+
+        RpcException? exception = null;
+        try
+        {
+            await client.ListTenantDeletionsAsync(
+                new ListTenantDeletionsRequest { IncludeCompleted = true, Page = 1, PageSize = 10 });
+        }
+        catch (RpcException ex)
+        {
+            exception = ex;
+        }
+
+        await Assert.That(exception).IsNotNull();
+        await Assert.That(exception!.StatusCode).IsEqualTo(StatusCode.Unauthenticated);
     }
 
     // ========== Helpers ==========

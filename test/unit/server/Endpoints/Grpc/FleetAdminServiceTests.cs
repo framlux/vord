@@ -6,6 +6,8 @@ using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Server.Endpoints.Grpc;
+using Framlux.FleetManagement.Services.Core.Billing;
+using Framlux.FleetManagement.Services.Core.Handlers;
 using Framlux.FleetManagement.Services.Core.Infrastructure;
 using Framlux.FleetManagement.Services.Core.Options;
 using Framlux.FleetManagement.Services.Core.Security;
@@ -20,6 +22,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
+using Microsoft.Extensions.Time.Testing;
 using NSubstitute;
 using StackExchange.Redis;
 
@@ -1751,6 +1754,274 @@ public sealed class FleetAdminServiceTests
             Arg.Any<string>(),
             Arg.Any<bool>(),
             Arg.Any<CancellationToken>());
+    }
+
+    // ── RequestTenantDeletion / RestoreTenant / ListTenantDeletions ──
+
+    /// <summary>
+    /// Builds a real <see cref="TenantDeletionHandler"/> backed by substituted dependencies. The
+    /// handler is sealed, so it cannot itself be substituted — mirroring the existing
+    /// <c>RetentionReclassifyDispatcher</c> real-instance pattern used elsewhere in this file lets
+    /// these tests verify the RPC layer's request/response mapping without re-testing the handler's
+    /// own logic, which is covered by <c>TenantDeletionHandlerTests</c>.
+    /// </summary>
+    private static TenantDeletionHandler CreateTenantDeletionHandler(
+        ITenantRepository tenantRepo,
+        ITenantDeletionRepository deletionRepo,
+        DateTimeOffset now)
+    {
+        IAuditLogRepository auditLog = Substitute.For<IAuditLogRepository>();
+        IDatabaseTransaction transaction = Substitute.For<IDatabaseTransaction>();
+        IDatabaseTransactionProvider transactionProvider = Substitute.For<IDatabaseTransactionProvider>();
+        transactionProvider.BeginTransactionAsync(Arg.Any<CancellationToken>()).Returns(transaction);
+        IBillingApiClient billingApiClient = Substitute.For<IBillingApiClient>();
+        billingApiClient.CancelSubscriptionImmediateAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(true);
+        FakeTimeProvider timeProvider = new(now);
+
+        return new TenantDeletionHandler(
+            tenantRepo, deletionRepo, auditLog, transactionProvider, billingApiClient, timeProvider,
+            Substitute.For<ILogger<TenantDeletionHandler>>());
+    }
+
+    /// <summary>
+    /// RequestTenantDeletion resolves the tenant despite it not being pre-deactivated, delegates to the
+    /// handler, and maps a successful result's ScheduledPurgeAt onto the response.
+    /// </summary>
+    [Test]
+    public async Task RequestTenantDeletion_ValidRequest_ReturnsSuccessWithScheduledPurgeAt()
+    {
+        DateTimeOffset now = new(2026, 07, 23, 12, 0, 0, TimeSpan.Zero);
+        Tenant tenant = MakeTenant();
+
+        ITenantRepository tenantRepo = Substitute.For<ITenantRepository>();
+        tenantRepo.GetTenantByExternalIdIncludingInactiveAsync(TenantExternalId, Arg.Any<CancellationToken>())
+            .Returns(tenant);
+        tenantRepo.GetTenantByIdAsync(TenantInternalId, Arg.Any<CancellationToken>()).Returns(tenant);
+
+        ITenantDeletionRepository deletionRepo = Substitute.For<ITenantDeletionRepository>();
+        deletionRepo.GetActiveDeletionForTenantAsync(TenantInternalId, Arg.Any<CancellationToken>())
+            .Returns((TenantDeletion?)null);
+        deletionRepo.InsertDeletionAsync(Arg.Any<TenantDeletion>(), Arg.Any<CancellationToken>())
+            .Returns(callInfo => callInfo.Arg<TenantDeletion>());
+
+        TenantDeletionHandler handler = CreateTenantDeletionHandler(tenantRepo, deletionRepo, now);
+
+        IServiceScopeFactory scopeFactory = CreateScopeFactoryWithServices(new Dictionary<Type, object>
+        {
+            { typeof(ITenantRepository), tenantRepo },
+            { typeof(TenantDeletionHandler), handler }
+        });
+
+        FleetAdminService service = CreateFleetAdminService(scopeFactory);
+        ServerCallContext context = CreateContext();
+
+        RequestTenantDeletionResponse response = await service.RequestTenantDeletion(
+            new RequestTenantDeletionRequest
+            {
+                TenantExternalId = TenantExternalId,
+                RequestedByUserId = 3,
+                Reason = "test reason"
+            }, context);
+
+        await Assert.That(response.Success).IsTrue();
+        await Assert.That(response.Message).IsEqualTo("OK");
+        await Assert.That(response.ScheduledPurgeAt.ToDateTimeOffset()).IsEqualTo(now.AddDays(30));
+    }
+
+    /// <summary>
+    /// RequestTenantDeletion for an unknown external ID throws NotFound before reaching the handler.
+    /// </summary>
+    [Test]
+    public async Task RequestTenantDeletion_UnknownTenant_ThrowsNotFound()
+    {
+        ITenantRepository tenantRepo = Substitute.For<ITenantRepository>();
+        tenantRepo.GetTenantByExternalIdIncludingInactiveAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns((Tenant?)null);
+
+        // The handler is resolved from the scope before the tenant lookup runs, so it must be
+        // registered even though this test never reaches it.
+        TenantDeletionHandler handler = CreateTenantDeletionHandler(
+            tenantRepo, Substitute.For<ITenantDeletionRepository>(), DateTimeOffset.UtcNow);
+
+        IServiceScopeFactory scopeFactory = CreateScopeFactoryWithServices(new Dictionary<Type, object>
+        {
+            { typeof(ITenantRepository), tenantRepo },
+            { typeof(TenantDeletionHandler), handler }
+        });
+
+        FleetAdminService service = CreateFleetAdminService(scopeFactory);
+        ServerCallContext context = CreateContext();
+
+        RpcException? exception = await Assert.ThrowsAsync<RpcException>(
+            async () => await service.RequestTenantDeletion(
+                new RequestTenantDeletionRequest { TenantExternalId = "unknown", RequestedByUserId = 1 },
+                context));
+
+        await Assert.That(exception).IsNotNull();
+        await Assert.That(exception!.StatusCode).IsEqualTo(StatusCode.NotFound);
+    }
+
+    /// <summary>
+    /// RestoreTenant resolves a deactivated tenant (via the including-inactive lookup) and maps the
+    /// handler's successful result onto the response.
+    /// </summary>
+    [Test]
+    public async Task RestoreTenant_ValidRequest_ReturnsSuccess()
+    {
+        Tenant tenant = MakeTenant();
+        tenant.IsActive = false;
+
+        ITenantRepository tenantRepo = Substitute.For<ITenantRepository>();
+        tenantRepo.GetTenantByExternalIdIncludingInactiveAsync(TenantExternalId, Arg.Any<CancellationToken>())
+            .Returns(tenant);
+
+        TenantDeletion pendingDeletion = new TenantDeletion
+        {
+            Id = 5,
+            TenantId = TenantInternalId,
+            TenantExternalId = TenantExternalId,
+            TenantName = tenant.Name,
+            RequestedByUserId = 3,
+            RequestedAt = DateTimeOffset.UtcNow,
+            ScheduledPurgeAt = DateTimeOffset.UtcNow.AddDays(30),
+            Status = TenantDeletionStatus.Deactivated
+        };
+
+        ITenantDeletionRepository deletionRepo = Substitute.For<ITenantDeletionRepository>();
+        deletionRepo.GetActiveDeletionForTenantAsync(TenantInternalId, Arg.Any<CancellationToken>())
+            .Returns(pendingDeletion);
+
+        TenantDeletionHandler handler = CreateTenantDeletionHandler(tenantRepo, deletionRepo, DateTimeOffset.UtcNow);
+
+        IServiceScopeFactory scopeFactory = CreateScopeFactoryWithServices(new Dictionary<Type, object>
+        {
+            { typeof(ITenantRepository), tenantRepo },
+            { typeof(TenantDeletionHandler), handler }
+        });
+
+        FleetAdminService service = CreateFleetAdminService(scopeFactory);
+        ServerCallContext context = CreateContext();
+
+        RestoreTenantResponse response = await service.RestoreTenant(
+            new RestoreTenantRequest { TenantExternalId = TenantExternalId, RequestedByUserId = 3 }, context);
+
+        await Assert.That(response.Success).IsTrue();
+        await Assert.That(response.Message).IsEqualTo("OK");
+        await deletionRepo.Received(1).SetTenantActiveAsync(TenantInternalId, true, null, null, Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>
+    /// RestoreTenant for an unknown external ID throws NotFound before reaching the handler.
+    /// </summary>
+    [Test]
+    public async Task RestoreTenant_UnknownTenant_ThrowsNotFound()
+    {
+        ITenantRepository tenantRepo = Substitute.For<ITenantRepository>();
+        tenantRepo.GetTenantByExternalIdIncludingInactiveAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns((Tenant?)null);
+
+        // The handler is resolved from the scope before the tenant lookup runs, so it must be
+        // registered even though this test never reaches it.
+        TenantDeletionHandler handler = CreateTenantDeletionHandler(
+            tenantRepo, Substitute.For<ITenantDeletionRepository>(), DateTimeOffset.UtcNow);
+
+        IServiceScopeFactory scopeFactory = CreateScopeFactoryWithServices(new Dictionary<Type, object>
+        {
+            { typeof(ITenantRepository), tenantRepo },
+            { typeof(TenantDeletionHandler), handler }
+        });
+
+        FleetAdminService service = CreateFleetAdminService(scopeFactory);
+        ServerCallContext context = CreateContext();
+
+        RpcException? exception = await Assert.ThrowsAsync<RpcException>(
+            async () => await service.RestoreTenant(
+                new RestoreTenantRequest { TenantExternalId = "unknown", RequestedByUserId = 1 },
+                context));
+
+        await Assert.That(exception).IsNotNull();
+        await Assert.That(exception!.StatusCode).IsEqualTo(StatusCode.NotFound);
+    }
+
+    /// <summary>
+    /// ListTenantDeletions maps every field, including the optional PurgedAt (set) and Reason
+    /// (defaulted to empty string when null), and passes through the total count.
+    /// </summary>
+    [Test]
+    public async Task ListTenantDeletions_MapsAllFieldsIncludingOptionalPurgedAt()
+    {
+        DateTimeOffset requestedAt = new(2026, 06, 01, 0, 0, 0, TimeSpan.Zero);
+        DateTimeOffset scheduledPurgeAt = requestedAt.AddDays(30);
+        DateTimeOffset purgedAt = scheduledPurgeAt.AddMinutes(5);
+
+        TenantDeletion purged = new TenantDeletion
+        {
+            Id = 1,
+            TenantId = TenantInternalId,
+            TenantExternalId = TenantExternalId,
+            TenantName = "Test Corp",
+            RequestedByUserId = 3,
+            RequestedAt = requestedAt,
+            ScheduledPurgeAt = scheduledPurgeAt,
+            Status = TenantDeletionStatus.Purged,
+            PurgedAt = purgedAt,
+            Reason = null
+        };
+
+        ITenantDeletionRepository deletionRepo = Substitute.For<ITenantDeletionRepository>();
+        deletionRepo.ListDeletionsAsync(true, 0, 50, Arg.Any<CancellationToken>())
+            .Returns((new List<TenantDeletion> { purged }, 1));
+
+        IServiceScopeFactory scopeFactory = CreateScopeFactoryWithServices(new Dictionary<Type, object>
+        {
+            { typeof(ITenantDeletionRepository), deletionRepo }
+        });
+
+        FleetAdminService service = CreateFleetAdminService(scopeFactory);
+        ServerCallContext context = CreateContext();
+
+        ListTenantDeletionsResponse response = await service.ListTenantDeletions(
+            new ListTenantDeletionsRequest { IncludeCompleted = true, Page = 1, PageSize = 50 }, context);
+
+        await Assert.That(response.TotalCount).IsEqualTo(1);
+        await Assert.That(response.Deletions.Count).IsEqualTo(1);
+
+        TenantDeletionRecord record = response.Deletions[0];
+        await Assert.That(record.Id).IsEqualTo(1);
+        await Assert.That(record.TenantId).IsEqualTo(TenantInternalId);
+        await Assert.That(record.TenantExternalId).IsEqualTo(TenantExternalId);
+        await Assert.That(record.TenantName).IsEqualTo("Test Corp");
+        await Assert.That(record.RequestedByUserId).IsEqualTo(3);
+        await Assert.That(record.Status).IsEqualTo((int)TenantDeletionStatus.Purged);
+        await Assert.That(record.Reason).IsEqualTo(string.Empty);
+        await Assert.That(record.PurgedAt.ToDateTimeOffset()).IsEqualTo(purgedAt);
+    }
+
+    /// <summary>
+    /// ListTenantDeletions passes IncludeCompleted through to the repository and sanitizes pagination
+    /// the same way the other list RPCs do.
+    /// </summary>
+    [Test]
+    public async Task ListTenantDeletions_ExcludeCompleted_PassesFlagAndPaginationThrough()
+    {
+        ITenantDeletionRepository deletionRepo = Substitute.For<ITenantDeletionRepository>();
+        deletionRepo.ListDeletionsAsync(false, 20, 10, Arg.Any<CancellationToken>())
+            .Returns((new List<TenantDeletion>(), 0));
+
+        IServiceScopeFactory scopeFactory = CreateScopeFactoryWithServices(new Dictionary<Type, object>
+        {
+            { typeof(ITenantDeletionRepository), deletionRepo }
+        });
+
+        FleetAdminService service = CreateFleetAdminService(scopeFactory);
+        ServerCallContext context = CreateContext();
+
+        ListTenantDeletionsResponse response = await service.ListTenantDeletions(
+            new ListTenantDeletionsRequest { IncludeCompleted = false, Page = 3, PageSize = 10 }, context);
+
+        await Assert.That(response.TotalCount).IsEqualTo(0);
+        await deletionRepo.Received(1).ListDeletionsAsync(false, 20, 10, Arg.Any<CancellationToken>());
     }
 
     // ── MapBillingTierToSubscriptionTier ──

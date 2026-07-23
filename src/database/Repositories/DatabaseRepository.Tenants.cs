@@ -82,6 +82,29 @@ public partial class DatabaseRepository : ITenantRepository
     }
 
     /// <inheritdoc/>
+    public async Task<Tenant?> GetTenantByExternalIdIncludingInactiveAsync(string externalId, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(externalId);
+
+        Tenant? tenant = null;
+
+        try
+        {
+            _logger.LogDebug("Retrieving tenant (including inactive) by external ID {ExternalId}", externalId);
+            tenant = await _db.Tenants
+                .Where(t => t.ExternalId == externalId)
+                .FirstOrDefaultAsync(cancellationToken);
+            _logger.LogInformation("Successfully retrieved tenant (including inactive) by external ID {ExternalId}", externalId);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "An error occurred while retrieving tenant (including inactive) by external ID {ExternalId}", externalId);
+        }
+
+        return tenant;
+    }
+
+    /// <inheritdoc/>
     public async Task<Tenant?> GetTenantByIdAsync(int tenantId, CancellationToken cancellationToken)
     {
         Tenant? tenant = null;
