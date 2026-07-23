@@ -12,6 +12,7 @@ using Framlux.FleetManagement.Services.Core.DataExport;
 using Framlux.FleetManagement.Services.Core.Handlers;
 using Framlux.FleetManagement.Services.Core.Hangfire;
 using Framlux.FleetManagement.Services.Core.Infrastructure;
+using Framlux.FleetManagement.Services.Core.Jobs;
 using Framlux.FleetManagement.Services.Core.Machines;
 using Framlux.FleetManagement.Services.Core.Notifications;
 using Framlux.FleetManagement.Services.Core.Options;
@@ -359,6 +360,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<AlertConditionStateCleanupJob>();
         services.AddScoped<IntegrationDeliveryJob>();
         services.AddScoped<SendInvitationEmailJob>();
+        services.AddScoped<TenantPurgeJob>();
 
         if (objectStorageEnabled)
         {

@@ -38,6 +38,9 @@ public static class RecurringJobIds
     /// <summary>DataExportCleanupJob (object-storage-gated).</summary>
     public const string DataExportCleanup = "data-export-cleanup";
 
+    /// <summary>TenantPurgeJob.</summary>
+    public const string TenantPurge = "tenant-purge";
+
     /// <summary>Every id, in registration order. Used by audit tests to lock the surface.</summary>
     public static IReadOnlyList<string> All { get; } = new[]
     {
@@ -50,5 +53,6 @@ public static class RecurringJobIds
         StripeSync,
         DataExportProcessing,
         DataExportCleanup,
+        TenantPurge,
     };
 }

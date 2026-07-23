@@ -22,7 +22,7 @@ public sealed class RecurringJobRegistryTests
     [Test]
     public async Task RegisterAll_AlwaysEnabledJobs_AreRegisteredWithExactCronExpressions()
     {
-        // Intent: the five always-on jobs must be present regardless of optional feature flags.
+        // Intent: the six always-on jobs must be present regardless of optional feature flags.
         // Their cron expressions are the production contract — verifying them by exact match
         // catches both renames and schedule drift.
         IRecurringJobManager mgr = Substitute.For<IRecurringJobManager>();
@@ -36,6 +36,7 @@ public sealed class RecurringJobRegistryTests
             ReceivedAddOrUpdate(mgr, "health-sweep-coordinator", "* * * * *");
             ReceivedAddOrUpdate(mgr, "alert-evaluation", "* * * * *");
             ReceivedAddOrUpdate(mgr, "alert-condition-state-cleanup", "17 2 * * *");
+            ReceivedAddOrUpdate(mgr, "tenant-purge", "23 * * * *");
         }).ThrowsNothing();
     }
 
@@ -112,7 +113,7 @@ public sealed class RecurringJobRegistryTests
     }
 
     [Test]
-    public async Task RegisterAll_AllFeaturesEnabled_RegistersExactNineJobs()
+    public async Task RegisterAll_AllFeaturesEnabled_RegistersExactTenJobs()
     {
         // Intent: pin the total job count when all feature flags are on. A new job added without
         // updating this test should force the developer to also update the pin — surfacing a
@@ -123,7 +124,7 @@ public sealed class RecurringJobRegistryTests
 
         await Assert.That(() =>
         {
-            mgr.Received(9).AddOrUpdate(
+            mgr.Received(10).AddOrUpdate(
                 Arg.Any<string>(),
                 Arg.Any<Job>(),
                 Arg.Any<string>(),

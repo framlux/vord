@@ -7,6 +7,7 @@ using Framlux.FleetManagement.Services.Core.Billing;
 using Framlux.FleetManagement.Services.Core.Commands;
 using Framlux.FleetManagement.Services.Core.DataExport;
 using Framlux.FleetManagement.Services.Core.Infrastructure;
+using Framlux.FleetManagement.Services.Core.Jobs;
 using Framlux.FleetManagement.Services.Core.Machines;
 using Hangfire;
 
@@ -61,6 +62,13 @@ public static class RecurringJobRegistry
             RecurringJobIds.AlertConditionStateCleanup,
             job => job.RunAsync(CancellationToken.None),
             "17 2 * * *");
+
+        // Phase-2 tenant purge is not billing- or storage-gated: when billing is disabled the
+        // NoOpBillingApiClient reports success so purges still complete.
+        recurringJobs.AddOrUpdate<TenantPurgeJob>(
+            RecurringJobIds.TenantPurge,
+            job => job.RunAsync(CancellationToken.None),
+            "23 * * * *");
 
         if (billingEnabled)
         {
