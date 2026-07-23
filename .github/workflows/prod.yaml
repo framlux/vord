@@ -9,6 +9,47 @@ env:
   SOLUTION: machine-info.slnx
 
 jobs:
+  # Guards that deployment/agent/install.sh and the published copy served from
+  # vord-internal's marketing app (src/marketing/static/install.sh, off vord-internal's `prod`
+  # branch — the branch that actually deploys the marketing container) haven't drifted apart.
+  #
+  # Deliberately has NO `needs:` relationship with build-test-package in either direction: this
+  # check must never be able to block or slow down a real release. If VORD_INTERNAL_REPO_TOKEN
+  # (a PAT/fine-grained token scoped to read framlux/vord-internal) isn't configured yet, the
+  # whole job is skipped via the `if:` below rather than failing — an unconfigured secret must
+  # never turn an unrelated push red. Once the secret exists, this job goes red only on an
+  # actual divergence between the two files.
+  check-install-script-sync:
+    runs-on: ubuntu-latest
+    if: ${{ secrets.VORD_INTERNAL_REPO_TOKEN != '' }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
+        with:
+          sparse-checkout: |
+            deployment/agent/install.sh
+          sparse-checkout-cone-mode: false
+
+      - name: Check out the published copy (vord-internal, prod branch)
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
+        with:
+          repository: framlux/vord-internal
+          ref: prod
+          token: ${{ secrets.VORD_INTERNAL_REPO_TOKEN }}
+          path: vord-internal-install-sync
+          sparse-checkout: |
+            src/marketing/static/install.sh
+          sparse-checkout-cone-mode: false
+
+      - name: Diff install.sh against the published copy
+        run: |
+          set -euo pipefail
+          if ! diff -u deployment/agent/install.sh vord-internal-install-sync/src/marketing/static/install.sh; then
+            echo "::error::deployment/agent/install.sh has drifted from vord-internal's src/marketing/static/install.sh (prod branch). Update the marketing copy in the same change."
+            exit 1
+          fi
+
   build-test-package:
     runs-on: ubuntu-latest
     permissions:
@@ -46,29 +87,6 @@ jobs:
 
       - name: Authenticate GitHub Packages
         run: dotnet nuget update source framlux --username ${{ github.actor }} --password ${{ secrets.GITHUB_TOKEN }} --store-password-in-clear-text
-
-      - name: Check install.sh is in sync with the published copy
-        # The one-touch install one-liner is served from vord-internal's marketing
-        # app off a static copy of this file. That copy cannot drift silently, so
-        # pull it down and diff before anything else runs.
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
-        with:
-          repository: framlux/vord-internal
-          ref: main
-          token: ${{ secrets.VORD_INTERNAL_REPO_TOKEN }}
-          path: vord-internal-install-sync
-          sparse-checkout: |
-            src/marketing/static/install.sh
-          sparse-checkout-cone-mode: false
-
-      - name: Diff install.sh against the published copy
-        run: |
-          set -euo pipefail
-          if ! diff -u deployment/agent/install.sh vord-internal-install-sync/src/marketing/static/install.sh; then
-            echo "::error::deployment/agent/install.sh has drifted from vord-internal's src/marketing/static/install.sh. Update the marketing copy in the same change."
-            exit 1
-          fi
-          rm -rf vord-internal-install-sync
 
       - name: Restore
         run: dotnet restore "$SOLUTION"
