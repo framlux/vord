@@ -131,6 +131,60 @@ public sealed class BillingApiClient : IBillingApiClient
     }
 
     /// <inheritdoc/>
+    public async Task<bool> CancelSubscriptionImmediateAsync(string tenantExternalId, CancellationToken ct)
+    {
+        try
+        {
+            CancelSubscriptionImmediateResponse response = await _grpcClient.CancelSubscriptionImmediateAsync(
+                new CancelSubscriptionImmediateRequest { TenantExternalId = tenantExternalId },
+                deadline: DateTime.UtcNow.Add(GrpcDeadline),
+                cancellationToken: ct);
+
+            if (response.Success == false)
+            {
+                _logger.LogWarning(
+                    "Failed to immediately cancel subscription for tenant {TenantExternalId}: {Message}",
+                    tenantExternalId, response.Message);
+            }
+
+            return response.Success;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error immediately canceling subscription for tenant {TenantExternalId}", tenantExternalId);
+
+            return false;
+        }
+    }
+
+    /// <inheritdoc/>
+    public async Task<bool> DeleteCustomerAsync(string tenantExternalId, CancellationToken ct)
+    {
+        try
+        {
+            DeleteCustomerResponse response = await _grpcClient.DeleteCustomerAsync(
+                new DeleteCustomerRequest { TenantExternalId = tenantExternalId },
+                deadline: DateTime.UtcNow.Add(GrpcDeadline),
+                cancellationToken: ct);
+
+            if (response.Success == false)
+            {
+                _logger.LogWarning(
+                    "Failed to delete billing customer for tenant {TenantExternalId}: {Message}",
+                    tenantExternalId, response.Message);
+            }
+
+            return response.Success;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error deleting billing customer for tenant {TenantExternalId}", tenantExternalId);
+
+            return false;
+        }
+    }
+
+    /// <inheritdoc/>
     public async Task<StripeSubscriptionStatus> GetSubscriptionStatusAsync(
         string tenantExternalId, CancellationToken ct)
     {

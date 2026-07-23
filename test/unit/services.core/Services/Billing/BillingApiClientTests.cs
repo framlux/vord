@@ -801,4 +801,110 @@ public sealed class BillingApiClientTests
 
         await Assert.That(result.Interval).IsEqualTo(BillingInterval.Annual);
     }
+
+    // --- CancelSubscriptionImmediateAsync ---
+
+    [Test]
+    public async Task CancelSubscriptionImmediateAsync_ReturnsTrueOnSuccess()
+    {
+        (BillingApiClient client, BillingManagement.BillingManagementClient grpc, ILogger<BillingApiClient> _) = CreateSut();
+        grpc.CancelSubscriptionImmediateAsync(
+                Arg.Any<CancelSubscriptionImmediateRequest>(), Arg.Any<Metadata>(), Arg.Any<DateTime?>(), Arg.Any<CancellationToken>())
+            .Returns(CreateAsyncCall(new CancelSubscriptionImmediateResponse { Success = true }));
+
+        bool result = await client.CancelSubscriptionImmediateAsync("tenant-ext-1", CancellationToken.None);
+
+        await Assert.That(result).IsTrue();
+    }
+
+    [Test]
+    public async Task CancelSubscriptionImmediateAsync_ReturnsFalseAndLogsWarningOnFailureResponse()
+    {
+        (BillingApiClient client, BillingManagement.BillingManagementClient grpc, ILogger<BillingApiClient> logger) = CreateSut();
+        grpc.CancelSubscriptionImmediateAsync(
+                Arg.Any<CancelSubscriptionImmediateRequest>(), Arg.Any<Metadata>(), Arg.Any<DateTime?>(), Arg.Any<CancellationToken>())
+            .Returns(CreateAsyncCall(new CancelSubscriptionImmediateResponse { Success = false, Message = "error" }));
+
+        bool result = await client.CancelSubscriptionImmediateAsync("tenant-ext-1", CancellationToken.None);
+
+        await Assert.That(result).IsFalse();
+        logger.Received().Log(
+            LogLevel.Warning,
+            Arg.Any<EventId>(),
+            Arg.Any<object>(),
+            Arg.Any<Exception>(),
+            Arg.Any<Func<object, Exception?, string>>());
+    }
+
+    [Test]
+    public async Task CancelSubscriptionImmediateAsync_ReturnsFalseAndLogsErrorOnRpcException()
+    {
+        (BillingApiClient client, BillingManagement.BillingManagementClient grpc, ILogger<BillingApiClient> logger) = CreateSut();
+        grpc.CancelSubscriptionImmediateAsync(
+                Arg.Any<CancelSubscriptionImmediateRequest>(), Arg.Any<Metadata>(), Arg.Any<DateTime?>(), Arg.Any<CancellationToken>())
+            .Returns(CreateFaultedCall<CancelSubscriptionImmediateResponse>(new RpcException(new Status(StatusCode.Unavailable, "down"))));
+
+        bool result = await client.CancelSubscriptionImmediateAsync("tenant-ext-1", CancellationToken.None);
+
+        await Assert.That(result).IsFalse();
+        logger.Received().Log(
+            LogLevel.Error,
+            Arg.Any<EventId>(),
+            Arg.Any<object>(),
+            Arg.Any<Exception>(),
+            Arg.Any<Func<object, Exception?, string>>());
+    }
+
+    // --- DeleteCustomerAsync ---
+
+    [Test]
+    public async Task DeleteCustomerAsync_ReturnsTrueOnSuccess()
+    {
+        (BillingApiClient client, BillingManagement.BillingManagementClient grpc, ILogger<BillingApiClient> _) = CreateSut();
+        grpc.DeleteCustomerAsync(
+                Arg.Any<DeleteCustomerRequest>(), Arg.Any<Metadata>(), Arg.Any<DateTime?>(), Arg.Any<CancellationToken>())
+            .Returns(CreateAsyncCall(new DeleteCustomerResponse { Success = true }));
+
+        bool result = await client.DeleteCustomerAsync("tenant-ext-1", CancellationToken.None);
+
+        await Assert.That(result).IsTrue();
+    }
+
+    [Test]
+    public async Task DeleteCustomerAsync_ReturnsFalseAndLogsWarningOnFailureResponse()
+    {
+        (BillingApiClient client, BillingManagement.BillingManagementClient grpc, ILogger<BillingApiClient> logger) = CreateSut();
+        grpc.DeleteCustomerAsync(
+                Arg.Any<DeleteCustomerRequest>(), Arg.Any<Metadata>(), Arg.Any<DateTime?>(), Arg.Any<CancellationToken>())
+            .Returns(CreateAsyncCall(new DeleteCustomerResponse { Success = false, Message = "no customer" }));
+
+        bool result = await client.DeleteCustomerAsync("tenant-ext-1", CancellationToken.None);
+
+        await Assert.That(result).IsFalse();
+        logger.Received().Log(
+            LogLevel.Warning,
+            Arg.Any<EventId>(),
+            Arg.Any<object>(),
+            Arg.Any<Exception>(),
+            Arg.Any<Func<object, Exception?, string>>());
+    }
+
+    [Test]
+    public async Task DeleteCustomerAsync_ReturnsFalseAndLogsErrorOnRpcException()
+    {
+        (BillingApiClient client, BillingManagement.BillingManagementClient grpc, ILogger<BillingApiClient> logger) = CreateSut();
+        grpc.DeleteCustomerAsync(
+                Arg.Any<DeleteCustomerRequest>(), Arg.Any<Metadata>(), Arg.Any<DateTime?>(), Arg.Any<CancellationToken>())
+            .Returns(CreateFaultedCall<DeleteCustomerResponse>(new RpcException(new Status(StatusCode.Unavailable, "down"))));
+
+        bool result = await client.DeleteCustomerAsync("tenant-ext-1", CancellationToken.None);
+
+        await Assert.That(result).IsFalse();
+        logger.Received().Log(
+            LogLevel.Error,
+            Arg.Any<EventId>(),
+            Arg.Any<object>(),
+            Arg.Any<Exception>(),
+            Arg.Any<Func<object, Exception?, string>>());
+    }
 }

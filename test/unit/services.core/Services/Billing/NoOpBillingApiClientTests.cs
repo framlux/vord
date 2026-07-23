@@ -97,4 +97,20 @@ public sealed class NoOpBillingApiClientTests
 
         await Assert.That(result).Count().IsEqualTo(0);
     }
+
+    [Test]
+    public async Task CancelSubscriptionImmediateAsync_AlwaysReturnsTrue()
+    {
+        bool result = await _client.CancelSubscriptionImmediateAsync("tenant-123", CancellationToken.None);
+
+        await Assert.That(result).IsTrue();
+    }
+
+    [Test]
+    public async Task DeleteCustomerAsync_AlwaysReturnsTrue()
+    {
+        bool result = await _client.DeleteCustomerAsync("tenant-123", CancellationToken.None);
+
+        await Assert.That(result).IsTrue();
+    }
 }

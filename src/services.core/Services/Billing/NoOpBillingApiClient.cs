@@ -64,4 +64,16 @@ public sealed class NoOpBillingApiClient : IBillingApiClient
     {
         return Task.FromResult<List<CatalogItemResult>>([]);
     }
+
+    /// <inheritdoc/>
+    public Task<bool> CancelSubscriptionImmediateAsync(string tenantExternalId, CancellationToken ct)
+    {
+        return Task.FromResult(true);
+    }
+
+    /// <inheritdoc/>
+    public Task<bool> DeleteCustomerAsync(string tenantExternalId, CancellationToken ct)
+    {
+        return Task.FromResult(true);
+    }
 }

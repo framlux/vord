@@ -80,4 +80,20 @@ public interface IBillingApiClient
     /// <param name="ct">Cancellation token.</param>
     /// <returns>The catalog entries, or an empty list on error.</returns>
     Task<List<CatalogItemResult>> GetPublicCatalogAsync(CancellationToken ct);
+
+    /// <summary>
+    /// Immediately cancels a subscription in Stripe, without waiting for the current billing period to end.
+    /// </summary>
+    /// <param name="tenantExternalId">The tenant external ID.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>True if the cancellation was successful.</returns>
+    Task<bool> CancelSubscriptionImmediateAsync(string tenantExternalId, CancellationToken ct);
+
+    /// <summary>
+    /// Deletes the billing customer record for a tenant in Stripe.
+    /// </summary>
+    /// <param name="tenantExternalId">The tenant external ID.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>True if the deletion was successful.</returns>
+    Task<bool> DeleteCustomerAsync(string tenantExternalId, CancellationToken ct);
 }
