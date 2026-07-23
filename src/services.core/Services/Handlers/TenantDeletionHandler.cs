@@ -102,6 +102,13 @@ public sealed class TenantDeletionHandler
         DateTimeOffset now = _timeProvider.GetUtcNow();
         DateTimeOffset scheduledPurgeAt = ComputeScheduledPurge(now);
 
+        // Admin-panel operators authenticate via a separate scheme with no fleet-side Users row, so the
+        // billing-api proxy passes 0 as a sentinel for "external admin operator". That value must never
+        // land in a Users FK column; null it out here and rely on the billing-api audit trail to record
+        // the operator's real identity. The raw value is still preserved on the non-FK
+        // TenantDeletions.RequestedByUserId column for record-keeping.
+        int? operatorUserId = requestedByUserId > 0 ? requestedByUserId : null;
+
         using IDatabaseTransaction transaction = await _transactionProvider.BeginTransactionAsync(ct);
 
         await _deletionRepo.InsertDeletionAsync(new TenantDeletion
@@ -116,11 +123,11 @@ public sealed class TenantDeletionHandler
             Reason = string.IsNullOrWhiteSpace(reason) ? null : reason,
         }, ct);
 
-        await _deletionRepo.SetTenantActiveAsync(tenantId, false, requestedByUserId, now, ct);
+        await _deletionRepo.SetTenantActiveAsync(tenantId, false, operatorUserId, now, ct);
 
         await _auditLog.InsertAuditLogAsync(AuditHelper.Create(
             tenantId: tenantId,
-            userId: requestedByUserId,
+            userId: operatorUserId,
             machineId: null,
             AuditAction.TenantDeletionRequested,
             AuditResourceType.Tenant,
@@ -164,6 +171,11 @@ public sealed class TenantDeletionHandler
             return new TenantDeletionResult(false, "Tenant has already been purged and cannot be restored", null);
         }
 
+        // Admin-panel operators have no fleet-side Users row, so 0 is a sentinel for "external admin
+        // operator" here too; null it out of the audit's FK column and let the billing-api audit trail
+        // carry the operator's real identity.
+        int? operatorUserId = requestedByUserId > 0 ? requestedByUserId : null;
+
         using IDatabaseTransaction transaction = await _transactionProvider.BeginTransactionAsync(ct);
 
         await _deletionRepo.UpdateDeletionStatusAsync(deletion.Id, TenantDeletionStatus.Restored, null, ct);
@@ -171,7 +183,7 @@ public sealed class TenantDeletionHandler
 
         await _auditLog.InsertAuditLogAsync(AuditHelper.Create(
             tenantId: tenantId,
-            userId: requestedByUserId,
+            userId: operatorUserId,
             machineId: null,
             AuditAction.TenantRestored,
             AuditResourceType.Tenant,

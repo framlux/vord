@@ -211,6 +211,41 @@ public class TenantDeletionHandlerTests
         await deletionRepo.Received(1).InsertDeletionAsync(Arg.Any<TenantDeletion>(), Arg.Any<CancellationToken>());
     }
 
+    [Test]
+    public async Task RequestDeletionAsync_RequestedByUserIdIsZero_NullsFkColumnsButKeepsRawValueOnDeletionRow()
+    {
+        Tenant tenant = TestDataBuilder.BuildTenant(name: "Admin Corp", externalId: "ext-admin");
+        tenant.Id = 8;
+        ITenantRepository tenantRepo = Substitute.For<ITenantRepository>();
+        tenantRepo.GetTenantByIdAsync(8, Arg.Any<CancellationToken>()).Returns(Task.FromResult<Tenant?>(tenant));
+
+        ITenantDeletionRepository deletionRepo = Substitute.For<ITenantDeletionRepository>();
+        deletionRepo.GetActiveDeletionForTenantAsync(8, Arg.Any<CancellationToken>()).Returns(Task.FromResult<TenantDeletion?>(null));
+        deletionRepo.InsertDeletionAsync(Arg.Any<TenantDeletion>(), Arg.Any<CancellationToken>())
+            .Returns(callInfo => Task.FromResult(callInfo.Arg<TenantDeletion>()));
+
+        (IDatabaseTransactionProvider transactionProvider, IAuditLogRepository auditLog) = CreateMockTransactionAndAudit();
+
+        IBillingApiClient billingApiClient = Substitute.For<IBillingApiClient>();
+        billingApiClient.CancelSubscriptionImmediateAsync("ext-admin", Arg.Any<CancellationToken>()).Returns(Task.FromResult(true));
+
+        FakeTimeProvider timeProvider = new(FixedNow);
+        TenantDeletionHandler handler = new(
+            tenantRepo, deletionRepo, auditLog, transactionProvider, billingApiClient, timeProvider,
+            Substitute.For<ILogger<TenantDeletionHandler>>());
+
+        TenantDeletionResult result = await handler.RequestDeletionAsync(8, 0, "admin panel deletion", CancellationToken.None);
+
+        await Assert.That(result.Success).IsTrue();
+        await deletionRepo.Received(1).InsertDeletionAsync(
+            Arg.Is<TenantDeletion>(d => d.RequestedByUserId == 0),
+            Arg.Any<CancellationToken>());
+        await deletionRepo.Received(1).SetTenantActiveAsync(8, false, Arg.Is<int?>(id => id == null), FixedNow, Arg.Any<CancellationToken>());
+        await auditLog.Received(1).InsertAuditLogAsync(
+            Arg.Is<AuditLogEntry>(e => (e.Action == AuditAction.TenantDeletionRequested) && (e.UserId == null)),
+            Arg.Any<CancellationToken>());
+    }
+
     // ========== RestoreAsync ==========
 
     [Test]
@@ -242,6 +277,36 @@ public class TenantDeletionHandlerTests
         await deletionRepo.Received(1).SetTenantActiveAsync(4, true, null, null, Arg.Any<CancellationToken>());
         await auditLog.Received(1).InsertAuditLogAsync(
             Arg.Is<AuditLogEntry>(e => (e.Action == AuditAction.TenantRestored) && (e.TenantId == 4)),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task RestoreAsync_RequestedByUserIdIsZero_NullsAuditFkColumn()
+    {
+        TenantDeletion deletion = new()
+        {
+            Id = 13,
+            TenantId = 4,
+            TenantExternalId = "ext-r",
+            TenantName = "Restore Corp",
+            RequestedByUserId = 1,
+            RequestedAt = FixedNow,
+            ScheduledPurgeAt = FixedNow.AddDays(30),
+            Status = TenantDeletionStatus.Deactivated,
+        };
+
+        ITenantDeletionRepository deletionRepo = Substitute.For<ITenantDeletionRepository>();
+        deletionRepo.GetActiveDeletionForTenantAsync(4, Arg.Any<CancellationToken>()).Returns(Task.FromResult<TenantDeletion?>(deletion));
+
+        (IDatabaseTransactionProvider transactionProvider, IAuditLogRepository auditLog) = CreateMockTransactionAndAudit();
+
+        TenantDeletionHandler handler = BuildHandler(deletionRepo: deletionRepo, transactionProvider: transactionProvider, auditLog: auditLog);
+
+        TenantDeletionResult result = await handler.RestoreAsync(4, 0, CancellationToken.None);
+
+        await Assert.That(result.Success).IsTrue();
+        await auditLog.Received(1).InsertAuditLogAsync(
+            Arg.Is<AuditLogEntry>(e => (e.Action == AuditAction.TenantRestored) && (e.UserId == null)),
             Arg.Any<CancellationToken>());
     }
 
