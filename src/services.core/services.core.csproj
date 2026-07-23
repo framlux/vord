@@ -33,7 +33,7 @@
     <PackageReference Include="AWSSDK.S3" Version="4.0.21.2" />
     <PackageReference Include="CloudNative.CloudEvents" Version="2.8.0" />
     <PackageReference Include="CloudNative.CloudEvents.SystemTextJson" Version="2.8.0" />
-    <PackageReference Include="Framlux.Vord.BillingGrpc" Version="1.15.0" />
+    <PackageReference Include="Framlux.Vord.BillingGrpc" Version="1.16.0" />
     <PackageReference Include="Hangfire.AspNetCore" Version="1.8.20" />
     <PackageReference Include="Hangfire.PostgreSql" Version="1.20.12" />
     <PackageReference Include="linq2db" Version="6.2.1" />
