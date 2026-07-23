@@ -155,6 +155,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<ITierFeatureLimitRepository>(sp => sp.GetRequiredService<DatabaseRepository>());
         services.AddScoped<ITenantSubscriptionOverrideRepository>(sp => sp.GetRequiredService<DatabaseRepository>());
         services.AddScoped<IPartitionRepository>(sp => sp.GetRequiredService<DatabaseRepository>());
+        services.AddScoped<ITenantDeletionRepository>(sp => sp.GetRequiredService<DatabaseRepository>());
         services.AddSingleton<IServerSettingsCache, ServerSettingsCache>();
 
         return services;
