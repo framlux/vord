@@ -287,6 +287,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<AuthMeHandler>();
         services.AddScoped<AdminHandler>();
         services.AddScoped<TenantHandler>();
+        services.AddScoped<TenantDeletionHandler>();
         services.AddScoped<RegistrationTokenHandler>();
         services.AddScoped<UserHandler>();
         services.AddScoped<MachineDetailHandler>();
