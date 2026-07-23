@@ -43,4 +43,49 @@ public interface ITenantDeletionRepository
     /// all rows are returned regardless of status.
     /// </summary>
     Task<(List<TenantDeletion> Deletions, int TotalCount)> ListDeletionsAsync(bool includeCompleted, int skip, int take, CancellationToken ct);
+
+    /// <summary>
+    /// Sets a tenant's <see cref="Tenant.IsActive"/> flag along with the disabling actor and
+    /// timestamp. Used both to deactivate a tenant for deletion and to restore it.
+    /// </summary>
+    Task SetTenantActiveAsync(int tenantId, bool isActive, int? disabledByUserId, DateTimeOffset? disabledAt, CancellationToken ct);
+
+    /// <summary>
+    /// Purges a tenant's operational data — everything except <c>Tenants</c>, <c>UserAccounts</c>,
+    /// <c>AuditLog</c>, and <c>UserTenantRoles</c> (the caller reads membership via
+    /// <see cref="GetUserIdsWithAnyRoleInTenantAsync"/> before removing roles separately with
+    /// <see cref="DeleteUserTenantRolesForTenantAsync"/>). Deletes follow the order of
+    /// <c>InitialMigration.Down()</c>: children before parents. Tables with no <c>TenantId</c>
+    /// column are scoped by a subquery on their parent's <c>TenantId</c>. Every delete predicate is
+    /// scoped to <paramref name="tenantId"/> (directly or via subquery), so re-running this method
+    /// on an already-purged tenant deletes zero rows and does not throw — it is idempotent.
+    /// </summary>
+    Task PurgeTenantOperationalDataAsync(int tenantId, CancellationToken ct);
+
+    /// <summary>
+    /// Gets the distinct set of user ids that have any <c>UserTenantRoles</c> row for the tenant,
+    /// whether the role is currently active or has been disabled.
+    /// </summary>
+    Task<List<int>> GetUserIdsWithAnyRoleInTenantAsync(int tenantId, CancellationToken ct);
+
+    /// <summary>
+    /// Deletes all <c>UserTenantRoles</c> rows for the tenant. Called after the caller has read
+    /// tenant membership, so it can determine which users become orphaned by the removal.
+    /// </summary>
+    Task DeleteUserTenantRolesForTenantAsync(int tenantId, CancellationToken ct);
+
+    /// <summary>
+    /// Determines whether a user has any active role in any tenant, across the whole system —
+    /// used to decide whether the user account itself has become an orphan and should be masked.
+    /// </summary>
+    Task<bool> UserHasAnyActiveRoleAsync(int userId, CancellationToken ct);
+
+    /// <summary>
+    /// Masks the PII on a <see cref="UserAccount"/> row that has no remaining active tenant role,
+    /// replacing <c>Username</c> and <c>ExternalId</c> with a per-id tombstone so the row (and its
+    /// id, kept for <c>AuditLog</c> FK integrity) can no longer be linked back to the real identity
+    /// or re-claimed by a future OIDC sign-in. Idempotent: a row whose <c>ExternalId</c> already
+    /// carries the tombstone prefix is skipped. Returns the number of rows updated (0 or 1).
+    /// </summary>
+    Task<int> MaskUserAsync(int userId, CancellationToken ct);
 }
