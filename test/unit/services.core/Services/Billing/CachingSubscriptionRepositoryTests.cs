@@ -184,6 +184,65 @@ public sealed class CachingSubscriptionRepositoryTests
     }
 
     [Test]
+    public async Task GetEffectiveRetentionDays_SecondCall_ServedFromCache_DoesNotHitDatabaseTwice()
+    {
+        // The ingest hot path stamps every envelope with the retention class, so the effective
+        // retention must be served from the cache after the first load — never a per-envelope query.
+        ISubscriptionRepository inner = Substitute.For<ISubscriptionRepository>();
+        inner.GetSubscriptionForTenantAsync(11, Arg.Any<CancellationToken>()).Returns(BuildSubscription(11));
+        inner.GetEffectiveRetentionDaysAsync(11, Arg.Any<CancellationToken>()).Returns(60);
+        IConnectionMultiplexer redis = FakeRedisConnection.Create();
+        CachingSubscriptionRepository repo = Create(inner, redis);
+
+        int first = await repo.GetEffectiveRetentionDaysAsync(11, CancellationToken.None);
+        int second = await repo.GetEffectiveRetentionDaysAsync(11, CancellationToken.None);
+
+        await Assert.That(first).IsEqualTo(60);
+        await Assert.That(second).IsEqualTo(60);
+        await inner.Received(1).GetEffectiveRetentionDaysAsync(11, Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task SubscriptionAndRetention_ShareOneCacheEntry_LoadedTogether()
+    {
+        // Both values live in one cache entry, so priming via a subscription read means the following
+        // retention read is a cache hit — the pair is loaded from the database exactly once.
+        ISubscriptionRepository inner = Substitute.For<ISubscriptionRepository>();
+        inner.GetSubscriptionForTenantAsync(12, Arg.Any<CancellationToken>()).Returns(BuildSubscription(12));
+        inner.GetEffectiveRetentionDaysAsync(12, Arg.Any<CancellationToken>()).Returns(365);
+        IConnectionMultiplexer redis = FakeRedisConnection.Create();
+        CachingSubscriptionRepository repo = Create(inner, redis);
+
+        await repo.GetSubscriptionForTenantAsync(12, CancellationToken.None);
+        int retention = await repo.GetEffectiveRetentionDaysAsync(12, CancellationToken.None);
+
+        await Assert.That(retention).IsEqualTo(365);
+        await inner.Received(1).GetSubscriptionForTenantAsync(12, Arg.Any<CancellationToken>());
+        await inner.Received(1).GetEffectiveRetentionDaysAsync(12, Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task InvalidateSubscriptionCache_NextRetentionReadReloadsFromDatabase()
+    {
+        // An override edit invalidates the cache entry; the next retention read must reflect the new
+        // value within one request rather than one TTL.
+        ISubscriptionRepository inner = Substitute.For<ISubscriptionRepository>();
+        inner.GetSubscriptionForTenantAsync(13, Arg.Any<CancellationToken>()).Returns(BuildSubscription(13));
+        inner.GetEffectiveRetentionDaysAsync(13, Arg.Any<CancellationToken>()).Returns(1);
+        IConnectionMultiplexer redis = FakeRedisConnection.Create();
+        CachingSubscriptionRepository repo = Create(inner, redis);
+
+        int before = await repo.GetEffectiveRetentionDaysAsync(13, CancellationToken.None);
+        await repo.InvalidateSubscriptionCacheAsync(13, CancellationToken.None);
+        inner.GetEffectiveRetentionDaysAsync(13, Arg.Any<CancellationToken>()).Returns(400);
+        int after = await repo.GetEffectiveRetentionDaysAsync(13, CancellationToken.None);
+
+        await Assert.That(before).IsEqualTo(1);
+        await Assert.That(after).IsEqualTo(400);
+        await inner.Received(2).GetEffectiveRetentionDaysAsync(13, Arg.Any<CancellationToken>());
+    }
+
+    [Test]
     public async Task Constructor_NullInner_Throws()
     {
         IConnectionMultiplexer redis = FakeRedisConnection.Create();

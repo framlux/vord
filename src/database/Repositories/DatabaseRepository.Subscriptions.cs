@@ -87,6 +87,35 @@ public partial class DatabaseRepository : ISubscriptionRepository
     }
 
     /// <inheritdoc/>
+    public async Task<int> GetEffectiveRetentionDaysAsync(int tenantId, CancellationToken cancellationToken)
+    {
+        TenantSubscription? subscription = await GetSubscriptionForTenantAsync(tenantId, cancellationToken);
+
+        if (subscription is null)
+        {
+            return 1;
+        }
+
+        TenantSubscriptionOverride? tenantOverride = await GetOverrideForTenantAsync(tenantId, cancellationToken);
+        if (tenantOverride?.RetentionDays is not null)
+        {
+            return tenantOverride.RetentionDays.Value;
+        }
+
+        TierFeatureLimit? tierLimits = await GetLimitsForTierAsync(subscription.Tier, cancellationToken);
+
+        return tierLimits?.RetentionDays ?? 1;
+    }
+
+    /// <inheritdoc/>
+    public Task InvalidateSubscriptionCacheAsync(int tenantId, CancellationToken cancellationToken)
+    {
+        // The database-backed repository holds no cache; invalidation is a no-op here and is handled
+        // by the caching decorator that wraps it.
+        return Task.CompletedTask;
+    }
+
+    /// <inheritdoc/>
     public async Task<List<TenantSubscription>> GetPaidSubscriptionsAsync(CancellationToken cancellationToken)
     {
         List<TenantSubscription> subscriptions = await _db.TenantSubscriptions

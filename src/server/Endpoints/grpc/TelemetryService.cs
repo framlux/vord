@@ -5,6 +5,7 @@
 using System.Diagnostics.Metrics;
 using System.Globalization;
 using System.Text.Json;
+using Framlux.FleetManagement.Database;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Grpc.AgentTelemetry;
@@ -456,11 +457,19 @@ public sealed class TelemetryService : Telemetry.TelemetryBase
                 using IServiceScope scope = _scopeFactory.CreateScope();
                 IMachineStateRepository machineStateRepo = scope.ServiceProvider.GetRequiredService<IMachineStateRepository>();
 
+                // Stamp every row with the retention class derived from the tenant's current effective
+                // retention. The value is served from the short-TTL subscription cache the eligibility
+                // gate already primed, so this adds no per-envelope database round-trip. A subscription
+                // change is healed by the reclassify job; a resolution glitch fails safe to Short.
+                int effectiveRetentionDays = await _subscriptionService.GetEffectiveRetentionDaysForTenantAsync(tenantId, ct);
+                RetentionClass retentionClass = RetentionClassPolicy.Classify(effectiveRetentionDays);
+
                 // Bulk insert all new telemetry rows.
                 List<MachineTelemetry> rows = newItems.Select(n => new MachineTelemetry
                 {
                     MachineId = machineId,
                     TenantId = tenantId,
+                    RetentionClass = retentionClass,
                     TelemetryType = n.Type,
                     Payload = n.Payload,
                     ReceivedAt = ResolveDedupTimestamp(n.Item, receivedAt),

@@ -36,6 +36,14 @@ public interface ISubscriptionService
     Task<int> GetRetentionDaysForTenantAsync(int tenantId, CancellationToken ct = default);
 
     /// <summary>
+    /// Gets the tenant's effective retention days from the cached subscription entry. Unlike
+    /// <see cref="GetRetentionDaysForTenantAsync"/>, this resolves through the short-TTL subscription
+    /// cache so the telemetry ingest hot path can stamp a row's retention class without a per-envelope
+    /// database round-trip.
+    /// </summary>
+    Task<int> GetEffectiveRetentionDaysForTenantAsync(int tenantId, CancellationToken ct = default);
+
+    /// <summary>
     /// Gets the active machine count for a tenant.
     /// </summary>
     Task<int> GetMachineCountForTenantAsync(int tenantId, CancellationToken ct = default);

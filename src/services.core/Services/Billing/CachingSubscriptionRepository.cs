@@ -26,13 +26,16 @@ public sealed class CachingSubscriptionRepository : ISubscriptionRepository
 {
     private const string KeyPrefix = "subscription:tenant:";
 
-    // Sentinel cached when a tenant has no subscription, so the negative result is cached without
-    // relying on empty-string semantics of RedisValue (an empty value is ambiguous with absence).
-    private const string NegativeMarker = "__none__";
-
     private readonly ISubscriptionRepository _inner;
     private readonly IConnectionMultiplexer _redis;
     private readonly TimeSpan _ttl;
+
+    /// <summary>
+    /// The cached payload for a tenant: the subscription (null when the tenant has none) together with
+    /// the effective retention days resolved at cache-population time. Caching both in one entry lets
+    /// the telemetry ingest hot path read a tenant's retention without an extra database round-trip.
+    /// </summary>
+    private sealed record CachedSubscriptionEntry(TenantSubscription? Subscription, int EffectiveRetentionDays);
 
     /// <summary>
     /// Initializes a new instance of the <see cref="CachingSubscriptionRepository"/> class.
@@ -59,26 +62,51 @@ public sealed class CachingSubscriptionRepository : ISubscriptionRepository
     /// <inheritdoc/>
     public async Task<TenantSubscription?> GetSubscriptionForTenantAsync(int tenantId, CancellationToken cancellationToken = default)
     {
+        CachedSubscriptionEntry entry = await GetOrLoadEntryAsync(tenantId, cancellationToken);
+
+        return entry.Subscription;
+    }
+
+    /// <inheritdoc/>
+    public async Task<int> GetEffectiveRetentionDaysAsync(int tenantId, CancellationToken cancellationToken = default)
+    {
+        CachedSubscriptionEntry entry = await GetOrLoadEntryAsync(tenantId, cancellationToken);
+
+        return entry.EffectiveRetentionDays;
+    }
+
+    /// <inheritdoc/>
+    public Task InvalidateSubscriptionCacheAsync(int tenantId, CancellationToken cancellationToken = default)
+    {
+        return InvalidateAsync(tenantId);
+    }
+
+    /// <summary>
+    /// Returns the cached subscription-plus-retention entry for a tenant, loading and caching it on a
+    /// miss. Both the subscription and its effective retention are resolved by the inner repository so
+    /// the resolution rule lives in one place; the pair is cached under a single key so the second of
+    /// two reads in a request is served from the cache.
+    /// </summary>
+    private async Task<CachedSubscriptionEntry> GetOrLoadEntryAsync(int tenantId, CancellationToken cancellationToken)
+    {
         IDatabase db = _redis.GetDatabase();
         string key = KeyFor(tenantId);
 
         RedisValue cached = await db.StringGetAsync(key);
         if (cached.HasValue)
         {
-            // A present-but-empty value is a cached negative (tenant has no subscription).
-            // Either way the key existing means we have an authoritative cached answer.
             return Deserialize(cached!);
         }
 
         TenantSubscription? subscription = await _inner.GetSubscriptionForTenantAsync(tenantId, cancellationToken);
+        int effectiveRetentionDays = await _inner.GetEffectiveRetentionDaysAsync(tenantId, cancellationToken);
+        CachedSubscriptionEntry entry = new(subscription, effectiveRetentionDays);
 
         // Cache both hits and misses so a tenant with no subscription does not re-query every call.
-        string payload = subscription is null
-            ? NegativeMarker
-            : JsonSerializer.Serialize(subscription, JsonDefaults.CamelCase);
+        string payload = JsonSerializer.Serialize(entry, JsonDefaults.CamelCase);
         await db.StringSetAsync(key, payload, _ttl, false, When.Always, CommandFlags.None);
 
-        return subscription;
+        return entry;
     }
 
     /// <inheritdoc/>
@@ -136,15 +164,17 @@ public sealed class CachingSubscriptionRepository : ISubscriptionRepository
         return KeyPrefix + tenantId.ToString(System.Globalization.CultureInfo.InvariantCulture);
     }
 
-    private static TenantSubscription? Deserialize(string payload)
+    private static CachedSubscriptionEntry Deserialize(string payload)
     {
-        // The negative marker (or any empty value) is a cached negative — tenant has no subscription.
-        if (string.IsNullOrEmpty(payload) || string.Equals(payload, NegativeMarker, StringComparison.Ordinal))
+        // An empty value is treated as a cached negative with the fail-safe one-day retention, so a
+        // corrupt or legacy entry can never resurrect a subscription or a longer retention.
+        if (string.IsNullOrEmpty(payload))
         {
-            return null;
+            return new CachedSubscriptionEntry(null, 1);
         }
 
-        return JsonSerializer.Deserialize<TenantSubscription>(payload, JsonDefaults.CamelCase);
+        return JsonSerializer.Deserialize<CachedSubscriptionEntry>(payload, JsonDefaults.CamelCase)
+            ?? new CachedSubscriptionEntry(null, 1);
     }
 
     private async Task InvalidateAsync(int tenantId)

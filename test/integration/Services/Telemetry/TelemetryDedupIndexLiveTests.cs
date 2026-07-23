@@ -3,6 +3,7 @@
 // See LICENSE for details.
 
 using FluentMigrator.Runner;
+using Framlux.FleetManagement.Database;
 using Framlux.FleetManagement.Database.Migrations;
 using Framlux.FleetManagement.Grpc.AgentTelemetry;
 using Framlux.FleetManagement.Server.Endpoints.Grpc;
@@ -16,11 +17,12 @@ namespace Framlux.FleetManagement.Test.Integration.Services.Telemetry;
 
 /// <summary>
 /// Live integration tests that exercise the MachineTelemetry dedup unique index against a real
-/// Postgres backend (Testcontainers). The dedup index is <c>(SourceEventId, ReceivedAt)</c> because
-/// Postgres requires the partition key in every unique index on a partitioned table. These tests
-/// prove that a re-delivery of the same source event collides on that index only when the
-/// partition-key timestamp is derived deterministically from the item's immutable collected_at —
-/// which is exactly what <see cref="TelemetryService.ResolveDedupTimestamp"/> guarantees.
+/// Postgres backend (Testcontainers). The dedup index is
+/// <c>(SourceEventId, RetentionClass, ReceivedAt)</c> because Postgres requires every partition-key
+/// column in a unique index on a partitioned table, and the table is partitioned LIST(RetentionClass)
+/// then RANGE(ReceivedAt). A re-delivery of the same source event resolves to the same class and the
+/// same partition-key timestamp, so it collides on that index — which is exactly what
+/// <see cref="TelemetryService.ResolveDedupTimestamp"/> guarantees for the timestamp component.
 /// </summary>
 public sealed class TelemetryDedupIndexLiveTests
 {
@@ -131,8 +133,8 @@ public sealed class TelemetryDedupIndexLiveTests
             NpgsqlDataSource dataSource = NpgsqlDataSource.Create(connectionString);
 
             // Pre-create the daily partitions the inserts will land in. The dedup test uses fixed
-            // June 2026 timestamps; create that day and a couple either side so any clamp lands in
-            // an existing partition.
+            // June 2026 timestamps and inserts Short-class rows, so create the class-qualified Short
+            // leaves for that day and a couple either side so any clamp lands in an existing partition.
             DateOnly[] partitionDays =
             [
                 new(2026, 6, 23),
@@ -141,7 +143,7 @@ public sealed class TelemetryDedupIndexLiveTests
             ];
             foreach (DateOnly day in partitionDays)
             {
-                string sql = PartitionManagementJob.BuildCreatePartitionSql("MachineTelemetry", day);
+                string sql = PartitionManagementJob.BuildCreateClassPartitionSql(RetentionClass.Short, day);
                 await using NpgsqlCommand cmd = dataSource.CreateCommand(sql);
                 await cmd.ExecuteNonQueryAsync();
             }
@@ -160,10 +162,11 @@ public sealed class TelemetryDedupIndexLiveTests
         {
             await using NpgsqlCommand cmd = _dataSource.CreateCommand(
                 @"INSERT INTO ""MachineTelemetry""
-                    (""MachineId"", ""TenantId"", ""TelemetryType"", ""Payload"", ""ReceivedAt"", ""ServerReceivedAt"", ""SourceEventId"")
-                  VALUES (@machineId, @tenantId, @type, @payload, @receivedAt, @serverReceivedAt, @sourceEventId)");
+                    (""MachineId"", ""TenantId"", ""RetentionClass"", ""TelemetryType"", ""Payload"", ""ReceivedAt"", ""ServerReceivedAt"", ""SourceEventId"")
+                  VALUES (@machineId, @tenantId, @retentionClass, @type, @payload, @receivedAt, @serverReceivedAt, @sourceEventId)");
             cmd.Parameters.AddWithValue("machineId", TestMachineId);
             cmd.Parameters.AddWithValue("tenantId", TestTenantId);
+            cmd.Parameters.AddWithValue("retentionClass", (short)RetentionClass.Short);
             cmd.Parameters.AddWithValue("type", (short)1);
             cmd.Parameters.AddWithValue("payload", "{}");
             cmd.Parameters.AddWithValue("receivedAt", receivedAt);

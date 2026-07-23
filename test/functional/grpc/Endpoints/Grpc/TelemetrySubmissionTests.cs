@@ -72,6 +72,55 @@ public sealed class TelemetrySubmissionTests
     }
 
     [Test]
+    public async Task SubmitTelemetry_StampsRetentionClass_FromEffectiveRetention()
+    {
+        // Intent: the ingest path must stamp each row's retention class from the tenant's effective
+        // retention, not leave the Short default. A 365-day override places the tenant in Long, which
+        // is distinguishable from the Short default — this guards the TelemetryService stamping wiring.
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+
+        string apiKey = "telemetry-retention-class-api-key";
+        (long machineId, int tenantId) = await SeedMachineWithSubscription(db, apiKey);
+        await db.InsertAsync(new TenantSubscriptionOverride
+        {
+            TenantId = tenantId,
+            RetentionDays = 365,
+            CreatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow,
+        });
+
+        using GrpcChannel channel = CreateChannel(factory);
+        Telemetry.TelemetryClient client = new(channel);
+
+        Metadata headers = new() { { "x-api-key", apiKey } };
+        string eventId = Guid.NewGuid().ToString("N");
+        TelemetryEnvelope envelope = new()
+        {
+            BatchId = Guid.NewGuid().ToString("N"),
+            AgentTimestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            Items =
+            {
+                new TelemetryItem
+                {
+                    EventId = eventId,
+                    Type = TelemetryTypes.CpuUtilizationType,
+                    CpuUtilization = new CpuUtilizationRecord { CpuUsagePercent = 42 }
+                }
+            }
+        };
+
+        TelemetryAck ack = await client.SubmitTelemetryAsync(envelope, headers: headers);
+
+        await Assert.That(ack.Success).IsTrue();
+
+        MachineTelemetry? stored = await db.MachineTelemetry
+            .FirstOrDefaultAsync(t => t.SourceEventId == eventId);
+        await Assert.That(stored).IsNotNull();
+        await Assert.That(stored!.RetentionClass).IsEqualTo(RetentionClass.Long);
+    }
+
+    [Test]
     public async Task SubmitTelemetry_CanceledSubscription_ReturnsSubscriptionNotActiveError()
     {
         // Arrange

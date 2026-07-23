@@ -33,6 +33,16 @@ public sealed class MachineTelemetry
     public required int TenantId { get; set; }
 
     /// <summary>
+    /// The physical retention class this row is stamped with at write time, derived from the tenant's
+    /// effective retention days. This is the LIST partition key of <c>MachineTelemetry</c>, routing the
+    /// row into the class whose daily partitions are dropped on the plan's own schedule. Defaults to
+    /// <see cref="RetentionClass.Short"/> — the cheapest class — so an unstamped row can never
+    /// physically outlive the shortest window.
+    /// </summary>
+    [Column("RetentionClass", DataType = LinqToDB.DataType.Int16), NotNull]
+    public RetentionClass RetentionClass { get; set; } = RetentionClass.Short;
+
+    /// <summary>
     /// The type of telemetry data (maps to TelemetryQueueItemTypes).
     /// </summary>
     [Column("TelemetryType"), NotNull]

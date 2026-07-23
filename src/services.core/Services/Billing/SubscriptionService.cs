@@ -130,6 +130,12 @@ public sealed class SubscriptionService : ISubscriptionService
     }
 
     /// <inheritdoc/>
+    public async Task<int> GetEffectiveRetentionDaysForTenantAsync(int tenantId, CancellationToken ct)
+    {
+        return await _subscriptionRepo.GetEffectiveRetentionDaysAsync(tenantId, ct);
+    }
+
+    /// <inheritdoc/>
     public async Task<int> GetMachineCountForTenantAsync(int tenantId, CancellationToken ct)
     {
         int count = await _machineRepo.GetActiveMachineCountAsync(tenantId, ct);

@@ -1446,11 +1446,14 @@ public sealed class FleetAdminServiceTests
         txProvider.BeginTransactionAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult(tx));
         IAuditLogRepository auditLog = Substitute.For<IAuditLogRepository>();
         auditLog.InsertAuditLogAsync(Arg.Any<AuditLogEntry>(), Arg.Any<CancellationToken>()).Returns(Task.CompletedTask);
+        ISubscriptionRepository subscriptionRepo = Substitute.For<ISubscriptionRepository>();
+        subscriptionRepo.InvalidateSubscriptionCacheAsync(Arg.Any<int>(), Arg.Any<CancellationToken>()).Returns(Task.CompletedTask);
 
         IServiceScopeFactory scopeFactory = CreateScopeFactoryWithServices(new Dictionary<Type, object>
         {
             { typeof(ITenantRepository), tenantRepo },
             { typeof(ITenantSubscriptionOverrideRepository), overrideRepo },
+            { typeof(ISubscriptionRepository), subscriptionRepo },
             { typeof(IDatabaseTransactionProvider), txProvider },
             { typeof(IAuditLogRepository), auditLog },
         });
@@ -1478,6 +1481,10 @@ public sealed class FleetAdminServiceTests
             5,
             (int?)null,
             Arg.Any<CancellationToken>());
+
+        // The override changes effective retention, so the tenant's subscription cache must be
+        // invalidated after commit or the change would lag by one cache TTL.
+        await subscriptionRepo.Received(1).InvalidateSubscriptionCacheAsync(TenantInternalId, Arg.Any<CancellationToken>());
     }
 
     // ── RemoveTenantOverride ──
@@ -1503,11 +1510,14 @@ public sealed class FleetAdminServiceTests
         txProvider.BeginTransactionAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult(tx));
         IAuditLogRepository auditLog = Substitute.For<IAuditLogRepository>();
         auditLog.InsertAuditLogAsync(Arg.Any<AuditLogEntry>(), Arg.Any<CancellationToken>()).Returns(Task.CompletedTask);
+        ISubscriptionRepository subscriptionRepo = Substitute.For<ISubscriptionRepository>();
+        subscriptionRepo.InvalidateSubscriptionCacheAsync(Arg.Any<int>(), Arg.Any<CancellationToken>()).Returns(Task.CompletedTask);
 
         IServiceScopeFactory scopeFactory = CreateScopeFactoryWithServices(new Dictionary<Type, object>
         {
             { typeof(ITenantRepository), tenantRepo },
             { typeof(ITenantSubscriptionOverrideRepository), overrideRepo },
+            { typeof(ISubscriptionRepository), subscriptionRepo },
             { typeof(IDatabaseTransactionProvider), txProvider },
             { typeof(IAuditLogRepository), auditLog },
         });
@@ -1521,6 +1531,9 @@ public sealed class FleetAdminServiceTests
         await Assert.That(response.Success).IsTrue();
         await Assert.That(response.Message).IsEqualTo("OK");
         await overrideRepo.Received(1).RemoveOverrideAsync(TenantInternalId, Arg.Any<CancellationToken>());
+
+        // Clearing the override reverts effective retention; the cache must be invalidated after commit.
+        await subscriptionRepo.Received(1).InvalidateSubscriptionCacheAsync(TenantInternalId, Arg.Any<CancellationToken>());
     }
 
     // ── ConfigureTenantOidc ──

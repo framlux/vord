@@ -516,6 +516,7 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
         using IServiceScope scope = _scopeFactory.CreateScope();
         ITenantRepository tenantRepo = scope.ServiceProvider.GetRequiredService<ITenantRepository>();
         ITenantSubscriptionOverrideRepository overrideRepo = scope.ServiceProvider.GetRequiredService<ITenantSubscriptionOverrideRepository>();
+        ISubscriptionRepository subscriptionRepo = scope.ServiceProvider.GetRequiredService<ISubscriptionRepository>();
         IDatabaseTransactionProvider transactionProvider = scope.ServiceProvider.GetRequiredService<IDatabaseTransactionProvider>();
         IAuditLogRepository auditLog = scope.ServiceProvider.GetRequiredService<IAuditLogRepository>();
 
@@ -545,6 +546,11 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
 
         await transaction.CommitAsync(context.CancellationToken);
 
+        // The override changes effective retention but does not route through the subscription
+        // repository's own mutators, so invalidate the cached entry here to make the change take
+        // effect within one request rather than one cache TTL.
+        await subscriptionRepo.InvalidateSubscriptionCacheAsync(tenant.Id, context.CancellationToken);
+
         _logger.LogInformation(
             "FleetAdmin: tenant {TenantId} override set (machineLimit={MachineLimit}, retentionDays={RetentionDays}, alertRuleLimit={AlertRuleLimit}, webhookLimit={WebhookLimit})",
             tenant.Id, machineLimit, retentionDays, alertRuleLimit, webhookLimit);
@@ -567,6 +573,7 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
         using IServiceScope scope = _scopeFactory.CreateScope();
         ITenantRepository tenantRepo = scope.ServiceProvider.GetRequiredService<ITenantRepository>();
         ITenantSubscriptionOverrideRepository overrideRepo = scope.ServiceProvider.GetRequiredService<ITenantSubscriptionOverrideRepository>();
+        ISubscriptionRepository subscriptionRepo = scope.ServiceProvider.GetRequiredService<ISubscriptionRepository>();
         IDatabaseTransactionProvider transactionProvider = scope.ServiceProvider.GetRequiredService<IDatabaseTransactionProvider>();
         IAuditLogRepository auditLog = scope.ServiceProvider.GetRequiredService<IAuditLogRepository>();
 
@@ -588,6 +595,10 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
             ipAddress: null), context.CancellationToken);
 
         await transaction.CommitAsync(context.CancellationToken);
+
+        // Clearing the override changes effective retention; invalidate the cached entry so the
+        // reverted retention takes effect within one request rather than one cache TTL.
+        await subscriptionRepo.InvalidateSubscriptionCacheAsync(tenant.Id, context.CancellationToken);
 
         _logger.LogInformation(
             "FleetAdmin: tenant {TenantId} override removed", tenant.Id);

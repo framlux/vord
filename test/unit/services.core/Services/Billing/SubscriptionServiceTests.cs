@@ -723,6 +723,32 @@ public class SubscriptionServiceTests
     }
 
     [Test]
+    public async Task GetEffectiveRetentionDaysForTenant_DelegatesToRepository_AndHonorsOverride()
+    {
+        // The ingest stamping path reads retention through this service method; it must resolve the
+        // same effective value (override winning over tier default) that the class-assignment relies on.
+        (DatabaseRepository repo, TestDatabaseFactory dbFactory) = BuildRepoAndFactory();
+        using (dbFactory)
+        {
+            TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 1, tier: SubscriptionTier.Free);
+            sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
+            await dbFactory.Context.InsertAsync(new TenantSubscriptionOverride
+            {
+                TenantId = 1,
+                RetentionDays = 30,
+                CreatedAt = DateTimeOffset.UtcNow,
+                UpdatedAt = DateTimeOffset.UtcNow,
+            });
+
+            SubscriptionService service = BuildService(repo, useRealOverrideRepo: true);
+
+            int retentionDays = await service.GetEffectiveRetentionDaysForTenantAsync(1, CancellationToken.None);
+
+            await Assert.That(retentionDays).IsEqualTo(30);
+        }
+    }
+
+    [Test]
     public async Task EnsureSubscriptionExists_CanceledPaidSubscription_RevertsToFree()
     {
         (DatabaseRepository repo, TestDatabaseFactory dbFactory) = BuildRepoAndFactory();

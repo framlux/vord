@@ -12,11 +12,13 @@ namespace Framlux.FleetManagement.Database.Repositories;
 public interface IPartitionRepository
 {
     /// <summary>
-    /// Returns the maximum <c>RetentionDays</c> across all tier feature limit rows, or
-    /// <see langword="null"/> if the table is empty.
+    /// Returns the drop window, in days, of the Long retention class: the greater of the fixed
+    /// 365-day floor and the largest per-tenant retention override. A rare over-365-day override
+    /// extends only the Long class; the Short and Medium windows are fixed constants and are never
+    /// stretched by any tenant's override.
     /// </summary>
     /// <param name="cancellationToken">Cancellation token.</param>
-    Task<int?> GetMaxRetentionDaysAsync(CancellationToken cancellationToken);
+    Task<int> GetLongClassRetentionDaysAsync(CancellationToken cancellationToken);
 
     /// <summary>
     /// Executes a partition-management DDL statement. The statement is composed by the caller

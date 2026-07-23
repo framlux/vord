@@ -12,10 +12,14 @@ namespace Framlux.FleetManagement.Database.Repositories;
 public partial class DatabaseRepository : IPartitionRepository
 {
     /// <inheritdoc/>
-    public async Task<int?> GetMaxRetentionDaysAsync(CancellationToken cancellationToken)
+    public async Task<int> GetLongClassRetentionDaysAsync(CancellationToken cancellationToken)
     {
-        return await _db.TierFeatureLimits
-            .MaxAsync(l => (int?)l.RetentionDays, cancellationToken);
+        // The Long window is the greater of the 365-day floor and the largest retention override
+        // across all tenants, so a rare over-365-day override extends only the Long class.
+        int? maxOverrideRetention = await _db.TenantSubscriptionOverrides
+            .MaxAsync(o => o.RetentionDays, cancellationToken);
+
+        return Math.Max(RetentionClassPolicy.LongWindowDays, maxOverrideRetention ?? 0);
     }
 
     /// <inheritdoc/>

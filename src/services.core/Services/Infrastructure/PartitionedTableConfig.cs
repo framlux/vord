@@ -2,24 +2,39 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
+using Framlux.FleetManagement.Database;
+
 namespace Framlux.FleetManagement.Services.Core.Infrastructure;
 
 /// <summary>
-/// Defines the partitioned tables and their partition key columns for the partition management service.
-/// Table names must match the constants in the database project's TableNames class.
+/// Defines the partitioned tables the partition management job maintains. Simple daily-range tables
+/// are listed in <see cref="RangeTables"/>; <c>MachineTelemetry</c> is handled separately because it
+/// is composite — partitioned LIST by <see cref="RetentionClass"/> and then RANGE by day — so its
+/// daily leaves live under a per-class parent and are dropped on each class's own schedule. Table
+/// names must match the constants in the database project's TableNames class.
 /// </summary>
 internal static class PartitionedTableConfig
 {
     /// <summary>
-    /// The set of tables that are range-partitioned by a timestamp column on PostgreSQL.
-    /// Each entry maps a table name to its partition key column.
+    /// The simple daily-range-partitioned tables, each mapping a table name to its partition key
+    /// column. Their leaves are dropped at the maximum (Long-class) retention window.
     /// </summary>
-    internal static readonly IReadOnlyList<PartitionedTable> Tables =
+    internal static readonly IReadOnlyList<PartitionedTable> RangeTables =
     [
-        new("MachineTelemetry", "ReceivedAt"),
         new("AuditLog", "Timestamp"),
         new("AlertEvents", "TriggeredAt"),
         new("RemoteCommands", "CreatedAt"),
+    ];
+
+    /// <summary>
+    /// The retention classes <c>MachineTelemetry</c> is partitioned into. Each class owns its own set
+    /// of daily leaf partitions and is created and dropped on its own schedule.
+    /// </summary>
+    internal static readonly IReadOnlyList<RetentionClass> TelemetryRetentionClasses =
+    [
+        RetentionClass.Short,
+        RetentionClass.Medium,
+        RetentionClass.Long,
     ];
 
     /// <summary>

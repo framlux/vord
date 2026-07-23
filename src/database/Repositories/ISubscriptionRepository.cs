@@ -46,6 +46,26 @@ public interface ISubscriptionRepository
     Task<TenantSubscription?> GetSubscriptionForTenantAsync(int tenantId, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Gets the tenant's effective retention days: the per-tenant override retention when present,
+    /// otherwise the tier default, falling back to one day when neither is resolvable. Served from the
+    /// same short-TTL cache entry as the subscription on the caching decorator, so the telemetry ingest
+    /// hot path can stamp a row's retention class without an extra database round-trip.
+    /// </summary>
+    /// <param name="tenantId">The tenant whose effective retention is resolved.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task<int> GetEffectiveRetentionDaysAsync(int tenantId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Invalidates the cached subscription entry (including its cached effective retention) for a
+    /// tenant. Called by paths that change effective retention without routing through this
+    /// repository's own mutators — notably per-tenant override edits — so the change takes effect
+    /// within one request rather than one cache TTL.
+    /// </summary>
+    /// <param name="tenantId">The tenant whose cache entry is invalidated.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task InvalidateSubscriptionCacheAsync(int tenantId, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Gets all subscriptions where the tier is not Free (i.e., paid subscriptions that have a Stripe counterpart).
     /// </summary>
     Task<List<TenantSubscription>> GetPaidSubscriptionsAsync(CancellationToken cancellationToken = default);
