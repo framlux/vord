@@ -39,11 +39,17 @@ public sealed class CachingSubscriptionRepositoryTests
         };
     }
 
+    private static RetentionReclassifyDispatcher DispatcherFor(IBackgroundJobClient backgroundJobs)
+    {
+        return new RetentionReclassifyDispatcher(
+            backgroundJobs, NullLogger<RetentionReclassifyDispatcher>.Instance);
+    }
+
     private static CachingSubscriptionRepository Create(
         ISubscriptionRepository inner,
         IConnectionMultiplexer redis,
         int ttlSeconds = 30,
-        IBackgroundJobClient? backgroundJobs = null)
+        RetentionReclassifyDispatcher? dispatcher = null)
     {
         IOptions<RedisOptions> options = Options.Create(new RedisOptions
         {
@@ -55,8 +61,7 @@ public sealed class CachingSubscriptionRepositoryTests
             inner,
             redis,
             options,
-            backgroundJobs ?? Substitute.For<IBackgroundJobClient>(),
-            NullLogger<CachingSubscriptionRepository>.Instance);
+            dispatcher ?? DispatcherFor(Substitute.For<IBackgroundJobClient>()));
     }
 
     [Test]
@@ -283,13 +288,12 @@ public sealed class CachingSubscriptionRepositoryTests
             null!,
             redis,
             options,
-            Substitute.For<IBackgroundJobClient>(),
-            NullLogger<CachingSubscriptionRepository>.Instance))
+            DispatcherFor(Substitute.For<IBackgroundJobClient>())))
             .Throws<ArgumentNullException>();
     }
 
     [Test]
-    public async Task Constructor_NullBackgroundJobClient_Throws()
+    public async Task Constructor_NullReclassifyDispatcher_Throws()
     {
         IConnectionMultiplexer redis = FakeRedisConnection.Create();
         IOptions<RedisOptions> options = Options.Create(new RedisOptions { ConnectionString = "x" });
@@ -298,40 +302,33 @@ public sealed class CachingSubscriptionRepositoryTests
             Substitute.For<ISubscriptionRepository>(),
             redis,
             options,
-            null!,
-            NullLogger<CachingSubscriptionRepository>.Instance))
-            .Throws<ArgumentNullException>();
-    }
-
-    [Test]
-    public async Task Constructor_NullLogger_Throws()
-    {
-        IConnectionMultiplexer redis = FakeRedisConnection.Create();
-        IOptions<RedisOptions> options = Options.Create(new RedisOptions { ConnectionString = "x" });
-
-        await Assert.That(() => new CachingSubscriptionRepository(
-            Substitute.For<ISubscriptionRepository>(),
-            redis,
-            options,
-            Substitute.For<IBackgroundJobClient>(),
             null!))
             .Throws<ArgumentNullException>();
     }
 
     [Test]
-    public async Task UpdateSubscriptionState_TierChanged_EnqueuesRetentionReclassifyForTenant()
+    public async Task UpdateSubscriptionState_TierChanged_MarksPendingWithoutEnqueuingInsideTheTransaction()
     {
         // Intent: this decorator is the single chokepoint every tier-change path routes through
         // (billing webhook, immediate downgrade, reactivate, Stripe sync correction, admin RPC), so
-        // enqueuing here provably covers all of them. Surviving telemetry must follow the new plan.
+        // observing the tier change here provably covers all of them. But it runs INSIDE the caller's
+        // transaction, so it must only mark the tenant: nothing may reach Hangfire until the caller
+        // dispatches after its commit.
         ISubscriptionRepository inner = Substitute.For<ISubscriptionRepository>();
         inner.UpdateSubscriptionStateAsync(11, SubscriptionTier.Pro, SubscriptionStatus.Active, false, Arg.Any<CancellationToken>())
             .Returns(1);
         IConnectionMultiplexer redis = FakeRedisConnection.Create();
         IBackgroundJobClient backgroundJobs = Substitute.For<IBackgroundJobClient>();
-        CachingSubscriptionRepository repo = Create(inner, redis, backgroundJobs: backgroundJobs);
+        RetentionReclassifyDispatcher dispatcher = DispatcherFor(backgroundJobs);
+        CachingSubscriptionRepository repo = Create(inner, redis, dispatcher: dispatcher);
 
         await repo.UpdateSubscriptionStateAsync(11, SubscriptionTier.Pro, SubscriptionStatus.Active, cancellationToken: CancellationToken.None);
+
+        // Still inside the caller's transaction: nothing enqueued yet.
+        backgroundJobs.DidNotReceive().Create(Arg.Any<Job>(), Arg.Any<IState>());
+
+        // The caller commits, then dispatches.
+        dispatcher.DispatchPending();
 
         backgroundJobs.Received(1).Create(
             Arg.Is<Job>(j => (j.Method.Name == nameof(RetentionReclassifyJob.RunAsync))
@@ -349,9 +346,11 @@ public sealed class CachingSubscriptionRepositoryTests
             .Returns(1);
         IConnectionMultiplexer redis = FakeRedisConnection.Create();
         IBackgroundJobClient backgroundJobs = Substitute.For<IBackgroundJobClient>();
-        CachingSubscriptionRepository repo = Create(inner, redis, backgroundJobs: backgroundJobs);
+        RetentionReclassifyDispatcher dispatcher = DispatcherFor(backgroundJobs);
+        CachingSubscriptionRepository repo = Create(inner, redis, dispatcher: dispatcher);
 
         await repo.UpdateSubscriptionStateAsync(12, null, SubscriptionStatus.PastDue, cancellationToken: CancellationToken.None);
+        dispatcher.DispatchPending();
 
         backgroundJobs.DidNotReceive().Create(Arg.Any<Job>(), Arg.Any<IState>());
     }
@@ -364,9 +363,11 @@ public sealed class CachingSubscriptionRepositoryTests
             .Returns(0);
         IConnectionMultiplexer redis = FakeRedisConnection.Create();
         IBackgroundJobClient backgroundJobs = Substitute.For<IBackgroundJobClient>();
-        CachingSubscriptionRepository repo = Create(inner, redis, backgroundJobs: backgroundJobs);
+        RetentionReclassifyDispatcher dispatcher = DispatcherFor(backgroundJobs);
+        CachingSubscriptionRepository repo = Create(inner, redis, dispatcher: dispatcher);
 
         await repo.UpdateSubscriptionStateAsync(13, SubscriptionTier.Team, SubscriptionStatus.Active, cancellationToken: CancellationToken.None);
+        dispatcher.DispatchPending();
 
         backgroundJobs.DidNotReceive().Create(Arg.Any<Job>(), Arg.Any<IState>());
     }
@@ -374,7 +375,7 @@ public sealed class CachingSubscriptionRepositoryTests
     [Test]
     public async Task UpdateSubscriptionState_EnqueueFailure_DoesNotFailTheSubscriptionChange()
     {
-        // Intent: the enqueue is fire-and-forget after the commit. A Hangfire storage blip must not
+        // Intent: the dispatch is fire-and-forget after the commit. A Hangfire storage blip must not
         // roll back or fail a subscription change that already committed.
         ISubscriptionRepository inner = Substitute.For<ISubscriptionRepository>();
         inner.UpdateSubscriptionStateAsync(14, SubscriptionTier.Pro, SubscriptionStatus.Active, false, Arg.Any<CancellationToken>())
@@ -382,9 +383,11 @@ public sealed class CachingSubscriptionRepositoryTests
         IConnectionMultiplexer redis = FakeRedisConnection.Create();
         IBackgroundJobClient backgroundJobs = Substitute.For<IBackgroundJobClient>();
         backgroundJobs.Create(Arg.Any<Job>(), Arg.Any<IState>()).Throws(new InvalidOperationException("hangfire down"));
-        CachingSubscriptionRepository repo = Create(inner, redis, backgroundJobs: backgroundJobs);
+        RetentionReclassifyDispatcher dispatcher = DispatcherFor(backgroundJobs);
+        CachingSubscriptionRepository repo = Create(inner, redis, dispatcher: dispatcher);
 
         int updated = await repo.UpdateSubscriptionStateAsync(14, SubscriptionTier.Pro, SubscriptionStatus.Active, cancellationToken: CancellationToken.None);
+        dispatcher.DispatchPending();
 
         await Assert.That(updated).IsEqualTo(1);
     }

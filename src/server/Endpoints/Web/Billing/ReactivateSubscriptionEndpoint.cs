@@ -24,6 +24,7 @@ public sealed class ReactivateSubscriptionEndpoint : EndpointWithoutRequest<ApiR
     private readonly ISubscriptionRepository _subscriptionRepository;
     private readonly ISubscriptionService _subscriptionService;
     private readonly ITenantContext _tenantContext;
+    private readonly RetentionReclassifyDispatcher _reclassifyDispatcher;
     private readonly ILogger<ReactivateSubscriptionEndpoint> _logger;
 
     /// <summary>
@@ -36,6 +37,7 @@ public sealed class ReactivateSubscriptionEndpoint : EndpointWithoutRequest<ApiR
         ISubscriptionRepository subscriptionRepository,
         ISubscriptionService subscriptionService,
         ITenantContext tenantContext,
+        RetentionReclassifyDispatcher reclassifyDispatcher,
         ILogger<ReactivateSubscriptionEndpoint> logger)
     {
         _billingStatus = billingStatus;
@@ -44,6 +46,7 @@ public sealed class ReactivateSubscriptionEndpoint : EndpointWithoutRequest<ApiR
         _subscriptionRepository = subscriptionRepository;
         _subscriptionService = subscriptionService;
         _tenantContext = tenantContext;
+        _reclassifyDispatcher = reclassifyDispatcher;
         _logger = logger;
     }
 
@@ -86,6 +89,10 @@ public sealed class ReactivateSubscriptionEndpoint : EndpointWithoutRequest<ApiR
             tenantId.ToString(), "Account reactivated to Free tier from canceled state", null), ct);
 
         await transaction.CommitAsync(ct);
+
+        // Post-commit: reverting to Free changes effective retention, so the surviving telemetry is
+        // reclassified. Queued here rather than inside the transaction above.
+        _reclassifyDispatcher.DispatchPending();
 
         _logger.LogInformation(
             "Subscription reactivated to Free tier for tenant {TenantId}",

@@ -18,6 +18,7 @@ using Hangfire.States;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using NSubstitute;
 using StackExchange.Redis;
@@ -1258,7 +1259,13 @@ public sealed class FleetAdminServiceTests
         IServiceScopeFactory scopeFactory = CreateScopeFactoryWithServices(new Dictionary<Type, object>
         {
             { typeof(ITenantRepository), tenantRepo },
-            { typeof(ISubscriptionRepository), subscriptionRepo }
+            { typeof(ISubscriptionRepository), subscriptionRepo },
+            {
+                typeof(RetentionReclassifyDispatcher),
+                new RetentionReclassifyDispatcher(
+                    Substitute.For<IBackgroundJobClient>(),
+                    NullLogger<RetentionReclassifyDispatcher>.Instance)
+            },
         });
 
         FleetAdminService service = CreateFleetAdminService(scopeFactory);
@@ -1293,7 +1300,13 @@ public sealed class FleetAdminServiceTests
         IServiceScopeFactory scopeFactory = CreateScopeFactoryWithServices(new Dictionary<Type, object>
         {
             { typeof(ITenantRepository), tenantRepo },
-            { typeof(ISubscriptionRepository), subscriptionRepo }
+            { typeof(ISubscriptionRepository), subscriptionRepo },
+            {
+                typeof(RetentionReclassifyDispatcher),
+                new RetentionReclassifyDispatcher(
+                    Substitute.For<IBackgroundJobClient>(),
+                    NullLogger<RetentionReclassifyDispatcher>.Instance)
+            },
         });
 
         FleetAdminService service = CreateFleetAdminService(scopeFactory);
@@ -1452,6 +1465,8 @@ public sealed class FleetAdminServiceTests
         ISubscriptionRepository subscriptionRepo = Substitute.For<ISubscriptionRepository>();
         subscriptionRepo.InvalidateSubscriptionCacheAsync(Arg.Any<int>(), Arg.Any<CancellationToken>()).Returns(Task.CompletedTask);
         IBackgroundJobClient backgroundJobs = Substitute.For<IBackgroundJobClient>();
+        RetentionReclassifyDispatcher reclassifyDispatcher = new(
+            backgroundJobs, NullLogger<RetentionReclassifyDispatcher>.Instance);
 
         IServiceScopeFactory scopeFactory = CreateScopeFactoryWithServices(new Dictionary<Type, object>
         {
@@ -1460,7 +1475,7 @@ public sealed class FleetAdminServiceTests
             { typeof(ISubscriptionRepository), subscriptionRepo },
             { typeof(IDatabaseTransactionProvider), txProvider },
             { typeof(IAuditLogRepository), auditLog },
-            { typeof(IBackgroundJobClient), backgroundJobs },
+            { typeof(RetentionReclassifyDispatcher), reclassifyDispatcher },
         });
 
         FleetAdminService service = CreateFleetAdminService(scopeFactory);
@@ -1525,6 +1540,8 @@ public sealed class FleetAdminServiceTests
         ISubscriptionRepository subscriptionRepo = Substitute.For<ISubscriptionRepository>();
         subscriptionRepo.InvalidateSubscriptionCacheAsync(Arg.Any<int>(), Arg.Any<CancellationToken>()).Returns(Task.CompletedTask);
         IBackgroundJobClient backgroundJobs = Substitute.For<IBackgroundJobClient>();
+        RetentionReclassifyDispatcher reclassifyDispatcher = new(
+            backgroundJobs, NullLogger<RetentionReclassifyDispatcher>.Instance);
 
         IServiceScopeFactory scopeFactory = CreateScopeFactoryWithServices(new Dictionary<Type, object>
         {
@@ -1533,7 +1550,7 @@ public sealed class FleetAdminServiceTests
             { typeof(ISubscriptionRepository), subscriptionRepo },
             { typeof(IDatabaseTransactionProvider), txProvider },
             { typeof(IAuditLogRepository), auditLog },
-            { typeof(IBackgroundJobClient), backgroundJobs },
+            { typeof(RetentionReclassifyDispatcher), reclassifyDispatcher },
         });
 
         FleetAdminService service = CreateFleetAdminService(scopeFactory);

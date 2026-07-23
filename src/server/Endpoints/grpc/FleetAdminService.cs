@@ -14,7 +14,6 @@ using Framlux.FleetManagement.Services.Core.ServerConfiguration;
 using Framlux.Vord.BillingGrpc;
 using Google.Protobuf.WellKnownTypes;
 using Grpc.Core;
-using Hangfire;
 using Microsoft.Extensions.Options;
 using StackExchange.Redis;
 
@@ -455,6 +454,10 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
             };
         }
 
+        // The tier write above is not wrapped in a transaction, so it is already durable; dispatch the
+        // reclassification the subscription seam marked rather than waiting for scope teardown.
+        scope.ServiceProvider.GetRequiredService<RetentionReclassifyDispatcher>().DispatchPending();
+
         _logger.LogInformation(
             "FleetAdmin: tenant {TenantId} subscription updated to tier={Tier}, status={Status}",
             tenant.Id, tier.Value, status);
@@ -621,26 +624,18 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
     }
 
     /// <summary>
-    /// Enqueues the retention reclassification for a tenant, fire-and-forget, after the override write
-    /// has committed. A Hangfire storage failure must not fail an override edit that already happened,
-    /// so the enqueue failure is logged and swallowed.
+    /// Queues the retention reclassification for a tenant after the write that changed its effective
+    /// retention has committed. Routed through the same dispatcher the subscription seam marks into, so
+    /// override edits and tier changes share one enqueue path and one failure policy.
     /// </summary>
-    /// <param name="scope">The request scope the Hangfire client is resolved from.</param>
+    /// <param name="scope">The request scope the dispatcher is resolved from.</param>
     /// <param name="tenantId">The tenant whose telemetry is reclassified.</param>
-    private void EnqueueRetentionReclassify(IServiceScope scope, int tenantId)
+    private static void EnqueueRetentionReclassify(IServiceScope scope, int tenantId)
     {
-        try
-        {
-            IBackgroundJobClient backgroundJobs = scope.ServiceProvider.GetRequiredService<IBackgroundJobClient>();
-            backgroundJobs.Enqueue<RetentionReclassifyJob>(job => job.RunAsync(tenantId, CancellationToken.None));
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(
-                ex,
-                "Failed to enqueue retention reclassification for tenant {TenantId}; its telemetry keeps the previous retention class until the job is re-run",
-                tenantId);
-        }
+        RetentionReclassifyDispatcher dispatcher =
+            scope.ServiceProvider.GetRequiredService<RetentionReclassifyDispatcher>();
+        dispatcher.MarkPending(tenantId);
+        dispatcher.DispatchPending();
     }
 
     /// <summary>

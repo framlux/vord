@@ -34,6 +34,15 @@ public static class RetentionClassPolicy
     public const int LongWindowDays = 365;
 
     /// <summary>
+    /// Days of future daily partitions the partition-maintenance job pre-creates ahead of server time.
+    /// This is the single source of truth for that horizon: the ingest path clamps a row's
+    /// partition-key timestamp to it so a derived timestamp always lands in an existing partition, and
+    /// the reclassification job extends its day walk by it so clock-skewed, future-dated rows move with
+    /// the rest. Kept here, beside the class windows, so the three consumers cannot drift apart.
+    /// </summary>
+    public const int PartitionCreateAheadDays = 7;
+
+    /// <summary>
     /// Maps a tenant's effective retention days to the smallest <see cref="RetentionClass"/> whose
     /// window can physically hold the data. A non-positive or unknown value fails safe to
     /// <see cref="RetentionClass.Short"/>, the cheapest class, so a resolution glitch can never route a

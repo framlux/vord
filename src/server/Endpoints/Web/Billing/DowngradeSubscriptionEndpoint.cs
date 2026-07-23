@@ -39,6 +39,7 @@ public sealed class DowngradeSubscriptionEndpoint : Endpoint<DowngradeSubscripti
     private readonly DowngradeGuardService _downgradeGuardService;
     private readonly IDowngradeCleanupService _downgradeCleanupService;
     private readonly ITierFeatureLimitRepository _tierLimitRepo;
+    private readonly RetentionReclassifyDispatcher _reclassifyDispatcher;
     private readonly ILogger<DowngradeSubscriptionEndpoint> _logger;
 
     /// <summary>
@@ -56,6 +57,7 @@ public sealed class DowngradeSubscriptionEndpoint : Endpoint<DowngradeSubscripti
         DowngradeGuardService downgradeGuardService,
         IDowngradeCleanupService downgradeCleanupService,
         ITierFeatureLimitRepository tierLimitRepo,
+        RetentionReclassifyDispatcher reclassifyDispatcher,
         ILogger<DowngradeSubscriptionEndpoint> logger)
     {
         _billingStatus = billingStatus;
@@ -69,6 +71,7 @@ public sealed class DowngradeSubscriptionEndpoint : Endpoint<DowngradeSubscripti
         _downgradeGuardService = downgradeGuardService;
         _downgradeCleanupService = downgradeCleanupService;
         _tierLimitRepo = tierLimitRepo;
+        _reclassifyDispatcher = reclassifyDispatcher;
         _logger = logger;
     }
 
@@ -168,6 +171,10 @@ public sealed class DowngradeSubscriptionEndpoint : Endpoint<DowngradeSubscripti
             tenantId.ToString(), "Immediate downgrade from Team to Pro", null), ct);
 
         await transaction.CommitAsync(ct);
+
+        // Post-commit: the immediate Team-to-Pro downgrade narrows effective retention, so the
+        // surviving telemetry is reclassified. Queued here rather than inside the transaction above.
+        _reclassifyDispatcher.DispatchPending();
 
         // Clean up Team-only resources after the transaction commits
         await _downgradeCleanupService.CleanupForProTierAsync(tenantId, ct);

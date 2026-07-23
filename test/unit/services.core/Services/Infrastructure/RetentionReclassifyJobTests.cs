@@ -4,10 +4,15 @@
 
 using Framlux.FleetManagement.Database;
 using Framlux.FleetManagement.Database.Repositories;
+using Framlux.FleetManagement.Services.Core.Billing;
 using Framlux.FleetManagement.Services.Core.Infrastructure;
+using Framlux.FleetManagement.Services.Core.Options;
 using Framlux.FleetManagement.Test.Infrastructure;
+using Hangfire;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 using NSubstitute;
+using StackExchange.Redis;
 
 namespace Framlux.FleetManagement.Test.Services.Infrastructure;
 
@@ -141,6 +146,78 @@ public sealed class RetentionReclassifyJobTests
             7, RetentionClass.Medium, Arg.Any<DateTimeOffset>(), Arg.Any<DateTimeOffset>(), Arg.Any<CancellationToken>());
         await machineState.Received().ReclassifyTelemetryForTenantAsync(
             7, RetentionClass.Long, Arg.Any<DateTimeOffset>(), Arg.Any<DateTimeOffset>(), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task RunAsync_ReadsCommittedRetention_NotAStaleCachedEntry()
+    {
+        // Intent: the subscription cache is invalidated BEFORE the plan change commits, so a concurrent
+        // read can re-seed it with the pre-change tier and hold that for the cache TTL. If the job read
+        // through that cache it would compute the old class, move nothing, and never be re-enqueued —
+        // permanent misclassification. The job therefore takes the uncached, database-backed repository.
+        ISubscriptionRepository database = Substitute.For<ISubscriptionRepository>();
+        database.GetEffectiveRetentionDaysAsync(7, Arg.Any<CancellationToken>()).Returns(1);
+        IConnectionMultiplexer redis = FakeRedisConnection.Create();
+        CachingSubscriptionRepository cached = new(
+            database,
+            redis,
+            Options.Create(new RedisOptions { ConnectionString = "localhost", SubscriptionCacheTtlSeconds = 30 }),
+            new RetentionReclassifyDispatcher(
+                Substitute.For<IBackgroundJobClient>(), NullLogger<RetentionReclassifyDispatcher>.Instance));
+
+        // A concurrent reader seeds the cache with the pre-change value…
+        await cached.GetEffectiveRetentionDaysAsync(7, CancellationToken.None);
+
+        // …and only then does the plan change become visible in the database.
+        database.GetEffectiveRetentionDaysAsync(7, Arg.Any<CancellationToken>()).Returns(60);
+        await Assert.That(await cached.GetEffectiveRetentionDaysAsync(7, CancellationToken.None)).IsEqualTo(1);
+
+        IMachineStateRepository machineState = Substitute.For<IMachineStateRepository>();
+        await CreateJob(database, machineState).RunAsync(7, CancellationToken.None);
+
+        // The job used the committed 60-day retention (Medium), not the stale cached 1 day (Short).
+        await machineState.Received().ReclassifyTelemetryForTenantAsync(
+            7, RetentionClass.Medium, Arg.Any<DateTimeOffset>(), Arg.Any<DateTimeOffset>(), Arg.Any<CancellationToken>());
+        await machineState.DidNotReceive().ReclassifyTelemetryForTenantAsync(
+            Arg.Any<int>(), RetentionClass.Short, Arg.Any<DateTimeOffset>(), Arg.Any<DateTimeOffset>(), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task RunAsync_RetentionChangesMidRun_RepeatsAndEndsOnTheLatestValue()
+    {
+        // Intent: a plan change that commits while the chunk loop is running would otherwise leave the
+        // tenant on the target the run started with. The post-loop convergence re-check catches it and
+        // runs again on the new value.
+        ISubscriptionRepository subscriptions = Substitute.For<ISubscriptionRepository>();
+        subscriptions.GetEffectiveRetentionDaysAsync(7, Arg.Any<CancellationToken>()).Returns(1, 60, 60);
+        IMachineStateRepository machineState = Substitute.For<IMachineStateRepository>();
+
+        await CreateJob(subscriptions, machineState).RunAsync(7, CancellationToken.None);
+
+        // First pass ran on the stale-at-the-time Short target; the re-check drove a second pass that
+        // converged the tenant on Medium.
+        await machineState.Received().ReclassifyTelemetryForTenantAsync(
+            7, RetentionClass.Short, Arg.Any<DateTimeOffset>(), Arg.Any<DateTimeOffset>(), Arg.Any<CancellationToken>());
+        await machineState.Received().ReclassifyTelemetryForTenantAsync(
+            7, RetentionClass.Medium, Arg.Any<DateTimeOffset>(), Arg.Any<DateTimeOffset>(), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task RunAsync_RetentionChangesOnEveryPass_StopsAtTheConvergenceBound()
+    {
+        // Intent: a pathological change storm must not pin a worker. The run stops after the bound;
+        // the change that outran it enqueued its own job.
+        int everChanging = 100;
+        ISubscriptionRepository subscriptions = Substitute.For<ISubscriptionRepository>();
+        subscriptions.GetEffectiveRetentionDaysAsync(7, Arg.Any<CancellationToken>())
+            .Returns(_ => everChanging++);
+        IMachineStateRepository machineState = Substitute.For<IMachineStateRepository>();
+
+        await CreateJob(subscriptions, machineState).RunAsync(7, CancellationToken.None);
+
+        // One read to seed plus one re-check per pass, bounded by MaxConvergencePasses.
+        await subscriptions.Received(RetentionReclassifyJob.MaxConvergencePasses + 1)
+            .GetEffectiveRetentionDaysAsync(7, Arg.Any<CancellationToken>());
     }
 
     [Test]

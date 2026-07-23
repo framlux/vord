@@ -124,12 +124,19 @@ public static class ServiceCollectionExtensions
         // Subscription status is read on every state-changing request and every unary telemetry
         // call, so wrap the database-backed repository in a Redis short-TTL caching decorator that
         // invalidates on subscription mutations.
+        services.AddScoped<RetentionReclassifyDispatcher>();
         services.AddScoped<ISubscriptionRepository>(sp => new CachingSubscriptionRepository(
             sp.GetRequiredService<DatabaseRepository>(),
             sp.GetRequiredService<IConnectionMultiplexer>(),
             sp.GetRequiredService<IOptions<RedisOptions>>(),
-            sp.GetRequiredService<IBackgroundJobClient>(),
-            sp.GetRequiredService<ILogger<CachingSubscriptionRepository>>()));
+            sp.GetRequiredService<RetentionReclassifyDispatcher>()));
+        // The reclassification job must read committed state, never the Redis-cached subscription
+        // entry, which a concurrent read can re-seed with the pre-change tier between the decorator's
+        // invalidate and the commit. Keying the database-backed repository keeps the job's dependency
+        // explicit while leaving every other consumer on the cached decorator.
+        services.AddKeyedScoped<ISubscriptionRepository>(
+            RetentionReclassifyJob.UncachedRepositoryKey,
+            (sp, key) => sp.GetRequiredService<DatabaseRepository>());
         services.AddScoped<IMachineRepository>(sp => sp.GetRequiredService<DatabaseRepository>());
         services.AddScoped<IInvitationRepository>(sp => sp.GetRequiredService<DatabaseRepository>());
         services.AddScoped<ISigningKeyRepository>(sp => sp.GetRequiredService<DatabaseRepository>());

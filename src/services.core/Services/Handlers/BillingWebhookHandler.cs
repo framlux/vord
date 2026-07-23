@@ -20,6 +20,7 @@ public sealed class BillingWebhookHandler : IBillingWebhookHandler
     private readonly ISubscriptionRepository _subscriptionRepo;
     private readonly IAlertRuleRepository _alertRuleRepo;
     private readonly IDowngradeCleanupService _downgradeCleanupService;
+    private readonly RetentionReclassifyDispatcher _reclassifyDispatcher;
 
     /// <summary>
     /// Creates a new instance of the <see cref="BillingWebhookHandler"/> class.
@@ -29,19 +30,22 @@ public sealed class BillingWebhookHandler : IBillingWebhookHandler
         IAuditLogRepository auditLog,
         ISubscriptionRepository subscriptionRepo,
         IAlertRuleRepository alertRuleRepo,
-        IDowngradeCleanupService downgradeCleanupService)
+        IDowngradeCleanupService downgradeCleanupService,
+        RetentionReclassifyDispatcher reclassifyDispatcher)
     {
         ArgumentNullException.ThrowIfNull(transactionProvider);
         ArgumentNullException.ThrowIfNull(auditLog);
         ArgumentNullException.ThrowIfNull(subscriptionRepo);
         ArgumentNullException.ThrowIfNull(alertRuleRepo);
         ArgumentNullException.ThrowIfNull(downgradeCleanupService);
+        ArgumentNullException.ThrowIfNull(reclassifyDispatcher);
 
         _transactionProvider = transactionProvider;
         _auditLog = auditLog;
         _subscriptionRepo = subscriptionRepo;
         _alertRuleRepo = alertRuleRepo;
         _downgradeCleanupService = downgradeCleanupService;
+        _reclassifyDispatcher = reclassifyDispatcher;
     }
 
     /// <inheritdoc/>
@@ -57,6 +61,9 @@ public sealed class BillingWebhookHandler : IBillingWebhookHandler
             tenantId.ToString(), null, null), ct);
 
         await transaction.CommitAsync(ct);
+
+        // Post-commit: a tier change marked during the transaction is only queued now, never inside it.
+        _reclassifyDispatcher.DispatchPending();
 
         await ProvisionDefaultAlertRulesAsync(tenantId, ct);
     }
@@ -238,6 +245,9 @@ public sealed class BillingWebhookHandler : IBillingWebhookHandler
 
         await transaction.CommitAsync(ct);
 
+        // Post-commit: a tier change marked during the transaction is only queued now, never inside it.
+        _reclassifyDispatcher.DispatchPending();
+
         await _downgradeCleanupService.CleanupForFreeTierAsync(tenantId, ct);
     }
 
@@ -260,6 +270,9 @@ public sealed class BillingWebhookHandler : IBillingWebhookHandler
             tenantId.ToString(), "Payment recovered, subscription reactivated", null), ct);
 
         await transaction.CommitAsync(ct);
+
+        // Post-commit: a tier change marked during the transaction is only queued now, never inside it.
+        _reclassifyDispatcher.DispatchPending();
     }
 
     /// <inheritdoc/>
@@ -275,6 +288,9 @@ public sealed class BillingWebhookHandler : IBillingWebhookHandler
             tenantId.ToString(), "Downgraded from Team to Pro", null), ct);
 
         await transaction.CommitAsync(ct);
+
+        // Post-commit: a tier change marked during the transaction is only queued now, never inside it.
+        _reclassifyDispatcher.DispatchPending();
     }
 
     /// <inheritdoc/>
@@ -290,6 +306,9 @@ public sealed class BillingWebhookHandler : IBillingWebhookHandler
             tenantId.ToString(), "Tier corrected by sync service", null), ct);
 
         await transaction.CommitAsync(ct);
+
+        // Post-commit: a tier change marked during the transaction is only queued now, never inside it.
+        _reclassifyDispatcher.DispatchPending();
     }
 
     /// <inheritdoc/>
@@ -305,6 +324,9 @@ public sealed class BillingWebhookHandler : IBillingWebhookHandler
             tenantId.ToString(), "Account canceled", null), ct);
 
         await transaction.CommitAsync(ct);
+
+        // Post-commit: a tier change marked during the transaction is only queued now, never inside it.
+        _reclassifyDispatcher.DispatchPending();
 
         await _downgradeCleanupService.CleanupForFreeTierAsync(tenantId, ct);
     }

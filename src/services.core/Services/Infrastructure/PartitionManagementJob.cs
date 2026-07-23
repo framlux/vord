@@ -18,7 +18,7 @@ namespace Framlux.FleetManagement.Services.Core.Infrastructure;
 /// </summary>
 public sealed class PartitionManagementJob
 {
-    private const int DaysAhead = 7;
+    private const int DaysAhead = RetentionClassPolicy.PartitionCreateAheadDays;
 
     /// <summary>
     /// Number of additional days of headroom kept beyond the maximum retention period before

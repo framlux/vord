@@ -28,21 +28,45 @@ namespace Framlux.FleetManagement.Services.Core.Infrastructure;
 /// and expire on the old schedule.
 /// </para>
 /// <para>
+/// The retention read deliberately bypasses the Redis caching decorator. That cache is invalidated
+/// before a subscription write commits, so a concurrent reader can re-seed it with the pre-change tier
+/// and hold that value for the cache TTL. A background convergence step has no hot-path reason to read
+/// a cache, and reading one here would turn a transient race into permanent misclassification: the job
+/// would compute the old class, move nothing, and never be re-enqueued. It therefore takes the
+/// database-backed repository directly, keyed as <see cref="UncachedRepositoryKey"/>.
+/// </para>
+/// <para>
 /// There is no per-tenant concurrency lock. Hangfire's <c>DisableConcurrentExecution</c> keys on the
 /// job method rather than its arguments, so it would serialize unrelated tenants, and the codebase's
 /// per-tenant advisory lock is try-once — a skipped run would drop the reclassification entirely.
 /// Overlap is instead made safe by the repository's "class differs from target" guard, which makes
-/// every UPDATE idempotent, and by resolving the target at execution time.
+/// every UPDATE idempotent, by resolving the target at execution time, and by the convergence
+/// re-check: after the chunk loop the job re-reads the committed retention and repeats when it moved,
+/// so a run that raced a plan change still ends on the latest value.
 /// </para>
 /// </remarks>
 public sealed class RetentionReclassifyJob
 {
     /// <summary>
+    /// DI key of the uncached, database-backed <see cref="ISubscriptionRepository"/> this job reads the
+    /// tenant's effective retention from. See the type remarks for why the caching decorator is unsafe
+    /// here.
+    /// </summary>
+    public const string UncachedRepositoryKey = "subscriptions:uncached";
+
+    /// <summary>
     /// Days beyond the current instant that the day-chunk walk covers. The ingest path clamps a row's
     /// partition-key timestamp to the pre-created future partitions, so a clock-skewed agent can place
     /// a row up to this many days ahead; those rows must move with the rest.
     /// </summary>
-    internal const int FutureWindowDays = 7;
+    internal const int FutureWindowDays = RetentionClassPolicy.PartitionCreateAheadDays;
+
+    /// <summary>
+    /// Maximum number of chunk-loop passes a single run performs. A pass beyond the first happens only
+    /// when the tenant's retention changed while the run was in flight; the bound stops a change storm
+    /// from pinning a worker, and the change that outran the last pass has already enqueued its own job.
+    /// </summary>
+    internal const int MaxConvergencePasses = 3;
 
     private readonly ISubscriptionRepository _subscriptionRepository;
     private readonly IMachineStateRepository _machineStateRepository;
@@ -52,12 +76,15 @@ public sealed class RetentionReclassifyJob
     /// <summary>
     /// Creates a new instance of the <see cref="RetentionReclassifyJob"/> class.
     /// </summary>
-    /// <param name="subscriptionRepository">Source of the tenant's current effective retention.</param>
+    /// <param name="subscriptionRepository">
+    /// Source of the tenant's current effective retention. Must be the uncached, database-backed
+    /// repository — see the type remarks.
+    /// </param>
     /// <param name="machineStateRepository">Repository performing the day-bounded reclassify update.</param>
     /// <param name="timeProvider">Clock used to bound the reclassification window.</param>
     /// <param name="logger">The logger.</param>
     public RetentionReclassifyJob(
-        ISubscriptionRepository subscriptionRepository,
+        [FromKeyedServices(UncachedRepositoryKey)] ISubscriptionRepository subscriptionRepository,
         IMachineStateRepository machineStateRepository,
         TimeProvider timeProvider,
         ILogger<RetentionReclassifyJob> logger)
@@ -89,15 +116,35 @@ public sealed class RetentionReclassifyJob
         }
 
         int retentionDays = await _subscriptionRepository.GetEffectiveRetentionDaysAsync(tenantId, ct);
-        RetentionClass target = RetentionClassPolicy.Classify(retentionDays);
-        IReadOnlyList<(DateTimeOffset Start, DateTimeOffset End)> chunks =
-            BuildDayChunks(_timeProvider.GetUtcNow(), retentionDays);
-
         int totalMoved = 0;
-        foreach ((DateTimeOffset start, DateTimeOffset end) in chunks)
+        int pass = 0;
+        RetentionClass target;
+
+        while (true)
         {
-            totalMoved += await _machineStateRepository.ReclassifyTelemetryForTenantAsync(
-                tenantId, target, start, end, ct);
+            pass++;
+            target = RetentionClassPolicy.Classify(retentionDays);
+            totalMoved += await MoveWindowAsync(tenantId, target, retentionDays, ct);
+
+            // Convergence re-check: a plan change that committed while this pass was running would
+            // otherwise leave the tenant on the target this pass computed. Re-read the committed
+            // retention; if it moved, run again on the new value.
+            int currentRetentionDays = await _subscriptionRepository.GetEffectiveRetentionDaysAsync(tenantId, ct);
+            if (currentRetentionDays == retentionDays)
+            {
+                break;
+            }
+
+            retentionDays = currentRetentionDays;
+
+            if (pass >= MaxConvergencePasses)
+            {
+                _logger.LogWarning(
+                    "Retention reclassify: tenant {TenantId} changed plan on every one of {Passes} passes; stopping. The change that outran this run enqueued its own job",
+                    tenantId, pass);
+
+                break;
+            }
         }
 
         if (totalMoved > 0)
@@ -111,6 +158,30 @@ public sealed class RetentionReclassifyJob
             _logger.LogDebug(
                 "Retention reclassify: tenant {TenantId} already converged on class {Class}", tenantId, target);
         }
+    }
+
+    /// <summary>
+    /// Runs one day-chunked pass over the tenant's effective window, moving every in-window row that is
+    /// not already in the target class.
+    /// </summary>
+    /// <param name="tenantId">The tenant whose telemetry is reclassified.</param>
+    /// <param name="target">The retention class the rows move into.</param>
+    /// <param name="retentionDays">The effective retention bounding the window.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>The number of rows moved by this pass.</returns>
+    private async Task<int> MoveWindowAsync(int tenantId, RetentionClass target, int retentionDays, CancellationToken ct)
+    {
+        IReadOnlyList<(DateTimeOffset Start, DateTimeOffset End)> chunks =
+            BuildDayChunks(_timeProvider.GetUtcNow(), retentionDays);
+
+        int moved = 0;
+        foreach ((DateTimeOffset start, DateTimeOffset end) in chunks)
+        {
+            moved += await _machineStateRepository.ReclassifyTelemetryForTenantAsync(
+                tenantId, target, start, end, ct);
+        }
+
+        return moved;
     }
 
     /// <summary>

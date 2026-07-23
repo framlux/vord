@@ -8,12 +8,18 @@ using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Services.Core.Billing;
 using Framlux.FleetManagement.Services.Core.Handlers;
+using Framlux.FleetManagement.Services.Core.Infrastructure;
+using Framlux.FleetManagement.Services.Core.Options;
 using Framlux.FleetManagement.Services.Core.Security;
 using Framlux.FleetManagement.Test.Infrastructure;
+using Hangfire;
+using Hangfire.Common;
+using Hangfire.States;
 using LinqToDB;
 using LinqToDB.Async;
 using LinqToDB.Tools;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 using NSubstitute;
 
 namespace Framlux.FleetManagement.Test.Services.Handlers;
@@ -75,7 +81,62 @@ public class BillingWebhookHandlerTests
             repo,
             repo,
             repo,
-            cleanupService ?? Substitute.For<IDowngradeCleanupService>());
+            cleanupService ?? Substitute.For<IDowngradeCleanupService>(),
+            new RetentionReclassifyDispatcher(
+                Substitute.For<IBackgroundJobClient>(), NullLogger<RetentionReclassifyDispatcher>.Instance));
+    }
+
+    /// <summary>
+    /// Pins the ordering the retention reclassification depends on: the tier change is observed by the
+    /// subscription seam mid-transaction, but nothing may reach Hangfire until the handler has
+    /// committed. Enqueuing inside the transaction would let the job read pre-change state, compute the
+    /// old retention class, move nothing, and never be re-enqueued.
+    /// </summary>
+    [Test]
+    public async Task HandleCheckoutCompletedAsync_EnqueuesReclassifyStrictlyAfterTheCommit()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        await SeedTierFeatureLimitsAsync(dbFactory.Context);
+        TenantSubscription seeded = TestDataBuilder.BuildSubscription(tenantId: 1, tier: SubscriptionTier.Free);
+        seeded.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(seeded);
+
+        DatabaseRepository repo = new(dbFactory.Context, new NullLogger<DatabaseRepository>());
+        IDatabaseTransaction transaction = Substitute.For<IDatabaseTransaction>();
+        IDatabaseTransactionProvider transactionProvider = Substitute.For<IDatabaseTransactionProvider>();
+        transactionProvider.BeginTransactionAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult(transaction));
+
+        IBackgroundJobClient backgroundJobs = Substitute.For<IBackgroundJobClient>();
+        RetentionReclassifyDispatcher dispatcher = new(
+            backgroundJobs, NullLogger<RetentionReclassifyDispatcher>.Instance);
+
+        // The production graph: the handler writes through the caching subscription decorator, which is
+        // where a tier change is detected.
+        CachingSubscriptionRepository subscriptions = new(
+            repo,
+            FakeRedisConnection.Create(),
+            Options.Create(new RedisOptions { ConnectionString = "localhost", SubscriptionCacheTtlSeconds = 30 }),
+            dispatcher);
+
+        BillingWebhookHandler handler = new(
+            transactionProvider,
+            repo,
+            subscriptions,
+            repo,
+            Substitute.For<IDowngradeCleanupService>(),
+            dispatcher);
+
+        await handler.HandleCheckoutCompletedAsync(1, SubscriptionTier.Pro, CancellationToken.None);
+
+        Received.InOrder(() =>
+        {
+            transaction.CommitAsync(Arg.Any<CancellationToken>());
+            backgroundJobs.Create(Arg.Any<Job>(), Arg.Any<IState>());
+        });
+
+        backgroundJobs.Received(1).Create(
+            Arg.Is<Job>(j => (j.Method.Name == nameof(RetentionReclassifyJob.RunAsync))
+                && ((int)j.Args[0] == 1)),
+            Arg.Any<IState>());
     }
 
     [Test]

@@ -72,11 +72,12 @@ public sealed class TelemetryService : Telemetry.TelemetryBase
     private const string StreamCountKeyPrefix = "telemetry:stream:";
 
     /// <summary>
-    /// Days of future daily partitions the partition job pre-creates. Mirrors
-    /// PartitionManagementJob.DaysAhead; the dedup timestamp clamp must not exceed it so derived
-    /// timestamps always land in an existing partition.
+    /// Days of future daily partitions the partition job pre-creates. Bound to the shared
+    /// <see cref="RetentionClassPolicy.PartitionCreateAheadDays"/> constant so the dedup timestamp
+    /// clamp can never exceed the horizon the partition job actually maintains, and derived timestamps
+    /// always land in an existing partition.
     /// </summary>
-    private const int PartitionJobDaysAhead = 7;
+    private const int PartitionJobDaysAhead = RetentionClassPolicy.PartitionCreateAheadDays;
 
     /// <summary>
     /// Maximum days into the past the dedup timestamp may be clamped to. Partition drop uses the

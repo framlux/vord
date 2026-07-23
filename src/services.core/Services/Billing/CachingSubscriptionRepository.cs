@@ -8,7 +8,6 @@ using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Services.Core.Infrastructure;
 using Framlux.FleetManagement.Services.Core.Options;
-using Hangfire;
 using Microsoft.Extensions.Options;
 using StackExchange.Redis;
 
@@ -34,8 +33,7 @@ public sealed class CachingSubscriptionRepository : ISubscriptionRepository
 
     private readonly ISubscriptionRepository _inner;
     private readonly IConnectionMultiplexer _redis;
-    private readonly IBackgroundJobClient _backgroundJobs;
-    private readonly ILogger<CachingSubscriptionRepository> _logger;
+    private readonly RetentionReclassifyDispatcher _reclassifyDispatcher;
     private readonly TimeSpan _ttl;
 
     /// <summary>
@@ -51,25 +49,21 @@ public sealed class CachingSubscriptionRepository : ISubscriptionRepository
     /// <param name="inner">The underlying repository that performs the actual database work.</param>
     /// <param name="redis">The Redis connection multiplexer used as the cache backing store.</param>
     /// <param name="redisOptions">Redis options supplying the cache TTL.</param>
-    /// <param name="backgroundJobs">Hangfire client used to enqueue retention reclassification after a tier change.</param>
-    /// <param name="logger">The logger.</param>
+    /// <param name="reclassifyDispatcher">Collects tier changes for post-commit retention reclassification.</param>
     public CachingSubscriptionRepository(
         ISubscriptionRepository inner,
         IConnectionMultiplexer redis,
         IOptions<RedisOptions> redisOptions,
-        IBackgroundJobClient backgroundJobs,
-        ILogger<CachingSubscriptionRepository> logger)
+        RetentionReclassifyDispatcher reclassifyDispatcher)
     {
         ArgumentNullException.ThrowIfNull(inner);
         ArgumentNullException.ThrowIfNull(redis);
         ArgumentNullException.ThrowIfNull(redisOptions);
-        ArgumentNullException.ThrowIfNull(backgroundJobs);
-        ArgumentNullException.ThrowIfNull(logger);
+        ArgumentNullException.ThrowIfNull(reclassifyDispatcher);
 
         _inner = inner;
         _redis = redis;
-        _backgroundJobs = backgroundJobs;
-        _logger = logger;
+        _reclassifyDispatcher = reclassifyDispatcher;
 
         int ttlSeconds = redisOptions.Value.SubscriptionCacheTtlSeconds;
         _ttl = TimeSpan.FromSeconds(ttlSeconds > 0 ? ttlSeconds : 30);
@@ -159,33 +153,15 @@ public sealed class CachingSubscriptionRepository : ISubscriptionRepository
         // observed. A tier change moves the tenant's effective retention, so the surviving telemetry
         // must follow it. Status-only transitions are skipped: effective retention is a function of
         // tier and per-tenant override alone.
+        //
+        // This runs inside the caller's transaction, so the change is only marked here. The caller
+        // dispatches it after its commit; see RetentionReclassifyDispatcher.
         if ((tier is not null) && (updated > 0))
         {
-            EnqueueReclassify(tenantId);
+            _reclassifyDispatcher.MarkPending(tenantId);
         }
 
         return updated;
-    }
-
-    /// <summary>
-    /// Enqueues the retention reclassification for a tenant, fire-and-forget, after the subscription
-    /// write has committed. A Hangfire storage failure must never fail or roll back a subscription
-    /// change that already happened, so the enqueue failure is logged and swallowed; the tenant's next
-    /// plan change re-enqueues, and an operator can re-run the job from the Hangfire dashboard.
-    /// </summary>
-    private void EnqueueReclassify(int tenantId)
-    {
-        try
-        {
-            _backgroundJobs.Enqueue<RetentionReclassifyJob>(job => job.RunAsync(tenantId, CancellationToken.None));
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(
-                ex,
-                "Failed to enqueue retention reclassification for tenant {TenantId}; its telemetry keeps the previous retention class until the job is re-run",
-                tenantId);
-        }
     }
 
     /// <inheritdoc/>
