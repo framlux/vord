@@ -19,6 +19,7 @@ using Framlux.FleetManagement.Services.Core.Security;
 using Framlux.FleetManagement.Services.Core.ServerConfiguration;
 using Framlux.FleetManagement.Services.Core.Telemetry;
 using Framlux.Vord.BillingGrpc;
+using Hangfire;
 using LinqToDB;
 using LinqToDB.Extensions.DependencyInjection;
 using LinqToDB.Extensions.Logging;
@@ -126,7 +127,9 @@ public static class ServiceCollectionExtensions
         services.AddScoped<ISubscriptionRepository>(sp => new CachingSubscriptionRepository(
             sp.GetRequiredService<DatabaseRepository>(),
             sp.GetRequiredService<IConnectionMultiplexer>(),
-            sp.GetRequiredService<IOptions<RedisOptions>>()));
+            sp.GetRequiredService<IOptions<RedisOptions>>(),
+            sp.GetRequiredService<IBackgroundJobClient>(),
+            sp.GetRequiredService<ILogger<CachingSubscriptionRepository>>()));
         services.AddScoped<IMachineRepository>(sp => sp.GetRequiredService<DatabaseRepository>());
         services.AddScoped<IInvitationRepository>(sp => sp.GetRequiredService<DatabaseRepository>());
         services.AddScoped<ISigningKeyRepository>(sp => sp.GetRequiredService<DatabaseRepository>());
@@ -339,6 +342,7 @@ public static class ServiceCollectionExtensions
 
         services.AddScoped<RemoteCommandExpiryJob>();
         services.AddScoped<PartitionManagementJob>();
+        services.AddScoped<RetentionReclassifyJob>();
         services.AddScoped<HealthSweepTenantJob>();
         services.AddScoped<HealthSweepCoordinatorJob>();
         services.AddScoped<AlertEvaluationJob>();

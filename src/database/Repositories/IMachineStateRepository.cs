@@ -40,6 +40,26 @@ public interface IMachineStateRepository
     Task InsertTelemetryAsync(MachineTelemetry row, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Moves one day's worth of a tenant's telemetry into the given retention class. Because
+    /// <c>RetentionClass</c> is the LIST partition key of <c>MachineTelemetry</c>, this UPDATE is a
+    /// keyed row movement on PostgreSQL: the rows physically relocate to the target class's daily leaf
+    /// partition and thereafter expire on that class's schedule. The caller chunks by day so each
+    /// statement stays small and lock-friendly.
+    /// </summary>
+    /// <param name="tenantId">The tenant whose rows move. Rows of other tenants are never touched.</param>
+    /// <param name="target">The retention class the rows move into.</param>
+    /// <param name="dayStart">Inclusive lower bound on <see cref="MachineTelemetry.ReceivedAt"/>.</param>
+    /// <param name="dayEnd">Exclusive upper bound on <see cref="MachineTelemetry.ReceivedAt"/>.</param>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    /// <returns>The number of rows moved. Rows already in the target class are not counted.</returns>
+    Task<int> ReclassifyTelemetryForTenantAsync(
+        int tenantId,
+        RetentionClass target,
+        DateTimeOffset dayStart,
+        DateTimeOffset dayEnd,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Returns the distinct tenant IDs that have at least one machine state summary row.
     /// Used by the health sweep service to partition work by tenant.
     /// </summary>

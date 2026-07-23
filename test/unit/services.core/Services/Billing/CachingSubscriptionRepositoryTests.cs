@@ -6,10 +6,16 @@ using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Services.Core.Billing;
+using Framlux.FleetManagement.Services.Core.Infrastructure;
 using Framlux.FleetManagement.Services.Core.Options;
 using Framlux.FleetManagement.Test.Infrastructure;
+using Hangfire;
+using Hangfire.Common;
+using Hangfire.States;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using NSubstitute;
+using NSubstitute.ExceptionExtensions;
 using StackExchange.Redis;
 
 namespace Framlux.FleetManagement.Test.Services.Billing;
@@ -36,7 +42,8 @@ public sealed class CachingSubscriptionRepositoryTests
     private static CachingSubscriptionRepository Create(
         ISubscriptionRepository inner,
         IConnectionMultiplexer redis,
-        int ttlSeconds = 30)
+        int ttlSeconds = 30,
+        IBackgroundJobClient? backgroundJobs = null)
     {
         IOptions<RedisOptions> options = Options.Create(new RedisOptions
         {
@@ -44,7 +51,12 @@ public sealed class CachingSubscriptionRepositoryTests
             SubscriptionCacheTtlSeconds = ttlSeconds,
         });
 
-        return new CachingSubscriptionRepository(inner, redis, options);
+        return new CachingSubscriptionRepository(
+            inner,
+            redis,
+            options,
+            backgroundJobs ?? Substitute.For<IBackgroundJobClient>(),
+            NullLogger<CachingSubscriptionRepository>.Instance);
     }
 
     [Test]
@@ -267,8 +279,114 @@ public sealed class CachingSubscriptionRepositoryTests
         IConnectionMultiplexer redis = FakeRedisConnection.Create();
         IOptions<RedisOptions> options = Options.Create(new RedisOptions { ConnectionString = "x" });
 
-        await Assert.That(() => new CachingSubscriptionRepository(null!, redis, options))
+        await Assert.That(() => new CachingSubscriptionRepository(
+            null!,
+            redis,
+            options,
+            Substitute.For<IBackgroundJobClient>(),
+            NullLogger<CachingSubscriptionRepository>.Instance))
             .Throws<ArgumentNullException>();
+    }
+
+    [Test]
+    public async Task Constructor_NullBackgroundJobClient_Throws()
+    {
+        IConnectionMultiplexer redis = FakeRedisConnection.Create();
+        IOptions<RedisOptions> options = Options.Create(new RedisOptions { ConnectionString = "x" });
+
+        await Assert.That(() => new CachingSubscriptionRepository(
+            Substitute.For<ISubscriptionRepository>(),
+            redis,
+            options,
+            null!,
+            NullLogger<CachingSubscriptionRepository>.Instance))
+            .Throws<ArgumentNullException>();
+    }
+
+    [Test]
+    public async Task Constructor_NullLogger_Throws()
+    {
+        IConnectionMultiplexer redis = FakeRedisConnection.Create();
+        IOptions<RedisOptions> options = Options.Create(new RedisOptions { ConnectionString = "x" });
+
+        await Assert.That(() => new CachingSubscriptionRepository(
+            Substitute.For<ISubscriptionRepository>(),
+            redis,
+            options,
+            Substitute.For<IBackgroundJobClient>(),
+            null!))
+            .Throws<ArgumentNullException>();
+    }
+
+    [Test]
+    public async Task UpdateSubscriptionState_TierChanged_EnqueuesRetentionReclassifyForTenant()
+    {
+        // Intent: this decorator is the single chokepoint every tier-change path routes through
+        // (billing webhook, immediate downgrade, reactivate, Stripe sync correction, admin RPC), so
+        // enqueuing here provably covers all of them. Surviving telemetry must follow the new plan.
+        ISubscriptionRepository inner = Substitute.For<ISubscriptionRepository>();
+        inner.UpdateSubscriptionStateAsync(11, SubscriptionTier.Pro, SubscriptionStatus.Active, false, Arg.Any<CancellationToken>())
+            .Returns(1);
+        IConnectionMultiplexer redis = FakeRedisConnection.Create();
+        IBackgroundJobClient backgroundJobs = Substitute.For<IBackgroundJobClient>();
+        CachingSubscriptionRepository repo = Create(inner, redis, backgroundJobs: backgroundJobs);
+
+        await repo.UpdateSubscriptionStateAsync(11, SubscriptionTier.Pro, SubscriptionStatus.Active, cancellationToken: CancellationToken.None);
+
+        backgroundJobs.Received(1).Create(
+            Arg.Is<Job>(j => (j.Method.Name == nameof(RetentionReclassifyJob.RunAsync))
+                && ((int)j.Args[0] == 11)),
+            Arg.Any<IState>());
+    }
+
+    [Test]
+    public async Task UpdateSubscriptionState_StatusOnlyChange_DoesNotEnqueueReclassify()
+    {
+        // Intent: effective retention is a function of tier and override only, so a status-only
+        // transition (past-due, canceled, reactivated) must not schedule pointless reclassification.
+        ISubscriptionRepository inner = Substitute.For<ISubscriptionRepository>();
+        inner.UpdateSubscriptionStateAsync(12, null, SubscriptionStatus.PastDue, false, Arg.Any<CancellationToken>())
+            .Returns(1);
+        IConnectionMultiplexer redis = FakeRedisConnection.Create();
+        IBackgroundJobClient backgroundJobs = Substitute.For<IBackgroundJobClient>();
+        CachingSubscriptionRepository repo = Create(inner, redis, backgroundJobs: backgroundJobs);
+
+        await repo.UpdateSubscriptionStateAsync(12, null, SubscriptionStatus.PastDue, cancellationToken: CancellationToken.None);
+
+        backgroundJobs.DidNotReceive().Create(Arg.Any<Job>(), Arg.Any<IState>());
+    }
+
+    [Test]
+    public async Task UpdateSubscriptionState_NoSubscriptionRowUpdated_DoesNotEnqueueReclassify()
+    {
+        ISubscriptionRepository inner = Substitute.For<ISubscriptionRepository>();
+        inner.UpdateSubscriptionStateAsync(13, SubscriptionTier.Team, SubscriptionStatus.Active, false, Arg.Any<CancellationToken>())
+            .Returns(0);
+        IConnectionMultiplexer redis = FakeRedisConnection.Create();
+        IBackgroundJobClient backgroundJobs = Substitute.For<IBackgroundJobClient>();
+        CachingSubscriptionRepository repo = Create(inner, redis, backgroundJobs: backgroundJobs);
+
+        await repo.UpdateSubscriptionStateAsync(13, SubscriptionTier.Team, SubscriptionStatus.Active, cancellationToken: CancellationToken.None);
+
+        backgroundJobs.DidNotReceive().Create(Arg.Any<Job>(), Arg.Any<IState>());
+    }
+
+    [Test]
+    public async Task UpdateSubscriptionState_EnqueueFailure_DoesNotFailTheSubscriptionChange()
+    {
+        // Intent: the enqueue is fire-and-forget after the commit. A Hangfire storage blip must not
+        // roll back or fail a subscription change that already committed.
+        ISubscriptionRepository inner = Substitute.For<ISubscriptionRepository>();
+        inner.UpdateSubscriptionStateAsync(14, SubscriptionTier.Pro, SubscriptionStatus.Active, false, Arg.Any<CancellationToken>())
+            .Returns(1);
+        IConnectionMultiplexer redis = FakeRedisConnection.Create();
+        IBackgroundJobClient backgroundJobs = Substitute.For<IBackgroundJobClient>();
+        backgroundJobs.Create(Arg.Any<Job>(), Arg.Any<IState>()).Throws(new InvalidOperationException("hangfire down"));
+        CachingSubscriptionRepository repo = Create(inner, redis, backgroundJobs: backgroundJobs);
+
+        int updated = await repo.UpdateSubscriptionStateAsync(14, SubscriptionTier.Pro, SubscriptionStatus.Active, cancellationToken: CancellationToken.None);
+
+        await Assert.That(updated).IsEqualTo(1);
     }
 
     [Test]

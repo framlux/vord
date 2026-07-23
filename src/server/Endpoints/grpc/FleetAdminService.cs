@@ -14,6 +14,7 @@ using Framlux.FleetManagement.Services.Core.ServerConfiguration;
 using Framlux.Vord.BillingGrpc;
 using Google.Protobuf.WellKnownTypes;
 using Grpc.Core;
+using Hangfire;
 using Microsoft.Extensions.Options;
 using StackExchange.Redis;
 
@@ -551,6 +552,11 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
         // effect within one request rather than one cache TTL.
         await subscriptionRepo.InvalidateSubscriptionCacheAsync(tenant.Id, context.CancellationToken);
 
+        // An override edit changes effective retention without touching the subscription row, so the
+        // tier-change seam never sees it. Enqueue the reclassification here, after the commit, so the
+        // tenant's surviving telemetry follows the retention the override now grants.
+        EnqueueRetentionReclassify(scope, tenant.Id);
+
         _logger.LogInformation(
             "FleetAdmin: tenant {TenantId} override set (machineLimit={MachineLimit}, retentionDays={RetentionDays}, alertRuleLimit={AlertRuleLimit}, webhookLimit={WebhookLimit})",
             tenant.Id, machineLimit, retentionDays, alertRuleLimit, webhookLimit);
@@ -600,6 +606,10 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
         // reverted retention takes effect within one request rather than one cache TTL.
         await subscriptionRepo.InvalidateSubscriptionCacheAsync(tenant.Id, context.CancellationToken);
 
+        // Reverting to the tier default can move the tenant into a different retention class, so the
+        // surviving telemetry is reclassified here as well, after the commit.
+        EnqueueRetentionReclassify(scope, tenant.Id);
+
         _logger.LogInformation(
             "FleetAdmin: tenant {TenantId} override removed", tenant.Id);
 
@@ -608,6 +618,29 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
             Success = true,
             Message = "OK"
         };
+    }
+
+    /// <summary>
+    /// Enqueues the retention reclassification for a tenant, fire-and-forget, after the override write
+    /// has committed. A Hangfire storage failure must not fail an override edit that already happened,
+    /// so the enqueue failure is logged and swallowed.
+    /// </summary>
+    /// <param name="scope">The request scope the Hangfire client is resolved from.</param>
+    /// <param name="tenantId">The tenant whose telemetry is reclassified.</param>
+    private void EnqueueRetentionReclassify(IServiceScope scope, int tenantId)
+    {
+        try
+        {
+            IBackgroundJobClient backgroundJobs = scope.ServiceProvider.GetRequiredService<IBackgroundJobClient>();
+            backgroundJobs.Enqueue<RetentionReclassifyJob>(job => job.RunAsync(tenantId, CancellationToken.None));
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Failed to enqueue retention reclassification for tenant {TenantId}; its telemetry keeps the previous retention class until the job is re-run",
+                tenantId);
+        }
     }
 
     /// <summary>

@@ -42,6 +42,28 @@ public partial class DatabaseRepository : IMachineStateRepository
     }
 
     /// <inheritdoc/>
+    public async Task<int> ReclassifyTelemetryForTenantAsync(
+        int tenantId,
+        RetentionClass target,
+        DateTimeOffset dayStart,
+        DateTimeOffset dayEnd,
+        CancellationToken cancellationToken)
+    {
+        // The "class differs from target" predicate makes the statement idempotent: a re-run, a
+        // Hangfire retry, or an overlapping run touches nothing once the day has converged, and rows
+        // written concurrently by ingest already carry the target class.
+        int moved = await _db.MachineTelemetry
+            .Where(t => (t.TenantId == tenantId)
+                && (t.RetentionClass != target)
+                && (t.ReceivedAt >= dayStart)
+                && (t.ReceivedAt < dayEnd))
+            .Set(t => t.RetentionClass, target)
+            .UpdateAsync(cancellationToken);
+
+        return moved;
+    }
+
+    /// <inheritdoc/>
     public async Task<List<int>> GetDistinctTenantIdsAsync(CancellationToken cancellationToken)
     {
         return await _db.MachineStateSummaries

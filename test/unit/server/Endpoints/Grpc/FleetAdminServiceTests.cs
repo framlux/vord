@@ -12,6 +12,9 @@ using Framlux.FleetManagement.Services.Core.Security;
 using Framlux.Vord.BillingGrpc;
 using Grpc.Core;
 using Grpc.Core.Testing;
+using Hangfire;
+using Hangfire.Common;
+using Hangfire.States;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -1448,6 +1451,7 @@ public sealed class FleetAdminServiceTests
         auditLog.InsertAuditLogAsync(Arg.Any<AuditLogEntry>(), Arg.Any<CancellationToken>()).Returns(Task.CompletedTask);
         ISubscriptionRepository subscriptionRepo = Substitute.For<ISubscriptionRepository>();
         subscriptionRepo.InvalidateSubscriptionCacheAsync(Arg.Any<int>(), Arg.Any<CancellationToken>()).Returns(Task.CompletedTask);
+        IBackgroundJobClient backgroundJobs = Substitute.For<IBackgroundJobClient>();
 
         IServiceScopeFactory scopeFactory = CreateScopeFactoryWithServices(new Dictionary<Type, object>
         {
@@ -1456,6 +1460,7 @@ public sealed class FleetAdminServiceTests
             { typeof(ISubscriptionRepository), subscriptionRepo },
             { typeof(IDatabaseTransactionProvider), txProvider },
             { typeof(IAuditLogRepository), auditLog },
+            { typeof(IBackgroundJobClient), backgroundJobs },
         });
 
         FleetAdminService service = CreateFleetAdminService(scopeFactory);
@@ -1485,6 +1490,13 @@ public sealed class FleetAdminServiceTests
         // The override changes effective retention, so the tenant's subscription cache must be
         // invalidated after commit or the change would lag by one cache TTL.
         await subscriptionRepo.Received(1).InvalidateSubscriptionCacheAsync(TenantInternalId, Arg.Any<CancellationToken>());
+
+        // An override edit can change effective retention without touching the subscription row, so
+        // this path enqueues the reclassify job itself rather than relying on the tier-change seam.
+        backgroundJobs.Received(1).Create(
+            Arg.Is<Job>(j => (j.Method.Name == nameof(RetentionReclassifyJob.RunAsync))
+                && ((int)j.Args[0] == TenantInternalId)),
+            Arg.Any<IState>());
     }
 
     // ── RemoveTenantOverride ──
@@ -1512,6 +1524,7 @@ public sealed class FleetAdminServiceTests
         auditLog.InsertAuditLogAsync(Arg.Any<AuditLogEntry>(), Arg.Any<CancellationToken>()).Returns(Task.CompletedTask);
         ISubscriptionRepository subscriptionRepo = Substitute.For<ISubscriptionRepository>();
         subscriptionRepo.InvalidateSubscriptionCacheAsync(Arg.Any<int>(), Arg.Any<CancellationToken>()).Returns(Task.CompletedTask);
+        IBackgroundJobClient backgroundJobs = Substitute.For<IBackgroundJobClient>();
 
         IServiceScopeFactory scopeFactory = CreateScopeFactoryWithServices(new Dictionary<Type, object>
         {
@@ -1520,6 +1533,7 @@ public sealed class FleetAdminServiceTests
             { typeof(ISubscriptionRepository), subscriptionRepo },
             { typeof(IDatabaseTransactionProvider), txProvider },
             { typeof(IAuditLogRepository), auditLog },
+            { typeof(IBackgroundJobClient), backgroundJobs },
         });
 
         FleetAdminService service = CreateFleetAdminService(scopeFactory);
@@ -1534,6 +1548,13 @@ public sealed class FleetAdminServiceTests
 
         // Clearing the override reverts effective retention; the cache must be invalidated after commit.
         await subscriptionRepo.Received(1).InvalidateSubscriptionCacheAsync(TenantInternalId, Arg.Any<CancellationToken>());
+
+        // Reverting to the tier default can move the tenant into a different class, so the surviving
+        // rows are reclassified here too.
+        backgroundJobs.Received(1).Create(
+            Arg.Is<Job>(j => (j.Method.Name == nameof(RetentionReclassifyJob.RunAsync))
+                && ((int)j.Args[0] == TenantInternalId)),
+            Arg.Any<IState>());
     }
 
     // ── ConfigureTenantOidc ──
