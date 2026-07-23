@@ -24,7 +24,12 @@ namespace Framlux.FleetManagement.Services.Core.Billing;
 /// </summary>
 public sealed class CachingSubscriptionRepository : ISubscriptionRepository
 {
-    private const string KeyPrefix = "subscription:tenant:";
+    // Versioned key prefix. The cached payload shape is part of the cache contract, so the prefix is
+    // bumped whenever that shape changes (v2 added the effective-retention field). A single shared
+    // constant keeps every read/write/invalidate site on the same version, and the version bump keeps
+    // a rolling deploy from reading a peer replica's older-format entry. Kept as one constant so the
+    // sites can never drift.
+    private const string KeyPrefix = "subscription:tenant:v2:";
 
     private readonly ISubscriptionRepository _inner;
     private readonly IConnectionMultiplexer _redis;
@@ -95,7 +100,14 @@ public sealed class CachingSubscriptionRepository : ISubscriptionRepository
         RedisValue cached = await db.StringGetAsync(key);
         if (cached.HasValue)
         {
-            return Deserialize(cached!);
+            CachedSubscriptionEntry? deserialized = TryDeserialize(cached!);
+            if (deserialized is not null)
+            {
+                return deserialized;
+            }
+
+            // A corrupt or legacy-format entry is treated as a miss: fall through, reload from the
+            // inner repository, and overwrite the key with the current (v2) format.
         }
 
         TenantSubscription? subscription = await _inner.GetSubscriptionForTenantAsync(tenantId, cancellationToken);
@@ -164,17 +176,24 @@ public sealed class CachingSubscriptionRepository : ISubscriptionRepository
         return KeyPrefix + tenantId.ToString(System.Globalization.CultureInfo.InvariantCulture);
     }
 
-    private static CachedSubscriptionEntry Deserialize(string payload)
+    private static CachedSubscriptionEntry? TryDeserialize(string payload)
     {
-        // An empty value is treated as a cached negative with the fail-safe one-day retention, so a
-        // corrupt or legacy entry can never resurrect a subscription or a longer retention.
+        // Returns null (a cache miss) for anything that is not a well-formed current-format entry —
+        // an empty value, malformed JSON, or a null document — so a corrupt or legacy entry falls
+        // through to a fresh load rather than throwing or resurrecting a stale answer.
         if (string.IsNullOrEmpty(payload))
         {
-            return new CachedSubscriptionEntry(null, 1);
+            return null;
         }
 
-        return JsonSerializer.Deserialize<CachedSubscriptionEntry>(payload, JsonDefaults.CamelCase)
-            ?? new CachedSubscriptionEntry(null, 1);
+        try
+        {
+            return JsonSerializer.Deserialize<CachedSubscriptionEntry>(payload, JsonDefaults.CamelCase);
+        }
+        catch (JsonException)
+        {
+            return null;
+        }
     }
 
     private async Task InvalidateAsync(int tenantId)

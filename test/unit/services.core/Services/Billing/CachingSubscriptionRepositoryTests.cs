@@ -243,6 +243,25 @@ public sealed class CachingSubscriptionRepositoryTests
     }
 
     [Test]
+    public async Task GetSubscription_CorruptOrLegacyCacheEntry_TreatedAsMiss_FallsThroughToInner()
+    {
+        // A pre-existing entry whose payload is not the current (v2) format — here a legacy
+        // "__none__" sentinel that is not valid JSON — must be treated as a cache miss and reloaded
+        // from the database, never throw and never silently resurrect a wrong answer.
+        ISubscriptionRepository inner = Substitute.For<ISubscriptionRepository>();
+        inner.GetSubscriptionForTenantAsync(20, Arg.Any<CancellationToken>()).Returns(BuildSubscription(20));
+        IConnectionMultiplexer redis = FakeRedisConnection.Create();
+        await redis.GetDatabase().StringSetAsync("subscription:tenant:v2:20", "__none__");
+        CachingSubscriptionRepository repo = Create(inner, redis);
+
+        TenantSubscription? result = await repo.GetSubscriptionForTenantAsync(20, CancellationToken.None);
+
+        await Assert.That(result).IsNotNull();
+        await Assert.That(result!.TenantId).IsEqualTo(20);
+        await inner.Received(1).GetSubscriptionForTenantAsync(20, Arg.Any<CancellationToken>());
+    }
+
+    [Test]
     public async Task Constructor_NullInner_Throws()
     {
         IConnectionMultiplexer redis = FakeRedisConnection.Create();
