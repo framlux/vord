@@ -2,6 +2,14 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
+// PRE-PRODUCTION MIGRATION POLICY: until the first production release ships, schema
+// changes are made by editing this migration in place and recreating databases.
+// AFTER the first production release, this file is FROZEN — never edit it again;
+// every schema change becomes a new, incremental FluentMigrator migration file with
+// a new version number. FluentMigrator records applied versions and will silently
+// skip an already-applied version, so an in-place edit after ship never reaches a
+// live database.
+
 using FluentMigrator;
 
 namespace Framlux.FleetManagement.Database.Migrations;

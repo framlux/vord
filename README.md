@@ -328,6 +328,12 @@ Uses the same `Database__*` environment variables as the server:
 | `Database__PASSWORD` | PostgreSQL password     | Yes      |
 | `Database__DB`       | PostgreSQL database name | Yes     |
 
+## Upgrading
+
+For production deployments, pin `IMAGE_TAG` to explicit released versions — never `latest` — so every service in the stack runs a known, reproducible build. Always run `migration-runner` to completion against the target version before starting the new `api-server`/`web` images, per the startup order above.
+
+Pre-1.0 releases may require a database reset when upgrading: the schema is still consolidated into a small number of migrations until GA, so some upgrades cannot be applied in place and instead require recreating the database.
+
 ## Development
 
 ### Build
