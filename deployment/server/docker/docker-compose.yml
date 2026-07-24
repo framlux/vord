@@ -113,8 +113,6 @@ services:
       Authentication__Oidc__ClientId: ${OIDC_CLIENT_ID:-}
       Authentication__Oidc__ClientSecret: ${OIDC_CLIENT_SECRET:-}
       Authentication__Oidc__MetadataAddress: ${OIDC_METADATA_ADDRESS:-}
-      Subscription__FreeTierMachineLimit: ${FREE_TIER_MACHINE_LIMIT:-3}
-      Subscription__FreeTierRetentionDays: ${FREE_TIER_RETENTION_DAYS:-1}
       Billing__Enabled: "${Billing__Enabled:-false}"
       Resend__ApiKey: ${RESEND_API_KEY:-}
       Resend__FromEmail: ${RESEND_FROM_EMAIL:-}

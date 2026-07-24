@@ -103,11 +103,6 @@ Vord Fleet can be self-hosted using Docker Compose. The built-in billing integra
 
    # Billing is disabled by default — no Stripe account needed
    Billing__Enabled=false
-
-   # Without billing, all tenants use the free tier limits.
-   # Set these to generous values for your deployment:
-   FREE_TIER_MACHINE_LIMIT=10000
-   FREE_TIER_RETENTION_DAYS=365
    ```
 
 3. Start the stack:
@@ -120,7 +115,7 @@ Vord Fleet can be self-hosted using Docker Compose. The built-in billing integra
 
 ### Disabling Billing
 
-When `Billing__Enabled=false` (the default), the server registers a no-op billing client. All subscription checks pass, and no Stripe account or billing API is required. Every tenant operates under the free tier limits, so adjust `FREE_TIER_MACHINE_LIMIT` and `FREE_TIER_RETENTION_DAYS` to match your needs.
+When `Billing__Enabled=false` (the default), the server registers a no-op billing client. All subscription checks pass, and no Stripe account or billing API is required. Every tenant operates under the free tier limits; to change those limits, edit the seeded `TierFeatureLimits` values (see [Subscription tiers](#subscription-tiers) under Configuration).
 
 ### Optional Services
 
@@ -251,14 +246,13 @@ Only needed when running behind a custom domain (e.g., `.example.com`). When not
 
 Required only if you want to enable the tenant data export feature. When not configured, the export endpoint returns 501. Works with any S3-compatible provider (AWS S3, MinIO, etc.).
 
-#### Subscription
+#### Subscription tiers
 
-| Key                                    | Description                          | Default | Required |
-|----------------------------------------|--------------------------------------|---------|----------|
-| `Subscription__FreeTierMachineLimit`   | Max machines for free tier           | 3       | No       |
-| `Subscription__FreeTierRetentionDays`  | Telemetry retention days (free tier) | 1       | No       |
-
-Self-hosters: set these to higher values for your deployment (e.g., `10000` machines, `365` days).
+Per-tier limits (machine count, telemetry retention, alert-rule/webhook caps,
+member count) are **not** environment variables. They live in the `TierFeatureLimits`
+table, seeded on first migration (Free defaults to 3 machines / 1 retention day).
+Self-hosters who want different limits should change the seeded values, and a
+per-tenant override can be applied through `TenantSubscriptionOverrides`.
 
 #### Email (Resend)
 
@@ -269,16 +263,13 @@ Self-hosters: set these to higher values for your deployment (e.g., `10000` mach
 
 Email is optional. Without it, invitation emails will not be sent but the application remains functional.
 
-#### Server Defaults
+#### Server operational defaults
 
-| Key                                          | Description                               | Default |
-|----------------------------------------------|-------------------------------------------|---------|
-| `ServerDefaults__AgentHeartbeatSeconds`       | Expected agent heartbeat interval         | 300     |
-| `ServerDefaults__AgentConfigRefreshSeconds`   | Agent config refresh interval             | 21600   |
-| `ServerDefaults__OnlineThresholdSeconds`      | Seconds before a machine is marked offline | 300    |
-| `ServerDefaults__CertificateExpiryWarningDays`| Days before cert expiry to warn           | 30      |
-| `ServerDefaults__TelemetryCleanupGraceDays`   | Grace period before telemetry cleanup     | 7       |
-| `ServerDefaults__DeduplicationTtlSeconds`     | Deduplication window for telemetry        | 300     |
+Operational thresholds (agent heartbeat interval, agent config-refresh interval,
+online threshold, deduplication window) are **not** environment variables. They are
+stored as server configuration settings in the database, seeded on first migration
+(`ServerConfigurationSettings`), and adjusted at runtime from the system-admin
+settings panel — no restart required.
 
 #### Telemetry
 
