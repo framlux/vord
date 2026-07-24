@@ -135,7 +135,7 @@ public sealed class ServerConfigurationService
         IDatabase db = _redis.GetDatabase();
 
         // Try Redis first (shared across all replicas).
-        RedisValue cached = await db.StringGetAsync(redisKey);
+        RedisValue cached = await TryRedisGetAsync(db, redisKey);
         if (cached.HasValue && int.TryParse(cached.ToString(), out int cachedValue) && cachedValue > 0)
         {
             return cachedValue;
@@ -147,7 +147,7 @@ public sealed class ServerConfigurationService
         if (value is not null && int.TryParse(value, out int parsed) && parsed > 0)
         {
             // Store in Redis so other replicas can read it.
-            await db.StringSetAsync(redisKey, parsed.ToString(), CacheTtl);
+            await TryRedisSetAsync(db, redisKey, parsed.ToString());
 
             return parsed;
         }
@@ -160,7 +160,7 @@ public sealed class ServerConfigurationService
         string redisKey = $"config:{key}";
         IDatabase db = _redis.GetDatabase();
 
-        RedisValue cached = await db.StringGetAsync(redisKey);
+        RedisValue cached = await TryRedisGetAsync(db, redisKey);
         if (cached.HasValue)
         {
             return cached.ToString();
@@ -171,9 +171,43 @@ public sealed class ServerConfigurationService
         string? value = await _cache.GetSettingFromDatabaseAsync(key, ct);
         if (value is not null)
         {
-            await db.StringSetAsync(redisKey, value, CacheTtl);
+            await TryRedisSetAsync(db, redisKey, value);
         }
 
         return value;
+    }
+
+    /// <summary>
+    /// Reads a key from Redis, treating any Redis outage as a cache miss so the caller falls back to
+    /// the database. Config resolution must remain available (fail-open) during a Redis blip rather
+    /// than propagating the failure and taking the fleet down.
+    /// </summary>
+    private static async Task<RedisValue> TryRedisGetAsync(IDatabase db, string redisKey)
+    {
+        try
+        {
+            return await db.StringGetAsync(redisKey);
+        }
+        catch (RedisException)
+        {
+            return RedisValue.Null;
+        }
+    }
+
+    /// <summary>
+    /// Populates the shared Redis cache on a best-effort basis. A Redis outage must not fail the read
+    /// path — the authoritative value has already been resolved from the database.
+    /// </summary>
+    private static async Task TryRedisSetAsync(IDatabase db, string redisKey, RedisValue value)
+    {
+        try
+        {
+            await db.StringSetAsync(redisKey, value, CacheTtl);
+        }
+        catch (RedisException)
+        {
+            // Best-effort cache population; a Redis outage is tolerated and other replicas will
+            // re-resolve from the database until Redis recovers.
+        }
     }
 }

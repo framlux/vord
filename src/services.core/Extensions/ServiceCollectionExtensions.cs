@@ -212,10 +212,13 @@ public static class ServiceCollectionExtensions
             pipelineBuilder.AddRetry(RedisRetryPipelineOptions.Create(TimeSpan.FromMilliseconds(200), logger));
         });
 
-        // Health checks for PostgreSQL and Redis
+        // Health checks for PostgreSQL and Redis. Postgres is a hard dependency (Unhealthy fails
+        // /readyz -> 503). Redis is fail-open: config, rate-limiting and machine-ping all degrade to
+        // the database or lenient paths during a Redis blip, so a Redis outage is reported as Degraded
+        // (/readyz still returns 200) rather than evicting every pod and turning a blip into an outage.
         services.AddHealthChecks()
             .AddNpgSql(postgresConnectionString, name: "postgresql", failureStatus: HealthStatus.Unhealthy)
-            .AddRedis(redisOpts.ConnectionString, name: "redis", failureStatus: HealthStatus.Unhealthy);
+            .AddRedis(redisOpts.ConnectionString, name: "redis", failureStatus: HealthStatus.Degraded);
 
         return services;
     }

@@ -342,4 +342,79 @@ public class ServerConfigurationServiceTests
 
         await Assert.That(allowed).IsTrue();
     }
+
+    // ========== Redis-outage fail-open tests ==========
+    // A Redis outage must degrade to a direct Postgres read, never fail config resolution.
+
+    [Test]
+    public async Task GetIntSetting_RedisReadThrows_FallsBackToDatabaseValue()
+    {
+        (ServerConfigurationService service, IServerSettingsCache cache, IDatabase redisDb) = CreateService();
+        redisDb.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
+            .Returns<Task<RedisValue>>(_ => throw new RedisConnectionException(ConnectionFailureType.UnableToConnect, "Redis unavailable"));
+        cache.GetSettingFromDatabaseAsync(ServerConfigurationSettingKeys.AgentHeartbeatSeconds, Arg.Any<CancellationToken>())
+            .Returns("900");
+
+        int result = await service.GetAgentHeartbeatSecondsAsync(CancellationToken.None);
+
+        await Assert.That(result).IsEqualTo(900);
+    }
+
+    [Test]
+    public async Task GetIntSetting_RedisReadThrows_DbMiss_ReturnsDefault()
+    {
+        (ServerConfigurationService service, IServerSettingsCache cache, IDatabase redisDb) = CreateService();
+        redisDb.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
+            .Returns<Task<RedisValue>>(_ => throw new RedisConnectionException(ConnectionFailureType.UnableToConnect, "Redis unavailable"));
+        cache.GetSettingFromDatabaseAsync(ServerConfigurationSettingKeys.AgentHeartbeatSeconds, Arg.Any<CancellationToken>())
+            .Returns((string?)null);
+
+        int result = await service.GetAgentHeartbeatSecondsAsync(CancellationToken.None);
+
+        await Assert.That(result).IsEqualTo(300);
+    }
+
+    [Test]
+    public async Task GetIntSetting_RedisWriteBackThrows_StillReturnsDatabaseValue()
+    {
+        (ServerConfigurationService service, IServerSettingsCache cache, IDatabase redisDb) = CreateService();
+        redisDb.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
+            .Returns(Task.FromResult<RedisValue>(RedisValue.Null));
+        redisDb.StringSetAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<Expiration>())
+            .Returns<Task<bool>>(_ => throw new RedisConnectionException(ConnectionFailureType.UnableToConnect, "Redis unavailable"));
+        cache.GetSettingFromDatabaseAsync(ServerConfigurationSettingKeys.AgentHeartbeatSeconds, Arg.Any<CancellationToken>())
+            .Returns("900");
+
+        int result = await service.GetAgentHeartbeatSecondsAsync(CancellationToken.None);
+
+        await Assert.That(result).IsEqualTo(900);
+    }
+
+    [Test]
+    public async Task GetStringSetting_RedisReadThrows_FallsBackToDatabaseValue()
+    {
+        (ServerConfigurationService service, IServerSettingsCache cache, IDatabase redisDb) = CreateService();
+        redisDb.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
+            .Returns<Task<RedisValue>>(_ => throw new RedisConnectionException(ConnectionFailureType.UnableToConnect, "Redis unavailable"));
+        cache.GetSettingFromDatabaseAsync(ServerConfigurationSettingKeys.AllowUserSignup, Arg.Any<CancellationToken>())
+            .Returns("false");
+
+        bool allowed = await service.GetAllowUserSignupAsync(CancellationToken.None);
+
+        await Assert.That(allowed).IsFalse();
+    }
+
+    [Test]
+    public async Task GetStringSetting_RedisReadThrows_DbMiss_DefaultsToAllowed()
+    {
+        (ServerConfigurationService service, IServerSettingsCache cache, IDatabase redisDb) = CreateService();
+        redisDb.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
+            .Returns<Task<RedisValue>>(_ => throw new RedisConnectionException(ConnectionFailureType.UnableToConnect, "Redis unavailable"));
+        cache.GetSettingFromDatabaseAsync(ServerConfigurationSettingKeys.AllowUserSignup, Arg.Any<CancellationToken>())
+            .Returns((string?)null);
+
+        bool allowed = await service.GetAllowUserSignupAsync(CancellationToken.None);
+
+        await Assert.That(allowed).IsTrue();
+    }
 }
