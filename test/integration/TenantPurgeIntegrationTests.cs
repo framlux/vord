@@ -35,6 +35,11 @@ public sealed class TenantPurgeIntegrationTests
     private static PostgresFixture _fixture = default!;
     private static string _migratedConnectionString = default!;
 
+    // A non-null JSON payload seeded into RemoteCommand.Params (a jsonb column). Inserting this
+    // through LinqToDB exercises the DataType.BinaryJson mapping — without it the parameter is sent
+    // as text and Postgres rejects it, so this doubles as the regression guard for that annotation.
+    private const string RemoteCommandParamsJson = """{"target":"reboot"}""";
+
     /// <summary>Starts the Postgres container once and runs migrations for all tests in this class.</summary>
     [Before(Class)]
     public static async Task BeforeClass()
@@ -111,6 +116,15 @@ public sealed class TenantPurgeIntegrationTests
         UserSigningKey signingKeyA = await SeedUserSigningKeyAsync(db, userU.Id, tenantA.Id);
         await SeedMachineAuthorizedKeyAsync(db, machineA.Id, signingKeyA.Id, tenantA.Id, admin.Id);
         await SeedRemoteCommandAsync(db, tenantA.Id, machineA.Id, userU.Id, signingKeyA.Id);
+
+        // The jsonb Params round-trips through LinqToDB (proves the BinaryJson mapping — the insert
+        // would fail with a 42804 type error without it). Postgres jsonb is semantic-preserving, not
+        // byte-preserving (it re-serializes, e.g. adding a space after the colon), so compare with
+        // insignificant whitespace removed rather than byte-for-byte.
+        RemoteCommand? seededCommand = await db.RemoteCommands.FirstOrDefaultAsync(c => c.TenantId == tenantA.Id);
+        await Assert.That(seededCommand).IsNotNull();
+        await Assert.That(seededCommand!.Params).IsNotNull();
+        await Assert.That(seededCommand.Params!.Replace(" ", "")).IsEqualTo(RemoteCommandParamsJson);
 
         AlertRule alertRuleA = await SeedAlertRuleAsync(db, tenantA.Id, admin.Id);
         await SeedAlertRuleMachineAsync(db, alertRuleA.Id, machineA.Id);
@@ -442,33 +456,27 @@ public sealed class TenantPurgeIntegrationTests
 
     private static async Task SeedRemoteCommandAsync(DatabaseContext db, int tenantId, long machineId, int userId, int signingKeyId)
     {
-        // RemoteCommand.Params is untyped `string?` in the model even though the column is JSONB
-        // (unlike AlertEvent.Details / IntegrationEndpoint.Configuration, which are annotated
-        // DataType.BinaryJson). LinqToDB then sends a NULL parameter typed as text, which Postgres
-        // rejects for a jsonb column. This is a pre-existing model/schema mismatch unrelated to the
-        // tenant-deletion purge; raw SQL sidesteps it here rather than reaching into unrelated code.
-        await db.ExecuteAsync(
-            """
-            INSERT INTO "RemoteCommands"
-                ("CommandId", "TenantId", "MachineId", "UserId", "SigningKeyId", "CommandType", "Params",
-                 "Nonce", "Signature", "CanonicalPayload", "Timestamp", "ExpiresAt", "Status", "CreatedAt")
-            VALUES
-                (@commandId, @tenantId, @machineId, @userId, @signingKeyId, @commandType, NULL,
-                 @nonce, @signature, @canonicalPayload, @timestamp, @expiresAt, @status, @createdAt)
-            """,
-            new DataParameter("commandId", Guid.NewGuid().ToString()),
-            new DataParameter("tenantId", tenantId),
-            new DataParameter("machineId", machineId),
-            new DataParameter("userId", userId),
-            new DataParameter("signingKeyId", signingKeyId),
-            new DataParameter("commandType", "reboot"),
-            new DataParameter("nonce", Guid.NewGuid().ToString("N")[..32]),
-            new DataParameter("signature", Convert.ToBase64String(Guid.NewGuid().ToByteArray())),
-            new DataParameter("canonicalPayload", """{"command":"reboot"}"""),
-            new DataParameter("timestamp", DateTimeOffset.UtcNow),
-            new DataParameter("expiresAt", DateTimeOffset.UtcNow.AddMinutes(5)),
-            new DataParameter("status", (short)RemoteCommandStatus.Pending),
-            new DataParameter("createdAt", DateTimeOffset.UtcNow));
+        // Insert through LinqToDB with a non-null Params (jsonb) payload. This exercises the model's
+        // DataType.BinaryJson mapping under real Postgres; if that annotation regresses, this insert
+        // fails and the test catches it.
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        await db.InsertAsync(new RemoteCommand
+        {
+            CommandId = Guid.NewGuid().ToString(),
+            TenantId = tenantId,
+            MachineId = machineId,
+            UserId = userId,
+            SigningKeyId = signingKeyId,
+            CommandType = "reboot",
+            Params = RemoteCommandParamsJson,
+            Nonce = Guid.NewGuid().ToString("N")[..32],
+            Signature = Convert.ToBase64String(Guid.NewGuid().ToByteArray()),
+            CanonicalPayload = """{"command":"reboot"}""",
+            Timestamp = now,
+            ExpiresAt = now.AddMinutes(5),
+            Status = RemoteCommandStatus.Pending,
+            CreatedAt = now,
+        });
     }
 
     private static async Task<AlertRule> SeedAlertRuleAsync(DatabaseContext db, int tenantId, int createdByUserId)

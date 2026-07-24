@@ -84,7 +84,7 @@ public sealed class RemoteCommand
     /// <summary>
     /// JSON-encoded command parameters.
     /// </summary>
-    [Column(Name = "Params"), Nullable]
+    [Column(Name = "Params", DataType = LinqToDB.DataType.BinaryJson), Nullable]
     public string? Params { get; set; }
 
     /// <summary>
