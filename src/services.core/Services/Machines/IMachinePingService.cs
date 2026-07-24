@@ -5,7 +5,7 @@
 namespace Framlux.FleetManagement.Services.Core.Machines;
 
 /// <summary>
-/// Service for tracking machine ping timestamps using Redis sorted sets.
+/// Service for tracking the most recent machine ping timestamp in Redis.
 /// </summary>
 public interface IMachinePingService
 {
@@ -22,14 +22,6 @@ public interface IMachinePingService
     /// <param name="machineId">The machine identifier.</param>
     /// <returns>The last ping time, or null if no pings exist.</returns>
     Task<DateTimeOffset?> GetLastPingAsync(long machineId);
-
-    /// <summary>
-    /// Gets all ping timestamps within the specified time window.
-    /// </summary>
-    /// <param name="machineId">The machine identifier.</param>
-    /// <param name="window">The time window to query from now.</param>
-    /// <returns>An enumerable of ping timestamps within the window.</returns>
-    Task<IEnumerable<DateTimeOffset>> GetPingHistoryAsync(long machineId, TimeSpan window);
 
     /// <summary>
     /// Checks whether the machine has pinged within the specified threshold.

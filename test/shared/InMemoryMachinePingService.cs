@@ -9,18 +9,17 @@ namespace Framlux.FleetManagement.Test.Infrastructure;
 
 /// <summary>
 /// In-memory implementation of <see cref="IMachinePingService"/> for testing without Redis.
+/// Mirrors the production service by retaining only each machine's most recent ping.
 /// </summary>
 public sealed class InMemoryMachinePingService : IMachinePingService
 {
-    private readonly ConcurrentDictionary<long, List<DateTimeOffset>> _pings = new();
+    private readonly ConcurrentDictionary<long, DateTimeOffset> _lastPings = new();
     private readonly ConcurrentDictionary<long, ulong> _capabilities = new();
 
     /// <inheritdoc/>
     public Task RecordPingAsync(long machineId)
     {
-        _pings.AddOrUpdate(machineId,
-            _ => [DateTimeOffset.UtcNow],
-            (_, list) => { list.Add(DateTimeOffset.UtcNow); return list; });
+        _lastPings[machineId] = DateTimeOffset.UtcNow;
 
         return Task.CompletedTask;
     }
@@ -28,33 +27,20 @@ public sealed class InMemoryMachinePingService : IMachinePingService
     /// <inheritdoc/>
     public Task<DateTimeOffset?> GetLastPingAsync(long machineId)
     {
-        if (_pings.TryGetValue(machineId, out List<DateTimeOffset>? pings) && pings.Count > 0)
+        if (_lastPings.TryGetValue(machineId, out DateTimeOffset lastPing))
         {
-            return Task.FromResult<DateTimeOffset?>(pings[^1]);
+            return Task.FromResult<DateTimeOffset?>(lastPing);
         }
 
         return Task.FromResult<DateTimeOffset?>(null);
     }
 
     /// <inheritdoc/>
-    public Task<IEnumerable<DateTimeOffset>> GetPingHistoryAsync(long machineId, TimeSpan window)
-    {
-        DateTimeOffset cutoff = DateTimeOffset.UtcNow - window;
-        if (_pings.TryGetValue(machineId, out List<DateTimeOffset>? pings))
-        {
-            return Task.FromResult<IEnumerable<DateTimeOffset>>(
-                pings.Where(p => p >= cutoff).OrderDescending().ToList());
-        }
-
-        return Task.FromResult<IEnumerable<DateTimeOffset>>([]);
-    }
-
-    /// <inheritdoc/>
     public Task<bool> IsOnlineAsync(long machineId, TimeSpan threshold)
     {
-        if (_pings.TryGetValue(machineId, out List<DateTimeOffset>? pings) && pings.Count > 0)
+        if (_lastPings.TryGetValue(machineId, out DateTimeOffset lastPing))
         {
-            return Task.FromResult(DateTimeOffset.UtcNow - pings[^1] <= threshold);
+            return Task.FromResult(DateTimeOffset.UtcNow - lastPing <= threshold);
         }
 
         return Task.FromResult(false);
@@ -67,9 +53,9 @@ public sealed class InMemoryMachinePingService : IMachinePingService
         foreach (long machineId in machineIds)
         {
             bool online = false;
-            if (_pings.TryGetValue(machineId, out List<DateTimeOffset>? pings) && pings.Count > 0)
+            if (_lastPings.TryGetValue(machineId, out DateTimeOffset lastPing))
             {
-                online = DateTimeOffset.UtcNow - pings[^1] <= threshold;
+                online = DateTimeOffset.UtcNow - lastPing <= threshold;
             }
             result[machineId] = online;
         }
@@ -83,11 +69,7 @@ public sealed class InMemoryMachinePingService : IMachinePingService
         Dictionary<long, DateTimeOffset?> result = new();
         foreach (long machineId in machineIds)
         {
-            DateTimeOffset? lastPing = null;
-            if (_pings.TryGetValue(machineId, out List<DateTimeOffset>? pings) && pings.Count > 0)
-            {
-                lastPing = pings[^1];
-            }
+            DateTimeOffset? lastPing = _lastPings.TryGetValue(machineId, out DateTimeOffset ping) ? ping : null;
             result[machineId] = lastPing;
         }
 

@@ -9,12 +9,17 @@ using StackExchange.Redis;
 namespace Framlux.FleetManagement.Services.Core.Machines;
 
 /// <summary>
-/// Redis-backed implementation of <see cref="IMachinePingService"/> using sorted sets.
-/// LastSeenAt on MachineStateSummary is updated by the streaming worker, not here.
+/// Redis-backed implementation of <see cref="IMachinePingService"/>. Each machine's last ping is
+/// stored as a single key holding the timestamp, with a TTL so a machine that stops reporting
+/// (decommissioned or removed) self-evicts instead of leaking a key forever. Every ping refreshes
+/// the key and its TTL. LastSeenAt on MachineStateSummary is updated by the streaming worker, not here.
 /// </summary>
 public sealed class RedisMachinePingService : IMachinePingService
 {
-    private static readonly TimeSpan RetentionWindow = TimeSpan.FromDays(7);
+    // TTL for a machine's Redis keys (last-ping and capabilities). Comfortably longer than any
+    // online threshold, so online/offline decisions are unaffected; its purpose is to evict keys
+    // for machines that never report again instead of leaking them forever.
+    private static readonly TimeSpan KeyRetention = TimeSpan.FromDays(7);
 
     private readonly IConnectionMultiplexer _redis;
     private readonly ResiliencePipeline _retryPipeline;
@@ -41,12 +46,10 @@ public sealed class RedisMachinePingService : IMachinePingService
         {
             IDatabase db = _redis.GetDatabase();
             string key = GetKey(machineId);
-            double nowMs = now.ToUnixTimeMilliseconds();
+            long nowMs = now.ToUnixTimeMilliseconds();
 
-            await db.SortedSetAddAsync(key, nowMs.ToString(), nowMs);
-
-            double cutoffMs = now.Subtract(RetentionWindow).ToUnixTimeMilliseconds();
-            await db.SortedSetRemoveRangeByScoreAsync(key, double.NegativeInfinity, cutoffMs);
+            // Overwrite the single last-ping value and refresh its TTL on every ping.
+            await db.StringSetAsync(key, nowMs.ToString(), KeyRetention);
         });
     }
 
@@ -54,36 +57,9 @@ public sealed class RedisMachinePingService : IMachinePingService
     public async Task<DateTimeOffset?> GetLastPingAsync(long machineId)
     {
         IDatabase db = _redis.GetDatabase();
-        string key = GetKey(machineId);
+        RedisValue value = await db.StringGetAsync(GetKey(machineId));
 
-        SortedSetEntry[] entries = await db.SortedSetRangeByScoreWithScoresAsync(
-            key,
-            order: Order.Descending,
-            take: 1);
-
-        if (entries.Length == 0)
-        {
-            return null;
-        }
-
-        return DateTimeOffset.FromUnixTimeMilliseconds((long)entries[0].Score);
-    }
-
-    /// <inheritdoc/>
-    public async Task<IEnumerable<DateTimeOffset>> GetPingHistoryAsync(long machineId, TimeSpan window)
-    {
-        IDatabase db = _redis.GetDatabase();
-        string key = GetKey(machineId);
-        double startMs = DateTimeOffset.UtcNow.Subtract(window).ToUnixTimeMilliseconds();
-        double endMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-
-        SortedSetEntry[] entries = await db.SortedSetRangeByScoreWithScoresAsync(
-            key,
-            start: startMs,
-            stop: endMs,
-            order: Order.Ascending);
-
-        return entries.Select(e => DateTimeOffset.FromUnixTimeMilliseconds((long)e.Score));
+        return ParseLastPing(value);
     }
 
     /// <inheritdoc/>
@@ -119,14 +95,11 @@ public sealed class RedisMachinePingService : IMachinePingService
         IDatabase db = _redis.GetDatabase();
         IBatch batch = db.CreateBatch();
 
-        List<(long Id, Task<SortedSetEntry[]> Task)> pending = [];
+        List<(long Id, Task<RedisValue> Task)> pending = [];
         foreach (long machineId in machineIds)
         {
             string key = GetKey(machineId);
-            Task<SortedSetEntry[]> task = batch.SortedSetRangeByScoreWithScoresAsync(
-                key,
-                order: Order.Descending,
-                take: 1);
+            Task<RedisValue> task = batch.StringGetAsync(key);
             pending.Add((machineId, task));
         }
 
@@ -134,12 +107,9 @@ public sealed class RedisMachinePingService : IMachinePingService
         await Task.WhenAll(pending.Select(p => p.Task));
 
         Dictionary<long, DateTimeOffset?> result = new(pending.Count);
-        foreach ((long id, Task<SortedSetEntry[]> task) in pending)
+        foreach ((long id, Task<RedisValue> task) in pending)
         {
-            SortedSetEntry[] entries = task.Result;
-            result[id] = entries.Length > 0
-                ? DateTimeOffset.FromUnixTimeMilliseconds((long)entries[0].Score)
-                : null;
+            result[id] = ParseLastPing(task.Result);
         }
 
         return result;
@@ -152,7 +122,7 @@ public sealed class RedisMachinePingService : IMachinePingService
         {
             IDatabase db = _redis.GetDatabase();
             string key = GetCapabilitiesKey(machineId);
-            await db.StringSetAsync(key, capabilities.ToString(), RetentionWindow);
+            await db.StringSetAsync(key, capabilities.ToString(), KeyRetention);
         });
     }
 
@@ -219,6 +189,16 @@ public sealed class RedisMachinePingService : IMachinePingService
         {
             ResilienceContextPool.Shared.Return(context);
         }
+    }
+
+    private static DateTimeOffset? ParseLastPing(RedisValue value)
+    {
+        if (value.IsNullOrEmpty)
+        {
+            return null;
+        }
+
+        return long.TryParse((string?)value, out long ms) ? DateTimeOffset.FromUnixTimeMilliseconds(ms) : null;
     }
 
     private static string GetKey(long machineId)
