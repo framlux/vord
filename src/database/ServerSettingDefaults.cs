@@ -44,4 +44,16 @@ public static class ServerSettingDefaults
 
     /// <summary>Default service status collection interval in seconds.</summary>
     public const int ServiceStatusSeconds = 3600;
+
+    /// <summary>Default: the Stripe sandbox canary runs.</summary>
+    public const bool StripeCanaryEnabled = true;
+
+    /// <summary>Default seconds between Stripe canary runs.</summary>
+    public const int StripeCanaryIntervalSeconds = 60;
+
+    /// <summary>Default seconds to wait for the canary webhook round-trip.</summary>
+    public const int StripeCanaryWebhookTimeoutSeconds = 40;
+
+    /// <summary>Default consecutive canary failures before alerting.</summary>
+    public const int StripeCanaryConsecutiveFailuresToAlert = 3;
 }

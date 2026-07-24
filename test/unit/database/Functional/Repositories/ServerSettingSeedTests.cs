@@ -33,6 +33,10 @@ public sealed class ServerSettingSeedTests
             [ServerConfigurationSettingKeys.TelemetrySendFastSeconds] = ServerSettingDefaults.TelemetrySendFastSeconds.ToString(),
             [ServerConfigurationSettingKeys.TelemetrySendSlowSeconds] = ServerSettingDefaults.TelemetrySendSlowSeconds.ToString(),
             [ServerConfigurationSettingKeys.ServiceStatusSeconds] = ServerSettingDefaults.ServiceStatusSeconds.ToString(),
+            [ServerConfigurationSettingKeys.StripeCanaryEnabled] = ServerSettingDefaults.StripeCanaryEnabled ? "true" : "false",
+            [ServerConfigurationSettingKeys.StripeCanaryIntervalSeconds] = ServerSettingDefaults.StripeCanaryIntervalSeconds.ToString(),
+            [ServerConfigurationSettingKeys.StripeCanaryWebhookTimeoutSeconds] = ServerSettingDefaults.StripeCanaryWebhookTimeoutSeconds.ToString(),
+            [ServerConfigurationSettingKeys.StripeCanaryConsecutiveFailuresToAlert] = ServerSettingDefaults.StripeCanaryConsecutiveFailuresToAlert.ToString(),
         };
 
     private static Dictionary<ServerConfigurationSettingKeys, string> ReadSeededSettings()

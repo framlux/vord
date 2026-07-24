@@ -54,7 +54,11 @@ public sealed class InitialMigration : Migration
             .Row(new { Key = (int)Enums.ServerConfigurationSettingKeys.TelemetryCollectSlowSeconds, Value = "900", Version = 1 })
             .Row(new { Key = (int)Enums.ServerConfigurationSettingKeys.TelemetrySendFastSeconds, Value = "15", Version = 1 })
             .Row(new { Key = (int)Enums.ServerConfigurationSettingKeys.TelemetrySendSlowSeconds, Value = "300", Version = 1 })
-            .Row(new { Key = (int)Enums.ServerConfigurationSettingKeys.ServiceStatusSeconds, Value = "3600", Version = 1 });
+            .Row(new { Key = (int)Enums.ServerConfigurationSettingKeys.ServiceStatusSeconds, Value = "3600", Version = 1 })
+            .Row(new { Key = (int)Enums.ServerConfigurationSettingKeys.StripeCanaryEnabled, Value = "true", Version = 1 })
+            .Row(new { Key = (int)Enums.ServerConfigurationSettingKeys.StripeCanaryIntervalSeconds, Value = "60", Version = 1 })
+            .Row(new { Key = (int)Enums.ServerConfigurationSettingKeys.StripeCanaryWebhookTimeoutSeconds, Value = "40", Version = 1 })
+            .Row(new { Key = (int)Enums.ServerConfigurationSettingKeys.StripeCanaryConsecutiveFailuresToAlert, Value = "3", Version = 1 });
 
         Create.Table(TableNames.Users)
             .WithColumn("Id").AsInt32().PrimaryKey().Identity().NotNullable()

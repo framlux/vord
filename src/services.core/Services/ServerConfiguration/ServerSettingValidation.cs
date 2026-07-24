@@ -25,6 +25,9 @@ public static class ServerSettingValidation
         [ServerConfigurationSettingKeys.TelemetrySendFastSeconds] = (5, 120),
         [ServerConfigurationSettingKeys.TelemetrySendSlowSeconds] = (30, 1800),
         [ServerConfigurationSettingKeys.ServiceStatusSeconds] = (60, 86400),
+        [ServerConfigurationSettingKeys.StripeCanaryIntervalSeconds] = (30, 3600),
+        [ServerConfigurationSettingKeys.StripeCanaryWebhookTimeoutSeconds] = (5, 300),
+        [ServerConfigurationSettingKeys.StripeCanaryConsecutiveFailuresToAlert] = (1, 100),
     };
 
     /// <summary>
@@ -46,12 +49,13 @@ public static class ServerSettingValidation
             return $"Value must not be empty for key: {(int)key}";
         }
 
-        if (key == ServerConfigurationSettingKeys.AllowUserSignup)
+        if ((key == ServerConfigurationSettingKeys.AllowUserSignup) ||
+            (key == ServerConfigurationSettingKeys.StripeCanaryEnabled))
         {
             if ((string.Equals(value, "true", StringComparison.OrdinalIgnoreCase) == false) &&
                 (string.Equals(value, "false", StringComparison.OrdinalIgnoreCase) == false))
             {
-                return "AllowUserSignup must be 'true' or 'false'.";
+                return $"{Enum.GetName(key)} must be 'true' or 'false'.";
             }
 
             return null;

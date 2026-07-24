@@ -74,4 +74,24 @@ public enum ServerConfigurationSettingKeys : int
     /// Controls how often agents collect systemd service status.
     /// </summary>
     ServiceStatusSeconds = 14,
+
+    /// <summary>
+    /// Whether the Stripe sandbox canary probe runs (default: true).
+    /// </summary>
+    StripeCanaryEnabled = 15,
+
+    /// <summary>
+    /// Seconds between Stripe canary probe runs (default: 60, range: 30-3600).
+    /// </summary>
+    StripeCanaryIntervalSeconds = 16,
+
+    /// <summary>
+    /// Seconds the canary waits for its synthetic webhook round-trip (default: 40, range: 5-300).
+    /// </summary>
+    StripeCanaryWebhookTimeoutSeconds = 17,
+
+    /// <summary>
+    /// Consecutive canary failures before alerting (default: 3, range: 1-100).
+    /// </summary>
+    StripeCanaryConsecutiveFailuresToAlert = 18,
 }
