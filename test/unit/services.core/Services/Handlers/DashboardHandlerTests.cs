@@ -26,7 +26,7 @@ public class DashboardHandlerTests
     {
         using TestDatabaseFactory dbFactory = new();
         InMemoryMachinePingService pingService = new();
-        ServerConfigurationService configService = new(Substitute.For<IServerSettingsCache>(), Substitute.For<IConnectionMultiplexer>());
+        ServerConfigurationService configService = new(Substitute.For<IServerSettingsReader>(), Substitute.For<IConnectionMultiplexer>());
         DashboardHandler handler = new(CreateRepo(dbFactory), pingService, configService);
 
         ServiceResult<DashboardSummaryDto> result = await handler.GetSummaryAsync(1, CancellationToken.None);
@@ -56,7 +56,7 @@ public class DashboardHandlerTests
         InMemoryMachinePingService pingService = new();
         await pingService.RecordPingAsync(m1.Id); // Only m1 is online
 
-        ServerConfigurationService configService = new(Substitute.For<IServerSettingsCache>(), Substitute.For<IConnectionMultiplexer>());
+        ServerConfigurationService configService = new(Substitute.For<IServerSettingsReader>(), Substitute.For<IConnectionMultiplexer>());
         DashboardHandler handler = new(CreateRepo(dbFactory), pingService, configService);
 
         ServiceResult<DashboardSummaryDto> result = await handler.GetSummaryAsync(1, CancellationToken.None);
@@ -77,7 +77,7 @@ public class DashboardHandlerTests
         m1.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(m1);
 
         InMemoryMachinePingService pingService = new();
-        ServerConfigurationService configService = new(Substitute.For<IServerSettingsCache>(), Substitute.For<IConnectionMultiplexer>());
+        ServerConfigurationService configService = new(Substitute.For<IServerSettingsReader>(), Substitute.For<IConnectionMultiplexer>());
         DashboardHandler handler = new(CreateRepo(dbFactory), pingService, configService);
 
         ServiceResult<DashboardSummaryDto> result = await handler.GetSummaryAsync(1, CancellationToken.None);

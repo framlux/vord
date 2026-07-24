@@ -35,7 +35,7 @@ public sealed class HealthSweepTenantJobTests
 
     private static ServerConfigurationService CreateConfigService(int onlineThresholdSeconds = 300)
     {
-        IServerSettingsCache cache = Substitute.For<IServerSettingsCache>();
+        IServerSettingsReader cache = Substitute.For<IServerSettingsReader>();
         cache.GetSettingFromDatabaseAsync(Arg.Any<ServerConfigurationSettingKeys>(), Arg.Any<CancellationToken>())
             .Returns(onlineThresholdSeconds.ToString());
 

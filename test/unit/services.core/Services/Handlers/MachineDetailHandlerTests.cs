@@ -44,7 +44,7 @@ public class MachineDetailHandlerTests
     {
         pingService ??= new InMemoryMachinePingService();
         stateService ??= Substitute.For<IMachineStateService>();
-        ServerConfigurationService configService = new(Substitute.For<IServerSettingsCache>(), Substitute.For<IConnectionMultiplexer>());
+        ServerConfigurationService configService = new(Substitute.For<IServerSettingsReader>(), Substitute.For<IConnectionMultiplexer>());
         DatabaseRepository repo = CreateRepo(dbFactory);
 
         return new MachineDetailHandler(repo, repo, pingService, configService, stateService);

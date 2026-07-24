@@ -35,7 +35,7 @@ public class MachineHandlerUpdateTests
     private static MachineHandler CreateHandler(TestDatabaseFactory dbFactory, InMemoryMachinePingService? pingService = null)
     {
         InMemoryMachinePingService ping = pingService ?? new InMemoryMachinePingService();
-        ServerConfigurationService configService = new(Substitute.For<IServerSettingsCache>(), Substitute.For<IConnectionMultiplexer>());
+        ServerConfigurationService configService = new(Substitute.For<IServerSettingsReader>(), Substitute.For<IConnectionMultiplexer>());
         DatabaseRepository repo = CreateRepo(dbFactory);
 
         return new MachineHandler(repo, repo, repo, repo, repo, ping, configService, Substitute.For<IMachineBillingSync>(), Substitute.For<IApiKeyCacheInvalidator>(), NullLogger<MachineHandler>.Instance);

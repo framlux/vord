@@ -52,7 +52,7 @@ public class MachineHandlerTests
     private static MachineHandler CreateHandler(TestDatabaseFactory dbFactory, InMemoryMachinePingService? pingService = null, IMachineBillingSync? machineBillingSync = null, IApiKeyCacheInvalidator? apiKeyCacheInvalidator = null)
     {
         InMemoryMachinePingService ping = pingService ?? new InMemoryMachinePingService();
-        ServerConfigurationService configService = new(Substitute.For<IServerSettingsCache>(), Substitute.For<IConnectionMultiplexer>());
+        ServerConfigurationService configService = new(Substitute.For<IServerSettingsReader>(), Substitute.For<IConnectionMultiplexer>());
         DatabaseRepository repo = CreateRepo(dbFactory);
 
         return new MachineHandler(repo, repo, repo, repo, repo, ping, configService, machineBillingSync ?? Substitute.For<IMachineBillingSync>(), apiKeyCacheInvalidator ?? Substitute.For<IApiKeyCacheInvalidator>(), NullLogger<MachineHandler>.Instance);

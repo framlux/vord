@@ -47,7 +47,7 @@ public class MachineStateServiceTests
 
     private static ServerConfigurationService CreateConfigService()
     {
-        IServerSettingsCache cache = Substitute.For<IServerSettingsCache>();
+        IServerSettingsReader cache = Substitute.For<IServerSettingsReader>();
         IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
         IDatabase redisDb = Substitute.For<IDatabase>();
         redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(redisDb);

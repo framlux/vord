@@ -37,7 +37,7 @@ public sealed class SocialAuthEventsTests
     {
         IUserRepository userRepo = Substitute.For<IUserRepository>();
         ITenantRepository tenantRepo = Substitute.For<ITenantRepository>();
-        IServerSettingsCache settingsCache = Substitute.For<IServerSettingsCache>();
+        IServerSettingsReader settingsCache = Substitute.For<IServerSettingsReader>();
         IUserSecurityStampService stampService = Substitute.For<IUserSecurityStampService>();
         stampService.GetCurrentStampAsync(Arg.Any<int>(), Arg.Any<CancellationToken>()).Returns(string.Empty);
 
@@ -605,7 +605,7 @@ public sealed class SocialAuthEventsTests
     {
         IUserRepository userRepo = Substitute.For<IUserRepository>();
         ITenantRepository tenantRepo = Substitute.For<ITenantRepository>();
-        IServerSettingsCache settingsCache = Substitute.For<IServerSettingsCache>();
+        IServerSettingsReader settingsCache = Substitute.For<IServerSettingsReader>();
         settingsCache.GetSettingFromDatabaseAsync(Database.Enums.ServerConfigurationSettingKeys.AllowUserSignup, Arg.Any<CancellationToken>())
             .Returns("false");
 
@@ -704,7 +704,7 @@ public sealed class SocialAuthEventsTests
     {
         IUserRepository userRepo = Substitute.For<IUserRepository>();
         ITenantRepository tenantRepo = Substitute.For<ITenantRepository>();
-        IServerSettingsCache settingsCache = Substitute.For<IServerSettingsCache>();
+        IServerSettingsReader settingsCache = Substitute.For<IServerSettingsReader>();
         IUserSecurityStampService stampService = Substitute.For<IUserSecurityStampService>();
         stampService.GetCurrentStampAsync(9, Arg.Any<CancellationToken>()).Returns("stamp-9");
 

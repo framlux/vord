@@ -40,7 +40,6 @@ public sealed class AdminHandler
 
     private readonly IServerConfigurationRepository _configRepo;
     private readonly IUserRepository _userRepo;
-    private readonly IServerSettingsCache _settingsCache;
     private readonly IConnectionMultiplexer _redis;
     private readonly IDatabaseTransactionProvider _transactionProvider;
     private readonly IAuditLogRepository _auditLog;
@@ -52,7 +51,6 @@ public sealed class AdminHandler
     public AdminHandler(
         IServerConfigurationRepository configRepo,
         IUserRepository userRepo,
-        IServerSettingsCache settingsCache,
         IConnectionMultiplexer redis,
         IDatabaseTransactionProvider transactionProvider,
         IAuditLogRepository auditLog,
@@ -60,7 +58,6 @@ public sealed class AdminHandler
     {
         ArgumentNullException.ThrowIfNull(configRepo);
         ArgumentNullException.ThrowIfNull(userRepo);
-        ArgumentNullException.ThrowIfNull(settingsCache);
         ArgumentNullException.ThrowIfNull(redis);
         ArgumentNullException.ThrowIfNull(transactionProvider);
         ArgumentNullException.ThrowIfNull(auditLog);
@@ -68,7 +65,6 @@ public sealed class AdminHandler
 
         _configRepo = configRepo;
         _userRepo = userRepo;
-        _settingsCache = settingsCache;
         _redis = redis;
         _transactionProvider = transactionProvider;
         _auditLog = auditLog;
@@ -143,14 +139,12 @@ public sealed class AdminHandler
 
         await transaction.CommitAsync(ct);
 
-        // Invalidate the shared Redis read-through entry and fan out a per-key invalidation to every
-        // replica's in-memory cache — only AFTER the commit, so a reader between the delete and the
-        // commit cannot re-cache the old value.
-        _settingsCache.InvalidateCache();
+        // Evict the shared Redis read-through entry for each changed key — only AFTER the commit, so
+        // a reader between the delete and the commit cannot re-cache the old value.
         foreach (SettingUpdateEntry update in updates)
         {
             ServerConfigurationSettingKeys key = (ServerConfigurationSettingKeys)update.Key;
-            await ServerSettingsInvalidation.PublishAsync(_redis, key, _logger);
+            await ServerSettingsInvalidation.InvalidateAsync(_redis, key, _logger);
         }
 
         return await GetSettingsAsync(ct);

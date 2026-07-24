@@ -28,11 +28,11 @@ public sealed class ConfigurationServiceTests
     private readonly ILogger<ConfigurationService> _logger = Substitute.For<ILogger<ConfigurationService>>();
 
     private ConfigurationService CreateService(
-        IServerSettingsCache? settingsCache = null,
+        IServerSettingsReader? settingsCache = null,
         ISigningKeyRepository? signingKeyRepo = null,
         IRemoteCommandRepository? remoteCommandRepo = null)
     {
-        IServerSettingsCache resolvedSettingsCache = settingsCache ?? Substitute.For<IServerSettingsCache>();
+        IServerSettingsReader resolvedSettingsCache = settingsCache ?? Substitute.For<IServerSettingsReader>();
         ISigningKeyRepository resolvedSigningKeyRepo = signingKeyRepo ?? Substitute.For<ISigningKeyRepository>();
         IRemoteCommandRepository resolvedRemoteCommandRepo = remoteCommandRepo ?? Substitute.For<IRemoteCommandRepository>();
         resolvedSigningKeyRepo.GetActiveSigningKeysForMachineAsync(Arg.Any<long>(), Arg.Any<CancellationToken>())
@@ -80,7 +80,7 @@ public sealed class ConfigurationServiceTests
     [Test]
     public async Task GetConfiguration_WithDbSettings_ReturnsConfiguredValues()
     {
-        IServerSettingsCache settingsCache = Substitute.For<IServerSettingsCache>();
+        IServerSettingsReader settingsCache = Substitute.For<IServerSettingsReader>();
         settingsCache.GetSettingFromDatabaseAsync(ServerConfigurationSettingKeys.AgentHeartbeatSeconds, Arg.Any<CancellationToken>())
             .Returns("60");
         settingsCache.GetSettingFromDatabaseAsync(ServerConfigurationSettingKeys.AgentConfigRefreshSeconds, Arg.Any<CancellationToken>())
@@ -112,7 +112,7 @@ public sealed class ConfigurationServiceTests
     [Test]
     public async Task GetConfiguration_WithServiceStatusSetting_ReturnsConfiguredValue()
     {
-        IServerSettingsCache settingsCache = Substitute.For<IServerSettingsCache>();
+        IServerSettingsReader settingsCache = Substitute.For<IServerSettingsReader>();
         settingsCache.GetSettingFromDatabaseAsync(ServerConfigurationSettingKeys.ServiceStatusSeconds, Arg.Any<CancellationToken>())
             .Returns("1800");
 

@@ -397,10 +397,9 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
         // already rejected unknown keys, so there is no missing-row case left to report.
         await configRepo.UpsertSettingAsync(key, request.Value, context.CancellationToken);
 
-        // Clear this replica's in-memory cache and fan out the eviction (Redis key delete + pub/sub) so
-        // every replica re-reads from the database, matching the REST admin path.
-        scope.ServiceProvider.GetRequiredService<IServerSettingsCache>().InvalidateCache();
-        await ServerSettingsInvalidation.PublishAsync(_redis, key, _logger);
+        // Evict the shared Redis read-through entry so every replica re-reads from the database,
+        // matching the REST admin path.
+        await ServerSettingsInvalidation.InvalidateAsync(_redis, key, _logger);
 
         _logger.LogInformation(
             "FleetAdmin: server setting {Key} updated to '{Value}'", key, request.Value);

@@ -15,9 +15,9 @@ namespace Framlux.FleetManagement.Test.Services;
 /// </summary>
 public class ServerConfigurationServiceTests
 {
-    private static (ServerConfigurationService service, IServerSettingsCache cache, IDatabase redisDb) CreateService()
+    private static (ServerConfigurationService service, IServerSettingsReader cache, IDatabase redisDb) CreateService()
     {
-        IServerSettingsCache cache = Substitute.For<IServerSettingsCache>();
+        IServerSettingsReader cache = Substitute.For<IServerSettingsReader>();
         IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
         IDatabase redisDb = Substitute.For<IDatabase>();
         redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(redisDb);
@@ -31,7 +31,7 @@ public class ServerConfigurationServiceTests
     [Test]
     public async Task GetAgentHeartbeatSecondsAsync_RedisCacheHit_ReturnsCachedValue()
     {
-        (ServerConfigurationService service, IServerSettingsCache cache, IDatabase redisDb) = CreateService();
+        (ServerConfigurationService service, IServerSettingsReader cache, IDatabase redisDb) = CreateService();
         redisDb.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
             .Returns(Task.FromResult<RedisValue>("600"));
 
@@ -44,7 +44,7 @@ public class ServerConfigurationServiceTests
     [Test]
     public async Task GetAgentHeartbeatSecondsAsync_RedisMiss_DbHit_ReturnsDbValue()
     {
-        (ServerConfigurationService service, IServerSettingsCache cache, IDatabase redisDb) = CreateService();
+        (ServerConfigurationService service, IServerSettingsReader cache, IDatabase redisDb) = CreateService();
         redisDb.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
             .Returns(Task.FromResult<RedisValue>(RedisValue.Null));
         cache.GetSettingFromDatabaseAsync(ServerConfigurationSettingKeys.AgentHeartbeatSeconds, Arg.Any<CancellationToken>())
@@ -58,7 +58,7 @@ public class ServerConfigurationServiceTests
     [Test]
     public async Task GetAgentHeartbeatSecondsAsync_RedisMiss_DbHit_CachesInRedis()
     {
-        (ServerConfigurationService service, IServerSettingsCache cache, IDatabase redisDb) = CreateService();
+        (ServerConfigurationService service, IServerSettingsReader cache, IDatabase redisDb) = CreateService();
         redisDb.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
             .Returns(Task.FromResult<RedisValue>(RedisValue.Null));
         cache.GetSettingFromDatabaseAsync(ServerConfigurationSettingKeys.AgentHeartbeatSeconds, Arg.Any<CancellationToken>())
@@ -75,7 +75,7 @@ public class ServerConfigurationServiceTests
     [Test]
     public async Task GetAgentHeartbeatSecondsAsync_RedisMiss_DbMiss_ReturnsDefault300()
     {
-        (ServerConfigurationService service, IServerSettingsCache cache, IDatabase redisDb) = CreateService();
+        (ServerConfigurationService service, IServerSettingsReader cache, IDatabase redisDb) = CreateService();
         redisDb.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
             .Returns(Task.FromResult<RedisValue>(RedisValue.Null));
         cache.GetSettingFromDatabaseAsync(ServerConfigurationSettingKeys.AgentHeartbeatSeconds, Arg.Any<CancellationToken>())
@@ -89,7 +89,7 @@ public class ServerConfigurationServiceTests
     [Test]
     public async Task GetAgentHeartbeatSecondsAsync_RedisInvalidValue_FallsBackToDb()
     {
-        (ServerConfigurationService service, IServerSettingsCache cache, IDatabase redisDb) = CreateService();
+        (ServerConfigurationService service, IServerSettingsReader cache, IDatabase redisDb) = CreateService();
         redisDb.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
             .Returns(Task.FromResult<RedisValue>("not-a-number"));
         cache.GetSettingFromDatabaseAsync(ServerConfigurationSettingKeys.AgentHeartbeatSeconds, Arg.Any<CancellationToken>())
@@ -103,7 +103,7 @@ public class ServerConfigurationServiceTests
     [Test]
     public async Task GetAgentHeartbeatSecondsAsync_RedisNegativeValue_FallsBackToDb()
     {
-        (ServerConfigurationService service, IServerSettingsCache cache, IDatabase redisDb) = CreateService();
+        (ServerConfigurationService service, IServerSettingsReader cache, IDatabase redisDb) = CreateService();
         redisDb.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
             .Returns(Task.FromResult<RedisValue>("-5"));
         cache.GetSettingFromDatabaseAsync(ServerConfigurationSettingKeys.AgentHeartbeatSeconds, Arg.Any<CancellationToken>())
@@ -117,7 +117,7 @@ public class ServerConfigurationServiceTests
     [Test]
     public async Task GetAgentHeartbeatSecondsAsync_DbInvalidValue_ReturnsDefault()
     {
-        (ServerConfigurationService service, IServerSettingsCache cache, IDatabase redisDb) = CreateService();
+        (ServerConfigurationService service, IServerSettingsReader cache, IDatabase redisDb) = CreateService();
         redisDb.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
             .Returns(Task.FromResult<RedisValue>(RedisValue.Null));
         cache.GetSettingFromDatabaseAsync(ServerConfigurationSettingKeys.AgentHeartbeatSeconds, Arg.Any<CancellationToken>())
@@ -131,7 +131,7 @@ public class ServerConfigurationServiceTests
     [Test]
     public async Task GetAgentHeartbeatSecondsAsync_RedisZeroValue_FallsBackToDb()
     {
-        (ServerConfigurationService service, IServerSettingsCache cache, IDatabase redisDb) = CreateService();
+        (ServerConfigurationService service, IServerSettingsReader cache, IDatabase redisDb) = CreateService();
         redisDb.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
             .Returns(Task.FromResult<RedisValue>("0"));
         cache.GetSettingFromDatabaseAsync(ServerConfigurationSettingKeys.AgentHeartbeatSeconds, Arg.Any<CancellationToken>())
@@ -147,7 +147,7 @@ public class ServerConfigurationServiceTests
     [Test]
     public async Task GetAgentConfigRefreshSecondsAsync_Default_Returns900()
     {
-        (ServerConfigurationService service, IServerSettingsCache _, IDatabase redisDb) = CreateService();
+        (ServerConfigurationService service, IServerSettingsReader _, IDatabase redisDb) = CreateService();
         redisDb.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
             .Returns(Task.FromResult<RedisValue>(RedisValue.Null));
 
@@ -161,7 +161,7 @@ public class ServerConfigurationServiceTests
     [Test]
     public async Task GetOnlineThresholdAsync_Default_Returns300Seconds()
     {
-        (ServerConfigurationService service, IServerSettingsCache _, IDatabase redisDb) = CreateService();
+        (ServerConfigurationService service, IServerSettingsReader _, IDatabase redisDb) = CreateService();
         redisDb.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
             .Returns(Task.FromResult<RedisValue>(RedisValue.Null));
 
@@ -173,7 +173,7 @@ public class ServerConfigurationServiceTests
     [Test]
     public async Task GetOnlineThresholdAsync_CustomValue_ReturnsAsTimeSpan()
     {
-        (ServerConfigurationService service, IServerSettingsCache _, IDatabase redisDb) = CreateService();
+        (ServerConfigurationService service, IServerSettingsReader _, IDatabase redisDb) = CreateService();
         redisDb.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
             .Returns(Task.FromResult<RedisValue>("600"));
 
@@ -187,7 +187,7 @@ public class ServerConfigurationServiceTests
     [Test]
     public async Task GetDeduplicationTtlAsync_Default_Returns300Seconds()
     {
-        (ServerConfigurationService service, IServerSettingsCache _, IDatabase redisDb) = CreateService();
+        (ServerConfigurationService service, IServerSettingsReader _, IDatabase redisDb) = CreateService();
         redisDb.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
             .Returns(Task.FromResult<RedisValue>(RedisValue.Null));
 
@@ -201,7 +201,7 @@ public class ServerConfigurationServiceTests
     [Test]
     public async Task GetServiceStatusSecondsAsync_NoSetting_ReturnsDefault3600()
     {
-        (ServerConfigurationService service, IServerSettingsCache cache, IDatabase redisDb) = CreateService();
+        (ServerConfigurationService service, IServerSettingsReader cache, IDatabase redisDb) = CreateService();
         redisDb.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
             .Returns(Task.FromResult<RedisValue>(RedisValue.Null));
         cache.GetSettingFromDatabaseAsync(ServerConfigurationSettingKeys.ServiceStatusSeconds, Arg.Any<CancellationToken>())
@@ -215,7 +215,7 @@ public class ServerConfigurationServiceTests
     [Test]
     public async Task GetServiceStatusSecondsAsync_ValidSetting_ReturnsValue()
     {
-        (ServerConfigurationService service, IServerSettingsCache cache, IDatabase redisDb) = CreateService();
+        (ServerConfigurationService service, IServerSettingsReader cache, IDatabase redisDb) = CreateService();
         redisDb.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
             .Returns(Task.FromResult<RedisValue>(RedisValue.Null));
         cache.GetSettingFromDatabaseAsync(ServerConfigurationSettingKeys.ServiceStatusSeconds, Arg.Any<CancellationToken>())
@@ -229,7 +229,7 @@ public class ServerConfigurationServiceTests
     [Test]
     public async Task GetServiceStatusSecondsAsync_InvalidSetting_Zero_ReturnsDefault()
     {
-        (ServerConfigurationService service, IServerSettingsCache cache, IDatabase redisDb) = CreateService();
+        (ServerConfigurationService service, IServerSettingsReader cache, IDatabase redisDb) = CreateService();
         redisDb.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
             .Returns(Task.FromResult<RedisValue>(RedisValue.Null));
         cache.GetSettingFromDatabaseAsync(ServerConfigurationSettingKeys.ServiceStatusSeconds, Arg.Any<CancellationToken>())
@@ -243,7 +243,7 @@ public class ServerConfigurationServiceTests
     [Test]
     public async Task GetServiceStatusSecondsAsync_InvalidSetting_Negative_ReturnsDefault()
     {
-        (ServerConfigurationService service, IServerSettingsCache cache, IDatabase redisDb) = CreateService();
+        (ServerConfigurationService service, IServerSettingsReader cache, IDatabase redisDb) = CreateService();
         redisDb.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
             .Returns(Task.FromResult<RedisValue>(RedisValue.Null));
         cache.GetSettingFromDatabaseAsync(ServerConfigurationSettingKeys.ServiceStatusSeconds, Arg.Any<CancellationToken>())
@@ -257,7 +257,7 @@ public class ServerConfigurationServiceTests
     [Test]
     public async Task GetServiceStatusSecondsAsync_InvalidSetting_NonNumeric_ReturnsDefault()
     {
-        (ServerConfigurationService service, IServerSettingsCache cache, IDatabase redisDb) = CreateService();
+        (ServerConfigurationService service, IServerSettingsReader cache, IDatabase redisDb) = CreateService();
         redisDb.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
             .Returns(Task.FromResult<RedisValue>(RedisValue.Null));
         cache.GetSettingFromDatabaseAsync(ServerConfigurationSettingKeys.ServiceStatusSeconds, Arg.Any<CancellationToken>())
@@ -271,7 +271,7 @@ public class ServerConfigurationServiceTests
     [Test]
     public async Task GetServiceStatusSecondsAsync_RedisCacheHit_ReturnsCachedValue()
     {
-        (ServerConfigurationService service, IServerSettingsCache cache, IDatabase redisDb) = CreateService();
+        (ServerConfigurationService service, IServerSettingsReader cache, IDatabase redisDb) = CreateService();
         redisDb.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
             .Returns(Task.FromResult<RedisValue>("7200"));
 
@@ -284,7 +284,7 @@ public class ServerConfigurationServiceTests
     [Test]
     public async Task GetServiceStatusSecondsAsync_RedisMiss_DbHit_CachesInRedis()
     {
-        (ServerConfigurationService service, IServerSettingsCache cache, IDatabase redisDb) = CreateService();
+        (ServerConfigurationService service, IServerSettingsReader cache, IDatabase redisDb) = CreateService();
         redisDb.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
             .Returns(Task.FromResult<RedisValue>(RedisValue.Null));
         cache.GetSettingFromDatabaseAsync(ServerConfigurationSettingKeys.ServiceStatusSeconds, Arg.Any<CancellationToken>())
@@ -303,7 +303,7 @@ public class ServerConfigurationServiceTests
     [Test]
     public async Task GetAllowUserSignupAsync_RedisSaysFalse_ReturnsFalse_WithoutDbRead()
     {
-        (ServerConfigurationService service, IServerSettingsCache cache, IDatabase redisDb) = CreateService();
+        (ServerConfigurationService service, IServerSettingsReader cache, IDatabase redisDb) = CreateService();
         redisDb.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
             .Returns(Task.FromResult<RedisValue>("false"));
 
@@ -316,7 +316,7 @@ public class ServerConfigurationServiceTests
     [Test]
     public async Task GetAllowUserSignupAsync_RedisMiss_DbSaysFalse_ReturnsFalse()
     {
-        (ServerConfigurationService service, IServerSettingsCache cache, IDatabase redisDb) = CreateService();
+        (ServerConfigurationService service, IServerSettingsReader cache, IDatabase redisDb) = CreateService();
         redisDb.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
             .Returns(Task.FromResult<RedisValue>(RedisValue.Null));
         cache.GetSettingFromDatabaseAsync(ServerConfigurationSettingKeys.AllowUserSignup, Arg.Any<CancellationToken>())
@@ -332,7 +332,7 @@ public class ServerConfigurationServiceTests
     [Test]
     public async Task GetAllowUserSignupAsync_Unset_DefaultsToAllowed()
     {
-        (ServerConfigurationService service, IServerSettingsCache cache, IDatabase redisDb) = CreateService();
+        (ServerConfigurationService service, IServerSettingsReader cache, IDatabase redisDb) = CreateService();
         redisDb.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
             .Returns(Task.FromResult<RedisValue>(RedisValue.Null));
         cache.GetSettingFromDatabaseAsync(ServerConfigurationSettingKeys.AllowUserSignup, Arg.Any<CancellationToken>())
@@ -349,7 +349,7 @@ public class ServerConfigurationServiceTests
     [Test]
     public async Task GetIntSetting_RedisReadThrows_FallsBackToDatabaseValue()
     {
-        (ServerConfigurationService service, IServerSettingsCache cache, IDatabase redisDb) = CreateService();
+        (ServerConfigurationService service, IServerSettingsReader cache, IDatabase redisDb) = CreateService();
         redisDb.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
             .Returns<Task<RedisValue>>(_ => throw new RedisConnectionException(ConnectionFailureType.UnableToConnect, "Redis unavailable"));
         cache.GetSettingFromDatabaseAsync(ServerConfigurationSettingKeys.AgentHeartbeatSeconds, Arg.Any<CancellationToken>())
@@ -363,7 +363,7 @@ public class ServerConfigurationServiceTests
     [Test]
     public async Task GetIntSetting_RedisReadThrows_DbMiss_ReturnsDefault()
     {
-        (ServerConfigurationService service, IServerSettingsCache cache, IDatabase redisDb) = CreateService();
+        (ServerConfigurationService service, IServerSettingsReader cache, IDatabase redisDb) = CreateService();
         redisDb.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
             .Returns<Task<RedisValue>>(_ => throw new RedisConnectionException(ConnectionFailureType.UnableToConnect, "Redis unavailable"));
         cache.GetSettingFromDatabaseAsync(ServerConfigurationSettingKeys.AgentHeartbeatSeconds, Arg.Any<CancellationToken>())
@@ -377,7 +377,7 @@ public class ServerConfigurationServiceTests
     [Test]
     public async Task GetIntSetting_RedisWriteBackThrows_StillReturnsDatabaseValue()
     {
-        (ServerConfigurationService service, IServerSettingsCache cache, IDatabase redisDb) = CreateService();
+        (ServerConfigurationService service, IServerSettingsReader cache, IDatabase redisDb) = CreateService();
         redisDb.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
             .Returns(Task.FromResult<RedisValue>(RedisValue.Null));
         redisDb.StringSetAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<Expiration>())
@@ -393,7 +393,7 @@ public class ServerConfigurationServiceTests
     [Test]
     public async Task GetStringSetting_RedisReadThrows_FallsBackToDatabaseValue()
     {
-        (ServerConfigurationService service, IServerSettingsCache cache, IDatabase redisDb) = CreateService();
+        (ServerConfigurationService service, IServerSettingsReader cache, IDatabase redisDb) = CreateService();
         redisDb.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
             .Returns<Task<RedisValue>>(_ => throw new RedisConnectionException(ConnectionFailureType.UnableToConnect, "Redis unavailable"));
         cache.GetSettingFromDatabaseAsync(ServerConfigurationSettingKeys.AllowUserSignup, Arg.Any<CancellationToken>())
@@ -407,7 +407,7 @@ public class ServerConfigurationServiceTests
     [Test]
     public async Task GetStringSetting_RedisReadThrows_DbMiss_DefaultsToAllowed()
     {
-        (ServerConfigurationService service, IServerSettingsCache cache, IDatabase redisDb) = CreateService();
+        (ServerConfigurationService service, IServerSettingsReader cache, IDatabase redisDb) = CreateService();
         redisDb.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
             .Returns<Task<RedisValue>>(_ => throw new RedisConnectionException(ConnectionFailureType.UnableToConnect, "Redis unavailable"));
         cache.GetSettingFromDatabaseAsync(ServerConfigurationSettingKeys.AllowUserSignup, Arg.Any<CancellationToken>())

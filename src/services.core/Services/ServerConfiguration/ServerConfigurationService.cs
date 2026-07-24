@@ -18,17 +18,17 @@ public sealed class ServerConfigurationService
 {
     private static readonly TimeSpan CacheTtl = TimeSpan.FromMinutes(5);
 
-    private readonly IServerSettingsCache _cache;
+    private readonly IServerSettingsReader _settingsReader;
     private readonly IConnectionMultiplexer _redis;
 
     /// <summary>
     /// Creates a new instance of the <see cref="ServerConfigurationService"/> class.
     /// </summary>
-    /// <param name="cache">The server settings cache for reading configuration settings.</param>
+    /// <param name="settingsReader">Reads configuration settings from the database.</param>
     /// <param name="redis">The Redis connection multiplexer for shared caching.</param>
-    public ServerConfigurationService(IServerSettingsCache cache, IConnectionMultiplexer redis)
+    public ServerConfigurationService(IServerSettingsReader settingsReader, IConnectionMultiplexer redis)
     {
-        _cache = cache ?? throw new ArgumentNullException(nameof(cache));
+        _settingsReader = settingsReader ?? throw new ArgumentNullException(nameof(settingsReader));
         _redis = redis ?? throw new ArgumentNullException(nameof(redis));
     }
 
@@ -143,7 +143,7 @@ public sealed class ServerConfigurationService
 
         // Fall back to the database directly — never the local cache — so a just-invalidated Redis key
         // is not re-seeded from another replica's stale in-memory value.
-        string? value = await _cache.GetSettingFromDatabaseAsync(key, ct);
+        string? value = await _settingsReader.GetSettingFromDatabaseAsync(key, ct);
         if (value is not null && int.TryParse(value, out int parsed) && parsed > 0)
         {
             // Store in Redis so other replicas can read it.
@@ -168,7 +168,7 @@ public sealed class ServerConfigurationService
 
         // Authoritative read from the database (not the local cache) so a cleared Redis key is not
         // re-seeded stale, then repopulate the shared cache for other replicas.
-        string? value = await _cache.GetSettingFromDatabaseAsync(key, ct);
+        string? value = await _settingsReader.GetSettingFromDatabaseAsync(key, ct);
         if (value is not null)
         {
             await TryRedisSetAsync(db, redisKey, value);

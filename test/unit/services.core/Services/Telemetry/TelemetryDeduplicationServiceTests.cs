@@ -19,7 +19,7 @@ public sealed class TelemetryDeduplicationServiceTests
 {
     private static ServerConfigurationService CreateConfigService()
     {
-        return new ServerConfigurationService(Substitute.For<IServerSettingsCache>(), Substitute.For<IConnectionMultiplexer>());
+        return new ServerConfigurationService(Substitute.For<IServerSettingsReader>(), Substitute.For<IConnectionMultiplexer>());
     }
 
     [Test]

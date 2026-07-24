@@ -1141,8 +1141,7 @@ public sealed class FleetAdminServiceTests
 
         IServiceScopeFactory scopeFactory = CreateScopeFactoryWithServices(new Dictionary<Type, object>
         {
-            { typeof(IServerConfigurationRepository), configRepo },
-            { typeof(IServerSettingsCache), Substitute.For<IServerSettingsCache>() }
+            { typeof(IServerConfigurationRepository), configRepo }
         });
 
         FleetAdminService service = CreateFleetAdminService(scopeFactory);
