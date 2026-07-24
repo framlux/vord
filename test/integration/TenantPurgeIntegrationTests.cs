@@ -11,6 +11,7 @@ using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Services.Core.Billing;
 using Framlux.FleetManagement.Services.Core.Handlers;
 using Framlux.FleetManagement.Services.Core.Jobs;
+using Framlux.FleetManagement.Services.Core.Security;
 using LinqToDB;
 using LinqToDB.Async;
 using LinqToDB.Data;
@@ -174,7 +175,8 @@ public sealed class TenantPurgeIntegrationTests
             .Returns(Task.FromResult(true));
 
         TenantDeletionHandler handler = new(
-            repo, repo, repo, repo, billingApiClient, timeProvider, NullLogger<TenantDeletionHandler>.Instance);
+            repo, repo, repo, repo, billingApiClient, Substitute.For<IRoleCacheInvalidator>(), timeProvider,
+            NullLogger<TenantDeletionHandler>.Instance);
 
         TenantDeletionResult requestResult = await handler.RequestDeletionAsync(
             tenantA.Id, requestedByUserId: 0, reason: "integration test", CancellationToken.None);

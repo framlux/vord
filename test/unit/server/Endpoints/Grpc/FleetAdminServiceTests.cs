@@ -1779,7 +1779,8 @@ public sealed class FleetAdminServiceTests
         FakeTimeProvider timeProvider = new(now);
 
         return new TenantDeletionHandler(
-            tenantRepo, deletionRepo, auditLog, transactionProvider, billingApiClient, timeProvider,
+            tenantRepo, deletionRepo, auditLog, transactionProvider, billingApiClient,
+            Substitute.For<IRoleCacheInvalidator>(), timeProvider,
             Substitute.For<ILogger<TenantDeletionHandler>>());
     }
 

@@ -7,6 +7,7 @@ using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Services.Core.Billing;
 using Framlux.FleetManagement.Services.Core.Infrastructure;
+using Framlux.FleetManagement.Services.Core.Security;
 using Microsoft.Extensions.Logging;
 
 namespace Framlux.FleetManagement.Services.Core.Handlers;
@@ -26,6 +27,7 @@ public sealed class TenantDeletionHandler
     private readonly IAuditLogRepository _auditLog;
     private readonly IDatabaseTransactionProvider _transactionProvider;
     private readonly IBillingApiClient _billingApiClient;
+    private readonly IRoleCacheInvalidator _roleCacheInvalidator;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<TenantDeletionHandler> _logger;
 
@@ -35,6 +37,7 @@ public sealed class TenantDeletionHandler
     /// <param name="auditLog">The audit log repository.</param>
     /// <param name="transactionProvider">The database transaction provider.</param>
     /// <param name="billingApiClient">The billing API client.</param>
+    /// <param name="roleCacheInvalidator">Evicts cached role claims so a deactivation is enforced promptly.</param>
     /// <param name="timeProvider">The time provider, for testable "now" resolution.</param>
     /// <param name="logger">The logger.</param>
     public TenantDeletionHandler(
@@ -43,6 +46,7 @@ public sealed class TenantDeletionHandler
         IAuditLogRepository auditLog,
         IDatabaseTransactionProvider transactionProvider,
         IBillingApiClient billingApiClient,
+        IRoleCacheInvalidator roleCacheInvalidator,
         TimeProvider timeProvider,
         ILogger<TenantDeletionHandler> logger)
     {
@@ -51,6 +55,7 @@ public sealed class TenantDeletionHandler
         ArgumentNullException.ThrowIfNull(auditLog);
         ArgumentNullException.ThrowIfNull(transactionProvider);
         ArgumentNullException.ThrowIfNull(billingApiClient);
+        ArgumentNullException.ThrowIfNull(roleCacheInvalidator);
         ArgumentNullException.ThrowIfNull(timeProvider);
         ArgumentNullException.ThrowIfNull(logger);
 
@@ -59,6 +64,7 @@ public sealed class TenantDeletionHandler
         _auditLog = auditLog;
         _transactionProvider = transactionProvider;
         _billingApiClient = billingApiClient;
+        _roleCacheInvalidator = roleCacheInvalidator;
         _timeProvider = timeProvider;
         _logger = logger;
     }
@@ -137,6 +143,13 @@ public sealed class TenantDeletionHandler
 
         await transaction.CommitAsync(ct);
 
+        // Evict the members' cached role claims so an already-open browser session loses this tenant's
+        // role on its very next request. New logins, tenant-switch, and telemetry ingest already block
+        // immediately on the live Tenants.IsActive check; without this eviction only an open session
+        // would keep its baked-in claim until the cache TTL. Best-effort by design — the TTL remains
+        // the backstop, and the deactivation itself is already committed.
+        await InvalidateMemberRoleCachesAsync(tenantId, ct);
+
         // After commit only — an external call inside the transaction would hold the DB lock across a
         // network round-trip and could not be rolled back anyway. Billing cancel is best-effort: the
         // tenant is already deactivated, and the purge job tears the Stripe customer down entirely at
@@ -204,8 +217,39 @@ public sealed class TenantDeletionHandler
 
         await transaction.CommitAsync(ct);
 
+        // Mirror of the deactivation path: the members' cached role claims still describe the tenant as
+        // gone, so evict them or restored access would not be usable until the cache TTL elapsed.
+        await InvalidateMemberRoleCachesAsync(tenantId, ct);
+
         _logger.LogInformation("Tenant {TenantId} deletion {DeletionId} restored", tenantId, deletion.Id);
 
         return new TenantDeletionResult(true, "OK", null);
+    }
+
+    /// <summary>
+    /// Evicts every tenant member's cached role claims so the next request rebuilds them from the
+    /// database, which filters on the tenant's current active flag. A Redis failure must not fail the
+    /// caller: the membership change is already committed and the cache TTL bounds the staleness.
+    /// </summary>
+    /// <param name="tenantId">The tenant whose members should have their role caches evicted.</param>
+    /// <param name="ct">A cancellation token.</param>
+    private async Task InvalidateMemberRoleCachesAsync(int tenantId, CancellationToken ct)
+    {
+        try
+        {
+            List<int> memberIds = await _deletionRepo.GetUserIdsWithAnyRoleInTenantAsync(tenantId, ct);
+
+            foreach (int userId in memberIds)
+            {
+                await _roleCacheInvalidator.InvalidateAsync(userId, ct);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(
+                ex,
+                "Could not evict cached role claims for tenant {TenantId} members; sessions will refresh on the cache TTL",
+                tenantId);
+        }
     }
 }

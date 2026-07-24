@@ -87,6 +87,8 @@ pnpm -C src/web test      # also: pnpm -C src/web check  /  pnpm -C src/web buil
 
 **Auth:** API Key scheme for agents, OIDC/OAuth for web users (GitHub, Google, Microsoft social login; per-tenant custom OIDC for Team tier). Role-based: Admin, TenantAdmin, MachineAdmin, Viewer.
 
+**Tenant deactivation is enforced within one request, not one TTL.** New logins, tenant-switch, and telemetry ingest block immediately on the live `Tenants.IsActive` check, but an already-open browser session carries its tenant role claim in the auth cookie. So `TenantDeletionHandler` — on both `RequestDeletionAsync` and `RestoreAsync`, **after commit** — evicts every tenant member's cached role claims via `IRoleCacheInvalidator`; `CookiePrincipalValidator` then rebuilds claims from `GetTenantsForUserAsync`, which filters on `Tenants.IsActive`. The eviction is best-effort (a Redis failure is logged, never fails the deletion) with the ≤5-minute claim-refresh TTL as the backstop. Any future path that flips a tenant's active flag must do the same, or it silently reverts to TTL-bounded enforcement.
+
 ## Key Conventions
 - All code files must start with the license header; each service or application must have a license file in the root folder of the service or application
 - Start with the Microsoft C# Coding Standards https://learn.microsoft.com/en-us/dotnet/csharp/fundamentals/coding-style/coding-conventions
