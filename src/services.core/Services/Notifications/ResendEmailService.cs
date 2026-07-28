@@ -89,7 +89,7 @@ public sealed class ResendEmailService : IEmailService
             }
 
             string responseBody = await response.Content.ReadAsStringAsync(ct);
-            _logger.LogWarning("Resend API returned {StatusCode} for email to {Email}: {Body}", response.StatusCode, toEmail, responseBody);
+            _logger.LogError("Resend API returned {StatusCode} for email to {Email}: {Body}", response.StatusCode, toEmail, responseBody);
 
             return false;
         }
@@ -135,7 +135,7 @@ public sealed class ResendEmailService : IEmailService
             }
 
             string responseBody = await response.Content.ReadAsStringAsync(ct);
-            _logger.LogWarning("Resend API returned {StatusCode} for alert email to {Email}: {Body}", response.StatusCode, toEmail, responseBody);
+            _logger.LogError("Resend API returned {StatusCode} for alert email to {Email}: {Body}", response.StatusCode, toEmail, responseBody);
 
             return false;
         }

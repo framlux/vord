@@ -6,8 +6,10 @@ using System.Text.Json;
 using Framlux.FleetManagement.Services.Core.Notifications;
 using Framlux.FleetManagement.Services.Core.Options;
 using Framlux.FleetManagement.Test.Infrastructure;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
+using NSubstitute;
 
 namespace Framlux.FleetManagement.Test.Services;
 
@@ -144,6 +146,34 @@ public sealed class ResendEmailServiceTests
         bool result = await service.SendInvitationEmailAsync("user@example.com", "Acme", "Admin", "https://app.example.com/accept", CancellationToken.None);
 
         await Assert.That(result).IsFalse();
+    }
+
+    [Test]
+    public async Task SendInvitation_ResendReturns550_LogsErrorWithStatusCodeAndBody()
+    {
+        // Regression test for vord-xoo: a rejected send (e.g. Resend's 550 for an
+        // unverified sender domain) must be logged at Error, not swallowed or logged
+        // below Error, so it is visible in logs and can be alerted on.
+        MockHttpMessageHandler handler = new();
+        handler.WithDefaultResponse(new HttpResponseMessage((System.Net.HttpStatusCode)550)
+        {
+            Content = new StringContent("The vordfleet.dev domain is not verified"),
+        });
+        HttpClient httpClient = new(handler);
+        IOptions<ResendOptions> options = BuildOptions(apiKey: "re_test_550");
+        ILogger<ResendEmailService> logger = Substitute.For<ILogger<ResendEmailService>>();
+
+        ResendEmailService service = new(httpClient, options, logger);
+
+        bool result = await service.SendInvitationEmailAsync("user@example.com", "Acme", "Admin", "https://app.example.com/accept", CancellationToken.None);
+
+        await Assert.That(result).IsFalse();
+        logger.Received().Log(
+            LogLevel.Error,
+            Arg.Any<EventId>(),
+            Arg.Any<object>(),
+            Arg.Any<Exception>(),
+            Arg.Any<Func<object, Exception?, string>>());
     }
 
     [Test]
@@ -295,6 +325,34 @@ public sealed class ResendEmailServiceTests
         await Assert.That(body).Contains("\"subject\":");
         await Assert.That(body).Contains("\"html\":");
         await Assert.That(body).Contains("alert@example.com");
+    }
+
+    [Test]
+    public async Task SendAlertEmail_ResendReturns550_LogsErrorWithStatusCodeAndBody()
+    {
+        // Regression test for vord-xoo: a rejected send (e.g. Resend's 550 for an
+        // unverified sender domain) must be logged at Error, not swallowed or logged
+        // below Error, so it is visible in logs and can be alerted on.
+        MockHttpMessageHandler handler = new();
+        handler.WithDefaultResponse(new HttpResponseMessage((System.Net.HttpStatusCode)550)
+        {
+            Content = new StringContent("The vordfleet.dev domain is not verified"),
+        });
+        HttpClient httpClient = new(handler);
+        IOptions<ResendOptions> options = BuildOptions(apiKey: "re_alert_550");
+        ILogger<ResendEmailService> logger = Substitute.For<ILogger<ResendEmailService>>();
+
+        ResendEmailService service = new(httpClient, options, logger);
+
+        bool result = await service.SendAlertEmailAsync("alert@example.com", "Alert", "<p>Body</p>", CancellationToken.None);
+
+        await Assert.That(result).IsFalse();
+        logger.Received().Log(
+            LogLevel.Error,
+            Arg.Any<EventId>(),
+            Arg.Any<object>(),
+            Arg.Any<Exception>(),
+            Arg.Any<Func<object, Exception?, string>>());
     }
 
     [Test]
