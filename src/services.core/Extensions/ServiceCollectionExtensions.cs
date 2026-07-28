@@ -92,7 +92,9 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IValidateOptions<ObjectStorageOptions>, ObjectStorageOptionsValidator>();
 
         services.AddOptions<ResendOptions>()
-            .Bind(configuration.GetSection("Resend"));
+            .Bind(configuration.GetSection("Resend"))
+            .ValidateOnStart();
+        services.AddSingleton<IValidateOptions<ResendOptions>, ResendOptionsValidator>();
 
         services.AddOptions<AppOptions>()
             .Bind(configuration.GetSection("App"))

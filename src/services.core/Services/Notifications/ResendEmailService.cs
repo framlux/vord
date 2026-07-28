@@ -34,9 +34,7 @@ public sealed class ResendEmailService : IEmailService
     public async Task<bool> SendInvitationEmailAsync(string toEmail, string tenantName, string inviterName, string acceptUrl, CancellationToken ct)
     {
         string apiKey = _resendOptions.ApiKey;
-        string fromEmail = string.IsNullOrEmpty(_resendOptions.FromEmail) == false
-            ? _resendOptions.FromEmail
-            : "Framlux Vord <invitations@vordfleet.dev>";
+        string fromEmail = _resendOptions.FromEmail;
 
         if (string.IsNullOrEmpty(apiKey))
         {
@@ -105,9 +103,7 @@ public sealed class ResendEmailService : IEmailService
     public async Task<bool> SendAlertEmailAsync(string toEmail, string subject, string htmlBody, CancellationToken ct)
     {
         string apiKey = _resendOptions.ApiKey;
-        string fromEmail = string.IsNullOrEmpty(_resendOptions.FromEmail) == false
-            ? _resendOptions.FromEmail
-            : "Framlux Vord <alerts@vordfleet.dev>";
+        string fromEmail = _resendOptions.FromEmail;
 
         if (string.IsNullOrEmpty(apiKey))
         {
