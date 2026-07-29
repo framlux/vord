@@ -48,14 +48,14 @@ public sealed class SendInvitationEmailJobTests
     // ========== SendAsync — happy path ==========
 
     [Test]
-    public async Task SendAsync_EmailServiceReturnsTrue_CompletesWithoutThrowing()
+    public async Task SendAsync_EmailServiceReturnsSent_CompletesWithoutThrowing()
     {
         // Intent: when Resend accepts the email the job must complete cleanly so Hangfire
         // marks it succeeded and does not consume a retry attempt.
         IEmailService emailService = Substitute.For<IEmailService>();
         emailService.SendInvitationEmailAsync(
             Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
-            .Returns(true);
+            .Returns(EmailDeliveryOutcome.Sent);
 
         SendInvitationEmailJob job = new(emailService, NullLogger<SendInvitationEmailJob>.Instance);
 
@@ -66,19 +66,36 @@ public sealed class SendInvitationEmailJobTests
             "user@example.com", "Acme Corp", "Alice", "https://app.test/accept?token=abc", CancellationToken.None);
     }
 
+    /// <summary>
+    /// Email is optional. With no provider configured the job must complete quietly rather than
+    /// throwing — otherwise every invitation on a self-hosted install burns its Hangfire retry
+    /// budget and accumulates permanently failed jobs.
+    /// </summary>
+    [Test]
+    public async Task SendAsync_EmailSkippedBecauseUnconfigured_DoesNotThrow()
+    {
+        IEmailService emailService = Substitute.For<IEmailService>();
+        emailService
+            .SendInvitationEmailAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(EmailDeliveryOutcome.Skipped);
+        SendInvitationEmailJob job = new(emailService, NullLogger<SendInvitationEmailJob>.Instance);
+
+        await job.SendAsync("to@example.com", "Tenant", "Inviter", "https://example.com/accept", CancellationToken.None);
+    }
+
     // ========== SendAsync — failure path (Hangfire retry trigger) ==========
 
     [Test]
-    public async Task SendAsync_EmailServiceReturnsFalse_ThrowsInvalidOperationException()
+    public async Task SendAsync_EmailServiceReturnsFailed_ThrowsInvalidOperationException()
     {
-        // Intent: IEmailService.SendInvitationEmailAsync returns false on failure (logs-and-returns
-        // pattern). The job must convert that into a throw so Hangfire's AutomaticRetryAttribute
-        // retries the job. Without the throw, Hangfire would mark the job succeeded and the
-        // invitation email would be silently lost.
+        // Intent: IEmailService.SendInvitationEmailAsync returns Failed when the provider rejects
+        // the message or is unreachable. The job must convert that into a throw so Hangfire's
+        // AutomaticRetryAttribute retries the job. Without the throw, Hangfire would mark the job
+        // succeeded and the invitation email would be silently lost.
         IEmailService emailService = Substitute.For<IEmailService>();
         emailService.SendInvitationEmailAsync(
             Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
-            .Returns(false);
+            .Returns(EmailDeliveryOutcome.Failed);
 
         SendInvitationEmailJob job = new(emailService, NullLogger<SendInvitationEmailJob>.Instance);
 
@@ -89,14 +106,14 @@ public sealed class SendInvitationEmailJobTests
     }
 
     [Test]
-    public async Task SendAsync_EmailServiceReturnsFalse_ExceptionMessageContainsRecipient()
+    public async Task SendAsync_EmailServiceReturnsFailed_ExceptionMessageContainsRecipient()
     {
         // Intent: the exception message should identify the failed recipient so the Hangfire
         // Failed tab shows actionable context without requiring a log search.
         IEmailService emailService = Substitute.For<IEmailService>();
         emailService.SendInvitationEmailAsync(
             Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
-            .Returns(false);
+            .Returns(EmailDeliveryOutcome.Failed);
 
         SendInvitationEmailJob job = new(emailService, NullLogger<SendInvitationEmailJob>.Instance);
 
@@ -116,7 +133,7 @@ public sealed class SendInvitationEmailJobTests
         IEmailService emailService = Substitute.For<IEmailService>();
         emailService.SendInvitationEmailAsync(
             Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
-            .Returns(true);
+            .Returns(EmailDeliveryOutcome.Sent);
 
         SendInvitationEmailJob job = new(emailService, NullLogger<SendInvitationEmailJob>.Instance);
 

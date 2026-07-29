@@ -152,7 +152,7 @@ public sealed class AlertDeliveryServiceTests
 
         IEmailService emailService = Substitute.For<IEmailService>();
         emailService.SendAlertEmailAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
-            .Returns(true);
+            .Returns(EmailDeliveryOutcome.Sent);
 
         TestServiceScopeFactory scopeFactory = CreateEmailScopeFactory(dbFactory, tenantRepo, attemptRepo, emailService);
         AlertDeliveryService service = BuildService(scopeFactory);
@@ -207,7 +207,7 @@ public sealed class AlertDeliveryServiceTests
 
         IEmailService emailService = Substitute.For<IEmailService>();
         emailService.SendAlertEmailAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
-            .Returns(false);
+            .Returns(EmailDeliveryOutcome.Failed);
 
         TestServiceScopeFactory scopeFactory = CreateEmailScopeFactory(dbFactory, tenantRepo, attemptRepo, emailService);
         AlertDeliveryService service = BuildService(scopeFactory);
@@ -223,7 +223,41 @@ public sealed class AlertDeliveryServiceTests
     }
 
     [Test]
-    public async Task DeliverAsync_NotifyEmail_PermanentFailure_NoThrowNoRelease()
+    public async Task DeliverAsync_NotifyEmail_Skipped_NoThrowNoReleaseNoTransientFailureRecorded()
+    {
+        // Intent: Skipped means no provider is configured — a supported self-hosted deployment.
+        // It must be treated as terminal success: no retry release, no transient failure, and the
+        // claim stays recorded so a Hangfire retry does not re-attempt a send that can never work.
+        using TestDatabaseFactory dbFactory = new();
+
+        ITenantRepository tenantRepo = Substitute.For<ITenantRepository>();
+        tenantRepo.GetTenantAdminEmailsAsync(Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns(["admin@x.com"]);
+
+        IAlertEmailDeliveryAttemptRepository attemptRepo = Substitute.For<IAlertEmailDeliveryAttemptRepository>();
+        attemptRepo.GetClaimedRecipientsAsync(Arg.Any<long>(), Arg.Any<CancellationToken>())
+            .Returns(new HashSet<string>(StringComparer.OrdinalIgnoreCase));
+        attemptRepo.TryClaimAttemptAsync(Arg.Any<long>(), Arg.Any<string>(), Arg.Any<DateTimeOffset>(), Arg.Any<CancellationToken>())
+            .Returns(true);
+
+        IEmailService emailService = Substitute.For<IEmailService>();
+        emailService.SendAlertEmailAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(EmailDeliveryOutcome.Skipped);
+
+        TestServiceScopeFactory scopeFactory = CreateEmailScopeFactory(dbFactory, tenantRepo, attemptRepo, emailService);
+        AlertDeliveryService service = BuildService(scopeFactory);
+
+        AlertEvent alertEvent = CreateEvent();
+        await service.DeliverAsync(alertEvent, CreateRule(notifyEmail: true), CancellationToken.None);
+
+        await attemptRepo.DidNotReceive().ReleaseClaimForRetryAsync(
+            Arg.Any<long>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
+        await attemptRepo.DidNotReceive().MarkAttemptSucceededAsync(
+            Arg.Any<long>(), Arg.Any<string>(), Arg.Any<DateTimeOffset>(), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task DeliverAsync_NotifyEmail_UnexpectedException_NoThrowNoRelease()
     {
         using TestDatabaseFactory dbFactory = new();
 
@@ -239,7 +273,7 @@ public sealed class AlertDeliveryServiceTests
 
         IEmailService emailService = Substitute.For<IEmailService>();
         emailService.SendAlertEmailAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
-            .Returns<bool>(_ => throw new InvalidOperationException("transport blew up"));
+            .Returns<EmailDeliveryOutcome>(_ => throw new InvalidOperationException("transport blew up"));
 
         TestServiceScopeFactory scopeFactory = CreateEmailScopeFactory(dbFactory, tenantRepo, attemptRepo, emailService);
         AlertDeliveryService service = BuildService(scopeFactory);
@@ -947,7 +981,7 @@ public sealed class AlertDeliveryServiceTests
 
         IEmailService emailService = Substitute.For<IEmailService>();
         emailService.SendAlertEmailAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
-            .Returns(true);
+            .Returns(EmailDeliveryOutcome.Sent);
 
         TestServiceScopeFactory scopeFactory = CreateEmailScopeFactory(dbFactory, tenantRepo, attemptRepo, emailService);
         MockHttpMessageHandler handler = new();

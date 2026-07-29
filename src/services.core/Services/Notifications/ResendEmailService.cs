@@ -31,16 +31,16 @@ public sealed class ResendEmailService : IEmailService
     }
 
     /// <inheritdoc/>
-    public async Task<bool> SendInvitationEmailAsync(string toEmail, string tenantName, string inviterName, string acceptUrl, CancellationToken ct)
+    public async Task<EmailDeliveryOutcome> SendInvitationEmailAsync(string toEmail, string tenantName, string inviterName, string acceptUrl, CancellationToken ct)
     {
         string apiKey = _resendOptions.ApiKey;
         string fromEmail = _resendOptions.FromEmail;
 
-        if (string.IsNullOrEmpty(apiKey))
+        if (string.IsNullOrWhiteSpace(apiKey))
         {
-            _logger.LogWarning("Resend API key not configured — skipping invitation email to {Email}", toEmail);
+            _logger.LogInformation("Resend API key not configured — email is optional, so skipping invitation email to {Email}", toEmail);
 
-            return false;
+            return EmailDeliveryOutcome.Skipped;
         }
 
         string htmlBody = $"""
@@ -83,33 +83,33 @@ public sealed class ResendEmailService : IEmailService
             {
                 _logger.LogInformation("Invitation email sent to {Email} for tenant {TenantName}", toEmail, tenantName);
 
-                return true;
+                return EmailDeliveryOutcome.Sent;
             }
 
             string responseBody = await response.Content.ReadAsStringAsync(ct);
             _logger.LogError("Resend API returned {StatusCode} for email to {Email}: {Body}", response.StatusCode, toEmail, responseBody);
 
-            return false;
+            return EmailDeliveryOutcome.Failed;
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to send invitation email to {Email}", toEmail);
 
-            return false;
+            return EmailDeliveryOutcome.Failed;
         }
     }
 
     /// <inheritdoc/>
-    public async Task<bool> SendAlertEmailAsync(string toEmail, string subject, string htmlBody, CancellationToken ct)
+    public async Task<EmailDeliveryOutcome> SendAlertEmailAsync(string toEmail, string subject, string htmlBody, CancellationToken ct)
     {
         string apiKey = _resendOptions.ApiKey;
         string fromEmail = _resendOptions.FromEmail;
 
-        if (string.IsNullOrEmpty(apiKey))
+        if (string.IsNullOrWhiteSpace(apiKey))
         {
-            _logger.LogWarning("Resend API key not configured — skipping alert email to {Email}", toEmail);
+            _logger.LogInformation("Resend API key not configured — email is optional, so skipping alert email to {Email}", toEmail);
 
-            return false;
+            return EmailDeliveryOutcome.Skipped;
         }
 
         object payload = new { from = fromEmail, to = new[] { toEmail }, subject, html = htmlBody };
@@ -127,19 +127,19 @@ public sealed class ResendEmailService : IEmailService
             {
                 _logger.LogInformation("Alert email sent to {Email}", toEmail);
 
-                return true;
+                return EmailDeliveryOutcome.Sent;
             }
 
             string responseBody = await response.Content.ReadAsStringAsync(ct);
             _logger.LogError("Resend API returned {StatusCode} for alert email to {Email}: {Body}", response.StatusCode, toEmail, responseBody);
 
-            return false;
+            return EmailDeliveryOutcome.Failed;
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Failed to send alert email to {Email}", toEmail);
 
-            return false;
+            return EmailDeliveryOutcome.Failed;
         }
     }
 
