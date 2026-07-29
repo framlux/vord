@@ -85,23 +85,6 @@ public sealed class SendInvitationEmailJobTests
 
     // ========== SendAsync — failure path (Hangfire retry trigger) ==========
 
-    /// <summary>
-    /// A real delivery failure must still throw so Hangfire retries — the graceful-skip path must
-    /// not swallow genuine failures.
-    /// </summary>
-    [Test]
-    public async Task SendAsync_EmailFailed_ThrowsSoHangfireRetries()
-    {
-        IEmailService emailService = Substitute.For<IEmailService>();
-        emailService
-            .SendInvitationEmailAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
-            .Returns(EmailDeliveryOutcome.Failed);
-        SendInvitationEmailJob job = new(emailService, NullLogger<SendInvitationEmailJob>.Instance);
-
-        await Assert.That(async () => await job.SendAsync("to@example.com", "Tenant", "Inviter", "https://example.com/accept", CancellationToken.None))
-            .Throws<InvalidOperationException>();
-    }
-
     [Test]
     public async Task SendAsync_EmailServiceReturnsFailed_ThrowsInvalidOperationException()
     {

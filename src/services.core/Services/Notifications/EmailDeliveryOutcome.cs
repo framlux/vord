@@ -13,15 +13,15 @@ namespace Framlux.FleetManagement.Services.Core.Notifications;
 public enum EmailDeliveryOutcome
 {
     /// <summary>
-    /// The message was accepted by the provider.
-    /// </summary>
-    Sent,
-
-    /// <summary>
     /// No email provider is configured, so nothing was sent. Not a failure — retrying cannot help
     /// and the caller must treat this as success.
     /// </summary>
     Skipped,
+
+    /// <summary>
+    /// The message was accepted by the provider.
+    /// </summary>
+    Sent,
 
     /// <summary>
     /// The provider was configured but rejected the message or was unreachable. Retrying may help.

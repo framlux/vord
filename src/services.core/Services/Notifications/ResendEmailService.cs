@@ -38,7 +38,7 @@ public sealed class ResendEmailService : IEmailService
 
         if (string.IsNullOrWhiteSpace(apiKey))
         {
-            _logger.LogWarning("Resend API key not configured — email is optional, so skipping invitation email to {Email}", toEmail);
+            _logger.LogInformation("Resend API key not configured — email is optional, so skipping invitation email to {Email}", toEmail);
 
             return EmailDeliveryOutcome.Skipped;
         }
@@ -107,7 +107,7 @@ public sealed class ResendEmailService : IEmailService
 
         if (string.IsNullOrWhiteSpace(apiKey))
         {
-            _logger.LogWarning("Resend API key not configured — email is optional, so skipping alert email to {Email}", toEmail);
+            _logger.LogInformation("Resend API key not configured — email is optional, so skipping alert email to {Email}", toEmail);
 
             return EmailDeliveryOutcome.Skipped;
         }
