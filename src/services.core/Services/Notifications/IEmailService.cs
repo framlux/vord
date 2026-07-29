@@ -17,8 +17,13 @@ public interface IEmailService
     /// <param name="inviterName">The name of the user who sent the invitation.</param>
     /// <param name="acceptUrl">The URL to accept the invitation.</param>
     /// <param name="ct">Cancellation token.</param>
-    /// <returns>Returns true if the email was sent successfully; otherwise, false.</returns>
-    Task<bool> SendInvitationEmailAsync(string toEmail, string tenantName, string inviterName, string acceptUrl, CancellationToken ct);
+    /// <returns>
+    /// <see cref="EmailDeliveryOutcome.Sent"/> if the provider accepted the message,
+    /// <see cref="EmailDeliveryOutcome.Skipped"/> if no provider is configured (a supported
+    /// self-hosted deployment, not a failure), or <see cref="EmailDeliveryOutcome.Failed"/> if the
+    /// provider rejected the message or was unreachable.
+    /// </returns>
+    Task<EmailDeliveryOutcome> SendInvitationEmailAsync(string toEmail, string tenantName, string inviterName, string acceptUrl, CancellationToken ct);
 
     /// <summary>
     /// Sends a pre-rendered alert notification email to a single recipient.
@@ -27,6 +32,11 @@ public interface IEmailService
     /// <param name="subject">The email subject line.</param>
     /// <param name="htmlBody">The rendered HTML body.</param>
     /// <param name="ct">Cancellation token.</param>
-    /// <returns>Returns true if the email was sent successfully; otherwise, false.</returns>
-    Task<bool> SendAlertEmailAsync(string toEmail, string subject, string htmlBody, CancellationToken ct);
+    /// <returns>
+    /// <see cref="EmailDeliveryOutcome.Sent"/> if the provider accepted the message,
+    /// <see cref="EmailDeliveryOutcome.Skipped"/> if no provider is configured (a supported
+    /// self-hosted deployment, not a failure), or <see cref="EmailDeliveryOutcome.Failed"/> if the
+    /// provider rejected the message or was unreachable.
+    /// </returns>
+    Task<EmailDeliveryOutcome> SendAlertEmailAsync(string toEmail, string subject, string htmlBody, CancellationToken ct);
 }

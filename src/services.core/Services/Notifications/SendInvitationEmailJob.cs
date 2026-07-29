@@ -10,7 +10,9 @@ namespace Framlux.FleetManagement.Services.Core.Notifications;
 /// Hangfire job that sends an invitation email with automatic retry on failure.
 /// Moves email delivery off the request path so a transient Resend outage or rate-limit
 /// does not surface as a user-visible error. If <see cref="IEmailService.SendInvitationEmailAsync"/>
-/// returns false the job throws so Hangfire's <see cref="AutomaticRetryAttribute"/> retries.
+/// returns <see cref="EmailDeliveryOutcome.Failed"/> the job throws so Hangfire's
+/// <see cref="AutomaticRetryAttribute"/> retries. <see cref="EmailDeliveryOutcome.Skipped"/> (no
+/// email provider configured — a supported deployment) completes quietly instead.
 /// </summary>
 public sealed class SendInvitationEmailJob
 {
@@ -31,7 +33,9 @@ public sealed class SendInvitationEmailJob
 
     /// <summary>
     /// Sends an invitation email to the specified address. Throws <see cref="InvalidOperationException"/>
-    /// when the underlying email service returns false so that Hangfire retries the job.
+    /// when the underlying email service returns <see cref="EmailDeliveryOutcome.Failed"/> so that
+    /// Hangfire retries the job. <see cref="EmailDeliveryOutcome.Skipped"/> — no email provider
+    /// configured — completes quietly rather than throwing.
     /// </summary>
     /// <param name="toEmail">The recipient email address.</param>
     /// <param name="tenantName">The name of the tenant the user is being invited to.</param>
@@ -41,9 +45,9 @@ public sealed class SendInvitationEmailJob
     [AutomaticRetry(Attempts = 3, DelaysInSeconds = new int[] { 10, 30, 60 })]
     public async Task SendAsync(string toEmail, string tenantName, string inviterName, string acceptUrl, CancellationToken ct)
     {
-        bool sent = await _emailService.SendInvitationEmailAsync(toEmail, tenantName, inviterName, acceptUrl, ct);
+        EmailDeliveryOutcome outcome = await _emailService.SendInvitationEmailAsync(toEmail, tenantName, inviterName, acceptUrl, ct);
 
-        if (sent == false)
+        if (outcome == EmailDeliveryOutcome.Failed)
         {
             _logger.LogWarning("Invitation email to {Email} for tenant {TenantName} failed; Hangfire will retry", toEmail, tenantName);
 

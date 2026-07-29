@@ -110,20 +110,25 @@ public sealed class AlertDeliveryService : IAlertDeliveryService
             bool releaseForRetry = false;
             try
             {
-                bool sent = await emailService.SendAlertEmailAsync(recipient, content.Subject, content.HtmlBody, ct);
-                if (sent == true)
+                EmailDeliveryOutcome outcome = await emailService.SendAlertEmailAsync(recipient, content.Subject, content.HtmlBody, ct);
+                if (outcome == EmailDeliveryOutcome.Sent)
                 {
                     await attemptRepo.MarkAttemptSucceededAsync(alertEvent.Id, recipient, DateTimeOffset.UtcNow, ct);
                 }
-                else
+                else if (outcome == EmailDeliveryOutcome.Failed)
                 {
-                    // SendAlertEmailAsync returns false for both transient transport/5xx failures and the
-                    // intentional no-API-key no-op. Treat false as transient so Hangfire retries; releasing
-                    // the claim lets a later retry re-attempt. A permanently-misconfigured key drains the
-                    // retry budget and surfaces in the Failed tab, which is the correct operator signal.
+                    // A permanently-misconfigured key (or transient transport/5xx failure) is retryable.
+                    // Treat Failed as transient so Hangfire retries; releasing the claim lets a later
+                    // retry re-attempt. Exhausting the retry budget then surfaces in the Failed tab,
+                    // which is the correct operator signal for a misconfigured key.
                     releaseForRetry = true;
                     transientFailures.Add($"email to {recipient} not sent");
                 }
+
+                // EmailDeliveryOutcome.Skipped means no email provider is configured — a supported
+                // self-hosted deployment. It is terminal success: no release, no transient failure,
+                // and the claim stays recorded so a retry does not re-attempt a send that can never
+                // work.
             }
             catch (Exception ex)
             {

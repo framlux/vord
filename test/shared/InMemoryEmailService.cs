@@ -32,18 +32,18 @@ public sealed class InMemoryEmailService : IEmailService
     public List<SentAlertEmail> SentAlertEmails { get; } = [];
 
     /// <inheritdoc/>
-    public Task<bool> SendInvitationEmailAsync(string toEmail, string tenantName, string inviterName, string acceptUrl, CancellationToken ct)
+    public Task<EmailDeliveryOutcome> SendInvitationEmailAsync(string toEmail, string tenantName, string inviterName, string acceptUrl, CancellationToken ct)
     {
         SentEmails.Add(new SentEmail(toEmail, tenantName, inviterName, acceptUrl));
 
-        return Task.FromResult(true);
+        return Task.FromResult(EmailDeliveryOutcome.Sent);
     }
 
     /// <inheritdoc/>
-    public Task<bool> SendAlertEmailAsync(string toEmail, string subject, string htmlBody, CancellationToken ct)
+    public Task<EmailDeliveryOutcome> SendAlertEmailAsync(string toEmail, string subject, string htmlBody, CancellationToken ct)
     {
         SentAlertEmails.Add(new SentAlertEmail(toEmail, subject, htmlBody));
 
-        return Task.FromResult(true);
+        return Task.FromResult(EmailDeliveryOutcome.Sent);
     }
 }

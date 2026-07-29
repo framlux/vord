@@ -23,12 +23,12 @@ public sealed class ResendEmailServiceTests
         return Options.Create(new ResendOptions
         {
             ApiKey = apiKey ?? string.Empty,
-            FromEmail = "Test <test@vordfleet.dev>",
+            FromEmail = "Test <test@outreach.framlux.io>",
         });
     }
 
     [Test]
-    public async Task SendInvitation_NoApiKey_ReturnsFalse()
+    public async Task SendInvitation_NoApiKey_ReturnsSkipped()
     {
         MockHttpMessageHandler handler = new();
         HttpClient httpClient = new(handler);
@@ -36,14 +36,14 @@ public sealed class ResendEmailServiceTests
 
         ResendEmailService service = new(httpClient, options, new NullLogger<ResendEmailService>());
 
-        bool result = await service.SendInvitationEmailAsync("user@example.com", "Acme", "Admin", "https://app.example.com/accept", CancellationToken.None);
+        EmailDeliveryOutcome result = await service.SendInvitationEmailAsync("user@example.com", "Acme", "Admin", "https://app.example.com/accept", CancellationToken.None);
 
-        await Assert.That(result).IsFalse();
+        await Assert.That(result).IsEqualTo(EmailDeliveryOutcome.Skipped);
         await Assert.That(handler.Requests.Count).IsEqualTo(0);
     }
 
     [Test]
-    public async Task SendInvitation_EmptyApiKey_ReturnsFalse()
+    public async Task SendInvitation_EmptyApiKey_ReturnsSkipped()
     {
         MockHttpMessageHandler handler = new();
         HttpClient httpClient = new(handler);
@@ -51,9 +51,24 @@ public sealed class ResendEmailServiceTests
 
         ResendEmailService service = new(httpClient, options, new NullLogger<ResendEmailService>());
 
-        bool result = await service.SendInvitationEmailAsync("user@example.com", "Acme", "Admin", "https://app.example.com/accept", CancellationToken.None);
+        EmailDeliveryOutcome result = await service.SendInvitationEmailAsync("user@example.com", "Acme", "Admin", "https://app.example.com/accept", CancellationToken.None);
 
-        await Assert.That(result).IsFalse();
+        await Assert.That(result).IsEqualTo(EmailDeliveryOutcome.Skipped);
+        await Assert.That(handler.Requests.Count).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task SendInvitation_WhitespaceApiKey_ReturnsSkipped()
+    {
+        MockHttpMessageHandler handler = new();
+        HttpClient httpClient = new(handler);
+        IOptions<ResendOptions> options = BuildOptions(apiKey: "   ");
+
+        ResendEmailService service = new(httpClient, options, new NullLogger<ResendEmailService>());
+
+        EmailDeliveryOutcome result = await service.SendInvitationEmailAsync("user@example.com", "Acme", "Admin", "https://app.example.com/accept", CancellationToken.None);
+
+        await Assert.That(result).IsEqualTo(EmailDeliveryOutcome.Skipped);
         await Assert.That(handler.Requests.Count).IsEqualTo(0);
     }
 
@@ -98,7 +113,7 @@ public sealed class ResendEmailServiceTests
     }
 
     [Test]
-    public async Task SendInvitation_ResendReturns200_ReturnsTrue()
+    public async Task SendInvitation_ResendReturns200_ReturnsSent()
     {
         MockHttpMessageHandler handler = new();
         handler.WithDefaultResponse(new HttpResponseMessage(System.Net.HttpStatusCode.OK));
@@ -107,13 +122,13 @@ public sealed class ResendEmailServiceTests
 
         ResendEmailService service = new(httpClient, options, new NullLogger<ResendEmailService>());
 
-        bool result = await service.SendInvitationEmailAsync("user@example.com", "Acme", "Admin", "https://app.example.com/accept", CancellationToken.None);
+        EmailDeliveryOutcome result = await service.SendInvitationEmailAsync("user@example.com", "Acme", "Admin", "https://app.example.com/accept", CancellationToken.None);
 
-        await Assert.That(result).IsTrue();
+        await Assert.That(result).IsEqualTo(EmailDeliveryOutcome.Sent);
     }
 
     [Test]
-    public async Task SendInvitation_ResendReturns400_ReturnsFalse()
+    public async Task SendInvitation_ResendReturns400_ReturnsFailed()
     {
         MockHttpMessageHandler handler = new();
         handler.WithDefaultResponse(new HttpResponseMessage(System.Net.HttpStatusCode.BadRequest)
@@ -125,13 +140,13 @@ public sealed class ResendEmailServiceTests
 
         ResendEmailService service = new(httpClient, options, new NullLogger<ResendEmailService>());
 
-        bool result = await service.SendInvitationEmailAsync("user@example.com", "Acme", "Admin", "https://app.example.com/accept", CancellationToken.None);
+        EmailDeliveryOutcome result = await service.SendInvitationEmailAsync("user@example.com", "Acme", "Admin", "https://app.example.com/accept", CancellationToken.None);
 
-        await Assert.That(result).IsFalse();
+        await Assert.That(result).IsEqualTo(EmailDeliveryOutcome.Failed);
     }
 
     [Test]
-    public async Task SendInvitation_ResendReturns500_ReturnsFalse()
+    public async Task SendInvitation_ResendReturns500_ReturnsFailed()
     {
         MockHttpMessageHandler handler = new();
         handler.WithDefaultResponse(new HttpResponseMessage(System.Net.HttpStatusCode.InternalServerError)
@@ -143,9 +158,9 @@ public sealed class ResendEmailServiceTests
 
         ResendEmailService service = new(httpClient, options, new NullLogger<ResendEmailService>());
 
-        bool result = await service.SendInvitationEmailAsync("user@example.com", "Acme", "Admin", "https://app.example.com/accept", CancellationToken.None);
+        EmailDeliveryOutcome result = await service.SendInvitationEmailAsync("user@example.com", "Acme", "Admin", "https://app.example.com/accept", CancellationToken.None);
 
-        await Assert.That(result).IsFalse();
+        await Assert.That(result).IsEqualTo(EmailDeliveryOutcome.Failed);
     }
 
     [Test]
@@ -165,9 +180,9 @@ public sealed class ResendEmailServiceTests
 
         ResendEmailService service = new(httpClient, options, logger);
 
-        bool result = await service.SendInvitationEmailAsync("user@example.com", "Acme", "Admin", "https://app.example.com/accept", CancellationToken.None);
+        EmailDeliveryOutcome result = await service.SendInvitationEmailAsync("user@example.com", "Acme", "Admin", "https://app.example.com/accept", CancellationToken.None);
 
-        await Assert.That(result).IsFalse();
+        await Assert.That(result).IsEqualTo(EmailDeliveryOutcome.Failed);
         logger.Received().Log(
             LogLevel.Error,
             Arg.Any<EventId>(),
@@ -177,7 +192,7 @@ public sealed class ResendEmailServiceTests
     }
 
     [Test]
-    public async Task SendInvitation_HttpException_ReturnsFalse()
+    public async Task SendInvitation_HttpException_ReturnsFailed()
     {
         MockHttpMessageHandler handler = new();
         handler.WithException(new HttpRequestException("Connection failed"));
@@ -186,9 +201,9 @@ public sealed class ResendEmailServiceTests
 
         ResendEmailService service = new(httpClient, options, new NullLogger<ResendEmailService>());
 
-        bool result = await service.SendInvitationEmailAsync("user@example.com", "Acme", "Admin", "https://app.example.com/accept", CancellationToken.None);
+        EmailDeliveryOutcome result = await service.SendInvitationEmailAsync("user@example.com", "Acme", "Admin", "https://app.example.com/accept", CancellationToken.None);
 
-        await Assert.That(result).IsFalse();
+        await Assert.That(result).IsEqualTo(EmailDeliveryOutcome.Failed);
     }
 
     [Test]
@@ -215,7 +230,7 @@ public sealed class ResendEmailServiceTests
     }
 
     [Test]
-    public async Task SendAlertEmail_ValidApiKey_ReturnsTrue()
+    public async Task SendAlertEmail_ValidApiKey_ReturnsSent()
     {
         MockHttpMessageHandler handler = new();
         handler.WithDefaultResponse(new HttpResponseMessage(System.Net.HttpStatusCode.OK));
@@ -224,14 +239,14 @@ public sealed class ResendEmailServiceTests
 
         ResendEmailService service = new(httpClient, options, new NullLogger<ResendEmailService>());
 
-        bool result = await service.SendAlertEmailAsync("alert@example.com", "Alert: Vehicle offline", "<p>Your vehicle is offline.</p>", CancellationToken.None);
+        EmailDeliveryOutcome result = await service.SendAlertEmailAsync("alert@example.com", "Alert: Vehicle offline", "<p>Your vehicle is offline.</p>", CancellationToken.None);
 
-        await Assert.That(result).IsTrue();
+        await Assert.That(result).IsEqualTo(EmailDeliveryOutcome.Sent);
         await Assert.That(handler.Requests.Count).IsEqualTo(1);
     }
 
     [Test]
-    public async Task SendAlertEmail_NoApiKey_ReturnsFalseWithNoHttpCalls()
+    public async Task SendAlertEmail_NoApiKey_ReturnsSkippedWithNoHttpCalls()
     {
         MockHttpMessageHandler handler = new();
         HttpClient httpClient = new(handler);
@@ -239,14 +254,29 @@ public sealed class ResendEmailServiceTests
 
         ResendEmailService service = new(httpClient, options, new NullLogger<ResendEmailService>());
 
-        bool result = await service.SendAlertEmailAsync("alert@example.com", "Alert", "<p>Body</p>", CancellationToken.None);
+        EmailDeliveryOutcome result = await service.SendAlertEmailAsync("alert@example.com", "Alert", "<p>Body</p>", CancellationToken.None);
 
-        await Assert.That(result).IsFalse();
+        await Assert.That(result).IsEqualTo(EmailDeliveryOutcome.Skipped);
         await Assert.That(handler.Requests.Count).IsEqualTo(0);
     }
 
     [Test]
-    public async Task SendAlertEmail_ResendReturns500_ReturnsFalse()
+    public async Task SendAlertEmail_WhitespaceApiKey_ReturnsSkippedWithNoHttpCalls()
+    {
+        MockHttpMessageHandler handler = new();
+        HttpClient httpClient = new(handler);
+        IOptions<ResendOptions> options = BuildOptions(apiKey: "   ");
+
+        ResendEmailService service = new(httpClient, options, new NullLogger<ResendEmailService>());
+
+        EmailDeliveryOutcome result = await service.SendAlertEmailAsync("alert@example.com", "Alert", "<p>Body</p>", CancellationToken.None);
+
+        await Assert.That(result).IsEqualTo(EmailDeliveryOutcome.Skipped);
+        await Assert.That(handler.Requests.Count).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task SendAlertEmail_ResendReturns500_ReturnsFailed()
     {
         MockHttpMessageHandler handler = new();
         handler.WithDefaultResponse(new HttpResponseMessage(System.Net.HttpStatusCode.InternalServerError)
@@ -258,13 +288,13 @@ public sealed class ResendEmailServiceTests
 
         ResendEmailService service = new(httpClient, options, new NullLogger<ResendEmailService>());
 
-        bool result = await service.SendAlertEmailAsync("alert@example.com", "Alert", "<p>Body</p>", CancellationToken.None);
+        EmailDeliveryOutcome result = await service.SendAlertEmailAsync("alert@example.com", "Alert", "<p>Body</p>", CancellationToken.None);
 
-        await Assert.That(result).IsFalse();
+        await Assert.That(result).IsEqualTo(EmailDeliveryOutcome.Failed);
     }
 
     [Test]
-    public async Task SendAlertEmail_ResendReturns400_ReturnsFalse()
+    public async Task SendAlertEmail_ResendReturns400_ReturnsFailed()
     {
         MockHttpMessageHandler handler = new();
         handler.WithDefaultResponse(new HttpResponseMessage(System.Net.HttpStatusCode.BadRequest)
@@ -276,13 +306,13 @@ public sealed class ResendEmailServiceTests
 
         ResendEmailService service = new(httpClient, options, new NullLogger<ResendEmailService>());
 
-        bool result = await service.SendAlertEmailAsync("alert@example.com", "Alert", "<p>Body</p>", CancellationToken.None);
+        EmailDeliveryOutcome result = await service.SendAlertEmailAsync("alert@example.com", "Alert", "<p>Body</p>", CancellationToken.None);
 
-        await Assert.That(result).IsFalse();
+        await Assert.That(result).IsEqualTo(EmailDeliveryOutcome.Failed);
     }
 
     [Test]
-    public async Task SendAlertEmail_HttpException_ReturnsFalse()
+    public async Task SendAlertEmail_HttpException_ReturnsFailed()
     {
         MockHttpMessageHandler handler = new();
         handler.WithException(new HttpRequestException("Connection failed"));
@@ -291,9 +321,9 @@ public sealed class ResendEmailServiceTests
 
         ResendEmailService service = new(httpClient, options, new NullLogger<ResendEmailService>());
 
-        bool result = await service.SendAlertEmailAsync("alert@example.com", "Alert", "<p>Body</p>", CancellationToken.None);
+        EmailDeliveryOutcome result = await service.SendAlertEmailAsync("alert@example.com", "Alert", "<p>Body</p>", CancellationToken.None);
 
-        await Assert.That(result).IsFalse();
+        await Assert.That(result).IsEqualTo(EmailDeliveryOutcome.Failed);
     }
 
     [Test]
@@ -344,9 +374,9 @@ public sealed class ResendEmailServiceTests
 
         ResendEmailService service = new(httpClient, options, logger);
 
-        bool result = await service.SendAlertEmailAsync("alert@example.com", "Alert", "<p>Body</p>", CancellationToken.None);
+        EmailDeliveryOutcome result = await service.SendAlertEmailAsync("alert@example.com", "Alert", "<p>Body</p>", CancellationToken.None);
 
-        await Assert.That(result).IsFalse();
+        await Assert.That(result).IsEqualTo(EmailDeliveryOutcome.Failed);
         logger.Received().Log(
             LogLevel.Error,
             Arg.Any<EventId>(),
@@ -356,7 +386,7 @@ public sealed class ResendEmailServiceTests
     }
 
     [Test]
-    public async Task SendAlertEmail_EmptyApiKey_ReturnsFalse()
+    public async Task SendAlertEmail_EmptyApiKey_ReturnsSkipped()
     {
         MockHttpMessageHandler handler = new();
         HttpClient httpClient = new(handler);
@@ -364,9 +394,9 @@ public sealed class ResendEmailServiceTests
 
         ResendEmailService service = new(httpClient, options, new NullLogger<ResendEmailService>());
 
-        bool result = await service.SendAlertEmailAsync("alert@example.com", "Alert", "<p>Body</p>", CancellationToken.None);
+        EmailDeliveryOutcome result = await service.SendAlertEmailAsync("alert@example.com", "Alert", "<p>Body</p>", CancellationToken.None);
 
-        await Assert.That(result).IsFalse();
+        await Assert.That(result).IsEqualTo(EmailDeliveryOutcome.Skipped);
         await Assert.That(handler.Requests.Count).IsEqualTo(0);
     }
 }
