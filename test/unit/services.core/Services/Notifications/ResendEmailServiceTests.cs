@@ -164,11 +164,12 @@ public sealed class ResendEmailServiceTests
     }
 
     [Test]
-    public async Task SendInvitation_ResendReturns550_LogsErrorWithStatusCodeAndBody()
+    public async Task SendInvitation_ResendReturns550_LogsWarningWithStatusCodeAndBody()
     {
         // Regression test for vord-xoo: a rejected send (e.g. Resend's 550 for an
-        // unverified sender domain) must be logged at Error, not swallowed or logged
-        // below Error, so it is visible in logs and can be alerted on.
+        // unverified sender domain) must be logged at Warning, not swallowed or logged
+        // below Warning, so it is visible in logs. Detection of the failure itself now
+        // comes from the email-failure counter and its alert, not the log severity.
         MockHttpMessageHandler handler = new();
         handler.WithDefaultResponse(new HttpResponseMessage((System.Net.HttpStatusCode)550)
         {
@@ -184,7 +185,44 @@ public sealed class ResendEmailServiceTests
 
         await Assert.That(result).IsEqualTo(EmailDeliveryOutcome.Failed);
         logger.Received().Log(
+            LogLevel.Warning,
+            Arg.Any<EventId>(),
+            Arg.Any<object>(),
+            Arg.Any<Exception>(),
+            Arg.Any<Func<object, Exception?, string>>());
+    }
+
+    /// <summary>
+    /// With no API key configured, skipping the send is an expected condition in a supported
+    /// deployment, so it must not be logged as a fault.
+    /// </summary>
+    [Test]
+    public async Task SendInvitationEmailAsync_NoApiKey_LogsAtInformation()
+    {
+        MockHttpMessageHandler handler = new();
+        HttpClient httpClient = new(handler);
+        IOptions<ResendOptions> options = BuildOptions(apiKey: null);
+        ILogger<ResendEmailService> logger = Substitute.For<ILogger<ResendEmailService>>();
+
+        ResendEmailService service = new(httpClient, options, logger);
+
+        EmailDeliveryOutcome result = await service.SendInvitationEmailAsync("user@example.com", "Acme", "Admin", "https://app.example.com/accept", CancellationToken.None);
+
+        await Assert.That(result).IsEqualTo(EmailDeliveryOutcome.Skipped);
+        logger.DidNotReceive().Log(
             LogLevel.Error,
+            Arg.Any<EventId>(),
+            Arg.Any<object>(),
+            Arg.Any<Exception>(),
+            Arg.Any<Func<object, Exception?, string>>());
+        logger.DidNotReceive().Log(
+            LogLevel.Warning,
+            Arg.Any<EventId>(),
+            Arg.Any<object>(),
+            Arg.Any<Exception>(),
+            Arg.Any<Func<object, Exception?, string>>());
+        logger.Received().Log(
+            LogLevel.Information,
             Arg.Any<EventId>(),
             Arg.Any<object>(),
             Arg.Any<Exception>(),
@@ -358,11 +396,12 @@ public sealed class ResendEmailServiceTests
     }
 
     [Test]
-    public async Task SendAlertEmail_ResendReturns550_LogsErrorWithStatusCodeAndBody()
+    public async Task SendAlertEmail_ResendReturns550_LogsWarningWithStatusCodeAndBody()
     {
         // Regression test for vord-xoo: a rejected send (e.g. Resend's 550 for an
-        // unverified sender domain) must be logged at Error, not swallowed or logged
-        // below Error, so it is visible in logs and can be alerted on.
+        // unverified sender domain) must be logged at Warning, not swallowed or logged
+        // below Warning, so it is visible in logs. Detection of the failure itself now
+        // comes from the email-failure counter and its alert, not the log severity.
         MockHttpMessageHandler handler = new();
         handler.WithDefaultResponse(new HttpResponseMessage((System.Net.HttpStatusCode)550)
         {
@@ -378,7 +417,44 @@ public sealed class ResendEmailServiceTests
 
         await Assert.That(result).IsEqualTo(EmailDeliveryOutcome.Failed);
         logger.Received().Log(
+            LogLevel.Warning,
+            Arg.Any<EventId>(),
+            Arg.Any<object>(),
+            Arg.Any<Exception>(),
+            Arg.Any<Func<object, Exception?, string>>());
+    }
+
+    /// <summary>
+    /// With no API key configured, skipping the send is an expected condition in a supported
+    /// deployment, so it must not be logged as a fault.
+    /// </summary>
+    [Test]
+    public async Task SendAlertEmailAsync_NoApiKey_LogsAtInformation()
+    {
+        MockHttpMessageHandler handler = new();
+        HttpClient httpClient = new(handler);
+        IOptions<ResendOptions> options = BuildOptions(apiKey: null);
+        ILogger<ResendEmailService> logger = Substitute.For<ILogger<ResendEmailService>>();
+
+        ResendEmailService service = new(httpClient, options, logger);
+
+        EmailDeliveryOutcome result = await service.SendAlertEmailAsync("alert@example.com", "Alert", "<p>Body</p>", CancellationToken.None);
+
+        await Assert.That(result).IsEqualTo(EmailDeliveryOutcome.Skipped);
+        logger.DidNotReceive().Log(
             LogLevel.Error,
+            Arg.Any<EventId>(),
+            Arg.Any<object>(),
+            Arg.Any<Exception>(),
+            Arg.Any<Func<object, Exception?, string>>());
+        logger.DidNotReceive().Log(
+            LogLevel.Warning,
+            Arg.Any<EventId>(),
+            Arg.Any<object>(),
+            Arg.Any<Exception>(),
+            Arg.Any<Func<object, Exception?, string>>());
+        logger.Received().Log(
+            LogLevel.Information,
             Arg.Any<EventId>(),
             Arg.Any<object>(),
             Arg.Any<Exception>(),
