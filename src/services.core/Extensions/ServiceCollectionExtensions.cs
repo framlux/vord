@@ -29,6 +29,7 @@ using Microsoft.AspNetCore.DataProtection.KeyManagement;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Npgsql;
 using Polly;
@@ -93,6 +94,14 @@ public static class ServiceCollectionExtensions
 
         services.AddOptions<ResendOptions>()
             .Bind(configuration.GetSection("Resend"))
+            .PostConfigure<ILogger<ResendOptions>>((options, logger) =>
+            {
+                if (string.IsNullOrWhiteSpace(options.ApiKey))
+                {
+                    logger.LogInformation(
+                        "Email sending is disabled because no Resend API key is configured.");
+                }
+            })
             .ValidateOnStart();
         services.AddSingleton<IValidateOptions<ResendOptions>, ResendOptionsValidator>();
 
