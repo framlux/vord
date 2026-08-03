@@ -77,12 +77,14 @@ func TestOpen_WALMode(t *testing.T) {
 }
 
 // Intent: Database file uses WAL journal mode (on-disk test).
-// Only runs on Linux where the agent actually deploys.
+//
+// This deliberately runs on every platform. It used to skip on non-Linux "because the agent only
+// deploys there", which meant it never ran on the machines where the code is written — so a DSN
+// that silently disabled WAL, the busy timeout and the synchronous setting survived until CI
+// happened to be looked at. A pragma assertion is about the driver honouring the DSN, which is
+// platform-independent; restricting it to the deployment OS only hid the bug from the people able
+// to fix it.
 func TestOpen_WALMode_OnDisk(t *testing.T) {
-	if runtime.GOOS != "linux" {
-		t.Skip("skipping on-disk WAL test on non-Linux platform")
-	}
-
 	dir := t.TempDir()
 	dbPath := dir + "/wal-test.db"
 
@@ -99,6 +101,18 @@ func TestOpen_WALMode_OnDisk(t *testing.T) {
 
 	if journalMode != "wal" {
 		t.Errorf("expected journal_mode 'wal', got %q", journalMode)
+	}
+
+	// The busy timeout was silently ignored by the same broken DSN and nothing asserted it. A
+	// value of 0 means the agent gets an immediate SQLITE_BUSY under contention on the telemetry
+	// queue rather than waiting, so this is worth pinning alongside the journal mode.
+	var busyTimeout int
+	if err := conn.QueryRow("PRAGMA busy_timeout").Scan(&busyTimeout); err != nil {
+		t.Fatalf("PRAGMA busy_timeout: %v", err)
+	}
+
+	if busyTimeout != 5000 {
+		t.Errorf("expected busy_timeout 5000, got %d", busyTimeout)
 	}
 }
 

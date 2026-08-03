@@ -23,7 +23,12 @@ func Open(dbPath string) (*sql.DB, error) {
 		defer syscall.Umask(oldUmask)
 	}
 
-	dsn := fmt.Sprintf("file:%s?_journal_mode=WAL&_busy_timeout=5000&_synchronous=NORMAL", dbPath)
+	// modernc.org/sqlite takes pragmas as _pragma=name(value); it silently IGNORES the
+	// mattn/go-sqlite3 style (_journal_mode=WAL&_busy_timeout=5000&_synchronous=NORMAL) that was
+	// here before. Ignored meant the agent ran with journal_mode=delete, busy_timeout=0 and
+	// synchronous=FULL — so writers blocked readers on the telemetry queue and any contention
+	// surfaced as an immediate SQLITE_BUSY instead of waiting out the 5s timeout.
+	dsn := fmt.Sprintf("file:%s?_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_pragma=synchronous(NORMAL)", dbPath)
 	conn, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, fmt.Errorf("opening database: %w", err)

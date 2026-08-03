@@ -141,6 +141,13 @@ jobs:
         run: pnpm install --frozen-lockfile
         working-directory: src/web
 
+      - name: Sync SvelteKit generated types
+        # svelte-check reads .svelte-kit/tsconfig.json, which only exists after a sync. The build
+        # job gets it for free via `pnpm build` (svelte-kit sync && vite build); this job does not
+        # build, so it has to sync explicitly or svelte-check fails on a missing tsconfig.
+        run: pnpm exec svelte-kit sync
+        working-directory: src/web
+
       - name: Type-check web (svelte-check)
         run: pnpm check
         working-directory: src/web
@@ -166,6 +173,12 @@ jobs:
         with:
           name: dotnet-build
 
+      - name: Restore the executable bit on test binaries
+        # upload-artifact/download-artifact do not preserve file modes, so the apphost that
+        # `dotnet run` execs comes back without +x and every test job dies with
+        # "Permission denied". This has been failing CI since the artifact split was introduced.
+        run: find test -type f -path '*/bin/Release/*' ! -name '*.*' -exec chmod +x {} +
+
       - name: Run unit tests (services.core)
         run: dotnet run --project test/unit/services.core/unit.services.core.csproj -c Release --no-build
 
@@ -185,6 +198,12 @@ jobs:
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
         with:
           name: dotnet-build
+
+      - name: Restore the executable bit on test binaries
+        # upload-artifact/download-artifact do not preserve file modes, so the apphost that
+        # `dotnet run` execs comes back without +x and every test job dies with
+        # "Permission denied". This has been failing CI since the artifact split was introduced.
+        run: find test -type f -path '*/bin/Release/*' ! -name '*.*' -exec chmod +x {} +
 
       - name: Run unit tests (server)
         run: dotnet run --project test/unit/server/unit.server.csproj -c Release --no-build
@@ -206,6 +225,12 @@ jobs:
         with:
           name: dotnet-build
 
+      - name: Restore the executable bit on test binaries
+        # upload-artifact/download-artifact do not preserve file modes, so the apphost that
+        # `dotnet run` execs comes back without +x and every test job dies with
+        # "Permission denied". This has been failing CI since the artifact split was introduced.
+        run: find test -type f -path '*/bin/Release/*' ! -name '*.*' -exec chmod +x {} +
+
       - name: Run unit tests (database)
         run: dotnet run --project test/unit/database/unit.database.csproj -c Release --no-build
 
@@ -225,6 +250,12 @@ jobs:
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
         with:
           name: dotnet-build
+
+      - name: Restore the executable bit on test binaries
+        # upload-artifact/download-artifact do not preserve file modes, so the apphost that
+        # `dotnet run` execs comes back without +x and every test job dies with
+        # "Permission denied". This has been failing CI since the artifact split was introduced.
+        run: find test -type f -path '*/bin/Release/*' ! -name '*.*' -exec chmod +x {} +
 
       - name: Run functional tests (web)
         run: dotnet run --project test/functional/web/functional.web.csproj -c Release --no-build
@@ -246,6 +277,12 @@ jobs:
         with:
           name: dotnet-build
 
+      - name: Restore the executable bit on test binaries
+        # upload-artifact/download-artifact do not preserve file modes, so the apphost that
+        # `dotnet run` execs comes back without +x and every test job dies with
+        # "Permission denied". This has been failing CI since the artifact split was introduced.
+        run: find test -type f -path '*/bin/Release/*' ! -name '*.*' -exec chmod +x {} +
+
       - name: Run functional tests (grpc)
         run: dotnet run --project test/functional/grpc/functional.grpc.csproj -c Release --no-build
 
@@ -266,6 +303,12 @@ jobs:
         with:
           name: dotnet-build
 
+      - name: Restore the executable bit on test binaries
+        # upload-artifact/download-artifact do not preserve file modes, so the apphost that
+        # `dotnet run` execs comes back without +x and every test job dies with
+        # "Permission denied". This has been failing CI since the artifact split was introduced.
+        run: find test -type f -path '*/bin/Release/*' ! -name '*.*' -exec chmod +x {} +
+
       - name: Run functional tests (hangfire)
         run: dotnet run --project test/functional/hangfire/functional.hangfire.csproj -c Release --no-build
 
@@ -285,6 +328,12 @@ jobs:
         uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
         with:
           name: dotnet-build
+
+      - name: Restore the executable bit on test binaries
+        # upload-artifact/download-artifact do not preserve file modes, so the apphost that
+        # `dotnet run` execs comes back without +x and every test job dies with
+        # "Permission denied". This has been failing CI since the artifact split was introduced.
+        run: find test -type f -path '*/bin/Release/*' ! -name '*.*' -exec chmod +x {} +
 
       # ubuntu-latest runners ship with Docker pre-installed and the daemon already running,
       # so Testcontainers.PostgreSql picks up the default Docker socket without extra config.
