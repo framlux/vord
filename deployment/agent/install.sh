@@ -205,6 +205,9 @@ config_has_token() {
 # see deployment/agent/install_test.sh. Takes an optional pre-computed tty state so tests can
 # exercise the interactive branch without a real pty; production callers pass nothing and let it
 # probe.
+#
+# shellcheck disable=SC2120  # the optional argument is a deliberate test seam: install_test.sh
+# passes it, and shellcheck only ever sees this file.
 resolve_noninteractive() {
     HAS_TTY="${1:-}"
     if [ -z "${HAS_TTY}" ]; then

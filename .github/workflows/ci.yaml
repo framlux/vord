@@ -176,8 +176,12 @@ jobs:
       - name: Restore the executable bit on test binaries
         # upload-artifact/download-artifact do not preserve file modes, so the apphost that
         # `dotnet run` execs comes back without +x and every test job dies with
-        # "Permission denied". This has been failing CI since the artifact split was introduced.
-        run: find test -type f -path '*/bin/Release/*' ! -name '*.*' -exec chmod +x {} +
+        # "Permission denied". This had been failing CI since the artifact split was introduced.
+        # Every file under the test output is chmod'ed rather than trying to single out the
+        # apphost: the binaries are named after their project (unit.database, functional.grpc),
+        # so no "extensionless" filter can find them, and a stray +x on a .dll or .json is
+        # harmless on an ephemeral runner.
+        run: find test -type f -path '*/bin/Release/*' -exec chmod +x {} +
 
       - name: Run unit tests (services.core)
         run: dotnet run --project test/unit/services.core/unit.services.core.csproj -c Release --no-build
@@ -202,8 +206,12 @@ jobs:
       - name: Restore the executable bit on test binaries
         # upload-artifact/download-artifact do not preserve file modes, so the apphost that
         # `dotnet run` execs comes back without +x and every test job dies with
-        # "Permission denied". This has been failing CI since the artifact split was introduced.
-        run: find test -type f -path '*/bin/Release/*' ! -name '*.*' -exec chmod +x {} +
+        # "Permission denied". This had been failing CI since the artifact split was introduced.
+        # Every file under the test output is chmod'ed rather than trying to single out the
+        # apphost: the binaries are named after their project (unit.database, functional.grpc),
+        # so no "extensionless" filter can find them, and a stray +x on a .dll or .json is
+        # harmless on an ephemeral runner.
+        run: find test -type f -path '*/bin/Release/*' -exec chmod +x {} +
 
       - name: Run unit tests (server)
         run: dotnet run --project test/unit/server/unit.server.csproj -c Release --no-build
@@ -228,8 +236,12 @@ jobs:
       - name: Restore the executable bit on test binaries
         # upload-artifact/download-artifact do not preserve file modes, so the apphost that
         # `dotnet run` execs comes back without +x and every test job dies with
-        # "Permission denied". This has been failing CI since the artifact split was introduced.
-        run: find test -type f -path '*/bin/Release/*' ! -name '*.*' -exec chmod +x {} +
+        # "Permission denied". This had been failing CI since the artifact split was introduced.
+        # Every file under the test output is chmod'ed rather than trying to single out the
+        # apphost: the binaries are named after their project (unit.database, functional.grpc),
+        # so no "extensionless" filter can find them, and a stray +x on a .dll or .json is
+        # harmless on an ephemeral runner.
+        run: find test -type f -path '*/bin/Release/*' -exec chmod +x {} +
 
       - name: Run unit tests (database)
         run: dotnet run --project test/unit/database/unit.database.csproj -c Release --no-build
@@ -254,8 +266,12 @@ jobs:
       - name: Restore the executable bit on test binaries
         # upload-artifact/download-artifact do not preserve file modes, so the apphost that
         # `dotnet run` execs comes back without +x and every test job dies with
-        # "Permission denied". This has been failing CI since the artifact split was introduced.
-        run: find test -type f -path '*/bin/Release/*' ! -name '*.*' -exec chmod +x {} +
+        # "Permission denied". This had been failing CI since the artifact split was introduced.
+        # Every file under the test output is chmod'ed rather than trying to single out the
+        # apphost: the binaries are named after their project (unit.database, functional.grpc),
+        # so no "extensionless" filter can find them, and a stray +x on a .dll or .json is
+        # harmless on an ephemeral runner.
+        run: find test -type f -path '*/bin/Release/*' -exec chmod +x {} +
 
       - name: Run functional tests (web)
         run: dotnet run --project test/functional/web/functional.web.csproj -c Release --no-build
@@ -280,8 +296,12 @@ jobs:
       - name: Restore the executable bit on test binaries
         # upload-artifact/download-artifact do not preserve file modes, so the apphost that
         # `dotnet run` execs comes back without +x and every test job dies with
-        # "Permission denied". This has been failing CI since the artifact split was introduced.
-        run: find test -type f -path '*/bin/Release/*' ! -name '*.*' -exec chmod +x {} +
+        # "Permission denied". This had been failing CI since the artifact split was introduced.
+        # Every file under the test output is chmod'ed rather than trying to single out the
+        # apphost: the binaries are named after their project (unit.database, functional.grpc),
+        # so no "extensionless" filter can find them, and a stray +x on a .dll or .json is
+        # harmless on an ephemeral runner.
+        run: find test -type f -path '*/bin/Release/*' -exec chmod +x {} +
 
       - name: Run functional tests (grpc)
         run: dotnet run --project test/functional/grpc/functional.grpc.csproj -c Release --no-build
@@ -306,8 +326,12 @@ jobs:
       - name: Restore the executable bit on test binaries
         # upload-artifact/download-artifact do not preserve file modes, so the apphost that
         # `dotnet run` execs comes back without +x and every test job dies with
-        # "Permission denied". This has been failing CI since the artifact split was introduced.
-        run: find test -type f -path '*/bin/Release/*' ! -name '*.*' -exec chmod +x {} +
+        # "Permission denied". This had been failing CI since the artifact split was introduced.
+        # Every file under the test output is chmod'ed rather than trying to single out the
+        # apphost: the binaries are named after their project (unit.database, functional.grpc),
+        # so no "extensionless" filter can find them, and a stray +x on a .dll or .json is
+        # harmless on an ephemeral runner.
+        run: find test -type f -path '*/bin/Release/*' -exec chmod +x {} +
 
       - name: Run functional tests (hangfire)
         run: dotnet run --project test/functional/hangfire/functional.hangfire.csproj -c Release --no-build
@@ -332,8 +356,12 @@ jobs:
       - name: Restore the executable bit on test binaries
         # upload-artifact/download-artifact do not preserve file modes, so the apphost that
         # `dotnet run` execs comes back without +x and every test job dies with
-        # "Permission denied". This has been failing CI since the artifact split was introduced.
-        run: find test -type f -path '*/bin/Release/*' ! -name '*.*' -exec chmod +x {} +
+        # "Permission denied". This had been failing CI since the artifact split was introduced.
+        # Every file under the test output is chmod'ed rather than trying to single out the
+        # apphost: the binaries are named after their project (unit.database, functional.grpc),
+        # so no "extensionless" filter can find them, and a stray +x on a .dll or .json is
+        # harmless on an ephemeral runner.
+        run: find test -type f -path '*/bin/Release/*' -exec chmod +x {} +
 
       # ubuntu-latest runners ship with Docker pre-installed and the daemon already running,
       # so Testcontainers.PostgreSql picks up the default Docker socket without extra config.
