@@ -1563,4 +1563,3 @@ func TestFetchConfiguration_NilTimeConfig_DoesNotPanic(t *testing.T) {
 		t.Errorf("expected PingInterval=60s (default), got %v", runtimeState.PingInterval())
 	}
 }
-

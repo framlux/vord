@@ -136,6 +136,65 @@ public sealed class MachineDetailFullEndpointTests
     }
 
     [Test]
+    public async Task FullDetail_MachineReportedAgentVersion_IsReturned()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId, long machineId) = await SeedEnvironment(db);
+
+        await db.InsertAsync(new MachineTelemetry
+        {
+            MachineId = machineId,
+            TenantId = tenantId,
+            TelemetryType = 13,
+            Payload = """{"version":"1.16.0"}""",
+            ReceivedAt = DateTimeOffset.UtcNow,
+            ServerReceivedAt = DateTimeOffset.UtcNow,
+            SourceEventId = Guid.NewGuid().ToString("N"),
+        });
+
+        HttpClient client = new AuthenticatedClientBuilder(factory)
+            .WithUserId(userId)
+            .WithRole(tenantId, (int)UserAccountRoles.Viewer)
+            .WithActiveTenant(tenantId)
+            .Build();
+
+        HttpResponseMessage response = await client.GetAsync($"/api/v1/machines/{machineId}/detail");
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
+
+        string body = await response.Content.ReadAsStringAsync();
+        using JsonDocument doc = JsonDocument.Parse(body);
+        JsonElement data = doc.RootElement.GetProperty("data");
+        await Assert.That(data.GetProperty("agentVersion").GetString()).IsEqualTo("1.16.0");
+    }
+
+    [Test]
+    public async Task FullDetail_MachineNeverReportedAgentVersion_ReturnsNull()
+    {
+        // Intent: a machine with no agent version telemetry reports null rather than an empty
+        // string, so the UI can distinguish "not reported yet" from a blank version.
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId, long machineId) = await SeedEnvironment(db);
+
+        HttpClient client = new AuthenticatedClientBuilder(factory)
+            .WithUserId(userId)
+            .WithRole(tenantId, (int)UserAccountRoles.Viewer)
+            .WithActiveTenant(tenantId)
+            .Build();
+
+        HttpResponseMessage response = await client.GetAsync($"/api/v1/machines/{machineId}/detail");
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
+
+        string body = await response.Content.ReadAsStringAsync();
+        using JsonDocument doc = JsonDocument.Parse(body);
+        JsonElement data = doc.RootElement.GetProperty("data");
+        await Assert.That(data.GetProperty("agentVersion").ValueKind).IsEqualTo(JsonValueKind.Null);
+    }
+
+    [Test]
     public async Task FullDetail_MachineNotFound_Returns404()
     {
         using FunctionalTestFactory factory = new();

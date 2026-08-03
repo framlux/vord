@@ -148,6 +148,14 @@ internal static class MachineStateBatchCollapser
 
                 break;
 
+            case TelemetryTypeIds.AgentVersion:
+                if (TelemetryPayloadParser.TryParseAgentVersion(winner.Payload, out AgentVersionFragment? agentVersion))
+                {
+                    return patch with { AgentVersion = agentVersion };
+                }
+
+                break;
+
             default:
                 // Unknown type: ignore (matches the old switch's default branch).
                 return patch;

@@ -7,7 +7,17 @@
     <RootNamespace>Framlux.Vord.Grpc</RootNamespace>
     <AssemblyName>Framlux.Vord.Grpc</AssemblyName>
     <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
-    <Version>2.8.5</Version>
+    <Version>2.9.0</Version>
+  </PropertyGroup>
+
+  <!-- The agent wire contracts — registration, configuration and telemetry — and nothing else.
+       The internal control-plane contract lives in src/billing-grpc so that agent-facing code
+       cannot reach it. This project is deliberately NOT packable: every consumer of the agent
+       contracts is inside this repository, and the Go agent generates its own bindings straight
+       from the .proto files (see src/agent/Makefile, which passes -I ../grpc/protos). Publishing
+       it would ship an assembly that nothing outside the repository restores. -->
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
   </PropertyGroup>
 
   <ItemGroup>

@@ -45,4 +45,7 @@ public static class TelemetryTypeIds
 
     /// <summary>Systemd service status.</summary>
     public const short ServiceStatus = 12;
+
+    /// <summary>The running agent's build version.</summary>
+    public const short AgentVersion = 13;
 }

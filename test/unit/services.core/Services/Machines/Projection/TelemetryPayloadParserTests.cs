@@ -2,29 +2,41 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
+using Framlux.FleetManagement.Grpc.AgentTelemetry;
+using Framlux.FleetManagement.Services.Core.Infrastructure;
 using Framlux.FleetManagement.Services.Core.Machines.Projection;
+using System.Text.Json;
 
 namespace Framlux.FleetManagement.Test.Services.Machines.Projection;
 
 /// <summary>
 /// Tests for <see cref="TelemetryPayloadParser"/>. These assert the documented projection
 /// values for each telemetry type, malformed-payload handling, and the two computed columns.
-/// The JSON property names mirror the production payloads parsed by the streaming service.
 /// </summary>
+/// <remarks>
+/// Every well-formed fixture is produced by serializing the actual protobuf record with the same
+/// options the ingest path uses, so the test cannot agree with the parser on a field name that the
+/// server never writes. Hand-written JSON appears only where the shape under test is deliberately
+/// not a valid payload (malformed text, wrong-typed fields, legacy shapes).
+/// </remarks>
 public class TelemetryPayloadParserTests
 {
     [Test]
     public async Task TryParseSystemInfo_FullPayload_MapsEverySummaryAndDetailField()
     {
-        string payload = """
+        string payload = Serialize(new SystemInfoRecord
         {
-          "hostname": "web-01", "hardware_model": "PowerEdge R740",
-          "hardware_vendor": "Dell", "hardware_serial": "SVC123",
-          "cpu_brand": "Xeon", "cpu_cores": 16,
-          "memory_total_bytes": 34359738368, "uptime_seconds": 1000,
-          "bios_version": "2.1.0", "ip_addresses": ["10.0.0.1"]
-        }
-        """;
+            Hostname = "web-01",
+            HardwareModel = "PowerEdge R740",
+            HardwareVendor = "Dell",
+            HardwareSerial = "SVC123",
+            CpuBrand = "Xeon",
+            CpuPhysicalCores = 16,
+            PhysicalMemory = 34359738368,
+            UptimeSeconds = 1000,
+            BiosVersion = "2.1.0",
+            IpAddresses = { "10.0.0.1" }
+        });
 
         bool ok = TelemetryPayloadParser.TryParseSystemInfo(payload, out SystemInfoFragment? f);
 
@@ -65,14 +77,22 @@ public class TelemetryPayloadParserTests
     [Test]
     public async Task TryParseOsVersion_FullPayload_MapsAllFields()
     {
-        string payload = """{ "os_name": "Ubuntu", "os_version": "22.04", "kernel": "5.15.0" }""";
+        // The agent reports the running kernel in the record's build field; the message has no
+        // dedicated kernel field, so build is the only source for the projected Kernel column.
+        string payload = Serialize(new OsVersionRecord
+        {
+            Name = "Ubuntu",
+            Version = "22.04",
+            Build = "5.15.0-91-generic",
+            Platform = "ubuntu"
+        });
 
         bool ok = TelemetryPayloadParser.TryParseOsVersion(payload, out OsVersionFragment? f);
 
         await Assert.That(ok).IsTrue();
         await Assert.That(f!.OsName).IsEqualTo("Ubuntu");
         await Assert.That(f.OsVersion).IsEqualTo("22.04");
-        await Assert.That(f.Kernel).IsEqualTo("5.15.0");
+        await Assert.That(f.Kernel).IsEqualTo("5.15.0-91-generic");
     }
 
     [Test]
@@ -96,9 +116,65 @@ public class TelemetryPayloadParserTests
     }
 
     [Test]
+    public async Task TryParseAgentVersion_PayloadWithVersion_MapsVersion()
+    {
+        string payload = Serialize(new AgentVersionRecord { Version = "1.16.0" });
+
+        bool ok = TelemetryPayloadParser.TryParseAgentVersion(payload, out AgentVersionFragment? f);
+
+        await Assert.That(ok).IsTrue();
+        await Assert.That(f!.AgentVersion).IsEqualTo("1.16.0");
+    }
+
+    [Test]
+    public async Task TryParseAgentVersion_MissingVersion_ReturnsFalseSoTheRecordedVersionSurvives()
+    {
+        bool ok = TelemetryPayloadParser.TryParseAgentVersion("{}", out AgentVersionFragment? f);
+
+        await Assert.That(ok).IsFalse();
+        await Assert.That(f).IsNull();
+    }
+
+    [Test]
+    public async Task TryParseAgentVersion_BlankVersion_ReturnsFalseSoTheRecordedVersionSurvives()
+    {
+        foreach (string payload in new[] { """{ "version": "" }""", """{ "version": "   " }""", """{ "version": null }""" })
+        {
+            bool ok = TelemetryPayloadParser.TryParseAgentVersion(payload, out AgentVersionFragment? f);
+
+            await Assert.That(ok).IsFalse();
+            await Assert.That(f).IsNull();
+        }
+    }
+
+    [Test]
+    public async Task TryParseAgentVersion_MalformedJson_ReturnsFalse()
+    {
+        bool ok = TelemetryPayloadParser.TryParseAgentVersion("][", out AgentVersionFragment? f);
+
+        await Assert.That(ok).IsFalse();
+        await Assert.That(f).IsNull();
+    }
+
+    [Test]
+    public async Task TryParseAgentVersion_WrongTypedVersion_ReturnsFalse()
+    {
+        // A number where the version string is expected makes GetString throw; skip the poison row.
+        bool ok = TelemetryPayloadParser.TryParseAgentVersion("""{ "version": 116 }""", out AgentVersionFragment? f);
+
+        await Assert.That(ok).IsFalse();
+        await Assert.That(f).IsNull();
+    }
+
+    [Test]
     public async Task TryParseCpuInfo_FullPayload_MapsAllFields()
     {
-        string payload = """{ "cpu_type": "x86_64", "physical_cpus": 2, "logical_cpus": 32 }""";
+        string payload = Serialize(new CpuInfoRecord
+        {
+            ProcessorType = "x86_64",
+            NumberOfCores = "2",
+            LogicalProcessors = 32
+        });
 
         bool ok = TelemetryPayloadParser.TryParseCpuInfo(payload, out CpuInfoFragment? f);
 
@@ -106,6 +182,26 @@ public class TelemetryPayloadParserTests
         await Assert.That(f!.CpuType).IsEqualTo("x86_64");
         await Assert.That(f.CpuPhysicalCpus).IsEqualTo(2);
         await Assert.That(f.CpuLogicalCpus).IsEqualTo(32);
+    }
+
+    [Test]
+    public async Task TryParseCpuInfo_NonNumericCoreCount_YieldsNullWithoutSkippingTheRow()
+    {
+        // number_of_cores is a proto string, so non-numeric text is a well-typed payload. The row must
+        // still project its other CPU columns rather than being discarded as poison.
+        string payload = Serialize(new CpuInfoRecord
+        {
+            ProcessorType = "aarch64",
+            NumberOfCores = "unknown",
+            LogicalProcessors = 8
+        });
+
+        bool ok = TelemetryPayloadParser.TryParseCpuInfo(payload, out CpuInfoFragment? f);
+
+        await Assert.That(ok).IsTrue();
+        await Assert.That(f!.CpuType).IsEqualTo("aarch64");
+        await Assert.That(f.CpuPhysicalCpus).IsNull();
+        await Assert.That(f.CpuLogicalCpus).IsEqualTo(8);
     }
 
     [Test]
@@ -131,7 +227,12 @@ public class TelemetryPayloadParserTests
     [Test]
     public async Task TryParseMemoryInfo_FullPayload_MapsAllFields()
     {
-        string payload = """{ "swap_total_bytes": 2147483648, "swap_free_bytes": 1073741824 }""";
+        string payload = Serialize(new MemoryInfoRecord
+        {
+            MemoryTotal = 34359738368,
+            SwapTotal = 2147483648,
+            SwapFree = 1073741824
+        });
 
         bool ok = TelemetryPayloadParser.TryParseMemoryInfo(payload, out MemoryInfoFragment? f);
 
@@ -162,7 +263,10 @@ public class TelemetryPayloadParserTests
     [Test]
     public async Task TryParseDiskInfo_AnyPayload_StoresRawPayload()
     {
-        string payload = """[{"name":"sda","size_bytes":500107862016}]""";
+        string payload = Serialize(new DiskInfoRecord
+        {
+            Disks = { new DiskInfoEntry { Device = "sda", MountPoint = "/", TotalBytes = 500107862016 } }
+        });
 
         bool ok = TelemetryPayloadParser.TryParseDiskInfo(payload, out DiskInfoFragment? f);
 
@@ -173,7 +277,9 @@ public class TelemetryPayloadParserTests
     [Test]
     public async Task TryParseCpuUsage_ReadsPercent()
     {
-        bool ok = TelemetryPayloadParser.TryParseCpuUsage("""{ "cpu_usage_percent": 73 }""", out CpuUsageFragment? f);
+        string payload = Serialize(new CpuUtilizationRecord { CpuUsagePercent = 73 });
+
+        bool ok = TelemetryPayloadParser.TryParseCpuUsage(payload, out CpuUsageFragment? f);
 
         await Assert.That(ok).IsTrue();
         await Assert.That(f!.CpuUsagePercent).IsEqualTo(73);
@@ -211,8 +317,8 @@ public class TelemetryPayloadParserTests
     [Test]
     public async Task TryParseSystemInfo_WrongTypedIntField_ReturnsFalse()
     {
-        // A string where cpu_cores expects an int makes GetInt32 throw; treat it as a poison row.
-        bool ok = TelemetryPayloadParser.TryParseSystemInfo("""{ "cpu_cores": "sixteen" }""", out SystemInfoFragment? f);
+        // A string where cpu_physical_cores expects an int makes GetInt32 throw; treat it as a poison row.
+        bool ok = TelemetryPayloadParser.TryParseSystemInfo("""{ "cpu_physical_cores": "sixteen" }""", out SystemInfoFragment? f);
 
         await Assert.That(ok).IsFalse();
         await Assert.That(f).IsNull();
@@ -221,7 +327,12 @@ public class TelemetryPayloadParserTests
     [Test]
     public async Task TryParseMemoryUsage_FullPayload_MapsSummaryAndDetail()
     {
-        string payload = """{ "memory_usage_percent": 64, "memory_used": 8589934592 }""";
+        string payload = Serialize(new MemoryUtilizationRecord
+        {
+            MemoryTotal = 16000000000,
+            MemoryUsagePercent = 64,
+            MemoryUsed = 8589934592
+        });
 
         bool ok = TelemetryPayloadParser.TryParseMemoryUsage(payload, out MemoryUsageFragment? f);
 
@@ -252,9 +363,15 @@ public class TelemetryPayloadParserTests
     [Test]
     public async Task TryParseDiskUsage_ComputesMaxPercentAcrossAllDisks()
     {
-        string payload = """
-        { "disks": [ { "usage_percent": 12 }, { "usage_percent": 87 }, { "usage_percent": 40 } ] }
-        """;
+        string payload = Serialize(new DiskUtilizationRecord
+        {
+            Disks =
+            {
+                new DiskUtilizationEntry { Path = "/", UsagePercent = 12 },
+                new DiskUtilizationEntry { Path = "/data", UsagePercent = 87 },
+                new DiskUtilizationEntry { Path = "/var", UsagePercent = 40 }
+            }
+        });
 
         bool ok = TelemetryPayloadParser.TryParseDiskUsage(payload, out DiskUsageFragment? f);
 
@@ -266,6 +383,8 @@ public class TelemetryPayloadParserTests
     [Test]
     public async Task TryParseDiskUsage_RootArrayPayload_ComputesMaxPercent()
     {
+        // A bare array is not what the current agent sends; the parser accepts it so historical rows
+        // stored in that shape still project. Written by hand for exactly that reason.
         string payload = """[ { "usage_percent": 5 }, { "usage_percent": 55 } ]""";
 
         bool ok = TelemetryPayloadParser.TryParseDiskUsage(payload, out DiskUsageFragment? f);
@@ -290,12 +409,11 @@ public class TelemetryPayloadParserTests
     [Test]
     public async Task TryParseHardwareHealth_FlagsDiskAndHardwareIssues()
     {
-        string payload = """
+        string payload = Serialize(new HardwareHealthRecord
         {
-          "disk_smart": [ { "health_status": "FAILED" } ],
-          "fans": [ { "rpm": 0 } ]
-        }
-        """;
+            DiskSmart = { new DiskSmartReading { Device = "/dev/sda", HealthStatus = "FAILED" } },
+            Fans = { new FanReading { Name = "fan1", Rpm = 0 } }
+        });
 
         bool ok = TelemetryPayloadParser.TryParseHardwareHealth(payload, out HardwareHealthFragment? f);
 
@@ -308,7 +426,10 @@ public class TelemetryPayloadParserTests
     [Test]
     public async Task TryParseHardwareHealth_FailingPowerSupply_FlagsHardwareIssue()
     {
-        string payload = """{ "power_supplies": [ { "status": "FAILED" } ] }""";
+        string payload = Serialize(new HardwareHealthRecord
+        {
+            PowerSupplies = { new PowerSupplyReading { Name = "psu1", Status = "FAILED" } }
+        });
 
         bool ok = TelemetryPayloadParser.TryParseHardwareHealth(payload, out HardwareHealthFragment? f);
 
@@ -320,13 +441,12 @@ public class TelemetryPayloadParserTests
     [Test]
     public async Task TryParseHardwareHealth_AllHealthy_FlagsNothing()
     {
-        string payload = """
+        string payload = Serialize(new HardwareHealthRecord
         {
-          "disk_smart": [ { "health_status": "PASSED" } ],
-          "fans": [ { "rpm": 3200 } ],
-          "power_supplies": [ { "status": "OK" } ]
-        }
-        """;
+            DiskSmart = { new DiskSmartReading { Device = "/dev/sda", HealthStatus = "PASSED" } },
+            Fans = { new FanReading { Name = "fan1", Rpm = 3200 } },
+            PowerSupplies = { new PowerSupplyReading { Name = "psu1", Status = "OK" } }
+        });
 
         bool ok = TelemetryPayloadParser.TryParseHardwareHealth(payload, out HardwareHealthFragment? f);
 
@@ -348,7 +468,12 @@ public class TelemetryPayloadParserTests
     [Test]
     public async Task TryParseSshSessions_AnyPayload_StoresRawPayload()
     {
-        string payload = """[{"user":"root","from":"10.0.0.5"}]""";
+        string payload = Serialize(new SshSessionRecord
+        {
+            User = "root",
+            SourceIp = "10.0.0.5",
+            Action = "connect"
+        });
 
         bool ok = TelemetryPayloadParser.TryParseSshSessions(payload, out SshSessionsFragment? f);
 
@@ -357,19 +482,42 @@ public class TelemetryPayloadParserTests
     }
 
     [Test]
-    public async Task TryParsePackageUpdates_FullPayload_MapsAllFields()
+    public async Task TryParsePackageUpdates_CountsPendingAndSecurityUpdates()
     {
-        string payload = """{ "pending_updates": 12, "security_updates": 3 }""";
+        // PackageUpdatesRecord carries only the update list; both projected counts are derived from it.
+        string payload = Serialize(new PackageUpdatesRecord
+        {
+            PackageManager = "apt",
+            Updates =
+            {
+                new PackageUpdate { Name = "openssl", IsSecurityUpdate = true },
+                new PackageUpdate { Name = "curl", IsSecurityUpdate = true },
+                new PackageUpdate { Name = "vim", IsSecurityUpdate = false }
+            }
+        });
 
         bool ok = TelemetryPayloadParser.TryParsePackageUpdates(payload, out PackageUpdatesFragment? f);
 
         await Assert.That(ok).IsTrue();
-        await Assert.That(f!.PendingUpdates).IsEqualTo(12);
-        await Assert.That(f.SecurityUpdates).IsEqualTo(3);
+        await Assert.That(f!.PendingUpdates).IsEqualTo(3);
+        await Assert.That(f.SecurityUpdates).IsEqualTo(2);
     }
 
     [Test]
-    public async Task TryParsePackageUpdates_MissingFields_YieldsNulls()
+    public async Task TryParsePackageUpdates_NoUpdatesReported_YieldsZeroCounts()
+    {
+        // An up-to-date machine sends an empty list. That is "zero pending", not "unknown".
+        string payload = Serialize(new PackageUpdatesRecord { PackageManager = "apt" });
+
+        bool ok = TelemetryPayloadParser.TryParsePackageUpdates(payload, out PackageUpdatesFragment? f);
+
+        await Assert.That(ok).IsTrue();
+        await Assert.That(f!.PendingUpdates).IsEqualTo(0);
+        await Assert.That(f.SecurityUpdates).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task TryParsePackageUpdates_MissingUpdatesArray_YieldsNulls()
     {
         bool ok = TelemetryPayloadParser.TryParsePackageUpdates("{}", out PackageUpdatesFragment? f);
 
@@ -388,19 +536,49 @@ public class TelemetryPayloadParserTests
     }
 
     [Test]
-    public async Task TryParseServiceStatus_FullPayload_MapsAllFields()
+    public async Task TryParseServiceStatus_CountsTotalAndFailedServices()
     {
-        string payload = """{ "total_services": 120, "failed_services": 2 }""";
+        // ServiceStatusRecord carries only the unit list; both projected counts are derived from it,
+        // with "failed" defined by the systemd active state exactly as the history read path does.
+        string payload = Serialize(new ServiceStatusRecord
+        {
+            Services =
+            {
+                new ServiceEntry { Unit = "ssh.service", ActiveState = "active" },
+                new ServiceEntry { Unit = "nginx.service", ActiveState = "failed" },
+                new ServiceEntry { Unit = "cron.service", ActiveState = "active" },
+                new ServiceEntry { Unit = "postgres.service", ActiveState = "Failed" }
+            }
+        });
 
         bool ok = TelemetryPayloadParser.TryParseServiceStatus(payload, out ServiceStatusFragment? f);
 
         await Assert.That(ok).IsTrue();
-        await Assert.That(f!.TotalServices).IsEqualTo(120);
+        await Assert.That(f!.TotalServices).IsEqualTo(4);
         await Assert.That(f.FailedServices).IsEqualTo(2);
     }
 
     [Test]
-    public async Task TryParseServiceStatus_MissingFields_YieldsNulls()
+    public async Task TryParseServiceStatus_AllServicesHealthy_YieldsZeroFailed()
+    {
+        string payload = Serialize(new ServiceStatusRecord
+        {
+            Services =
+            {
+                new ServiceEntry { Unit = "ssh.service", ActiveState = "active" },
+                new ServiceEntry { Unit = "cron.service", ActiveState = "inactive" }
+            }
+        });
+
+        bool ok = TelemetryPayloadParser.TryParseServiceStatus(payload, out ServiceStatusFragment? f);
+
+        await Assert.That(ok).IsTrue();
+        await Assert.That(f!.TotalServices).IsEqualTo(2);
+        await Assert.That(f.FailedServices).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task TryParseServiceStatus_MissingServicesArray_YieldsNulls()
     {
         bool ok = TelemetryPayloadParser.TryParseServiceStatus("{}", out ServiceStatusFragment? f);
 
@@ -421,7 +599,14 @@ public class TelemetryPayloadParserTests
     [Test]
     public async Task ComputeMaxDiskUsagePercent_WrappedDisks_ReturnsMax()
     {
-        string payload = """{ "disks": [ { "usage_percent": 30 }, { "usage_percent": 92 } ] }""";
+        string payload = Serialize(new DiskUtilizationRecord
+        {
+            Disks =
+            {
+                new DiskUtilizationEntry { Path = "/", UsagePercent = 30 },
+                new DiskUtilizationEntry { Path = "/data", UsagePercent = 92 }
+            }
+        });
 
         int max = TelemetryPayloadParser.ComputeMaxDiskUsagePercent(payload);
 
@@ -439,7 +624,10 @@ public class TelemetryPayloadParserTests
     [Test]
     public async Task ComputeHardwareHealthFlags_FailedDiskSmart_FlagsDiskIssue()
     {
-        string payload = """{ "disk_smart": [ { "health_status": "FAILED" } ] }""";
+        string payload = Serialize(new HardwareHealthRecord
+        {
+            DiskSmart = { new DiskSmartReading { Device = "/dev/sda", HealthStatus = "FAILED" } }
+        });
 
         (bool hasDiskIssue, bool hasHardwareIssue) = TelemetryPayloadParser.ComputeHardwareHealthFlags(payload);
 
@@ -450,7 +638,10 @@ public class TelemetryPayloadParserTests
     [Test]
     public async Task ComputeHardwareHealthFlags_StoppedFan_FlagsHardwareIssue()
     {
-        string payload = """{ "fans": [ { "rpm": 0 } ] }""";
+        string payload = Serialize(new HardwareHealthRecord
+        {
+            Fans = { new FanReading { Name = "fan1", Rpm = 0 } }
+        });
 
         (bool hasDiskIssue, bool hasHardwareIssue) = TelemetryPayloadParser.ComputeHardwareHealthFlags(payload);
 
@@ -466,4 +657,13 @@ public class TelemetryPayloadParserTests
         await Assert.That(hasDiskIssue).IsFalse();
         await Assert.That(hasHardwareIssue).IsFalse();
     }
+
+    /// <summary>
+    /// Serializes a protobuf telemetry record the same way the ingest path stores it, so a fixture can
+    /// only ever carry the field names the server actually writes.
+    /// </summary>
+    /// <param name="record">The protobuf telemetry record to serialize.</param>
+    /// <returns>The stored payload JSON for that record.</returns>
+    private static string Serialize(object record) =>
+        JsonSerializer.Serialize(record, JsonDefaults.SnakeCase);
 }

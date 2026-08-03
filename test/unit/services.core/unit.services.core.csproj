@@ -17,6 +17,9 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- The projection parser reads the wire contract's field names, so its tests build fixtures from
+         the generated protobuf types rather than hand-written JSON keys. -->
+    <ProjectReference Include="../../../src/grpc/grpc.csproj" />
     <ProjectReference Include="../../../src/services.core/services.core.csproj" />
     <ProjectReference Include="../../shared/shared.csproj" />
   </ItemGroup>

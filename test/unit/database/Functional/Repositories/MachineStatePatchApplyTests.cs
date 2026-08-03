@@ -123,6 +123,70 @@ public class MachineStatePatchApplyTests
     }
 
     [Test]
+    public async Task ApplyDetailPatch_WithAgentVersion_WritesTheAgentVersionColumn()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        DatabaseContext db = dbFactory.Context;
+        await SeedAsync(db, 100);
+        await db.GetTable<MachineStateDetail>().Where(d => d.MachineId == 100)
+            .Set(d => d.Kernel, "5.15").UpdateAsync();
+        Database.Repositories.DatabaseRepository repo = BuildRepository(dbFactory);
+
+        MachineDetailPatch patch = new()
+        {
+            MachineId = 100,
+            HasAgentVersion = true,
+            AgentVersion = "1.16.0",
+        };
+
+        await repo.ApplyDetailPatchAsync(patch, CancellationToken.None);
+
+        MachineStateDetail d = await db.GetTable<MachineStateDetail>().FirstAsync(x => x.MachineId == 100);
+        await Assert.That(d.AgentVersion).IsEqualTo("1.16.0");
+        await Assert.That(d.Kernel).IsEqualTo("5.15"); // untouched type preserved
+    }
+
+    [Test]
+    public async Task ApplyDetailPatch_WithoutAgentVersion_PreservesTheRecordedAgentVersion()
+    {
+        // Intent: a batch that carries no agent version must leave the version already recorded in
+        // place. If the presence flag were ignored the column would be nulled on every other batch.
+        using TestDatabaseFactory dbFactory = new();
+        DatabaseContext db = dbFactory.Context;
+        await SeedAsync(db, 100);
+        await db.GetTable<MachineStateDetail>().Where(d => d.MachineId == 100)
+            .Set(d => d.AgentVersion, "1.15.3").UpdateAsync();
+        Database.Repositories.DatabaseRepository repo = BuildRepository(dbFactory);
+
+        MachineDetailPatch patch = new()
+        {
+            MachineId = 100,
+            HasDiskInfo = true,
+            DiskInfos = """[{"name":"sda"}]""",
+        };
+
+        await repo.ApplyDetailPatchAsync(patch, CancellationToken.None);
+
+        MachineStateDetail d = await db.GetTable<MachineStateDetail>().FirstAsync(x => x.MachineId == 100);
+        await Assert.That(d.AgentVersion).IsEqualTo("1.15.3");
+    }
+
+    [Test]
+    public async Task ApplyDetailPatch_WithOnlyAgentVersion_IsTreatedAsADetailChange()
+    {
+        // Intent: HasAnyDetail must count the agent version, otherwise a batch carrying only the
+        // agent version would be short-circuited and the column would never be written.
+        MachineDetailPatch patch = new()
+        {
+            MachineId = 100,
+            HasAgentVersion = true,
+            AgentVersion = "1.16.0",
+        };
+
+        await Assert.That(patch.HasAnyDetail).IsTrue();
+    }
+
+    [Test]
     public async Task ApplyDetailPatch_WithNoDetailTypes_IssuesNoUpdateAndDoesNotThrow()
     {
         using TestDatabaseFactory dbFactory = new();

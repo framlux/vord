@@ -60,11 +60,11 @@ type PendingCommand struct {
 
 // Processor validates and executes remote commands.
 type Processor struct {
-	handler              *Handler
-	store                NonceStore
-	ack                  CommandAcknowledger
-	destructiveDelay     time.Duration
-	maxTimestampAge      time.Duration
+	handler          *Handler
+	store            NonceStore
+	ack              CommandAcknowledger
+	destructiveDelay time.Duration
+	maxTimestampAge  time.Duration
 }
 
 // NewProcessor creates a command processor.

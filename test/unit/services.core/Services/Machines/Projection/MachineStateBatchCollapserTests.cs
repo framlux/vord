@@ -83,7 +83,7 @@ public class MachineStateBatchCollapserTests
         [
             Row(1, 100, TelemetryTypeIds.CpuUsage, """{ "cpu_usage_percent": 1 }""", t0.AddMinutes(9)),
             Row(2, 100, TelemetryTypeIds.MemoryUsage, """{ "memory_usage_percent": 1 }""", t0.AddMinutes(3)),
-            Row(3, 100, TelemetryTypeIds.PackageUpdates, """{ "pending_updates": 1, "security_updates": 0 }""", t0.AddMinutes(1)),
+            Row(3, 100, TelemetryTypeIds.PackageUpdates, """{ "package_manager": "apt", "updates": [ { "name": "vim", "is_security_update": false } ] }""", t0.AddMinutes(1)),
         ];
 
         CollapseResult result = MachineStateBatchCollapser.Collapse(batch);
@@ -207,23 +207,24 @@ public class MachineStateBatchCollapserTests
     [Test]
     public async Task Collapse_EveryTelemetryType_MapsToItsFragment()
     {
-        // Intent: every one of the 12 telemetry types is wired into the switch; a missing
+        // Intent: every telemetry type is wired into the switch; a missing
         // case would leave the corresponding fragment null and fail this test.
         DateTimeOffset t0 = DateTimeOffset.UnixEpoch;
         List<MachineTelemetry> batch =
         [
             Row(1, 100, TelemetryTypeIds.SystemInfo, """{ "hostname": "web-01" }""", t0),
-            Row(2, 100, TelemetryTypeIds.OsVersion, """{ "os_name": "Ubuntu", "os_version": "24.04", "kernel": "6.8" }""", t0),
-            Row(3, 100, TelemetryTypeIds.CpuInfo, """{ "cpu_type": "x86_64", "physical_cpus": 2, "logical_cpus": 8 }""", t0),
-            Row(4, 100, TelemetryTypeIds.MemoryInfo, """{ "swap_total_bytes": 1024, "swap_free_bytes": 512 }""", t0),
+            Row(2, 100, TelemetryTypeIds.OsVersion, """{ "name": "Ubuntu", "version": "24.04", "build": "6.8" }""", t0),
+            Row(3, 100, TelemetryTypeIds.CpuInfo, """{ "processor_type": "x86_64", "number_of_cores": "2", "logical_processors": 8 }""", t0),
+            Row(4, 100, TelemetryTypeIds.MemoryInfo, """{ "swap_total": 1024, "swap_free": 512 }""", t0),
             Row(5, 100, TelemetryTypeIds.DiskInfo, """[{"name":"sda"}]""", t0),
             Row(6, 100, TelemetryTypeIds.CpuUsage, """{ "cpu_usage_percent": 12 }""", t0),
             Row(7, 100, TelemetryTypeIds.MemoryUsage, """{ "memory_usage_percent": 34, "memory_used": 2048 }""", t0),
             Row(8, 100, TelemetryTypeIds.DiskUsage, """{ "disks": [ { "usage_percent": 55 } ] }""", t0),
             Row(9, 100, TelemetryTypeIds.SshSessions, """[{"user":"root"}]""", t0),
             Row(10, 100, TelemetryTypeIds.HardwareHealth, """{ "fans": [ { "rpm": 0 } ] }""", t0),
-            Row(11, 100, TelemetryTypeIds.PackageUpdates, """{ "pending_updates": 7, "security_updates": 2 }""", t0),
-            Row(12, 100, TelemetryTypeIds.ServiceStatus, """{ "total_services": 50, "failed_services": 1 }""", t0),
+            Row(11, 100, TelemetryTypeIds.PackageUpdates, """{ "package_manager": "apt", "updates": [ { "name": "openssl", "is_security_update": true } ] }""", t0),
+            Row(12, 100, TelemetryTypeIds.ServiceStatus, """{ "services": [ { "unit": "ssh.service", "active_state": "active" } ] }""", t0),
+            Row(13, 100, TelemetryTypeIds.AgentVersion, """{ "version": "1.16.0" }""", t0),
         ];
 
         CollapseResult result = MachineStateBatchCollapser.Collapse(batch);
@@ -242,6 +243,60 @@ public class MachineStateBatchCollapserTests
         await Assert.That(patch.HardwareHealth).IsNotNull();
         await Assert.That(patch.PackageUpdates).IsNotNull();
         await Assert.That(patch.ServiceStatus).IsNotNull();
+        await Assert.That(patch.AgentVersion!.AgentVersion).IsEqualTo("1.16.0");
+    }
+
+    [Test]
+    public async Task Collapse_AgentVersionRow_MakesThePatchDetailBearing()
+    {
+        // Intent: an agent version row on its own must reach the detail table; if the patch did not
+        // report a detail change the streaming service would skip the detail update entirely.
+        DateTimeOffset t0 = DateTimeOffset.UnixEpoch;
+        List<MachineTelemetry> batch =
+        [
+            Row(1, 100, TelemetryTypeIds.AgentVersion, """{ "version": "2.0.1" }""", t0),
+        ];
+
+        CollapseResult result = MachineStateBatchCollapser.Collapse(batch);
+
+        MachineStatePatch patch = result.Patches.Single();
+        await Assert.That(patch.AgentVersion!.AgentVersion).IsEqualTo("2.0.1");
+        await Assert.That(patch.HasDetailChanges).IsTrue();
+    }
+
+    [Test]
+    public async Task Collapse_AgentVersionRowWithoutVersion_ProducesNoFragment()
+    {
+        // Intent: an agent that reports no version must not produce a fragment, so the projection
+        // leaves the version already recorded for the machine untouched instead of nulling it.
+        DateTimeOffset t0 = DateTimeOffset.UnixEpoch;
+        List<MachineTelemetry> batch =
+        [
+            Row(1, 100, TelemetryTypeIds.AgentVersion, """{ "version": "" }""", t0),
+        ];
+
+        CollapseResult result = MachineStateBatchCollapser.Collapse(batch);
+
+        MachineStatePatch patch = result.Patches.Single();
+        await Assert.That(patch.AgentVersion).IsNull();
+        await Assert.That(patch.HasDetailChanges).IsFalse();
+    }
+
+    [Test]
+    public async Task Collapse_MultipleAgentVersionRows_KeepsTheLatestByServerReceivedAt()
+    {
+        // Intent: after an upgrade the newest reported version wins, so the fleet view is not stuck
+        // on the version the machine was running before the restart.
+        DateTimeOffset t0 = DateTimeOffset.UnixEpoch;
+        List<MachineTelemetry> batch =
+        [
+            Row(1, 100, TelemetryTypeIds.AgentVersion, """{ "version": "1.15.0" }""", t0.AddMinutes(10)),
+            Row(2, 100, TelemetryTypeIds.AgentVersion, """{ "version": "1.16.0" }""", t0.AddMinutes(20)),
+        ];
+
+        CollapseResult result = MachineStateBatchCollapser.Collapse(batch);
+
+        await Assert.That(result.Patches.Single().AgentVersion!.AgentVersion).IsEqualTo("1.16.0");
     }
 
     [Test]

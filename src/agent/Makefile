@@ -1,5 +1,10 @@
 BINARY_NAME := vord-agent
-VERSION := $(shell git describe --tags --always --dirty 2>/dev/null || echo "dev")
+# The agent's version comes from its own tag namespace. `--match 'agent-v*'` matters: the repo also
+# carries server-v* tags (and the pre-existing bare v* tags), and an unfiltered `git describe`
+# would happily stamp the server's version onto an agent binary — the exact lockstep the split
+# tag prefixes exist to remove. The agent-v prefix is stripped so the binary reports a plain
+# semver; a build with no agent-v tag in its history reports "dev".
+VERSION ?= $(patsubst agent-v%,%,$(shell git describe --tags --match 'agent-v*' --always --dirty 2>/dev/null || echo "dev"))
 BUILD_TIME := $(shell date -u '+%Y-%m-%dT%H:%M:%SZ')
 LDFLAGS := -s -w -X main.version=$(VERSION) -X main.buildTime=$(BUILD_TIME)
 

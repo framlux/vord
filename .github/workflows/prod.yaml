@@ -1,162 +1,108 @@
-name: CI • Build, Test, Package
+name: Release • Build, Test, Publish
 
+# Releases are cut by pushing a tag, never by pushing a branch. The tag name is the ONLY source
+# of the version that gets stamped into artifacts, so a published artifact can never disagree with
+# the ref that built it.
+#
+#   agent-v<semver>   e.g. agent-v0.4.1   -> Go agent only (tarballs + deb/rpm to Gemfury)
+#   server-v<semver>  e.g. server-v2.9.0  -> server-side containers only (api-server,
+#                                            migration_runner, services-worker, web)
+#   billinggrpc-v<semver>
+#                     e.g. billinggrpc-v1.18.0
+#                                         -> the Framlux.Vord.BillingGrpc NuGet package (the
+#                                            internal control-plane contract in src/billing-grpc)
+#
+# The prefixes are deliberately independent: the agent no longer inherits src/server's version, so
+# an agent fix ships without rebuilding the server and vice versa. Each job below is filtered by
+# prefix so a tag never rebuilds the other component. The control-plane contract gets its own
+# prefix because framlux/vord-internal pins an exact Framlux.Vord.BillingGrpc version cross-repo,
+# and a contract change does not imply a server release. The agent contracts in src/grpc have no
+# prefix at all: nothing outside this repository consumes them as a package, and the Go agent
+# generates its bindings from the raw .proto files.
 on:
   push:
-    branches:
-      - prod
+    tags:
+      - 'agent-v*'
+      - 'server-v*'
+      - 'billinggrpc-v*'
 
 env:
   SOLUTION: machine-info.slnx
 
+# Two different release tags may legitimately be in flight at once (an agent tag and a server
+# tag). Grouping on the ref keeps re-pushes of the same tag from racing without serialising
+# unrelated releases. Never cancel a release mid-publish.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
-  # Guards that deployment/agent/install.sh and the published copy served from
-  # vord-internal's marketing app (src/marketing/static/install.sh, off vord-internal's `prod`
-  # branch — the branch that actually deploys the marketing container) haven't drifted apart.
-  #
-  # Deliberately has NO `needs:` relationship with build-test-package in either direction: this
-  # check must never be able to block or slow down a real release. If VORD_INTERNAL_REPO_TOKEN
-  # (a PAT/fine-grained token scoped to read framlux/vord-internal) isn't configured yet, the
-  # whole job is skipped via the `if:` below rather than failing — an unconfigured secret must
-  # never turn an unrelated push red. Once the secret exists, this job goes red only on an
-  # actual divergence between the two files.
-  check-install-script-sync:
+  # Single place that turns the tag name into a version. Fails loudly on a tag that does not
+  # match a known prefix or does not carry a semver, so a typo like `agent-2.0.0` (missing the v)
+  # can never publish a package called "2.0.0" from an unvalidated ref.
+  resolve-version:
     runs-on: ubuntu-latest
-    if: ${{ secrets.VORD_INTERNAL_REPO_TOKEN != '' }}
-    permissions:
-      contents: read
+    outputs:
+      version: ${{ steps.resolve.outputs.version }}
+      component: ${{ steps.resolve.outputs.component }}
     steps:
-      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
-        with:
-          sparse-checkout: |
-            deployment/agent/install.sh
-          sparse-checkout-cone-mode: false
-
-      - name: Check out the published copy (vord-internal, prod branch)
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
-        with:
-          repository: framlux/vord-internal
-          ref: prod
-          token: ${{ secrets.VORD_INTERNAL_REPO_TOKEN }}
-          path: vord-internal-install-sync
-          sparse-checkout: |
-            src/marketing/static/install.sh
-          sparse-checkout-cone-mode: false
-
-      - name: Diff install.sh against the published copy
+      - name: Derive version from the tag name
+        id: resolve
+        env:
+          TAG: ${{ github.ref_name }}
         run: |
           set -euo pipefail
-          if ! diff -u deployment/agent/install.sh vord-internal-install-sync/src/marketing/static/install.sh; then
-            echo "::error::deployment/agent/install.sh has drifted from vord-internal's src/marketing/static/install.sh (prod branch). Update the marketing copy in the same change."
+          case "$TAG" in
+            agent-v*)
+              COMPONENT=agent
+              VERSION="${TAG#agent-v}"
+              ;;
+            server-v*)
+              COMPONENT=server
+              VERSION="${TAG#server-v}"
+              ;;
+            billinggrpc-v*)
+              COMPONENT=billinggrpc
+              VERSION="${TAG#billinggrpc-v}"
+              ;;
+            *)
+              echo "::error::Tag '$TAG' does not start with agent-v, server-v or billinggrpc-v; refusing to release."
+              exit 1
+              ;;
+          esac
+          if ! printf '%s' "$VERSION" | grep -Eq '^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$'; then
+            echo "::error::Tag '$TAG' does not carry a semantic version (got '$VERSION')."
             exit 1
           fi
+          echo "component=$COMPONENT" >> "$GITHUB_OUTPUT"
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "Releasing $COMPONENT version $VERSION from tag $TAG"
 
-  build-test-package:
+  # ---------------------------------------------------------------------------------------------
+  # agent-v* only
+  # ---------------------------------------------------------------------------------------------
+  build-agent:
+    if: startsWith(github.ref, 'refs/tags/agent-v')
+    needs: resolve-version
     runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.resolve-version.outputs.version }}
     permissions:
       contents: read
-      packages: write
-      attestations: write
-      id-token: write
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
-
-      - uses: actions/setup-dotnet@c2fa09f4bde5ebb9d1777cf28262a3eb3db3ced7  # v5.2.0
-        with:
-          dotnet-version: 10.0.x
 
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff  # v5.6.0
         with:
           go-version: '1.26.x'
 
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4.4.0
-        with:
-          node-version: 22
+      - name: Vet Go agent
+        run: go vet ./...
+        working-directory: src/agent
 
-      - uses: pnpm/action-setup@a15d269cd4658e1107c09f1fabf4cbd7bd1f308a  # v4.4.0
-        with:
-          version: 11.1.1
-
-      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f  # v3.12.0
-
-      - name: Log in to the Container registry
-        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9  # v3.7.0
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Authenticate GitHub Packages
-        run: dotnet nuget update source framlux --username ${{ github.actor }} --password ${{ secrets.GITHUB_TOKEN }} --store-password-in-clear-text
-
-      - name: Restore
-        run: dotnet restore "$SOLUTION"
-
-      - name: Build (Release)
-        run: dotnet build "$SOLUTION" -c Release --no-restore
-
-      - name: Run unit tests (services.core)
-        run: dotnet run --project test/unit/services.core/unit.services.core.csproj -c Release --no-build
-
-      - name: Run unit tests (server)
-        run: dotnet run --project test/unit/server/unit.server.csproj -c Release --no-build
-
-      - name: Run unit tests (database)
-        run: dotnet run --project test/unit/database/unit.database.csproj -c Release --no-build
-
-      - name: Run functional tests (web)
-        run: dotnet run --project test/functional/web/functional.web.csproj -c Release --no-build
-
-      - name: Run functional tests (grpc)
-        run: dotnet run --project test/functional/grpc/functional.grpc.csproj -c Release --no-build
-
-      - name: Run functional tests (hangfire)
-        run: dotnet run --project test/functional/hangfire/functional.hangfire.csproj -c Release --no-build
-
-      - name: Run integration tests
-        run: dotnet run --project test/integration/integration.csproj -c Release --no-build
-
-      - name: Read version from csproj
-        shell: bash
-        run: |
-          set -euo pipefail
-          VERSION=$(dotnet msbuild src/server/server.csproj -nologo -getProperty:Version | tail -n 1 | tr -d '\r')
-          if [ -z "$VERSION" ]; then
-            echo "Version not found"
-            exit 1
-          fi
-          echo "VERSION=$VERSION" >> "$GITHUB_ENV"
-          echo "Resolved VERSION=$VERSION"
-
-      - name: Publish Migration Runner
-        run: dotnet publish src/migrationRunner/migrationRunner.csproj -c Release -r linux-x64 --self-contained /t:PublishContainer
-
-      - name: Publish API Server
-        run: dotnet publish src/server/server.csproj -c Release -r linux-x64 --self-contained /t:PublishContainer
-
-      - name: Publish Services Worker
-        run: dotnet publish src/services.worker/services.worker.csproj -c Release -r linux-x64 --self-contained /t:PublishContainer
-
-      - name: Install web dependencies
-        run: pnpm install --frozen-lockfile
-        working-directory: src/web
-
-      - name: Type-check web
-        run: npx svelte-kit sync && pnpm check
-        working-directory: src/web
-
-      - name: Build web
-        run: pnpm build
-        working-directory: src/web
-
-      - name: Build and push web container
-        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8  # v6.19.2
-        with:
-          context: src/web
-          push: true
-          provenance: false
-          tags: |
-            ghcr.io/framlux/vord/web:${{ env.VERSION }}
-            ghcr.io/framlux/vord/web:latest
+      - name: Test Go agent
+        run: go test ./...
+        working-directory: src/agent
 
       - name: Build Go agent (linux-amd64)
         run: >
@@ -194,21 +140,46 @@ jobs:
           tar -czf ./publish/vord-agent-linux-386.tar.gz -C ./publish vord-agent-linux-386
           tar -czf ./publish/vord-agent-linux-arm.tar.gz -C ./publish vord-agent-linux-arm
 
+      - name: Materialize RPM signing key
+        working-directory: src/agent
+        env:
+          RPM_SIGNING_KEY: ${{ secrets.RPM_SIGNING_KEY }}
+        # Until the RPM_SIGNING_KEY secret is provisioned this writes nothing and RPM_SIGN_KEY_FILE
+        # stays empty, which nfpm treats as "build unsigned" — the current published state. Adding
+        # the secret is the only step needed to start signing; nothing else has to change.
+        run: |
+          if [ -n "${RPM_SIGNING_KEY}" ]; then
+            umask 077
+            printf '%s' "${RPM_SIGNING_KEY}" > ./rpm-signing-key.asc
+            echo "RPM_SIGN_KEY_FILE=${PWD}/rpm-signing-key.asc" >> "$GITHUB_ENV"
+            echo "RPM signing enabled."
+          else
+            echo "RPM_SIGN_KEY_FILE=" >> "$GITHUB_ENV"
+            echo "::warning::RPM_SIGNING_KEY is not set — publishing UNSIGNED RPMs. The installer must keep gpgcheck=0/repo_gpgcheck=1."
+          fi
+
       - name: Package deb/rpm with nfpm
         working-directory: src/agent
+        env:
+          NFPM_RPM_PASSPHRASE: ${{ secrets.RPM_SIGNING_KEY_PASSPHRASE }}
         # L2: pinned to a specific nfpm version so a breaking change upstream cannot silently
         # alter agent packaging mid-release. Bump via Dependabot (gomod ecosystem).
         run: |
           go install github.com/goreleaser/nfpm/v2/cmd/nfpm@v2.41.3
           nfpm --version
 
-          for arch in amd64 arm64 386 arm; do
-            export GOARCH="$arch"
+          # BIN_ARCH names the built binary; PKG_ARCH is what nfpm labels the package. They
+          # differ for 32-bit ARM: the binary is vord-agent-linux-arm, but the package must be
+          # arm7 so nfpm emits Debian's armhf, which is what dpkg on those hosts asks for.
+          for spec in amd64:amd64 arm64:arm64 386:386 arm:arm7; do
+            BIN_ARCH="${spec%%:*}"
+            PKG_ARCH="${spec##*:}"
+            export BIN_ARCH PKG_ARCH
             envsubst < nfpm.yaml > nfpm.resolved.yaml
-            nfpm pkg --config nfpm.resolved.yaml --packager deb --target "./publish/vord-agent-${arch}.deb"
-            nfpm pkg --config nfpm.resolved.yaml --packager rpm --target "./publish/vord-agent-${arch}.rpm"
+            nfpm pkg --config nfpm.resolved.yaml --packager deb --target "./publish/vord-agent-${BIN_ARCH}.deb"
+            nfpm pkg --config nfpm.resolved.yaml --packager rpm --target "./publish/vord-agent-${BIN_ARCH}.rpm"
           done
-          rm -f nfpm.resolved.yaml
+          rm -f nfpm.resolved.yaml rpm-signing-key.asc
 
       - name: Upload packages to Gemfury
         working-directory: src/agent
@@ -235,3 +206,172 @@ jobs:
           path: |
             ./src/agent/publish/vord-agent-*.deb
             ./src/agent/publish/vord-agent-*.rpm
+
+  # ---------------------------------------------------------------------------------------------
+  # server-v* only
+  # ---------------------------------------------------------------------------------------------
+  build-server:
+    if: startsWith(github.ref, 'refs/tags/server-v')
+    needs: resolve-version
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.resolve-version.outputs.version }}
+    permissions:
+      contents: read
+      packages: write
+      attestations: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
+
+      - uses: actions/setup-dotnet@c2fa09f4bde5ebb9d1777cf28262a3eb3db3ced7  # v5.2.0
+        with:
+          dotnet-version: 10.0.x
+
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020  # v4.4.0
+        with:
+          node-version: 22
+
+      - uses: pnpm/action-setup@a15d269cd4658e1107c09f1fabf4cbd7bd1f308a  # v4.4.0
+        with:
+          version: 11.1.1
+
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f  # v3.12.0
+
+      - name: Log in to the Container registry
+        uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9  # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Restore
+        run: dotnet restore "$SOLUTION"
+
+      - name: Build (Release)
+        run: dotnet build "$SOLUTION" -c Release --no-restore
+
+      - name: Run unit tests (services.core)
+        run: dotnet run --project test/unit/services.core/unit.services.core.csproj -c Release --no-build
+
+      - name: Run unit tests (server)
+        run: dotnet run --project test/unit/server/unit.server.csproj -c Release --no-build
+
+      - name: Run unit tests (database)
+        run: dotnet run --project test/unit/database/unit.database.csproj -c Release --no-build
+
+      - name: Run functional tests (web)
+        run: dotnet run --project test/functional/web/functional.web.csproj -c Release --no-build
+
+      - name: Run functional tests (grpc)
+        run: dotnet run --project test/functional/grpc/functional.grpc.csproj -c Release --no-build
+
+      - name: Run functional tests (hangfire)
+        run: dotnet run --project test/functional/hangfire/functional.hangfire.csproj -c Release --no-build
+
+      - name: Run integration tests
+        run: dotnet run --project test/integration/integration.csproj -c Release --no-build
+
+      # -p:Version overrides the <Version> in each csproj, and ContainerImageTags is
+      # "$(Version);latest", so the image tag is the tag name's version rather than whatever the
+      # csproj happens to say. The csproj value is now only a local-dev default.
+      - name: Publish Migration Runner
+        run: dotnet publish src/migrationRunner/migrationRunner.csproj -c Release -r linux-x64 --self-contained -p:Version="$VERSION" /t:PublishContainer
+
+      - name: Publish API Server
+        run: dotnet publish src/server/server.csproj -c Release -r linux-x64 --self-contained -p:Version="$VERSION" /t:PublishContainer
+
+      - name: Publish Services Worker
+        run: dotnet publish src/services.worker/services.worker.csproj -c Release -r linux-x64 --self-contained -p:Version="$VERSION" /t:PublishContainer
+
+      - name: Install web dependencies
+        run: pnpm install --frozen-lockfile
+        working-directory: src/web
+
+      - name: Type-check web
+        run: npx svelte-kit sync && pnpm check
+        working-directory: src/web
+
+      - name: Build web
+        run: pnpm build
+        working-directory: src/web
+
+      - name: Build and push web container
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8  # v6.19.2
+        with:
+          context: src/web
+          push: true
+          provenance: false
+          tags: |
+            ghcr.io/framlux/vord/web:${{ needs.resolve-version.outputs.version }}
+            ghcr.io/framlux/vord/web:latest
+
+  # ---------------------------------------------------------------------------------------------
+  # billinggrpc-v* only
+  # ---------------------------------------------------------------------------------------------
+  # Publishes the internal control-plane contract — BillingGateway, BillingManagement and
+  # FleetAdmin, in src/billing-grpc — as Framlux.Vord.BillingGrpc. This repository is the producer
+  # of the contract; framlux/vord-internal is a consumer. Nothing here is needed to BUILD this
+  # repository — src/server and src/services.core take a ProjectReference on src/billing-grpc — so
+  # a failure to publish can never make the open-core repo unbuildable.
+  #
+  # The agent contracts in src/grpc are deliberately not published by any job: every consumer is
+  # inside this repository, and the Go agent generates from the raw .proto files.
+  #
+  # Two feeds, deliberately:
+  #   nuget.org        — anonymous restore, so anyone can consume the contract. Skipped with a
+  #                      warning while NUGET_ORG_API_KEY is unset, mirroring the RPM signing step:
+  #                      an unprovisioned secret must never turn a release red.
+  #   GitHub Packages  — always pushed, using the built-in GITHUB_TOKEN. This is what
+  #                      framlux/vord-internal restores from today, so the package keeps flowing
+  #                      with no owner action at all.
+  publish-billing-grpc-package:
+    if: startsWith(github.ref, 'refs/tags/billinggrpc-v')
+    needs: resolve-version
+    runs-on: ubuntu-latest
+    env:
+      VERSION: ${{ needs.resolve-version.outputs.version }}
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
+
+      - uses: actions/setup-dotnet@c2fa09f4bde5ebb9d1777cf28262a3eb3db3ced7  # v5.2.0
+        with:
+          dotnet-version: 10.0.x
+
+      # -p:Version overrides the <Version> in billing-grpc.csproj so the package version is the
+      # tag's version. Consumers pin an exact version, so a package whose version disagreed with
+      # its tag would be undiagnosable from the consumer side.
+      - name: Pack the internal control-plane contract
+        run: dotnet pack src/billing-grpc/billing-grpc.csproj -c Release -p:Version="$VERSION" -o ./nupkg
+
+      - name: Push to nuget.org
+        env:
+          NUGET_ORG_API_KEY: ${{ secrets.NUGET_ORG_API_KEY }}
+        run: |
+          if [ -n "${NUGET_ORG_API_KEY}" ]; then
+            dotnet nuget push ./nupkg/*.nupkg \
+              --source https://api.nuget.org/v3/index.json \
+              --api-key "${NUGET_ORG_API_KEY}" \
+              --skip-duplicate
+          else
+            echo "::warning::NUGET_ORG_API_KEY is not set — skipping the nuget.org push. Framlux.Vord.BillingGrpc will only be available from GitHub Packages, which requires authentication to restore."
+          fi
+
+      # Skipped on forks: a fork has no write access to the framlux org feed, and a fork that tags
+      # its own build has no reason to publish to it.
+      - name: Push to GitHub Packages
+        if: github.repository == 'framlux/vord'
+        run: |
+          dotnet nuget push ./nupkg/*.nupkg \
+            --source https://nuget.pkg.github.com/framlux/index.json \
+            --api-key "${{ secrets.GITHUB_TOKEN }}" \
+            --skip-duplicate
+
+      - name: Archive the package
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        with:
+          name: framlux-vord-billinggrpc-nupkg
+          path: ./nupkg/*.nupkg

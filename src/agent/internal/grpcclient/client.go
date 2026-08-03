@@ -26,11 +26,11 @@ import (
 
 // Client wraps gRPC connections to the vord server.
 type Client struct {
-	conn           *grpc.ClientConn
-	Registration   pb.RegistrationClient
-	Configuration  pb.ConfigurationClient
-	Telemetry      pb.TelemetryClient
-	state          *state.RuntimeState
+	conn          *grpc.ClientConn
+	Registration  pb.RegistrationClient
+	Configuration pb.ConfigurationClient
+	Telemetry     pb.TelemetryClient
+	state         *state.RuntimeState
 }
 
 // New creates a new gRPC client connected to the specified target. When useTLS is false the

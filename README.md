@@ -41,6 +41,7 @@ graph LR
 |------------|-------|----------------|
 | Server HTTP | 12233 | HTTP/1.1 (REST) |
 | Server gRPC | 12234 | HTTP/2 (gRPC)  |
+| Server internal gRPC | 12236 | HTTP/2 (gRPC) over mutual TLS |
 | Web UI     | 5254  | HTTP           |
 | PostgreSQL | 5432  | TCP            |
 | Redis      | 6379  | TCP            |

@@ -14,7 +14,7 @@
   </PropertyGroup>
   
   <!-- Disable XML documentation requirements for projects with auto-generated code -->
-  <PropertyGroup Condition="'$(MSBuildProjectName)' == 'grpc' Or '$(MSBuildProjectName)' == 'billingGrpc' Or $(MSBuildProjectName.Contains('thriftgen'))">
+  <PropertyGroup Condition="'$(MSBuildProjectName)' == 'grpc' Or '$(MSBuildProjectName)' == 'billing-grpc' Or $(MSBuildProjectName.Contains('thriftgen'))">
     <GenerateDocumentationFile>false</GenerateDocumentationFile>
     <EnforceCodeStyleInBuild>false</EnforceCodeStyleInBuild>
     <AnalysisLevel>none</AnalysisLevel>

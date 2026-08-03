@@ -62,8 +62,11 @@ builder.Services.AddOptions<KestrelHttp2Options>()
 builder.Services.AddOptions<AuthCookieOptions>()
     .Bind(builder.Configuration.GetSection("Auth"));
 
-builder.Services.AddOptions<InternalApiOptions>()
-    .Bind(builder.Configuration.GetSection("InternalApi"));
+builder.Services.AddOptions<InternalGrpcOptions>()
+    .Bind(builder.Configuration.GetSection("InternalGrpc"))
+    .ValidateOnStart();
+builder.Services.AddSingleton<IValidateOptions<InternalGrpcOptions>, InternalGrpcOptionsValidator>();
+builder.Services.AddSingleton<IInternalCallerAuthorizer, CertificateSubjectAuthorizer>();
 
 builder.Services.AddOptions<AppCorsOptions>()
     .Bind(builder.Configuration.GetSection("Cors"));
@@ -94,6 +97,16 @@ string? redisPassword = StackExchange.Redis.ConfigurationOptions.Parse(redisOpts
 ProductionSecretsGuard.Validate(builder.Environment.EnvironmentName, dbOpts.Password, redisPassword);
 BillingOptions billingOpts = builder.Configuration.GetSection("Billing").Get<BillingOptions>() ?? new();
 ObjectStorageOptions objectStorageOpts = builder.Configuration.GetSection("ObjectStorage").Get<ObjectStorageOptions>() ?? new();
+
+// The internal billing/admin gRPC services listen on their own mutual-TLS port. The agent port
+// keeps its existing plain-text configuration — agents authenticate with an API key and have no
+// client certificate, so requiring one there would refuse every machine in the fleet.
+InternalGrpcOptions internalGrpcOpts = builder.Configuration.GetSection("InternalGrpc").Get<InternalGrpcOptions>() ?? new();
+bool internalGrpcListenerEnabled = billingOpts.Enabled && internalGrpcOpts.Enabled;
+if (internalGrpcListenerEnabled)
+{
+    builder.WebHost.ConfigureKestrel(options => InternalGrpcEndpoint.Configure(options, internalGrpcOpts));
+}
 
 string[] corsOrigins = corsOpts.Origins;
 // Fail fast on Production misconfiguration (empty list or wildcard).
@@ -462,10 +475,21 @@ app.MapGrpcService<TelemetryService>()
     .RequireAuthorization(ApiKeyAuthenticationHandler.SchemeName);
 if (billingOpts.Enabled)
 {
-    app.MapGrpcService<BillingGatewayService>()
+    // AllowAnonymous only bypasses the agent API-key scheme. Both services authorise their
+    // caller on the client-certificate subject via IInternalCallerAuthorizer, which no caller on
+    // the plain-text agent port can ever satisfy.
+    IEndpointConventionBuilder billingGatewayEndpoint = app.MapGrpcService<BillingGatewayService>()
         .AllowAnonymous();
-    app.MapGrpcService<FleetAdminService>()
+    IEndpointConventionBuilder fleetAdminEndpoint = app.MapGrpcService<FleetAdminService>()
         .AllowAnonymous();
+
+    if (internalGrpcListenerEnabled)
+    {
+        // Route these services on the mutual-TLS port only, so they are not even addressable
+        // from the agent endpoint.
+        billingGatewayEndpoint.RequireHost($"*:{internalGrpcOpts.Port}");
+        fleetAdminEndpoint.RequireHost($"*:{internalGrpcOpts.Port}");
+    }
 }
 
 // Graceful shutdown: allow in-flight requests to complete during Kubernetes rolling updates.

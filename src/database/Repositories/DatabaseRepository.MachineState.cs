@@ -283,6 +283,11 @@ public partial class DatabaseRepository : IMachineStateRepository
             update = update.Set(d => d.HardwareHealth, patch.HardwareHealth);
         }
 
+        if (patch.HasAgentVersion == true)
+        {
+            update = update.Set(d => d.AgentVersion, patch.AgentVersion);
+        }
+
         await update.UpdateAsync(cancellationToken);
     }
 

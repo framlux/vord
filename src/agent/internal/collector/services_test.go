@@ -149,4 +149,3 @@ func TestServicesCollector_DefaultInterval_AfterRuntimeUpdate_ReturnsNewValue(t 
 		t.Errorf("expected DefaultInterval=10m after runtime update, got %v", collector.DefaultInterval())
 	}
 }
-

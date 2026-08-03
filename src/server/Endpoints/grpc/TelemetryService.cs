@@ -658,6 +658,7 @@ public sealed class TelemetryService : Telemetry.TelemetryBase
             TelemetryItem.PayloadOneofCase.HardwareHealth => item.HardwareHealth,
             TelemetryItem.PayloadOneofCase.PackageUpdates => item.PackageUpdates,
             TelemetryItem.PayloadOneofCase.ServiceStatus => item.ServiceStatus,
+            TelemetryItem.PayloadOneofCase.AgentVersion => item.AgentVersion,
             _ => null
         };
 

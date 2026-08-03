@@ -38,7 +38,7 @@ func NewHwHealthCollector() *HwHealthCollector {
 	}
 }
 
-func (c *HwHealthCollector) Name() string              { return "hardware_health" }
+func (c *HwHealthCollector) Name() string                   { return "hardware_health" }
 func (c *HwHealthCollector) DefaultInterval() time.Duration { return 5 * time.Minute }
 
 type fanReading struct {

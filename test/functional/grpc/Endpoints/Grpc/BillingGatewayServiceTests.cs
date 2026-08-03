@@ -20,11 +20,16 @@ namespace Framlux.FleetManagement.FunctionalTest.Endpoints.Grpc;
 /// </summary>
 public sealed class BillingGatewayServiceTests
 {
+    /// <summary>
+    /// The client-certificate subject the internal services are configured to accept. In
+    /// production it is the DNS name on the certificate cert-manager issues to billing-api.
+    /// </summary>
+    private const string PermittedClientSubject = "billing-api.vord-fleet.svc.cluster.local";
     [Test]
-    public async Task ProcessBillingAction_MissingInternalKey_ThrowsUnauthenticated()
+    public async Task ProcessBillingAction_NoClientCertificate_ThrowsUnauthenticated()
     {
         using FunctionalTestFactory factory = new();
-        factory.WithInternalApiKey("test-internal-key");
+        factory.WithInternalClientSubjects(PermittedClientSubject);
         using GrpcChannel channel = CreateChannel(factory);
         BillingGateway.BillingGatewayClient client = new(channel);
 
@@ -46,17 +51,23 @@ public sealed class BillingGatewayServiceTests
         await Assert.That(exception!.StatusCode).IsEqualTo(StatusCode.Unauthenticated);
     }
 
+    /// <summary>
+    /// A caller holding a certificate that is entirely valid — issued by the internal CA, in
+    /// date, correctly formed — but whose subject is not on the permitted list must still be
+    /// refused. This is what proves the service authorises on the caller's identity rather than
+    /// on the mere fact that some certificate was presented.
+    /// </summary>
     [Test]
-    public async Task ProcessBillingAction_WrongInternalKey_ThrowsUnauthenticated()
+    public async Task ProcessBillingAction_ValidCertificateWithNonPermittedSubject_ThrowsPermissionDenied()
     {
         using FunctionalTestFactory factory = new();
-        factory.WithInternalApiKey("test-internal-key");
+        factory.WithInternalClientSubjects(PermittedClientSubject);
         using GrpcChannel channel = CreateChannel(factory);
         BillingGateway.BillingGatewayClient client = new(channel);
 
         Metadata headers = new Metadata
         {
-            { "x-internal-key", "wrong-key" }
+            { TestClientCertificateMiddleware.SubjectHeader, "impostor.vord-fleet.svc.cluster.local" }
         };
 
         RpcException? exception = null;
@@ -74,20 +85,20 @@ public sealed class BillingGatewayServiceTests
         }
 
         await Assert.That(exception).IsNotNull();
-        await Assert.That(exception!.StatusCode).IsEqualTo(StatusCode.Unauthenticated);
+        await Assert.That(exception!.StatusCode).IsEqualTo(StatusCode.PermissionDenied);
     }
 
     [Test]
     public async Task ProcessBillingAction_TenantNotFound_ThrowsNotFound()
     {
         using FunctionalTestFactory factory = new();
-        factory.WithInternalApiKey("test-internal-key");
+        factory.WithInternalClientSubjects(PermittedClientSubject);
         using GrpcChannel channel = CreateChannel(factory);
         BillingGateway.BillingGatewayClient client = new(channel);
 
         Metadata headers = new Metadata
         {
-            { "x-internal-key", "test-internal-key" }
+            { TestClientCertificateMiddleware.SubjectHeader, PermittedClientSubject }
         };
 
         RpcException? exception = null;
@@ -113,7 +124,7 @@ public sealed class BillingGatewayServiceTests
     public async Task ProcessBillingAction_UnspecifiedAction_ThrowsInvalidArgument()
     {
         using FunctionalTestFactory factory = new();
-        factory.WithInternalApiKey("test-internal-key");
+        factory.WithInternalClientSubjects(PermittedClientSubject);
         using DatabaseContext db = factory.CreateDbContext();
 
         string externalId = $"ext-{Guid.NewGuid():N}";
@@ -122,7 +133,7 @@ public sealed class BillingGatewayServiceTests
         using GrpcChannel channel = CreateChannel(factory);
         BillingGateway.BillingGatewayClient client = new(channel);
 
-        Metadata headers = new Metadata { { "x-internal-key", "test-internal-key" } };
+        Metadata headers = new Metadata { { TestClientCertificateMiddleware.SubjectHeader, PermittedClientSubject } };
 
         RpcException? exception = null;
         try
@@ -147,7 +158,7 @@ public sealed class BillingGatewayServiceTests
     public async Task ProcessBillingAction_UpgradeToPro_UpdatesAllSubscriptionFields()
     {
         using FunctionalTestFactory factory = new();
-        factory.WithInternalApiKey("test-internal-key");
+        factory.WithInternalClientSubjects(PermittedClientSubject);
         using DatabaseContext db = factory.CreateDbContext();
 
         string externalId = $"ext-{Guid.NewGuid():N}";
@@ -161,7 +172,7 @@ public sealed class BillingGatewayServiceTests
         using GrpcChannel channel = CreateChannel(factory);
         BillingGateway.BillingGatewayClient client = new(channel);
 
-        Metadata headers = new Metadata { { "x-internal-key", "test-internal-key" } };
+        Metadata headers = new Metadata { { TestClientCertificateMiddleware.SubjectHeader, PermittedClientSubject } };
 
         BillingActionResponse response = await client.ProcessBillingActionAsync(
             new BillingActionRequest
@@ -185,7 +196,7 @@ public sealed class BillingGatewayServiceTests
     public async Task ProcessBillingAction_UpgradeToTeam_UpdatesAllSubscriptionFields()
     {
         using FunctionalTestFactory factory = new();
-        factory.WithInternalApiKey("test-internal-key");
+        factory.WithInternalClientSubjects(PermittedClientSubject);
         using DatabaseContext db = factory.CreateDbContext();
 
         string externalId = $"ext-{Guid.NewGuid():N}";
@@ -198,7 +209,7 @@ public sealed class BillingGatewayServiceTests
         using GrpcChannel channel = CreateChannel(factory);
         BillingGateway.BillingGatewayClient client = new(channel);
 
-        Metadata headers = new Metadata { { "x-internal-key", "test-internal-key" } };
+        Metadata headers = new Metadata { { TestClientCertificateMiddleware.SubjectHeader, PermittedClientSubject } };
 
         BillingActionResponse response = await client.ProcessBillingActionAsync(
             new BillingActionRequest
@@ -222,7 +233,7 @@ public sealed class BillingGatewayServiceTests
     public async Task ProcessBillingAction_DowngradeToFree_RevertsSubscriptionToFreeTier()
     {
         using FunctionalTestFactory factory = new();
-        factory.WithInternalApiKey("test-internal-key");
+        factory.WithInternalClientSubjects(PermittedClientSubject);
         using DatabaseContext db = factory.CreateDbContext();
 
         string externalId = $"ext-{Guid.NewGuid():N}";
@@ -235,7 +246,7 @@ public sealed class BillingGatewayServiceTests
         using GrpcChannel channel = CreateChannel(factory);
         BillingGateway.BillingGatewayClient client = new(channel);
 
-        Metadata headers = new Metadata { { "x-internal-key", "test-internal-key" } };
+        Metadata headers = new Metadata { { TestClientCertificateMiddleware.SubjectHeader, PermittedClientSubject } };
 
         BillingActionResponse response = await client.ProcessBillingActionAsync(
             new BillingActionRequest
@@ -258,7 +269,7 @@ public sealed class BillingGatewayServiceTests
     public async Task ProcessBillingAction_DowngradeFromTeamToFree_RevertsAllFields()
     {
         using FunctionalTestFactory factory = new();
-        factory.WithInternalApiKey("test-internal-key");
+        factory.WithInternalClientSubjects(PermittedClientSubject);
         using DatabaseContext db = factory.CreateDbContext();
 
         string externalId = $"ext-{Guid.NewGuid():N}";
@@ -267,7 +278,7 @@ public sealed class BillingGatewayServiceTests
         using GrpcChannel channel = CreateChannel(factory);
         BillingGateway.BillingGatewayClient client = new(channel);
 
-        Metadata headers = new Metadata { { "x-internal-key", "test-internal-key" } };
+        Metadata headers = new Metadata { { TestClientCertificateMiddleware.SubjectHeader, PermittedClientSubject } };
 
         BillingActionResponse response = await client.ProcessBillingActionAsync(
             new BillingActionRequest
@@ -289,7 +300,7 @@ public sealed class BillingGatewayServiceTests
     public async Task ProcessBillingAction_DowngradeToPro_SetsCorrectValues()
     {
         using FunctionalTestFactory factory = new();
-        factory.WithInternalApiKey("test-internal-key");
+        factory.WithInternalClientSubjects(PermittedClientSubject);
         using DatabaseContext db = factory.CreateDbContext();
 
         string externalId = $"ext-{Guid.NewGuid():N}";
@@ -302,7 +313,7 @@ public sealed class BillingGatewayServiceTests
         using GrpcChannel channel = CreateChannel(factory);
         BillingGateway.BillingGatewayClient client = new(channel);
 
-        Metadata headers = new Metadata { { "x-internal-key", "test-internal-key" } };
+        Metadata headers = new Metadata { { TestClientCertificateMiddleware.SubjectHeader, PermittedClientSubject } };
 
         BillingActionResponse response = await client.ProcessBillingActionAsync(
             new BillingActionRequest
@@ -325,7 +336,7 @@ public sealed class BillingGatewayServiceTests
     public async Task ProcessBillingAction_UpdatePeriodEnd_UpdatesDate()
     {
         using FunctionalTestFactory factory = new();
-        factory.WithInternalApiKey("test-internal-key");
+        factory.WithInternalClientSubjects(PermittedClientSubject);
         using DatabaseContext db = factory.CreateDbContext();
 
         string externalId = $"ext-{Guid.NewGuid():N}";
@@ -334,7 +345,7 @@ public sealed class BillingGatewayServiceTests
         using GrpcChannel channel = CreateChannel(factory);
         BillingGateway.BillingGatewayClient client = new(channel);
 
-        Metadata headers = new Metadata { { "x-internal-key", "test-internal-key" } };
+        Metadata headers = new Metadata { { TestClientCertificateMiddleware.SubjectHeader, PermittedClientSubject } };
         DateTimeOffset periodEnd = DateTimeOffset.UtcNow.AddDays(30);
 
         BillingActionResponse response = await client.ProcessBillingActionAsync(
@@ -357,7 +368,7 @@ public sealed class BillingGatewayServiceTests
     public async Task ProcessBillingAction_SetPastDue_UpdatesStatus()
     {
         using FunctionalTestFactory factory = new();
-        factory.WithInternalApiKey("test-internal-key");
+        factory.WithInternalClientSubjects(PermittedClientSubject);
         using DatabaseContext db = factory.CreateDbContext();
 
         string externalId = $"ext-{Guid.NewGuid():N}";
@@ -366,7 +377,7 @@ public sealed class BillingGatewayServiceTests
         using GrpcChannel channel = CreateChannel(factory);
         BillingGateway.BillingGatewayClient client = new(channel);
 
-        Metadata headers = new Metadata { { "x-internal-key", "test-internal-key" } };
+        Metadata headers = new Metadata { { TestClientCertificateMiddleware.SubjectHeader, PermittedClientSubject } };
 
         BillingActionResponse response = await client.ProcessBillingActionAsync(
             new BillingActionRequest
@@ -387,7 +398,7 @@ public sealed class BillingGatewayServiceTests
     public async Task ProcessBillingAction_SetActive_RestoresActiveStatus()
     {
         using FunctionalTestFactory factory = new();
-        factory.WithInternalApiKey("test-internal-key");
+        factory.WithInternalClientSubjects(PermittedClientSubject);
         using DatabaseContext db = factory.CreateDbContext();
 
         string externalId = $"ext-{Guid.NewGuid():N}";
@@ -396,7 +407,7 @@ public sealed class BillingGatewayServiceTests
         using GrpcChannel channel = CreateChannel(factory);
         BillingGateway.BillingGatewayClient client = new(channel);
 
-        Metadata headers = new Metadata { { "x-internal-key", "test-internal-key" } };
+        Metadata headers = new Metadata { { TestClientCertificateMiddleware.SubjectHeader, PermittedClientSubject } };
 
         BillingActionResponse response = await client.ProcessBillingActionAsync(
             new BillingActionRequest
@@ -417,7 +428,7 @@ public sealed class BillingGatewayServiceTests
     public async Task ProcessBillingAction_UpdatePeriodEnd_MissingTimestamp_ThrowsInvalidArgument()
     {
         using FunctionalTestFactory factory = new();
-        factory.WithInternalApiKey("test-internal-key");
+        factory.WithInternalClientSubjects(PermittedClientSubject);
         using DatabaseContext db = factory.CreateDbContext();
 
         string externalId = $"ext-{Guid.NewGuid():N}";
@@ -426,7 +437,7 @@ public sealed class BillingGatewayServiceTests
         using GrpcChannel channel = CreateChannel(factory);
         BillingGateway.BillingGatewayClient client = new(channel);
 
-        Metadata headers = new Metadata { { "x-internal-key", "test-internal-key" } };
+        Metadata headers = new Metadata { { TestClientCertificateMiddleware.SubjectHeader, PermittedClientSubject } };
 
         RpcException? exception = null;
         try
@@ -451,11 +462,11 @@ public sealed class BillingGatewayServiceTests
     public async Task ProcessBillingAction_NonExistentTenant_ThrowsNotFoundWithExternalId()
     {
         using FunctionalTestFactory factory = new();
-        factory.WithInternalApiKey("test-internal-key");
+        factory.WithInternalClientSubjects(PermittedClientSubject);
         using GrpcChannel channel = CreateChannel(factory);
         BillingGateway.BillingGatewayClient client = new(channel);
 
-        Metadata headers = new Metadata { { "x-internal-key", "test-internal-key" } };
+        Metadata headers = new Metadata { { TestClientCertificateMiddleware.SubjectHeader, PermittedClientSubject } };
         string nonExistentExternalId = $"ext-does-not-exist-{Guid.NewGuid():N}";
 
         RpcException? exception = null;
@@ -482,7 +493,7 @@ public sealed class BillingGatewayServiceTests
     {
         // Verify that downgrading from Pro to Free applies Free tier defaults
         using FunctionalTestFactory factory = new();
-        factory.WithInternalApiKey("test-internal-key");
+        factory.WithInternalClientSubjects(PermittedClientSubject);
         using DatabaseContext db = factory.CreateDbContext();
 
         string externalId = $"ext-{Guid.NewGuid():N}";
@@ -491,7 +502,7 @@ public sealed class BillingGatewayServiceTests
         using GrpcChannel channel = CreateChannel(factory);
         BillingGateway.BillingGatewayClient client = new(channel);
 
-        Metadata headers = new Metadata { { "x-internal-key", "test-internal-key" } };
+        Metadata headers = new Metadata { { TestClientCertificateMiddleware.SubjectHeader, PermittedClientSubject } };
 
         BillingActionResponse response = await client.ProcessBillingActionAsync(
             new BillingActionRequest
@@ -516,7 +527,7 @@ public sealed class BillingGatewayServiceTests
         // and dispatches DowngradeToFree only when an intentional downgrade was scheduled.
         // The fleet server always reverts to Free/Active when it receives this action.
         using FunctionalTestFactory factory = new();
-        factory.WithInternalApiKey("test-internal-key");
+        factory.WithInternalClientSubjects(PermittedClientSubject);
         using DatabaseContext db = factory.CreateDbContext();
 
         string externalId = $"ext-{Guid.NewGuid():N}";
@@ -529,7 +540,7 @@ public sealed class BillingGatewayServiceTests
         using GrpcChannel channel = CreateChannel(factory);
         BillingGateway.BillingGatewayClient client = new(channel);
 
-        Metadata headers = new Metadata { { "x-internal-key", "test-internal-key" } };
+        Metadata headers = new Metadata { { TestClientCertificateMiddleware.SubjectHeader, PermittedClientSubject } };
 
         BillingActionResponse response = await client.ProcessBillingActionAsync(
             new BillingActionRequest
@@ -553,7 +564,7 @@ public sealed class BillingGatewayServiceTests
     {
         // Verify that the exact timestamp provided is persisted on the subscription record
         using FunctionalTestFactory factory = new();
-        factory.WithInternalApiKey("test-internal-key");
+        factory.WithInternalClientSubjects(PermittedClientSubject);
         using DatabaseContext db = factory.CreateDbContext();
 
         string externalId = $"ext-{Guid.NewGuid():N}";
@@ -562,7 +573,7 @@ public sealed class BillingGatewayServiceTests
         using GrpcChannel channel = CreateChannel(factory);
         BillingGateway.BillingGatewayClient client = new(channel);
 
-        Metadata headers = new Metadata { { "x-internal-key", "test-internal-key" } };
+        Metadata headers = new Metadata { { TestClientCertificateMiddleware.SubjectHeader, PermittedClientSubject } };
 
         // Truncate to seconds because protobuf Timestamp has second-level precision
         DateTimeOffset periodEnd = new DateTimeOffset(
@@ -593,7 +604,7 @@ public sealed class BillingGatewayServiceTests
     {
         // Verify that SetPastDue marks an Active Team subscription as PastDue without altering the tier
         using FunctionalTestFactory factory = new();
-        factory.WithInternalApiKey("test-internal-key");
+        factory.WithInternalClientSubjects(PermittedClientSubject);
         using DatabaseContext db = factory.CreateDbContext();
 
         string externalId = $"ext-{Guid.NewGuid():N}";
@@ -602,7 +613,7 @@ public sealed class BillingGatewayServiceTests
         using GrpcChannel channel = CreateChannel(factory);
         BillingGateway.BillingGatewayClient client = new(channel);
 
-        Metadata headers = new Metadata { { "x-internal-key", "test-internal-key" } };
+        Metadata headers = new Metadata { { TestClientCertificateMiddleware.SubjectHeader, PermittedClientSubject } };
 
         BillingActionResponse response = await client.ProcessBillingActionAsync(
             new BillingActionRequest
@@ -626,7 +637,7 @@ public sealed class BillingGatewayServiceTests
     {
         // Verify that SetActive restores a PastDue Pro subscription to Active without altering the tier
         using FunctionalTestFactory factory = new();
-        factory.WithInternalApiKey("test-internal-key");
+        factory.WithInternalClientSubjects(PermittedClientSubject);
         using DatabaseContext db = factory.CreateDbContext();
 
         string externalId = $"ext-{Guid.NewGuid():N}";
@@ -635,7 +646,7 @@ public sealed class BillingGatewayServiceTests
         using GrpcChannel channel = CreateChannel(factory);
         BillingGateway.BillingGatewayClient client = new(channel);
 
-        Metadata headers = new Metadata { { "x-internal-key", "test-internal-key" } };
+        Metadata headers = new Metadata { { TestClientCertificateMiddleware.SubjectHeader, PermittedClientSubject } };
 
         BillingActionResponse response = await client.ProcessBillingActionAsync(
             new BillingActionRequest

@@ -3,12 +3,20 @@
 // See LICENSE for details.
 
 import { describe, it, expect } from 'vitest';
+import canonicalInstaller from '../../../../../deployment/agent/install.sh?raw';
 import { generateInstallScript } from './install-script';
 
 describe('generateInstallScript', () => {
     it('should start with bash shebang', () => {
         const script = generateInstallScript('test-token-123');
         expect(script.startsWith('#!/usr/bin/env bash')).toBe(true);
+    });
+
+    it('should append the canonical installer verbatim', () => {
+        // The whole point of the prelude design: there is exactly one installer body, so a fix in
+        // deployment/agent/install.sh reaches the dashboard without anyone porting it.
+        const script = generateInstallScript('token');
+        expect(script.endsWith(canonicalInstaller)).toBe(true);
     });
 
     it('should include PATH normalization for minimal environments', () => {
@@ -20,40 +28,46 @@ describe('generateInstallScript', () => {
 
     it('should contain the provided token value', () => {
         const script = generateInstallScript('my-secret-token-abc');
-        expect(script).toContain('REGISTRATION_TOKEN="my-secret-token-abc"');
+        expect(script).toContain('export VORD_REGISTRATION_TOKEN="my-secret-token-abc"');
     });
 
     it('should contain the provided server address', () => {
         const script = generateInstallScript('token', 'custom.server.dev');
-        expect(script).toContain('SERVER_ADDRESS="custom.server.dev"');
+        expect(script).toContain('export VORD_SERVER_ADDRESS="custom.server.dev"');
     });
 
     it('should use default server address when not provided', () => {
         const script = generateInstallScript('token');
-        expect(script).toContain('SERVER_ADDRESS="grpc.app.vordfleet.dev"');
+        expect(script).toContain('export VORD_SERVER_ADDRESS="grpc.app.vordfleet.dev"');
     });
 
     it('should use default port when not provided', () => {
         const script = generateInstallScript('token');
-        expect(script).toContain('server_port = 443');
+        expect(script).toContain('export VORD_SERVER_PORT=443');
     });
 
     it('should use custom port when provided', () => {
         const script = generateInstallScript('token', 'grpc.app.vordfleet.dev', 12234);
-        expect(script).toContain('server_port = 12234');
+        expect(script).toContain('export VORD_SERVER_PORT=12234');
     });
 
-    it('should not contain interactive read prompts', () => {
+    it('should be non-interactive by construction', () => {
+        // The installer prompts only when no token is supplied. Exporting one ahead of the body is
+        // what selects the non-interactive path, so asserting the export is the real guarantee —
+        // the prompt code still exists in the body and is simply never reached.
         const script = generateInstallScript('token');
-        expect(script).not.toContain('read -r');
-        expect(script).not.toContain('Enter the server address');
-        expect(script).not.toContain('Enter your registration token');
+        expect(script).toContain('export VORD_REGISTRATION_TOKEN=');
+        const preludeEnd = script.indexOf('#!/usr/bin/env bash', 1);
+        const prelude = script.slice(0, preludeEnd);
+        expect(prelude).not.toContain('read -r');
     });
 
-    it('should contain systemctl enable and start commands', () => {
+    it('should restart rather than start, so the agent re-reads the written config', () => {
+        // The package postinstall starts the agent before any config exists; `start` on an
+        // already-running unit is a no-op, which would leave it running on the placeholder.
         const script = generateInstallScript('token');
         expect(script).toContain('systemctl enable');
-        expect(script).toContain('systemctl start');
+        expect(script).toContain('systemctl restart "${PACKAGE_NAME}"');
     });
 
     it('should contain config file write section', () => {
@@ -71,27 +85,27 @@ describe('generateInstallScript', () => {
 
     it('should escape double quotes in token values', () => {
         const script = generateInstallScript('token"with"quotes');
-        expect(script).toContain('REGISTRATION_TOKEN="token\\"with\\"quotes"');
+        expect(script).toContain('export VORD_REGISTRATION_TOKEN="token\\"with\\"quotes"');
     });
 
     it('should escape dollar signs in token values', () => {
         const script = generateInstallScript('token$var');
-        expect(script).toContain('REGISTRATION_TOKEN="token\\$var"');
+        expect(script).toContain('export VORD_REGISTRATION_TOKEN="token\\$var"');
     });
 
     it('should escape backslashes in token values', () => {
         const script = generateInstallScript('token\\slash');
-        expect(script).toContain('REGISTRATION_TOKEN="token\\\\slash"');
+        expect(script).toContain('export VORD_REGISTRATION_TOKEN="token\\\\slash"');
     });
 
     it('should escape backticks in token values', () => {
         const script = generateInstallScript('token`cmd`end');
-        expect(script).toContain('REGISTRATION_TOKEN="token\\`cmd\\`end"');
+        expect(script).toContain('export VORD_REGISTRATION_TOKEN="token\\`cmd\\`end"');
     });
 
     it('should escape shell-dangerous characters in server address', () => {
         const script = generateInstallScript('token', 'server"$`\\bad');
-        expect(script).toContain('SERVER_ADDRESS="server\\"\\$\\`\\\\bad"');
+        expect(script).toContain('export VORD_SERVER_ADDRESS="server\\"\\$\\`\\\\bad"');
     });
 
     it('should include use_tls setting', () => {
@@ -107,8 +121,22 @@ describe('generateInstallScript', () => {
     it('should use the signed-by keyring flow for the apt repository', () => {
         const script = generateInstallScript('token');
         expect(script).toContain('KEYRING_PATH="/usr/share/keyrings/framlux-archive-keyring.gpg"');
-        expect(script).toContain('gpg --dearmor -o "${KEYRING_PATH}"');
         expect(script).toContain('deb [signed-by=${KEYRING_PATH}] ${APT_REPO_URL} * *');
+    });
+
+    it('should dearmor the signing key non-interactively so re-runs work', () => {
+        // `gpg --dearmor -o FILE` refuses to overwrite an existing FILE and, with no tty, dies —
+        // which broke every retry of a failed install.
+        const script = generateInstallScript('token');
+        expect(script).toContain('gpg --batch --yes --dearmor');
+    });
+
+    it('should not enable rpm package signature checking, which the published RPMs lack', () => {
+        // The RPMs carry no package signature; the repository metadata is signed instead.
+        // gpgcheck=1 would fail every dnf/yum install with "package is not signed".
+        const script = generateInstallScript('token');
+        expect(script).toContain('gpgcheck=0');
+        expect(script).toContain('repo_gpgcheck=1');
     });
 
     it('should not use the removed apt-key command', () => {
@@ -116,13 +144,13 @@ describe('generateInstallScript', () => {
         expect(script).not.toContain('apt-key');
     });
 
-    it('should place the token in the config file write, not the repository setup', () => {
+    it('should place the token in the prelude, ahead of the installer body', () => {
         const script = generateInstallScript('my-secret-token-abc');
-        const tokenIndex = script.indexOf('REGISTRATION_TOKEN="my-secret-token-abc"');
-        const keyringIndex = script.indexOf('KEYRING_PATH=');
+        const tokenIndex = script.indexOf('export VORD_REGISTRATION_TOKEN="my-secret-token-abc"');
+        const bodyIndex = script.indexOf('set -euo pipefail');
 
         expect(tokenIndex).toBeGreaterThan(-1);
-        expect(keyringIndex).toBeGreaterThan(-1);
-        expect(tokenIndex).toBeGreaterThan(keyringIndex);
+        expect(bodyIndex).toBeGreaterThan(-1);
+        expect(tokenIndex).toBeLessThan(bodyIndex);
     });
 });

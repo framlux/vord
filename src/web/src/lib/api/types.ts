@@ -186,6 +186,8 @@ export interface MachineDetailDto {
 	totalServices: number;
 	recentSshSessions: SshSessionDto[];
 	telemetryLastUpdated: string | null;
+	/** The running agent's build version, or null when the agent has not reported one. */
+	agentVersion: string | null;
 }
 
 export interface SystemInfoDto {

@@ -9,9 +9,11 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"net"
 	"os"
 	"path/filepath"
 	"strconv"
+	"strings"
 
 	"github.com/BurntSushi/toml"
 )
@@ -241,6 +243,16 @@ func (c *Config) EnsureDataDir() error {
 }
 
 // GRPCTarget returns the dial target string for gRPC.
+//
+// An IPv6 literal must be bracketed before the port is appended, or the result is ambiguous and
+// the dial fails: "2001:db8::1:443" cannot be split back into a host and a port. net.JoinHostPort
+// adds the brackets when the host contains a colon and leaves hostnames and IPv4 untouched.
+// A literal the operator already bracketed is unwrapped first so it is not double-bracketed.
 func (c *Config) GRPCTarget() string {
-	return fmt.Sprintf("%s:%d", c.ServerAddress, c.ServerPort)
+	host := c.ServerAddress
+	if strings.HasPrefix(host, "[") && strings.HasSuffix(host, "]") {
+		host = host[1 : len(host)-1]
+	}
+
+	return net.JoinHostPort(host, strconv.Itoa(c.ServerPort))
 }

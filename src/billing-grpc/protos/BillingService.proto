@@ -1,0 +1,476 @@
+// Copyright (c) 2026 Framlux LLC
+// Licensed under the MIT License
+// See LICENSE for details.
+
+syntax = "proto3";
+package framlux.billing;
+import "google/protobuf/timestamp.proto";
+option csharp_namespace = "Framlux.Vord.BillingGrpc";
+
+enum BillingAction {
+  BILLING_ACTION_UNSPECIFIED = 0;
+  BILLING_ACTION_UPGRADE_TO_PRO = 1;
+  BILLING_ACTION_UPGRADE_TO_TEAM = 2;
+  BILLING_ACTION_DOWNGRADE_TO_FREE = 3;
+  BILLING_ACTION_DOWNGRADE_TO_PRO = 4;
+  BILLING_ACTION_UPDATE_PERIOD_END = 5;
+  BILLING_ACTION_SET_PAST_DUE = 6;
+  BILLING_ACTION_SET_ACTIVE = 7;
+  BILLING_ACTION_CANCEL_ACCOUNT = 8;
+}
+
+enum BillingTier {
+  BILLING_TIER_UNSPECIFIED = 0;
+  BILLING_TIER_FREE = 1;
+  BILLING_TIER_PRO = 2;
+  BILLING_TIER_TEAM = 3;
+}
+
+enum BillingInterval {
+  BILLING_INTERVAL_NONE = 0;
+  BILLING_INTERVAL_MONTHLY = 1;
+  BILLING_INTERVAL_ANNUAL = 2;
+}
+
+enum PendingActionType {
+  PENDING_ACTION_TYPE_UNSPECIFIED = 0;
+  PENDING_ACTION_TYPE_DOWNGRADE_TO_FREE = 1;
+  PENDING_ACTION_TYPE_DOWNGRADE_TO_PRO = 2;
+  PENDING_ACTION_TYPE_CANCEL_ACCOUNT = 3;
+}
+
+// Fleet server implements — billing API calls when Stripe webhooks arrive
+service BillingGateway {
+  rpc ProcessBillingAction(BillingActionRequest) returns (BillingActionResponse);
+}
+
+// Billing API implements — fleet server calls for Stripe operations
+service BillingManagement {
+  rpc UpdateSubscriptionQuantity(UpdateQuantityRequest) returns (UpdateQuantityResponse);
+  rpc ReportMachineUsage(ReportMachineUsageRequest) returns (ReportMachineUsageResponse);
+  rpc CancelSubscription(CancelSubscriptionRequest) returns (CancelSubscriptionResponse);
+  rpc GetSubscriptionStatus(GetSubscriptionStatusRequest) returns (GetSubscriptionStatusResponse);
+  rpc SwapSubscriptionPrice(SwapSubscriptionPriceRequest) returns (SwapSubscriptionPriceResponse);
+  rpc ResumeSubscription(ResumeSubscriptionRequest) returns (ResumeSubscriptionResponse);
+  rpc GetUpcomingInvoice(GetUpcomingInvoiceRequest) returns (GetUpcomingInvoiceResponse);
+  rpc ListInvoices(ListInvoicesRequest) returns (ListInvoicesResponse);
+  rpc GetPublicCatalog(GetPublicCatalogRequest) returns (GetPublicCatalogResponse);
+  rpc CancelSubscriptionImmediate(CancelSubscriptionImmediateRequest) returns (CancelSubscriptionImmediateResponse);
+  rpc DeleteCustomer(DeleteCustomerRequest) returns (DeleteCustomerResponse);
+}
+
+message BillingActionRequest {
+  string tenant_external_id = 1;
+  BillingAction action = 2;
+  google.protobuf.Timestamp current_period_end = 3; // only for UPDATE_PERIOD_END
+}
+message BillingActionResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+message UpdateQuantityRequest {
+  string tenant_external_id = 1;
+  int32 machine_count = 2;
+}
+message UpdateQuantityResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+message ReportMachineUsageRequest {
+  string tenant_external_id = 1;
+  int32 machine_count = 2;
+}
+message ReportMachineUsageResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+message CancelSubscriptionRequest {
+  string tenant_external_id = 1;
+  PendingActionType pending_action = 2;
+}
+message CancelSubscriptionResponse {
+  bool success = 1;
+  bool cancel_at_period_end = 2;
+  string message = 3;
+}
+
+message GetSubscriptionStatusRequest {
+  string tenant_external_id = 1;
+}
+message GetSubscriptionStatusResponse {
+  bool cancel_at_period_end = 1;
+  string stripe_status = 2;
+  string price_id = 3;
+  int32 quantity = 4;
+  google.protobuf.Timestamp current_period_end = 5;
+  BillingTier tier = 6;
+  BillingInterval billing_interval = 7;
+}
+
+// Public pricing catalog (active prices with their tier and interval)
+message GetPublicCatalogRequest {}
+message GetPublicCatalogResponse {
+  repeated CatalogPriceItem items = 1;
+}
+message CatalogPriceItem {
+  BillingTier tier = 1;
+  BillingInterval interval = 2;
+  int64 unit_amount_cents = 3;
+  string currency = 4;
+  bool is_metered = 5;
+}
+
+message CancelSubscriptionImmediateRequest {
+  string tenant_external_id = 1;
+}
+message CancelSubscriptionImmediateResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+message DeleteCustomerRequest {
+  string tenant_external_id = 1;
+}
+message DeleteCustomerResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+message SwapSubscriptionPriceRequest {
+  string tenant_external_id = 1;
+  BillingTier target_tier = 2;
+}
+message SwapSubscriptionPriceResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+message ResumeSubscriptionRequest {
+  string tenant_external_id = 1;
+}
+message ResumeSubscriptionResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+// Upcoming invoice (current billing period with prorated amounts)
+message GetUpcomingInvoiceRequest {
+  string tenant_external_id = 1;
+}
+message GetUpcomingInvoiceResponse {
+  bool has_invoice = 1;
+  int64 amount_due_cents = 2;
+  string currency = 3;
+  google.protobuf.Timestamp period_start = 4;
+  google.protobuf.Timestamp period_end = 5;
+  google.protobuf.Timestamp next_payment_attempt = 6;
+  int64 unit_amount_cents = 7;
+  repeated BillingLineItem lines = 8;
+}
+message BillingLineItem {
+  string description = 1;
+  int64 amount_cents = 2;
+  int32 quantity = 3;
+  google.protobuf.Timestamp period_start = 4;
+  google.protobuf.Timestamp period_end = 5;
+  bool proration = 6;
+}
+
+// Invoice history
+message ListInvoicesRequest {
+  string tenant_external_id = 1;
+  int32 limit = 2;
+}
+message ListInvoicesResponse {
+  repeated BillingInvoice invoices = 1;
+}
+message BillingInvoice {
+  string id = 1;
+  int64 amount_cents = 2;
+  string currency = 3;
+  string status = 4;
+  google.protobuf.Timestamp created = 5;
+  google.protobuf.Timestamp period_start = 6;
+  google.protobuf.Timestamp period_end = 7;
+  string hosted_invoice_url = 8;
+  string invoice_pdf_url = 9;
+}
+
+// Fleet server implements — billing API (admin panel) calls for fleet data
+service FleetAdmin {
+  rpc ListUsers(ListUsersRequest) returns (ListUsersResponse);
+  rpc ListTenants(ListTenantsRequest) returns (ListTenantsResponse);
+  rpc GetTenantDetail(GetTenantDetailRequest) returns (GetTenantDetailResponse);
+  rpc ListMachines(ListMachinesRequest) returns (ListMachinesResponse);
+  rpc ListAuditLogEntries(ListAuditLogEntriesRequest) returns (ListAuditLogEntriesResponse);
+  rpc GetServerSettings(GetServerSettingsRequest) returns (GetServerSettingsResponse);
+  rpc UpdateServerSetting(UpdateServerSettingRequest) returns (UpdateServerSettingResponse);
+  rpc UpdateTenantSubscription(UpdateTenantSubscriptionRequest) returns (UpdateTenantSubscriptionResponse);
+  rpc ConfigureTenantOidc(ConfigureTenantOidcRequest) returns (ConfigureTenantOidcResponse);
+  rpc GetTenantOverride(GetTenantOverrideRequest) returns (GetTenantOverrideResponse);
+  rpc SetTenantOverride(SetTenantOverrideRequest) returns (SetTenantOverrideResponse);
+  rpc RemoveTenantOverride(RemoveTenantOverrideRequest) returns (RemoveTenantOverrideResponse);
+  rpc RequestTenantDeletion(RequestTenantDeletionRequest) returns (RequestTenantDeletionResponse);
+  rpc RestoreTenant(RestoreTenantRequest) returns (RestoreTenantResponse);
+  rpc ListTenantDeletions(ListTenantDeletionsRequest) returns (ListTenantDeletionsResponse);
+}
+
+// --- FleetAdmin shared types ---
+
+message FleetUser {
+  int32 id = 1;
+  string external_id = 2;
+  string username = 3;
+  bool is_active = 4;
+  bool is_global_admin = 5;
+  string auth_provider = 6;
+  google.protobuf.Timestamp created_at = 7;
+  repeated FleetUserTenantRole tenant_roles = 8;
+}
+
+message FleetUserTenantRole {
+  int32 tenant_id = 1;
+  string tenant_name = 2;
+  string role = 3;
+}
+
+message FleetTenant {
+  int32 id = 1;
+  string external_id = 2;
+  string name = 3;
+  bool is_active = 4;
+  string logo_url = 5;
+  google.protobuf.Timestamp created_at = 6;
+  int32 machine_count = 7;
+  int32 user_count = 8;
+  FleetTenantSubscription subscription = 9;
+}
+
+message FleetTenantSubscription {
+  BillingTier tier = 1;
+  string status = 2;
+  int32 machine_limit = 3;
+  int32 retention_days = 4;
+  google.protobuf.Timestamp current_period_end = 5;
+  bool cancel_at_period_end = 6;
+}
+
+message FleetMachine {
+  int64 id = 1;
+  string name = 2;
+  int32 tenant_id = 3;
+  string tenant_name = 4;
+  bool is_deleted = 5;
+  google.protobuf.Timestamp registered_on = 6;
+}
+
+message FleetAuditEntry {
+  int64 id = 1;
+  int32 tenant_id = 2;
+  int32 user_id = 3;
+  string action = 4;
+  string resource_type = 5;
+  string details = 6;
+  google.protobuf.Timestamp timestamp = 7;
+  string tenant_name = 8;
+  string username = 9;
+}
+
+// Server configuration setting identifiers. Values match the fleet server's storage enum;
+// vord's ServerSettingKeyParityTests asserts the two stay identical. Ids 4, 5, and 13 belonged
+// to retired settings and are available for reuse.
+enum ServerSettingKey {
+  SERVER_SETTING_KEY_NONE = 0;
+  SERVER_SETTING_KEY_AGENT_HEARTBEAT_SECONDS = 1;
+  SERVER_SETTING_KEY_AGENT_CONFIG_REFRESH_SECONDS = 2;
+  SERVER_SETTING_KEY_ONLINE_THRESHOLD_SECONDS = 3;
+  SERVER_SETTING_KEY_DEDUPLICATION_TTL_SECONDS = 6;
+  SERVER_SETTING_KEY_AGENT_COMMAND_POLL_SECONDS = 7;
+  SERVER_SETTING_KEY_ALLOW_USER_SIGNUP = 8;
+  SERVER_SETTING_KEY_TELEMETRY_COLLECT_FAST_SECONDS = 9;
+  SERVER_SETTING_KEY_TELEMETRY_COLLECT_SLOW_SECONDS = 10;
+  SERVER_SETTING_KEY_TELEMETRY_SEND_FAST_SECONDS = 11;
+  SERVER_SETTING_KEY_TELEMETRY_SEND_SLOW_SECONDS = 12;
+  SERVER_SETTING_KEY_SERVICE_STATUS_SECONDS = 14;
+  SERVER_SETTING_KEY_STRIPE_CANARY_ENABLED = 15;
+  SERVER_SETTING_KEY_STRIPE_CANARY_INTERVAL_SECONDS = 16;
+  SERVER_SETTING_KEY_STRIPE_CANARY_WEBHOOK_TIMEOUT_SECONDS = 17;
+  SERVER_SETTING_KEY_STRIPE_CANARY_CONSECUTIVE_FAILURES_TO_ALERT = 18;
+}
+
+message ServerSetting {
+  ServerSettingKey key = 1;
+  string key_name = 2;
+  string value = 3;
+  int32 version = 4;
+  string description = 5;
+  int32 min = 6;
+  int32 max = 7;
+}
+
+// --- FleetAdmin request/response messages ---
+
+message ListUsersRequest {
+  string search = 1;
+  int32 page = 2;
+  int32 page_size = 3;
+}
+message ListUsersResponse {
+  repeated FleetUser users = 1;
+  int32 total_count = 2;
+}
+
+message ListTenantsRequest {
+  string search = 1;
+  int32 page = 2;
+  int32 page_size = 3;
+}
+message ListTenantsResponse {
+  repeated FleetTenant tenants = 1;
+  int32 total_count = 2;
+}
+
+message GetTenantDetailRequest {
+  string tenant_external_id = 1;
+}
+message GetTenantDetailResponse {
+  FleetTenant tenant = 1;
+  repeated FleetUser users = 2;
+  repeated FleetMachine machines = 3;
+}
+
+message ListMachinesRequest {
+  string tenant_external_id = 1;
+  int32 page = 2;
+  int32 page_size = 3;
+}
+message ListMachinesResponse {
+  repeated FleetMachine machines = 1;
+  int32 total_count = 2;
+}
+
+message ListAuditLogEntriesRequest {
+  string tenant_external_id = 1;
+  int32 page = 2;
+  int32 page_size = 3;
+}
+message ListAuditLogEntriesResponse {
+  repeated FleetAuditEntry entries = 1;
+  int32 total_count = 2;
+}
+
+message GetServerSettingsRequest {}
+message GetServerSettingsResponse {
+  repeated ServerSetting settings = 1;
+}
+
+message UpdateServerSettingRequest {
+  ServerSettingKey key = 1;
+  string value = 2;
+}
+message UpdateServerSettingResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+message UpdateTenantSubscriptionRequest {
+  string tenant_external_id = 1;
+  BillingTier tier = 2;
+  int32 machine_limit = 3;
+  int32 retention_days = 4;
+  string status = 5;
+}
+message UpdateTenantSubscriptionResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+message ConfigureTenantOidcRequest {
+  string tenant_external_id = 1;
+  string authority = 2;
+  string client_id = 3;
+  string client_secret = 4;
+  string metadata_address = 5;
+  string email_domain = 6;
+  bool is_enabled = 7;
+}
+message ConfigureTenantOidcResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+message GetTenantOverrideRequest {
+  string tenant_external_id = 1;
+}
+message GetTenantOverrideResponse {
+  bool has_override = 1;
+  int32 machine_limit = 2; // -1 means not set (use tier default), 0 means none allowed
+  int32 retention_days = 3; // -1 means not set (use tier default)
+  int32 alert_rule_limit = 4; // -1 means not set (use tier default), 0 means none allowed
+  int32 webhook_limit = 5; // -1 means not set (use tier default), 0 means none allowed
+}
+
+message SetTenantOverrideRequest {
+  string tenant_external_id = 1;
+  int32 machine_limit = 2; // -1 means use tier default (null in DB), 0 means none allowed
+  int32 retention_days = 3; // -1 means use tier default (null in DB)
+  int32 alert_rule_limit = 4; // -1 means use tier default (null in DB), 0 means none allowed
+  int32 webhook_limit = 5; // -1 means use tier default (null in DB), 0 means none allowed
+}
+message SetTenantOverrideResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+message RemoveTenantOverrideRequest {
+  string tenant_external_id = 1;
+}
+message RemoveTenantOverrideResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+message RequestTenantDeletionRequest {
+  string tenant_external_id = 1;
+  int32 requested_by_user_id = 2;
+  string reason = 3; // optional free-text
+}
+message RequestTenantDeletionResponse {
+  bool success = 1;
+  string message = 2;
+  google.protobuf.Timestamp scheduled_purge_at = 3;
+}
+
+message RestoreTenantRequest {
+  string tenant_external_id = 1;
+  int32 requested_by_user_id = 2;
+}
+message RestoreTenantResponse {
+  bool success = 1;
+  string message = 2;
+}
+
+message ListTenantDeletionsRequest {
+  bool include_completed = 1; // false = only pending (Deactivated); true = all
+  int32 page = 2;
+  int32 page_size = 3;
+}
+message ListTenantDeletionsResponse {
+  repeated TenantDeletionRecord deletions = 1;
+  int32 total_count = 2;
+}
+message TenantDeletionRecord {
+  int32 id = 1;
+  int32 tenant_id = 2;
+  string tenant_external_id = 3;
+  string tenant_name = 4;
+  int32 requested_by_user_id = 5;
+  google.protobuf.Timestamp requested_at = 6;
+  google.protobuf.Timestamp scheduled_purge_at = 7;
+  int32 status = 8;
+  google.protobuf.Timestamp purged_at = 9;
+  string reason = 10;
+}

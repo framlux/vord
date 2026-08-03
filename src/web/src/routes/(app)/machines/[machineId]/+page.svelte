@@ -22,6 +22,7 @@
 	import HealthBadge from '$lib/components/HealthBadge.svelte';
 	import MachineHero from '$lib/components/machine/MachineHero.svelte';
 	import VitalsBar from '$lib/components/machine/VitalsBar.svelte';
+	import AgentVersionRow from '$lib/components/machine/AgentVersionRow.svelte';
 	import { CircleAlert, Terminal, Pencil, History, ShieldAlert } from 'lucide-svelte';
 	import { invalidateAll } from '$app/navigation';
 	import { enhance } from '$app/forms';
@@ -665,6 +666,7 @@
 							<span class="font-mono text-sm text-surface-900 dark:text-surface-100">{machineDetail.osVersion.arch}</span>
 						</div>
 					{/if}
+					<AgentVersionRow agentVersion={machineDetail?.agentVersion ?? null} />
 					{#if machineDetail?.systemInfo?.ipAddresses && machineDetail.systemInfo.ipAddresses.length > 0}
 						<div>
 							<span class="text-sm text-surface-500 dark:text-surface-400">IP Addresses</span>

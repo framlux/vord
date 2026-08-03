@@ -6,13 +6,13 @@ import { test } from '@playwright/test';
 import path from 'node:path';
 import fs from 'node:fs/promises';
 
-// Captures marketing screenshots from the fleet UI running in mock mode and
-// writes them straight into the vord-internal marketing repo's static assets.
-
-const OUTPUT_DIR = path.resolve(
-	import.meta.dirname,
-	'../../../../vord-internal/src/marketing/static/screenshots'
-);
+// Captures marketing screenshots from the fleet UI running in mock mode.
+// The destination is deliberately configurable: set VORD_SCREENSHOT_DIR to
+// write straight into whatever site serves the images. With it unset the PNGs
+// land inside this repository, so a fork needs no sibling checkout.
+const OUTPUT_DIR = process.env.VORD_SCREENSHOT_DIR
+	? path.resolve(process.env.VORD_SCREENSHOT_DIR)
+	: path.resolve(import.meta.dirname, '../screenshots');
 
 test.beforeAll(async () => {
 	await fs.mkdir(OUTPUT_DIR, { recursive: true });

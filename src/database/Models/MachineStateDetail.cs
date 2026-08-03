@@ -128,4 +128,10 @@ public sealed class MachineStateDetail
     /// </summary>
     [Column("HardwareHealth", DataType = LinqToDB.DataType.BinaryJson), Nullable]
     public string? HardwareHealth { get; set; }
+
+    /// <summary>
+    /// The running agent's build version from AgentVersion telemetry.
+    /// </summary>
+    [Column("AgentVersion"), Nullable]
+    public string? AgentVersion { get; set; }
 }

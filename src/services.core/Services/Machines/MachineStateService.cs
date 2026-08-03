@@ -185,6 +185,7 @@ public sealed class MachineStateService : IMachineStateService
         HardwareHealthPayload? hwHealth = DeserializePayload<HardwareHealthPayload>(latestByType, TelemetryTypeIds.HardwareHealth);
         PackageUpdatesPayload? packages = DeserializePayload<PackageUpdatesPayload>(latestByType, TelemetryTypeIds.PackageUpdates);
         ServiceStatusPayload? services = DeserializePayload<ServiceStatusPayload>(latestByType, TelemetryTypeIds.ServiceStatus);
+        AgentVersionPayload? agentVersion = DeserializePayload<AgentVersionPayload>(latestByType, TelemetryTypeIds.AgentVersion);
 
         List<ServiceEntryDto> failedServices = services?.Services
             .Where(s => string.Equals(s.ActiveState, "failed", StringComparison.OrdinalIgnoreCase))
@@ -220,7 +221,24 @@ public sealed class MachineStateService : IMachineStateService
             TotalServices = services?.Services.Count ?? 0,
             RecentSshSessions = sshSessions,
             TelemetryLastUpdated = state?.LastSeenAt,
+            AgentVersion = NormalizeAgentVersion(agentVersion?.Version),
         };
+    }
+
+    /// <summary>
+    /// Normalizes a reported agent version for display. A blank version is reported as null so the
+    /// UI shows "not reported" rather than an empty value.
+    /// </summary>
+    /// <param name="version">The version string from the latest AgentVersion telemetry payload.</param>
+    /// <returns>The trimmed version, or null when nothing usable was reported.</returns>
+    internal static string? NormalizeAgentVersion(string? version)
+    {
+        if (string.IsNullOrWhiteSpace(version))
+        {
+            return null;
+        }
+
+        return version.Trim();
     }
 
     private static T? DeserializePayload<T>(Dictionary<short, MachineTelemetry> map, short type) where T : class

@@ -396,7 +396,8 @@ public sealed class InitialMigration : Migration
             .WithColumn("DiskInfos").AsString().Nullable()
             .WithColumn("DiskUsages").AsString().Nullable()
             .WithColumn("SshSessions").AsString().Nullable()
-            .WithColumn("HardwareHealth").AsString().Nullable();
+            .WithColumn("HardwareHealth").AsString().Nullable()
+            .WithColumn("AgentVersion").AsString(64).Nullable();
 
         IfDatabase("PostgreSQL").Execute.Sql("""
             ALTER TABLE "MachineStateDetail" ALTER COLUMN "DiskInfos" TYPE jsonb USING "DiskInfos"::jsonb;

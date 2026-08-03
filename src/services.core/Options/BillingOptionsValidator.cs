@@ -15,9 +15,21 @@ public sealed class BillingOptionsValidator : IValidateOptions<BillingOptions>
     /// <inheritdoc/>
     public ValidateOptionsResult Validate(string? name, BillingOptions options)
     {
+        ArgumentNullException.ThrowIfNull(options);
+
         if (options.Enabled && string.IsNullOrWhiteSpace(options.GrpcUrl))
         {
             return ValidateOptionsResult.Fail("Billing:GrpcUrl is required when Billing:Enabled is true.");
+        }
+
+        // A client certificate is useless without its key, and configuring one without the other
+        // would silently fall back to an unauthenticated channel the billing API then rejects.
+        bool hasCertificate = string.IsNullOrWhiteSpace(options.ClientCertificatePath) == false;
+        bool hasKey = string.IsNullOrWhiteSpace(options.ClientCertificateKeyPath) == false;
+        if (hasCertificate != hasKey)
+        {
+            return ValidateOptionsResult.Fail(
+                "Billing:ClientCertificatePath and Billing:ClientCertificateKeyPath must be set together.");
         }
 
         return ValidateOptionsResult.Success;

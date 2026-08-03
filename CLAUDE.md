@@ -81,7 +81,12 @@ pnpm -C src/web test      # also: pnpm -C src/web check  /  pnpm -C src/web buil
 - `agent` — Deployed on managed machines (root privilege). Local SQLite database for queuing telemetry, communicates with server via gRPC and publishes telemetry via gRPC
 - `migrationRunner` — Runs database migrations on startup
 - `database` — Shared: LinqToDB models, FluentMigrator migrations, DatabaseContext
-- `grpc` — Shared: Protobuf definitions (`src/grpc/protos/`) and generated code
+- `grpc` — Shared: the **agent** wire contracts only (`src/grpc/protos/` — registration, configuration, telemetry) and their generated code. Deliberately **not** published: every consumer is inside this repo, and the Go agent generates its own bindings from the raw `.proto` (`src/agent/Makefile` passes `-I ../grpc/protos`).
+- `billing-grpc` — Shared: the **internal control-plane** contract (`src/billing-grpc/protos/BillingService.proto` — `BillingGateway`, `BillingManagement`, `FleetAdmin`) and its generated code. Published as the `Framlux.Vord.BillingGrpc` NuGet package for the closed billing repo to consume.
+
+**The control-plane contract is a separate project on purpose.** One shared contract project meant one assembly, so anything referencing the agent contracts could also see the billing types — a convention, not a constraint. The split makes it a constraint at the project level, but `services.core` and `server` are each still a single assembly, so a `ProjectReference` alone would re-expose the contract to everything in them. `BillingContractBoundaryTests` (in `test/unit/server/Architecture/`) closes that gap by decoding each assembly's IL and failing when any type outside the permitted set touches `Framlux.Vord.BillingGrpc`. The rule is **not** "billing types stay in billing-named code" — the proto also declares `FleetAdmin`, which legitimately appears in fleet-admin code. It is: *the internal control-plane contract is referenced only by the server-side gRPC services that implement it and the `services.core` billing layer that calls it.* Permitted are the namespaces `Framlux.FleetManagement.Services.Core.Billing` and `Framlux.FleetManagement.Server.Endpoints.Web.Billing`, plus exactly three types — `BillingGatewayService`, `FleetAdminService` and `ServiceCollectionExtensions` (the composition root must name the generated client). `Endpoints.Grpc` is *not* allowed wholesale because the agent-facing `RegistrationService`, `ConfigurationService` and `TelemetryService` share that namespace. Widening the permitted set is a deliberate, reviewable change; a second test fails if an entry on the list no longer uses the contract, so the list cannot rot into a blanket exemption.
+
+**This repository must build with no credentials.** It is open core, and a self-hoster clones it and runs `dotnet restore && dotnet build` with nothing configured. Concretely: `nuget.config` lists nuget.org and nothing else, no project may take a `PackageReference` on a package that only exists on an authenticated feed, and no workflow may read from `framlux/vord-internal`. The billing gRPC contract used to arrive as a `Framlux.Vord.BillingGrpc` package from GitHub Packages — which returns 401 to anonymous restore even for public packages — so the proto now lives here in `src/billing-grpc` and the dependency points the other way: vord publishes the contract, vord-internal consumes it. The generated C# namespace is `Framlux.Vord.BillingGrpc` (it comes from `option csharp_namespace` in the proto, not from the project's `RootNamespace`), so moving the file between projects changes no C# source in either repo — if a split of these contracts ever seems to require editing `using` statements, something else is wrong. Anything that reintroduces an authenticated feed, or a cross-repo read from the closed repo, breaks self-hosting.
 
 **Data flow:** Agent → gRPC → Server (control plane); Agent → gRPC → Server → PostgreSQL
 
@@ -132,9 +137,54 @@ pnpm -C src/web test      # also: pnpm -C src/web check  /  pnpm -C src/web buil
 
 **Server configuration settings (replica-safe cache):** admin-facing settings (`ServerConfigurationSettings`) are read through two layers: a shared Redis read-through in `ServerConfigurationService` (`config:{key}`, 5-min TTL) and Postgres as the source of truth. There is deliberately **no per-process in-memory layer** — a third layer was removed once it was found to have no production readers, and reintroducing one would put a replica-local copy behind the shared cache that nothing can invalidate promptly. Redis misses fall through to `IServerSettingsReader.GetSettingFromDatabaseAsync` (in the `database` project), which always reads the database, so a just-invalidated key is never re-seeded stale. Every write path — REST `AdminHandler` and gRPC `FleetAdminService` — must, **after commit**, call `ServerSettingsInvalidation.InvalidateAsync`, which deletes the Redis key; it is best-effort, with the Redis TTL as the correctness backstop. Both write paths validate through the single `ServerSettingValidation` helper. The `database` project takes no Redis dependency.
 
+**Internal gRPC is mutual TLS on its own port — never on the agent port.** `BillingGatewayService` and `FleetAdminService` are reached only over the `InternalGrpc` endpoint (default 12236), a Kestrel listener bound in `Startup/InternalGrpcEndpoint.cs` with `ClientCertificateMode.RequireCertificate` and a chain check against the internal CA alone (`X509ChainTrustMode.CustomRootTrust` — the machine trust store is deliberately not consulted). The agent endpoint (12234) must keep its current plain configuration forever: agents authenticate with an API key, have no client certificate, and requiring one there would refuse the entire fleet. Transport validity is not the authorisation decision — `CertificateSubjectAuthorizer` additionally matches the caller's certificate against `InternalGrpc:AllowedClientSubjects` (full subject DN, common name, or any DNS SAN; exact and case-insensitive). Without that list every certificate the internal CA ever issued would be accepted, which is no stronger than the shared secret this replaced, so `InternalGrpcOptionsValidator` refuses to start an enabled-but-subjectless endpoint. Both services stay gated by `Billing:Enabled`, and when `InternalGrpc:Enabled` is off they still fail closed because no caller on a plain-text port can present a certificate. Outbound calls to billing-api work the same way in reverse: `Billing:ClientCertificatePath` / `ClientCertificateKeyPath` / `ServerCaPath` feed `MutualTlsHandlerFactory`, so this process's identity is a mounted file, never a header or an embedded secret. There is no shared internal key anywhere in the system; do not reintroduce one.
+
 **Antiforgery (CSRF):** ASP.NET Core antiforgery is registered globally (`AntiforgeryStartup.ConfigureOptions`) and **every state-changing FastEndpoints endpoint** (verb other than GET/HEAD/OPTIONS) is automatically opted in via the FE `Endpoints.Configurator`. The middleware enforces on form-encoded and multipart content types only; JSON requests are unaffected. The runtime skip predicate (`AntiforgeryStartup.ShouldSkipAntiforgery`) bypasses the check when the request did not carry the auth cookie (API-key callers etc.). To opt a specific endpoint out — for example a webhook that authenticates via HMAC signature — attach `[SkipAntiforgery]` to the endpoint class AND add its full type name to `AntiforgeryOptOutAllowlist.Entries`. A regression test (`AntiforgeryEnrollmentRegressionTests`) fails if those two diverge, so every opt-out is a deliberate, reviewable change.
 
 **Email (Resend) is optional:** a missing `Resend:ApiKey` is a supported self-hosted deployment, not a failure — `ResendOptionsValidator` only fails startup when a key is configured without `Resend:FromEmail`, since Resend rejects sends from an unverified address and that rejection would otherwise be invisible. Every `IEmailService` method returns `EmailDeliveryOutcome` with three states — `Sent`, `Skipped`, `Failed` — instead of throwing or returning bool. `Skipped` means no provider is configured and is terminal success: callers must never retry it or record it as a delivery failure. Any new `IEmailService` consumer must switch on all three states explicitly rather than treating non-`Sent` as an error.
+
+## Releases
+
+Trunk-based: `main` is the only long-lived branch. There is no `prod` branch — releases are cut by
+pushing a **tag**, and `.github/workflows/prod.yaml` derives the version from the tag name. Nothing
+reads `<Version>` out of a csproj at release time any more, so a published artifact can never
+disagree with the ref that built it.
+
+| Tag | Builds and publishes | Does NOT touch |
+| --- | --- | --- |
+| `agent-v<semver>` (e.g. `agent-v2.9.0`) | Go agent for linux amd64/arm64/386/armv7 — tarball artifacts plus deb/rpm packaged by nfpm and pushed to Gemfury. | Any container |
+| `server-v<semver>` (e.g. `server-v2.9.0`) | `api-server`, `migration_runner`, `services-worker` (via `dotnet publish /t:PublishContainer -p:Version=…`) and the `web` container, each tagged `<semver>` and `latest`. Runs the full .NET unit/functional/integration suites first. | The agent |
+| `billinggrpc-v<semver>` (e.g. `billinggrpc-v1.18.0`) | `Framlux.Vord.BillingGrpc` — the internal control-plane contract in `src/billing-grpc/protos` — packed with `-p:Version` from the tag and pushed to nuget.org (skipped with a warning while `NUGET_ORG_API_KEY` is unset) and to GitHub Packages. | Any container, the agent, or the agent contracts in `src/grpc` |
+
+There is no tag prefix for the agent contracts in `src/grpc`, and there must not be one: nothing
+outside this repository consumes them as a package. `Framlux.Vord.BillingGrpc` 1.17.0 is already
+published, so the next control-plane release is `billinggrpc-v1.18.0` or above.
+
+**Agent and server versions are independent.** The agent used to inherit `src/server/server.csproj`'s
+`<Version>`; it no longer does. Bump either on its own cadence. The two version lines share a
+starting point only because the agent's first independent tag must not regress below the last
+version it shipped under the old lockstep scheme (package managers refuse a "downgrade").
+
+Cutting a release:
+
+```bash
+git switch main && git pull            # release from main only; the tag must point at a green commit
+git tag agent-v2.9.0                   # or server-v2.9.0
+git push origin agent-v2.9.0
+```
+
+- Use plain `MAJOR.MINOR.PATCH`. The workflow rejects a tag that lacks a known prefix or a semver.
+  Pre-release suffixes parse, but avoid them for `agent-v*` — deb/rpm version ordering for
+  pre-releases is not what you would expect.
+- The csproj `<Version>` elements are now only a local-dev default; the container tag comes from the
+  git tag. Keep them roughly in step for sanity, but they are not the release source of truth.
+- The pre-existing bare `v*` tags (`v2.8.5` and earlier) belong to the old scheme and trigger
+  nothing. Leave them alone; do not reuse the bare prefix.
+- Deployment is still a separate, deliberate step: ArgoCD syncs the `framlux/stack` repo's `main`
+  branch, where each image tag is pinned explicitly. Publishing an image does not deploy it —
+  bump the tag in `stack/clusters/prod/apps/vord-platform/base/**` to roll it out.
+- Locally, `make -C src/agent build` derives its version from `git describe --tags --match 'agent-v*'`,
+  so it only ever sees agent tags, never `server-v*` or the old `v*`.
 
 ## Planning Rules
 - Before writing a plan or implementation, always check what work has ALREADY been completed in the codebase. Diff against recent commits and existing file state. Never include already-done items in plans.

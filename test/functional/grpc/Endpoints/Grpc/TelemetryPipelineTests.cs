@@ -289,6 +289,689 @@ public sealed class TelemetryPipelineTests
         await Assert.That(detail!.MemoryUsedBytes).IsEqualTo(24_000_000_000);
     }
 
+    [Test]
+    public async Task Pipeline_AgentVersion_RoundTripsToTelemetryHistoryAndDetailTable()
+    {
+        // Arrange
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+
+        string apiKey = "pipeline-agent-version-key";
+        (long machineId, int tenantId) = await SeedMachineWithStateRows(db, apiKey);
+
+        using GrpcChannel channel = CreateChannel(factory);
+        Telemetry.TelemetryClient client = new(channel);
+
+        Metadata headers = new() { { "x-api-key", apiKey } };
+        string eventId = Guid.NewGuid().ToString("N");
+
+        TelemetryEnvelope envelope = new()
+        {
+            BatchId = Guid.NewGuid().ToString("N"),
+            AgentTimestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            Items =
+            {
+                new TelemetryItem
+                {
+                    EventId = eventId,
+                    Type = TelemetryTypes.AgentVersionType,
+                    AgentVersion = new AgentVersionRecord { Version = "1.16.0" }
+                }
+            }
+        };
+
+        // Act
+        TelemetryAck ack = await client.SubmitTelemetryAsync(envelope, headers: headers);
+        await Assert.That(ack.Success).IsTrue();
+
+        // The version is retained as history in MachineTelemetry, stamped with the agent version type.
+        MachineTelemetry? row = await db.MachineTelemetry
+            .FirstOrDefaultAsync(t => t.SourceEventId == eventId);
+        await Assert.That(row).IsNotNull();
+        await Assert.That(row!.TelemetryType).IsEqualTo(TelemetryTypeIds.AgentVersion);
+        await Assert.That(row.Payload).Contains("1.16.0");
+
+        await ProjectRowsAsync(db, row);
+
+        // Assert — the current value lands on the machine's detail row.
+        MachineStateDetail? detail = await db.MachineStateDetails
+            .FirstOrDefaultAsync(d => d.MachineId == machineId);
+        await Assert.That(detail).IsNotNull();
+        await Assert.That(detail!.AgentVersion).IsEqualTo("1.16.0");
+    }
+
+    [Test]
+    public async Task Pipeline_AgentVersionWithoutVersion_LeavesTheRecordedVersionInPlace()
+    {
+        // Intent: an agent that reports no version must not wipe the version already recorded, so
+        // support keeps the last known version instead of seeing it disappear.
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+
+        string apiKey = "pipeline-agent-version-empty-key";
+        (long machineId, int tenantId) = await SeedMachineWithStateRows(db, apiKey);
+        await db.GetTable<MachineStateDetail>().Where(d => d.MachineId == machineId)
+            .Set(d => d.AgentVersion, "1.15.3").UpdateAsync();
+
+        using GrpcChannel channel = CreateChannel(factory);
+        Telemetry.TelemetryClient client = new(channel);
+
+        Metadata headers = new() { { "x-api-key", apiKey } };
+        string eventId = Guid.NewGuid().ToString("N");
+
+        TelemetryEnvelope envelope = new()
+        {
+            BatchId = Guid.NewGuid().ToString("N"),
+            AgentTimestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            Items =
+            {
+                new TelemetryItem
+                {
+                    EventId = eventId,
+                    Type = TelemetryTypes.AgentVersionType,
+                    AgentVersion = new AgentVersionRecord()
+                }
+            }
+        };
+
+        TelemetryAck ack = await client.SubmitTelemetryAsync(envelope, headers: headers);
+        await Assert.That(ack.Success).IsTrue();
+
+        MachineTelemetry? row = await db.MachineTelemetry
+            .FirstOrDefaultAsync(t => t.SourceEventId == eventId);
+        await Assert.That(row).IsNotNull();
+
+        await ProjectRowsAsync(db, row!);
+
+        MachineStateDetail? detail = await db.MachineStateDetails
+            .FirstOrDefaultAsync(d => d.MachineId == machineId);
+        await Assert.That(detail!.AgentVersion).IsEqualTo("1.15.3");
+    }
+
+    [Test]
+    public async Task Pipeline_SystemInfo_RoundTripsCoreCountAndMemoryToStateTables()
+    {
+        // Intent: the inventory columns the fleet list and machine detail page read must survive the
+        // proto to stored-JSON to parser round-trip. Core count and total memory are the two that a
+        // name-only fixture cannot protect, because the proto calls them cpu_physical_cores and
+        // physical_memory rather than anything the projection column names suggest.
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+
+        string apiKey = "pipeline-system-info-key";
+        (long machineId, int tenantId) = await SeedMachineWithStateRows(db, apiKey);
+
+        using GrpcChannel channel = CreateChannel(factory);
+        Telemetry.TelemetryClient client = new(channel);
+
+        Metadata headers = new() { { "x-api-key", apiKey } };
+        string eventId = Guid.NewGuid().ToString("N");
+
+        TelemetryEnvelope envelope = new()
+        {
+            BatchId = Guid.NewGuid().ToString("N"),
+            AgentTimestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            Items =
+            {
+                new TelemetryItem
+                {
+                    EventId = eventId,
+                    Type = TelemetryTypes.SystemInfoType,
+                    SystemInfo = new SystemInfoRecord
+                    {
+                        Hostname = "web-01",
+                        HardwareModel = "PowerEdge R740",
+                        HardwareVendor = "Dell",
+                        HardwareSerial = "SVC123",
+                        CpuBrand = "Xeon Gold 6248",
+                        CpuPhysicalCores = 16,
+                        CpuLogicalCores = 32,
+                        PhysicalMemory = 34_359_738_368,
+                        UptimeSeconds = 86_400,
+                        BiosVersion = "2.1.0",
+                        IpAddresses = { "10.0.0.1" }
+                    }
+                }
+            }
+        };
+
+        TelemetryAck ack = await client.SubmitTelemetryAsync(envelope, headers: headers);
+        await Assert.That(ack.Success).IsTrue();
+
+        MachineTelemetry? row = await db.MachineTelemetry
+            .FirstOrDefaultAsync(t => t.SourceEventId == eventId);
+        await Assert.That(row).IsNotNull();
+
+        await ProjectRowsAsync(db, row!);
+
+        MachineStateSummary? summary = await db.MachineStateSummaries
+            .FirstOrDefaultAsync(s => s.MachineId == machineId);
+        await Assert.That(summary).IsNotNull();
+        await Assert.That(summary!.Hostname).IsEqualTo("web-01");
+        await Assert.That(summary.HardwareModel).IsEqualTo("PowerEdge R740");
+        await Assert.That(summary.IpAddresses).IsNotNull();
+
+        MachineStateDetail? detail = await db.MachineStateDetails
+            .FirstOrDefaultAsync(d => d.MachineId == machineId);
+        await Assert.That(detail).IsNotNull();
+        await Assert.That(detail!.HardwareVendor).IsEqualTo("Dell");
+        await Assert.That(detail.HardwareSerial).IsEqualTo("SVC123");
+        await Assert.That(detail.CpuBrand).IsEqualTo("Xeon Gold 6248");
+        await Assert.That(detail.CpuCores).IsEqualTo(16);
+        await Assert.That(detail.MemoryTotalBytes).IsEqualTo(34_359_738_368L);
+        await Assert.That(detail.UptimeSeconds).IsEqualTo(86_400L);
+        await Assert.That(detail.BiosVersion).IsEqualTo("2.1.0");
+    }
+
+    [Test]
+    public async Task Pipeline_OsVersion_RoundTripsNameVersionAndKernelToStateTables()
+    {
+        // Intent: OsName and OsVersion feed the fleet list, and the kernel string the agent reports in
+        // the record's build field feeds the machine detail page.
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+
+        string apiKey = "pipeline-os-version-key";
+        (long machineId, int tenantId) = await SeedMachineWithStateRows(db, apiKey);
+
+        using GrpcChannel channel = CreateChannel(factory);
+        Telemetry.TelemetryClient client = new(channel);
+
+        Metadata headers = new() { { "x-api-key", apiKey } };
+        string eventId = Guid.NewGuid().ToString("N");
+
+        TelemetryEnvelope envelope = new()
+        {
+            BatchId = Guid.NewGuid().ToString("N"),
+            AgentTimestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            Items =
+            {
+                new TelemetryItem
+                {
+                    EventId = eventId,
+                    Type = TelemetryTypes.OsVersionType,
+                    OsVersion = new OsVersionRecord
+                    {
+                        Name = "Ubuntu",
+                        Version = "22.04",
+                        Major = 22,
+                        Minor = 4,
+                        Build = "5.15.0-91-generic",
+                        Platform = "ubuntu",
+                        Codename = "jammy"
+                    }
+                }
+            }
+        };
+
+        TelemetryAck ack = await client.SubmitTelemetryAsync(envelope, headers: headers);
+        await Assert.That(ack.Success).IsTrue();
+
+        MachineTelemetry? row = await db.MachineTelemetry
+            .FirstOrDefaultAsync(t => t.SourceEventId == eventId);
+        await Assert.That(row).IsNotNull();
+
+        await ProjectRowsAsync(db, row!);
+
+        MachineStateSummary? summary = await db.MachineStateSummaries
+            .FirstOrDefaultAsync(s => s.MachineId == machineId);
+        await Assert.That(summary).IsNotNull();
+        await Assert.That(summary!.OsName).IsEqualTo("Ubuntu");
+        await Assert.That(summary.OsVersion).IsEqualTo("22.04");
+
+        MachineStateDetail? detail = await db.MachineStateDetails
+            .FirstOrDefaultAsync(d => d.MachineId == machineId);
+        await Assert.That(detail).IsNotNull();
+        await Assert.That(detail!.Kernel).IsEqualTo("5.15.0-91-generic");
+    }
+
+    [Test]
+    public async Task Pipeline_CpuInfo_RoundTripsProcessorTypeAndCoreCountsToDetailTable()
+    {
+        // Intent: the physical core count is declared as a string on CpuInfoRecord, so the projection
+        // must convert it rather than read it as a number and discard the whole row.
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+
+        string apiKey = "pipeline-cpu-info-key";
+        (long machineId, int tenantId) = await SeedMachineWithStateRows(db, apiKey);
+
+        using GrpcChannel channel = CreateChannel(factory);
+        Telemetry.TelemetryClient client = new(channel);
+
+        Metadata headers = new() { { "x-api-key", apiKey } };
+        string eventId = Guid.NewGuid().ToString("N");
+
+        TelemetryEnvelope envelope = new()
+        {
+            BatchId = Guid.NewGuid().ToString("N"),
+            AgentTimestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            Items =
+            {
+                new TelemetryItem
+                {
+                    EventId = eventId,
+                    Type = TelemetryTypes.CpuInfoType,
+                    CpuInfo = new CpuInfoRecord
+                    {
+                        DeviceId = "CPU0",
+                        Model = "Intel(R) Xeon(R) Gold 6248",
+                        ProcessorType = "x86_64",
+                        NumberOfCores = "2",
+                        LogicalProcessors = 8
+                    }
+                }
+            }
+        };
+
+        TelemetryAck ack = await client.SubmitTelemetryAsync(envelope, headers: headers);
+        await Assert.That(ack.Success).IsTrue();
+
+        MachineTelemetry? row = await db.MachineTelemetry
+            .FirstOrDefaultAsync(t => t.SourceEventId == eventId);
+        await Assert.That(row).IsNotNull();
+
+        await ProjectRowsAsync(db, row!);
+
+        MachineStateDetail? detail = await db.MachineStateDetails
+            .FirstOrDefaultAsync(d => d.MachineId == machineId);
+        await Assert.That(detail).IsNotNull();
+        await Assert.That(detail!.CpuType).IsEqualTo("x86_64");
+        await Assert.That(detail.CpuPhysicalCpus).IsEqualTo(2);
+        await Assert.That(detail.CpuLogicalCpus).IsEqualTo(8);
+    }
+
+    [Test]
+    public async Task Pipeline_MemoryInfo_RoundTripsSwapTotalsToDetailTable()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+
+        string apiKey = "pipeline-memory-info-key";
+        (long machineId, int tenantId) = await SeedMachineWithStateRows(db, apiKey);
+
+        using GrpcChannel channel = CreateChannel(factory);
+        Telemetry.TelemetryClient client = new(channel);
+
+        Metadata headers = new() { { "x-api-key", apiKey } };
+        string eventId = Guid.NewGuid().ToString("N");
+
+        TelemetryEnvelope envelope = new()
+        {
+            BatchId = Guid.NewGuid().ToString("N"),
+            AgentTimestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            Items =
+            {
+                new TelemetryItem
+                {
+                    EventId = eventId,
+                    Type = TelemetryTypes.MemoryInfoType,
+                    MemoryInfo = new MemoryInfoRecord
+                    {
+                        MemoryTotal = 34_359_738_368,
+                        MemoryFree = 8_589_934_592,
+                        MemoryAvailable = 12_884_901_888,
+                        SwapTotal = 8_589_934_592,
+                        SwapFree = 4_294_967_296
+                    }
+                }
+            }
+        };
+
+        TelemetryAck ack = await client.SubmitTelemetryAsync(envelope, headers: headers);
+        await Assert.That(ack.Success).IsTrue();
+
+        MachineTelemetry? row = await db.MachineTelemetry
+            .FirstOrDefaultAsync(t => t.SourceEventId == eventId);
+        await Assert.That(row).IsNotNull();
+
+        await ProjectRowsAsync(db, row!);
+
+        MachineStateDetail? detail = await db.MachineStateDetails
+            .FirstOrDefaultAsync(d => d.MachineId == machineId);
+        await Assert.That(detail).IsNotNull();
+        await Assert.That(detail!.SwapTotalBytes).IsEqualTo(8_589_934_592L);
+        await Assert.That(detail.SwapFreeBytes).IsEqualTo(4_294_967_296L);
+    }
+
+    [Test]
+    public async Task Pipeline_PackageUpdates_CountsPendingAndSecurityUpdatesIntoSummary()
+    {
+        // Intent: PackageUpdatesRecord carries only the update list, so the fleet list's pending and
+        // security counters are derived from it during projection.
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+
+        string apiKey = "pipeline-package-updates-key";
+        (long machineId, int tenantId) = await SeedMachineWithStateRows(db, apiKey);
+
+        using GrpcChannel channel = CreateChannel(factory);
+        Telemetry.TelemetryClient client = new(channel);
+
+        Metadata headers = new() { { "x-api-key", apiKey } };
+        string eventId = Guid.NewGuid().ToString("N");
+
+        TelemetryEnvelope envelope = new()
+        {
+            BatchId = Guid.NewGuid().ToString("N"),
+            AgentTimestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            Items =
+            {
+                new TelemetryItem
+                {
+                    EventId = eventId,
+                    Type = TelemetryTypes.PackageUpdatesType,
+                    PackageUpdates = new PackageUpdatesRecord
+                    {
+                        PackageManager = "apt",
+                        Updates =
+                        {
+                            new PackageUpdate { Name = "openssl", CurrentVersion = "3.0.2", AvailableVersion = "3.0.13", IsSecurityUpdate = true },
+                            new PackageUpdate { Name = "curl", CurrentVersion = "7.81.0", AvailableVersion = "7.81.1", IsSecurityUpdate = true },
+                            new PackageUpdate { Name = "vim", CurrentVersion = "8.2", AvailableVersion = "8.3", IsSecurityUpdate = false }
+                        }
+                    }
+                }
+            }
+        };
+
+        TelemetryAck ack = await client.SubmitTelemetryAsync(envelope, headers: headers);
+        await Assert.That(ack.Success).IsTrue();
+
+        MachineTelemetry? row = await db.MachineTelemetry
+            .FirstOrDefaultAsync(t => t.SourceEventId == eventId);
+        await Assert.That(row).IsNotNull();
+
+        await ProjectRowsAsync(db, row!);
+
+        MachineStateSummary? summary = await db.MachineStateSummaries
+            .FirstOrDefaultAsync(s => s.MachineId == machineId);
+        await Assert.That(summary).IsNotNull();
+        await Assert.That(summary!.PendingUpdates).IsEqualTo(3);
+        await Assert.That(summary.SecurityUpdates).IsEqualTo(2);
+    }
+
+    [Test]
+    public async Task Pipeline_ServiceStatus_CountsTotalAndFailedServicesIntoSummary()
+    {
+        // Intent: ServiceStatusRecord carries only the unit list, so the fleet list's total and failed
+        // service counters are derived from it, with "failed" read from the systemd active state.
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+
+        string apiKey = "pipeline-service-status-key";
+        (long machineId, int tenantId) = await SeedMachineWithStateRows(db, apiKey);
+
+        using GrpcChannel channel = CreateChannel(factory);
+        Telemetry.TelemetryClient client = new(channel);
+
+        Metadata headers = new() { { "x-api-key", apiKey } };
+        string eventId = Guid.NewGuid().ToString("N");
+
+        TelemetryEnvelope envelope = new()
+        {
+            BatchId = Guid.NewGuid().ToString("N"),
+            AgentTimestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            Items =
+            {
+                new TelemetryItem
+                {
+                    EventId = eventId,
+                    Type = TelemetryTypes.ServiceStatusType,
+                    ServiceStatus = new ServiceStatusRecord
+                    {
+                        Services =
+                        {
+                            new ServiceEntry { Unit = "ssh.service", LoadState = "loaded", ActiveState = "active", SubState = "running" },
+                            new ServiceEntry { Unit = "nginx.service", LoadState = "loaded", ActiveState = "failed", SubState = "failed" },
+                            new ServiceEntry { Unit = "cron.service", LoadState = "loaded", ActiveState = "active", SubState = "running" },
+                            new ServiceEntry { Unit = "postgresql.service", LoadState = "loaded", ActiveState = "inactive", SubState = "dead" }
+                        }
+                    }
+                }
+            }
+        };
+
+        TelemetryAck ack = await client.SubmitTelemetryAsync(envelope, headers: headers);
+        await Assert.That(ack.Success).IsTrue();
+
+        MachineTelemetry? row = await db.MachineTelemetry
+            .FirstOrDefaultAsync(t => t.SourceEventId == eventId);
+        await Assert.That(row).IsNotNull();
+
+        await ProjectRowsAsync(db, row!);
+
+        MachineStateSummary? summary = await db.MachineStateSummaries
+            .FirstOrDefaultAsync(s => s.MachineId == machineId);
+        await Assert.That(summary).IsNotNull();
+        await Assert.That(summary!.TotalServices).IsEqualTo(4);
+        await Assert.That(summary.FailedServices).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task Pipeline_HardwareHealth_RoundTripsIssueFlagsToSummary()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+
+        string apiKey = "pipeline-hardware-health-key";
+        (long machineId, int tenantId) = await SeedMachineWithStateRows(db, apiKey);
+
+        using GrpcChannel channel = CreateChannel(factory);
+        Telemetry.TelemetryClient client = new(channel);
+
+        Metadata headers = new() { { "x-api-key", apiKey } };
+        string eventId = Guid.NewGuid().ToString("N");
+
+        TelemetryEnvelope envelope = new()
+        {
+            BatchId = Guid.NewGuid().ToString("N"),
+            AgentTimestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            Items =
+            {
+                new TelemetryItem
+                {
+                    EventId = eventId,
+                    Type = TelemetryTypes.HardwareHealthType,
+                    HardwareHealth = new HardwareHealthRecord
+                    {
+                        DiskSmart = { new DiskSmartReading { Device = "/dev/sda", Model = "Samsung", HealthStatus = "FAILED" } },
+                        Fans = { new FanReading { Name = "fan1", Rpm = 0, Status = "critical" } },
+                        PowerSupplies = { new PowerSupplyReading { Name = "psu1", Watts = 750, Status = "OK" } }
+                    }
+                }
+            }
+        };
+
+        TelemetryAck ack = await client.SubmitTelemetryAsync(envelope, headers: headers);
+        await Assert.That(ack.Success).IsTrue();
+
+        MachineTelemetry? row = await db.MachineTelemetry
+            .FirstOrDefaultAsync(t => t.SourceEventId == eventId);
+        await Assert.That(row).IsNotNull();
+
+        await ProjectRowsAsync(db, row!);
+
+        MachineStateSummary? summary = await db.MachineStateSummaries
+            .FirstOrDefaultAsync(s => s.MachineId == machineId);
+        await Assert.That(summary).IsNotNull();
+        await Assert.That(summary!.HasDiskHealthIssue).IsTrue();
+        await Assert.That(summary.HasHardwareIssue).IsTrue();
+    }
+
+    [Test]
+    public async Task Pipeline_AllInventoryAndUsageTelemetry_PopulatesEveryMappedStateColumn()
+    {
+        // Intent: one submission carrying every telemetry type, asserted column by column. This is the
+        // guard against a projection key drifting away from the proto field the server actually writes:
+        // a stale key resolves to null here rather than agreeing with a hand-written fixture.
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+
+        string apiKey = "pipeline-every-column-key";
+        (long machineId, int tenantId) = await SeedMachineWithStateRows(db, apiKey);
+
+        using GrpcChannel channel = CreateChannel(factory);
+        Telemetry.TelemetryClient client = new(channel);
+
+        Metadata headers = new() { { "x-api-key", apiKey } };
+
+        TelemetryEnvelope envelope = new()
+        {
+            BatchId = Guid.NewGuid().ToString("N"),
+            AgentTimestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            Items =
+            {
+                new TelemetryItem
+                {
+                    EventId = Guid.NewGuid().ToString("N"),
+                    Type = TelemetryTypes.SystemInfoType,
+                    SystemInfo = new SystemInfoRecord
+                    {
+                        Hostname = "db-07",
+                        HardwareModel = "ProLiant DL380",
+                        HardwareVendor = "HPE",
+                        HardwareSerial = "HP-99",
+                        CpuBrand = "EPYC 7443",
+                        CpuPhysicalCores = 24,
+                        PhysicalMemory = 68_719_476_736,
+                        UptimeSeconds = 172_800,
+                        BiosVersion = "U30",
+                        IpAddresses = { "10.1.2.3" }
+                    }
+                },
+                new TelemetryItem
+                {
+                    EventId = Guid.NewGuid().ToString("N"),
+                    Type = TelemetryTypes.OsVersionType,
+                    OsVersion = new OsVersionRecord { Name = "Debian GNU/Linux", Version = "12", Build = "6.1.0-18-amd64" }
+                },
+                new TelemetryItem
+                {
+                    EventId = Guid.NewGuid().ToString("N"),
+                    Type = TelemetryTypes.CpuInfoType,
+                    CpuInfo = new CpuInfoRecord { ProcessorType = "amd64", NumberOfCores = "24", LogicalProcessors = 48 }
+                },
+                new TelemetryItem
+                {
+                    EventId = Guid.NewGuid().ToString("N"),
+                    Type = TelemetryTypes.MemoryInfoType,
+                    MemoryInfo = new MemoryInfoRecord { SwapTotal = 17_179_869_184, SwapFree = 17_179_869_184 }
+                },
+                new TelemetryItem
+                {
+                    EventId = Guid.NewGuid().ToString("N"),
+                    Type = TelemetryTypes.DiskInfoType,
+                    DiskInfo = new DiskInfoRecord
+                    {
+                        Disks = { new DiskInfoEntry { Device = "/dev/sda1", MountPoint = "/", FsType = "ext4", TotalBytes = 500_107_862_016 } }
+                    }
+                },
+                new TelemetryItem
+                {
+                    EventId = Guid.NewGuid().ToString("N"),
+                    Type = TelemetryTypes.CpuUtilizationType,
+                    CpuUtilization = new CpuUtilizationRecord { CpuUsagePercent = 31 }
+                },
+                new TelemetryItem
+                {
+                    EventId = Guid.NewGuid().ToString("N"),
+                    Type = TelemetryTypes.MemoryUtilizationType,
+                    MemoryUtilization = new MemoryUtilizationRecord { MemoryUsagePercent = 42, MemoryUsed = 28_991_029_248 }
+                },
+                new TelemetryItem
+                {
+                    EventId = Guid.NewGuid().ToString("N"),
+                    Type = TelemetryTypes.DiskUtilizationType,
+                    DiskUtilization = new DiskUtilizationRecord
+                    {
+                        Disks = { new DiskUtilizationEntry { Path = "/", UsagePercent = 51 } }
+                    }
+                },
+                new TelemetryItem
+                {
+                    EventId = Guid.NewGuid().ToString("N"),
+                    Type = TelemetryTypes.PackageUpdatesType,
+                    PackageUpdates = new PackageUpdatesRecord
+                    {
+                        PackageManager = "apt",
+                        Updates =
+                        {
+                            new PackageUpdate { Name = "openssl", IsSecurityUpdate = true },
+                            new PackageUpdate { Name = "vim", IsSecurityUpdate = false }
+                        }
+                    }
+                },
+                new TelemetryItem
+                {
+                    EventId = Guid.NewGuid().ToString("N"),
+                    Type = TelemetryTypes.ServiceStatusType,
+                    ServiceStatus = new ServiceStatusRecord
+                    {
+                        Services =
+                        {
+                            new ServiceEntry { Unit = "ssh.service", ActiveState = "active" },
+                            new ServiceEntry { Unit = "nginx.service", ActiveState = "failed" }
+                        }
+                    }
+                },
+                new TelemetryItem
+                {
+                    EventId = Guid.NewGuid().ToString("N"),
+                    Type = TelemetryTypes.AgentVersionType,
+                    AgentVersion = new AgentVersionRecord { Version = "1.16.0" }
+                }
+            }
+        };
+
+        TelemetryAck ack = await client.SubmitTelemetryAsync(envelope, headers: headers);
+        await Assert.That(ack.Success).IsTrue();
+
+        List<MachineTelemetry> rows = await db.MachineTelemetry
+            .Where(t => t.MachineId == machineId)
+            .OrderBy(t => t.Id)
+            .ToListAsync();
+
+        await ProjectRowsAsync(db, rows.ToArray());
+
+        MachineStateSummary? summary = await db.MachineStateSummaries
+            .FirstOrDefaultAsync(s => s.MachineId == machineId);
+        await Assert.That(summary).IsNotNull();
+        await Assert.That(summary!.Hostname).IsEqualTo("db-07");
+        await Assert.That(summary.HardwareModel).IsEqualTo("ProLiant DL380");
+        await Assert.That(summary.IpAddresses).IsNotNull();
+        await Assert.That(summary.OsName).IsEqualTo("Debian GNU/Linux");
+        await Assert.That(summary.OsVersion).IsEqualTo("12");
+        await Assert.That(summary.CpuUsagePercent).IsEqualTo(31);
+        await Assert.That(summary.MemoryUsagePercent).IsEqualTo(42);
+        await Assert.That(summary.MaxDiskUsagePercent).IsEqualTo(51);
+        await Assert.That(summary.PendingUpdates).IsEqualTo(2);
+        await Assert.That(summary.SecurityUpdates).IsEqualTo(1);
+        await Assert.That(summary.TotalServices).IsEqualTo(2);
+        await Assert.That(summary.FailedServices).IsEqualTo(1);
+
+        MachineStateDetail? detail = await db.MachineStateDetails
+            .FirstOrDefaultAsync(d => d.MachineId == machineId);
+        await Assert.That(detail).IsNotNull();
+        await Assert.That(detail!.HardwareVendor).IsEqualTo("HPE");
+        await Assert.That(detail.HardwareSerial).IsEqualTo("HP-99");
+        await Assert.That(detail.CpuBrand).IsEqualTo("EPYC 7443");
+        await Assert.That(detail.CpuCores).IsEqualTo(24);
+        await Assert.That(detail.MemoryTotalBytes).IsEqualTo(68_719_476_736L);
+        await Assert.That(detail.UptimeSeconds).IsEqualTo(172_800L);
+        await Assert.That(detail.BiosVersion).IsEqualTo("U30");
+        await Assert.That(detail.Kernel).IsEqualTo("6.1.0-18-amd64");
+        await Assert.That(detail.CpuType).IsEqualTo("amd64");
+        await Assert.That(detail.CpuPhysicalCpus).IsEqualTo(24);
+        await Assert.That(detail.CpuLogicalCpus).IsEqualTo(48);
+        await Assert.That(detail.SwapTotalBytes).IsEqualTo(17_179_869_184L);
+        await Assert.That(detail.SwapFreeBytes).IsEqualTo(17_179_869_184L);
+        await Assert.That(detail.MemoryUsedBytes).IsEqualTo(28_991_029_248L);
+        await Assert.That(detail.DiskInfos).IsNotNull();
+        await Assert.That(detail.DiskUsages).IsNotNull();
+        await Assert.That(detail.AgentVersion).IsEqualTo("1.16.0");
+    }
+
     /// <summary>
     /// Projects the supplied raw telemetry rows into the state tables exactly as the streaming
     /// service does: collapse the rows to one patch per machine via the production collapser, then
@@ -301,79 +984,13 @@ public sealed class TelemetryPipelineTests
 
         foreach (MachineStatePatch patch in collapse.Patches)
         {
-            await repo.ApplySummaryPatchAsync(MapSummary(patch), CancellationToken.None);
+            await repo.ApplySummaryPatchAsync(MachineStateStreamingService.MapSummary(patch), CancellationToken.None);
 
             if (patch.HasDetailChanges == true)
             {
-                await repo.ApplyDetailPatchAsync(MapDetail(patch), CancellationToken.None);
+                await repo.ApplyDetailPatchAsync(MachineStateStreamingService.MapDetail(patch), CancellationToken.None);
             }
         }
-    }
-
-    private static MachineSummaryPatch MapSummary(MachineStatePatch patch)
-    {
-        return new MachineSummaryPatch
-        {
-            MachineId = patch.MachineId,
-            LastSeenAt = patch.LastSeenAt,
-            HasSystemInfo = patch.SystemInfo is not null,
-            Hostname = patch.SystemInfo?.Hostname,
-            HardwareModel = patch.SystemInfo?.HardwareModel,
-            IpAddresses = patch.SystemInfo?.IpAddresses,
-            HasOsVersion = patch.OsVersion is not null,
-            OsName = patch.OsVersion?.OsName,
-            OsVersion = patch.OsVersion?.OsVersion,
-            HasCpuUsage = patch.CpuUsage is not null,
-            CpuUsagePercent = patch.CpuUsage?.CpuUsagePercent,
-            HasMemoryUsage = patch.MemoryUsage is not null,
-            MemoryUsagePercent = patch.MemoryUsage?.MemoryUsagePercent,
-            HasDiskUsage = patch.DiskUsage is not null,
-            MaxDiskUsagePercent = patch.DiskUsage?.MaxDiskUsagePercent,
-            HasHardwareHealth = patch.HardwareHealth is not null,
-            HasDiskHealthIssue = patch.HardwareHealth?.HasDiskHealthIssue,
-            HasHardwareIssue = patch.HardwareHealth?.HasHardwareIssue,
-            HasPackageUpdates = patch.PackageUpdates is not null,
-            PendingUpdates = patch.PackageUpdates?.PendingUpdates,
-            SecurityUpdates = patch.PackageUpdates?.SecurityUpdates,
-            HasServiceStatus = patch.ServiceStatus is not null,
-            TotalServices = patch.ServiceStatus?.TotalServices,
-            FailedServices = patch.ServiceStatus?.FailedServices,
-        };
-    }
-
-    private static MachineDetailPatch MapDetail(MachineStatePatch patch)
-    {
-        return new MachineDetailPatch
-        {
-            MachineId = patch.MachineId,
-            HasSystemInfo = patch.SystemInfo is not null,
-            HardwareVendor = patch.SystemInfo?.HardwareVendor,
-            HardwareSerial = patch.SystemInfo?.HardwareSerial,
-            CpuBrand = patch.SystemInfo?.CpuBrand,
-            CpuCores = patch.SystemInfo?.CpuCores,
-            MemoryTotalBytes = patch.SystemInfo?.MemoryTotalBytes,
-            UptimeSeconds = patch.SystemInfo?.UptimeSeconds,
-            BiosVersion = patch.SystemInfo?.BiosVersion,
-            HasOsVersion = patch.OsVersion is not null,
-            Kernel = patch.OsVersion?.Kernel,
-            HasCpuInfo = patch.CpuInfo is not null,
-            CpuType = patch.CpuInfo?.CpuType,
-            CpuPhysicalCpus = patch.CpuInfo?.CpuPhysicalCpus,
-            CpuLogicalCpus = patch.CpuInfo?.CpuLogicalCpus,
-            HasMemoryInfo = patch.MemoryInfo is not null,
-            SwapTotalBytes = patch.MemoryInfo?.SwapTotalBytes,
-            SwapFreeBytes = patch.MemoryInfo?.SwapFreeBytes,
-            HasMemoryUsage = patch.MemoryUsage is not null,
-            MemoryUsedBytes = patch.MemoryUsage?.MemoryUsedBytes,
-            HasDiskInfo = patch.DiskInfo is not null,
-            DiskInfos = patch.DiskInfo?.DiskInfos,
-            HasDiskUsage = patch.DiskUsage is not null,
-            DiskUsages = patch.DiskUsage?.DiskUsages,
-            HasSshSessions = patch.SshSessions is not null,
-            SshSessions = patch.SshSessions?.SshSessions,
-            HasHardwareHealth = patch.HardwareHealth is not null,
-            HardwareHealth = patch.HardwareHealth?.HardwareHealth,
-        };
     }
 
     private static GrpcChannel CreateChannel(FunctionalTestFactory factory)

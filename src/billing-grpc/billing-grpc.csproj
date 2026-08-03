@@ -1,0 +1,47 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <RootNamespace>Framlux.Vord.BillingGrpc</RootNamespace>
+    <AssemblyName>Framlux.Vord.BillingGrpc</AssemblyName>
+    <GenerateAssemblyInfo>true</GenerateAssemblyInfo>
+    <Version>1.18.0</Version>
+  </PropertyGroup>
+
+  <!-- The internal control-plane contract between vord and vord-internal: BillingGateway,
+       BillingManagement and FleetAdmin. It lives in its own project — and therefore its own
+       assembly — so that the agent contracts in src/grpc cannot see it and it cannot see them.
+       A single shared project would have made the boundary a convention rather than a constraint.
+       This is the only contract project that is published: framlux/vord-internal consumes it as a
+       package, while the agent contracts are consumed only inside this repository. The version
+       stamped into the package comes from the release tag, not from the <Version> above, which is
+       only a local-development default. -->
+  <PropertyGroup>
+    <IsPackable>true</IsPackable>
+    <PackageId>Framlux.Vord.BillingGrpc</PackageId>
+    <Description>Protobuf contracts for the Vord internal control plane: billing gateway, billing management, and fleet administration.</Description>
+    <Authors>Framlux LLC</Authors>
+    <Company>Framlux LLC</Company>
+    <PackageLicenseFile>LICENSE</PackageLicenseFile>
+    <PackageProjectUrl>https://github.com/framlux/vord</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/framlux/vord</RepositoryUrl>
+    <RepositoryType>git</RepositoryType>
+    <PackageTags>vord;grpc;protobuf;billing</PackageTags>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Protobuf Include="protos\*.proto" GrpcServices="Both" />
+    <None Include="LICENSE" Pack="true" PackagePath="" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Grpc.AspNetCore" Version="2.76.0" />
+    <PackageReference Include="Grpc.Tools" Version="2.80.0">
+      <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>
+      <PrivateAssets>all</PrivateAssets>
+    </PackageReference>
+  </ItemGroup>
+
+</Project>

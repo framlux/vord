@@ -7,7 +7,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 // Marketing-screenshot capture configuration. Drives the fleet UI in mock mode
-// (VORD_API_MOCK=true) and writes PNGs to the vord-internal marketing repo.
+// (VORD_API_MOCK=true) and writes PNGs to VORD_SCREENSHOT_DIR, defaulting to
+// src/web/screenshots inside this repository.
 
 const certPath = path.resolve(import.meta.dirname, '../certs/localhost+1.pem');
 const certsExist = fs.existsSync(certPath);

@@ -731,4 +731,21 @@ public class MachineStateServiceTests
         await Assert.That(result.Machines[0].Name).IsEqualTo("zzz-host");
         await Assert.That(result.Machines[1].Name).IsEqualTo("aaa-host");
     }
+
+    [Test]
+    public async Task NormalizeAgentVersion_ReportedVersion_IsTrimmed()
+    {
+        await Assert.That(MachineStateService.NormalizeAgentVersion("1.16.0")).IsEqualTo("1.16.0");
+        await Assert.That(MachineStateService.NormalizeAgentVersion("  1.16.0 ")).IsEqualTo("1.16.0");
+    }
+
+    [Test]
+    public async Task NormalizeAgentVersion_MissingOrBlankVersion_IsNull()
+    {
+        // Intent: an agent that reported nothing usable is surfaced as "not reported" rather than
+        // as an empty string that would render as a blank value in the UI.
+        await Assert.That(MachineStateService.NormalizeAgentVersion(null)).IsNull();
+        await Assert.That(MachineStateService.NormalizeAgentVersion("")).IsNull();
+        await Assert.That(MachineStateService.NormalizeAgentVersion("   ")).IsNull();
+    }
 }

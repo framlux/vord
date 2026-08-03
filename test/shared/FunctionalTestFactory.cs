@@ -57,7 +57,7 @@ public class FunctionalTestFactory : WebApplicationFactory<Program>
     private static readonly object HostCreationLock = new();
 
     private readonly SqliteConnection _dbConnection;
-    private string? _internalApiKey;
+    private string[]? _internalClientSubjects;
 
     /// <summary>
     /// NSubstitute mock for <see cref="IBillingApiClient"/> that replaces the real
@@ -167,12 +167,14 @@ public class FunctionalTestFactory : WebApplicationFactory<Program>
     }
 
     /// <summary>
-    /// Sets the internal API key for billing gRPC authentication.
+    /// Declares the client-certificate subjects the internal billing and fleet-admin gRPC
+    /// services will accept, and installs the middleware that lets a test present one.
     /// Must be called before the first HTTP request.
     /// </summary>
-    public void WithInternalApiKey(string key)
+    /// <param name="subjects">The permitted certificate subjects.</param>
+    public void WithInternalClientSubjects(params string[] subjects)
     {
-        _internalApiKey = key;
+        _internalClientSubjects = subjects;
     }
 
     /// <inheritdoc/>
@@ -189,15 +191,17 @@ public class FunctionalTestFactory : WebApplicationFactory<Program>
     {
         builder.UseEnvironment("Testing");
 
-        if (_internalApiKey is not null)
+        if (_internalClientSubjects is not null)
         {
-            builder.ConfigureAppConfiguration((_, config) =>
+            Dictionary<string, string?> allowedSubjects = new();
+            for (int index = 0; index < _internalClientSubjects.Length; index++)
             {
-                config.AddInMemoryCollection(new Dictionary<string, string?>
-                {
-                    ["InternalApi:Key"] = _internalApiKey
-                });
-            });
+                allowedSubjects[$"InternalGrpc:AllowedClientSubjects:{index}"] = _internalClientSubjects[index];
+            }
+
+            builder.ConfigureAppConfiguration((_, config) => config.AddInMemoryCollection(allowedSubjects));
+            builder.ConfigureTestServices(services =>
+                services.AddSingleton<IStartupFilter, TestClientCertificateStartupFilter>());
         }
 
         builder.ConfigureTestServices(services =>

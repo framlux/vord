@@ -39,7 +39,7 @@ func NewPackagesCollector() *PackagesCollector {
 	return &PackagesCollector{packageManager: pm}
 }
 
-func (c *PackagesCollector) Name() string              { return "package_updates" }
+func (c *PackagesCollector) Name() string                   { return "package_updates" }
 func (c *PackagesCollector) DefaultInterval() time.Duration { return 6 * time.Hour }
 
 type packageUpdate struct {

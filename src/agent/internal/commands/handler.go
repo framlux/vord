@@ -15,10 +15,10 @@ import (
 type CommandType string
 
 const (
-	CommandReboot      CommandType = "reboot"
-	CommandKillProcess CommandType = "kill_process"
-	CommandKillSession CommandType = "kill_session"
-	CommandCheckUpdate CommandType = "check_updates"
+	CommandReboot        CommandType = "reboot"
+	CommandKillProcess   CommandType = "kill_process"
+	CommandKillSession   CommandType = "kill_session"
+	CommandCheckUpdate   CommandType = "check_updates"
 	CommandInstallUpdate CommandType = "install_updates"
 )
 

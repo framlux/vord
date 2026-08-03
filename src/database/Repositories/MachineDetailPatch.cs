@@ -98,6 +98,12 @@ public sealed record MachineDetailPatch
     /// <summary>JSONB object with structured hardware health from HardwareHealth telemetry.</summary>
     public string? HardwareHealth { get; init; }
 
+    /// <summary>True when the AgentVersion-owned detail column should be written.</summary>
+    public bool HasAgentVersion { get; init; }
+
+    /// <summary>The running agent's build version from AgentVersion telemetry.</summary>
+    public string? AgentVersion { get; init; }
+
     /// <summary>
     /// True when at least one detail-bearing telemetry type is present. The caller uses this to
     /// skip an update that would set zero columns.
@@ -105,5 +111,6 @@ public sealed record MachineDetailPatch
     public bool HasAnyDetail =>
         (HasSystemInfo == true) || (HasOsVersion == true) || (HasCpuInfo == true) ||
         (HasMemoryInfo == true) || (HasMemoryUsage == true) || (HasDiskInfo == true) ||
-        (HasDiskUsage == true) || (HasSshSessions == true) || (HasHardwareHealth == true);
+        (HasDiskUsage == true) || (HasSshSessions == true) || (HasHardwareHealth == true) ||
+        (HasAgentVersion == true);
 }

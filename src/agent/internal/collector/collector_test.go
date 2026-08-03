@@ -86,8 +86,8 @@ func TestCollectorNames(t *testing.T) {
 // Intent: Each collector returns its exact expected default interval.
 func TestCollectorDefaultIntervals(t *testing.T) {
 	tests := []struct {
-		collector    Collector
-		wantExact    time.Duration
+		collector Collector
+		wantExact time.Duration
 	}{
 		{NewSSHSessionsCollector(state.New()), 60 * time.Second},
 		{NewHwHealthCollector(), 5 * time.Minute},

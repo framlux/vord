@@ -33,6 +33,7 @@
   </ItemGroup>
 
   <ItemGroup>
+    <ProjectReference Include="..\billing-grpc\billing-grpc.csproj" />
     <ProjectReference Include="..\database\database.csproj" />
     <ProjectReference Include="..\grpc\grpc.csproj" />
     <ProjectReference Include="..\services.core\services.core.csproj" />

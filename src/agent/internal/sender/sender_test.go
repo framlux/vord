@@ -171,7 +171,7 @@ func TestJsonToProto_InvalidJSON(t *testing.T) {
 
 // --- payloadDispatch tests ---
 
-// Intent: All 12 db.Telemetry* constants have entries in payloadDispatch map.
+// Intent: All db.Telemetry* constants have entries in payloadDispatch map.
 func TestPayloadDispatch_AllTypesRegistered(t *testing.T) {
 	allTypes := []db.TelemetryType{
 		db.TelemetrySystemInfo,
@@ -186,6 +186,7 @@ func TestPayloadDispatch_AllTypesRegistered(t *testing.T) {
 		db.TelemetryHardwareHealth,
 		db.TelemetryPackageUpdates,
 		db.TelemetryServiceStatus,
+		db.TelemetryAgentVersion,
 	}
 
 	for _, tt := range allTypes {
@@ -305,6 +306,31 @@ func TestSetPayload_MemoryUsage(t *testing.T) {
 	memPayload := telItem.GetMemoryUtilization()
 	if memPayload == nil {
 		t.Fatal("expected MemoryUtilization payload, got nil")
+	}
+}
+
+// Intent: Agent version JSON correctly maps to the proto AgentVersion payload so the server
+// receives the version on the slow tier instead of an empty oneof.
+func TestSetPayload_AgentVersion(t *testing.T) {
+	store := newTestStore(t)
+	client := &mockTelemetryClient{}
+	s := New(store, client, state.New(), jitter.NewDefault())
+
+	telItem := &pb.TelemetryItem{}
+	item := db.TelemetryQueueItem{
+		ID:       "test-agent-version",
+		ItemType: db.TelemetryAgentVersion,
+		Payload:  `{"version": "1.16.0"}`,
+	}
+
+	s.setPayload(telItem, item)
+
+	versionPayload := telItem.GetAgentVersion()
+	if versionPayload == nil {
+		t.Fatal("expected AgentVersion payload, got nil")
+	}
+	if versionPayload.Version != "1.16.0" {
+		t.Errorf("expected Version=1.16.0, got %q", versionPayload.Version)
 	}
 }
 
@@ -709,6 +735,7 @@ func TestRunTier_SlowTypes(t *testing.T) {
 		db.TelemetryDiskInfo:       true,
 		db.TelemetryHardwareHealth: true,
 		db.TelemetryPackageUpdates: true,
+		db.TelemetryAgentVersion:   true,
 	}
 
 	for _, tt := range SlowTypes {

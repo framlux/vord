@@ -43,6 +43,7 @@ var SlowTypes = []db.TelemetryType{
 	db.TelemetryDiskInfo,
 	db.TelemetryHardwareHealth,
 	db.TelemetryPackageUpdates,
+	db.TelemetryAgentVersion,
 }
 
 const (
@@ -322,6 +323,12 @@ var payloadDispatch = map[db.TelemetryType]payloadEntry{
 		newMsg: func() proto.Message { return &pb.ServiceStatusRecord{} },
 		wrapMsg: func(m proto.Message) *pb.TelemetryItem {
 			return &pb.TelemetryItem{Payload: &pb.TelemetryItem_ServiceStatus{ServiceStatus: m.(*pb.ServiceStatusRecord)}}
+		},
+	},
+	db.TelemetryAgentVersion: {
+		newMsg: func() proto.Message { return &pb.AgentVersionRecord{} },
+		wrapMsg: func(m proto.Message) *pb.TelemetryItem {
+			return &pb.TelemetryItem{Payload: &pb.TelemetryItem_AgentVersion{AgentVersion: m.(*pb.AgentVersionRecord)}}
 		},
 	},
 }

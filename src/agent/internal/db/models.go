@@ -20,6 +20,7 @@ const (
 	TelemetryHardwareHealth TelemetryType = 10
 	TelemetryPackageUpdates TelemetryType = 11
 	TelemetryServiceStatus  TelemetryType = 12
+	TelemetryAgentVersion   TelemetryType = 13
 )
 
 // QueueStatus represents the processing state of a telemetry queue item.

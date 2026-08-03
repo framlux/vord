@@ -20,9 +20,9 @@ import (
 
 // mockNonceStore provides configurable behavior for NonceStore methods.
 type mockNonceStore struct {
-	isUsedFn     func(nonce string) (bool, error)
-	recordFn     func(nonce string) error
-	getKeyFn     func(keyID int32) (*SigningKey, error)
+	isUsedFn       func(nonce string) (bool, error)
+	recordFn       func(nonce string) error
+	getKeyFn       func(keyID int32) (*SigningKey, error)
 	recordedNonces []string
 }
 

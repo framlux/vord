@@ -329,10 +329,21 @@ public static class ServiceCollectionExtensions
         if (billingOpts.Enabled)
         {
             // Billing gRPC client for managing Stripe subscriptions
-            services.AddGrpcClient<BillingManagement.BillingManagementClient>(options =>
+            IHttpClientBuilder billingGrpcClient = services.AddGrpcClient<BillingManagement.BillingManagementClient>(options =>
             {
                 options.Address = new Uri(billingOpts.GrpcUrl);
             });
+
+            // Present this process's client certificate so the billing API can authorise on its
+            // subject. Configured by file path only — nothing is embedded in the image.
+            if (string.IsNullOrWhiteSpace(billingOpts.ClientCertificatePath) == false)
+            {
+                billingGrpcClient.ConfigurePrimaryHttpMessageHandler(() => MutualTlsHandlerFactory.Create(
+                    billingOpts.ClientCertificatePath,
+                    billingOpts.ClientCertificateKeyPath,
+                    billingOpts.ServerCaPath));
+            }
+
             services.AddSingleton<IBillingApiClient, BillingApiClient>();
 
             // Billing webhook handler processes inbound billing events

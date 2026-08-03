@@ -440,7 +440,7 @@ public class MachineStateStreamingServiceTests
         await SeedTelemetryAsync(db,
             Row(1, 100, TelemetryTypeIds.CpuUsage, """{ "cpu_usage_percent": 40 }""", t0),
             Row(2, 100, TelemetryTypeIds.CpuUsage, """{ "cpu_usage_percent": 88 }""", t0.AddMinutes(5)),
-            Row(3, 100, TelemetryTypeIds.OsVersion, """{ "os_name": "Ubuntu", "os_version": "22.04", "kernel": "6.2" }""", t0.AddMinutes(2)));
+            Row(3, 100, TelemetryTypeIds.OsVersion, """{ "name": "Ubuntu", "version": "22.04", "build": "6.2" }""", t0.AddMinutes(2)));
 
         await RunOneLoopIterationAsync(db);
 
@@ -554,7 +554,7 @@ public class MachineStateStreamingServiceTests
         long machineId = 100;
         await SeedSummaryAndDetail(db, machineId);
 
-        string payload = """{"hostname":"web-01","hardware_model":"PowerEdge R740","hardware_vendor":"Dell","hardware_serial":"SN123","cpu_brand":"Xeon","cpu_cores":16,"memory_total_bytes":34359738368,"uptime_seconds":86400,"bios_version":"2.1","ip_addresses":["10.0.0.1"]}""";
+        string payload = """{"hostname":"web-01","hardware_model":"PowerEdge R740","hardware_vendor":"Dell","hardware_serial":"SN123","cpu_brand":"Xeon","cpu_physical_cores":16,"physical_memory":34359738368,"uptime_seconds":86400,"bios_version":"2.1","ip_addresses":["10.0.0.1"]}""";
         await SeedTelemetryAsync(db, Row(1, machineId, TelemetryTypeIds.SystemInfo, payload, FixedClock));
 
         await RunOneLoopIterationAsync(db);
@@ -580,7 +580,7 @@ public class MachineStateStreamingServiceTests
         await SeedSummaryAndDetail(db, machineId);
 
         await SeedTelemetryAsync(db, Row(1, machineId, TelemetryTypeIds.OsVersion,
-            """{"os_name":"Ubuntu","os_version":"22.04","kernel":"5.15.0-91"}""", FixedClock));
+            """{"name":"Ubuntu","version":"22.04","build":"5.15.0-91"}""", FixedClock));
 
         await RunOneLoopIterationAsync(db);
 
@@ -601,7 +601,7 @@ public class MachineStateStreamingServiceTests
         await SeedSummaryAndDetail(db, machineId);
 
         await SeedTelemetryAsync(db, Row(1, machineId, TelemetryTypeIds.CpuInfo,
-            """{"cpu_type":"x86_64","physical_cpus":2,"logical_cpus":8}""", FixedClock));
+            """{"processor_type":"x86_64","number_of_cores":"2","logical_processors":8}""", FixedClock));
 
         await RunOneLoopIterationAsync(db);
 
@@ -620,7 +620,7 @@ public class MachineStateStreamingServiceTests
         await SeedSummaryAndDetail(db, machineId);
 
         await SeedTelemetryAsync(db, Row(1, machineId, TelemetryTypeIds.MemoryInfo,
-            """{"swap_total_bytes":8589934592,"swap_free_bytes":4294967296}""", FixedClock));
+            """{"swap_total":8589934592,"swap_free":4294967296}""", FixedClock));
 
         await RunOneLoopIterationAsync(db);
 
@@ -750,13 +750,13 @@ public class MachineStateStreamingServiceTests
         await SeedSummaryAndDetail(db, machineId);
 
         await SeedTelemetryAsync(db, Row(1, machineId, TelemetryTypeIds.PackageUpdates,
-            """{"pending_updates":42,"security_updates":7}""", FixedClock));
+            """{"package_manager":"apt","updates":[{"name":"openssl","is_security_update":true},{"name":"curl","is_security_update":true},{"name":"vim","is_security_update":false}]}""", FixedClock));
 
         await RunOneLoopIterationAsync(db);
 
         MachineStateSummary summary = await db.MachineStateSummaries.FirstAsync(s => s.MachineId == machineId);
-        await Assert.That(summary.PendingUpdates).IsEqualTo(42);
-        await Assert.That(summary.SecurityUpdates).IsEqualTo(7);
+        await Assert.That(summary.PendingUpdates).IsEqualTo(3);
+        await Assert.That(summary.SecurityUpdates).IsEqualTo(2);
     }
 
     [Test]
@@ -768,13 +768,51 @@ public class MachineStateStreamingServiceTests
         await SeedSummaryAndDetail(db, machineId);
 
         await SeedTelemetryAsync(db, Row(1, machineId, TelemetryTypeIds.ServiceStatus,
-            """{"total_services":120,"failed_services":3}""", FixedClock));
+            """{"services":[{"unit":"ssh.service","active_state":"active"},{"unit":"nginx.service","active_state":"failed"},{"unit":"cron.service","active_state":"active"}]}""", FixedClock));
 
         await RunOneLoopIterationAsync(db);
 
         MachineStateSummary summary = await db.MachineStateSummaries.FirstAsync(s => s.MachineId == machineId);
-        await Assert.That(summary.TotalServices).IsEqualTo(120);
-        await Assert.That(summary.FailedServices).IsEqualTo(3);
+        await Assert.That(summary.TotalServices).IsEqualTo(3);
+        await Assert.That(summary.FailedServices).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task StreamLoop_AgentVersion_ProjectsDetailField()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        DatabaseContext db = dbFactory.Context;
+        long machineId = 113;
+        await SeedSummaryAndDetail(db, machineId);
+
+        await SeedTelemetryAsync(db, Row(1, machineId, TelemetryTypeIds.AgentVersion,
+            """{"version":"1.16.0"}""", FixedClock));
+
+        await RunOneLoopIterationAsync(db);
+
+        MachineStateDetail detail = await db.MachineStateDetails.FirstAsync(d => d.MachineId == machineId);
+        await Assert.That(detail.AgentVersion).IsEqualTo("1.16.0");
+    }
+
+    [Test]
+    public async Task StreamLoop_AgentVersionWithoutVersion_LeavesTheRecordedVersionInPlace()
+    {
+        // Intent: an agent reporting a blank version must never erase the version already projected
+        // for the machine — support would otherwise lose the version on the next empty report.
+        using TestDatabaseFactory dbFactory = new();
+        DatabaseContext db = dbFactory.Context;
+        long machineId = 114;
+        await SeedSummaryAndDetail(db, machineId);
+        await db.GetTable<MachineStateDetail>().Where(d => d.MachineId == machineId)
+            .Set(d => d.AgentVersion, "1.15.3").UpdateAsync();
+
+        await SeedTelemetryAsync(db, Row(1, machineId, TelemetryTypeIds.AgentVersion,
+            """{"version":""}""", FixedClock));
+
+        await RunOneLoopIterationAsync(db);
+
+        MachineStateDetail detail = await db.MachineStateDetails.FirstAsync(d => d.MachineId == machineId);
+        await Assert.That(detail.AgentVersion).IsEqualTo("1.15.3");
     }
 
     [Test]

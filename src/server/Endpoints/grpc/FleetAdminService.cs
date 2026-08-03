@@ -8,13 +8,11 @@ using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Server.Auth;
 using Framlux.FleetManagement.Services.Core.Handlers;
 using Framlux.FleetManagement.Services.Core.Infrastructure;
-using Framlux.FleetManagement.Services.Core.Options;
 using Framlux.FleetManagement.Services.Core.Security;
 using Framlux.FleetManagement.Services.Core.ServerConfiguration;
 using Framlux.Vord.BillingGrpc;
 using Google.Protobuf.WellKnownTypes;
 using Grpc.Core;
-using Microsoft.Extensions.Options;
 using StackExchange.Redis;
 
 namespace Framlux.FleetManagement.Server.Endpoints.Grpc;
@@ -28,7 +26,7 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
     private const int MaxPageSize = 100;
 
     private readonly IServiceScopeFactory _scopeFactory;
-    private readonly InternalApiOptions _internalApiOptions;
+    private readonly IInternalCallerAuthorizer _callerAuthorizer;
     private readonly IOidcSecretProtector _oidcSecretProtector;
     private readonly ILogger<FleetAdminService> _logger;
     private readonly IConnectionMultiplexer _redis;
@@ -38,18 +36,18 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
     /// </summary>
     public FleetAdminService(
         IServiceScopeFactory scopeFactory,
-        IOptions<InternalApiOptions> internalApiOptions,
+        IInternalCallerAuthorizer callerAuthorizer,
         IOidcSecretProtector oidcSecretProtector,
         ILogger<FleetAdminService> logger,
         IConnectionMultiplexer redis)
     {
         ArgumentNullException.ThrowIfNull(scopeFactory);
-        ArgumentNullException.ThrowIfNull(internalApiOptions);
+        ArgumentNullException.ThrowIfNull(callerAuthorizer);
         ArgumentNullException.ThrowIfNull(oidcSecretProtector);
         ArgumentNullException.ThrowIfNull(logger);
         ArgumentNullException.ThrowIfNull(redis);
         _scopeFactory = scopeFactory;
-        _internalApiOptions = internalApiOptions.Value;
+        _callerAuthorizer = callerAuthorizer;
         _oidcSecretProtector = oidcSecretProtector;
         _logger = logger;
         _redis = redis;
@@ -61,7 +59,7 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
     public override async Task<ListUsersResponse> ListUsers(
         ListUsersRequest request, ServerCallContext context)
     {
-        ValidateInternalKey(context);
+        AuthorizeInternalCaller(context);
 
         using IServiceScope scope = _scopeFactory.CreateScope();
         IUserRepository userRepo = scope.ServiceProvider.GetRequiredService<IUserRepository>();
@@ -101,7 +99,7 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
     public override async Task<ListTenantsResponse> ListTenants(
         ListTenantsRequest request, ServerCallContext context)
     {
-        ValidateInternalKey(context);
+        AuthorizeInternalCaller(context);
 
         using IServiceScope scope = _scopeFactory.CreateScope();
         ITenantRepository tenantRepo = scope.ServiceProvider.GetRequiredService<ITenantRepository>();
@@ -163,7 +161,7 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
     public override async Task<GetTenantDetailResponse> GetTenantDetail(
         GetTenantDetailRequest request, ServerCallContext context)
     {
-        ValidateInternalKey(context);
+        AuthorizeInternalCaller(context);
 
         using IServiceScope scope = _scopeFactory.CreateScope();
         ITenantRepository tenantRepo = scope.ServiceProvider.GetRequiredService<ITenantRepository>();
@@ -227,7 +225,7 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
     public override async Task<ListMachinesResponse> ListMachines(
         ListMachinesRequest request, ServerCallContext context)
     {
-        ValidateInternalKey(context);
+        AuthorizeInternalCaller(context);
 
         using IServiceScope scope = _scopeFactory.CreateScope();
         ITenantRepository tenantRepo = scope.ServiceProvider.GetRequiredService<ITenantRepository>();
@@ -272,7 +270,7 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
     public override async Task<ListAuditLogEntriesResponse> ListAuditLogEntries(
         ListAuditLogEntriesRequest request, ServerCallContext context)
     {
-        ValidateInternalKey(context);
+        AuthorizeInternalCaller(context);
 
         using IServiceScope scope = _scopeFactory.CreateScope();
         ITenantRepository tenantRepo = scope.ServiceProvider.GetRequiredService<ITenantRepository>();
@@ -344,7 +342,7 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
     public override async Task<GetServerSettingsResponse> GetServerSettings(
         GetServerSettingsRequest request, ServerCallContext context)
     {
-        ValidateInternalKey(context);
+        AuthorizeInternalCaller(context);
 
         using IServiceScope scope = _scopeFactory.CreateScope();
         IServerConfigurationRepository configRepo = scope.ServiceProvider.GetRequiredService<IServerConfigurationRepository>();
@@ -378,7 +376,7 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
     public override async Task<UpdateServerSettingResponse> UpdateServerSetting(
         UpdateServerSettingRequest request, ServerCallContext context)
     {
-        ValidateInternalKey(context);
+        AuthorizeInternalCaller(context);
 
         ServerConfigurationSettingKeys key = (ServerConfigurationSettingKeys)(int)request.Key;
 
@@ -417,7 +415,7 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
     public override async Task<UpdateTenantSubscriptionResponse> UpdateTenantSubscription(
         UpdateTenantSubscriptionRequest request, ServerCallContext context)
     {
-        ValidateInternalKey(context);
+        AuthorizeInternalCaller(context);
 
         SubscriptionTier? tier = MapBillingTierToSubscriptionTier(request.Tier);
         if (tier is null)
@@ -474,7 +472,7 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
     public override async Task<GetTenantOverrideResponse> GetTenantOverride(
         GetTenantOverrideRequest request, ServerCallContext context)
     {
-        ValidateInternalKey(context);
+        AuthorizeInternalCaller(context);
 
         using IServiceScope scope = _scopeFactory.CreateScope();
         ITenantRepository tenantRepo = scope.ServiceProvider.GetRequiredService<ITenantRepository>();
@@ -514,7 +512,7 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
     public override async Task<SetTenantOverrideResponse> SetTenantOverride(
         SetTenantOverrideRequest request, ServerCallContext context)
     {
-        ValidateInternalKey(context);
+        AuthorizeInternalCaller(context);
 
         using IServiceScope scope = _scopeFactory.CreateScope();
         ITenantRepository tenantRepo = scope.ServiceProvider.GetRequiredService<ITenantRepository>();
@@ -576,7 +574,7 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
     public override async Task<RemoveTenantOverrideResponse> RemoveTenantOverride(
         RemoveTenantOverrideRequest request, ServerCallContext context)
     {
-        ValidateInternalKey(context);
+        AuthorizeInternalCaller(context);
 
         using IServiceScope scope = _scopeFactory.CreateScope();
         ITenantRepository tenantRepo = scope.ServiceProvider.GetRequiredService<ITenantRepository>();
@@ -643,7 +641,7 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
     public override async Task<ConfigureTenantOidcResponse> ConfigureTenantOidc(
         ConfigureTenantOidcRequest request, ServerCallContext context)
     {
-        ValidateInternalKey(context);
+        AuthorizeInternalCaller(context);
 
         using IServiceScope scope = _scopeFactory.CreateScope();
         ITenantRepository tenantRepo = scope.ServiceProvider.GetRequiredService<ITenantRepository>();
@@ -707,7 +705,7 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
     public override async Task<RequestTenantDeletionResponse> RequestTenantDeletion(
         RequestTenantDeletionRequest request, ServerCallContext context)
     {
-        ValidateInternalKey(context);
+        AuthorizeInternalCaller(context);
 
         using IServiceScope scope = _scopeFactory.CreateScope();
         ITenantRepository tenantRepo = scope.ServiceProvider.GetRequiredService<ITenantRepository>();
@@ -739,7 +737,7 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
     public override async Task<RestoreTenantResponse> RestoreTenant(
         RestoreTenantRequest request, ServerCallContext context)
     {
-        ValidateInternalKey(context);
+        AuthorizeInternalCaller(context);
 
         using IServiceScope scope = _scopeFactory.CreateScope();
         ITenantRepository tenantRepo = scope.ServiceProvider.GetRequiredService<ITenantRepository>();
@@ -760,7 +758,7 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
     public override async Task<ListTenantDeletionsResponse> ListTenantDeletions(
         ListTenantDeletionsRequest request, ServerCallContext context)
     {
-        ValidateInternalKey(context);
+        AuthorizeInternalCaller(context);
 
         using IServiceScope scope = _scopeFactory.CreateScope();
         ITenantDeletionRepository deletionRepo = scope.ServiceProvider.GetRequiredService<ITenantDeletionRepository>();
@@ -795,9 +793,9 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
         return response;
     }
 
-    private void ValidateInternalKey(ServerCallContext context)
+    private void AuthorizeInternalCaller(ServerCallContext context)
     {
-        InternalApiKeyValidator.Validate(context, _internalApiOptions);
+        _callerAuthorizer.Authorize(context);
     }
 
     internal static (int Page, int PageSize) SanitizePagination(int page, int pageSize)

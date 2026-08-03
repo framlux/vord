@@ -5,6 +5,7 @@
 package config
 
 import (
+	"net"
 	"os"
 	"path/filepath"
 	"testing"
@@ -72,6 +73,75 @@ func TestGRPCTarget_WithIPAddress(t *testing.T) {
 	expected := "192.168.1.100:443"
 	if got != expected {
 		t.Errorf("GRPCTarget() = %q, want %q", got, expected)
+	}
+}
+
+func TestGRPCTarget_BracketsIPv6Literal(t *testing.T) {
+	cfg := &Config{
+		ServerAddress: "2001:db8::1",
+		ServerPort:    12234,
+	}
+
+	got := cfg.GRPCTarget()
+	expected := "[2001:db8::1]:12234"
+	if got != expected {
+		t.Errorf("GRPCTarget() = %q, want %q", got, expected)
+	}
+}
+
+func TestGRPCTarget_DoesNotDoubleBracketIPv6Literal(t *testing.T) {
+	cfg := &Config{
+		ServerAddress: "[2001:db8::1]",
+		ServerPort:    12234,
+	}
+
+	got := cfg.GRPCTarget()
+	expected := "[2001:db8::1]:12234"
+	if got != expected {
+		t.Errorf("GRPCTarget() = %q, want %q", got, expected)
+	}
+}
+
+func TestGRPCTarget_IPv6Loopback(t *testing.T) {
+	cfg := &Config{
+		ServerAddress: "::1",
+		ServerPort:    443,
+	}
+
+	got := cfg.GRPCTarget()
+	expected := "[::1]:443"
+	if got != expected {
+		t.Errorf("GRPCTarget() = %q, want %q", got, expected)
+	}
+}
+
+// The dial target must survive a round trip through net.SplitHostPort, which is what the gRPC
+// dialer and any proxy in front of it will do with it.
+func TestGRPCTarget_IsSplittable(t *testing.T) {
+	cases := []struct {
+		address string
+		want    string
+	}{
+		{"example.com", "example.com"},
+		{"192.168.1.100", "192.168.1.100"},
+		{"2001:db8::1", "2001:db8::1"},
+		{"::1", "::1"},
+	}
+
+	for _, tc := range cases {
+		cfg := &Config{ServerAddress: tc.address, ServerPort: 12234}
+		host, port, err := net.SplitHostPort(cfg.GRPCTarget())
+		if err != nil {
+			t.Errorf("SplitHostPort(%q) failed: %v", cfg.GRPCTarget(), err)
+
+			continue
+		}
+		if host != tc.want {
+			t.Errorf("host = %q, want %q", host, tc.want)
+		}
+		if port != "12234" {
+			t.Errorf("port = %q, want %q", port, "12234")
+		}
 	}
 }
 

@@ -56,4 +56,3 @@ func (r *Registry) RegisterDynamic(c Collector, getInterval func() time.Duration
 		getInterval: getInterval,
 	})
 }
-

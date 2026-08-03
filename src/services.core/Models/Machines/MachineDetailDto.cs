@@ -61,4 +61,7 @@ public sealed class MachineDetailDto
 
     /// <summary>Most recent telemetry timestamp across all types.</summary>
     public DateTimeOffset? TelemetryLastUpdated { get; set; }
+
+    /// <summary>The running agent's build version, or null when the agent has not reported one.</summary>
+    public string? AgentVersion { get; set; }
 }

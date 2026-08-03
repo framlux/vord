@@ -268,7 +268,7 @@ public sealed class MachineStateStreamingService : BackgroundService
     /// type's presence flag is set from whether its fragment is present, and the fragment's columns
     /// are copied across. Keeps the dependency direction (services.core to database) intact.
     /// </summary>
-    private static MachineSummaryPatch MapSummary(MachineStatePatch patch)
+    internal static MachineSummaryPatch MapSummary(MachineStatePatch patch)
     {
         return new MachineSummaryPatch
         {
@@ -304,7 +304,7 @@ public sealed class MachineStateStreamingService : BackgroundService
     /// type's presence flag is set from whether its fragment is present, and the fragment's columns
     /// are copied across. Keeps the dependency direction (services.core to database) intact.
     /// </summary>
-    private static MachineDetailPatch MapDetail(MachineStatePatch patch)
+    internal static MachineDetailPatch MapDetail(MachineStatePatch patch)
     {
         return new MachineDetailPatch
         {
@@ -336,6 +336,8 @@ public sealed class MachineStateStreamingService : BackgroundService
             SshSessions = patch.SshSessions?.SshSessions,
             HasHardwareHealth = patch.HardwareHealth is not null,
             HardwareHealth = patch.HardwareHealth?.HardwareHealth,
+            HasAgentVersion = patch.AgentVersion is not null,
+            AgentVersion = patch.AgentVersion?.AgentVersion,
         };
     }
 

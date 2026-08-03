@@ -7,11 +7,9 @@ using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Server.Auth;
 using Framlux.FleetManagement.Services.Core.Handlers;
-using Framlux.FleetManagement.Services.Core.Options;
 using Framlux.Vord.BillingGrpc;
 using Google.Protobuf.WellKnownTypes;
 using Grpc.Core;
-using Microsoft.Extensions.Options;
 
 namespace Framlux.FleetManagement.Server.Endpoints.Grpc;
 
@@ -22,7 +20,7 @@ namespace Framlux.FleetManagement.Server.Endpoints.Grpc;
 public sealed class BillingGatewayService : BillingGateway.BillingGatewayBase
 {
     private readonly IServiceScopeFactory _scopeFactory;
-    private readonly InternalApiOptions _internalApiOptions;
+    private readonly IInternalCallerAuthorizer _callerAuthorizer;
     private readonly ILogger<BillingGatewayService> _logger;
 
     /// <summary>
@@ -30,11 +28,11 @@ public sealed class BillingGatewayService : BillingGateway.BillingGatewayBase
     /// </summary>
     public BillingGatewayService(
         IServiceScopeFactory scopeFactory,
-        IOptions<InternalApiOptions> internalApiOptions,
+        IInternalCallerAuthorizer callerAuthorizer,
         ILogger<BillingGatewayService> logger)
     {
         _scopeFactory = scopeFactory;
-        _internalApiOptions = internalApiOptions.Value;
+        _callerAuthorizer = callerAuthorizer;
         _logger = logger;
     }
 
@@ -44,7 +42,7 @@ public sealed class BillingGatewayService : BillingGateway.BillingGatewayBase
     public override async Task<BillingActionResponse> ProcessBillingAction(
         BillingActionRequest request, ServerCallContext context)
     {
-        ValidateInternalKey(context);
+        AuthorizeInternalCaller(context);
 
         using IServiceScope scope = _scopeFactory.CreateScope();
         ITenantRepository tenantRepository = scope.ServiceProvider.GetRequiredService<ITenantRepository>();
@@ -131,8 +129,8 @@ public sealed class BillingGatewayService : BillingGateway.BillingGatewayBase
         };
     }
 
-    private void ValidateInternalKey(ServerCallContext context)
+    private void AuthorizeInternalCaller(ServerCallContext context)
     {
-        InternalApiKeyValidator.Validate(context, _internalApiOptions);
+        _callerAuthorizer.Authorize(context);
     }
 }

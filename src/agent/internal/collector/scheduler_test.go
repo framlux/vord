@@ -234,4 +234,3 @@ func TestRegisterDynamic_RunCollector_RespectsIntervalChange(t *testing.T) {
 		t.Errorf("expected dynamic collector to run at least 2 times, got %d", count)
 	}
 }
-

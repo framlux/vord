@@ -5,6 +5,7 @@
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
+using Framlux.FleetManagement.Server.Auth;
 using Framlux.FleetManagement.Server.Endpoints.Grpc;
 using Framlux.FleetManagement.Services.Core.Options;
 using Framlux.FleetManagement.Services.Core.Handlers;
@@ -24,7 +25,6 @@ namespace Framlux.FleetManagement.UnitTest.Endpoints.Grpc;
 /// </summary>
 public sealed class BillingGatewayServiceTests
 {
-    private const string ValidApiKey = "test-internal-api-key-12345";
     private const string TenantExternalId = "ext-tenant-abc";
     private const int TenantId = 42;
 
@@ -42,14 +42,30 @@ public sealed class BillingGatewayServiceTests
         _logger = Substitute.For<ILogger<BillingGatewayService>>();
     }
 
-    private BillingGatewayService CreateService(string configuredKey = ValidApiKey)
+    /// <summary>
+    /// Builds the service under test. Caller authorisation is a collaborator here — its own
+    /// rules are proven in <c>CertificateSubjectAuthorizerTests</c> and end to end in the
+    /// functional gRPC suite. What matters at this level is that the service consults it before
+    /// doing any work and propagates its rejection unchanged.
+    /// </summary>
+    private BillingGatewayService CreateService(StatusCode? rejectWith = null)
     {
-        InternalApiOptions options = new InternalApiOptions { Key = configuredKey };
-        IOptions<InternalApiOptions> wrappedOptions = Options.Create(options);
-
         IServiceScopeFactory scopeFactory = CreateScopeFactory();
 
-        return new BillingGatewayService(scopeFactory, wrappedOptions, _logger);
+        return new BillingGatewayService(scopeFactory, CreateAuthorizer(rejectWith), _logger);
+    }
+
+    private static IInternalCallerAuthorizer CreateAuthorizer(StatusCode? rejectWith)
+    {
+        IInternalCallerAuthorizer authorizer = Substitute.For<IInternalCallerAuthorizer>();
+        if (rejectWith is not null)
+        {
+            authorizer
+                .When(a => a.Authorize(Arg.Any<ServerCallContext>()))
+                .Do(_ => throw new RpcException(new Status(rejectWith.Value, "Rejected")));
+        }
+
+        return authorizer;
     }
 
     private IServiceScopeFactory CreateScopeFactory()
@@ -67,13 +83,9 @@ public sealed class BillingGatewayServiceTests
         return scopeFactory;
     }
 
-    private static ServerCallContext CreateContext(string? apiKey = ValidApiKey)
+    private static ServerCallContext CreateContext()
     {
         Metadata headers = new Metadata();
-        if (apiKey is not null)
-        {
-            headers.Add("x-internal-key", apiKey);
-        }
 
         return TestServerCallContext.Create(
             method: "Test",
@@ -124,13 +136,14 @@ public sealed class BillingGatewayServiceTests
     // ────────────────────────────────────────────────────────────────
 
     /// <summary>
-    /// When the internal API key is not configured (empty), the service should return Unavailable.
+    /// When no permitted client subject is configured the service cannot make an authorisation
+    /// decision, so it makes none and reports Unavailable.
     /// </summary>
     [Test]
-    public async Task ProcessBillingAction_EmptyConfiguredKey_ThrowsUnavailable()
+    public async Task ProcessBillingAction_AuthorizerReportsUnconfigured_ThrowsUnavailable()
     {
-        BillingGatewayService service = CreateService(configuredKey: string.Empty);
-        ServerCallContext context = CreateContext(apiKey: ValidApiKey);
+        BillingGatewayService service = CreateService(rejectWith: StatusCode.Unavailable);
+        ServerCallContext context = CreateContext();
         BillingActionRequest request = CreateRequest(BillingAction.UpgradeToPro);
 
         RpcException? exception = await Assert.ThrowsAsync<RpcException>(
@@ -138,17 +151,16 @@ public sealed class BillingGatewayServiceTests
 
         await Assert.That(exception).IsNotNull();
         await Assert.That(exception!.StatusCode).IsEqualTo(StatusCode.Unavailable);
-        await Assert.That(exception.Status.Detail).Contains("not configured");
     }
 
     /// <summary>
-    /// When no API key header is provided, the service should return Unauthenticated.
+    /// A caller that presented no client certificate is rejected as unauthenticated.
     /// </summary>
     [Test]
-    public async Task ProcessBillingAction_MissingApiKeyHeader_ThrowsUnauthenticated()
+    public async Task ProcessBillingAction_NoClientCertificate_ThrowsUnauthenticated()
     {
-        BillingGatewayService service = CreateService();
-        ServerCallContext context = CreateContext(apiKey: null);
+        BillingGatewayService service = CreateService(rejectWith: StatusCode.Unauthenticated);
+        ServerCallContext context = CreateContext();
         BillingActionRequest request = CreateRequest(BillingAction.UpgradeToPro);
 
         RpcException? exception = await Assert.ThrowsAsync<RpcException>(
@@ -156,32 +168,32 @@ public sealed class BillingGatewayServiceTests
 
         await Assert.That(exception).IsNotNull();
         await Assert.That(exception!.StatusCode).IsEqualTo(StatusCode.Unauthenticated);
-        await Assert.That(exception.Status.Detail).IsEqualTo("Unauthorized");
     }
 
     /// <summary>
-    /// When the provided API key does not match the configured key, the service should return Unauthenticated.
+    /// A caller holding a certificate the internal CA issued, but whose subject is not on the
+    /// permitted list, is rejected. This is the case that distinguishes authorising on identity
+    /// from merely accepting any valid certificate.
     /// </summary>
     [Test]
-    public async Task ProcessBillingAction_InvalidApiKey_ThrowsUnauthenticated()
+    public async Task ProcessBillingAction_NonPermittedCertificateSubject_ThrowsPermissionDenied()
     {
-        BillingGatewayService service = CreateService();
-        ServerCallContext context = CreateContext(apiKey: "wrong-key");
+        BillingGatewayService service = CreateService(rejectWith: StatusCode.PermissionDenied);
+        ServerCallContext context = CreateContext();
         BillingActionRequest request = CreateRequest(BillingAction.UpgradeToPro);
 
         RpcException? exception = await Assert.ThrowsAsync<RpcException>(
             async () => await service.ProcessBillingAction(request, context));
 
         await Assert.That(exception).IsNotNull();
-        await Assert.That(exception!.StatusCode).IsEqualTo(StatusCode.Unauthenticated);
-        await Assert.That(exception.Status.Detail).IsEqualTo("Unauthorized");
+        await Assert.That(exception!.StatusCode).IsEqualTo(StatusCode.PermissionDenied);
     }
 
     /// <summary>
-    /// When a valid API key is provided and tenant exists, the service should succeed.
+    /// When the caller is authorised and the tenant exists, the service should succeed.
     /// </summary>
     [Test]
-    public async Task ProcessBillingAction_ValidApiKey_Succeeds()
+    public async Task ProcessBillingAction_AuthorizedCaller_Succeeds()
     {
         BillingGatewayService service = CreateService();
         ServerCallContext context = CreateContext();
@@ -470,8 +482,8 @@ public sealed class BillingGatewayServiceTests
     [Test]
     public async Task ProcessBillingAction_AuthFailure_DoesNotCallHandler()
     {
-        BillingGatewayService service = CreateService();
-        ServerCallContext context = CreateContext(apiKey: "wrong-key");
+        BillingGatewayService service = CreateService(rejectWith: StatusCode.PermissionDenied);
+        ServerCallContext context = CreateContext();
         SetupTenantFound();
         BillingActionRequest request = CreateRequest(BillingAction.UpgradeToPro);
 

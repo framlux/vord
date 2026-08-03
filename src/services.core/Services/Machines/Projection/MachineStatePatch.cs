@@ -52,9 +52,13 @@ internal sealed record MachineStatePatch
     /// <summary>ServiceStatus fragment, or null when absent.</summary>
     public ServiceStatusFragment? ServiceStatus { get; init; }
 
+    /// <summary>AgentVersion fragment, or null when absent.</summary>
+    public AgentVersionFragment? AgentVersion { get; init; }
+
     /// <summary>True when at least one detail-bearing telemetry type is present.</summary>
     public bool HasDetailChanges =>
         (SystemInfo is not null) || (OsVersion is not null) || (CpuInfo is not null) ||
         (MemoryInfo is not null) || (DiskInfo is not null) || (MemoryUsage is not null) ||
-        (DiskUsage is not null) || (SshSessions is not null) || (HardwareHealth is not null);
+        (DiskUsage is not null) || (SshSessions is not null) || (HardwareHealth is not null) ||
+        (AgentVersion is not null);
 }

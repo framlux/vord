@@ -5,6 +5,7 @@
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
+using Framlux.FleetManagement.Server.Auth;
 using Framlux.FleetManagement.Server.Endpoints.Grpc;
 using Framlux.FleetManagement.Services.Core.Billing;
 using Framlux.FleetManagement.Services.Core.Handlers;
@@ -453,24 +454,41 @@ public sealed class FleetAdminServiceTests
     // RPC method tests — uses NSubstitute mocks for all dependencies
     // ────────────────────────────────────────────────────────────────
 
-    private const string ValidInternalKey = "test-fleet-admin-key";
     private const string TenantExternalId = "ext-tenant-001";
     private const int TenantInternalId = 10;
 
+    /// <summary>
+    /// Builds the service under test. Caller authorisation is a collaborator here — its own
+    /// rules are proven in <c>CertificateSubjectAuthorizerTests</c> and end to end in the
+    /// functional gRPC suite. What matters at this level is that every RPC consults it before
+    /// touching a repository and propagates its rejection unchanged.
+    /// </summary>
     private static FleetAdminService CreateFleetAdminService(
         IServiceScopeFactory scopeFactory,
-        string configuredKey = ValidInternalKey,
+        StatusCode? rejectWith = null,
         IOidcSecretProtector? oidcSecretProtector = null,
         IConnectionMultiplexer? redis = null)
     {
-        InternalApiOptions options = new InternalApiOptions { Key = configuredKey };
-        IOptions<InternalApiOptions> wrappedOptions = Options.Create(options);
         ILogger<FleetAdminService> logger = Substitute.For<ILogger<FleetAdminService>>();
         IOidcSecretProtector resolvedProtector = oidcSecretProtector
             ?? new OidcSecretProtector(new EphemeralDataProtectionProvider());
         IConnectionMultiplexer resolvedRedis = redis ?? Substitute.For<IConnectionMultiplexer>();
 
-        return new FleetAdminService(scopeFactory, wrappedOptions, resolvedProtector, logger, resolvedRedis);
+        return new FleetAdminService(
+            scopeFactory, CreateAuthorizer(rejectWith), resolvedProtector, logger, resolvedRedis);
+    }
+
+    private static IInternalCallerAuthorizer CreateAuthorizer(StatusCode? rejectWith)
+    {
+        IInternalCallerAuthorizer authorizer = Substitute.For<IInternalCallerAuthorizer>();
+        if (rejectWith is not null)
+        {
+            authorizer
+                .When(a => a.Authorize(Arg.Any<ServerCallContext>()))
+                .Do(_ => throw new RpcException(new Status(rejectWith.Value, "Rejected")));
+        }
+
+        return authorizer;
     }
 
     private static IServiceScopeFactory CreateScopeFactoryWithServices(Dictionary<Type, object> services)
@@ -490,13 +508,9 @@ public sealed class FleetAdminServiceTests
         return scopeFactory;
     }
 
-    private static ServerCallContext CreateContext(string? apiKey = ValidInternalKey)
+    private static ServerCallContext CreateContext()
     {
         Metadata headers = new Metadata();
-        if (apiKey is not null)
-        {
-            headers.Add("x-internal-key", apiKey);
-        }
 
         return TestServerCallContext.Create(
             method: "Test",
@@ -526,17 +540,18 @@ public sealed class FleetAdminServiceTests
         };
     }
 
-    // ── ValidateInternalKey: empty configured key ──
+    // ── Caller authorisation ──
 
     /// <summary>
-    /// When the configured key is empty, all RPC methods must throw Unavailable before touching any repository.
+    /// When no permitted client subject is configured, RPC methods must throw Unavailable
+    /// before touching any repository.
     /// </summary>
     [Test]
-    public async Task ListUsers_EmptyConfiguredKey_ThrowsUnavailable()
+    public async Task ListUsers_AuthorizerReportsUnconfigured_ThrowsUnavailable()
     {
         IServiceScopeFactory scopeFactory = Substitute.For<IServiceScopeFactory>();
-        FleetAdminService service = CreateFleetAdminService(scopeFactory, configuredKey: string.Empty);
-        ServerCallContext context = CreateContext(apiKey: ValidInternalKey);
+        FleetAdminService service = CreateFleetAdminService(scopeFactory, rejectWith: StatusCode.Unavailable);
+        ServerCallContext context = CreateContext();
 
         RpcException? exception = await Assert.ThrowsAsync<RpcException>(
             async () => await service.ListUsers(new ListUsersRequest(), context));
@@ -546,14 +561,14 @@ public sealed class FleetAdminServiceTests
     }
 
     /// <summary>
-    /// When an incorrect key is supplied, all RPC methods must throw Unauthenticated.
+    /// A caller that presented no client certificate is rejected as unauthenticated.
     /// </summary>
     [Test]
-    public async Task ListUsers_WrongKey_ThrowsUnauthenticated()
+    public async Task ListUsers_NoClientCertificate_ThrowsUnauthenticated()
     {
         IServiceScopeFactory scopeFactory = Substitute.For<IServiceScopeFactory>();
-        FleetAdminService service = CreateFleetAdminService(scopeFactory);
-        ServerCallContext context = CreateContext(apiKey: "wrong-key");
+        FleetAdminService service = CreateFleetAdminService(scopeFactory, rejectWith: StatusCode.Unauthenticated);
+        ServerCallContext context = CreateContext();
 
         RpcException? exception = await Assert.ThrowsAsync<RpcException>(
             async () => await service.ListUsers(new ListUsersRequest(), context));
@@ -562,13 +577,32 @@ public sealed class FleetAdminServiceTests
         await Assert.That(exception!.StatusCode).IsEqualTo(StatusCode.Unauthenticated);
     }
 
+    /// <summary>
+    /// A caller holding a certificate the internal CA issued, but whose subject is not on the
+    /// permitted list, is rejected without any repository being touched.
+    /// </summary>
+    [Test]
+    public async Task ListUsers_NonPermittedCertificateSubject_ThrowsPermissionDenied()
+    {
+        IServiceScopeFactory scopeFactory = Substitute.For<IServiceScopeFactory>();
+        FleetAdminService service = CreateFleetAdminService(scopeFactory, rejectWith: StatusCode.PermissionDenied);
+        ServerCallContext context = CreateContext();
+
+        RpcException? exception = await Assert.ThrowsAsync<RpcException>(
+            async () => await service.ListUsers(new ListUsersRequest(), context));
+
+        await Assert.That(exception).IsNotNull();
+        await Assert.That(exception!.StatusCode).IsEqualTo(StatusCode.PermissionDenied);
+        scopeFactory.DidNotReceive().CreateScope();
+    }
+
     // ── ListUsers ──
 
     /// <summary>
-    /// ListUsers returns users and their tenant roles when the authenticated key is valid.
+    /// ListUsers returns users and their tenant roles when the caller is authorised.
     /// </summary>
     [Test]
-    public async Task ListUsers_ValidKey_ReturnsMappedUsers()
+    public async Task ListUsers_AuthorizedCaller_ReturnsMappedUsers()
     {
         IUserRepository userRepo = Substitute.For<IUserRepository>();
         ITenantRepository tenantRepo = Substitute.For<ITenantRepository>();

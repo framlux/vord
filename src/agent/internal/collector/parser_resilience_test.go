@@ -16,17 +16,17 @@ import (
 // format changes, container oddities, etc. Every parser must return a
 // zero/empty value (never panic) for any input.
 var commonBadInputs = []string{
-	"",                              // empty
-	"\x00\x01\x02\xff\xfe",         // binary garbage
-	"\x00\x00\x00\x00",             // NUL-filled
-	strings.Repeat("a", 1<<20),     // extremely long single line (1MB)
-	"   \n\t\n  ",                   // only whitespace
-	"\n\n\n\n",                      // only newlines
-	"\r\n\r\n",                      // Windows line endings
-	"\t\t\t\t",                      // tab-heavy
-	"cpu \xf0\x9f\x94\xa5 100",     // Unicode/emoji
-	"-1",                            // negative number
-	"99999999999999999999",          // overflow number
+	"",                         // empty
+	"\x00\x01\x02\xff\xfe",     // binary garbage
+	"\x00\x00\x00\x00",         // NUL-filled
+	strings.Repeat("a", 1<<20), // extremely long single line (1MB)
+	"   \n\t\n  ",              // only whitespace
+	"\n\n\n\n",                 // only newlines
+	"\r\n\r\n",                 // Windows line endings
+	"\t\t\t\t",                 // tab-heavy
+	"cpu \xf0\x9f\x94\xa5 100", // Unicode/emoji
+	"-1",                       // negative number
+	"99999999999999999999",     // overflow number
 }
 
 // truncatedInput returns the first line of a format with more data after it.
@@ -44,10 +44,10 @@ func truncatedInput(fullInput string) string {
 func TestParseCpuTicksNoPanic(t *testing.T) {
 	inputs := append([]string{}, commonBadInputs...)
 	inputs = append(inputs,
-		"cpu ",                         // cpu line with no data after prefix
-		"cpu 1 2",                      // too few fields
-		"cpu a b c d e f g h",          // non-numeric fields
-		"cpu -1 -2 -3 -4 -5 -6 -7 -8", // negative values
+		"cpu ",                                   // cpu line with no data after prefix
+		"cpu 1 2",                                // too few fields
+		"cpu a b c d e f g h",                    // non-numeric fields
+		"cpu -1 -2 -3 -4 -5 -6 -7 -8",            // negative values
 		"cpu 99999999999999999999 0 0 0 0 0 0 0", // overflow value
 		"cpu 100 200 300 400\ncpu 500 600 700 800 900 1000 1100 1200", // multiple cpu lines
 		truncatedInput("cpu  10132153 290696 3084719 46828483 16683 0 25195 0 0 0\ncpu0 1393280 32966"),
@@ -70,14 +70,14 @@ func TestParseCpuTicksNoPanic(t *testing.T) {
 func TestParseMeminfoDataNoPanic(t *testing.T) {
 	inputs := append([]string{}, commonBadInputs...)
 	inputs = append(inputs,
-		"no colon here",                                // lines without colons
-		"MemTotal: not_a_number kB",                    // non-numeric value
-		"MemTotal: -1024 kB",                           // negative kB value
-		"MemTotal:",                                    // value without data
-		": 1024 kB",                                    // zero-length key
-		"MemTotal: 1024 kB\nMemTotal: 2048 kB",        // duplicate keys
-		"MemTotal: 1024",                               // without " kB" suffix
-		"MemTotal: 99999999999999999999 kB",            // overflow
+		"no colon here",                        // lines without colons
+		"MemTotal: not_a_number kB",            // non-numeric value
+		"MemTotal: -1024 kB",                   // negative kB value
+		"MemTotal:",                            // value without data
+		": 1024 kB",                            // zero-length key
+		"MemTotal: 1024 kB\nMemTotal: 2048 kB", // duplicate keys
+		"MemTotal: 1024",                       // without " kB" suffix
+		"MemTotal: 99999999999999999999 kB",    // overflow
 	)
 
 	for _, input := range inputs {
@@ -97,12 +97,12 @@ func TestParseMeminfoDataNoPanic(t *testing.T) {
 func TestParseMountsDataNoPanic(t *testing.T) {
 	inputs := append([]string{}, commonBadInputs...)
 	inputs = append(inputs,
-		"/dev/sda1",                                    // line with fewer than 3 fields
-		"/dev/sda1 /mnt",                               // only 2 fields
-		"/dev/sda1 /mnt/my\\ mount ext4 rw 0 0",       // mount point with escaped space
-		strings.Repeat("/dev/very/long/path", 10000)+" /mnt ext4 rw 0 0", // extremely long device path
+		"/dev/sda1",                             // line with fewer than 3 fields
+		"/dev/sda1 /mnt",                        // only 2 fields
+		"/dev/sda1 /mnt/my\\ mount ext4 rw 0 0", // mount point with escaped space
+		strings.Repeat("/dev/very/long/path", 10000)+" /mnt ext4 rw 0 0",           // extremely long device path
 		"proc /proc proc rw 0 0\nsysfs /sys sysfs rw 0 0\ntmpfs /tmp tmpfs rw 0 0", // all pseudo-FS entries
-		"\x00\x01 /mnt ext4 rw 0 0",                   // binary in device name
+		"\x00\x01 /mnt ext4 rw 0 0",                             // binary in device name
 		"/dev/sda1 /mnt ext4 rw 0 0\n/dev/sdb1 /mnt xfs rw 0 0", // duplicate mount points
 	)
 
@@ -123,11 +123,11 @@ func TestParseMountsDataNoPanic(t *testing.T) {
 func TestParseProcCpuinfoDataNoPanic(t *testing.T) {
 	inputs := append([]string{}, commonBadInputs...)
 	inputs = append(inputs,
-		"key without value",             // key without colon
-		": value without key",           // value without key
-		"\n\n\n",                        // only empty lines between blocks
-		"single field no colon",         // single field with no colon
-		"model name\t:",                 // key with colon but no value
+		"key without value",     // key without colon
+		": value without key",   // value without key
+		"\n\n\n",                // only empty lines between blocks
+		"single field no colon", // single field with no colon
+		"model name\t:",         // key with colon but no value
 	)
 
 	for _, input := range inputs {
@@ -147,12 +147,12 @@ func TestParseProcCpuinfoDataNoPanic(t *testing.T) {
 func TestParseOsReleaseDataNoPanic(t *testing.T) {
 	inputs := append([]string{}, commonBadInputs...)
 	inputs = append(inputs,
-		"no equals here",                     // lines without =
-		"KEY=\"unmatched quote",              // values with unmatched quotes
-		"KEY=value=with=equals",              // keys with = in the value
-		"=empty_key",                         // empty key
-		"KEY=",                               // empty value
-		"KEY=\"\"",                           // empty value quoted
+		"no equals here",        // lines without =
+		"KEY=\"unmatched quote", // values with unmatched quotes
+		"KEY=value=with=equals", // keys with = in the value
+		"=empty_key",            // empty key
+		"KEY=",                  // empty value
+		"KEY=\"\"",              // empty value quoted
 	)
 
 	for _, input := range inputs {
@@ -172,13 +172,13 @@ func TestParseOsReleaseDataNoPanic(t *testing.T) {
 func TestParseVersionNoPanic(t *testing.T) {
 	inputs := append([]string{}, commonBadInputs...)
 	inputs = append(inputs,
-		"-1.-2.-3",          // negative version numbers
-		"1.",                // single dot trailing
-		"1.2.",              // trailing dot
-		"1.2.3.",            // double trailing dot
-		"1a.2b.3c",         // version with letters mixed in
-		".",                 // just a dot
-		"...",               // multiple dots
+		"-1.-2.-3", // negative version numbers
+		"1.",       // single dot trailing
+		"1.2.",     // trailing dot
+		"1.2.3.",   // double trailing dot
+		"1a.2b.3c", // version with letters mixed in
+		".",        // just a dot
+		"...",      // multiple dots
 	)
 
 	for _, input := range inputs {
@@ -213,8 +213,8 @@ func TestCpuBrandFromDataNoPanic(t *testing.T) {
 func TestCountPhysicalCoresFromDataNoPanic(t *testing.T) {
 	inputs := append([]string{}, commonBadInputs...)
 	inputs = append(inputs,
-		"physical id\t: abc\ncore id\t: def\n",   // non-numeric IDs
-		"physical id\t: -1\ncore id\t: -2\n",     // negative IDs
+		"physical id\t: abc\ncore id\t: def\n", // non-numeric IDs
+		"physical id\t: -1\ncore id\t: -2\n",   // negative IDs
 	)
 
 	for _, input := range inputs {
@@ -234,9 +234,9 @@ func TestCountPhysicalCoresFromDataNoPanic(t *testing.T) {
 func TestMemTotalBytesFromDataNoPanic(t *testing.T) {
 	inputs := append([]string{}, commonBadInputs...)
 	inputs = append(inputs,
-		"NotMemTotal: 1024 kB",            // missing MemTotal line
-		"MemTotal: not_a_number kB",       // non-numeric value
-		"MemTotal: -1024 kB",              // negative value
+		"NotMemTotal: 1024 kB",      // missing MemTotal line
+		"MemTotal: not_a_number kB", // non-numeric value
+		"MemTotal: -1024 kB",        // negative value
 	)
 
 	for _, input := range inputs {
@@ -278,8 +278,8 @@ func TestUptimeSecondsFromDataNoPanic(t *testing.T) {
 func TestParseGlobalIPAddressesNoPanic(t *testing.T) {
 	inputs := append([]string{}, commonBadInputs...)
 	inputs = append(inputs,
-		"2: eth0 inet not_cidr brd 10.0.0.255",     // no / in inet field
-		"2: eth0 inet6 fe80::1 brd scope global",   // IPv6-formatted without /
+		"2: eth0 inet not_cidr brd 10.0.0.255",   // no / in inet field
+		"2: eth0 inet6 fe80::1 brd scope global", // IPv6-formatted without /
 	)
 
 	for _, input := range inputs {

@@ -147,7 +147,7 @@
 				<h2 class="text-lg font-semibold text-surface-900 dark:text-surface-50">11. Contact</h2>
 				<p class="mt-2 leading-relaxed">
 					Questions about this policy? Contact us at
-					<a href="mailto:legal@framlux.com" class="text-primary-500 hover:underline">legal@framlux.com</a>.
+					<a href="mailto:legal@framlux.io" class="text-primary-500 hover:underline">legal@framlux.io</a>.
 				</p>
 			</section>
 		</div>

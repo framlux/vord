@@ -23,6 +23,11 @@ namespace Framlux.FleetManagement.FunctionalTest.Endpoints.Grpc;
 /// </summary>
 public sealed class FleetAdminServiceTests
 {
+    /// <summary>
+    /// The client-certificate subject the internal services are configured to accept. In
+    /// production it is the DNS name on the certificate cert-manager issues to billing-api.
+    /// </summary>
+    private const string PermittedClientSubject = "billing-api.vord-fleet.svc.cluster.local";
     // ========== Billing Disabled Tests ==========
 
     [Test]
@@ -47,10 +52,10 @@ public sealed class FleetAdminServiceTests
     // ========== Authentication Tests ==========
 
     [Test]
-    public async Task ListUsers_MissingInternalKey_ThrowsUnauthenticated()
+    public async Task ListUsers_NoClientCertificate_ThrowsUnauthenticated()
     {
         using FunctionalTestFactory factory = new();
-        factory.WithInternalApiKey("test-internal-key");
+        factory.WithInternalClientSubjects(PermittedClientSubject);
         using GrpcChannel channel = CreateChannel(factory);
         FleetAdmin.FleetAdminClient client = new(channel);
 
@@ -68,20 +73,26 @@ public sealed class FleetAdminServiceTests
         await Assert.That(exception!.StatusCode).IsEqualTo(StatusCode.Unauthenticated);
     }
 
+    /// <summary>
+    /// A caller holding a certificate that is entirely valid — issued by the internal CA, in
+    /// date, correctly formed — but whose subject is not on the permitted list must still be
+    /// refused. This is what proves the service authorises on the caller's identity rather than
+    /// on the mere fact that some certificate was presented.
+    /// </summary>
     [Test]
-    public async Task ListUsers_WrongInternalKey_ThrowsUnauthenticated()
+    public async Task ListUsers_ValidCertificateWithNonPermittedSubject_ThrowsPermissionDenied()
     {
         using FunctionalTestFactory factory = new();
-        factory.WithInternalApiKey("test-internal-key");
+        factory.WithInternalClientSubjects(PermittedClientSubject);
         using GrpcChannel channel = CreateChannel(factory);
         FleetAdmin.FleetAdminClient client = new(channel);
-
-        Metadata headers = new Metadata { { "x-internal-key", "wrong-key" } };
 
         RpcException? exception = null;
         try
         {
-            await client.ListUsersAsync(new ListUsersRequest { Page = 1, PageSize = 10 }, headers);
+            await client.ListUsersAsync(
+                new ListUsersRequest { Page = 1, PageSize = 10 },
+                Headers("impostor.vord-fleet.svc.cluster.local"));
         }
         catch (RpcException ex)
         {
@@ -89,7 +100,7 @@ public sealed class FleetAdminServiceTests
         }
 
         await Assert.That(exception).IsNotNull();
-        await Assert.That(exception!.StatusCode).IsEqualTo(StatusCode.Unauthenticated);
+        await Assert.That(exception!.StatusCode).IsEqualTo(StatusCode.PermissionDenied);
     }
 
     // ========== ListUsers Tests ==========
@@ -98,11 +109,11 @@ public sealed class FleetAdminServiceTests
     public async Task ListUsers_EmptyDatabase_ReturnsOnlySystemUser()
     {
         using FunctionalTestFactory factory = new();
-        factory.WithInternalApiKey("test-key");
+        factory.WithInternalClientSubjects(PermittedClientSubject);
         using GrpcChannel channel = CreateChannel(factory);
         FleetAdmin.FleetAdminClient client = new(channel);
 
-        Metadata headers = Headers("test-key");
+        Metadata headers = Headers();
 
         ListUsersResponse response = await client.ListUsersAsync(
             new ListUsersRequest { Page = 1, PageSize = 10 }, headers);
@@ -118,7 +129,7 @@ public sealed class FleetAdminServiceTests
     public async Task ListUsers_WithUsers_ReturnsPaginatedResults()
     {
         using FunctionalTestFactory factory = new();
-        factory.WithInternalApiKey("test-key");
+        factory.WithInternalClientSubjects(PermittedClientSubject);
         using DatabaseContext db = factory.CreateDbContext();
 
         await SeedUser(db, "user-a", "ext-a", AuthProviderType.GitHub);
@@ -129,7 +140,7 @@ public sealed class FleetAdminServiceTests
         FleetAdmin.FleetAdminClient client = new(channel);
 
         ListUsersResponse response = await client.ListUsersAsync(
-            new ListUsersRequest { Page = 1, PageSize = 2 }, Headers("test-key"));
+            new ListUsersRequest { Page = 1, PageSize = 2 }, Headers());
 
         // Total = 3 seeded + 1 migration-seeded system user.
         await Assert.That(response.TotalCount).IsEqualTo(4);
@@ -140,7 +151,7 @@ public sealed class FleetAdminServiceTests
     public async Task ListUsers_WithSearch_FiltersResults()
     {
         using FunctionalTestFactory factory = new();
-        factory.WithInternalApiKey("test-key");
+        factory.WithInternalClientSubjects(PermittedClientSubject);
         using DatabaseContext db = factory.CreateDbContext();
 
         await SeedUser(db, "alice", "ext-alice", AuthProviderType.GitHub);
@@ -150,7 +161,7 @@ public sealed class FleetAdminServiceTests
         FleetAdmin.FleetAdminClient client = new(channel);
 
         ListUsersResponse response = await client.ListUsersAsync(
-            new ListUsersRequest { Search = "alice", Page = 1, PageSize = 50 }, Headers("test-key"));
+            new ListUsersRequest { Search = "alice", Page = 1, PageSize = 50 }, Headers());
 
         await Assert.That(response.TotalCount).IsEqualTo(1);
         await Assert.That(response.Users[0].Username).IsEqualTo("alice");
@@ -160,7 +171,7 @@ public sealed class FleetAdminServiceTests
     public async Task ListUsers_IncludesTenantRoles()
     {
         using FunctionalTestFactory factory = new();
-        factory.WithInternalApiKey("test-key");
+        factory.WithInternalClientSubjects(PermittedClientSubject);
         using DatabaseContext db = factory.CreateDbContext();
 
         int userId = await SeedUser(db, "admin-user", "ext-admin", AuthProviderType.GitHub);
@@ -171,7 +182,7 @@ public sealed class FleetAdminServiceTests
         FleetAdmin.FleetAdminClient client = new(channel);
 
         ListUsersResponse response = await client.ListUsersAsync(
-            new ListUsersRequest { Page = 1, PageSize = 50 }, Headers("test-key"));
+            new ListUsersRequest { Page = 1, PageSize = 50 }, Headers());
 
         await Assert.That(response.Users.Count).IsGreaterThanOrEqualTo(1);
 
@@ -196,12 +207,12 @@ public sealed class FleetAdminServiceTests
     public async Task ListTenants_EmptyDatabase_ReturnsEmptyList()
     {
         using FunctionalTestFactory factory = new();
-        factory.WithInternalApiKey("test-key");
+        factory.WithInternalClientSubjects(PermittedClientSubject);
         using GrpcChannel channel = CreateChannel(factory);
         FleetAdmin.FleetAdminClient client = new(channel);
 
         ListTenantsResponse response = await client.ListTenantsAsync(
-            new ListTenantsRequest { Page = 1, PageSize = 10 }, Headers("test-key"));
+            new ListTenantsRequest { Page = 1, PageSize = 10 }, Headers());
 
         await Assert.That(response.TotalCount).IsEqualTo(0);
         await Assert.That(response.Tenants.Count).IsEqualTo(0);
@@ -211,7 +222,7 @@ public sealed class FleetAdminServiceTests
     public async Task ListTenants_WithTenants_IncludesCountsAndSubscription()
     {
         using FunctionalTestFactory factory = new();
-        factory.WithInternalApiKey("test-key");
+        factory.WithInternalClientSubjects(PermittedClientSubject);
         using DatabaseContext db = factory.CreateDbContext();
 
         string extId = $"ext-{Guid.NewGuid():N}";
@@ -224,7 +235,7 @@ public sealed class FleetAdminServiceTests
         FleetAdmin.FleetAdminClient client = new(channel);
 
         ListTenantsResponse response = await client.ListTenantsAsync(
-            new ListTenantsRequest { Page = 1, PageSize = 50 }, Headers("test-key"));
+            new ListTenantsRequest { Page = 1, PageSize = 50 }, Headers());
 
         await Assert.That(response.TotalCount).IsGreaterThanOrEqualTo(1);
 
@@ -248,7 +259,7 @@ public sealed class FleetAdminServiceTests
     public async Task ListTenants_WithSearch_FiltersResults()
     {
         using FunctionalTestFactory factory = new();
-        factory.WithInternalApiKey("test-key");
+        factory.WithInternalClientSubjects(PermittedClientSubject);
         using DatabaseContext db = factory.CreateDbContext();
 
         await SeedTenant(db, "alpha-corp", $"ext-{Guid.NewGuid():N}");
@@ -258,7 +269,7 @@ public sealed class FleetAdminServiceTests
         FleetAdmin.FleetAdminClient client = new(channel);
 
         ListTenantsResponse response = await client.ListTenantsAsync(
-            new ListTenantsRequest { Search = "alpha", Page = 1, PageSize = 50 }, Headers("test-key"));
+            new ListTenantsRequest { Search = "alpha", Page = 1, PageSize = 50 }, Headers());
 
         await Assert.That(response.TotalCount).IsEqualTo(1);
         await Assert.That(response.Tenants[0].Name).IsEqualTo("alpha-corp");
@@ -270,7 +281,7 @@ public sealed class FleetAdminServiceTests
     public async Task GetTenantDetail_NonexistentTenant_ThrowsNotFound()
     {
         using FunctionalTestFactory factory = new();
-        factory.WithInternalApiKey("test-key");
+        factory.WithInternalClientSubjects(PermittedClientSubject);
         using GrpcChannel channel = CreateChannel(factory);
         FleetAdmin.FleetAdminClient client = new(channel);
 
@@ -279,7 +290,7 @@ public sealed class FleetAdminServiceTests
         {
             await client.GetTenantDetailAsync(
                 new GetTenantDetailRequest { TenantExternalId = "does-not-exist" },
-                Headers("test-key"));
+                Headers());
         }
         catch (RpcException ex)
         {
@@ -294,7 +305,7 @@ public sealed class FleetAdminServiceTests
     public async Task GetTenantDetail_ReturnsTenantWithUsersAndMachines()
     {
         using FunctionalTestFactory factory = new();
-        factory.WithInternalApiKey("test-key");
+        factory.WithInternalClientSubjects(PermittedClientSubject);
         using DatabaseContext db = factory.CreateDbContext();
 
         string extId = $"ext-{Guid.NewGuid():N}";
@@ -308,7 +319,7 @@ public sealed class FleetAdminServiceTests
 
         GetTenantDetailResponse response = await client.GetTenantDetailAsync(
             new GetTenantDetailRequest { TenantExternalId = extId },
-            Headers("test-key"));
+            Headers());
 
         await Assert.That(response.Tenant).IsNotNull();
         await Assert.That(response.Tenant.ExternalId).IsEqualTo(extId);
@@ -326,7 +337,7 @@ public sealed class FleetAdminServiceTests
     public async Task ListMachines_NoFilter_ReturnsAllMachines()
     {
         using FunctionalTestFactory factory = new();
-        factory.WithInternalApiKey("test-key");
+        factory.WithInternalClientSubjects(PermittedClientSubject);
         using DatabaseContext db = factory.CreateDbContext();
 
         int tenantId = await SeedTenant(db, "machine-tenant", $"ext-mt-{Guid.NewGuid():N}");
@@ -337,7 +348,7 @@ public sealed class FleetAdminServiceTests
         FleetAdmin.FleetAdminClient client = new(channel);
 
         ListMachinesResponse response = await client.ListMachinesAsync(
-            new ListMachinesRequest { Page = 1, PageSize = 50 }, Headers("test-key"));
+            new ListMachinesRequest { Page = 1, PageSize = 50 }, Headers());
 
         await Assert.That(response.TotalCount).IsGreaterThanOrEqualTo(2);
     }
@@ -346,7 +357,7 @@ public sealed class FleetAdminServiceTests
     public async Task ListMachines_WithTenantFilter_ReturnsFilteredMachines()
     {
         using FunctionalTestFactory factory = new();
-        factory.WithInternalApiKey("test-key");
+        factory.WithInternalClientSubjects(PermittedClientSubject);
         using DatabaseContext db = factory.CreateDbContext();
 
         string ext1 = $"ext-{Guid.NewGuid():N}";
@@ -361,7 +372,7 @@ public sealed class FleetAdminServiceTests
 
         ListMachinesResponse response = await client.ListMachinesAsync(
             new ListMachinesRequest { TenantExternalId = ext1, Page = 1, PageSize = 50 },
-            Headers("test-key"));
+            Headers());
 
         await Assert.That(response.TotalCount).IsEqualTo(1);
         await Assert.That(response.Machines[0].Name).IsEqualTo("m-t1");
@@ -371,7 +382,7 @@ public sealed class FleetAdminServiceTests
     public async Task ListMachines_InvalidTenantExternalId_ThrowsNotFound()
     {
         using FunctionalTestFactory factory = new();
-        factory.WithInternalApiKey("test-key");
+        factory.WithInternalClientSubjects(PermittedClientSubject);
         using GrpcChannel channel = CreateChannel(factory);
         FleetAdmin.FleetAdminClient client = new(channel);
 
@@ -380,7 +391,7 @@ public sealed class FleetAdminServiceTests
         {
             await client.ListMachinesAsync(
                 new ListMachinesRequest { TenantExternalId = "invalid", Page = 1, PageSize = 50 },
-                Headers("test-key"));
+                Headers());
         }
         catch (RpcException ex)
         {
@@ -397,7 +408,7 @@ public sealed class FleetAdminServiceTests
     public async Task ListAuditLogEntries_ReturnsEntriesOrderedByTimestampDesc()
     {
         using FunctionalTestFactory factory = new();
-        factory.WithInternalApiKey("test-key");
+        factory.WithInternalClientSubjects(PermittedClientSubject);
         using DatabaseContext db = factory.CreateDbContext();
 
         int tenantId = await SeedTenant(db, "audit-tenant", $"ext-{Guid.NewGuid():N}");
@@ -412,7 +423,7 @@ public sealed class FleetAdminServiceTests
         FleetAdmin.FleetAdminClient client = new(channel);
 
         ListAuditLogEntriesResponse response = await client.ListAuditLogEntriesAsync(
-            new ListAuditLogEntriesRequest { Page = 1, PageSize = 50 }, Headers("test-key"));
+            new ListAuditLogEntriesRequest { Page = 1, PageSize = 50 }, Headers());
 
         await Assert.That(response.TotalCount).IsGreaterThanOrEqualTo(2);
 
@@ -425,7 +436,7 @@ public sealed class FleetAdminServiceTests
     public async Task ListAuditLogEntries_WithTenantFilter_FiltersEntries()
     {
         using FunctionalTestFactory factory = new();
-        factory.WithInternalApiKey("test-key");
+        factory.WithInternalClientSubjects(PermittedClientSubject);
         using DatabaseContext db = factory.CreateDbContext();
 
         string ext1 = $"ext-{Guid.NewGuid():N}";
@@ -443,7 +454,7 @@ public sealed class FleetAdminServiceTests
 
         ListAuditLogEntriesResponse response = await client.ListAuditLogEntriesAsync(
             new ListAuditLogEntriesRequest { TenantExternalId = ext1, Page = 1, PageSize = 50 },
-            Headers("test-key"));
+            Headers());
 
         await Assert.That(response.TotalCount).IsEqualTo(1);
     }
@@ -454,7 +465,7 @@ public sealed class FleetAdminServiceTests
     public async Task GetServerSettings_ReturnsAllSettings()
     {
         using FunctionalTestFactory factory = new();
-        factory.WithInternalApiKey("test-key");
+        factory.WithInternalClientSubjects(PermittedClientSubject);
         using DatabaseContext db = factory.CreateDbContext();
 
         await SeedServerSetting(db, ServerConfigurationSettingKeys.AgentHeartbeatSeconds, "30");
@@ -464,7 +475,7 @@ public sealed class FleetAdminServiceTests
         FleetAdmin.FleetAdminClient client = new(channel);
 
         GetServerSettingsResponse response = await client.GetServerSettingsAsync(
-            new GetServerSettingsRequest(), Headers("test-key"));
+            new GetServerSettingsRequest(), Headers());
 
         await Assert.That(response.Settings.Count).IsGreaterThanOrEqualTo(2);
 
@@ -486,7 +497,7 @@ public sealed class FleetAdminServiceTests
     public async Task GetServerSettings_IncludesServiceStatusSetting()
     {
         using FunctionalTestFactory factory = new();
-        factory.WithInternalApiKey("test-key");
+        factory.WithInternalClientSubjects(PermittedClientSubject);
         using DatabaseContext db = factory.CreateDbContext();
 
         await SeedServerSetting(db, ServerConfigurationSettingKeys.ServiceStatusSeconds, "3600");
@@ -495,7 +506,7 @@ public sealed class FleetAdminServiceTests
         FleetAdmin.FleetAdminClient client = new(channel);
 
         GetServerSettingsResponse response = await client.GetServerSettingsAsync(
-            new GetServerSettingsRequest(), Headers("test-key"));
+            new GetServerSettingsRequest(), Headers());
 
         ServerSetting? serviceStatus = null;
         foreach (ServerSetting s in response.Settings)
@@ -517,7 +528,7 @@ public sealed class FleetAdminServiceTests
     public async Task UpdateServerSetting_ValidKey_UpdatesValueAndIncrementsVersion()
     {
         using FunctionalTestFactory factory = new();
-        factory.WithInternalApiKey("test-key");
+        factory.WithInternalClientSubjects(PermittedClientSubject);
         using DatabaseContext db = factory.CreateDbContext();
 
         await SeedServerSetting(db, ServerConfigurationSettingKeys.AgentHeartbeatSeconds, "30");
@@ -531,7 +542,7 @@ public sealed class FleetAdminServiceTests
                 Key = (ServerSettingKey)(int)ServerConfigurationSettingKeys.AgentHeartbeatSeconds,
                 Value = "45"
             },
-            Headers("test-key"));
+            Headers());
 
         await Assert.That(response.Success).IsTrue();
 
@@ -548,7 +559,7 @@ public sealed class FleetAdminServiceTests
     public async Task UpdateServerSetting_ServiceStatus_ValidValue_Succeeds()
     {
         using FunctionalTestFactory factory = new();
-        factory.WithInternalApiKey("test-key");
+        factory.WithInternalClientSubjects(PermittedClientSubject);
         using DatabaseContext db = factory.CreateDbContext();
 
         await SeedServerSetting(db, ServerConfigurationSettingKeys.ServiceStatusSeconds, "3600");
@@ -562,7 +573,7 @@ public sealed class FleetAdminServiceTests
                 Key = (ServerSettingKey)(int)ServerConfigurationSettingKeys.ServiceStatusSeconds,
                 Value = "1800"
             },
-            Headers("test-key"));
+            Headers());
 
         await Assert.That(response.Success).IsTrue();
 
@@ -579,7 +590,7 @@ public sealed class FleetAdminServiceTests
     public async Task UpdateServerSetting_ServiceStatus_NonexistentRow_CreatesSetting()
     {
         using FunctionalTestFactory factory = new();
-        factory.WithInternalApiKey("test-key");
+        factory.WithInternalClientSubjects(PermittedClientSubject);
         using DatabaseContext db = factory.CreateDbContext();
         using GrpcChannel channel = CreateChannel(factory);
         FleetAdmin.FleetAdminClient client = new(channel);
@@ -592,7 +603,7 @@ public sealed class FleetAdminServiceTests
                 Key = (ServerSettingKey)(int)ServerConfigurationSettingKeys.ServiceStatusSeconds,
                 Value = "1800"
             },
-            Headers("test-key"));
+            Headers());
 
         await Assert.That(response.Success).IsTrue();
 
@@ -609,7 +620,7 @@ public sealed class FleetAdminServiceTests
     public async Task UpdateServerSetting_ValidKey_EvictsSharedRedisCacheEntry()
     {
         using FunctionalTestFactory factory = new();
-        factory.WithInternalApiKey("test-key");
+        factory.WithInternalClientSubjects(PermittedClientSubject);
         using DatabaseContext db = factory.CreateDbContext();
 
         await SeedServerSetting(db, ServerConfigurationSettingKeys.OnlineThresholdSeconds, "60");
@@ -634,7 +645,7 @@ public sealed class FleetAdminServiceTests
                 Key = (ServerSettingKey)(int)ServerConfigurationSettingKeys.OnlineThresholdSeconds,
                 Value = "90"
             },
-            Headers("test-key"));
+            Headers());
 
         await Assert.That(response.Success).IsTrue();
 
@@ -647,7 +658,7 @@ public sealed class FleetAdminServiceTests
     public async Task UpdateServerSetting_InvalidKey_ThrowsInvalidArgument()
     {
         using FunctionalTestFactory factory = new();
-        factory.WithInternalApiKey("test-key");
+        factory.WithInternalClientSubjects(PermittedClientSubject);
         using GrpcChannel channel = CreateChannel(factory);
         FleetAdmin.FleetAdminClient client = new(channel);
 
@@ -656,7 +667,7 @@ public sealed class FleetAdminServiceTests
         {
             await client.UpdateServerSettingAsync(
                 new UpdateServerSettingRequest { Key = (ServerSettingKey)999, Value = "bad" },
-                Headers("test-key"));
+                Headers());
         }
         catch (RpcException ex)
         {
@@ -673,7 +684,7 @@ public sealed class FleetAdminServiceTests
     public async Task UpdateTenantSubscription_ValidRequest_UpdatesAllFields()
     {
         using FunctionalTestFactory factory = new();
-        factory.WithInternalApiKey("test-key");
+        factory.WithInternalClientSubjects(PermittedClientSubject);
         using DatabaseContext db = factory.CreateDbContext();
 
         string extId = $"ext-{Guid.NewGuid():N}";
@@ -689,7 +700,7 @@ public sealed class FleetAdminServiceTests
                 Tier = BillingTier.Pro,
                 Status = "Active",
             },
-            Headers("test-key"));
+            Headers());
 
         await Assert.That(response.Success).IsTrue();
 
@@ -706,7 +717,7 @@ public sealed class FleetAdminServiceTests
     public async Task UpdateTenantSubscription_InvalidTier_ThrowsInvalidArgument()
     {
         using FunctionalTestFactory factory = new();
-        factory.WithInternalApiKey("test-key");
+        factory.WithInternalClientSubjects(PermittedClientSubject);
         using GrpcChannel channel = CreateChannel(factory);
         FleetAdmin.FleetAdminClient client = new(channel);
 
@@ -720,7 +731,7 @@ public sealed class FleetAdminServiceTests
                     Tier = BillingTier.Unspecified,
                     Status = "Active",
                 },
-                Headers("test-key"));
+                Headers());
         }
         catch (RpcException ex)
         {
@@ -736,7 +747,7 @@ public sealed class FleetAdminServiceTests
     public async Task UpdateTenantSubscription_NonexistentTenant_ThrowsNotFound()
     {
         using FunctionalTestFactory factory = new();
-        factory.WithInternalApiKey("test-key");
+        factory.WithInternalClientSubjects(PermittedClientSubject);
         using GrpcChannel channel = CreateChannel(factory);
         FleetAdmin.FleetAdminClient client = new(channel);
 
@@ -750,7 +761,7 @@ public sealed class FleetAdminServiceTests
                     Tier = BillingTier.Pro,
                     Status = "Active",
                 },
-                Headers("test-key"));
+                Headers());
         }
         catch (RpcException ex)
         {
@@ -767,7 +778,7 @@ public sealed class FleetAdminServiceTests
     public async Task SetTenantOverride_ValidRequest_WritesExactlyOneAuditLogEntry()
     {
         using FunctionalTestFactory factory = new();
-        factory.WithInternalApiKey("test-key");
+        factory.WithInternalClientSubjects(PermittedClientSubject);
         using DatabaseContext db = factory.CreateDbContext();
 
         string extId = $"ext-{Guid.NewGuid():N}";
@@ -785,7 +796,7 @@ public sealed class FleetAdminServiceTests
                 AlertRuleLimit = 10,
                 WebhookLimit = 5,
             },
-            Headers("test-key"));
+            Headers());
 
         await Assert.That(response.Success).IsTrue();
 
@@ -803,7 +814,7 @@ public sealed class FleetAdminServiceTests
     public async Task RemoveTenantOverride_ValidRequest_WritesExactlyOneAuditLogEntry()
     {
         using FunctionalTestFactory factory = new();
-        factory.WithInternalApiKey("test-key");
+        factory.WithInternalClientSubjects(PermittedClientSubject);
         using DatabaseContext db = factory.CreateDbContext();
 
         string extId = $"ext-{Guid.NewGuid():N}";
@@ -826,7 +837,7 @@ public sealed class FleetAdminServiceTests
 
         RemoveTenantOverrideResponse response = await client.RemoveTenantOverrideAsync(
             new RemoveTenantOverrideRequest { TenantExternalId = extId },
-            Headers("test-key"));
+            Headers());
 
         await Assert.That(response.Success).IsTrue();
 
@@ -846,7 +857,7 @@ public sealed class FleetAdminServiceTests
     public async Task ConfigureTenantOidc_NewConfig_CreatesRecord()
     {
         using FunctionalTestFactory factory = new();
-        factory.WithInternalApiKey("test-key");
+        factory.WithInternalClientSubjects(PermittedClientSubject);
         using DatabaseContext db = factory.CreateDbContext();
 
         string extId = $"ext-{Guid.NewGuid():N}";
@@ -866,7 +877,7 @@ public sealed class FleetAdminServiceTests
                 EmailDomain = "example.com",
                 IsEnabled = true
             },
-            Headers("test-key"));
+            Headers());
 
         await Assert.That(response.Success).IsTrue();
 
@@ -885,7 +896,7 @@ public sealed class FleetAdminServiceTests
     public async Task ConfigureTenantOidc_ExistingConfig_UpdatesRecord()
     {
         using FunctionalTestFactory factory = new();
-        factory.WithInternalApiKey("test-key");
+        factory.WithInternalClientSubjects(PermittedClientSubject);
         using DatabaseContext db = factory.CreateDbContext();
 
         string extId = $"ext-{Guid.NewGuid():N}";
@@ -918,7 +929,7 @@ public sealed class FleetAdminServiceTests
                 EmailDomain = "new.example.com",
                 IsEnabled = true
             },
-            Headers("test-key"));
+            Headers());
 
         await Assert.That(response.Success).IsTrue();
 
@@ -936,7 +947,7 @@ public sealed class FleetAdminServiceTests
     public async Task ConfigureTenantOidc_NonexistentTenant_ThrowsNotFound()
     {
         using FunctionalTestFactory factory = new();
-        factory.WithInternalApiKey("test-key");
+        factory.WithInternalClientSubjects(PermittedClientSubject);
         using GrpcChannel channel = CreateChannel(factory);
         FleetAdmin.FleetAdminClient client = new(channel);
 
@@ -953,7 +964,7 @@ public sealed class FleetAdminServiceTests
                     EmailDomain = "e.com",
                     IsEnabled = true
                 },
-                Headers("test-key"));
+                Headers());
         }
         catch (RpcException ex)
         {
@@ -970,7 +981,7 @@ public sealed class FleetAdminServiceTests
     public async Task RequestTenantDeletion_ValidTenant_DeactivatesAndSchedulesPurge()
     {
         using FunctionalTestFactory factory = new();
-        factory.WithInternalApiKey("test-key");
+        factory.WithInternalClientSubjects(PermittedClientSubject);
         using DatabaseContext db = factory.CreateDbContext();
 
         string extId = $"ext-{Guid.NewGuid():N}";
@@ -989,7 +1000,7 @@ public sealed class FleetAdminServiceTests
                 RequestedByUserId = userId,
                 Reason = "customer offboarding",
             },
-            Headers("test-key"));
+            Headers());
 
         await Assert.That(response.Success).IsTrue();
 
@@ -1020,7 +1031,7 @@ public sealed class FleetAdminServiceTests
     public async Task RequestTenantDeletion_SecondCallForSameTenant_ReturnsFailure()
     {
         using FunctionalTestFactory factory = new();
-        factory.WithInternalApiKey("test-key");
+        factory.WithInternalClientSubjects(PermittedClientSubject);
         using DatabaseContext db = factory.CreateDbContext();
 
         string extId = $"ext-{Guid.NewGuid():N}";
@@ -1032,13 +1043,13 @@ public sealed class FleetAdminServiceTests
 
         RequestTenantDeletionResponse first = await client.RequestTenantDeletionAsync(
             new RequestTenantDeletionRequest { TenantExternalId = extId, RequestedByUserId = userId },
-            Headers("test-key"));
+            Headers());
 
         await Assert.That(first.Success).IsTrue();
 
         RequestTenantDeletionResponse second = await client.RequestTenantDeletionAsync(
             new RequestTenantDeletionRequest { TenantExternalId = extId, RequestedByUserId = userId },
-            Headers("test-key"));
+            Headers());
 
         await Assert.That(second.Success).IsFalse();
 
@@ -1053,7 +1064,7 @@ public sealed class FleetAdminServiceTests
     public async Task RequestTenantDeletion_UnknownTenant_ThrowsNotFound()
     {
         using FunctionalTestFactory factory = new();
-        factory.WithInternalApiKey("test-key");
+        factory.WithInternalClientSubjects(PermittedClientSubject);
         using GrpcChannel channel = CreateChannel(factory);
         FleetAdmin.FleetAdminClient client = new(channel);
 
@@ -1062,7 +1073,7 @@ public sealed class FleetAdminServiceTests
         {
             await client.RequestTenantDeletionAsync(
                 new RequestTenantDeletionRequest { TenantExternalId = "does-not-exist", RequestedByUserId = 1 },
-                Headers("test-key"));
+                Headers());
         }
         catch (RpcException ex)
         {
@@ -1077,7 +1088,7 @@ public sealed class FleetAdminServiceTests
     public async Task RequestTenantDeletion_MissingInternalKey_ThrowsUnauthenticated()
     {
         using FunctionalTestFactory factory = new();
-        factory.WithInternalApiKey("test-key");
+        factory.WithInternalClientSubjects(PermittedClientSubject);
         using GrpcChannel channel = CreateChannel(factory);
         FleetAdmin.FleetAdminClient client = new(channel);
 
@@ -1100,7 +1111,7 @@ public sealed class FleetAdminServiceTests
     public async Task RequestTenantDeletion_DeactivatesTenant_BlocksTelemetryIngest()
     {
         using FunctionalTestFactory factory = new();
-        factory.WithInternalApiKey("test-key");
+        factory.WithInternalClientSubjects(PermittedClientSubject);
         using DatabaseContext db = factory.CreateDbContext();
 
         string extId = $"ext-{Guid.NewGuid():N}";
@@ -1119,7 +1130,7 @@ public sealed class FleetAdminServiceTests
 
         RequestTenantDeletionResponse response = await client.RequestTenantDeletionAsync(
             new RequestTenantDeletionRequest { TenantExternalId = extId, RequestedByUserId = userId },
-            Headers("test-key"));
+            Headers());
 
         await Assert.That(response.Success).IsTrue();
 
@@ -1134,7 +1145,7 @@ public sealed class FleetAdminServiceTests
     public async Task RestoreTenant_DeactivatedTenant_RestoresAndReactivates()
     {
         using FunctionalTestFactory factory = new();
-        factory.WithInternalApiKey("test-key");
+        factory.WithInternalClientSubjects(PermittedClientSubject);
         using DatabaseContext db = factory.CreateDbContext();
 
         string extId = $"ext-{Guid.NewGuid():N}";
@@ -1146,13 +1157,13 @@ public sealed class FleetAdminServiceTests
 
         RequestTenantDeletionResponse requestResponse = await client.RequestTenantDeletionAsync(
             new RequestTenantDeletionRequest { TenantExternalId = extId, RequestedByUserId = userId },
-            Headers("test-key"));
+            Headers());
 
         await Assert.That(requestResponse.Success).IsTrue();
 
         RestoreTenantResponse restoreResponse = await client.RestoreTenantAsync(
             new RestoreTenantRequest { TenantExternalId = extId, RequestedByUserId = userId },
-            Headers("test-key"));
+            Headers());
 
         await Assert.That(restoreResponse.Success).IsTrue();
 
@@ -1172,7 +1183,7 @@ public sealed class FleetAdminServiceTests
     public async Task RestoreTenant_NoPendingDeletion_ReturnsFailure()
     {
         using FunctionalTestFactory factory = new();
-        factory.WithInternalApiKey("test-key");
+        factory.WithInternalClientSubjects(PermittedClientSubject);
         using DatabaseContext db = factory.CreateDbContext();
 
         string extId = $"ext-{Guid.NewGuid():N}";
@@ -1183,7 +1194,7 @@ public sealed class FleetAdminServiceTests
 
         RestoreTenantResponse restoreResponse = await client.RestoreTenantAsync(
             new RestoreTenantRequest { TenantExternalId = extId, RequestedByUserId = 1 },
-            Headers("test-key"));
+            Headers());
 
         await Assert.That(restoreResponse.Success).IsFalse();
     }
@@ -1192,7 +1203,7 @@ public sealed class FleetAdminServiceTests
     public async Task RestoreTenant_UnknownTenant_ThrowsNotFound()
     {
         using FunctionalTestFactory factory = new();
-        factory.WithInternalApiKey("test-key");
+        factory.WithInternalClientSubjects(PermittedClientSubject);
         using GrpcChannel channel = CreateChannel(factory);
         FleetAdmin.FleetAdminClient client = new(channel);
 
@@ -1201,7 +1212,7 @@ public sealed class FleetAdminServiceTests
         {
             await client.RestoreTenantAsync(
                 new RestoreTenantRequest { TenantExternalId = "does-not-exist", RequestedByUserId = 1 },
-                Headers("test-key"));
+                Headers());
         }
         catch (RpcException ex)
         {
@@ -1216,7 +1227,7 @@ public sealed class FleetAdminServiceTests
     public async Task RestoreTenant_MissingInternalKey_ThrowsUnauthenticated()
     {
         using FunctionalTestFactory factory = new();
-        factory.WithInternalApiKey("test-key");
+        factory.WithInternalClientSubjects(PermittedClientSubject);
         using GrpcChannel channel = CreateChannel(factory);
         FleetAdmin.FleetAdminClient client = new(channel);
 
@@ -1241,7 +1252,7 @@ public sealed class FleetAdminServiceTests
     public async Task ListTenantDeletions_ExcludeCompleted_ReturnsOnlyDeactivated()
     {
         using FunctionalTestFactory factory = new();
-        factory.WithInternalApiKey("test-key");
+        factory.WithInternalClientSubjects(PermittedClientSubject);
         using DatabaseContext db = factory.CreateDbContext();
 
         string extActive = $"ext-{Guid.NewGuid():N}";
@@ -1255,18 +1266,18 @@ public sealed class FleetAdminServiceTests
 
         await client.RequestTenantDeletionAsync(
             new RequestTenantDeletionRequest { TenantExternalId = extActive, RequestedByUserId = userId, Reason = "still pending" },
-            Headers("test-key"));
+            Headers());
 
         await client.RequestTenantDeletionAsync(
             new RequestTenantDeletionRequest { TenantExternalId = extRestored, RequestedByUserId = userId },
-            Headers("test-key"));
+            Headers());
         await client.RestoreTenantAsync(
             new RestoreTenantRequest { TenantExternalId = extRestored, RequestedByUserId = userId },
-            Headers("test-key"));
+            Headers());
 
         ListTenantDeletionsResponse excludeCompleted = await client.ListTenantDeletionsAsync(
             new ListTenantDeletionsRequest { IncludeCompleted = false, Page = 1, PageSize = 50 },
-            Headers("test-key"));
+            Headers());
 
         await Assert.That(excludeCompleted.Deletions.Count).IsEqualTo(1);
         await Assert.That(excludeCompleted.Deletions[0].TenantExternalId).IsEqualTo(extActive);
@@ -1277,7 +1288,7 @@ public sealed class FleetAdminServiceTests
 
         ListTenantDeletionsResponse includeCompleted = await client.ListTenantDeletionsAsync(
             new ListTenantDeletionsRequest { IncludeCompleted = true, Page = 1, PageSize = 50 },
-            Headers("test-key"));
+            Headers());
 
         await Assert.That(includeCompleted.TotalCount).IsEqualTo(2);
 
@@ -1299,7 +1310,7 @@ public sealed class FleetAdminServiceTests
     public async Task ListTenantDeletions_Pagination_ReturnsRequestedPageAndTotalCount()
     {
         using FunctionalTestFactory factory = new();
-        factory.WithInternalApiKey("test-key");
+        factory.WithInternalClientSubjects(PermittedClientSubject);
         using DatabaseContext db = factory.CreateDbContext();
 
         int userId = await SeedUser(db, "page-user", $"ext-u-{Guid.NewGuid():N}", AuthProviderType.GitHub);
@@ -1313,19 +1324,19 @@ public sealed class FleetAdminServiceTests
             await SeedTenantWithSubscription(db, extId, SubscriptionTier.Pro);
             await client.RequestTenantDeletionAsync(
                 new RequestTenantDeletionRequest { TenantExternalId = extId, RequestedByUserId = userId },
-                Headers("test-key"));
+                Headers());
         }
 
         ListTenantDeletionsResponse page1 = await client.ListTenantDeletionsAsync(
             new ListTenantDeletionsRequest { IncludeCompleted = true, Page = 1, PageSize = 2 },
-            Headers("test-key"));
+            Headers());
 
         await Assert.That(page1.TotalCount).IsEqualTo(3);
         await Assert.That(page1.Deletions.Count).IsEqualTo(2);
 
         ListTenantDeletionsResponse page2 = await client.ListTenantDeletionsAsync(
             new ListTenantDeletionsRequest { IncludeCompleted = true, Page = 2, PageSize = 2 },
-            Headers("test-key"));
+            Headers());
 
         await Assert.That(page2.TotalCount).IsEqualTo(3);
         await Assert.That(page2.Deletions.Count).IsEqualTo(1);
@@ -1335,7 +1346,7 @@ public sealed class FleetAdminServiceTests
     public async Task ListTenantDeletions_MissingInternalKey_ThrowsUnauthenticated()
     {
         using FunctionalTestFactory factory = new();
-        factory.WithInternalApiKey("test-key");
+        factory.WithInternalClientSubjects(PermittedClientSubject);
         using GrpcChannel channel = CreateChannel(factory);
         FleetAdmin.FleetAdminClient client = new(channel);
 
@@ -1356,9 +1367,14 @@ public sealed class FleetAdminServiceTests
 
     // ========== Helpers ==========
 
-    private static Metadata Headers(string key)
+    /// <summary>
+    /// Builds the call metadata that makes the caller appear to hold a client certificate for
+    /// <paramref name="subject"/>. In production this identity comes from the TLS handshake on
+    /// the internal mutual-TLS port, not from a header.
+    /// </summary>
+    private static Metadata Headers(string subject = PermittedClientSubject)
     {
-        return new Metadata { { "x-internal-key", key } };
+        return new Metadata { { TestClientCertificateMiddleware.SubjectHeader, subject } };
     }
 
     private static GrpcChannel CreateChannel(FunctionalTestFactory factory)

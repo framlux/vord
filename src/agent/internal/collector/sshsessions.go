@@ -42,10 +42,10 @@ func (c *SSHSessionsCollector) DefaultInterval() time.Duration {
 }
 
 var (
-	reAccepted    = regexp.MustCompile(`Accepted (\S+) for (\S+) from ([\d.:a-fA-F]+) port (\d+)`)
-	reDisconnect  = regexp.MustCompile(`Disconnected from user (\S+) ([\d.:a-fA-F]+) port (\d+)`)
-	reFailed      = regexp.MustCompile(`Failed (\S+) for (\S+) from ([\d.:a-fA-F]+) port (\d+)`)
-	reSessionOpen = regexp.MustCompile(`session opened for user (\S+)`)
+	reAccepted     = regexp.MustCompile(`Accepted (\S+) for (\S+) from ([\d.:a-fA-F]+) port (\d+)`)
+	reDisconnect   = regexp.MustCompile(`Disconnected from user (\S+) ([\d.:a-fA-F]+) port (\d+)`)
+	reFailed       = regexp.MustCompile(`Failed (\S+) for (\S+) from ([\d.:a-fA-F]+) port (\d+)`)
+	reSessionOpen  = regexp.MustCompile(`session opened for user (\S+)`)
 	reSessionClose = regexp.MustCompile(`session closed for user (\S+)`)
 )
 

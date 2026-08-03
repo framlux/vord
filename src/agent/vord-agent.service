@@ -15,6 +15,10 @@ TimeoutStopSec=30
 MemoryMax=512M
 CPUQuota=50%
 StateDirectory=vord-agent
+# The default StateDirectoryMode is 0755, which systemd re-applies on every start. The agent's
+# SQLite database holds the machine's issued API key, so keep the directory owner-only to match
+# the 0700 the package ships.
+StateDirectoryMode=0700
 
 ProtectSystem=strict
 ReadWritePaths=/var/lib/vord-agent /etc/framlux
