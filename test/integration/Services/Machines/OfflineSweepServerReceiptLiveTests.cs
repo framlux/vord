@@ -123,6 +123,18 @@ public sealed class OfflineSweepServerReceiptLiveTests
         return (machineId, tenantId);
     }
 
+    /// <summary>
+    /// Drops the sub-microsecond component of an instant so it survives a PostgreSQL timestamptz
+    /// round trip unchanged. Without this, a value written and read back is not equal to the one
+    /// held in memory.
+    /// </summary>
+    /// <param name="value">The instant to truncate.</param>
+    /// <returns>The instant with microsecond precision.</returns>
+    private static DateTimeOffset TruncateToMicroseconds(DateTimeOffset value)
+    {
+        return value.AddTicks(-(value.Ticks % TimeSpan.TicksPerMicrosecond));
+    }
+
     [Test]
     public async Task OfflineSweep_LastSeenDerivesFromServerReceipt_MarksSkewedDeadAgentOffline()
     {
@@ -141,7 +153,14 @@ public sealed class OfflineSweepServerReceiptLiveTests
             HealthStatus = 0,
         });
 
-        DateTimeOffset now = DateTimeOffset.UtcNow;
+        // Truncated to microseconds because PostgreSQL timestamptz stores microsecond precision
+        // while DateTimeOffset counts 100ns ticks. Writing a raw UtcNow and then asserting exact
+        // equality against it compares a value that was truncated on the way into the database
+        // with one that was not, so the assertion failed for roughly nine runs in ten — and the
+        // failure printed identical expected and received values, because they differ below the
+        // displayed precision. The sweep still needs a real clock (it is compared against
+        // Postgres NOW()), so the instant stays live; only its precision is aligned.
+        DateTimeOffset now = TruncateToMicroseconds(DateTimeOffset.UtcNow);
 
         // The agent's clock is three days fast (ReceivedAt in the future), but the server actually
         // received these rows well beyond the offline threshold ago. A full day back keeps the machine
