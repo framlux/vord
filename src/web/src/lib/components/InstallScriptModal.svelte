@@ -3,7 +3,7 @@
      See LICENSE for details. -->
 
 <script lang="ts">
-	import { generateInstallScript } from '$lib/utils/install-script';
+	import { generateInstallCommand } from '$lib/utils/install-script';
 	import { Copy, Check, X } from 'lucide-svelte';
 
 	let {
@@ -20,7 +20,7 @@
 
 	let copied = $state(false);
 
-	const script = $derived(generateInstallScript(token, serverAddress));
+	const script = $derived(generateInstallCommand(token, serverAddress));
 
 	function copyScript() {
 		navigator.clipboard.writeText(script);
@@ -39,7 +39,7 @@
 		>
 			<div class="flex items-center justify-between">
 				<h3 id="install-script-dialog-title" class="text-lg font-semibold text-surface-900 dark:text-surface-50">
-					Install Script
+					Install Command
 				</h3>
 				<button
 					onclick={onclose}
@@ -50,9 +50,10 @@
 				</button>
 			</div>
 			<p class="mt-1 text-sm text-surface-500">
-				Run this script on your target machine to install and configure the agent automatically.
+				Run this command as root on your target machine. It downloads the installer, adds the
+				package repository, installs the agent and registers it with this token.
 			</p>
-			<div class="mt-4 max-h-96 overflow-y-auto rounded-lg border border-surface-200 bg-surface-900 dark:border-surface-600 dark:bg-surface-950">
+			<div class="mt-4 rounded-lg border border-surface-200 bg-surface-900 dark:border-surface-600 dark:bg-surface-950">
 				<pre class="overflow-x-auto p-4 text-xs leading-relaxed text-surface-100"><code>{script}</code></pre>
 			</div>
 			<div class="mt-4 flex justify-end gap-3">
@@ -71,7 +72,7 @@
 						Copied
 					{:else}
 						<Copy size={16} />
-						Copy Script
+						Copy Command
 					{/if}
 				</button>
 			</div>

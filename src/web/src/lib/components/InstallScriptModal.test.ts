@@ -23,14 +23,14 @@ describe('InstallScriptModal', () => {
         expect(screen.getByRole('dialog')).toBeInTheDocument();
     });
 
-    it('should display the Install Script title', () => {
+    it('should display the Install Command title', () => {
         render(InstallScriptModal, {
             props: {
                 open: true,
                 token: 'test-token-123'
             }
         });
-        expect(screen.getByText('Install Script')).toBeInTheDocument();
+        expect(screen.getByText('Install Command')).toBeInTheDocument();
     });
 
     it('should display a code block containing the token value in the script', () => {
@@ -45,14 +45,14 @@ describe('InstallScriptModal', () => {
         expect(codeBlock?.textContent).toContain('my-unique-token-xyz');
     });
 
-    it('should have a Copy Script button', () => {
+    it('should have a Copy Command button', () => {
         render(InstallScriptModal, {
             props: {
                 open: true,
                 token: 'test-token'
             }
         });
-        expect(screen.getByText('Copy Script')).toBeInTheDocument();
+        expect(screen.getByText('Copy Command')).toBeInTheDocument();
     });
 
     it('should have a Close button', () => {
@@ -93,7 +93,7 @@ describe('InstallScriptModal', () => {
         expect(onclose).toHaveBeenCalledOnce();
     });
 
-    it('should copy script to clipboard when Copy Script button is clicked', async () => {
+    it('should copy the command to clipboard when Copy Command button is clicked', async () => {
         const writeText = vi.fn().mockResolvedValue(undefined);
         Object.assign(navigator, {
             clipboard: { writeText }
@@ -106,11 +106,12 @@ describe('InstallScriptModal', () => {
             }
         });
 
-        await fireEvent.click(screen.getByText('Copy Script'));
+        await fireEvent.click(screen.getByText('Copy Command'));
         expect(writeText).toHaveBeenCalledOnce();
         const copiedText = writeText.mock.calls[0][0];
         expect(copiedText).toContain('clipboard-test-token');
-        expect(copiedText).toContain('#!/usr/bin/env bash');
+        expect(copiedText).toContain('curl -fsSL https://get.vordfleet.dev | sudo bash -s --');
+        expect(copiedText).not.toContain('\n');
     });
 
     it('should have correct aria attributes for accessibility', () => {
