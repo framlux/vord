@@ -375,7 +375,11 @@ public class MachineStateStreamingServiceTests
             .Select(i => Row(i, 100, TelemetryTypeIds.CpuUsage, $$"""{ "cpu_usage_percent": {{i}} }""", t0.AddMinutes(i)))
             .ToList();
         spy.GetTelemetryBatchAsync(Arg.Any<long>(), Arg.Any<DateTimeOffset>(), Arg.Any<DateTimeOffset>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
-            .Returns(batch, []); // first poll returns the batch, then empty
+            // NOTE: the second value must be a real empty list, not the collection expression [].
+            // In a params position [] binds as the empty params ARRAY, so `Returns(batch, [])`
+            // means `Returns(batch)` — which NSubstitute treats as "return this on every call".
+            // The loop then re-reads the same batch on every poll and applies it repeatedly.
+            .Returns(batch, new List<MachineTelemetry>());
 
         await RunOneLoopIterationAsync(spy);
 
@@ -393,7 +397,7 @@ public class MachineStateStreamingServiceTests
         // only returns the rows this shard owns.
         IMachineStateRepository spy = Substitute.For<IMachineStateRepository>();
         spy.GetTelemetryBatchAsync(Arg.Any<long>(), Arg.Any<DateTimeOffset>(), Arg.Any<DateTimeOffset>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
-            .Returns([], []);
+            .Returns(new List<MachineTelemetry>(), new List<MachineTelemetry>());
 
         await RunOneLoopIterationAsync(spy, shardIndex: 1, shardCount: 2);
 
@@ -529,7 +533,11 @@ public class MachineStateStreamingServiceTests
             Row(2, 100, TelemetryTypeIds.MemoryUsage, """{ "memory_usage_percent": 25 }""", t0),
         ];
         spy.GetTelemetryBatchAsync(Arg.Any<long>(), Arg.Any<DateTimeOffset>(), Arg.Any<DateTimeOffset>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
-            .Returns(batch, []); // first poll returns the batch, then empty
+            // NOTE: the second value must be a real empty list, not the collection expression [].
+            // In a params position [] binds as the empty params ARRAY, so `Returns(batch, [])`
+            // means `Returns(batch)` — which NSubstitute treats as "return this on every call".
+            // The loop then re-reads the same batch on every poll and applies it repeatedly.
+            .Returns(batch, new List<MachineTelemetry>());
 
         await RunOneLoopIterationAsync(spy);
 
@@ -968,7 +976,11 @@ public class MachineStateStreamingServiceTests
         // First poll yields the batch (advancing the mark to 42), every later poll is empty so the
         // loop idles deterministically on the FixedTimeProvider until cancellation unwinds it.
         spy.GetTelemetryBatchAsync(Arg.Any<long>(), Arg.Any<DateTimeOffset>(), Arg.Any<DateTimeOffset>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
-            .Returns(batch, []);
+            // NOTE: the second value must be a real empty list, not the collection expression [].
+            // In a params position [] binds as the empty params ARRAY, so `Returns(batch, [])`
+            // means `Returns(batch)` — which NSubstitute treats as "return this on every call".
+            // The loop then re-reads the same batch on every poll and applies it repeatedly.
+            .Returns(batch, new List<MachineTelemetry>());
 
         // Completion is gated on the loop's SECOND poll, which only fires after the batch was
         // applied and the mark advanced — a deterministic, wall-clock-independent signal.
