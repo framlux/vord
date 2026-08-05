@@ -19,11 +19,23 @@ namespace Framlux.FleetManagement.Test.Integration;
 /// </summary>
 public sealed class PostgresFixture : IAsyncDisposable
 {
-    // Sizing for the shared connection budget. Roughly forty pools exist at peak — one per
-    // fixture plus one per per-test child database — so the server ceiling is set well clear of
-    // what the capped pools can collectively demand.
-    private const int MaxServerConnections = 500;
-    private const int MaxConnectionsPerPool = 10;
+    // Sizing for the shared connection budget. The server ceiling is what keeps the suite off
+    // "sorry, too many clients already": every class now draws on one budget instead of a private
+    // container's default of 100, and a full run peaks around ninety backends, which left almost
+    // no headroom at that default.
+    //
+    // The per-pool cap does no work at today's load — measured demand is under three connections
+    // per pool — and exists only to bound future growth. It is set well above the busiest class
+    // rather than at its demand: PostgresAdvisoryLockProviderLiveTests runs six tests in parallel
+    // against one pool needing ten connections between them, and one of those tests deliberately
+    // never disposes its lock handle, so that slot stays checked out for the rest of the class.
+    // A cap that merely matched the current demand would leave the class with negative margin and
+    // start queueing against the connection timeout the moment another lock test is added.
+    //
+    // Thirty-four pools live over a run — one per fixture plus one per per-test child database —
+    // so the ceiling stays clear of what the caps could collectively demand.
+    private const int MaxServerConnections = 800;
+    private const int MaxConnectionsPerPool = 20;
 
     // ExecutionAndPublication guarantees the container factory runs exactly once even though TUnit
     // invokes InitializeAsync from many class-level hooks concurrently. The Lazy wraps the Task
