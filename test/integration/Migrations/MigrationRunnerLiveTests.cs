@@ -19,12 +19,27 @@ namespace Framlux.FleetManagement.Test.Integration.Migrations;
 /// in-memory SQLite used in unit tests.
 /// </summary>
 /// <remarks>
-/// Per the saved-feedback memory <c>feedback_migrations_initial.md</c>: the app is deployed,
-/// migrations must be idempotent, and a broken migration is unrecoverable in prod. These tests
-/// catch that class of bug before it ships.
+/// Per the saved-feedback memory <c>feedback_migrations_initial.md</c>, the app is deployed and a
+/// broken migration is unrecoverable in prod — but for InitialMigration and InitialMigration2
+/// specifically, "broken" is not "not idempotent". Both are fresh-install-only: pre-production
+/// policy is to edit them in place and recreate databases, and once the first production release
+/// ships they are frozen forever, with every later schema change landing in its own new migration
+/// file. They are not, and are not meant to be, fully re-entrant against an already-migrated
+/// database — almost none of their DDL carries an IF NOT EXISTS or relkind guard, because none of
+/// it is meant to run twice. These tests instead guard three things: a clean apply on a fresh
+/// database produces the exact intended shape, a second MigrateUp() against an already-migrated
+/// database is a safe no-op via FluentMigrator's own VersionInfo tracking (the real pod-restart
+/// path), and the one re-entrancy guard InitialMigration does carry and can actually be exercised —
+/// CREATE SCHEMA IF NOT EXISTS "hangfire" — still holds if the migration body is genuinely
+/// re-entered.
 /// </remarks>
 public sealed class MigrationRunnerLiveTests
 {
+    // FluentMigrator's applied-version number for InitialMigration, computed by MigrationVersion
+    // from [MigrationVersion(2026, 04, 05, 1)] as (2026 * 1_000_000_000L) + (4 * 100_000L) +
+    // (5 * 1_000L) + 1.
+    private const long InitialMigrationVersion = 2026000405001L;
+
     private static PostgresFixture _fixture = default!;
 
     [Before(Class)]
@@ -108,11 +123,14 @@ public sealed class MigrationRunnerLiveTests
     }
 
     [Test]
-    public async Task MigrationChain_IsIdempotent_OnSecondRun()
+    public async Task MigrationChain_SkipsAlreadyAppliedVersions_OnSecondMigrateUp()
     {
-        // Run the chain on a fresh DB, then run it again — FluentMigrator's VersionInfo table
-        // tracks completed migrations and should make the second invocation a no-op (no errors,
-        // no duplicate column adds).
+        // The real production scenario this covers: every pod restart calls MigrateUp against a
+        // database that has already been migrated. FluentMigrator reads VersionInfo and skips any
+        // version already recorded there, so this proves that path is a safe no-op. It does NOT
+        // prove the migrations' own bodies are idempotent — a skipped call never re-executes any
+        // migration SQL, so this would still pass if every re-entrancy guard inside the migrations
+        // were deleted. That is exercised separately below.
         string connStr = BuildIsolatedDatabaseConnectionString();
         await using ServiceProvider provider = BuildMigrationServices(connStr);
         using IServiceScope scope = provider.CreateScope();
@@ -127,6 +145,73 @@ public sealed class MigrationRunnerLiveTests
         long secondRunVersionCount = await CountVersionsAsync(connStr);
 
         await Assert.That(secondRunVersionCount).IsEqualTo(firstRunVersionCount);
+    }
+
+    [Test]
+    public async Task InitialMigration_HangfireSchemaGuard_SurvivesReexecution_WhenMigrationBodyReapplies()
+    {
+        // Unlike a migration that alters an already-existing production table, InitialMigration and
+        // InitialMigration2 only ever run once, against a genuinely fresh database: pre-production
+        // policy is to edit them in place and recreate databases, and once the first production
+        // release ships they are frozen and a new schema change becomes a new migration file with
+        // its own version. FluentMigrator's VersionInfo skip (covered above) is what keeps a normal
+        // MigrateUp from ever re-entering their bodies.
+        //
+        // Confirmed directly against Postgres: deleting InitialMigration's VersionInfo row and
+        // calling MigrateUp() again throws 42P07 ("relation \"ConfigurationSettings\" already
+        // exists") on Create.Table(TableNames.ServerConfigurationSettings) — the first statement in
+        // Up() after the schema guard. Almost none of InitialMigration's DDL (its Create.Table
+        // calls, its daily partition creation, most of its raw-SQL indexes) carries an IF NOT
+        // EXISTS or relkind guard, because none of it is meant to run twice; InitialMigration is not
+        // — and is not meant to be — fully re-entrant, and a real reapply of its full body is
+        // expected to keep failing there until this migration is frozen and superseded by
+        // incrementals that are each designed for it.
+        //
+        // CREATE SCHEMA IF NOT EXISTS "hangfire" is the one exception worth a regression test: it is
+        // the very first statement in Up(), ahead of every unguarded one, so it is the only guarded
+        // statement a genuine second MigrateUp() call can actually reach and exercise — this test
+        // calls the real compiled Up() body rather than a hand-copied duplicate of its SQL, so an
+        // edit to the guard in InitialMigration.cs is what this test would catch. The three
+        // pg_trgm-related guards later in Up() are unreachable this way: the unguarded failure above
+        // always happens first, so their own re-entrancy is not exercised by any test in this file.
+        string connStr = BuildIsolatedDatabaseConnectionString();
+        await using ServiceProvider provider = BuildMigrationServices(connStr);
+        using IServiceScope scope = provider.CreateScope();
+        scope.ServiceProvider.GetRequiredService<IMigrationRunner>().MigrateUp();
+
+        // FluentMigrator caches VersionInfo in memory per runner instance, so deleting the row and
+        // calling MigrateUp() again on the SAME runner would still see it as applied and skip the
+        // migration regardless of whether the guard exists. A fresh provider/scope/runner is built
+        // below for the reapply, the same way a real second pod calling MigrateUp() with its own
+        // runner would.
+        int deletedVersionRows = await DeleteMigrationVersionAsync(connStr, InitialMigrationVersion);
+        // If this migration's version number ever drifts from the literal above, or FluentMigrator's
+        // version table is ever reconfigured, the DELETE would silently affect zero rows and the
+        // reapply below would skip the migration entirely rather than reaching the schema guard —
+        // exactly the false-green class this test exists to eliminate.
+        await Assert.That(deletedVersionRows).IsEqualTo(1);
+
+        await using ServiceProvider reapplyProvider = BuildMigrationServices(connStr);
+        using IServiceScope reapplyScope = reapplyProvider.CreateScope();
+        IMigrationRunner reapplyRunner = reapplyScope.ServiceProvider.GetRequiredService<IMigrationRunner>();
+
+        Exception? reapplyException = null;
+        try
+        {
+            reapplyRunner.MigrateUp();
+        }
+        catch (Exception ex)
+        {
+            reapplyException = ex;
+        }
+
+        // The reapply IS expected to fail — see the remarks above — but only once it reaches the
+        // first unguarded statement. If the hangfire schema guard had been removed, that would be
+        // the statement to fail instead, with an error naming "hangfire" rather than
+        // "ConfigurationSettings".
+        await Assert.That(reapplyException).IsNotNull();
+        await Assert.That(reapplyException!.Message).Contains("ConfigurationSettings");
+        await Assert.That(reapplyException.Message).DoesNotContain("hangfire");
     }
 
     [Test]
@@ -407,12 +492,16 @@ public sealed class MigrationRunnerLiveTests
         await Assert.That(await GetIndexDefAsync(connStr, "IX_IntegrationEndpoints_TenantId")).IsNotNull();
         await Assert.That(await GetIndexDefAsync(connStr, "IX_IntegrationEndpoints_TenantId_Provider")).IsNotNull();
 
-        // IX_TenantDeletions_ActiveTenant is existence-only for a different reason: unlike the
-        // pair above, its predicate (WHERE "Status" <> 3) is semantically meaningful — a restored
-        // tenant must become deletable again — and that predicate is asserted on neither dialect
-        // here. That gap is tracked separately (vord-1al); this check only proves the index
-        // exists, not that its predicate is correct.
-        await Assert.That(await GetIndexDefAsync(connStr, "IX_TenantDeletions_ActiveTenant")).IsNotNull();
+        // IX_TenantDeletions_ActiveTenant is byte-identical across dialects, but unlike the
+        // IntegrationEndpoints pair above, its predicate (WHERE "Status" <> 3) carries the entire
+        // semantic: it is what lets a restored tenant (Status = 3, Restored) be deleted again,
+        // by excluding Restored rows from the "at most one active deletion per tenant" guard. A
+        // regression that dropped or inverted that predicate would pass every other test in the
+        // repo, so assert the full definition rather than treating this like the byte-identical
+        // pair it happens to share this section with.
+        string? tenantDeletionsActive = await GetIndexDefAsync(connStr, "IX_TenantDeletions_ActiveTenant");
+        await Assert.That(tenantDeletionsActive).IsEqualTo(
+            "CREATE UNIQUE INDEX \"IX_TenantDeletions_ActiveTenant\" ON public.\"TenantDeletions\" USING btree (\"TenantId\") WHERE (\"Status\" <> 3)");
     }
 
     [Test]
@@ -566,6 +655,23 @@ public sealed class MigrationRunnerLiveTests
         object? result = await cmd.ExecuteScalarAsync();
 
         return result is long l ? l : Convert.ToInt64(result);
+    }
+
+    /// <summary>
+    /// Deletes a single recorded version from FluentMigrator's VersionInfo table, so a subsequent
+    /// MigrateUp treats that migration as unapplied and re-executes its body instead of skipping
+    /// it.
+    /// </summary>
+    /// <returns>The number of rows the DELETE affected, so a caller can confirm it hit exactly one.</returns>
+    private static async Task<int> DeleteMigrationVersionAsync(string connStr, long version)
+    {
+        await using NpgsqlConnection conn = new(connStr);
+        await conn.OpenAsync();
+        await using NpgsqlCommand cmd = conn.CreateCommand();
+        cmd.CommandText = @"DELETE FROM ""VersionInfo"" WHERE ""Version"" = @v";
+        cmd.Parameters.AddWithValue("@v", version);
+
+        return await cmd.ExecuteNonQueryAsync();
     }
 
     private static async Task<char?> GetRelkindAsync(string connStr, string relName)

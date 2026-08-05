@@ -19,7 +19,7 @@ public sealed class AdvisoryLockLivenessLiveTests
 {
     private static PostgresFixture _fixture = default!;
 
-    /// <summary>Starts the Postgres container once for the class. No schema is needed for advisory locks.</summary>
+    /// <summary>Creates the class's own database on the shared Postgres container. No schema is needed for advisory locks.</summary>
     [Before(Class)]
     public static async Task BeforeClass()
     {
@@ -27,7 +27,7 @@ public sealed class AdvisoryLockLivenessLiveTests
         await _fixture.InitializeAsync();
     }
 
-    /// <summary>Stops the Postgres container after the class.</summary>
+    /// <summary>Releases the class's data source after the class.</summary>
     [After(Class)]
     public static async Task AfterClass()
     {
@@ -49,6 +49,9 @@ public sealed class AdvisoryLockLivenessLiveTests
         await Assert.That(blocked).IsNull();
 
         // Terminate the backend that holds the advisory lock, from a separate admin connection.
+        // pg_stat_activity and pg_locks span the whole cluster, so the sweep is confined to this
+        // test's own database — other classes run their advisory-lock tests concurrently on the
+        // same Postgres instance and must not have their lock holders killed from under them.
         await using (NpgsqlConnection admin = await _fixture.DataSource.OpenConnectionAsync(CancellationToken.None))
         {
             await using NpgsqlCommand kill = admin.CreateCommand();
@@ -56,7 +59,9 @@ public sealed class AdvisoryLockLivenessLiveTests
                 SELECT pg_terminate_backend(a.pid)
                 FROM pg_stat_activity a
                 JOIN pg_locks l ON l.pid = a.pid
-                WHERE l.locktype = 'advisory' AND a.pid <> pg_backend_pid()";
+                WHERE l.locktype = 'advisory'
+                  AND a.pid <> pg_backend_pid()
+                  AND a.datname = current_database()";
             await kill.ExecuteNonQueryAsync(CancellationToken.None);
         }
 
