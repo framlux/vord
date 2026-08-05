@@ -19,7 +19,7 @@ public sealed class AdvisoryLockLivenessLiveTests
 {
     private static PostgresFixture _fixture = default!;
 
-    /// <summary>Starts the Postgres container once for the class. No schema is needed for advisory locks.</summary>
+    /// <summary>Creates the class's own database on the shared Postgres container. No schema is needed for advisory locks.</summary>
     [Before(Class)]
     public static async Task BeforeClass()
     {
@@ -27,7 +27,7 @@ public sealed class AdvisoryLockLivenessLiveTests
         await _fixture.InitializeAsync();
     }
 
-    /// <summary>Stops the Postgres container after the class.</summary>
+    /// <summary>Releases the class's data source after the class.</summary>
     [After(Class)]
     public static async Task AfterClass()
     {

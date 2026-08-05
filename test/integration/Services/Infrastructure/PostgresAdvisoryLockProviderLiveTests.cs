@@ -19,7 +19,7 @@ public sealed class PostgresAdvisoryLockProviderLiveTests
     private static PostgresFixture _fixture = default!;
 
     /// <summary>
-    /// Starts the Postgres container once per test class.
+    /// Creates the class's own database on the shared Postgres container.
     /// </summary>
     [Before(Class)]
     public static async Task BeforeClass()
@@ -29,7 +29,7 @@ public sealed class PostgresAdvisoryLockProviderLiveTests
     }
 
     /// <summary>
-    /// Tears down the container after all tests in the class run.
+    /// Releases the class's data source after all tests in the class run.
     /// </summary>
     [After(Class)]
     public static async Task AfterClass()
@@ -159,7 +159,9 @@ public sealed class PostgresAdvisoryLockProviderLiveTests
     /// Looks up the backend pid holding the advisory lock for the given lock name and
     /// terminates it via <c>pg_terminate_backend</c>. Returns true if a pid was found and
     /// <c>pg_terminate_backend</c> returned true. Uses a separate connection so the running
-    /// test process is not the lock holder being killed.
+    /// test process is not the lock holder being killed. <c>pg_locks</c> spans the whole
+    /// cluster, so the lookup is confined to this class's own database — other classes share
+    /// the Postgres instance and must keep their lock holders.
     /// Postgres represents a 64-bit advisory key as two 32-bit columns in pg_locks
     /// (<c>classid</c> high 32 bits, <c>objid</c> low 32 bits), so we reconstruct the key
     /// before comparing.
@@ -179,6 +181,7 @@ public sealed class PostgresAdvisoryLockProviderLiveTests
               AND classid = @classid
               AND objid = @objid
               AND granted = true
+              AND database = (SELECT oid FROM pg_database WHERE datname = current_database())
             LIMIT 1";
         cmd.Parameters.AddWithValue("classid", classId);
         cmd.Parameters.AddWithValue("objid", objId);

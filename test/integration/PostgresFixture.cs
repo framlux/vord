@@ -19,6 +19,12 @@ namespace Framlux.FleetManagement.Test.Integration;
 /// </summary>
 public sealed class PostgresFixture : IAsyncDisposable
 {
+    // Sizing for the shared connection budget. Roughly forty pools exist at peak — one per
+    // fixture plus one per per-test child database — so the server ceiling is set well clear of
+    // what the capped pools can collectively demand.
+    private const int MaxServerConnections = 500;
+    private const int MaxConnectionsPerPool = 10;
+
     // ExecutionAndPublication guarantees the container factory runs exactly once even though TUnit
     // invokes InitializeAsync from many class-level hooks concurrently. The Lazy wraps the Task
     // rather than the container so callers await the same in-flight start instead of blocking a
@@ -53,6 +59,11 @@ public sealed class PostgresFixture : IAsyncDisposable
         {
             KeepAlive = 30,
             TcpKeepAlive = true,
+
+            // Bounds every pool built from this string, including the child-database strings the
+            // migration tests derive from it, so no single class can exhaust the shared budget.
+            // Nothing in the suite drives more than a couple of concurrent connections at once.
+            MaxPoolSize = MaxConnectionsPerPool,
         };
 
         // Guid "N" formatting is already lowercase hex, which keeps the identifier valid without
@@ -101,7 +112,19 @@ public sealed class PostgresFixture : IAsyncDisposable
             return;
         }
 
-        PostgreSqlContainer container = await SharedContainer.Value;
+        PostgreSqlContainer container;
+        try
+        {
+            container = await SharedContainer.Value;
+        }
+        catch
+        {
+            // A failed start already disposed its own container and reported the failure through
+            // every class that awaited it; rethrowing the cached fault here would only close the
+            // session with a duplicate of that error.
+            return;
+        }
+
         await container.DisposeAsync();
     }
 
@@ -109,8 +132,25 @@ public sealed class PostgresFixture : IAsyncDisposable
     {
         PostgreSqlContainer container = new PostgreSqlBuilder()
             .WithImage("postgres:18-alpine")
+
+            // Every class's pool now draws on one connection budget instead of a private
+            // container's default of 100, and per-test child databases keep their own idle
+            // physical connections for minutes. The raised ceiling sits comfortably above the
+            // worst case that MaxPoolSize bounds the suite to.
+            .WithCommand("-c", $"max_connections={MaxServerConnections}")
             .Build();
-        await container.StartAsync();
+
+        try
+        {
+            await container.StartAsync();
+        }
+        catch
+        {
+            // Ryuk is disabled, so a container that was created but never started would leak
+            // daemon-side once the faulted task is all that remains of it.
+            await container.DisposeAsync();
+            throw;
+        }
 
         return container;
     }
