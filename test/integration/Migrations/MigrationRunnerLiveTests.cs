@@ -270,31 +270,74 @@ public sealed class MigrationRunnerLiveTests
             .IsEquivalentTo(new List<string> { "MachineTelemetry_Long", "MachineTelemetry_Medium", "MachineTelemetry_Short" });
 
         // Each range parent's bootstrap creates a daily leaf for today plus the next 7 days
-        // (8 total) and a default partition (9 total). A broken bootstrap loop — wrong day count,
-        // off-by-one, or a missing default — changes this count from data already read.
+        // (8 total) and a default partition (9 total). Count and default-presence alone do not
+        // prove the window runs forward: a reversed loop (today-7..today) produces the same count
+        // and the same default, so pin the exact leaf names too. Derive "today" from the database's
+        // own clock — CreateInitialDailyPartitions/CreateInitialClassDailyPartitions stamp names
+        // from DateTime.UtcNow at migration time, so deriving expected names from the database's
+        // now() (rather than a hardcoded date or the test host's clock) tracks the same day the
+        // migration actually used, without ever hardcoding a date.
+        DateOnly today = await GetDatabaseUtcTodayAsync(connStr);
+        List<string> expectedDailyOffsets = [];
+        for (int offset = 0; offset <= 7; offset++)
+        {
+            expectedDailyOffsets.Add(today.AddDays(offset).ToString("yyyyMMdd"));
+        }
+
         List<string> auditLogChildren = await GetPartitionNamesAsync(connStr, "AuditLog");
-        await Assert.That(auditLogChildren).Contains("auditlog_default");
-        await Assert.That(auditLogChildren.Count).IsEqualTo(9);
+        List<string> expectedAuditLogChildren = expectedDailyOffsets
+            .Select(day => $"auditlog_d{day}")
+            .Append("auditlog_default")
+            .ToList();
+        await Assert.That(auditLogChildren).IsEquivalentTo(expectedAuditLogChildren);
 
         List<string> alertEventsChildren = await GetPartitionNamesAsync(connStr, "AlertEvents");
-        await Assert.That(alertEventsChildren).Contains("alertevents_default");
-        await Assert.That(alertEventsChildren.Count).IsEqualTo(9);
+        List<string> expectedAlertEventsChildren = expectedDailyOffsets
+            .Select(day => $"alertevents_d{day}")
+            .Append("alertevents_default")
+            .ToList();
+        await Assert.That(alertEventsChildren).IsEquivalentTo(expectedAlertEventsChildren);
 
         List<string> remoteCommandsChildren = await GetPartitionNamesAsync(connStr, "RemoteCommands");
-        await Assert.That(remoteCommandsChildren).Contains("remotecommands_default");
-        await Assert.That(remoteCommandsChildren.Count).IsEqualTo(9);
+        List<string> expectedRemoteCommandsChildren = expectedDailyOffsets
+            .Select(day => $"remotecommands_d{day}")
+            .Append("remotecommands_default")
+            .ToList();
+        await Assert.That(remoteCommandsChildren).IsEquivalentTo(expectedRemoteCommandsChildren);
 
         List<string> shortChildren = await GetPartitionNamesAsync(connStr, "MachineTelemetry_Short");
-        await Assert.That(shortChildren).Contains("MachineTelemetry_Short_default");
-        await Assert.That(shortChildren.Count).IsEqualTo(9);
+        List<string> expectedShortChildren = expectedDailyOffsets
+            .Select(day => $"MachineTelemetry_Short_{day}")
+            .Append("MachineTelemetry_Short_default")
+            .ToList();
+        await Assert.That(shortChildren).IsEquivalentTo(expectedShortChildren);
 
         List<string> mediumChildren = await GetPartitionNamesAsync(connStr, "MachineTelemetry_Medium");
-        await Assert.That(mediumChildren).Contains("MachineTelemetry_Medium_default");
-        await Assert.That(mediumChildren.Count).IsEqualTo(9);
+        List<string> expectedMediumChildren = expectedDailyOffsets
+            .Select(day => $"MachineTelemetry_Medium_{day}")
+            .Append("MachineTelemetry_Medium_default")
+            .ToList();
+        await Assert.That(mediumChildren).IsEquivalentTo(expectedMediumChildren);
 
         List<string> longChildren = await GetPartitionNamesAsync(connStr, "MachineTelemetry_Long");
-        await Assert.That(longChildren).Contains("MachineTelemetry_Long_default");
-        await Assert.That(longChildren.Count).IsEqualTo(9);
+        List<string> expectedLongChildren = expectedDailyOffsets
+            .Select(day => $"MachineTelemetry_Long_{day}")
+            .Append("MachineTelemetry_Long_default")
+            .ToList();
+        await Assert.That(longChildren).IsEquivalentTo(expectedLongChildren);
+
+        // PostgreSQL requires every partition-key column to be part of any unique constraint, which
+        // is why these primary keys are composite. Column ORDER is load-bearing for index usage, so
+        // compare the joined string rather than a set: IsEquivalentTo is order-insensitive and would
+        // pass a reordered PK.
+        await Assert.That(string.Join(",", await GetPrimaryKeyColumnsAsync(connStr, "MachineTelemetry")))
+            .IsEqualTo("Id,RetentionClass,ReceivedAt");
+        await Assert.That(string.Join(",", await GetPrimaryKeyColumnsAsync(connStr, "AuditLog")))
+            .IsEqualTo("Id,Timestamp");
+        await Assert.That(string.Join(",", await GetPrimaryKeyColumnsAsync(connStr, "AlertEvents")))
+            .IsEqualTo("Id,TriggeredAt");
+        await Assert.That(string.Join(",", await GetPrimaryKeyColumnsAsync(connStr, "RemoteCommands")))
+            .IsEqualTo("Id,CreatedAt");
     }
 
     [Test]
@@ -551,6 +594,47 @@ public sealed class MigrationRunnerLiveTests
         }
 
         return names;
+    }
+
+    private static async Task<DateOnly> GetDatabaseUtcTodayAsync(string connStr)
+    {
+        await using NpgsqlConnection conn = new(connStr);
+        await conn.OpenAsync();
+        await using NpgsqlCommand cmd = conn.CreateCommand();
+        // Matches the DateTime.UtcNow the migration itself stamps partition names from
+        // (CreateInitialDailyPartitions / CreateInitialClassDailyPartitions), regardless of the
+        // server's configured time zone.
+        cmd.CommandText = "SELECT (now() AT TIME ZONE 'UTC')::date";
+        object? result = await cmd.ExecuteScalarAsync();
+
+        return (DateOnly)result!;
+    }
+
+    private static async Task<List<string>> GetPrimaryKeyColumnsAsync(string connStr, string tableName)
+    {
+        await using NpgsqlConnection conn = new(connStr);
+        await conn.OpenAsync();
+        await using NpgsqlCommand cmd = conn.CreateCommand();
+        cmd.CommandText = @"SELECT pg_get_constraintdef(c.oid)
+            FROM pg_constraint c
+            JOIN pg_class t ON t.oid = c.conrelid
+            JOIN pg_namespace n ON n.oid = t.relnamespace
+            WHERE n.nspname = current_schema() AND t.relname = @t AND c.contype = 'p'";
+        cmd.Parameters.AddWithValue("@t", tableName);
+        object? result = await cmd.ExecuteScalarAsync();
+        if (result is null or DBNull)
+        {
+            return [];
+        }
+
+        // pg_get_constraintdef renders e.g. PRIMARY KEY ("Id", "RetentionClass", "ReceivedAt").
+        // Extract the parenthesised column list in the order Postgres reports it and strip quotes.
+        string constraintDef = result.ToString()!;
+        int openParen = constraintDef.IndexOf('(');
+        int closeParen = constraintDef.LastIndexOf(')');
+        string columnList = constraintDef.Substring(openParen + 1, closeParen - openParen - 1);
+
+        return columnList.Split(", ").Select(column => column.Trim('"')).ToList();
     }
 
     private static async Task<string?> GetPartitionKeyDefAsync(string connStr, string relName)
