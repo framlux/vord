@@ -83,9 +83,10 @@ migrations: `BillingAuditLog`, `ContactSubmissions`, `WaitlistEntries`, `Product
 `CanaryWebhookReceipts`, and `WebhookEvents`.
 
 **Partitioning post-condition.** `pg_class.relkind = 'p'` for `BillingAuditLog`; four month
-partitions plus the default attached; and both indexes
-(`IX_BillingAuditLog_TenantExternalId_Timestamp`, `IX_BillingAuditLog_Timestamp`) present exactly
-once, since duplicate-index-after-rename was defect #2. This is the case a smoke test passes while
+partitions plus the default attached; and all three indexes
+(`IX_BillingAuditLog_TenantExternalId_Timestamp`, `IX_BillingAuditLog_Timestamp`,
+`IX_BillingAuditLog_Action_Timestamp`) present exactly once on the parent, since
+duplicate-index-after-rename was defect #2. This is the case a smoke test passes while
 still being wrong.
 
 Partition names are month-derived at run time, so assertions read the database's own `now()`
