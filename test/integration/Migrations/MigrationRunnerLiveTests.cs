@@ -482,12 +482,16 @@ public sealed class MigrationRunnerLiveTests
         await Assert.That(await GetIndexDefAsync(connStr, "IX_IntegrationEndpoints_TenantId")).IsNotNull();
         await Assert.That(await GetIndexDefAsync(connStr, "IX_IntegrationEndpoints_TenantId_Provider")).IsNotNull();
 
-        // IX_TenantDeletions_ActiveTenant is existence-only for a different reason: unlike the
-        // pair above, its predicate (WHERE "Status" <> 3) is semantically meaningful — a restored
-        // tenant must become deletable again — and that predicate is asserted on neither dialect
-        // here. That gap is tracked separately (vord-1al); this check only proves the index
-        // exists, not that its predicate is correct.
-        await Assert.That(await GetIndexDefAsync(connStr, "IX_TenantDeletions_ActiveTenant")).IsNotNull();
+        // IX_TenantDeletions_ActiveTenant is byte-identical across dialects, but unlike the
+        // IntegrationEndpoints pair above, its predicate (WHERE "Status" <> 3) carries the entire
+        // semantic: it is what lets a restored tenant (Status = 3, Restored) be deleted again,
+        // by excluding Restored rows from the "at most one active deletion per tenant" guard. A
+        // regression that dropped or inverted that predicate would pass every other test in the
+        // repo, so assert the full definition rather than treating this like the byte-identical
+        // pair it happens to share this section with.
+        string? tenantDeletionsActive = await GetIndexDefAsync(connStr, "IX_TenantDeletions_ActiveTenant");
+        await Assert.That(tenantDeletionsActive).IsEqualTo(
+            "CREATE UNIQUE INDEX \"IX_TenantDeletions_ActiveTenant\" ON public.\"TenantDeletions\" USING btree (\"TenantId\") WHERE (\"Status\" <> 3)");
     }
 
     [Test]
