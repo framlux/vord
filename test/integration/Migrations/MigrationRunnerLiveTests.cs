@@ -611,9 +611,12 @@ public sealed class MigrationRunnerLiveTests
         await using NpgsqlConnection conn = new(connStr);
         await conn.OpenAsync();
         await using NpgsqlCommand cmd = conn.CreateCommand();
-        // Matches the DateTime.UtcNow the migration itself stamps partition names from
-        // (CreateInitialDailyPartitions / CreateInitialClassDailyPartitions), regardless of the
-        // server's configured time zone.
+        // Reads the CONTAINER's UTC date, not the test host's — the migration itself stamps
+        // partition names from DateTime.UtcNow on the test HOST (CreateInitialDailyPartitions /
+        // CreateInitialClassDailyPartitions), so the two are not proven to agree; see the caller
+        // for why a host/container mismatch shows up as a false failure rather than a false pass.
+        // `now() AT TIME ZONE 'UTC'` is timezone-independent regardless of the server's configured
+        // time zone.
         cmd.CommandText = "SELECT (now() AT TIME ZONE 'UTC')::date";
         object? result = await cmd.ExecuteScalarAsync();
 
