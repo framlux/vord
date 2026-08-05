@@ -9,6 +9,7 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <PackageReference Include="FluentMigrator.Runner.Postgres" Version="8.0.1" />
     <PackageReference Include="FluentMigrator.Runner.SQLite" Version="8.0.1" />
     <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.7" />
     <PackageReference Include="Microsoft.Extensions.TimeProvider.Testing" Version="10.7.0" />
@@ -19,6 +20,15 @@
   <ItemGroup>
     <ProjectReference Include="../../../src/database/database.csproj" />
     <ProjectReference Include="../../shared/shared.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Embedded (not read off disk by path) so MigrationDialectGuardTests's source-text scan
+         does not depend on the current working directory and survives running from any
+         directory or CI runner. -->
+    <EmbeddedResource Include="../../../src/database/Migrations/**/*.cs">
+      <LogicalName>MigrationSource.%(RecursiveDir)%(Filename)%(Extension)</LogicalName>
+    </EmbeddedResource>
   </ItemGroup>
 
 </Project>
