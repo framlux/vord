@@ -22,4 +22,13 @@
     <ProjectReference Include="../../shared/shared.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Embedded (not read off disk by path) so MigrationDialectGuardTests's source-text scan
+         does not depend on the current working directory and survives running from any
+         directory or CI runner. -->
+    <EmbeddedResource Include="../../../src/database/Migrations/**/*.cs">
+      <LogicalName>MigrationSource.%(RecursiveDir)%(Filename)%(Extension)</LogicalName>
+    </EmbeddedResource>
+  </ItemGroup>
+
 </Project>
