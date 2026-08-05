@@ -19,9 +19,19 @@ namespace Framlux.FleetManagement.Test.Integration.Migrations;
 /// in-memory SQLite used in unit tests.
 /// </summary>
 /// <remarks>
-/// Per the saved-feedback memory <c>feedback_migrations_initial.md</c>: the app is deployed,
-/// migrations must be idempotent, and a broken migration is unrecoverable in prod. These tests
-/// catch that class of bug before it ships.
+/// Per the saved-feedback memory <c>feedback_migrations_initial.md</c>, the app is deployed and a
+/// broken migration is unrecoverable in prod — but for InitialMigration and InitialMigration2
+/// specifically, "broken" is not "not idempotent". Both are fresh-install-only: pre-production
+/// policy is to edit them in place and recreate databases, and once the first production release
+/// ships they are frozen forever, with every later schema change landing in its own new migration
+/// file. They are not, and are not meant to be, fully re-entrant against an already-migrated
+/// database — almost none of their DDL carries an IF NOT EXISTS or relkind guard, because none of
+/// it is meant to run twice. These tests instead guard three things: a clean apply on a fresh
+/// database produces the exact intended shape, a second MigrateUp() against an already-migrated
+/// database is a safe no-op via FluentMigrator's own VersionInfo tracking (the real pod-restart
+/// path), and the one re-entrancy guard InitialMigration does carry and can actually be exercised —
+/// CREATE SCHEMA IF NOT EXISTS "hangfire" — still holds if the migration body is genuinely
+/// re-entered.
 /// </remarks>
 public sealed class MigrationRunnerLiveTests
 {
