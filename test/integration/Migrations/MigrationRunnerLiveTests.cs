@@ -251,64 +251,115 @@ public sealed class MigrationRunnerLiveTests
         await Assert.That(await GetRelkindAsync(connStr, "MachineTelemetry_Medium")).IsEqualTo('p');
         await Assert.That(await GetRelkindAsync(connStr, "MachineTelemetry_Long")).IsEqualTo('p');
 
-        // Each range parent carries a default partition so a row outside the current window is
-        // never rejected outright.
-        await Assert.That(await GetPartitionNamesAsync(connStr, "AuditLog"))
-            .Contains("auditlog_default");
-        await Assert.That(await GetPartitionNamesAsync(connStr, "AlertEvents"))
-            .Contains("alertevents_default");
-        await Assert.That(await GetPartitionNamesAsync(connStr, "RemoteCommands"))
-            .Contains("remotecommands_default");
+        // relkind = 'p' alone only proves some relation by that name is partitioned; it does not
+        // prove the shape or that Short/Medium/Long map to the right retention class. Pin the
+        // partition strategy and the class each parent claims.
+        await Assert.That(await GetPartitionKeyDefAsync(connStr, "MachineTelemetry")).IsEqualTo("LIST (\"RetentionClass\")");
+        await Assert.That(await GetPartitionKeyDefAsync(connStr, "MachineTelemetry_Short")).IsEqualTo("RANGE (\"ReceivedAt\")");
+        await Assert.That(await GetPartitionKeyDefAsync(connStr, "MachineTelemetry_Medium")).IsEqualTo("RANGE (\"ReceivedAt\")");
+        await Assert.That(await GetPartitionKeyDefAsync(connStr, "MachineTelemetry_Long")).IsEqualTo("RANGE (\"ReceivedAt\")");
+
+        // Pin which RetentionClass value each named parent actually owns. A Short/Long swap here
+        // would misroute every retention class while every other assertion in this test still passes.
+        await Assert.That(await GetPartitionBoundAsync(connStr, "MachineTelemetry_Short")).IsEqualTo("FOR VALUES IN ('0')");
+        await Assert.That(await GetPartitionBoundAsync(connStr, "MachineTelemetry_Medium")).IsEqualTo("FOR VALUES IN ('1')");
+        await Assert.That(await GetPartitionBoundAsync(connStr, "MachineTelemetry_Long")).IsEqualTo("FOR VALUES IN ('2')");
+
+        // The top-level LIST parent has exactly the three class parents as children, no more, no less.
+        await Assert.That(await GetPartitionNamesAsync(connStr, "MachineTelemetry"))
+            .IsEquivalentTo(new List<string> { "MachineTelemetry_Long", "MachineTelemetry_Medium", "MachineTelemetry_Short" });
+
+        // Each range parent's bootstrap creates a daily leaf for today plus the next 7 days
+        // (8 total) and a default partition (9 total). A broken bootstrap loop — wrong day count,
+        // off-by-one, or a missing default — changes this count from data already read.
+        List<string> auditLogChildren = await GetPartitionNamesAsync(connStr, "AuditLog");
+        await Assert.That(auditLogChildren).Contains("auditlog_default");
+        await Assert.That(auditLogChildren.Count).IsEqualTo(9);
+
+        List<string> alertEventsChildren = await GetPartitionNamesAsync(connStr, "AlertEvents");
+        await Assert.That(alertEventsChildren).Contains("alertevents_default");
+        await Assert.That(alertEventsChildren.Count).IsEqualTo(9);
+
+        List<string> remoteCommandsChildren = await GetPartitionNamesAsync(connStr, "RemoteCommands");
+        await Assert.That(remoteCommandsChildren).Contains("remotecommands_default");
+        await Assert.That(remoteCommandsChildren.Count).IsEqualTo(9);
+
+        List<string> shortChildren = await GetPartitionNamesAsync(connStr, "MachineTelemetry_Short");
+        await Assert.That(shortChildren).Contains("MachineTelemetry_Short_default");
+        await Assert.That(shortChildren.Count).IsEqualTo(9);
+
+        List<string> mediumChildren = await GetPartitionNamesAsync(connStr, "MachineTelemetry_Medium");
+        await Assert.That(mediumChildren).Contains("MachineTelemetry_Medium_default");
+        await Assert.That(mediumChildren.Count).IsEqualTo(9);
+
+        List<string> longChildren = await GetPartitionNamesAsync(connStr, "MachineTelemetry_Long");
+        await Assert.That(longChildren).Contains("MachineTelemetry_Long_default");
+        await Assert.That(longChildren.Count).IsEqualTo(9);
     }
 
     [Test]
     public async Task PostgresOnlyIndexes_HaveTheirIntendedDefinitions_AfterFullChain()
     {
-        // Existence is not enough: four of these indexes exist under the same name on both
-        // dialects with materially different definitions, so an existence check passes on a wrong one.
+        // Existence is not enough: five of these indexes exist under the same name on both
+        // dialects with materially different definitions, so an existence check passes on a wrong
+        // one. pg_indexes.indexdef is deterministic normalised text for a pinned Postgres image, so
+        // the discriminating cases assert the full string rather than a keyword both dialects share.
         string connStr = BuildIsolatedDatabaseConnectionString();
         await using ServiceProvider provider = BuildMigrationServices(connStr);
         using IServiceScope scope = provider.CreateScope();
         scope.ServiceProvider.GetRequiredService<IMigrationRunner>().MigrateUp();
 
-        // Case-insensitive uniqueness is LOWER("Name") on Postgres and COLLATE NOCASE on SQLite.
+        // Case-insensitive uniqueness is lower("Name") on Postgres and COLLATE NOCASE on SQLite.
         string? tenantsName = await GetIndexDefAsync(connStr, "IX_Tenants_Name");
-        await Assert.That(tenantsName).IsNotNull();
-        await Assert.That(tenantsName!).Contains("UNIQUE");
-        await Assert.That(tenantsName).Contains("lower");
+        await Assert.That(tenantsName).IsEqualTo(
+            "CREATE UNIQUE INDEX \"IX_Tenants_Name\" ON public.\"Tenants\" USING btree (lower(\"Name\"))");
 
-        // The Postgres definition carries the partition key columns; the SQLite one is single-column.
+        // The Postgres definition carries the partition key columns and a NOT NULL predicate; the
+        // SQLite one is single-column. "ON ONLY" reflects that the parent-level index has no rows
+        // of its own on a partitioned table — the per-partition indexes carry the data.
         string? sourceEventId = await GetIndexDefAsync(connStr, "IX_MachineTelemetry_SourceEventId");
-        await Assert.That(sourceEventId).IsNotNull();
-        await Assert.That(sourceEventId!).Contains("UNIQUE");
-        await Assert.That(sourceEventId).Contains("RetentionClass");
-        await Assert.That(sourceEventId).Contains("ReceivedAt");
-        await Assert.That(sourceEventId).Contains("WHERE");
+        await Assert.That(sourceEventId).IsEqualTo(
+            "CREATE UNIQUE INDEX \"IX_MachineTelemetry_SourceEventId\" ON ONLY public.\"MachineTelemetry\" USING btree (\"SourceEventId\", \"RetentionClass\", \"ReceivedAt\") WHERE (\"SourceEventId\" IS NOT NULL)");
 
-        // Partial indexes: the predicate is the whole point, and a dropped WHERE clause changes
-        // uniqueness semantics rather than just performance.
+        // Partial indexes: the predicate is the whole point, and a dropped or wrong-column predicate
+        // changes uniqueness semantics rather than just performance. Postgres renders boolean
+        // literals as true/false where SQLite's own definition uses 1/0, so a Contains("WHERE")
+        // could not tell a correct predicate from an inverted or wrong-column one; assert the exact text.
         string? activeRoles = await GetIndexDefAsync(connStr, "IX_UserTenantRoles_Active");
-        await Assert.That(activeRoles).IsNotNull();
-        await Assert.That(activeRoles!).Contains("UNIQUE");
-        await Assert.That(activeRoles).Contains("WHERE");
+        await Assert.That(activeRoles).IsEqualTo(
+            "CREATE UNIQUE INDEX \"IX_UserTenantRoles_Active\" ON public.\"UserTenantRoles\" USING btree (\"UserId\", \"AssignedTenantId\") WHERE (\"IsActive\" = true)");
 
         string? activeMachines = await GetIndexDefAsync(connStr, "IX_Machines_TenantId_Active");
-        await Assert.That(activeMachines).IsNotNull();
-        await Assert.That(activeMachines!).Contains("WHERE");
+        await Assert.That(activeMachines).IsEqualTo(
+            "CREATE INDEX \"IX_Machines_TenantId_Active\" ON public.\"Machines\" USING btree (\"TenantId\") WHERE (\"IsDeleted\" = false)");
 
-        foreach (string indexName in new[]
-        {
-            "IX_TenantDeletions_ActiveTenant",
-            "IX_RemoteCommands_CommandId",
-            "IX_IntegrationEndpoints_TenantId",
-            "IX_IntegrationEndpoints_TenantId_Provider",
-            "IX_MachineStateSummary_Hostname_Trgm",
-            "IX_MachineStateSummary_Name_Trgm",
-            "IX_MachineStateSummary_HardwareModel_Trgm",
-        })
-        {
-            await Assert.That(await GetIndexDefAsync(connStr, indexName)).IsNotNull();
-        }
+        // A fifth same-name/different-definition pair: Postgres carries the partition key
+        // (CreatedAt) alongside CommandId; SQLite is CommandId alone.
+        string? remoteCommandId = await GetIndexDefAsync(connStr, "IX_RemoteCommands_CommandId");
+        await Assert.That(remoteCommandId).IsEqualTo(
+            "CREATE UNIQUE INDEX \"IX_RemoteCommands_CommandId\" ON ONLY public.\"RemoteCommands\" USING btree (\"CommandId\", \"CreatedAt\")");
+
+        // The trigram indexes have no SQLite counterpart at all: their entire value is
+        // "USING gin (lower(col) gin_trgm_ops)". An index of the same name degraded to a plain
+        // btree, or with lower() dropped, would pass an existence check and the pg_trgm extension
+        // check, so pin the full definition including the column each one targets.
+        string? nameTrgm = await GetIndexDefAsync(connStr, "IX_MachineStateSummary_Name_Trgm");
+        await Assert.That(nameTrgm).IsEqualTo(
+            "CREATE INDEX \"IX_MachineStateSummary_Name_Trgm\" ON public.\"MachineStateSummary\" USING gin (lower((\"Name\")::text) gin_trgm_ops)");
+
+        string? hostnameTrgm = await GetIndexDefAsync(connStr, "IX_MachineStateSummary_Hostname_Trgm");
+        await Assert.That(hostnameTrgm).IsEqualTo(
+            "CREATE INDEX \"IX_MachineStateSummary_Hostname_Trgm\" ON public.\"MachineStateSummary\" USING gin (lower((\"Hostname\")::text) gin_trgm_ops)");
+
+        string? hardwareModelTrgm = await GetIndexDefAsync(connStr, "IX_MachineStateSummary_HardwareModel_Trgm");
+        await Assert.That(hardwareModelTrgm).IsEqualTo(
+            "CREATE INDEX \"IX_MachineStateSummary_HardwareModel_Trgm\" ON public.\"MachineStateSummary\" USING gin (lower((\"HardwareModel\")::text) gin_trgm_ops)");
+
+        // IX_IntegrationEndpoints_TenantId and _TenantId_Provider are byte-identical on both
+        // dialects, so an existence check is all that's meaningful here.
+        await Assert.That(await GetIndexDefAsync(connStr, "IX_TenantDeletions_ActiveTenant")).IsNotNull();
+        await Assert.That(await GetIndexDefAsync(connStr, "IX_IntegrationEndpoints_TenantId")).IsNotNull();
+        await Assert.That(await GetIndexDefAsync(connStr, "IX_IntegrationEndpoints_TenantId_Provider")).IsNotNull();
     }
 
     [Test]
@@ -332,10 +383,11 @@ public sealed class MigrationRunnerLiveTests
         using IServiceScope scope = provider.CreateScope();
         scope.ServiceProvider.GetRequiredService<IMigrationRunner>().MigrateUp();
 
+        // The bound is the entire semantic here: Contains("CHECK") + Contains("DurationMinutes")
+        // would pass on ">= -100", "<= 0", or "<> 42" just as readily as the intended ">= 0". Assert
+        // the full constraint definition.
         string? durationCheck = await GetConstraintDefAsync(connStr, "CK_AlertRules_DurationMinutes");
-        await Assert.That(durationCheck).IsNotNull();
-        await Assert.That(durationCheck!).Contains("CHECK");
-        await Assert.That(durationCheck).Contains("DurationMinutes");
+        await Assert.That(durationCheck).IsEqualTo("CHECK ((\"DurationMinutes\" >= 0))");
 
         // The UserAccounts self-references are raw SQL on Postgres purely so they can be
         // DEFERRABLE INITIALLY DEFERRED: the System row references itself, and without deferral a
@@ -499,6 +551,36 @@ public sealed class MigrationRunnerLiveTests
         }
 
         return names;
+    }
+
+    private static async Task<string?> GetPartitionKeyDefAsync(string connStr, string relName)
+    {
+        await using NpgsqlConnection conn = new(connStr);
+        await conn.OpenAsync();
+        await using NpgsqlCommand cmd = conn.CreateCommand();
+        cmd.CommandText = @"SELECT pg_get_partkeydef(c.oid)
+            FROM pg_class c
+            JOIN pg_namespace n ON n.oid = c.relnamespace
+            WHERE n.nspname = current_schema() AND c.relname = @r";
+        cmd.Parameters.AddWithValue("@r", relName);
+        object? result = await cmd.ExecuteScalarAsync();
+
+        return result is null or DBNull ? null : result.ToString();
+    }
+
+    private static async Task<string?> GetPartitionBoundAsync(string connStr, string relName)
+    {
+        await using NpgsqlConnection conn = new(connStr);
+        await conn.OpenAsync();
+        await using NpgsqlCommand cmd = conn.CreateCommand();
+        cmd.CommandText = @"SELECT pg_get_expr(c.relpartbound, c.oid)
+            FROM pg_class c
+            JOIN pg_namespace n ON n.oid = c.relnamespace
+            WHERE n.nspname = current_schema() AND c.relname = @r";
+        cmd.Parameters.AddWithValue("@r", relName);
+        object? result = await cmd.ExecuteScalarAsync();
+
+        return result is null or DBNull ? null : result.ToString();
     }
 
     private static async Task<string?> GetIndexDefAsync(string connStr, string indexName)
