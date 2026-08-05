@@ -524,11 +524,9 @@ than existence, pg_trgm, check constraints, and the deferrable UserAccounts FKs.
   <ItemGroup>
     <PackageReference Include="TUnit" Version="1.6.28" />
     <PackageReference Include="Testcontainers.PostgreSql" Version="4.7.0" />
-    <PackageReference Include="Npgsql" Version="10.0.2" />
+    <PackageReference Include="Npgsql" Version="10.0.1" />
     <PackageReference Include="FluentMigrator.Runner" Version="7.2.0" />
     <PackageReference Include="FluentMigrator.Runner.Postgres" Version="7.2.0" />
-    <PackageReference Include="Microsoft.Extensions.DependencyInjection" Version="10.0.10" />
-    <PackageReference Include="Microsoft.Extensions.Logging" Version="10.0.10" />
   </ItemGroup>
 
   <ItemGroup>
@@ -538,7 +536,7 @@ than existence, pg_trgm, check constraints, and the deferrable UserAccounts FKs.
 </Project>
 ```
 
-TUnit and FluentMigrator versions match what `test/billing` and `api.csproj` already resolve, so the build does not fan out into a version-unification problem.
+TUnit 1.6.28 matches `test/billing`; FluentMigrator 7.2.0 and Npgsql 10.0.1 match `api.csproj` exactly, so the build does not fan out into a version-unification problem. `Microsoft.Extensions.DependencyInjection` and `.Logging` are deliberately not declared — they arrive transitively through the `api.csproj` reference, exactly as they do for `test/billing`.
 
 - [ ] **Step 2: Register it in the solution**
 
