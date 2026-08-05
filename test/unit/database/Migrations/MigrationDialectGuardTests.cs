@@ -80,12 +80,25 @@ public class MigrationDialectGuardTests
     {
         // IsNotEmpty alone would pass vacuously if discovery partially broke and only
         // ExportInitialMigration survived, silently dropping the real migrations from coverage.
-        // Naming the two production migrations explicitly closes that gap.
         List<string> migrationNames = [.. GetMigrationTypes().Select(t => t.Name)];
 
         await Assert.That(migrationNames).IsNotEmpty();
-        await Assert.That(migrationNames).Contains(nameof(InitialMigration));
-        await Assert.That(migrationNames).Contains("InitialMigration2");
+    }
+
+    [Test]
+    public async Task ProductionMigrations_ContainInitialMigrationAndInitialMigration2()
+    {
+        // This is the set EveryMigration_ProducesAtLeastOneExpression_OnPostgres actually
+        // iterates (Export-tagged migrations excluded). Asserting names against the unfiltered
+        // GetMigrationTypes() would not catch it: if InitialMigration or InitialMigration2 were
+        // ever mistakenly tagged "Export", the reflection guard's loop body would stop running
+        // for it, silentMigrations would stay empty, and an assertion against the unfiltered
+        // list would still pass — the exact silent-pass failure this whole guard exists to
+        // prevent, one level down. The assertion has to be against the set the guard iterates.
+        List<string> productionMigrationNames = [.. GetProductionMigrationTypes().Select(t => t.Name)];
+
+        await Assert.That(productionMigrationNames).Contains(nameof(InitialMigration));
+        await Assert.That(productionMigrationNames).Contains("InitialMigration2");
     }
 
     [Test]
@@ -93,9 +106,18 @@ public class MigrationDialectGuardTests
     {
         // Without this, IfDatabaseLiterals_MatchDialectsThisRepoUses passes vacuously if the
         // embedded-resource wiring or the regex ever stops finding files or literals.
-        List<string> sourceTexts = GetEmbeddedMigrationSourceTexts();
+        //
+        // The overall file/literal counts alone would still pass vacuously if a future glob
+        // change embedded some files but silently dropped others with a large share of the
+        // literals (e.g. keeping InitialMigration2.cs's 4 but dropping InitialMigration.cs's 51
+        // — the total would stay > 0 while 93% of the literals went unscanned). Naming the two
+        // production migration source files explicitly closes that gap.
+        List<string> resourceNames = [.. GetEmbeddedMigrationResourceNames()];
+        List<string> sourceTexts = GetEmbeddedMigrationSourceTexts(resourceNames);
 
         await Assert.That(sourceTexts).IsNotEmpty();
+        await Assert.That(resourceNames).Contains("MigrationSource.InitialMigration.cs");
+        await Assert.That(resourceNames).Contains("MigrationSource.InitialMigration2.cs");
 
         int totalLiterals = sourceTexts.Sum(text => IfDatabaseLiteralPattern.Matches(StripComments(text)).Count);
 
@@ -108,7 +130,7 @@ public class MigrationDialectGuardTests
         HashSet<string> acceptedDialects = BuildAcceptedDialects();
         List<string> unrecognizedLiterals = [];
 
-        foreach (string sourceText in GetEmbeddedMigrationSourceTexts())
+        foreach (string sourceText in GetEmbeddedMigrationSourceTexts(GetEmbeddedMigrationResourceNames()))
         {
             string stripped = StripComments(sourceText);
 
@@ -124,6 +146,51 @@ public class MigrationDialectGuardTests
         }
 
         await Assert.That(unrecognizedLiterals).IsEmpty();
+    }
+
+    /// <summary>
+    /// <see cref="StripComments"/> is a hand-rolled scanner with no test coverage of its own in
+    /// this repo, because nothing under <c>src/database/Migrations/</c> today has a comment that
+    /// mentions <c>IfDatabase</c> — so the green runs above only prove it preserves real literals
+    /// through verbatim and raw strings, never that it actually discards a commented-out one.
+    /// vord-internal's migrations DO carry such a doc comment, and this helper is written to be
+    /// reused there (Task 5), so the discard path is exercised directly here against synthetic
+    /// source covering a <c>//</c> line comment, an XML doc (<c>///</c>) comment, and a
+    /// <c>/* block */</c> comment — each mentioning a dialect string that must never surface as a
+    /// literal once stripped.
+    /// </summary>
+    [Test]
+    [Arguments("// IfDatabase(\"Postgres\") is a decoy in a line comment")]
+    [Arguments("/// <remarks>See IfDatabase(\"Postgres\") for background.</remarks>")]
+    [Arguments("/* IfDatabase(\"Postgres\") is a decoy in a block comment */")]
+    public async Task StripComments_DiscardsCommentedOutIfDatabaseMentions(string commentOnlySource)
+    {
+        string stripped = StripComments(commentOnlySource);
+
+        await Assert.That(IfDatabaseLiteralPattern.Matches(stripped)).IsEmpty();
+    }
+
+    [Test]
+    public async Task StripComments_PreservesRealCallsAndStringContent()
+    {
+        // A real call sits alongside a decoy in a line comment, plus a verbatim string and a
+        // triple-quoted raw string that both contain quoted SQL identifiers (the same shape as
+        // this repo's migrations) — none of that string content should be mistaken for a
+        // comment or be altered by stripping. Built with an escaped (non-raw) string literal
+        // rather than a C# raw string, since the synthetic source itself needs to contain a
+        // triple-quote sequence and nesting that inside a matching raw-string delimiter would
+        // only obscure what is being tested.
+        string source = "// decoy: IfDatabase(\"Postgres\") should not appear below\n"
+            + "IfDatabase(\"PostgreSQL\").Execute.Sql(@\"ALTER TABLE \"\"Machines\"\" ADD COLUMN \"\"X\"\" text;\");\n"
+            + "IfDatabase(\"SQLite\").Execute.Sql(\"\"\"\n"
+            + "    CREATE TABLE \"Machines\" (\"Id\" INTEGER PRIMARY KEY);\n"
+            + "    \"\"\");\n";
+
+        string stripped = StripComments(source);
+        List<string> dialects = [.. IfDatabaseLiteralPattern.Matches(stripped).Select(m => m.Groups[1].Value)];
+
+        await Assert.That(dialects).IsEquivalentTo(["PostgreSQL", "SQLite"]);
+        await Assert.That(stripped).Contains("\"Machines\"");
     }
 
     private static ServiceProvider BuildPostgresServices()
@@ -177,18 +244,27 @@ public class MigrationDialectGuardTests
     }
 
     /// <summary>
-    /// Reads every migration source file embedded as a resource by
-    /// <c>test/unit/database/unit.database.csproj</c>. Embedding the sources (rather than
-    /// reading them off disk by relative path) means the scan does not depend on the current
-    /// working directory and survives being run from any directory or CI runner.
+    /// Lists the manifest resource names of every migration source file embedded by
+    /// <c>test/unit/database/unit.database.csproj</c> (logical names prefixed
+    /// <c>MigrationSource.</c>, one per file under <c>src/database/Migrations/</c>, including
+    /// the <c>Export</c> subfolder). Embedding the sources (rather than reading them off disk by
+    /// relative path) means the scan does not depend on the current working directory and
+    /// survives being run from any directory or CI runner.
     /// </summary>
-    private static List<string> GetEmbeddedMigrationSourceTexts()
+    private static List<string> GetEmbeddedMigrationResourceNames()
+    {
+        Assembly assembly = typeof(MigrationDialectGuardTests).Assembly;
+
+        return [.. assembly.GetManifestResourceNames()
+            .Where(name => name.StartsWith("MigrationSource.", StringComparison.Ordinal))];
+    }
+
+    private static List<string> GetEmbeddedMigrationSourceTexts(IEnumerable<string> resourceNames)
     {
         Assembly assembly = typeof(MigrationDialectGuardTests).Assembly;
         List<string> texts = [];
 
-        foreach (string resourceName in assembly.GetManifestResourceNames()
-            .Where(name => name.StartsWith("MigrationSource.", StringComparison.Ordinal)))
+        foreach (string resourceName in resourceNames)
         {
             using Stream? stream = assembly.GetManifestResourceStream(resourceName);
             using StreamReader reader = new(stream!);
@@ -200,12 +276,24 @@ public class MigrationDialectGuardTests
     }
 
     /// <summary>
-    /// Strips C# comments (<c>//</c> line comments and <c>/* */</c> block comments) from
+    /// Strips C# comments (<c>//</c> line comments, XML doc <c>///</c> comments — which this
+    /// scanner treats the same as a plain line comment — and <c>/* */</c> block comments) from
     /// migration source while leaving string content untouched, so a doc comment that merely
     /// mentions <c>IfDatabase("Postgres")</c> in prose is not mistaken for a real literal.
     /// Recognises plain <c>"..."</c> strings, verbatim <c>@"..."</c> strings, and triple-quoted
-    /// raw strings (<c>"""..."""</c>), all of which appear in this repo's migrations.
+    /// raw strings (<c>"""..."""</c>), all of which appear in this repo's migrations. Covered
+    /// directly by <see cref="StripComments_DiscardsCommentedOutIfDatabaseMentions"/> and
+    /// <see cref="StripComments_PreservesRealCallsAndStringContent"/>.
     /// </summary>
+    /// <remarks>
+    /// Deliberately not a full C# lexer. It does not recognise character literals
+    /// (<c>'"'</c> would be misread as the start of a string) or interpolated strings with a
+    /// quote inside an interpolation hole (<c>$"{Foo("x")}"</c>), and a raw-string SQL body that
+    /// happens to contain the literal characters <c>IfDatabase("...")</c> would produce a false
+    /// positive rather than being recognised as inert string content. None of these patterns
+    /// exist in either this repo's or vord-internal's migrations today; if one is ever
+    /// introduced, this scanner needs to grow to match it.
+    /// </remarks>
     private static string StripComments(string source)
     {
         System.Text.StringBuilder result = new(source.Length);
