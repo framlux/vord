@@ -228,6 +228,123 @@ public sealed class MigrationRunnerLiveTests
         await Assert.That(await ReadTierLimitsAsync(connStr, 3)).IsEqualTo($"10000,365,25,15,{int.MaxValue}");
     }
 
+    [Test]
+    public async Task PartitionedTables_ArePartitioned_AfterFullChain()
+    {
+        // Four tables are partitioned on Postgres and plain on SQLite, so the SQLite runs cannot
+        // see this at all. A table that silently stays unpartitioned passes every existence and
+        // column check while breaking the partition-maintenance services at runtime.
+        string connStr = BuildIsolatedDatabaseConnectionString();
+        await using ServiceProvider provider = BuildMigrationServices(connStr);
+        using IServiceScope scope = provider.CreateScope();
+        scope.ServiceProvider.GetRequiredService<IMigrationRunner>().MigrateUp();
+
+        // relkind 'p' is a partitioned table; 'r' is an ordinary one.
+        await Assert.That(await GetRelkindAsync(connStr, "MachineTelemetry")).IsEqualTo('p');
+        await Assert.That(await GetRelkindAsync(connStr, "AuditLog")).IsEqualTo('p');
+        await Assert.That(await GetRelkindAsync(connStr, "AlertEvents")).IsEqualTo('p');
+        await Assert.That(await GetRelkindAsync(connStr, "RemoteCommands")).IsEqualTo('p');
+
+        // MachineTelemetry is two-level: LIST("RetentionClass") then RANGE("ReceivedAt") per class,
+        // so each retention-class partition must itself be partitioned.
+        await Assert.That(await GetRelkindAsync(connStr, "MachineTelemetry_Short")).IsEqualTo('p');
+        await Assert.That(await GetRelkindAsync(connStr, "MachineTelemetry_Medium")).IsEqualTo('p');
+        await Assert.That(await GetRelkindAsync(connStr, "MachineTelemetry_Long")).IsEqualTo('p');
+
+        // Each range parent carries a default partition so a row outside the current window is
+        // never rejected outright.
+        await Assert.That(await GetPartitionNamesAsync(connStr, "AuditLog"))
+            .Contains("auditlog_default");
+        await Assert.That(await GetPartitionNamesAsync(connStr, "AlertEvents"))
+            .Contains("alertevents_default");
+        await Assert.That(await GetPartitionNamesAsync(connStr, "RemoteCommands"))
+            .Contains("remotecommands_default");
+    }
+
+    [Test]
+    public async Task PostgresOnlyIndexes_HaveTheirIntendedDefinitions_AfterFullChain()
+    {
+        // Existence is not enough: four of these indexes exist under the same name on both
+        // dialects with materially different definitions, so an existence check passes on a wrong one.
+        string connStr = BuildIsolatedDatabaseConnectionString();
+        await using ServiceProvider provider = BuildMigrationServices(connStr);
+        using IServiceScope scope = provider.CreateScope();
+        scope.ServiceProvider.GetRequiredService<IMigrationRunner>().MigrateUp();
+
+        // Case-insensitive uniqueness is LOWER("Name") on Postgres and COLLATE NOCASE on SQLite.
+        string? tenantsName = await GetIndexDefAsync(connStr, "IX_Tenants_Name");
+        await Assert.That(tenantsName).IsNotNull();
+        await Assert.That(tenantsName!).Contains("UNIQUE");
+        await Assert.That(tenantsName).Contains("lower");
+
+        // The Postgres definition carries the partition key columns; the SQLite one is single-column.
+        string? sourceEventId = await GetIndexDefAsync(connStr, "IX_MachineTelemetry_SourceEventId");
+        await Assert.That(sourceEventId).IsNotNull();
+        await Assert.That(sourceEventId!).Contains("UNIQUE");
+        await Assert.That(sourceEventId).Contains("RetentionClass");
+        await Assert.That(sourceEventId).Contains("ReceivedAt");
+        await Assert.That(sourceEventId).Contains("WHERE");
+
+        // Partial indexes: the predicate is the whole point, and a dropped WHERE clause changes
+        // uniqueness semantics rather than just performance.
+        string? activeRoles = await GetIndexDefAsync(connStr, "IX_UserTenantRoles_Active");
+        await Assert.That(activeRoles).IsNotNull();
+        await Assert.That(activeRoles!).Contains("UNIQUE");
+        await Assert.That(activeRoles).Contains("WHERE");
+
+        string? activeMachines = await GetIndexDefAsync(connStr, "IX_Machines_TenantId_Active");
+        await Assert.That(activeMachines).IsNotNull();
+        await Assert.That(activeMachines!).Contains("WHERE");
+
+        foreach (string indexName in new[]
+        {
+            "IX_TenantDeletions_ActiveTenant",
+            "IX_RemoteCommands_CommandId",
+            "IX_IntegrationEndpoints_TenantId",
+            "IX_IntegrationEndpoints_TenantId_Provider",
+            "IX_MachineStateSummary_Hostname_Trgm",
+            "IX_MachineStateSummary_Name_Trgm",
+            "IX_MachineStateSummary_HardwareModel_Trgm",
+        })
+        {
+            await Assert.That(await GetIndexDefAsync(connStr, indexName)).IsNotNull();
+        }
+    }
+
+    [Test]
+    public async Task PgTrgmExtension_Installed_AfterFullChain()
+    {
+        // The three trigram indexes depend on it and it has no SQLite counterpart, so nothing
+        // else in the suite would notice if the CREATE EXTENSION stopped running.
+        string connStr = BuildIsolatedDatabaseConnectionString();
+        await using ServiceProvider provider = BuildMigrationServices(connStr);
+        using IServiceScope scope = provider.CreateScope();
+        scope.ServiceProvider.GetRequiredService<IMigrationRunner>().MigrateUp();
+
+        await Assert.That(await ExtensionExistsAsync(connStr, "pg_trgm")).IsTrue();
+    }
+
+    [Test]
+    public async Task CheckConstraints_AndDeferrableForeignKeys_Exist_AfterFullChain()
+    {
+        string connStr = BuildIsolatedDatabaseConnectionString();
+        await using ServiceProvider provider = BuildMigrationServices(connStr);
+        using IServiceScope scope = provider.CreateScope();
+        scope.ServiceProvider.GetRequiredService<IMigrationRunner>().MigrateUp();
+
+        string? durationCheck = await GetConstraintDefAsync(connStr, "CK_AlertRules_DurationMinutes");
+        await Assert.That(durationCheck).IsNotNull();
+        await Assert.That(durationCheck!).Contains("CHECK");
+        await Assert.That(durationCheck).Contains("DurationMinutes");
+
+        // The UserAccounts self-references are raw SQL on Postgres purely so they can be
+        // DEFERRABLE INITIALLY DEFERRED: the System row references itself, and without deferral a
+        // --data-only restore requires disabling triggers. SQLite cannot express it, so losing the
+        // deferral would be silent everywhere else.
+        await Assert.That(await ForeignKeyIsDeferredAsync(connStr, "FK_Users_CreatedBy")).IsTrue();
+        await Assert.That(await ForeignKeyIsDeferredAsync(connStr, "FK_Users_DeletedBy")).IsTrue();
+    }
+
     // ----- helpers -----
 
     private static async Task<bool> TableExistsAsync(string connStr, string tableName)
@@ -344,5 +461,98 @@ public sealed class MigrationRunnerLiveTests
         object? result = await cmd.ExecuteScalarAsync();
 
         return result is long l ? l : Convert.ToInt64(result);
+    }
+
+    private static async Task<char?> GetRelkindAsync(string connStr, string relName)
+    {
+        await using NpgsqlConnection conn = new(connStr);
+        await conn.OpenAsync();
+        await using NpgsqlCommand cmd = conn.CreateCommand();
+        cmd.CommandText = @"SELECT c.relkind
+            FROM pg_class c
+            JOIN pg_namespace n ON n.oid = c.relnamespace
+            WHERE n.nspname = current_schema() AND c.relname = @r";
+        cmd.Parameters.AddWithValue("@r", relName);
+        object? result = await cmd.ExecuteScalarAsync();
+
+        return result is char c ? c : null;
+    }
+
+    private static async Task<List<string>> GetPartitionNamesAsync(string connStr, string parent)
+    {
+        await using NpgsqlConnection conn = new(connStr);
+        await conn.OpenAsync();
+        await using NpgsqlCommand cmd = conn.CreateCommand();
+        cmd.CommandText = @"SELECT child.relname
+            FROM pg_inherits i
+            JOIN pg_class parent ON parent.oid = i.inhparent
+            JOIN pg_class child ON child.oid = i.inhrelid
+            JOIN pg_namespace n ON n.oid = parent.relnamespace
+            WHERE n.nspname = current_schema() AND parent.relname = @p
+            ORDER BY child.relname";
+        cmd.Parameters.AddWithValue("@p", parent);
+        List<string> names = [];
+        await using NpgsqlDataReader reader = await cmd.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+        {
+            names.Add(reader.GetString(0));
+        }
+
+        return names;
+    }
+
+    private static async Task<string?> GetIndexDefAsync(string connStr, string indexName)
+    {
+        await using NpgsqlConnection conn = new(connStr);
+        await conn.OpenAsync();
+        await using NpgsqlCommand cmd = conn.CreateCommand();
+        cmd.CommandText = @"SELECT indexdef FROM pg_indexes
+            WHERE schemaname = current_schema() AND indexname = @i";
+        cmd.Parameters.AddWithValue("@i", indexName);
+        object? result = await cmd.ExecuteScalarAsync();
+
+        return result is null or DBNull ? null : result.ToString();
+    }
+
+    private static async Task<bool> ExtensionExistsAsync(string connStr, string extension)
+    {
+        await using NpgsqlConnection conn = new(connStr);
+        await conn.OpenAsync();
+        await using NpgsqlCommand cmd = conn.CreateCommand();
+        cmd.CommandText = "SELECT EXISTS (SELECT 1 FROM pg_extension WHERE extname = @e)";
+        cmd.Parameters.AddWithValue("@e", extension);
+        object? result = await cmd.ExecuteScalarAsync();
+
+        return result is bool b && b;
+    }
+
+    private static async Task<string?> GetConstraintDefAsync(string connStr, string constraintName)
+    {
+        await using NpgsqlConnection conn = new(connStr);
+        await conn.OpenAsync();
+        await using NpgsqlCommand cmd = conn.CreateCommand();
+        cmd.CommandText = @"SELECT pg_get_constraintdef(c.oid)
+            FROM pg_constraint c
+            JOIN pg_namespace n ON n.oid = c.connamespace
+            WHERE n.nspname = current_schema() AND c.conname = @c";
+        cmd.Parameters.AddWithValue("@c", constraintName);
+        object? result = await cmd.ExecuteScalarAsync();
+
+        return result is null or DBNull ? null : result.ToString();
+    }
+
+    private static async Task<bool> ForeignKeyIsDeferredAsync(string connStr, string constraintName)
+    {
+        await using NpgsqlConnection conn = new(connStr);
+        await conn.OpenAsync();
+        await using NpgsqlCommand cmd = conn.CreateCommand();
+        cmd.CommandText = @"SELECT c.condeferrable AND c.condeferred
+            FROM pg_constraint c
+            JOIN pg_namespace n ON n.oid = c.connamespace
+            WHERE n.nspname = current_schema() AND c.conname = @c AND c.contype = 'f'";
+        cmd.Parameters.AddWithValue("@c", constraintName);
+        object? result = await cmd.ExecuteScalarAsync();
+
+        return result is bool b && b;
     }
 }
