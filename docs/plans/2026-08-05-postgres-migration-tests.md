@@ -18,6 +18,7 @@
 - No AI attribution in commit messages. No review IDs, "Fix N", phase or task numbers in code or comments.
 - Never depend on wall-clock time in a test. Where a migration computes dates, read them from the database's own `now()`.
 - Tests must fail loudly, never skip, when a container runtime is absent.
+- TUnit filters: use the path form `--treenode-filter "/*/*/ClassName/*"`. The `"*Name*"` form documented in CLAUDE.md matches nothing and reports "Zero tests ran" — a silent pass, not a failure.
 - `dotnet run --no-build` can replay stale TUnit results. When verifying a change, build with `--no-incremental` or run the compiled executable directly if results look suspicious.
 - vord test namespaces: `Framlux.FleetManagement.Test.*`. vord-internal: `Framlux.Billing.Api.Tests.*`.
 
@@ -174,7 +175,7 @@ public class MigrationDialectGuardTests
 
 ```bash
 cd vord && dotnet build test/unit/database/unit.database.csproj -c Release --no-incremental
-dotnet run --project test/unit/database/unit.database.csproj -c Release --no-build --treenode-filter "*MigrationDialectGuardTests*"
+dotnet run --project test/unit/database/unit.database.csproj -c Release --no-build --treenode-filter "/*/*/MigrationDialectGuardTests/*"
 ```
 
 Expected: 2 passed. All three vord migrations emit expressions on Postgres today.
@@ -298,7 +299,7 @@ Append to the helpers region:
 
 ```bash
 cd vord && dotnet build test/integration/integration.csproj -c Release --no-incremental
-dotnet run --project test/integration/integration.csproj -c Release --no-build --treenode-filter "*PartitionedTables_ArePartitioned_AfterFullChain*"
+dotnet run --project test/integration/integration.csproj -c Release --no-build --treenode-filter "/*/*/MigrationRunnerLiveTests/PartitionedTables_ArePartitioned_AfterFullChain"
 ```
 
 Expected: PASS. If a `_default` name assertion fails, read the actual names from the failure output — `pg_class.relname` is lower-cased only when the migration created the partition with an unquoted identifier. Correct the expected strings to what the migration actually produces rather than changing the migration.
@@ -403,7 +404,7 @@ Helpers:
 
 ```bash
 cd vord && dotnet build test/integration/integration.csproj -c Release --no-incremental
-dotnet run --project test/integration/integration.csproj -c Release --no-build --treenode-filter "*MigrationRunnerLiveTests*"
+dotnet run --project test/integration/integration.csproj -c Release --no-build --treenode-filter "/*/*/MigrationRunnerLiveTests/*"
 ```
 
 Expected: all pass. `pg_indexes.indexdef` normalises the definition, so if a `Contains` assertion fails, print the actual `indexdef` and match against what Postgres reports — but only after confirming the migration really does produce the intended shape.
@@ -471,7 +472,7 @@ Helpers:
 
 ```bash
 cd vord && dotnet build test/integration/integration.csproj -c Release --no-incremental
-dotnet run --project test/integration/integration.csproj -c Release --no-build --treenode-filter "*MigrationRunnerLiveTests*"
+dotnet run --project test/integration/integration.csproj -c Release --no-build --treenode-filter "/*/*/MigrationRunnerLiveTests/*"
 ```
 
 Expected: all pass, including the seven pre-existing tests.
@@ -1103,7 +1104,7 @@ public sealed class MigrationDialectGuardTests
 
 ```bash
 cd vord-internal && dotnet build test/billing.integration/billing.integration.csproj -c Release --no-incremental
-dotnet run --project test/billing.integration/billing.integration.csproj -c Release --no-build --treenode-filter "*MigrationDialectGuardTests*"
+dotnet run --project test/billing.integration/billing.integration.csproj -c Release --no-build --treenode-filter "/*/*/MigrationDialectGuardTests/*"
 ```
 
 Expected: 2 passed. All ten migrations emit expressions on Postgres today.
