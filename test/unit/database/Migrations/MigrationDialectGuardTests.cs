@@ -43,8 +43,27 @@ public class MigrationDialectGuardTests
     /// Migration source only ever calls this with a plain quoted string, never a verbatim or
     /// raw string, so a simple quoted-string capture is sufficient.
     /// </summary>
+    /// <remarks>
+    /// Only recognises a single-literal call: <c>IfDatabase("Postgres")</c>. A future
+    /// multi-argument call such as <c>IfDatabase("Postgres", "SQLite")</c>, or one passing a
+    /// constant instead of a string literal, does not match this pattern and is silently not
+    /// scanned at all rather than being flagged as unrecognised. <see cref="IfDatabaseCallSitePattern"/>
+    /// and <see cref="IfDatabaseCallSites_AreAllMatchedByLiteralPattern"/> guard against that:
+    /// they count every occurrence of the bare <c>IfDatabase(</c> call token and fail if that
+    /// count disagrees with how many this pattern matched, so an unscannable call form fails
+    /// loudly instead of being skipped.
+    /// </remarks>
     private static readonly Regex IfDatabaseLiteralPattern = new(
         "IfDatabase\\(\\s*\"([^\"]*)\"\\s*\\)",
+        RegexOptions.Compiled);
+
+    /// <summary>
+    /// Matches every <c>IfDatabase(</c> call token, regardless of its arguments. Used only to
+    /// count call sites so <see cref="IfDatabaseCallSites_AreAllMatchedByLiteralPattern"/> can
+    /// detect a call shape <see cref="IfDatabaseLiteralPattern"/> would otherwise silently skip.
+    /// </summary>
+    private static readonly Regex IfDatabaseCallSitePattern = new(
+        "IfDatabase\\(",
         RegexOptions.Compiled);
 
     [Test]
@@ -76,16 +95,6 @@ public class MigrationDialectGuardTests
     }
 
     [Test]
-    public async Task MigrationAssembly_ContainsMigrations()
-    {
-        // IsNotEmpty alone would pass vacuously if discovery partially broke and only
-        // ExportInitialMigration survived, silently dropping the real migrations from coverage.
-        List<string> migrationNames = [.. GetMigrationTypes().Select(t => t.Name)];
-
-        await Assert.That(migrationNames).IsNotEmpty();
-    }
-
-    [Test]
     public async Task ProductionMigrations_ContainInitialMigrationAndInitialMigration2()
     {
         // This is the set EveryMigration_ProducesAtLeastOneExpression_OnPostgres actually
@@ -99,6 +108,32 @@ public class MigrationDialectGuardTests
 
         await Assert.That(productionMigrationNames).Contains(nameof(InitialMigration));
         await Assert.That(productionMigrationNames).Contains("InitialMigration2");
+    }
+
+    [Test]
+    public async Task EmbeddedMigrationSources_CoverEveryMigrationType()
+    {
+        // Naming InitialMigration.cs and InitialMigration2.cs explicitly (below) only proves those
+        // two specific files stay embedded. Once the first production release ships, those two
+        // files freeze forever and every schema change becomes a NEW migration file — exactly the
+        // kind of file the name-based assertions do not cover. A glob narrowing in
+        // unit.database.csproj, or a migration placed outside src/database/Migrations/, would drop
+        // that new file from the resource set with no test failure, and any mis-guarded statement
+        // in it would be invisible to the reflection guard too. This asserts by construction that
+        // the embedded set covers every migration type the reflection guard's discovery finds,
+        // rather than a fixed list of today's file names, so a future migration is covered
+        // automatically.
+        //
+        // Covers ALL migration types, including Export-tagged ones: the reflection guard
+        // (EveryMigration_ProducesAtLeastOneExpression_OnPostgres) deliberately excludes those, but
+        // the source-text scan (IfDatabaseLiterals_MatchDialectsThisRepoUses) deliberately includes
+        // them, and it is the source scan this assertion protects.
+        HashSet<string> embeddedFileNames = [.. GetEmbeddedMigrationResourceNames().Select(GetSourceFileNameWithoutExtension)];
+        List<string> missingTypeNames = [.. GetMigrationTypes()
+            .Select(t => t.Name)
+            .Where(name => embeddedFileNames.Contains(name) == false)];
+
+        await Assert.That(missingTypeNames).IsEmpty();
     }
 
     [Test]
@@ -146,6 +181,33 @@ public class MigrationDialectGuardTests
         }
 
         await Assert.That(unrecognizedLiterals).IsEmpty();
+    }
+
+    [Test]
+    public async Task IfDatabaseCallSites_AreAllMatchedByLiteralPattern()
+    {
+        // IfDatabaseLiteralPattern only recognises a single quoted-string argument. A call shape
+        // it cannot parse (a multi-argument call, or one passing a constant) would otherwise be
+        // silently excluded from every guard above rather than failing. Counting the bare
+        // "IfDatabase(" token separately and comparing counts catches that: a mismatch means some
+        // call site did not produce a literal match.
+        List<string> resourceNames = [.. GetEmbeddedMigrationResourceNames()];
+        List<string> sourceTexts = GetEmbeddedMigrationSourceTexts(resourceNames);
+        List<string> unmatchedResourceNames = [];
+
+        for (int index = 0; index < resourceNames.Count; index++)
+        {
+            string stripped = StripComments(sourceTexts[index]);
+            int callSiteCount = IfDatabaseCallSitePattern.Matches(stripped).Count;
+            int literalMatchCount = IfDatabaseLiteralPattern.Matches(stripped).Count;
+
+            if (callSiteCount != literalMatchCount)
+            {
+                unmatchedResourceNames.Add(resourceNames[index]);
+            }
+        }
+
+        await Assert.That(unmatchedResourceNames).IsEmpty();
     }
 
     /// <summary>
@@ -257,6 +319,31 @@ public class MigrationDialectGuardTests
 
         return [.. assembly.GetManifestResourceNames()
             .Where(name => name.StartsWith("MigrationSource.", StringComparison.Ordinal))];
+    }
+
+    /// <summary>
+    /// Recovers the source file name (without directory or extension) a manifest resource was
+    /// embedded from, so it can be compared against a migration type's <see cref="Type.Name"/>.
+    /// LogicalName carries <c>%(RecursiveDir)</c>, so a file under the <c>Export</c> subfolder
+    /// embeds as <c>MigrationSource.Export/ExportInitialMigration.cs</c> — the directory segment
+    /// is separated by <c>/</c>, not <c>.</c>, so a simple prefix/suffix trim (rather than a
+    /// dotted-suffix match) is required to isolate the file name correctly for both top-level and
+    /// subfolder resources.
+    /// </summary>
+    private static string GetSourceFileNameWithoutExtension(string resourceName)
+    {
+        const string prefix = "MigrationSource.";
+        const string extension = ".cs";
+
+        string withoutPrefix = resourceName.StartsWith(prefix, StringComparison.Ordinal)
+            ? resourceName[prefix.Length..]
+            : resourceName;
+        string withoutExtension = withoutPrefix.EndsWith(extension, StringComparison.Ordinal)
+            ? withoutPrefix[..^extension.Length]
+            : withoutPrefix;
+        int lastSeparator = withoutExtension.LastIndexOf('/');
+
+        return (lastSeparator == -1) ? withoutExtension : withoutExtension[(lastSeparator + 1)..];
     }
 
     private static List<string> GetEmbeddedMigrationSourceTexts(IEnumerable<string> resourceNames)

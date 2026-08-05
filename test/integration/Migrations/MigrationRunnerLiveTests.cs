@@ -272,11 +272,15 @@ public sealed class MigrationRunnerLiveTests
         // Each range parent's bootstrap creates a daily leaf for today plus the next 7 days
         // (8 total) and a default partition (9 total). Count and default-presence alone do not
         // prove the window runs forward: a reversed loop (today-7..today) produces the same count
-        // and the same default, so pin the exact leaf names too. Derive "today" from the database's
-        // own clock — CreateInitialDailyPartitions/CreateInitialClassDailyPartitions stamp names
-        // from DateTime.UtcNow at migration time, so deriving expected names from the database's
-        // now() (rather than a hardcoded date or the test host's clock) tracks the same day the
-        // migration actually used, without ever hardcoding a date.
+        // and the same default, so pin the exact leaf names too. Derive "today" without hardcoding
+        // a date by reading it back from the database's own now() rather than the test host's
+        // clock — but the two are NOT proven to agree: CreateInitialDailyPartitions /
+        // CreateInitialClassDailyPartitions stamp partition names from DateTime.UtcNow on the test
+        // HOST (see InitialMigration.cs around lines 985 and 1013), while this reads the
+        // container's clock. Host and container UTC dates normally agree, but a mismatch (clock
+        // skew, or the migration running in a sub-second window either side of UTC midnight) makes
+        // this comparison wrong in the direction of a false failure — the expected names would be
+        // off by a day from what the migration actually created — never a false green.
         DateOnly today = await GetDatabaseUtcTodayAsync(connStr);
         List<string> expectedDailyOffsets = [];
         for (int offset = 0; offset <= 7; offset++)
@@ -400,9 +404,15 @@ public sealed class MigrationRunnerLiveTests
 
         // IX_IntegrationEndpoints_TenantId and _TenantId_Provider are byte-identical on both
         // dialects, so an existence check is all that's meaningful here.
-        await Assert.That(await GetIndexDefAsync(connStr, "IX_TenantDeletions_ActiveTenant")).IsNotNull();
         await Assert.That(await GetIndexDefAsync(connStr, "IX_IntegrationEndpoints_TenantId")).IsNotNull();
         await Assert.That(await GetIndexDefAsync(connStr, "IX_IntegrationEndpoints_TenantId_Provider")).IsNotNull();
+
+        // IX_TenantDeletions_ActiveTenant is existence-only for a different reason: unlike the
+        // pair above, its predicate (WHERE "Status" <> 3) is semantically meaningful — a restored
+        // tenant must become deletable again — and that predicate is asserted on neither dialect
+        // here. That gap is tracked separately (vord-1al); this check only proves the index
+        // exists, not that its predicate is correct.
+        await Assert.That(await GetIndexDefAsync(connStr, "IX_TenantDeletions_ActiveTenant")).IsNotNull();
     }
 
     [Test]
