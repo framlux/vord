@@ -130,6 +130,29 @@ public sealed class MachineService : IMachineService
             return (RegistrationStatus.RegistrationActive, machine.Id, null);
         }
 
+        // Once the agent has proven it holds a working key, no caller gets a key for this machine —
+        // neither the cached copy nor a fresh one. KeyDeliveredAt is stamped by the authentication
+        // handler on first successful use, so non-null means an agent is out there authenticating
+        // right now.
+        // This has to come before the cached-delivery attempt, not just before the re-issue. Auto
+        // enrolment returns the key inline in the RegisterSystem response, so the agent never claims
+        // the Redis entry and it survives its full TTL. Without this check a second caller able to
+        // present a valid tenant registration token and a matching serial and system id could poll
+        // status inside that window and be handed the incumbent's live key — no re-issue, nothing
+        // invalidated, no trace on either host.
+        // The needsApiKey == false path above is deliberately still allowed: a plain status poll
+        // from a healthy agent must keep working.
+        if (machine.KeyDeliveredAt is not null)
+        {
+            _logger.LogWarning(
+                "Refusing to hand out an API key for machine {MachineId} in tenant {TenantId}: its agent accepted a key at {KeyDeliveredAt}",
+                machine.Id,
+                token.TenantId,
+                machine.KeyDeliveredAt);
+
+            return (RegistrationStatus.UnknownRegistration, null, null);
+        }
+
         // Try to deliver the cached plaintext key first (one-time delivery from initial registration).
         // Cache value is encrypted at rest via IDataProtector so Redis snapshots/MONITOR cannot
         // extract live API keys.
@@ -166,28 +189,10 @@ public sealed class MachineService : IMachineService
             }
         }
 
-        // Refuse to re-issue once the agent has proven it holds a working key. KeyDeliveredAt is
-        // stamped by the authentication handler on first successful use, so non-null means an agent
-        // is out there authenticating right now. Re-issuing in that case overwrites the stored hash
-        // and invalidates that agent's credentials, taking a live machine permanently offline with
-        // no error on either side, since an agent only self-recovers when its stored key is empty.
-        // Reporting an unknown registration instead makes the failure visible: the caller falls
-        // through to RegisterSystem, which rejects it with "Machine already exists".
-        // Null still re-issues on purpose. That covers every case where the key never reached its
-        // agent — a lost response, an expired cache entry — so a handoff that failed in flight can
-        // always be retried, and only a confirmed-live machine is protected.
-        if ((plaintextKey is null) && (machine.KeyDeliveredAt is not null))
-        {
-            _logger.LogWarning(
-                "Refusing to re-issue API key for machine {MachineId} in tenant {TenantId}: its agent accepted a key at {KeyDeliveredAt}",
-                machine.Id,
-                token.TenantId,
-                machine.KeyDeliveredAt);
-
-            return (RegistrationStatus.UnknownRegistration, null, null);
-        }
-
-        // If no cached key was available, re-issue a new one.
+        // Reaching here means the key has never been accepted, so a re-issue is safe and is the
+        // recovery path: it covers every case where the key never made it to its agent — a lost
+        // response, an expired cache entry, a delivery lost to a concurrent caller. A handoff that
+        // failed in flight can always be retried, and only a confirmed-live machine is protected.
         if (plaintextKey is null)
         {
             (string? reissuedKey, string? oldKeyHash) = await machineRepo.ReissueApiKeyAsync(machine.Id, cancellationToken);

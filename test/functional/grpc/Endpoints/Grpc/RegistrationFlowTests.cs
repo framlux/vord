@@ -453,10 +453,10 @@ public sealed class RegistrationFlowTests
 
         string incumbentApiKey = registerResponse.ApiKey;
 
-        // Simulate the agent having claimed its initial key by setting the delivery latch directly.
-        // This is deliberately not driven through a status call: the functional Redis fake stubs a
-        // StringSetAsync overload that MachineService no longer binds to, so the cached-delivery
-        // branch never serves here and a status call would re-issue instead of claiming.
+        // Mark the key as accepted, which in production the authentication handler does on the
+        // agent's first successful call. Note the pending-key cache entry from registration is
+        // deliberately left in place: auto-enrolment returns the key inline, so the agent never
+        // claims that entry and it survives its full TTL. A second caller must not be handed it.
         await db.Machines
             .Where(m => m.Id == registerResponse.MachineId)
             .Set(m => m.KeyDeliveredAt, DateTimeOffset.UtcNow)
@@ -484,6 +484,64 @@ public sealed class RegistrationFlowTests
         GetConfigurationResponse configResponse = await configClient.GetConfigurationAsync(configRequest, headers: headers);
         await Assert.That(configResponse.TimeConfig).IsNotNull();
         await Assert.That(configResponse.TimeConfig.HeartbeatTimeInSeconds).IsGreaterThan(0);
+    }
+
+    [Test]
+    public async Task GetRegistrationStatus_AcceptedKey_CachedCopyIsNotDisclosed()
+    {
+        // The pending-key cache entry seeded at registration is never claimed under auto-enrolment,
+        // because the key is returned inline in the RegisterSystem response. It therefore sits in
+        // Redis for its whole TTL holding the machine's LIVE credential. A second caller polling
+        // status inside that window must not receive it: that would be silent credential disclosure
+        // with no re-issue, nothing invalidated, and no trace on either host.
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+
+        (int tenantId, long tokenId) = await SeedTenantWithToken(db);
+        await SeedActiveSubscription(db, tenantId);
+
+        using GrpcChannel channel = CreateChannel(factory);
+        Registration.RegistrationClient registrationClient = new(channel);
+
+        RegisterSystemRequest registerRequest = new()
+        {
+            Hostname = "disclosure-host",
+            SerialNumber = "sn-disclosure-001",
+            SystemId = "sys-disclosure-001",
+            RegistrationToken = "test-registration-token",
+            MachineType = MachineType.BareMetalServerType,
+            Os = OperatingSystemType.UbuntuOs
+        };
+        RegisterSystemResponse registerResponse = await registrationClient.RegisterSystemAsync(registerRequest);
+        string incumbentApiKey = registerResponse.ApiKey;
+
+        // The agent authenticates, which records acceptance.
+        Configuration.ConfigurationClient configClient = new(channel);
+        Metadata incumbentHeaders = new() { { "x-api-key", incumbentApiKey } };
+        await configClient.GetConfigurationAsync(
+            new GetConfigurationRequest { MachineId = registerResponse.MachineId },
+            headers: incumbentHeaders);
+
+        // Act — a second caller asks for a key while the cache entry is still live.
+        SystemRegistrationStatusResponse secondResponse = await registrationClient.GetRegistrationStatusAsync(
+            new SystemRegistrationStatusRequest
+            {
+                SerialNumber = "sn-disclosure-001",
+                SystemId = "sys-disclosure-001",
+                RegistrationToken = "test-registration-token",
+                NeedsApiKey = true
+            });
+
+        // Assert — nothing handed out, and above all not the incumbent's live key.
+        await Assert.That(secondResponse.Status).IsEqualTo(RegistrationStatus.UnknownRegistration);
+        await Assert.That(secondResponse.ApiKey).IsEmpty();
+        await Assert.That(secondResponse.ApiKey).IsNotEqualTo(incumbentApiKey);
+
+        // The incumbent is unaffected.
+        GetConfigurationResponse configResponse = await configClient.GetConfigurationAsync(
+            new GetConfigurationRequest { MachineId = registerResponse.MachineId },
+            headers: incumbentHeaders);
+        await Assert.That(configResponse.TimeConfig).IsNotNull();
     }
 
     [Test]
