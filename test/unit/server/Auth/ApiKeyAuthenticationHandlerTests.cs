@@ -123,6 +123,77 @@ public class ApiKeyAuthenticationHandlerTests
     }
 
     [Test]
+    public async Task ValidKey_NotYetAccepted_RecordsAcceptance()
+    {
+        // First successful authentication is the only proof the server gets that the agent received
+        // and persisted its key. Without this stamp the re-issue guard in GetRegistrationStatusAsync
+        // never fires and a live machine can be re-keyed out from under its agent.
+        Machine machine = BuildMachine(keyDeliveredAt: null);
+        IMachineRepository machineRepo = Substitute.For<IMachineRepository>();
+        machineRepo.GetMachineByApiKeyAsync("valid-key", Arg.Any<CancellationToken>())
+            .Returns(machine);
+
+        AuthenticateResult result = await RunHandlerAsync(machineRepo, "valid-key");
+
+        await Assert.That(result.Succeeded).IsTrue();
+        await Assert.That(machine.KeyDeliveredAt).IsNull();
+        await machineRepo.Received(1).MarkKeyDeliveredAsync(42, Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task ValidKey_AlreadyAccepted_DoesNotWriteAgain()
+    {
+        // Acceptance is once per key. Re-stamping on every cache miss would put a pointless write on
+        // the authentication path for the entire life of the fleet.
+        Machine machine = BuildMachine(keyDeliveredAt: DateTimeOffset.UtcNow);
+        IMachineRepository machineRepo = Substitute.For<IMachineRepository>();
+        machineRepo.GetMachineByApiKeyAsync("valid-key", Arg.Any<CancellationToken>())
+            .Returns(machine);
+
+        AuthenticateResult result = await RunHandlerAsync(machineRepo, "valid-key");
+
+        await Assert.That(result.Succeeded).IsTrue();
+        await machineRepo.DidNotReceive().MarkKeyDeliveredAsync(Arg.Any<long>(), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task ValidKey_AcceptanceStampFails_StillAuthenticates()
+    {
+        // Recording acceptance is best-effort: a database fault must never reject a valid agent.
+        // The machine simply stays eligible for a re-issue until its next authentication.
+        Machine machine = BuildMachine(keyDeliveredAt: null);
+        IMachineRepository machineRepo = Substitute.For<IMachineRepository>();
+        machineRepo.GetMachineByApiKeyAsync("valid-key", Arg.Any<CancellationToken>())
+            .Returns(machine);
+        machineRepo.MarkKeyDeliveredAsync(Arg.Any<long>(), Arg.Any<CancellationToken>())
+            .Returns<Task<int>>(_ => throw new InvalidOperationException("database unavailable"));
+
+        AuthenticateResult result = await RunHandlerAsync(machineRepo, "valid-key");
+
+        await Assert.That(result.Succeeded).IsTrue();
+        await Assert.That(result.Principal!.FindFirst("MachineId")!.Value).IsEqualTo("42");
+    }
+
+    private static Machine BuildMachine(DateTimeOffset? keyDeliveredAt)
+    {
+        return new Machine
+        {
+            Id = 42,
+            Name = "test-machine",
+            ApiKeyHash = "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890",
+            SerialNumber = "SN-TEST",
+            SystemId = "SID-TEST",
+            MachineType = Database.Enums.MachineTypes.BareMetalServer,
+            OperatingSystem = Database.Enums.OperatingSystems.Ubuntu,
+            RegistrationTokenId = 1,
+            RegisteredOn = DateTimeOffset.UtcNow,
+            IsDeleted = false,
+            TenantId = 1,
+            KeyDeliveredAt = keyDeliveredAt,
+        };
+    }
+
+    [Test]
     public async Task ValidKey_IncludesTenantIdClaim()
     {
         Machine machine = new()

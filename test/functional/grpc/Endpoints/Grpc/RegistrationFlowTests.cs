@@ -424,10 +424,12 @@ public sealed class RegistrationFlowTests
     }
 
     [Test]
-    public async Task GetRegistrationStatus_ReissuedApiKey_AuthenticatesOnSubsequentGrpcCall()
+    public async Task GetRegistrationStatus_ClaimedKey_SecondCallerRefusedAndIncumbentKeySurvives()
     {
-        // Arrange — register a machine, drain the cached initial key, then trigger a true
-        // re-issuance and verify the newly generated key authenticates for API-key-protected calls
+        // Arrange — once an agent has claimed its initial key, a second caller presenting the same
+        // serial and system id must not be able to re-key the machine. Before this guard existed
+        // the second call re-issued, overwrote the stored hash and invalidated the incumbent's
+        // credentials, taking a live machine permanently offline with no error on either side.
         using FunctionalTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
 
@@ -449,32 +451,34 @@ public sealed class RegistrationFlowTests
         RegisterSystemResponse registerResponse = await registrationClient.RegisterSystemAsync(registerRequest);
         await Assert.That(registerResponse.MachineId).IsGreaterThan(0);
 
-        // First NeedsApiKey call delivers the cached original key and clears the Redis entry
-        SystemRegistrationStatusRequest drainCacheRequest = new()
+        string incumbentApiKey = registerResponse.ApiKey;
+
+        // Simulate the agent having claimed its initial key by setting the delivery latch directly.
+        // This is deliberately not driven through a status call: the functional Redis fake stubs a
+        // StringSetAsync overload that MachineService no longer binds to, so the cached-delivery
+        // branch never serves here and a status call would re-issue instead of claiming.
+        await db.Machines
+            .Where(m => m.Id == registerResponse.MachineId)
+            .Set(m => m.KeyDeliveredAt, DateTimeOffset.UtcNow)
+            .UpdateAsync();
+
+        // Act — a second caller with the same identity asks for a key.
+        SystemRegistrationStatusRequest secondCaller = new()
         {
             SerialNumber = "sn-reissue-auth-001",
             SystemId = "sys-reissue-auth-001",
             RegistrationToken = "test-registration-token",
             NeedsApiKey = true
         };
-        await registrationClient.GetRegistrationStatusAsync(drainCacheRequest);
+        SystemRegistrationStatusResponse secondResponse = await registrationClient.GetRegistrationStatusAsync(secondCaller);
 
-        // Act — second NeedsApiKey call triggers a true re-issuance with a new key and hash
-        SystemRegistrationStatusRequest reissueRequest = new()
-        {
-            SerialNumber = "sn-reissue-auth-001",
-            SystemId = "sys-reissue-auth-001",
-            RegistrationToken = "test-registration-token",
-            NeedsApiKey = true
-        };
-        SystemRegistrationStatusResponse reissueResponse = await registrationClient.GetRegistrationStatusAsync(reissueRequest);
-        await Assert.That(reissueResponse.ApiKey).IsNotEmpty();
+        // Assert — refused, and no credential handed out.
+        await Assert.That(secondResponse.Status).IsEqualTo(RegistrationStatus.UnknownRegistration);
+        await Assert.That(secondResponse.ApiKey).IsEmpty();
 
-        string reissuedApiKey = reissueResponse.ApiKey;
-
-        // Assert — the re-issued key authenticates for an API-key-protected gRPC call
+        // The incumbent's key must still authenticate. This is the regression guard.
         Configuration.ConfigurationClient configClient = new(channel);
-        Metadata headers = new() { { "x-api-key", reissuedApiKey } };
+        Metadata headers = new() { { "x-api-key", incumbentApiKey } };
         GetConfigurationRequest configRequest = new() { MachineId = registerResponse.MachineId };
 
         GetConfigurationResponse configResponse = await configClient.GetConfigurationAsync(configRequest, headers: headers);
@@ -483,10 +487,11 @@ public sealed class RegistrationFlowTests
     }
 
     [Test]
-    public async Task GetRegistrationStatus_OldApiKeyInvalidatedAfterReissuance()
+    public async Task GetRegistrationStatus_KeyNeverClaimed_StillReissuesForRecovery()
     {
-        // Arrange — after re-issuance the original API key must no longer authenticate,
-        // ensuring that key rotation actually revokes the compromised credential
+        // Arrange — the guard keys on whether the initial key was ever CLAIMED, not on whether the
+        // machine exists. A machine whose cached key was lost before any agent picked it up must
+        // still be able to obtain one, otherwise a Redis eviction would strand it permanently.
         using FunctionalTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
 
@@ -498,9 +503,9 @@ public sealed class RegistrationFlowTests
 
         RegisterSystemRequest registerRequest = new()
         {
-            Hostname = "old-key-host",
-            SerialNumber = "sn-oldkey-001",
-            SystemId = "sys-oldkey-001",
+            Hostname = "never-claimed-host",
+            SerialNumber = "sn-neverclaimed-001",
+            SystemId = "sys-neverclaimed-001",
             RegistrationToken = "test-registration-token",
             MachineType = MachineType.BareMetalServerType,
             Os = OperatingSystemType.UbuntuOs
@@ -508,51 +513,26 @@ public sealed class RegistrationFlowTests
         RegisterSystemResponse registerResponse = await registrationClient.RegisterSystemAsync(registerRequest);
         await Assert.That(registerResponse.MachineId).IsGreaterThan(0);
 
-        string originalApiKey = registerResponse.ApiKey;
-
-        // The first NeedsApiKey call delivers the original key from Redis cache
-        // (stored during registration) and removes it. This simulates the agent
-        // picking up its initial key.
-        SystemRegistrationStatusRequest firstDelivery = new()
+        // Act — the very first claim still succeeds and yields a usable key.
+        SystemRegistrationStatusRequest statusRequest = new()
         {
-            SerialNumber = "sn-oldkey-001",
-            SystemId = "sys-oldkey-001",
+            SerialNumber = "sn-neverclaimed-001",
+            SystemId = "sys-neverclaimed-001",
             RegistrationToken = "test-registration-token",
             NeedsApiKey = true
         };
-        SystemRegistrationStatusResponse firstResponse = await registrationClient.GetRegistrationStatusAsync(firstDelivery);
-        await Assert.That(firstResponse.ApiKey).IsNotEmpty();
+        SystemRegistrationStatusResponse statusResponse = await registrationClient.GetRegistrationStatusAsync(statusRequest);
 
-        // The second NeedsApiKey call finds no cached key and triggers a true
-        // re-issuance that generates a new key and overwrites ApiKeyHash.
-        SystemRegistrationStatusRequest reissueRequest = new()
-        {
-            SerialNumber = "sn-oldkey-001",
-            SystemId = "sys-oldkey-001",
-            RegistrationToken = "test-registration-token",
-            NeedsApiKey = true
-        };
-        SystemRegistrationStatusResponse reissueResponse = await registrationClient.GetRegistrationStatusAsync(reissueRequest);
-        await Assert.That(reissueResponse.ApiKey).IsNotEmpty();
+        await Assert.That(statusResponse.Status).IsEqualTo(RegistrationStatus.RegistrationActive);
+        await Assert.That(statusResponse.MachineId).IsEqualTo(registerResponse.MachineId);
+        await Assert.That(statusResponse.ApiKey).IsNotEmpty();
 
-        // Act — attempt to use the original API key for an authenticated call
         Configuration.ConfigurationClient configClient = new(channel);
-        Metadata headers = new() { { "x-api-key", originalApiKey } };
+        Metadata headers = new() { { "x-api-key", statusResponse.ApiKey } };
         GetConfigurationRequest configRequest = new() { MachineId = registerResponse.MachineId };
 
-        RpcException? exception = null;
-        try
-        {
-            await configClient.GetConfigurationAsync(configRequest, headers: headers);
-        }
-        catch (RpcException ex)
-        {
-            exception = ex;
-        }
-
-        // Assert — the old key must be rejected
-        await Assert.That(exception).IsNotNull();
-        await Assert.That(exception!.StatusCode).IsEqualTo(StatusCode.Unauthenticated);
+        GetConfigurationResponse configResponse = await configClient.GetConfigurationAsync(configRequest, headers: headers);
+        await Assert.That(configResponse.TimeConfig).IsNotNull();
     }
 
     [Test]

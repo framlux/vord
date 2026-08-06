@@ -268,6 +268,48 @@ public class MachineServiceTests
     }
 
     [Test]
+    public async Task GetRegistrationStatus_KeyAlreadyDelivered_RefusesReissueAndReportsUnknown()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        RegistrationToken token = await SeedValidRegistrationToken(dbFactory, FixedNow);
+
+        // KeyDeliveredAt is the one-time-delivery latch: null means the initial key was never
+        // claimed, non-null means an agent picked it up and is authenticating with it. A second
+        // caller presenting the same serial and system id must not be able to re-key it out from
+        // under that agent. The null case deliberately still re-issues — that is what lets an agent
+        // recover when the Redis entry was lost before it ever claimed its key — and is covered by
+        // GetRegistrationStatus_NeedsApiKey_CacheExpired_ReissuesNewKey.
+        Machine machine = TestDataBuilder.BuildMachine(tenantId: token.TenantId, registrationTokenId: token.Id);
+        machine.KeyDeliveredAt = FixedNow;
+        machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
+
+        IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
+        IDatabase redisDb = Substitute.For<IDatabase>();
+        redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(redisDb);
+        redisDb.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
+            .Returns(Task.FromResult<RedisValue>(RedisValue.Null));
+
+        IMachineRepository machineRepo = Substitute.For<IMachineRepository>();
+        machineRepo.GetMachineBySerialAndSystemIdAsync(machine.SerialNumber, machine.SystemId, token.TenantId, Arg.Any<CancellationToken>())
+            .Returns(machine);
+
+        IApiKeyCacheInvalidator invalidator = Substitute.For<IApiKeyCacheInvalidator>();
+
+        TestServiceScopeFactory scopeFactory = CreateScopeFactory(dbFactory, machineRepo);
+        MachineService service = BuildService(scopeFactory, redis: redis, apiKeyCacheInvalidator: invalidator);
+
+        (RegistrationStatus status, long? id, string? apiKey) result =
+            await service.GetRegistrationStatusAsync(machine.SerialNumber, machine.SystemId, TestTokenValue, true, CancellationToken.None);
+
+        await Assert.That(result.status).IsEqualTo(RegistrationStatus.UnknownRegistration);
+        await Assert.That(result.id).IsNull();
+        await Assert.That(result.apiKey).IsNull();
+        await machineRepo.DidNotReceive().ReissueApiKeyAsync(Arg.Any<long>(), Arg.Any<CancellationToken>());
+        // The incumbent agent's credentials must survive untouched — no reissue, so no invalidation.
+        await invalidator.DidNotReceive().InvalidateByHashAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
     public async Task GetRegistrationStatus_Reissue_InvalidatesOldKeyAuthCache()
     {
         using TestDatabaseFactory dbFactory = new();
@@ -1021,11 +1063,12 @@ public class MachineServiceTests
     // ========== Regression: API key cache deleted before DB update (bug fix) ==========
 
     [Test]
-    public async Task GetRegistrationStatus_CacheDeletedBeforeDbMark_PreventsStaleRedelivery()
+    public async Task GetRegistrationStatus_CacheDeleteLost_DoesNotDeliverKey()
     {
-        // Regression test: previously, MarkKeyDeliveredAsync ran before KeyDeleteAsync.
-        // If KeyDeleteAsync failed, the stale cache entry allowed duplicate delivery.
-        // Fix: KeyDeleteAsync runs first so the cache is cleared even if MarkKeyDelivered fails.
+        // The atomic Redis delete is the one-time-delivery arbiter: a caller that did not remove the
+        // entry did not win the race and must not be handed the key. This replaced an ordering
+        // invariant between KeyDeleteAsync and a database mark, which no longer applies now that
+        // acceptance is recorded at authentication rather than during delivery.
         using TestDatabaseFactory dbFactory = new();
         RegistrationToken token = await SeedValidRegistrationToken(dbFactory, FixedNow);
 
@@ -1036,33 +1079,68 @@ public class MachineServiceTests
         IDatabase redisDb = Substitute.For<IDatabase>();
         redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(redisDb);
 
-        // Cache has a key
+        EphemeralDataProtectionProvider provider = new();
+        IDataProtector seedingProtector = provider.CreateProtector("MachineService.PendingApiKey");
         redisDb.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
-            .Returns(Task.FromResult<RedisValue>("cached-plaintext-key"));
+            .Returns(Task.FromResult<RedisValue>(seedingProtector.Protect("cached-plaintext-key")));
+
+        // This caller read the entry but another caller removed it first.
+        redisDb.KeyDeleteAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
+            .Returns(false);
 
         IMachineRepository machineRepo = Substitute.For<IMachineRepository>();
         machineRepo.GetMachineBySerialAndSystemIdAsync(machine.SerialNumber, machine.SystemId, token.TenantId, Arg.Any<CancellationToken>())
             .Returns(machine);
-        machineRepo.MarkKeyDeliveredAsync(machine.Id, Arg.Any<CancellationToken>())
-            .Returns(1);
-
-        // Track call ordering: KeyDeleteAsync must be called BEFORE MarkKeyDeliveredAsync
-        List<string> callOrder = [];
-        redisDb.When(db => db.KeyDeleteAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>()))
-            .Do(_ => callOrder.Add("KeyDelete"));
-        machineRepo.When(repo => repo.MarkKeyDeliveredAsync(Arg.Any<long>(), Arg.Any<CancellationToken>()))
-            .Do(_ => callOrder.Add("MarkDelivered"));
+        machineRepo.ReissueApiKeyAsync(machine.Id, Arg.Any<CancellationToken>())
+            .Returns(("reissued-plaintext-key", "old-key-hash"));
 
         TestServiceScopeFactory scopeFactory = CreateScopeFactory(dbFactory, machineRepo);
-        MachineService service = BuildService(scopeFactory, redis: redis);
+        MachineService service = BuildService(scopeFactory, redis: redis, dataProtectionProvider: provider);
 
-        await service.GetRegistrationStatusAsync(machine.SerialNumber, machine.SystemId, TestTokenValue, true, CancellationToken.None);
+        (RegistrationStatus status, long? id, string? apiKey) result =
+            await service.GetRegistrationStatusAsync(machine.SerialNumber, machine.SystemId, TestTokenValue, true, CancellationToken.None);
 
-        // Verify cache is deleted before the DB mark — this is the regression guard
-        await Assert.That(callOrder.Count).IsGreaterThanOrEqualTo(2);
-        int deleteIdx = callOrder.IndexOf("KeyDelete");
-        int markIdx = callOrder.IndexOf("MarkDelivered");
-        await Assert.That(deleteIdx).IsLessThan(markIdx);
+        // The cached key must not be handed out; this machine has never been accepted, so the
+        // caller legitimately falls through to a re-issue rather than receiving the contested key.
+        await Assert.That(result.apiKey).IsNotEqualTo("cached-plaintext-key");
+        await Assert.That(result.apiKey).IsEqualTo("reissued-plaintext-key");
+    }
+
+    [Test]
+    public async Task GetRegistrationStatus_Delivery_DoesNotStampAcceptance()
+    {
+        // Acceptance is recorded when the agent authenticates, never during delivery. If delivery
+        // stamped it, a response lost in flight would leave the machine looking accepted and the
+        // re-issue guard would strand the agent permanently.
+        using TestDatabaseFactory dbFactory = new();
+        RegistrationToken token = await SeedValidRegistrationToken(dbFactory, FixedNow);
+
+        Machine machine = TestDataBuilder.BuildMachine(tenantId: token.TenantId, registrationTokenId: token.Id);
+        machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
+
+        IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
+        IDatabase redisDb = Substitute.For<IDatabase>();
+        redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(redisDb);
+
+        EphemeralDataProtectionProvider provider = new();
+        IDataProtector seedingProtector = provider.CreateProtector("MachineService.PendingApiKey");
+        redisDb.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
+            .Returns(Task.FromResult<RedisValue>(seedingProtector.Protect("cached-plaintext-key")));
+        redisDb.KeyDeleteAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
+            .Returns(true);
+
+        IMachineRepository machineRepo = Substitute.For<IMachineRepository>();
+        machineRepo.GetMachineBySerialAndSystemIdAsync(machine.SerialNumber, machine.SystemId, token.TenantId, Arg.Any<CancellationToken>())
+            .Returns(machine);
+
+        TestServiceScopeFactory scopeFactory = CreateScopeFactory(dbFactory, machineRepo);
+        MachineService service = BuildService(scopeFactory, redis: redis, dataProtectionProvider: provider);
+
+        (RegistrationStatus status, long? id, string? apiKey) result =
+            await service.GetRegistrationStatusAsync(machine.SerialNumber, machine.SystemId, TestTokenValue, true, CancellationToken.None);
+
+        await Assert.That(result.apiKey).IsEqualTo("cached-plaintext-key");
+        await machineRepo.DidNotReceive().MarkKeyDeliveredAsync(Arg.Any<long>(), Arg.Any<CancellationToken>());
     }
 
     [Test]

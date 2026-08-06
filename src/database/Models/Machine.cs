@@ -118,7 +118,27 @@ public sealed class Machine
     public UserAccount? DeletedByUser { get; set; }
 
     /// <summary>
-    /// Represents the date and time when the API key was delivered to the agent.
+    /// When the agent took possession of its current API key, evidenced by the first successful
+    /// authentication with it. Delivery here means a completed handoff, not a send: the server
+    /// stamps this only once the agent has demonstrably received and persisted the key, so a
+    /// response lost in flight leaves the column null and the handoff can simply be retried.
+    /// <para>
+    /// Written by <c>MarkKeyDeliveredAsync</c>, whose <c>KeyDeliveredAt == null</c> predicate makes
+    /// it a once-per-key stamp, from <c>ApiKeyAuthenticationHandler</c> on a cache-miss lookup.
+    /// <c>ReissueApiKeyAsync</c> clears it, because a freshly minted key has not been accepted yet.
+    /// It is never set at registration: auto-enrolment returns the key inline and caches it, and
+    /// neither is proof the agent has it.
+    /// </para>
+    /// <para>
+    /// Non-null therefore means a live agent is authenticating with this key right now, which is
+    /// what <c>GetRegistrationStatusAsync</c> tests before refusing to re-issue — re-keying a
+    /// machine in that state would invalidate the running agent's credentials and take it offline.
+    /// </para>
+    /// <para>
+    /// This column does not record when a key was minted or sent; nothing needs either, and no UI,
+    /// API response, or data export reads this value. One-time delivery of the cached key is
+    /// arbitrated by the atomic Redis <c>DEL</c>, not by this column.
+    /// </para>
     /// </summary>
     [Column("KeyDeliveredAt"), Nullable]
     public DateTimeOffset? KeyDeliveredAt { get; set; }

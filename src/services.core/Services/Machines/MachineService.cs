@@ -140,14 +140,14 @@ public sealed class MachineService : IMachineService
 
         if (cachedKey.HasValue)
         {
-            // Delete from cache first — safe direction: if MarkKeyDelivered fails afterward,
-            // the reissue path below will recover. The reverse order risked stale cache entries
-            // allowing duplicate delivery if KeyDeleteAsync failed after a successful DB update.
-            await redisDb.KeyDeleteAsync(cacheKey);
+            // The atomic Redis delete is the race arbiter: when two callers read the same entry,
+            // only one of them removes it and so only one delivers the key. DEL is single-statement
+            // and single-threaded, which is a stronger guarantee than the read-then-update pair this
+            // replaced. Deleting before use also keeps the safe failure direction — a crash after
+            // this point costs the caller a retry rather than leaving live key material in Redis.
+            bool wonDelivery = await redisDb.KeyDeleteAsync(cacheKey);
 
-            int updated = await machineRepo.MarkKeyDeliveredAsync(machine.Id, cancellationToken);
-
-            if (updated > 0)
+            if (wonDelivery)
             {
                 string? decrypted = TryUnprotectPendingKey(cachedKey.ToString()!, machine.Id);
                 if (decrypted is not null)
@@ -166,6 +166,27 @@ public sealed class MachineService : IMachineService
             }
         }
 
+        // Refuse to re-issue once the agent has proven it holds a working key. KeyDeliveredAt is
+        // stamped by the authentication handler on first successful use, so non-null means an agent
+        // is out there authenticating right now. Re-issuing in that case overwrites the stored hash
+        // and invalidates that agent's credentials, taking a live machine permanently offline with
+        // no error on either side, since an agent only self-recovers when its stored key is empty.
+        // Reporting an unknown registration instead makes the failure visible: the caller falls
+        // through to RegisterSystem, which rejects it with "Machine already exists".
+        // Null still re-issues on purpose. That covers every case where the key never reached its
+        // agent — a lost response, an expired cache entry — so a handoff that failed in flight can
+        // always be retried, and only a confirmed-live machine is protected.
+        if ((plaintextKey is null) && (machine.KeyDeliveredAt is not null))
+        {
+            _logger.LogWarning(
+                "Refusing to re-issue API key for machine {MachineId} in tenant {TenantId}: its agent accepted a key at {KeyDeliveredAt}",
+                machine.Id,
+                token.TenantId,
+                machine.KeyDeliveredAt);
+
+            return (RegistrationStatus.UnknownRegistration, null, null);
+        }
+
         // If no cached key was available, re-issue a new one.
         if (plaintextKey is null)
         {
@@ -181,10 +202,12 @@ public sealed class MachineService : IMachineService
                     await _apiKeyCacheInvalidator.InvalidateByHashAsync(oldKeyHash, cancellationToken);
                 }
 
-                // Cache the encrypted form for retry resilience and mark as delivered.
+                // Cache the encrypted form so a caller whose response is lost in flight can retry
+                // and be handed the same key. Nothing is stamped here: acceptance is recorded when
+                // the agent first authenticates, so an undelivered key leaves no trace that would
+                // block a retry.
                 string protectedKey = _pendingApiKeyProtector.Protect(plaintextKey);
                 await redisDb.StringSetAsync(cacheKey, protectedKey, ApiKeyCacheTtl);
-                await machineRepo.MarkKeyDeliveredAsync(machine.Id, cancellationToken);
                 _logger.LogInformation("API key re-issued for machine {MachineId} in tenant {TenantId}", machine.Id, token.TenantId);
             }
             else

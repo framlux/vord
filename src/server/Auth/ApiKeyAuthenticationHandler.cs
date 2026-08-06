@@ -105,6 +105,24 @@ public class ApiKeyAuthenticationHandler : AuthenticationHandler<AuthenticationS
             return AuthenticateResult.Fail("Invalid API key");
         }
 
+        // A successful lookup is the only proof the server ever gets that the agent received and
+        // persisted its key, so record acceptance here. The repository call is a compare-and-swap on
+        // a null column, making this at most one write per key lifetime; the null check keeps an
+        // already-accepted machine from issuing a pointless update on every cache miss. Best-effort
+        // on purpose — a failure to stamp must never reject a valid agent, and the only cost is that
+        // the machine stays eligible for a key re-issue until its next authentication.
+        if (machine.KeyDeliveredAt is null)
+        {
+            try
+            {
+                await _machineRepository.MarkKeyDeliveredAsync(machine.Id, Context.RequestAborted);
+            }
+            catch (Exception ex)
+            {
+                Logger.LogWarning(ex, "Failed to record key acceptance for machine {MachineId}", machine.Id);
+            }
+        }
+
         // Cache the resolved (machineId, tenantId) tuple. The cache key is hash-derived so the
         // raw token does not appear in Redis at any point.
         await SetCachedKeyAsync(keyHash, machine.Id, machine.TenantId);
