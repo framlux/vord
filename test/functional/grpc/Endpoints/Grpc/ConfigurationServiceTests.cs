@@ -87,6 +87,73 @@ public sealed class ConfigurationServiceTests
     }
 
     [Test]
+    public async Task GetConfiguration_ReportedMachineType_CorrectsMachineAndSummary()
+    {
+        // Machine type is otherwise written only at registration, and an upgraded agent never
+        // re-registers, so this is the only route by which a host classified by an older agent can
+        // ever be corrected. Both rows must move: the dashboard reads the summary.
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+
+        (long machineId, string apiKey) = await RegisterMachineAsync(factory);
+
+        await db.Machines
+            .Where(m => m.Id == machineId)
+            .Set(m => m.MachineType, MachineTypes.Unknown)
+            .UpdateAsync();
+        await db.MachineStateSummaries
+            .Where(s => s.MachineId == machineId)
+            .Set(s => s.MachineType, (byte)MachineTypes.Unknown)
+            .UpdateAsync();
+
+        using GrpcChannel channel = CreateChannel(factory);
+        Configuration.ConfigurationClient client = new(channel);
+
+        Metadata headers = new() { { "x-api-key", apiKey } };
+        await client.GetConfigurationAsync(
+            new GetConfigurationRequest
+            {
+                MachineId = machineId,
+                MachineType = Framlux.FleetManagement.Grpc.AgentRegistration.MachineType.VirtualMachineType,
+            },
+            headers: headers);
+
+        Machine? stored = await db.Machines.FirstOrDefaultAsync(m => m.Id == machineId);
+        MachineStateSummary? summary = await db.MachineStateSummaries.FirstOrDefaultAsync(s => s.MachineId == machineId);
+
+        await Assert.That(stored!.MachineType).IsEqualTo(MachineTypes.VirtualMachine);
+        await Assert.That(summary!.MachineType).IsEqualTo((byte)MachineTypes.VirtualMachine);
+    }
+
+    [Test]
+    public async Task GetConfiguration_UnknownReportedType_DoesNotOverwriteStoredType()
+    {
+        // Every agent released before the field existed sends the zero value, and a current agent
+        // sends it when detection failed. Neither is an assertion that the host is unknown, so a
+        // good stored classification must survive.
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+
+        (long machineId, string apiKey) = await RegisterMachineAsync(factory);
+
+        await db.Machines
+            .Where(m => m.Id == machineId)
+            .Set(m => m.MachineType, MachineTypes.VirtualMachine)
+            .UpdateAsync();
+
+        using GrpcChannel channel = CreateChannel(factory);
+        Configuration.ConfigurationClient client = new(channel);
+
+        Metadata headers = new() { { "x-api-key", apiKey } };
+        await client.GetConfigurationAsync(
+            new GetConfigurationRequest { MachineId = machineId },
+            headers: headers);
+
+        Machine? stored = await db.Machines.FirstOrDefaultAsync(m => m.Id == machineId);
+        await Assert.That(stored!.MachineType).IsEqualTo(MachineTypes.VirtualMachine);
+    }
+
+    [Test]
     public async Task GetConfiguration_MachineIdMismatch_ReturnsPermissionDenied()
     {
         using FunctionalTestFactory factory = new();

@@ -9,6 +9,11 @@ option go_package = "github.com/framlux/vord/internal/proto/agent";
 
 package agent;
 
+// MachineType is declared alongside the registration contract; both files share the "agent" proto
+// package, so the generated Go type is already in scope and C# resolves it through the
+// AgentRegistration namespace.
+import "AgentRegistration.proto";
+
 service Configuration {
     rpc GetConfiguration (GetConfigurationRequest) returns (GetConfigurationResponse);
     rpc AgentPing (AgentPingRequest) returns (AgentPingResponse);
@@ -20,6 +25,11 @@ message GetConfigurationRequest {
     int64 machine_id = 1;
     // Bitwise agent capabilities: bit 0 = remote commands enabled.
     uint64 agent_capabilities = 2;
+    // Machine type as currently detected by the agent. Machine type is otherwise recorded only at
+    // registration, and an agent that upgrades never re-registers, so a host classified by an older
+    // agent would keep a stale type forever. Reporting it here lets the server correct it. Sending
+    // UNKNOWN_TYPE is treated as "no opinion" and never overwrites a known value.
+    MachineType machine_type = 3;
 }
 
 message GetConfigurationResponse {

@@ -41,6 +41,42 @@ public partial class DatabaseRepository : IMachineRepository
     }
 
     /// <inheritdoc />
+    public async Task<bool> UpdateMachineTypeAsync(long machineId, MachineTypes machineType, CancellationToken cancellationToken)
+    {
+        // Machine type is mirrored into MachineStateSummary at registration and the dashboard reads
+        // the summary, so a correction has to touch both rows or the visible value stays stale.
+        // The predicate skips the write entirely when nothing changed, which is the common case:
+        // every agent reports its type on every configuration fetch.
+        //
+        // Both statements share a transaction because the retry path cannot repair a partial write.
+        // If the machine row committed and the summary did not, the next report would find the type
+        // already correct, match zero rows, and return before ever reaching the summary — leaving
+        // the visible value permanently wrong while the underlying data looks right.
+        await using DataConnectionTransaction transaction = await _db.BeginTransactionAsync(cancellationToken);
+
+        int updated = await _db.Machines
+            .Where(m => (m.Id == machineId) && (m.IsDeleted == false) && (m.MachineType != machineType))
+            .Set(m => m.MachineType, machineType)
+            .UpdateAsync(cancellationToken);
+
+        if (updated == 0)
+        {
+            return false;
+        }
+
+        await _db.MachineStateSummaries
+            .Where(s => s.MachineId == machineId)
+            .Set(s => s.MachineType, (byte)machineType)
+            .UpdateAsync(cancellationToken);
+
+        await transaction.CommitAsync(cancellationToken);
+
+        _logger.LogInformation("Machine {MachineId} type corrected to {MachineType}", machineId, machineType);
+
+        return true;
+    }
+
+    /// <inheritdoc />
     public async Task<bool> DoesMachineExistAsync(string serialNumber, string systemId, string assetTag, int tenantId, CancellationToken cancellationToken)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(serialNumber);

@@ -27,19 +27,103 @@ public sealed class ConfigurationServiceTests
     private readonly IMachinePingService _pingService = Substitute.For<IMachinePingService>();
     private readonly ILogger<ConfigurationService> _logger = Substitute.For<ILogger<ConfigurationService>>();
 
+    [Test]
+    [Arguments(Framlux.FleetManagement.Grpc.AgentRegistration.MachineType.VirtualMachineType, MachineTypes.VirtualMachine)]
+    [Arguments(Framlux.FleetManagement.Grpc.AgentRegistration.MachineType.BareMetalServerType, MachineTypes.BareMetalServer)]
+    [Arguments(Framlux.FleetManagement.Grpc.AgentRegistration.MachineType.DesktopType, MachineTypes.Desktop)]
+    [Arguments(Framlux.FleetManagement.Grpc.AgentRegistration.MachineType.LaptopType, MachineTypes.Laptop)]
+    public async Task ResolveReportedMachineType_KnownType_MapsToStoredEnum(
+        Framlux.FleetManagement.Grpc.AgentRegistration.MachineType reported,
+        MachineTypes expected)
+    {
+        await Assert.That(ConfigurationService.ResolveReportedMachineType(reported)).IsEqualTo(expected);
+    }
+
+    [Test]
+    public async Task ResolveReportedMachineType_UnknownType_IsIgnored()
+    {
+        // UnknownType means the agent could not classify the host, not that the host is unknown.
+        // Treating it as an assertion would let a detection failure erase a good stored value.
+        await Assert.That(ConfigurationService.ResolveReportedMachineType(
+            Framlux.FleetManagement.Grpc.AgentRegistration.MachineType.UnknownType)).IsNull();
+    }
+
+    [Test]
+    public async Task ResolveReportedMachineType_OutOfRangeValue_IsIgnored()
+    {
+        // An agent must not be able to write an enum value the rest of the system cannot read.
+        await Assert.That(ConfigurationService.ResolveReportedMachineType(
+            (Framlux.FleetManagement.Grpc.AgentRegistration.MachineType)999)).IsNull();
+    }
+
+    [Test]
+    public async Task GetConfiguration_ReportedType_CorrectsStoredMachineType()
+    {
+        IMachineRepository machineRepo = Substitute.For<IMachineRepository>();
+        ConfigurationService service = CreateService(machineRepo: machineRepo);
+
+        GetConfigurationRequest request = new()
+        {
+            MachineId = 42,
+            MachineType = Framlux.FleetManagement.Grpc.AgentRegistration.MachineType.VirtualMachineType,
+        };
+
+        await service.GetConfiguration(request, CreateAuthenticatedContext(42));
+
+        await machineRepo.Received(1).UpdateMachineTypeAsync(42, MachineTypes.VirtualMachine, Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task GetConfiguration_UnknownReportedType_LeavesStoredTypeAlone()
+    {
+        IMachineRepository machineRepo = Substitute.For<IMachineRepository>();
+        ConfigurationService service = CreateService(machineRepo: machineRepo);
+
+        // An agent that omits the field, including every agent released before it existed, sends
+        // the zero value. That must never be read as an assertion about the machine.
+        GetConfigurationRequest request = new() { MachineId = 42 };
+
+        await service.GetConfiguration(request, CreateAuthenticatedContext(42));
+
+        await machineRepo.DidNotReceive().UpdateMachineTypeAsync(Arg.Any<long>(), Arg.Any<MachineTypes>(), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task GetConfiguration_MachineTypeUpdateFails_StillReturnsConfiguration()
+    {
+        // Correcting the type is opportunistic. A database fault must not cost the agent its
+        // configuration fetch, which carries the timing settings the whole agent runs on.
+        IMachineRepository machineRepo = Substitute.For<IMachineRepository>();
+        machineRepo.UpdateMachineTypeAsync(Arg.Any<long>(), Arg.Any<MachineTypes>(), Arg.Any<CancellationToken>())
+            .Returns<Task<bool>>(_ => throw new InvalidOperationException("database unavailable"));
+        ConfigurationService service = CreateService(machineRepo: machineRepo);
+
+        GetConfigurationRequest request = new()
+        {
+            MachineId = 42,
+            MachineType = Framlux.FleetManagement.Grpc.AgentRegistration.MachineType.VirtualMachineType,
+        };
+
+        GetConfigurationResponse response = await service.GetConfiguration(request, CreateAuthenticatedContext(42));
+
+        await Assert.That(response.TimeConfig).IsNotNull();
+    }
+
     private ConfigurationService CreateService(
         IServerSettingsReader? settingsCache = null,
         ISigningKeyRepository? signingKeyRepo = null,
-        IRemoteCommandRepository? remoteCommandRepo = null)
+        IRemoteCommandRepository? remoteCommandRepo = null,
+        IMachineRepository? machineRepo = null)
     {
         IServerSettingsReader resolvedSettingsCache = settingsCache ?? Substitute.For<IServerSettingsReader>();
         ISigningKeyRepository resolvedSigningKeyRepo = signingKeyRepo ?? Substitute.For<ISigningKeyRepository>();
         IRemoteCommandRepository resolvedRemoteCommandRepo = remoteCommandRepo ?? Substitute.For<IRemoteCommandRepository>();
         resolvedSigningKeyRepo.GetActiveSigningKeysForMachineAsync(Arg.Any<long>(), Arg.Any<CancellationToken>())
             .Returns(new List<Database.Models.UserSigningKey>());
+        IMachineRepository resolvedMachineRepo = machineRepo ?? Substitute.For<IMachineRepository>();
         ServerConfigurationService configService = new(resolvedSettingsCache, Substitute.For<IConnectionMultiplexer>());
 
-        return new ConfigurationService(resolvedSigningKeyRepo, resolvedRemoteCommandRepo, _pingService, configService, _logger);
+        return new ConfigurationService(resolvedSigningKeyRepo, resolvedRemoteCommandRepo, _pingService, resolvedMachineRepo, configService, _logger);
     }
 
     private static ServerCallContext CreateAuthenticatedContext(long machineId, int tenantId = 1)

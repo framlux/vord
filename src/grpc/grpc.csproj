@@ -21,7 +21,9 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <Protobuf Include="protos\*.proto" GrpcServices="Both" />
+    <!-- ProtoRoot keeps imports flat (e.g. import "AgentRegistration.proto") so this and the
+         Go agent's protoc invocation, which passes -I ../grpc/protos, resolve them identically. -->
+    <Protobuf Include="protos\*.proto" ProtoRoot="protos" GrpcServices="Both" />
   </ItemGroup>
 
   <ItemGroup>

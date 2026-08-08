@@ -2,11 +2,14 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
-using Framlux.FleetManagement.Database.Repositories;
+using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
+using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Test.Infrastructure;
-using Microsoft.Extensions.Logging.Abstractions;
+using LinqToDB;
+using LinqToDB.Async;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
 
 namespace Framlux.FleetManagement.Test.QueryCache;
@@ -292,5 +295,94 @@ public class DatabaseRepositoryTests
         await Assert.That(async () =>
             await cache.CreateTenantAsync(tenant, CancellationToken.None))
             .Throws<ArgumentException>();
+    }
+
+    // ========== UpdateMachineTypeAsync ==========
+
+    [Test]
+    public async Task UpdateMachineType_Changed_UpdatesBothMachineAndSummary()
+    {
+        // The dashboard reads MachineStateSummary, so updating only the Machines row would correct
+        // the data and leave the visible value stale.
+        using TestDatabaseFactory dbFactory = new();
+        DatabaseRepository repository = new(dbFactory.Context, NullLogger<DatabaseRepository>.Instance);
+
+        Machine machine = TestDataBuilder.BuildMachine(tenantId: 1);
+        machine.MachineType = MachineTypes.Unknown;
+        machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
+        await dbFactory.Context.InsertAsync(TestDataBuilder.BuildMachineStateSummary(machineId: machine.Id, tenantId: 1));
+
+        bool changed = await repository.UpdateMachineTypeAsync(machine.Id, MachineTypes.VirtualMachine, CancellationToken.None);
+
+        await Assert.That(changed).IsTrue();
+
+        Machine? stored = await dbFactory.Context.Machines.FirstOrDefaultAsync(m => m.Id == machine.Id);
+        MachineStateSummary? summary = await dbFactory.Context.MachineStateSummaries.FirstOrDefaultAsync(s => s.MachineId == machine.Id);
+
+        await Assert.That(stored!.MachineType).IsEqualTo(MachineTypes.VirtualMachine);
+        await Assert.That(summary!.MachineType).IsEqualTo((byte)MachineTypes.VirtualMachine);
+    }
+
+    [Test]
+    public async Task UpdateMachineType_SummaryCannotDivergeFromMachine()
+    {
+        // The correction is idempotent only if both rows move together. Were the machine row to
+        // commit without the summary, the next report would find the type already correct, match
+        // zero rows, and return before touching the summary — so the value the dashboard shows would
+        // stay wrong forever while the underlying data looked right. Re-applying the same type must
+        // therefore always leave the two in agreement.
+        using TestDatabaseFactory dbFactory = new();
+        DatabaseRepository repository = new(dbFactory.Context, NullLogger<DatabaseRepository>.Instance);
+
+        Machine machine = TestDataBuilder.BuildMachine(tenantId: 1);
+        machine.MachineType = MachineTypes.Unknown;
+        machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
+        await dbFactory.Context.InsertAsync(TestDataBuilder.BuildMachineStateSummary(machineId: machine.Id, tenantId: 1));
+
+        await repository.UpdateMachineTypeAsync(machine.Id, MachineTypes.VirtualMachine, CancellationToken.None);
+        bool secondReport = await repository.UpdateMachineTypeAsync(machine.Id, MachineTypes.VirtualMachine, CancellationToken.None);
+
+        await Assert.That(secondReport).IsFalse();
+
+        Machine? stored = await dbFactory.Context.Machines.FirstOrDefaultAsync(m => m.Id == machine.Id);
+        MachineStateSummary? summary = await dbFactory.Context.MachineStateSummaries.FirstOrDefaultAsync(s => s.MachineId == machine.Id);
+
+        await Assert.That((byte)stored!.MachineType).IsEqualTo(summary!.MachineType);
+    }
+
+    [Test]
+    public async Task UpdateMachineType_Unchanged_ReportsNoChange()
+    {
+        // Every agent reports its type on every configuration fetch, so the no-op case is the common
+        // one and must not issue a write.
+        using TestDatabaseFactory dbFactory = new();
+        DatabaseRepository repository = new(dbFactory.Context, NullLogger<DatabaseRepository>.Instance);
+
+        Machine machine = TestDataBuilder.BuildMachine(tenantId: 1);
+        machine.MachineType = MachineTypes.VirtualMachine;
+        machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
+
+        bool changed = await repository.UpdateMachineTypeAsync(machine.Id, MachineTypes.VirtualMachine, CancellationToken.None);
+
+        await Assert.That(changed).IsFalse();
+    }
+
+    [Test]
+    public async Task UpdateMachineType_DeletedMachine_IsNotUpdated()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        DatabaseRepository repository = new(dbFactory.Context, NullLogger<DatabaseRepository>.Instance);
+
+        Machine machine = TestDataBuilder.BuildMachine(tenantId: 1);
+        machine.MachineType = MachineTypes.Unknown;
+        machine.IsDeleted = true;
+        machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
+
+        bool changed = await repository.UpdateMachineTypeAsync(machine.Id, MachineTypes.VirtualMachine, CancellationToken.None);
+
+        await Assert.That(changed).IsFalse();
+
+        Machine? stored = await dbFactory.Context.Machines.FirstOrDefaultAsync(m => m.Id == machine.Id);
+        await Assert.That(stored!.MachineType).IsEqualTo(MachineTypes.Unknown);
     }
 }

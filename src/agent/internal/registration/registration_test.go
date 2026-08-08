@@ -1563,3 +1563,174 @@ func TestFetchConfiguration_NilTimeConfig_DoesNotPanic(t *testing.T) {
 		t.Errorf("expected PingInterval=60s (default), got %v", runtimeState.PingInterval())
 	}
 }
+
+func TestClassifyMachineType(t *testing.T) {
+	// systemd-detect-virt is authoritative when it answers. The DMI rows below it cover the
+	// fallback for hosts without systemd, which is best-effort by design.
+	//
+	// The DMI strings are drawn from published platform behaviour, not from hardware in hand.
+	// Before relying on a fallback row, confirm it against a real guest of that platform — a wrong
+	// vendor string here labels real bare metal as a VM.
+	tests := []struct {
+		name        string
+		virt        string
+		productName string
+		sysVendor   string
+		chassisType string
+		want        pb.MachineType
+	}{
+		// systemd answered: the verdict wins regardless of what DMI says.
+		{"detect-virt kvm", "kvm", "Standard PC (i440FX + PIIX, 1996)", "QEMU", "1", pb.MachineType_VIRTUAL_MACHINE_TYPE},
+		{"detect-virt microsoft", "microsoft", "Virtual Machine", "Microsoft Corporation", "3", pb.MachineType_VIRTUAL_MACHINE_TYPE},
+		{"detect-virt amazon", "amazon", "m5.large", "Amazon EC2", "1", pb.MachineType_VIRTUAL_MACHINE_TYPE},
+		{"detect-virt vmware", "vmware", "VMware Virtual Platform", "VMware, Inc.", "1", pb.MachineType_VIRTUAL_MACHINE_TYPE},
+
+		// systemd said none: hardware, even where a vendor string looks like a hypervisor's.
+		{"bare metal server", "none", "PowerEdge R640", "Dell Inc.", "17", pb.MachineType_BARE_METAL_SERVER_TYPE},
+		{"ec2 metal instance", "none", "c5.metal", "Amazon EC2", "1", pb.MachineType_UNKNOWN_TYPE},
+		{"gcp bare metal", "none", "Google Compute Engine", "Google", "17", pb.MachineType_BARE_METAL_SERVER_TYPE},
+		{"oracle bare metal", "none", "ORACLE SERVER X8-2", "Oracle Corporation", "17", pb.MachineType_BARE_METAL_SERVER_TYPE},
+		{"nutanix appliance", "none", "NX-3060-G7", "Nutanix", "17", pb.MachineType_BARE_METAL_SERVER_TYPE},
+		{"chromebook", "none", "Eve", "GOOGLE", "9", pb.MachineType_LAPTOP_TYPE},
+		{"none beats hypervisor product string", "none", "VMware Virtual Platform", "VMware, Inc.", "17", pb.MachineType_BARE_METAL_SERVER_TYPE},
+		{"none beats qemu vendor string", "none", "Standard PC (i440FX + PIIX, 1996)", "QEMU", "17", pb.MachineType_BARE_METAL_SERVER_TYPE},
+		{"desktop", "none", "OptiPlex 7070", "Dell Inc.", "3", pb.MachineType_DESKTOP_TYPE},
+		{"laptop", "none", "ThinkPad X1", "LENOVO", "10", pb.MachineType_LAPTOP_TYPE},
+
+		// No systemd answer: DMI fallback by product_name.
+		{"dmi azure", "", "Virtual Machine", "Microsoft Corporation", "3", pb.MachineType_VIRTUAL_MACHINE_TYPE},
+		{"dmi gce", "", "Google Compute Engine", "Google", "1", pb.MachineType_VIRTUAL_MACHINE_TYPE},
+		{"dmi digitalocean", "", "Droplet", "DigitalOcean", "1", pb.MachineType_VIRTUAL_MACHINE_TYPE},
+		{"dmi openstack", "", "OpenStack Nova", "OpenStack Foundation", "1", pb.MachineType_VIRTUAL_MACHINE_TYPE},
+		{"dmi xen hvm", "", "HVM domU", "Xen", "1", pb.MachineType_VIRTUAL_MACHINE_TYPE},
+		{"dmi virtualbox", "", "VirtualBox", "innotek GmbH", "1", pb.MachineType_VIRTUAL_MACHINE_TYPE},
+		{"dmi libvirt default product", "", "Standard PC (i440FX + PIIX, 1996)", "QEMU", "1", pb.MachineType_VIRTUAL_MACHINE_TYPE},
+		{"dmi parallels", "", "Parallels Virtual Platform", "Parallels Software International Inc.", "1", pb.MachineType_VIRTUAL_MACHINE_TYPE},
+
+		// No systemd answer: DMI fallback by sys_vendor, where product_name gives nothing away.
+		{"dmi vendor qemu", "", "", "QEMU", "1", pb.MachineType_VIRTUAL_MACHINE_TYPE},
+		{"dmi vendor vmware", "", "", "VMware, Inc.", "1", pb.MachineType_VIRTUAL_MACHINE_TYPE},
+
+		// Cloud vendors with nothing else to go on: guess virtual. These brands sell far more
+		// guests than bare-metal instances, and a wrong guess is cheap to correct once the agent
+		// reports its type on the next configuration fetch.
+		{"dmi ec2 nitro", "", "m5.large", "Amazon EC2", "1", pb.MachineType_VIRTUAL_MACHINE_TYPE},
+		{"dmi alibaba guest", "", "", "Alibaba Cloud", "1", pb.MachineType_VIRTUAL_MACHINE_TYPE},
+		{"dmi nutanix ahv guest", "", "AHV", "Nutanix", "1", pb.MachineType_VIRTUAL_MACHINE_TYPE},
+
+		// Vendors kept OFF the guess list, because their guests are already matched by product name
+		// and the vendor string alone would only ever fire on that vendor's physical hardware.
+		{"google vendor alone is not a guess", "", "", "Google", "1", pb.MachineType_UNKNOWN_TYPE},
+		{"microsoft vendor alone is not a guess", "", "", "Microsoft Corporation", "1", pb.MachineType_UNKNOWN_TYPE},
+		{"oracle vendor alone is not a guess", "", "", "Oracle Corporation", "1", pb.MachineType_UNKNOWN_TYPE},
+
+		// Form factors the chassis map previously omitted. Without them a physical device fell
+		// through with no answer and was handed to the cloud-vendor guess.
+		{"surface tablet chassis", "", "Surface Pro", "Microsoft Corporation", "30", pb.MachineType_LAPTOP_TYPE},
+		{"all-in-one chassis", "", "iMac", "Apple Inc.", "13", pb.MachineType_DESKTOP_TYPE},
+		{"mini pc chassis", "", "NUC", "Intel", "35", pb.MachineType_DESKTOP_TYPE},
+
+		// ... but a product name saying "metal" is how AWS and GCP label bare-metal shapes, so the
+		// guess is withheld rather than mislabelling real hardware.
+		{"dmi ec2 metal shape", "", "c5.metal", "Amazon EC2", "1", pb.MachineType_UNKNOWN_TYPE},
+		{"dmi gcp metal shape", "", "c3-highmem-192-metal", "Google", "1", pb.MachineType_UNKNOWN_TYPE},
+
+		// ... and a physical chassis outranks the vendor brand, so hardware sold by a cloud vendor
+		// is not swept up by the guess.
+		{"dmi ec2 vendor on a server chassis", "", "m5.large", "Amazon EC2", "17", pb.MachineType_BARE_METAL_SERVER_TYPE},
+		{"dmi oracle bare metal server", "", "ORACLE SERVER X8-2", "Oracle Corporation", "17", pb.MachineType_BARE_METAL_SERVER_TYPE},
+		{"dmi nutanix appliance", "", "NX-3060-G7", "Nutanix", "17", pb.MachineType_BARE_METAL_SERVER_TYPE},
+		{"dmi surface is a laptop", "", "Surface Laptop", "Microsoft Corporation", "10", pb.MachineType_LAPTOP_TYPE},
+		{"dmi chromebook is a laptop", "", "Eve", "GOOGLE", "9", pb.MachineType_LAPTOP_TYPE},
+
+		// Nothing readable at all.
+		{"no dmi no virt", "", "", "", "", pb.MachineType_UNKNOWN_TYPE},
+		{"virt none no dmi", "none", "", "", "", pb.MachineType_UNKNOWN_TYPE},
+
+		// Matching is case-insensitive on both DMI fields.
+		{"uppercase product", "", "QEMU Standard PC", "", "1", pb.MachineType_VIRTUAL_MACHINE_TYPE},
+		{"uppercase vendor", "", "", "XEN", "1", pb.MachineType_VIRTUAL_MACHINE_TYPE},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := classifyMachineType(tt.virt, tt.productName, tt.sysVendor, tt.chassisType)
+			if got != tt.want {
+				t.Errorf("classifyMachineType(%q, %q, %q, %q) = %v, want %v",
+					tt.virt, tt.productName, tt.sysVendor, tt.chassisType, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestDetectVirtualizationMissingBinaryReturnsUnknown(t *testing.T) {
+	// With an empty PATH the binary cannot be found. That is not an answer, so the caller must be
+	// told nothing is known rather than being handed a false "none" that would suppress the DMI
+	// fallback on a genuinely virtualized host.
+	t.Setenv("PATH", "")
+
+	if got := detectVirtualization(context.Background()); got != "" {
+		t.Errorf("detectVirtualization with no PATH = %q, want empty", got)
+	}
+}
+
+func TestDetectVirtualizationCancelledContextReturnsUnknown(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	if got := detectVirtualization(ctx); got != "" {
+		t.Errorf("detectVirtualization with cancelled context = %q, want empty", got)
+	}
+}
+
+// writeFakeDetectVirt puts a stub systemd-detect-virt on PATH so the branches that depend on its
+// exit status can be exercised without a hypervisor. Returns nothing; PATH is restored by t.Setenv.
+func writeFakeDetectVirt(t *testing.T, stdout string, exitCode int) {
+	t.Helper()
+
+	dir := t.TempDir()
+	script := fmt.Sprintf("#!/bin/sh\nprintf '%%s\\n' '%s'\nexit %d\n", stdout, exitCode)
+	path := filepath.Join(dir, "systemd-detect-virt")
+	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {
+		t.Fatalf("writing fake systemd-detect-virt: %v", err)
+	}
+
+	t.Setenv("PATH", dir)
+}
+
+func TestDetectVirtualizationReportsHypervisor(t *testing.T) {
+	writeFakeDetectVirt(t, "kvm", 0)
+
+	if got := detectVirtualization(context.Background()); got != "kvm" {
+		t.Errorf("detectVirtualization = %q, want %q", got, "kvm")
+	}
+}
+
+func TestDetectVirtualizationNoneIsDefinitive(t *testing.T) {
+	// Exit 1 with "none" is the documented not-virtualized answer. It must come back as "none" and
+	// not as "no answer", because "none" is what suppresses the DMI guessing.
+	writeFakeDetectVirt(t, "none", 1)
+
+	if got := detectVirtualization(context.Background()); got != "none" {
+		t.Errorf("detectVirtualization = %q, want %q", got, "none")
+	}
+}
+
+func TestDetectVirtualizationFailureOutputIsNotAVerdict(t *testing.T) {
+	// A non-zero exit carrying anything other than "none" is a broken binary or a wrapper script,
+	// not an answer. Treating it as one would report the host as virtual AND suppress the DMI
+	// fallback that would have classified it correctly.
+	writeFakeDetectVirt(t, "command not understood", 2)
+
+	if got := detectVirtualization(context.Background()); got != "" {
+		t.Errorf("detectVirtualization = %q, want empty so the DMI fallback runs", got)
+	}
+}
+
+func TestDetectVirtualizationEmptyOutputIsNotAVerdict(t *testing.T) {
+	writeFakeDetectVirt(t, "", 1)
+
+	if got := detectVirtualization(context.Background()); got != "" {
+		t.Errorf("detectVirtualization = %q, want empty", got)
+	}
+}

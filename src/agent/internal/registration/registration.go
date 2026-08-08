@@ -8,9 +8,11 @@ package registration
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -124,7 +126,7 @@ func (m *Manager) register(ctx context.Context) error {
 
 	m.state.SetSerialNumber(serialNumber)
 
-	machineType := detectMachineType()
+	machineType := detectMachineType(ctx)
 	osType := detectOSType()
 	osVersion := detectOSVersion()
 	systemID := readMachineID()
@@ -254,9 +256,13 @@ func (m *Manager) FetchConfiguration(ctx context.Context) error {
 		return fmt.Errorf("not registered")
 	}
 
+	// Report the currently detected machine type so the server can correct a stale classification.
+	// Type is otherwise recorded only at registration, and an upgraded agent never re-registers, so
+	// a host that an older agent could not classify would stay wrong forever.
 	resp, err := m.configuration.GetConfiguration(ctx, &pb.GetConfigurationRequest{
 		MachineId:         machineID,
 		AgentCapabilities: m.state.AgentCapabilities(),
+		MachineType:       detectMachineType(ctx),
 	})
 	if err != nil {
 		return fmt.Errorf("GetConfiguration RPC: %w", err)
@@ -439,29 +445,151 @@ func readMachineIDSerial(path string) string {
 	return "mid-" + mid
 }
 
-func detectMachineType() pb.MachineType {
-	productName := strings.ToLower(readDMIField("product_name"))
+// detectVirtTimeout bounds the systemd-detect-virt call so a wedged binary cannot stall the agent.
+const detectVirtTimeout = 30 * time.Second
 
-	// Check for virtual machine.
-	vmIndicators := []string{"kvm", "qemu", "vmware", "virtualbox", "xen", "hyper-v", "bochs"}
-	for _, indicator := range vmIndicators {
-		if strings.Contains(productName, indicator) {
-			return pb.MachineType_VIRTUAL_MACHINE_TYPE
-		}
-	}
+// dmiVMProductNames are product_name substrings that identify a hypervisor. Only consulted when
+// systemd-detect-virt is unavailable.
+var dmiVMProductNames = []string{
+	"kvm", "qemu", "vmware", "virtualbox", "xen", "bochs",
+	"hyper-v",               // effectively dead: real Hyper-V reports "Virtual Machine"
+	"virtual machine",       // Hyper-V and Azure
+	"hvm domu",              // Xen HVM, whose sys_vendor rather than product carries "Xen"
+	"droplet",               // DigitalOcean
+	"openstack",             // "OpenStack Nova" / "OpenStack Compute"
+	"google compute engine", // GCE
+	"standard pc",           // libvirt/QEMU default SMBIOS product, e.g. "Standard PC (i440FX + PIIX, 1996)"
+	"parallels",
+}
 
-	// Check chassis type (3=Desktop, 9/10=Laptop, 17=Server).
-	chassisType := readDMIField("chassis_type")
+// dmiVMVendors are sys_vendor substrings that identify a hypervisor outright.
+var dmiVMVendors = []string{
+	"qemu", "xen", "innotek", "vmware", "openstack", "parallels", "digitalocean",
+}
+
+// dmiCloudVendors are sys_vendor substrings for platforms whose guests carry no other giveaway.
+// They are a last-resort guess, applied only when nothing else has classified the host — see
+// classifyMachineType for the guards. Guessing VM is the right default because these vendors sell
+// far more guests than bare-metal instances, and a wrong guess self-corrects: the agent reports its
+// type on every configuration fetch, so a mislabelled host is fixed on the next poll.
+//
+// Deliberately NOT listed, because each can only ever fire on that vendor's PHYSICAL hardware:
+// "google" (GCE guests already match product "Google Compute Engine", leaving only Chromebooks and
+// GCP bare-metal shapes), "microsoft corporation" (Azure guests already match product "Virtual
+// Machine", leaving only Surface devices), and "oracle" (OCI guests present QEMU DMI and match
+// earlier, leaving only Oracle/Sun servers). Including them would trade nothing for a wrong label
+// on real hardware.
+var dmiCloudVendors = []string{
+	"amazon ec2", "alibaba", "nutanix",
+}
+
+// classifyChassis maps the DMI chassis type to a machine type, or UNKNOWN_TYPE when the value is
+// absent or one of the non-committal codes such as 1 (Other) that virtualized hosts typically report.
+func classifyChassis(chassisType string) pb.MachineType {
 	switch chassisType {
-	case "3", "4", "5", "6", "7", "24":
+	case "3", "4", "5", "6", "7", "13", "24", "35", "36":
 		return pb.MachineType_DESKTOP_TYPE
-	case "8", "9", "10", "14", "31", "32":
+	case "8", "9", "10", "11", "14", "30", "31", "32":
 		return pb.MachineType_LAPTOP_TYPE
 	case "17", "23", "25", "28", "29":
 		return pb.MachineType_BARE_METAL_SERVER_TYPE
 	}
 
 	return pb.MachineType_UNKNOWN_TYPE
+}
+
+// detectVirtualization asks systemd for an authoritative answer. Returns the hypervisor name when
+// virtualized, "none" when definitively running on hardware, and "" when no answer is available
+// (systemd-detect-virt missing, or the call failed) so the caller can fall back to DMI.
+//
+// The --vm flag matters: without it systemd-detect-virt also reports containers, and a containerized
+// agent is a different question than a guest OS.
+func detectVirtualization(ctx context.Context) string {
+	// Bound the call. Both callers pass the root process context, which is only cancelled at
+	// shutdown, so a binary wedged on unreadable sysfs would otherwise block agent startup or stall
+	// the config-refresh loop indefinitely. This mirrors the timeout the collector applies to every
+	// command it runs.
+	ctx, cancel := context.WithTimeout(ctx, detectVirtTimeout)
+	defer cancel()
+
+	out, err := exec.CommandContext(ctx, "systemd-detect-virt", "--vm").Output()
+	result := strings.ToLower(strings.TrimSpace(string(out)))
+
+	if err != nil {
+		// The contract is binary: exit 0 carries the hypervisor name, and a non-zero exit means
+		// "none". Accept only that exact word — any other output alongside a failure is a wrapper
+		// script or a broken build, and treating it as a verdict would both misreport the host as
+		// virtual and suppress the DMI fallback that would have answered correctly.
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) && (result == "none") {
+			return result
+		}
+
+		slog.Debug("systemd-detect-virt gave no usable answer, falling back to DMI", "error", err, "output", result)
+
+		return ""
+	}
+
+	return result
+}
+
+// classifyMachineType maps a virtualization verdict and the DMI fields to a machine type. Kept free
+// of I/O so every platform can be covered by a table test.
+func classifyMachineType(virt string, productName string, sysVendor string, chassisType string) pb.MachineType {
+	productName = strings.ToLower(productName)
+	sysVendor = strings.ToLower(sysVendor)
+
+	switch virt {
+	case "":
+		// No authoritative answer. Fall back to matching DMI strings, which is best-effort and only
+		// reached on hosts without systemd.
+		for _, indicator := range dmiVMProductNames {
+			if strings.Contains(productName, indicator) {
+				return pb.MachineType_VIRTUAL_MACHINE_TYPE
+			}
+		}
+		for _, vendor := range dmiVMVendors {
+			if strings.Contains(sysVendor, vendor) {
+				return pb.MachineType_VIRTUAL_MACHINE_TYPE
+			}
+		}
+
+		// Nothing conclusive. Let the chassis speak before guessing: a real Chromebook, Surface, or
+		// Oracle server carries a cloud vendor string but reports a physical chassis, and that is a
+		// stronger signal than the brand.
+		if chassis := classifyChassis(chassisType); chassis != pb.MachineType_UNKNOWN_TYPE {
+			return chassis
+		}
+
+		// Last resort. A cloud vendor with no chassis to go on is far more likely a guest than a
+		// bare-metal instance, so guess VM — unless the product name says "metal", which is how
+		// AWS and GCP name their bare-metal shapes.
+		if strings.Contains(productName, "metal") == false {
+			for _, vendor := range dmiCloudVendors {
+				if strings.Contains(sysVendor, vendor) {
+					return pb.MachineType_VIRTUAL_MACHINE_TYPE
+				}
+			}
+		}
+
+		return pb.MachineType_UNKNOWN_TYPE
+	case "none":
+		// Definitively not virtualized. Skip the DMI heuristics entirely — they exist only to guess
+		// what systemd already answered, and a vendor string must never override it.
+	default:
+		return pb.MachineType_VIRTUAL_MACHINE_TYPE
+	}
+
+	return classifyChassis(chassisType)
+}
+
+func detectMachineType(ctx context.Context) pb.MachineType {
+	return classifyMachineType(
+		detectVirtualization(ctx),
+		readDMIField("product_name"),
+		readDMIField("sys_vendor"),
+		readDMIField("chassis_type"),
+	)
 }
 
 func detectOSType() pb.OperatingSystemType {

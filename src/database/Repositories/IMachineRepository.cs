@@ -31,6 +31,17 @@ public interface IMachineRepository
     Task<int> MarkKeyDeliveredAsync(long machineId, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Corrects a machine's recorded type, updating both the machine row and the state summary the
+    /// dashboard reads. Machine type is otherwise written only at registration, so an agent that
+    /// improves its detection has no other way to fix a stale classification.
+    /// </summary>
+    /// <param name="machineId">The machine to update.</param>
+    /// <param name="machineType">The type the agent now reports.</param>
+    /// <param name="cancellationToken">A token to cancel the operation.</param>
+    /// <returns>True when the stored type differed and was changed; false when it already matched.</returns>
+    Task<bool> UpdateMachineTypeAsync(long machineId, MachineTypes machineType, CancellationToken cancellationToken);
+
+    /// <summary>
     /// Checks if an active (non-deleted) machine exists based on the serial number, system ID, or asset tag number.
     /// </summary>
     Task<bool> DoesMachineExistAsync(string serialNumber, string systemId, string assetTag, int tenantId, CancellationToken cancellationToken = default);

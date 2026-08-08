@@ -26,6 +26,7 @@ public sealed class ConfigurationService : Configuration.ConfigurationBase
     private readonly ISigningKeyRepository _signingKeyRepository;
     private readonly IRemoteCommandRepository _remoteCommandRepository;
     private readonly IMachinePingService _pingService;
+    private readonly IMachineRepository _machineRepository;
     private readonly ServerConfigurationService _configService;
     private readonly ILogger<ConfigurationService> _logger;
 
@@ -35,6 +36,7 @@ public sealed class ConfigurationService : Configuration.ConfigurationBase
     /// <param name="signingKeyRepository">The signing key repository for retrieving trusted keys</param>
     /// <param name="remoteCommandRepository">The remote command repository for pending commands</param>
     /// <param name="pingService">The machine ping tracking service</param>
+    /// <param name="machineRepository">The machine repository, used to correct a stale machine type</param>
     /// <param name="configService">The server configuration service for runtime settings</param>
     /// <param name="logger">The application-wide logging service instance</param>
     /// <exception cref="ArgumentNullException"></exception>
@@ -42,12 +44,14 @@ public sealed class ConfigurationService : Configuration.ConfigurationBase
         ISigningKeyRepository signingKeyRepository,
         IRemoteCommandRepository remoteCommandRepository,
         IMachinePingService pingService,
+        IMachineRepository machineRepository,
         ServerConfigurationService configService,
         ILogger<ConfigurationService> logger)
     {
         _signingKeyRepository = signingKeyRepository ?? throw new ArgumentNullException(nameof(signingKeyRepository));
         _remoteCommandRepository = remoteCommandRepository ?? throw new ArgumentNullException(nameof(remoteCommandRepository));
         _pingService = pingService ?? throw new ArgumentNullException(nameof(pingService));
+        _machineRepository = machineRepository ?? throw new ArgumentNullException(nameof(machineRepository));
         _configService = configService ?? throw new ArgumentNullException(nameof(configService));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
@@ -61,6 +65,8 @@ public sealed class ConfigurationService : Configuration.ConfigurationBase
     public override async Task<GetConfigurationResponse> GetConfiguration(GetConfigurationRequest request, ServerCallContext context)
     {
         long machineId = ResolveMachineId(context, request.MachineId, "GetConfiguration");
+
+        await ApplyReportedMachineTypeAsync(machineId, request.MachineType, context.CancellationToken);
 
         int heartbeatSeconds = await _configService.GetAgentHeartbeatSecondsAsync(context.CancellationToken);
         int configRefreshSeconds = await _configService.GetAgentConfigRefreshSecondsAsync(context.CancellationToken);
@@ -235,6 +241,51 @@ public sealed class ConfigurationService : Configuration.ConfigurationBase
             context.CancellationToken);
 
         return new AcknowledgeCommandResponse { Success = true };
+    }
+
+    /// <summary>
+    /// Records a machine type reported by the agent when it differs from what is stored. Failures
+    /// are swallowed: this is an opportunistic correction and must never fail a configuration fetch.
+    /// </summary>
+    private async Task ApplyReportedMachineTypeAsync(long machineId, Framlux.FleetManagement.Grpc.AgentRegistration.MachineType reported, CancellationToken cancellationToken)
+    {
+        MachineTypes? resolved = ResolveReportedMachineType(reported);
+        if (resolved is null)
+        {
+            return;
+        }
+
+        try
+        {
+            await _machineRepository.UpdateMachineTypeAsync(machineId, resolved.Value, cancellationToken);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Failed to apply reported machine type for machine {MachineId}", machineId);
+        }
+    }
+
+    /// <summary>
+    /// Maps a reported machine type onto the stored enum, or null when it should be ignored.
+    /// <para>
+    /// UnknownType means the agent could not classify the host, which is not the same as asserting
+    /// the host is unknown — treating it as an assertion would let a detection failure erase a good
+    /// stored value. An out-of-range value is rejected for the same reason a registration would
+    /// reject it: an agent must not be able to write an enum the rest of the system cannot read.
+    /// </para>
+    /// </summary>
+    /// <param name="reported">The machine type as sent by the agent.</param>
+    /// <returns>The database enum value to store, or null to leave the stored type alone.</returns>
+    internal static MachineTypes? ResolveReportedMachineType(Framlux.FleetManagement.Grpc.AgentRegistration.MachineType reported)
+    {
+        return reported switch
+        {
+            Framlux.FleetManagement.Grpc.AgentRegistration.MachineType.DesktopType => MachineTypes.Desktop,
+            Framlux.FleetManagement.Grpc.AgentRegistration.MachineType.LaptopType => MachineTypes.Laptop,
+            Framlux.FleetManagement.Grpc.AgentRegistration.MachineType.BareMetalServerType => MachineTypes.BareMetalServer,
+            Framlux.FleetManagement.Grpc.AgentRegistration.MachineType.VirtualMachineType => MachineTypes.VirtualMachine,
+            _ => null,
+        };
     }
 
     /// <summary>
