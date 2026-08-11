@@ -47,7 +47,6 @@ service BillingGateway {
 // Billing API implements — fleet server calls for Stripe operations
 service BillingManagement {
   rpc UpdateSubscriptionQuantity(UpdateQuantityRequest) returns (UpdateQuantityResponse);
-  rpc ReportMachineUsage(ReportMachineUsageRequest) returns (ReportMachineUsageResponse);
   rpc CancelSubscription(CancelSubscriptionRequest) returns (CancelSubscriptionResponse);
   rpc GetSubscriptionStatus(GetSubscriptionStatusRequest) returns (GetSubscriptionStatusResponse);
   rpc SwapSubscriptionPrice(SwapSubscriptionPriceRequest) returns (SwapSubscriptionPriceResponse);
@@ -71,18 +70,11 @@ message BillingActionResponse {
 
 message UpdateQuantityRequest {
   string tenant_external_id = 1;
-  int32 machine_count = 2;
+  // Billable quantity, not a raw machine count: it is the active machine count raised to
+  // the tier floor, so it can legitimately exceed the number of machines registered.
+  int32 quantity = 2;
 }
 message UpdateQuantityResponse {
-  bool success = 1;
-  string message = 2;
-}
-
-message ReportMachineUsageRequest {
-  string tenant_external_id = 1;
-  int32 machine_count = 2;
-}
-message ReportMachineUsageResponse {
   bool success = 1;
   string message = 2;
 }
@@ -216,6 +208,7 @@ service FleetAdmin {
   rpc RequestTenantDeletion(RequestTenantDeletionRequest) returns (RequestTenantDeletionResponse);
   rpc RestoreTenant(RestoreTenantRequest) returns (RestoreTenantResponse);
   rpc ListTenantDeletions(ListTenantDeletionsRequest) returns (ListTenantDeletionsResponse);
+  rpc GetBillableMachineCount(GetBillableMachineCountRequest) returns (GetBillableMachineCountResponse);
 }
 
 // --- FleetAdmin shared types ---
@@ -473,4 +466,17 @@ message TenantDeletionRecord {
   int32 status = 8;
   google.protobuf.Timestamp purged_at = 9;
   string reason = 10;
+}
+
+message GetBillableMachineCountRequest {
+  string tenant_external_id = 1;
+  // The tier whose floor applies — "free", "pro" or "team". At checkout this is the tier
+  // being purchased, which is not the tier the tenant is currently on.
+  string target_tier = 2;
+}
+
+message GetBillableMachineCountResponse {
+  int32 billable_count = 1;
+  bool success = 2;
+  string message = 3;
 }

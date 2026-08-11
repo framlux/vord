@@ -12,22 +12,13 @@ namespace Framlux.FleetManagement.Services.Core.Billing;
 public interface IBillingApiClient
 {
     /// <summary>
-    /// Updates the subscription quantity in Stripe to match the current machine count.
+    /// Updates the subscription quantity in Stripe to match the billable count.
     /// </summary>
     /// <param name="tenantExternalId">The tenant external ID.</param>
-    /// <param name="machineCount">The current active machine count.</param>
+    /// <param name="quantity">The billable quantity to report.</param>
     /// <param name="ct">Cancellation token.</param>
     /// <returns>True if the update was successful.</returns>
-    Task<bool> UpdateQuantityAsync(string tenantExternalId, int machineCount, CancellationToken ct);
-
-    /// <summary>
-    /// Reports the current machine count for a tenant to the billing API for metered billing.
-    /// </summary>
-    /// <param name="tenantExternalId">The tenant external ID.</param>
-    /// <param name="machineCount">The current active machine count.</param>
-    /// <param name="ct">Cancellation token.</param>
-    /// <returns>True if the usage report was successful.</returns>
-    Task<bool> ReportMachineUsageAsync(string tenantExternalId, int machineCount, CancellationToken ct);
+    Task<bool> UpdateQuantityAsync(string tenantExternalId, int quantity, CancellationToken ct);
 
     /// <summary>
     /// Cancels a subscription at the end of the current billing period.

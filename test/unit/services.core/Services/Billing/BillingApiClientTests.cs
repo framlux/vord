@@ -111,44 +111,6 @@ public sealed class BillingApiClientTests
         await Assert.That(result).IsFalse();
     }
 
-    // --- ReportMachineUsageAsync ---
-
-    [Test]
-    public async Task ReportMachineUsageAsync_ReturnsTrueOnSuccess()
-    {
-        (BillingApiClient client, BillingManagement.BillingManagementClient grpc, ILogger<BillingApiClient> _) = CreateSut();
-        grpc.ReportMachineUsageAsync(Arg.Any<ReportMachineUsageRequest>(), Arg.Any<Metadata>(), Arg.Any<DateTime?>(), Arg.Any<CancellationToken>())
-            .Returns(CreateAsyncCall(new ReportMachineUsageResponse { Success = true, Message = "OK" }));
-
-        bool result = await client.ReportMachineUsageAsync("tenant-ext-1", 5, CancellationToken.None);
-
-        await Assert.That(result).IsTrue();
-    }
-
-    [Test]
-    public async Task ReportMachineUsageAsync_ReturnsFalseOnFailureResponse()
-    {
-        (BillingApiClient client, BillingManagement.BillingManagementClient grpc, ILogger<BillingApiClient> logger) = CreateSut();
-        grpc.ReportMachineUsageAsync(Arg.Any<ReportMachineUsageRequest>(), Arg.Any<Metadata>(), Arg.Any<DateTime?>(), Arg.Any<CancellationToken>())
-            .Returns(CreateAsyncCall(new ReportMachineUsageResponse { Success = false, Message = "No subscription" }));
-
-        bool result = await client.ReportMachineUsageAsync("tenant-ext-1", 5, CancellationToken.None);
-
-        await Assert.That(result).IsFalse();
-    }
-
-    [Test]
-    public async Task ReportMachineUsageAsync_ReturnsFalseOnException()
-    {
-        (BillingApiClient client, BillingManagement.BillingManagementClient grpc, ILogger<BillingApiClient> _) = CreateSut();
-        grpc.ReportMachineUsageAsync(Arg.Any<ReportMachineUsageRequest>(), Arg.Any<Metadata>(), Arg.Any<DateTime?>(), Arg.Any<CancellationToken>())
-            .Returns(CreateFaultedCall<ReportMachineUsageResponse>(new RpcException(new Status(StatusCode.Internal, "error"))));
-
-        bool result = await client.ReportMachineUsageAsync("tenant-ext-1", 5, CancellationToken.None);
-
-        await Assert.That(result).IsFalse();
-    }
-
     // --- CancelSubscriptionAsync ---
 
     [Test]
@@ -260,7 +222,7 @@ public sealed class BillingApiClientTests
 
         await Assert.That(capturedRequest).IsNotNull();
         await Assert.That(capturedRequest!.TenantExternalId).IsEqualTo("tenant-abc");
-        await Assert.That(capturedRequest.MachineCount).IsEqualTo(10);
+        await Assert.That(capturedRequest.Quantity).IsEqualTo(10);
     }
 
     [Test]

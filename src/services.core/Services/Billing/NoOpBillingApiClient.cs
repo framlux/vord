@@ -12,13 +12,7 @@ namespace Framlux.FleetManagement.Services.Core.Billing;
 public sealed class NoOpBillingApiClient : IBillingApiClient
 {
     /// <inheritdoc/>
-    public Task<bool> UpdateQuantityAsync(string tenantExternalId, int machineCount, CancellationToken ct)
-    {
-        return Task.FromResult(true);
-    }
-
-    /// <inheritdoc/>
-    public Task<bool> ReportMachineUsageAsync(string tenantExternalId, int machineCount, CancellationToken ct)
+    public Task<bool> UpdateQuantityAsync(string tenantExternalId, int quantity, CancellationToken ct)
     {
         return Task.FromResult(true);
     }

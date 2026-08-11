@@ -65,7 +65,7 @@ public sealed class UsageHeartbeatJobTests
 
         await job.RunAsync(CancellationToken.None);
 
-        await billingApi.DidNotReceive().ReportMachineUsageAsync(
+        await billingApi.DidNotReceive().UpdateQuantityAsync(
             Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>());
     }
 
@@ -83,10 +83,10 @@ public sealed class UsageHeartbeatJobTests
         tenantRepo.GetTenantByIdAsync(7, Arg.Any<CancellationToken>()).Returns(tenant);
 
         ISubscriptionService subscriptionService = Substitute.For<ISubscriptionService>();
-        subscriptionService.GetMachineCountForTenantAsync(7, Arg.Any<CancellationToken>()).Returns(42);
+        subscriptionService.GetBillableMachineCountAsync(7, SubscriptionTier.Pro, Arg.Any<CancellationToken>()).Returns(42);
 
         IBillingApiClient billingApi = Substitute.For<IBillingApiClient>();
-        billingApi.ReportMachineUsageAsync("ext-tenant-7", 42, Arg.Any<CancellationToken>()).Returns(true);
+        billingApi.UpdateQuantityAsync("ext-tenant-7", 42, Arg.Any<CancellationToken>()).Returns(true);
 
         UsageHeartbeatJob job = BuildJob(
             subscriptionRepository: subscriptionRepo,
@@ -96,7 +96,7 @@ public sealed class UsageHeartbeatJobTests
 
         await job.RunAsync(CancellationToken.None);
 
-        await billingApi.Received(1).ReportMachineUsageAsync(
+        await billingApi.Received(1).UpdateQuantityAsync(
             "ext-tenant-7", 42, Arg.Any<CancellationToken>());
     }
 
@@ -122,11 +122,11 @@ public sealed class UsageHeartbeatJobTests
             .Returns(BuildTenant(3, "ext-3"));
 
         ISubscriptionService subscriptionService = Substitute.For<ISubscriptionService>();
-        subscriptionService.GetMachineCountForTenantAsync(Arg.Any<int>(), Arg.Any<CancellationToken>())
+        subscriptionService.GetBillableMachineCountAsync(Arg.Any<int>(), SubscriptionTier.Pro, Arg.Any<CancellationToken>())
             .Returns(10);
 
         IBillingApiClient billingApi = Substitute.For<IBillingApiClient>();
-        billingApi.ReportMachineUsageAsync(Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+        billingApi.UpdateQuantityAsync(Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
             .Returns(true);
 
         UsageHeartbeatJob job = BuildJob(
@@ -137,7 +137,7 @@ public sealed class UsageHeartbeatJobTests
 
         await job.RunAsync(CancellationToken.None);
 
-        await billingApi.Received(3).ReportMachineUsageAsync(
+        await billingApi.Received(3).UpdateQuantityAsync(
             Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>());
     }
 
@@ -162,10 +162,10 @@ public sealed class UsageHeartbeatJobTests
             .Returns(BuildTenant(200, "ext-200"));
 
         ISubscriptionService subscriptionService = Substitute.For<ISubscriptionService>();
-        subscriptionService.GetMachineCountForTenantAsync(200, Arg.Any<CancellationToken>()).Returns(5);
+        subscriptionService.GetBillableMachineCountAsync(200, SubscriptionTier.Pro, Arg.Any<CancellationToken>()).Returns(5);
 
         IBillingApiClient billingApi = Substitute.For<IBillingApiClient>();
-        billingApi.ReportMachineUsageAsync("ext-200", 5, Arg.Any<CancellationToken>()).Returns(true);
+        billingApi.UpdateQuantityAsync("ext-200", 5, Arg.Any<CancellationToken>()).Returns(true);
 
         UsageHeartbeatJob job = BuildJob(
             subscriptionRepository: subscriptionRepo,
@@ -175,9 +175,9 @@ public sealed class UsageHeartbeatJobTests
 
         await job.RunAsync(CancellationToken.None);
 
-        await billingApi.Received(1).ReportMachineUsageAsync(
+        await billingApi.Received(1).UpdateQuantityAsync(
             "ext-200", 5, Arg.Any<CancellationToken>());
-        await billingApi.DidNotReceive().ReportMachineUsageAsync(
+        await billingApi.DidNotReceive().UpdateQuantityAsync(
             Arg.Is<string>(s => s != "ext-200"), Arg.Any<int>(), Arg.Any<CancellationToken>());
     }
 
@@ -202,12 +202,12 @@ public sealed class UsageHeartbeatJobTests
             .Returns(BuildTenant(2, "ext-2"));
 
         ISubscriptionService subscriptionService = Substitute.For<ISubscriptionService>();
-        subscriptionService.GetMachineCountForTenantAsync(Arg.Any<int>(), Arg.Any<CancellationToken>())
+        subscriptionService.GetBillableMachineCountAsync(Arg.Any<int>(), SubscriptionTier.Pro, Arg.Any<CancellationToken>())
             .Returns(1);
 
         IBillingApiClient billingApi = Substitute.For<IBillingApiClient>();
-        billingApi.ReportMachineUsageAsync("ext-1", Arg.Any<int>(), Arg.Any<CancellationToken>()).Returns(false);
-        billingApi.ReportMachineUsageAsync("ext-2", Arg.Any<int>(), Arg.Any<CancellationToken>()).Returns(true);
+        billingApi.UpdateQuantityAsync("ext-1", Arg.Any<int>(), Arg.Any<CancellationToken>()).Returns(false);
+        billingApi.UpdateQuantityAsync("ext-2", Arg.Any<int>(), Arg.Any<CancellationToken>()).Returns(true);
 
         UsageHeartbeatJob job = BuildJob(
             subscriptionRepository: subscriptionRepo,
@@ -217,7 +217,7 @@ public sealed class UsageHeartbeatJobTests
 
         await Assert.That(async () => await job.RunAsync(CancellationToken.None)).ThrowsNothing();
 
-        await billingApi.Received(1).ReportMachineUsageAsync(
+        await billingApi.Received(1).UpdateQuantityAsync(
             "ext-2", Arg.Any<int>(), Arg.Any<CancellationToken>());
     }
 
@@ -242,13 +242,13 @@ public sealed class UsageHeartbeatJobTests
             .Returns(BuildTenant(2, "ext-2"));
 
         ISubscriptionService subscriptionService = Substitute.For<ISubscriptionService>();
-        subscriptionService.GetMachineCountForTenantAsync(Arg.Any<int>(), Arg.Any<CancellationToken>())
+        subscriptionService.GetBillableMachineCountAsync(Arg.Any<int>(), SubscriptionTier.Pro, Arg.Any<CancellationToken>())
             .Returns(1);
 
         IBillingApiClient billingApi = Substitute.For<IBillingApiClient>();
-        billingApi.ReportMachineUsageAsync("ext-1", Arg.Any<int>(), Arg.Any<CancellationToken>())
+        billingApi.UpdateQuantityAsync("ext-1", Arg.Any<int>(), Arg.Any<CancellationToken>())
             .Returns<Task<bool>>(_ => throw new HttpRequestException("billing API down"));
-        billingApi.ReportMachineUsageAsync("ext-2", Arg.Any<int>(), Arg.Any<CancellationToken>())
+        billingApi.UpdateQuantityAsync("ext-2", Arg.Any<int>(), Arg.Any<CancellationToken>())
             .Returns(true);
 
         UsageHeartbeatJob job = BuildJob(
@@ -259,7 +259,7 @@ public sealed class UsageHeartbeatJobTests
 
         await Assert.That(async () => await job.RunAsync(CancellationToken.None)).ThrowsNothing();
 
-        await billingApi.Received(1).ReportMachineUsageAsync(
+        await billingApi.Received(1).UpdateQuantityAsync(
             "ext-2", Arg.Any<int>(), Arg.Any<CancellationToken>());
     }
 
@@ -424,16 +424,16 @@ public sealed class UsageHeartbeatJobTests
 
         await job.RunAsync(CancellationToken.None);
 
-        await subscriptionService.DidNotReceive().GetMachineCountForTenantAsync(
-            Arg.Any<int>(), Arg.Any<CancellationToken>());
-        await billingApi.DidNotReceive().ReportMachineUsageAsync(
+        await subscriptionService.DidNotReceive().GetBillableMachineCountAsync(
+            Arg.Any<int>(), SubscriptionTier.Pro, Arg.Any<CancellationToken>());
+        await billingApi.DidNotReceive().UpdateQuantityAsync(
             Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>());
     }
 
     [Test]
     public async Task ReportUsage_GetMachineCountThrows_LogsWarningAndContinuesToNextTenant()
     {
-        // Intent: failure isolation. When GetMachineCountForTenantAsync throws inside the
+        // Intent: failure isolation. When GetBillableMachineCountAsync throws inside the
         // per-tenant loop (e.g., a transient DB timeout), the exception must be caught and the
         // loop must continue to the next tenant. Without this containment, one slow tenant query
         // would abort billing reporting for every tenant scheduled after it in the cycle.
@@ -451,12 +451,12 @@ public sealed class UsageHeartbeatJobTests
         tenantRepo.GetTenantByIdAsync(2, Arg.Any<CancellationToken>()).Returns(BuildTenant(2, "ext-2"));
 
         ISubscriptionService subscriptionService = Substitute.For<ISubscriptionService>();
-        subscriptionService.GetMachineCountForTenantAsync(1, Arg.Any<CancellationToken>())
+        subscriptionService.GetBillableMachineCountAsync(1, SubscriptionTier.Pro, Arg.Any<CancellationToken>())
             .Returns<int>(_ => throw new InvalidOperationException("database timeout"));
-        subscriptionService.GetMachineCountForTenantAsync(2, Arg.Any<CancellationToken>()).Returns(8);
+        subscriptionService.GetBillableMachineCountAsync(2, SubscriptionTier.Pro, Arg.Any<CancellationToken>()).Returns(8);
 
         IBillingApiClient billingApi = Substitute.For<IBillingApiClient>();
-        billingApi.ReportMachineUsageAsync("ext-2", 8, Arg.Any<CancellationToken>()).Returns(true);
+        billingApi.UpdateQuantityAsync("ext-2", 8, Arg.Any<CancellationToken>()).Returns(true);
 
         ILogger<UsageHeartbeatJob> logger = Substitute.For<ILogger<UsageHeartbeatJob>>();
 
@@ -470,10 +470,10 @@ public sealed class UsageHeartbeatJobTests
         await Assert.That(async () => await job.RunAsync(CancellationToken.None)).ThrowsNothing();
 
         // Tenant 1's failure must not have produced a billing call.
-        await billingApi.DidNotReceive().ReportMachineUsageAsync(
+        await billingApi.DidNotReceive().UpdateQuantityAsync(
             "ext-1", Arg.Any<int>(), Arg.Any<CancellationToken>());
         // Tenant 2 must still have been reported with the correct count.
-        await billingApi.Received(1).ReportMachineUsageAsync(
+        await billingApi.Received(1).UpdateQuantityAsync(
             "ext-2", 8, Arg.Any<CancellationToken>());
         // The error must have been logged at warning level (per-tenant swallow).
         logger.Received().Log(
@@ -508,12 +508,12 @@ public sealed class UsageHeartbeatJobTests
         tenantRepo.GetTenantByIdAsync(3, Arg.Any<CancellationToken>()).Returns(BuildTenant(3, "ext-3"));
 
         ISubscriptionService subscriptionService = Substitute.For<ISubscriptionService>();
-        subscriptionService.GetMachineCountForTenantAsync(1, Arg.Any<CancellationToken>()).Returns(10);
-        subscriptionService.GetMachineCountForTenantAsync(2, Arg.Any<CancellationToken>()).Returns(20);
-        subscriptionService.GetMachineCountForTenantAsync(3, Arg.Any<CancellationToken>()).Returns(30);
+        subscriptionService.GetBillableMachineCountAsync(1, SubscriptionTier.Pro, Arg.Any<CancellationToken>()).Returns(10);
+        subscriptionService.GetBillableMachineCountAsync(2, SubscriptionTier.Pro, Arg.Any<CancellationToken>()).Returns(20);
+        subscriptionService.GetBillableMachineCountAsync(3, SubscriptionTier.Pro, Arg.Any<CancellationToken>()).Returns(30);
 
         IBillingApiClient billingApi = Substitute.For<IBillingApiClient>();
-        billingApi.ReportMachineUsageAsync(Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+        billingApi.UpdateQuantityAsync(Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
             .Returns(true);
 
         UsageHeartbeatJob job = BuildJob(
@@ -524,15 +524,15 @@ public sealed class UsageHeartbeatJobTests
 
         await job.RunAsync(CancellationToken.None);
 
-        await billingApi.Received(1).ReportMachineUsageAsync("ext-1", 10, Arg.Any<CancellationToken>());
-        await billingApi.Received(1).ReportMachineUsageAsync("ext-2", 20, Arg.Any<CancellationToken>());
-        await billingApi.Received(1).ReportMachineUsageAsync("ext-3", 30, Arg.Any<CancellationToken>());
+        await billingApi.Received(1).UpdateQuantityAsync("ext-1", 10, Arg.Any<CancellationToken>());
+        await billingApi.Received(1).UpdateQuantityAsync("ext-2", 20, Arg.Any<CancellationToken>());
+        await billingApi.Received(1).UpdateQuantityAsync("ext-3", 30, Arg.Any<CancellationToken>());
         // Defense against mis-routing: no call should have used a mismatched (externalId, count).
-        await billingApi.DidNotReceive().ReportMachineUsageAsync(
+        await billingApi.DidNotReceive().UpdateQuantityAsync(
             "ext-1", Arg.Is<int>(c => c != 10), Arg.Any<CancellationToken>());
-        await billingApi.DidNotReceive().ReportMachineUsageAsync(
+        await billingApi.DidNotReceive().UpdateQuantityAsync(
             "ext-2", Arg.Is<int>(c => c != 20), Arg.Any<CancellationToken>());
-        await billingApi.DidNotReceive().ReportMachineUsageAsync(
+        await billingApi.DidNotReceive().UpdateQuantityAsync(
             "ext-3", Arg.Is<int>(c => c != 30), Arg.Any<CancellationToken>());
     }
 
@@ -569,7 +569,7 @@ public sealed class UsageHeartbeatJobTests
 
         // The body never ran: GetPaidSubscriptionsAsync should not have been touched.
         await subscriptionRepo.DidNotReceive().GetPaidSubscriptionsAsync(Arg.Any<CancellationToken>());
-        await billingApi.DidNotReceive().ReportMachineUsageAsync(
+        await billingApi.DidNotReceive().UpdateQuantityAsync(
             Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>());
     }
 

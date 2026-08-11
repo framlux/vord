@@ -2061,6 +2061,70 @@ public sealed class FleetAdminServiceTests
         await deletionRepo.Received(1).ListDeletionsAsync(false, 20, 10, Arg.Any<CancellationToken>());
     }
 
+    // ── GetBillableMachineCount ──
+
+    /// <summary>
+    /// GetBillableMachineCount returns the billable count for the target tier, applying that
+    /// tier's floor rather than the tenant's current tier.
+    /// </summary>
+    [Test]
+    [Arguments("pro", 0, 1)]
+    [Arguments("team", 1, 3)]
+    [Arguments("team", 8, 8)]
+    public async Task GetBillableMachineCount_AppliesTargetTierFloor(
+        string targetTier, int active, int expected)
+    {
+        ITenantRepository tenantRepo = Substitute.For<ITenantRepository>();
+        tenantRepo.GetTenantByExternalIdAsync(TenantExternalId, Arg.Any<CancellationToken>())
+            .Returns(MakeTenant());
+
+        ISubscriptionService subscriptions = Substitute.For<ISubscriptionService>();
+        subscriptions.GetBillableMachineCountAsync(TenantInternalId, Arg.Any<SubscriptionTier>(), Arg.Any<CancellationToken>())
+            .Returns(Math.Max(active, targetTier == "team" ? 3 : 1));
+
+        IServiceScopeFactory scopeFactory = CreateScopeFactoryWithServices(new Dictionary<Type, object>
+        {
+            { typeof(ITenantRepository), tenantRepo },
+            { typeof(ISubscriptionService), subscriptions }
+        });
+
+        FleetAdminService service = CreateFleetAdminService(scopeFactory);
+        ServerCallContext context = CreateContext();
+
+        GetBillableMachineCountResponse response = await service.GetBillableMachineCount(
+            new GetBillableMachineCountRequest { TenantExternalId = TenantExternalId, TargetTier = targetTier },
+            context);
+
+        await Assert.That(response.Success).IsTrue();
+        await Assert.That(response.BillableCount).IsEqualTo(expected);
+    }
+
+    /// <summary>
+    /// GetBillableMachineCount fails gracefully when the tenant cannot be found.
+    /// </summary>
+    [Test]
+    public async Task GetBillableMachineCount_UnknownTenant_ReturnsFailure()
+    {
+        ITenantRepository tenantRepo = Substitute.For<ITenantRepository>();
+        tenantRepo.GetTenantByExternalIdAsync("missing", Arg.Any<CancellationToken>())
+            .Returns((Tenant?)null);
+
+        IServiceScopeFactory scopeFactory = CreateScopeFactoryWithServices(new Dictionary<Type, object>
+        {
+            { typeof(ITenantRepository), tenantRepo },
+            { typeof(ISubscriptionService), Substitute.For<ISubscriptionService>() }
+        });
+
+        FleetAdminService service = CreateFleetAdminService(scopeFactory);
+        ServerCallContext context = CreateContext();
+
+        GetBillableMachineCountResponse response = await service.GetBillableMachineCount(
+            new GetBillableMachineCountRequest { TenantExternalId = "missing", TargetTier = "pro" },
+            context);
+
+        await Assert.That(response.Success).IsFalse();
+    }
+
     // ── MapBillingTierToSubscriptionTier ──
 
     /// <summary>

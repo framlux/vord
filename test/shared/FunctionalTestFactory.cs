@@ -506,8 +506,6 @@ public class FunctionalTestFactory : WebApplicationFactory<Program>
 
         mock.UpdateQuantityAsync(Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(true));
-        mock.ReportMachineUsageAsync(Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
-            .Returns(Task.FromResult(true));
         mock.CancelSubscriptionAsync(Arg.Any<string>(), Arg.Any<PendingActionType>(), Arg.Any<CancellationToken>())
             .Returns(Task.FromResult(true));
         mock.GetSubscriptionStatusAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())

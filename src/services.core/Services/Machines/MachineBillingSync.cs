@@ -51,27 +51,28 @@ public sealed class MachineBillingSync : IMachineBillingSync
     /// <inheritdoc/>
     public async Task ReportActiveMachineUsageAsync(int tenantId, CancellationToken ct)
     {
-        // Report usage to billing for metered billing (best effort)
+        // Report billable quantity to billing (best effort)
         try
         {
             TenantSubscription? subscription = await _subscriptionService.GetSubscriptionForTenantAsync(tenantId, ct);
 
-            // Only report usage for paid tiers; Free tier has no Stripe subscription
+            // Only report quantity for paid tiers; Free tier has no Stripe subscription
             if ((subscription is not null) && (subscription.Tier != SubscriptionTier.Free))
             {
                 Tenant? tenant = await _tenantRepo.GetTenantByIdAsync(tenantId, ct);
 
                 if (tenant is not null)
                 {
-                    int activeMachineCount = await _machineRepo.GetActiveMachineCountAsync(tenantId, ct);
-                    await _billingApiClient.ReportMachineUsageAsync(tenant.ExternalId, activeMachineCount, ct);
+                    int quantity = await _subscriptionService.GetBillableMachineCountAsync(
+                        tenantId, subscription.Tier, ct);
+                    await _billingApiClient.UpdateQuantityAsync(tenant.ExternalId, quantity, ct);
                 }
             }
         }
         catch (Exception ex)
         {
             _logger.LogWarning(ex,
-                "Failed to report machine usage to billing for tenant {TenantId}",
+                "Failed to report billable quantity to billing for tenant {TenantId}",
                 tenantId);
         }
     }

@@ -377,24 +377,25 @@ public sealed class MachineService : IMachineService
 
         _logger.LogInformation("Machine created with ID {MachineId} for {SerialNumber}", createdMachine.Id, request.SerialNumber);
 
-        // Report usage to billing for metered billing (best effort, hourly heartbeat provides the safety net)
+        // Report billable quantity to billing (best effort, hourly heartbeat provides the safety net)
         try
         {
-            // Only report usage for paid tiers; Free tier has no Stripe subscription
+            // Only report quantity for paid tiers; Free tier has no Stripe subscription
             if ((subscription is not null) && (subscription.Tier != SubscriptionTier.Free))
             {
                 ITenantRepository tenantRepository = scope.ServiceProvider.GetRequiredService<ITenantRepository>();
                 Tenant? tenant = await tenantRepository.GetTenantByIdAsync(token.TenantId, cancellationToken);
                 if (tenant is not null)
                 {
-                    int machineCount = await machineRepository.GetActiveMachineCountAsync(token.TenantId, cancellationToken);
-                    await _billingApiClient.ReportMachineUsageAsync(tenant.ExternalId, machineCount, cancellationToken);
+                    int quantity = await subscriptionService.GetBillableMachineCountAsync(
+                        token.TenantId, subscription.Tier, cancellationToken);
+                    await _billingApiClient.UpdateQuantityAsync(tenant.ExternalId, quantity, cancellationToken);
                 }
             }
         }
         catch (Exception ex)
         {
-            _logger.LogWarning(ex, "Failed to report machine usage to billing for tenant {TenantId}", token.TenantId);
+            _logger.LogWarning(ex, "Failed to report billable quantity to billing for tenant {TenantId}", token.TenantId);
         }
 
         return (createdMachine.Id, plaintextApiKey, string.Empty);

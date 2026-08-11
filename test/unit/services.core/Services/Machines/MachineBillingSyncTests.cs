@@ -49,7 +49,7 @@ public sealed class MachineBillingSyncTests
 
         await service.ReportActiveMachineUsageAsync(1, CancellationToken.None);
 
-        await billingApiClient.DidNotReceive().ReportMachineUsageAsync(
+        await billingApiClient.DidNotReceive().UpdateQuantityAsync(
             Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>());
     }
 
@@ -70,16 +70,16 @@ public sealed class MachineBillingSyncTests
 
         await service.ReportActiveMachineUsageAsync(1, CancellationToken.None);
 
-        await billingApiClient.DidNotReceive().ReportMachineUsageAsync(
+        await billingApiClient.DidNotReceive().UpdateQuantityAsync(
             Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>());
     }
 
     [Test]
-    public async Task ReportActiveMachineUsageAsync_ProTierWithTenant_CallsReportMachineUsageWithCorrectArgs()
+    public async Task ReportActiveMachineUsageAsync_ProTierWithTenant_CallsUpdateQuantityWithCorrectArgs()
     {
         int tenantId = 42;
         string externalId = "ext-tenant-42";
-        int activeMachineCount = 7;
+        int billableQuantity = 7;
 
         TenantSubscription proSub = TestDataBuilder.BuildSubscription(tenantId: tenantId, tier: SubscriptionTier.Pro);
         Tenant tenant = TestDataBuilder.BuildTenant(externalId: externalId);
@@ -88,23 +88,22 @@ public sealed class MachineBillingSyncTests
         ISubscriptionService subscriptionService = Substitute.For<ISubscriptionService>();
         subscriptionService.GetSubscriptionForTenantAsync(tenantId, Arg.Any<CancellationToken>())
             .Returns(proSub);
+        subscriptionService.GetBillableMachineCountAsync(tenantId, SubscriptionTier.Pro, Arg.Any<CancellationToken>())
+            .Returns(billableQuantity);
 
         ITenantRepository tenantRepo = Substitute.For<ITenantRepository>();
         tenantRepo.GetTenantByIdAsync(tenantId, Arg.Any<CancellationToken>())
             .Returns(tenant);
 
         IMachineRepository machineRepo = Substitute.For<IMachineRepository>();
-        machineRepo.GetActiveMachineCountAsync(tenantId, Arg.Any<CancellationToken>())
-            .Returns(activeMachineCount);
-
         IBillingApiClient billingApiClient = Substitute.For<IBillingApiClient>();
 
         MachineBillingSync service = CreateService(subscriptionService, tenantRepo, machineRepo, billingApiClient);
 
         await service.ReportActiveMachineUsageAsync(tenantId, CancellationToken.None);
 
-        await billingApiClient.Received(1).ReportMachineUsageAsync(
-            externalId, activeMachineCount, Arg.Any<CancellationToken>());
+        await billingApiClient.Received(1).UpdateQuantityAsync(
+            externalId, billableQuantity, Arg.Any<CancellationToken>());
     }
 
     [Test]
@@ -129,7 +128,7 @@ public sealed class MachineBillingSyncTests
 
         await service.ReportActiveMachineUsageAsync(tenantId, CancellationToken.None);
 
-        await billingApiClient.DidNotReceive().ReportMachineUsageAsync(
+        await billingApiClient.DidNotReceive().UpdateQuantityAsync(
             Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>());
     }
 
@@ -146,17 +145,17 @@ public sealed class MachineBillingSyncTests
         ISubscriptionService subscriptionService = Substitute.For<ISubscriptionService>();
         subscriptionService.GetSubscriptionForTenantAsync(tenantId, Arg.Any<CancellationToken>())
             .Returns(proSub);
+        subscriptionService.GetBillableMachineCountAsync(tenantId, SubscriptionTier.Pro, Arg.Any<CancellationToken>())
+            .Returns(3);
 
         ITenantRepository tenantRepo = Substitute.For<ITenantRepository>();
         tenantRepo.GetTenantByIdAsync(tenantId, Arg.Any<CancellationToken>())
             .Returns(tenant);
 
         IMachineRepository machineRepo = Substitute.For<IMachineRepository>();
-        machineRepo.GetActiveMachineCountAsync(tenantId, Arg.Any<CancellationToken>())
-            .Returns(3);
 
         IBillingApiClient billingApiClient = Substitute.For<IBillingApiClient>();
-        billingApiClient.ReportMachineUsageAsync(Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+        billingApiClient.UpdateQuantityAsync(Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
             .ThrowsAsync(new InvalidOperationException("Billing service unavailable"));
 
         ILogger<MachineBillingSync> logger = Substitute.For<ILogger<MachineBillingSync>>();

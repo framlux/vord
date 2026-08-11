@@ -860,10 +860,10 @@ public class MachineServiceTests
         await Assert.That(result.errorMessage).IsEqualTo("Registration token has already been used");
     }
 
-    // ========== ReportMachineUsage called on machine registration ==========
+    // ========== UpdateQuantity called on machine registration ==========
 
     [Test]
-    public async Task RegisterSystem_PaidTier_CallsReportMachineUsageWithCorrectCount()
+    public async Task RegisterSystem_PaidTier_CallsUpdateQuantityWithCorrectCount()
     {
         using TestDatabaseFactory dbFactory = new();
         RegistrationToken token = await SeedValidRegistrationToken(dbFactory, FixedNow, tenantId: 1);
@@ -888,9 +888,6 @@ public class MachineServiceTests
         createdMachine.Id = 200;
         machineRepo.CreateMachineWithKeyAsync(Arg.Any<Machine>(), Arg.Any<long>(), Arg.Any<DateTimeOffset>(), Arg.Any<int?>(), Arg.Any<CancellationToken>())
             .Returns((createdMachine, "api-key-billing-test"));
-        machineRepo.GetActiveMachineCountAsync(1, Arg.Any<CancellationToken>())
-            .Returns(7);
-
         ITenantRepository tenantRepo = Substitute.For<ITenantRepository>();
         tenantRepo.GetTenantByIdAsync(1, Arg.Any<CancellationToken>()).Returns(tenant);
 
@@ -898,6 +895,8 @@ public class MachineServiceTests
         subscriptionService.GetSubscriptionForTenantAsync(1, Arg.Any<CancellationToken>()).Returns(sub);
         subscriptionService.GetEffectiveLimitsForTenantAsync(1, Arg.Any<CancellationToken>()).Returns(
             new EffectiveLimits { MachineLimit = 1000, RetentionDays = 60, AlertRuleLimit = 10, WebhookLimit = 5 });
+        subscriptionService.GetBillableMachineCountAsync(1, SubscriptionTier.Pro, Arg.Any<CancellationToken>())
+            .Returns(7);
 
         Dictionary<Type, object> services = new()
         {
@@ -907,7 +906,7 @@ public class MachineServiceTests
         };
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context, services);
         IBillingApiClient billingApiClient = Substitute.For<IBillingApiClient>();
-        billingApiClient.ReportMachineUsageAsync(Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+        billingApiClient.UpdateQuantityAsync(Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
             .Returns(true);
 
         MachineService service = BuildService(scopeFactory, billingApiClient: billingApiClient);
@@ -928,13 +927,13 @@ public class MachineServiceTests
         await Assert.That(result.machineId).IsEqualTo(200L);
         await Assert.That(result.errorMessage).IsEqualTo(string.Empty);
 
-        // Verify billing was called with the tenant external ID and the correct active machine count
-        await billingApiClient.Received(1).ReportMachineUsageAsync(
+        // Verify billing was called with the tenant external ID and the correct billable quantity
+        await billingApiClient.Received(1).UpdateQuantityAsync(
             "ext-tenant-billing", 7, Arg.Any<CancellationToken>());
     }
 
     [Test]
-    public async Task RegisterSystem_FreeTier_DoesNotCallReportMachineUsage()
+    public async Task RegisterSystem_FreeTier_DoesNotCallUpdateQuantity()
     {
         using TestDatabaseFactory dbFactory = new();
         RegistrationToken token = await SeedValidRegistrationToken(dbFactory, FixedNow, tenantId: 1);
@@ -986,7 +985,7 @@ public class MachineServiceTests
         await Assert.That(result.machineId).IsEqualTo(201L);
 
         // Free tier should NOT call billing
-        await billingApiClient.DidNotReceive().ReportMachineUsageAsync(
+        await billingApiClient.DidNotReceive().UpdateQuantityAsync(
             Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>());
     }
 
@@ -1013,9 +1012,6 @@ public class MachineServiceTests
         createdMachine.Id = 202;
         machineRepo.CreateMachineWithKeyAsync(Arg.Any<Machine>(), Arg.Any<long>(), Arg.Any<DateTimeOffset>(), Arg.Any<int?>(), Arg.Any<CancellationToken>())
             .Returns((createdMachine, "api-key-fail-test"));
-        machineRepo.GetActiveMachineCountAsync(1, Arg.Any<CancellationToken>())
-            .Returns(3);
-
         ITenantRepository tenantRepo = Substitute.For<ITenantRepository>();
         tenantRepo.GetTenantByIdAsync(1, Arg.Any<CancellationToken>()).Returns(tenant);
 
@@ -1023,6 +1019,8 @@ public class MachineServiceTests
         subscriptionService.GetSubscriptionForTenantAsync(1, Arg.Any<CancellationToken>()).Returns(sub);
         subscriptionService.GetEffectiveLimitsForTenantAsync(1, Arg.Any<CancellationToken>()).Returns(
             new EffectiveLimits { MachineLimit = 1000, RetentionDays = 60, AlertRuleLimit = 10, WebhookLimit = 5 });
+        subscriptionService.GetBillableMachineCountAsync(1, SubscriptionTier.Pro, Arg.Any<CancellationToken>())
+            .Returns(3);
 
         Dictionary<Type, object> services = new()
         {
@@ -1034,7 +1032,7 @@ public class MachineServiceTests
 
         // Simulate billing client throwing an exception
         IBillingApiClient billingApiClient = Substitute.For<IBillingApiClient>();
-        billingApiClient.ReportMachineUsageAsync(Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+        billingApiClient.UpdateQuantityAsync(Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
             .Returns<bool>(_ => throw new InvalidOperationException("Billing service unavailable"));
 
         MachineService service = BuildService(scopeFactory, billingApiClient: billingApiClient);
@@ -1496,7 +1494,7 @@ public class MachineServiceTests
         // Registration succeeds; billing is skipped when tenant is null
         await Assert.That(result.machineId).IsEqualTo(305L);
         await Assert.That(result.errorMessage).IsEqualTo(string.Empty);
-        await billingApiClient.DidNotReceive().ReportMachineUsageAsync(
+        await billingApiClient.DidNotReceive().UpdateQuantityAsync(
             Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>());
     }
 
@@ -1545,7 +1543,7 @@ public class MachineServiceTests
 
         await Assert.That(result.machineId).IsEqualTo(306L);
         await Assert.That(result.errorMessage).IsEqualTo(string.Empty);
-        await billingApiClient.DidNotReceive().ReportMachineUsageAsync(
+        await billingApiClient.DidNotReceive().UpdateQuantityAsync(
             Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>());
     }
 

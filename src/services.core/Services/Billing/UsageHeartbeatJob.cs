@@ -10,8 +10,8 @@ using Hangfire;
 namespace Framlux.FleetManagement.Services.Core.Billing;
 
 /// <summary>
-/// Hangfire recurring job that reports machine usage counts to the billing API.
-/// Serves as the primary metered billing reporting mechanism alongside event-driven reports
+/// Hangfire recurring job that reports billable subscription quantities to the billing API.
+/// Serves as the primary quantity reporting mechanism alongside event-driven reports
 /// on machine registration and removal. Replaces the former UsageHeartbeatService.
 /// </summary>
 public sealed class UsageHeartbeatJob
@@ -59,15 +59,16 @@ public sealed class UsageHeartbeatJob
     }
 
     /// <summary>
-    /// Runs the usage heartbeat. Reports the current machine count for every paid tenant.
+    /// Runs the usage heartbeat. Reports the current billable quantity for every paid tenant.
     /// Per-tenant errors are swallowed and counted; top-level errors propagate so Hangfire
     /// records the cycle as failed.
     /// </summary>
     /// <param name="ct">Cancellation token (provided by Hangfire on shutdown).</param>
     // Serialize across replicas via Postgres advisory lock instead of
     // [DisableConcurrentExecution]. The lock is try-once: if another replica holds it we skip
-    // this tick rather than queue up — the next hourly tick will retry and metered-billing
-    // data tolerates a one-hour gap.
+    // this tick rather than queue up. Quantity is a level rather than an accumulation, so a
+    // skipped tick loses nothing — the next tick reports the same absolute value and Stripe
+    // converges. Machine registration and removal also report on their own.
     [AutomaticRetry(Attempts = 0)]
     public async Task RunAsync(CancellationToken ct)
     {
@@ -105,21 +106,22 @@ public sealed class UsageHeartbeatJob
                     continue;
                 }
 
-                int machineCount = await _subscriptionService.GetMachineCountForTenantAsync(subscription.TenantId, ct);
-                bool success = await _billingApiClient.ReportMachineUsageAsync(tenant.ExternalId, machineCount, ct);
+                int quantity = await _subscriptionService.GetBillableMachineCountAsync(
+                    subscription.TenantId, subscription.Tier, ct);
+                bool success = await _billingApiClient.UpdateQuantityAsync(tenant.ExternalId, quantity, ct);
 
                 if (success)
                 {
                     successCount++;
                     _logger.LogDebug(
-                        "Usage heartbeat: Reported {MachineCount} machines for tenant {TenantId}",
-                        machineCount, subscription.TenantId);
+                        "Usage heartbeat: Reported billable quantity {Quantity} for tenant {TenantId}",
+                        quantity, subscription.TenantId);
                 }
                 else
                 {
                     failCount++;
                     _logger.LogWarning(
-                        "Usage heartbeat: Failed to report usage for tenant {TenantId}",
+                        "Usage heartbeat: Failed to report quantity for tenant {TenantId}",
                         subscription.TenantId);
                 }
             }

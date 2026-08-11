@@ -62,7 +62,7 @@ public sealed class StripeSyncJobTests
         await sut.Job.RunAsync(CancellationToken.None);
 
         // None of the four sync sub-operations should fire.
-        await sut.BillingClient.DidNotReceive().ReportMachineUsageAsync(
+        await sut.BillingClient.DidNotReceive().UpdateQuantityAsync(
             Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>());
         await sut.WebhookHandler.DidNotReceive().HandleTierCorrectionAsync(
             Arg.Any<int>(), Arg.Any<SubscriptionTier>(), Arg.Any<CancellationToken>());
@@ -78,11 +78,11 @@ public sealed class StripeSyncJobTests
             Tier = BillingTier.Pro,
             Quantity = 5,
         });
-        sut.SubscriptionService.GetMachineCountForTenantAsync(1, Arg.Any<CancellationToken>()).Returns(8);
+        sut.SubscriptionService.GetBillableMachineCountAsync(1, SubscriptionTier.Pro, Arg.Any<CancellationToken>()).Returns(8);
 
         await sut.Job.RunAsync(CancellationToken.None);
 
-        await sut.BillingClient.Received(1).ReportMachineUsageAsync("ext-1", 8, Arg.Any<CancellationToken>());
+        await sut.BillingClient.Received(1).UpdateQuantityAsync("ext-1", 8, Arg.Any<CancellationToken>());
     }
 
     [Test]
@@ -95,11 +95,32 @@ public sealed class StripeSyncJobTests
             Tier = BillingTier.Pro,
             Quantity = 5,
         });
-        sut.SubscriptionService.GetMachineCountForTenantAsync(1, Arg.Any<CancellationToken>()).Returns(5);
+        sut.SubscriptionService.GetBillableMachineCountAsync(1, SubscriptionTier.Pro, Arg.Any<CancellationToken>()).Returns(5);
 
         await sut.Job.RunAsync(CancellationToken.None);
 
-        await sut.BillingClient.DidNotReceive().ReportMachineUsageAsync(
+        await sut.BillingClient.DidNotReceive().UpdateQuantityAsync(
+            Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task RunAsync_TenantBelowTierFloor_DoesNotReportDrift()
+    {
+        // Team floor is 3. One active machine means Stripe legitimately holds quantity 3,
+        // so the comparison must be against the billable count, not the raw count.
+        TestSut sut = new();
+        sut.SeedOneSubscription(localTier: SubscriptionTier.Team, stripeStatus: DefaultStripeStatus with
+        {
+            StripeStatus = "active",
+            Tier = BillingTier.Team,
+            Quantity = 3,
+        }, tenantId: 7);
+        sut.SubscriptionService.GetBillableMachineCountAsync(7, SubscriptionTier.Team, Arg.Any<CancellationToken>())
+            .Returns(3);
+
+        await sut.Job.RunAsync(CancellationToken.None);
+
+        await sut.BillingClient.DidNotReceive().UpdateQuantityAsync(
             Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>());
     }
 
@@ -113,7 +134,7 @@ public sealed class StripeSyncJobTests
             Tier = BillingTier.Team, // drift: local is Pro, Stripe says Team
             Quantity = 5,
         });
-        sut.SubscriptionService.GetMachineCountForTenantAsync(1, Arg.Any<CancellationToken>()).Returns(5);
+        sut.SubscriptionService.GetBillableMachineCountAsync(1, SubscriptionTier.Pro, Arg.Any<CancellationToken>()).Returns(5);
 
         await sut.Job.RunAsync(CancellationToken.None);
 
@@ -131,7 +152,7 @@ public sealed class StripeSyncJobTests
             Tier = BillingTier.Pro,
             Quantity = 5,
         });
-        sut.SubscriptionService.GetMachineCountForTenantAsync(1, Arg.Any<CancellationToken>()).Returns(5);
+        sut.SubscriptionService.GetBillableMachineCountAsync(1, SubscriptionTier.Pro, Arg.Any<CancellationToken>()).Returns(5);
 
         await sut.Job.RunAsync(CancellationToken.None);
 
@@ -150,7 +171,7 @@ public sealed class StripeSyncJobTests
                 Tier = BillingTier.Pro,
                 Quantity = 5,
             });
-        sut.SubscriptionService.GetMachineCountForTenantAsync(1, Arg.Any<CancellationToken>()).Returns(5);
+        sut.SubscriptionService.GetBillableMachineCountAsync(1, SubscriptionTier.Pro, Arg.Any<CancellationToken>()).Returns(5);
 
         await sut.Job.RunAsync(CancellationToken.None);
 
@@ -168,7 +189,7 @@ public sealed class StripeSyncJobTests
                 Tier = BillingTier.Pro,
                 Quantity = 5,
             });
-        sut.SubscriptionService.GetMachineCountForTenantAsync(1, Arg.Any<CancellationToken>()).Returns(5);
+        sut.SubscriptionService.GetBillableMachineCountAsync(1, SubscriptionTier.Pro, Arg.Any<CancellationToken>()).Returns(5);
 
         await sut.Job.RunAsync(CancellationToken.None);
 
@@ -189,7 +210,7 @@ public sealed class StripeSyncJobTests
                 Quantity = 5,
                 CurrentPeriodEnd = stripePeriodEnd,
             });
-        sut.SubscriptionService.GetMachineCountForTenantAsync(1, Arg.Any<CancellationToken>()).Returns(5);
+        sut.SubscriptionService.GetBillableMachineCountAsync(1, SubscriptionTier.Pro, Arg.Any<CancellationToken>()).Returns(5);
 
         await sut.Job.RunAsync(CancellationToken.None);
 
@@ -211,7 +232,7 @@ public sealed class StripeSyncJobTests
                 Quantity = 5,
                 CurrentPeriodEnd = shared,
             });
-        sut.SubscriptionService.GetMachineCountForTenantAsync(1, Arg.Any<CancellationToken>()).Returns(5);
+        sut.SubscriptionService.GetBillableMachineCountAsync(1, SubscriptionTier.Pro, Arg.Any<CancellationToken>()).Returns(5);
 
         await sut.Job.RunAsync(CancellationToken.None);
 
@@ -234,7 +255,7 @@ public sealed class StripeSyncJobTests
             Tier = BillingTier.Free,
             Quantity = 5,
         });
-        sut.SubscriptionService.GetMachineCountForTenantAsync(1, Arg.Any<CancellationToken>()).Returns(5);
+        sut.SubscriptionService.GetBillableMachineCountAsync(1, SubscriptionTier.Pro, Arg.Any<CancellationToken>()).Returns(5);
 
         await sut.Job.RunAsync(CancellationToken.None);
 
@@ -261,7 +282,7 @@ public sealed class StripeSyncJobTests
             },
             localCancelAtPeriodEnd: false,
             tenantId: 7);
-        sut.SubscriptionService.GetMachineCountForTenantAsync(7, Arg.Any<CancellationToken>()).Returns(5);
+        sut.SubscriptionService.GetBillableMachineCountAsync(7, SubscriptionTier.Pro, Arg.Any<CancellationToken>()).Returns(5);
 
         await sut.Job.RunAsync(CancellationToken.None);
 
@@ -286,7 +307,7 @@ public sealed class StripeSyncJobTests
                 CancelAtPeriodEnd = true,
             },
             localCancelAtPeriodEnd: true);
-        sut.SubscriptionService.GetMachineCountForTenantAsync(1, Arg.Any<CancellationToken>()).Returns(5);
+        sut.SubscriptionService.GetBillableMachineCountAsync(1, SubscriptionTier.Pro, Arg.Any<CancellationToken>()).Returns(5);
 
         await sut.Job.RunAsync(CancellationToken.None);
 
@@ -636,7 +657,7 @@ public sealed class StripeSyncJobTests
                 Tier = BillingTier.Pro,
                 Quantity = 5,
             });
-        sut.SubscriptionService.GetMachineCountForTenantAsync(1, Arg.Any<CancellationToken>()).Returns(5);
+        sut.SubscriptionService.GetBillableMachineCountAsync(1, SubscriptionTier.Pro, Arg.Any<CancellationToken>()).Returns(5);
 
         await sut.Job.RunAsync(CancellationToken.None);
 
@@ -659,7 +680,7 @@ public sealed class StripeSyncJobTests
                 Tier = BillingTier.Pro,
                 Quantity = 5,
             });
-        sut.SubscriptionService.GetMachineCountForTenantAsync(1, Arg.Any<CancellationToken>()).Returns(5);
+        sut.SubscriptionService.GetBillableMachineCountAsync(1, SubscriptionTier.Pro, Arg.Any<CancellationToken>()).Returns(5);
 
         await sut.Job.RunAsync(CancellationToken.None);
 
@@ -687,7 +708,7 @@ public sealed class StripeSyncJobTests
                 Quantity = 5,
                 CurrentPeriodEnd = stripeEnd,
             });
-        sut.SubscriptionService.GetMachineCountForTenantAsync(1, Arg.Any<CancellationToken>()).Returns(5);
+        sut.SubscriptionService.GetBillableMachineCountAsync(1, SubscriptionTier.Pro, Arg.Any<CancellationToken>()).Returns(5);
 
         await sut.Job.RunAsync(CancellationToken.None);
 
@@ -714,7 +735,7 @@ public sealed class StripeSyncJobTests
                 Quantity = 5,
                 CurrentPeriodEnd = stripeEnd,
             });
-        sut.SubscriptionService.GetMachineCountForTenantAsync(1, Arg.Any<CancellationToken>()).Returns(5);
+        sut.SubscriptionService.GetBillableMachineCountAsync(1, SubscriptionTier.Pro, Arg.Any<CancellationToken>()).Returns(5);
 
         await sut.Job.RunAsync(CancellationToken.None);
 
@@ -743,13 +764,13 @@ public sealed class StripeSyncJobTests
                 Quantity = 5,
                 CurrentPeriodEnd = periodEnd,
             });
-        sut.SubscriptionService.GetMachineCountForTenantAsync(1, Arg.Any<CancellationToken>()).Returns(10);
-        sut.BillingClient.ReportMachineUsageAsync("ext-1", 10, Arg.Any<CancellationToken>())
+        sut.SubscriptionService.GetBillableMachineCountAsync(1, SubscriptionTier.Pro, Arg.Any<CancellationToken>()).Returns(10);
+        sut.BillingClient.UpdateQuantityAsync("ext-1", 10, Arg.Any<CancellationToken>())
             .Returns(false);
 
         await Assert.That(async () => await sut.Job.RunAsync(CancellationToken.None)).ThrowsNothing();
 
-        await sut.BillingClient.Received(1).ReportMachineUsageAsync("ext-1", 10, Arg.Any<CancellationToken>());
+        await sut.BillingClient.Received(1).UpdateQuantityAsync("ext-1", 10, Arg.Any<CancellationToken>());
         sut.Logger.Received().Log(
             LogLevel.Warning,
             Arg.Any<EventId>(),

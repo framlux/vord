@@ -114,19 +114,20 @@ public sealed class StripeSyncJob
         TenantSubscription subscription, string tenantExternalId,
         StripeSubscriptionStatus stripeStatus, CancellationToken ct)
     {
-        int localMachineCount = await _subscriptionService.GetMachineCountForTenantAsync(subscription.TenantId, ct);
+        int billableCount = await _subscriptionService.GetBillableMachineCountAsync(
+            subscription.TenantId, subscription.Tier, ct);
 
-        if (localMachineCount != stripeStatus.Quantity)
+        if (billableCount != stripeStatus.Quantity)
         {
             _logger.LogWarning(
-                "Stripe sync: Usage drift detected for tenant {TenantId}. Local: {LocalCount}, Stripe: {StripeCount}. Correcting via usage report",
-                subscription.TenantId, localMachineCount, stripeStatus.Quantity);
+                "Stripe sync: Quantity drift detected for tenant {TenantId}. Local: {LocalCount}, Stripe: {StripeCount}. Correcting",
+                subscription.TenantId, billableCount, stripeStatus.Quantity);
 
-            bool success = await _billingApiClient.ReportMachineUsageAsync(tenantExternalId, localMachineCount, ct);
+            bool success = await _billingApiClient.UpdateQuantityAsync(tenantExternalId, billableCount, ct);
             if (success == false)
             {
                 _logger.LogWarning(
-                    "Stripe sync: Failed to report machine usage for tenant {TenantId}",
+                    "Stripe sync: Failed to update billable quantity for tenant {TenantId}",
                     subscription.TenantId);
             }
         }

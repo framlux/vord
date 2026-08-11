@@ -6,6 +6,7 @@ using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Server.Auth;
+using Framlux.FleetManagement.Services.Core.Billing;
 using Framlux.FleetManagement.Services.Core.Handlers;
 using Framlux.FleetManagement.Services.Core.Infrastructure;
 using Framlux.FleetManagement.Services.Core.Security;
@@ -791,6 +792,47 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
         }
 
         return response;
+    }
+
+    /// <summary>
+    /// Returns the quantity Stripe should bill for a tenant on <c>target_tier</c>. The tier is
+    /// supplied by the caller because checkout sizes the first invoice for the tier being
+    /// purchased, while the tenant is still on Free at that moment.
+    /// </summary>
+    public override async Task<GetBillableMachineCountResponse> GetBillableMachineCount(
+        GetBillableMachineCountRequest request, ServerCallContext context)
+    {
+        AuthorizeInternalCaller(context);
+
+        using IServiceScope scope = _scopeFactory.CreateScope();
+        ITenantRepository tenantRepository = scope.ServiceProvider.GetRequiredService<ITenantRepository>();
+        ISubscriptionService subscriptionService = scope.ServiceProvider.GetRequiredService<ISubscriptionService>();
+
+        if (System.Enum.TryParse(request.TargetTier, ignoreCase: true, out SubscriptionTier tier) == false)
+        {
+            return new GetBillableMachineCountResponse
+            {
+                Success = false,
+                Message = $"Unknown tier '{request.TargetTier}'"
+            };
+        }
+
+        Tenant? tenant = await tenantRepository.GetTenantByExternalIdAsync(
+            request.TenantExternalId, context.CancellationToken);
+
+        if (tenant is null)
+        {
+            return new GetBillableMachineCountResponse
+            {
+                Success = false,
+                Message = $"No tenant found for {request.TenantExternalId}"
+            };
+        }
+
+        int billable = await subscriptionService.GetBillableMachineCountAsync(
+            tenant.Id, tier, context.CancellationToken);
+
+        return new GetBillableMachineCountResponse { BillableCount = billable, Success = true };
     }
 
     private void AuthorizeInternalCaller(ServerCallContext context)
