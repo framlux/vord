@@ -163,6 +163,40 @@ public sealed class SubscriptionService : ISubscriptionService
         return count;
     }
 
+    /// <summary>
+    /// Floors used when a TierFeatureLimits row is missing. Falling back to zero would bill a
+    /// paid subscription nothing, so the known values are duplicated here deliberately.
+    /// </summary>
+    private static readonly Dictionary<SubscriptionTier, int> FallbackFloors = new()
+    {
+        [SubscriptionTier.Free] = 0,
+        [SubscriptionTier.Pro] = 1,
+        [SubscriptionTier.Team] = 3,
+    };
+
+    /// <inheritdoc/>
+    public async Task<int> GetBillableMachineCountAsync(int tenantId, SubscriptionTier tier, CancellationToken ct)
+    {
+        int active = await _machineRepo.GetActiveMachineCountAsync(tenantId, ct);
+
+        TierFeatureLimit? tierLimits = await _tierLimitRepo.GetLimitsForTierAsync(tier, ct);
+
+        int floor;
+        if (tierLimits is null)
+        {
+            floor = FallbackFloors.TryGetValue(tier, out int fallback) ? fallback : 0;
+            _logger.LogWarning(
+                "No TierFeatureLimits found for tier {Tier}, using fallback billable floor {Floor}",
+                tier, floor);
+        }
+        else
+        {
+            floor = tierLimits.MinimumBillableMachines;
+        }
+
+        return Math.Max(active, floor);
+    }
+
     /// <inheritdoc/>
     public async Task EnsureSubscriptionExistsAsync(int tenantId, CancellationToken ct)
     {

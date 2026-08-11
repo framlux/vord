@@ -2,6 +2,7 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
+using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 
 namespace Framlux.FleetManagement.Services.Core.Billing;
@@ -87,4 +88,14 @@ public interface ISubscriptionService
     /// <param name="tenantId">The tenant to check.</param>
     /// <param name="ct">Cancellation token.</param>
     Task<bool> CanAddMemberAsync(int tenantId, CancellationToken ct = default);
+
+    /// <summary>
+    /// Returns the machine count Stripe should be billed for: the tenant's active machine
+    /// count raised to the floor for <paramref name="tier"/>.
+    /// </summary>
+    /// <param name="tenantId">The tenant to count machines for.</param>
+    /// <param name="tier">The tier whose floor applies. Callers pass the tier being billed,
+    /// which at checkout is the tier being purchased rather than the tenant's current one.</param>
+    /// <param name="ct">Cancellation token.</param>
+    Task<int> GetBillableMachineCountAsync(int tenantId, SubscriptionTier tier, CancellationToken ct);
 }
