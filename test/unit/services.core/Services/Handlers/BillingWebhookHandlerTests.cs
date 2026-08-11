@@ -44,6 +44,7 @@ public class BillingWebhookHandlerTests
             AlertRuleLimit = 0,
             WebhookLimit = 0,
             MemberLimit = 1,
+            MinimumBillableMachines = 0,
             UpdatedAt = now,
         });
 
@@ -55,6 +56,7 @@ public class BillingWebhookHandlerTests
             AlertRuleLimit = 10,
             WebhookLimit = 5,
             MemberLimit = 5,
+            MinimumBillableMachines = 1,
             UpdatedAt = now,
         });
 
@@ -66,6 +68,7 @@ public class BillingWebhookHandlerTests
             AlertRuleLimit = 25,
             WebhookLimit = 15,
             MemberLimit = int.MaxValue,
+            MinimumBillableMachines = 3,
             UpdatedAt = now,
         });
     }

@@ -33,6 +33,7 @@ public class SubscriptionCacheTests
             AlertRuleLimit = 0,
             WebhookLimit = 0,
             MemberLimit = 1,
+            MinimumBillableMachines = 0,
             UpdatedAt = now,
         });
         tierLimitRepo.GetLimitsForTierAsync(SubscriptionTier.Pro, Arg.Any<CancellationToken>()).Returns(new TierFeatureLimit
@@ -43,6 +44,7 @@ public class SubscriptionCacheTests
             AlertRuleLimit = 10,
             WebhookLimit = 5,
             MemberLimit = 5,
+            MinimumBillableMachines = 1,
             UpdatedAt = now,
         });
         tierLimitRepo.GetLimitsForTierAsync(SubscriptionTier.Team, Arg.Any<CancellationToken>()).Returns(new TierFeatureLimit
@@ -53,6 +55,7 @@ public class SubscriptionCacheTests
             AlertRuleLimit = 25,
             WebhookLimit = 15,
             MemberLimit = int.MaxValue,
+            MinimumBillableMachines = 3,
             UpdatedAt = now,
         });
         ITenantSubscriptionOverrideRepository overrideRepo = Substitute.For<ITenantSubscriptionOverrideRepository>();

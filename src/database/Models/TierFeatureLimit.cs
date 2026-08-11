@@ -59,6 +59,13 @@ public sealed class TierFeatureLimit
     public required int MemberLimit { get; set; }
 
     /// <summary>
+    /// Minimum number of machines this tier bills for, regardless of how many are active.
+    /// Free is zero because it has no Stripe subscription.
+    /// </summary>
+    [Column(Name = "MinimumBillableMachines"), NotNull]
+    public required int MinimumBillableMachines { get; set; }
+
+    /// <summary>
     /// When these limits were last updated.
     /// </summary>
     [Column(Name = "UpdatedAt"), NotNull]

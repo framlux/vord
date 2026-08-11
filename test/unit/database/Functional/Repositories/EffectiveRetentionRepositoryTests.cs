@@ -34,6 +34,7 @@ public sealed class EffectiveRetentionRepositoryTests
             AlertRuleLimit = 0,
             WebhookLimit = 0,
             MemberLimit = 1,
+            MinimumBillableMachines = 0,
             UpdatedAt = DateTimeOffset.UtcNow,
         });
     }

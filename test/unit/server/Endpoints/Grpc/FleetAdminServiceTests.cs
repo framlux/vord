@@ -242,6 +242,7 @@ public sealed class FleetAdminServiceTests
             AlertRuleLimit = 10,
             WebhookLimit = 5,
             MemberLimit = 5,
+            MinimumBillableMachines = 1,
             UpdatedAt = DateTimeOffset.UtcNow
         };
 
@@ -716,6 +717,7 @@ public sealed class FleetAdminServiceTests
             AlertRuleLimit = 10,
             WebhookLimit = 5,
             MemberLimit = 5,
+            MinimumBillableMachines = 1,
             UpdatedAt = DateTimeOffset.UtcNow
         };
 
@@ -876,6 +878,7 @@ public sealed class FleetAdminServiceTests
             AlertRuleLimit = 50,
             WebhookLimit = 20,
             MemberLimit = int.MaxValue,
+            MinimumBillableMachines = 3,
             UpdatedAt = DateTimeOffset.UtcNow
         };
 
