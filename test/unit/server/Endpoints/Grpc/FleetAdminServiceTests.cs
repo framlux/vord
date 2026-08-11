@@ -2125,6 +2125,47 @@ public sealed class FleetAdminServiceTests
         await Assert.That(response.Success).IsFalse();
     }
 
+    /// <summary>
+    /// GetBillableMachineCount rejects any target tier that is not a real, billable tier — an
+    /// unparseable string, a numeric string that happens to match an enum value that is not
+    /// billable, an out-of-range numeric string, "none", and "free" (Free has no Stripe
+    /// subscription to size). Without this guard, <c>Enum.TryParse</c> alone accepts all of
+    /// these and the floor computation silently falls through to a billable count of 0 — a paid
+    /// tenant would be billed nothing while keeping paid features.
+    /// </summary>
+    [Test]
+    [Arguments("none")]
+    [Arguments("0")]
+    [Arguments("7")]
+    [Arguments("garbage")]
+    [Arguments("free")]
+    public async Task GetBillableMachineCount_NonBillableTargetTier_ReturnsFailureWithoutZeroCount(string targetTier)
+    {
+        ITenantRepository tenantRepo = Substitute.For<ITenantRepository>();
+        tenantRepo.GetTenantByExternalIdAsync(TenantExternalId, Arg.Any<CancellationToken>())
+            .Returns(MakeTenant());
+
+        ISubscriptionService subscriptions = Substitute.For<ISubscriptionService>();
+
+        IServiceScopeFactory scopeFactory = CreateScopeFactoryWithServices(new Dictionary<Type, object>
+        {
+            { typeof(ITenantRepository), tenantRepo },
+            { typeof(ISubscriptionService), subscriptions }
+        });
+
+        FleetAdminService service = CreateFleetAdminService(scopeFactory);
+        ServerCallContext context = CreateContext();
+
+        GetBillableMachineCountResponse response = await service.GetBillableMachineCount(
+            new GetBillableMachineCountRequest { TenantExternalId = TenantExternalId, TargetTier = targetTier },
+            context);
+
+        await Assert.That(response.Success).IsFalse();
+        await Assert.That(response.BillableCount).IsEqualTo(0);
+        await subscriptions.DidNotReceive().GetBillableMachineCountAsync(
+            Arg.Any<int>(), Arg.Any<SubscriptionTier>(), Arg.Any<CancellationToken>());
+    }
+
     // ── MapBillingTierToSubscriptionTier ──
 
     /// <summary>

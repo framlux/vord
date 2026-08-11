@@ -539,10 +539,11 @@ public sealed class UsageHeartbeatJobTests
     [Test]
     public async Task RunAsync_NoLongerCarriesDisableConcurrentExecutionAttribute()
     {
-        // M11 regression: serialization moved from Hangfire's [DisableConcurrentExecution]
-        // (which blocks waiting for the lock) to IAdvisoryLockProvider (try-once). The attribute
-        // must NOT be present — if a future PR re-adds it, semantics drift back to a queueing
-        // model that does NOT match the metered-billing-tolerates-skip design.
+        // Serialization moved from Hangfire's [DisableConcurrentExecution] (which blocks waiting
+        // for the lock) to IAdvisoryLockProvider (try-once). The attribute must NOT be present —
+        // if a future PR re-adds it, semantics drift back to a queueing model that is unnecessary
+        // for quantity reporting: quantity is a level rather than an accumulation, so a skipped
+        // tick loses nothing and the next tick reports the same absolute value.
         MethodInfo method = typeof(UsageHeartbeatJob).GetMethod(nameof(UsageHeartbeatJob.RunAsync))!;
         CustomAttributeData? attrData = method.GetCustomAttributesData()
             .FirstOrDefault(a => a.AttributeType == typeof(DisableConcurrentExecutionAttribute));

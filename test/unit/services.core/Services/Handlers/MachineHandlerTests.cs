@@ -713,7 +713,7 @@ public class MachineHandlerTests
 
         await Assert.That(result.IsSuccess).IsTrue();
 
-        // The handler delegates the metered-billing report to the billing-sync collaborator;
+        // The handler delegates the billable-quantity report to the billing-sync collaborator;
         // the tier gating and best-effort semantics are covered by MachineBillingSyncTests.
         await machineBillingSync.Received(1).ReportActiveMachineUsageAsync(tenant.Id, Arg.Any<CancellationToken>());
     }

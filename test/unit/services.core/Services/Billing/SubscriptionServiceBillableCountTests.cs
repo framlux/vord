@@ -61,6 +61,20 @@ public sealed class SubscriptionServiceBillableCountTests
         await Assert.That(result).IsEqualTo(3);
     }
 
+    [Test]
+    public async Task GetBillableMachineCountAsync_NoneTier_ThrowsRatherThanReturningZero()
+    {
+        // None is not a billable tier and has no floor policy. Silently falling through to a
+        // billable count of 0 would bill nothing for a subscription that should never have
+        // reached this method in the first place; refuse loudly instead.
+        SubscriptionService service = BuildService(SubscriptionTier.None, floor: 0, active: 5);
+
+        InvalidOperationException? ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => service.GetBillableMachineCountAsync(42, SubscriptionTier.None, CancellationToken.None));
+
+        await Assert.That(ex).IsNotNull();
+    }
+
     private static SubscriptionService BuildService(
         SubscriptionTier tier, int floor, int active, bool tierRowMissing = false)
     {

@@ -808,12 +808,23 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
         ITenantRepository tenantRepository = scope.ServiceProvider.GetRequiredService<ITenantRepository>();
         ISubscriptionService subscriptionService = scope.ServiceProvider.GetRequiredService<ISubscriptionService>();
 
-        if (System.Enum.TryParse(request.TargetTier, ignoreCase: true, out SubscriptionTier tier) == false)
+        bool parsed = System.Enum.TryParse(request.TargetTier, ignoreCase: true, out SubscriptionTier tier);
+
+        // TryParse alone is not enough: it accepts any integer string (e.g. "7") and any defined
+        // name, and SubscriptionTier declares None = 0. Require a defined enum value and reject
+        // None and Free explicitly — only Pro and Team are billable, and nothing should be sizing
+        // a Free purchase. Without this, an unparseable or non-billable tier silently floors to 0
+        // (no TierFeatureLimits row, no FallbackFloors entry), and the caller writes a quantity-0
+        // line item onto what may be a paying subscription.
+        if ((parsed == false) ||
+            (System.Enum.IsDefined(tier) == false) ||
+            (tier == SubscriptionTier.None) ||
+            (tier == SubscriptionTier.Free))
         {
             return new GetBillableMachineCountResponse
             {
                 Success = false,
-                Message = $"Unknown tier '{request.TargetTier}'"
+                Message = $"'{request.TargetTier}' is not a billable tier"
             };
         }
 

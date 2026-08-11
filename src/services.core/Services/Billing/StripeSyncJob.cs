@@ -114,8 +114,21 @@ public sealed class StripeSyncJob
         TenantSubscription subscription, string tenantExternalId,
         StripeSubscriptionStatus stripeStatus, CancellationToken ct)
     {
+        // The floor must come from the tier the quantity is actually landing on in Stripe, not
+        // from the (possibly stale) local tier. SyncTierAsync only submits the correction — it
+        // does not mutate this in-memory subscription — so on the cycle that first detects tier
+        // drift, using subscription.Tier would size the write against the wrong tier's floor
+        // (e.g. writing a Pro floor onto what Stripe already has as Team, or vice versa). The one
+        // exception mirrors SyncTierAsync's own guard: a Stripe-reported Free tier for a locally
+        // paid subscription is treated as untrustworthy (bug or stale cache), so the local tier
+        // is kept in that case too.
+        SubscriptionTier? stripeTier = MapBillingTierToSubscriptionTier(stripeStatus.Tier);
+        SubscriptionTier floorTier = ((stripeTier is null) || (stripeTier.Value == SubscriptionTier.Free))
+            ? subscription.Tier
+            : stripeTier.Value;
+
         int billableCount = await _subscriptionService.GetBillableMachineCountAsync(
-            subscription.TenantId, subscription.Tier, ct);
+            subscription.TenantId, floorTier, ct);
 
         if (billableCount != stripeStatus.Quantity)
         {

@@ -119,7 +119,8 @@ public sealed class MachineHandler
             await _apiKeyCacheInvalidator.InvalidateByHashAsync(deletedKeyHash, ct);
         }
 
-        // Report usage to billing for metered billing after deletion (best effort)
+        // Report the updated billable quantity after deletion (best effort) so Stripe reflects
+        // the new machine count without waiting for the next heartbeat cycle
         await _machineBillingSync.ReportActiveMachineUsageAsync(tenantId.Value, ct);
 
         return ServiceResult<ApiResponse<object>>.Ok(ApiResponse<object>.Ok(new { }, "Machine deleted successfully"));

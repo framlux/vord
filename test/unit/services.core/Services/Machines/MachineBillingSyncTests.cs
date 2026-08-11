@@ -75,6 +75,39 @@ public sealed class MachineBillingSyncTests
     }
 
     [Test]
+    public async Task ReportActiveMachineUsageAsync_NoneTierSubscription_ReportsNothing()
+    {
+        // Intent: the billing guard must allowlist Pro/Team rather than merely exclude Free. A
+        // subscription row can carry Tier.None (e.g. one that predates a tier being set); None
+        // has no billable floor and must not reach GetBillableMachineCountAsync, which refuses it.
+        TenantSubscription noneSub = TestDataBuilder.BuildSubscription(tenantId: 1, tier: SubscriptionTier.None);
+
+        ISubscriptionService subscriptionService = Substitute.For<ISubscriptionService>();
+        subscriptionService.GetSubscriptionForTenantAsync(1, Arg.Any<CancellationToken>())
+            .Returns(noneSub);
+
+        // A resolvable tenant must be stubbed, or the "tenant is null" branch short-circuits
+        // before the tier guard is ever reached, and this test would pass regardless of what
+        // the guard does.
+        Tenant tenant = TestDataBuilder.BuildTenant(externalId: "ext-tenant-none-tier");
+        tenant.Id = 1;
+
+        ITenantRepository tenantRepo = Substitute.For<ITenantRepository>();
+        tenantRepo.GetTenantByIdAsync(1, Arg.Any<CancellationToken>()).Returns(tenant);
+        IMachineRepository machineRepo = Substitute.For<IMachineRepository>();
+        IBillingApiClient billingApiClient = Substitute.For<IBillingApiClient>();
+
+        MachineBillingSync service = CreateService(subscriptionService, tenantRepo, machineRepo, billingApiClient);
+
+        await service.ReportActiveMachineUsageAsync(1, CancellationToken.None);
+
+        await billingApiClient.DidNotReceive().UpdateQuantityAsync(
+            Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>());
+        await subscriptionService.DidNotReceive().GetBillableMachineCountAsync(
+            Arg.Any<int>(), Arg.Any<SubscriptionTier>(), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
     public async Task ReportActiveMachineUsageAsync_ProTierWithTenant_CallsUpdateQuantityWithCorrectArgs()
     {
         int tenantId = 42;

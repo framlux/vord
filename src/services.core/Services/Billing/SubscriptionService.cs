@@ -177,6 +177,22 @@ public sealed class SubscriptionService : ISubscriptionService
     /// <inheritdoc/>
     public async Task<int> GetBillableMachineCountAsync(int tenantId, SubscriptionTier tier, CancellationToken ct)
     {
+        // None is not a billable tier and has no floor policy — a caller passing it (e.g. a
+        // subscription row that predates a tier being set) must not silently fall through to a
+        // billable count of 0. Refuse loudly instead of encoding None = 0 into FallbackFloors,
+        // which would make the silent-zero look like intended behaviour. Every caller of this
+        // method already treats per-tenant billing as best-effort and catches around it, so
+        // throwing here surfaces as a loud per-tenant log line rather than an outage.
+        if (tier == SubscriptionTier.None)
+        {
+            _logger.LogError(
+                "GetBillableMachineCountAsync called with SubscriptionTier.None for tenant {TenantId}; refusing to compute a billable quantity",
+                tenantId);
+
+            throw new InvalidOperationException(
+                $"Tenant {tenantId} has no subscription tier (None); cannot compute a billable machine count");
+        }
+
         int active = await _machineRepo.GetActiveMachineCountAsync(tenantId, ct);
 
         TierFeatureLimit? tierLimits = await _tierLimitRepo.GetLimitsForTierAsync(tier, ct);

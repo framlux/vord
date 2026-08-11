@@ -380,8 +380,12 @@ public sealed class MachineService : IMachineService
         // Report billable quantity to billing (best effort, hourly heartbeat provides the safety net)
         try
         {
-            // Only report quantity for paid tiers; Free tier has no Stripe subscription
-            if ((subscription is not null) && (subscription.Tier != SubscriptionTier.Free))
+            // Only report quantity for genuinely billable tiers. An allowlist (Pro/Team) rather
+            // than excluding Free alone, because a subscription row can also carry Tier.None
+            // (e.g. one that predates a tier being set); None has no floor policy and would
+            // otherwise reach GetBillableMachineCountAsync, which refuses it.
+            if ((subscription is not null) &&
+                ((subscription.Tier == SubscriptionTier.Pro) || (subscription.Tier == SubscriptionTier.Team)))
             {
                 ITenantRepository tenantRepository = scope.ServiceProvider.GetRequiredService<ITenantRepository>();
                 Tenant? tenant = await tenantRepository.GetTenantByIdAsync(token.TenantId, cancellationToken);

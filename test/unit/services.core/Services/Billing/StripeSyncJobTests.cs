@@ -125,6 +125,77 @@ public sealed class StripeSyncJobTests
     }
 
     [Test]
+    public async Task RunAsync_TierDrift_QuantityWriteUsesStripeTierFloorNotLocalTierFloor()
+    {
+        // Intent: local is stale Pro (floor 1), Stripe already reports Team (floor 3) — the exact
+        // drift condition this job exists to correct. The quantity write must be sized against
+        // Team, the tier the write is actually landing on in Stripe, not against the stale local
+        // Pro tier. Only the Team-floor stub is configured; if the implementation regresses to
+        // sizing off subscription.Tier (Pro), the unconfigured Pro-tier call returns the
+        // NSubstitute default of 0, which would not match Stripe's quantity of 3 and would
+        // trigger an incorrect write — so this test fails loudly under that regression rather
+        // than silently passing.
+        TestSut sut = new();
+        sut.SeedOneSubscription(localTier: SubscriptionTier.Pro, stripeStatus: DefaultStripeStatus with
+        {
+            StripeStatus = "active",
+            Tier = BillingTier.Team,
+            Quantity = 3,
+        });
+        sut.SubscriptionService.GetBillableMachineCountAsync(1, SubscriptionTier.Team, Arg.Any<CancellationToken>())
+            .Returns(3);
+
+        await sut.Job.RunAsync(CancellationToken.None);
+
+        await sut.BillingClient.DidNotReceive().UpdateQuantityAsync(
+            Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task RunAsync_TierDrift_QuantityWriteReportsStripeTierFloorValue()
+    {
+        // Intent: the positive counterpart to the test above — when the Team-floored billable
+        // count genuinely differs from Stripe's quantity, the value written must be the
+        // Team-floored count (5), not whatever the stale local Pro floor would have produced.
+        TestSut sut = new();
+        sut.SeedOneSubscription(localTier: SubscriptionTier.Pro, stripeStatus: DefaultStripeStatus with
+        {
+            StripeStatus = "active",
+            Tier = BillingTier.Team,
+            Quantity = 3,
+        });
+        sut.SubscriptionService.GetBillableMachineCountAsync(1, SubscriptionTier.Team, Arg.Any<CancellationToken>())
+            .Returns(5);
+
+        await sut.Job.RunAsync(CancellationToken.None);
+
+        await sut.BillingClient.Received(1).UpdateQuantityAsync("ext-1", 5, Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task RunAsync_TierDrift_StripeReportsFreeForPaidTenant_QuantityFloorStaysOnLocalTier()
+    {
+        // Intent: SyncTierAsync distrusts a Stripe-reported Free tier for a locally paid
+        // subscription (bug or stale cache) and does not correct to it. The quantity floor must
+        // apply the same distrust — falling back to the local tier — rather than flooring to
+        // Free's 0, which would zero out the quantity for a genuinely paying tenant.
+        TestSut sut = new();
+        sut.SeedOneSubscription(localTier: SubscriptionTier.Team, stripeStatus: DefaultStripeStatus with
+        {
+            StripeStatus = "active",
+            Tier = BillingTier.Free,
+            Quantity = 3,
+        });
+        sut.SubscriptionService.GetBillableMachineCountAsync(1, SubscriptionTier.Team, Arg.Any<CancellationToken>())
+            .Returns(3);
+
+        await sut.Job.RunAsync(CancellationToken.None);
+
+        await sut.BillingClient.DidNotReceive().UpdateQuantityAsync(
+            Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
     public async Task RunAsync_TierDrift_CorrectsViaWebhookHandler()
     {
         TestSut sut = new();
