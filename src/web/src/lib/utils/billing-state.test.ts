@@ -84,9 +84,9 @@ describe('billingIntervalLabel', () => {
 });
 
 const catalog: CatalogItemDto[] = [
-	{ tier: 'Pro', interval: 'monthly', unitAmountCents: 300, currency: 'usd', isMetered: true },
-	{ tier: 'Pro', interval: 'annual', unitAmountCents: 3000, currency: 'usd', isMetered: true },
-	{ tier: 'Team', interval: 'monthly', unitAmountCents: 500, currency: 'usd', isMetered: true }
+	{ tier: 'Pro', interval: 'monthly', unitAmountCents: 300, currency: 'usd' },
+	{ tier: 'Pro', interval: 'annual', unitAmountCents: 3000, currency: 'usd' },
+	{ tier: 'Team', interval: 'monthly', unitAmountCents: 500, currency: 'usd' }
 ];
 
 describe('findCatalogPrice', () => {

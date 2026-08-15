@@ -337,8 +337,7 @@ public sealed class BillingApiClient : IBillingApiClient
                 i.Tier,
                 i.Interval,
                 i.UnitAmountCents,
-                i.Currency,
-                i.IsMetered)).ToList();
+                i.Currency)).ToList();
         }
         catch (Exception ex)
         {

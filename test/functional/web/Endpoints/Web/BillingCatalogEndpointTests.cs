@@ -86,9 +86,9 @@ public sealed class BillingCatalogEndpointTests
     {
         return
         [
-            new CatalogItemResult(BillingTier.Pro, BillingInterval.Monthly, 300, "usd", true),
-            new CatalogItemResult(BillingTier.Pro, BillingInterval.Annual, 3000, "usd", true),
-            new CatalogItemResult(BillingTier.Team, BillingInterval.Monthly, 500, "usd", true),
+            new CatalogItemResult(BillingTier.Pro, BillingInterval.Monthly, 300, "usd"),
+            new CatalogItemResult(BillingTier.Pro, BillingInterval.Annual, 3000, "usd"),
+            new CatalogItemResult(BillingTier.Team, BillingInterval.Monthly, 500, "usd"),
         ];
     }
 
@@ -142,7 +142,8 @@ public sealed class BillingCatalogEndpointTests
         await Assert.That(data[0].GetProperty("interval").GetString()).IsEqualTo("monthly");
         await Assert.That(data[0].GetProperty("unitAmountCents").GetInt64()).IsEqualTo(300);
         await Assert.That(data[0].GetProperty("currency").GetString()).IsEqualTo("usd");
-        await Assert.That(data[0].GetProperty("isMetered").GetBoolean()).IsTrue();
+        // Every price is licensed per-machine, so the catalog must not advertise a metered flag.
+        await Assert.That(data[0].TryGetProperty("isMetered", out JsonElement _)).IsFalse();
         await Assert.That(data[1].GetProperty("interval").GetString()).IsEqualTo("annual");
         await Assert.That(data[2].GetProperty("tier").GetString()).IsEqualTo("Team");
     }

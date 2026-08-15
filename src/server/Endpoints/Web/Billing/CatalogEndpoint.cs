@@ -24,9 +24,6 @@ public sealed class CatalogItemDto
 
     /// <summary>Three-letter currency code.</summary>
     public string Currency { get; set; } = "usd";
-
-    /// <summary>Whether the price is metered (billed on reported machine usage).</summary>
-    public bool IsMetered { get; set; }
 }
 
 /// <summary>
@@ -70,7 +67,6 @@ public sealed class CatalogEndpoint : EndpointWithoutRequest<ApiResponse<List<Ca
             Interval = BillingIntervalFormat.ToWireString(i.Interval),
             UnitAmountCents = i.UnitAmountCents,
             Currency = i.Currency,
-            IsMetered = i.IsMetered,
         }).ToList();
 
         await Send.OkAsync(ApiResponse<List<CatalogItemDto>>.Ok(dtos), cancellation: ct);

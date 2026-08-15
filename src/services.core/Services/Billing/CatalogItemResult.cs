@@ -13,10 +13,8 @@ namespace Framlux.FleetManagement.Services.Core.Billing;
 /// <param name="Interval">The billing recurrence interval.</param>
 /// <param name="UnitAmountCents">Per-machine price in cents.</param>
 /// <param name="Currency">Three-letter ISO currency code.</param>
-/// <param name="IsMetered">Whether the price is metered (billed on reported usage).</param>
 public sealed record CatalogItemResult(
     BillingTier Tier,
     BillingInterval Interval,
     long UnitAmountCents,
-    string Currency,
-    bool IsMetered);
+    string Currency);

@@ -708,7 +708,6 @@ public sealed class BillingApiClientTests
             Interval = BillingInterval.Monthly,
             UnitAmountCents = 300,
             Currency = "usd",
-            IsMetered = true,
         });
         response.Items.Add(new CatalogPriceItem
         {
@@ -716,7 +715,6 @@ public sealed class BillingApiClientTests
             Interval = BillingInterval.Annual,
             UnitAmountCents = 5000,
             Currency = "usd",
-            IsMetered = false,
         });
         grpc.GetPublicCatalogAsync(
                 Arg.Any<GetPublicCatalogRequest>(), Arg.Any<Metadata>(), Arg.Any<DateTime?>(), Arg.Any<CancellationToken>())
@@ -729,7 +727,6 @@ public sealed class BillingApiClientTests
         await Assert.That(result[0].Interval).IsEqualTo(BillingInterval.Monthly);
         await Assert.That(result[0].UnitAmountCents).IsEqualTo(300);
         await Assert.That(result[0].Currency).IsEqualTo("usd");
-        await Assert.That(result[0].IsMetered).IsTrue();
         await Assert.That(result[1].Interval).IsEqualTo(BillingInterval.Annual);
     }
 

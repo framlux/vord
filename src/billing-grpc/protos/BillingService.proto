@@ -108,11 +108,16 @@ message GetPublicCatalogResponse {
   repeated CatalogPriceItem items = 1;
 }
 message CatalogPriceItem {
+  // Field 5 held is_metered. Vord bills licensed per-machine quantities only, so the
+  // distinction no longer exists; the number stays reserved so a future field cannot
+  // reuse it and be read as a stale boolean by an older peer.
+  reserved 5;
+  reserved "is_metered";
+
   BillingTier tier = 1;
   BillingInterval interval = 2;
   int64 unit_amount_cents = 3;
   string currency = 4;
-  bool is_metered = 5;
 }
 
 message CancelSubscriptionImmediateRequest {

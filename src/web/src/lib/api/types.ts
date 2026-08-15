@@ -374,7 +374,6 @@ export interface CatalogItemDto {
 	interval: string | null;
 	unitAmountCents: number;
 	currency: string;
-	isMetered: boolean;
 }
 
 export interface InvoiceDto {
