@@ -41,20 +41,35 @@ public sealed class RecurringJobRegistryTests
     }
 
     [Test]
-    public async Task RegisterAll_BillingEnabled_AddsUsageHeartbeatAndStripeSync()
+    public async Task RegisterAll_BillingEnabled_AddsStripeSync()
     {
-        // Intent: when billing is enabled both billing-tier recurring jobs must be scheduled with
-        // their exact cron expressions and the registry must NOT also remove them in the same call.
+        // Intent: when billing is enabled the billing-tier recurring job must be scheduled with its
+        // exact cron expression and the registry must NOT also remove it in the same call.
         IRecurringJobManager mgr = Substitute.For<IRecurringJobManager>();
 
         RecurringJobRegistry.RegisterAll(mgr, billingEnabled: true, objectStorageEnabled: false);
 
         await Assert.That(() =>
         {
-            ReceivedAddOrUpdate(mgr, "usage-heartbeat", "7 * * * *");
             ReceivedAddOrUpdate(mgr, "stripe-sync", "*/5 * * * *");
-            mgr.DidNotReceive().RemoveIfExists("usage-heartbeat");
             mgr.DidNotReceive().RemoveIfExists("stripe-sync");
+        }).ThrowsNothing();
+    }
+
+    [Test]
+    public async Task RegisterAll_AlwaysDropsRetiredUsageHeartbeat()
+    {
+        // Intent: the retired schedule is torn down even when billing is on. Hangfire persists
+        // recurring jobs, so a copy registered by an earlier release would otherwise keep firing
+        // against a job type that no longer exists.
+        IRecurringJobManager mgr = Substitute.For<IRecurringJobManager>();
+
+        RecurringJobRegistry.RegisterAll(mgr, billingEnabled: true, objectStorageEnabled: false);
+
+        await Assert.That(() =>
+        {
+            mgr.Received(1).RemoveIfExists("usage-heartbeat");
+            DidNotReceiveAddOrUpdate(mgr, "usage-heartbeat");
         }).ThrowsNothing();
     }
 
@@ -113,7 +128,7 @@ public sealed class RecurringJobRegistryTests
     }
 
     [Test]
-    public async Task RegisterAll_AllFeaturesEnabled_RegistersExactTenJobs()
+    public async Task RegisterAll_AllFeaturesEnabled_RegistersExactNineJobs()
     {
         // Intent: pin the total job count when all feature flags are on. A new job added without
         // updating this test should force the developer to also update the pin — surfacing a
@@ -124,12 +139,16 @@ public sealed class RecurringJobRegistryTests
 
         await Assert.That(() =>
         {
-            mgr.Received(10).AddOrUpdate(
+            mgr.Received(9).AddOrUpdate(
                 Arg.Any<string>(),
                 Arg.Any<Job>(),
                 Arg.Any<string>(),
                 Arg.Any<RecurringJobOptions>());
-            mgr.DidNotReceive().RemoveIfExists(Arg.Any<string>());
+
+            // The retired usage-heartbeat schedule is the only thing torn down with every flag on;
+            // removing anything else here would mean a live job was being unscheduled.
+            mgr.Received(1).RemoveIfExists(RecurringJobIds.UsageHeartbeat);
+            mgr.Received(1).RemoveIfExists(Arg.Any<string>());
         }).ThrowsNothing();
     }
 

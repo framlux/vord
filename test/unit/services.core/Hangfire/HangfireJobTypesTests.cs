@@ -67,7 +67,6 @@ public sealed class HangfireJobTypesTests
         await Assert.That(IsRegistered<DataExportProcessingJob>(services)).IsTrue();
         await Assert.That(IsRegistered<DataExportCleanupJob>(services)).IsTrue();
         await Assert.That(IsRegistered<StripeSyncJob>(services)).IsTrue();
-        await Assert.That(IsRegistered<UsageHeartbeatJob>(services)).IsTrue();
     }
 
     [Test]
@@ -88,7 +87,6 @@ public sealed class HangfireJobTypesTests
         await Assert.That(GetLifetime<DataExportProcessingJob>(services)).IsEqualTo(ServiceLifetime.Scoped);
         await Assert.That(GetLifetime<DataExportCleanupJob>(services)).IsEqualTo(ServiceLifetime.Scoped);
         await Assert.That(GetLifetime<StripeSyncJob>(services)).IsEqualTo(ServiceLifetime.Scoped);
-        await Assert.That(GetLifetime<UsageHeartbeatJob>(services)).IsEqualTo(ServiceLifetime.Scoped);
     }
 
     [Test]
@@ -110,7 +108,6 @@ public sealed class HangfireJobTypesTests
         services.AddHangfireJobTypes(billingEnabled: false, objectStorageEnabled: true);
 
         await Assert.That(IsRegistered<StripeSyncJob>(services)).IsFalse();
-        await Assert.That(IsRegistered<UsageHeartbeatJob>(services)).IsFalse();
     }
 
     [Test]

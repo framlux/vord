@@ -28,7 +28,7 @@ public sealed class PostgresAdvisoryLockProviderHashTests
     public async Task HashLockName_DifferentInputs_ProduceDifferentKeys()
     {
         long a = PostgresAdvisoryLockProvider.HashLockName(LockNames.StateStreaming);
-        long b = PostgresAdvisoryLockProvider.HashLockName(LockNames.UsageHeartbeat);
+        long b = PostgresAdvisoryLockProvider.HashLockName(LockNames.HealthSweepTenantPrefix + "1");
 
         await Assert.That(a).IsNotEqualTo(b);
     }

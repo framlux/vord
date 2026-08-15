@@ -115,14 +115,6 @@ public sealed class JobQueueAttributesTests
     }
 
     [Test]
-    public async Task UsageHeartbeatJob_RunAsync_UsesDefaultQueue()
-    {
-        string? q = GetQueueName(typeof(UsageHeartbeatJob), "RunAsync");
-
-        await Assert.That(q).IsNull();
-    }
-
-    [Test]
     public async Task AlertConditionStateCleanupJob_RunAsync_UsesDefaultQueue()
     {
         string? q = GetQueueName(typeof(AlertConditionStateCleanupJob), "RunAsync");

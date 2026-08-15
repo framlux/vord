@@ -70,13 +70,14 @@ public static class RecurringJobRegistry
             job => job.RunAsync(CancellationToken.None),
             "23 * * * *");
 
+        // UsageHeartbeatJob has been removed: StripeSyncJob reconciles the same billable quantity
+        // twelve times as often and sizes it against the tier Stripe actually holds rather than the
+        // local record. Its schedule is dropped unconditionally so a copy persisted by an earlier
+        // release cannot keep firing for a job type that no longer exists.
+        recurringJobs.RemoveIfExists(RecurringJobIds.UsageHeartbeat);
+
         if (billingEnabled)
         {
-            recurringJobs.AddOrUpdate<UsageHeartbeatJob>(
-                RecurringJobIds.UsageHeartbeat,
-                job => job.RunAsync(CancellationToken.None),
-                "7 * * * *");
-
             recurringJobs.AddOrUpdate<StripeSyncJob>(
                 RecurringJobIds.StripeSync,
                 job => job.RunAsync(CancellationToken.None),
@@ -84,7 +85,6 @@ public static class RecurringJobRegistry
         }
         else
         {
-            recurringJobs.RemoveIfExists(RecurringJobIds.UsageHeartbeat);
             recurringJobs.RemoveIfExists(RecurringJobIds.StripeSync);
         }
 

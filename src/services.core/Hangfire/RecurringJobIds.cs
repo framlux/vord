@@ -26,7 +26,11 @@ public static class RecurringJobIds
     /// <summary>AlertConditionStateCleanupJob.</summary>
     public const string AlertConditionStateCleanup = "alert-condition-state-cleanup";
 
-    /// <summary>UsageHeartbeatJob (billing-gated).</summary>
+    /// <summary>
+    /// Retired: UsageHeartbeatJob is gone, but the id is kept so the registry can delete the
+    /// schedule earlier releases persisted in Hangfire storage. Deliberately absent from
+    /// <see cref="All"/>, which lists only ids that are still registered.
+    /// </summary>
     public const string UsageHeartbeat = "usage-heartbeat";
 
     /// <summary>StripeSyncJob (billing-gated).</summary>
@@ -50,7 +54,6 @@ public static class RecurringJobIds
         AlertEvaluation,
         AlertConditionStateCleanup,
         TenantPurge,
-        UsageHeartbeat,
         StripeSync,
         DataExportProcessing,
         DataExportCleanup,

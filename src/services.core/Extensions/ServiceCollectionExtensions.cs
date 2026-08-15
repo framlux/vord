@@ -396,7 +396,6 @@ public static class ServiceCollectionExtensions
         if (billingEnabled)
         {
             services.AddScoped<StripeSyncJob>();
-            services.AddScoped<UsageHeartbeatJob>();
         }
 
         return services;

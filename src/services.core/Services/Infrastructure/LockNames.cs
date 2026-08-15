@@ -32,9 +32,6 @@ public static class LockNames
     /// </summary>
     public const string StateStreamingShardPrefix = "state-streaming:shard:";
 
-    /// <summary>Usage-heartbeat singleton lock (one heartbeat run per cluster per hour).</summary>
-    public const string UsageHeartbeat = "usage-heartbeat";
-
     /// <summary>
     /// Prefix for the per-tenant health-sweep lock; the full key is
     /// <c>health-sweep:tenant:&lt;tenantId&gt;</c>.
@@ -45,7 +42,6 @@ public static class LockNames
     public static IReadOnlyList<string> FixedNames { get; } = new[]
     {
         StateStreaming,
-        UsageHeartbeat,
     };
 
     /// <summary>Every prefix used to compose tenant-scoped lock names.</summary>
