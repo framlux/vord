@@ -117,15 +117,7 @@ public class FunctionalTestFactory : WebApplicationFactory<Program>
         Environment.SetEnvironmentVariable("Authentication__Microsoft__ClientId", "test-microsoft-id");
         Environment.SetEnvironmentVariable("Authentication__Microsoft__ClientSecret", "test-microsoft-secret");
 
-        // The functional hosts default to the hosted deployment so the existing suites keep
-        // exercising the gated paths. Self-hosted coverage opts in via its own factory.
-        Environment.SetEnvironmentVariable("Deployment__SelfHosted", "false");
         Environment.SetEnvironmentVariable("Billing__GrpcUrl", "http://localhost:12235");
-
-        // The hosted deployment refuses to start without a sender address and a Resend key, so
-        // both are supplied here. The transport itself is replaced below, so the key is never used.
-        Environment.SetEnvironmentVariable("Email__FromEmail", "Framlux Vord <invitations@test.invalid>");
-        Environment.SetEnvironmentVariable("Email__Resend__ApiKey", "re_functional_test");
 
         _dbConnection = new SqliteConnection("Data Source=:memory:");
         _dbConnection.Open();
@@ -184,12 +176,54 @@ public class FunctionalTestFactory : WebApplicationFactory<Program>
         _internalClientSubjects = subjects;
     }
 
+    /// <summary>
+    /// Configuration the composition root reads directly from <c>builder.Configuration</c> while it
+    /// is still deciding which services to register. Those reads happen before any
+    /// <c>ConfigureAppConfiguration</c> source a test factory adds is in play, so the only way to
+    /// steer them is the environment — which <see cref="CreateHost"/> does under the host-creation
+    /// lock so that concurrently constructed hosts cannot observe each other's values.
+    /// Keys are in environment-variable form; a null value clears the variable.
+    /// </summary>
+    protected virtual IReadOnlyDictionary<string, string?> StartupEnvironment { get; } =
+        new Dictionary<string, string?>
+        {
+            // The functional hosts default to the hosted deployment so the existing suites keep
+            // exercising the gated paths. Self-hosted coverage opts in via its own factory.
+            ["Deployment__SelfHosted"] = "false",
+
+            // The hosted deployment refuses to start without a sender address and a Resend key, so
+            // both are supplied here. The transport itself is replaced below, so the key is never
+            // used, and no SMTP relay is configured in this mode.
+            ["Email__FromEmail"] = "Framlux Vord <invitations@test.invalid>",
+            ["Email__Resend__ApiKey"] = "re_functional_test",
+            ["Email__Smtp__Host"] = null,
+        };
+
     /// <inheritdoc/>
     protected override IHost CreateHost(IHostBuilder builder)
     {
         lock (HostCreationLock)
         {
-            return base.CreateHost(builder);
+            IReadOnlyDictionary<string, string?> startup = StartupEnvironment;
+
+            foreach (KeyValuePair<string, string?> setting in startup)
+            {
+                Environment.SetEnvironmentVariable(setting.Key, setting.Value);
+            }
+
+            try
+            {
+                return base.CreateHost(builder);
+            }
+            finally
+            {
+                // Leaving these set would let a host built outside this lock inherit another
+                // factory's mode.
+                foreach (string key in startup.Keys)
+                {
+                    Environment.SetEnvironmentVariable(key, null);
+                }
+            }
         }
     }
 

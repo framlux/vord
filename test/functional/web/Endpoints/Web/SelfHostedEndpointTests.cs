@@ -3,29 +3,40 @@
 // See LICENSE for details.
 
 using System.Net;
+using System.Net.Http.Json;
+using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using Framlux.FleetManagement.Database;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
+using Framlux.FleetManagement.Services.Core.Billing;
+using Framlux.FleetManagement.Services.Core.Machines;
 using Framlux.FleetManagement.Test.Infrastructure;
 using LinqToDB;
 using LinqToDB.Async;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Framlux.FleetManagement.FunctionalTest.Endpoints.Web;
 
 /// <summary>
-/// Verifies that billing management endpoints return 404 in a self-hosted deployment.
-/// The subscription read endpoint should remain accessible regardless of deployment mode.
+/// The self-hosted half of the two-mode matrix. A self-hosted deployment has no subscription tiers,
+/// so every entitlement-gated surface must succeed for a tenant whose stored subscription row is
+/// still <see cref="SubscriptionTier.Free"/>, while the billing management endpoints — which need a
+/// SaaS control plane behind them — are absent. The subscription read endpoint stays reachable in
+/// both modes because the web shell fetches it on every page load.
 /// </summary>
 public sealed class SelfHostedEndpointTests
 {
-    private static async Task<(int TenantId, int UserId)> SeedTenantWithSubscription(DatabaseContext db)
+    private static async Task<(int TenantId, int UserId)> SeedTenantWithSubscription(
+        DatabaseContext db,
+        SubscriptionTier tier = SubscriptionTier.Pro,
+        bool isGlobalAdmin = false)
     {
         Tenant tenant = new()
         {
             ExternalId = Guid.NewGuid().ToString("N"),
-            Name = $"Billing Disabled Tenant {Guid.NewGuid():N}",
+            Name = $"Self Hosted Tenant {Guid.NewGuid():N}",
             CreatedAt = DateTimeOffset.UtcNow,
             CreatedByUserId = 1,
             IsActive = true,
@@ -36,7 +47,7 @@ public sealed class SelfHostedEndpointTests
         TenantSubscription subscription = new()
         {
             TenantId = tenant.Id,
-            Tier = SubscriptionTier.Pro,
+            Tier = tier,
             Status = SubscriptionStatus.Active,
             CreatedAt = DateTimeOffset.UtcNow,
             UpdatedAt = DateTimeOffset.UtcNow,
@@ -45,13 +56,13 @@ public sealed class SelfHostedEndpointTests
 
         UserAccount user = new()
         {
-            ExternalId = $"ext-billing-disabled-{Guid.NewGuid():N}",
-            Username = $"billingdisabled-{Guid.NewGuid():N}@example.com",
+            ExternalId = $"ext-self-hosted-{Guid.NewGuid():N}",
+            Username = $"selfhosted-{Guid.NewGuid():N}@example.com",
             CreatedAt = DateTimeOffset.UtcNow,
             CreatedByUserId = 1,
             IsActive = true,
             IsSystem = false,
-            IsGlobalAdmin = false,
+            IsGlobalAdmin = isGlobalAdmin,
         };
         user.Id = await db.InsertWithInt32IdentityAsync(user);
 
@@ -69,13 +80,66 @@ public sealed class SelfHostedEndpointTests
         return (tenant.Id, user.Id);
     }
 
-    private static HttpClient BuildClient(SelfHostedTestFactory factory, int tenantId, int userId)
+    private static async Task<long> SeedMachine(DatabaseContext db, int tenantId)
     {
-        return new AuthenticatedClientBuilder(factory)
+        Machine machine = new()
+        {
+            TenantId = tenantId,
+            Name = $"self-hosted-machine-{Guid.NewGuid():N}",
+            ApiKeyHash = Guid.NewGuid().ToString("N"),
+            SerialNumber = $"sn-{Guid.NewGuid():N}",
+            SystemId = $"sid-{Guid.NewGuid():N}",
+            MachineType = MachineTypes.VirtualMachine,
+            OperatingSystem = OperatingSystems.Ubuntu,
+            RegistrationTokenId = 0,
+            RegisteredOn = DateTimeOffset.UtcNow,
+            IsDeleted = false,
+        };
+
+        return await db.InsertWithInt64IdentityAsync(machine);
+    }
+
+    private static async Task<(int SigningKeyId, NSec.Cryptography.Key PrivateKey)> SeedSigningKey(
+        DatabaseContext db,
+        int tenantId,
+        int userId)
+    {
+        NSec.Cryptography.SignatureAlgorithm algorithm = NSec.Cryptography.SignatureAlgorithm.Ed25519;
+        NSec.Cryptography.Key privateKey = NSec.Cryptography.Key.Create(algorithm);
+        byte[] publicKey = privateKey.Export(NSec.Cryptography.KeyBlobFormat.RawPublicKey);
+
+        UserSigningKey signingKey = new()
+        {
+            UserId = userId,
+            TenantId = tenantId,
+            Label = $"Self Hosted Key {Guid.NewGuid():N}",
+            PublicKey = Convert.ToBase64String(publicKey),
+            PublicKeyFingerprint = Convert.ToHexStringLower(SHA256.HashData(publicKey)),
+            CreatedAt = DateTimeOffset.UtcNow,
+        };
+        signingKey.Id = await db.InsertWithInt32IdentityAsync(signingKey);
+
+        return (signingKey.Id, privateKey);
+    }
+
+    private static HttpClient BuildClient(
+        SelfHostedTestFactory factory,
+        int tenantId,
+        int userId,
+        UserAccountRoles clientRole = UserAccountRoles.TenantAdmin,
+        bool isGlobalAdmin = false)
+    {
+        AuthenticatedClientBuilder builder = new AuthenticatedClientBuilder(factory)
             .WithUserId(userId)
-            .WithRole(tenantId, (int)UserAccountRoles.TenantAdmin)
-            .WithActiveTenant(tenantId)
-            .Build();
+            .WithRole(tenantId, (int)clientRole)
+            .WithActiveTenant(tenantId);
+
+        if (isGlobalAdmin)
+        {
+            builder = builder.AsGlobalAdmin();
+        }
+
+        return builder.Build();
     }
 
     [Test]
@@ -134,18 +198,50 @@ public sealed class SelfHostedEndpointTests
         await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.NotFound);
     }
 
+    /// <summary>
+    /// All four billing management endpoints in one place, so a future registration change that
+    /// exposes any single one of them fails here rather than in only one of four separate tests.
+    /// </summary>
     [Test]
-    public async Task GetSubscription_WhenBillingDisabled_StillReturnsOk()
+    public async Task BillingManagementEndpoints_InSelfHosted_Return404()
     {
         using SelfHostedTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
-        (int tenantId, int userId) = await SeedTenantWithSubscription(db);
+        (int tenantId, int userId) = await SeedTenantWithSubscription(db, SubscriptionTier.Free);
+        HttpClient client = BuildClient(factory, tenantId, userId);
 
-        HttpClient client = new AuthenticatedClientBuilder(factory)
-            .WithUserId(userId)
-            .WithRole(tenantId, (int)UserAccountRoles.Viewer)
-            .WithActiveTenant(tenantId)
-            .Build();
+        StringContent downgrade = new(
+            JsonSerializer.Serialize(new { targetTier = "free" }),
+            Encoding.UTF8,
+            "application/json");
+
+        (string Path, HttpResponseMessage Response)[] responses =
+        [
+            ("/api/v1/billing/cancel", await client.PostAsync("/api/v1/billing/cancel", null)),
+            ("/api/v1/billing/downgrade", await client.PostAsync("/api/v1/billing/downgrade", downgrade)),
+            ("/api/v1/billing/resume", await client.PostAsync("/api/v1/billing/resume", null)),
+            ("/api/v1/billing/reactivate", await client.PostAsync("/api/v1/billing/reactivate", null)),
+        ];
+
+        foreach ((string path, HttpResponseMessage response) in responses)
+        {
+            await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.NotFound)
+                .Because($"{path} manages a Stripe subscription and has no meaning in a self-hosted deployment");
+        }
+    }
+
+    /// <summary>
+    /// The subscription read endpoint is unguarded on purpose: the web layout fetches it on every
+    /// page load, so a blanket 404 across the billing routes would break the application shell.
+    /// </summary>
+    [Test]
+    public async Task GetBillingSubscription_InSelfHosted_StillReturns200()
+    {
+        using SelfHostedTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId) = await SeedTenantWithSubscription(db, SubscriptionTier.Free);
+
+        HttpClient client = BuildClient(factory, tenantId, userId, UserAccountRoles.Viewer);
 
         HttpResponseMessage response = await client.GetAsync("/api/v1/billing/subscription");
 
@@ -158,7 +254,256 @@ public sealed class SelfHostedEndpointTests
         bool success = root.GetProperty("success").GetBoolean();
         await Assert.That(success).IsTrue();
 
+        // The stored row is still Free; the self-hosted entitlement view reports the synthetic
+        // top tier so the tier checks spread across the endpoints all pass.
         string tier = root.GetProperty("data").GetProperty("tier").GetString()!;
-        await Assert.That(tier).IsEqualTo("Pro");
+        await Assert.That(tier).IsEqualTo("Team");
+    }
+
+    [Test]
+    public async Task EffectiveLimits_InSelfHosted_AreUnlimited()
+    {
+        using SelfHostedTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId) = await SeedTenantWithSubscription(db, SubscriptionTier.Free);
+
+        HttpClient client = BuildClient(factory, tenantId, userId, UserAccountRoles.Viewer);
+
+        HttpResponseMessage response = await client.GetAsync("/api/v1/billing/subscription");
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
+
+        string body = await response.Content.ReadAsStringAsync();
+        using JsonDocument doc = JsonDocument.Parse(body);
+        JsonElement data = doc.RootElement.GetProperty("data");
+
+        await Assert.That(data.GetProperty("machineLimit").GetInt32()).IsEqualTo(int.MaxValue);
+        await Assert.That(data.GetProperty("alertRuleLimit").GetInt32()).IsEqualTo(int.MaxValue);
+        await Assert.That(data.GetProperty("webhookLimit").GetInt32()).IsEqualTo(int.MaxValue);
+
+        // Retention is capped at the widest class the partitioning scheme supports rather than
+        // being unlimited, because there is no unlimited retention class.
+        await Assert.That(data.GetProperty("retentionDays").GetInt32())
+            .IsEqualTo(RetentionClassPolicy.LongWindowDays);
+
+        // The member limit does not travel on this payload, so it is asserted where it lives.
+        using IServiceScope scope = factory.Services.CreateScope();
+        ISubscriptionService subscriptions = scope.ServiceProvider.GetRequiredService<ISubscriptionService>();
+        EffectiveLimits limits = await subscriptions.GetEffectiveLimitsForTenantAsync(tenantId, CancellationToken.None);
+
+        await Assert.That(limits.MemberLimit).IsEqualTo(int.MaxValue);
+    }
+
+    /// <summary>
+    /// Covers both the Team-tier gate and the alert-rule limit predicate: the Free row allows zero
+    /// custom rules, so a delegated limit check would refuse this request.
+    /// </summary>
+    [Test]
+    public async Task AlertRuleCreate_OnFreeRow_Succeeds()
+    {
+        using SelfHostedTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId) = await SeedTenantWithSubscription(db, SubscriptionTier.Free);
+        long machineId = await SeedMachine(db, tenantId);
+        HttpClient client = BuildClient(factory, tenantId, userId);
+
+        HttpResponseMessage response = await client.PostAsJsonAsync("/api/v1/alert-rules", new
+        {
+            Name = "Self hosted CPU rule",
+            Metric = "CpuUsage",
+            Operator = "GreaterThan",
+            Threshold = 90,
+            DurationMinutes = 5,
+            Severity = "Warning",
+            MachineIds = new long[] { machineId },
+        });
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
+        string body = await response.Content.ReadAsStringAsync();
+        await Assert.That(body).Contains("\"success\":true");
+    }
+
+    /// <summary>
+    /// The Free row's webhook limit is zero, so a delegated webhook predicate would refuse this.
+    /// </summary>
+    [Test]
+    public async Task IntegrationCreate_OnFreeRow_Succeeds()
+    {
+        using SelfHostedTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId) = await SeedTenantWithSubscription(db, SubscriptionTier.Free);
+        HttpClient client = BuildClient(factory, tenantId, userId);
+
+        HttpResponseMessage response = await client.PostAsJsonAsync("/api/v1/integrations", new
+        {
+            provider = "Custom",
+            name = "Self hosted webhook",
+            configuration = new Dictionary<string, string>
+            {
+                ["url"] = "https://relay.example.com/webhook"
+            }
+        });
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.Created);
+        string body = await response.Content.ReadAsStringAsync();
+        await Assert.That(body).Contains("\"success\":true");
+    }
+
+    [Test]
+    public async Task MachineAuthorizedKeyAdd_OnFreeRow_Succeeds()
+    {
+        using SelfHostedTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId) = await SeedTenantWithSubscription(db, SubscriptionTier.Free);
+        long machineId = await SeedMachine(db, tenantId);
+        (int signingKeyId, NSec.Cryptography.Key privateKey) = await SeedSigningKey(db, tenantId, userId);
+        privateKey.Dispose();
+
+        HttpClient client = BuildClient(factory, tenantId, userId);
+
+        HttpResponseMessage response = await client.PostAsJsonAsync(
+            $"/api/v1/machines/{machineId}/authorized-keys",
+            new { SigningKeyId = signingKeyId });
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
+        string body = await response.Content.ReadAsStringAsync();
+        await Assert.That(body).Contains("\"success\":true");
+    }
+
+    [Test]
+    public async Task CommandSend_OnFreeRow_Succeeds()
+    {
+        using SelfHostedTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId) = await SeedTenantWithSubscription(db, SubscriptionTier.Free);
+        long machineId = await SeedMachine(db, tenantId);
+        (int signingKeyId, NSec.Cryptography.Key privateKey) = await SeedSigningKey(db, tenantId, userId);
+
+        using (privateKey)
+        {
+            await db.InsertWithInt32IdentityAsync(new MachineAuthorizedKey
+            {
+                MachineId = machineId,
+                SigningKeyId = signingKeyId,
+                TenantId = tenantId,
+                AuthorizedAt = DateTimeOffset.UtcNow,
+                AuthorizedByUserId = userId,
+            });
+
+            IMachinePingService pingService = factory.Services.GetRequiredService<IMachinePingService>();
+            await pingService.SetAgentCapabilitiesAsync(machineId, 1UL);
+
+            HttpClient client = BuildClient(factory, tenantId, userId, UserAccountRoles.MachineAdmin);
+
+            string payload = "{}";
+            byte[] signature = NSec.Cryptography.SignatureAlgorithm.Ed25519.Sign(
+                privateKey, Encoding.UTF8.GetBytes(payload));
+
+            HttpResponseMessage response = await client.PostAsJsonAsync("/api/v1/commands", new
+            {
+                CommandId = Guid.NewGuid().ToString("D"),
+                MachineId = machineId,
+                SigningKeyId = signingKeyId,
+                CommandType = "reboot",
+                Nonce = Guid.NewGuid().ToString("N"),
+                Signature = Convert.ToBase64String(signature),
+                CanonicalPayload = payload,
+                Timestamp = DateTimeOffset.UtcNow,
+                ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(10),
+            });
+
+            await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
+            string body = await response.Content.ReadAsStringAsync();
+            await Assert.That(body).Contains("\"success\":true");
+        }
+    }
+
+    [Test]
+    public async Task AuditLogList_OnFreeRow_Succeeds()
+    {
+        using SelfHostedTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId) = await SeedTenantWithSubscription(db, SubscriptionTier.Free);
+
+        await db.InsertAsync(new AuditLogEntry
+        {
+            TenantId = tenantId,
+            UserId = userId,
+            Action = AuditAction.UserLogin,
+            ResourceType = AuditResourceType.User,
+            Timestamp = DateTimeOffset.UtcNow,
+        });
+
+        HttpClient client = BuildClient(factory, tenantId, userId);
+
+        HttpResponseMessage response = await client.GetAsync("/api/v1/audit-log");
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
+        string body = await response.Content.ReadAsStringAsync();
+        await Assert.That(body).Contains("\"success\":true");
+        await Assert.That(body).Contains("\"totalCount\":1");
+    }
+
+    /// <summary>
+    /// In the hosted deployment every non-Team tier has the invitee's role forced to TenantAdmin.
+    /// A self-hosted deployment has no tiers, so the requested role must survive.
+    /// </summary>
+    [Test]
+    public async Task Invitation_OnFreeRow_SucceedsAndHonoursRequestedRole()
+    {
+        using SelfHostedTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId) = await SeedTenantWithSubscription(db, SubscriptionTier.Free);
+        HttpClient client = BuildClient(factory, tenantId, userId);
+
+        string inviteeEmail = $"invitee-{Guid.NewGuid():N}@example.com";
+
+        HttpResponseMessage response = await client.PostAsJsonAsync("/api/v1/invitations", new
+        {
+            Email = inviteeEmail,
+            Role = "Viewer",
+        });
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
+
+        TenantInvitation? invitation = await db.TenantInvitations
+            .FirstOrDefaultAsync(i => i.Email == inviteeEmail);
+
+        await Assert.That(invitation).IsNotNull();
+        await Assert.That(invitation!.Role).IsEqualTo(UserAccountRoles.Viewer);
+    }
+
+    [Test]
+    public async Task UpdateAdminSettings_InSelfHosted_Succeeds()
+    {
+        using SelfHostedTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId) = await SeedTenantWithSubscription(db, SubscriptionTier.Free, isGlobalAdmin: true);
+
+        await db.InsertAsync(new ServerConfigurationSettings
+        {
+            Key = ServerConfigurationSettingKeys.AgentHeartbeatSeconds,
+            Value = "300",
+            Version = 1,
+        });
+
+        HttpClient client = BuildClient(factory, tenantId, userId, isGlobalAdmin: true);
+
+        StringContent content = new(
+            JsonSerializer.Serialize(new
+            {
+                settings = new[]
+                {
+                    new { key = (int)ServerConfigurationSettingKeys.AgentHeartbeatSeconds, value = "600" }
+                }
+            }),
+            Encoding.UTF8,
+            "application/json");
+
+        HttpResponseMessage response = await client.PutAsync("/api/v1/admin/settings", content);
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
+        string body = await response.Content.ReadAsStringAsync();
+        await Assert.That(body).Contains("\"success\":true");
     }
 }
