@@ -284,7 +284,24 @@ public static class ServiceCollectionExtensions
                 .AddSingleton<ISqlDialect, PostgresSqlDialect>();
 
         services.AddSingleton<ServerConfigurationService>();
-        services.AddScoped<ISubscriptionService, SubscriptionService>();
+
+        // In a self-hosted deployment there are no tiers, so the real service is wrapped by one
+        // that answers every entitlement question permissively. It is registered as a decorator
+        // rather than as a set of branches inside the callers because the entitlement checks are
+        // spread across roughly twenty endpoints, handlers and jobs.
+        services.AddScoped<SubscriptionService>();
+        if (deploymentMode.IsSelfHosted)
+        {
+            services.AddScoped<ISubscriptionService>(sp =>
+                new SelfHostedSubscriptionService(
+                    sp.GetRequiredService<SubscriptionService>(),
+                    sp.GetRequiredService<TimeProvider>()));
+        }
+        else
+        {
+            services.AddScoped<ISubscriptionService>(sp => sp.GetRequiredService<SubscriptionService>());
+        }
+
         services.AddScoped<DowngradeGuardService>();
         services.AddScoped<IDowngradeCleanupService, DowngradeCleanupService>();
         services.AddSingleton<IOidcSecretProtector, OidcSecretProtector>();
