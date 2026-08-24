@@ -7,6 +7,7 @@ using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Server.Endpoints;
 using Framlux.FleetManagement.Server.Endpoints.Web.Billing;
 using Framlux.FleetManagement.Services.Core.Billing;
+using Framlux.FleetManagement.Services.Core.Deployment;
 using Framlux.FleetManagement.Services.Core.Options;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Options;
@@ -23,15 +24,15 @@ public sealed class BillingEndpointGuardsTests
     private const int TenantId = 42;
 
     [Test]
-    public async Task LoadGatedSubscriptionAsync_BillingDisabled_Writes404AndReturnsNull()
+    public async Task LoadGatedSubscriptionAsync_SelfHosted_Writes404AndReturnsNull()
     {
-        BillingStatus billingStatus = new(Options.Create(new BillingOptions { Enabled = false }));
+        DeploymentMode deploymentMode = new(Options.Create(new DeploymentOptions { SelfHosted = true }));
         ISubscriptionService subscriptionService = Substitute.For<ISubscriptionService>();
         DefaultHttpContext httpContext = new();
         httpContext.Response.Body = new MemoryStream();
 
         TenantSubscription? result = await BillingEndpointGuards.LoadGatedSubscriptionAsync(
-            httpContext, billingStatus, subscriptionService, TenantId, CancellationToken.None);
+            httpContext, deploymentMode, subscriptionService, TenantId, CancellationToken.None);
 
         await Assert.That(result).IsNull();
         await Assert.That(httpContext.Response.StatusCode).IsEqualTo(404);
@@ -48,7 +49,7 @@ public sealed class BillingEndpointGuardsTests
     [Test]
     public async Task LoadGatedSubscriptionAsync_NoSubscription_Writes404AndReturnsNull()
     {
-        BillingStatus billingStatus = new(Options.Create(new BillingOptions { Enabled = true }));
+        DeploymentMode deploymentMode = new(Options.Create(new DeploymentOptions { SelfHosted = false }));
         ISubscriptionService subscriptionService = Substitute.For<ISubscriptionService>();
         subscriptionService.GetSubscriptionForTenantAsync(TenantId, Arg.Any<CancellationToken>())
             .Returns((TenantSubscription?)null);
@@ -56,7 +57,7 @@ public sealed class BillingEndpointGuardsTests
         httpContext.Response.Body = new MemoryStream();
 
         TenantSubscription? result = await BillingEndpointGuards.LoadGatedSubscriptionAsync(
-            httpContext, billingStatus, subscriptionService, TenantId, CancellationToken.None);
+            httpContext, deploymentMode, subscriptionService, TenantId, CancellationToken.None);
 
         await Assert.That(result).IsNull();
         await Assert.That(httpContext.Response.StatusCode).IsEqualTo(404);
@@ -71,7 +72,7 @@ public sealed class BillingEndpointGuardsTests
     [Test]
     public async Task LoadGatedSubscriptionAsync_SubscriptionPresent_ReturnsSubscriptionAndWritesNothing()
     {
-        BillingStatus billingStatus = new(Options.Create(new BillingOptions { Enabled = true }));
+        DeploymentMode deploymentMode = new(Options.Create(new DeploymentOptions { SelfHosted = false }));
         TenantSubscription subscription = new()
         {
             Id = 1,
@@ -89,7 +90,7 @@ public sealed class BillingEndpointGuardsTests
         httpContext.Response.Body = responseBody;
 
         TenantSubscription? result = await BillingEndpointGuards.LoadGatedSubscriptionAsync(
-            httpContext, billingStatus, subscriptionService, TenantId, CancellationToken.None);
+            httpContext, deploymentMode, subscriptionService, TenantId, CancellationToken.None);
 
         await Assert.That(result).IsEqualTo(subscription);
         await Assert.That(responseBody.Length).IsEqualTo(0L);

@@ -4,27 +4,28 @@
 
 using FastEndpoints;
 using Framlux.FleetManagement.Server.Auth;
-using Framlux.FleetManagement.Services.Core.Billing;
+using Framlux.FleetManagement.Services.Core.Deployment;
 using Framlux.FleetManagement.Services.Core.Handlers;
 using Framlux.FleetManagement.Services.Core.Infrastructure;
 
 namespace Framlux.FleetManagement.Server.Endpoints.Web.Admin;
 
 /// <summary>
-/// Updates server configuration settings. Only available when billing is disabled.
+/// Updates server configuration settings. Only available in a self-hosted deployment; in SaaS
+/// these settings are managed from the internal admin application.
 /// </summary>
 public sealed class UpdateAdminSettingsEndpoint : Endpoint<UpdateAdminSettingsRequest, ApiResponse<ServerSettingsDto>>
 {
-    private readonly BillingStatus _billingStatus;
+    private readonly DeploymentMode _deploymentMode;
     private readonly AdminHandler _handler;
     private readonly ITenantContext _tenantContext;
 
     /// <summary>
     /// Creates a new instance of the <see cref="UpdateAdminSettingsEndpoint"/> class.
     /// </summary>
-    public UpdateAdminSettingsEndpoint(BillingStatus billingStatus, AdminHandler handler, ITenantContext tenantContext)
+    public UpdateAdminSettingsEndpoint(DeploymentMode deploymentMode, AdminHandler handler, ITenantContext tenantContext)
     {
-        _billingStatus = billingStatus;
+        _deploymentMode = deploymentMode;
         _handler = handler;
         _tenantContext = tenantContext;
     }
@@ -40,7 +41,7 @@ public sealed class UpdateAdminSettingsEndpoint : Endpoint<UpdateAdminSettingsRe
     /// <inheritdoc/>
     public override async Task HandleAsync(UpdateAdminSettingsRequest req, CancellationToken ct)
     {
-        if (_billingStatus.IsEnabled)
+        if (_deploymentMode.IsSaas)
         {
             await HttpContext.SendApiErrorAsync(404, "Endpoint not available when billing is enabled", ct);
 

@@ -12,55 +12,70 @@ namespace Framlux.FleetManagement.Test.Validators;
 /// </summary>
 public sealed class BillingOptionsValidatorTests
 {
-    private readonly BillingOptionsValidator _validator = new();
-
+    /// <summary>
+    /// A certificate without its key would silently fall back to an unauthenticated channel that
+    /// the billing API then rejects, so the pair must be configured together or not at all.
+    /// </summary>
     [Test]
-    public async Task Validate_BillingDisabled_WithEmptyGrpcUrl_Succeeds()
+    public async Task Validate_CertificateWithoutKey_Fails()
     {
-        BillingOptions options = new() { Enabled = false, GrpcUrl = string.Empty };
+        BillingOptions options = new()
+        {
+            GrpcUrl = "https://billing-api.internal:12237",
+            ClientCertificatePath = "/tls/internal-client/tls.crt",
+        };
 
-        ValidateOptionsResult result = _validator.Validate(null, options);
-
-        await Assert.That(result.Succeeded).IsTrue();
-    }
-
-    [Test]
-    public async Task Validate_BillingDisabled_WithGrpcUrl_Succeeds()
-    {
-        BillingOptions options = new() { Enabled = false, GrpcUrl = "http://localhost:5001" };
-
-        ValidateOptionsResult result = _validator.Validate(null, options);
-
-        await Assert.That(result.Succeeded).IsTrue();
-    }
-
-    [Test]
-    public async Task Validate_BillingEnabled_WithGrpcUrl_Succeeds()
-    {
-        BillingOptions options = new() { Enabled = true, GrpcUrl = "http://localhost:5001" };
-
-        ValidateOptionsResult result = _validator.Validate(null, options);
-
-        await Assert.That(result.Succeeded).IsTrue();
-    }
-
-    [Test]
-    public async Task Validate_BillingEnabled_WithEmptyGrpcUrl_Fails()
-    {
-        BillingOptions options = new() { Enabled = true, GrpcUrl = string.Empty };
-
-        ValidateOptionsResult result = _validator.Validate(null, options);
+        ValidateOptionsResult result = new BillingOptionsValidator().Validate(null, options);
 
         await Assert.That(result.Failed).IsTrue();
+        await Assert.That(result.FailureMessage).Contains("ClientCertificateKeyPath");
     }
 
+    /// <summary>
+    /// A key without its certificate is the mirror-image misconfiguration.
+    /// </summary>
     [Test]
-    public async Task Validate_BillingEnabled_WithWhitespaceGrpcUrl_Fails()
+    public async Task Validate_KeyWithoutCertificate_Fails()
     {
-        BillingOptions options = new() { Enabled = true, GrpcUrl = "   " };
+        BillingOptions options = new()
+        {
+            GrpcUrl = "https://billing-api.internal:12237",
+            ClientCertificateKeyPath = "/tls/internal-client/tls.key",
+        };
 
-        ValidateOptionsResult result = _validator.Validate(null, options);
+        ValidateOptionsResult result = new BillingOptionsValidator().Validate(null, options);
 
         await Assert.That(result.Failed).IsTrue();
+        await Assert.That(result.FailureMessage).Contains("ClientCertificatePath");
+    }
+
+    /// <summary>
+    /// Both halves present is the production configuration.
+    /// </summary>
+    [Test]
+    public async Task Validate_CertificateAndKeyTogether_Succeeds()
+    {
+        BillingOptions options = new()
+        {
+            GrpcUrl = "https://billing-api.internal:12237",
+            ClientCertificatePath = "/tls/internal-client/tls.crt",
+            ClientCertificateKeyPath = "/tls/internal-client/tls.key",
+        };
+
+        ValidateOptionsResult result = new BillingOptionsValidator().Validate(null, options);
+
+        await Assert.That(result.Succeeded).IsTrue();
+    }
+
+    /// <summary>
+    /// An empty section is valid on its own; whether a billing endpoint is required is the
+    /// deployment validator's decision, not this one's.
+    /// </summary>
+    [Test]
+    public async Task Validate_EmptyOptions_Succeeds()
+    {
+        ValidateOptionsResult result = new BillingOptionsValidator().Validate(null, new BillingOptions());
+
+        await Assert.That(result.Succeeded).IsTrue();
     }
 }

@@ -23,7 +23,7 @@ public sealed class ApiErrorEnvelopeRegressionTests
     [Test]
     public async Task ErrorResponses_KeepApiResponseEnvelopeShape()
     {
-        using BillingDisabledTestFactory factory = new();
+        using SelfHostedTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
 
         Tenant tenant = new()

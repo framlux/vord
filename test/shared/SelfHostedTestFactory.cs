@@ -8,24 +8,25 @@ using Microsoft.Extensions.Configuration;
 namespace Framlux.FleetManagement.Test.Infrastructure;
 
 /// <summary>
-/// Test factory that forces Billing:Enabled to false, overriding the environment variable
-/// set by FunctionalTestFactory. Used to verify billing endpoints return 404 when billing
-/// is disabled.
+/// Test factory that runs the host as a self-hosted deployment, overriding the hosted default
+/// set by <see cref="FunctionalTestFactory"/>. Used to verify that the billing surfaces are
+/// absent when there is no SaaS control plane behind them.
 /// </summary>
-public sealed class BillingDisabledTestFactory : FunctionalTestFactory
+public sealed class SelfHostedTestFactory : FunctionalTestFactory
 {
     /// <inheritdoc/>
     protected override void ConfigureWebHost(IWebHostBuilder builder)
     {
         base.ConfigureWebHost(builder);
 
-        // Override the Billing:Enabled env var set by the base class.
-        // AddInMemoryCollection added last takes precedence.
+        // Per-host rather than process-global, because tests run in parallel and an environment
+        // variable would race across concurrently constructed hosts. An in-memory collection
+        // added last takes precedence over the environment.
         builder.ConfigureAppConfiguration((_, config) =>
         {
             config.AddInMemoryCollection(new Dictionary<string, string?>
             {
-                ["Billing:Enabled"] = "false"
+                ["Deployment:SelfHosted"] = "true"
             });
         });
     }

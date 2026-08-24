@@ -116,9 +116,15 @@ public class FunctionalTestFactory : WebApplicationFactory<Program>
         Environment.SetEnvironmentVariable("Authentication__Microsoft__ClientId", "test-microsoft-id");
         Environment.SetEnvironmentVariable("Authentication__Microsoft__ClientSecret", "test-microsoft-secret");
 
-        // Enable billing integration for functional tests so billing endpoints and gRPC are mapped
-        Environment.SetEnvironmentVariable("Billing__Enabled", "true");
+        // The functional hosts default to the hosted deployment so the existing suites keep
+        // exercising the gated paths. Self-hosted coverage opts in via its own factory.
+        Environment.SetEnvironmentVariable("Deployment__SelfHosted", "false");
         Environment.SetEnvironmentVariable("Billing__GrpcUrl", "http://localhost:12235");
+
+        // Staged ahead of the email rework. Nothing binds an Email section yet, so these are inert
+        // until that work lands, at which point the hosted host refuses to start without them.
+        Environment.SetEnvironmentVariable("Email__FromEmail", "Framlux Vord <invitations@test.invalid>");
+        Environment.SetEnvironmentVariable("Email__Resend__ApiKey", "re_functional_test");
 
         _dbConnection = new SqliteConnection("Data Source=:memory:");
         _dbConnection.Open();

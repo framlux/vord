@@ -8,6 +8,7 @@ using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Server.Auth;
 using Framlux.FleetManagement.Services.Core.Billing;
+using Framlux.FleetManagement.Services.Core.Deployment;
 using Framlux.FleetManagement.Services.Core.Infrastructure;
 
 namespace Framlux.FleetManagement.Server.Endpoints.Web.Billing;
@@ -18,7 +19,7 @@ namespace Framlux.FleetManagement.Server.Endpoints.Web.Billing;
 /// </summary>
 public sealed class ReactivateSubscriptionEndpoint : EndpointWithoutRequest<ApiResponse<object>>
 {
-    private readonly BillingStatus _billingStatus;
+    private readonly DeploymentMode _deploymentMode;
     private readonly IDatabaseTransactionProvider _transactionProvider;
     private readonly IAuditLogRepository _auditLog;
     private readonly ISubscriptionRepository _subscriptionRepository;
@@ -31,7 +32,7 @@ public sealed class ReactivateSubscriptionEndpoint : EndpointWithoutRequest<ApiR
     /// Creates a new instance of the <see cref="ReactivateSubscriptionEndpoint"/> class.
     /// </summary>
     public ReactivateSubscriptionEndpoint(
-        BillingStatus billingStatus,
+        DeploymentMode deploymentMode,
         IDatabaseTransactionProvider transactionProvider,
         IAuditLogRepository auditLog,
         ISubscriptionRepository subscriptionRepository,
@@ -40,7 +41,7 @@ public sealed class ReactivateSubscriptionEndpoint : EndpointWithoutRequest<ApiR
         RetentionReclassifyDispatcher reclassifyDispatcher,
         ILogger<ReactivateSubscriptionEndpoint> logger)
     {
-        _billingStatus = billingStatus;
+        _deploymentMode = deploymentMode;
         _transactionProvider = transactionProvider;
         _auditLog = auditLog;
         _subscriptionRepository = subscriptionRepository;
@@ -65,7 +66,7 @@ public sealed class ReactivateSubscriptionEndpoint : EndpointWithoutRequest<ApiR
         int tenantId = _tenantContext.RequireTenantId();
 
         TenantSubscription? subscription = await BillingEndpointGuards.LoadGatedSubscriptionAsync(
-            HttpContext, _billingStatus, _subscriptionService, tenantId, ct);
+            HttpContext, _deploymentMode, _subscriptionService, tenantId, ct);
         if (subscription is null)
         {
             return;

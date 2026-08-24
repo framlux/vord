@@ -4,6 +4,7 @@
 
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Services.Core.Billing;
+using Framlux.FleetManagement.Services.Core.Deployment;
 using Microsoft.AspNetCore.Http;
 
 namespace Framlux.FleetManagement.Server.Endpoints.Web.Billing;
@@ -20,12 +21,12 @@ internal static class BillingEndpointGuards
     /// </summary>
     internal static async Task<TenantSubscription?> LoadGatedSubscriptionAsync(
         HttpContext httpContext,
-        BillingStatus billingStatus,
+        DeploymentMode deploymentMode,
         ISubscriptionService subscriptionService,
         int tenantId,
         CancellationToken ct)
     {
-        if (billingStatus.IsEnabled == false)
+        if (deploymentMode.IsSaas == false)
         {
             await httpContext.SendApiErrorAsync(404, "Billing is not enabled", ct);
 

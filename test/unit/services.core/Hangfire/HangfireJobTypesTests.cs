@@ -54,7 +54,7 @@ public sealed class HangfireJobTypesTests
     {
         ServiceCollection services = new();
 
-        services.AddHangfireJobTypes(billingEnabled: true, objectStorageEnabled: true);
+        services.AddHangfireJobTypes(isSaas: true, objectStorageEnabled: true);
 
         await Assert.That(IsRegistered<RemoteCommandExpiryJob>(services)).IsTrue();
         await Assert.That(IsRegistered<PartitionManagementJob>(services)).IsTrue();
@@ -74,7 +74,7 @@ public sealed class HangfireJobTypesTests
     {
         ServiceCollection services = new();
 
-        services.AddHangfireJobTypes(billingEnabled: true, objectStorageEnabled: true);
+        services.AddHangfireJobTypes(isSaas: true, objectStorageEnabled: true);
 
         await Assert.That(GetLifetime<RemoteCommandExpiryJob>(services)).IsEqualTo(ServiceLifetime.Scoped);
         await Assert.That(GetLifetime<PartitionManagementJob>(services)).IsEqualTo(ServiceLifetime.Scoped);
@@ -94,7 +94,7 @@ public sealed class HangfireJobTypesTests
     {
         ServiceCollection services = new();
 
-        services.AddHangfireJobTypes(billingEnabled: true, objectStorageEnabled: false);
+        services.AddHangfireJobTypes(isSaas: true, objectStorageEnabled: false);
 
         await Assert.That(IsRegistered<DataExportProcessingJob>(services)).IsFalse();
         await Assert.That(IsRegistered<DataExportCleanupJob>(services)).IsFalse();
@@ -105,7 +105,7 @@ public sealed class HangfireJobTypesTests
     {
         ServiceCollection services = new();
 
-        services.AddHangfireJobTypes(billingEnabled: false, objectStorageEnabled: true);
+        services.AddHangfireJobTypes(isSaas: false, objectStorageEnabled: true);
 
         await Assert.That(IsRegistered<StripeSyncJob>(services)).IsFalse();
     }

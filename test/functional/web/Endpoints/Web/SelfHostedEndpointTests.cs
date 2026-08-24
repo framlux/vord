@@ -15,10 +15,10 @@ using LinqToDB.Async;
 namespace Framlux.FleetManagement.FunctionalTest.Endpoints.Web;
 
 /// <summary>
-/// Verifies that billing management endpoints return 404 when Billing:Enabled is false.
-/// The subscription read endpoint should remain accessible regardless of billing status.
+/// Verifies that billing management endpoints return 404 in a self-hosted deployment.
+/// The subscription read endpoint should remain accessible regardless of deployment mode.
 /// </summary>
-public sealed class BillingDisabledEndpointTests
+public sealed class SelfHostedEndpointTests
 {
     private static async Task<(int TenantId, int UserId)> SeedTenantWithSubscription(DatabaseContext db)
     {
@@ -69,7 +69,7 @@ public sealed class BillingDisabledEndpointTests
         return (tenant.Id, user.Id);
     }
 
-    private static HttpClient BuildClient(BillingDisabledTestFactory factory, int tenantId, int userId)
+    private static HttpClient BuildClient(SelfHostedTestFactory factory, int tenantId, int userId)
     {
         return new AuthenticatedClientBuilder(factory)
             .WithUserId(userId)
@@ -81,7 +81,7 @@ public sealed class BillingDisabledEndpointTests
     [Test]
     public async Task CancelSubscription_WhenBillingDisabled_Returns404()
     {
-        using BillingDisabledTestFactory factory = new();
+        using SelfHostedTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
         (int tenantId, int userId) = await SeedTenantWithSubscription(db);
         HttpClient client = BuildClient(factory, tenantId, userId);
@@ -94,7 +94,7 @@ public sealed class BillingDisabledEndpointTests
     [Test]
     public async Task DowngradeSubscription_WhenBillingDisabled_Returns404()
     {
-        using BillingDisabledTestFactory factory = new();
+        using SelfHostedTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
         (int tenantId, int userId) = await SeedTenantWithSubscription(db);
         HttpClient client = BuildClient(factory, tenantId, userId);
@@ -111,7 +111,7 @@ public sealed class BillingDisabledEndpointTests
     [Test]
     public async Task ResumeSubscription_WhenBillingDisabled_Returns404()
     {
-        using BillingDisabledTestFactory factory = new();
+        using SelfHostedTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
         (int tenantId, int userId) = await SeedTenantWithSubscription(db);
         HttpClient client = BuildClient(factory, tenantId, userId);
@@ -124,7 +124,7 @@ public sealed class BillingDisabledEndpointTests
     [Test]
     public async Task ReactivateSubscription_WhenBillingDisabled_Returns404()
     {
-        using BillingDisabledTestFactory factory = new();
+        using SelfHostedTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
         (int tenantId, int userId) = await SeedTenantWithSubscription(db);
         HttpClient client = BuildClient(factory, tenantId, userId);
@@ -137,7 +137,7 @@ public sealed class BillingDisabledEndpointTests
     [Test]
     public async Task GetSubscription_WhenBillingDisabled_StillReturnsOk()
     {
-        using BillingDisabledTestFactory factory = new();
+        using SelfHostedTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
         (int tenantId, int userId) = await SeedTenantWithSubscription(db);
 

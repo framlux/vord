@@ -11,6 +11,7 @@ using Framlux.FleetManagement.Server.Endpoints.Web;
 using Framlux.FleetManagement.Server.Endpoints.Web.Machines.History;
 using Framlux.FleetManagement.Server.Options;
 using Framlux.FleetManagement.Server.Startup;
+using Framlux.FleetManagement.Services.Core.Deployment;
 using Framlux.FleetManagement.Services.Core.Extensions;
 using Framlux.FleetManagement.Services.Core.Hangfire;
 using Framlux.FleetManagement.Services.Core.Infrastructure;
@@ -97,12 +98,15 @@ string? redisPassword = StackExchange.Redis.ConfigurationOptions.Parse(redisOpts
 ProductionSecretsGuard.Validate(builder.Environment.EnvironmentName, dbOpts.Password, redisPassword);
 BillingOptions billingOpts = builder.Configuration.GetSection("Billing").Get<BillingOptions>() ?? new();
 ObjectStorageOptions objectStorageOpts = builder.Configuration.GetSection("ObjectStorage").Get<ObjectStorageOptions>() ?? new();
+DeploymentOptions deploymentOpts = builder.Configuration.GetSection("Deployment").Get<DeploymentOptions>() ?? new();
+DeploymentMode deploymentMode = new(Microsoft.Extensions.Options.Options.Create(deploymentOpts));
 
-// The internal billing/admin gRPC services listen on their own mutual-TLS port. The agent port
-// keeps its existing plain-text configuration — agents authenticate with an API key and have no
-// client certificate, so requiring one there would refuse every machine in the fleet.
+// The internal billing and admin gRPC services listen on their own mutual-TLS port, and only in
+// the hosted deployment. The agent port keeps its existing plain-text configuration — agents
+// authenticate with an API key and have no client certificate, so requiring one there would
+// refuse every machine in the fleet.
 InternalGrpcOptions internalGrpcOpts = builder.Configuration.GetSection("InternalGrpc").Get<InternalGrpcOptions>() ?? new();
-bool internalGrpcListenerEnabled = billingOpts.Enabled && internalGrpcOpts.Enabled;
+bool internalGrpcListenerEnabled = deploymentMode.IsSaas && internalGrpcOpts.Enabled;
 if (internalGrpcListenerEnabled)
 {
     builder.WebHost.ConfigureKestrel(options => InternalGrpcEndpoint.Configure(options, internalGrpcOpts));
@@ -280,14 +284,14 @@ builder.Services.AddAuthorization(options =>
 string connectionString = ServiceCollectionExtensions.BuildConnectionString(dbOpts, "Framlux.FleetManagement.ApiServer");
 builder.Services.AddRepositories(dbOpts, "Framlux.FleetManagement.ApiServer");
 builder.Services.AddCoreInfrastructure(redisOpts, connectionString);
-builder.Services.AddCoreServices(billingOpts, objectStorageOpts);
+builder.Services.AddCoreServices(deploymentMode, objectStorageOpts, billingOpts);
 
 // Register Hangfire job-type concrete classes in the server too, not just the worker.
 // The server enqueues these jobs (e.g. RequestDataExportEndpoint -> DataExportProcessingJob);
 // without DI registration here, Hangfire's activator would fall back to Activator.CreateInstance
 // — fragile against future scoped-dependency additions. Feature gating mirrors the worker.
 builder.Services.AddHangfireJobTypes(
-    billingEnabled: billingOpts.Enabled,
+    isSaas: deploymentMode.IsSaas,
     objectStorageEnabled: string.IsNullOrEmpty(objectStorageOpts.BucketName) == false);
 
 // Server-specific handler registrations (have Auth dependencies that stay in server)
@@ -473,7 +477,7 @@ app.MapGrpcService<ConfigurationService>()
     .RequireAuthorization(ApiKeyAuthenticationHandler.SchemeName);
 app.MapGrpcService<TelemetryService>()
     .RequireAuthorization(ApiKeyAuthenticationHandler.SchemeName);
-if (billingOpts.Enabled)
+if (deploymentMode.IsSaas)
 {
     // AllowAnonymous only bypasses the agent API-key scheme. Both services authorise their
     // caller on the client-certificate subject via IInternalCallerAuthorizer, which no caller on

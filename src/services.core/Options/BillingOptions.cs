@@ -5,15 +5,11 @@
 namespace Framlux.FleetManagement.Services.Core.Options;
 
 /// <summary>
-/// Configuration options for Stripe billing integration.
+/// Configuration options for reaching the SaaS billing API. Ignored entirely when
+/// Deployment:SelfHosted is true.
 /// </summary>
 public sealed class BillingOptions
 {
-    /// <summary>
-    /// Whether billing is enabled for this deployment.
-    /// </summary>
-    public bool Enabled { get; set; }
-
     /// <summary>
     /// The gRPC URL for the billing API service.
     /// </summary>

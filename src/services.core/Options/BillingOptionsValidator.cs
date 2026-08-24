@@ -7,8 +7,8 @@ using Microsoft.Extensions.Options;
 namespace Framlux.FleetManagement.Services.Core.Options;
 
 /// <summary>
-/// Validates <see cref="BillingOptions"/> configuration.
-/// When billing is enabled, the gRPC URL must be provided.
+/// Validates <see cref="BillingOptions"/> configuration. Whether a billing endpoint is required
+/// at all is decided by <see cref="DeploymentOptionsValidator"/>, which knows the deployment mode.
 /// </summary>
 public sealed class BillingOptionsValidator : IValidateOptions<BillingOptions>
 {
@@ -16,11 +16,6 @@ public sealed class BillingOptionsValidator : IValidateOptions<BillingOptions>
     public ValidateOptionsResult Validate(string? name, BillingOptions options)
     {
         ArgumentNullException.ThrowIfNull(options);
-
-        if (options.Enabled && string.IsNullOrWhiteSpace(options.GrpcUrl))
-        {
-            return ValidateOptionsResult.Fail("Billing:GrpcUrl is required when Billing:Enabled is true.");
-        }
 
         // A client certificate is useless without its key, and configuring one without the other
         // would silently fall back to an unauthenticated channel the billing API then rejects.

@@ -152,7 +152,7 @@ public sealed class BillingCatalogEndpointTests
     public async Task Catalog_BillingDisabled_ReturnsOkWithEmptyList()
     {
         // Billing-disabled installs must get an empty catalog (UI hides pricing), not a 404
-        using BillingDisabledTestFactory factory = new();
+        using SelfHostedTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
         (int tenantId, int userId) = await SeedTenantAndUser(db, SubscriptionTier.Free);
         HttpClient client = BuildViewerClient(factory, tenantId, userId);

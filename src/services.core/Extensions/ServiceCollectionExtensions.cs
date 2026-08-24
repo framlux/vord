@@ -272,9 +272,12 @@ public static class ServiceCollectionExtensions
     /// </summary>
     public static IServiceCollection AddCoreServices(
         this IServiceCollection services,
-        BillingOptions billingOpts,
-        ObjectStorageOptions objectStorageOpts)
+        DeploymentMode deploymentMode,
+        ObjectStorageOptions objectStorageOpts,
+        BillingOptions billingOpts)
     {
+        ArgumentNullException.ThrowIfNull(deploymentMode);
+
         services.AddSingleton<IMachineService, MachineService>()
                 .AddSingleton<IMachineStateService, MachineStateService>()
                 .AddSingleton<MachineSearchService>()
@@ -330,10 +333,8 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IAlertDeliveryService, AlertDeliveryService>();
         services.AddSingleton<IEventAlertService, EventAlertService>();
 
-        // Billing configuration: explicit opt-in via Billing:Enabled flag
-        services.AddSingleton<BillingStatus>();
-
-        if (billingOpts.Enabled)
+        // Billing is reachable only in the hosted deployment.
+        if (deploymentMode.IsSaas)
         {
             // Billing gRPC client for managing Stripe subscriptions
             IHttpClientBuilder billingGrpcClient = services.AddGrpcClient<BillingManagement.BillingManagementClient>(options =>
@@ -373,11 +374,11 @@ public static class ServiceCollectionExtensions
     /// disabled features do not register their job classes.
     /// </summary>
     /// <param name="services">The service collection.</param>
-    /// <param name="billingEnabled">Whether the Billing feature is enabled.</param>
+    /// <param name="isSaas">Whether this process is running as the hosted SaaS deployment.</param>
     /// <param name="objectStorageEnabled">Whether object-storage (data export) is enabled.</param>
     public static IServiceCollection AddHangfireJobTypes(
         this IServiceCollection services,
-        bool billingEnabled,
+        bool isSaas,
         bool objectStorageEnabled)
     {
         ArgumentNullException.ThrowIfNull(services);
@@ -400,7 +401,7 @@ public static class ServiceCollectionExtensions
             services.AddScoped<DataExportCleanupJob>();
         }
 
-        if (billingEnabled)
+        if (isSaas)
         {
             services.AddScoped<StripeSyncJob>();
         }
@@ -415,7 +416,7 @@ public static class ServiceCollectionExtensions
     /// </summary>
     public static IServiceCollection AddBackgroundWorkers(
         this IServiceCollection services,
-        BillingOptions billingOpts,
+        bool isSaas,
         ObjectStorageOptions objectStorageOpts,
         IConfiguration configuration)
     {
@@ -447,7 +448,7 @@ public static class ServiceCollectionExtensions
         }
 
         services.AddHangfireJobTypes(
-            billingEnabled: billingOpts.Enabled,
+            isSaas: isSaas,
             objectStorageEnabled: string.IsNullOrEmpty(objectStorageOpts.BucketName) == false);
 
         return services;

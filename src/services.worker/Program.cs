@@ -2,6 +2,7 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
+using Framlux.FleetManagement.Services.Core.Deployment;
 using Framlux.FleetManagement.Services.Core.Extensions;
 using Framlux.FleetManagement.Services.Core.Hangfire;
 using Framlux.FleetManagement.Services.Core.Infrastructure;
@@ -39,6 +40,8 @@ RedisOptions redisOpts = builder.Configuration.GetSection("Redis").Get<RedisOpti
     ?? throw new InvalidOperationException("Redis configuration section is missing.");
 BillingOptions billingOpts = builder.Configuration.GetSection("Billing").Get<BillingOptions>() ?? new();
 ObjectStorageOptions objectStorageOpts = builder.Configuration.GetSection("ObjectStorage").Get<ObjectStorageOptions>() ?? new();
+DeploymentOptions deploymentOpts = builder.Configuration.GetSection("Deployment").Get<DeploymentOptions>() ?? new();
+DeploymentMode deploymentMode = new(Microsoft.Extensions.Options.Options.Create(deploymentOpts));
 
 // Shared infrastructure: database, repositories, Redis, Polly, health checks
 string connectionString = ServiceCollectionExtensions.BuildConnectionString(dbOpts, "Framlux.FleetManagement.ServicesWorker");
@@ -50,10 +53,10 @@ builder.Services.AddCoreInfrastructure(redisOpts, connectionString);
 // CustomPayloadFormatter) when running scheduled jobs, so the protector purposes must resolve to
 // the same key material in both processes.
 builder.Services.AddCoreDataProtection("Framlux.FleetManagement.Web");
-builder.Services.AddCoreServices(billingOpts, objectStorageOpts);
+builder.Services.AddCoreServices(deploymentMode, objectStorageOpts, billingOpts);
 
 // Background workers — the primary purpose of this process
-builder.Services.AddBackgroundWorkers(billingOpts, objectStorageOpts, builder.Configuration);
+builder.Services.AddBackgroundWorkers(deploymentMode.IsSaas, objectStorageOpts, builder.Configuration);
 
 // Gate worker startup on Hangfire schema readiness. migration-runner installs the
 // hangfire schema and depends_on:service_healthy provides the ordering in compose/ArgoCD,
@@ -77,7 +80,7 @@ using (IServiceScope startupScope = app.Services.CreateScope())
     IRecurringJobManager recurringJobs = startupScope.ServiceProvider.GetRequiredService<IRecurringJobManager>();
     RecurringJobRegistry.RegisterAll(
         recurringJobs,
-        billingEnabled: billingOpts.Enabled,
+        isSaas: deploymentMode.IsSaas,
         objectStorageEnabled: string.IsNullOrEmpty(objectStorageOpts.BucketName) == false);
 }
 

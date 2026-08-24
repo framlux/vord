@@ -81,7 +81,7 @@ public sealed class AdminSettingsEndpointTests
     [Test]
     public async Task GetSettings_AsGlobalAdmin_ReturnsSettingsWithNameAndDescription()
     {
-        using BillingDisabledTestFactory factory = new();
+        using SelfHostedTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
         (int tenantId, int userId) = await SeedGlobalAdmin(db);
 
@@ -116,7 +116,7 @@ public sealed class AdminSettingsEndpointTests
     [Test]
     public async Task UpdateSettings_WhenBillingDisabled_UpdatesAndReturnsNewValues()
     {
-        using BillingDisabledTestFactory factory = new();
+        using SelfHostedTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
         (int tenantId, int userId) = await SeedGlobalAdmin(db);
 
@@ -181,7 +181,7 @@ public sealed class AdminSettingsEndpointTests
     [Test]
     public async Task UpdateSettings_AsNonAdmin_Returns403()
     {
-        using BillingDisabledTestFactory factory = new();
+        using SelfHostedTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
         (int tenantId, int userId) = await SeedGlobalAdmin(db);
 
@@ -208,7 +208,7 @@ public sealed class AdminSettingsEndpointTests
     [Test]
     public async Task UpdateSettings_InvalidKey_Returns400()
     {
-        using BillingDisabledTestFactory factory = new();
+        using SelfHostedTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
         (int tenantId, int userId) = await SeedGlobalAdmin(db);
         HttpClient client = BuildGlobalAdminClient(factory, tenantId, userId);
@@ -230,7 +230,7 @@ public sealed class AdminSettingsEndpointTests
     [Test]
     public async Task UpdateSettings_ReflectedInSubsequentGet()
     {
-        using BillingDisabledTestFactory factory = new();
+        using SelfHostedTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
         (int tenantId, int userId) = await SeedGlobalAdmin(db);
 
@@ -266,7 +266,7 @@ public sealed class AdminSettingsEndpointTests
     [Test]
     public async Task UpdateSettings_WhenBillingDisabled_WritesExactlyOneAuditLogEntry()
     {
-        using BillingDisabledTestFactory factory = new();
+        using SelfHostedTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
         (int tenantId, int userId) = await SeedGlobalAdmin(db);
 

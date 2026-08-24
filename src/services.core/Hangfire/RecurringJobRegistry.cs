@@ -25,9 +25,9 @@ public static class RecurringJobRegistry
     /// previously-registered schedule doesn't fire after the feature is turned off.
     /// </summary>
     /// <param name="recurringJobs">The Hangfire recurring job manager.</param>
-    /// <param name="billingEnabled">Whether billing-related jobs should be registered.</param>
+    /// <param name="isSaas">Whether this process is running as the hosted SaaS deployment.</param>
     /// <param name="objectStorageEnabled">Whether object-storage-dependent jobs should be registered.</param>
-    public static void RegisterAll(IRecurringJobManager recurringJobs, bool billingEnabled, bool objectStorageEnabled)
+    public static void RegisterAll(IRecurringJobManager recurringJobs, bool isSaas, bool objectStorageEnabled)
     {
         ArgumentNullException.ThrowIfNull(recurringJobs);
 
@@ -70,7 +70,7 @@ public static class RecurringJobRegistry
             job => job.RunAsync(CancellationToken.None),
             "23 * * * *");
 
-        if (billingEnabled)
+        if (isSaas)
         {
             recurringJobs.AddOrUpdate<StripeSyncJob>(
                 RecurringJobIds.StripeSync,

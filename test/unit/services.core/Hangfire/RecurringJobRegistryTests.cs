@@ -27,7 +27,7 @@ public sealed class RecurringJobRegistryTests
         // catches both renames and schedule drift.
         IRecurringJobManager mgr = Substitute.For<IRecurringJobManager>();
 
-        RecurringJobRegistry.RegisterAll(mgr, billingEnabled: false, objectStorageEnabled: false);
+        RecurringJobRegistry.RegisterAll(mgr, isSaas: false, objectStorageEnabled: false);
 
         await Assert.That(() =>
         {
@@ -41,13 +41,13 @@ public sealed class RecurringJobRegistryTests
     }
 
     [Test]
-    public async Task RegisterAll_BillingEnabled_AddsStripeSync()
+    public async Task RegisterAll_Saas_AddsStripeSync()
     {
         // Intent: when billing is enabled the billing-tier recurring job must be scheduled with its
         // exact cron expression and the registry must NOT also remove it in the same call.
         IRecurringJobManager mgr = Substitute.For<IRecurringJobManager>();
 
-        RecurringJobRegistry.RegisterAll(mgr, billingEnabled: true, objectStorageEnabled: false);
+        RecurringJobRegistry.RegisterAll(mgr, isSaas: true, objectStorageEnabled: false);
 
         await Assert.That(() =>
         {
@@ -57,13 +57,13 @@ public sealed class RecurringJobRegistryTests
     }
 
     [Test]
-    public async Task RegisterAll_BillingDisabled_RemovesBillingJobs()
+    public async Task RegisterAll_SelfHosted_RemovesBillingJobs()
     {
         // Intent: a previously registered billing job must be torn down when the feature flag is
         // off so it can no longer fire after the tenant disables billing.
         IRecurringJobManager mgr = Substitute.For<IRecurringJobManager>();
 
-        RecurringJobRegistry.RegisterAll(mgr, billingEnabled: false, objectStorageEnabled: false);
+        RecurringJobRegistry.RegisterAll(mgr, isSaas: false, objectStorageEnabled: false);
 
         await Assert.That(() =>
         {
@@ -79,7 +79,7 @@ public sealed class RecurringJobRegistryTests
         // enabled both the processing tick and the cleanup sweep must be scheduled.
         IRecurringJobManager mgr = Substitute.For<IRecurringJobManager>();
 
-        RecurringJobRegistry.RegisterAll(mgr, billingEnabled: false, objectStorageEnabled: true);
+        RecurringJobRegistry.RegisterAll(mgr, isSaas: false, objectStorageEnabled: true);
 
         await Assert.That(() =>
         {
@@ -97,7 +97,7 @@ public sealed class RecurringJobRegistryTests
         // jobs must be removed so they cannot fail repeatedly against missing storage.
         IRecurringJobManager mgr = Substitute.For<IRecurringJobManager>();
 
-        RecurringJobRegistry.RegisterAll(mgr, billingEnabled: false, objectStorageEnabled: false);
+        RecurringJobRegistry.RegisterAll(mgr, isSaas: false, objectStorageEnabled: false);
 
         await Assert.That(() =>
         {
@@ -116,7 +116,7 @@ public sealed class RecurringJobRegistryTests
         // forgotten test update during code review rather than after deployment.
         IRecurringJobManager mgr = Substitute.For<IRecurringJobManager>();
 
-        RecurringJobRegistry.RegisterAll(mgr, billingEnabled: true, objectStorageEnabled: true);
+        RecurringJobRegistry.RegisterAll(mgr, isSaas: true, objectStorageEnabled: true);
 
         await Assert.That(() =>
         {

@@ -33,7 +33,7 @@ public sealed class FleetAdminServiceTests
     [Test]
     public async Task FleetAdmin_BillingDisabled_ServiceNotMapped()
     {
-        using BillingDisabledTestFactory factory = new();
+        using SelfHostedTestFactory factory = new();
         HttpClient httpClient = factory.CreateClient();
 
         // Send a raw HTTP POST to the gRPC endpoint path to verify the service is not mapped

@@ -8,6 +8,7 @@ using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Server.Auth;
 using Framlux.FleetManagement.Services.Core.Billing;
+using Framlux.FleetManagement.Services.Core.Deployment;
 using Framlux.FleetManagement.Services.Core.Infrastructure;
 
 namespace Framlux.FleetManagement.Server.Endpoints.Web.Billing;
@@ -18,7 +19,7 @@ namespace Framlux.FleetManagement.Server.Endpoints.Web.Billing;
 /// </summary>
 public sealed class ResumeSubscriptionEndpoint : EndpointWithoutRequest<ApiResponse<object>>
 {
-    private readonly BillingStatus _billingStatus;
+    private readonly DeploymentMode _deploymentMode;
     private readonly IAuditLogRepository _auditLog;
     private readonly ITenantRepository _tenantRepository;
     private readonly ISubscriptionService _subscriptionService;
@@ -30,7 +31,7 @@ public sealed class ResumeSubscriptionEndpoint : EndpointWithoutRequest<ApiRespo
     /// Creates a new instance of the <see cref="ResumeSubscriptionEndpoint"/> class.
     /// </summary>
     public ResumeSubscriptionEndpoint(
-        BillingStatus billingStatus,
+        DeploymentMode deploymentMode,
         IAuditLogRepository auditLog,
         ITenantRepository tenantRepository,
         ISubscriptionService subscriptionService,
@@ -38,7 +39,7 @@ public sealed class ResumeSubscriptionEndpoint : EndpointWithoutRequest<ApiRespo
         IBillingApiClient billingApiClient,
         ILogger<ResumeSubscriptionEndpoint> logger)
     {
-        _billingStatus = billingStatus;
+        _deploymentMode = deploymentMode;
         _auditLog = auditLog;
         _tenantRepository = tenantRepository;
         _subscriptionService = subscriptionService;
@@ -62,7 +63,7 @@ public sealed class ResumeSubscriptionEndpoint : EndpointWithoutRequest<ApiRespo
         int tenantId = _tenantContext.RequireTenantId();
 
         TenantSubscription? subscription = await BillingEndpointGuards.LoadGatedSubscriptionAsync(
-            HttpContext, _billingStatus, _subscriptionService, tenantId, ct);
+            HttpContext, _deploymentMode, _subscriptionService, tenantId, ct);
         if (subscription is null)
         {
             return;
