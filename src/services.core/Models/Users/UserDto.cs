@@ -64,6 +64,12 @@ public sealed class UserDto
     public string? CsrfToken { get; set; }
 
     /// <summary>
+    /// Deployment facts for the client. Not a property of the user; it travels on this payload
+    /// because it is the response the web application already fetches and caches per session.
+    /// </summary>
+    public DeploymentDto Deployment { get; set; } = new();
+
+    /// <summary>
     /// Helper to map from a <see cref="ClaimsPrincipal"/>.
     /// </summary>
     public static UserDto FromPrincipal(ClaimsPrincipal user, ILogger logger)

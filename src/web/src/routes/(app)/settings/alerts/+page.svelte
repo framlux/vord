@@ -14,6 +14,10 @@
 
 	let { data } = $props();
 
+	// A self-hosted deployment has no rule quota, so the usage counter would only ever report a
+	// meaningless ceiling.
+	const selfHosted: boolean = $derived(data.user?.deployment?.selfHosted === true);
+
 	const rules: AlertRuleDto[] | null = $derived(data.rules);
 	const events: PaginatedResponse<AlertEventDto> | null = $derived(data.events);
 	const integrations: IntegrationEndpointDto[] | null = $derived(data.integrations);
@@ -213,7 +217,7 @@
 				<div class="flex items-center justify-between">
 					<div class="flex items-center gap-3">
 						<h2 class="text-lg font-semibold text-surface-900 dark:text-surface-50">Alert Rules</h2>
-						{#if data.subscription?.alertRuleLimit !== null && data.subscription?.alertRuleLimit !== undefined}
+						{#if selfHosted === false && data.subscription?.alertRuleLimit !== null && data.subscription?.alertRuleLimit !== undefined}
 							<span class="text-sm text-surface-500 dark:text-surface-400">
 								{data.subscription.alertRuleCount} of {data.subscription.alertRuleLimit} rules used
 							</span>
@@ -226,7 +230,7 @@
 					</div>
 					<button
 						onclick={() => { showCreateRule = !showCreateRule; rulesError = null; }}
-						disabled={data.subscription?.alertRuleLimit !== null && data.subscription?.alertRuleLimit !== undefined && data.subscription.alertRuleCount >= data.subscription.alertRuleLimit}
+						disabled={selfHosted === false && data.subscription?.alertRuleLimit !== null && data.subscription?.alertRuleLimit !== undefined && data.subscription.alertRuleCount >= data.subscription.alertRuleLimit}
 						class="flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-primary-700 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-primary-500 dark:hover:bg-primary-600"
 					>
 						<Plus class="h-4 w-4" />

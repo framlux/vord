@@ -58,6 +58,9 @@ export interface UserDto {
 	tenants: UserTenantDto[];
 	activeTenantId: number | null;
 	csrfToken?: string | null;
+	// Optional because a freshly deployed web container can briefly talk to an older api-server
+	// that does not send it. An absent value must be read as the hosted product.
+	deployment?: { selfHosted: boolean };
 }
 
 export interface UserTenantDto {

@@ -104,6 +104,22 @@ describe('OrgSwitcher', () => {
 
             expect(screen.queryByText(/Plan$/)).not.toBeInTheDocument();
         });
+
+        it('should not display plan tier in a self-hosted deployment', () => {
+            const user = makeUser({ deployment: { selfHosted: true } });
+            const subscription = makeSubscription({ tier: 'Team' });
+            render(OrgSwitcher, { props: { user, subscription } });
+
+            expect(screen.queryByText(/Plan$/)).not.toBeInTheDocument();
+        });
+
+        it('should display plan tier when the server omits the deployment field', () => {
+            const user = makeUser({ deployment: undefined });
+            const subscription = makeSubscription({ tier: 'Pro' });
+            render(OrgSwitcher, { props: { user, subscription } });
+
+            expect(screen.getByText('Pro Plan')).toBeInTheDocument();
+        });
     });
 
     describe('multi-tenant', () => {

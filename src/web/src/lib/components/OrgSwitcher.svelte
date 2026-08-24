@@ -9,6 +9,9 @@
 
     let { user, subscription = null }: { user: UserDto; subscription?: SubscriptionDto | null } = $props();
 
+    // A self-hosted deployment has no subscription tiers, so there is no plan to name.
+    const selfHosted = $derived(user.deployment?.selfHosted === true);
+
     let open = $state(false);
     let switching = $state(false);
 
@@ -86,7 +89,7 @@
             <div class="truncate text-[13px] font-semibold text-surface-900 dark:text-surface-50">
                 {activeTenant?.tenantName ?? 'No Organization'}
             </div>
-            {#if subscription?.tier}
+            {#if subscription?.tier && (selfHosted === false)}
                 <div class="text-[11px] text-surface-500 dark:text-surface-400">
                     {tierLabel(subscription.tier)} Plan
                 </div>

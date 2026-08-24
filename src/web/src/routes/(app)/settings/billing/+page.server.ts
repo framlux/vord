@@ -25,6 +25,12 @@ export const load: PageServerLoad = async ({ fetch, cookies, locals }) => {
 		error(403, 'Access denied');
 	}
 
+	// A self-hosted deployment has no subscription to manage, so the route does not exist there.
+	// An absent flag means an older api-server, which can only be the hosted cluster mid-rollout.
+	if (locals.user?.deployment?.selfHosted === true) {
+		error(404, 'Not found');
+	}
+
 	const api = createServerApiClient(fetch, cookies.get('vord_auth'), cookies.get('vord_tenant'));
 	try {
 		// Fetch billing data in parallel

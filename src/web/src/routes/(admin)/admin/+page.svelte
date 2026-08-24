@@ -18,20 +18,20 @@
 	const users: UserAccountDto[] = $derived(data.users);
 	const settings: ServerSettingsDto = $derived(data.settings);
 	const tenants: TenantDto[] = $derived(data.tenants);
-	const billingEnabled: boolean = $derived(data.billingEnabled);
+	const selfHosted: boolean = $derived(data.selfHosted);
 
 	type TabId = 'users' | 'tenants' | 'settings';
 
 	const tabs: { id: TabId; label: string; icon: typeof Users }[] = $derived(
-		billingEnabled
+		selfHosted
 			? [
-					{ id: 'users', label: 'Users', icon: Users },
-					{ id: 'tenants', label: 'Tenants', icon: Building2 }
-				]
-			: [
 					{ id: 'users', label: 'Users', icon: Users },
 					{ id: 'tenants', label: 'Tenants', icon: Building2 },
 					{ id: 'settings', label: 'Settings', icon: Settings }
+				]
+			: [
+					{ id: 'users', label: 'Users', icon: Users },
+					{ id: 'tenants', label: 'Tenants', icon: Building2 }
 				]
 	);
 
@@ -130,7 +130,7 @@
 	<div>
 		<h1 class="text-3xl font-bold text-surface-900 dark:text-surface-50">Admin Panel</h1>
 		<p class="mt-1 text-surface-500 dark:text-surface-400">
-			Manage users, tenants{billingEnabled ? '' : ', and settings'}.
+			Manage users, tenants{selfHosted ? ', and settings' : ''}.
 		</p>
 	</div>
 
@@ -339,8 +339,8 @@
 		</div>
 	{/if}
 
-	<!-- Settings Tab (only when billing is disabled) -->
-	{#if activeTab === 'settings' && billingEnabled === false}
+	<!-- Settings Tab (self-hosted deployments only) -->
+	{#if activeTab === 'settings' && selfHosted === true}
 		<form
 			method="POST"
 			action="?/updateSettings"

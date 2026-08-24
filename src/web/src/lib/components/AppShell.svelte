@@ -33,6 +33,10 @@
         children?: Snippet;
     } = $props();
 
+    // The billing route does not exist in a self-hosted deployment, so the link to it must not
+    // either. An absent flag means an older api-server, which can only be the hosted cluster.
+    const selfHosted = $derived(user.deployment?.selfHosted === true);
+
     let mobileMenuOpen = $state(false);
     let userMenuOpen = $state(false);
 
@@ -177,11 +181,13 @@
                 <Shield size={16} />
                 Signing Keys
             </a>
-            <hr class="my-2 border-surface-200 dark:border-surface-700" />
-            <a href="/settings/billing" class={navItemClass('/settings/billing')} onclick={onNavigate}>
-                <CreditCard size={16} />
-                Billing
-            </a>
+            {#if selfHosted === false}
+                <hr class="my-2 border-surface-200 dark:border-surface-700" />
+                <a href="/settings/billing" class={navItemClass('/settings/billing')} onclick={onNavigate}>
+                    <CreditCard size={16} />
+                    Billing
+                </a>
+            {/if}
             <hr class="my-2 border-surface-200 dark:border-surface-700" />
             <a href="/settings/audit-log" class={navItemClass('/settings/audit-log')} onclick={onNavigate}>
                 <ScrollText size={16} />

@@ -12,6 +12,8 @@
 
 	const tenants: TenantDto[] = $derived(data.tenants);
 	const subscription: SubscriptionDto | null = $derived(data.subscription);
+	// A self-hosted deployment has no tiers or limits, so the whole subscription card is noise.
+	const selfHosted: boolean = $derived(data.user?.deployment?.selfHosted === true);
 
 	function getTierBadgeClasses(tier: string): string {
 		if (tier === 'Pro') {
@@ -189,72 +191,74 @@
 	</div>
 
 	<!-- Subscription Section -->
-	<div
-		class="rounded-xl border border-surface-200 bg-surface-50 p-6 dark:border-surface-700 dark:bg-surface-800"
-	>
-		<div class="mb-4 flex items-center gap-3">
-			<CreditCard class="h-5 w-5 text-surface-400 dark:text-surface-500" />
-			<h2 class="text-lg font-semibold text-surface-900 dark:text-surface-50">Subscription</h2>
-		</div>
-		{#if subscription === null}
-			<div class="flex flex-wrap items-center gap-4">
-				<div>
-					<p class="text-xs text-surface-500 dark:text-surface-400">Tier</p>
-					<span class="mt-1 inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium {getTierBadgeClasses('Free')}">
-						Free
-					</span>
-				</div>
-				<div>
-					<p class="text-xs text-surface-500 dark:text-surface-400">Machine Limit</p>
-					<p class="mt-1 text-sm font-medium text-surface-900 dark:text-surface-100">3 machines</p>
-				</div>
-				<div>
-					<p class="text-xs text-surface-500 dark:text-surface-400">Data Retention</p>
-					<p class="mt-1 text-sm font-medium text-surface-900 dark:text-surface-100">1 day(s)</p>
-				</div>
+	{#if selfHosted === false}
+		<div
+			class="rounded-xl border border-surface-200 bg-surface-50 p-6 dark:border-surface-700 dark:bg-surface-800"
+		>
+			<div class="mb-4 flex items-center gap-3">
+				<CreditCard class="h-5 w-5 text-surface-400 dark:text-surface-500" />
+				<h2 class="text-lg font-semibold text-surface-900 dark:text-surface-50">Subscription</h2>
 			</div>
-		{:else}
-			<div class="flex flex-wrap items-center gap-6">
-				<div>
-					<p class="text-xs text-surface-500 dark:text-surface-400">Tier</p>
-					<span class="mt-1 inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium {getTierBadgeClasses(subscription.tier)}">
-						{subscription.tier}
-					</span>
-				</div>
-				<div>
-					<p class="text-xs text-surface-500 dark:text-surface-400">Status</p>
-					<span class="mt-1 inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium {getStatusBadgeClasses(subscription.status)}">
-						{subscription.status}
-					</span>
-				</div>
-				<div>
-					<p class="text-xs text-surface-500 dark:text-surface-400">Machines</p>
-					<p class="mt-1 text-sm font-medium text-surface-900 dark:text-surface-100">
-						{subscription.machineCount}
-						{#if subscription.machineLimit === null}
-							/ Unlimited
-						{:else}
-							/ {subscription.machineLimit}
-						{/if}
-					</p>
-				</div>
-				<div>
-					<p class="text-xs text-surface-500 dark:text-surface-400">Data Retention</p>
-					<p class="mt-1 text-sm font-medium text-surface-900 dark:text-surface-100">
-						{subscription.retentionDays} day(s)
-					</p>
-				</div>
-				{#if subscription.currentPeriodEnd !== null}
+			{#if subscription === null}
+				<div class="flex flex-wrap items-center gap-4">
 					<div>
-						<p class="text-xs text-surface-500 dark:text-surface-400">Current Period Ends</p>
+						<p class="text-xs text-surface-500 dark:text-surface-400">Tier</p>
+						<span class="mt-1 inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium {getTierBadgeClasses('Free')}">
+							Free
+						</span>
+					</div>
+					<div>
+						<p class="text-xs text-surface-500 dark:text-surface-400">Machine Limit</p>
+						<p class="mt-1 text-sm font-medium text-surface-900 dark:text-surface-100">3 machines</p>
+					</div>
+					<div>
+						<p class="text-xs text-surface-500 dark:text-surface-400">Data Retention</p>
+						<p class="mt-1 text-sm font-medium text-surface-900 dark:text-surface-100">1 day(s)</p>
+					</div>
+				</div>
+			{:else}
+				<div class="flex flex-wrap items-center gap-6">
+					<div>
+						<p class="text-xs text-surface-500 dark:text-surface-400">Tier</p>
+						<span class="mt-1 inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium {getTierBadgeClasses(subscription.tier)}">
+							{subscription.tier}
+						</span>
+					</div>
+					<div>
+						<p class="text-xs text-surface-500 dark:text-surface-400">Status</p>
+						<span class="mt-1 inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium {getStatusBadgeClasses(subscription.status)}">
+							{subscription.status}
+						</span>
+					</div>
+					<div>
+						<p class="text-xs text-surface-500 dark:text-surface-400">Machines</p>
 						<p class="mt-1 text-sm font-medium text-surface-900 dark:text-surface-100">
-							{formatPeriodEnd(subscription.currentPeriodEnd)}
+							{subscription.machineCount}
+							{#if subscription.machineLimit === null}
+								/ Unlimited
+							{:else}
+								/ {subscription.machineLimit}
+							{/if}
 						</p>
 					</div>
-				{/if}
-			</div>
-		{/if}
-	</div>
+					<div>
+						<p class="text-xs text-surface-500 dark:text-surface-400">Data Retention</p>
+						<p class="mt-1 text-sm font-medium text-surface-900 dark:text-surface-100">
+							{subscription.retentionDays} day(s)
+						</p>
+					</div>
+					{#if subscription.currentPeriodEnd !== null}
+						<div>
+							<p class="text-xs text-surface-500 dark:text-surface-400">Current Period Ends</p>
+							<p class="mt-1 text-sm font-medium text-surface-900 dark:text-surface-100">
+								{formatPeriodEnd(subscription.currentPeriodEnd)}
+							</p>
+						</div>
+					{/if}
+				</div>
+			{/if}
+		</div>
+	{/if}
 
 	<!-- Data Export Section -->
 	<div

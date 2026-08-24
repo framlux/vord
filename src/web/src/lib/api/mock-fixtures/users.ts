@@ -16,7 +16,8 @@ export const mockUser: UserDto = {
 	tenants: [
 		{ tenantId: 1, tenantName: 'Framlux Production', role: '1' },
 		{ tenantId: 2, tenantName: 'Framlux Lab', role: '1' }
-	]
+	],
+	deployment: { selfHosted: false }
 };
 
 export const mockSubscription: SubscriptionDto = {

@@ -195,6 +195,29 @@ describe('AppShell', () => {
             expect(screen.getByText('Billing')).toBeInTheDocument();
             expect(screen.getByText('Audit Log')).toBeInTheDocument();
         });
+
+        it('should hide Billing in a self-hosted deployment', async () => {
+            setRoute('/settings');
+            const user = makeUser({
+                tenants: [{ tenantId: 1, tenantName: 'Acme Corp', role: '1' }],
+                deployment: { selfHosted: true }
+            });
+            render(AppShell, { props: { user } });
+
+            expect(screen.getByText('General')).toBeInTheDocument();
+            expect(screen.queryByText('Billing')).not.toBeInTheDocument();
+        });
+
+        it('should show Billing when the server omits the deployment field', async () => {
+            setRoute('/settings');
+            const user = makeUser({
+                tenants: [{ tenantId: 1, tenantName: 'Acme Corp', role: '1' }],
+                deployment: undefined
+            });
+            render(AppShell, { props: { user } });
+
+            expect(screen.getByText('Billing')).toBeInTheDocument();
+        });
     });
 
     describe('active link highlighting', () => {

@@ -6,9 +6,10 @@ using System.Security.Claims;
 using FastEndpoints;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Server.Auth;
-using Framlux.FleetManagement.Services.Core.Models.Users;
+using Framlux.FleetManagement.Services.Core.Deployment;
 using Framlux.FleetManagement.Services.Core.Handlers;
 using Framlux.FleetManagement.Services.Core.Infrastructure;
+using Framlux.FleetManagement.Services.Core.Models.Users;
 using Microsoft.AspNetCore.Antiforgery;
 
 namespace Framlux.FleetManagement.Server.Endpoints.Web.Auth;
@@ -22,6 +23,7 @@ public sealed class AuthMeEndpoint : EndpointWithoutRequest<ApiResponse<UserDto>
     private readonly IAntiforgery _antiforgery;
     private readonly ILogger<AuthMeEndpoint> _logger;
     private readonly ITenantContext _tenantContext;
+    private readonly DeploymentMode _deploymentMode;
 
     /// <summary>
     /// Creates a new instance of the <see cref="AuthMeEndpoint"/> class.
@@ -30,12 +32,14 @@ public sealed class AuthMeEndpoint : EndpointWithoutRequest<ApiResponse<UserDto>
     /// <param name="antiforgery">The antiforgery service used to issue the double-submit token.</param>
     /// <param name="logger">The logger instance.</param>
     /// <param name="tenantContext">Provides the resolved tenant and user identity for the current request.</param>
-    public AuthMeEndpoint(AuthMeHandler handler, IAntiforgery antiforgery, ILogger<AuthMeEndpoint> logger, ITenantContext tenantContext)
+    /// <param name="deploymentMode">The deployment mode this process is running in.</param>
+    public AuthMeEndpoint(AuthMeHandler handler, IAntiforgery antiforgery, ILogger<AuthMeEndpoint> logger, ITenantContext tenantContext, DeploymentMode deploymentMode)
     {
         _handler = handler;
         _antiforgery = antiforgery;
         _logger = logger;
         _tenantContext = tenantContext;
+        _deploymentMode = deploymentMode;
     }
 
     /// <inheritdoc/>
@@ -56,6 +60,10 @@ public sealed class AuthMeEndpoint : EndpointWithoutRequest<ApiResponse<UserDto>
         }
 
         UserDto dto = UserDto.FromPrincipal(User, _logger);
+
+        // FromPrincipal builds from cookie claims alone, so the mode is stamped here rather than
+        // being minted into the principal: it is a property of the process, not of the session.
+        dto.Deployment = new DeploymentDto { SelfHosted = _deploymentMode.IsSelfHosted };
 
         // The provider claim is minted alongside the principal. Resolve identity on the
         // (provider, subject) pair; absent, unparseable, or out-of-range values fall back to Unknown.

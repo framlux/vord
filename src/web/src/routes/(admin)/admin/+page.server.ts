@@ -6,11 +6,12 @@ import { createServerApiClient, csrfFor } from '$lib/api/server';
 import { ApiError } from '$lib/api/client';
 import { redirect, error, fail } from '@sveltejs/kit';
 import type { PageServerLoad, Actions } from './$types';
-import { env } from '$env/dynamic/public';
 
-export const load: PageServerLoad = async ({ fetch, cookies }) => {
+export const load: PageServerLoad = async ({ fetch, cookies, locals }) => {
 	const api = createServerApiClient(fetch, cookies.get('vord_auth'), cookies.get('vord_tenant'));
-	const billingEnabled = !!env.PUBLIC_BILLING_URL;
+	// An older api-server omits the field entirely; treating that as hosted is correct, because
+	// the only place a version mismatch can occur is the hosted cluster mid-rollout.
+	const selfHosted = locals.user?.deployment?.selfHosted === true;
 
 	try {
 		const promises: [
@@ -21,7 +22,7 @@ export const load: PageServerLoad = async ({ fetch, cookies }) => {
 
 		const [users, settings, tenants] = await Promise.all(promises);
 
-		return { users, settings, tenants, billingEnabled };
+		return { users, settings, tenants, selfHosted };
 	} catch (e) {
 		if (e instanceof ApiError) {
 			if (e.status === 401) redirect(302, '/auth/login');
