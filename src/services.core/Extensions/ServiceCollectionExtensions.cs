@@ -9,6 +9,7 @@ using Framlux.FleetManagement.Services.Core.Alerts.Formatters;
 using Framlux.FleetManagement.Services.Core.Billing;
 using Framlux.FleetManagement.Services.Core.Commands;
 using Framlux.FleetManagement.Services.Core.DataExport;
+using Framlux.FleetManagement.Services.Core.Deployment;
 using Framlux.FleetManagement.Services.Core.Handlers;
 using Framlux.FleetManagement.Services.Core.Hangfire;
 using Framlux.FleetManagement.Services.Core.Infrastructure;
@@ -64,6 +65,12 @@ public static class ServiceCollectionExtensions
         this IServiceCollection services,
         IConfiguration configuration)
     {
+        services.AddOptions<DeploymentOptions>()
+            .Bind(configuration.GetSection("Deployment"))
+            .ValidateOnStart();
+        services.AddSingleton<IValidateOptions<DeploymentOptions>, DeploymentOptionsValidator>();
+        services.AddSingleton<DeploymentMode>();
+
         services.AddOptions<BillingOptions>()
             .Bind(configuration.GetSection("Billing"))
             .ValidateDataAnnotations()
