@@ -113,9 +113,17 @@ services:
       Authentication__Oidc__ClientId: ${OIDC_CLIENT_ID:-}
       Authentication__Oidc__ClientSecret: ${OIDC_CLIENT_SECRET:-}
       Authentication__Oidc__MetadataAddress: ${OIDC_METADATA_ADDRESS:-}
-      Billing__Enabled: "${Billing__Enabled:-false}"
-      Resend__ApiKey: ${RESEND_API_KEY:-}
-      Resend__FromEmail: ${RESEND_FROM_EMAIL:-}
+      # This compose file is the reference self-hosted deployment. Leave this true — setting it
+      # false requires a reachable billing API, which is not part of the self-hosted product.
+      Deployment__SelfHosted: "true"
+      # Email is optional. Leave SMTP_HOST empty and every send is skipped; set it to a relay
+      # (Postfix, a provider's submission endpoint) and invitations and alerts are delivered.
+      Email__FromEmail: ${EMAIL_FROM:-}
+      Email__Smtp__Host: ${SMTP_HOST:-}
+      Email__Smtp__Port: "${SMTP_PORT:-587}"
+      Email__Smtp__Username: ${SMTP_USERNAME:-}
+      Email__Smtp__Password: ${SMTP_PASSWORD:-}
+      Email__Smtp__UseStartTls: "${SMTP_USE_STARTTLS:-true}"
       # Auth__CookieDomain: "${AUTH_COOKIE_DOMAIN:-}"  # Uncomment if using a custom domain
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:12233/readyz || exit 1"]
@@ -155,10 +163,18 @@ services:
       Database__PASSWORD: ${DB_PASSWORD}
       Database__DB: ${DB_NAME}
       Redis__ConnectionString: "redis:6379,password=${REDIS_PASSWORD}"
-      Billing__Enabled: "${Billing__Enabled:-false}"
+      # This compose file is the reference self-hosted deployment. Leave this true — setting it
+      # false requires a reachable billing API, which is not part of the self-hosted product.
+      Deployment__SelfHosted: "true"
       Hangfire__WorkerCount: "${HANGFIRE_WORKER_COUNT:-10}"
-      Resend__ApiKey: ${RESEND_API_KEY:-}
-      Resend__FromEmail: ${RESEND_FROM_EMAIL:-}
+      # Email is optional. Leave SMTP_HOST empty and every send is skipped; set it to a relay
+      # (Postfix, a provider's submission endpoint) and invitations and alerts are delivered.
+      Email__FromEmail: ${EMAIL_FROM:-}
+      Email__Smtp__Host: ${SMTP_HOST:-}
+      Email__Smtp__Port: "${SMTP_PORT:-587}"
+      Email__Smtp__Username: ${SMTP_USERNAME:-}
+      Email__Smtp__Password: ${SMTP_PASSWORD:-}
+      Email__Smtp__UseStartTls: "${SMTP_USE_STARTTLS:-true}"
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:8080/healthz || exit 1"]
       interval: 10s
