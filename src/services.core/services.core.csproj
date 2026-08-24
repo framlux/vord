@@ -40,6 +40,7 @@
     <PackageReference Include="linq2db" Version="6.2.1" />
     <PackageReference Include="linq2db.Extensions" Version="6.2.1" />
     <PackageReference Include="linq2db.PostgreSQL" Version="6.2.1" />
+    <PackageReference Include="MailKit" Version="4.17.0" />
     <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.7" />
     <!-- Pin the native SQLite binary above the vulnerable 2.1.11 pulled transitively by
          Microsoft.Data.Sqlite (advisory GHSA-2m69-gcr7-jv3q). Propagates to dependent projects. -->

@@ -5,17 +5,12 @@
 namespace Framlux.FleetManagement.Services.Core.Options;
 
 /// <summary>
-/// Configuration options for the Resend email service.
+/// Settings for the Resend transport, used by the hosted deployment.
 /// </summary>
-public sealed class ResendOptions
+public sealed class ResendEmailOptions
 {
     /// <summary>
-    /// The Resend API key.
+    /// The Resend API key. Required in a hosted deployment; ignored in a self-hosted one.
     /// </summary>
     public string ApiKey { get; set; } = string.Empty;
-
-    /// <summary>
-    /// The sender email address.
-    /// </summary>
-    public string FromEmail { get; set; } = string.Empty;
 }

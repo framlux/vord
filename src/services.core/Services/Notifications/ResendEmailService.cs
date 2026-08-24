@@ -17,56 +17,32 @@ namespace Framlux.FleetManagement.Services.Core.Notifications;
 public sealed class ResendEmailService : IEmailService
 {
     private readonly HttpClient _httpClient;
-    private readonly ResendOptions _resendOptions;
+    private readonly EmailOptions _emailOptions;
     private readonly ILogger<ResendEmailService> _logger;
 
     /// <summary>
     /// Creates a new instance of the <see cref="ResendEmailService"/> class.
     /// </summary>
-    public ResendEmailService(HttpClient httpClient, IOptions<ResendOptions> resendOptions, ILogger<ResendEmailService> logger)
+    public ResendEmailService(HttpClient httpClient, IOptions<EmailOptions> emailOptions, ILogger<ResendEmailService> logger)
     {
         _httpClient = httpClient;
-        _resendOptions = resendOptions.Value;
+        _emailOptions = emailOptions.Value;
         _logger = logger;
     }
 
     /// <inheritdoc/>
     public async Task<EmailDeliveryOutcome> SendInvitationEmailAsync(string toEmail, string tenantName, string inviterName, string acceptUrl, CancellationToken ct)
     {
-        string apiKey = _resendOptions.ApiKey;
-        string fromEmail = _resendOptions.FromEmail;
+        string apiKey = _emailOptions.Resend.ApiKey;
+        string fromEmail = _emailOptions.FromEmail;
 
-        if (string.IsNullOrWhiteSpace(apiKey))
-        {
-            _logger.LogInformation("Resend API key not configured — email is optional, so skipping invitation email to {Email}", toEmail);
-
-            return EmailDeliveryOutcome.Skipped;
-        }
-
-        string htmlBody = $"""
-            <div style="font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; max-width: 560px; margin: 0 auto; padding: 40px 20px;">
-                <h2 style="color: #1a1a1a; margin-bottom: 8px;">You've been invited to join {HtmlEncode(tenantName)}</h2>
-                <p style="color: #666; font-size: 15px; line-height: 1.5;">
-                    {HtmlEncode(inviterName)} has invited you to join <strong>{HtmlEncode(tenantName)}</strong> on Framlux Vord.
-                </p>
-                <div style="margin: 32px 0;">
-                    <a href="{HtmlEncode(acceptUrl)}" style="display: inline-block; background-color: #6366f1; color: #ffffff; text-decoration: none; padding: 12px 32px; border-radius: 8px; font-weight: 600; font-size: 15px;">
-                        Accept Invitation
-                    </a>
-                </div>
-                <p style="color: #999; font-size: 13px; line-height: 1.5;">
-                    This invitation expires in 7 days. If you did not expect this email, you can safely ignore it.
-                </p>
-                <hr style="border: none; border-top: 1px solid #eee; margin: 32px 0;" />
-                <p style="color: #bbb; font-size: 12px;">Framlux Vord &mdash; Fleet Monitoring</p>
-            </div>
-            """;
+        string htmlBody = EmailTemplates.RenderInvitation(tenantName, inviterName, acceptUrl);
 
         object payload = new
         {
             from = fromEmail,
             to = new[] { toEmail },
-            subject = $"You've been invited to join {tenantName} on Framlux Vord",
+            subject = EmailTemplates.InvitationSubject(tenantName),
             html = htmlBody,
         };
 
@@ -102,15 +78,8 @@ public sealed class ResendEmailService : IEmailService
     /// <inheritdoc/>
     public async Task<EmailDeliveryOutcome> SendAlertEmailAsync(string toEmail, string subject, string htmlBody, CancellationToken ct)
     {
-        string apiKey = _resendOptions.ApiKey;
-        string fromEmail = _resendOptions.FromEmail;
-
-        if (string.IsNullOrWhiteSpace(apiKey))
-        {
-            _logger.LogInformation("Resend API key not configured — email is optional, so skipping alert email to {Email}", toEmail);
-
-            return EmailDeliveryOutcome.Skipped;
-        }
+        string apiKey = _emailOptions.Resend.ApiKey;
+        string fromEmail = _emailOptions.FromEmail;
 
         object payload = new { from = fromEmail, to = new[] { toEmail }, subject, html = htmlBody };
 
@@ -141,10 +110,5 @@ public sealed class ResendEmailService : IEmailService
 
             return EmailDeliveryOutcome.Failed;
         }
-    }
-
-    private static string HtmlEncode(string value)
-    {
-        return System.Net.WebUtility.HtmlEncode(value);
     }
 }

@@ -16,6 +16,7 @@ using Framlux.FleetManagement.Services.Core.Commands;
 using Framlux.FleetManagement.Services.Core.DataExport;
 using Framlux.FleetManagement.Services.Core.Infrastructure;
 using Framlux.FleetManagement.Services.Core.Machines;
+using Framlux.FleetManagement.Services.Core.Notifications;
 using Framlux.FleetManagement.Services.Core.Telemetry;
 using Framlux.Vord.BillingGrpc;
 using Hangfire;
@@ -121,8 +122,8 @@ public class FunctionalTestFactory : WebApplicationFactory<Program>
         Environment.SetEnvironmentVariable("Deployment__SelfHosted", "false");
         Environment.SetEnvironmentVariable("Billing__GrpcUrl", "http://localhost:12235");
 
-        // Staged ahead of the email rework. Nothing binds an Email section yet, so these are inert
-        // until that work lands, at which point the hosted host refuses to start without them.
+        // The hosted deployment refuses to start without a sender address and a Resend key, so
+        // both are supplied here. The transport itself is replaced below, so the key is never used.
         Environment.SetEnvironmentVariable("Email__FromEmail", "Framlux Vord <invitations@test.invalid>");
         Environment.SetEnvironmentVariable("Email__Resend__ApiKey", "re_functional_test");
 
@@ -312,6 +313,12 @@ public class FunctionalTestFactory : WebApplicationFactory<Program>
             // Replace object storage with a fake for tests
             services.RemoveAll<IObjectStorageService>();
             services.AddSingleton(NSubstitute.Substitute.For<IObjectStorageService>());
+
+            // The hosted host carries a real-looking API key so startup validation passes, which
+            // makes the Resend transport live. Replace it for every functional test so no test can
+            // reach the network; individual tests that assert on delivery still substitute their own.
+            services.RemoveAll<IEmailService>();
+            services.AddSingleton<IEmailService, NoOpEmailService>();
 
             // Replace cookie auth handler with TestAuthHandler so REST endpoints
             // can be tested without a real OAuth flow. The MultiAuth policy scheme

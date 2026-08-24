@@ -98,6 +98,7 @@ string? redisPassword = StackExchange.Redis.ConfigurationOptions.Parse(redisOpts
 ProductionSecretsGuard.Validate(builder.Environment.EnvironmentName, dbOpts.Password, redisPassword);
 BillingOptions billingOpts = builder.Configuration.GetSection("Billing").Get<BillingOptions>() ?? new();
 ObjectStorageOptions objectStorageOpts = builder.Configuration.GetSection("ObjectStorage").Get<ObjectStorageOptions>() ?? new();
+EmailOptions emailOpts = builder.Configuration.GetSection("Email").Get<EmailOptions>() ?? new();
 DeploymentOptions deploymentOpts = builder.Configuration.GetSection("Deployment").Get<DeploymentOptions>() ?? new();
 DeploymentMode deploymentMode = new(Microsoft.Extensions.Options.Options.Create(deploymentOpts));
 
@@ -284,7 +285,7 @@ builder.Services.AddAuthorization(options =>
 string connectionString = ServiceCollectionExtensions.BuildConnectionString(dbOpts, "Framlux.FleetManagement.ApiServer");
 builder.Services.AddRepositories(dbOpts, "Framlux.FleetManagement.ApiServer");
 builder.Services.AddCoreInfrastructure(redisOpts, connectionString);
-builder.Services.AddCoreServices(deploymentMode, objectStorageOpts, billingOpts);
+builder.Services.AddCoreServices(deploymentMode, objectStorageOpts, emailOpts, billingOpts);
 
 // Register Hangfire job-type concrete classes in the server too, not just the worker.
 // The server enqueues these jobs (e.g. RequestDataExportEndpoint -> DataExportProcessingJob);

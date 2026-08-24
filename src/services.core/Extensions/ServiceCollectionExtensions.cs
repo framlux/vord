@@ -99,18 +99,10 @@ public static class ServiceCollectionExtensions
             .ValidateOnStart();
         services.AddSingleton<IValidateOptions<ObjectStorageOptions>, ObjectStorageOptionsValidator>();
 
-        services.AddOptions<ResendOptions>()
-            .Bind(configuration.GetSection("Resend"))
-            .PostConfigure<ILogger<ResendOptions>>((options, logger) =>
-            {
-                if (string.IsNullOrWhiteSpace(options.ApiKey))
-                {
-                    logger.LogInformation(
-                        "Email sending is disabled because no Resend API key is configured.");
-                }
-            })
+        services.AddOptions<EmailOptions>()
+            .Bind(configuration.GetSection("Email"))
             .ValidateOnStart();
-        services.AddSingleton<IValidateOptions<ResendOptions>, ResendOptionsValidator>();
+        services.AddSingleton<IValidateOptions<EmailOptions>, EmailOptionsValidator>();
 
         services.AddOptions<AppOptions>()
             .Bind(configuration.GetSection("App"))
@@ -274,9 +266,11 @@ public static class ServiceCollectionExtensions
         this IServiceCollection services,
         DeploymentMode deploymentMode,
         ObjectStorageOptions objectStorageOpts,
+        EmailOptions emailOpts,
         BillingOptions billingOpts)
     {
         ArgumentNullException.ThrowIfNull(deploymentMode);
+        ArgumentNullException.ThrowIfNull(emailOpts);
 
         services.AddSingleton<IMachineService, MachineService>()
                 .AddSingleton<IMachineStateService, MachineStateService>()
@@ -313,7 +307,21 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IRoleCacheInvalidator, RoleCacheInvalidator>();
         services.AddSingleton<IApiKeyCacheInvalidator, ApiKeyCacheInvalidator>();
         services.AddSingleton<IUserSecurityStampService, UserSecurityStampService>();
-        services.AddHttpClient<IEmailService, ResendEmailService>();
+        // The transport follows the deployment mode. A hosted deployment always has a Resend key
+        // (startup validation enforces it); a self-hosted one uses an operator-supplied SMTP relay,
+        // or none at all, in which case every send reports Skipped.
+        if (deploymentMode.IsSaas)
+        {
+            services.AddHttpClient<IEmailService, ResendEmailService>();
+        }
+        else if (string.IsNullOrWhiteSpace(emailOpts.Smtp.Host) == false)
+        {
+            services.AddSingleton<IEmailService, SmtpEmailService>();
+        }
+        else
+        {
+            services.AddSingleton<IEmailService, NoOpEmailService>();
+        }
 
         // System clock abstraction so time-dependent logic (e.g. registration token expiry)
         // can be unit-tested with a controllable TimeProvider.

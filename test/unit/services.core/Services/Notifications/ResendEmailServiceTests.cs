@@ -14,62 +14,19 @@ using NSubstitute;
 namespace Framlux.FleetManagement.Test.Services;
 
 /// <summary>
-/// Tests for <see cref="ResendEmailService"/>.
+/// Tests for <see cref="ResendEmailService"/>. This transport is only registered when a Resend
+/// API key is present, so every case here assumes one; a deployment with no transport at all is
+/// covered by the no-op service instead.
 /// </summary>
 public sealed class ResendEmailServiceTests
 {
-    private static IOptions<ResendOptions> BuildOptions(string? apiKey = null)
+    private static IOptions<EmailOptions> BuildOptions(string apiKey)
     {
-        return Options.Create(new ResendOptions
+        return Options.Create(new EmailOptions
         {
-            ApiKey = apiKey ?? string.Empty,
             FromEmail = "Test <test@outreach.framlux.io>",
+            Resend = new ResendEmailOptions { ApiKey = apiKey },
         });
-    }
-
-    [Test]
-    public async Task SendInvitation_NoApiKey_ReturnsSkipped()
-    {
-        MockHttpMessageHandler handler = new();
-        HttpClient httpClient = new(handler);
-        IOptions<ResendOptions> options = BuildOptions(apiKey: null);
-
-        ResendEmailService service = new(httpClient, options, new NullLogger<ResendEmailService>());
-
-        EmailDeliveryOutcome result = await service.SendInvitationEmailAsync("user@example.com", "Acme", "Admin", "https://app.example.com/accept", CancellationToken.None);
-
-        await Assert.That(result).IsEqualTo(EmailDeliveryOutcome.Skipped);
-        await Assert.That(handler.Requests.Count).IsEqualTo(0);
-    }
-
-    [Test]
-    public async Task SendInvitation_EmptyApiKey_ReturnsSkipped()
-    {
-        MockHttpMessageHandler handler = new();
-        HttpClient httpClient = new(handler);
-        IOptions<ResendOptions> options = BuildOptions(apiKey: "");
-
-        ResendEmailService service = new(httpClient, options, new NullLogger<ResendEmailService>());
-
-        EmailDeliveryOutcome result = await service.SendInvitationEmailAsync("user@example.com", "Acme", "Admin", "https://app.example.com/accept", CancellationToken.None);
-
-        await Assert.That(result).IsEqualTo(EmailDeliveryOutcome.Skipped);
-        await Assert.That(handler.Requests.Count).IsEqualTo(0);
-    }
-
-    [Test]
-    public async Task SendInvitation_WhitespaceApiKey_ReturnsSkipped()
-    {
-        MockHttpMessageHandler handler = new();
-        HttpClient httpClient = new(handler);
-        IOptions<ResendOptions> options = BuildOptions(apiKey: "   ");
-
-        ResendEmailService service = new(httpClient, options, new NullLogger<ResendEmailService>());
-
-        EmailDeliveryOutcome result = await service.SendInvitationEmailAsync("user@example.com", "Acme", "Admin", "https://app.example.com/accept", CancellationToken.None);
-
-        await Assert.That(result).IsEqualTo(EmailDeliveryOutcome.Skipped);
-        await Assert.That(handler.Requests.Count).IsEqualTo(0);
     }
 
     [Test]
@@ -77,7 +34,7 @@ public sealed class ResendEmailServiceTests
     {
         MockHttpMessageHandler handler = new();
         HttpClient httpClient = new(handler);
-        IOptions<ResendOptions> options = BuildOptions(apiKey: "re_test_123");
+        IOptions<EmailOptions> options = BuildOptions("re_test_123");
 
         ResendEmailService service = new(httpClient, options, new NullLogger<ResendEmailService>());
 
@@ -97,7 +54,7 @@ public sealed class ResendEmailServiceTests
     {
         MockHttpMessageHandler handler = new();
         HttpClient httpClient = new(handler);
-        IOptions<ResendOptions> options = BuildOptions(apiKey: "re_test_456");
+        IOptions<EmailOptions> options = BuildOptions("re_test_456");
 
         ResendEmailService service = new(httpClient, options, new NullLogger<ResendEmailService>());
 
@@ -118,7 +75,7 @@ public sealed class ResendEmailServiceTests
         MockHttpMessageHandler handler = new();
         handler.WithDefaultResponse(new HttpResponseMessage(System.Net.HttpStatusCode.OK));
         HttpClient httpClient = new(handler);
-        IOptions<ResendOptions> options = BuildOptions(apiKey: "re_test_ok");
+        IOptions<EmailOptions> options = BuildOptions("re_test_ok");
 
         ResendEmailService service = new(httpClient, options, new NullLogger<ResendEmailService>());
 
@@ -136,7 +93,7 @@ public sealed class ResendEmailServiceTests
             Content = new StringContent("Bad request"),
         });
         HttpClient httpClient = new(handler);
-        IOptions<ResendOptions> options = BuildOptions(apiKey: "re_test_400");
+        IOptions<EmailOptions> options = BuildOptions("re_test_400");
 
         ResendEmailService service = new(httpClient, options, new NullLogger<ResendEmailService>());
 
@@ -154,7 +111,7 @@ public sealed class ResendEmailServiceTests
             Content = new StringContent("Server error"),
         });
         HttpClient httpClient = new(handler);
-        IOptions<ResendOptions> options = BuildOptions(apiKey: "re_test_500");
+        IOptions<EmailOptions> options = BuildOptions("re_test_500");
 
         ResendEmailService service = new(httpClient, options, new NullLogger<ResendEmailService>());
 
@@ -176,7 +133,7 @@ public sealed class ResendEmailServiceTests
             Content = new StringContent("The vordfleet.dev domain is not verified"),
         });
         HttpClient httpClient = new(handler);
-        IOptions<ResendOptions> options = BuildOptions(apiKey: "re_test_550");
+        IOptions<EmailOptions> options = BuildOptions("re_test_550");
         ILogger<ResendEmailService> logger = Substitute.For<ILogger<ResendEmailService>>();
 
         ResendEmailService service = new(httpClient, options, logger);
@@ -192,50 +149,13 @@ public sealed class ResendEmailServiceTests
             Arg.Any<Func<object, Exception?, string>>());
     }
 
-    /// <summary>
-    /// With no API key configured, skipping the send is an expected condition in a supported
-    /// deployment, so it must not be logged as a fault.
-    /// </summary>
-    [Test]
-    public async Task SendInvitationEmailAsync_NoApiKey_LogsAtInformation()
-    {
-        MockHttpMessageHandler handler = new();
-        HttpClient httpClient = new(handler);
-        IOptions<ResendOptions> options = BuildOptions(apiKey: null);
-        ILogger<ResendEmailService> logger = Substitute.For<ILogger<ResendEmailService>>();
-
-        ResendEmailService service = new(httpClient, options, logger);
-
-        EmailDeliveryOutcome result = await service.SendInvitationEmailAsync("user@example.com", "Acme", "Admin", "https://app.example.com/accept", CancellationToken.None);
-
-        await Assert.That(result).IsEqualTo(EmailDeliveryOutcome.Skipped);
-        logger.DidNotReceive().Log(
-            LogLevel.Error,
-            Arg.Any<EventId>(),
-            Arg.Any<object>(),
-            Arg.Any<Exception>(),
-            Arg.Any<Func<object, Exception?, string>>());
-        logger.DidNotReceive().Log(
-            LogLevel.Warning,
-            Arg.Any<EventId>(),
-            Arg.Any<object>(),
-            Arg.Any<Exception>(),
-            Arg.Any<Func<object, Exception?, string>>());
-        logger.Received().Log(
-            LogLevel.Information,
-            Arg.Any<EventId>(),
-            Arg.Any<object>(),
-            Arg.Any<Exception>(),
-            Arg.Any<Func<object, Exception?, string>>());
-    }
-
     [Test]
     public async Task SendInvitation_HttpException_ReturnsFailed()
     {
         MockHttpMessageHandler handler = new();
         handler.WithException(new HttpRequestException("Connection failed"));
         HttpClient httpClient = new(handler);
-        IOptions<ResendOptions> options = BuildOptions(apiKey: "re_test_err");
+        IOptions<EmailOptions> options = BuildOptions("re_test_err");
 
         ResendEmailService service = new(httpClient, options, new NullLogger<ResendEmailService>());
 
@@ -249,7 +169,7 @@ public sealed class ResendEmailServiceTests
     {
         MockHttpMessageHandler handler = new();
         HttpClient httpClient = new(handler);
-        IOptions<ResendOptions> options = BuildOptions(apiKey: "re_test_xss");
+        IOptions<EmailOptions> options = BuildOptions("re_test_xss");
 
         ResendEmailService service = new(httpClient, options, new NullLogger<ResendEmailService>());
 
@@ -273,7 +193,7 @@ public sealed class ResendEmailServiceTests
         MockHttpMessageHandler handler = new();
         handler.WithDefaultResponse(new HttpResponseMessage(System.Net.HttpStatusCode.OK));
         HttpClient httpClient = new(handler);
-        IOptions<ResendOptions> options = BuildOptions(apiKey: "re_alert_ok");
+        IOptions<EmailOptions> options = BuildOptions("re_alert_ok");
 
         ResendEmailService service = new(httpClient, options, new NullLogger<ResendEmailService>());
 
@@ -281,36 +201,6 @@ public sealed class ResendEmailServiceTests
 
         await Assert.That(result).IsEqualTo(EmailDeliveryOutcome.Sent);
         await Assert.That(handler.Requests.Count).IsEqualTo(1);
-    }
-
-    [Test]
-    public async Task SendAlertEmail_NoApiKey_ReturnsSkippedWithNoHttpCalls()
-    {
-        MockHttpMessageHandler handler = new();
-        HttpClient httpClient = new(handler);
-        IOptions<ResendOptions> options = BuildOptions(apiKey: null);
-
-        ResendEmailService service = new(httpClient, options, new NullLogger<ResendEmailService>());
-
-        EmailDeliveryOutcome result = await service.SendAlertEmailAsync("alert@example.com", "Alert", "<p>Body</p>", CancellationToken.None);
-
-        await Assert.That(result).IsEqualTo(EmailDeliveryOutcome.Skipped);
-        await Assert.That(handler.Requests.Count).IsEqualTo(0);
-    }
-
-    [Test]
-    public async Task SendAlertEmail_WhitespaceApiKey_ReturnsSkippedWithNoHttpCalls()
-    {
-        MockHttpMessageHandler handler = new();
-        HttpClient httpClient = new(handler);
-        IOptions<ResendOptions> options = BuildOptions(apiKey: "   ");
-
-        ResendEmailService service = new(httpClient, options, new NullLogger<ResendEmailService>());
-
-        EmailDeliveryOutcome result = await service.SendAlertEmailAsync("alert@example.com", "Alert", "<p>Body</p>", CancellationToken.None);
-
-        await Assert.That(result).IsEqualTo(EmailDeliveryOutcome.Skipped);
-        await Assert.That(handler.Requests.Count).IsEqualTo(0);
     }
 
     [Test]
@@ -322,7 +212,7 @@ public sealed class ResendEmailServiceTests
             Content = new StringContent("Server error"),
         });
         HttpClient httpClient = new(handler);
-        IOptions<ResendOptions> options = BuildOptions(apiKey: "re_alert_500");
+        IOptions<EmailOptions> options = BuildOptions("re_alert_500");
 
         ResendEmailService service = new(httpClient, options, new NullLogger<ResendEmailService>());
 
@@ -340,7 +230,7 @@ public sealed class ResendEmailServiceTests
             Content = new StringContent("Bad request"),
         });
         HttpClient httpClient = new(handler);
-        IOptions<ResendOptions> options = BuildOptions(apiKey: "re_alert_400");
+        IOptions<EmailOptions> options = BuildOptions("re_alert_400");
 
         ResendEmailService service = new(httpClient, options, new NullLogger<ResendEmailService>());
 
@@ -355,7 +245,7 @@ public sealed class ResendEmailServiceTests
         MockHttpMessageHandler handler = new();
         handler.WithException(new HttpRequestException("Connection failed"));
         HttpClient httpClient = new(handler);
-        IOptions<ResendOptions> options = BuildOptions(apiKey: "re_alert_err");
+        IOptions<EmailOptions> options = BuildOptions("re_alert_err");
 
         ResendEmailService service = new(httpClient, options, new NullLogger<ResendEmailService>());
 
@@ -370,7 +260,7 @@ public sealed class ResendEmailServiceTests
         MockHttpMessageHandler handler = new();
         handler.WithDefaultResponse(new HttpResponseMessage(System.Net.HttpStatusCode.OK));
         HttpClient httpClient = new(handler);
-        IOptions<ResendOptions> options = BuildOptions(apiKey: "re_alert_shape");
+        IOptions<EmailOptions> options = BuildOptions("re_alert_shape");
 
         ResendEmailService service = new(httpClient, options, new NullLogger<ResendEmailService>());
 
@@ -408,7 +298,7 @@ public sealed class ResendEmailServiceTests
             Content = new StringContent("The vordfleet.dev domain is not verified"),
         });
         HttpClient httpClient = new(handler);
-        IOptions<ResendOptions> options = BuildOptions(apiKey: "re_alert_550");
+        IOptions<EmailOptions> options = BuildOptions("re_alert_550");
         ILogger<ResendEmailService> logger = Substitute.For<ILogger<ResendEmailService>>();
 
         ResendEmailService service = new(httpClient, options, logger);
@@ -422,57 +312,5 @@ public sealed class ResendEmailServiceTests
             Arg.Any<object>(),
             Arg.Any<Exception>(),
             Arg.Any<Func<object, Exception?, string>>());
-    }
-
-    /// <summary>
-    /// With no API key configured, skipping the send is an expected condition in a supported
-    /// deployment, so it must not be logged as a fault.
-    /// </summary>
-    [Test]
-    public async Task SendAlertEmailAsync_NoApiKey_LogsAtInformation()
-    {
-        MockHttpMessageHandler handler = new();
-        HttpClient httpClient = new(handler);
-        IOptions<ResendOptions> options = BuildOptions(apiKey: null);
-        ILogger<ResendEmailService> logger = Substitute.For<ILogger<ResendEmailService>>();
-
-        ResendEmailService service = new(httpClient, options, logger);
-
-        EmailDeliveryOutcome result = await service.SendAlertEmailAsync("alert@example.com", "Alert", "<p>Body</p>", CancellationToken.None);
-
-        await Assert.That(result).IsEqualTo(EmailDeliveryOutcome.Skipped);
-        logger.DidNotReceive().Log(
-            LogLevel.Error,
-            Arg.Any<EventId>(),
-            Arg.Any<object>(),
-            Arg.Any<Exception>(),
-            Arg.Any<Func<object, Exception?, string>>());
-        logger.DidNotReceive().Log(
-            LogLevel.Warning,
-            Arg.Any<EventId>(),
-            Arg.Any<object>(),
-            Arg.Any<Exception>(),
-            Arg.Any<Func<object, Exception?, string>>());
-        logger.Received().Log(
-            LogLevel.Information,
-            Arg.Any<EventId>(),
-            Arg.Any<object>(),
-            Arg.Any<Exception>(),
-            Arg.Any<Func<object, Exception?, string>>());
-    }
-
-    [Test]
-    public async Task SendAlertEmail_EmptyApiKey_ReturnsSkipped()
-    {
-        MockHttpMessageHandler handler = new();
-        HttpClient httpClient = new(handler);
-        IOptions<ResendOptions> options = BuildOptions(apiKey: "");
-
-        ResendEmailService service = new(httpClient, options, new NullLogger<ResendEmailService>());
-
-        EmailDeliveryOutcome result = await service.SendAlertEmailAsync("alert@example.com", "Alert", "<p>Body</p>", CancellationToken.None);
-
-        await Assert.That(result).IsEqualTo(EmailDeliveryOutcome.Skipped);
-        await Assert.That(handler.Requests.Count).IsEqualTo(0);
     }
 }
