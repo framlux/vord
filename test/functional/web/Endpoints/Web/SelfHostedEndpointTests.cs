@@ -231,8 +231,39 @@ public sealed class SelfHostedEndpointTests
     }
 
     /// <summary>
+    /// The read endpoints whose entire payload comes from Stripe. Without a guard they answer 200
+    /// with empty or zeroed data, which reads as "your account has no invoices" rather than "this
+    /// product has no billing". Grouped so that exposing any one of them fails here.
+    /// </summary>
+    [Test]
+    public async Task BillingReadEndpoints_InSelfHosted_Return404()
+    {
+        using SelfHostedTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId) = await SeedTenantWithSubscription(db, SubscriptionTier.Free);
+        HttpClient client = BuildClient(factory, tenantId, userId, UserAccountRoles.Viewer);
+
+        string[] paths =
+        [
+            "/api/v1/billing/catalog",
+            "/api/v1/billing/invoices",
+            "/api/v1/billing/upcoming-invoice",
+            "/api/v1/billing/usage-history",
+        ];
+
+        foreach (string path in paths)
+        {
+            HttpResponseMessage response = await client.GetAsync(path);
+
+            await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.NotFound)
+                .Because($"{path} serves Stripe data that does not exist in a self-hosted deployment");
+        }
+    }
+
+    /// <summary>
     /// The subscription read endpoint is unguarded on purpose: the web layout fetches it on every
     /// page load, so a blanket 404 across the billing routes would break the application shell.
+    /// It sits beside the 404 tests above so the exclusion reads as deliberate rather than missed.
     /// </summary>
     [Test]
     public async Task GetBillingSubscription_InSelfHosted_StillReturns200()

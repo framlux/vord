@@ -148,10 +148,14 @@ public sealed class BillingCatalogEndpointTests
         await Assert.That(data[2].GetProperty("tier").GetString()).IsEqualTo("Team");
     }
 
+    /// <summary>
+    /// A self-hosted deployment sells nothing, so it has no prices to list. This previously answered
+    /// 200 with an empty array, which reads as "we have no plans for sale" rather than "this
+    /// product is not sold".
+    /// </summary>
     [Test]
-    public async Task Catalog_BillingDisabled_ReturnsOkWithEmptyList()
+    public async Task Catalog_SelfHosted_Returns404()
     {
-        // Billing-disabled installs must get an empty catalog (UI hides pricing), not a 404
         using SelfHostedTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
         (int tenantId, int userId) = await SeedTenantAndUser(db, SubscriptionTier.Free);
@@ -159,9 +163,6 @@ public sealed class BillingCatalogEndpointTests
 
         HttpResponseMessage response = await client.GetAsync("/api/v1/billing/catalog");
 
-        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
-        string body = await response.Content.ReadAsStringAsync();
-        using JsonDocument doc = JsonDocument.Parse(body);
-        await Assert.That(doc.RootElement.GetProperty("data").GetArrayLength()).IsEqualTo(0);
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.NotFound);
     }
 }

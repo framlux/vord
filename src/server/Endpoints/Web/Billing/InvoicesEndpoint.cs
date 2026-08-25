@@ -7,6 +7,7 @@ using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Server.Auth;
 using Framlux.FleetManagement.Services.Core.Billing;
+using Framlux.FleetManagement.Services.Core.Deployment;
 
 namespace Framlux.FleetManagement.Server.Endpoints.Web.Billing;
 
@@ -44,22 +45,30 @@ public sealed class InvoiceDto
 }
 
 /// <summary>
-/// Returns recent paid invoices for the current tenant.
+/// Returns recent paid invoices for the current tenant. Absent in a self-hosted deployment, which
+/// issues no invoices.
 /// </summary>
 public sealed class InvoicesEndpoint : EndpointWithoutRequest<ApiResponse<List<InvoiceDto>>>
 {
     private readonly ITenantRepository _tenantRepository;
     private readonly IBillingApiClient _billingApiClient;
     private readonly ITenantContext _tenantContext;
+    private readonly DeploymentMode _deploymentMode;
 
     /// <summary>
     /// Creates a new instance of the <see cref="InvoicesEndpoint"/> class.
     /// </summary>
-    public InvoicesEndpoint(ITenantRepository tenantRepository, IBillingApiClient billingApiClient, ITenantContext tenantContext)
+    public InvoicesEndpoint(ITenantRepository tenantRepository, IBillingApiClient billingApiClient, ITenantContext tenantContext, DeploymentMode deploymentMode)
     {
+        ArgumentNullException.ThrowIfNull(tenantRepository);
+        ArgumentNullException.ThrowIfNull(billingApiClient);
+        ArgumentNullException.ThrowIfNull(tenantContext);
+        ArgumentNullException.ThrowIfNull(deploymentMode);
+
         _tenantRepository = tenantRepository;
         _billingApiClient = billingApiClient;
         _tenantContext = tenantContext;
+        _deploymentMode = deploymentMode;
     }
 
     /// <inheritdoc/>
@@ -74,6 +83,13 @@ public sealed class InvoicesEndpoint : EndpointWithoutRequest<ApiResponse<List<I
     /// <inheritdoc/>
     public override async Task HandleAsync(CancellationToken ct)
     {
+        if (_deploymentMode.IsSelfHosted)
+        {
+            await HttpContext.SendApiErrorAsync(404, "Billing is not enabled", ct);
+
+            return;
+        }
+
         int tenantId = _tenantContext.RequireTenantId();
 
         Tenant? tenant = await _tenantRepository.GetTenantByIdAsync(tenantId, ct);

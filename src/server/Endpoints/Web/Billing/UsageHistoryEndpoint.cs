@@ -7,6 +7,7 @@ using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Server.Auth;
 using Framlux.FleetManagement.Services.Core.Billing;
+using Framlux.FleetManagement.Services.Core.Deployment;
 
 namespace Framlux.FleetManagement.Server.Endpoints.Web.Billing;
 
@@ -30,12 +31,20 @@ public sealed class UsagePointDto
 /// Machine counts are reconstructed from RegisteredOn/DeletedOn timestamps.
 /// Costs come from actual Stripe invoice amounts.
 /// </summary>
+/// <remarks>
+/// Absent in a self-hosted deployment. The machine-count series would still be genuine there, but
+/// the same response reports an invoice amount for every month, which self-hosted has no source
+/// for — it would answer zero and read as "you were billed nothing" rather than "this product does
+/// not bill". Surfacing the fleet-size history self-hosted means a usage endpoint that makes no
+/// billing claim, not relaxing this guard.
+/// </remarks>
 public sealed class UsageHistoryEndpoint : EndpointWithoutRequest<ApiResponse<List<UsagePointDto>>>
 {
     private readonly ITenantRepository _tenantRepository;
     private readonly IBillingApiClient _billingApiClient;
     private readonly ISubscriptionService _subscriptionService;
     private readonly ITenantContext _tenantContext;
+    private readonly DeploymentMode _deploymentMode;
 
     /// <summary>
     /// Creates a new instance of the <see cref="UsageHistoryEndpoint"/> class.
@@ -44,12 +53,20 @@ public sealed class UsageHistoryEndpoint : EndpointWithoutRequest<ApiResponse<Li
         ITenantRepository tenantRepository,
         IBillingApiClient billingApiClient,
         ISubscriptionService subscriptionService,
-        ITenantContext tenantContext)
+        ITenantContext tenantContext,
+        DeploymentMode deploymentMode)
     {
+        ArgumentNullException.ThrowIfNull(tenantRepository);
+        ArgumentNullException.ThrowIfNull(billingApiClient);
+        ArgumentNullException.ThrowIfNull(subscriptionService);
+        ArgumentNullException.ThrowIfNull(tenantContext);
+        ArgumentNullException.ThrowIfNull(deploymentMode);
+
         _tenantRepository = tenantRepository;
         _billingApiClient = billingApiClient;
         _subscriptionService = subscriptionService;
         _tenantContext = tenantContext;
+        _deploymentMode = deploymentMode;
     }
 
     /// <inheritdoc/>
@@ -64,6 +81,13 @@ public sealed class UsageHistoryEndpoint : EndpointWithoutRequest<ApiResponse<Li
     /// <inheritdoc/>
     public override async Task HandleAsync(CancellationToken ct)
     {
+        if (_deploymentMode.IsSelfHosted)
+        {
+            await HttpContext.SendApiErrorAsync(404, "Billing is not enabled", ct);
+
+            return;
+        }
+
         int tenantId = _tenantContext.RequireTenantId();
 
         Tenant? tenant = await _tenantRepository.GetTenantByIdAsync(tenantId, ct);

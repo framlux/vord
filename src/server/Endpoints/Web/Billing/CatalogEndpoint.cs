@@ -5,6 +5,7 @@
 using FastEndpoints;
 using Framlux.FleetManagement.Server.Auth;
 using Framlux.FleetManagement.Services.Core.Billing;
+using Framlux.FleetManagement.Services.Core.Deployment;
 
 namespace Framlux.FleetManagement.Server.Endpoints.Web.Billing;
 
@@ -27,22 +28,28 @@ public sealed class CatalogItemDto
 }
 
 /// <summary>
-/// Returns the public pricing catalog. Deliberately available to Free-tier tenants —
-/// the catalog powers the upgrade pricing cards — and deliberately not gated on the
-/// billing-enabled flag: disabled installs simply receive an empty catalog.
+/// Returns the public pricing catalog. Deliberately available to Free-tier tenants, since the
+/// catalog powers the upgrade pricing cards. It is absent in a self-hosted deployment, which sells
+/// nothing and therefore has no prices to list.
 /// </summary>
 public sealed class CatalogEndpoint : EndpointWithoutRequest<ApiResponse<List<CatalogItemDto>>>
 {
     private readonly IBillingApiClient _billingApiClient;
     private readonly ITenantContext _tenantContext;
+    private readonly DeploymentMode _deploymentMode;
 
     /// <summary>
     /// Creates a new instance of the <see cref="CatalogEndpoint"/> class.
     /// </summary>
-    public CatalogEndpoint(IBillingApiClient billingApiClient, ITenantContext tenantContext)
+    public CatalogEndpoint(IBillingApiClient billingApiClient, ITenantContext tenantContext, DeploymentMode deploymentMode)
     {
+        ArgumentNullException.ThrowIfNull(billingApiClient);
+        ArgumentNullException.ThrowIfNull(tenantContext);
+        ArgumentNullException.ThrowIfNull(deploymentMode);
+
         _billingApiClient = billingApiClient;
         _tenantContext = tenantContext;
+        _deploymentMode = deploymentMode;
     }
 
     /// <inheritdoc/>
@@ -57,6 +64,13 @@ public sealed class CatalogEndpoint : EndpointWithoutRequest<ApiResponse<List<Ca
     /// <inheritdoc/>
     public override async Task HandleAsync(CancellationToken ct)
     {
+        if (_deploymentMode.IsSelfHosted)
+        {
+            await HttpContext.SendApiErrorAsync(404, "Billing is not enabled", ct);
+
+            return;
+        }
+
         _tenantContext.RequireTenantId();
 
         List<CatalogItemResult> items = await _billingApiClient.GetPublicCatalogAsync(ct);
