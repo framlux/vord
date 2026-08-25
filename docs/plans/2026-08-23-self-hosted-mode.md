@@ -4,7 +4,7 @@
 
 **Goal:** Replace three drifting inferred signals (`Billing:Enabled`, `PUBLIC_BILLING_URL`, empty `Resend:ApiKey`) with one explicit `Deployment:SelfHosted` flag that alone decides SaaS-versus-self-hosted behaviour, and unlock the full product for self-hosters.
 
-**Architecture:** A `DeploymentOptions`/`DeploymentMode` pair becomes the single mode switch. `Billing:Enabled` is deleted and every consumer reads `DeploymentMode.IsSaas`. Self-hosted entitlement is delivered by a `SelfHostedSubscriptionService` decorator implementing all thirteen `ISubscriptionService` members. Email becomes an `Email:*` section with the provider chosen by mode — Resend in SaaS (hard-required), MailKit SMTP in self-hosted (optional, falling back to a no-op).
+**Architecture:** A `DeploymentOptions`/`DeploymentMode` pair becomes the single mode switch. `Billing:Enabled` is deleted and every consumer reads `DeploymentMode.IsSaas`. Self-hosted entitlement is delivered by a `SelfHostedSubscriptionService` decorator implementing all twelve `ISubscriptionService` members. Email becomes an `Email:*` section with the provider chosen by mode — Resend in SaaS (hard-required), MailKit SMTP in self-hosted (optional, falling back to a no-op).
 
 **Tech Stack:** .NET 10, FastEndpoints, LinqToDB, Hangfire, TUnit, SvelteKit 5 / Skeleton v3, MailKit (new), Kustomize/ArgoCD.
 
@@ -746,7 +746,7 @@ git commit -m "refactor: replace Billing:Enabled with deployment mode as the sin
 - Test: `test/unit/services.core/Services/Billing/SelfHostedSubscriptionServiceTests.cs`
 
 **Interfaces:**
-- Consumes: `DeploymentMode` (Task 1); `ISubscriptionService` (13 members, see `src/services.core/Services/Billing/ISubscriptionService.cs`); `TimeProvider` (already registered in `AddCoreServices`).
+- Consumes: `DeploymentMode` (Task 1); `ISubscriptionService` (12 members, see `src/services.core/Services/Billing/ISubscriptionService.cs`); `TimeProvider` (already registered in `AddCoreServices`).
 - Produces: `SelfHostedSubscriptionService : ISubscriptionService`, constructor `(ISubscriptionService inner, TimeProvider timeProvider)`.
 
 **Read the spec's §4 before starting.** Getting a member wrong here fails *silently* — the self-hoster sees an unlocked UI while a limit still bites. In particular retention does **not** flow through `EffectiveLimits`.
@@ -990,7 +990,7 @@ Expected: compile failure — `SelfHostedSubscriptionService` does not exist.
 
 - [ ] **Step 3: Implement the decorator**
 
-Create `src/services.core/Services/Billing/SelfHostedSubscriptionService.cs`. Confirm the exact member signatures against `ISubscriptionService.cs` as you write — all thirteen must be present.
+Create `src/services.core/Services/Billing/SelfHostedSubscriptionService.cs`. Confirm the exact member signatures against `ISubscriptionService.cs` as you write — all twelve must be present.
 
 ```csharp
 // Copyright (c) 2026 Framlux LLC
@@ -2090,7 +2090,7 @@ dotnet run --project test/functional/grpc/functional.grpc.csproj
 dotnet run --project test/functional/hangfire/functional.hangfire.csproj
 ```
 
-Expected: all PASS. If a self-hosted test returns 403, a `SelfHostedSubscriptionService` member is still delegating — check it against the thirteen-member table in Task 3.
+Expected: all PASS. If a self-hosted test returns 403, a `SelfHostedSubscriptionService` member is still delegating — check it against the member table in Task 3.
 
 - [ ] **Step 6: Add the runtime billing-isolation architecture test**
 
@@ -2382,7 +2382,7 @@ Three edits:
 
 3. Add a new **"Deployment mode"** paragraph under Architecture:
 
-> **`Deployment:SelfHosted` is the single mode switch.** It defaults to `true` so a fresh clone runs with no configuration; the hosted deployment sets it to `false`. It alone decides the billing client (real versus `NoOpBillingApiClient`), whether `BillingGatewayService` and `FleetAdminService` are mapped, whether `StripeSyncJob` is registered, the email transport, and whether entitlement limits apply. `Billing:Enabled` was deleted — a second switch is exactly the drift this replaced. In self-hosted, `SelfHostedSubscriptionService` decorates `ISubscriptionService` and answers every entitlement question permissively; it must implement **all thirteen** interface members, because a delegated member silently reimposes a Free-tier limit that the interface does not reflect. Retention is the member most easily missed: it does not flow through `EffectiveLimits`, and it is capped at `RetentionClassPolicy.LongWindowDays`, not unlimited, because there is no unlimited retention class.
+> **`Deployment:SelfHosted` is the single mode switch.** It defaults to `true` so a fresh clone runs with no configuration; the hosted deployment sets it to `false`. It alone decides the billing client (real versus `NoOpBillingApiClient`), whether `BillingGatewayService` and `FleetAdminService` are mapped, whether `StripeSyncJob` is registered, the email transport, and whether entitlement limits apply. `Billing:Enabled` was deleted — a second switch is exactly the drift this replaced. In self-hosted, `SelfHostedSubscriptionService` decorates `ISubscriptionService` and answers every entitlement question permissively; it must implement **all twelve** interface members, because a delegated member silently reimposes a Free-tier limit that the interface does not reflect. Retention is the member most easily missed: it does not flow through `EffectiveLimits`, and it is capped at `RetentionClassPolicy.LongWindowDays`, not unlimited, because there is no unlimited retention class.
 
 - [ ] **Step 4: Full verification**
 
@@ -2539,7 +2539,7 @@ Replace `~/.claude/projects/-Users-jonathanmiller-Repositories-framlux/memory/vo
 
 - [ ] `grep -rn "Billing:Enabled\|Billing__Enabled\|BillingStatus\|billingEnabled" src/ test/ deployment/` returns nothing in vord.
 - [ ] `grep -rn "ResendOptions\|Resend__ApiKey\|Resend:ApiKey" src/ test/` returns nothing in vord.
-- [ ] `SelfHostedSubscriptionService` implements all thirteen `ISubscriptionService` members (Task 3 Step 6), sets all five `required` members on the synthetic subscription, and **delegates** `IsIngestEligibleAsync`.
+- [ ] `SelfHostedSubscriptionService` implements all twelve `ISubscriptionService` members (Task 3 Step 6), sets all five `required` members on the synthetic subscription, and bases `IsIngestEligibleAsync` on the tenant active flag alone.
 - [ ] A functional test proves a deactivated tenant still cannot ingest in self-hosted mode.
 - [ ] `grep -rn "BillingDisabled" test/` returns nothing.
 - [ ] Both functional mode suites pass.

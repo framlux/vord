@@ -129,12 +129,6 @@ public sealed class SelfHostedSubscriptionService : ISubscriptionService
     }
 
     /// <inheritdoc/>
-    public Task EnsureSubscriptionExistsAsync(int tenantId, CancellationToken ct = default)
-    {
-        return _inner.EnsureSubscriptionExistsAsync(tenantId, ct);
-    }
-
-    /// <inheritdoc/>
     public Task<int> GetMachineCountAtDateAsync(int tenantId, DateTimeOffset targetDate, CancellationToken ct = default)
     {
         return _inner.GetMachineCountAtDateAsync(tenantId, targetDate, ct);

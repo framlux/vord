@@ -197,7 +197,7 @@ dropped after one day.
 **Chosen approach: a `SelfHostedSubscriptionService` decorator** implementing `ISubscriptionService`
 and registered in place of `SubscriptionService` when `SelfHosted == true`.
 
-**It must be defined over all thirteen interface members, not the two that are interesting.** A
+**It must be defined over all twelve interface members, not the two that are interesting.** A
 member left delegating to the inner service silently reintroduces a Free-tier limit. Explicitly:
 
 | Member | Self-hosted behaviour |
@@ -264,7 +264,7 @@ path has to be checked against the no-op client's behaviour, not against a routi
 
 **Rejected alternative:** introducing an `IEntitlementService` and rewriting all ~23 call sites.
 Cleaner long-term, but a large diff across the SaaS revenue path for no SaaS behaviour change. The
-thirteen-member decorator is the smaller change; it is worth revisiting if the surface grows again.
+twelve-member decorator is the smaller change; it is worth revisiting if the surface grows again.
 
 **Deliberate behaviour change to verify:** `InvitationHandler.cs:126` currently forces every invitee
 to `TenantAdmin` when the tenant is not Team. Under the synthetic Team tier, self-hosted invitations
@@ -766,7 +766,7 @@ tag is cut.
 | --- | --- |
 | SaaS deploy ships without `Deployment__SelfHosted=false` and silently loses billing | Phase 1 of the stack rollout places the flag while it is still inert, so no build that reads it ever runs without it; `DeploymentOptionsValidator` additionally fails startup on a half-configured SaaS deployment |
 | A later stack change reverts or drops the `Deployment__SelfHosted` literal | It sits in `fleet-config` next to `Billing__GrpcUrl`, and a SaaS deployment missing the flag falls back to self-hosted where `Billing__GrpcUrl` is ignored — no startup failure catches this. A comment in `kustomization.yaml` must state that the literal is load-bearing |
-| A `SelfHostedSubscriptionService` member is left delegating and silently reintroduces a Free limit | The decorator is specified over all thirteen members with defined semantics per member; the retention and `Can*Async` regression tests are the backstop, since a delegated member fails silently rather than loudly |
+| A `SelfHostedSubscriptionService` member is left delegating and silently reintroduces a Free limit | The decorator is specified over all twelve members with defined semantics per member; the retention and `Can*Async` regression tests are the backstop, since a delegated member fails silently rather than loudly |
 | Synthetic Team tier leaks into a tier-keyed write path added later | Reachable tier-keyed writes already exist (`MachineBillingSync.cs:64`) and are safe only because `NoOpBillingApiClient` no-ops them; this is documented on the decorator as the actual invariant to preserve |
 | `RetentionReclassifyJob`'s undecorated keyed repository sees the real `Free` row | Dormant in self-hosted (dispatched only from the SaaS-only `FleetAdminService.cs:635`); documented on the decorator so it is not made reachable without revisiting |
 | MailKit is a new dependency in a project referenced by seven test projects | Standard package, no native assets; build verification covers it |

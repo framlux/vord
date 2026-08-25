@@ -389,68 +389,6 @@ public class SubscriptionServiceTests
         }
     }
 
-    [Test]
-    public async Task EnsureSubscriptionExists_NoSubscription_ProvisionsFreeTier()
-    {
-        (DatabaseRepository repo, TestDatabaseFactory dbFactory) = BuildRepoAndFactory();
-        using (dbFactory)
-        {
-            SubscriptionService service = BuildService(repo);
-
-            await service.EnsureSubscriptionExistsAsync(100, CancellationToken.None);
-
-            TenantSubscription? sub = await dbFactory.Context.TenantSubscriptions
-                .FirstOrDefaultAsync(s => s.TenantId == 100);
-
-            await Assert.That(sub).IsNotNull();
-            await Assert.That(sub!.Tier).IsEqualTo(SubscriptionTier.Free);
-            await Assert.That(sub.Status).IsEqualTo(SubscriptionStatus.Active);
-        }
-    }
-
-    [Test]
-    public async Task EnsureSubscriptionExists_ActiveSubscription_NoOp()
-    {
-        (DatabaseRepository repo, TestDatabaseFactory dbFactory) = BuildRepoAndFactory();
-        using (dbFactory)
-        {
-            TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 200, tier: SubscriptionTier.Pro);
-            sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
-
-            SubscriptionService service = BuildService(repo);
-
-            await service.EnsureSubscriptionExistsAsync(200, CancellationToken.None);
-
-            int count = await dbFactory.Context.TenantSubscriptions
-                .Where(s => s.TenantId == 200)
-                .CountAsync();
-
-            await Assert.That(count).IsEqualTo(1);
-        }
-    }
-
-    [Test]
-    public async Task EnsureSubscriptionExists_InactiveFreeSubscription_Reactivates()
-    {
-        (DatabaseRepository repo, TestDatabaseFactory dbFactory) = BuildRepoAndFactory();
-        using (dbFactory)
-        {
-            TenantSubscription sub = TestDataBuilder.BuildSubscription(
-                tenantId: 300, tier: SubscriptionTier.Free, status: SubscriptionStatus.Canceled);
-            sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
-
-            SubscriptionService service = BuildService(repo);
-
-            await service.EnsureSubscriptionExistsAsync(300, CancellationToken.None);
-
-            TenantSubscription? updated = await dbFactory.Context.TenantSubscriptions
-                .FirstOrDefaultAsync(s => s.TenantId == 300);
-
-            await Assert.That(updated).IsNotNull();
-            await Assert.That(updated!.Status).IsEqualTo(SubscriptionStatus.Active);
-        }
-    }
-
     // ========== Subscription Active Status Tests ==========
 
     [Test]
@@ -809,63 +747,6 @@ public class SubscriptionServiceTests
             int retentionDays = await service.GetEffectiveRetentionDaysForTenantAsync(1, CancellationToken.None);
 
             await Assert.That(retentionDays).IsEqualTo(30);
-        }
-    }
-
-    [Test]
-    public async Task EnsureSubscriptionExists_CanceledPaidSubscription_RevertsToFree()
-    {
-        (DatabaseRepository repo, TestDatabaseFactory dbFactory) = BuildRepoAndFactory();
-        using (dbFactory)
-        {
-            TenantSubscription sub = TestDataBuilder.BuildSubscription(
-                tenantId: 400, tier: SubscriptionTier.Pro, status: SubscriptionStatus.Canceled);
-            sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
-
-            SubscriptionService service = BuildService(repo);
-
-            await service.EnsureSubscriptionExistsAsync(400, CancellationToken.None);
-
-            TenantSubscription? updated = await dbFactory.Context.TenantSubscriptions
-                .FirstOrDefaultAsync(s => s.TenantId == 400);
-
-            await Assert.That(updated).IsNotNull();
-            await Assert.That(updated!.Tier).IsEqualTo(SubscriptionTier.Free);
-            await Assert.That(updated.Status).IsEqualTo(SubscriptionStatus.Active);
-        }
-    }
-
-    [Test]
-    public async Task EnsureSubscriptionExists_PastDuePaidSubscription_RetainsTierAndStatus()
-    {
-        // Regression test: previously, PastDue paid subscriptions silently fell through
-        // EnsureSubscriptionExistsAsync without any action or logging. The method now
-        // explicitly handles PastDue status, retaining the current tier while Stripe
-        // handles dunning. This prevents accidental revert-to-free or re-provisioning.
-        (DatabaseRepository repo, TestDatabaseFactory dbFactory) = BuildRepoAndFactory();
-        using (dbFactory)
-        {
-            TenantSubscription sub = TestDataBuilder.BuildSubscription(
-                tenantId: 500, tier: SubscriptionTier.Pro, status: SubscriptionStatus.PastDue);
-            sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
-
-            SubscriptionService service = BuildService(repo);
-
-            await service.EnsureSubscriptionExistsAsync(500, CancellationToken.None);
-
-            TenantSubscription? updated = await dbFactory.Context.TenantSubscriptions
-                .FirstOrDefaultAsync(s => s.TenantId == 500);
-
-            // Should remain PastDue Pro — not reverted or re-provisioned
-            await Assert.That(updated).IsNotNull();
-            await Assert.That(updated!.Tier).IsEqualTo(SubscriptionTier.Pro);
-            await Assert.That(updated.Status).IsEqualTo(SubscriptionStatus.PastDue);
-
-            // Verify no additional subscription was created
-            int count = await dbFactory.Context.TenantSubscriptions
-                .Where(s => s.TenantId == 500)
-                .CountAsync();
-            await Assert.That(count).IsEqualTo(1);
         }
     }
 

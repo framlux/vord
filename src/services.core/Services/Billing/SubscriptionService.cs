@@ -214,51 +214,6 @@ public sealed class SubscriptionService : ISubscriptionService
     }
 
     /// <inheritdoc/>
-    public async Task EnsureSubscriptionExistsAsync(int tenantId, CancellationToken ct)
-    {
-        TenantSubscription? subscription = await _subscriptionRepo.GetSubscriptionForTenantAsync(tenantId, ct);
-
-        if (subscription is not null && subscription.Status == SubscriptionStatus.Active)
-        {
-            return;
-        }
-
-        // PastDue paid subscriptions keep access — Stripe handles dunning and will
-        // eventually send a payment_succeeded or subscription_deleted webhook.
-        // Do not revert or provision; the tenant retains their current tier.
-        if (subscription is not null && subscription.Status == SubscriptionStatus.PastDue)
-        {
-            _logger.LogDebug("Subscription for tenant {TenantId} is past due — retaining current tier pending payment resolution", tenantId);
-
-            return;
-        }
-
-        if (subscription is not null && subscription.Tier == SubscriptionTier.Free && subscription.Status != SubscriptionStatus.Active)
-        {
-            await _subscriptionRepo.UpdateSubscriptionStateAsync(subscription.TenantId, tier: null, SubscriptionStatus.Active, cancellationToken: ct);
-
-            _logger.LogInformation("Reactivated Free subscription for tenant {TenantId}", tenantId);
-
-            return;
-        }
-
-        // Canceled paid subscription — Stripe subscription is gone, revert to Free
-        if (subscription is not null && subscription.Status == SubscriptionStatus.Canceled)
-        {
-            await _subscriptionRepo.UpdateSubscriptionStateAsync(tenantId, SubscriptionTier.Free, SubscriptionStatus.Active, clearCurrentPeriodEnd: true, cancellationToken: ct);
-
-            _logger.LogInformation("Reverted canceled paid subscription to Free for tenant {TenantId}", tenantId);
-
-            return;
-        }
-
-        if (subscription is null)
-        {
-            await ProvisionFreeSubscriptionAsync(tenantId, ct);
-        }
-    }
-
-    /// <inheritdoc/>
     public async Task<bool> CanCreateAlertRuleAsync(int tenantId, CancellationToken ct)
     {
         TenantSubscription? subscription = await _subscriptionRepo.GetSubscriptionForTenantAsync(tenantId, ct);

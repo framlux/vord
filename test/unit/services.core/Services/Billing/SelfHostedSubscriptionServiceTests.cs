@@ -221,7 +221,7 @@ public sealed class SelfHostedSubscriptionServiceTests
     /// downstream code still expects a real row to exist for the tenant.
     /// </summary>
     [Test]
-    public async Task ProvisioningMembers_DelegateToInner()
+    public async Task ProvisionFreeSubscriptionAsync_DelegatesToInner()
     {
         SelfHostedSubscriptionService service = CreateService(out ISubscriptionService inner);
         TenantSubscription row = new()
@@ -235,9 +235,6 @@ public sealed class SelfHostedSubscriptionServiceTests
         inner.ProvisionFreeSubscriptionAsync(9, Arg.Any<CancellationToken>()).Returns(row);
 
         await Assert.That(await service.ProvisionFreeSubscriptionAsync(9)).IsEqualTo(row);
-
-        await service.EnsureSubscriptionExistsAsync(9);
-        await inner.Received(1).EnsureSubscriptionExistsAsync(9, Arg.Any<CancellationToken>());
     }
 
     [Test]

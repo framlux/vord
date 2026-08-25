@@ -50,13 +50,6 @@ public interface ISubscriptionService
     Task<int> GetMachineCountForTenantAsync(int tenantId, CancellationToken ct = default);
 
     /// <summary>
-    /// Ensures a subscription exists for the given tenant.
-    /// If no subscription exists, provisions a Free-tier subscription.
-    /// If an inactive Free subscription exists, reactivates it.
-    /// </summary>
-    Task EnsureSubscriptionExistsAsync(int tenantId, CancellationToken ct = default);
-
-    /// <summary>
     /// Gets the machine count for a tenant at a specific point in time.
     /// Reconstructs from RegisteredOn/DeletedOn timestamps.
     /// </summary>
