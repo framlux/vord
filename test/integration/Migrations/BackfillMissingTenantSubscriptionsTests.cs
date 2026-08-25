@@ -3,6 +3,7 @@
 // See LICENSE for details.
 
 using FluentMigrator.Runner;
+using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Migrations;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -21,8 +22,10 @@ namespace Framlux.FleetManagement.Test.Integration.Migrations;
 /// </remarks>
 public sealed class BackfillMissingTenantSubscriptionsTests
 {
-    private const int FreeTier = 0;
-    private const int ActiveStatus = 1;
+    // The stored values are the underlying enum integers. Free is 1, not 0 — zero is
+    // SubscriptionTier.None, which passes the Pro gate when the status is Active.
+    private const int FreeTier = (int)SubscriptionTier.Free;
+    private const int ActiveStatus = (int)SubscriptionStatus.Active;
 
     private static PostgresFixture _fixture = default!;
 
@@ -62,7 +65,7 @@ public sealed class BackfillMissingTenantSubscriptionsTests
         int userId = await SeedUserAsync(conn);
         int tenantWithout = await SeedTenantAsync(conn, "Admin Created Tenant", userId);
         int tenantWith = await SeedTenantAsync(conn, "Onboarded Tenant", userId);
-        await SeedSubscriptionAsync(conn, tenantWith, tier: 2, status: ActiveStatus);
+        await SeedSubscriptionAsync(conn, tenantWith, (int)SubscriptionTier.Pro, ActiveStatus);
 
         runner.MigrateUp();
 
@@ -73,7 +76,7 @@ public sealed class BackfillMissingTenantSubscriptionsTests
 
         (int Tier, int Status, int Count) untouched = await ReadSubscriptionAsync(conn, tenantWith);
         await Assert.That(untouched.Count).IsEqualTo(1);
-        await Assert.That(untouched.Tier).IsEqualTo(2);
+        await Assert.That(untouched.Tier).IsEqualTo((int)SubscriptionTier.Pro);
     }
 
     /// <summary>
@@ -99,7 +102,7 @@ public sealed class BackfillMissingTenantSubscriptionsTests
         await using NpgsqlCommand rerun = new(
             """
             INSERT INTO "TenantSubscriptions" ("TenantId", "Tier", "Status", "CreatedAt", "UpdatedAt", "CancelAtPeriodEnd")
-            SELECT t."Id", 0, 1, NOW(), NOW(), FALSE
+            SELECT t."Id", 1, 1, NOW(), NOW(), FALSE
             FROM "Tenants" t
             WHERE NOT EXISTS (
                 SELECT 1 FROM "TenantSubscriptions" s WHERE s."TenantId" = t."Id"

@@ -28,16 +28,18 @@ public sealed class BackfillMissingTenantSubscriptions : Migration
     /// <inheritdoc/>
     public override void Up()
     {
-        // Tier and Status columns are integers: Free = 0, Active = 1. Written as raw SQL because
-        // the insert is conditional on the absence of a row, which the fluent Insert API cannot
-        // express — and scoped to PostgreSQL because the functional test hosts run this same
-        // migration set against SQLite, where quoted identifiers and NOW() do not apply. Those
-        // hosts create their tenants through the application, which always provisions, so they
-        // have nothing to backfill.
+        // Tier and Status are stored as the underlying enum integers: SubscriptionTier.Free = 1 and
+        // SubscriptionStatus.Active = 1. Free is deliberately not zero — zero is SubscriptionTier.None,
+        // which passes the Pro gate whenever the status is Active and would hand every backfilled
+        // tenant paid features. Written as raw SQL because the insert is conditional on the absence
+        // of a row, which the fluent Insert API cannot express — and scoped to PostgreSQL because
+        // the functional test hosts run this same migration set against SQLite, where quoted
+        // identifiers and NOW() do not apply. Those hosts create their tenants through the
+        // application, which always provisions, so they have nothing to backfill.
         IfDatabase("PostgreSQL").Execute.Sql(
             """
             INSERT INTO "TenantSubscriptions" ("TenantId", "Tier", "Status", "CreatedAt", "UpdatedAt", "CancelAtPeriodEnd")
-            SELECT t."Id", 0, 1, NOW(), NOW(), FALSE
+            SELECT t."Id", 1, 1, NOW(), NOW(), FALSE
             FROM "Tenants" t
             WHERE NOT EXISTS (
                 SELECT 1 FROM "TenantSubscriptions" s WHERE s."TenantId" = t."Id"
