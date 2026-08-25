@@ -289,6 +289,7 @@ public static class ServiceCollectionExtensions
             services.AddScoped<ISubscriptionService>(sp =>
                 new SelfHostedSubscriptionService(
                     sp.GetRequiredService<SubscriptionService>(),
+                    sp.GetRequiredService<ITenantRepository>(),
                     sp.GetRequiredService<TimeProvider>()));
         }
         else

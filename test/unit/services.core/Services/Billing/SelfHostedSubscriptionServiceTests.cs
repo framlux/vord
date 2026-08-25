@@ -5,6 +5,7 @@
 using Framlux.FleetManagement.Database;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
+using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Services.Core.Billing;
 using Microsoft.Extensions.Time.Testing;
 using NSubstitute;
@@ -23,9 +24,29 @@ public sealed class SelfHostedSubscriptionServiceTests
 
     private static SelfHostedSubscriptionService CreateService(out ISubscriptionService inner)
     {
-        inner = Substitute.For<ISubscriptionService>();
+        return CreateService(out inner, out _);
+    }
 
-        return new SelfHostedSubscriptionService(inner, new FakeTimeProvider(FixedNow));
+    private static SelfHostedSubscriptionService CreateService(out ISubscriptionService inner, out ITenantRepository tenants)
+    {
+        inner = Substitute.For<ISubscriptionService>();
+        tenants = Substitute.For<ITenantRepository>();
+
+        return new SelfHostedSubscriptionService(inner, tenants, new FakeTimeProvider(FixedNow));
+    }
+
+    private static Tenant ActiveTenant(int id, bool isActive)
+    {
+        return new Tenant
+        {
+            Id = id,
+            Name = "Acme",
+            ExternalId = $"ext-{id}",
+            IsActive = isActive,
+            CreatedAt = FixedNow,
+            CreatedByUserId = 1,
+            LogoUrl = string.Empty,
+        };
     }
 
     [Test]
@@ -99,20 +120,42 @@ public sealed class SelfHostedSubscriptionServiceTests
     }
 
     /// <summary>
-    /// Ingest eligibility is not an entitlement question. The real implementation checks the
-    /// tenant's active flag first, which is how deactivation and pending deletion stop telemetry,
-    /// so overriding it would let a deactivated tenant ingest forever. A live self-hosted tenant is
-    /// eligible anyway, because eligibility accepts any Active subscription regardless of tier.
+    /// Subscription status is a hosted-product concept. A self-hosted deployment cannot change a
+    /// subscription — every billing endpoint is absent — so gating ingest on a stale or imported
+    /// status would block the tenant permanently with no way to recover.
     /// </summary>
     [Test]
-    public async Task IsIngestEligibleAsync_DelegatesSoTenantDeactivationStillBlocks()
+    public async Task IsIngestEligibleAsync_CanceledRowOnActiveTenant_IsEligible()
     {
-        SelfHostedSubscriptionService service = CreateService(out ISubscriptionService inner);
+        SelfHostedSubscriptionService service = CreateService(out ISubscriptionService inner, out ITenantRepository tenants);
+        tenants.GetTenantByIdAsync(1, Arg.Any<CancellationToken>())
+            .Returns(ActiveTenant(1, isActive: true));
         inner.IsIngestEligibleAsync(1, Arg.Any<CancellationToken>()).Returns(false);
-        inner.IsIngestEligibleAsync(2, Arg.Any<CancellationToken>()).Returns(true);
+
+        await Assert.That(await service.IsIngestEligibleAsync(1)).IsTrue();
+    }
+
+    /// <summary>
+    /// Unlocking entitlements must not unlock tenant deactivation: this is the enforcement point
+    /// for a tenant pending deletion, and it has to survive in both deployment modes.
+    /// </summary>
+    [Test]
+    public async Task IsIngestEligibleAsync_DeactivatedTenant_IsNotEligible()
+    {
+        SelfHostedSubscriptionService service = CreateService(out _, out ITenantRepository tenants);
+        tenants.GetTenantByIdAsync(1, Arg.Any<CancellationToken>())
+            .Returns(ActiveTenant(1, isActive: false));
 
         await Assert.That(await service.IsIngestEligibleAsync(1)).IsFalse();
-        await Assert.That(await service.IsIngestEligibleAsync(2)).IsTrue();
+    }
+
+    [Test]
+    public async Task IsIngestEligibleAsync_UnknownTenant_IsNotEligible()
+    {
+        SelfHostedSubscriptionService service = CreateService(out _, out ITenantRepository tenants);
+        tenants.GetTenantByIdAsync(99, Arg.Any<CancellationToken>()).Returns((Tenant?)null);
+
+        await Assert.That(await service.IsIngestEligibleAsync(99)).IsFalse();
     }
 
     /// <summary>
@@ -200,7 +243,18 @@ public sealed class SelfHostedSubscriptionServiceTests
     [Test]
     public async Task Constructor_NullInner_Throws()
     {
-        await Assert.That(() => new SelfHostedSubscriptionService(null!, new FakeTimeProvider(FixedNow)))
+        ITenantRepository tenants = Substitute.For<ITenantRepository>();
+
+        await Assert.That(() => new SelfHostedSubscriptionService(null!, tenants, new FakeTimeProvider(FixedNow)))
+            .Throws<ArgumentNullException>();
+    }
+
+    [Test]
+    public async Task Constructor_NullTenantRepository_Throws()
+    {
+        ISubscriptionService inner = Substitute.For<ISubscriptionService>();
+
+        await Assert.That(() => new SelfHostedSubscriptionService(inner, null!, new FakeTimeProvider(FixedNow)))
             .Throws<ArgumentNullException>();
     }
 
@@ -208,8 +262,9 @@ public sealed class SelfHostedSubscriptionServiceTests
     public async Task Constructor_NullTimeProvider_Throws()
     {
         ISubscriptionService inner = Substitute.For<ISubscriptionService>();
+        ITenantRepository tenants = Substitute.For<ITenantRepository>();
 
-        await Assert.That(() => new SelfHostedSubscriptionService(inner, null!))
+        await Assert.That(() => new SelfHostedSubscriptionService(inner, tenants, null!))
             .Throws<ArgumentNullException>();
     }
 }

@@ -206,19 +206,31 @@ member left delegating to the inner service silently reintroduces a Free-tier li
 | `GetEffectiveLimitsForTenantAsync` | `int.MaxValue` in every field |
 | `CanCreateAlertRuleAsync`, `CanCreateWebhookAsync`, `CanAddMemberAsync` | always `true` |
 | `GetRetentionDaysForTenantAsync`, `GetEffectiveRetentionDaysForTenantAsync` | `RetentionClassPolicy.LongWindowDays` (365) — see below |
-| `IsIngestEligibleAsync` | **delegate** — see below |
+| `IsIngestEligibleAsync` | **tenant active flag only** — see below |
 | `ProvisionFreeSubscriptionAsync`, `EnsureSubscriptionExistsAsync` | delegate (row creation must still happen) |
 | `GetMachineCountForTenantAsync`, `GetMachineCountAtDateAsync`, `GetBillableMachineCountAsync` | delegate (real counts, no entitlement meaning) |
 
-**`IsIngestEligibleAsync` must delegate, not answer `true`.** An earlier draft made it permissive
-along with the other predicates. That is wrong: `SubscriptionService.IsIngestEligibleAsync`
+**`IsIngestEligibleAsync` checks the tenant's active flag and nothing else.** Two alternatives were
+tried and rejected, in this order.
+
+*It must not answer a blanket `true`.* `SubscriptionService.IsIngestEligibleAsync`
 (`SubscriptionService.cs:99`) checks `Tenant.IsActive` *before* it looks at any subscription, and
 that check is the enforcement point for tenant deactivation and pending deletion — the behaviour
-CLAUDE.md describes as blocking "immediately on the live `Tenants.IsActive` check". Overriding it
-to `true` would let a deactivated self-hosted tenant's machines ingest forever. The override is also
-unnecessary: `IsIngestEligible` (`SubscriptionService.cs:83`) accepts any `Active` or `PastDue`
-subscription regardless of tier, and a self-hosted row is `Free`/`Active`, so delegating already
-yields full ingest. Delegate.
+CLAUDE.md describes as blocking "immediately on the live `Tenants.IsActive` check". Overriding it to
+`true` would let a deactivated self-hosted tenant's machines ingest forever.
+
+*It must not delegate either, which is where the previous draft landed.* Delegation was justified by
+observing that `IsIngestEligible` (`SubscriptionService.cs:83`) accepts any `Active` or `PastDue`
+subscription regardless of tier, and that a freshly seeded self-hosted row is `Free`/`Active`. That
+holds only for rows this deployment created. A row that arrives `Canceled` — by importing a database
+from the hosted product, or by flipping an existing install to `SelfHosted=true` — blocks ingest
+**permanently**, because a self-hosted deployment has no way to change a subscription: every billing
+endpoint 404s and no webhook is mapped. Both are exactly the migration paths self-hosting invites.
+
+So the decorator reads the tenant directly: eligible when the tenant exists and is active. Status is
+a hosted-product concept and is dropped; the active flag is not. Healing the row instead was
+considered and rejected — see §7 on `EnsureSubscriptionExistsAsync`, whose `Canceled`-paid branch
+would destroy the imported history on the first telemetry packet.
 
 **Retention is capped at 365 days, not unlimited, and the spec says so honestly.** Telemetry rows
 are physically partitioned by `RetentionClass`, and `RetentionClassPolicy` defines exactly three

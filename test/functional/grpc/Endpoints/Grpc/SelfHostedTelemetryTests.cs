@@ -53,9 +53,47 @@ public sealed class SelfHostedTelemetryTests
     }
 
     /// <summary>
+    /// Subscription status has no meaning in a self-hosted deployment: there is no payment provider
+    /// and every billing endpoint is absent, so a row left Canceled by a database import or by
+    /// switching an existing install to self-hosted cannot be repaired. Gating ingest on it would
+    /// silence the fleet permanently.
+    /// </summary>
+    [Test]
+    public async Task Ingest_ForCanceledSubscriptionOnActiveTenant_IsAccepted()
+    {
+        using SelfHostedTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+
+        string apiKey = $"self-hosted-canceled-{Guid.NewGuid():N}";
+        (long machineId, int tenantId) = await SeedFreeTenantWithMachine(db, apiKey);
+
+        await db.TenantSubscriptions
+            .Where(s => s.TenantId == tenantId)
+            .Set(s => s.Status, SubscriptionStatus.Canceled)
+            .UpdateAsync();
+
+        using GrpcChannel channel = CreateChannel(factory);
+        Telemetry.TelemetryClient client = new(channel);
+
+        string eventId = Guid.NewGuid().ToString("N");
+        TelemetryAck ack = await client.SubmitTelemetryAsync(
+            BuildEnvelope(eventId),
+            headers: new Metadata { { "x-api-key", apiKey } });
+
+        await Assert.That(ack.Success).IsTrue();
+
+        MachineTelemetry? row = await db.MachineTelemetry
+            .FirstOrDefaultAsync(t => t.SourceEventId == eventId);
+
+        await Assert.That(row).IsNotNull();
+        await Assert.That(row!.MachineId).IsEqualTo(machineId);
+    }
+
+    /// <summary>
     /// A self-hosted deployment answers entitlement questions permissively, but ingest eligibility
-    /// is not one: it delegates so that deactivation and pending deletion keep stopping telemetry
-    /// within a single request.
+    /// is not one: the tenant's active flag still decides, so deactivation and pending deletion keep
+    /// stopping telemetry within a single request. This test is the pair of the one above — together
+    /// they pin that status was dropped and the active flag was not.
     /// </summary>
     [Test]
     public async Task Ingest_ForDeactivatedTenant_IsStillBlocked()

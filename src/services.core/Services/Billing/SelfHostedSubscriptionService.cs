@@ -5,6 +5,7 @@
 using Framlux.FleetManagement.Database;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
+using Framlux.FleetManagement.Database.Repositories;
 
 namespace Framlux.FleetManagement.Services.Core.Billing;
 
@@ -40,22 +41,29 @@ namespace Framlux.FleetManagement.Services.Core.Billing;
 public sealed class SelfHostedSubscriptionService : ISubscriptionService
 {
     private readonly ISubscriptionService _inner;
+    private readonly ITenantRepository _tenantRepository;
     private readonly TimeProvider _timeProvider;
 
     /// <summary>
     /// Creates a new instance of the <see cref="SelfHostedSubscriptionService"/> class.
     /// </summary>
     /// <param name="inner">The real subscription service, used for non-entitlement queries.</param>
+    /// <param name="tenantRepository">
+    /// Used to read the tenant's active flag, which is the only ingest gate that carries meaning in
+    /// a self-hosted deployment.
+    /// </param>
     /// <param name="timeProvider">
     /// Clock used to stamp the synthetic subscription. The synthetic row is serialized by the
     /// subscription endpoint, so its timestamps are user-visible and must be a real time.
     /// </param>
-    public SelfHostedSubscriptionService(ISubscriptionService inner, TimeProvider timeProvider)
+    public SelfHostedSubscriptionService(ISubscriptionService inner, ITenantRepository tenantRepository, TimeProvider timeProvider)
     {
         ArgumentNullException.ThrowIfNull(inner);
+        ArgumentNullException.ThrowIfNull(tenantRepository);
         ArgumentNullException.ThrowIfNull(timeProvider);
 
         _inner = inner;
+        _tenantRepository = tenantRepository;
         _timeProvider = timeProvider;
     }
 
@@ -78,15 +86,17 @@ public sealed class SelfHostedSubscriptionService : ISubscriptionService
 
     /// <inheritdoc/>
     /// <remarks>
-    /// Deliberately delegated. This is not an entitlement question: the real implementation checks
-    /// the tenant's active flag first, which is how tenant deactivation and pending deletion stop
-    /// telemetry within a single request. Answering permissively here would let a deactivated
-    /// tenant ingest forever. A live self-hosted tenant is eligible anyway, because eligibility
-    /// accepts any active subscription regardless of tier.
+    /// Deliberately does not consult the subscription. Status is a hosted-product concept: a
+    /// self-hosted deployment has no way to change a subscription, so a row left Canceled by a
+    /// database import or a mode switch would block ingest permanently with no route to recover.
+    /// The tenant's active flag is the check that does carry meaning here, and it must be kept —
+    /// it is how deactivation and pending deletion stop telemetry within a single request.
     /// </remarks>
-    public Task<bool> IsIngestEligibleAsync(int tenantId, CancellationToken ct = default)
+    public async Task<bool> IsIngestEligibleAsync(int tenantId, CancellationToken ct = default)
     {
-        return _inner.IsIngestEligibleAsync(tenantId, ct);
+        Tenant? tenant = await _tenantRepository.GetTenantByIdAsync(tenantId, ct);
+
+        return (tenant is not null) && tenant.IsActive;
     }
 
     /// <inheritdoc/>
