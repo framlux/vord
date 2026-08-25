@@ -77,10 +77,6 @@ public static class ServiceCollectionExtensions
             .ValidateOnStart();
         services.AddSingleton<IValidateOptions<BillingOptions>, BillingOptionsValidator>();
 
-        // Registered after the billing options it reads. Both entry points call AddCoreOptions, so
-        // the check reaches the API server and the worker without either naming it.
-        services.AddHostedService<IgnoredBillingConfigurationWarning>();
-
         services.Configure<TierDefaultOptions>(configuration.GetSection("TierDefaults"));
 
         services.AddOptions<DatabaseOptions>()
@@ -107,6 +103,11 @@ public static class ServiceCollectionExtensions
             .Bind(configuration.GetSection("Email"))
             .ValidateOnStart();
         services.AddSingleton<IValidateOptions<EmailOptions>, EmailOptionsValidator>();
+
+        // Registered after the billing and email options it reads. Both entry points call
+        // AddCoreOptions, so the check reaches the API server and the worker without either
+        // naming it.
+        services.AddHostedService<IgnoredHostedConfigurationWarning>();
 
         services.AddOptions<AppOptions>()
             .Bind(configuration.GetSection("App"))

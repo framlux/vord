@@ -1600,6 +1600,9 @@ public class MachineServiceTests
 
         await service.RegisterSystemAsync(request, CancellationToken.None);
 
-        await Assert.That(callOrder).IsEquivalentTo(new List<string> { "create", "report" });
+        // Joined rather than compared as a collection: IsEquivalentTo ignores order, so it passes
+        // even when the two calls happen the wrong way round — which is the only thing this test
+        // exists to catch.
+        await Assert.That(string.Join(",", callOrder)).IsEqualTo("create,report");
     }
 }

@@ -7,7 +7,6 @@ using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Server.Auth;
 using Framlux.FleetManagement.Services.Core.Models.Machines;
-using Framlux.FleetManagement.Services.Core.Billing;
 using Framlux.FleetManagement.Services.Core.Infrastructure;
 using Framlux.FleetManagement.Services.Core.Machines;
 
