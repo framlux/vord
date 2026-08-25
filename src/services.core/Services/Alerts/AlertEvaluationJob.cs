@@ -100,9 +100,11 @@ public sealed class AlertEvaluationJob
                 // the recurring schedule, so transient failures self-heal.
                 try
                 {
-                    // Threshold-based alerts are a paid feature. Free tier (and any non-active status) skip.
+                    // Threshold-based alerts are a paid feature. A pre-processor cannot reach a
+                    // background job, so the gate is asked of the shared policy rather than
+                    // restated here.
                     TenantSubscription? subscription = await _subscriptionService.GetSubscriptionForTenantAsync(tenantId, ct);
-                    if ((subscription is null) || (subscription.Tier == SubscriptionTier.Free) || (subscription.Status != SubscriptionStatus.Active))
+                    if (SubscriptionPolicy.RequiresPro(subscription))
                     {
                         continue;
                     }

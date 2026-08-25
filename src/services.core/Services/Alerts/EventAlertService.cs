@@ -43,8 +43,10 @@ public sealed class EventAlertService : IEventAlertService
         using IServiceScope scope = _scopeFactory.CreateScope();
         ISubscriptionService subscriptionService = scope.ServiceProvider.GetRequiredService<ISubscriptionService>();
 
+        // Event alerts are a paid feature. A pre-processor cannot reach this path, so the gate is
+        // asked of the shared policy rather than restated here.
         TenantSubscription? subscription = await subscriptionService.GetSubscriptionForTenantAsync(tenantId, ct);
-        if ((subscription is null) || (subscription.Tier == SubscriptionTier.Free) || (subscription.Status != SubscriptionStatus.Active))
+        if (SubscriptionPolicy.RequiresPro(subscription))
         {
             return;
         }

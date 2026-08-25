@@ -282,4 +282,58 @@ public sealed class SubscriptionStatusPreProcessorTests
         await Assert.That(message).Contains("reactivate");
         await Assert.That(message).Contains("billing");
     }
+
+    // --- Fail closed on a missing subscription ---
+
+    /// <summary>
+    /// Every other entitlement gate refuses a tenant with no subscription row; this one used to
+    /// return early and permit the mutation. The message is deliberately not the canceled one:
+    /// there is nothing to reactivate, and in a self-hosted deployment the billing page it points
+    /// at does not exist.
+    /// </summary>
+    [Test]
+    public async Task Post_TenantWithNoSubscription_Returns403WithMissingSubscriptionMessage()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId) = await SeedTenantWithStatus(db, SubscriptionStatus.Active);
+
+        await db.TenantSubscriptions.Where(s => s.TenantId == tenantId).DeleteAsync();
+
+        HttpClient client = BuildClient(factory, tenantId, userId);
+
+        HttpResponseMessage response = await client.PostAsJsonAsync("/api/v1/invitations", new
+        {
+            Email = "test@example.com",
+        });
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.Forbidden);
+
+        string body = await response.Content.ReadAsStringAsync();
+        using JsonDocument doc = JsonDocument.Parse(body);
+        string message = doc.RootElement.GetProperty("message").GetString() ?? string.Empty;
+
+        await Assert.That(message).Contains("No subscription found");
+        await Assert.That(message).DoesNotContain("reactivate");
+    }
+
+    /// <summary>
+    /// Reading stays permitted with no subscription row, exactly as it does for a canceled one.
+    /// Failing closed is about mutations, not about locking a tenant out of their own data.
+    /// </summary>
+    [Test]
+    public async Task Get_TenantWithNoSubscription_Returns200()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId) = await SeedTenantWithStatus(db, SubscriptionStatus.Active);
+
+        await db.TenantSubscriptions.Where(s => s.TenantId == tenantId).DeleteAsync();
+
+        HttpClient client = BuildClient(factory, tenantId, userId);
+
+        HttpResponseMessage response = await client.GetAsync("/api/v1/invitations");
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
+    }
 }

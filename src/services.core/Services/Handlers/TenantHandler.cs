@@ -27,6 +27,7 @@ public sealed partial class TenantHandler
     private static partial Regex BlockedCharactersRegex();
 
     private readonly ITenantRepository _tenantRepo;
+    private readonly ISubscriptionRepository _subscriptionRepo;
     private readonly IDatabaseTransactionProvider _transactionProvider;
     private readonly IAuditLogRepository _auditLog;
     private readonly ILogger<TenantHandler> _logger;
@@ -36,16 +37,19 @@ public sealed partial class TenantHandler
     /// </summary>
     public TenantHandler(
         ITenantRepository tenantRepo,
+        ISubscriptionRepository subscriptionRepo,
         IDatabaseTransactionProvider transactionProvider,
         IAuditLogRepository auditLog,
         ILogger<TenantHandler> logger)
     {
         ArgumentNullException.ThrowIfNull(tenantRepo);
+        ArgumentNullException.ThrowIfNull(subscriptionRepo);
         ArgumentNullException.ThrowIfNull(transactionProvider);
         ArgumentNullException.ThrowIfNull(auditLog);
         ArgumentNullException.ThrowIfNull(logger);
 
         _tenantRepo = tenantRepo;
+        _subscriptionRepo = subscriptionRepo;
         _transactionProvider = transactionProvider;
         _auditLog = auditLog;
         _logger = logger;
@@ -86,14 +90,28 @@ public sealed partial class TenantHandler
 
         using IDatabaseTransaction transaction = await _transactionProvider.BeginTransactionAsync(ct);
 
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+
         Tenant tenant = await _tenantRepo.CreateTenantAsync(new Tenant
         {
             Name = name,
             ExternalId = Guid.NewGuid().ToString(),
             LogoUrl = logoUrl,
             IsActive = true,
-            CreatedAt = DateTimeOffset.UtcNow,
+            CreatedAt = now,
             CreatedByUserId = userId,
+        }, ct);
+
+        // Provisioned in the same transaction as the tenant, matching the onboarding and invitation
+        // paths. Every entitlement gate refuses a tenant with no subscription row, so a tenant
+        // created without one could be joined by members who could then change nothing.
+        await _subscriptionRepo.CreateTenantSubscriptionAsync(new TenantSubscription
+        {
+            TenantId = tenant.Id,
+            Tier = SubscriptionTier.Free,
+            Status = SubscriptionStatus.Active,
+            CreatedAt = now,
+            UpdatedAt = now,
         }, ct);
 
         await _auditLog.InsertAuditLogAsync(AuditHelper.Create(

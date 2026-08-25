@@ -63,19 +63,20 @@ public sealed class SubscriptionStatusPreProcessor : IGlobalPreProcessor
         TenantSubscription? subscription = await subscriptionService
             .GetSubscriptionForTenantAsync(tenantId.Value, ct);
 
-        if (subscription is null)
+        if (SubscriptionPolicy.BlocksMutations(subscription) == false)
         {
             return;
         }
 
-        if (subscription.Status == SubscriptionStatus.Canceled)
-        {
-            await httpContext.SendApiErrorAsync(
-                403,
-                "Subscription is canceled. Your account is in read-only mode. Please reactivate from the billing page.",
-                ct);
+        // A missing row gets its own message. The canceled text points at the billing page to
+        // reactivate, but there is nothing to reactivate when no subscription exists — and in a
+        // self-hosted deployment that page is absent entirely.
+        string message = subscription is null
+            ? "No subscription found for this tenant."
+            : "Subscription is canceled. Your account is in read-only mode. Please reactivate from the billing page.";
 
-            context.HttpContext.MarkResponseStart();
-        }
+        await httpContext.SendApiErrorAsync(403, message, ct);
+
+        context.HttpContext.MarkResponseStart();
     }
 }

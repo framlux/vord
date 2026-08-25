@@ -72,17 +72,15 @@ public sealed class ProSubscriptionPreProcessor : IGlobalPreProcessor
     }
 
     /// <summary>
-    /// Returns <c>true</c> when the supplied subscription does not grant alerting access — i.e. it
-    /// is missing, on the Free tier, or not in the Active status. Extracted as an
-    /// <c>internal static</c> method so the gating decision can be unit-tested directly.
+    /// Returns <c>true</c> when the supplied subscription does not grant Pro access. The rule now
+    /// lives in <see cref="SubscriptionPolicy.RequiresPro"/> so the background jobs, which no
+    /// pre-processor reaches, ask the same question rather than restating it.
     /// </summary>
     /// <param name="subscription">The tenant's subscription, or <c>null</c> if none exists.</param>
     /// <returns><c>true</c> if access must be denied; otherwise <c>false</c>.</returns>
     internal static bool RequiresProGate(TenantSubscription? subscription)
     {
-        return (subscription is null) ||
-               (subscription.Tier == SubscriptionTier.Free) ||
-               (subscription.Status != SubscriptionStatus.Active);
+        return SubscriptionPolicy.RequiresPro(subscription);
     }
 
     /// <summary>

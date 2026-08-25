@@ -87,7 +87,7 @@ public sealed class InvitationHandler
         }
 
         TenantSubscription? subscription = await _subscriptionService.GetSubscriptionForTenantAsync(tenantId.Value, ct);
-        if ((subscription is null) || (subscription.Tier == SubscriptionTier.Free))
+        if (SubscriptionPolicy.RequiresPaidTier(subscription))
         {
             return ServiceResult<InvitationDeliveryResult>.Error(402,
                 new InvitationDeliveryResult { ErrorMessage = "Upgrade to Pro or Team to invite team members" });
@@ -122,8 +122,9 @@ public sealed class InvitationHandler
             assignedRole = parsed;
         }
 
-        // Non-Team tiers get TenantAdmin role forced for all invitations
-        if (subscription.Tier != SubscriptionTier.Team)
+        // Non-Team tiers get TenantAdmin role forced for all invitations. The same predicate as the
+        // Team feature gates, even though here it forks a role rather than refusing the request.
+        if (SubscriptionPolicy.RequiresTeam(subscription))
         {
             assignedRole = UserAccountRoles.TenantAdmin;
         }

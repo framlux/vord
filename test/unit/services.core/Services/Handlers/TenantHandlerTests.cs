@@ -2,6 +2,7 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
+using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Services.Core.Models.Tenants;
@@ -24,10 +25,12 @@ public class TenantHandlerTests
         ITenantRepository? tenantRepository = null,
         IDatabaseTransactionProvider? transactionProvider = null,
         IAuditLogRepository? auditLog = null,
-        ILogger<TenantHandler>? logger = null)
+        ILogger<TenantHandler>? logger = null,
+        ISubscriptionRepository? subscriptionRepository = null)
     {
         return new TenantHandler(
             tenantRepository ?? Substitute.For<ITenantRepository>(),
+            subscriptionRepository ?? Substitute.For<ISubscriptionRepository>(),
             transactionProvider ?? Substitute.For<IDatabaseTransactionProvider>(),
             auditLog ?? Substitute.For<IAuditLogRepository>(),
             logger ?? Substitute.For<ILogger<TenantHandler>>());
@@ -318,5 +321,77 @@ public class TenantHandlerTests
             .Returns(Task.CompletedTask);
 
         return (txProvider, auditLog);
+    }
+
+    /// <summary>
+    /// Every entitlement gate refuses a tenant with no subscription row, and the mutation gate now
+    /// fails closed on one, so an admin-created tenant without a row would be joinable but unable
+    /// to change anything. The other two tenant-creation paths have always provisioned; this is the
+    /// one that did not.
+    /// </summary>
+    [Test]
+    public async Task CreateAsync_ProvisionsFreeSubscriptionForTheNewTenant()
+    {
+        ITenantRepository cache = Substitute.For<ITenantRepository>();
+        cache.GetTenantByNameAsync("Provisioned Corp", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<Tenant?>(null));
+        Tenant createdTenant = TestDataBuilder.BuildTenant(name: "Provisioned Corp");
+        createdTenant.Id = 77;
+        cache.CreateTenantAsync(Arg.Any<Tenant>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(createdTenant));
+        (IDatabaseTransactionProvider txProvider, IAuditLogRepository auditLog) = CreateMockTransactionAndAudit();
+        ISubscriptionRepository subscriptions = Substitute.For<ISubscriptionRepository>();
+        TenantHandler handler = BuildHandler(
+            tenantRepository: cache,
+            transactionProvider: txProvider,
+            auditLog: auditLog,
+            subscriptionRepository: subscriptions);
+
+        ServiceResult<TenantDto> result = await handler.CreateAsync(
+            "Provisioned Corp", "https://logo.png", 1, CancellationToken.None);
+
+        await Assert.That(result.IsSuccess).IsTrue();
+        await subscriptions.Received(1).CreateTenantSubscriptionAsync(
+            Arg.Is<TenantSubscription>(s =>
+                (s.TenantId == 77) &&
+                (s.Tier == SubscriptionTier.Free) &&
+                (s.Status == SubscriptionStatus.Active)),
+            Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>
+    /// The subscription is written before the commit, so a failure to provision rolls the tenant
+    /// back with it rather than leaving the row-less tenant this exists to prevent.
+    /// </summary>
+    [Test]
+    public async Task CreateAsync_WhenProvisioningFails_DoesNotCommit()
+    {
+        ITenantRepository cache = Substitute.For<ITenantRepository>();
+        cache.GetTenantByNameAsync("Rollback Corp", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<Tenant?>(null));
+        Tenant createdTenant = TestDataBuilder.BuildTenant(name: "Rollback Corp");
+        createdTenant.Id = 78;
+        cache.CreateTenantAsync(Arg.Any<Tenant>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(createdTenant));
+
+        IDatabaseTransaction transaction = Substitute.For<IDatabaseTransaction>();
+        IDatabaseTransactionProvider txProvider = Substitute.For<IDatabaseTransactionProvider>();
+        txProvider.BeginTransactionAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult(transaction));
+
+        ISubscriptionRepository subscriptions = Substitute.For<ISubscriptionRepository>();
+        subscriptions.CreateTenantSubscriptionAsync(Arg.Any<TenantSubscription>(), Arg.Any<CancellationToken>())
+            .Returns<Task<TenantSubscription>>(_ => throw new InvalidOperationException("provisioning failed"));
+
+        TenantHandler handler = BuildHandler(
+            tenantRepository: cache,
+            transactionProvider: txProvider,
+            auditLog: Substitute.For<IAuditLogRepository>(),
+            subscriptionRepository: subscriptions);
+
+        await Assert.That(async () => await handler.CreateAsync(
+                "Rollback Corp", "https://logo.png", 1, CancellationToken.None))
+            .Throws<InvalidOperationException>();
+
+        await transaction.DidNotReceive().CommitAsync(Arg.Any<CancellationToken>());
     }
 }
