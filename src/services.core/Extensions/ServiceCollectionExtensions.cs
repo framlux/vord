@@ -77,6 +77,10 @@ public static class ServiceCollectionExtensions
             .ValidateOnStart();
         services.AddSingleton<IValidateOptions<BillingOptions>, BillingOptionsValidator>();
 
+        // Registered after the billing options it reads. Both entry points call AddCoreOptions, so
+        // the check reaches the API server and the worker without either naming it.
+        services.AddHostedService<IgnoredBillingConfigurationWarning>();
+
         services.Configure<TierDefaultOptions>(configuration.GetSection("TierDefaults"));
 
         services.AddOptions<DatabaseOptions>()
