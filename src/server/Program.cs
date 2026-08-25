@@ -444,6 +444,11 @@ app.UseFastEndpoints(options =>
             ep.PreProcessor<SubscriptionStatusPreProcessor>(FastEndpoints.Order.Before);
             ep.PreProcessor<ProSubscriptionPreProcessor>(FastEndpoints.Order.Before);
 
+            // Registered after the Pro gate, and the order is observable: the alert-rule endpoints
+            // carry both tags, and a Free tenant is meant to receive the Pro message. Running Team
+            // first would change which message that tenant sees.
+            ep.PreProcessor<TeamSubscriptionPreProcessor>(FastEndpoints.Order.Before);
+
             // Global-by-default antiforgery enrollment. See AntiforgeryStartup and
             // AntiforgeryEnrollment for the rule; opt out per-endpoint with [SkipAntiforgery]
             // (every opt-out must also be reviewed and listed in AntiforgeryOptOutAllowlist).

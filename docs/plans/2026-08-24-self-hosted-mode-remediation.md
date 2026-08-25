@@ -507,9 +507,11 @@ The SSH-key and command-send strings are **identical**, which is a pre-existing 
 
 Moving a gate from the handler into a pre-processor changes *when* it fires relative to request validation, so pin the result with a test rather than reasoning about it.
 
-An earlier draft of this step argued from `IPreProcessorContext.ValidationFailures` that pre-processors run *before* the automatic 400, and that an invalid body from a non-Team tenant on `CommandSend` might therefore flip from 400 to 403. That inference is backwards. In the FastEndpoints version in use, `Endpoint.ExecAsync` runs bind → `OnBeforeValidate` → `ValidateRequest` → `OnAfterValidate` → pre-processors → handler, and `ValidateRequest` throws `ValidationFailureException` (caught and rendered as the automatic 400) before any pre-processor runs. `ValidationFailures` is exposed on the context so a pre-processor can inspect or add to failures that did not throw — not because it precedes the 400.
+**Measured, not predicted.** Global pre-processors registered through the configurator run **before** request validation in this setup, so the flip is real: an invalid body from a non-Team tenant on `CommandSend` returns **403 after the conversion where it returned 400 before**.
 
-So validation still wins, and the conversion moves the gate earlier relative to the *handler* only. Expect 400 both before and after. Still write the test — one functional test posting an invalid body as a non-Team tenant — and record the code the framework actually produces rather than the one this paragraph predicts.
+This was established by observation rather than by reading the framework. Two independent readings of the FastEndpoints source argued the opposite — that `ValidateRequest` throws its `ValidationFailureException` ahead of `RunPreprocessors`, with `IPreProcessorContext.ValidationFailures` exposed only so a pre-processor can inspect failures that did not throw. The running system disagrees: a Free tenant posting a body that fails validation to the already-Pro-tagged `alert-rule` create endpoint receives the *Pro* 403, not a 400. Trust the test.
+
+The change is acceptable and is the reason the conversion converges rather than diverges: every Pro-tagged endpoint has always behaved this way, so `CommandSend` now matches its neighbours instead of being the odd one out. A tenant's own tier is not a secret, so reporting it before validating the payload leaks nothing. The test records the observed code so a future framework upgrade that reorders this is caught rather than absorbed.
 
 - [ ] **Step 7: Run everything, then commit**
 

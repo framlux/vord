@@ -50,8 +50,13 @@ public sealed class AlertRuleCreateEndpoint : Endpoint<CreateAlertRuleRequest, A
     {
         Post("/alert-rules");
         Policies(AuthorizationPolicies.TenantAdmin);
-        Tags(Services.Billing.EndpointTags.RequiresProSubscription, EndpointTags.RequiresTenant);
-        Options(b => b.WithMetadata(new RequiresProFeatureMessage(ProFeatureMessages.Alerting)));
+        Tags(
+            Services.Billing.EndpointTags.RequiresProSubscription,
+            Services.Billing.EndpointTags.RequiresTeamSubscription,
+            EndpointTags.RequiresTenant);
+        Options(b => b
+            .WithMetadata(new RequiresProFeatureMessage(ProFeatureMessages.Alerting))
+            .WithMetadata(new RequiresTeamFeatureMessage("Custom alert rules require a Team subscription")));
         Version(1);
     }
 
@@ -60,19 +65,9 @@ public sealed class AlertRuleCreateEndpoint : Endpoint<CreateAlertRuleRequest, A
     {
         int tenantId = _tenantContext.RequireTenantId();
 
-        // Pro+ gating (null/Free/non-Active → 403) is enforced by ProSubscriptionPreProcessor via
-        // the RequiresProSubscription tag. The subscription is still loaded here for the Team-tier
-        // check below. The pre-processor guarantees a non-null, Active, non-Free subscription.
-        TenantSubscription? subscription = await _subscriptionService.GetSubscriptionForTenantAsync(tenantId, ct);
-
-        // Only Team tier can create custom rules
-        if ((subscription is null) || (subscription.Tier != SubscriptionTier.Team))
-        {
-            await HttpContext.SendApiErrorAsync(403, "Custom alert rules require a Team subscription", ct);
-
-            return;
-        }
-
+        // Tier gating is declarative: the RequiresProSubscription and RequiresTeamSubscription tags
+        // in Configure() are enforced by their pre-processors before this handler runs, so a tenant
+        // reaching here is on Team with an Active subscription.
         bool canCreate = await _subscriptionService.CanCreateAlertRuleAsync(tenantId, ct);
         if (canCreate == false)
         {

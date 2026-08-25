@@ -30,16 +30,14 @@ public sealed class MachineAuthorizedKeyAddRequest
 public sealed class MachineAuthorizedKeyAddEndpoint : Endpoint<MachineAuthorizedKeyAddRequest, ApiResponse<MachineAuthorizedKeyDto>>
 {
     private readonly MachineAuthorizedKeyService _authorizedKeyService;
-    private readonly ISubscriptionService _subscriptionService;
     private readonly ITenantContext _tenantContext;
 
     /// <summary>
     /// Creates a new instance of the <see cref="MachineAuthorizedKeyAddEndpoint"/> class.
     /// </summary>
-    public MachineAuthorizedKeyAddEndpoint(MachineAuthorizedKeyService authorizedKeyService, ISubscriptionService subscriptionService, ITenantContext tenantContext)
+    public MachineAuthorizedKeyAddEndpoint(MachineAuthorizedKeyService authorizedKeyService, ITenantContext tenantContext)
     {
         _authorizedKeyService = authorizedKeyService;
-        _subscriptionService = subscriptionService;
         _tenantContext = tenantContext;
     }
 
@@ -48,7 +46,8 @@ public sealed class MachineAuthorizedKeyAddEndpoint : Endpoint<MachineAuthorized
     {
         Post("/machines/{machineId}/authorized-keys");
         Policies(AuthorizationPolicies.MachineAdmin);
-        Tags(EndpointTags.RequiresTenant);
+        Tags(Services.Billing.EndpointTags.RequiresTeamSubscription, EndpointTags.RequiresTenant);
+        Options(b => b.WithMetadata(new RequiresTeamFeatureMessage("Remote commands require a Team subscription")));
         Version(1);
     }
 
@@ -56,15 +55,6 @@ public sealed class MachineAuthorizedKeyAddEndpoint : Endpoint<MachineAuthorized
     public override async Task HandleAsync(MachineAuthorizedKeyAddRequest req, CancellationToken ct)
     {
         int tenantId = _tenantContext.RequireTenantId();
-
-        // Remote commands require a Team subscription.
-        TenantSubscription? subscription = await _subscriptionService.GetSubscriptionForTenantAsync(tenantId, ct);
-        if ((subscription is null) || (subscription.Tier != SubscriptionTier.Team))
-        {
-            await HttpContext.SendApiErrorAsync(403, "Remote commands require a Team subscription", ct);
-
-            return;
-        }
 
         long machineId = Route<long>("machineId");
 

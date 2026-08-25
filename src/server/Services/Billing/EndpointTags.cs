@@ -23,6 +23,14 @@ public static class EndpointTags
     public const string RequiresProSubscription = "RequiresProSubscription";
 
     /// <summary>
+    /// Endpoints with this tag require the Team tier. The shared
+    /// <see cref="TeamSubscriptionPreProcessor"/> returns 403 for tenants on any other tier or with
+    /// no subscription. Unlike the Pro gate this is tier-only and does not consult status, matching
+    /// the hand-written checks it replaced.
+    /// </summary>
+    public const string RequiresTeamSubscription = "RequiresTeamSubscription";
+
+    /// <summary>
     /// Endpoints with this tag require a tenant scope on the request. The
     /// <see cref="Tenancy.TenantContextPreProcessor"/> rejects tenant-less requests with a
     /// 401 before the handler runs, so tagged handlers may call

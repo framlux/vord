@@ -62,7 +62,7 @@ public sealed class TenantOidcHandler
         }
 
         TenantSubscription? subscription = await _subscriptionService.GetSubscriptionForTenantAsync(tenantId, ct);
-        if ((subscription is null) || (subscription.Tier != SubscriptionTier.Team))
+        if (SubscriptionPolicy.RequiresTeam(subscription))
         {
             return ServiceResult<TenantOidcConfigDto>.Forbidden("Custom OIDC configuration requires a Team tier subscription");
         }
@@ -104,7 +104,7 @@ public sealed class TenantOidcHandler
         }
 
         TenantSubscription? subscription = await _subscriptionService.GetSubscriptionForTenantAsync(tenantId, ct);
-        if ((subscription is null) || (subscription.Tier != SubscriptionTier.Team))
+        if (SubscriptionPolicy.RequiresTeam(subscription))
         {
             return ServiceResult<TenantOidcConfigDto>.Forbidden("Custom OIDC configuration requires a Team tier subscription");
         }

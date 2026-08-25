@@ -95,7 +95,9 @@ public sealed class AuthProviderChallengeEndpoint : EndpointWithoutRequest<ApiRe
 
             TenantOidcConfiguration? oidcConfig = await _tenantRepository.GetTenantOidcConfigurationAsync(tenantId, ct);
             TenantSubscription? subscription = await _subscriptionService.GetSubscriptionForTenantAsync(tenantId, ct);
-            bool teamTier = (subscription is not null) && (subscription.Tier == SubscriptionTier.Team);
+            // Asks the positive question, so the block-polarity predicate is inverted here rather than
+            // written out again. Using it bare would silently reverse the gate.
+            bool teamTier = SubscriptionPolicy.RequiresTeam(subscription) == false;
             if ((SsoOidcEvents.IsConfigUsable(oidcConfig) == false) || (teamTier == false))
             {
                 await HttpContext.SendApiErrorAsync(400, "Custom SSO is not available for this organization", ct);

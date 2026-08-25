@@ -18,16 +18,14 @@ namespace Framlux.FleetManagement.Server.Endpoints.Web.Commands;
 public sealed class CommandSendEndpoint : Endpoint<CommandSendRequest, ApiResponse<CommandDto>>
 {
     private readonly RemoteCommandService _commandService;
-    private readonly ISubscriptionService _subscriptionService;
     private readonly ITenantContext _tenantContext;
 
     /// <summary>
     /// Creates a new instance of the <see cref="CommandSendEndpoint"/> class.
     /// </summary>
-    public CommandSendEndpoint(RemoteCommandService commandService, ISubscriptionService subscriptionService, ITenantContext tenantContext)
+    public CommandSendEndpoint(RemoteCommandService commandService, ITenantContext tenantContext)
     {
         _commandService = commandService;
-        _subscriptionService = subscriptionService;
         _tenantContext = tenantContext;
     }
 
@@ -36,7 +34,8 @@ public sealed class CommandSendEndpoint : Endpoint<CommandSendRequest, ApiRespon
     {
         Post("/commands");
         Policies(AuthorizationPolicies.MachineAdmin);
-        Tags(EndpointTags.RequiresTenant);
+        Tags(Services.Billing.EndpointTags.RequiresTeamSubscription, EndpointTags.RequiresTenant);
+        Options(b => b.WithMetadata(new RequiresTeamFeatureMessage("Remote commands require a Team subscription")));
         Version(1);
     }
 
@@ -44,14 +43,6 @@ public sealed class CommandSendEndpoint : Endpoint<CommandSendRequest, ApiRespon
     public override async Task HandleAsync(CommandSendRequest req, CancellationToken ct)
     {
         int tenantId = _tenantContext.RequireTenantId();
-
-        TenantSubscription? subscription = await _subscriptionService.GetSubscriptionForTenantAsync(tenantId, ct);
-        if ((subscription is null) || (subscription.Tier != SubscriptionTier.Team))
-        {
-            await HttpContext.SendApiErrorAsync(403, "Remote commands require a Team subscription", ct);
-
-            return;
-        }
 
         int? userId = _tenantContext.UserId;
         if (userId is null)

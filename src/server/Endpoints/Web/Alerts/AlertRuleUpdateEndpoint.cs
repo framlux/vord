@@ -121,7 +121,7 @@ public sealed class AlertRuleUpdateEndpoint : Endpoint<UpdateAlertRuleRequest, A
             return;
         }
 
-        if (rule.IsCustom && ((subscription is null) || (subscription.Tier != SubscriptionTier.Team)))
+        if (rule.IsCustom && SubscriptionPolicy.RequiresTeam(subscription))
         {
             await HttpContext.SendApiErrorAsync(403, "Custom rules can only be modified with a Team subscription", ct);
 

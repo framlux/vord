@@ -155,7 +155,7 @@ public sealed class MemberHandler
         }
 
         TenantSubscription? subscription = await _subscriptionService.GetSubscriptionForTenantAsync(tenantId.Value, ct);
-        if ((subscription is null) || (subscription.Tier != SubscriptionTier.Team))
+        if (SubscriptionPolicy.RequiresTeam(subscription))
         {
             return ServiceResult<ApiResponse<object>>.Error(403, ApiResponse<object>.Error("Role management requires a Team subscription"));
         }

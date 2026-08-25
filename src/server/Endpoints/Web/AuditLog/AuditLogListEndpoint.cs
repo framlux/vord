@@ -44,16 +44,14 @@ public sealed class AuditLogListRequest
 public sealed class AuditLogListEndpoint : Endpoint<AuditLogListRequest, ApiResponse<PaginatedResponse<AuditLogEntryDto>>>
 {
     private readonly IAuditLogRepository _auditLogRepo;
-    private readonly ISubscriptionService _subscriptionService;
     private readonly ITenantContext _tenantContext;
 
     /// <summary>
     /// Creates a new instance of the <see cref="AuditLogListEndpoint"/> class.
     /// </summary>
-    public AuditLogListEndpoint(IAuditLogRepository auditLogRepo, ISubscriptionService subscriptionService, ITenantContext tenantContext)
+    public AuditLogListEndpoint(IAuditLogRepository auditLogRepo, ITenantContext tenantContext)
     {
         _auditLogRepo = auditLogRepo;
-        _subscriptionService = subscriptionService;
         _tenantContext = tenantContext;
     }
 
@@ -62,7 +60,8 @@ public sealed class AuditLogListEndpoint : Endpoint<AuditLogListRequest, ApiResp
     {
         Get("/audit-log");
         Policies(AuthorizationPolicies.TenantAdmin);
-        Tags(EndpointTags.RequiresTenant);
+        Tags(Services.Billing.EndpointTags.RequiresTeamSubscription, EndpointTags.RequiresTenant);
+        Options(b => b.WithMetadata(new RequiresTeamFeatureMessage("Audit log requires a Team subscription")));
         Version(1);
     }
 
@@ -70,14 +69,6 @@ public sealed class AuditLogListEndpoint : Endpoint<AuditLogListRequest, ApiResp
     public override async Task HandleAsync(AuditLogListRequest req, CancellationToken ct)
     {
         int tenantId = _tenantContext.RequireTenantId();
-
-        TenantSubscription? subscription = await _subscriptionService.GetSubscriptionForTenantAsync(tenantId, ct);
-        if ((subscription is null) || (subscription.Tier != SubscriptionTier.Team))
-        {
-            await HttpContext.SendApiErrorAsync(403, "Audit log requires a Team subscription", ct);
-
-            return;
-        }
 
         int page = req.Page < 1 ? 1 : req.Page;
         int pageSize = (req.PageSize < 1) || (req.PageSize > 100) ? 25 : req.PageSize;

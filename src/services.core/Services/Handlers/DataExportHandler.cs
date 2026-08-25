@@ -160,7 +160,7 @@ public sealed class DataExportHandler : IDataExportHandler
             // Include audit log for Team tier subscriptions
             TenantSubscription? subscription = await _subscriptionService.GetSubscriptionForTenantAsync(job.TenantId, ct);
 
-            if (subscription is not null && subscription.Tier == SubscriptionTier.Team)
+            if (SubscriptionPolicy.RequiresTeam(subscription) == false)
             {
                 await ExportAuditLogAsync(sqlite, job.TenantId, ct);
             }
