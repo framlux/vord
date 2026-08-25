@@ -59,11 +59,12 @@ public class MachineServiceTests
         return token;
     }
 
-    private static TestServiceScopeFactory CreateScopeFactory(TestDatabaseFactory dbFactory, IMachineRepository machineRepo, ITenantRepository? tenantRepo = null, ISubscriptionService? subscriptionService = null)
+    private static TestServiceScopeFactory CreateScopeFactory(TestDatabaseFactory dbFactory, IMachineRepository machineRepo, ITenantRepository? tenantRepo = null, ISubscriptionService? subscriptionService = null, IMachineBillingSync? billingSync = null)
     {
         Dictionary<Type, object> services = new()
         {
             { typeof(IMachineRepository), machineRepo },
+            { typeof(IMachineBillingSync), billingSync ?? Substitute.For<IMachineBillingSync>() },
         };
 
         if (tenantRepo is not null)
@@ -104,7 +105,6 @@ public class MachineServiceTests
     private static MachineService BuildService(
         IServiceScopeFactory scopeFactory,
         IConnectionMultiplexer? redis = null,
-        IBillingApiClient? billingApiClient = null,
         IDataProtectionProvider? dataProtectionProvider = null,
         TimeProvider? timeProvider = null,
         IApiKeyCacheInvalidator? apiKeyCacheInvalidator = null,
@@ -114,10 +114,21 @@ public class MachineServiceTests
             scopeFactory,
             logger ?? new NullLogger<MachineService>(),
             redis ?? CreateDefaultRedis(),
-            billingApiClient ?? Substitute.For<IBillingApiClient>(),
             dataProtectionProvider ?? new EphemeralDataProtectionProvider(),
             timeProvider ?? new FakeTimeProvider(FixedNow),
             apiKeyCacheInvalidator ?? Substitute.For<IApiKeyCacheInvalidator>());
+    }
+
+    /// <summary>
+    /// The row CreateMachineWithKeyAsync is stubbed to return. Only the identifier is read by the
+    /// caller, but Machine's required members must all be set for it to construct.
+    /// </summary>
+    private static Machine BuildCreatedMachine(long id)
+    {
+        Machine machine = TestDataBuilder.BuildMachine();
+        machine.Id = id;
+
+        return machine;
     }
 
     private static IConnectionMultiplexer CreateDefaultRedis()
@@ -862,270 +873,6 @@ public class MachineServiceTests
 
     // ========== UpdateQuantity called on machine registration ==========
 
-    [Test]
-    public async Task RegisterSystem_PaidTier_CallsUpdateQuantityWithCorrectCount()
-    {
-        using TestDatabaseFactory dbFactory = new();
-        RegistrationToken token = await SeedValidRegistrationToken(dbFactory, FixedNow, tenantId: 1);
-
-        // Seed a tenant with an external ID so the billing client can be called
-        Tenant tenant = TestDataBuilder.BuildTenant(externalId: "ext-tenant-billing");
-        tenant.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(tenant);
-
-        // Seed a Pro subscription so the billing path is triggered
-        TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 1, tier: SubscriptionTier.Pro);
-        sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
-
-        // Seed tier feature limits so GetEffectiveLimitsForTenantAsync works
-        await SeedTierFeatureLimitsAsync(dbFactory);
-
-        IMachineRepository machineRepo = Substitute.For<IMachineRepository>();
-        machineRepo.DoesMachineExistAsync(
-            Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
-            .Returns(false);
-
-        Machine createdMachine = TestDataBuilder.BuildMachine(tenantId: 1, registrationTokenId: token.Id);
-        createdMachine.Id = 200;
-        machineRepo.CreateMachineWithKeyAsync(Arg.Any<Machine>(), Arg.Any<long>(), Arg.Any<DateTimeOffset>(), Arg.Any<int?>(), Arg.Any<CancellationToken>())
-            .Returns((createdMachine, "api-key-billing-test"));
-        ITenantRepository tenantRepo = Substitute.For<ITenantRepository>();
-        tenantRepo.GetTenantByIdAsync(1, Arg.Any<CancellationToken>()).Returns(tenant);
-
-        ISubscriptionService subscriptionService = Substitute.For<ISubscriptionService>();
-        subscriptionService.GetSubscriptionForTenantAsync(1, Arg.Any<CancellationToken>()).Returns(sub);
-        subscriptionService.GetEffectiveLimitsForTenantAsync(1, Arg.Any<CancellationToken>()).Returns(
-            new EffectiveLimits { MachineLimit = 1000, RetentionDays = 60, AlertRuleLimit = 10, WebhookLimit = 5 });
-        subscriptionService.GetBillableMachineCountAsync(1, SubscriptionTier.Pro, Arg.Any<CancellationToken>())
-            .Returns(7);
-
-        Dictionary<Type, object> services = new()
-        {
-            { typeof(IMachineRepository), machineRepo },
-            { typeof(ITenantRepository), tenantRepo },
-            { typeof(ISubscriptionService), subscriptionService },
-        };
-        TestServiceScopeFactory scopeFactory = new(dbFactory.Context, services);
-        IBillingApiClient billingApiClient = Substitute.For<IBillingApiClient>();
-        billingApiClient.UpdateQuantityAsync(Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
-            .Returns(true);
-
-        MachineService service = BuildService(scopeFactory, billingApiClient: billingApiClient);
-
-        RegisterSystemRequest request = new()
-        {
-            SerialNumber = "SN-BILLING",
-            SystemId = "SID-BILLING",
-            Hostname = "billing-test-host",
-            MachineType = Grpc.AgentRegistration.MachineType.BareMetalServerType,
-            Os = OperatingSystemType.UbuntuOs,
-            RegistrationToken = TestTokenValue,
-        };
-
-        (long? machineId, string? apiKey, string errorMessage) result =
-            await service.RegisterSystemAsync(request, CancellationToken.None);
-
-        await Assert.That(result.machineId).IsEqualTo(200L);
-        await Assert.That(result.errorMessage).IsEqualTo(string.Empty);
-
-        // Verify billing was called with the tenant external ID and the correct billable quantity
-        await billingApiClient.Received(1).UpdateQuantityAsync(
-            "ext-tenant-billing", 7, Arg.Any<CancellationToken>());
-    }
-
-    [Test]
-    public async Task RegisterSystem_FreeTier_DoesNotCallUpdateQuantity()
-    {
-        using TestDatabaseFactory dbFactory = new();
-        RegistrationToken token = await SeedValidRegistrationToken(dbFactory, FixedNow, tenantId: 1);
-
-        // Seed a Free subscription so billing is skipped
-        TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 1, tier: SubscriptionTier.Free);
-        sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
-
-        await SeedTierFeatureLimitsAsync(dbFactory);
-
-        IMachineRepository machineRepo = Substitute.For<IMachineRepository>();
-        machineRepo.DoesMachineExistAsync(
-            Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
-            .Returns(false);
-
-        Machine createdMachine = TestDataBuilder.BuildMachine(tenantId: 1, registrationTokenId: token.Id);
-        createdMachine.Id = 201;
-        machineRepo.CreateMachineWithKeyAsync(Arg.Any<Machine>(), Arg.Any<long>(), Arg.Any<DateTimeOffset>(), Arg.Any<int?>(), Arg.Any<CancellationToken>())
-            .Returns((createdMachine, "api-key-free-test"));
-
-        ISubscriptionService subscriptionService = Substitute.For<ISubscriptionService>();
-        subscriptionService.GetSubscriptionForTenantAsync(1, Arg.Any<CancellationToken>()).Returns(sub);
-        subscriptionService.GetEffectiveLimitsForTenantAsync(1, Arg.Any<CancellationToken>()).Returns(
-            new EffectiveLimits { MachineLimit = 3, RetentionDays = 1 });
-
-        Dictionary<Type, object> services = new()
-        {
-            { typeof(IMachineRepository), machineRepo },
-            { typeof(ISubscriptionService), subscriptionService },
-        };
-        TestServiceScopeFactory scopeFactory = new(dbFactory.Context, services);
-        IBillingApiClient billingApiClient = Substitute.For<IBillingApiClient>();
-
-        MachineService service = BuildService(scopeFactory, billingApiClient: billingApiClient);
-
-        RegisterSystemRequest request = new()
-        {
-            SerialNumber = "SN-FREE",
-            SystemId = "SID-FREE",
-            Hostname = "free-test-host",
-            MachineType = Grpc.AgentRegistration.MachineType.BareMetalServerType,
-            Os = OperatingSystemType.UbuntuOs,
-            RegistrationToken = TestTokenValue,
-        };
-
-        (long? machineId, string? apiKey, string errorMessage) result =
-            await service.RegisterSystemAsync(request, CancellationToken.None);
-
-        await Assert.That(result.machineId).IsEqualTo(201L);
-
-        // Free tier should NOT call billing
-        await billingApiClient.DidNotReceive().UpdateQuantityAsync(
-            Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>());
-    }
-
-    [Test]
-    public async Task RegisterSystem_NoneTierSubscription_DoesNotCallUpdateQuantity()
-    {
-        // Intent: the billing guard must allowlist Pro/Team rather than merely exclude Free. A
-        // subscription row can carry Tier.None (e.g. one that predates a tier being set); None
-        // has no billable floor and must not reach GetBillableMachineCountAsync, which refuses it.
-        using TestDatabaseFactory dbFactory = new();
-        RegistrationToken token = await SeedValidRegistrationToken(dbFactory, FixedNow, tenantId: 1);
-
-        // A tenant with a resolvable external ID must exist, or the "tenant is null" branch
-        // short-circuits before the tier guard is ever reached, and this test would pass
-        // regardless of what the guard does.
-        Tenant tenant = TestDataBuilder.BuildTenant(externalId: "ext-tenant-none-tier");
-        tenant.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(tenant);
-
-        TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 1, tier: SubscriptionTier.None);
-        sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
-
-        await SeedTierFeatureLimitsAsync(dbFactory);
-
-        IMachineRepository machineRepo = Substitute.For<IMachineRepository>();
-        machineRepo.DoesMachineExistAsync(
-            Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
-            .Returns(false);
-
-        Machine createdMachine = TestDataBuilder.BuildMachine(tenantId: 1, registrationTokenId: token.Id);
-        createdMachine.Id = 203;
-        machineRepo.CreateMachineWithKeyAsync(Arg.Any<Machine>(), Arg.Any<long>(), Arg.Any<DateTimeOffset>(), Arg.Any<int?>(), Arg.Any<CancellationToken>())
-            .Returns((createdMachine, "api-key-none-tier-test"));
-
-        ITenantRepository tenantRepo = Substitute.For<ITenantRepository>();
-        tenantRepo.GetTenantByIdAsync(1, Arg.Any<CancellationToken>()).Returns(tenant);
-
-        ISubscriptionService subscriptionService = Substitute.For<ISubscriptionService>();
-        subscriptionService.GetSubscriptionForTenantAsync(1, Arg.Any<CancellationToken>()).Returns(sub);
-        subscriptionService.GetEffectiveLimitsForTenantAsync(1, Arg.Any<CancellationToken>()).Returns(
-            new EffectiveLimits { MachineLimit = 3, RetentionDays = 1 });
-
-        Dictionary<Type, object> services = new()
-        {
-            { typeof(IMachineRepository), machineRepo },
-            { typeof(ITenantRepository), tenantRepo },
-            { typeof(ISubscriptionService), subscriptionService },
-        };
-        TestServiceScopeFactory scopeFactory = new(dbFactory.Context, services);
-        IBillingApiClient billingApiClient = Substitute.For<IBillingApiClient>();
-
-        MachineService service = BuildService(scopeFactory, billingApiClient: billingApiClient);
-
-        RegisterSystemRequest request = new()
-        {
-            SerialNumber = "SN-NONE-TIER",
-            SystemId = "SID-NONE-TIER",
-            Hostname = "none-tier-test-host",
-            MachineType = Grpc.AgentRegistration.MachineType.BareMetalServerType,
-            Os = OperatingSystemType.UbuntuOs,
-            RegistrationToken = TestTokenValue,
-        };
-
-        (long? machineId, string? apiKey, string errorMessage) result =
-            await service.RegisterSystemAsync(request, CancellationToken.None);
-
-        await Assert.That(result.machineId).IsEqualTo(203L);
-
-        await billingApiClient.DidNotReceive().UpdateQuantityAsync(
-            Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>());
-        await subscriptionService.DidNotReceive().GetBillableMachineCountAsync(
-            Arg.Any<int>(), Arg.Any<SubscriptionTier>(), Arg.Any<CancellationToken>());
-    }
-
-    [Test]
-    public async Task RegisterSystem_BillingFailure_DoesNotPreventRegistration()
-    {
-        using TestDatabaseFactory dbFactory = new();
-        RegistrationToken token = await SeedValidRegistrationToken(dbFactory, FixedNow, tenantId: 1);
-
-        Tenant tenant = TestDataBuilder.BuildTenant(externalId: "ext-tenant-fail");
-        tenant.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(tenant);
-
-        TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 1, tier: SubscriptionTier.Pro);
-        sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
-
-        await SeedTierFeatureLimitsAsync(dbFactory);
-
-        IMachineRepository machineRepo = Substitute.For<IMachineRepository>();
-        machineRepo.DoesMachineExistAsync(
-            Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
-            .Returns(false);
-
-        Machine createdMachine = TestDataBuilder.BuildMachine(tenantId: 1, registrationTokenId: token.Id);
-        createdMachine.Id = 202;
-        machineRepo.CreateMachineWithKeyAsync(Arg.Any<Machine>(), Arg.Any<long>(), Arg.Any<DateTimeOffset>(), Arg.Any<int?>(), Arg.Any<CancellationToken>())
-            .Returns((createdMachine, "api-key-fail-test"));
-        ITenantRepository tenantRepo = Substitute.For<ITenantRepository>();
-        tenantRepo.GetTenantByIdAsync(1, Arg.Any<CancellationToken>()).Returns(tenant);
-
-        ISubscriptionService subscriptionService = Substitute.For<ISubscriptionService>();
-        subscriptionService.GetSubscriptionForTenantAsync(1, Arg.Any<CancellationToken>()).Returns(sub);
-        subscriptionService.GetEffectiveLimitsForTenantAsync(1, Arg.Any<CancellationToken>()).Returns(
-            new EffectiveLimits { MachineLimit = 1000, RetentionDays = 60, AlertRuleLimit = 10, WebhookLimit = 5 });
-        subscriptionService.GetBillableMachineCountAsync(1, SubscriptionTier.Pro, Arg.Any<CancellationToken>())
-            .Returns(3);
-
-        Dictionary<Type, object> services = new()
-        {
-            { typeof(IMachineRepository), machineRepo },
-            { typeof(ITenantRepository), tenantRepo },
-            { typeof(ISubscriptionService), subscriptionService },
-        };
-        TestServiceScopeFactory scopeFactory = new(dbFactory.Context, services);
-
-        // Simulate billing client throwing an exception
-        IBillingApiClient billingApiClient = Substitute.For<IBillingApiClient>();
-        billingApiClient.UpdateQuantityAsync(Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
-            .Returns<bool>(_ => throw new InvalidOperationException("Billing service unavailable"));
-
-        MachineService service = BuildService(scopeFactory, billingApiClient: billingApiClient);
-
-        RegisterSystemRequest request = new()
-        {
-            SerialNumber = "SN-FAIL",
-            SystemId = "SID-FAIL",
-            Hostname = "fail-test-host",
-            MachineType = Grpc.AgentRegistration.MachineType.BareMetalServerType,
-            Os = OperatingSystemType.UbuntuOs,
-            RegistrationToken = TestTokenValue,
-        };
-
-        // Registration should succeed even when billing fails (best-effort pattern)
-        (long? machineId, string? apiKey, string errorMessage) result =
-            await service.RegisterSystemAsync(request, CancellationToken.None);
-
-        await Assert.That(result.machineId).IsEqualTo(202L);
-        await Assert.That(result.apiKey).IsEqualTo("api-key-fail-test");
-        await Assert.That(result.errorMessage).IsEqualTo(string.Empty);
-    }
-
     // ========== GetRegistrationStatus — concurrent delivery and null key reissue branches ==========
 
     // ========== Regression: API key cache deleted before DB update (bug fix) ==========
@@ -1511,112 +1258,6 @@ public class MachineServiceTests
         await Assert.That(result.errorMessage).IsEqualTo("Machine limit exceeded");
     }
 
-    [Test]
-    public async Task RegisterSystem_PaidTier_TenantNotFound_SkipsBillingGracefully()
-    {
-        using TestDatabaseFactory dbFactory = new();
-        RegistrationToken token = await SeedValidRegistrationToken(dbFactory, FixedNow, tenantId: 1);
-
-        TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 1, tier: SubscriptionTier.Pro);
-        sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
-
-        IMachineRepository machineRepo = Substitute.For<IMachineRepository>();
-        machineRepo.DoesMachineExistAsync(
-            Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
-            .Returns(false);
-
-        Machine createdMachine = TestDataBuilder.BuildMachine(tenantId: 1, registrationTokenId: token.Id);
-        createdMachine.Id = 305;
-        machineRepo.CreateMachineWithKeyAsync(Arg.Any<Machine>(), Arg.Any<long>(), Arg.Any<DateTimeOffset>(), Arg.Any<int?>(), Arg.Any<CancellationToken>())
-            .Returns((createdMachine, "api-key-no-tenant"));
-
-        ITenantRepository tenantRepo = Substitute.For<ITenantRepository>();
-        tenantRepo.GetTenantByIdAsync(1, Arg.Any<CancellationToken>()).Returns((Tenant?)null);
-
-        ISubscriptionService subscriptionService = Substitute.For<ISubscriptionService>();
-        subscriptionService.GetSubscriptionForTenantAsync(1, Arg.Any<CancellationToken>()).Returns(sub);
-        subscriptionService.GetEffectiveLimitsForTenantAsync(1, Arg.Any<CancellationToken>()).Returns(
-            new EffectiveLimits { MachineLimit = 1000, RetentionDays = 60, AlertRuleLimit = 10, WebhookLimit = 5 });
-
-        Dictionary<Type, object> services = new()
-        {
-            { typeof(IMachineRepository), machineRepo },
-            { typeof(ITenantRepository), tenantRepo },
-            { typeof(ISubscriptionService), subscriptionService },
-        };
-        TestServiceScopeFactory scopeFactory = new(dbFactory.Context, services);
-        IBillingApiClient billingApiClient = Substitute.For<IBillingApiClient>();
-        MachineService service = BuildService(scopeFactory, billingApiClient: billingApiClient);
-
-        RegisterSystemRequest request = new()
-        {
-            SerialNumber = "SN-NOTENANT",
-            SystemId = "SID-NOTENANT",
-            Hostname = "notenant-host",
-            MachineType = Grpc.AgentRegistration.MachineType.BareMetalServerType,
-            Os = OperatingSystemType.UbuntuOs,
-            RegistrationToken = TestTokenValue,
-        };
-
-        (long? machineId, string? apiKey, string errorMessage) result =
-            await service.RegisterSystemAsync(request, CancellationToken.None);
-
-        // Registration succeeds; billing is skipped when tenant is null
-        await Assert.That(result.machineId).IsEqualTo(305L);
-        await Assert.That(result.errorMessage).IsEqualTo(string.Empty);
-        await billingApiClient.DidNotReceive().UpdateQuantityAsync(
-            Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>());
-    }
-
-    [Test]
-    public async Task RegisterSystem_NullSubscription_SkipsBilling()
-    {
-        using TestDatabaseFactory dbFactory = new();
-        RegistrationToken token = await SeedValidRegistrationToken(dbFactory, FixedNow, tenantId: 1);
-
-        IMachineRepository machineRepo = Substitute.For<IMachineRepository>();
-        machineRepo.DoesMachineExistAsync(
-            Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
-            .Returns(false);
-
-        Machine createdMachine = TestDataBuilder.BuildMachine(tenantId: 1, registrationTokenId: token.Id);
-        createdMachine.Id = 306;
-        machineRepo.CreateMachineWithKeyAsync(Arg.Any<Machine>(), Arg.Any<long>(), Arg.Any<DateTimeOffset>(), Arg.Any<int?>(), Arg.Any<CancellationToken>())
-            .Returns((createdMachine, "api-key-nosub"));
-
-        ISubscriptionService subscriptionService = Substitute.For<ISubscriptionService>();
-        subscriptionService.GetSubscriptionForTenantAsync(1, Arg.Any<CancellationToken>()).Returns((TenantSubscription?)null);
-        subscriptionService.GetEffectiveLimitsForTenantAsync(1, Arg.Any<CancellationToken>()).Returns(
-            new EffectiveLimits { MachineLimit = 3, RetentionDays = 1 });
-
-        Dictionary<Type, object> services = new()
-        {
-            { typeof(IMachineRepository), machineRepo },
-            { typeof(ISubscriptionService), subscriptionService },
-        };
-        TestServiceScopeFactory scopeFactory = new(dbFactory.Context, services);
-        IBillingApiClient billingApiClient = Substitute.For<IBillingApiClient>();
-        MachineService service = BuildService(scopeFactory, billingApiClient: billingApiClient);
-
-        RegisterSystemRequest request = new()
-        {
-            SerialNumber = "SN-NOSUB",
-            SystemId = "SID-NOSUB",
-            Hostname = "nosub-host",
-            MachineType = Grpc.AgentRegistration.MachineType.BareMetalServerType,
-            Os = OperatingSystemType.UbuntuOs,
-            RegistrationToken = TestTokenValue,
-        };
-
-        (long? machineId, string? apiKey, string errorMessage) result =
-            await service.RegisterSystemAsync(request, CancellationToken.None);
-
-        await Assert.That(result.machineId).IsEqualTo(306L);
-        await Assert.That(result.errorMessage).IsEqualTo(string.Empty);
-        await billingApiClient.DidNotReceive().UpdateQuantityAsync(
-            Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>());
-    }
-
     private static async Task SeedTierFeatureLimitsAsync(TestDatabaseFactory dbFactory)
     {
         DateTimeOffset now = FixedNow;
@@ -1807,7 +1448,6 @@ public class MachineServiceTests
     {
         TestServiceScopeFactory scopeFactory = new(new TestDatabaseFactory().Context);
         IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
-        IBillingApiClient billing = Substitute.For<IBillingApiClient>();
 
         ArgumentNullException? ex = await Assert.ThrowsAsync<ArgumentNullException>(() =>
         {
@@ -1815,7 +1455,6 @@ public class MachineServiceTests
                 scopeFactory,
                 new NullLogger<MachineService>(),
                 redis,
-                billing,
                 null!,
                 new FakeTimeProvider(FixedNow),
                 Substitute.For<IApiKeyCacheInvalidator>());
@@ -1874,5 +1513,93 @@ public class MachineServiceTests
             ExpiresAt = expiresAt,
             IsRevoked = false,
         };
+    }
+
+    /// <summary>
+    /// Registration reports the tenant's billable quantity through the shared sync service rather
+    /// than reimplementing it. The tier allowlist, the tenant lookup and the failure handling all
+    /// live there and are covered by its own tests; what matters here is that registration still
+    /// triggers the report.
+    /// </summary>
+    [Test]
+    public async Task RegisterSystem_ReportsBillableUsageThroughTheSyncService()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        await SeedValidRegistrationToken(dbFactory, FixedNow);
+
+        IMachineRepository machineRepo = Substitute.For<IMachineRepository>();
+        machineRepo.CreateMachineWithKeyAsync(
+                Arg.Any<Machine>(), Arg.Any<long>(), Arg.Any<DateTimeOffset>(), Arg.Any<int?>(), Arg.Any<CancellationToken>())
+            .Returns((BuildCreatedMachine(200), "plaintext-key"));
+
+        IMachineBillingSync billingSync = Substitute.For<IMachineBillingSync>();
+        TestServiceScopeFactory scopeFactory = CreateScopeFactory(dbFactory, machineRepo, billingSync: billingSync);
+        MachineService service = BuildService(scopeFactory);
+
+        RegisterSystemRequest request = new()
+        {
+            SerialNumber = "SN-SYNC",
+            SystemId = "SID-SYNC",
+            Hostname = "sync-host",
+            MachineType = Grpc.AgentRegistration.MachineType.BareMetalServerType,
+            Os = OperatingSystemType.UbuntuOs,
+            RegistrationToken = TestTokenValue,
+        };
+
+        (long? machineId, string? apiKey, string errorMessage) result =
+            await service.RegisterSystemAsync(request, CancellationToken.None);
+
+        await Assert.That(result.errorMessage).IsEqualTo(string.Empty);
+        await billingSync.Received(1).ReportActiveMachineUsageAsync(1, Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>
+    /// The report must happen after the machine row is committed. The quantity is computed from a
+    /// live count of active machines, so reporting first would under-report by one — silently,
+    /// because the sync service swallows its own failures and any quantity is accepted downstream.
+    /// </summary>
+    [Test]
+    public async Task RegisterSystem_ReportsBillableUsageOnlyAfterTheMachineRowIsCreated()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        await SeedValidRegistrationToken(dbFactory, FixedNow);
+
+        List<string> callOrder = [];
+
+        IMachineRepository machineRepo = Substitute.For<IMachineRepository>();
+        machineRepo.CreateMachineWithKeyAsync(
+                Arg.Any<Machine>(), Arg.Any<long>(), Arg.Any<DateTimeOffset>(), Arg.Any<int?>(), Arg.Any<CancellationToken>())
+            .Returns(_ =>
+            {
+                callOrder.Add("create");
+
+                return (BuildCreatedMachine(201), "plaintext-key");
+            });
+
+        IMachineBillingSync billingSync = Substitute.For<IMachineBillingSync>();
+        billingSync.ReportActiveMachineUsageAsync(Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns(_ =>
+            {
+                callOrder.Add("report");
+
+                return Task.CompletedTask;
+            });
+
+        TestServiceScopeFactory scopeFactory = CreateScopeFactory(dbFactory, machineRepo, billingSync: billingSync);
+        MachineService service = BuildService(scopeFactory);
+
+        RegisterSystemRequest request = new()
+        {
+            SerialNumber = "SN-ORDER",
+            SystemId = "SID-ORDER",
+            Hostname = "order-host",
+            MachineType = Grpc.AgentRegistration.MachineType.BareMetalServerType,
+            Os = OperatingSystemType.UbuntuOs,
+            RegistrationToken = TestTokenValue,
+        };
+
+        await service.RegisterSystemAsync(request, CancellationToken.None);
+
+        await Assert.That(callOrder).IsEquivalentTo(new List<string> { "create", "report" });
     }
 }

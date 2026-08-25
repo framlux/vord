@@ -30,7 +30,6 @@ public sealed class MachineService : IMachineService
     private readonly IServiceScopeFactory _serviceScopeFactory;
     private readonly ILogger<MachineService> _logger;
     private readonly IConnectionMultiplexer _redis;
-    private readonly IBillingApiClient _billingApiClient;
     private readonly IDataProtector _pendingApiKeyProtector;
     private readonly TimeProvider _timeProvider;
     private readonly IApiKeyCacheInvalidator _apiKeyCacheInvalidator;
@@ -41,7 +40,6 @@ public sealed class MachineService : IMachineService
     /// <param name="scopeFactory">Factory for creating service scopes for database operations.</param>
     /// <param name="logger">The logger instance for diagnostic logging.</param>
     /// <param name="redis">Redis connection for cross-replica API key delivery cache.</param>
-    /// <param name="billingApiClient">Client for communicating billing updates to Stripe.</param>
     /// <param name="dataProtectionProvider">Data protection provider for encrypting pending API keys at rest in Redis.</param>
     /// <param name="timeProvider">Time provider used for token expiry and consumption time checks.</param>
     /// <param name="apiKeyCacheInvalidator">Invalidates the auth cache for a replaced key on reissue.</param>
@@ -50,7 +48,6 @@ public sealed class MachineService : IMachineService
         IServiceScopeFactory scopeFactory,
         ILogger<MachineService> logger,
         IConnectionMultiplexer redis,
-        IBillingApiClient billingApiClient,
         IDataProtectionProvider dataProtectionProvider,
         TimeProvider timeProvider,
         IApiKeyCacheInvalidator apiKeyCacheInvalidator)
@@ -58,14 +55,12 @@ public sealed class MachineService : IMachineService
         ArgumentNullException.ThrowIfNull(scopeFactory);
         ArgumentNullException.ThrowIfNull(logger);
         ArgumentNullException.ThrowIfNull(redis);
-        ArgumentNullException.ThrowIfNull(billingApiClient);
         ArgumentNullException.ThrowIfNull(dataProtectionProvider);
         ArgumentNullException.ThrowIfNull(timeProvider);
         ArgumentNullException.ThrowIfNull(apiKeyCacheInvalidator);
         _serviceScopeFactory = scopeFactory;
         _logger = logger;
         _redis = redis;
-        _billingApiClient = billingApiClient;
         _pendingApiKeyProtector = dataProtectionProvider.CreateProtector(PendingApiKeyProtectorPurpose);
         _timeProvider = timeProvider;
         _apiKeyCacheInvalidator = apiKeyCacheInvalidator;
@@ -310,7 +305,6 @@ public sealed class MachineService : IMachineService
 
         // Check subscription machine limit from tier defaults + overrides
         ISubscriptionService subscriptionService = scope.ServiceProvider.GetRequiredService<ISubscriptionService>();
-        TenantSubscription? subscription = await subscriptionService.GetSubscriptionForTenantAsync(token.TenantId, cancellationToken);
         EffectiveLimits effectiveLimits = await subscriptionService.GetEffectiveLimitsForTenantAsync(token.TenantId, cancellationToken);
         int? machineLimit = effectiveLimits.MachineLimit;
 
@@ -377,30 +371,11 @@ public sealed class MachineService : IMachineService
 
         _logger.LogInformation("Machine created with ID {MachineId} for {SerialNumber}", createdMachine.Id, request.SerialNumber);
 
-        // Report billable quantity to billing (best effort, hourly heartbeat provides the safety net)
-        try
-        {
-            // Only report quantity for genuinely billable tiers. An allowlist (Pro/Team) rather
-            // than excluding Free alone, because a subscription row can also carry Tier.None
-            // (e.g. one that predates a tier being set); None has no floor policy and would
-            // otherwise reach GetBillableMachineCountAsync, which refuses it.
-            if ((subscription is not null) &&
-                ((subscription.Tier == SubscriptionTier.Pro) || (subscription.Tier == SubscriptionTier.Team)))
-            {
-                ITenantRepository tenantRepository = scope.ServiceProvider.GetRequiredService<ITenantRepository>();
-                Tenant? tenant = await tenantRepository.GetTenantByIdAsync(token.TenantId, cancellationToken);
-                if (tenant is not null)
-                {
-                    int quantity = await subscriptionService.GetBillableMachineCountAsync(
-                        token.TenantId, subscription.Tier, cancellationToken);
-                    await _billingApiClient.UpdateQuantityAsync(tenant.ExternalId, quantity, cancellationToken);
-                }
-            }
-        }
-        catch (Exception ex)
-        {
-            _logger.LogWarning(ex, "Failed to report billable quantity to billing for tenant {TenantId}", token.TenantId);
-        }
+        // Reported after the machine row is committed, so the live count includes it. The sync
+        // service wraps itself in best-effort error handling and logs its own failures, so there is
+        // deliberately no try/catch here.
+        IMachineBillingSync billingSync = scope.ServiceProvider.GetRequiredService<IMachineBillingSync>();
+        await billingSync.ReportActiveMachineUsageAsync(token.TenantId, cancellationToken);
 
         return (createdMachine.Id, plaintextApiKey, string.Empty);
     }
