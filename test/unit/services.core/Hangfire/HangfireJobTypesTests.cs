@@ -101,7 +101,7 @@ public sealed class HangfireJobTypesTests
     }
 
     [Test]
-    public async Task BillingDisabled_BillingJobsNotRegistered()
+    public async Task SelfHosted_BillingJobsNotRegistered()
     {
         ServiceCollection services = new();
 

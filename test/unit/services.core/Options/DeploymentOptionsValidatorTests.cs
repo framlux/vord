@@ -112,4 +112,20 @@ public sealed class DeploymentOptionsValidatorTests
 
         await Assert.That(() => validator.Validate(null, null!)).Throws<ArgumentNullException>();
     }
+
+    [Test]
+    public async Task Constructor_NullBillingOptions_Throws()
+    {
+        IConfiguration configuration = new ConfigurationBuilder().Build();
+
+        await Assert.That(() => new DeploymentOptionsValidator(null!, configuration))
+            .Throws<ArgumentNullException>();
+    }
+
+    [Test]
+    public async Task Constructor_NullConfiguration_Throws()
+    {
+        await Assert.That(() => new DeploymentOptionsValidator(Options.Create(new BillingOptions()), null!))
+            .Throws<ArgumentNullException>();
+    }
 }

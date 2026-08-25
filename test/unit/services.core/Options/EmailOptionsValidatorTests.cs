@@ -140,4 +140,10 @@ public sealed class EmailOptionsValidatorTests
 
         await Assert.That(() => validator.Validate(null, null!)).Throws<ArgumentNullException>();
     }
+
+    [Test]
+    public async Task Constructor_NullDeploymentMode_Throws()
+    {
+        await Assert.That(() => new EmailOptionsValidator(null!)).Throws<ArgumentNullException>();
+    }
 }

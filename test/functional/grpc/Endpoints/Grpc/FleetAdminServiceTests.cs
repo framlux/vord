@@ -31,7 +31,7 @@ public sealed class FleetAdminServiceTests
     // ========== Billing Disabled Tests ==========
 
     [Test]
-    public async Task FleetAdmin_BillingDisabled_ServiceNotMapped()
+    public async Task FleetAdmin_SelfHosted_ServiceNotMapped()
     {
         using SelfHostedTestFactory factory = new();
         HttpClient httpClient = factory.CreateClient();

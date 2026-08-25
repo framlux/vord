@@ -28,6 +28,9 @@ public sealed class DeploymentOptionsValidator : IValidateOptions<DeploymentOpti
     /// </param>
     public DeploymentOptionsValidator(IOptions<BillingOptions> billingOptions, IConfiguration configuration)
     {
+        ArgumentNullException.ThrowIfNull(billingOptions);
+        ArgumentNullException.ThrowIfNull(configuration);
+
         _billingOptions = billingOptions;
         _configuration = configuration;
     }

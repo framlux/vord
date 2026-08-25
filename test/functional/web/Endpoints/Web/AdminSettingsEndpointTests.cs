@@ -114,7 +114,7 @@ public sealed class AdminSettingsEndpointTests
     }
 
     [Test]
-    public async Task UpdateSettings_WhenBillingDisabled_UpdatesAndReturnsNewValues()
+    public async Task UpdateSettings_WhenSelfHosted_UpdatesAndReturnsNewValues()
     {
         using SelfHostedTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
@@ -264,7 +264,7 @@ public sealed class AdminSettingsEndpointTests
     }
 
     [Test]
-    public async Task UpdateSettings_WhenBillingDisabled_WritesExactlyOneAuditLogEntry()
+    public async Task UpdateSettings_WhenSelfHosted_WritesExactlyOneAuditLogEntry()
     {
         using SelfHostedTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();

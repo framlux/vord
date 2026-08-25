@@ -313,4 +313,30 @@ public sealed class ResendEmailServiceTests
             Arg.Any<Exception>(),
             Arg.Any<Func<object, Exception?, string>>());
     }
+
+    [Test]
+    public async Task Constructor_NullHttpClient_Throws()
+    {
+        await Assert.That(() => new ResendEmailService(
+                null!, Options.Create(new EmailOptions()), NullLogger<ResendEmailService>.Instance))
+            .Throws<ArgumentNullException>();
+    }
+
+    [Test]
+    public async Task Constructor_NullEmailOptions_Throws()
+    {
+        using HttpClient httpClient = new();
+
+        await Assert.That(() => new ResendEmailService(httpClient, null!, NullLogger<ResendEmailService>.Instance))
+            .Throws<ArgumentNullException>();
+    }
+
+    [Test]
+    public async Task Constructor_NullLogger_Throws()
+    {
+        using HttpClient httpClient = new();
+
+        await Assert.That(() => new ResendEmailService(httpClient, Options.Create(new EmailOptions()), null!))
+            .Throws<ArgumentNullException>();
+    }
 }

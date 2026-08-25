@@ -27,6 +27,9 @@ public sealed class SmtpEmailService : IEmailService
     /// <param name="logger">The logger.</param>
     public SmtpEmailService(IOptions<EmailOptions> emailOptions, ILogger<SmtpEmailService> logger)
     {
+        ArgumentNullException.ThrowIfNull(emailOptions);
+        ArgumentNullException.ThrowIfNull(logger);
+
         _emailOptions = emailOptions.Value;
         _logger = logger;
     }
@@ -51,14 +54,18 @@ public sealed class SmtpEmailService : IEmailService
     {
         SmtpEmailOptions smtp = _emailOptions.Smtp;
 
-        MimeMessage message = new();
-        message.From.Add(MailboxAddress.Parse(_emailOptions.FromEmail));
-        message.To.Add(MailboxAddress.Parse(toEmail));
-        message.Subject = subject;
-        message.Body = new BodyBuilder { HtmlBody = htmlBody }.ToMessageBody();
-
         try
         {
+            // Address parsing is inside the guarded region on purpose. Email:FromEmail is only
+            // checked for presence at startup, never for parseability, so a mistyped sender would
+            // otherwise throw out of every send instead of reporting a delivery failure the caller
+            // can act on.
+            MimeMessage message = new();
+            message.From.Add(MailboxAddress.Parse(_emailOptions.FromEmail));
+            message.To.Add(MailboxAddress.Parse(toEmail));
+            message.Subject = subject;
+            message.Body = new BodyBuilder { HtmlBody = htmlBody }.ToMessageBody();
+
             using SmtpClient client = new();
 
             SecureSocketOptions socketOptions = smtp.UseStartTls

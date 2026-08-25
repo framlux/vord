@@ -40,4 +40,10 @@ public sealed class NoOpEmailServiceTests
 
         await Assert.That(outcome).IsEqualTo(EmailDeliveryOutcome.Skipped);
     }
+
+    [Test]
+    public async Task Constructor_NullLogger_Throws()
+    {
+        await Assert.That(() => new NoOpEmailService(null!)).Throws<ArgumentNullException>();
+    }
 }

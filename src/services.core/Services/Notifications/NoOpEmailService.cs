@@ -18,6 +18,8 @@ public sealed class NoOpEmailService : IEmailService
     /// <param name="logger">The logger.</param>
     public NoOpEmailService(ILogger<NoOpEmailService> logger)
     {
+        ArgumentNullException.ThrowIfNull(logger);
+
         _logger = logger;
     }
 

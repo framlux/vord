@@ -143,7 +143,7 @@ public sealed class SelfHostedEndpointTests
     }
 
     [Test]
-    public async Task CancelSubscription_WhenBillingDisabled_Returns404()
+    public async Task CancelSubscription_WhenSelfHosted_Returns404()
     {
         using SelfHostedTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
@@ -156,7 +156,7 @@ public sealed class SelfHostedEndpointTests
     }
 
     [Test]
-    public async Task DowngradeSubscription_WhenBillingDisabled_Returns404()
+    public async Task DowngradeSubscription_WhenSelfHosted_Returns404()
     {
         using SelfHostedTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
@@ -173,7 +173,7 @@ public sealed class SelfHostedEndpointTests
     }
 
     [Test]
-    public async Task ResumeSubscription_WhenBillingDisabled_Returns404()
+    public async Task ResumeSubscription_WhenSelfHosted_Returns404()
     {
         using SelfHostedTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
@@ -186,7 +186,7 @@ public sealed class SelfHostedEndpointTests
     }
 
     [Test]
-    public async Task ReactivateSubscription_WhenBillingDisabled_Returns404()
+    public async Task ReactivateSubscription_WhenSelfHosted_Returns404()
     {
         using SelfHostedTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();

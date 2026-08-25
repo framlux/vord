@@ -23,6 +23,8 @@ public sealed class EmailOptionsValidator : IValidateOptions<EmailOptions>
     /// <param name="deploymentMode">The deployment mode this process is running as.</param>
     public EmailOptionsValidator(DeploymentMode deploymentMode)
     {
+        ArgumentNullException.ThrowIfNull(deploymentMode);
+
         _deploymentMode = deploymentMode;
     }
 

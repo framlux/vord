@@ -25,6 +25,10 @@ public sealed class ResendEmailService : IEmailService
     /// </summary>
     public ResendEmailService(HttpClient httpClient, IOptions<EmailOptions> emailOptions, ILogger<ResendEmailService> logger)
     {
+        ArgumentNullException.ThrowIfNull(httpClient);
+        ArgumentNullException.ThrowIfNull(emailOptions);
+        ArgumentNullException.ThrowIfNull(logger);
+
         _httpClient = httpClient;
         _emailOptions = emailOptions.Value;
         _logger = logger;
