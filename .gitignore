@@ -566,3 +566,7 @@ cython_debug/
 
 # Default output of the Playwright marketing-screenshot capture (VORD_SCREENSHOT_DIR)
 src/web/screenshots/
+
+# Coverage output
+coverage/
+coverage-report/

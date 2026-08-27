@@ -251,26 +251,46 @@ jobs:
       - name: Build (Release)
         run: dotnet build "$SOLUTION" -c Release --no-restore
 
+      - name: Install coverage tools
+        run: |
+          dotnet tool install --global coverlet.console
+          dotnet tool install --global dotnet-reportgenerator-globaltool
+          echo "$HOME/.dotnet/tools" >> "$GITHUB_PATH"
+
       - name: Run unit tests (services.core)
-        run: dotnet run --project test/unit/services.core/unit.services.core.csproj -c Release --no-build
+        run: ./scripts/run-tests-with-coverage.sh test/unit/services.core/unit.services.core.csproj coverage/unit.services.core.xml
 
       - name: Run unit tests (server)
-        run: dotnet run --project test/unit/server/unit.server.csproj -c Release --no-build
+        run: ./scripts/run-tests-with-coverage.sh test/unit/server/unit.server.csproj coverage/unit.server.xml
 
       - name: Run unit tests (database)
-        run: dotnet run --project test/unit/database/unit.database.csproj -c Release --no-build
+        run: ./scripts/run-tests-with-coverage.sh test/unit/database/unit.database.csproj coverage/unit.database.xml
 
       - name: Run functional tests (web)
-        run: dotnet run --project test/functional/web/functional.web.csproj -c Release --no-build
+        run: ./scripts/run-tests-with-coverage.sh test/functional/web/functional.web.csproj coverage/functional.web.xml
 
       - name: Run functional tests (grpc)
-        run: dotnet run --project test/functional/grpc/functional.grpc.csproj -c Release --no-build
+        run: ./scripts/run-tests-with-coverage.sh test/functional/grpc/functional.grpc.csproj coverage/functional.grpc.xml
 
       - name: Run functional tests (hangfire)
-        run: dotnet run --project test/functional/hangfire/functional.hangfire.csproj -c Release --no-build
+        run: ./scripts/run-tests-with-coverage.sh test/functional/hangfire/functional.hangfire.csproj coverage/functional.hangfire.xml
 
       - name: Run integration tests
         run: dotnet run --project test/integration/integration.csproj -c Release --no-build
+
+      # Runs before any publish step, so a release cannot ship code that has fallen below the
+      # coverage floor. The same six suites feed the gate here as in CI, so the two report the
+      # same number; integration tests run uninstrumented because they are not part of that set.
+      - name: Merge coverage and enforce the threshold
+        run: ./scripts/check-coverage.sh coverage coverage-report
+
+      - name: Upload the HTML coverage report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        with:
+          name: coverage-report
+          path: coverage-report
+          retention-days: 30
 
       # -p:Version overrides the <Version> in each csproj, and ContainerImageTags is
       # "$(Version);latest", so the image tag is the tag name's version rather than whatever the

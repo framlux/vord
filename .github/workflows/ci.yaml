@@ -186,6 +186,21 @@ jobs:
       - name: Run unit tests (services.core)
         run: dotnet run --project test/unit/services.core/unit.services.core.csproj -c Release --no-build
 
+      - name: Install coverage tools
+        run: |
+          dotnet tool install --global coverlet.console
+          echo "$HOME/.dotnet/tools" >> "$GITHUB_PATH"
+
+      - name: Collect coverage
+        run: ./scripts/run-tests-with-coverage.sh test/unit/services.core/unit.services.core.csproj coverage/unit.services.core.xml
+
+      - name: Upload coverage
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        with:
+          name: coverage-unit.services.core
+          path: coverage/unit.services.core.xml
+          retention-days: 1
+
   test-unit-server:
     needs: build
     runs-on: ubuntu-latest
@@ -215,6 +230,21 @@ jobs:
 
       - name: Run unit tests (server)
         run: dotnet run --project test/unit/server/unit.server.csproj -c Release --no-build
+
+      - name: Install coverage tools
+        run: |
+          dotnet tool install --global coverlet.console
+          echo "$HOME/.dotnet/tools" >> "$GITHUB_PATH"
+
+      - name: Collect coverage
+        run: ./scripts/run-tests-with-coverage.sh test/unit/server/unit.server.csproj coverage/unit.server.xml
+
+      - name: Upload coverage
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        with:
+          name: coverage-unit.server
+          path: coverage/unit.server.xml
+          retention-days: 1
 
   test-unit-database:
     needs: build
@@ -246,6 +276,21 @@ jobs:
       - name: Run unit tests (database)
         run: dotnet run --project test/unit/database/unit.database.csproj -c Release --no-build
 
+      - name: Install coverage tools
+        run: |
+          dotnet tool install --global coverlet.console
+          echo "$HOME/.dotnet/tools" >> "$GITHUB_PATH"
+
+      - name: Collect coverage
+        run: ./scripts/run-tests-with-coverage.sh test/unit/database/unit.database.csproj coverage/unit.database.xml
+
+      - name: Upload coverage
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        with:
+          name: coverage-unit.database
+          path: coverage/unit.database.xml
+          retention-days: 1
+
   test-functional-web:
     needs: build
     runs-on: ubuntu-latest
@@ -275,6 +320,21 @@ jobs:
 
       - name: Run functional tests (web)
         run: dotnet run --project test/functional/web/functional.web.csproj -c Release --no-build
+
+      - name: Install coverage tools
+        run: |
+          dotnet tool install --global coverlet.console
+          echo "$HOME/.dotnet/tools" >> "$GITHUB_PATH"
+
+      - name: Collect coverage
+        run: ./scripts/run-tests-with-coverage.sh test/functional/web/functional.web.csproj coverage/functional.web.xml
+
+      - name: Upload coverage
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        with:
+          name: coverage-functional.web
+          path: coverage/functional.web.xml
+          retention-days: 1
 
   test-functional-grpc:
     needs: build
@@ -306,6 +366,21 @@ jobs:
       - name: Run functional tests (grpc)
         run: dotnet run --project test/functional/grpc/functional.grpc.csproj -c Release --no-build
 
+      - name: Install coverage tools
+        run: |
+          dotnet tool install --global coverlet.console
+          echo "$HOME/.dotnet/tools" >> "$GITHUB_PATH"
+
+      - name: Collect coverage
+        run: ./scripts/run-tests-with-coverage.sh test/functional/grpc/functional.grpc.csproj coverage/functional.grpc.xml
+
+      - name: Upload coverage
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        with:
+          name: coverage-functional.grpc
+          path: coverage/functional.grpc.xml
+          retention-days: 1
+
   test-functional-hangfire:
     needs: build
     runs-on: ubuntu-latest
@@ -335,6 +410,21 @@ jobs:
 
       - name: Run functional tests (hangfire)
         run: dotnet run --project test/functional/hangfire/functional.hangfire.csproj -c Release --no-build
+
+      - name: Install coverage tools
+        run: |
+          dotnet tool install --global coverlet.console
+          echo "$HOME/.dotnet/tools" >> "$GITHUB_PATH"
+
+      - name: Collect coverage
+        run: ./scripts/run-tests-with-coverage.sh test/functional/hangfire/functional.hangfire.csproj coverage/functional.hangfire.xml
+
+      - name: Upload coverage
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        with:
+          name: coverage-functional.hangfire
+          path: coverage/functional.hangfire.xml
+          retention-days: 1
 
   test-integration:
     needs: build
@@ -367,3 +457,47 @@ jobs:
       # so Testcontainers.PostgreSql picks up the default Docker socket without extra config.
       - name: Run integration tests
         run: dotnet run --project test/integration/integration.csproj -c Release --no-build
+
+  coverage:
+    needs:
+      - test-unit-services-core
+      - test-unit-server
+      - test-unit-database
+      - test-functional-web
+      - test-functional-grpc
+      - test-functional-hangfire
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5  # v4.3.1
+
+      - uses: actions/setup-dotnet@c2fa09f4bde5ebb9d1777cf28262a3eb3db3ced7  # v5.2.0
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Download coverage from every suite
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093  # v4.3.0
+        with:
+          pattern: coverage-*
+          merge-multiple: true
+          path: coverage
+
+      - name: Install report generator
+        run: |
+          dotnet tool install --global dotnet-reportgenerator-globaltool
+          echo "$HOME/.dotnet/tools" >> "$GITHUB_PATH"
+
+      # Merges every suite's report before measuring. Per-suite numbers understate badly — the
+      # server assembly alone is exercised by four of them — so the gate is only meaningful on the
+      # union.
+      - name: Merge coverage and enforce the threshold
+        run: ./scripts/check-coverage.sh coverage coverage-report
+
+      - name: Upload the HTML coverage report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4.6.2
+        with:
+          name: coverage-report
+          path: coverage-report
+          retention-days: 14
