@@ -33,6 +33,16 @@ public interface IDataExportRepository
     Task<bool> HasActiveExportJobAsync(int tenantId, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Takes a transaction-scoped advisory lock covering this tenant's export requests, so that
+    /// the checks guarding a new export and the insert that follows them are one atomic decision.
+    /// Without it concurrent requests all pass the checks before any of them inserts, and the
+    /// per-tier window can be bypassed by firing requests in parallel. Must be called inside a
+    /// transaction; the lock releases when that transaction ends. A no-op on providers without
+    /// advisory locks, where writes are already serialized.
+    /// </summary>
+    Task AcquireTenantExportLockAsync(int tenantId, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Returns when the tenant most recently requested an export, or null if it never has.
     /// Counts every job regardless of status: a failed or expired export still consumed the work
     /// that the per-tier cooldown rations.

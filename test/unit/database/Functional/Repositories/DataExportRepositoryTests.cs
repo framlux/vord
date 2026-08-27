@@ -523,6 +523,19 @@ public class DataExportRepositoryTests
     }
 
     [Test]
+    public async Task AcquireTenantExportLockAsync_OnSqlite_IsANoOpRatherThanAFailure()
+    {
+        // Intent: the lock is a PostgreSQL advisory lock. Providers without one must fall through
+        // silently — a throw here would take the whole export path down on SQLite.
+        using TestDatabaseFactory dbFactory = new();
+        IDataExportRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+
+        (int _, int tenantId) = await SeedUserAndTenantAsync(dbFactory);
+
+        await repo.AcquireTenantExportLockAsync(tenantId, CancellationToken.None);
+    }
+
+    [Test]
     public async Task GetLastExportRequestedAtAsync_NoJobs_ReturnsNull()
     {
         using TestDatabaseFactory dbFactory = new();

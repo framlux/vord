@@ -98,6 +98,14 @@ public sealed class DataExportHandler : IDataExportHandler
             return ServiceResult<DataExportRequestOutcome>.NotFound();
         }
 
+        // Every guard below and the insert that follows them run inside one transaction holding a
+        // per-tenant advisory lock. Checked outside it, concurrent requests all read the same
+        // pre-insert state and all pass, which makes the window bypassable by simply firing
+        // requests in parallel — the exact abuse the window exists to stop.
+        using IDatabaseTransaction transaction = await _transactionProvider.BeginTransactionAsync(ct);
+
+        await _exportRepo.AcquireTenantExportLockAsync(tenantId.Value, ct);
+
         // Check if there are machines to export
         int machineCount = await _machineRepo.GetActiveMachineCountAsync(tenantId.Value, ct);
 
@@ -124,10 +132,10 @@ public sealed class DataExportHandler : IDataExportHandler
 
         if (nextEligibleAt is not null)
         {
-            await _auditLog.InsertAuditLogAsync(AuditHelper.Create(
-                tenantId, requestedByUserId, null,
-                AuditAction.DataExportThrottled, AuditResourceType.DataExport,
-                null, null, null), ct);
+            await RecordThrottledRequestAsync(tenantId.Value, requestedByUserId, nextEligibleAt.Value, ct);
+
+            // Commit so the refusal record survives; nothing else was written.
+            await transaction.CommitAsync(ct);
 
             _logger.LogInformation(
                 "Refused data export for tenant {TenantId}: next export available at {NextEligibleAt:o}",
@@ -150,8 +158,6 @@ public sealed class DataExportHandler : IDataExportHandler
             DownloadToken = RandomNumberGenerator.GetHexString(64, true)
         };
 
-        using IDatabaseTransaction transaction = await _transactionProvider.BeginTransactionAsync(ct);
-
         DataExportJob createdJob = await _exportRepo.CreateExportJobAsync(job, ct);
 
         await _auditLog.InsertAuditLogAsync(AuditHelper.Create(
@@ -164,6 +170,32 @@ public sealed class DataExportHandler : IDataExportHandler
         _logger.LogInformation("Created data export job {JobId} for tenant {TenantId}", createdJob.Id, tenantId);
 
         return ServiceResult<DataExportRequestOutcome>.Ok(new DataExportRequestOutcome { JobId = createdJob.Id });
+    }
+
+    /// <summary>
+    /// Records that a request was refused, at most once per cooldown window. A tenant inside its
+    /// window can keep calling, so writing a row per attempt would let the refusal path itself
+    /// become the cheap way to fill the audit table. The window's own end instant identifies it,
+    /// so the check is an exact match rather than a comparison against the entry's clock — the
+    /// audit timestamp and the window come from different sources and must not be compared.
+    /// </summary>
+    private async Task RecordThrottledRequestAsync(
+        int tenantId, int requestedByUserId, DateTimeOffset windowEndsAt, CancellationToken ct)
+    {
+        string windowId = windowEndsAt.ToString("o");
+
+        bool alreadyRecorded = await _auditLog.HasEntryForResourceAsync(
+            tenantId, AuditAction.DataExportThrottled, windowId, ct);
+
+        if (alreadyRecorded)
+        {
+            return;
+        }
+
+        await _auditLog.InsertAuditLogAsync(AuditHelper.Create(
+            tenantId, requestedByUserId, null,
+            AuditAction.DataExportThrottled, AuditResourceType.DataExport,
+            windowId, null, null), ct);
     }
 
     /// <inheritdoc/>

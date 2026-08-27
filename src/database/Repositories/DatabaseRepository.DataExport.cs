@@ -6,6 +6,7 @@ using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using LinqToDB;
 using LinqToDB.Async;
+using LinqToDB.Data;
 using Microsoft.Extensions.Logging;
 
 namespace Framlux.FleetManagement.Database.Repositories;
@@ -13,6 +14,12 @@ namespace Framlux.FleetManagement.Database.Repositories;
 /// <inheritdoc/>
 public partial class DatabaseRepository : IDataExportRepository
 {
+    /// <summary>
+    /// First key of the tenant export advisory lock, keeping it distinct from every other
+    /// advisory lock taken against this database.
+    /// </summary>
+    private const int DataExportLockNamespace = 0x4558_5054;
+
     /// <inheritdoc/>
     public async Task<DataExportJob> CreateExportJobAsync(DataExportJob job, CancellationToken cancellationToken)
     {
@@ -54,6 +61,21 @@ public partial class DatabaseRepository : IDataExportRepository
                       cancellationToken);
 
         return hasActive;
+    }
+
+    /// <inheritdoc/>
+    public async Task AcquireTenantExportLockAsync(int tenantId, CancellationToken cancellationToken)
+    {
+        // Uses the two-argument form so the first key namespaces this lock away from every other
+        // advisory lock in the system and the second scopes it to one tenant.
+        if (_db.DataProvider.Name.Contains("PostgreSQL"))
+        {
+            await _db.ExecuteAsync(
+                "SELECT pg_advisory_xact_lock(@namespace, @tenantId)",
+                cancellationToken,
+                new DataParameter("@namespace", DataExportLockNamespace),
+                new DataParameter("@tenantId", tenantId));
+        }
     }
 
     /// <inheritdoc/>

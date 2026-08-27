@@ -502,6 +502,90 @@ public class DataExportHandlerTests
         await Assert.That(eligibleAt).IsNull();
     }
 
+    /// <summary>
+    /// A tenant inside its window can keep calling. One refusal record per window is the point —
+    /// a row per attempt would make the refusal path itself the cheap way to fill the audit table.
+    /// </summary>
+    [Test]
+    public async Task ExportTenantDataAsync_RepeatedRefusals_RecordOneAuditEntryPerWindow()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        await SeedMachine(dbFactory, tenantId: 1);
+
+        CaptureObjectStorageService capture = new();
+        FakeTimeProvider clock = new(FixedNow);
+        DataExportHandler handler = CreateHandler(
+            dbFactory, objectStorage: capture, timeProvider: clock, exportCooldown: TimeSpan.FromHours(24));
+
+        ServiceResult<DataExportRequestOutcome> firstResult = await handler.ExportTenantDataAsync(1, 1, CancellationToken.None);
+        await handler.ProcessExportJobAsync(firstResult.Data!.JobId, CancellationToken.None);
+
+        try
+        {
+            clock.Advance(TimeSpan.FromHours(1));
+
+            for (int attempt = 0; attempt < 5; attempt++)
+            {
+                await handler.ExportTenantDataAsync(1, 1, CancellationToken.None);
+            }
+
+            int throttledCount = await dbFactory.Context.AuditLog
+                .CountAsync(a => a.Action == AuditAction.DataExportThrottled);
+
+            await Assert.That(throttledCount).IsEqualTo(1);
+        }
+        finally
+        {
+            CleanupFile(capture.LastCapturedPath);
+        }
+    }
+
+    /// <summary>
+    /// A refusal in a later window is recorded again — collapsing them forever would hide a tenant
+    /// that keeps hitting the wall week after week.
+    /// </summary>
+    [Test]
+    public async Task ExportTenantDataAsync_RefusalInLaterWindow_RecordsAnotherAuditEntry()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        await SeedMachine(dbFactory, tenantId: 1);
+
+        CaptureObjectStorageService capture = new();
+        FakeTimeProvider clock = new(FixedNow);
+        DataExportHandler handler = CreateHandler(
+            dbFactory, objectStorage: capture, timeProvider: clock, exportCooldown: TimeSpan.FromHours(24));
+
+        ServiceResult<DataExportRequestOutcome> firstResult = await handler.ExportTenantDataAsync(1, 1, CancellationToken.None);
+        await handler.ProcessExportJobAsync(firstResult.Data!.JobId, CancellationToken.None);
+
+        try
+        {
+            clock.Advance(TimeSpan.FromHours(1));
+            await handler.ExportTenantDataAsync(1, 1, CancellationToken.None);
+
+            // Past the first window: a fresh export starts a new one.
+            clock.Advance(TimeSpan.FromHours(24));
+            ServiceResult<DataExportRequestOutcome> secondResult = await handler.ExportTenantDataAsync(1, 1, CancellationToken.None);
+            await Assert.That(secondResult.IsSuccess).IsTrue();
+
+            // Run it to completion, otherwise the next request is refused as already-in-progress
+            // and never reaches the cooldown at all.
+            await handler.ProcessExportJobAsync(secondResult.Data!.JobId, CancellationToken.None);
+
+            clock.Advance(TimeSpan.FromHours(1));
+            await handler.ExportTenantDataAsync(1, 1, CancellationToken.None);
+
+            int throttledCount = await dbFactory.Context.AuditLog
+                .CountAsync(a => a.Action == AuditAction.DataExportThrottled);
+
+            await Assert.That(throttledCount).IsEqualTo(2);
+        }
+        finally
+        {
+            CleanupFile(capture.LastCapturedPath);
+        }
+    }
+
     [Test]
     public async Task ExportTenantDataAsync_ActiveJobExists_Returns409()
     {

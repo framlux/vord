@@ -77,7 +77,10 @@ public static class ServiceCollectionExtensions
             .ValidateOnStart();
         services.AddSingleton<IValidateOptions<BillingOptions>, BillingOptionsValidator>();
 
-        services.Configure<TierDefaultOptions>(configuration.GetSection("TierDefaults"));
+        services.AddOptions<TierDefaultOptions>()
+            .Bind(configuration.GetSection("TierDefaults"))
+            .ValidateOnStart();
+        services.AddSingleton<IValidateOptions<TierDefaultOptions>, TierDefaultOptionsValidator>();
 
         services.AddOptions<DatabaseOptions>()
             .Bind(configuration.GetSection("Database"))

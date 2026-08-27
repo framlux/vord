@@ -26,6 +26,17 @@ public partial class DatabaseRepository : IAuditLogRepository
     }
 
     /// <inheritdoc/>
+    public async Task<bool> HasEntryForResourceAsync(
+        int tenantId, Database.Enums.AuditAction action, string resourceId, CancellationToken cancellationToken)
+    {
+        bool exists = await _db.AuditLog
+            .AnyAsync(a => (a.TenantId == tenantId) && (a.Action == action) && (a.ResourceId == resourceId),
+                      cancellationToken);
+
+        return exists;
+    }
+
+    /// <inheritdoc/>
     public async Task<List<AuditLogEntry>> GetAuditLogEntriesForTenantAsync(
         int tenantId, int skip, int take,
         Database.Enums.AuditAction? actionFilter, DateTimeOffset? fromDate, DateTimeOffset? toDate,

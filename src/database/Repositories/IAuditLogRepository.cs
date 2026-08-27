@@ -21,6 +21,14 @@ public interface IAuditLogRepository
     Task InsertAuditLogAsync(AuditLogEntry entry, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Returns true when an audit entry recording <paramref name="action"/> against
+    /// <paramref name="resourceId"/> already exists for the tenant. Lets a caller record a
+    /// repeated condition once per occurrence rather than once per attempt, keyed on the
+    /// occurrence's own identity rather than on a time comparison.
+    /// </summary>
+    Task<bool> HasEntryForResourceAsync(int tenantId, AuditAction action, string resourceId, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Returns paginated audit log entries for a tenant with optional filters, ordered by timestamp descending.
     /// Eager-loads the User navigation property.
     /// </summary>
