@@ -208,6 +208,8 @@ service FleetAdmin {
   rpc RestoreTenant(RestoreTenantRequest) returns (RestoreTenantResponse);
   rpc ListTenantDeletions(ListTenantDeletionsRequest) returns (ListTenantDeletionsResponse);
   rpc GetBillableMachineCount(GetBillableMachineCountRequest) returns (GetBillableMachineCountResponse);
+  rpc ListRecurringJobs(ListRecurringJobsRequest) returns (ListRecurringJobsResponse);
+  rpc RunRecurringJobNow(RunRecurringJobNowRequest) returns (RunRecurringJobNowResponse);
 }
 
 // --- FleetAdmin shared types ---
@@ -478,4 +480,80 @@ message GetBillableMachineCountResponse {
   int32 billable_count = 1;
   bool success = 2;
   string message = 3;
+}
+
+enum FleetRecurringJobStatus {
+  FLEET_RECURRING_JOB_STATUS_UNSPECIFIED = 0;
+  FLEET_RECURRING_JOB_STATUS_SCHEDULED = 1;
+  FLEET_RECURRING_JOB_STATUS_OVERDUE = 2;
+  FLEET_RECURRING_JOB_STATUS_DISABLED = 3;
+  FLEET_RECURRING_JOB_STATUS_MISSING = 4;
+  FLEET_RECURRING_JOB_STATUS_LOAD_FAILED = 5;
+}
+
+message FleetRecurringJob {
+  string id = 1;
+  string cron = 2;
+  string time_zone_id = 3;
+  // Unset until the job has run at least once.
+  google.protobuf.Timestamp last_execution = 4;
+  // Unset when Hangfire has disabled the schedule.
+  google.protobuf.Timestamp next_execution = 5;
+  string last_job_id = 6;
+  // Best-effort. Hangfire resolves this by reading the last job row, which it expires after a
+  // day, so an aged-out daily job reports empty. Render empty as "unknown", never as success.
+  string last_job_state = 7;
+  // The SCHEDULER's error (bad cron, payload deserialize, factory create) — NOT the job's own
+  // failure message. Stored in the recurring-job hash and therefore durable.
+  string error = 8;
+  int32 retry_attempt = 9;
+  FleetRecurringJobStatus status = 10;
+}
+
+message FleetHangfireServer {
+  string name = 1;
+  int32 workers_count = 2;
+  // Unset when Hangfire reports no start time.
+  google.protobuf.Timestamp started_at = 3;
+  google.protobuf.Timestamp heartbeat = 4;
+  repeated string queues = 5;
+}
+
+// The outcome of one manual run, resolved from Hangfire's job details.
+message FleetManualRun {
+  string job_id = 1;
+  string recurring_job_id = 2;
+  string triggered_by = 3;
+  google.protobuf.Timestamp created_at = 4;
+  // Enqueued | Processing | Succeeded | Failed | Deleted
+  string state = 5;
+  string reason = 6;
+  // False once Hangfire has expired the job row, so the run is known to have happened but its
+  // outcome is no longer retained.
+  bool retained = 7;
+}
+
+message ListRecurringJobsRequest {
+  // Job ids of recent manual runs to resolve outcomes for. Capped server-side at 20.
+  repeated string enrich_job_ids = 1;
+}
+
+message ListRecurringJobsResponse {
+  repeated FleetRecurringJob jobs = 1;
+  repeated FleetHangfireServer servers = 2;
+  int64 failed_job_count = 3;
+  repeated FleetManualRun manual_runs = 4;
+  // The fleet's clock, so callers render ages against the clock that computed the statuses.
+  google.protobuf.Timestamp server_time = 5;
+}
+
+message RunRecurringJobNowRequest {
+  string job_id = 1;
+  string triggered_by = 2;
+}
+
+message RunRecurringJobNowResponse {
+  bool success = 1;
+  string message = 2;
+  string enqueued_job_id = 3;
 }
