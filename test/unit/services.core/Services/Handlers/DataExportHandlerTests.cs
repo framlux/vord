@@ -15,6 +15,7 @@ using LinqToDB;
 using Microsoft.Data.Sqlite;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Time.Testing;
 using NSubstitute;
 using NSubstitute.ExceptionExtensions;
 
@@ -25,13 +26,18 @@ namespace Framlux.FleetManagement.Test.Services.Handlers;
 /// </summary>
 public class DataExportHandlerTests
 {
+    private static readonly DateTimeOffset FixedNow = new(2026, 8, 27, 12, 0, 0, TimeSpan.Zero);
+
     private static DataExportHandler CreateHandler(
         TestDatabaseFactory dbFactory,
         IObjectStorageService? objectStorage = null,
-        ILogger<DataExportHandler>? logger = null)
+        ILogger<DataExportHandler>? logger = null,
+        TimeProvider? timeProvider = null,
+        TimeSpan? exportCooldown = null)
     {
         objectStorage ??= new CaptureObjectStorageService();
         logger ??= Substitute.For<ILogger<DataExportHandler>>();
+        timeProvider ??= new FakeTimeProvider(FixedNow);
 
         DatabaseRepository repo = new(dbFactory.Context, NullLogger<DatabaseRepository>.Instance);
 
@@ -40,8 +46,10 @@ public class DataExportHandlerTests
         ISubscriptionService subscriptionService = Substitute.For<ISubscriptionService>();
         subscriptionService.GetSubscriptionForTenantAsync(Arg.Any<int>(), Arg.Any<CancellationToken>())
             .Returns(callInfo => repo.GetSubscriptionForTenantAsync(callInfo.ArgAt<int>(0), callInfo.ArgAt<CancellationToken>(1)));
+        subscriptionService.GetDataExportCooldownAsync(Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns(exportCooldown ?? TimeSpan.FromHours(24));
 
-        return new DataExportHandler(repo, repo, repo, repo, subscriptionService, repo, logger, objectStorage);
+        return new DataExportHandler(repo, repo, repo, repo, subscriptionService, repo, logger, objectStorage, timeProvider);
     }
 
     private static async Task<long> SeedMachine(TestDatabaseFactory dbFactory, int tenantId = 1, bool isDeleted = false, string hostname = "export-host")
@@ -398,6 +406,102 @@ public class DataExportHandlerTests
         await Assert.That(result.IsNotFound).IsTrue();
     }
 
+    /// <summary>
+    /// A tenant that has never exported is eligible immediately.
+    /// </summary>
+    [Test]
+    public async Task GetNextExportEligibleAtAsync_NoPriorExport_ReturnsNull()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        DataExportHandler handler = CreateHandler(dbFactory);
+
+        DateTimeOffset? eligibleAt = await handler.GetNextExportEligibleAtAsync(1, CancellationToken.None);
+
+        await Assert.That(eligibleAt).IsNull();
+    }
+
+    /// <summary>
+    /// Inside the window the caller is told exactly when the next export becomes available, so the
+    /// rejection can say something more useful than "no".
+    /// </summary>
+    [Test]
+    public async Task GetNextExportEligibleAtAsync_WithinWindow_ReturnsWhenTheWindowExpires()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        await SeedMachine(dbFactory, tenantId: 1);
+
+        DateTimeOffset lastRequest = FixedNow.AddHours(-2);
+        await dbFactory.Context.InsertAsync(TestDataBuilder.BuildDataExportJob(
+            tenantId: 1, requestedByUserId: 1, status: DataExportJobStatus.Complete, requestedAt: lastRequest));
+
+        DataExportHandler handler = CreateHandler(dbFactory, exportCooldown: TimeSpan.FromHours(24));
+
+        DateTimeOffset? eligibleAt = await handler.GetNextExportEligibleAtAsync(1, CancellationToken.None);
+
+        await Assert.That(eligibleAt).IsEqualTo(lastRequest.AddHours(24));
+    }
+
+    /// <summary>
+    /// Once the window has elapsed the tenant is eligible again.
+    /// </summary>
+    [Test]
+    public async Task GetNextExportEligibleAtAsync_WindowElapsed_ReturnsNull()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        await SeedMachine(dbFactory, tenantId: 1);
+
+        await dbFactory.Context.InsertAsync(TestDataBuilder.BuildDataExportJob(
+            tenantId: 1, requestedByUserId: 1, status: DataExportJobStatus.Complete,
+            requestedAt: FixedNow.AddHours(-25)));
+
+        DataExportHandler handler = CreateHandler(dbFactory, exportCooldown: TimeSpan.FromHours(24));
+
+        DateTimeOffset? eligibleAt = await handler.GetNextExportEligibleAtAsync(1, CancellationToken.None);
+
+        await Assert.That(eligibleAt).IsNull();
+    }
+
+    /// <summary>
+    /// A failed export still consumed the work the cooldown rations, so it holds the window shut.
+    /// </summary>
+    [Test]
+    public async Task GetNextExportEligibleAtAsync_PriorExportFailed_StillHoldsTheWindow()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        await SeedMachine(dbFactory, tenantId: 1);
+
+        DateTimeOffset lastRequest = FixedNow.AddHours(-1);
+        await dbFactory.Context.InsertAsync(TestDataBuilder.BuildDataExportJob(
+            tenantId: 1, requestedByUserId: 1, status: DataExportJobStatus.Failed, requestedAt: lastRequest));
+
+        DataExportHandler handler = CreateHandler(dbFactory, exportCooldown: TimeSpan.FromHours(12));
+
+        DateTimeOffset? eligibleAt = await handler.GetNextExportEligibleAtAsync(1, CancellationToken.None);
+
+        await Assert.That(eligibleAt).IsEqualTo(lastRequest.AddHours(12));
+    }
+
+    /// <summary>
+    /// A zero cooldown — what a self-hosted deployment reports — never withholds an export, even
+    /// when one was requested moments ago.
+    /// </summary>
+    [Test]
+    public async Task GetNextExportEligibleAtAsync_ZeroCooldown_ReturnsNull()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        await SeedMachine(dbFactory, tenantId: 1);
+
+        await dbFactory.Context.InsertAsync(TestDataBuilder.BuildDataExportJob(
+            tenantId: 1, requestedByUserId: 1, status: DataExportJobStatus.Complete,
+            requestedAt: FixedNow.AddMinutes(-1)));
+
+        DataExportHandler handler = CreateHandler(dbFactory, exportCooldown: TimeSpan.Zero);
+
+        DateTimeOffset? eligibleAt = await handler.GetNextExportEligibleAtAsync(1, CancellationToken.None);
+
+        await Assert.That(eligibleAt).IsNull();
+    }
+
     [Test]
     public async Task ExportTenantDataAsync_ActiveJobExists_Returns409()
     {
@@ -422,7 +526,12 @@ public class DataExportHandlerTests
         await SeedMachine(dbFactory, tenantId: 1);
 
         CaptureObjectStorageService capture = new();
-        DataExportHandler handler = CreateHandler(dbFactory, objectStorage: capture);
+
+        // A completed job no longer blocks on its own; the tier cooldown is what decides. This
+        // case is the one where the window has already elapsed.
+        FakeTimeProvider clock = new(FixedNow);
+        DataExportHandler handler = CreateHandler(
+            dbFactory, objectStorage: capture, timeProvider: clock, exportCooldown: TimeSpan.FromHours(24));
 
         // Create and process first job to completion
         ServiceResult<int> firstResult = await handler.ExportTenantDataAsync(1, 1, CancellationToken.None);
@@ -430,11 +539,84 @@ public class DataExportHandlerTests
 
         try
         {
-            // Second job should succeed since first is completed
+            clock.Advance(TimeSpan.FromHours(25));
+
+            // Second job should succeed since first is completed and the window has passed
             ServiceResult<int> secondResult = await handler.ExportTenantDataAsync(1, 1, CancellationToken.None);
 
             await Assert.That(secondResult.IsSuccess).IsTrue();
             await Assert.That(secondResult.Data).IsGreaterThan(firstResult.Data);
+        }
+        finally
+        {
+            CleanupFile(capture.LastCapturedPath);
+        }
+    }
+
+    /// <summary>
+    /// The counterpart: a completed export inside the tier window is refused with 429 rather than
+    /// silently allowed. This is the hole the cooldown exists to close — without it a tenant can
+    /// re-request a full-database export the instant the previous one finishes, in a loop.
+    /// </summary>
+    [Test]
+    public async Task ExportTenantDataAsync_WithinCooldownWindow_Returns429()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        await SeedMachine(dbFactory, tenantId: 1);
+
+        CaptureObjectStorageService capture = new();
+        FakeTimeProvider clock = new(FixedNow);
+        DataExportHandler handler = CreateHandler(
+            dbFactory, objectStorage: capture, timeProvider: clock, exportCooldown: TimeSpan.FromHours(24));
+
+        ServiceResult<int> firstResult = await handler.ExportTenantDataAsync(1, 1, CancellationToken.None);
+        await handler.ProcessExportJobAsync(firstResult.Data, CancellationToken.None);
+
+        try
+        {
+            clock.Advance(TimeSpan.FromHours(23));
+
+            ServiceResult<int> secondResult = await handler.ExportTenantDataAsync(1, 1, CancellationToken.None);
+
+            await Assert.That(secondResult.StatusCode).IsEqualTo(429);
+        }
+        finally
+        {
+            CleanupFile(capture.LastCapturedPath);
+        }
+    }
+
+    /// <summary>
+    /// A refused export is auditable. Without this the only trace of a throttled tenant is a log
+    /// line, which is not something an operator can answer a support question from.
+    /// </summary>
+    [Test]
+    public async Task ExportTenantDataAsync_WithinCooldownWindow_WritesThrottledAuditEntry()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        await SeedMachine(dbFactory, tenantId: 1);
+
+        CaptureObjectStorageService capture = new();
+        FakeTimeProvider clock = new(FixedNow);
+        DataExportHandler handler = CreateHandler(
+            dbFactory, objectStorage: capture, timeProvider: clock, exportCooldown: TimeSpan.FromHours(24));
+
+        ServiceResult<int> firstResult = await handler.ExportTenantDataAsync(1, 1, CancellationToken.None);
+        await handler.ProcessExportJobAsync(firstResult.Data, CancellationToken.None);
+
+        try
+        {
+            clock.Advance(TimeSpan.FromHours(1));
+
+            await handler.ExportTenantDataAsync(1, 1, CancellationToken.None);
+
+            List<AuditLogEntry> throttled = await dbFactory.Context.AuditLog
+                .Where(a => a.Action == AuditAction.DataExportThrottled)
+                .ToListAsync();
+
+            await Assert.That(throttled.Count).IsEqualTo(1);
+            await Assert.That(throttled[0].TenantId).IsEqualTo(1);
+            await Assert.That(throttled[0].UserId).IsEqualTo(1);
         }
         finally
         {

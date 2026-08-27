@@ -33,4 +33,10 @@ public sealed class TierLimitDefaults
     /// Maximum number of members (users with tenant access) allowed.
     /// </summary>
     public int MemberLimit { get; set; }
+
+    /// <summary>
+    /// Hours a tenant must wait between generating data exports. Governs generating an export
+    /// only; downloading one that already exists is not affected.
+    /// </summary>
+    public int DataExportCooldownHours { get; set; }
 }

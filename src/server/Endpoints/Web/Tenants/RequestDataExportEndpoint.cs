@@ -2,6 +2,7 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
+using System.Globalization;
 using FastEndpoints;
 using Framlux.FleetManagement.Server.Auth;
 using Framlux.FleetManagement.Services.Core.DataExport;
@@ -29,6 +30,18 @@ public sealed class RequestDataExportResponse
 }
 
 /// <summary>
+/// Response model returned when an export is refused because the tenant's cooldown has not elapsed.
+/// </summary>
+public sealed class RequestDataExportThrottledResponse
+{
+    /// <summary>
+    /// When the tenant may next generate an export, as an ISO-8601 timestamp. Present so the
+    /// dashboard can say when rather than only that the request was refused.
+    /// </summary>
+    public string NextExportAvailableAt { get; set; } = "";
+}
+
+/// <summary>
 /// Creates a pending data export job for the current tenant.
 /// </summary>
 public sealed class RequestDataExportEndpoint : EndpointWithoutRequest<ApiResponse<RequestDataExportResponse>>
@@ -37,6 +50,7 @@ public sealed class RequestDataExportEndpoint : EndpointWithoutRequest<ApiRespon
     private readonly IDataExportHandler _handler;
     private readonly IObjectStorageService _objectStorageService;
     private readonly ITenantContext _tenantContext;
+    private readonly TimeProvider _timeProvider;
 
     /// <summary>
     /// Creates a new instance of the <see cref="RequestDataExportEndpoint"/> class.
@@ -45,17 +59,20 @@ public sealed class RequestDataExportEndpoint : EndpointWithoutRequest<ApiRespon
         IDataExportHandler handler,
         IObjectStorageService objectStorageService,
         IBackgroundJobClient backgroundJobClient,
-        ITenantContext tenantContext)
+        ITenantContext tenantContext,
+        TimeProvider timeProvider)
     {
         ArgumentNullException.ThrowIfNull(handler);
         ArgumentNullException.ThrowIfNull(objectStorageService);
         ArgumentNullException.ThrowIfNull(backgroundJobClient);
         ArgumentNullException.ThrowIfNull(tenantContext);
+        ArgumentNullException.ThrowIfNull(timeProvider);
 
         _handler = handler;
         _objectStorageService = objectStorageService;
         _backgroundJobClient = backgroundJobClient;
         _tenantContext = tenantContext;
+        _timeProvider = timeProvider;
     }
 
     /// <inheritdoc/>
@@ -102,6 +119,13 @@ public sealed class RequestDataExportEndpoint : EndpointWithoutRequest<ApiRespon
             return;
         }
 
+        if (result.StatusCode == StatusCodes.Status429TooManyRequests)
+        {
+            await SendCooldownAsync(tenantId, ct);
+
+            return;
+        }
+
         // Enqueue the per-job claim path so we process exactly this row, not a fleet-wide sweep.
         // The recurring DataExportProcessingJob.RunAsync continues to run as the orphan reaper.
         _backgroundJobClient.Enqueue<DataExportProcessingJob>(job => job.ProcessSingleAsync(result.Data, CancellationToken.None));
@@ -109,5 +133,43 @@ public sealed class RequestDataExportEndpoint : EndpointWithoutRequest<ApiRespon
         await Send.OkAsync(
             ApiResponse<RequestDataExportResponse>.Ok(new RequestDataExportResponse { JobId = result.Data, Status = "Pending" }),
             cancellation: ct);
+    }
+
+    /// <summary>
+    /// Writes the throttled response. The handler has already decided to refuse; this reads the
+    /// eligibility instant back so the caller learns when it may retry rather than only that it
+    /// may not now. The extra read happens on the refusal path only.
+    /// </summary>
+    private async Task SendCooldownAsync(int? tenantId, CancellationToken ct)
+    {
+        DateTimeOffset? nextEligibleAt = tenantId is null
+            ? null
+            : await _handler.GetNextExportEligibleAtAsync(tenantId.Value, ct);
+
+        HttpContext.Response.StatusCode = StatusCodes.Status429TooManyRequests;
+
+        if (nextEligibleAt is not null)
+        {
+            // Retry-After is whole seconds, rounded up so it never points at an instant that is
+            // still inside the window.
+            double secondsRemaining = (nextEligibleAt.Value - _timeProvider.GetUtcNow()).TotalSeconds;
+            long retryAfter = (long)Math.Max(1, Math.Ceiling(secondsRemaining));
+
+            HttpContext.Response.Headers.RetryAfter = retryAfter.ToString(CultureInfo.InvariantCulture);
+        }
+
+        await HttpContext.Response.WriteAsJsonAsync(
+            new ApiResponse<RequestDataExportThrottledResponse>
+            {
+                Success = false,
+                Message = nextEligibleAt is null
+                    ? "Another data export cannot be requested yet"
+                    : $"Another data export cannot be requested until {nextEligibleAt.Value:o}",
+                Data = new RequestDataExportThrottledResponse
+                {
+                    NextExportAvailableAt = nextEligibleAt?.ToString("o") ?? "",
+                },
+            },
+            ct);
     }
 }

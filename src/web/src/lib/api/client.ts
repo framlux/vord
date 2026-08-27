@@ -56,7 +56,11 @@ import { buildQueryString } from '$lib/utils/query';
 export class ApiError extends Error {
 	constructor(
 		public status: number,
-		message: string
+		message: string,
+		// The error envelope's data payload, when the server sent one. Some failures carry
+		// structured detail the caller needs — a 429 reports when the request may be retried —
+		// and flattening that to a message string would lose it.
+		public data?: unknown
 	) {
 		super(message);
 		this.name = 'ApiError';
@@ -154,7 +158,7 @@ export class ApiClient {
 
 			if (response.ok === false) {
 				const apiResp = json as ApiResponse<unknown>;
-				throw new ApiError(response.status, apiResp?.message ?? 'Request failed');
+				throw new ApiError(response.status, apiResp?.message ?? 'Request failed', apiResp?.data);
 			}
 
 			return json as T;

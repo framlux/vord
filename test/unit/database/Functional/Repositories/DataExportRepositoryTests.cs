@@ -521,4 +521,85 @@ public class DataExportRepositoryTests
         DataExportJob? after = await repo.GetExportJobByIdAsync(doneId);
         await Assert.That(after!.Status).IsEqualTo(DataExportJobStatus.Complete);
     }
+
+    [Test]
+    public async Task GetLastExportRequestedAtAsync_NoJobs_ReturnsNull()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        IDataExportRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+
+        (int _, int tenantId) = await SeedUserAndTenantAsync(dbFactory);
+
+        DateTimeOffset? last = await repo.GetLastExportRequestedAtAsync(tenantId, CancellationToken.None);
+
+        await Assert.That(last).IsNull();
+    }
+
+    [Test]
+    public async Task GetLastExportRequestedAtAsync_ReturnsMostRecentRequest()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        IDataExportRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+
+        (int userId, int tenantId) = await SeedUserAndTenantAsync(dbFactory);
+
+        DateTimeOffset older = new(2026, 8, 20, 9, 0, 0, TimeSpan.Zero);
+        DateTimeOffset newer = new(2026, 8, 21, 9, 0, 0, TimeSpan.Zero);
+
+        await dbFactory.Context.InsertAsync(TestDataBuilder.BuildDataExportJob(
+            tenantId: tenantId, requestedByUserId: userId, status: DataExportJobStatus.Complete, requestedAt: older));
+        await dbFactory.Context.InsertAsync(TestDataBuilder.BuildDataExportJob(
+            tenantId: tenantId, requestedByUserId: userId, status: DataExportJobStatus.Complete, requestedAt: newer));
+
+        DateTimeOffset? last = await repo.GetLastExportRequestedAtAsync(tenantId, CancellationToken.None);
+
+        await Assert.That(last).IsEqualTo(newer);
+    }
+
+    [Test]
+    public async Task GetLastExportRequestedAtAsync_CountsFailedAndExpiredJobs()
+    {
+        // Intent: a failed or expired export still consumed the work that the cooldown rations,
+        // so it must hold the window shut. Counting only successful exports would let a tenant
+        // loop on a request that reliably fails.
+        using TestDatabaseFactory dbFactory = new();
+        IDataExportRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+
+        (int userId, int tenantId) = await SeedUserAndTenantAsync(dbFactory);
+
+        DateTimeOffset succeeded = new(2026, 8, 20, 9, 0, 0, TimeSpan.Zero);
+        DateTimeOffset failed = new(2026, 8, 21, 9, 0, 0, TimeSpan.Zero);
+
+        await dbFactory.Context.InsertAsync(TestDataBuilder.BuildDataExportJob(
+            tenantId: tenantId, requestedByUserId: userId, status: DataExportJobStatus.Complete, requestedAt: succeeded));
+        await dbFactory.Context.InsertAsync(TestDataBuilder.BuildDataExportJob(
+            tenantId: tenantId, requestedByUserId: userId, status: DataExportJobStatus.Failed, requestedAt: failed));
+
+        DateTimeOffset? last = await repo.GetLastExportRequestedAtAsync(tenantId, CancellationToken.None);
+
+        await Assert.That(last).IsEqualTo(failed);
+    }
+
+    [Test]
+    public async Task GetLastExportRequestedAtAsync_IgnoresOtherTenants()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        IDataExportRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+
+        (int userId, int tenantId) = await SeedUserAndTenantAsync(dbFactory);
+
+        Tenant otherTenant = TestDataBuilder.BuildTenant(createdByUserId: userId);
+        otherTenant.ExternalId = Guid.NewGuid().ToString("N");
+        int otherTenantId = await dbFactory.Context.InsertWithInt32IdentityAsync(otherTenant);
+
+        await dbFactory.Context.InsertAsync(TestDataBuilder.BuildDataExportJob(
+            tenantId: otherTenantId,
+            requestedByUserId: userId,
+            status: DataExportJobStatus.Complete,
+            requestedAt: new DateTimeOffset(2026, 8, 21, 9, 0, 0, TimeSpan.Zero)));
+
+        DateTimeOffset? last = await repo.GetLastExportRequestedAtAsync(tenantId, CancellationToken.None);
+
+        await Assert.That(last).IsNull();
+    }
 }

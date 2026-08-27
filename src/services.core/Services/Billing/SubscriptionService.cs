@@ -291,6 +291,19 @@ public sealed class SubscriptionService : ISubscriptionService
         };
     }
 
+    /// <inheritdoc/>
+    public async Task<TimeSpan> GetDataExportCooldownAsync(int tenantId, CancellationToken ct)
+    {
+        TenantSubscription? subscription = await _subscriptionRepo.GetSubscriptionForTenantAsync(tenantId, ct);
+
+        // A missing subscription resolves to the free window, the same way every other effective
+        // limit resolves it. Answering "no window" here would make the absence of a row the
+        // cheapest way to export without limit.
+        SubscriptionTier tier = subscription?.Tier ?? SubscriptionTier.Free;
+
+        return TimeSpan.FromHours(GetConfigDefaultsForTier(tier).DataExportCooldownHours);
+    }
+
     /// <summary>
     /// Gets the configuration-driven default limits for a subscription tier.
     /// </summary>

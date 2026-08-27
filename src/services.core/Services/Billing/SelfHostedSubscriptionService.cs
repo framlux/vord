@@ -162,6 +162,14 @@ public sealed class SelfHostedSubscriptionService : ISubscriptionService
     }
 
     /// <inheritdoc/>
+    public Task<TimeSpan> GetDataExportCooldownAsync(int tenantId, CancellationToken ct = default)
+    {
+        // The cooldown rations a cost the hosted service pays. A self-hoster exports their own
+        // data onto their own disk, so there is nothing here to ration.
+        return Task.FromResult(TimeSpan.Zero);
+    }
+
+    /// <inheritdoc/>
     public Task<int> GetBillableMachineCountAsync(int tenantId, SubscriptionTier tier, CancellationToken ct)
     {
         return _inner.GetBillableMachineCountAsync(tenantId, tier, ct);

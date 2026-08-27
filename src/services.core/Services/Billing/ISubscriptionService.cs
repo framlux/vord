@@ -70,6 +70,15 @@ public interface ISubscriptionService
     Task<EffectiveLimits> GetEffectiveLimitsForTenantAsync(int tenantId, CancellationToken ct = default);
 
     /// <summary>
+    /// Gets how long the tenant must wait between generating data exports. Governs generating an
+    /// export only — downloading an export that already exists is not rationed. A tenant with no
+    /// subscription resolves to the free window rather than to no window.
+    /// </summary>
+    /// <param name="tenantId">The tenant to check.</param>
+    /// <param name="ct">Cancellation token.</param>
+    Task<TimeSpan> GetDataExportCooldownAsync(int tenantId, CancellationToken ct = default);
+
+    /// <summary>
     /// Checks whether the tenant can add another member within their tier limit. The limit is enforced
     /// against active members plus pending non-expired invitations so a tenant cannot over-invite past the cap.
     /// </summary>

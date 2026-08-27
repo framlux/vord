@@ -110,6 +110,20 @@ public sealed class SelfHostedSubscriptionServiceTests
         await Assert.That(await service.CanCreateWebhookAsync(1)).IsTrue();
     }
 
+    /// <summary>
+    /// The export cooldown exists to bound a cost the hosted service pays. A self-hoster exports
+    /// their own data to their own disk, so there is nothing to ration.
+    /// </summary>
+    [Test]
+    public async Task GetDataExportCooldownAsync_IsAlwaysZero()
+    {
+        SelfHostedSubscriptionService service = CreateService(out ISubscriptionService inner);
+        inner.GetDataExportCooldownAsync(Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns(TimeSpan.FromHours(24));
+
+        await Assert.That(await service.GetDataExportCooldownAsync(1)).IsEqualTo(TimeSpan.Zero);
+    }
+
     [Test]
     public async Task CanAddMemberAsync_IsAlwaysTrue()
     {

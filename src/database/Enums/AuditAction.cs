@@ -51,6 +51,8 @@ public enum AuditAction : short
     RegistrationTokenRevoked = 51,
     /// <summary>A data export was requested.</summary>
     DataExportRequested = 60,
+    /// <summary>A data export request was refused because the tenant's tier cooldown had not elapsed.</summary>
+    DataExportThrottled = 61,
     /// <summary>A signing key was registered for remote commands.</summary>
     SigningKeyRegistered = 70,
     /// <summary>A signing key was revoked.</summary>

@@ -13,6 +13,16 @@ namespace Framlux.FleetManagement.Services.Core.Handlers;
 public interface IDataExportHandler
 {
     /// <summary>
+    /// Returns when the tenant may next generate an export, or null when it may do so now.
+    /// The window is per subscription tier and counts every prior request regardless of outcome,
+    /// since a failed export consumed the same work. Downloading an export that already exists is
+    /// never rationed by this.
+    /// </summary>
+    /// <param name="tenantId">The tenant to check.</param>
+    /// <param name="ct">Cancellation token.</param>
+    Task<DateTimeOffset?> GetNextExportEligibleAtAsync(int tenantId, CancellationToken ct);
+
+    /// <summary>
     /// Creates a pending data export job for the given tenant.
     /// Returns the job ID for status polling.
     /// </summary>

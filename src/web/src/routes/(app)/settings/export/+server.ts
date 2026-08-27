@@ -23,6 +23,16 @@ export const POST = async ({ fetch, cookies, locals }: RequestEvent) => {
 		if (e instanceof ApiError) {
 			if (e.status === 401) redirect(302, '/auth/login');
 			if (e.status === 404) error(404, 'No machine data found to export');
+
+			// The cooldown response says when the next export is allowed. Pass that through as a
+			// body rather than collapsing it to a generic failure, so the page can tell the user
+			// when to come back instead of only that something went wrong.
+			if (e.status === 429) {
+				const detail = e.data as { nextExportAvailableAt?: string } | undefined;
+
+				return json({ nextExportAvailableAt: detail?.nextExportAvailableAt ?? '' }, { status: 429 });
+			}
+
 			error(e.status, 'Export request failed');
 		}
 		throw e;

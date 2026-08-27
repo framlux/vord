@@ -56,6 +56,27 @@
 	let pollTimer = $state<ReturnType<typeof setInterval> | null>(null);
 	let fileSizeBytes = $state<number | null>(null);
 
+	// Exports are rationed per subscription tier. The server reports when the next one is allowed;
+	// render that in the viewer's own locale rather than echoing an ISO timestamp at them.
+	function formatCooldownMessage(nextAvailableAt: string | undefined): string {
+		if (!nextAvailableAt) {
+			return 'Another export cannot be requested yet. Please try again later.';
+		}
+
+		const when = new Date(nextAvailableAt);
+
+		if (Number.isNaN(when.getTime())) {
+			return 'Another export cannot be requested yet. Please try again later.';
+		}
+
+		return `Another export cannot be requested until ${when.toLocaleString(undefined, {
+			month: 'short',
+			day: 'numeric',
+			hour: 'numeric',
+			minute: '2-digit'
+		})}.`;
+	}
+
 	async function handleExport() {
 		isRequesting = true;
 		exportError = null;
@@ -68,6 +89,13 @@
 
 			if (response.status === 404) {
 				exportError = 'No machine data found to export.';
+
+				return;
+			}
+
+			if (response.status === 429) {
+				const detail = await response.json();
+				exportError = formatCooldownMessage(detail.nextExportAvailableAt);
 
 				return;
 			}

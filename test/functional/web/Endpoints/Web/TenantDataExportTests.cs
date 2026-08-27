@@ -13,6 +13,7 @@ using Hangfire.States;
 using LinqToDB;
 using LinqToDB.Async;
 using NSubstitute;
+using System.Globalization;
 using System.Net;
 using System.Text.Json;
 
@@ -412,7 +413,7 @@ public sealed class TenantDataExportTests
 
     // ========== Seed helpers ==========
 
-    private static async Task<int> SeedTenantWithSubscription(DatabaseContext db, string name)
+    private static async Task<int> SeedTenantWithSubscription(DatabaseContext db, string name, SubscriptionTier tier = SubscriptionTier.Pro)
     {
         Tenant tenant = new()
         {
@@ -428,7 +429,7 @@ public sealed class TenantDataExportTests
         TenantSubscription subscription = new()
         {
             TenantId = tenant.Id,
-            Tier = SubscriptionTier.Pro,
+            Tier = tier,
             Status = SubscriptionStatus.Active,
             CreatedAt = DateTimeOffset.UtcNow,
             UpdatedAt = DateTimeOffset.UtcNow
@@ -436,6 +437,297 @@ public sealed class TenantDataExportTests
         await db.InsertWithInt32IdentityAsync(subscription);
 
         return tenant.Id;
+    }
+
+    // ========== Per-tier export cooldown ==========
+
+    [Test]
+    public async Task RequestExport_FreeTierWithinTwentyFourHours_Returns429WithRetryAfter()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+
+        int tenantId = await SeedTenantWithSubscription(db, "Free Cooldown Tenant", SubscriptionTier.Free);
+        await SeedMachine(db, tenantId, "free-host");
+
+        DateTimeOffset lastRequest = DateTimeOffset.UtcNow.AddHours(-1);
+        await SeedExportJob(db, tenantId, DataExportJobStatus.Complete, lastRequest);
+
+        HttpClient client = TenantAdminClient(factory, tenantId);
+
+        HttpResponseMessage response = await client.PostAsync("/api/v1/tenants/export", null);
+
+        await Assert.That((int)response.StatusCode).IsEqualTo(429);
+        await Assert.That(response.Headers.RetryAfter).IsNotNull();
+
+        string body = await response.Content.ReadAsStringAsync();
+        using JsonDocument doc = JsonDocument.Parse(body);
+        await Assert.That(doc.RootElement.GetProperty("success").GetBoolean()).IsFalse();
+
+        string nextAvailable = doc.RootElement.GetProperty("data").GetProperty("nextExportAvailableAt").GetString()!;
+        DateTimeOffset parsed = DateTimeOffset.Parse(nextAvailable, CultureInfo.InvariantCulture);
+
+        // The free window is 24 hours from the previous request, not from now.
+        await Assert.That(parsed).IsEqualTo(lastRequest.AddHours(24)).Within(TimeSpan.FromSeconds(1));
+    }
+
+    [Test]
+    public async Task RequestExport_FreeTierAfterTwentyFourHours_Succeeds()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+
+        int tenantId = await SeedTenantWithSubscription(db, "Free Elapsed Tenant", SubscriptionTier.Free);
+        await SeedMachine(db, tenantId, "free-elapsed-host");
+        await SeedExportJob(db, tenantId, DataExportJobStatus.Complete, DateTimeOffset.UtcNow.AddHours(-25));
+
+        HttpClient client = TenantAdminClient(factory, tenantId);
+
+        HttpResponseMessage response = await client.PostAsync("/api/v1/tenants/export", null);
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
+    }
+
+    [Test]
+    public async Task RequestExport_ProTierWithinTwelveHours_Returns429()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+
+        int tenantId = await SeedTenantWithSubscription(db, "Pro Cooldown Tenant", SubscriptionTier.Pro);
+        await SeedMachine(db, tenantId, "pro-host");
+        await SeedExportJob(db, tenantId, DataExportJobStatus.Complete, DateTimeOffset.UtcNow.AddHours(-11));
+
+        HttpClient client = TenantAdminClient(factory, tenantId);
+
+        HttpResponseMessage response = await client.PostAsync("/api/v1/tenants/export", null);
+
+        await Assert.That((int)response.StatusCode).IsEqualTo(429);
+    }
+
+    [Test]
+    public async Task RequestExport_ProTierAfterTwelveHours_Succeeds()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+
+        int tenantId = await SeedTenantWithSubscription(db, "Pro Elapsed Tenant", SubscriptionTier.Pro);
+        await SeedMachine(db, tenantId, "pro-elapsed-host");
+        await SeedExportJob(db, tenantId, DataExportJobStatus.Complete, DateTimeOffset.UtcNow.AddHours(-13));
+
+        HttpClient client = TenantAdminClient(factory, tenantId);
+
+        HttpResponseMessage response = await client.PostAsync("/api/v1/tenants/export", null);
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
+    }
+
+    [Test]
+    public async Task RequestExport_TeamTierWithinEightHours_Returns429()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+
+        int tenantId = await SeedTenantWithSubscription(db, "Team Cooldown Tenant", SubscriptionTier.Team);
+        await SeedMachine(db, tenantId, "team-host");
+        await SeedExportJob(db, tenantId, DataExportJobStatus.Complete, DateTimeOffset.UtcNow.AddHours(-7));
+
+        HttpClient client = TenantAdminClient(factory, tenantId);
+
+        HttpResponseMessage response = await client.PostAsync("/api/v1/tenants/export", null);
+
+        await Assert.That((int)response.StatusCode).IsEqualTo(429);
+    }
+
+    [Test]
+    public async Task RequestExport_TeamTierAfterEightHours_Succeeds()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+
+        int tenantId = await SeedTenantWithSubscription(db, "Team Elapsed Tenant", SubscriptionTier.Team);
+        await SeedMachine(db, tenantId, "team-elapsed-host");
+        await SeedExportJob(db, tenantId, DataExportJobStatus.Complete, DateTimeOffset.UtcNow.AddHours(-9));
+
+        HttpClient client = TenantAdminClient(factory, tenantId);
+
+        HttpResponseMessage response = await client.PostAsync("/api/v1/tenants/export", null);
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
+    }
+
+    [Test]
+    public async Task RequestExport_PriorExportFailed_StillConsumesTheWindow()
+    {
+        // Intent: the cooldown rations the work an export costs, and a failed export cost the
+        // same work. Counting only successful exports would leave a loop open on a request that
+        // reliably fails.
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+
+        int tenantId = await SeedTenantWithSubscription(db, "Failed Export Tenant", SubscriptionTier.Free);
+        await SeedMachine(db, tenantId, "failed-export-host");
+        await SeedExportJob(db, tenantId, DataExportJobStatus.Failed, DateTimeOffset.UtcNow.AddHours(-2));
+
+        HttpClient client = TenantAdminClient(factory, tenantId);
+
+        HttpResponseMessage response = await client.PostAsync("/api/v1/tenants/export", null);
+
+        await Assert.That((int)response.StatusCode).IsEqualTo(429);
+    }
+
+    [Test]
+    public async Task RequestExport_ThrottledRequest_WritesAuditEntry()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+
+        int tenantId = await SeedTenantWithSubscription(db, "Throttle Audit Tenant", SubscriptionTier.Free);
+        await SeedMachine(db, tenantId, "throttle-audit-host");
+        await SeedExportJob(db, tenantId, DataExportJobStatus.Complete, DateTimeOffset.UtcNow.AddHours(-1));
+
+        HttpClient client = TenantAdminClient(factory, tenantId);
+
+        await client.PostAsync("/api/v1/tenants/export", null);
+
+        List<AuditLogEntry> entries = await db.AuditLog
+            .Where(a => (a.TenantId == tenantId) && (a.Action == AuditAction.DataExportThrottled))
+            .ToListAsync();
+
+        await Assert.That(entries.Count).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task ExportDownload_WithinCooldownWindow_IsUnaffected()
+    {
+        // Intent: the cooldown governs generating an export, never retrieving one that already
+        // exists. A tenant inside the window must still be able to download the export it is
+        // waiting on.
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+
+        int tenantId = await SeedTenantWithSubscription(db, "Download During Cooldown Tenant", SubscriptionTier.Free);
+        await SeedMachine(db, tenantId, "cooldown-download-host");
+
+        int jobId = await SeedExportJob(db, tenantId, DataExportJobStatus.Complete, DateTimeOffset.UtcNow.AddHours(-1));
+
+        HttpClient client = TenantAdminClient(factory, tenantId);
+
+        // Generating is refused while the window is open.
+        HttpResponseMessage generate = await client.PostAsync("/api/v1/tenants/export", null);
+        await Assert.That((int)generate.StatusCode).IsEqualTo(429);
+
+        // Reading the status of the existing export is not.
+        HttpResponseMessage status = await client.GetAsync($"/api/v1/tenants/export/{jobId}");
+        await Assert.That(status.StatusCode).IsEqualTo(HttpStatusCode.OK);
+    }
+
+    // ========== Sibling export endpoints reject non-administrators ==========
+
+    [Test]
+    public async Task ExportStatus_MachineAdminRole_Returns403()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+
+        int tenantId = await SeedTenantWithSubscription(db, "Status Role Tenant");
+        int jobId = await SeedExportJob(db, tenantId, DataExportJobStatus.Complete, DateTimeOffset.UtcNow.AddHours(-1));
+
+        HttpClient client = new AuthenticatedClientBuilder(factory)
+            .WithUserId(1)
+            .WithRole(tenantId, (int)UserAccountRoles.MachineAdmin)
+            .WithActiveTenant(tenantId)
+            .Build();
+
+        HttpResponseMessage response = await client.GetAsync($"/api/v1/tenants/export/{jobId}");
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.Forbidden);
+    }
+
+    [Test]
+    public async Task ExportStatus_ViewerRole_Returns403()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+
+        int tenantId = await SeedTenantWithSubscription(db, "Status Viewer Tenant");
+        int jobId = await SeedExportJob(db, tenantId, DataExportJobStatus.Complete, DateTimeOffset.UtcNow.AddHours(-1));
+
+        HttpClient client = new AuthenticatedClientBuilder(factory)
+            .WithUserId(1)
+            .WithRole(tenantId, (int)UserAccountRoles.Viewer)
+            .WithActiveTenant(tenantId)
+            .Build();
+
+        HttpResponseMessage response = await client.GetAsync($"/api/v1/tenants/export/{jobId}");
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.Forbidden);
+    }
+
+    [Test]
+    public async Task ExportDownload_MachineAdminRole_Returns403()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+
+        int tenantId = await SeedTenantWithSubscription(db, "Download Role Tenant");
+        int jobId = await SeedExportJob(db, tenantId, DataExportJobStatus.Complete, DateTimeOffset.UtcNow.AddHours(-1));
+
+        HttpClient client = new AuthenticatedClientBuilder(factory)
+            .WithUserId(1)
+            .WithRole(tenantId, (int)UserAccountRoles.MachineAdmin)
+            .WithActiveTenant(tenantId)
+            .Build();
+
+        HttpResponseMessage response = await client.GetAsync($"/api/v1/tenants/export/{jobId}/download");
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.Forbidden);
+    }
+
+    [Test]
+    public async Task ExportDownload_ViewerRole_Returns403()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+
+        int tenantId = await SeedTenantWithSubscription(db, "Download Viewer Tenant");
+        int jobId = await SeedExportJob(db, tenantId, DataExportJobStatus.Complete, DateTimeOffset.UtcNow.AddHours(-1));
+
+        HttpClient client = new AuthenticatedClientBuilder(factory)
+            .WithUserId(1)
+            .WithRole(tenantId, (int)UserAccountRoles.Viewer)
+            .WithActiveTenant(tenantId)
+            .Build();
+
+        HttpResponseMessage response = await client.GetAsync($"/api/v1/tenants/export/{jobId}/download");
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.Forbidden);
+    }
+
+    private static HttpClient TenantAdminClient(FunctionalTestFactory factory, int tenantId)
+    {
+        return new AuthenticatedClientBuilder(factory)
+            .WithUserId(1)
+            .WithRole(tenantId, (int)UserAccountRoles.TenantAdmin)
+            .WithActiveTenant(tenantId)
+            .Build();
+    }
+
+    private static async Task<int> SeedExportJob(
+        DatabaseContext db, int tenantId, DataExportJobStatus status, DateTimeOffset requestedAt)
+    {
+        DataExportJob job = new()
+        {
+            TenantId = tenantId,
+            Status = status,
+            RequestedByUserId = 1,
+            RequestedAt = requestedAt,
+            ObjectKey = status == DataExportJobStatus.Complete ? $"exports/{tenantId}/seeded.sqlite" : "",
+            ExpiresAt = requestedAt.AddDays(7),
+            DownloadToken = Guid.NewGuid().ToString("N"),
+        };
+
+        return await db.InsertWithInt32IdentityAsync(job);
     }
 
     private static async Task<long> SeedMachine(DatabaseContext db, int tenantId, string hostname)

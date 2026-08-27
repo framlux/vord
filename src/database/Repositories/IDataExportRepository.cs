@@ -33,6 +33,13 @@ public interface IDataExportRepository
     Task<bool> HasActiveExportJobAsync(int tenantId, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Returns when the tenant most recently requested an export, or null if it never has.
+    /// Counts every job regardless of status: a failed or expired export still consumed the work
+    /// that the per-tier cooldown rations.
+    /// </summary>
+    Task<DateTimeOffset?> GetLastExportRequestedAtAsync(int tenantId, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Updates the status of an export job.
     /// </summary>
     Task UpdateExportJobStatusAsync(int jobId, DataExportJobStatus status, CancellationToken cancellationToken = default);

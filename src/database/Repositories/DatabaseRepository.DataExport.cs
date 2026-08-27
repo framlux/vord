@@ -57,6 +57,19 @@ public partial class DatabaseRepository : IDataExportRepository
     }
 
     /// <inheritdoc/>
+    public async Task<DateTimeOffset?> GetLastExportRequestedAtAsync(int tenantId, CancellationToken cancellationToken)
+    {
+        List<DateTimeOffset> mostRecent = await _db.DataExportJobs
+            .Where(j => j.TenantId == tenantId)
+            .OrderByDescending(j => j.RequestedAt)
+            .Select(j => j.RequestedAt)
+            .Take(1)
+            .ToListAsync(cancellationToken);
+
+        return mostRecent.Count == 0 ? null : mostRecent[0];
+    }
+
+    /// <inheritdoc/>
     public async Task UpdateExportJobStatusAsync(int jobId, DataExportJobStatus status, CancellationToken cancellationToken)
     {
         await _db.DataExportJobs

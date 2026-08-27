@@ -28,6 +28,7 @@ public sealed class DataExportHandler : IDataExportHandler
     private readonly IMachineStateRepository _machineStateRepo;
     private readonly ILogger<DataExportHandler> _logger;
     private readonly IObjectStorageService _objectStorageService;
+    private readonly TimeProvider _timeProvider;
 
     private const int BatchSize = 5000;
 
@@ -42,7 +43,8 @@ public sealed class DataExportHandler : IDataExportHandler
         ISubscriptionService subscriptionService,
         IMachineStateRepository machineStateRepo,
         ILogger<DataExportHandler> logger,
-        IObjectStorageService objectStorageService)
+        IObjectStorageService objectStorageService,
+        TimeProvider timeProvider)
     {
         ArgumentNullException.ThrowIfNull(exportRepo);
         ArgumentNullException.ThrowIfNull(auditLog);
@@ -52,6 +54,7 @@ public sealed class DataExportHandler : IDataExportHandler
         ArgumentNullException.ThrowIfNull(machineStateRepo);
         ArgumentNullException.ThrowIfNull(logger);
         ArgumentNullException.ThrowIfNull(objectStorageService);
+        ArgumentNullException.ThrowIfNull(timeProvider);
 
         _exportRepo = exportRepo;
         _auditLog = auditLog;
@@ -61,6 +64,29 @@ public sealed class DataExportHandler : IDataExportHandler
         _machineStateRepo = machineStateRepo;
         _logger = logger;
         _objectStorageService = objectStorageService;
+        _timeProvider = timeProvider;
+    }
+
+    /// <inheritdoc/>
+    public async Task<DateTimeOffset?> GetNextExportEligibleAtAsync(int tenantId, CancellationToken ct)
+    {
+        TimeSpan cooldown = await _subscriptionService.GetDataExportCooldownAsync(tenantId, ct);
+
+        if (cooldown <= TimeSpan.Zero)
+        {
+            return null;
+        }
+
+        DateTimeOffset? lastRequestedAt = await _exportRepo.GetLastExportRequestedAtAsync(tenantId, ct);
+
+        if (lastRequestedAt is null)
+        {
+            return null;
+        }
+
+        DateTimeOffset eligibleAt = lastRequestedAt.Value + cooldown;
+
+        return eligibleAt > _timeProvider.GetUtcNow() ? eligibleAt : null;
     }
 
     /// <inheritdoc/>
@@ -90,7 +116,27 @@ public sealed class DataExportHandler : IDataExportHandler
             return ServiceResult<int>.Error(409, 0);
         }
 
-        DateTimeOffset now = DateTimeOffset.UtcNow;
+        // Generating an export is a full read of the tenant's data plus a file build and an
+        // upload, all of it free to the requester. The per-tier cooldown bounds how often that
+        // cost can be incurred. It rations generating an export only; downloading one that
+        // already exists is untouched.
+        DateTimeOffset? nextEligibleAt = await GetNextExportEligibleAtAsync(tenantId.Value, ct);
+
+        if (nextEligibleAt is not null)
+        {
+            await _auditLog.InsertAuditLogAsync(AuditHelper.Create(
+                tenantId, requestedByUserId, null,
+                AuditAction.DataExportThrottled, AuditResourceType.DataExport,
+                null, null, null), ct);
+
+            _logger.LogInformation(
+                "Refused data export for tenant {TenantId}: next export available at {NextEligibleAt:o}",
+                tenantId, nextEligibleAt.Value);
+
+            return ServiceResult<int>.Error(429, 0);
+        }
+
+        DateTimeOffset now = _timeProvider.GetUtcNow();
 
         DataExportJob job = new()
         {
