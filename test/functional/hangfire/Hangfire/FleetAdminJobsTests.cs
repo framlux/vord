@@ -4,6 +4,7 @@
 
 using Framlux.FleetManagement.Services.Core.Hangfire;
 using Framlux.Vord.BillingGrpc;
+using Grpc.Core;
 
 namespace Framlux.FleetManagement.FunctionalTest.Hangfire;
 
@@ -109,5 +110,119 @@ public sealed class FleetAdminJobsTests
         FleetManualRun run = response.ManualRuns.Single();
 
         await Assert.That(run.Retained).IsFalse();
+    }
+
+    [Test]
+    public async Task RunRecurringJobNow_UnknownJobId_ThrowsInvalidArgument()
+    {
+        // Intent: this RPC must never become a generic enqueue-anything primitive. Only ids this
+        // build declares may be run.
+        await using FleetAdminJobsFixture fixture = await FleetAdminJobsFixture.CreateAsync();
+
+        RunRecurringJobNowRequest request = new() { JobId = "not-a-real-job", TriggeredBy = "ops@framlux.io" };
+
+        RpcException? exception = await Assert.ThrowsAsync<RpcException>(
+            async () => await fixture.Service.RunRecurringJobNow(request, fixture.CallContext));
+
+        await Assert.That(exception!.StatusCode).IsEqualTo(StatusCode.InvalidArgument);
+    }
+
+    [Test]
+    public async Task RunRecurringJobNow_JobAbsentFromStorage_ThrowsFailedPrecondition()
+    {
+        // Intent: a known id whose registration is missing has no job definition to enqueue.
+        // Failing loudly beats enqueueing nothing and reporting success.
+        await using FleetAdminJobsFixture fixture = await FleetAdminJobsFixture.CreateAsync(
+            registerRecurringJobs: false);
+
+        RunRecurringJobNowRequest request = new()
+        {
+            JobId = RecurringJobIds.TenantPurge,
+            TriggeredBy = "ops@framlux.io",
+        };
+
+        RpcException? exception = await Assert.ThrowsAsync<RpcException>(
+            async () => await fixture.Service.RunRecurringJobNow(request, fixture.CallContext));
+
+        await Assert.That(exception!.StatusCode).IsEqualTo(StatusCode.FailedPrecondition);
+    }
+
+    [Test]
+    public async Task RunRecurringJobNow_KnownJob_ReturnsEnqueuedJobId()
+    {
+        // Intent: the caller records the enqueued id in its own audit store, which is what makes
+        // a manual run traceable after Hangfire expires the job row.
+        await using FleetAdminJobsFixture fixture = await FleetAdminJobsFixture.CreateAsync();
+
+        RunRecurringJobNowRequest request = new()
+        {
+            JobId = RecurringJobIds.TenantPurge,
+            TriggeredBy = "ops@framlux.io",
+        };
+
+        RunRecurringJobNowResponse response = await fixture.Service.RunRecurringJobNow(
+            request, fixture.CallContext);
+
+        await Assert.That(response.Success).IsTrue();
+        await Assert.That(response.EnqueuedJobId).IsNotEmpty();
+    }
+
+    [Test]
+    public async Task RunRecurringJobNow_StampsRecurringJobIdAndTriggeredByParameters()
+    {
+        // Intent: the parameters are what link a manual run back to its recurring job and its
+        // operator. Without them the run is an anonymous background job and the view cannot
+        // attribute it.
+        await using FleetAdminJobsFixture fixture = await FleetAdminJobsFixture.CreateAsync();
+
+        RunRecurringJobNowRequest request = new()
+        {
+            JobId = RecurringJobIds.TenantPurge,
+            TriggeredBy = "ops@framlux.io",
+        };
+
+        RunRecurringJobNowResponse runResponse = await fixture.Service.RunRecurringJobNow(
+            request, fixture.CallContext);
+
+        ListRecurringJobsRequest listRequest = new();
+        listRequest.EnrichJobIds.Add(runResponse.EnqueuedJobId);
+
+        ListRecurringJobsResponse listResponse = await fixture.Service.ListRecurringJobs(
+            listRequest, fixture.CallContext);
+
+        FleetManualRun run = listResponse.ManualRuns.Single();
+
+        // These assert the decoded values. Hangfire stores job parameters JSON-serialised, so the
+        // raw stored value carries its quotes; the reader strips them.
+        await Assert.That(run.RecurringJobId).IsEqualTo(RecurringJobIds.TenantPurge);
+        await Assert.That(run.TriggeredBy).IsEqualTo("ops@framlux.io");
+    }
+
+    [Test]
+    public async Task RunRecurringJobNow_LeavesRecurringScheduleUntouched()
+    {
+        // Intent: the regression guard for enqueueing rather than triggering. Hangfire's trigger
+        // path rewrites LastExecution, clears Error and recomputes NextExecution from now,
+        // discarding a pending overdue occurrence. If this handler were changed to trigger, a
+        // manual run would erase the scheduled-run history the view exists to show.
+        await using FleetAdminJobsFixture fixture = await FleetAdminJobsFixture.CreateAsync();
+
+        ListRecurringJobsResponse before = await fixture.Service.ListRecurringJobs(
+            new ListRecurringJobsRequest(), fixture.CallContext);
+        FleetRecurringJob beforeJob = before.Jobs.First(j => j.Id == RecurringJobIds.TenantPurge);
+
+        RunRecurringJobNowRequest request = new()
+        {
+            JobId = RecurringJobIds.TenantPurge,
+            TriggeredBy = "ops@framlux.io",
+        };
+        await fixture.Service.RunRecurringJobNow(request, fixture.CallContext);
+
+        ListRecurringJobsResponse after = await fixture.Service.ListRecurringJobs(
+            new ListRecurringJobsRequest(), fixture.CallContext);
+        FleetRecurringJob afterJob = after.Jobs.First(j => j.Id == RecurringJobIds.TenantPurge);
+
+        await Assert.That(afterJob.NextExecution).IsEqualTo(beforeJob.NextExecution);
+        await Assert.That(afterJob.LastExecution).IsEqualTo(beforeJob.LastExecution);
     }
 }

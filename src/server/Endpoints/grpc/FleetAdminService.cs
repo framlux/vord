@@ -17,6 +17,8 @@ using Framlux.Vord.BillingGrpc;
 using Google.Protobuf.WellKnownTypes;
 using Grpc.Core;
 using Hangfire;
+using Hangfire.Common;
+using Hangfire.States;
 using Hangfire.Storage;
 using Hangfire.Storage.Monitoring;
 using StackExchange.Redis;
@@ -900,6 +902,57 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
         }
 
         return Task.FromResult(response);
+    }
+
+    /// <summary>
+    /// Runs a recurring job once, out of band, by enqueueing an ordinary background job of the
+    /// same type. The recurring-job schedule is deliberately not touched: Hangfire's own trigger
+    /// path rewrites the last-execution and next-execution fields, which would erase the very
+    /// state this service reports.
+    /// </summary>
+    public override Task<RunRecurringJobNowResponse> RunRecurringJobNow(
+        RunRecurringJobNowRequest request, ServerCallContext context)
+    {
+        AuthorizeInternalCaller(context);
+
+        if (RecurringJobIds.All.Contains(request.JobId) == false)
+        {
+            throw new RpcException(new Status(
+                StatusCode.InvalidArgument,
+                $"Unknown recurring job id: '{request.JobId}'"));
+        }
+
+        Job? job = _inspector.GetJobDefinition(request.JobId);
+
+        if (job is null)
+        {
+            throw new RpcException(new Status(
+                StatusCode.FailedPrecondition,
+                $"Recurring job '{request.JobId}' is not registered in storage, so there is nothing to run."));
+        }
+
+        // These are the same parameter names Hangfire's own scheduler stamps when it fires a
+        // recurring job, so a manual run is a first-class run of that job in Hangfire's model.
+        Dictionary<string, object> parameters = new()
+        {
+            ["RecurringJobId"] = request.JobId,
+            ["TriggeredBy"] = request.TriggeredBy,
+        };
+
+        // EnqueuedState defaults to the "default" queue, but QueueAttribute is an elect-state
+        // filter that runs first, so [Queue("critical")] and [Queue("long")] still win.
+        string enqueuedJobId = _backgroundJobs.Create(job, new EnqueuedState(), parameters);
+
+        _logger.LogInformation(
+            "FleetAdmin: recurring job {JobId} run on demand by {TriggeredBy} as job {EnqueuedJobId}",
+            request.JobId, request.TriggeredBy, enqueuedJobId);
+
+        return Task.FromResult(new RunRecurringJobNowResponse
+        {
+            Success = true,
+            Message = "OK",
+            EnqueuedJobId = enqueuedJobId,
+        });
     }
 
     private static FleetRecurringJob MapRecurringJob(RecurringJobSnapshot snapshot)
