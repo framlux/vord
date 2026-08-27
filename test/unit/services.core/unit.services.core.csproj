@@ -10,6 +10,9 @@
 
   <ItemGroup>
     <PackageReference Include="TUnit" Version="1.37.24" />
+    <!-- Recurring-job inspection is exercised against a real Hangfire storage rather than a
+         mocked connection, so the storage-key contract the inspector depends on is proven. -->
+    <PackageReference Include="Hangfire.InMemory" Version="1.0.0" />
     <PackageReference Include="NSubstitute" Version="5.3.0" />
     <PackageReference Include="NSec.Cryptography" Version="25.4.0" />
     <PackageReference Include="Microsoft.Data.Sqlite" Version="10.0.7" />
