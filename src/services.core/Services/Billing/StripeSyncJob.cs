@@ -101,6 +101,14 @@ public sealed class StripeSyncJob
                 await SyncPeriodEndAsync(subscription, stripeStatus, ct);
                 await SyncCancelAtPeriodEndAsync(subscription, stripeStatus, ct);
             }
+            catch (OperationCanceledException)
+            {
+                // Worker shutdown, not a per-tenant sync failure. Swallowing it would log an error
+                // for every remaining tenant (each one failing instantly on its first await) and
+                // let RunAsync return normally, so Hangfire would record the aborted cycle as a
+                // success. Abort the pass instead and let the next tick re-sync.
+                throw;
+            }
             catch (Exception ex)
             {
                 _logger.LogError(ex,

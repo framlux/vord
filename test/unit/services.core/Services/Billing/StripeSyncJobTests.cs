@@ -406,6 +406,27 @@ public sealed class StripeSyncJobTests
     }
 
     [Test]
+    public async Task RunAsync_PerTenantCancellation_PropagatesAndSkipsRemainingTenants()
+    {
+        // Cancellation is worker shutdown, not a per-tenant sync failure. Swallowing it would log
+        // an error for every remaining tenant (each failing instantly on its first await) and let
+        // RunAsync return normally, so Hangfire would record the aborted cycle as a success.
+        TestSut sut = new();
+        List<TenantSubscription> subs = new() { BuildSub(1), BuildSub(2) };
+        sut.SubscriptionRepo.GetPaidSubscriptionsAsync(Arg.Any<CancellationToken>()).Returns(subs);
+        sut.TenantRepo.GetTenantByIdAsync(1, Arg.Any<CancellationToken>()).Returns(BuildTenant(1, "ext-1"));
+        sut.TenantRepo.GetTenantByIdAsync(2, Arg.Any<CancellationToken>()).Returns(BuildTenant(2, "ext-2"));
+        sut.BillingClient.GetSubscriptionStatusAsync("ext-1", Arg.Any<CancellationToken>())
+            .Returns<Task<StripeSubscriptionStatus>>(_ => throw new OperationCanceledException());
+
+        await Assert.ThrowsAsync<OperationCanceledException>(
+            () => sut.Job.RunAsync(CancellationToken.None));
+
+        await sut.BillingClient.DidNotReceive().GetSubscriptionStatusAsync(
+            "ext-2", Arg.Any<CancellationToken>());
+    }
+
+    [Test]
     public async Task RunAsync_SubscriptionRepositoryThrows_ExceptionPropagates()
     {
         // Top-level exception (outside the per-tenant try/catch) must propagate so Hangfire

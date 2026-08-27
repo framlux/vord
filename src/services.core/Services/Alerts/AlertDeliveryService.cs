@@ -130,6 +130,16 @@ public sealed class AlertDeliveryService : IAlertDeliveryService
                 // and the claim stays recorded so a retry does not re-attempt a send that can never
                 // work.
             }
+            catch (OperationCanceledException)
+            {
+                // Worker shutdown, not a delivery failure. SmtpEmailService rethrows cancellation
+                // rather than reporting Failed, so the message never left the process. Release the
+                // claim and let the exception abort the pass so Hangfire requeues the job;
+                // swallowing it here would record the send as permanently failed and lose the alert.
+                releaseForRetry = true;
+
+                throw;
+            }
             catch (Exception ex)
             {
                 // Unexpected — likely a programming error. Log + leave the claim in place (retries

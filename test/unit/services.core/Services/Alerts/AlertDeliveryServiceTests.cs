@@ -223,6 +223,44 @@ public sealed class AlertDeliveryServiceTests
     }
 
     [Test]
+    public async Task DeliverAsync_NotifyEmail_Canceled_ReleasesClaimAndPropagates()
+    {
+        // Intent: cancellation is worker shutdown, not a delivery failure. SmtpEmailService
+        // rethrows cancellation instead of reporting Failed, so the message never left the
+        // process. Treating it as a permanent failure would keep the claim and lose the alert
+        // forever, so the claim must be released and the exception must propagate so Hangfire
+        // requeues the job.
+        using TestDatabaseFactory dbFactory = new();
+
+        ITenantRepository tenantRepo = Substitute.For<ITenantRepository>();
+        tenantRepo.GetTenantAdminEmailsAsync(Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns(["admin@x.com"]);
+
+        IAlertEmailDeliveryAttemptRepository attemptRepo = Substitute.For<IAlertEmailDeliveryAttemptRepository>();
+        attemptRepo.GetClaimedRecipientsAsync(Arg.Any<long>(), Arg.Any<CancellationToken>())
+            .Returns(new HashSet<string>(StringComparer.OrdinalIgnoreCase));
+        attemptRepo.TryClaimAttemptAsync(Arg.Any<long>(), Arg.Any<string>(), Arg.Any<DateTimeOffset>(), Arg.Any<CancellationToken>())
+            .Returns(true);
+
+        IEmailService emailService = Substitute.For<IEmailService>();
+        emailService.SendAlertEmailAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns<EmailDeliveryOutcome>(_ => throw new OperationCanceledException());
+
+        TestServiceScopeFactory scopeFactory = CreateEmailScopeFactory(dbFactory, tenantRepo, attemptRepo, emailService);
+        AlertDeliveryService service = BuildService(scopeFactory);
+
+        AlertEvent alertEvent = CreateEvent();
+        await Assert.ThrowsAsync<OperationCanceledException>(() =>
+            service.DeliverAsync(alertEvent, CreateRule(notifyEmail: true), CancellationToken.None));
+
+        // The release uses CancellationToken.None so it still runs while the worker is stopping.
+        await attemptRepo.Received(1).ReleaseClaimForRetryAsync(
+            alertEvent.Id, "admin@x.com", Arg.Any<CancellationToken>());
+        await attemptRepo.DidNotReceive().MarkAttemptSucceededAsync(
+            Arg.Any<long>(), Arg.Any<string>(), Arg.Any<DateTimeOffset>(), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
     public async Task DeliverAsync_NotifyEmail_Skipped_NoThrowNoReleaseNoTransientFailureRecorded()
     {
         // Intent: Skipped means no provider is configured — a supported self-hosted deployment.
