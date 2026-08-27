@@ -39,6 +39,7 @@
 		RegistrationTokenCreated: 'Token Created',
 		RegistrationTokenRevoked: 'Token Revoked',
 		DataExportRequested: 'Data Export',
+		DataExportThrottled: 'Data Export Refused',
 	};
 
 	const allActions = Object.keys(actionLabels);

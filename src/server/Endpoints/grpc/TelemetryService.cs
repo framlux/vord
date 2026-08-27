@@ -675,7 +675,7 @@ public sealed class TelemetryService : Telemetry.TelemetryBase
             return false;
         }
 
-        // The single ingest-eligibility gate owns the policy (Active-only today).
+        // The single ingest-eligibility gate owns the policy (Active or PastDue today).
         return await _subscriptionService.IsIngestEligibleAsync(tenantId, ct);
     }
 

@@ -1568,9 +1568,13 @@ func TestClassifyMachineType(t *testing.T) {
 	// systemd-detect-virt is authoritative when it answers. The DMI rows below it cover the
 	// fallback for hosts without systemd, which is best-effort by design.
 	//
-	// The DMI strings are drawn from published platform behaviour, not from hardware in hand.
-	// Before relying on a fallback row, confirm it against a real guest of that platform — a wrong
-	// vendor string here labels real bare metal as a VM.
+	// The DMI strings come from published platform behaviour rather than hardware in hand, and are
+	// expected to stay that way: the space of vendors, product names and chassis codes is far larger
+	// than any fleet we could assemble to test against. Treat a wrong row as a bug to fix from
+	// research or a customer report, not as a gap to close up front. Two things make that
+	// affordable — the fallback runs only on hosts without systemd, and the server re-reads the
+	// agent's verdict on every configuration fetch, so a corrected heuristic repairs existing
+	// machines on their next poll instead of needing a migration.
 	tests := []struct {
 		name        string
 		virt        string

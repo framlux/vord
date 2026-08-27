@@ -90,12 +90,12 @@ public sealed class DataExportHandler : IDataExportHandler
     }
 
     /// <inheritdoc/>
-    public async Task<ServiceResult<int>> ExportTenantDataAsync(int? tenantId, int requestedByUserId, CancellationToken ct)
+    public async Task<ServiceResult<DataExportRequestOutcome>> ExportTenantDataAsync(int? tenantId, int requestedByUserId, CancellationToken ct)
     {
         if (tenantId is null)
         {
 
-            return ServiceResult<int>.NotFound();
+            return ServiceResult<DataExportRequestOutcome>.NotFound();
         }
 
         // Check if there are machines to export
@@ -104,7 +104,7 @@ public sealed class DataExportHandler : IDataExportHandler
         if (machineCount == 0)
         {
 
-            return ServiceResult<int>.NotFound();
+            return ServiceResult<DataExportRequestOutcome>.NotFound();
         }
 
         // Reject if tenant already has a Pending or Processing job
@@ -113,7 +113,7 @@ public sealed class DataExportHandler : IDataExportHandler
         if (hasActiveJob)
         {
 
-            return ServiceResult<int>.Error(409, 0);
+            return ServiceResult<DataExportRequestOutcome>.Error(409, new DataExportRequestOutcome());
         }
 
         // Generating an export is a full read of the tenant's data plus a file build and an
@@ -133,7 +133,8 @@ public sealed class DataExportHandler : IDataExportHandler
                 "Refused data export for tenant {TenantId}: next export available at {NextEligibleAt:o}",
                 tenantId, nextEligibleAt.Value);
 
-            return ServiceResult<int>.Error(429, 0);
+            return ServiceResult<DataExportRequestOutcome>.Error(
+                429, new DataExportRequestOutcome { NextEligibleAt = nextEligibleAt });
         }
 
         DateTimeOffset now = _timeProvider.GetUtcNow();
@@ -162,7 +163,7 @@ public sealed class DataExportHandler : IDataExportHandler
 
         _logger.LogInformation("Created data export job {JobId} for tenant {TenantId}", createdJob.Id, tenantId);
 
-        return ServiceResult<int>.Ok(createdJob.Id);
+        return ServiceResult<DataExportRequestOutcome>.Ok(new DataExportRequestOutcome { JobId = createdJob.Id });
     }
 
     /// <inheritdoc/>

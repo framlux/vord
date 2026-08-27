@@ -103,7 +103,7 @@ public sealed class RequestDataExportEndpoint : EndpointWithoutRequest<ApiRespon
             return;
         }
 
-        ServiceResult<int> result = await _handler.ExportTenantDataAsync(tenantId, userId.Value, ct);
+        ServiceResult<DataExportRequestOutcome> result = await _handler.ExportTenantDataAsync(tenantId, userId.Value, ct);
 
         if (result.IsNotFound)
         {
@@ -121,31 +121,29 @@ public sealed class RequestDataExportEndpoint : EndpointWithoutRequest<ApiRespon
 
         if (result.StatusCode == StatusCodes.Status429TooManyRequests)
         {
-            await SendCooldownAsync(tenantId, ct);
+            await SendCooldownAsync(result.Data?.NextEligibleAt, ct);
 
             return;
         }
 
         // Enqueue the per-job claim path so we process exactly this row, not a fleet-wide sweep.
         // The recurring DataExportProcessingJob.RunAsync continues to run as the orphan reaper.
-        _backgroundJobClient.Enqueue<DataExportProcessingJob>(job => job.ProcessSingleAsync(result.Data, CancellationToken.None));
+        int jobId = result.Data!.JobId;
+
+        _backgroundJobClient.Enqueue<DataExportProcessingJob>(job => job.ProcessSingleAsync(jobId, CancellationToken.None));
 
         await Send.OkAsync(
-            ApiResponse<RequestDataExportResponse>.Ok(new RequestDataExportResponse { JobId = result.Data, Status = "Pending" }),
+            ApiResponse<RequestDataExportResponse>.Ok(new RequestDataExportResponse { JobId = jobId, Status = "Pending" }),
             cancellation: ct);
     }
 
     /// <summary>
-    /// Writes the throttled response. The handler has already decided to refuse; this reads the
-    /// eligibility instant back so the caller learns when it may retry rather than only that it
-    /// may not now. The extra read happens on the refusal path only.
+    /// Writes the throttled response. The eligibility instant comes from the same decision that
+    /// refused the request, so the header and the body can never disagree with the refusal or
+    /// with each other.
     /// </summary>
-    private async Task SendCooldownAsync(int? tenantId, CancellationToken ct)
+    private async Task SendCooldownAsync(DateTimeOffset? nextEligibleAt, CancellationToken ct)
     {
-        DateTimeOffset? nextEligibleAt = tenantId is null
-            ? null
-            : await _handler.GetNextExportEligibleAtAsync(tenantId.Value, ct);
-
         HttpContext.Response.StatusCode = StatusCodes.Status429TooManyRequests;
 
         if (nextEligibleAt is not null)

@@ -29,8 +29,11 @@ public interface IDataExportHandler
     /// <param name="tenantId">The tenant whose data to export.</param>
     /// <param name="requestedByUserId">The user who requested the export.</param>
     /// <param name="ct">Cancellation token.</param>
-    /// <returns>A service result containing the created job ID.</returns>
-    Task<ServiceResult<int>> ExportTenantDataAsync(int? tenantId, int requestedByUserId, CancellationToken ct);
+    /// <returns>
+    /// A service result carrying the created job id, or — when refused for cooldown — the instant
+    /// at which the tenant becomes eligible again.
+    /// </returns>
+    Task<ServiceResult<DataExportRequestOutcome>> ExportTenantDataAsync(int? tenantId, int requestedByUserId, CancellationToken ct);
 
     /// <summary>
     /// Processes a pending export job: generates the SQLite file, uploads to S3, and updates the job record.

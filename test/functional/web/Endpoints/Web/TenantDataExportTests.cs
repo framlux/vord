@@ -620,6 +620,11 @@ public sealed class TenantDataExportTests
         // Reading the status of the existing export is not.
         HttpResponseMessage status = await client.GetAsync($"/api/v1/tenants/export/{jobId}");
         await Assert.That(status.StatusCode).IsEqualTo(HttpStatusCode.OK);
+
+        // Neither is downloading it. The download may fail for its own reasons in this harness
+        // (the seeded object is not in storage), but it must never be refused for cooldown.
+        HttpResponseMessage download = await client.GetAsync($"/api/v1/tenants/export/{jobId}/download");
+        await Assert.That((int)download.StatusCode).IsNotEqualTo(429);
     }
 
     // ========== Sibling export endpoints reject non-administrators ==========

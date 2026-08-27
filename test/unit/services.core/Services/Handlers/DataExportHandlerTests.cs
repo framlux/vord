@@ -69,7 +69,7 @@ public class DataExportHandlerTests
         using TestDatabaseFactory dbFactory = new();
         DataExportHandler handler = CreateHandler(dbFactory);
 
-        ServiceResult<int> result = await handler.ExportTenantDataAsync(null, 1, CancellationToken.None);
+        ServiceResult<DataExportRequestOutcome> result = await handler.ExportTenantDataAsync(null, 1, CancellationToken.None);
 
         await Assert.That(result.IsNotFound).IsTrue();
     }
@@ -81,13 +81,13 @@ public class DataExportHandlerTests
         await SeedMachine(dbFactory, tenantId: 1);
         DataExportHandler handler = CreateHandler(dbFactory);
 
-        ServiceResult<int> result = await handler.ExportTenantDataAsync(1, 1, CancellationToken.None);
+        ServiceResult<DataExportRequestOutcome> result = await handler.ExportTenantDataAsync(1, 1, CancellationToken.None);
 
         await Assert.That(result.IsSuccess).IsTrue();
-        await Assert.That(result.Data).IsGreaterThan(0);
+        await Assert.That(result.Data!.JobId).IsGreaterThan(0);
 
         DataExportJob? job = await dbFactory.Context.DataExportJobs
-            .FirstOrDefaultAsync(j => j.Id == result.Data);
+            .FirstOrDefaultAsync(j => j.Id == result.Data!.JobId);
         await Assert.That(job).IsNotNull();
         await Assert.That(job!.Status).IsEqualTo(DataExportJobStatus.Pending);
         await Assert.That(job.TenantId).IsEqualTo(1);
@@ -105,8 +105,8 @@ public class DataExportHandlerTests
         CaptureObjectStorageService capture = new();
         DataExportHandler handler = CreateHandler(dbFactory, objectStorage: capture);
 
-        ServiceResult<int> createResult = await handler.ExportTenantDataAsync(1, 1, CancellationToken.None);
-        int jobId = createResult.Data;
+        ServiceResult<DataExportRequestOutcome> createResult = await handler.ExportTenantDataAsync(1, 1, CancellationToken.None);
+        int jobId = createResult.Data!.JobId;
         await handler.ProcessExportJobAsync(jobId, CancellationToken.None);
 
         try
@@ -137,8 +137,8 @@ public class DataExportHandlerTests
         CaptureObjectStorageService capture = new();
         DataExportHandler handler = CreateHandler(dbFactory, objectStorage: capture);
 
-        ServiceResult<int> createResult = await handler.ExportTenantDataAsync(1, 1, CancellationToken.None);
-        await handler.ProcessExportJobAsync(createResult.Data, CancellationToken.None);
+        ServiceResult<DataExportRequestOutcome> createResult = await handler.ExportTenantDataAsync(1, 1, CancellationToken.None);
+        await handler.ProcessExportJobAsync(createResult.Data!.JobId, CancellationToken.None);
 
         try
         {
@@ -166,8 +166,8 @@ public class DataExportHandlerTests
         CaptureObjectStorageService capture = new();
         DataExportHandler handler = CreateHandler(dbFactory, objectStorage: capture);
 
-        ServiceResult<int> createResult = await handler.ExportTenantDataAsync(1, 1, CancellationToken.None);
-        await handler.ProcessExportJobAsync(createResult.Data, CancellationToken.None);
+        ServiceResult<DataExportRequestOutcome> createResult = await handler.ExportTenantDataAsync(1, 1, CancellationToken.None);
+        await handler.ProcessExportJobAsync(createResult.Data!.JobId, CancellationToken.None);
 
         try
         {
@@ -202,8 +202,8 @@ public class DataExportHandlerTests
         CaptureObjectStorageService capture = new();
         DataExportHandler handler = CreateHandler(dbFactory, objectStorage: capture);
 
-        ServiceResult<int> createResult = await handler.ExportTenantDataAsync(1, 1, CancellationToken.None);
-        await handler.ProcessExportJobAsync(createResult.Data, CancellationToken.None);
+        ServiceResult<DataExportRequestOutcome> createResult = await handler.ExportTenantDataAsync(1, 1, CancellationToken.None);
+        await handler.ProcessExportJobAsync(createResult.Data!.JobId, CancellationToken.None);
 
         try
         {
@@ -237,8 +237,8 @@ public class DataExportHandlerTests
         CaptureObjectStorageService capture = new();
         DataExportHandler handler = CreateHandler(dbFactory, objectStorage: capture);
 
-        ServiceResult<int> createResult = await handler.ExportTenantDataAsync(1, 1, CancellationToken.None);
-        await handler.ProcessExportJobAsync(createResult.Data, CancellationToken.None);
+        ServiceResult<DataExportRequestOutcome> createResult = await handler.ExportTenantDataAsync(1, 1, CancellationToken.None);
+        await handler.ProcessExportJobAsync(createResult.Data!.JobId, CancellationToken.None);
 
         try
         {
@@ -272,8 +272,8 @@ public class DataExportHandlerTests
         CaptureObjectStorageService capture = new();
         DataExportHandler handler = CreateHandler(dbFactory, objectStorage: capture);
 
-        ServiceResult<int> createResult = await handler.ExportTenantDataAsync(1, 1, CancellationToken.None);
-        await handler.ProcessExportJobAsync(createResult.Data, CancellationToken.None);
+        ServiceResult<DataExportRequestOutcome> createResult = await handler.ExportTenantDataAsync(1, 1, CancellationToken.None);
+        await handler.ProcessExportJobAsync(createResult.Data!.JobId, CancellationToken.None);
 
         try
         {
@@ -307,8 +307,8 @@ public class DataExportHandlerTests
         CaptureObjectStorageService capture = new();
         DataExportHandler handler = CreateHandler(dbFactory, objectStorage: capture);
 
-        ServiceResult<int> createResult = await handler.ExportTenantDataAsync(1, 1, CancellationToken.None);
-        await handler.ProcessExportJobAsync(createResult.Data, CancellationToken.None);
+        ServiceResult<DataExportRequestOutcome> createResult = await handler.ExportTenantDataAsync(1, 1, CancellationToken.None);
+        await handler.ProcessExportJobAsync(createResult.Data!.JobId, CancellationToken.None);
 
         try
         {
@@ -344,8 +344,8 @@ public class DataExportHandlerTests
         await SeedMachine(dbFactory, tenantId: 1);
         DataExportHandler handler = CreateHandler(dbFactory);
 
-        ServiceResult<int> createResult = await handler.ExportTenantDataAsync(1, 1, CancellationToken.None);
-        int jobId = createResult.Data;
+        ServiceResult<DataExportRequestOutcome> createResult = await handler.ExportTenantDataAsync(1, 1, CancellationToken.None);
+        int jobId = createResult.Data!.JobId;
 
         ServiceResult<DataExportJob> result = await handler.GetExportJobAsync(jobId, 999, CancellationToken.None);
 
@@ -361,8 +361,8 @@ public class DataExportHandlerTests
         CaptureObjectStorageService capture = new();
         DataExportHandler handler = CreateHandler(dbFactory, objectStorage: capture);
 
-        ServiceResult<int> createResult = await handler.ExportTenantDataAsync(1, 1, CancellationToken.None);
-        int jobId = createResult.Data;
+        ServiceResult<DataExportRequestOutcome> createResult = await handler.ExportTenantDataAsync(1, 1, CancellationToken.None);
+        int jobId = createResult.Data!.JobId;
         await handler.ProcessExportJobAsync(jobId, CancellationToken.None);
 
         ServiceResult<DataExportJob> result = await handler.GetExportJobAsync(jobId, 1, CancellationToken.None);
@@ -389,7 +389,7 @@ public class DataExportHandlerTests
         DataExportHandler handler = CreateHandler(dbFactory);
 
         // Tenant 999 has no machines
-        ServiceResult<int> result = await handler.ExportTenantDataAsync(999, 1, CancellationToken.None);
+        ServiceResult<DataExportRequestOutcome> result = await handler.ExportTenantDataAsync(999, 1, CancellationToken.None);
 
         await Assert.That(result.IsNotFound).IsTrue();
     }
@@ -401,7 +401,7 @@ public class DataExportHandlerTests
         await SeedMachine(dbFactory, tenantId: 5, isDeleted: true);
         DataExportHandler handler = CreateHandler(dbFactory);
 
-        ServiceResult<int> result = await handler.ExportTenantDataAsync(5, 1, CancellationToken.None);
+        ServiceResult<DataExportRequestOutcome> result = await handler.ExportTenantDataAsync(5, 1, CancellationToken.None);
 
         await Assert.That(result.IsNotFound).IsTrue();
     }
@@ -510,11 +510,11 @@ public class DataExportHandlerTests
         DataExportHandler handler = CreateHandler(dbFactory);
 
         // Create first job
-        ServiceResult<int> firstResult = await handler.ExportTenantDataAsync(1, 1, CancellationToken.None);
+        ServiceResult<DataExportRequestOutcome> firstResult = await handler.ExportTenantDataAsync(1, 1, CancellationToken.None);
         await Assert.That(firstResult.IsSuccess).IsTrue();
 
         // Attempt second job while first is still pending
-        ServiceResult<int> secondResult = await handler.ExportTenantDataAsync(1, 1, CancellationToken.None);
+        ServiceResult<DataExportRequestOutcome> secondResult = await handler.ExportTenantDataAsync(1, 1, CancellationToken.None);
 
         await Assert.That(secondResult.StatusCode).IsEqualTo(409);
     }
@@ -534,18 +534,18 @@ public class DataExportHandlerTests
             dbFactory, objectStorage: capture, timeProvider: clock, exportCooldown: TimeSpan.FromHours(24));
 
         // Create and process first job to completion
-        ServiceResult<int> firstResult = await handler.ExportTenantDataAsync(1, 1, CancellationToken.None);
-        await handler.ProcessExportJobAsync(firstResult.Data, CancellationToken.None);
+        ServiceResult<DataExportRequestOutcome> firstResult = await handler.ExportTenantDataAsync(1, 1, CancellationToken.None);
+        await handler.ProcessExportJobAsync(firstResult.Data!.JobId, CancellationToken.None);
 
         try
         {
             clock.Advance(TimeSpan.FromHours(25));
 
             // Second job should succeed since first is completed and the window has passed
-            ServiceResult<int> secondResult = await handler.ExportTenantDataAsync(1, 1, CancellationToken.None);
+            ServiceResult<DataExportRequestOutcome> secondResult = await handler.ExportTenantDataAsync(1, 1, CancellationToken.None);
 
             await Assert.That(secondResult.IsSuccess).IsTrue();
-            await Assert.That(secondResult.Data).IsGreaterThan(firstResult.Data);
+            await Assert.That(secondResult.Data!.JobId).IsGreaterThan(firstResult.Data!.JobId);
         }
         finally
         {
@@ -569,14 +569,14 @@ public class DataExportHandlerTests
         DataExportHandler handler = CreateHandler(
             dbFactory, objectStorage: capture, timeProvider: clock, exportCooldown: TimeSpan.FromHours(24));
 
-        ServiceResult<int> firstResult = await handler.ExportTenantDataAsync(1, 1, CancellationToken.None);
-        await handler.ProcessExportJobAsync(firstResult.Data, CancellationToken.None);
+        ServiceResult<DataExportRequestOutcome> firstResult = await handler.ExportTenantDataAsync(1, 1, CancellationToken.None);
+        await handler.ProcessExportJobAsync(firstResult.Data!.JobId, CancellationToken.None);
 
         try
         {
             clock.Advance(TimeSpan.FromHours(23));
 
-            ServiceResult<int> secondResult = await handler.ExportTenantDataAsync(1, 1, CancellationToken.None);
+            ServiceResult<DataExportRequestOutcome> secondResult = await handler.ExportTenantDataAsync(1, 1, CancellationToken.None);
 
             await Assert.That(secondResult.StatusCode).IsEqualTo(429);
         }
@@ -601,8 +601,8 @@ public class DataExportHandlerTests
         DataExportHandler handler = CreateHandler(
             dbFactory, objectStorage: capture, timeProvider: clock, exportCooldown: TimeSpan.FromHours(24));
 
-        ServiceResult<int> firstResult = await handler.ExportTenantDataAsync(1, 1, CancellationToken.None);
-        await handler.ProcessExportJobAsync(firstResult.Data, CancellationToken.None);
+        ServiceResult<DataExportRequestOutcome> firstResult = await handler.ExportTenantDataAsync(1, 1, CancellationToken.None);
+        await handler.ProcessExportJobAsync(firstResult.Data!.JobId, CancellationToken.None);
 
         try
         {
@@ -631,12 +631,12 @@ public class DataExportHandlerTests
         await SeedMachine(dbFactory, tenantId: 1);
         DataExportHandler handler = CreateHandler(dbFactory);
 
-        ServiceResult<int> result = await handler.ExportTenantDataAsync(1, 42, CancellationToken.None);
+        ServiceResult<DataExportRequestOutcome> result = await handler.ExportTenantDataAsync(1, 42, CancellationToken.None);
 
         await Assert.That(result.IsSuccess).IsTrue();
 
         AuditLogEntry? audit = await dbFactory.Context.AuditLog
-            .FirstOrDefaultAsync(a => a.ResourceId == result.Data.ToString());
+            .FirstOrDefaultAsync(a => a.ResourceId == result.Data!.JobId.ToString());
         await Assert.That(audit).IsNotNull();
         await Assert.That(audit!.Action).IsEqualTo(AuditAction.DataExportRequested);
     }
@@ -660,8 +660,8 @@ public class DataExportHandlerTests
         long machineId = await SeedMachine(dbFactory, tenantId: 1);
         DataExportHandler handler = CreateHandler(dbFactory);
 
-        ServiceResult<int> createResult = await handler.ExportTenantDataAsync(1, 1, CancellationToken.None);
-        int jobId = createResult.Data;
+        ServiceResult<DataExportRequestOutcome> createResult = await handler.ExportTenantDataAsync(1, 1, CancellationToken.None);
+        int jobId = createResult.Data!.JobId;
 
         // Delete all machines after job was created
         await dbFactory.Context.Machines
@@ -691,11 +691,11 @@ public class DataExportHandlerTests
 
         DataExportHandler handler = CreateHandler(dbFactory, objectStorage: failingStorage);
 
-        ServiceResult<int> createResult = await handler.ExportTenantDataAsync(1, 1, CancellationToken.None);
-        await handler.ProcessExportJobAsync(createResult.Data, CancellationToken.None);
+        ServiceResult<DataExportRequestOutcome> createResult = await handler.ExportTenantDataAsync(1, 1, CancellationToken.None);
+        await handler.ProcessExportJobAsync(createResult.Data!.JobId, CancellationToken.None);
 
         DataExportJob? job = await dbFactory.Context.DataExportJobs
-            .FirstOrDefaultAsync(j => j.Id == createResult.Data);
+            .FirstOrDefaultAsync(j => j.Id == createResult.Data!.JobId);
         await Assert.That(job).IsNotNull();
         await Assert.That(job!.Status).IsEqualTo(DataExportJobStatus.Failed);
         await Assert.That(job.ErrorMessage).IsNotNull();
@@ -730,8 +730,8 @@ public class DataExportHandlerTests
         CaptureObjectStorageService capture = new();
         DataExportHandler handler = CreateHandler(dbFactory, objectStorage: capture);
 
-        ServiceResult<int> createResult = await handler.ExportTenantDataAsync(1, 1, CancellationToken.None);
-        await handler.ProcessExportJobAsync(createResult.Data, CancellationToken.None);
+        ServiceResult<DataExportRequestOutcome> createResult = await handler.ExportTenantDataAsync(1, 1, CancellationToken.None);
+        await handler.ProcessExportJobAsync(createResult.Data!.JobId, CancellationToken.None);
 
         try
         {
@@ -771,8 +771,8 @@ public class DataExportHandlerTests
         CaptureObjectStorageService capture = new();
         DataExportHandler handler = CreateHandler(dbFactory, objectStorage: capture);
 
-        ServiceResult<int> createResult = await handler.ExportTenantDataAsync(1, 1, CancellationToken.None);
-        await handler.ProcessExportJobAsync(createResult.Data, CancellationToken.None);
+        ServiceResult<DataExportRequestOutcome> createResult = await handler.ExportTenantDataAsync(1, 1, CancellationToken.None);
+        await handler.ProcessExportJobAsync(createResult.Data!.JobId, CancellationToken.None);
 
         try
         {
@@ -822,8 +822,8 @@ public class DataExportHandlerTests
         await SeedMachine(dbFactory, tenantId: 1);
         DataExportHandler handler = CreateHandler(dbFactory);
 
-        ServiceResult<int> createResult = await handler.ExportTenantDataAsync(1, 1, CancellationToken.None);
-        int jobId = createResult.Data;
+        ServiceResult<DataExportRequestOutcome> createResult = await handler.ExportTenantDataAsync(1, 1, CancellationToken.None);
+        int jobId = createResult.Data!.JobId;
 
         ServiceResult<DataExportJob> result = await handler.GetExportJobAsync(jobId, 1, CancellationToken.None);
 
@@ -875,8 +875,8 @@ public class DataExportHandlerTests
         await SeedMachine(dbFactory, tenantId: 1);
         DataExportHandler handler = CreateHandler(dbFactory);
 
-        ServiceResult<int> createResult = await handler.ExportTenantDataAsync(1, 1, CancellationToken.None);
-        int jobId = createResult.Data;
+        ServiceResult<DataExportRequestOutcome> createResult = await handler.ExportTenantDataAsync(1, 1, CancellationToken.None);
+        int jobId = createResult.Data!.JobId;
 
         // Retrieve the job to get its token
         DataExportJob? createdJob = await dbFactory.Context.DataExportJobs
