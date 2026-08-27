@@ -17,6 +17,7 @@ using Grpc.Core;
 using Grpc.Core.Testing;
 using Hangfire;
 using Hangfire.Common;
+using Hangfire.InMemory;
 using Hangfire.States;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.Extensions.DependencyInjection;
@@ -476,7 +477,14 @@ public sealed class FleetAdminServiceTests
         IConnectionMultiplexer resolvedRedis = redis ?? Substitute.For<IConnectionMultiplexer>();
 
         return new FleetAdminService(
-            scopeFactory, CreateAuthorizer(rejectWith), resolvedProtector, logger, resolvedRedis);
+            scopeFactory,
+            CreateAuthorizer(rejectWith),
+            resolvedProtector,
+            logger,
+            resolvedRedis,
+            new InMemoryStorage(),
+            TimeProvider.System,
+            Substitute.For<IBackgroundJobClientV2>());
     }
 
     private static IInternalCallerAuthorizer CreateAuthorizer(StatusCode? rejectWith)

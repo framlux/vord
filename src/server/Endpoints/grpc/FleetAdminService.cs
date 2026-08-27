@@ -2,18 +2,23 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
+using System.Text.Json;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Server.Auth;
 using Framlux.FleetManagement.Services.Core.Billing;
 using Framlux.FleetManagement.Services.Core.Handlers;
+using Framlux.FleetManagement.Services.Core.Hangfire;
 using Framlux.FleetManagement.Services.Core.Infrastructure;
 using Framlux.FleetManagement.Services.Core.Security;
 using Framlux.FleetManagement.Services.Core.ServerConfiguration;
 using Framlux.Vord.BillingGrpc;
 using Google.Protobuf.WellKnownTypes;
 using Grpc.Core;
+using Hangfire;
+using Hangfire.Storage;
+using Hangfire.Storage.Monitoring;
 using StackExchange.Redis;
 
 namespace Framlux.FleetManagement.Server.Endpoints.Grpc;
@@ -25,12 +30,17 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
 {
     private const int DefaultPageSize = 50;
     private const int MaxPageSize = 100;
+    private const int MaxEnrichJobIds = 20;
 
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly IInternalCallerAuthorizer _callerAuthorizer;
     private readonly IOidcSecretProtector _oidcSecretProtector;
     private readonly ILogger<FleetAdminService> _logger;
     private readonly IConnectionMultiplexer _redis;
+    private readonly JobStorage _storage;
+    private readonly TimeProvider _timeProvider;
+    private readonly IBackgroundJobClientV2 _backgroundJobs;
+    private readonly RecurringJobInspector _inspector;
 
     /// <summary>
     /// Creates a new instance of the <see cref="FleetAdminService"/> class.
@@ -40,18 +50,28 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
         IInternalCallerAuthorizer callerAuthorizer,
         IOidcSecretProtector oidcSecretProtector,
         ILogger<FleetAdminService> logger,
-        IConnectionMultiplexer redis)
+        IConnectionMultiplexer redis,
+        JobStorage storage,
+        TimeProvider timeProvider,
+        IBackgroundJobClientV2 backgroundJobs)
     {
         ArgumentNullException.ThrowIfNull(scopeFactory);
         ArgumentNullException.ThrowIfNull(callerAuthorizer);
         ArgumentNullException.ThrowIfNull(oidcSecretProtector);
         ArgumentNullException.ThrowIfNull(logger);
         ArgumentNullException.ThrowIfNull(redis);
+        ArgumentNullException.ThrowIfNull(storage);
+        ArgumentNullException.ThrowIfNull(timeProvider);
+        ArgumentNullException.ThrowIfNull(backgroundJobs);
         _scopeFactory = scopeFactory;
         _callerAuthorizer = callerAuthorizer;
         _oidcSecretProtector = oidcSecretProtector;
         _logger = logger;
         _redis = redis;
+        _storage = storage;
+        _timeProvider = timeProvider;
+        _backgroundJobs = backgroundJobs;
+        _inspector = new RecurringJobInspector(storage, timeProvider);
     }
 
     /// <summary>
@@ -844,6 +864,200 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
             tenant.Id, tier, context.CancellationToken);
 
         return new GetBillableMachineCountResponse { BillableCount = billable, Success = true };
+    }
+
+    /// <summary>
+    /// Lists every recurring job this build knows about with its health, plus worker heartbeats,
+    /// the fleet-wide failed-job count, and the outcomes of any manual runs the caller asks about.
+    /// </summary>
+    public override Task<ListRecurringJobsResponse> ListRecurringJobs(
+        ListRecurringJobsRequest request, ServerCallContext context)
+    {
+        AuthorizeInternalCaller(context);
+
+        IMonitoringApi monitoring = _storage.GetMonitoringApi();
+        StatisticsDto statistics = monitoring.GetStatistics();
+
+        ListRecurringJobsResponse response = new()
+        {
+            FailedJobCount = statistics.Failed,
+            ServerTime = Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow()),
+        };
+
+        foreach (RecurringJobSnapshot snapshot in _inspector.Inspect())
+        {
+            response.Jobs.Add(MapRecurringJob(snapshot));
+        }
+
+        foreach (ServerDto server in monitoring.Servers())
+        {
+            response.Servers.Add(MapServer(server));
+        }
+
+        foreach (string jobId in request.EnrichJobIds.Take(MaxEnrichJobIds))
+        {
+            response.ManualRuns.Add(MapManualRun(monitoring, jobId));
+        }
+
+        return Task.FromResult(response);
+    }
+
+    private static FleetRecurringJob MapRecurringJob(RecurringJobSnapshot snapshot)
+    {
+        FleetRecurringJob job = new()
+        {
+            Id = snapshot.Id,
+            Cron = snapshot.Cron,
+            TimeZoneId = snapshot.TimeZoneId,
+            LastJobId = snapshot.LastJobId,
+            LastJobState = snapshot.LastJobState,
+            Error = snapshot.Error,
+            RetryAttempt = snapshot.RetryAttempt,
+            Status = MapStatus(snapshot.Status),
+        };
+
+        if (snapshot.LastExecution.HasValue)
+        {
+            job.LastExecution = ToTimestamp(snapshot.LastExecution.Value);
+        }
+
+        if (snapshot.NextExecution.HasValue)
+        {
+            job.NextExecution = ToTimestamp(snapshot.NextExecution.Value);
+        }
+
+        return job;
+    }
+
+    private static FleetHangfireServer MapServer(ServerDto server)
+    {
+        FleetHangfireServer mapped = new()
+        {
+            Name = server.Name ?? "",
+            WorkersCount = server.WorkersCount,
+        };
+
+        if (server.Queues is not null)
+        {
+            mapped.Queues.AddRange(server.Queues);
+        }
+
+        // Hangfire substitutes DateTime.MinValue when a server reports no start time. That value
+        // is DateTimeKind.Unspecified and outside Timestamp's range, so converting it throws;
+        // leave the field unset instead.
+        if (server.StartedAt > DateTime.MinValue)
+        {
+            mapped.StartedAt = ToTimestamp(server.StartedAt);
+        }
+
+        if (server.Heartbeat.HasValue)
+        {
+            mapped.Heartbeat = ToTimestamp(server.Heartbeat.Value);
+        }
+
+        return mapped;
+    }
+
+    private static FleetManualRun MapManualRun(IMonitoringApi monitoring, string jobId)
+    {
+        FleetManualRun run = new() { JobId = jobId };
+
+        JobDetailsDto? details;
+
+        try
+        {
+            details = monitoring.JobDetails(jobId);
+        }
+        catch (Exception ex) when ((ex is FormatException) || (ex is OverflowException))
+        {
+            // The Postgres monitoring API parses the job id with Convert.ToInt64 and throws on
+            // anything non-numeric. One malformed id from an old audit row must not take down the
+            // whole jobs page. The in-memory storage used by tests returns null instead, so this
+            // path is invisible to the functional suite — do not delete it for looking unreachable.
+            run.Retained = false;
+
+            return run;
+        }
+
+        if (details is null)
+        {
+            // Hangfire has expired the job row. The run still happened; the caller's own audit
+            // record is what proves it, so report it rather than dropping it.
+            run.Retained = false;
+
+            return run;
+        }
+
+        run.Retained = true;
+
+        if (details.CreatedAt.HasValue)
+        {
+            run.CreatedAt = ToTimestamp(details.CreatedAt.Value);
+        }
+
+        if (details.Properties is not null)
+        {
+            run.RecurringJobId = ReadJobParameter(details.Properties, "RecurringJobId");
+            run.TriggeredBy = ReadJobParameter(details.Properties, "TriggeredBy");
+        }
+
+        StateHistoryDto? latest = details.History?.OrderByDescending(h => h.CreatedAt).FirstOrDefault();
+
+        if (latest is not null)
+        {
+            run.State = latest.StateName ?? "";
+            run.Reason = latest.Reason ?? "";
+        }
+
+        return run;
+    }
+
+    /// <summary>
+    /// Reads one job parameter. Hangfire stores parameter values JSON-serialised, so a string
+    /// round-trips with its quotes; returning the raw stored value would surface
+    /// <c>"tenant-purge"</c> including them. Unparseable values fall back to the raw string rather
+    /// than throwing, so one malformed parameter cannot break the whole response.
+    /// </summary>
+    private static string ReadJobParameter(IDictionary<string, string> properties, string name)
+    {
+        // Note: Properties is IDictionary, not IReadOnlyDictionary, so the GetValueOrDefault
+        // extension does not apply here.
+        if (properties.TryGetValue(name, out string? raw) == false)
+        {
+            return "";
+        }
+
+        if (string.IsNullOrEmpty(raw))
+        {
+            return "";
+        }
+
+        try
+        {
+            return JsonSerializer.Deserialize<string>(raw) ?? "";
+        }
+        catch (JsonException)
+        {
+            return raw;
+        }
+    }
+
+    private static FleetRecurringJobStatus MapStatus(RecurringJobHealth health)
+    {
+        return health switch
+        {
+            RecurringJobHealth.Scheduled => FleetRecurringJobStatus.Scheduled,
+            RecurringJobHealth.Overdue => FleetRecurringJobStatus.Overdue,
+            RecurringJobHealth.Disabled => FleetRecurringJobStatus.Disabled,
+            RecurringJobHealth.Missing => FleetRecurringJobStatus.Missing,
+            RecurringJobHealth.LoadFailed => FleetRecurringJobStatus.LoadFailed,
+            _ => FleetRecurringJobStatus.Unspecified,
+        };
+    }
+
+    private static Timestamp ToTimestamp(DateTime value)
+    {
+        return Timestamp.FromDateTime(DateTime.SpecifyKind(value, DateTimeKind.Utc));
     }
 
     private void AuthorizeInternalCaller(ServerCallContext context)
