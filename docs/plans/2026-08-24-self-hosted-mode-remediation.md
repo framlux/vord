@@ -537,16 +537,18 @@ The decision and its full reasoning are recorded in the spec's §7. Read that be
 - Modify: `test/unit/services.core/Services/Billing/SelfHostedSubscriptionServiceTests.cs`
 - Modify: `docs/specs/2026-08-23-self-hosted-mode-design.md`, `CLAUDE.md`
 
-- [ ] **Step 1: Delete the member and its implementations**
+- [x] **Step 1: Delete the member and its implementations**
 
 Compiler-guided throughout. In `SelfHostedSubscriptionServiceTests`, `ProvisioningMembers_DelegateToInner` covers **both** `EnsureSubscriptionExistsAsync` and `ProvisionFreeSubscriptionAsync` — keep the second half.
 
-- [ ] **Step 2: Update the thirteen-member prose**
+- [x] **Step 2: Update the member-count prose**
 
-"All thirteen members" is load-bearing and becomes **twelve** in: the spec's §4 member table and surrounding text, vord CLAUDE.md's deployment-mode paragraph, and the parent plan's Task 3 Step 6 grep check, which asserts both files report 13. The shipped decorator's XML remarks do not name a count — check anyway, but do not manufacture an edit there.
+The member count is load-bearing in: the spec's §4 member table and surrounding text, vord CLAUDE.md's deployment-mode paragraph, and the parent plan's Task 3 Step 6 grep check. The shipped decorator's XML remarks do not name a count — check anyway, but do not manufacture an edit there.
+
+**It landed at eleven, not twelve.** `ProvisionFreeSubscriptionAsync` was also removed — not planned here, but it had no callers left once provisioning moved to the transactional path at tenant creation, so the count dropped twice. The spec's §4 table no longer lists either provisioning member.
 
 ```bash
-grep -rn "thirteen\|13 members\| 13$" docs/ CLAUDE.md src/services.core/Services/Billing/SelfHostedSubscriptionService.cs
+grep -rn "thirteen\|twelve\|13 members\|12 members" docs/ CLAUDE.md src/services.core/Services/Billing/SelfHostedSubscriptionService.cs
 ```
 
 Missing one leaves documentation that fails its own audit.
@@ -652,6 +654,6 @@ the record, so none of these get re-raised as open items:
 - [ ] The alert-rule regression tests use a **Pro/Active** fixture, not Free — a Free fixture is refused by the Pro gate and would pass with the Team pre-processor unregistered.
 - [ ] `InvitationHandler:89` still returns **402** with its original message.
 - [ ] SaaS: a Free-row tenant is still refused by every Team feature after the refactor.
-- [ ] If Task 7 ran: no occurrence of "thirteen members" survives in docs, CLAUDE.md, the decorator's XML remarks, or the parent plan's grep check.
+- [x] If Task 7 ran: no stale member count survives in docs, CLAUDE.md, the decorator's XML remarks, or the parent plan's grep check. The decorator and the interface both have eleven members.
 - [ ] `MachineService` no longer references `IBillingApiClient`, and machine registration still reports billable quantity.
 - [ ] No AI attribution in any commit; nothing pushed.

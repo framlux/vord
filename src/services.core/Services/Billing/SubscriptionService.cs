@@ -110,25 +110,6 @@ public sealed class SubscriptionService : ISubscriptionService
     }
 
     /// <inheritdoc/>
-    public async Task<TenantSubscription> ProvisionFreeSubscriptionAsync(int tenantId, CancellationToken ct)
-    {
-        DateTimeOffset now = DateTimeOffset.UtcNow;
-        TenantSubscription subscription = new()
-        {
-            TenantId = tenantId,
-            Tier = SubscriptionTier.Free,
-            Status = SubscriptionStatus.Active,
-            CreatedAt = now,
-            UpdatedAt = now,
-        };
-
-        subscription = await _subscriptionRepo.CreateTenantSubscriptionAsync(subscription, ct);
-        _logger.LogInformation("Provisioned Free subscription for tenant {TenantId}", tenantId);
-
-        return subscription;
-    }
-
-    /// <inheritdoc/>
     public async Task<int> GetRetentionDaysForTenantAsync(int tenantId, CancellationToken ct)
     {
         TenantSubscription? subscription = await GetSubscriptionForTenantAsync(tenantId, ct);

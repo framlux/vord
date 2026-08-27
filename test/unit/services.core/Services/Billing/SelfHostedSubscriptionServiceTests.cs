@@ -216,27 +216,6 @@ public sealed class SelfHostedSubscriptionServiceTests
         await Assert.That(await service.GetMachineCountAtDateAsync(7, when)).IsEqualTo(5);
     }
 
-    /// <summary>
-    /// Row provisioning must still happen: the synthetic subscription is a read-side view, and
-    /// downstream code still expects a real row to exist for the tenant.
-    /// </summary>
-    [Test]
-    public async Task ProvisionFreeSubscriptionAsync_DelegatesToInner()
-    {
-        SelfHostedSubscriptionService service = CreateService(out ISubscriptionService inner);
-        TenantSubscription row = new()
-        {
-            TenantId = 9,
-            Tier = SubscriptionTier.Free,
-            Status = SubscriptionStatus.Active,
-            CreatedAt = FixedNow,
-            UpdatedAt = FixedNow,
-        };
-        inner.ProvisionFreeSubscriptionAsync(9, Arg.Any<CancellationToken>()).Returns(row);
-
-        await Assert.That(await service.ProvisionFreeSubscriptionAsync(9)).IsEqualTo(row);
-    }
-
     [Test]
     public async Task Constructor_NullInner_Throws()
     {

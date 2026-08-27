@@ -125,22 +125,6 @@ public class SubscriptionCacheTests
     }
 
     [Test]
-    public async Task ProvisionFreeSubscription_CreatesWithCorrectDefaults()
-    {
-        using TestDatabaseFactory dbFactory = new();
-        Database.Repositories.DatabaseRepository repo = new(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
-        SubscriptionService service = BuildService(repo);
-
-        TenantSubscription result = await service.ProvisionFreeSubscriptionAsync(77, CancellationToken.None);
-
-        await Assert.That(result).IsNotNull();
-        await Assert.That(result.TenantId).IsEqualTo(77);
-        await Assert.That(result.Tier).IsEqualTo(SubscriptionTier.Free);
-        await Assert.That(result.Status).IsEqualTo(SubscriptionStatus.Active);
-        await Assert.That(result.Id).IsNotEqualTo(0);
-    }
-
-    [Test]
     public async Task GetSubscriptionForTenantAsync_AfterDirectDbUpdate_ReturnsUpdatedTier()
     {
         using TestDatabaseFactory dbFactory = new();

@@ -197,7 +197,7 @@ dropped after one day.
 **Chosen approach: a `SelfHostedSubscriptionService` decorator** implementing `ISubscriptionService`
 and registered in place of `SubscriptionService` when `SelfHosted == true`.
 
-**It must be defined over all twelve interface members, not the two that are interesting.** A
+**It must be defined over all eleven interface members, not the two that are interesting.** A
 member left delegating to the inner service silently reintroduces a Free-tier limit. Explicitly:
 
 | Member | Self-hosted behaviour |
@@ -207,7 +207,6 @@ member left delegating to the inner service silently reintroduces a Free-tier li
 | `CanCreateAlertRuleAsync`, `CanCreateWebhookAsync`, `CanAddMemberAsync` | always `true` |
 | `GetRetentionDaysForTenantAsync`, `GetEffectiveRetentionDaysForTenantAsync` | `RetentionClassPolicy.LongWindowDays` (365) — see below |
 | `IsIngestEligibleAsync` | **tenant active flag only** — see below |
-| `ProvisionFreeSubscriptionAsync`, `EnsureSubscriptionExistsAsync` | delegate (row creation must still happen) |
 | `GetMachineCountForTenantAsync`, `GetMachineCountAtDateAsync`, `GetBillableMachineCountAsync` | delegate (real counts, no entitlement meaning) |
 
 **`IsIngestEligibleAsync` checks the tenant's active flag and nothing else.** Two alternatives were
@@ -264,7 +263,7 @@ path has to be checked against the no-op client's behaviour, not against a routi
 
 **Rejected alternative:** introducing an `IEntitlementService` and rewriting all ~23 call sites.
 Cleaner long-term, but a large diff across the SaaS revenue path for no SaaS behaviour change. The
-twelve-member decorator is the smaller change; it is worth revisiting if the surface grows again.
+eleven-member decorator is the smaller change; it is worth revisiting if the surface grows again.
 
 **Deliberate behaviour change to verify:** `InvitationHandler.cs:126` currently forces every invitee
 to `TenantAdmin` when the tenant is not Team. Under the synthetic Team tier, self-hosted invitations
@@ -570,8 +569,8 @@ So: delete it from `ISubscriptionService`, `SubscriptionService`, the self-hoste
 tests. Reconciliation stays where it already lives — `StripeSyncJob` on a five-minute schedule for
 status drift, `BillingWebhookHandler` for tier transitions.
 
-**Two consequences that must land in the same commit.** The decorator drops to **twelve** members,
-and "all thirteen" is load-bearing prose in §4 above, in vord CLAUDE.md, and in the parent plan's
+**Two consequences that must land in the same commit.** The decorator drops a member, and the
+member count is load-bearing prose in §4 above, in vord CLAUDE.md, and in the parent plan's
 grep check — every occurrence changes together or the documentation fails its own audit. And
 `SubscriptionStatusPreProcessor`'s null fail-open is fixed at the pre-processor, paired with
 provisioning at `TenantHandler` (above), **not** by reintroducing an ensure-exists call: hardening
@@ -592,9 +591,15 @@ semantics — not a helper on the request path.
 None of this changes the self-hosted design, because every rule above reads through
 `ISubscriptionService` and the decorator already answers permissively. Two knock-on edits:
 
-- `SelfHostedSubscriptionService` drops to **twelve** members. "All thirteen members" is load-bearing
-  prose in §4 above, in vord CLAUDE.md and in the decorator's own XML remarks — every occurrence must
-  change in the same commit, or the documentation fails its own audit.
+- `SelfHostedSubscriptionService` loses a member. The count is load-bearing prose in §4 above, in
+  vord CLAUDE.md and in the decorator's own XML remarks — every occurrence must change in the same
+  commit, or the documentation fails its own audit.
+
+  It has since lost a second one. `ProvisionFreeSubscriptionAsync` went the same way and for the
+  same reason: provisioning moved to the transactional path at tenant creation, which left the
+  member with no callers at all. That removal was not planned here, so the count reached
+  **eleven** by two separate steps rather than the one this section anticipated — which is
+  precisely why the prose states the members rather than a number wherever it can.
 - The new `TeamSubscriptionPreProcessor` must be registered in the FastEndpoints configurator
   alongside the existing two, or the Team gates silently stop firing in **SaaS** — the failure mode
   is an unguarded paid feature, so it needs a SaaS regression test per gated endpoint.
@@ -766,7 +771,7 @@ tag is cut.
 | --- | --- |
 | SaaS deploy ships without `Deployment__SelfHosted=false` and silently loses billing | Phase 1 of the stack rollout places the flag while it is still inert, so no build that reads it ever runs without it; `DeploymentOptionsValidator` additionally fails startup on a half-configured SaaS deployment |
 | A later stack change reverts or drops the `Deployment__SelfHosted` literal | It sits in `fleet-config` next to `Billing__GrpcUrl`, and a SaaS deployment missing the flag falls back to self-hosted where `Billing__GrpcUrl` is ignored — no startup failure catches this. A comment in `kustomization.yaml` must state that the literal is load-bearing |
-| A `SelfHostedSubscriptionService` member is left delegating and silently reintroduces a Free limit | The decorator is specified over all twelve members with defined semantics per member; the retention and `Can*Async` regression tests are the backstop, since a delegated member fails silently rather than loudly |
+| A `SelfHostedSubscriptionService` member is left delegating and silently reintroduces a Free limit | The decorator is specified over all eleven members with defined semantics per member; the retention and `Can*Async` regression tests are the backstop, since a delegated member fails silently rather than loudly |
 | Synthetic Team tier leaks into a tier-keyed write path added later | Reachable tier-keyed writes already exist (`MachineBillingSync.cs:64`) and are safe only because `NoOpBillingApiClient` no-ops them; this is documented on the decorator as the actual invariant to preserve |
 | `RetentionReclassifyJob`'s undecorated keyed repository sees the real `Free` row | Dormant in self-hosted (dispatched only from the SaaS-only `FleetAdminService.cs:635`); documented on the decorator so it is not made reachable without revisiting |
 | MailKit is a new dependency in a project referenced by seven test projects | Standard package, no native assets; build verification covers it |

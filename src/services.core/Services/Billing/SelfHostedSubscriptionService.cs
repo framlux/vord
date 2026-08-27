@@ -100,12 +100,6 @@ public sealed class SelfHostedSubscriptionService : ISubscriptionService
     }
 
     /// <inheritdoc/>
-    public Task<TenantSubscription> ProvisionFreeSubscriptionAsync(int tenantId, CancellationToken ct = default)
-    {
-        return _inner.ProvisionFreeSubscriptionAsync(tenantId, ct);
-    }
-
-    /// <inheritdoc/>
     /// <remarks>
     /// Returns the widest retention class the partitioning scheme supports rather than a nominally
     /// unlimited value. There is no unlimited class; anything above the long window would be

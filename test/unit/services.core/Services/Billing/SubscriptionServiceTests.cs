@@ -257,39 +257,6 @@ public class SubscriptionServiceTests
     }
 
     [Test]
-    public async Task ProvisionFreeSubscription_CreatesCorrectDefaults()
-    {
-        (DatabaseRepository repo, TestDatabaseFactory dbFactory) = BuildRepoAndFactory();
-        using (dbFactory)
-        {
-            SubscriptionService service = BuildService(repo);
-
-            TenantSubscription result = await service.ProvisionFreeSubscriptionAsync(42, CancellationToken.None);
-
-            await Assert.That(result.TenantId).IsEqualTo(42);
-            await Assert.That(result.Tier).IsEqualTo(SubscriptionTier.Free);
-            await Assert.That(result.Status).IsEqualTo(SubscriptionStatus.Active);
-            await Assert.That(result.Id).IsNotEqualTo(0);
-        }
-    }
-
-    [Test]
-    public async Task ProvisionFreeSubscription_UsesConfiguredLimits()
-    {
-        (DatabaseRepository repo, TestDatabaseFactory dbFactory) = BuildRepoAndFactory();
-        using (dbFactory)
-        {
-            SubscriptionService service = BuildService(repo, machineLimit: 10000, retentionDays: 365);
-
-            TenantSubscription result = await service.ProvisionFreeSubscriptionAsync(43, CancellationToken.None);
-
-            await Assert.That(result.TenantId).IsEqualTo(43);
-            await Assert.That(result.Tier).IsEqualTo(SubscriptionTier.Free);
-            await Assert.That(result.Status).IsEqualTo(SubscriptionStatus.Active);
-        }
-    }
-
-    [Test]
     public async Task GetRetentionDays_WithSubscription_ReturnsTierLimitValue()
     {
         (DatabaseRepository repo, TestDatabaseFactory dbFactory) = BuildRepoAndFactory();

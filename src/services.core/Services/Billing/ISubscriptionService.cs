@@ -27,11 +27,6 @@ public interface ISubscriptionService
     Task<bool> IsIngestEligibleAsync(int tenantId, CancellationToken ct = default);
 
     /// <summary>
-    /// Creates a Free-tier subscription for a tenant.
-    /// </summary>
-    Task<TenantSubscription> ProvisionFreeSubscriptionAsync(int tenantId, CancellationToken ct = default);
-
-    /// <summary>
     /// Gets the retention days for a tenant.
     /// </summary>
     Task<int> GetRetentionDaysForTenantAsync(int tenantId, CancellationToken ct = default);
