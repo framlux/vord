@@ -177,6 +177,66 @@ public sealed class TenantEndpointTests
         await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.Created);
     }
 
+    /// <summary>
+    /// A tenant created through the API can mutate immediately. Creation writes the subscription
+    /// row in the same transaction as the tenant, and the mutation gate fails closed on a missing
+    /// row, so a creation path that skipped provisioning would leave the new tenant permanently
+    /// read-only — and nothing afterwards creates the row, because every writer only touches a
+    /// tenant it has just inserted.
+    ///
+    /// The mutation is a delete of an integration that does not exist, chosen because it carries
+    /// no tier gate: a Free tenant is allowed to attempt it, so 404 means the request reached the
+    /// handler and 403 means the subscription gate stopped it. Asserting on the distinction is
+    /// what makes this a regression test rather than a smoke check.
+    /// </summary>
+    [Test]
+    public async Task CreateTenant_ThenMutateAsThatTenant_IsNotBlockedByTheSubscriptionGate()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId) = await SeedTenantEnvironment(db, isGlobalAdmin: true);
+
+        HttpClient creator = new AuthenticatedClientBuilder(factory)
+            .WithUserId(userId)
+            .AsGlobalAdmin()
+            .WithRole(tenantId, (int)UserAccountRoles.TenantAdmin)
+            .WithActiveTenant(tenantId)
+            .Build();
+
+        HttpResponseMessage created = await creator.PostAsJsonAsync("/api/v1/tenants", new
+        {
+            Name = $"Freshly Created Tenant {Guid.NewGuid():N}",
+            LogoUrl = "",
+        });
+        await Assert.That(created.StatusCode).IsEqualTo(HttpStatusCode.Created);
+
+        int newTenantId = await db.GetTable<Tenant>()
+            .Where(t => t.Id != tenantId)
+            .OrderByDescending(t => t.Id)
+            .Select(t => t.Id)
+            .FirstOrDefaultAsync();
+        await Assert.That(newTenantId).IsNotEqualTo(0);
+
+        // The row must exist before the request is made; otherwise a 404 below would prove
+        // nothing about provisioning.
+        bool hasSubscription = await db.GetTable<TenantSubscription>()
+            .AnyAsync(s => s.TenantId == newTenantId);
+        await Assert.That(hasSubscription).IsTrue();
+
+        HttpClient asNewTenant = new AuthenticatedClientBuilder(factory)
+            .WithUserId(userId)
+            .WithRole(newTenantId, (int)UserAccountRoles.TenantAdmin)
+            .WithActiveTenant(newTenantId)
+            .Build();
+
+        HttpResponseMessage mutation = await asNewTenant.DeleteAsync("/api/v1/integrations/999999");
+
+        await Assert.That(mutation.StatusCode).IsNotEqualTo(HttpStatusCode.Forbidden);
+
+        string body = await mutation.Content.ReadAsStringAsync();
+        await Assert.That(body).DoesNotContain("No subscription found");
+    }
+
     // --- TenantListEndpoint Tests ---
 
     [Test]

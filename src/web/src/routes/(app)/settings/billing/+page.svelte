@@ -25,7 +25,7 @@
 	const pendingAction = $derived(subscription?.pendingAction ?? null);
 	const isCanceling = $derived(pendingAction === 'CancelAccount');
 
-	const hasBillingService = $derived(data.billingEnabled === true);
+	const hasBillingService = $derived(data.billingServiceConfigured === true);
 
 	const upcomingInvoice: UpcomingInvoiceDto | null = $derived(data.upcomingInvoice ?? null);
 	const invoices: InvoiceDto[] = $derived(data.invoices ?? []);

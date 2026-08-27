@@ -46,7 +46,10 @@ export const load: PageServerLoad = async ({ fetch, cookies, locals }) => {
 			invoices,
 			usageHistory,
 			catalog,
-			billingEnabled: !!env.PUBLIC_BILLING_URL
+			// Whether a billing-web URL is configured, not whether this deployment does billing.
+			// The mode question was answered above by the self-hosted 404; reaching here means the
+			// deployment bills, and this only says whether the checkout service can be reached.
+			billingServiceConfigured: !!env.PUBLIC_BILLING_URL
 		};
 	} catch (e) {
 		if (e instanceof ApiError) {
