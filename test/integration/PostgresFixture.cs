@@ -142,8 +142,7 @@ public sealed class PostgresFixture : IAsyncDisposable
 
     private static async Task<PostgreSqlContainer> StartSharedContainerAsync()
     {
-        PostgreSqlContainer container = new PostgreSqlBuilder()
-            .WithImage("postgres:18-alpine")
+        PostgreSqlContainer container = new PostgreSqlBuilder("postgres:18-alpine")
 
             // Every class's pool now draws on one connection budget instead of a private
             // container's default of 100, and per-test child databases keep their own idle
