@@ -19,6 +19,9 @@ using Hangfire;
 using Hangfire.Common;
 using Framlux.FleetManagement.Services.Core.Hangfire;
 using Hangfire.InMemory;
+using NSubstitute.ExceptionExtensions;
+using Hangfire.Storage;
+using Hangfire.Storage.Monitoring;
 using Hangfire.States;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.Extensions.DependencyInjection;
@@ -471,7 +474,9 @@ public sealed class FleetAdminServiceTests
         StatusCode? rejectWith = null,
         IOidcSecretProtector? oidcSecretProtector = null,
         IConnectionMultiplexer? redis = null,
-        IBackgroundJobClientV2? backgroundJobs = null)
+        IBackgroundJobClientV2? backgroundJobs = null,
+        JobStorage? storage = null,
+        HangfireOptions? hangfireOptions = null)
     {
         ILogger<FleetAdminService> logger = Substitute.For<ILogger<FleetAdminService>>();
         IOidcSecretProtector resolvedProtector = oidcSecretProtector
@@ -484,10 +489,343 @@ public sealed class FleetAdminServiceTests
             resolvedProtector,
             logger,
             resolvedRedis,
-            new InMemoryStorage(),
+            storage ?? new InMemoryStorage(),
             TimeProvider.System,
             backgroundJobs ?? Substitute.For<IBackgroundJobClientV2>(),
-            Options.Create(new HangfireOptions()));
+            Options.Create(hangfireOptions ?? new HangfireOptions()));
+    }
+
+    // ── On-demand run: failure paths ──
+
+    /// <summary>
+    /// Hangfire's client returns the new job id or null, and ships without nullable annotations so
+    /// nothing warns. Reporting success on null would tell the caller a run had started and leave
+    /// it no id to record the run against.
+    /// </summary>
+    [Test]
+    public async Task RunRecurringJobNow_ClientReturnsNoJobId_ThrowsUnavailable()
+    {
+        IBackgroundJobClientV2 backgroundJobs = Substitute.For<IBackgroundJobClientV2>();
+        backgroundJobs.Create(Arg.Any<Job>(), Arg.Any<IState>(), Arg.Any<IDictionary<string, object>>())
+            .Returns((string?)null);
+
+        RpcException? exception = await RunAgainstSeededStorageAsync(backgroundJobs);
+
+        await Assert.That(exception!.StatusCode).IsEqualTo(StatusCode.Unavailable);
+    }
+
+    /// <summary>
+    /// Hangfire wraps every storage failure during creation in BackgroundJobClientException. Left
+    /// unhandled it surfaces as Unknown, which the admin API turns into a 500 carrying .NET
+    /// internals rather than a clean unavailable.
+    /// </summary>
+    [Test]
+    public async Task RunRecurringJobNow_ClientThrows_ThrowsUnavailable()
+    {
+        IBackgroundJobClientV2 backgroundJobs = Substitute.For<IBackgroundJobClientV2>();
+        backgroundJobs.Create(Arg.Any<Job>(), Arg.Any<IState>(), Arg.Any<IDictionary<string, object>>())
+            .Throws(new BackgroundJobClientException("storage down", new InvalidOperationException()));
+
+        RpcException? exception = await RunAgainstSeededStorageAsync(backgroundJobs);
+
+        await Assert.That(exception!.StatusCode).IsEqualTo(StatusCode.Unavailable);
+    }
+
+    /// <summary>
+    /// A registration whose payload will not deserialise cannot be run, and the operator must be
+    /// told that rather than that the job is unregistered — the two send them looking in different
+    /// places.
+    /// </summary>
+    [Test]
+    public async Task RunRecurringJobNow_PayloadWillNotLoad_ThrowsFailedPreconditionSayingSo()
+    {
+        using InMemoryStorage storage = new();
+        SeedRecurringJob(storage, RecurringJobIds.TenantPurge, unloadable: true);
+
+        FleetAdminService service = CreateFleetAdminService(
+            Substitute.For<IServiceScopeFactory>(), storage: storage, redis: CreateRedisAllowing());
+
+        RunRecurringJobNowRequest request = new()
+        {
+            JobId = RecurringJobIds.TenantPurge,
+            TriggeredBy = "ops@framlux.io",
+        };
+
+        RpcException? exception = await Assert.ThrowsAsync<RpcException>(
+            async () => await service.RunRecurringJobNow(request, CreateContext()));
+
+        await Assert.That(exception!.StatusCode).IsEqualTo(StatusCode.FailedPrecondition);
+        await Assert.That(exception.Status.Detail).Contains("payload");
+    }
+
+    /// <summary>
+    /// The operator identity is caller-supplied and unbounded. Left uncapped it lands whole in a
+    /// Hangfire job-parameter row and in a log event, once per call.
+    /// </summary>
+    [Test]
+    public async Task RunRecurringJobNow_OverlongTriggeredBy_IsTruncatedBeforeStamping()
+    {
+        using InMemoryStorage storage = new();
+        SeedRecurringJob(storage, RecurringJobIds.TenantPurge, unloadable: false);
+
+        IBackgroundJobClientV2 backgroundJobs = Substitute.For<IBackgroundJobClientV2>();
+        backgroundJobs.Create(Arg.Any<Job>(), Arg.Any<IState>(), Arg.Any<IDictionary<string, object>>())
+            .Returns("job-1");
+
+        FleetAdminService service = CreateFleetAdminService(
+            Substitute.For<IServiceScopeFactory>(),
+            backgroundJobs: backgroundJobs,
+            storage: storage,
+            redis: CreateRedisAllowing());
+
+        RunRecurringJobNowRequest request = new()
+        {
+            JobId = RecurringJobIds.TenantPurge,
+            TriggeredBy = new string('x', 5000),
+        };
+
+        await service.RunRecurringJobNow(request, CreateContext());
+
+        IDictionary<string, object> captured = (IDictionary<string, object>)backgroundJobs
+            .ReceivedCalls()
+            .Single(c => c.GetMethodInfo().Name == nameof(IBackgroundJobClientV2.Create))
+            .GetArguments()[2]!;
+
+        await Assert.That(((string)captured["TriggeredBy"]).Length).IsEqualTo(256);
+    }
+
+    /// <summary>
+    /// The cooldown bounds an accident. If Redis is unreachable, denying the operator their tool
+    /// during a Redis outage would be the worse failure, so the run proceeds.
+    /// </summary>
+    [Test]
+    public async Task RunRecurringJobNow_RedisUnreachable_StillRuns()
+    {
+        using InMemoryStorage storage = new();
+        SeedRecurringJob(storage, RecurringJobIds.TenantPurge, unloadable: false);
+
+        IBackgroundJobClientV2 backgroundJobs = Substitute.For<IBackgroundJobClientV2>();
+        backgroundJobs.Create(Arg.Any<Job>(), Arg.Any<IState>(), Arg.Any<IDictionary<string, object>>())
+            .Returns("job-1");
+
+        IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
+        IDatabase database = Substitute.For<IDatabase>();
+        database.StringSetAsync(
+                Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<TimeSpan?>(), Arg.Any<When>())
+            .Throws(new RedisConnectionException(ConnectionFailureType.UnableToConnect, "down"));
+        redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(database);
+
+        FleetAdminService service = CreateFleetAdminService(
+            Substitute.For<IServiceScopeFactory>(),
+            backgroundJobs: backgroundJobs,
+            storage: storage,
+            redis: redis);
+
+        RunRecurringJobNowRequest request = new()
+        {
+            JobId = RecurringJobIds.TenantPurge,
+            TriggeredBy = "ops@framlux.io",
+        };
+
+        RunRecurringJobNowResponse response = await service.RunRecurringJobNow(request, CreateContext());
+
+        await Assert.That(response.Success).IsTrue();
+    }
+
+    /// <summary>
+    /// A zero or negative cooldown disables the check outright rather than blocking every run.
+    /// </summary>
+    [Test]
+    public async Task RunRecurringJobNow_CooldownDisabled_DoesNotConsultRedis()
+    {
+        using InMemoryStorage storage = new();
+        SeedRecurringJob(storage, RecurringJobIds.TenantPurge, unloadable: false);
+
+        IBackgroundJobClientV2 backgroundJobs = Substitute.For<IBackgroundJobClientV2>();
+        backgroundJobs.Create(Arg.Any<Job>(), Arg.Any<IState>(), Arg.Any<IDictionary<string, object>>())
+            .Returns("job-1");
+
+        IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
+
+        FleetAdminService service = CreateFleetAdminService(
+            Substitute.For<IServiceScopeFactory>(),
+            backgroundJobs: backgroundJobs,
+            storage: storage,
+            redis: redis,
+            hangfireOptions: new HangfireOptions { ManualRunCooldownSeconds = 0 });
+
+        RunRecurringJobNowRequest request = new()
+        {
+            JobId = RecurringJobIds.TenantPurge,
+            TriggeredBy = "ops@framlux.io",
+        };
+
+        RunRecurringJobNowResponse response = await service.RunRecurringJobNow(request, CreateContext());
+
+        await Assert.That(response.Success).IsTrue();
+        redis.DidNotReceiveWithAnyArgs().GetDatabase();
+    }
+
+    // ── Recurring-job read: degraded storage ──
+
+    /// <summary>
+    /// The jobs view is what an operator opens when the platform is already misbehaving. A storage
+    /// fault in one section must not cost them the other two, and the section that failed has to
+    /// name itself so the panel can say "unknown" rather than render a confident zero.
+    /// </summary>
+    [Test]
+    public async Task ListRecurringJobs_StatisticsUnavailable_NamesTheSectionAndKeepsTheRest()
+    {
+        IMonitoringApi monitoring = Substitute.For<IMonitoringApi>();
+        monitoring.GetStatistics().Throws(new InvalidOperationException("statistics unavailable"));
+        monitoring.Servers().Returns(new List<ServerDto>());
+
+        ListRecurringJobsResponse response = await ListAgainstAsync(monitoring);
+
+        await Assert.That(response.UnavailableSections).Contains("failed_count");
+        await Assert.That(response.FailedJobCount).IsEqualTo(0);
+        await Assert.That(response.Jobs.Count).IsEqualTo(RecurringJobIds.All.Count);
+    }
+
+    /// <summary>
+    /// Worker heartbeat is the headline signal, so its failure must be reported as unknown rather
+    /// than as an empty list, which reads identically to "no workers are running".
+    /// </summary>
+    [Test]
+    public async Task ListRecurringJobs_WorkersUnavailable_NamesTheSection()
+    {
+        IMonitoringApi monitoring = Substitute.For<IMonitoringApi>();
+        monitoring.GetStatistics().Returns(new StatisticsDto());
+        monitoring.Servers().Throws(new InvalidOperationException("servers unavailable"));
+
+        ListRecurringJobsResponse response = await ListAgainstAsync(monitoring);
+
+        await Assert.That(response.UnavailableSections).Contains("workers");
+        await Assert.That(response.Workers.Count).IsEqualTo(0);
+    }
+
+    /// <summary>
+    /// The enrichment list is caller-controlled, so the cap is the only thing bounding the number
+    /// of storage lookups one request can provoke.
+    /// </summary>
+    [Test]
+    public async Task ListRecurringJobs_MoreEnrichIdsThanTheCap_ResolvesOnlyTheCap()
+    {
+        IMonitoringApi monitoring = Substitute.For<IMonitoringApi>();
+        monitoring.GetStatistics().Returns(new StatisticsDto());
+        monitoring.Servers().Returns(new List<ServerDto>());
+        monitoring.JobDetails(Arg.Any<string>()).Returns((JobDetailsDto?)null);
+
+        ListRecurringJobsRequest request = new();
+
+        for (int i = 0; i < 25; i++)
+        {
+            request.EnrichJobIds.Add($"job-{i}");
+        }
+
+        ListRecurringJobsResponse response = await ListAgainstAsync(monitoring, request);
+
+        await Assert.That(response.ManualRuns.Count).IsEqualTo(20);
+    }
+
+    /// <summary>
+    /// A single unreadable job id must degrade to "outcome not retained" rather than failing the
+    /// whole page. On PostgreSQL this path is reachable through a non-numeric id and through
+    /// duplicate job-parameter rows; the in-memory storage used elsewhere has neither.
+    /// </summary>
+    [Test]
+    public async Task ListRecurringJobs_EnrichLookupThrows_ReportsTheRunAsNotRetained()
+    {
+        IMonitoringApi monitoring = Substitute.For<IMonitoringApi>();
+        monitoring.GetStatistics().Returns(new StatisticsDto());
+        monitoring.Servers().Returns(new List<ServerDto>());
+        monitoring.JobDetails(Arg.Any<string>()).Throws(new FormatException("not a number"));
+
+        ListRecurringJobsRequest request = new();
+        request.EnrichJobIds.Add("not-a-numeric-id");
+
+        ListRecurringJobsResponse response = await ListAgainstAsync(monitoring, request);
+
+        await Assert.That(response.ManualRuns.Single().Retained).IsFalse();
+    }
+
+    private static async Task<ListRecurringJobsResponse> ListAgainstAsync(
+        IMonitoringApi monitoring, ListRecurringJobsRequest? request = null)
+    {
+        using InMemoryStorage backing = new();
+        JobStorage storage = Substitute.For<JobStorage>();
+        storage.GetMonitoringApi().Returns(monitoring);
+        storage.GetConnection().Returns(_ => backing.GetConnection());
+
+        FleetAdminService service = CreateFleetAdminService(
+            Substitute.For<IServiceScopeFactory>(), storage: storage);
+
+        return await service.ListRecurringJobs(request ?? new ListRecurringJobsRequest(), CreateContext());
+    }
+
+    private static async Task<RpcException?> RunAgainstSeededStorageAsync(IBackgroundJobClientV2 backgroundJobs)
+    {
+        using InMemoryStorage storage = new();
+        SeedRecurringJob(storage, RecurringJobIds.TenantPurge, unloadable: false);
+
+        FleetAdminService service = CreateFleetAdminService(
+            Substitute.For<IServiceScopeFactory>(),
+            backgroundJobs: backgroundJobs,
+            storage: storage,
+            redis: CreateRedisAllowing());
+
+        RunRecurringJobNowRequest request = new()
+        {
+            JobId = RecurringJobIds.TenantPurge,
+            TriggeredBy = "ops@framlux.io",
+        };
+
+        return await Assert.ThrowsAsync<RpcException>(
+            async () => await service.RunRecurringJobNow(request, CreateContext()));
+    }
+
+    private static IConnectionMultiplexer CreateRedisAllowing()
+    {
+        IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
+        IDatabase database = Substitute.For<IDatabase>();
+        database.StringSetAsync(
+                Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<TimeSpan?>(), Arg.Any<When>())
+            .Returns(true);
+        redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(database);
+
+        return redis;
+    }
+
+    private static void SeedRecurringJob(InMemoryStorage storage, string id, bool unloadable)
+    {
+        string payload = unloadable
+            ? "{\"Type\":\"Framlux.Does.Not.Exist, NoSuchAssembly\",\"Method\":\"RunAsync\",\"ParameterTypes\":\"[]\",\"Arguments\":\"[]\"}"
+            : InvocationData.SerializeJob(
+                Job.FromExpression<SeedProbeJob>(j => j.RunAsync(CancellationToken.None))).SerializePayload();
+
+        Dictionary<string, string> hash = new()
+        {
+            ["Cron"] = "* * * * *",
+            ["Job"] = payload,
+            ["NextExecution"] = JobHelper.SerializeDateTime(DateTime.UtcNow.AddMinutes(10)),
+            ["TimeZoneId"] = TimeZoneInfo.Utc.Id,
+        };
+
+        using IStorageConnection connection = storage.GetConnection();
+        using IWriteOnlyTransaction transaction = connection.CreateWriteTransaction();
+        transaction.AddToSet("recurring-jobs", id, 0);
+        transaction.SetRangeInHash($"recurring-job:{id}", hash);
+        transaction.Commit();
+    }
+
+    /// <summary>Stand-in job type used only to produce a resolvable payload for these fixtures.</summary>
+    public sealed class SeedProbeJob
+    {
+        /// <summary>Never invoked; the payload only has to deserialise.</summary>
+        public Task RunAsync(CancellationToken cancellationToken)
+        {
+            return Task.CompletedTask;
+        }
     }
 
     private static IInternalCallerAuthorizer CreateAuthorizer(StatusCode? rejectWith)

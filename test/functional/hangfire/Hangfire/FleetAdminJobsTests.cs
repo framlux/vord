@@ -57,14 +57,25 @@ public sealed class FleetAdminJobsTests
     [Test]
     public async Task ListRecurringJobs_ReturnsServerTime()
     {
-        // Intent: the panel renders ages against the fleet's clock, not the browser's. An unset
-        // server_time would silently shift every relative timestamp in the view.
+        // Intent: the panel renders ages against the fleet's clock, not the browser's, so a wrong
+        // value shifts every relative timestamp in the view. Asserting only non-null would pass
+        // against any constant, so this brackets the call and requires the value to fall inside —
+        // the bracket bounds the assertion, it does not define the pass condition.
         await using FleetAdminJobsFixture fixture = await FleetAdminJobsFixture.CreateAsync();
+
+        DateTimeOffset before = DateTimeOffset.UtcNow;
 
         ListRecurringJobsResponse response = await fixture.Service.ListRecurringJobs(
             new ListRecurringJobsRequest(), fixture.CallContext);
 
+        DateTimeOffset after = DateTimeOffset.UtcNow;
+
         await Assert.That(response.ServerTime).IsNotNull();
+
+        DateTimeOffset serverTime = response.ServerTime.ToDateTimeOffset();
+
+        await Assert.That(serverTime).IsGreaterThanOrEqualTo(before);
+        await Assert.That(serverTime).IsLessThanOrEqualTo(after);
     }
 
     [Test]

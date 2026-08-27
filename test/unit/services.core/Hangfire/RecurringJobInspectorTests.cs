@@ -211,6 +211,29 @@ public sealed class RecurringJobInspectorTests
     }
 
     [Test]
+    public async Task ResolveForRun_RegistrationHashRemoved_ReportsMissing()
+    {
+        // Intent: the id is still in the set but its hash is gone, so Hangfire returns a stub with
+        // no job definition. Enqueueing from that would dereference null; reporting Missing sends
+        // the operator to the registration, which is where the problem actually is.
+        using InMemoryStorage storage = new();
+
+        using (IStorageConnection connection = storage.GetConnection())
+        using (IWriteOnlyTransaction transaction = connection.CreateWriteTransaction())
+        {
+            transaction.AddToSet("recurring-jobs", RecurringJobIds.TenantPurge, 0);
+            transaction.Commit();
+        }
+
+        RecurringJobInspector inspector = new(storage, new FakeTimeProvider(Now));
+
+        RecurringJobRunTarget target = inspector.ResolveForRun(RecurringJobIds.TenantPurge);
+
+        await Assert.That(target.Job).IsNull();
+        await Assert.That(target.Status).IsEqualTo(RecurringJobHealth.Missing);
+    }
+
+    [Test]
     public async Task Inspect_ErrorSetWithFutureNextExecution_IsSchedulingError()
     {
         // Intent: while Hangfire retries a failed scheduling pass it keeps NextExecution ~15s
