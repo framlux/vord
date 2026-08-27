@@ -2050,7 +2050,7 @@ The empty SMTP host is the point: it selects `NoOpEmailService`, which is exactl
 
 Add to the renamed `SelfHostedEndpointTests.cs` (which already asserts the billing endpoints 404 under `SelfHostedTestFactory`). Follow the file's existing conventions for host construction, authentication and tenant seeding. Add each of the following as its own `[Test]`, seeding a tenant whose subscription row is `SubscriptionTier.Free`:
 
-0. `Ingest_ForDeactivatedTenant_IsStillBlocked` — deactivate the tenant, then attempt telemetry ingest; expect rejection. Self-hosted unlocks entitlements, **not** tenant deactivation: `IsIngestEligibleAsync` delegates precisely so pending-deletion enforcement survives. This test is what stops a future edit from making that member permissive along with its neighbours.
+0. `Ingest_ForDeactivatedTenant_IsStillBlocked` — deactivate the tenant, then attempt telemetry ingest; expect rejection. Self-hosted unlocks entitlements, **not** tenant deactivation: `IsIngestEligibleAsync` checks the tenant's active flag and nothing else, precisely so pending-deletion enforcement survives without depending on the subscription row. This test is what stops a future edit from making that member permissive along with its neighbours.
 1. `AlertRuleCreate_OnFreeRow_Succeeds` — POST a custom alert rule; expect 200, not 403. This covers both the Team gate and the `CanCreateAlertRuleAsync` limit.
 2. `IntegrationCreate_OnFreeRow_Succeeds` — POST a webhook integration; expect 200. Free's webhook limit is 0, so a delegated `CanCreateWebhookAsync` fails here.
 3. `MachineAuthorizedKeyAdd_OnFreeRow_Succeeds` — expect 200.

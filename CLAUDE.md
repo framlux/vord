@@ -48,7 +48,10 @@ dotnet run --project test/integration/integration.csproj
 # Web frontend (SvelteKit / Vitest)
 pnpm -C src/web test      # also: pnpm -C src/web check  /  pnpm -C src/web build
 
-# Target a subset of any TUnit project with: --treenode-filter "*SomeTestName*"
+# Target a subset of any TUnit project with the full four-segment path:
+#   --treenode-filter "/*/*/SomeTestClass/*"
+# A bare "*SomeTestName*" matches nothing and reports "Zero tests ran" rather than failing, so a
+# filtered run can look green while running no tests at all. Check the total before believing it.
 
 # For Podman on macOS, point Testcontainers at the podman socket first:
 #   export DOCKER_HOST="unix://$(podman machine inspect podman-machine-default --format '{{.ConnectionInfo.PodmanSocket.Path}}')"
@@ -195,7 +198,7 @@ git push origin agent-v2.9.0
 
 ## Workflow Rules
 
-- When modifying code, always run the full build and test suite before reporting completion. Verify: Go (`go build ./...` && `go test ./...`), .NET (`dotnet build` && `dotnet test`), SvelteKit (`npm run build`). Never report 'done' with a plan — confirm green builds.
+- When modifying code, always run the full build and test suite before reporting completion. Verify: Go (`go build ./...` && `go test ./...`), .NET (`dotnet build machine-info.slnx` plus the test executables listed under Testing — **never** `dotnet test`, which does not run these TUnit projects), SvelteKit (`npm run build`). Never report 'done' with a plan — confirm green builds.
 - When encountering transient API errors (500s), automatically retry the operation without waiting for user prompting. Do not stop and ask — just resume.
 - Before starting implementation, check what work has already been completed in the codebase. Do not include already-done items in plans. If resuming a multi-session effort, diff against current state first.
 - Before fixing this bug, write a failing test that reproduces the exact behavior I'm seeing. Then fix the code to make the test pass. Then run the full test suite.

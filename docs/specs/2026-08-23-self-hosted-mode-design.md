@@ -649,9 +649,11 @@ Per repository convention, every item below is required before the work is compl
 - Self-hosted: ingested telemetry is stamped `RetentionClass.Long`, not `Short` — the regression
   test for the retention accessors, which is the failure mode a UI-level test would not catch.
 - Self-hosted: a **deactivated** tenant still cannot ingest. Unlocking entitlements must not unlock
-  tenant deactivation; `IsIngestEligibleAsync` delegates precisely so pending-deletion enforcement
-  survives, and this test is what stops a later edit from making it permissive alongside its
-  neighbours.
+  tenant deactivation; `IsIngestEligibleAsync` checks the tenant's active flag and nothing else —
+  it does **not** delegate, precisely so that pending-deletion enforcement survives without a
+  subscription row having to look a particular way. This test is what stops a later edit from
+  making it permissive alongside its neighbours, or from "restoring" a delegation that would brick
+  tenants whose imported subscription history is not Active.
 - SaaS: every tier gate still refuses a `Free` tenant; `PUT /admin/settings` returns 404;
   `BillingGateway` / `FleetAdmin` are routed.
 
