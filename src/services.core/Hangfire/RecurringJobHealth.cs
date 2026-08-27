@@ -18,7 +18,10 @@ public enum RecurringJobHealth
     /// <summary>Registered, but its next occurrence is further in the past than the grace window.</summary>
     Overdue = 2,
 
-    /// <summary>Hangfire disabled the schedule after repeated scheduling failures.</summary>
+    /// <summary>
+    /// The job has no next occurrence, so it will not run again. Hangfire disabled it after
+    /// repeated scheduling failures, or its cron has no future occurrence at all.
+    /// </summary>
     Disabled = 3,
 
     /// <summary>Known to this build but absent from storage.</summary>
@@ -26,4 +29,10 @@ public enum RecurringJobHealth
 
     /// <summary>Registered, but its payload could not be deserialised into a job.</summary>
     LoadFailed = 5,
+
+    /// <summary>
+    /// The scheduler failed to create this job's background job on its last pass and is retrying.
+    /// Distinct from the job itself throwing, which this model does not track per job.
+    /// </summary>
+    SchedulingError = 6,
 }

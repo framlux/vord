@@ -16,6 +16,7 @@ using Framlux.FleetManagement.Services.Core.ServerConfiguration;
 using Framlux.Vord.BillingGrpc;
 using Google.Protobuf.WellKnownTypes;
 using Grpc.Core;
+using Microsoft.Extensions.Options;
 using Hangfire;
 using Hangfire.Common;
 using Hangfire.States;
@@ -33,6 +34,10 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
     private const int DefaultPageSize = 50;
     private const int MaxPageSize = 100;
     private const int MaxEnrichJobIds = 20;
+    private const int MaxTriggeredByLength = 256;
+    private const string FailedCountSection = "failed_count";
+    private const string JobsSection = "jobs";
+    private const string WorkersSection = "workers";
 
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly IInternalCallerAuthorizer _callerAuthorizer;
@@ -43,6 +48,7 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
     private readonly TimeProvider _timeProvider;
     private readonly IBackgroundJobClientV2 _backgroundJobs;
     private readonly RecurringJobInspector _inspector;
+    private readonly IOptions<HangfireOptions> _hangfireOptions;
 
     /// <summary>
     /// Creates a new instance of the <see cref="FleetAdminService"/> class.
@@ -55,7 +61,8 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
         IConnectionMultiplexer redis,
         JobStorage storage,
         TimeProvider timeProvider,
-        IBackgroundJobClientV2 backgroundJobs)
+        IBackgroundJobClientV2 backgroundJobs,
+        IOptions<HangfireOptions> hangfireOptions)
     {
         ArgumentNullException.ThrowIfNull(scopeFactory);
         ArgumentNullException.ThrowIfNull(callerAuthorizer);
@@ -65,6 +72,8 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
         ArgumentNullException.ThrowIfNull(storage);
         ArgumentNullException.ThrowIfNull(timeProvider);
         ArgumentNullException.ThrowIfNull(backgroundJobs);
+        ArgumentNullException.ThrowIfNull(hangfireOptions);
+        _hangfireOptions = hangfireOptions;
         _scopeFactory = scopeFactory;
         _callerAuthorizer = callerAuthorizer;
         _oidcSecretProtector = oidcSecretProtector;
@@ -878,22 +887,54 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
         AuthorizeInternalCaller(context);
 
         IMonitoringApi monitoring = _storage.GetMonitoringApi();
-        StatisticsDto statistics = monitoring.GetStatistics();
 
         ListRecurringJobsResponse response = new()
         {
-            FailedJobCount = statistics.Failed,
             ServerTime = Timestamp.FromDateTimeOffset(_timeProvider.GetUtcNow()),
         };
 
-        foreach (RecurringJobSnapshot snapshot in _inspector.Inspect())
+        // Each block is isolated. This view is what an operator opens when the platform is already
+        // misbehaving, so a storage fault in one section must not cost them the other two — losing
+        // the worker heartbeat because a statistics query failed would hide the headline signal.
+        // Sections that could not be read are named so the panel can say "unknown" rather than
+        // rendering a confident zero.
+        try
         {
-            response.Jobs.Add(MapRecurringJob(snapshot));
+            StatisticsDto statistics = monitoring.GetStatistics();
+            response.FailedJobCount = statistics.Failed;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "FleetAdmin: could not read Hangfire statistics");
+            response.UnavailableSections.Add(FailedCountSection);
         }
 
-        foreach (ServerDto server in monitoring.Servers())
+        try
         {
-            response.Servers.Add(MapServer(server));
+            foreach (RecurringJobSnapshot snapshot in _inspector.Inspect())
+            {
+                response.Jobs.Add(MapRecurringJob(snapshot));
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "FleetAdmin: could not read recurring job state");
+            response.Jobs.Clear();
+            response.UnavailableSections.Add(JobsSection);
+        }
+
+        try
+        {
+            foreach (ServerDto server in monitoring.Servers())
+            {
+                response.Workers.Add(MapWorker(server));
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "FleetAdmin: could not read Hangfire worker heartbeats");
+            response.Workers.Clear();
+            response.UnavailableSections.Add(WorkersSection);
         }
 
         foreach (string jobId in request.EnrichJobIds.Take(MaxEnrichJobIds))
@@ -910,25 +951,49 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
     /// path rewrites the last-execution and next-execution fields, which would erase the very
     /// state this service reports.
     /// </summary>
-    public override Task<RunRecurringJobNowResponse> RunRecurringJobNow(
+    public override async Task<RunRecurringJobNowResponse> RunRecurringJobNow(
         RunRecurringJobNowRequest request, ServerCallContext context)
     {
         AuthorizeInternalCaller(context);
 
+        string caller = DescribeCaller(context);
+
         if (RecurringJobIds.All.Contains(request.JobId) == false)
         {
+            // The id is not echoed back: it is caller-controlled and unbounded, and a large value
+            // would land in an HTTP/2 trailer and break the response rather than report the error.
+            _logger.LogWarning(
+                "FleetAdmin: rejected on-demand run of unknown recurring job (caller {Caller}, id length {Length})",
+                caller, request.JobId.Length);
+
             throw new RpcException(new Status(
-                StatusCode.InvalidArgument,
-                $"Unknown recurring job id: '{request.JobId}'"));
+                StatusCode.InvalidArgument, "Unknown recurring job id."));
         }
 
-        Job? job = _inspector.GetJobDefinition(request.JobId);
+        RecurringJobRunTarget target = _inspector.ResolveForRun(request.JobId);
 
-        if (job is null)
+        if (target.Job is null)
         {
+            string reason = (target.Status == RecurringJobHealth.LoadFailed)
+                ? $"Recurring job '{request.JobId}' is registered but its payload cannot be loaded, so it cannot be run."
+                : $"Recurring job '{request.JobId}' is not registered in storage, so there is nothing to run.";
+
+            _logger.LogWarning(
+                "FleetAdmin: rejected on-demand run of {JobId} (caller {Caller}, status {Status})",
+                request.JobId, caller, target.Status);
+
+            throw new RpcException(new Status(StatusCode.FailedPrecondition, reason));
+        }
+
+        if (await TryClaimManualRunAsync(request.JobId).ConfigureAwait(false) == false)
+        {
+            _logger.LogWarning(
+                "FleetAdmin: rejected on-demand run of {JobId} still in cooldown (caller {Caller})",
+                request.JobId, caller);
+
             throw new RpcException(new Status(
                 StatusCode.FailedPrecondition,
-                $"Recurring job '{request.JobId}' is not registered in storage, so there is nothing to run."));
+                $"Recurring job '{request.JobId}' was already run on demand recently. Wait for the cooldown to elapse before running it again."));
         }
 
         // These are the same parameter names Hangfire's own scheduler stamps when it fires a
@@ -936,23 +1001,123 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
         Dictionary<string, object> parameters = new()
         {
             ["RecurringJobId"] = request.JobId,
-            ["TriggeredBy"] = request.TriggeredBy,
+            ["TriggeredBy"] = Truncate(request.TriggeredBy, MaxTriggeredByLength),
         };
 
-        // EnqueuedState defaults to the "default" queue, but QueueAttribute is an elect-state
-        // filter that runs first, so [Queue("critical")] and [Queue("long")] still win.
-        string enqueuedJobId = _backgroundJobs.Create(job, new EnqueuedState(), parameters);
+        string? enqueuedJobId;
+
+        try
+        {
+            // EnqueuedState defaults to the "default" queue, but QueueAttribute is an elect-state
+            // filter that runs first, so [Queue("critical")] and [Queue("long")] still win.
+            enqueuedJobId = _backgroundJobs.Create(target.Job, new EnqueuedState(), parameters);
+        }
+        catch (BackgroundJobClientException ex)
+        {
+            // Hangfire wraps every storage failure in this type. Left unhandled it surfaces as
+            // StatusCode.Unknown, which the admin API maps to a 500 carrying .NET internals.
+            _logger.LogError(
+                ex, "FleetAdmin: enqueueing {JobId} on demand failed (caller {Caller})", request.JobId, caller);
+
+            throw new RpcException(new Status(
+                StatusCode.Unavailable, $"Could not enqueue recurring job '{request.JobId}'."));
+        }
+
+        if (string.IsNullOrEmpty(enqueuedJobId))
+        {
+            // BackgroundJobClient.Create returns _factory.Create(context)?.Id, so this is null
+            // whenever the storage declines to create the job. Hangfire targets netstandard2.0
+            // without nullable annotations, so nothing warns. Reporting success here would tell
+            // the caller a run happened and leave it with no id to record it against.
+            _logger.LogError(
+                "FleetAdmin: enqueueing {JobId} on demand returned no job id (caller {Caller})",
+                request.JobId, caller);
+
+            throw new RpcException(new Status(
+                StatusCode.Unavailable, $"Could not enqueue recurring job '{request.JobId}'."));
+        }
 
         _logger.LogInformation(
-            "FleetAdmin: recurring job {JobId} run on demand by {TriggeredBy} as job {EnqueuedJobId}",
-            request.JobId, request.TriggeredBy, enqueuedJobId);
+            "FleetAdmin: recurring job {JobId} run on demand by {TriggeredBy} (caller {Caller}) as job {EnqueuedJobId}",
+            request.JobId, request.TriggeredBy, caller, enqueuedJobId);
 
-        return Task.FromResult(new RunRecurringJobNowResponse
+        return new RunRecurringJobNowResponse
         {
             Success = true,
             Message = "OK",
             EnqueuedJobId = enqueuedJobId,
-        });
+        };
+    }
+
+    /// <summary>
+    /// Claims the right to run a job on demand, returning false while a previous run is still
+    /// inside its cooldown. Set-if-absent in Redis, so concurrent callers cannot both claim it.
+    /// </summary>
+    /// <remarks>
+    /// A failure to reach Redis lets the run proceed: the cooldown bounds an accident, and denying
+    /// an operator their tool during a Redis outage would be the worse failure.
+    /// </remarks>
+    private async Task<bool> TryClaimManualRunAsync(string jobId)
+    {
+        int cooldownSeconds = _hangfireOptions.Value.ManualRunCooldownSeconds;
+
+        if (cooldownSeconds <= 0)
+        {
+            return true;
+        }
+
+        try
+        {
+            IDatabase redis = _redis.GetDatabase();
+
+            return await redis.StringSetAsync(
+                $"fleet:manualrun:{jobId}",
+                "1",
+                TimeSpan.FromSeconds(cooldownSeconds),
+                When.NotExists).ConfigureAwait(false);
+        }
+        catch (RedisException ex)
+        {
+            _logger.LogWarning(
+                ex, "FleetAdmin: could not check the on-demand run cooldown for {JobId}; allowing the run", jobId);
+
+            return true;
+        }
+    }
+
+    /// <summary>
+    /// Describes the authenticated peer for the audit trail. The client-certificate subject is the
+    /// only identity the fleet itself verified; the operator identity that rides in the request is
+    /// asserted by the caller and cannot stand alone.
+    /// </summary>
+    private static string DescribeCaller(ServerCallContext context)
+    {
+        try
+        {
+            string? subject = context.GetHttpContext()?.Connection.ClientCertificate?.Subject;
+
+            if (string.IsNullOrEmpty(subject) == false)
+            {
+                return subject;
+            }
+        }
+        catch (InvalidOperationException)
+        {
+            // GetHttpContext throws rather than returning null when the call is not hosted by
+            // ASP.NET Core, which is the case for a directly-constructed context in the tests.
+        }
+
+        return context.Peer ?? "unknown";
+    }
+
+    private static string Truncate(string value, int maxLength)
+    {
+        if (value.Length <= maxLength)
+        {
+            return value;
+        }
+
+        return value[..maxLength];
     }
 
     private static FleetRecurringJob MapRecurringJob(RecurringJobSnapshot snapshot)
@@ -982,9 +1147,9 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
         return job;
     }
 
-    private static FleetHangfireServer MapServer(ServerDto server)
+    private static FleetJobWorker MapWorker(ServerDto server)
     {
-        FleetHangfireServer mapped = new()
+        FleetJobWorker mapped = new()
         {
             Name = server.Name ?? "",
             WorkersCount = server.WorkersCount,
@@ -995,9 +1160,10 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
             mapped.Queues.AddRange(server.Queues);
         }
 
-        // Hangfire substitutes DateTime.MinValue when a server reports no start time. That value
-        // is DateTimeKind.Unspecified and outside Timestamp's range, so converting it throws;
-        // leave the field unset instead.
+        // Hangfire substitutes DateTime.MinValue when a server reports no start time. A year-1
+        // start time is meaningless to an operator, so leave the field unset rather than rendering
+        // it. (It would not throw — ToTimestamp forces Kind to Utc and DateTime.MinValue is exactly
+        // protobuf's minimum — but it would still be noise.)
         if (server.StartedAt > DateTime.MinValue)
         {
             mapped.StartedAt = ToTimestamp(server.StartedAt);
@@ -1021,12 +1187,14 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
         {
             details = monitoring.JobDetails(jobId);
         }
-        catch (Exception ex) when ((ex is FormatException) || (ex is OverflowException))
+        catch (Exception)
         {
-            // The Postgres monitoring API parses the job id with Convert.ToInt64 and throws on
-            // anything non-numeric. One malformed id from an old audit row must not take down the
-            // whole jobs page. The in-memory storage used by tests returns null instead, so this
-            // path is invisible to the functional suite — do not delete it for looking unreachable.
+            // One bad id must not take down the whole jobs page. Deliberately broad: the Postgres
+            // monitoring API parses the id with Convert.ToInt64 (FormatException on anything
+            // non-numeric) and then builds its property dictionary with ToDictionary, which throws
+            // on duplicate job-parameter rows the schema's non-unique index permits. The in-memory
+            // storage used by tests returns null and has neither path, so none of this is
+            // reachable from the functional suite — do not delete it for looking unreachable.
             run.Retained = false;
 
             return run;
@@ -1104,6 +1272,8 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
             RecurringJobHealth.Disabled => FleetRecurringJobStatus.Disabled,
             RecurringJobHealth.Missing => FleetRecurringJobStatus.Missing,
             RecurringJobHealth.LoadFailed => FleetRecurringJobStatus.LoadFailed,
+            RecurringJobHealth.SchedulingError => FleetRecurringJobStatus.SchedulingError,
+            RecurringJobHealth.Unknown => FleetRecurringJobStatus.Unspecified,
             _ => FleetRecurringJobStatus.Unspecified,
         };
     }

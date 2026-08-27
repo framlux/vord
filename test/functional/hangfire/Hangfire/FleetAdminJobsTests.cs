@@ -3,8 +3,10 @@
 // See LICENSE for details.
 
 using Framlux.FleetManagement.Services.Core.Hangfire;
+using Framlux.FleetManagement.Services.Core.Infrastructure;
 using Framlux.Vord.BillingGrpc;
 using Grpc.Core;
+using Microsoft.Extensions.DependencyInjection;
 
 namespace Framlux.FleetManagement.FunctionalTest.Hangfire;
 
@@ -13,10 +15,12 @@ namespace Framlux.FleetManagement.FunctionalTest.Hangfire;
 /// server, which is the only place the nine registrations and a live server row both exist.
 /// </summary>
 /// <remarks>
-/// Runs serially. Hangfire's DI registration resolves the process-global JobStorage.Current, and
-/// the test factory resets it per host, so two of these classes running concurrently would read
-/// each other's storage. Worse, a concurrent RegisterAll recomputes NextExecution for the very
-/// job whose schedule stability one of these tests asserts.
+/// Runs serially, as does every other class in this project that builds a test host. Hangfire's DI
+/// registration resolves the process-global JobStorage.Current, which each host's AddHangfire call
+/// reassigns, so two hosts alive at once can read each other's storage. Worse, a concurrent
+/// RegisterAll recomputes NextExecution for the very job whose schedule stability one of these
+/// tests asserts. A keyless [NotInParallel] only serialises against other keyless ones, so the
+/// attribute has to be on all of them, not just this class.
 /// </remarks>
 [NotInParallel]
 public sealed class FleetAdminJobsTests
@@ -83,7 +87,7 @@ public sealed class FleetAdminJobsTests
             response = await fixture.Service.ListRecurringJobs(
                 new ListRecurringJobsRequest(), fixture.CallContext);
 
-            if (response.Servers.Count > 0)
+            if (response.Workers.Count > 0)
             {
                 break;
             }
@@ -91,7 +95,7 @@ public sealed class FleetAdminJobsTests
             await Task.Delay(50);
         }
 
-        await Assert.That(response.Servers.Count).IsGreaterThan(0);
+        await Assert.That(response.Workers.Count).IsGreaterThan(0);
     }
 
     [Test]
@@ -196,6 +200,54 @@ public sealed class FleetAdminJobsTests
         // raw stored value carries its quotes; the reader strips them.
         await Assert.That(run.RecurringJobId).IsEqualTo(RecurringJobIds.TenantPurge);
         await Assert.That(run.TriggeredBy).IsEqualTo("ops@framlux.io");
+    }
+
+    [Test]
+    public async Task RunRecurringJobNow_EnqueuesTheJobTypeThatWasAskedFor()
+    {
+        // Intent: the operator picked a specific job. Resolving the wrong definition would enqueue
+        // real work against the production fleet while reporting success — the run id and the
+        // stamped parameters would all look correct, so nothing else in this suite would notice.
+        await using FleetAdminJobsFixture fixture = await FleetAdminJobsFixture.CreateAsync();
+
+        RunRecurringJobNowRequest request = new()
+        {
+            JobId = RecurringJobIds.PartitionManagement,
+            TriggeredBy = "ops@framlux.io",
+        };
+
+        RunRecurringJobNowResponse response = await fixture.Service.RunRecurringJobNow(
+            request, fixture.CallContext);
+
+        global::Hangfire.JobStorage storage =
+            fixture.Factory.Services.GetRequiredService<global::Hangfire.JobStorage>();
+        global::Hangfire.Storage.Monitoring.JobDetailsDto details =
+            storage.GetMonitoringApi().JobDetails(response.EnqueuedJobId);
+
+        await Assert.That(details.Job.Type).IsEqualTo(typeof(PartitionManagementJob));
+    }
+
+    [Test]
+    public async Task RunRecurringJobNow_SecondRunWithinCooldown_ThrowsFailedPrecondition()
+    {
+        // Intent: every recurring job holds a DisableConcurrentExecution lock that blocks a worker
+        // thread for up to its timeout — half an hour for the two long jobs — against ten workers
+        // on one node. Without a cooldown, a few impatient clicks during an incident park most of
+        // the pool and starve the per-minute jobs on the critical queue.
+        await using FleetAdminJobsFixture fixture = await FleetAdminJobsFixture.CreateAsync();
+
+        RunRecurringJobNowRequest request = new()
+        {
+            JobId = RecurringJobIds.TenantPurge,
+            TriggeredBy = "ops@framlux.io",
+        };
+
+        await fixture.Service.RunRecurringJobNow(request, fixture.CallContext);
+
+        RpcException? exception = await Assert.ThrowsAsync<RpcException>(
+            async () => await fixture.Service.RunRecurringJobNow(request, fixture.CallContext));
+
+        await Assert.That(exception!.StatusCode).IsEqualTo(StatusCode.FailedPrecondition);
     }
 
     [Test]

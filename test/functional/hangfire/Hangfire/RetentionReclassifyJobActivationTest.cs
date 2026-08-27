@@ -16,6 +16,12 @@ namespace Framlux.FleetManagement.FunctionalTest.Hangfire;
 /// honoured if the job type itself is registered for constructor injection — a wiring detail that no
 /// unit test can catch because unit tests construct the job by hand.
 /// </summary>
+/// <remarks>
+/// Runs serially with every other class in this project that builds a test host. Hangfire's DI
+/// registration resolves the process-global JobStorage.Current, which each host's AddHangfire call
+/// reassigns, so two hosts alive at once can read each other's storage.
+/// </remarks>
+[NotInParallel]
 public sealed class RetentionReclassifyJobActivationTest
 {
     [Test]

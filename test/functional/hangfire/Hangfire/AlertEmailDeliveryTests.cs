@@ -27,6 +27,12 @@ namespace Framlux.FleetManagement.FunctionalTest.Hangfire;
 /// registered <see cref="InMemoryEmailService"/> records the send so the test can assert the
 /// recipient, subject, and host link without touching the real Resend transport.
 /// </summary>
+/// <remarks>
+/// Runs serially with every other class in this project that builds a test host. Hangfire's DI
+/// registration resolves the process-global JobStorage.Current, which each host's AddHangfire call
+/// reassigns, so two hosts alive at once can read each other's storage.
+/// </remarks>
+[NotInParallel]
 public sealed class AlertEmailDeliveryTests
 {
     [Test]

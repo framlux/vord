@@ -70,32 +70,41 @@ public sealed class RecurringJobInspector
     }
 
     /// <summary>
-    /// Returns the job definition stored for a recurring job, or null when the job is absent from
-    /// storage or its payload cannot be deserialised. Callers enqueue this rather than resolving a
-    /// type themselves, so there is no second registry to drift from
-    /// <see cref="RecurringJobRegistry"/>.
+    /// Resolves a recurring job for an on-demand run. Callers enqueue the returned definition
+    /// rather than resolving a type themselves, so there is no second registry to drift from
+    /// <see cref="RecurringJobRegistry"/>. The status distinguishes a job that is absent from one
+    /// whose payload will not deserialise, so the caller can say which it was.
     /// </summary>
     /// <param name="recurringJobId">The recurring job id to resolve.</param>
-    /// <returns>The stored job definition, or null.</returns>
-    public Job? GetJobDefinition(string recurringJobId)
+    /// <returns>The stored definition with <see cref="RecurringJobHealth.Scheduled"/>, or a null
+    /// definition with the reason it could not be resolved.</returns>
+    public RecurringJobRunTarget ResolveForRun(string recurringJobId)
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(recurringJobId);
 
+        // The single-id overload reads only the hash for this job. The parameterless one enumerates
+        // every recurring job and resolves each one's last-run state, so an unrelated job's
+        // unreadable state would abort the run the operator actually asked for.
         using IStorageConnection connection = _storage.GetConnection();
-        RecurringJobDto? dto = connection.GetRecurringJobs()
+        RecurringJobDto? dto = connection.GetRecurringJobs(new[] { recurringJobId })
             .FirstOrDefault(candidate => string.Equals(candidate.Id, recurringJobId, StringComparison.Ordinal));
 
         if (dto is null)
         {
-            return null;
+            return new RecurringJobRunTarget(null, RecurringJobHealth.Missing);
         }
 
         if (dto.Removed)
         {
-            return null;
+            return new RecurringJobRunTarget(null, RecurringJobHealth.Missing);
         }
 
-        return dto.Job;
+        if ((dto.LoadException is not null) || (dto.Job is null))
+        {
+            return new RecurringJobRunTarget(null, RecurringJobHealth.LoadFailed);
+        }
+
+        return new RecurringJobRunTarget(dto.Job, RecurringJobHealth.Scheduled);
     }
 
     private static RecurringJobSnapshot Classify(string id, RecurringJobDto? dto, DateTime now)
@@ -145,6 +154,18 @@ public sealed class RecurringJobInspector
         if (dto.NextExecution.Value < (now - OverdueGrace))
         {
             return RecurringJobHealth.Overdue;
+        }
+
+        // Keyed on Error rather than RetryAttempt, which looks like the more natural signal but is
+        // not. RecurringJobManager.TriggerJob — the button on Hangfire's own dashboard — clears
+        // Error via ScheduleNext while leaving RetryAttempt at its last value, and only a
+        // successful scheduled pass resets the counter. Classifying on RetryAttempt would report a
+        // scheduling failure on a perfectly healthy job until its next occurrence, which for a
+        // daily cron is most of a day. Disable() likewise leaves RetryAttempt at 5 forever, which
+        // is why the null-NextExecution branch above has to stay ahead of this one.
+        if (string.IsNullOrEmpty(dto.Error) == false)
+        {
+            return RecurringJobHealth.SchedulingError;
         }
 
         return RecurringJobHealth.Scheduled;

@@ -489,6 +489,10 @@ enum FleetRecurringJobStatus {
   FLEET_RECURRING_JOB_STATUS_DISABLED = 3;
   FLEET_RECURRING_JOB_STATUS_MISSING = 4;
   FLEET_RECURRING_JOB_STATUS_LOAD_FAILED = 5;
+  // The SCHEDULER could not create this job's background job on its last pass and is retrying:
+  // Hangfire retries five times at its 15-second polling interval, then disables the schedule.
+  // This is NOT "the job ran and threw" — that shows up in last_job_state and failed_job_count.
+  FLEET_RECURRING_JOB_STATUS_SCHEDULING_ERROR = 6;
 }
 
 message FleetRecurringJob {
@@ -510,7 +514,7 @@ message FleetRecurringJob {
   FleetRecurringJobStatus status = 10;
 }
 
-message FleetHangfireServer {
+message FleetJobWorker {
   string name = 1;
   int32 workers_count = 2;
   // Unset when Hangfire reports no start time.
@@ -540,11 +544,15 @@ message ListRecurringJobsRequest {
 
 message ListRecurringJobsResponse {
   repeated FleetRecurringJob jobs = 1;
-  repeated FleetHangfireServer servers = 2;
+  repeated FleetJobWorker workers = 2;
   int64 failed_job_count = 3;
   repeated FleetManualRun manual_runs = 4;
   // The fleet's clock, so callers render ages against the clock that computed the statuses.
   google.protobuf.Timestamp server_time = 5;
+  // Names of sections that could not be read from storage: "failed_count", "jobs", "workers".
+  // Their fields carry defaults, so a caller MUST render these as unknown rather than as zero or
+  // empty — a confident "0 failed jobs" when the query failed is worse than saying nothing.
+  repeated string unavailable_sections = 6;
 }
 
 message RunRecurringJobNowRequest {

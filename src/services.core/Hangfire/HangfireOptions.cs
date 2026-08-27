@@ -31,4 +31,20 @@ public sealed class HangfireOptions
     /// </summary>
     [Range(1, 1440)]
     public int InvisibilityTimeoutMinutes { get; set; } = 120;
+
+    /// <summary>
+    /// How long (in seconds) after an operator runs a recurring job on demand before the same job
+    /// may be run on demand again. Defaults to 60.
+    /// </summary>
+    /// <remarks>
+    /// This exists to bound worker starvation, not to police intent. Every recurring job carries
+    /// <c>[DisableConcurrentExecution]</c>, whose filter blocks a worker thread for up to the job's
+    /// timeout — 1800 seconds for partition management and data-export processing — against a
+    /// default worker count of 10 on a single node. Without a cooldown, a handful of impatient
+    /// clicks during an incident parks most of the pool and starves the per-minute jobs on the
+    /// critical queue, which is a background-processing outage caused by a button. A short cooldown
+    /// defeats that accident; it does not stop an operator who deliberately spaces runs out, which
+    /// is a considered choice rather than a slip.
+    /// </remarks>
+    public int ManualRunCooldownSeconds { get; set; } = 60;
 }

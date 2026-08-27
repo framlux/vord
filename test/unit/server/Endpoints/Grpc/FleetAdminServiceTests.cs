@@ -17,6 +17,7 @@ using Grpc.Core;
 using Grpc.Core.Testing;
 using Hangfire;
 using Hangfire.Common;
+using Framlux.FleetManagement.Services.Core.Hangfire;
 using Hangfire.InMemory;
 using Hangfire.States;
 using Microsoft.AspNetCore.DataProtection;
@@ -469,7 +470,8 @@ public sealed class FleetAdminServiceTests
         IServiceScopeFactory scopeFactory,
         StatusCode? rejectWith = null,
         IOidcSecretProtector? oidcSecretProtector = null,
-        IConnectionMultiplexer? redis = null)
+        IConnectionMultiplexer? redis = null,
+        IBackgroundJobClientV2? backgroundJobs = null)
     {
         ILogger<FleetAdminService> logger = Substitute.For<ILogger<FleetAdminService>>();
         IOidcSecretProtector resolvedProtector = oidcSecretProtector
@@ -484,7 +486,8 @@ public sealed class FleetAdminServiceTests
             resolvedRedis,
             new InMemoryStorage(),
             TimeProvider.System,
-            Substitute.For<IBackgroundJobClientV2>());
+            backgroundJobs ?? Substitute.For<IBackgroundJobClientV2>(),
+            Options.Create(new HangfireOptions()));
     }
 
     private static IInternalCallerAuthorizer CreateAuthorizer(StatusCode? rejectWith)
@@ -550,6 +553,48 @@ public sealed class FleetAdminServiceTests
     }
 
     // ── Caller authorisation ──
+
+    /// <summary>
+    /// The recurring-job read must consult the authorizer before touching Hangfire storage.
+    /// </summary>
+    [Test]
+    public async Task ListRecurringJobs_AuthorizerRejects_Throws()
+    {
+        IServiceScopeFactory scopeFactory = Substitute.For<IServiceScopeFactory>();
+        FleetAdminService service = CreateFleetAdminService(scopeFactory, rejectWith: StatusCode.PermissionDenied);
+        ServerCallContext context = CreateContext();
+
+        RpcException? exception = await Assert.ThrowsAsync<RpcException>(
+            async () => await service.ListRecurringJobs(new ListRecurringJobsRequest(), context));
+
+        await Assert.That(exception!.StatusCode).IsEqualTo(StatusCode.PermissionDenied);
+    }
+
+    /// <summary>
+    /// The on-demand run is the only mutating background-infrastructure RPC, so its authorisation
+    /// check must run before the allow-list validation and before anything is enqueued.
+    /// </summary>
+    [Test]
+    public async Task RunRecurringJobNow_AuthorizerRejects_ThrowsAndEnqueuesNothing()
+    {
+        IServiceScopeFactory scopeFactory = Substitute.For<IServiceScopeFactory>();
+        IBackgroundJobClientV2 backgroundJobs = Substitute.For<IBackgroundJobClientV2>();
+        FleetAdminService service = CreateFleetAdminService(
+            scopeFactory, rejectWith: StatusCode.PermissionDenied, backgroundJobs: backgroundJobs);
+        ServerCallContext context = CreateContext();
+
+        RunRecurringJobNowRequest request = new()
+        {
+            JobId = RecurringJobIds.TenantPurge,
+            TriggeredBy = "ops@framlux.io",
+        };
+
+        RpcException? exception = await Assert.ThrowsAsync<RpcException>(
+            async () => await service.RunRecurringJobNow(request, context));
+
+        await Assert.That(exception!.StatusCode).IsEqualTo(StatusCode.PermissionDenied);
+        backgroundJobs.DidNotReceiveWithAnyArgs().Create(default!, default!, default!);
+    }
 
     /// <summary>
     /// When no permitted client subject is configured, RPC methods must throw Unavailable
