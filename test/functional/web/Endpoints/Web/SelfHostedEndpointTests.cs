@@ -572,7 +572,7 @@ public sealed class SelfHostedEndpointTests
     public async Task GetTenants_AsGlobalAdminInSelfHosted_ReturnsEveryTenant()
     {
         // The fleet-local admin console is the whole point of this deployment, and its tenant tab
-        // reads this route. Scoping it away here would empty that tab.
+        // reads this route.
         using SelfHostedTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
         (int tenantId, int userId) = await SeedTenantWithSubscription(db, SubscriptionTier.Free, isGlobalAdmin: true);

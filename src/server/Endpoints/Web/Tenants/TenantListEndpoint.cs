@@ -5,10 +5,8 @@
 using System.Security.Claims;
 using FastEndpoints;
 using Framlux.FleetManagement.Services.Core.Auth;
-using Framlux.FleetManagement.Services.Core.Deployment;
 using Framlux.FleetManagement.Services.Core.Handlers;
 using Framlux.FleetManagement.Services.Core.Infrastructure;
-using Framlux.FleetManagement.Services.Core.Models.Tenants;
 
 namespace Framlux.FleetManagement.Server.Endpoints.Web.Tenants;
 
@@ -17,15 +15,13 @@ namespace Framlux.FleetManagement.Server.Endpoints.Web.Tenants;
 /// </summary>
 public sealed class TenantListEndpoint : EndpointWithoutRequest<ApiResponse<List<TenantDto>>>
 {
-    private readonly DeploymentMode _deploymentMode;
     private readonly TenantHandler _handler;
 
     /// <summary>
     /// Creates a new instance of the <see cref="TenantListEndpoint"/> class.
     /// </summary>
-    public TenantListEndpoint(DeploymentMode deploymentMode, TenantHandler handler)
+    public TenantListEndpoint(TenantHandler handler)
     {
-        _deploymentMode = deploymentMode;
         _handler = handler;
     }
 
@@ -39,12 +35,12 @@ public sealed class TenantListEndpoint : EndpointWithoutRequest<ApiResponse<List
     /// <inheritdoc/>
     public override async Task HandleAsync(CancellationToken ct)
     {
-        // Global admins see all tenants — but only where a fleet-local administration console
-        // exists to show them. This route is also the ordinary tenant switcher, so it stays open
-        // in both modes; it is the cross-tenant escalation that is scoped away in SaaS, where the
-        // whole-fleet view belongs to the internal operator application. Without this the admin
-        // page's tenant list survives the removal of the page as a plain GET.
-        bool isGlobalAdmin = AuthClaims.IsUserGlobalAdmin(User) && _deploymentMode.IsSelfHosted;
+        // Global admins see all tenants, in either deployment shape. Scoping this by deployment
+        // mode was tried and reverted: it withheld the roster here while GET /tenants/{id} still
+        // served any tenant by id, and ids are sequential, so it bought no containment and only
+        // read as though it had. Narrowing the global-admin surface means doing it across the
+        // detail and create routes and the policy bypass in AllowedRolesHandler, not one route.
+        bool isGlobalAdmin = AuthClaims.IsUserGlobalAdmin(User);
 
         List<int> tenantIds = User.FindAll(ClaimTypes.Role)
             .Select(c => c.Value.Split(':'))
