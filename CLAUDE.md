@@ -162,8 +162,9 @@ disagree with the ref that built it.
 | `billinggrpc-v<semver>` (e.g. `billinggrpc-v1.18.0`) | `Framlux.Vord.BillingGrpc` — the internal control-plane contract in `src/billing-grpc/protos` — packed with `-p:Version` from the tag and pushed to nuget.org (skipped with a warning while `NUGET_ORG_API_KEY` is unset) and to GitHub Packages. | Any container, the agent, or the agent contracts in `src/grpc` |
 
 There is no tag prefix for the agent contracts in `src/grpc`, and there must not be one: nothing
-outside this repository consumes them as a package. `Framlux.Vord.BillingGrpc` 1.17.0 is already
-published, so the next control-plane release is `billinggrpc-v1.18.0` or above.
+outside this repository consumes them as a package. Published `Framlux.Vord.BillingGrpc` versions are
+immutable, so read the highest existing tag before choosing the next one — `git tag -l 'billinggrpc-v*' | sort -V | tail -1`
+— rather than trusting a number written here, which rots the moment someone releases without editing this line.
 
 **Agent and server versions are independent.** The agent used to inherit `src/server/server.csproj`'s
 `<Version>`; it no longer does. Bump either on its own cadence. The two version lines share a
