@@ -34,10 +34,22 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
     private const int DefaultPageSize = 50;
     private const int MaxPageSize = 100;
     private const int MaxEnrichJobIds = 20;
+    private const int MaxProcessingJobs = 25;
+    private const int ProcessingScanPageSize = 200;
+    private const int MaxProcessingScanPages = 5;
     private const int MaxTriggeredByLength = 256;
     private const string FailedCountSection = "failed_count";
     private const string JobsSection = "jobs";
     private const string WorkersSection = "workers";
+    private const string ProcessingSection = "processing";
+
+    /// <summary>
+    /// How long the whole in-flight section may spend on its one-storage-read-per-row attribution
+    /// lookups. The sole caller gives the entire RPC ten seconds, and this section is the only
+    /// part of it whose cost scales with how badly the fleet is misbehaving; without a ceiling a
+    /// saturated database turns a slow panel into no panel at all.
+    /// </summary>
+    private static readonly TimeSpan ProcessingAttributionBudget = TimeSpan.FromSeconds(2);
 
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly IInternalCallerAuthorizer _callerAuthorizer;
@@ -879,7 +891,8 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
 
     /// <summary>
     /// Lists every recurring job this build knows about with its health, plus worker heartbeats,
-    /// the fleet-wide failed-job count, and the outcomes of any manual runs the caller asks about.
+    /// the work in flight right now, the fleet-wide failed-job count, and the outcomes of any
+    /// manual runs the caller asks about.
     /// </summary>
     public override Task<ListRecurringJobsResponse> ListRecurringJobs(
         ListRecurringJobsRequest request, ServerCallContext context)
@@ -894,7 +907,7 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
         };
 
         // Each block is isolated. This view is what an operator opens when the platform is already
-        // misbehaving, so a storage fault in one section must not cost them the other two — losing
+        // misbehaving, so a storage fault in one section must not cost them the others — losing
         // the worker heartbeat because a statistics query failed would hide the headline signal.
         // Sections that could not be read are named so the panel can say "unknown" rather than
         // rendering a confident zero.
@@ -937,8 +950,48 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
             response.UnavailableSections.Add(WorkersSection);
         }
 
+        try
+        {
+            // An empty list here is the healthy steady state, so a swallowed failure would read as
+            // "the fleet is idle" — the one answer an operator must never be given wrongly during
+            // an incident. Hence the section name on failure, same as the others.
+            long processingCount = monitoring.ProcessingCount();
+
+            DateTimeOffset attributionDeadline =
+                _timeProvider.GetUtcNow().Add(ProcessingAttributionBudget);
+
+            foreach (KeyValuePair<string, ProcessingJobDto> entry in
+                ScanOldestProcessingJobs(monitoring, context.CancellationToken))
+            {
+                // The job id is the key of Hangfire's JobList, not a property of the DTO.
+                response.ProcessingJobs.Add(MapProcessingJob(
+                    monitoring, entry.Key, entry.Value, attributionDeadline, context.CancellationToken));
+            }
+
+            // The count and the list are two independent storage reads, so the fleet can pick up
+            // work between them and leave a total smaller than the rows it is meant to describe.
+            // The list is the thing the operator can see, so it wins: a headline of "0 running"
+            // above five visible rows is worse than a count that lags by a moment.
+            response.ProcessingJobCount = Math.Max(processingCount, response.ProcessingJobs.Count);
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "FleetAdmin: could not read in-flight Hangfire jobs");
+            response.ProcessingJobs.Clear();
+            response.ProcessingJobCount = 0;
+            response.UnavailableSections.Add(ProcessingSection);
+        }
+
         foreach (string jobId in request.EnrichJobIds.Take(MaxEnrichJobIds))
         {
+            if (context.CancellationToken.IsCancellationRequested)
+            {
+                // The caller has already given up. Every further id is another round-trip against
+                // a database nobody is waiting on, which is exactly the wrong thing to do to the
+                // storage that is probably the reason they gave up.
+                break;
+            }
+
             response.ManualRuns.Add(MapManualRun(monitoring, jobId));
         }
 
@@ -1173,6 +1226,132 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
         {
             mapped.Heartbeat = ToTimestamp(server.Heartbeat.Value);
         }
+
+        return mapped;
+    }
+
+    /// <summary>
+    /// Reads the in-flight jobs and keeps the ones that have been running longest.
+    /// </summary>
+    /// <remarks>
+    /// Hangfire's monitoring API does not document an order for this list, and the PostgreSQL
+    /// storage returns the most recently created jobs first. Keeping the first page would
+    /// therefore drop the six-hour job and retain twenty-five rows seconds old — precisely
+    /// inverting what this section exists to show. So the window is scanned, sorted oldest-first
+    /// and truncated here rather than at the query. The scan is bounded because it is only ever
+    /// read during an incident: the processing set is bounded by worker slots in a healthy fleet,
+    /// and a fleet with more than <see cref="MaxProcessingScanPages"/> pages of it has already
+    /// told the operator what they needed to know through the count alone.
+    /// </remarks>
+    private static List<KeyValuePair<string, ProcessingJobDto>> ScanOldestProcessingJobs(
+        IMonitoringApi monitoring, CancellationToken ct)
+    {
+        List<KeyValuePair<string, ProcessingJobDto>> scanned = [];
+
+        for (int page = 0; page < MaxProcessingScanPages; page++)
+        {
+            JobList<ProcessingJobDto> current =
+                monitoring.ProcessingJobs(page * ProcessingScanPageSize, ProcessingScanPageSize);
+
+            scanned.AddRange(current);
+
+            if ((current.Count < ProcessingScanPageSize) || ct.IsCancellationRequested)
+            {
+                break;
+            }
+        }
+
+        // A row Hangfire reports without a start time cannot be ranked by age, so it sorts last:
+        // it is the least informative answer to "what has been running longest".
+        return scanned
+            .OrderBy(entry => entry.Value.StartedAt ?? DateTime.MaxValue)
+            .Take(MaxProcessingJobs)
+            .ToList();
+    }
+
+    /// <summary>
+    /// Maps one in-flight job, resolving its recurring-job attribution from the job's parameters.
+    /// </summary>
+    /// <remarks>
+    /// The attribution costs one extra storage read per job, which is why the caller caps the page
+    /// it enumerates and passes a deadline: this runs against the same database that is probably
+    /// the reason the operator is looking. A failed, skipped or budget-exhausted read degrades
+    /// that one row to Unknown — reporting NotRecurring would assert something the storage never
+    /// told us.
+    /// </remarks>
+    private FleetProcessingJob MapProcessingJob(
+        IMonitoringApi monitoring,
+        string jobId,
+        ProcessingJobDto processing,
+        DateTimeOffset attributionDeadline,
+        CancellationToken ct)
+    {
+        FleetProcessingJob mapped = new()
+        {
+            JobId = jobId,
+            ServerId = processing.ServerId ?? "",
+            InProcessingState = processing.InProcessingState,
+            Attribution = FleetProcessingAttribution.Unknown,
+        };
+
+        // Job is null whenever the payload failed to deserialise, and LoadException then carries
+        // the reason. The job is still genuinely running, so the row stays.
+        if (processing.Job is not null)
+        {
+            mapped.JobName = $"{processing.Job.Type.Name}.{processing.Job.Method.Name}";
+            mapped.Queue = processing.Job.Queue ?? "";
+        }
+
+        if (processing.LoadException is not null)
+        {
+            mapped.LoadError = processing.LoadException.Message;
+        }
+
+        if (processing.StartedAt.HasValue)
+        {
+            mapped.StartedAt = ToTimestamp(processing.StartedAt.Value);
+        }
+
+        if (ct.IsCancellationRequested || (_timeProvider.GetUtcNow() >= attributionDeadline))
+        {
+            // Out of budget, so the remaining rows ship unattributed. An operator who can see the
+            // runaway job without knowing which schedule produced it is far better served than one
+            // whose whole request tripped the client deadline and returned nothing.
+            return mapped;
+        }
+
+        JobDetailsDto? details;
+
+        try
+        {
+            details = monitoring.JobDetails(jobId);
+        }
+        catch (Exception)
+        {
+            // Deliberately broad, for the same reasons MapManualRun is: the PostgreSQL monitoring
+            // API throws on ids it cannot parse and on the duplicate job-parameter rows its schema
+            // permits. One unreadable row must not cost the operator the rest of the page.
+            return mapped;
+        }
+
+        if (details?.Properties is null)
+        {
+            return mapped;
+        }
+
+        string recurringJobId = ReadJobParameter(details.Properties, "RecurringJobId");
+
+        if (string.IsNullOrEmpty(recurringJobId))
+        {
+            // The parameters were read and carry no link: a fan-out child such as the per-tenant
+            // health sweep, or on-demand work like a data export. This is a fact, not a gap.
+            mapped.Attribution = FleetProcessingAttribution.NotRecurring;
+
+            return mapped;
+        }
+
+        mapped.RecurringJobId = recurringJobId;
+        mapped.Attribution = FleetProcessingAttribution.Recurring;
 
         return mapped;
     }

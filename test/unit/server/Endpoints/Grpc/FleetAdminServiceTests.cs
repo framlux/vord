@@ -2,6 +2,7 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
+using System.Reflection;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
@@ -476,7 +477,8 @@ public sealed class FleetAdminServiceTests
         IConnectionMultiplexer? redis = null,
         IBackgroundJobClientV2? backgroundJobs = null,
         JobStorage? storage = null,
-        HangfireOptions? hangfireOptions = null)
+        HangfireOptions? hangfireOptions = null,
+        TimeProvider? timeProvider = null)
     {
         ILogger<FleetAdminService> logger = Substitute.For<ILogger<FleetAdminService>>();
         IOidcSecretProtector resolvedProtector = oidcSecretProtector
@@ -490,7 +492,7 @@ public sealed class FleetAdminServiceTests
             logger,
             resolvedRedis,
             storage ?? new InMemoryStorage(),
-            TimeProvider.System,
+            timeProvider ?? TimeProvider.System,
             backgroundJobs ?? Substitute.For<IBackgroundJobClientV2>(),
             Options.Create(hangfireOptions ?? new HangfireOptions()));
     }
@@ -670,15 +672,14 @@ public sealed class FleetAdminServiceTests
 
     /// <summary>
     /// The jobs view is what an operator opens when the platform is already misbehaving. A storage
-    /// fault in one section must not cost them the other two, and the section that failed has to
+    /// fault in one section must not cost them the others, and the section that failed has to
     /// name itself so the panel can say "unknown" rather than render a confident zero.
     /// </summary>
     [Test]
     public async Task ListRecurringJobs_StatisticsUnavailable_NamesTheSectionAndKeepsTheRest()
     {
-        IMonitoringApi monitoring = Substitute.For<IMonitoringApi>();
+        IMonitoringApi monitoring = CreateHealthyMonitoring();
         monitoring.GetStatistics().Throws(new InvalidOperationException("statistics unavailable"));
-        monitoring.Servers().Returns(new List<ServerDto>());
 
         ListRecurringJobsResponse response = await ListAgainstAsync(monitoring);
 
@@ -694,8 +695,7 @@ public sealed class FleetAdminServiceTests
     [Test]
     public async Task ListRecurringJobs_WorkersUnavailable_NamesTheSection()
     {
-        IMonitoringApi monitoring = Substitute.For<IMonitoringApi>();
-        monitoring.GetStatistics().Returns(new StatisticsDto());
+        IMonitoringApi monitoring = CreateHealthyMonitoring();
         monitoring.Servers().Throws(new InvalidOperationException("servers unavailable"));
 
         ListRecurringJobsResponse response = await ListAgainstAsync(monitoring);
@@ -711,10 +711,7 @@ public sealed class FleetAdminServiceTests
     [Test]
     public async Task ListRecurringJobs_MoreEnrichIdsThanTheCap_ResolvesOnlyTheCap()
     {
-        IMonitoringApi monitoring = Substitute.For<IMonitoringApi>();
-        monitoring.GetStatistics().Returns(new StatisticsDto());
-        monitoring.Servers().Returns(new List<ServerDto>());
-        monitoring.JobDetails(Arg.Any<string>()).Returns((JobDetailsDto?)null);
+        IMonitoringApi monitoring = CreateHealthyMonitoring();
 
         ListRecurringJobsRequest request = new();
 
@@ -736,9 +733,7 @@ public sealed class FleetAdminServiceTests
     [Test]
     public async Task ListRecurringJobs_EnrichLookupThrows_ReportsTheRunAsNotRetained()
     {
-        IMonitoringApi monitoring = Substitute.For<IMonitoringApi>();
-        monitoring.GetStatistics().Returns(new StatisticsDto());
-        monitoring.Servers().Returns(new List<ServerDto>());
+        IMonitoringApi monitoring = CreateHealthyMonitoring();
         monitoring.JobDetails(Arg.Any<string>()).Throws(new FormatException("not a number"));
 
         ListRecurringJobsRequest request = new();
@@ -749,8 +744,367 @@ public sealed class FleetAdminServiceTests
         await Assert.That(response.ManualRuns.Single().Retained).IsFalse();
     }
 
+    // ── Recurring-job read: work in flight ──
+
+    /// <summary>
+    /// The in-flight list answers the first question of an incident: is the queue wedged or is
+    /// something genuinely running long? That needs the identity of the work, the worker running
+    /// it and when it started — a start time, not a duration, so ages track server_time.
+    /// </summary>
+    [Test]
+    public async Task ListRecurringJobs_ProcessingJobs_ReportsWhatIsRunningAndWhere()
+    {
+        DateTime startedAt = new(2026, 8, 28, 9, 30, 0, DateTimeKind.Utc);
+
+        IMonitoringApi monitoring = CreateHealthyMonitoring();
+        monitoring.ProcessingCount().Returns(3);
+        monitoring.ProcessingJobs(Arg.Any<int>(), Arg.Any<int>())
+            .Returns(ProcessingList(("101", CreateProcessing("worker-a", startedAt, queue: "critical"))));
+
+        ListRecurringJobsResponse response = await ListAgainstAsync(monitoring);
+
+        FleetProcessingJob running = response.ProcessingJobs.Single();
+
+        await Assert.That(running.JobId).IsEqualTo("101");
+        await Assert.That(running.JobName).IsEqualTo("SeedProbeJob.RunAsync");
+        await Assert.That(running.Queue).IsEqualTo("critical");
+        await Assert.That(running.ServerId).IsEqualTo("worker-a");
+        await Assert.That(running.StartedAt.ToDateTime()).IsEqualTo(startedAt);
+        await Assert.That(running.InProcessingState).IsTrue();
+
+        // The list is capped, so the total has to come from storage or a busy fleet under-reports.
+        await Assert.That(response.ProcessingJobCount).IsEqualTo(3);
+        await Assert.That(response.UnavailableSections).DoesNotContain("processing");
+    }
+
+    /// <summary>
+    /// Empty is the normal healthy state for in-flight work, which makes this the one section
+    /// where a swallowed storage fault reads as "the fleet is idle". The section must name itself
+    /// and the list must be emptied, so the panel renders unknown rather than a confident nothing.
+    /// </summary>
+    [Test]
+    public async Task ListRecurringJobs_ProcessingUnavailable_NamesTheSectionAndReturnsNothing()
+    {
+        IMonitoringApi monitoring = CreateHealthyMonitoring();
+        monitoring.ProcessingCount().Returns(7);
+        monitoring.ProcessingJobs(Arg.Any<int>(), Arg.Any<int>())
+            .Throws(new InvalidOperationException("processing list unavailable"));
+
+        ListRecurringJobsResponse response = await ListAgainstAsync(monitoring);
+
+        await Assert.That(response.UnavailableSections).Contains("processing");
+        await Assert.That(response.ProcessingJobs.Count).IsEqualTo(0);
+
+        // The count is governed by the same section, so a partially-filled response would let the
+        // panel show "7 running" beside an empty list it has just been told is unknown.
+        await Assert.That(response.ProcessingJobCount).IsEqualTo(0);
+        await Assert.That(response.Workers.Count).IsEqualTo(1);
+    }
+
+    /// <summary>
+    /// A job carrying Hangfire's RecurringJobId parameter belongs to a schedule, and saying so is
+    /// what lets an operator connect a long-running row to the cron entry that produced it.
+    /// </summary>
+    [Test]
+    public async Task ListRecurringJobs_ProcessingJobFromASchedule_AttributesItToTheRecurringJob()
+    {
+        IMonitoringApi monitoring = CreateHealthyMonitoring();
+        monitoring.ProcessingJobs(Arg.Any<int>(), Arg.Any<int>())
+            .Returns(ProcessingList(("101", CreateProcessing("worker-a"))));
+        monitoring.JobDetails("101").Returns(CreateDetails(
+            new Dictionary<string, string>
+            {
+                ["RecurringJobId"] = $"\"{RecurringJobIds.TenantPurge}\"",
+            }));
+
+        ListRecurringJobsResponse response = await ListAgainstAsync(monitoring);
+
+        FleetProcessingJob running = response.ProcessingJobs.Single();
+
+        await Assert.That(running.Attribution).IsEqualTo(FleetProcessingAttribution.Recurring);
+        await Assert.That(running.RecurringJobId).IsEqualTo(RecurringJobIds.TenantPurge);
+    }
+
+    /// <summary>
+    /// Fan-out children and on-demand work have no schedule behind them and never will. That is a
+    /// fact about the job, not a gap in the read, and the two must not be conflated.
+    /// </summary>
+    [Test]
+    public async Task ListRecurringJobs_ProcessingJobWithNoSchedule_ReportsItAsNotRecurring()
+    {
+        IMonitoringApi monitoring = CreateHealthyMonitoring();
+        monitoring.ProcessingJobs(Arg.Any<int>(), Arg.Any<int>())
+            .Returns(ProcessingList(("101", CreateProcessing("worker-a"))));
+        monitoring.JobDetails("101").Returns(CreateDetails(new Dictionary<string, string>()));
+
+        ListRecurringJobsResponse response = await ListAgainstAsync(monitoring);
+
+        FleetProcessingJob running = response.ProcessingJobs.Single();
+
+        await Assert.That(running.Attribution).IsEqualTo(FleetProcessingAttribution.NotRecurring);
+        await Assert.That(running.RecurringJobId).IsEqualTo("");
+    }
+
+    /// <summary>
+    /// When the attribution read itself fails the row must survive, unattributed. Dropping it
+    /// would hide the runaway job this view exists to expose, and calling it NotRecurring would
+    /// assert something storage never said.
+    /// </summary>
+    [Test]
+    public async Task ListRecurringJobs_ProcessingJobDetailsThrow_KeepsTheRowAsUnattributed()
+    {
+        IMonitoringApi monitoring = CreateHealthyMonitoring();
+        monitoring.ProcessingJobs(Arg.Any<int>(), Arg.Any<int>())
+            .Returns(ProcessingList(("101", CreateProcessing("worker-a"))));
+        monitoring.JobDetails("101").Throws(new FormatException("not a number"));
+
+        ListRecurringJobsResponse response = await ListAgainstAsync(monitoring);
+
+        FleetProcessingJob running = response.ProcessingJobs.Single();
+
+        await Assert.That(running.Attribution).IsEqualTo(FleetProcessingAttribution.Unknown);
+        await Assert.That(running.JobId).IsEqualTo("101");
+        await Assert.That(response.UnavailableSections).DoesNotContain("processing");
+    }
+
+    /// <summary>
+    /// Hangfire's own page is bounded so a wedged fleet cannot make this a full-table read, and a
+    /// short page means there is nothing more to scan — asking for another would be a wasted
+    /// round-trip against the database the operator is already worried about.
+    /// </summary>
+    [Test]
+    public async Task ListRecurringJobs_ProcessingListShorterThanAPage_IsReadInOneQuery()
+    {
+        IMonitoringApi monitoring = CreateHealthyMonitoring();
+
+        await ListAgainstAsync(monitoring);
+
+        monitoring.Received(1).ProcessingJobs(0, 200);
+        monitoring.DidNotReceive().ProcessingJobs(Arg.Is<int>(from => from > 0), Arg.Any<int>());
+    }
+
+    /// <summary>
+    /// The cap must keep the jobs that have been running LONGEST. Hangfire's PostgreSQL storage
+    /// orders its processing page by descending job id, so simply taking that page would retain
+    /// the twenty-five newest rows and silently drop the runaway job — telling an operator that
+    /// nothing is running long is the one wrong answer this whole section exists to prevent.
+    /// </summary>
+    [Test]
+    public async Task ListRecurringJobs_MoreInFlightJobsThanTheCap_KeepsTheOnesRunningLongest()
+    {
+        DateTime baseline = new(2026, 8, 28, 9, 0, 0, DateTimeKind.Utc);
+
+        // Newest first, as the PostgreSQL storage returns them: job "0" is the six-hour straggler.
+        (string JobId, ProcessingJobDto Processing)[] newestFirst = Enumerable.Range(0, 30)
+            .Reverse()
+            .Select(i => (i.ToString(), CreateProcessing("worker-a", baseline.AddMinutes(i))))
+            .ToArray();
+
+        IMonitoringApi monitoring = CreateHealthyMonitoring();
+        monitoring.ProcessingJobs(Arg.Any<int>(), Arg.Any<int>()).Returns(ProcessingList(newestFirst));
+
+        ListRecurringJobsResponse response = await ListAgainstAsync(monitoring);
+
+        await Assert.That(response.ProcessingJobs.Count).IsEqualTo(25);
+
+        // Oldest first, so the straggler is the headline row rather than one the cap discarded.
+        await Assert.That(response.ProcessingJobs.Select(j => j.JobId).ToList())
+            .IsEquivalentTo(Enumerable.Range(0, 25).Select(i => i.ToString()).ToList());
+    }
+
+    /// <summary>
+    /// A row Hangfire reports without a start time cannot be ranked by age, so it must not
+    /// displace one that can: the cap exists to keep the longest-running work, and an unknown
+    /// start is the least informative answer to that question.
+    /// </summary>
+    [Test]
+    public async Task ListRecurringJobs_InFlightJobWithNoStartTime_RanksBehindOnesThatHaveOne()
+    {
+        DateTime startedAt = new(2026, 8, 28, 9, 0, 0, DateTimeKind.Utc);
+
+        IMonitoringApi monitoring = CreateHealthyMonitoring();
+        monitoring.ProcessingJobs(Arg.Any<int>(), Arg.Any<int>()).Returns(ProcessingList(
+            ("no-start", CreateProcessing("worker-a")),
+            ("started", CreateProcessing("worker-a", startedAt))));
+
+        ListRecurringJobsResponse response = await ListAgainstAsync(monitoring);
+
+        await Assert.That(response.ProcessingJobs.Select(j => j.JobId).ToList())
+            .IsEquivalentTo(new List<string> { "started", "no-start" });
+    }
+
+    /// <summary>
+    /// The total and the list are separate storage reads, so work dequeued between them leaves a
+    /// total below the rows it describes. The list is what the operator can see, so the total is
+    /// raised to meet it rather than letting a panel print "0 running" above five visible rows.
+    /// </summary>
+    [Test]
+    public async Task ListRecurringJobs_CountReadBeforeTheWorkStarted_NeverUndercountsTheRowsReturned()
+    {
+        IMonitoringApi monitoring = CreateHealthyMonitoring();
+        monitoring.ProcessingCount().Returns(0);
+        monitoring.ProcessingJobs(Arg.Any<int>(), Arg.Any<int>()).Returns(ProcessingList(
+            ("101", CreateProcessing("worker-a")),
+            ("102", CreateProcessing("worker-a"))));
+
+        ListRecurringJobsResponse response = await ListAgainstAsync(monitoring);
+
+        await Assert.That(response.ProcessingJobCount).IsEqualTo(2);
+    }
+
+    /// <summary>
+    /// Hangfire reports a job whose payload it cannot deserialise with no Job at all and the
+    /// reason on LoadException. That job is still genuinely executing, so the row has to survive
+    /// with an empty name and the error attached — a mid-deploy type rename is exactly when an
+    /// operator needs to see what is still running.
+    /// </summary>
+    [Test]
+    public async Task ListRecurringJobs_InFlightJobWithAnUnreadablePayload_KeepsTheRowAndReportsWhy()
+    {
+        IMonitoringApi monitoring = CreateHealthyMonitoring();
+        monitoring.ProcessingCount().Returns(1);
+        monitoring.ProcessingJobs(Arg.Any<int>(), Arg.Any<int>())
+            .Returns(ProcessingList(("101", CreateUnloadableProcessing("worker-a"))));
+
+        ListRecurringJobsResponse response = await ListAgainstAsync(monitoring);
+
+        FleetProcessingJob running = response.ProcessingJobs.Single();
+
+        await Assert.That(running.JobId).IsEqualTo("101");
+        await Assert.That(running.JobName).IsEqualTo("");
+        await Assert.That(running.Queue).IsEqualTo("");
+        await Assert.That(running.ServerId).IsEqualTo("worker-a");
+        await Assert.That(running.LoadError).IsNotEmpty();
+        await Assert.That(response.UnavailableSections).DoesNotContain("processing");
+    }
+
+    /// <summary>
+    /// Attribution is one storage read per row against the database that is probably the reason
+    /// the operator is here, and the caller bounds the whole RPC with a fixed deadline. Once the
+    /// budget is gone the remaining rows must ship unattributed rather than push the response past
+    /// that deadline — an unattributed row still shows the runaway job; a dead RPC shows nothing.
+    /// </summary>
+    [Test]
+    public async Task ListRecurringJobs_AttributionBudgetExhausted_ShipsTheRemainingRowsUnattributed()
+    {
+        FakeTimeProvider timeProvider = new(new DateTimeOffset(2026, 8, 28, 9, 0, 0, TimeSpan.Zero));
+
+        IMonitoringApi monitoring = CreateHealthyMonitoring();
+        monitoring.ProcessingJobs(Arg.Any<int>(), Arg.Any<int>()).Returns(ProcessingList(
+            ("101", CreateProcessing("worker-a", new DateTime(2026, 8, 28, 8, 0, 0, DateTimeKind.Utc))),
+            ("102", CreateProcessing("worker-a", new DateTime(2026, 8, 28, 8, 30, 0, DateTimeKind.Utc)))));
+
+        // One lookup is made to cost more than the whole two-second budget, so the first row is
+        // attributed and the second is not. Driving the clock from the call keeps the test
+        // deterministic — nothing here waits on wall time.
+        monitoring.JobDetails(Arg.Any<string>()).Returns(_ =>
+        {
+            timeProvider.Advance(TimeSpan.FromMilliseconds(2100));
+
+            return CreateDetails(new Dictionary<string, string>
+            {
+                ["RecurringJobId"] = $"\"{RecurringJobIds.TenantPurge}\"",
+            });
+        });
+
+        ListRecurringJobsResponse response = await ListAgainstAsync(monitoring, timeProvider: timeProvider);
+
+        await Assert.That(response.ProcessingJobs.Count).IsEqualTo(2);
+        await Assert.That(response.ProcessingJobs[0].Attribution)
+            .IsEqualTo(FleetProcessingAttribution.Recurring);
+        await Assert.That(response.ProcessingJobs[1].Attribution)
+            .IsEqualTo(FleetProcessingAttribution.Unknown);
+
+        // The second row's lookup must not have been issued at all: the point of the budget is to
+        // stop querying a struggling database, not to discard what it returned.
+        monitoring.Received(1).JobDetails(Arg.Any<string>());
+    }
+
+    /// <summary>
+    /// A monitoring API with every section answering healthily, for tests to break one at a time.
+    /// </summary>
+    /// <remarks>
+    /// Every member the RPC touches has to be stubbed here, including the ones a given test does
+    /// not care about. An unstubbed member returns null, the section's own try/catch swallows the
+    /// resulting NullReferenceException, and the test passes while quietly reporting that section
+    /// as unavailable — green, and testing the wrong behaviour.
+    /// </remarks>
+    private static IMonitoringApi CreateHealthyMonitoring()
+    {
+        IMonitoringApi monitoring = Substitute.For<IMonitoringApi>();
+        monitoring.GetStatistics().Returns(new StatisticsDto());
+        monitoring.Servers().Returns(new List<ServerDto> { new() { Name = "worker-a" } });
+        monitoring.ProcessingCount().Returns(0);
+        monitoring.ProcessingJobs(Arg.Any<int>(), Arg.Any<int>()).Returns(ProcessingList());
+        monitoring.JobDetails(Arg.Any<string>()).Returns((JobDetailsDto?)null);
+
+        return monitoring;
+    }
+
+    /// <summary>Builds Hangfire's processing page, whose key — not the DTO — carries the job id.</summary>
+    private static JobList<ProcessingJobDto> ProcessingList(
+        params (string JobId, ProcessingJobDto Processing)[] entries)
+    {
+        return new JobList<ProcessingJobDto>(
+            entries.Select(e => new KeyValuePair<string, ProcessingJobDto>(e.JobId, e.Processing)));
+    }
+
+    private static ProcessingJobDto CreateProcessing(
+        string serverId, DateTime? startedAt = null, string? queue = null)
+    {
+        MethodInfo method = typeof(SeedProbeJob).GetMethod(nameof(SeedProbeJob.RunAsync))!;
+        object[] arguments = [CancellationToken.None];
+
+        return new ProcessingJobDto
+        {
+            ServerId = serverId,
+            StartedAt = startedAt,
+            InProcessingState = true,
+            Job = queue is null
+                ? new Job(typeof(SeedProbeJob), method, arguments)
+                : new Job(typeof(SeedProbeJob), method, arguments, queue),
+        };
+    }
+
+    /// <summary>
+    /// Builds the row Hangfire produces when it cannot deserialise a job's payload: no Job at all,
+    /// with the reason on LoadException. Constructed through InvocationData rather than by setting
+    /// the two fields directly, so the shape stays whatever Hangfire itself would emit.
+    /// </summary>
+    private static ProcessingJobDto CreateUnloadableProcessing(string serverId)
+    {
+        InvocationData invocation = new(
+            "Framlux.Does.Not.Exist, NoSuchAssembly", "RunAsync", "[]", "[]");
+
+        JobLoadException? loadException = null;
+
+        try
+        {
+            invocation.DeserializeJob();
+        }
+        catch (JobLoadException ex)
+        {
+            loadException = ex;
+        }
+
+        return new ProcessingJobDto
+        {
+            ServerId = serverId,
+            InProcessingState = true,
+            Job = null,
+            LoadException = loadException,
+        };
+    }
+
+    private static JobDetailsDto CreateDetails(Dictionary<string, string> properties)
+    {
+        return new JobDetailsDto { Properties = properties, History = [] };
+    }
+
     private static async Task<ListRecurringJobsResponse> ListAgainstAsync(
-        IMonitoringApi monitoring, ListRecurringJobsRequest? request = null)
+        IMonitoringApi monitoring,
+        ListRecurringJobsRequest? request = null,
+        TimeProvider? timeProvider = null)
     {
         using InMemoryStorage backing = new();
         JobStorage storage = Substitute.For<JobStorage>();
@@ -758,7 +1112,7 @@ public sealed class FleetAdminServiceTests
         storage.GetConnection().Returns(_ => backing.GetConnection());
 
         FleetAdminService service = CreateFleetAdminService(
-            Substitute.For<IServiceScopeFactory>(), storage: storage);
+            Substitute.For<IServiceScopeFactory>(), storage: storage, timeProvider: timeProvider);
 
         return await service.ListRecurringJobs(request ?? new ListRecurringJobsRequest(), CreateContext());
     }

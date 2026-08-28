@@ -288,4 +288,115 @@ public sealed class FleetAdminJobsTests
         await Assert.That(afterJob.NextExecution).IsEqualTo(beforeJob.NextExecution);
         await Assert.That(afterJob.LastExecution).IsEqualTo(beforeJob.LastExecution);
     }
+
+    [Test]
+    public async Task ListRecurringJobs_WithAJobExecuting_ReportsItAsInFlight()
+    {
+        // Intent: the whole point of the in-flight list is telling "the queue is wedged" apart
+        // from "something is running long", and only a real worker holding a real job proves the
+        // list reports what is actually executing rather than what was merely enqueued.
+        //
+        // The probe parks the worker deliberately, so it is released in a finally: leaving it held
+        // would stall the host's shutdown and take the rest of the class with it.
+        await using FleetAdminJobsFixture fixture = await FleetAdminJobsFixture.CreateAsync();
+
+        using InFlightProbe probe = new();
+
+        global::Hangfire.IBackgroundJobClient client =
+            fixture.Factory.Services.GetRequiredService<global::Hangfire.IBackgroundJobClient>();
+        string jobId = client.Create(
+            global::Hangfire.Common.Job.FromExpression(() => InFlightProbe.Park()),
+            new global::Hangfire.States.EnqueuedState());
+
+        try
+        {
+            // The worker picks the job up on its own dispatcher thread that nothing here awaits,
+            // so this polls. The deadline only bounds failure; it never defines the pass condition.
+            FleetProcessingJob? running = null;
+            DateTimeOffset deadline = DateTimeOffset.UtcNow.AddSeconds(20);
+
+            while (DateTimeOffset.UtcNow < deadline)
+            {
+                ListRecurringJobsResponse polled = await fixture.Service.ListRecurringJobs(
+                    new ListRecurringJobsRequest(), fixture.CallContext);
+
+                running = polled.ProcessingJobs.FirstOrDefault(j => j.JobId == jobId);
+
+                if (running is not null)
+                {
+                    break;
+                }
+
+                await Task.Delay(50);
+            }
+
+            await Assert.That(running).IsNotNull();
+            await Assert.That(running!.JobName).IsEqualTo("InFlightProbe.Park");
+            await Assert.That(running.ServerId).IsNotEmpty();
+            await Assert.That(running.StartedAt).IsNotNull();
+            await Assert.That(running.InProcessingState).IsTrue();
+
+            // An ordinary enqueue carries no RecurringJobId parameter, and that is a fact about
+            // the job rather than a gap in the read — reporting Unknown here would tell an
+            // operator the link might exist when it never can.
+            await Assert.That(running.Attribution).IsEqualTo(FleetProcessingAttribution.NotRecurring);
+        }
+        finally
+        {
+            probe.Release();
+        }
+    }
+
+    [Test]
+    public async Task ListRecurringJobs_WithNothingExecuting_ReportsAnEmptyListNotAnUnknownSection()
+    {
+        // Intent: empty is the healthy steady state for in-flight work, so it must not be
+        // reported as a storage fault. The inverse — a fault reported as empty — is what the
+        // section name exists to prevent, and the two are indistinguishable without this.
+        await using FleetAdminJobsFixture fixture = await FleetAdminJobsFixture.CreateAsync();
+
+        ListRecurringJobsResponse response = await fixture.Service.ListRecurringJobs(
+            new ListRecurringJobsRequest(), fixture.CallContext);
+
+        await Assert.That(response.UnavailableSections).DoesNotContain("processing");
+    }
+
+    /// <summary>
+    /// A job that parks its worker until released, so a background job is genuinely mid-execution
+    /// while the RPC is called. Static because Hangfire has to serialise the invocation, and a
+    /// static method needs no activation from a container it was never registered in.
+    /// </summary>
+    public sealed class InFlightProbe : IDisposable
+    {
+        private static readonly ManualResetEventSlim Gate = new(false);
+
+        /// <summary>
+        /// Creates a probe with the gate closed. The reset is what makes a second construction in
+        /// the same process work at all: the gate has to be static for Hangfire to reach it from a
+        /// serialised invocation, so without this a repeated or retried run would find it still
+        /// set from the first, park nothing, and fail for a reason unrelated to the code under test.
+        /// </summary>
+        public InFlightProbe()
+        {
+            Gate.Reset();
+        }
+
+        /// <summary>Blocks the worker. The timeout bounds a leaked hold; it is not a delay.</summary>
+        public static void Park()
+        {
+            Gate.Wait(TimeSpan.FromSeconds(30));
+        }
+
+        /// <summary>Lets the parked worker finish. Idempotent, so the finally and the dispose may both call it.</summary>
+        public void Release()
+        {
+            Gate.Set();
+        }
+
+        /// <inheritdoc />
+        public void Dispose()
+        {
+            Release();
+        }
+    }
 }
