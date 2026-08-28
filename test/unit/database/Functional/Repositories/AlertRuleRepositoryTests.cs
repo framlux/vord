@@ -510,51 +510,6 @@ public class AlertRuleRepositoryTests
         await Assert.That(defaultRule!.IsEnabled).IsTrue();
     }
 
-    // ========== HasDefaultAlertRulesAsync tests ==========
-
-    [Test]
-    public async Task HasDefaultAlertRulesAsync_WithDefaultRules_ReturnsTrue()
-    {
-        using TestDatabaseFactory dbFactory = new();
-        IAlertRuleRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
-
-        (int userId, int tenantId) = await SeedUserAndTenantAsync(dbFactory);
-
-        AlertRule defaultRule = TestDataBuilder.BuildAlertRule(tenantId: tenantId, createdByUserId: userId, isCustom: false);
-        await dbFactory.Context.InsertWithInt32IdentityAsync(defaultRule);
-
-        bool result = await repo.HasDefaultAlertRulesAsync(tenantId);
-
-        await Assert.That(result).IsTrue();
-    }
-
-    [Test]
-    public async Task HasDefaultAlertRulesAsync_OnlyCustomRules_ReturnsFalse()
-    {
-        using TestDatabaseFactory dbFactory = new();
-        IAlertRuleRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
-
-        (int userId, int tenantId) = await SeedUserAndTenantAsync(dbFactory);
-
-        AlertRule customRule = TestDataBuilder.BuildAlertRule(tenantId: tenantId, createdByUserId: userId, isCustom: true);
-        await dbFactory.Context.InsertWithInt32IdentityAsync(customRule);
-
-        bool result = await repo.HasDefaultAlertRulesAsync(tenantId);
-
-        await Assert.That(result).IsFalse();
-    }
-
-    [Test]
-    public async Task HasDefaultAlertRulesAsync_NoRulesAtAll_ReturnsFalse()
-    {
-        using TestDatabaseFactory dbFactory = new();
-        IAlertRuleRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
-
-        bool result = await repo.HasDefaultAlertRulesAsync(99999);
-
-        await Assert.That(result).IsFalse();
-    }
-
     // ========== InsertAlertRulesAsync tests ==========
 
     [Test]
@@ -838,5 +793,176 @@ public class AlertRuleRepositoryTests
         await Assert.That(removed).IsEqualTo(0);
         int remaining = await dbFactory.Context.AlertRuleMachines.CountAsync(arm => arm.MachineId == machineId);
         await Assert.That(remaining).IsEqualTo(1);
+    }
+
+    // ========== GetBuiltInMetricsForTenantAsync tests ==========
+
+    [Test]
+    public async Task GetBuiltInMetricsForTenantAsync_ReturnsBuiltInMetricsScopedToTenant()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        IAlertRuleRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+
+        (int userId, int tenantId) = await SeedUserAndTenantAsync(dbFactory);
+        (int otherUserId, int otherTenantId) = await SeedUserAndTenantAsync(dbFactory);
+
+        await dbFactory.Context.InsertWithInt32IdentityAsync(
+            TestDataBuilder.BuildAlertRule(tenantId: tenantId, createdByUserId: userId, metric: AlertMetric.DiskUsage, isCustom: false));
+        await dbFactory.Context.InsertWithInt32IdentityAsync(
+            TestDataBuilder.BuildAlertRule(tenantId: tenantId, createdByUserId: userId, metric: AlertMetric.CpuUsage, isCustom: false));
+        await dbFactory.Context.InsertWithInt32IdentityAsync(
+            TestDataBuilder.BuildAlertRule(tenantId: tenantId, createdByUserId: userId, metric: AlertMetric.MemoryUsage, isCustom: true));
+        await dbFactory.Context.InsertWithInt32IdentityAsync(
+            TestDataBuilder.BuildAlertRule(tenantId: otherTenantId, createdByUserId: otherUserId, metric: AlertMetric.SecurityUpdates, isCustom: false));
+
+        List<AlertMetric> metrics = await repo.GetBuiltInMetricsForTenantAsync(tenantId);
+
+        await Assert.That(metrics.Count).IsEqualTo(2);
+        await Assert.That(metrics).Contains(AlertMetric.DiskUsage);
+        await Assert.That(metrics).Contains(AlertMetric.CpuUsage);
+    }
+
+    // ========== EnableBuiltInAlertRulesAsync tests ==========
+
+    [Test]
+    public async Task EnableBuiltInAlertRulesAsync_EnablesBuiltInsOnlyAndReturnsCount()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        IAlertRuleRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+
+        (int userId, int tenantId) = await SeedUserAndTenantAsync(dbFactory);
+        (int otherUserId, int otherTenantId) = await SeedUserAndTenantAsync(dbFactory);
+
+        int diskId = await dbFactory.Context.InsertWithInt32IdentityAsync(
+            TestDataBuilder.BuildAlertRule(tenantId: tenantId, createdByUserId: userId, metric: AlertMetric.DiskUsage, isCustom: false, isEnabled: false));
+        int cpuId = await dbFactory.Context.InsertWithInt32IdentityAsync(
+            TestDataBuilder.BuildAlertRule(tenantId: tenantId, createdByUserId: userId, metric: AlertMetric.CpuUsage, isCustom: false, isEnabled: false));
+        int customId = await dbFactory.Context.InsertWithInt32IdentityAsync(
+            TestDataBuilder.BuildAlertRule(tenantId: tenantId, createdByUserId: userId, metric: AlertMetric.MemoryUsage, isCustom: true, isEnabled: false));
+        int otherTenantId2 = await dbFactory.Context.InsertWithInt32IdentityAsync(
+            TestDataBuilder.BuildAlertRule(tenantId: otherTenantId, createdByUserId: otherUserId, metric: AlertMetric.DiskUsage, isCustom: false, isEnabled: false));
+
+        int updated = await repo.EnableBuiltInAlertRulesAsync(tenantId);
+
+        await Assert.That(updated).IsEqualTo(2);
+
+        AlertRule? disk = await dbFactory.Context.AlertRules.FirstOrDefaultAsync(r => r.Id == diskId);
+        AlertRule? cpu = await dbFactory.Context.AlertRules.FirstOrDefaultAsync(r => r.Id == cpuId);
+        AlertRule? custom = await dbFactory.Context.AlertRules.FirstOrDefaultAsync(r => r.Id == customId);
+        AlertRule? otherRule = await dbFactory.Context.AlertRules.FirstOrDefaultAsync(r => r.Id == otherTenantId2);
+
+        await Assert.That(disk!.IsEnabled).IsTrue();
+        await Assert.That(cpu!.IsEnabled).IsTrue();
+        await Assert.That(custom!.IsEnabled).IsFalse();
+        await Assert.That(otherRule!.IsEnabled).IsFalse();
+    }
+
+    // ========== EnableCustomAlertRulesAsync tests ==========
+
+    [Test]
+    public async Task EnableCustomAlertRulesAsync_EnablesCustomOnlyAndReturnsCount()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        IAlertRuleRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+
+        (int userId, int tenantId) = await SeedUserAndTenantAsync(dbFactory);
+        (int otherUserId, int otherTenantId) = await SeedUserAndTenantAsync(dbFactory);
+
+        int firstCustomId = await dbFactory.Context.InsertWithInt32IdentityAsync(
+            TestDataBuilder.BuildAlertRule(tenantId: tenantId, createdByUserId: userId, metric: AlertMetric.CpuUsage, isCustom: true, isEnabled: false));
+        int secondCustomId = await dbFactory.Context.InsertWithInt32IdentityAsync(
+            TestDataBuilder.BuildAlertRule(tenantId: tenantId, createdByUserId: userId, metric: AlertMetric.CpuUsage, isCustom: true, isEnabled: false));
+        int builtInId = await dbFactory.Context.InsertWithInt32IdentityAsync(
+            TestDataBuilder.BuildAlertRule(tenantId: tenantId, createdByUserId: userId, metric: AlertMetric.DiskUsage, isCustom: false, isEnabled: false));
+        int otherCustomId = await dbFactory.Context.InsertWithInt32IdentityAsync(
+            TestDataBuilder.BuildAlertRule(tenantId: otherTenantId, createdByUserId: otherUserId, metric: AlertMetric.CpuUsage, isCustom: true, isEnabled: false));
+
+        int updated = await repo.EnableCustomAlertRulesAsync(tenantId);
+
+        await Assert.That(updated).IsEqualTo(2);
+
+        AlertRule? firstCustom = await dbFactory.Context.AlertRules.FirstOrDefaultAsync(r => r.Id == firstCustomId);
+        AlertRule? secondCustom = await dbFactory.Context.AlertRules.FirstOrDefaultAsync(r => r.Id == secondCustomId);
+        AlertRule? builtIn = await dbFactory.Context.AlertRules.FirstOrDefaultAsync(r => r.Id == builtInId);
+        AlertRule? otherCustom = await dbFactory.Context.AlertRules.FirstOrDefaultAsync(r => r.Id == otherCustomId);
+
+        await Assert.That(firstCustom!.IsEnabled).IsTrue();
+        await Assert.That(secondCustom!.IsEnabled).IsTrue();
+        await Assert.That(builtIn!.IsEnabled).IsFalse();
+        await Assert.That(otherCustom!.IsEnabled).IsFalse();
+    }
+
+    // ========== SetAlertRuleEnabledAsync tests ==========
+
+    [Test]
+    public async Task SetAlertRuleEnabledAsync_OwnedRule_FlipsAndReturnsTrue()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        IAlertRuleRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+
+        (int userId, int tenantId) = await SeedUserAndTenantAsync(dbFactory);
+
+        int ruleId = await dbFactory.Context.InsertWithInt32IdentityAsync(
+            TestDataBuilder.BuildAlertRule(tenantId: tenantId, createdByUserId: userId, isCustom: false, isEnabled: false));
+
+        bool enabled = await repo.SetAlertRuleEnabledAsync(ruleId, tenantId, true);
+
+        await Assert.That(enabled).IsTrue();
+        AlertRule? afterEnable = await dbFactory.Context.AlertRules.FirstOrDefaultAsync(r => r.Id == ruleId);
+        await Assert.That(afterEnable!.IsEnabled).IsTrue();
+
+        bool disabled = await repo.SetAlertRuleEnabledAsync(ruleId, tenantId, false);
+
+        await Assert.That(disabled).IsTrue();
+        AlertRule? afterDisable = await dbFactory.Context.AlertRules.FirstOrDefaultAsync(r => r.Id == ruleId);
+        await Assert.That(afterDisable!.IsEnabled).IsFalse();
+    }
+
+    [Test]
+    public async Task SetAlertRuleEnabledAsync_RuleInAnotherTenant_ReturnsFalseAndLeavesRuleAlone()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        IAlertRuleRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+
+        (int userId, int tenantId) = await SeedUserAndTenantAsync(dbFactory);
+        (int otherUserId, int otherTenantId) = await SeedUserAndTenantAsync(dbFactory);
+
+        int ruleId = await dbFactory.Context.InsertWithInt32IdentityAsync(
+            TestDataBuilder.BuildAlertRule(tenantId: tenantId, createdByUserId: userId, isCustom: false, isEnabled: false));
+
+        bool result = await repo.SetAlertRuleEnabledAsync(ruleId, otherTenantId, true);
+
+        await Assert.That(result).IsFalse();
+        AlertRule? rule = await dbFactory.Context.AlertRules.FirstOrDefaultAsync(r => r.Id == ruleId);
+        await Assert.That(rule!.IsEnabled).IsFalse();
+    }
+
+    // ========== CountCustomAlertRulesForTenantAsync tests ==========
+
+    [Test]
+    public async Task CountCustomAlertRulesForTenantAsync_CountsCustomRulesOnly()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        IAlertRuleRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+
+        (int userId, int tenantId) = await SeedUserAndTenantAsync(dbFactory);
+        (int otherUserId, int otherTenantId) = await SeedUserAndTenantAsync(dbFactory);
+
+        foreach (AlertMetric metric in Enum.GetValues<AlertMetric>())
+        {
+            await dbFactory.Context.InsertWithInt32IdentityAsync(
+                TestDataBuilder.BuildAlertRule(tenantId: tenantId, createdByUserId: userId, metric: metric, isCustom: false));
+        }
+
+        await dbFactory.Context.InsertWithInt32IdentityAsync(
+            TestDataBuilder.BuildAlertRule(tenantId: tenantId, createdByUserId: userId, metric: AlertMetric.CpuUsage, isCustom: true));
+        await dbFactory.Context.InsertWithInt32IdentityAsync(
+            TestDataBuilder.BuildAlertRule(tenantId: tenantId, createdByUserId: userId, metric: AlertMetric.CpuUsage, isCustom: true));
+        await dbFactory.Context.InsertWithInt32IdentityAsync(
+            TestDataBuilder.BuildAlertRule(tenantId: otherTenantId, createdByUserId: otherUserId, metric: AlertMetric.CpuUsage, isCustom: true));
+
+        int count = await repo.CountCustomAlertRulesForTenantAsync(tenantId);
+
+        await Assert.That(count).IsEqualTo(2);
     }
 }

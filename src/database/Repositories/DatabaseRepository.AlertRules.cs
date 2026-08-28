@@ -147,12 +147,72 @@ public partial class DatabaseRepository : IAlertRuleRepository
     }
 
     /// <inheritdoc/>
-    public async Task<bool> HasDefaultAlertRulesAsync(int tenantId, CancellationToken cancellationToken)
+    public async Task<List<AlertMetric>> GetBuiltInMetricsForTenantAsync(int tenantId, CancellationToken cancellationToken)
     {
-        bool hasRules = await _db.AlertRules
-            .AnyAsync(r => (r.TenantId == tenantId) && (r.IsCustom == false), cancellationToken);
+        List<AlertMetric> metrics = await _db.AlertRules
+            .Where(r => (r.TenantId == tenantId) && (r.IsCustom == false))
+            .Select(r => r.Metric)
+            .ToListAsync(cancellationToken);
 
-        return hasRules;
+        return metrics;
+    }
+
+    /// <inheritdoc/>
+    public async Task<int> EnableBuiltInAlertRulesAsync(int tenantId, CancellationToken cancellationToken)
+    {
+        int updated = await _db.AlertRules
+            .Where(r => (r.TenantId == tenantId) && (r.IsCustom == false) && (r.IsEnabled == false))
+            .Set(r => r.IsEnabled, true)
+            .Set(r => r.UpdatedAt, DateTimeOffset.UtcNow)
+            .UpdateAsync(cancellationToken);
+
+        if (updated > 0)
+        {
+            _logger.LogInformation("Enabled {Count} built-in alert rules for tenant {TenantId}", updated, tenantId);
+        }
+
+        return updated;
+    }
+
+    /// <inheritdoc/>
+    public async Task<int> EnableCustomAlertRulesAsync(int tenantId, CancellationToken cancellationToken)
+    {
+        int updated = await _db.AlertRules
+            .Where(r => (r.TenantId == tenantId) && (r.IsCustom == true) && (r.IsEnabled == false))
+            .Set(r => r.IsEnabled, true)
+            .Set(r => r.UpdatedAt, DateTimeOffset.UtcNow)
+            .UpdateAsync(cancellationToken);
+
+        if (updated > 0)
+        {
+            _logger.LogInformation("Enabled {Count} custom alert rules for tenant {TenantId}", updated, tenantId);
+        }
+
+        return updated;
+    }
+
+    /// <inheritdoc/>
+    public async Task<bool> SetAlertRuleEnabledAsync(int ruleId, int tenantId, bool isEnabled, CancellationToken cancellationToken)
+    {
+        // The tenant predicate is part of the UPDATE rather than a preceding read, so a rule belonging
+        // to another tenant simply matches nothing and the caller sees false.
+        int updated = await _db.AlertRules
+            .Where(r => (r.Id == ruleId) && (r.TenantId == tenantId))
+            .Set(r => r.IsEnabled, isEnabled)
+            .Set(r => r.UpdatedAt, DateTimeOffset.UtcNow)
+            .UpdateAsync(cancellationToken);
+
+        return updated > 0;
+    }
+
+    /// <inheritdoc/>
+    public async Task<int> CountCustomAlertRulesForTenantAsync(int tenantId, CancellationToken cancellationToken)
+    {
+        int count = await _db.AlertRules
+            .Where(r => (r.TenantId == tenantId) && (r.IsCustom == true))
+            .CountAsync(cancellationToken);
+
+        return count;
     }
 
     /// <inheritdoc/>

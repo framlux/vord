@@ -70,7 +70,7 @@ public sealed class BillingWebhookHandler : IBillingWebhookHandler
 
     private async Task ProvisionDefaultAlertRulesAsync(int tenantId, CancellationToken ct)
     {
-        bool hasRules = await _alertRuleRepo.HasDefaultAlertRulesAsync(tenantId, ct);
+        bool hasRules = (await _alertRuleRepo.GetBuiltInMetricsForTenantAsync(tenantId, ct)).Count > 0;
 
         if (hasRules)
         {

@@ -100,11 +100,47 @@ public interface IAlertRuleRepository
     Task<int> DisableAlertRulesForTenantAsync(int tenantId, bool customOnly, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Checks whether a tenant already has non-custom (default) alert rules provisioned.
+    /// Returns the metrics a tenant already holds a built-in (non-custom) rule for. The metric is the
+    /// identity of a built-in rule, so this is what makes provisioning idempotent: the caller diffs the
+    /// returned metrics against the shipped definitions and inserts only what is missing.
     /// </summary>
     /// <param name="tenantId">The tenant ID.</param>
     /// <param name="cancellationToken">A cancellation token.</param>
-    Task<bool> HasDefaultAlertRulesAsync(int tenantId, CancellationToken cancellationToken = default);
+    Task<List<AlertMetric>> GetBuiltInMetricsForTenantAsync(int tenantId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Enables every disabled built-in (non-custom) rule for a tenant and returns the number updated.
+    /// </summary>
+    /// <param name="tenantId">The tenant ID.</param>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    Task<int> EnableBuiltInAlertRulesAsync(int tenantId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Enables every disabled custom rule for a tenant and returns the number updated. This is the
+    /// inverse of a downgrade's custom-rule freeze, applied when a tenant returns to an entitled tier.
+    /// </summary>
+    /// <param name="tenantId">The tenant ID.</param>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    Task<int> EnableCustomAlertRulesAsync(int tenantId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Sets the enabled state of a single rule, scoped to the owning tenant. A rule outside
+    /// <paramref name="tenantId"/> is a no-op.
+    /// </summary>
+    /// <param name="ruleId">The alert rule ID.</param>
+    /// <param name="tenantId">The tenant that must own the rule.</param>
+    /// <param name="isEnabled">The enabled state to apply.</param>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    /// <returns><c>true</c> if the rule belongs to the tenant and was updated; otherwise <c>false</c>.</returns>
+    Task<bool> SetAlertRuleEnabledAsync(int ruleId, int tenantId, bool isEnabled, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Counts the custom rules a tenant holds. Built-in rules ship with every tenant and are not
+    /// authored, so they do not consume the tier's alert rule quota.
+    /// </summary>
+    /// <param name="tenantId">The tenant ID.</param>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    Task<int> CountCustomAlertRulesForTenantAsync(int tenantId, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Inserts multiple alert rules in sequence.
