@@ -367,6 +367,11 @@ public static class ServiceCollectionExtensions
         services.AddSingleton<IAlertDeliveryService, AlertDeliveryService>();
         services.AddSingleton<IEventAlertService, EventAlertService>();
 
+        // Scoped, because it depends on the scoped alert rule repository and must join whatever
+        // transaction its caller has open. The neighbouring delivery service is a singleton only
+        // because it resolves its own scopes per delivery.
+        services.AddScoped<IBuiltInAlertRuleProvisioner, BuiltInAlertRuleProvisioner>();
+
         // Billing is reachable only in the hosted deployment.
         if (deploymentMode.IsSaas)
         {
