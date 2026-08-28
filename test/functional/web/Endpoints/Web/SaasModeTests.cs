@@ -234,4 +234,53 @@ public sealed class SaasModeTests
 
         await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.NotFound);
     }
+
+    [Test]
+    public async Task GetAdminSettings_InSaas_Returns404()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId) = await SeedTenant(db, SubscriptionTier.Pro, isGlobalAdmin: true);
+        HttpClient client = BuildClient(factory, tenantId, userId, isGlobalAdmin: true);
+
+        HttpResponseMessage response = await client.GetAsync("/api/v1/admin/settings");
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.NotFound);
+    }
+
+    [Test]
+    public async Task GetAdminUsers_InSaas_Returns404()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId) = await SeedTenant(db, SubscriptionTier.Pro, isGlobalAdmin: true);
+        HttpClient client = BuildClient(factory, tenantId, userId, isGlobalAdmin: true);
+
+        HttpResponseMessage response = await client.GetAsync("/api/v1/admin/users");
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.NotFound);
+    }
+
+    [Test]
+    public async Task GetTenants_AsGlobalAdminInSaas_ReturnsOnlyTheirOwnTenants()
+    {
+        // This route is also the ordinary tenant switcher, so it keeps answering 200 — which is
+        // exactly why the cross-tenant escalation had to be closed here rather than at the route.
+        // The admin panel's tenant tab is fed by this call, and a 404 on the panel alone would
+        // leave the whole-fleet listing one plain GET away.
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId) = await SeedTenant(db, SubscriptionTier.Pro, isGlobalAdmin: true);
+        (int otherTenantId, _) = await SeedTenant(db, SubscriptionTier.Pro);
+        HttpClient client = BuildClient(factory, tenantId, userId, isGlobalAdmin: true);
+
+        HttpResponseMessage response = await client.GetAsync("/api/v1/tenants");
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
+
+        string body = await response.Content.ReadAsStringAsync();
+
+        await Assert.That(body).Contains($"\"id\":{tenantId}");
+        await Assert.That(body).DoesNotContain($"\"id\":{otherTenantId}");
+    }
 }

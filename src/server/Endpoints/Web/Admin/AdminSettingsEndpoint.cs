@@ -4,23 +4,27 @@
 
 using FastEndpoints;
 using Framlux.FleetManagement.Server.Auth;
+using Framlux.FleetManagement.Services.Core.Deployment;
 using Framlux.FleetManagement.Services.Core.Handlers;
 using Framlux.FleetManagement.Services.Core.Infrastructure;
 
 namespace Framlux.FleetManagement.Server.Endpoints.Web.Admin;
 
 /// <summary>
-/// Returns server configuration settings.
+/// Returns server configuration settings. Only available in a self-hosted deployment; in SaaS
+/// these settings are read from the internal admin application.
 /// </summary>
 public sealed class AdminSettingsEndpoint : EndpointWithoutRequest<ApiResponse<ServerSettingsDto>>
 {
+    private readonly DeploymentMode _deploymentMode;
     private readonly AdminHandler _handler;
 
     /// <summary>
     /// Creates a new instance of the <see cref="AdminSettingsEndpoint"/> class.
     /// </summary>
-    public AdminSettingsEndpoint(AdminHandler handler)
+    public AdminSettingsEndpoint(DeploymentMode deploymentMode, AdminHandler handler)
     {
+        _deploymentMode = deploymentMode;
         _handler = handler;
     }
 
@@ -35,6 +39,11 @@ public sealed class AdminSettingsEndpoint : EndpointWithoutRequest<ApiResponse<S
     /// <inheritdoc/>
     public override async Task HandleAsync(CancellationToken ct)
     {
+        if (await AdminEndpointGuards.RefusedForDeploymentAsync(HttpContext, _deploymentMode, ct))
+        {
+            return;
+        }
+
         ServiceResult<List<SettingEntry>> result = await _handler.GetSettingsAsync(ct);
 
         ServerSettingsDto dto = new()

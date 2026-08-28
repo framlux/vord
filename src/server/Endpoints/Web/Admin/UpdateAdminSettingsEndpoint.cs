@@ -41,10 +41,8 @@ public sealed class UpdateAdminSettingsEndpoint : Endpoint<UpdateAdminSettingsRe
     /// <inheritdoc/>
     public override async Task HandleAsync(UpdateAdminSettingsRequest req, CancellationToken ct)
     {
-        if (_deploymentMode.IsSaas)
+        if (await AdminEndpointGuards.RefusedForDeploymentAsync(HttpContext, _deploymentMode, ct))
         {
-            await HttpContext.SendApiErrorAsync(404, "Endpoint not available when billing is enabled", ct);
-
             return;
         }
 

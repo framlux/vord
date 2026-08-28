@@ -193,8 +193,10 @@ public sealed class RestAuthorizationTests
     [Test]
     public async Task GlobalAdmin_CanAccessAdminEndpoints_ReturnsNon403()
     {
-        // Arrange
-        using FunctionalTestFactory factory = new();
+        // Arrange — the admin surface exists only in a self-hosted deployment; on the hosted
+        // factory these routes answer 404, which would satisfy "not 401/403" without proving
+        // that authorization let the request through.
+        using SelfHostedTestFactory factory = new();
         HttpClient client = new AuthenticatedClientBuilder(factory)
             .WithUserId(10)
             .AsGlobalAdmin()

@@ -537,4 +537,55 @@ public sealed class SelfHostedEndpointTests
         string body = await response.Content.ReadAsStringAsync();
         await Assert.That(body).Contains("\"success\":true");
     }
+
+    [Test]
+    public async Task GetAdminSettings_InSelfHosted_Succeeds()
+    {
+        using SelfHostedTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId) = await SeedTenantWithSubscription(db, SubscriptionTier.Free, isGlobalAdmin: true);
+        HttpClient client = BuildClient(factory, tenantId, userId, isGlobalAdmin: true);
+
+        HttpResponseMessage response = await client.GetAsync("/api/v1/admin/settings");
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
+        string body = await response.Content.ReadAsStringAsync();
+        await Assert.That(body).Contains("\"success\":true");
+    }
+
+    [Test]
+    public async Task GetAdminUsers_InSelfHosted_Succeeds()
+    {
+        using SelfHostedTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId) = await SeedTenantWithSubscription(db, SubscriptionTier.Free, isGlobalAdmin: true);
+        HttpClient client = BuildClient(factory, tenantId, userId, isGlobalAdmin: true);
+
+        HttpResponseMessage response = await client.GetAsync("/api/v1/admin/users");
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
+        string body = await response.Content.ReadAsStringAsync();
+        await Assert.That(body).Contains("\"success\":true");
+    }
+
+    [Test]
+    public async Task GetTenants_AsGlobalAdminInSelfHosted_ReturnsEveryTenant()
+    {
+        // The fleet-local admin console is the whole point of this deployment, and its tenant tab
+        // reads this route. Scoping it away here would empty that tab.
+        using SelfHostedTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId) = await SeedTenantWithSubscription(db, SubscriptionTier.Free, isGlobalAdmin: true);
+        (int otherTenantId, _) = await SeedTenantWithSubscription(db, SubscriptionTier.Free);
+        HttpClient client = BuildClient(factory, tenantId, userId, isGlobalAdmin: true);
+
+        HttpResponseMessage response = await client.GetAsync("/api/v1/tenants");
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
+
+        string body = await response.Content.ReadAsStringAsync();
+
+        await Assert.That(body).Contains($"\"id\":{tenantId}");
+        await Assert.That(body).Contains($"\"id\":{otherTenantId}");
+    }
 }

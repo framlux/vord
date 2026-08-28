@@ -14,7 +14,8 @@ namespace Framlux.FleetManagement.FunctionalTest.Endpoints.Web;
 
 /// <summary>
 /// Functional tests for the global admin users listing endpoint (<c>GET /api/v1/admin/users</c>).
-/// The endpoint is protected by the <c>"Admin"</c> policy which requires the <c>iga=True</c> claim.
+/// The endpoint is protected by the <c>"Admin"</c> policy which requires the <c>iga=True</c> claim,
+/// and only exists in a self-hosted deployment, so the happy path runs on the self-hosted factory.
 /// </summary>
 public sealed class AdminUsersEndpointTests
 {
@@ -96,7 +97,7 @@ public sealed class AdminUsersEndpointTests
     [Test]
     public async Task GetUsers_AsGlobalAdmin_ReturnsAllUsersAcrossAllTenants()
     {
-        using FunctionalTestFactory factory = new();
+        using SelfHostedTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
         SeededFixture seeded = await SeedTwoTenantsAndTwoUsers(db);
 
