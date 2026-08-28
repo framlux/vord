@@ -123,13 +123,36 @@ describe('AppShell', () => {
         });
 
         it('should show Fleet, Settings, and Admin tabs for GlobalAdmin', () => {
-            const user = makeUser({ isGlobalAdmin: true });
+            const user = makeUser({ isGlobalAdmin: true, deployment: { selfHosted: true } });
             render(AppShell, { props: { user } });
 
             const adminLinks = screen.getAllByRole('link').filter(
                 (el) => el.textContent?.trim() === 'Admin'
             );
             expect(adminLinks.length).toBeGreaterThan(0);
+        });
+
+        it('should hide the Admin tab from a GlobalAdmin in a hosted deployment', () => {
+            // The hosted product administers through the internal operator console, so the
+            // route is gone and a link to it would only lead to a not-found page.
+            const user = makeUser({ isGlobalAdmin: true, deployment: { selfHosted: false } });
+            render(AppShell, { props: { user } });
+
+            const adminLinks = screen.getAllByRole('link').filter(
+                (el) => el.textContent?.trim() === 'Admin'
+            );
+            expect(adminLinks).toHaveLength(0);
+        });
+
+        it('should hide the Admin tab when the deployment field is absent', () => {
+            // An older api-server omits the field, which can only happen on the hosted cluster.
+            const user = makeUser({ isGlobalAdmin: true });
+            render(AppShell, { props: { user } });
+
+            const adminLinks = screen.getAllByRole('link').filter(
+                (el) => el.textContent?.trim() === 'Admin'
+            );
+            expect(adminLinks).toHaveLength(0);
         });
 
         it('should completely hide Admin tab for non-global-admin users', () => {
@@ -266,7 +289,7 @@ describe('AppShell', () => {
         });
 
         it('should have correct href on Admin tab', () => {
-            const user = makeUser({ isGlobalAdmin: true });
+            const user = makeUser({ isGlobalAdmin: true, deployment: { selfHosted: true } });
             render(AppShell, { props: { user } });
 
             const adminLinks = screen.getAllByRole('link').filter(

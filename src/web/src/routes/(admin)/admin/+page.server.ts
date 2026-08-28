@@ -8,10 +8,15 @@ import { redirect, error, fail } from '@sveltejs/kit';
 import type { PageServerLoad, Actions } from './$types';
 
 export const load: PageServerLoad = async ({ fetch, cookies, locals }) => {
+	// Repeated from the group's layout guard rather than inherited from it: loads run in
+	// parallel, so the layout's not-found does not stop this one from running. Against a current
+	// api-server the calls would 404 and surface as a 500; against one old enough to omit the
+	// deployment field they would succeed and render the console the guard just removed.
+	if (locals.user?.deployment?.selfHosted !== true) {
+		error(404, 'Not found');
+	}
+
 	const api = createServerApiClient(fetch, cookies.get('vord_auth'), cookies.get('vord_tenant'));
-	// An older api-server omits the field entirely; treating that as hosted is correct, because
-	// the only place a version mismatch can occur is the hosted cluster mid-rollout.
-	const selfHosted = locals.user?.deployment?.selfHosted === true;
 
 	try {
 		const promises: [
@@ -22,7 +27,7 @@ export const load: PageServerLoad = async ({ fetch, cookies, locals }) => {
 
 		const [users, settings, tenants] = await Promise.all(promises);
 
-		return { users, settings, tenants, selfHosted };
+		return { users, settings, tenants };
 	} catch (e) {
 		if (e instanceof ApiError) {
 			if (e.status === 401) redirect(302, '/auth/login');

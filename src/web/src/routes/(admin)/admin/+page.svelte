@@ -18,22 +18,14 @@
 	const users: UserAccountDto[] = $derived(data.users);
 	const settings: ServerSettingsDto = $derived(data.settings);
 	const tenants: TenantDto[] = $derived(data.tenants);
-	const selfHosted: boolean = $derived(data.selfHosted);
 
 	type TabId = 'users' | 'tenants' | 'settings';
 
-	const tabs: { id: TabId; label: string; icon: typeof Users }[] = $derived(
-		selfHosted
-			? [
-					{ id: 'users', label: 'Users', icon: Users },
-					{ id: 'tenants', label: 'Tenants', icon: Building2 },
-					{ id: 'settings', label: 'Settings', icon: Settings }
-				]
-			: [
-					{ id: 'users', label: 'Users', icon: Users },
-					{ id: 'tenants', label: 'Tenants', icon: Building2 }
-				]
-	);
+	const tabs: { id: TabId; label: string; icon: typeof Users }[] = [
+		{ id: 'users', label: 'Users', icon: Users },
+		{ id: 'tenants', label: 'Tenants', icon: Building2 },
+		{ id: 'settings', label: 'Settings', icon: Settings }
+	];
 
 	let activeTab: TabId = $state('users');
 
@@ -130,7 +122,7 @@
 	<div>
 		<h1 class="text-3xl font-bold text-surface-900 dark:text-surface-50">Admin Panel</h1>
 		<p class="mt-1 text-surface-500 dark:text-surface-400">
-			Manage users, tenants{selfHosted ? ', and settings' : ''}.
+			Manage users, tenants, and settings.
 		</p>
 	</div>
 
@@ -340,7 +332,7 @@
 	{/if}
 
 	<!-- Settings Tab (self-hosted deployments only) -->
-	{#if activeTab === 'settings' && selfHosted === true}
+	{#if activeTab === 'settings'}
 		<form
 			method="POST"
 			action="?/updateSettings"

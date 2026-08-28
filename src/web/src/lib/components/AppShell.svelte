@@ -33,8 +33,9 @@
         children?: Snippet;
     } = $props();
 
-    // The billing route does not exist in a self-hosted deployment, so the link to it must not
-    // either. An absent flag means an older api-server, which can only be the hosted cluster.
+    // The billing route does not exist in a self-hosted deployment, and the fleet's own admin
+    // console does not exist in the hosted one, so neither link may outlive its route. An absent
+    // flag means an older api-server, which can only be the hosted cluster.
     const selfHosted = $derived(user.deployment?.selfHosted === true);
 
     let mobileMenuOpen = $state(false);
@@ -56,7 +57,7 @@
     let activeTab = $derived(deriveTab(page.url.pathname));
 
     let showSettingsTab = $derived(canAdminTenant(user));
-    let showAdminTab = $derived(isGlobalAdmin(user));
+    let showAdminTab = $derived(isGlobalAdmin(user) && selfHosted);
     let showTabBar = $derived(showSettingsTab || showAdminTab);
 
     function isActive(path: string): boolean {

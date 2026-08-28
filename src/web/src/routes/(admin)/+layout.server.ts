@@ -15,6 +15,16 @@ export const load: LayoutServerLoad = async ({ locals, url, fetch, cookies }) =>
 		error(403, 'Access denied. Global admin privileges required.');
 	}
 
+	// The hosted product is administered from the internal operator application, so this whole
+	// route group does not exist there. An absent flag means an api-server old enough to predate
+	// the field, which can only be the hosted cluster mid-rollout — and such a server also
+	// predates the REST gate, so its admin calls would all SUCCEED. Guessing self-hosted would
+	// therefore render a fully working fleet-admin console in the hosted deployment, which is the
+	// exact door being closed; the absent case has to fail closed.
+	if (locals.user.deployment?.selfHosted !== true) {
+		error(404, 'Not found');
+	}
+
 	const api = createServerApiClient(fetch, cookies.get('vord_auth'), cookies.get('vord_tenant'));
 	const subscription = await api.getSubscription().catch(() => null);
 

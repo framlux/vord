@@ -34,6 +34,17 @@ function makeEvent(selfHosted: boolean | undefined): LoadEvent {
 	} as unknown as LoadEvent;
 }
 
+/** Takes the awaited value rather than a Promise, because `load` is typed MaybePromise. */
+async function statusOf(result: unknown): Promise<number> {
+	try {
+		await result;
+	} catch (thrown) {
+		return (thrown as { status: number }).status;
+	}
+
+	throw new Error('expected the load to throw, but it resolved');
+}
+
 describe('admin +page.server load — deployment mode', () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
@@ -42,33 +53,29 @@ describe('admin +page.server load — deployment mode', () => {
 		apiMock.getTenants.mockResolvedValue([]);
 	});
 
-	it('passes selfHosted through so the page can hide the billing-only surfaces', async () => {
+	it('loads the admin data in a self-hosted deployment', async () => {
 		const data = await load(makeEvent(true));
 
-		expect(data).toMatchObject({ selfHosted: true });
-	});
-
-	it('reports hosted when the flag is false', async () => {
-		const data = await load(makeEvent(false));
-
-		expect(data).toMatchObject({ selfHosted: false });
-	});
-
-	it('treats an absent deployment field as hosted', async () => {
-		// An older api-server omits the field entirely. The only place a version mismatch can
-		// occur is the hosted cluster mid-rollout, so defaulting to self-hosted would hide the
-		// billing surfaces from the operator of a deployment that does bill.
-		const data = await load(makeEvent(undefined));
-
-		expect(data).toMatchObject({ selfHosted: false });
-	});
-
-	it('loads the admin data regardless of mode', async () => {
-		// The admin page itself exists in both modes; only what it renders differs.
-		await load(makeEvent(true));
-
+		expect(data).toMatchObject({ users: [], settings: [], tenants: [] });
 		expect(apiMock.getAdminUsers).toHaveBeenCalledOnce();
 		expect(apiMock.getAdminSettings).toHaveBeenCalledOnce();
 		expect(apiMock.getTenants).toHaveBeenCalledOnce();
+	});
+
+	it('404s in hosted mode without calling the admin endpoints', async () => {
+		expect(await statusOf(load(makeEvent(false)))).toBe(404);
+
+		// Reaching the API would mean a 404 from the api-server surfacing as an unhandled 500,
+		// because the catch below only translates 401 and 403.
+		expect(apiMock.getAdminUsers).not.toHaveBeenCalled();
+		expect(apiMock.getAdminSettings).not.toHaveBeenCalled();
+		expect(apiMock.getTenants).not.toHaveBeenCalled();
+	});
+
+	it('treats an absent deployment field as hosted and 404s', async () => {
+		// An older api-server omits the field entirely. The only place a version mismatch can
+		// occur is the hosted cluster mid-rollout, where this route must not exist.
+		expect(await statusOf(load(makeEvent(undefined)))).toBe(404);
+		expect(apiMock.getAdminUsers).not.toHaveBeenCalled();
 	});
 });
