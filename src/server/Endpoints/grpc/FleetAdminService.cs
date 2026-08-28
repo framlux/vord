@@ -2,6 +2,7 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
+using System.Reflection;
 using System.Text.Json;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
@@ -1270,6 +1271,28 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
     }
 
     /// <summary>
+    /// Resolves the queue a job actually runs on, mirroring how Hangfire elects it.
+    /// </summary>
+    /// <remarks>
+    /// <see cref="Job.Queue"/> is the queue named when the job was created, and every job here is
+    /// created without one — the routing comes from <c>[Queue("critical")]</c> and
+    /// <c>[Queue("long")]</c>, an elect-state filter that rewrites the enqueued state and never
+    /// writes back to the job. Reading <see cref="Job.Queue"/> therefore reports the default for
+    /// every row, which in a view whose whole purpose is answering "is a queue wedged?" is not an
+    /// unknown but a positive false claim. Hangfire resolves the filter from the method first and
+    /// then the declaring type, so this looks in the same order.
+    /// </remarks>
+    private static string ResolveQueue(Job job)
+    {
+        QueueAttribute? queue = job.Method.GetCustomAttribute<QueueAttribute>()
+            ?? job.Type.GetCustomAttribute<QueueAttribute>();
+
+        // Empty is the contract's "runs on Hangfire's default queue", which is what an absent
+        // attribute genuinely means.
+        return queue?.Queue ?? "";
+    }
+
+    /// <summary>
     /// Maps one in-flight job, resolving its recurring-job attribution from the job's parameters.
     /// </summary>
     /// <remarks>
@@ -1299,7 +1322,7 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
         if (processing.Job is not null)
         {
             mapped.JobName = $"{processing.Job.Type.Name}.{processing.Job.Method.Name}";
-            mapped.Queue = processing.Job.Queue ?? "";
+            mapped.Queue = ResolveQueue(processing.Job);
         }
 
         if (processing.LoadException is not null)

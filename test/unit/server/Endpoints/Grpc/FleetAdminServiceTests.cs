@@ -759,14 +759,19 @@ public sealed class FleetAdminServiceTests
         IMonitoringApi monitoring = CreateHealthyMonitoring();
         monitoring.ProcessingCount().Returns(3);
         monitoring.ProcessingJobs(Arg.Any<int>(), Arg.Any<int>())
-            .Returns(ProcessingList(("101", CreateProcessing("worker-a", startedAt, queue: "critical"))));
+            .Returns(ProcessingList(
+                ("101", CreateProcessing("worker-a", startedAt, typeof(QueuedProbeJob)))));
 
         ListRecurringJobsResponse response = await ListAgainstAsync(monitoring);
 
         FleetProcessingJob running = response.ProcessingJobs.Single();
 
         await Assert.That(running.JobId).IsEqualTo("101");
-        await Assert.That(running.JobName).IsEqualTo("SeedProbeJob.RunAsync");
+        await Assert.That(running.JobName).IsEqualTo("QueuedProbeJob.RunAsync");
+
+        // The queue has to come from the attribute. Job.Queue is null on every job the fleet
+        // creates, so reading it would label a saturated "critical" job as "default" — the exact
+        // wrong answer for the one question this view exists to answer.
         await Assert.That(running.Queue).IsEqualTo("critical");
         await Assert.That(running.ServerId).IsEqualTo("worker-a");
         await Assert.That(running.StartedAt.ToDateTime()).IsEqualTo(startedAt);
@@ -775,6 +780,23 @@ public sealed class FleetAdminServiceTests
         // The list is capped, so the total has to come from storage or a busy fleet under-reports.
         await Assert.That(response.ProcessingJobCount).IsEqualTo(3);
         await Assert.That(response.UnavailableSections).DoesNotContain("processing");
+    }
+
+    /// <summary>
+    /// A job with no queue attribute genuinely runs on the default queue, and the contract spells
+    /// empty as exactly that. This is the case the attribute lookup must not over-reach on.
+    /// </summary>
+    [Test]
+    public async Task ListRecurringJobs_ProcessingJobWithNoQueueAttribute_ReportsTheDefaultQueue()
+    {
+        IMonitoringApi monitoring = CreateHealthyMonitoring();
+        monitoring.ProcessingCount().Returns(1);
+        monitoring.ProcessingJobs(Arg.Any<int>(), Arg.Any<int>())
+            .Returns(ProcessingList(("101", CreateProcessing("worker-a"))));
+
+        ListRecurringJobsResponse response = await ListAgainstAsync(monitoring);
+
+        await Assert.That(response.ProcessingJobs.Single().Queue).IsEqualTo("");
     }
 
     /// <summary>
@@ -1049,10 +1071,17 @@ public sealed class FleetAdminServiceTests
             entries.Select(e => new KeyValuePair<string, ProcessingJobDto>(e.JobId, e.Processing)));
     }
 
+    /// <remarks>
+    /// Job.Queue is deliberately never set. Hangfire only populates it when the job is created
+    /// with an explicit queue, which nothing in this codebase does — the routing comes from the
+    /// QueueAttribute elect-state filter. Passing a queue here would fabricate a state production
+    /// never produces, and would hide a mapping that reads the wrong source.
+    /// </remarks>
     private static ProcessingJobDto CreateProcessing(
-        string serverId, DateTime? startedAt = null, string? queue = null)
+        string serverId, DateTime? startedAt = null, Type? jobType = null)
     {
-        MethodInfo method = typeof(SeedProbeJob).GetMethod(nameof(SeedProbeJob.RunAsync))!;
+        Type type = jobType ?? typeof(SeedProbeJob);
+        MethodInfo method = type.GetMethod("RunAsync")!;
         object[] arguments = [CancellationToken.None];
 
         return new ProcessingJobDto
@@ -1060,9 +1089,7 @@ public sealed class FleetAdminServiceTests
             ServerId = serverId,
             StartedAt = startedAt,
             InProcessingState = true,
-            Job = queue is null
-                ? new Job(typeof(SeedProbeJob), method, arguments)
-                : new Job(typeof(SeedProbeJob), method, arguments, queue),
+            Job = new Job(type, method, arguments),
         };
     }
 
@@ -1176,6 +1203,21 @@ public sealed class FleetAdminServiceTests
     public sealed class SeedProbeJob
     {
         /// <summary>Never invoked; the payload only has to deserialise.</summary>
+        public Task RunAsync(CancellationToken cancellationToken)
+        {
+            return Task.CompletedTask;
+        }
+    }
+
+    /// <summary>
+    /// A probe shaped like every real Vord job: the queue comes from the attribute, and nothing
+    /// ever sets Job.Queue. Constructing a Job with an explicit queue instead would test a state
+    /// production never reaches, and would pass whether or not the attribute is honoured.
+    /// </summary>
+    public sealed class QueuedProbeJob
+    {
+        /// <summary>Never invoked; the payload only has to deserialise.</summary>
+        [Queue("critical")]
         public Task RunAsync(CancellationToken cancellationToken)
         {
             return Task.CompletedTask;
