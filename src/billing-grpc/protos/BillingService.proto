@@ -537,6 +537,47 @@ message FleetManualRun {
   bool retained = 7;
 }
 
+// How a currently-executing job was linked back to a recurring schedule. Hangfire's processing
+// list does not carry that link: it lives in a job parameter that costs one extra storage read per
+// job, and that read is capped and can fail. An empty recurring_job_id is therefore ambiguous on
+// its own, and this says which kind of empty it is.
+enum FleetProcessingAttribution {
+  FLEET_PROCESSING_ATTRIBUTION_UNSPECIFIED = 0;
+  // recurring_job_id was read from the job's own RecurringJobId parameter and is trustworthy.
+  FLEET_PROCESSING_ATTRIBUTION_RECURRING = 1;
+  // The job's parameters were read and carry no recurring link — a fan-out child or on-demand
+  // work. It has no recurring job id and never will.
+  FLEET_PROCESSING_ATTRIBUTION_NOT_RECURRING = 2;
+  // The lookup was skipped or failed. This job may still belong to a recurring schedule, so
+  // render it as unknown; treating it as NOT_RECURRING would hide the runaway job an operator
+  // opened this view to find.
+  FLEET_PROCESSING_ATTRIBUTION_UNKNOWN = 3;
+}
+
+// One background job Hangfire reports as executing right now.
+message FleetProcessingJob {
+  string job_id = 1;
+  // Type and method of the invocation, e.g. "TenantPurgeJob.RunAsync". Empty when Hangfire could
+  // not deserialise the payload, in which case load_error says why.
+  string job_name = 2;
+  // Empty when the payload does not name one; the job then runs on Hangfire's default queue.
+  string queue = 3;
+  // The Hangfire server executing this job. Matches FleetJobWorker.name.
+  string server_id = 4;
+  // Unset when Hangfire reports no start time. This is a timestamp rather than a duration on
+  // purpose: render the age against server_time, which is the clock that produced it.
+  google.protobuf.Timestamp started_at = 5;
+  // False when the job left the Processing state between the list query and the state read, so
+  // this row is already stale. Render it as finishing, not as running work.
+  bool in_processing_state = 6;
+  // Meaningful only when attribution is RECURRING; empty otherwise.
+  string recurring_job_id = 7;
+  FleetProcessingAttribution attribution = 8;
+  // Hangfire's payload deserialisation error, when it has one. A job with this set is still
+  // genuinely running.
+  string load_error = 9;
+}
+
 message ListRecurringJobsRequest {
   // Job ids of recent manual runs to resolve outcomes for. Capped server-side at 20.
   repeated string enrich_job_ids = 1;
@@ -549,10 +590,27 @@ message ListRecurringJobsResponse {
   repeated FleetManualRun manual_runs = 4;
   // The fleet's clock, so callers render ages against the clock that computed the statuses.
   google.protobuf.Timestamp server_time = 5;
-  // Names of sections that could not be read from storage: "failed_count", "jobs", "workers".
-  // Their fields carry defaults, so a caller MUST render these as unknown rather than as zero or
-  // empty — a confident "0 failed jobs" when the query failed is worse than saying nothing.
+  // Names of sections that could not be read from storage: "failed_count", "jobs", "workers",
+  // "processing". Their fields carry defaults, so a caller MUST render these as unknown rather
+  // than as zero or empty — a confident "0 failed jobs" when the query failed is worse than
+  // saying nothing.
   repeated string unavailable_sections = 6;
+  // Jobs executing right now, capped server-side at 25. When more than 25 are executing the
+  // retained rows are the ones that STARTED EARLIEST, because the question this list answers is
+  // "what is running long"; a job Hangfire reports without a start time sorts last. Rows are
+  // ordered oldest-first. Callers may rely on both.
+  //
+  // An empty list is the NORMAL healthy state here, unlike jobs and workers, which makes it the
+  // one section where "nothing is running" and "the query failed" look identical. The only way to
+  // tell them apart is the "processing" entry in unavailable_sections — check it before rendering
+  // this as idle.
+  repeated FleetProcessingJob processing_jobs = 7;
+  // Total jobs in the Processing state, which exceeds processing_jobs's length when the list was
+  // capped. Never less than that length: the total and the list are separate storage reads, so
+  // the server raises the total to the number of rows it actually returned rather than let a
+  // caller compute a negative "N more not shown". Governed by the same "processing" section as
+  // the list above.
+  int64 processing_job_count = 8;
 }
 
 message RunRecurringJobNowRequest {
