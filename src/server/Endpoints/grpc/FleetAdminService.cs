@@ -1279,8 +1279,9 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
     /// <c>[Queue("long")]</c>, an elect-state filter that rewrites the enqueued state and never
     /// writes back to the job. Reading <see cref="Job.Queue"/> therefore reports the default for
     /// every row, which in a view whose whole purpose is answering "is a queue wedged?" is not an
-    /// unknown but a positive false claim. Hangfire resolves the filter from the method first and
-    /// then the declaring type, so this looks in the same order.
+    /// unknown but a positive false claim. Hangfire collects filters type-scope first and then
+    /// method-scope, and the later one wins, so a method-level attribute overrides a type-level
+    /// one — this returns the method's for the same reason, by looking there first.
     /// </remarks>
     private static string ResolveQueue(Job job)
     {

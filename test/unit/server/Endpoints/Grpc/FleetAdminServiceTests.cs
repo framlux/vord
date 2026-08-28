@@ -930,8 +930,10 @@ public sealed class FleetAdminServiceTests
         await Assert.That(response.ProcessingJobs.Count).IsEqualTo(25);
 
         // Oldest first, so the straggler is the headline row rather than one the cap discarded.
-        await Assert.That(response.ProcessingJobs.Select(j => j.JobId).ToList())
-            .IsEquivalentTo(Enumerable.Range(0, 25).Select(i => i.ToString()).ToList());
+        // Joined rather than compared as collections: IsEquivalentTo ignores order, so it would
+        // hold for every permutation and assert nothing about the ranking this test is named for.
+        await Assert.That(string.Join(",", response.ProcessingJobs.Select(j => j.JobId)))
+            .IsEqualTo(string.Join(",", Enumerable.Range(0, 25)));
     }
 
     /// <summary>
@@ -951,8 +953,8 @@ public sealed class FleetAdminServiceTests
 
         ListRecurringJobsResponse response = await ListAgainstAsync(monitoring);
 
-        await Assert.That(response.ProcessingJobs.Select(j => j.JobId).ToList())
-            .IsEquivalentTo(new List<string> { "started", "no-start" });
+        await Assert.That(string.Join(",", response.ProcessingJobs.Select(j => j.JobId)))
+            .IsEqualTo("started,no-start");
     }
 
     /// <summary>
