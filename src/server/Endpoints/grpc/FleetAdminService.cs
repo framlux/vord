@@ -8,6 +8,7 @@ using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Server.Auth;
+using Framlux.FleetManagement.Services.Core.Alerts;
 using Framlux.FleetManagement.Services.Core.Billing;
 using Framlux.FleetManagement.Services.Core.Handlers;
 using Framlux.FleetManagement.Services.Core.Hangfire;
@@ -499,6 +500,27 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
         // The tier write above is not wrapped in a transaction, so it is already durable; dispatch the
         // reclassification the subscription seam marked rather than waiting for scope teardown.
         scope.ServiceProvider.GetRequiredService<RetentionReclassifyDispatcher>().DispatchPending();
+
+        // An administrative grant is a real route into a paid tier and bypasses Stripe entirely, so
+        // nothing else on this path would ever provision or enable the built-in rules. The status
+        // guard matters: the RPC accepts Pro with a Canceled status and applies no cross-field
+        // validation, while SubscriptionPolicy.RequiresPro is status-sensitive, so without it the
+        // seed path and the enable path would disagree about the same tenant.
+        if (((tier.Value == SubscriptionTier.Pro) || (tier.Value == SubscriptionTier.Team)) &&
+            (status == SubscriptionStatus.Active))
+        {
+            IBuiltInAlertRuleProvisioner provisioner = scope.ServiceProvider.GetRequiredService<IBuiltInAlertRuleProvisioner>();
+            await provisioner.EnsureProvisionedAsync(tenant.Id, context.CancellationToken);
+            await provisioner.EnableBuiltInsAsync(tenant.Id, context.CancellationToken);
+
+            // Mirrors the checkout path: arriving at Team restores the custom rules a Pro downgrade
+            // froze.
+            if (tier.Value == SubscriptionTier.Team)
+            {
+                IAlertRuleRepository alertRuleRepo = scope.ServiceProvider.GetRequiredService<IAlertRuleRepository>();
+                await alertRuleRepo.EnableCustomAlertRulesAsync(tenant.Id, context.CancellationToken);
+            }
+        }
 
         _logger.LogInformation(
             "FleetAdmin: tenant {TenantId} subscription updated to tier={Tier}, status={Status}",

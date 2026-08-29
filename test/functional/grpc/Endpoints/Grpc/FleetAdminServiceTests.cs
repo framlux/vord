@@ -6,6 +6,7 @@ using System.Net;
 using Framlux.FleetManagement.Database;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
+using Framlux.FleetManagement.Services.Core.Alerts;
 using Framlux.FleetManagement.Services.Core.Billing;
 using Framlux.FleetManagement.Test.Infrastructure;
 using Framlux.Vord.BillingGrpc;
@@ -772,6 +773,175 @@ public sealed class FleetAdminServiceTests
         await Assert.That(exception!.StatusCode).IsEqualTo(StatusCode.NotFound);
     }
 
+    /// <summary>
+    /// An administrative grant is a real route into a paid tier that bypasses Stripe entirely, so
+    /// it has to leave the tenant in the same state a checkout would: built-in rules present and
+    /// enabled.
+    /// </summary>
+    [Test]
+    public async Task UpdateTenantSubscription_GrantToPro_EnablesExistingBuiltInRules()
+    {
+        using FunctionalTestFactory factory = new();
+        factory.WithInternalClientSubjects(PermittedClientSubject);
+        using DatabaseContext db = factory.CreateDbContext();
+
+        string extId = $"ext-{Guid.NewGuid():N}";
+        int tenantId = await SeedTenantWithSubscription(db, extId, SubscriptionTier.Free);
+        await SeedDisabledBuiltInRules(db, tenantId);
+
+        using GrpcChannel channel = CreateChannel(factory);
+        FleetAdmin.FleetAdminClient client = new(channel);
+
+        UpdateTenantSubscriptionResponse response = await client.UpdateTenantSubscriptionAsync(
+            new UpdateTenantSubscriptionRequest
+            {
+                TenantExternalId = extId,
+                Tier = BillingTier.Pro,
+                Status = "Active",
+            },
+            Headers());
+
+        await Assert.That(response.Success).IsTrue();
+
+        List<AlertRule> rules = await db.AlertRules
+            .Where(r => (r.TenantId == tenantId) && (r.IsCustom == false))
+            .ToListAsync();
+
+        await Assert.That(rules.Count).IsEqualTo(BuiltInAlertRuleDefinitions.All.Count);
+        foreach (AlertRule rule in rules)
+        {
+            await Assert.That(rule.IsEnabled).IsTrue();
+        }
+    }
+
+    /// <summary>
+    /// A tenant that predates provisioning at tenant creation holds no built-in rules at all, so the
+    /// grant has to create them as well as enable them.
+    /// </summary>
+    [Test]
+    public async Task UpdateTenantSubscription_GrantToPro_ProvisionsMissingBuiltInRules()
+    {
+        using FunctionalTestFactory factory = new();
+        factory.WithInternalClientSubjects(PermittedClientSubject);
+        using DatabaseContext db = factory.CreateDbContext();
+
+        string extId = $"ext-{Guid.NewGuid():N}";
+        int tenantId = await SeedTenantWithSubscription(db, extId, SubscriptionTier.Free);
+
+        using GrpcChannel channel = CreateChannel(factory);
+        FleetAdmin.FleetAdminClient client = new(channel);
+
+        UpdateTenantSubscriptionResponse response = await client.UpdateTenantSubscriptionAsync(
+            new UpdateTenantSubscriptionRequest
+            {
+                TenantExternalId = extId,
+                Tier = BillingTier.Pro,
+                Status = "Active",
+            },
+            Headers());
+
+        await Assert.That(response.Success).IsTrue();
+
+        List<AlertRule> rules = await db.AlertRules
+            .Where(r => (r.TenantId == tenantId) && (r.IsCustom == false))
+            .ToListAsync();
+
+        await Assert.That(rules.Count).IsEqualTo(BuiltInAlertRuleDefinitions.All.Count);
+        foreach (AlertRule rule in rules)
+        {
+            await Assert.That(rule.IsEnabled).IsTrue();
+        }
+    }
+
+    /// <summary>
+    /// Arriving at Team restores the custom rules a Pro downgrade froze, mirroring the checkout
+    /// path. Reaching Pro must not, because custom rules are what the Team tier sells.
+    /// </summary>
+    [Test]
+    public async Task UpdateTenantSubscription_GrantToTeam_EnablesCustomRulesButProDoesNot()
+    {
+        using FunctionalTestFactory factory = new();
+        factory.WithInternalClientSubjects(PermittedClientSubject);
+        using DatabaseContext db = factory.CreateDbContext();
+
+        string proExtId = $"ext-{Guid.NewGuid():N}";
+        string teamExtId = $"ext-{Guid.NewGuid():N}";
+        int proTenantId = await SeedTenantWithSubscription(db, proExtId, SubscriptionTier.Free);
+        int teamTenantId = await SeedTenantWithSubscription(db, teamExtId, SubscriptionTier.Free);
+        int proRuleId = await SeedDisabledCustomRule(db, proTenantId);
+        int teamRuleId = await SeedDisabledCustomRule(db, teamTenantId);
+
+        using GrpcChannel channel = CreateChannel(factory);
+        FleetAdmin.FleetAdminClient client = new(channel);
+
+        await client.UpdateTenantSubscriptionAsync(
+            new UpdateTenantSubscriptionRequest
+            {
+                TenantExternalId = proExtId,
+                Tier = BillingTier.Pro,
+                Status = "Active",
+            },
+            Headers());
+
+        await client.UpdateTenantSubscriptionAsync(
+            new UpdateTenantSubscriptionRequest
+            {
+                TenantExternalId = teamExtId,
+                Tier = BillingTier.Team,
+                Status = "Active",
+            },
+            Headers());
+
+        AlertRule? proRule = await db.AlertRules.Where(r => r.Id == proRuleId).FirstOrDefaultAsync();
+        AlertRule? teamRule = await db.AlertRules.Where(r => r.Id == teamRuleId).FirstOrDefaultAsync();
+
+        await Assert.That(proRule).IsNotNull();
+        await Assert.That(proRule!.IsEnabled).IsFalse();
+        await Assert.That(teamRule).IsNotNull();
+        await Assert.That(teamRule!.IsEnabled).IsTrue();
+    }
+
+    /// <summary>
+    /// The RPC accepts a paid tier with a non-Active status and applies no cross-field validation,
+    /// so the guard has to be here: a Canceled subscription is not entitled and its built-in rules
+    /// must stay off.
+    /// </summary>
+    [Test]
+    public async Task UpdateTenantSubscription_GrantToProCanceled_LeavesBuiltInRulesDisabled()
+    {
+        using FunctionalTestFactory factory = new();
+        factory.WithInternalClientSubjects(PermittedClientSubject);
+        using DatabaseContext db = factory.CreateDbContext();
+
+        string extId = $"ext-{Guid.NewGuid():N}";
+        int tenantId = await SeedTenantWithSubscription(db, extId, SubscriptionTier.Free);
+        await SeedDisabledBuiltInRules(db, tenantId);
+
+        using GrpcChannel channel = CreateChannel(factory);
+        FleetAdmin.FleetAdminClient client = new(channel);
+
+        UpdateTenantSubscriptionResponse response = await client.UpdateTenantSubscriptionAsync(
+            new UpdateTenantSubscriptionRequest
+            {
+                TenantExternalId = extId,
+                Tier = BillingTier.Pro,
+                Status = "Canceled",
+            },
+            Headers());
+
+        await Assert.That(response.Success).IsTrue();
+
+        List<AlertRule> rules = await db.AlertRules
+            .Where(r => (r.TenantId == tenantId) && (r.IsCustom == false))
+            .ToListAsync();
+
+        await Assert.That(rules.Count).IsEqualTo(BuiltInAlertRuleDefinitions.All.Count);
+        foreach (AlertRule rule in rules)
+        {
+            await Assert.That(rule.IsEnabled).IsFalse();
+        }
+    }
+
     // ========== SetTenantOverride / RemoveTenantOverride Audit Tests ==========
 
     [Test]
@@ -1440,6 +1610,58 @@ public sealed class FleetAdminServiceTests
         await db.InsertAsync(subscription);
 
         return tenantId;
+    }
+
+    /// <summary>
+    /// Seeds the full set of built-in rules disabled, as a Free tenant holds them. Driving this off
+    /// the shipped definitions keeps the count assertions honest if a metric is ever added.
+    /// </summary>
+    private static async Task SeedDisabledBuiltInRules(DatabaseContext db, int tenantId)
+    {
+        foreach (BuiltInAlertRuleDefinition definition in BuiltInAlertRuleDefinitions.All)
+        {
+            AlertRule rule = new()
+            {
+                TenantId = tenantId,
+                Name = definition.Name,
+                Metric = definition.Metric,
+                Operator = definition.Operator,
+                Threshold = definition.Threshold,
+                DurationMinutes = definition.DurationMinutes,
+                Severity = definition.Severity,
+                IsEnabled = false,
+                NotifyEmail = true,
+                NotifyWebhook = false,
+                IsCustom = false,
+                CreatedByUserId = BuiltInAlertRuleDefinitions.SystemUserId,
+                CreatedAt = DateTimeOffset.UtcNow,
+                UpdatedAt = DateTimeOffset.UtcNow
+            };
+            await db.InsertAsync(rule);
+        }
+    }
+
+    private static async Task<int> SeedDisabledCustomRule(DatabaseContext db, int tenantId)
+    {
+        AlertRule rule = new()
+        {
+            TenantId = tenantId,
+            Name = $"custom-{Guid.NewGuid():N}",
+            Metric = AlertMetric.CpuUsage,
+            Operator = AlertOperator.GreaterThan,
+            Threshold = 50,
+            DurationMinutes = 5,
+            Severity = AlertSeverity.Warning,
+            IsEnabled = false,
+            NotifyEmail = true,
+            NotifyWebhook = false,
+            IsCustom = true,
+            CreatedByUserId = BuiltInAlertRuleDefinitions.SystemUserId,
+            CreatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow
+        };
+
+        return await db.InsertWithInt32IdentityAsync(rule);
     }
 
     private static async Task SeedUserTenantRole(

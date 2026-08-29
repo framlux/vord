@@ -8,6 +8,7 @@ using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Server.Auth;
 using Framlux.FleetManagement.Server.Endpoints.Grpc;
+using Framlux.FleetManagement.Services.Core.Alerts;
 using Framlux.FleetManagement.Services.Core.Billing;
 using Framlux.FleetManagement.Services.Core.Handlers;
 using Framlux.FleetManagement.Services.Core.Infrastructure;
@@ -2129,6 +2130,7 @@ public sealed class FleetAdminServiceTests
         {
             { typeof(ITenantRepository), tenantRepo },
             { typeof(ISubscriptionRepository), subscriptionRepo },
+            { typeof(IBuiltInAlertRuleProvisioner), Substitute.For<IBuiltInAlertRuleProvisioner>() },
             {
                 typeof(RetentionReclassifyDispatcher),
                 new RetentionReclassifyDispatcher(
