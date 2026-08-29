@@ -14,12 +14,20 @@ using Hangfire;
 using LinqToDB;
 using LinqToDB.Async;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Time.Testing;
 using NSubstitute;
 
 namespace Framlux.FleetManagement.Test.Services;
 
 public sealed class AlertEvaluationJobTests
 {
+    /// <summary>
+    /// Fixed instant every duration-window test starts from. Condition durations are the one thing
+    /// this job measures, so they are asserted against a clock the test controls rather than the
+    /// wall clock — a ten-minute offline window is not something a test can wait out.
+    /// </summary>
+    private static readonly DateTimeOffset EvaluationEpoch = new(2026, 8, 28, 12, 0, 0, TimeSpan.Zero);
+
     // ----- Pure helpers: EvaluateCondition -----
 
     [Test]
@@ -226,7 +234,8 @@ public sealed class AlertEvaluationJobTests
 
     private static (AlertEvaluationJob Job, DatabaseContext Db, IAlertConditionStateRepository ConditionStates, IAlertDeliveryService Delivery, IAlertEventRepository AlertEventRepo, IAlertRuleRepository AlertRuleRepo, IMachineStateRepository MachineStateRepo) CreateJobWithDb(
         TestDatabaseFactory dbFactory,
-        ISubscriptionService? subscriptionService = null)
+        ISubscriptionService? subscriptionService = null,
+        TimeProvider? timeProvider = null)
     {
         DatabaseContext db = dbFactory.Context;
 
@@ -244,6 +253,7 @@ public sealed class AlertEvaluationJobTests
             alertConditionStateRepository: repository,
             subscriptionService: resolvedSubscriptionService,
             deliveryService: deliveryService,
+            timeProvider: timeProvider ?? TimeProvider.System,
             logger: logger);
 
         return (job, db, repository, deliveryService, repository, repository, repository);
@@ -371,7 +381,8 @@ public sealed class AlertEvaluationJobTests
     public async Task EvaluateRuleForMachineAsync_ConditionMet_WithDuration_FirstObservation_InsertsStateNoEvent()
     {
         using TestDatabaseFactory dbFactory = new();
-        (AlertEvaluationJob job, DatabaseContext db, _, _, _, _, _) = CreateJobWithDb(dbFactory);
+        FakeTimeProvider clock = new(EvaluationEpoch);
+        (AlertEvaluationJob job, DatabaseContext db, _, _, _, _, _) = CreateJobWithDb(dbFactory, timeProvider: clock);
 
         Tenant tenant = TestDataBuilder.BuildTenant();
         tenant.Id = await db.InsertWithInt32IdentityAsync(tenant);
@@ -379,7 +390,7 @@ public sealed class AlertEvaluationJobTests
         AlertRule rule = TestDataBuilder.BuildAlertRule(tenantId: tenant.Id, metric: AlertMetric.CpuUsage, threshold: 80m, durationMinutes: 5);
         rule.Id = await db.InsertWithInt32IdentityAsync(rule);
 
-        MachineStateSummary state = new() { MachineId = 1, CpuUsagePercent = 90, LastSeenAt = DateTimeOffset.UtcNow };
+        MachineStateSummary state = new() { MachineId = 1, CpuUsagePercent = 90, LastSeenAt = EvaluationEpoch };
 
         await job.EvaluateRuleForMachineAsync(rule, state, new HashSet<long>(), CancellationToken.None);
 
@@ -387,6 +398,8 @@ public sealed class AlertEvaluationJobTests
             .Where(s => (s.AlertRuleId == rule.Id) && (s.MachineId == 1))
             .FirstOrDefaultAsync();
         await Assert.That(row).IsNotNull();
+        // The window opens at the injected clock's instant, not the wall clock.
+        await Assert.That(row!.FirstTriggeredAt).IsEqualTo(EvaluationEpoch);
 
         int eventCount = await db.AlertEvents.CountAsync();
         await Assert.That(eventCount).IsEqualTo(0);
@@ -398,7 +411,8 @@ public sealed class AlertEvaluationJobTests
         // Intent: the duration window must measure from the original FirstTriggeredAt; subsequent
         // observations within the window must NOT reset it.
         using TestDatabaseFactory dbFactory = new();
-        (AlertEvaluationJob job, DatabaseContext db, _, _, _, _, _) = CreateJobWithDb(dbFactory);
+        FakeTimeProvider clock = new(EvaluationEpoch);
+        (AlertEvaluationJob job, DatabaseContext db, _, _, _, _, _) = CreateJobWithDb(dbFactory, timeProvider: clock);
 
         Tenant tenant = TestDataBuilder.BuildTenant();
         tenant.Id = await db.InsertWithInt32IdentityAsync(tenant);
@@ -406,15 +420,16 @@ public sealed class AlertEvaluationJobTests
         AlertRule rule = TestDataBuilder.BuildAlertRule(tenantId: tenant.Id, metric: AlertMetric.CpuUsage, threshold: 80m, durationMinutes: 5);
         rule.Id = await db.InsertWithInt32IdentityAsync(rule);
 
-        DateTimeOffset twoMinutesAgo = DateTimeOffset.UtcNow.AddMinutes(-2);
         await db.InsertAsync(new AlertConditionState
         {
             AlertRuleId = rule.Id, MachineId = 1,
-            FirstTriggeredAt = twoMinutesAgo,
-            LastObservedAt = twoMinutesAgo,
+            FirstTriggeredAt = EvaluationEpoch,
+            LastObservedAt = EvaluationEpoch,
         });
 
-        MachineStateSummary state = new() { MachineId = 1, CpuUsagePercent = 90, LastSeenAt = DateTimeOffset.UtcNow };
+        clock.Advance(TimeSpan.FromMinutes(2));
+
+        MachineStateSummary state = new() { MachineId = 1, CpuUsagePercent = 90, LastSeenAt = clock.GetUtcNow() };
 
         await job.EvaluateRuleForMachineAsync(rule, state, new HashSet<long>(), CancellationToken.None);
 
@@ -422,9 +437,9 @@ public sealed class AlertEvaluationJobTests
             .Where(s => (s.AlertRuleId == rule.Id) && (s.MachineId == 1))
             .FirstOrDefaultAsync();
         await Assert.That(row).IsNotNull();
-        // FirstTriggeredAt must NOT have been reset; LastObservedAt should advance.
-        await Assert.That(row!.FirstTriggeredAt).IsEqualTo(twoMinutesAgo);
-        await Assert.That(row.LastObservedAt > twoMinutesAgo).IsTrue();
+        // FirstTriggeredAt must NOT have been reset; LastObservedAt advances to the current instant.
+        await Assert.That(row!.FirstTriggeredAt).IsEqualTo(EvaluationEpoch);
+        await Assert.That(row.LastObservedAt).IsEqualTo(EvaluationEpoch.AddMinutes(2));
 
         int eventCount = await db.AlertEvents.CountAsync();
         await Assert.That(eventCount).IsEqualTo(0);
@@ -434,7 +449,8 @@ public sealed class AlertEvaluationJobTests
     public async Task EvaluateRuleForMachineAsync_ConditionMet_WithDuration_Elapsed_FiresAlertAndClearsStateRow()
     {
         using TestDatabaseFactory dbFactory = new();
-        (AlertEvaluationJob job, DatabaseContext db, _, IAlertDeliveryService delivery, _, _, _) = CreateJobWithDb(dbFactory);
+        FakeTimeProvider clock = new(EvaluationEpoch);
+        (AlertEvaluationJob job, DatabaseContext db, _, IAlertDeliveryService delivery, _, _, _) = CreateJobWithDb(dbFactory, timeProvider: clock);
 
         Tenant tenant = TestDataBuilder.BuildTenant();
         tenant.Id = await db.InsertWithInt32IdentityAsync(tenant);
@@ -445,15 +461,16 @@ public sealed class AlertEvaluationJobTests
         AlertRule rule = TestDataBuilder.BuildAlertRule(tenantId: tenant.Id, metric: AlertMetric.CpuUsage, threshold: 80m, durationMinutes: 5);
         rule.Id = await db.InsertWithInt32IdentityAsync(rule);
 
-        DateTimeOffset tenMinutesAgo = DateTimeOffset.UtcNow.AddMinutes(-10);
         await db.InsertAsync(new AlertConditionState
         {
             AlertRuleId = rule.Id, MachineId = machine.Id,
-            FirstTriggeredAt = tenMinutesAgo,
-            LastObservedAt = tenMinutesAgo,
+            FirstTriggeredAt = EvaluationEpoch,
+            LastObservedAt = EvaluationEpoch,
         });
 
-        MachineStateSummary state = new() { MachineId = machine.Id, CpuUsagePercent = 95, LastSeenAt = DateTimeOffset.UtcNow };
+        clock.Advance(TimeSpan.FromMinutes(10));
+
+        MachineStateSummary state = new() { MachineId = machine.Id, CpuUsagePercent = 95, LastSeenAt = clock.GetUtcNow() };
 
         await job.EvaluateRuleForMachineAsync(rule, state, new HashSet<long>(), CancellationToken.None);
 
@@ -461,6 +478,8 @@ public sealed class AlertEvaluationJobTests
         List<AlertEvent> events = await db.AlertEvents.Where(e => e.AlertRuleId == rule.Id).ToListAsync();
         await Assert.That(events.Count).IsEqualTo(1);
         await Assert.That(events[0].Status).IsEqualTo(AlertEventStatus.Triggered);
+        // The event is stamped from the injected clock, not the wall clock.
+        await Assert.That(events[0].TriggeredAt).IsEqualTo(EvaluationEpoch.AddMinutes(10));
 
         // State row deleted so a re-trigger gets a fresh window.
         AlertConditionState? row = await db.AlertConditionStates
@@ -469,6 +488,94 @@ public sealed class AlertEvaluationJobTests
         await Assert.That(row).IsNull();
 
         await delivery.Received(1).EnqueueAsync(events[0].Id, rule.Id, rule.TenantId, Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task MachineOfflineRule_NineMinutesIntoOutage_DoesNotFire()
+    {
+        // Intent: the shipped offline rule waits ten minutes on top of the five minutes of silence
+        // that sets the offline flag, so a reboot or a brief network drop must not page anyone.
+        using TestDatabaseFactory dbFactory = new();
+        FakeTimeProvider clock = new(EvaluationEpoch);
+        (AlertEvaluationJob job, DatabaseContext db, _, IAlertDeliveryService delivery, _, _, _) = CreateJobWithDb(dbFactory, timeProvider: clock);
+
+        Tenant tenant = TestDataBuilder.BuildTenant();
+        tenant.Id = await db.InsertWithInt32IdentityAsync(tenant);
+
+        Machine machine = TestDataBuilder.BuildMachine(tenantId: tenant.Id);
+        machine.Id = await db.InsertWithInt64IdentityAsync(machine);
+
+        AlertRule rule = TestDataBuilder.BuildAlertRule(
+            tenantId: tenant.Id, metric: AlertMetric.MachineOffline, op: AlertOperator.EqualTo, threshold: 1m, durationMinutes: 10);
+        rule.Id = await db.InsertWithInt32IdentityAsync(rule);
+
+        await db.InsertAsync(new AlertConditionState
+        {
+            AlertRuleId = rule.Id, MachineId = machine.Id,
+            FirstTriggeredAt = EvaluationEpoch,
+            LastObservedAt = EvaluationEpoch,
+        });
+
+        clock.Advance(TimeSpan.FromMinutes(9));
+
+        MachineStateSummary state = new()
+        {
+            MachineId = machine.Id, HealthStatus = AlertConstants.HealthStatusOffline, LastSeenAt = EvaluationEpoch,
+        };
+
+        await job.EvaluateRuleForMachineAsync(rule, state, new HashSet<long>(), CancellationToken.None);
+
+        int events = await db.AlertEvents.CountAsync();
+        await Assert.That(events).IsEqualTo(0);
+        await delivery.DidNotReceive().EnqueueAsync(Arg.Any<long>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>());
+
+        // The window is still open, so the tracking row survives for the next evaluation.
+        AlertConditionState? row = await db.AlertConditionStates
+            .Where(s => (s.AlertRuleId == rule.Id) && (s.MachineId == machine.Id))
+            .FirstOrDefaultAsync();
+        await Assert.That(row).IsNotNull();
+        await Assert.That(row!.FirstTriggeredAt).IsEqualTo(EvaluationEpoch);
+    }
+
+    [Test]
+    public async Task MachineOfflineRule_ElevenMinutesIntoOutage_Fires()
+    {
+        // Intent: the same rule must fire once the ten-minute window has genuinely elapsed.
+        using TestDatabaseFactory dbFactory = new();
+        FakeTimeProvider clock = new(EvaluationEpoch);
+        (AlertEvaluationJob job, DatabaseContext db, _, IAlertDeliveryService delivery, _, _, _) = CreateJobWithDb(dbFactory, timeProvider: clock);
+
+        Tenant tenant = TestDataBuilder.BuildTenant();
+        tenant.Id = await db.InsertWithInt32IdentityAsync(tenant);
+
+        Machine machine = TestDataBuilder.BuildMachine(tenantId: tenant.Id);
+        machine.Id = await db.InsertWithInt64IdentityAsync(machine);
+
+        AlertRule rule = TestDataBuilder.BuildAlertRule(
+            tenantId: tenant.Id, metric: AlertMetric.MachineOffline, op: AlertOperator.EqualTo, threshold: 1m, durationMinutes: 10);
+        rule.Id = await db.InsertWithInt32IdentityAsync(rule);
+
+        await db.InsertAsync(new AlertConditionState
+        {
+            AlertRuleId = rule.Id, MachineId = machine.Id,
+            FirstTriggeredAt = EvaluationEpoch,
+            LastObservedAt = EvaluationEpoch,
+        });
+
+        clock.Advance(TimeSpan.FromMinutes(11));
+
+        MachineStateSummary state = new()
+        {
+            MachineId = machine.Id, HealthStatus = AlertConstants.HealthStatusOffline, LastSeenAt = EvaluationEpoch,
+        };
+
+        await job.EvaluateRuleForMachineAsync(rule, state, new HashSet<long>(), CancellationToken.None);
+
+        List<AlertEvent> events = await db.AlertEvents.Where(e => e.AlertRuleId == rule.Id).ToListAsync();
+        await Assert.That(events.Count).IsEqualTo(1);
+        await Assert.That(events[0].MachineId).IsEqualTo(machine.Id);
+        await Assert.That(events[0].TriggeredAt).IsEqualTo(EvaluationEpoch.AddMinutes(11));
+        await delivery.Received(1).EnqueueAsync(events[0].Id, rule.Id, tenant.Id, Arg.Any<CancellationToken>());
     }
 
     // ----- RunAsync paths -----
@@ -647,7 +754,8 @@ public sealed class AlertEvaluationJobTests
         // be cleared so that the next outage starts a fresh window from zero. Without this the
         // machine could flap online/offline and accumulate "time offline" across distinct outages.
         using TestDatabaseFactory dbFactory = new();
-        (AlertEvaluationJob job, DatabaseContext db, _, IAlertDeliveryService delivery, _, _, _) = CreateJobWithDb(dbFactory);
+        FakeTimeProvider clock = new(EvaluationEpoch);
+        (AlertEvaluationJob job, DatabaseContext db, _, IAlertDeliveryService delivery, _, _, _) = CreateJobWithDb(dbFactory, timeProvider: clock);
 
         Tenant tenant = TestDataBuilder.BuildTenant();
         tenant.Id = await db.InsertWithInt32IdentityAsync(tenant);
@@ -659,16 +767,17 @@ public sealed class AlertEvaluationJobTests
         rule.Id = await db.InsertWithInt32IdentityAsync(rule);
 
         // Seed an in-flight condition-state row from when the machine first went offline.
-        DateTimeOffset twoMinutesAgo = DateTimeOffset.UtcNow.AddMinutes(-2);
         await db.InsertAsync(new AlertConditionState
         {
             AlertRuleId = rule.Id, MachineId = machine.Id,
-            FirstTriggeredAt = twoMinutesAgo,
-            LastObservedAt = twoMinutesAgo,
+            FirstTriggeredAt = EvaluationEpoch,
+            LastObservedAt = EvaluationEpoch,
         });
 
+        clock.Advance(TimeSpan.FromMinutes(2));
+
         // Machine is now back online (HealthStatus = 0 → metric value 0, fails threshold > 0).
-        MachineStateSummary state = new() { MachineId = machine.Id, HealthStatus = 0, LastSeenAt = DateTimeOffset.UtcNow };
+        MachineStateSummary state = new() { MachineId = machine.Id, HealthStatus = 0, LastSeenAt = clock.GetUtcNow() };
 
         await job.EvaluateRuleForMachineAsync(rule, state, new HashSet<long>(), CancellationToken.None);
 
@@ -826,6 +935,7 @@ public sealed class AlertEvaluationJobTests
         IAlertConditionStateRepository? conditionStates = null,
         ISubscriptionService? subscriptions = null,
         IAlertDeliveryService? delivery = null,
+        TimeProvider? timeProvider = null,
         ILogger<AlertEvaluationJob>? logger = null)
     {
         return new AlertEvaluationJob(
@@ -835,6 +945,7 @@ public sealed class AlertEvaluationJobTests
             conditionStates!,
             subscriptions!,
             delivery!,
+            timeProvider!,
             logger!);
     }
 
@@ -846,6 +957,7 @@ public sealed class AlertEvaluationJobTests
         IAlertConditionStateRepository cs = Substitute.For<IAlertConditionStateRepository>();
         ISubscriptionService ss = Substitute.For<ISubscriptionService>();
         IAlertDeliveryService ds = Substitute.For<IAlertDeliveryService>();
+        TimeProvider tp = new FakeTimeProvider(EvaluationEpoch);
         ILogger<AlertEvaluationJob> log = Substitute.For<ILogger<AlertEvaluationJob>>();
 
         return BuildJob(
@@ -855,6 +967,7 @@ public sealed class AlertEvaluationJobTests
             paramName == "alertConditionStateRepository" ? null : cs,
             paramName == "subscriptionService" ? null : ss,
             paramName == "deliveryService" ? null : ds,
+            paramName == "timeProvider" ? null : tp,
             paramName == "logger" ? null : log);
     }
 
@@ -937,6 +1050,19 @@ public sealed class AlertEvaluationJobTests
     }
 
     [Test]
+    public async Task Constructor_NullTimeProvider_Throws()
+    {
+        ArgumentNullException? ex = await Assert.ThrowsAsync<ArgumentNullException>(() =>
+        {
+            BuildJobWithAllExcept("timeProvider");
+
+            return Task.CompletedTask;
+        });
+        await Assert.That(ex).IsNotNull();
+        await Assert.That(ex!.ParamName).IsEqualTo("timeProvider");
+    }
+
+    [Test]
     public async Task Constructor_NullLogger_Throws()
     {
         ArgumentNullException? ex = await Assert.ThrowsAsync<ArgumentNullException>(() =>
@@ -1002,7 +1128,7 @@ public sealed class AlertEvaluationJobTests
                 Arg.Any<DateTimeOffset>(), Arg.Any<DateTimeOffset>(), Arg.Any<CancellationToken>())
             .Returns(new List<AlertEvent>());
 
-        AlertEvaluationJob job = new(stateRepo, ruleRepo, eventRepo, conditionRepo, subscriptionService, delivery, logger);
+        AlertEvaluationJob job = new(stateRepo, ruleRepo, eventRepo, conditionRepo, subscriptionService, delivery, new FakeTimeProvider(EvaluationEpoch), logger);
 
         // Must NOT throw — tenant 1 failure is caught + logged.
         await job.RunAsync(CancellationToken.None);
@@ -1043,7 +1169,7 @@ public sealed class AlertEvaluationJobTests
                 throw new OperationCanceledException(cts.Token);
             });
 
-        AlertEvaluationJob job = new(stateRepo, ruleRepo, eventRepo, conditionRepo, subscriptionService, delivery, logger);
+        AlertEvaluationJob job = new(stateRepo, ruleRepo, eventRepo, conditionRepo, subscriptionService, delivery, new FakeTimeProvider(EvaluationEpoch), logger);
 
         await Assert.ThrowsAsync<OperationCanceledException>(() => job.RunAsync(cts.Token));
     }

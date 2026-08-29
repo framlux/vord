@@ -29,11 +29,24 @@ public sealed class AlertEvaluationJob
     private readonly IAlertConditionStateRepository _alertConditionStateRepository;
     private readonly ISubscriptionService _subscriptionService;
     private readonly IAlertDeliveryService _deliveryService;
+    private readonly TimeProvider _timeProvider;
     private readonly ILogger<AlertEvaluationJob> _logger;
 
     /// <summary>
     /// Creates a new instance of the <see cref="AlertEvaluationJob"/> class.
     /// </summary>
+    /// <param name="machineStateRepository">Source of the latest per-machine telemetry summary.</param>
+    /// <param name="alertRuleRepository">Source of enabled rules and their machine assignments.</param>
+    /// <param name="alertEventRepository">Creates and resolves alert events.</param>
+    /// <param name="alertConditionStateRepository">Tracks how long a condition has held.</param>
+    /// <param name="subscriptionService">Answers whether a tenant is entitled to threshold alerts.</param>
+    /// <param name="deliveryService">Enqueues delivery for newly triggered events.</param>
+    /// <param name="timeProvider">
+    /// Clock used for the condition-duration window, the event's triggered timestamp and the
+    /// re-drive window. Injected rather than read from the wall clock so a rule's duration — which
+    /// can be fifteen minutes — is testable without waiting it out.
+    /// </param>
+    /// <param name="logger">Logger.</param>
     public AlertEvaluationJob(
         IMachineStateRepository machineStateRepository,
         IAlertRuleRepository alertRuleRepository,
@@ -41,6 +54,7 @@ public sealed class AlertEvaluationJob
         IAlertConditionStateRepository alertConditionStateRepository,
         ISubscriptionService subscriptionService,
         IAlertDeliveryService deliveryService,
+        TimeProvider timeProvider,
         ILogger<AlertEvaluationJob> logger)
     {
         ArgumentNullException.ThrowIfNull(machineStateRepository);
@@ -49,6 +63,7 @@ public sealed class AlertEvaluationJob
         ArgumentNullException.ThrowIfNull(alertConditionStateRepository);
         ArgumentNullException.ThrowIfNull(subscriptionService);
         ArgumentNullException.ThrowIfNull(deliveryService);
+        ArgumentNullException.ThrowIfNull(timeProvider);
         ArgumentNullException.ThrowIfNull(logger);
 
         _machineStateRepository = machineStateRepository;
@@ -57,6 +72,7 @@ public sealed class AlertEvaluationJob
         _alertConditionStateRepository = alertConditionStateRepository;
         _subscriptionService = subscriptionService;
         _deliveryService = deliveryService;
+        _timeProvider = timeProvider;
         _logger = logger;
     }
 
@@ -162,7 +178,7 @@ public sealed class AlertEvaluationJob
         // Reconciliation pass: re-enqueue any Triggered events that lost their Hangfire enqueue
         // in the crash window between the DB commit and the Enqueue call. The delivery job is
         // idempotent via IntegrationDeliveryAttempt claims, so re-enqueueing is safe.
-        DateTimeOffset now = DateTimeOffset.UtcNow;
+        DateTimeOffset now = _timeProvider.GetUtcNow();
         await RedriveOrphanedEventsAsync(
             now.AddMinutes(-RedriveMaxAgeMinutes),
             now.AddMinutes(-RedriveMinAgeMinutes),
@@ -224,7 +240,7 @@ public sealed class AlertEvaluationJob
 
         // Sample the clock once so the duration check and the persisted TriggeredAt timestamp share
         // the same observation instant.
-        DateTimeOffset now = DateTimeOffset.UtcNow;
+        DateTimeOffset now = _timeProvider.GetUtcNow();
 
         // Check if condition has persisted long enough.
         if (rule.DurationMinutes > 0)
