@@ -1773,4 +1773,160 @@ public sealed class AlertRuleEndpointTests
         AlertRule? stillExists = await db.AlertRules.FirstOrDefaultAsync(r => r.Id == ruleA.Id);
         await Assert.That(stillExists).IsNotNull();
     }
+
+    // --- Enable/disable toggle endpoint tests ---
+
+    private static async Task<int> SeedRuleAsync(
+        DatabaseContext db,
+        int tenantId,
+        int userId,
+        bool isCustom,
+        bool isEnabled)
+    {
+        AlertRule rule = new()
+        {
+            TenantId = tenantId,
+            Name = isCustom ? "Custom CPU Rule" : "CPU usage above 90%",
+            Metric = AlertMetric.CpuUsage,
+            Operator = AlertOperator.GreaterThan,
+            Threshold = 90,
+            DurationMinutes = 15,
+            Severity = AlertSeverity.Warning,
+            IsEnabled = isEnabled,
+            IsCustom = isCustom,
+            NotifyEmail = true,
+            NotifyWebhook = false,
+            CreatedByUserId = userId,
+            CreatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow,
+        };
+
+        return await db.InsertWithInt32IdentityAsync(rule);
+    }
+
+    [Test]
+    public async Task UpdateRuleEnabled_ProTierBuiltInRule_Disables_Returns200()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId, long machineId) = await SeedAlertEnvironment(db, SubscriptionTier.Pro);
+        int ruleId = await SeedRuleAsync(db, tenantId, userId, isCustom: false, isEnabled: true);
+
+        HttpClient client = BuildClient(factory, tenantId, userId);
+
+        HttpResponseMessage response = await client.PatchAsJsonAsync(
+            $"/api/v1/alert-rules/{ruleId}/enabled",
+            new { IsEnabled = false });
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
+
+        AlertRule? updated = await db.AlertRules.FirstOrDefaultAsync(r => r.Id == ruleId);
+        await Assert.That(updated!.IsEnabled).IsFalse();
+    }
+
+    [Test]
+    public async Task UpdateRuleEnabled_ProTierBuiltInRule_Enables_Returns200()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId, long machineId) = await SeedAlertEnvironment(db, SubscriptionTier.Pro);
+        int ruleId = await SeedRuleAsync(db, tenantId, userId, isCustom: false, isEnabled: false);
+
+        HttpClient client = BuildClient(factory, tenantId, userId);
+
+        HttpResponseMessage response = await client.PatchAsJsonAsync(
+            $"/api/v1/alert-rules/{ruleId}/enabled",
+            new { IsEnabled = true });
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
+
+        AlertRule? updated = await db.AlertRules.FirstOrDefaultAsync(r => r.Id == ruleId);
+        await Assert.That(updated!.IsEnabled).IsTrue();
+    }
+
+    [Test]
+    public async Task UpdateRuleEnabled_ProTierCustomRule_Returns403()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId, long machineId) = await SeedAlertEnvironment(db, SubscriptionTier.Pro);
+        int ruleId = await SeedRuleAsync(db, tenantId, userId, isCustom: true, isEnabled: false);
+
+        HttpClient client = BuildClient(factory, tenantId, userId);
+
+        HttpResponseMessage response = await client.PatchAsJsonAsync(
+            $"/api/v1/alert-rules/{ruleId}/enabled",
+            new { IsEnabled = true });
+
+        // A Pro tag alone would let a tenant that downgraded from Team switch every custom rule the
+        // downgrade disabled back on, keeping Team-authored rules running on a Pro plan.
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.Forbidden);
+        string body = await response.Content.ReadAsStringAsync();
+        await Assert.That(body).Contains("Team subscription");
+
+        AlertRule? unchanged = await db.AlertRules.FirstOrDefaultAsync(r => r.Id == ruleId);
+        await Assert.That(unchanged!.IsEnabled).IsFalse();
+    }
+
+    [Test]
+    public async Task UpdateRuleEnabled_TeamTierCustomRule_Returns200()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId, long machineId) = await SeedAlertEnvironment(db, SubscriptionTier.Team);
+        int ruleId = await SeedRuleAsync(db, tenantId, userId, isCustom: true, isEnabled: false);
+
+        HttpClient client = BuildClient(factory, tenantId, userId);
+
+        HttpResponseMessage response = await client.PatchAsJsonAsync(
+            $"/api/v1/alert-rules/{ruleId}/enabled",
+            new { IsEnabled = true });
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
+
+        AlertRule? updated = await db.AlertRules.FirstOrDefaultAsync(r => r.Id == ruleId);
+        await Assert.That(updated!.IsEnabled).IsTrue();
+    }
+
+    [Test]
+    public async Task UpdateRuleEnabled_FreeTier_Returns403()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId, long machineId) = await SeedAlertEnvironment(db, SubscriptionTier.Free);
+        int ruleId = await SeedRuleAsync(db, tenantId, userId, isCustom: false, isEnabled: false);
+
+        HttpClient client = BuildClient(factory, tenantId, userId);
+
+        HttpResponseMessage response = await client.PatchAsJsonAsync(
+            $"/api/v1/alert-rules/{ruleId}/enabled",
+            new { IsEnabled = true });
+
+        // Free may read the built-ins as an upsell, but not operate them.
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.Forbidden);
+
+        AlertRule? unchanged = await db.AlertRules.FirstOrDefaultAsync(r => r.Id == ruleId);
+        await Assert.That(unchanged!.IsEnabled).IsFalse();
+    }
+
+    [Test]
+    public async Task UpdateRuleEnabled_OtherTenantRule_Returns404()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantIdA, int userIdA, long machineIdA) = await SeedAlertEnvironment(db, SubscriptionTier.Pro);
+        (int tenantIdB, int userIdB, long machineIdB) = await SeedAlertEnvironment(db, SubscriptionTier.Pro);
+        int ruleId = await SeedRuleAsync(db, tenantIdA, userIdA, isCustom: false, isEnabled: false);
+
+        HttpClient clientB = BuildClient(factory, tenantIdB, userIdB);
+
+        HttpResponseMessage response = await clientB.PatchAsJsonAsync(
+            $"/api/v1/alert-rules/{ruleId}/enabled",
+            new { IsEnabled = true });
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.NotFound);
+
+        AlertRule? unchanged = await db.AlertRules.FirstOrDefaultAsync(r => r.Id == ruleId);
+        await Assert.That(unchanged!.IsEnabled).IsFalse();
+    }
 }
