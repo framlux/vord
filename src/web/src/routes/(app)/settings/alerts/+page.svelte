@@ -18,12 +18,37 @@
 	// meaningless ceiling.
 	const selfHosted: boolean = $derived(data.user?.deployment?.selfHosted === true);
 
-	const rules: AlertRuleDto[] | null = $derived(data.rules);
+	const rules: AlertRuleDto[] = $derived(data.rules ?? []);
 	const events: PaginatedResponse<AlertEventDto> | null = $derived(data.events);
 	const integrations: IntegrationEndpointDto[] | null = $derived(data.integrations);
 	const providers: IntegrationProviderDto[] | null = $derived(data.providers);
 	const machines: { id: number; name: string }[] = $derived(data.machines ?? []);
 	const filters = $derived(data.filters);
+
+	// A Free tenant still sees its built-in rules — an invisible alert rule is indistinguishable from
+	// no alert rule — but every control that changes one is withheld. A missing subscription is read
+	// optimistically: the billing API being briefly unavailable must not present as a downgrade, and
+	// the server refuses anything the tenant is not entitled to regardless of what is rendered here.
+	const entitled: boolean = $derived(
+		selfHosted || data.subscription === null || data.subscription === undefined ||
+		data.subscription.tier === 'Pro' || data.subscription.tier === 'Team'
+	);
+
+	// Retuning a built-in rule is authoring a rule, which is what the Team tier sells. Pro may turn a
+	// built-in on or off and choose which machines it watches; below Team it may not touch anything
+	// else, and it may not touch a custom rule at all.
+	const canAuthorRules: boolean = $derived(
+		selfHosted || data.subscription === null || data.subscription === undefined ||
+		data.subscription.tier === 'Team'
+	);
+
+	function canModify(rule: AlertRuleDto): boolean {
+		if (rule.isCustom) {
+			return canAuthorRules;
+		}
+
+		return entitled;
+	}
 
 	const validTabs = ['rules', 'events', 'integrations'] as const;
 	const urlTab = pageState.url.searchParams.get('tab');
@@ -33,6 +58,7 @@
 	let showCreateRule = $state(false);
 	let connectingProvider = $state<string | null>(null);
 	let editingRuleId = $state<number | null>(null);
+	let assigningRuleId = $state<number | null>(null);
 	let deleteRuleConfirm = $state<{ open: boolean; id: number | null }>({ open: false, id: null });
 	let deleteIntegrationConfirm = $state<{ open: boolean; id: number | null }>({ open: false, id: null });
 	let revealedSecret = $state<string | null>(null);
@@ -151,14 +177,15 @@
 <div class="space-y-6">
 	<PageHeader title="Alerts" description="Manage alert rules, view alert events, and configure integrations." />
 
-	{#if rules === null}
+	{#if entitled === false}
 		<div class="flex items-center gap-3 rounded-xl border border-amber-200 bg-amber-50 p-6 dark:border-amber-800 dark:bg-amber-900/20">
 			<CircleAlert class="h-5 w-5 text-amber-600 dark:text-amber-400" />
 			<p class="text-sm text-amber-700 dark:text-amber-300">
-				Alerting is available on Pro and Team plans. Upgrade your subscription to access this feature.
+				These built-in alert rules only run on Pro and Team plans. Upgrade your subscription to turn them on and choose the machines they watch.
 			</p>
 		</div>
-	{:else}
+	{/if}
+
 		<!-- Tabs -->
 		<div role="tablist" class="flex gap-1 rounded-lg border border-surface-200 bg-surface-100 p-1 dark:border-surface-700 dark:bg-surface-800">
 			<button
@@ -217,7 +244,7 @@
 				<div class="flex items-center justify-between">
 					<div class="flex items-center gap-3">
 						<h2 class="text-lg font-semibold text-surface-900 dark:text-surface-50">Alert Rules</h2>
-						{#if selfHosted === false && data.subscription?.alertRuleLimit !== null && data.subscription?.alertRuleLimit !== undefined}
+						{#if canAuthorRules && selfHosted === false && data.subscription?.alertRuleLimit !== null && data.subscription?.alertRuleLimit !== undefined}
 							<span class="text-sm text-surface-500 dark:text-surface-400">
 								{data.subscription.alertRuleCount} of {data.subscription.alertRuleLimit} rules used
 							</span>
@@ -228,14 +255,18 @@
 							{/if}
 						{/if}
 					</div>
-					<button
-						onclick={() => { showCreateRule = !showCreateRule; rulesError = null; }}
-						disabled={selfHosted === false && data.subscription?.alertRuleLimit !== null && data.subscription?.alertRuleLimit !== undefined && data.subscription.alertRuleCount >= data.subscription.alertRuleLimit}
-						class="flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-primary-700 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-primary-500 dark:hover:bg-primary-600"
-					>
-						<Plus class="h-4 w-4" />
-						New Rule
-					</button>
+					<!-- Writing a rule of your own is what the Team tier sells, so the quota and the button
+					     that spends it belong to Team. Pro and Free are here for their built-in rules. -->
+					{#if canAuthorRules}
+						<button
+							onclick={() => { showCreateRule = !showCreateRule; rulesError = null; }}
+							disabled={selfHosted === false && data.subscription?.alertRuleLimit !== null && data.subscription?.alertRuleLimit !== undefined && data.subscription.alertRuleCount >= data.subscription.alertRuleLimit}
+							class="flex items-center gap-2 rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white transition-colors hover:bg-primary-700 disabled:cursor-not-allowed disabled:opacity-50 dark:bg-primary-500 dark:hover:bg-primary-600"
+						>
+							<Plus class="h-4 w-4" />
+							New Rule
+						</button>
+					{/if}
 				</div>
 
 				<!-- Create Rule Form -->
@@ -371,6 +402,8 @@
 												{/if}
 												{#if rule.isCustom}
 													<span class="text-xs text-primary-600 dark:text-primary-400">Custom</span>
+												{:else}
+													<span class="text-xs text-surface-500 dark:text-surface-400">Built-in</span>
 												{/if}
 											</td>
 											<td class="px-4 py-3 text-surface-600 dark:text-surface-400">{rule.metric}</td>
@@ -390,7 +423,24 @@
 												</span>
 											</td>
 											<td class="px-4 py-3 text-surface-600 dark:text-surface-400">
-												{rule.machineIds?.length ?? 0} machine{(rule.machineIds?.length ?? 0) === 1 ? '' : 's'}
+												<!-- A rule with no machines assigned watches nothing, and rules arrive unassigned,
+												     so silence here is indistinguishable from an alert that will never fire. The
+												     way out of that state sits in the cell that reports it. -->
+												{#if (rule.machineIds?.length ?? 0) === 0}
+													<span class="text-amber-600 dark:text-amber-400">Not watching any machines yet</span>
+												{:else}
+													{rule.machineIds.length} machine{rule.machineIds.length === 1 ? '' : 's'}
+												{/if}
+												{#if canModify(rule)}
+													<button
+														type="button"
+														aria-label="Assign machines to {rule.name}"
+														onclick={() => { assigningRuleId = assigningRuleId === rule.id ? null : rule.id; editingRuleId = null; rulesError = null; }}
+														class="mt-1 block whitespace-nowrap text-xs text-primary-600 hover:underline dark:text-primary-400"
+													>
+														{(rule.machineIds?.length ?? 0) === 0 ? 'Assign machines' : 'Change machines'}
+													</button>
+												{/if}
 											</td>
 											<td class="px-4 py-3">
 												{#if rule.isEnabled}
@@ -405,10 +455,23 @@
 												{#if rule.notifyWebhook}Webhook{/if}
 											</td>
 											<td class="px-4 py-3">
-												<div class="flex items-center gap-2">
+												<div class="flex items-center gap-2 whitespace-nowrap">
 													{#if editingRuleId !== rule.id}
-														<button onclick={() => { editingRuleId = rule.id; rulesError = null; }} class="text-xs text-primary-600 hover:underline dark:text-primary-400">Edit</button>
-														{#if rule.isCustom}
+														{#if canModify(rule) && (rule.isCustom || canAuthorRules)}
+															<button onclick={() => { editingRuleId = rule.id; assigningRuleId = null; rulesError = null; }} class="text-xs text-primary-600 hover:underline dark:text-primary-400">Edit</button>
+														{/if}
+														{#if canModify(rule)}
+															<!-- The one change Pro may make to a built-in rule, on the endpoint that
+															     accepts it alone rather than through the full-rule update. -->
+															<form method="POST" action="?/toggleRule" use:enhance={() => { rulesError = null; return async ({ result, update }) => { if (result.type === 'failure') { rulesError = (result.data as { message?: string })?.message ?? 'Failed to update rule'; } else { rulesError = null; await update(); } }; }}>
+																<input type="hidden" name="id" value={rule.id} />
+																<input type="hidden" name="isEnabled" value={rule.isEnabled ? 'off' : 'on'} />
+																<button type="submit" aria-label="{rule.isEnabled ? 'Disable' : 'Enable'} {rule.name}" class="text-xs text-primary-600 hover:underline dark:text-primary-400">
+																	{rule.isEnabled ? 'Disable' : 'Enable'}
+																</button>
+															</form>
+														{/if}
+														{#if rule.isCustom && canAuthorRules}
 															<button type="button" aria-label="Delete rule" onclick={() => deleteRuleConfirm = { open: true, id: rule.id }} class="rounded p-1 text-red-600 hover:bg-red-50 dark:text-red-400 dark:hover:bg-red-900/20">
 																<Trash2 class="h-4 w-4" />
 															</button>
@@ -417,6 +480,34 @@
 												</div>
 											</td>
 										</tr>
+										{#if assigningRuleId === rule.id}
+											<tr class="bg-surface-50 dark:bg-surface-800/50">
+												<td colspan="8" class="px-4 py-4">
+													<form method="POST" action="?/assignRuleMachines" use:enhance={() => { rulesError = null; return async ({ result, update }) => { if (result.type === 'failure') { rulesError = (result.data as { message?: string })?.message ?? 'Failed to update machines'; } else { assigningRuleId = null; rulesError = null; await update(); } }; }}>
+														<input type="hidden" name="id" value={rule.id} />
+														<span class="mb-1 block text-xs text-surface-500 dark:text-surface-400">Machines watched by {rule.name}</span>
+														<div class="max-h-40 overflow-y-auto rounded border border-surface-300 p-2 space-y-1 dark:border-surface-600" role="group" aria-label="Machines watched by {rule.name}">
+															{#each machines as machine}
+																<label class="flex items-center gap-2 text-sm">
+																	<input type="checkbox" name="machineIds" value={machine.id} checked={rule.machineIds?.includes(machine.id) ?? false} class="checkbox" />
+																	<span class="text-surface-700 dark:text-surface-300">{machine.name}</span>
+																</label>
+															{/each}
+															{#if machines.length === 0}
+																<p class="text-xs text-surface-400 dark:text-surface-500">No machines available.</p>
+															{/if}
+														</div>
+														<!-- Clearing every box is a legitimate answer: it parks the rule so it watches
+														     nothing, without switching it off. -->
+														<p class="mt-1 text-xs text-surface-400 dark:text-surface-500">A rule with no machines selected stays configured but evaluates nothing.</p>
+														<div class="mt-4 flex justify-end gap-2">
+															<button type="button" onclick={() => { assigningRuleId = null; rulesError = null; }} class="rounded-lg border border-surface-300 px-4 py-2 text-sm font-medium text-surface-700 hover:bg-surface-100 dark:border-surface-600 dark:text-surface-300 dark:hover:bg-surface-700">Cancel</button>
+															<button type="submit" class="rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700 dark:bg-primary-500 dark:hover:bg-primary-600">Save Machines</button>
+														</div>
+													</form>
+												</td>
+											</tr>
+										{/if}
 										{#if editingRuleId === rule.id}
 											{@const isEditEvent = eventMetrics.has(rule.metric)}
 											{@const editMinDuration = metricMinDuration[rule.metric] ?? 1}
@@ -881,7 +972,6 @@
 			{/if}
 			</div>
 		{/if}
-	{/if}
 </div>
 
 <form

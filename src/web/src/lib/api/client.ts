@@ -31,6 +31,8 @@ import type {
 	IntegrationProviderDto,
 	CreateAlertRuleRequest,
 	UpdateAlertRuleRequest,
+	UpdateAlertRuleEnabledRequest,
+	UpdateAlertRuleMachinesRequest,
 	CreateIntegrationRequest,
 	UpdateIntegrationRequest,
 	MachineAuthorizedKeyDto,
@@ -584,6 +586,18 @@ export class ApiClient {
 
 	async updateAlertRule(id: number, req: UpdateAlertRuleRequest): Promise<AlertRuleDto> {
 		const resp = await this.put<ApiResponse<AlertRuleDto>>(`/api/v1/alert-rules/${id}`, req);
+
+		return this.unwrap(resp);
+	}
+
+	async setAlertRuleEnabled(id: number, req: UpdateAlertRuleEnabledRequest): Promise<boolean> {
+		const resp = await this.patch<ApiResponse<boolean>>(`/api/v1/alert-rules/${id}/enabled`, req);
+
+		return this.unwrap(resp);
+	}
+
+	async updateAlertRuleMachines(id: number, req: UpdateAlertRuleMachinesRequest): Promise<number[]> {
+		const resp = await this.put<ApiResponse<number[]>>(`/api/v1/alert-rules/${id}/machines`, req);
 
 		return this.unwrap(resp);
 	}

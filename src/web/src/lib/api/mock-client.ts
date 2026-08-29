@@ -12,6 +12,9 @@ import type {
 	MachineDetailDto,
 	MachineAuthorizedKeyDto,
 	AlertRuleDto,
+	AlertEventDto,
+	IntegrationEndpointDto,
+	IntegrationProviderDto,
 	FleetSshSessionDto,
 	UpdateMachineRequest
 } from './types';
@@ -92,6 +95,21 @@ export class MockApiClient {
 
 	async getFleetSshSessions(): Promise<PaginatedResponse<FleetSshSessionDto>> {
 		return mockFleetSshSessions;
+	}
+
+	// The alerts settings screen reads three more collections alongside the rules. There are no
+	// fixtures for them, and empty is the honest answer: a demo fleet has fired nothing and connected
+	// nothing, which is also the state the page's empty branches are least often seen in.
+	async getAlertEvents(): Promise<PaginatedResponse<AlertEventDto>> {
+		return { items: [], page: 1, pageSize: 25, totalCount: 0, totalPages: 0, hasNextPage: false, hasPreviousPage: false };
+	}
+
+	async getIntegrations(): Promise<IntegrationEndpointDto[]> {
+		return [];
+	}
+
+	async getIntegrationProviders(): Promise<IntegrationProviderDto[]> {
+		return [];
 	}
 
 	// No-op success stubs — let mid-screenshot clicks (tenant switch, rename, ack)

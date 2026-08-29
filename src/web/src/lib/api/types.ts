@@ -557,6 +557,14 @@ export interface UpdateAlertRuleRequest {
 	machineIds: number[];
 }
 
+export interface UpdateAlertRuleEnabledRequest {
+	isEnabled: boolean;
+}
+
+export interface UpdateAlertRuleMachinesRequest {
+	machineIds: number[];
+}
+
 export interface CreateIntegrationRequest {
 	provider: string;
 	name?: string;

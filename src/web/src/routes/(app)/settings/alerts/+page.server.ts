@@ -35,10 +35,14 @@ export const load: PageServerLoad = async ({ fetch, cookies, locals, url }) => {
 
 	try {
 		const [rules, events, integrations, providers, subscription, machinesResponse] = await Promise.all([
+			// Alert rules answer for every tier — a Free tenant sees its built-in rules disabled, which
+			// is the upgrade case — so a failure there is a real failure and must reach the catch.
+			// The three below are still Pro-gated, and a 403 from any of them would otherwise take the
+			// whole page down for a Free tenant.
 			api.getAlertRules(),
-			api.getAlertEvents({ page, pageSize, status, severity }),
-			api.getIntegrations(),
-			api.getIntegrationProviders(),
+			api.getAlertEvents({ page, pageSize, status, severity }).catch(() => null),
+			api.getIntegrations().catch(() => null),
+			api.getIntegrationProviders().catch(() => null),
 			api.getSubscription().catch(() => null),
 			api.getMachines({ pageSize: 1000 })
 		]);
@@ -125,6 +129,61 @@ export const actions: Actions = {
 			}
 
 			return fail(500, { message: 'Failed to update alert rule' });
+		}
+	},
+
+	toggleRule: async ({ fetch, cookies, request, locals }) => {
+		if (locals.user === null || canAdminTenant(locals.user) === false) {
+			return fail(403, { message: 'Access denied' });
+		}
+
+		const api = createServerApiClient(fetch, cookies.get('vord_auth'), cookies.get('vord_tenant'), undefined, csrfFor(cookies, locals));
+		const data = await request.formData();
+		const id = parseRequiredInt(data, 'id');
+		if (id === null) {
+			return fail(400, { message: 'Invalid ID' });
+		}
+
+		try {
+			await api.setAlertRuleEnabled(id, { isEnabled: data.get('isEnabled') === 'on' });
+
+			return { success: true };
+		} catch (e) {
+			if (e instanceof ApiError) {
+				return fail(e.status, { message: e.message });
+			}
+
+			return fail(500, { message: 'Failed to update alert rule' });
+		}
+	},
+
+	assignRuleMachines: async ({ fetch, cookies, request, locals }) => {
+		if (locals.user === null || canAdminTenant(locals.user) === false) {
+			return fail(403, { message: 'Access denied' });
+		}
+
+		const api = createServerApiClient(fetch, cookies.get('vord_auth'), cookies.get('vord_tenant'), undefined, csrfFor(cookies, locals));
+		const data = await request.formData();
+		const id = parseRequiredInt(data, 'id');
+		if (id === null) {
+			return fail(400, { message: 'Invalid ID' });
+		}
+
+		// An empty selection is meaningful here and is forwarded as such: it parks the rule so it
+		// watches nothing, without turning it off. The rule update endpoint rejects that, which is why
+		// assignment has an endpoint of its own.
+		const machineIds = data.getAll('machineIds').map((v) => parseInt(v as string)).filter((v) => Number.isNaN(v) === false);
+
+		try {
+			await api.updateAlertRuleMachines(id, { machineIds });
+
+			return { success: true };
+		} catch (e) {
+			if (e instanceof ApiError) {
+				return fail(e.status, { message: e.message });
+			}
+
+			return fail(500, { message: 'Failed to update alert rule machines' });
 		}
 	},
 
