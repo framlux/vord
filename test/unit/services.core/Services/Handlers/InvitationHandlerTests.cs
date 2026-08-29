@@ -5,6 +5,7 @@
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
+using Framlux.FleetManagement.Services.Core.Alerts;
 using Framlux.FleetManagement.Services.Core.Billing;
 using Framlux.FleetManagement.Services.Core.Handlers;
 using Framlux.FleetManagement.Services.Core.Infrastructure;
@@ -31,7 +32,8 @@ public class InvitationHandlerTests
         ISubscriptionRepository? subscriptionRepository = null,
         IBackgroundJobClient? backgroundJobClient = null,
         ISubscriptionService? subscriptionService = null,
-        IRoleCacheInvalidator? roleCacheInvalidator = null)
+        IRoleCacheInvalidator? roleCacheInvalidator = null,
+        IBuiltInAlertRuleProvisioner? provisioner = null)
     {
         return new InvitationHandler(
             transactionProvider ?? CreateDefaultTransactionProvider(),
@@ -41,7 +43,8 @@ public class InvitationHandlerTests
             subscriptionRepository ?? Substitute.For<ISubscriptionRepository>(),
             backgroundJobClient ?? Substitute.For<IBackgroundJobClient>(),
             subscriptionService ?? CreateMockSubService(),
-            roleCacheInvalidator ?? Substitute.For<IRoleCacheInvalidator>());
+            roleCacheInvalidator ?? Substitute.For<IRoleCacheInvalidator>(),
+            provisioner ?? Substitute.For<IBuiltInAlertRuleProvisioner>());
     }
 
     private static IDatabaseTransactionProvider CreateDefaultTransactionProvider()
@@ -619,6 +622,68 @@ public class InvitationHandlerTests
         // the serializable member-limit guard.
         await tenantRepository.Received(1).CreateUserTenantRoleAsync(Arg.Any<UserTenantRole>(), Arg.Any<CancellationToken>());
         await tenantRepository.Received(1).CreateUserTenantRoleWithMemberLimitAsync(Arg.Any<UserTenantRole>(), Arg.Any<int?>(), Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>
+    /// Accepting an invitation as a brand-new user creates a personal tenant, which is a third route
+    /// into existence that Stripe never sees. It gets its built-in rules like any other tenant.
+    /// </summary>
+    [Test]
+    public async Task AcceptAsync_NewUser_ProvisionsBuiltInAlertRulesForThePersonalTenant()
+    {
+        IInvitationRepository invitationRepository = CreateDefaultInvitationRepository();
+        invitationRepository.GetInvitationByTokenAsync("token", Arg.Any<CancellationToken>()).Returns(new TenantInvitation
+        {
+            Id = 1, TenantId = 5, Email = "user@test.com", TokenHash = "token", Role = UserAccountRoles.Viewer, Status = InvitationStatus.Pending,
+            InvitedByUserId = 2, CreatedAt = DateTimeOffset.UtcNow, ExpiresAt = DateTimeOffset.UtcNow.AddDays(7)
+        });
+        ITenantRepository tenantRepository = CreateDefaultTenantRepository();
+        tenantRepository.GetTenantsForUserAsync("ext-1", Arg.Any<CancellationToken>()).Returns(Enumerable.Empty<UserTenantRole>());
+        tenantRepository.CreateTenantAsync(Arg.Any<Tenant>(), Arg.Any<CancellationToken>()).Returns(callInfo =>
+        {
+            Tenant t = callInfo.Arg<Tenant>();
+            t.Id = 99;
+
+            return t;
+        });
+        IBuiltInAlertRuleProvisioner provisioner = Substitute.For<IBuiltInAlertRuleProvisioner>();
+        InvitationHandler handler = BuildHandler(
+            invitationRepository: invitationRepository,
+            tenantRepository: tenantRepository,
+            provisioner: provisioner);
+
+        await handler.AcceptAsync("token", "user@test.com", 1, "ext-1", CancellationToken.None);
+
+        await provisioner.Received(1).EnsureProvisionedAsync(99, Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>
+    /// No personal tenant is created for a user who already belongs somewhere, so nothing new needs
+    /// provisioning — the inviting tenant already has its own rules.
+    /// </summary>
+    [Test]
+    public async Task AcceptAsync_ExistingUser_DoesNotProvisionBuiltInAlertRules()
+    {
+        IInvitationRepository invitationRepository = CreateDefaultInvitationRepository();
+        invitationRepository.GetInvitationByTokenAsync("token", Arg.Any<CancellationToken>()).Returns(new TenantInvitation
+        {
+            Id = 1, TenantId = 5, Email = "user@test.com", TokenHash = "token", Role = UserAccountRoles.TenantAdmin, Status = InvitationStatus.Pending,
+            InvitedByUserId = 2, CreatedAt = DateTimeOffset.UtcNow, ExpiresAt = DateTimeOffset.UtcNow.AddDays(7)
+        });
+        ITenantRepository tenantRepository = CreateDefaultTenantRepository();
+        tenantRepository.GetTenantsForUserAsync("ext-1", Arg.Any<CancellationToken>()).Returns(new List<UserTenantRole>
+        {
+            new() { UserId = 1, AssignedTenantId = 10, Role = UserAccountRoles.TenantAdmin, AssignedByUserId = 1, AssignedAt = DateTimeOffset.UtcNow, IsActive = true }
+        });
+        IBuiltInAlertRuleProvisioner provisioner = Substitute.For<IBuiltInAlertRuleProvisioner>();
+        InvitationHandler handler = BuildHandler(
+            invitationRepository: invitationRepository,
+            tenantRepository: tenantRepository,
+            provisioner: provisioner);
+
+        await handler.AcceptAsync("token", "user@test.com", 1, "ext-1", CancellationToken.None);
+
+        await provisioner.DidNotReceive().EnsureProvisionedAsync(Arg.Any<int>(), Arg.Any<CancellationToken>());
     }
 
     [Test]

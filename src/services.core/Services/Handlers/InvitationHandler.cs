@@ -7,6 +7,7 @@ using System.Text;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
+using Framlux.FleetManagement.Services.Core.Alerts;
 using Framlux.FleetManagement.Services.Core.Billing;
 using Framlux.FleetManagement.Services.Core.Infrastructure;
 using Framlux.FleetManagement.Services.Core.Models;
@@ -29,6 +30,7 @@ public sealed class InvitationHandler
     private readonly IBackgroundJobClient _backgroundJobClient;
     private readonly ISubscriptionService _subscriptionService;
     private readonly IRoleCacheInvalidator _roleCacheInvalidator;
+    private readonly IBuiltInAlertRuleProvisioner _builtInProvisioner;
 
     /// <summary>
     /// Creates a new instance of the <see cref="InvitationHandler"/> class.
@@ -41,7 +43,8 @@ public sealed class InvitationHandler
         ISubscriptionRepository subscriptionRepository,
         IBackgroundJobClient backgroundJobClient,
         ISubscriptionService subscriptionService,
-        IRoleCacheInvalidator roleCacheInvalidator)
+        IRoleCacheInvalidator roleCacheInvalidator,
+        IBuiltInAlertRuleProvisioner builtInProvisioner)
     {
         ArgumentNullException.ThrowIfNull(transactionProvider);
         ArgumentNullException.ThrowIfNull(auditLog);
@@ -51,6 +54,7 @@ public sealed class InvitationHandler
         ArgumentNullException.ThrowIfNull(backgroundJobClient);
         ArgumentNullException.ThrowIfNull(subscriptionService);
         ArgumentNullException.ThrowIfNull(roleCacheInvalidator);
+        ArgumentNullException.ThrowIfNull(builtInProvisioner);
 
         _transactionProvider = transactionProvider;
         _auditLog = auditLog;
@@ -60,6 +64,7 @@ public sealed class InvitationHandler
         _backgroundJobClient = backgroundJobClient;
         _subscriptionService = subscriptionService;
         _roleCacheInvalidator = roleCacheInvalidator;
+        _builtInProvisioner = builtInProvisioner;
     }
 
     /// <summary>
@@ -282,6 +287,11 @@ public sealed class InvitationHandler
                 AssignedAt = now,
                 IsActive = true,
             }, ct);
+
+            // Inside the transaction so a tenant never exists without its rules. Every repository
+            // interface resolves to the same scoped DatabaseRepository over one DatabaseContext, so
+            // this participates in the open transaction rather than opening a second connection.
+            await _builtInProvisioner.EnsureProvisionedAsync(personalTenant.Id, ct);
 
             personalTenantProvisioned = true;
         }

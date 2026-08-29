@@ -6,6 +6,7 @@ using Framlux.FleetManagement.Database;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
+using Framlux.FleetManagement.Services.Core.Alerts;
 using Framlux.FleetManagement.Services.Core.Billing;
 using Framlux.FleetManagement.Services.Core.Handlers;
 using Framlux.FleetManagement.Services.Core.Infrastructure;
@@ -17,7 +18,6 @@ using Hangfire.Common;
 using Hangfire.States;
 using LinqToDB;
 using LinqToDB.Async;
-using LinqToDB.Tools;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using NSubstitute;
@@ -75,7 +75,8 @@ public class BillingWebhookHandlerTests
 
     private static BillingWebhookHandler CreateHandler(
         TestDatabaseFactory dbFactory,
-        IDowngradeCleanupService? cleanupService = null)
+        IDowngradeCleanupService? cleanupService = null,
+        IBuiltInAlertRuleProvisioner? provisioner = null)
     {
         DatabaseRepository repo = new(dbFactory.Context, new NullLogger<DatabaseRepository>());
 
@@ -84,6 +85,7 @@ public class BillingWebhookHandlerTests
             repo,
             repo,
             repo,
+            provisioner ?? Substitute.For<IBuiltInAlertRuleProvisioner>(),
             cleanupService ?? Substitute.For<IDowngradeCleanupService>(),
             new RetentionReclassifyDispatcher(
                 Substitute.For<IBackgroundJobClient>(), NullLogger<RetentionReclassifyDispatcher>.Instance));
@@ -125,6 +127,7 @@ public class BillingWebhookHandlerTests
             repo,
             subscriptions,
             repo,
+            Substitute.For<IBuiltInAlertRuleProvisioner>(),
             Substitute.For<IDowngradeCleanupService>(),
             dispatcher);
 
@@ -335,52 +338,69 @@ public class BillingWebhookHandlerTests
         await Assert.That(count).IsEqualTo(0);
     }
 
+    /// <summary>
+    /// Checkout is a backstop, not the owner of provisioning: a tenant created before rules moved to
+    /// tenant creation still needs them, and any tenant returning from Free needs them re-enabled.
+    /// </summary>
     [Test]
-    public async Task HandleCheckoutCompletedAsync_CreatesDefaultAlertRules()
+    public async Task HandleCheckoutCompletedAsync_ProvisionsAndEnablesBuiltIns()
     {
         using TestDatabaseFactory dbFactory = new();
         await SeedTierFeatureLimitsAsync(dbFactory.Context);
         TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 1, tier: SubscriptionTier.Free);
         sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
 
-        BillingWebhookHandler handler = CreateHandler(dbFactory);
+        IBuiltInAlertRuleProvisioner provisioner = Substitute.For<IBuiltInAlertRuleProvisioner>();
+        BillingWebhookHandler handler = CreateHandler(dbFactory, provisioner: provisioner);
 
         await handler.HandleCheckoutCompletedAsync(1, SubscriptionTier.Pro, CancellationToken.None);
 
-        List<AlertRule> rules = await dbFactory.Context.AlertRules
-            .Where(r => r.TenantId == 1)
-            .ToListAsync();
-        await Assert.That(rules.Count).IsEqualTo(8);
-        await Assert.That(rules.All(r => r.IsCustom == false)).IsTrue();
-        await Assert.That(rules.All(r => r.IsEnabled == true)).IsTrue();
-        await Assert.That(rules.All(r => r.CreatedByUserId == 1)).IsTrue();
+        await provisioner.Received(1).EnsureProvisionedAsync(1, Arg.Any<CancellationToken>());
+        await provisioner.Received(1).EnableBuiltInsAsync(1, Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>
+    /// A Pro downgrade disables custom rules, so the journey back to Team must turn them on again.
+    /// The Pro checkout must not, or a downgraded tenant would recover Team's rules by paying for Pro.
+    /// </summary>
+    [Test]
+    public async Task HandleCheckoutCompletedAsync_Team_ReEnablesCustomRules()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        await SeedTierFeatureLimitsAsync(dbFactory.Context);
+        TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 1, tier: SubscriptionTier.Pro);
+        sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
+
+        AlertRule custom = TestDataBuilder.BuildAlertRule(tenantId: 1, isCustom: true, isEnabled: false);
+        custom.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(custom);
+
+        BillingWebhookHandler handler = CreateHandler(dbFactory);
+
+        await handler.HandleCheckoutCompletedAsync(1, SubscriptionTier.Team, CancellationToken.None);
+
+        AlertRule? reloaded = await dbFactory.Context.AlertRules.FirstOrDefaultAsync(r => r.Id == custom.Id);
+        await Assert.That(reloaded).IsNotNull();
+        await Assert.That(reloaded!.IsEnabled).IsTrue();
     }
 
     [Test]
-    public async Task HandleCheckoutCompletedAsync_ExistingRules_DoesNotDuplicate()
+    public async Task HandleCheckoutCompletedAsync_Pro_LeavesCustomRulesDisabled()
     {
         using TestDatabaseFactory dbFactory = new();
         await SeedTierFeatureLimitsAsync(dbFactory.Context);
         TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 1, tier: SubscriptionTier.Free);
         sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
 
+        AlertRule custom = TestDataBuilder.BuildAlertRule(tenantId: 1, isCustom: true, isEnabled: false);
+        custom.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(custom);
+
         BillingWebhookHandler handler = CreateHandler(dbFactory);
 
-        // First upgrade creates default alert rules
         await handler.HandleCheckoutCompletedAsync(1, SubscriptionTier.Pro, CancellationToken.None);
 
-        int countAfterFirst = await dbFactory.Context.AlertRules
-            .Where(r => r.TenantId == 1)
-            .CountAsync();
-        await Assert.That(countAfterFirst).IsEqualTo(8);
-
-        // Second upgrade should not duplicate the rules
-        await handler.HandleCheckoutCompletedAsync(1, SubscriptionTier.Team, CancellationToken.None);
-
-        int countAfterSecond = await dbFactory.Context.AlertRules
-            .Where(r => r.TenantId == 1)
-            .CountAsync();
-        await Assert.That(countAfterSecond).IsEqualTo(8);
+        AlertRule? reloaded = await dbFactory.Context.AlertRules.FirstOrDefaultAsync(r => r.Id == custom.Id);
+        await Assert.That(reloaded).IsNotNull();
+        await Assert.That(reloaded!.IsEnabled).IsFalse();
     }
 
     [Test]
@@ -527,155 +547,6 @@ public class BillingWebhookHandlerTests
         await Assert.That(updated.Tier).IsEqualTo(SubscriptionTier.Team);
     }
 
-    // ========== Default alert rule seed correctness tests ==========
-
-    [Test]
-    public async Task HandleCheckoutCompletedAsync_DefaultRules_VolatileMetricsDuration5()
-    {
-        using TestDatabaseFactory dbFactory = new();
-        await SeedTierFeatureLimitsAsync(dbFactory.Context);
-        TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 1, tier: SubscriptionTier.Free);
-        sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
-
-        BillingWebhookHandler handler = CreateHandler(dbFactory);
-
-        await handler.HandleCheckoutCompletedAsync(1, SubscriptionTier.Pro, CancellationToken.None);
-
-        AlertMetric[] volatileMetrics = [AlertMetric.CpuUsage, AlertMetric.MemoryUsage, AlertMetric.DiskUsage];
-        List<AlertRule> volatileRules = await dbFactory.Context.AlertRules
-            .Where(r => r.TenantId == 1 && r.Metric.In(volatileMetrics))
-            .ToListAsync();
-
-        await Assert.That(volatileRules.Count).IsEqualTo(3);
-        await Assert.That(volatileRules.All(r => r.DurationMinutes == 5)).IsTrue();
-    }
-
-    [Test]
-    public async Task HandleCheckoutCompletedAsync_DefaultRules_StateMetricsDuration1()
-    {
-        using TestDatabaseFactory dbFactory = new();
-        await SeedTierFeatureLimitsAsync(dbFactory.Context);
-        TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 1, tier: SubscriptionTier.Free);
-        sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
-
-        BillingWebhookHandler handler = CreateHandler(dbFactory);
-
-        await handler.HandleCheckoutCompletedAsync(1, SubscriptionTier.Pro, CancellationToken.None);
-
-        AlertMetric[] stateMetrics = [AlertMetric.FailedServices, AlertMetric.SecurityUpdates, AlertMetric.MachineOffline, AlertMetric.DiskHealth];
-        List<AlertRule> stateRules = await dbFactory.Context.AlertRules
-            .Where(r => r.TenantId == 1 && r.Metric.In(stateMetrics))
-            .ToListAsync();
-
-        await Assert.That(stateRules.Count).IsEqualTo(4);
-        await Assert.That(stateRules.All(r => r.DurationMinutes == 1)).IsTrue();
-    }
-
-    [Test]
-    public async Task HandleCheckoutCompletedAsync_DefaultRules_SshConnectionDuration0()
-    {
-        using TestDatabaseFactory dbFactory = new();
-        await SeedTierFeatureLimitsAsync(dbFactory.Context);
-        TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 1, tier: SubscriptionTier.Free);
-        sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
-
-        BillingWebhookHandler handler = CreateHandler(dbFactory);
-
-        await handler.HandleCheckoutCompletedAsync(1, SubscriptionTier.Pro, CancellationToken.None);
-
-        AlertRule? sshRule = await dbFactory.Context.AlertRules
-            .FirstOrDefaultAsync(r => r.TenantId == 1 && r.Metric == AlertMetric.SshConnection);
-
-        await Assert.That(sshRule).IsNotNull();
-        await Assert.That(sshRule!.DurationMinutes).IsEqualTo(0);
-    }
-
-    [Test]
-    public async Task HandleCheckoutCompletedAsync_DefaultRules_CriticalSeverityForOfflineAndDiskHealth()
-    {
-        using TestDatabaseFactory dbFactory = new();
-        await SeedTierFeatureLimitsAsync(dbFactory.Context);
-        TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 1, tier: SubscriptionTier.Free);
-        sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
-
-        BillingWebhookHandler handler = CreateHandler(dbFactory);
-
-        await handler.HandleCheckoutCompletedAsync(1, SubscriptionTier.Pro, CancellationToken.None);
-
-        AlertRule? offlineRule = await dbFactory.Context.AlertRules
-            .FirstOrDefaultAsync(r => r.TenantId == 1 && r.Metric == AlertMetric.MachineOffline);
-        AlertRule? diskHealthRule = await dbFactory.Context.AlertRules
-            .FirstOrDefaultAsync(r => r.TenantId == 1 && r.Metric == AlertMetric.DiskHealth);
-
-        await Assert.That(offlineRule).IsNotNull();
-        await Assert.That(offlineRule!.Severity).IsEqualTo(AlertSeverity.Critical);
-        await Assert.That(diskHealthRule).IsNotNull();
-        await Assert.That(diskHealthRule!.Severity).IsEqualTo(AlertSeverity.Critical);
-    }
-
-    [Test]
-    public async Task HandleCheckoutCompletedAsync_DefaultRules_InfoSeverityForSshAndSecurityUpdates()
-    {
-        using TestDatabaseFactory dbFactory = new();
-        await SeedTierFeatureLimitsAsync(dbFactory.Context);
-        TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 1, tier: SubscriptionTier.Free);
-        sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
-
-        BillingWebhookHandler handler = CreateHandler(dbFactory);
-
-        await handler.HandleCheckoutCompletedAsync(1, SubscriptionTier.Pro, CancellationToken.None);
-
-        AlertRule? sshRule = await dbFactory.Context.AlertRules
-            .FirstOrDefaultAsync(r => r.TenantId == 1 && r.Metric == AlertMetric.SshConnection);
-        AlertRule? securityUpdatesRule = await dbFactory.Context.AlertRules
-            .FirstOrDefaultAsync(r => r.TenantId == 1 && r.Metric == AlertMetric.SecurityUpdates);
-
-        await Assert.That(sshRule).IsNotNull();
-        await Assert.That(sshRule!.Severity).IsEqualTo(AlertSeverity.Info);
-        await Assert.That(securityUpdatesRule).IsNotNull();
-        await Assert.That(securityUpdatesRule!.Severity).IsEqualTo(AlertSeverity.Info);
-    }
-
-    [Test]
-    public async Task HandleCheckoutCompletedAsync_DefaultRules_AllNotifyEmailTrue()
-    {
-        using TestDatabaseFactory dbFactory = new();
-        await SeedTierFeatureLimitsAsync(dbFactory.Context);
-        TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 1, tier: SubscriptionTier.Free);
-        sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
-
-        BillingWebhookHandler handler = CreateHandler(dbFactory);
-
-        await handler.HandleCheckoutCompletedAsync(1, SubscriptionTier.Pro, CancellationToken.None);
-
-        List<AlertRule> rules = await dbFactory.Context.AlertRules
-            .Where(r => r.TenantId == 1)
-            .ToListAsync();
-
-        await Assert.That(rules.Count).IsEqualTo(8);
-        await Assert.That(rules.All(r => r.NotifyEmail == true)).IsTrue();
-    }
-
-    [Test]
-    public async Task HandleCheckoutCompletedAsync_DefaultRules_AllNotifyWebhookFalse()
-    {
-        using TestDatabaseFactory dbFactory = new();
-        await SeedTierFeatureLimitsAsync(dbFactory.Context);
-        TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 1, tier: SubscriptionTier.Free);
-        sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
-
-        BillingWebhookHandler handler = CreateHandler(dbFactory);
-
-        await handler.HandleCheckoutCompletedAsync(1, SubscriptionTier.Pro, CancellationToken.None);
-
-        List<AlertRule> rules = await dbFactory.Context.AlertRules
-            .Where(r => r.TenantId == 1)
-            .ToListAsync();
-
-        await Assert.That(rules.Count).IsEqualTo(8);
-        await Assert.That(rules.All(r => r.NotifyWebhook == false)).IsTrue();
-    }
-
     [Test]
     public async Task HandleTierCorrectionAsync_UpdatesTierAndCreatesAuditLog()
     {
@@ -757,25 +628,5 @@ public class BillingWebhookHandlerTests
             .Where(a => a.TenantId == 3 && a.Action == AuditAction.SubscriptionDowngraded)
             .CountAsync();
         await Assert.That(auditCount).IsGreaterThanOrEqualTo(1);
-    }
-
-    [Test]
-    public async Task HandleCheckoutCompletedAsync_DefaultRules_SystemUserCreatedBy()
-    {
-        using TestDatabaseFactory dbFactory = new();
-        await SeedTierFeatureLimitsAsync(dbFactory.Context);
-        TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 1, tier: SubscriptionTier.Free);
-        sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
-
-        BillingWebhookHandler handler = CreateHandler(dbFactory);
-
-        await handler.HandleCheckoutCompletedAsync(1, SubscriptionTier.Pro, CancellationToken.None);
-
-        List<AlertRule> rules = await dbFactory.Context.AlertRules
-            .Where(r => r.TenantId == 1)
-            .ToListAsync();
-
-        await Assert.That(rules.Count).IsEqualTo(8);
-        await Assert.That(rules.All(r => r.CreatedByUserId == 1)).IsTrue();
     }
 }

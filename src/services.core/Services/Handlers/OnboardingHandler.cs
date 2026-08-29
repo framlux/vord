@@ -5,6 +5,7 @@
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
+using Framlux.FleetManagement.Services.Core.Alerts;
 using Framlux.FleetManagement.Services.Core.Infrastructure;
 using Framlux.FleetManagement.Services.Core.Security;
 
@@ -20,6 +21,7 @@ public sealed class OnboardingHandler
     private readonly ISubscriptionRepository _subscriptionRepository;
     private readonly IAuditLogRepository _auditLog;
     private readonly IRoleCacheInvalidator _roleCacheInvalidator;
+    private readonly IBuiltInAlertRuleProvisioner _builtInProvisioner;
 
     /// <summary>
     /// Creates a new instance of the <see cref="OnboardingHandler"/> class.
@@ -29,24 +31,28 @@ public sealed class OnboardingHandler
     /// <param name="subscriptionRepository">The subscription repository.</param>
     /// <param name="auditLog">The audit log repository.</param>
     /// <param name="roleCacheInvalidator">The role cache invalidator.</param>
+    /// <param name="builtInProvisioner">The built-in alert rule provisioner.</param>
     public OnboardingHandler(
         IDatabaseTransactionProvider transactionProvider,
         ITenantRepository tenantRepository,
         ISubscriptionRepository subscriptionRepository,
         IAuditLogRepository auditLog,
-        IRoleCacheInvalidator roleCacheInvalidator)
+        IRoleCacheInvalidator roleCacheInvalidator,
+        IBuiltInAlertRuleProvisioner builtInProvisioner)
     {
         ArgumentNullException.ThrowIfNull(transactionProvider);
         ArgumentNullException.ThrowIfNull(tenantRepository);
         ArgumentNullException.ThrowIfNull(subscriptionRepository);
         ArgumentNullException.ThrowIfNull(auditLog);
         ArgumentNullException.ThrowIfNull(roleCacheInvalidator);
+        ArgumentNullException.ThrowIfNull(builtInProvisioner);
 
         _transactionProvider = transactionProvider;
         _tenantRepository = tenantRepository;
         _subscriptionRepository = subscriptionRepository;
         _auditLog = auditLog;
         _roleCacheInvalidator = roleCacheInvalidator;
+        _builtInProvisioner = builtInProvisioner;
     }
 
     /// <summary>
@@ -120,6 +126,11 @@ public sealed class OnboardingHandler
             UpdatedAt = now,
         };
         await _subscriptionRepository.CreateTenantSubscriptionAsync(subscription, ct);
+
+        // Inside the transaction so a tenant never exists without its rules. Every repository
+        // interface resolves to the same scoped DatabaseRepository over one DatabaseContext, so this
+        // participates in the open transaction rather than opening a second connection.
+        await _builtInProvisioner.EnsureProvisionedAsync(tenant.Id, ct);
 
         // Assign the creating user as TenantAdmin
         await _tenantRepository.CreateUserTenantRoleAsync(new UserTenantRole

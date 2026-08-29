@@ -6,6 +6,7 @@ using System.Text.RegularExpressions;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
+using Framlux.FleetManagement.Services.Core.Alerts;
 using Framlux.FleetManagement.Services.Core.Infrastructure;
 using Framlux.FleetManagement.Services.Core.Models.Tenants;
 
@@ -30,6 +31,7 @@ public sealed partial class TenantHandler
     private readonly ISubscriptionRepository _subscriptionRepo;
     private readonly IDatabaseTransactionProvider _transactionProvider;
     private readonly IAuditLogRepository _auditLog;
+    private readonly IBuiltInAlertRuleProvisioner _builtInProvisioner;
     private readonly ILogger<TenantHandler> _logger;
 
     /// <summary>
@@ -40,18 +42,21 @@ public sealed partial class TenantHandler
         ISubscriptionRepository subscriptionRepo,
         IDatabaseTransactionProvider transactionProvider,
         IAuditLogRepository auditLog,
+        IBuiltInAlertRuleProvisioner builtInProvisioner,
         ILogger<TenantHandler> logger)
     {
         ArgumentNullException.ThrowIfNull(tenantRepo);
         ArgumentNullException.ThrowIfNull(subscriptionRepo);
         ArgumentNullException.ThrowIfNull(transactionProvider);
         ArgumentNullException.ThrowIfNull(auditLog);
+        ArgumentNullException.ThrowIfNull(builtInProvisioner);
         ArgumentNullException.ThrowIfNull(logger);
 
         _tenantRepo = tenantRepo;
         _subscriptionRepo = subscriptionRepo;
         _transactionProvider = transactionProvider;
         _auditLog = auditLog;
+        _builtInProvisioner = builtInProvisioner;
         _logger = logger;
     }
 
@@ -113,6 +118,11 @@ public sealed partial class TenantHandler
             CreatedAt = now,
             UpdatedAt = now,
         }, ct);
+
+        // Inside the transaction so a tenant never exists without its rules. Every repository
+        // interface resolves to the same scoped DatabaseRepository over one DatabaseContext, so this
+        // participates in the open transaction rather than opening a second connection.
+        await _builtInProvisioner.EnsureProvisionedAsync(tenant.Id, ct);
 
         await _auditLog.InsertAuditLogAsync(AuditHelper.Create(
             tenantId: tenant.Id,

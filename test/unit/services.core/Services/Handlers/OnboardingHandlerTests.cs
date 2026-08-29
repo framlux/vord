@@ -5,6 +5,7 @@
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
+using Framlux.FleetManagement.Services.Core.Alerts;
 using Framlux.FleetManagement.Services.Core.Handlers;
 using Framlux.FleetManagement.Services.Core.Infrastructure;
 using Framlux.FleetManagement.Services.Core.Security;
@@ -22,14 +23,16 @@ public class OnboardingHandlerTests
         ITenantRepository? tenantRepository = null,
         ISubscriptionRepository? subscriptionRepository = null,
         IAuditLogRepository? auditLog = null,
-        IRoleCacheInvalidator? roleCacheInvalidator = null)
+        IRoleCacheInvalidator? roleCacheInvalidator = null,
+        IBuiltInAlertRuleProvisioner? provisioner = null)
     {
         return new OnboardingHandler(
             transactionProvider ?? Substitute.For<IDatabaseTransactionProvider>(),
             tenantRepository ?? Substitute.For<ITenantRepository>(),
             subscriptionRepository ?? Substitute.For<ISubscriptionRepository>(),
             auditLog ?? Substitute.For<IAuditLogRepository>(),
-            roleCacheInvalidator ?? Substitute.For<IRoleCacheInvalidator>());
+            roleCacheInvalidator ?? Substitute.For<IRoleCacheInvalidator>(),
+            provisioner ?? Substitute.For<IBuiltInAlertRuleProvisioner>());
     }
 
     [Test]
@@ -140,6 +143,46 @@ public class OnboardingHandlerTests
 
         await Assert.That(result.IsSuccess).IsTrue();
         await Assert.That(result.Data!.TenantId).IsEqualTo(42);
+    }
+
+    /// <summary>
+    /// Self-service onboarding is the most common way a tenant comes into existence, and it never
+    /// touches Stripe, so it has to provision the built-in rules itself.
+    /// </summary>
+    [Test]
+    public async Task CreateOrganizationAsync_Success_ProvisionsBuiltInAlertRules()
+    {
+        IDatabaseTransactionProvider transactionProvider = Substitute.For<IDatabaseTransactionProvider>();
+        IDatabaseTransaction mockTransaction = Substitute.For<IDatabaseTransaction>();
+        transactionProvider.BeginTransactionAsync(Arg.Any<CancellationToken>()).Returns(mockTransaction);
+        ITenantRepository tenantRepository = Substitute.For<ITenantRepository>();
+        ISubscriptionRepository subscriptionRepository = Substitute.For<ISubscriptionRepository>();
+        tenantRepository.GetTenantsForUserAsync("ext-1", Arg.Any<CancellationToken>()).Returns(Enumerable.Empty<UserTenantRole>());
+        tenantRepository.GetTenantByNameAsync("New Org", Arg.Any<CancellationToken>()).Returns((Tenant?)null);
+        tenantRepository.CreateTenantAsync(Arg.Any<Tenant>(), Arg.Any<CancellationToken>()).Returns(callInfo =>
+        {
+            Tenant t = callInfo.Arg<Tenant>();
+            t.Id = 42;
+
+            return t;
+        });
+        subscriptionRepository.CreateTenantSubscriptionAsync(Arg.Any<TenantSubscription>(), Arg.Any<CancellationToken>()).Returns(callInfo =>
+        {
+            TenantSubscription s = callInfo.Arg<TenantSubscription>();
+            s.Id = 1;
+
+            return s;
+        });
+        IBuiltInAlertRuleProvisioner provisioner = Substitute.For<IBuiltInAlertRuleProvisioner>();
+        OnboardingHandler handler = BuildHandler(
+            transactionProvider: transactionProvider,
+            tenantRepository: tenantRepository,
+            subscriptionRepository: subscriptionRepository,
+            provisioner: provisioner);
+
+        await handler.CreateOrganizationAsync("New Org", 1, "ext-1", CancellationToken.None);
+
+        await provisioner.Received(1).EnsureProvisionedAsync(42, Arg.Any<CancellationToken>());
     }
 
     [Test]

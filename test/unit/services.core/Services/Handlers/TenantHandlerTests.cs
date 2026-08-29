@@ -5,6 +5,7 @@
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
+using Framlux.FleetManagement.Services.Core.Alerts;
 using Framlux.FleetManagement.Services.Core.Models.Tenants;
 using Framlux.FleetManagement.Services.Core.Handlers;
 using Framlux.FleetManagement.Services.Core.Infrastructure;
@@ -26,13 +27,15 @@ public class TenantHandlerTests
         IDatabaseTransactionProvider? transactionProvider = null,
         IAuditLogRepository? auditLog = null,
         ILogger<TenantHandler>? logger = null,
-        ISubscriptionRepository? subscriptionRepository = null)
+        ISubscriptionRepository? subscriptionRepository = null,
+        IBuiltInAlertRuleProvisioner? provisioner = null)
     {
         return new TenantHandler(
             tenantRepository ?? Substitute.For<ITenantRepository>(),
             subscriptionRepository ?? Substitute.For<ISubscriptionRepository>(),
             transactionProvider ?? Substitute.For<IDatabaseTransactionProvider>(),
             auditLog ?? Substitute.For<IAuditLogRepository>(),
+            provisioner ?? Substitute.For<IBuiltInAlertRuleProvisioner>(),
             logger ?? Substitute.For<ILogger<TenantHandler>>());
     }
 
@@ -214,6 +217,32 @@ public class TenantHandlerTests
         await Assert.That(result.IsSuccess).IsTrue();
         await Assert.That(result.Data!.Name).IsEqualTo("New Corp");
         await Assert.That(result.Data!.Id).IsEqualTo(42);
+    }
+
+    /// <summary>
+    /// A tenant must never exist without its built-in rules. Provisioning used to hang off the Stripe
+    /// checkout webhook, so a tenant that never checked out — and every tenant on the day it is
+    /// created — had none at all.
+    /// </summary>
+    [Test]
+    public async Task CreateAsync_ProvisionsBuiltInAlertRules()
+    {
+        ITenantRepository cache = Substitute.For<ITenantRepository>();
+        cache.GetTenantByNameAsync("Acme Fleet", Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<Tenant?>(null));
+        Tenant createdTenant = TestDataBuilder.BuildTenant(name: "Acme Fleet");
+        createdTenant.Id = 77;
+        cache.CreateTenantAsync(Arg.Any<Tenant>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(createdTenant));
+        (IDatabaseTransactionProvider txProvider, IAuditLogRepository auditLog) = CreateMockTransactionAndAudit();
+        IBuiltInAlertRuleProvisioner provisioner = Substitute.For<IBuiltInAlertRuleProvisioner>();
+        TenantHandler handler = BuildHandler(
+            tenantRepository: cache, transactionProvider: txProvider, auditLog: auditLog, provisioner: provisioner);
+
+        ServiceResult<TenantDto> result = await handler.CreateAsync("Acme Fleet", string.Empty, 1, CancellationToken.None);
+
+        await Assert.That(result.IsSuccess).IsTrue();
+        await provisioner.Received(1).EnsureProvisionedAsync(result.Data!.Id, Arg.Any<CancellationToken>());
     }
 
     // ========== GetDetailAsync tests ==========

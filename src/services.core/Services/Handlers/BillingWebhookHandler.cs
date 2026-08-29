@@ -3,8 +3,8 @@
 // See LICENSE for details.
 
 using Framlux.FleetManagement.Database.Enums;
-using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
+using Framlux.FleetManagement.Services.Core.Alerts;
 using Framlux.FleetManagement.Services.Core.Billing;
 using Framlux.FleetManagement.Services.Core.Infrastructure;
 
@@ -19,6 +19,7 @@ public sealed class BillingWebhookHandler : IBillingWebhookHandler
     private readonly IAuditLogRepository _auditLog;
     private readonly ISubscriptionRepository _subscriptionRepo;
     private readonly IAlertRuleRepository _alertRuleRepo;
+    private readonly IBuiltInAlertRuleProvisioner _builtInProvisioner;
     private readonly IDowngradeCleanupService _downgradeCleanupService;
     private readonly RetentionReclassifyDispatcher _reclassifyDispatcher;
 
@@ -30,6 +31,7 @@ public sealed class BillingWebhookHandler : IBillingWebhookHandler
         IAuditLogRepository auditLog,
         ISubscriptionRepository subscriptionRepo,
         IAlertRuleRepository alertRuleRepo,
+        IBuiltInAlertRuleProvisioner builtInProvisioner,
         IDowngradeCleanupService downgradeCleanupService,
         RetentionReclassifyDispatcher reclassifyDispatcher)
     {
@@ -37,6 +39,7 @@ public sealed class BillingWebhookHandler : IBillingWebhookHandler
         ArgumentNullException.ThrowIfNull(auditLog);
         ArgumentNullException.ThrowIfNull(subscriptionRepo);
         ArgumentNullException.ThrowIfNull(alertRuleRepo);
+        ArgumentNullException.ThrowIfNull(builtInProvisioner);
         ArgumentNullException.ThrowIfNull(downgradeCleanupService);
         ArgumentNullException.ThrowIfNull(reclassifyDispatcher);
 
@@ -44,6 +47,7 @@ public sealed class BillingWebhookHandler : IBillingWebhookHandler
         _auditLog = auditLog;
         _subscriptionRepo = subscriptionRepo;
         _alertRuleRepo = alertRuleRepo;
+        _builtInProvisioner = builtInProvisioner;
         _downgradeCleanupService = downgradeCleanupService;
         _reclassifyDispatcher = reclassifyDispatcher;
     }
@@ -65,161 +69,20 @@ public sealed class BillingWebhookHandler : IBillingWebhookHandler
         // Post-commit: a tier change marked during the transaction is only queued now, never inside it.
         _reclassifyDispatcher.DispatchPending();
 
-        await ProvisionDefaultAlertRulesAsync(tenantId, ct);
-    }
+        // Backstop for tenants created before provisioning moved to tenant creation. Ensure is a
+        // no-op for anything already seeded; the enable is what matters, because a prior downgrade
+        // to Free disables every rule and nothing else turns them back on.
+        await _builtInProvisioner.EnsureProvisionedAsync(tenantId, ct);
+        await _builtInProvisioner.EnableBuiltInsAsync(tenantId, ct);
 
-    private async Task ProvisionDefaultAlertRulesAsync(int tenantId, CancellationToken ct)
-    {
-        bool hasRules = (await _alertRuleRepo.GetBuiltInMetricsForTenantAsync(tenantId, ct)).Count > 0;
-
-        if (hasRules)
+        // Returning to Team restores the custom rules a Pro downgrade disabled. This is the path a
+        // real re-upgrade takes — HandleTierCorrectionAsync only runs on Stripe drift, and
+        // HandlePaymentSucceededAsync passes a null tier — so without this branch the custom-rule
+        // round trip is never repaired on the journey customers actually make.
+        if (tier == SubscriptionTier.Team)
         {
-            return;
+            await _alertRuleRepo.EnableCustomAlertRulesAsync(tenantId, ct);
         }
-
-        DateTimeOffset now = DateTimeOffset.UtcNow;
-
-        AlertRule[] defaults =
-        [
-            new()
-            {
-                TenantId = tenantId,
-                Name = "Disk usage above 90%",
-                Metric = AlertMetric.DiskUsage,
-                Operator = AlertOperator.GreaterThan,
-                Threshold = 90,
-                DurationMinutes = 5,
-                Severity = AlertSeverity.Warning,
-                IsEnabled = true,
-                NotifyEmail = true,
-                NotifyWebhook = false,
-                IsCustom = false,
-                CreatedByUserId = 1,
-                CreatedAt = now,
-                UpdatedAt = now,
-            },
-            new()
-            {
-                TenantId = tenantId,
-                Name = "Failed services detected",
-                Metric = AlertMetric.FailedServices,
-                Operator = AlertOperator.GreaterThan,
-                Threshold = 0,
-                DurationMinutes = 1,
-                Severity = AlertSeverity.Warning,
-                IsEnabled = true,
-                NotifyEmail = true,
-                NotifyWebhook = false,
-                IsCustom = false,
-                CreatedByUserId = 1,
-                CreatedAt = now,
-                UpdatedAt = now,
-            },
-            new()
-            {
-                TenantId = tenantId,
-                Name = "Security updates available",
-                Metric = AlertMetric.SecurityUpdates,
-                Operator = AlertOperator.GreaterThan,
-                Threshold = 0,
-                DurationMinutes = 1,
-                Severity = AlertSeverity.Info,
-                IsEnabled = true,
-                NotifyEmail = true,
-                NotifyWebhook = false,
-                IsCustom = false,
-                CreatedByUserId = 1,
-                CreatedAt = now,
-                UpdatedAt = now,
-            },
-            new()
-            {
-                TenantId = tenantId,
-                Name = "CPU usage above 90%",
-                Metric = AlertMetric.CpuUsage,
-                Operator = AlertOperator.GreaterThan,
-                Threshold = 90,
-                DurationMinutes = 5,
-                Severity = AlertSeverity.Warning,
-                IsEnabled = true,
-                NotifyEmail = true,
-                NotifyWebhook = false,
-                IsCustom = false,
-                CreatedByUserId = 1,
-                CreatedAt = now,
-                UpdatedAt = now,
-            },
-            new()
-            {
-                TenantId = tenantId,
-                Name = "Memory usage above 90%",
-                Metric = AlertMetric.MemoryUsage,
-                Operator = AlertOperator.GreaterThan,
-                Threshold = 90,
-                DurationMinutes = 5,
-                Severity = AlertSeverity.Warning,
-                IsEnabled = true,
-                NotifyEmail = true,
-                NotifyWebhook = false,
-                IsCustom = false,
-                CreatedByUserId = 1,
-                CreatedAt = now,
-                UpdatedAt = now,
-            },
-            new()
-            {
-                TenantId = tenantId,
-                Name = "Machine offline",
-                Metric = AlertMetric.MachineOffline,
-                Operator = AlertOperator.EqualTo,
-                Threshold = 1,
-                DurationMinutes = 1,
-                Severity = AlertSeverity.Critical,
-                IsEnabled = true,
-                NotifyEmail = true,
-                NotifyWebhook = false,
-                IsCustom = false,
-                CreatedByUserId = 1,
-                CreatedAt = now,
-                UpdatedAt = now,
-            },
-            new()
-            {
-                TenantId = tenantId,
-                Name = "Disk health issues",
-                Metric = AlertMetric.DiskHealth,
-                Operator = AlertOperator.EqualTo,
-                Threshold = 1,
-                DurationMinutes = 1,
-                Severity = AlertSeverity.Critical,
-                IsEnabled = true,
-                NotifyEmail = true,
-                NotifyWebhook = false,
-                IsCustom = false,
-                CreatedByUserId = 1,
-                CreatedAt = now,
-                UpdatedAt = now,
-            },
-            new()
-            {
-                TenantId = tenantId,
-                Name = "New SSH connection",
-                Metric = AlertMetric.SshConnection,
-                Operator = AlertOperator.EqualTo,
-                Threshold = 1,
-                DurationMinutes = 0,
-                Severity = AlertSeverity.Info,
-                IsEnabled = true,
-                NotifyEmail = true,
-                NotifyWebhook = false,
-                IsCustom = false,
-                CreatedByUserId = 1,
-                CreatedAt = now,
-                UpdatedAt = now,
-            },
-        ];
-
-        await _alertRuleRepo.InsertAlertRulesAsync(defaults, ct);
     }
 
     /// <inheritdoc/>
