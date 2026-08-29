@@ -135,6 +135,40 @@ public sealed class AlertRuleUpdateEndpoint : Endpoint<UpdateAlertRuleRequest, A
             return;
         }
 
+        // A built-in rule below Team accepts an enable/disable and nothing else. Retuning a
+        // threshold is authoring a rule, which is what the Team tier sells; without this, every
+        // default is a custom rule wearing a different name.
+        //
+        // MachineIds is deliberately excluded from this comparison. An unassigned rule watches
+        // nothing, so choosing which machines a built-in covers is the primary control Pro has over
+        // it — scoping, not authoring. The metric needs no comparison either: the immutability check
+        // above has already proven it equal.
+        if ((rule.IsCustom == false) && SubscriptionPolicy.RequiresTeam(subscription))
+        {
+            // The edit form carries no description field and sends nothing, so a strict comparison
+            // would permanently lock Pro out of toggling any built-in that acquired a description
+            // while the tenant was on Team.
+            bool descriptionUnchanged = string.IsNullOrEmpty(req.Description)
+                ? string.IsNullOrEmpty(rule.Description)
+                : string.Equals(req.Description, rule.Description, StringComparison.Ordinal);
+
+            bool changesOnlyEnabled =
+                (req.Name == rule.Name) &&
+                descriptionUnchanged &&
+                (req.Threshold == rule.Threshold) &&
+                (req.DurationMinutes == rule.DurationMinutes) &&
+                (severity == rule.Severity) &&
+                (req.NotifyEmail == rule.NotifyEmail) &&
+                (req.NotifyWebhook == rule.NotifyWebhook);
+
+            if (changesOnlyEnabled == false)
+            {
+                await HttpContext.SendApiErrorAsync(403, "Built-in rules can be enabled or disabled on Pro. Editing them requires a Team subscription.", ct);
+
+                return;
+            }
+        }
+
         // Validate threshold and duration based on the rule's metric type (requires DB-loaded metric)
         string? validationError = ValidateMetricConstraints(rule.Metric, req.Threshold, req.DurationMinutes);
         if (validationError is not null)

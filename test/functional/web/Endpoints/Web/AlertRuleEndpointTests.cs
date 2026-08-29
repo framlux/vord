@@ -469,7 +469,10 @@ public sealed class AlertRuleEndpointTests
     {
         using FunctionalTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
-        (int tenantId, int userId, long machineId) = await SeedAlertEnvironment(db, SubscriptionTier.Pro);
+
+        // Team, because this exercises retuning a built-in rule's fields — an authoring operation
+        // only Team may perform. The tier is incidental to what the test is checking.
+        (int tenantId, int userId, long machineId) = await SeedAlertEnvironment(db, SubscriptionTier.Team);
 
         AlertRule rule = new()
         {
@@ -526,7 +529,10 @@ public sealed class AlertRuleEndpointTests
     {
         using FunctionalTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
-        (int tenantId, int userId, long machineId) = await SeedAlertEnvironment(db, SubscriptionTier.Pro);
+
+        // Team, so the request reaches the machine-id validation rather than stopping at the
+        // built-in editing gate. The tier is incidental to what the test is checking.
+        (int tenantId, int userId, long machineId) = await SeedAlertEnvironment(db, SubscriptionTier.Team);
 
         AlertRule rule = new()
         {
@@ -583,7 +589,10 @@ public sealed class AlertRuleEndpointTests
     {
         using FunctionalTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
-        (int tenantId, int userId, long machineId) = await SeedAlertEnvironment(db, SubscriptionTier.Pro);
+
+        // Team, because the request retunes a built-in rule's name and threshold. The tier is
+        // incidental to what the test is checking.
+        (int tenantId, int userId, long machineId) = await SeedAlertEnvironment(db, SubscriptionTier.Team);
 
         AlertRule rule = new()
         {
@@ -1057,7 +1066,7 @@ public sealed class AlertRuleEndpointTests
     }
 
     [Test]
-    public async Task UpdateRule_ProTierDefaultRule_Returns200()
+    public async Task UpdateRule_ProTierDefaultRule_Returns403()
     {
         using FunctionalTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
@@ -1070,9 +1079,12 @@ public sealed class AlertRuleEndpointTests
             Metric = AlertMetric.CpuUsage,
             Operator = AlertOperator.GreaterThan,
             Threshold = 80,
+            DurationMinutes = 5,
             Severity = AlertSeverity.Warning,
             IsEnabled = true,
             IsCustom = false,
+            NotifyEmail = true,
+            NotifyWebhook = false,
             CreatedByUserId = userId,
             CreatedAt = DateTimeOffset.UtcNow,
             UpdatedAt = DateTimeOffset.UtcNow,
@@ -1094,15 +1106,117 @@ public sealed class AlertRuleEndpointTests
             MachineIds = new long[] { machineId },
         });
 
+        // Built-in rules are Team-only to edit. Pro may enable or disable one, but retuning its
+        // threshold is authoring a rule, which is what the Team tier sells.
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.Forbidden);
+        string body = await response.Content.ReadAsStringAsync();
+        await Assert.That(body).Contains("Team subscription");
+
+        AlertRule? unchanged = await db.AlertRules.FirstOrDefaultAsync(r => r.Id == defaultRule.Id);
+        await Assert.That(unchanged!.Name).IsEqualTo("Default CPU Rule");
+        await Assert.That(unchanged.Threshold).IsEqualTo(80m);
+        await Assert.That(unchanged.Severity).IsEqualTo(AlertSeverity.Warning);
+    }
+
+    [Test]
+    public async Task UpdateRule_ProTierDefaultRule_EnabledChangeOnly_Returns200()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId, long machineId) = await SeedAlertEnvironment(db, SubscriptionTier.Pro);
+
+        AlertRule defaultRule = new()
+        {
+            TenantId = tenantId,
+            Name = "Default CPU Rule",
+            Metric = AlertMetric.CpuUsage,
+            Operator = AlertOperator.GreaterThan,
+            Threshold = 90,
+            DurationMinutes = 15,
+            Severity = AlertSeverity.Warning,
+            IsEnabled = true,
+            IsCustom = false,
+            NotifyEmail = true,
+            NotifyWebhook = false,
+            CreatedByUserId = userId,
+            CreatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow,
+        };
+        defaultRule.Id = await db.InsertWithInt32IdentityAsync(defaultRule);
+
+        HttpClient client = BuildClient(factory, tenantId, userId);
+
+        HttpResponseMessage response = await client.PutAsJsonAsync($"/api/v1/alert-rules/{defaultRule.Id}", new
+        {
+            Name = "Default CPU Rule",
+            Metric = "CpuUsage",
+            Threshold = 90,
+            DurationMinutes = 15,
+            Severity = "Warning",
+            IsEnabled = false,
+            NotifyEmail = true,
+            NotifyWebhook = false,
+            MachineIds = new long[] { machineId },
+        });
+
+        // Echoing every stored field back and flipping only IsEnabled is the one shape Pro may send.
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
+
+        AlertRule? updated = await db.AlertRules.FirstOrDefaultAsync(r => r.Id == defaultRule.Id);
+        await Assert.That(updated!.IsEnabled).IsFalse();
+        await Assert.That(updated.Threshold).IsEqualTo(90m);
+        await Assert.That(updated.Name).IsEqualTo("Default CPU Rule");
+    }
+
+    [Test]
+    public async Task UpdateRule_TeamTierDefaultRule_Returns200()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId, long machineId) = await SeedAlertEnvironment(db, SubscriptionTier.Team);
+
+        AlertRule defaultRule = new()
+        {
+            TenantId = tenantId,
+            Name = "Default CPU Rule",
+            Metric = AlertMetric.CpuUsage,
+            Operator = AlertOperator.GreaterThan,
+            Threshold = 80,
+            DurationMinutes = 5,
+            Severity = AlertSeverity.Warning,
+            IsEnabled = true,
+            IsCustom = false,
+            NotifyEmail = true,
+            NotifyWebhook = false,
+            CreatedByUserId = userId,
+            CreatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow,
+        };
+        defaultRule.Id = await db.InsertWithInt32IdentityAsync(defaultRule);
+
+        HttpClient client = BuildClient(factory, tenantId, userId);
+
+        HttpResponseMessage response = await client.PutAsJsonAsync($"/api/v1/alert-rules/{defaultRule.Id}", new
+        {
+            Name = "Updated Default",
+            Metric = "CpuUsage",
+            Threshold = 95,
+            DurationMinutes = 10,
+            Severity = "Critical",
+            IsEnabled = true,
+            NotifyEmail = true,
+            NotifyWebhook = false,
+            MachineIds = new long[] { machineId },
+        });
+
+        // Team is the tier that buys rule authoring, including retuning a built-in.
         await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
         string body = await response.Content.ReadAsStringAsync();
         await Assert.That(body).Contains("Updated Default");
-        await Assert.That(body).Contains("Critical");
 
-        // Pro tier is allowed to edit DEFAULT rules; verify the row was actually updated.
         AlertRule? updated = await db.AlertRules.FirstOrDefaultAsync(r => r.Id == defaultRule.Id);
         await Assert.That(updated!.Name).IsEqualTo("Updated Default");
-        await Assert.That(updated.Threshold).IsEqualTo(90m);
+        await Assert.That(updated.Threshold).IsEqualTo(95m);
         await Assert.That(updated.Severity).IsEqualTo(AlertSeverity.Critical);
     }
 
@@ -1310,7 +1424,10 @@ public sealed class AlertRuleEndpointTests
     {
         using FunctionalTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
-        (int tenantId, int userId, long machineId) = await SeedAlertEnvironment(db, SubscriptionTier.Pro);
+
+        // Team, because changing a built-in rule's duration is an authoring operation. The tier is
+        // incidental to the duration validation this test covers.
+        (int tenantId, int userId, long machineId) = await SeedAlertEnvironment(db, SubscriptionTier.Team);
 
         AlertRule rule = new()
         {
@@ -1359,7 +1476,10 @@ public sealed class AlertRuleEndpointTests
     {
         using FunctionalTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
-        (int tenantId, int userId, long machineId) = await SeedAlertEnvironment(db, SubscriptionTier.Pro);
+
+        // Team, because the request also flips NotifyEmail on a built-in rule. The tier is
+        // incidental to the zero-duration behaviour this test covers.
+        (int tenantId, int userId, long machineId) = await SeedAlertEnvironment(db, SubscriptionTier.Team);
 
         AlertRule rule = new()
         {
