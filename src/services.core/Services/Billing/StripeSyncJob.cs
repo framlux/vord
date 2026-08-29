@@ -205,8 +205,11 @@ public sealed class StripeSyncJob
 
             switch (mappedStatus.Value)
             {
+                // Reactivation goes through the webhook handler, not a direct status write. Reaching
+                // Active is only half of it: whatever suspended the tenant disabled its alert rules,
+                // and the handler is the single place that audits the recovery and turns them back on.
                 case SubscriptionStatus.Active:
-                    await _subscriptionRepository.UpdateSubscriptionStateAsync(subscription.TenantId, tier: null, SubscriptionStatus.Active, cancellationToken: ct);
+                    await _webhookHandler.HandlePaymentSucceededAsync(subscription.TenantId, ct);
 
                     break;
 

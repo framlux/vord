@@ -3,6 +3,7 @@
 // See LICENSE for details.
 
 using Framlux.FleetManagement.Database.Enums;
+using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Services.Core.Alerts;
 using Framlux.FleetManagement.Services.Core.Billing;
@@ -136,6 +137,25 @@ public sealed class BillingWebhookHandler : IBillingWebhookHandler
 
         // Post-commit: a tier change marked during the transaction is only queued now, never inside it.
         _reclassifyDispatcher.DispatchPending();
+
+        // A recovered payment carries no tier of its own, so entitlement has to be read from the row
+        // this handler just wrote — Active is now true, which is what makes the policy answer usable.
+        // The transition matters because cancellation disables every rule the tenant has while leaving
+        // the tier alone, so nothing but this restores them.
+        TenantSubscription? subscription = await _subscriptionRepo.GetSubscriptionForTenantAsync(tenantId, ct);
+
+        if (SubscriptionPolicy.RequiresPro(subscription) == false)
+        {
+            await _builtInProvisioner.EnsureProvisionedAsync(tenantId, ct);
+            await _builtInProvisioner.EnableBuiltInsAsync(tenantId, ct);
+
+            // A canceled Team tenant lost its custom rules to the same sweep. Restoring only the
+            // built-ins would leave it paying for Team and running on Pro's rule set.
+            if (subscription!.Tier == SubscriptionTier.Team)
+            {
+                await _alertRuleRepo.EnableCustomAlertRulesAsync(tenantId, ct);
+            }
+        }
     }
 
     /// <inheritdoc/>
@@ -172,6 +192,21 @@ public sealed class BillingWebhookHandler : IBillingWebhookHandler
 
         // Post-commit: a tier change marked during the transaction is only queued now, never inside it.
         _reclassifyDispatcher.DispatchPending();
+
+        // Drift repair is the one path that exists because a checkout webhook was lost, so it is the
+        // likeliest route by which a paying tenant has never been provisioned at all. The provisioner
+        // opens its own transaction, which is why this sits after the commit rather than inside it.
+        if ((tier == SubscriptionTier.Pro) || (tier == SubscriptionTier.Team))
+        {
+            await _builtInProvisioner.EnsureProvisionedAsync(tenantId, ct);
+            await _builtInProvisioner.EnableBuiltInsAsync(tenantId, ct);
+
+            // Arriving at Team, by any route, thaws the custom rules a Pro downgrade froze.
+            if (tier == SubscriptionTier.Team)
+            {
+                await _alertRuleRepo.EnableCustomAlertRulesAsync(tenantId, ct);
+            }
+        }
     }
 
     /// <inheritdoc/>

@@ -739,6 +739,10 @@ public sealed class StripeSyncJobTests
         // Intent: local says PastDue, Stripe now says active (the customer paid). The sync job
         // must transition local back to Active. Without this path the customer would stay locked
         // out of paid features after successful payment retry until the next webhook.
+        //
+        // The transition goes through the webhook handler rather than writing the status row
+        // directly, because reactivation also has to audit the change and turn the tenant's alert
+        // rules back on; a direct write reaches Active with every rule still disabled.
         TestSut sut = new();
         sut.SeedOneSubscription(
             localTier: SubscriptionTier.Pro,
@@ -753,7 +757,8 @@ public sealed class StripeSyncJobTests
 
         await sut.Job.RunAsync(CancellationToken.None);
 
-        await sut.SubscriptionRepo.Received(1).UpdateSubscriptionStateAsync(1, null, SubscriptionStatus.Active, false, Arg.Any<CancellationToken>());
+        await sut.WebhookHandler.Received(1).HandlePaymentSucceededAsync(1, Arg.Any<CancellationToken>());
+        await sut.SubscriptionRepo.DidNotReceive().UpdateSubscriptionStateAsync(1, null, SubscriptionStatus.Active, false, Arg.Any<CancellationToken>());
     }
 
     [Test]
@@ -762,6 +767,8 @@ public sealed class StripeSyncJobTests
         // Intent: a previously canceled local subscription must transition to Active when Stripe
         // reports active (e.g., the customer reactivated via the Stripe portal). Without this,
         // a reactivated customer would stay locked at canceled until the next webhook lands.
+        // Cancellation disabled every alert rule the tenant had, so this must run the same
+        // reactivation the payment webhook runs rather than only flipping the status column.
         TestSut sut = new();
         sut.SeedOneSubscription(
             localTier: SubscriptionTier.Pro,
@@ -776,7 +783,8 @@ public sealed class StripeSyncJobTests
 
         await sut.Job.RunAsync(CancellationToken.None);
 
-        await sut.SubscriptionRepo.Received(1).UpdateSubscriptionStateAsync(1, null, SubscriptionStatus.Active, false, Arg.Any<CancellationToken>());
+        await sut.WebhookHandler.Received(1).HandlePaymentSucceededAsync(1, Arg.Any<CancellationToken>());
+        await sut.SubscriptionRepo.DidNotReceive().UpdateSubscriptionStateAsync(1, null, SubscriptionStatus.Active, false, Arg.Any<CancellationToken>());
     }
 
     // ========== Period end anti-thrash ==========
