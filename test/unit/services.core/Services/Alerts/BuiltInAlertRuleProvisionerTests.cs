@@ -150,17 +150,219 @@ public sealed class BuiltInAlertRuleProvisionerTests
         await Assert.That(inserted.TrueForAll(r => r.UpdatedAt == Now)).IsTrue();
     }
 
+    /// <summary>
+    /// The first checkout: the tenant sat on Free, the sweep left every built-in off, and paying is
+    /// what turns them on.
+    /// </summary>
     [Test]
-    public async Task EnableBuiltInsAsync_DelegatesToTheRepository()
+    public async Task RestoreForTierAsync_FreeToPro_EnablesBuiltIns()
     {
-        IAlertRuleRepository repo = Substitute.For<IAlertRuleRepository>();
-        repo.EnableBuiltInAlertRulesAsync(7, Arg.Any<CancellationToken>()).Returns(8);
+        IAlertRuleRepository repo = FullyProvisionedRepo(7);
 
         BuiltInAlertRuleProvisioner provisioner = Build(repo, Substitute.For<ISubscriptionService>());
 
-        await provisioner.EnableBuiltInsAsync(7, CancellationToken.None);
+        await provisioner.RestoreForTierAsync(
+            7,
+            Subscription(SubscriptionTier.Free, SubscriptionStatus.Active),
+            SubscriptionTier.Pro,
+            SubscriptionStatus.Active,
+            CancellationToken.None);
 
         await repo.Received(1).EnableBuiltInAlertRulesAsync(7, Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>
+    /// Cancellation runs the same sweep a Free downgrade does, so reactivation has to undo it.
+    /// </summary>
+    [Test]
+    public async Task RestoreForTierAsync_CanceledToActive_EnablesBuiltIns()
+    {
+        IAlertRuleRepository repo = FullyProvisionedRepo(7);
+
+        BuiltInAlertRuleProvisioner provisioner = Build(repo, Substitute.For<ISubscriptionService>());
+
+        await provisioner.RestoreForTierAsync(
+            7,
+            Subscription(SubscriptionTier.Pro, SubscriptionStatus.Canceled),
+            SubscriptionTier.Pro,
+            SubscriptionStatus.Active,
+            CancellationToken.None);
+
+        await repo.Received(1).EnableBuiltInAlertRulesAsync(7, Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>
+    /// A declined card writes PastDue and disables nothing, so the retry that succeeds has nothing to
+    /// restore. Enabling here would revive every built-in the tenant had silenced, and would do it
+    /// again on every dunning cycle.
+    /// </summary>
+    [Test]
+    public async Task RestoreForTierAsync_PastDueToActive_LeavesBuiltInsAlone()
+    {
+        IAlertRuleRepository repo = FullyProvisionedRepo(7);
+
+        BuiltInAlertRuleProvisioner provisioner = Build(repo, Substitute.For<ISubscriptionService>());
+
+        await provisioner.RestoreForTierAsync(
+            7,
+            Subscription(SubscriptionTier.Pro, SubscriptionStatus.PastDue),
+            SubscriptionTier.Pro,
+            SubscriptionStatus.Active,
+            CancellationToken.None);
+
+        await repo.DidNotReceive().EnableBuiltInAlertRulesAsync(Arg.Any<int>(), Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>
+    /// An upgrade between two paid tiers passes through no sweep, so the built-ins the tenant chose
+    /// to silence stay silent. The custom rules a Pro downgrade froze are a different matter: they
+    /// thaw on arrival at Team.
+    /// </summary>
+    [Test]
+    public async Task RestoreForTierAsync_ProToTeam_ThawsCustomRulesWithoutRevivingBuiltIns()
+    {
+        IAlertRuleRepository repo = FullyProvisionedRepo(7);
+
+        BuiltInAlertRuleProvisioner provisioner = Build(repo, Substitute.For<ISubscriptionService>());
+
+        await provisioner.RestoreForTierAsync(
+            7,
+            Subscription(SubscriptionTier.Pro, SubscriptionStatus.Active),
+            SubscriptionTier.Team,
+            SubscriptionStatus.Active,
+            CancellationToken.None);
+
+        await repo.DidNotReceive().EnableBuiltInAlertRulesAsync(Arg.Any<int>(), Arg.Any<CancellationToken>());
+        await repo.Received(1).EnableCustomAlertRulesAsync(7, Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>
+    /// A monthly renewal arrives on the same path a recovery does and is not a transition at all.
+    /// </summary>
+    [Test]
+    public async Task RestoreForTierAsync_ActiveRenewal_ChangesNothing()
+    {
+        IAlertRuleRepository repo = FullyProvisionedRepo(7);
+
+        BuiltInAlertRuleProvisioner provisioner = Build(repo, Substitute.For<ISubscriptionService>());
+
+        await provisioner.RestoreForTierAsync(
+            7,
+            Subscription(SubscriptionTier.Team, SubscriptionStatus.Active),
+            SubscriptionTier.Team,
+            SubscriptionStatus.Active,
+            CancellationToken.None);
+
+        await repo.DidNotReceive().EnableBuiltInAlertRulesAsync(Arg.Any<int>(), Arg.Any<CancellationToken>());
+        await repo.DidNotReceive().EnableCustomAlertRulesAsync(Arg.Any<int>(), Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>
+    /// A canceled Team tenant lost its custom rules to the sweep as well, so restoring only the
+    /// built-ins would leave it paying for Team and running Pro's rule set.
+    /// </summary>
+    [Test]
+    public async Task RestoreForTierAsync_CanceledTeamToActiveTeam_RestoresBoth()
+    {
+        IAlertRuleRepository repo = FullyProvisionedRepo(7);
+
+        BuiltInAlertRuleProvisioner provisioner = Build(repo, Substitute.For<ISubscriptionService>());
+
+        await provisioner.RestoreForTierAsync(
+            7,
+            Subscription(SubscriptionTier.Team, SubscriptionStatus.Canceled),
+            SubscriptionTier.Team,
+            SubscriptionStatus.Active,
+            CancellationToken.None);
+
+        await repo.Received(1).EnableBuiltInAlertRulesAsync(7, Arg.Any<CancellationToken>());
+        await repo.Received(1).EnableCustomAlertRulesAsync(7, Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>
+    /// A tenant with no subscription row has never been through anything the sweep spared, and the
+    /// caller has just written it into a paid tier, so this is a first entitlement.
+    /// </summary>
+    [Test]
+    public async Task RestoreForTierAsync_NoPriorSubscription_EnablesBuiltIns()
+    {
+        IAlertRuleRepository repo = FullyProvisionedRepo(7);
+
+        BuiltInAlertRuleProvisioner provisioner = Build(repo, Substitute.For<ISubscriptionService>());
+
+        await provisioner.RestoreForTierAsync(
+            7, null, SubscriptionTier.Pro, SubscriptionStatus.Active, CancellationToken.None);
+
+        await repo.Received(1).EnableBuiltInAlertRulesAsync(7, Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>
+    /// Free is not an entitlement, so nothing is seeded and nothing is enabled.
+    /// </summary>
+    [Test]
+    public async Task RestoreForTierAsync_ToFree_DoesNothing()
+    {
+        IAlertRuleRepository repo = FullyProvisionedRepo(7);
+
+        BuiltInAlertRuleProvisioner provisioner = Build(repo, Substitute.For<ISubscriptionService>());
+
+        await provisioner.RestoreForTierAsync(
+            7,
+            Subscription(SubscriptionTier.Team, SubscriptionStatus.Active),
+            SubscriptionTier.Free,
+            SubscriptionStatus.Active,
+            CancellationToken.None);
+
+        await repo.DidNotReceive().GetBuiltInMetricsForTenantAsync(Arg.Any<int>(), Arg.Any<CancellationToken>());
+        await repo.DidNotReceive().EnableBuiltInAlertRulesAsync(Arg.Any<int>(), Arg.Any<CancellationToken>());
+        await repo.DidNotReceive().EnableCustomAlertRulesAsync(Arg.Any<int>(), Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>
+    /// A paid tier that is not Active is refused every gated feature, so landing on one restores
+    /// nothing. The administrative grant RPC accepts exactly this combination.
+    /// </summary>
+    [Test]
+    public async Task RestoreForTierAsync_PaidTierButInactiveStatus_DoesNothing()
+    {
+        IAlertRuleRepository repo = FullyProvisionedRepo(7);
+
+        BuiltInAlertRuleProvisioner provisioner = Build(repo, Substitute.For<ISubscriptionService>());
+
+        await provisioner.RestoreForTierAsync(
+            7,
+            Subscription(SubscriptionTier.Free, SubscriptionStatus.Active),
+            SubscriptionTier.Pro,
+            SubscriptionStatus.Canceled,
+            CancellationToken.None);
+
+        await repo.DidNotReceive().GetBuiltInMetricsForTenantAsync(Arg.Any<int>(), Arg.Any<CancellationToken>());
+        await repo.DidNotReceive().EnableBuiltInAlertRulesAsync(Arg.Any<int>(), Arg.Any<CancellationToken>());
+        await repo.DidNotReceive().EnableCustomAlertRulesAsync(Arg.Any<int>(), Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>
+    /// Seeding is a backstop on every entitled transition, including the ones that restore nothing —
+    /// a tenant that reached a paid tier without rules needs them whatever the prior state was.
+    /// </summary>
+    [Test]
+    public async Task RestoreForTierAsync_EntitledWithoutRestore_StillSeedsMissingRules()
+    {
+        IAlertRuleRepository repo = Substitute.For<IAlertRuleRepository>();
+        repo.GetBuiltInMetricsForTenantAsync(7, Arg.Any<CancellationToken>()).Returns([]);
+        ISubscriptionService subscriptions = SubscriptionsReturning(7, SubscriptionTier.Pro);
+
+        BuiltInAlertRuleProvisioner provisioner = Build(repo, subscriptions);
+
+        await provisioner.RestoreForTierAsync(
+            7,
+            Subscription(SubscriptionTier.Pro, SubscriptionStatus.PastDue),
+            SubscriptionTier.Pro,
+            SubscriptionStatus.Active,
+            CancellationToken.None);
+
+        await Assert.That(CapturedRules(repo).Count).IsEqualTo(8);
+        await repo.DidNotReceive().EnableBuiltInAlertRulesAsync(Arg.Any<int>(), Arg.Any<CancellationToken>());
     }
 
     [Test]
@@ -195,6 +397,31 @@ public sealed class BuiltInAlertRuleProvisionerTests
             subscriptions,
             new FakeTimeProvider(Now),
             new NullLogger<BuiltInAlertRuleProvisioner>());
+    }
+
+    /// <summary>
+    /// A repository whose tenant already holds every built-in metric, so seeding is a no-op and the
+    /// restore decision is the only thing under test.
+    /// </summary>
+    private static IAlertRuleRepository FullyProvisionedRepo(int tenantId)
+    {
+        IAlertRuleRepository repo = Substitute.For<IAlertRuleRepository>();
+        repo.GetBuiltInMetricsForTenantAsync(tenantId, Arg.Any<CancellationToken>())
+            .Returns([.. BuiltInAlertRuleDefinitions.All.Select(d => d.Metric)]);
+
+        return repo;
+    }
+
+    private static TenantSubscription Subscription(SubscriptionTier tier, SubscriptionStatus status)
+    {
+        return new TenantSubscription
+        {
+            TenantId = 7,
+            Tier = tier,
+            Status = status,
+            CreatedAt = Now,
+            UpdatedAt = Now,
+        };
     }
 
     private static ISubscriptionService SubscriptionsReturning(int tenantId, SubscriptionTier tier)

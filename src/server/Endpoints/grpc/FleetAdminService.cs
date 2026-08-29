@@ -485,6 +485,11 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
         Tenant tenant = await ResolveTenantByExternalIdAsync(
             tenantRepo, request.TenantExternalId, context.CancellationToken);
 
+        // What a grant may restore depends on where the tenant is coming from, and the write below
+        // destroys that, so the prior row has to be read first.
+        TenantSubscription? priorSubscription = await subscriptionRepo.GetSubscriptionForTenantAsync(
+            tenant.Id, context.CancellationToken);
+
         int updated = await subscriptionRepo.UpdateSubscriptionStateAsync(
             tenant.Id, tier.Value, status, cancellationToken: context.CancellationToken);
 
@@ -502,25 +507,12 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
         scope.ServiceProvider.GetRequiredService<RetentionReclassifyDispatcher>().DispatchPending();
 
         // An administrative grant is a real route into a paid tier and bypasses Stripe entirely, so
-        // nothing else on this path would ever provision or enable the built-in rules. The status
-        // guard matters: the RPC accepts Pro with a Canceled status and applies no cross-field
-        // validation, while SubscriptionPolicy.RequiresPro is status-sensitive, so without it the
-        // seed path and the enable path would disagree about the same tenant.
-        if (((tier.Value == SubscriptionTier.Pro) || (tier.Value == SubscriptionTier.Team)) &&
-            (status == SubscriptionStatus.Active))
-        {
-            IBuiltInAlertRuleProvisioner provisioner = scope.ServiceProvider.GetRequiredService<IBuiltInAlertRuleProvisioner>();
-            await provisioner.EnsureProvisionedAsync(tenant.Id, context.CancellationToken);
-            await provisioner.EnableBuiltInsAsync(tenant.Id, context.CancellationToken);
-
-            // Mirrors the checkout path: arriving at Team restores the custom rules a Pro downgrade
-            // froze.
-            if (tier.Value == SubscriptionTier.Team)
-            {
-                IAlertRuleRepository alertRuleRepo = scope.ServiceProvider.GetRequiredService<IAlertRuleRepository>();
-                await alertRuleRepo.EnableCustomAlertRulesAsync(tenant.Id, context.CancellationToken);
-            }
-        }
+        // nothing else on this path would ever provision or restore the alert rules. The RPC accepts
+        // any tier with any status and applies no cross-field validation, so both are handed over
+        // exactly as written and the provisioner decides what the transition permits.
+        IBuiltInAlertRuleProvisioner provisioner = scope.ServiceProvider.GetRequiredService<IBuiltInAlertRuleProvisioner>();
+        await provisioner.RestoreForTierAsync(
+            tenant.Id, priorSubscription, tier.Value, status, context.CancellationToken);
 
         _logger.LogInformation(
             "FleetAdmin: tenant {TenantId} subscription updated to tier={Tier}, status={Status}",

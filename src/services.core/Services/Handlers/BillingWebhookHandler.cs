@@ -19,7 +19,6 @@ public sealed class BillingWebhookHandler : IBillingWebhookHandler
     private readonly IDatabaseTransactionProvider _transactionProvider;
     private readonly IAuditLogRepository _auditLog;
     private readonly ISubscriptionRepository _subscriptionRepo;
-    private readonly IAlertRuleRepository _alertRuleRepo;
     private readonly IBuiltInAlertRuleProvisioner _builtInProvisioner;
     private readonly IDowngradeCleanupService _downgradeCleanupService;
     private readonly RetentionReclassifyDispatcher _reclassifyDispatcher;
@@ -31,7 +30,6 @@ public sealed class BillingWebhookHandler : IBillingWebhookHandler
         IDatabaseTransactionProvider transactionProvider,
         IAuditLogRepository auditLog,
         ISubscriptionRepository subscriptionRepo,
-        IAlertRuleRepository alertRuleRepo,
         IBuiltInAlertRuleProvisioner builtInProvisioner,
         IDowngradeCleanupService downgradeCleanupService,
         RetentionReclassifyDispatcher reclassifyDispatcher)
@@ -39,7 +37,6 @@ public sealed class BillingWebhookHandler : IBillingWebhookHandler
         ArgumentNullException.ThrowIfNull(transactionProvider);
         ArgumentNullException.ThrowIfNull(auditLog);
         ArgumentNullException.ThrowIfNull(subscriptionRepo);
-        ArgumentNullException.ThrowIfNull(alertRuleRepo);
         ArgumentNullException.ThrowIfNull(builtInProvisioner);
         ArgumentNullException.ThrowIfNull(downgradeCleanupService);
         ArgumentNullException.ThrowIfNull(reclassifyDispatcher);
@@ -47,7 +44,6 @@ public sealed class BillingWebhookHandler : IBillingWebhookHandler
         _transactionProvider = transactionProvider;
         _auditLog = auditLog;
         _subscriptionRepo = subscriptionRepo;
-        _alertRuleRepo = alertRuleRepo;
         _builtInProvisioner = builtInProvisioner;
         _downgradeCleanupService = downgradeCleanupService;
         _reclassifyDispatcher = reclassifyDispatcher;
@@ -56,6 +52,10 @@ public sealed class BillingWebhookHandler : IBillingWebhookHandler
     /// <inheritdoc/>
     public async Task HandleCheckoutCompletedAsync(int tenantId, SubscriptionTier tier, CancellationToken ct)
     {
+        // What the tenant is entitled to recover depends on where it is coming from, and the write
+        // below destroys that. Reading it here is the only chance.
+        TenantSubscription? priorSubscription = await _subscriptionRepo.GetSubscriptionForTenantAsync(tenantId, ct);
+
         using IDatabaseTransaction transaction = await _transactionProvider.BeginTransactionAsync(ct);
 
         await _subscriptionRepo.UpdateSubscriptionStateAsync(tenantId, tier, SubscriptionStatus.Active, cancellationToken: ct);
@@ -70,20 +70,11 @@ public sealed class BillingWebhookHandler : IBillingWebhookHandler
         // Post-commit: a tier change marked during the transaction is only queued now, never inside it.
         _reclassifyDispatcher.DispatchPending();
 
-        // Backstop for tenants created before provisioning moved to tenant creation. Ensure is a
-        // no-op for anything already seeded; the enable is what matters, because a prior downgrade
-        // to Free disables every rule and nothing else turns them back on.
-        await _builtInProvisioner.EnsureProvisionedAsync(tenantId, ct);
-        await _builtInProvisioner.EnableBuiltInsAsync(tenantId, ct);
-
-        // Returning to Team restores the custom rules a Pro downgrade disabled. This is the path a
-        // real re-upgrade takes — HandleTierCorrectionAsync only runs on Stripe drift, and
-        // HandlePaymentSucceededAsync passes a null tier — so without this branch the custom-rule
-        // round trip is never repaired on the journey customers actually make.
-        if (tier == SubscriptionTier.Team)
-        {
-            await _alertRuleRepo.EnableCustomAlertRulesAsync(tenantId, ct);
-        }
+        // Checkout is the journey customers actually make, so it is the path that has to repair a
+        // Free downgrade and a Pro-to-Team round trip alike. The provisioner opens its own
+        // transaction, which is why this sits after the commit rather than inside it.
+        await _builtInProvisioner.RestoreForTierAsync(
+            tenantId, priorSubscription, tier, SubscriptionStatus.Active, ct);
     }
 
     /// <inheritdoc/>
@@ -125,10 +116,9 @@ public sealed class BillingWebhookHandler : IBillingWebhookHandler
     public async Task HandlePaymentSucceededAsync(int tenantId, CancellationToken ct)
     {
         // Billing sends this for every paid invoice, so an ordinary monthly renewal arrives here just
-        // as a recovered payment does. The status before the write is the only thing that tells the
+        // as a recovered payment does. The state before the write is the only thing that tells the
         // two apart, and it has to be read before the transaction overwrites it.
         TenantSubscription? priorSubscription = await _subscriptionRepo.GetSubscriptionForTenantAsync(tenantId, ct);
-        bool isRecovery = (priorSubscription is not null) && (priorSubscription.Status != SubscriptionStatus.Active);
 
         using IDatabaseTransaction transaction = await _transactionProvider.BeginTransactionAsync(ct);
 
@@ -144,33 +134,16 @@ public sealed class BillingWebhookHandler : IBillingWebhookHandler
         // Post-commit: a tier change marked during the transaction is only queued now, never inside it.
         _reclassifyDispatcher.DispatchPending();
 
-        // A recovered payment carries no tier of its own, so entitlement has to be read from the row
-        // this handler just wrote — Active is now true, which is what makes the policy answer usable.
-        // The transition matters because cancellation disables every rule the tenant has while leaving
-        // the tier alone, so nothing but this restores them.
-        TenantSubscription? subscription = await _subscriptionRepo.GetSubscriptionForTenantAsync(tenantId, ct);
-
-        if (SubscriptionPolicy.RequiresPro(subscription) == false)
+        // An invoice carries no tier of its own, so the tier is whatever the tenant already held; only
+        // the status moved. A tenant with no subscription row was not written to at all above, so
+        // there is nothing to restore it to.
+        if (priorSubscription is null)
         {
-            // Seeding missing rows never mutates an existing one, so it is safe on every invoice and
-            // remains a backstop for a paying tenant that was somehow never provisioned.
-            await _builtInProvisioner.EnsureProvisionedAsync(tenantId, ct);
-
-            // The enables overwrite whatever the tenant chose, so they are confined to an actual
-            // recovery. Running them on a renewal would revive rules an admin deliberately silenced,
-            // once every billing cycle.
-            if (isRecovery)
-            {
-                await _builtInProvisioner.EnableBuiltInsAsync(tenantId, ct);
-
-                // A canceled Team tenant lost its custom rules to the same sweep. Restoring only the
-                // built-ins would leave it paying for Team and running on Pro's rule set.
-                if (subscription!.Tier == SubscriptionTier.Team)
-                {
-                    await _alertRuleRepo.EnableCustomAlertRulesAsync(tenantId, ct);
-                }
-            }
+            return;
         }
+
+        await _builtInProvisioner.RestoreForTierAsync(
+            tenantId, priorSubscription, priorSubscription.Tier, SubscriptionStatus.Active, ct);
     }
 
     /// <inheritdoc/>
@@ -194,6 +167,8 @@ public sealed class BillingWebhookHandler : IBillingWebhookHandler
     /// <inheritdoc/>
     public async Task HandleTierCorrectionAsync(int tenantId, SubscriptionTier tier, CancellationToken ct)
     {
+        TenantSubscription? priorSubscription = await _subscriptionRepo.GetSubscriptionForTenantAsync(tenantId, ct);
+
         using IDatabaseTransaction transaction = await _transactionProvider.BeginTransactionAsync(ct);
 
         await _subscriptionRepo.UpdateSubscriptionStateAsync(tenantId, tier, SubscriptionStatus.Active, cancellationToken: ct);
@@ -211,17 +186,8 @@ public sealed class BillingWebhookHandler : IBillingWebhookHandler
         // Drift repair is the one path that exists because a checkout webhook was lost, so it is the
         // likeliest route by which a paying tenant has never been provisioned at all. The provisioner
         // opens its own transaction, which is why this sits after the commit rather than inside it.
-        if ((tier == SubscriptionTier.Pro) || (tier == SubscriptionTier.Team))
-        {
-            await _builtInProvisioner.EnsureProvisionedAsync(tenantId, ct);
-            await _builtInProvisioner.EnableBuiltInsAsync(tenantId, ct);
-
-            // Arriving at Team, by any route, thaws the custom rules a Pro downgrade froze.
-            if (tier == SubscriptionTier.Team)
-            {
-                await _alertRuleRepo.EnableCustomAlertRulesAsync(tenantId, ct);
-            }
-        }
+        await _builtInProvisioner.RestoreForTierAsync(
+            tenantId, priorSubscription, tier, SubscriptionStatus.Active, ct);
     }
 
     /// <inheritdoc/>

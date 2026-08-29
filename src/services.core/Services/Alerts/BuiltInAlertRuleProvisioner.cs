@@ -136,8 +136,46 @@ public sealed class BuiltInAlertRuleProvisioner : IBuiltInAlertRuleProvisioner
     }
 
     /// <inheritdoc/>
-    public async Task EnableBuiltInsAsync(int tenantId, CancellationToken ct = default)
+    public async Task RestoreForTierAsync(
+        int tenantId,
+        TenantSubscription? priorSubscription,
+        SubscriptionTier currentTier,
+        SubscriptionStatus currentStatus,
+        CancellationToken ct = default)
     {
-        await _alertRuleRepository.EnableBuiltInAlertRulesAsync(tenantId, ct);
+        if ((currentTier == SubscriptionTier.Free) || (currentStatus != SubscriptionStatus.Active))
+        {
+            return;
+        }
+
+        // Seeding never mutates an existing row, so it runs on every entitled transition regardless of
+        // what is restored — it is the backstop for a paying tenant that was somehow never provisioned.
+        await EnsureProvisionedAsync(tenantId, ct);
+
+        // Rules are disabled by exactly one mechanism: the downgrade sweep, which runs when a tenant
+        // lands on Free or has its account cancelled. So there is something to turn back on only when
+        // the tenant is arriving from one of those two states. A renewal, a Pro-to-Team upgrade and a
+        // recovered payment after a decline all pass through no sweep — PastDue disables nothing —
+        // and enabling on any of them would overwrite the tenant's own choices, on the dunning path
+        // once per billing cycle. A tenant with no prior row has never had rules of its own to keep.
+        bool arrivingFromSweptState = (priorSubscription is null) ||
+                                      (priorSubscription.Tier == SubscriptionTier.Free) ||
+                                      (priorSubscription.Status == SubscriptionStatus.Canceled);
+
+        if (arrivingFromSweptState)
+        {
+            await _alertRuleRepository.EnableBuiltInAlertRulesAsync(tenantId, ct);
+        }
+
+        // Custom rules are Team's in every respect, and a Pro downgrade freezes them without touching
+        // their assignments. Arriving at Team from anywhere else thaws them; so does a sweep, which
+        // disabled them along with everything else while leaving the tier on Team.
+        if (currentTier == SubscriptionTier.Team)
+        {
+            if ((priorSubscription?.Tier != SubscriptionTier.Team) || arrivingFromSweptState)
+            {
+                await _alertRuleRepository.EnableCustomAlertRulesAsync(tenantId, ct);
+            }
+        }
     }
 }

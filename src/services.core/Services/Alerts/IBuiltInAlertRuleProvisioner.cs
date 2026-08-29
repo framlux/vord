@@ -2,6 +2,9 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
+using Framlux.FleetManagement.Database.Enums;
+using Framlux.FleetManagement.Database.Models;
+
 namespace Framlux.FleetManagement.Services.Core.Alerts;
 
 /// <summary>
@@ -19,10 +22,25 @@ public interface IBuiltInAlertRuleProvisioner
     Task EnsureProvisionedAsync(int tenantId, CancellationToken ct = default);
 
     /// <summary>
-    /// Enables every built-in rule the tenant holds. Called on each transition into an entitled
-    /// state, because a downgrade to Free disables them and nothing else turns them back on.
+    /// Restores whatever a downgrade sweep disabled, for a tenant that has just been written to
+    /// <paramref name="currentTier"/> and <paramref name="currentStatus"/>. Safe to call from every
+    /// route into a paid tier — checkout, payment recovery, drift correction, administrative grant —
+    /// because the decision about what a given transition may restore is taken here rather than at
+    /// the call site.
     /// </summary>
-    /// <param name="tenantId">The tenant whose built-in rules should be enabled.</param>
+    /// <param name="tenantId">The tenant whose rules should be restored.</param>
+    /// <param name="priorSubscription">
+    /// The subscription row as it stood before the transition was written, or <c>null</c> if the
+    /// tenant had none. This is the only thing that distinguishes a return from a swept state from
+    /// an ordinary renewal, so it must be read before the write that overwrites it.
+    /// </param>
+    /// <param name="currentTier">The tier the tenant now holds.</param>
+    /// <param name="currentStatus">The status the tenant now holds.</param>
     /// <param name="ct">Cancellation token.</param>
-    Task EnableBuiltInsAsync(int tenantId, CancellationToken ct = default);
+    Task RestoreForTierAsync(
+        int tenantId,
+        TenantSubscription? priorSubscription,
+        SubscriptionTier currentTier,
+        SubscriptionStatus currentStatus,
+        CancellationToken ct = default);
 }

@@ -73,6 +73,16 @@ public class BillingWebhookHandlerTests
         });
     }
 
+    /// <summary>
+    /// Whether the prior subscription handed to the provisioner is the row the handler replaced. The
+    /// null test lives here rather than in the matcher because an expression tree cannot hold a
+    /// pattern.
+    /// </summary>
+    private static bool PriorIs(TenantSubscription? prior, SubscriptionTier tier, SubscriptionStatus status)
+    {
+        return (prior is not null) && (prior.Tier == tier) && (prior.Status == status);
+    }
+
     private static BillingWebhookHandler CreateHandler(
         TestDatabaseFactory dbFactory,
         IDowngradeCleanupService? cleanupService = null,
@@ -81,7 +91,6 @@ public class BillingWebhookHandlerTests
         DatabaseRepository repo = new(dbFactory.Context, new NullLogger<DatabaseRepository>());
 
         return new BillingWebhookHandler(
-            repo,
             repo,
             repo,
             repo,
@@ -126,7 +135,6 @@ public class BillingWebhookHandlerTests
             transactionProvider,
             repo,
             subscriptions,
-            repo,
             Substitute.For<IBuiltInAlertRuleProvisioner>(),
             Substitute.For<IDowngradeCleanupService>(),
             dispatcher);
@@ -339,11 +347,12 @@ public class BillingWebhookHandlerTests
     }
 
     /// <summary>
-    /// Checkout is a backstop, not the owner of provisioning: a tenant created before rules moved to
-    /// tenant creation still needs them, and any tenant returning from Free needs them re-enabled.
+    /// What a transition may restore depends on the state it replaced, so the handler has to report
+    /// the row as it stood before the write rather than the one it just made. Reading it afterwards
+    /// would report Pro/Active for every checkout and lose the distinction entirely.
     /// </summary>
     [Test]
-    public async Task HandleCheckoutCompletedAsync_ProvisionsAndEnablesBuiltIns()
+    public async Task HandleCheckoutCompletedAsync_ReportsTheStateItReplaced()
     {
         using TestDatabaseFactory dbFactory = new();
         await SeedTierFeatureLimitsAsync(dbFactory.Context);
@@ -355,52 +364,62 @@ public class BillingWebhookHandlerTests
 
         await handler.HandleCheckoutCompletedAsync(1, SubscriptionTier.Pro, CancellationToken.None);
 
-        await provisioner.Received(1).EnsureProvisionedAsync(1, Arg.Any<CancellationToken>());
-        await provisioner.Received(1).EnableBuiltInsAsync(1, Arg.Any<CancellationToken>());
+        await provisioner.Received(1).RestoreForTierAsync(
+            1,
+            Arg.Is<TenantSubscription?>(s => PriorIs(s, SubscriptionTier.Free, SubscriptionStatus.Active)),
+            SubscriptionTier.Pro,
+            SubscriptionStatus.Active,
+            Arg.Any<CancellationToken>());
     }
 
     /// <summary>
-    /// A Pro downgrade disables custom rules, so the journey back to Team must turn them on again.
-    /// The Pro checkout must not, or a downgraded tenant would recover Team's rules by paying for Pro.
+    /// A Pro downgrade freezes the custom rules, and the journey back to Team is the one customers
+    /// actually make, so the handler has to report both ends of it.
     /// </summary>
     [Test]
-    public async Task HandleCheckoutCompletedAsync_Team_ReEnablesCustomRules()
+    public async Task HandleCheckoutCompletedAsync_Team_ReportsArrivalAtTeamFromPro()
     {
         using TestDatabaseFactory dbFactory = new();
         await SeedTierFeatureLimitsAsync(dbFactory.Context);
         TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 1, tier: SubscriptionTier.Pro);
         sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
 
-        AlertRule custom = TestDataBuilder.BuildAlertRule(tenantId: 1, isCustom: true, isEnabled: false);
-        custom.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(custom);
-
-        BillingWebhookHandler handler = CreateHandler(dbFactory);
+        IBuiltInAlertRuleProvisioner provisioner = Substitute.For<IBuiltInAlertRuleProvisioner>();
+        BillingWebhookHandler handler = CreateHandler(dbFactory, provisioner: provisioner);
 
         await handler.HandleCheckoutCompletedAsync(1, SubscriptionTier.Team, CancellationToken.None);
 
-        AlertRule? reloaded = await dbFactory.Context.AlertRules.FirstOrDefaultAsync(r => r.Id == custom.Id);
-        await Assert.That(reloaded).IsNotNull();
-        await Assert.That(reloaded!.IsEnabled).IsTrue();
+        await provisioner.Received(1).RestoreForTierAsync(
+            1,
+            Arg.Is<TenantSubscription?>(s => PriorIs(s, SubscriptionTier.Pro, SubscriptionStatus.Active)),
+            SubscriptionTier.Team,
+            SubscriptionStatus.Active,
+            Arg.Any<CancellationToken>());
     }
 
+    /// <summary>
+    /// A Pro checkout is not an arrival at Team, and reporting the tier it actually wrote is what
+    /// keeps a downgraded tenant from recovering Team's rules by paying for Pro.
+    /// </summary>
     [Test]
-    public async Task HandleCheckoutCompletedAsync_Pro_LeavesCustomRulesDisabled()
+    public async Task HandleCheckoutCompletedAsync_Pro_ReportsProNotTeam()
     {
         using TestDatabaseFactory dbFactory = new();
         await SeedTierFeatureLimitsAsync(dbFactory.Context);
         TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 1, tier: SubscriptionTier.Free);
         sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
 
-        AlertRule custom = TestDataBuilder.BuildAlertRule(tenantId: 1, isCustom: true, isEnabled: false);
-        custom.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(custom);
-
-        BillingWebhookHandler handler = CreateHandler(dbFactory);
+        IBuiltInAlertRuleProvisioner provisioner = Substitute.For<IBuiltInAlertRuleProvisioner>();
+        BillingWebhookHandler handler = CreateHandler(dbFactory, provisioner: provisioner);
 
         await handler.HandleCheckoutCompletedAsync(1, SubscriptionTier.Pro, CancellationToken.None);
 
-        AlertRule? reloaded = await dbFactory.Context.AlertRules.FirstOrDefaultAsync(r => r.Id == custom.Id);
-        await Assert.That(reloaded).IsNotNull();
-        await Assert.That(reloaded!.IsEnabled).IsFalse();
+        await provisioner.Received(1).RestoreForTierAsync(
+            1,
+            Arg.Any<TenantSubscription?>(),
+            SubscriptionTier.Pro,
+            SubscriptionStatus.Active,
+            Arg.Any<CancellationToken>());
     }
 
     [Test]
@@ -595,7 +614,7 @@ public class BillingWebhookHandlerTests
     /// so it is precisely the path where a tenant reaches a paid tier having never been provisioned.
     /// </summary>
     [Test]
-    public async Task HandleTierCorrectionAsync_ToPro_ProvisionsAndEnablesBuiltIns()
+    public async Task HandleTierCorrectionAsync_ToPro_ReportsTheStateItReplaced()
     {
         using TestDatabaseFactory dbFactory = new();
         await SeedTierFeatureLimitsAsync(dbFactory.Context);
@@ -607,15 +626,20 @@ public class BillingWebhookHandlerTests
 
         await handler.HandleTierCorrectionAsync(1, SubscriptionTier.Pro, CancellationToken.None);
 
-        await provisioner.Received(1).EnsureProvisionedAsync(1, Arg.Any<CancellationToken>());
-        await provisioner.Received(1).EnableBuiltInsAsync(1, Arg.Any<CancellationToken>());
+        await provisioner.Received(1).RestoreForTierAsync(
+            1,
+            Arg.Is<TenantSubscription?>(s => PriorIs(s, SubscriptionTier.Free, SubscriptionStatus.Active)),
+            SubscriptionTier.Pro,
+            SubscriptionStatus.Active,
+            Arg.Any<CancellationToken>());
     }
 
     /// <summary>
-    /// A correction downwards to Free is not an entitlement, so nothing may be seeded or enabled.
+    /// A correction downwards to Free is not an entitlement. The handler still reports it rather than
+    /// deciding for itself — Free is refused inside the provisioner, where the rule is stated once.
     /// </summary>
     [Test]
-    public async Task HandleTierCorrectionAsync_ToFree_DoesNotProvision()
+    public async Task HandleTierCorrectionAsync_ToFree_ReportsFree()
     {
         using TestDatabaseFactory dbFactory = new();
         await SeedTierFeatureLimitsAsync(dbFactory.Context);
@@ -627,60 +651,46 @@ public class BillingWebhookHandlerTests
 
         await handler.HandleTierCorrectionAsync(1, SubscriptionTier.Free, CancellationToken.None);
 
+        await provisioner.Received(1).RestoreForTierAsync(
+            1,
+            Arg.Any<TenantSubscription?>(),
+            SubscriptionTier.Free,
+            SubscriptionStatus.Active,
+            Arg.Any<CancellationToken>());
         await provisioner.DidNotReceive().EnsureProvisionedAsync(Arg.Any<int>(), Arg.Any<CancellationToken>());
-        await provisioner.DidNotReceive().EnableBuiltInsAsync(Arg.Any<int>(), Arg.Any<CancellationToken>());
     }
 
     /// <summary>
-    /// Team to Pro and back: the Pro downgrade froze the custom rules, and arriving at Team again —
-    /// by whichever route — is what thaws them.
+    /// Team to Pro and back: the drift repair reports arrival at Team from Pro, which is the pair
+    /// that thaws the custom rules the downgrade froze.
     /// </summary>
     [Test]
-    public async Task HandleTierCorrectionAsync_ToTeam_ReEnablesCustomRules()
+    public async Task HandleTierCorrectionAsync_ToTeam_ReportsArrivalAtTeamFromPro()
     {
         using TestDatabaseFactory dbFactory = new();
         await SeedTierFeatureLimitsAsync(dbFactory.Context);
         TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 1, tier: SubscriptionTier.Pro);
         sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
 
-        AlertRule custom = TestDataBuilder.BuildAlertRule(tenantId: 1, isCustom: true, isEnabled: false);
-        custom.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(custom);
-
-        BillingWebhookHandler handler = CreateHandler(dbFactory);
+        IBuiltInAlertRuleProvisioner provisioner = Substitute.For<IBuiltInAlertRuleProvisioner>();
+        BillingWebhookHandler handler = CreateHandler(dbFactory, provisioner: provisioner);
 
         await handler.HandleTierCorrectionAsync(1, SubscriptionTier.Team, CancellationToken.None);
 
-        AlertRule? reloaded = await dbFactory.Context.AlertRules.FirstOrDefaultAsync(r => r.Id == custom.Id);
-        await Assert.That(reloaded).IsNotNull();
-        await Assert.That(reloaded!.IsEnabled).IsTrue();
-    }
-
-    [Test]
-    public async Task HandleTierCorrectionAsync_ToPro_LeavesCustomRulesDisabled()
-    {
-        using TestDatabaseFactory dbFactory = new();
-        await SeedTierFeatureLimitsAsync(dbFactory.Context);
-        TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 1, tier: SubscriptionTier.Free);
-        sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
-
-        AlertRule custom = TestDataBuilder.BuildAlertRule(tenantId: 1, isCustom: true, isEnabled: false);
-        custom.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(custom);
-
-        BillingWebhookHandler handler = CreateHandler(dbFactory);
-
-        await handler.HandleTierCorrectionAsync(1, SubscriptionTier.Pro, CancellationToken.None);
-
-        AlertRule? reloaded = await dbFactory.Context.AlertRules.FirstOrDefaultAsync(r => r.Id == custom.Id);
-        await Assert.That(reloaded).IsNotNull();
-        await Assert.That(reloaded!.IsEnabled).IsFalse();
+        await provisioner.Received(1).RestoreForTierAsync(
+            1,
+            Arg.Is<TenantSubscription?>(s => PriorIs(s, SubscriptionTier.Pro, SubscriptionStatus.Active)),
+            SubscriptionTier.Team,
+            SubscriptionStatus.Active,
+            Arg.Any<CancellationToken>());
     }
 
     /// <summary>
     /// Cancel then reactivate: the cancellation disabled every rule the tenant had while leaving the
-    /// tier alone, so recovering the payment is the only thing that can turn the built-ins back on.
+    /// tier alone, so the prior status is the whole of what makes this a recovery.
     /// </summary>
     [Test]
-    public async Task HandlePaymentSucceededAsync_PaidTier_ProvisionsAndEnablesBuiltIns()
+    public async Task HandlePaymentSucceededAsync_Canceled_ReportsTheCanceledPrior()
     {
         using TestDatabaseFactory dbFactory = new();
         await SeedTierFeatureLimitsAsync(dbFactory.Context);
@@ -693,16 +703,47 @@ public class BillingWebhookHandlerTests
 
         await handler.HandlePaymentSucceededAsync(1, CancellationToken.None);
 
-        await provisioner.Received(1).EnsureProvisionedAsync(1, Arg.Any<CancellationToken>());
-        await provisioner.Received(1).EnableBuiltInsAsync(1, Arg.Any<CancellationToken>());
+        await provisioner.Received(1).RestoreForTierAsync(
+            1,
+            Arg.Is<TenantSubscription?>(s => PriorIs(s, SubscriptionTier.Pro, SubscriptionStatus.Canceled)),
+            SubscriptionTier.Pro,
+            SubscriptionStatus.Active,
+            Arg.Any<CancellationToken>());
     }
 
     /// <summary>
-    /// The reactivation carries no tier, so entitlement has to be read from the row it just wrote.
-    /// A Free tenant recovering a payment is still a Free tenant.
+    /// A declined card writes PastDue and disables nothing, so the retry that succeeds must be
+    /// reported as coming from PastDue. Reading the row after the write would report Active and make
+    /// every dunning cycle indistinguishable from a cancellation recovery.
     /// </summary>
     [Test]
-    public async Task HandlePaymentSucceededAsync_FreeTier_DoesNotProvision()
+    public async Task HandlePaymentSucceededAsync_PastDue_ReportsPastDueNotTheStatusItJustWrote()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        await SeedTierFeatureLimitsAsync(dbFactory.Context);
+        TenantSubscription sub = TestDataBuilder.BuildSubscription(
+            tenantId: 1, tier: SubscriptionTier.Pro, status: SubscriptionStatus.PastDue);
+        sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
+
+        IBuiltInAlertRuleProvisioner provisioner = Substitute.For<IBuiltInAlertRuleProvisioner>();
+        BillingWebhookHandler handler = CreateHandler(dbFactory, provisioner: provisioner);
+
+        await handler.HandlePaymentSucceededAsync(1, CancellationToken.None);
+
+        await provisioner.Received(1).RestoreForTierAsync(
+            1,
+            Arg.Is<TenantSubscription?>(s => PriorIs(s, SubscriptionTier.Pro, SubscriptionStatus.PastDue)),
+            SubscriptionTier.Pro,
+            SubscriptionStatus.Active,
+            Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>
+    /// An invoice carries no tier, so the tier reported is whatever the tenant already held. A Free
+    /// tenant recovering a payment is still a Free tenant and nothing is seeded for it.
+    /// </summary>
+    [Test]
+    public async Task HandlePaymentSucceededAsync_FreeTier_ReportsFreeAndProvisionsNothing()
     {
         using TestDatabaseFactory dbFactory = new();
         await SeedTierFeatureLimitsAsync(dbFactory.Context);
@@ -715,12 +756,17 @@ public class BillingWebhookHandlerTests
 
         await handler.HandlePaymentSucceededAsync(1, CancellationToken.None);
 
+        await provisioner.Received(1).RestoreForTierAsync(
+            1,
+            Arg.Any<TenantSubscription?>(),
+            SubscriptionTier.Free,
+            SubscriptionStatus.Active,
+            Arg.Any<CancellationToken>());
         await provisioner.DidNotReceive().EnsureProvisionedAsync(Arg.Any<int>(), Arg.Any<CancellationToken>());
-        await provisioner.DidNotReceive().EnableBuiltInsAsync(Arg.Any<int>(), Arg.Any<CancellationToken>());
     }
 
     [Test]
-    public async Task HandlePaymentSucceededAsync_NoSubscription_DoesNotProvision()
+    public async Task HandlePaymentSucceededAsync_NoSubscription_RestoresNothing()
     {
         using TestDatabaseFactory dbFactory = new();
         IBuiltInAlertRuleProvisioner provisioner = Substitute.For<IBuiltInAlertRuleProvisioner>();
@@ -728,15 +774,21 @@ public class BillingWebhookHandlerTests
 
         await handler.HandlePaymentSucceededAsync(999, CancellationToken.None);
 
-        await provisioner.DidNotReceive().EnsureProvisionedAsync(Arg.Any<int>(), Arg.Any<CancellationToken>());
+        await provisioner.DidNotReceive().RestoreForTierAsync(
+            Arg.Any<int>(),
+            Arg.Any<TenantSubscription?>(),
+            Arg.Any<SubscriptionTier>(),
+            Arg.Any<SubscriptionStatus>(),
+            Arg.Any<CancellationToken>());
     }
 
     /// <summary>
-    /// A canceled Team tenant had its custom rules disabled along with everything else, so the
-    /// reactivation must restore them too — the built-ins alone would be a silent demotion to Pro.
+    /// A canceled Team tenant had its custom rules disabled along with everything else, so both the
+    /// tier and the canceled prior have to reach the provisioner — the built-ins alone would be a
+    /// silent demotion to Pro.
     /// </summary>
     [Test]
-    public async Task HandlePaymentSucceededAsync_TeamTier_ReEnablesCustomRules()
+    public async Task HandlePaymentSucceededAsync_TeamTier_ReportsTeamAndTheCanceledPrior()
     {
         using TestDatabaseFactory dbFactory = new();
         await SeedTierFeatureLimitsAsync(dbFactory.Context);
@@ -744,46 +796,26 @@ public class BillingWebhookHandlerTests
             tenantId: 1, tier: SubscriptionTier.Team, status: SubscriptionStatus.Canceled);
         sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
 
-        AlertRule custom = TestDataBuilder.BuildAlertRule(tenantId: 1, isCustom: true, isEnabled: false);
-        custom.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(custom);
-
-        BillingWebhookHandler handler = CreateHandler(dbFactory);
+        IBuiltInAlertRuleProvisioner provisioner = Substitute.For<IBuiltInAlertRuleProvisioner>();
+        BillingWebhookHandler handler = CreateHandler(dbFactory, provisioner: provisioner);
 
         await handler.HandlePaymentSucceededAsync(1, CancellationToken.None);
 
-        AlertRule? reloaded = await dbFactory.Context.AlertRules.FirstOrDefaultAsync(r => r.Id == custom.Id);
-        await Assert.That(reloaded).IsNotNull();
-        await Assert.That(reloaded!.IsEnabled).IsTrue();
-    }
-
-    [Test]
-    public async Task HandlePaymentSucceededAsync_ProTier_LeavesCustomRulesDisabled()
-    {
-        using TestDatabaseFactory dbFactory = new();
-        await SeedTierFeatureLimitsAsync(dbFactory.Context);
-        TenantSubscription sub = TestDataBuilder.BuildSubscription(
-            tenantId: 1, tier: SubscriptionTier.Pro, status: SubscriptionStatus.Canceled);
-        sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
-
-        AlertRule custom = TestDataBuilder.BuildAlertRule(tenantId: 1, isCustom: true, isEnabled: false);
-        custom.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(custom);
-
-        BillingWebhookHandler handler = CreateHandler(dbFactory);
-
-        await handler.HandlePaymentSucceededAsync(1, CancellationToken.None);
-
-        AlertRule? reloaded = await dbFactory.Context.AlertRules.FirstOrDefaultAsync(r => r.Id == custom.Id);
-        await Assert.That(reloaded).IsNotNull();
-        await Assert.That(reloaded!.IsEnabled).IsFalse();
+        await provisioner.Received(1).RestoreForTierAsync(
+            1,
+            Arg.Is<TenantSubscription?>(s => PriorIs(s, SubscriptionTier.Team, SubscriptionStatus.Canceled)),
+            SubscriptionTier.Team,
+            SubscriptionStatus.Active,
+            Arg.Any<CancellationToken>());
     }
 
     /// <summary>
     /// The billing side sends this action for every paid invoice, including each ordinary monthly
-    /// renewal, so a subscription that was already active is not recovering from anything. Re-enabling
-    /// there would revive a built-in the admin deliberately silenced, once per billing cycle.
+    /// renewal, so a subscription that was already active is not recovering from anything and must be
+    /// reported as such.
     /// </summary>
     [Test]
-    public async Task HandlePaymentSucceededAsync_AlreadyActive_DoesNotEnableBuiltIns()
+    public async Task HandlePaymentSucceededAsync_AlreadyActive_ReportsAnActivePrior()
     {
         using TestDatabaseFactory dbFactory = new();
         await SeedTierFeatureLimitsAsync(dbFactory.Context);
@@ -796,32 +828,12 @@ public class BillingWebhookHandlerTests
 
         await handler.HandlePaymentSucceededAsync(1, CancellationToken.None);
 
-        await provisioner.DidNotReceive().EnableBuiltInsAsync(Arg.Any<int>(), Arg.Any<CancellationToken>());
-    }
-
-    /// <summary>
-    /// Same reasoning for the Team custom-rule sweep: a renewal invoice must not resurrect the rules a
-    /// Team admin turned off.
-    /// </summary>
-    [Test]
-    public async Task HandlePaymentSucceededAsync_AlreadyActiveTeam_LeavesCustomRulesDisabled()
-    {
-        using TestDatabaseFactory dbFactory = new();
-        await SeedTierFeatureLimitsAsync(dbFactory.Context);
-        TenantSubscription sub = TestDataBuilder.BuildSubscription(
-            tenantId: 1, tier: SubscriptionTier.Team, status: SubscriptionStatus.Active);
-        sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
-
-        AlertRule custom = TestDataBuilder.BuildAlertRule(tenantId: 1, isCustom: true, isEnabled: false);
-        custom.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(custom);
-
-        BillingWebhookHandler handler = CreateHandler(dbFactory);
-
-        await handler.HandlePaymentSucceededAsync(1, CancellationToken.None);
-
-        AlertRule? reloaded = await dbFactory.Context.AlertRules.FirstOrDefaultAsync(r => r.Id == custom.Id);
-        await Assert.That(reloaded).IsNotNull();
-        await Assert.That(reloaded!.IsEnabled).IsFalse();
+        await provisioner.Received(1).RestoreForTierAsync(
+            1,
+            Arg.Is<TenantSubscription?>(s => PriorIs(s, SubscriptionTier.Pro, SubscriptionStatus.Active)),
+            SubscriptionTier.Pro,
+            SubscriptionStatus.Active,
+            Arg.Any<CancellationToken>());
     }
 
     [Test]
