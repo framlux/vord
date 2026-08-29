@@ -205,7 +205,10 @@ public sealed class SubscriptionService : ISubscriptionService
         }
 
         EffectiveLimits limits = await GetEffectiveLimitsForTenantAsync(tenantId, ct);
-        int count = await _alertRuleRepo.CountAlertRulesForTenantAsync(tenantId, ct);
+        // Only custom rules count against the allowance. Built-ins ship with the product and are
+        // provisioned for every tenant, so counting them would charge a tenant for rules it never
+        // authored — and would put a Free tenant permanently over a limit of zero.
+        int count = await _alertRuleRepo.CountCustomAlertRulesForTenantAsync(tenantId, ct);
 
         return count < limits.AlertRuleLimit;
     }

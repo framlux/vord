@@ -107,7 +107,9 @@ public sealed class SubscriptionEndpoint : EndpointWithoutRequest<ApiResponse<Su
         }
 
         int machineCount = await _subscriptionService.GetMachineCountForTenantAsync(tenantId, ct);
-        int alertRuleCount = await _alertRuleRepo.CountAlertRulesForTenantAsync(tenantId, ct);
+        // Matches the entitlement check: the reported usage is authored rules only, so the figure
+        // shown to the tenant is the same one that decides whether another rule may be created.
+        int alertRuleCount = await _alertRuleRepo.CountCustomAlertRulesForTenantAsync(tenantId, ct);
         int webhookCount = await _integrationRepo.CountIntegrationsForTenantAsync(tenantId, ct);
         EffectiveLimits limits = await _subscriptionService.GetEffectiveLimitsForTenantAsync(tenantId, ct);
 

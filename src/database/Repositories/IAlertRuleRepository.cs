@@ -84,13 +84,6 @@ public interface IAlertRuleRepository
     Task<List<AlertRule>> GetEnabledAlertRulesAsync(CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Returns the count of alert rules for a tenant.
-    /// </summary>
-    /// <param name="tenantId">The tenant ID.</param>
-    /// <param name="cancellationToken">A cancellation token.</param>
-    Task<int> CountAlertRulesForTenantAsync(int tenantId, CancellationToken cancellationToken = default);
-
-    /// <summary>
     /// Disables alert rules for a tenant. When <paramref name="customOnly"/> is true, only custom rules
     /// are disabled; otherwise all enabled rules are disabled.
     /// </summary>

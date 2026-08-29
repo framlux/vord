@@ -111,16 +111,6 @@ public partial class DatabaseRepository : IAlertRuleRepository
     }
 
     /// <inheritdoc/>
-    public async Task<int> CountAlertRulesForTenantAsync(int tenantId, CancellationToken cancellationToken)
-    {
-        int count = await _db.AlertRules
-            .Where(r => r.TenantId == tenantId)
-            .CountAsync(cancellationToken);
-
-        return count;
-    }
-
-    /// <inheritdoc/>
     public async Task<int> DisableAlertRulesForTenantAsync(int tenantId, bool customOnly, CancellationToken cancellationToken)
     {
         IQueryable<AlertRule> query = _db.AlertRules

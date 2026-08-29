@@ -292,6 +292,35 @@ public sealed class SubscriptionEndpointTests
         await Assert.That(data.GetProperty("machineCount").GetInt32()).IsEqualTo(0);
     }
 
+    [Test]
+    public async Task GetSubscription_AlertRuleCount_ExcludesBuiltInRules()
+    {
+        // The usage figure drives the "x of y rules used" display and the New Rule affordance. Every
+        // tenant holds the shipped built-ins, so counting them would report a Free tenant as being
+        // over a limit of zero and would silently shrink what a paid tenant may author.
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+
+        int tenantId = await SeedTenantWithSubscription(db, SubscriptionTier.Pro, null, 60);
+
+        foreach (AlertMetric metric in Enum.GetValues<AlertMetric>())
+        {
+            await db.InsertAsync(TestDataBuilder.BuildAlertRule(tenantId: tenantId, metric: metric, isCustom: false));
+        }
+
+        await db.InsertAsync(TestDataBuilder.BuildAlertRule(tenantId: tenantId));
+        await db.InsertAsync(TestDataBuilder.BuildAlertRule(tenantId: tenantId));
+
+        HttpClient client = BuildViewerClient(factory, tenantId);
+
+        HttpResponseMessage response = await client.GetAsync("/api/v1/billing/subscription");
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
+
+        JsonElement data = await ExtractDataElement(response);
+        await Assert.That(data.GetProperty("alertRuleCount").GetInt32()).IsEqualTo(2);
+    }
+
     // ========== Helpers ==========
 
     private static HttpClient BuildViewerClient(FunctionalTestFactory factory, int tenantId)

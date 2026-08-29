@@ -371,38 +371,6 @@ public class AlertRuleRepositoryTests
         await Assert.That(result.Count).IsEqualTo(2);
     }
 
-    // ========== CountAlertRulesForTenantAsync tests ==========
-
-    [Test]
-    public async Task CountAlertRulesForTenantAsync_NoRules_ReturnsZero()
-    {
-        using TestDatabaseFactory dbFactory = new();
-        IAlertRuleRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
-
-        int count = await repo.CountAlertRulesForTenantAsync(99999);
-
-        await Assert.That(count).IsEqualTo(0);
-    }
-
-    [Test]
-    public async Task CountAlertRulesForTenantAsync_MultipleRules_ReturnsCorrectCount()
-    {
-        using TestDatabaseFactory dbFactory = new();
-        IAlertRuleRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
-
-        (int userId, int tenantId) = await SeedUserAndTenantAsync(dbFactory);
-
-        for (int i = 0; i < 4; i++)
-        {
-            AlertRule rule = TestDataBuilder.BuildAlertRule(tenantId: tenantId, createdByUserId: userId);
-            await dbFactory.Context.InsertWithInt32IdentityAsync(rule);
-        }
-
-        int count = await repo.CountAlertRulesForTenantAsync(tenantId);
-
-        await Assert.That(count).IsEqualTo(4);
-    }
-
     // ========== DisableAlertRulesForTenantAsync tests ==========
 
     [Test]
@@ -529,7 +497,7 @@ public class AlertRuleRepositoryTests
 
         await repo.InsertAlertRulesAsync(rules);
 
-        int count = await repo.CountAlertRulesForTenantAsync(tenantId);
+        int count = await dbFactory.Context.AlertRules.CountAsync(r => r.TenantId == tenantId);
 
         await Assert.That(count).IsEqualTo(3);
     }
@@ -546,7 +514,7 @@ public class AlertRuleRepositoryTests
 
         await repo.InsertAlertRulesAsync(emptyList);
 
-        int count = await repo.CountAlertRulesForTenantAsync(tenantId);
+        int count = await dbFactory.Context.AlertRules.CountAsync(r => r.TenantId == tenantId);
 
         await Assert.That(count).IsEqualTo(0);
     }

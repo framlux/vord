@@ -487,6 +487,67 @@ public class SubscriptionServiceTests
     }
 
     [Test]
+    public async Task CanCreateAlertRule_BuiltInRulesDoNotConsumeQuota_ReturnsTrue()
+    {
+        // Built-in rules are shipped with the product, not authored by the tenant, so they must not
+        // spend the tier's authoring allowance. Eight built-ins plus two custom rules is ten rows
+        // against a Pro limit of ten, and the tenant is still entitled to author eight more.
+        (DatabaseRepository repo, TestDatabaseFactory dbFactory) = BuildRepoAndFactory();
+        using (dbFactory)
+        {
+            TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 1, tier: SubscriptionTier.Pro);
+            sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
+
+            foreach (AlertMetric metric in Enum.GetValues<AlertMetric>())
+            {
+                await dbFactory.Context.InsertWithInt32IdentityAsync(
+                    TestDataBuilder.BuildAlertRule(tenantId: 1, metric: metric, isCustom: false));
+            }
+
+            for (int i = 0; i < 2; i++)
+            {
+                await dbFactory.Context.InsertWithInt32IdentityAsync(TestDataBuilder.BuildAlertRule(tenantId: 1));
+            }
+
+            SubscriptionService service = BuildService(repo);
+
+            bool result = await service.CanCreateAlertRuleAsync(1, CancellationToken.None);
+
+            await Assert.That(result).IsTrue();
+        }
+    }
+
+    [Test]
+    public async Task CanCreateAlertRule_CustomRulesAtLimitAlongsideBuiltIns_ReturnsFalse()
+    {
+        // The mirror image: excluding built-ins must not become excluding the limit. Ten custom
+        // rules exhaust the Pro allowance whatever else the tenant holds.
+        (DatabaseRepository repo, TestDatabaseFactory dbFactory) = BuildRepoAndFactory();
+        using (dbFactory)
+        {
+            TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 1, tier: SubscriptionTier.Pro);
+            sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
+
+            foreach (AlertMetric metric in Enum.GetValues<AlertMetric>())
+            {
+                await dbFactory.Context.InsertWithInt32IdentityAsync(
+                    TestDataBuilder.BuildAlertRule(tenantId: 1, metric: metric, isCustom: false));
+            }
+
+            for (int i = 0; i < 10; i++)
+            {
+                await dbFactory.Context.InsertWithInt32IdentityAsync(TestDataBuilder.BuildAlertRule(tenantId: 1));
+            }
+
+            SubscriptionService service = BuildService(repo);
+
+            bool result = await service.CanCreateAlertRuleAsync(1, CancellationToken.None);
+
+            await Assert.That(result).IsFalse();
+        }
+    }
+
+    [Test]
     public async Task CanCreateAlertRule_ZeroLimit_ReturnsFalse()
     {
         (DatabaseRepository repo, TestDatabaseFactory dbFactory) = BuildRepoAndFactory();
