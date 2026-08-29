@@ -7,6 +7,7 @@ using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Server.Auth;
+using Framlux.FleetManagement.Server.Services.Billing;
 using Framlux.FleetManagement.Services.Core.Infrastructure;
 
 namespace Framlux.FleetManagement.Server.Endpoints.Web.Machines;
@@ -51,7 +52,12 @@ public sealed class MachineAlertRulesUpdateEndpoint : Endpoint<UpdateMachineAler
     {
         Put("/machines/{machineId}/alert-rules");
         Policies(AuthorizationPolicies.TenantAdmin);
-        Tags(EndpointTags.RequiresTenant);
+
+        // Assignment decides what a rule actually watches, so it is as much a paid operation as
+        // authoring one. A Free tenant may read the built-in rules it holds as an upgrade prompt;
+        // the matching list endpoint stays open for exactly that reason.
+        Tags(Services.Billing.EndpointTags.RequiresProSubscription, EndpointTags.RequiresTenant);
+        Options(b => b.WithMetadata(new RequiresProFeatureMessage(ProFeatureMessages.Alerting)));
         Version(1);
     }
 

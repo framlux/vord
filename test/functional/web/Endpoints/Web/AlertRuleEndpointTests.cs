@@ -4,10 +4,12 @@
 
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
+using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Database;
 using Framlux.FleetManagement.Test.Infrastructure;
 using LinqToDB.Async;
 using LinqToDB;
+using Microsoft.Extensions.DependencyInjection;
 using NSubstitute;
 using System.Net.Http.Json;
 using System.Net;
@@ -1928,5 +1930,252 @@ public sealed class AlertRuleEndpointTests
 
         AlertRule? unchanged = await db.AlertRules.FirstOrDefaultAsync(r => r.Id == ruleId);
         await Assert.That(unchanged!.IsEnabled).IsFalse();
+    }
+
+    // --- Rule-side machine assignment endpoint tests ---
+
+    private static async Task<long> SeedMachineAsync(DatabaseContext db, int tenantId)
+    {
+        Machine machine = new()
+        {
+            TenantId = tenantId,
+            Name = $"test-machine-{Guid.NewGuid():N}",
+            ApiKeyHash = Guid.NewGuid().ToString("N").PadLeft(64, '0'),
+            SerialNumber = $"sn-{Guid.NewGuid():N}",
+            SystemId = $"sid-{Guid.NewGuid():N}",
+            MachineType = MachineTypes.VirtualMachine,
+            OperatingSystem = OperatingSystems.Ubuntu,
+            RegistrationTokenId = 0,
+            RegisteredOn = DateTimeOffset.UtcNow,
+            IsDeleted = false,
+        };
+
+        return await db.InsertWithInt64IdentityAsync(machine);
+    }
+
+    [Test]
+    public async Task UpdateRuleMachines_ProTierBuiltInRule_AssignsMachines_Returns200()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId, long machineId) = await SeedAlertEnvironment(db, SubscriptionTier.Pro);
+        long secondMachineId = await SeedMachineAsync(db, tenantId);
+        int ruleId = await SeedRuleAsync(db, tenantId, userId, isCustom: false, isEnabled: true);
+
+        HttpClient client = BuildClient(factory, tenantId, userId);
+
+        HttpResponseMessage response = await client.PutAsJsonAsync(
+            $"/api/v1/alert-rules/{ruleId}/machines",
+            new { MachineIds = new[] { machineId, secondMachineId } });
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
+
+        List<long> assigned = await db.AlertRuleMachines
+            .Where(arm => arm.AlertRuleId == ruleId)
+            .Select(arm => arm.MachineId)
+            .ToListAsync();
+
+        await Assert.That(assigned.Count).IsEqualTo(2);
+        await Assert.That(assigned).Contains(machineId);
+        await Assert.That(assigned).Contains(secondMachineId);
+    }
+
+    [Test]
+    public async Task UpdateRuleMachines_ProTierCustomRule_Returns403()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId, long machineId) = await SeedAlertEnvironment(db, SubscriptionTier.Pro);
+        int ruleId = await SeedRuleAsync(db, tenantId, userId, isCustom: true, isEnabled: false);
+
+        HttpClient client = BuildClient(factory, tenantId, userId);
+
+        HttpResponseMessage response = await client.PutAsJsonAsync(
+            $"/api/v1/alert-rules/{ruleId}/machines",
+            new { MachineIds = new[] { machineId } });
+
+        // A Pro downgrade freezes custom rules exactly as they were — assignments intact, rule
+        // disabled — so re-targeting one at Pro would resurrect Team-authored coverage.
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.Forbidden);
+        string body = await response.Content.ReadAsStringAsync();
+        await Assert.That(body).Contains("Team subscription");
+
+        int assignedCount = await db.AlertRuleMachines.CountAsync(arm => arm.AlertRuleId == ruleId);
+        await Assert.That(assignedCount).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task UpdateRuleMachines_TeamTierCustomRule_Returns200()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId, long machineId) = await SeedAlertEnvironment(db, SubscriptionTier.Team);
+        int ruleId = await SeedRuleAsync(db, tenantId, userId, isCustom: true, isEnabled: true);
+
+        HttpClient client = BuildClient(factory, tenantId, userId);
+
+        HttpResponseMessage response = await client.PutAsJsonAsync(
+            $"/api/v1/alert-rules/{ruleId}/machines",
+            new { MachineIds = new[] { machineId } });
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
+
+        int assignedCount = await db.AlertRuleMachines.CountAsync(arm => arm.AlertRuleId == ruleId);
+        await Assert.That(assignedCount).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task UpdateRuleMachines_MachineFromAnotherTenant_Returns400()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantIdA, int userIdA, long machineIdA) = await SeedAlertEnvironment(db, SubscriptionTier.Pro);
+        (int tenantIdB, int userIdB, long machineIdB) = await SeedAlertEnvironment(db, SubscriptionTier.Pro);
+        int ruleId = await SeedRuleAsync(db, tenantIdA, userIdA, isCustom: false, isEnabled: true);
+
+        HttpClient clientA = BuildClient(factory, tenantIdA, userIdA);
+
+        HttpResponseMessage response = await clientA.PutAsJsonAsync(
+            $"/api/v1/alert-rules/{ruleId}/machines",
+            new { MachineIds = new[] { machineIdA, machineIdB } });
+
+        // The repository silently drops out-of-tenant machine ids, so a partial success would look
+        // identical to a full one from the caller's side. The endpoint must reject the whole request.
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.BadRequest);
+
+        int assignedCount = await db.AlertRuleMachines.CountAsync(arm => arm.AlertRuleId == ruleId);
+        await Assert.That(assignedCount).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task UpdateRuleMachines_FreeTier_Returns403()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId, long machineId) = await SeedAlertEnvironment(db, SubscriptionTier.Free);
+        int ruleId = await SeedRuleAsync(db, tenantId, userId, isCustom: false, isEnabled: false);
+
+        HttpClient client = BuildClient(factory, tenantId, userId);
+
+        HttpResponseMessage response = await client.PutAsJsonAsync(
+            $"/api/v1/alert-rules/{ruleId}/machines",
+            new { MachineIds = new[] { machineId } });
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.Forbidden);
+
+        int assignedCount = await db.AlertRuleMachines.CountAsync(arm => arm.AlertRuleId == ruleId);
+        await Assert.That(assignedCount).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task UpdateRuleMachines_OtherTenantRule_Returns404()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantIdA, int userIdA, long machineIdA) = await SeedAlertEnvironment(db, SubscriptionTier.Pro);
+        (int tenantIdB, int userIdB, long machineIdB) = await SeedAlertEnvironment(db, SubscriptionTier.Pro);
+        int ruleId = await SeedRuleAsync(db, tenantIdA, userIdA, isCustom: false, isEnabled: true);
+
+        HttpClient clientB = BuildClient(factory, tenantIdB, userIdB);
+
+        HttpResponseMessage response = await clientB.PutAsJsonAsync(
+            $"/api/v1/alert-rules/{ruleId}/machines",
+            new { MachineIds = new[] { machineIdB } });
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.NotFound);
+
+        int assignedCount = await db.AlertRuleMachines.CountAsync(arm => arm.AlertRuleId == ruleId);
+        await Assert.That(assignedCount).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task UpdateRuleMachines_Reassigning_ReplacesRatherThanAppends()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId, long machineId) = await SeedAlertEnvironment(db, SubscriptionTier.Pro);
+        long secondMachineId = await SeedMachineAsync(db, tenantId);
+        int ruleId = await SeedRuleAsync(db, tenantId, userId, isCustom: false, isEnabled: true);
+
+        HttpClient client = BuildClient(factory, tenantId, userId);
+
+        await client.PutAsJsonAsync(
+            $"/api/v1/alert-rules/{ruleId}/machines",
+            new { MachineIds = new[] { machineId, secondMachineId } });
+
+        HttpResponseMessage response = await client.PutAsJsonAsync(
+            $"/api/v1/alert-rules/{ruleId}/machines",
+            new { MachineIds = new[] { secondMachineId } });
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
+
+        List<long> assigned = await db.AlertRuleMachines
+            .Where(arm => arm.AlertRuleId == ruleId)
+            .Select(arm => arm.MachineId)
+            .ToListAsync();
+
+        await Assert.That(assigned.Count).IsEqualTo(1);
+        await Assert.That(assigned[0]).IsEqualTo(secondMachineId);
+    }
+
+    [Test]
+    public async Task UpdateRuleMachines_EmptyList_ParksTheRuleWithoutDisablingIt()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId, long machineId) = await SeedAlertEnvironment(db, SubscriptionTier.Pro);
+        int ruleId = await SeedRuleAsync(db, tenantId, userId, isCustom: false, isEnabled: true);
+
+        HttpClient client = BuildClient(factory, tenantId, userId);
+
+        await client.PutAsJsonAsync(
+            $"/api/v1/alert-rules/{ruleId}/machines",
+            new { MachineIds = new[] { machineId } });
+
+        // Unlike the full update endpoint, an empty list is a legitimate request here: it means
+        // "watch nothing", which is how a rule is parked without turning it off.
+        HttpResponseMessage response = await client.PutAsJsonAsync(
+            $"/api/v1/alert-rules/{ruleId}/machines",
+            new { MachineIds = Array.Empty<long>() });
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
+
+        int assignedCount = await db.AlertRuleMachines.CountAsync(arm => arm.AlertRuleId == ruleId);
+        await Assert.That(assignedCount).IsEqualTo(0);
+
+        AlertRule? unchanged = await db.AlertRules.FirstOrDefaultAsync(r => r.Id == ruleId);
+        await Assert.That(unchanged!.IsEnabled).IsTrue();
+    }
+
+    [Test]
+    public async Task UpdateRuleMachines_AssignedRule_BecomesVisibleToTheEvaluationLookup()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId, long machineId) = await SeedAlertEnvironment(db, SubscriptionTier.Pro);
+        int ruleId = await SeedRuleAsync(db, tenantId, userId, isCustom: false, isEnabled: true);
+
+        HttpClient client = BuildClient(factory, tenantId, userId);
+
+        using IServiceScope scope = factory.Services.CreateScope();
+        IAlertRuleRepository repo = scope.ServiceProvider.GetRequiredService<IAlertRuleRepository>();
+
+        // Assignment is the whole point: the evaluation lookup inner-joins AlertRuleMachines, so an
+        // unassigned rule is invisible to it no matter how it is configured.
+        List<AlertRule> before = await repo.GetEnabledRulesForMachineByMetricAsync(
+            tenantId, machineId, AlertMetric.CpuUsage, CancellationToken.None);
+        await Assert.That(before.Count).IsEqualTo(0);
+
+        HttpResponseMessage response = await client.PutAsJsonAsync(
+            $"/api/v1/alert-rules/{ruleId}/machines",
+            new { MachineIds = new[] { machineId } });
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
+
+        List<AlertRule> after = await repo.GetEnabledRulesForMachineByMetricAsync(
+            tenantId, machineId, AlertMetric.CpuUsage, CancellationToken.None);
+
+        await Assert.That(after.Count).IsEqualTo(1);
+        await Assert.That(after[0].Id).IsEqualTo(ruleId);
     }
 }

@@ -19,7 +19,10 @@ namespace Framlux.FleetManagement.FunctionalTest.Endpoints.Web;
 /// </summary>
 public sealed class MachineAlertRulesEndpointTests
 {
-    private static async Task<(int TenantId, int UserId, long MachineId)> SeedTenantWithMachine(DatabaseContext db, string label)
+    private static async Task<(int TenantId, int UserId, long MachineId)> SeedTenantWithMachine(
+        DatabaseContext db,
+        string label,
+        SubscriptionTier tier = SubscriptionTier.Team)
     {
         Tenant tenant = new()
         {
@@ -35,7 +38,7 @@ public sealed class MachineAlertRulesEndpointTests
         TenantSubscription subscription = new()
         {
             TenantId = tenant.Id,
-            Tier = SubscriptionTier.Team,
+            Tier = tier,
             Status = SubscriptionStatus.Active,
             CreatedAt = DateTimeOffset.UtcNow,
             UpdatedAt = DateTimeOffset.UtcNow,
@@ -225,6 +228,30 @@ public sealed class MachineAlertRulesEndpointTests
         // Nothing must have been persisted for the cross-tenant rule.
         List<AlertRuleMachine> assignments = await db.AlertRuleMachines
             .Where(a => a.MachineId == machineAId)
+            .ToListAsync();
+        await Assert.That(assignments.Count).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task Update_FreeTier_Returns403()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId, long machineId) = await SeedTenantWithMachine(db, "Free Tenant", SubscriptionTier.Free);
+
+        int ruleId = await SeedAlertRule(db, tenantId, "rule-to-assign");
+
+        HttpClient client = BuildClient(factory, tenantId, userId);
+
+        HttpResponseMessage response = await client.PutAsJsonAsync(
+            $"/api/v1/machines/{machineId}/alert-rules",
+            new { RuleIds = new[] { ruleId } });
+
+        // Free may look at the rules it holds, but changing what they watch is a paid operation.
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.Forbidden);
+
+        List<AlertRuleMachine> assignments = await db.AlertRuleMachines
+            .Where(a => a.MachineId == machineId)
             .ToListAsync();
         await Assert.That(assignments.Count).IsEqualTo(0);
     }
