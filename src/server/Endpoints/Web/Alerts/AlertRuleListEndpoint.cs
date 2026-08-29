@@ -6,13 +6,13 @@ using FastEndpoints;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Server.Auth;
-using Framlux.FleetManagement.Server.Services.Billing;
 
 namespace Framlux.FleetManagement.Server.Endpoints.Web.Alerts;
 
 /// <summary>
 /// Returns alert rules for the current tenant.
-/// Requires Pro+ subscription and ViewOnly role.
+/// Readable on every tier so a Free tenant can see the built-in rules it would gain by upgrading;
+/// requires the ViewOnly role.
 /// </summary>
 public sealed class AlertRuleListEndpoint : EndpointWithoutRequest<ApiResponse<List<AlertRuleDto>>>
 {
@@ -38,8 +38,12 @@ public sealed class AlertRuleListEndpoint : EndpointWithoutRequest<ApiResponse<L
     {
         Get("/alert-rules");
         Policies(AuthorizationPolicies.ViewOnly);
-        Tags(Services.Billing.EndpointTags.RequiresProSubscription, EndpointTags.RequiresTenant);
-        Options(b => b.WithMetadata(new RequiresProFeatureMessage(ProFeatureMessages.Alerting)));
+
+        // Deliberately tenant-only rather than Pro-gated. A Free tenant holds its built-in rules
+        // seeded and disabled, and showing them is the upgrade case: an invisible alert rule is
+        // indistinguishable from no alert rule. Create, update and delete keep their gates, so this
+        // is read access and nothing more.
+        Tags(EndpointTags.RequiresTenant);
         Version(1);
     }
 
@@ -48,7 +52,6 @@ public sealed class AlertRuleListEndpoint : EndpointWithoutRequest<ApiResponse<L
     {
         int tenantId = _tenantContext.RequireTenantId();
 
-        // Pro+ gating is enforced by ProSubscriptionPreProcessor via the RequiresProSubscription tag.
         List<AlertRule> rules = await _alertRuleRepo.GetAlertRulesForTenantAsync(tenantId, ct);
 
         // Fetch machine assignments for all rules in one query

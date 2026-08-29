@@ -6,6 +6,7 @@ using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Database;
+using Framlux.FleetManagement.Services.Core.Alerts;
 using Framlux.FleetManagement.Test.Infrastructure;
 using LinqToDB.Async;
 using LinqToDB;
@@ -852,18 +853,39 @@ public sealed class AlertRuleEndpointTests
     // --- ListAlertRules Tests ---
 
     [Test]
-    public async Task ListAlertRules_FreeTier_Returns403()
+    public async Task ListAlertRules_FreeTier_ReturnsBuiltInRulesDisabled()
     {
         using FunctionalTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
         (int tenantId, int userId, long machineId) = await SeedAlertEnvironment(db, SubscriptionTier.Free);
+
+        using (IServiceScope scope = factory.Services.CreateScope())
+        {
+            IBuiltInAlertRuleProvisioner provisioner = scope.ServiceProvider.GetRequiredService<IBuiltInAlertRuleProvisioner>();
+            await provisioner.EnsureProvisionedAsync(tenantId, CancellationToken.None);
+        }
+
         HttpClient client = BuildClient(factory, tenantId, userId, UserAccountRoles.Viewer);
 
         HttpResponseMessage response = await client.GetAsync("/api/v1/alert-rules");
 
-        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.Forbidden);
+        // Read access is deliberately open to every tier: a Free tenant holds its built-in rules
+        // seeded and disabled, and an invisible alert rule is indistinguishable from no alert rule,
+        // which makes the upgrade case impossible to present. Create, update and delete keep their
+        // Pro and Team gates, so this is read access and nothing more.
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
+
         string body = await response.Content.ReadAsStringAsync();
-        await Assert.That(body).Contains("Pro or Team subscription");
+        JsonDocument doc = JsonDocument.Parse(body);
+        JsonElement dataArray = doc.RootElement.GetProperty("data");
+
+        await Assert.That(dataArray.GetArrayLength()).IsEqualTo(BuiltInAlertRuleDefinitions.All.Count);
+
+        foreach (JsonElement rule in dataArray.EnumerateArray())
+        {
+            await Assert.That(rule.GetProperty("isCustom").GetBoolean()).IsFalse();
+            await Assert.That(rule.GetProperty("isEnabled").GetBoolean()).IsFalse();
+        }
     }
 
     [Test]
