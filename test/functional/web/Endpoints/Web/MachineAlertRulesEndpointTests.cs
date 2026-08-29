@@ -86,7 +86,7 @@ public sealed class MachineAlertRulesEndpointTests
         return (tenant.Id, user.Id, machine.Id);
     }
 
-    private static async Task<int> SeedAlertRule(DatabaseContext db, int tenantId, string name)
+    private static async Task<int> SeedAlertRule(DatabaseContext db, int tenantId, string name, bool isCustom = true)
     {
         AlertRule rule = new()
         {
@@ -98,7 +98,7 @@ public sealed class MachineAlertRulesEndpointTests
             DurationMinutes = 5,
             Severity = AlertSeverity.Warning,
             IsEnabled = true,
-            IsCustom = true,
+            IsCustom = isCustom,
             CreatedByUserId = 1,
             CreatedAt = DateTimeOffset.UtcNow,
             UpdatedAt = DateTimeOffset.UtcNow,
@@ -301,5 +301,87 @@ public sealed class MachineAlertRulesEndpointTests
         bool tenantARuleAssignedAnywhere = await db.AlertRuleMachines
             .AnyAsync(a => a.AlertRuleId == tenantARuleId);
         await Assert.That(tenantARuleAssignedAnywhere).IsFalse();
+    }
+
+    // ========== Custom-rule boundary ==========
+
+    [Test]
+    public async Task Update_ProTier_OmittingAFrozenCustomRule_LeavesItsAssignmentIntact()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId, long machineId) = await SeedTenantWithMachine(db, "Pro Tenant", SubscriptionTier.Pro);
+
+        int customRuleId = await SeedAlertRule(db, tenantId, "team-authored-rule");
+        int builtInRuleId = await SeedAlertRule(db, tenantId, "built-in-rule", isCustom: false);
+        await db.InsertAsync(new AlertRuleMachine { AlertRuleId = customRuleId, MachineId = machineId, CreatedAt = DateTimeOffset.UtcNow });
+
+        HttpClient client = BuildClient(factory, tenantId, userId);
+
+        // The machine page offers Pro no control over a custom rule, so the saved set names only the
+        // built-in. That must not be read as an instruction to destroy the frozen assignment.
+        HttpResponseMessage response = await client.PutAsJsonAsync(
+            $"/api/v1/machines/{machineId}/alert-rules",
+            new { RuleIds = new[] { builtInRuleId } });
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
+
+        List<int> assignedRuleIds = await db.AlertRuleMachines
+            .Where(a => a.MachineId == machineId)
+            .Select(a => a.AlertRuleId)
+            .ToListAsync();
+
+        await Assert.That(assignedRuleIds).Contains(customRuleId);
+        await Assert.That(assignedRuleIds).Contains(builtInRuleId);
+    }
+
+    [Test]
+    public async Task Update_ProTier_TargetingAnUnassignedCustomRule_Returns403()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId, long machineId) = await SeedTenantWithMachine(db, "Pro Tenant", SubscriptionTier.Pro);
+
+        int customRuleId = await SeedAlertRule(db, tenantId, "team-authored-rule");
+
+        HttpClient client = BuildClient(factory, tenantId, userId);
+
+        // Putting Team-authored coverage into service is the thing Pro is not entitled to do,
+        // whichever side of the relationship the request comes from.
+        HttpResponseMessage response = await client.PutAsJsonAsync(
+            $"/api/v1/machines/{machineId}/alert-rules",
+            new { RuleIds = new[] { customRuleId } });
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.Forbidden);
+
+        List<AlertRuleMachine> assignments = await db.AlertRuleMachines
+            .Where(a => a.MachineId == machineId)
+            .ToListAsync();
+        await Assert.That(assignments.Count).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task Update_TeamTier_RemovingACustomRule_DropsTheAssignment()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId, long machineId) = await SeedTenantWithMachine(db, "Team Tenant");
+
+        int customRuleId = await SeedAlertRule(db, tenantId, "team-authored-rule");
+        await db.InsertAsync(new AlertRuleMachine { AlertRuleId = customRuleId, MachineId = machineId, CreatedAt = DateTimeOffset.UtcNow });
+
+        HttpClient client = BuildClient(factory, tenantId, userId);
+
+        // Custom rules are Team's in every respect, including the right to stop watching a machine.
+        HttpResponseMessage response = await client.PutAsJsonAsync(
+            $"/api/v1/machines/{machineId}/alert-rules",
+            new { RuleIds = Array.Empty<int>() });
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
+
+        List<AlertRuleMachine> assignments = await db.AlertRuleMachines
+            .Where(a => a.MachineId == machineId)
+            .ToListAsync();
+        await Assert.That(assignments.Count).IsEqualTo(0);
     }
 }

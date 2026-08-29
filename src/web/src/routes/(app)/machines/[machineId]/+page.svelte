@@ -459,6 +459,15 @@
 
 	const assignedRuleIds = $derived(new Set(machineAlertRules.map((r) => r.id)));
 
+	// Custom rules belong to Team, and the API refuses to re-target one below that tier. Offering a
+	// checkbox the save would be rejected for is the wrong shape of control, so below Team the modal
+	// lists built-in rules only. Nothing is hidden from view: a custom rule this machine already
+	// carries stays frozen and keeps its row in the Alert Rules table above, assignment intact.
+	const assignableAlertRules = $derived(
+		isTeamTier ? allAlertRules : allAlertRules.filter((r) => r.isCustom === false)
+	);
+	const frozenCustomRuleCount = $derived(allAlertRules.length - assignableAlertRules.length);
+
 	function getSeverityBadgeClasses(severity: string): string {
 		switch (severity.toLowerCase()) {
 			case 'critical':
@@ -1457,6 +1466,13 @@
 				Select which alert rules should apply to this machine.
 			</p>
 
+			{#if frozenCustomRuleCount > 0}
+				<p class="mb-4 text-sm text-surface-500 dark:text-surface-400">
+					{frozenCustomRuleCount} custom {frozenCustomRuleCount === 1 ? 'rule is' : 'rules are'} not shown. Custom rules keep their assignments but can only be changed with a
+					<a href="/settings/billing" class="underline hover:text-surface-700 dark:hover:text-surface-200">Team subscription</a>.
+				</p>
+			{/if}
+
 			{#if alertRulesError}
 				<p class="mb-4 text-sm text-red-600 dark:text-red-400" role="alert">{alertRulesError}</p>
 			{/if}
@@ -1476,13 +1492,13 @@
 					};
 				}}
 			>
-				{#if allAlertRules.length === 0}
+				{#if assignableAlertRules.length === 0}
 					<p class="py-4 text-center text-sm text-surface-500 dark:text-surface-400">
 						No alert rules have been created for this tenant. Create rules in Settings to assign them here.
 					</p>
 				{:else}
 					<div class="max-h-80 space-y-2 overflow-y-auto">
-						{#each allAlertRules as rule (rule.id)}
+						{#each assignableAlertRules as rule (rule.id)}
 							<label class="flex cursor-pointer items-start gap-3 rounded-lg border border-surface-200 p-3 transition hover:bg-surface-50 dark:border-surface-700 dark:hover:bg-surface-700/50">
 								<input
 									type="checkbox"

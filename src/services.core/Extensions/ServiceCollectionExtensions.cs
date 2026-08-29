@@ -372,6 +372,9 @@ public static class ServiceCollectionExtensions
         // because it resolves its own scopes per delivery.
         services.AddScoped<IBuiltInAlertRuleProvisioner, BuiltInAlertRuleProvisioner>();
 
+        // Scoped for the same reason: it writes through the scoped alert rule repository.
+        services.AddScoped<IAlertRuleAssignmentService, AlertRuleAssignmentService>();
+
         // Billing is reachable only in the hosted deployment.
         if (deploymentMode.IsSaas)
         {

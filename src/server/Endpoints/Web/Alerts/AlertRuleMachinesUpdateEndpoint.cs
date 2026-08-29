@@ -8,6 +8,7 @@ using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Server.Auth;
 using Framlux.FleetManagement.Server.Services.Billing;
+using Framlux.FleetManagement.Services.Core.Alerts;
 using Framlux.FleetManagement.Services.Core.Billing;
 using Framlux.FleetManagement.Services.Core.Infrastructure;
 
@@ -35,7 +36,7 @@ public sealed class UpdateAlertRuleMachinesRequest
 public sealed class AlertRuleMachinesUpdateEndpoint : Endpoint<UpdateAlertRuleMachinesRequest, ApiResponse<long[]>>
 {
     private readonly IAlertRuleRepository _alertRuleRepo;
-    private readonly IMachineRepository _machineRepo;
+    private readonly IAlertRuleAssignmentService _assignmentService;
     private readonly ISubscriptionService _subscriptionService;
     private readonly IAuditLogRepository _auditLog;
     private readonly ITenantContext _tenantContext;
@@ -45,13 +46,13 @@ public sealed class AlertRuleMachinesUpdateEndpoint : Endpoint<UpdateAlertRuleMa
     /// </summary>
     public AlertRuleMachinesUpdateEndpoint(
         IAlertRuleRepository alertRuleRepo,
-        IMachineRepository machineRepo,
+        IAlertRuleAssignmentService assignmentService,
         ISubscriptionService subscriptionService,
         IAuditLogRepository auditLog,
         ITenantContext tenantContext)
     {
         _alertRuleRepo = alertRuleRepo;
-        _machineRepo = machineRepo;
+        _assignmentService = assignmentService;
         _subscriptionService = subscriptionService;
         _auditLog = auditLog;
         _tenantContext = tenantContext;
@@ -88,32 +89,28 @@ public sealed class AlertRuleMachinesUpdateEndpoint : Endpoint<UpdateAlertRuleMa
             return;
         }
 
-        // The entitlement boundary has to be identical for every verb that touches a custom rule. A
-        // Pro downgrade freezes those rules exactly as they were — assignments intact, rule disabled —
-        // so re-targeting one here would put Team-authored coverage back into service on a Pro plan
-        // just as surely as switching it back on would.
-        if (rule.IsCustom && SubscriptionPolicy.RequiresTeam(subscription))
+        // The entitlement boundary and the tenant-ownership check on the machine ids both live in the
+        // assignment service, which the machine-side route goes through as well. Unlike the full
+        // update endpoint, an empty array is accepted: it means the rule watches nothing, which is how
+        // a rule is parked without turning it off.
+        AlertRuleAssignmentOutcome outcome = await _assignmentService.SetMachinesForRuleAsync(
+            rule, tenantId, req.MachineIds, subscription, ct);
+
+        if (outcome == AlertRuleAssignmentOutcome.CustomRuleRequiresTeam)
         {
             await HttpContext.SendApiErrorAsync(403, "Custom rules can only be modified with a Team subscription", ct);
 
             return;
         }
 
-        // SetMachinesForRuleAsync silently drops machine ids that do not belong to the tenant, so a
-        // request naming another tenant's machine would otherwise report success having assigned
-        // fewer machines than asked for. The rejection has to happen here.
-        List<long> validMachineIds = await _machineRepo.GetActiveMachineIdsForTenantAsync(tenantId, req.MachineIds, ct);
-        if (validMachineIds.Count != req.MachineIds.Distinct().Count())
+        if (outcome == AlertRuleAssignmentOutcome.InvalidMachineIds)
         {
             await HttpContext.SendApiErrorAsync(400, "One or more machine IDs are invalid or do not belong to this tenant", ct);
 
             return;
         }
 
-        // Unlike the full update endpoint, an empty array is accepted: it means the rule watches
-        // nothing, which is how a rule is parked without turning it off.
-        bool assigned = await _alertRuleRepo.SetMachinesForRuleAsync(ruleId, tenantId, req.MachineIds, ct);
-        if (assigned == false)
+        if (outcome == AlertRuleAssignmentOutcome.NotFound)
         {
             await HttpContext.SendApiErrorAsync(404, "Alert rule not found", ct);
 
