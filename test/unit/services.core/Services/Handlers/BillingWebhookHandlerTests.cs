@@ -777,6 +777,53 @@ public class BillingWebhookHandlerTests
         await Assert.That(reloaded!.IsEnabled).IsFalse();
     }
 
+    /// <summary>
+    /// The billing side sends this action for every paid invoice, including each ordinary monthly
+    /// renewal, so a subscription that was already active is not recovering from anything. Re-enabling
+    /// there would revive a built-in the admin deliberately silenced, once per billing cycle.
+    /// </summary>
+    [Test]
+    public async Task HandlePaymentSucceededAsync_AlreadyActive_DoesNotEnableBuiltIns()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        await SeedTierFeatureLimitsAsync(dbFactory.Context);
+        TenantSubscription sub = TestDataBuilder.BuildSubscription(
+            tenantId: 1, tier: SubscriptionTier.Pro, status: SubscriptionStatus.Active);
+        sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
+
+        IBuiltInAlertRuleProvisioner provisioner = Substitute.For<IBuiltInAlertRuleProvisioner>();
+        BillingWebhookHandler handler = CreateHandler(dbFactory, provisioner: provisioner);
+
+        await handler.HandlePaymentSucceededAsync(1, CancellationToken.None);
+
+        await provisioner.DidNotReceive().EnableBuiltInsAsync(Arg.Any<int>(), Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>
+    /// Same reasoning for the Team custom-rule sweep: a renewal invoice must not resurrect the rules a
+    /// Team admin turned off.
+    /// </summary>
+    [Test]
+    public async Task HandlePaymentSucceededAsync_AlreadyActiveTeam_LeavesCustomRulesDisabled()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        await SeedTierFeatureLimitsAsync(dbFactory.Context);
+        TenantSubscription sub = TestDataBuilder.BuildSubscription(
+            tenantId: 1, tier: SubscriptionTier.Team, status: SubscriptionStatus.Active);
+        sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
+
+        AlertRule custom = TestDataBuilder.BuildAlertRule(tenantId: 1, isCustom: true, isEnabled: false);
+        custom.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(custom);
+
+        BillingWebhookHandler handler = CreateHandler(dbFactory);
+
+        await handler.HandlePaymentSucceededAsync(1, CancellationToken.None);
+
+        AlertRule? reloaded = await dbFactory.Context.AlertRules.FirstOrDefaultAsync(r => r.Id == custom.Id);
+        await Assert.That(reloaded).IsNotNull();
+        await Assert.That(reloaded!.IsEnabled).IsFalse();
+    }
+
     [Test]
     public async Task HandleAccountCanceledAsync_DeactivatesSubscriptionAndCleansUp()
     {

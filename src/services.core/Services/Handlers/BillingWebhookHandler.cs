@@ -124,6 +124,12 @@ public sealed class BillingWebhookHandler : IBillingWebhookHandler
     /// <inheritdoc/>
     public async Task HandlePaymentSucceededAsync(int tenantId, CancellationToken ct)
     {
+        // Billing sends this for every paid invoice, so an ordinary monthly renewal arrives here just
+        // as a recovered payment does. The status before the write is the only thing that tells the
+        // two apart, and it has to be read before the transaction overwrites it.
+        TenantSubscription? priorSubscription = await _subscriptionRepo.GetSubscriptionForTenantAsync(tenantId, ct);
+        bool isRecovery = (priorSubscription is not null) && (priorSubscription.Status != SubscriptionStatus.Active);
+
         using IDatabaseTransaction transaction = await _transactionProvider.BeginTransactionAsync(ct);
 
         await _subscriptionRepo.UpdateSubscriptionStateAsync(tenantId, tier: null, SubscriptionStatus.Active, cancellationToken: ct);
@@ -146,14 +152,23 @@ public sealed class BillingWebhookHandler : IBillingWebhookHandler
 
         if (SubscriptionPolicy.RequiresPro(subscription) == false)
         {
+            // Seeding missing rows never mutates an existing one, so it is safe on every invoice and
+            // remains a backstop for a paying tenant that was somehow never provisioned.
             await _builtInProvisioner.EnsureProvisionedAsync(tenantId, ct);
-            await _builtInProvisioner.EnableBuiltInsAsync(tenantId, ct);
 
-            // A canceled Team tenant lost its custom rules to the same sweep. Restoring only the
-            // built-ins would leave it paying for Team and running on Pro's rule set.
-            if (subscription!.Tier == SubscriptionTier.Team)
+            // The enables overwrite whatever the tenant chose, so they are confined to an actual
+            // recovery. Running them on a renewal would revive rules an admin deliberately silenced,
+            // once every billing cycle.
+            if (isRecovery)
             {
-                await _alertRuleRepo.EnableCustomAlertRulesAsync(tenantId, ct);
+                await _builtInProvisioner.EnableBuiltInsAsync(tenantId, ct);
+
+                // A canceled Team tenant lost its custom rules to the same sweep. Restoring only the
+                // built-ins would leave it paying for Team and running on Pro's rule set.
+                if (subscription!.Tier == SubscriptionTier.Team)
+                {
+                    await _alertRuleRepo.EnableCustomAlertRulesAsync(tenantId, ct);
+                }
             }
         }
     }
