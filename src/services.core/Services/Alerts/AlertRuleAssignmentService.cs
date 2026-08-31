@@ -29,22 +29,24 @@ public sealed class AlertRuleAssignmentService : IAlertRuleAssignmentService
     }
 
     /// <inheritdoc/>
-    public async Task<AlertRuleAssignmentOutcome> SetMachinesForRuleAsync(
+    public async Task<RuleMachineAssignmentResult> SetMachinesForRuleAsync(
         AlertRule rule,
         int tenantId,
         IReadOnlyList<long> machineIds,
+        IReadOnlyList<long> offeredMachineIds,
         TenantSubscription? subscription,
         CancellationToken ct = default)
     {
         ArgumentNullException.ThrowIfNull(rule);
         ArgumentNullException.ThrowIfNull(machineIds);
+        ArgumentNullException.ThrowIfNull(offeredMachineIds);
 
         // A Pro downgrade freezes custom rules exactly as they were — assignments intact, rule
         // disabled — so re-targeting one would put Team-authored coverage back into service on a Pro
         // plan just as surely as switching it back on would.
         if (rule.IsCustom && SubscriptionPolicy.RequiresTeam(subscription))
         {
-            return AlertRuleAssignmentOutcome.CustomRuleRequiresTeam;
+            return new RuleMachineAssignmentResult { Outcome = AlertRuleAssignmentOutcome.CustomRuleRequiresTeam };
         }
 
         // The repository silently drops machine ids that do not belong to the tenant, so a request
@@ -53,14 +55,56 @@ public sealed class AlertRuleAssignmentService : IAlertRuleAssignmentService
         List<long> validMachineIds = await _machineRepo.GetActiveMachineIdsForTenantAsync(tenantId, machineIds, ct);
         if (validMachineIds.Count != machineIds.Distinct().Count())
         {
-            return AlertRuleAssignmentOutcome.InvalidMachineIds;
+            return new RuleMachineAssignmentResult { Outcome = AlertRuleAssignmentOutcome.InvalidMachineIds };
         }
 
-        bool assigned = await _alertRuleRepo.SetMachinesForRuleAsync(rule.Id, tenantId, machineIds, ct);
+        Dictionary<int, List<long>> currentByRule = await _alertRuleRepo.GetMachineIdsForRulesAsync([rule.Id], ct);
+        IReadOnlyList<long> effective = ResolveMachineSetForRule(
+            machineIds, offeredMachineIds, currentByRule[rule.Id]);
 
-        return assigned
-            ? AlertRuleAssignmentOutcome.Applied
-            : AlertRuleAssignmentOutcome.NotFound;
+        bool assigned = await _alertRuleRepo.SetMachinesForRuleAsync(rule.Id, tenantId, effective, ct);
+        if (assigned == false)
+        {
+            return new RuleMachineAssignmentResult { Outcome = AlertRuleAssignmentOutcome.NotFound };
+        }
+
+        return new RuleMachineAssignmentResult
+        {
+            Outcome = AlertRuleAssignmentOutcome.Applied,
+            AppliedMachineIds = effective,
+        };
+    }
+
+    /// <summary>
+    /// Works out which machines a rule should end up watching, given what the caller asked for and
+    /// which machines it was able to ask about.
+    /// </summary>
+    /// <remarks>
+    /// The rule-side write is a replace-set, so whatever this returns is the rule's complete
+    /// assignment list afterwards. A picker draws one page of the fleet, and a machine it never drew
+    /// is a machine the caller never unchecked — reading that silence as a removal deletes coverage
+    /// nobody asked to delete, and reports success for it. The offered set is therefore what bounds
+    /// the removal: assignments outside it are carried through. It bounds removals only, so a machine
+    /// the caller names is assigned whether it was offered or not.
+    /// </remarks>
+    /// <param name="requestedMachineIds">The machines the caller wants the rule to watch.</param>
+    /// <param name="offeredMachineIds">The machines the caller was able to choose from.</param>
+    /// <param name="currentMachineIds">The machines the rule watches right now.</param>
+    /// <returns>The set to write.</returns>
+    public static IReadOnlyList<long> ResolveMachineSetForRule(
+        IReadOnlyList<long> requestedMachineIds,
+        IReadOnlyList<long> offeredMachineIds,
+        IReadOnlyList<long> currentMachineIds)
+    {
+        ArgumentNullException.ThrowIfNull(requestedMachineIds);
+        ArgumentNullException.ThrowIfNull(offeredMachineIds);
+        ArgumentNullException.ThrowIfNull(currentMachineIds);
+
+        HashSet<long> offered = [.. offeredMachineIds];
+
+        return [.. requestedMachineIds
+            .Concat(currentMachineIds.Where(id => offered.Contains(id) == false))
+            .Distinct()];
     }
 
     /// <inheritdoc/>

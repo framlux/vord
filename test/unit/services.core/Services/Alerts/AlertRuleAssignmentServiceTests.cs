@@ -185,4 +185,89 @@ public sealed class AlertRuleAssignmentServiceTests
         await Assert.That(() => AlertRuleAssignmentService.ResolveRuleSetForMachine(TenantRules, [], null!, null))
             .Throws<ArgumentNullException>();
     }
+
+    [Test]
+    public async Task ResolveMachines_WithinTheOfferedSet_ReplacesRatherThanMerges()
+    {
+        // Deselecting a machine the caller was looking at is the whole point of the control, so a
+        // machine inside the offered set that the request omits is removed.
+        IReadOnlyList<long> applied = AlertRuleAssignmentService.ResolveMachineSetForRule(
+            [1L],
+            [1L, 2L],
+            [1L, 2L]);
+
+        await Assert.That(applied.Count).IsEqualTo(1);
+        await Assert.That(applied).Contains(1L);
+    }
+
+    [Test]
+    public async Task ResolveMachines_OutsideTheOfferedSet_AreKept()
+    {
+        // The picker shows one page of machines. Everything past it was never rendered, so it was
+        // never submitted either, and reading that omission as a removal deletes coverage the caller
+        // never saw and could not have intended to drop.
+        List<long> everyMachine = Enumerable.Range(1, 150).Select(i => (long)i).ToList();
+        List<long> offered = everyMachine.Take(100).ToList();
+        List<long> requested = offered.Where(id => id != 7L).ToList();
+
+        IReadOnlyList<long> applied = AlertRuleAssignmentService.ResolveMachineSetForRule(
+            requested,
+            offered,
+            everyMachine);
+
+        await Assert.That(applied.Count).IsEqualTo(149);
+        await Assert.That(applied).DoesNotContain(7L);
+        await Assert.That(applied).Contains(101L);
+        await Assert.That(applied).Contains(150L);
+    }
+
+    [Test]
+    public async Task ResolveMachines_NoOfferedSet_RemovesNothing()
+    {
+        // A caller that does not say what it was able to choose from has declared no scope, and a
+        // request with no scope cannot be read as a removal of anything.
+        IReadOnlyList<long> applied = AlertRuleAssignmentService.ResolveMachineSetForRule(
+            [1L],
+            [],
+            [1L, 2L, 3L]);
+
+        await Assert.That(applied.Count).IsEqualTo(3);
+        await Assert.That(applied).Contains(2L);
+        await Assert.That(applied).Contains(3L);
+    }
+
+    [Test]
+    public async Task ResolveMachines_RequestOutsideTheOfferedSet_IsStillApplied()
+    {
+        // The offered set bounds what may be removed, not what may be added.
+        IReadOnlyList<long> applied = AlertRuleAssignmentService.ResolveMachineSetForRule(
+            [9L],
+            [1L, 2L],
+            [1L]);
+
+        await Assert.That(applied.Count).IsEqualTo(1);
+        await Assert.That(applied).Contains(9L);
+    }
+
+    [Test]
+    public async Task ResolveMachines_Duplicates_AreCollapsed()
+    {
+        IReadOnlyList<long> applied = AlertRuleAssignmentService.ResolveMachineSetForRule(
+            [1L, 1L],
+            [1L],
+            [1L]);
+
+        await Assert.That(applied.Count).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task ResolveMachines_NullArguments_Throw()
+    {
+        await Assert.That(() => AlertRuleAssignmentService.ResolveMachineSetForRule(null!, [], []))
+            .Throws<ArgumentNullException>();
+        await Assert.That(() => AlertRuleAssignmentService.ResolveMachineSetForRule([], null!, []))
+            .Throws<ArgumentNullException>();
+        await Assert.That(() => AlertRuleAssignmentService.ResolveMachineSetForRule([], [], null!))
+            .Throws<ArgumentNullException>();
+    }
 }

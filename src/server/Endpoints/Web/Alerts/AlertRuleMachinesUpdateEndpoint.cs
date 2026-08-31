@@ -21,6 +21,13 @@ public sealed class UpdateAlertRuleMachinesRequest
 {
     /// <summary>The machine IDs this rule should evaluate against. An empty array means the rule watches nothing.</summary>
     public long[] MachineIds { get; set; } = [];
+
+    /// <summary>
+    /// The machine IDs the caller was choosing from. Only assignments named here may be removed, so
+    /// a caller that saw one page of a larger fleet cannot unassign the machines it never rendered.
+    /// An empty array removes nothing.
+    /// </summary>
+    public long[] VisibleMachineIds { get; set; } = [];
 }
 
 /// <summary>
@@ -89,12 +96,15 @@ public sealed class AlertRuleMachinesUpdateEndpoint : Endpoint<UpdateAlertRuleMa
             return;
         }
 
-        // The entitlement boundary and the tenant-ownership check on the machine ids both live in the
-        // assignment service, which the machine-side route goes through as well. Unlike the full
-        // update endpoint, an empty array is accepted: it means the rule watches nothing, which is how
-        // a rule is parked without turning it off.
-        AlertRuleAssignmentOutcome outcome = await _assignmentService.SetMachinesForRuleAsync(
-            rule, tenantId, req.MachineIds, subscription, ct);
+        // The entitlement boundary, the tenant-ownership check on the machine ids and the bound on
+        // what a partial view of the fleet may remove all live in the assignment service, which the
+        // machine-side route goes through as well. Unlike the full update endpoint, an empty array is
+        // accepted: it means the rule watches nothing, which is how a rule is parked without turning
+        // it off.
+        RuleMachineAssignmentResult result = await _assignmentService.SetMachinesForRuleAsync(
+            rule, tenantId, req.MachineIds, req.VisibleMachineIds, subscription, ct);
+
+        AlertRuleAssignmentOutcome outcome = result.Outcome;
 
         if (outcome == AlertRuleAssignmentOutcome.CustomRuleRequiresTeam)
         {
@@ -117,14 +127,18 @@ public sealed class AlertRuleMachinesUpdateEndpoint : Endpoint<UpdateAlertRuleMa
             return;
         }
 
+        long[] applied = [.. result.AppliedMachineIds];
+
+        // The applied set, not the request: machines the caller never saw were carried through, and
+        // an audit entry that echoed the request would record a removal that never happened.
         int? userId = _tenantContext.UserId;
         await _auditLog.InsertAuditLogAsync(AuditHelper.Create(
             tenantId, userId, null,
             AuditAction.AlertRuleUpdated, AuditResourceType.AlertRule,
-            ruleId.ToString(), new { rule.Name, req.MachineIds }, null), ct);
+            ruleId.ToString(), new { rule.Name, MachineIds = applied }, null), ct);
 
         await Send.OkAsync(
-            ApiResponse<long[]>.Ok(req.MachineIds, "Alert rule machines updated"),
+            ApiResponse<long[]>.Ok(applied, "Alert rule machines updated"),
             cancellation: ct);
     }
 }

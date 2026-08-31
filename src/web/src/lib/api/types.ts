@@ -555,6 +555,11 @@ export interface UpdateAlertRuleRequest {
 	notifyEmail: boolean;
 	notifyWebhook: boolean;
 	machineIds: number[];
+	/**
+	 * The machines the caller was choosing from. Only assignments named here may be removed, so a
+	 * picker that rendered one page of a larger fleet cannot unassign the machines it never drew.
+	 */
+	visibleMachineIds: number[];
 }
 
 export interface UpdateAlertRuleEnabledRequest {
@@ -563,6 +568,11 @@ export interface UpdateAlertRuleEnabledRequest {
 
 export interface UpdateAlertRuleMachinesRequest {
 	machineIds: number[];
+	/**
+	 * The machines the caller was choosing from. Only assignments named here may be removed, so a
+	 * picker that rendered one page of a larger fleet cannot unassign the machines it never drew.
+	 */
+	visibleMachineIds: number[];
 }
 
 export interface CreateIntegrationRequest {

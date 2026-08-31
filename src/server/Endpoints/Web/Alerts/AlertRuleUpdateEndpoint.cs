@@ -51,6 +51,13 @@ public sealed class UpdateAlertRuleRequest
 
     /// <summary>The machine IDs this rule should evaluate against.</summary>
     public long[] MachineIds { get; set; } = [];
+
+    /// <summary>
+    /// The machine IDs the caller was choosing from. Only assignments named here may be removed, so
+    /// a caller that saw one page of a larger fleet cannot unassign the machines it never rendered.
+    /// An empty array removes nothing.
+    /// </summary>
+    public long[] VisibleMachineIds { get; set; } = [];
 }
 
 /// <summary>
@@ -60,7 +67,7 @@ public sealed class UpdateAlertRuleRequest
 public sealed class AlertRuleUpdateEndpoint : Endpoint<UpdateAlertRuleRequest, ApiResponse<AlertRuleDto>>
 {
     private readonly IAlertRuleRepository _alertRuleRepo;
-    private readonly IMachineRepository _machineRepo;
+    private readonly IAlertRuleAssignmentService _assignmentService;
     private readonly ISubscriptionService _subscriptionService;
     private readonly IAuditLogRepository _auditLog;
     private readonly ITenantContext _tenantContext;
@@ -70,13 +77,13 @@ public sealed class AlertRuleUpdateEndpoint : Endpoint<UpdateAlertRuleRequest, A
     /// </summary>
     public AlertRuleUpdateEndpoint(
         IAlertRuleRepository alertRuleRepo,
-        IMachineRepository machineRepo,
+        IAlertRuleAssignmentService assignmentService,
         ISubscriptionService subscriptionService,
         IAuditLogRepository auditLog,
         ITenantContext tenantContext)
     {
         _alertRuleRepo = alertRuleRepo;
-        _machineRepo = machineRepo;
+        _assignmentService = assignmentService;
         _subscriptionService = subscriptionService;
         _auditLog = auditLog;
         _tenantContext = tenantContext;
@@ -178,12 +185,31 @@ public sealed class AlertRuleUpdateEndpoint : Endpoint<UpdateAlertRuleRequest, A
             return;
         }
 
-        // Validate machine assignments before any write so an invalid machine id fails the whole
-        // request with the rule row untouched, matching the create path's validate-first ordering.
-        List<long> validMachineIds = await _machineRepo.GetActiveMachineIdsForTenantAsync(tenantId, req.MachineIds, ct);
-        if (validMachineIds.Count != req.MachineIds.Distinct().Count())
+        // Assignment goes through the same service the dedicated assignment endpoint and the
+        // machine-side route use, so the tenant-ownership check on the machine ids and the bound on
+        // what a partial view of the fleet may remove are stated once. It runs before the rule write
+        // so an invalid machine id fails the whole request with the rule row untouched, matching the
+        // create path's validate-first ordering.
+        RuleMachineAssignmentResult assignment = await _assignmentService.SetMachinesForRuleAsync(
+            rule, tenantId, req.MachineIds, req.VisibleMachineIds, subscription, ct);
+
+        if (assignment.Outcome == AlertRuleAssignmentOutcome.InvalidMachineIds)
         {
             await HttpContext.SendApiErrorAsync(400, "One or more machine IDs are invalid or do not belong to this tenant", ct);
+
+            return;
+        }
+
+        if (assignment.Outcome == AlertRuleAssignmentOutcome.CustomRuleRequiresTeam)
+        {
+            await HttpContext.SendApiErrorAsync(403, "Custom rules can only be modified with a Team subscription", ct);
+
+            return;
+        }
+
+        if (assignment.Outcome == AlertRuleAssignmentOutcome.NotFound)
+        {
+            await Send.NotFoundAsync(ct);
 
             return;
         }
@@ -194,14 +220,6 @@ public sealed class AlertRuleUpdateEndpoint : Endpoint<UpdateAlertRuleRequest, A
             req.Threshold, req.DurationMinutes,
             severity, req.IsEnabled,
             req.NotifyEmail, req.NotifyWebhook, ct);
-
-        bool assigned = await _alertRuleRepo.SetMachinesForRuleAsync(ruleId, tenantId, req.MachineIds, ct);
-        if (assigned == false)
-        {
-            await Send.NotFoundAsync(ct);
-
-            return;
-        }
 
         int? userId = _tenantContext.UserId;
         await _auditLog.InsertAuditLogAsync(AuditHelper.Create(
@@ -223,7 +241,7 @@ public sealed class AlertRuleUpdateEndpoint : Endpoint<UpdateAlertRuleRequest, A
             NotifyEmail = req.NotifyEmail,
             NotifyWebhook = req.NotifyWebhook,
             IsCustom = rule.IsCustom,
-            MachineIds = req.MachineIds,
+            MachineIds = [.. assignment.AppliedMachineIds],
         };
 
         await Send.OkAsync(ApiResponse<AlertRuleDto>.Ok(dto, "Alert rule updated"), cancellation: ct);

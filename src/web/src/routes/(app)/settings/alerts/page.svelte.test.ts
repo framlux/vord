@@ -89,17 +89,25 @@ function makeUser(): UserDto {
 	};
 }
 
-function makeData(subscription: SubscriptionDto | null, rules: AlertRuleDto[]) {
+function makeData(
+	subscription: SubscriptionDto | null,
+	rules: AlertRuleDto[],
+	overrides: { machineCount?: number; machinesTruncated?: boolean } = {}
+) {
+	const machines = [
+		{ id: 10, name: 'web-01' },
+		{ id: 11, name: 'db-01' }
+	];
+
 	return {
 		rules,
 		events: null,
 		integrations: null,
 		providers: null,
 		subscription,
-		machines: [
-			{ id: 10, name: 'web-01' },
-			{ id: 11, name: 'db-01' }
-		],
+		machines,
+		machineCount: overrides.machineCount ?? machines.length,
+		machinesTruncated: overrides.machinesTruncated ?? false,
 		filters: { status: undefined, severity: undefined },
 		user: makeUser()
 	};
@@ -171,6 +179,35 @@ describe('alerts settings page', () => {
 		expect(group).toBeInTheDocument();
 		expect(group.closest('form')?.getAttribute('action')).toBe('?/assignRuleMachines');
 		expect(screen.getByLabelText('db-01')).not.toBeChecked();
+	});
+
+	it('says which machines the picker is showing when the fleet does not fit on one page', async () => {
+		// A rule can report 150 machines above a list of 100 checkboxes. Left unsaid, the tenant reads
+		// the list as the whole fleet and the save as having unchecked the rest.
+		render(AlertsPage, {
+			props: {
+				data: makeData(makeSubscription(), [makeRule()], { machineCount: 150, machinesTruncated: true })
+			}
+		});
+
+		await fireEvent.click(screen.getByRole('button', { name: 'Assign machines to Disk usage above 90%' }));
+
+		expect(screen.getAllByText(/Showing the first 2 of 150 machines/i).length).toBeGreaterThan(0);
+	});
+
+	it('sends the machines the picker offered, so the save cannot remove the ones it did not', async () => {
+		render(AlertsPage, {
+			props: {
+				data: makeData(makeSubscription(), [makeRule()], { machineCount: 150, machinesTruncated: true })
+			}
+		});
+
+		await fireEvent.click(screen.getByRole('button', { name: 'Assign machines to Disk usage above 90%' }));
+
+		const group = screen.getByRole('group', { name: 'Machines watched by Disk usage above 90%' });
+		const offered = group.closest('form')?.querySelector('input[name="visibleMachineIds"]');
+
+		expect(offered).toHaveValue('10,11');
 	});
 
 	it('treats an unavailable subscription as entitled rather than as a downgrade', () => {

@@ -2125,9 +2125,11 @@ public sealed class AlertRuleEndpointTests
             $"/api/v1/alert-rules/{ruleId}/machines",
             new { MachineIds = new[] { machineId, secondMachineId } });
 
+        // A caller that names the machines it was choosing from is asking for those, and only those,
+        // to be reconsidered — so an omission inside that set is a removal.
         HttpResponseMessage response = await client.PutAsJsonAsync(
             $"/api/v1/alert-rules/{ruleId}/machines",
-            new { MachineIds = new[] { secondMachineId } });
+            new { MachineIds = new[] { secondMachineId }, VisibleMachineIds = new[] { machineId, secondMachineId } });
 
         await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
 
@@ -2158,7 +2160,7 @@ public sealed class AlertRuleEndpointTests
         // "watch nothing", which is how a rule is parked without turning it off.
         HttpResponseMessage response = await client.PutAsJsonAsync(
             $"/api/v1/alert-rules/{ruleId}/machines",
-            new { MachineIds = Array.Empty<long>() });
+            new { MachineIds = Array.Empty<long>(), VisibleMachineIds = new[] { machineId } });
 
         await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
 
@@ -2199,5 +2201,154 @@ public sealed class AlertRuleEndpointTests
 
         await Assert.That(after.Count).IsEqualTo(1);
         await Assert.That(after[0].Id).IsEqualTo(ruleId);
+    }
+
+    [Test]
+    public async Task UpdateRuleMachines_MachinesTheCallerNeverSaw_SurviveTheSave()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId, long machineId) = await SeedAlertEnvironment(db, SubscriptionTier.Pro);
+        int ruleId = await SeedRuleAsync(db, tenantId, userId, isCustom: false, isEnabled: true);
+
+        List<long> everyMachineId = [machineId];
+        for (int i = 0; i < 149; i++)
+        {
+            everyMachineId.Add(await SeedMachineAsync(db, tenantId));
+        }
+
+        HttpClient client = BuildClient(factory, tenantId, userId);
+
+        await client.PutAsJsonAsync(
+            $"/api/v1/alert-rules/{ruleId}/machines",
+            new { MachineIds = everyMachineId });
+
+        // The machine list endpoint caps a page at 100, so a picker over a 150-machine fleet renders
+        // the first 100 and submits from those alone. The 50 it never drew were never unchecked, and
+        // the save must not read their absence as a removal.
+        List<long> offered = everyMachineId.Take(100).ToList();
+        List<long> submitted = offered.Skip(1).ToList();
+
+        HttpResponseMessage response = await client.PutAsJsonAsync(
+            $"/api/v1/alert-rules/{ruleId}/machines",
+            new { MachineIds = submitted, VisibleMachineIds = offered });
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
+
+        List<long> assigned = await db.AlertRuleMachines
+            .Where(arm => arm.AlertRuleId == ruleId)
+            .Select(arm => arm.MachineId)
+            .ToListAsync();
+
+        await Assert.That(assigned.Count).IsEqualTo(149);
+        await Assert.That(assigned).DoesNotContain(offered[0]);
+        await Assert.That(assigned).Contains(everyMachineId[100]);
+        await Assert.That(assigned).Contains(everyMachineId[149]);
+    }
+
+    [Test]
+    public async Task UpdateRuleMachines_WithoutTheOfferedSet_RemovesNothing()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId, long machineId) = await SeedAlertEnvironment(db, SubscriptionTier.Pro);
+        long secondMachineId = await SeedMachineAsync(db, tenantId);
+        int ruleId = await SeedRuleAsync(db, tenantId, userId, isCustom: false, isEnabled: true);
+
+        HttpClient client = BuildClient(factory, tenantId, userId);
+
+        await client.PutAsJsonAsync(
+            $"/api/v1/alert-rules/{ruleId}/machines",
+            new { MachineIds = new[] { machineId, secondMachineId } });
+
+        // A caller that does not declare what it was choosing from has declared no scope, and a
+        // request with no scope cannot be read as a removal — a page written before the offered set
+        // existed must not be able to delete coverage it never showed.
+        HttpResponseMessage response = await client.PutAsJsonAsync(
+            $"/api/v1/alert-rules/{ruleId}/machines",
+            new { MachineIds = new[] { machineId } });
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
+
+        List<long> assigned = await db.AlertRuleMachines
+            .Where(arm => arm.AlertRuleId == ruleId)
+            .Select(arm => arm.MachineId)
+            .ToListAsync();
+
+        await Assert.That(assigned.Count).IsEqualTo(2);
+        await Assert.That(assigned).Contains(secondMachineId);
+    }
+
+    [Test]
+    public async Task UpdateRuleMachines_ReportsTheSetItActuallyWrote()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId, long machineId) = await SeedAlertEnvironment(db, SubscriptionTier.Pro);
+        long secondMachineId = await SeedMachineAsync(db, tenantId);
+        int ruleId = await SeedRuleAsync(db, tenantId, userId, isCustom: false, isEnabled: true);
+
+        HttpClient client = BuildClient(factory, tenantId, userId);
+
+        await client.PutAsJsonAsync(
+            $"/api/v1/alert-rules/{ruleId}/machines",
+            new { MachineIds = new[] { machineId, secondMachineId } });
+
+        // Echoing the request would tell the caller its unrendered machines had been dropped, which
+        // is the opposite of what happened.
+        HttpResponseMessage response = await client.PutAsJsonAsync(
+            $"/api/v1/alert-rules/{ruleId}/machines",
+            new { MachineIds = new[] { machineId }, VisibleMachineIds = new[] { machineId } });
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
+
+        string body = await response.Content.ReadAsStringAsync();
+        JsonDocument doc = JsonDocument.Parse(body);
+        List<long> reported = [.. doc.RootElement.GetProperty("data").EnumerateArray().Select(e => e.GetInt64())];
+
+        await Assert.That(reported.Count).IsEqualTo(2);
+        await Assert.That(reported).Contains(secondMachineId);
+    }
+
+    [Test]
+    public async Task UpdateAlertRule_MachinesTheCallerNeverSaw_SurviveTheSave()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId, long machineId) = await SeedAlertEnvironment(db, SubscriptionTier.Team);
+        long secondMachineId = await SeedMachineAsync(db, tenantId);
+        int ruleId = await SeedRuleAsync(db, tenantId, userId, isCustom: true, isEnabled: true);
+
+        HttpClient client = BuildClient(factory, tenantId, userId);
+
+        await client.PutAsJsonAsync(
+            $"/api/v1/alert-rules/{ruleId}/machines",
+            new { MachineIds = new[] { machineId, secondMachineId } });
+
+        // The edit form carries the same truncated picker as the assignment form, and its save
+        // replaces the assignment set too, so the same omission would destroy the same rows.
+        HttpResponseMessage response = await client.PutAsJsonAsync($"/api/v1/alert-rules/{ruleId}", new
+        {
+            Name = "Custom CPU Rule",
+            Metric = "CpuUsage",
+            Threshold = 95,
+            DurationMinutes = 15,
+            Severity = "Warning",
+            IsEnabled = true,
+            NotifyEmail = true,
+            NotifyWebhook = false,
+            MachineIds = new[] { machineId },
+            VisibleMachineIds = new[] { machineId },
+        });
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
+
+        List<long> assigned = await db.AlertRuleMachines
+            .Where(arm => arm.AlertRuleId == ruleId)
+            .Select(arm => arm.MachineId)
+            .ToListAsync();
+
+        await Assert.That(assigned.Count).IsEqualTo(2);
+        await Assert.That(assigned).Contains(secondMachineId);
     }
 }

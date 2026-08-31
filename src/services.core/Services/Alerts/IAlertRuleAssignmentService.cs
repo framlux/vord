@@ -21,16 +21,26 @@ public interface IAlertRuleAssignmentService
     /// Replaces the machines a single rule watches, after checking that every named machine is an
     /// active machine of the tenant.
     /// </summary>
+    /// <remarks>
+    /// The write is bounded by the set of machines the caller says it was choosing from, because a
+    /// caller that cannot see a machine cannot mean to unassign it. A machine picker draws one page
+    /// of a fleet, and a fleet is not obliged to fit on a page.
+    /// </remarks>
     /// <param name="rule">The rule being re-targeted, already loaded and confirmed to belong to the tenant.</param>
     /// <param name="tenantId">The tenant that owns the rule.</param>
     /// <param name="machineIds">The machines the rule should watch. Empty parks the rule without disabling it.</param>
+    /// <param name="offeredMachineIds">
+    /// The machines the caller was able to choose from. Only assignments inside this set may be
+    /// removed; an empty set therefore removes nothing.
+    /// </param>
     /// <param name="subscription">The tenant's subscription, or <c>null</c> if none exists.</param>
     /// <param name="ct">Cancellation token.</param>
-    /// <returns>What the request resolved to.</returns>
-    Task<AlertRuleAssignmentOutcome> SetMachinesForRuleAsync(
+    /// <returns>What the request resolved to, and the set actually written.</returns>
+    Task<RuleMachineAssignmentResult> SetMachinesForRuleAsync(
         AlertRule rule,
         int tenantId,
         IReadOnlyList<long> machineIds,
+        IReadOnlyList<long> offeredMachineIds,
         TenantSubscription? subscription,
         CancellationToken ct = default);
 

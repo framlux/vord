@@ -23,6 +23,15 @@
 	const integrations: IntegrationEndpointDto[] | null = $derived(data.integrations);
 	const providers: IntegrationProviderDto[] | null = $derived(data.providers);
 	const machines: { id: number; name: string }[] = $derived(data.machines ?? []);
+
+	// The picker draws one page of the fleet. The rule row counts a rule's machines from the rule
+	// itself, so it can legitimately report more machines than there are checkboxes below it, and
+	// saying so is the difference between a confusing page and a misleading one. The offered set
+	// travels with every save: the API may only unassign machines the form says it was choosing
+	// from, so the machines past the page keep their assignment.
+	const machineCount: number = $derived(data.machineCount ?? machines.length);
+	const machinesTruncated: boolean = $derived(data.machinesTruncated ?? false);
+	const visibleMachineIds: string = $derived(machines.map((m) => m.id).join(','));
 	const filters = $derived(data.filters);
 
 	// A Free tenant still sees its built-in rules — an invisible alert rule is indistinguishable from
@@ -348,6 +357,9 @@
 							</div>
 							<div class="mt-4">
 								<span class="mb-1 block text-xs text-surface-500 dark:text-surface-400">Machines (at least 1 required)</span>
+								{#if machinesTruncated}
+									<p class="mb-1 text-xs text-amber-600 dark:text-amber-400">Showing the first {machines.length} of {machineCount} machines. A new rule can only be pointed at the machines listed here.</p>
+								{/if}
 								<div class="max-h-40 overflow-y-auto border border-surface-300 rounded p-2 space-y-1 dark:border-surface-600" role="group" aria-label="Machines (at least 1 required)">
 									{#each machines as machine}
 										<label class="flex items-center gap-2 text-sm">
@@ -485,7 +497,11 @@
 												<td colspan="8" class="px-4 py-4">
 													<form method="POST" action="?/assignRuleMachines" use:enhance={() => { rulesError = null; return async ({ result, update }) => { if (result.type === 'failure') { rulesError = (result.data as { message?: string })?.message ?? 'Failed to update machines'; } else { assigningRuleId = null; rulesError = null; await update(); } }; }}>
 														<input type="hidden" name="id" value={rule.id} />
+														<input type="hidden" name="visibleMachineIds" value={visibleMachineIds} />
 														<span class="mb-1 block text-xs text-surface-500 dark:text-surface-400">Machines watched by {rule.name}</span>
+														{#if machinesTruncated}
+															<p class="mb-1 text-xs text-amber-600 dark:text-amber-400">Showing the first {machines.length} of {machineCount} machines. Machines not listed keep their current assignment when you save.</p>
+														{/if}
 														<div class="max-h-40 overflow-y-auto rounded border border-surface-300 p-2 space-y-1 dark:border-surface-600" role="group" aria-label="Machines watched by {rule.name}">
 															{#each machines as machine}
 																<label class="flex items-center gap-2 text-sm">
@@ -499,7 +515,7 @@
 														</div>
 														<!-- Clearing every box is a legitimate answer: it parks the rule so it watches
 														     nothing, without switching it off. -->
-														<p class="mt-1 text-xs text-surface-400 dark:text-surface-500">A rule with no machines selected stays configured but evaluates nothing.</p>
+														<p class="mt-1 text-xs text-surface-400 dark:text-surface-500">A rule with no machines selected stays configured but evaluates nothing{machinesTruncated ? ' — clearing every box here only clears the machines listed above' : ''}.</p>
 														<div class="mt-4 flex justify-end gap-2">
 															<button type="button" onclick={() => { assigningRuleId = null; rulesError = null; }} class="rounded-lg border border-surface-300 px-4 py-2 text-sm font-medium text-surface-700 hover:bg-surface-100 dark:border-surface-600 dark:text-surface-300 dark:hover:bg-surface-700">Cancel</button>
 															<button type="submit" class="rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700 dark:bg-primary-500 dark:hover:bg-primary-600">Save Machines</button>
@@ -515,6 +531,7 @@
 												<td colspan="8" class="px-4 py-4">
 													<form method="POST" action="?/updateRule" use:enhance={() => { rulesError = null; return async ({ result, update }) => { if (result.type === 'failure') { rulesError = (result.data as { message?: string })?.message ?? 'An error occurred'; } else { editingRuleId = null; rulesError = null; await update(); } }; }}>
 														<input type="hidden" name="id" value={rule.id} />
+														<input type="hidden" name="visibleMachineIds" value={visibleMachineIds} />
 														<input type="hidden" name="metric" value={rule.metric} />
 														{#if rulesError}
 															<div role="alert" class="mb-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-900/20 dark:text-red-300">
@@ -568,6 +585,9 @@
 														</div>
 														<div class="mt-4">
 															<span class="mb-1 block text-xs text-surface-500 dark:text-surface-400">Machines (at least 1 required)</span>
+															{#if machinesTruncated}
+																<p class="mb-1 text-xs text-amber-600 dark:text-amber-400">Showing the first {machines.length} of {machineCount} machines. Machines not listed keep their current assignment when you save.</p>
+															{/if}
 															<div class="max-h-40 overflow-y-auto border border-surface-300 rounded p-2 space-y-1 dark:border-surface-600" role="group" aria-label="Machines (at least 1 required)">
 																{#each machines as machine}
 																	<label class="flex items-center gap-2 text-sm">

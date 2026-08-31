@@ -9,6 +9,19 @@ import { canAdminTenant, canAdminMachines } from '$lib/utils/roles';
 import { redirect, error, fail } from '@sveltejs/kit';
 import type { PageServerLoad, Actions } from './$types';
 
+// The machine list endpoint clamps a page to 100. Asking for more is not an error there, it is a
+// silent truncation, so the page asks for exactly what it can be given and says so when the fleet
+// does not fit.
+const MACHINE_PAGE_SIZE = 100;
+
+function parseMachineIds(formData: FormData, field: string): number[] {
+	return formData
+		.getAll(field)
+		.flatMap((v) => (v as string).split(','))
+		.map((v) => parseInt(v.trim()))
+		.filter((v) => Number.isNaN(v) === false);
+}
+
 function parseRequiredInt(formData: FormData, field: string): number | null {
 	const raw = formData.get(field);
 	if (raw === null) {
@@ -44,12 +57,28 @@ export const load: PageServerLoad = async ({ fetch, cookies, locals, url }) => {
 			api.getIntegrations().catch(() => null),
 			api.getIntegrationProviders().catch(() => null),
 			api.getSubscription().catch(() => null),
-			api.getMachines({ pageSize: 1000 })
+			api.getMachines({ pageSize: MACHINE_PAGE_SIZE })
 		]);
 
 		const machines = machinesResponse.items.map((m) => ({ id: m.id, name: m.name }));
 
-		return { rules, events, integrations, providers, subscription, machines, filters: { status, severity } };
+		// The rule row counts a rule's machines from the rule itself, so it can report more machines
+		// than the picker below it can draw. Saying which is which is the difference between a
+		// confusing page and a misleading one.
+		const machineCount = machinesResponse.totalCount;
+		const machinesTruncated = machineCount > machines.length;
+
+		return {
+			rules,
+			events,
+			integrations,
+			providers,
+			subscription,
+			machines,
+			machineCount,
+			machinesTruncated,
+			filters: { status, severity }
+		};
 	} catch (e) {
 		if (e instanceof ApiError) {
 			if (e.status === 401) redirect(302, '/auth/login');
@@ -68,7 +97,7 @@ export const actions: Actions = {
 		const api = createServerApiClient(fetch, cookies.get('vord_auth'), cookies.get('vord_tenant'), undefined, csrfFor(cookies, locals));
 		const data = await request.formData();
 
-		const machineIds = data.getAll('machineIds').map((v) => parseInt(v as string)).filter((v) => Number.isNaN(v) === false);
+		const machineIds = parseMachineIds(data, 'machineIds');
 
 		try {
 			await api.createAlertRule({
@@ -106,7 +135,11 @@ export const actions: Actions = {
 			return fail(400, { message: 'Invalid ID' });
 		}
 
-		const machineIds = data.getAll('machineIds').map((v) => parseInt(v as string)).filter((v) => Number.isNaN(v) === false);
+		// The API may only unassign machines the form says it was choosing from, so the offered set
+		// travels with the request. Without it a truncated picker would delete the assignments it
+		// never rendered.
+		const machineIds = parseMachineIds(data, 'machineIds');
+		const visibleMachineIds = parseMachineIds(data, 'visibleMachineIds');
 
 		try {
 			await api.updateAlertRule(id, {
@@ -119,7 +152,8 @@ export const actions: Actions = {
 				isEnabled: data.get('isEnabled') === 'on',
 				notifyEmail: data.get('notifyEmail') === 'on',
 				notifyWebhook: data.get('notifyWebhook') === 'on',
-				machineIds
+				machineIds,
+				visibleMachineIds
 			});
 
 			return { success: true };
@@ -172,10 +206,14 @@ export const actions: Actions = {
 		// An empty selection is meaningful here and is forwarded as such: it parks the rule so it
 		// watches nothing, without turning it off. The rule update endpoint rejects that, which is why
 		// assignment has an endpoint of its own.
-		const machineIds = data.getAll('machineIds').map((v) => parseInt(v as string)).filter((v) => Number.isNaN(v) === false);
+		const machineIds = parseMachineIds(data, 'machineIds');
+
+		// The offered set bounds what the API is allowed to remove. A picker that could only draw the
+		// first page of the fleet must not be read as having unchecked the rest.
+		const visibleMachineIds = parseMachineIds(data, 'visibleMachineIds');
 
 		try {
-			await api.updateAlertRuleMachines(id, { machineIds });
+			await api.updateAlertRuleMachines(id, { machineIds, visibleMachineIds });
 
 			return { success: true };
 		} catch (e) {
