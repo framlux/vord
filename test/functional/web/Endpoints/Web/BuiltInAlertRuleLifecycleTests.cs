@@ -6,7 +6,6 @@ using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database;
 using Framlux.FleetManagement.Services.Core.Alerts;
-using Framlux.FleetManagement.Services.Core.Billing;
 using Framlux.FleetManagement.Services.Core.Handlers;
 using Framlux.FleetManagement.Test.Infrastructure;
 using LinqToDB.Async;
@@ -305,15 +304,9 @@ public sealed class BuiltInAlertRuleLifecycleTests
         };
         customRule.Id = await db.InsertWithInt32IdentityAsync(customRule);
 
-        // The two halves of a real Team-to-Pro downgrade: the handler moves the row, the cleanup
-        // service freezes the Team-only resources. DowngradeSubscriptionEndpoint runs both.
+        // A billing-initiated downgrade is the whole of the transition: nothing else runs behind it,
+        // so the handler owes the freeze as well as the tier change.
         await InvokeWebhookAsync(factory, h => h.HandleDowngradeToProAsync(tenantId, CancellationToken.None));
-
-        using (IServiceScope scope = factory.Services.CreateScope())
-        {
-            IDowngradeCleanupService cleanup = scope.ServiceProvider.GetRequiredService<IDowngradeCleanupService>();
-            await cleanup.CleanupForProTierAsync(tenantId, CancellationToken.None);
-        }
 
         AlertRule? frozen = await db.AlertRules.Where(r => r.Id == customRule.Id).FirstOrDefaultAsync();
         await Assert.That(frozen!.IsEnabled).IsFalse();

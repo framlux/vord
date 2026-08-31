@@ -162,4 +162,85 @@ public sealed class SubscriptionPolicyTests
         await Assert.That(SubscriptionPolicy.BlocksMutations(
             Subscription(SubscriptionTier.Pro, SubscriptionStatus.PastDue))).IsFalse();
     }
+
+    /// <summary>
+    /// A built-in rule runs wherever alerting runs, so this must be exactly the Pro gate for one —
+    /// tightening it would silence the eight rules every paying tenant gets.
+    /// </summary>
+    [Test]
+    public async Task RefusesAlertRule_BuiltIn_MatchesThePlainAlertingGate()
+    {
+        AlertRule builtIn = Rule(isCustom: false);
+
+        foreach (SubscriptionTier tier in AllTiers())
+        {
+            foreach (SubscriptionStatus status in AllStatuses())
+            {
+                TenantSubscription subscription = Subscription(tier, status);
+
+                await Assert.That(SubscriptionPolicy.RefusesAlertRule(builtIn, subscription))
+                    .IsEqualTo(SubscriptionPolicy.RequiresPro(subscription))
+                    .Because($"tier {tier} with status {status}");
+            }
+        }
+    }
+
+    /// <summary>
+    /// A custom rule runs only on an Active Team subscription. Pro is the case that matters: a
+    /// downgrade is expected to clear the rule's enabled flag, and this is what holds if it does not.
+    /// </summary>
+    [Test]
+    public async Task RefusesAlertRule_Custom_RunsOnlyOnActiveTeam()
+    {
+        AlertRule custom = Rule(isCustom: true);
+
+        foreach (SubscriptionTier tier in AllTiers())
+        {
+            foreach (SubscriptionStatus status in AllStatuses())
+            {
+                bool expected = (tier != SubscriptionTier.Team) || (status != SubscriptionStatus.Active);
+
+                await Assert.That(SubscriptionPolicy.RefusesAlertRule(custom, Subscription(tier, status)))
+                    .IsEqualTo(expected)
+                    .Because($"tier {tier} with status {status}");
+            }
+        }
+    }
+
+    /// <summary>
+    /// Fails closed on a missing subscription, for a custom rule and a built-in one alike.
+    /// </summary>
+    [Test]
+    public async Task RefusesAlertRule_NullSubscription_Refuses()
+    {
+        await Assert.That(SubscriptionPolicy.RefusesAlertRule(Rule(isCustom: false), null)).IsTrue();
+        await Assert.That(SubscriptionPolicy.RefusesAlertRule(Rule(isCustom: true), null)).IsTrue();
+    }
+
+    [Test]
+    public async Task RefusesAlertRule_NullRule_Throws()
+    {
+        await Assert.That(() => SubscriptionPolicy.RefusesAlertRule(
+            null!, Subscription(SubscriptionTier.Team, SubscriptionStatus.Active)))
+            .Throws<ArgumentNullException>();
+    }
+
+    private static AlertRule Rule(bool isCustom)
+    {
+        return new AlertRule
+        {
+            TenantId = 1,
+            Name = "Rule",
+            Metric = AlertMetric.CpuUsage,
+            Operator = AlertOperator.GreaterThan,
+            Threshold = 80m,
+            DurationMinutes = 0,
+            Severity = AlertSeverity.Warning,
+            IsEnabled = true,
+            IsCustom = isCustom,
+            CreatedByUserId = 1,
+            CreatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow,
+        };
+    }
 }

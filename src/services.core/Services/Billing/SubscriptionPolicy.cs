@@ -87,6 +87,29 @@ public static class SubscriptionPolicy
     }
 
     /// <summary>
+    /// Whether an alert rule must not be evaluated for the tenant that owns it: the tenant is not
+    /// entitled to alerting at all, or the rule is a custom one and the tenant is not on Team.
+    /// </summary>
+    /// <param name="rule">The rule about to be evaluated.</param>
+    /// <param name="subscription">The owning tenant's subscription, or <c>null</c> if none exists.</param>
+    /// <returns><c>true</c> when the rule must be skipped.</returns>
+    /// <remarks>
+    /// Authoring a custom rule is Team's, and so is running one. Every path that takes Team away is
+    /// expected to clear the rule's enabled flag, but that flag is a stored bit maintained by four
+    /// separate write paths, and a path that forgets leaves a Team-authored rule firing on a Pro
+    /// plan with nothing to notice. Asking the tier at evaluation time makes the entitlement true by
+    /// construction rather than by remembering. The flag is still cleared on downgrade — a frozen
+    /// rule must read as disabled in the product — so this is a second lock, not the only one.
+    /// </remarks>
+    public static bool RefusesAlertRule(AlertRule rule, TenantSubscription? subscription)
+    {
+        ArgumentNullException.ThrowIfNull(rule);
+
+        return RequiresPro(subscription) ||
+               (rule.IsCustom && RequiresTeam(subscription));
+    }
+
+    /// <summary>
     /// Whether the tenant must be held to read-only access: no subscription, or a canceled one.
     /// </summary>
     /// <param name="subscription">The tenant's subscription, or <c>null</c> if none exists.</param>

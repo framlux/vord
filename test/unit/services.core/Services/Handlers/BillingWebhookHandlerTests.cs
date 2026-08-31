@@ -479,6 +479,106 @@ public class BillingWebhookHandlerTests
         await Assert.That(updated.Status).IsEqualTo(SubscriptionStatus.Active);
     }
 
+    /// <summary>
+    /// The evaluator is authorship-blind, so a Team-authored rule left enabled keeps firing on a Pro
+    /// plan. The billing-initiated downgrade must freeze the Team-only resources itself rather than
+    /// relying on the in-product endpoint, which is a different caller entirely.
+    /// </summary>
+    [Test]
+    public async Task HandleDowngradeToProAsync_FreezesTeamOnlyResources()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        await SeedTierFeatureLimitsAsync(dbFactory.Context);
+        TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 1, tier: SubscriptionTier.Team);
+        sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
+
+        IDowngradeCleanupService cleanupService = Substitute.For<IDowngradeCleanupService>();
+        BillingWebhookHandler handler = CreateHandler(dbFactory, cleanupService: cleanupService);
+
+        await handler.HandleDowngradeToProAsync(1, CancellationToken.None);
+
+        await cleanupService.Received(1).CleanupForProTierAsync(1, Arg.Any<CancellationToken>());
+        await cleanupService.DidNotReceive().CleanupForFreeTierAsync(Arg.Any<int>(), Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>
+    /// The cleanup opens its own transaction, so running it inside the handler's would nest one write
+    /// set inside another and roll the freeze back with the tier change if the outer commit failed.
+    /// </summary>
+    [Test]
+    public async Task HandleDowngradeToProAsync_FreezesStrictlyAfterTheCommit()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        await SeedTierFeatureLimitsAsync(dbFactory.Context);
+        TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 1, tier: SubscriptionTier.Team);
+        sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
+
+        DatabaseRepository repo = new(dbFactory.Context, new NullLogger<DatabaseRepository>());
+        IDatabaseTransaction transaction = Substitute.For<IDatabaseTransaction>();
+        IDatabaseTransactionProvider transactionProvider = Substitute.For<IDatabaseTransactionProvider>();
+        transactionProvider.BeginTransactionAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult(transaction));
+
+        IDowngradeCleanupService cleanupService = Substitute.For<IDowngradeCleanupService>();
+
+        BillingWebhookHandler handler = new(
+            transactionProvider,
+            repo,
+            repo,
+            Substitute.For<IBuiltInAlertRuleProvisioner>(),
+            cleanupService,
+            new RetentionReclassifyDispatcher(
+                Substitute.For<IBackgroundJobClient>(), NullLogger<RetentionReclassifyDispatcher>.Instance));
+
+        await handler.HandleDowngradeToProAsync(1, CancellationToken.None);
+
+        Received.InOrder(() =>
+        {
+            transaction.CommitAsync(Arg.Any<CancellationToken>());
+            cleanupService.CleanupForProTierAsync(1, Arg.Any<CancellationToken>());
+        });
+    }
+
+    /// <summary>
+    /// Drift repair reaches Pro by the same route a downgrade does, so it owes the same freeze. The
+    /// sync job never corrects downwards to Free, so Pro is the only correction that loses an
+    /// entitlement.
+    /// </summary>
+    [Test]
+    public async Task HandleTierCorrectionAsync_ToPro_FreezesTeamOnlyResources()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        await SeedTierFeatureLimitsAsync(dbFactory.Context);
+        TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 1, tier: SubscriptionTier.Team);
+        sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
+
+        IDowngradeCleanupService cleanupService = Substitute.For<IDowngradeCleanupService>();
+        BillingWebhookHandler handler = CreateHandler(dbFactory, cleanupService: cleanupService);
+
+        await handler.HandleTierCorrectionAsync(1, SubscriptionTier.Pro, CancellationToken.None);
+
+        await cleanupService.Received(1).CleanupForProTierAsync(1, Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>
+    /// A correction upwards to Team gains the entitlement rather than losing it, and the thaw is the
+    /// provisioner's. Freezing here would undo it.
+    /// </summary>
+    [Test]
+    public async Task HandleTierCorrectionAsync_ToTeam_DoesNotFreeze()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        await SeedTierFeatureLimitsAsync(dbFactory.Context);
+        TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 1, tier: SubscriptionTier.Pro);
+        sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
+
+        IDowngradeCleanupService cleanupService = Substitute.For<IDowngradeCleanupService>();
+        BillingWebhookHandler handler = CreateHandler(dbFactory, cleanupService: cleanupService);
+
+        await handler.HandleTierCorrectionAsync(1, SubscriptionTier.Team, CancellationToken.None);
+
+        await cleanupService.DidNotReceive().CleanupForProTierAsync(Arg.Any<int>(), Arg.Any<CancellationToken>());
+    }
+
     [Test]
     public async Task HandlePaymentSucceededAsync_SetsStatusToActive()
     {

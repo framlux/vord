@@ -91,6 +91,44 @@ public sealed class EventAlertServiceTests
             .CreateEventIfNotExistsAsync(Arg.Any<AlertEvent>(), Arg.Any<CancellationToken>());
     }
 
+    /// <summary>
+    /// A custom rule is Team's to run as well as to author. A downgrade to Pro is expected to clear
+    /// the rule's enabled flag, but the flag is a stored bit several writers maintain; the tier is
+    /// asked here so a writer that forgets cannot leave a Team-authored rule firing on a Pro plan.
+    /// </summary>
+    [Test]
+    public async Task EvaluateSshConnect_ProTier_CustomRule_DoesNotCreateEvent()
+    {
+        SetupActiveProSubscription();
+
+        AlertRule rule = new()
+        {
+            Id = 11,
+            TenantId = 1,
+            Name = "Team-authored SSH rule",
+            Metric = AlertMetric.SshConnection,
+            Operator = AlertOperator.EqualTo,
+            Threshold = 1,
+            Severity = AlertSeverity.Info,
+            IsEnabled = true,
+            IsCustom = true,
+            CreatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow,
+        };
+
+        _alertRuleRepo.GetEnabledRulesForMachineByMetricAsync(1, 100, AlertMetric.SshConnection, Arg.Any<CancellationToken>())
+            .Returns(new List<AlertRule> { rule });
+
+        EventAlertService service = CreateService();
+
+        await service.EvaluateSshConnectAsync(1, 100, "root", "192.168.1.1", 22, "publickey", CancellationToken.None);
+
+        await _alertEventRepo.DidNotReceive()
+            .CreateEventIfNotExistsAsync(Arg.Any<AlertEvent>(), Arg.Any<CancellationToken>());
+        await _deliveryService.DidNotReceive()
+            .EnqueueAsync(Arg.Any<long>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>());
+    }
+
     [Test]
     public async Task EvaluateSshConnect_MatchingRule_CreatesEventAndEnqueuesDelivery()
     {

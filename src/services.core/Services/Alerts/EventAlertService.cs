@@ -63,6 +63,14 @@ public sealed class EventAlertService : IEventAlertService
 
         foreach (AlertRule rule in rules)
         {
+            // A custom rule is Team's to run as well as to author. The downgrade paths clear its
+            // enabled flag, but that flag is a stored bit several writers have to maintain, and this
+            // asks the tier instead of trusting them.
+            if (SubscriptionPolicy.RefusesAlertRule(rule, subscription))
+            {
+                continue;
+            }
+
             string message = $"New SSH connection: user {user} from {sourceIp} ({authMethod})";
             string details = JsonSerializer.Serialize(
                 new { user, sourceIp, sourcePort, authMethod },

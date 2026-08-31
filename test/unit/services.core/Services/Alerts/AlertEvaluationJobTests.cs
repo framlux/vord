@@ -680,7 +680,75 @@ public sealed class AlertEvaluationJobTests
         Machine machine = TestDataBuilder.BuildMachine(tenantId: tenant.Id);
         machine.Id = await db.InsertWithInt64IdentityAsync(machine);
 
-        AlertRule rule = TestDataBuilder.BuildAlertRule(tenantId: tenant.Id, metric: AlertMetric.CpuUsage, threshold: 80m, durationMinutes: 0);
+        AlertRule rule = TestDataBuilder.BuildAlertRule(tenantId: tenant.Id, metric: AlertMetric.CpuUsage, threshold: 80m, isCustom: false, durationMinutes: 0);
+        rule.Id = await db.InsertWithInt32IdentityAsync(rule);
+
+        await db.InsertAsync(new AlertRuleMachine { AlertRuleId = rule.Id, MachineId = machine.Id, CreatedAt = DateTimeOffset.UtcNow });
+        await db.InsertAsync(TestDataBuilder.BuildMachineStateSummary(machineId: machine.Id, tenantId: tenant.Id, cpuPercent: 95));
+
+        await job.RunAsync(CancellationToken.None);
+
+        int events = await db.AlertEvents.CountAsync();
+        await Assert.That(events).IsEqualTo(1);
+        await delivery.Received(1).EnqueueAsync(Arg.Any<long>(), rule.Id, tenant.Id, Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>
+    /// Authoring a custom rule is Team's and so is running one. A downgrade is expected to clear the
+    /// enabled flag, but the flag is written by several paths and one of them forgetting would leave
+    /// a Team-authored rule firing on a Pro plan. The evaluator asks the tier instead of trusting it.
+    /// </summary>
+    [Test]
+    public async Task RunAsync_ProTier_EnabledCustomRule_DoesNotFire()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        ISubscriptionService subscriptionService = Substitute.For<ISubscriptionService>();
+        (AlertEvaluationJob job, DatabaseContext db, _, IAlertDeliveryService delivery, _, _, _) = CreateJobWithDb(dbFactory, subscriptionService);
+
+        Tenant tenant = TestDataBuilder.BuildTenant();
+        tenant.Id = await db.InsertWithInt32IdentityAsync(tenant);
+
+        TenantSubscription proSub = TestDataBuilder.BuildSubscription(tenantId: tenant.Id, tier: SubscriptionTier.Pro, status: SubscriptionStatus.Active);
+        await db.InsertWithInt32IdentityAsync(proSub);
+        subscriptionService.GetSubscriptionForTenantAsync(tenant.Id, Arg.Any<CancellationToken>()).Returns(proSub);
+
+        Machine machine = TestDataBuilder.BuildMachine(tenantId: tenant.Id);
+        machine.Id = await db.InsertWithInt64IdentityAsync(machine);
+
+        AlertRule rule = TestDataBuilder.BuildAlertRule(tenantId: tenant.Id, metric: AlertMetric.CpuUsage, threshold: 80m, isCustom: true, durationMinutes: 0);
+        rule.Id = await db.InsertWithInt32IdentityAsync(rule);
+
+        await db.InsertAsync(new AlertRuleMachine { AlertRuleId = rule.Id, MachineId = machine.Id, CreatedAt = DateTimeOffset.UtcNow });
+        await db.InsertAsync(TestDataBuilder.BuildMachineStateSummary(machineId: machine.Id, tenantId: tenant.Id, cpuPercent: 95));
+
+        await job.RunAsync(CancellationToken.None);
+
+        int events = await db.AlertEvents.CountAsync();
+        await Assert.That(events).IsEqualTo(0);
+        await delivery.DidNotReceive().EnqueueAsync(Arg.Any<long>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>
+    /// The other side of the same gate: on Team a custom rule evaluates exactly as a built-in does.
+    /// </summary>
+    [Test]
+    public async Task RunAsync_TeamTier_EnabledCustomRule_Fires()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        ISubscriptionService subscriptionService = Substitute.For<ISubscriptionService>();
+        (AlertEvaluationJob job, DatabaseContext db, _, IAlertDeliveryService delivery, _, _, _) = CreateJobWithDb(dbFactory, subscriptionService);
+
+        Tenant tenant = TestDataBuilder.BuildTenant();
+        tenant.Id = await db.InsertWithInt32IdentityAsync(tenant);
+
+        TenantSubscription teamSub = TestDataBuilder.BuildSubscription(tenantId: tenant.Id, tier: SubscriptionTier.Team, status: SubscriptionStatus.Active);
+        await db.InsertWithInt32IdentityAsync(teamSub);
+        subscriptionService.GetSubscriptionForTenantAsync(tenant.Id, Arg.Any<CancellationToken>()).Returns(teamSub);
+
+        Machine machine = TestDataBuilder.BuildMachine(tenantId: tenant.Id);
+        machine.Id = await db.InsertWithInt64IdentityAsync(machine);
+
+        AlertRule rule = TestDataBuilder.BuildAlertRule(tenantId: tenant.Id, metric: AlertMetric.CpuUsage, threshold: 80m, isCustom: true, durationMinutes: 0);
         rule.Id = await db.InsertWithInt32IdentityAsync(rule);
 
         await db.InsertAsync(new AlertRuleMachine { AlertRuleId = rule.Id, MachineId = machine.Id, CreatedAt = DateTimeOffset.UtcNow });
@@ -888,7 +956,7 @@ public sealed class AlertEvaluationJobTests
         TenantSubscription sub2 = TestDataBuilder.BuildSubscription(tenantId: tenant2.Id, tier: SubscriptionTier.Team, status: SubscriptionStatus.Active);
         subscriptionService.GetSubscriptionForTenantAsync(tenant2.Id, Arg.Any<CancellationToken>()).Returns(sub2);
 
-        AlertRule rule1 = TestDataBuilder.BuildAlertRule(tenantId: tenant1.Id, metric: AlertMetric.CpuUsage, threshold: 80m, durationMinutes: 0);
+        AlertRule rule1 = TestDataBuilder.BuildAlertRule(tenantId: tenant1.Id, metric: AlertMetric.CpuUsage, threshold: 80m, isCustom: false, durationMinutes: 0);
         rule1.Id = await db.InsertWithInt32IdentityAsync(rule1);
         AlertRule rule2 = TestDataBuilder.BuildAlertRule(tenantId: tenant2.Id, metric: AlertMetric.MemoryUsage, threshold: 50m, durationMinutes: 0);
         rule2.Id = await db.InsertWithInt32IdentityAsync(rule2);

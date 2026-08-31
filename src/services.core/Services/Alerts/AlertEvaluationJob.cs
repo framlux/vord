@@ -138,6 +138,14 @@ public sealed class AlertEvaluationJob
                             continue;
                         }
 
+                        // A custom rule is Team's to run as well as to author. The downgrade paths
+                        // clear its enabled flag, but that flag is a stored bit several writers have
+                        // to maintain, and this asks the tier instead of trusting them.
+                        if (SubscriptionPolicy.RefusesAlertRule(rule, subscription))
+                        {
+                            continue;
+                        }
+
                         List<long> assignedMachineIds = machinesByRule.GetValueOrDefault(rule.Id, []);
                         if (assignedMachineIds.Count == 0)
                         {
