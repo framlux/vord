@@ -27,6 +27,7 @@
 	import { invalidateAll } from '$app/navigation';
 	import { enhance } from '$app/forms';
 	import { canAdminMachines } from '$lib/utils/roles';
+	import { canManageAlertRules } from '$lib/utils/alert-entitlement';
 	import {
 		generateNonce,
 		buildCanonicalPayload,
@@ -458,6 +459,18 @@
 	let alertRulesError = $state('');
 
 	const assignedRuleIds = $derived(new Set(machineAlertRules.map((r) => r.id)));
+
+	// The rule list is readable by every tenant — a Free tenant reads its eight disabled built-ins as
+	// an upsell — but the save is Pro-gated, and status-sensitive with it. Offering the picker on the
+	// same terms the alerts page offers its controls keeps the two screens from disagreeing about
+	// what this tenant may do.
+	const canManageRules = $derived(
+		canManageAlertRules(data.subscription, data.user?.deployment?.selfHosted === true)
+	);
+	const lapsedPaidTier = $derived(
+		canManageRules === false && data.subscription !== null && data.subscription !== undefined &&
+		(data.subscription.tier === 'Pro' || data.subscription.tier === 'Team')
+	);
 
 	// Custom rules belong to Team, and the API refuses to re-target one below that tier. Offering a
 	// checkbox the save would be rejected for is the wrong shape of control, so below Team the modal
@@ -1377,7 +1390,7 @@
 				<ShieldAlert size={18} class="text-surface-500 dark:text-surface-400" />
 				<h3 class="text-xs font-semibold uppercase tracking-wider text-surface-400 dark:text-surface-500">Alert Rules</h3>
 			</div>
-			{#if canAdminMachines(data.user)}
+			{#if canAdminMachines(data.user) && canManageRules}
 				<button
 					onclick={() => { showAlertRulesModal = true; alertRulesError = ''; }}
 					class="inline-flex items-center gap-1.5 rounded-lg border border-surface-200 bg-surface-50 px-3 py-1.5 text-sm font-medium text-surface-700 transition hover:bg-surface-100 dark:border-surface-700 dark:bg-surface-800 dark:text-surface-300 dark:hover:bg-surface-700"
@@ -1386,6 +1399,20 @@
 				</button>
 			{/if}
 		</div>
+
+		{#if canAdminMachines(data.user) && (canManageRules === false)}
+			<div class="mb-4 rounded-lg border border-amber-200 bg-amber-50 p-3 dark:border-amber-800 dark:bg-amber-900/20">
+				{#if lapsedPaidTier}
+					<p class="text-sm text-amber-700 dark:text-amber-300">
+						Alert rules stay switched off while your subscription is not active. Settle your <a href="/settings/billing" class="underline hover:text-amber-800 dark:hover:text-amber-200">billing</a> to choose the rules that watch this machine.
+					</p>
+				{:else}
+					<p class="text-sm text-amber-700 dark:text-amber-300">
+						Alert rules only run on Pro and Team plans. <a href="/settings/billing" class="underline hover:text-amber-800 dark:hover:text-amber-200">Upgrade your subscription</a> to choose the rules that watch this machine.
+					</p>
+				{/if}
+			</div>
+		{/if}
 
 		{#if machineAlertRules.length === 0}
 			<p class="py-4 text-center text-sm text-surface-500 dark:text-surface-400">
@@ -1440,7 +1467,7 @@
 </div>
 
 <!-- Alert Rules Management Modal -->
-{#if showAlertRulesModal}
+{#if showAlertRulesModal && canManageRules}
 	<!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
 	<!-- svelte-ignore a11y_interactive_supports_focus -->
 	<div

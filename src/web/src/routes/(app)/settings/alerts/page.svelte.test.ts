@@ -74,7 +74,7 @@ function makeSubscription(overrides: Partial<SubscriptionDto> = {}): Subscriptio
 	};
 }
 
-function makeUser(): UserDto {
+function makeUser(selfHosted: boolean = false): UserDto {
 	return {
 		id: 1,
 		name: 'Jonathan Miller',
@@ -85,14 +85,14 @@ function makeUser(): UserDto {
 		needsOnboarding: false,
 		tenants: [{ tenantId: 1, tenantName: 'Acme Corp', role: '1' }],
 		activeTenantId: 1,
-		deployment: { selfHosted: false }
+		deployment: { selfHosted }
 	};
 }
 
 function makeData(
 	subscription: SubscriptionDto | null,
 	rules: AlertRuleDto[],
-	overrides: { machineCount?: number; machinesTruncated?: boolean } = {}
+	overrides: { machineCount?: number; machinesTruncated?: boolean; selfHosted?: boolean } = {}
 ) {
 	const machines = [
 		{ id: 10, name: 'web-01' },
@@ -109,7 +109,7 @@ function makeData(
 		machineCount: overrides.machineCount ?? machines.length,
 		machinesTruncated: overrides.machinesTruncated ?? false,
 		filters: { status: undefined, severity: undefined },
-		user: makeUser()
+		user: makeUser(overrides.selfHosted ?? false)
 	};
 }
 
@@ -124,7 +124,51 @@ describe('alerts settings page', () => {
 		expect(screen.getByText('Built-in')).toBeInTheDocument();
 		expect(screen.getByText(/only run on Pro and Team plans/i)).toBeInTheDocument();
 		expect(screen.queryByRole('button', { name: 'Edit' })).not.toBeInTheDocument();
+		expect(screen.queryByRole('button', { name: /^Enable / })).not.toBeInTheDocument();
+		expect(screen.queryByRole('button', { name: /^Disable / })).not.toBeInTheDocument();
+		expect(screen.queryByRole('button', { name: /^Assign machines to / })).not.toBeInTheDocument();
+		expect(screen.queryByRole('button', { name: 'New Rule' })).not.toBeInTheDocument();
 		expect(screen.queryByText('Limit reached')).not.toBeInTheDocument();
+	});
+
+	it('withholds every control from a Pro tenant whose subscription has lapsed', () => {
+		// Each control here posts to an endpoint gated by RequiresPro, which refuses a non-Active
+		// status as flatly as it refuses Free. A tier-only gate would render a working screen where
+		// every save answers 403.
+		render(AlertsPage, {
+			props: { data: makeData(makeSubscription({ status: 'PastDue' }), [makeRule()]) }
+		});
+
+		expect(screen.getByText(/stay switched off while your subscription is not active/i)).toBeInTheDocument();
+		expect(screen.queryByText(/only run on Pro and Team plans/i)).not.toBeInTheDocument();
+		expect(screen.queryByRole('button', { name: /^Disable / })).not.toBeInTheDocument();
+		expect(screen.queryByRole('button', { name: /^Assign machines to / })).not.toBeInTheDocument();
+	});
+
+	it('withholds the custom-rule controls from a Team tenant whose subscription has lapsed', () => {
+		// Custom rules are Team's, but every endpoint that touches one also carries the Pro gate, so
+		// a lapsed Team tenant may not author either.
+		render(AlertsPage, {
+			props: {
+				data: makeData(
+					makeSubscription({ tier: 'Team', status: 'PastDue', alertRuleLimit: 25 }),
+					[makeRule({ isCustom: true, name: 'Custom load rule' })]
+				)
+			}
+		});
+
+		expect(screen.queryByRole('button', { name: 'Edit' })).not.toBeInTheDocument();
+		expect(screen.queryByRole('button', { name: 'New Rule' })).not.toBeInTheDocument();
+		expect(screen.queryByRole('button', { name: 'Delete rule' })).not.toBeInTheDocument();
+	});
+
+	it('keeps a Canceled subscription off the alerting controls', () => {
+		render(AlertsPage, {
+			props: { data: makeData(makeSubscription({ status: 'Canceled' }), [makeRule()]) }
+		});
+
+		expect(screen.getByText(/stay switched off while your subscription is not active/i)).toBeInTheDocument();
+		expect(screen.queryByRole('button', { name: /^Disable / })).not.toBeInTheDocument();
 	});
 
 	it('gives Pro an enable/disable control on a built-in rule but no edit form', () => {
@@ -217,5 +261,19 @@ describe('alerts settings page', () => {
 
 		expect(screen.queryByText(/only run on Pro and Team plans/i)).not.toBeInTheDocument();
 		expect(screen.getByRole('button', { name: 'Disable Disk usage above 90%' })).toBeInTheDocument();
+	});
+
+	it('leaves a self-hosted deployment fully entitled whatever its subscription row says', () => {
+		render(AlertsPage, {
+			props: {
+				data: makeData(makeSubscription({ tier: 'Free', status: 'Canceled' }), [makeRule()], {
+					selfHosted: true
+				})
+			}
+		});
+
+		expect(screen.queryByText(/only run on Pro and Team plans/i)).not.toBeInTheDocument();
+		expect(screen.getByRole('button', { name: 'Disable Disk usage above 90%' })).toBeInTheDocument();
+		expect(screen.getByRole('button', { name: 'New Rule' })).toBeInTheDocument();
 	});
 });

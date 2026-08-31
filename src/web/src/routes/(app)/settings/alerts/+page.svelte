@@ -10,6 +10,7 @@
 	import { page as pageState } from '$app/state';
 	import PageHeader from '$lib/components/PageHeader.svelte';
 	import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
+	import { canAuthorAlertRules, canManageAlertRules } from '$lib/utils/alert-entitlement';
 	import { formatDateTime } from '$lib/utils/format';
 
 	let { data } = $props();
@@ -35,20 +36,20 @@
 	const filters = $derived(data.filters);
 
 	// A Free tenant still sees its built-in rules — an invisible alert rule is indistinguishable from
-	// no alert rule — but every control that changes one is withheld. A missing subscription is read
-	// optimistically: the billing API being briefly unavailable must not present as a downgrade, and
-	// the server refuses anything the tenant is not entitled to regardless of what is rendered here.
-	const entitled: boolean = $derived(
-		selfHosted || data.subscription === null || data.subscription === undefined ||
-		data.subscription.tier === 'Pro' || data.subscription.tier === 'Team'
-	);
+	// no alert rule — but every control that changes one is withheld. The predicate lives beside the
+	// machine page's copy so the two cannot drift.
+	const entitled: boolean = $derived(canManageAlertRules(data.subscription, selfHosted));
 
 	// Retuning a built-in rule is authoring a rule, which is what the Team tier sells. Pro may turn a
 	// built-in on or off and choose which machines it watches; below Team it may not touch anything
 	// else, and it may not touch a custom rule at all.
-	const canAuthorRules: boolean = $derived(
-		selfHosted || data.subscription === null || data.subscription === undefined ||
-		data.subscription.tier === 'Team'
+	const canAuthorRules: boolean = $derived(canAuthorAlertRules(data.subscription, selfHosted));
+
+	// A paid tier that has lapsed is refused the same controls as Free, but for a different reason,
+	// and telling it to upgrade a plan it already pays for reads as a bug.
+	const lapsedPaidTier: boolean = $derived(
+		entitled === false && data.subscription !== null && data.subscription !== undefined &&
+		(data.subscription.tier === 'Pro' || data.subscription.tier === 'Team')
 	);
 
 	function canModify(rule: AlertRuleDto): boolean {
@@ -189,9 +190,15 @@
 	{#if entitled === false}
 		<div class="flex items-center gap-3 rounded-xl border border-amber-200 bg-amber-50 p-6 dark:border-amber-800 dark:bg-amber-900/20">
 			<CircleAlert class="h-5 w-5 text-amber-600 dark:text-amber-400" />
-			<p class="text-sm text-amber-700 dark:text-amber-300">
-				These built-in alert rules only run on Pro and Team plans. Upgrade your subscription to turn them on and choose the machines they watch.
-			</p>
+			{#if lapsedPaidTier}
+				<p class="text-sm text-amber-700 dark:text-amber-300">
+					Alert rules stay switched off while your subscription is not active. Settle your <a href="/settings/billing" class="underline hover:text-amber-800 dark:hover:text-amber-200">billing</a> to turn them back on.
+				</p>
+			{:else}
+				<p class="text-sm text-amber-700 dark:text-amber-300">
+					These built-in alert rules only run on Pro and Team plans. Upgrade your subscription to turn them on and choose the machines they watch.
+				</p>
+			{/if}
 		</div>
 	{/if}
 
