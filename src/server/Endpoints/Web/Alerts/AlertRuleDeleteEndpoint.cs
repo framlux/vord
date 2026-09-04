@@ -63,8 +63,19 @@ public sealed class AlertRuleDeleteEndpoint : EndpointWithoutRequest<ApiResponse
     {
         Delete("/alert-rules/{id}");
         Policies(AuthorizationPolicies.TenantAdmin);
-        Tags(Services.Billing.EndpointTags.RequiresProSubscription, EndpointTags.RequiresTenant);
-        Options(b => b.WithMetadata(new RequiresProFeatureMessage(ProFeatureMessages.Alerting)));
+
+        // Only custom rules are deletable at all (built-ins are refused below), and custom rules
+        // belong to Team in every respect. Without the Team tag this was the one verb through which
+        // a Pro tenant could destroy Team-authored work — permanently, along with the assignment
+        // rows a downgrade deliberately preserves, so a later return to Team would restore a rule
+        // watching nothing.
+        Tags(
+            Services.Billing.EndpointTags.RequiresProSubscription,
+            Services.Billing.EndpointTags.RequiresTeamSubscription,
+            EndpointTags.RequiresTenant);
+        Options(b => b
+            .WithMetadata(new RequiresProFeatureMessage(ProFeatureMessages.Alerting))
+            .WithMetadata(new RequiresTeamFeatureMessage("Deleting custom alert rules requires a Team subscription")));
         Version(1);
     }
 

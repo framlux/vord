@@ -441,6 +441,60 @@ public sealed class BuiltInAlertRuleProvisionerTests
         return subscriptions;
     }
 
+    /// <summary>
+    /// Pins every shipped built-in definition exactly. The thresholds and durations here are tuned
+    /// values, not defaults — each one is the line between a useful alert and a mailbox nobody
+    /// reads, and all eight ship enabled with email on. Without this, reverting a duration or
+    /// downgrading a severity is a silent change that no other test notices.
+    /// </summary>
+    [Test]
+    [Arguments(AlertMetric.MachineOffline, AlertOperator.EqualTo, 1, 10, AlertSeverity.Critical)]
+    [Arguments(AlertMetric.DiskHealth, AlertOperator.EqualTo, 1, 1, AlertSeverity.Critical)]
+    [Arguments(AlertMetric.DiskUsage, AlertOperator.GreaterThan, 90, 5, AlertSeverity.Warning)]
+    [Arguments(AlertMetric.FailedServices, AlertOperator.GreaterThan, 0, 5, AlertSeverity.Warning)]
+    [Arguments(AlertMetric.CpuUsage, AlertOperator.GreaterThan, 90, 15, AlertSeverity.Warning)]
+    [Arguments(AlertMetric.MemoryUsage, AlertOperator.GreaterThan, 90, 15, AlertSeverity.Warning)]
+    [Arguments(AlertMetric.SecurityUpdates, AlertOperator.GreaterThan, 0, 1, AlertSeverity.Info)]
+    [Arguments(AlertMetric.SshConnection, AlertOperator.EqualTo, 1, 0, AlertSeverity.Info)]
+    public async Task Definitions_ShipTheTunedThresholdForEachMetric(
+        AlertMetric metric,
+        AlertOperator expectedOperator,
+        int expectedThreshold,
+        int expectedDurationMinutes,
+        AlertSeverity expectedSeverity)
+    {
+        BuiltInAlertRuleDefinition definition = BuiltInAlertRuleDefinitions.All.Single(d => d.Metric == metric);
+
+        await Assert.That(definition.Operator).IsEqualTo(expectedOperator);
+        await Assert.That(definition.Threshold).IsEqualTo((decimal)expectedThreshold);
+        await Assert.That(definition.DurationMinutes).IsEqualTo(expectedDurationMinutes);
+        await Assert.That(definition.Severity).IsEqualTo(expectedSeverity);
+    }
+
+    [Test]
+    public async Task Definitions_AreProvisionedOntoTheRuleUnaltered()
+    {
+        IAlertRuleRepository repo = Substitute.For<IAlertRuleRepository>();
+        repo.GetBuiltInMetricsForTenantAsync(7, Arg.Any<CancellationToken>()).Returns([]);
+        BuiltInAlertRuleProvisioner provisioner = Build(repo, SubscriptionsReturning(7, SubscriptionTier.Pro));
+
+        await provisioner.EnsureProvisionedAsync(7, CancellationToken.None);
+
+        List<AlertRule> rules = CapturedRules(repo);
+
+        foreach (BuiltInAlertRuleDefinition definition in BuiltInAlertRuleDefinitions.All)
+        {
+            AlertRule rule = rules.Single(r => r.Metric == definition.Metric);
+
+            await Assert.That(rule.Name).IsEqualTo(definition.Name);
+            await Assert.That(rule.Operator).IsEqualTo(definition.Operator);
+            await Assert.That(rule.Threshold).IsEqualTo(definition.Threshold);
+            await Assert.That(rule.DurationMinutes).IsEqualTo(definition.DurationMinutes);
+            await Assert.That(rule.Severity).IsEqualTo(definition.Severity);
+            await Assert.That(rule.NotifyEmail).IsTrue();
+        }
+    }
+
     private static List<AlertRule> CapturedRules(IAlertRuleRepository repo)
     {
         IEnumerable<AlertRule> captured = (IEnumerable<AlertRule>)repo.ReceivedCalls()

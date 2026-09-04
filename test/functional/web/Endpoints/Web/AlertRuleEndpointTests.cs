@@ -663,7 +663,7 @@ public sealed class AlertRuleEndpointTests
     {
         using FunctionalTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
-        (int tenantId, int userId, long machineId) = await SeedAlertEnvironment(db, SubscriptionTier.Pro);
+        (int tenantId, int userId, long machineId) = await SeedAlertEnvironment(db, SubscriptionTier.Team);
         HttpClient client = BuildClient(factory, tenantId, userId);
 
         HttpResponseMessage response = await client.DeleteAsync("/api/v1/alert-rules/99999");
@@ -678,7 +678,7 @@ public sealed class AlertRuleEndpointTests
     {
         using FunctionalTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
-        (int tenantId, int userId, long machineId) = await SeedAlertEnvironment(db, SubscriptionTier.Pro);
+        (int tenantId, int userId, long machineId) = await SeedAlertEnvironment(db, SubscriptionTier.Team);
 
         AlertRule defaultRule = new()
         {
@@ -706,11 +706,11 @@ public sealed class AlertRuleEndpointTests
     }
 
     [Test]
-    public async Task DeleteAlertRule_CustomRule_Succeeds()
+    public async Task DeleteAlertRule_TeamTier_CustomRule_Succeeds()
     {
         using FunctionalTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
-        (int tenantId, int userId, long machineId) = await SeedAlertEnvironment(db, SubscriptionTier.Pro);
+        (int tenantId, int userId, long machineId) = await SeedAlertEnvironment(db, SubscriptionTier.Team);
 
         AlertRule customRule = new()
         {
@@ -742,13 +742,59 @@ public sealed class AlertRuleEndpointTests
     }
 
     [Test]
+    public async Task DeleteAlertRule_ProTier_CustomRule_Returns403AndLeavesTheRuleIntact()
+    {
+        // A Pro downgrade freezes a Team-authored rule: disabled, assignments intact. Deleting it is
+        // the one way a Pro tenant could still destroy Team-tier work, and it takes the assignment
+        // rows with it, so the later thaw would restore a rule that watches nothing.
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId, long machineId) = await SeedAlertEnvironment(db, SubscriptionTier.Pro);
+
+        AlertRule frozenCustomRule = new()
+        {
+            TenantId = tenantId,
+            Name = "Team authored",
+            Metric = AlertMetric.DiskUsage,
+            Operator = AlertOperator.GreaterThan,
+            Threshold = 95,
+            Severity = AlertSeverity.Warning,
+            IsEnabled = false,
+            IsCustom = true,
+            CreatedByUserId = userId,
+            CreatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow,
+        };
+        frozenCustomRule.Id = await db.InsertWithInt32IdentityAsync(frozenCustomRule);
+
+        await db.InsertAsync(new AlertRuleMachine
+        {
+            AlertRuleId = frozenCustomRule.Id,
+            MachineId = machineId,
+            CreatedAt = DateTimeOffset.UtcNow,
+        });
+
+        HttpClient client = BuildClient(factory, tenantId, userId);
+
+        HttpResponseMessage response = await client.DeleteAsync($"/api/v1/alert-rules/{frozenCustomRule.Id}");
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.Forbidden);
+
+        AlertRule? survivor = await db.AlertRules.FirstOrDefaultAsync(r => r.Id == frozenCustomRule.Id);
+        await Assert.That(survivor).IsNotNull();
+
+        int assignments = await db.AlertRuleMachines.CountAsync(m => m.AlertRuleId == frozenCustomRule.Id);
+        await Assert.That(assignments).IsEqualTo(1);
+    }
+
+    [Test]
     public async Task DeleteAlertRule_AlsoClearsAlertConditionStates()
     {
         // Intent: deleting a rule must remove every per-machine condition-tracking row for that
         // rule. Replaces the previous Redis-key cleanup contract; same invariant.
         using FunctionalTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
-        (int tenantId, int userId, long machineId) = await SeedAlertEnvironment(db, SubscriptionTier.Pro);
+        (int tenantId, int userId, long machineId) = await SeedAlertEnvironment(db, SubscriptionTier.Team);
 
         long secondMachineId = await db.InsertWithInt64IdentityAsync(new Machine
         {
@@ -817,8 +863,8 @@ public sealed class AlertRuleEndpointTests
     {
         using FunctionalTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
-        (int tenantId1, int userId1, long machineId1) = await SeedAlertEnvironment(db, SubscriptionTier.Pro);
-        (int tenantId2, int userId2, long machineId2) = await SeedAlertEnvironment(db, SubscriptionTier.Pro);
+        (int tenantId1, int userId1, long machineId1) = await SeedAlertEnvironment(db, SubscriptionTier.Team);
+        (int tenantId2, int userId2, long machineId2) = await SeedAlertEnvironment(db, SubscriptionTier.Team);
 
         AlertRule rule = new()
         {
@@ -937,7 +983,7 @@ public sealed class AlertRuleEndpointTests
     {
         using FunctionalTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
-        (int tenantId, int userId, long machineId) = await SeedAlertEnvironment(db, SubscriptionTier.Pro);
+        (int tenantId, int userId, long machineId) = await SeedAlertEnvironment(db, SubscriptionTier.Team);
 
         AlertRule rule = new()
         {
@@ -1017,7 +1063,7 @@ public sealed class AlertRuleEndpointTests
     {
         using FunctionalTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
-        (int tenantId, int userId, long machineId) = await SeedAlertEnvironment(db, SubscriptionTier.Pro);
+        (int tenantId, int userId, long machineId) = await SeedAlertEnvironment(db, SubscriptionTier.Team);
 
         AlertRule rule = new()
         {
