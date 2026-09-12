@@ -240,6 +240,67 @@ describe('ApiClient', () => {
             expect(calledUrl).toBe('http://localhost:12233/api/v1/machines');
         });
 
+        it('should request machine ids with no query string when unfiltered', async () => {
+            fetchFn.mockResolvedValue({
+                ok: true,
+                status: 200,
+                json: () =>
+                    Promise.resolve({
+                        success: true,
+                        data: { ids: [1, 2], totalCount: 2, truncated: false },
+                        message: null,
+                        errors: null
+                    })
+            });
+
+            const result = await client.getMachineIds();
+
+            expect(fetchFn.mock.calls[0][0]).toBe('http://localhost:12233/api/v1/machines/ids');
+            expect(result).toEqual({ ids: [1, 2], totalCount: 2, truncated: false });
+        });
+
+        it('should pass the picker filters through to the machine ids endpoint', async () => {
+            fetchFn.mockResolvedValue({
+                ok: true,
+                status: 200,
+                json: () =>
+                    Promise.resolve({
+                        success: true,
+                        data: { ids: [], totalCount: 0, truncated: false },
+                        message: null,
+                        errors: null
+                    })
+            });
+
+            await client.getMachineIds({ search: 'web', healthStatus: 'Warning', os: 'Ubuntu' });
+
+            const calledUrl = fetchFn.mock.calls[0][0] as string;
+            expect(calledUrl).toContain('search=web');
+            expect(calledUrl).toContain('healthStatus=Warning');
+            expect(calledUrl).toContain('os=Ubuntu');
+        });
+
+        it('should surface truncation rather than hiding it behind the id list', async () => {
+            fetchFn.mockResolvedValue({
+                ok: true,
+                status: 200,
+                json: () =>
+                    Promise.resolve({
+                        success: true,
+                        data: { ids: [1, 2, 3], totalCount: 900, truncated: true },
+                        message: null,
+                        errors: null
+                    })
+            });
+
+            const result = await client.getMachineIds();
+
+            // A caller reading only `ids` would believe it had the whole match. The flag is the
+            // difference between an incomplete selection and a silently wrong one.
+            expect(result.truncated).toBe(true);
+            expect(result.totalCount).toBe(900);
+        });
+
         it('should send DELETE requests for deleteMachine', async () => {
             fetchFn.mockResolvedValue({
                 ok: true,

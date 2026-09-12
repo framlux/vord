@@ -11,6 +11,7 @@ import type {
 	PaginatedFleetOverviewDto,
 	MachineDetailDto,
 	MachineDto,
+	MachineIdSelectionDto,
 	MachineStatusDto,
 	UserAccountDto,
 	TenantDto,
@@ -368,6 +369,22 @@ export class ApiClient {
 		const qs = buildQueryString(params ?? {});
 		const resp = await this.get<ApiResponse<PaginatedResponse<MachineDto>>>(
 			`/api/v1/machines${qs ? `?${qs}` : ''}`
+		);
+		return this.unwrap(resp);
+	}
+
+	// Resolves a filter to the ids it matches, for building a selection without paging the full
+	// machine list and discarding every field but the id. Check `truncated` before presenting the
+	// result as the complete set.
+	async getMachineIds(params?: {
+		search?: string;
+		healthStatus?: string;
+		os?: string;
+		type?: string;
+	}): Promise<MachineIdSelectionDto> {
+		const qs = buildQueryString(params ?? {});
+		const resp = await this.get<ApiResponse<MachineIdSelectionDto>>(
+			`/api/v1/machines/ids${qs ? `?${qs}` : ''}`
 		);
 		return this.unwrap(resp);
 	}

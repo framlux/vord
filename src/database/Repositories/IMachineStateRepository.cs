@@ -218,6 +218,18 @@ public interface IMachineStateRepository
     Task<(List<FleetMachineRow> Rows, int TotalCount)> SearchFleetMachinesAsync(int tenantId, FleetSearchParameters parameters, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Returns the ids of every machine matching the search filters, up to <paramref name="maxIds"/>,
+    /// along with the unbounded match count so a caller can tell a complete answer from a capped one.
+    /// Sorting and paging in <paramref name="parameters"/> are ignored: this answers "which machines
+    /// does this filter match", not "which page of them".
+    /// </summary>
+    /// <param name="tenantId">The tenant ID.</param>
+    /// <param name="parameters">Search parameters supplying the filters.</param>
+    /// <param name="maxIds">The most ids to return.</param>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    Task<(List<long> Ids, int TotalCount)> SearchFleetMachineIdsAsync(int tenantId, FleetSearchParameters parameters, int maxIds, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Returns the stored projection cursor position for the given shard, or null when no cursor
     /// row exists yet for that shard.
     /// </summary>

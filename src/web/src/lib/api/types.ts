@@ -87,6 +87,14 @@ export interface TenantDto {
 	isActive: boolean;
 }
 
+// The machines a filter matches, as ids, for building a selection without transferring the
+// machines themselves. `truncated` means `ids` is a prefix of the match rather than all of it.
+export interface MachineIdSelectionDto {
+	ids: number[];
+	totalCount: number;
+	truncated: boolean;
+}
+
 // Machine DTOs
 export interface MachineDto {
 	id: number;

@@ -413,11 +413,15 @@ public partial class DatabaseRepository : IMachineStateRepository
         return (healthCounts, totalSecurityUpdates);
     }
 
-    /// <inheritdoc/>
-    public async Task<(List<FleetMachineRow> Rows, int TotalCount)> SearchFleetMachinesAsync(int tenantId, FleetSearchParameters parameters, CancellationToken cancellationToken)
+    /// <summary>
+    /// Applies every fleet search filter to a base query. Shared by the paginated row search and
+    /// the ids-only search, so the two can never disagree about what a filter set matches.
+    /// </summary>
+    /// <param name="query">The tenant-scoped base query to filter.</param>
+    /// <param name="parameters">The search parameters supplying the filters.</param>
+    /// <returns>The query with every requested filter applied.</returns>
+    private static IQueryable<FleetMachineRow> ApplyFleetSearchFilters(IQueryable<FleetMachineRow> query, FleetSearchParameters parameters)
     {
-        IQueryable<FleetMachineRow> query = BuildFleetBaseQuery(tenantId);
-
         // Text search
         if (string.IsNullOrWhiteSpace(parameters.Search) == false)
         {
@@ -530,6 +534,35 @@ public partial class DatabaseRepository : IMachineStateRepository
             DateTimeOffset before = parameters.LastSeenBefore.Value;
             query = query.Where(r => (r.LastSeenAt != null) && (r.LastSeenAt <= before));
         }
+
+        return query;
+    }
+
+    /// <inheritdoc/>
+    public async Task<(List<long> Ids, int TotalCount)> SearchFleetMachineIdsAsync(int tenantId, FleetSearchParameters parameters, int maxIds, CancellationToken cancellationToken)
+    {
+        IQueryable<FleetMachineRow> query = ApplyFleetSearchFilters(BuildFleetBaseQuery(tenantId), parameters);
+
+        // Counted before the cap is applied. Without this a caller cannot tell "the filter matches
+        // exactly maxIds machines" from "it matches more than we are willing to hand back", and a
+        // selection built on the second is quietly incomplete.
+        int totalCount = await query.CountAsync(cancellationToken);
+
+        // Ordered by id rather than by the caller's sort: the result is a set, and a stable order
+        // makes the cap deterministic instead of dependent on whichever sort the picker last used.
+        List<long> ids = await query
+            .OrderBy(r => r.Id)
+            .Select(r => r.Id)
+            .Take(maxIds)
+            .ToListAsync(cancellationToken);
+
+        return (ids, totalCount);
+    }
+
+    /// <inheritdoc/>
+    public async Task<(List<FleetMachineRow> Rows, int TotalCount)> SearchFleetMachinesAsync(int tenantId, FleetSearchParameters parameters, CancellationToken cancellationToken)
+    {
+        IQueryable<FleetMachineRow> query = ApplyFleetSearchFilters(BuildFleetBaseQuery(tenantId), parameters);
 
         int totalCount = await query.CountAsync(cancellationToken);
 

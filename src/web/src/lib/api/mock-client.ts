@@ -9,6 +9,7 @@ import type {
 	PaginatedFleetOverviewDto,
 	PaginatedResponse,
 	MachineDto,
+	MachineIdSelectionDto,
 	MachineDetailDto,
 	MachineAuthorizedKeyDto,
 	AlertRuleDto,
@@ -61,6 +62,14 @@ export class MockApiClient {
 
 	async getMachines(): Promise<PaginatedResponse<MachineDto>> {
 		return mockMachineList;
+	}
+
+	async getMachineIds(): Promise<MachineIdSelectionDto> {
+		// The fixture fleet is small enough to fit any cap, so mock mode never exercises the
+		// truncated branch. A picker must not rely on mock mode to prove it handles one.
+		const ids = mockMachineList.items.map((m) => m.id);
+
+		return { ids, totalCount: ids.length, truncated: false };
 	}
 
 	async getMachine(id: number): Promise<MachineDto> {

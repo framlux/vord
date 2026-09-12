@@ -55,7 +55,13 @@ public sealed class MachineSearchService
         CancellationToken ct)
     {
         int page = criteria.Page < 1 ? 1 : criteria.Page;
-        int pageSize = (criteria.PageSize < 1) || (criteria.PageSize > 100) ? 25 : criteria.PageSize;
+        // Unreachable from HTTP, where the endpoint refuses an out-of-range page size outright.
+        // This is the in-process backstop for a caller that bypasses it, and it defers to the same
+        // shared bound rather than restating one: a second copy of this rule is how the endpoint
+        // and the service came to disagree in the first place.
+        int pageSize = PaginationLimits.IsValidPageSize(criteria.PageSize)
+            ? criteria.PageSize
+            : PaginationLimits.DefaultPageSize;
 
         if (tenantId is null)
         {
@@ -72,6 +78,42 @@ public sealed class MachineSearchService
         IMachineStateRepository machineStateRepo = scope.ServiceProvider.GetRequiredService<IMachineStateRepository>();
 
         return await SearchSqlPaginatedAsync(machineStateRepo, criteria, tenantId.Value, page, pageSize, ct);
+    }
+
+    /// <summary>
+    /// Resolves the machines a filter matches to their ids, for building a selection without
+    /// transferring the machines themselves.
+    /// </summary>
+    /// <param name="criteria">The search criteria supplying the filters. Paging and sort are ignored.</param>
+    /// <param name="tenantId">The tenant ID of the requesting user.</param>
+    /// <param name="ct">Cancellation token.</param>
+    /// <returns>The matching ids, the unbounded match count, and whether the cap withheld any.</returns>
+    public async Task<MachineIdSelectionDto> SearchIdsAsync(
+        MachineSearchCriteria criteria,
+        int? tenantId,
+        CancellationToken ct)
+    {
+        if (tenantId is null)
+        {
+            return new MachineIdSelectionDto();
+        }
+
+        using IServiceScope scope = _scopeFactory.CreateScope();
+        IMachineStateRepository machineStateRepo = scope.ServiceProvider.GetRequiredService<IMachineStateRepository>();
+
+        // Page and page size are irrelevant here, but BuildSearchParameters needs them to compute
+        // Skip and Take, which the ids query then ignores. Pass values that cannot underflow.
+        FleetSearchParameters searchParams = BuildSearchParameters(criteria, 1, 1);
+
+        (List<long> ids, int totalCount) = await machineStateRepo.SearchFleetMachineIdsAsync(
+            tenantId.Value, searchParams, MachineSelectionLimits.MaxSelectableIds, ct);
+
+        return new MachineIdSelectionDto
+        {
+            Ids = ids,
+            TotalCount = totalCount,
+            Truncated = totalCount > ids.Count,
+        };
     }
 
     /// <summary>
