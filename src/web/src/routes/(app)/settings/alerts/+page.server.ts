@@ -9,9 +9,9 @@ import { canAdminTenant, canAdminMachines } from '$lib/utils/roles';
 import { redirect, error, fail } from '@sveltejs/kit';
 import type { PageServerLoad, Actions } from './$types';
 
-// The machine list endpoint clamps a page to 100. Asking for more is not an error there, it is a
-// silent truncation, so the page asks for exactly what it can be given and says so when the fleet
-// does not fit.
+// The machine list endpoint serves at most 100 rows per page and now refuses a larger request
+// outright, so this asks for exactly what it can be given and says so when the fleet does not fit.
+// Reaching the rest of a large fleet is the job of the paginated picker, not a bigger page.
 const MACHINE_PAGE_SIZE = 100;
 
 function parseMachineIds(formData: FormData, field: string): number[] {

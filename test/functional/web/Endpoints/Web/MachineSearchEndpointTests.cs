@@ -230,7 +230,7 @@ public sealed class MachineSearchEndpointTests
     // ========== Pagination ==========
 
     [Test]
-    public async Task Search_PaginationClampedCorrectly()
+    public async Task Search_PageBelowOne_IsFlooredToTheFirstPage()
     {
         using FunctionalTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
@@ -239,7 +239,10 @@ public sealed class MachineSearchEndpointTests
 
         HttpClient client = BuildAuthenticatedClient(factory, tenantId);
 
-        HttpResponseMessage response = await client.GetAsync("/api/v1/machines/search?page=-1&pageSize=200");
+        // The page number is floored rather than refused: page 1 is where a caller asking for
+        // page -1 would have started anyway, so nothing is hidden from them. An out-of-range
+        // pageSize is refused instead, and that contract lives in MachinePageSizeContractTests.
+        HttpResponseMessage response = await client.GetAsync("/api/v1/machines/search?page=-1&pageSize=50");
 
         await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
 
@@ -247,8 +250,7 @@ public sealed class MachineSearchEndpointTests
         using JsonDocument doc = JsonDocument.Parse(body);
         JsonElement data = doc.RootElement.GetProperty("data");
         await Assert.That(data.GetProperty("page").GetInt32()).IsEqualTo(1);
-        // pageSize=200 is clamped to 100 by Math.Clamp in the endpoint
-        await Assert.That(data.GetProperty("pageSize").GetInt32()).IsEqualTo(100);
+        await Assert.That(data.GetProperty("pageSize").GetInt32()).IsEqualTo(50);
     }
 
     // ========== Response field structure ==========
