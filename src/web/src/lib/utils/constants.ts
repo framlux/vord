@@ -17,3 +17,10 @@ export const DISK_CRITICAL_THRESHOLD = 95;
 // Temperature thresholds in degrees Celsius.
 export const TEMP_WARNING_CELSIUS = 55;
 export const TEMP_CRITICAL_CELSIUS = 80;
+
+// Headline per-machine monthly price for the Pro tier, in whole US dollars, used by
+// upsell copy in the signed-in app. This must match the live Stripe price the checkout
+// actually charges (lookup key vord_pro_monthly_licensed) and the figure every marketing
+// surface quotes. A stale value here misquotes the price to a customer who is one click
+// from paying it.
+export const PRO_PRICE_PER_MACHINE_USD = 5;

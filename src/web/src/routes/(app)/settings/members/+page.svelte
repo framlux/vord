@@ -21,6 +21,7 @@
   import PageHeader from '$lib/components/PageHeader.svelte';
   import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
   import { formatDate } from '$lib/utils/format';
+  import { PRO_PRICE_PER_MACHINE_USD } from '$lib/utils/constants';
 
   let { data } = $props();
 
@@ -157,7 +158,8 @@
         class="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 dark:border-amber-700 dark:bg-amber-900/20"
       >
         <p class="text-sm text-amber-800 dark:text-amber-300">
-          Upgrade to Pro to invite team members — <strong>$3/host/month</strong>
+          Upgrade to Pro to invite team members —
+          <strong>${PRO_PRICE_PER_MACHINE_USD}/host/month</strong>
         </p>
         <a
           href="/settings/billing"
