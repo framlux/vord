@@ -128,6 +128,64 @@ describe('MachineHero', () => {
 		expect(screen.getByText('prod-web-01')).toBeDefined();
 	});
 
+	it('should explain a warning caused by stale telemetry', () => {
+		render(MachineHero, {
+			props: {
+				machine: buildMachine(),
+				isOnline: true,
+				lastPing: new Date(Date.now() - 30 * 1000).toISOString(),
+				healthStatus: MachineHealthStatus.Warning,
+				telemetryLastUpdated: new Date(Date.now() - 6 * 60 * 1000).toISOString()
+			}
+		});
+
+		expect(screen.getByText(/no telemetry/i)).toBeDefined();
+	});
+
+	it('should explain stale telemetry on a critical machine too', () => {
+		// Worst-wins in the sweep means a machine whose last metrics were critical keeps Critical
+		// while its telemetry goes silent. The explanation is just as wanted there.
+		render(MachineHero, {
+			props: {
+				machine: buildMachine(),
+				isOnline: true,
+				lastPing: new Date(Date.now() - 30 * 1000).toISOString(),
+				healthStatus: MachineHealthStatus.Critical,
+				telemetryLastUpdated: new Date(Date.now() - 6 * 60 * 1000).toISOString()
+			}
+		});
+
+		expect(screen.getByText(/no telemetry/i)).toBeDefined();
+	});
+
+	it('should say nothing on a machine that is reporting', () => {
+		render(MachineHero, {
+			props: {
+				machine: buildMachine(),
+				isOnline: true,
+				lastPing: new Date(Date.now() - 30 * 1000).toISOString(),
+				healthStatus: MachineHealthStatus.Warning,
+				telemetryLastUpdated: new Date(Date.now() - 30 * 1000).toISOString()
+			}
+		});
+
+		expect(screen.queryByText(/no telemetry/i)).toBeNull();
+	});
+
+	it('should say nothing on an offline machine, whose telemetry is stale by definition', () => {
+		render(MachineHero, {
+			props: {
+				machine: buildMachine(),
+				isOnline: false,
+				lastPing: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
+				healthStatus: MachineHealthStatus.Offline,
+				telemetryLastUpdated: new Date(Date.now() - 6 * 60 * 1000).toISOString()
+			}
+		});
+
+		expect(screen.queryByText(/no telemetry/i)).toBeNull();
+	});
+
 	it('should display last seen time when lastPing is provided', () => {
 		render(MachineHero, {
 			props: {

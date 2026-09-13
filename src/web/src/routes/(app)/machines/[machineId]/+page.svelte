@@ -522,7 +522,13 @@
 	{/if}
 
 	<!-- Header -->
-	<MachineHero {machine} {isOnline} {lastPing} {healthStatus} />
+	<MachineHero
+		{machine}
+		{isOnline}
+		{lastPing}
+		{healthStatus}
+		telemetryLastUpdated={machineDetail?.telemetryLastUpdated ?? null}
+	/>
 
 	<!-- Vitals -->
 	<div class="flex items-center justify-between">

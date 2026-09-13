@@ -15,13 +15,25 @@
 		machine,
 		isOnline,
 		lastPing,
-		healthStatus
+		healthStatus,
+		telemetryLastUpdated = null
 	}: {
 		machine: MachineDto;
 		isOnline: boolean;
 		lastPing: string | null;
 		healthStatus: MachineHealthStatus;
+		telemetryLastUpdated?: string | null;
 	} = $props();
+
+	// lastPing is the union of the heartbeat and telemetry channels, so staleness has to be judged
+	// on the telemetry timestamp alone: a machine whose agent answers while its collector is wedged
+	// has a fresh union and silent telemetry, which is exactly the state this line explains.
+	const STALE_AFTER_MS = 5 * 60 * 1000;
+	const telemetryIsStale = $derived(
+		telemetryLastUpdated
+			? Date.now() - new Date(telemetryLastUpdated).getTime() > STALE_AFTER_MS
+			: true
+	);
 </script>
 
 <div>
@@ -77,6 +89,11 @@
 				{#if lastPing}
 					<span class="text-xs text-surface-400 dark:text-surface-500">
 						Last seen {formatRelativeTime(lastPing)}
+					</span>
+				{/if}
+				{#if isOnline && telemetryIsStale}
+					<span class="text-xs text-amber-600 dark:text-amber-400">
+						Agent responding, no telemetry
 					</span>
 				{/if}
 			</div>
