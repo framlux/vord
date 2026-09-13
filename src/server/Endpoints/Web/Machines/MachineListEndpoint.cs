@@ -39,19 +39,13 @@ public sealed class MachineListEndpoint : EndpointWithoutRequest<ApiResponse<Pag
     public override async Task HandleAsync(CancellationToken ct)
     {
         int page = Math.Max(1, Query<int?>("page", isRequired: false) ?? 1);
-        int? requestedPageSize = Query<int?>("pageSize", isRequired: false);
-
-        if ((requestedPageSize is not null) && (PaginationLimits.IsValidPageSize(requestedPageSize.Value) == false))
+        if (PageSizeQuery.TryResolve(Query<int?>("pageSize", isRequired: false), out int pageSize) == false)
         {
-            await HttpContext.SendApiErrorAsync(
-                StatusCodes.Status400BadRequest,
-                $"pageSize must be between 1 and {PaginationLimits.MaxPageSize}.",
-                ct);
+            await HttpContext.SendApiErrorAsync(StatusCodes.Status400BadRequest, PageSizeQuery.OutOfRangeMessage, ct);
 
             return;
         }
 
-        int pageSize = requestedPageSize ?? PaginationLimits.DefaultPageSize;
         string? search = Query<string?>("search", isRequired: false);
         string? osFilter = Query<string?>("os", isRequired: false);
         string? typeFilter = Query<string?>("type", isRequired: false);

@@ -40,7 +40,13 @@ public sealed class CommandListEndpoint : EndpointWithoutRequest<ApiResponse<Lis
     {
         long machineId = Route<long>("id");
         int page = Math.Max(1, Query<int?>("page", isRequired: false) ?? 1);
-        int pageSize = Math.Clamp(Query<int?>("pageSize", isRequired: false) ?? 25, 1, 100);
+
+        if (PageSizeQuery.TryResolve(Query<int?>("pageSize", isRequired: false), out int pageSize) == false)
+        {
+            await HttpContext.SendApiErrorAsync(StatusCodes.Status400BadRequest, PageSizeQuery.OutOfRangeMessage, ct);
+
+            return;
+        }
 
         int tenantId = _tenantContext.RequireTenantId();
 

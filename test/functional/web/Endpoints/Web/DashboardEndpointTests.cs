@@ -147,7 +147,7 @@ public sealed class DashboardEndpointTests
     }
 
     [Test]
-    public async Task DashboardFleet_Pagination_ClampedToValidRange()
+    public async Task DashboardFleet_PageBelowOne_IsFlooredAndAnOverLimitPageSizeIsRefused()
     {
         using FunctionalTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
@@ -155,8 +155,14 @@ public sealed class DashboardEndpointTests
 
         HttpClient client = BuildAuthenticatedClient(factory, tenantId);
 
-        // pageSize=200 should be clamped to 100, page=-1 should default to 1
-        HttpResponseMessage response = await client.GetAsync("/api/v1/dashboard/fleet?pageSize=200&page=-1");
+        // The two parameters are treated differently on purpose. Flooring a page to 1 cannot hide
+        // rows, because page 1 is where the caller would have started. Reducing a page size can,
+        // and a short page is indistinguishable from the end of the collection, so it is refused.
+        HttpResponseMessage overLimit = await client.GetAsync("/api/v1/dashboard/fleet?pageSize=200");
+
+        await Assert.That(overLimit.StatusCode).IsEqualTo(HttpStatusCode.BadRequest);
+
+        HttpResponseMessage response = await client.GetAsync("/api/v1/dashboard/fleet?page=-1");
 
         await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
 
@@ -164,10 +170,6 @@ public sealed class DashboardEndpointTests
         using JsonDocument doc = JsonDocument.Parse(body);
         JsonElement data = doc.RootElement.GetProperty("data");
 
-        // Verify the endpoint clamped pageSize from 200 down to 100
-        await Assert.That(data.GetProperty("pageSize").GetInt32()).IsEqualTo(100);
-
-        // Verify the endpoint clamped page from -1 up to 1
         await Assert.That(data.GetProperty("page").GetInt32()).IsEqualTo(1);
     }
 
@@ -193,7 +195,7 @@ public sealed class DashboardEndpointTests
     }
 
     [Test]
-    public async Task DashboardFleet_Pagination_PageSizeZeroClampedToOne()
+    public async Task DashboardFleet_PageSizeZero_IsRefused()
     {
         using FunctionalTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
@@ -201,20 +203,13 @@ public sealed class DashboardEndpointTests
 
         HttpClient client = BuildAuthenticatedClient(factory, tenantId);
 
-        // pageSize=0 should be clamped to 1 (Math.Clamp with min=1)
         HttpResponseMessage response = await client.GetAsync("/api/v1/dashboard/fleet?pageSize=0");
 
-        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
-
-        string body = await response.Content.ReadAsStringAsync();
-        using JsonDocument doc = JsonDocument.Parse(body);
-        JsonElement data = doc.RootElement.GetProperty("data");
-
-        await Assert.That(data.GetProperty("pageSize").GetInt32()).IsEqualTo(1);
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.BadRequest);
     }
 
     [Test]
-    public async Task DashboardFleet_Pagination_NegativePageSizeClampedToOne()
+    public async Task DashboardFleet_NegativePageSize_IsRefused()
     {
         using FunctionalTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
@@ -222,16 +217,9 @@ public sealed class DashboardEndpointTests
 
         HttpClient client = BuildAuthenticatedClient(factory, tenantId);
 
-        // pageSize=-1 should be clamped to 1 (Math.Clamp with min=1)
         HttpResponseMessage response = await client.GetAsync("/api/v1/dashboard/fleet?pageSize=-1");
 
-        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
-
-        string body = await response.Content.ReadAsStringAsync();
-        using JsonDocument doc = JsonDocument.Parse(body);
-        JsonElement data = doc.RootElement.GetProperty("data");
-
-        await Assert.That(data.GetProperty("pageSize").GetInt32()).IsEqualTo(1);
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.BadRequest);
     }
 
     [Test]

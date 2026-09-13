@@ -38,7 +38,14 @@ public sealed class DashboardFleetEndpoint : EndpointWithoutRequest<ApiResponse<
     public override async Task HandleAsync(CancellationToken ct)
     {
         int page = Math.Max(1, Query<int?>("page", isRequired: false) ?? 1);
-        int pageSize = Math.Clamp(Query<int?>("pageSize", isRequired: false) ?? 25, 1, 100);
+
+        if (PageSizeQuery.TryResolve(Query<int?>("pageSize", isRequired: false), out int pageSize) == false)
+        {
+            await HttpContext.SendApiErrorAsync(StatusCodes.Status400BadRequest, PageSizeQuery.OutOfRangeMessage, ct);
+
+            return;
+        }
+
         string? search = Query<string?>("search", isRequired: false);
         string? statusFilter = Query<string?>("status", isRequired: false);
         string sortBy = Query<string?>("sortBy", isRequired: false) ?? "name";

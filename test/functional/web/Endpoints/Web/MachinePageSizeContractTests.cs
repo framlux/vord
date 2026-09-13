@@ -73,6 +73,17 @@ public sealed class MachinePageSizeContractTests
             .Build();
     }
 
+    private static HttpClient BuildAdminClient(FunctionalTestFactory factory, int tenantId)
+    {
+        // Authorisation runs before the handler, so a Viewer would be refused by the
+        // registration-tokens endpoint before its page size was ever read.
+        return new AuthenticatedClientBuilder(factory)
+            .WithUserId(1)
+            .WithRole(tenantId, (int)UserAccountRoles.TenantAdmin)
+            .WithActiveTenant(tenantId)
+            .Build();
+    }
+
     // ========== Over the ceiling is refused, not quietly reduced ==========
 
     [Test]
@@ -247,5 +258,99 @@ public sealed class MachinePageSizeContractTests
         using JsonDocument doc = JsonDocument.Parse(body);
         JsonElement data = doc.RootElement.GetProperty("data");
         await Assert.That(data.GetProperty("page").GetInt32()).IsEqualTo(1);
+    }
+
+    // ========== The rule is the same on every paginated collection ==========
+
+    [Test]
+    public async Task DashboardFleet_PageSizeAboveTheCeiling_Returns400()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        int tenantId = await SeedTenantWithSubscription(db);
+
+        HttpClient client = BuildAuthenticatedClient(factory, tenantId);
+
+        HttpResponseMessage response = await client.GetAsync(
+            $"/api/v1/dashboard/fleet?pageSize={PaginationLimits.MaxPageSize + 1}");
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.BadRequest);
+    }
+
+    [Test]
+    public async Task DashboardFleet_PageSizeAtTheCeiling_Returns200()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        int tenantId = await SeedTenantWithSubscription(db);
+
+        HttpClient client = BuildAuthenticatedClient(factory, tenantId);
+
+        HttpResponseMessage response = await client.GetAsync(
+            $"/api/v1/dashboard/fleet?pageSize={PaginationLimits.MaxPageSize}");
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
+    }
+
+    [Test]
+    public async Task RegistrationTokens_PageSizeAboveTheCeiling_Returns400()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        int tenantId = await SeedTenantWithSubscription(db);
+
+        HttpClient client = BuildAdminClient(factory, tenantId);
+
+        HttpResponseMessage response = await client.GetAsync(
+            $"/api/v1/machines/registration-tokens?pageSize={PaginationLimits.MaxPageSize + 1}");
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.BadRequest);
+    }
+
+    [Test]
+    public async Task CommandHistory_PageSizeAboveTheCeiling_Returns400()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        int tenantId = await SeedTenantWithSubscription(db);
+        await SeedMachine(db, tenantId, "command-host");
+
+        HttpClient client = BuildAuthenticatedClient(factory, tenantId);
+
+        HttpResponseMessage response = await client.GetAsync(
+            $"/api/v1/machines/1/commands?pageSize={PaginationLimits.MaxPageSize + 1}");
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.BadRequest);
+    }
+
+    [Test]
+    public async Task EveryPaginatedCollection_RefusesTheSameValue()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        int tenantId = await SeedTenantWithSubscription(db);
+        await SeedMachine(db, tenantId, "uniform-host");
+
+        HttpClient client = BuildAdminClient(factory, tenantId);
+
+        // The point of the shared rule is that a caller learns it once. A single endpoint drifting
+        // back to a silent clamp would be invisible in its own test file but is caught here.
+        string[] paths =
+        [
+            "/api/v1/machines",
+            "/api/v1/machines/search",
+            "/api/v1/dashboard/fleet",
+            "/api/v1/machines/registration-tokens",
+            "/api/v1/machines/1/commands",
+        ];
+
+        foreach (string path in paths)
+        {
+            HttpResponseMessage response = await client.GetAsync($"{path}?pageSize=1000");
+
+            await Assert.That(response.StatusCode)
+                .IsEqualTo(HttpStatusCode.BadRequest)
+                .Because($"{path} must refuse an over-limit page size rather than serve a short one");
+        }
     }
 }

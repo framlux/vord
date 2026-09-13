@@ -38,14 +38,9 @@ public sealed class MachineSearchEndpoint : EndpointWithoutRequest<ApiResponse<P
     public override async Task HandleAsync(CancellationToken ct)
     {
         int? tenantId = _tenantContext.TenantId;
-        int? requestedPageSize = Query<int?>("pageSize", isRequired: false);
-
-        if ((requestedPageSize is not null) && (PaginationLimits.IsValidPageSize(requestedPageSize.Value) == false))
+        if (PageSizeQuery.TryResolve(Query<int?>("pageSize", isRequired: false), out int pageSize) == false)
         {
-            await HttpContext.SendApiErrorAsync(
-                StatusCodes.Status400BadRequest,
-                $"pageSize must be between 1 and {PaginationLimits.MaxPageSize}.",
-                ct);
+            await HttpContext.SendApiErrorAsync(StatusCodes.Status400BadRequest, PageSizeQuery.OutOfRangeMessage, ct);
 
             return;
         }
@@ -53,7 +48,7 @@ public sealed class MachineSearchEndpoint : EndpointWithoutRequest<ApiResponse<P
         MachineSearchCriteria criteria = new()
         {
             Page = Math.Max(1, Query<int?>("page", isRequired: false) ?? 1),
-            PageSize = requestedPageSize ?? PaginationLimits.DefaultPageSize,
+            PageSize = pageSize,
             Search = Query<string?>("search", isRequired: false),
             HealthStatus = Query<string?>("healthStatus", isRequired: false),
             Os = Query<string?>("os", isRequired: false),
