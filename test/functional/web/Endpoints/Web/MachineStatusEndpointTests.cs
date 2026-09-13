@@ -7,10 +7,8 @@ using System.Text.Json;
 using Framlux.FleetManagement.Database;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
-using Framlux.FleetManagement.Services.Core.Machines;
 using Framlux.FleetManagement.Test.Infrastructure;
 using LinqToDB;
-using Microsoft.Extensions.DependencyInjection;
 
 namespace Framlux.FleetManagement.FunctionalTest.Endpoints.Web;
 
@@ -128,10 +126,11 @@ public sealed class MachineStatusEndpointTests
         await Assert.That(data.TryGetProperty("healthStatus", out JsonElement healthProp)).IsTrue();
         int healthValue = healthProp.GetInt32();
 
-        // The stored column says Critical (2) and that is what the endpoint reports, even though
-        // no recent ping exists — liveness travels separately on isOnline.
+        // The stored column says Critical (2) and that is what the endpoint reports. Critical is
+        // a verdict about a machine we can still reach, so it reads online: only Offline means
+        // the server has stopped hearing from it.
         await Assert.That(healthValue).IsEqualTo(2);
-        await Assert.That(data.GetProperty("isOnline").GetBoolean()).IsFalse();
+        await Assert.That(data.GetProperty("isOnline").GetBoolean()).IsTrue();
     }
 
     [Test]
@@ -155,10 +154,6 @@ public sealed class MachineStatusEndpointTests
             LastSeenAt = DateTimeOffset.UtcNow,
         };
         await db.InsertAsync(summary);
-
-        // Record a ping so the machine shows as online
-        IMachinePingService pingService = factory.Services.GetRequiredService<IMachinePingService>();
-        await pingService.RecordPingAsync(machineId);
 
         HttpClient client = new AuthenticatedClientBuilder(factory)
             .WithUserId(userId)

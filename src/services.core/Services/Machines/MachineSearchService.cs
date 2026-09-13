@@ -8,7 +8,6 @@ using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Services.Core.Models;
 using Framlux.FleetManagement.Services.Core.Models.Machines;
-using Framlux.FleetManagement.Services.Core.ServerConfiguration;
 
 namespace Framlux.FleetManagement.Services.Core.Machines;
 
@@ -22,24 +21,15 @@ namespace Framlux.FleetManagement.Services.Core.Machines;
 public sealed class MachineSearchService
 {
     private readonly IServiceScopeFactory _scopeFactory;
-    private readonly IMachinePingService _pingService;
-    private readonly ServerConfigurationService _configService;
 
     /// <summary>
     /// Creates a new instance of the <see cref="MachineSearchService"/> class.
     /// </summary>
-    public MachineSearchService(
-        IServiceScopeFactory scopeFactory,
-        IMachinePingService pingService,
-        ServerConfigurationService configService)
+    public MachineSearchService(IServiceScopeFactory scopeFactory)
     {
         ArgumentNullException.ThrowIfNull(scopeFactory);
-        ArgumentNullException.ThrowIfNull(pingService);
-        ArgumentNullException.ThrowIfNull(configService);
 
         _scopeFactory = scopeFactory;
-        _pingService = pingService;
-        _configService = configService;
     }
 
     /// <summary>
@@ -116,10 +106,10 @@ public sealed class MachineSearchService
     }
 
     /// <summary>
-    /// Fast path: count, sort, and paginate at the SQL level, then resolve Redis and
-    /// JSONB data only for the paged subset.
+    /// Fast path: count, sort, and paginate at the SQL level, then build DTOs for the paged
+    /// subset only.
     /// </summary>
-    private async Task<PaginatedResponse<FleetMachineDto>> SearchSqlPaginatedAsync(
+    private static async Task<PaginatedResponse<FleetMachineDto>> SearchSqlPaginatedAsync(
         IMachineStateRepository machineStateRepo,
         MachineSearchCriteria criteria,
         int tenantId,
@@ -130,16 +120,10 @@ public sealed class MachineSearchService
         FleetSearchParameters searchParams = BuildSearchParameters(criteria, page, pageSize);
         (List<FleetMachineRow> pagedRows, int totalCount) = await machineStateRepo.SearchFleetMachinesAsync(tenantId, searchParams, ct);
 
-        // Resolve Redis only for the paged subset.
-        List<long> pagedIds = pagedRows.Select(r => r.Id).ToList();
-        TimeSpan onlineThreshold = await _configService.GetOnlineThresholdAsync(ct);
-        Dictionary<long, bool> onlineMap = await _pingService.AreOnlineAsync(pagedIds, onlineThreshold);
-        Dictionary<long, DateTimeOffset?> lastPingMap = await _pingService.GetLastPingsAsync(pagedIds);
-
         // Build DTOs for the paged subset only. Health status comes straight from the swept
         // column the filter, sort and count all ran against, so the rows a filter selected are
         // the rows the page displays with that status.
-        List<FleetMachineDto> pagedDtos = BuildDtos(pagedRows, onlineMap, lastPingMap);
+        List<FleetMachineDto> pagedDtos = BuildDtos(pagedRows);
 
         return new PaginatedResponse<FleetMachineDto>
         {
@@ -202,17 +186,14 @@ public sealed class MachineSearchService
         };
     }
 
-    private static List<FleetMachineDto> BuildDtos(
-        List<FleetMachineRow> rows,
-        Dictionary<long, bool> onlineMap,
-        Dictionary<long, DateTimeOffset?> lastPingMap)
+    private static List<FleetMachineDto> BuildDtos(List<FleetMachineRow> rows)
     {
         List<FleetMachineDto> dtos = new(rows.Count);
 
         foreach (FleetMachineRow row in rows)
         {
-            bool isOnline = onlineMap.GetValueOrDefault(row.Id, false);
-            DateTimeOffset? lastPing = row.LastSeenAt ?? lastPingMap.GetValueOrDefault(row.Id);
+            bool isOnline = MachineLiveness.IsOnline(row.HealthStatus);
+            DateTimeOffset? lastPing = MachineLiveness.LastSeen(row.LastSeenAt, row.LastHeartbeatAt);
             MachineHealthStatus health = (MachineHealthStatus)row.HealthStatus;
 
             dtos.Add(new FleetMachineDto

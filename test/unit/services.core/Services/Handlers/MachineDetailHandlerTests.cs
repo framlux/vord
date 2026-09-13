@@ -8,13 +8,11 @@ using Framlux.FleetManagement.Services.Core.Models.Machines;
 using Framlux.FleetManagement.Services.Core.Handlers;
 using Framlux.FleetManagement.Services.Core.Infrastructure;
 using Framlux.FleetManagement.Services.Core.Machines;
-using Framlux.FleetManagement.Services.Core.ServerConfiguration;
 using Framlux.FleetManagement.Test.Infrastructure;
 using LinqToDB.Async;
 using LinqToDB;
 using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
-using StackExchange.Redis;
 
 namespace Framlux.FleetManagement.Test.Services.Handlers;
 
@@ -44,10 +42,15 @@ public class MachineDetailHandlerTests
     {
         pingService ??= new InMemoryMachinePingService();
         stateService ??= Substitute.For<IMachineStateService>();
-        ServerConfigurationService configService = new(Substitute.For<IServerSettingsReader>(), Substitute.For<IConnectionMultiplexer>());
         DatabaseRepository repo = CreateRepo(dbFactory);
 
-        return new MachineDetailHandler(repo, repo, pingService, configService, stateService);
+        return new MachineDetailHandler(repo, repo, pingService, stateService);
+    }
+
+    private static async Task SeedSummary(TestDatabaseFactory dbFactory, long machineId, short healthStatus)
+    {
+        await dbFactory.Context.InsertAsync(TestDataBuilder.BuildMachineStateSummary(
+            machineId: machineId, healthStatus: healthStatus, lastSeenAt: DateTimeOffset.UtcNow));
     }
 
     // ========== GetDetailAsync tests ==========
@@ -117,10 +120,9 @@ public class MachineDetailHandlerTests
     {
         using TestDatabaseFactory dbFactory = new();
         long machineId = await SeedMachine(dbFactory);
-        InMemoryMachinePingService pingService = new();
-        await pingService.RecordPingAsync(machineId);
+        await SeedSummary(dbFactory, machineId, healthStatus: 0);
 
-        MachineDetailHandler handler = CreateHandler(dbFactory, pingService: pingService);
+        MachineDetailHandler handler = CreateHandler(dbFactory);
 
         ServiceResult<MachineDto> result = await handler.GetDetailAsync(machineId, 1, CancellationToken.None);
 
@@ -217,9 +219,8 @@ public class MachineDetailHandlerTests
     {
         using TestDatabaseFactory dbFactory = new();
         long machineId = await SeedMachine(dbFactory);
-        InMemoryMachinePingService pingService = new();
-        await pingService.RecordPingAsync(machineId);
-        MachineDetailHandler handler = CreateHandler(dbFactory, pingService: pingService);
+        await SeedSummary(dbFactory, machineId, healthStatus: 0);
+        MachineDetailHandler handler = CreateHandler(dbFactory);
 
         ServiceResult<MachineStatusDto> result = await handler.GetStatusAsync(machineId, 1, CancellationToken.None);
 
@@ -313,14 +314,12 @@ public class MachineDetailHandlerTests
     {
         using TestDatabaseFactory dbFactory = new();
         long machineId = await SeedMachine(dbFactory);
-        InMemoryMachinePingService pingService = new();
-        await pingService.RecordPingAsync(machineId);
 
         MachineStateSummary summary = TestDataBuilder.BuildMachineStateSummary(
             machineId: machineId, cpuPercent: 20, memoryPercent: 30);
         await dbFactory.Context.InsertAsync(summary);
 
-        MachineDetailHandler handler = CreateHandler(dbFactory, pingService: pingService);
+        MachineDetailHandler handler = CreateHandler(dbFactory);
 
         ServiceResult<MachineStatusDto> result = await handler.GetStatusAsync(machineId, 1, CancellationToken.None);
 
@@ -337,14 +336,12 @@ public class MachineDetailHandlerTests
         // user reached this machine from.
         using TestDatabaseFactory dbFactory = new();
         long machineId = await SeedMachine(dbFactory);
-        InMemoryMachinePingService pingService = new();
-        await pingService.RecordPingAsync(machineId);
 
         MachineStateSummary summary = TestDataBuilder.BuildMachineStateSummary(
             machineId: machineId, cpuPercent: 10, memoryPercent: 10, healthStatus: 2);
         await dbFactory.Context.InsertAsync(summary);
 
-        MachineDetailHandler handler = CreateHandler(dbFactory, pingService: pingService);
+        MachineDetailHandler handler = CreateHandler(dbFactory);
 
         ServiceResult<MachineStatusDto> result = await handler.GetStatusAsync(machineId, 1, CancellationToken.None);
 
@@ -361,14 +358,12 @@ public class MachineDetailHandlerTests
         // re-derived the rule for itself.
         using TestDatabaseFactory dbFactory = new();
         long machineId = await SeedMachine(dbFactory);
-        InMemoryMachinePingService pingService = new();
-        await pingService.RecordPingAsync(machineId);
 
         MachineStateSummary summary = TestDataBuilder.BuildMachineStateSummary(
             machineId: machineId, cpuPercent: 20, memoryPercent: 85, healthStatus: 0);
         await dbFactory.Context.InsertAsync(summary);
 
-        MachineDetailHandler handler = CreateHandler(dbFactory, pingService: pingService);
+        MachineDetailHandler handler = CreateHandler(dbFactory);
 
         ServiceResult<MachineStatusDto> result = await handler.GetStatusAsync(machineId, 1, CancellationToken.None);
 
@@ -378,28 +373,11 @@ public class MachineDetailHandlerTests
     }
 
     [Test]
-    public async Task GetStatusAsync_OnlineNoSummary_ReturnsHealthStatusOffline()
+    public async Task GetStatusAsync_NoSummary_ReportsOfflineOnBothAxes()
     {
-        // A machine with no summary row has never reported telemetry, and the fleet query the
-        // machine list is built from reports exactly that case as Offline. This endpoint agrees
-        // rather than inventing a Healthy verdict from nothing but a Redis ping.
-        using TestDatabaseFactory dbFactory = new();
-        long machineId = await SeedMachine(dbFactory);
-        InMemoryMachinePingService pingService = new();
-        await pingService.RecordPingAsync(machineId);
-
-        MachineDetailHandler handler = CreateHandler(dbFactory, pingService: pingService);
-
-        ServiceResult<MachineStatusDto> result = await handler.GetStatusAsync(machineId, 1, CancellationToken.None);
-
-        await Assert.That(result.IsSuccess).IsTrue();
-        await Assert.That(result.Data!.IsOnline).IsTrue();
-        await Assert.That(result.Data!.HealthStatus).IsEqualTo(MachineHealthStatus.Offline);
-    }
-
-    [Test]
-    public async Task GetStatusAsync_OfflineNoSummary_ReturnsHealthStatusOffline()
-    {
+        // A machine with no summary row has never been heard from, and the fleet query the
+        // machine list is built from reports exactly that case as Offline. Liveness and health
+        // now come from the same row, so the two axes cannot disagree about it.
         using TestDatabaseFactory dbFactory = new();
         long machineId = await SeedMachine(dbFactory);
 

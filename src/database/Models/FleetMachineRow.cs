@@ -57,6 +57,9 @@ public sealed class FleetMachineRow
     /// <summary>Last seen timestamp from MachineStateSummary.</summary>
     public DateTimeOffset? LastSeenAt { get; init; }
 
+    /// <summary>Last agent heartbeat timestamp from MachineStateSummary.</summary>
+    public DateTimeOffset? LastHeartbeatAt { get; init; }
+
     /// <summary>Maximum disk usage percentage from MachineStateSummary.</summary>
     public int? MaxDiskUsagePercent { get; init; }
 

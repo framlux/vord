@@ -7,11 +7,8 @@ using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Services.Core.Models.Dashboard;
 using Framlux.FleetManagement.Services.Core.Models.Machines;
 using Framlux.FleetManagement.Services.Core.Machines;
-using Framlux.FleetManagement.Services.Core.ServerConfiguration;
 using Framlux.FleetManagement.Test.Infrastructure;
 using LinqToDB;
-using NSubstitute;
-using StackExchange.Redis;
 
 namespace Framlux.FleetManagement.Test.Services;
 
@@ -20,43 +17,6 @@ namespace Framlux.FleetManagement.Test.Services;
 /// </summary>
 public class MachineStateServiceTests
 {
-    private static IMachinePingService CreateMockPingService(bool online = false)
-    {
-        IMachinePingService pingService = Substitute.For<IMachinePingService>();
-        pingService.AreOnlineAsync(Arg.Any<IEnumerable<long>>(), Arg.Any<TimeSpan>())
-            .Returns(callInfo =>
-            {
-                IEnumerable<long> ids = callInfo.Arg<IEnumerable<long>>();
-
-                return ids.ToDictionary(id => id, _ => online);
-            });
-        pingService.GetLastPingsAsync(Arg.Any<IEnumerable<long>>())
-            .Returns(callInfo =>
-            {
-                IEnumerable<long> ids = callInfo.Arg<IEnumerable<long>>();
-
-                return ids.ToDictionary(id => id, _ => online ? (DateTimeOffset?)DateTimeOffset.UtcNow : null);
-            });
-        pingService.IsOnlineAsync(Arg.Any<long>(), Arg.Any<TimeSpan>())
-            .Returns(online);
-        pingService.GetLastPingAsync(Arg.Any<long>())
-            .Returns(online ? (DateTimeOffset?)DateTimeOffset.UtcNow : null);
-
-        return pingService;
-    }
-
-    private static ServerConfigurationService CreateConfigService()
-    {
-        IServerSettingsReader cache = Substitute.For<IServerSettingsReader>();
-        IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
-        IDatabase redisDb = Substitute.For<IDatabase>();
-        redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(redisDb);
-        redisDb.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
-            .Returns(Task.FromResult<RedisValue>(RedisValue.Null));
-
-        return new ServerConfigurationService(cache, redis);
-    }
-
     // ========== GetFleetOverviewAsync tests ==========
 
     [Test]
@@ -64,7 +24,7 @@ public class MachineStateServiceTests
     {
         using TestDatabaseFactory dbFactory = new();
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineStateService service = new(scopeFactory, CreateMockPingService(), CreateConfigService());
+        MachineStateService service = new(scopeFactory);
 
         PaginatedFleetOverviewDto result = await service.GetFleetOverviewAsync(
             1, 25, null, null, null, "name", "asc", CancellationToken.None);
@@ -78,7 +38,7 @@ public class MachineStateServiceTests
     {
         using TestDatabaseFactory dbFactory = new();
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineStateService service = new(scopeFactory, CreateMockPingService(), CreateConfigService());
+        MachineStateService service = new(scopeFactory);
 
         PaginatedFleetOverviewDto result = await service.GetFleetOverviewAsync(
             1, 25, 1, null, null, "name", "asc", CancellationToken.None);
@@ -97,7 +57,7 @@ public class MachineStateServiceTests
         machine2.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine2);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineStateService service = new(scopeFactory, CreateMockPingService(), CreateConfigService());
+        MachineStateService service = new(scopeFactory);
 
         PaginatedFleetOverviewDto result = await service.GetFleetOverviewAsync(
             1, 25, 1, null, null, "name", "asc", CancellationToken.None);
@@ -118,7 +78,7 @@ public class MachineStateServiceTests
         await dbFactory.Context.InsertAsync(state);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineStateService service = new(scopeFactory, CreateMockPingService(online: true), CreateConfigService());
+        MachineStateService service = new(scopeFactory);
 
         PaginatedFleetOverviewDto result = await service.GetFleetOverviewAsync(
             1, 25, 1, null, null, "name", "asc", CancellationToken.None);
@@ -135,7 +95,7 @@ public class MachineStateServiceTests
         machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineStateService service = new(scopeFactory, CreateMockPingService(online: false), CreateConfigService());
+        MachineStateService service = new(scopeFactory);
 
         PaginatedFleetOverviewDto result = await service.GetFleetOverviewAsync(
             1, 25, 1, null, null, "name", "asc", CancellationToken.None);
@@ -153,7 +113,7 @@ public class MachineStateServiceTests
         await dbFactory.Context.InsertAsync(state);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineStateService service = new(scopeFactory, CreateMockPingService(online: true), CreateConfigService());
+        MachineStateService service = new(scopeFactory);
 
         PaginatedFleetOverviewDto result = await service.GetFleetOverviewAsync(
             1, 25, 1, null, null, "name", "asc", CancellationToken.None);
@@ -171,7 +131,7 @@ public class MachineStateServiceTests
         await dbFactory.Context.InsertAsync(state);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineStateService service = new(scopeFactory, CreateMockPingService(online: true), CreateConfigService());
+        MachineStateService service = new(scopeFactory);
 
         PaginatedFleetOverviewDto result = await service.GetFleetOverviewAsync(
             1, 25, 1, null, null, "name", "asc", CancellationToken.None);
@@ -187,7 +147,7 @@ public class MachineStateServiceTests
         machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineStateService service = new(scopeFactory, CreateMockPingService(), CreateConfigService());
+        MachineStateService service = new(scopeFactory);
 
         PaginatedFleetOverviewDto result = await service.GetFleetOverviewAsync(
             -5, 25, 1, null, null, "name", "asc", CancellationToken.None);
@@ -201,7 +161,7 @@ public class MachineStateServiceTests
     {
         using TestDatabaseFactory dbFactory = new();
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineStateService service = new(scopeFactory, CreateMockPingService(), CreateConfigService());
+        MachineStateService service = new(scopeFactory);
 
         PaginatedFleetOverviewDto result = await service.GetFleetOverviewAsync(
             1, 999, 1, null, null, "name", "asc", CancellationToken.None);
@@ -219,7 +179,7 @@ public class MachineStateServiceTests
         machine2.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine2);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineStateService service = new(scopeFactory, CreateMockPingService(), CreateConfigService());
+        MachineStateService service = new(scopeFactory);
 
         PaginatedFleetOverviewDto result = await service.GetFleetOverviewAsync(
             1, 25, 1, "web-server", null, "name", "asc", CancellationToken.None);
@@ -235,7 +195,7 @@ public class MachineStateServiceTests
         machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineStateService service = new(scopeFactory, CreateMockPingService(online: false), CreateConfigService());
+        MachineStateService service = new(scopeFactory);
 
         PaginatedFleetOverviewDto result = await service.GetFleetOverviewAsync(
             1, 25, 1, null, "offline", "name", "asc", CancellationToken.None);
@@ -251,7 +211,7 @@ public class MachineStateServiceTests
         machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineStateService service = new(scopeFactory, CreateMockPingService(online: false), CreateConfigService());
+        MachineStateService service = new(scopeFactory);
 
         PaginatedFleetOverviewDto result = await service.GetFleetOverviewAsync(
             1, 25, 1, null, "healthy", "name", "asc", CancellationToken.None);
@@ -268,7 +228,7 @@ public class MachineStateServiceTests
         machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineStateService service = new(scopeFactory, CreateMockPingService(), CreateConfigService());
+        MachineStateService service = new(scopeFactory);
 
         PaginatedFleetOverviewDto result = await service.GetFleetOverviewAsync(
             1, 25, 1, null, null, "name", "asc", CancellationToken.None);
@@ -284,7 +244,7 @@ public class MachineStateServiceTests
         machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineStateService service = new(scopeFactory, CreateMockPingService(), CreateConfigService());
+        MachineStateService service = new(scopeFactory);
 
         PaginatedFleetOverviewDto result = await service.GetFleetOverviewAsync(
             1, 25, 1, null, null, "name", "asc", CancellationToken.None);
@@ -307,7 +267,7 @@ public class MachineStateServiceTests
         await dbFactory.Context.InsertAsync(state2);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineStateService service = new(scopeFactory, CreateMockPingService(online: true), CreateConfigService());
+        MachineStateService service = new(scopeFactory);
 
         PaginatedFleetOverviewDto result = await service.GetFleetOverviewAsync(
             1, 25, 1, null, null, "cpu", "desc", CancellationToken.None);
@@ -323,7 +283,7 @@ public class MachineStateServiceTests
     {
         using TestDatabaseFactory dbFactory = new();
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineStateService service = new(scopeFactory, CreateMockPingService(), CreateConfigService());
+        MachineStateService service = new(scopeFactory);
 
         MachineDetailDto? result = await service.GetMachineDetailAsync(1, null, CancellationToken.None);
 
@@ -335,7 +295,7 @@ public class MachineStateServiceTests
     {
         using TestDatabaseFactory dbFactory = new();
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineStateService service = new(scopeFactory, CreateMockPingService(), CreateConfigService());
+        MachineStateService service = new(scopeFactory);
 
         MachineDetailDto? result = await service.GetMachineDetailAsync(999, 1, CancellationToken.None);
 
@@ -350,7 +310,7 @@ public class MachineStateServiceTests
         machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineStateService service = new(scopeFactory, CreateMockPingService(), CreateConfigService());
+        MachineStateService service = new(scopeFactory);
 
         MachineDetailDto? result = await service.GetMachineDetailAsync(machine.Id, 1, CancellationToken.None);
 
@@ -366,7 +326,7 @@ public class MachineStateServiceTests
         machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineStateService service = new(scopeFactory, CreateMockPingService(), CreateConfigService());
+        MachineStateService service = new(scopeFactory);
 
         MachineDetailDto? result = await service.GetMachineDetailAsync(machine.Id, 1, CancellationToken.None);
 
@@ -379,15 +339,18 @@ public class MachineStateServiceTests
         using TestDatabaseFactory dbFactory = new();
         Machine machine = TestDataBuilder.BuildMachine(tenantId: 1);
         machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
+        await dbFactory.Context.InsertAsync(TestDataBuilder.BuildMachineStateSummary(
+            machineId: machine.Id, healthStatus: 0, lastSeenAt: DateTimeOffset.UtcNow));
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineStateService service = new(scopeFactory, CreateMockPingService(online: true), CreateConfigService());
+        MachineStateService service = new(scopeFactory);
 
         MachineDetailDto? result = await service.GetMachineDetailAsync(machine.Id, 1, CancellationToken.None);
 
         await Assert.That(result).IsNotNull();
         await Assert.That(result!.Id).IsEqualTo(machine.Id);
         await Assert.That(result.IsOnline).IsTrue();
+        await Assert.That(result.LastPing).IsNotNull();
     }
 
     [Test]
@@ -399,7 +362,7 @@ public class MachineStateServiceTests
         machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineStateService service = new(scopeFactory, CreateMockPingService(online: false), CreateConfigService());
+        MachineStateService service = new(scopeFactory);
 
         MachineDetailDto? result = await service.GetMachineDetailAsync(machine.Id, 1, CancellationToken.None);
 
@@ -417,7 +380,7 @@ public class MachineStateServiceTests
         await dbFactory.Context.InsertAsync(state);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineStateService service = new(scopeFactory, CreateMockPingService(), CreateConfigService());
+        MachineStateService service = new(scopeFactory);
 
         MachineDetailDto? result = await service.GetMachineDetailAsync(machine.Id, 1, CancellationToken.None);
 
@@ -442,7 +405,7 @@ public class MachineStateServiceTests
         await dbFactory.Context.InsertAsync(telemetry);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineStateService service = new(scopeFactory, CreateMockPingService(online: true), CreateConfigService());
+        MachineStateService service = new(scopeFactory);
 
         MachineDetailDto? result = await service.GetMachineDetailAsync(machine.Id, 1, CancellationToken.None);
 
@@ -468,7 +431,7 @@ public class MachineStateServiceTests
         await dbFactory.Context.InsertAsync(telemetry);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineStateService service = new(scopeFactory, CreateMockPingService(online: true), CreateConfigService());
+        MachineStateService service = new(scopeFactory);
 
         MachineDetailDto? result = await service.GetMachineDetailAsync(machine.Id, 1, CancellationToken.None);
 
@@ -493,7 +456,7 @@ public class MachineStateServiceTests
         await dbFactory.Context.InsertAsync(telemetry);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineStateService service = new(scopeFactory, CreateMockPingService(online: true), CreateConfigService());
+        MachineStateService service = new(scopeFactory);
 
         MachineDetailDto? result = await service.GetMachineDetailAsync(machine.Id, 1, CancellationToken.None);
 
@@ -519,7 +482,7 @@ public class MachineStateServiceTests
         await dbFactory.Context.InsertAsync(telemetry);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineStateService service = new(scopeFactory, CreateMockPingService(online: true), CreateConfigService());
+        MachineStateService service = new(scopeFactory);
 
         MachineDetailDto? result = await service.GetMachineDetailAsync(machine.Id, 1, CancellationToken.None);
 
@@ -535,7 +498,7 @@ public class MachineStateServiceTests
         machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineStateService service = new(scopeFactory, CreateMockPingService(online: true), CreateConfigService());
+        MachineStateService service = new(scopeFactory);
 
         MachineDetailDto? result = await service.GetMachineDetailAsync(machine.Id, 1, CancellationToken.None);
 
@@ -573,7 +536,7 @@ public class MachineStateServiceTests
         await dbFactory.Context.InsertAsync(memTelemetry);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineStateService service = new(scopeFactory, CreateMockPingService(online: true), CreateConfigService());
+        MachineStateService service = new(scopeFactory);
 
         MachineDetailDto? result = await service.GetMachineDetailAsync(machine.Id, 1, CancellationToken.None);
 
@@ -599,7 +562,7 @@ public class MachineStateServiceTests
         await dbFactory.Context.InsertAsync(sshTelemetry);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineStateService service = new(scopeFactory, CreateMockPingService(online: true), CreateConfigService());
+        MachineStateService service = new(scopeFactory);
 
         MachineDetailDto? result = await service.GetMachineDetailAsync(machine.Id, 1, CancellationToken.None);
 
@@ -610,23 +573,24 @@ public class MachineStateServiceTests
     }
 
     [Test]
-    public async Task GetMachineDetailAsync_NoState_OnlineMachine_HealthIsOffline()
+    public async Task GetMachineDetailAsync_NoState_ReportsOfflineOnBothAxes()
     {
-        // With no summary row the machine has never reported telemetry, which the fleet query
-        // behind the machine list reports as Offline. The detail page agrees, and the live Redis
-        // ping surfaces through IsOnline instead of being folded into the health verdict.
+        // With no summary row the machine has never been heard from, which the fleet query behind
+        // the machine list reports as Offline. The detail page agrees on both axes, because both
+        // now come from the same row rather than from two separate clocks.
         using TestDatabaseFactory dbFactory = new();
         Machine machine = TestDataBuilder.BuildMachine(tenantId: 1);
         machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineStateService service = new(scopeFactory, CreateMockPingService(online: true), CreateConfigService());
+        MachineStateService service = new(scopeFactory);
 
         MachineDetailDto? result = await service.GetMachineDetailAsync(machine.Id, 1, CancellationToken.None);
 
         await Assert.That(result).IsNotNull();
         await Assert.That(result!.HealthStatus).IsEqualTo(MachineHealthStatus.Offline);
-        await Assert.That(result.IsOnline).IsTrue();
+        await Assert.That(result.IsOnline).IsFalse();
+        await Assert.That(result.LastPing).IsNull();
     }
 
     [Test]
@@ -650,7 +614,7 @@ public class MachineStateServiceTests
         await dbFactory.Context.InsertAsync(state);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineStateService service = new(scopeFactory, CreateMockPingService(online: true), CreateConfigService());
+        MachineStateService service = new(scopeFactory);
 
         MachineDetailDto? result = await service.GetMachineDetailAsync(machine.Id, 1, CancellationToken.None);
 
@@ -672,7 +636,7 @@ public class MachineStateServiceTests
         await dbFactory.Context.InsertAsync(state);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineStateService service = new(scopeFactory, CreateMockPingService(online: true), CreateConfigService());
+        MachineStateService service = new(scopeFactory);
 
         MachineDetailDto? result = await service.GetMachineDetailAsync(machine.Id, 1, CancellationToken.None);
 
@@ -697,7 +661,7 @@ public class MachineStateServiceTests
         await dbFactory.Context.InsertAsync(telemetry);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineStateService service = new(scopeFactory, CreateMockPingService(online: true), CreateConfigService());
+        MachineStateService service = new(scopeFactory);
 
         MachineDetailDto? result = await service.GetMachineDetailAsync(machine.Id, 1, CancellationToken.None);
 
@@ -719,7 +683,7 @@ public class MachineStateServiceTests
         await dbFactory.Context.InsertAsync(state);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineStateService service = new(scopeFactory, CreateMockPingService(online: true), CreateConfigService());
+        MachineStateService service = new(scopeFactory);
 
         PaginatedFleetOverviewDto result = await service.GetFleetOverviewAsync(
             1, 25, 1, null, null, "name", "asc", CancellationToken.None);
@@ -741,7 +705,7 @@ public class MachineStateServiceTests
         await dbFactory.Context.InsertAsync(state);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineStateService service = new(scopeFactory, CreateMockPingService(online: true), CreateConfigService());
+        MachineStateService service = new(scopeFactory);
 
         PaginatedFleetOverviewDto result = await service.GetFleetOverviewAsync(
             1, 25, 1, null, null, "name", "asc", CancellationToken.None);
@@ -761,7 +725,7 @@ public class MachineStateServiceTests
     {
         using TestDatabaseFactory dbFactory = new();
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineStateService service = new(scopeFactory, CreateMockPingService(), CreateConfigService());
+        MachineStateService service = new(scopeFactory);
 
         PaginatedFleetOverviewDto result = await service.GetFleetOverviewAsync(
             1, 0, 1, null, null, "name", "asc", CancellationToken.None);
@@ -779,7 +743,7 @@ public class MachineStateServiceTests
         machine2.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine2);
 
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineStateService service = new(scopeFactory, CreateMockPingService(), CreateConfigService());
+        MachineStateService service = new(scopeFactory);
 
         PaginatedFleetOverviewDto result = await service.GetFleetOverviewAsync(
             1, 25, 1, null, null, "name", "desc", CancellationToken.None);

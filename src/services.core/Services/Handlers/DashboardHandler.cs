@@ -7,7 +7,6 @@ using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Services.Core.Infrastructure;
 using Framlux.FleetManagement.Services.Core.Machines;
 using Framlux.FleetManagement.Services.Core.Models.Dashboard;
-using Framlux.FleetManagement.Services.Core.ServerConfiguration;
 
 namespace Framlux.FleetManagement.Services.Core.Handlers;
 
@@ -17,21 +16,18 @@ namespace Framlux.FleetManagement.Services.Core.Handlers;
 public sealed class DashboardHandler
 {
     private readonly IMachineRepository _machineRepo;
-    private readonly IMachinePingService _pingService;
-    private readonly ServerConfigurationService _configService;
+    private readonly IMachineStateRepository _machineStateRepo;
 
     /// <summary>
     /// Creates a new instance of the <see cref="DashboardHandler"/> class.
     /// </summary>
-    public DashboardHandler(IMachineRepository machineRepo, IMachinePingService pingService, ServerConfigurationService configService)
+    public DashboardHandler(IMachineRepository machineRepo, IMachineStateRepository machineStateRepo)
     {
         ArgumentNullException.ThrowIfNull(machineRepo);
-        ArgumentNullException.ThrowIfNull(pingService);
-        ArgumentNullException.ThrowIfNull(configService);
+        ArgumentNullException.ThrowIfNull(machineStateRepo);
 
         _machineRepo = machineRepo;
-        _pingService = pingService;
-        _configService = configService;
+        _machineStateRepo = machineStateRepo;
     }
 
     /// <summary>
@@ -49,10 +45,12 @@ public sealed class DashboardHandler
 
         List<Machine> machines = await _machineRepo.ListActiveMachinesForTenantAsync(tenantId.Value, ct);
 
+        // Counted from the swept summary rows, the same source the fleet list and the machine
+        // detail page read. A machine with no summary row has never been heard from and counts
+        // as offline, which is what every other read path does with that absence.
         List<long> machineIds = machines.Select(m => m.Id).ToList();
-        TimeSpan onlineThreshold = await _configService.GetOnlineThresholdAsync(ct);
-        Dictionary<long, bool> onlineMap = await _pingService.AreOnlineAsync(machineIds, onlineThreshold);
-        int onlineCount = onlineMap.Count(kvp => kvp.Value);
+        List<MachineStateSummary> summaries = await _machineStateRepo.GetSummaryListByMachineIdsAsync(machineIds, ct);
+        int onlineCount = summaries.Count(s => MachineLiveness.IsOnline(s));
 
         DashboardSummaryDto dto = new()
         {

@@ -49,13 +49,17 @@ public class MachineHandlerTests
         return new DatabaseRepository(dbFactory.Context, new NullLogger<DatabaseRepository>());
     }
 
-    private static MachineHandler CreateHandler(TestDatabaseFactory dbFactory, InMemoryMachinePingService? pingService = null, IMachineBillingSync? machineBillingSync = null, IApiKeyCacheInvalidator? apiKeyCacheInvalidator = null)
+    private static MachineHandler CreateHandler(TestDatabaseFactory dbFactory, IMachineBillingSync? machineBillingSync = null, IApiKeyCacheInvalidator? apiKeyCacheInvalidator = null)
     {
-        InMemoryMachinePingService ping = pingService ?? new InMemoryMachinePingService();
-        ServerConfigurationService configService = new(Substitute.For<IServerSettingsReader>(), Substitute.For<IConnectionMultiplexer>());
         DatabaseRepository repo = CreateRepo(dbFactory);
 
-        return new MachineHandler(repo, repo, repo, repo, repo, ping, configService, machineBillingSync ?? Substitute.For<IMachineBillingSync>(), apiKeyCacheInvalidator ?? Substitute.For<IApiKeyCacheInvalidator>(), NullLogger<MachineHandler>.Instance);
+        return new MachineHandler(repo, repo, repo, repo, repo, machineBillingSync ?? Substitute.For<IMachineBillingSync>(), apiKeyCacheInvalidator ?? Substitute.For<IApiKeyCacheInvalidator>(), NullLogger<MachineHandler>.Instance);
+    }
+
+    private static async Task SeedSummary(TestDatabaseFactory dbFactory, long machineId, short healthStatus)
+    {
+        await dbFactory.Context.InsertAsync(TestDataBuilder.BuildMachineStateSummary(
+            machineId: machineId, healthStatus: healthStatus, lastSeenAt: DateTimeOffset.UtcNow));
     }
 
     // ========== DeleteAsync tests ==========
@@ -454,12 +458,12 @@ public class MachineHandlerTests
     {
         using TestDatabaseFactory dbFactory = new();
         long onlineMachineId = await SeedMachine(dbFactory, hostname: "online-host");
-        await SeedMachine(dbFactory, hostname: "offline-host");
+        long offlineMachineId = await SeedMachine(dbFactory, hostname: "offline-host");
 
-        InMemoryMachinePingService pingService = new();
-        await pingService.RecordPingAsync(onlineMachineId);
+        await SeedSummary(dbFactory, onlineMachineId, healthStatus: 0);
+        await SeedSummary(dbFactory, offlineMachineId, healthStatus: 3);
 
-        MachineHandler handler = CreateHandler(dbFactory, pingService);
+        MachineHandler handler = CreateHandler(dbFactory);
 
         ServiceResult<PaginatedResponse<MachineDto>> result = await handler.ListAsync(1, 25, 1, null, null, null, "online", "name", "asc", CancellationToken.None);
 
@@ -475,12 +479,12 @@ public class MachineHandlerTests
     {
         using TestDatabaseFactory dbFactory = new();
         long onlineMachineId = await SeedMachine(dbFactory, hostname: "online-host");
-        await SeedMachine(dbFactory, hostname: "offline-host");
+        long offlineMachineId = await SeedMachine(dbFactory, hostname: "offline-host");
 
-        InMemoryMachinePingService pingService = new();
-        await pingService.RecordPingAsync(onlineMachineId);
+        await SeedSummary(dbFactory, onlineMachineId, healthStatus: 0);
+        await SeedSummary(dbFactory, offlineMachineId, healthStatus: 3);
 
-        MachineHandler handler = CreateHandler(dbFactory, pingService);
+        MachineHandler handler = CreateHandler(dbFactory);
 
         ServiceResult<PaginatedResponse<MachineDto>> result = await handler.ListAsync(1, 25, 1, null, null, null, "offline", "name", "asc", CancellationToken.None);
 
@@ -489,6 +493,53 @@ public class MachineHandlerTests
         await Assert.That(result.Data!.Items[0].Name).IsEqualTo("offline-host");
         await Assert.That(result.Data!.Items[0].IsOnline).IsFalse();
         await Assert.That(result.Data!.TotalCount).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task ListAsync_OfflineStatusFilter_IncludesMachinesWithNoSummaryRow()
+    {
+        // A machine that has never been heard from has no summary row at all. The filter must
+        // treat that absence as offline, the same default every other read path applies.
+        using TestDatabaseFactory dbFactory = new();
+        long onlineMachineId = await SeedMachine(dbFactory, hostname: "online-host");
+        await SeedMachine(dbFactory, hostname: "never-seen-host");
+
+        await SeedSummary(dbFactory, onlineMachineId, healthStatus: 0);
+
+        MachineHandler handler = CreateHandler(dbFactory);
+
+        ServiceResult<PaginatedResponse<MachineDto>> result = await handler.ListAsync(1, 25, 1, null, null, null, "offline", "name", "asc", CancellationToken.None);
+
+        await Assert.That(result.Data!.Items.Count).IsEqualTo(1);
+        await Assert.That(result.Data!.Items[0].Name).IsEqualTo("never-seen-host");
+        await Assert.That(result.Data!.Items[0].IsOnline).IsFalse();
+        await Assert.That(result.Data!.Items[0].LastPing).IsNull();
+    }
+
+    [Test]
+    public async Task ListAsync_Unfiltered_DerivesOnlineFromTheSweptHealthStatus()
+    {
+        // The unfiltered list path has no summary join either, so it batch-loads the same rows.
+        // A Critical machine is still online: only Offline means the server has lost contact.
+        using TestDatabaseFactory dbFactory = new();
+        long criticalMachineId = await SeedMachine(dbFactory, hostname: "critical-host");
+        long offlineMachineId = await SeedMachine(dbFactory, hostname: "offline-host");
+
+        await SeedSummary(dbFactory, criticalMachineId, healthStatus: 2);
+        await SeedSummary(dbFactory, offlineMachineId, healthStatus: 3);
+
+        MachineHandler handler = CreateHandler(dbFactory);
+
+        ServiceResult<PaginatedResponse<MachineDto>> result = await handler.ListAsync(1, 25, 1, null, null, null, null, "name", "asc", CancellationToken.None);
+
+        await Assert.That(result.Data!.Items.Count).IsEqualTo(2);
+
+        MachineDto critical = result.Data!.Items.First(m => m.Name == "critical-host");
+        MachineDto offline = result.Data!.Items.First(m => m.Name == "offline-host");
+
+        await Assert.That(critical.IsOnline).IsTrue();
+        await Assert.That(critical.LastPing).IsNotNull();
+        await Assert.That(offline.IsOnline).IsFalse();
     }
 
     [Test]

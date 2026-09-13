@@ -11,7 +11,6 @@ using Framlux.FleetManagement.Services.Core.Machines;
 using Framlux.FleetManagement.Services.Core.Models;
 using Framlux.FleetManagement.Services.Core.Models.Machines;
 using Framlux.FleetManagement.Services.Core.Security;
-using Framlux.FleetManagement.Services.Core.ServerConfiguration;
 
 namespace Framlux.FleetManagement.Services.Core.Handlers;
 
@@ -25,8 +24,6 @@ public sealed class MachineHandler
     private readonly IAlertRuleRepository _alertRuleRepo;
     private readonly IDatabaseTransactionProvider _transactionProvider;
     private readonly IAuditLogRepository _auditLog;
-    private readonly IMachinePingService _pingService;
-    private readonly ServerConfigurationService _configService;
     private readonly IMachineBillingSync _machineBillingSync;
     private readonly IApiKeyCacheInvalidator _apiKeyCacheInvalidator;
     private readonly ILogger<MachineHandler> _logger;
@@ -40,8 +37,6 @@ public sealed class MachineHandler
         IAlertRuleRepository alertRuleRepo,
         IDatabaseTransactionProvider transactionProvider,
         IAuditLogRepository auditLog,
-        IMachinePingService pingService,
-        ServerConfigurationService configService,
         IMachineBillingSync machineBillingSync,
         IApiKeyCacheInvalidator apiKeyCacheInvalidator,
         ILogger<MachineHandler> logger)
@@ -51,8 +46,6 @@ public sealed class MachineHandler
         ArgumentNullException.ThrowIfNull(alertRuleRepo);
         ArgumentNullException.ThrowIfNull(transactionProvider);
         ArgumentNullException.ThrowIfNull(auditLog);
-        ArgumentNullException.ThrowIfNull(pingService);
-        ArgumentNullException.ThrowIfNull(configService);
         ArgumentNullException.ThrowIfNull(machineBillingSync);
         ArgumentNullException.ThrowIfNull(apiKeyCacheInvalidator);
         ArgumentNullException.ThrowIfNull(logger);
@@ -62,8 +55,6 @@ public sealed class MachineHandler
         _alertRuleRepo = alertRuleRepo;
         _transactionProvider = transactionProvider;
         _auditLog = auditLog;
-        _pingService = pingService;
-        _configService = configService;
         _machineBillingSync = machineBillingSync;
         _apiKeyCacheInvalidator = apiKeyCacheInvalidator;
         _logger = logger;
@@ -198,13 +189,13 @@ public sealed class MachineHandler
         machine.Description = description;
         machine.Location = location;
 
-        TimeSpan onlineThreshold = await _configService.GetOnlineThresholdAsync(ct);
-        bool isOnline = await _pingService.IsOnlineAsync(machine.Id, onlineThreshold);
-        DateTimeOffset? lastPing = await _pingService.GetLastPingAsync(machine.Id);
-
         MachineStateSummary? summary = await _machineStateRepo.GetSummaryForMachineAsync(machineId, ct);
 
-        MachineDto dto = BuildMachineDto(machine, isOnline, lastPing, summary?.Hostname);
+        MachineDto dto = BuildMachineDto(
+            machine,
+            MachineLiveness.IsOnline(summary),
+            MachineLiveness.LastSeen(summary?.LastSeenAt, summary?.LastHeartbeatAt),
+            summary?.Hostname);
 
         return ServiceResult<ApiResponse<MachineDto>>.Ok(
             ApiResponse<MachineDto>.Ok(dto, "Machine updated successfully"));
@@ -277,7 +268,7 @@ public sealed class MachineHandler
 
         if (hasStatusFilter)
         {
-            // Load all matching machines and resolve online status via batch Redis call.
+            // Load all matching machines and resolve online status from their summary rows.
             List<Machine> allMachines = await _machineRepo.ListActiveMachinesForTenantAsync(tenantId.Value, ct);
 
             // Apply search/OS/type filters in memory since we loaded all machines
@@ -297,14 +288,14 @@ public sealed class MachineHandler
                 allMachines = allMachines.Where(m => m.MachineType == parsedType.Value).ToList();
             }
 
+            // One batch lookup for the whole candidate set, in place of the batch Redis call this
+            // replaced. The filter still runs in memory: pushing it into SQL is a separate change.
             List<long> allIds = allMachines.Select(m => m.Id).ToList();
-            TimeSpan onlineThreshold = await _configService.GetOnlineThresholdAsync(ct);
-            Dictionary<long, bool> onlineMap = await _pingService.AreOnlineAsync(allIds, onlineThreshold);
-            Dictionary<long, DateTimeOffset?> lastPingMap = await _pingService.GetLastPingsAsync(allIds);
+            Dictionary<long, MachineStateSummary> summaryMap = await LoadSummaryMapAsync(allIds, ct);
 
             bool wantOnline = statusFilter!.Equals("online", StringComparison.OrdinalIgnoreCase);
             List<Machine> filtered = allMachines
-                .Where(m => onlineMap.GetValueOrDefault(m.Id, false) == wantOnline)
+                .Where(m => MachineLiveness.IsOnline(summaryMap.GetValueOrDefault(m.Id)) == wantOnline)
                 .ToList();
 
             int totalCount = filtered.Count;
@@ -318,14 +309,9 @@ public sealed class MachineHandler
                 .Take(pageSize)
                 .ToList();
 
-            List<long> pagedIds = paged.Select(m => m.Id).ToList();
-            Dictionary<long, string?> hostnameMap = await _machineStateRepo.GetHostnameMapAsync(pagedIds, ct);
-
-            List<MachineDto> dtos = paged.Select(machine => BuildMachineDto(
-                machine,
-                onlineMap.GetValueOrDefault(machine.Id, false),
-                lastPingMap.GetValueOrDefault(machine.Id),
-                hostnameMap.GetValueOrDefault(machine.Id))).ToList();
+            List<MachineDto> dtos = paged
+                .Select(machine => BuildMachineDto(machine, summaryMap.GetValueOrDefault(machine.Id)))
+                .ToList();
 
             PaginatedResponse<MachineDto> response = new()
             {
@@ -345,19 +331,13 @@ public sealed class MachineHandler
                 tenantId.Value, search, parsedOs, parsedType,
                 sortBy, sortDir, (page - 1) * pageSize, pageSize, ct);
 
-            // Batch Redis calls instead of N+1 individual calls.
+            // One batch lookup for the page, in place of the batch Redis call this replaced.
             List<long> machineIds = machines.Select(m => m.Id).ToList();
-            TimeSpan onlineThreshold = await _configService.GetOnlineThresholdAsync(ct);
-            Dictionary<long, bool> onlineMap = await _pingService.AreOnlineAsync(machineIds, onlineThreshold);
-            Dictionary<long, DateTimeOffset?> lastPingMap = await _pingService.GetLastPingsAsync(machineIds);
+            Dictionary<long, MachineStateSummary> summaryMap = await LoadSummaryMapAsync(machineIds, ct);
 
-            Dictionary<long, string?> hostnameMap = await _machineStateRepo.GetHostnameMapAsync(machineIds, ct);
-
-            List<MachineDto> dtos = machines.Select(machine => BuildMachineDto(
-                machine,
-                onlineMap.GetValueOrDefault(machine.Id, false),
-                lastPingMap.GetValueOrDefault(machine.Id),
-                hostnameMap.GetValueOrDefault(machine.Id))).ToList();
+            List<MachineDto> dtos = machines
+                .Select(machine => BuildMachineDto(machine, summaryMap.GetValueOrDefault(machine.Id)))
+                .ToList();
 
             PaginatedResponse<MachineDto> response = new()
             {
@@ -369,6 +349,26 @@ public sealed class MachineHandler
 
             return ServiceResult<PaginatedResponse<MachineDto>>.Ok(response);
         }
+    }
+
+    /// <summary>
+    /// Loads the summary rows for a set of machines, keyed by machine id. A machine with no row
+    /// is simply absent, which every liveness derivation reads as offline.
+    /// </summary>
+    private async Task<Dictionary<long, MachineStateSummary>> LoadSummaryMapAsync(List<long> machineIds, CancellationToken ct)
+    {
+        List<MachineStateSummary> summaries = await _machineStateRepo.GetSummaryListByMachineIdsAsync(machineIds, ct);
+
+        return summaries.ToDictionary(s => s.MachineId);
+    }
+
+    private static MachineDto BuildMachineDto(Machine machine, MachineStateSummary? summary)
+    {
+        return BuildMachineDto(
+            machine,
+            MachineLiveness.IsOnline(summary),
+            MachineLiveness.LastSeen(summary?.LastSeenAt, summary?.LastHeartbeatAt),
+            summary?.Hostname);
     }
 
     private static MachineDto BuildMachineDto(Machine machine, bool isOnline, DateTimeOffset? lastPing, string? telemetryHostname = null)

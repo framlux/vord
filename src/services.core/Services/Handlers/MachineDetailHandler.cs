@@ -7,7 +7,6 @@ using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Services.Core.Infrastructure;
 using Framlux.FleetManagement.Services.Core.Machines;
 using Framlux.FleetManagement.Services.Core.Models.Machines;
-using Framlux.FleetManagement.Services.Core.ServerConfiguration;
 
 namespace Framlux.FleetManagement.Services.Core.Handlers;
 
@@ -21,7 +20,6 @@ public sealed class MachineDetailHandler
     private readonly IMachineRepository _machineRepo;
     private readonly IMachineStateRepository _machineStateRepo;
     private readonly IMachinePingService _pingService;
-    private readonly ServerConfigurationService _configService;
     private readonly IMachineStateService _stateService;
 
     /// <summary>
@@ -31,19 +29,16 @@ public sealed class MachineDetailHandler
         IMachineRepository machineRepo,
         IMachineStateRepository machineStateRepo,
         IMachinePingService pingService,
-        ServerConfigurationService configService,
         IMachineStateService stateService)
     {
         ArgumentNullException.ThrowIfNull(machineRepo);
         ArgumentNullException.ThrowIfNull(machineStateRepo);
         ArgumentNullException.ThrowIfNull(pingService);
-        ArgumentNullException.ThrowIfNull(configService);
         ArgumentNullException.ThrowIfNull(stateService);
 
         _machineRepo = machineRepo;
         _machineStateRepo = machineStateRepo;
         _pingService = pingService;
-        _configService = configService;
         _stateService = stateService;
     }
 
@@ -64,12 +59,11 @@ public sealed class MachineDetailHandler
             return ServiceResult<MachineDto>.NotFound();
         }
 
-        TimeSpan onlineThreshold = await _configService.GetOnlineThresholdAsync(ct);
-        bool isOnline = await _pingService.IsOnlineAsync(machine.Id, onlineThreshold);
-        DateTimeOffset? lastPing = await _pingService.GetLastPingAsync(machine.Id);
         ulong capabilities = await _pingService.GetAgentCapabilitiesAsync(machine.Id);
 
         MachineStateSummary? summary = await _machineStateRepo.GetSummaryForMachineAsync(machine.Id, ct);
+        bool isOnline = MachineLiveness.IsOnline(summary);
+        DateTimeOffset? lastPing = MachineLiveness.LastSeen(summary?.LastSeenAt, summary?.LastHeartbeatAt);
 
         MachineDto dto = new()
         {
@@ -123,18 +117,17 @@ public sealed class MachineDetailHandler
             return ServiceResult<MachineStatusDto>.NotFound();
         }
 
-        TimeSpan onlineThreshold = await _configService.GetOnlineThresholdAsync(ct);
-        bool isOnline = await _pingService.IsOnlineAsync(machineId, onlineThreshold);
-        DateTimeOffset? lastPing = await _pingService.GetLastPingAsync(machineId);
         ulong capabilities = await _pingService.GetAgentCapabilitiesAsync(machineId);
 
-        // Health comes from the swept column so this endpoint cannot report a status that
-        // disagrees with the list the user reached the machine from. A machine with no summary
-        // row has never reported telemetry, which the fleet query treats as offline.
+        // Health and liveness both come from the swept column so this endpoint cannot report a
+        // status that disagrees with the list the user reached the machine from. A machine with
+        // no summary row has never been heard from, which the fleet query treats as offline.
         MachineStateSummary? summary = await _machineStateRepo.GetSummaryForMachineAsync(machineId, ct);
         MachineHealthStatus healthStatus = summary is not null
             ? (MachineHealthStatus)summary.HealthStatus
             : MachineHealthStatus.Offline;
+        bool isOnline = MachineLiveness.IsOnline(summary);
+        DateTimeOffset? lastPing = MachineLiveness.LastSeen(summary?.LastSeenAt, summary?.LastHeartbeatAt);
 
         MachineStatusDto dto = new()
         {

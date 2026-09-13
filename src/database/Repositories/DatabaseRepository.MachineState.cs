@@ -713,6 +713,7 @@ public partial class DatabaseRepository : IMachineStateRepository
                    TotalServices = s != null ? s.TotalServices : (int?)null,
                    HealthStatus = s != null ? s.HealthStatus : (short)3,
                    LastSeenAt = s != null ? s.LastSeenAt : (DateTimeOffset?)null,
+                   LastHeartbeatAt = s != null ? s.LastHeartbeatAt : (DateTimeOffset?)null,
                    MaxDiskUsagePercent = s != null ? s.MaxDiskUsagePercent : (int?)null,
                    HasDiskHealthIssue = s != null ? s.HasDiskHealthIssue : (bool?)null,
                    HasHardwareIssue = s != null ? s.HasHardwareIssue : (bool?)null,

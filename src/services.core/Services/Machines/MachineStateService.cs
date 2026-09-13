@@ -9,7 +9,6 @@ using Framlux.FleetManagement.Services.Core.Infrastructure;
 using Framlux.FleetManagement.Services.Core.Models.Dashboard;
 using Framlux.FleetManagement.Services.Core.Models.Machines;
 using Framlux.FleetManagement.Services.Core.Models.Telemetry;
-using Framlux.FleetManagement.Services.Core.ServerConfiguration;
 using Framlux.FleetManagement.Services.Core.Telemetry;
 
 namespace Framlux.FleetManagement.Services.Core.Machines;
@@ -20,21 +19,15 @@ namespace Framlux.FleetManagement.Services.Core.Machines;
 public sealed class MachineStateService : IMachineStateService
 {
     private readonly IServiceScopeFactory _scopeFactory;
-    private readonly IMachinePingService _pingService;
-    private readonly ServerConfigurationService _configService;
 
     /// <summary>
     /// Creates a new instance of the <see cref="MachineStateService"/> class.
     /// </summary>
-    public MachineStateService(IServiceScopeFactory scopeFactory, IMachinePingService pingService, ServerConfigurationService configService)
+    public MachineStateService(IServiceScopeFactory scopeFactory)
     {
         ArgumentNullException.ThrowIfNull(scopeFactory);
-        ArgumentNullException.ThrowIfNull(pingService);
-        ArgumentNullException.ThrowIfNull(configService);
 
         _scopeFactory = scopeFactory;
-        _pingService = pingService;
-        _configService = configService;
     }
 
     /// <inheritdoc/>
@@ -128,8 +121,8 @@ public sealed class MachineStateService : IMachineStateService
             HealthStatus = (MachineHealthStatus)row.HealthStatus,
             CpuUsagePercent = row.CpuUsagePercent,
             MemoryUsagePercent = row.MemoryUsagePercent,
-            IsOnline = row.HealthStatus != 3,
-            LastPing = row.LastSeenAt,
+            IsOnline = MachineLiveness.IsOnline(row.HealthStatus),
+            LastPing = MachineLiveness.LastSeen(row.LastSeenAt, row.LastHeartbeatAt),
             PendingUpdates = row.PendingUpdates ?? 0,
             SecurityUpdates = row.SecurityUpdates ?? 0,
             FailedServices = row.FailedServices ?? 0,
@@ -170,9 +163,8 @@ public sealed class MachineStateService : IMachineStateService
 
         MachineStateSummary? state = await machineStateRepo.GetSummaryForMachineAsync(machineId, ct);
 
-        TimeSpan onlineThreshold = await _configService.GetOnlineThresholdAsync(ct);
-        bool isOnline = await _pingService.IsOnlineAsync(machineId, onlineThreshold);
-        DateTimeOffset? lastPing = await _pingService.GetLastPingAsync(machineId);
+        bool isOnline = MachineLiveness.IsOnline(state);
+        DateTimeOffset? lastPing = MachineLiveness.LastSeen(state?.LastSeenAt, state?.LastHeartbeatAt);
 
         // Fetch latest raw telemetry per type for this machine.
         Dictionary<short, MachineTelemetry> latestByType = await machineStateRepo.GetLatestTelemetryPerTypeAsync(machineId, 7, ct);
