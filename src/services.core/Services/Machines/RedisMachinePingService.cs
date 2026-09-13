@@ -9,16 +9,17 @@ using StackExchange.Redis;
 namespace Framlux.FleetManagement.Services.Core.Machines;
 
 /// <summary>
-/// Redis-backed implementation of <see cref="IMachinePingService"/>. Each machine's last ping is
-/// stored as a single key holding the timestamp, with a TTL so a machine that stops reporting
-/// (decommissioned or removed) self-evicts instead of leaking a key forever. Every ping refreshes
-/// the key and its TTL. LastSeenAt on MachineStateSummary is updated by the streaming worker, not here.
+/// Redis-backed implementation of <see cref="IMachinePingService"/>. Each machine's reported
+/// capabilities are stored as a single key, with a TTL so a machine that stops reporting
+/// (decommissioned or removed) self-evicts instead of leaking a key forever. Every report refreshes
+/// the key and its TTL. Liveness is not stored here: it is decided by the health sweep from the
+/// timestamps on MachineStateSummary.
 /// </summary>
 public sealed class RedisMachinePingService : IMachinePingService
 {
-    // TTL for a machine's Redis keys (last-ping and capabilities). Comfortably longer than any
-    // online threshold, so online/offline decisions are unaffected; its purpose is to evict keys
-    // for machines that never report again instead of leaking them forever.
+    // TTL for a machine's Redis capabilities key. Comfortably longer than any configuration fetch
+    // interval; its purpose is to evict keys for machines that never report again instead of
+    // leaking them forever.
     private static readonly TimeSpan KeyRetention = TimeSpan.FromDays(7);
 
     private readonly IConnectionMultiplexer _redis;
@@ -35,84 +36,6 @@ public sealed class RedisMachinePingService : IMachinePingService
 
         _redis = redis ?? throw new ArgumentNullException(nameof(redis));
         _retryPipeline = pipelineProvider.GetPipeline("redis-ping");
-    }
-
-    /// <inheritdoc/>
-    public async Task RecordPingAsync(long machineId)
-    {
-        DateTimeOffset now = DateTimeOffset.UtcNow;
-
-        await ExecuteWithRetryAsync("RecordPing", async () =>
-        {
-            IDatabase db = _redis.GetDatabase();
-            string key = GetKey(machineId);
-            long nowMs = now.ToUnixTimeMilliseconds();
-
-            // Overwrite the single last-ping value and refresh its TTL on every ping.
-            await db.StringSetAsync(key, nowMs.ToString(), KeyRetention);
-        });
-    }
-
-    /// <inheritdoc/>
-    public async Task<DateTimeOffset?> GetLastPingAsync(long machineId)
-    {
-        IDatabase db = _redis.GetDatabase();
-        RedisValue value = await db.StringGetAsync(GetKey(machineId));
-
-        return ParseLastPing(value);
-    }
-
-    /// <inheritdoc/>
-    public async Task<bool> IsOnlineAsync(long machineId, TimeSpan threshold)
-    {
-        DateTimeOffset? lastPing = await GetLastPingAsync(machineId);
-        if (lastPing is null)
-        {
-            return false;
-        }
-
-        return DateTimeOffset.UtcNow - lastPing.Value <= threshold;
-    }
-
-    /// <inheritdoc/>
-    public async Task<Dictionary<long, bool>> AreOnlineAsync(IEnumerable<long> machineIds, TimeSpan threshold)
-    {
-        Dictionary<long, DateTimeOffset?> lastPings = await GetLastPingsAsync(machineIds);
-        DateTimeOffset now = DateTimeOffset.UtcNow;
-
-        Dictionary<long, bool> result = new(lastPings.Count);
-        foreach (KeyValuePair<long, DateTimeOffset?> kvp in lastPings)
-        {
-            result[kvp.Key] = kvp.Value.HasValue && now - kvp.Value.Value <= threshold;
-        }
-
-        return result;
-    }
-
-    /// <inheritdoc/>
-    public async Task<Dictionary<long, DateTimeOffset?>> GetLastPingsAsync(IEnumerable<long> machineIds)
-    {
-        IDatabase db = _redis.GetDatabase();
-        IBatch batch = db.CreateBatch();
-
-        List<(long Id, Task<RedisValue> Task)> pending = [];
-        foreach (long machineId in machineIds)
-        {
-            string key = GetKey(machineId);
-            Task<RedisValue> task = batch.StringGetAsync(key);
-            pending.Add((machineId, task));
-        }
-
-        batch.Execute();
-        await Task.WhenAll(pending.Select(p => p.Task));
-
-        Dictionary<long, DateTimeOffset?> result = new(pending.Count);
-        foreach ((long id, Task<RedisValue> task) in pending)
-        {
-            result[id] = ParseLastPing(task.Result);
-        }
-
-        return result;
     }
 
     /// <inheritdoc/>
@@ -189,21 +112,6 @@ public sealed class RedisMachinePingService : IMachinePingService
         {
             ResilienceContextPool.Shared.Return(context);
         }
-    }
-
-    private static DateTimeOffset? ParseLastPing(RedisValue value)
-    {
-        if (value.IsNullOrEmpty)
-        {
-            return null;
-        }
-
-        return long.TryParse((string?)value, out long ms) ? DateTimeOffset.FromUnixTimeMilliseconds(ms) : null;
-    }
-
-    private static string GetKey(long machineId)
-    {
-        return $"machine:ping:{machineId}";
     }
 
     private static string GetCapabilitiesKey(long machineId)

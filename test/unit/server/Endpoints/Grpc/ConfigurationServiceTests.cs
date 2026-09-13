@@ -276,20 +276,6 @@ public sealed class ConfigurationServiceTests
     }
 
     [Test]
-    public async Task AgentPing_ValidRequest_ReturnsSuccess()
-    {
-        _pingService.RecordPingAsync(Arg.Any<long>()).Returns(Task.CompletedTask);
-        ConfigurationService service = CreateService();
-        ServerCallContext context = CreateAuthenticatedContext(10);
-
-        AgentPingResponse response = await service.AgentPing(
-            new AgentPingRequest { MachineId = 10 }, context);
-
-        await Assert.That(response.Success).IsTrue();
-        await _pingService.Received(1).RecordPingAsync(10);
-    }
-
-    [Test]
     public async Task AgentPing_MismatchedMachineId_ThrowsPermissionDenied()
     {
         ConfigurationService service = CreateService();
@@ -306,19 +292,6 @@ public sealed class ConfigurationServiceTests
         {
             await Assert.That(ex.StatusCode).IsEqualTo(StatusCode.PermissionDenied);
         }
-    }
-
-    [Test]
-    public async Task AgentPing_PingServiceFailure_ReturnsFalse()
-    {
-        _pingService.RecordPingAsync(Arg.Any<long>()).Returns(Task.FromException(new InvalidOperationException("Redis down")));
-        ConfigurationService service = CreateService();
-        ServerCallContext context = CreateAuthenticatedContext(10);
-
-        AgentPingResponse response = await service.AgentPing(
-            new AgentPingRequest { MachineId = 10 }, context);
-
-        await Assert.That(response.Success).IsFalse();
     }
 
     [Test]
@@ -647,7 +620,8 @@ public sealed class ConfigurationServiceTests
     [Test]
     public async Task AgentPing_NoMachineClaim_ThrowsUnauthenticated()
     {
-        ConfigurationService service = CreateService();
+        IMachineStateRepository machineStateRepo = Substitute.For<IMachineStateRepository>();
+        ConfigurationService service = CreateService(machineStateRepo: machineStateRepo);
         ServerCallContext context = CreateContextWithoutMachineClaim();
 
         AgentPingRequest request = new() { MachineId = 99 };
@@ -662,7 +636,8 @@ public sealed class ConfigurationServiceTests
             await Assert.That(ex.StatusCode).IsEqualTo(StatusCode.Unauthenticated);
         }
 
-        await _pingService.DidNotReceive().RecordPingAsync(Arg.Any<long>());
+        await machineStateRepo.DidNotReceive().RecordHeartbeatAsync(
+            Arg.Any<long>(), Arg.Any<DateTimeOffset>(), Arg.Any<CancellationToken>());
     }
 
     [Test]

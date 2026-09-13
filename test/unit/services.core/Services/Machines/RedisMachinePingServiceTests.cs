@@ -43,216 +43,6 @@ public class RedisMachinePingServiceTests
         return (service, redisDb);
     }
 
-    // ========== GetLastPingAsync tests ==========
-
-    [Test]
-    public async Task GetLastPingAsync_NoPing_ReturnsNull()
-    {
-        (RedisMachinePingService service, IDatabase redisDb) = CreateService();
-        redisDb.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
-            .Returns(Task.FromResult<RedisValue>(RedisValue.Null));
-
-        DateTimeOffset? result = await service.GetLastPingAsync(1);
-
-        await Assert.That(result).IsNull();
-    }
-
-    [Test]
-    public async Task GetLastPingAsync_HasPing_ReturnsTimestamp()
-    {
-        (RedisMachinePingService service, IDatabase redisDb) = CreateService();
-        long timestampMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-        redisDb.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
-            .Returns(Task.FromResult<RedisValue>(timestampMs.ToString()));
-
-        DateTimeOffset? result = await service.GetLastPingAsync(1);
-
-        await Assert.That(result).IsNotNull();
-        await Assert.That(result!.Value.ToUnixTimeMilliseconds()).IsEqualTo(timestampMs);
-    }
-
-    [Test]
-    public async Task GetLastPingAsync_NonNumericValue_ReturnsNull()
-    {
-        (RedisMachinePingService service, IDatabase redisDb) = CreateService();
-        redisDb.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
-            .Returns(Task.FromResult<RedisValue>("not-a-number"));
-
-        DateTimeOffset? result = await service.GetLastPingAsync(1);
-
-        await Assert.That(result).IsNull();
-    }
-
-    // ========== IsOnlineAsync tests ==========
-
-    [Test]
-    public async Task IsOnlineAsync_NoPing_ReturnsFalse()
-    {
-        (RedisMachinePingService service, IDatabase redisDb) = CreateService();
-        redisDb.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
-            .Returns(Task.FromResult<RedisValue>(RedisValue.Null));
-
-        bool result = await service.IsOnlineAsync(1, TimeSpan.FromMinutes(5));
-
-        await Assert.That(result).IsFalse();
-    }
-
-    [Test]
-    public async Task IsOnlineAsync_RecentPing_ReturnsTrue()
-    {
-        (RedisMachinePingService service, IDatabase redisDb) = CreateService();
-        long recentMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-        redisDb.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
-            .Returns(Task.FromResult<RedisValue>(recentMs.ToString()));
-
-        bool result = await service.IsOnlineAsync(1, TimeSpan.FromMinutes(5));
-
-        await Assert.That(result).IsTrue();
-    }
-
-    [Test]
-    public async Task IsOnlineAsync_OldPing_ReturnsFalse()
-    {
-        (RedisMachinePingService service, IDatabase redisDb) = CreateService();
-        long oldMs = DateTimeOffset.UtcNow.AddMinutes(-10).ToUnixTimeMilliseconds();
-        redisDb.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
-            .Returns(Task.FromResult<RedisValue>(oldMs.ToString()));
-
-        bool result = await service.IsOnlineAsync(1, TimeSpan.FromMinutes(5));
-
-        await Assert.That(result).IsFalse();
-    }
-
-    // ========== RecordPingAsync tests ==========
-
-    [Test]
-    public async Task RecordPingAsync_StoresLastPingUnderMachineKeyWithSelfEvictingTtl()
-    {
-        (RedisMachinePingService service, IDatabase redisDb) = CreateService();
-
-        await service.RecordPingAsync(42);
-
-        // A single value under the machine's ping key, with a TTL so a machine that stops
-        // reporting self-evicts rather than leaking a key forever.
-        await redisDb.Received().StringSetAsync(
-            Arg.Is<RedisKey>(k => k.ToString() == "machine:ping:42"),
-            Arg.Any<RedisValue>(),
-            Arg.Is<Expiration>(e => e.Equals(new Expiration(TimeSpan.FromDays(7)))),
-            Arg.Any<ValueCondition>(),
-            Arg.Any<CommandFlags>());
-    }
-
-    [Test]
-    public async Task RecordPingAsync_DoesNotUseSortedSets()
-    {
-        (RedisMachinePingService service, IDatabase redisDb) = CreateService();
-
-        await service.RecordPingAsync(42);
-
-        // The 7-day per-heartbeat sorted-set history is gone; nothing should touch a sorted set.
-        bool usedSortedSet = redisDb.ReceivedCalls()
-            .Any(c => c.GetMethodInfo().Name.StartsWith("SortedSet", StringComparison.Ordinal));
-        await Assert.That(usedSortedSet).IsFalse();
-    }
-
-    // ========== AreOnlineAsync tests ==========
-
-    [Test]
-    public async Task AreOnlineAsync_MixedMachines_ReturnsCorrectStatusMap()
-    {
-        IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
-        IDatabase redisDb = Substitute.For<IDatabase>();
-        redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(redisDb);
-        RedisMachinePingService service = new(redis, CreatePipelineProvider());
-
-        IBatch batch = Substitute.For<IBatch>();
-        redisDb.CreateBatch(Arg.Any<object>()).Returns(batch);
-
-        long recentMs = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-        long oldMs = DateTimeOffset.UtcNow.AddMinutes(-10).ToUnixTimeMilliseconds();
-
-        // Machine 1: recent ping (online).
-        batch.StringGetAsync(Arg.Is<RedisKey>(k => k.ToString() == "machine:ping:1"), Arg.Any<CommandFlags>())
-            .Returns(Task.FromResult<RedisValue>(recentMs.ToString()));
-
-        // Machine 2: old ping (offline).
-        batch.StringGetAsync(Arg.Is<RedisKey>(k => k.ToString() == "machine:ping:2"), Arg.Any<CommandFlags>())
-            .Returns(Task.FromResult<RedisValue>(oldMs.ToString()));
-
-        // Machine 3: no ping (offline).
-        batch.StringGetAsync(Arg.Is<RedisKey>(k => k.ToString() == "machine:ping:3"), Arg.Any<CommandFlags>())
-            .Returns(Task.FromResult<RedisValue>(RedisValue.Null));
-
-        Dictionary<long, bool> result = await service.AreOnlineAsync([1L, 2L, 3L], TimeSpan.FromMinutes(5));
-
-        await Assert.That(result[1]).IsTrue();
-        await Assert.That(result[2]).IsFalse();
-        await Assert.That(result[3]).IsFalse();
-    }
-
-    [Test]
-    public async Task AreOnlineAsync_AllMachinesNoData_ReturnsAllFalse()
-    {
-        IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
-        IDatabase redisDb = Substitute.For<IDatabase>();
-        redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(redisDb);
-        RedisMachinePingService service = new(redis, CreatePipelineProvider());
-
-        IBatch batch = Substitute.For<IBatch>();
-        redisDb.CreateBatch(Arg.Any<object>()).Returns(batch);
-
-        batch.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
-            .Returns(Task.FromResult<RedisValue>(RedisValue.Null));
-
-        Dictionary<long, bool> result = await service.AreOnlineAsync([1L, 2L], TimeSpan.FromMinutes(5));
-
-        await Assert.That(result[1]).IsFalse();
-        await Assert.That(result[2]).IsFalse();
-    }
-
-    // ========== GetLastPingsAsync tests ==========
-
-    [Test]
-    public async Task GetLastPingsAsync_MultipleMachines_ReturnsBatchResults()
-    {
-        IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
-        IDatabase redisDb = Substitute.For<IDatabase>();
-        redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(redisDb);
-        RedisMachinePingService service = new(redis, CreatePipelineProvider());
-
-        IBatch batch = Substitute.For<IBatch>();
-        redisDb.CreateBatch(Arg.Any<object>()).Returns(batch);
-
-        long ts = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-
-        batch.StringGetAsync(Arg.Is<RedisKey>(k => k.ToString() == "machine:ping:10"), Arg.Any<CommandFlags>())
-            .Returns(Task.FromResult<RedisValue>(ts.ToString()));
-
-        batch.StringGetAsync(Arg.Is<RedisKey>(k => k.ToString() == "machine:ping:20"), Arg.Any<CommandFlags>())
-            .Returns(Task.FromResult<RedisValue>(RedisValue.Null));
-
-        Dictionary<long, DateTimeOffset?> result = await service.GetLastPingsAsync([10L, 20L]);
-
-        await Assert.That(result[10]).IsNotNull();
-        await Assert.That(result[20]).IsNull();
-    }
-
-    [Test]
-    public async Task GetLastPingsAsync_EmptyInput_ReturnsEmptyDictionary()
-    {
-        IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
-        IDatabase redisDb = Substitute.For<IDatabase>();
-        redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(redisDb);
-        RedisMachinePingService service = new(redis, CreatePipelineProvider());
-
-        IBatch batch = Substitute.For<IBatch>();
-        redisDb.CreateBatch(Arg.Any<object>()).Returns(batch);
-
-        Dictionary<long, DateTimeOffset?> result = await service.GetLastPingsAsync([]);
-
-        await Assert.That(result.Count).IsEqualTo(0);
-    }
-
     // ========== GetAgentCapabilitiesAsync tests ==========
 
     [Test]
@@ -375,7 +165,7 @@ public class RedisMachinePingServiceTests
     // ========== Retry pipeline semantics ==========
 
     [Test]
-    public async Task RecordPingAsync_TransientRedisFailure_RetriesUntilSuccess()
+    public async Task SetAgentCapabilitiesAsync_TransientRedisFailure_RetriesUntilSuccess()
     {
         // Pins the retry semantics carried over from the deleted RetryHelper: transient
         // failures are retried by the "redis-ping" pipeline until the call succeeds.
@@ -398,7 +188,7 @@ public class RedisMachinePingServiceTests
                 return Task.FromResult(true);
             });
 
-        await service.RecordPingAsync(7);
+        await service.SetAgentCapabilitiesAsync(7, 1);
 
         await Assert.That(callCount).IsEqualTo(3);
     }
@@ -432,7 +222,7 @@ public class RedisMachinePingServiceTests
     }
 
     [Test]
-    public async Task RecordPingAsync_OperationCanceledException_NeverRetried()
+    public async Task SetAgentCapabilitiesAsync_OperationCanceledException_NeverRetried()
     {
         // OperationCanceledException must propagate immediately without being retried,
         // matching the deleted RetryHelper's cancellation-never-retried behavior.
@@ -453,7 +243,7 @@ public class RedisMachinePingServiceTests
 
         await Assert.ThrowsAsync<OperationCanceledException>(async () =>
         {
-            await service.RecordPingAsync(9);
+            await service.SetAgentCapabilitiesAsync(9, 1);
         });
 
         await Assert.That(callCount).IsEqualTo(1);

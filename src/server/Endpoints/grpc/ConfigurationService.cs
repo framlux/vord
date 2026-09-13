@@ -136,8 +136,6 @@ public sealed class ConfigurationService : Configuration.ConfigurationBase
 
         try
         {
-            await _pingService.RecordPingAsync(machineId);
-
             // The heartbeat is stamped at server receipt time, never from the agent clock, and lands
             // on the summary row so the health sweep can see the control-plane channel as well as
             // the telemetry one.
@@ -145,7 +143,7 @@ public sealed class ConfigurationService : Configuration.ConfigurationBase
         }
         catch (Exception ex)
         {
-            _logger.LogError(ex, "Failed to record ping for machine ID {MachineId}", machineId);
+            _logger.LogError(ex, "Failed to record heartbeat for machine ID {MachineId}", machineId);
 
             return new AgentPingResponse { Success = false };
         }
