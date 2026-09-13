@@ -177,95 +177,12 @@ public sealed class HealthSweepThresholdLiveTests
     }
 
     [Test]
-    [Arguments(94, 10, 10, 0, false, false, (short)1)]
-    [Arguments(95, 10, 10, 0, false, false, (short)2)]
-    [Arguments(96, 10, 10, 0, false, false, (short)2)]
-    [Arguments(80, 10, 10, 0, false, false, (short)1)]
-    [Arguments(79, 10, 10, 0, false, false, (short)0)]
-    [Arguments(10, 94, 10, 0, false, false, (short)1)]
-    [Arguments(10, 95, 10, 0, false, false, (short)2)]
-    [Arguments(10, 80, 10, 0, false, false, (short)1)]
-    [Arguments(10, 79, 10, 0, false, false, (short)0)]
-    [Arguments(10, 10, 94, 0, false, false, (short)1)]
-    [Arguments(10, 10, 95, 0, false, false, (short)2)]
-    [Arguments(10, 10, 80, 0, false, false, (short)1)]
-    [Arguments(10, 10, 79, 0, false, false, (short)0)]
-    [Arguments(10, 10, 10, 1, false, false, (short)2)]
-    [Arguments(10, 10, 10, 0, true, false, (short)2)]
-    [Arguments(10, 10, 10, 0, false, true, (short)2)]
-    [Arguments(10, 10, 10, 0, false, false, (short)0)]
-    public async Task Sweep_AtEveryThresholdBoundary_WritesTheExpectedStatus(
-        int cpu,
-        int memory,
-        int maxDisk,
-        int failedServices,
-        bool diskIssue,
-        bool hardwareIssue,
-        short expected)
+    [MethodDataSource(typeof(HealthRuleCases), nameof(HealthRuleCases.All))]
+    public async Task Sweep_AtEveryThresholdBoundary_WritesTheExpectedStatus(HealthRuleCase testCase)
     {
-        using DatabaseContext db = CreateContext();
-        DatabaseRepository repo = CreateRepo(db);
-        int tenantId = await SeedTenantAsync(db);
-        long machineId = await SeedSummaryAsync(
-            db, tenantId, cpu, memory, maxDisk, failedServices, diskIssue, hardwareIssue);
+        short swept = await HealthRuleEvaluation.EvaluateInPostgresAsync(_migratedConnectionString, testCase);
 
-        await SweepAsync(repo, tenantId);
-
-        await Assert.That(await ReadHealthAsync(db, machineId)).IsEqualTo(expected);
-    }
-
-    [Test]
-    public async Task Sweep_StaleLastSeen_OutranksCriticalMetrics()
-    {
-        using DatabaseContext db = CreateContext();
-        DatabaseRepository repo = CreateRepo(db);
-        int tenantId = await SeedTenantAsync(db);
-
-        // Offline is evaluated first in the rule. A machine that stopped reporting while its last
-        // known metrics were critical must read Offline, not Critical, or the fleet would show a
-        // dead machine as a live emergency.
-        long machineId = await SeedSummaryAsync(
-            db, tenantId, cpu: 99, memory: 99, maxDisk: 99, failedServices: 5,
-            lastSeenAt: DateTimeOffset.UtcNow.AddSeconds(-(OnlineThresholdSeconds + 60)));
-
-        await SweepAsync(repo, tenantId);
-
-        await Assert.That(await ReadHealthAsync(db, machineId)).IsEqualTo((short)3);
-    }
-
-    [Test]
-    public async Task Sweep_NullLastSeen_IsOffline()
-    {
-        using DatabaseContext db = CreateContext();
-        DatabaseRepository repo = CreateRepo(db);
-        int tenantId = await SeedTenantAsync(db);
-        long machineId = await SeedSummaryAsync(db, tenantId, cpu: 10, memory: 10, maxDisk: 10);
-
-        await db.MachineStateSummaries
-            .Where(s => s.MachineId == machineId)
-            .Set(s => s.LastSeenAt, (DateTimeOffset?)null)
-            .UpdateAsync();
-
-        await SweepAsync(repo, tenantId);
-
-        await Assert.That(await ReadHealthAsync(db, machineId)).IsEqualTo((short)3);
-    }
-
-    [Test]
-    public async Task Sweep_NullMetrics_AreTreatedAsHealthyRatherThanCritical()
-    {
-        using DatabaseContext db = CreateContext();
-        DatabaseRepository repo = CreateRepo(db);
-        int tenantId = await SeedTenantAsync(db);
-
-        // A machine that reports in but has not yet sent usage telemetry has nulls here. The rule
-        // COALESCEs disk and failed services; CPU and memory are compared as nulls, which is not
-        // true in SQL. This pins that the combination lands on Healthy and never on Critical.
-        long machineId = await SeedSummaryAsync(db, tenantId);
-
-        await SweepAsync(repo, tenantId);
-
-        await Assert.That(await ReadHealthAsync(db, machineId)).IsEqualTo((short)0);
+        await Assert.That(swept).IsEqualTo(testCase.Expected);
     }
 
     [Test]

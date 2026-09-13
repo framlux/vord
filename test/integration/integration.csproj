@@ -27,6 +27,7 @@
     <ProjectReference Include="../../src/grpc/grpc.csproj" />
     <ProjectReference Include="../../src/server/server.csproj" />
     <ProjectReference Include="../../src/services.core/services.core.csproj" />
+    <ProjectReference Include="../shared/shared.csproj" />
   </ItemGroup>
 
 </Project>
