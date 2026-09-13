@@ -779,6 +779,104 @@ public class MachineStateRepositoryTests
         await Assert.That(batch3[0].Id > cursor2).IsTrue();
     }
 
+    [Test]
+    // Interior/healthy baseline.
+    [Arguments(10, 10, 10, 0, false, false, (short)0)]
+    // CPU: below warning, at warning, below critical, at critical.
+    [Arguments(79, 10, 10, 0, false, false, (short)0)]
+    [Arguments(80, 10, 10, 0, false, false, (short)1)]
+    [Arguments(94, 10, 10, 0, false, false, (short)1)]
+    [Arguments(95, 10, 10, 0, false, false, (short)2)]
+    // Memory, same four boundaries.
+    [Arguments(10, 79, 10, 0, false, false, (short)0)]
+    [Arguments(10, 80, 10, 0, false, false, (short)1)]
+    [Arguments(10, 94, 10, 0, false, false, (short)1)]
+    [Arguments(10, 95, 10, 0, false, false, (short)2)]
+    // Max disk usage, same four boundaries.
+    [Arguments(10, 10, 79, 0, false, false, (short)0)]
+    [Arguments(10, 10, 80, 0, false, false, (short)1)]
+    [Arguments(10, 10, 94, 0, false, false, (short)1)]
+    [Arguments(10, 10, 95, 0, false, false, (short)2)]
+    // Failed services and each hardware flag, in isolation.
+    [Arguments(10, 10, 10, 1, false, false, (short)2)]
+    [Arguments(10, 10, 10, 0, true, false, (short)2)]
+    [Arguments(10, 10, 10, 0, false, true, (short)2)]
+    public async Task SweepHealthStatusAsync_AtEveryThresholdBoundary_WritesTheExpectedStatus(
+        int cpuPercent, int memoryPercent, int maxDiskUsagePercent, int failedServices,
+        bool hasDiskHealthIssue, bool hasHardwareIssue, short expectedHealthStatus)
+    {
+        // The sweep SQL is now the only place the health thresholds are written down, so the
+        // thresholds themselves are pinned by running that SQL rather than by a second copy of
+        // the rule in C#. Each case sits directly at or just below a boundary, where an off-by-one
+        // in the SQL shows up and an interior data point would not.
+        using TestDatabaseFactory dbFactory = new();
+        IMachineStateRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+
+        UserAccount user = TestDataBuilder.BuildUser();
+        int userId = await dbFactory.Context.InsertWithInt32IdentityAsync(user);
+        Tenant tenant = TestDataBuilder.BuildTenant(createdByUserId: userId);
+        int tenantId = await dbFactory.Context.InsertWithInt32IdentityAsync(tenant);
+
+        Machine machine = TestDataBuilder.BuildMachine(tenantId: tenantId);
+        long machineId = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
+
+        MachineStateSummary summary = TestDataBuilder.BuildMachineStateSummary(
+            machineId: machineId,
+            tenantId: tenantId,
+            cpuPercent: cpuPercent,
+            memoryPercent: memoryPercent,
+            healthStatus: 0,
+            lastSeenAt: DateTimeOffset.UtcNow);
+        summary.FailedServices = failedServices;
+        summary.MaxDiskUsagePercent = maxDiskUsagePercent;
+        summary.HasDiskHealthIssue = hasDiskHealthIssue;
+        summary.HasHardwareIssue = hasHardwareIssue;
+        await dbFactory.Context.InsertAsync(summary);
+
+        SqliteSqlDialect dialect = new();
+        await repo.SweepHealthStatusAsync(dialect.HealthSweepForTenant, tenantId, 300);
+
+        MachineStateSummary? updated = await repo.GetSummaryForMachineAsync(machineId);
+
+        await Assert.That(updated).IsNotNull();
+        await Assert.That(updated!.HealthStatus).IsEqualTo(expectedHealthStatus);
+    }
+
+    [Test]
+    public async Task SweepHealthStatusAsync_StaleLastSeen_WritesOfflineOverAnyMetricVerdict()
+    {
+        // Offline outranks every metric branch: a machine the server has not heard from is
+        // reported Offline even though its last known metrics were critical.
+        using TestDatabaseFactory dbFactory = new();
+        IMachineStateRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+
+        UserAccount user = TestDataBuilder.BuildUser();
+        int userId = await dbFactory.Context.InsertWithInt32IdentityAsync(user);
+        Tenant tenant = TestDataBuilder.BuildTenant(createdByUserId: userId);
+        int tenantId = await dbFactory.Context.InsertWithInt32IdentityAsync(tenant);
+
+        Machine machine = TestDataBuilder.BuildMachine(tenantId: tenantId);
+        long machineId = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
+
+        MachineStateSummary summary = TestDataBuilder.BuildMachineStateSummary(
+            machineId: machineId,
+            tenantId: tenantId,
+            cpuPercent: 99,
+            memoryPercent: 99,
+            healthStatus: 0,
+            lastSeenAt: DateTimeOffset.UtcNow.AddHours(-1));
+        summary.FailedServices = 5;
+        await dbFactory.Context.InsertAsync(summary);
+
+        SqliteSqlDialect dialect = new();
+        await repo.SweepHealthStatusAsync(dialect.HealthSweepForTenant, tenantId, 300);
+
+        MachineStateSummary? updated = await repo.GetSummaryForMachineAsync(machineId);
+
+        await Assert.That(updated).IsNotNull();
+        await Assert.That(updated!.HealthStatus).IsEqualTo((short)3);
+    }
+
     // ========== GetFleetHealthAggregationAsync tests ==========
 
     [Test]

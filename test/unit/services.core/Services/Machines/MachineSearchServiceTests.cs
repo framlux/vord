@@ -1708,114 +1708,13 @@ public class MachineSearchServiceTests
         await Assert.That(result.Items[0].IpAddress).IsNull();
     }
 
-    // ========== EnrichWithJsonbData — critical via high disk usage ==========
-
-    [Test]
-    public async Task SearchAsync_OnlineMachineHighDisk_HealthRecalculatedToCritical()
-    {
-        // The enrichment step recalculates health with disk data. When disk >= 95
-        // and the machine is online, enriched health should be Critical.
-        using TestDatabaseFactory dbFactory = new();
-        Machine machine = TestDataBuilder.BuildMachine(tenantId: 1, hostname: "disk-critical");
-        machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
-        MachineStateSummary state = TestDataBuilder.BuildMachineStateSummary(
-            machineId: machine.Id, cpuPercent: 20, memoryPercent: 30, healthStatus: 0);
-        state.MaxDiskUsagePercent = 97;
-        state.HasDiskHealthIssue = false;
-        state.HasHardwareIssue = false;
-        await dbFactory.Context.InsertAsync(state);
-
-        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, CreateMockPingService(online: true), CreateConfigService());
-
-        PaginatedResponse<FleetMachineDto> result = await service.SearchAsync(
-            DefaultCriteria(), 1, CancellationToken.None);
-
-        await Assert.That(result.TotalCount).IsEqualTo(1);
-        await Assert.That(result.Items[0].HealthStatus).IsEqualTo(MachineHealthStatus.Critical);
-    }
-
-    // ========== EnrichWithJsonbData — critical via disk health issue ==========
-
-    [Test]
-    public async Task SearchAsync_OnlineMachineDiskHealthIssue_HealthRecalculatedToCritical()
-    {
-        using TestDatabaseFactory dbFactory = new();
-        Machine machine = TestDataBuilder.BuildMachine(tenantId: 1, hostname: "smart-fail");
-        machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
-        MachineStateSummary state = TestDataBuilder.BuildMachineStateSummary(
-            machineId: machine.Id, cpuPercent: 20, memoryPercent: 30, healthStatus: 0);
-        state.MaxDiskUsagePercent = 50;
-        state.HasDiskHealthIssue = true;
-        state.HasHardwareIssue = false;
-        await dbFactory.Context.InsertAsync(state);
-
-        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, CreateMockPingService(online: true), CreateConfigService());
-
-        PaginatedResponse<FleetMachineDto> result = await service.SearchAsync(
-            DefaultCriteria(), 1, CancellationToken.None);
-
-        await Assert.That(result.TotalCount).IsEqualTo(1);
-        await Assert.That(result.Items[0].HealthStatus).IsEqualTo(MachineHealthStatus.Critical);
-    }
-
-    // ========== EnrichWithJsonbData — critical via hardware issue ==========
-
-    [Test]
-    public async Task SearchAsync_OnlineMachineHardwareIssue_HealthRecalculatedToCritical()
-    {
-        using TestDatabaseFactory dbFactory = new();
-        Machine machine = TestDataBuilder.BuildMachine(tenantId: 1, hostname: "hw-fault");
-        machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
-        MachineStateSummary state = TestDataBuilder.BuildMachineStateSummary(
-            machineId: machine.Id, cpuPercent: 20, memoryPercent: 30, healthStatus: 0);
-        state.MaxDiskUsagePercent = 40;
-        state.HasDiskHealthIssue = false;
-        state.HasHardwareIssue = true;
-        await dbFactory.Context.InsertAsync(state);
-
-        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, CreateMockPingService(online: true), CreateConfigService());
-
-        PaginatedResponse<FleetMachineDto> result = await service.SearchAsync(
-            DefaultCriteria(), 1, CancellationToken.None);
-
-        await Assert.That(result.TotalCount).IsEqualTo(1);
-        await Assert.That(result.Items[0].HealthStatus).IsEqualTo(MachineHealthStatus.Critical);
-    }
-
-    // ========== EnrichWithJsonbData — warning via disk 80-94 ==========
-
-    [Test]
-    public async Task SearchAsync_OnlineMachineDiskInWarningRange_HealthRecalculatedToWarning()
-    {
-        using TestDatabaseFactory dbFactory = new();
-        Machine machine = TestDataBuilder.BuildMachine(tenantId: 1, hostname: "disk-warm");
-        machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
-        MachineStateSummary state = TestDataBuilder.BuildMachineStateSummary(
-            machineId: machine.Id, cpuPercent: 20, memoryPercent: 30, healthStatus: 0);
-        state.MaxDiskUsagePercent = 88;
-        state.HasDiskHealthIssue = false;
-        state.HasHardwareIssue = false;
-        await dbFactory.Context.InsertAsync(state);
-
-        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
-        MachineSearchService service = new(scopeFactory, CreateMockPingService(online: true), CreateConfigService());
-
-        PaginatedResponse<FleetMachineDto> result = await service.SearchAsync(
-            DefaultCriteria(), 1, CancellationToken.None);
-
-        await Assert.That(result.TotalCount).IsEqualTo(1);
-        await Assert.That(result.Items[0].HealthStatus).IsEqualTo(MachineHealthStatus.Warning);
-    }
-
-    // ========== EnrichWithJsonbData — offline overrides all enrichment ==========
+    // ========== A swept Offline status survives the read path ==========
 
     [Test]
     public async Task SearchAsync_OfflineMachineWithHighDisk_HealthStaysOffline()
     {
-        // Even when disk usage is critical, an offline machine should remain Offline.
+        // The sweep already resolved this machine to Offline, which outranks the critical raw
+        // metrics on the same row. The read path must surface that verdict unchanged.
         using TestDatabaseFactory dbFactory = new();
         Machine machine = TestDataBuilder.BuildMachine(tenantId: 1, hostname: "offline-full-disk");
         machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
@@ -2158,15 +2057,15 @@ public class MachineSearchServiceTests
         await Assert.That(result.Items[1].MemoryUsagePercent).IsEqualTo(75);
     }
 
-    // ========== Health enrichment delegates to HealthComputer ==========
+    // ========== Health status is read from the swept column, never recomputed ==========
 
     [Test]
-    public async Task SearchAsync_HealthEnrichment_DelegatesToHealthComputerVerdict()
+    public async Task SearchAsync_ReportsSweptHealthColumn_NotAVerdictRecomputedFromRawMetrics()
     {
-        // The DB-computed HealthStatus column says Critical (stale sweep result), but the
-        // current raw metrics on the row are all within healthy range. The search result
-        // must report whatever HealthComputer computes from those raw metrics for an online
-        // machine — not the stale DB value, and not a second hand-rolled threshold check.
+        // The swept HealthStatus column says Critical while every raw metric on the row sits in
+        // the healthy band. The search result must report the column, because the column is what
+        // the health filter, the sort and the dashboard rollups all ran against. A result that
+        // reported Healthy here would be a read path recomputing the rule a second time.
         using TestDatabaseFactory dbFactory = new();
         Machine machine = TestDataBuilder.BuildMachine(tenantId: 1);
         machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
@@ -2185,18 +2084,16 @@ public class MachineSearchServiceTests
         PaginatedResponse<FleetMachineDto> result = await service.SearchAsync(
             DefaultCriteria(), 1, CancellationToken.None);
 
-        MachineHealthStatus expected = HealthComputer.Compute(state, isOnline: true);
-
-        await Assert.That(expected).IsEqualTo(MachineHealthStatus.Healthy);
-        await Assert.That(result.Items[0].HealthStatus).IsEqualTo(expected);
+        await Assert.That(result.Items[0].HealthStatus).IsEqualTo(MachineHealthStatus.Critical);
     }
 
     [Test]
-    public async Task SearchAsync_HealthEnrichment_OfflineOverridesRawMetrics()
+    public async Task SearchAsync_OfflinePerRedis_StillReportsSweptHealthButFlagsNotOnline()
     {
-        // Even when raw metrics would otherwise imply Critical, a machine that is offline
-        // per Redis must still report Offline — the online override HealthComputer applies
-        // must take precedence over the metric-based checks.
+        // Redis liveness and health status answer two different questions. A machine Redis has
+        // not heard from must still carry the swept health status it was filtered by, while the
+        // separate IsOnline flag carries the live liveness signal. Collapsing the two is what let
+        // the list disagree with its own filter.
         using TestDatabaseFactory dbFactory = new();
         Machine machine = TestDataBuilder.BuildMachine(tenantId: 1);
         machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
@@ -2211,7 +2108,8 @@ public class MachineSearchServiceTests
         PaginatedResponse<FleetMachineDto> result = await service.SearchAsync(
             DefaultCriteria(), 1, CancellationToken.None);
 
-        await Assert.That(result.Items[0].HealthStatus).IsEqualTo(MachineHealthStatus.Offline);
+        await Assert.That(result.Items[0].HealthStatus).IsEqualTo(MachineHealthStatus.Healthy);
+        await Assert.That(result.Items[0].IsOnline).IsFalse();
     }
 
     [Test]
@@ -2236,19 +2134,16 @@ public class MachineSearchServiceTests
     [Arguments(10, 10, 10, 1, false, false)]
     [Arguments(10, 10, 10, 0, true, false)]
     [Arguments(10, 10, 10, 0, false, true)]
-    public async Task SearchAsync_HealthEnrichment_BoundaryMatrix_MatchesHealthComputer(
+    public async Task SearchAsync_RawMetricsAtEveryThreshold_DoNotOverrideTheSweptColumn(
         int cpuPercent, int memoryPercent, int maxDiskUsagePercent, int failedServices,
         bool hasDiskHealthIssue, bool hasHardwareIssue)
     {
-        // A single interior data point cannot distinguish a correct delegation to
-        // HealthComputer from an inline copy whose thresholds have silently drifted — both
-        // agree deep inside a band. This matrix walks every critical(95)/warning(80)
-        // boundary on CPU, memory, and disk, plus the FailedServices/disk-issue/hardware-
-        // issue flags in isolation, and asserts the service's result matches whatever
-        // HealthComputer computes for the exact same inputs. The DB-computed HealthStatus
-        // column is deliberately seeded as Healthy (0) so a search result that merely
-        // echoed the stale DB value — rather than truly recomputing via HealthComputer —
-        // would fail every case above the Healthy band.
+        // Every one of these rows carries raw metrics that a threshold rule would score as
+        // Warning or Critical, but the swept column says Healthy. The search must report Healthy
+        // for all of them. This matrix walks each critical (95) and warning (80) boundary on CPU,
+        // memory and disk plus the failed-service and issue flags in isolation, so reintroducing
+        // any inline threshold check into this read path fails here rather than surfacing later
+        // as a list that contradicts its own filter.
         using TestDatabaseFactory dbFactory = new();
         Machine machine = TestDataBuilder.BuildMachine(tenantId: 1);
         machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
@@ -2267,8 +2162,47 @@ public class MachineSearchServiceTests
         PaginatedResponse<FleetMachineDto> result = await service.SearchAsync(
             DefaultCriteria(), 1, CancellationToken.None);
 
-        MachineHealthStatus expected = HealthComputer.Compute(state, isOnline: true);
+        await Assert.That(result.Items[0].HealthStatus).IsEqualTo(MachineHealthStatus.Healthy);
+    }
 
+    [Test]
+    [Arguments("healthy", MachineHealthStatus.Healthy)]
+    [Arguments("warning", MachineHealthStatus.Warning)]
+    [Arguments("critical", MachineHealthStatus.Critical)]
+    [Arguments("offline", MachineHealthStatus.Offline)]
+    public async Task SearchAsync_FilteredByHealth_EveryDisplayedStatusMatchesTheFilter(
+        string filter, MachineHealthStatus expected)
+    {
+        // The property the whole change exists to guarantee: what a user sees equals what the
+        // filter matched. One machine is seeded per status, each with raw metrics that disagree
+        // with its swept column, so a read path that recomputed would return rows whose displayed
+        // status is not the one asked for.
+        using TestDatabaseFactory dbFactory = new();
+
+        short[] statuses = [0, 1, 2, 3];
+        foreach (short status in statuses)
+        {
+            Machine machine = TestDataBuilder.BuildMachine(tenantId: 1);
+            machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
+
+            // Raw metrics deliberately contradict the column for every seeded machine.
+            MachineStateSummary state = TestDataBuilder.BuildMachineStateSummary(
+                machineId: machine.Id, cpuPercent: 99, memoryPercent: 99, healthStatus: status);
+            state.FailedServices = 3;
+            state.MaxDiskUsagePercent = 99;
+            await dbFactory.Context.InsertAsync(state);
+        }
+
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+        MachineSearchService service = new(scopeFactory, CreateMockPingService(online: true), CreateConfigService());
+
+        MachineSearchCriteria criteria = DefaultCriteria();
+        criteria.HealthStatus = filter;
+
+        PaginatedResponse<FleetMachineDto> result = await service.SearchAsync(
+            criteria, 1, CancellationToken.None);
+
+        await Assert.That(result.Items.Count).IsEqualTo(1);
         await Assert.That(result.Items[0].HealthStatus).IsEqualTo(expected);
     }
 }

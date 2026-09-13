@@ -6,7 +6,6 @@ using System.Text.Json;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
-using Framlux.FleetManagement.Services.Core.Infrastructure;
 using Framlux.FleetManagement.Services.Core.Models;
 using Framlux.FleetManagement.Services.Core.Models.Machines;
 using Framlux.FleetManagement.Services.Core.ServerConfiguration;
@@ -137,11 +136,10 @@ public sealed class MachineSearchService
         Dictionary<long, bool> onlineMap = await _pingService.AreOnlineAsync(pagedIds, onlineThreshold);
         Dictionary<long, DateTimeOffset?> lastPingMap = await _pingService.GetLastPingsAsync(pagedIds);
 
-        // Build DTOs for the paged subset only.
+        // Build DTOs for the paged subset only. Health status comes straight from the swept
+        // column the filter, sort and count all ran against, so the rows a filter selected are
+        // the rows the page displays with that status.
         List<FleetMachineDto> pagedDtos = BuildDtos(pagedRows, onlineMap, lastPingMap);
-
-        // Enrich the paged subset with health computation from Redis+scalar data.
-        EnrichWithHealth(pagedDtos, pagedRows, onlineMap);
 
         return new PaginatedResponse<FleetMachineDto>
         {
@@ -240,35 +238,6 @@ public sealed class MachineSearchService
         }
 
         return dtos;
-    }
-
-    private static void EnrichWithHealth(
-        List<FleetMachineDto> dtos,
-        List<FleetMachineRow> rows,
-        Dictionary<long, bool> onlineMap)
-    {
-        Dictionary<long, FleetMachineRow> rowMap = rows.ToDictionary(r => r.Id);
-
-        foreach (FleetMachineDto dto in dtos)
-        {
-            if (rowMap.TryGetValue(dto.Id, out FleetMachineRow? row) == false)
-            {
-                continue;
-            }
-
-            bool isOnline = onlineMap.GetValueOrDefault(dto.Id, false);
-            MachineStateSummary summary = new()
-            {
-                CpuUsagePercent = row.CpuUsagePercent,
-                MemoryUsagePercent = row.MemoryUsagePercent,
-                FailedServices = row.FailedServices,
-                MaxDiskUsagePercent = row.MaxDiskUsagePercent,
-                HasDiskHealthIssue = row.HasDiskHealthIssue,
-                HasHardwareIssue = row.HasHardwareIssue,
-            };
-
-            dto.HealthStatus = HealthComputer.Compute(summary, isOnline);
-        }
     }
 
     private static HashSet<MachineHealthStatus> ParseHealthStatuses(string healthStatusFilter)

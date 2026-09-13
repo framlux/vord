@@ -90,7 +90,8 @@ public sealed class MachineStatusEndpointTests
         using DatabaseContext db = factory.CreateDbContext();
         (int tenantId, int userId, long machineId) = await SeedEnvironment(db);
 
-        // Seed a summary so HealthComputer has telemetry to evaluate
+        // The swept HealthStatus column is what the endpoint reports, so seed it to Critical
+        // while leaving the raw metrics healthy: only the column can produce the expected value.
         MachineStateSummary summary = new()
         {
             MachineId = machineId,
@@ -101,7 +102,7 @@ public sealed class MachineStatusEndpointTests
             Hostname = "test-host",
             CpuUsagePercent = 20,
             MemoryUsagePercent = 30,
-            HealthStatus = 0,
+            HealthStatus = 2,
             LastSeenAt = DateTimeOffset.UtcNow,
         };
         await db.InsertAsync(summary);
@@ -127,8 +128,10 @@ public sealed class MachineStatusEndpointTests
         await Assert.That(data.TryGetProperty("healthStatus", out JsonElement healthProp)).IsTrue();
         int healthValue = healthProp.GetInt32();
 
-        // Machine has no recent ping via InMemoryPingService, so it should be Offline (3)
-        await Assert.That(healthValue).IsEqualTo(3);
+        // The stored column says Critical (2) and that is what the endpoint reports, even though
+        // no recent ping exists — liveness travels separately on isOnline.
+        await Assert.That(healthValue).IsEqualTo(2);
+        await Assert.That(data.GetProperty("isOnline").GetBoolean()).IsFalse();
     }
 
     [Test]

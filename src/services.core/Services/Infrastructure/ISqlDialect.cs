@@ -29,6 +29,10 @@ public interface ISqlDialect
 
     /// <summary>
     /// SQL for sweeping health status recomputation for all machines belonging to a single tenant.
+    /// This SQL, per dialect, is the only definition of the health rule in the system. Read paths
+    /// surface the swept HealthStatus column rather than re-deriving it, so what a user sees is
+    /// the same value the health filter matched on and the same value an alert fired on. Do not
+    /// reintroduce an application-side copy of these thresholds.
     /// </summary>
     string HealthSweepForTenant { get; }
 

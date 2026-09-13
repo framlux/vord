@@ -393,6 +393,7 @@ public class MachineStateServiceTests
     [Test]
     public async Task GetMachineDetailAsync_OfflineMachine_HealthIsOffline()
     {
+        // No summary row at all, so the health verdict is Offline regardless of the ping.
         using TestDatabaseFactory dbFactory = new();
         Machine machine = TestDataBuilder.BuildMachine(tenantId: 1);
         machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
@@ -609,8 +610,11 @@ public class MachineStateServiceTests
     }
 
     [Test]
-    public async Task GetMachineDetailAsync_NoState_OnlineMachine_HealthIsHealthy()
+    public async Task GetMachineDetailAsync_NoState_OnlineMachine_HealthIsOffline()
     {
+        // With no summary row the machine has never reported telemetry, which the fleet query
+        // behind the machine list reports as Offline. The detail page agrees, and the live Redis
+        // ping surfaces through IsOnline instead of being folded into the health verdict.
         using TestDatabaseFactory dbFactory = new();
         Machine machine = TestDataBuilder.BuildMachine(tenantId: 1);
         machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
@@ -621,7 +625,60 @@ public class MachineStateServiceTests
         MachineDetailDto? result = await service.GetMachineDetailAsync(machine.Id, 1, CancellationToken.None);
 
         await Assert.That(result).IsNotNull();
+        await Assert.That(result!.HealthStatus).IsEqualTo(MachineHealthStatus.Offline);
+        await Assert.That(result.IsOnline).IsTrue();
+    }
+
+    [Test]
+    public async Task GetMachineDetailAsync_ReportsSweptHealthColumn_NotRecomputedFromRawMetrics()
+    {
+        // The detail page is the one place a live recomputation might seem defensible, since the
+        // user is looking at a single machine. It is not: a status here that disagrees with the
+        // list the user clicked through from, and with the alert that may have sent them, is
+        // worse than a value up to one sweep old. Raw metrics say Critical, the column says
+        // Healthy, and the page reports the column.
+        using TestDatabaseFactory dbFactory = new();
+        Machine machine = TestDataBuilder.BuildMachine(tenantId: 1);
+        machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
+
+        MachineStateSummary state = TestDataBuilder.BuildMachineStateSummary(
+            machineId: machine.Id, cpuPercent: 99, memoryPercent: 99, healthStatus: 0);
+        state.FailedServices = 4;
+        state.MaxDiskUsagePercent = 99;
+        state.HasDiskHealthIssue = true;
+        state.HasHardwareIssue = true;
+        await dbFactory.Context.InsertAsync(state);
+
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+        MachineStateService service = new(scopeFactory, CreateMockPingService(online: true), CreateConfigService());
+
+        MachineDetailDto? result = await service.GetMachineDetailAsync(machine.Id, 1, CancellationToken.None);
+
+        await Assert.That(result).IsNotNull();
         await Assert.That(result!.HealthStatus).IsEqualTo(MachineHealthStatus.Healthy);
+    }
+
+    [Test]
+    public async Task GetMachineDetailAsync_SweptColumnCritical_SurvivesAnOnlinePing()
+    {
+        // The mirror of the previous case. A live ping must not soften a swept Critical into
+        // something friendlier; online-ness travels on IsOnline, not on the health status.
+        using TestDatabaseFactory dbFactory = new();
+        Machine machine = TestDataBuilder.BuildMachine(tenantId: 1);
+        machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
+
+        MachineStateSummary state = TestDataBuilder.BuildMachineStateSummary(
+            machineId: machine.Id, cpuPercent: 5, memoryPercent: 5, healthStatus: 2);
+        await dbFactory.Context.InsertAsync(state);
+
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+        MachineStateService service = new(scopeFactory, CreateMockPingService(online: true), CreateConfigService());
+
+        MachineDetailDto? result = await service.GetMachineDetailAsync(machine.Id, 1, CancellationToken.None);
+
+        await Assert.That(result).IsNotNull();
+        await Assert.That(result!.HealthStatus).IsEqualTo(MachineHealthStatus.Critical);
+        await Assert.That(result.IsOnline).IsTrue();
     }
 
     [Test]

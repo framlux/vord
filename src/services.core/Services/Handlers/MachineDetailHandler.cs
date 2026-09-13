@@ -128,10 +128,13 @@ public sealed class MachineDetailHandler
         DateTimeOffset? lastPing = await _pingService.GetLastPingAsync(machineId);
         ulong capabilities = await _pingService.GetAgentCapabilitiesAsync(machineId);
 
+        // Health comes from the swept column so this endpoint cannot report a status that
+        // disagrees with the list the user reached the machine from. A machine with no summary
+        // row has never reported telemetry, which the fleet query treats as offline.
         MachineStateSummary? summary = await _machineStateRepo.GetSummaryForMachineAsync(machineId, ct);
         MachineHealthStatus healthStatus = summary is not null
-            ? HealthComputer.Compute(summary, isOnline)
-            : (isOnline ? MachineHealthStatus.Healthy : MachineHealthStatus.Offline);
+            ? (MachineHealthStatus)summary.HealthStatus
+            : MachineHealthStatus.Offline;
 
         MachineStatusDto dto = new()
         {

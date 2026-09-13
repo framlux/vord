@@ -198,9 +198,12 @@ public sealed class MachineStateService : IMachineStateService
             .OfType<SshSessionPayload>()
             .ToList();
 
+        // Health comes from the swept column, the same value the machine list, its health filter
+        // and the alert evaluator read. A machine that has never reported telemetry has no summary
+        // row, and the fleet query treats that absence as offline, so this does too.
         MachineHealthStatus health = state is not null
-            ? HealthComputer.Compute(state, isOnline)
-            : (isOnline ? MachineHealthStatus.Healthy : MachineHealthStatus.Offline);
+            ? (MachineHealthStatus)state.HealthStatus
+            : MachineHealthStatus.Offline;
 
         return new MachineDetailDto
         {

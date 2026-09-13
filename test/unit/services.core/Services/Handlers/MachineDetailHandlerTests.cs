@@ -296,7 +296,7 @@ public class MachineDetailHandlerTests
         long machineId = await SeedMachine(dbFactory);
 
         MachineStateSummary summary = TestDataBuilder.BuildMachineStateSummary(
-            machineId: machineId, cpuPercent: 20, memoryPercent: 30);
+            machineId: machineId, cpuPercent: 20, memoryPercent: 30, healthStatus: 3);
         await dbFactory.Context.InsertAsync(summary);
 
         MachineDetailHandler handler = CreateHandler(dbFactory);
@@ -330,15 +330,18 @@ public class MachineDetailHandlerTests
     }
 
     [Test]
-    public async Task GetStatusAsync_OnlineCriticalCpu_ReturnsHealthStatusCritical()
+    public async Task GetStatusAsync_SweptColumnCritical_ReturnsHealthStatusCritical()
     {
+        // Raw CPU is well inside the healthy band while the swept column says Critical. The
+        // status endpoint reports the column, so it can never contradict the machine list the
+        // user reached this machine from.
         using TestDatabaseFactory dbFactory = new();
         long machineId = await SeedMachine(dbFactory);
         InMemoryMachinePingService pingService = new();
         await pingService.RecordPingAsync(machineId);
 
         MachineStateSummary summary = TestDataBuilder.BuildMachineStateSummary(
-            machineId: machineId, cpuPercent: 96, memoryPercent: 30);
+            machineId: machineId, cpuPercent: 10, memoryPercent: 10, healthStatus: 2);
         await dbFactory.Context.InsertAsync(summary);
 
         MachineDetailHandler handler = CreateHandler(dbFactory, pingService: pingService);
@@ -351,15 +354,18 @@ public class MachineDetailHandlerTests
     }
 
     [Test]
-    public async Task GetStatusAsync_OnlineWarningMemory_ReturnsHealthStatusWarning()
+    public async Task GetStatusAsync_RawMetricsInWarningBand_StillReportsTheSweptColumn()
     {
+        // Memory sits at 85, above the warning threshold the sweep applies, but the column has
+        // not been swept to Warning yet. Reporting Warning here would mean this endpoint had
+        // re-derived the rule for itself.
         using TestDatabaseFactory dbFactory = new();
         long machineId = await SeedMachine(dbFactory);
         InMemoryMachinePingService pingService = new();
         await pingService.RecordPingAsync(machineId);
 
         MachineStateSummary summary = TestDataBuilder.BuildMachineStateSummary(
-            machineId: machineId, cpuPercent: 20, memoryPercent: 85);
+            machineId: machineId, cpuPercent: 20, memoryPercent: 85, healthStatus: 0);
         await dbFactory.Context.InsertAsync(summary);
 
         MachineDetailHandler handler = CreateHandler(dbFactory, pingService: pingService);
@@ -368,12 +374,15 @@ public class MachineDetailHandlerTests
 
         await Assert.That(result.IsSuccess).IsTrue();
         await Assert.That(result.Data!.IsOnline).IsTrue();
-        await Assert.That(result.Data!.HealthStatus).IsEqualTo(MachineHealthStatus.Warning);
+        await Assert.That(result.Data!.HealthStatus).IsEqualTo(MachineHealthStatus.Healthy);
     }
 
     [Test]
-    public async Task GetStatusAsync_OnlineNoSummary_ReturnsHealthStatusHealthy()
+    public async Task GetStatusAsync_OnlineNoSummary_ReturnsHealthStatusOffline()
     {
+        // A machine with no summary row has never reported telemetry, and the fleet query the
+        // machine list is built from reports exactly that case as Offline. This endpoint agrees
+        // rather than inventing a Healthy verdict from nothing but a Redis ping.
         using TestDatabaseFactory dbFactory = new();
         long machineId = await SeedMachine(dbFactory);
         InMemoryMachinePingService pingService = new();
@@ -385,7 +394,7 @@ public class MachineDetailHandlerTests
 
         await Assert.That(result.IsSuccess).IsTrue();
         await Assert.That(result.Data!.IsOnline).IsTrue();
-        await Assert.That(result.Data!.HealthStatus).IsEqualTo(MachineHealthStatus.Healthy);
+        await Assert.That(result.Data!.HealthStatus).IsEqualTo(MachineHealthStatus.Offline);
     }
 
     [Test]
