@@ -63,12 +63,4 @@ public sealed class SqliteSqlDialect : ISqlDialect
             ELSE 0
         END
         """;
-
-    /// <inheritdoc/>
-    public string StaleSweepSql => """
-        UPDATE "MachineStateSummary"
-        SET "HealthStatus" = 3
-        WHERE "LastSeenAt" < datetime('now', '-' || @onlineThresholdSeconds || ' seconds')
-          AND "HealthStatus" != 3
-        """;
 }

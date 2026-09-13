@@ -47,12 +47,4 @@ public sealed class PostgresSqlDialect : ISqlDialect
         FROM computed c
         WHERE s."MachineId" = c."MachineId" AND s."HealthStatus" != c."NewHealth"
         """;
-
-    /// <inheritdoc/>
-    public string StaleSweepSql => """
-        UPDATE "MachineStateSummary"
-        SET "HealthStatus" = 3
-        WHERE "LastSeenAt" < (NOW() - MAKE_INTERVAL(secs => @onlineThresholdSeconds))
-          AND "HealthStatus" != 3
-        """;
 }

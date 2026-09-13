@@ -35,10 +35,4 @@ public interface ISqlDialect
     /// reintroduce an application-side copy of these thresholds.
     /// </summary>
     string HealthSweepForTenant { get; }
-
-    /// <summary>
-    /// SQL for detecting and marking machines that have gone stale or offline based on
-    /// their last ping or telemetry timestamps.
-    /// </summary>
-    string StaleSweepSql { get; }
 }

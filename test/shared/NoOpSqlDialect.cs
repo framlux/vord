@@ -23,7 +23,4 @@ internal sealed class NoOpSqlDialect : ISqlDialect
 
     /// <inheritdoc/>
     public string HealthSweepForTenant => string.Empty;
-
-    /// <inheritdoc/>
-    public string StaleSweepSql => string.Empty;
 }
