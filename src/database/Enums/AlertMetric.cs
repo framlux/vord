@@ -24,5 +24,7 @@ public enum AlertMetric : short
     /// <summary>Disk SMART health status.</summary>
     DiskHealth = 7,
     /// <summary>New SSH connection detected on the machine.</summary>
-    SshConnection = 8
+    SshConnection = 8,
+    /// <summary>Telemetry has stopped arriving from a machine that is still reachable.</summary>
+    TelemetryStale = 9
 }

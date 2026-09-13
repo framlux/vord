@@ -31,7 +31,7 @@ public sealed class BuiltInAlertRuleProvisionerTests
         List<AlertRule> inserted = CapturedRules(repo);
 
         await Assert.That(inserted.Count).IsEqualTo(BuiltInAlertRuleDefinitions.All.Count);
-        await Assert.That(inserted.Count).IsEqualTo(8);
+        await Assert.That(inserted.Count).IsEqualTo(9);
         await Assert.That(inserted.TrueForAll(r => r.IsEnabled == false)).IsTrue();
         await Assert.That(inserted.TrueForAll(r => r.IsCustom == false)).IsTrue();
         await Assert.That(inserted.TrueForAll(r => r.TenantId == 7)).IsTrue();
@@ -53,7 +53,7 @@ public sealed class BuiltInAlertRuleProvisionerTests
 
         List<AlertRule> inserted = CapturedRules(repo);
 
-        await Assert.That(inserted.Count).IsEqualTo(8);
+        await Assert.That(inserted.Count).IsEqualTo(9);
         await Assert.That(inserted.TrueForAll(r => r.IsEnabled)).IsTrue();
     }
 
@@ -71,7 +71,7 @@ public sealed class BuiltInAlertRuleProvisionerTests
 
         List<AlertRule> inserted = CapturedRules(repo);
 
-        await Assert.That(inserted.Count).IsEqualTo(8);
+        await Assert.That(inserted.Count).IsEqualTo(9);
         await Assert.That(inserted.TrueForAll(r => r.IsEnabled == false)).IsTrue();
     }
 
@@ -94,7 +94,7 @@ public sealed class BuiltInAlertRuleProvisionerTests
 
         List<AlertRule> inserted = CapturedRules(repo);
 
-        await Assert.That(inserted.Count).IsEqualTo(8);
+        await Assert.That(inserted.Count).IsEqualTo(9);
         await Assert.That(inserted.TrueForAll(r => r.IsEnabled)).IsTrue();
     }
 
@@ -112,7 +112,7 @@ public sealed class BuiltInAlertRuleProvisionerTests
 
         List<AlertRule> inserted = CapturedRules(repo);
 
-        await Assert.That(inserted.Count).IsEqualTo(6);
+        await Assert.That(inserted.Count).IsEqualTo(7);
         await Assert.That(inserted.Exists(r => r.Metric == AlertMetric.CpuUsage)).IsFalse();
         await Assert.That(inserted.Exists(r => r.Metric == AlertMetric.DiskHealth)).IsFalse();
     }
@@ -361,7 +361,7 @@ public sealed class BuiltInAlertRuleProvisionerTests
             SubscriptionStatus.Active,
             CancellationToken.None);
 
-        await Assert.That(CapturedRules(repo).Count).IsEqualTo(8);
+        await Assert.That(CapturedRules(repo).Count).IsEqualTo(9);
         await repo.DidNotReceive().EnableBuiltInAlertRulesAsync(Arg.Any<int>(), Arg.Any<CancellationToken>());
     }
 
@@ -444,7 +444,7 @@ public sealed class BuiltInAlertRuleProvisionerTests
     /// <summary>
     /// Pins every shipped built-in definition exactly. The thresholds and durations here are tuned
     /// values, not defaults — each one is the line between a useful alert and a mailbox nobody
-    /// reads, and all eight ship enabled with email on. Without this, reverting a duration or
+    /// reads, and all of them ship enabled with email on. Without this, reverting a duration or
     /// downgrading a severity is a silent change that no other test notices.
     /// </summary>
     [Test]
@@ -456,6 +456,7 @@ public sealed class BuiltInAlertRuleProvisionerTests
     [Arguments(AlertMetric.MemoryUsage, AlertOperator.GreaterThan, 90, 15, AlertSeverity.Warning)]
     [Arguments(AlertMetric.SecurityUpdates, AlertOperator.GreaterThan, 0, 1, AlertSeverity.Info)]
     [Arguments(AlertMetric.SshConnection, AlertOperator.EqualTo, 1, 0, AlertSeverity.Info)]
+    [Arguments(AlertMetric.TelemetryStale, AlertOperator.EqualTo, 1, 10, AlertSeverity.Warning)]
     public async Task Definitions_ShipTheTunedThresholdForEachMetric(
         AlertMetric metric,
         AlertOperator expectedOperator,

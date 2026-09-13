@@ -313,6 +313,7 @@ public sealed class AlertEvaluationJob
             AlertMetric.SecurityUpdates => state.SecurityUpdates.HasValue ? (decimal)state.SecurityUpdates.Value : null,
             AlertMetric.DiskHealth => GetDiskHealthValue(state),
             AlertMetric.MachineOffline => state.HealthStatus == AlertConstants.HealthStatusOffline ? 1m : 0m,
+            AlertMetric.TelemetryStale => state.TelemetryStale ? 1m : 0m,
             AlertMetric.SshConnection => null,
             _ => null,
         };

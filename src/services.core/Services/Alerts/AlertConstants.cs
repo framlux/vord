@@ -58,6 +58,7 @@ public static class AlertConstants
             AlertMetric.SecurityUpdates => 1,
             AlertMetric.DiskHealth => 1,
             AlertMetric.SshConnection => 0,
+            AlertMetric.TelemetryStale => 1,
             _ => 1,
         };
     }

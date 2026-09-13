@@ -89,7 +89,8 @@
 		FailedServices: 1,
 		SecurityUpdates: 1,
 		DiskHealth: 1,
-		SshConnection: 0
+		SshConnection: 0,
+		TelemetryStale: 1
 	};
 
 	const eventMetrics = new Set(['SshConnection']);
@@ -315,6 +316,7 @@
 										<option value="DiskHealth">Disk Health</option>
 										<option value="MachineOffline">Machine Offline</option>
 										<option value="SshConnection">SSH Connection</option>
+										<option value="TelemetryStale">Telemetry Stopped</option>
 									</select>
 								</div>
 								{#if isCreateEventMetric === false}

@@ -24,11 +24,12 @@ internal static class AlertRuleMetricRules
     }
 
     /// <summary>
-    /// Determines whether the metric is binary (only 0 or 1 is meaningful), e.g. machine offline or disk health.
+    /// Determines whether the metric is binary (only 0 or 1 is meaningful), e.g. machine offline,
+    /// disk health or stale telemetry.
     /// </summary>
     internal static bool IsBinaryMetric(AlertMetric metric)
     {
-        return metric is AlertMetric.MachineOffline or AlertMetric.DiskHealth;
+        return metric is AlertMetric.MachineOffline or AlertMetric.DiskHealth or AlertMetric.TelemetryStale;
     }
 
     /// <summary>

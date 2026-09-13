@@ -216,6 +216,24 @@ public sealed class AlertEvaluationJobTests
     }
 
     [Test]
+    [Arguments(true, 1)]
+    [Arguments(false, 0)]
+    public async Task GetMetricValue_TelemetryStale_ReflectsTheSweptFlag(bool stale, int expected)
+    {
+        // The evaluator reads the flag the health sweep wrote rather than recomputing staleness, so
+        // the rule has one definition and an alert can never disagree with the health badge.
+        MachineStateSummary s = new()
+        {
+            MachineId = 1,
+            HealthStatus = 1,
+            LastSeenAt = DateTimeOffset.UtcNow,
+            TelemetryStale = stale,
+        };
+
+        await Assert.That(AlertEvaluationJob.GetMetricValue(AlertMetric.TelemetryStale, s)).IsEqualTo((decimal)expected);
+    }
+
+    [Test]
     public async Task GetMetricValue_SshConnection_AlwaysNull()
     {
         // SshConnection is an event-metric; should never reach GetMetricValue in normal flow.

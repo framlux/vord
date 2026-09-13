@@ -150,4 +150,12 @@ public sealed class MachineStateSummary
     /// </summary>
     [Column("LastHeartbeatAt"), Nullable]
     public DateTimeOffset? LastHeartbeatAt { get; set; }
+
+    /// <summary>
+    /// Whether telemetry has stopped arriving while the machine is still reachable. Written by the
+    /// same sweep statement that writes <see cref="HealthStatus"/>, so staleness has exactly one
+    /// definition and the alert evaluator reads it rather than recomputing the rule.
+    /// </summary>
+    [Column("TelemetryStale"), NotNull]
+    public bool TelemetryStale { get; set; }
 }

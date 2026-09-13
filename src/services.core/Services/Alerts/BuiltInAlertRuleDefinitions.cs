@@ -118,5 +118,18 @@ public static class BuiltInAlertRuleDefinitions
             1,
             0,
             AlertSeverity.Info),
+
+        // A reachable machine that has stopped reporting is invisible rather than gone: the agent
+        // answers, so "Machine offline" never fires, and the metrics on screen are frozen at
+        // whatever they last were. Ten minutes past the staleness window is long enough to ride out
+        // a collector restart. Warning, not Critical — nothing is known to be wrong, we have simply
+        // stopped being able to tell.
+        new BuiltInAlertRuleDefinition(
+            "Telemetry stopped",
+            AlertMetric.TelemetryStale,
+            AlertOperator.EqualTo,
+            1,
+            10,
+            AlertSeverity.Warning),
     ];
 }
