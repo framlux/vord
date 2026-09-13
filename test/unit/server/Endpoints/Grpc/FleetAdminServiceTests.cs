@@ -1966,6 +1966,11 @@ public sealed class FleetAdminServiceTests
     {
         IServerConfigurationRepository configRepo = Substitute.For<IServerConfigurationRepository>();
 
+        // The cross-setting rule reads the current settings before writing, so the substitute has
+        // to answer the way the real repository does rather than with a null list.
+        configRepo.ListAllSettingsAsync(Arg.Any<CancellationToken>())
+            .Returns(new List<ServerConfigurationSettings>());
+
         IServiceScopeFactory scopeFactory = CreateScopeFactoryWithServices(new Dictionary<Type, object>
         {
             { typeof(IServerConfigurationRepository), configRepo }
@@ -2016,6 +2021,49 @@ public sealed class FleetAdminServiceTests
                 }, context));
 
         await Assert.That(exception!.StatusCode).IsEqualTo(StatusCode.InvalidArgument);
+        await configRepo.DidNotReceive().UpsertSettingAsync(
+            Arg.Any<ServerConfigurationSettingKeys>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>
+    /// UpdateServerSetting rejects a value that is in range on its own but collides with another
+    /// setting's stored value, so the single-key gRPC path enforces the same relationship the REST
+    /// batch path does.
+    /// </summary>
+    [Test]
+    public async Task UpdateServerSetting_CollidesWithAnotherSetting_ThrowsInvalidArgumentAndDoesNotWrite()
+    {
+        IServerConfigurationRepository configRepo = Substitute.For<IServerConfigurationRepository>();
+        configRepo.ListAllSettingsAsync(Arg.Any<CancellationToken>())
+            .Returns(new List<ServerConfigurationSettings>
+            {
+                new()
+                {
+                    Key = ServerConfigurationSettingKeys.AgentHeartbeatSeconds,
+                    Value = "300",
+                    Version = 1,
+                },
+            });
+
+        IServiceScopeFactory scopeFactory = CreateScopeFactoryWithServices(new Dictionary<Type, object>
+        {
+            { typeof(IServerConfigurationRepository), configRepo }
+        });
+
+        FleetAdminService service = CreateFleetAdminService(scopeFactory);
+        ServerCallContext context = CreateContext();
+
+        // 300 is inside the threshold's own 60-3600 bounds, but not twice the stored 300s heartbeat.
+        RpcException? exception = await Assert.ThrowsAsync<RpcException>(
+            async () => await service.UpdateServerSetting(
+                new UpdateServerSettingRequest
+                {
+                    Key = (ServerSettingKey)(int)ServerConfigurationSettingKeys.OnlineThresholdSeconds,
+                    Value = "300"
+                }, context));
+
+        await Assert.That(exception!.StatusCode).IsEqualTo(StatusCode.InvalidArgument);
+        await Assert.That(exception.Status.Detail).Contains("AgentHeartbeatSeconds");
         await configRepo.DidNotReceive().UpsertSettingAsync(
             Arg.Any<ServerConfigurationSettingKeys>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
     }

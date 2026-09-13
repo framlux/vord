@@ -133,7 +133,7 @@ public sealed class AdminSettingsEndpointTests
         {
             settings = new[]
             {
-                new { key = 1, value = "600" }
+                new { key = 1, value = "100" }
             }
         });
         StringContent content = new(json, Encoding.UTF8, "application/json");
@@ -152,7 +152,7 @@ public sealed class AdminSettingsEndpointTests
         JsonElement settingsArray = root.GetProperty("data").GetProperty("settings");
         JsonElement updatedSetting = settingsArray.EnumerateArray()
             .First(s => s.GetProperty("key").GetInt32() == 1);
-        await Assert.That(updatedSetting.GetProperty("value").GetString()).IsEqualTo("600");
+        await Assert.That(updatedSetting.GetProperty("value").GetString()).IsEqualTo("100");
     }
 
     [Test]

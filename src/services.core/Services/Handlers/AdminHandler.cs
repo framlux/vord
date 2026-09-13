@@ -27,7 +27,7 @@ public sealed class AdminHandler
     {
         [ServerConfigurationSettingKeys.AgentHeartbeatSeconds] = "How often agents send a heartbeat to the server, in seconds (10-600).",
         [ServerConfigurationSettingKeys.AgentConfigRefreshSeconds] = "How often agents refresh their configuration from the server, in seconds (60-86400).",
-        [ServerConfigurationSettingKeys.OnlineThresholdSeconds] = "Maximum seconds since last heartbeat before a machine is considered offline.",
+        [ServerConfigurationSettingKeys.OnlineThresholdSeconds] = "Maximum seconds since the server last heard from a machine, by heartbeat or telemetry, before it is considered offline (60-3600, and at least twice the heartbeat interval).",
         [ServerConfigurationSettingKeys.DeduplicationTtlSeconds] = "Time-to-live in seconds for telemetry event deduplication.",
         [ServerConfigurationSettingKeys.AgentCommandPollSeconds] = "How often agents poll the server for pending commands, in seconds (10-300).",
         [ServerConfigurationSettingKeys.AllowUserSignup] = "Whether new users are allowed to self-register via social login.",
@@ -118,6 +118,17 @@ public sealed class AdminHandler
             }
         }
 
+        // Cross-setting rules are judged once, on the state this save would produce: the stored
+        // values overlaid with every proposed value. Judging each entry against the stored values
+        // would reject a batch that moves both sides of a pair together, and would leave a
+        // deployment that already violates a rule unable to save the batch that repairs it.
+        string? relationshipError = ServerSettingValidation.ValidateRelationships(
+            await BuildResultingSettingsAsync(updates, ct));
+        if (relationshipError is not null)
+        {
+            return ServiceResult<List<SettingEntry>>.BadRequest(relationshipError);
+        }
+
         using IDatabaseTransaction transaction = await _transactionProvider.BeginTransactionAsync(ct);
 
         foreach (SettingUpdateEntry update in updates)
@@ -148,6 +159,22 @@ public sealed class AdminHandler
         }
 
         return await GetSettingsAsync(ct);
+    }
+
+    private async Task<Dictionary<ServerConfigurationSettingKeys, string>> BuildResultingSettingsAsync(
+        List<SettingUpdateEntry> updates, CancellationToken ct)
+    {
+        List<ServerConfigurationSettings> current = await _configRepo.ListAllSettingsAsync(ct);
+
+        Dictionary<ServerConfigurationSettingKeys, string> resulting = current
+            .ToDictionary(s => s.Key, s => s.Value);
+
+        foreach (SettingUpdateEntry update in updates)
+        {
+            resulting[(ServerConfigurationSettingKeys)update.Key] = update.Value;
+        }
+
+        return resulting;
     }
 
     /// <summary>

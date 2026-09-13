@@ -102,12 +102,12 @@ public class AdminHandlerTests
 
         DatabaseRepository repo = CreateRepo(dbFactory);
         AdminHandler handler = new(repo, repo, redis, repo, repo, NullLogger<AdminHandler>.Instance);
-        List<SettingUpdateEntry> updates = [new() { Key = 1, Value = "600" }];
+        List<SettingUpdateEntry> updates = [new() { Key = 1, Value = "100" }];
 
         ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, 1, CancellationToken.None);
 
         await Assert.That(result.IsSuccess).IsTrue();
-        await Assert.That(result.Data!.First(e => e.Key == 1).Value).IsEqualTo("600");
+        await Assert.That(result.Data!.First(e => e.Key == 1).Value).IsEqualTo("100");
     }
 
     [Test]
@@ -118,13 +118,13 @@ public class AdminHandlerTests
 
         DatabaseRepository repo = CreateRepo(dbFactory);
         AdminHandler handler = new(repo, repo, redis, repo, repo, NullLogger<AdminHandler>.Instance);
-        List<SettingUpdateEntry> updates = [new() { Key = 1, Value = "500" }];
+        List<SettingUpdateEntry> updates = [new() { Key = 1, Value = "100" }];
 
         ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, 1, CancellationToken.None);
 
         await Assert.That(result.IsSuccess).IsTrue();
         await Assert.That(result.Data!.Count).IsEqualTo(1);
-        await Assert.That(result.Data!.First(e => e.Key == 1).Value).IsEqualTo("500");
+        await Assert.That(result.Data!.First(e => e.Key == 1).Value).IsEqualTo("100");
     }
 
     [Test]
@@ -289,7 +289,7 @@ public class AdminHandlerTests
 
         DatabaseRepository repo = CreateRepo(dbFactory);
         AdminHandler handler = new(repo, repo, redis, repo, repo, NullLogger<AdminHandler>.Instance);
-        List<SettingUpdateEntry> updates = [new() { Key = 1, Value = "600" }];
+        List<SettingUpdateEntry> updates = [new() { Key = 1, Value = "100" }];
 
         await handler.UpdateSettingsAsync(updates, 1, CancellationToken.None);
 
@@ -312,7 +312,7 @@ public class AdminHandlerTests
 
         DatabaseRepository repo = CreateRepo(dbFactory);
         AdminHandler handler = new(repo, repo, redis, repo, repo, NullLogger<AdminHandler>.Instance);
-        List<SettingUpdateEntry> updates = [new() { Key = 1, Value = "600" }];
+        List<SettingUpdateEntry> updates = [new() { Key = 1, Value = "100" }];
 
         await handler.UpdateSettingsAsync(updates, 1, CancellationToken.None);
 
@@ -375,11 +375,133 @@ public class AdminHandlerTests
 
         DatabaseRepository repo = CreateRepo(dbFactory);
         AdminHandler handler = new(repo, repo, redis, repo, repo, NullLogger<AdminHandler>.Instance);
-        List<SettingUpdateEntry> updates = [new() { Key = 1, Value = "600" }];
+        // The heartbeat's maximum needs a threshold that clears twice it, which is above the
+        // threshold's own default, so the batch has to carry both.
+        List<SettingUpdateEntry> updates =
+        [
+            new() { Key = 1, Value = "600" },
+            new() { Key = (int)ServerConfigurationSettingKeys.OnlineThresholdSeconds, Value = "1200" },
+        ];
 
         ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, 1, CancellationToken.None);
 
         await Assert.That(result.IsSuccess).IsTrue();
+    }
+
+    // ========== Cross-setting relationship tests ==========
+
+    [Test]
+    public async Task UpdateSettingsAsync_ThresholdUnderTwiceTheHeartbeat_ReturnsBadRequest()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        AdminHandler handler = CreateHandler(dbFactory);
+        List<SettingUpdateEntry> updates =
+        [
+            new() { Key = (int)ServerConfigurationSettingKeys.AgentHeartbeatSeconds, Value = "300" },
+            new() { Key = (int)ServerConfigurationSettingKeys.OnlineThresholdSeconds, Value = "300" },
+        ];
+
+        ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, 1, CancellationToken.None);
+
+        await Assert.That(result.IsSuccess).IsFalse();
+        await Assert.That(result.StatusCode).IsEqualTo(400);
+        await Assert.That(result.ErrorMessage).Contains("AgentHeartbeatSeconds");
+    }
+
+    [Test]
+    public async Task UpdateSettingsAsync_RaisingBothTogether_Succeeds()
+    {
+        // The admin panel submits every setting on every save. Judging each key against the stored
+        // values would reject this batch, because the threshold would be checked against a
+        // heartbeat that has not been written yet.
+        using TestDatabaseFactory dbFactory = new();
+        IConnectionMultiplexer redis = CreateFakeRedis();
+        await dbFactory.Context.InsertAsync(new ServerConfigurationSettings
+        {
+            Key = ServerConfigurationSettingKeys.AgentHeartbeatSeconds,
+            Value = "120",
+            Version = 1,
+        });
+        await dbFactory.Context.InsertAsync(new ServerConfigurationSettings
+        {
+            Key = ServerConfigurationSettingKeys.OnlineThresholdSeconds,
+            Value = "300",
+            Version = 1,
+        });
+
+        DatabaseRepository repo = CreateRepo(dbFactory);
+        AdminHandler handler = new(repo, repo, redis, repo, repo, NullLogger<AdminHandler>.Instance);
+        List<SettingUpdateEntry> updates =
+        [
+            new() { Key = (int)ServerConfigurationSettingKeys.AgentHeartbeatSeconds, Value = "200" },
+            new() { Key = (int)ServerConfigurationSettingKeys.OnlineThresholdSeconds, Value = "600" },
+        ];
+
+        ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, 1, CancellationToken.None);
+
+        await Assert.That(result.IsSuccess).IsTrue();
+    }
+
+    [Test]
+    public async Task UpdateSettingsAsync_RepairingAnAlreadyViolatingDeployment_Succeeds()
+    {
+        // An operator who deliberately kept the old 300/300 pair must still be able to save the
+        // batch that fixes it, or the rule locks them out of their own settings tab forever.
+        using TestDatabaseFactory dbFactory = new();
+        IConnectionMultiplexer redis = CreateFakeRedis();
+        await dbFactory.Context.InsertAsync(new ServerConfigurationSettings
+        {
+            Key = ServerConfigurationSettingKeys.AgentHeartbeatSeconds,
+            Value = "300",
+            Version = 4,
+        });
+        await dbFactory.Context.InsertAsync(new ServerConfigurationSettings
+        {
+            Key = ServerConfigurationSettingKeys.OnlineThresholdSeconds,
+            Value = "300",
+            Version = 4,
+        });
+
+        DatabaseRepository repo = CreateRepo(dbFactory);
+        AdminHandler handler = new(repo, repo, redis, repo, repo, NullLogger<AdminHandler>.Instance);
+        List<SettingUpdateEntry> updates =
+        [
+            new() { Key = (int)ServerConfigurationSettingKeys.AgentHeartbeatSeconds, Value = "150" },
+            new() { Key = (int)ServerConfigurationSettingKeys.OnlineThresholdSeconds, Value = "300" },
+        ];
+
+        ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, 1, CancellationToken.None);
+
+        await Assert.That(result.IsSuccess).IsTrue();
+        await Assert.That(result.Data!.First(e => e.Key == (int)ServerConfigurationSettingKeys.AgentHeartbeatSeconds).Value).IsEqualTo("150");
+    }
+
+    [Test]
+    public async Task UpdateSettingsAsync_RelationshipViolation_WritesNothing()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        IConnectionMultiplexer redis = CreateFakeRedis();
+        await dbFactory.Context.InsertAsync(new ServerConfigurationSettings
+        {
+            Key = ServerConfigurationSettingKeys.AgentHeartbeatSeconds,
+            Value = "120",
+            Version = 1,
+        });
+
+        DatabaseRepository repo = CreateRepo(dbFactory);
+        AdminHandler handler = new(repo, repo, redis, repo, repo, NullLogger<AdminHandler>.Instance);
+        List<SettingUpdateEntry> updates =
+        [
+            new() { Key = (int)ServerConfigurationSettingKeys.AgentHeartbeatSeconds, Value = "500" },
+        ];
+
+        ServiceResult<List<SettingEntry>> result = await handler.UpdateSettingsAsync(updates, 1, CancellationToken.None);
+
+        await Assert.That(result.IsSuccess).IsFalse();
+
+        ServerConfigurationSettings? stored = await dbFactory.Context.ServerConfigurationSettings
+            .FirstOrDefaultAsync(s => s.Key == ServerConfigurationSettingKeys.AgentHeartbeatSeconds);
+        await Assert.That(stored!.Value).IsEqualTo("120");
     }
 
     [Test]

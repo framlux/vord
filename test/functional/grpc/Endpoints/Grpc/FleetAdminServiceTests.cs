@@ -644,7 +644,7 @@ public sealed class FleetAdminServiceTests
             new UpdateServerSettingRequest
             {
                 Key = (ServerSettingKey)(int)ServerConfigurationSettingKeys.OnlineThresholdSeconds,
-                Value = "90"
+                Value = "400"
             },
             Headers());
 

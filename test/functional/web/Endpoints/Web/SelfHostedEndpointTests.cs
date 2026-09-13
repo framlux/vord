@@ -525,7 +525,7 @@ public sealed class SelfHostedEndpointTests
             {
                 settings = new[]
                 {
-                    new { key = (int)ServerConfigurationSettingKeys.AgentHeartbeatSeconds, value = "600" }
+                    new { key = (int)ServerConfigurationSettingKeys.AgentHeartbeatSeconds, value = "100" }
                 }
             }),
             Encoding.UTF8,

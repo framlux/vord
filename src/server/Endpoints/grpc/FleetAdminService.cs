@@ -437,6 +437,23 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
         using IServiceScope scope = _scopeFactory.CreateScope();
         IServerConfigurationRepository configRepo = scope.ServiceProvider.GetRequiredService<IServerConfigurationRepository>();
 
+        // Cross-setting rules are judged on the state this write would produce, the same way the
+        // REST admin path judges a batch. This path can only carry one key, so it merely forces an
+        // ordering on the caller; the message names the setting it conflicts with so that ordering
+        // is discoverable.
+        List<ServerConfigurationSettings> currentSettings =
+            await configRepo.ListAllSettingsAsync(context.CancellationToken);
+
+        Dictionary<ServerConfigurationSettingKeys, string> resulting =
+            currentSettings.ToDictionary(s => s.Key, s => s.Value);
+        resulting[key] = request.Value;
+
+        string? relationshipError = ServerSettingValidation.ValidateRelationships(resulting);
+        if (relationshipError is not null)
+        {
+            throw new RpcException(new Status(StatusCode.InvalidArgument, relationshipError));
+        }
+
         // Upsert so a valid key always persists, matching the REST admin path. Validation above
         // already rejected unknown keys, so there is no missing-row case left to report.
         await configRepo.UpsertSettingAsync(key, request.Value, context.CancellationToken);
