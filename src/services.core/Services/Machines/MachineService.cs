@@ -354,7 +354,10 @@ public sealed class MachineService : IMachineService
             Name = machine.Name,
             OperatingSystem = (byte)machine.OperatingSystem,
             MachineType = (byte)machine.MachineType,
-            HealthStatus = 0,
+            // Offline until telemetry arrives and the sweep says otherwise. The fleet query already
+            // treats a missing summary row as offline, so seeding anything else would make this
+            // pre-created row disagree with that default for the identical situation.
+            HealthStatus = 3,
         }, cancellationToken);
 
         await machineStateRepo.InsertDetailAsync(new MachineStateDetail

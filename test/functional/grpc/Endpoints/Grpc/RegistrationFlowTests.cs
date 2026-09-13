@@ -8,10 +8,14 @@ using Framlux.FleetManagement.Database;
 using Framlux.FleetManagement.Test.Infrastructure;
 using Framlux.FleetManagement.Grpc.AgentConfiguration;
 using Framlux.FleetManagement.Grpc.AgentRegistration;
+using Framlux.FleetManagement.Services.Core.Machines;
+using Framlux.FleetManagement.Services.Core.Models.Dashboard;
+using Framlux.FleetManagement.Services.Core.Models.Machines;
 using Grpc.Core;
 using Grpc.Net.Client;
 using LinqToDB.Async;
 using LinqToDB;
+using Microsoft.Extensions.DependencyInjection;
 using System.Security.Cryptography;
 using System.Text;
 
@@ -59,6 +63,79 @@ public sealed class RegistrationFlowTests
             .FirstOrDefaultAsync(m => m.Id == response.MachineId);
         await Assert.That(machine).IsNotNull();
         await Assert.That(machine!.SerialNumber).IsEqualTo("sn-register-001");
+    }
+
+    [Test]
+    public async Task RegisterSystem_BeforeAnyTelemetry_SummaryReadsOffline()
+    {
+        // Registration pre-creates the summary row so later telemetry writes are pure updates.
+        // That row must not claim the machine is healthy: nothing has reported yet, and green is
+        // the one colour an agent that failed to start must never show.
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+
+        (int tenantId, long tokenId) = await SeedTenantWithToken(db);
+        await SeedActiveSubscription(db, tenantId);
+
+        using GrpcChannel channel = CreateChannel(factory);
+        Registration.RegistrationClient client = new(channel);
+
+        RegisterSystemResponse response = await client.RegisterSystemAsync(new RegisterSystemRequest
+        {
+            Hostname = "test-host-no-telemetry",
+            SerialNumber = "sn-no-telemetry-001",
+            SystemId = "sys-no-telemetry-001",
+            RegistrationToken = "test-registration-token",
+            MachineType = MachineType.BareMetalServerType,
+            Os = OperatingSystemType.UbuntuOs
+        });
+
+        MachineStateSummary? summary = await db.MachineStateSummaries
+            .FirstOrDefaultAsync(s => s.MachineId == response.MachineId);
+
+        await Assert.That(summary).IsNotNull();
+        await Assert.That(summary!.HealthStatus).IsEqualTo((short)3);
+    }
+
+    [Test]
+    public async Task RegisterSystem_BeforeAnyTelemetry_FleetListAndDetailAgreeOnHealth()
+    {
+        // The fleet query maps an absent summary row to Offline, so a pre-created row is the only
+        // way the list and the detail page can disagree about a machine that has never reported.
+        // Pinned separately from the seeded value, because the agreement is the property that broke.
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+
+        (int tenantId, long tokenId) = await SeedTenantWithToken(db);
+        await SeedActiveSubscription(db, tenantId);
+
+        using GrpcChannel channel = CreateChannel(factory);
+        Registration.RegistrationClient client = new(channel);
+
+        RegisterSystemResponse response = await client.RegisterSystemAsync(new RegisterSystemRequest
+        {
+            Hostname = "test-host-agreement",
+            SerialNumber = "sn-agreement-001",
+            SystemId = "sys-agreement-001",
+            RegistrationToken = "test-registration-token",
+            MachineType = MachineType.BareMetalServerType,
+            Os = OperatingSystemType.UbuntuOs
+        });
+
+        using IServiceScope scope = factory.Services.CreateScope();
+        IMachineStateService stateService = scope.ServiceProvider.GetRequiredService<IMachineStateService>();
+
+        PaginatedFleetOverviewDto overview = await stateService.GetFleetOverviewAsync(
+            1, 25, tenantId, null, null, "name", "asc", CancellationToken.None);
+        MachineDetailDto? detail = await stateService.GetMachineDetailAsync(
+            response.MachineId, tenantId, CancellationToken.None);
+
+        FleetMachineDto? listed = overview.Machines.FirstOrDefault(m => m.Id == response.MachineId);
+
+        await Assert.That(listed).IsNotNull();
+        await Assert.That(detail).IsNotNull();
+        await Assert.That(detail!.HealthStatus).IsEqualTo(listed!.HealthStatus);
+        await Assert.That(listed.HealthStatus).IsEqualTo(MachineHealthStatus.Offline);
     }
 
     [Test]
