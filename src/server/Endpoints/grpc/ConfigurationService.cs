@@ -27,7 +27,9 @@ public sealed class ConfigurationService : Configuration.ConfigurationBase
     private readonly IRemoteCommandRepository _remoteCommandRepository;
     private readonly IMachinePingService _pingService;
     private readonly IMachineRepository _machineRepository;
+    private readonly IMachineStateRepository _machineStateRepository;
     private readonly ServerConfigurationService _configService;
+    private readonly TimeProvider _timeProvider;
     private readonly ILogger<ConfigurationService> _logger;
 
     /// <summary>
@@ -37,7 +39,9 @@ public sealed class ConfigurationService : Configuration.ConfigurationBase
     /// <param name="remoteCommandRepository">The remote command repository for pending commands</param>
     /// <param name="pingService">The machine ping tracking service</param>
     /// <param name="machineRepository">The machine repository, used to correct a stale machine type</param>
+    /// <param name="machineStateRepository">The machine state repository, used to record heartbeats</param>
     /// <param name="configService">The server configuration service for runtime settings</param>
+    /// <param name="timeProvider">The time source used to stamp heartbeats at server receipt time</param>
     /// <param name="logger">The application-wide logging service instance</param>
     /// <exception cref="ArgumentNullException"></exception>
     public ConfigurationService(
@@ -45,14 +49,18 @@ public sealed class ConfigurationService : Configuration.ConfigurationBase
         IRemoteCommandRepository remoteCommandRepository,
         IMachinePingService pingService,
         IMachineRepository machineRepository,
+        IMachineStateRepository machineStateRepository,
         ServerConfigurationService configService,
+        TimeProvider timeProvider,
         ILogger<ConfigurationService> logger)
     {
         _signingKeyRepository = signingKeyRepository ?? throw new ArgumentNullException(nameof(signingKeyRepository));
         _remoteCommandRepository = remoteCommandRepository ?? throw new ArgumentNullException(nameof(remoteCommandRepository));
         _pingService = pingService ?? throw new ArgumentNullException(nameof(pingService));
         _machineRepository = machineRepository ?? throw new ArgumentNullException(nameof(machineRepository));
+        _machineStateRepository = machineStateRepository ?? throw new ArgumentNullException(nameof(machineStateRepository));
         _configService = configService ?? throw new ArgumentNullException(nameof(configService));
+        _timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -129,6 +137,11 @@ public sealed class ConfigurationService : Configuration.ConfigurationBase
         try
         {
             await _pingService.RecordPingAsync(machineId);
+
+            // The heartbeat is stamped at server receipt time, never from the agent clock, and lands
+            // on the summary row so the health sweep can see the control-plane channel as well as
+            // the telemetry one.
+            await _machineStateRepository.RecordHeartbeatAsync(machineId, _timeProvider.GetUtcNow(), context.CancellationToken);
         }
         catch (Exception ex)
         {

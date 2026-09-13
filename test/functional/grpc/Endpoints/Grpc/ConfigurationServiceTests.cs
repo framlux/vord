@@ -192,6 +192,30 @@ public sealed class ConfigurationServiceTests
     }
 
     [Test]
+    public async Task AgentPing_RecordsTheHeartbeatOnTheSummaryRow()
+    {
+        // The health sweep is SQL over the summary row and cannot read a Redis key, so the heartbeat
+        // has to land on the same row the sweep reads or liveness stays blind to the control plane.
+        using FunctionalTestFactory factory = new();
+
+        // Drive a real registration so the summary row under test is the one registration produces.
+        (long machineId, string apiKey) = await RegisterMachineAsync(factory);
+
+        using GrpcChannel channel = CreateChannel(factory);
+        Configuration.ConfigurationClient client = new(channel);
+        Metadata headers = new() { { "x-api-key", apiKey } };
+
+        await client.AgentPingAsync(new AgentPingRequest { MachineId = machineId }, headers: headers);
+
+        using DatabaseContext db = factory.CreateDbContext();
+        MachineStateSummary? summary = await db.MachineStateSummaries
+            .FirstOrDefaultAsync(s => s.MachineId == machineId);
+
+        await Assert.That(summary).IsNotNull();
+        await Assert.That(summary!.LastHeartbeatAt).IsNotNull();
+    }
+
+    [Test]
     public async Task AgentPing_MismatchedMachineId_ReturnsPermissionDenied()
     {
         using FunctionalTestFactory factory = new();

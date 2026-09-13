@@ -77,6 +77,15 @@ public interface IMachineStateRepository
     Task<int> SweepHealthStatusAsync(string sql, int tenantId, int onlineThresholdSeconds, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Records an agent heartbeat against the machine's summary row, never moving the recorded
+    /// time backward.
+    /// </summary>
+    /// <param name="machineId">The machine that sent the heartbeat.</param>
+    /// <param name="receivedAt">Server receipt time of the heartbeat. Never the agent clock.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    Task RecordHeartbeatAsync(long machineId, DateTimeOffset receivedAt, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Gets the state summary for a single machine.
     /// </summary>
     Task<MachineStateSummary?> GetSummaryForMachineAsync(long machineId, CancellationToken cancellationToken = default);

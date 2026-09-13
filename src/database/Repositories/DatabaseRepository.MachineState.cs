@@ -7,6 +7,7 @@ using LinqToDB;
 using LinqToDB.Async;
 using LinqToDB.Data;
 using LinqToDB.Linq;
+using Microsoft.Extensions.Logging;
 
 namespace Framlux.FleetManagement.Database.Repositories;
 
@@ -82,6 +83,27 @@ public partial class DatabaseRepository : IMachineStateRepository
             new DataParameter("onlineThresholdSeconds", onlineThresholdSeconds));
 
         return rowsAffected;
+    }
+
+    /// <inheritdoc/>
+    public async Task RecordHeartbeatAsync(long machineId, DateTimeOffset receivedAt, CancellationToken cancellationToken)
+    {
+        // Sets one column and nothing else, so it cannot collide with the streaming projection's
+        // patch update on the same row — that path sets only the columns present in its patch.
+        int affected = await _db.MachineStateSummaries
+            .Where(s => s.MachineId == machineId)
+            .Set(
+                s => s.LastHeartbeatAt,
+                s => ((s.LastHeartbeatAt == null) || (s.LastHeartbeatAt < receivedAt)) ? receivedAt : s.LastHeartbeatAt)
+            .UpdateAsync(cancellationToken);
+
+        if (affected == 0)
+        {
+            // A machine with no summary row cannot be marked live by any path, so it would read
+            // Offline forever with nothing to explain why. Registration pre-creates the row, so
+            // this means a machine registered before that seed existed and never sent telemetry.
+            _logger.LogWarning("Heartbeat for machine {MachineId} matched no state summary row", machineId);
+        }
     }
 
     /// <inheritdoc/>

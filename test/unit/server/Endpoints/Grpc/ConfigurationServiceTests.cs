@@ -14,6 +14,7 @@ using Framlux.FleetManagement.Test.Infrastructure;
 using Grpc.Core;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Time.Testing;
 using NSubstitute;
 using StackExchange.Redis;
 using System.Security.Claims;
@@ -110,11 +111,45 @@ public sealed class ConfigurationServiceTests
         await Assert.That(response.TimeConfig).IsNotNull();
     }
 
+    [Test]
+    public async Task AgentPing_RecordsTheHeartbeatAtServerReceiptTime()
+    {
+        // The recorded time comes from the injected clock, never the agent's, so a skewed agent
+        // cannot decide whether it looks live.
+        IMachineStateRepository machineStateRepo = Substitute.For<IMachineStateRepository>();
+        DateTimeOffset now = new(2026, 9, 13, 10, 0, 0, TimeSpan.Zero);
+        ConfigurationService service = CreateService(
+            machineStateRepo: machineStateRepo,
+            timeProvider: new FakeTimeProvider(now));
+
+        AgentPingResponse response = await service.AgentPing(new AgentPingRequest { MachineId = 42 }, CreateAuthenticatedContext(42));
+
+        await Assert.That(response.Success).IsTrue();
+        await machineStateRepo.Received(1).RecordHeartbeatAsync(42, now, Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task AgentPing_HeartbeatWriteFails_ReportsFailure()
+    {
+        // A ping that could not be recorded must not report success, or the agent would believe the
+        // server knows it is alive when nothing was written.
+        IMachineStateRepository machineStateRepo = Substitute.For<IMachineStateRepository>();
+        machineStateRepo.RecordHeartbeatAsync(Arg.Any<long>(), Arg.Any<DateTimeOffset>(), Arg.Any<CancellationToken>())
+            .Returns<Task>(_ => throw new InvalidOperationException("database unavailable"));
+        ConfigurationService service = CreateService(machineStateRepo: machineStateRepo);
+
+        AgentPingResponse response = await service.AgentPing(new AgentPingRequest { MachineId = 42 }, CreateAuthenticatedContext(42));
+
+        await Assert.That(response.Success).IsFalse();
+    }
+
     private ConfigurationService CreateService(
         IServerSettingsReader? settingsCache = null,
         ISigningKeyRepository? signingKeyRepo = null,
         IRemoteCommandRepository? remoteCommandRepo = null,
-        IMachineRepository? machineRepo = null)
+        IMachineRepository? machineRepo = null,
+        IMachineStateRepository? machineStateRepo = null,
+        TimeProvider? timeProvider = null)
     {
         IServerSettingsReader resolvedSettingsCache = settingsCache ?? Substitute.For<IServerSettingsReader>();
         ISigningKeyRepository resolvedSigningKeyRepo = signingKeyRepo ?? Substitute.For<ISigningKeyRepository>();
@@ -122,9 +157,19 @@ public sealed class ConfigurationServiceTests
         resolvedSigningKeyRepo.GetActiveSigningKeysForMachineAsync(Arg.Any<long>(), Arg.Any<CancellationToken>())
             .Returns(new List<Database.Models.UserSigningKey>());
         IMachineRepository resolvedMachineRepo = machineRepo ?? Substitute.For<IMachineRepository>();
+        IMachineStateRepository resolvedMachineStateRepo = machineStateRepo ?? Substitute.For<IMachineStateRepository>();
+        TimeProvider resolvedTimeProvider = timeProvider ?? new FakeTimeProvider(new DateTimeOffset(2026, 9, 13, 10, 0, 0, TimeSpan.Zero));
         ServerConfigurationService configService = new(resolvedSettingsCache, Substitute.For<IConnectionMultiplexer>());
 
-        return new ConfigurationService(resolvedSigningKeyRepo, resolvedRemoteCommandRepo, _pingService, resolvedMachineRepo, configService, _logger);
+        return new ConfigurationService(
+            resolvedSigningKeyRepo,
+            resolvedRemoteCommandRepo,
+            _pingService,
+            resolvedMachineRepo,
+            resolvedMachineStateRepo,
+            configService,
+            resolvedTimeProvider,
+            _logger);
     }
 
     private static ServerCallContext CreateAuthenticatedContext(long machineId, int tenantId = 1)

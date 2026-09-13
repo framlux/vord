@@ -7,7 +7,9 @@ using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Test.Infrastructure;
 using LinqToDB;
 using LinqToDB.Async;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using NSubstitute;
 
 namespace Framlux.FleetManagement.Test.Functional.DatabaseRepository;
 
@@ -1527,5 +1529,63 @@ public class MachineStateRepositoryTests
         await repo.SetProjectionCursorAsync(0, 9, shardCount: 1);
 
         await Assert.That(await repo.GetProjectionCursorAsync(0)).IsEqualTo(9L);
+    }
+
+    // ========== RecordHeartbeatAsync tests ==========
+
+    [Test]
+    public async Task RecordHeartbeatAsync_SetsTheHeartbeatTimestamp()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        IMachineStateRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+
+        (int _, int _, long machineId) = await SeedMachineWithStateAsync(dbFactory);
+
+        DateTimeOffset receivedAt = new(2026, 9, 13, 10, 0, 0, TimeSpan.Zero);
+        await repo.RecordHeartbeatAsync(machineId, receivedAt);
+
+        MachineStateSummary? updated = await repo.GetSummaryForMachineAsync(machineId);
+
+        await Assert.That(updated).IsNotNull();
+        await Assert.That(updated!.LastHeartbeatAt).IsEqualTo(receivedAt);
+    }
+
+    [Test]
+    public async Task RecordHeartbeatAsync_NeverMovesTheTimestampBackward()
+    {
+        // A retried or delayed ping must not rewind liveness, the same rule LastSeenAt follows.
+        using TestDatabaseFactory dbFactory = new();
+        IMachineStateRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+
+        (int _, int _, long machineId) = await SeedMachineWithStateAsync(dbFactory);
+
+        DateTimeOffset later = new(2026, 9, 13, 10, 0, 0, TimeSpan.Zero);
+        DateTimeOffset earlier = later.AddMinutes(-5);
+
+        await repo.RecordHeartbeatAsync(machineId, later);
+        await repo.RecordHeartbeatAsync(machineId, earlier);
+
+        MachineStateSummary? updated = await repo.GetSummaryForMachineAsync(machineId);
+
+        await Assert.That(updated!.LastHeartbeatAt).IsEqualTo(later);
+    }
+
+    [Test]
+    public async Task RecordHeartbeatAsync_NoSummaryRow_LogsAWarning()
+    {
+        // A machine with no summary row cannot be marked live by any path, so a dropped heartbeat
+        // would leave it reading Offline forever with nothing to explain why.
+        using TestDatabaseFactory dbFactory = new();
+        ILogger<Database.Repositories.DatabaseRepository> logger = Substitute.For<ILogger<Database.Repositories.DatabaseRepository>>();
+        IMachineStateRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, logger);
+
+        await repo.RecordHeartbeatAsync(999999, new DateTimeOffset(2026, 9, 13, 10, 0, 0, TimeSpan.Zero));
+
+        logger.Received(1).Log(
+            LogLevel.Warning,
+            Arg.Any<EventId>(),
+            Arg.Any<object>(),
+            Arg.Any<Exception?>(),
+            Arg.Any<Func<object, Exception?, string>>());
     }
 }
