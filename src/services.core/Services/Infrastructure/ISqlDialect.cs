@@ -34,5 +34,14 @@ public interface ISqlDialect
     /// the same value the health filter matched on and the same value an alert fired on. Do not
     /// reintroduce an application-side copy of these thresholds.
     /// </summary>
+    /// <remarks>
+    /// Liveness is the union of both channels the server hears a machine on: the telemetry receipt
+    /// and the agent heartbeat. Neither being recent within the online threshold writes Offline and
+    /// short-circuits everything below. Otherwise the status is the maximum of two independently
+    /// computed verdicts — the metric branches, and a staleness verdict that is Warning when
+    /// telemetry alone has gone quiet — so stale telemetry raises a healthy machine without ever
+    /// lowering a critical one. The same statement writes the TelemetryStale flag, so staleness has
+    /// one definition rather than being recomputed by anything that reads it.
+    /// </remarks>
     string HealthSweepForTenant { get; }
 }

@@ -164,6 +164,7 @@ public sealed class HealthSweepThresholdLiveTests
             new PostgresSqlDialect().HealthSweepForTenant,
             tenantId,
             OnlineThresholdSeconds,
+            HealthRuleCases.StaleSeconds,
             CancellationToken.None);
     }
 

@@ -22,6 +22,12 @@ public static class HealthRuleCases
     public const int OnlineThresholdSeconds = 300;
 
     /// <summary>
+    /// Stale-telemetry window, in seconds, that every case in this matrix is evaluated against.
+    /// Mirrors TelemetryCollectFastSeconds x 5 at the shipped 60s collection cadence.
+    /// </summary>
+    public const int StaleSeconds = 300;
+
+    /// <summary>
     /// Every case in the matrix, as a TUnit method data source.
     /// </summary>
     public static IEnumerable<Func<HealthRuleCase>> All()
@@ -39,34 +45,47 @@ public static class HealthRuleCases
     // case a second either side of it would be deciding the outcome on execution latency.
     private static readonly HealthRuleCase[] Cases =
     [
-        new(10, 10, 10, 0, false, false, 60, 0, "interior baseline"),
+        new(10, 10, 10, 0, false, false, 60, 60, 0, "interior baseline"),
 
-        new(79, 10, 10, 0, false, false, 60, 0, "cpu below warning"),
-        new(80, 10, 10, 0, false, false, 60, 1, "cpu at warning"),
-        new(94, 10, 10, 0, false, false, 60, 1, "cpu below critical"),
-        new(95, 10, 10, 0, false, false, 60, 2, "cpu at critical"),
+        new(79, 10, 10, 0, false, false, 60, 60, 0, "cpu below warning"),
+        new(80, 10, 10, 0, false, false, 60, 60, 1, "cpu at warning"),
+        new(94, 10, 10, 0, false, false, 60, 60, 1, "cpu below critical"),
+        new(95, 10, 10, 0, false, false, 60, 60, 2, "cpu at critical"),
 
-        new(10, 79, 10, 0, false, false, 60, 0, "memory below warning"),
-        new(10, 80, 10, 0, false, false, 60, 1, "memory at warning"),
-        new(10, 94, 10, 0, false, false, 60, 1, "memory below critical"),
-        new(10, 95, 10, 0, false, false, 60, 2, "memory at critical"),
+        new(10, 79, 10, 0, false, false, 60, 60, 0, "memory below warning"),
+        new(10, 80, 10, 0, false, false, 60, 60, 1, "memory at warning"),
+        new(10, 94, 10, 0, false, false, 60, 60, 1, "memory below critical"),
+        new(10, 95, 10, 0, false, false, 60, 60, 2, "memory at critical"),
 
-        new(10, 10, 79, 0, false, false, 60, 0, "disk below warning"),
-        new(10, 10, 80, 0, false, false, 60, 1, "disk at warning"),
-        new(10, 10, 94, 0, false, false, 60, 1, "disk below critical"),
-        new(10, 10, 95, 0, false, false, 60, 2, "disk at critical"),
+        new(10, 10, 79, 0, false, false, 60, 60, 0, "disk below warning"),
+        new(10, 10, 80, 0, false, false, 60, 60, 1, "disk at warning"),
+        new(10, 10, 94, 0, false, false, 60, 60, 1, "disk below critical"),
+        new(10, 10, 95, 0, false, false, 60, 60, 2, "disk at critical"),
 
-        new(10, 10, 10, 1, false, false, 60, 2, "one failed service"),
-        new(10, 10, 10, 0, true, false, 60, 2, "disk health issue"),
-        new(10, 10, 10, 0, false, true, 60, 2, "hardware issue"),
+        new(10, 10, 10, 1, false, false, 60, 60, 2, "one failed service"),
+        new(10, 10, 10, 0, true, false, 60, 60, 2, "disk health issue"),
+        new(10, 10, 10, 0, false, true, 60, 60, 2, "hardware issue"),
 
         // A machine that stopped reporting while its last known metrics were critical must read
         // Offline, not Critical, or the fleet would show a dead machine as a live emergency.
-        new(99, 99, 99, 5, true, true, 360, 3, "stale receipt outranks critical metrics"),
-        new(10, 10, 10, 0, false, false, null, 3, "never seen"),
+        new(99, 99, 99, 5, true, true, 360, 360, 3, "stale receipt outranks critical metrics"),
+        new(10, 10, 10, 0, false, false, null, null, 3, "never seen"),
 
         // A machine that reports in but has not yet sent usage telemetry has nulls here. Disk and
         // failed services are coalesced; CPU and memory compare as nulls, which is not true in SQL.
-        new(null, null, null, 0, false, false, 60, 0, "no metrics reported yet"),
+        new(null, null, null, 0, false, false, 60, 60, 0, "no metrics reported yet"),
+
+        // Liveness is the union of the two channels: either one being recent keeps a machine online.
+        new(10, 10, 10, 0, false, false, 600, 60, 1, "heartbeat fresh, telemetry stale"),
+        new(10, 10, 10, 0, false, false, null, 60, 1, "heartbeat only, no telemetry yet"),
+        new(10, 10, 10, 0, false, false, 60, 600, 0, "telemetry fresh, heartbeat stale"),
+        // A machine on neither channel is covered by "never seen" above, which now carries a null
+        // heartbeat as well as a null receipt.
+        new(10, 10, 10, 0, false, false, 600, 600, 3, "both channels stale"),
+
+        // Worst wins: staleness raises a healthy machine to Warning but never lowers a Critical.
+        new(99, 10, 10, 0, false, false, 600, 60, 2, "stale telemetry does not mask a critical cpu"),
+        new(10, 10, 10, 3, false, false, 600, 60, 2, "stale telemetry does not mask failed services"),
+        new(85, 10, 10, 0, false, false, 600, 60, 1, "stale telemetry and a warning metric stay Warning"),
     ];
 }

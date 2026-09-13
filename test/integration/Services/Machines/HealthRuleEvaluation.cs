@@ -79,6 +79,7 @@ public static class HealthRuleEvaluation
             new PostgresSqlDialect().HealthSweepForTenant,
             tenantId,
             HealthRuleCases.OnlineThresholdSeconds,
+            HealthRuleCases.StaleSeconds,
             CancellationToken.None);
 
         MachineStateSummary swept = await db.MachineStateSummaries
@@ -109,6 +110,7 @@ public static class HealthRuleEvaluation
             new SqliteSqlDialect().HealthSweepForTenant,
             TenantId,
             HealthRuleCases.OnlineThresholdSeconds,
+            HealthRuleCases.StaleSeconds,
             CancellationToken.None);
 
         MachineStateSummary swept = await dbFactory.Context.MachineStateSummaries
@@ -137,6 +139,9 @@ public static class HealthRuleEvaluation
             HealthStatus = UnsweptSentinel,
             LastSeenAt = testCase.LastSeenSecondsAgo is int secondsAgo
                 ? DateTimeOffset.UtcNow.AddSeconds(-secondsAgo)
+                : null,
+            LastHeartbeatAt = testCase.LastHeartbeatSecondsAgo is int heartbeatAgo
+                ? DateTimeOffset.UtcNow.AddSeconds(-heartbeatAgo)
                 : null,
         };
     }

@@ -74,13 +74,14 @@ public partial class DatabaseRepository : IMachineStateRepository
     }
 
     /// <inheritdoc/>
-    public async Task<int> SweepHealthStatusAsync(string sql, int tenantId, int onlineThresholdSeconds, CancellationToken cancellationToken)
+    public async Task<int> SweepHealthStatusAsync(string sql, int tenantId, int onlineThresholdSeconds, int staleSeconds, CancellationToken cancellationToken)
     {
         int rowsAffected = await _db.ExecuteAsync(
             sql,
             cancellationToken,
             new DataParameter("tenantId", tenantId),
-            new DataParameter("onlineThresholdSeconds", onlineThresholdSeconds));
+            new DataParameter("onlineThresholdSeconds", onlineThresholdSeconds),
+            new DataParameter("staleSeconds", staleSeconds));
 
         return rowsAffected;
     }

@@ -836,7 +836,7 @@ public class MachineStateRepositoryTests
         await dbFactory.Context.InsertAsync(summary);
 
         SqliteSqlDialect dialect = new();
-        await repo.SweepHealthStatusAsync(dialect.HealthSweepForTenant, tenantId, 300);
+        await repo.SweepHealthStatusAsync(dialect.HealthSweepForTenant, tenantId, 300, 300);
 
         MachineStateSummary? updated = await repo.GetSummaryForMachineAsync(machineId);
 
@@ -871,7 +871,7 @@ public class MachineStateRepositoryTests
         await dbFactory.Context.InsertAsync(summary);
 
         SqliteSqlDialect dialect = new();
-        await repo.SweepHealthStatusAsync(dialect.HealthSweepForTenant, tenantId, 300);
+        await repo.SweepHealthStatusAsync(dialect.HealthSweepForTenant, tenantId, 300, 300);
 
         MachineStateSummary? updated = await repo.GetSummaryForMachineAsync(machineId);
 
@@ -1237,7 +1237,7 @@ public class MachineStateRepositoryTests
         await dbFactory.Context.InsertAsync(s4);
 
         SqliteSqlDialect dialect = new();
-        int rowsAffected = await repo.SweepHealthStatusAsync(dialect.HealthSweepForTenant, tenantId, 300);
+        int rowsAffected = await repo.SweepHealthStatusAsync(dialect.HealthSweepForTenant, tenantId, 300, 300);
 
         // At least 3 machines should have had their status changed (m2, m3, m4 all started at 0)
         await Assert.That(rowsAffected >= 3).IsTrue();

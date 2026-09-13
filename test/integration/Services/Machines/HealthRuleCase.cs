@@ -14,6 +14,7 @@ namespace Framlux.FleetManagement.Test.Integration.Services.Machines;
 /// <param name="HasDiskHealthIssue">Whether SMART reported a failing disk.</param>
 /// <param name="HasHardwareIssue">Whether hardware health reported a fault.</param>
 /// <param name="LastSeenSecondsAgo">Age of the last server receipt in seconds, or null for a machine that has never been seen.</param>
+/// <param name="LastHeartbeatSecondsAgo">Age of the last agent heartbeat in seconds, or null when none has been received.</param>
 /// <param name="Expected">Health status the rule must write: 0 Healthy, 1 Warning, 2 Critical, 3 Offline.</param>
 /// <param name="Description">Short label naming the boundary this case sits on.</param>
 public sealed record HealthRuleCase(
@@ -24,6 +25,7 @@ public sealed record HealthRuleCase(
     bool HasDiskHealthIssue,
     bool HasHardwareIssue,
     int? LastSeenSecondsAgo,
+    int? LastHeartbeatSecondsAgo,
     short Expected,
     string Description)
 {

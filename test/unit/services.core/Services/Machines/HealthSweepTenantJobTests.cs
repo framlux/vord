@@ -33,11 +33,19 @@ public sealed class HealthSweepTenantJobTests
             logger ?? Substitute.For<ILogger<HealthSweepTenantJob>>());
     }
 
-    private static ServerConfigurationService CreateConfigService(int onlineThresholdSeconds = 300)
+    private static ServerConfigurationService CreateConfigService(
+        int onlineThresholdSeconds = 300,
+        int collectFastSeconds = 60,
+        int sendFastSeconds = 15)
     {
         IServerSettingsReader cache = Substitute.For<IServerSettingsReader>();
         cache.GetSettingFromDatabaseAsync(Arg.Any<ServerConfigurationSettingKeys>(), Arg.Any<CancellationToken>())
-            .Returns(onlineThresholdSeconds.ToString());
+            .Returns(call => call.Arg<ServerConfigurationSettingKeys>() switch
+            {
+                ServerConfigurationSettingKeys.TelemetryCollectFastSeconds => collectFastSeconds.ToString(),
+                ServerConfigurationSettingKeys.TelemetrySendFastSeconds => sendFastSeconds.ToString(),
+                _ => onlineThresholdSeconds.ToString(),
+            });
 
         IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
         IDatabase redisDb = Substitute.For<IDatabase>();
@@ -79,7 +87,7 @@ public sealed class HealthSweepTenantJobTests
     public async Task RunAsync_LockAcquired_RunsSweepWithDialectSqlAndThresholdSeconds()
     {
         IMachineStateRepository repo = Substitute.For<IMachineStateRepository>();
-        repo.SweepHealthStatusAsync(Arg.Any<string>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+        repo.SweepHealthStatusAsync(Arg.Any<string>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
             .Returns(7);
 
         HealthSweepTenantJob job = BuildJob(
@@ -89,7 +97,43 @@ public sealed class HealthSweepTenantJobTests
 
         await job.RunAsync(tenantId: 42, CancellationToken.None);
 
-        await repo.Received(1).SweepHealthStatusAsync("SELECT 1", 42, 120, Arg.Any<CancellationToken>());
+        await repo.Received(1).SweepHealthStatusAsync(
+            "SELECT 1", 42, 120, Arg.Any<int>(), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task RunAsync_StaleWindow_IsFiveTimesTheLongerOfCollectAndSendIntervals()
+    {
+        // LastSeenAt advances on send receipt, not on collection, so a fleet configured to collect
+        // often and send rarely must not be judged stale on the collection interval alone — that
+        // would flip it Healthy/Warning on every sweep.
+        IMachineStateRepository repo = Substitute.For<IMachineStateRepository>();
+
+        HealthSweepTenantJob job = BuildJob(
+            machineStateRepository: repo,
+            configService: CreateConfigService(collectFastSeconds: 10, sendFastSeconds: 120));
+
+        await job.RunAsync(tenantId: 3, CancellationToken.None);
+
+        await repo.Received(1).SweepHealthStatusAsync(
+            Arg.Any<string>(), 3, Arg.Any<int>(), 600, Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task RunAsync_StaleWindow_TakesTheCollectIntervalWhenItIsTheLonger()
+    {
+        // The complement of the case above: whichever interval is longer decides the window, so a
+        // fleet that collects rarely and sends often is judged on its collection cadence.
+        IMachineStateRepository repo = Substitute.For<IMachineStateRepository>();
+
+        HealthSweepTenantJob job = BuildJob(
+            machineStateRepository: repo,
+            configService: CreateConfigService(collectFastSeconds: 90, sendFastSeconds: 15));
+
+        await job.RunAsync(tenantId: 3, CancellationToken.None);
+
+        await repo.Received(1).SweepHealthStatusAsync(
+            Arg.Any<string>(), 3, Arg.Any<int>(), 450, Arg.Any<CancellationToken>());
     }
 
     [Test]
@@ -103,7 +147,7 @@ public sealed class HealthSweepTenantJobTests
             .Returns(handle);
 
         IMachineStateRepository repo = Substitute.For<IMachineStateRepository>();
-        repo.SweepHealthStatusAsync(Arg.Any<string>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+        repo.SweepHealthStatusAsync(Arg.Any<string>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
             .Returns(0);
 
         HealthSweepTenantJob job = BuildJob(machineStateRepository: repo, advisoryLockProvider: provider);
@@ -125,7 +169,7 @@ public sealed class HealthSweepTenantJobTests
         await job.RunAsync(tenantId: 1, CancellationToken.None);
 
         await repo.DidNotReceive().SweepHealthStatusAsync(
-            Arg.Any<string>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>());
+            Arg.Any<string>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>());
     }
 
     [Test]
@@ -181,7 +225,7 @@ public sealed class HealthSweepTenantJobTests
             .Returns(handle);
 
         IMachineStateRepository repo = Substitute.For<IMachineStateRepository>();
-        repo.SweepHealthStatusAsync(Arg.Any<string>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+        repo.SweepHealthStatusAsync(Arg.Any<string>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
             .ThrowsAsync(new InvalidOperationException("DB down"));
 
         HealthSweepTenantJob job = BuildJob(machineStateRepository: repo, advisoryLockProvider: provider);
@@ -228,7 +272,8 @@ public sealed class HealthSweepTenantJobTests
         await job.RunAsync(tenantId: 7, cts.Token);
 
         await provider.Received(1).TryAcquireAsync(Arg.Any<string>(), cts.Token);
-        await repo.Received(1).SweepHealthStatusAsync(Arg.Any<string>(), 7, Arg.Any<int>(), cts.Token);
+        await repo.Received(1).SweepHealthStatusAsync(
+            Arg.Any<string>(), 7, Arg.Any<int>(), Arg.Any<int>(), cts.Token);
     }
 
     [Test]
@@ -336,7 +381,7 @@ public sealed class HealthSweepTenantJobTests
         // whose fleets are healthy. The production code gates the log on rowsAffected > 0;
         // this test pins that gate so a future "always log" regression is caught.
         IMachineStateRepository repo = Substitute.For<IMachineStateRepository>();
-        repo.SweepHealthStatusAsync(Arg.Any<string>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+        repo.SweepHealthStatusAsync(Arg.Any<string>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
             .Returns(0);
 
         ILogger<HealthSweepTenantJob> logger = Substitute.For<ILogger<HealthSweepTenantJob>>();
@@ -364,7 +409,7 @@ public sealed class HealthSweepTenantJobTests
         // log must fire so operators can correlate sweep activity with health-state transitions.
         // Pinning both sides of the gate keeps the contract symmetric.
         IMachineStateRepository repo = Substitute.For<IMachineStateRepository>();
-        repo.SweepHealthStatusAsync(Arg.Any<string>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+        repo.SweepHealthStatusAsync(Arg.Any<string>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
             .Returns(5);
 
         ILogger<HealthSweepTenantJob> logger = Substitute.For<ILogger<HealthSweepTenantJob>>();

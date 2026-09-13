@@ -80,10 +80,19 @@ public sealed class HealthSweepTenantJob
 
         TimeSpan onlineThreshold = await _configService.GetOnlineThresholdAsync(ct);
 
+        // Telemetry is stale once it is five cycles behind. LastSeenAt advances on send receipt,
+        // not on collection, so the window is derived from whichever of the two intervals is
+        // longer: the bounds permit collect=10s with send=120s, and deriving from collection alone
+        // would make a legitimately-configured fleet oscillate Healthy/Warning on every sweep.
+        int collectFast = await _configService.GetTelemetryCollectFastSecondsAsync(ct);
+        int sendFast = await _configService.GetTelemetrySendFastSecondsAsync(ct);
+        int staleSeconds = Math.Max(collectFast, sendFast) * 5;
+
         int rowsAffected = await _machineStateRepository.SweepHealthStatusAsync(
             _dialect.HealthSweepForTenant,
             tenantId,
             (int)onlineThreshold.TotalSeconds,
+            staleSeconds,
             ct);
 
         if (rowsAffected > 0)

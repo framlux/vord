@@ -23,44 +23,50 @@ public sealed class SqliteSqlDialect : ISqlDialect
     public bool SupportsJsonbSort => false;
 
     /// <inheritdoc/>
-    public string HealthSweepForTenant => """
+    public string HealthSweepForTenant => $"""
         UPDATE "MachineStateSummary"
-        SET "HealthStatus" = CASE
+        SET "HealthStatus" = {HealthExpression},
+            "TelemetryStale" = {StaleExpression}
+        WHERE "TenantId" = @tenantId
+          AND ("HealthStatus" != {HealthExpression} OR "TelemetryStale" != {StaleExpression})
+        """;
+
+    // SQLite has no UPDATE ... FROM, so the whole expression appears twice — once in SET and once
+    // in the change guard. One constant per verdict keeps that from becoming two transcriptions of
+    // the rule in a file that is already the second transcription of it.
+    private const string StaleExpression = """
+        CASE
             WHEN "LastSeenAt" IS NULL
-                OR "LastSeenAt" < datetime('now', '-' || @onlineThresholdSeconds || ' seconds')
-                THEN 3
-            WHEN "CpuUsagePercent" >= 95 OR "MemoryUsagePercent" >= 95
-                THEN 2
-            WHEN COALESCE("FailedServices", 0) > 0
-                THEN 2
-            WHEN COALESCE("MaxDiskUsagePercent", 0) >= 95
-                THEN 2
-            WHEN "HasDiskHealthIssue" = 1 OR "HasHardwareIssue" = 1
-                THEN 2
-            WHEN "CpuUsagePercent" >= 80 OR "MemoryUsagePercent" >= 80
-                THEN 1
-            WHEN COALESCE("MaxDiskUsagePercent", 0) >= 80
+                OR "LastSeenAt" < datetime('now', '-' || @staleSeconds || ' seconds')
                 THEN 1
             ELSE 0
         END
-        WHERE "TenantId" = @tenantId
-          AND "HealthStatus" != CASE
-            WHEN "LastSeenAt" IS NULL
-                OR "LastSeenAt" < datetime('now', '-' || @onlineThresholdSeconds || ' seconds')
+        """;
+
+    // The two-argument MAX() scalar returns NULL if either argument is NULL, so both timestamps are
+    // coalesced to a sentinel that sorts before any real value rather than compared directly.
+    private const string HealthExpression = """
+        CASE
+            WHEN MAX(COALESCE("LastSeenAt", '0001-01-01 00:00:00'),
+                     COALESCE("LastHeartbeatAt", '0001-01-01 00:00:00'))
+                 < datetime('now', '-' || @onlineThresholdSeconds || ' seconds')
                 THEN 3
-            WHEN "CpuUsagePercent" >= 95 OR "MemoryUsagePercent" >= 95
-                THEN 2
-            WHEN COALESCE("FailedServices", 0) > 0
-                THEN 2
-            WHEN COALESCE("MaxDiskUsagePercent", 0) >= 95
-                THEN 2
-            WHEN "HasDiskHealthIssue" = 1 OR "HasHardwareIssue" = 1
-                THEN 2
-            WHEN "CpuUsagePercent" >= 80 OR "MemoryUsagePercent" >= 80
-                THEN 1
-            WHEN COALESCE("MaxDiskUsagePercent", 0) >= 80
-                THEN 1
-            ELSE 0
+            ELSE MAX(
+                CASE
+                    WHEN "CpuUsagePercent" >= 95 OR "MemoryUsagePercent" >= 95 THEN 2
+                    WHEN COALESCE("FailedServices", 0) > 0 THEN 2
+                    WHEN COALESCE("MaxDiskUsagePercent", 0) >= 95 THEN 2
+                    WHEN "HasDiskHealthIssue" = 1 OR "HasHardwareIssue" = 1 THEN 2
+                    WHEN "CpuUsagePercent" >= 80 OR "MemoryUsagePercent" >= 80 THEN 1
+                    WHEN COALESCE("MaxDiskUsagePercent", 0) >= 80 THEN 1
+                    ELSE 0
+                END,
+                CASE
+                    WHEN "LastSeenAt" IS NULL
+                        OR "LastSeenAt" < datetime('now', '-' || @staleSeconds || ' seconds')
+                        THEN 1
+                    ELSE 0
+                END)
         END
         """;
 }

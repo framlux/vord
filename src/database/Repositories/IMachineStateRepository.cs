@@ -72,9 +72,10 @@ public interface IMachineStateRepository
     /// <param name="sql">Dialect-specific SQL for the health sweep.</param>
     /// <param name="tenantId">The tenant to sweep.</param>
     /// <param name="onlineThresholdSeconds">Seconds before a machine is considered offline.</param>
+    /// <param name="staleSeconds">Seconds of telemetry silence after which an online machine's telemetry counts as stale.</param>
     /// <param name="cancellationToken">Cancellation token.</param>
     /// <returns>Number of rows affected.</returns>
-    Task<int> SweepHealthStatusAsync(string sql, int tenantId, int onlineThresholdSeconds, CancellationToken cancellationToken = default);
+    Task<int> SweepHealthStatusAsync(string sql, int tenantId, int onlineThresholdSeconds, int staleSeconds, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Records an agent heartbeat against the machine's summary row, never moving the recorded

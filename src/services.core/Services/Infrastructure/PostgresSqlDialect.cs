@@ -23,28 +23,37 @@ public sealed class PostgresSqlDialect : ISqlDialect
     public string HealthSweepForTenant => """
         WITH computed AS (
             SELECT "MachineId", CASE
-                WHEN "LastSeenAt" IS NULL
-                    OR "LastSeenAt" < (NOW() - MAKE_INTERVAL(secs => @onlineThresholdSeconds))
+                WHEN GREATEST(
+                        COALESCE("LastSeenAt", TIMESTAMPTZ '-infinity'),
+                        COALESCE("LastHeartbeatAt", TIMESTAMPTZ '-infinity'))
+                     < (NOW() - MAKE_INTERVAL(secs => @onlineThresholdSeconds))
                     THEN 3
-                WHEN "CpuUsagePercent" >= 95 OR "MemoryUsagePercent" >= 95
-                    THEN 2
-                WHEN COALESCE("FailedServices", 0) > 0
-                    THEN 2
-                WHEN COALESCE("MaxDiskUsagePercent", 0) >= 95
-                    THEN 2
-                WHEN "HasDiskHealthIssue" = true OR "HasHardwareIssue" = true
-                    THEN 2
-                WHEN "CpuUsagePercent" >= 80 OR "MemoryUsagePercent" >= 80
-                    THEN 1
-                WHEN COALESCE("MaxDiskUsagePercent", 0) >= 80
-                    THEN 1
-                ELSE 0
-            END AS "NewHealth"
+                ELSE GREATEST(
+                    CASE
+                        WHEN "CpuUsagePercent" >= 95 OR "MemoryUsagePercent" >= 95 THEN 2
+                        WHEN COALESCE("FailedServices", 0) > 0 THEN 2
+                        WHEN COALESCE("MaxDiskUsagePercent", 0) >= 95 THEN 2
+                        WHEN "HasDiskHealthIssue" = true OR "HasHardwareIssue" = true THEN 2
+                        WHEN "CpuUsagePercent" >= 80 OR "MemoryUsagePercent" >= 80 THEN 1
+                        WHEN COALESCE("MaxDiskUsagePercent", 0) >= 80 THEN 1
+                        ELSE 0
+                    END,
+                    CASE
+                        WHEN "LastSeenAt" IS NULL
+                            OR "LastSeenAt" < (NOW() - MAKE_INTERVAL(secs => @staleSeconds))
+                            THEN 1
+                        ELSE 0
+                    END)
+            END AS "NewHealth",
+            ("LastSeenAt" IS NULL
+                OR "LastSeenAt" < (NOW() - MAKE_INTERVAL(secs => @staleSeconds))) AS "NewStale"
             FROM "MachineStateSummary"
             WHERE "TenantId" = @tenantId
         )
-        UPDATE "MachineStateSummary" s SET "HealthStatus" = c."NewHealth"
+        UPDATE "MachineStateSummary" s
+        SET "HealthStatus" = c."NewHealth", "TelemetryStale" = c."NewStale"
         FROM computed c
-        WHERE s."MachineId" = c."MachineId" AND s."HealthStatus" != c."NewHealth"
+        WHERE s."MachineId" = c."MachineId"
+          AND (s."HealthStatus" != c."NewHealth" OR s."TelemetryStale" != c."NewStale")
         """;
 }

@@ -208,6 +208,7 @@ public sealed class OfflineSweepServerReceiptLiveTests
             new PostgresSqlDialect().HealthSweepForTenant,
             tenantId,
             onlineThresholdSeconds: 300,
+            staleSeconds: 300,
             CancellationToken.None);
 
         MachineStateSummary swept = await db.GetTable<MachineStateSummary>().FirstAsync(x => x.MachineId == machineId);
