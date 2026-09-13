@@ -142,4 +142,12 @@ public sealed class MachineStateSummary
     /// </summary>
     [Column("LastSeenAt"), Nullable]
     public DateTimeOffset? LastSeenAt { get; set; }
+
+    /// <summary>
+    /// When the server last received an agent heartbeat, at server receipt time. Distinct from
+    /// <see cref="LastSeenAt"/>, which tracks telemetry receipts: liveness is the more recent of
+    /// the two, while staleness is judged on telemetry alone.
+    /// </summary>
+    [Column("LastHeartbeatAt"), Nullable]
+    public DateTimeOffset? LastHeartbeatAt { get; set; }
 }

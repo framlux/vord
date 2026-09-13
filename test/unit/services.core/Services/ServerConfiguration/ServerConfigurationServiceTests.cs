@@ -2,6 +2,7 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
+using Framlux.FleetManagement.Database;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Services.Core.ServerConfiguration;
@@ -73,7 +74,7 @@ public class ServerConfigurationServiceTests
     }
 
     [Test]
-    public async Task GetAgentHeartbeatSecondsAsync_RedisMiss_DbMiss_ReturnsDefault300()
+    public async Task GetAgentHeartbeatSecondsAsync_RedisMiss_DbMiss_ReturnsShippedDefault()
     {
         (ServerConfigurationService service, IServerSettingsReader cache, IDatabase redisDb) = CreateService();
         redisDb.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>())
@@ -83,7 +84,7 @@ public class ServerConfigurationServiceTests
 
         int result = await service.GetAgentHeartbeatSecondsAsync(CancellationToken.None);
 
-        await Assert.That(result).IsEqualTo(300);
+        await Assert.That(result).IsEqualTo(ServerSettingDefaults.AgentHeartbeatSeconds);
     }
 
     [Test]
@@ -111,7 +112,7 @@ public class ServerConfigurationServiceTests
 
         int result = await service.GetAgentHeartbeatSecondsAsync(CancellationToken.None);
 
-        await Assert.That(result).IsEqualTo(300);
+        await Assert.That(result).IsEqualTo(ServerSettingDefaults.AgentHeartbeatSeconds);
     }
 
     [Test]
@@ -125,7 +126,7 @@ public class ServerConfigurationServiceTests
 
         int result = await service.GetAgentHeartbeatSecondsAsync(CancellationToken.None);
 
-        await Assert.That(result).IsEqualTo(300);
+        await Assert.That(result).IsEqualTo(ServerSettingDefaults.AgentHeartbeatSeconds);
     }
 
     [Test]
@@ -371,7 +372,7 @@ public class ServerConfigurationServiceTests
 
         int result = await service.GetAgentHeartbeatSecondsAsync(CancellationToken.None);
 
-        await Assert.That(result).IsEqualTo(300);
+        await Assert.That(result).IsEqualTo(ServerSettingDefaults.AgentHeartbeatSeconds);
     }
 
     [Test]

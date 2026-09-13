@@ -12,8 +12,9 @@ namespace Framlux.FleetManagement.Database;
 /// </summary>
 public static class ServerSettingDefaults
 {
-    /// <summary>Default agent heartbeat interval in seconds.</summary>
-    public const int AgentHeartbeatSeconds = 300;
+    /// <summary>Default agent heartbeat interval in seconds. Comfortably inside OnlineThresholdSeconds
+    /// even after the agent's ±15% jitter, which a value equal to the threshold was not.</summary>
+    public const int AgentHeartbeatSeconds = 120;
 
     /// <summary>Default agent configuration refresh interval in seconds.</summary>
     public const int AgentConfigRefreshSeconds = 900;

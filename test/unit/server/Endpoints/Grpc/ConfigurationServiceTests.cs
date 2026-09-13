@@ -2,6 +2,7 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
+using Framlux.FleetManagement.Database;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
@@ -156,9 +157,10 @@ public sealed class ConfigurationServiceTests
         GetConfigurationResponse response = await service.GetConfiguration(
             new GetConfigurationRequest { MachineId = 1 }, context);
 
-        // Default heartbeat = 300 seconds (5 min), default config refresh = 900 seconds (15 min).
-        await Assert.That(response.TimeConfig.HeartbeatTimeInSeconds).IsEqualTo(300);
-        await Assert.That(response.TimeConfig.ConfigurationRefreshTimeInSeconds).IsEqualTo(900);
+        // The shipped defaults, read from the constants the read paths fall back to rather than
+        // copied here, so a retuned default cannot leave this assertion behind.
+        await Assert.That(response.TimeConfig.HeartbeatTimeInSeconds).IsEqualTo(ServerSettingDefaults.AgentHeartbeatSeconds);
+        await Assert.That(response.TimeConfig.ConfigurationRefreshTimeInSeconds).IsEqualTo(ServerSettingDefaults.AgentConfigRefreshSeconds);
     }
 
     [Test]
