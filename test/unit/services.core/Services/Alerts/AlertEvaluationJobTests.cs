@@ -271,6 +271,7 @@ public sealed class AlertEvaluationJobTests
             alertConditionStateRepository: repository,
             subscriptionService: resolvedSubscriptionService,
             deliveryService: deliveryService,
+            alertPipelineMetrics: TestMetricsFactory.CreateAlertPipelineMetrics(),
             timeProvider: timeProvider ?? TimeProvider.System,
             logger: logger);
 
@@ -1031,6 +1032,7 @@ public sealed class AlertEvaluationJobTests
             conditionStates!,
             subscriptions!,
             delivery!,
+            TestMetricsFactory.CreateAlertPipelineMetrics(),
             timeProvider!,
             logger!);
     }
@@ -1214,7 +1216,7 @@ public sealed class AlertEvaluationJobTests
                 Arg.Any<DateTimeOffset>(), Arg.Any<DateTimeOffset>(), Arg.Any<CancellationToken>())
             .Returns(new List<AlertEvent>());
 
-        AlertEvaluationJob job = new(stateRepo, ruleRepo, eventRepo, conditionRepo, subscriptionService, delivery, new FakeTimeProvider(EvaluationEpoch), logger);
+        AlertEvaluationJob job = new(stateRepo, ruleRepo, eventRepo, conditionRepo, subscriptionService, delivery, TestMetricsFactory.CreateAlertPipelineMetrics(), new FakeTimeProvider(EvaluationEpoch), logger);
 
         // Must NOT throw — tenant 1 failure is caught + logged.
         await job.RunAsync(CancellationToken.None);
@@ -1255,7 +1257,7 @@ public sealed class AlertEvaluationJobTests
                 throw new OperationCanceledException(cts.Token);
             });
 
-        AlertEvaluationJob job = new(stateRepo, ruleRepo, eventRepo, conditionRepo, subscriptionService, delivery, new FakeTimeProvider(EvaluationEpoch), logger);
+        AlertEvaluationJob job = new(stateRepo, ruleRepo, eventRepo, conditionRepo, subscriptionService, delivery, TestMetricsFactory.CreateAlertPipelineMetrics(), new FakeTimeProvider(EvaluationEpoch), logger);
 
         await Assert.ThrowsAsync<OperationCanceledException>(() => job.RunAsync(cts.Token));
     }

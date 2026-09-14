@@ -8,6 +8,7 @@ using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Services.Core.Billing;
 using Framlux.FleetManagement.Services.Core.Infrastructure;
+using Framlux.FleetManagement.Services.Core.Observability;
 
 namespace Framlux.FleetManagement.Services.Core.Alerts;
 
@@ -18,6 +19,7 @@ public sealed class EventAlertService : IEventAlertService
 {
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly IAlertDeliveryService _deliveryService;
+    private readonly AlertPipelineMetrics _alertPipelineMetrics;
     private readonly ILogger<EventAlertService> _logger;
 
     /// <summary>
@@ -26,14 +28,17 @@ public sealed class EventAlertService : IEventAlertService
     public EventAlertService(
         IServiceScopeFactory scopeFactory,
         IAlertDeliveryService deliveryService,
+        AlertPipelineMetrics alertPipelineMetrics,
         ILogger<EventAlertService> logger)
     {
         ArgumentNullException.ThrowIfNull(scopeFactory);
         ArgumentNullException.ThrowIfNull(deliveryService);
+        ArgumentNullException.ThrowIfNull(alertPipelineMetrics);
         ArgumentNullException.ThrowIfNull(logger);
 
         _scopeFactory = scopeFactory;
         _deliveryService = deliveryService;
+        _alertPipelineMetrics = alertPipelineMetrics;
         _logger = logger;
     }
 
@@ -99,6 +104,7 @@ public sealed class EventAlertService : IEventAlertService
                 "SSH alert triggered: Rule {RuleId} for machine {MachineId} — user {User} from {SourceIp}",
                 rule.Id, machineId, user, sourceIp);
 
+            _alertPipelineMetrics.RecordEventFired(rule.Metric, rule.Severity);
             await _deliveryService.EnqueueAsync(createdEvent.Id, rule.Id, tenantId, ct);
         }
     }

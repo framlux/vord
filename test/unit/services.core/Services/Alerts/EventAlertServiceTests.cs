@@ -7,6 +7,7 @@ using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Services.Core.Alerts;
+using Framlux.FleetManagement.Test.Infrastructure;
 using Framlux.FleetManagement.Services.Core.Billing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -35,7 +36,7 @@ public sealed class EventAlertServiceTests
 
         IServiceScopeFactory scopeFactory = provider.GetRequiredService<IServiceScopeFactory>();
 
-        return new EventAlertService(scopeFactory, _deliveryService, _logger);
+        return new EventAlertService(scopeFactory, _deliveryService, TestMetricsFactory.CreateAlertPipelineMetrics(), _logger);
     }
 
     private void SetupActiveProSubscription()

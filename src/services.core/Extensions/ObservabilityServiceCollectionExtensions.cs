@@ -75,6 +75,9 @@ public static class ObservabilityServiceCollectionExtensions
         services.AddSingleton<BillingMetrics>();
         services.AddSingleton<IInitialisableMetrics>(provider => provider.GetRequiredService<BillingMetrics>());
 
+        services.AddSingleton<AlertPipelineMetrics>();
+        services.AddSingleton<IInitialisableMetrics>(provider => provider.GetRequiredService<AlertPipelineMetrics>());
+
         services.AddHostedService<MetricSeriesInitialiser>();
 
         if (string.IsNullOrWhiteSpace(endpoint) == true)

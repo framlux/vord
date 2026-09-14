@@ -8,6 +8,7 @@ using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Services.Core.Billing;
 using Framlux.FleetManagement.Services.Core.Infrastructure;
+using Framlux.FleetManagement.Services.Core.Observability;
 using Hangfire;
 
 namespace Framlux.FleetManagement.Services.Core.Alerts;
@@ -29,6 +30,7 @@ public sealed class AlertEvaluationJob
     private readonly IAlertConditionStateRepository _alertConditionStateRepository;
     private readonly ISubscriptionService _subscriptionService;
     private readonly IAlertDeliveryService _deliveryService;
+    private readonly AlertPipelineMetrics _alertPipelineMetrics;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<AlertEvaluationJob> _logger;
 
@@ -41,6 +43,7 @@ public sealed class AlertEvaluationJob
     /// <param name="alertConditionStateRepository">Tracks how long a condition has held.</param>
     /// <param name="subscriptionService">Answers whether a tenant is entitled to threshold alerts.</param>
     /// <param name="deliveryService">Enqueues delivery for newly triggered events.</param>
+    /// <param name="alertPipelineMetrics">Instruments counting alert events as they fire.</param>
     /// <param name="timeProvider">
     /// Clock used for the condition-duration window, the event's triggered timestamp and the
     /// re-drive window. Injected rather than read from the wall clock so a rule's duration — which
@@ -54,6 +57,7 @@ public sealed class AlertEvaluationJob
         IAlertConditionStateRepository alertConditionStateRepository,
         ISubscriptionService subscriptionService,
         IAlertDeliveryService deliveryService,
+        AlertPipelineMetrics alertPipelineMetrics,
         TimeProvider timeProvider,
         ILogger<AlertEvaluationJob> logger)
     {
@@ -63,6 +67,7 @@ public sealed class AlertEvaluationJob
         ArgumentNullException.ThrowIfNull(alertConditionStateRepository);
         ArgumentNullException.ThrowIfNull(subscriptionService);
         ArgumentNullException.ThrowIfNull(deliveryService);
+        ArgumentNullException.ThrowIfNull(alertPipelineMetrics);
         ArgumentNullException.ThrowIfNull(timeProvider);
         ArgumentNullException.ThrowIfNull(logger);
 
@@ -72,6 +77,7 @@ public sealed class AlertEvaluationJob
         _alertConditionStateRepository = alertConditionStateRepository;
         _subscriptionService = subscriptionService;
         _deliveryService = deliveryService;
+        _alertPipelineMetrics = alertPipelineMetrics;
         _timeProvider = timeProvider;
         _logger = logger;
     }
@@ -299,6 +305,7 @@ public sealed class AlertEvaluationJob
             await _alertConditionStateRepository.DeleteAsync(rule.Id, state.MachineId, ct);
         }
 
+        _alertPipelineMetrics.RecordEventFired(rule.Metric, rule.Severity);
         await _deliveryService.EnqueueAsync(createdEvent.Id, rule.Id, rule.TenantId, ct);
     }
 
