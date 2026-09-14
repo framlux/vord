@@ -375,6 +375,13 @@ app.UseSerilogRequestLogging(options =>
 });
 
 app.UseForwardedHeaders();
+
+// A failed gRPC call still completes with HTTP 200 and reports its failure in a trailer, so
+// without this the whole agent-facing and internal control-plane surface is invisible to any
+// error-rate rule. It sits ahead of authentication so a call refused before it reaches a service
+// is counted too.
+app.UseGrpcStatusMetricTag();
+
 app.UseMiddleware<Framlux.FleetManagement.Server.Middleware.SecurityHeadersMiddleware>();
 app.UseCors();
 app.UseRateLimiter();
