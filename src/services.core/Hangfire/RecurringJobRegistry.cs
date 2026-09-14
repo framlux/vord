@@ -20,6 +20,39 @@ namespace Framlux.FleetManagement.Services.Core.Hangfire;
 public static class RecurringJobRegistry
 {
     /// <summary>
+    /// The recurring job ids this configuration intends to register. A job absent from this set is
+    /// deliberately not registered, so health reporting must not treat it as missing.
+    /// </summary>
+    /// <param name="isSaas">Whether this is the hosted deployment.</param>
+    /// <param name="objectStorageEnabled">Whether object storage is configured.</param>
+    /// <returns>The ids that should exist in storage.</returns>
+    public static IReadOnlySet<string> IntendedJobIds(bool isSaas, bool objectStorageEnabled)
+    {
+        HashSet<string> ids = new(StringComparer.Ordinal)
+        {
+            RecurringJobIds.RemoteCommandExpiry,
+            RecurringJobIds.PartitionManagement,
+            RecurringJobIds.HealthSweepCoordinator,
+            RecurringJobIds.AlertEvaluation,
+            RecurringJobIds.AlertConditionStateCleanup,
+            RecurringJobIds.TenantPurge,
+        };
+
+        if (isSaas == true)
+        {
+            ids.Add(RecurringJobIds.StripeSync);
+        }
+
+        if (objectStorageEnabled == true)
+        {
+            ids.Add(RecurringJobIds.DataExportProcessing);
+            ids.Add(RecurringJobIds.DataExportCleanup);
+        }
+
+        return ids;
+    }
+
+    /// <summary>
     /// Registers every recurring job. Safe to call repeatedly — Hangfire upserts by job id.
     /// Feature-gated jobs are added only when the matching flag is true and removed otherwise so a
     /// previously-registered schedule doesn't fire after the feature is turned off.

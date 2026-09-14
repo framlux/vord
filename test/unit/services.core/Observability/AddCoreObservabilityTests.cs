@@ -3,6 +3,7 @@
 // See LICENSE for details.
 
 using Framlux.FleetManagement.Services.Core.Extensions;
+using Framlux.FleetManagement.Services.Core.Deployment;
 using Framlux.FleetManagement.Services.Core.Observability;
 using Framlux.FleetManagement.Services.Core.Options;
 using Microsoft.Extensions.Configuration;
@@ -43,11 +44,15 @@ public sealed class AddCoreObservabilityTests
         ServiceCollection services = new();
         services.AddLogging();
 
-        // The worker's gauge classes read the clock and the streaming shard configuration, which the
-        // real host registers through AddCoreServices and AddBackgroundWorkers. Supplying them here
-        // keeps this helper an honest stand-in for that process rather than a weaker one.
+        // The gauge classes read the clock, the deployment mode, the object-storage configuration
+        // and the streaming shard count. Both hosts register all of these through AddCoreOptions,
+        // AddCoreServices and AddBackgroundWorkers before observability is added, so supplying them
+        // here keeps this helper an honest stand-in for a real process rather than a weaker one.
         services.AddSingleton(TimeProvider.System);
         services.AddOptions<StreamingOptions>();
+        services.AddOptions<ObjectStorageOptions>();
+        services.AddOptions<DeploymentOptions>();
+        services.AddSingleton<DeploymentMode>();
 
         services.AddCoreObservability(configuration, host);
 

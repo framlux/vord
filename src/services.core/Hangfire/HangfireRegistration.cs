@@ -2,7 +2,9 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
+using Framlux.FleetManagement.Services.Core.Observability;
 using Hangfire;
+using Hangfire.Common;
 using Hangfire.Dashboard;
 using Hangfire.PostgreSql;
 using Microsoft.AspNetCore.Builder;
@@ -66,11 +68,17 @@ public static class HangfireRegistration
     }
 
     /// <summary>
-    /// Registers the Hangfire processing server. Call this only in the services.worker process.
+    /// Registers the Hangfire processing server. Call this only in a process that runs jobs.
     /// </summary>
     /// <param name="services">The service collection.</param>
+    /// <param name="customise">
+    /// Optional override applied after the production defaults, so a test host can shorten timeouts
+    /// and name its server without duplicating the filter wiring this method installs.
+    /// </param>
     /// <returns>The service collection for chaining.</returns>
-    public static IServiceCollection AddHangfireServerForWorker(this IServiceCollection services)
+    public static IServiceCollection AddHangfireServerForWorker(
+        this IServiceCollection services,
+        Action<BackgroundJobServerOptions>? customise = null)
     {
         ArgumentNullException.ThrowIfNull(services);
 
@@ -84,6 +92,23 @@ public static class HangfireRegistration
             // then default (admin/UI-initiated work), then long (multi-minute jobs that
             // would otherwise hog all workers and delay critical work).
             options.Queues = new[] { "critical", "default", "long" };
+
+            // The job-duration filter belongs to the server rather than the global filter
+            // collection: only a process that runs jobs can invoke it, and a process-global
+            // registration would accumulate a second copy every time another host is built in the
+            // same process — recording one run twice.
+            JobFilterCollection serverFilters = [];
+            serverFilters.Add(new JobDurationFilter(
+                sp.GetRequiredService<JobMetrics>(),
+                sp.GetRequiredService<TimeProvider>()));
+
+            // Composed with the defaults rather than replacing them, so AutomaticRetry and the rest
+            // of Hangfire's own filters keep working.
+            options.FilterProvider = new JobFilterProviderCollection(
+                JobFilterProviders.Providers,
+                serverFilters);
+
+            customise?.Invoke(options);
         });
 
         return services;

@@ -463,6 +463,18 @@ public partial class DatabaseRepository : IMachineStateRepository
         return (healthCounts, totalSecurityUpdates);
     }
 
+    /// <inheritdoc/>
+    public async Task<IReadOnlyDictionary<short, int>> GetFleetMachineCountsByHealthAsync(CancellationToken cancellationToken)
+    {
+        List<HealthStatusCount> grouped = await (
+            from r in BuildFleetRows(_db.Machines)
+            group r by r.HealthStatus into g
+            select new HealthStatusCount { HealthStatus = g.Key, Count = g.Count() }
+        ).ToListAsync(cancellationToken);
+
+        return grouped.ToDictionary(row => row.HealthStatus, row => row.Count);
+    }
+
     /// <summary>
     /// Applies every fleet search filter to a base query. Shared by the paginated row search and
     /// the ids-only search, so the two can never disagree about what a filter set matches.
@@ -719,10 +731,23 @@ public partial class DatabaseRepository : IMachineStateRepository
 
     private IQueryable<FleetMachineRow> BuildFleetBaseQuery(int tenantId)
     {
-        return from m in _db.Machines
+        return BuildFleetRows(_db.Machines.Where(m => m.TenantId == tenantId));
+    }
+
+    /// <summary>
+    /// Projects machines into fleet rows, joining the state summary and defaulting a machine with
+    /// no summary row to Offline. Shared by the tenant-scoped fleet query and the fleet-wide count
+    /// so the two cannot disagree about what a fleet member is, or about what a machine that has
+    /// registered but never reported counts as.
+    /// </summary>
+    /// <param name="machines">The machine set to project, already scoped by the caller.</param>
+    /// <returns>The projected rows.</returns>
+    private IQueryable<FleetMachineRow> BuildFleetRows(IQueryable<Machine> machines)
+    {
+        return from m in machines
                join s in _db.MachineStateSummaries on m.Id equals s.MachineId into stateJoin
                from s in stateJoin.DefaultIfEmpty()
-               where (m.TenantId == tenantId) && (m.IsDeleted == false)
+               where m.IsDeleted == false
                select new FleetMachineRow
                {
                    Id = m.Id,

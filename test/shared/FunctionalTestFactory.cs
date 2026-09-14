@@ -10,6 +10,7 @@ using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Migrations;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Server.Auth;
+using Framlux.FleetManagement.Services.Core.Hangfire;
 using Framlux.FleetManagement.Services.Core.Alerts;
 using Framlux.FleetManagement.Services.Core.Billing;
 using Framlux.FleetManagement.Services.Core.Commands;
@@ -298,7 +299,10 @@ public class FunctionalTestFactory : WebApplicationFactory<Program>
                 // Hangfire end-to-end smoke test path: keep the real BackgroundJobClient that
                 // AddHangfire registered against InMemory storage, and stand up a processing
                 // server in-process so enqueued jobs actually run.
-                services.AddHangfireServer(options =>
+                // Goes through the production registration so the server-side filter wiring — the
+                // job-duration instrument among it — is the same code the worker runs, rather than
+                // a parallel copy a test could pass against while production had none.
+                services.AddHangfireServerForWorker(options =>
                 {
                     options.WorkerCount = 1;
                     options.ServerName = $"vord-functional-{Guid.NewGuid():N}";

@@ -248,6 +248,16 @@ public interface IMachineStateRepository
     Task<long?> GetProjectionCursorAsync(int shardIndex, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Counts machines across every tenant, grouped by health status. Deliberately fleet-wide: this
+    /// answers an operator's question about the installation, not a customer's about their fleet.
+    /// Keyed by the stored short rather than the health enum, which lives in a project this one
+    /// cannot reference.
+    /// </summary>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>A count per health status; statuses with no machines are absent.</returns>
+    Task<IReadOnlyDictionary<short, int>> GetFleetMachineCountsByHealthAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Returns the server receipt time of the oldest telemetry row this shard has not yet
     /// projected and that the projection read would actually pick up, or null when the shard is
     /// caught up.

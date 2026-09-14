@@ -2,13 +2,16 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
+using Framlux.FleetManagement.Services.Core.Deployment;
 using Framlux.FleetManagement.Services.Core.Observability;
 using Framlux.FleetManagement.Services.Core.Options;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using OpenTelemetry.Metrics;
 using OpenTelemetry.Resources;
+using System.Diagnostics.Metrics;
 using System.Reflection;
 
 namespace Framlux.FleetManagement.Services.Core.Extensions;
@@ -92,6 +95,19 @@ public static class ObservabilityServiceCollectionExtensions
 
         services.AddSingleton<ResilienceMetrics>();
         services.AddSingleton<IInitialisableMetrics>(provider => provider.GetRequiredService<ResilienceMetrics>());
+
+        // Injected into the Hangfire duration filter, which is constructed from the container in
+        // both processes, so a worker-only registration here would break the API server's Hangfire
+        // client. The gauges gate themselves to the worker instead.
+        services.AddSingleton<JobMetrics>(provider => new JobMetrics(
+            provider.GetRequiredService<IMeterFactory>(),
+            provider.GetRequiredService<IServiceScopeFactory>(),
+            provider.GetRequiredService<TimeProvider>(),
+            provider.GetRequiredService<DeploymentMode>(),
+            provider.GetRequiredService<IOptions<ObjectStorageOptions>>(),
+            host,
+            provider.GetRequiredService<ILogger<JobMetrics>>()));
+        services.AddSingleton<IObservableMetrics>(provider => provider.GetRequiredService<JobMetrics>());
 
         services.AddHostedService<MetricSeriesInitialiser>();
 
