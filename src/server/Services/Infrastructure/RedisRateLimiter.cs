@@ -2,9 +2,9 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
+using Framlux.FleetManagement.Services.Core.Observability;
 using Microsoft.Extensions.Logging;
 using StackExchange.Redis;
-using System.Diagnostics.Metrics;
 
 namespace Framlux.FleetManagement.Server.Services.Infrastructure;
 
@@ -14,27 +14,11 @@ namespace Framlux.FleetManagement.Server.Services.Infrastructure;
 /// </summary>
 public sealed class RedisFixedWindowRateLimiter
 {
-    /// <summary>
-    /// Meter name for rate-limiter instruments. Subscribe from an OpenTelemetry collector to observe
-    /// the fail-open counter.
-    /// </summary>
-    public const string MeterName = "Framlux.FleetManagement.Server.RateLimiting";
-
-    private static readonly Meter RateLimiterMeter = new(MeterName);
-
-    /// <summary>
-    /// Counts how many requests were admitted because Redis was unreachable (fail-open). A rising value
-    /// means abuse protection is degraded; correlate with Redis availability.
-    /// </summary>
-    private static readonly Counter<long> FailOpenCounter = RateLimiterMeter.CreateCounter<long>(
-        "ratelimit.redis_failopen",
-        unit: "requests",
-        description: "Requests admitted because Redis rate-limiting was unavailable.");
-
     private readonly IConnectionMultiplexer _redis;
     private readonly string _keyPrefix;
     private readonly int _permitLimit;
     private readonly TimeSpan _window;
+    private readonly ResilienceMetrics _resilienceMetrics;
     private readonly ILogger? _logger;
 
     /// <summary>
@@ -44,13 +28,15 @@ public sealed class RedisFixedWindowRateLimiter
     /// <param name="keyPrefix">Prefix for Redis keys (e.g. "ratelimit:global" or "ratelimit:login").</param>
     /// <param name="permitLimit">Maximum number of requests per window.</param>
     /// <param name="window">The time window duration.</param>
+    /// <param name="resilienceMetrics">Instruments counting requests admitted without rate limiting.</param>
     /// <param name="logger">Optional logger used to warn when the limiter fails open on a Redis outage.</param>
-    public RedisFixedWindowRateLimiter(IConnectionMultiplexer redis, string keyPrefix, int permitLimit, TimeSpan window, ILogger? logger = null)
+    public RedisFixedWindowRateLimiter(IConnectionMultiplexer redis, string keyPrefix, int permitLimit, TimeSpan window, ResilienceMetrics resilienceMetrics, ILogger? logger = null)
     {
         _redis = redis ?? throw new ArgumentNullException(nameof(redis));
         _keyPrefix = keyPrefix;
         _permitLimit = permitLimit;
         _window = window;
+        _resilienceMetrics = resilienceMetrics ?? throw new ArgumentNullException(nameof(resilienceMetrics));
         _logger = logger;
     }
 
@@ -96,7 +82,7 @@ public sealed class RedisFixedWindowRateLimiter
             // Rate limiting is abuse protection, not a security boundary. When Redis is unreachable we
             // deliberately fail open (admit the request) rather than take the platform down; a metric and
             // warning record the degraded mode. Non-connectivity errors (script bugs) still surface.
-            FailOpenCounter.Add(1);
+            _resilienceMetrics.RecordFailOpen(ResilienceComponent.RateLimiter);
             _logger?.LogWarning(ex, "Redis unavailable for rate limiting on {KeyPrefix}; failing open and admitting the request", _keyPrefix);
 
             return true;

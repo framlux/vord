@@ -5,6 +5,7 @@
 using Framlux.FleetManagement.Server.Middleware;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
+using Framlux.FleetManagement.Test.Infrastructure;
 using NSubstitute;
 using StackExchange.Redis;
 using System.Net;
@@ -36,7 +37,7 @@ public sealed class CallbackRateLimitMiddlewareTests
 
         IConnectionMultiplexer redis = CreateThrowingRedis();
         ILogger<CallbackRateLimitMiddleware> logger = Substitute.For<ILogger<CallbackRateLimitMiddleware>>();
-        CallbackRateLimitMiddleware middleware = new(Next, redis, logger);
+        CallbackRateLimitMiddleware middleware = new(Next, redis, TestMetricsFactory.CreateResilienceMetrics(), logger);
 
         DefaultHttpContext context = new();
         context.Connection.RemoteIpAddress = IPAddress.Parse("203.0.113.7");
@@ -65,7 +66,7 @@ public sealed class CallbackRateLimitMiddlewareTests
 
         IConnectionMultiplexer redis = CreateCountingRedis(returnCount: 1L);
         ILogger<CallbackRateLimitMiddleware> logger = Substitute.For<ILogger<CallbackRateLimitMiddleware>>();
-        CallbackRateLimitMiddleware middleware = new(Next, redis, logger);
+        CallbackRateLimitMiddleware middleware = new(Next, redis, TestMetricsFactory.CreateResilienceMetrics(), logger);
 
         DefaultHttpContext context = new();
         context.Connection.RemoteIpAddress = IPAddress.Parse("203.0.113.8");
@@ -93,7 +94,7 @@ public sealed class CallbackRateLimitMiddlewareTests
 
         IConnectionMultiplexer redis = CreateCountingRedis(returnCount: long.MaxValue);
         ILogger<CallbackRateLimitMiddleware> logger = Substitute.For<ILogger<CallbackRateLimitMiddleware>>();
-        CallbackRateLimitMiddleware middleware = new(Next, redis, logger);
+        CallbackRateLimitMiddleware middleware = new(Next, redis, TestMetricsFactory.CreateResilienceMetrics(), logger);
 
         DefaultHttpContext context = new();
         context.Connection.RemoteIpAddress = IPAddress.Parse("203.0.113.9");

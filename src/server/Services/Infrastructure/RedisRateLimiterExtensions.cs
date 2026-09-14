@@ -4,6 +4,7 @@
 
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using Framlux.FleetManagement.Services.Core.Observability;
 using StackExchange.Redis;
 using System.Threading.RateLimiting;
 
@@ -37,11 +38,12 @@ public static class RedisRateLimiterExtensions
     /// <c>CallbackRateLimitMiddleware</c> uses this factory to enforce the callback limit.
     /// </summary>
     /// <param name="redis">The Redis connection multiplexer.</param>
+    /// <param name="resilienceMetrics">Instruments counting requests admitted without rate limiting.</param>
     /// <param name="logger">Optional logger used to warn when the limiter fails open on a Redis outage.</param>
     /// <returns>A fixed-window limiter configured for the callback surface.</returns>
-    public static RedisFixedWindowRateLimiter CreateCallbackLimiter(IConnectionMultiplexer redis, ILogger? logger = null)
+    public static RedisFixedWindowRateLimiter CreateCallbackLimiter(IConnectionMultiplexer redis, ResilienceMetrics resilienceMetrics, ILogger? logger = null)
     {
-        return new RedisFixedWindowRateLimiter(redis, CallbackKeyPrefix, CallbackPermitLimit, CallbackWindow, logger);
+        return new RedisFixedWindowRateLimiter(redis, CallbackKeyPrefix, CallbackPermitLimit, CallbackWindow, resilienceMetrics, logger);
     }
 
     /// <summary>
@@ -61,16 +63,17 @@ public static class RedisRateLimiterExtensions
         services.AddSingleton<IConfigureOptions<Microsoft.AspNetCore.RateLimiting.RateLimiterOptions>>(sp =>
         {
             IConnectionMultiplexer redis = sp.GetRequiredService<IConnectionMultiplexer>();
-            ILogger limiterLogger = sp.GetRequiredService<ILoggerFactory>().CreateLogger(RedisFixedWindowRateLimiter.MeterName);
+            ILogger limiterLogger = sp.GetRequiredService<ILoggerFactory>().CreateLogger("Framlux.FleetManagement.Server.RateLimiting");
+            ResilienceMetrics resilienceMetrics = sp.GetRequiredService<ResilienceMetrics>();
 
             return new ConfigureOptions<Microsoft.AspNetCore.RateLimiting.RateLimiterOptions>(options =>
             {
-                RedisFixedWindowRateLimiter globalLimiter = new(redis, "ratelimit:global", 100, TimeSpan.FromMinutes(1), limiterLogger);
-                RedisFixedWindowRateLimiter loginLimiter = new(redis, "ratelimit:login", 10, TimeSpan.FromMinutes(5), limiterLogger);
+                RedisFixedWindowRateLimiter globalLimiter = new(redis, "ratelimit:global", 100, TimeSpan.FromMinutes(1), resilienceMetrics, limiterLogger);
+                RedisFixedWindowRateLimiter loginLimiter = new(redis, "ratelimit:login", 10, TimeSpan.FromMinutes(5), resilienceMetrics, limiterLogger);
                 // Dedicated policy for anonymous token-authenticated endpoints (data-export
                 // download). 30/min per IP — tighter than global because a single IP brute-forcing
                 // 64-hex tokens is cheap to mount and the only response we can offer is to slow them.
-                RedisFixedWindowRateLimiter anonymousTokenLimiter = new(redis, "ratelimit:anonymous-token", 30, TimeSpan.FromMinutes(1), limiterLogger);
+                RedisFixedWindowRateLimiter anonymousTokenLimiter = new(redis, "ratelimit:anonymous-token", 30, TimeSpan.FromMinutes(1), resilienceMetrics, limiterLogger);
 
                 options.GlobalLimiter = PartitionedRateLimiter.Create<HttpContext, string>(context =>
                 {

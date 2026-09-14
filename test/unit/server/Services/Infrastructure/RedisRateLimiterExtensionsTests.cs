@@ -2,6 +2,7 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
+using Framlux.FleetManagement.Test.Infrastructure;
 using Framlux.FleetManagement.Services.Core.Infrastructure;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.Extensions.DependencyInjection;
@@ -29,6 +30,7 @@ public class RedisRateLimiterExtensionsTests
         IDatabase db = Substitute.For<IDatabase>();
         redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(db);
         services.AddSingleton(redis);
+        services.AddSingleton(TestMetricsFactory.CreateResilienceMetrics());
         services.AddLogging();
 
         services.AddRedisRateLimiting();
@@ -64,6 +66,7 @@ public class RedisRateLimiterExtensionsTests
         IDatabase db = Substitute.For<IDatabase>();
         redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(db);
         services.AddSingleton(redis);
+        services.AddSingleton(TestMetricsFactory.CreateResilienceMetrics());
         services.AddLogging();
 
         services.AddRedisRateLimiting();
@@ -94,6 +97,7 @@ public class RedisRateLimiterExtensionsTests
         IDatabase db = Substitute.For<IDatabase>();
         redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(db);
         services.AddSingleton(redis);
+        services.AddSingleton(TestMetricsFactory.CreateResilienceMetrics());
         services.AddLogging();
 
         services.AddRedisRateLimiting();
@@ -123,6 +127,7 @@ public class RedisRateLimiterExtensionsTests
         IDatabase db = Substitute.For<IDatabase>();
         redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(db);
         services.AddSingleton(redis);
+        services.AddSingleton(TestMetricsFactory.CreateResilienceMetrics());
         services.AddLogging();
 
         services.AddRedisRateLimiting();
@@ -156,7 +161,7 @@ public class RedisRateLimiterExtensionsTests
             .Returns(_ => RedisResult.Create((RedisValue)System.Threading.Interlocked.Increment(ref count)));
         redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(db);
 
-        RedisFixedWindowRateLimiter limiter = RedisRateLimiterExtensions.CreateCallbackLimiter(redis);
+        RedisFixedWindowRateLimiter limiter = RedisRateLimiterExtensions.CreateCallbackLimiter(redis, TestMetricsFactory.CreateResilienceMetrics());
 
         for (int i = 0; i < RedisRateLimiterExtensions.CallbackPermitLimit; i++)
         {

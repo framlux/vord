@@ -6,6 +6,7 @@ using Framlux.FleetManagement.Services.Core.Infrastructure;
 using Grpc.Core.Testing;
 using Grpc.Core;
 using Microsoft.Extensions.Logging.Abstractions;
+using Framlux.FleetManagement.Test.Infrastructure;
 using NSubstitute;
 using StackExchange.Redis;
 
@@ -22,7 +23,7 @@ public class GrpcRateLimitingInterceptorTests
         IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
         redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(db);
         NullLogger<GrpcRateLimitingInterceptor> logger = new();
-        GrpcRateLimitingInterceptor interceptor = new(redis, logger);
+        GrpcRateLimitingInterceptor interceptor = new(redis, TestMetricsFactory.CreateResilienceMetrics(), logger);
 
         return (interceptor, db);
     }

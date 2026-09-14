@@ -5,6 +5,7 @@
 using Framlux.FleetManagement.Services.Core.ServerConfiguration;
 using Framlux.FleetManagement.Services.Core.Telemetry;
 using Microsoft.Extensions.Logging.Abstractions;
+using Framlux.FleetManagement.Test.Infrastructure;
 using NSubstitute;
 using StackExchange.Redis;
 
@@ -21,7 +22,7 @@ public sealed class RedisTelemetryDeduplicationServiceTests
         // ServerConfigurationService is a sealed concrete class that cannot be mocked.
         // Passing null for redis causes a failure during construction; the exact exception
         // type depends on the runtime but construction should not succeed.
-        await Assert.That(() => new RedisTelemetryDeduplicationService(null!, null!, NullLogger<RedisTelemetryDeduplicationService>.Instance))
+        await Assert.That(() => new RedisTelemetryDeduplicationService(null!, null!, TestMetricsFactory.CreateResilienceMetrics(), NullLogger<RedisTelemetryDeduplicationService>.Instance))
             .Throws<Exception>();
     }
 
@@ -30,7 +31,7 @@ public sealed class RedisTelemetryDeduplicationServiceTests
     {
         IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
 
-        await Assert.That(() => new RedisTelemetryDeduplicationService(redis, null!, NullLogger<RedisTelemetryDeduplicationService>.Instance))
+        await Assert.That(() => new RedisTelemetryDeduplicationService(redis, null!, TestMetricsFactory.CreateResilienceMetrics(), NullLogger<RedisTelemetryDeduplicationService>.Instance))
             .Throws<ArgumentNullException>();
     }
 }

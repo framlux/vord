@@ -2,10 +2,10 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
+using Framlux.FleetManagement.Services.Core.Observability;
 using Framlux.FleetManagement.Services.Core.ServerConfiguration;
 using Microsoft.Extensions.Logging;
 using StackExchange.Redis;
-using System.Diagnostics.Metrics;
 
 namespace Framlux.FleetManagement.Services.Core.Telemetry;
 
@@ -16,22 +16,9 @@ public sealed class RedisTelemetryDeduplicationService : ITelemetryDeduplication
 {
     private const string KeyPrefix = "telemetry:dedup:";
 
-    /// <summary>Meter name for telemetry-dedup instruments.</summary>
-    public const string MeterName = "Framlux.FleetManagement.Services.Core.TelemetryDedup";
-
-    private static readonly Meter DedupMeter = new(MeterName);
-
-    /// <summary>
-    /// Counts batches processed as all-unseen because Redis dedup was unavailable (fail-open). The
-    /// Postgres unique index remains the backstop, so duplicates are still dropped at insert time.
-    /// </summary>
-    private static readonly Counter<long> FailOpenCounter = DedupMeter.CreateCounter<long>(
-        "telemetry.dedup_failopen",
-        unit: "batches",
-        description: "Telemetry batches admitted without Redis dedup because Redis was unavailable.");
-
     private readonly IConnectionMultiplexer _redis;
     private readonly ServerConfigurationService _configService;
+    private readonly ResilienceMetrics _resilienceMetrics;
     private readonly ILogger<RedisTelemetryDeduplicationService> _logger;
 
     /// <summary>
@@ -39,11 +26,13 @@ public sealed class RedisTelemetryDeduplicationService : ITelemetryDeduplication
     /// </summary>
     /// <param name="redis">The Redis connection multiplexer.</param>
     /// <param name="configService">The server configuration service for runtime settings.</param>
+    /// <param name="resilienceMetrics">Instruments counting batches admitted without deduplication.</param>
     /// <param name="logger">Logger used to warn when dedup fails open on a Redis outage.</param>
-    public RedisTelemetryDeduplicationService(IConnectionMultiplexer redis, ServerConfigurationService configService, ILogger<RedisTelemetryDeduplicationService> logger)
+    public RedisTelemetryDeduplicationService(IConnectionMultiplexer redis, ServerConfigurationService configService, ResilienceMetrics resilienceMetrics, ILogger<RedisTelemetryDeduplicationService> logger)
     {
         _redis = redis ?? throw new ArgumentNullException(nameof(redis));
         _configService = configService ?? throw new ArgumentNullException(nameof(configService));
+        _resilienceMetrics = resilienceMetrics ?? throw new ArgumentNullException(nameof(resilienceMetrics));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -94,7 +83,7 @@ public sealed class RedisTelemetryDeduplicationService : ITelemetryDeduplication
             // Fail open: report every id as newly-seen so processing proceeds. The Postgres unique index
             // on (SourceEventId, ReceivedAt) is the layer-2 dedup backstop that drops any true duplicate
             // at insert time, so correctness is preserved while Redis is unavailable.
-            FailOpenCounter.Add(1);
+            _resilienceMetrics.RecordFailOpen(ResilienceComponent.TelemetryDedup);
             _logger.LogWarning(ex, "Redis unavailable for telemetry dedup; failing open for {Count} events (DB unique index will dedup)", ids.Count);
 
             return ids.ToDictionary(id => id, _ => true);

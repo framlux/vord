@@ -2,6 +2,7 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
+using Framlux.FleetManagement.Test.Infrastructure;
 using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Services.Core.ServerConfiguration;
 using Framlux.FleetManagement.Services.Core.Telemetry;
@@ -36,7 +37,7 @@ public sealed class TelemetryDeduplicationServiceTests
             Arg.Any<When>())
             .Returns(true);
 
-        RedisTelemetryDeduplicationService service = new(redis, CreateConfigService(), NullLogger<RedisTelemetryDeduplicationService>.Instance);
+        RedisTelemetryDeduplicationService service = new(redis, CreateConfigService(), TestMetricsFactory.CreateResilienceMetrics(), NullLogger<RedisTelemetryDeduplicationService>.Instance);
 
         bool result = await service.TryMarkSeenAsync("new-event-1");
 
@@ -57,7 +58,7 @@ public sealed class TelemetryDeduplicationServiceTests
             Arg.Any<When>())
             .Returns(false);
 
-        RedisTelemetryDeduplicationService service = new(redis, CreateConfigService(), NullLogger<RedisTelemetryDeduplicationService>.Instance);
+        RedisTelemetryDeduplicationService service = new(redis, CreateConfigService(), TestMetricsFactory.CreateResilienceMetrics(), NullLogger<RedisTelemetryDeduplicationService>.Instance);
 
         bool result = await service.TryMarkSeenAsync("dup-event-1");
 
@@ -78,7 +79,7 @@ public sealed class TelemetryDeduplicationServiceTests
             Arg.Any<When>())
             .Returns(true);
 
-        RedisTelemetryDeduplicationService service = new(redis, CreateConfigService(), NullLogger<RedisTelemetryDeduplicationService>.Instance);
+        RedisTelemetryDeduplicationService service = new(redis, CreateConfigService(), TestMetricsFactory.CreateResilienceMetrics(), NullLogger<RedisTelemetryDeduplicationService>.Instance);
 
         await service.TryMarkSeenAsync("test-event");
 
@@ -104,7 +105,7 @@ public sealed class TelemetryDeduplicationServiceTests
             Arg.Any<When>())
             .Returns(true);
 
-        RedisTelemetryDeduplicationService service = new(redis, CreateConfigService(), NullLogger<RedisTelemetryDeduplicationService>.Instance);
+        RedisTelemetryDeduplicationService service = new(redis, CreateConfigService(), TestMetricsFactory.CreateResilienceMetrics(), NullLogger<RedisTelemetryDeduplicationService>.Instance);
 
         await service.TryMarkSeenAsync("ttl-event");
 
@@ -140,7 +141,7 @@ public sealed class TelemetryDeduplicationServiceTests
             Arg.Any<When>())
             .Returns(Task.FromResult(false));
 
-        RedisTelemetryDeduplicationService service = new(redis, CreateConfigService(), NullLogger<RedisTelemetryDeduplicationService>.Instance);
+        RedisTelemetryDeduplicationService service = new(redis, CreateConfigService(), TestMetricsFactory.CreateResilienceMetrics(), NullLogger<RedisTelemetryDeduplicationService>.Instance);
 
         Dictionary<string, bool> result = await service.TryMarkSeenBatchAsync(["event-a", "event-b"]);
 
@@ -158,7 +159,7 @@ public sealed class TelemetryDeduplicationServiceTests
         IBatch batch = Substitute.For<IBatch>();
         db.CreateBatch(Arg.Any<object>()).Returns(batch);
 
-        RedisTelemetryDeduplicationService service = new(redis, CreateConfigService(), NullLogger<RedisTelemetryDeduplicationService>.Instance);
+        RedisTelemetryDeduplicationService service = new(redis, CreateConfigService(), TestMetricsFactory.CreateResilienceMetrics(), NullLogger<RedisTelemetryDeduplicationService>.Instance);
 
         Dictionary<string, bool> result = await service.TryMarkSeenBatchAsync([]);
 
@@ -179,7 +180,7 @@ public sealed class TelemetryDeduplicationServiceTests
             Arg.Any<When>())
             .Returns(true);
 
-        RedisTelemetryDeduplicationService service = new(redis, CreateConfigService(), NullLogger<RedisTelemetryDeduplicationService>.Instance);
+        RedisTelemetryDeduplicationService service = new(redis, CreateConfigService(), TestMetricsFactory.CreateResilienceMetrics(), NullLogger<RedisTelemetryDeduplicationService>.Instance);
 
         bool result = await service.TryMarkSeenAsync("");
 
@@ -195,7 +196,7 @@ public sealed class TelemetryDeduplicationServiceTests
     [Test]
     public async Task Constructor_NullRedis_ThrowsArgumentNullException()
     {
-        await Assert.That(() => new RedisTelemetryDeduplicationService(null!, CreateConfigService(), NullLogger<RedisTelemetryDeduplicationService>.Instance))
+        await Assert.That(() => new RedisTelemetryDeduplicationService(null!, CreateConfigService(), TestMetricsFactory.CreateResilienceMetrics(), NullLogger<RedisTelemetryDeduplicationService>.Instance))
             .Throws<ArgumentNullException>();
     }
 
@@ -204,7 +205,7 @@ public sealed class TelemetryDeduplicationServiceTests
     {
         IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
 
-        await Assert.That(() => new RedisTelemetryDeduplicationService(redis, null!, NullLogger<RedisTelemetryDeduplicationService>.Instance))
+        await Assert.That(() => new RedisTelemetryDeduplicationService(redis, null!, TestMetricsFactory.CreateResilienceMetrics(), NullLogger<RedisTelemetryDeduplicationService>.Instance))
             .Throws<ArgumentNullException>();
     }
 
@@ -213,7 +214,16 @@ public sealed class TelemetryDeduplicationServiceTests
     {
         IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
 
-        await Assert.That(() => new RedisTelemetryDeduplicationService(redis, CreateConfigService(), null!))
+        await Assert.That(() => new RedisTelemetryDeduplicationService(redis, CreateConfigService(), TestMetricsFactory.CreateResilienceMetrics(), null!))
+            .Throws<ArgumentNullException>();
+    }
+
+    [Test]
+    public async Task Constructor_NullResilienceMetrics_ThrowsArgumentNullException()
+    {
+        IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
+
+        await Assert.That(() => new RedisTelemetryDeduplicationService(redis, CreateConfigService(), null!, NullLogger<RedisTelemetryDeduplicationService>.Instance))
             .Throws<ArgumentNullException>();
     }
 
@@ -230,7 +240,7 @@ public sealed class TelemetryDeduplicationServiceTests
         batch.StringSetAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<TimeSpan?>(), Arg.Any<When>())
             .Returns(Task.FromException<bool>(new RedisConnectionException(ConnectionFailureType.UnableToConnect, "down")));
 
-        RedisTelemetryDeduplicationService service = new(redis, CreateConfigService(), NullLogger<RedisTelemetryDeduplicationService>.Instance);
+        RedisTelemetryDeduplicationService service = new(redis, CreateConfigService(), TestMetricsFactory.CreateResilienceMetrics(), NullLogger<RedisTelemetryDeduplicationService>.Instance);
 
         Dictionary<string, bool> result = await service.TryMarkSeenBatchAsync(["event-a", "event-b"]);
 
@@ -250,7 +260,7 @@ public sealed class TelemetryDeduplicationServiceTests
         batch.StringSetAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<TimeSpan?>(), Arg.Any<When>())
             .Returns(Task.FromException<bool>(new RedisTimeoutException("slow", CommandStatus.Unknown)));
 
-        RedisTelemetryDeduplicationService service = new(redis, CreateConfigService(), NullLogger<RedisTelemetryDeduplicationService>.Instance);
+        RedisTelemetryDeduplicationService service = new(redis, CreateConfigService(), TestMetricsFactory.CreateResilienceMetrics(), NullLogger<RedisTelemetryDeduplicationService>.Instance);
 
         Dictionary<string, bool> result = await service.TryMarkSeenBatchAsync(["only-event"]);
 
@@ -265,7 +275,7 @@ public sealed class TelemetryDeduplicationServiceTests
         redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(db);
         db.KeyDeleteAsync(Arg.Any<RedisKey[]>(), Arg.Any<CommandFlags>()).Returns(2L);
 
-        RedisTelemetryDeduplicationService service = new(redis, CreateConfigService(), NullLogger<RedisTelemetryDeduplicationService>.Instance);
+        RedisTelemetryDeduplicationService service = new(redis, CreateConfigService(), TestMetricsFactory.CreateResilienceMetrics(), NullLogger<RedisTelemetryDeduplicationService>.Instance);
 
         await service.UnmarkSeenBatchAsync(["event-a", "event-b"]);
 
@@ -283,7 +293,7 @@ public sealed class TelemetryDeduplicationServiceTests
         IDatabase db = Substitute.For<IDatabase>();
         redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(db);
 
-        RedisTelemetryDeduplicationService service = new(redis, CreateConfigService(), NullLogger<RedisTelemetryDeduplicationService>.Instance);
+        RedisTelemetryDeduplicationService service = new(redis, CreateConfigService(), TestMetricsFactory.CreateResilienceMetrics(), NullLogger<RedisTelemetryDeduplicationService>.Instance);
 
         await service.UnmarkSeenBatchAsync([]);
 
@@ -297,7 +307,7 @@ public sealed class TelemetryDeduplicationServiceTests
         IDatabase db = Substitute.For<IDatabase>();
         redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(db);
 
-        RedisTelemetryDeduplicationService service = new(redis, CreateConfigService(), NullLogger<RedisTelemetryDeduplicationService>.Instance);
+        RedisTelemetryDeduplicationService service = new(redis, CreateConfigService(), TestMetricsFactory.CreateResilienceMetrics(), NullLogger<RedisTelemetryDeduplicationService>.Instance);
 
         // Null input is a documented no-op that must not throw.
         await service.UnmarkSeenBatchAsync(null!);
@@ -314,7 +324,7 @@ public sealed class TelemetryDeduplicationServiceTests
         db.KeyDeleteAsync(Arg.Any<RedisKey[]>(), Arg.Any<CommandFlags>())
             .Returns<long>(_ => throw new RedisConnectionException(ConnectionFailureType.UnableToConnect, "down"));
 
-        RedisTelemetryDeduplicationService service = new(redis, CreateConfigService(), NullLogger<RedisTelemetryDeduplicationService>.Instance);
+        RedisTelemetryDeduplicationService service = new(redis, CreateConfigService(), TestMetricsFactory.CreateResilienceMetrics(), NullLogger<RedisTelemetryDeduplicationService>.Instance);
 
         // Best-effort compensation: a connectivity failure while unmarking must not throw.
         await service.UnmarkSeenBatchAsync(["event-a"]);
@@ -332,7 +342,7 @@ public sealed class TelemetryDeduplicationServiceTests
         batch.StringSetAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<TimeSpan?>(), Arg.Any<When>())
             .Returns(Task.FromException<bool>(new InvalidOperationException("bug")));
 
-        RedisTelemetryDeduplicationService service = new(redis, CreateConfigService(), NullLogger<RedisTelemetryDeduplicationService>.Instance);
+        RedisTelemetryDeduplicationService service = new(redis, CreateConfigService(), TestMetricsFactory.CreateResilienceMetrics(), NullLogger<RedisTelemetryDeduplicationService>.Instance);
 
         await Assert.That(async () => await service.TryMarkSeenBatchAsync(["event-a"]))
             .Throws<InvalidOperationException>();

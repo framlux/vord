@@ -81,6 +81,9 @@ public static class ObservabilityServiceCollectionExtensions
         services.AddSingleton<AuthMetrics>();
         services.AddSingleton<IInitialisableMetrics>(provider => provider.GetRequiredService<AuthMetrics>());
 
+        services.AddSingleton<ResilienceMetrics>();
+        services.AddSingleton<IInitialisableMetrics>(provider => provider.GetRequiredService<ResilienceMetrics>());
+
         services.AddHostedService<MetricSeriesInitialiser>();
 
         if (string.IsNullOrWhiteSpace(endpoint) == true)

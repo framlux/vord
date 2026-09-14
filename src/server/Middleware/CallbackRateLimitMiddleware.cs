@@ -5,6 +5,7 @@
 using Framlux.FleetManagement.Server.Services.Infrastructure;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
+using Framlux.FleetManagement.Services.Core.Observability;
 using StackExchange.Redis;
 using System;
 
@@ -35,11 +36,12 @@ public sealed class CallbackRateLimitMiddleware
     /// </summary>
     /// <param name="next">The next middleware in the pipeline.</param>
     /// <param name="redis">The Redis connection multiplexer backing the limiter.</param>
+    /// <param name="resilienceMetrics">Instruments counting requests admitted without rate limiting.</param>
     /// <param name="logger">The logger used to record fail-open events.</param>
-    public CallbackRateLimitMiddleware(RequestDelegate next, IConnectionMultiplexer redis, ILogger<CallbackRateLimitMiddleware> logger)
+    public CallbackRateLimitMiddleware(RequestDelegate next, IConnectionMultiplexer redis, ResilienceMetrics resilienceMetrics, ILogger<CallbackRateLimitMiddleware> logger)
     {
         _next = next;
-        _limiter = RedisRateLimiterExtensions.CreateCallbackLimiter(redis, logger);
+        _limiter = RedisRateLimiterExtensions.CreateCallbackLimiter(redis, resilienceMetrics, logger);
         _logger = logger;
     }
 

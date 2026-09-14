@@ -4,6 +4,7 @@
 
 using Framlux.FleetManagement.Services.Core.Infrastructure;
 using Microsoft.Extensions.Logging;
+using Framlux.FleetManagement.Test.Infrastructure;
 using NSubstitute;
 using StackExchange.Redis;
 
@@ -19,7 +20,7 @@ public class RedisRateLimiterTests
         IDatabase db = Substitute.For<IDatabase>();
         IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
         redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(db);
-        RedisFixedWindowRateLimiter limiter = new(redis, "ratelimit:test", permitLimit, TimeSpan.FromMinutes(1));
+        RedisFixedWindowRateLimiter limiter = new(redis, "ratelimit:test", permitLimit, TimeSpan.FromMinutes(1), TestMetricsFactory.CreateResilienceMetrics());
 
         return (limiter, db);
     }
@@ -122,7 +123,7 @@ public class RedisRateLimiterTests
         IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
         redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(db);
         ILogger logger = Substitute.For<ILogger>();
-        RedisFixedWindowRateLimiter limiter = new(redis, "ratelimit:test", 10, TimeSpan.FromMinutes(1), logger);
+        RedisFixedWindowRateLimiter limiter = new(redis, "ratelimit:test", 10, TimeSpan.FromMinutes(1), TestMetricsFactory.CreateResilienceMetrics(), logger);
 
         db.ScriptEvaluateAsync(Arg.Any<string>(), Arg.Any<RedisKey[]>(), Arg.Any<RedisValue[]>(), Arg.Any<CommandFlags>())
             .Returns<RedisResult>(_ => throw new RedisConnectionException(ConnectionFailureType.UnableToConnect, "Connection refused"));
@@ -236,7 +237,7 @@ public class RedisRateLimiterTests
     {
         ArgumentNullException? ex = await Assert.ThrowsAsync<ArgumentNullException>(() =>
         {
-            RedisFixedWindowRateLimiter _ = new(null!, "ratelimit:test", 10, TimeSpan.FromMinutes(1));
+            RedisFixedWindowRateLimiter _ = new(null!, "ratelimit:test", 10, TimeSpan.FromMinutes(1), TestMetricsFactory.CreateResilienceMetrics());
 
             return Task.CompletedTask;
         });
@@ -254,7 +255,7 @@ public class RedisRateLimiterTests
         IDatabase db = Substitute.For<IDatabase>();
         IConnectionMultiplexer redis = Substitute.For<IConnectionMultiplexer>();
         redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(db);
-        RedisFixedWindowRateLimiter inner = new(redis, "ratelimit:test", permitLimit, TimeSpan.FromMinutes(1));
+        RedisFixedWindowRateLimiter inner = new(redis, "ratelimit:test", permitLimit, TimeSpan.FromMinutes(1), TestMetricsFactory.CreateResilienceMetrics());
         RedisPartitionedRateLimiter partitioned = new(inner, partitionKey);
 
         return (partitioned, db);

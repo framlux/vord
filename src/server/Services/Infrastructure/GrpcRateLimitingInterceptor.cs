@@ -5,6 +5,7 @@
 using System.Security.Claims;
 using Grpc.Core.Interceptors;
 using Grpc.Core;
+using Framlux.FleetManagement.Services.Core.Observability;
 using StackExchange.Redis;
 
 namespace Framlux.FleetManagement.Server.Services.Infrastructure;
@@ -22,10 +23,11 @@ public sealed class GrpcRateLimitingInterceptor : Interceptor
     /// Creates a new instance of the <see cref="GrpcRateLimitingInterceptor"/> class.
     /// </summary>
     /// <param name="redis">The Redis connection multiplexer.</param>
+    /// <param name="resilienceMetrics">Instruments counting requests admitted without rate limiting.</param>
     /// <param name="logger">The logger instance.</param>
-    public GrpcRateLimitingInterceptor(IConnectionMultiplexer redis, ILogger<GrpcRateLimitingInterceptor> logger)
+    public GrpcRateLimitingInterceptor(IConnectionMultiplexer redis, ResilienceMetrics resilienceMetrics, ILogger<GrpcRateLimitingInterceptor> logger)
     {
-        _limiter = new RedisFixedWindowRateLimiter(redis, "ratelimit:grpc", 100, TimeSpan.FromMinutes(1), logger);
+        _limiter = new RedisFixedWindowRateLimiter(redis, "ratelimit:grpc", 100, TimeSpan.FromMinutes(1), resilienceMetrics, logger);
         _logger = logger;
     }
 
