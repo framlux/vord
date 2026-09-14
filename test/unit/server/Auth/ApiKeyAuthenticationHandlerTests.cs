@@ -5,6 +5,7 @@
 using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Server.Auth;
+using Framlux.FleetManagement.Test.Infrastructure;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -48,7 +49,7 @@ public class ApiKeyAuthenticationHandlerTests
         ILoggerFactory loggerFactory = new NullLoggerFactory();
         UrlEncoder encoder = UrlEncoder.Default;
 
-        ApiKeyAuthenticationHandler handler = new(options, loggerFactory, encoder, machineRepository, redis);
+        ApiKeyAuthenticationHandler handler = new(options, loggerFactory, encoder, machineRepository, redis, TestMetricsFactory.CreateIngestMetrics());
 
         DefaultHttpContext httpContext = new();
         if (apiKeyHeader is not null)
@@ -70,7 +71,7 @@ public class ApiKeyAuthenticationHandlerTests
         UrlEncoder encoder = UrlEncoder.Default;
         IMachineRepository machineRepo = Substitute.For<IMachineRepository>();
 
-        return new ApiKeyAuthenticationHandler(options, loggerFactory, encoder, machineRepo, redis);
+        return new ApiKeyAuthenticationHandler(options, loggerFactory, encoder, machineRepo, redis, TestMetricsFactory.CreateIngestMetrics());
     }
 
     [Test]

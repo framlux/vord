@@ -8,6 +8,7 @@ using System.Text;
 using System.Text.Encodings.Web;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
+using Framlux.FleetManagement.Services.Core.Observability;
 using Framlux.FleetManagement.Services.Core.Security;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.Extensions.Options;
@@ -40,6 +41,7 @@ public class ApiKeyAuthenticationHandler : AuthenticationHandler<AuthenticationS
 
     private readonly IMachineRepository _machineRepository;
     private readonly IConnectionMultiplexer _redis;
+    private readonly IngestMetrics _ingestMetrics;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="ApiKeyAuthenticationHandler"/> class.
@@ -49,16 +51,20 @@ public class ApiKeyAuthenticationHandler : AuthenticationHandler<AuthenticationS
     /// <param name="encoder">The URL encoder.</param>
     /// <param name="machineRepository">The machine repository.</param>
     /// <param name="redis">The Redis connection multiplexer for caching.</param>
+    /// <param name="ingestMetrics">Records refusals, which happen before any service is entered.</param>
     public ApiKeyAuthenticationHandler(
         IOptionsMonitor<AuthenticationSchemeOptions> options,
         ILoggerFactory logger,
         UrlEncoder encoder,
         IMachineRepository machineRepository,
-        IConnectionMultiplexer redis)
+        IConnectionMultiplexer redis,
+        IngestMetrics ingestMetrics)
     : base(options, logger, encoder)
     {
+        ArgumentNullException.ThrowIfNull(ingestMetrics);
         _machineRepository = machineRepository;
         _redis = redis;
+        _ingestMetrics = ingestMetrics;
     }
 
     /// <summary>
@@ -82,6 +88,8 @@ public class ApiKeyAuthenticationHandler : AuthenticationHandler<AuthenticationS
 
         if (string.IsNullOrEmpty(apiKeyHeader))
         {
+            _ingestMetrics.RecordAuthRejection(IngestAuthRejectionReason.MissingKey);
+
             return AuthenticateResult.Fail("No API key found");
         }
 
@@ -101,6 +109,10 @@ public class ApiKeyAuthenticationHandler : AuthenticationHandler<AuthenticationS
         {
             string keyPrefix = apiKeyHeader.Length > 8 ? apiKeyHeader[..8] : apiKeyHeader;
             Logger.LogWarning("Invalid API key attempted (prefix: {KeyPrefix}...)", keyPrefix);
+
+            // A revoked key and one that never existed are indistinguishable here: the lookup
+            // answers null for both, so the counter says unknown and means either.
+            _ingestMetrics.RecordAuthRejection(IngestAuthRejectionReason.UnknownKey);
 
             return AuthenticateResult.Fail("Invalid API key");
         }

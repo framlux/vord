@@ -7,6 +7,7 @@ using Framlux.FleetManagement.Server.Services.Infrastructure;
 using Framlux.FleetManagement.Services.Core.Billing;
 using Framlux.FleetManagement.Services.Core.Options;
 using Framlux.FleetManagement.Services.Core.Telemetry;
+using Framlux.FleetManagement.Test.Infrastructure;
 using Hangfire;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -37,6 +38,7 @@ public sealed class TelemetryServiceStreamCapTests
             redis,
             Options.Create(options),
             processLimiter ?? new ProcessStreamSlotLimiter(5000),
+            TestMetricsFactory.CreateIngestMetrics(),
             TimeProvider.System,
             NullLogger<TelemetryService>.Instance);
     }

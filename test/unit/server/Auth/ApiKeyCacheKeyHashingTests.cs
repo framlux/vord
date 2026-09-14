@@ -5,6 +5,7 @@
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Server.Auth;
+using Framlux.FleetManagement.Test.Infrastructure;
 using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.Logging;
@@ -38,7 +39,7 @@ public sealed class ApiKeyCacheKeyHashingTests
     {
         IOptionsMonitor<AuthenticationSchemeOptions> options = Substitute.For<IOptionsMonitor<AuthenticationSchemeOptions>>();
         options.Get(Arg.Any<string>()).Returns(new AuthenticationSchemeOptions());
-        ApiKeyAuthenticationHandler handler = new(options, new NullLoggerFactory(), UrlEncoder.Default, machineRepository, redis);
+        ApiKeyAuthenticationHandler handler = new(options, new NullLoggerFactory(), UrlEncoder.Default, machineRepository, redis, TestMetricsFactory.CreateIngestMetrics());
         DefaultHttpContext httpContext = new();
         httpContext.Request.Headers["x-api-key"] = apiKey;
         AuthenticationScheme scheme = new(ApiKeyAuthenticationHandler.SchemeName, null, typeof(ApiKeyAuthenticationHandler));
@@ -158,7 +159,7 @@ public sealed class ApiKeyCacheKeyHashingTests
         (IConnectionMultiplexer redis, IDatabase redisDb) = CreateRedisMock();
         IOptionsMonitor<AuthenticationSchemeOptions> options = Substitute.For<IOptionsMonitor<AuthenticationSchemeOptions>>();
         options.Get(Arg.Any<string>()).Returns(new AuthenticationSchemeOptions());
-        ApiKeyAuthenticationHandler handler = new(options, new NullLoggerFactory(), UrlEncoder.Default, Substitute.For<IMachineRepository>(), redis);
+        ApiKeyAuthenticationHandler handler = new(options, new NullLoggerFactory(), UrlEncoder.Default, Substitute.For<IMachineRepository>(), redis, TestMetricsFactory.CreateIngestMetrics());
 
         await handler.InvalidateCachedKeyAsync(Sample);
 

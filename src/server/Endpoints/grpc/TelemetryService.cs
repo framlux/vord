@@ -2,7 +2,6 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
-using System.Diagnostics.Metrics;
 using System.Globalization;
 using System.Text.Json;
 using Framlux.FleetManagement.Database;
@@ -14,6 +13,7 @@ using Framlux.FleetManagement.Server.Services.Infrastructure;
 using Framlux.FleetManagement.Services.Core.Alerts;
 using Framlux.FleetManagement.Services.Core.Billing;
 using Framlux.FleetManagement.Services.Core.Infrastructure;
+using Framlux.FleetManagement.Services.Core.Observability;
 using Framlux.FleetManagement.Services.Core.Options;
 using Framlux.FleetManagement.Services.Core.Telemetry;
 using Grpc.Core;
@@ -33,29 +33,6 @@ namespace Framlux.FleetManagement.Server.Endpoints.Grpc;
 [Authorize(ApiKeyAuthenticationHandler.SchemeName)]
 public sealed class TelemetryService : Telemetry.TelemetryBase
 {
-
-    /// <summary>
-    /// Meter name for telemetry-ingest instruments. Subscribe to this name from an OpenTelemetry /
-    /// metrics listener to observe agent clock-skew and other ingest signals.
-    /// </summary>
-    public const string MeterName = "Framlux.FleetManagement.Server.Telemetry";
-
-    /// <summary>
-    /// Meter that owns telemetry-ingest instruments. Static so the instrument is shared across all
-    /// per-request service instances the gRPC framework constructs.
-    /// </summary>
-    private static readonly Meter TelemetryMeter = new(MeterName);
-
-    /// <summary>
-    /// Records the magnitude of agent clock skew for envelopes whose skew exceeded <see cref="MaxClockSkew"/>.
-    /// The telemetry is still ingested; this instrument makes drifted agent clocks observable. Skew magnitude
-    /// is captured as a measurement value rather than a tag to keep the metric bounded in cardinality.
-    /// </summary>
-    private static readonly Histogram<double> ClockSkewHistogram = TelemetryMeter.CreateHistogram<double>(
-        "telemetry.agent.clock_skew_seconds",
-        unit: "s",
-        description: "Agent clock skew magnitude in seconds for envelopes exceeding the skew threshold.");
-
     /// <summary>
     /// PostgreSQL error code for unique constraint violation.
     /// </summary>
@@ -102,6 +79,7 @@ public sealed class TelemetryService : Telemetry.TelemetryBase
     private readonly IConnectionMultiplexer _redis;
     private readonly TelemetryOptions _options;
     private readonly ProcessStreamSlotLimiter _processSlotLimiter;
+    private readonly IngestMetrics _ingestMetrics;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<TelemetryService> _logger;
 
@@ -132,6 +110,7 @@ public sealed class TelemetryService : Telemetry.TelemetryBase
         IConnectionMultiplexer redis,
         IOptions<TelemetryOptions> options,
         ProcessStreamSlotLimiter processSlotLimiter,
+        IngestMetrics ingestMetrics,
         TimeProvider timeProvider,
         ILogger<TelemetryService> logger)
     {
@@ -143,6 +122,7 @@ public sealed class TelemetryService : Telemetry.TelemetryBase
         ArgumentNullException.ThrowIfNull(redis);
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(processSlotLimiter);
+        ArgumentNullException.ThrowIfNull(ingestMetrics);
         ArgumentNullException.ThrowIfNull(timeProvider);
         ArgumentNullException.ThrowIfNull(logger);
         _scopeFactory = scopeFactory;
@@ -153,6 +133,7 @@ public sealed class TelemetryService : Telemetry.TelemetryBase
         _redis = redis;
         _options = options.Value;
         _processSlotLimiter = processSlotLimiter;
+        _ingestMetrics = ingestMetrics;
         _timeProvider = timeProvider;
         _logger = logger;
     }
@@ -171,6 +152,7 @@ public sealed class TelemetryService : Telemetry.TelemetryBase
             StatusCode code = machineId == -1 ? StatusCode.PermissionDenied : StatusCode.Unauthenticated;
             string message = machineId == -1 ? "Machine ID mismatch between API key and header" : "Could not determine machine identity";
             context.Status = new Status(code, message);
+            _ingestMetrics.RecordStreamRejection(IngestStreamRejectionReason.Identity);
 
             return;
         }
@@ -180,6 +162,7 @@ public sealed class TelemetryService : Telemetry.TelemetryBase
         if (await IsSubscriptionActiveAsync(context, context.CancellationToken) == false)
         {
             context.Status = new Status(StatusCode.PermissionDenied, "Tenant subscription is not active");
+            _ingestMetrics.RecordStreamRejection(IngestStreamRejectionReason.NotEntitled);
 
             return;
         }
@@ -195,6 +178,7 @@ public sealed class TelemetryService : Telemetry.TelemetryBase
             _logger.LogWarning(
                 "Telemetry stream refused for machine {MachineId}: concurrent-stream limit ({Limit}) reached",
                 machineId, _options.MaxConcurrentStreamsPerMachine);
+            _ingestMetrics.RecordStreamRejection(IngestStreamRejectionReason.StreamLimit);
 
             return;
         }
@@ -221,6 +205,7 @@ public sealed class TelemetryService : Telemetry.TelemetryBase
                         _logger.LogInformation(
                             "Telemetry stream for machine {MachineId} closing — subscription no longer active",
                             machineId);
+                        _ingestMetrics.RecordStreamRejection(IngestStreamRejectionReason.NotEntitled);
 
                         break;
                     }
@@ -342,6 +327,7 @@ public sealed class TelemetryService : Telemetry.TelemetryBase
         if (machineId <= 0)
         {
             string message = machineId == -1 ? "Machine ID mismatch between API key and header" : "Could not determine machine identity";
+            _ingestMetrics.RecordEnvelope(IngestOutcome.Rejected);
 
             return new TelemetryAck
             {
@@ -353,6 +339,8 @@ public sealed class TelemetryService : Telemetry.TelemetryBase
 
         if (await IsSubscriptionActiveAsync(context, context.CancellationToken) == false)
         {
+            _ingestMetrics.RecordEnvelope(IngestOutcome.NotEntitled);
+
             return new TelemetryAck
             {
                 BatchId = request.BatchId,
@@ -380,6 +368,7 @@ public sealed class TelemetryService : Telemetry.TelemetryBase
             _logger.LogWarning(
                 "Envelope {BatchId} from machine {MachineId} rejected: missing agent_timestamp",
                 envelope.BatchId, machineId);
+            _ingestMetrics.RecordEnvelope(IngestOutcome.Rejected);
 
             return new TelemetryAck
             {
@@ -400,13 +389,14 @@ public sealed class TelemetryService : Telemetry.TelemetryBase
             _logger.LogWarning(
                 "Envelope {BatchId} from machine {MachineId} has agent clock skew {Skew} exceeding {Max}; accepting and recording skew",
                 envelope.BatchId, machineId, skew, MaxClockSkew);
-            RecordClockSkew(skew);
+            _ingestMetrics.RecordClockSkew(skew.TotalSeconds);
         }
 
         if (envelope.Items.Count > MaxItemsPerEnvelope)
         {
             _logger.LogWarning("Envelope {BatchId} from machine {MachineId} contains {Count} items, exceeding limit of {Max}",
                 envelope.BatchId, machineId, envelope.Items.Count, MaxItemsPerEnvelope);
+            _ingestMetrics.RecordEnvelope(IngestOutcome.Rejected);
 
             return new TelemetryAck
             {
@@ -492,6 +482,7 @@ public sealed class TelemetryService : Telemetry.TelemetryBase
                     // Compensate before NACKing so the retry (which arrives within the dedup TTL) is not
                     // classified a duplicate and dropped. Unmark must complete before the NACK is returned.
                     await _dedupService.UnmarkSeenBatchAsync(markedEventIds);
+                    _ingestMetrics.RecordEnvelope(IngestOutcome.Unavailable);
 
                     return new TelemetryAck
                     {
@@ -506,6 +497,7 @@ public sealed class TelemetryService : Telemetry.TelemetryBase
                     _logger.LogWarning("Telemetry write timed out for machine {MachineId} batch {BatchId}", machineId, envelope.BatchId);
 
                     await _dedupService.UnmarkSeenBatchAsync(markedEventIds);
+                    _ingestMetrics.RecordEnvelope(IngestOutcome.Unavailable);
 
                     return new TelemetryAck
                     {
@@ -545,6 +537,7 @@ public sealed class TelemetryService : Telemetry.TelemetryBase
 
             _logger.LogDebug("Processed {Count} telemetry items for machine {MachineId} batch {BatchId}",
                 envelope.Items.Count, machineId, envelope.BatchId);
+            _ingestMetrics.RecordEnvelope(IngestOutcome.Accepted);
 
             return new TelemetryAck
             {
@@ -561,6 +554,7 @@ public sealed class TelemetryService : Telemetry.TelemetryBase
             // A failure anywhere between marking and a successful insert is a retryable NACK, so unmark
             // the event IDs we marked (best-effort) before returning so the retry is reprocessed.
             await _dedupService.UnmarkSeenBatchAsync(markedEventIds);
+            _ingestMetrics.RecordEnvelope(IngestOutcome.Unavailable);
 
             return new TelemetryAck
             {
@@ -602,17 +596,6 @@ public sealed class TelemetryService : Telemetry.TelemetryBase
         }
 
         return collected;
-    }
-
-    /// <summary>
-    /// Records an observed agent clock skew that exceeded <see cref="MaxClockSkew"/>. Captures the skew
-    /// magnitude in the ingest skew histogram so drifted agent clocks are visible to metrics listeners
-    /// without dropping the telemetry that produced the skew. Per-machine detail is preserved in the
-    /// surrounding warning log; the metric carries no machine dimension to keep cardinality bounded.
-    /// </summary>
-    private static void RecordClockSkew(TimeSpan skew)
-    {
-        ClockSkewHistogram.Record(skew.TotalSeconds);
     }
 
     private void EnqueueSshAlertEvaluations(

@@ -8,6 +8,7 @@ using Framlux.FleetManagement.Services.Core.Billing;
 using Framlux.FleetManagement.Services.Core.Options;
 using Framlux.FleetManagement.Services.Core.Telemetry;
 using Framlux.FleetManagement.Test.Integration;
+using Framlux.FleetManagement.Test.Infrastructure;
 using Hangfire;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -54,6 +55,7 @@ public sealed class StreamSlotAcquireLiveTests
             _fixture.Connection,
             Options.Create(new TelemetryOptions { MaxConcurrentStreamsPerMachine = maxPerMachine }),
             new ProcessStreamSlotLimiter(5000),
+            TestMetricsFactory.CreateIngestMetrics(),
             TimeProvider.System,
             NullLogger<TelemetryService>.Instance);
     }

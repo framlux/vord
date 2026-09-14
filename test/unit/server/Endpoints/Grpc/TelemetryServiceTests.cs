@@ -112,7 +112,7 @@ public sealed class TelemetryServiceTests
 
     private TelemetryService CreateService(IServiceScopeFactory scopeFactory)
     {
-        return new TelemetryService(scopeFactory, _dedupService, _subscriptionService, _backgroundJobs, NoOpPipeline, BuildTestRedis(), Options.Create(new TelemetryOptions()), new ProcessStreamSlotLimiter(5000), _timeProvider, _logger);
+        return new TelemetryService(scopeFactory, _dedupService, _subscriptionService, _backgroundJobs, NoOpPipeline, BuildTestRedis(), Options.Create(new TelemetryOptions()), new ProcessStreamSlotLimiter(5000), TestMetricsFactory.CreateIngestMetrics(), _timeProvider, _logger);
     }
 
     /// <summary>
@@ -315,7 +315,7 @@ public sealed class TelemetryServiceTests
                 return ids.ToDictionary(id => id, _ => false);
             });
 
-        TelemetryService service = new(scopeFactory, dupDedupService, _subscriptionService, _backgroundJobs, NoOpPipeline, BuildTestRedis(), Options.Create(new TelemetryOptions()), new ProcessStreamSlotLimiter(5000), _timeProvider, _logger);
+        TelemetryService service = new(scopeFactory, dupDedupService, _subscriptionService, _backgroundJobs, NoOpPipeline, BuildTestRedis(), Options.Create(new TelemetryOptions()), new ProcessStreamSlotLimiter(5000), TestMetricsFactory.CreateIngestMetrics(), _timeProvider, _logger);
         ServerCallContext context = CreateAuthenticatedContext(200);
 
         TelemetryEnvelope envelope = new()
@@ -416,7 +416,7 @@ public sealed class TelemetryServiceTests
         // drive it directly so this test pins the gate wiring, not the specific status-to-eligibility map.
         inactiveSubService.IsIngestEligibleAsync(Arg.Any<int>(), Arg.Any<CancellationToken>()).Returns(false);
 
-        TelemetryService service = new(scopeFactory, _dedupService, inactiveSubService, _backgroundJobs, NoOpPipeline, BuildTestRedis(), Options.Create(new TelemetryOptions()), new ProcessStreamSlotLimiter(5000), _timeProvider, _logger);
+        TelemetryService service = new(scopeFactory, _dedupService, inactiveSubService, _backgroundJobs, NoOpPipeline, BuildTestRedis(), Options.Create(new TelemetryOptions()), new ProcessStreamSlotLimiter(5000), TestMetricsFactory.CreateIngestMetrics(), _timeProvider, _logger);
         ServerCallContext context = CreateAuthenticatedContext(100);
 
         TelemetryEnvelope envelope = new() { AgentTimestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow), BatchId ="batch-inactive" };
@@ -719,7 +719,7 @@ public sealed class TelemetryServiceTests
         // drive it directly so this test pins the gate wiring, not the specific status-to-eligibility map.
         inactiveSubService.IsIngestEligibleAsync(Arg.Any<int>(), Arg.Any<CancellationToken>()).Returns(false);
 
-        TelemetryService service = new(scopeFactory, _dedupService, inactiveSubService, _backgroundJobs, NoOpPipeline, BuildTestRedis(), Options.Create(new TelemetryOptions()), new ProcessStreamSlotLimiter(5000), _timeProvider, _logger);
+        TelemetryService service = new(scopeFactory, _dedupService, inactiveSubService, _backgroundJobs, NoOpPipeline, BuildTestRedis(), Options.Create(new TelemetryOptions()), new ProcessStreamSlotLimiter(5000), TestMetricsFactory.CreateIngestMetrics(), _timeProvider, _logger);
         ServerCallContext context = CreateAuthenticatedContext(100);
 
         FakeAsyncStreamReader<TelemetryEnvelope> requestStream = new([]);
@@ -1023,7 +1023,7 @@ public sealed class TelemetryServiceTests
         });
 
         // Use a no-op pipeline so the BrokenCircuitException propagates out unhandled by Polly.
-        TelemetryService service = new(scopeFactory, _dedupService, _subscriptionService, _backgroundJobs, NoOpPipeline, BuildTestRedis(), Options.Create(new TelemetryOptions()), new ProcessStreamSlotLimiter(5000), _timeProvider, _logger);
+        TelemetryService service = new(scopeFactory, _dedupService, _subscriptionService, _backgroundJobs, NoOpPipeline, BuildTestRedis(), Options.Create(new TelemetryOptions()), new ProcessStreamSlotLimiter(5000), TestMetricsFactory.CreateIngestMetrics(), _timeProvider, _logger);
         ServerCallContext context = CreateAuthenticatedContext(100);
 
         TelemetryEnvelope envelope = new()
@@ -1064,7 +1064,7 @@ public sealed class TelemetryServiceTests
             { typeof(Database.Repositories.IMachineStateRepository), throwingRepo }
         });
 
-        TelemetryService service = new(scopeFactory, _dedupService, _subscriptionService, _backgroundJobs, NoOpPipeline, BuildTestRedis(), Options.Create(new TelemetryOptions()), new ProcessStreamSlotLimiter(5000), _timeProvider, _logger);
+        TelemetryService service = new(scopeFactory, _dedupService, _subscriptionService, _backgroundJobs, NoOpPipeline, BuildTestRedis(), Options.Create(new TelemetryOptions()), new ProcessStreamSlotLimiter(5000), TestMetricsFactory.CreateIngestMetrics(), _timeProvider, _logger);
         ServerCallContext context = CreateAuthenticatedContext(100);
 
         TelemetryEnvelope envelope = new()
@@ -1104,7 +1104,7 @@ public sealed class TelemetryServiceTests
             { typeof(Database.Repositories.IMachineStateRepository), throwingRepo }
         });
 
-        TelemetryService service = new(scopeFactory, _dedupService, _subscriptionService, _backgroundJobs, NoOpPipeline, BuildTestRedis(), Options.Create(new TelemetryOptions()), new ProcessStreamSlotLimiter(5000), _timeProvider, _logger);
+        TelemetryService service = new(scopeFactory, _dedupService, _subscriptionService, _backgroundJobs, NoOpPipeline, BuildTestRedis(), Options.Create(new TelemetryOptions()), new ProcessStreamSlotLimiter(5000), TestMetricsFactory.CreateIngestMetrics(), _timeProvider, _logger);
         ServerCallContext context = CreateAuthenticatedContext(100);
 
         TelemetryEnvelope envelope = new()
@@ -1172,7 +1172,7 @@ public sealed class TelemetryServiceTests
         {
             { typeof(Database.Repositories.IMachineStateRepository), throwingRepo },
         });
-        TelemetryService failingService = new(throwingScope, statefulDedup, _subscriptionService, _backgroundJobs, NoOpPipeline, BuildTestRedis(), Options.Create(new TelemetryOptions()), new ProcessStreamSlotLimiter(5000), _timeProvider, _logger);
+        TelemetryService failingService = new(throwingScope, statefulDedup, _subscriptionService, _backgroundJobs, NoOpPipeline, BuildTestRedis(), Options.Create(new TelemetryOptions()), new ProcessStreamSlotLimiter(5000), TestMetricsFactory.CreateIngestMetrics(), _timeProvider, _logger);
 
         TelemetryAck firstAck = await failingService.SubmitTelemetry(BuildEnvelope(), CreateAuthenticatedContext(100));
         await Assert.That(firstAck.Success).IsFalse();
@@ -1180,7 +1180,7 @@ public sealed class TelemetryServiceTests
         // Second attempt: the write succeeds. Because the first attempt unmarked the event, the retry is
         // treated as new and the row is inserted.
         TestServiceScopeFactory workingScope = new(dbFactory.Context);
-        TelemetryService workingService = new(workingScope, statefulDedup, _subscriptionService, _backgroundJobs, NoOpPipeline, BuildTestRedis(), Options.Create(new TelemetryOptions()), new ProcessStreamSlotLimiter(5000), _timeProvider, _logger);
+        TelemetryService workingService = new(workingScope, statefulDedup, _subscriptionService, _backgroundJobs, NoOpPipeline, BuildTestRedis(), Options.Create(new TelemetryOptions()), new ProcessStreamSlotLimiter(5000), TestMetricsFactory.CreateIngestMetrics(), _timeProvider, _logger);
 
         TelemetryAck secondAck = await workingService.SubmitTelemetry(BuildEnvelope(), CreateAuthenticatedContext(100));
         await Assert.That(secondAck.Success).IsTrue();
@@ -1199,7 +1199,7 @@ public sealed class TelemetryServiceTests
         using TestDatabaseFactory dbFactory = new();
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
 
-        TelemetryService service = new(scopeFactory, _dedupService, _subscriptionService, _backgroundJobs, NoOpPipeline, BuildTestRedis(), Options.Create(new TelemetryOptions()), new ProcessStreamSlotLimiter(5000), _timeProvider, _logger);
+        TelemetryService service = new(scopeFactory, _dedupService, _subscriptionService, _backgroundJobs, NoOpPipeline, BuildTestRedis(), Options.Create(new TelemetryOptions()), new ProcessStreamSlotLimiter(5000), TestMetricsFactory.CreateIngestMetrics(), _timeProvider, _logger);
 
         // Context with a valid MachineId claim but no TenantId claim — IsSubscriptionActiveAsync returns false.
         DefaultHttpContext httpContext = new();
@@ -1239,7 +1239,7 @@ public sealed class TelemetryServiceTests
         // A clean, whole-second server clock so the SQLite round-trip compares exactly.
         DateTimeOffset serverNow = new(2026, 6, 24, 12, 0, 0, TimeSpan.Zero);
         FakeTimeProvider fixedClock = new(serverNow);
-        TelemetryService service = new(scopeFactory, _dedupService, _subscriptionService, _backgroundJobs, NoOpPipeline, BuildTestRedis(), Options.Create(new TelemetryOptions()), new ProcessStreamSlotLimiter(5000), fixedClock, _logger);
+        TelemetryService service = new(scopeFactory, _dedupService, _subscriptionService, _backgroundJobs, NoOpPipeline, BuildTestRedis(), Options.Create(new TelemetryOptions()), new ProcessStreamSlotLimiter(5000), TestMetricsFactory.CreateIngestMetrics(), fixedClock, _logger);
         ServerCallContext context = CreateAuthenticatedContext(100);
 
         // The item's collected-at is three days in the future — within the ±7d dedup clamp, so ReceivedAt
