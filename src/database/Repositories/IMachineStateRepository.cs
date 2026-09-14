@@ -248,6 +248,26 @@ public interface IMachineStateRepository
     Task<long?> GetProjectionCursorAsync(int shardIndex, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Returns the server receipt time of the oldest telemetry row this shard has not yet
+    /// projected and that the projection read would actually pick up, or null when the shard is
+    /// caught up.
+    /// </summary>
+    /// <param name="cursor">The shard's high-water mark row id.</param>
+    /// <param name="streamingWindow">The oldest receipt time the projection still reads.</param>
+    /// <param name="visibilityCutoff">The newest receipt time considered visible, applying the safety lag.</param>
+    /// <param name="shardIndex">The projection shard.</param>
+    /// <param name="shardCount">The shard count the cursors were written under.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>The oldest outstanding receipt time, or null when nothing is outstanding.</returns>
+    Task<DateTimeOffset?> GetOldestUnprojectedReceiptAsync(
+        long cursor,
+        DateTimeOffset streamingWindow,
+        DateTimeOffset visibilityCutoff,
+        int shardIndex,
+        int shardCount,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Upserts the projection cursor for the given shard, inserting a row when none exists or
     /// advancing the stored position and update timestamp otherwise. Records the shard count in
     /// effect so a later shard-count change can be detected and refused at startup.

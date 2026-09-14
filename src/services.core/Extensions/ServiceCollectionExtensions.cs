@@ -16,6 +16,7 @@ using Framlux.FleetManagement.Services.Core.Infrastructure;
 using Framlux.FleetManagement.Services.Core.Jobs;
 using Framlux.FleetManagement.Services.Core.Machines;
 using Framlux.FleetManagement.Services.Core.Notifications;
+using Framlux.FleetManagement.Services.Core.Observability;
 using Framlux.FleetManagement.Services.Core.Options;
 using Framlux.FleetManagement.Services.Core.Security;
 using Framlux.FleetManagement.Services.Core.ServerConfiguration;
@@ -486,7 +487,8 @@ public static class ServiceCollectionExtensions
                 sp.GetRequiredService<IAdvisoryLockProvider>(),
                 sp.GetRequiredService<ILogger<MachineStateStreamingService>>(),
                 shardIndex: captured,
-                streamingOptions: sp.GetRequiredService<IOptions<StreamingOptions>>()));
+                streamingOptions: sp.GetRequiredService<IOptions<StreamingOptions>>(),
+                projectionMetrics: sp.GetRequiredService<ProjectionMetrics>()));
         }
 
         services.AddHangfireJobTypes(

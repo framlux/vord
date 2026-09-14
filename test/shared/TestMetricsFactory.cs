@@ -3,6 +3,8 @@
 // See LICENSE for details.
 
 using Framlux.FleetManagement.Services.Core.Observability;
+using Framlux.FleetManagement.Services.Core.Options;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.DependencyInjection;
 using System.Diagnostics.Metrics;
 
@@ -102,5 +104,20 @@ public static class TestMetricsFactory
     public static AuthMetrics CreateAuthMetrics()
     {
         return new AuthMetrics(CreateMeterFactory());
+    }
+
+    /// <summary>
+    /// Creates projection instruments on a fresh meter factory, backed by a scope factory that
+    /// resolves nothing. Intended for tests that need the dependency but never collect from it.
+    /// </summary>
+    /// <returns>Projection metrics ready to be injected.</returns>
+    public static ProjectionMetrics CreateProjectionMetrics()
+    {
+        return new ProjectionMetrics(
+            CreateMeterFactory(),
+            new TestServiceScopeFactory(null!, []),
+            TimeProvider.System,
+            Microsoft.Extensions.Options.Options.Create(new StreamingOptions()),
+            NullLogger<ProjectionMetrics>.Instance);
     }
 }

@@ -6,6 +6,7 @@ using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Services.Core.Infrastructure;
 using Framlux.FleetManagement.Services.Core.Machines.Projection;
+using Framlux.FleetManagement.Services.Core.Observability;
 using Framlux.FleetManagement.Services.Core.Options;
 
 namespace Framlux.FleetManagement.Services.Core.Machines;
@@ -25,6 +26,12 @@ namespace Framlux.FleetManagement.Services.Core.Machines;
 /// </summary>
 public sealed class MachineStateStreamingService : BackgroundService
 {
+    /// <summary>
+    /// How far back the projection still reads. A row older than this is outside the window by
+    /// design and is never projected, so it is not lag.
+    /// </summary>
+    public const int StreamingWindowDays = 2;
+
     /// <summary>
     /// How long to sleep when no new telemetry rows are available.
     /// </summary>
@@ -66,6 +73,7 @@ public sealed class MachineStateStreamingService : BackgroundService
     /// <param name="logger">The logger.</param>
     /// <param name="shardIndex">The projection shard this instance owns under modulo partitioning.</param>
     /// <param name="streamingOptions">Streaming options carrying the shard count and batch size.</param>
+    /// <param name="projectionMetrics">Instruments reporting how far behind this shard is.</param>
     /// <param name="timeProvider">Clock abstraction used for loop delays so tests do not depend on wall-clock time.</param>
     /// <param name="startupDelay">Optional override for the startup delay; tests use a short value to keep the suite fast.</param>
     public MachineStateStreamingService(
@@ -75,6 +83,7 @@ public sealed class MachineStateStreamingService : BackgroundService
         ILogger<MachineStateStreamingService> logger,
         int shardIndex,
         IOptions<StreamingOptions> streamingOptions,
+        ProjectionMetrics projectionMetrics,
         TimeProvider? timeProvider = null,
         TimeSpan? startupDelay = null)
     {
@@ -83,6 +92,7 @@ public sealed class MachineStateStreamingService : BackgroundService
         ArgumentNullException.ThrowIfNull(advisoryLockProvider);
         ArgumentNullException.ThrowIfNull(logger);
         ArgumentNullException.ThrowIfNull(streamingOptions);
+        ArgumentNullException.ThrowIfNull(projectionMetrics);
 
         StreamingOptions options = streamingOptions.Value;
 
@@ -93,6 +103,10 @@ public sealed class MachineStateStreamingService : BackgroundService
         _startupDelay = startupDelay ?? DefaultStartupDelay;
         _logger = logger;
         _shardIndex = shardIndex;
+
+        // Every worker replica registers the full shard set, so tracking from the constructor means
+        // no shard goes unobserved while any worker is alive, and max() across replicas is exact.
+        projectionMetrics.TrackShard(shardIndex);
         _shardCount = options.ShardCount;
         _batchSize = options.BatchSize;
         _visibilityLag = TimeSpan.FromSeconds(Math.Max(0, options.VisibilityLagSeconds));
@@ -213,7 +227,7 @@ public sealed class MachineStateStreamingService : BackgroundService
             IMachineStateRepository repo = scope.ServiceProvider.GetRequiredService<IMachineStateRepository>();
 
             DateTimeOffset now = _timeProvider.GetUtcNow();
-            DateTimeOffset streamingWindow = now.AddDays(-2);
+            DateTimeOffset streamingWindow = now.AddDays(-StreamingWindowDays);
             DateTimeOffset visibilityCutoff = now - _visibilityLag;
             List<MachineTelemetry> batch = await repo.GetTelemetryBatchAsync(
                 _highWaterMark, streamingWindow, visibilityCutoff, _batchSize, _shardIndex, _shardCount, ct);

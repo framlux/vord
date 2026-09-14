@@ -60,6 +60,15 @@ public static class ObservabilityServiceCollectionExtensions
             services.AddSingleton<IInitialisableMetrics>(provider => provider.GetRequiredService<IngestMetrics>());
         }
 
+        if (host == ObservabilityHost.ServicesWorker)
+        {
+            // The second line is what guarantees construction. This class is also injected into the
+            // streaming service, so today it would be built anyway — but that is a coincidence of
+            // the current wiring, and relying on it is how a gauge comes to emit nothing at all.
+            services.AddSingleton<ProjectionMetrics>();
+            services.AddSingleton<IObservableMetrics>(provider => provider.GetRequiredService<ProjectionMetrics>());
+        }
+
         // Registered in both processes because AddCoreServices registers AlertDeliveryService
         // unconditionally on both. A host-conditional registration here would leave one of them
         // unable to build its container at startup.

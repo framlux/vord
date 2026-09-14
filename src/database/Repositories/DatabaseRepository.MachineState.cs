@@ -337,6 +337,33 @@ public partial class DatabaseRepository : IMachineStateRepository
     }
 
     /// <inheritdoc/>
+    public async Task<DateTimeOffset?> GetOldestUnprojectedReceiptAsync(
+        long cursor, DateTimeOffset streamingWindow, DateTimeOffset visibilityCutoff, int shardIndex, int shardCount, CancellationToken cancellationToken)
+    {
+        // The predicate chain is copied from GetTelemetryBatchAsync rather than paraphrased. A row
+        // the projection loop will never read is not lag: one above the cursor but older than the
+        // streaming window is outside the window by design, and one newer than the visibility
+        // cutoff has not become visible yet. Either omission would report permanent lag on a
+        // perfectly healthy projection.
+        IQueryable<MachineTelemetry> query = _db.MachineTelemetry
+            .Where(t => (t.Id > cursor) && (t.ReceivedAt > streamingWindow) && (t.ServerReceivedAt <= visibilityCutoff));
+
+        if (shardCount > 1)
+        {
+            query = query.Where(t => (t.MachineId % shardCount) == shardIndex);
+        }
+
+        // Ordered by id and taking one row, not MIN(ServerReceivedAt): the modulo predicate is not
+        // index-usable, so an aggregate would scan the whole backlog — making the observability
+        // query most expensive exactly during the incident it exists to report. Ids ascend with
+        // insert, so the first row by id is the oldest.
+        return await query
+            .OrderBy(t => t.Id)
+            .Select(t => (DateTimeOffset?)t.ServerReceivedAt)
+            .FirstOrDefaultAsync(cancellationToken);
+    }
+
+    /// <inheritdoc/>
     public async Task<List<MachineTelemetry>> GetTelemetryPageByMachineIdsAndTypeAsync(
         List<long> machineIds, short telemetryType, DateTimeOffset receivedSince, int skip, int take, CancellationToken cancellationToken)
     {

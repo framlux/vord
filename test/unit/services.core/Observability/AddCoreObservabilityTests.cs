@@ -42,6 +42,13 @@ public sealed class AddCoreObservabilityTests
 
         ServiceCollection services = new();
         services.AddLogging();
+
+        // The worker's gauge classes read the clock and the streaming shard configuration, which the
+        // real host registers through AddCoreServices and AddBackgroundWorkers. Supplying them here
+        // keeps this helper an honest stand-in for that process rather than a weaker one.
+        services.AddSingleton(TimeProvider.System);
+        services.AddOptions<StreamingOptions>();
+
         services.AddCoreObservability(configuration, host);
 
         return services.BuildServiceProvider();

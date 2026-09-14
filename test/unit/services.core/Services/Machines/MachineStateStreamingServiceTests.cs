@@ -62,8 +62,9 @@ public class MachineStateStreamingServiceTests
             logger ?? Substitute.For<ILogger<MachineStateStreamingService>>(),
             shardIndex,
             StreamingOptionsFor(shardCount),
-            timeProvider ?? TimeProvider.System,
-            startupDelay ?? FastStartupDelay);
+            TestMetricsFactory.CreateProjectionMetrics(),
+            timeProvider: timeProvider ?? TimeProvider.System,
+            startupDelay: startupDelay ?? FastStartupDelay);
     }
 
     private static IOptions<StreamingOptions> StreamingOptionsFor(int shardCount)
@@ -304,8 +305,9 @@ public class MachineStateStreamingServiceTests
             Substitute.For<ILogger<MachineStateStreamingService>>(),
             0,
             Microsoft.Extensions.Options.Options.Create(new StreamingOptions { ShardCount = 1, BatchSize = 200, VisibilityLagSeconds = lagSeconds }),
-            clock,
-            FastStartupDelay);
+            TestMetricsFactory.CreateProjectionMetrics(),
+            timeProvider: clock,
+            startupDelay: FastStartupDelay);
 
         using CancellationTokenSource cts = new();
         await service.StartAsync(cts.Token);
@@ -1309,7 +1311,8 @@ public class MachineStateStreamingServiceTests
             Substitute.For<IAdvisoryLockProvider>(),
             Substitute.For<ILogger<MachineStateStreamingService>>(),
             shardIndex: 0,
-            StreamingOptionsFor(1)))
+            StreamingOptionsFor(1),
+            TestMetricsFactory.CreateProjectionMetrics()))
             .Throws<ArgumentNullException>();
     }
 
@@ -1322,7 +1325,8 @@ public class MachineStateStreamingServiceTests
             Substitute.For<IAdvisoryLockProvider>(),
             Substitute.For<ILogger<MachineStateStreamingService>>(),
             shardIndex: 0,
-            StreamingOptionsFor(1)))
+            StreamingOptionsFor(1),
+            TestMetricsFactory.CreateProjectionMetrics()))
             .Throws<ArgumentNullException>();
     }
 
@@ -1335,7 +1339,8 @@ public class MachineStateStreamingServiceTests
             null!,
             Substitute.For<ILogger<MachineStateStreamingService>>(),
             shardIndex: 0,
-            StreamingOptionsFor(1)))
+            StreamingOptionsFor(1),
+            TestMetricsFactory.CreateProjectionMetrics()))
             .Throws<ArgumentNullException>();
     }
 
@@ -1348,7 +1353,22 @@ public class MachineStateStreamingServiceTests
             Substitute.For<IAdvisoryLockProvider>(),
             null!,
             shardIndex: 0,
-            StreamingOptionsFor(1)))
+            StreamingOptionsFor(1),
+            TestMetricsFactory.CreateProjectionMetrics()))
+            .Throws<ArgumentNullException>();
+    }
+
+    [Test]
+    public async Task Constructor_NullProjectionMetrics_ThrowsArgumentNullException()
+    {
+        await Assert.That(() => new MachineStateStreamingService(
+            Substitute.For<IServiceScopeFactory>(),
+            Substitute.For<ISqlDialect>(),
+            Substitute.For<IAdvisoryLockProvider>(),
+            Substitute.For<ILogger<MachineStateStreamingService>>(),
+            shardIndex: 0,
+            StreamingOptionsFor(1),
+            null!))
             .Throws<ArgumentNullException>();
     }
 
@@ -1361,7 +1381,8 @@ public class MachineStateStreamingServiceTests
             Substitute.For<IAdvisoryLockProvider>(),
             Substitute.For<ILogger<MachineStateStreamingService>>(),
             shardIndex: 0,
-            null!))
+            null!,
+            TestMetricsFactory.CreateProjectionMetrics()))
             .Throws<ArgumentNullException>();
     }
 }

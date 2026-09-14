@@ -9,7 +9,8 @@ namespace Framlux.FleetManagement.Services.Core.Observability;
 
 /// <summary>
 /// Records a zero on every closed-enum series at startup, so a failure that happens once is still
-/// visible to a rule watching for an increase.
+/// visible to a rule watching for an increase, and forces every gauge class into existence so its
+/// series exist at all.
 /// </summary>
 /// <remarks>
 /// This runs as a hosted service rather than during registration because instruments only exist on
@@ -20,26 +21,48 @@ namespace Framlux.FleetManagement.Services.Core.Observability;
 public sealed class MetricSeriesInitialiser : IHostedService
 {
     private readonly IEnumerable<IInitialisableMetrics> _metrics;
+    private readonly IEnumerable<IObservableMetrics> _observableMetrics;
     private readonly ILogger<MetricSeriesInitialiser> _logger;
 
     /// <summary>
     /// Creates the initialiser.
     /// </summary>
     /// <param name="metrics">Every metric class registered in this process that pre-records series.</param>
+    /// <param name="observableMetrics">Every gauge-backed metric class registered in this process.</param>
     /// <param name="logger">The logger.</param>
     public MetricSeriesInitialiser(
         IEnumerable<IInitialisableMetrics> metrics,
+        IEnumerable<IObservableMetrics> observableMetrics,
         ILogger<MetricSeriesInitialiser> logger)
     {
         ArgumentNullException.ThrowIfNull(metrics);
+        ArgumentNullException.ThrowIfNull(observableMetrics);
         ArgumentNullException.ThrowIfNull(logger);
         _metrics = metrics;
+        _observableMetrics = observableMetrics;
         _logger = logger;
     }
 
     /// <inheritdoc />
     public Task StartAsync(CancellationToken cancellationToken)
     {
+        // Resolving each gauge class is the entire point: constructing it is what creates its
+        // observable instruments, and a gauge nothing else injects would otherwise never exist.
+        // There is nothing to call on them afterwards.
+        foreach (IObservableMetrics observable in _observableMetrics)
+        {
+            try
+            {
+                _logger.LogDebug("Registered observable metrics {MetricClass}", observable.GetType().Name);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(
+                    ex,
+                    "Failed to construct observable metrics; the series it reports will not exist");
+            }
+        }
+
         foreach (IInitialisableMetrics metrics in _metrics)
         {
             try
