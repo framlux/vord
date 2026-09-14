@@ -2,6 +2,7 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
+using Framlux.FleetManagement.Services.Core.Observability;
 using System.Net;
 using System.Security.Cryptography;
 using System.Text.Json;
@@ -414,6 +415,7 @@ public sealed class SsoOidcEventsTests
         IServiceProvider serviceProvider = Substitute.For<IServiceProvider>();
         serviceProvider.GetService(typeof(ILogger<SsoOidcEvents>))
             .Returns(logger ?? Substitute.For<ILogger<SsoOidcEvents>>());
+        serviceProvider.GetService(typeof(AuthMetrics)).Returns(TestMetricsFactory.CreateAuthMetrics());
         if (tenantRepo is not null)
         {
             serviceProvider.GetService(typeof(ITenantRepository)).Returns(tenantRepo);
@@ -567,6 +569,7 @@ public sealed class SsoOidcEventsTests
         IServiceProvider serviceProvider = Substitute.For<IServiceProvider>();
         serviceProvider.GetService(typeof(ILogger<SsoOidcEvents>))
             .Returns(logger ?? Substitute.For<ILogger<SsoOidcEvents>>());
+        serviceProvider.GetService(typeof(AuthMetrics)).Returns(TestMetricsFactory.CreateAuthMetrics());
         if (tenantRepo is not null)
         {
             serviceProvider.GetService(typeof(ITenantRepository)).Returns(tenantRepo);
@@ -997,6 +1000,7 @@ public sealed class SsoOidcEventsTests
         IServiceProvider serviceProvider = Substitute.For<IServiceProvider>();
         serviceProvider.GetService(typeof(ILogger<SsoOidcEvents>))
             .Returns(Substitute.For<ILogger<SsoOidcEvents>>());
+        serviceProvider.GetService(typeof(AuthMetrics)).Returns(TestMetricsFactory.CreateAuthMetrics());
 
         DefaultHttpContext httpContext = new();
         httpContext.RequestServices = serviceProvider;

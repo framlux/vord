@@ -8,7 +8,9 @@ using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Services.Core.ServerConfiguration;
 using Framlux.FleetManagement.Services.Core.Auth;
+using Framlux.FleetManagement.Services.Core.Observability;
 using Framlux.FleetManagement.Services.Core.Security;
+using Microsoft.AspNetCore.Authentication;
 using Microsoft.AspNetCore.Authentication.OAuth;
 
 namespace Framlux.FleetManagement.Server.Auth;
@@ -28,11 +30,43 @@ public static class SocialAuthEvents
     {
         ClaimsIdentity identity = (ClaimsIdentity)context.Principal!.Identity!;
         AuthProviderType provider = ResolveProviderFromScheme(context.Scheme.Name);
+        AuthMetrics metrics = context.HttpContext.RequestServices.GetRequiredService<AuthMetrics>();
+
         bool success = await PopulateUserClaimsAsync(identity, context.HttpContext, context.HttpContext.RequestAborted, provider);
         if (success == false)
         {
+            // The system correctly refusing a person, not the flow breaking. Kept apart from
+            // failed because one is a support question and the other is an incident.
+            metrics.RecordLogin(provider, LoginOutcome.Rejected);
             context.Fail("User account is inactive or not authorized");
+
+            return;
         }
+
+        metrics.RecordLogin(provider, LoginOutcome.Succeeded);
+    }
+
+    /// <summary>
+    /// Records a social login flow that broke before a ticket could be created — a token exchange
+    /// that did not complete, a provider outage, a state or correlation failure.
+    /// </summary>
+    /// <param name="context">The remote failure context.</param>
+    /// <returns>A completed task.</returns>
+    /// <remarks>
+    /// Deliberately does not call <c>HandleResponse</c>, so the framework's default handling is
+    /// preserved exactly: this records and then gets out of the way. Without a handler here the
+    /// whole class of provider-side failure was invisible to the application, so this closes a gap
+    /// rather than only measuring one.
+    /// </remarks>
+    public static Task OnRemoteFailureAsync(RemoteFailureContext context)
+    {
+        ArgumentNullException.ThrowIfNull(context);
+
+        context.HttpContext.RequestServices
+            .GetRequiredService<AuthMetrics>()
+            .RecordLogin(ResolveProviderFromScheme(context.Scheme.Name), LoginOutcome.Failed);
+
+        return Task.CompletedTask;
     }
 
     /// <summary>

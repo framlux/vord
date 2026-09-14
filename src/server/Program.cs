@@ -179,6 +179,7 @@ builder.Services.AddAuthentication(options =>
     {
         await SocialAuthEvents.OnCreatingTicketAsync(context);
     };
+    options.Events.OnRemoteFailure = SocialAuthEvents.OnRemoteFailureAsync;
 })
 .AddGoogle("google", options =>
 {
@@ -189,6 +190,7 @@ builder.Services.AddAuthentication(options =>
     {
         await SocialAuthEvents.OnCreatingTicketAsync(context);
     };
+    options.Events.OnRemoteFailure = SocialAuthEvents.OnRemoteFailureAsync;
 })
 .AddMicrosoftAccount("microsoft", options =>
 {
@@ -199,6 +201,7 @@ builder.Services.AddAuthentication(options =>
     {
         await SocialAuthEvents.OnCreatingTicketAsync(context);
     };
+    options.Events.OnRemoteFailure = SocialAuthEvents.OnRemoteFailureAsync;
 })
 .AddOpenIdConnect("tenant-oidc", options =>
 {

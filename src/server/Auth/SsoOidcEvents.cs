@@ -8,6 +8,7 @@ using System.Text.Json;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
+using Framlux.FleetManagement.Services.Core.Observability;
 using Framlux.FleetManagement.Services.Core.Security;
 using Microsoft.AspNetCore.Authentication.OpenIdConnect;
 using Microsoft.Extensions.Options;
@@ -89,6 +90,9 @@ public sealed class SsoOidcEvents : OpenIdConnectEvents
             context.Properties.Items.TryGetValue("tenantId", out string? tenantIdStr) == false ||
             int.TryParse(tenantIdStr, out int tenantId) == false)
         {
+            // Fires precisely because the tenant id could not be read, which is why the unknown
+            // bucket exists at all.
+            Metrics(context.HttpContext).RecordSsoFailure(LoginOutcome.Failed, tenantId: null);
             context.Fail("Missing tenant ID in authentication properties");
 
             return;
@@ -101,6 +105,7 @@ public sealed class SsoOidcEvents : OpenIdConnectEvents
         if (IsConfigUsable(resolvedConfig) == false)
         {
             logger.LogWarning("Tenant OIDC configuration missing or disabled during code exchange for tenant {TenantId}", tenantId);
+            Metrics(context.HttpContext).RecordSsoFailure(LoginOutcome.Failed, tenantId);
             context.Fail("Tenant OIDC configuration not found");
 
             return;
@@ -119,6 +124,7 @@ public sealed class SsoOidcEvents : OpenIdConnectEvents
             logger.LogWarning(
                 "Token endpoint from discovery document is unsafe for tenant {TenantId}: {TokenEndpoint}",
                 tenantId, tokenEndpoint);
+            Metrics(context.HttpContext).RecordSsoFailure(LoginOutcome.Failed, tenantId);
             context.Fail("Token endpoint points to a disallowed destination");
 
             return;
@@ -135,6 +141,7 @@ public sealed class SsoOidcEvents : OpenIdConnectEvents
         catch (InvalidOperationException)
         {
             logger.LogError("OIDC client secret for tenant {TenantId} is unprotected", tenantId);
+            Metrics(context.HttpContext).RecordSsoFailure(LoginOutcome.Failed, tenantId);
             context.Fail("OIDC client secret is not protected at rest");
 
             return;
@@ -160,6 +167,7 @@ public sealed class SsoOidcEvents : OpenIdConnectEvents
             logger.LogWarning(
                 "Token exchange failed for tenant {TenantId}: HTTP {StatusCode}",
                 tenantId, (int)tokenResponse.StatusCode);
+            Metrics(context.HttpContext).RecordSsoFailure(LoginOutcome.Failed, tenantId);
             context.Fail($"Token exchange failed: {tokenResponse.StatusCode}");
 
             return;
@@ -171,6 +179,7 @@ public sealed class SsoOidcEvents : OpenIdConnectEvents
         if (string.IsNullOrEmpty(idToken))
         {
             logger.LogWarning("No id_token received from token endpoint for tenant {TenantId}", tenantId);
+            Metrics(context.HttpContext).RecordSsoFailure(LoginOutcome.Failed, tenantId);
             context.Fail("No id_token received from token endpoint");
 
             return;
@@ -196,6 +205,7 @@ public sealed class SsoOidcEvents : OpenIdConnectEvents
             logger.LogWarning(
                 "id_token signature validation failed for tenant {TenantId}: {Reason}",
                 tenantId, validationResult.Exception?.Message ?? "unknown");
+            Metrics(context.HttpContext).RecordSsoFailure(LoginOutcome.Failed, tenantId);
             context.Fail("id_token validation failed");
 
             return;
@@ -215,6 +225,7 @@ public sealed class SsoOidcEvents : OpenIdConnectEvents
         if (nonceOk == false)
         {
             logger.LogWarning("id_token nonce validation failed for tenant {TenantId}", tenantId);
+            Metrics(context.HttpContext).RecordSsoFailure(LoginOutcome.Failed, tenantId);
             context.Fail("id_token nonce validation failed");
 
             return;
@@ -230,6 +241,9 @@ public sealed class SsoOidcEvents : OpenIdConnectEvents
         if (populated == false)
         {
             logger.LogWarning("User account is inactive or not authorized for tenant {TenantId}", tenantId);
+
+            // The system correctly refusing a person, not the tenant's provider being broken.
+            Metrics(context.HttpContext).RecordSsoFailure(LoginOutcome.Rejected, tenantId);
             context.Fail("User account is inactive or not authorized");
 
             return;
@@ -238,6 +252,8 @@ public sealed class SsoOidcEvents : OpenIdConnectEvents
         // Short-circuit: set the validated principal and complete authentication.
         // This bypasses the middleware's built-in token validation entirely, avoiding the
         // placeholder authority issue and eliminating any need to mutate the shared Options singleton.
+        Metrics(context.HttpContext).RecordLogin(AuthProviderType.CustomOidc, LoginOutcome.Succeeded);
+
         context.Principal = new ClaimsPrincipal(identity);
         context.Success();
     }
@@ -294,6 +310,17 @@ public sealed class SsoOidcEvents : OpenIdConnectEvents
             documentRetriever);
 
         return await configManager.GetConfigurationAsync(ct);
+    }
+
+    /// <summary>
+    /// Resolves the authentication instruments from the request. This type has no constructor — it
+    /// is created directly at composition — so everything it needs comes from the request services.
+    /// </summary>
+    /// <param name="httpContext">The current request.</param>
+    /// <returns>The authentication instruments.</returns>
+    private static AuthMetrics Metrics(HttpContext httpContext)
+    {
+        return httpContext.RequestServices.GetRequiredService<AuthMetrics>();
     }
 
     /// <summary>

@@ -24,6 +24,7 @@ public sealed class MetricTenantAllowlistTests
         "EmailMetrics",
         "IntegrationMetrics",
         "RegistrationMetrics",
+        "AuthMetrics",
     };
 
     private static IEnumerable<Type> MetricClasses()

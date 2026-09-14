@@ -78,6 +78,9 @@ public static class ObservabilityServiceCollectionExtensions
         services.AddSingleton<AlertPipelineMetrics>();
         services.AddSingleton<IInitialisableMetrics>(provider => provider.GetRequiredService<AlertPipelineMetrics>());
 
+        services.AddSingleton<AuthMetrics>();
+        services.AddSingleton<IInitialisableMetrics>(provider => provider.GetRequiredService<AuthMetrics>());
+
         services.AddHostedService<MetricSeriesInitialiser>();
 
         if (string.IsNullOrWhiteSpace(endpoint) == true)

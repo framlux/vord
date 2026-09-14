@@ -85,4 +85,22 @@ public static class TestMetricsFactory
     {
         return new AlertPipelineMetrics(CreateMeterFactory());
     }
+
+    /// <summary>
+    /// Creates resilience instruments on a fresh meter factory.
+    /// </summary>
+    /// <returns>Resilience metrics ready to record into.</returns>
+    public static ResilienceMetrics CreateResilienceMetrics()
+    {
+        return new ResilienceMetrics(CreateMeterFactory());
+    }
+
+    /// <summary>
+    /// Creates authentication instruments on a fresh meter factory.
+    /// </summary>
+    /// <returns>Authentication metrics ready to record into.</returns>
+    public static AuthMetrics CreateAuthMetrics()
+    {
+        return new AuthMetrics(CreateMeterFactory());
+    }
 }
