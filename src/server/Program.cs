@@ -15,6 +15,7 @@ using Framlux.FleetManagement.Services.Core.Deployment;
 using Framlux.FleetManagement.Services.Core.Extensions;
 using Framlux.FleetManagement.Services.Core.Hangfire;
 using Framlux.FleetManagement.Services.Core.Infrastructure;
+using Framlux.FleetManagement.Services.Core.Observability;
 using Framlux.FleetManagement.Services.Core.Options;
 using Microsoft.AspNetCore.Antiforgery;
 using Microsoft.AspNetCore.Authentication;
@@ -55,6 +56,7 @@ builder.Host.AddCoreSerilog();
 
 // Bind shared configuration options
 builder.Services.AddCoreOptions(builder.Configuration);
+builder.Services.AddCoreObservability(builder.Configuration, ObservabilityHost.ApiServer);
 
 // Server-specific configuration options
 builder.Services.AddOptions<KestrelHttp2Options>()

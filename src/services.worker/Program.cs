@@ -6,6 +6,7 @@ using Framlux.FleetManagement.Services.Core.Deployment;
 using Framlux.FleetManagement.Services.Core.Extensions;
 using Framlux.FleetManagement.Services.Core.Hangfire;
 using Framlux.FleetManagement.Services.Core.Infrastructure;
+using Framlux.FleetManagement.Services.Core.Observability;
 using Framlux.FleetManagement.Services.Core.Options;
 using Hangfire;
 using Microsoft.AspNetCore.Diagnostics.HealthChecks;
@@ -47,6 +48,7 @@ DeploymentMode deploymentMode = new(Microsoft.Extensions.Options.Options.Create(
 // Shared infrastructure: database, repositories, Redis, Polly, health checks
 string connectionString = ServiceCollectionExtensions.BuildConnectionString(dbOpts, "Framlux.FleetManagement.ServicesWorker");
 builder.Services.AddRepositories(dbOpts, "Framlux.FleetManagement.ServicesWorker");
+builder.Services.AddCoreObservability(builder.Configuration, ObservabilityHost.ServicesWorker);
 builder.Services.AddCoreInfrastructure(redisOpts, connectionString);
 // Intentionally shares the "Framlux.FleetManagement.Web" application name with the server process
 // so the worker uses the same Data Protection key ring. The worker decrypts artifacts encrypted by
