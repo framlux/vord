@@ -90,5 +90,21 @@ public sealed class AuthMetrics : IInitialisableMetrics
                     new KeyValuePair<string, object?>("outcome", MetricTag.From(outcome)));
             }
         }
+
+        foreach (LoginOutcome outcome in Enum.GetValues<LoginOutcome>())
+        {
+            if (outcome == LoginOutcome.Succeeded)
+            {
+                continue;
+            }
+
+            // A real tenant's series cannot be pre-created, but a flow that breaks before the
+            // tenant is resolved lands in the unknown bucket, which is known here — so the first
+            // such failure is an observable increase rather than a series being born.
+            _ssoLoginFailures.Add(
+                0,
+                new KeyValuePair<string, object?>("tenant", MetricTag.Unknown),
+                new KeyValuePair<string, object?>("outcome", MetricTag.From(outcome)));
+        }
     }
 }

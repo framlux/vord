@@ -3,6 +3,7 @@
 // See LICENSE for details.
 
 using Framlux.FleetManagement.Services.Core.Observability;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Framlux.FleetManagement.Test.Observability;
@@ -14,33 +15,48 @@ namespace Framlux.FleetManagement.Test.Observability;
 /// The observable half is the one worth testing: a gauge class nothing else injects is never
 /// constructed, so its instrument is never created and its series never appear in Prometheus — while
 /// every unit test still passes, because those tests construct the class directly. Resolving the
-/// marker is what turns construction from a coincidence into a guarantee.
+/// descriptors here is what turns construction from a coincidence into a guarantee, and doing the
+/// resolving inside the pass is what keeps one unbuildable gauge from costing the whole process.
 /// </remarks>
 public sealed class MetricSeriesInitialiserTests
 {
     [Test]
-    public async Task StartAsync_ResolvesEveryObservableMetricClass()
+    public async Task StartAsync_WhenOneGaugeClassCannotBeConstructed_StillConstructsTheRest()
     {
-        // Enumerating the registered markers is the entire mechanism: it is what forces the
-        // constructor — and therefore the observable instrument — into existence.
-        CountingObservableMetrics observable = new();
+        // A gauge whose constructor fails should cost its own series and nothing else. If the
+        // classes were injected instead of resolved here, the container would build them before
+        // this method ran and the process would never start at all.
+        MetricsConstructionLog log = new();
+        ServiceCollection services = new();
+        services.AddSingleton(log);
+        services.AddSingleton<ThrowingObservableMetrics>();
+        services.AddSingleton(ObservableMetricsDescriptor.For<ThrowingObservableMetrics>());
+        services.AddSingleton<CountingObservableMetrics>();
+        services.AddSingleton(ObservableMetricsDescriptor.For<CountingObservableMetrics>());
+
+        using ServiceProvider provider = services.BuildServiceProvider();
+
         MetricSeriesInitialiser initialiser = new(
             [],
-            [observable],
+            provider.GetServices<ObservableMetricsDescriptor>(),
+            provider,
             NullLogger<MetricSeriesInitialiser>.Instance);
 
         await initialiser.StartAsync(CancellationToken.None);
 
-        await Assert.That(observable.WasResolved).IsTrue();
+        await Assert.That(log.Constructed.Count).IsEqualTo(1);
+        await Assert.That(log.Constructed[0]).IsEqualTo(nameof(CountingObservableMetrics));
     }
 
     [Test]
     public async Task StartAsync_InitialisesEveryCounterClass()
     {
         RecordingInitialisableMetrics metrics = new();
+        using ServiceProvider provider = new ServiceCollection().BuildServiceProvider();
         MetricSeriesInitialiser initialiser = new(
             [metrics],
             [],
+            provider,
             NullLogger<MetricSeriesInitialiser>.Instance);
 
         await initialiser.StartAsync(CancellationToken.None);
@@ -55,9 +71,11 @@ public sealed class MetricSeriesInitialiserTests
         // process, so one bad class must not stop startup or starve its neighbours.
         ThrowingInitialisableMetrics throwing = new();
         RecordingInitialisableMetrics healthy = new();
+        using ServiceProvider provider = new ServiceCollection().BuildServiceProvider();
         MetricSeriesInitialiser initialiser = new(
             [throwing, healthy],
             [],
+            provider,
             NullLogger<MetricSeriesInitialiser>.Instance);
 
         await initialiser.StartAsync(CancellationToken.None);
@@ -68,7 +86,12 @@ public sealed class MetricSeriesInitialiserTests
     [Test]
     public async Task StopAsync_DoesNothingAndCompletes()
     {
-        MetricSeriesInitialiser initialiser = new([], [], NullLogger<MetricSeriesInitialiser>.Instance);
+        using ServiceProvider provider = new ServiceCollection().BuildServiceProvider();
+        MetricSeriesInitialiser initialiser = new(
+            [],
+            [],
+            provider,
+            NullLogger<MetricSeriesInitialiser>.Instance);
 
         await initialiser.StopAsync(CancellationToken.None);
 

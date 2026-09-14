@@ -150,6 +150,23 @@ public sealed class AddCoreObservabilityTests
     }
 
     [Test]
+    public async Task JobMetricsResolvesInBothHosts()
+    {
+        // The Hangfire duration filter is constructed from the container in both processes, so this
+        // class must be resolvable in both. It learns which process it is from the container rather
+        // than from a hand-written factory, so the enum has to be registered too.
+        using ServiceProvider apiServer = Build("http://collector:4317", ObservabilityHost.ApiServer);
+        using ServiceProvider worker = Build("http://collector:4317", ObservabilityHost.ServicesWorker);
+
+        await Assert.That(apiServer.GetService<JobMetrics>()).IsNotNull();
+        await Assert.That(worker.GetService<JobMetrics>()).IsNotNull();
+        await Assert.That(apiServer.GetRequiredService<ObservabilityHost>())
+            .IsEqualTo(ObservabilityHost.ApiServer);
+        await Assert.That(worker.GetRequiredService<ObservabilityHost>())
+            .IsEqualTo(ObservabilityHost.ServicesWorker);
+    }
+
+    [Test]
     public async Task MetricClassesAreSingletons()
     {
         using ServiceProvider provider = Build("http://collector:4317");

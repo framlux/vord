@@ -2,16 +2,13 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
-using Framlux.FleetManagement.Services.Core.Deployment;
 using Framlux.FleetManagement.Services.Core.Observability;
 using Framlux.FleetManagement.Services.Core.Options;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using OpenTelemetry.Metrics;
 using OpenTelemetry.Resources;
-using System.Diagnostics.Metrics;
 using System.Reflection;
 
 namespace Framlux.FleetManagement.Services.Core.Extensions;
@@ -57,63 +54,45 @@ public static class ObservabilityServiceCollectionExtensions
 
         services.AddMetrics();
 
+        // The metric classes take this as a constructor argument, so it has to be resolvable rather
+        // than closed over by a factory lambda. Nothing else registers the enum. The non-generic
+        // overload is required because the generic one only accepts reference types.
+        services.AddSingleton(typeof(ObservabilityHost), host);
+
         if (host == ObservabilityHost.ApiServer)
         {
-            services.AddSingleton<IngestMetrics>();
-            services.AddSingleton<IInitialisableMetrics>(provider => provider.GetRequiredService<IngestMetrics>());
+            AddInitialisable<IngestMetrics>(services);
         }
 
         if (host == ObservabilityHost.ServicesWorker)
         {
-            // The second line is what guarantees construction. This class is also injected into the
+            // The descriptor is what guarantees construction. This class is also injected into the
             // streaming service, so today it would be built anyway — but that is a coincidence of
             // the current wiring, and relying on it is how a gauge comes to emit nothing at all.
-            services.AddSingleton<ProjectionMetrics>();
-            services.AddSingleton<IObservableMetrics>(provider => provider.GetRequiredService<ProjectionMetrics>());
+            AddObservable<ProjectionMetrics>(services);
 
-            // Nothing injects the fleet gauge — it has no call sites at all — so without the marker
-            // registration below it would never be constructed, its instrument would never be
-            // created, and vord_fleet_machines would never exist while every test still passed.
-            services.AddSingleton<FleetMetrics>();
-            services.AddSingleton<IObservableMetrics>(provider => provider.GetRequiredService<FleetMetrics>());
+            // Nothing injects the fleet gauge — it has no call sites at all — so without its
+            // descriptor it would never be constructed, its instrument would never be created, and
+            // vord_fleet_machines would never exist while every test still passed.
+            AddObservable<FleetMetrics>(services);
         }
 
         // Registered in both processes because AddCoreServices registers AlertDeliveryService
         // unconditionally on both. A host-conditional registration here would leave one of them
         // unable to build its container at startup.
-        services.AddSingleton<EmailMetrics>();
-        services.AddSingleton<IInitialisableMetrics>(provider => provider.GetRequiredService<EmailMetrics>());
+        AddInitialisable<EmailMetrics>(services);
 
-        services.AddSingleton<IntegrationMetrics>();
-        services.AddSingleton<IInitialisableMetrics>(provider => provider.GetRequiredService<IntegrationMetrics>());
-
-        services.AddSingleton<RegistrationMetrics>();
-        services.AddSingleton<IInitialisableMetrics>(provider => provider.GetRequiredService<RegistrationMetrics>());
-
-        services.AddSingleton<BillingMetrics>();
-        services.AddSingleton<IInitialisableMetrics>(provider => provider.GetRequiredService<BillingMetrics>());
-
-        services.AddSingleton<AlertPipelineMetrics>();
-        services.AddSingleton<IInitialisableMetrics>(provider => provider.GetRequiredService<AlertPipelineMetrics>());
-
-        services.AddSingleton<AuthMetrics>();
-        services.AddSingleton<IInitialisableMetrics>(provider => provider.GetRequiredService<AuthMetrics>());
-
-        services.AddSingleton<ResilienceMetrics>();
-        services.AddSingleton<IInitialisableMetrics>(provider => provider.GetRequiredService<ResilienceMetrics>());
+        AddInitialisable<IntegrationMetrics>(services);
+        AddInitialisable<RegistrationMetrics>(services);
+        AddInitialisable<BillingMetrics>(services);
+        AddInitialisable<AlertPipelineMetrics>(services);
+        AddInitialisable<AuthMetrics>(services);
+        AddInitialisable<ResilienceMetrics>(services);
 
         // Injected into the Hangfire duration filter, which is constructed from the container in
         // both processes, so a worker-only registration here would break the API server's Hangfire
-        // client. The gauges gate themselves to the worker instead.
-        services.AddSingleton<JobMetrics>(provider => new JobMetrics(
-            provider.GetRequiredService<IMeterFactory>(),
-            provider.GetRequiredService<IServiceScopeFactory>(),
-            provider.GetRequiredService<TimeProvider>(),
-            provider.GetRequiredService<DeploymentMode>(),
-            provider.GetRequiredService<IOptions<ObjectStorageOptions>>(),
-            host,
-            provider.GetRequiredService<ILogger<JobMetrics>>()));
-        services.AddSingleton<IObservableMetrics>(provider => provider.GetRequiredService<JobMetrics>());
+        // client. The class creates its gauges only in the worker instead.
+        AddObservable<JobMetrics>(services);
 
         services.AddHostedService<MetricSeriesInitialiser>();
 
@@ -130,6 +109,14 @@ public static class ObservabilityServiceCollectionExtensions
             .WithMetrics(metrics => metrics
                 .AddMeter(VordMeter.Name)
                 .AddMeter("Npgsql")
+                // This also covers the gRPC surface. gRPC calls are ordinary ASP.NET Core endpoints
+                // on Kestrel, so they land in http.server.request.duration with the service and
+                // method as the route. Grpc.AspNetCore.Server publishes no Meter of its own — its
+                // call counters are EventCounters — so naming a gRPC meter here would add a series
+                // that never arrives and read like coverage that does not exist. The gRPC status
+                // code is not on the request itself either, because a failed call still ends
+                // HTTP 200 with its status in a trailer; GrpcStatusMetricTagMiddleware reads that
+                // trailer and enriches this same instrument with it.
                 .AddAspNetCoreInstrumentation()
                 .AddHttpClientInstrumentation()
                 .AddRuntimeInstrumentation()
@@ -139,6 +126,30 @@ public static class ObservabilityServiceCollectionExtensions
                 }));
 
         return services;
+    }
+
+    /// <summary>
+    /// Registers a metric class as a singleton and hands the startup pass the same instance to
+    /// pre-record its closed-enum series on. Aliasing the wrong concrete type here is invisible at a
+    /// glance and would silently drop a class's series, so the type is named once.
+    /// </summary>
+    private static void AddInitialisable<TMetrics>(IServiceCollection services)
+        where TMetrics : class, IInitialisableMetrics
+    {
+        services.AddSingleton<TMetrics>();
+        services.AddSingleton<IInitialisableMetrics>(provider => provider.GetRequiredService<TMetrics>());
+    }
+
+    /// <summary>
+    /// Registers a gauge-backed metric class as a singleton alongside the descriptor that makes the
+    /// startup pass construct it. Without the descriptor the class is built only if something else
+    /// happens to inject it, and its series would quietly never exist.
+    /// </summary>
+    private static void AddObservable<TMetrics>(IServiceCollection services)
+        where TMetrics : class, IObservableMetrics
+    {
+        services.AddSingleton<TMetrics>();
+        services.AddSingleton(ObservableMetricsDescriptor.For<TMetrics>());
     }
 
     /// <summary>

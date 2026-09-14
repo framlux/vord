@@ -7,13 +7,18 @@ using Framlux.FleetManagement.Services.Core.Observability;
 namespace Framlux.FleetManagement.Test.Observability;
 
 /// <summary>
-/// A stand-in gauge class whose only job is to record that it was constructed at all.
+/// A stand-in gauge class whose only job is to note that the container constructed it, which is
+/// where a real gauge would create its observable instrument.
 /// </summary>
 public sealed class CountingObservableMetrics : IObservableMetrics
 {
     /// <summary>
-    /// Always true on a constructed instance. Reading it from the initialiser's enumeration proves
-    /// the marker was resolved, which is the entire mechanism under test.
+    /// Creates the stand-in and notes the construction.
     /// </summary>
-    public bool WasResolved { get; } = true;
+    /// <param name="log">The shared record of what was constructed.</param>
+    public CountingObservableMetrics(MetricsConstructionLog log)
+    {
+        ArgumentNullException.ThrowIfNull(log);
+        log.Record(nameof(CountingObservableMetrics));
+    }
 }

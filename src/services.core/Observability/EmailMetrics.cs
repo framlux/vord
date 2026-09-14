@@ -98,6 +98,11 @@ public sealed class EmailMetrics : IInitialisableMetrics
             }
 
             _sends.Add(0, new KeyValuePair<string, object?>("outcome", UndeliverableOutcome), purposeTag);
+
+            // A real tenant's series cannot be pre-created, but the bucket used when no tenant is
+            // in scope is known here, and it is the one an alert would otherwise miss the first
+            // time it moved.
+            _sendFailures.Add(0, TenantTag(null), purposeTag);
         }
     }
 

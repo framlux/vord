@@ -130,6 +130,13 @@ public sealed class AuthMetricsTests
         IReadOnlyList<CollectedMeasurement<long>> measurements = logins.GetMeasurementSnapshot();
         await Assert.That(measurements.Count).IsEqualTo(15);
         await Assert.That(measurements.All(measurement => measurement.Value == 0L)).IsTrue();
-        await Assert.That(failures.GetMeasurementSnapshot().Count).IsEqualTo(0);
+
+        // The two failing outcomes in the unknown tenant bucket, which is where a flow that breaks
+        // before the tenant is read lands. No real tenant is invented here.
+        IReadOnlyList<CollectedMeasurement<long>> attributed = failures.GetMeasurementSnapshot();
+        await Assert.That(attributed.Count).IsEqualTo(2);
+        await Assert.That(attributed.All(measurement => measurement.Value == 0L)).IsTrue();
+        await Assert.That(attributed.All(measurement => "unknown".Equals(measurement.Tags["tenant"]))).IsTrue();
+        await Assert.That(attributed.Any(measurement => "succeeded".Equals(measurement.Tags["outcome"]))).IsFalse();
     }
 }

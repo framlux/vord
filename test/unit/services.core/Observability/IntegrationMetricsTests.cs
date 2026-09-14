@@ -94,6 +94,13 @@ public sealed class IntegrationMetricsTests
         IReadOnlyList<CollectedMeasurement<long>> measurements = deliveries.GetMeasurementSnapshot();
         await Assert.That(measurements.Count).IsEqualTo(30);
         await Assert.That(measurements.All(measurement => measurement.Value == 0L)).IsTrue();
-        await Assert.That(failures.GetMeasurementSnapshot().Count).IsEqualTo(0);
+
+        // The four failing outcomes by six providers, all in the unknown tenant bucket — a real
+        // tenant's series cannot be pre-created, and none is invented here.
+        IReadOnlyList<CollectedMeasurement<long>> attributed = failures.GetMeasurementSnapshot();
+        await Assert.That(attributed.Count).IsEqualTo(24);
+        await Assert.That(attributed.All(measurement => measurement.Value == 0L)).IsTrue();
+        await Assert.That(attributed.All(measurement => "unknown".Equals(measurement.Tags["tenant"]))).IsTrue();
+        await Assert.That(attributed.Any(measurement => "delivered".Equals(measurement.Tags["outcome"]))).IsFalse();
     }
 }

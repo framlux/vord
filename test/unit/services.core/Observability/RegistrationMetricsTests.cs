@@ -79,7 +79,7 @@ public sealed class RegistrationMetricsTests
     }
 
     [Test]
-    public async Task InitialiseSeries_CreatesEveryFleetWideOutcome()
+    public async Task InitialiseSeries_CreatesEveryFleetWideOutcomeAndTheUnknownTenantFailures()
     {
         (RegistrationMetrics metrics, IMeterFactory factory) = Build();
         using MetricCollector<long> attempts = new(factory, VordMeter.Name, "vord.registration.attempts");
@@ -90,6 +90,14 @@ public sealed class RegistrationMetricsTests
         IReadOnlyList<CollectedMeasurement<long>> measurements = attempts.GetMeasurementSnapshot();
         await Assert.That(measurements.Count).IsEqualTo(9);
         await Assert.That(measurements.All(measurement => measurement.Value == 0L)).IsTrue();
-        await Assert.That(failures.GetMeasurementSnapshot().Count).IsEqualTo(0);
+
+        // The eight failing outcomes in the unknown tenant bucket. A bad token resolves no tenant,
+        // so this is the series the onboarding alert reads, and it has to exist before the first
+        // failure rather than be born by it.
+        IReadOnlyList<CollectedMeasurement<long>> attributed = failures.GetMeasurementSnapshot();
+        await Assert.That(attributed.Count).IsEqualTo(8);
+        await Assert.That(attributed.All(measurement => measurement.Value == 0L)).IsTrue();
+        await Assert.That(attributed.All(measurement => "unknown".Equals(measurement.Tags["tenant"]))).IsTrue();
+        await Assert.That(attributed.Any(measurement => "registered".Equals(measurement.Tags["outcome"]))).IsFalse();
     }
 }

@@ -28,24 +28,24 @@ namespace Framlux.FleetManagement.Services.Core.Observability;
 /// deliberately absent job as Missing would page an operator hourly, forever, about an intended
 /// absence.
 ///
-/// The gauges report only from the worker. The Hangfire filter that feeds the duration histogram is
+/// The gauges exist only in the worker. The Hangfire filter that feeds the duration histogram is
 /// constructed in both processes, so this class is too — but only the worker runs a processing
 /// server, and letting the API server's replicas each query Hangfire storage on every collection
-/// cycle would duplicate every series for no gain.
+/// cycle would duplicate every series for no gain. Creating the gauges only where they report also
+/// keeps the API server from carrying two instruments that can never yield a measurement.
+///
+/// Neither gauge is bounded by a timeout. Both reach Hangfire through its monitoring API, which is
+/// synchronous and takes no cancellation token, so there is nothing to hand a deadline to — a hung
+/// Postgres would stall the collection cycle and with it every other instrument in the worker. The
+/// exposure is stated rather than papered over: the only way to bound a call that cannot be
+/// cancelled is to abandon the thread running it, which leaks one thread per collection cycle for
+/// as long as the database stays hung.
 /// </remarks>
 public sealed class JobMetrics : IObservableMetrics
 {
-    /// <summary>
-    /// How long one gauge measurement may take before it is abandoned. The callbacks run on the
-    /// exporter's collection thread and Hangfire's monitoring API hits Postgres, so without this a
-    /// hung query would stall every instrument in the process.
-    /// </summary>
-    private static readonly TimeSpan MeasurementTimeout = TimeSpan.FromSeconds(3);
-
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<JobMetrics> _logger;
-    private readonly ObservabilityHost _host;
     private readonly bool _isSaas;
     private readonly bool _objectStorageEnabled;
     private readonly Histogram<double> _runDuration;
@@ -58,7 +58,7 @@ public sealed class JobMetrics : IObservableMetrics
     /// <param name="timeProvider">The clock the job inspector measures overdue against.</param>
     /// <param name="deploymentMode">Decides whether the billing sync job is intended to exist.</param>
     /// <param name="objectStorageOptions">Decides whether the data export jobs are intended to exist.</param>
-    /// <param name="host">Which process this is. The gauges report only from the worker.</param>
+    /// <param name="host">Which process this is. The gauges are created only in the worker.</param>
     /// <param name="logger">The logger.</param>
     public JobMetrics(
         IMeterFactory meterFactory,
@@ -79,22 +79,28 @@ public sealed class JobMetrics : IObservableMetrics
         _scopeFactory = scopeFactory;
         _timeProvider = timeProvider;
         _logger = logger;
-        _host = host;
         _isSaas = deploymentMode.IsSaas;
         _objectStorageEnabled = string.IsNullOrEmpty(objectStorageOptions.Value.BucketName) == false;
 
         Meter meter = meterFactory.Create(VordMeter.Name);
 
-        meter.CreateObservableGauge(
-            "vord.jobs.recurring.health",
-            ObserveRecurringHealth,
-            description: "One per intended recurring job and health state: 1 for the current state, 0 otherwise.");
+        // Only the worker runs a Hangfire processing server, so only the worker has anything to
+        // report here.
+        if (host == ObservabilityHost.ServicesWorker)
+        {
+            meter.CreateObservableGauge(
+                "vord.jobs.recurring.health",
+                ObserveRecurringHealth,
+                description: "One per intended recurring job and health state: 1 for the current state, 0 otherwise.");
 
-        meter.CreateObservableGauge(
-            "vord.jobs.queue_depth",
-            ObserveQueueDepth,
-            description: "Enqueued job count per queue.");
+            meter.CreateObservableGauge(
+                "vord.jobs.queue_depth",
+                ObserveQueueDepth,
+                description: "Enqueued job count per queue.");
+        }
 
+        // The duration histogram is unconditional: the Hangfire filter that records into it is
+        // constructed in both processes.
         _runDuration = meter.CreateHistogram<double>(
             "vord.jobs.duration_seconds",
             unit: "s",
@@ -117,11 +123,6 @@ public sealed class JobMetrics : IObservableMetrics
 
     private IEnumerable<Measurement<long>> ObserveRecurringHealth()
     {
-        if (_host != ObservabilityHost.ServicesWorker)
-        {
-            return [];
-        }
-
         try
         {
             IReadOnlySet<string> intended = RecurringJobRegistry.IntendedJobIds(_isSaas, _objectStorageEnabled);
@@ -163,11 +164,6 @@ public sealed class JobMetrics : IObservableMetrics
 
     private IEnumerable<Measurement<long>> ObserveQueueDepth()
     {
-        if (_host != ObservabilityHost.ServicesWorker)
-        {
-            return [];
-        }
-
         try
         {
             Dictionary<HangfireQueueKind, long> depths = [];
@@ -177,10 +173,12 @@ public sealed class JobMetrics : IObservableMetrics
                 depths[queue] = 0L;
             }
 
-            using CancellationTokenSource timeout = new(MeasurementTimeout);
             using IServiceScope scope = _scopeFactory.CreateScope();
             JobStorage storage = scope.ServiceProvider.GetRequiredService<JobStorage>();
 
+            // Hangfire's monitoring API is synchronous and takes no cancellation token, so nothing
+            // bounds this query; if it ever gains one, this is where a measurement timeout is
+            // threaded through.
             foreach (QueueWithTopEnqueuedJobsDto queue in storage.GetMonitoringApi().Queues())
             {
                 depths[MapQueue(queue.Name)] += queue.Length;
@@ -221,7 +219,7 @@ public sealed class JobMetrics : IObservableMetrics
         // The inspector is not registered in DI — it is constructed where it is used — so it is
         // built here rather than resolved, which would throw on every collection cycle. It is
         // synchronous and takes no cancellation token, so nothing bounds it today; if it ever gains
-        // one, this is where the measurement timeout is threaded through.
+        // one, this is where a measurement timeout is threaded through.
         return new RecurringJobInspector(storage, _timeProvider).Inspect();
     }
 }

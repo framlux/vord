@@ -112,10 +112,11 @@ public sealed class EmailMetricsTests
     }
 
     [Test]
-    public async Task InitialiseSeries_CreatesEveryFleetWideCombinationAndNoAttributedOne()
+    public async Task InitialiseSeries_CreatesEveryFleetWideCombinationAndTheUnknownTenantOnly()
     {
-        // Attributed series are per-tenant and cannot be pre-created; that limit is why alerting
-        // reads the fleet-wide counter and attribution is a drill-down.
+        // A real tenant's attributed series cannot be pre-created; that limit is why alerting
+        // reads the fleet-wide counter and attribution is a drill-down. The unknown bucket is the
+        // exception, because its value is fixed and known at startup.
         (EmailMetrics metrics, IMeterFactory factory) = Build();
         using MetricCollector<long> sends = new(factory, VordMeter.Name, "vord.email.sends");
         using MetricCollector<long> failures = new(factory, VordMeter.Name, "vord.email.send_failures");
@@ -126,6 +127,12 @@ public sealed class EmailMetricsTests
         IReadOnlyList<CollectedMeasurement<long>> measurements = sends.GetMeasurementSnapshot();
         await Assert.That(measurements.Count).IsEqualTo(8);
         await Assert.That(measurements.All(measurement => measurement.Value == 0L)).IsTrue();
-        await Assert.That(failures.GetMeasurementSnapshot().Count).IsEqualTo(0);
+
+        // One attributed series per purpose, all of them the unknown bucket.
+        IReadOnlyList<CollectedMeasurement<long>> attributed = failures.GetMeasurementSnapshot();
+        await Assert.That(attributed.Count).IsEqualTo(2);
+        await Assert.That(attributed.All(measurement => measurement.Value == 0L)).IsTrue();
+        await Assert.That(attributed.All(measurement => "unknown".Equals(measurement.Tags["tenant"]))).IsTrue();
+        await Assert.That(attributed.Select(measurement => measurement.Tags["purpose"]).Distinct().Count()).IsEqualTo(2);
     }
 }

@@ -52,6 +52,11 @@ public sealed class SendInvitationEmailJob
     /// <param name="inviterName">The name of the user who sent the invitation.</param>
     /// <param name="acceptUrl">The URL to accept the invitation.</param>
     /// <param name="ct">Cancellation token (provided by Hangfire on shutdown).</param>
+    // Hangfire serialises this method's signature into the job row, so a job enqueued before a
+    // deploy that changes the parameter list cannot be deserialised after it and fails permanently.
+    // The tenant id was added to this list only because there were no tenants yet and therefore no
+    // enqueued invitations to strand. Any later change to these parameters needs either a
+    // forwarding overload kept for one release or a deliberate drain of the pending queue.
     [AutomaticRetry(Attempts = 3, DelaysInSeconds = new int[] { 10, 30, 60 })]
     public async Task SendAsync(string toEmail, int tenantId, string tenantName, string inviterName, string acceptUrl, CancellationToken ct)
     {

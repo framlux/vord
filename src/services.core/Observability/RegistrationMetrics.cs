@@ -68,7 +68,19 @@ public sealed class RegistrationMetrics : IInitialisableMetrics
     {
         foreach (RegistrationOutcome outcome in Enum.GetValues<RegistrationOutcome>())
         {
-            _attempts.Add(0, new KeyValuePair<string, object?>("outcome", MetricTag.From(outcome)));
+            KeyValuePair<string, object?> outcomeTag = new("outcome", MetricTag.From(outcome));
+
+            _attempts.Add(0, outcomeTag);
+
+            if (outcome == RegistrationOutcome.Registered)
+            {
+                continue;
+            }
+
+            // A bad token is the failure with no tenant to attribute it to, and it is the one
+            // onboarding alerting exists for. A real tenant's series cannot be pre-created, but
+            // this bucket is known here, so the first such failure is still an observable increase.
+            _failures.Add(0, new KeyValuePair<string, object?>("tenant", MetricTag.Unknown), outcomeTag);
         }
     }
 }

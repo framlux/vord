@@ -76,12 +76,27 @@ public sealed class IntegrationMetrics : IInitialisableMetrics
     {
         foreach (IntegrationDeliveryOutcome outcome in Enum.GetValues<IntegrationDeliveryOutcome>())
         {
+            KeyValuePair<string, object?> outcomeTag = new("outcome", MetricTag.From(outcome));
+
             foreach (IntegrationProvider provider in Enum.GetValues<IntegrationProvider>())
             {
-                _deliveries.Add(
+                KeyValuePair<string, object?> providerTag = new("provider", MetricTag.From(provider));
+
+                _deliveries.Add(0, outcomeTag, providerTag);
+
+                if (outcome == IntegrationDeliveryOutcome.Delivered)
+                {
+                    continue;
+                }
+
+                // A real tenant's series cannot be pre-created, but the bucket used when no tenant
+                // is in scope is known here, and it is the one an alert would otherwise miss the
+                // first time it moved.
+                _deliveryFailures.Add(
                     0,
-                    new KeyValuePair<string, object?>("outcome", MetricTag.From(outcome)),
-                    new KeyValuePair<string, object?>("provider", MetricTag.From(provider)));
+                    new KeyValuePair<string, object?>("tenant", MetricTag.Unknown),
+                    outcomeTag,
+                    providerTag);
             }
         }
     }

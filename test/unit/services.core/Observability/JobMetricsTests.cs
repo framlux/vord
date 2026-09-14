@@ -220,22 +220,65 @@ public sealed class JobMetricsTests
     }
 
     [Test]
-    public async Task Gauges_OnTheApiServer_YieldNoMeasurement()
+    public async Task Gauges_OnTheApiServer_AreNotCreatedAtAll()
     {
-        // The Hangfire filter constructs this class in both hosts, so the gauges gate themselves.
-        // Without that, every api-server replica would query Hangfire storage on each collection
-        // cycle and duplicate every series.
+        // The Hangfire filter constructs this class in both hosts, so the class exists in both — but
+        // only the worker runs a processing server. Were the gauges created here, every api-server
+        // replica would query Hangfire storage on each collection cycle and duplicate every series.
         (JobMetrics metrics, IMeterFactory factory) = Build(
             StorageWithAllNineScheduled(), host: ObservabilityHost.ApiServer);
 
-        using MetricCollector<long> health = new(factory, VordMeter.Name, "vord.jobs.recurring.health");
-        using MetricCollector<long> depth = new(factory, VordMeter.Name, "vord.jobs.queue_depth");
+        IReadOnlyList<string> instruments = PublishedInstrumentNames(factory);
 
-        health.RecordObservableInstruments();
-        depth.RecordObservableInstruments();
+        await Assert.That(instruments).DoesNotContain("vord.jobs.recurring.health");
+        await Assert.That(instruments).DoesNotContain("vord.jobs.queue_depth");
+        await Assert.That(metrics).IsNotNull();
 
-        await Assert.That(health.GetMeasurementSnapshot().Count).IsEqualTo(0);
-        await Assert.That(depth.GetMeasurementSnapshot().Count).IsEqualTo(0);
+        // The same probe against the worker, so an absence caused by a broken probe rather than by
+        // the host gate cannot pass unnoticed.
+        (JobMetrics _, IMeterFactory workerFactory) = Build(StorageWithAllNineScheduled());
+        IReadOnlyList<string> workerInstruments = PublishedInstrumentNames(workerFactory);
+
+        await Assert.That(workerInstruments).Contains("vord.jobs.recurring.health");
+        await Assert.That(workerInstruments).Contains("vord.jobs.queue_depth");
+    }
+
+    [Test]
+    public async Task DurationHistogram_IsCreatedOnTheApiServerToo()
+    {
+        // The Hangfire duration filter records from both processes, so this instrument must exist in
+        // both. Gating it with the gauges would silently lose every api-server job run.
+        (JobMetrics metrics, IMeterFactory factory) = Build(
+            new InMemoryStorage(), host: ObservabilityHost.ApiServer);
+        using MetricCollector<double> collector = new(factory, VordMeter.Name, "vord.jobs.duration_seconds");
+
+        metrics.RecordRun(InstrumentedJob.AlertEvaluation, JobOutcome.Failed, 0.25d);
+
+        IReadOnlyList<CollectedMeasurement<double>> measurements = collector.GetMeasurementSnapshot();
+        await Assert.That(measurements.Count).IsEqualTo(1);
+        await Assert.That(measurements[0].Tags["outcome"]).IsEqualTo("failed");
+    }
+
+    /// <summary>
+    /// Lists the instruments the factory's meters have actually published, so a test can assert an
+    /// instrument was never created rather than that it merely reported nothing.
+    /// </summary>
+    private static IReadOnlyList<string> PublishedInstrumentNames(IMeterFactory factory)
+    {
+        List<string> names = [];
+
+        using MeterListener listener = new();
+        listener.InstrumentPublished = (instrument, _) =>
+        {
+            if (ReferenceEquals(instrument.Meter.Scope, factory) == true)
+            {
+                names.Add(instrument.Name);
+            }
+        };
+
+        listener.Start();
+
+        return names;
     }
 
     [Test]

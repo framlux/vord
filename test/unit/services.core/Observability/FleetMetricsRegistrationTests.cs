@@ -57,7 +57,7 @@ public sealed class FleetMetricsRegistrationTests
 
         using ServiceProvider provider = services.BuildServiceProvider();
 
-        // Starting the hosted service is what resolves the observable markers, which is the only
+        // Starting the hosted service is what resolves the observable descriptors, which is the only
         // thing that constructs a gauge class nothing else depends on.
         MetricSeriesInitialiser initialiser = provider.GetServices<IHostedService>()
             .OfType<MetricSeriesInitialiser>()

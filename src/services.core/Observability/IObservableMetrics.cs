@@ -10,9 +10,11 @@ namespace Framlux.FleetManagement.Services.Core.Observability;
 /// <remarks>
 /// A gauge's series come into being when the class is constructed and the observable instrument is
 /// created, so a gauge class nothing injects is never constructed and its series never exist — while
-/// every unit test still passes, because the tests construct the class directly. Resolving this
-/// marker at startup is what makes construction a guarantee rather than a side effect of whichever
-/// other type happens to depend on it today.
+/// every unit test still passes, because the tests construct the class directly. Registering an
+/// <see cref="ObservableMetricsDescriptor"/> for the class and resolving it from the startup pass is
+/// what makes construction a guarantee rather than a side effect of whichever other type happens to
+/// depend on it today. This marker is the constraint that keeps a descriptor from naming anything
+/// else.
 /// </remarks>
 public interface IObservableMetrics
 {
