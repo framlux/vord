@@ -25,6 +25,7 @@ public sealed class AlertDeliveryService : IAlertDeliveryService
     private readonly IBackgroundJobClient _backgroundJobClient;
     private readonly Dictionary<IntegrationProvider, IIntegrationPayloadFormatter> _formatters;
     private readonly EmailMetrics _emailMetrics;
+    private readonly IntegrationMetrics _integrationMetrics;
     private readonly ILogger<AlertDeliveryService> _logger;
 
     /// <summary>
@@ -35,6 +36,7 @@ public sealed class AlertDeliveryService : IAlertDeliveryService
     /// <param name="backgroundJobClient">Hangfire background job client for enqueue.</param>
     /// <param name="formatters">Payload formatters for each integration provider.</param>
     /// <param name="emailMetrics">Instruments counting alert email delivery.</param>
+    /// <param name="integrationMetrics">Instruments counting integration webhook delivery.</param>
     /// <param name="logger">The logger.</param>
     public AlertDeliveryService(
         IServiceScopeFactory scopeFactory,
@@ -42,6 +44,7 @@ public sealed class AlertDeliveryService : IAlertDeliveryService
         IBackgroundJobClient backgroundJobClient,
         IEnumerable<IIntegrationPayloadFormatter> formatters,
         EmailMetrics emailMetrics,
+        IntegrationMetrics integrationMetrics,
         ILogger<AlertDeliveryService> logger)
     {
         ArgumentNullException.ThrowIfNull(scopeFactory);
@@ -49,6 +52,7 @@ public sealed class AlertDeliveryService : IAlertDeliveryService
         ArgumentNullException.ThrowIfNull(backgroundJobClient);
         ArgumentNullException.ThrowIfNull(formatters);
         ArgumentNullException.ThrowIfNull(emailMetrics);
+        ArgumentNullException.ThrowIfNull(integrationMetrics);
         ArgumentNullException.ThrowIfNull(logger);
 
         _scopeFactory = scopeFactory;
@@ -56,6 +60,7 @@ public sealed class AlertDeliveryService : IAlertDeliveryService
         _backgroundJobClient = backgroundJobClient;
         _formatters = formatters.ToDictionary(f => f.Provider);
         _emailMetrics = emailMetrics;
+        _integrationMetrics = integrationMetrics;
         _logger = logger;
     }
 
@@ -205,6 +210,11 @@ public sealed class AlertDeliveryService : IAlertDeliveryService
                 _logger.LogWarning("No formatter registered for provider {Provider} on integration {IntegrationId}",
                     integration.Provider, integration.Id);
 
+                // Nothing is ever sent for this endpoint, and the loop moves on silently. Without
+                // this the customer simply stops receiving alerts with no signal anywhere.
+                _integrationMetrics.RecordDelivery(
+                    IntegrationDeliveryOutcome.Unformattable, integration.Provider, rule.TenantId);
+
                 continue;
             }
 
@@ -231,6 +241,8 @@ public sealed class AlertDeliveryService : IAlertDeliveryService
                 if (response.IsSuccessStatusCode)
                 {
                     await attemptRepo.MarkAttemptSucceededAsync(alertEvent.Id, integration.Id, DateTimeOffset.UtcNow, ct);
+                    _integrationMetrics.RecordDelivery(
+                        IntegrationDeliveryOutcome.Delivered, integration.Provider, rule.TenantId);
                 }
                 else if ((int)response.StatusCode >= 500)
                 {
@@ -239,6 +251,8 @@ public sealed class AlertDeliveryService : IAlertDeliveryService
                     _logger.LogWarning("Integration {IntegrationId} ({Provider}) delivery failed with 5xx {StatusCode}; will retry",
                         integration.Id, integration.Provider, response.StatusCode);
                     transientFailures.Add($"integration {integration.Id} returned {(int)response.StatusCode}");
+                    _integrationMetrics.RecordDelivery(
+                        IntegrationDeliveryOutcome.Transient, integration.Provider, rule.TenantId);
                 }
                 else
                 {
@@ -246,6 +260,8 @@ public sealed class AlertDeliveryService : IAlertDeliveryService
                     // retries skip this integration; the receiver rejected our request format/auth.
                     _logger.LogError("Integration {IntegrationId} ({Provider}) delivery permanently failed with {StatusCode}; suppressing retries",
                         integration.Id, integration.Provider, response.StatusCode);
+                    _integrationMetrics.RecordDelivery(
+                        IntegrationDeliveryOutcome.Rejected, integration.Provider, rule.TenantId);
                 }
             }
             catch (Exception ex) when (ex is HttpRequestException || ex is TaskCanceledException)
@@ -255,6 +271,8 @@ public sealed class AlertDeliveryService : IAlertDeliveryService
                 _logger.LogWarning(ex, "Integration {IntegrationId} ({Provider}) transport failure for event {EventId}; will retry",
                     integration.Id, integration.Provider, alertEvent.Id);
                 transientFailures.Add($"integration {integration.Id} transport error: {ex.Message}");
+                _integrationMetrics.RecordDelivery(
+                    IntegrationDeliveryOutcome.Transient, integration.Provider, rule.TenantId);
             }
             catch (Exception ex)
             {
@@ -263,6 +281,8 @@ public sealed class AlertDeliveryService : IAlertDeliveryService
                 // this pass.
                 _logger.LogError(ex, "Failed to deliver integration {IntegrationId} ({Provider}) for alert event {EventId}; suppressing retries",
                     integration.Id, integration.Provider, alertEvent.Id);
+                _integrationMetrics.RecordDelivery(
+                    IntegrationDeliveryOutcome.Error, integration.Provider, rule.TenantId);
             }
             finally
             {

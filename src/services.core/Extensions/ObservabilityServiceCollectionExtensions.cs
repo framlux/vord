@@ -66,6 +66,9 @@ public static class ObservabilityServiceCollectionExtensions
         services.AddSingleton<EmailMetrics>();
         services.AddSingleton<IInitialisableMetrics>(provider => provider.GetRequiredService<EmailMetrics>());
 
+        services.AddSingleton<IntegrationMetrics>();
+        services.AddSingleton<IInitialisableMetrics>(provider => provider.GetRequiredService<IntegrationMetrics>());
+
         services.AddHostedService<MetricSeriesInitialiser>();
 
         if (string.IsNullOrWhiteSpace(endpoint) == true)

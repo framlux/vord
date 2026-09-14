@@ -49,4 +49,13 @@ public static class TestMetricsFactory
     {
         return new EmailMetrics(CreateMeterFactory());
     }
+
+    /// <summary>
+    /// Creates integration delivery instruments on a fresh meter factory.
+    /// </summary>
+    /// <returns>Integration metrics ready to record into.</returns>
+    public static IntegrationMetrics CreateIntegrationMetrics()
+    {
+        return new IntegrationMetrics(CreateMeterFactory());
+    }
 }

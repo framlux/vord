@@ -34,6 +34,7 @@ public sealed class AlertDeliveryServiceTests
         IBackgroundJobClient? backgroundJobClient = null,
         IIntegrationPayloadFormatter[]? formatters = null,
         EmailMetrics? emailMetrics = null,
+        IntegrationMetrics? integrationMetrics = null,
         ILogger<AlertDeliveryService>? logger = null)
     {
         return new AlertDeliveryService(
@@ -42,6 +43,7 @@ public sealed class AlertDeliveryServiceTests
             backgroundJobClient ?? Substitute.For<IBackgroundJobClient>(),
             formatters ?? [CreateCustomFormatter()],
             emailMetrics ?? TestMetricsFactory.CreateEmailMetrics(),
+            integrationMetrics ?? TestMetricsFactory.CreateIntegrationMetrics(),
             logger ?? new NullLogger<AlertDeliveryService>());
     }
 
