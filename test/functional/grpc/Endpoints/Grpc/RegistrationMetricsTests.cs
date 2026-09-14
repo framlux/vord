@@ -74,11 +74,12 @@ public sealed class RegistrationMetricsTests
 
         // The gRPC layer flattens every service-layer failure into one InvalidArgument, which is
         // precisely why the instrument lives in the service and not here.
-        RpcException exception = await Assert.ThrowsAsync<RpcException>(async () =>
+        RpcException? exception = await Assert.ThrowsAsync<RpcException>(async () =>
             await client.RegisterSystemAsync(
                 BuildRequest("no-such-token-at-all", "sn-metrics-bad", "sys-metrics-bad")));
 
-        await Assert.That(exception.StatusCode).IsEqualTo(StatusCode.InvalidArgument);
+        await Assert.That(exception).IsNotNull();
+        await Assert.That(exception!.StatusCode).IsEqualTo(StatusCode.InvalidArgument);
 
         IReadOnlyList<CollectedMeasurement<long>> measurements = attempts.GetMeasurementSnapshot();
         await Assert.That(measurements.Count).IsEqualTo(1);
@@ -111,11 +112,12 @@ public sealed class RegistrationMetricsTests
         using GrpcChannel channel = CreateChannel(factory);
         Registration.RegistrationClient client = new(channel);
 
-        RpcException exception = await Assert.ThrowsAsync<RpcException>(async () =>
+        RpcException? exception = await Assert.ThrowsAsync<RpcException>(async () =>
             await client.RegisterSystemAsync(
                 BuildRequest("metrics-limit-token", "sn-metrics-limit", "sys-metrics-limit")));
 
-        await Assert.That(exception.StatusCode).IsEqualTo(StatusCode.InvalidArgument);
+        await Assert.That(exception).IsNotNull();
+        await Assert.That(exception!.StatusCode).IsEqualTo(StatusCode.InvalidArgument);
 
         IReadOnlyList<CollectedMeasurement<long>> measurements = attempts.GetMeasurementSnapshot();
         await Assert.That(measurements.Count).IsEqualTo(1);

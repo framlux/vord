@@ -3,11 +3,15 @@
 // See LICENSE for details.
 
 using Framlux.FleetManagement.Services.Core.Billing;
+using Framlux.FleetManagement.Services.Core.Observability;
+using Framlux.FleetManagement.Test.Infrastructure;
 using Framlux.Vord.BillingGrpc;
 using Grpc.Core;
+using Microsoft.Extensions.Diagnostics.Metrics.Testing;
 using Microsoft.Extensions.Logging;
 using NSubstitute;
 using NSubstitute.ExceptionExtensions;
+using System.Diagnostics.Metrics;
 
 namespace Framlux.FleetManagement.Test.Services;
 
@@ -40,9 +44,25 @@ public sealed class BillingApiClientTests
     {
         BillingManagement.BillingManagementClient grpcClient = Substitute.For<BillingManagement.BillingManagementClient>();
         ILogger<BillingApiClient> logger = Substitute.For<ILogger<BillingApiClient>>();
-        BillingApiClient client = new(grpcClient, logger);
+        BillingApiClient client = new(grpcClient, TestMetricsFactory.CreateBillingMetrics(), logger);
 
         return (client, grpcClient, logger);
+    }
+
+    /// <summary>
+    /// Builds the client over instruments the caller can observe, for the tests that assert on the
+    /// recorded outcome rather than the returned value.
+    /// </summary>
+    private static (BillingApiClient Client, BillingManagement.BillingManagementClient GrpcClient, IMeterFactory Factory) CreateInstrumentedSut()
+    {
+        BillingManagement.BillingManagementClient grpcClient = Substitute.For<BillingManagement.BillingManagementClient>();
+        IMeterFactory factory = TestMetricsFactory.CreateMeterFactory();
+        BillingApiClient client = new(
+            grpcClient,
+            new BillingMetrics(factory),
+            Substitute.For<ILogger<BillingApiClient>>());
+
+        return (client, grpcClient, factory);
     }
 
     // --- UpdateQuantityAsync ---
@@ -865,5 +885,48 @@ public sealed class BillingApiClientTests
             Arg.Any<object>(),
             Arg.Any<Exception>(),
             Arg.Any<Func<object, Exception?, string>>());
+    }
+
+    // --- Instrumentation ---
+
+    [Test]
+    public async Task UpdateQuantityAsync_WhenBillingApiDeclines_RecordsFailedRatherThanOk()
+    {
+        // The RPC answers with a failure flag instead of throwing, so gRPC transport
+        // instrumentation records this call as successful. Without this branch the whole internal
+        // billing surface would look healthy while every operation was being refused.
+        (BillingApiClient client, BillingManagement.BillingManagementClient grpc, IMeterFactory factory) = CreateInstrumentedSut();
+        grpc.UpdateSubscriptionQuantityAsync(
+                Arg.Any<UpdateQuantityRequest>(), Arg.Any<Metadata>(), Arg.Any<DateTime?>(), Arg.Any<CancellationToken>())
+            .Returns(CreateAsyncCall(new UpdateQuantityResponse { Success = false, Message = "no" }));
+
+        using MetricCollector<long> operations = new(factory, VordMeter.Name, "vord.billing.operations");
+
+        await client.UpdateQuantityAsync("ext-tenant", 5, CancellationToken.None);
+
+        IReadOnlyList<CollectedMeasurement<long>> measurements = operations.GetMeasurementSnapshot();
+        await Assert.That(measurements.Count).IsEqualTo(1);
+        await Assert.That(measurements[0].Tags["operation"]).IsEqualTo("update_quantity");
+        await Assert.That(measurements[0].Tags["outcome"]).IsEqualTo("failed");
+    }
+
+    [Test]
+    public async Task UpdateQuantityAsync_WhenTheCallDoesNotComplete_RecordsErrorNotFailed()
+    {
+        // Not reaching billing-api at all is a different incident from billing-api saying no, and
+        // only one of them implicates the other service's logic.
+        (BillingApiClient client, BillingManagement.BillingManagementClient grpc, IMeterFactory factory) = CreateInstrumentedSut();
+        grpc.UpdateSubscriptionQuantityAsync(
+                Arg.Any<UpdateQuantityRequest>(), Arg.Any<Metadata>(), Arg.Any<DateTime?>(), Arg.Any<CancellationToken>())
+            .Returns(CreateFaultedCall<UpdateQuantityResponse>(
+                new RpcException(new Status(StatusCode.Unavailable, "billing-api unreachable"))));
+
+        using MetricCollector<long> operations = new(factory, VordMeter.Name, "vord.billing.operations");
+
+        await client.UpdateQuantityAsync("ext-tenant", 5, CancellationToken.None);
+
+        IReadOnlyList<CollectedMeasurement<long>> measurements = operations.GetMeasurementSnapshot();
+        await Assert.That(measurements.Count).IsEqualTo(1);
+        await Assert.That(measurements[0].Tags["outcome"]).IsEqualTo("error");
     }
 }

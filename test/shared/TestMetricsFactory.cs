@@ -67,4 +67,22 @@ public static class TestMetricsFactory
     {
         return new RegistrationMetrics(CreateMeterFactory());
     }
+
+    /// <summary>
+    /// Creates billing control-plane instruments on a fresh meter factory.
+    /// </summary>
+    /// <returns>Billing metrics ready to record into.</returns>
+    public static BillingMetrics CreateBillingMetrics()
+    {
+        return new BillingMetrics(CreateMeterFactory());
+    }
+
+    /// <summary>
+    /// Creates alert-pipeline instruments on a fresh meter factory.
+    /// </summary>
+    /// <returns>Alert pipeline metrics ready to record into.</returns>
+    public static AlertPipelineMetrics CreateAlertPipelineMetrics()
+    {
+        return new AlertPipelineMetrics(CreateMeterFactory());
+    }
 }

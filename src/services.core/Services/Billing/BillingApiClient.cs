@@ -2,6 +2,7 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
+using Framlux.FleetManagement.Services.Core.Observability;
 using Framlux.Vord.BillingGrpc;
 
 namespace Framlux.FleetManagement.Services.Core.Billing;
@@ -15,6 +16,7 @@ public sealed class BillingApiClient : IBillingApiClient
     private static readonly TimeSpan GrpcDeadline = TimeSpan.FromSeconds(10);
 
     private readonly BillingManagement.BillingManagementClient _grpcClient;
+    private readonly BillingMetrics _billingMetrics;
     private readonly ILogger<BillingApiClient> _logger;
 
     /// <summary>
@@ -22,12 +24,15 @@ public sealed class BillingApiClient : IBillingApiClient
     /// </summary>
     public BillingApiClient(
         BillingManagement.BillingManagementClient grpcClient,
+        BillingMetrics billingMetrics,
         ILogger<BillingApiClient> logger)
     {
         ArgumentNullException.ThrowIfNull(grpcClient);
+        ArgumentNullException.ThrowIfNull(billingMetrics);
         ArgumentNullException.ThrowIfNull(logger);
 
         _grpcClient = grpcClient;
+        _billingMetrics = billingMetrics;
         _logger = logger;
     }
 
@@ -50,6 +55,10 @@ public sealed class BillingApiClient : IBillingApiClient
                     tenantExternalId, response.Message);
             }
 
+            _billingMetrics.RecordOperation(
+                BillingOperation.UpdateQuantity,
+                response.Success ? BillingOperationOutcome.Ok : BillingOperationOutcome.Failed);
+
             return response.Success;
         }
         catch (Exception ex)
@@ -57,6 +66,8 @@ public sealed class BillingApiClient : IBillingApiClient
             _logger.LogError(ex,
                 "Error updating quantity for tenant {TenantExternalId}",
                 tenantExternalId);
+
+            _billingMetrics.RecordOperation(BillingOperation.UpdateQuantity, BillingOperationOutcome.Error);
 
             return false;
         }
@@ -83,6 +94,10 @@ public sealed class BillingApiClient : IBillingApiClient
                     tenantExternalId, response.Message);
             }
 
+            _billingMetrics.RecordOperation(
+                BillingOperation.CancelSubscription,
+                response.Success ? BillingOperationOutcome.Ok : BillingOperationOutcome.Failed);
+
             return response.Success;
         }
         catch (Exception ex)
@@ -90,6 +105,8 @@ public sealed class BillingApiClient : IBillingApiClient
             _logger.LogError(ex,
                 "Error canceling subscription for tenant {TenantExternalId}",
                 tenantExternalId);
+
+            _billingMetrics.RecordOperation(BillingOperation.CancelSubscription, BillingOperationOutcome.Error);
 
             return false;
         }
@@ -112,11 +129,17 @@ public sealed class BillingApiClient : IBillingApiClient
                     tenantExternalId, response.Message);
             }
 
+            _billingMetrics.RecordOperation(
+                BillingOperation.CancelSubscriptionImmediate,
+                response.Success ? BillingOperationOutcome.Ok : BillingOperationOutcome.Failed);
+
             return response.Success;
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error immediately canceling subscription for tenant {TenantExternalId}", tenantExternalId);
+
+            _billingMetrics.RecordOperation(BillingOperation.CancelSubscriptionImmediate, BillingOperationOutcome.Error);
 
             return false;
         }
@@ -139,11 +162,17 @@ public sealed class BillingApiClient : IBillingApiClient
                     tenantExternalId, response.Message);
             }
 
+            _billingMetrics.RecordOperation(
+                BillingOperation.DeleteCustomer,
+                response.Success ? BillingOperationOutcome.Ok : BillingOperationOutcome.Failed);
+
             return response.Success;
         }
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error deleting billing customer for tenant {TenantExternalId}", tenantExternalId);
+
+            _billingMetrics.RecordOperation(BillingOperation.DeleteCustomer, BillingOperationOutcome.Error);
 
             return false;
         }
@@ -167,6 +196,8 @@ public sealed class BillingApiClient : IBillingApiClient
                 ? response.CurrentPeriodEnd.ToDateTimeOffset()
                 : null;
 
+            _billingMetrics.RecordOperation(BillingOperation.GetSubscriptionStatus, BillingOperationOutcome.Ok);
+
             return new StripeSubscriptionStatus(
                 response.CancelAtPeriodEnd,
                 response.StripeStatus,
@@ -180,6 +211,8 @@ public sealed class BillingApiClient : IBillingApiClient
             _logger.LogError(ex,
                 "Error getting subscription status for tenant {TenantExternalId}",
                 tenantExternalId);
+
+            _billingMetrics.RecordOperation(BillingOperation.GetSubscriptionStatus, BillingOperationOutcome.Error);
 
             return new StripeSubscriptionStatus(false, "none", 0, null, BillingTier.Unspecified, BillingInterval.None);
         }
@@ -206,6 +239,10 @@ public sealed class BillingApiClient : IBillingApiClient
                     tenantExternalId, response.Message);
             }
 
+            _billingMetrics.RecordOperation(
+                BillingOperation.SwapSubscriptionPrice,
+                response.Success ? BillingOperationOutcome.Ok : BillingOperationOutcome.Failed);
+
             return response.Success;
         }
         catch (Exception ex)
@@ -213,6 +250,8 @@ public sealed class BillingApiClient : IBillingApiClient
             _logger.LogError(ex,
                 "Error swapping subscription price for tenant {TenantExternalId}",
                 tenantExternalId);
+
+            _billingMetrics.RecordOperation(BillingOperation.SwapSubscriptionPrice, BillingOperationOutcome.Error);
 
             return false;
         }
@@ -238,6 +277,10 @@ public sealed class BillingApiClient : IBillingApiClient
                     tenantExternalId, response.Message);
             }
 
+            _billingMetrics.RecordOperation(
+                BillingOperation.ResumeSubscription,
+                response.Success ? BillingOperationOutcome.Ok : BillingOperationOutcome.Failed);
+
             return response.Success;
         }
         catch (Exception ex)
@@ -245,6 +288,8 @@ public sealed class BillingApiClient : IBillingApiClient
             _logger.LogError(ex,
                 "Error resuming subscription for tenant {TenantExternalId}",
                 tenantExternalId);
+
+            _billingMetrics.RecordOperation(BillingOperation.ResumeSubscription, BillingOperationOutcome.Error);
 
             return false;
         }
@@ -262,6 +307,9 @@ public sealed class BillingApiClient : IBillingApiClient
 
             if (response.HasInvoice == false)
             {
+                // A normal answer, not a failure: there is simply no invoice to preview.
+                _billingMetrics.RecordOperation(BillingOperation.GetUpcomingInvoice, BillingOperationOutcome.Ok);
+
                 return null;
             }
 
@@ -278,6 +326,8 @@ public sealed class BillingApiClient : IBillingApiClient
                 .Where(l => l.AmountCents < 0)
                 .Sum(l => l.AmountCents));
 
+            _billingMetrics.RecordOperation(BillingOperation.GetUpcomingInvoice, BillingOperationOutcome.Ok);
+
             return new UpcomingInvoiceResult(
                 response.AmountDueCents,
                 response.Currency,
@@ -291,6 +341,8 @@ public sealed class BillingApiClient : IBillingApiClient
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error getting upcoming invoice for tenant {TenantExternalId}", tenantExternalId);
+            _billingMetrics.RecordOperation(BillingOperation.GetUpcomingInvoice, BillingOperationOutcome.Error);
+
             return null;
         }
     }
@@ -304,6 +356,8 @@ public sealed class BillingApiClient : IBillingApiClient
                 new ListInvoicesRequest { TenantExternalId = tenantExternalId, Limit = limit },
                 deadline: DateTime.UtcNow.Add(GrpcDeadline),
                 cancellationToken: ct);
+
+            _billingMetrics.RecordOperation(BillingOperation.ListInvoices, BillingOperationOutcome.Ok);
 
             return response.Invoices.Select(inv => new InvoiceResult(
                 inv.Id,
@@ -319,6 +373,8 @@ public sealed class BillingApiClient : IBillingApiClient
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error listing invoices for tenant {TenantExternalId}", tenantExternalId);
+            _billingMetrics.RecordOperation(BillingOperation.ListInvoices, BillingOperationOutcome.Error);
+
             return [];
         }
     }
@@ -333,6 +389,8 @@ public sealed class BillingApiClient : IBillingApiClient
                 deadline: DateTime.UtcNow.Add(GrpcDeadline),
                 cancellationToken: ct);
 
+            _billingMetrics.RecordOperation(BillingOperation.GetPublicCatalog, BillingOperationOutcome.Ok);
+
             return response.Items.Select(i => new CatalogItemResult(
                 i.Tier,
                 i.Interval,
@@ -342,6 +400,8 @@ public sealed class BillingApiClient : IBillingApiClient
         catch (Exception ex)
         {
             _logger.LogError(ex, "Error getting public billing catalog");
+            _billingMetrics.RecordOperation(BillingOperation.GetPublicCatalog, BillingOperationOutcome.Error);
+
             return [];
         }
     }
