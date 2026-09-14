@@ -69,6 +69,9 @@ public static class ObservabilityServiceCollectionExtensions
         services.AddSingleton<IntegrationMetrics>();
         services.AddSingleton<IInitialisableMetrics>(provider => provider.GetRequiredService<IntegrationMetrics>());
 
+        services.AddSingleton<RegistrationMetrics>();
+        services.AddSingleton<IInitialisableMetrics>(provider => provider.GetRequiredService<RegistrationMetrics>());
+
         services.AddHostedService<MetricSeriesInitialiser>();
 
         if (string.IsNullOrWhiteSpace(endpoint) == true)

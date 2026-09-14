@@ -9,6 +9,7 @@ using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Grpc.AgentRegistration;
 using Framlux.FleetManagement.Services.Core.Billing;
+using Framlux.FleetManagement.Services.Core.Observability;
 using Framlux.FleetManagement.Services.Core.Security;
 using Microsoft.AspNetCore.DataProtection;
 using StackExchange.Redis;
@@ -33,6 +34,7 @@ public sealed class MachineService : IMachineService
     private readonly IDataProtector _pendingApiKeyProtector;
     private readonly TimeProvider _timeProvider;
     private readonly IApiKeyCacheInvalidator _apiKeyCacheInvalidator;
+    private readonly RegistrationMetrics _registrationMetrics;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="MachineService"/> class.
@@ -43,6 +45,7 @@ public sealed class MachineService : IMachineService
     /// <param name="dataProtectionProvider">Data protection provider for encrypting pending API keys at rest in Redis.</param>
     /// <param name="timeProvider">Time provider used for token expiry and consumption time checks.</param>
     /// <param name="apiKeyCacheInvalidator">Invalidates the auth cache for a replaced key on reissue.</param>
+    /// <param name="registrationMetrics">Instruments counting machine registration attempts.</param>
     /// <exception cref="ArgumentNullException">Thrown when a required parameter is null.</exception>
     public MachineService(
         IServiceScopeFactory scopeFactory,
@@ -50,7 +53,8 @@ public sealed class MachineService : IMachineService
         IConnectionMultiplexer redis,
         IDataProtectionProvider dataProtectionProvider,
         TimeProvider timeProvider,
-        IApiKeyCacheInvalidator apiKeyCacheInvalidator)
+        IApiKeyCacheInvalidator apiKeyCacheInvalidator,
+        RegistrationMetrics registrationMetrics)
     {
         ArgumentNullException.ThrowIfNull(scopeFactory);
         ArgumentNullException.ThrowIfNull(logger);
@@ -58,12 +62,14 @@ public sealed class MachineService : IMachineService
         ArgumentNullException.ThrowIfNull(dataProtectionProvider);
         ArgumentNullException.ThrowIfNull(timeProvider);
         ArgumentNullException.ThrowIfNull(apiKeyCacheInvalidator);
+        ArgumentNullException.ThrowIfNull(registrationMetrics);
         _serviceScopeFactory = scopeFactory;
         _logger = logger;
         _redis = redis;
         _pendingApiKeyProtector = dataProtectionProvider.CreateProtector(PendingApiKeyProtectorPurpose);
         _timeProvider = timeProvider;
         _apiKeyCacheInvalidator = apiKeyCacheInvalidator;
+        _registrationMetrics = registrationMetrics;
     }
 
     /// <inheritdoc/>
@@ -244,143 +250,181 @@ public sealed class MachineService : IMachineService
     /// <inheritdoc/>
     public async Task<(long? machineId, string? apiKey, string errorMessage)> RegisterSystemAsync(RegisterSystemRequest request, CancellationToken cancellationToken)
     {
-        if (string.IsNullOrEmpty(request.RegistrationToken))
+        int? resolvedTenantId = null;
+
+        try
         {
-            return (null, null, "Registration token is required");
-        }
-
-        // Validate the registration token
-        string tokenHash = ComputeSha256Hash(request.RegistrationToken);
-
-        using IServiceScope scope = _serviceScopeFactory.CreateScope();
-        IRegistrationTokenRepository tokenRepo = scope.ServiceProvider.GetRequiredService<IRegistrationTokenRepository>();
-
-        RegistrationToken? token = await tokenRepo.GetTokenByHashAsync(tokenHash, cancellationToken);
-
-        if (token is null)
-        {
-            _logger.LogWarning("Registration attempt with invalid token hash");
-
-            return (null, null, "Invalid registration token");
-        }
-
-        if (token.IsRevoked)
-        {
-            _logger.LogWarning("Registration attempt with revoked token {TokenId}", token.Id);
-
-            return (null, null, "Registration token has been revoked");
-        }
-
-        DateTimeOffset now = _timeProvider.GetUtcNow();
-
-        if (IsTokenExpired(token, now))
-        {
-            _logger.LogWarning("Registration attempt with expired token {TokenId}", token.Id);
-
-            return (null, null, "Registration token has expired");
-        }
-
-        // Single-use tokens: a token that has already registered its one machine is permanently
-        // consumed. The atomic consume in CreateMachineWithKeyAsync is the race-safe guard; this
-        // pre-check rejects the common already-used case early with a clear message.
-        if (token.ConsumedAt is not null)
-        {
-            _logger.LogWarning("Registration attempt with already-consumed token {TokenId}", token.Id);
-
-            return (null, null, "Registration token has already been used");
-        }
-
-        IMachineRepository machineRepository = scope.ServiceProvider.GetRequiredService<IMachineRepository>();
-
-        // Normalize case-sensitive fields to lowercase for consistent index usage.
-        string normalizedSerial = request.SerialNumber.ToLowerInvariant();
-        string normalizedSystemId = request.SystemId.ToLowerInvariant();
-
-        // Check if we have a machine already with these IDs
-        bool machineExists = await machineRepository.DoesMachineExistAsync(normalizedSerial, normalizedSystemId, request.AssetTag ?? string.Empty, token.TenantId, cancellationToken);
-        if (machineExists)
-        {
-            return (null, null, "Machine already exists");
-        }
-
-        // Check subscription machine limit from tier defaults + overrides
-        ISubscriptionService subscriptionService = scope.ServiceProvider.GetRequiredService<ISubscriptionService>();
-        EffectiveLimits effectiveLimits = await subscriptionService.GetEffectiveLimitsForTenantAsync(token.TenantId, cancellationToken);
-        int? machineLimit = effectiveLimits.MachineLimit;
-
-        _logger.LogInformation("Creating Machine for {SerialNumber} with token {TokenId}", request.SerialNumber, token.Id);
-        Machine machine = new()
-        {
-            ApiKeyHash = string.Empty, // Will be set by CreateMachineWithKeyAsync
-            Name = request.Hostname,
-            SerialNumber = normalizedSerial,
-            SystemId = normalizedSystemId,
-            AssetTagNumber = request.AssetTag,
-            MachineType = ConvertRpcMachineTypeToDatabaseMachineType(request.MachineType),
-            OperatingSystem = ConvertRpcOsTypeToDatabaseOsType(request.Os),
-            RegistrationTokenId = token.Id,
-            RegisteredOn = now,
-            IsDeleted = false,
-            TenantId = token.TenantId,
-        };
-
-        (Machine? createdMachine, string? plaintextApiKey) = await machineRepository.CreateMachineWithKeyAsync(machine, token.Id, now, machineLimit, cancellationToken);
-
-        if (createdMachine is null)
-        {
-            // CreateMachineWithKeyAsync rejected before commit for one of two reasons: the token was
-            // consumed/revoked/expired by a concurrent registration since the pre-check, or the
-            // tenant is at its machine limit. Reload the token to disambiguate the message.
-            RegistrationToken? reloadedToken = await tokenRepo.GetTokenByHashAsync(tokenHash, cancellationToken);
-
-            if (reloadedToken?.ConsumedAt is not null)
+            if (string.IsNullOrEmpty(request.RegistrationToken))
             {
-                _logger.LogWarning("Registration token {TokenId} was consumed by a concurrent registration", token.Id);
+                _registrationMetrics.RecordAttempt(RegistrationOutcome.MissingToken, tenantId: null);
+
+                return (null, null, "Registration token is required");
+            }
+
+            // Validate the registration token
+            string tokenHash = ComputeSha256Hash(request.RegistrationToken);
+
+            using IServiceScope scope = _serviceScopeFactory.CreateScope();
+            IRegistrationTokenRepository tokenRepo = scope.ServiceProvider.GetRequiredService<IRegistrationTokenRepository>();
+
+            RegistrationToken? token = await tokenRepo.GetTokenByHashAsync(tokenHash, cancellationToken);
+
+            if (token is null)
+            {
+                _logger.LogWarning("Registration attempt with invalid token hash");
+
+                // No tenant has been identified at all: the token is how one would be.
+                _registrationMetrics.RecordAttempt(RegistrationOutcome.InvalidToken, tenantId: null);
+
+                return (null, null, "Invalid registration token");
+            }
+
+            resolvedTenantId = token.TenantId;
+
+            if (token.IsRevoked)
+            {
+                _logger.LogWarning("Registration attempt with revoked token {TokenId}", token.Id);
+
+                _registrationMetrics.RecordAttempt(RegistrationOutcome.RevokedToken, token.TenantId);
+
+                return (null, null, "Registration token has been revoked");
+            }
+
+            DateTimeOffset now = _timeProvider.GetUtcNow();
+
+            if (IsTokenExpired(token, now))
+            {
+                _logger.LogWarning("Registration attempt with expired token {TokenId}", token.Id);
+
+                _registrationMetrics.RecordAttempt(RegistrationOutcome.ExpiredToken, token.TenantId);
+
+                return (null, null, "Registration token has expired");
+            }
+
+            // Single-use tokens: a token that has already registered its one machine is permanently
+            // consumed. The atomic consume in CreateMachineWithKeyAsync is the race-safe guard; this
+            // pre-check rejects the common already-used case early with a clear message.
+            if (token.ConsumedAt is not null)
+            {
+                _logger.LogWarning("Registration attempt with already-consumed token {TokenId}", token.Id);
+
+                _registrationMetrics.RecordAttempt(RegistrationOutcome.ConsumedToken, token.TenantId);
 
                 return (null, null, "Registration token has already been used");
             }
 
-            _logger.LogWarning("Machine limit exceeded for tenant {TenantId}", token.TenantId);
+            IMachineRepository machineRepository = scope.ServiceProvider.GetRequiredService<IMachineRepository>();
 
-            return (null, null, "Machine limit exceeded");
+            // Normalize case-sensitive fields to lowercase for consistent index usage.
+            string normalizedSerial = request.SerialNumber.ToLowerInvariant();
+            string normalizedSystemId = request.SystemId.ToLowerInvariant();
+
+            // Check if we have a machine already with these IDs
+            bool machineExists = await machineRepository.DoesMachineExistAsync(normalizedSerial, normalizedSystemId, request.AssetTag ?? string.Empty, token.TenantId, cancellationToken);
+            if (machineExists)
+            {
+                _registrationMetrics.RecordAttempt(RegistrationOutcome.DuplicateMachine, token.TenantId);
+
+                return (null, null, "Machine already exists");
+            }
+
+            // Check subscription machine limit from tier defaults + overrides
+            ISubscriptionService subscriptionService = scope.ServiceProvider.GetRequiredService<ISubscriptionService>();
+            EffectiveLimits effectiveLimits = await subscriptionService.GetEffectiveLimitsForTenantAsync(token.TenantId, cancellationToken);
+            int? machineLimit = effectiveLimits.MachineLimit;
+
+            _logger.LogInformation("Creating Machine for {SerialNumber} with token {TokenId}", request.SerialNumber, token.Id);
+            Machine machine = new()
+            {
+                ApiKeyHash = string.Empty, // Will be set by CreateMachineWithKeyAsync
+                Name = request.Hostname,
+                SerialNumber = normalizedSerial,
+                SystemId = normalizedSystemId,
+                AssetTagNumber = request.AssetTag,
+                MachineType = ConvertRpcMachineTypeToDatabaseMachineType(request.MachineType),
+                OperatingSystem = ConvertRpcOsTypeToDatabaseOsType(request.Os),
+                RegistrationTokenId = token.Id,
+                RegisteredOn = now,
+                IsDeleted = false,
+                TenantId = token.TenantId,
+            };
+
+            (Machine? createdMachine, string? plaintextApiKey) = await machineRepository.CreateMachineWithKeyAsync(machine, token.Id, now, machineLimit, cancellationToken);
+
+            if (createdMachine is null)
+            {
+                // CreateMachineWithKeyAsync rejected before commit for one of two reasons: the token was
+                // consumed/revoked/expired by a concurrent registration since the pre-check, or the
+                // tenant is at its machine limit. Reload the token to disambiguate the message.
+                RegistrationToken? reloadedToken = await tokenRepo.GetTokenByHashAsync(tokenHash, cancellationToken);
+
+                if (reloadedToken?.ConsumedAt is not null)
+                {
+                    _logger.LogWarning("Registration token {TokenId} was consumed by a concurrent registration", token.Id);
+
+                    _registrationMetrics.RecordAttempt(RegistrationOutcome.ConsumedToken, token.TenantId);
+
+                    return (null, null, "Registration token has already been used");
+                }
+
+                _logger.LogWarning("Machine limit exceeded for tenant {TenantId}", token.TenantId);
+
+                // A paying customer at their tier cap who cannot onboard. Commercially the most
+                // interesting way registration fails.
+                _registrationMetrics.RecordAttempt(RegistrationOutcome.MachineLimitExceeded, token.TenantId);
+
+                return (null, null, "Machine limit exceeded");
+            }
+
+            // Pre-create summary and detail rows so all subsequent telemetry writes are pure UPDATEs.
+            IMachineStateRepository machineStateRepo = scope.ServiceProvider.GetRequiredService<IMachineStateRepository>();
+            await machineStateRepo.InsertSummaryAsync(new MachineStateSummary
+            {
+                MachineId = createdMachine.Id,
+                TenantId = token.TenantId,
+                Name = machine.Name,
+                OperatingSystem = (byte)machine.OperatingSystem,
+                MachineType = (byte)machine.MachineType,
+                // Offline until telemetry arrives and the sweep says otherwise. The fleet query already
+                // treats a missing summary row as offline, so seeding anything else would make this
+                // pre-created row disagree with that default for the identical situation.
+                HealthStatus = 3,
+            }, cancellationToken);
+
+            await machineStateRepo.InsertDetailAsync(new MachineStateDetail
+            {
+                MachineId = createdMachine.Id,
+            }, cancellationToken);
+
+            // Cache the encrypted key in Redis for recovery via GetRegistrationStatus.
+            // IDataProtector ensures Redis snapshots/MONITOR sessions cannot extract live API keys.
+            IDatabase redisDb = _redis.GetDatabase();
+            string cacheKey = $"pending_api_key:{createdMachine.Id}";
+            string protectedApiKey = _pendingApiKeyProtector.Protect(plaintextApiKey!);
+            await redisDb.StringSetAsync(cacheKey, protectedApiKey, ApiKeyCacheTtl);
+
+            _logger.LogInformation("Machine created with ID {MachineId} for {SerialNumber}", createdMachine.Id, request.SerialNumber);
+
+            // Reported after the machine row is committed, so the live count includes it. The sync
+            // service wraps itself in best-effort error handling and logs its own failures, so there is
+            // deliberately no try/catch here.
+            IMachineBillingSync billingSync = scope.ServiceProvider.GetRequiredService<IMachineBillingSync>();
+            await billingSync.ReportActiveMachineUsageAsync(token.TenantId, cancellationToken);
+
+            _registrationMetrics.RecordAttempt(RegistrationOutcome.Registered, token.TenantId);
+
+            return (createdMachine.Id, plaintextApiKey, string.Empty);
         }
-
-        // Pre-create summary and detail rows so all subsequent telemetry writes are pure UPDATEs.
-        IMachineStateRepository machineStateRepo = scope.ServiceProvider.GetRequiredService<IMachineStateRepository>();
-        await machineStateRepo.InsertSummaryAsync(new MachineStateSummary
+        catch (Exception)
         {
-            MachineId = createdMachine.Id,
-            TenantId = token.TenantId,
-            Name = machine.Name,
-            OperatingSystem = (byte)machine.OperatingSystem,
-            MachineType = (byte)machine.MachineType,
-            // Offline until telemetry arrives and the sweep says otherwise. The fleet query already
-            // treats a missing summary row as offline, so seeding anything else would make this
-            // pre-created row disagree with that default for the identical situation.
-            HealthStatus = 3,
-        }, cancellationToken);
+            // The machine row is created before the Redis key write and the billing sync, so a
+            // throw here can leave a registered machine behind. Recording it is what separates
+            // that from a registration that simply never happened — and the gRPC layer flattens
+            // every exception into one message, so nothing above can tell the difference.
+            _registrationMetrics.RecordAttempt(RegistrationOutcome.Error, resolvedTenantId);
 
-        await machineStateRepo.InsertDetailAsync(new MachineStateDetail
-        {
-            MachineId = createdMachine.Id,
-        }, cancellationToken);
-
-        // Cache the encrypted key in Redis for recovery via GetRegistrationStatus.
-        // IDataProtector ensures Redis snapshots/MONITOR sessions cannot extract live API keys.
-        IDatabase redisDb = _redis.GetDatabase();
-        string cacheKey = $"pending_api_key:{createdMachine.Id}";
-        string protectedApiKey = _pendingApiKeyProtector.Protect(plaintextApiKey!);
-        await redisDb.StringSetAsync(cacheKey, protectedApiKey, ApiKeyCacheTtl);
-
-        _logger.LogInformation("Machine created with ID {MachineId} for {SerialNumber}", createdMachine.Id, request.SerialNumber);
-
-        // Reported after the machine row is committed, so the live count includes it. The sync
-        // service wraps itself in best-effort error handling and logs its own failures, so there is
-        // deliberately no try/catch here.
-        IMachineBillingSync billingSync = scope.ServiceProvider.GetRequiredService<IMachineBillingSync>();
-        await billingSync.ReportActiveMachineUsageAsync(token.TenantId, cancellationToken);
-
-        return (createdMachine.Id, plaintextApiKey, string.Empty);
+            throw;
+        }
     }
 
     /// <summary>

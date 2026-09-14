@@ -58,4 +58,13 @@ public static class TestMetricsFactory
     {
         return new IntegrationMetrics(CreateMeterFactory());
     }
+
+    /// <summary>
+    /// Creates registration instruments on a fresh meter factory.
+    /// </summary>
+    /// <returns>Registration metrics ready to record into.</returns>
+    public static RegistrationMetrics CreateRegistrationMetrics()
+    {
+        return new RegistrationMetrics(CreateMeterFactory());
+    }
 }

@@ -10,6 +10,7 @@ using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Grpc.AgentRegistration;
 using Framlux.FleetManagement.Services.Core.Billing;
 using Framlux.FleetManagement.Services.Core.Machines;
+using Framlux.FleetManagement.Services.Core.Observability;
 using Framlux.FleetManagement.Services.Core.Security;
 using Framlux.FleetManagement.Test.Infrastructure;
 using LinqToDB;
@@ -108,7 +109,8 @@ public class MachineServiceTests
         IDataProtectionProvider? dataProtectionProvider = null,
         TimeProvider? timeProvider = null,
         IApiKeyCacheInvalidator? apiKeyCacheInvalidator = null,
-        ILogger<MachineService>? logger = null)
+        ILogger<MachineService>? logger = null,
+        RegistrationMetrics? registrationMetrics = null)
     {
         return new MachineService(
             scopeFactory,
@@ -116,7 +118,8 @@ public class MachineServiceTests
             redis ?? CreateDefaultRedis(),
             dataProtectionProvider ?? new EphemeralDataProtectionProvider(),
             timeProvider ?? new FakeTimeProvider(FixedNow),
-            apiKeyCacheInvalidator ?? Substitute.For<IApiKeyCacheInvalidator>());
+            apiKeyCacheInvalidator ?? Substitute.For<IApiKeyCacheInvalidator>(),
+            registrationMetrics ?? TestMetricsFactory.CreateRegistrationMetrics());
     }
 
     /// <summary>
@@ -1457,7 +1460,8 @@ public class MachineServiceTests
                 redis,
                 null!,
                 new FakeTimeProvider(FixedNow),
-                Substitute.For<IApiKeyCacheInvalidator>());
+                Substitute.For<IApiKeyCacheInvalidator>(),
+                TestMetricsFactory.CreateRegistrationMetrics());
 
             return Task.CompletedTask;
         });
