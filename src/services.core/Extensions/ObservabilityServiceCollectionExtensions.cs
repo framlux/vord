@@ -70,6 +70,12 @@ public static class ObservabilityServiceCollectionExtensions
             // the current wiring, and relying on it is how a gauge comes to emit nothing at all.
             services.AddSingleton<ProjectionMetrics>();
             services.AddSingleton<IObservableMetrics>(provider => provider.GetRequiredService<ProjectionMetrics>());
+
+            // Nothing injects the fleet gauge — it has no call sites at all — so without the marker
+            // registration below it would never be constructed, its instrument would never be
+            // created, and vord_fleet_machines would never exist while every test still passed.
+            services.AddSingleton<FleetMetrics>();
+            services.AddSingleton<IObservableMetrics>(provider => provider.GetRequiredService<FleetMetrics>());
         }
 
         // Registered in both processes because AddCoreServices registers AlertDeliveryService
