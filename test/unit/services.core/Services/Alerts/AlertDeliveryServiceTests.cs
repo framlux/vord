@@ -8,6 +8,7 @@ using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Services.Core.Alerts;
 using Framlux.FleetManagement.Services.Core.Notifications;
+using Framlux.FleetManagement.Services.Core.Observability;
 using Framlux.FleetManagement.Services.Core.Options;
 using Framlux.FleetManagement.Test.Infrastructure;
 using Hangfire;
@@ -32,6 +33,7 @@ public sealed class AlertDeliveryServiceTests
         IHttpClientFactory? httpFactory = null,
         IBackgroundJobClient? backgroundJobClient = null,
         IIntegrationPayloadFormatter[]? formatters = null,
+        EmailMetrics? emailMetrics = null,
         ILogger<AlertDeliveryService>? logger = null)
     {
         return new AlertDeliveryService(
@@ -39,6 +41,7 @@ public sealed class AlertDeliveryServiceTests
             httpFactory ?? Substitute.For<IHttpClientFactory>(),
             backgroundJobClient ?? Substitute.For<IBackgroundJobClient>(),
             formatters ?? [CreateCustomFormatter()],
+            emailMetrics ?? TestMetricsFactory.CreateEmailMetrics(),
             logger ?? new NullLogger<AlertDeliveryService>());
     }
 

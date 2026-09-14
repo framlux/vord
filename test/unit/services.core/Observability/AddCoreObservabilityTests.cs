@@ -159,8 +159,15 @@ public sealed class AddCoreObservabilityTests
         IngestMetrics metrics = provider.GetRequiredService<IngestMetrics>();
         IInitialisableMetrics[] initialisable = provider.GetServices<IInitialisableMetrics>().ToArray();
 
-        await Assert.That(initialisable.Length).IsEqualTo(1);
-        await Assert.That(ReferenceEquals(initialisable[0], metrics)).IsTrue();
+        // The ingest class appears exactly once, and it is the very instance the call sites resolve.
+        // A second registration would give the hosted service its own copy, whose zeros would land
+        // on instruments nobody records to.
+        await Assert.That(initialisable.OfType<IngestMetrics>().Count()).IsEqualTo(1);
+        await Assert.That(ReferenceEquals(initialisable.OfType<IngestMetrics>().Single(), metrics)).IsTrue();
+
+        // Every registered initialisable is a distinct class; none is registered twice.
+        await Assert.That(initialisable.Select(m => m.GetType()).Distinct().Count())
+            .IsEqualTo(initialisable.Length);
     }
 
     [Test]
@@ -177,10 +184,11 @@ public sealed class AddCoreObservabilityTests
     }
 
     [Test]
-    public async Task SeriesInitialisation_OnAHostThatOwnsNoMetrics_StartsCleanly()
+    public async Task SeriesInitialisation_OnAHostThatDoesNotOwnEveryMetricClass_StartsCleanly()
     {
-        // The worker registers no metric class in this phase, so the initialiser resolves an empty
-        // set. Starting must still be a no-op rather than a resolution failure.
+        // The worker owns the shared classes but not the API server's ingest instruments, so the
+        // initialiser resolves a partial set. Starting must be clean rather than a resolution
+        // failure — a host must never be unable to start because a class belongs to its sibling.
         using ServiceProvider provider = Build("http://collector:4317", ObservabilityHost.ServicesWorker);
         MetricSeriesInitialiser initialiser = provider.GetServices<IHostedService>()
             .OfType<MetricSeriesInitialiser>()
@@ -189,6 +197,9 @@ public sealed class AddCoreObservabilityTests
         await initialiser.StartAsync(CancellationToken.None);
         await initialiser.StopAsync(CancellationToken.None);
 
-        await Assert.That(provider.GetServices<IInitialisableMetrics>().Any()).IsFalse();
+        IInitialisableMetrics[] initialisable = provider.GetServices<IInitialisableMetrics>().ToArray();
+
+        await Assert.That(initialisable.OfType<IngestMetrics>().Any()).IsFalse();
+        await Assert.That(initialisable.OfType<EmailMetrics>().Any()).IsTrue();
     }
 }

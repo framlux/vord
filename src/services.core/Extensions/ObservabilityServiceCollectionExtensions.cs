@@ -60,6 +60,12 @@ public static class ObservabilityServiceCollectionExtensions
             services.AddSingleton<IInitialisableMetrics>(provider => provider.GetRequiredService<IngestMetrics>());
         }
 
+        // Registered in both processes because AddCoreServices registers AlertDeliveryService
+        // unconditionally on both. A host-conditional registration here would leave one of them
+        // unable to build its container at startup.
+        services.AddSingleton<EmailMetrics>();
+        services.AddSingleton<IInitialisableMetrics>(provider => provider.GetRequiredService<EmailMetrics>());
+
         services.AddHostedService<MetricSeriesInitialiser>();
 
         if (string.IsNullOrWhiteSpace(endpoint) == true)

@@ -166,7 +166,7 @@ public sealed class InvitationHandler
 
         // Enqueue after the transaction commits so the invitation is persisted before we promise to email.
         // The job retries on failure via Hangfire so a transient Resend outage does not silently drop the email.
-        _backgroundJobClient.Enqueue<SendInvitationEmailJob>(j => j.SendAsync(normalizedEmail, tenantName, "A team member", acceptUrl, CancellationToken.None));
+        _backgroundJobClient.Enqueue<SendInvitationEmailJob>(j => j.SendAsync(normalizedEmail, tenantId.Value, tenantName, "A team member", acceptUrl, CancellationToken.None));
 
         return ServiceResult<InvitationDeliveryResult>.Ok(new InvitationDeliveryResult
         {
@@ -425,7 +425,7 @@ public sealed class InvitationHandler
 
         // Enqueue after the transaction commits so the new invitation is persisted before we promise to email.
         // The job retries on failure via Hangfire so a transient Resend outage does not silently drop the email.
-        _backgroundJobClient.Enqueue<SendInvitationEmailJob>(j => j.SendAsync(oldInvitation.Email, tenantName, inviterEmail, acceptUrl, CancellationToken.None));
+        _backgroundJobClient.Enqueue<SendInvitationEmailJob>(j => j.SendAsync(oldInvitation.Email, tenantId.Value, tenantName, inviterEmail, acceptUrl, CancellationToken.None));
 
         return ServiceResult<InvitationDeliveryResult>.Ok(new InvitationDeliveryResult
         {

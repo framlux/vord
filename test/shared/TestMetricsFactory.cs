@@ -40,4 +40,13 @@ public static class TestMetricsFactory
     {
         return new IngestMetrics(CreateMeterFactory());
     }
+
+    /// <summary>
+    /// Creates email instruments on a fresh meter factory.
+    /// </summary>
+    /// <returns>Email metrics ready to record into.</returns>
+    public static EmailMetrics CreateEmailMetrics()
+    {
+        return new EmailMetrics(CreateMeterFactory());
+    }
 }

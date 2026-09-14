@@ -3,6 +3,7 @@
 // See LICENSE for details.
 
 using Framlux.FleetManagement.Services.Core.Notifications;
+using Framlux.FleetManagement.Test.Infrastructure;
 using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
 
@@ -20,7 +21,7 @@ public sealed class SendInvitationEmailJobTests
     {
         ArgumentNullException? ex = await Assert.ThrowsAsync<ArgumentNullException>(() =>
         {
-            SendInvitationEmailJob _ = new(null!, NullLogger<SendInvitationEmailJob>.Instance);
+            SendInvitationEmailJob _ = new(null!, TestMetricsFactory.CreateEmailMetrics(), NullLogger<SendInvitationEmailJob>.Instance);
 
             return Task.CompletedTask;
         });
@@ -30,13 +31,29 @@ public sealed class SendInvitationEmailJobTests
     }
 
     [Test]
+    public async Task Constructor_NullEmailMetrics_ThrowsArgumentNullException()
+    {
+        IEmailService emailService = Substitute.For<IEmailService>();
+
+        ArgumentNullException? ex = await Assert.ThrowsAsync<ArgumentNullException>(() =>
+        {
+            SendInvitationEmailJob _ = new(emailService, null!, NullLogger<SendInvitationEmailJob>.Instance);
+
+            return Task.CompletedTask;
+        });
+
+        await Assert.That(ex).IsNotNull();
+        await Assert.That(ex!.ParamName).IsEqualTo("emailMetrics");
+    }
+
+    [Test]
     public async Task Constructor_NullLogger_ThrowsArgumentNullException()
     {
         IEmailService emailService = Substitute.For<IEmailService>();
 
         ArgumentNullException? ex = await Assert.ThrowsAsync<ArgumentNullException>(() =>
         {
-            SendInvitationEmailJob _ = new(emailService, null!);
+            SendInvitationEmailJob _ = new(emailService, TestMetricsFactory.CreateEmailMetrics(), null!);
 
             return Task.CompletedTask;
         });
@@ -57,9 +74,9 @@ public sealed class SendInvitationEmailJobTests
             Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns(EmailDeliveryOutcome.Sent);
 
-        SendInvitationEmailJob job = new(emailService, NullLogger<SendInvitationEmailJob>.Instance);
+        SendInvitationEmailJob job = new(emailService, TestMetricsFactory.CreateEmailMetrics(), NullLogger<SendInvitationEmailJob>.Instance);
 
-        await job.SendAsync("user@example.com", "Acme Corp", "Alice", "https://app.test/accept?token=abc", CancellationToken.None);
+        await job.SendAsync("user@example.com", 12, "Acme Corp", "Alice", "https://app.test/accept?token=abc", CancellationToken.None);
 
         // No exception means the job completed successfully.
         await emailService.Received(1).SendInvitationEmailAsync(
@@ -78,9 +95,9 @@ public sealed class SendInvitationEmailJobTests
         emailService
             .SendInvitationEmailAsync(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns(EmailDeliveryOutcome.Skipped);
-        SendInvitationEmailJob job = new(emailService, NullLogger<SendInvitationEmailJob>.Instance);
+        SendInvitationEmailJob job = new(emailService, TestMetricsFactory.CreateEmailMetrics(), NullLogger<SendInvitationEmailJob>.Instance);
 
-        await job.SendAsync("to@example.com", "Tenant", "Inviter", "https://example.com/accept", CancellationToken.None);
+        await job.SendAsync("to@example.com", 12, "Tenant", "Inviter", "https://example.com/accept", CancellationToken.None);
     }
 
     // ========== SendAsync — failure path (Hangfire retry trigger) ==========
@@ -97,10 +114,10 @@ public sealed class SendInvitationEmailJobTests
             Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns(EmailDeliveryOutcome.Failed);
 
-        SendInvitationEmailJob job = new(emailService, NullLogger<SendInvitationEmailJob>.Instance);
+        SendInvitationEmailJob job = new(emailService, TestMetricsFactory.CreateEmailMetrics(), NullLogger<SendInvitationEmailJob>.Instance);
 
         InvalidOperationException? ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            job.SendAsync("user@example.com", "Acme Corp", "Alice", "https://app.test/accept?token=abc", CancellationToken.None));
+            job.SendAsync("user@example.com", 12, "Acme Corp", "Alice", "https://app.test/accept?token=abc", CancellationToken.None));
 
         await Assert.That(ex).IsNotNull();
     }
@@ -115,10 +132,10 @@ public sealed class SendInvitationEmailJobTests
             Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns(EmailDeliveryOutcome.Failed);
 
-        SendInvitationEmailJob job = new(emailService, NullLogger<SendInvitationEmailJob>.Instance);
+        SendInvitationEmailJob job = new(emailService, TestMetricsFactory.CreateEmailMetrics(), NullLogger<SendInvitationEmailJob>.Instance);
 
         InvalidOperationException? ex = await Assert.ThrowsAsync<InvalidOperationException>(() =>
-            job.SendAsync("target@example.com", "Tenant X", "Bob", "https://app.test/accept?token=xyz", CancellationToken.None));
+            job.SendAsync("target@example.com", 12, "Tenant X", "Bob", "https://app.test/accept?token=xyz", CancellationToken.None));
 
         await Assert.That(ex!.Message).Contains("target@example.com");
     }
@@ -135,9 +152,9 @@ public sealed class SendInvitationEmailJobTests
             Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
             .Returns(EmailDeliveryOutcome.Sent);
 
-        SendInvitationEmailJob job = new(emailService, NullLogger<SendInvitationEmailJob>.Instance);
+        SendInvitationEmailJob job = new(emailService, TestMetricsFactory.CreateEmailMetrics(), NullLogger<SendInvitationEmailJob>.Instance);
 
-        await job.SendAsync("alice@example.com", "My Org", "Bob Smith", "https://vord.example.com/invitations/accept?token=tok123", CancellationToken.None);
+        await job.SendAsync("alice@example.com", 12, "My Org", "Bob Smith", "https://vord.example.com/invitations/accept?token=tok123", CancellationToken.None);
 
         await emailService.Received(1).SendInvitationEmailAsync(
             "alice@example.com",

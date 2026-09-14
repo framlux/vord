@@ -6,6 +6,7 @@ using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Services.Core.Notifications;
+using Framlux.FleetManagement.Services.Core.Observability;
 using Framlux.FleetManagement.Services.Core.Options;
 using Hangfire;
 
@@ -23,6 +24,7 @@ public sealed class AlertDeliveryService : IAlertDeliveryService
     private readonly IHttpClientFactory _httpClientFactory;
     private readonly IBackgroundJobClient _backgroundJobClient;
     private readonly Dictionary<IntegrationProvider, IIntegrationPayloadFormatter> _formatters;
+    private readonly EmailMetrics _emailMetrics;
     private readonly ILogger<AlertDeliveryService> _logger;
 
     /// <summary>
@@ -32,24 +34,28 @@ public sealed class AlertDeliveryService : IAlertDeliveryService
     /// <param name="httpClientFactory">HTTP client factory.</param>
     /// <param name="backgroundJobClient">Hangfire background job client for enqueue.</param>
     /// <param name="formatters">Payload formatters for each integration provider.</param>
+    /// <param name="emailMetrics">Instruments counting alert email delivery.</param>
     /// <param name="logger">The logger.</param>
     public AlertDeliveryService(
         IServiceScopeFactory scopeFactory,
         IHttpClientFactory httpClientFactory,
         IBackgroundJobClient backgroundJobClient,
         IEnumerable<IIntegrationPayloadFormatter> formatters,
+        EmailMetrics emailMetrics,
         ILogger<AlertDeliveryService> logger)
     {
         ArgumentNullException.ThrowIfNull(scopeFactory);
         ArgumentNullException.ThrowIfNull(httpClientFactory);
         ArgumentNullException.ThrowIfNull(backgroundJobClient);
         ArgumentNullException.ThrowIfNull(formatters);
+        ArgumentNullException.ThrowIfNull(emailMetrics);
         ArgumentNullException.ThrowIfNull(logger);
 
         _scopeFactory = scopeFactory;
         _httpClientFactory = httpClientFactory;
         _backgroundJobClient = backgroundJobClient;
         _formatters = formatters.ToDictionary(f => f.Provider);
+        _emailMetrics = emailMetrics;
         _logger = logger;
     }
 
@@ -81,6 +87,10 @@ public sealed class AlertDeliveryService : IAlertDeliveryService
             _logger.LogWarning("No TenantAdmin recipients for alert email on event {EventId}, tenant {TenantId}; skipping",
                 alertEvent.Id, rule.TenantId);
 
+            // No send is attempted, so there is no delivery outcome to record — but the customer
+            // receives no alert, which is the failure the instrument exists for.
+            _emailMetrics.RecordUndeliverable(EmailPurpose.Alert, rule.TenantId);
+
             return;
         }
 
@@ -111,6 +121,11 @@ public sealed class AlertDeliveryService : IAlertDeliveryService
             try
             {
                 EmailDeliveryOutcome outcome = await emailService.SendAlertEmailAsync(recipient, content.Subject, content.HtmlBody, ct);
+
+                // Recorded once here rather than in each branch below, so the three outcomes cannot
+                // drift apart as the branches change.
+                _emailMetrics.RecordSend(outcome, EmailPurpose.Alert, rule.TenantId);
+
                 if (outcome == EmailDeliveryOutcome.Sent)
                 {
                     await attemptRepo.MarkAttemptSucceededAsync(alertEvent.Id, recipient, DateTimeOffset.UtcNow, ct);

@@ -2,6 +2,7 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
+using Framlux.FleetManagement.Services.Core.Observability;
 using Hangfire;
 
 namespace Framlux.FleetManagement.Services.Core.Notifications;
@@ -17,17 +18,23 @@ namespace Framlux.FleetManagement.Services.Core.Notifications;
 public sealed class SendInvitationEmailJob
 {
     private readonly IEmailService _emailService;
+    private readonly EmailMetrics _emailMetrics;
     private readonly ILogger<SendInvitationEmailJob> _logger;
 
     /// <summary>
     /// Creates a new instance of the <see cref="SendInvitationEmailJob"/> class.
     /// </summary>
-    public SendInvitationEmailJob(IEmailService emailService, ILogger<SendInvitationEmailJob> logger)
+    public SendInvitationEmailJob(
+        IEmailService emailService,
+        EmailMetrics emailMetrics,
+        ILogger<SendInvitationEmailJob> logger)
     {
         ArgumentNullException.ThrowIfNull(emailService);
+        ArgumentNullException.ThrowIfNull(emailMetrics);
         ArgumentNullException.ThrowIfNull(logger);
 
         _emailService = emailService;
+        _emailMetrics = emailMetrics;
         _logger = logger;
     }
 
@@ -38,14 +45,31 @@ public sealed class SendInvitationEmailJob
     /// configured — completes quietly rather than throwing.
     /// </summary>
     /// <param name="toEmail">The recipient email address.</param>
+    /// <param name="tenantId">The internal id of the tenant the user is being invited to. Carried so
+    /// a delivery failure can be attributed to a customer; the tenant name is not an identifier,
+    /// because two tenants may share one.</param>
     /// <param name="tenantName">The name of the tenant the user is being invited to.</param>
     /// <param name="inviterName">The name of the user who sent the invitation.</param>
     /// <param name="acceptUrl">The URL to accept the invitation.</param>
     /// <param name="ct">Cancellation token (provided by Hangfire on shutdown).</param>
     [AutomaticRetry(Attempts = 3, DelaysInSeconds = new int[] { 10, 30, 60 })]
-    public async Task SendAsync(string toEmail, string tenantName, string inviterName, string acceptUrl, CancellationToken ct)
+    public async Task SendAsync(string toEmail, int tenantId, string tenantName, string inviterName, string acceptUrl, CancellationToken ct)
     {
-        EmailDeliveryOutcome outcome = await _emailService.SendInvitationEmailAsync(toEmail, tenantName, inviterName, acceptUrl, ct);
+        EmailDeliveryOutcome outcome;
+        try
+        {
+            outcome = await _emailService.SendInvitationEmailAsync(toEmail, tenantName, inviterName, acceptUrl, ct);
+        }
+        catch (Exception)
+        {
+            // A throw is still a customer who did not get their invitation. Recording only the
+            // returned outcomes would leave a transport failure invisible.
+            _emailMetrics.RecordSend(EmailDeliveryOutcome.Failed, EmailPurpose.Invitation, tenantId);
+
+            throw;
+        }
+
+        _emailMetrics.RecordSend(outcome, EmailPurpose.Invitation, tenantId);
 
         if (outcome == EmailDeliveryOutcome.Failed)
         {
