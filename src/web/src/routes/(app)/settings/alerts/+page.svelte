@@ -5,11 +5,13 @@
 <script lang="ts">
 	import type { AlertRuleDto, AlertEventDto, IntegrationEndpointDto, IntegrationProviderDto, IntegrationTestResultDto, PaginatedResponse } from '$lib/api/types';
 	import { Bell, CircleAlert, ChevronLeft, ChevronRight, Plus, Trash2, Check, Plug, Copy, RefreshCw, Zap } from 'lucide-svelte';
+	import { tick } from 'svelte';
 	import { enhance } from '$app/forms';
 	import { goto } from '$app/navigation';
 	import { page as pageState } from '$app/state';
 	import PageHeader from '$lib/components/PageHeader.svelte';
 	import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
+	import MachineAssignmentModal from '$lib/components/machine/MachineAssignmentModal.svelte';
 	import { canAuthorAlertRules, canManageAlertRules } from '$lib/utils/alert-entitlement';
 	import { formatDateTime } from '$lib/utils/format';
 
@@ -23,16 +25,6 @@
 	const events: PaginatedResponse<AlertEventDto> | null = $derived(data.events);
 	const integrations: IntegrationEndpointDto[] | null = $derived(data.integrations);
 	const providers: IntegrationProviderDto[] | null = $derived(data.providers);
-	const machines: { id: number; name: string }[] = $derived(data.machines ?? []);
-
-	// The picker draws one page of the fleet. The rule row counts a rule's machines from the rule
-	// itself, so it can legitimately report more machines than there are checkboxes below it, and
-	// saying so is the difference between a confusing page and a misleading one. The offered set
-	// travels with every save: the API may only unassign machines the form says it was choosing
-	// from, so the machines past the page keep their assignment.
-	const machineCount: number = $derived(data.machineCount ?? machines.length);
-	const machinesTruncated: boolean = $derived(data.machinesTruncated ?? false);
-	const visibleMachineIds: string = $derived(machines.map((m) => m.id).join(','));
 	const filters = $derived(data.filters);
 
 	// A Free tenant still sees its built-in rules — an invisible alert rule is indistinguishable from
@@ -68,7 +60,6 @@
 	let showCreateRule = $state(false);
 	let connectingProvider = $state<string | null>(null);
 	let editingRuleId = $state<number | null>(null);
-	let assigningRuleId = $state<number | null>(null);
 	let deleteRuleConfirm = $state<{ open: boolean; id: number | null }>({ open: false, id: null });
 	let deleteIntegrationConfirm = $state<{ open: boolean; id: number | null }>({ open: false, id: null });
 	let revealedSecret = $state<string | null>(null);
@@ -118,6 +109,99 @@
 	const metricOperators: Record<string, Array<{ value: string; label: string }>> = {
 		FailedSshLogin: [{ value: 'GreaterThan', label: 'Greater Than' }]
 	};
+
+	// Which picker is open, if any. The three are mutually exclusive — a rule row, the create form
+	// and one rule's edit form — so they share a single modal rather than mounting one each.
+	type PickerTarget = { kind: 'assign'; ruleId: number } | { kind: 'create' } | { kind: 'edit'; ruleId: number };
+	let picker = $state<PickerTarget | null>(null);
+
+	// Selections live here rather than on the rendered rows, because the modal reaches the whole
+	// fleet a page at a time and a checkbox list bound to one page loses everything off it.
+	// "Offered" is what the save is allowed to unassign: the API carries through any assignment the
+	// caller could not see, so a machine the picker represented has to be named or unticking it
+	// would silently do nothing.
+	let createSelectedIds = $state<number[]>([]);
+	let editSelectedIds = $state<number[]>([]);
+	let editOfferedIds = $state<number[]>([]);
+
+	const pickerRule = $derived.by(() => {
+		const target = picker;
+		if (target === null || target.kind === 'create') {
+			return null;
+		}
+
+		return rules.find((r) => r.id === target.ruleId) ?? null;
+	});
+
+	const pickerInitialIds = $derived.by(() => {
+		if (picker === null) {
+			return [];
+		}
+		if (picker.kind === 'create') {
+			return createSelectedIds;
+		}
+
+		return picker.kind === 'edit' ? editSelectedIds : (pickerRule?.machineIds ?? []);
+	});
+
+	const pickerTitle = $derived(
+		picker === null
+			? ''
+			: picker.kind === 'create'
+				? 'Machines for the new rule'
+				: `Machines watched by ${pickerRule?.name ?? 'this rule'}`
+	);
+
+	// Only the assignment route accepts an empty set, where it parks a rule so it watches nothing
+	// without switching it off. Both validators refuse an empty array on create and update, so
+	// offering a save there would build a request the server answers 400.
+	const pickerAllowsEmpty = $derived(picker?.kind === 'assign');
+
+	let assignForm: HTMLFormElement;
+	let assignRuleId = $state<number | null>(null);
+	let assignMachineIds = $state('');
+	let assignOfferedIds = $state('');
+
+	function machineLabel(count: number): string {
+		return count === 1 ? '1 machine' : `${count} machines`;
+	}
+
+	async function onPickerSave(machineIds: number[], offeredIds: number[]) {
+		const target = picker;
+		if (target === null) {
+			return;
+		}
+
+		if (target.kind === 'create') {
+			createSelectedIds = machineIds;
+			picker = null;
+
+			return;
+		}
+
+		if (target.kind === 'edit') {
+			editSelectedIds = machineIds;
+			editOfferedIds = offeredIds;
+			picker = null;
+
+			return;
+		}
+
+		// Assignment saves on its own endpoint rather than through the rule update, so it posts
+		// immediately instead of waiting for a surrounding form to be submitted. The rule id is held
+		// apart from the picker because closing the picker must not blank the field the submit is
+		// about to read.
+		assignRuleId = target.ruleId;
+		assignMachineIds = machineIds.join(',');
+		assignOfferedIds = offeredIds.join(',');
+		rulesError = null;
+		picker = null;
+
+		// These inputs are bound to state, and state reaches the DOM on the next tick. Submitting in
+		// the same turn would post whatever they held before this save.
+		await tick();
+		assignForm.requestSubmit();
+	}
 
 	let createMetric = $state('CpuUsage');
 	const createHasThreshold = $derived(metricsWithoutThreshold.has(createMetric) === false);
@@ -404,19 +488,24 @@
 							</div>
 							<div class="mt-4">
 								<span class="mb-1 block text-xs text-surface-500 dark:text-surface-400">Machines (at least 1 required)</span>
-								{#if machinesTruncated}
-									<p class="mb-1 text-xs text-amber-600 dark:text-amber-400">Showing the first {machines.length} of {machineCount} machines. A new rule can only be pointed at the machines listed here.</p>
-								{/if}
-								<div class="max-h-40 overflow-y-auto border border-surface-300 rounded p-2 space-y-1 dark:border-surface-600" role="group" aria-label="Machines (at least 1 required)">
-									{#each machines as machine}
-										<label class="flex items-center gap-2 text-sm">
-											<input type="checkbox" name="machineIds" value={machine.id} class="checkbox" />
-											<span class="text-surface-700 dark:text-surface-300">{machine.name}</span>
-										</label>
-									{/each}
-									{#if machines.length === 0}
-										<p class="text-xs text-surface-400 dark:text-surface-500">No machines available.</p>
-									{/if}
+								<!-- The picker reaches the whole fleet rather than the first page of it, so the
+								     selection travels as one field instead of a checkbox per machine. -->
+								<input type="hidden" name="machineIds" value={createSelectedIds.join(',')} />
+								<div class="flex items-center gap-3">
+									<button
+										type="button"
+										onclick={() => { picker = { kind: 'create' }; rulesError = null; }}
+										class="rounded-lg border border-surface-300 px-3 py-2 text-sm font-medium text-surface-700 hover:bg-surface-100 dark:border-surface-600 dark:text-surface-300 dark:hover:bg-surface-700"
+									>
+										Choose machines
+									</button>
+									<span class="text-sm text-surface-600 dark:text-surface-400">
+										{#if createSelectedIds.length === 0}
+											No machines chosen yet
+										{:else}
+											{machineLabel(createSelectedIds.length)} chosen
+										{/if}
+									</span>
 								</div>
 							</div>
 							<div class="mt-4 flex justify-end gap-2">
@@ -494,7 +583,7 @@
 													<button
 														type="button"
 														aria-label="Assign machines to {rule.name}"
-														onclick={() => { assigningRuleId = assigningRuleId === rule.id ? null : rule.id; editingRuleId = null; rulesError = null; }}
+														onclick={() => { picker = { kind: 'assign', ruleId: rule.id }; editingRuleId = null; rulesError = null; }}
 														class="mt-1 block whitespace-nowrap text-xs text-primary-600 hover:underline dark:text-primary-400"
 													>
 														{(rule.machineIds?.length ?? 0) === 0 ? 'Assign machines' : 'Change machines'}
@@ -517,7 +606,10 @@
 												<div class="flex items-center gap-2 whitespace-nowrap">
 													{#if editingRuleId !== rule.id}
 														{#if canModify(rule) && (rule.isCustom || canAuthorRules)}
-															<button onclick={() => { editingRuleId = rule.id; assigningRuleId = null; rulesError = null; }} class="text-xs text-primary-600 hover:underline dark:text-primary-400">Edit</button>
+															<!-- The edit form posts the selection as one field, so it has to open holding
+															     what the rule already watches. Left empty it would post nothing and the
+															     save would be refused for naming no machines. -->
+															<button onclick={() => { editingRuleId = rule.id; editSelectedIds = [...(rule.machineIds ?? [])]; editOfferedIds = [...(rule.machineIds ?? [])]; rulesError = null; }} class="text-xs text-primary-600 hover:underline dark:text-primary-400">Edit</button>
 														{/if}
 														{#if canModify(rule)}
 															<!-- The one change Pro may make to a built-in rule, on the endpoint that
@@ -539,38 +631,6 @@
 												</div>
 											</td>
 										</tr>
-										{#if assigningRuleId === rule.id}
-											<tr class="bg-surface-50 dark:bg-surface-800/50">
-												<td colspan="8" class="px-4 py-4">
-													<form method="POST" action="?/assignRuleMachines" use:enhance={() => { rulesError = null; return async ({ result, update }) => { if (result.type === 'failure') { rulesError = (result.data as { message?: string })?.message ?? 'Failed to update machines'; } else { assigningRuleId = null; rulesError = null; await update(); } }; }}>
-														<input type="hidden" name="id" value={rule.id} />
-														<input type="hidden" name="visibleMachineIds" value={visibleMachineIds} />
-														<span class="mb-1 block text-xs text-surface-500 dark:text-surface-400">Machines watched by {rule.name}</span>
-														{#if machinesTruncated}
-															<p class="mb-1 text-xs text-amber-600 dark:text-amber-400">Showing the first {machines.length} of {machineCount} machines. Machines not listed keep their current assignment when you save.</p>
-														{/if}
-														<div class="max-h-40 overflow-y-auto rounded border border-surface-300 p-2 space-y-1 dark:border-surface-600" role="group" aria-label="Machines watched by {rule.name}">
-															{#each machines as machine}
-																<label class="flex items-center gap-2 text-sm">
-																	<input type="checkbox" name="machineIds" value={machine.id} checked={rule.machineIds?.includes(machine.id) ?? false} class="checkbox" />
-																	<span class="text-surface-700 dark:text-surface-300">{machine.name}</span>
-																</label>
-															{/each}
-															{#if machines.length === 0}
-																<p class="text-xs text-surface-400 dark:text-surface-500">No machines available.</p>
-															{/if}
-														</div>
-														<!-- Clearing every box is a legitimate answer: it parks the rule so it watches
-														     nothing, without switching it off. -->
-														<p class="mt-1 text-xs text-surface-400 dark:text-surface-500">A rule with no machines selected stays configured but evaluates nothing{machinesTruncated ? ' — clearing every box here only clears the machines listed above' : ''}.</p>
-														<div class="mt-4 flex justify-end gap-2">
-															<button type="button" onclick={() => { assigningRuleId = null; rulesError = null; }} class="rounded-lg border border-surface-300 px-4 py-2 text-sm font-medium text-surface-700 hover:bg-surface-100 dark:border-surface-600 dark:text-surface-300 dark:hover:bg-surface-700">Cancel</button>
-															<button type="submit" class="rounded-lg bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700 dark:bg-primary-500 dark:hover:bg-primary-600">Save Machines</button>
-														</div>
-													</form>
-												</td>
-											</tr>
-										{/if}
 										{#if editingRuleId === rule.id}
 											{@const editHasThreshold = metricsWithoutThreshold.has(rule.metric) === false}
 											{@const editMinDuration = metricMinDuration[rule.metric] ?? 1}
@@ -578,7 +638,6 @@
 												<td colspan="8" class="px-4 py-4">
 													<form method="POST" action="?/updateRule" use:enhance={() => { rulesError = null; return async ({ result, update }) => { if (result.type === 'failure') { rulesError = (result.data as { message?: string })?.message ?? 'An error occurred'; } else { editingRuleId = null; rulesError = null; await update(); } }; }}>
 														<input type="hidden" name="id" value={rule.id} />
-														<input type="hidden" name="visibleMachineIds" value={visibleMachineIds} />
 														<input type="hidden" name="metric" value={rule.metric} />
 														{#if rulesError}
 															<div role="alert" class="mb-4 rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-900/20 dark:text-red-300">
@@ -632,19 +691,26 @@
 														</div>
 														<div class="mt-4">
 															<span class="mb-1 block text-xs text-surface-500 dark:text-surface-400">Machines (at least 1 required)</span>
-															{#if machinesTruncated}
-																<p class="mb-1 text-xs text-amber-600 dark:text-amber-400">Showing the first {machines.length} of {machineCount} machines. Machines not listed keep their current assignment when you save.</p>
-															{/if}
-															<div class="max-h-40 overflow-y-auto border border-surface-300 rounded p-2 space-y-1 dark:border-surface-600" role="group" aria-label="Machines (at least 1 required)">
-																{#each machines as machine}
-																	<label class="flex items-center gap-2 text-sm">
-																		<input type="checkbox" name="machineIds" value={machine.id} checked={rule.machineIds?.includes(machine.id) ?? false} class="checkbox" />
-																		<span class="text-surface-700 dark:text-surface-300">{machine.name}</span>
-																	</label>
-																{/each}
-																{#if machines.length === 0}
-																	<p class="text-xs text-surface-400 dark:text-surface-500">No machines available.</p>
-																{/if}
+															<!-- Both the selection and the set it was chosen from travel with the save. The
+															     second is what bounds a removal: an assignment the caller never saw is
+															     carried through rather than read as having been unticked. -->
+															<input type="hidden" name="machineIds" value={editSelectedIds.join(',')} />
+															<input type="hidden" name="visibleMachineIds" value={editOfferedIds.join(',')} />
+															<div class="flex items-center gap-3">
+																<button
+																	type="button"
+																	onclick={() => { picker = { kind: 'edit', ruleId: rule.id }; rulesError = null; }}
+																	class="rounded-lg border border-surface-300 px-3 py-2 text-sm font-medium text-surface-700 hover:bg-surface-100 dark:border-surface-600 dark:text-surface-300 dark:hover:bg-surface-700"
+																>
+																	Choose machines
+																</button>
+																<span class="text-sm text-surface-600 dark:text-surface-400">
+																	{#if editSelectedIds.length === 0}
+																		No machines chosen
+																	{:else}
+																		{machineLabel(editSelectedIds.length)} chosen
+																	{/if}
+																</span>
 															</div>
 														</div>
 														<div class="mt-4 flex justify-end gap-2">
@@ -1080,6 +1146,38 @@
 >
 	<input type="hidden" name="id" value={deleteIntegrationConfirm.id ?? ''} />
 </form>
+
+<!-- Assignment has its own endpoint and saves on its own, so the picker posts through this rather
+     than through a form wrapped around the rules table. -->
+<form
+	method="POST"
+	action="?/assignRuleMachines"
+	use:enhance={() => {
+		return async ({ result, update }) => {
+			if (result.type === 'failure') {
+				rulesError = (result.data as { message?: string })?.message ?? 'Failed to update machines';
+			} else {
+				rulesError = null;
+				await update();
+			}
+		};
+	}}
+	bind:this={assignForm}
+	class="hidden"
+>
+	<input type="hidden" name="id" value={assignRuleId ?? ''} />
+	<input type="hidden" name="machineIds" value={assignMachineIds} />
+	<input type="hidden" name="visibleMachineIds" value={assignOfferedIds} />
+</form>
+
+<MachineAssignmentModal
+	open={picker !== null}
+	title={pickerTitle}
+	initialSelectedIds={pickerInitialIds}
+	allowEmpty={pickerAllowsEmpty}
+	onsave={onPickerSave}
+	oncancel={() => { picker = null; }}
+/>
 
 <ConfirmDialog
 	open={deleteRuleConfirm.open}

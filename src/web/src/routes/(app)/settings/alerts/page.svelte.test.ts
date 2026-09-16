@@ -5,7 +5,14 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/svelte';
 import '@testing-library/jest-dom/vitest';
-import type { AlertRuleDto, SubscriptionDto, UserDto } from '$lib/api/types';
+import { MachineHealthStatus } from '$lib/api/types';
+import type {
+	AlertRuleDto,
+	FleetMachineDto,
+	PaginatedResponse,
+	SubscriptionDto,
+	UserDto
+} from '$lib/api/types';
 
 const { mockPage } = vi.hoisted(() => {
 	const mockPage = {
@@ -33,7 +40,55 @@ vi.mock('$app/forms', () => ({
 	enhance: () => ({})
 }));
 
+// The assignment picker reads the fleet through the API client. Without a stub it reaches real
+// fetch under jsdom, and every test that opens the picker fails on that rather than on the thing
+// it is actually asserting.
+const { searchMachinesMock, getMachineIdsMock } = vi.hoisted(() => ({
+	searchMachinesMock: vi.fn(),
+	getMachineIdsMock: vi.fn()
+}));
+
+vi.mock('$lib/api/client', () => ({
+	ApiClient: class {
+		searchMachines = searchMachinesMock;
+		getMachineIds = getMachineIdsMock;
+	}
+}));
+
 import AlertsPage from './+page.svelte';
+
+function fleetMachine(id: number, name: string): FleetMachineDto {
+	return {
+		id,
+		name,
+		hostname: `${name}.prod.lan`,
+		ipAddress: '10.0.1.1',
+		hardwareModel: null,
+		healthStatus: MachineHealthStatus.Healthy,
+		cpuUsagePercent: 5,
+		memoryUsagePercent: 5,
+		maxDiskUsagePercent: 5,
+		hasDiskHealthIssue: false,
+		hasHardwareIssue: false,
+		isOnline: true,
+		lastPing: null,
+		pendingUpdates: 0,
+		securityUpdates: 0,
+		failedServices: 0,
+		totalServices: 1
+	};
+}
+
+function fleetPage(items: FleetMachineDto[]): PaginatedResponse<FleetMachineDto> {
+	return {
+		items,
+		page: 1,
+		pageSize: 25,
+		totalCount: items.length,
+		totalPages: 1,
+		hasNextPage: false
+	} as PaginatedResponse<FleetMachineDto>;
+}
 
 function makeRule(overrides: Partial<AlertRuleDto> = {}): AlertRuleDto {
 	return {
@@ -92,22 +147,17 @@ function makeUser(selfHosted: boolean = false): UserDto {
 function makeData(
 	subscription: SubscriptionDto | null,
 	rules: AlertRuleDto[],
-	overrides: { machineCount?: number; machinesTruncated?: boolean; selfHosted?: boolean } = {}
+	overrides: { selfHosted?: boolean } = {}
 ) {
-	const machines = [
-		{ id: 10, name: 'web-01' },
-		{ id: 11, name: 'db-01' }
-	];
-
+	// Mirrors what the loader actually returns. It stopped sending a machine list once the picker
+	// began reaching the fleet itself, and test data still carrying one would let a test pass
+	// against a field production never supplies.
 	return {
 		rules,
 		events: null,
 		integrations: null,
 		providers: null,
 		subscription,
-		machines,
-		machineCount: overrides.machineCount ?? machines.length,
-		machinesTruncated: overrides.machinesTruncated ?? false,
 		filters: { status: undefined, severity: undefined },
 		user: makeUser(overrides.selfHosted ?? false)
 	};
@@ -212,46 +262,45 @@ describe('alerts settings page', () => {
 		expect(screen.getByRole('button', { name: 'Assign machines to Disk usage above 90%' })).toBeInTheDocument();
 	});
 
-	it('opens a machine picker posting to the rule-side assignment action', async () => {
+	it('opens a machine picker that saves through the rule-side assignment action', async () => {
+		searchMachinesMock.mockResolvedValue(fleetPage([fleetMachine(11, 'db-01')]));
 		render(AlertsPage, {
 			props: { data: makeData(makeSubscription(), [makeRule({ machineIds: [], machines: [] })]) }
 		});
 
 		await fireEvent.click(screen.getByRole('button', { name: 'Assign machines to Disk usage above 90%' }));
 
-		const group = screen.getByRole('group', { name: 'Machines watched by Disk usage above 90%' });
-		expect(group).toBeInTheDocument();
-		expect(group.closest('form')?.getAttribute('action')).toBe('?/assignRuleMachines');
-		expect(screen.getByLabelText('db-01')).not.toBeChecked();
+		const dialog = await screen.findByRole('dialog');
+		expect(dialog).toHaveAccessibleName('Machines watched by Disk usage above 90%');
+		expect(await screen.findByRole('checkbox', { name: 'Select db-01' })).not.toBeChecked();
+
+		// Assignment has an endpoint of its own — the only one that accepts an empty set, which is
+		// how a rule is parked without being switched off.
+		expect(document.querySelector('form[action="?/assignRuleMachines"]')).not.toBeNull();
 	});
 
-	it('says which machines the picker is showing when the fleet does not fit on one page', async () => {
-		// A rule can report 150 machines above a list of 100 checkboxes. Left unsaid, the tenant reads
-		// the list as the whole fleet and the save as having unchecked the rest.
+	// The "showing the first N of M" notice that used to live here is gone with the list it
+	// described: the picker now pages the whole fleet, so there is no silent remainder to warn
+	// about. What replaced it — a capped bulk selection announcing itself — is covered where the
+	// cap actually exists, in the picker's own tests.
+
+	it('offers the machines the picker represented, so a save cannot remove the ones it did not', async () => {
+		searchMachinesMock.mockResolvedValue(fleetPage([fleetMachine(11, 'db-01')]));
 		render(AlertsPage, {
-			props: {
-				data: makeData(makeSubscription(), [makeRule()], { machineCount: 150, machinesTruncated: true })
-			}
+			props: { data: makeData(makeSubscription(), [makeRule({ machineIds: [10] })]) }
 		});
 
 		await fireEvent.click(screen.getByRole('button', { name: 'Assign machines to Disk usage above 90%' }));
+		await screen.findByRole('checkbox', { name: 'Select db-01' });
+		await fireEvent.click(screen.getByRole('button', { name: 'Save' }));
 
-		expect(screen.getAllByText(/Showing the first 2 of 150 machines/i).length).toBeGreaterThan(0);
-	});
+		const offered = document.querySelector(
+			'form[action="?/assignRuleMachines"] input[name="visibleMachineIds"]'
+		) as HTMLInputElement;
 
-	it('sends the machines the picker offered, so the save cannot remove the ones it did not', async () => {
-		render(AlertsPage, {
-			props: {
-				data: makeData(makeSubscription(), [makeRule()], { machineCount: 150, machinesTruncated: true })
-			}
-		});
-
-		await fireEvent.click(screen.getByRole('button', { name: 'Assign machines to Disk usage above 90%' }));
-
-		const group = screen.getByRole('group', { name: 'Machines watched by Disk usage above 90%' });
-		const offered = group.closest('form')?.querySelector('input[name="visibleMachineIds"]');
-
-		expect(offered).toHaveValue('10,11');
+		// What the rule already watched plus what the picker drew. Both are machines the user could
+		// have unticked, and an id missing from here is carried through rather than removed.
+		expect(offered.value.split(',').sort()).toEqual(['10', '11']);
 	});
 
 	it('treats an unavailable subscription as entitled rather than as a downgrade', () => {

@@ -62,19 +62,7 @@ function makeActionEvent(form: Record<string, string[]>) {
 	} as never;
 }
 
-function machinePage(count: number, totalCount: number) {
-	return {
-		items: Array.from({ length: count }, (_, i) => ({ id: i + 1, name: `machine-${i + 1}` })),
-		page: 1,
-		pageSize: 100,
-		totalCount,
-		totalPages: Math.ceil(totalCount / 100),
-		hasNextPage: totalCount > count,
-		hasPreviousPage: false
-	};
-}
-
-describe('alerts +page.server load — the machine picker', () => {
+describe('alerts +page.server load', () => {
 	beforeEach(() => {
 		vi.clearAllMocks();
 		apiMock.getAlertRules.mockResolvedValue([]);
@@ -82,31 +70,30 @@ describe('alerts +page.server load — the machine picker', () => {
 		apiMock.getIntegrations.mockResolvedValue(null);
 		apiMock.getIntegrationProviders.mockResolvedValue(null);
 		apiMock.getSubscription.mockResolvedValue(null);
-		apiMock.getMachines.mockResolvedValue(machinePage(3, 3));
 	});
 
-	it('asks for a page the machine list endpoint will actually return', async () => {
-		// The endpoint clamps pageSize to 100. Asking for more was not an error, it was a silent
-		// truncation, and the page then believed it was looking at the whole fleet.
-		await load(makeLoadEvent());
-
-		const requested = apiMock.getMachines.mock.calls[0][0] as { pageSize: number };
-		expect(requested.pageSize).toBeLessThanOrEqual(100);
-	});
-
-	it('says nothing about truncation when the whole fleet fits', async () => {
+	// This replaces three tests that pinned how honestly a first page of the fleet was described.
+	// The picker no longer reads one — it pages the fleet itself through the search endpoint — so
+	// the truncation they guarded against cannot arise here. What is worth pinning instead is that
+	// the fetch does not come back: it costs a request on every visit that nothing would read, and
+	// reintroducing it would put a partial view of the fleet back on the page.
+	it('loads no machine list, because the picker reaches the fleet itself', async () => {
 		const data = await load(makeLoadEvent());
 
-		expect(data).toMatchObject({ machinesTruncated: false, machineCount: 3 });
+		expect(apiMock.getMachines).not.toHaveBeenCalled();
+		expect(data).not.toHaveProperty('machines');
+		expect(data).not.toHaveProperty('machineCount');
+		expect(data).not.toHaveProperty('machinesTruncated');
 	});
 
-	it('reports the truncation when the fleet does not fit on one page', async () => {
-		apiMock.getMachines.mockResolvedValue(machinePage(100, 150));
+	it('still loads the rules, which answer for every tier', async () => {
+		apiMock.getAlertRules.mockResolvedValue([{ id: 1 }]);
 
 		const data = await load(makeLoadEvent());
 
-		expect(data).toMatchObject({ machinesTruncated: true, machineCount: 150 });
-		expect((data as { machines: unknown[] }).machines).toHaveLength(100);
+		// Matched rather than accessed: the loader's return type includes void, because it can
+		// redirect or refuse instead of resolving.
+		expect(data).toMatchObject({ rules: [{ id: 1 }] });
 	});
 });
 

@@ -5,11 +5,13 @@
 import { dev } from '$app/environment';
 import { env } from '$env/dynamic/private';
 import { error, json } from '@sveltejs/kit';
+import { MachineHealthStatus } from '$lib/api/types';
 import type { RequestHandler } from './$types';
 import {
 	mockUser,
 	mockSubscription,
 	mockFleetOverview,
+	mockFleetMachines,
 	mockMachineList,
 	mockMachineById,
 	mockMachineDetailById,
@@ -39,7 +41,7 @@ function ok<T>(data: T): Response {
 	return json({ success: true, data, message: null, errors: null });
 }
 
-const mockGet: RequestHandler = async ({ params }) => {
+const mockGet: RequestHandler = async ({ params, url }) => {
 	const path = params.path ?? '';
 
 	if (path === 'auth/me') {
@@ -60,6 +62,53 @@ const mockGet: RequestHandler = async ({ params }) => {
 	}
 	if (path === 'machines') {
 		return ok(mockMachineList);
+	}
+	// The assignment picker reaches the fleet through search rather than the machine list, so
+	// without these two mock mode renders a picker that answers 404 to everything. Filtering and
+	// paging are applied for real: a picker that pages is only exercised by a source that pages.
+	// Health is the only filter the fixtures can answer, since FleetMachineDto carries no OS or
+	// type, so os and type are accepted and ignored here and cannot be proven in mock mode.
+	if (path === 'machines/search') {
+		const search = (url.searchParams.get('search') ?? '').trim().toLowerCase();
+		const wanted = (url.searchParams.get('healthStatus') ?? '')
+			.split(',')
+			.map((s) => s.trim().toLowerCase())
+			.filter((s) => s.length > 0);
+
+		const matched = mockFleetMachines.filter((machine) => {
+			const matchesSearch =
+				search.length === 0 ||
+				machine.name.toLowerCase().includes(search) ||
+				(machine.hostname ?? '').toLowerCase().includes(search) ||
+				(machine.hardwareModel ?? '').toLowerCase().includes(search);
+
+			const matchesHealth =
+				wanted.length === 0 ||
+				wanted.includes(MachineHealthStatus[machine.healthStatus].toLowerCase());
+
+			return matchesSearch && matchesHealth;
+		});
+
+		const pageSize = Number(url.searchParams.get('pageSize') ?? 25);
+		const page = Number(url.searchParams.get('page') ?? 1);
+		const start = (page - 1) * pageSize;
+		const totalPages = Math.max(1, Math.ceil(matched.length / pageSize));
+
+		return ok({
+			items: matched.slice(start, start + pageSize),
+			page,
+			pageSize,
+			totalCount: matched.length,
+			totalPages,
+			hasNextPage: page < totalPages
+		});
+	}
+	if (path === 'machines/ids') {
+		// The fixture fleet fits any cap, so truncated is always false here. A picker must not rely
+		// on mock mode to prove it handles a capped selection.
+		const ids = mockFleetMachines.map((m) => m.id);
+
+		return ok({ ids, totalCount: ids.length, truncated: false });
 	}
 	if (path === 'machines/ssh-sessions') {
 		return ok(mockFleetSshSessions);

@@ -9,11 +9,6 @@ import { canAdminTenant, canAdminMachines } from '$lib/utils/roles';
 import { redirect, error, fail } from '@sveltejs/kit';
 import type { PageServerLoad, Actions } from './$types';
 
-// The machine list endpoint serves at most 100 rows per page and now refuses a larger request
-// outright, so this asks for exactly what it can be given and says so when the fleet does not fit.
-// Reaching the rest of a large fleet is the job of the paginated picker, not a bigger page.
-const MACHINE_PAGE_SIZE = 100;
-
 function parseMachineIds(formData: FormData, field: string): number[] {
 	return formData
 		.getAll(field)
@@ -47,7 +42,11 @@ export const load: PageServerLoad = async ({ fetch, cookies, locals, url }) => {
 	const severity = url.searchParams.get('severity') ?? undefined;
 
 	try {
-		const [rules, events, integrations, providers, subscription, machinesResponse] = await Promise.all([
+		// No machine list is loaded here. The assignment picker reaches the fleet itself, a page at a
+		// time, through the search endpoint — so fetching a first page on every visit would cost a
+		// request nothing reads, and would reintroduce the partial view that made a save look like it
+		// had unchecked the machines it never drew.
+		const [rules, events, integrations, providers, subscription] = await Promise.all([
 			// Alert rules answer for every tier — a Free tenant sees its built-in rules disabled, which
 			// is the upgrade case — so a failure there is a real failure and must reach the catch.
 			// The three below are still Pro-gated, and a 403 from any of them would otherwise take the
@@ -56,17 +55,8 @@ export const load: PageServerLoad = async ({ fetch, cookies, locals, url }) => {
 			api.getAlertEvents({ page, pageSize, status, severity }).catch(() => null),
 			api.getIntegrations().catch(() => null),
 			api.getIntegrationProviders().catch(() => null),
-			api.getSubscription().catch(() => null),
-			api.getMachines({ pageSize: MACHINE_PAGE_SIZE })
+			api.getSubscription().catch(() => null)
 		]);
-
-		const machines = machinesResponse.items.map((m) => ({ id: m.id, name: m.name }));
-
-		// The rule row counts a rule's machines from the rule itself, so it can report more machines
-		// than the picker below it can draw. Saying which is which is the difference between a
-		// confusing page and a misleading one.
-		const machineCount = machinesResponse.totalCount;
-		const machinesTruncated = machineCount > machines.length;
 
 		return {
 			rules,
@@ -74,9 +64,6 @@ export const load: PageServerLoad = async ({ fetch, cookies, locals, url }) => {
 			integrations,
 			providers,
 			subscription,
-			machines,
-			machineCount,
-			machinesTruncated,
 			filters: { status, severity }
 		};
 	} catch (e) {

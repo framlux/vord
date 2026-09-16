@@ -2,10 +2,13 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
+import { MachineHealthStatus } from './types';
 import type {
 	UserDto,
 	SubscriptionDto,
 	DashboardSummaryDto,
+	FleetMachineDto,
+	MachineSearchParams,
 	PaginatedFleetOverviewDto,
 	PaginatedResponse,
 	MachineDto,
@@ -23,6 +26,7 @@ import {
 	mockUser,
 	mockSubscription,
 	mockFleetOverview,
+	mockFleetMachines,
 	mockMachineList,
 	mockMachineById,
 	mockMachineDetailById,
@@ -70,6 +74,47 @@ export class MockApiClient {
 		const ids = mockMachineList.items.map((m) => m.id);
 
 		return { ids, totalCount: ids.length, truncated: false };
+	}
+
+	// Filtering and paging are applied here rather than returning the whole fixture fleet, because a
+	// picker that pages is only exercised by a source that actually pages. Health is the one filter
+	// the fixtures can answer — FleetMachineDto carries no OS or type — so os and type are accepted
+	// and ignored, and mock mode cannot be used to prove those two filters work.
+	async searchMachines(params: MachineSearchParams): Promise<PaginatedResponse<FleetMachineDto>> {
+		const search = params.search?.trim().toLowerCase() ?? '';
+		const wanted = (params.healthStatus ?? '')
+			.split(',')
+			.map((s) => s.trim().toLowerCase())
+			.filter((s) => s.length > 0);
+
+		const matched = mockFleetMachines.filter((machine) => {
+			const matchesSearch =
+				search.length === 0 ||
+				machine.name.toLowerCase().includes(search) ||
+				(machine.hostname ?? '').toLowerCase().includes(search) ||
+				(machine.hardwareModel ?? '').toLowerCase().includes(search);
+
+			const matchesHealth =
+				wanted.length === 0 ||
+				wanted.includes(MachineHealthStatus[machine.healthStatus].toLowerCase());
+
+			return matchesSearch && matchesHealth;
+		});
+
+		const pageSize = params.pageSize ?? 25;
+		const page = params.page ?? 1;
+		const start = (page - 1) * pageSize;
+		const items = matched.slice(start, start + pageSize);
+		const totalPages = Math.max(1, Math.ceil(matched.length / pageSize));
+
+		return {
+			items,
+			page,
+			pageSize,
+			totalCount: matched.length,
+			totalPages,
+			hasNextPage: page < totalPages
+		} as PaginatedResponse<FleetMachineDto>;
 	}
 
 	async getMachine(id: number): Promise<MachineDto> {
