@@ -190,7 +190,14 @@
 
 		if (target.kind === 'edit') {
 			editSelectedIds = machineIds;
-			editOfferedIds = offeredIds;
+
+			// Accumulated across the whole edit rather than replaced per session. The modal reports
+			// what it could offer while it was open, and it opens holding the current selection — so a
+			// machine unticked in an earlier session is absent from the next session's offer unless
+			// the list happens to redraw it. Replacing here would drop that machine from the set the
+			// save is allowed to remove from, and the API carries through what the caller could not
+			// see: the rule would go on watching a machine the interface reported as unassigned.
+			editOfferedIds = [...new Set([...editOfferedIds, ...offeredIds])];
 			picker = null;
 
 			return;

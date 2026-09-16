@@ -347,6 +347,49 @@ describe('alerts settings page', () => {
 		expect(offered.value.split(',').sort()).toEqual(['10', '11']);
 	});
 
+	it('keeps offering a machine unticked in an earlier picker session, so the removal survives a second visit', async () => {
+		// The set a save may remove from is everything the user could have unticked across the whole
+		// edit, not just what the last picker session happened to draw. Reopening the picker seeds it
+		// from the current selection, so a machine already unticked is no longer represented — and an
+		// id missing from the offered set is carried through by the server rather than removed. The
+		// interface would report 1 machine while the rule went on watching 2.
+		// The second session must not redraw web-01, or the list itself would re-offer it and the
+		// memory this test is about would never be consulted. A filter change, another page, or a
+		// machine that simply is not on the first page of a large fleet all produce this.
+		searchMachinesMock
+			.mockResolvedValueOnce(fleetPage([fleetMachine(10, 'web-01'), fleetMachine(11, 'db-01')]))
+			.mockResolvedValue(fleetPage([fleetMachine(11, 'db-01')]));
+		render(AlertsPage, {
+			props: {
+				data: makeData(makeSubscription({ tier: 'Team', alertRuleLimit: 25 }), [
+					makeRule({
+						machineIds: [10, 11],
+						machines: [
+							{ id: 10, name: 'web-01' },
+							{ id: 11, name: 'db-01' }
+						]
+					})
+				])
+			}
+		});
+
+		await fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+		await fireEvent.click(screen.getByRole('button', { name: 'Choose machines' }));
+		await fireEvent.click(await screen.findByRole('checkbox', { name: 'Select web-01' }));
+		await fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+		// Second visit to the same picker, changing nothing.
+		await fireEvent.click(screen.getByRole('button', { name: 'Choose machines' }));
+		await screen.findByRole('checkbox', { name: 'Select db-01' });
+		await fireEvent.click(screen.getByRole('button', { name: 'Save' }));
+
+		const offered = document.querySelector(
+			'form[action="?/updateRule"] input[name="visibleMachineIds"]'
+		) as HTMLInputElement;
+
+		expect(offered.value.split(',').sort()).toEqual(['10', '11']);
+	});
+
 	it('treats an unavailable subscription as entitled rather than as a downgrade', () => {
 		render(AlertsPage, {
 			props: { data: makeData(null, [makeRule()]) }
