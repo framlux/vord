@@ -479,9 +479,7 @@
 		if (showAlertRulesModal) {
 			rulesPreviouslyFocused = document.activeElement as HTMLElement;
 			requestAnimationFrame(() => {
-				if (rulesDialogElement !== undefined) {
-					moveFocusInto(rulesDialogElement);
-				}
+				moveFocusInto(rulesDialogElement);
 			});
 		} else if (rulesPreviouslyFocused !== null) {
 			rulesPreviouslyFocused.focus();

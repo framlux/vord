@@ -162,6 +162,14 @@ describe('moveFocusInto', () => {
 		expect(document.activeElement?.id).toBe('close');
 	});
 
+	it('does nothing when the dialog is already gone', () => {
+		// Focus moves in on the next animation frame, and a dialog closed within that frame has
+		// already been removed: Svelte sets a bound element to null, not undefined. Guarding for
+		// undefined alone at each call site threw on exactly that — open and close inside one frame.
+		expect(() => moveFocusInto(null)).not.toThrow();
+		expect(() => moveFocusInto(undefined)).not.toThrow();
+	});
+
 	it('falls back to the container itself when it holds no controls', () => {
 		// A dialog with nothing to focus must still take focus, or the next Tab resumes from
 		// wherever the user was on the page behind it and Escape never reaches the dialog.

@@ -32,9 +32,7 @@
 		if (open) {
 			previouslyFocused = document.activeElement as HTMLElement;
 			requestAnimationFrame(() => {
-				if (dialogElement !== undefined) {
-					moveFocusInto(dialogElement);
-				}
+				moveFocusInto(dialogElement);
 			});
 		} else if (previouslyFocused !== null) {
 			previouslyFocused.focus();

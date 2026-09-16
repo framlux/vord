@@ -65,8 +65,16 @@ export function trapTabKey(container: HTMLElement, event: KeyboardEvent): void {
  * The fallback is the point of the function: a dialog nobody focused leaves the next Tab resuming
  * from wherever the user was on the page behind it, and leaves an Escape handler bound inside the
  * dialog unreachable — so the dialog cannot be closed from the keyboard at all.
+ *
+ * A missing container is accepted and ignored. Callers invoke this on the next animation frame, and
+ * a dialog closed within that frame has already been removed — Svelte sets a bound element to null
+ * rather than undefined, which is the case the per-dialog guards got wrong.
  */
-export function moveFocusInto(container: HTMLElement): void {
+export function moveFocusInto(container: HTMLElement | null | undefined): void {
+	if (container === null || container === undefined) {
+		return;
+	}
+
 	const focusable = focusableWithin(container);
 	if (focusable.length > 0) {
 		focusable[0].focus();
