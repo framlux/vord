@@ -44,6 +44,15 @@
 		(data.subscription.tier === 'Pro' || data.subscription.tier === 'Team')
 	);
 
+	// A rule watches only what is assigned to it and arrives assigned to nothing, so an enabled rule
+	// with an empty machine list is silence that looks exactly like calm. The row already says so in
+	// the cell that can fix it; this says it where someone who came to the page for another reason
+	// will still see it. A disabled rule is excluded deliberately — it is off because someone turned
+	// it off, and warning about it would teach the tenant to scroll past the banner that matters.
+	const unwatchedEnabledRules: AlertRuleDto[] = $derived(
+		rules.filter((r) => r.isEnabled && (r.machineIds?.length ?? 0) === 0)
+	);
+
 	function canModify(rule: AlertRuleDto): boolean {
 		if (rule.isCustom) {
 			return canAuthorRules;
@@ -310,6 +319,24 @@
 					These built-in alert rules only run on Pro and Team plans. Upgrade your subscription to turn them on and choose the machines they watch.
 				</p>
 			{/if}
+		</div>
+	{/if}
+
+	{#if unwatchedEnabledRules.length > 0}
+		<div class="flex items-center gap-3 rounded-xl border border-amber-200 bg-amber-50 p-4 dark:border-amber-800 dark:bg-amber-900/20">
+			<CircleAlert class="h-5 w-5 shrink-0 text-amber-600 dark:text-amber-400" />
+			<p class="text-sm text-amber-700 dark:text-amber-300">
+				<!-- The design's copy assumed every rule was unassigned, which is only the opening state.
+				     Once one rule is assigned that sentence is false, and a banner that overstates the
+				     gap is the same problem as one that hides it. -->
+				{#if unwatchedEnabledRules.length === rules.length}
+					None of your alert rules are watching machines yet — they will not fire until you assign some.
+				{:else if unwatchedEnabledRules.length === 1}
+					1 alert rule is not watching any machines — it will not fire until you assign some.
+				{:else}
+					{unwatchedEnabledRules.length} alert rules are not watching any machines — they will not fire until you assign some.
+				{/if}
+			</p>
 		</div>
 	{/if}
 

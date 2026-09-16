@@ -262,6 +262,50 @@ describe('alerts settings page', () => {
 		expect(screen.getByRole('button', { name: 'Assign machines to Disk usage above 90%' })).toBeInTheDocument();
 	});
 
+	it('warns across the page while an enabled rule is watching nothing', () => {
+		// A rule arrives unassigned and stays that way until someone acts. Saying so only in the row
+		// puts the warning behind a scroll, on a screen nobody visits until an alert they expected
+		// failed to arrive.
+		render(AlertsPage, {
+			props: { data: makeData(makeSubscription(), [makeRule({ machineIds: [], machines: [] })]) }
+		});
+
+		expect(screen.getByText(/they will not fire until you assign some/i)).toBeInTheDocument();
+	});
+
+	it('counts the unwatched rules rather than claiming none of them is watching', () => {
+		// "None of your alert rules are watching machines" is true only in the opening state. Once one
+		// rule is assigned, a banner that still says none overstates the gap, and a banner that
+		// overstates is discounted exactly like one that hides.
+		render(AlertsPage, {
+			props: {
+				data: makeData(makeSubscription(), [
+					makeRule({ machineIds: [], machines: [] }),
+					makeRule({ id: 2, name: 'CPU high', machineIds: [], machines: [] }),
+					makeRule({ id: 3, name: 'Memory high', machineIds: [10] })
+				])
+			}
+		});
+
+		expect(screen.getByText(/2 alert rules are not watching any machines/i)).toBeInTheDocument();
+		expect(screen.queryByText(/none of your alert rules/i)).not.toBeInTheDocument();
+	});
+
+	it('does not raise the page warning for a rule that is switched off', () => {
+		// A disabled rule watching nothing is not a gap — it is a rule someone turned off. Warning
+		// about it would train the tenant to ignore the banner that matters.
+		render(AlertsPage, {
+			props: {
+				data: makeData(makeSubscription(), [
+					makeRule({ isEnabled: false, machineIds: [], machines: [] }),
+					makeRule({ id: 2, name: 'CPU high', machineIds: [10] })
+				])
+			}
+		});
+
+		expect(screen.queryByText(/they will not fire until you assign some/i)).not.toBeInTheDocument();
+	});
+
 	it('opens a machine picker that saves through the rule-side assignment action', async () => {
 		searchMachinesMock.mockResolvedValue(fleetPage([fleetMachine(11, 'db-01')]));
 		render(AlertsPage, {

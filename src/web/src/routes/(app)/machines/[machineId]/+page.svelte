@@ -460,6 +460,13 @@
 
 	const assignedRuleIds = $derived(new Set(machineAlertRules.map((r) => r.id)));
 
+	// Deliberately not the alerts page's question read backwards. That page asks whether a rule has
+	// machines; this asks whether a machine has a rule that is switched on. A machine assigned only
+	// to disabled rules passes an assignment check and is still watched by nothing — and a newly
+	// registered machine arrives in exactly that state by design, which is only honest if the machine
+	// itself says so. A fleet expansion is precisely when nobody is reading the alerts page.
+	const watchedByEnabledRule: boolean = $derived(machineAlertRules.some((r) => r.isEnabled));
+
 	// The rule list is readable by every tenant — a Free tenant reads its eight disabled built-ins as
 	// an upsell — but the save is Pro-gated, and status-sensitive with it. Offering the picker on the
 	// same terms the alerts page offers its controls keeps the two screens from disagreeing about
@@ -1417,6 +1424,15 @@
 						Alert rules only run on Pro and Team plans. <a href="/settings/billing" class="underline hover:text-amber-800 dark:hover:text-amber-200">Upgrade your subscription</a> to choose the rules that watch this machine.
 					</p>
 				{/if}
+			</div>
+		{/if}
+
+		{#if watchedByEnabledRule === false}
+			<div class="mb-4 flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 p-3 dark:border-amber-800 dark:bg-amber-900/20">
+				<CircleAlert size={16} class="mt-0.5 shrink-0 text-amber-600 dark:text-amber-400" />
+				<p class="text-sm text-amber-700 dark:text-amber-300">
+					No enabled alert rule is watching this machine. Nothing here will raise an alert until one is assigned and switched on.
+				</p>
 			</div>
 		{/if}
 

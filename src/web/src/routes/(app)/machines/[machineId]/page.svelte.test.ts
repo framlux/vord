@@ -167,6 +167,42 @@ describe('machine detail alert rules', () => {
 		expect(screen.queryByRole('button', { name: 'Manage Rules' })).not.toBeInTheDocument();
 	});
 
+	it('says a machine carrying only disabled rules is watched by nothing', () => {
+		// Not the alerts page's question read backwards. Every rule here names this machine, so an
+		// assignment check would call it covered; none of them is switched on, so nothing will fire.
+		render(MachinePage, {
+			props: {
+				data: makeData(makeSubscription(), builtIns, {
+					machineAlertRules: [makeRule({ id: 3, name: 'Built-in 3', isEnabled: false })]
+				})
+			}
+		});
+
+		expect(screen.getByText(/no enabled alert rule is watching this machine/i)).toBeInTheDocument();
+	});
+
+	it('says a machine with no rules at all is watched by nothing', () => {
+		// This is the case the "new machines arrive unwatched" decision creates, and a fleet
+		// expansion is exactly when nobody is reading the alerts page.
+		render(MachinePage, {
+			props: { data: makeData(makeSubscription(), builtIns, { machineAlertRules: [] }) }
+		});
+
+		expect(screen.getByText(/no enabled alert rule is watching this machine/i)).toBeInTheDocument();
+	});
+
+	it('says nothing about coverage once an enabled rule is watching the machine', () => {
+		render(MachinePage, {
+			props: {
+				data: makeData(makeSubscription(), builtIns, {
+					machineAlertRules: [makeRule({ id: 3, name: 'Built-in 3', isEnabled: true })]
+				})
+			}
+		});
+
+		expect(screen.queryByText(/no enabled alert rule is watching this machine/i)).not.toBeInTheDocument();
+	});
+
 	it('leaves a self-hosted deployment its rule picker whatever its subscription row says', () => {
 		render(MachinePage, {
 			props: {
