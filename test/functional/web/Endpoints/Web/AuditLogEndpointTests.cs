@@ -6,7 +6,6 @@ using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database;
 using Framlux.FleetManagement.Test.Infrastructure;
-using LinqToDB.Async;
 using LinqToDB;
 using System.Net;
 using System.Text.Json;
@@ -228,7 +227,7 @@ public sealed class AuditLogEndpointTests
     }
 
     [Test]
-    public async Task ListAuditLog_PageSizeExceedsMax_ClampedTo100()
+    public async Task ListAuditLog_PageSizeExceedsMax_Returns400()
     {
         using FunctionalTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
@@ -240,11 +239,12 @@ public sealed class AuditLogEndpointTests
             .WithActiveTenant(tenantId)
             .Build();
 
-        // Page size > 100 should be clamped to the default (25), not cause an error.
+        // Refused, as every paginated collection refuses it. This used to be replaced with the default,
+        // so a request for 500 entries got 25 — a short page indistinguishable from the end of the log.
         HttpResponseMessage response = await client.GetAsync("/api/v1/audit-log?PageSize=500");
 
-        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.BadRequest);
         string body = await response.Content.ReadAsStringAsync();
-        await Assert.That(body).Contains("\"success\":true");
+        await Assert.That(body).Contains("pageSize must be between 1 and 100");
     }
 }

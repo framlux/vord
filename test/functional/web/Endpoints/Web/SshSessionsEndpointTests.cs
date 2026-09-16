@@ -6,7 +6,6 @@ using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database;
 using Framlux.FleetManagement.Test.Infrastructure;
-using LinqToDB.Async;
 using LinqToDB;
 using System.Net;
 
@@ -266,7 +265,25 @@ public sealed class SshSessionsEndpointTests
     }
 
     [Test]
-    public async Task SshSessions_PageSizeAbove100_ClampedTo50()
+    public async Task SshSessions_OmittedPageSize_DefaultsTo50()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId) = await SeedSshEnvironment(db);
+        HttpClient client = BuildClient(factory, tenantId, userId);
+
+        HttpResponseMessage response = await client.GetAsync("/api/v1/machines/ssh-sessions");
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
+        string body = await response.Content.ReadAsStringAsync();
+        await Assert.That(body).Contains("\"pageSize\":50");
+    }
+
+    // An explicit page size outside the servable range is refused, as every paginated collection
+    // refuses it. These used to be replaced with the default, so a request for 200 sessions got 50 —
+    // a short page indistinguishable from the end of the collection.
+    [Test]
+    public async Task SshSessions_PageSizeAbove100_Returns400()
     {
         using FunctionalTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
@@ -275,13 +292,13 @@ public sealed class SshSessionsEndpointTests
 
         HttpResponseMessage response = await client.GetAsync("/api/v1/machines/ssh-sessions?PageSize=200");
 
-        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.BadRequest);
         string body = await response.Content.ReadAsStringAsync();
-        await Assert.That(body).Contains("\"pageSize\":50");
+        await Assert.That(body).Contains("pageSize must be between 1 and 100");
     }
 
     [Test]
-    public async Task SshSessions_PageSizeBelowOne_DefaultsTo50()
+    public async Task SshSessions_PageSizeBelowOne_Returns400()
     {
         using FunctionalTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
@@ -290,9 +307,7 @@ public sealed class SshSessionsEndpointTests
 
         HttpResponseMessage response = await client.GetAsync("/api/v1/machines/ssh-sessions?PageSize=0");
 
-        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
-        string body = await response.Content.ReadAsStringAsync();
-        await Assert.That(body).Contains("\"pageSize\":50");
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.BadRequest);
     }
 
     [Test]

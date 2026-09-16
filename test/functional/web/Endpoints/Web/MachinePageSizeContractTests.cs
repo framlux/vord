@@ -4,10 +4,13 @@
 
 using System.Net;
 using System.Text.Json;
+using System.Text.RegularExpressions;
+using FastEndpoints;
+using Microsoft.AspNetCore.Routing;
+using Microsoft.Extensions.DependencyInjection;
 using Framlux.FleetManagement.Database;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
-using Framlux.FleetManagement.Services.Core.Models;
 using Framlux.FleetManagement.Test.Infrastructure;
 using LinqToDB;
 
@@ -20,7 +23,7 @@ namespace Framlux.FleetManagement.FunctionalTest.Endpoints.Web;
 /// </summary>
 public sealed class MachinePageSizeContractTests
 {
-    private static async Task<int> SeedTenantWithSubscription(DatabaseContext db)
+    private static async Task<int> SeedTenantWithSubscription(DatabaseContext db, SubscriptionTier tier = SubscriptionTier.Pro)
     {
         Tenant tenant = new()
         {
@@ -36,7 +39,7 @@ public sealed class MachinePageSizeContractTests
         TenantSubscription subscription = new()
         {
             TenantId = tenant.Id,
-            Tier = SubscriptionTier.Pro,
+            Tier = tier,
             Status = SubscriptionStatus.Active,
             CreatedAt = DateTimeOffset.UtcNow,
             UpdatedAt = DateTimeOffset.UtcNow,
@@ -323,34 +326,130 @@ public sealed class MachinePageSizeContractTests
         await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.BadRequest);
     }
 
+    // ========== Every page-size reader, discovered rather than listed ==========
+
+    // The sweep used to enumerate five paths by hand, which is how three endpoints still clamping
+    // their own way went unnoticed while the contract was declared finished. It now finds its
+    // subjects: every endpoint whose source reads the page size through the shared rule — the
+    // architecture test in unit.server guarantees there is no other way to read one — mapped to its
+    // registered GET route. Discovery is by source because one reader, the command history, returns
+    // a plain list and reads the query imperatively, so neither of its types says it paginates.
+
+    private static readonly string[] KnownPageSizeReaders =
+    [
+        "MachineListEndpoint",
+        "MachineSearchEndpoint",
+        "DashboardFleetEndpoint",
+        "ListRegistrationTokensEndpoint",
+        "CommandListEndpoint",
+        "AlertEventListEndpoint",
+        "AuditLogListEndpoint",
+        "SshSessionsFleetEndpoint",
+    ];
+
+    private static string FindRepoRoot()
+    {
+        DirectoryInfo? dir = new(AppContext.BaseDirectory);
+        while (dir is not null)
+        {
+            if (File.Exists(Path.Combine(dir.FullName, "machine-info.slnx")))
+            {
+                return dir.FullName;
+            }
+
+            dir = dir.Parent;
+        }
+
+        throw new InvalidOperationException("Could not locate machine-info.slnx walking up from " + AppContext.BaseDirectory);
+    }
+
+    private static HashSet<string> EndpointClassesUsingTheSharedRule()
+    {
+        string endpoints = Path.Combine(FindRepoRoot(), "src", "server", "Endpoints");
+        Regex endpointClass = new(@"\bclass\s+(\w+Endpoint)\b", RegexOptions.Compiled);
+        HashSet<string> names = new(StringComparer.Ordinal);
+
+        foreach (string path in Directory.EnumerateFiles(endpoints, "*.cs", SearchOption.AllDirectories))
+        {
+            string source = File.ReadAllText(path);
+            if (source.Contains("PageSizeQuery.TryResolve", StringComparison.Ordinal) == false)
+            {
+                continue;
+            }
+
+            foreach (Match match in endpointClass.Matches(source))
+            {
+                names.Add(match.Groups[1].Value);
+            }
+        }
+
+        return names;
+    }
+
+    private static List<string> GetRoutesFor(FunctionalTestFactory factory, HashSet<string> endpointNames)
+    {
+        EndpointDataSource source = factory.Services.GetRequiredService<EndpointDataSource>();
+        Regex routeParameter = new(@"\{[^}]+\}", RegexOptions.Compiled);
+        List<string> routes = [];
+
+        foreach (RouteEndpoint endpoint in source.Endpoints.OfType<RouteEndpoint>())
+        {
+            EndpointDefinition? definition = endpoint.Metadata.GetMetadata<EndpointDefinition>();
+            if ((definition is null) || (endpointNames.Contains(definition.EndpointType.Name) == false))
+            {
+                continue;
+            }
+
+            IReadOnlyList<string>? methods = endpoint.Metadata.GetMetadata<HttpMethodMetadata>()?.HttpMethods;
+            if ((methods is null) || (methods.Contains("GET") == false))
+            {
+                continue;
+            }
+
+            // Route parameters all name the single machine the test seeds.
+            string raw = endpoint.RoutePattern.RawText ?? string.Empty;
+            routes.Add("/" + routeParameter.Replace(raw, "1").TrimStart('/'));
+        }
+
+        return routes.Distinct(StringComparer.Ordinal).OrderBy(r => r, StringComparer.Ordinal).ToList();
+    }
+
     [Test]
-    public async Task EveryPaginatedCollection_RefusesTheSameValue()
+    public async Task EveryKnownPageSizeReader_UsesTheSharedRule()
+    {
+        // The premise of the sweep below. Without it a discovery that found nothing would pass.
+        HashSet<string> discovered = EndpointClassesUsingTheSharedRule();
+
+        foreach (string known in KnownPageSizeReaders)
+        {
+            await Assert.That(discovered).Contains(known);
+        }
+    }
+
+    [Test]
+    public async Task EveryPageSizeReader_RefusesAnOverLimitPageOnTheWire()
     {
         using FunctionalTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
-        int tenantId = await SeedTenantWithSubscription(db);
+
+        // Team, because the audit log is a Team feature and would otherwise refuse the request on
+        // tier before its page size was ever read. An admin for the same reason on the
+        // administrative collections.
+        int tenantId = await SeedTenantWithSubscription(db, SubscriptionTier.Team);
         await SeedMachine(db, tenantId, "uniform-host");
 
         HttpClient client = BuildAdminClient(factory, tenantId);
 
-        // The point of the shared rule is that a caller learns it once. A single endpoint drifting
-        // back to a silent clamp would be invisible in its own test file but is caught here.
-        string[] paths =
-        [
-            "/api/v1/machines",
-            "/api/v1/machines/search",
-            "/api/v1/dashboard/fleet",
-            "/api/v1/machines/registration-tokens",
-            "/api/v1/machines/1/commands",
-        ];
+        List<string> routes = GetRoutesFor(factory, EndpointClassesUsingTheSharedRule());
+        await Assert.That(routes.Count).IsGreaterThanOrEqualTo(KnownPageSizeReaders.Length);
 
-        foreach (string path in paths)
+        foreach (string route in routes)
         {
-            HttpResponseMessage response = await client.GetAsync($"{path}?pageSize=1000");
+            HttpResponseMessage response = await client.GetAsync($"{route}?pageSize={PaginationLimits.MaxPageSize + 1}");
 
             await Assert.That(response.StatusCode)
                 .IsEqualTo(HttpStatusCode.BadRequest)
-                .Because($"{path} must refuse an over-limit page size rather than serve a short one");
+                .Because($"{route} must refuse an over-limit page size rather than serve a short one");
         }
     }
 }

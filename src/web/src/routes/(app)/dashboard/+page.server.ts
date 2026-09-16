@@ -4,16 +4,14 @@
 
 import { createServerApiClient } from '$lib/api/server';
 import { ApiError } from '$lib/api/client';
+import { parsePaginationParams } from '$lib/utils/pagination';
 import { redirect, error } from '@sveltejs/kit';
 import type { PageServerLoad } from './$types';
 
 export const load: PageServerLoad = async ({ fetch, cookies, url }) => {
 	const api = createServerApiClient(fetch, cookies.get('vord_auth'), cookies.get('vord_tenant'));
 
-	const rawPage = parseInt(url.searchParams.get('page') ?? '1', 10);
-	const page = Number.isNaN(rawPage) ? 1 : Math.max(1, rawPage);
-	const rawPageSize = parseInt(url.searchParams.get('pageSize') ?? '25', 10);
-	const pageSize = Number.isNaN(rawPageSize) ? 25 : Math.min(100, Math.max(1, rawPageSize));
+	const { page, pageSize } = parsePaginationParams(url);
 	const search = url.searchParams.get('search') ?? undefined;
 	const status = url.searchParams.get('status') ?? undefined;
 	const validSortFields = ['name', 'status', 'cpu', 'memory'] as const;

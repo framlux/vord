@@ -70,7 +70,14 @@ public sealed class AuditLogListEndpoint : Endpoint<AuditLogListRequest, ApiResp
         int tenantId = _tenantContext.RequireTenantId();
 
         int page = req.Page < 1 ? 1 : req.Page;
-        int pageSize = (req.PageSize < 1) || (req.PageSize > 100) ? 25 : req.PageSize;
+        // Refused rather than replaced with the default: a request for 200 rows used to get 25, a short
+        // page indistinguishable from the end of the collection.
+        if (PageSizeQuery.TryResolve(req.PageSize, out int pageSize) == false)
+        {
+            await HttpContext.SendApiErrorAsync(StatusCodes.Status400BadRequest, PageSizeQuery.OutOfRangeMessage, ct);
+
+            return;
+        }
 
         AuditAction? actionFilter = null;
         if ((string.IsNullOrEmpty(req.Action) == false) && Enum.TryParse<AuditAction>(req.Action, true, out AuditAction parsed))

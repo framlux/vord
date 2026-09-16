@@ -8,7 +8,6 @@ using Framlux.FleetManagement.Database;
 using Framlux.FleetManagement.Test.Infrastructure;
 using LinqToDB.Async;
 using LinqToDB;
-using System.Net.Http.Json;
 using System.Net;
 using System.Text.Json;
 
@@ -315,7 +314,25 @@ public sealed class AlertEventEndpointTests
     }
 
     [Test]
-    public async Task ListAlertEvents_InvalidPageSize_DefaultsTo25()
+    public async Task ListAlertEvents_OmittedPageSize_DefaultsTo25()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId, _) = await SeedAlertEventEnvironment(db);
+        HttpClient client = BuildClient(factory, tenantId, userId, UserAccountRoles.Viewer);
+
+        HttpResponseMessage response = await client.GetAsync("/api/v1/alert-events");
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
+        string body = await response.Content.ReadAsStringAsync();
+        await Assert.That(body).Contains("\"pageSize\":25");
+    }
+
+    // An explicit page size outside the servable range is refused, as every paginated collection
+    // refuses it. These used to be replaced with the default, so a request for 500 events got 25 — a
+    // short page indistinguishable from the end of the collection.
+    [Test]
+    public async Task ListAlertEvents_PageSizeBelowOne_Returns400()
     {
         using FunctionalTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
@@ -324,13 +341,11 @@ public sealed class AlertEventEndpointTests
 
         HttpResponseMessage response = await client.GetAsync("/api/v1/alert-events?PageSize=0");
 
-        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
-        string body = await response.Content.ReadAsStringAsync();
-        await Assert.That(body).Contains("\"pageSize\":25");
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.BadRequest);
     }
 
     [Test]
-    public async Task ListAlertEvents_PageSizeExceedsMax_DefaultsTo25()
+    public async Task ListAlertEvents_PageSizeExceedsMax_Returns400()
     {
         using FunctionalTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
@@ -339,9 +354,9 @@ public sealed class AlertEventEndpointTests
 
         HttpResponseMessage response = await client.GetAsync("/api/v1/alert-events?PageSize=500");
 
-        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.BadRequest);
         string body = await response.Content.ReadAsStringAsync();
-        await Assert.That(body).Contains("\"pageSize\":25");
+        await Assert.That(body).Contains("pageSize must be between 1 and 100");
     }
 
     [Test]

@@ -11,7 +11,6 @@ using Framlux.FleetManagement.Services.Core.Billing;
 using Framlux.FleetManagement.Services.Core.Infrastructure;
 using Framlux.FleetManagement.Services.Core.Models.Telemetry;
 using Framlux.FleetManagement.Services.Core.Telemetry;
-using Microsoft.Extensions.Logging;
 
 namespace Framlux.FleetManagement.Server.Endpoints.Web.Machines;
 
@@ -104,7 +103,15 @@ public sealed class SshSessionsFleetEndpoint : Endpoint<FleetSshSessionsRequest,
         int tenantId = _tenantContext.RequireTenantId();
 
         int page = req.Page < 1 ? 1 : req.Page;
-        int pageSize = (req.PageSize < 1) || (req.PageSize > 100) ? 50 : req.PageSize;
+        // Refused rather than replaced with the default: a request for 200 rows used to get 50, a short
+        // page indistinguishable from the end of the collection. The request's own default of 50 is
+        // within range, so an omitted page size still gets it.
+        if (PageSizeQuery.TryResolve(req.PageSize, out int pageSize) == false)
+        {
+            await HttpContext.SendApiErrorAsync(StatusCodes.Status400BadRequest, PageSizeQuery.OutOfRangeMessage, ct);
+
+            return;
+        }
 
         // Build a lookup of machine names for tenant machines.
         List<Machine> tenantMachines = await _machineRepo.ListActiveMachinesForTenantAsync(tenantId, ct);
