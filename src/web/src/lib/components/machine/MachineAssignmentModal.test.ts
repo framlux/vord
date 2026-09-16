@@ -2,7 +2,7 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/svelte';
 import '@testing-library/jest-dom/vitest';
 import { MachineHealthStatus, type FleetMachineDto, type PaginatedResponse } from '$lib/api/types';
@@ -64,6 +64,17 @@ function respondByPage() {
 	searchMachinesMock.mockImplementation(async (params: { page?: number }) =>
 		(params?.page ?? 1) === 2 ? pageTwo : pageOne
 	);
+}
+
+// A promise whose settlement the test controls, so the order two requests answer in is chosen
+// rather than left to scheduling.
+function deferred<T>() {
+	let resolve!: (value: T) => void;
+	const promise = new Promise<T>((r) => {
+		resolve = r;
+	});
+
+	return { promise, resolve };
 }
 
 function baseProps(overrides: Record<string, unknown> = {}) {
@@ -133,11 +144,19 @@ describe('MachineAssignmentModal', () => {
 		expect(screen.getByText(/1 machine you selected is not shown/i)).toBeInTheDocument();
 	});
 
-	it('resolves select-all-matching through the ids endpoint using the current filter', async () => {
+	it('resolves select-all-matching through the ids endpoint using the filter on screen', async () => {
+		// Select-all resolves the filter the list was loaded with, so the filtered list has to be on
+		// screen first — which is what a person sees before they click. The previous version clicked
+		// inside the debounce window and expected the typed filter, which asserted the very
+		// divergence this picker exists to prevent; its unfired timer also leaked into later tests.
 		getMachineIdsMock.mockResolvedValue({ ids: [7, 8, 9], totalCount: 3, truncated: false });
+		searchMachinesMock.mockImplementation(async (params: { search?: string }) =>
+			params?.search === 'prod' ? makePage([makeMachine(7, 'prod-01')]) : pageOne
+		);
 		render(MachineAssignmentModal, { props: baseProps() });
 
 		await fireEvent.input(await screen.findByLabelText(/search machines/i), { target: { value: 'prod' } });
+		await screen.findByText('prod-01');
 		await fireEvent.click(screen.getByRole('button', { name: /select all matching/i }));
 
 		await waitFor(() =>
@@ -203,6 +222,124 @@ describe('MachineAssignmentModal', () => {
 
 		expect(onsave).toHaveBeenCalled();
 		expect(onsave.mock.calls[0][0]).toEqual([]);
+	});
+
+	describe('when a request fails', () => {
+		it('keeps the list drawn when select-all fails, and says which action failed', async () => {
+			// A bulk-selection failure used to share the list's error slot, and that slot renders in
+			// place of the list. One failed ids call blanked a fleet that had loaded fine, and nothing
+			// re-fetched it, so the only way back was to cancel and lose the whole selection.
+			getMachineIdsMock.mockRejectedValue(new Error('boom'));
+			render(MachineAssignmentModal, { props: baseProps() });
+
+			await screen.findByText('web-01');
+			await fireEvent.click(screen.getByRole('button', { name: 'Select all matching' }));
+
+			expect(await screen.findByRole('alert')).toHaveTextContent(/could not select all matching/i);
+			expect(screen.getByText('web-01')).toBeInTheDocument();
+		});
+
+		it('offers a way to retry a list that failed to load', async () => {
+			searchMachinesMock.mockRejectedValueOnce(new Error('boom'));
+			render(MachineAssignmentModal, { props: baseProps() });
+
+			await screen.findByText(/could not load machines/i);
+			await fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+
+			expect(await screen.findByText('web-01')).toBeInTheDocument();
+		});
+	});
+
+	// Fake timers stand in for the search debounce, so nothing here depends on how long anything
+	// takes. findBy and waitFor are avoided: they poll on timers these tests have frozen.
+	describe('when requests race', () => {
+		const both = makePage([makeMachine(1, 'web-01'), makeMachine(2, 'db-01')]);
+		const onlyDb = makePage([makeMachine(2, 'db-01')]);
+
+		afterEach(() => {
+			vi.useRealTimers();
+		});
+
+		it('draws the newest filter even when an older request answers last', async () => {
+			vi.useFakeTimers();
+			const critical = deferred<PaginatedResponse<FleetMachineDto>>();
+			const anyHealth = deferred<PaginatedResponse<FleetMachineDto>>();
+			searchMachinesMock
+				.mockResolvedValueOnce(both)
+				.mockImplementationOnce(() => critical.promise)
+				.mockImplementationOnce(() => anyHealth.promise);
+
+			render(MachineAssignmentModal, { props: baseProps() });
+			await vi.advanceTimersByTimeAsync(0);
+			expect(screen.getByText('web-01')).toBeInTheDocument();
+
+			const health = screen.getByLabelText('Health');
+			await fireEvent.change(health, { target: { value: 'critical' } });
+			await vi.advanceTimersByTimeAsync(300);
+			await fireEvent.change(health, { target: { value: '' } });
+			await vi.advanceTimersByTimeAsync(300);
+
+			// The premise, asserted rather than assumed: both filter changes reached the server, the
+			// first of them filtered. Without this the test passes whenever the debounced loads fail
+			// to fire, because the list simply keeps its first page.
+			expect(searchMachinesMock).toHaveBeenCalledTimes(3);
+			expect(searchMachinesMock.mock.calls[1][0].healthStatus).toBe('critical');
+
+			// The request for the current filter answers first; the superseded one answers after it
+			// and must not be drawn under a filter it no longer describes.
+			anyHealth.resolve(both);
+			await vi.advanceTimersByTimeAsync(0);
+			critical.resolve(onlyDb);
+			await vi.advanceTimersByTimeAsync(0);
+
+			expect(screen.getByText('web-01')).toBeInTheDocument();
+		});
+
+		// Found because an earlier test in this file typed a search and ended inside the debounce
+		// window: its timer fired during a later test, searched with a filter that test never set,
+		// and consumed one of its queued responses. In the product the same leak sends a request
+		// after the dialog is gone and writes its answer into a picker nobody is looking at.
+		it('sends nothing after it closes with a keystroke still waiting', async () => {
+			vi.useFakeTimers();
+			searchMachinesMock.mockResolvedValueOnce(both);
+			const { rerender } = render(MachineAssignmentModal, { props: baseProps() });
+			await vi.advanceTimersByTimeAsync(0);
+
+			await fireEvent.input(screen.getByLabelText('Search machines'), { target: { value: 'db' } });
+			await rerender(baseProps({ open: false }));
+			await vi.advanceTimersByTimeAsync(300);
+
+			expect(searchMachinesMock).toHaveBeenCalledTimes(1);
+		});
+
+		it('sends nothing after it is removed with a keystroke still waiting', async () => {
+			vi.useFakeTimers();
+			searchMachinesMock.mockResolvedValueOnce(both);
+			const { unmount } = render(MachineAssignmentModal, { props: baseProps() });
+			await vi.advanceTimersByTimeAsync(0);
+
+			await fireEvent.input(screen.getByLabelText('Search machines'), { target: { value: 'db' } });
+			unmount();
+			await vi.advanceTimersByTimeAsync(300);
+
+			expect(searchMachinesMock).toHaveBeenCalledTimes(1);
+		});
+
+		it('resolves select-all against the filter on screen, not one still being typed', async () => {
+			// Discarding stale responses is not enough on its own. Between a keystroke and its
+			// debounced load the list still shows the previous filter, and a select-all that read the
+			// live inputs would resolve a set the user has not been shown.
+			vi.useFakeTimers();
+			searchMachinesMock.mockResolvedValueOnce(both);
+			render(MachineAssignmentModal, { props: baseProps() });
+			await vi.advanceTimersByTimeAsync(0);
+
+			await fireEvent.input(screen.getByLabelText('Search machines'), { target: { value: 'db' } });
+			await fireEvent.click(screen.getByRole('button', { name: 'Select all matching' }));
+
+			expect(getMachineIdsMock).toHaveBeenCalled();
+			expect(getMachineIdsMock.mock.calls[0][0].search).toBeUndefined();
+		});
 	});
 
 	it('surfaces a failed load instead of rendering an empty fleet', async () => {

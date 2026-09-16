@@ -50,6 +50,20 @@
 	let loadError = $state<string | null>(null);
 	let capNotice = $state<string | null>(null);
 
+	// A failed bulk selection is its own condition. It used to share loadError, which renders in
+	// place of the list, so one failed ids call blanked a fleet that had loaded perfectly well.
+	let selectionError = $state<string | null>(null);
+
+	// The filters the drawn list was actually loaded with, as opposed to what the inputs say right
+	// now. Between a keystroke and its debounced load those differ, and "select all matching" has to
+	// mean matching what the user can see. Null until a load has succeeded: with nothing on screen
+	// there is nothing to match.
+	let appliedFilters = $state<ReturnType<typeof currentFilters> | null>(null);
+
+	// Each load takes a number, and only the newest may write. Without this a slow response for a
+	// filter the user has already moved past can land last and be drawn under the new filter.
+	let loadSeq = 0;
+
 	let search = $state('');
 	let healthStatus = $state('');
 	let os = $state('');
@@ -77,27 +91,49 @@
 	}
 
 	async function load(requestedPage: number) {
+		const token = ++loadSeq;
+		const filters = currentFilters();
 		loading = true;
 		loadError = null;
 		try {
 			const result = await client.searchMachines({
 				page: requestedPage,
 				pageSize: PAGE_SIZE,
-				...currentFilters()
+				...filters
 			});
+			if (token !== loadSeq) {
+				return;
+			}
 
 			machines = result.items;
 			page = result.page;
 			totalPages = result.totalPages;
+			appliedFilters = filters;
 			offered = new Set([...offered, ...result.items.map((m) => m.id)]);
 		} catch {
+			if (token !== loadSeq) {
+				return;
+			}
+
 			// An empty list and a failed request look identical on screen, and one of them means
 			// "this fleet has no machines" while the other means "we do not know".
 			machines = [];
-			loadError = 'Could not load machines. Try again.';
+			appliedFilters = null;
+			loadError = 'Could not load machines.';
 		} finally {
-			loading = false;
+			if (token === loadSeq) {
+				loading = false;
+			}
 		}
+	}
+
+	// Closing or removing the dialog must take its pending work with it. A debounced search left
+	// running fired after the dialog was gone, and a response still in flight would have written
+	// into a picker nobody was looking at. Advancing the sequence discards the latter.
+	function cancelPending() {
+		clearTimeout(searchTimer);
+		searchTimer = undefined;
+		loadSeq++;
 	}
 
 	function applyFilterChange() {
@@ -116,9 +152,15 @@
 	}
 
 	async function selectAllMatching() {
+		const filters = appliedFilters;
+		if (filters === null) {
+			return;
+		}
+
 		capNotice = null;
+		selectionError = null;
 		try {
-			const selection = await client.getMachineIds(currentFilters());
+			const selection = await client.getMachineIds(filters);
 			selected = new Set([...selected, ...selection.ids]);
 			offered = new Set([...offered, ...selection.ids]);
 
@@ -128,7 +170,7 @@
 				capNotice = `Too many machines match this filter (${selection.totalCount.toLocaleString()}). The first ${selection.ids.length.toLocaleString()} were selected — narrow the filter to reach the rest.`;
 			}
 		} catch {
-			loadError = 'Could not select all matching machines. Try again.';
+			selectionError = 'Could not select all matching machines. Try again.';
 		}
 	}
 
@@ -169,18 +211,29 @@
 				offered = new Set(initialSelectedIds);
 				page = 1;
 				capNotice = null;
+				selectionError = null;
+				appliedFilters = null;
 				load(1);
 
 				requestAnimationFrame(() => {
-					if (dialogElement !== undefined) {
-						moveFocusInto(dialogElement);
-					}
+					moveFocusInto(dialogElement);
 				});
-			} else if (previouslyFocused !== null) {
-				previouslyFocused.focus();
-				previouslyFocused = null;
+			} else {
+				cancelPending();
+				if (previouslyFocused !== null) {
+					previouslyFocused.focus();
+					previouslyFocused = null;
+				}
 			}
 		});
+	});
+
+	// Closing is not the only way out: the dialog can be removed while open, and the pending work
+	// has to go with it then too.
+	$effect(() => {
+		return () => {
+			cancelPending();
+		};
 	});
 
 	const healthOptions = [
@@ -270,7 +323,7 @@
 					{/if}
 				</div>
 				<div class="flex items-center gap-2">
-					<button type="button" onclick={selectAllMatching} class="rounded border border-surface-300 px-2 py-1 font-medium text-primary-600 hover:bg-surface-100 dark:border-surface-600 dark:text-primary-400 dark:hover:bg-surface-700">
+					<button type="button" onclick={selectAllMatching} disabled={appliedFilters === null} class="rounded border disabled:cursor-not-allowed disabled:opacity-50 border-surface-300 px-2 py-1 font-medium text-primary-600 hover:bg-surface-100 dark:border-surface-600 dark:text-primary-400 dark:hover:bg-surface-700">
 						Select all matching
 					</button>
 					<button type="button" onclick={clearSelection} class="rounded border border-surface-300 px-2 py-1 font-medium text-surface-600 hover:bg-surface-100 dark:border-surface-600 dark:text-surface-400 dark:hover:bg-surface-700">
@@ -278,6 +331,12 @@
 					</button>
 				</div>
 			</div>
+
+			{#if selectionError}
+				<p role="alert" class="border-b border-red-200 bg-red-50 px-4 py-2 text-xs text-red-700 dark:border-red-800 dark:bg-red-900/20 dark:text-red-300">
+					{selectionError}
+				</p>
+			{/if}
 
 			{#if capNotice}
 				<p class="border-b border-amber-200 bg-amber-50 px-4 py-2 text-xs text-amber-700 dark:border-amber-800 dark:bg-amber-900/20 dark:text-amber-300">
@@ -287,9 +346,14 @@
 
 			<div class="min-h-0 flex-1 overflow-y-auto p-4">
 				{#if loadError}
-					<p role="alert" class="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-900/20 dark:text-red-300">
-						{loadError}
-					</p>
+					<!-- A failed load used to be a dead end: nothing changed that would trigger another
+					     one, so the only way back was to cancel and lose the selection. -->
+					<div class="flex items-center justify-between gap-3 rounded-lg border border-red-200 bg-red-50 p-3 dark:border-red-800 dark:bg-red-900/20">
+						<p role="alert" class="text-sm text-red-700 dark:text-red-300">{loadError}</p>
+						<button type="button" onclick={() => load(page)} class="rounded border border-red-300 px-2 py-1 text-xs font-medium text-red-700 hover:bg-red-100 dark:border-red-700 dark:text-red-300 dark:hover:bg-red-900/40">
+							Try again
+						</button>
+					</div>
 				{:else if loading && machines.length === 0}
 					<p class="py-6 text-center text-sm text-surface-500 dark:text-surface-400">Loading machines…</p>
 				{:else if machines.length === 0}
