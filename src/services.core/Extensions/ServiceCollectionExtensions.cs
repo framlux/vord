@@ -200,6 +200,7 @@ public static class ServiceCollectionExtensions
             ConnectionMultiplexer.Connect(redisConfig));
         services.AddSingleton<IMachinePingService, RedisMachinePingService>();
         services.AddSingleton<ITelemetryDeduplicationService, RedisTelemetryDeduplicationService>();
+        services.AddSingleton<IFailedSshLoginChainGate, RedisFailedSshLoginChainGate>();
         services.AddSingleton<IAdvisoryLockProvider, PostgresAdvisoryLockProvider>();
 
         services.AddHangfireClient(postgresConnectionString);
@@ -433,6 +434,7 @@ public static class ServiceCollectionExtensions
         services.AddScoped<HealthSweepCoordinatorJob>();
         services.AddScoped<AlertEvaluationJob>();
         services.AddScoped<SshAlertEvaluationJob>();
+        services.AddScoped<FailedSshLoginWindowJob>();
         services.AddScoped<AlertConditionStateCleanupJob>();
         services.AddScoped<IntegrationDeliveryJob>();
         services.AddScoped<SendInvitationEmailJob>();

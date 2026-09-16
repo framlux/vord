@@ -4,6 +4,7 @@
 
 using Framlux.FleetManagement.Server.Endpoints.Grpc;
 using Framlux.FleetManagement.Server.Services.Infrastructure;
+using Framlux.FleetManagement.Services.Core.Alerts;
 using Framlux.FleetManagement.Services.Core.Billing;
 using Framlux.FleetManagement.Services.Core.Options;
 using Framlux.FleetManagement.Services.Core.Telemetry;
@@ -56,6 +57,8 @@ public sealed class StreamSlotAcquireLiveTests
             Options.Create(new TelemetryOptions { MaxConcurrentStreamsPerMachine = maxPerMachine }),
             new ProcessStreamSlotLimiter(5000),
             TestMetricsFactory.CreateIngestMetrics(),
+            TestMetricsFactory.CreateResilienceMetrics(),
+            Substitute.For<IFailedSshLoginChainGate>(),
             TimeProvider.System,
             NullLogger<TelemetryService>.Instance);
     }

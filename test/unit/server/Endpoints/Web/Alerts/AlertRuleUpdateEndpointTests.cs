@@ -106,7 +106,7 @@ public sealed class AlertRuleUpdateEndpointTests
     {
         string? result = AlertRuleUpdateEndpoint.ValidateMetricConstraints(AlertMetric.SshConnection, 1, 1);
 
-        await Assert.That(result).IsEqualTo("Duration must be zero for event-based metrics");
+        await Assert.That(result).IsEqualTo("Duration must be zero for point-in-time metrics");
     }
 
     [Test]
@@ -122,7 +122,7 @@ public sealed class AlertRuleUpdateEndpointTests
     {
         string? result = AlertRuleUpdateEndpoint.ValidateMetricConstraints(AlertMetric.SshConnection, 1, -1);
 
-        await Assert.That(result).IsEqualTo("Duration must be zero for event-based metrics");
+        await Assert.That(result).IsEqualTo("Duration must be zero for point-in-time metrics");
     }
 
     // --- Volatile Metric Duration Validation ---
@@ -259,5 +259,25 @@ public sealed class AlertRuleUpdateEndpointTests
         string? result = AlertRuleUpdateEndpoint.ValidateMetricConstraints(AlertMetric.CpuUsage, 80, 5000);
 
         await Assert.That(result).IsEqualTo("Duration for CpuUsage alerts must be between 5 and 1440 minutes");
+    }
+
+    /// <summary>
+    /// The database-loaded re-validation shares the metric rules, so an ingest-evaluated metric
+    /// that measures a window must be allowed a non-zero duration here as well.
+    /// </summary>
+    [Test]
+    public async Task ValidateMetricConstraints_FailedSshLogin_WindowDuration_ReturnsNull()
+    {
+        string? result = AlertRuleUpdateEndpoint.ValidateMetricConstraints(AlertMetric.FailedSshLogin, 5, 10);
+
+        await Assert.That(result).IsNull();
+    }
+
+    [Test]
+    public async Task ValidateMetricConstraints_FailedSshLogin_ZeroDuration_ReturnsError()
+    {
+        string? result = AlertRuleUpdateEndpoint.ValidateMetricConstraints(AlertMetric.FailedSshLogin, 5, 0);
+
+        await Assert.That(result).IsEqualTo("Duration for FailedSshLogin alerts must be between 5 and 1440 minutes");
     }
 }

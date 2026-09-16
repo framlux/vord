@@ -41,6 +41,12 @@ public sealed class CreateAlertRuleValidator : Validator<CreateAlertRuleRequest>
             .Must(op => Enum.TryParse<AlertOperator>(op, true, out _))
             .WithMessage("Invalid operator");
 
+        // The operator is settable only at create time; the update path preserves whatever the row
+        // already carries. Metrics that only make sense under one comparison are constrained here.
+        RuleFor(x => x.Operator)
+            .Must((req, op) => AlertRuleMetricRules.ValidateOperatorForMetric(req.Metric, op))
+            .WithMessage(req => AlertRuleMetricRules.GetOperatorValidationMessage(req.Metric));
+
         RuleFor(x => x.Severity)
             .Must(sev => Enum.TryParse<AlertSeverity>(sev, true, out _))
             .WithMessage("Invalid severity");

@@ -80,6 +80,8 @@ public sealed class TelemetryService : Telemetry.TelemetryBase
     private readonly TelemetryOptions _options;
     private readonly ProcessStreamSlotLimiter _processSlotLimiter;
     private readonly IngestMetrics _ingestMetrics;
+    private readonly ResilienceMetrics _resilienceMetrics;
+    private readonly IFailedSshLoginChainGate _failedSshLoginChainGate;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<TelemetryService> _logger;
 
@@ -111,6 +113,8 @@ public sealed class TelemetryService : Telemetry.TelemetryBase
         IOptions<TelemetryOptions> options,
         ProcessStreamSlotLimiter processSlotLimiter,
         IngestMetrics ingestMetrics,
+        ResilienceMetrics resilienceMetrics,
+        IFailedSshLoginChainGate failedSshLoginChainGate,
         TimeProvider timeProvider,
         ILogger<TelemetryService> logger)
     {
@@ -123,6 +127,8 @@ public sealed class TelemetryService : Telemetry.TelemetryBase
         ArgumentNullException.ThrowIfNull(options);
         ArgumentNullException.ThrowIfNull(processSlotLimiter);
         ArgumentNullException.ThrowIfNull(ingestMetrics);
+        ArgumentNullException.ThrowIfNull(resilienceMetrics);
+        ArgumentNullException.ThrowIfNull(failedSshLoginChainGate);
         ArgumentNullException.ThrowIfNull(timeProvider);
         ArgumentNullException.ThrowIfNull(logger);
         _scopeFactory = scopeFactory;
@@ -134,6 +140,8 @@ public sealed class TelemetryService : Telemetry.TelemetryBase
         _options = options.Value;
         _processSlotLimiter = processSlotLimiter;
         _ingestMetrics = ingestMetrics;
+        _resilienceMetrics = resilienceMetrics;
+        _failedSshLoginChainGate = failedSshLoginChainGate;
         _timeProvider = timeProvider;
         _logger = logger;
     }
@@ -532,7 +540,7 @@ public sealed class TelemetryService : Telemetry.TelemetryBase
 
                 // Enqueue SSH alert evaluation out of band so the ack is not blocked on per-item
                 // alert evaluation; each SSH item becomes its own independently-retryable job.
-                EnqueueSshAlertEvaluations(tenantId, machineId, newItems);
+                await EnqueueSshAlertEvaluationsAsync(tenantId, machineId, newItems, receivedAt);
             }
 
             _logger.LogDebug("Processed {Count} telemetry items for machine {MachineId} batch {BatchId}",
@@ -598,11 +606,18 @@ public sealed class TelemetryService : Telemetry.TelemetryBase
         return collected;
     }
 
-    private void EnqueueSshAlertEvaluations(
+    private async Task EnqueueSshAlertEvaluationsAsync(
         int tenantId,
         long machineId,
-        List<(TelemetryItem Item, short Type, string Payload)> items)
+        List<(TelemetryItem Item, short Type, string Payload)> items,
+        DateTimeOffset receivedAt)
     {
+        // Every item in an envelope belongs to the one authenticated machine, and the chain lease
+        // gives the same answer for each of its failed items, so the gate is asked once per envelope
+        // rather than once per attempt. Asking per attempt put hundreds of sequential Redis
+        // round-trips inside the pre-ack path of exactly the envelopes a brute force produces.
+        bool failedLoginChainHandled = false;
+
         foreach ((TelemetryItem item, short _, string _) in items)
         {
             if (item.PayloadCase != TelemetryItem.PayloadOneofCase.SshSession)
@@ -611,6 +626,17 @@ public sealed class TelemetryService : Telemetry.TelemetryBase
             }
 
             SshSessionRecord ssh = item.SshSession;
+
+            if (FailedSshLoginWindowJob.IsFailedAction(ssh.Action) == true)
+            {
+                if (failedLoginChainHandled == false)
+                {
+                    await OpenFailedSshLoginChainAsync(tenantId, machineId, receivedAt);
+                    failedLoginChainHandled = true;
+                }
+
+                continue;
+            }
 
             // Only enqueue for actions the job actually evaluates. The agent emits "failed" for every
             // failed auth attempt; under brute force that would flood the Postgres-backed critical queue
@@ -623,6 +649,57 @@ public sealed class TelemetryService : Telemetry.TelemetryBase
             _backgroundJobs.Enqueue<SshAlertEvaluationJob>(
                 job => job.RunAsync(tenantId, machineId, ssh.Action, ssh.User, ssh.SourceIp, ssh.SourcePort, ssh.AuthMethod, CancellationToken.None));
         }
+    }
+
+    /// <summary>
+    /// Opens a failed-SSH-login evaluation chain for the machine and schedules its first run, unless
+    /// a chain is already running for it.
+    /// </summary>
+    /// <remarks>
+    /// Redis is a lease, never the authority on the count. It answers only "is an evaluation chain
+    /// already running for this machine", which is the same question the chain's own re-arm asks —
+    /// sharing it is what keeps a machine under sustained attack to one chain instead of accumulating
+    /// one per window from each scheduler. The evaluation then counts each rule's own window from the
+    /// telemetry rows, which is why the fail-open path below produces exactly the same answer.
+    /// <para>
+    /// The chain's window is anchored to the envelope's server receipt time, which is what every row
+    /// it will count is stamped with. Anchoring to the moment the job runs instead would start the
+    /// window after those rows and miss a burst delivered in a single envelope entirely.
+    /// </para>
+    /// </remarks>
+    private async Task OpenFailedSshLoginChainAsync(int tenantId, long machineId, DateTimeOffset receivedAt)
+    {
+        try
+        {
+            string? chainToken = await _failedSshLoginChainGate.TryOpenChainAsync(machineId);
+
+            if (chainToken is null)
+            {
+                return;
+            }
+
+            ScheduleFailedSshLoginWindowJob(tenantId, machineId, receivedAt, chainToken);
+        }
+        catch (Exception ex) when (ex is RedisConnectionException or RedisTimeoutException)
+        {
+            // Fail open: alerting on a brute-force attempt matters more than suppressing a duplicate
+            // evaluation, and the count itself never came from Redis. What is lost is the suppression,
+            // so the flood it prevents is bounded by hand instead — one chain per machine per envelope,
+            // which the first successful renewal collapses back to one.
+            _resilienceMetrics.RecordFailOpen(ResilienceComponent.SshFailureWindow);
+            _logger.LogWarning(ex,
+                "Redis unavailable for the failed SSH login chain lease on machine {MachineId}; failing open and scheduling one evaluation for this batch",
+                machineId);
+
+            ScheduleFailedSshLoginWindowJob(tenantId, machineId, receivedAt, Guid.NewGuid().ToString("N"));
+        }
+    }
+
+    private void ScheduleFailedSshLoginWindowJob(int tenantId, long machineId, DateTimeOffset windowOpenedAt, string chainToken)
+    {
+        _backgroundJobs.Schedule<FailedSshLoginWindowJob>(
+            job => job.RunAsync(tenantId, machineId, windowOpenedAt, chainToken, CancellationToken.None),
+            AlertConstants.FailedSshLoginWindow);
     }
 
     private static string SerializePayload(TelemetryItem item)

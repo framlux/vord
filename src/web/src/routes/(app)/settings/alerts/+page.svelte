@@ -90,14 +90,40 @@
 		SecurityUpdates: 1,
 		DiskHealth: 1,
 		SshConnection: 0,
-		TelemetryStale: 1
+		TelemetryStale: 1,
+		// Failed-login windows are evaluated on the server's five-minute cadence, so a shorter window
+		// would leave most of the traffic uninspected and detect less than the built-in rule does.
+		FailedSshLogin: 5
 	};
 
-	const eventMetrics = new Set(['SshConnection']);
+	// These are two different questions that used to share one set, and conflating them hid the very
+	// inputs a metric needed. "Measured from events" asks where the number comes from: events as they
+	// arrive, rather than the periodic sweep over machine state. "Has nothing to configure" asks
+	// whether the rule has an operator, a threshold and a window at all. An SSH connection is both —
+	// it fires on the event itself, so there is no number to compare. A failed SSH login is only the
+	// first: the failures are counted as they arrive, but the count is then compared against a
+	// threshold over a window the tenant chooses, so every one of those inputs still applies.
+	const eventMeasuredMetrics = new Set(['SshConnection', 'FailedSshLogin']);
+	const metricsWithoutThreshold = new Set(['SshConnection']);
+
+	const defaultOperators: Array<{ value: string; label: string }> = [
+		{ value: 'GreaterThan', label: 'Greater Than' },
+		{ value: 'LessThan', label: 'Less Than' },
+		{ value: 'EqualTo', label: 'Equals' }
+	];
+
+	// The server refuses anything but a greater-than comparison on a failed-login count. Equals never
+	// fires when a burst takes the count straight from four to seven, and less-than fires on almost
+	// every quiet window. Offering either would only build a rule the save rejects.
+	const metricOperators: Record<string, Array<{ value: string; label: string }>> = {
+		FailedSshLogin: [{ value: 'GreaterThan', label: 'Greater Than' }]
+	};
 
 	let createMetric = $state('CpuUsage');
-	const isCreateEventMetric = $derived(eventMetrics.has(createMetric));
+	const createHasThreshold = $derived(metricsWithoutThreshold.has(createMetric) === false);
 	const createMinDuration = $derived(metricMinDuration[createMetric] ?? 1);
+	const createOperators = $derived(metricOperators[createMetric] ?? defaultOperators);
+	const createIsEventMeasured = $derived(eventMeasuredMetrics.has(createMetric));
 
 	async function copySecret() {
 		if (revealedSecret) {
@@ -316,17 +342,25 @@
 										<option value="DiskHealth">Disk Health</option>
 										<option value="MachineOffline">Machine Offline</option>
 										<option value="SshConnection">SSH Connection</option>
+										<option value="FailedSshLogin">Failed SSH Logins</option>
 										<option value="TelemetryStale">Telemetry Stopped</option>
 									</select>
 								</div>
-								{#if isCreateEventMetric === false}
+								{#if createHasThreshold}
 									<div>
 										<label for="rule-operator" class="mb-1 block text-xs text-surface-500 dark:text-surface-400">Operator</label>
-										<select id="rule-operator" name="operator" required class="w-full rounded-lg border border-surface-300 bg-surface-50 px-3 py-2 text-sm dark:border-surface-600 dark:bg-surface-700 dark:text-surface-100">
-											<option value="GreaterThan">Greater Than</option>
-											<option value="LessThan">Less Than</option>
-											<option value="EqualTo">Equals</option>
-										</select>
+										<!-- Remounting on a metric change drops any selection the new metric does not allow,
+										     so the form can never post an operator that is no longer on offer. -->
+										{#key createMetric}
+											<select id="rule-operator" name="operator" required class="w-full rounded-lg border border-surface-300 bg-surface-50 px-3 py-2 text-sm dark:border-surface-600 dark:bg-surface-700 dark:text-surface-100">
+												{#each createOperators as operator}
+													<option value={operator.value}>{operator.label}</option>
+												{/each}
+											</select>
+										{/key}
+										{#if createOperators.length < defaultOperators.length}
+											<p class="mt-1 text-xs text-surface-400 dark:text-surface-500">This metric counts events in a window, so only a greater-than comparison is meaningful.</p>
+										{/if}
 									</div>
 									<div>
 										<label for="rule-threshold" class="mb-1 block text-xs text-surface-500 dark:text-surface-400">Threshold</label>
@@ -335,7 +369,11 @@
 									<div>
 										<label for="rule-duration" class="mb-1 block text-xs text-surface-500 dark:text-surface-400">Duration (minutes)</label>
 										<input id="rule-duration" name="durationMinutes" type="number" value={createMinDuration} min={createMinDuration} class="w-full rounded-lg border border-surface-300 bg-surface-50 px-3 py-2 text-sm dark:border-surface-600 dark:bg-surface-700 dark:text-surface-100" />
-										<p class="mt-1 text-xs text-surface-400 dark:text-surface-500">Minimum {createMinDuration} min. Condition must be sustained before the alert fires.</p>
+										{#if createIsEventMeasured}
+											<p class="mt-1 text-xs text-surface-400 dark:text-surface-500">Minimum {createMinDuration} min. Events are counted over this window and the alert fires when the window closes.</p>
+										{:else}
+											<p class="mt-1 text-xs text-surface-400 dark:text-surface-500">Minimum {createMinDuration} min. Condition must be sustained before the alert fires.</p>
+										{/if}
 									</div>
 								{:else}
 									<input type="hidden" name="operator" value="EqualTo" />
@@ -429,7 +467,7 @@
 											</td>
 											<td class="px-4 py-3 text-surface-600 dark:text-surface-400">{rule.metric}</td>
 											<td class="px-4 py-3 text-surface-600 dark:text-surface-400">
-												{#if eventMetrics.has(rule.metric)}
+												{#if metricsWithoutThreshold.has(rule.metric)}
 													<span class="text-xs text-surface-400">On event</span>
 												{:else}
 													{rule.operator} {rule.threshold}
@@ -534,7 +572,7 @@
 											</tr>
 										{/if}
 										{#if editingRuleId === rule.id}
-											{@const isEditEvent = eventMetrics.has(rule.metric)}
+											{@const editHasThreshold = metricsWithoutThreshold.has(rule.metric) === false}
 											{@const editMinDuration = metricMinDuration[rule.metric] ?? 1}
 											<tr class="bg-surface-50 dark:bg-surface-800/50">
 												<td colspan="8" class="px-4 py-4">
@@ -552,7 +590,7 @@
 																<label for="edit-name-{rule.id}" class="mb-1 block text-xs text-surface-500 dark:text-surface-400">Name</label>
 																<input id="edit-name-{rule.id}" name="name" type="text" value={rule.name} required class="w-full rounded-lg border border-surface-300 bg-surface-50 px-3 py-2 text-sm dark:border-surface-600 dark:bg-surface-700 dark:text-surface-100" />
 															</div>
-															{#if isEditEvent === false}
+															{#if editHasThreshold}
 																<div>
 																	<label for="edit-threshold-{rule.id}" class="mb-1 block text-xs text-surface-500 dark:text-surface-400">Threshold</label>
 																	<input id="edit-threshold-{rule.id}" name="threshold" type="number" step="any" value={rule.threshold} required class="w-full rounded-lg border border-surface-300 bg-surface-50 px-3 py-2 text-sm dark:border-surface-600 dark:bg-surface-700 dark:text-surface-100" />
@@ -560,7 +598,7 @@
 																<div>
 																	<label for="edit-duration-{rule.id}" class="mb-1 block text-xs text-surface-500 dark:text-surface-400">Duration (minutes)</label>
 																	<input id="edit-duration-{rule.id}" name="durationMinutes" type="number" value={rule.durationMinutes} min={editMinDuration} class="w-full rounded-lg border border-surface-300 bg-surface-50 px-3 py-2 text-sm dark:border-surface-600 dark:bg-surface-700 dark:text-surface-100" />
-																	<p class="mt-1 text-xs text-surface-400 dark:text-surface-500">Minimum {editMinDuration} min</p>
+																	<p class="mt-1 text-xs text-surface-400 dark:text-surface-500">Minimum {editMinDuration} min{eventMeasuredMetrics.has(rule.metric) ? ' — events are counted over this window' : ''}</p>
 																</div>
 															{:else}
 																<input type="hidden" name="threshold" value={rule.threshold} />

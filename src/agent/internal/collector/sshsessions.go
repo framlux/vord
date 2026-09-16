@@ -41,10 +41,17 @@ func (c *SSHSessionsCollector) DefaultInterval() time.Duration {
 	return c.rs.TelemetryCollectFastInterval()
 }
 
+// sshd names an unknown account with an "invalid user " prefix ("illegal user " on
+// older builds), so the username is not the word immediately after "for". Treating
+// that prefix as optional is what lets both forms share one capture group.
+const sshUnknownUserPrefix = `(?:invalid user |illegal user )?`
+
 var (
+	// Successful logins never carry the unknown-user prefix — sshd cannot accept an
+	// account it does not have — so this pattern stays as-is.
 	reAccepted     = regexp.MustCompile(`Accepted (\S+) for (\S+) from ([\d.:a-fA-F]+) port (\d+)`)
 	reDisconnect   = regexp.MustCompile(`Disconnected from user (\S+) ([\d.:a-fA-F]+) port (\d+)`)
-	reFailed       = regexp.MustCompile(`Failed (\S+) for (\S+) from ([\d.:a-fA-F]+) port (\d+)`)
+	reFailed       = regexp.MustCompile(`Failed (\S+) for ` + sshUnknownUserPrefix + `(\S+) from ([\d.:a-fA-F]+) port (\d+)`)
 	reSessionOpen  = regexp.MustCompile(`session opened for user (\S+)`)
 	reSessionClose = regexp.MustCompile(`session closed for user (\S+)`)
 )

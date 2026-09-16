@@ -7,10 +7,16 @@ using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Test.Infrastructure;
 using Framlux.FleetManagement.Grpc.AgentTelemetry;
+using Framlux.FleetManagement.Services.Core.Alerts;
 using Grpc.Core;
 using Grpc.Net.Client;
+using Hangfire.Common;
+using Hangfire.States;
 using LinqToDB;
 using LinqToDB.Async;
+using Microsoft.Extensions.DependencyInjection;
+using NSubstitute;
+using NSubstitute.Core;
 using System.Security.Cryptography;
 using System.Text;
 
@@ -618,6 +624,219 @@ public sealed class TelemetrySubmissionTests
         await Assert.That(count).IsEqualTo(0);
     }
 
+    [Test]
+    public async Task SubmitTelemetry_FailedSshLogin_SchedulesTheWindowJobAndNotThePerItemJob()
+    {
+        // The homepage promise is alerting on failed logins, and the ingest path is where that starts.
+        // One failed attempt opens the window and schedules exactly one evaluation; it must never
+        // become a per-item job, which under brute force is one critical-queue job per attempt.
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+
+        string apiKey = "telemetry-failed-ssh-key";
+        (long machineId, int tenantId) = await SeedMachineWithSubscription(db, apiKey);
+
+        using GrpcChannel channel = CreateChannel(factory);
+        Telemetry.TelemetryClient client = new(channel);
+        Metadata headers = new() { { "x-api-key", apiKey } };
+
+        TelemetryEnvelope envelope = new()
+        {
+            BatchId = Guid.NewGuid().ToString("N"),
+            AgentTimestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            Items =
+            {
+                new TelemetryItem
+                {
+                    EventId = Guid.NewGuid().ToString("N"),
+                    Type = TelemetryTypes.SshSessionType,
+                    SshSession = new SshSessionRecord
+                    {
+                        User = "root",
+                        SourceIp = "203.0.113.7",
+                        SourcePort = 22,
+                        Action = "failed",
+                        AuthMethod = "password",
+                        Timestamp = DateTimeOffset.UtcNow.ToString("o"),
+                    }
+                }
+            }
+        };
+
+        TelemetryAck ack = await client.SubmitTelemetryAsync(envelope, headers: headers);
+
+        await Assert.That(ack.Success).IsTrue();
+        factory.BackgroundJobClientMock.Received(1).Create(
+            Arg.Is<Job>(job => (job.Type == typeof(FailedSshLoginWindowJob))
+                && ((int)job.Args[0] == tenantId)
+                && ((long)job.Args[1] == machineId)),
+            Arg.Is<IState>(state => state is ScheduledState));
+        factory.BackgroundJobClientMock.DidNotReceive().Create(
+            Arg.Is<Job>(job => job.Type == typeof(SshAlertEvaluationJob)),
+            Arg.Any<IState>());
+    }
+
+    [Test]
+    public async Task SubmitTelemetry_SshConnect_KeepsThePerItemJobAndOpensNoWindow()
+    {
+        // A successful connect is a different alert with a different shape; the failure window must
+        // not be touched by it.
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+
+        string apiKey = "telemetry-connect-ssh-key";
+        (long machineId, int _) = await SeedMachineWithSubscription(db, apiKey);
+
+        using GrpcChannel channel = CreateChannel(factory);
+        Telemetry.TelemetryClient client = new(channel);
+        Metadata headers = new() { { "x-api-key", apiKey } };
+
+        TelemetryEnvelope envelope = new()
+        {
+            BatchId = Guid.NewGuid().ToString("N"),
+            AgentTimestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            Items =
+            {
+                new TelemetryItem
+                {
+                    EventId = Guid.NewGuid().ToString("N"),
+                    Type = TelemetryTypes.SshSessionType,
+                    SshSession = new SshSessionRecord
+                    {
+                        User = "deploy",
+                        SourceIp = "198.51.100.4",
+                        SourcePort = 44000,
+                        Action = "connect",
+                        AuthMethod = "publickey",
+                        Timestamp = DateTimeOffset.UtcNow.ToString("o"),
+                    }
+                }
+            }
+        };
+
+        TelemetryAck ack = await client.SubmitTelemetryAsync(envelope, headers: headers);
+
+        await Assert.That(ack.Success).IsTrue();
+        factory.BackgroundJobClientMock.Received(1).Create(
+            Arg.Is<Job>(job => (job.Type == typeof(SshAlertEvaluationJob))
+                && ((long)job.Args[1] == machineId)
+                && ((string)job.Args[2] == "connect")),
+            Arg.Any<IState>());
+        factory.BackgroundJobClientMock.DidNotReceive().Create(
+            Arg.Is<Job>(job => job.Type == typeof(FailedSshLoginWindowJob)),
+            Arg.Any<IState>());
+    }
+
+    /// <summary>
+    /// The promise the whole feature exists for, end to end: attempts arrive over the wire, and the
+    /// evaluation the ingest path wakes up counts those very rows and raises the alert.
+    /// </summary>
+    [Test]
+    public async Task SubmitTelemetry_FailedSshLoginsOverThreshold_RaiseAnAlertEventWhenTheWindowJobRuns()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+
+        string apiKey = "telemetry-failed-ssh-pipeline-key";
+        (long machineId, int tenantId) = await SeedMachineWithSubscription(db, apiKey, subscriptionTier: SubscriptionTier.Pro);
+
+        AlertRule rule = TestDataBuilder.BuildAlertRule(
+            tenantId: tenantId,
+            metric: AlertMetric.FailedSshLogin,
+            op: AlertOperator.GreaterThan,
+            threshold: 5,
+            severity: AlertSeverity.Warning,
+            isCustom: false,
+            durationMinutes: AlertConstants.FailedSshLoginWindowMinutes);
+        rule.Id = await db.InsertWithInt32IdentityAsync(rule);
+
+        await db.InsertAsync(new AlertRuleMachine
+        {
+            AlertRuleId = rule.Id,
+            MachineId = machineId,
+            CreatedAt = DateTimeOffset.UtcNow,
+        });
+
+        using GrpcChannel channel = CreateChannel(factory);
+        Telemetry.TelemetryClient client = new(channel);
+        Metadata headers = new() { { "x-api-key", apiKey } };
+
+        TelemetryEnvelope envelope = new()
+        {
+            BatchId = Guid.NewGuid().ToString("N"),
+            AgentTimestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+        };
+
+        for (int attempt = 0; attempt < 6; attempt++)
+        {
+            envelope.Items.Add(new TelemetryItem
+            {
+                EventId = Guid.NewGuid().ToString("N"),
+                Type = TelemetryTypes.SshSessionType,
+                SshSession = new SshSessionRecord
+                {
+                    User = (attempt % 2 == 0) ? "root" : "admin",
+                    SourceIp = "203.0.113.7",
+                    SourcePort = 55000 + attempt,
+                    Action = "failed",
+                    AuthMethod = "password",
+                    Timestamp = DateTimeOffset.UtcNow.ToString("o"),
+                }
+            });
+        }
+
+        TelemetryAck ack = await client.SubmitTelemetryAsync(envelope, headers: headers);
+
+        await Assert.That(ack.Success).IsTrue();
+
+        // The evaluation runs with exactly the arguments ingest scheduled it with, including the
+        // envelope's server receipt time. Anchoring the window to the job's own run instant instead
+        // would start it after these rows and count nothing.
+        Job scheduled = FindScheduledWindowJob(factory);
+
+        using (IServiceScope scope = factory.Services.CreateScope())
+        {
+            FailedSshLoginWindowJob job = scope.ServiceProvider.GetRequiredService<FailedSshLoginWindowJob>();
+            await job.RunAsync(
+                (int)scheduled.Args[0]!,
+                (long)scheduled.Args[1]!,
+                (DateTimeOffset)scheduled.Args[2]!,
+                (string)scheduled.Args[3]!,
+                CancellationToken.None);
+        }
+
+        AlertEvent? raised = await db.AlertEvents
+            .Where(e => (e.AlertRuleId == rule.Id) && (e.MachineId == machineId))
+            .FirstOrDefaultAsync();
+
+        await Assert.That(raised).IsNotNull();
+        await Assert.That(raised!.Status).IsEqualTo(AlertEventStatus.Triggered);
+        await Assert.That(raised.Message).Contains("6 failed SSH logins");
+        await Assert.That(raised.Details).Contains("203.0.113.7");
+        factory.BackgroundJobClientMock.Received().Create(
+            Arg.Is<Job>(job => job.Type == typeof(IntegrationDeliveryJob)),
+            Arg.Any<IState>());
+    }
+
+    /// <summary>
+    /// Returns the failed-SSH-login window job the ingest path scheduled, so the evaluation can be
+    /// run with the arguments production would have given it.
+    /// </summary>
+    private static Job FindScheduledWindowJob(FunctionalTestFactory factory)
+    {
+        foreach (ICall call in factory.BackgroundJobClientMock.ReceivedCalls())
+        {
+            object?[] arguments = call.GetArguments();
+
+            if ((arguments.Length == 2) && (arguments[0] is Job job) && (job.Type == typeof(FailedSshLoginWindowJob)))
+            {
+                return job;
+            }
+        }
+
+        throw new InvalidOperationException("Ingest scheduled no failed-SSH-login window job.");
+    }
+
     private static GrpcChannel CreateChannel(FunctionalTestFactory factory)
     {
         HttpMessageHandler handler = new ResponseVersionHandler
@@ -634,7 +853,8 @@ public sealed class TelemetrySubmissionTests
     private static async Task<(long machineId, int tenantId)> SeedMachineWithSubscription(
         DatabaseContext db,
         string plaintextApiKey,
-        SubscriptionStatus subscriptionStatus = SubscriptionStatus.Active)
+        SubscriptionStatus subscriptionStatus = SubscriptionStatus.Active,
+        SubscriptionTier subscriptionTier = SubscriptionTier.Free)
     {
         Tenant tenant = new()
         {
@@ -650,7 +870,7 @@ public sealed class TelemetrySubmissionTests
         TenantSubscription subscription = new()
         {
             TenantId = tenantId,
-            Tier = SubscriptionTier.Free,
+            Tier = subscriptionTier,
             Status = subscriptionStatus,
             CreatedAt = DateTimeOffset.UtcNow,
             UpdatedAt = DateTimeOffset.UtcNow

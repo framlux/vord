@@ -10,6 +10,7 @@ using Framlux.FleetManagement.Server.Services.Infrastructure;
 using Framlux.FleetManagement.Services.Core.Alerts;
 using Framlux.FleetManagement.Services.Core.Billing;
 using Framlux.FleetManagement.Services.Core.Machines;
+using Framlux.FleetManagement.Services.Core.Observability;
 using Framlux.FleetManagement.Services.Core.Options;
 using Framlux.FleetManagement.Services.Core.Telemetry;
 using Framlux.FleetManagement.Test.Infrastructure;
@@ -21,12 +22,14 @@ using LinqToDB;
 using LinqToDB.Async;
 using Microsoft.AspNetCore.Http;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Diagnostics.Metrics.Testing;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Time.Testing;
 using NSubstitute;
 using Polly;
 using StackExchange.Redis;
+using System.Diagnostics.Metrics;
 using System.Security.Claims;
 
 namespace Framlux.FleetManagement.Test.Endpoints.Grpc;
@@ -40,6 +43,9 @@ public sealed class TelemetryServiceTests
     private readonly ISubscriptionService _subscriptionService;
     private readonly IBackgroundJobClient _backgroundJobs = Substitute.For<IBackgroundJobClient>();
     private readonly ILogger<TelemetryService> _logger = Substitute.For<ILogger<TelemetryService>>();
+    // Default: the machine has no evaluation chain running, so the first failed login in an envelope
+    // opens one.
+    private readonly IFailedSshLoginChainGate _chainGate = Substitute.For<IFailedSshLoginChainGate>();
     // Fixed server clock so skew assertions are deterministic. Initialized to the real current
     // instant so the happy-path tests (which stamp AgentTimestamp from DateTimeOffset.UtcNow) stay
     // well within the skew threshold.
@@ -72,6 +78,8 @@ public sealed class TelemetryServiceTests
                 UpdatedAt = DateTimeOffset.UtcNow,
             });
         _subscriptionService.IsIngestEligibleAsync(Arg.Any<int>(), Arg.Any<CancellationToken>()).Returns(true);
+
+        _chainGate.TryOpenChainAsync(Arg.Any<long>()).Returns("chain-token");
     }
 
     /// <summary>
@@ -110,9 +118,26 @@ public sealed class TelemetryServiceTests
 
     private static readonly ResiliencePipeline NoOpPipeline = ResiliencePipeline.Empty;
 
-    private TelemetryService CreateService(IServiceScopeFactory scopeFactory)
+    private TelemetryService CreateService(
+        IServiceScopeFactory scopeFactory,
+        IConnectionMultiplexer? redis = null,
+        ResilienceMetrics? resilienceMetrics = null,
+        IFailedSshLoginChainGate? chainGate = null)
     {
-        return new TelemetryService(scopeFactory, _dedupService, _subscriptionService, _backgroundJobs, NoOpPipeline, BuildTestRedis(), Options.Create(new TelemetryOptions()), new ProcessStreamSlotLimiter(5000), TestMetricsFactory.CreateIngestMetrics(), _timeProvider, _logger);
+        return new TelemetryService(
+            scopeFactory,
+            _dedupService,
+            _subscriptionService,
+            _backgroundJobs,
+            NoOpPipeline,
+            redis ?? BuildTestRedis(),
+            Options.Create(new TelemetryOptions()),
+            new ProcessStreamSlotLimiter(5000),
+            TestMetricsFactory.CreateIngestMetrics(),
+            resilienceMetrics ?? TestMetricsFactory.CreateResilienceMetrics(),
+            chainGate ?? _chainGate,
+            _timeProvider,
+            _logger);
     }
 
     /// <summary>
@@ -315,7 +340,7 @@ public sealed class TelemetryServiceTests
                 return ids.ToDictionary(id => id, _ => false);
             });
 
-        TelemetryService service = new(scopeFactory, dupDedupService, _subscriptionService, _backgroundJobs, NoOpPipeline, BuildTestRedis(), Options.Create(new TelemetryOptions()), new ProcessStreamSlotLimiter(5000), TestMetricsFactory.CreateIngestMetrics(), _timeProvider, _logger);
+        TelemetryService service = new(scopeFactory, dupDedupService, _subscriptionService, _backgroundJobs, NoOpPipeline, BuildTestRedis(), Options.Create(new TelemetryOptions()), new ProcessStreamSlotLimiter(5000), TestMetricsFactory.CreateIngestMetrics(), TestMetricsFactory.CreateResilienceMetrics(), _chainGate, _timeProvider, _logger);
         ServerCallContext context = CreateAuthenticatedContext(200);
 
         TelemetryEnvelope envelope = new()
@@ -416,7 +441,7 @@ public sealed class TelemetryServiceTests
         // drive it directly so this test pins the gate wiring, not the specific status-to-eligibility map.
         inactiveSubService.IsIngestEligibleAsync(Arg.Any<int>(), Arg.Any<CancellationToken>()).Returns(false);
 
-        TelemetryService service = new(scopeFactory, _dedupService, inactiveSubService, _backgroundJobs, NoOpPipeline, BuildTestRedis(), Options.Create(new TelemetryOptions()), new ProcessStreamSlotLimiter(5000), TestMetricsFactory.CreateIngestMetrics(), _timeProvider, _logger);
+        TelemetryService service = new(scopeFactory, _dedupService, inactiveSubService, _backgroundJobs, NoOpPipeline, BuildTestRedis(), Options.Create(new TelemetryOptions()), new ProcessStreamSlotLimiter(5000), TestMetricsFactory.CreateIngestMetrics(), TestMetricsFactory.CreateResilienceMetrics(), _chainGate, _timeProvider, _logger);
         ServerCallContext context = CreateAuthenticatedContext(100);
 
         TelemetryEnvelope envelope = new() { AgentTimestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow), BatchId ="batch-inactive" };
@@ -594,11 +619,215 @@ public sealed class TelemetryServiceTests
 
         await Assert.That(ack.Success).IsTrue();
         _backgroundJobs.Received(1).Create(
-            Arg.Is<Job>(j => (j.Method.Name == nameof(SshAlertEvaluationJob.RunAsync)) && ((string)j.Args[2] == "connect")), Arg.Any<IState>());
+            Arg.Is<Job>(j => (j.Type == typeof(SshAlertEvaluationJob)) && ((string)j.Args[2] == "connect")), Arg.Any<IState>());
         _backgroundJobs.Received(1).Create(
             Arg.Is<Job>(j => (j.Method.Name == nameof(SshAlertEvaluationJob.RunAsync)) && ((string)j.Args[2] == "disconnect")), Arg.Any<IState>());
         _backgroundJobs.DidNotReceive().Create(
             Arg.Is<Job>(j => (j.Method.Name == nameof(SshAlertEvaluationJob.RunAsync)) && ((string)j.Args[2] == "failed")), Arg.Any<IState>());
+    }
+
+    /// <summary>
+    /// Builds an SSH telemetry envelope from a list of (action, event id) pairs.
+    /// </summary>
+    private static TelemetryEnvelope BuildSshEnvelope(string batchId, params (string Action, string EventId)[] entries)
+    {
+        TelemetryEnvelope envelope = new()
+        {
+            AgentTimestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            BatchId = batchId,
+        };
+
+        foreach ((string action, string eventId) in entries)
+        {
+            envelope.Items.Add(new TelemetryItem
+            {
+                EventId = eventId,
+                Type = TelemetryTypes.SshSessionType,
+                SshSession = new SshSessionRecord
+                {
+                    User = "root",
+                    SourceIp = "203.0.113.7",
+                    SourcePort = 22,
+                    Action = action,
+                    AuthMethod = "password",
+                    Timestamp = DateTimeOffset.UtcNow.ToString("o"),
+                },
+            });
+        }
+
+        return envelope;
+    }
+
+    [Test]
+    public async Task SubmitTelemetry_FailedSshLogins_OpensOneChainPerEnvelope()
+    {
+        // Three failures, one chain: the lease gives the same answer for every failed item in an
+        // envelope, so it is asked once. Asking per attempt put hundreds of sequential Redis
+        // round-trips inside the pre-ack path of exactly the envelopes a brute force produces.
+        using TestDatabaseFactory dbFactory = new();
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+        TelemetryService service = CreateService(scopeFactory);
+        ServerCallContext context = CreateAuthenticatedContext(1200, tenantId: 21);
+
+        TelemetryAck ack = await service.SubmitTelemetry(
+            context: context,
+            request: BuildSshEnvelope("batch-fail-open-window", ("failed", "f1"), ("failed", "f2"), ("failed", "f3")));
+
+        await Assert.That(ack.Success).IsTrue();
+        await _chainGate.Received(1).TryOpenChainAsync(1200L);
+        _backgroundJobs.Received(1).Create(
+            Arg.Is<Job>(j => (j.Type == typeof(FailedSshLoginWindowJob))
+                && ((int)j.Args[0] == 21)
+                && ((long)j.Args[1] == 1200L)),
+            Arg.Is<IState>(state => state is ScheduledState));
+    }
+
+    /// <summary>
+    /// The scheduled evaluation carries the envelope's server receipt time, which is what every row
+    /// it will count is stamped with. Anchoring the window to the moment the job runs instead would
+    /// start it after those rows, and a burst delivered in a single envelope would be missed
+    /// entirely.
+    /// </summary>
+    [Test]
+    public async Task SubmitTelemetry_FailedSshLogins_AnchorsTheWindowToTheEnvelopesReceiptTime()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+        TelemetryService service = CreateService(scopeFactory);
+        ServerCallContext context = CreateAuthenticatedContext(1206, tenantId: 27);
+
+        DateTimeOffset receivedAt = _timeProvider.GetUtcNow();
+
+        await service.SubmitTelemetry(BuildSshEnvelope("batch-anchor", ("failed", "f20")), context);
+
+        _backgroundJobs.Received(1).Create(
+            Arg.Is<Job>(j => (j.Type == typeof(FailedSshLoginWindowJob))
+                && ((DateTimeOffset)j.Args[2] == receivedAt)
+                && ((string)j.Args[3] == "chain-token")),
+            Arg.Is<IState>(state => state is ScheduledState));
+    }
+
+    [Test]
+    public async Task SubmitTelemetry_FailedSshLogins_WhileAChainIsLive_SchedulesNothing()
+    {
+        // A chain is already evaluating this machine every window, so a second one would only
+        // duplicate its work. This is the suppression that keeps a machine under sustained attack to
+        // one chain instead of accumulating one per window.
+        using TestDatabaseFactory dbFactory = new();
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+        _chainGate.TryOpenChainAsync(1201L).Returns((string?)null);
+        TelemetryService service = CreateService(scopeFactory);
+        ServerCallContext context = CreateAuthenticatedContext(1201, tenantId: 22);
+
+        TelemetryAck ack = await service.SubmitTelemetry(
+            context: context,
+            request: BuildSshEnvelope("batch-fail-existing-window", ("failed", "f4"), ("failed", "f5")));
+
+        await Assert.That(ack.Success).IsTrue();
+        _backgroundJobs.DidNotReceive().Create(
+            Arg.Is<Job>(j => j.Type == typeof(FailedSshLoginWindowJob)),
+            Arg.Any<IState>());
+    }
+
+    /// <summary>
+    /// The regression the lease exists for: failures arriving in window after window must not each
+    /// open their own chain. The running chain holds the lease, so ingest schedules nothing until the
+    /// chain ends and releases it.
+    /// </summary>
+    [Test]
+    public async Task SubmitTelemetry_FailedSshLoginsAcrossConsecutiveWindows_KeepsOneLiveChain()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+
+        // The first envelope opens the chain; every later envelope finds the lease held.
+        _chainGate.TryOpenChainAsync(1202L).Returns("chain-token", (string?)null, (string?)null);
+
+        TelemetryService service = CreateService(scopeFactory);
+        ServerCallContext context = CreateAuthenticatedContext(1202, tenantId: 23);
+
+        await service.SubmitTelemetry(BuildSshEnvelope("batch-roll-1", ("failed", "f6"), ("failed", "f7")), context);
+        _timeProvider.Advance(AlertConstants.FailedSshLoginWindow);
+        await service.SubmitTelemetry(BuildSshEnvelope("batch-roll-2", ("failed", "f8")), context);
+        _timeProvider.Advance(AlertConstants.FailedSshLoginWindow);
+        await service.SubmitTelemetry(BuildSshEnvelope("batch-roll-3", ("failed", "f9")), context);
+
+        _backgroundJobs.Received(1).Create(
+            Arg.Is<Job>(j => (j.Type == typeof(FailedSshLoginWindowJob))
+                && ((long)j.Args[1] == 1202L)),
+            Arg.Any<IState>());
+    }
+
+    [Test]
+    public async Task SubmitTelemetry_FailedSshLogins_RedisUnavailable_SchedulesOncePerMachineAndRecordsFailOpen()
+    {
+        // Failing open keeps alerting alive during a Redis outage, but the whole point of the lease is
+        // that a brute-force burst must not become one job per attempt. One job per machine per batch
+        // is the degraded contract.
+        using TestDatabaseFactory dbFactory = new();
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+        ServiceCollection metricServices = new();
+        metricServices.AddMetrics();
+        using ServiceProvider metricProvider = metricServices.BuildServiceProvider();
+        IMeterFactory meterFactory = metricProvider.GetRequiredService<IMeterFactory>();
+        ResilienceMetrics resilienceMetrics = new(meterFactory);
+        using MetricCollector<long> collector = new(meterFactory, VordMeter.Name, "vord.redis.fail_open");
+
+        _chainGate.TryOpenChainAsync(1203L)
+            .Returns<string?>(_ => throw new RedisConnectionException(ConnectionFailureType.UnableToConnect, "Connection refused"));
+
+        TelemetryService service = CreateService(scopeFactory, resilienceMetrics: resilienceMetrics);
+        ServerCallContext context = CreateAuthenticatedContext(1203, tenantId: 24);
+
+        TelemetryAck ack = await service.SubmitTelemetry(
+            context: context,
+            request: BuildSshEnvelope("batch-fail-open", ("failed", "f9"), ("failed", "f10"), ("failed", "f11"), ("failed", "f12")));
+
+        await Assert.That(ack.Success).IsTrue();
+        _backgroundJobs.Received(1).Create(
+            Arg.Is<Job>(j => (j.Type == typeof(FailedSshLoginWindowJob))
+                && ((long)j.Args[1] == 1203L)),
+            Arg.Any<IState>());
+
+        IReadOnlyList<CollectedMeasurement<long>> measurements = collector.GetMeasurementSnapshot();
+        await Assert.That(measurements.Count).IsEqualTo(1);
+        await Assert.That(measurements[0].Tags["component"]).IsEqualTo("ssh_failure_window");
+    }
+
+    [Test]
+    public async Task SubmitTelemetry_FailedSshLogins_DoNotEnqueueThePerItemSshJob()
+    {
+        // Widening the per-item job's evaluated actions is exactly the flood this design avoids.
+        using TestDatabaseFactory dbFactory = new();
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+        TelemetryService service = CreateService(scopeFactory);
+        ServerCallContext context = CreateAuthenticatedContext(1204, tenantId: 25);
+
+        await service.SubmitTelemetry(BuildSshEnvelope("batch-no-per-item", ("failed", "f13"), ("failed", "f14")), context);
+
+        _backgroundJobs.DidNotReceive().Create(
+            Arg.Is<Job>(j => j.Type == typeof(SshAlertEvaluationJob)),
+            Arg.Any<IState>());
+    }
+
+    [Test]
+    public async Task SubmitTelemetry_SshConnect_EnqueuesThePerItemJobAndOpensNoFailureChain()
+    {
+        // A successful connect is a different alert entirely; it must not touch the failure lease.
+        using TestDatabaseFactory dbFactory = new();
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+        TelemetryService service = CreateService(scopeFactory);
+        ServerCallContext context = CreateAuthenticatedContext(1205, tenantId: 26);
+
+        await service.SubmitTelemetry(BuildSshEnvelope("batch-connect-only", ("connect", "f15")), context);
+
+        _backgroundJobs.Received(1).Create(
+            Arg.Is<Job>(j => (j.Type == typeof(SshAlertEvaluationJob)) && ((string)j.Args[2] == "connect")),
+            Arg.Any<IState>());
+        _backgroundJobs.DidNotReceive().Create(
+            Arg.Is<Job>(j => j.Type == typeof(FailedSshLoginWindowJob)),
+            Arg.Any<IState>());
+        await _chainGate.DidNotReceive().TryOpenChainAsync(Arg.Any<long>());
     }
 
     [Test]
@@ -663,7 +892,7 @@ public sealed class TelemetryServiceTests
         await Assert.That(ack.AcknowledgedEventIds[0]).IsEqualTo("event-ssh-throws-1");
         // The ack does not wait on alert evaluation — the work is enqueued for out-of-band handling.
         _backgroundJobs.Received(1).Create(
-            Arg.Is<Job>(j => j.Method.Name == nameof(SshAlertEvaluationJob.RunAsync)),
+            Arg.Is<Job>(j => j.Type == typeof(SshAlertEvaluationJob)),
             Arg.Any<IState>());
     }
 
@@ -719,7 +948,7 @@ public sealed class TelemetryServiceTests
         // drive it directly so this test pins the gate wiring, not the specific status-to-eligibility map.
         inactiveSubService.IsIngestEligibleAsync(Arg.Any<int>(), Arg.Any<CancellationToken>()).Returns(false);
 
-        TelemetryService service = new(scopeFactory, _dedupService, inactiveSubService, _backgroundJobs, NoOpPipeline, BuildTestRedis(), Options.Create(new TelemetryOptions()), new ProcessStreamSlotLimiter(5000), TestMetricsFactory.CreateIngestMetrics(), _timeProvider, _logger);
+        TelemetryService service = new(scopeFactory, _dedupService, inactiveSubService, _backgroundJobs, NoOpPipeline, BuildTestRedis(), Options.Create(new TelemetryOptions()), new ProcessStreamSlotLimiter(5000), TestMetricsFactory.CreateIngestMetrics(), TestMetricsFactory.CreateResilienceMetrics(), _chainGate, _timeProvider, _logger);
         ServerCallContext context = CreateAuthenticatedContext(100);
 
         FakeAsyncStreamReader<TelemetryEnvelope> requestStream = new([]);
@@ -1023,7 +1252,7 @@ public sealed class TelemetryServiceTests
         });
 
         // Use a no-op pipeline so the BrokenCircuitException propagates out unhandled by Polly.
-        TelemetryService service = new(scopeFactory, _dedupService, _subscriptionService, _backgroundJobs, NoOpPipeline, BuildTestRedis(), Options.Create(new TelemetryOptions()), new ProcessStreamSlotLimiter(5000), TestMetricsFactory.CreateIngestMetrics(), _timeProvider, _logger);
+        TelemetryService service = new(scopeFactory, _dedupService, _subscriptionService, _backgroundJobs, NoOpPipeline, BuildTestRedis(), Options.Create(new TelemetryOptions()), new ProcessStreamSlotLimiter(5000), TestMetricsFactory.CreateIngestMetrics(), TestMetricsFactory.CreateResilienceMetrics(), _chainGate, _timeProvider, _logger);
         ServerCallContext context = CreateAuthenticatedContext(100);
 
         TelemetryEnvelope envelope = new()
@@ -1064,7 +1293,7 @@ public sealed class TelemetryServiceTests
             { typeof(Database.Repositories.IMachineStateRepository), throwingRepo }
         });
 
-        TelemetryService service = new(scopeFactory, _dedupService, _subscriptionService, _backgroundJobs, NoOpPipeline, BuildTestRedis(), Options.Create(new TelemetryOptions()), new ProcessStreamSlotLimiter(5000), TestMetricsFactory.CreateIngestMetrics(), _timeProvider, _logger);
+        TelemetryService service = new(scopeFactory, _dedupService, _subscriptionService, _backgroundJobs, NoOpPipeline, BuildTestRedis(), Options.Create(new TelemetryOptions()), new ProcessStreamSlotLimiter(5000), TestMetricsFactory.CreateIngestMetrics(), TestMetricsFactory.CreateResilienceMetrics(), _chainGate, _timeProvider, _logger);
         ServerCallContext context = CreateAuthenticatedContext(100);
 
         TelemetryEnvelope envelope = new()
@@ -1104,7 +1333,7 @@ public sealed class TelemetryServiceTests
             { typeof(Database.Repositories.IMachineStateRepository), throwingRepo }
         });
 
-        TelemetryService service = new(scopeFactory, _dedupService, _subscriptionService, _backgroundJobs, NoOpPipeline, BuildTestRedis(), Options.Create(new TelemetryOptions()), new ProcessStreamSlotLimiter(5000), TestMetricsFactory.CreateIngestMetrics(), _timeProvider, _logger);
+        TelemetryService service = new(scopeFactory, _dedupService, _subscriptionService, _backgroundJobs, NoOpPipeline, BuildTestRedis(), Options.Create(new TelemetryOptions()), new ProcessStreamSlotLimiter(5000), TestMetricsFactory.CreateIngestMetrics(), TestMetricsFactory.CreateResilienceMetrics(), _chainGate, _timeProvider, _logger);
         ServerCallContext context = CreateAuthenticatedContext(100);
 
         TelemetryEnvelope envelope = new()
@@ -1172,7 +1401,7 @@ public sealed class TelemetryServiceTests
         {
             { typeof(Database.Repositories.IMachineStateRepository), throwingRepo },
         });
-        TelemetryService failingService = new(throwingScope, statefulDedup, _subscriptionService, _backgroundJobs, NoOpPipeline, BuildTestRedis(), Options.Create(new TelemetryOptions()), new ProcessStreamSlotLimiter(5000), TestMetricsFactory.CreateIngestMetrics(), _timeProvider, _logger);
+        TelemetryService failingService = new(throwingScope, statefulDedup, _subscriptionService, _backgroundJobs, NoOpPipeline, BuildTestRedis(), Options.Create(new TelemetryOptions()), new ProcessStreamSlotLimiter(5000), TestMetricsFactory.CreateIngestMetrics(), TestMetricsFactory.CreateResilienceMetrics(), _chainGate, _timeProvider, _logger);
 
         TelemetryAck firstAck = await failingService.SubmitTelemetry(BuildEnvelope(), CreateAuthenticatedContext(100));
         await Assert.That(firstAck.Success).IsFalse();
@@ -1180,7 +1409,7 @@ public sealed class TelemetryServiceTests
         // Second attempt: the write succeeds. Because the first attempt unmarked the event, the retry is
         // treated as new and the row is inserted.
         TestServiceScopeFactory workingScope = new(dbFactory.Context);
-        TelemetryService workingService = new(workingScope, statefulDedup, _subscriptionService, _backgroundJobs, NoOpPipeline, BuildTestRedis(), Options.Create(new TelemetryOptions()), new ProcessStreamSlotLimiter(5000), TestMetricsFactory.CreateIngestMetrics(), _timeProvider, _logger);
+        TelemetryService workingService = new(workingScope, statefulDedup, _subscriptionService, _backgroundJobs, NoOpPipeline, BuildTestRedis(), Options.Create(new TelemetryOptions()), new ProcessStreamSlotLimiter(5000), TestMetricsFactory.CreateIngestMetrics(), TestMetricsFactory.CreateResilienceMetrics(), _chainGate, _timeProvider, _logger);
 
         TelemetryAck secondAck = await workingService.SubmitTelemetry(BuildEnvelope(), CreateAuthenticatedContext(100));
         await Assert.That(secondAck.Success).IsTrue();
@@ -1199,7 +1428,7 @@ public sealed class TelemetryServiceTests
         using TestDatabaseFactory dbFactory = new();
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
 
-        TelemetryService service = new(scopeFactory, _dedupService, _subscriptionService, _backgroundJobs, NoOpPipeline, BuildTestRedis(), Options.Create(new TelemetryOptions()), new ProcessStreamSlotLimiter(5000), TestMetricsFactory.CreateIngestMetrics(), _timeProvider, _logger);
+        TelemetryService service = new(scopeFactory, _dedupService, _subscriptionService, _backgroundJobs, NoOpPipeline, BuildTestRedis(), Options.Create(new TelemetryOptions()), new ProcessStreamSlotLimiter(5000), TestMetricsFactory.CreateIngestMetrics(), TestMetricsFactory.CreateResilienceMetrics(), _chainGate, _timeProvider, _logger);
 
         // Context with a valid MachineId claim but no TenantId claim — IsSubscriptionActiveAsync returns false.
         DefaultHttpContext httpContext = new();
@@ -1239,7 +1468,7 @@ public sealed class TelemetryServiceTests
         // A clean, whole-second server clock so the SQLite round-trip compares exactly.
         DateTimeOffset serverNow = new(2026, 6, 24, 12, 0, 0, TimeSpan.Zero);
         FakeTimeProvider fixedClock = new(serverNow);
-        TelemetryService service = new(scopeFactory, _dedupService, _subscriptionService, _backgroundJobs, NoOpPipeline, BuildTestRedis(), Options.Create(new TelemetryOptions()), new ProcessStreamSlotLimiter(5000), TestMetricsFactory.CreateIngestMetrics(), fixedClock, _logger);
+        TelemetryService service = new(scopeFactory, _dedupService, _subscriptionService, _backgroundJobs, NoOpPipeline, BuildTestRedis(), Options.Create(new TelemetryOptions()), new ProcessStreamSlotLimiter(5000), TestMetricsFactory.CreateIngestMetrics(), TestMetricsFactory.CreateResilienceMetrics(), _chainGate, fixedClock, _logger);
         ServerCallContext context = CreateAuthenticatedContext(100);
 
         // The item's collected-at is three days in the future — within the ±7d dedup clamp, so ReceivedAt

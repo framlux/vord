@@ -50,6 +50,7 @@ public static class InstrumentedJobMap
             ["RetentionReclassifyJob"] = InstrumentedJob.RetentionReclassify,
             ["SendInvitationEmailJob"] = InstrumentedJob.SendInvitationEmail,
             ["SshAlertEvaluationJob"] = InstrumentedJob.SshAlertEvaluation,
+            ["FailedSshLoginWindowJob"] = InstrumentedJob.FailedSshLoginWindow,
         }.ToFrozenDictionary(StringComparer.Ordinal);
 
     /// <summary>

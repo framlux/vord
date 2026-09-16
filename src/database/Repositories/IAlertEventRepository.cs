@@ -69,6 +69,21 @@ public interface IAlertEventRepository
     Task ResolveEventsForRuleMachineAsync(int ruleId, long machineId, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Returns whether an active (non-resolved) event already exists for a rule and machine pair.
+    /// </summary>
+    /// <remarks>
+    /// This is the same condition <see cref="CreateEventIfNotExistsAsync"/> de-duplicates on, offered
+    /// separately so a caller whose alert details are expensive to assemble can decline to build them
+    /// for an incident that is already open. It is an optimisation and never the authority: the
+    /// insert still takes the advisory lock and re-checks, because this answer can go stale between
+    /// the two calls.
+    /// </remarks>
+    /// <param name="ruleId">The alert rule ID.</param>
+    /// <param name="machineId">The machine ID.</param>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    Task<bool> HasActiveEventForRuleMachineAsync(int ruleId, long machineId, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Resolves all active (non-resolved) events for a rule (used when deleting a rule).
     /// </summary>
     /// <param name="ruleId">The alert rule ID.</param>

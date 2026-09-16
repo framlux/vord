@@ -260,7 +260,7 @@ public sealed class CreateAlertRuleValidatorTests
         ValidationResult result = await _validator.ValidateAsync(request);
 
         await Assert.That(result.IsValid).IsFalse();
-        await Assert.That(result.Errors.Any(e => e.ErrorMessage == "Duration must be zero for event-based metrics")).IsTrue();
+        await Assert.That(result.Errors.Any(e => e.ErrorMessage == "Duration must be zero for point-in-time metrics")).IsTrue();
     }
 
     [Test]
@@ -456,5 +456,56 @@ public sealed class CreateAlertRuleValidatorTests
         ValidationResult result = await _validator.ValidateAsync(request);
 
         await Assert.That(result.IsValid).IsTrue();
+    }
+
+    /// <summary>
+    /// A failed-login count jumps in bursts, so an equality test misses the incident entirely and a
+    /// less-than test fires on every quiet window. The validator has to refuse both.
+    /// </summary>
+    [Test]
+    [Arguments("LessThan")]
+    [Arguments("EqualTo")]
+    public async Task FailedSshLogin_UnusableOperator_FailsValidation(string op)
+    {
+        CreateAlertRuleRequest request = ValidRequest();
+        request.Metric = "FailedSshLogin";
+        request.Operator = op;
+        request.Threshold = 5;
+        request.DurationMinutes = 5;
+
+        ValidationResult result = await _validator.ValidateAsync(request);
+
+        // The exact message matters: asserting only that the request is invalid would stay green if
+        // the operator constraint were removed and some unrelated field started failing instead.
+        await Assert.That(result.IsValid).IsFalse();
+        await Assert.That(result.Errors.Any(error => error.ErrorMessage == "Failed SSH login alerts must use the 'more than' operator")).IsTrue();
+    }
+
+    [Test]
+    public async Task FailedSshLogin_GreaterThanWithWindowDuration_PassesValidation()
+    {
+        CreateAlertRuleRequest request = ValidRequest();
+        request.Metric = "FailedSshLogin";
+        request.Operator = "GreaterThan";
+        request.Threshold = 5;
+        request.DurationMinutes = 5;
+
+        ValidationResult result = await _validator.ValidateAsync(request);
+
+        await Assert.That(result.IsValid).IsTrue();
+    }
+
+    [Test]
+    public async Task FailedSshLogin_ZeroDuration_FailsValidation()
+    {
+        CreateAlertRuleRequest request = ValidRequest();
+        request.Metric = "FailedSshLogin";
+        request.Operator = "GreaterThan";
+        request.Threshold = 5;
+        request.DurationMinutes = 0;
+
+        ValidationResult result = await _validator.ValidateAsync(request);
+
+        await Assert.That(result.IsValid).IsFalse();
     }
 }

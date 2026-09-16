@@ -36,7 +36,7 @@ public sealed class EventAlertServiceTests
 
         IServiceScopeFactory scopeFactory = provider.GetRequiredService<IServiceScopeFactory>();
 
-        return new EventAlertService(scopeFactory, _deliveryService, TestMetricsFactory.CreateAlertPipelineMetrics(), _logger);
+        return new EventAlertService(scopeFactory, _deliveryService, TestMetricsFactory.CreateAlertPipelineMetrics(), TimeProvider.System, _logger);
     }
 
     private void SetupActiveProSubscription()

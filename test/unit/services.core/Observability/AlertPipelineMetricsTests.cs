@@ -76,9 +76,9 @@ public sealed class AlertPipelineMetricsTests
 
         metrics.InitialiseSeries();
 
-        // Nine metrics by three severities.
+        // Ten metrics by three severities.
         IReadOnlyList<CollectedMeasurement<long>> measurements = collector.GetMeasurementSnapshot();
-        await Assert.That(measurements.Count).IsEqualTo(27);
+        await Assert.That(measurements.Count).IsEqualTo(30);
         await Assert.That(measurements.All(measurement => measurement.Value == 0L)).IsTrue();
     }
 }

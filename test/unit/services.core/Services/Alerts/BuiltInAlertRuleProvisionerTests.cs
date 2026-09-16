@@ -31,7 +31,7 @@ public sealed class BuiltInAlertRuleProvisionerTests
         List<AlertRule> inserted = CapturedRules(repo);
 
         await Assert.That(inserted.Count).IsEqualTo(BuiltInAlertRuleDefinitions.All.Count);
-        await Assert.That(inserted.Count).IsEqualTo(9);
+        await Assert.That(inserted.Count).IsEqualTo(10);
         await Assert.That(inserted.TrueForAll(r => r.IsEnabled == false)).IsTrue();
         await Assert.That(inserted.TrueForAll(r => r.IsCustom == false)).IsTrue();
         await Assert.That(inserted.TrueForAll(r => r.TenantId == 7)).IsTrue();
@@ -53,7 +53,7 @@ public sealed class BuiltInAlertRuleProvisionerTests
 
         List<AlertRule> inserted = CapturedRules(repo);
 
-        await Assert.That(inserted.Count).IsEqualTo(9);
+        await Assert.That(inserted.Count).IsEqualTo(10);
         await Assert.That(inserted.TrueForAll(r => r.IsEnabled)).IsTrue();
     }
 
@@ -71,7 +71,7 @@ public sealed class BuiltInAlertRuleProvisionerTests
 
         List<AlertRule> inserted = CapturedRules(repo);
 
-        await Assert.That(inserted.Count).IsEqualTo(9);
+        await Assert.That(inserted.Count).IsEqualTo(10);
         await Assert.That(inserted.TrueForAll(r => r.IsEnabled == false)).IsTrue();
     }
 
@@ -94,7 +94,7 @@ public sealed class BuiltInAlertRuleProvisionerTests
 
         List<AlertRule> inserted = CapturedRules(repo);
 
-        await Assert.That(inserted.Count).IsEqualTo(9);
+        await Assert.That(inserted.Count).IsEqualTo(10);
         await Assert.That(inserted.TrueForAll(r => r.IsEnabled)).IsTrue();
     }
 
@@ -112,7 +112,7 @@ public sealed class BuiltInAlertRuleProvisionerTests
 
         List<AlertRule> inserted = CapturedRules(repo);
 
-        await Assert.That(inserted.Count).IsEqualTo(7);
+        await Assert.That(inserted.Count).IsEqualTo(8);
         await Assert.That(inserted.Exists(r => r.Metric == AlertMetric.CpuUsage)).IsFalse();
         await Assert.That(inserted.Exists(r => r.Metric == AlertMetric.DiskHealth)).IsFalse();
     }
@@ -361,7 +361,7 @@ public sealed class BuiltInAlertRuleProvisionerTests
             SubscriptionStatus.Active,
             CancellationToken.None);
 
-        await Assert.That(CapturedRules(repo).Count).IsEqualTo(9);
+        await Assert.That(CapturedRules(repo).Count).IsEqualTo(10);
         await repo.DidNotReceive().EnableBuiltInAlertRulesAsync(Arg.Any<int>(), Arg.Any<CancellationToken>());
     }
 
@@ -376,6 +376,20 @@ public sealed class BuiltInAlertRuleProvisionerTests
         {
             await Assert.That(BuiltInAlertRuleDefinitions.All.Count(d => d.Metric == metric)).IsEqualTo(1);
         }
+    }
+
+    /// <summary>
+    /// The name is what a recipient reads on the notification, so it has to describe the same
+    /// condition the rule actually evaluates. GreaterThan 5 means "more than 5"; wording it as
+    /// "5 or more" would tell people the rule fires one attempt earlier than it does.
+    /// </summary>
+    [Test]
+    public async Task Definitions_FailedSshLoginNameMatchesTheStoredThreshold()
+    {
+        BuiltInAlertRuleDefinition definition = BuiltInAlertRuleDefinitions.All
+            .Single(d => d.Metric == AlertMetric.FailedSshLogin);
+
+        await Assert.That(definition.Name).Contains("More than 5");
     }
 
     [Test]
@@ -457,6 +471,7 @@ public sealed class BuiltInAlertRuleProvisionerTests
     [Arguments(AlertMetric.SecurityUpdates, AlertOperator.GreaterThan, 0, 1, AlertSeverity.Info)]
     [Arguments(AlertMetric.SshConnection, AlertOperator.EqualTo, 1, 0, AlertSeverity.Info)]
     [Arguments(AlertMetric.TelemetryStale, AlertOperator.EqualTo, 1, 10, AlertSeverity.Warning)]
+    [Arguments(AlertMetric.FailedSshLogin, AlertOperator.GreaterThan, 5, 5, AlertSeverity.Warning)]
     public async Task Definitions_ShipTheTunedThresholdForEachMetric(
         AlertMetric metric,
         AlertOperator expectedOperator,

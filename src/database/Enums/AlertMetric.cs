@@ -26,5 +26,7 @@ public enum AlertMetric : short
     /// <summary>New SSH connection detected on the machine.</summary>
     SshConnection = 8,
     /// <summary>Telemetry has stopped arriving from a machine that is still reachable.</summary>
-    TelemetryStale = 9
+    TelemetryStale = 9,
+    /// <summary>Number of failed SSH login attempts on the machine within the rule's window.</summary>
+    FailedSshLogin = 10
 }

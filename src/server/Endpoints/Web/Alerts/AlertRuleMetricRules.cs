@@ -70,12 +70,48 @@ internal static class AlertRuleMetricRules
     }
 
     /// <summary>
-    /// Validates the duration against the metric type: event metrics require exactly zero, and every other
-    /// metric requires a value between its per-metric minimum and the global maximum rule duration.
+    /// Validates the operator against the metric type. Most metrics accept any comparison; a windowed
+    /// count of failed SSH logins accepts only <see cref="AlertOperator.GreaterThan"/>.
+    /// </summary>
+    /// <remarks>
+    /// A brute-force run takes the count from four to dozens between two windows, so an equality test
+    /// lands on the threshold only by chance and misses the incident it exists to catch. A less-than
+    /// test is worse: every ordinary window contains a mistyped password or two, so it would alert on
+    /// the fleet behaving normally.
+    /// </remarks>
+    internal static bool ValidateOperatorForMetric(AlertMetric metric, AlertOperator op)
+    {
+        if (metric == AlertMetric.FailedSshLogin)
+        {
+            return op == AlertOperator.GreaterThan;
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Returns the validation message describing the operators the metric accepts.
+    /// </summary>
+    internal static string GetOperatorValidationMessage(AlertMetric metric)
+    {
+        if (metric == AlertMetric.FailedSshLogin)
+        {
+            return "Failed SSH login alerts must use the 'more than' operator";
+        }
+
+        return "Operator is not valid for this metric";
+    }
+
+    /// <summary>
+    /// Validates the duration against the metric type: point-in-time metrics require exactly zero, and
+    /// every other metric requires a value between its per-metric minimum and the global maximum rule
+    /// duration. Keyed on <see cref="AlertConstants.RequiresZeroDuration"/> rather than
+    /// <see cref="AlertConstants.IsEventMetric"/> — a metric can be evaluated at ingest and still
+    /// measure a window, and such a rule needs a real duration.
     /// </summary>
     internal static bool ValidateDurationForMetric(AlertMetric metric, int duration)
     {
-        if (AlertConstants.IsEventMetric(metric))
+        if (AlertConstants.RequiresZeroDuration(metric))
         {
             return duration == 0;
         }
@@ -89,9 +125,9 @@ internal static class AlertRuleMetricRules
     /// </summary>
     internal static string GetDurationValidationMessage(AlertMetric metric)
     {
-        if (AlertConstants.IsEventMetric(metric))
+        if (AlertConstants.RequiresZeroDuration(metric))
         {
-            return "Duration must be zero for event-based metrics";
+            return "Duration must be zero for point-in-time metrics";
         }
 
         int minimum = AlertConstants.GetMinimumDurationMinutes(metric);
@@ -151,5 +187,38 @@ internal static class AlertRuleMetricRules
         }
 
         return GetDurationValidationMessage(parsed);
+    }
+
+    /// <summary>
+    /// Validates the operator for a metric and operator supplied as request strings. An unparseable
+    /// metric or operator passes here so the dedicated "invalid metric" and "invalid operator" rules
+    /// are the ones that surface the parse failure.
+    /// </summary>
+    internal static bool ValidateOperatorForMetric(string? metric, string? op)
+    {
+        if (Enum.TryParse<AlertMetric>(metric, true, out AlertMetric parsedMetric) == false)
+        {
+            return true;
+        }
+
+        if (Enum.TryParse<AlertOperator>(op, true, out AlertOperator parsedOperator) == false)
+        {
+            return true;
+        }
+
+        return ValidateOperatorForMetric(parsedMetric, parsedOperator);
+    }
+
+    /// <summary>
+    /// Returns the operator validation message for a metric supplied as a request string.
+    /// </summary>
+    internal static string GetOperatorValidationMessage(string? metric)
+    {
+        if (Enum.TryParse<AlertMetric>(metric, true, out AlertMetric parsed) == false)
+        {
+            return "Operator is not valid for this metric";
+        }
+
+        return GetOperatorValidationMessage(parsed);
     }
 }

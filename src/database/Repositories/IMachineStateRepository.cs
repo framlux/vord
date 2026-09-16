@@ -211,6 +211,52 @@ public interface IMachineStateRepository
     Task<List<MachineTelemetry>> GetTelemetryHistoryAsync(long machineId, short telemetryType, DateTimeOffset rangeStart, DateTimeOffset rangeEnd, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Counts telemetry rows of one type for a machine whose payload contains a marker substring and
+    /// whose server receipt time falls inside an inclusive window. The count is computed by the
+    /// database; no payload ever crosses the wire.
+    /// </summary>
+    /// <remarks>
+    /// The window is expressed in <see cref="MachineTelemetry.ServerReceivedAt"/> because that is the
+    /// only recency signal in the row — <see cref="MachineTelemetry.ReceivedAt"/> is derived from the
+    /// agent's clock and a skewed agent could otherwise place an attack outside the window or
+    /// manufacture one inside it. A generous <c>ReceivedAt</c> lower bound is added by the
+    /// implementation purely so PostgreSQL can still prune partitions, which are ranged on that
+    /// column; it is wide enough that it can never exclude a row the server-time predicate keeps.
+    /// <para>
+    /// The marker is matched as a substring of the stored JSON rather than by parsing it, so this
+    /// stays a single aggregate query under a brute-force rate. Callers own the marker string and
+    /// must pin the serialized payload shape with a test, since a serializer change would silently
+    /// return zero rather than fail.
+    /// </para>
+    /// </remarks>
+    /// <param name="machineId">The machine ID.</param>
+    /// <param name="telemetryType">The telemetry type identifier.</param>
+    /// <param name="payloadMarker">Substring the payload must contain.</param>
+    /// <param name="windowStart">Inclusive start of the server-receipt window.</param>
+    /// <param name="windowEnd">Inclusive end of the server-receipt window.</param>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    Task<int> CountTelemetryWithPayloadMarkerAsync(long machineId, short telemetryType, string payloadMarker, DateTimeOffset windowStart, DateTimeOffset windowEnd, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Returns the payloads of the most recent telemetry rows matching the same filters as
+    /// <see cref="CountTelemetryWithPayloadMarkerAsync"/>, newest first and capped at
+    /// <paramref name="limit"/> rows. Only the payload column is selected.
+    /// </summary>
+    /// <remarks>
+    /// This exists for describing an incident after it has already been decided, never for deciding
+    /// one: the decision is the count, which the database computes. A caller that reaches for this
+    /// on every evaluation has turned an aggregate into a row haul.
+    /// </remarks>
+    /// <param name="machineId">The machine ID.</param>
+    /// <param name="telemetryType">The telemetry type identifier.</param>
+    /// <param name="payloadMarker">Substring the payload must contain.</param>
+    /// <param name="windowStart">Inclusive start of the server-receipt window.</param>
+    /// <param name="windowEnd">Inclusive end of the server-receipt window.</param>
+    /// <param name="limit">Maximum number of payloads to return.</param>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    Task<List<string>> GetTelemetryPayloadsWithMarkerAsync(long machineId, short telemetryType, string payloadMarker, DateTimeOffset windowStart, DateTimeOffset windowEnd, int limit, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Returns health count aggregation (grouped by HealthStatus) and total security updates
     /// for all machines in a tenant, using a Machines LEFT JOIN MachineStateSummaries query.
     /// </summary>

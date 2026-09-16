@@ -834,6 +834,48 @@ public sealed class AlertEvaluationJobTests
     }
 
     [Test]
+    public async Task RunAsync_FailedSshLoginEventMetric_SkippedInPeriodicEvaluation()
+    {
+        // Intent: a failed-login count is derived from telemetry rows, not from any
+        // MachineStateSummary field, so the periodic loop has nothing to evaluate it against.
+        // Being classified as an event metric is what keeps this rule out of the loop entirely;
+        // if that classification is lost the loop would read a null metric value for every
+        // assigned machine.
+        using TestDatabaseFactory dbFactory = new();
+        ISubscriptionService subscriptionService = Substitute.For<ISubscriptionService>();
+        (AlertEvaluationJob job, DatabaseContext db, _, _, _, _, _) = CreateJobWithDb(dbFactory, subscriptionService);
+
+        Tenant tenant = TestDataBuilder.BuildTenant();
+        tenant.Id = await db.InsertWithInt32IdentityAsync(tenant);
+        TenantSubscription proSub = TestDataBuilder.BuildSubscription(tenantId: tenant.Id, tier: SubscriptionTier.Pro, status: SubscriptionStatus.Active);
+        subscriptionService.GetSubscriptionForTenantAsync(tenant.Id, Arg.Any<CancellationToken>()).Returns(proSub);
+
+        Machine machine = TestDataBuilder.BuildMachine(tenantId: tenant.Id);
+        machine.Id = await db.InsertWithInt64IdentityAsync(machine);
+
+        AlertRule failedLoginRule = TestDataBuilder.BuildAlertRule(tenantId: tenant.Id, metric: AlertMetric.FailedSshLogin, op: AlertOperator.GreaterThan, threshold: 5m, durationMinutes: 5);
+        failedLoginRule.Id = await db.InsertWithInt32IdentityAsync(failedLoginRule);
+
+        await db.InsertAsync(new AlertRuleMachine { AlertRuleId = failedLoginRule.Id, MachineId = machine.Id, CreatedAt = DateTimeOffset.UtcNow });
+        await db.InsertAsync(TestDataBuilder.BuildMachineStateSummary(machineId: machine.Id, tenantId: tenant.Id, cpuPercent: 95));
+
+        await job.RunAsync(CancellationToken.None);
+
+        int events = await db.AlertEvents.CountAsync();
+        await Assert.That(events).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task GetMetricValue_FailedSshLogin_AlwaysNull()
+    {
+        // The periodic loop has no state-summary field for a windowed count; the value is only
+        // ever derived at ingest.
+        MachineStateSummary s = new() { MachineId = 1, CpuUsagePercent = 90, LastSeenAt = DateTimeOffset.UtcNow };
+
+        await Assert.That(AlertEvaluationJob.GetMetricValue(AlertMetric.FailedSshLogin, s)).IsNull();
+    }
+
+    [Test]
     public async Task EvaluateRuleForMachineAsync_DurationRule_ComesBackOnline_ClearsState()
     {
         // Intent: when a machine that previously breached an offline-with-duration rule comes

@@ -263,6 +263,97 @@ describe('alerts settings page', () => {
 		expect(screen.getByRole('button', { name: 'Disable Disk usage above 90%' })).toBeInTheDocument();
 	});
 
+	it('keeps the threshold inputs on a failed-login rule, which is counted rather than fired on', async () => {
+		// The metric is measured from ingest events, but it is still a count compared against a
+		// threshold over a window. Hiding those inputs, as the SSH-connection rule does, would post a
+		// zero duration that the server refuses.
+		render(AlertsPage, {
+			props: { data: makeData(makeSubscription({ tier: 'Team', alertRuleLimit: 25 }), []) }
+		});
+
+		await fireEvent.click(screen.getByRole('button', { name: 'New Rule' }));
+		await fireEvent.change(screen.getByLabelText('Metric'), { target: { value: 'FailedSshLogin' } });
+
+		expect(screen.getByLabelText('Operator')).toBeInTheDocument();
+		expect(screen.getByLabelText('Threshold')).toBeInTheDocument();
+		// Failed-login windows are evaluated on the platform's five-minute cadence, so the form must
+		// not offer a window the server will refuse — and that a tighter rule would detect less with.
+		expect(screen.getByLabelText('Duration (minutes)')).toHaveAttribute('min', '5');
+		expect(screen.queryByText(/No threshold or duration applies/i)).not.toBeInTheDocument();
+	});
+
+	it('offers only a greater-than comparison on a failed-login count', async () => {
+		render(AlertsPage, {
+			props: { data: makeData(makeSubscription({ tier: 'Team', alertRuleLimit: 25 }), []) }
+		});
+
+		await fireEvent.click(screen.getByRole('button', { name: 'New Rule' }));
+		await fireEvent.change(screen.getByLabelText('Metric'), { target: { value: 'FailedSshLogin' } });
+
+		const operator = screen.getByLabelText('Operator') as HTMLSelectElement;
+		const offered = Array.from(operator.options).map((o) => o.value);
+
+		expect(offered).toEqual(['GreaterThan']);
+		expect(operator.value).toBe('GreaterThan');
+	});
+
+	it('restores the full operator list when the metric goes back to a sampled one', async () => {
+		render(AlertsPage, {
+			props: { data: makeData(makeSubscription({ tier: 'Team', alertRuleLimit: 25 }), []) }
+		});
+
+		await fireEvent.click(screen.getByRole('button', { name: 'New Rule' }));
+		await fireEvent.change(screen.getByLabelText('Metric'), { target: { value: 'FailedSshLogin' } });
+		await fireEvent.change(screen.getByLabelText('Metric'), { target: { value: 'CpuUsage' } });
+
+		const operator = screen.getByLabelText('Operator') as HTMLSelectElement;
+
+		expect(Array.from(operator.options).map((o) => o.value)).toEqual(['GreaterThan', 'LessThan', 'EqualTo']);
+	});
+
+	it('still hides the threshold inputs for a rule that fires on the event itself', async () => {
+		render(AlertsPage, {
+			props: { data: makeData(makeSubscription({ tier: 'Team', alertRuleLimit: 25 }), []) }
+		});
+
+		await fireEvent.click(screen.getByRole('button', { name: 'New Rule' }));
+		await fireEvent.change(screen.getByLabelText('Metric'), { target: { value: 'SshConnection' } });
+
+		expect(screen.queryByLabelText('Operator')).not.toBeInTheDocument();
+		expect(screen.queryByLabelText('Threshold')).not.toBeInTheDocument();
+		expect(screen.getByText(/No threshold or duration applies/i)).toBeInTheDocument();
+	});
+
+	it('reports a failed-login rule as a windowed condition, not as "on event"', () => {
+		render(AlertsPage, {
+			props: {
+				data: makeData(makeSubscription(), [
+					makeRule({ metric: 'FailedSshLogin', name: 'Failed SSH logins', threshold: 5, durationMinutes: 5 })
+				])
+			}
+		});
+
+		expect(screen.getByText(/GreaterThan 5/)).toBeInTheDocument();
+		expect(screen.getByText('for 5m')).toBeInTheDocument();
+		expect(screen.queryByText('On event')).not.toBeInTheDocument();
+	});
+
+	it('gives a failed-login rule its threshold and duration inputs when edited', async () => {
+		render(AlertsPage, {
+			props: {
+				data: makeData(makeSubscription({ tier: 'Team', alertRuleLimit: 25 }), [
+					makeRule({ metric: 'FailedSshLogin', name: 'Failed SSH logins', threshold: 5, durationMinutes: 5 })
+				])
+			}
+		});
+
+		await fireEvent.click(screen.getByRole('button', { name: 'Edit' }));
+
+		expect(screen.getByLabelText('Threshold')).toHaveValue(5);
+		expect(screen.getByLabelText('Duration (minutes)')).toHaveAttribute('min', '5');
+		expect(screen.queryByText(/fires immediately on detection/i)).not.toBeInTheDocument();
+	});
+
 	it('leaves a self-hosted deployment fully entitled whatever its subscription row says', () => {
 		render(AlertsPage, {
 			props: {

@@ -53,6 +53,9 @@ public enum InstrumentedJob
     /// <summary>Evaluates SSH connection event alerts for one batch.</summary>
     SshAlertEvaluation,
 
+    /// <summary>Evaluates one machine's failed-SSH-login window and re-arms while it stays live.</summary>
+    FailedSshLoginWindow,
+
     /// <summary>A job this build does not know about. A rising count here means this enum needs a
     /// member, not that the tag rule failed.</summary>
     Other,

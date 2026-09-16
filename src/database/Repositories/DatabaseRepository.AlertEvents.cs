@@ -125,6 +125,15 @@ public partial class DatabaseRepository : IAlertEventRepository
     }
 
     /// <inheritdoc/>
+    public async Task<bool> HasActiveEventForRuleMachineAsync(int ruleId, long machineId, CancellationToken cancellationToken)
+    {
+        return await _db.AlertEvents
+            .AnyAsync(e => (e.AlertRuleId == ruleId) &&
+                           (e.MachineId == machineId) &&
+                           (e.Status != AlertEventStatus.Resolved), cancellationToken);
+    }
+
+    /// <inheritdoc/>
     public async Task ResolveEventsForRuleAsync(int ruleId, CancellationToken cancellationToken)
     {
         int resolved = await _db.AlertEvents

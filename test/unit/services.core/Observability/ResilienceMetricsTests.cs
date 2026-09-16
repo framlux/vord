@@ -29,6 +29,7 @@ public sealed class ResilienceMetricsTests
     [Test]
     [Arguments(ResilienceComponent.RateLimiter, "rate_limiter")]
     [Arguments(ResilienceComponent.TelemetryDedup, "telemetry_dedup")]
+    [Arguments(ResilienceComponent.SshFailureWindow, "ssh_failure_window")]
     public async Task RecordFailOpen_TagsTheComponent(ResilienceComponent component, string expected)
     {
         (ResilienceMetrics metrics, IMeterFactory factory) = Build();
@@ -55,7 +56,7 @@ public sealed class ResilienceMetricsTests
     }
 
     [Test]
-    public async Task InitialiseSeries_CreatesBothComponents()
+    public async Task InitialiseSeries_CreatesEveryComponent()
     {
         (ResilienceMetrics metrics, IMeterFactory factory) = Build();
         using MetricCollector<long> collector = new(factory, VordMeter.Name, "vord.redis.fail_open");
@@ -63,7 +64,7 @@ public sealed class ResilienceMetricsTests
         metrics.InitialiseSeries();
 
         IReadOnlyList<CollectedMeasurement<long>> measurements = collector.GetMeasurementSnapshot();
-        await Assert.That(measurements.Count).IsEqualTo(2);
+        await Assert.That(measurements.Count).IsEqualTo(Enum.GetValues<ResilienceComponent>().Length);
         await Assert.That(measurements.All(measurement => measurement.Value == 0L)).IsTrue();
     }
 }

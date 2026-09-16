@@ -173,6 +173,198 @@ func TestParseSSHLine_IPv6Address(t *testing.T) {
 	}
 }
 
+// Intent: every shape of sshd auth line the alerting path depends on is parsed into the
+// right action with its fields intact, and lines that are not auth events are dropped.
+// Brute-force traffic is dominated by unknown accounts, so the "invalid user" forms must
+// produce failed events rather than being silently discarded.
+func TestParseSSHLine_AuthLineShapes(t *testing.T) {
+	cases := []struct {
+		name       string
+		line       string
+		action     string
+		user       string
+		sourceIP   string
+		sourcePort int
+		authMethod string
+	}{
+		{
+			name:       "valid user failure",
+			line:       "Jun 15 10:35:00 server sshd[1234]: Failed password for root from 203.0.113.5 port 44444 ssh2",
+			action:     "failed",
+			user:       "root",
+			sourceIP:   "203.0.113.5",
+			sourcePort: 44444,
+			authMethod: "password",
+		},
+		{
+			name:       "invalid user failure",
+			line:       "Jun 15 10:35:01 server sshd[1234]: Failed password for invalid user bob from 203.0.113.6 port 44445 ssh2",
+			action:     "failed",
+			user:       "bob",
+			sourceIP:   "203.0.113.6",
+			sourcePort: 44445,
+			authMethod: "password",
+		},
+		{
+			name:       "illegal user failure from older sshd",
+			line:       "Jun 15 10:35:02 server sshd[1234]: Failed password for illegal user oracle from 203.0.113.7 port 44446 ssh2",
+			action:     "failed",
+			user:       "oracle",
+			sourceIP:   "203.0.113.7",
+			sourcePort: 44446,
+			authMethod: "password",
+		},
+		{
+			name:       "invalid user none method probe",
+			line:       "Jun 15 10:35:03 server sshd[1234]: Failed none for invalid user admin from 203.0.113.8 port 44447 ssh2",
+			action:     "failed",
+			user:       "admin",
+			sourceIP:   "203.0.113.8",
+			sourcePort: 44447,
+			authMethod: "none",
+		},
+		{
+			name:       "account literally named invalid is not mistaken for the prefix",
+			line:       "Jun 15 10:35:04 server sshd[1234]: Failed password for invalid from 203.0.113.9 port 44448 ssh2",
+			action:     "failed",
+			user:       "invalid",
+			sourceIP:   "203.0.113.9",
+			sourcePort: 44448,
+			authMethod: "password",
+		},
+		{
+			name:       "invalid user failure over IPv6",
+			line:       "Jun 15 10:35:05 server sshd[1234]: Failed publickey for invalid user git from 2001:db8::dead:beef port 44449 ssh2",
+			action:     "failed",
+			user:       "git",
+			sourceIP:   "2001:db8::dead:beef",
+			sourcePort: 44449,
+			authMethod: "publickey",
+		},
+		{
+			name:       "successful connect is still a connect",
+			line:       "Jun 15 10:30:00 server sshd[1234]: Accepted publickey for deploy from 10.0.1.50 port 54321 ssh2",
+			action:     "connect",
+			user:       "deploy",
+			sourceIP:   "10.0.1.50",
+			sourcePort: 54321,
+			authMethod: "publickey",
+		},
+		{
+			name:       "disconnect is still a disconnect",
+			line:       "Jun 15 10:45:00 server sshd[1234]: Disconnected from user deploy 10.0.1.50 port 54321",
+			action:     "disconnect",
+			user:       "deploy",
+			sourceIP:   "10.0.1.50",
+			sourcePort: 54321,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			results := parseSSHLine(tc.line)
+			if len(results) != 1 {
+				t.Fatalf("expected 1 result, got %d", len(results))
+			}
+
+			r := results[0]
+			if r.Action != tc.action {
+				t.Errorf("expected Action=%q, got %q", tc.action, r.Action)
+			}
+			if r.User != tc.user {
+				t.Errorf("expected User=%q, got %q", tc.user, r.User)
+			}
+			if r.SourceIP != tc.sourceIP {
+				t.Errorf("expected SourceIP=%q, got %q", tc.sourceIP, r.SourceIP)
+			}
+			if r.SourcePort != tc.sourcePort {
+				t.Errorf("expected SourcePort=%d, got %d", tc.sourcePort, r.SourcePort)
+			}
+			if r.AuthMethod != tc.authMethod {
+				t.Errorf("expected AuthMethod=%q, got %q", tc.authMethod, r.AuthMethod)
+			}
+			if r.Timestamp == "" {
+				t.Error("expected non-empty Timestamp")
+			}
+		})
+	}
+}
+
+// Intent: truncated or garbled auth lines are dropped rather than parsed into a
+// half-populated event, and parsing never panics on them.
+func TestParseSSHLine_MalformedAuthLinesDropped(t *testing.T) {
+	cases := []struct {
+		name string
+		line string
+	}{
+		{name: "non-numeric address", line: "sshd[1234]: Failed password for invalid user bob from notanip port 22 ssh2"},
+		{name: "non-numeric port", line: "sshd[1234]: Failed password for invalid user bob from 203.0.113.5 port xyz ssh2"},
+		{name: "truncated before source", line: "sshd[1234]: Failed password for invalid user bob"},
+		{name: "prefix with no username", line: "sshd[1234]: Failed password for invalid user from 203.0.113.5 port 22 ssh2"},
+		{name: "max attempts truncated", line: "sshd[1234]: error: maximum authentication attempts exceeded for"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			results := parseSSHLine(tc.line)
+			if len(results) != 0 {
+				t.Errorf("expected 0 results for %q, got %d (%+v)", tc.line, len(results), results)
+			}
+		})
+	}
+}
+
+// Intent: sshd's "maximum authentication attempts exceeded" line reports that a connection
+// was torn down, not that another credential was tried. It is not collected, because every
+// attempt that exhausted the limit already arrived as its own "Failed" line.
+func TestParseSSHLine_MaxAuthTriesSummaryNotCollected(t *testing.T) {
+	cases := []struct {
+		name string
+		line string
+	}{
+		{name: "invalid user", line: "Jun 15 10:35:06 server sshd[1234]: error: maximum authentication attempts exceeded for invalid user bob from 203.0.113.10 port 44450 ssh2 [preauth]"},
+		{name: "valid user", line: "Jun 15 10:35:07 server sshd[1234]: error: maximum authentication attempts exceeded for root from 203.0.113.11 port 44451 ssh2 [preauth]"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			results := parseSSHLine(tc.line)
+			if len(results) != 0 {
+				t.Errorf("expected 0 results for %q, got %d (%+v)", tc.line, len(results), results)
+			}
+		})
+	}
+}
+
+// Intent: a connection that burns every attempt contributes exactly one failed event per
+// attempt. sshd emits its summary line in addition to the per-attempt lines, so collecting
+// both would report more failures than the host saw and shift the threshold a tenant tunes
+// against — six real attempts must count as six, not seven.
+func TestParseSSHLine_ExhaustedConnectionCountsEachAttemptOnce(t *testing.T) {
+	lines := []string{
+		"Jun 15 10:35:00 server sshd[1234]: Failed password for invalid user bob from 203.0.113.10 port 44450 ssh2",
+		"Jun 15 10:35:01 server sshd[1234]: Failed password for invalid user bob from 203.0.113.10 port 44450 ssh2",
+		"Jun 15 10:35:02 server sshd[1234]: Failed password for invalid user bob from 203.0.113.10 port 44450 ssh2",
+		"Jun 15 10:35:03 server sshd[1234]: Failed password for invalid user bob from 203.0.113.10 port 44450 ssh2",
+		"Jun 15 10:35:04 server sshd[1234]: Failed password for invalid user bob from 203.0.113.10 port 44450 ssh2",
+		"Jun 15 10:35:05 server sshd[1234]: Failed password for invalid user bob from 203.0.113.10 port 44450 ssh2",
+		"Jun 15 10:35:06 server sshd[1234]: error: maximum authentication attempts exceeded for invalid user bob from 203.0.113.10 port 44450 ssh2 [preauth]",
+	}
+
+	failed := 0
+	for _, line := range lines {
+		for _, r := range parseSSHLine(line) {
+			if r.Action == "failed" {
+				failed++
+			}
+		}
+	}
+
+	if failed != 6 {
+		t.Errorf("expected 6 failed events for a connection that exhausted MaxAuthTries=6, got %d", failed)
+	}
+}
+
 // Intent: storeSSHSession inserts SSH session and enqueues telemetry in one operation.
 func TestStoreSSHSession_InsertsAndEnqueues(t *testing.T) {
 	store := newTestStore(t)

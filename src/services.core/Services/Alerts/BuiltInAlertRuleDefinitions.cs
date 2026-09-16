@@ -131,5 +131,19 @@ public static class BuiltInAlertRuleDefinitions
             1,
             10,
             AlertSeverity.Warning),
+
+        // Any machine with SSH exposed to the internet sees a steady trickle of failed logins, and
+        // a person fat-fingering a key twice is not an incident either — so the threshold has to sit
+        // above ordinary background noise. More than five failures inside five minutes is where the
+        // pattern stops looking like typos or a stale key and starts looking like something working
+        // through a list. Warning rather than Critical: a refused login is the system doing its job,
+        // and what matters is that someone looks, not that someone wakes up.
+        new BuiltInAlertRuleDefinition(
+            "More than 5 failed SSH logins",
+            AlertMetric.FailedSshLogin,
+            AlertOperator.GreaterThan,
+            5,
+            5,
+            AlertSeverity.Warning),
     ];
 }

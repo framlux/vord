@@ -41,6 +41,13 @@ public sealed class GrpcStatusMetricTagTests
     /// </summary>
     private const string RequestDurationInstrument = "http.server.request.duration";
 
+    /// <summary>
+    /// Backstop for the measurement wait. It is a failure guard, not the mechanism: the wait is
+    /// signalled by the collector when a measurement is recorded, so a healthy run never approaches
+    /// this and a broken one fails rather than hanging.
+    /// </summary>
+    private static readonly TimeSpan MeasurementWaitTimeout = TimeSpan.FromSeconds(30);
+
     [Test]
     public async Task FailedCall_IsTaggedWithItsGrpcStatusDespiteAnsweringHttp200()
     {
@@ -128,6 +135,13 @@ public sealed class GrpcStatusMetricTagTests
     /// </summary>
     private static async Task<CollectedMeasurement<double>> SingleGrpcMeasurement(MetricCollector<double> durations)
     {
+        // The hosting layer records the duration as the request pipeline unwinds, which can happen
+        // after the client has already read the response and its trailer, so a snapshot taken the
+        // instant the call returns is sometimes still empty. The collector signals when a measurement
+        // lands, so this waits on that signal rather than sleeping and re-reading; the exact-count
+        // assertion below is unchanged, so a second tagged measurement still fails the test.
+        await durations.WaitForMeasurementsAsync(minCount: 1).WaitAsync(MeasurementWaitTimeout);
+
         List<CollectedMeasurement<double>> tagged = durations.GetMeasurementSnapshot()
             .Where(measurement => measurement.Tags.ContainsKey(GrpcStatusMetricTagMiddleware.TagName) == true)
             .ToList();

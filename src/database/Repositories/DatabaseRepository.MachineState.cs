@@ -443,6 +443,50 @@ public partial class DatabaseRepository : IMachineStateRepository
             .ToListAsync(cancellationToken);
     }
 
+    /// <summary>
+    /// How far back of the window start the <c>ReceivedAt</c> bound is placed. MachineTelemetry is
+    /// range-partitioned on <c>ReceivedAt</c>, so a predicate on <c>ServerReceivedAt</c> alone prunes
+    /// nothing and every partition is scanned. Telemetry ingestion clamps <c>ReceivedAt</c> to the
+    /// maintained partition window, which is this same number of days, so no row the server-time
+    /// predicate would keep can fall outside this bound.
+    /// </summary>
+    private const int TelemetryPartitionPruningLookbackDays = 7;
+
+    /// <inheritdoc/>
+    public async Task<int> CountTelemetryWithPayloadMarkerAsync(long machineId, short telemetryType, string payloadMarker, DateTimeOffset windowStart, DateTimeOffset windowEnd, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(payloadMarker);
+
+        return await BuildPayloadMarkerQuery(machineId, telemetryType, payloadMarker, windowStart, windowEnd)
+            .CountAsync(cancellationToken);
+    }
+
+    /// <inheritdoc/>
+    public async Task<List<string>> GetTelemetryPayloadsWithMarkerAsync(long machineId, short telemetryType, string payloadMarker, DateTimeOffset windowStart, DateTimeOffset windowEnd, int limit, CancellationToken cancellationToken)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(payloadMarker);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(limit);
+
+        return await BuildPayloadMarkerQuery(machineId, telemetryType, payloadMarker, windowStart, windowEnd)
+            .OrderByDescending(t => t.ServerReceivedAt)
+            .Take(limit)
+            .Select(t => t.Payload)
+            .ToListAsync(cancellationToken);
+    }
+
+    private IQueryable<MachineTelemetry> BuildPayloadMarkerQuery(long machineId, short telemetryType, string payloadMarker, DateTimeOffset windowStart, DateTimeOffset windowEnd)
+    {
+        DateTimeOffset partitionLowerBound = windowStart.AddDays(-TelemetryPartitionPruningLookbackDays);
+
+        return _db.MachineTelemetry
+            .Where(t => (t.MachineId == machineId) &&
+                        (t.TelemetryType == telemetryType) &&
+                        (t.ReceivedAt >= partitionLowerBound) &&
+                        (t.ServerReceivedAt >= windowStart) &&
+                        (t.ServerReceivedAt <= windowEnd) &&
+                        t.Payload.Contains(payloadMarker));
+    }
+
     /// <inheritdoc/>
     public async Task<(List<(short HealthStatus, int Count)> HealthCounts, int TotalSecurityUpdates)> GetFleetHealthAggregationAsync(int tenantId, CancellationToken cancellationToken)
     {

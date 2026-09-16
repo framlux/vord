@@ -348,7 +348,7 @@ public sealed class UpdateAlertRuleValidatorTests
         ValidationResult result = await _validator.ValidateAsync(request);
 
         await Assert.That(result.IsValid).IsFalse();
-        await Assert.That(result.Errors.Any(e => e.ErrorMessage == "Duration must be zero for event-based metrics")).IsTrue();
+        await Assert.That(result.Errors.Any(e => e.ErrorMessage == "Duration must be zero for point-in-time metrics")).IsTrue();
     }
 
     [Test]
@@ -372,5 +372,35 @@ public sealed class UpdateAlertRuleValidatorTests
 
         await Assert.That(result.IsValid).IsFalse();
         await Assert.That(result.Errors.Any(e => e.ErrorMessage == "At least one machine must be selected")).IsTrue();
+    }
+
+    /// <summary>
+    /// The update path shares the metric rules with create, so a windowed duration on an
+    /// ingest-evaluated metric has to be accepted here too.
+    /// </summary>
+    [Test]
+    public async Task FailedSshLogin_WindowDuration_PassesValidation()
+    {
+        UpdateAlertRuleRequest request = ValidRequest();
+        request.Metric = "FailedSshLogin";
+        request.Threshold = 5;
+        request.DurationMinutes = 10;
+
+        ValidationResult result = await _validator.ValidateAsync(request);
+
+        await Assert.That(result.IsValid).IsTrue();
+    }
+
+    [Test]
+    public async Task FailedSshLogin_ZeroDuration_FailsValidation()
+    {
+        UpdateAlertRuleRequest request = ValidRequest();
+        request.Metric = "FailedSshLogin";
+        request.Threshold = 5;
+        request.DurationMinutes = 0;
+
+        ValidationResult result = await _validator.ValidateAsync(request);
+
+        await Assert.That(result.IsValid).IsFalse();
     }
 }
