@@ -3,6 +3,8 @@
      See LICENSE for details. -->
 
 <script lang="ts">
+	import { moveFocusInto, trapTabKey } from '$lib/utils/focus-trap';
+
 	let {
 		open = false,
 		title = 'Confirm',
@@ -30,30 +32,22 @@
 		if (open) {
 			previouslyFocused = document.activeElement as HTMLElement;
 			requestAnimationFrame(() => {
-				const firstButton = dialogElement?.querySelector('button');
-				firstButton?.focus();
+				if (dialogElement !== undefined) {
+					moveFocusInto(dialogElement);
+				}
 			});
-		} else if (previouslyFocused) {
+		} else if (previouslyFocused !== null) {
 			previouslyFocused.focus();
 			previouslyFocused = null;
 		}
 	});
 
+	// Was a local copy that collected buttons alone. That is adequate for the two buttons this
+	// dialog actually renders, but it is the copy other dialogs were modelled on, and there it
+	// skipped every input, select and checkbox. One tested implementation instead of four.
 	function trapFocus(event: KeyboardEvent) {
-		if (event.key !== 'Tab') return;
-
-		const focusable = dialogElement?.querySelectorAll('button') ?? [];
-		if (focusable.length === 0) return;
-
-		const first = focusable[0] as HTMLElement;
-		const last = focusable[focusable.length - 1] as HTMLElement;
-
-		if (event.shiftKey && document.activeElement === first) {
-			event.preventDefault();
-			last.focus();
-		} else if (event.shiftKey === false && document.activeElement === last) {
-			event.preventDefault();
-			first.focus();
+		if (dialogElement !== undefined) {
+			trapTabKey(dialogElement, event);
 		}
 	}
 

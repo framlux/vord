@@ -3,7 +3,7 @@
 // See LICENSE for details.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/svelte';
+import { render, screen, fireEvent, waitFor } from '@testing-library/svelte';
 import '@testing-library/jest-dom/vitest';
 import type { UserDto, SubscriptionDto } from '$lib/api/types';
 
@@ -393,6 +393,30 @@ describe('AppShell', () => {
 
             const overlay = container.querySelector('.animate-fade-overlay');
             expect(overlay).not.toBeNull();
+        });
+
+        // The overlay could only be dismissed by clicking the backdrop, which is not a thing a
+        // keyboard user can do. It covers the whole screen and holds the navigation, so with no
+        // Escape there was no way past it without a pointer.
+        it('should close the mobile overlay on Escape', async () => {
+            const user = makeUser();
+            const { container } = render(AppShell, { props: { user } });
+
+            await fireEvent.click(screen.getByLabelText('Open navigation menu'));
+            await fireEvent.keyDown(window, { key: 'Escape' });
+
+            expect(container.querySelector('.animate-fade-overlay')).toBeNull();
+        });
+
+        it('should return focus to the menu button when the overlay closes', async () => {
+            const user = makeUser();
+            render(AppShell, { props: { user } });
+
+            const trigger = screen.getByLabelText('Open navigation menu');
+            await fireEvent.click(trigger);
+            await fireEvent.keyDown(window, { key: 'Escape' });
+
+            await waitFor(() => expect(document.activeElement).toBe(trigger));
         });
     });
 

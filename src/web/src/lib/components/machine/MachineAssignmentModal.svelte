@@ -5,6 +5,7 @@
 <script lang="ts">
 	import { untrack } from 'svelte';
 	import { ApiClient } from '$lib/api/client';
+	import { moveFocusInto, trapTabKey } from '$lib/utils/focus-trap';
 	import { MachineHealthStatus, OperatingSystem, MachineType, type FleetMachineDto } from '$lib/api/types';
 	import HealthBadge from '$lib/components/HealthBadge.svelte';
 	import Pagination from '$lib/components/Pagination.svelte';
@@ -144,29 +145,12 @@
 		onsave?.([...selected], [...offered]);
 	}
 
+	// The wrapping rule itself lives in one tested place now. It was correct here and absent or
+	// narrower in the three sibling dialogs, and the per-dialog test that was supposed to prove it
+	// could not fail — jsdom does not move focus on Tab, so "focus is still inside" is free.
 	function trapFocus(event: KeyboardEvent) {
-		if (event.key !== 'Tab') {
-			return;
-		}
-
-		// Every control in this dialog, not just its buttons: a trap that skips the search box,
-		// the filters and the checkboxes lets focus escape the moment someone tabs through the list.
-		const focusable = dialogElement?.querySelectorAll<HTMLElement>(
-			'button:not([disabled]), input:not([disabled]), select:not([disabled]), [href], [tabindex]:not([tabindex="-1"])'
-		);
-		if (focusable === undefined || focusable.length === 0) {
-			return;
-		}
-
-		const first = focusable[0];
-		const last = focusable[focusable.length - 1];
-
-		if (event.shiftKey && document.activeElement === first) {
-			event.preventDefault();
-			last.focus();
-		} else if (event.shiftKey === false && document.activeElement === last) {
-			event.preventDefault();
-			first.focus();
+		if (dialogElement !== undefined) {
+			trapTabKey(dialogElement, event);
 		}
 	}
 
@@ -188,8 +172,9 @@
 				load(1);
 
 				requestAnimationFrame(() => {
-					const target = dialogElement?.querySelector<HTMLElement>('input, button');
-					target?.focus();
+					if (dialogElement !== undefined) {
+						moveFocusInto(dialogElement);
+					}
 				});
 			} else if (previouslyFocused !== null) {
 				previouslyFocused.focus();

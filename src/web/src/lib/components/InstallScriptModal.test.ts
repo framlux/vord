@@ -3,7 +3,7 @@
 // See LICENSE for details.
 
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/svelte';
+import { render, screen, fireEvent, waitFor } from '@testing-library/svelte';
 import '@testing-library/jest-dom/vitest';
 import InstallScriptModal from './InstallScriptModal.svelte';
 
@@ -21,6 +21,54 @@ describe('InstallScriptModal', () => {
             }
         });
         expect(screen.getByRole('dialog')).toBeInTheDocument();
+    });
+
+    describe('accessibility', () => {
+        // This dialog carried the right ARIA attributes and none of the keyboard behaviour they
+        // imply. It holds a registration token: a keyboard or screen-reader user who opens it and
+        // cannot close it, or who tabs straight out of it into the page behind, is stuck on a modal
+        // that is announced as modal and does not behave like one.
+        it('closes on Escape', async () => {
+            const onclose = vi.fn();
+            render(InstallScriptModal, { props: { open: true, token: 't', onclose } });
+
+            await fireEvent.keyDown(window, { key: 'Escape' });
+
+            expect(onclose).toHaveBeenCalled();
+        });
+
+        it('moves focus into the dialog when it opens', async () => {
+            render(InstallScriptModal, { props: { open: true, token: 't' } });
+
+            const dialog = screen.getByRole('dialog');
+            await waitFor(() => expect(dialog.contains(document.activeElement)).toBe(true));
+        });
+
+        it('wraps Tab on the last control back to the first', async () => {
+            render(InstallScriptModal, { props: { open: true, token: 't' } });
+
+            const dialog = screen.getByRole('dialog');
+            const focusable = dialog.querySelectorAll<HTMLElement>('button:not([disabled])');
+            const first = focusable[0];
+            const last = focusable[focusable.length - 1];
+
+            last.focus();
+            await fireEvent.keyDown(dialog, { key: 'Tab' });
+
+            expect(document.activeElement).toBe(first);
+        });
+
+        it('returns focus to whatever opened it', async () => {
+            const trigger = document.createElement('button');
+            document.body.appendChild(trigger);
+            trigger.focus();
+
+            const { rerender } = render(InstallScriptModal, { props: { open: true, token: 't' } });
+            await rerender({ open: false, token: 't' });
+
+            await waitFor(() => expect(document.activeElement).toBe(trigger));
+            trigger.remove();
+        });
     });
 
     it('should display the Install Command title', () => {

@@ -238,19 +238,74 @@ describe('MachineAssignmentModal', () => {
 			expect(oncancel).toHaveBeenCalled();
 		});
 
-		// ConfirmDialog traps on buttons alone, which would skip the search box, the filters and
-		// every checkbox here — a trap that excludes most of its own dialog is not a trap.
-		it('traps Tab within the dialog across every focusable control', async () => {
+		// These assert where focus LANDS. The previous version fired Tab and then checked that focus
+		// was still somewhere inside the dialog, which jsdom guarantees on its own — it does not move
+		// focus on Tab, so the element the test had just focused by hand was trivially still inside.
+		// That assertion passed with trapFocus deleted entirely.
+		it('wraps Tab on the last control back to the first', async () => {
 			render(MachineAssignmentModal, { props: baseProps() });
 
 			const dialog = await screen.findByRole('dialog');
-			const focusable = dialog.querySelectorAll('button, input, select, [href], [tabindex]:not([tabindex="-1"])');
-			const last = focusable[focusable.length - 1] as HTMLElement;
+			const focusable = dialog.querySelectorAll<HTMLElement>(
+				'button:not([disabled]), input:not([disabled]), select:not([disabled]), [href], [tabindex]:not([tabindex="-1"])'
+			);
+			const first = focusable[0];
+			const last = focusable[focusable.length - 1];
 
 			last.focus();
 			await fireEvent.keyDown(dialog, { key: 'Tab' });
 
-			expect(dialog.contains(document.activeElement)).toBe(true);
+			expect(document.activeElement).toBe(first);
 		});
+
+		it('wraps Shift+Tab on the first control back to the last', async () => {
+			render(MachineAssignmentModal, { props: baseProps() });
+
+			const dialog = await screen.findByRole('dialog');
+			const focusable = dialog.querySelectorAll<HTMLElement>(
+				'button:not([disabled]), input:not([disabled]), select:not([disabled]), [href], [tabindex]:not([tabindex="-1"])'
+			);
+			const first = focusable[0];
+			const last = focusable[focusable.length - 1];
+
+			first.focus();
+			await fireEvent.keyDown(dialog, { key: 'Tab', shiftKey: true });
+
+			expect(document.activeElement).toBe(last);
+		});
+
+		it('returns focus to whatever opened it', async () => {
+			// Claimed in the commit that shipped this modal and never tested. Losing focus to the
+			// document body on close strands a keyboard user at the top of the page, with no way back
+			// to the row they were working on.
+			const trigger = document.createElement('button');
+			trigger.textContent = 'Assign machines';
+			document.body.appendChild(trigger);
+			trigger.focus();
+
+			const { rerender } = render(MachineAssignmentModal, { props: baseProps() });
+			await screen.findByRole('dialog');
+
+			await rerender(baseProps({ open: false }));
+
+			await waitFor(() => expect(document.activeElement).toBe(trigger));
+			trigger.remove();
+		});
+	});
+
+	it('saves a selection built across two pages, not merely the page in view', async () => {
+		// The selection is a set the modal owns rather than something derived from the rendered rows.
+		// Nothing asserted that end to end through a save, which is the one place the distinction
+		// actually costs a machine its coverage.
+		const onsave = vi.fn();
+		render(MachineAssignmentModal, { props: baseProps({ onsave }) });
+
+		await fireEvent.click(await screen.findByRole('checkbox', { name: /web-01/ }));
+		await fireEvent.click(screen.getByRole('button', { name: 'Next page' }));
+		await fireEvent.click(await screen.findByRole('checkbox', { name: /db-01/ }));
+		await fireEvent.click(screen.getByRole('button', { name: /save/i }));
+
+		expect(onsave).toHaveBeenCalled();
+		expect([...onsave.mock.calls[0][0]].sort()).toEqual([1, 2]);
 	});
 });

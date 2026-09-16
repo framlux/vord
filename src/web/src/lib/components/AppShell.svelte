@@ -41,6 +41,23 @@
     let mobileMenuOpen = $state(false);
     let userMenuOpen = $state(false);
 
+    // The overlay covers the screen and holds the navigation, and it could only be dismissed by
+    // clicking its backdrop — which is not something a keyboard user can do. Escape closes it and
+    // hands focus back to the control that opened it, rather than leaving focus stranded behind a
+    // panel that is no longer there.
+    let menuButton: HTMLButtonElement | undefined = $state(undefined);
+
+    function handleWindowKeydown(event: KeyboardEvent) {
+        if (event.key !== 'Escape') {
+            return;
+        }
+
+        if (mobileMenuOpen) {
+            mobileMenuOpen = false;
+            menuButton?.focus();
+        }
+    }
+
     type NavTab = 'fleet' | 'settings' | 'admin';
 
     function deriveTab(pathname: string): NavTab {
@@ -94,7 +111,7 @@
     }
 </script>
 
-<svelte:window onclick={handleUserMenuClickOutside} />
+<svelte:window onclick={handleUserMenuClickOutside} onkeydown={handleWindowKeydown} />
 
 {#snippet sidebarContent(onNavigate: (() => void) | undefined)}
     <!-- Logo -->
@@ -311,8 +328,10 @@
         <!-- Mobile top bar -->
         <header class="flex h-12 items-center gap-3 border-b border-surface-200 px-4 dark:border-surface-700 lg:hidden">
             <button
+                bind:this={menuButton}
                 onclick={() => (mobileMenuOpen = !mobileMenuOpen)}
                 class="rounded-md p-1.5 text-surface-500 hover:bg-surface-100 dark:hover:bg-surface-700"
+                aria-expanded={mobileMenuOpen}
                 aria-label="Open navigation menu"
             >
                 <Menu size={20} />

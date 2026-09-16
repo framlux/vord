@@ -3,7 +3,7 @@
 // See LICENSE for details.
 
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/svelte';
+import { render, screen, fireEvent, waitFor } from '@testing-library/svelte';
 import '@testing-library/jest-dom/vitest';
 import ConfirmDialog from './ConfirmDialog.svelte';
 
@@ -97,6 +97,53 @@ describe('ConfirmDialog', () => {
 
         rerender({ open: false });
         expect(container.querySelector('.fixed')).toBeNull();
+    });
+
+    describe('keyboard behaviour', () => {
+        // The aria attributes were asserted and the behaviour they promise was not. This dialog
+        // confirms destructive actions — deleting a rule, deleting a machine — so being unable to
+        // back out of it from the keyboard is the worst place to have this gap.
+        it('closes on Escape', async () => {
+            const oncancel = vi.fn();
+            render(ConfirmDialog, { props: { open: true, oncancel } });
+
+            await fireEvent.keyDown(window, { key: 'Escape' });
+
+            expect(oncancel).toHaveBeenCalled();
+        });
+
+        it('moves focus into the dialog when it opens', async () => {
+            render(ConfirmDialog, { props: { open: true } });
+
+            const dialog = screen.getByRole('dialog');
+            await waitFor(() => expect(dialog.contains(document.activeElement)).toBe(true));
+        });
+
+        it('wraps Tab on the last control back to the first', async () => {
+            render(ConfirmDialog, { props: { open: true } });
+
+            const dialog = screen.getByRole('dialog');
+            const focusable = dialog.querySelectorAll<HTMLElement>('button:not([disabled])');
+            const first = focusable[0];
+            const last = focusable[focusable.length - 1];
+
+            last.focus();
+            await fireEvent.keyDown(dialog, { key: 'Tab' });
+
+            expect(document.activeElement).toBe(first);
+        });
+
+        it('returns focus to whatever opened it', async () => {
+            const trigger = document.createElement('button');
+            document.body.appendChild(trigger);
+            trigger.focus();
+
+            const { rerender } = render(ConfirmDialog, { props: { open: true } });
+            await rerender({ open: false });
+
+            await waitFor(() => expect(document.activeElement).toBe(trigger));
+            trigger.remove();
+        });
     });
 
     it('should have correct aria attributes for accessibility', () => {

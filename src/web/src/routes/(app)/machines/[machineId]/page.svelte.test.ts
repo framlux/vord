@@ -3,7 +3,7 @@
 // See LICENSE for details.
 
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/svelte';
+import { render, screen, fireEvent, waitFor } from '@testing-library/svelte';
 import '@testing-library/jest-dom/vitest';
 import { MachineType, OperatingSystem } from '$lib/api/types';
 import type { AlertRuleDto, MachineDto, SubscriptionDto, UserDto } from '$lib/api/types';
@@ -221,6 +221,65 @@ describe('machine detail alert rules', () => {
 		});
 
 		expect(screen.queryByText(/no enabled alert rule is watching this machine/i)).not.toBeInTheDocument();
+	});
+
+	describe('the rule picker dialog is operable from the keyboard', () => {
+		// It was announced as a modal dialog and behaved like a div. Nothing moved focus into it, so
+		// its Escape handler — bound to the dialog element rather than the window — could not receive
+		// the key at all, and there was no trap and no focus return. Every one of these fails against
+		// that version.
+		async function openPicker() {
+			render(MachinePage, {
+				props: { data: makeData(makeSubscription(), builtIns) }
+			});
+
+			// Focused before it is clicked, because a real activation — pointer or keyboard — focuses
+			// the control, and jsdom's click does not. Without this the dialog is asked to restore
+			// focus to a document body that never held it, and the restore looks broken when it is
+			// the fixture that is unfaithful.
+			const trigger = screen.getByRole('button', { name: 'Manage Rules' });
+			trigger.focus();
+			await fireEvent.click(trigger);
+
+			return screen.getByRole('dialog');
+		}
+
+		it('moves focus into the dialog when it opens', async () => {
+			const dialog = await openPicker();
+
+			await waitFor(() => expect(dialog.contains(document.activeElement)).toBe(true));
+		});
+
+		it('closes on Escape', async () => {
+			await openPicker();
+
+			await fireEvent.keyDown(window, { key: 'Escape' });
+
+			expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+		});
+
+		it('wraps Tab on the last control back to the first', async () => {
+			const dialog = await openPicker();
+			const focusable = dialog.querySelectorAll<HTMLElement>(
+				'button:not([disabled]), input:not([disabled]), select:not([disabled]), [href], [tabindex]:not([tabindex="-1"])'
+			);
+			const first = focusable[0];
+			const last = focusable[focusable.length - 1];
+
+			last.focus();
+			await fireEvent.keyDown(dialog, { key: 'Tab' });
+
+			expect(document.activeElement).toBe(first);
+		});
+
+		it('returns focus to the control that opened it', async () => {
+			await openPicker();
+			const trigger = screen.getByRole('button', { name: 'Manage Rules' });
+
+			await fireEvent.keyDown(window, { key: 'Escape' });
+
+			await waitFor(() => expect(document.activeElement).toBe(trigger));
+		});
 	});
 
 	it('leaves a self-hosted deployment its rule picker whatever its subscription row says', () => {

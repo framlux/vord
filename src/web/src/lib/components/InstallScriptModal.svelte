@@ -4,6 +4,7 @@
 
 <script lang="ts">
 	import { generateInstallCommand } from '$lib/utils/install-script';
+	import { moveFocusInto, trapTabKey } from '$lib/utils/focus-trap';
 	import { Copy, Check, X } from 'lucide-svelte';
 
 	let {
@@ -20,6 +21,26 @@
 
 	let copied = $state(false);
 
+	// This dialog carried the ARIA of a modal and none of the behaviour: focus stayed on the page
+	// behind it, Tab walked straight out, and there was no Escape. It holds a registration token,
+	// so it is exactly the sort of thing someone opens, reads, and needs to be able to leave.
+	let dialogElement: HTMLDivElement | undefined = $state(undefined);
+	let previouslyFocused: HTMLElement | null = null;
+
+	$effect(() => {
+		if (open) {
+			previouslyFocused = document.activeElement as HTMLElement;
+			requestAnimationFrame(() => {
+				if (dialogElement !== undefined) {
+					moveFocusInto(dialogElement);
+				}
+			});
+		} else if (previouslyFocused !== null) {
+			previouslyFocused.focus();
+			previouslyFocused = null;
+		}
+	});
+
 	const script = $derived(generateInstallCommand(token, serverAddress));
 
 	function copyScript() {
@@ -29,9 +50,15 @@
 	}
 </script>
 
+<svelte:window onkeydown={(e) => { if (open && e.key === 'Escape') onclose?.(); }} />
+
 {#if open}
 	<div class="fixed inset-0 z-50 flex items-center justify-center bg-black/50" role="presentation">
+		<!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
 		<div
+			bind:this={dialogElement}
+			onkeydown={(e) => { if (dialogElement !== undefined) trapTabKey(dialogElement, e); }}
+			tabindex="-1"
 			class="mx-4 w-full max-w-3xl rounded-xl bg-surface-50 p-6 shadow-xl dark:bg-surface-800"
 			role="dialog"
 			aria-modal="true"

@@ -28,6 +28,7 @@
 	import { enhance } from '$app/forms';
 	import { canAdminMachines } from '$lib/utils/roles';
 	import { canAuthorAlertRules, canManageAlertRules } from '$lib/utils/alert-entitlement';
+	import { moveFocusInto, trapTabKey } from '$lib/utils/focus-trap';
 	import {
 		generateNonce,
 		buildCanonicalPayload,
@@ -467,6 +468,27 @@
 	// itself says so. A fleet expansion is precisely when nobody is reading the alerts page.
 	const watchedByEnabledRule: boolean = $derived(machineAlertRules.some((r) => r.isEnabled));
 
+	// This dialog announced itself as modal and behaved like a div: nothing moved focus into it, so
+	// its Escape handler — bound to the dialog element rather than the window — never received the
+	// key, and there was no trap and no way back to the control that opened it. A keyboard user
+	// could open it and not close it.
+	let rulesDialogElement: HTMLDivElement | undefined = $state(undefined);
+	let rulesPreviouslyFocused: HTMLElement | null = null;
+
+	$effect(() => {
+		if (showAlertRulesModal) {
+			rulesPreviouslyFocused = document.activeElement as HTMLElement;
+			requestAnimationFrame(() => {
+				if (rulesDialogElement !== undefined) {
+					moveFocusInto(rulesDialogElement);
+				}
+			});
+		} else if (rulesPreviouslyFocused !== null) {
+			rulesPreviouslyFocused.focus();
+			rulesPreviouslyFocused = null;
+		}
+	});
+
 	// The rule list is readable by every tenant — a Free tenant reads its eight disabled built-ins as
 	// an upsell — but the save is Pro-gated, and status-sensitive with it. Offering the picker on the
 	// same terms the alerts page offers its controls keeps the two screens from disagreeing about
@@ -566,8 +588,9 @@
 
 	<!-- Tabs -->
 	<div class="overflow-x-auto border-b border-surface-200 dark:border-surface-700">
-		<!-- svelte-ignore a11y_no_noninteractive_element_to_interactive_role -->
-		<nav class="-mb-px flex gap-6" role="tablist" aria-label="Machine details" aria-orientation="horizontal" onkeydown={handleTabKeydown}>
+		<!-- A plain element rather than <nav>: giving a navigation landmark the tablist role strips
+		     the landmark from the accessibility tree, which is what the suppression here was hiding. -->
+		<div class="-mb-px flex gap-6" role="tablist" aria-label="Machine details" aria-orientation="horizontal">
 			{#each tabs as tab}
 				<button
 					id="tab-{tab.id}"
@@ -576,6 +599,7 @@
 					aria-controls="tabpanel-{tab.id}"
 					tabindex={activeTab === tab.id ? 0 : -1}
 					onclick={() => (activeTab = tab.id)}
+					onkeydown={handleTabKeydown}
 					class="whitespace-nowrap border-b-2 px-1 py-3 text-sm font-medium transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-500 focus-visible:ring-offset-2 dark:focus-visible:ring-offset-surface-900 {activeTab === tab.id
 						? 'border-primary-500 text-primary-500'
 						: 'border-transparent text-surface-500 hover:border-surface-300 hover:text-surface-700 dark:text-surface-400 dark:hover:text-surface-200'}"
@@ -583,7 +607,7 @@
 					{tab.label}
 				</button>
 			{/each}
-		</nav>
+		</div>
 	</div>
 
 	<!-- Tab Content -->
@@ -1496,18 +1520,23 @@
 	</div>
 </div>
 
+<svelte:window onkeydown={(e) => { if (showAlertRulesModal && e.key === 'Escape') showAlertRulesModal = false; }} />
+
 <!-- Alert Rules Management Modal -->
 {#if showAlertRulesModal && canManageRules}
-	<!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-	<!-- svelte-ignore a11y_interactive_supports_focus -->
-	<div
-		class="fixed inset-0 z-50 flex items-center justify-center bg-black/50"
-		role="dialog"
-		aria-modal="true"
-		aria-labelledby="alert-rules-modal-title"
-		onkeydown={(e) => { if (e.key === 'Escape') showAlertRulesModal = false; }}
-	>
-		<div class="mx-4 w-full max-w-lg rounded-xl border border-surface-200 bg-white p-6 shadow-xl dark:border-surface-700 dark:bg-surface-800">
+	<!-- The dialog role belongs on the panel, not on the full-screen backdrop it sits in: naming
+	     the backdrop the dialog tells assistive technology the dialog is the whole viewport. -->
+	<div class="fixed inset-0 z-50 flex items-center justify-center bg-black/50" role="presentation">
+		<!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+		<div
+			bind:this={rulesDialogElement}
+			onkeydown={(e) => { if (rulesDialogElement !== undefined) trapTabKey(rulesDialogElement, e); }}
+			tabindex="-1"
+			class="mx-4 w-full max-w-lg rounded-xl border border-surface-200 bg-white p-6 shadow-xl dark:border-surface-700 dark:bg-surface-800"
+			role="dialog"
+			aria-modal="true"
+			aria-labelledby="alert-rules-modal-title"
+		>
 			<div class="mb-4 flex items-center justify-between">
 				<h2 id="alert-rules-modal-title" class="text-lg font-semibold text-surface-900 dark:text-surface-50">Manage Alert Rules</h2>
 				<button
