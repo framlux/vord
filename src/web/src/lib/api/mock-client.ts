@@ -2,7 +2,8 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
-import { MachineHealthStatus } from './types';
+import { ApiError } from './client';
+import { exceedsPageSizeCeiling, matchFleetMachines, pageOfFleet, type MockFleetFilter } from './mock-fleet-query';
 import type {
 	UserDto,
 	SubscriptionDto,
@@ -68,53 +69,28 @@ export class MockApiClient {
 		return mockMachineList;
 	}
 
-	async getMachineIds(): Promise<MachineIdSelectionDto> {
-		// The fixture fleet is small enough to fit any cap, so mock mode never exercises the
-		// truncated branch. A picker must not rely on mock mode to prove it handles one.
-		const ids = mockMachineList.items.map((m) => m.id);
+	// Resolved from the same fleet and the same filter as searchMachines, so select-all is exactly
+	// what the list shows. It used to read a different fixture fleet and ignore every filter. The
+	// fixture fleet is small enough to fit any cap, so mock mode never exercises the truncated
+	// branch; a picker must not rely on mock mode to prove it handles one.
+	async getMachineIds(params?: MockFleetFilter & { os?: string; type?: string }): Promise<MachineIdSelectionDto> {
+		const ids = matchFleetMachines(mockFleetMachines, params ?? {}).map((m) => m.id);
 
 		return { ids, totalCount: ids.length, truncated: false };
 	}
 
 	// Filtering and paging are applied here rather than returning the whole fixture fleet, because a
-	// picker that pages is only exercised by a source that actually pages. Health is the one filter
-	// the fixtures can answer — FleetMachineDto carries no OS or type — so os and type are accepted
-	// and ignored, and mock mode cannot be used to prove those two filters work.
+	// picker that pages is only exercised by a source that actually pages. The page-size ceiling is
+	// enforced as the API enforces it, so a caller that regressed past it fails here too.
 	async searchMachines(params: MachineSearchParams): Promise<PaginatedResponse<FleetMachineDto>> {
-		const search = params.search?.trim().toLowerCase() ?? '';
-		const wanted = (params.healthStatus ?? '')
-			.split(',')
-			.map((s) => s.trim().toLowerCase())
-			.filter((s) => s.length > 0);
-
-		const matched = mockFleetMachines.filter((machine) => {
-			const matchesSearch =
-				search.length === 0 ||
-				machine.name.toLowerCase().includes(search) ||
-				(machine.hostname ?? '').toLowerCase().includes(search) ||
-				(machine.hardwareModel ?? '').toLowerCase().includes(search);
-
-			const matchesHealth =
-				wanted.length === 0 ||
-				wanted.includes(MachineHealthStatus[machine.healthStatus].toLowerCase());
-
-			return matchesSearch && matchesHealth;
-		});
-
 		const pageSize = params.pageSize ?? 25;
-		const page = params.page ?? 1;
-		const start = (page - 1) * pageSize;
-		const items = matched.slice(start, start + pageSize);
-		const totalPages = Math.max(1, Math.ceil(matched.length / pageSize));
+		if (exceedsPageSizeCeiling(pageSize)) {
+			throw new ApiError(400, 'Page size exceeds the maximum the API serves');
+		}
 
-		return {
-			items,
-			page,
-			pageSize,
-			totalCount: matched.length,
-			totalPages,
-			hasNextPage: page < totalPages
-		} as PaginatedResponse<FleetMachineDto>;
+		const matched = matchFleetMachines(mockFleetMachines, params);
+
+		return pageOfFleet(matched, params.page ?? 1, pageSize);
 	}
 
 	async getMachine(id: number): Promise<MachineDto> {

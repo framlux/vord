@@ -173,6 +173,44 @@ describe('mock mode serves the machine endpoints the assignment picker drives', 
 		expect(second.hasNextPage).toBe(false);
 	});
 
+	// Select-all has to resolve exactly what the list shows. The ids branch used to ignore every
+	// filter, so in mock mode select-all under a filter selected the whole fleet — reproducing the
+	// divergence the two-endpoint design exists to prevent.
+	it('narrows machines/ids by search, as machines/search does', async () => {
+		const data = await getData('machines/ids', '?search=db');
+
+		expect(data.ids).toEqual([3]);
+		expect(data.totalCount).toBe(1);
+	});
+
+	it('narrows machines/ids by health, including the multi-value form', async () => {
+		expect((await getData('machines/ids', '?healthStatus=critical')).ids).toEqual([3]);
+		expect((await getData('machines/ids', '?healthStatus=warning,critical')).ids).toEqual([2, 3]);
+	});
+
+	it('agrees with machines/search for the same filter', async () => {
+		for (const query of ['', '?search=web', '?healthStatus=healthy', '?search=web&healthStatus=warning']) {
+			const separator = query.length === 0 ? '?' : '&';
+			const listed = await getData('machines/search', `${query}${separator}pageSize=100`);
+			const selected = await getData('machines/ids', query);
+
+			expect(selected.ids).toEqual(listed.items.map((m: FleetMachineDto) => m.id));
+		}
+	});
+
+	it('refuses a search page larger than the API serves, without reaching upstream', async () => {
+		const { event, fetchMock } = makeEvent('machines/search', '?pageSize=101');
+
+		await expect(GET(event)).rejects.toMatchObject({ status: 400 });
+		expect(fetchMock).not.toHaveBeenCalled();
+	});
+
+	it('serves a search page exactly at the ceiling', async () => {
+		const data = await getData('machines/search', '?pageSize=100');
+
+		expect(data.pageSize).toBe(100);
+	});
+
 	it('returns an empty page rather than failing when nothing matches', async () => {
 		const data = await getData('machines/search', '?search=nothing-matches-this');
 

@@ -14,6 +14,11 @@ export const MEMORY_CRITICAL_THRESHOLD = 95;
 export const DISK_WARNING_THRESHOLD = 80;
 export const DISK_CRITICAL_THRESHOLD = 95;
 
+// The largest page any paginated API collection serves. The server refuses a larger request with a
+// 400 rather than quietly returning a short page (PaginationLimits on the server side), so anything
+// here that builds or imitates a paginated request must agree with this number.
+export const MAX_PAGE_SIZE = 100;
+
 // Temperature thresholds in degrees Celsius.
 export const TEMP_WARNING_CELSIUS = 55;
 export const TEMP_CRITICAL_CELSIUS = 80;

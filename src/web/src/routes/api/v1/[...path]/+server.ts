@@ -5,7 +5,7 @@
 import { dev } from '$app/environment';
 import { env } from '$env/dynamic/private';
 import { error, json } from '@sveltejs/kit';
-import { MachineHealthStatus } from '$lib/api/types';
+import { exceedsPageSizeCeiling, matchFleetMachines, pageOfFleet, type MockFleetFilter } from '$lib/api/mock-fleet-query';
 import type { RequestHandler } from './$types';
 import {
 	mockUser,
@@ -41,6 +41,14 @@ function ok<T>(data: T): Response {
 	return json({ success: true, data, message: null, errors: null });
 }
 
+// The list and the bulk selection read the same parameters, so they are read in one place.
+function fleetFilterFrom(url: URL): MockFleetFilter {
+	return {
+		search: url.searchParams.get('search') ?? undefined,
+		healthStatus: url.searchParams.get('healthStatus') ?? undefined
+	};
+}
+
 const mockGet: RequestHandler = async ({ params, url }) => {
 	const path = params.path ?? '';
 
@@ -64,49 +72,24 @@ const mockGet: RequestHandler = async ({ params, url }) => {
 		return ok(mockMachineList);
 	}
 	// The assignment picker reaches the fleet through search rather than the machine list, so
-	// without these two mock mode renders a picker that answers 404 to everything. Filtering and
-	// paging are applied for real: a picker that pages is only exercised by a source that pages.
-	// Health is the only filter the fixtures can answer, since FleetMachineDto carries no OS or
-	// type, so os and type are accepted and ignored here and cannot be proven in mock mode.
+	// without these two mock mode renders a picker that answers 404 to everything. Both answer
+	// through one filter, as production does, so select-all resolves exactly what the list shows.
+	// Paging is applied for real: a picker that pages is only exercised by a source that pages.
 	if (path === 'machines/search') {
-		const search = (url.searchParams.get('search') ?? '').trim().toLowerCase();
-		const wanted = (url.searchParams.get('healthStatus') ?? '')
-			.split(',')
-			.map((s) => s.trim().toLowerCase())
-			.filter((s) => s.length > 0);
-
-		const matched = mockFleetMachines.filter((machine) => {
-			const matchesSearch =
-				search.length === 0 ||
-				machine.name.toLowerCase().includes(search) ||
-				(machine.hostname ?? '').toLowerCase().includes(search) ||
-				(machine.hardwareModel ?? '').toLowerCase().includes(search);
-
-			const matchesHealth =
-				wanted.length === 0 ||
-				wanted.includes(MachineHealthStatus[machine.healthStatus].toLowerCase());
-
-			return matchesSearch && matchesHealth;
-		});
-
 		const pageSize = Number(url.searchParams.get('pageSize') ?? 25);
-		const page = Number(url.searchParams.get('page') ?? 1);
-		const start = (page - 1) * pageSize;
-		const totalPages = Math.max(1, Math.ceil(matched.length / pageSize));
+		if (exceedsPageSizeCeiling(pageSize)) {
+			throw error(400, 'Page size exceeds the maximum the API serves');
+		}
 
-		return ok({
-			items: matched.slice(start, start + pageSize),
-			page,
-			pageSize,
-			totalCount: matched.length,
-			totalPages,
-			hasNextPage: page < totalPages
-		});
+		const page = Number(url.searchParams.get('page') ?? 1);
+		const matched = matchFleetMachines(mockFleetMachines, fleetFilterFrom(url));
+
+		return ok(pageOfFleet(matched, page, pageSize));
 	}
 	if (path === 'machines/ids') {
 		// The fixture fleet fits any cap, so truncated is always false here. A picker must not rely
 		// on mock mode to prove it handles a capped selection.
-		const ids = mockFleetMachines.map((m) => m.id);
+		const ids = matchFleetMachines(mockFleetMachines, fleetFilterFrom(url)).map((m) => m.id);
 
 		return ok({ ids, totalCount: ids.length, truncated: false });
 	}
