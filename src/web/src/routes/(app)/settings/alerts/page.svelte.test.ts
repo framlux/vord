@@ -245,6 +245,30 @@ describe('alerts settings page', () => {
 		expect(screen.queryByText('Limit reached')).not.toBeInTheDocument();
 	});
 
+	it('freezes a custom rule below Team: visible, assignments intact, and no control offered at all', () => {
+		// A downgraded Team tenant keeps its custom rules and may not touch them. Every endpoint that
+		// would change one refuses below Team, so the rule is shown with no control rather than a
+		// control that answers 403 — and it is shown, because hiding it would make an assignment that
+		// is still firing invisible to the person paying for it.
+		render(AlertsPage, {
+			props: {
+				data: makeData(makeSubscription(), [
+					makeRule({ isCustom: true, name: 'Custom load rule', machineIds: [10, 11] })
+				])
+			}
+		});
+
+		expect(screen.getByText('Custom load rule')).toBeInTheDocument();
+		expect(screen.getByText('Custom')).toBeInTheDocument();
+		expect(screen.getByText('2 machines')).toBeInTheDocument();
+
+		expect(screen.queryByRole('button', { name: 'Edit' })).not.toBeInTheDocument();
+		expect(screen.queryByRole('button', { name: /^Disable / })).not.toBeInTheDocument();
+		expect(screen.queryByRole('button', { name: /^Enable / })).not.toBeInTheDocument();
+		expect(screen.queryByRole('button', { name: /^Assign machines to / })).not.toBeInTheDocument();
+		expect(screen.queryByRole('button', { name: 'Delete rule' })).not.toBeInTheDocument();
+	});
+
 	it('gives Team the edit form on a built-in rule', () => {
 		render(AlertsPage, {
 			props: { data: makeData(makeSubscription({ tier: 'Team', alertRuleLimit: 25 }), [makeRule()]) }

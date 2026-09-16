@@ -56,7 +56,7 @@ vi.mock('$lib/api/mock-fixtures', () => ({
 	mockMachineDetailById: new Map(),
 	mockMachineAuthorizedKeys: [],
 	mockFleetSshSessions: [],
-	mockAlertRules: [],
+	mockAlertRules: [{ id: 1, name: 'Disk usage above 90%', isEnabled: true, isCustom: false, machineIds: [1] }],
 	getMockMachineAlertRules: () => []
 }));
 
@@ -89,6 +89,31 @@ async function getData(path: string, query = '') {
 
 beforeEach(() => {
 	vi.clearAllMocks();
+});
+
+describe('mock mode serves the alerts settings page', () => {
+	it('answers the rule list locally rather than reaching for a backend that is not running', async () => {
+		// The rules are the page. Without this branch the alerts screen cannot be opened in mock mode
+		// at all, which is the mode the surface is worked on in when there is no tenant at each tier
+		// to log into.
+		const rules = await getData('alert-rules');
+
+		expect(rules).toHaveLength(1);
+		expect(rules[0].name).toBe('Disk usage above 90%');
+	});
+
+	it('refuses the collections it has no fixtures for instead of proxying them upstream', async () => {
+		// Events, integrations and providers have no fixtures, and the loader asks for each with its
+		// own catch so a missing one leaves an empty tab rather than taking the page down. Answering
+		// 404 here is what makes that true: proxying would mean quietly dialling a backend that is not
+		// there, and the page would hang on a screen that is supposed to work offline.
+		for (const path of ['alert-events', 'integrations', 'integration-providers']) {
+			const { event, fetchMock } = makeEvent(path);
+
+			await expect(GET(event)).rejects.toMatchObject({ status: 404 });
+			expect(fetchMock).not.toHaveBeenCalled();
+		}
+	});
 });
 
 describe('mock mode serves the machine endpoints the assignment picker drives', () => {
