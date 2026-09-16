@@ -167,6 +167,26 @@ describe('machine detail alert rules', () => {
 		expect(screen.queryByRole('button', { name: 'Manage Rules' })).not.toBeInTheDocument();
 	});
 
+	it('offers a self-hosted deployment its custom rules, which it is entitled to author', async () => {
+		// The picker decides what to offer from a bare tier comparison, while every other alert
+		// control on this page asks canAuthorAlertRules. The two disagree exactly where the
+		// subscription row is not the authority: a self-hosted deployment has no meaningful tier, is
+		// entitled to everything, and would still have its own custom rules filtered out of the list.
+		render(MachinePage, {
+			props: {
+				data: makeData(
+					makeSubscription({ tier: 'Free', status: 'Canceled' }),
+					[...builtIns, makeRule({ id: 99, name: 'Custom load rule', isCustom: true })],
+					{ selfHosted: true }
+				)
+			}
+		});
+
+		await fireEvent.click(screen.getByRole('button', { name: 'Manage Rules' }));
+
+		expect(screen.getByRole('checkbox', { name: /Custom load rule/ })).toBeInTheDocument();
+	});
+
 	it('says a machine carrying only disabled rules is watched by nothing', () => {
 		// Not the alerts page's question read backwards. Every rule here names this machine, so an
 		// assignment check would call it covered; none of them is switched on, so nothing will fire.

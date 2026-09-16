@@ -27,7 +27,7 @@
 	import { invalidateAll } from '$app/navigation';
 	import { enhance } from '$app/forms';
 	import { canAdminMachines } from '$lib/utils/roles';
-	import { canManageAlertRules } from '$lib/utils/alert-entitlement';
+	import { canAuthorAlertRules, canManageAlertRules } from '$lib/utils/alert-entitlement';
 	import {
 		generateNonce,
 		buildCanonicalPayload,
@@ -483,8 +483,16 @@
 	// checkbox the save would be rejected for is the wrong shape of control, so below Team the modal
 	// lists built-in rules only. Nothing is hidden from view: a custom rule this machine already
 	// carries stays frozen and keeps its row in the Alert Rules table above, assignment intact.
+	// Whether the tenant may author rules is the question here, and it is not the same as whether the
+	// subscription row says Team. A self-hosted deployment has no meaningful tier and is entitled to
+	// everything; a briefly unavailable billing API must not present as a downgrade. The bare tier
+	// comparison answered both wrong and disagreed with every other alert control on this page and on
+	// the alerts settings page, which is the drift this predicate exists to prevent.
+	const canAuthorRules = $derived(
+		canAuthorAlertRules(data.subscription, data.user?.deployment?.selfHosted === true)
+	);
 	const assignableAlertRules = $derived(
-		isTeamTier ? allAlertRules : allAlertRules.filter((r) => r.isCustom === false)
+		canAuthorRules ? allAlertRules : allAlertRules.filter((r) => r.isCustom === false)
 	);
 	const frozenCustomRuleCount = $derived(allAlertRules.length - assignableAlertRules.length);
 
