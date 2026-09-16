@@ -12,7 +12,6 @@ using Framlux.FleetManagement.Services.Core.Alerts;
 using Framlux.FleetManagement.Services.Core.Billing;
 using Framlux.FleetManagement.Services.Core.Handlers;
 using Framlux.FleetManagement.Services.Core.Infrastructure;
-using Framlux.FleetManagement.Services.Core.Options;
 using Framlux.FleetManagement.Services.Core.Security;
 using Framlux.Vord.BillingGrpc;
 using Grpc.Core;
@@ -77,22 +76,59 @@ public sealed class FleetAdminServiceTests
         await Assert.That(pageSize).IsEqualTo(50);
     }
 
-    [Test]
-    public async Task SanitizePagination_NegativePageSize_DefaultsToFifty()
-    {
-        (int page, int pageSize) = FleetAdminService.SanitizePagination(1, -10);
+    // proto3 cannot tell an omitted page_size from zero, so zero keeps meaning "not asked" (above).
+    // Anything else outside the servable range is refused, as the HTTP collections refuse it. This
+    // used to clamp, and a clamped page reads exactly like the end of the collection: the admin
+    // console's new-subscription page asked for 500 tenants and silently received 100, so a tenant
+    // beyond the hundredth could not be chosen.
 
-        await Assert.That(page).IsEqualTo(1);
-        await Assert.That(pageSize).IsEqualTo(50);
+    [Test]
+    public async Task SanitizePagination_NegativePageSize_IsRefused()
+    {
+        RpcException? exception = await Assert.ThrowsAsync<RpcException>(() =>
+        {
+            FleetAdminService.SanitizePagination(1, -10);
+
+            return Task.CompletedTask;
+        });
+
+        await Assert.That(exception!.StatusCode).IsEqualTo(StatusCode.InvalidArgument);
     }
 
     [Test]
-    public async Task SanitizePagination_OverMaxPageSize_CapsToOneHundred()
+    public async Task SanitizePagination_OverMaxPageSize_IsRefused()
     {
-        (int page, int pageSize) = FleetAdminService.SanitizePagination(1, 500);
+        RpcException? exception = await Assert.ThrowsAsync<RpcException>(() =>
+        {
+            FleetAdminService.SanitizePagination(1, 500);
+
+            return Task.CompletedTask;
+        });
+
+        await Assert.That(exception!.StatusCode).IsEqualTo(StatusCode.InvalidArgument);
+        await Assert.That(exception.Status.Detail).Contains("100");
+    }
+
+    [Test]
+    public async Task SanitizePagination_PageSizeAtTheCeiling_IsServed()
+    {
+        (int page, int pageSize) = FleetAdminService.SanitizePagination(1, 100);
 
         await Assert.That(page).IsEqualTo(1);
         await Assert.That(pageSize).IsEqualTo(100);
+    }
+
+    [Test]
+    public async Task SanitizePagination_OneOverTheCeiling_IsRefused()
+    {
+        RpcException? exception = await Assert.ThrowsAsync<RpcException>(() =>
+        {
+            FleetAdminService.SanitizePagination(1, 101);
+
+            return Task.CompletedTask;
+        });
+
+        await Assert.That(exception!.StatusCode).IsEqualTo(StatusCode.InvalidArgument);
     }
 
     [Test]

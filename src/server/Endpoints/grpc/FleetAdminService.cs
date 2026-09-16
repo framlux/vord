@@ -34,7 +34,6 @@ namespace Framlux.FleetManagement.Server.Endpoints.Grpc;
 public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
 {
     private const int DefaultPageSize = 50;
-    private const int MaxPageSize = 100;
     private const int MaxEnrichJobIds = 20;
     private const int MaxProcessingJobs = 25;
     private const int ProcessingScanPageSize = 200;
@@ -1529,16 +1528,21 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
             page = 1;
         }
 
-        if (pageSize < 1)
+        // proto3 cannot tell an omitted page_size from zero, so zero means "not asked" and gets this
+        // service's default. Anything else is held to the rule every paginated collection shares and
+        // refused rather than clamped: a clamped page reads exactly like the end of the collection,
+        // which is how the admin console came to offer only the first hundred tenants.
+        if (pageSize == 0)
         {
-            pageSize = DefaultPageSize;
-        }
-        else if (pageSize > MaxPageSize)
-        {
-            pageSize = MaxPageSize;
+            return (page, DefaultPageSize);
         }
 
-        return (page, pageSize);
+        if (PageSizeQuery.TryResolve(pageSize, out int servable) == false)
+        {
+            throw new RpcException(new Status(StatusCode.InvalidArgument, PageSizeQuery.OutOfRangeMessage));
+        }
+
+        return (page, servable);
     }
 
     internal static FleetUser MapToFleetUser(

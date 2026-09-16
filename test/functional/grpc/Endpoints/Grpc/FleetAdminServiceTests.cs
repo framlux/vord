@@ -204,6 +204,38 @@ public sealed class FleetAdminServiceTests
 
     // ========== ListTenants Tests ==========
 
+    // The control plane refuses an over-limit page instead of clamping it. A clamped page reads like
+    // the end of the collection: the admin console asked for 500 tenants, received 100, and could not
+    // offer a tenant beyond the hundredth. Asserted on the wire, since the refusal only helps a caller
+    // if it arrives as a status the caller can act on.
+    [Test]
+    public async Task ListTenants_PageSizeOverTheCeiling_IsRefusedAsInvalidArgument()
+    {
+        using FunctionalTestFactory factory = new();
+        factory.WithInternalClientSubjects(PermittedClientSubject);
+        using GrpcChannel channel = CreateChannel(factory);
+        FleetAdmin.FleetAdminClient client = new(channel);
+
+        RpcException? exception = await Assert.ThrowsAsync<RpcException>(async () =>
+            await client.ListTenantsAsync(new ListTenantsRequest { Page = 1, PageSize = 101 }, Headers()));
+
+        await Assert.That(exception!.StatusCode).IsEqualTo(StatusCode.InvalidArgument);
+    }
+
+    [Test]
+    public async Task ListTenants_OmittedPageSize_IsServedWithTheDefault()
+    {
+        // proto3 sends an unset page_size as zero, so zero must keep meaning "not asked".
+        using FunctionalTestFactory factory = new();
+        factory.WithInternalClientSubjects(PermittedClientSubject);
+        using GrpcChannel channel = CreateChannel(factory);
+        FleetAdmin.FleetAdminClient client = new(channel);
+
+        ListTenantsResponse response = await client.ListTenantsAsync(new ListTenantsRequest { Page = 1 }, Headers());
+
+        await Assert.That(response.TotalCount).IsEqualTo(0);
+    }
+
     [Test]
     public async Task ListTenants_EmptyDatabase_ReturnsEmptyList()
     {
