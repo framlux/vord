@@ -127,6 +127,78 @@ public sealed class MachineIdSelectionEndpointTests
         await Assert.That(data.GetProperty("truncated").GetBoolean()).IsFalse();
     }
 
+    // A bulk selection is only safe if it resolves exactly the filter the caller meant. This endpoint
+    // implements four of the filters /machines/search accepts, and used to ignore the rest in
+    // silence — so a picker that grew a CPU or disk filter and wired it to the list alone would have
+    // select-all resolve the unfiltered fleet and assign machines the user never saw. Anything it does
+    // not implement is now refused, paging and sorting included, since a caller sending those has
+    // misunderstood what it gets back.
+    [Test]
+    [Arguments("cpuMin=50")]
+    [Arguments("cpuMax=90")]
+    [Arguments("memoryMin=50")]
+    [Arguments("diskMin=90")]
+    [Arguments("pendingUpdatesMin=1")]
+    [Arguments("securityUpdatesMin=1")]
+    [Arguments("failedServicesMin=1")]
+    [Arguments("hasDiskHealthIssue=true")]
+    [Arguments("hasHardwareIssue=true")]
+    [Arguments("lastSeenAfter=2026-01-01T00:00:00Z")]
+    [Arguments("page=2")]
+    [Arguments("pageSize=10")]
+    [Arguments("sortBy=name")]
+    [Arguments("search=prod&cpuMin=50")]
+    public async Task Ids_ParameterItDoesNotImplement_IsRefused(string query)
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        int tenantId = await SeedTenantWithSubscription(db);
+        await SeedMachine(db, tenantId, "prod-web-01");
+
+        HttpClient client = BuildAuthenticatedClient(factory, tenantId);
+
+        HttpResponseMessage response = await client.GetAsync($"/api/v1/machines/ids?{query}");
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.BadRequest);
+        string body = await response.Content.ReadAsStringAsync();
+        await Assert.That(body).Contains("search, healthStatus, os and type");
+    }
+
+    [Test]
+    public async Task Ids_AllFourSupportedFilters_AreAcceptedTogether()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        int tenantId = await SeedTenantWithSubscription(db);
+        await SeedMachine(db, tenantId, "prod-web-01");
+
+        HttpClient client = BuildAuthenticatedClient(factory, tenantId);
+
+        HttpResponseMessage response = await client.GetAsync(
+            "/api/v1/machines/ids?search=prod&healthStatus=healthy&os=Ubuntu&type=BareMetalServer");
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
+    }
+
+    [Test]
+    public async Task Ids_SupportedFilterInAnotherCase_IsAccepted()
+    {
+        // Query-string names are matched without regard to case everywhere else in the API, so the
+        // refusal must not turn a differently-cased supported filter into an error.
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        int tenantId = await SeedTenantWithSubscription(db);
+        long matching = await SeedMachine(db, tenantId, "prod-web-01");
+        await SeedMachine(db, tenantId, "staging-db-01");
+
+        HttpClient client = BuildAuthenticatedClient(factory, tenantId);
+
+        HttpResponseMessage response = await client.GetAsync("/api/v1/machines/ids?Search=prod-web");
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
+        await Assert.That(ReadIds(await ReadData(response))).IsEquivalentTo(new List<long> { matching });
+    }
+
     [Test]
     public async Task Ids_SearchFilter_ReturnsOnlyTheMatchingMachines()
     {
