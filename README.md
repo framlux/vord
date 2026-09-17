@@ -57,23 +57,27 @@ graph LR
 ```
 src/
 ├── server/          # .NET API server (FastEndpoints + gRPC)
+├── services.core/   # Shared domain services, handlers, and background jobs
+├── services.worker/ # Background job worker host (the services-worker container)
 ├── web/             # SvelteKit frontend
 ├── agent/           # Go agent for managed machines (MIT)
 ├── database/        # LinqToDB models & FluentMigrator migrations
-├── grpc/            # Protobuf service definitions (MIT)
+├── grpc/            # Agent wire contracts (MIT)
+├── billing-grpc/    # Internal control-plane contract, published as a NuGet package
 └── migrationRunner/ # Database migration runner
 deployment/
 ├── agent/           # Agent install script
 └── server/
     └── docker/      # Docker Compose stack + .env template
 test/
-├── unit/            # TUnit unit tests
-└── functional/      # TUnit functional tests (in-memory SQLite)
+├── unit/            # TUnit unit tests, split by assembly under test
+├── functional/      # TUnit functional tests (in-memory SQLite), split by surface
+└── integration/     # TUnit integration tests (Testcontainers, real Postgres)
 ```
 
 ## Self-Hosting
 
-Vord Fleet can be self-hosted using Docker Compose. The built-in billing integration (Stripe) is disabled by default and is not required for self-hosted deployments.
+Vord Fleet can be self-hosted using Docker Compose. `Deployment__SelfHosted` defaults to `true`, so a fresh clone runs with no billing configuration: the Stripe integration is not wired up, no Stripe account is needed, and no subscription tier gates any feature.
 
 ### Prerequisites
 
@@ -102,8 +106,10 @@ Vord Fleet can be self-hosted using Docker Compose. The built-in billing integra
    GITHUB_CLIENT_ID=your-client-id
    GITHUB_CLIENT_SECRET=your-client-secret
 
-   # Billing is disabled by default — no Stripe account needed
-   Billing__Enabled=false
+   # Redis requires AUTH — placeholder values are rejected in Production
+   REDIS_PASSWORD=your-secure-redis-password
+
+   # Self-hosted mode is the default — no Stripe account needed, nothing to set here
    ```
 
 3. Start the stack:
@@ -114,13 +120,35 @@ Vord Fleet can be self-hosted using Docker Compose. The built-in billing integra
 
 4. Access the web UI at `http://localhost:5254` (or your configured `WEB_PORT`).
 
-### Disabling Billing
+### Self-Hosted Mode and Entitlements
 
-When `Billing__Enabled=false` (the default), the server registers a no-op billing client. All subscription checks pass, and no Stripe account or billing API is required. Every tenant operates under the free tier limits; to change those limits, edit the seeded `TierFeatureLimits` values (see [Subscription tiers](#subscription-tiers) under Configuration).
+`Deployment__SelfHosted` is the single switch that selects self-hosted behaviour, and it defaults to
+`true`. In that mode the server registers a no-op billing client, does not map the internal billing
+gRPC services, and does not schedule the Stripe sync job. No Stripe account or billing API is
+required.
+
+Self-hosted tenants do **not** run under the Free tier limits. `SelfHostedSubscriptionService`
+decorates the subscription service and answers every entitlement question permissively:
+
+- The tenant reports a synthetic **Team**, **Active** subscription, so tier checks throughout the
+  application pass. The stored subscription row is left untouched.
+- Machine, alert-rule, webhook, and member limits are effectively unbounded (`int.MaxValue`), and
+  alert-rule and webhook creation is always permitted.
+- The data-export cooldown is zero — a self-hoster exports their own data onto their own disk.
+- **Retention is the one limit that still has a ceiling.** It is reported through the effective
+  limits like the others, but as `RetentionClassPolicy.LongWindowDays` (365 days) rather than an
+  unbounded value — the widest retention class the partitioning scheme supports. There is no
+  unlimited retention class, so a larger number would not be honoured.
+- Telemetry ingest is gated only on the tenant's active flag, never on subscription status, so a
+  row left `Canceled` by a database import or a mode switch cannot permanently block ingest.
+
+The seeded `TierFeatureLimits` values therefore do not constrain a self-hosted deployment. They
+still exist (see [Subscription tiers](#subscription-tiers) under Configuration) and apply if you run
+with `Deployment__SelfHosted=false`, which requires a reachable billing API.
 
 ### Optional Services
 
-- **Email (Resend)** — If `RESEND_API_KEY` is not set, tenant invitations will not be sent via email. The application still functions; you can share invitation links manually.
+- **Email (SMTP)** — Self-hosted deployments send mail over SMTP. If `SMTP_HOST` in your `.env` (`Email__Smtp__Host` in application config) is empty, every send is reported as skipped: tenant invitations and alert notifications are not delivered, the application still functions, and you can share invitation links manually. Point it at a relay (Postfix, a provider's submission endpoint) to have mail delivered.
 - **OIDC/SSO** — The `OIDC_*` variables are only needed if you want to configure a custom OIDC provider for single sign-on. Social login (GitHub/Google/Microsoft) works without these.
 - **Data Export** — Requires S3-compatible object storage (`ObjectStorage__*` config). Without it, the export endpoint returns 501. [SeaweedFS](https://github.com/seaweedfs/seaweedfs) (Apache 2.0) is recommended for self-hosted S3-compatible storage.
 
@@ -138,7 +166,11 @@ The server is designed to run behind an SSL-terminating reverse proxy (nginx, Tr
 | `redis`            | `redis:7-alpine`                              | Caching and rate limiting            |
 | `migration-runner` | `ghcr.io/framlux/vord/migration_runner`       | Applies schema migrations, then exits |
 | `api-server`       | `ghcr.io/framlux/vord/api-server`             | REST API + gRPC control plane        |
+| `services-worker`  | `ghcr.io/framlux/vord/services-worker`        | Drains the background job queue (alert evaluation, data export, partition maintenance, health sweep) |
 | `web`              | `ghcr.io/framlux/vord/web`                    | SvelteKit dashboard                  |
+
+The `api-server` enqueues background work; `services-worker` executes it. Without `services-worker`
+the dashboard shows scheduled jobs but nothing runs.
 
 ### Startup Order
 
@@ -146,7 +178,7 @@ All containers include health checks. Compose enforces this dependency chain:
 
 1. `postgres` and `redis` start first and must pass health checks.
 2. `migration-runner` starts after `postgres` is healthy, applies migrations, and exposes a readiness endpoint.
-3. `api-server` starts after `postgres`, `redis`, and `migration-runner` are all healthy.
+3. `api-server` and `services-worker` start after `postgres`, `redis`, and `migration-runner` are all healthy.
 4. `web` starts after `api-server` is healthy.
 
 ### Exposed Ports
@@ -219,13 +251,17 @@ At least one OAuth provider should be configured for user sign-in.
 
 These are only required if you configure a custom OIDC provider for single sign-on.
 
-#### Billing
+#### Deployment mode
 
-| Key                  | Description                                          | Default | Required |
-|----------------------|------------------------------------------------------|---------|----------|
-| `Billing__Enabled`   | Enable Stripe billing integration                    | `false` | No       |
+| Key                         | Description                                          | Default | Required |
+|-----------------------------|------------------------------------------------------|---------|----------|
+| `Deployment__SelfHosted`    | Run as a self-hosted deployment                      | `true`  | No       |
 
-When disabled (the default), a no-op billing client is registered and no Stripe configuration is needed. When enabled, the server expects a Stripe billing API to be available.
+This is the only mode switch. When `true` (the default), a no-op billing client is registered, the
+internal billing gRPC services are not mapped, the Stripe sync job is not scheduled, email goes over
+SMTP, and entitlement limits do not apply — see
+[Self-Hosted Mode and Entitlements](#self-hosted-mode-and-entitlements). When `false`, the server
+expects a reachable billing API and a Resend API key, and refuses to start without them.
 
 #### Authentication — Cookies
 
@@ -255,14 +291,37 @@ table, seeded on first migration (Free defaults to 3 machines / 1 retention day)
 Self-hosters who want different limits should change the seeded values, and a
 per-tenant override can be applied through `TenantSubscriptionOverrides`.
 
-#### Email (Resend)
+#### Email
 
-| Key                   | Description        | Default | Required |
-|-----------------------|--------------------|---------|----------|
-| `Resend__ApiKey`      | Resend API key     | —       | No       |
-| `Resend__FromEmail`   | Sender address     | —       | No       |
+The transport follows the deployment mode: SMTP when `Deployment__SelfHosted` is `true`, Resend when
+it is `false`.
 
-Email is optional. Without it, invitation emails will not be sent but the application remains functional.
+| Key                          | Description                                   | Default | Required |
+|------------------------------|-----------------------------------------------|---------|----------|
+| `Email__FromEmail`           | Sender address                                | —       | Only if `Email__Smtp__Host` is set |
+| `Email__Smtp__Host`          | SMTP relay host; empty disables email entirely | —      | No       |
+| `Email__Smtp__Port`          | SMTP port                                     | `587`   | No       |
+| `Email__Smtp__Username`      | SMTP username                                 | —       | No       |
+| `Email__Smtp__Password`      | SMTP password                                 | —       | No       |
+| `Email__Smtp__UseStartTls`   | Use STARTTLS                                  | `true`  | No       |
+
+Email is optional in a self-hosted deployment. With `Email__Smtp__Host` empty, every send is
+reported as skipped — invitations and alert notifications are not delivered, and the application
+remains functional. Setting a host makes `Email__FromEmail` required and the port must be in range,
+or startup fails.
+
+`Email__Resend__ApiKey` applies only when `Deployment__SelfHosted` is `false`, and is ignored in a
+self-hosted deployment. Startup warns about the ignored key only when no SMTP host is set either,
+since that is the case where every send is silently skipped; with an SMTP host configured, a stray
+Resend key is ignored without a warning.
+
+#### Background jobs
+
+| Key                      | Description                                        | Default |
+|--------------------------|----------------------------------------------------|---------|
+| `Hangfire__WorkerCount`  | Background job worker threads per services-worker replica | 10 |
+
+Set via `HANGFIRE_WORKER_COUNT` in the Docker Compose `.env`.
 
 #### Server operational defaults
 
@@ -274,9 +333,17 @@ settings panel — no restart required.
 
 #### Telemetry
 
-| Key                        | Description                          | Default |
-|----------------------------|--------------------------------------|---------|
-| `Telemetry__RetentionDays` | Days to retain telemetry data        | 90      |
+| Key                                        | Description                                     | Default |
+|--------------------------------------------|-------------------------------------------------|---------|
+| `Telemetry__MaxStreamDurationMinutes`      | Maximum duration of a single telemetry stream   | 5       |
+| `Telemetry__MaxEnvelopesPerStream`         | Maximum envelopes accepted per stream           | 1000    |
+| `Telemetry__MaxConcurrentStreamsPerMachine` | Concurrent streams allowed per machine         | 1       |
+| `Telemetry__MaxConcurrentStreamsPerProcess` | Concurrent streams allowed per server process  | 5000    |
+| `Telemetry__SubscriptionRecheckIntervalSeconds` | How often an open stream rechecks eligibility | 30  |
+
+Telemetry **retention** is not configured here. It is a per-tier value in `TierFeatureLimits`
+(see [Subscription tiers](#subscription-tiers)), capped by the retention class windows, and in a
+self-hosted deployment it is 365 days.
 
 #### Logging
 
@@ -344,11 +411,19 @@ cd src/web && pnpm install && pnpm dev
 ### Test
 
 ```bash
-# .NET unit tests (TUnit — runs as an executable)
-dotnet run --project test/unit/unit.csproj
+# .NET unit tests (TUnit — run as executables, not via `dotnet test`).
+# Split by assembly under test; run the ones you need.
+dotnet run --project test/unit/server/unit.server.csproj
+dotnet run --project test/unit/services.core/unit.services.core.csproj
+dotnet run --project test/unit/database/unit.database.csproj
 
-# .NET functional tests (full HTTP pipeline with in-memory SQLite)
-dotnet run --project test/functional/functional.csproj
+# .NET functional tests (full HTTP pipeline with in-memory SQLite), split by surface
+dotnet run --project test/functional/web/functional.web.csproj
+dotnet run --project test/functional/grpc/functional.grpc.csproj
+dotnet run --project test/functional/hangfire/functional.hangfire.csproj
+
+# .NET integration tests (Testcontainers — needs Docker or Podman for a real Postgres)
+dotnet run --project test/integration/integration.csproj
 
 # Go agent tests
 cd src/agent && go test ./...
