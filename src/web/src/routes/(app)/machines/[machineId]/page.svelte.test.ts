@@ -6,7 +6,14 @@ import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/svelte';
 import '@testing-library/jest-dom/vitest';
 import { MachineType, OperatingSystem } from '$lib/api/types';
-import type { AlertRuleDto, MachineDto, SubscriptionDto, UserDto } from '$lib/api/types';
+import type {
+	AlertRuleDto,
+	MachineDetailDto,
+	MachineDto,
+	SubscriptionDto,
+	UserDto
+} from '$lib/api/types';
+import { MachineHealthStatus } from '$lib/api/types';
 
 vi.mock('$app/navigation', () => ({
 	invalidateAll: vi.fn(),
@@ -293,5 +300,185 @@ describe('machine detail alert rules', () => {
 
 		expect(screen.getByRole('button', { name: 'Manage Rules' })).toBeInTheDocument();
 		expect(screen.queryByText(/only run on Pro and Team plans/i)).not.toBeInTheDocument();
+	});
+});
+
+function makeDetail(overrides: Partial<MachineDetailDto> = {}): MachineDetailDto {
+	return {
+		id: 7,
+		name: 'web-01',
+		hostname: 'web-01.acme.co',
+		isOnline: true,
+		lastPing: '2026-08-28T10:00:00Z',
+		healthStatus: MachineHealthStatus.Healthy,
+		systemInfo: {
+			hostname: 'web-01.acme.co',
+			uuid: 'uuid-7',
+			cpuType: 'x86_64',
+			cpuBrand: 'AMD EPYC 7763',
+			cpuPhysicalCores: 32,
+			cpuLogicalCores: 64,
+			physicalMemory: 137_438_953_472,
+			hardwareVendor: 'Dell',
+			hardwareModel: 'R650',
+			hardwareVersion: '1',
+			hardwareSerial: 'SN-7',
+			uptimeSeconds: 100_000,
+			biosVersion: '2.1.0',
+			ipAddresses: ['10.0.0.7']
+		},
+		osVersion: null,
+		cpuUsage: {
+			cpuUsagePercent: 61,
+			userTime: 34,
+			systemTime: 11,
+			niceTime: 0,
+			idleTime: 39,
+			iowaitTime: 14,
+			irqTime: 0,
+			softirqTime: 2,
+			stealTime: 0
+		},
+		memoryUsage: {
+			memoryTotal: 137_438_953_472,
+			memoryUsed: 68_719_476_736,
+			memoryUsagePercent: 50
+		},
+		memoryInfo: {
+			memoryTotal: 137_438_953_472,
+			memoryFree: 34_359_738_368,
+			memoryAvailable: 51_539_607_552,
+			swapTotal: 0,
+			swapFree: 0
+		},
+		memoryInfoReceivedAt: '2026-08-28T09:45:00Z',
+		diskUsages: null,
+		hardwareHealth: null,
+		packageUpdates: null,
+		failedServices: [],
+		totalServices: 0,
+		recentSshSessions: [],
+		telemetryLastUpdated: '2026-08-28T10:00:00Z',
+		agentVersion: null,
+		...overrides
+	};
+}
+
+function renderWithDetail(detail: MachineDetailDto) {
+	return render(MachinePage, {
+		props: {
+			data: { ...makeData(makeSubscription(), builtIns), machineDetail: detail }
+		}
+	});
+}
+
+describe('machine detail CPU breakdown', () => {
+	it('shows the user, system and iowait components of the CPU figure', () => {
+		// The headline CPU percentage is 100 minus idle, so these are a decomposition of it. Without
+		// them an operator cannot tell a machine busy with work from one stuck waiting on a disk.
+		renderWithDetail(makeDetail());
+
+		const breakdown = screen.getByTestId('cpu-breakdown');
+
+		expect(breakdown).toHaveTextContent('user 34%');
+		expect(breakdown).toHaveTextContent('sys 11%');
+		expect(breakdown).toHaveTextContent('iowait 14%');
+	});
+
+	it('says the breakdown is part of the CPU figure rather than load on top of it', () => {
+		renderWithDetail(makeDetail());
+
+		expect(screen.getByTestId('cpu-breakdown')).toHaveTextContent(/not additional load/i);
+	});
+
+	it('hides the steal figure on a host reporting no steal', () => {
+		// Permanently rendering "steal 0%" on bare metal trains people to ignore the one field that
+		// matters on a noisy neighbour.
+		renderWithDetail(makeDetail());
+
+		expect(screen.getByTestId('cpu-breakdown')).not.toHaveTextContent('steal');
+	});
+
+	it('shows the steal figure once a hypervisor is taking time from the guest', () => {
+		renderWithDetail(
+			makeDetail({
+				cpuUsage: {
+					cpuUsagePercent: 61,
+					userTime: 34,
+					systemTime: 11,
+					niceTime: 0,
+					idleTime: 39,
+					iowaitTime: 14,
+					irqTime: 0,
+					softirqTime: 2,
+					stealTime: 7
+				}
+			})
+		);
+
+		expect(screen.getByTestId('cpu-breakdown')).toHaveTextContent('steal 7%');
+	});
+
+	it('renders no breakdown line at all for a machine that has reported no CPU usage', () => {
+		renderWithDetail(makeDetail({ cpuUsage: null }));
+
+		expect(screen.queryByTestId('cpu-breakdown')).not.toBeInTheDocument();
+	});
+});
+
+describe('machine detail memory info', () => {
+	async function openHardwareTab(detail: MachineDetailDto) {
+		renderWithDetail(detail);
+		await fireEvent.click(screen.getByRole('tab', { name: /hardware/i }));
+	}
+
+	it('renders available memory from the agent reading rather than total minus used', async () => {
+		// total - used is the definition of used, so deriving it would restate a number already on
+		// screen. MemAvailable is a different fact: 48 GB here, where total - used would say 64 GB.
+		await openHardwareTab(makeDetail());
+
+		expect(screen.getByTestId('memory-available')).toHaveTextContent('48 GB');
+	});
+
+	it('hides the swap line entirely on a host with no swap configured', async () => {
+		await openHardwareTab(makeDetail());
+
+		expect(screen.queryByTestId('memory-swap')).not.toBeInTheDocument();
+	});
+
+	it('renders swap used, total and percentage once swap is configured', async () => {
+		await openHardwareTab(
+			makeDetail({
+				memoryInfo: {
+					memoryTotal: 137_438_953_472,
+					memoryFree: 34_359_738_368,
+					memoryAvailable: 51_539_607_552,
+					swapTotal: 8_589_934_592,
+					swapFree: 2_147_483_648
+				}
+			})
+		);
+
+		const swap = screen.getByTestId('memory-swap');
+
+		expect(swap).toHaveTextContent('6.0 GB');
+		expect(swap).toHaveTextContent('8.0 GB');
+		expect(swap).toHaveTextContent('75%');
+	});
+
+	it('labels the block with its own receipt time, not the machine last-seen time', async () => {
+		// This record arrives every fifteen minutes and the detail lookup spans seven days, so an
+		// unlabelled block could present week-old swap as current.
+		await openHardwareTab(makeDetail());
+
+		expect(screen.getByTestId('memory-info-as-of')).toBeInTheDocument();
+	});
+
+	it('renders nothing extra for a machine that has reported no memory info', async () => {
+		await openHardwareTab(makeDetail({ memoryInfo: null, memoryInfoReceivedAt: null }));
+
+		expect(screen.queryByTestId('memory-available')).not.toBeInTheDocument();
+		expect(screen.queryByTestId('memory-swap')).not.toBeInTheDocument();
+		expect(screen.queryByTestId('memory-info-as-of')).not.toBeInTheDocument();
 	});
 });

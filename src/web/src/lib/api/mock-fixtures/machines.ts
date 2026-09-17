@@ -334,6 +334,8 @@ function sparseDetail(machine: MachineDto, healthStatus: MachineHealthStatus): M
 		osVersion: null,
 		cpuUsage: null,
 		memoryUsage: null,
+		memoryInfo: null,
+		memoryInfoReceivedAt: null,
 		diskUsages: null,
 		hardwareHealth: null,
 		packageUpdates: null,
@@ -377,12 +379,32 @@ const web01Detail: MachineDetailDto = {
 		arch: 'x86_64',
 		build: '6.8.0-51-generic'
 	},
-	cpuUsage: { cpuUsagePercent: 23 },
+	cpuUsage: {
+		cpuUsagePercent: 23,
+		userTime: 14,
+		systemTime: 6,
+		niceTime: 0,
+		idleTime: 77,
+		iowaitTime: 2,
+		irqTime: 0,
+		softirqTime: 1,
+		// Bare metal: no hypervisor, so the breakdown line hides the steal figure entirely.
+		stealTime: 0
+	},
 	memoryUsage: {
 		memoryTotal: 137_438_953_472,
 		memoryUsed: 56_348_768_153,
 		memoryUsagePercent: 41
 	},
+	// No swap configured, so the swap line is hidden on this host.
+	memoryInfo: {
+		memoryTotal: 137_438_953_472,
+		memoryFree: 61_203_849_216,
+		memoryAvailable: 74_083_237_888,
+		swapTotal: 0,
+		swapFree: 0
+	},
+	memoryInfoReceivedAt: '2026-01-15T10:18:00Z',
 	diskUsages: {
 		disks: [
 			{
@@ -498,12 +520,31 @@ const dbPrimaryDetail: MachineDetailDto = {
 		arch: 'x86_64',
 		build: '6.8.0-51-generic'
 	},
-	cpuUsage: { cpuUsagePercent: 67 },
+	cpuUsage: {
+		cpuUsagePercent: 67,
+		userTime: 38,
+		systemTime: 12,
+		niceTime: 1,
+		idleTime: 33,
+		iowaitTime: 9,
+		irqTime: 0,
+		softirqTime: 2,
+		// A noisy neighbour on shared hardware: the breakdown line shows the steal figure.
+		stealTime: 5
+	},
 	memoryUsage: {
 		memoryTotal: 549_755_813_888,
 		memoryUsed: 428_809_534_833,
 		memoryUsagePercent: 78
 	},
+	memoryInfo: {
+		memoryTotal: 549_755_813_888,
+		memoryFree: 71_940_669_440,
+		memoryAvailable: 96_207_142_912,
+		swapTotal: 8_589_934_592,
+		swapFree: 6_442_450_944
+	},
+	memoryInfoReceivedAt: '2026-01-15T10:05:00Z',
 	diskUsages: {
 		disks: [
 			{

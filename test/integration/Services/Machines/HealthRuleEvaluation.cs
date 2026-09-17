@@ -133,6 +133,7 @@ public static class HealthRuleEvaluation
             CpuUsagePercent = testCase.CpuUsagePercent,
             MemoryUsagePercent = testCase.MemoryUsagePercent,
             MaxDiskUsagePercent = testCase.MaxDiskUsagePercent,
+            MaxDiskWearoutPercent = testCase.MaxDiskWearoutPercent,
             FailedServices = testCase.FailedServices,
             HasDiskHealthIssue = testCase.HasDiskHealthIssue,
             HasHardwareIssue = testCase.HasHardwareIssue,

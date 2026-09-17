@@ -255,6 +255,63 @@ internal static class TelemetryPayloadParser
     }
 
     /// <summary>
+    /// Computes the highest usable SSD wear figure across the reported disks.
+    /// </summary>
+    /// <remarks>
+    /// The agent derives wear as 100 minus a normalized SMART attribute value and leaves the field
+    /// at 0 when no wear attribute is present, so 0 means "not reported", not "a new disk". The
+    /// other degenerate output is 100, which is what a drive whose normalized value is 0
+    /// (unpopulated, or used as a raw counter) produces. Both are excluded: only 1..99 inclusive
+    /// counts. A drive genuinely at full consumed endurance was seen at 99 on an earlier report and
+    /// is far above any threshold anyway, so excluding 100 costs nothing and avoids a verdict on a
+    /// misparse.
+    /// </remarks>
+    /// <param name="hardwareHealthJson">The raw hardware-health JSON payload.</param>
+    /// <returns>The highest wear percentage in the range 1..99, or null when no disk reported one.</returns>
+    internal static int? ComputeMaxDiskWearoutPercent(string hardwareHealthJson)
+    {
+        int? maxWearout = null;
+
+        try
+        {
+            using JsonDocument doc = JsonDocument.Parse(hardwareHealthJson);
+            JsonElement root = doc.RootElement;
+
+            if (root.TryGetProperty("disk_smart", out JsonElement diskSmart) &&
+                (diskSmart.ValueKind == JsonValueKind.Array))
+            {
+                foreach (JsonElement disk in diskSmart.EnumerateArray())
+                {
+                    if (disk.TryGetProperty("wearout_percent", out JsonElement wearout) == false)
+                    {
+                        continue;
+                    }
+
+                    int value = wearout.GetInt32();
+
+                    if ((value < 1) || (value > 99))
+                    {
+                        continue;
+                    }
+
+                    if ((maxWearout is null) || (value > maxWearout.Value))
+                    {
+                        maxWearout = value;
+                    }
+                }
+            }
+        }
+        catch (Exception ex) when (ex is JsonException or InvalidOperationException or FormatException)
+        {
+            // Malformed payload, or a wrong-typed field (e.g. a non-numeric wearout_percent) — report
+            // nothing, which leaves the stored last-known-good value alone.
+            return null;
+        }
+
+        return maxWearout;
+    }
+
+    /// <summary>
     /// Parses a payload as JSON and maps its root element into a fragment, treating any
     /// exception raised by malformed JSON or a wrong-typed field the same way: return false
     /// rather than throw, so a poison row can be skipped without aborting the batch.
@@ -341,7 +398,8 @@ internal static class TelemetryPayloadParser
         return new HardwareHealthFragment(
             HasDiskHealthIssue: hasDiskIssue,
             HasHardwareIssue: hasHardwareIssue,
-            HardwareHealth: payload);
+            HardwareHealth: payload,
+            MaxDiskWearoutPercent: ComputeMaxDiskWearoutPercent(payload));
     }
 
     /// <summary>

@@ -54,6 +54,82 @@ public class MachineStatePatchApplyTests
     }
 
     [Test]
+    public async Task ApplySummaryPatch_HardwareHealthWithWear_WritesTheWearColumn()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        DatabaseContext db = dbFactory.Context;
+        await SeedAsync(db, 140);
+        Database.Repositories.DatabaseRepository repo = BuildRepository(dbFactory);
+
+        MachineSummaryPatch patch = new()
+        {
+            MachineId = 140,
+            HasHardwareHealth = true,
+            HasDiskHealthIssue = false,
+            HasHardwareIssue = false,
+            MaxDiskWearoutPercent = 84,
+        };
+
+        await repo.ApplySummaryPatchAsync(patch, CancellationToken.None);
+
+        MachineStateSummary s = await db.GetTable<MachineStateSummary>().FirstAsync(x => x.MachineId == 140);
+        await Assert.That(s.MaxDiskWearoutPercent).IsEqualTo(84);
+    }
+
+    [Test]
+    public async Task ApplySummaryPatch_HardwareHealthWithoutWear_LeavesAStoredWearValueAlone()
+    {
+        // smartctl exits non-zero — and so contributes no disk entry at all — exactly when a drive
+        // is failing, so a report carrying no usable wear figure must not erase a known one. Drop
+        // the non-null guard in the repository and this test fails: the machine silently returns to
+        // Healthy through the very failure the column exists to surface.
+        using TestDatabaseFactory dbFactory = new();
+        DatabaseContext db = dbFactory.Context;
+        await SeedAsync(db, 141);
+        await db.GetTable<MachineStateSummary>().Where(s => s.MachineId == 141)
+            .Set(s => s.MaxDiskWearoutPercent, 96).UpdateAsync();
+        Database.Repositories.DatabaseRepository repo = BuildRepository(dbFactory);
+
+        MachineSummaryPatch patch = new()
+        {
+            MachineId = 141,
+            HasHardwareHealth = true,
+            HasDiskHealthIssue = true,
+            HasHardwareIssue = false,
+            MaxDiskWearoutPercent = null,
+        };
+
+        await repo.ApplySummaryPatchAsync(patch, CancellationToken.None);
+
+        MachineStateSummary s = await db.GetTable<MachineStateSummary>().FirstAsync(x => x.MachineId == 141);
+        await Assert.That(s.MaxDiskWearoutPercent).IsEqualTo(96);
+        await Assert.That(s.HasDiskHealthIssue).IsTrue();
+    }
+
+    [Test]
+    public async Task ApplySummaryPatch_NoHardwareHealthAtAll_LeavesTheWearColumnAlone()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        DatabaseContext db = dbFactory.Context;
+        await SeedAsync(db, 142);
+        await db.GetTable<MachineStateSummary>().Where(s => s.MachineId == 142)
+            .Set(s => s.MaxDiskWearoutPercent, 55).UpdateAsync();
+        Database.Repositories.DatabaseRepository repo = BuildRepository(dbFactory);
+
+        MachineSummaryPatch patch = new()
+        {
+            MachineId = 142,
+            HasCpuUsage = true,
+            CpuUsagePercent = 12,
+        };
+
+        await repo.ApplySummaryPatchAsync(patch, CancellationToken.None);
+
+        MachineStateSummary s = await db.GetTable<MachineStateSummary>().FirstAsync(x => x.MachineId == 142);
+        await Assert.That(s.MaxDiskWearoutPercent).IsEqualTo(55);
+    }
+
+    [Test]
     public async Task ApplySummaryPatch_NeverMovesLastSeenAtBackward()
     {
         using TestDatabaseFactory dbFactory = new();

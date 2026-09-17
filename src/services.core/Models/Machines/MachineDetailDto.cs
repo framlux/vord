@@ -41,6 +41,16 @@ public sealed class MachineDetailDto
     /// <summary>Latest memory usage payload.</summary>
     public MemoryUsagePayload? MemoryUsage { get; set; }
 
+    /// <summary>Latest memory and swap totals payload (type=4), or null when none was reported.</summary>
+    public MemoryInfoPayload? MemoryInfo { get; set; }
+
+    /// <summary>
+    /// Server receipt time of the payload in <see cref="MemoryInfo"/>. Required rather than optional:
+    /// the detail lookup searches a seven-day window and this record arrives every fifteen minutes,
+    /// so without the timestamp the UI could present a week-old swap figure as current.
+    /// </summary>
+    public DateTimeOffset? MemoryInfoReceivedAt { get; set; }
+
     /// <summary>Latest disk usage payload (array of all mounts).</summary>
     public DiskUsagePayload? DiskUsages { get; set; }
 

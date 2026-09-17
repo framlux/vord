@@ -8,4 +8,9 @@ namespace Framlux.FleetManagement.Services.Core.Machines.Projection;
 /// <param name="HasDiskHealthIssue">Whether any disk reported a health issue (summary column).</param>
 /// <param name="HasHardwareIssue">Whether any hardware component reported an issue (summary column).</param>
 /// <param name="HardwareHealth">The raw hardware-health JSON payload (detail column).</param>
-internal sealed record HardwareHealthFragment(bool HasDiskHealthIssue, bool HasHardwareIssue, string HardwareHealth);
+/// <param name="MaxDiskWearoutPercent">Highest usable SSD wear percentage across the reported disks, or null when none reported one.</param>
+internal sealed record HardwareHealthFragment(
+    bool HasDiskHealthIssue,
+    bool HasHardwareIssue,
+    string HardwareHealth,
+    int? MaxDiskWearoutPercent);

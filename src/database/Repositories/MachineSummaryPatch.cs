@@ -70,6 +70,12 @@ public sealed record MachineSummaryPatch
     /// <summary>Whether any hardware component has an issue from HardwareHealth telemetry.</summary>
     public bool? HasHardwareIssue { get; init; }
 
+    /// <summary>
+    /// Highest usable SSD wear percentage across the machine's disks, or null when this report
+    /// carried none. Null does not clear the stored column: wear is last-known-good.
+    /// </summary>
+    public int? MaxDiskWearoutPercent { get; init; }
+
     /// <summary>True when the PackageUpdates-owned summary columns should be written.</summary>
     public bool HasPackageUpdates { get; init; }
 

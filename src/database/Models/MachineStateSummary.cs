@@ -94,6 +94,17 @@ public sealed class MachineStateSummary
     public int? MaxDiskUsagePercent { get; set; }
 
     /// <summary>
+    /// Highest SSD wear figure, as a percentage of rated endurance consumed, across every disk that
+    /// reported a usable SMART wear attribute. Null means no disk has yet reported one — the normal
+    /// state on NVMe-only hosts and on hosts without smartctl. Unlike every other column derived
+    /// from hardware health, this value is last-known-good: a report that carries no usable wear
+    /// figure leaves the stored value alone, because smartctl exits non-zero (and so reports
+    /// nothing) exactly when a drive is failing.
+    /// </summary>
+    [Column("MaxDiskWearoutPercent"), Nullable]
+    public int? MaxDiskWearoutPercent { get; set; }
+
+    /// <summary>
     /// Total pending package updates from PackageUpdates telemetry.
     /// </summary>
     [Column("PendingUpdates"), Nullable]

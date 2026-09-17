@@ -658,6 +658,161 @@ public class TelemetryPayloadParserTests
         await Assert.That(hasHardwareIssue).IsFalse();
     }
 
+    [Test]
+    public async Task ComputeMaxDiskWearoutPercent_TwoDisks_TakesTheHighest()
+    {
+        string payload = Serialize(new HardwareHealthRecord
+        {
+            DiskSmart =
+            {
+                new DiskSmartReading { Device = "/dev/sda", WearoutPercent = 12 },
+                new DiskSmartReading { Device = "/dev/sdb", WearoutPercent = 71 },
+            }
+        });
+
+        int? max = TelemetryPayloadParser.ComputeMaxDiskWearoutPercent(payload);
+
+        await Assert.That(max).IsEqualTo(71);
+    }
+
+    [Test]
+    public async Task ComputeMaxDiskWearoutPercent_ZeroReading_IsTreatedAsNotReported()
+    {
+        // The agent leaves the field at 0 when the drive exposes no wear attribute, so 0 means
+        // "unknown", not "a brand new disk". Treating it as a reading would report every drive
+        // without the attribute as pristine.
+        string payload = Serialize(new HardwareHealthRecord
+        {
+            DiskSmart = { new DiskSmartReading { Device = "/dev/sda", WearoutPercent = 0 } }
+        });
+
+        int? max = TelemetryPayloadParser.ComputeMaxDiskWearoutPercent(payload);
+
+        await Assert.That(max).IsNull();
+    }
+
+    [Test]
+    public async Task ComputeMaxDiskWearoutPercent_HundredReading_IsTreatedAsAMisparse()
+    {
+        // Wear is derived as 100 minus a normalized SMART value, so a drive whose normalized value
+        // is unpopulated (or used as a raw counter) yields exactly 100. Admitting it would raise a
+        // verdict on a healthy drive; a genuinely exhausted one was seen at 99 on an earlier report.
+        string payload = Serialize(new HardwareHealthRecord
+        {
+            DiskSmart = { new DiskSmartReading { Device = "/dev/sda", WearoutPercent = 100 } }
+        });
+
+        int? max = TelemetryPayloadParser.ComputeMaxDiskWearoutPercent(payload);
+
+        await Assert.That(max).IsNull();
+    }
+
+    [Test]
+    [Arguments(0, 45, 45)]
+    [Arguments(100, 60, 60)]
+    [Arguments(-3, 45, 45)]
+    [Arguments(255, 45, 45)]
+    public async Task ComputeMaxDiskWearoutPercent_ExcludedValue_DoesNotSuppressARealReading(
+        int excluded, int usable, int expected)
+    {
+        string payload = Serialize(new HardwareHealthRecord
+        {
+            DiskSmart =
+            {
+                new DiskSmartReading { Device = "/dev/sda", WearoutPercent = excluded },
+                new DiskSmartReading { Device = "/dev/sdb", WearoutPercent = usable },
+            }
+        });
+
+        int? max = TelemetryPayloadParser.ComputeMaxDiskWearoutPercent(payload);
+
+        await Assert.That(max).IsEqualTo(expected);
+    }
+
+    [Test]
+    [Arguments(1)]
+    [Arguments(79)]
+    [Arguments(80)]
+    [Arguments(99)]
+    public async Task ComputeMaxDiskWearoutPercent_AtEachBandBoundary_ReportsTheValue(int wearout)
+    {
+        string payload = Serialize(new HardwareHealthRecord
+        {
+            DiskSmart = { new DiskSmartReading { Device = "/dev/sda", WearoutPercent = wearout } }
+        });
+
+        int? max = TelemetryPayloadParser.ComputeMaxDiskWearoutPercent(payload);
+
+        await Assert.That(max).IsEqualTo(wearout);
+    }
+
+    [Test]
+    public async Task ComputeMaxDiskWearoutPercent_NoDiskSmartSection_ReportsNothing()
+    {
+        string payload = Serialize(new HardwareHealthRecord
+        {
+            Fans = { new FanReading { Name = "fan1", Rpm = 3200 } }
+        });
+
+        int? max = TelemetryPayloadParser.ComputeMaxDiskWearoutPercent(payload);
+
+        await Assert.That(max).IsNull();
+    }
+
+    [Test]
+    [Arguments("{\"disk_smart\":[]}")]
+    [Arguments("{\"disk_smart\":[{\"device\":\"/dev/sda\"}]}")]
+    public async Task ComputeMaxDiskWearoutPercent_NothingUsableInTheSection_ReportsNothing(string payload)
+    {
+        int? max = TelemetryPayloadParser.ComputeMaxDiskWearoutPercent(payload);
+
+        await Assert.That(max).IsNull();
+    }
+
+    [Test]
+    [Arguments("not json")]
+    [Arguments("{\"disk_smart\":[{\"wearout_percent\":\"high\"}]}")]
+    public async Task ComputeMaxDiskWearoutPercent_PoisonPayload_ReportsNothingWithoutThrowing(string payload)
+    {
+        int? max = TelemetryPayloadParser.ComputeMaxDiskWearoutPercent(payload);
+
+        await Assert.That(max).IsNull();
+    }
+
+    [Test]
+    public async Task TryParseHardwareHealth_WearingDiskAlongsideAFailure_ReportsBothFromOnePayload()
+    {
+        string payload = Serialize(new HardwareHealthRecord
+        {
+            DiskSmart =
+            {
+                new DiskSmartReading { Device = "/dev/sda", HealthStatus = "FAILED", WearoutPercent = 44 },
+                new DiskSmartReading { Device = "/dev/sdb", HealthStatus = "PASSED", WearoutPercent = 88 },
+            }
+        });
+
+        bool ok = TelemetryPayloadParser.TryParseHardwareHealth(payload, out HardwareHealthFragment? f);
+
+        await Assert.That(ok).IsTrue();
+        await Assert.That(f!.MaxDiskWearoutPercent).IsEqualTo(88);
+        await Assert.That(f.HasDiskHealthIssue).IsTrue();
+        await Assert.That(f.HasHardwareIssue).IsFalse();
+    }
+
+    [Test]
+    public async Task TryParseHardwareHealth_NoUsableWearValue_LeavesTheFragmentValueNull()
+    {
+        string payload = Serialize(new HardwareHealthRecord
+        {
+            DiskSmart = { new DiskSmartReading { Device = "/dev/sda", HealthStatus = "PASSED" } }
+        });
+
+        bool ok = TelemetryPayloadParser.TryParseHardwareHealth(payload, out HardwareHealthFragment? f);
+
+        await Assert.That(ok).IsTrue();
+        await Assert.That(f!.MaxDiskWearoutPercent).IsNull();
+    }
+
     /// <summary>
     /// Serializes a protobuf telemetry record the same way the ingest path stores it, so a fixture can
     /// only ever carry the field names the server actually writes.

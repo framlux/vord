@@ -136,11 +136,21 @@
 
 	// Vitals derived values
 	const cpuPercent = $derived(machineDetail?.cpuUsage?.cpuUsagePercent ?? null);
+	const cpuBreakdown = $derived(machineDetail?.cpuUsage ?? null);
 	const cpuTooltip = $derived.by(() => {
 		const sysInfo = machineDetail?.systemInfo;
 		if (sysInfo === undefined || sysInfo === null) return undefined;
 
-		return `${sysInfo.cpuBrand}\n${sysInfo.cpuPhysicalCores} physical / ${sysInfo.cpuLogicalCores} logical cores`;
+		const header = `${sysInfo.cpuBrand}\n${sysInfo.cpuPhysicalCores} physical / ${sysInfo.cpuLogicalCores} logical cores`;
+		const cpu = machineDetail?.cpuUsage;
+		if (cpu === undefined || cpu === null) return header;
+
+		// All eight buckets, including the four the breakdown line omits. They are components of the
+		// CPU figure, so the agent's whole-percent truncation means they will not sum to exactly 100.
+		return (
+			`${header}\nuser ${cpu.userTime}% · sys ${cpu.systemTime}% · nice ${cpu.niceTime}% · idle ${cpu.idleTime}%` +
+			`\niowait ${cpu.iowaitTime}% · irq ${cpu.irqTime}% · softirq ${cpu.softirqTime}% · steal ${cpu.stealTime}%`
+		);
 	});
 	const memoryPercent = $derived(machineDetail?.memoryUsage?.memoryUsagePercent ?? null);
 	const memoryTooltip = $derived.by(() => {
@@ -584,6 +594,19 @@
 		</a>
 	</div>
 
+	{#if cpuBreakdown}
+		<!-- A decomposition of the CPU gauge above, not extra load: the agent derives CPU usage as
+		     100 minus idle, so iowait and steal are already inside it. No colour coding here — the
+		     health sweep owns verdicts, and a second UI-only opinion would drift from it. -->
+		<p class="-mt-2 text-xs text-surface-500 dark:text-surface-400" data-testid="cpu-breakdown">
+			<span>user {cpuBreakdown.userTime}% · sys {cpuBreakdown.systemTime}% · iowait {cpuBreakdown.iowaitTime}%</span>
+			{#if cpuBreakdown.stealTime > 0}
+				<span> · steal {cpuBreakdown.stealTime}%</span>
+			{/if}
+			<span class="ml-1">— components of the CPU figure above, not additional load.</span>
+		</p>
+	{/if}
+
 	<!-- Tabs -->
 	<div class="overflow-x-auto border-b border-surface-200 dark:border-surface-700">
 		<!-- A plain element rather than <nav>: giving a navigation landmark the tablist role strips
@@ -906,6 +929,27 @@
 								<p class="text-xs text-surface-500 dark:text-surface-400">
 									{machineDetail.memoryUsage.memoryUsagePercent}% used
 								</p>
+							{/if}
+							{#if machineDetail.memoryInfo}
+								<!-- Available comes from the agent's MemAvailable reading, never from
+								     total minus used — that subtraction is the definition of used and
+								     would restate it rather than add a second fact. -->
+								<p class="text-xs text-surface-500 dark:text-surface-400" data-testid="memory-available">
+									{formatBytes(machineDetail.memoryInfo.memoryAvailable)} available
+								</p>
+								{#if machineDetail.memoryInfo.swapTotal > 0}
+									<p class="text-xs text-surface-500 dark:text-surface-400" data-testid="memory-swap">
+										Swap {formatBytes(machineDetail.memoryInfo.swapTotal - machineDetail.memoryInfo.swapFree)} / {formatBytes(machineDetail.memoryInfo.swapTotal)}
+										({Math.round(((machineDetail.memoryInfo.swapTotal - machineDetail.memoryInfo.swapFree) / machineDetail.memoryInfo.swapTotal) * 100)}%)
+									</p>
+								{/if}
+								{#if machineDetail.memoryInfoReceivedAt}
+									<!-- This record arrives every 15 minutes and the lookup window is
+									     seven days, so it is labelled with its own receipt time. -->
+									<p class="text-xs text-surface-500 dark:text-surface-400" data-testid="memory-info-as-of">
+										as of {formatRelativeTime(machineDetail.memoryInfoReceivedAt)}
+									</p>
+								{/if}
 							{/if}
 						</div>
 						<div>

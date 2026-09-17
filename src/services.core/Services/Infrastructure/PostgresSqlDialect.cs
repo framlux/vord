@@ -36,6 +36,7 @@ public sealed class PostgresSqlDialect : ISqlDialect
                         WHEN "HasDiskHealthIssue" = true OR "HasHardwareIssue" = true THEN 2
                         WHEN "CpuUsagePercent" >= 80 OR "MemoryUsagePercent" >= 80 THEN 1
                         WHEN COALESCE("MaxDiskUsagePercent", 0) >= 80 THEN 1
+                        WHEN COALESCE("MaxDiskWearoutPercent", 0) >= 80 THEN 1
                         ELSE 0
                     END,
                     CASE

@@ -304,6 +304,7 @@ public sealed class MachineStateStreamingService : BackgroundService
             HasHardwareHealth = patch.HardwareHealth is not null,
             HasDiskHealthIssue = patch.HardwareHealth?.HasDiskHealthIssue,
             HasHardwareIssue = patch.HardwareHealth?.HasHardwareIssue,
+            MaxDiskWearoutPercent = patch.HardwareHealth?.MaxDiskWearoutPercent,
             HasPackageUpdates = patch.PackageUpdates is not null,
             PendingUpdates = patch.PackageUpdates?.PendingUpdates,
             SecurityUpdates = patch.PackageUpdates?.SecurityUpdates,

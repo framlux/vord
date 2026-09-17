@@ -195,6 +195,96 @@ public sealed class MachineDetailFullEndpointTests
     }
 
     [Test]
+    public async Task FullDetail_CpuAndMemoryInfoTelemetry_ReturnsTheBreakdownAndSwapFigures()
+    {
+        // Both groups were already on the wire and already stored; only the response DTO dropped
+        // them. Asserting the exact values (not just a 200) is what would catch a silent rename of
+        // a snake_case field, which would otherwise bind to a plausible-looking zero.
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId, long machineId) = await SeedEnvironment(db);
+
+        DateTimeOffset memoryInfoReceivedAt = new(2026, 09, 17, 10, 30, 00, TimeSpan.Zero);
+
+        await db.InsertAsync(new MachineTelemetry
+        {
+            MachineId = machineId,
+            TenantId = tenantId,
+            TelemetryType = 6,
+            Payload = """{"cpu_usage_percent":72,"user_time":24,"system_time":9,"nice_time":0,"idle_time":28,"iowait_time":37,"irq_time":0,"softirq_time":1,"steal_time":9}""",
+            ReceivedAt = DateTimeOffset.UtcNow,
+            ServerReceivedAt = DateTimeOffset.UtcNow,
+            SourceEventId = Guid.NewGuid().ToString("N"),
+        });
+
+        await db.InsertAsync(new MachineTelemetry
+        {
+            MachineId = machineId,
+            TenantId = tenantId,
+            TelemetryType = 4,
+            Payload = """{"memory_total":17179869184,"memory_free":2147483648,"memory_available":4294967296,"swap_total":8589934592,"swap_free":6442450944}""",
+            ReceivedAt = memoryInfoReceivedAt,
+            ServerReceivedAt = memoryInfoReceivedAt,
+            SourceEventId = Guid.NewGuid().ToString("N"),
+        });
+
+        HttpClient client = new AuthenticatedClientBuilder(factory)
+            .WithUserId(userId)
+            .WithRole(tenantId, (int)UserAccountRoles.Viewer)
+            .WithActiveTenant(tenantId)
+            .Build();
+
+        HttpResponseMessage response = await client.GetAsync($"/api/v1/machines/{machineId}/detail");
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
+
+        string body = await response.Content.ReadAsStringAsync();
+        using JsonDocument doc = JsonDocument.Parse(body);
+        JsonElement data = doc.RootElement.GetProperty("data");
+
+        JsonElement cpu = data.GetProperty("cpuUsage");
+        await Assert.That(cpu.GetProperty("cpuUsagePercent").GetInt32()).IsEqualTo(72);
+        await Assert.That(cpu.GetProperty("userTime").GetInt32()).IsEqualTo(24);
+        await Assert.That(cpu.GetProperty("iowaitTime").GetInt32()).IsEqualTo(37);
+        await Assert.That(cpu.GetProperty("stealTime").GetInt32()).IsEqualTo(9);
+
+        JsonElement memoryInfo = data.GetProperty("memoryInfo");
+        await Assert.That(memoryInfo.GetProperty("memoryAvailable").GetInt64()).IsEqualTo(4294967296L);
+        await Assert.That(memoryInfo.GetProperty("swapTotal").GetInt64()).IsEqualTo(8589934592L);
+        await Assert.That(memoryInfo.GetProperty("swapFree").GetInt64()).IsEqualTo(6442450944L);
+
+        DateTimeOffset returnedReceivedAt = data.GetProperty("memoryInfoReceivedAt").GetDateTimeOffset();
+        await Assert.That(returnedReceivedAt.ToUnixTimeSeconds())
+            .IsEqualTo(memoryInfoReceivedAt.ToUnixTimeSeconds());
+    }
+
+    [Test]
+    public async Task FullDetail_NoMemoryInfoTelemetry_ReturnsNullMemoryInfoWithoutFailing()
+    {
+        // The slow-tick record can be absent for the first fifteen minutes of a machine's life, and
+        // the response must still be a 200 with an explicit null rather than a 500.
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId, long machineId) = await SeedEnvironment(db);
+
+        HttpClient client = new AuthenticatedClientBuilder(factory)
+            .WithUserId(userId)
+            .WithRole(tenantId, (int)UserAccountRoles.Viewer)
+            .WithActiveTenant(tenantId)
+            .Build();
+
+        HttpResponseMessage response = await client.GetAsync($"/api/v1/machines/{machineId}/detail");
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
+
+        string body = await response.Content.ReadAsStringAsync();
+        using JsonDocument doc = JsonDocument.Parse(body);
+        JsonElement data = doc.RootElement.GetProperty("data");
+        await Assert.That(data.GetProperty("memoryInfo").ValueKind).IsEqualTo(JsonValueKind.Null);
+        await Assert.That(data.GetProperty("memoryInfoReceivedAt").ValueKind).IsEqualTo(JsonValueKind.Null);
+    }
+
+    [Test]
     public async Task FullDetail_MachineNotFound_Returns404()
     {
         using FunctionalTestFactory factory = new();

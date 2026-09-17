@@ -190,6 +190,9 @@ export interface MachineDetailDto {
 	osVersion: OsVersionDto | null;
 	cpuUsage: CpuUsageDto | null;
 	memoryUsage: MemoryUsageDto | null;
+	memoryInfo: MemoryInfoDto | null;
+	/** Server receipt time of memoryInfo; the lookup window is seven days, so it can be stale. */
+	memoryInfoReceivedAt: string | null;
 	diskUsages: DiskUsageDto | null;
 	hardwareHealth: HardwareHealthDto | null;
 	packageUpdates: PackageUpdatesDto | null;
@@ -228,6 +231,24 @@ export interface OsVersionDto {
 
 export interface CpuUsageDto {
 	cpuUsagePercent: number;
+	/** The eight jiffy buckets below decompose cpuUsagePercent; they are not additional load. */
+	userTime: number;
+	systemTime: number;
+	niceTime: number;
+	idleTime: number;
+	iowaitTime: number;
+	irqTime: number;
+	softirqTime: number;
+	stealTime: number;
+}
+
+/** Memory and swap totals (telemetry type 4), reported on the agent's 15-minute slow tick. */
+export interface MemoryInfoDto {
+	memoryTotal: number;
+	memoryFree: number;
+	memoryAvailable: number;
+	swapTotal: number;
+	swapFree: number;
 }
 
 export interface MemoryUsageDto {

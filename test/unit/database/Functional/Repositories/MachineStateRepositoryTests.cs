@@ -783,29 +783,38 @@ public class MachineStateRepositoryTests
 
     [Test]
     // Interior/healthy baseline.
-    [Arguments(10, 10, 10, 0, false, false, (short)0)]
+    [Arguments(10, 10, 10, 0, false, false, null, (short)0)]
     // CPU: below warning, at warning, below critical, at critical.
-    [Arguments(79, 10, 10, 0, false, false, (short)0)]
-    [Arguments(80, 10, 10, 0, false, false, (short)1)]
-    [Arguments(94, 10, 10, 0, false, false, (short)1)]
-    [Arguments(95, 10, 10, 0, false, false, (short)2)]
+    [Arguments(79, 10, 10, 0, false, false, null, (short)0)]
+    [Arguments(80, 10, 10, 0, false, false, null, (short)1)]
+    [Arguments(94, 10, 10, 0, false, false, null, (short)1)]
+    [Arguments(95, 10, 10, 0, false, false, null, (short)2)]
     // Memory, same four boundaries.
-    [Arguments(10, 79, 10, 0, false, false, (short)0)]
-    [Arguments(10, 80, 10, 0, false, false, (short)1)]
-    [Arguments(10, 94, 10, 0, false, false, (short)1)]
-    [Arguments(10, 95, 10, 0, false, false, (short)2)]
+    [Arguments(10, 79, 10, 0, false, false, null, (short)0)]
+    [Arguments(10, 80, 10, 0, false, false, null, (short)1)]
+    [Arguments(10, 94, 10, 0, false, false, null, (short)1)]
+    [Arguments(10, 95, 10, 0, false, false, null, (short)2)]
     // Max disk usage, same four boundaries.
-    [Arguments(10, 10, 79, 0, false, false, (short)0)]
-    [Arguments(10, 10, 80, 0, false, false, (short)1)]
-    [Arguments(10, 10, 94, 0, false, false, (short)1)]
-    [Arguments(10, 10, 95, 0, false, false, (short)2)]
+    [Arguments(10, 10, 79, 0, false, false, null, (short)0)]
+    [Arguments(10, 10, 80, 0, false, false, null, (short)1)]
+    [Arguments(10, 10, 94, 0, false, false, null, (short)1)]
+    [Arguments(10, 10, 95, 0, false, false, null, (short)2)]
     // Failed services and each hardware flag, in isolation.
-    [Arguments(10, 10, 10, 1, false, false, (short)2)]
-    [Arguments(10, 10, 10, 0, true, false, (short)2)]
-    [Arguments(10, 10, 10, 0, false, true, (short)2)]
+    [Arguments(10, 10, 10, 1, false, false, null, (short)2)]
+    [Arguments(10, 10, 10, 0, true, false, null, (short)2)]
+    [Arguments(10, 10, 10, 0, false, true, null, (short)2)]
+    // SSD wear, which the sweep raises to Warning and never to Critical: the value is monotonic,
+    // so a Critical clause would pin the machine there permanently and hide a real transient one.
+    [Arguments(10, 10, 10, 0, false, false, null, (short)0)]
+    [Arguments(10, 10, 10, 0, false, false, 79, (short)0)]
+    [Arguments(10, 10, 10, 0, false, false, 80, (short)1)]
+    [Arguments(10, 10, 10, 0, false, false, 99, (short)1)]
+    // A worn disk must not mask a critical metric on the same machine.
+    [Arguments(95, 10, 10, 0, false, false, 99, (short)2)]
     public async Task SweepHealthStatusAsync_AtEveryThresholdBoundary_WritesTheExpectedStatus(
         int cpuPercent, int memoryPercent, int maxDiskUsagePercent, int failedServices,
-        bool hasDiskHealthIssue, bool hasHardwareIssue, short expectedHealthStatus)
+        bool hasDiskHealthIssue, bool hasHardwareIssue, int? maxDiskWearoutPercent,
+        short expectedHealthStatus)
     {
         // The sweep SQL is now the only place the health thresholds are written down, so the
         // thresholds themselves are pinned by running that SQL rather than by a second copy of
@@ -833,6 +842,7 @@ public class MachineStateRepositoryTests
         summary.MaxDiskUsagePercent = maxDiskUsagePercent;
         summary.HasDiskHealthIssue = hasDiskHealthIssue;
         summary.HasHardwareIssue = hasHardwareIssue;
+        summary.MaxDiskWearoutPercent = maxDiskWearoutPercent;
         await dbFactory.Context.InsertAsync(summary);
 
         SqliteSqlDialect dialect = new();

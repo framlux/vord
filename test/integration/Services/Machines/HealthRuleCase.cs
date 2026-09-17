@@ -10,6 +10,7 @@ namespace Framlux.FleetManagement.Test.Integration.Services.Machines;
 /// <param name="CpuUsagePercent">Reported CPU usage, or null when the machine has not reported it.</param>
 /// <param name="MemoryUsagePercent">Reported memory usage, or null when the machine has not reported it.</param>
 /// <param name="MaxDiskUsagePercent">Highest disk usage across mounts, or null when not reported.</param>
+/// <param name="MaxDiskWearoutPercent">Highest SSD wear percentage across the machine's disks, or null when no disk reported a usable value.</param>
 /// <param name="FailedServices">Count of failed systemd units.</param>
 /// <param name="HasDiskHealthIssue">Whether SMART reported a failing disk.</param>
 /// <param name="HasHardwareIssue">Whether hardware health reported a fault.</param>
@@ -21,6 +22,7 @@ public sealed record HealthRuleCase(
     int? CpuUsagePercent,
     int? MemoryUsagePercent,
     int? MaxDiskUsagePercent,
+    int? MaxDiskWearoutPercent,
     int FailedServices,
     bool HasDiskHealthIssue,
     bool HasHardwareIssue,

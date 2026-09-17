@@ -731,6 +731,54 @@ public class MachineStateStreamingServiceTests
     }
 
     [Test]
+    public async Task StreamLoop_HardwareHealthWithWear_ProjectsTheHighestWearoutOntoTheSummary()
+    {
+        // The health sweep reads scalar columns only, so a wear figure that stays in the JSON
+        // payload can never become a verdict. This is the mapping that carries it to a column.
+        using TestDatabaseFactory dbFactory = new();
+        DatabaseContext db = dbFactory.Context;
+        long machineId = 130;
+        await SeedSummaryAndDetail(db, machineId);
+
+        string payload = """{"disk_smart":[{"device":"/dev/sda","wearout_percent":22},{"device":"/dev/sdb","wearout_percent":84}]}""";
+        await SeedTelemetryAsync(db, Row(1, machineId, TelemetryTypeIds.HardwareHealth, payload, FixedClock));
+
+        await RunOneLoopIterationAsync(db);
+
+        MachineStateSummary summary = await db.MachineStateSummaries.FirstAsync(s => s.MachineId == machineId);
+        await Assert.That(summary.MaxDiskWearoutPercent).IsEqualTo(84);
+    }
+
+    [Test]
+    public async Task MapSummary_CarriesTheWearFigureFromTheHardwareHealthFragment()
+    {
+        MachineStatePatch patch = new()
+        {
+            MachineId = 131,
+            HardwareHealth = new HardwareHealthFragment(
+                HasDiskHealthIssue: false,
+                HasHardwareIssue: false,
+                HardwareHealth: "{}",
+                MaxDiskWearoutPercent: 77),
+        };
+
+        MachineSummaryPatch summary = MachineStateStreamingService.MapSummary(patch);
+
+        await Assert.That(summary.MaxDiskWearoutPercent).IsEqualTo(77);
+        await Assert.That(summary.HasHardwareHealth).IsTrue();
+    }
+
+    [Test]
+    public async Task MapSummary_WithoutAHardwareHealthFragment_CarriesNoWearFigure()
+    {
+        MachineStatePatch patch = new() { MachineId = 132 };
+
+        MachineSummaryPatch summary = MachineStateStreamingService.MapSummary(patch);
+
+        await Assert.That(summary.MaxDiskWearoutPercent).IsNull();
+    }
+
+    [Test]
     public async Task StreamLoop_HardwareHealth_ProjectsSummaryFlagsAndDetailPayload()
     {
         using TestDatabaseFactory dbFactory = new();

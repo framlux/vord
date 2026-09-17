@@ -7,6 +7,7 @@ using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Services.Core.Models.Dashboard;
 using Framlux.FleetManagement.Services.Core.Models.Machines;
 using Framlux.FleetManagement.Services.Core.Machines;
+using Framlux.FleetManagement.Services.Core.Telemetry;
 using Framlux.FleetManagement.Test.Infrastructure;
 using LinqToDB;
 
@@ -351,6 +352,89 @@ public class MachineStateServiceTests
         await Assert.That(result!.Id).IsEqualTo(machine.Id);
         await Assert.That(result.IsOnline).IsTrue();
         await Assert.That(result.LastPing).IsNotNull();
+    }
+
+    [Test]
+    public async Task GetMachineDetailAsync_WithMemoryInfoRow_ReturnsSwapAndAvailableWithItsReceiptTime()
+    {
+        // Swap and MemAvailable travel in MemoryInfo (type 4), a different record from the memory
+        // usage the vitals bar reads, and one the agent sends every fifteen minutes. The receipt
+        // time travels with it because the detail lookup spans seven days.
+        using TestDatabaseFactory dbFactory = new();
+        Machine machine = TestDataBuilder.BuildMachine(tenantId: 1);
+        machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
+
+        DateTimeOffset receivedAt = DateTimeOffset.UtcNow.AddMinutes(-12);
+        await dbFactory.Context.InsertAsync(TestDataBuilder.BuildMachineTelemetry(
+            machineId: machine.Id,
+            telemetryType: TelemetryTypeIds.MemoryInfo,
+            payload: """{"memory_total":17179869184,"memory_free":2147483648,"memory_available":4294967296,"swap_total":8589934592,"swap_free":6442450944}""",
+            receivedAt: receivedAt));
+
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+        MachineStateService service = new(scopeFactory);
+
+        MachineDetailDto? result = await service.GetMachineDetailAsync(machine.Id, 1, CancellationToken.None);
+
+        await Assert.That(result).IsNotNull();
+        await Assert.That(result!.MemoryInfo).IsNotNull();
+        await Assert.That(result.MemoryInfo!.MemoryAvailable).IsEqualTo(4294967296L);
+        await Assert.That(result.MemoryInfo.SwapTotal).IsEqualTo(8589934592L);
+        await Assert.That(result.MemoryInfo.SwapFree).IsEqualTo(6442450944L);
+        await Assert.That(result.MemoryInfoReceivedAt).IsNotNull();
+        await Assert.That(result.MemoryInfoReceivedAt!.Value.ToUnixTimeSeconds())
+            .IsEqualTo(receivedAt.ToUnixTimeSeconds());
+    }
+
+    [Test]
+    public async Task GetMachineDetailAsync_WithoutMemoryInfoRow_ReturnsNoMemoryInfoAndNoTimestamp()
+    {
+        // A machine that has reported memory usage but not yet the slow-tick memory info must not
+        // present a timestamp with nothing behind it.
+        using TestDatabaseFactory dbFactory = new();
+        Machine machine = TestDataBuilder.BuildMachine(tenantId: 1);
+        machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
+
+        await dbFactory.Context.InsertAsync(TestDataBuilder.BuildMachineTelemetry(
+            machineId: machine.Id,
+            telemetryType: TelemetryTypeIds.MemoryUsage,
+            payload: """{"memory_total":17179869184,"memory_used":8589934592,"memory_usage_percent":50}"""));
+
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+        MachineStateService service = new(scopeFactory);
+
+        MachineDetailDto? result = await service.GetMachineDetailAsync(machine.Id, 1, CancellationToken.None);
+
+        await Assert.That(result).IsNotNull();
+        await Assert.That(result!.MemoryUsage).IsNotNull();
+        await Assert.That(result.MemoryInfo).IsNull();
+        await Assert.That(result.MemoryInfoReceivedAt).IsNull();
+    }
+
+    [Test]
+    public async Task GetMachineDetailAsync_WithCpuUsageRow_ReturnsTheJiffyBreakdown()
+    {
+        // The breakdown is already on the wire and already stored; only the DTO dropped it.
+        using TestDatabaseFactory dbFactory = new();
+        Machine machine = TestDataBuilder.BuildMachine(tenantId: 1);
+        machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
+
+        await dbFactory.Context.InsertAsync(TestDataBuilder.BuildMachineTelemetry(
+            machineId: machine.Id,
+            telemetryType: TelemetryTypeIds.CpuUsage,
+            payload: """{"cpu_usage_percent":61,"user_time":34,"system_time":11,"nice_time":1,"idle_time":39,"iowait_time":14,"irq_time":0,"softirq_time":2,"steal_time":9}"""));
+
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+        MachineStateService service = new(scopeFactory);
+
+        MachineDetailDto? result = await service.GetMachineDetailAsync(machine.Id, 1, CancellationToken.None);
+
+        await Assert.That(result).IsNotNull();
+        await Assert.That(result!.CpuUsage).IsNotNull();
+        await Assert.That(result.CpuUsage!.CpuUsagePercent).IsEqualTo(61);
+        await Assert.That(result.CpuUsage.UserTime).IsEqualTo(34);
+        await Assert.That(result.CpuUsage.IowaitTime).IsEqualTo(14);
+        await Assert.That(result.CpuUsage.StealTime).IsEqualTo(9);
     }
 
     [Test]

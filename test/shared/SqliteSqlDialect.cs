@@ -59,6 +59,7 @@ public sealed class SqliteSqlDialect : ISqlDialect
                     WHEN "HasDiskHealthIssue" = 1 OR "HasHardwareIssue" = 1 THEN 2
                     WHEN "CpuUsagePercent" >= 80 OR "MemoryUsagePercent" >= 80 THEN 1
                     WHEN COALESCE("MaxDiskUsagePercent", 0) >= 80 THEN 1
+                    WHEN COALESCE("MaxDiskWearoutPercent", 0) >= 80 THEN 1
                     ELSE 0
                 END,
                 CASE

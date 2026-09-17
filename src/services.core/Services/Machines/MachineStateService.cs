@@ -173,6 +173,7 @@ public sealed class MachineStateService : IMachineStateService
         OsVersionPayload? osVersion = DeserializePayload<OsVersionPayload>(latestByType, TelemetryTypeIds.OsVersion);
         CpuUsagePayload? cpuUsage = DeserializePayload<CpuUsagePayload>(latestByType, TelemetryTypeIds.CpuUsage);
         MemoryUsagePayload? memoryUsage = DeserializePayload<MemoryUsagePayload>(latestByType, TelemetryTypeIds.MemoryUsage);
+        MemoryInfoPayload? memoryInfo = DeserializePayload<MemoryInfoPayload>(latestByType, TelemetryTypeIds.MemoryInfo);
         DiskUsagePayload? diskUsages = DeserializePayload<DiskUsagePayload>(latestByType, TelemetryTypeIds.DiskUsage);
         HardwareHealthPayload? hwHealth = DeserializePayload<HardwareHealthPayload>(latestByType, TelemetryTypeIds.HardwareHealth);
         PackageUpdatesPayload? packages = DeserializePayload<PackageUpdatesPayload>(latestByType, TelemetryTypeIds.PackageUpdates);
@@ -209,6 +210,12 @@ public sealed class MachineStateService : IMachineStateService
             OsVersion = osVersion,
             CpuUsage = cpuUsage,
             MemoryUsage = memoryUsage,
+            MemoryInfo = memoryInfo,
+            // Paired with the payload deliberately: the lookup window is seven days, so the swap and
+            // available figures need their own receipt time rather than the machine's last-seen time.
+            MemoryInfoReceivedAt = latestByType.TryGetValue(TelemetryTypeIds.MemoryInfo, out MachineTelemetry? memoryInfoRow)
+                ? memoryInfoRow.ServerReceivedAt
+                : null,
             DiskUsages = diskUsages,
             HardwareHealth = hwHealth,
             PackageUpdates = packages,

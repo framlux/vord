@@ -215,6 +215,15 @@ public partial class DatabaseRepository : IMachineStateRepository
             update = update
                 .Set(s => s.HasDiskHealthIssue, patch.HasDiskHealthIssue)
                 .Set(s => s.HasHardwareIssue, patch.HasHardwareIssue);
+
+            // Wear is the one hardware-health column that is last-known-good. smartctl exits
+            // non-zero — and so contributes no disk entry at all — exactly when a drive is failing,
+            // so writing null here would let one such report erase a known wear figure and return
+            // the machine to Healthy through the very failure the column exists to surface.
+            if (patch.MaxDiskWearoutPercent is not null)
+            {
+                update = update.Set(s => s.MaxDiskWearoutPercent, patch.MaxDiskWearoutPercent);
+            }
         }
 
         if (patch.HasPackageUpdates == true)
