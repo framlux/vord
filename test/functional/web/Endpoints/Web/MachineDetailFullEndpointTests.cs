@@ -204,7 +204,10 @@ public sealed class MachineDetailFullEndpointTests
         using DatabaseContext db = factory.CreateDbContext();
         (int tenantId, int userId, long machineId) = await SeedEnvironment(db);
 
-        DateTimeOffset memoryInfoReceivedAt = new(2026, 09, 17, 10, 30, 00, TimeSpan.Zero);
+        // Relative to now so the row stays inside the endpoint's seven-day recency window whatever
+        // day this runs, and offset from the CPU row so the assertion below can only pass if the
+        // response carries the memory record's own timestamp.
+        DateTimeOffset memoryInfoReceivedAt = DateTimeOffset.UtcNow.AddMinutes(-30);
 
         await db.InsertAsync(new MachineTelemetry
         {
