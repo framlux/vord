@@ -3,6 +3,7 @@
 // See LICENSE for details.
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
+import type { HandleFetch } from '@sveltejs/kit';
 
 // `dev` drives whether auto-set cookies are marked Secure. Default the test
 // suite to a dev build so the non-mock branch in `handle` runs without the
@@ -12,10 +13,11 @@ vi.mock('$env/dynamic/private', () => ({ env: { VORD_API_MOCK: 'false' } }));
 
 const getMeBootstrapMock = vi.fn();
 vi.mock('$lib/api/server', () => ({
+    API_BASE: 'http://backend:12233',
     createServerApiClient: () => ({ getMeBootstrap: getMeBootstrapMock })
 }));
 
-import { handle } from './hooks.server';
+import { handle, handleFetch } from './hooks.server';
 
 type CookieSet = { name: string; value: string; opts: Record<string, unknown> };
 
@@ -100,5 +102,99 @@ describe('hooks.server handle — vord_tenant auto-set cookie', () => {
         await handle({ event, resolve });
 
         expect(sets.find((s) => s.name === 'vord_csrf')).toBeUndefined();
+    });
+});
+
+// The api-server rejects a state-changing or antiforgery-minting request that does not arrive over
+// TLS, and in-cluster it is reached over plain http, so handleFetch tells it which scheme the
+// browser actually used. These cases pin that header to the browser's scheme and to the backend only.
+describe('hooks.server handleFetch — x-forwarded-proto for the backend', () => {
+    async function forwardedRequest(eventUrl: string, request: Request): Promise<Request> {
+        const downstream = vi.fn<typeof fetch>(async () => new Response('{}'));
+        const event = { url: new URL(eventUrl) } as unknown as Parameters<HandleFetch>[0]['event'];
+
+        await handleFetch({ event, request, fetch: downstream });
+
+        return downstream.mock.calls[0][0] as Request;
+    }
+
+    it('tells the backend the browser used https when the incoming request was https', async () => {
+        const forwarded = await forwardedRequest(
+            'https://app.vordfleet.dev/dashboard',
+            new Request('http://backend:12233/api/v1/auth/me')
+        );
+
+        expect(forwarded.headers.get('x-forwarded-proto')).toBe('https');
+    });
+
+    it('tells the backend the browser used http when the incoming request was plain http', async () => {
+        const forwarded = await forwardedRequest(
+            'http://localhost:5173/dashboard',
+            new Request('http://backend:12233/api/v1/auth/me')
+        );
+
+        expect(forwarded.headers.get('x-forwarded-proto')).toBe('http');
+    });
+
+    it('overwrites a pre-existing x-forwarded-proto instead of appending to it', async () => {
+        const forwarded = await forwardedRequest(
+            'http://localhost:5173/dashboard',
+            new Request('http://backend:12233/api/v1/auth/me', {
+                headers: { 'x-forwarded-proto': 'https' }
+            })
+        );
+
+        // An appended value would read "https, http"; the backend must see exactly the browser's scheme.
+        expect(forwarded.headers.get('x-forwarded-proto')).toBe('http');
+    });
+
+    it.each([
+        ['another internal service', 'https://billing.vordfleet.dev/v1/checkout'],
+        ['an external host', 'https://api.github.com/user'],
+        ['the backend host on a different port', 'http://backend:9999/api/v1/auth/me'],
+        ['a host that merely starts with the backend host', 'http://backend.evil.example:12233/api/v1/auth/me']
+    ])('does not add x-forwarded-proto to a request for %s', async (_label, url) => {
+        const request = new Request(url);
+
+        const forwarded = await forwardedRequest('https://app.vordfleet.dev/dashboard', request);
+
+        expect(forwarded.headers.has('x-forwarded-proto')).toBe(false);
+        expect(forwarded.url).toBe(request.url);
+    });
+
+    it('preserves the method, body and other headers of the backend request', async () => {
+        const forwarded = await forwardedRequest(
+            'https://app.vordfleet.dev/machines',
+            new Request('http://backend:12233/api/v1/machines/7', {
+                method: 'PUT',
+                headers: {
+                    'content-type': 'application/json',
+                    cookie: 'vord_auth=token; vord_tenant=7',
+                    'x-csrf-token': 'csrf-token-abc'
+                },
+                body: JSON.stringify({ name: 'web-01' })
+            })
+        );
+
+        expect(forwarded.method).toBe('PUT');
+        expect(forwarded.url).toBe('http://backend:12233/api/v1/machines/7');
+        expect(forwarded.headers.get('content-type')).toBe('application/json');
+        expect(forwarded.headers.get('cookie')).toBe('vord_auth=token; vord_tenant=7');
+        expect(forwarded.headers.get('x-csrf-token')).toBe('csrf-token-abc');
+        expect(await forwarded.text()).toBe('{"name":"web-01"}');
+    });
+
+    it('returns the response the backend produced', async () => {
+        const upstream = new Response('{"ok":true}', { status: 201 });
+        const downstream = vi.fn<typeof fetch>(async () => upstream);
+        const event = { url: new URL('https://app.vordfleet.dev/') } as unknown as Parameters<HandleFetch>[0]['event'];
+
+        const response = await handleFetch({
+            event,
+            request: new Request('http://backend:12233/api/v1/auth/me'),
+            fetch: downstream
+        });
+
+        expect(response).toBe(upstream);
     });
 });

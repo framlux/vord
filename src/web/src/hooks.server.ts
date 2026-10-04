@@ -2,10 +2,12 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
-import type { Handle } from '@sveltejs/kit';
+import type { Handle, HandleFetch } from '@sveltejs/kit';
 import { env } from '$env/dynamic/private';
 import { dev } from '$app/environment';
-import { createServerApiClient } from '$lib/api/server';
+import { API_BASE, createServerApiClient } from '$lib/api/server';
+
+const API_ORIGIN = new URL(API_BASE).origin;
 
 const MAX_CACHE_SIZE = 10_000;
 const SESSION_TTL_MS = 60_000;
@@ -147,4 +149,20 @@ export const handle: Handle = async ({ event, resolve }) => {
 	response.headers.set('X-Frame-Options', 'DENY');
 
 	return response;
+};
+
+// The api-server sits behind an SSL-terminating proxy and trusts X-Forwarded-Proto to learn that a
+// request was secure; its antiforgery cookie policy refuses to mint or validate tokens for a request
+// it believes is plain http. This pod reaches it over plain in-cluster http, so without this hook
+// every server-side fetch (the /auth/me bootstrap and every proxied browser mutation) looks insecure
+// to it. Tell the backend the scheme the browser actually used. The header is set, never appended,
+// so a value from the original request cannot be smuggled through, and it is not hardcoded to https
+// because a self-hosted deployment may legitimately run over plain http. Requests to any other
+// origin are left exactly as they were.
+export const handleFetch: HandleFetch = async ({ event, request, fetch }) => {
+	if (new URL(request.url).origin === API_ORIGIN) {
+		request.headers.set('x-forwarded-proto', event.url.protocol.replace(/:$/, ''));
+	}
+
+	return fetch(request);
 };

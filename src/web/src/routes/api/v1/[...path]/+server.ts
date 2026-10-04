@@ -5,6 +5,7 @@
 import { dev } from '$app/environment';
 import { env } from '$env/dynamic/private';
 import { error, json } from '@sveltejs/kit';
+import { API_BASE } from '$lib/api/server';
 import { exceedsPageSizeCeiling, matchFleetMachines, pageOfFleet, type MockFleetFilter } from '$lib/api/mock-fleet-query';
 import type { RequestHandler } from './$types';
 import {
@@ -34,8 +35,6 @@ import {
 // the request body to the real backend, returning the response verbatim. This keeps
 // the front-door origin clean (cookies stay first-party) without exposing the .NET
 // service directly to browsers.
-
-const API_BASE = env.API_BASE_URL ?? 'http://127.0.0.1:12233';
 
 function ok<T>(data: T): Response {
 	return json({ success: true, data, message: null, errors: null });

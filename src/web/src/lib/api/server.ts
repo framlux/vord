@@ -7,7 +7,9 @@ import { dev } from '$app/environment';
 import { ApiClient } from './client';
 import { MockApiClient } from './mock-client';
 
-const API_BASE = env.API_BASE_URL ?? 'http://127.0.0.1:12233';
+// The backend API base URL, shared by every server-side caller so the SSR client, the browser proxy
+// and the fetch hook agree on which origin is the backend.
+export const API_BASE = env.API_BASE_URL ?? 'http://127.0.0.1:12233';
 
 /**
  * Builds the double-submit antiforgery payload for {@link createServerApiClient} from the request's
