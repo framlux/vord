@@ -36,6 +36,7 @@
 		SubscriptionUpgraded: 'Subscription Upgraded',
 		SubscriptionDowngraded: 'Subscription Downgraded',
 		SubscriptionCanceled: 'Subscription Canceled',
+		EnterpriseAgreementApplied: 'Enterprise Agreement Applied',
 		RegistrationTokenCreated: 'Token Created',
 		RegistrationTokenRevoked: 'Token Revoked',
 		DataExportRequested: 'Data Export',
