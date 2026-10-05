@@ -16,6 +16,7 @@ using LinqToDB;
 using LinqToDB.Async;
 using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
+using NSubstitute.ClearExtensions;
 
 namespace Framlux.FleetManagement.Test.Services.Billing;
 
@@ -93,6 +94,8 @@ public sealed class EnterpriseAgreementHandlerTests
             ISubscriptionRepository spy = Substitute.For<ISubscriptionRepository>();
             spy.GetSubscriptionForTenantAsync(Arg.Any<int>(), Arg.Any<CancellationToken>())
                 .Returns(call => Repo.GetSubscriptionForTenantAsync(call.ArgAt<int>(0), call.ArgAt<CancellationToken>(1)));
+            spy.GetSubscriptionForUpdateAsync(Arg.Any<int>(), Arg.Any<CancellationToken>())
+                .Returns(call => Repo.GetSubscriptionForUpdateAsync(call.ArgAt<int>(0), call.ArgAt<CancellationToken>(1)));
             spy.ApplyEnterpriseSubscriptionAsync(Arg.Any<int>(), Arg.Any<int>(), Arg.Any<DateTimeOffset>(), Arg.Any<CancellationToken>())
                 .Returns(call => Repo.ApplyEnterpriseSubscriptionAsync(
                     call.ArgAt<int>(0), call.ArgAt<int>(1), call.ArgAt<DateTimeOffset>(2), call.ArgAt<CancellationToken>(3)));
@@ -330,7 +333,7 @@ public sealed class EnterpriseAgreementHandlerTests
     }
 
     [Test]
-    public async Task Apply_WhenTheAuditInsertFails_DoesNothingAfterCommit()
+    public async Task Apply_WhenTheAuditInsertFails_EnqueuesNothingAndLeavesNoRow()
     {
         using Harness h = new();
         IAuditLogRepository failingAudit = Substitute.For<IAuditLogRepository>();
@@ -343,11 +346,130 @@ public sealed class EnterpriseAgreementHandlerTests
 
         await Assert.That(await h.Repo.GetSubscriptionForTenantAsync(TenantId, CancellationToken.None)).IsNull();
         h.BackgroundJobs.DidNotReceive().Create(Arg.Any<Job>(), Arg.Any<IState>());
-        await h.Provisioner.DidNotReceive().RestoreForTierAsync(
-            Arg.Any<int>(),
-            Arg.Any<TenantSubscription?>(),
-            Arg.Any<SubscriptionTier>(),
-            Arg.Any<SubscriptionStatus>(),
+    }
+
+    /// <summary>
+    /// The restore is what billing-api's retry would never reach if it ran after the commit: the retry
+    /// finds the revision already applied and returns. Inside the transaction a failed restore takes
+    /// the tier write with it, so the retry applies the revision afresh and restores.
+    /// </summary>
+    [Test]
+    public async Task Apply_WhenTheRestoreFails_RollsEverythingBackAndARetryRestores()
+    {
+        using Harness h = new();
+        await h.SeedSubscriptionAsync(SubscriptionTier.Free);
+        h.Provisioner.RestoreForTierAsync(
+                Arg.Any<int>(), Arg.Any<TenantSubscription?>(), Arg.Any<SubscriptionTier>(), Arg.Any<SubscriptionStatus>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromException(new InvalidOperationException("rule store unavailable")));
+
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => h.Handler.ApplyAsync(Terms(revision: 1), CancellationToken.None));
+
+        TenantSubscription? afterFailure = await h.Repo.GetSubscriptionForTenantAsync(TenantId, CancellationToken.None);
+        await Assert.That(afterFailure!.Tier).IsEqualTo(SubscriptionTier.Free);
+        await Assert.That(afterFailure.AppliedAgreementRevision).IsNull();
+        await Assert.That(await h.Repo.GetOverrideForTenantAsync(TenantId, CancellationToken.None)).IsNull();
+        await Assert.That(await h.CountAuditAsync(AuditAction.EnterpriseAgreementApplied)).IsEqualTo(0);
+
+        h.Provisioner.ClearSubstitute(ClearOptions.All);
+        EnterpriseApplyOutcome retry = await h.Handler.ApplyAsync(Terms(revision: 1), CancellationToken.None);
+
+        await Assert.That(retry).IsEqualTo(EnterpriseApplyOutcome.Applied);
+        await h.Provisioner.Received(1).RestoreForTierAsync(
+            TenantId,
+            Arg.Is<TenantSubscription?>(p => (p != null) && (p.Tier == SubscriptionTier.Free)),
+            SubscriptionTier.Enterprise,
+            SubscriptionStatus.Active,
+            Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task Apply_WhenTheRestoreFails_StillInvalidatesTheSubscriptionCache()
+    {
+        using Harness h = new();
+        h.Provisioner.RestoreForTierAsync(
+                Arg.Any<int>(), Arg.Any<TenantSubscription?>(), Arg.Any<SubscriptionTier>(), Arg.Any<SubscriptionStatus>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromException(new InvalidOperationException("rule store unavailable")));
+        ISubscriptionRepository subscriptions = h.SpyOnSubscriptions();
+        EnterpriseAgreementHandler handler = h.BuildHandler(subscriptionRepo: subscriptions);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => handler.ApplyAsync(Terms(revision: 1), CancellationToken.None));
+
+        await subscriptions.Received(1).InvalidateSubscriptionCacheAsync(TenantId, Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task Apply_Applied_RestoresInsideTheTransactionAndWritesTheAuditRowLast()
+    {
+        using Harness h = new();
+        IDatabaseTransaction transaction = Substitute.For<IDatabaseTransaction>();
+        IDatabaseTransactionProvider transactionProvider = Substitute.For<IDatabaseTransactionProvider>();
+        transactionProvider.BeginTransactionAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult(transaction));
+        IAuditLogRepository audit = Substitute.For<IAuditLogRepository>();
+        EnterpriseAgreementHandler handler = h.BuildHandler(transactionProvider, auditLog: audit);
+
+        await handler.ApplyAsync(Terms(revision: 1), CancellationToken.None);
+
+        Received.InOrder(() =>
+        {
+            transactionProvider.BeginTransactionAsync(Arg.Any<CancellationToken>());
+            h.Provisioner.RestoreForTierAsync(
+                TenantId, Arg.Any<TenantSubscription?>(), SubscriptionTier.Enterprise, SubscriptionStatus.Active, Arg.Any<CancellationToken>());
+            audit.InsertAuditLogAsync(Arg.Any<AuditLogEntry>(), Arg.Any<CancellationToken>());
+            transaction.CommitAsync(Arg.Any<CancellationToken>());
+        });
+    }
+
+    /// <summary>
+    /// What the restore may do depends on the tier the tenant held a moment ago. A cached read can
+    /// still say Team after a deletion committed Free, so the row is locked and read from the database
+    /// inside the transaction, ahead of the write that destroys it.
+    /// </summary>
+    [Test]
+    public async Task Apply_ReadsThePriorRowLockedAndUncachedInsideTheTransaction()
+    {
+        using Harness h = new();
+        await h.SeedSubscriptionAsync(SubscriptionTier.Free);
+        ISubscriptionRepository subscriptions = h.SpyOnSubscriptions();
+        TenantSubscription staleCachedTeam = TestDataBuilder.BuildSubscription(tenantId: TenantId, tier: SubscriptionTier.Team);
+        subscriptions.GetSubscriptionForTenantAsync(TenantId, Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<TenantSubscription?>(staleCachedTeam));
+        IDatabaseTransaction transaction = Substitute.For<IDatabaseTransaction>();
+        IDatabaseTransactionProvider transactionProvider = Substitute.For<IDatabaseTransactionProvider>();
+        transactionProvider.BeginTransactionAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult(transaction));
+        EnterpriseAgreementHandler handler = h.BuildHandler(transactionProvider, subscriptions);
+
+        await handler.ApplyAsync(Terms(revision: 1), CancellationToken.None);
+
+        await h.Provisioner.Received(1).RestoreForTierAsync(
+            TenantId,
+            Arg.Is<TenantSubscription?>(p => (p != null) && (p.Tier == SubscriptionTier.Free)),
+            SubscriptionTier.Enterprise,
+            SubscriptionStatus.Active,
+            Arg.Any<CancellationToken>());
+        await subscriptions.DidNotReceive().GetSubscriptionForTenantAsync(Arg.Any<int>(), Arg.Any<CancellationToken>());
+        Received.InOrder(() =>
+        {
+            transactionProvider.BeginTransactionAsync(Arg.Any<CancellationToken>());
+            subscriptions.GetSubscriptionForUpdateAsync(TenantId, Arg.Any<CancellationToken>());
+            subscriptions.ApplyEnterpriseSubscriptionAsync(
+                TenantId, 1, Arg.Any<DateTimeOffset>(), Arg.Any<CancellationToken>());
+        });
+    }
+
+    [Test]
+    public async Task Apply_NoSubscriptionRow_HandsTheProvisionerNoPriorRow()
+    {
+        using Harness h = new();
+
+        await h.Handler.ApplyAsync(Terms(revision: 1), CancellationToken.None);
+
+        await h.Provisioner.Received(1).RestoreForTierAsync(
+            TenantId,
+            null,
+            SubscriptionTier.Enterprise,
+            SubscriptionStatus.Active,
             Arg.Any<CancellationToken>());
     }
 

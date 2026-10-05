@@ -63,57 +63,83 @@ public sealed class EnterpriseAgreementHandler : IEnterpriseAgreementHandler
         ArgumentNullException.ThrowIfNull(terms);
         Validate(terms);
 
-        // What the transition may restore depends on where the tenant is coming from, and the write
-        // below destroys that, so the prior row is read first.
-        TenantSubscription? prior = await _subscriptionRepo.GetSubscriptionForTenantAsync(terms.TenantId, ct);
-
         EnterpriseApplyOutcome outcome;
-        using (IDatabaseTransaction transaction = await _transactionProvider.BeginTransactionAsync(ct))
+        bool cacheMayHoldUncommittedState = false;
+        try
         {
-            outcome = await _subscriptionRepo.ApplyEnterpriseSubscriptionAsync(
-                terms.TenantId, terms.Revision, terms.TermEnd, ct);
-
-            if (outcome != EnterpriseApplyOutcome.Applied)
+            using (IDatabaseTransaction transaction = await _transactionProvider.BeginTransactionAsync(ct))
             {
-                _logger.LogInformation(
-                    "Enterprise agreement {AgreementId} revision {Revision} for tenant {TenantId} not applied: {Outcome}",
-                    terms.AgreementId, terms.Revision, terms.TenantId, outcome);
+                // What the transition may restore depends on where the tenant is coming from, and the
+                // write below destroys that. The row is locked before it is read, and the read skips the
+                // cache, so a downgrade that is committing at this moment has either finished and is
+                // what is read, or has not started writing and waits for this transaction.
+                TenantSubscription? prior = await _subscriptionRepo.GetSubscriptionForUpdateAsync(terms.TenantId, ct);
 
-                return outcome;
-            }
+                outcome = await _subscriptionRepo.ApplyEnterpriseSubscriptionAsync(
+                    terms.TenantId, terms.Revision, terms.TermEnd, ct);
 
-            await _overrideRepo.UpsertOverrideAsync(
-                terms.TenantId, terms.MachineLimit, terms.RetentionDays, terms.AlertRuleLimit,
-                terms.WebhookLimit, terms.MemberLimit, ct);
-
-            await _auditLog.InsertAuditLogAsync(AuditHelper.Create(
-                terms.TenantId, null, null,
-                AuditAction.EnterpriseAgreementApplied, AuditResourceType.Subscription,
-                terms.TenantId.ToString(),
-                new
+                if (outcome != EnterpriseApplyOutcome.Applied)
                 {
-                    terms.AgreementId,
-                    terms.Revision,
-                    terms.MachineLimit,
-                    terms.RetentionDays,
-                    terms.MemberLimit,
-                    terms.AlertRuleLimit,
-                    terms.WebhookLimit,
-                    terms.TermEnd,
-                },
-                null), ct);
+                    _logger.LogInformation(
+                        "Enterprise agreement {AgreementId} revision {Revision} for tenant {TenantId} not applied: {Outcome}",
+                        terms.AgreementId, terms.Revision, terms.TenantId, outcome);
 
-            await transaction.CommitAsync(ct);
+                    return outcome;
+                }
+
+                // Everything from here reads through the subscription cache on this transaction's
+                // connection, and so can leave an entry describing state that never commits.
+                cacheMayHoldUncommittedState = true;
+
+                await _overrideRepo.UpsertOverrideAsync(
+                    terms.TenantId, terms.MachineLimit, terms.RetentionDays, terms.AlertRuleLimit,
+                    terms.WebhookLimit, terms.MemberLimit, ct);
+
+                // Restoring inside the transaction is what makes a retry safe: if it fails, the tier
+                // write rolls back with it and the retry applies the revision afresh, instead of finding
+                // it already applied and never restoring.
+                await _provisioner.RestoreForTierAsync(
+                    terms.TenantId, prior, SubscriptionTier.Enterprise, SubscriptionStatus.Active, ct);
+
+                // Written last on purpose. A statement inside a PostgreSQL transaction that fails and is
+                // swallowed (the provisioner tolerates a concurrent seed's unique violation) leaves the
+                // transaction aborted, and committing it would silently roll back while reporting
+                // success. Another statement here turns that into a thrown error and a retry.
+                await _auditLog.InsertAuditLogAsync(AuditHelper.Create(
+                    terms.TenantId, null, null,
+                    AuditAction.EnterpriseAgreementApplied, AuditResourceType.Subscription,
+                    terms.TenantId.ToString(),
+                    new
+                    {
+                        terms.AgreementId,
+                        terms.Revision,
+                        terms.MachineLimit,
+                        terms.RetentionDays,
+                        terms.MemberLimit,
+                        terms.AlertRuleLimit,
+                        terms.WebhookLimit,
+                        terms.TermEnd,
+                    },
+                    null), ct);
+
+                await transaction.CommitAsync(ct);
+            }
+        }
+        finally
+        {
+            // The override write does not pass through the caching repository's mutators, so the
+            // cached entry (which also caches effective retention) is invalidated here, after the
+            // commit. It is also invalidated when the transaction rolled back, because the reads above
+            // may have cached the uncommitted Enterprise state. The token is not honoured: this undoes
+            // a side effect and must still happen when the request was cancelled.
+            if (cacheMayHoldUncommittedState)
+            {
+                await _subscriptionRepo.InvalidateSubscriptionCacheAsync(terms.TenantId, CancellationToken.None);
+            }
         }
 
-        // The override write does not pass through the caching repository's mutators, so the cached
-        // entry (which also caches effective retention) is invalidated here, after commit.
-        await _subscriptionRepo.InvalidateSubscriptionCacheAsync(terms.TenantId, ct);
         _reclassifyDispatcher.MarkPending(terms.TenantId);
         _reclassifyDispatcher.DispatchPending();
-
-        await _provisioner.RestoreForTierAsync(
-            terms.TenantId, prior, SubscriptionTier.Enterprise, SubscriptionStatus.Active, ct);
 
         _logger.LogInformation(
             "Enterprise agreement {AgreementId} revision {Revision} applied to tenant {TenantId}",
