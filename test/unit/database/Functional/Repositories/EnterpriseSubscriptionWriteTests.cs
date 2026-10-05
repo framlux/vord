@@ -7,6 +7,7 @@ using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Test.Infrastructure;
 using LinqToDB;
+using LinqToDB.Interceptors;
 using Microsoft.Extensions.Logging.Abstractions;
 
 namespace Framlux.FleetManagement.Test.Functional.DatabaseRepository;
@@ -91,6 +92,39 @@ public sealed class EnterpriseSubscriptionWriteTests
     }
 
     [Test]
+    public async Task UpdateSubscriptionPeriodEnd_TeamRow_StillUpdates()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        await SeedAsync(dbFactory, SubscriptionTier.Team);
+        Database.Repositories.DatabaseRepository repo = BuildRepository(dbFactory);
+
+        int updated = await repo.UpdateSubscriptionPeriodEndAsync(1, TermEnd);
+
+        TenantSubscription? row = await repo.GetSubscriptionForTenantAsync(1, CancellationToken.None);
+        await Assert.That(updated).IsEqualTo(1);
+        await Assert.That(row!.CurrentPeriodEnd).IsEqualTo(TermEnd);
+        await Assert.That(row.Tier).IsEqualTo(SubscriptionTier.Team);
+    }
+
+    [Test]
+    [Arguments(true)]
+    [Arguments(false)]
+    public async Task SetCancelAtPeriodEnd_TeamRow_StillUpdates(bool cancelAtPeriodEnd)
+    {
+        using TestDatabaseFactory dbFactory = new();
+        await SeedAsync(dbFactory, SubscriptionTier.Team);
+        Database.Repositories.DatabaseRepository repo = BuildRepository(dbFactory);
+        await repo.SetCancelAtPeriodEndAsync(1, cancelAtPeriodEnd == false);
+
+        int updated = await repo.SetCancelAtPeriodEndAsync(1, cancelAtPeriodEnd);
+
+        TenantSubscription? row = await repo.GetSubscriptionForTenantAsync(1, CancellationToken.None);
+        await Assert.That(updated).IsEqualTo(1);
+        await Assert.That(row!.CancelAtPeriodEnd).IsEqualTo(cancelAtPeriodEnd);
+        await Assert.That(row.Tier).IsEqualTo(SubscriptionTier.Team);
+    }
+
+    [Test]
     public async Task GetPaidSubscriptions_ExcludesEnterpriseFreeAndNone()
     {
         using TestDatabaseFactory dbFactory = new();
@@ -169,6 +203,42 @@ public sealed class EnterpriseSubscriptionWriteTests
         await Assert.That(row.CurrentPeriodEnd).IsEqualTo(TermEnd);
     }
 
+    /// <summary>
+    /// Two deliveries of the same revision can both read the row before either writes. The one that
+    /// loses the guarded update must still be told the revision is applied, because billing-api treats
+    /// that as success and a stale revision as a failure to investigate.
+    /// </summary>
+    [Test]
+    public async Task ApplyEnterprise_WhenTheSameRevisionLandedBetweenTheReadAndTheWrite_ReportsAlreadyApplied()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        Database.Repositories.DatabaseRepository repo = BuildRepository(dbFactory);
+        await repo.ApplyEnterpriseSubscriptionAsync(1, 2, TermEnd);
+        dbFactory.Context.AddInterceptor(new PreApplyReadInterceptor());
+
+        EnterpriseApplyOutcome outcome = await repo.ApplyEnterpriseSubscriptionAsync(1, 2, TermEnd.AddYears(5));
+
+        TenantSubscription? row = await repo.GetSubscriptionForTenantAsync(1, CancellationToken.None);
+        await Assert.That(outcome).IsEqualTo(EnterpriseApplyOutcome.AlreadyApplied);
+        await Assert.That(row!.AppliedAgreementRevision).IsEqualTo(2);
+        await Assert.That(row.CurrentPeriodEnd).IsEqualTo(TermEnd);
+    }
+
+    [Test]
+    public async Task ApplyEnterprise_WhenANewerRevisionLandedBetweenTheReadAndTheWrite_ReportsStaleRevision()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        Database.Repositories.DatabaseRepository repo = BuildRepository(dbFactory);
+        await repo.ApplyEnterpriseSubscriptionAsync(1, 3, TermEnd);
+        dbFactory.Context.AddInterceptor(new PreApplyReadInterceptor());
+
+        EnterpriseApplyOutcome outcome = await repo.ApplyEnterpriseSubscriptionAsync(1, 2, TermEnd.AddYears(5));
+
+        TenantSubscription? row = await repo.GetSubscriptionForTenantAsync(1, CancellationToken.None);
+        await Assert.That(outcome).IsEqualTo(EnterpriseApplyOutcome.StaleRevision);
+        await Assert.That(row!.AppliedAgreementRevision).IsEqualTo(3);
+    }
+
     [Test]
     public async Task UpsertOverride_WritesMemberLimit_AndBatchReadReturnsIt()
     {
@@ -183,5 +253,26 @@ public sealed class EnterpriseSubscriptionWriteTests
         await Assert.That(overrides.Count).IsEqualTo(2);
         await Assert.That(overrides.Single(o => o.TenantId == 1).MemberLimit).IsEqualTo(75);
         await Assert.That(overrides.Single(o => o.TenantId == 2).MemberLimit).IsEqualTo(int.MaxValue);
+    }
+
+    /// <summary>
+    /// Makes the first subscription read describe the row as it was before the competing apply: no
+    /// agreement revision recorded. The database already holds the competitor's revision, which is
+    /// exactly what a request sees when the other apply commits between its read and its write.
+    /// </summary>
+    private sealed class PreApplyReadInterceptor : EntityServiceInterceptor
+    {
+        private bool _applied;
+
+        public override object EntityCreated(EntityCreatedEventData eventData, object entity)
+        {
+            if ((_applied == false) && (entity is TenantSubscription subscription))
+            {
+                _applied = true;
+                subscription.AppliedAgreementRevision = null;
+            }
+
+            return entity;
+        }
     }
 }

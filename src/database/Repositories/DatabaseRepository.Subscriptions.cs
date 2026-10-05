@@ -211,6 +211,20 @@ public partial class DatabaseRepository : ISubscriptionRepository
             .Set(s => s.UpdatedAt, now)
             .UpdateAsync(cancellationToken);
 
-        return updated > 0 ? EnterpriseApplyOutcome.Applied : EnterpriseApplyOutcome.StaleRevision;
+        if (updated > 0)
+        {
+            return EnterpriseApplyOutcome.Applied;
+        }
+
+        // The guarded update matched nothing, so another apply moved the row after the read above. Whether
+        // that was this same revision (a duplicate delivery racing its twin) or a newer one decides what
+        // the caller is told: billing-api treats already-applied as success but a stale revision as a
+        // failure to investigate.
+        int? appliedNow = await _db.TenantSubscriptions
+            .Where(s => s.TenantId == tenantId)
+            .Select(s => s.AppliedAgreementRevision)
+            .FirstOrDefaultAsync(cancellationToken);
+
+        return (appliedNow == revision) ? EnterpriseApplyOutcome.AlreadyApplied : EnterpriseApplyOutcome.StaleRevision;
     }
 }
