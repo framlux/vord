@@ -28,6 +28,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using NSubstitute;
+using Npgsql;
 using StackExchange.Redis;
 
 namespace Framlux.FleetManagement.Test.Integration.Repositories;
@@ -291,7 +292,67 @@ public sealed class SubscriptionRowLockLiveTests
         await Assert.That(await applyDb.AuditLog.CountAsync(a => (a.TenantId == tenantId) && (a.Action == AuditAction.SubscriptionDowngraded))).IsEqualTo(0);
     }
 
+    /// <summary>
+    /// The provisioner tolerates a concurrent seed's unique violation, but inside the apply's
+    /// transaction that violation aborts it, and PostgreSQL then lets COMMIT return as though it had
+    /// succeeded. The audit row, written after the restore, is what makes the apply fail instead.
+    /// </summary>
+    [Test]
+    public async Task Apply_WhenTheRestoreSwallowsAUniqueViolation_FailsRatherThanCommittingASilentRollback()
+    {
+        using DatabaseContext db = CreateContext();
+        int tenantId = await SeedTenantAsync(db, SubscriptionTier.Team);
+        DatabaseRepository repo = new(db, NullLogger<DatabaseRepository>.Instance);
+        IBuiltInAlertRuleProvisioner provisioner = Substitute.For<IBuiltInAlertRuleProvisioner>();
+        provisioner.RestoreForTierAsync(
+                Arg.Any<int>(), Arg.Any<TenantSubscription?>(), Arg.Any<SubscriptionTier>(), Arg.Any<SubscriptionStatus>(), Arg.Any<CancellationToken>())
+            .Returns(async _ =>
+            {
+                await repo.InsertAlertRulesAsync([BuiltInRule(tenantId)], CancellationToken.None);
+                try
+                {
+                    await repo.InsertAlertRulesAsync([BuiltInRule(tenantId)], CancellationToken.None);
+                }
+                catch (PostgresException ex) when (ex.SqlState == "23505")
+                {
+                    // Swallowed exactly as the provisioner swallows it.
+                }
+            });
+        EnterpriseAgreementHandler handler = BuildAgreementHandler(repo, repo, provisioner);
+
+        PostgresException? failure = await Assert.ThrowsAsync<PostgresException>(
+            () => handler.ApplyAsync(Terms(tenantId, revision: 1), CancellationToken.None));
+
+        TenantSubscription? row = await repo.GetSubscriptionForTenantAsync(tenantId, CancellationToken.None);
+        await Assert.That(failure!.SqlState).IsEqualTo("25P02");
+        await Assert.That(row!.Tier).IsEqualTo(SubscriptionTier.Team);
+        await Assert.That(row.AppliedAgreementRevision).IsNull();
+        await Assert.That(await repo.GetOverrideForTenantAsync(tenantId, CancellationToken.None)).IsNull();
+        await Assert.That(await db.AlertRules.CountAsync(r => r.TenantId == tenantId)).IsEqualTo(0);
+    }
+
     // ========== Helpers ==========
+
+    private static AlertRule BuiltInRule(int tenantId)
+    {
+        return new AlertRule
+        {
+            TenantId = tenantId,
+            Name = "Live built-in rule",
+            Metric = AlertMetric.CpuUsage,
+            Operator = AlertOperator.GreaterThan,
+            Threshold = 90m,
+            DurationMinutes = 0,
+            Severity = AlertSeverity.Warning,
+            IsEnabled = true,
+            NotifyEmail = true,
+            NotifyWebhook = false,
+            IsCustom = false,
+            CreatedByUserId = 1,
+            CreatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow,
+        };
+    }
 
     private static CancellationTokenSource NewFailsafe()
     {
