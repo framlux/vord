@@ -53,6 +53,20 @@ public interface ISubscriptionRepository
     Task<TenantSubscription?> GetSubscriptionForTenantAsync(int tenantId, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Locks the tenant's subscription row until the surrounding transaction ends, then reads it from
+    /// the database. A caching decorator never serves or fills this read. Anything that decides what to
+    /// do from the tier it reads, and then writes on that decision, calls this first inside its
+    /// transaction: a writer that arrives meanwhile (an agreement being applied, a Stripe webhook) waits
+    /// for the lock, so what was read is still true when the transaction commits. The lock is a
+    /// <c>FOR UPDATE</c> row lock on PostgreSQL and a no-op on SQLite, which has one writer at a time.
+    /// Must run inside the caller's transaction.
+    /// </summary>
+    /// <param name="tenantId">The tenant whose subscription row is locked and read.</param>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    /// <returns>The subscription as last committed (or as this transaction has changed it), or null when the tenant has none.</returns>
+    Task<TenantSubscription?> GetSubscriptionForUpdateAsync(int tenantId, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Gets the tenant's effective retention days: the per-tenant override retention when present,
     /// otherwise the tier default, falling back to one day when neither is resolvable. Served from the
     /// same short-TTL cache entry as the subscription on the caching decorator, so the telemetry ingest

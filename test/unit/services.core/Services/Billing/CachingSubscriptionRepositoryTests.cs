@@ -497,4 +497,42 @@ public sealed class CachingSubscriptionRepositoryTests
         await Assert.That(cancelUpdated).IsEqualTo(0);
         await inner.Received(3).GetSubscriptionForTenantAsync(23, Arg.Any<CancellationToken>());
     }
+
+    [Test]
+    public async Task GetSubscriptionForUpdate_AlwaysReadsTheDatabase_AndNeverFillsOrServesTheCache()
+    {
+        // Intent: a locking read exists to see the committed row and to run inside a transaction that
+        // may roll back, so a cached copy must neither answer it nor be created by it.
+        ISubscriptionRepository inner = Substitute.For<ISubscriptionRepository>();
+        TenantSubscription locked = BuildSubscription(24);
+        inner.GetSubscriptionForUpdateAsync(24, Arg.Any<CancellationToken>()).Returns(locked);
+        inner.GetSubscriptionForTenantAsync(24, Arg.Any<CancellationToken>())
+            .Returns(BuildSubscription(24, SubscriptionStatus.PastDue));
+        IConnectionMultiplexer redis = FakeRedisConnection.Create();
+        CachingSubscriptionRepository repo = Create(inner, redis);
+        await repo.GetSubscriptionForTenantAsync(24, CancellationToken.None);
+
+        TenantSubscription? first = await repo.GetSubscriptionForUpdateAsync(24, CancellationToken.None);
+        TenantSubscription? second = await repo.GetSubscriptionForUpdateAsync(24, CancellationToken.None);
+
+        await Assert.That(first).IsSameReferenceAs(locked);
+        await Assert.That(second).IsSameReferenceAs(locked);
+        await inner.Received(2).GetSubscriptionForUpdateAsync(24, Arg.Any<CancellationToken>());
+        await inner.Received(1).GetSubscriptionForTenantAsync(24, Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task GetSubscriptionForUpdate_NoRow_ReturnsNullAndCachesNothing()
+    {
+        ISubscriptionRepository inner = Substitute.For<ISubscriptionRepository>();
+        inner.GetSubscriptionForUpdateAsync(25, Arg.Any<CancellationToken>()).Returns((TenantSubscription?)null);
+        IConnectionMultiplexer redis = FakeRedisConnection.Create();
+        CachingSubscriptionRepository repo = Create(inner, redis);
+
+        TenantSubscription? locked = await repo.GetSubscriptionForUpdateAsync(25, CancellationToken.None);
+        await repo.GetSubscriptionForTenantAsync(25, CancellationToken.None);
+
+        await Assert.That(locked).IsNull();
+        await inner.Received(1).GetSubscriptionForTenantAsync(25, Arg.Any<CancellationToken>());
+    }
 }

@@ -125,6 +125,37 @@ public sealed class EnterpriseSubscriptionWriteTests
     }
 
     [Test]
+    [Arguments(SubscriptionTier.Free)]
+    [Arguments(SubscriptionTier.Team)]
+    [Arguments(SubscriptionTier.Enterprise)]
+    public async Task GetSubscriptionForUpdate_ReturnsTheCommittedRowWithoutChangingIt(SubscriptionTier tier)
+    {
+        using TestDatabaseFactory dbFactory = new();
+        await SeedAsync(dbFactory, tier);
+        Database.Repositories.DatabaseRepository repo = BuildRepository(dbFactory);
+
+        using (IDatabaseTransaction transaction = await repo.BeginTransactionAsync(CancellationToken.None))
+        {
+            TenantSubscription? locked = await repo.GetSubscriptionForUpdateAsync(1, CancellationToken.None);
+
+            await Assert.That(locked).IsNotNull();
+            await Assert.That(locked!.Tier).IsEqualTo(tier);
+            await Assert.That(locked.Status).IsEqualTo(SubscriptionStatus.Active);
+        }
+    }
+
+    [Test]
+    public async Task GetSubscriptionForUpdate_NoRow_ReturnsNull()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        Database.Repositories.DatabaseRepository repo = BuildRepository(dbFactory);
+
+        TenantSubscription? locked = await repo.GetSubscriptionForUpdateAsync(1, CancellationToken.None);
+
+        await Assert.That(locked).IsNull();
+    }
+
+    [Test]
     public async Task GetPaidSubscriptions_ExcludesEnterpriseFreeAndNone()
     {
         using TestDatabaseFactory dbFactory = new();

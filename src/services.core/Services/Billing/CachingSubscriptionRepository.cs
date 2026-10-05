@@ -78,6 +78,14 @@ public sealed class CachingSubscriptionRepository : ISubscriptionRepository
     }
 
     /// <inheritdoc/>
+    public async Task<TenantSubscription?> GetSubscriptionForUpdateAsync(int tenantId, CancellationToken cancellationToken = default)
+    {
+        // A locking read has to see the database, and an entry cached from inside the caller's
+        // transaction could outlive a rollback, so this neither reads nor fills the cache.
+        return await _inner.GetSubscriptionForUpdateAsync(tenantId, cancellationToken);
+    }
+
+    /// <inheritdoc/>
     public async Task<int> GetEffectiveRetentionDaysAsync(int tenantId, CancellationToken cancellationToken = default)
     {
         CachedSubscriptionEntry entry = await GetOrLoadEntryAsync(tenantId, cancellationToken);

@@ -6,6 +6,7 @@ using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using LinqToDB;
 using LinqToDB.Async;
+using LinqToDB.Data;
 using LinqToDB.Linq;
 using Microsoft.Extensions.Logging;
 
@@ -96,6 +97,25 @@ public partial class DatabaseRepository : ISubscriptionRepository
         TenantSubscription? subscription = await _db.TenantSubscriptions
             .Where(s => s.TenantId == tenantId)
             .FirstOrDefaultAsync(cancellationToken);
+
+        return subscription;
+    }
+
+    /// <inheritdoc/>
+    public async Task<TenantSubscription?> GetSubscriptionForUpdateAsync(int tenantId, CancellationToken cancellationToken = default)
+    {
+        // The lock and the read are separate statements. Under READ COMMITTED the read starts after the
+        // lock is held, so it sees whatever the previous holder committed, which a single locking
+        // SELECT would not give the caller's later statements either.
+        if (_db.DataProvider.Name.Contains("PostgreSQL"))
+        {
+            await _db.ExecuteAsync(
+                $"SELECT 1 FROM \"{TableNames.TenantSubscriptions}\" WHERE \"TenantId\" = @tenantId FOR UPDATE",
+                cancellationToken,
+                new DataParameter("@tenantId", tenantId));
+        }
+
+        TenantSubscription? subscription = await GetSubscriptionForTenantAsync(tenantId, cancellationToken);
 
         return subscription;
     }
