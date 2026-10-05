@@ -169,21 +169,35 @@ public sealed class DowngradeSubscriptionEndpoint : Endpoint<DowngradeSubscripti
         using IDatabaseTransaction transaction = await _transactionProvider.BeginTransactionAsync(ct);
 
         // Proactively update local subscription to avoid stale data before webhook arrives
-        await _subscriptionRepository.UpdateSubscriptionStateAsync(tenantId, SubscriptionTier.Pro, SubscriptionStatus.Active, clearCurrentPeriodEnd: true, cancellationToken: ct);
+        int updated = await _subscriptionRepository.UpdateSubscriptionStateAsync(tenantId, SubscriptionTier.Pro, SubscriptionStatus.Active, clearCurrentPeriodEnd: true, cancellationToken: ct);
+        if (updated == 0)
+        {
+            // The write refuses Enterprise rows in SQL, so no row changing means an agreement was
+            // applied after the gated read. Leaving without a commit rolls back, and nothing below may
+            // run: the Team-only cleanup would otherwise disable an Enterprise tenant's resources.
+            _logger.LogWarning(
+                "Team->Pro downgrade for tenant {TenantId} changed no subscription; refusing it", tenantId);
+            await BillingEndpointGuards.RefuseEnterpriseAppliedMeanwhileAsync(HttpContext, ct);
+
+            return;
+        }
 
         await _auditLog.InsertAuditLogAsync(AuditHelper.Create(
             tenantId, null, null,
             AuditAction.SubscriptionDowngradeRequested, AuditResourceType.Subscription,
             tenantId.ToString(), "Immediate downgrade from Team to Pro", null), ct);
 
+        // Freeze the Team-only resources in the same transaction as the tier change. The tier write
+        // holds the subscription row's lock until the commit, so an agreement being applied waits for
+        // the freeze to finish instead of landing between a committed Pro tier and a cleanup that
+        // would then hit an Enterprise tenant.
+        await _downgradeCleanupService.CleanupForProTierAsync(tenantId, ct);
+
         await transaction.CommitAsync(ct);
 
         // Post-commit: the immediate Team-to-Pro downgrade narrows effective retention, so the
         // surviving telemetry is reclassified. Queued here rather than inside the transaction above.
         _reclassifyDispatcher.DispatchPending();
-
-        // Clean up Team-only resources after the transaction commits
-        await _downgradeCleanupService.CleanupForProTierAsync(tenantId, ct);
 
         // Swap the Stripe price (best effort, webhook will also fire)
         Tenant? tenant = await _tenantRepository.GetTenantByIdAsync(tenantId, ct);

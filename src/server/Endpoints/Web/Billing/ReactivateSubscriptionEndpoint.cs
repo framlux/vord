@@ -87,7 +87,17 @@ public sealed class ReactivateSubscriptionEndpoint : EndpointWithoutRequest<ApiR
         using IDatabaseTransaction transaction = await _transactionProvider.BeginTransactionAsync(ct);
 
         // Reactivate by reverting to Free tier with Active status
-        await _subscriptionRepository.UpdateSubscriptionStateAsync(tenantId, SubscriptionTier.Free, SubscriptionStatus.Active, clearCurrentPeriodEnd: true, cancellationToken: ct);
+        int updated = await _subscriptionRepository.UpdateSubscriptionStateAsync(tenantId, SubscriptionTier.Free, SubscriptionStatus.Active, clearCurrentPeriodEnd: true, cancellationToken: ct);
+        if (updated == 0)
+        {
+            // The write refuses Enterprise rows in SQL, so no row changing means an agreement was
+            // applied after the gated read. Leaving without a commit rolls back.
+            _logger.LogWarning(
+                "Reactivation for tenant {TenantId} changed no subscription; refusing it", tenantId);
+            await BillingEndpointGuards.RefuseEnterpriseAppliedMeanwhileAsync(HttpContext, ct);
+
+            return;
+        }
 
         await _auditLog.InsertAuditLogAsync(AuditHelper.Create(
             tenantId, null, null,

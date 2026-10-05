@@ -97,7 +97,17 @@ public sealed class CancelSubscriptionEndpoint : EndpointWithoutRequest<ApiRespo
         {
             using IDatabaseTransaction transaction = await _transactionProvider.BeginTransactionAsync(ct);
 
-            await _subscriptionRepository.UpdateSubscriptionStateAsync(tenantId, tier: null, SubscriptionStatus.Canceled, cancellationToken: ct);
+            int updated = await _subscriptionRepository.UpdateSubscriptionStateAsync(tenantId, tier: null, SubscriptionStatus.Canceled, cancellationToken: ct);
+            if (updated == 0)
+            {
+                // The write refuses Enterprise rows in SQL, so no row changing means an agreement was
+                // applied after the gated read. Leaving without a commit rolls back.
+                _logger.LogWarning(
+                    "Free tier cancellation for tenant {TenantId} changed no subscription; refusing it", tenantId);
+                await BillingEndpointGuards.RefuseEnterpriseAppliedMeanwhileAsync(HttpContext, ct);
+
+                return;
+            }
 
             await _auditLog.InsertAuditLogAsync(AuditHelper.Create(
                 tenantId, null, null,

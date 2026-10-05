@@ -66,4 +66,15 @@ internal static class BillingEndpointGuards
 
         return true;
     }
+
+    /// <summary>
+    /// Refuses a self-serve billing change whose write matched no subscription row. The gated read
+    /// saw a customer-changeable subscription, so a write that then finds nothing to update means an
+    /// agreement was applied between the read (which may have been served from the cache) and the
+    /// write. The caller must have left its transaction uncommitted so nothing it did survives.
+    /// </summary>
+    internal static async Task RefuseEnterpriseAppliedMeanwhileAsync(HttpContext httpContext, CancellationToken ct)
+    {
+        await httpContext.SendApiErrorAsync(StatusCodes.Status409Conflict, EnterpriseAgreementMessage, ct);
+    }
 }
