@@ -108,15 +108,30 @@ public class BillingWebhookHandlerTests
         return count;
     }
 
+    /// <summary>
+    /// A transaction provider whose transaction is a substitute, so a test can see where the commit
+    /// falls among the handler's other calls. The writes still reach the database, outside any
+    /// transaction, which is all these ordering tests need.
+    /// </summary>
+    private static (IDatabaseTransaction Transaction, IDatabaseTransactionProvider Provider) BuildObservableTransaction()
+    {
+        IDatabaseTransaction transaction = Substitute.For<IDatabaseTransaction>();
+        IDatabaseTransactionProvider provider = Substitute.For<IDatabaseTransactionProvider>();
+        provider.BeginTransactionAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult(transaction));
+
+        return (transaction, provider);
+    }
+
     private static BillingWebhookHandler CreateHandler(
         TestDatabaseFactory dbFactory,
         IDowngradeCleanupService? cleanupService = null,
-        IBuiltInAlertRuleProvisioner? provisioner = null)
+        IBuiltInAlertRuleProvisioner? provisioner = null,
+        IDatabaseTransactionProvider? transactionProvider = null)
     {
         DatabaseRepository repo = new(dbFactory.Context, new NullLogger<DatabaseRepository>());
 
         return new BillingWebhookHandler(
-            repo,
+            transactionProvider ?? repo,
             repo,
             repo,
             provisioner ?? Substitute.For<IBuiltInAlertRuleProvisioner>(),
@@ -529,41 +544,129 @@ public class BillingWebhookHandlerTests
     }
 
     /// <summary>
-    /// The cleanup opens its own transaction, so running it inside the handler's would nest one write
-    /// set inside another and roll the freeze back with the tier change if the outer commit failed.
+    /// The freeze must run inside the handler's transaction. The tier write holds the subscription
+    /// row's lock until the commit, so an agreement being applied waits for the freeze; run after the
+    /// commit, the freeze could land on a tenant that became Enterprise in between.
     /// </summary>
     [Test]
-    public async Task HandleDowngradeToProAsync_FreezesStrictlyAfterTheCommit()
+    public async Task HandleDowngradeToProAsync_FreezesInsideTheTransactionBeforeTheCommit()
     {
         using TestDatabaseFactory dbFactory = new();
         await SeedTierFeatureLimitsAsync(dbFactory.Context);
         TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 1, tier: SubscriptionTier.Team);
         sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
-
-        DatabaseRepository repo = new(dbFactory.Context, new NullLogger<DatabaseRepository>());
-        IDatabaseTransaction transaction = Substitute.For<IDatabaseTransaction>();
-        IDatabaseTransactionProvider transactionProvider = Substitute.For<IDatabaseTransactionProvider>();
-        transactionProvider.BeginTransactionAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult(transaction));
-
+        (IDatabaseTransaction transaction, IDatabaseTransactionProvider transactionProvider) = BuildObservableTransaction();
         IDowngradeCleanupService cleanupService = Substitute.For<IDowngradeCleanupService>();
-
-        BillingWebhookHandler handler = new(
-            transactionProvider,
-            repo,
-            repo,
-            Substitute.For<IBuiltInAlertRuleProvisioner>(),
-            cleanupService,
-            new RetentionReclassifyDispatcher(
-                Substitute.For<IBackgroundJobClient>(), NullLogger<RetentionReclassifyDispatcher>.Instance),
-            NullLogger<BillingWebhookHandler>.Instance);
+        BillingWebhookHandler handler = CreateHandler(dbFactory, cleanupService: cleanupService, transactionProvider: transactionProvider);
 
         await handler.HandleDowngradeToProAsync(1, CancellationToken.None);
 
         Received.InOrder(() =>
         {
-            transaction.CommitAsync(Arg.Any<CancellationToken>());
             cleanupService.CleanupForProTierAsync(1, Arg.Any<CancellationToken>());
+            transaction.CommitAsync(Arg.Any<CancellationToken>());
         });
+    }
+
+    [Test]
+    public async Task HandleDowngradeToProAsync_WhenTheFreezeFails_LeavesTheTierUntouched()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        await SeedTierFeatureLimitsAsync(dbFactory.Context);
+        TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 1, tier: SubscriptionTier.Team);
+        sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
+        IDowngradeCleanupService cleanupService = Substitute.For<IDowngradeCleanupService>();
+        cleanupService.CleanupForProTierAsync(1, Arg.Any<CancellationToken>())
+            .Returns(Task.FromException(new InvalidOperationException("freeze failed")));
+        BillingWebhookHandler handler = CreateHandler(dbFactory, cleanupService: cleanupService);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => handler.HandleDowngradeToProAsync(1, CancellationToken.None));
+
+        TenantSubscription? row = await dbFactory.Context.TenantSubscriptions.FirstOrDefaultAsync(s => s.TenantId == 1);
+        await Assert.That(row!.Tier).IsEqualTo(SubscriptionTier.Team);
+        await Assert.That(await CountAuditRowsAsync(dbFactory, AuditAction.SubscriptionDowngraded)).IsEqualTo(0);
+    }
+
+    /// <summary>
+    /// Trimming machines is irreversible, so it runs before the commit, and the cached API keys of
+    /// the trimmed machines are only evicted after it: evicting earlier lets a request that still sees
+    /// the machine as active cache its key again.
+    /// </summary>
+    [Test]
+    public async Task HandleSubscriptionDeletedAsync_CleansUpBeforeTheCommitAndEvictsKeysAfterIt()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        await SeedTierFeatureLimitsAsync(dbFactory.Context);
+        TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 1, tier: SubscriptionTier.Team);
+        sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
+        (IDatabaseTransaction transaction, IDatabaseTransactionProvider transactionProvider) = BuildObservableTransaction();
+        IReadOnlyList<string> trimmed = ["key-hash-1", "key-hash-2"];
+        IDowngradeCleanupService cleanupService = Substitute.For<IDowngradeCleanupService>();
+        cleanupService.CleanupForFreeTierAsync(1, Arg.Any<CancellationToken>()).Returns(Task.FromResult(trimmed));
+        BillingWebhookHandler handler = CreateHandler(dbFactory, cleanupService: cleanupService, transactionProvider: transactionProvider);
+
+        await handler.HandleSubscriptionDeletedAsync(1, CancellationToken.None);
+
+        Received.InOrder(() =>
+        {
+            cleanupService.CleanupForFreeTierAsync(1, Arg.Any<CancellationToken>());
+            transaction.CommitAsync(Arg.Any<CancellationToken>());
+            cleanupService.EvictApiKeysAsync(trimmed, Arg.Any<CancellationToken>());
+        });
+    }
+
+    [Test]
+    public async Task HandleAccountCanceledAsync_CleansUpBeforeTheCommitAndEvictsKeysAfterIt()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        await SeedTierFeatureLimitsAsync(dbFactory.Context);
+        TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 1, tier: SubscriptionTier.Team);
+        sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
+        (IDatabaseTransaction transaction, IDatabaseTransactionProvider transactionProvider) = BuildObservableTransaction();
+        IReadOnlyList<string> trimmed = ["key-hash-1"];
+        IDowngradeCleanupService cleanupService = Substitute.For<IDowngradeCleanupService>();
+        cleanupService.CleanupForFreeTierAsync(1, Arg.Any<CancellationToken>()).Returns(Task.FromResult(trimmed));
+        BillingWebhookHandler handler = CreateHandler(dbFactory, cleanupService: cleanupService, transactionProvider: transactionProvider);
+
+        await handler.HandleAccountCanceledAsync(1, CancellationToken.None);
+
+        Received.InOrder(() =>
+        {
+            cleanupService.CleanupForFreeTierAsync(1, Arg.Any<CancellationToken>());
+            transaction.CommitAsync(Arg.Any<CancellationToken>());
+            cleanupService.EvictApiKeysAsync(trimmed, Arg.Any<CancellationToken>());
+        });
+    }
+
+    /// <summary>
+    /// The tier change and the cleanup are one unit. If the cleanup fails the tier must not have
+    /// changed, so the redelivered webhook runs the whole thing again instead of finding a tier that
+    /// is already Free and a tenant whose machines were never trimmed.
+    /// </summary>
+    [Test]
+    [Arguments(true)]
+    [Arguments(false)]
+    public async Task HandleFreeTierReversion_WhenTheCleanupFails_LeavesTheTierAndAuditUntouched(bool accountCanceled)
+    {
+        using TestDatabaseFactory dbFactory = new();
+        await SeedTierFeatureLimitsAsync(dbFactory.Context);
+        TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 1, tier: SubscriptionTier.Team);
+        sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
+        IDowngradeCleanupService cleanupService = Substitute.For<IDowngradeCleanupService>();
+        cleanupService.CleanupForFreeTierAsync(1, Arg.Any<CancellationToken>())
+            .Returns(Task.FromException<IReadOnlyList<string>>(new InvalidOperationException("cleanup failed")));
+        BillingWebhookHandler handler = CreateHandler(dbFactory, cleanupService: cleanupService);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => accountCanceled
+            ? handler.HandleAccountCanceledAsync(1, CancellationToken.None)
+            : handler.HandleSubscriptionDeletedAsync(1, CancellationToken.None));
+
+        TenantSubscription? row = await dbFactory.Context.TenantSubscriptions.FirstOrDefaultAsync(s => s.TenantId == 1);
+        await Assert.That(row!.Tier).IsEqualTo(SubscriptionTier.Team);
+        await Assert.That(row.Status).IsEqualTo(SubscriptionStatus.Active);
+        await Assert.That(await CountAuditRowsAsync(dbFactory, AuditAction.SubscriptionDowngraded)).IsEqualTo(0);
+        await cleanupService.DidNotReceive().EvictApiKeysAsync(Arg.Any<IReadOnlyList<string>>(), Arg.Any<CancellationToken>());
     }
 
     /// <summary>
@@ -585,6 +688,30 @@ public class BillingWebhookHandlerTests
         await handler.HandleTierCorrectionAsync(1, SubscriptionTier.Pro, CancellationToken.None);
 
         await cleanupService.Received(1).CleanupForProTierAsync(1, Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task HandleTierCorrectionAsync_ToPro_FreezesBeforeTheCommitAndRestoresAfterIt()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        await SeedTierFeatureLimitsAsync(dbFactory.Context);
+        TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 1, tier: SubscriptionTier.Team);
+        sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
+        (IDatabaseTransaction transaction, IDatabaseTransactionProvider transactionProvider) = BuildObservableTransaction();
+        IDowngradeCleanupService cleanupService = Substitute.For<IDowngradeCleanupService>();
+        IBuiltInAlertRuleProvisioner provisioner = Substitute.For<IBuiltInAlertRuleProvisioner>();
+        BillingWebhookHandler handler = CreateHandler(
+            dbFactory, cleanupService: cleanupService, provisioner: provisioner, transactionProvider: transactionProvider);
+
+        await handler.HandleTierCorrectionAsync(1, SubscriptionTier.Pro, CancellationToken.None);
+
+        Received.InOrder(() =>
+        {
+            cleanupService.CleanupForProTierAsync(1, Arg.Any<CancellationToken>());
+            transaction.CommitAsync(Arg.Any<CancellationToken>());
+            provisioner.RestoreForTierAsync(
+                1, Arg.Any<TenantSubscription?>(), SubscriptionTier.Pro, SubscriptionStatus.Active, Arg.Any<CancellationToken>());
+        });
     }
 
     /// <summary>

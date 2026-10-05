@@ -82,7 +82,7 @@ public sealed class DowngradeCleanupService : IDowngradeCleanupService
     }
 
     /// <inheritdoc/>
-    public async Task CleanupForFreeTierAsync(int tenantId, CancellationToken ct)
+    public async Task<IReadOnlyList<string>> CleanupForFreeTierAsync(int tenantId, CancellationToken ct)
     {
         // Disable custom OIDC configuration
         await _tenantRepo.DisableTenantOidcConfigAsync(tenantId, ct);
@@ -107,23 +107,38 @@ public sealed class DowngradeCleanupService : IDowngradeCleanupService
                 integrationsDisabled, tenantId);
         }
 
-        await TrimMachinesToFreeLimitAsync(tenantId, ct);
+        IReadOnlyList<string> trimmedKeyHashes = await TrimMachinesToFreeLimitAsync(tenantId, ct);
+
+        return trimmedKeyHashes;
+    }
+
+    /// <inheritdoc/>
+    public async Task EvictApiKeysAsync(IReadOnlyList<string> apiKeyHashes, CancellationToken ct)
+    {
+        ArgumentNullException.ThrowIfNull(apiKeyHashes);
+
+        foreach (string apiKeyHash in apiKeyHashes)
+        {
+            // Stop the trimmed machine from authenticating immediately, not just on the auth-cache TTL.
+            await _apiKeyCacheInvalidator.InvalidateByHashAsync(apiKeyHash, ct);
+        }
     }
 
     /// <summary>
     /// Soft-deletes machines beyond the Free tier limit, keeping the oldest-registered. Reuses the
-    /// soft-delete path (which returns the deleted key's hash so the API-key auth cache can be
-    /// invalidated) and writes one audit entry per trimmed machine. At-or-under the limit is a no-op, so
-    /// re-running this after an interactive downgrade that already ensured compliance is safe.
+    /// soft-delete path (which returns the deleted key's hash so the caller can evict the API-key auth
+    /// cache once it has committed) and writes one audit entry per trimmed machine. At-or-under the
+    /// limit is a no-op, so re-running this after an interactive downgrade that already ensured
+    /// compliance is safe.
     /// </summary>
-    private async Task TrimMachinesToFreeLimitAsync(int tenantId, CancellationToken ct)
+    private async Task<IReadOnlyList<string>> TrimMachinesToFreeLimitAsync(int tenantId, CancellationToken ct)
     {
         TierFeatureLimit? freeLimits = await _tierLimitRepo.GetLimitsForTierAsync(SubscriptionTier.Free, ct);
         if (freeLimits is null)
         {
             _logger.LogWarning("Free tier limits not found; skipping machine trim for tenant {TenantId}", tenantId);
 
-            return;
+            return [];
         }
 
         int freeMachineLimit = freeLimits.MachineLimit;
@@ -131,7 +146,7 @@ public sealed class DowngradeCleanupService : IDowngradeCleanupService
         List<Machine> machines = await _machineRepo.ListActiveMachinesForTenantAsync(tenantId, ct);
         if (machines.Count <= freeMachineLimit)
         {
-            return;
+            return [];
         }
 
         // Keep the oldest-registered machines; trim the newest beyond the limit.
@@ -141,14 +156,14 @@ public sealed class DowngradeCleanupService : IDowngradeCleanupService
             .Skip(freeMachineLimit)
             .ToList();
 
+        List<string> trimmedKeyHashes = [];
         foreach (Machine machine in toTrim)
         {
             string? deletedKeyHash = await _machineRepo.SoftDeleteMachineAsync(machine.Id, tenantId, SystemUserId, ct);
 
             if (deletedKeyHash is not null)
             {
-                // Stop the trimmed machine from authenticating immediately, not just on the auth-cache TTL.
-                await _apiKeyCacheInvalidator.InvalidateByHashAsync(deletedKeyHash, ct);
+                trimmedKeyHashes.Add(deletedKeyHash);
             }
 
             await _auditLog.InsertAuditLogAsync(AuditHelper.Create(
@@ -162,5 +177,7 @@ public sealed class DowngradeCleanupService : IDowngradeCleanupService
         _logger.LogInformation(
             "Trimmed {Count} machines beyond the Free tier limit ({Limit}) for tenant {TenantId} during downgrade",
             toTrim.Count, freeMachineLimit, tenantId);
+
+        return trimmedKeyHashes;
     }
 }

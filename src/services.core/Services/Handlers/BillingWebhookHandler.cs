@@ -128,12 +128,20 @@ public sealed class BillingWebhookHandler : IBillingWebhookHandler
             AuditAction.SubscriptionDowngraded, AuditResourceType.Subscription,
             tenantId.ToString(), "Downgraded to Free tier", null), ct);
 
+        // The cleanup is irreversible (machines beyond the Free limit are soft-deleted), so it runs
+        // inside this transaction: the tier write above holds the subscription row's lock until the
+        // commit, which makes an agreement being applied to this tenant wait for the cleanup instead of
+        // landing between a committed Free tier and a cleanup that would then hit an Enterprise tenant.
+        IReadOnlyList<string> trimmedApiKeyHashes = await _downgradeCleanupService.CleanupForFreeTierAsync(tenantId, ct);
+
         await transaction.CommitAsync(ct);
 
         // Post-commit: a tier change marked during the transaction is only queued now, never inside it.
         _reclassifyDispatcher.DispatchPending();
 
-        await _downgradeCleanupService.CleanupForFreeTierAsync(tenantId, ct);
+        // Evicting before the commit would let a request that still sees the machine as active cache its
+        // key again, so the trimmed machines keep authenticating until the entry expires.
+        await _downgradeCleanupService.EvictApiKeysAsync(trimmedApiKeyHashes, ct);
     }
 
     /// <inheritdoc/>
@@ -213,17 +221,17 @@ public sealed class BillingWebhookHandler : IBillingWebhookHandler
             AuditAction.SubscriptionDowngraded, AuditResourceType.Subscription,
             tenantId.ToString(), "Downgraded from Team to Pro", null), ct);
 
+        // Nothing runs behind a billing-initiated downgrade, so the freeze belongs here as much as it
+        // does in the in-product path. Alert evaluation reads only the enabled flag and the tier the
+        // rule requires — it never asks who authored a rule — so a Team-authored rule left enabled
+        // keeps firing on a Pro plan. It runs inside this transaction so the tier write's row lock
+        // keeps an agreement being applied from landing between the committed tier and the freeze.
+        await _downgradeCleanupService.CleanupForProTierAsync(tenantId, ct);
+
         await transaction.CommitAsync(ct);
 
         // Post-commit: a tier change marked during the transaction is only queued now, never inside it.
         _reclassifyDispatcher.DispatchPending();
-
-        // Nothing runs behind a billing-initiated downgrade, so the freeze belongs here as much as it
-        // does in the in-product path. Alert evaluation reads only the enabled flag and the tier the
-        // rule requires — it never asks who authored a rule — so a Team-authored rule left enabled
-        // keeps firing on a Pro plan. The cleanup opens its own transaction, which is why this sits
-        // after the commit rather than inside it.
-        await _downgradeCleanupService.CleanupForProTierAsync(tenantId, ct);
     }
 
     /// <inheritdoc/>
@@ -249,26 +257,24 @@ public sealed class BillingWebhookHandler : IBillingWebhookHandler
             AuditAction.SubscriptionUpgraded, AuditResourceType.Subscription,
             tenantId.ToString(), "Tier corrected by sync service", null), ct);
 
+        // Drift repair reaches Pro by the same route the downgrade does, so it owes the same freeze on
+        // the Team-only resources, inside this transaction for the same reason. The sync job refuses to
+        // correct downwards to Free, so Pro is the only correction that can take an entitlement away.
+        // The restore below never enables custom rules below Team, so it cannot undo the freeze.
+        if (tier == SubscriptionTier.Pro)
+        {
+            await _downgradeCleanupService.CleanupForProTierAsync(tenantId, ct);
+        }
+
         await transaction.CommitAsync(ct);
 
         // Post-commit: a tier change marked during the transaction is only queued now, never inside it.
         _reclassifyDispatcher.DispatchPending();
 
         // Drift repair is the one path that exists because a checkout webhook was lost, so it is the
-        // likeliest route by which a paying tenant has never been provisioned at all. The provisioner
-        // opens its own transaction, which is why this sits after the commit rather than inside it.
+        // likeliest route by which a paying tenant has never been provisioned at all.
         await _builtInProvisioner.RestoreForTierAsync(
             tenantId, priorSubscription, tier, SubscriptionStatus.Active, ct);
-
-        // Drift repair reaches Pro by the same route the downgrade does, so it owes the same freeze on
-        // the Team-only resources. The sync job refuses to correct downwards to Free, so Pro is the
-        // only correction that can take an entitlement away. Restoring first and freezing second is
-        // deliberate: the restore never enables custom rules below Team, so the two cannot fight, and
-        // freezing last means the losing entitlement has the final word.
-        if (tier == SubscriptionTier.Pro)
-        {
-            await _downgradeCleanupService.CleanupForProTierAsync(tenantId, ct);
-        }
     }
 
     /// <inheritdoc/>
@@ -292,11 +298,14 @@ public sealed class BillingWebhookHandler : IBillingWebhookHandler
             AuditAction.SubscriptionDowngraded, AuditResourceType.Subscription,
             tenantId.ToString(), "Account canceled", null), ct);
 
+        // Inside the transaction for the reason given in HandleSubscriptionDeletedAsync.
+        IReadOnlyList<string> trimmedApiKeyHashes = await _downgradeCleanupService.CleanupForFreeTierAsync(tenantId, ct);
+
         await transaction.CommitAsync(ct);
 
         // Post-commit: a tier change marked during the transaction is only queued now, never inside it.
         _reclassifyDispatcher.DispatchPending();
 
-        await _downgradeCleanupService.CleanupForFreeTierAsync(tenantId, ct);
+        await _downgradeCleanupService.EvictApiKeysAsync(trimmedApiKeyHashes, ct);
     }
 }

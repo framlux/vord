@@ -353,17 +353,19 @@ public class DowngradeCleanupServiceTests
 
             DateTimeOffset t0 = DateTimeOffset.UtcNow.AddDays(-10);
             long[] ids = new long[4];
+            string[] keyHashes = new string[4];
             for (int i = 0; i < 4; i++)
             {
                 Machine m = TestDataBuilder.BuildMachine(tenantId: 1);
                 m.RegisteredOn = t0.AddDays(i); // ids[0] oldest, ids[3] newest
+                keyHashes[i] = m.ApiKeyHash;
                 ids[i] = await dbFactory.Context.InsertWithInt64IdentityAsync(m);
             }
 
             IApiKeyCacheInvalidator invalidator = Substitute.For<IApiKeyCacheInvalidator>();
             DowngradeCleanupService service = new(repo, repo, repo, repo, repo, repo, invalidator, new NullLogger<DowngradeCleanupService>());
 
-            await service.CleanupForFreeTierAsync(1, CancellationToken.None);
+            IReadOnlyList<string> trimmed = await service.CleanupForFreeTierAsync(1, CancellationToken.None);
 
             // The oldest-registered machine survives; the three newest are soft-deleted.
             await Assert.That((await dbFactory.Context.Machines.FirstAsync(m => m.Id == ids[0])).IsDeleted).IsFalse();
@@ -372,10 +374,117 @@ public class DowngradeCleanupServiceTests
                 await Assert.That((await dbFactory.Context.Machines.FirstAsync(m => m.Id == ids[i])).IsDeleted).IsTrue();
             }
 
-            // One API-key cache invalidation and one audit entry per trimmed machine.
-            await invalidator.Received(3).InvalidateByHashAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
+            // The trimmed keys are handed back for eviction after the caller commits; evicting them
+            // here, before that commit, would let a request that still sees the machine re-cache it.
+            await Assert.That(trimmed).IsEquivalentTo([keyHashes[1], keyHashes[2], keyHashes[3]]);
+            await invalidator.DidNotReceive().InvalidateByHashAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
             int trimAudits = await dbFactory.Context.AuditLog.CountAsync(a => a.Action == AuditAction.MachineDeleted);
             await Assert.That(trimAudits).IsEqualTo(3);
+        }
+    }
+
+    [Test]
+    public async Task EvictApiKeys_InvalidatesEachHashHandedBack()
+    {
+        (DatabaseRepository repo, TestDatabaseFactory dbFactory) = BuildRepoAndFactory();
+        using (dbFactory)
+        {
+            IApiKeyCacheInvalidator invalidator = Substitute.For<IApiKeyCacheInvalidator>();
+            DowngradeCleanupService service = new(repo, repo, repo, repo, repo, repo, invalidator, new NullLogger<DowngradeCleanupService>());
+
+            await service.EvictApiKeysAsync(["hash-a", "hash-b"], CancellationToken.None);
+
+            await invalidator.Received(1).InvalidateByHashAsync("hash-a", Arg.Any<CancellationToken>());
+            await invalidator.Received(1).InvalidateByHashAsync("hash-b", Arg.Any<CancellationToken>());
+        }
+    }
+
+    [Test]
+    public async Task EvictApiKeys_NoHashes_InvalidatesNothing()
+    {
+        (DatabaseRepository repo, TestDatabaseFactory dbFactory) = BuildRepoAndFactory();
+        using (dbFactory)
+        {
+            IApiKeyCacheInvalidator invalidator = Substitute.For<IApiKeyCacheInvalidator>();
+            DowngradeCleanupService service = new(repo, repo, repo, repo, repo, repo, invalidator, new NullLogger<DowngradeCleanupService>());
+
+            await service.EvictApiKeysAsync([], CancellationToken.None);
+
+            await invalidator.DidNotReceive().InvalidateByHashAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
+        }
+    }
+
+    [Test]
+    public async Task EvictApiKeys_NullHashes_Throws()
+    {
+        (DatabaseRepository repo, TestDatabaseFactory dbFactory) = BuildRepoAndFactory();
+        using (dbFactory)
+        {
+            DowngradeCleanupService service = new(
+                repo, repo, repo, repo, repo, repo, Substitute.For<IApiKeyCacheInvalidator>(), new NullLogger<DowngradeCleanupService>());
+
+            await Assert.ThrowsAsync<ArgumentNullException>(() => service.EvictApiKeysAsync(null!, CancellationToken.None));
+        }
+    }
+
+    /// <summary>
+    /// The cleanup is irreversible, so it must commit or roll back with the transaction that changes
+    /// the tier. Run on its own connection state it would survive the rollback of that transaction, and
+    /// the tenant would lose machines for a tier change that never happened.
+    /// </summary>
+    [Test]
+    public async Task CleanupForFreeTier_RollsBackWithTheCallersTransaction()
+    {
+        (DatabaseRepository repo, TestDatabaseFactory dbFactory) = BuildRepoAndFactory();
+        using (dbFactory)
+        {
+            await SeedFreeMachineLimitAsync(dbFactory, machineLimit: 1);
+            await dbFactory.Context.InsertAsync(TestDataBuilder.BuildTenantOidcConfiguration(tenantId: 1, isEnabled: true));
+            AlertRule rule = TestDataBuilder.BuildAlertRule(tenantId: 1, isCustom: false, isEnabled: true);
+            rule.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(rule);
+            IntegrationEndpoint integration = TestDataBuilder.BuildIntegrationEndpoint(tenantId: 1, isEnabled: true);
+            integration.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(integration);
+            for (int i = 0; i < 3; i++)
+            {
+                await dbFactory.Context.InsertWithInt64IdentityAsync(TestDataBuilder.BuildMachine(tenantId: 1));
+            }
+
+            DowngradeCleanupService service = new(
+                repo, repo, repo, repo, repo, repo, Substitute.For<IApiKeyCacheInvalidator>(), new NullLogger<DowngradeCleanupService>());
+
+            using (IDatabaseTransaction transaction = await repo.BeginTransactionAsync(CancellationToken.None))
+            {
+                IReadOnlyList<string> trimmed = await service.CleanupForFreeTierAsync(1, CancellationToken.None);
+                await Assert.That(trimmed.Count).IsEqualTo(2);
+            }
+
+            await Assert.That(await dbFactory.Context.Machines.CountAsync(m => m.IsDeleted == false)).IsEqualTo(3);
+            await Assert.That((await dbFactory.Context.TenantOidcConfigurations.FirstAsync(c => c.TenantId == 1)).IsEnabled).IsTrue();
+            await Assert.That((await dbFactory.Context.AlertRules.FirstAsync(r => r.Id == rule.Id)).IsEnabled).IsTrue();
+            await Assert.That((await dbFactory.Context.IntegrationEndpoints.FirstAsync(i => i.Id == integration.Id)).IsEnabled).IsTrue();
+            await Assert.That(await dbFactory.Context.AuditLog.CountAsync(a => a.Action == AuditAction.MachineDeleted)).IsEqualTo(0);
+        }
+    }
+
+    [Test]
+    public async Task CleanupForProTier_RollsBackWithTheCallersTransaction()
+    {
+        (DatabaseRepository repo, TestDatabaseFactory dbFactory) = BuildRepoAndFactory();
+        using (dbFactory)
+        {
+            await dbFactory.Context.InsertAsync(TestDataBuilder.BuildTenantOidcConfiguration(tenantId: 1, isEnabled: true));
+            AlertRule rule = TestDataBuilder.BuildAlertRule(tenantId: 1, isCustom: true, isEnabled: true);
+            rule.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(rule);
+            DowngradeCleanupService service = new(
+                repo, repo, repo, repo, repo, repo, Substitute.For<IApiKeyCacheInvalidator>(), new NullLogger<DowngradeCleanupService>());
+
+            using (IDatabaseTransaction transaction = await repo.BeginTransactionAsync(CancellationToken.None))
+            {
+                await service.CleanupForProTierAsync(1, CancellationToken.None);
+            }
+
+            await Assert.That((await dbFactory.Context.TenantOidcConfigurations.FirstAsync(c => c.TenantId == 1)).IsEnabled).IsTrue();
+            await Assert.That((await dbFactory.Context.AlertRules.FirstAsync(r => r.Id == rule.Id)).IsEnabled).IsTrue();
         }
     }
 
