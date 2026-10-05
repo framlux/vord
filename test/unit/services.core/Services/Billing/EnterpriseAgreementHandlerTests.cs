@@ -53,15 +53,7 @@ public sealed class EnterpriseAgreementHandlerTests
             Repo = new DatabaseRepository(_dbFactory.Context, new NullLogger<DatabaseRepository>());
             Provisioner = Substitute.For<IBuiltInAlertRuleProvisioner>();
             BackgroundJobs = Substitute.For<IBackgroundJobClient>();
-
-            Handler = new EnterpriseAgreementHandler(
-                Repo,
-                Repo,
-                Repo,
-                Repo,
-                Provisioner,
-                new RetentionReclassifyDispatcher(BackgroundJobs, NullLogger<RetentionReclassifyDispatcher>.Instance),
-                NullLogger<EnterpriseAgreementHandler>.Instance);
+            Handler = BuildHandler();
         }
 
         public DatabaseRepository Repo { get; }
@@ -71,6 +63,42 @@ public sealed class EnterpriseAgreementHandlerTests
         public IBackgroundJobClient BackgroundJobs { get; }
 
         public EnterpriseAgreementHandler Handler { get; }
+
+        /// <summary>
+        /// Builds a handler over the same database whose transaction provider, subscription
+        /// repository or audit log can be replaced, to observe or break one collaborator while the
+        /// rest stay real.
+        /// </summary>
+        public EnterpriseAgreementHandler BuildHandler(
+            IDatabaseTransactionProvider? transactionProvider = null,
+            ISubscriptionRepository? subscriptionRepo = null,
+            IAuditLogRepository? auditLog = null)
+        {
+            return new EnterpriseAgreementHandler(
+                transactionProvider ?? Repo,
+                subscriptionRepo ?? Repo,
+                Repo,
+                auditLog ?? Repo,
+                Provisioner,
+                new RetentionReclassifyDispatcher(BackgroundJobs, NullLogger<RetentionReclassifyDispatcher>.Instance),
+                NullLogger<EnterpriseAgreementHandler>.Instance);
+        }
+
+        /// <summary>
+        /// A subscription repository that reads and applies through the real one but records every
+        /// call, so a test can see whether the cache was invalidated and in what order.
+        /// </summary>
+        public ISubscriptionRepository SpyOnSubscriptions()
+        {
+            ISubscriptionRepository spy = Substitute.For<ISubscriptionRepository>();
+            spy.GetSubscriptionForTenantAsync(Arg.Any<int>(), Arg.Any<CancellationToken>())
+                .Returns(call => Repo.GetSubscriptionForTenantAsync(call.ArgAt<int>(0), call.ArgAt<CancellationToken>(1)));
+            spy.ApplyEnterpriseSubscriptionAsync(Arg.Any<int>(), Arg.Any<int>(), Arg.Any<DateTimeOffset>(), Arg.Any<CancellationToken>())
+                .Returns(call => Repo.ApplyEnterpriseSubscriptionAsync(
+                    call.ArgAt<int>(0), call.ArgAt<int>(1), call.ArgAt<DateTimeOffset>(2), call.ArgAt<CancellationToken>(3)));
+
+            return spy;
+        }
 
         public async Task SeedSubscriptionAsync(SubscriptionTier tier)
         {
@@ -274,6 +302,95 @@ public sealed class EnterpriseAgreementHandlerTests
         await Assert.That(ov.MemberLimit).IsEqualTo(1);
         await Assert.That(ov.AlertRuleLimit).IsEqualTo(alerts);
         await Assert.That(ov.WebhookLimit).IsEqualTo(webhooks);
+    }
+
+    /// <summary>
+    /// The tier, the override and the audit row are one unit: a failure part-way through must leave
+    /// the tenant exactly as it was. Were the writes outside the transaction, the subscription and
+    /// override rows would survive the failed audit insert and the tenant would be Enterprise.
+    /// </summary>
+    [Test]
+    public async Task Apply_WhenTheAuditInsertFails_RollsBackTheTierAndTheOverride()
+    {
+        using Harness h = new();
+        await h.SeedSubscriptionAsync(SubscriptionTier.Team);
+        IAuditLogRepository failingAudit = Substitute.For<IAuditLogRepository>();
+        failingAudit.InsertAuditLogAsync(Arg.Any<AuditLogEntry>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromException(new InvalidOperationException("audit store unavailable")));
+        EnterpriseAgreementHandler handler = h.BuildHandler(auditLog: failingAudit);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => handler.ApplyAsync(Terms(revision: 1), CancellationToken.None));
+
+        TenantSubscription? sub = await h.Repo.GetSubscriptionForTenantAsync(TenantId, CancellationToken.None);
+        TenantSubscriptionOverride? ov = await h.Repo.GetOverrideForTenantAsync(TenantId, CancellationToken.None);
+        await Assert.That(sub!.Tier).IsEqualTo(SubscriptionTier.Team);
+        await Assert.That(sub.AppliedAgreementRevision).IsNull();
+        await Assert.That(ov).IsNull();
+    }
+
+    [Test]
+    public async Task Apply_WhenTheAuditInsertFails_DoesNothingAfterCommit()
+    {
+        using Harness h = new();
+        IAuditLogRepository failingAudit = Substitute.For<IAuditLogRepository>();
+        failingAudit.InsertAuditLogAsync(Arg.Any<AuditLogEntry>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromException(new InvalidOperationException("audit store unavailable")));
+        EnterpriseAgreementHandler handler = h.BuildHandler(auditLog: failingAudit);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            () => handler.ApplyAsync(Terms(revision: 1), CancellationToken.None));
+
+        await Assert.That(await h.Repo.GetSubscriptionForTenantAsync(TenantId, CancellationToken.None)).IsNull();
+        h.BackgroundJobs.DidNotReceive().Create(Arg.Any<Job>(), Arg.Any<IState>());
+        await h.Provisioner.DidNotReceive().RestoreForTierAsync(
+            Arg.Any<int>(),
+            Arg.Any<TenantSubscription?>(),
+            Arg.Any<SubscriptionTier>(),
+            Arg.Any<SubscriptionStatus>(),
+            Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>
+    /// The override write bypasses the caching repository's mutators, so the cached entry (which also
+    /// holds effective retention) is only evicted by the handler's own call. That call has to follow
+    /// the commit: evicting earlier lets a concurrent reader re-cache the pre-apply state.
+    /// </summary>
+    [Test]
+    public async Task Apply_Applied_InvalidatesTheSubscriptionCacheAfterTheCommit()
+    {
+        using Harness h = new();
+        ISubscriptionRepository subscriptions = h.SpyOnSubscriptions();
+        IDatabaseTransaction transaction = Substitute.For<IDatabaseTransaction>();
+        IDatabaseTransactionProvider transactionProvider = Substitute.For<IDatabaseTransactionProvider>();
+        transactionProvider.BeginTransactionAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult(transaction));
+        EnterpriseAgreementHandler handler = h.BuildHandler(transactionProvider, subscriptions);
+
+        EnterpriseApplyOutcome outcome = await handler.ApplyAsync(Terms(revision: 1), CancellationToken.None);
+
+        await Assert.That(outcome).IsEqualTo(EnterpriseApplyOutcome.Applied);
+        await subscriptions.Received(1).InvalidateSubscriptionCacheAsync(TenantId, Arg.Any<CancellationToken>());
+        Received.InOrder(() =>
+        {
+            transaction.CommitAsync(Arg.Any<CancellationToken>());
+            subscriptions.InvalidateSubscriptionCacheAsync(TenantId, Arg.Any<CancellationToken>());
+        });
+    }
+
+    [Test]
+    [Arguments(2, EnterpriseApplyOutcome.AlreadyApplied)]
+    [Arguments(1, EnterpriseApplyOutcome.StaleRevision)]
+    public async Task Apply_NotApplied_LeavesTheSubscriptionCacheAlone(int revision, EnterpriseApplyOutcome expected)
+    {
+        using Harness h = new();
+        await h.Handler.ApplyAsync(Terms(revision: 2), CancellationToken.None);
+        ISubscriptionRepository subscriptions = h.SpyOnSubscriptions();
+        EnterpriseAgreementHandler handler = h.BuildHandler(subscriptionRepo: subscriptions);
+
+        EnterpriseApplyOutcome outcome = await handler.ApplyAsync(Terms(revision: revision), CancellationToken.None);
+
+        await Assert.That(outcome).IsEqualTo(expected);
+        await subscriptions.DidNotReceive().InvalidateSubscriptionCacheAsync(Arg.Any<int>(), Arg.Any<CancellationToken>());
     }
 
     [Test]

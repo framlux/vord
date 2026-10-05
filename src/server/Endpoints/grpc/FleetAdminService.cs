@@ -691,8 +691,14 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
 
         using IDatabaseTransaction transaction = await transactionProvider.BeginTransactionAsync(context.CancellationToken);
 
-        await overrideRepo.UpsertOverrideAsync(
+        // The up-front check above gives the clear message but reads a possibly cached tier, so the
+        // write carries its own Enterprise test. Leaving the scope without committing rolls back.
+        bool written = await overrideRepo.UpsertOverrideUnlessEnterpriseAsync(
             tenant.Id, machineLimit, retentionDays, alertRuleLimit, webhookLimit, memberLimit: null, context.CancellationToken);
+        if (written == false)
+        {
+            throw EnterpriseOverrideRefusal();
+        }
 
         await auditLog.InsertAuditLogAsync(AuditHelper.Create(
             tenantId: tenant.Id,
@@ -749,7 +755,13 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
 
         using IDatabaseTransaction transaction = await transactionProvider.BeginTransactionAsync(context.CancellationToken);
 
-        await overrideRepo.RemoveOverrideAsync(tenant.Id, context.CancellationToken);
+        // See SetTenantOverride: the delete carries its own Enterprise test, and leaving the scope
+        // without committing rolls back.
+        bool removed = await overrideRepo.RemoveOverrideUnlessEnterpriseAsync(tenant.Id, context.CancellationToken);
+        if (removed == false)
+        {
+            throw EnterpriseOverrideRefusal();
+        }
 
         await auditLog.InsertAuditLogAsync(AuditHelper.Create(
             tenantId: tenant.Id,
@@ -796,10 +808,15 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
             tenantId, cancellationToken);
         if ((subscription is not null) && (subscription.Tier == SubscriptionTier.Enterprise))
         {
-            throw new RpcException(new Status(
-                StatusCode.FailedPrecondition,
-                "This tenant's limits are set by its enterprise agreement"));
+            throw EnterpriseOverrideRefusal();
         }
+    }
+
+    private static RpcException EnterpriseOverrideRefusal()
+    {
+        return new RpcException(new Status(
+            StatusCode.FailedPrecondition,
+            "This tenant's limits are set by its enterprise agreement"));
     }
 
     /// <summary>

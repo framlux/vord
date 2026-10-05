@@ -2800,8 +2800,8 @@ public sealed class FleetAdminServiceTests
         Tenant tenant = MakeTenant();
         tenantRepo.GetTenantByExternalIdAsync(TenantExternalId, Arg.Any<CancellationToken>())
             .Returns(tenant);
-        overrideRepo.UpsertOverrideAsync(Arg.Any<int>(), Arg.Any<int?>(), Arg.Any<int?>(), Arg.Any<int?>(), Arg.Any<int?>(), Arg.Any<int?>(), Arg.Any<CancellationToken>())
-            .Returns(Task.CompletedTask);
+        overrideRepo.UpsertOverrideUnlessEnterpriseAsync(Arg.Any<int>(), Arg.Any<int?>(), Arg.Any<int?>(), Arg.Any<int?>(), Arg.Any<int?>(), Arg.Any<int?>(), Arg.Any<CancellationToken>())
+            .Returns(true);
 
         IDatabaseTransaction tx = Substitute.For<IDatabaseTransaction>();
         tx.CommitAsync(Arg.Any<CancellationToken>()).Returns(Task.CompletedTask);
@@ -2841,7 +2841,7 @@ public sealed class FleetAdminServiceTests
         await Assert.That(response.Success).IsTrue();
         await Assert.That(response.Message).IsEqualTo("OK");
 
-        await overrideRepo.Received(1).UpsertOverrideAsync(
+        await overrideRepo.Received(1).UpsertOverrideUnlessEnterpriseAsync(
             TenantInternalId,
             10,
             (int?)null,
@@ -2849,6 +2849,8 @@ public sealed class FleetAdminServiceTests
             (int?)null,
             (int?)null,
             Arg.Any<CancellationToken>());
+        await overrideRepo.DidNotReceive().UpsertOverrideAsync(
+            Arg.Any<int>(), Arg.Any<int?>(), Arg.Any<int?>(), Arg.Any<int?>(), Arg.Any<int?>(), Arg.Any<int?>(), Arg.Any<CancellationToken>());
 
         // The override changes effective retention, so the tenant's subscription cache must be
         // invalidated after commit or the change would lag by one cache TTL.
@@ -2876,8 +2878,8 @@ public sealed class FleetAdminServiceTests
         Tenant tenant = MakeTenant();
         tenantRepo.GetTenantByExternalIdAsync(TenantExternalId, Arg.Any<CancellationToken>())
             .Returns(tenant);
-        overrideRepo.RemoveOverrideAsync(TenantInternalId, Arg.Any<CancellationToken>())
-            .Returns(Task.CompletedTask);
+        overrideRepo.RemoveOverrideUnlessEnterpriseAsync(TenantInternalId, Arg.Any<CancellationToken>())
+            .Returns(true);
 
         IDatabaseTransaction tx = Substitute.For<IDatabaseTransaction>();
         tx.CommitAsync(Arg.Any<CancellationToken>()).Returns(Task.CompletedTask);
@@ -2909,7 +2911,8 @@ public sealed class FleetAdminServiceTests
 
         await Assert.That(response.Success).IsTrue();
         await Assert.That(response.Message).IsEqualTo("OK");
-        await overrideRepo.Received(1).RemoveOverrideAsync(TenantInternalId, Arg.Any<CancellationToken>());
+        await overrideRepo.Received(1).RemoveOverrideUnlessEnterpriseAsync(TenantInternalId, Arg.Any<CancellationToken>());
+        await overrideRepo.DidNotReceive().RemoveOverrideAsync(Arg.Any<int>(), Arg.Any<CancellationToken>());
 
         // Clearing the override reverts effective retention; the cache must be invalidated after commit.
         await subscriptionRepo.Received(1).InvalidateSubscriptionCacheAsync(TenantInternalId, Arg.Any<CancellationToken>());
@@ -2962,7 +2965,7 @@ public sealed class FleetAdminServiceTests
         await Assert.That(exception!.StatusCode).IsEqualTo(StatusCode.FailedPrecondition);
         await Assert.That(exception.Status.Detail).Contains("agreement");
         await txProvider.DidNotReceive().BeginTransactionAsync(Arg.Any<CancellationToken>());
-        await overrideRepo.DidNotReceive().UpsertOverrideAsync(
+        await overrideRepo.DidNotReceive().UpsertOverrideUnlessEnterpriseAsync(
             Arg.Any<int>(), Arg.Any<int?>(), Arg.Any<int?>(), Arg.Any<int?>(), Arg.Any<int?>(), Arg.Any<int?>(), Arg.Any<CancellationToken>());
         await auditLog.DidNotReceive().InsertAuditLogAsync(Arg.Any<AuditLogEntry>(), Arg.Any<CancellationToken>());
     }
@@ -3003,8 +3006,95 @@ public sealed class FleetAdminServiceTests
         await Assert.That(exception!.StatusCode).IsEqualTo(StatusCode.FailedPrecondition);
         await Assert.That(exception.Status.Detail).Contains("agreement");
         await txProvider.DidNotReceive().BeginTransactionAsync(Arg.Any<CancellationToken>());
-        await overrideRepo.DidNotReceive().RemoveOverrideAsync(Arg.Any<int>(), Arg.Any<CancellationToken>());
+        await overrideRepo.DidNotReceive().RemoveOverrideUnlessEnterpriseAsync(Arg.Any<int>(), Arg.Any<CancellationToken>());
         await auditLog.DidNotReceive().InsertAuditLogAsync(Arg.Any<AuditLogEntry>(), Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>
+    /// The up-front tier read can be stale (it is served from a 30-second cache), so an agreement may
+    /// commit between that read and the write. The write then reports nothing written, and the RPC must
+    /// refuse, roll back, and leave neither an audit row nor a cache eviction or reclassify behind.
+    /// </summary>
+    [Test]
+    public async Task SetTenantOverride_TierBecameEnterpriseAfterTheCheck_IsRefusedAndRolledBack()
+    {
+        (FleetAdminService service, ITenantSubscriptionOverrideRepository overrideRepo, IDatabaseTransaction transaction,
+            IAuditLogRepository auditLog, ISubscriptionRepository subscriptionRepo, IBackgroundJobClient backgroundJobs) = CreateStaleTierService();
+        overrideRepo.UpsertOverrideUnlessEnterpriseAsync(
+                Arg.Any<int>(), Arg.Any<int?>(), Arg.Any<int?>(), Arg.Any<int?>(), Arg.Any<int?>(), Arg.Any<int?>(), Arg.Any<CancellationToken>())
+            .Returns(false);
+
+        RpcException? exception = await Assert.ThrowsAsync<RpcException>(
+            async () => await service.SetTenantOverride(
+                new SetTenantOverrideRequest { TenantExternalId = TenantExternalId, MachineLimit = 10 }, CreateContext()));
+
+        await Assert.That(exception!.StatusCode).IsEqualTo(StatusCode.FailedPrecondition);
+        await Assert.That(exception.Status.Detail).Contains("agreement");
+        await transaction.DidNotReceive().CommitAsync(Arg.Any<CancellationToken>());
+        await auditLog.DidNotReceive().InsertAuditLogAsync(Arg.Any<AuditLogEntry>(), Arg.Any<CancellationToken>());
+        await subscriptionRepo.DidNotReceive().InvalidateSubscriptionCacheAsync(Arg.Any<int>(), Arg.Any<CancellationToken>());
+        backgroundJobs.DidNotReceive().Create(Arg.Any<Job>(), Arg.Any<IState>());
+    }
+
+    [Test]
+    public async Task RemoveTenantOverride_TierBecameEnterpriseAfterTheCheck_IsRefusedAndRolledBack()
+    {
+        (FleetAdminService service, ITenantSubscriptionOverrideRepository overrideRepo, IDatabaseTransaction transaction,
+            IAuditLogRepository auditLog, ISubscriptionRepository subscriptionRepo, IBackgroundJobClient backgroundJobs) = CreateStaleTierService();
+        overrideRepo.RemoveOverrideUnlessEnterpriseAsync(Arg.Any<int>(), Arg.Any<CancellationToken>()).Returns(false);
+
+        RpcException? exception = await Assert.ThrowsAsync<RpcException>(
+            async () => await service.RemoveTenantOverride(
+                new RemoveTenantOverrideRequest { TenantExternalId = TenantExternalId }, CreateContext()));
+
+        await Assert.That(exception!.StatusCode).IsEqualTo(StatusCode.FailedPrecondition);
+        await Assert.That(exception.Status.Detail).Contains("agreement");
+        await transaction.DidNotReceive().CommitAsync(Arg.Any<CancellationToken>());
+        await auditLog.DidNotReceive().InsertAuditLogAsync(Arg.Any<AuditLogEntry>(), Arg.Any<CancellationToken>());
+        await subscriptionRepo.DidNotReceive().InvalidateSubscriptionCacheAsync(Arg.Any<int>(), Arg.Any<CancellationToken>());
+        backgroundJobs.DidNotReceive().Create(Arg.Any<Job>(), Arg.Any<IState>());
+    }
+
+    /// <summary>
+    /// Builds a service whose up-front subscription read says Team, as a stale cache entry would, with
+    /// the override repository left for the test to answer for the write.
+    /// </summary>
+    private static (FleetAdminService Service, ITenantSubscriptionOverrideRepository OverrideRepo, IDatabaseTransaction Transaction,
+        IAuditLogRepository AuditLog, ISubscriptionRepository SubscriptionRepo, IBackgroundJobClient BackgroundJobs) CreateStaleTierService()
+    {
+        ITenantRepository tenantRepo = Substitute.For<ITenantRepository>();
+        ITenantSubscriptionOverrideRepository overrideRepo = Substitute.For<ITenantSubscriptionOverrideRepository>();
+        ISubscriptionRepository subscriptionRepo = Substitute.For<ISubscriptionRepository>();
+        IDatabaseTransaction transaction = Substitute.For<IDatabaseTransaction>();
+        IDatabaseTransactionProvider txProvider = Substitute.For<IDatabaseTransactionProvider>();
+        IAuditLogRepository auditLog = Substitute.For<IAuditLogRepository>();
+        IBackgroundJobClient backgroundJobs = Substitute.For<IBackgroundJobClient>();
+        tenantRepo.GetTenantByExternalIdAsync(TenantExternalId, Arg.Any<CancellationToken>())
+            .Returns(MakeTenant());
+        subscriptionRepo.GetSubscriptionForTenantAsync(TenantInternalId, Arg.Any<CancellationToken>())
+            .Returns(new TenantSubscription
+            {
+                TenantId = TenantInternalId,
+                Tier = SubscriptionTier.Team,
+                Status = SubscriptionStatus.Active,
+                CreatedAt = DateTimeOffset.UnixEpoch,
+                UpdatedAt = DateTimeOffset.UnixEpoch,
+            });
+        txProvider.BeginTransactionAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult(transaction));
+        IServiceScopeFactory scopeFactory = CreateScopeFactoryWithServices(new Dictionary<Type, object>
+        {
+            { typeof(ITenantRepository), tenantRepo },
+            { typeof(ITenantSubscriptionOverrideRepository), overrideRepo },
+            { typeof(ISubscriptionRepository), subscriptionRepo },
+            { typeof(IDatabaseTransactionProvider), txProvider },
+            { typeof(IAuditLogRepository), auditLog },
+            {
+                typeof(RetentionReclassifyDispatcher),
+                new RetentionReclassifyDispatcher(backgroundJobs, NullLogger<RetentionReclassifyDispatcher>.Instance)
+            },
+        });
+
+        return (CreateFleetAdminService(scopeFactory), overrideRepo, transaction, auditLog, subscriptionRepo, backgroundJobs);
     }
 
     // ── ConfigureTenantOidc ──

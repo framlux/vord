@@ -6,6 +6,7 @@ using System.Net;
 using Framlux.FleetManagement.Database;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
+using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Services.Core.Alerts;
 using Framlux.FleetManagement.Services.Core.Billing;
 using Framlux.FleetManagement.Test.Infrastructure;
@@ -1413,6 +1414,160 @@ public sealed class FleetAdminServiceTests
         await Assert.That(ov).IsNotNull();
         await Assert.That(ov!.MachineLimit).IsEqualTo(500);
         await Assert.That(audits).IsEqualTo(0);
+    }
+
+    /// <summary>
+    /// Reads the tenant's subscription through the same caching repository the RPCs use, so the cache
+    /// holds the tier as it is now. Changing the row afterwards behind the cache then reproduces an
+    /// agreement that commits between an RPC's up-front tier read and its write.
+    /// </summary>
+    private static async Task<SubscriptionTier> PrimeTheSubscriptionCacheAsync(FunctionalTestFactory factory, int tenantId)
+    {
+        using IServiceScope scope = factory.Services.CreateScope();
+        ISubscriptionRepository subscriptions = scope.ServiceProvider.GetRequiredService<ISubscriptionRepository>();
+        TenantSubscription? cached = await subscriptions.GetSubscriptionForTenantAsync(tenantId, CancellationToken.None);
+
+        return cached!.Tier;
+    }
+
+    [Test]
+    public async Task SetTenantOverride_TierBecomesEnterpriseBehindAStaleCache_IsRefusedWithNoChange()
+    {
+        using FunctionalTestFactory factory = new();
+        factory.WithInternalClientSubjects(PermittedClientSubject);
+        using DatabaseContext db = factory.CreateDbContext();
+        string extId = $"ext-{Guid.NewGuid():N}";
+        int tenantId = await SeedTenantWithSubscription(db, extId, SubscriptionTier.Team);
+        await db.InsertAsync(new TenantSubscriptionOverride
+        {
+            TenantId = tenantId,
+            MachineLimit = 500,
+            RetentionDays = 180,
+            AlertRuleLimit = 40,
+            WebhookLimit = 20,
+            MemberLimit = int.MaxValue,
+            CreatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow,
+        });
+        await Assert.That(await PrimeTheSubscriptionCacheAsync(factory, tenantId)).IsEqualTo(SubscriptionTier.Team);
+        await db.TenantSubscriptions
+            .Where(sub => sub.TenantId == tenantId)
+            .Set(sub => sub.Tier, SubscriptionTier.Enterprise)
+            .UpdateAsync();
+        using GrpcChannel channel = CreateChannel(factory);
+        FleetAdmin.FleetAdminClient client = new(channel);
+
+        RpcException? exception = null;
+        try
+        {
+            await client.SetTenantOverrideAsync(
+                new SetTenantOverrideRequest
+                {
+                    TenantExternalId = extId,
+                    MachineLimit = 1,
+                    RetentionDays = 1,
+                    AlertRuleLimit = 1,
+                    WebhookLimit = 1,
+                },
+                Headers());
+        }
+        catch (RpcException ex)
+        {
+            exception = ex;
+        }
+
+        TenantSubscriptionOverride? ov = await db.TenantSubscriptionOverrides.FirstOrDefaultAsync(o => o.TenantId == tenantId);
+        int audits = await db.AuditLog
+            .Where(e => (e.Action == AuditAction.TenantSubscriptionOverrideChanged) && (e.TenantId == tenantId))
+            .CountAsync();
+        await Assert.That(exception).IsNotNull();
+        await Assert.That(exception!.StatusCode).IsEqualTo(StatusCode.FailedPrecondition);
+        await Assert.That(exception.Status.Detail).Contains("agreement");
+        await Assert.That(ov!.MachineLimit).IsEqualTo(500);
+        await Assert.That(ov.RetentionDays).IsEqualTo(180);
+        await Assert.That(ov.MemberLimit).IsEqualTo(int.MaxValue);
+        await Assert.That(audits).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task RemoveTenantOverride_TierBecomesEnterpriseBehindAStaleCache_IsRefusedWithNoChange()
+    {
+        using FunctionalTestFactory factory = new();
+        factory.WithInternalClientSubjects(PermittedClientSubject);
+        using DatabaseContext db = factory.CreateDbContext();
+        string extId = $"ext-{Guid.NewGuid():N}";
+        int tenantId = await SeedTenantWithSubscription(db, extId, SubscriptionTier.Team);
+        await db.InsertAsync(new TenantSubscriptionOverride
+        {
+            TenantId = tenantId,
+            MachineLimit = 500,
+            RetentionDays = 180,
+            AlertRuleLimit = 40,
+            WebhookLimit = 20,
+            MemberLimit = int.MaxValue,
+            CreatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow,
+        });
+        await Assert.That(await PrimeTheSubscriptionCacheAsync(factory, tenantId)).IsEqualTo(SubscriptionTier.Team);
+        await db.TenantSubscriptions
+            .Where(sub => sub.TenantId == tenantId)
+            .Set(sub => sub.Tier, SubscriptionTier.Enterprise)
+            .UpdateAsync();
+        using GrpcChannel channel = CreateChannel(factory);
+        FleetAdmin.FleetAdminClient client = new(channel);
+
+        RpcException? exception = null;
+        try
+        {
+            await client.RemoveTenantOverrideAsync(new RemoveTenantOverrideRequest { TenantExternalId = extId }, Headers());
+        }
+        catch (RpcException ex)
+        {
+            exception = ex;
+        }
+
+        TenantSubscriptionOverride? ov = await db.TenantSubscriptionOverrides.FirstOrDefaultAsync(o => o.TenantId == tenantId);
+        int audits = await db.AuditLog
+            .Where(e => (e.Action == AuditAction.TenantSubscriptionOverrideChanged) && (e.TenantId == tenantId))
+            .CountAsync();
+        await Assert.That(exception).IsNotNull();
+        await Assert.That(exception!.StatusCode).IsEqualTo(StatusCode.FailedPrecondition);
+        await Assert.That(ov).IsNotNull();
+        await Assert.That(ov!.MachineLimit).IsEqualTo(500);
+        await Assert.That(audits).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task SetTenantOverride_TeamTenantWithNoOverrideYet_InsertsItAndAudits()
+    {
+        using FunctionalTestFactory factory = new();
+        factory.WithInternalClientSubjects(PermittedClientSubject);
+        using DatabaseContext db = factory.CreateDbContext();
+        string extId = $"ext-{Guid.NewGuid():N}";
+        int tenantId = await SeedTenantWithSubscription(db, extId, SubscriptionTier.Team);
+        using GrpcChannel channel = CreateChannel(factory);
+        FleetAdmin.FleetAdminClient client = new(channel);
+
+        SetTenantOverrideResponse response = await client.SetTenantOverrideAsync(
+            new SetTenantOverrideRequest
+            {
+                TenantExternalId = extId,
+                MachineLimit = 50,
+                RetentionDays = -1,
+                AlertRuleLimit = 10,
+                WebhookLimit = -1,
+            },
+            Headers());
+
+        TenantSubscriptionOverride? ov = await db.TenantSubscriptionOverrides.FirstOrDefaultAsync(o => o.TenantId == tenantId);
+        int audits = await db.AuditLog
+            .Where(e => (e.Action == AuditAction.TenantSubscriptionOverrideChanged) && (e.TenantId == tenantId))
+            .CountAsync();
+        await Assert.That(response.Success).IsTrue();
+        await Assert.That(ov!.MachineLimit).IsEqualTo(50);
+        await Assert.That(ov.RetentionDays).IsNull();
+        await Assert.That(ov.AlertRuleLimit).IsEqualTo(10);
+        await Assert.That(audits).IsEqualTo(1);
     }
 
     // ========== Effective Limits On The Wire Tests ==========
