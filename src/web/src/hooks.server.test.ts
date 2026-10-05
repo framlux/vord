@@ -105,6 +105,45 @@ describe('hooks.server handle — vord_tenant auto-set cookie', () => {
     });
 });
 
+// SvelteKit builds the Content-Security-Policy itself (kit.csp in svelte.config.js) because only it
+// knows the nonce it stamps on the inline bootstrap script. A policy written here after resolve()
+// would replace that header and silently stop every page from hydrating, so the hook must leave it
+// alone and only add the headers SvelteKit does not own.
+describe('hooks.server handle — security headers', () => {
+    beforeEach(() => {
+        vi.clearAllMocks();
+    });
+
+    it('does not invent a Content-Security-Policy when the response carries none', async () => {
+        const response = await handle({ event: makeEvent({}, []), resolve });
+
+        expect(response.headers.has('Content-Security-Policy')).toBe(false);
+    });
+
+    it('leaves the nonce-bearing Content-Security-Policy SvelteKit produced untouched', async () => {
+        const kitPolicy = "default-src 'self'; script-src 'self' 'nonce-abc123'";
+        const kitResolve = vi.fn(
+            async () => new Response('<html></html>', { headers: { 'content-security-policy': kitPolicy } })
+        );
+
+        const response = await handle({ event: makeEvent({}, []), resolve: kitResolve });
+
+        expect(response.headers.get('Content-Security-Policy')).toBe(kitPolicy);
+    });
+
+    it('still sets the transport and framing headers SvelteKit does not own', async () => {
+        const response = await handle({ event: makeEvent({}, []), resolve });
+
+        expect(response.headers.get('Strict-Transport-Security')).toBe(
+            'max-age=63072000; includeSubDomains; preload'
+        );
+        expect(response.headers.get('X-Content-Type-Options')).toBe('nosniff');
+        expect(response.headers.get('Referrer-Policy')).toBe('strict-origin-when-cross-origin');
+        expect(response.headers.get('Permissions-Policy')).toBe('camera=(), microphone=(), geolocation=()');
+        expect(response.headers.get('X-Frame-Options')).toBe('DENY');
+    });
+});
+
 // The api-server rejects a state-changing or antiforgery-minting request that does not arrive over
 // TLS, and in-cluster it is reached over plain http, so handleFetch tells it which scheme the
 // browser actually used. These cases pin that header to the browser's scheme and to the backend only.

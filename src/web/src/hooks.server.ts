@@ -129,19 +129,10 @@ export const handle: Handle = async ({ event, resolve }) => {
 
 	// Security headers — mirror the .NET server's SecurityHeadersMiddleware so the SvelteKit
 	// front-door (which the browser hits first) carries the same protections. Existing
-	// upstream Set-Cookie / Content-Type values pass through untouched.
-	response.headers.set(
-		'Content-Security-Policy',
-		"default-src 'self'; "
-			+ "base-uri 'self'; "
-			+ "frame-ancestors 'none'; "
-			+ "img-src 'self' data:; "
-			+ "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
-			+ "font-src 'self' https://fonts.gstatic.com; "
-			+ "script-src 'self'; "
-			+ "connect-src 'self'; "
-			+ "object-src 'none'"
-	);
+	// upstream Set-Cookie / Content-Type values pass through untouched. The Content-Security-Policy
+	// is deliberately not set here: SvelteKit builds it from kit.csp in svelte.config.js because it
+	// alone knows the per-response nonce on the inline script that boots each page, and a header
+	// written after resolve() would replace that one and stop every page from hydrating.
 	response.headers.set('Strict-Transport-Security', 'max-age=63072000; includeSubDomains; preload');
 	response.headers.set('X-Content-Type-Options', 'nosniff');
 	response.headers.set('Referrer-Policy', 'strict-origin-when-cross-origin');
