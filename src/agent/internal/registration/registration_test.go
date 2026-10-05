@@ -1009,6 +1009,73 @@ func TestReadMachineIDSerial_EmptyFile(t *testing.T) {
 	}
 }
 
+// --- pickHardwareSerial tests ---
+
+// Intent: A real product serial is used as-is.
+func TestPickHardwareSerial_RealProductSerial(t *testing.T) {
+	result := pickHardwareSerial("C02XL0GTJGH5", "PF2ABCDE")
+
+	if result != "C02XL0GTJGH5" {
+		t.Errorf("expected product serial, got %q", result)
+	}
+}
+
+// Intent: A filler product serial falls through to a real board serial.
+func TestPickHardwareSerial_PlaceholderProductRealBoard(t *testing.T) {
+	placeholders := []string{
+		"System Serial Number",
+		"To Be Filled By O.E.M.",
+		"Default string",
+		"Not Specified",
+		"0123456789",
+		"None",
+	}
+	for _, placeholder := range placeholders {
+		result := pickHardwareSerial(placeholder, "PF2ABCDE")
+
+		if result != "PF2ABCDE" {
+			t.Errorf("product %q: expected board serial %q, got %q", placeholder, "PF2ABCDE", result)
+		}
+	}
+}
+
+// Intent: An empty product serial falls through to a real board serial.
+func TestPickHardwareSerial_EmptyProductRealBoard(t *testing.T) {
+	result := pickHardwareSerial("", "PF2ABCDE")
+
+	if result != "PF2ABCDE" {
+		t.Errorf("expected board serial, got %q", result)
+	}
+}
+
+// Intent: When both serials are filler the result is empty so the machine-id and generated
+// fallbacks run instead of the filler being registered as an identity.
+func TestPickHardwareSerial_BothPlaceholder(t *testing.T) {
+	result := pickHardwareSerial("System Serial Number", "Default string")
+
+	if result != "" {
+		t.Errorf("expected empty string, got %q", result)
+	}
+}
+
+// Intent: Missing DMI fields produce an empty result, not a panic or a filler value.
+func TestPickHardwareSerial_EmptyInputs(t *testing.T) {
+	result := pickHardwareSerial("", "")
+
+	if result != "" {
+		t.Errorf("expected empty string, got %q", result)
+	}
+}
+
+// Intent: A real product serial wins even when the board serial is filler.
+func TestPickHardwareSerial_RealProductPlaceholderBoard(t *testing.T) {
+	result := pickHardwareSerial("C02XL0GTJGH5", "Default string")
+
+	if result != "C02XL0GTJGH5" {
+		t.Errorf("expected product serial, got %q", result)
+	}
+}
+
 // --- Dynamic API key rotation tests ---
 
 // Intent: Server includes a rotated API key in config response → agent updates state and store.

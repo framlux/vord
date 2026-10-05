@@ -21,6 +21,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/framlux/vord/internal/db"
+	"github.com/framlux/vord/internal/hwid"
 	pb "github.com/framlux/vord/internal/proto/agent"
 	"github.com/framlux/vord/internal/state"
 )
@@ -403,14 +404,7 @@ func readMachineID() string {
 }
 
 func detectSerial() string {
-	serial := readDMIField("product_serial")
-	if serial != "" && serial != "Not Specified" && serial != "To Be Filled By O.E.M." {
-		return serial
-	}
-
-	// Fallback to board serial.
-	serial = readDMIField("board_serial")
-	if serial != "" && serial != "Not Specified" && serial != "To Be Filled By O.E.M." {
+	if serial := pickHardwareSerial(readDMIField("product_serial"), readDMIField("board_serial")); serial != "" {
 		return serial
 	}
 
@@ -422,6 +416,18 @@ func detectSerial() string {
 	// Fallback to /var/lib/dbus/machine-id (older dbus systems).
 	if mid := readMachineIDSerial("/var/lib/dbus/machine-id"); mid != "" {
 		return mid
+	}
+
+	return ""
+}
+
+// pickHardwareSerial returns the first of the product and board serials that identifies a machine,
+// or an empty string when both are blank or firmware filler such as "System Serial Number".
+func pickHardwareSerial(productSerial, boardSerial string) string {
+	for _, serial := range []string{productSerial, boardSerial} {
+		if hwid.IsPlaceholder(serial) == false {
+			return serial
+		}
 	}
 
 	return ""
