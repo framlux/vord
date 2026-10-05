@@ -2367,7 +2367,7 @@ public sealed class FleetAdminServiceTests
         Tenant tenant = MakeTenant();
         tenantRepo.GetTenantByExternalIdAsync(TenantExternalId, Arg.Any<CancellationToken>())
             .Returns(tenant);
-        overrideRepo.UpsertOverrideAsync(Arg.Any<int>(), Arg.Any<int?>(), Arg.Any<int?>(), Arg.Any<int?>(), Arg.Any<int?>(), Arg.Any<CancellationToken>())
+        overrideRepo.UpsertOverrideAsync(Arg.Any<int>(), Arg.Any<int?>(), Arg.Any<int?>(), Arg.Any<int?>(), Arg.Any<int?>(), Arg.Any<int?>(), Arg.Any<CancellationToken>())
             .Returns(Task.CompletedTask);
 
         IDatabaseTransaction tx = Substitute.For<IDatabaseTransaction>();
@@ -2413,6 +2413,7 @@ public sealed class FleetAdminServiceTests
             10,
             (int?)null,
             5,
+            (int?)null,
             (int?)null,
             Arg.Any<CancellationToken>());
 

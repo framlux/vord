@@ -608,7 +608,7 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
         using IDatabaseTransaction transaction = await transactionProvider.BeginTransactionAsync(context.CancellationToken);
 
         await overrideRepo.UpsertOverrideAsync(
-            tenant.Id, machineLimit, retentionDays, alertRuleLimit, webhookLimit, context.CancellationToken);
+            tenant.Id, machineLimit, retentionDays, alertRuleLimit, webhookLimit, memberLimit: null, context.CancellationToken);
 
         await auditLog.InsertAuditLogAsync(AuditHelper.Create(
             tenantId: tenant.Id,

@@ -22,7 +22,7 @@ public partial class DatabaseRepository : ITenantSubscriptionOverrideRepository
     }
 
     /// <inheritdoc/>
-    public async Task UpsertOverrideAsync(int tenantId, int? machineLimit, int? retentionDays, int? alertRuleLimit, int? webhookLimit, CancellationToken cancellationToken)
+    public async Task UpsertOverrideAsync(int tenantId, int? machineLimit, int? retentionDays, int? alertRuleLimit, int? webhookLimit, int? memberLimit, CancellationToken cancellationToken = default)
     {
         DateTimeOffset now = DateTimeOffset.UtcNow;
 
@@ -33,6 +33,7 @@ public partial class DatabaseRepository : ITenantSubscriptionOverrideRepository
             .Set(o => o.RetentionDays, retentionDays)
             .Set(o => o.AlertRuleLimit, alertRuleLimit)
             .Set(o => o.WebhookLimit, webhookLimit)
+            .Set(o => o.MemberLimit, memberLimit)
             .Set(o => o.UpdatedAt, now)
             .UpdateAsync(cancellationToken);
 
@@ -51,6 +52,7 @@ public partial class DatabaseRepository : ITenantSubscriptionOverrideRepository
                 RetentionDays = retentionDays,
                 AlertRuleLimit = alertRuleLimit,
                 WebhookLimit = webhookLimit,
+                MemberLimit = memberLimit,
                 CreatedAt = now,
                 UpdatedAt = now,
             }, token: cancellationToken);
@@ -64,9 +66,21 @@ public partial class DatabaseRepository : ITenantSubscriptionOverrideRepository
                 .Set(o => o.RetentionDays, retentionDays)
                 .Set(o => o.AlertRuleLimit, alertRuleLimit)
                 .Set(o => o.WebhookLimit, webhookLimit)
+                .Set(o => o.MemberLimit, memberLimit)
                 .Set(o => o.UpdatedAt, now)
                 .UpdateAsync(cancellationToken);
         }
+    }
+
+    /// <inheritdoc/>
+    public async Task<List<TenantSubscriptionOverride>> GetOverridesForTenantsAsync(
+        List<int> tenantIds, CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(tenantIds);
+
+        return await _db.TenantSubscriptionOverrides
+            .Where(o => tenantIds.Contains(o.TenantId))
+            .ToListAsync(cancellationToken);
     }
 
     /// <inheritdoc/>

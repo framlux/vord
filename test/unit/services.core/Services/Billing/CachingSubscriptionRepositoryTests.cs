@@ -422,4 +422,79 @@ public sealed class CachingSubscriptionRepositoryTests
 
         await inner.Received(2).GetSubscriptionForTenantAsync(9, Arg.Any<CancellationToken>());
     }
+
+    [Test]
+    public async Task ApplyEnterpriseSubscription_Applied_MarksPendingAndInvalidatesTenantCacheEntry()
+    {
+        // Intent: entering Enterprise changes the tenant's tier, so retention must be reclassified
+        // after the caller's commit and the cached subscription must not outlive the write.
+        ISubscriptionRepository inner = Substitute.For<ISubscriptionRepository>();
+        DateTimeOffset termEnd = new(2027, 10, 4, 23, 59, 59, TimeSpan.Zero);
+        inner.GetSubscriptionForTenantAsync(21, Arg.Any<CancellationToken>()).Returns(BuildSubscription(21));
+        inner.ApplyEnterpriseSubscriptionAsync(21, 2, termEnd, Arg.Any<CancellationToken>())
+            .Returns(EnterpriseApplyOutcome.Applied);
+        IConnectionMultiplexer redis = FakeRedisConnection.Create();
+        IBackgroundJobClient backgroundJobs = Substitute.For<IBackgroundJobClient>();
+        RetentionReclassifyDispatcher dispatcher = DispatcherFor(backgroundJobs);
+        CachingSubscriptionRepository repo = Create(inner, redis, dispatcher: dispatcher);
+
+        await repo.GetSubscriptionForTenantAsync(21, CancellationToken.None);
+        EnterpriseApplyOutcome outcome = await repo.ApplyEnterpriseSubscriptionAsync(21, 2, termEnd, CancellationToken.None);
+        await repo.GetSubscriptionForTenantAsync(21, CancellationToken.None);
+
+        await Assert.That(outcome).IsEqualTo(EnterpriseApplyOutcome.Applied);
+        await inner.Received(2).GetSubscriptionForTenantAsync(21, Arg.Any<CancellationToken>());
+        backgroundJobs.DidNotReceive().Create(Arg.Any<Job>(), Arg.Any<IState>());
+        dispatcher.DispatchPending();
+        backgroundJobs.Received(1).Create(
+            Arg.Is<Job>(j => (j.Method.Name == nameof(RetentionReclassifyJob.RunAsync))
+                && ((int)j.Args[0] == 21)),
+            Arg.Any<IState>());
+    }
+
+    [Test]
+    [Arguments(EnterpriseApplyOutcome.AlreadyApplied)]
+    [Arguments(EnterpriseApplyOutcome.StaleRevision)]
+    public async Task ApplyEnterpriseSubscription_NothingWritten_ReturnsOutcomeWithoutEnqueuingReclassify(EnterpriseApplyOutcome innerOutcome)
+    {
+        // Intent: a repeated or out-of-order revision changes no tier, so it must not schedule
+        // pointless retention reclassification.
+        ISubscriptionRepository inner = Substitute.For<ISubscriptionRepository>();
+        DateTimeOffset termEnd = new(2027, 10, 4, 23, 59, 59, TimeSpan.Zero);
+        inner.ApplyEnterpriseSubscriptionAsync(22, 1, termEnd, Arg.Any<CancellationToken>()).Returns(innerOutcome);
+        IConnectionMultiplexer redis = FakeRedisConnection.Create();
+        IBackgroundJobClient backgroundJobs = Substitute.For<IBackgroundJobClient>();
+        RetentionReclassifyDispatcher dispatcher = DispatcherFor(backgroundJobs);
+        CachingSubscriptionRepository repo = Create(inner, redis, dispatcher: dispatcher);
+
+        EnterpriseApplyOutcome outcome = await repo.ApplyEnterpriseSubscriptionAsync(22, 1, termEnd, CancellationToken.None);
+        dispatcher.DispatchPending();
+
+        await Assert.That(outcome).IsEqualTo(innerOutcome);
+        backgroundJobs.DidNotReceive().Create(Arg.Any<Job>(), Arg.Any<IState>());
+    }
+
+    [Test]
+    public async Task PeriodEndAndCancelAtPeriodEnd_ReturnInnerRowCountsAndInvalidateTenantCacheEntry()
+    {
+        // Intent: callers learn whether the write landed (0 for an Enterprise row), and the cache is
+        // dropped either way so a refused write can never leave a stale entry behind.
+        ISubscriptionRepository inner = Substitute.For<ISubscriptionRepository>();
+        DateTimeOffset periodEnd = new(2027, 1, 1, 0, 0, 0, TimeSpan.Zero);
+        inner.GetSubscriptionForTenantAsync(23, Arg.Any<CancellationToken>()).Returns(BuildSubscription(23));
+        inner.UpdateSubscriptionPeriodEndAsync(23, periodEnd, Arg.Any<CancellationToken>()).Returns(1);
+        inner.SetCancelAtPeriodEndAsync(23, true, Arg.Any<CancellationToken>()).Returns(0);
+        IConnectionMultiplexer redis = FakeRedisConnection.Create();
+        CachingSubscriptionRepository repo = Create(inner, redis);
+
+        await repo.GetSubscriptionForTenantAsync(23, CancellationToken.None);
+        int periodUpdated = await repo.UpdateSubscriptionPeriodEndAsync(23, periodEnd, CancellationToken.None);
+        await repo.GetSubscriptionForTenantAsync(23, CancellationToken.None);
+        int cancelUpdated = await repo.SetCancelAtPeriodEndAsync(23, true, CancellationToken.None);
+        await repo.GetSubscriptionForTenantAsync(23, CancellationToken.None);
+
+        await Assert.That(periodUpdated).IsEqualTo(1);
+        await Assert.That(cancelUpdated).IsEqualTo(0);
+        await inner.Received(3).GetSubscriptionForTenantAsync(23, Arg.Any<CancellationToken>());
+    }
 }

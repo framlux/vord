@@ -19,7 +19,14 @@ public interface ITenantSubscriptionOverrideRepository
     /// <summary>
     /// Creates or updates the override for a specific tenant. Null values mean "use tier default".
     /// </summary>
-    Task UpsertOverrideAsync(int tenantId, int? machineLimit, int? retentionDays, int? alertRuleLimit, int? webhookLimit, CancellationToken cancellationToken = default);
+    Task UpsertOverrideAsync(int tenantId, int? machineLimit, int? retentionDays, int? alertRuleLimit, int? webhookLimit, int? memberLimit, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Gets the overrides for the given tenants in one query; tenants without an override are absent from the result.
+    /// </summary>
+    /// <param name="tenantIds">The tenant IDs to query.</param>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    Task<List<TenantSubscriptionOverride>> GetOverridesForTenantsAsync(List<int> tenantIds, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Removes the override for a specific tenant, reverting to tier defaults.

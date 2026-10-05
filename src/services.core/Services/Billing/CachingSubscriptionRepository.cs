@@ -165,10 +165,12 @@ public sealed class CachingSubscriptionRepository : ISubscriptionRepository
     }
 
     /// <inheritdoc/>
-    public async Task UpdateSubscriptionPeriodEndAsync(int tenantId, DateTimeOffset currentPeriodEnd, CancellationToken cancellationToken = default)
+    public async Task<int> UpdateSubscriptionPeriodEndAsync(int tenantId, DateTimeOffset currentPeriodEnd, CancellationToken cancellationToken = default)
     {
-        await _inner.UpdateSubscriptionPeriodEndAsync(tenantId, currentPeriodEnd, cancellationToken);
+        int updated = await _inner.UpdateSubscriptionPeriodEndAsync(tenantId, currentPeriodEnd, cancellationToken);
         await InvalidateAsync(tenantId);
+
+        return updated;
     }
 
     /// <inheritdoc/>
@@ -184,10 +186,28 @@ public sealed class CachingSubscriptionRepository : ISubscriptionRepository
     }
 
     /// <inheritdoc/>
-    public async Task SetCancelAtPeriodEndAsync(int tenantId, bool cancelAtPeriodEnd, CancellationToken cancellationToken = default)
+    public async Task<int> SetCancelAtPeriodEndAsync(int tenantId, bool cancelAtPeriodEnd, CancellationToken cancellationToken = default)
     {
-        await _inner.SetCancelAtPeriodEndAsync(tenantId, cancelAtPeriodEnd, cancellationToken);
+        int updated = await _inner.SetCancelAtPeriodEndAsync(tenantId, cancelAtPeriodEnd, cancellationToken);
         await InvalidateAsync(tenantId);
+
+        return updated;
+    }
+
+    /// <inheritdoc/>
+    public async Task<EnterpriseApplyOutcome> ApplyEnterpriseSubscriptionAsync(
+        int tenantId, int revision, DateTimeOffset termEnd, CancellationToken cancellationToken = default)
+    {
+        EnterpriseApplyOutcome outcome = await _inner.ApplyEnterpriseSubscriptionAsync(tenantId, revision, termEnd, cancellationToken);
+        await InvalidateAsync(tenantId);
+
+        // A tier change moves the tenant's retention class; the caller dispatches after commit.
+        if (outcome == EnterpriseApplyOutcome.Applied)
+        {
+            _reclassifyDispatcher.MarkPending(tenantId);
+        }
+
+        return outcome;
     }
 
     private static string KeyFor(int tenantId)

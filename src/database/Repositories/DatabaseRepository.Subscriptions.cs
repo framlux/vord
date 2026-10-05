@@ -45,7 +45,10 @@ public partial class DatabaseRepository : ISubscriptionRepository
     {
         DateTimeOffset now = DateTimeOffset.UtcNow;
         IUpdatable<TenantSubscription> update = _db.TenantSubscriptions
-            .Where(s => s.TenantId == tenantId)
+            // Enterprise is owned by its agreement. Every write here comes from Stripe, a customer
+            // action or a Stripe-shaped admin grant, so none may touch it; the filter is in SQL so a
+            // stale cached tier or a racing reconciliation pass cannot get around it.
+            .Where(s => (s.TenantId == tenantId) && (s.Tier != SubscriptionTier.Enterprise))
             .AsUpdatable()
             .Set(s => s.Status, status)
             .Set(s => s.UpdatedAt, now);
@@ -66,14 +69,17 @@ public partial class DatabaseRepository : ISubscriptionRepository
     }
 
     /// <inheritdoc/>
-    public async Task UpdateSubscriptionPeriodEndAsync(int tenantId, DateTimeOffset currentPeriodEnd, CancellationToken cancellationToken)
+    public async Task<int> UpdateSubscriptionPeriodEndAsync(int tenantId, DateTimeOffset currentPeriodEnd, CancellationToken cancellationToken = default)
     {
         DateTimeOffset now = DateTimeOffset.UtcNow;
-        await _db.TenantSubscriptions
-            .Where(s => s.TenantId == tenantId)
+        int updated = await _db.TenantSubscriptions
+            // Enterprise rows are excluded in SQL for the same reason as in UpdateSubscriptionStateAsync.
+            .Where(s => (s.TenantId == tenantId) && (s.Tier != SubscriptionTier.Enterprise))
             .Set(s => s.CurrentPeriodEnd, currentPeriodEnd)
             .Set(s => s.UpdatedAt, now)
             .UpdateAsync(cancellationToken);
+
+        return updated;
     }
 
     /// <inheritdoc/>
@@ -118,8 +124,10 @@ public partial class DatabaseRepository : ISubscriptionRepository
     /// <inheritdoc/>
     public async Task<List<TenantSubscription>> GetPaidSubscriptionsAsync(CancellationToken cancellationToken)
     {
+        // Stripe-billed tiers only. Enterprise is paid but invoiced outside Stripe, so the reconciler
+        // that reads this list must never see it.
         List<TenantSubscription> subscriptions = await _db.TenantSubscriptions
-            .Where(s => s.Tier != SubscriptionTier.Free)
+            .Where(s => (s.Tier == SubscriptionTier.Pro) || (s.Tier == SubscriptionTier.Team))
             .ToListAsync(cancellationToken);
 
         return subscriptions;
@@ -136,13 +144,65 @@ public partial class DatabaseRepository : ISubscriptionRepository
     }
 
     /// <inheritdoc/>
-    public async Task SetCancelAtPeriodEndAsync(int tenantId, bool cancelAtPeriodEnd, CancellationToken cancellationToken)
+    public async Task<int> SetCancelAtPeriodEndAsync(int tenantId, bool cancelAtPeriodEnd, CancellationToken cancellationToken = default)
     {
         DateTimeOffset now = DateTimeOffset.UtcNow;
-        await _db.TenantSubscriptions
-            .Where(s => s.TenantId == tenantId)
+        int updated = await _db.TenantSubscriptions
+            // Enterprise rows are excluded in SQL for the same reason as in UpdateSubscriptionStateAsync.
+            .Where(s => (s.TenantId == tenantId) && (s.Tier != SubscriptionTier.Enterprise))
             .Set(s => s.CancelAtPeriodEnd, cancelAtPeriodEnd)
             .Set(s => s.UpdatedAt, now)
             .UpdateAsync(cancellationToken);
+
+        return updated;
+    }
+
+    /// <inheritdoc/>
+    public async Task<EnterpriseApplyOutcome> ApplyEnterpriseSubscriptionAsync(
+        int tenantId, int revision, DateTimeOffset termEnd, CancellationToken cancellationToken = default)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(revision);
+
+        DateTimeOffset now = DateTimeOffset.UtcNow;
+        TenantSubscription? existing = await _db.TenantSubscriptions
+            .Where(s => s.TenantId == tenantId)
+            .FirstOrDefaultAsync(cancellationToken);
+
+        if (existing is null)
+        {
+            await _db.InsertWithInt32IdentityAsync(new TenantSubscription
+            {
+                TenantId = tenantId,
+                Tier = SubscriptionTier.Enterprise,
+                Status = SubscriptionStatus.Active,
+                CurrentPeriodEnd = termEnd,
+                CancelAtPeriodEnd = false,
+                AppliedAgreementRevision = revision,
+                CreatedAt = now,
+                UpdatedAt = now,
+            }, token: cancellationToken);
+
+            return EnterpriseApplyOutcome.Applied;
+        }
+
+        if (existing.AppliedAgreementRevision.HasValue && (existing.AppliedAgreementRevision.Value == revision))
+        {
+            return EnterpriseApplyOutcome.AlreadyApplied;
+        }
+
+        // The revision guard is repeated in SQL so two applies racing past the read above still
+        // cannot let the older one land second.
+        int updated = await _db.TenantSubscriptions
+            .Where(s => (s.TenantId == tenantId) &&
+                        ((s.AppliedAgreementRevision == null) || (s.AppliedAgreementRevision < revision)))
+            .Set(s => s.Tier, SubscriptionTier.Enterprise)
+            .Set(s => s.Status, SubscriptionStatus.Active)
+            .Set(s => s.CurrentPeriodEnd, (DateTimeOffset?)termEnd)
+            .Set(s => s.CancelAtPeriodEnd, false)
+            .Set(s => s.AppliedAgreementRevision, (int?)revision)
+            .Set(s => s.UpdatedAt, now)
+            .UpdateAsync(cancellationToken);
+
+        return updated > 0 ? EnterpriseApplyOutcome.Applied : EnterpriseApplyOutcome.StaleRevision;
     }
 }

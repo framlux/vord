@@ -20,14 +20,15 @@ public interface ISubscriptionRepository
     /// <summary>
     /// Updates the state of a tenant's subscription in a single parameterized UPDATE. Replaces
     /// the previous per-transition mutators (checkout, revert-to-free, past-due, reactivate,
-    /// downgrade-to-pro, deactivate, admin update).
+    /// downgrade-to-pro, deactivate, admin update). Never updates an Enterprise row: that tier is
+    /// owned by its agreement, not by Stripe or by a customer action.
     /// </summary>
     /// <param name="tenantId">The tenant whose subscription is updated.</param>
     /// <param name="tier">The new tier, or null to leave the tier unchanged.</param>
     /// <param name="status">The new subscription status.</param>
     /// <param name="clearCurrentPeriodEnd">When true, sets <see cref="TenantSubscription.CurrentPeriodEnd"/> to null; otherwise the column is left unchanged.</param>
     /// <param name="cancellationToken">A cancellation token.</param>
-    /// <returns>The number of rows updated (0 when the tenant has no subscription).</returns>
+    /// <returns>The number of rows updated; 0 when the tenant has no subscription or is on Enterprise.</returns>
     Task<int> UpdateSubscriptionStateAsync(
         int tenantId,
         SubscriptionTier? tier,
@@ -36,9 +37,14 @@ public interface ISubscriptionRepository
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Updates the current period end of a subscription.
+    /// Updates the current period end of a subscription. Never updates an Enterprise row, whose
+    /// period end is the agreement term.
     /// </summary>
-    Task UpdateSubscriptionPeriodEndAsync(int tenantId, DateTimeOffset currentPeriodEnd, CancellationToken cancellationToken = default);
+    /// <param name="tenantId">The tenant whose subscription is updated.</param>
+    /// <param name="currentPeriodEnd">The new current period end.</param>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    /// <returns>The number of rows updated; 0 when the tenant has no subscription or is on Enterprise.</returns>
+    Task<int> UpdateSubscriptionPeriodEndAsync(int tenantId, DateTimeOffset currentPeriodEnd, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Gets the subscription for a tenant.
@@ -66,7 +72,8 @@ public interface ISubscriptionRepository
     Task InvalidateSubscriptionCacheAsync(int tenantId, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Gets all subscriptions where the tier is not Free (i.e., paid subscriptions that have a Stripe counterpart).
+    /// Gets the subscriptions billed through Stripe: Pro and Team only. Enterprise is paid but invoiced
+    /// outside Stripe, so it has no Stripe counterpart and is excluded.
     /// </summary>
     Task<List<TenantSubscription>> GetPaidSubscriptionsAsync(CancellationToken cancellationToken = default);
 
@@ -80,10 +87,26 @@ public interface ISubscriptionRepository
     /// <summary>
     /// Sets the <see cref="TenantSubscription.CancelAtPeriodEnd"/> flag for a tenant's subscription.
     /// Used by the Stripe sync path to mirror Stripe's cancel-at-period-end state locally so the UI
-    /// can reflect a pending cancellation before the subscription transitions to canceled.
+    /// can reflect a pending cancellation before the subscription transitions to canceled. Never
+    /// updates an Enterprise row.
     /// </summary>
     /// <param name="tenantId">The tenant whose subscription is being updated.</param>
     /// <param name="cancelAtPeriodEnd">The new cancel-at-period-end value.</param>
     /// <param name="cancellationToken">A cancellation token.</param>
-    Task SetCancelAtPeriodEndAsync(int tenantId, bool cancelAtPeriodEnd, CancellationToken cancellationToken = default);
+    /// <returns>The number of rows updated; 0 when the tenant has no subscription or is on Enterprise.</returns>
+    Task<int> SetCancelAtPeriodEndAsync(int tenantId, bool cancelAtPeriodEnd, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Puts a tenant on the Enterprise tier for an applied agreement revision: creates the
+    /// subscription row if missing, otherwise sets tier Enterprise, status Active, the term end and
+    /// the revision. The only write that may move a tenant into Enterprise. Must run inside the
+    /// caller's transaction.
+    /// </summary>
+    /// <param name="tenantId">The tenant.</param>
+    /// <param name="revision">The agreement revision being applied; must be positive.</param>
+    /// <param name="termEnd">The end of the agreement term, stored as the current period end.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <returns>Whether the revision was applied, already applied, or older than the one applied.</returns>
+    Task<EnterpriseApplyOutcome> ApplyEnterpriseSubscriptionAsync(
+        int tenantId, int revision, DateTimeOffset termEnd, CancellationToken cancellationToken = default);
 }

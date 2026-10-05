@@ -1,0 +1,172 @@
+// Copyright (c) 2026 Framlux LLC
+// Licensed under the Functional Source License, Version 1.1, ALv2 Future License
+// See LICENSE for details.
+
+using Framlux.FleetManagement.Database.Enums;
+using Framlux.FleetManagement.Database.Models;
+using Framlux.FleetManagement.Database.Repositories;
+using Framlux.FleetManagement.Test.Infrastructure;
+using LinqToDB;
+using Microsoft.Extensions.Logging.Abstractions;
+
+namespace Framlux.FleetManagement.Test.Functional.DatabaseRepository;
+
+/// <summary>
+/// Repository tests for the Enterprise guarantees on subscription writes: every Stripe-shaped or
+/// customer-shaped mutator leaves an Enterprise row alone, the paid-subscription read excludes it,
+/// and the one write that enters Enterprise is revision-ordered and idempotent.
+/// </summary>
+public sealed class EnterpriseSubscriptionWriteTests
+{
+    private static readonly DateTimeOffset TermEnd = new(2027, 10, 4, 23, 59, 59, TimeSpan.Zero);
+
+    private static Database.Repositories.DatabaseRepository BuildRepository(TestDatabaseFactory dbFactory)
+    {
+        return new Database.Repositories.DatabaseRepository(
+            dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+    }
+
+    private static async Task SeedAsync(TestDatabaseFactory dbFactory, SubscriptionTier tier)
+    {
+        TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 1, tier: tier, status: SubscriptionStatus.Active);
+        await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
+    }
+
+    [Test]
+    public async Task UpdateSubscriptionState_EnterpriseRow_IsLeftUntouched()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        await SeedAsync(dbFactory, SubscriptionTier.Enterprise);
+        Database.Repositories.DatabaseRepository repo = BuildRepository(dbFactory);
+
+        int updated = await repo.UpdateSubscriptionStateAsync(1, SubscriptionTier.Free, SubscriptionStatus.Canceled, clearCurrentPeriodEnd: true);
+
+        TenantSubscription? row = await repo.GetSubscriptionForTenantAsync(1, CancellationToken.None);
+        await Assert.That(updated).IsEqualTo(0);
+        await Assert.That(row!.Tier).IsEqualTo(SubscriptionTier.Enterprise);
+        await Assert.That(row.Status).IsEqualTo(SubscriptionStatus.Active);
+    }
+
+    [Test]
+    public async Task PeriodEndAndCancelAtPeriodEnd_EnterpriseRow_AreLeftUntouched()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        await SeedAsync(dbFactory, SubscriptionTier.Enterprise);
+        Database.Repositories.DatabaseRepository repo = BuildRepository(dbFactory);
+
+        int periodUpdated = await repo.UpdateSubscriptionPeriodEndAsync(1, TermEnd);
+        int cancelUpdated = await repo.SetCancelAtPeriodEndAsync(1, true);
+
+        TenantSubscription? row = await repo.GetSubscriptionForTenantAsync(1, CancellationToken.None);
+        await Assert.That(periodUpdated).IsEqualTo(0);
+        await Assert.That(cancelUpdated).IsEqualTo(0);
+        await Assert.That(row!.CancelAtPeriodEnd).IsFalse();
+    }
+
+    [Test]
+    public async Task UpdateSubscriptionState_TeamRow_StillUpdates()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        await SeedAsync(dbFactory, SubscriptionTier.Team);
+        Database.Repositories.DatabaseRepository repo = BuildRepository(dbFactory);
+
+        int updated = await repo.UpdateSubscriptionStateAsync(1, SubscriptionTier.Pro, SubscriptionStatus.Active);
+
+        await Assert.That(updated).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task GetPaidSubscriptions_ExcludesEnterpriseFreeAndNone()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        int tenantId = 1;
+        foreach (SubscriptionTier tier in Enum.GetValues<SubscriptionTier>())
+        {
+            await dbFactory.Context.InsertWithInt32IdentityAsync(
+                TestDataBuilder.BuildSubscription(tenantId: tenantId++, tier: tier, status: SubscriptionStatus.Active));
+        }
+
+        List<TenantSubscription> paid = await BuildRepository(dbFactory).GetPaidSubscriptionsAsync(CancellationToken.None);
+
+        await Assert.That(paid.Select(s => s.Tier).OrderBy(t => t))
+            .IsEquivalentTo([SubscriptionTier.Pro, SubscriptionTier.Team]);
+    }
+
+    [Test]
+    public async Task ApplyEnterprise_NoRow_CreatesAnEnterpriseRow()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        Database.Repositories.DatabaseRepository repo = BuildRepository(dbFactory);
+
+        EnterpriseApplyOutcome outcome = await repo.ApplyEnterpriseSubscriptionAsync(1, 1, TermEnd);
+
+        TenantSubscription? row = await repo.GetSubscriptionForTenantAsync(1, CancellationToken.None);
+        await Assert.That(outcome).IsEqualTo(EnterpriseApplyOutcome.Applied);
+        await Assert.That(row!.Tier).IsEqualTo(SubscriptionTier.Enterprise);
+        await Assert.That(row.Status).IsEqualTo(SubscriptionStatus.Active);
+        await Assert.That(row.CurrentPeriodEnd).IsEqualTo(TermEnd);
+        await Assert.That(row.CancelAtPeriodEnd).IsFalse();
+        await Assert.That(row.AppliedAgreementRevision).IsEqualTo(1);
+    }
+
+    [Test]
+    [Arguments(SubscriptionTier.Free)]
+    [Arguments(SubscriptionTier.Team)]
+    public async Task ApplyEnterprise_ExistingRow_MovesItToEnterprise(SubscriptionTier from)
+    {
+        using TestDatabaseFactory dbFactory = new();
+        await SeedAsync(dbFactory, from);
+        Database.Repositories.DatabaseRepository repo = BuildRepository(dbFactory);
+
+        EnterpriseApplyOutcome outcome = await repo.ApplyEnterpriseSubscriptionAsync(1, 1, TermEnd);
+
+        TenantSubscription? row = await repo.GetSubscriptionForTenantAsync(1, CancellationToken.None);
+        await Assert.That(outcome).IsEqualTo(EnterpriseApplyOutcome.Applied);
+        await Assert.That(row!.Tier).IsEqualTo(SubscriptionTier.Enterprise);
+    }
+
+    [Test]
+    public async Task ApplyEnterprise_SameRevisionTwice_IsANoOp()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        Database.Repositories.DatabaseRepository repo = BuildRepository(dbFactory);
+        await repo.ApplyEnterpriseSubscriptionAsync(1, 2, TermEnd);
+
+        EnterpriseApplyOutcome outcome = await repo.ApplyEnterpriseSubscriptionAsync(1, 2, TermEnd.AddYears(5));
+
+        TenantSubscription? row = await repo.GetSubscriptionForTenantAsync(1, CancellationToken.None);
+        await Assert.That(outcome).IsEqualTo(EnterpriseApplyOutcome.AlreadyApplied);
+        await Assert.That(row!.CurrentPeriodEnd).IsEqualTo(TermEnd);
+    }
+
+    [Test]
+    public async Task ApplyEnterprise_OlderRevision_IsRefusedAndChangesNothing()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        Database.Repositories.DatabaseRepository repo = BuildRepository(dbFactory);
+        await repo.ApplyEnterpriseSubscriptionAsync(1, 3, TermEnd);
+
+        EnterpriseApplyOutcome outcome = await repo.ApplyEnterpriseSubscriptionAsync(1, 2, TermEnd.AddYears(5));
+
+        TenantSubscription? row = await repo.GetSubscriptionForTenantAsync(1, CancellationToken.None);
+        await Assert.That(outcome).IsEqualTo(EnterpriseApplyOutcome.StaleRevision);
+        await Assert.That(row!.AppliedAgreementRevision).IsEqualTo(3);
+        await Assert.That(row.CurrentPeriodEnd).IsEqualTo(TermEnd);
+    }
+
+    [Test]
+    public async Task UpsertOverride_WritesMemberLimit_AndBatchReadReturnsIt()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        Database.Repositories.DatabaseRepository repo = BuildRepository(dbFactory);
+
+        await repo.UpsertOverrideAsync(1, 500, 180, 40, 20, 75);
+        await repo.UpsertOverrideAsync(2, 10, 30, 5, 5, int.MaxValue);
+
+        List<TenantSubscriptionOverride> overrides = await repo.GetOverridesForTenantsAsync([1, 2, 3]);
+
+        await Assert.That(overrides.Count).IsEqualTo(2);
+        await Assert.That(overrides.Single(o => o.TenantId == 1).MemberLimit).IsEqualTo(75);
+        await Assert.That(overrides.Single(o => o.TenantId == 2).MemberLimit).IsEqualTo(int.MaxValue);
+    }
+}
