@@ -17,8 +17,10 @@ namespace Framlux.FleetManagement.Services.Core.Billing;
 /// <para>
 /// Every predicate here is <b>block-polarity</b>: <c>true</c> means refuse. A single allow-polarity
 /// name sitting among them is exactly the detail that gets misread once and then copied, so there
-/// is deliberately not one. Call sites that ask the positive question — "is this tenant Team?" —
-/// write <c>RequiresTeam(subscription) == false</c> rather than a fresh comparison.
+/// is deliberately not one. Call sites that ask the positive question — "does this tenant have Team
+/// features?" — write <c>RequiresTeam(subscription) == false</c> rather than a fresh comparison.
+/// That answer is true for Team and Enterprise alike: the predicate refuses everything outside
+/// <c>{Team, Enterprise}</c>, so a caller must never read it as "is on the Team tier".
 /// </para>
 /// <para>
 /// Every predicate also fails closed on a missing subscription. That case is decided here, in the
@@ -44,8 +46,8 @@ public static class SubscriptionPolicy
         [SubscriptionTier.Team, SubscriptionTier.Enterprise];
 
     /// <summary>
-    /// Whether the tenant must be refused a Pro-or-Team feature: no subscription, the Free tier, or
-    /// any status other than Active.
+    /// Whether the tenant must be refused a feature that needs a paid tier (Pro, Team or Enterprise):
+    /// no subscription, the Free tier, or any status other than Active.
     /// </summary>
     /// <param name="subscription">The tenant's subscription, or <c>null</c> if none exists.</param>
     /// <returns><c>true</c> when access must be denied.</returns>
@@ -97,8 +99,9 @@ public static class SubscriptionPolicy
     /// <returns><c>true</c> when access must be denied.</returns>
     /// <remarks>
     /// Distinct from <see cref="RequiresPro"/>, which additionally requires an Active status, and
-    /// from <see cref="RequiresTeam(TenantSubscription)"/>, which refuses Pro. This is the rule
-    /// behind the invitation upsell, which answers 402 rather than 403.
+    /// from <see cref="RequiresTeam(TenantSubscription)"/>, which refuses Pro. Pro, Team and
+    /// Enterprise all pass: Enterprise is invoiced outside Stripe but is a paid tier. This is the
+    /// rule behind the invitation upsell, which answers 402 rather than 403.
     /// </remarks>
     public static bool RequiresPaidTier(TenantSubscription? subscription)
     {
@@ -108,14 +111,16 @@ public static class SubscriptionPolicy
 
     /// <summary>
     /// Whether an alert rule must not be evaluated for the tenant that owns it: the tenant is not
-    /// entitled to alerting at all, or the rule is a custom one and the tenant is not on Team.
+    /// entitled to alerting at all, or the rule is a custom one and the tenant lacks Team features
+    /// (it is on neither Team nor Enterprise).
     /// </summary>
     /// <param name="rule">The rule about to be evaluated.</param>
     /// <param name="subscription">The owning tenant's subscription, or <c>null</c> if none exists.</param>
     /// <returns><c>true</c> when the rule must be skipped.</returns>
     /// <remarks>
-    /// Authoring a custom rule is Team's, and so is running one. Every path that takes Team away is
-    /// expected to clear the rule's enabled flag, but that flag is a stored bit maintained by four
+    /// Authoring a custom rule belongs to the Team feature set (Team and Enterprise), and so does
+    /// running one. Every path that takes those features away is expected to clear the rule's enabled
+    /// flag, but that flag is a stored bit maintained by four
     /// separate write paths, and a path that forgets leaves a Team-authored rule firing on a Pro
     /// plan with nothing to notice. Asking the tier at evaluation time makes the entitlement true by
     /// construction rather than by remembering. The flag is still cleared on downgrade — a frozen

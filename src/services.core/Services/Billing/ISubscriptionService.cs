@@ -94,5 +94,10 @@ public interface ISubscriptionService
     /// <param name="tier">The tier whose floor applies. Callers pass the tier being billed,
     /// which at checkout is the tier being purchased rather than the tenant's current one.</param>
     /// <param name="ct">Cancellation token.</param>
+    /// <exception cref="InvalidOperationException">
+    /// <paramref name="tier"/> is not billed through Stripe: Free and the unset default have no billable
+    /// floor, and Enterprise is invoiced outside Stripe, so a count for any of them could be pushed to
+    /// Stripe by mistake. Callers already treat per-tenant billing as best-effort and catch around it.
+    /// </exception>
     Task<int> GetBillableMachineCountAsync(int tenantId, SubscriptionTier tier, CancellationToken ct);
 }
