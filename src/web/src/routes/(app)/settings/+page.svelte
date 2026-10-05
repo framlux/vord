@@ -7,6 +7,7 @@
 	import type { TenantDto, SubscriptionDto } from '$lib/api/types';
 	import { Building2, Download, Check, CircleAlert, LoaderCircle, CreditCard } from 'lucide-svelte';
 	import { formatBytes } from '$lib/utils/format';
+	import { tierBadgeClasses } from '$lib/utils/tier';
 
 	let { data } = $props();
 
@@ -14,17 +15,6 @@
 	const subscription: SubscriptionDto | null = $derived(data.subscription);
 	// A self-hosted deployment has no tiers or limits, so the whole subscription card is noise.
 	const selfHosted: boolean = $derived(data.user?.deployment?.selfHosted === true);
-
-	function getTierBadgeClasses(tier: string): string {
-		if (tier === 'Pro') {
-			return 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400';
-		}
-		if (tier === 'Team') {
-			return 'bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-400';
-		}
-
-		return 'bg-surface-100 text-surface-700 dark:bg-surface-700 dark:text-surface-300';
-	}
 
 	function getStatusBadgeClasses(status: string): string {
 		if (status === 'Active') {
@@ -231,7 +221,7 @@
 				<div class="flex flex-wrap items-center gap-4">
 					<div>
 						<p class="text-xs text-surface-500 dark:text-surface-400">Tier</p>
-						<span class="mt-1 inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium {getTierBadgeClasses('Free')}">
+						<span class="mt-1 inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium {tierBadgeClasses('Free')}">
 							Free
 						</span>
 					</div>
@@ -248,7 +238,7 @@
 				<div class="flex flex-wrap items-center gap-6">
 					<div>
 						<p class="text-xs text-surface-500 dark:text-surface-400">Tier</p>
-						<span class="mt-1 inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium {getTierBadgeClasses(subscription.tier)}">
+						<span class="mt-1 inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium {tierBadgeClasses(subscription.tier)}">
 							{subscription.tier}
 						</span>
 					</div>

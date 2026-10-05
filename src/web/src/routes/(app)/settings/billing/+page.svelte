@@ -5,6 +5,7 @@
 <script lang="ts">
 	import type { SubscriptionDto, UpcomingInvoiceDto, InvoiceDto, UsagePointDto, CatalogItemDto } from '$lib/api/types';
 	import { billingIntervalLabel, deriveBillingPageState, findCatalogPrice, findCatalogPriceWithFallback, monthlyEquivalentCents } from '$lib/utils/billing-state';
+	import { isEnterprise, isStripeBilled, tierBadgeClasses } from '$lib/utils/tier';
 	import { CreditCard, CircleArrowUp, CircleArrowDown, ExternalLink, CircleAlert, CircleX, RotateCcw, Calculator, Receipt, TrendingUp, Download, ChevronDown, Tag } from 'lucide-svelte';
 
 	let { data, form } = $props();
@@ -17,7 +18,8 @@
 	const pageState = $derived(deriveBillingPageState(subscription));
 	const isCanceled = $derived(pageState === 'canceled');
 	const isFree = $derived((subscription === null || subscription.tier === 'Free') && (isCanceled === false));
-	const isPaid = $derived(subscription !== null && (subscription.tier === 'Pro' || subscription.tier === 'Team') && (isCanceled === false));
+	const isEnterpriseTier = $derived(isEnterprise(subscription?.tier));
+	const isPaid = $derived(isStripeBilled(subscription?.tier) && (isCanceled === false));
 	const isPro = $derived(subscription !== null && subscription.tier === 'Pro');
 	const isTeam = $derived(subscription !== null && subscription.tier === 'Team');
 	const isPastDue = $derived(subscription !== null && subscription.status === 'PastDue');
@@ -101,17 +103,6 @@
 	let machineCountInput = $state(1);
 	let machineCount = $derived(Math.max(1, Math.min(10000, machineCountInput || 1)));
 
-	function getTierBadgeClasses(tier: string): string {
-		if (tier === 'Pro') {
-			return 'bg-blue-100 text-blue-800 dark:bg-blue-900/30 dark:text-blue-400';
-		}
-		if (tier === 'Team') {
-			return 'bg-purple-100 text-purple-800 dark:bg-purple-900/30 dark:text-purple-400';
-		}
-
-		return 'bg-surface-100 text-surface-700 dark:bg-surface-700 dark:text-surface-300';
-	}
-
 	function getStatusBadgeClasses(status: string): string {
 		if (status === 'Active') {
 			return 'bg-green-100 text-green-800 dark:bg-green-900/30 dark:text-green-400';
@@ -183,6 +174,17 @@
 		return Math.min(100, Math.round((sub.machineCount / sub.machineLimit) * 100));
 	}
 
+	// The server reports an unlimited member allowance as the largest 32-bit integer.
+	const unlimitedMemberLimit = 2147483647;
+
+	function getMemberLimitText(sub: SubscriptionDto): string {
+		if (sub.memberLimit === unlimitedMemberLimit) {
+			return 'Unlimited';
+		}
+
+		return `${sub.memberCount} / ${sub.memberLimit}`;
+	}
+
 	function getPendingActionDescription(): string {
 		if (pendingAction === 'CancelAccount') {
 			return 'Your account will be canceled';
@@ -223,7 +225,7 @@
 	{/if}
 
 	<!-- Past Due Warning Banner -->
-	{#if isPastDue}
+	{#if isPastDue && (isEnterpriseTier === false)}
 		<div class="rounded-xl border border-amber-300 bg-amber-50 p-4 dark:border-amber-700 dark:bg-amber-900/20">
 			<div class="flex items-start gap-3">
 				<CircleAlert class="mt-0.5 h-5 w-5 text-amber-600 dark:text-amber-400" />
@@ -248,7 +250,7 @@
 	{/if}
 
 	<!-- Pending Action Banner (cancel or downgrade) -->
-	{#if hasPendingAction && subscription !== null}
+	{#if hasPendingAction && (subscription !== null) && (isEnterpriseTier === false)}
 		<div class="rounded-xl border p-4 {isCanceling ? 'border-red-300 bg-red-50 dark:border-red-700 dark:bg-red-900/20' : 'border-amber-300 bg-amber-50 dark:border-amber-700 dark:bg-amber-900/20'}">
 			<div class="flex items-start gap-3">
 				{#if isCanceling}
@@ -294,7 +296,7 @@
 						Your subscription has been canceled and your account is in read-only mode.
 						Reactivate to regain full access.
 					</p>
-					{#if hasBillingService}
+					{#if hasBillingService && (isEnterpriseTier === false)}
 						<div class="mt-4 flex flex-wrap gap-3">
 							<form method="POST" action="?/reactivate">
 								<button
@@ -362,7 +364,7 @@
 				<div class="flex items-center gap-4">
 					<div>
 						<p class="text-xs text-surface-500 dark:text-surface-400">Tier</p>
-						<span class="mt-1 inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium {getTierBadgeClasses('Free')}">
+						<span class="mt-1 inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium {tierBadgeClasses('Free')}">
 							Free
 						</span>
 					</div>
@@ -381,7 +383,7 @@
 				<div class="flex flex-wrap items-center gap-6">
 					<div>
 						<p class="text-xs text-surface-500 dark:text-surface-400">Tier</p>
-						<span class="mt-1 inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium {getTierBadgeClasses(subscription.tier)}">
+						<span class="mt-1 inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium {tierBadgeClasses(subscription.tier)}">
 							{subscription.tier}
 						</span>
 					</div>
@@ -407,7 +409,7 @@
 					{/if}
 					{#if subscription.currentPeriodEnd !== null}
 						<div>
-							<p class="text-xs text-surface-500 dark:text-surface-400">Current Period Ends</p>
+							<p class="text-xs text-surface-500 dark:text-surface-400">{isEnterpriseTier ? 'Term ends' : 'Current Period Ends'}</p>
 							<p class="mt-1 text-sm font-medium text-surface-900 dark:text-surface-100">
 								{formatPeriodEnd(subscription.currentPeriodEnd)}
 							</p>
@@ -436,12 +438,21 @@
 						</div>
 					{/if}
 				</div>
+
+				{#if isEnterpriseTier}
+					<div class="flex items-center justify-between">
+						<p class="text-xs text-surface-500 dark:text-surface-400">Member Usage</p>
+						<p class="text-xs font-medium text-surface-700 dark:text-surface-300">
+							{getMemberLimitText(subscription)}
+						</p>
+					</div>
+				{/if}
 			</div>
 		{/if}
 	</div>
 
 	<!-- Upgrade / Manage / Downgrade Section -->
-	{#if hasBillingService}
+	{#if hasBillingService && (isEnterpriseTier === false)}
 		<div
 			class="rounded-xl border border-surface-200 bg-surface-50 p-6 dark:border-surface-700 dark:bg-surface-800"
 		>
@@ -480,7 +491,7 @@
 								{@const item = findCatalogPriceWithFallback(catalog, tierName, selectedInterval)}
 								{#if item !== null}
 									<div class="flex flex-col rounded-xl border border-surface-200 bg-surface-50 p-6 dark:border-surface-700 dark:bg-surface-800">
-										<span class="inline-flex w-fit items-center rounded-full px-2.5 py-0.5 text-xs font-medium {getTierBadgeClasses(tierName)}">
+										<span class="inline-flex w-fit items-center rounded-full px-2.5 py-0.5 text-xs font-medium {tierBadgeClasses(tierName)}">
 											{tierName}
 										</span>
 										<p class="mt-3 text-3xl font-bold text-surface-900 dark:text-surface-50">
@@ -784,8 +795,21 @@
 		</div>
 	{/if}
 
+	<!-- An Enterprise tenant is invoiced under its agreement, so no Stripe action is offered to it -->
+	{#if isEnterpriseTier}
+		<section class="rounded-xl border border-surface-200 bg-surface-50 p-6 dark:border-surface-700 dark:bg-surface-800">
+			<h2 class="text-lg font-semibold text-surface-900 dark:text-surface-50">Enterprise agreement</h2>
+			<p class="mt-2 text-sm text-surface-600 dark:text-surface-300">
+				Your plan and its limits are set by your agreement and invoiced directly, not through this page.
+			</p>
+			<a href="mailto:support@framlux.io?subject=Enterprise%20agreement" class="mt-4 inline-block text-sm font-medium text-primary-600 hover:underline dark:text-primary-400">
+				Contact us about your agreement
+			</a>
+		</section>
+	{/if}
+
 	<!-- Current Bill Summary -->
-	{#if upcomingInvoice?.hasInvoice}
+	{#if upcomingInvoice?.hasInvoice && (isEnterpriseTier === false)}
 		<div class="rounded-xl border border-surface-200 bg-surface-50 p-6 dark:border-surface-700 dark:bg-surface-800">
 			<div class="flex items-center gap-2 text-lg font-semibold text-surface-900 dark:text-surface-50">
 				<Receipt size={20} />
@@ -863,7 +887,7 @@
 	{/if}
 
 	<!-- Invoice History -->
-	{#if invoices.length > 0}
+	{#if (invoices.length > 0) && (isEnterpriseTier === false)}
 		<div class="rounded-xl border border-surface-200 bg-surface-50 p-6 dark:border-surface-700 dark:bg-surface-800">
 			<div class="flex items-center gap-2 text-lg font-semibold text-surface-900 dark:text-surface-50">
 				<Receipt size={20} />
@@ -972,102 +996,104 @@
 		</div>
 	{/if}
 
-	<!-- Plan Comparison -->
-	<div
-		class="rounded-xl border border-surface-200 bg-surface-50 p-6 dark:border-surface-700 dark:bg-surface-800"
-	>
-		<h2 class="mb-4 text-lg font-semibold text-surface-900 dark:text-surface-50">Plan Comparison</h2>
-		<div class="overflow-x-auto">
-			<table class="w-full text-sm">
-				<thead>
-					<tr class="border-b border-surface-200 dark:border-surface-700">
-						<th scope="col" class="py-3 pr-4 text-left font-medium text-surface-500 dark:text-surface-400">Feature</th>
-						<th scope="col" class="px-4 py-3 text-center font-medium text-surface-500 dark:text-surface-400">Free</th>
-						<th scope="col" class="px-4 py-3 text-center font-medium text-blue-600 dark:text-blue-400">Pro</th>
-						<th scope="col" class="px-4 py-3 text-center font-medium text-purple-600 dark:text-purple-400">Team</th>
-					</tr>
-				</thead>
-				<tbody class="divide-y divide-surface-100 dark:divide-surface-700">
-					<tr>
-						<td class="py-3 pr-4 text-surface-900 dark:text-surface-100">Machine Limit</td>
-						<td class="px-4 py-3 text-center text-surface-600 dark:text-surface-400">3</td>
-						<td class="px-4 py-3 text-center text-surface-600 dark:text-surface-400">1,000</td>
-						<td class="px-4 py-3 text-center text-surface-600 dark:text-surface-400">10,000</td>
-					</tr>
-					<tr>
-						<td class="py-3 pr-4 text-surface-900 dark:text-surface-100">Data Retention</td>
-						<td class="px-4 py-3 text-center text-surface-600 dark:text-surface-400">1 day</td>
-						<td class="px-4 py-3 text-center text-surface-600 dark:text-surface-400">60 days</td>
-						<td class="px-4 py-3 text-center text-surface-600 dark:text-surface-400">365 days</td>
-					</tr>
-					<tr>
-						<td class="py-3 pr-4 text-surface-900 dark:text-surface-100">Alerting</td>
-						<td class="px-4 py-3 text-center text-surface-400">-</td>
-						<td class="px-4 py-3 text-center text-green-600 dark:text-green-400">Default rules</td>
-						<td class="px-4 py-3 text-center text-green-600 dark:text-green-400">Custom rules</td>
-					</tr>
-					<tr>
-						<td class="py-3 pr-4 text-surface-900 dark:text-surface-100">Audit Log</td>
-						<td class="px-4 py-3 text-center text-surface-400">-</td>
-						<td class="px-4 py-3 text-center text-surface-400">-</td>
-						<td class="px-4 py-3 text-center text-green-600 dark:text-green-400">Full access</td>
-					</tr>
-					<tr>
-						<td class="py-3 pr-4 text-surface-900 dark:text-surface-100">Custom OIDC SSO</td>
-						<td class="px-4 py-3 text-center text-surface-400">-</td>
-						<td class="px-4 py-3 text-center text-surface-400">-</td>
-						<td class="px-4 py-3 text-center text-green-600 dark:text-green-400">Included</td>
-					</tr>
-					<tr>
-						<td class="py-3 pr-4 text-surface-900 dark:text-surface-100">Price</td>
-						<td class="px-4 py-3 text-center font-medium text-surface-900 dark:text-surface-100">$0</td>
-						<td class="px-4 py-3 text-center font-medium text-surface-900 dark:text-surface-100">{formatCents(proMonthlyCents)}/host/mo</td>
-						<td class="px-4 py-3 text-center font-medium text-surface-900 dark:text-surface-100">{formatCents(teamMonthlyCents)}/host/mo</td>
-					</tr>
-				</tbody>
-			</table>
+	{#if isEnterpriseTier === false}
+		<!-- Plan Comparison -->
+		<div
+			class="rounded-xl border border-surface-200 bg-surface-50 p-6 dark:border-surface-700 dark:bg-surface-800"
+		>
+			<h2 class="mb-4 text-lg font-semibold text-surface-900 dark:text-surface-50">Plan Comparison</h2>
+			<div class="overflow-x-auto">
+				<table class="w-full text-sm">
+					<thead>
+						<tr class="border-b border-surface-200 dark:border-surface-700">
+							<th scope="col" class="py-3 pr-4 text-left font-medium text-surface-500 dark:text-surface-400">Feature</th>
+							<th scope="col" class="px-4 py-3 text-center font-medium text-surface-500 dark:text-surface-400">Free</th>
+							<th scope="col" class="px-4 py-3 text-center font-medium text-blue-600 dark:text-blue-400">Pro</th>
+							<th scope="col" class="px-4 py-3 text-center font-medium text-purple-600 dark:text-purple-400">Team</th>
+						</tr>
+					</thead>
+					<tbody class="divide-y divide-surface-100 dark:divide-surface-700">
+						<tr>
+							<td class="py-3 pr-4 text-surface-900 dark:text-surface-100">Machine Limit</td>
+							<td class="px-4 py-3 text-center text-surface-600 dark:text-surface-400">3</td>
+							<td class="px-4 py-3 text-center text-surface-600 dark:text-surface-400">1,000</td>
+							<td class="px-4 py-3 text-center text-surface-600 dark:text-surface-400">10,000</td>
+						</tr>
+						<tr>
+							<td class="py-3 pr-4 text-surface-900 dark:text-surface-100">Data Retention</td>
+							<td class="px-4 py-3 text-center text-surface-600 dark:text-surface-400">1 day</td>
+							<td class="px-4 py-3 text-center text-surface-600 dark:text-surface-400">60 days</td>
+							<td class="px-4 py-3 text-center text-surface-600 dark:text-surface-400">365 days</td>
+						</tr>
+						<tr>
+							<td class="py-3 pr-4 text-surface-900 dark:text-surface-100">Alerting</td>
+							<td class="px-4 py-3 text-center text-surface-400">-</td>
+							<td class="px-4 py-3 text-center text-green-600 dark:text-green-400">Default rules</td>
+							<td class="px-4 py-3 text-center text-green-600 dark:text-green-400">Custom rules</td>
+						</tr>
+						<tr>
+							<td class="py-3 pr-4 text-surface-900 dark:text-surface-100">Audit Log</td>
+							<td class="px-4 py-3 text-center text-surface-400">-</td>
+							<td class="px-4 py-3 text-center text-surface-400">-</td>
+							<td class="px-4 py-3 text-center text-green-600 dark:text-green-400">Full access</td>
+						</tr>
+						<tr>
+							<td class="py-3 pr-4 text-surface-900 dark:text-surface-100">Custom OIDC SSO</td>
+							<td class="px-4 py-3 text-center text-surface-400">-</td>
+							<td class="px-4 py-3 text-center text-surface-400">-</td>
+							<td class="px-4 py-3 text-center text-green-600 dark:text-green-400">Included</td>
+						</tr>
+						<tr>
+							<td class="py-3 pr-4 text-surface-900 dark:text-surface-100">Price</td>
+							<td class="px-4 py-3 text-center font-medium text-surface-900 dark:text-surface-100">$0</td>
+							<td class="px-4 py-3 text-center font-medium text-surface-900 dark:text-surface-100">{formatCents(proMonthlyCents)}/host/mo</td>
+							<td class="px-4 py-3 text-center font-medium text-surface-900 dark:text-surface-100">{formatCents(teamMonthlyCents)}/host/mo</td>
+						</tr>
+					</tbody>
+				</table>
+			</div>
 		</div>
-	</div>
 
-	<!-- Cost Calculator -->
-	<div
-		class="rounded-xl border border-surface-200 bg-surface-50 p-6 dark:border-surface-700 dark:bg-surface-800"
-	>
-		<div class="mb-4 flex items-center gap-3">
-			<Calculator class="h-5 w-5 text-surface-400 dark:text-surface-500" />
-			<h2 class="text-lg font-semibold text-surface-900 dark:text-surface-50">Cost Calculator</h2>
-		</div>
-		<div class="space-y-4">
-			<div>
-				<label for="machine-count" class="block text-sm font-medium text-surface-700 dark:text-surface-300">
-					Number of machines
-				</label>
-				<input
-					id="machine-count"
-					type="number"
-					min="1"
-					max="10000"
-					bind:value={machineCountInput}
-					class="mt-1 w-32 rounded-lg border border-surface-300 bg-surface-50 px-3 py-2 text-sm text-surface-900 dark:border-surface-600 dark:bg-surface-700 dark:text-surface-100"
-				/>
+		<!-- Cost Calculator -->
+		<div
+			class="rounded-xl border border-surface-200 bg-surface-50 p-6 dark:border-surface-700 dark:bg-surface-800"
+		>
+			<div class="mb-4 flex items-center gap-3">
+				<Calculator class="h-5 w-5 text-surface-400 dark:text-surface-500" />
+				<h2 class="text-lg font-semibold text-surface-900 dark:text-surface-50">Cost Calculator</h2>
 			</div>
-			<div class="flex gap-8">
+			<div class="space-y-4">
 				<div>
-					<p class="text-sm text-surface-500 dark:text-surface-400">Pro</p>
-					<p class="text-2xl font-bold text-blue-600 dark:text-blue-400">
-						{formatCents(machineCount * proMonthlyCents)}<span class="text-sm font-normal">/mo</span>
-					</p>
+					<label for="machine-count" class="block text-sm font-medium text-surface-700 dark:text-surface-300">
+						Number of machines
+					</label>
+					<input
+						id="machine-count"
+						type="number"
+						min="1"
+						max="10000"
+						bind:value={machineCountInput}
+						class="mt-1 w-32 rounded-lg border border-surface-300 bg-surface-50 px-3 py-2 text-sm text-surface-900 dark:border-surface-600 dark:bg-surface-700 dark:text-surface-100"
+					/>
 				</div>
-				<div>
-					<p class="text-sm text-surface-500 dark:text-surface-400">Team</p>
-					<p class="text-2xl font-bold text-purple-600 dark:text-purple-400">
-						{formatCents(machineCount * teamMonthlyCents)}<span class="text-sm font-normal">/mo</span>
-					</p>
+				<div class="flex gap-8">
+					<div>
+						<p class="text-sm text-surface-500 dark:text-surface-400">Pro</p>
+						<p class="text-2xl font-bold text-blue-600 dark:text-blue-400">
+							{formatCents(machineCount * proMonthlyCents)}<span class="text-sm font-normal">/mo</span>
+						</p>
+					</div>
+					<div>
+						<p class="text-sm text-surface-500 dark:text-surface-400">Team</p>
+						<p class="text-2xl font-bold text-purple-600 dark:text-purple-400">
+							{formatCents(machineCount * teamMonthlyCents)}<span class="text-sm font-normal">/mo</span>
+						</p>
+					</div>
 				</div>
+				<p class="text-xs text-surface-400 dark:text-surface-500">
+					Costs are prorated when adding or removing machines mid-cycle.
+				</p>
 			</div>
-			<p class="text-xs text-surface-400 dark:text-surface-500">
-				Costs are prorated when adding or removing machines mid-cycle.
-			</p>
 		</div>
-	</div>
+	{/if}
 </div>

@@ -2,7 +2,7 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
-import { describe, it, expect, vi } from 'vitest';
+import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/svelte';
 import '@testing-library/jest-dom/vitest';
 import { MachineHealthStatus } from '$lib/api/types';
@@ -125,6 +125,8 @@ function makeSubscription(overrides: Partial<SubscriptionDto> = {}): Subscriptio
 		alertRuleCount: 0,
 		webhookLimit: 3,
 		webhookCount: 0,
+		memberLimit: 5,
+		memberCount: 1,
 		...overrides
 	};
 }
@@ -164,6 +166,17 @@ function makeData(
 }
 
 describe('alerts settings page', () => {
+	// jsdom does not implement requestSubmit, which the assignment save calls once the hidden inputs
+	// have settled. Stubbing it keeps the save tests asserting on those inputs instead of printing
+	// jsdom's "not implemented" notice.
+	beforeEach(() => {
+		vi.spyOn(HTMLFormElement.prototype, 'requestSubmit').mockImplementation(() => {});
+	});
+
+	afterEach(() => {
+		vi.restoreAllMocks();
+	});
+
 	it('shows a Free tenant its built-in rules read-only, with an upgrade prompt', () => {
 		const subscription = makeSubscription({ tier: 'Free', alertRuleLimit: 0, alertRuleCount: 0 });
 		render(AlertsPage, {
@@ -275,6 +288,29 @@ describe('alerts settings page', () => {
 		});
 
 		expect(screen.getByRole('button', { name: 'Edit' })).toBeInTheDocument();
+	});
+
+	it('gives Enterprise everything Team has, including the edit form and new custom rules', () => {
+		render(AlertsPage, {
+			props: {
+				data: makeData(makeSubscription({ tier: 'Enterprise', alertRuleLimit: 100 }), [makeRule()])
+			}
+		});
+
+		expect(screen.getByRole('button', { name: 'Edit' })).toBeInTheDocument();
+		expect(screen.getByRole('button', { name: 'New Rule' })).toBeInTheDocument();
+		expect(screen.queryByText(/only run on Pro and Team plans/i)).not.toBeInTheDocument();
+	});
+
+	it('tells a lapsed Enterprise tenant its subscription is inactive instead of telling it to upgrade', () => {
+		render(AlertsPage, {
+			props: {
+				data: makeData(makeSubscription({ tier: 'Enterprise', status: 'Canceled' }), [makeRule()])
+			}
+		});
+
+		expect(screen.getByText(/stay switched off while your subscription is not active/i)).toBeInTheDocument();
+		expect(screen.queryByText(/only run on Pro and Team plans/i)).not.toBeInTheDocument();
 	});
 
 	it('says so when a rule is watching no machines, and offers to assign some', () => {

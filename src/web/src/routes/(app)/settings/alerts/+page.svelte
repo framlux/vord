@@ -13,6 +13,7 @@
 	import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
 	import MachineAssignmentModal from '$lib/components/machine/MachineAssignmentModal.svelte';
 	import { canAuthorAlertRules, canManageAlertRules } from '$lib/utils/alert-entitlement';
+	import { hasProFeatures } from '$lib/utils/tier';
 	import { formatDateTime } from '$lib/utils/format';
 
 	let { data } = $props();
@@ -40,8 +41,7 @@
 	// A paid tier that has lapsed is refused the same controls as Free, but for a different reason,
 	// and telling it to upgrade a plan it already pays for reads as a bug.
 	const lapsedPaidTier: boolean = $derived(
-		entitled === false && data.subscription !== null && data.subscription !== undefined &&
-		(data.subscription.tier === 'Pro' || data.subscription.tier === 'Team')
+		(entitled === false) && hasProFeatures(data.subscription?.tier)
 	);
 
 	// A rule watches only what is assigned to it and arrives assigned to nothing, so an enabled rule

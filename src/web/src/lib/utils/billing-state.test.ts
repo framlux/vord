@@ -27,6 +27,8 @@ function makeSub(overrides: Partial<SubscriptionDto> = {}): SubscriptionDto {
 		alertRuleCount: 0,
 		webhookLimit: 3,
 		webhookCount: 0,
+		memberLimit: 5,
+		memberCount: 1,
 		...overrides
 	};
 }
@@ -42,6 +44,12 @@ describe('deriveBillingPageState', () => {
 
 	it('returns active for an active paid subscription', () => {
 		expect(deriveBillingPageState(makeSub())).toBe('active');
+	});
+
+	it('returns active, never free, for an active Enterprise subscription', () => {
+		expect(
+			deriveBillingPageState(makeSub({ tier: 'Enterprise', billingInterval: null }))
+		).toBe('active');
 	});
 
 	it('returns pending-change when cancel-at-period-end is set', () => {

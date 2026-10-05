@@ -46,6 +46,8 @@ function makeSubscription(overrides: Partial<SubscriptionDto> = {}): Subscriptio
         alertRuleCount: 0,
         webhookLimit: 0,
         webhookCount: 0,
+        memberLimit: 5,
+        memberCount: 1,
         ...overrides
     };
 }

@@ -187,6 +187,7 @@
 	<TimeRangeBar
 		{activeRange}
 		retentionDays={data.retentionDays}
+		tier={data.subscription?.tier}
 		onrangechange={handleRangeChange}
 	/>
 

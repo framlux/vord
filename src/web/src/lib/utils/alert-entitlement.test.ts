@@ -20,7 +20,9 @@ function sub(tier: string, status: string): SubscriptionDto {
 		alertRuleLimit: 10,
 		alertRuleCount: 0,
 		webhookLimit: 3,
-		webhookCount: 0
+		webhookCount: 0,
+		memberLimit: 5,
+		memberCount: 1
 	};
 }
 
@@ -28,6 +30,11 @@ describe('canManageAlertRules', () => {
 	it('admits an active Pro or Team tenant', () => {
 		expect(canManageAlertRules(sub('Pro', 'Active'), false)).toBe(true);
 		expect(canManageAlertRules(sub('Team', 'Active'), false)).toBe(true);
+	});
+
+	it('admits an active Enterprise tenant to manage and author rules', () => {
+		expect(canManageAlertRules(sub('Enterprise', 'Active'), false)).toBe(true);
+		expect(canAuthorAlertRules(sub('Enterprise', 'Active'), false)).toBe(true);
 	});
 
 	it('refuses Free whatever its status', () => {
@@ -65,7 +72,7 @@ describe('canAuthorAlertRules', () => {
 	});
 
 	it('never admits more than canManageAlertRules does', () => {
-		const tiers = ['Free', 'Pro', 'Team'];
+		const tiers = ['Free', 'Pro', 'Team', 'Enterprise'];
 		const statuses = ['Active', 'PastDue', 'Canceled', 'Trialing'];
 
 		for (const tier of tiers) {
@@ -96,12 +103,12 @@ describe('canAuthorAlertRules', () => {
 // same terms. Neither test can prove the other still agrees; each fails the moment its own side
 // moves, which is what makes a drift reviewable instead of invisible.
 //
-//                            | Free | Pro  | Team
+//                            | Free | Pro  | Team | Enterprise
 //   See rules and coverage   | yes (read-only, every tier — ungated beyond tenant scope)
-//   Enable / disable         | no   | yes  | yes    (built-ins)
-//   Assign machines          | no   | yes  | yes    (built-ins)
-//   Edit thresholds          | no   | no   | yes
-//   Create / delete custom   | no   | no   | yes
+//   Enable / disable         | no   | yes  | yes  | yes    (built-ins)
+//   Assign machines          | no   | yes  | yes  | yes    (built-ins)
+//   Edit thresholds          | no   | no   | yes  | yes
+//   Create / delete custom   | no   | no   | yes  | yes
 describe('the alert affordance table', () => {
 	const rows: Array<{
 		tier: string;
@@ -110,7 +117,8 @@ describe('the alert affordance table', () => {
 	}> = [
 		{ tier: 'Free', mayManage: false, mayAuthor: false },
 		{ tier: 'Pro', mayManage: true, mayAuthor: false },
-		{ tier: 'Team', mayManage: true, mayAuthor: true }
+		{ tier: 'Team', mayManage: true, mayAuthor: true },
+		{ tier: 'Enterprise', mayManage: true, mayAuthor: true }
 	];
 
 	for (const row of rows) {

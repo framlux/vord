@@ -3,6 +3,7 @@
 // See LICENSE for details.
 
 import type { SubscriptionDto } from '$lib/api/types';
+import { hasProFeatures, hasTeamFeatures } from './tier';
 
 /**
  * Whether the tenant may touch its alert rules at all: enable or disable one, and choose the
@@ -27,8 +28,7 @@ export function canManageAlertRules(
 		return true;
 	}
 
-	return (subscription.tier === 'Pro' || subscription.tier === 'Team') &&
-		subscription.status === 'Active';
+	return hasProFeatures(subscription.tier) && subscription.status === 'Active';
 }
 
 /**
@@ -57,5 +57,5 @@ export function canAuthorAlertRules(
 		return true;
 	}
 
-	return subscription.tier === 'Team';
+	return hasTeamFeatures(subscription.tier);
 }

@@ -22,14 +22,15 @@
   import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
   import { formatDate } from '$lib/utils/format';
   import { PRO_PRICE_PER_MACHINE_USD } from '$lib/utils/constants';
+  import { hasProFeatures, hasTeamFeatures } from '$lib/utils/tier';
 
   let { data } = $props();
 
   let invitations: InvitationListDto[] = $derived(data.invitations);
   let members: MemberDto[] = $derived(data.members);
   let subscription: SubscriptionDto | null = $derived(data.subscription);
-  const isFreeTier = $derived(subscription === null || subscription.tier === "Free");
-  const isTeamTier = $derived(subscription !== null && subscription.tier === "Team");
+  const isFreeTier = $derived(subscription === null || hasProFeatures(subscription.tier) === false);
+  const isTeamTier = $derived(hasTeamFeatures(subscription?.tier));
 
   let inviteEmail = $state("");
   let inviteRole = $state("Viewer");

@@ -354,7 +354,8 @@ export enum SubscriptionTier {
 	None = 0,
 	Free = 1,
 	Pro = 2,
-	Team = 3
+	Team = 3,
+	Enterprise = 4
 }
 
 export enum SubscriptionStatus {
@@ -378,6 +379,8 @@ export interface SubscriptionDto {
 	alertRuleCount: number;
 	webhookLimit: number;
 	webhookCount: number;
+	memberLimit: number;
+	memberCount: number;
 }
 
 export interface UpcomingInvoiceDto {

@@ -4,14 +4,17 @@
 
 <script lang="ts">
 	import { Lock } from 'lucide-svelte';
+	import { isEnterprise } from '$lib/utils/tier';
 
 	let {
 		activeRange,
 		retentionDays,
+		tier = null,
 		onrangechange
 	}: {
 		activeRange: string;
 		retentionDays: number;
+		tier?: string | null;
 		onrangechange: (range: string) => void;
 	} = $props();
 
@@ -30,6 +33,16 @@
 
 		return 'Pro';
 	}
+
+	// An Enterprise tenant's retention is set by its agreement, so a locked range is not something
+	// it can upgrade its way out of.
+	function disabledTitle(requiredDays: number, label: string): string {
+		if (isEnterprise(tier)) {
+			return `${label} of history is not included in your agreement`;
+		}
+
+		return `Upgrade to ${upgradeTierName(requiredDays)} for ${label} history`;
+	}
 </script>
 
 <div class="flex items-center gap-1" role="group" aria-label="Time range">
@@ -39,7 +52,7 @@
 		<button
 			type="button"
 			disabled={isDisabled}
-			title={isDisabled ? `Upgrade to ${upgradeTierName(range.requiredDays)} for ${range.label} history` : `Show ${range.label} of history`}
+			title={isDisabled ? disabledTitle(range.requiredDays, range.label) : `Show ${range.label} of history`}
 			onclick={() => onrangechange(range.value)}
 			class="inline-flex items-center gap-1 rounded-lg px-3 py-1.5 text-sm font-medium transition
 				{isActive

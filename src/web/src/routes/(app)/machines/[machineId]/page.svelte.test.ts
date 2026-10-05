@@ -87,6 +87,8 @@ function makeSubscription(overrides: Partial<SubscriptionDto> = {}): Subscriptio
 		alertRuleCount: 0,
 		webhookLimit: 3,
 		webhookCount: 0,
+		memberLimit: 5,
+		memberCount: 1,
 		...overrides
 	};
 }
@@ -159,6 +161,33 @@ describe('machine detail alert rules', () => {
 		expect(screen.getAllByRole('checkbox')).toHaveLength(8);
 		expect(screen.getByRole('checkbox', { name: /Built-in 3/ })).toBeChecked();
 		expect(screen.getByRole('checkbox', { name: /Built-in 1/ })).not.toBeChecked();
+	});
+
+	it('offers an Enterprise admin the custom rules Team is offered', async () => {
+		render(MachinePage, {
+			props: {
+				data: makeData(makeSubscription({ tier: 'Enterprise' }), [
+					...builtIns,
+					makeRule({ id: 99, name: 'Custom load rule', isCustom: true })
+				])
+			}
+		});
+
+		await fireEvent.click(screen.getByRole('button', { name: 'Manage Rules' }));
+
+		expect(screen.getByRole('checkbox', { name: /Custom load rule/ })).toBeInTheDocument();
+	});
+
+	it('tells a lapsed Enterprise admin the subscription is inactive instead of telling it to upgrade', () => {
+		render(MachinePage, {
+			props: {
+				data: makeData(makeSubscription({ tier: 'Enterprise', status: 'Canceled' }), builtIns)
+			}
+		});
+
+		expect(screen.queryByRole('button', { name: 'Manage Rules' })).not.toBeInTheDocument();
+		expect(screen.getByText(/not active/i)).toBeInTheDocument();
+		expect(screen.queryByText(/only run on Pro and Team plans/i)).not.toBeInTheDocument();
 	});
 
 	it('still shows a Free machine the rules it already carries, so the upsell has something to sell', () => {

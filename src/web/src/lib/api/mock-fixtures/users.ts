@@ -33,5 +33,7 @@ export const mockSubscription: SubscriptionDto = {
 	alertRuleLimit: 50,
 	alertRuleCount: 8,
 	webhookLimit: 10,
-	webhookCount: 2
+	webhookCount: 2,
+	memberLimit: 5,
+	memberCount: 3
 };

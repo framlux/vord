@@ -28,6 +28,7 @@
 	import { enhance } from '$app/forms';
 	import { canAdminMachines } from '$lib/utils/roles';
 	import { canAuthorAlertRules, canManageAlertRules } from '$lib/utils/alert-entitlement';
+	import { hasProFeatures, hasTeamFeatures } from '$lib/utils/tier';
 	import { moveFocusInto, trapTabKey } from '$lib/utils/focus-trap';
 	import {
 		generateNonce,
@@ -45,7 +46,7 @@
 	const commandsEnabled = $derived(liveStatus?.commandsEnabled ?? machine.commandsEnabled);
 	const healthStatus = $derived(liveStatus?.healthStatus ?? data.machineDetail?.healthStatus ?? MachineHealthStatus.Offline);
 	const machineDetail: MachineDetailDto | null = $derived(data.machineDetail);
-	const isTeamTier = $derived(data.subscription !== null && data.subscription.tier === 'Team');
+	const isTeamTier = $derived(hasTeamFeatures(data.subscription?.tier));
 	// svelte-ignore state_referenced_locally
 	let authorizedKeys = $state<MachineAuthorizedKeyDto[]>(data.authorizedKeys ?? []);
 
@@ -505,8 +506,7 @@
 		canManageAlertRules(data.subscription, data.user?.deployment?.selfHosted === true)
 	);
 	const lapsedPaidTier = $derived(
-		canManageRules === false && data.subscription !== null && data.subscription !== undefined &&
-		(data.subscription.tier === 'Pro' || data.subscription.tier === 'Team')
+		(canManageRules === false) && hasProFeatures(data.subscription?.tier)
 	);
 
 	// Custom rules belong to Team, and the API refuses to re-target one below that tier. Offering a
