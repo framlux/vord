@@ -108,6 +108,36 @@ public sealed class MachineBillingSyncTests
     }
 
     [Test]
+    public async Task ReportActiveMachineUsageAsync_EnterpriseTenant_NeverReportsAQuantity()
+    {
+        // Intent: Enterprise has every Team feature but is invoiced outside Stripe, so no quantity
+        // may ever be pushed for it. The tenant is stubbed as resolvable so the "tenant is null"
+        // branch cannot short-circuit before the tier guard this test is about.
+        TenantSubscription enterpriseSub = TestDataBuilder.BuildSubscription(tenantId: 1, tier: SubscriptionTier.Enterprise);
+
+        ISubscriptionService subscriptionService = Substitute.For<ISubscriptionService>();
+        subscriptionService.GetSubscriptionForTenantAsync(1, Arg.Any<CancellationToken>())
+            .Returns(enterpriseSub);
+
+        Tenant tenant = TestDataBuilder.BuildTenant(externalId: "ext-tenant-enterprise");
+        tenant.Id = 1;
+
+        ITenantRepository tenantRepo = Substitute.For<ITenantRepository>();
+        tenantRepo.GetTenantByIdAsync(1, Arg.Any<CancellationToken>()).Returns(tenant);
+        IMachineRepository machineRepo = Substitute.For<IMachineRepository>();
+        IBillingApiClient billingApiClient = Substitute.For<IBillingApiClient>();
+
+        MachineBillingSync service = CreateService(subscriptionService, tenantRepo, machineRepo, billingApiClient);
+
+        await service.ReportActiveMachineUsageAsync(1, CancellationToken.None);
+
+        await billingApiClient.DidNotReceive().UpdateQuantityAsync(
+            Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>());
+        await subscriptionService.DidNotReceive().GetBillableMachineCountAsync(
+            Arg.Any<int>(), Arg.Any<SubscriptionTier>(), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
     public async Task ReportActiveMachineUsageAsync_ProTierWithTenant_CallsUpdateQuantityWithCorrectArgs()
     {
         int tenantId = 42;

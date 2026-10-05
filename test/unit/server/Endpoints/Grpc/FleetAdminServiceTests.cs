@@ -3003,10 +3003,11 @@ public sealed class FleetAdminServiceTests
     /// <summary>
     /// GetBillableMachineCount rejects any target tier that is not a real, billable tier — an
     /// unparseable string, a numeric string that happens to match an enum value that is not
-    /// billable, an out-of-range numeric string, "none", and "free" (Free has no Stripe
-    /// subscription to size). Without this guard, <c>Enum.TryParse</c> alone accepts all of
-    /// these and the floor computation silently falls through to a billable count of 0 — a paid
-    /// tenant would be billed nothing while keeping paid features.
+    /// billable, an out-of-range numeric string, "none", "free" (Free has no Stripe
+    /// subscription to size) and "enterprise" (invoiced outside Stripe, by name or by number).
+    /// Without this guard, <c>Enum.TryParse</c> alone accepts all of these and the floor
+    /// computation silently falls through to a billable count of 0 — a paid tenant would be billed
+    /// nothing while keeping paid features.
     /// </summary>
     [Test]
     [Arguments("none")]
@@ -3014,6 +3015,9 @@ public sealed class FleetAdminServiceTests
     [Arguments("7")]
     [Arguments("garbage")]
     [Arguments("free")]
+    [Arguments("enterprise")]
+    [Arguments("Enterprise")]
+    [Arguments("4")]
     public async Task GetBillableMachineCount_NonBillableTargetTier_ReturnsFailureWithoutZeroCount(string targetTier)
     {
         ITenantRepository tenantRepo = Substitute.For<ITenantRepository>();

@@ -167,12 +167,13 @@ public sealed class BuiltInAlertRuleProvisioner : IBuiltInAlertRuleProvisioner
             await _alertRuleRepository.EnableBuiltInAlertRulesAsync(tenantId, ct);
         }
 
-        // Custom rules are Team's in every respect, and a Pro downgrade freezes them without touching
-        // their assignments. Arriving at Team from anywhere else thaws them; so does a sweep, which
-        // disabled them along with everything else while leaving the tier on Team.
-        if (currentTier == SubscriptionTier.Team)
+        // Custom rules belong to the Team feature set in every respect, and a Pro downgrade freezes
+        // them without touching their assignments. Arriving at a Team-feature tier from one without
+        // them thaws them; so does a sweep. Moving between Team and Enterprise thaws nothing, so the
+        // customer's own choices survive a conversion.
+        if (SubscriptionPolicy.RequiresTeam(currentTier) == false)
         {
-            if ((priorSubscription?.Tier != SubscriptionTier.Team) || arrivingFromSweptState)
+            if (SubscriptionPolicy.RequiresTeam(priorSubscription) || arrivingFromSweptState)
             {
                 await _alertRuleRepository.EnableCustomAlertRulesAsync(tenantId, ct);
             }

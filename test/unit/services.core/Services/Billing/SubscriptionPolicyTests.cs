@@ -28,6 +28,11 @@ public sealed class SubscriptionPolicyTests
         };
     }
 
+    private static bool HasTeamFeatures(SubscriptionTier tier)
+    {
+        return (tier == SubscriptionTier.Team) || (tier == SubscriptionTier.Enterprise);
+    }
+
     private static IEnumerable<SubscriptionTier> AllTiers()
     {
         return Enum.GetValues<SubscriptionTier>();
@@ -93,22 +98,51 @@ public sealed class SubscriptionPolicyTests
     /// <summary>
     /// The Team gate is tier-only by design — every hand-written copy it replaces tested tier
     /// alone, so consulting status here would tighten nine gates during a refactor whose contract
-    /// is bit-for-bit behaviour preservation.
+    /// is bit-for-bit behaviour preservation. Enterprise carries the Team feature set, so it passes.
     /// </summary>
     [Test]
-    public async Task RequiresTeam_BlocksEveryTierExceptTeam_RegardlessOfStatus()
+    public async Task RequiresTeam_BlocksEveryTierWithoutTeamFeatures_RegardlessOfStatus()
     {
         foreach (SubscriptionTier tier in AllTiers())
         {
             foreach (SubscriptionStatus status in AllStatuses())
             {
-                bool expected = tier != SubscriptionTier.Team;
+                bool expected = HasTeamFeatures(tier) == false;
 
                 await Assert.That(SubscriptionPolicy.RequiresTeam(Subscription(tier, status)))
                     .IsEqualTo(expected)
                     .Because($"tier {tier} with status {status}");
             }
         }
+    }
+
+    /// <summary>
+    /// The tier overload exists for callers that reason about a transition and hold a tier rather
+    /// than a subscription; if the two ever disagreed, a provisioner and an endpoint would give
+    /// different answers for the same tenant.
+    /// </summary>
+    [Test]
+    public async Task RequiresTeam_TierOverload_AgreesWithSubscriptionOverload()
+    {
+        foreach (SubscriptionTier tier in AllTiers())
+        {
+            await Assert.That(SubscriptionPolicy.RequiresTeam(tier))
+                .IsEqualTo(SubscriptionPolicy.RequiresTeam(Subscription(tier, SubscriptionStatus.Active)))
+                .Because($"tier {tier}");
+        }
+    }
+
+    /// <summary>
+    /// Enterprise is invoiced outside Stripe but must open every gate a Pro or Team tenant's does.
+    /// </summary>
+    [Test]
+    public async Task Enterprise_GetsEveryProAndTeamFeature_WhenActive()
+    {
+        TenantSubscription enterprise = Subscription(SubscriptionTier.Enterprise, SubscriptionStatus.Active);
+
+        await Assert.That(SubscriptionPolicy.RequiresPro(enterprise)).IsFalse();
+        await Assert.That(SubscriptionPolicy.RequiresTeam(enterprise)).IsFalse();
+        await Assert.That(SubscriptionPolicy.RequiresPaidTier(enterprise)).IsFalse();
     }
 
     /// <summary>
@@ -186,11 +220,12 @@ public sealed class SubscriptionPolicyTests
     }
 
     /// <summary>
-    /// A custom rule runs only on an Active Team subscription. Pro is the case that matters: a
-    /// downgrade is expected to clear the rule's enabled flag, and this is what holds if it does not.
+    /// A custom rule runs only on an Active subscription whose tier carries the Team feature set,
+    /// which is Team and Enterprise. Pro is the case that matters: a downgrade is expected to clear
+    /// the rule's enabled flag, and this is what holds if it does not.
     /// </summary>
     [Test]
-    public async Task RefusesAlertRule_Custom_RunsOnlyOnActiveTeam()
+    public async Task RefusesAlertRule_Custom_RunsOnlyOnActiveTeamFeatureTiers()
     {
         AlertRule custom = Rule(isCustom: true);
 
@@ -198,7 +233,7 @@ public sealed class SubscriptionPolicyTests
         {
             foreach (SubscriptionStatus status in AllStatuses())
             {
-                bool expected = (tier != SubscriptionTier.Team) || (status != SubscriptionStatus.Active);
+                bool expected = (HasTeamFeatures(tier) == false) || (status != SubscriptionStatus.Active);
 
                 await Assert.That(SubscriptionPolicy.RefusesAlertRule(custom, Subscription(tier, status)))
                     .IsEqualTo(expected)

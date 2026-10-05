@@ -1448,6 +1448,27 @@ public sealed class FleetAdminServiceTests
         await Assert.That(exception!.StatusCode).IsEqualTo(StatusCode.Unauthenticated);
     }
 
+    // ========== GetBillableMachineCount Tests ==========
+
+    [Test]
+    public async Task GetBillableMachineCount_EnterpriseTarget_IsRefused()
+    {
+        using FunctionalTestFactory factory = new();
+        factory.WithInternalClientSubjects(PermittedClientSubject);
+        using DatabaseContext db = factory.CreateDbContext();
+        string extId = $"ext-{Guid.NewGuid():N}";
+        await SeedTenantWithSubscription(db, extId, SubscriptionTier.Team);
+
+        using GrpcChannel channel = CreateChannel(factory);
+        FleetAdmin.FleetAdminClient client = new(channel);
+
+        GetBillableMachineCountResponse response = await client.GetBillableMachineCountAsync(
+            new GetBillableMachineCountRequest { TenantExternalId = extId, TargetTier = "enterprise" }, Headers());
+
+        await Assert.That(response.Success).IsFalse();
+        await Assert.That(response.Message).Contains("not a billable tier");
+    }
+
     // ========== ListTenantDeletions Tests ==========
 
     [Test]

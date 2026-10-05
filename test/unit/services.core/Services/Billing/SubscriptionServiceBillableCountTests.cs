@@ -39,8 +39,6 @@ public sealed class SubscriptionServiceBillableCountTests
     [Arguments(SubscriptionTier.Team, 3, 2, 3)]
     [Arguments(SubscriptionTier.Team, 3, 3, 3)]
     [Arguments(SubscriptionTier.Team, 3, 9, 9)]
-    [Arguments(SubscriptionTier.Enterprise, 0, 0, 0)]   // no floor: never billed through Stripe
-    [Arguments(SubscriptionTier.Enterprise, 0, 12, 12)]
     public async Task GetBillableMachineCountAsync_AppliesTierFloor(
         SubscriptionTier tier, int floor, int active, int expected)
     {
@@ -64,15 +62,32 @@ public sealed class SubscriptionServiceBillableCountTests
     }
 
     [Test]
-    public async Task GetBillableMachineCountAsync_EnterpriseMissingTierRow_HasNoFloor()
+    [Arguments(true)]
+    [Arguments(false)]
+    public async Task GetBillableMachineCountAsync_EnterpriseTier_ThrowsBecauseItIsNeverAStripeQuantity(bool tierRowMissing)
     {
-        // Enterprise is invoiced rather than metered through Stripe, so a missing limits row must
-        // resolve to the active machine count and never to a floor borrowed from a paid tier.
-        SubscriptionService service = BuildService(SubscriptionTier.Enterprise, floor: 0, active: 0, tierRowMissing: true);
+        // Enterprise is invoiced outside Stripe, so a billable quantity for it can only be a
+        // caller bug. It must be refused whether or not its limits row exists, and must never
+        // resolve to the active machine count where a caller could push it to Stripe.
+        SubscriptionService service = BuildService(
+            SubscriptionTier.Enterprise, floor: 0, active: 12, tierRowMissing: tierRowMissing);
 
-        int result = await service.GetBillableMachineCountAsync(42, SubscriptionTier.Enterprise, CancellationToken.None);
+        InvalidOperationException? ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => service.GetBillableMachineCountAsync(42, SubscriptionTier.Enterprise, CancellationToken.None));
 
-        await Assert.That(result).IsEqualTo(0);
+        await Assert.That(ex).IsNotNull();
+    }
+
+    [Test]
+    public async Task GetBillableMachineCountAsync_FreeTier_ThrowsRatherThanReturningTheFloor()
+    {
+        // Free has no Stripe subscription to size; only the Stripe-billed tiers have a quantity.
+        SubscriptionService service = BuildService(SubscriptionTier.Free, floor: 0, active: 2);
+
+        InvalidOperationException? ex = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => service.GetBillableMachineCountAsync(42, SubscriptionTier.Free, CancellationToken.None));
+
+        await Assert.That(ex).IsNotNull();
     }
 
     [Test]

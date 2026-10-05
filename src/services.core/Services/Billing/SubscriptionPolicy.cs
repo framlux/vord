@@ -28,12 +28,21 @@ namespace Framlux.FleetManagement.Services.Core.Billing;
 /// These are pure functions over an already-loaded subscription. Anything needing repository
 /// access — count limits, ingest eligibility, retention — stays on ISubscriptionService, where the
 /// self-hosted decorator can answer it permissively. The billable-tier allowlist is also
-/// deliberately absent: it selects which tiers are invoiced, not which features are permitted, and
-/// folding a billing concern in here would blur the boundary this type exists to sharpen.
+/// deliberately absent and lives in <see cref="StripeBilledTiers"/>: it selects which tiers are
+/// invoiced through Stripe, not which features are permitted, and folding a billing concern in here
+/// would blur the boundary this type exists to sharpen.
 /// </para>
 /// </remarks>
 public static class SubscriptionPolicy
 {
+    /// <summary>
+    /// The tiers that carry the full Team feature set. Enterprise is every Team feature with limits set
+    /// by agreement, so it belongs here; membership is explicit because None sorts below Free and an
+    /// ordinal comparison would be wrong the next time a tier is added.
+    /// </summary>
+    private static readonly HashSet<SubscriptionTier> TeamFeatureTiers =
+        [SubscriptionTier.Team, SubscriptionTier.Enterprise];
+
     /// <summary>
     /// Whether the tenant must be refused a Pro-or-Team feature: no subscription, the Free tier, or
     /// any status other than Active.
@@ -44,7 +53,7 @@ public static class SubscriptionPolicy
     /// This is the only predicate here that consults status, so a lapsed paid tier is refused
     /// exactly as a Free one is. Note it names Free rather than testing "not paid", so the unset
     /// default tier passes when the status is Active; that is the shape it has always had and was
-    /// moved here unchanged.
+    /// moved here unchanged. Enterprise passes, as it names Free rather than enumerating paid tiers.
     /// </remarks>
     public static bool RequiresPro(TenantSubscription? subscription)
     {
@@ -54,8 +63,8 @@ public static class SubscriptionPolicy
     }
 
     /// <summary>
-    /// Whether the tenant must be refused a Team-only feature: no subscription, or any tier other
-    /// than Team.
+    /// Whether the tenant must be refused a Team-only feature: no subscription, or a tier without the
+    /// Team feature set (anything other than Team or Enterprise).
     /// </summary>
     /// <param name="subscription">The tenant's subscription, or <c>null</c> if none exists.</param>
     /// <returns><c>true</c> when access must be denied.</returns>
@@ -66,7 +75,18 @@ public static class SubscriptionPolicy
     public static bool RequiresTeam(TenantSubscription? subscription)
     {
         return (subscription is null) ||
-               (subscription.Tier != SubscriptionTier.Team);
+               RequiresTeam(subscription.Tier);
+    }
+
+    /// <summary>
+    /// Whether a tier lacks the Team feature set. For callers that hold a tier rather than a
+    /// subscription, such as a provisioner reasoning about a transition.
+    /// </summary>
+    /// <param name="tier">The tier to test.</param>
+    /// <returns><c>true</c> when the tier must be refused Team-only features.</returns>
+    public static bool RequiresTeam(SubscriptionTier tier)
+    {
+        return TeamFeatureTiers.Contains(tier) == false;
     }
 
     /// <summary>
@@ -77,8 +97,8 @@ public static class SubscriptionPolicy
     /// <returns><c>true</c> when access must be denied.</returns>
     /// <remarks>
     /// Distinct from <see cref="RequiresPro"/>, which additionally requires an Active status, and
-    /// from <see cref="RequiresTeam"/>, which refuses Pro. This is the rule behind the invitation
-    /// upsell, which answers 402 rather than 403.
+    /// from <see cref="RequiresTeam(TenantSubscription)"/>, which refuses Pro. This is the rule
+    /// behind the invitation upsell, which answers 402 rather than 403.
     /// </remarks>
     public static bool RequiresPaidTier(TenantSubscription? subscription)
     {

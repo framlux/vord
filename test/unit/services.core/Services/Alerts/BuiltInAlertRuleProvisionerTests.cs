@@ -237,6 +237,94 @@ public sealed class BuiltInAlertRuleProvisionerTests
     }
 
     /// <summary>
+    /// Enterprise carries the Team feature set, so arriving at it from Pro thaws the custom rules a
+    /// Pro downgrade froze, exactly as arriving at Team does.
+    /// </summary>
+    [Test]
+    public async Task RestoreForTierAsync_ProToEnterprise_ThawsCustomRulesWithoutRevivingBuiltIns()
+    {
+        IAlertRuleRepository repo = FullyProvisionedRepo(7);
+
+        BuiltInAlertRuleProvisioner provisioner = Build(repo, Substitute.For<ISubscriptionService>());
+
+        await provisioner.RestoreForTierAsync(
+            7,
+            Subscription(SubscriptionTier.Pro, SubscriptionStatus.Active),
+            SubscriptionTier.Enterprise,
+            SubscriptionStatus.Active,
+            CancellationToken.None);
+
+        await repo.DidNotReceive().EnableBuiltInAlertRulesAsync(Arg.Any<int>(), Arg.Any<CancellationToken>());
+        await repo.Received(1).EnableCustomAlertRulesAsync(7, Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>
+    /// Converting a Team tenant to Enterprise moves between two tiers with the same feature set and
+    /// passes through no sweep, so nothing is switched back on: a rule the customer turned off
+    /// stays off.
+    /// </summary>
+    [Test]
+    public async Task RestoreForTierAsync_TeamToEnterprise_ThawsNothingTheCustomerTurnedOff()
+    {
+        IAlertRuleRepository repo = FullyProvisionedRepo(7);
+
+        BuiltInAlertRuleProvisioner provisioner = Build(repo, Substitute.For<ISubscriptionService>());
+
+        await provisioner.RestoreForTierAsync(
+            7,
+            Subscription(SubscriptionTier.Team, SubscriptionStatus.Active),
+            SubscriptionTier.Enterprise,
+            SubscriptionStatus.Active,
+            CancellationToken.None);
+
+        await repo.DidNotReceive().EnableCustomAlertRulesAsync(Arg.Any<int>(), Arg.Any<CancellationToken>());
+        await repo.DidNotReceive().EnableBuiltInAlertRulesAsync(Arg.Any<int>(), Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>
+    /// The reverse conversion is also a move within the Team feature set and restores nothing.
+    /// </summary>
+    [Test]
+    public async Task RestoreForTierAsync_EnterpriseToTeam_ThawsNothingTheCustomerTurnedOff()
+    {
+        IAlertRuleRepository repo = FullyProvisionedRepo(7);
+
+        BuiltInAlertRuleProvisioner provisioner = Build(repo, Substitute.For<ISubscriptionService>());
+
+        await provisioner.RestoreForTierAsync(
+            7,
+            Subscription(SubscriptionTier.Enterprise, SubscriptionStatus.Active),
+            SubscriptionTier.Team,
+            SubscriptionStatus.Active,
+            CancellationToken.None);
+
+        await repo.DidNotReceive().EnableCustomAlertRulesAsync(Arg.Any<int>(), Arg.Any<CancellationToken>());
+        await repo.DidNotReceive().EnableBuiltInAlertRulesAsync(Arg.Any<int>(), Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>
+    /// A Free tenant's sweep left every rule off, so arriving at Enterprise restores the built-ins
+    /// and the custom rules together.
+    /// </summary>
+    [Test]
+    public async Task RestoreForTierAsync_FreeToEnterprise_RestoresBuiltInAndCustomRules()
+    {
+        IAlertRuleRepository repo = FullyProvisionedRepo(7);
+
+        BuiltInAlertRuleProvisioner provisioner = Build(repo, Substitute.For<ISubscriptionService>());
+
+        await provisioner.RestoreForTierAsync(
+            7,
+            Subscription(SubscriptionTier.Free, SubscriptionStatus.Active),
+            SubscriptionTier.Enterprise,
+            SubscriptionStatus.Active,
+            CancellationToken.None);
+
+        await repo.Received(1).EnableBuiltInAlertRulesAsync(7, Arg.Any<CancellationToken>());
+        await repo.Received(1).EnableCustomAlertRulesAsync(7, Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>
     /// A monthly renewal arrives on the same path a recovery does and is not a transition at all.
     /// </summary>
     [Test]

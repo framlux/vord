@@ -56,12 +56,12 @@ public sealed class MachineBillingSync : IMachineBillingSync
         {
             TenantSubscription? subscription = await _subscriptionService.GetSubscriptionForTenantAsync(tenantId, ct);
 
-            // Only report quantity for genuinely billable tiers. An allowlist (Pro/Team) rather
-            // than excluding Free alone, because a subscription row can also carry Tier.None
-            // (e.g. one that predates a tier being set); None has no floor policy and would
-            // otherwise reach GetBillableMachineCountAsync, which refuses it.
-            if ((subscription is not null) &&
-                ((subscription.Tier == SubscriptionTier.Pro) || (subscription.Tier == SubscriptionTier.Team)))
+            // Only report quantity for tiers billed through Stripe. An allowlist rather than
+            // excluding Free alone, because a subscription row can also carry Tier.None (e.g. one
+            // that predates a tier being set), which has no floor policy and would otherwise reach
+            // GetBillableMachineCountAsync, which refuses it. Enterprise is excluded for the same
+            // reason: it is invoiced outside Stripe, so there is no quantity to push.
+            if ((subscription is not null) && StripeBilledTiers.Contains(subscription.Tier))
             {
                 Tenant? tenant = await _tenantRepo.GetTenantByIdAsync(tenantId, ct);
 
