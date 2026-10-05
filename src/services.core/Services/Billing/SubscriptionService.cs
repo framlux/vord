@@ -293,7 +293,7 @@ public sealed class SubscriptionService : ISubscriptionService
             RetentionDays = tenantOverride?.RetentionDays ?? tierLimits?.RetentionDays ?? configDefaults.RetentionDays,
             AlertRuleLimit = tenantOverride?.AlertRuleLimit ?? tierLimits?.AlertRuleLimit ?? configDefaults.AlertRuleLimit,
             WebhookLimit = tenantOverride?.WebhookLimit ?? tierLimits?.WebhookLimit ?? configDefaults.WebhookLimit,
-            MemberLimit = tierLimits?.MemberLimit ?? configDefaults.MemberLimit,
+            MemberLimit = tenantOverride?.MemberLimit ?? tierLimits?.MemberLimit ?? configDefaults.MemberLimit,
         };
     }
 

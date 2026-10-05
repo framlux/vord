@@ -834,6 +834,79 @@ public class SubscriptionServiceTests
         }
     }
 
+    private static SubscriptionService BuildEnterpriseService(DatabaseRepository repo, int tierMemberLimit)
+    {
+        ITierFeatureLimitRepository tierLimitRepo = Substitute.For<ITierFeatureLimitRepository>();
+        tierLimitRepo.GetLimitsForTierAsync(SubscriptionTier.Enterprise, Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult<TierFeatureLimit?>(new TierFeatureLimit
+            {
+                Tier = SubscriptionTier.Enterprise,
+                MachineLimit = 10000,
+                RetentionDays = 365,
+                AlertRuleLimit = 25,
+                WebhookLimit = 15,
+                MemberLimit = tierMemberLimit,
+                MinimumBillableMachines = 0,
+                UpdatedAt = DateTimeOffset.UtcNow,
+            }));
+
+        IOptions<TierDefaultOptions> tierDefaults = Options.Create(new TierDefaultOptions
+        {
+            Free = new() { MachineLimit = 3, RetentionDays = 1, AlertRuleLimit = 0, WebhookLimit = 0, MemberLimit = 1 },
+            Pro = new() { MachineLimit = 1000, RetentionDays = 60, AlertRuleLimit = 10, WebhookLimit = 5, MemberLimit = 5 },
+            Team = new() { MachineLimit = 10000, RetentionDays = 365, AlertRuleLimit = 25, WebhookLimit = 15, MemberLimit = int.MaxValue },
+        });
+
+        return new SubscriptionService(repo, repo, repo, repo, tierLimitRepo, repo, repo, repo, tierDefaults, TimeProvider.System, new NullLogger<SubscriptionService>());
+    }
+
+    [Test]
+    public async Task GetEffectiveLimits_MemberOverride_WinsOverTheTierValue()
+    {
+        (DatabaseRepository repo, TestDatabaseFactory dbFactory) = BuildRepoAndFactory();
+        using (dbFactory)
+        {
+            TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 1, tier: SubscriptionTier.Enterprise);
+            sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
+            await dbFactory.Context.InsertAsync(new TenantSubscriptionOverride
+            {
+                TenantId = 1,
+                MemberLimit = 75,
+                CreatedAt = DateTimeOffset.UtcNow,
+                UpdatedAt = DateTimeOffset.UtcNow,
+            });
+            SubscriptionService service = BuildEnterpriseService(repo, tierMemberLimit: int.MaxValue);
+
+            EffectiveLimits limits = await service.GetEffectiveLimitsForTenantAsync(1, CancellationToken.None);
+
+            await Assert.That(limits.MemberLimit).IsEqualTo(75);
+        }
+    }
+
+    [Test]
+    public async Task GetEffectiveLimits_NoMemberOverride_UsesTheTierValue()
+    {
+        (DatabaseRepository repo, TestDatabaseFactory dbFactory) = BuildRepoAndFactory();
+        using (dbFactory)
+        {
+            TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 1, tier: SubscriptionTier.Enterprise);
+            sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
+            await dbFactory.Context.InsertAsync(new TenantSubscriptionOverride
+            {
+                TenantId = 1,
+                MachineLimit = 500,
+                CreatedAt = DateTimeOffset.UtcNow,
+                UpdatedAt = DateTimeOffset.UtcNow,
+            });
+            SubscriptionService service = BuildEnterpriseService(repo, tierMemberLimit: 20);
+
+            EffectiveLimits limits = await service.GetEffectiveLimitsForTenantAsync(1, CancellationToken.None);
+
+            await Assert.That(limits.MachineLimit).IsEqualTo(500);
+            await Assert.That(limits.MemberLimit).IsEqualTo(20);
+        }
+    }
+
     [Test]
     public async Task GetMachineCountAtDate_ReturnsCountFromRepository()
     {

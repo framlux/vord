@@ -10,6 +10,7 @@ using Framlux.FleetManagement.Services.Core.Alerts;
 using Framlux.FleetManagement.Services.Core.Billing;
 using Framlux.FleetManagement.Test.Infrastructure;
 using Framlux.Vord.BillingGrpc;
+using Google.Protobuf.WellKnownTypes;
 using Grpc.Core;
 using Grpc.Net.Client;
 using LinqToDB;
@@ -1053,6 +1054,442 @@ public sealed class FleetAdminServiceTests
         await Assert.That(entries[0].UserId).IsNull();
     }
 
+    // ========== ApplyEnterpriseAgreement Tests ==========
+
+    private static ApplyEnterpriseAgreementRequest ApplyRequest(string extId, int revision, int machineLimit = 500)
+    {
+        return new ApplyEnterpriseAgreementRequest
+        {
+            TenantExternalId = extId,
+            AgreementId = 42,
+            Revision = revision,
+            MachineLimit = machineLimit,
+            RetentionDays = 180,
+            MemberLimit = int.MaxValue,
+            AlertRuleLimit = 40,
+            WebhookLimit = 20,
+            TermEnd = Timestamp.FromDateTimeOffset(new DateTimeOffset(2027, 10, 4, 23, 59, 59, TimeSpan.Zero)),
+        };
+    }
+
+    [Test]
+    public async Task ApplyEnterpriseAgreement_TenantWithoutSubscription_BecomesEnterpriseWithEveryLimit()
+    {
+        using FunctionalTestFactory factory = new();
+        factory.WithInternalClientSubjects(PermittedClientSubject);
+        using DatabaseContext db = factory.CreateDbContext();
+        string extId = $"ext-{Guid.NewGuid():N}";
+        int tenantId = await SeedTenant(db, $"tenant-{Guid.NewGuid():N}", extId);
+        using GrpcChannel channel = CreateChannel(factory);
+        FleetAdmin.FleetAdminClient client = new(channel);
+
+        ApplyEnterpriseAgreementResponse response = await client.ApplyEnterpriseAgreementAsync(ApplyRequest(extId, 1), Headers());
+
+        TenantSubscription? sub = await db.TenantSubscriptions.FirstOrDefaultAsync(s => s.TenantId == tenantId);
+        TenantSubscriptionOverride? ov = await db.TenantSubscriptionOverrides.FirstOrDefaultAsync(o => o.TenantId == tenantId);
+        await Assert.That(response.Success).IsTrue();
+        await Assert.That(response.Outcome).IsEqualTo("applied");
+        await Assert.That(sub!.Tier).IsEqualTo(SubscriptionTier.Enterprise);
+        await Assert.That(sub.Status).IsEqualTo(SubscriptionStatus.Active);
+        await Assert.That(sub.AppliedAgreementRevision).IsEqualTo(1);
+        await Assert.That(sub.CurrentPeriodEnd).IsEqualTo(new DateTimeOffset(2027, 10, 4, 23, 59, 59, TimeSpan.Zero));
+        await Assert.That(ov!.MachineLimit).IsEqualTo(500);
+        await Assert.That(ov.RetentionDays).IsEqualTo(180);
+        await Assert.That(ov.MemberLimit).IsEqualTo(int.MaxValue);
+        await Assert.That(ov.AlertRuleLimit).IsEqualTo(40);
+        await Assert.That(ov.WebhookLimit).IsEqualTo(20);
+    }
+
+    [Test]
+    public async Task ApplyEnterpriseAgreement_FromTeam_WritesOneAuditRow()
+    {
+        using FunctionalTestFactory factory = new();
+        factory.WithInternalClientSubjects(PermittedClientSubject);
+        using DatabaseContext db = factory.CreateDbContext();
+        string extId = $"ext-{Guid.NewGuid():N}";
+        int tenantId = await SeedTenantWithSubscription(db, extId, SubscriptionTier.Team);
+        using GrpcChannel channel = CreateChannel(factory);
+        FleetAdmin.FleetAdminClient client = new(channel);
+
+        await client.ApplyEnterpriseAgreementAsync(ApplyRequest(extId, 1), Headers());
+
+        List<AuditLogEntry> entries = await db.AuditLog
+            .Where(e => (e.Action == AuditAction.EnterpriseAgreementApplied) && (e.TenantId == tenantId))
+            .ToListAsync();
+        TenantSubscription? sub = await db.TenantSubscriptions.FirstOrDefaultAsync(s => s.TenantId == tenantId);
+        await Assert.That(entries.Count).IsEqualTo(1);
+        await Assert.That(entries[0].UserId).IsNull();
+        await Assert.That(sub!.Tier).IsEqualTo(SubscriptionTier.Enterprise);
+    }
+
+    [Test]
+    public async Task ApplyEnterpriseAgreement_SameRevisionTwice_ReportsAlreadyApplied()
+    {
+        using FunctionalTestFactory factory = new();
+        factory.WithInternalClientSubjects(PermittedClientSubject);
+        using DatabaseContext db = factory.CreateDbContext();
+        string extId = $"ext-{Guid.NewGuid():N}";
+        int tenantId = await SeedTenant(db, $"tenant-{Guid.NewGuid():N}", extId);
+        using GrpcChannel channel = CreateChannel(factory);
+        FleetAdmin.FleetAdminClient client = new(channel);
+        await client.ApplyEnterpriseAgreementAsync(ApplyRequest(extId, 1), Headers());
+
+        ApplyEnterpriseAgreementResponse second = await client.ApplyEnterpriseAgreementAsync(
+            ApplyRequest(extId, 1, machineLimit: 9), Headers());
+
+        TenantSubscriptionOverride? ov = await db.TenantSubscriptionOverrides.FirstOrDefaultAsync(o => o.TenantId == tenantId);
+        int audits = await db.AuditLog
+            .Where(e => (e.Action == AuditAction.EnterpriseAgreementApplied) && (e.TenantId == tenantId))
+            .CountAsync();
+        await Assert.That(second.Success).IsTrue();
+        await Assert.That(second.Outcome).IsEqualTo("already_applied");
+        await Assert.That(ov!.MachineLimit).IsEqualTo(500);
+        await Assert.That(audits).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task ApplyEnterpriseAgreement_OlderRevision_ReportsStaleAndKeepsNewerLimits()
+    {
+        using FunctionalTestFactory factory = new();
+        factory.WithInternalClientSubjects(PermittedClientSubject);
+        using DatabaseContext db = factory.CreateDbContext();
+        string extId = $"ext-{Guid.NewGuid():N}";
+        int tenantId = await SeedTenant(db, $"tenant-{Guid.NewGuid():N}", extId);
+        using GrpcChannel channel = CreateChannel(factory);
+        FleetAdmin.FleetAdminClient client = new(channel);
+        await client.ApplyEnterpriseAgreementAsync(ApplyRequest(extId, 2, machineLimit: 800), Headers());
+
+        ApplyEnterpriseAgreementResponse second = await client.ApplyEnterpriseAgreementAsync(
+            ApplyRequest(extId, 1, machineLimit: 100), Headers());
+
+        TenantSubscriptionOverride? ov = await db.TenantSubscriptionOverrides.FirstOrDefaultAsync(o => o.TenantId == tenantId);
+        TenantSubscription? sub = await db.TenantSubscriptions.FirstOrDefaultAsync(s => s.TenantId == tenantId);
+        await Assert.That(second.Success).IsTrue();
+        await Assert.That(second.Outcome).IsEqualTo("stale_revision");
+        await Assert.That(ov!.MachineLimit).IsEqualTo(800);
+        await Assert.That(sub!.AppliedAgreementRevision).IsEqualTo(2);
+    }
+
+    [Test]
+    public async Task ApplyEnterpriseAgreement_InvalidRetention_IsInvalidArgument()
+    {
+        using FunctionalTestFactory factory = new();
+        factory.WithInternalClientSubjects(PermittedClientSubject);
+        using DatabaseContext db = factory.CreateDbContext();
+        string extId = $"ext-{Guid.NewGuid():N}";
+        int tenantId = await SeedTenant(db, $"tenant-{Guid.NewGuid():N}", extId);
+        using GrpcChannel channel = CreateChannel(factory);
+        FleetAdmin.FleetAdminClient client = new(channel);
+        ApplyEnterpriseAgreementRequest request = ApplyRequest(extId, 1);
+        request.RetentionDays = 400;
+
+        RpcException? exception = null;
+        try
+        {
+            await client.ApplyEnterpriseAgreementAsync(request, Headers());
+        }
+        catch (RpcException ex)
+        {
+            exception = ex;
+        }
+
+        TenantSubscription? sub = await db.TenantSubscriptions.FirstOrDefaultAsync(s => s.TenantId == tenantId);
+        await Assert.That(exception).IsNotNull();
+        await Assert.That(exception!.StatusCode).IsEqualTo(StatusCode.InvalidArgument);
+        await Assert.That(exception.Status.Detail).Contains("Retention");
+        await Assert.That(sub).IsNull();
+    }
+
+    [Test]
+    public async Task ApplyEnterpriseAgreement_MissingTermEnd_IsInvalidArgument()
+    {
+        using FunctionalTestFactory factory = new();
+        factory.WithInternalClientSubjects(PermittedClientSubject);
+        using DatabaseContext db = factory.CreateDbContext();
+        string extId = $"ext-{Guid.NewGuid():N}";
+        int tenantId = await SeedTenant(db, $"tenant-{Guid.NewGuid():N}", extId);
+        using GrpcChannel channel = CreateChannel(factory);
+        FleetAdmin.FleetAdminClient client = new(channel);
+        ApplyEnterpriseAgreementRequest request = ApplyRequest(extId, 1);
+        request.TermEnd = null;
+
+        RpcException? exception = null;
+        try
+        {
+            await client.ApplyEnterpriseAgreementAsync(request, Headers());
+        }
+        catch (RpcException ex)
+        {
+            exception = ex;
+        }
+
+        TenantSubscription? sub = await db.TenantSubscriptions.FirstOrDefaultAsync(s => s.TenantId == tenantId);
+        await Assert.That(exception).IsNotNull();
+        await Assert.That(exception!.StatusCode).IsEqualTo(StatusCode.InvalidArgument);
+        await Assert.That(exception.Status.Detail).Contains("TermEnd");
+        await Assert.That(sub).IsNull();
+    }
+
+    [Test]
+    public async Task ApplyEnterpriseAgreement_UnknownTenant_ThrowsNotFound()
+    {
+        using FunctionalTestFactory factory = new();
+        factory.WithInternalClientSubjects(PermittedClientSubject);
+        using GrpcChannel channel = CreateChannel(factory);
+        FleetAdmin.FleetAdminClient client = new(channel);
+
+        RpcException? exception = null;
+        try
+        {
+            await client.ApplyEnterpriseAgreementAsync(ApplyRequest("does-not-exist", 1), Headers());
+        }
+        catch (RpcException ex)
+        {
+            exception = ex;
+        }
+
+        await Assert.That(exception).IsNotNull();
+        await Assert.That(exception!.StatusCode).IsEqualTo(StatusCode.NotFound);
+    }
+
+    [Test]
+    public async Task ApplyEnterpriseAgreement_NonPermittedSubject_ThrowsPermissionDenied()
+    {
+        using FunctionalTestFactory factory = new();
+        factory.WithInternalClientSubjects(PermittedClientSubject);
+        using DatabaseContext db = factory.CreateDbContext();
+        string extId = $"ext-{Guid.NewGuid():N}";
+        int tenantId = await SeedTenant(db, $"tenant-{Guid.NewGuid():N}", extId);
+        using GrpcChannel channel = CreateChannel(factory);
+        FleetAdmin.FleetAdminClient client = new(channel);
+
+        RpcException? exception = null;
+        try
+        {
+            await client.ApplyEnterpriseAgreementAsync(
+                ApplyRequest(extId, 1), Headers("impostor.vord-fleet.svc.cluster.local"));
+        }
+        catch (RpcException ex)
+        {
+            exception = ex;
+        }
+
+        TenantSubscription? sub = await db.TenantSubscriptions.FirstOrDefaultAsync(s => s.TenantId == tenantId);
+        await Assert.That(exception).IsNotNull();
+        await Assert.That(exception!.StatusCode).IsEqualTo(StatusCode.PermissionDenied);
+        await Assert.That(sub).IsNull();
+    }
+
+    // ========== Enterprise Refusal Tests ==========
+
+    [Test]
+    public async Task UpdateTenantSubscription_ToEnterprise_IsRefused()
+    {
+        using FunctionalTestFactory factory = new();
+        factory.WithInternalClientSubjects(PermittedClientSubject);
+        using DatabaseContext db = factory.CreateDbContext();
+        string extId = $"ext-{Guid.NewGuid():N}";
+        int tenantId = await SeedTenantWithSubscription(db, extId, SubscriptionTier.Team);
+        using GrpcChannel channel = CreateChannel(factory);
+        FleetAdmin.FleetAdminClient client = new(channel);
+
+        RpcException? exception = null;
+        try
+        {
+            await client.UpdateTenantSubscriptionAsync(
+                new UpdateTenantSubscriptionRequest { TenantExternalId = extId, Tier = BillingTier.Enterprise, Status = "Active" },
+                Headers());
+        }
+        catch (RpcException ex)
+        {
+            exception = ex;
+        }
+
+        TenantSubscription? sub = await db.TenantSubscriptions.FirstOrDefaultAsync(s => s.TenantId == tenantId);
+        await Assert.That(exception).IsNotNull();
+        await Assert.That(exception!.StatusCode).IsEqualTo(StatusCode.FailedPrecondition);
+        await Assert.That(sub!.Tier).IsEqualTo(SubscriptionTier.Team);
+    }
+
+    [Test]
+    public async Task UpdateTenantSubscription_OnEnterpriseTenant_IsRefused()
+    {
+        using FunctionalTestFactory factory = new();
+        factory.WithInternalClientSubjects(PermittedClientSubject);
+        using DatabaseContext db = factory.CreateDbContext();
+        string extId = $"ext-{Guid.NewGuid():N}";
+        int tenantId = await SeedTenantWithSubscription(db, extId, SubscriptionTier.Enterprise);
+        using GrpcChannel channel = CreateChannel(factory);
+        FleetAdmin.FleetAdminClient client = new(channel);
+
+        RpcException? exception = null;
+        try
+        {
+            await client.UpdateTenantSubscriptionAsync(
+                new UpdateTenantSubscriptionRequest { TenantExternalId = extId, Tier = BillingTier.Free, Status = "Active" },
+                Headers());
+        }
+        catch (RpcException ex)
+        {
+            exception = ex;
+        }
+
+        TenantSubscription? sub = await db.TenantSubscriptions.FirstOrDefaultAsync(s => s.TenantId == tenantId);
+        await Assert.That(exception).IsNotNull();
+        await Assert.That(exception!.StatusCode).IsEqualTo(StatusCode.FailedPrecondition);
+        await Assert.That(sub!.Tier).IsEqualTo(SubscriptionTier.Enterprise);
+    }
+
+    [Test]
+    public async Task SetTenantOverride_OnEnterpriseTenant_IsRefusedAndWritesNothing()
+    {
+        using FunctionalTestFactory factory = new();
+        factory.WithInternalClientSubjects(PermittedClientSubject);
+        using DatabaseContext db = factory.CreateDbContext();
+        string extId = $"ext-{Guid.NewGuid():N}";
+        int tenantId = await SeedTenantWithSubscription(db, extId, SubscriptionTier.Enterprise);
+        using GrpcChannel channel = CreateChannel(factory);
+        FleetAdmin.FleetAdminClient client = new(channel);
+
+        RpcException? exception = null;
+        try
+        {
+            await client.SetTenantOverrideAsync(
+                new SetTenantOverrideRequest
+                {
+                    TenantExternalId = extId,
+                    MachineLimit = 50,
+                    RetentionDays = 30,
+                    AlertRuleLimit = 10,
+                    WebhookLimit = 5,
+                },
+                Headers());
+        }
+        catch (RpcException ex)
+        {
+            exception = ex;
+        }
+
+        TenantSubscriptionOverride? ov = await db.TenantSubscriptionOverrides.FirstOrDefaultAsync(o => o.TenantId == tenantId);
+        int audits = await db.AuditLog
+            .Where(e => (e.Action == AuditAction.TenantSubscriptionOverrideChanged) && (e.TenantId == tenantId))
+            .CountAsync();
+        await Assert.That(exception).IsNotNull();
+        await Assert.That(exception!.StatusCode).IsEqualTo(StatusCode.FailedPrecondition);
+        await Assert.That(exception.Status.Detail).Contains("agreement");
+        await Assert.That(ov).IsNull();
+        await Assert.That(audits).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task RemoveTenantOverride_OnEnterpriseTenant_IsRefused()
+    {
+        using FunctionalTestFactory factory = new();
+        factory.WithInternalClientSubjects(PermittedClientSubject);
+        using DatabaseContext db = factory.CreateDbContext();
+        string extId = $"ext-{Guid.NewGuid():N}";
+        int tenantId = await SeedTenant(db, $"tenant-{Guid.NewGuid():N}", extId);
+        using GrpcChannel channel = CreateChannel(factory);
+        FleetAdmin.FleetAdminClient client = new(channel);
+        await client.ApplyEnterpriseAgreementAsync(ApplyRequest(extId, 1), Headers());
+
+        RpcException? exception = null;
+        try
+        {
+            await client.RemoveTenantOverrideAsync(new RemoveTenantOverrideRequest { TenantExternalId = extId }, Headers());
+        }
+        catch (RpcException ex)
+        {
+            exception = ex;
+        }
+
+        TenantSubscriptionOverride? ov = await db.TenantSubscriptionOverrides.FirstOrDefaultAsync(o => o.TenantId == tenantId);
+        int audits = await db.AuditLog
+            .Where(e => (e.Action == AuditAction.TenantSubscriptionOverrideChanged) && (e.TenantId == tenantId))
+            .CountAsync();
+        await Assert.That(exception).IsNotNull();
+        await Assert.That(exception!.StatusCode).IsEqualTo(StatusCode.FailedPrecondition);
+        await Assert.That(exception.Status.Detail).Contains("agreement");
+        await Assert.That(ov).IsNotNull();
+        await Assert.That(ov!.MachineLimit).IsEqualTo(500);
+        await Assert.That(audits).IsEqualTo(0);
+    }
+
+    // ========== Effective Limits On The Wire Tests ==========
+
+    [Test]
+    public async Task ListTenants_ReportsEffectiveLimitsAndRevision()
+    {
+        using FunctionalTestFactory factory = new();
+        factory.WithInternalClientSubjects(PermittedClientSubject);
+        using DatabaseContext db = factory.CreateDbContext();
+        string enterpriseExtId = $"ext-{Guid.NewGuid():N}";
+        string teamExtId = $"ext-{Guid.NewGuid():N}";
+        await SeedTenant(db, $"tenant-{Guid.NewGuid():N}", enterpriseExtId);
+        await SeedTenantWithSubscription(db, teamExtId, SubscriptionTier.Team);
+        using GrpcChannel channel = CreateChannel(factory);
+        FleetAdmin.FleetAdminClient client = new(channel);
+        await client.ApplyEnterpriseAgreementAsync(ApplyRequest(enterpriseExtId, 1), Headers());
+
+        ListTenantsResponse response = await client.ListTenantsAsync(
+            new ListTenantsRequest { Page = 1, PageSize = 50 }, Headers());
+
+        FleetTenant enterprise = response.Tenants.Single(t => t.ExternalId == enterpriseExtId);
+        FleetTenant team = response.Tenants.Single(t => t.ExternalId == teamExtId);
+        await Assert.That(enterprise.Subscription.Tier).IsEqualTo(BillingTier.Enterprise);
+        await Assert.That(enterprise.Subscription.MachineLimit).IsEqualTo(500);
+        await Assert.That(enterprise.Subscription.RetentionDays).IsEqualTo(180);
+        await Assert.That(enterprise.Subscription.MemberLimit).IsEqualTo(int.MaxValue);
+        await Assert.That(enterprise.Subscription.AlertRuleLimit).IsEqualTo(40);
+        await Assert.That(enterprise.Subscription.WebhookLimit).IsEqualTo(20);
+        await Assert.That(enterprise.Subscription.AppliedAgreementRevision).IsEqualTo(1);
+        await Assert.That(team.Subscription.Tier).IsEqualTo(BillingTier.Team);
+        await Assert.That(team.Subscription.MachineLimit).IsEqualTo(10000);
+        await Assert.That(team.Subscription.MemberLimit).IsEqualTo(int.MaxValue);
+        await Assert.That(team.Subscription.AppliedAgreementRevision).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task GetTenantDetail_ReportsEffectiveLimitsOfAnEnterpriseTenant()
+    {
+        using FunctionalTestFactory factory = new();
+        factory.WithInternalClientSubjects(PermittedClientSubject);
+        using DatabaseContext db = factory.CreateDbContext();
+        string extId = $"ext-{Guid.NewGuid():N}";
+        await SeedTenant(db, $"tenant-{Guid.NewGuid():N}", extId);
+        using GrpcChannel channel = CreateChannel(factory);
+        FleetAdmin.FleetAdminClient client = new(channel);
+        await client.ApplyEnterpriseAgreementAsync(ApplyRequest(extId, 3, machineLimit: 750), Headers());
+
+        GetTenantDetailResponse response = await client.GetTenantDetailAsync(
+            new GetTenantDetailRequest { TenantExternalId = extId }, Headers());
+
+        await Assert.That(response.Tenant.Subscription.Tier).IsEqualTo(BillingTier.Enterprise);
+        await Assert.That(response.Tenant.Subscription.MachineLimit).IsEqualTo(750);
+        await Assert.That(response.Tenant.Subscription.AppliedAgreementRevision).IsEqualTo(3);
+    }
+
+    [Test]
+    public async Task GetTenantDetail_ReportsAlertRuleAndWebhookCounts()
+    {
+        using FunctionalTestFactory factory = new();
+        factory.WithInternalClientSubjects(PermittedClientSubject);
+        using DatabaseContext db = factory.CreateDbContext();
+        string extId = $"ext-{Guid.NewGuid():N}";
+        int tenantId = await SeedTenantWithSubscription(db, extId, SubscriptionTier.Team);
+        await SeedDisabledCustomRule(db, tenantId);
+        await SeedDisabledCustomRule(db, tenantId);
+        await SeedIntegration(db, tenantId);
+        using GrpcChannel channel = CreateChannel(factory);
+        FleetAdmin.FleetAdminClient client = new(channel);
+
+        GetTenantDetailResponse response = await client.GetTenantDetailAsync(
+            new GetTenantDetailRequest { TenantExternalId = extId }, Headers());
+
+        await Assert.That(response.Tenant.AlertRuleCount).IsEqualTo(2);
+        await Assert.That(response.Tenant.WebhookCount).IsEqualTo(1);
+    }
+
     // ========== ConfigureTenantOidc Tests ==========
 
     [Test]
@@ -1715,6 +2152,22 @@ public sealed class FleetAdminServiceTests
         };
 
         return await db.InsertWithInt32IdentityAsync(rule);
+    }
+
+    private static async Task SeedIntegration(DatabaseContext db, int tenantId)
+    {
+        IntegrationEndpoint integration = new()
+        {
+            TenantId = tenantId,
+            Provider = IntegrationProvider.Custom,
+            Name = $"integration-{Guid.NewGuid():N}",
+            Configuration = """{"url":"https://hooks.example.com/test","secret":"encrypted-secret"}""",
+            IsEnabled = true,
+            CreatedByUserId = 1,
+            CreatedAt = DateTimeOffset.UtcNow,
+        };
+
+        await db.InsertAsync(integration);
     }
 
     private static async Task SeedUserTenantRole(

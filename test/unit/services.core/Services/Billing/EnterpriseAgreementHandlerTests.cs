@@ -1,0 +1,286 @@
+// Copyright (c) 2026 Framlux LLC
+// Licensed under the Functional Source License, Version 1.1, ALv2 Future License
+// See LICENSE for details.
+
+using Framlux.FleetManagement.Database.Enums;
+using Framlux.FleetManagement.Database.Models;
+using Framlux.FleetManagement.Database.Repositories;
+using Framlux.FleetManagement.Services.Core.Alerts;
+using Framlux.FleetManagement.Services.Core.Billing;
+using Framlux.FleetManagement.Services.Core.Infrastructure;
+using Framlux.FleetManagement.Test.Infrastructure;
+using Hangfire;
+using Hangfire.Common;
+using Hangfire.States;
+using LinqToDB;
+using LinqToDB.Async;
+using Microsoft.Extensions.Logging.Abstractions;
+using NSubstitute;
+
+namespace Framlux.FleetManagement.Test.Services.Billing;
+
+/// <summary>
+/// Tests for <see cref="EnterpriseAgreementHandler"/>.
+/// </summary>
+public sealed class EnterpriseAgreementHandlerTests
+{
+    private const int TenantId = 1;
+
+    private static readonly DateTimeOffset TermEnd = new(2027, 10, 4, 23, 59, 59, TimeSpan.Zero);
+
+    private static EnterpriseAgreementTerms Terms(
+        int revision,
+        int machineLimit = 500,
+        int retentionDays = 180,
+        int memberLimit = int.MaxValue,
+        int alertRuleLimit = 40,
+        int webhookLimit = 20)
+    {
+        return new EnterpriseAgreementTerms(
+            TenantId, 42, revision, machineLimit, retentionDays, memberLimit, alertRuleLimit, webhookLimit, TermEnd);
+    }
+
+    /// <summary>
+    /// The handler with the production graph: real repositories over an in-memory database, a
+    /// substitute provisioner, and a real dispatcher over a substitute Hangfire client.
+    /// </summary>
+    private sealed class Harness : IDisposable
+    {
+        private readonly TestDatabaseFactory _dbFactory = new();
+
+        public Harness()
+        {
+            Repo = new DatabaseRepository(_dbFactory.Context, new NullLogger<DatabaseRepository>());
+            Provisioner = Substitute.For<IBuiltInAlertRuleProvisioner>();
+            BackgroundJobs = Substitute.For<IBackgroundJobClient>();
+
+            Handler = new EnterpriseAgreementHandler(
+                Repo,
+                Repo,
+                Repo,
+                Repo,
+                Provisioner,
+                new RetentionReclassifyDispatcher(BackgroundJobs, NullLogger<RetentionReclassifyDispatcher>.Instance),
+                NullLogger<EnterpriseAgreementHandler>.Instance);
+        }
+
+        public DatabaseRepository Repo { get; }
+
+        public IBuiltInAlertRuleProvisioner Provisioner { get; }
+
+        public IBackgroundJobClient BackgroundJobs { get; }
+
+        public EnterpriseAgreementHandler Handler { get; }
+
+        public async Task SeedSubscriptionAsync(SubscriptionTier tier)
+        {
+            TenantSubscription subscription = TestDataBuilder.BuildSubscription(tenantId: TenantId, tier: tier);
+            subscription.Id = await _dbFactory.Context.InsertWithInt32IdentityAsync(subscription);
+        }
+
+        public async Task SeedOverrideAsync(int? machineLimit, int? memberLimit)
+        {
+            await _dbFactory.Context.InsertAsync(new TenantSubscriptionOverride
+            {
+                TenantId = TenantId,
+                MachineLimit = machineLimit,
+                MemberLimit = memberLimit,
+                CreatedAt = DateTimeOffset.UtcNow,
+                UpdatedAt = DateTimeOffset.UtcNow,
+            });
+        }
+
+        public async Task<int> CountAuditAsync(AuditAction action)
+        {
+            int count = await _dbFactory.Context.AuditLog
+                .Where(a => (a.TenantId == TenantId) && (a.Action == action))
+                .CountAsync();
+
+            return count;
+        }
+
+        public void Dispose()
+        {
+            _dbFactory.Dispose();
+        }
+    }
+
+    [Test]
+    public async Task Apply_WritesTierEveryOverrideAndOneAuditRow()
+    {
+        using Harness h = new();
+
+        EnterpriseApplyOutcome outcome = await h.Handler.ApplyAsync(Terms(revision: 1), CancellationToken.None);
+
+        TenantSubscription? sub = await h.Repo.GetSubscriptionForTenantAsync(TenantId, CancellationToken.None);
+        TenantSubscriptionOverride? ov = await h.Repo.GetOverrideForTenantAsync(TenantId, CancellationToken.None);
+        await Assert.That(outcome).IsEqualTo(EnterpriseApplyOutcome.Applied);
+        await Assert.That(sub!.Tier).IsEqualTo(SubscriptionTier.Enterprise);
+        await Assert.That(sub.Status).IsEqualTo(SubscriptionStatus.Active);
+        await Assert.That(sub.AppliedAgreementRevision).IsEqualTo(1);
+        await Assert.That(sub.CurrentPeriodEnd).IsEqualTo(TermEnd);
+        await Assert.That(ov!.MachineLimit).IsEqualTo(500);
+        await Assert.That(ov.RetentionDays).IsEqualTo(180);
+        await Assert.That(ov.MemberLimit).IsEqualTo(int.MaxValue);
+        await Assert.That(ov.AlertRuleLimit).IsEqualTo(40);
+        await Assert.That(ov.WebhookLimit).IsEqualTo(20);
+        await Assert.That(await h.CountAuditAsync(AuditAction.EnterpriseAgreementApplied)).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task Apply_ReplacesAnExistingOverrideWholesale()
+    {
+        using Harness h = new();
+        await h.SeedSubscriptionAsync(SubscriptionTier.Team);
+        await h.SeedOverrideAsync(machineLimit: 50, memberLimit: null);
+
+        await h.Handler.ApplyAsync(Terms(revision: 1, memberLimit: 75), CancellationToken.None);
+
+        TenantSubscriptionOverride? ov = await h.Repo.GetOverrideForTenantAsync(TenantId, CancellationToken.None);
+        await Assert.That(ov!.MachineLimit).IsEqualTo(500);
+        await Assert.That(ov.MemberLimit).IsEqualTo(75);
+    }
+
+    [Test]
+    public async Task Apply_FromFree_RestoresTierGatedResources()
+    {
+        using Harness h = new();
+        await h.SeedSubscriptionAsync(SubscriptionTier.Free);
+
+        await h.Handler.ApplyAsync(Terms(revision: 1), CancellationToken.None);
+
+        await h.Provisioner.Received(1).RestoreForTierAsync(
+            TenantId,
+            Arg.Is<TenantSubscription?>(p => (p != null) && (p.Tier == SubscriptionTier.Free)),
+            SubscriptionTier.Enterprise,
+            SubscriptionStatus.Active,
+            Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task Apply_Applied_EnqueuesOneRetentionReclassifyForTheTenant()
+    {
+        using Harness h = new();
+
+        await h.Handler.ApplyAsync(Terms(revision: 1), CancellationToken.None);
+
+        h.BackgroundJobs.Received(1).Create(
+            Arg.Is<Job>(j => (j.Method.Name == nameof(RetentionReclassifyJob.RunAsync))
+                && ((int)j.Args[0] == TenantId)),
+            Arg.Any<IState>());
+    }
+
+    [Test]
+    public async Task Apply_SameRevisionTwice_WritesNothingTheSecondTime()
+    {
+        using Harness h = new();
+        await h.Handler.ApplyAsync(Terms(revision: 1), CancellationToken.None);
+        h.BackgroundJobs.ClearReceivedCalls();
+        h.Provisioner.ClearReceivedCalls();
+
+        EnterpriseApplyOutcome second = await h.Handler.ApplyAsync(Terms(revision: 1, machineLimit: 9), CancellationToken.None);
+
+        TenantSubscriptionOverride? ov = await h.Repo.GetOverrideForTenantAsync(TenantId, CancellationToken.None);
+        await Assert.That(second).IsEqualTo(EnterpriseApplyOutcome.AlreadyApplied);
+        await Assert.That(ov!.MachineLimit).IsEqualTo(500);
+        await Assert.That(await h.CountAuditAsync(AuditAction.EnterpriseAgreementApplied)).IsEqualTo(1);
+        h.BackgroundJobs.DidNotReceive().Create(Arg.Any<Job>(), Arg.Any<IState>());
+        await h.Provisioner.DidNotReceive().RestoreForTierAsync(
+            Arg.Any<int>(),
+            Arg.Any<TenantSubscription?>(),
+            Arg.Any<SubscriptionTier>(),
+            Arg.Any<SubscriptionStatus>(),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task Apply_OlderRevision_LeavesNewerLimitsInPlace()
+    {
+        using Harness h = new();
+        await h.Handler.ApplyAsync(Terms(revision: 2, machineLimit: 800), CancellationToken.None);
+
+        EnterpriseApplyOutcome outcome = await h.Handler.ApplyAsync(Terms(revision: 1, machineLimit: 100), CancellationToken.None);
+
+        TenantSubscriptionOverride? ov = await h.Repo.GetOverrideForTenantAsync(TenantId, CancellationToken.None);
+        TenantSubscription? sub = await h.Repo.GetSubscriptionForTenantAsync(TenantId, CancellationToken.None);
+        await Assert.That(outcome).IsEqualTo(EnterpriseApplyOutcome.StaleRevision);
+        await Assert.That(ov!.MachineLimit).IsEqualTo(800);
+        await Assert.That(sub!.AppliedAgreementRevision).IsEqualTo(2);
+        await Assert.That(await h.CountAuditAsync(AuditAction.EnterpriseAgreementApplied)).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task Apply_NewerRevision_ReplacesTheLimits()
+    {
+        using Harness h = new();
+        await h.Handler.ApplyAsync(Terms(revision: 1, machineLimit: 500), CancellationToken.None);
+
+        EnterpriseApplyOutcome outcome = await h.Handler.ApplyAsync(Terms(revision: 2, machineLimit: 800), CancellationToken.None);
+
+        TenantSubscriptionOverride? ov = await h.Repo.GetOverrideForTenantAsync(TenantId, CancellationToken.None);
+        TenantSubscription? sub = await h.Repo.GetSubscriptionForTenantAsync(TenantId, CancellationToken.None);
+        await Assert.That(outcome).IsEqualTo(EnterpriseApplyOutcome.Applied);
+        await Assert.That(ov!.MachineLimit).IsEqualTo(800);
+        await Assert.That(sub!.AppliedAgreementRevision).IsEqualTo(2);
+        await Assert.That(await h.CountAuditAsync(AuditAction.EnterpriseAgreementApplied)).IsEqualTo(2);
+    }
+
+    [Test]
+    [Arguments(0, 180, 10, 10, 10)]      // machines must be positive
+    [Arguments(500, 0, 10, 10, 10)]      // retention 1..365
+    [Arguments(500, 366, 10, 10, 10)]
+    [Arguments(500, 180, 0, 10, 10)]     // members must be positive
+    [Arguments(500, 180, 10, -1, 10)]    // -1 is "tier default", never valid for Enterprise
+    [Arguments(500, 180, 10, 10, -1)]
+    public async Task Apply_InvalidLimits_AreRefusedBeforeAnyWrite(int machines, int retention, int members, int alerts, int webhooks)
+    {
+        using Harness h = new();
+
+        await Assert.ThrowsAsync<ArgumentException>(() => h.Handler.ApplyAsync(
+            Terms(revision: 1, machineLimit: machines, retentionDays: retention, memberLimit: members, alertRuleLimit: alerts, webhookLimit: webhooks),
+            CancellationToken.None));
+
+        await Assert.That(await h.Repo.GetSubscriptionForTenantAsync(TenantId, CancellationToken.None)).IsNull();
+        await Assert.That(await h.Repo.GetOverrideForTenantAsync(TenantId, CancellationToken.None)).IsNull();
+    }
+
+    [Test]
+    [Arguments(0)]
+    [Arguments(-1)]
+    public async Task Apply_NonPositiveRevision_IsRefusedBeforeAnyWrite(int revision)
+    {
+        using Harness h = new();
+
+        await Assert.ThrowsAsync<ArgumentException>(() => h.Handler.ApplyAsync(Terms(revision: revision), CancellationToken.None));
+
+        await Assert.That(await h.Repo.GetSubscriptionForTenantAsync(TenantId, CancellationToken.None)).IsNull();
+    }
+
+    [Test]
+    [Arguments(1, 1, 0, 0)]
+    [Arguments(1, 365, 1, 1)]
+    public async Task Apply_LimitsAtTheirBoundaries_AreAccepted(int machines, int retention, int alerts, int webhooks)
+    {
+        using Harness h = new();
+
+        EnterpriseApplyOutcome outcome = await h.Handler.ApplyAsync(
+            Terms(revision: 1, machineLimit: machines, retentionDays: retention, memberLimit: 1, alertRuleLimit: alerts, webhookLimit: webhooks),
+            CancellationToken.None);
+
+        TenantSubscriptionOverride? ov = await h.Repo.GetOverrideForTenantAsync(TenantId, CancellationToken.None);
+        await Assert.That(outcome).IsEqualTo(EnterpriseApplyOutcome.Applied);
+        await Assert.That(ov!.MachineLimit).IsEqualTo(machines);
+        await Assert.That(ov.RetentionDays).IsEqualTo(retention);
+        await Assert.That(ov.MemberLimit).IsEqualTo(1);
+        await Assert.That(ov.AlertRuleLimit).IsEqualTo(alerts);
+        await Assert.That(ov.WebhookLimit).IsEqualTo(webhooks);
+    }
+
+    [Test]
+    public async Task Apply_NullTerms_Throws()
+    {
+        using Harness h = new();
+
+        await Assert.ThrowsAsync<ArgumentNullException>(() => h.Handler.ApplyAsync(null!, CancellationToken.None));
+    }
+}

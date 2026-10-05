@@ -303,6 +303,56 @@ public sealed class FleetAdminServiceTests
         await Assert.That(result.Subscription.Status).IsEqualTo("Active");
         await Assert.That(result.Subscription.MachineLimit).IsEqualTo(50);
         await Assert.That(result.Subscription.RetentionDays).IsEqualTo(60);
+        await Assert.That(result.Subscription.MemberLimit).IsEqualTo(5);
+        await Assert.That(result.Subscription.AlertRuleLimit).IsEqualTo(10);
+        await Assert.That(result.Subscription.WebhookLimit).IsEqualTo(5);
+        await Assert.That(result.Subscription.AppliedAgreementRevision).IsEqualTo(0);
+        await Assert.That(result.AlertRuleCount).IsEqualTo(0);
+        await Assert.That(result.WebhookCount).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task MapToFleetTenant_OverrideAndCounts_AreCarriedOntoTheTenant()
+    {
+        Tenant tenant = MakeTenant();
+        TenantSubscription subscription = new()
+        {
+            TenantId = TenantInternalId,
+            Tier = SubscriptionTier.Enterprise,
+            Status = SubscriptionStatus.Active,
+            AppliedAgreementRevision = 2,
+            CreatedAt = DateTimeOffset.UnixEpoch,
+            UpdatedAt = DateTimeOffset.UnixEpoch,
+        };
+        TierFeatureLimit tier = new()
+        {
+            Tier = SubscriptionTier.Enterprise,
+            MachineLimit = 10000,
+            RetentionDays = 365,
+            AlertRuleLimit = 25,
+            WebhookLimit = 15,
+            MemberLimit = int.MaxValue,
+            MinimumBillableMachines = 0,
+            UpdatedAt = DateTimeOffset.UnixEpoch,
+        };
+        TenantSubscriptionOverride tenantOverride = new()
+        {
+            TenantId = TenantInternalId,
+            MachineLimit = 500,
+            RetentionDays = 180,
+            AlertRuleLimit = 40,
+            WebhookLimit = 20,
+            MemberLimit = int.MaxValue,
+        };
+
+        FleetTenant result = FleetAdminService.MapToFleetTenant(
+            tenant, 4, 2, subscription, tier, tenantOverride, alertRuleCount: 7, webhookCount: 3);
+
+        await Assert.That(result.AlertRuleCount).IsEqualTo(7);
+        await Assert.That(result.WebhookCount).IsEqualTo(3);
+        await Assert.That(result.Subscription.MachineLimit).IsEqualTo(500);
+        await Assert.That(result.Subscription.AlertRuleLimit).IsEqualTo(40);
+        await Assert.That(result.Subscription.AppliedAgreementRevision).IsEqualTo(2);
     }
 
     [Test]
@@ -380,6 +430,55 @@ public sealed class FleetAdminServiceTests
         FleetTenantSubscription result = FleetAdminService.MapSubscription(subscription);
 
         await Assert.That(result.CurrentPeriodEnd).IsNull();
+    }
+
+    [Test]
+    public async Task MapSubscription_OverrideSet_ReportsTheOverrideNotTheTierValue()
+    {
+        TenantSubscription sub = new() { TenantId = 1, Tier = SubscriptionTier.Enterprise, Status = SubscriptionStatus.Active, CreatedAt = DateTimeOffset.UnixEpoch, UpdatedAt = DateTimeOffset.UnixEpoch, AppliedAgreementRevision = 4, CancelAtPeriodEnd = false };
+        TierFeatureLimit tier = new() { Tier = SubscriptionTier.Enterprise, MachineLimit = 10000, RetentionDays = 365, AlertRuleLimit = 25, WebhookLimit = 15, MemberLimit = int.MaxValue, MinimumBillableMachines = 0 };
+        TenantSubscriptionOverride ov = new() { TenantId = 1, MachineLimit = 500, RetentionDays = 180, AlertRuleLimit = 40, WebhookLimit = 20, MemberLimit = 75 };
+
+        FleetTenantSubscription proto = FleetAdminService.MapSubscription(sub, tier, ov);
+
+        await Assert.That(proto.Tier).IsEqualTo(BillingTier.Enterprise);
+        await Assert.That(proto.MachineLimit).IsEqualTo(500);
+        await Assert.That(proto.RetentionDays).IsEqualTo(180);
+        await Assert.That(proto.MemberLimit).IsEqualTo(75);
+        await Assert.That(proto.AlertRuleLimit).IsEqualTo(40);
+        await Assert.That(proto.WebhookLimit).IsEqualTo(20);
+        await Assert.That(proto.AppliedAgreementRevision).IsEqualTo(4);
+    }
+
+    [Test]
+    public async Task MapSubscription_OverrideFieldsUnset_FallBackToTheTierPerField()
+    {
+        TenantSubscription sub = new() { TenantId = 1, Tier = SubscriptionTier.Pro, Status = SubscriptionStatus.Active, CreatedAt = DateTimeOffset.UnixEpoch, UpdatedAt = DateTimeOffset.UnixEpoch };
+        TierFeatureLimit tier = new() { Tier = SubscriptionTier.Pro, MachineLimit = 1000, RetentionDays = 60, AlertRuleLimit = 10, WebhookLimit = 5, MemberLimit = 5, MinimumBillableMachines = 1 };
+        TenantSubscriptionOverride ov = new() { TenantId = 1, MachineLimit = 50 };
+
+        FleetTenantSubscription proto = FleetAdminService.MapSubscription(sub, tier, ov);
+
+        await Assert.That(proto.MachineLimit).IsEqualTo(50);
+        await Assert.That(proto.RetentionDays).IsEqualTo(60);
+        await Assert.That(proto.MemberLimit).IsEqualTo(5);
+        await Assert.That(proto.AlertRuleLimit).IsEqualTo(10);
+        await Assert.That(proto.WebhookLimit).IsEqualTo(5);
+        await Assert.That(proto.AppliedAgreementRevision).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task MapSubscription_NoOverrideAndNoTierRow_ReportsZeroForEveryLimit()
+    {
+        TenantSubscription sub = new() { TenantId = 1, Tier = SubscriptionTier.Team, Status = SubscriptionStatus.Active, CreatedAt = DateTimeOffset.UnixEpoch, UpdatedAt = DateTimeOffset.UnixEpoch };
+
+        FleetTenantSubscription proto = FleetAdminService.MapSubscription(sub);
+
+        await Assert.That(proto.MachineLimit).IsEqualTo(0);
+        await Assert.That(proto.RetentionDays).IsEqualTo(0);
+        await Assert.That(proto.MemberLimit).IsEqualTo(0);
+        await Assert.That(proto.AlertRuleLimit).IsEqualTo(0);
+        await Assert.That(proto.WebhookLimit).IsEqualTo(0);
     }
 
     [Test]
@@ -1482,6 +1581,7 @@ public sealed class FleetAdminServiceTests
         IMachineRepository machineRepo = Substitute.For<IMachineRepository>();
         ISubscriptionRepository subscriptionRepo = Substitute.For<ISubscriptionRepository>();
         ITierFeatureLimitRepository tierLimitRepo = Substitute.For<ITierFeatureLimitRepository>();
+        ITenantSubscriptionOverrideRepository overrideRepo = Substitute.For<ITenantSubscriptionOverrideRepository>();
 
         Tenant tenant = MakeTenant();
 
@@ -1493,6 +1593,8 @@ public sealed class FleetAdminServiceTests
             .Returns(new List<UserTenantRole>());
         subscriptionRepo.GetSubscriptionsForTenantsAsync(Arg.Any<List<int>>(), Arg.Any<CancellationToken>())
             .Returns(new List<TenantSubscription>());
+        overrideRepo.GetOverridesForTenantsAsync(Arg.Any<List<int>>(), Arg.Any<CancellationToken>())
+            .Returns(new List<TenantSubscriptionOverride>());
         tierLimitRepo.GetAllLimitsAsync(Arg.Any<CancellationToken>())
             .Returns(new List<TierFeatureLimit>());
 
@@ -1501,7 +1603,8 @@ public sealed class FleetAdminServiceTests
             { typeof(ITenantRepository), tenantRepo },
             { typeof(IMachineRepository), machineRepo },
             { typeof(ISubscriptionRepository), subscriptionRepo },
-            { typeof(ITierFeatureLimitRepository), tierLimitRepo }
+            { typeof(ITierFeatureLimitRepository), tierLimitRepo },
+            { typeof(ITenantSubscriptionOverrideRepository), overrideRepo }
         });
 
         FleetAdminService service = CreateFleetAdminService(scopeFactory);
@@ -1525,6 +1628,7 @@ public sealed class FleetAdminServiceTests
         IMachineRepository machineRepo = Substitute.For<IMachineRepository>();
         ISubscriptionRepository subscriptionRepo = Substitute.For<ISubscriptionRepository>();
         ITierFeatureLimitRepository tierLimitRepo = Substitute.For<ITierFeatureLimitRepository>();
+        ITenantSubscriptionOverrideRepository overrideRepo = Substitute.For<ITenantSubscriptionOverrideRepository>();
 
         Tenant tenant = MakeTenant();
         TenantSubscription subscription = new TenantSubscription
@@ -1555,6 +1659,8 @@ public sealed class FleetAdminServiceTests
             .Returns(new List<UserTenantRole>());
         subscriptionRepo.GetSubscriptionsForTenantsAsync(Arg.Any<List<int>>(), Arg.Any<CancellationToken>())
             .Returns(new List<TenantSubscription> { subscription });
+        overrideRepo.GetOverridesForTenantsAsync(Arg.Any<List<int>>(), Arg.Any<CancellationToken>())
+            .Returns(new List<TenantSubscriptionOverride>());
         tierLimitRepo.GetAllLimitsAsync(Arg.Any<CancellationToken>())
             .Returns(new List<TierFeatureLimit> { limits });
 
@@ -1563,7 +1669,8 @@ public sealed class FleetAdminServiceTests
             { typeof(ITenantRepository), tenantRepo },
             { typeof(IMachineRepository), machineRepo },
             { typeof(ISubscriptionRepository), subscriptionRepo },
-            { typeof(ITierFeatureLimitRepository), tierLimitRepo }
+            { typeof(ITierFeatureLimitRepository), tierLimitRepo },
+            { typeof(ITenantSubscriptionOverrideRepository), overrideRepo }
         });
 
         FleetAdminService service = CreateFleetAdminService(scopeFactory);
@@ -1588,6 +1695,9 @@ public sealed class FleetAdminServiceTests
         IMachineRepository machineRepo = Substitute.For<IMachineRepository>();
         ISubscriptionRepository subscriptionRepo = Substitute.For<ISubscriptionRepository>();
         ITierFeatureLimitRepository tierLimitRepo = Substitute.For<ITierFeatureLimitRepository>();
+        ITenantSubscriptionOverrideRepository overrideRepo = Substitute.For<ITenantSubscriptionOverrideRepository>();
+        IAlertRuleRepository alertRuleRepo = Substitute.For<IAlertRuleRepository>();
+        IIntegrationRepository integrationRepo = Substitute.For<IIntegrationRepository>();
 
         Tenant tenant = MakeTenant();
         Machine machine = new Machine
@@ -1624,7 +1734,10 @@ public sealed class FleetAdminServiceTests
             { typeof(IUserRepository), userRepo },
             { typeof(IMachineRepository), machineRepo },
             { typeof(ISubscriptionRepository), subscriptionRepo },
-            { typeof(ITierFeatureLimitRepository), tierLimitRepo }
+            { typeof(ITierFeatureLimitRepository), tierLimitRepo },
+            { typeof(ITenantSubscriptionOverrideRepository), overrideRepo },
+            { typeof(IAlertRuleRepository), alertRuleRepo },
+            { typeof(IIntegrationRepository), integrationRepo }
         });
 
         FleetAdminService service = CreateFleetAdminService(scopeFactory);
@@ -1686,6 +1799,9 @@ public sealed class FleetAdminServiceTests
         IMachineRepository machineRepo = Substitute.For<IMachineRepository>();
         ISubscriptionRepository subscriptionRepo = Substitute.For<ISubscriptionRepository>();
         ITierFeatureLimitRepository tierLimitRepo = Substitute.For<ITierFeatureLimitRepository>();
+        ITenantSubscriptionOverrideRepository overrideRepo = Substitute.For<ITenantSubscriptionOverrideRepository>();
+        IAlertRuleRepository alertRuleRepo = Substitute.For<IAlertRuleRepository>();
+        IIntegrationRepository integrationRepo = Substitute.For<IIntegrationRepository>();
 
         Tenant tenant = MakeTenant();
         TenantSubscription subscription = new TenantSubscription
@@ -1727,7 +1843,10 @@ public sealed class FleetAdminServiceTests
             { typeof(IUserRepository), userRepo },
             { typeof(IMachineRepository), machineRepo },
             { typeof(ISubscriptionRepository), subscriptionRepo },
-            { typeof(ITierFeatureLimitRepository), tierLimitRepo }
+            { typeof(ITierFeatureLimitRepository), tierLimitRepo },
+            { typeof(ITenantSubscriptionOverrideRepository), overrideRepo },
+            { typeof(IAlertRuleRepository), alertRuleRepo },
+            { typeof(IIntegrationRepository), integrationRepo }
         });
 
         FleetAdminService service = CreateFleetAdminService(scopeFactory);
@@ -1738,6 +1857,138 @@ public sealed class FleetAdminServiceTests
 
         await Assert.That(response.Tenant.Subscription).IsNotNull();
         await Assert.That(response.Tenant.Subscription.MachineLimit).IsEqualTo(200);
+    }
+
+    /// <summary>
+    /// ListTenants reports a tenant's effective limits: where an override sets a limit the panel must
+    /// show the override, not the tier row it replaces.
+    /// </summary>
+    [Test]
+    public async Task ListTenants_TenantWithOverride_ReportsTheOverrideLimits()
+    {
+        ITenantRepository tenantRepo = Substitute.For<ITenantRepository>();
+        IMachineRepository machineRepo = Substitute.For<IMachineRepository>();
+        ISubscriptionRepository subscriptionRepo = Substitute.For<ISubscriptionRepository>();
+        ITierFeatureLimitRepository tierLimitRepo = Substitute.For<ITierFeatureLimitRepository>();
+        ITenantSubscriptionOverrideRepository overrideRepo = Substitute.For<ITenantSubscriptionOverrideRepository>();
+        tenantRepo.SearchTenantsPagedAsync(Arg.Any<string?>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns((new List<Tenant> { MakeTenant() }, 1));
+        machineRepo.GetMachineCountsByTenantsAsync(Arg.Any<List<int>>(), Arg.Any<CancellationToken>())
+            .Returns(new Dictionary<int, int>());
+        tenantRepo.GetActiveRolesForTenantsAsync(Arg.Any<List<int>>(), Arg.Any<CancellationToken>())
+            .Returns(new List<UserTenantRole>());
+        subscriptionRepo.GetSubscriptionsForTenantsAsync(Arg.Any<List<int>>(), Arg.Any<CancellationToken>())
+            .Returns(new List<TenantSubscription>
+            {
+                new()
+                {
+                    TenantId = TenantInternalId,
+                    Tier = SubscriptionTier.Enterprise,
+                    Status = SubscriptionStatus.Active,
+                    AppliedAgreementRevision = 6,
+                    CreatedAt = DateTimeOffset.UnixEpoch,
+                    UpdatedAt = DateTimeOffset.UnixEpoch,
+                },
+            });
+        tierLimitRepo.GetAllLimitsAsync(Arg.Any<CancellationToken>())
+            .Returns(new List<TierFeatureLimit>
+            {
+                new()
+                {
+                    Tier = SubscriptionTier.Enterprise,
+                    MachineLimit = 10000,
+                    RetentionDays = 365,
+                    AlertRuleLimit = 25,
+                    WebhookLimit = 15,
+                    MemberLimit = int.MaxValue,
+                    MinimumBillableMachines = 0,
+                    UpdatedAt = DateTimeOffset.UnixEpoch,
+                },
+            });
+        overrideRepo.GetOverridesForTenantsAsync(Arg.Any<List<int>>(), Arg.Any<CancellationToken>())
+            .Returns(new List<TenantSubscriptionOverride>
+            {
+                new() { TenantId = TenantInternalId, MachineLimit = 500, RetentionDays = 180, AlertRuleLimit = 40, WebhookLimit = 20, MemberLimit = 75 },
+            });
+        IServiceScopeFactory scopeFactory = CreateScopeFactoryWithServices(new Dictionary<Type, object>
+        {
+            { typeof(ITenantRepository), tenantRepo },
+            { typeof(IMachineRepository), machineRepo },
+            { typeof(ISubscriptionRepository), subscriptionRepo },
+            { typeof(ITierFeatureLimitRepository), tierLimitRepo },
+            { typeof(ITenantSubscriptionOverrideRepository), overrideRepo },
+        });
+        FleetAdminService service = CreateFleetAdminService(scopeFactory);
+
+        ListTenantsResponse response = await service.ListTenants(new ListTenantsRequest(), CreateContext());
+
+        FleetTenantSubscription reported = response.Tenants[0].Subscription;
+        await Assert.That(reported.MachineLimit).IsEqualTo(500);
+        await Assert.That(reported.RetentionDays).IsEqualTo(180);
+        await Assert.That(reported.MemberLimit).IsEqualTo(75);
+        await Assert.That(reported.AlertRuleLimit).IsEqualTo(40);
+        await Assert.That(reported.WebhookLimit).IsEqualTo(20);
+        await Assert.That(reported.AppliedAgreementRevision).IsEqualTo(6);
+    }
+
+    /// <summary>
+    /// GetTenantDetail reports the tenant's override-aware limits together with how many custom alert
+    /// rules and webhook integrations it is using against them.
+    /// </summary>
+    [Test]
+    public async Task GetTenantDetail_ReportsTheOverrideAndTheAlertRuleAndWebhookCounts()
+    {
+        ITenantRepository tenantRepo = Substitute.For<ITenantRepository>();
+        IUserRepository userRepo = Substitute.For<IUserRepository>();
+        IMachineRepository machineRepo = Substitute.For<IMachineRepository>();
+        ISubscriptionRepository subscriptionRepo = Substitute.For<ISubscriptionRepository>();
+        ITierFeatureLimitRepository tierLimitRepo = Substitute.For<ITierFeatureLimitRepository>();
+        ITenantSubscriptionOverrideRepository overrideRepo = Substitute.For<ITenantSubscriptionOverrideRepository>();
+        IAlertRuleRepository alertRuleRepo = Substitute.For<IAlertRuleRepository>();
+        IIntegrationRepository integrationRepo = Substitute.For<IIntegrationRepository>();
+        tenantRepo.GetTenantByExternalIdAsync(TenantExternalId, Arg.Any<CancellationToken>())
+            .Returns(MakeTenant());
+        tenantRepo.GetActiveRolesForTenantsAsync(Arg.Any<List<int>>(), Arg.Any<CancellationToken>())
+            .Returns(new List<UserTenantRole>());
+        userRepo.GetUsersByIdsAsync(Arg.Any<List<int>>(), Arg.Any<CancellationToken>())
+            .Returns(new List<UserAccount>());
+        machineRepo.SearchMachinesPagedAsync(TenantInternalId, 0, 10000, Arg.Any<CancellationToken>())
+            .Returns((new List<Machine>(), 0));
+        subscriptionRepo.GetSubscriptionForTenantAsync(TenantInternalId, Arg.Any<CancellationToken>())
+            .Returns(new TenantSubscription
+            {
+                TenantId = TenantInternalId,
+                Tier = SubscriptionTier.Enterprise,
+                Status = SubscriptionStatus.Active,
+                AppliedAgreementRevision = 2,
+                CreatedAt = DateTimeOffset.UnixEpoch,
+                UpdatedAt = DateTimeOffset.UnixEpoch,
+            });
+        overrideRepo.GetOverrideForTenantAsync(TenantInternalId, Arg.Any<CancellationToken>())
+            .Returns(new TenantSubscriptionOverride { TenantId = TenantInternalId, MachineLimit = 500, AlertRuleLimit = 40, WebhookLimit = 20 });
+        alertRuleRepo.CountCustomAlertRulesForTenantAsync(TenantInternalId, Arg.Any<CancellationToken>()).Returns(7);
+        integrationRepo.CountIntegrationsForTenantAsync(TenantInternalId, Arg.Any<CancellationToken>()).Returns(3);
+        IServiceScopeFactory scopeFactory = CreateScopeFactoryWithServices(new Dictionary<Type, object>
+        {
+            { typeof(ITenantRepository), tenantRepo },
+            { typeof(IUserRepository), userRepo },
+            { typeof(IMachineRepository), machineRepo },
+            { typeof(ISubscriptionRepository), subscriptionRepo },
+            { typeof(ITierFeatureLimitRepository), tierLimitRepo },
+            { typeof(ITenantSubscriptionOverrideRepository), overrideRepo },
+            { typeof(IAlertRuleRepository), alertRuleRepo },
+            { typeof(IIntegrationRepository), integrationRepo },
+        });
+        FleetAdminService service = CreateFleetAdminService(scopeFactory);
+
+        GetTenantDetailResponse response = await service.GetTenantDetail(
+            new GetTenantDetailRequest { TenantExternalId = TenantExternalId }, CreateContext());
+
+        await Assert.That(response.Tenant.AlertRuleCount).IsEqualTo(7);
+        await Assert.That(response.Tenant.WebhookCount).IsEqualTo(3);
+        await Assert.That(response.Tenant.Subscription.MachineLimit).IsEqualTo(500);
+        await Assert.That(response.Tenant.Subscription.AlertRuleLimit).IsEqualTo(40);
+        await Assert.That(response.Tenant.Subscription.AppliedAgreementRevision).IsEqualTo(2);
     }
 
     // ── ListMachines ──
@@ -2238,6 +2489,188 @@ public sealed class FleetAdminServiceTests
         await Assert.That(response.Message).IsEqualTo("OK");
     }
 
+    /// <summary>
+    /// UpdateTenantSubscription refuses to move any tenant onto Enterprise: that tier is entered only
+    /// by applying an agreement, so no write may reach the repository.
+    /// </summary>
+    [Test]
+    public async Task UpdateTenantSubscription_ToEnterprise_IsRefusedWithoutWriting()
+    {
+        ITenantRepository tenantRepo = Substitute.For<ITenantRepository>();
+        ISubscriptionRepository subscriptionRepo = Substitute.For<ISubscriptionRepository>();
+        tenantRepo.GetTenantByExternalIdAsync(TenantExternalId, Arg.Any<CancellationToken>())
+            .Returns(MakeTenant());
+        IServiceScopeFactory scopeFactory = CreateScopeFactoryWithServices(new Dictionary<Type, object>
+        {
+            { typeof(ITenantRepository), tenantRepo },
+            { typeof(ISubscriptionRepository), subscriptionRepo },
+        });
+        FleetAdminService service = CreateFleetAdminService(scopeFactory);
+
+        RpcException? exception = await Assert.ThrowsAsync<RpcException>(
+            async () => await service.UpdateTenantSubscription(
+                new UpdateTenantSubscriptionRequest
+                {
+                    TenantExternalId = TenantExternalId,
+                    Tier = BillingTier.Enterprise,
+                    Status = "Active"
+                }, CreateContext()));
+
+        await Assert.That(exception!.StatusCode).IsEqualTo(StatusCode.FailedPrecondition);
+        await subscriptionRepo.DidNotReceive().UpdateSubscriptionStateAsync(
+            Arg.Any<int>(), Arg.Any<SubscriptionTier?>(), Arg.Any<SubscriptionStatus>(), Arg.Any<bool>(), Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>
+    /// UpdateTenantSubscription refuses to move a tenant off Enterprise too: leaving it is the end of
+    /// an agreement, not a Stripe-shaped grant.
+    /// </summary>
+    [Test]
+    public async Task UpdateTenantSubscription_FromEnterprise_IsRefusedWithoutWriting()
+    {
+        ITenantRepository tenantRepo = Substitute.For<ITenantRepository>();
+        ISubscriptionRepository subscriptionRepo = Substitute.For<ISubscriptionRepository>();
+        tenantRepo.GetTenantByExternalIdAsync(TenantExternalId, Arg.Any<CancellationToken>())
+            .Returns(MakeTenant());
+        subscriptionRepo.GetSubscriptionForTenantAsync(TenantInternalId, Arg.Any<CancellationToken>())
+            .Returns(new TenantSubscription
+            {
+                TenantId = TenantInternalId,
+                Tier = SubscriptionTier.Enterprise,
+                Status = SubscriptionStatus.Active,
+                CreatedAt = DateTimeOffset.UnixEpoch,
+                UpdatedAt = DateTimeOffset.UnixEpoch,
+            });
+        IServiceScopeFactory scopeFactory = CreateScopeFactoryWithServices(new Dictionary<Type, object>
+        {
+            { typeof(ITenantRepository), tenantRepo },
+            { typeof(ISubscriptionRepository), subscriptionRepo },
+        });
+        FleetAdminService service = CreateFleetAdminService(scopeFactory);
+
+        RpcException? exception = await Assert.ThrowsAsync<RpcException>(
+            async () => await service.UpdateTenantSubscription(
+                new UpdateTenantSubscriptionRequest
+                {
+                    TenantExternalId = TenantExternalId,
+                    Tier = BillingTier.Free,
+                    Status = "Active"
+                }, CreateContext()));
+
+        await Assert.That(exception!.StatusCode).IsEqualTo(StatusCode.FailedPrecondition);
+        await subscriptionRepo.DidNotReceive().UpdateSubscriptionStateAsync(
+            Arg.Any<int>(), Arg.Any<SubscriptionTier?>(), Arg.Any<SubscriptionStatus>(), Arg.Any<bool>(), Arg.Any<CancellationToken>());
+    }
+
+    // ── ApplyEnterpriseAgreement ──
+
+    private static ApplyEnterpriseAgreementRequest BuildApplyRequest()
+    {
+        return new ApplyEnterpriseAgreementRequest
+        {
+            TenantExternalId = TenantExternalId,
+            AgreementId = 42,
+            Revision = 3,
+            MachineLimit = 500,
+            RetentionDays = 180,
+            MemberLimit = 75,
+            AlertRuleLimit = 40,
+            WebhookLimit = 20,
+            TermEnd = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(new DateTimeOffset(2027, 10, 4, 23, 59, 59, TimeSpan.Zero)),
+        };
+    }
+
+    private static (FleetAdminService Service, IEnterpriseAgreementHandler Handler) CreateApplyService()
+    {
+        ITenantRepository tenantRepo = Substitute.For<ITenantRepository>();
+        IEnterpriseAgreementHandler handler = Substitute.For<IEnterpriseAgreementHandler>();
+        tenantRepo.GetTenantByExternalIdAsync(TenantExternalId, Arg.Any<CancellationToken>())
+            .Returns(MakeTenant());
+        IServiceScopeFactory scopeFactory = CreateScopeFactoryWithServices(new Dictionary<Type, object>
+        {
+            { typeof(ITenantRepository), tenantRepo },
+            { typeof(IEnterpriseAgreementHandler), handler },
+        });
+
+        return (CreateFleetAdminService(scopeFactory), handler);
+    }
+
+    /// <summary>
+    /// The wire outcome is a stable string the billing API branches on, so each handler outcome must
+    /// map to exactly its documented value and none may be reported as a failure.
+    /// </summary>
+    [Test]
+    [Arguments(EnterpriseApplyOutcome.Applied, "applied")]
+    [Arguments(EnterpriseApplyOutcome.AlreadyApplied, "already_applied")]
+    [Arguments(EnterpriseApplyOutcome.StaleRevision, "stale_revision")]
+    public async Task ApplyEnterpriseAgreement_ReportsTheHandlerOutcomeAsItsWireValue(EnterpriseApplyOutcome outcome, string expected)
+    {
+        (FleetAdminService service, IEnterpriseAgreementHandler handler) = CreateApplyService();
+        handler.ApplyAsync(Arg.Any<EnterpriseAgreementTerms>(), Arg.Any<CancellationToken>()).Returns(outcome);
+
+        ApplyEnterpriseAgreementResponse response = await service.ApplyEnterpriseAgreement(BuildApplyRequest(), CreateContext());
+
+        await Assert.That(response.Success).IsTrue();
+        await Assert.That(response.Message).IsEqualTo("OK");
+        await Assert.That(response.Outcome).IsEqualTo(expected);
+    }
+
+    [Test]
+    public async Task ApplyEnterpriseAgreement_HandsTheHandlerTheResolvedTenantAndEveryTerm()
+    {
+        (FleetAdminService service, IEnterpriseAgreementHandler handler) = CreateApplyService();
+        handler.ApplyAsync(Arg.Any<EnterpriseAgreementTerms>(), Arg.Any<CancellationToken>())
+            .Returns(EnterpriseApplyOutcome.Applied);
+
+        await service.ApplyEnterpriseAgreement(BuildApplyRequest(), CreateContext());
+
+        await handler.Received(1).ApplyAsync(
+            new EnterpriseAgreementTerms(
+                TenantInternalId, 42, 3, 500, 180, 75, 40, 20, new DateTimeOffset(2027, 10, 4, 23, 59, 59, TimeSpan.Zero)),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task ApplyEnterpriseAgreement_HandlerRefusesTheTerms_IsInvalidArgumentCarryingItsMessage()
+    {
+        (FleetAdminService service, IEnterpriseAgreementHandler handler) = CreateApplyService();
+        handler.ApplyAsync(Arg.Any<EnterpriseAgreementTerms>(), Arg.Any<CancellationToken>())
+            .ThrowsAsync(new ArgumentException("Retention must be between 1 and 365 days."));
+
+        RpcException? exception = await Assert.ThrowsAsync<RpcException>(
+            async () => await service.ApplyEnterpriseAgreement(BuildApplyRequest(), CreateContext()));
+
+        await Assert.That(exception!.StatusCode).IsEqualTo(StatusCode.InvalidArgument);
+        await Assert.That(exception.Status.Detail).Contains("Retention");
+    }
+
+    [Test]
+    public async Task ApplyEnterpriseAgreement_MissingTermEnd_IsInvalidArgumentAndNeverReachesTheHandler()
+    {
+        (FleetAdminService service, IEnterpriseAgreementHandler handler) = CreateApplyService();
+        ApplyEnterpriseAgreementRequest request = BuildApplyRequest();
+        request.TermEnd = null;
+
+        RpcException? exception = await Assert.ThrowsAsync<RpcException>(
+            async () => await service.ApplyEnterpriseAgreement(request, CreateContext()));
+
+        await Assert.That(exception!.StatusCode).IsEqualTo(StatusCode.InvalidArgument);
+        await handler.DidNotReceive().ApplyAsync(Arg.Any<EnterpriseAgreementTerms>(), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task ApplyEnterpriseAgreement_CallerRejected_PropagatesAndTouchesNothing()
+    {
+        IServiceScopeFactory scopeFactory = Substitute.For<IServiceScopeFactory>();
+        FleetAdminService service = CreateFleetAdminService(scopeFactory, rejectWith: StatusCode.PermissionDenied);
+
+        RpcException? exception = await Assert.ThrowsAsync<RpcException>(
+            async () => await service.ApplyEnterpriseAgreement(BuildApplyRequest(), CreateContext()));
+
+        await Assert.That(exception!.StatusCode).IsEqualTo(StatusCode.PermissionDenied);
+        scopeFactory.DidNotReceive().CreateScope();
+    }
+
     // ── GetTenantOverride ──
 
     /// <summary>
@@ -2487,6 +2920,91 @@ public sealed class FleetAdminServiceTests
             Arg.Is<Job>(j => (j.Method.Name == nameof(RetentionReclassifyJob.RunAsync))
                 && ((int)j.Args[0] == TenantInternalId)),
             Arg.Any<IState>());
+    }
+
+    /// <summary>
+    /// An Enterprise tenant's limits belong to its agreement, so editing them here would let the two
+    /// disagree: the refusal has to land before the transaction opens or anything is written.
+    /// </summary>
+    [Test]
+    public async Task SetTenantOverride_OnEnterpriseTenant_IsRefusedBeforeAnyWrite()
+    {
+        ITenantRepository tenantRepo = Substitute.For<ITenantRepository>();
+        ITenantSubscriptionOverrideRepository overrideRepo = Substitute.For<ITenantSubscriptionOverrideRepository>();
+        ISubscriptionRepository subscriptionRepo = Substitute.For<ISubscriptionRepository>();
+        IDatabaseTransactionProvider txProvider = Substitute.For<IDatabaseTransactionProvider>();
+        IAuditLogRepository auditLog = Substitute.For<IAuditLogRepository>();
+        tenantRepo.GetTenantByExternalIdAsync(TenantExternalId, Arg.Any<CancellationToken>())
+            .Returns(MakeTenant());
+        subscriptionRepo.GetSubscriptionForTenantAsync(TenantInternalId, Arg.Any<CancellationToken>())
+            .Returns(new TenantSubscription
+            {
+                TenantId = TenantInternalId,
+                Tier = SubscriptionTier.Enterprise,
+                Status = SubscriptionStatus.Active,
+                CreatedAt = DateTimeOffset.UnixEpoch,
+                UpdatedAt = DateTimeOffset.UnixEpoch,
+            });
+        IServiceScopeFactory scopeFactory = CreateScopeFactoryWithServices(new Dictionary<Type, object>
+        {
+            { typeof(ITenantRepository), tenantRepo },
+            { typeof(ITenantSubscriptionOverrideRepository), overrideRepo },
+            { typeof(ISubscriptionRepository), subscriptionRepo },
+            { typeof(IDatabaseTransactionProvider), txProvider },
+            { typeof(IAuditLogRepository), auditLog },
+        });
+        FleetAdminService service = CreateFleetAdminService(scopeFactory);
+
+        RpcException? exception = await Assert.ThrowsAsync<RpcException>(
+            async () => await service.SetTenantOverride(
+                new SetTenantOverrideRequest { TenantExternalId = TenantExternalId, MachineLimit = 10 }, CreateContext()));
+
+        await Assert.That(exception!.StatusCode).IsEqualTo(StatusCode.FailedPrecondition);
+        await Assert.That(exception.Status.Detail).Contains("agreement");
+        await txProvider.DidNotReceive().BeginTransactionAsync(Arg.Any<CancellationToken>());
+        await overrideRepo.DidNotReceive().UpsertOverrideAsync(
+            Arg.Any<int>(), Arg.Any<int?>(), Arg.Any<int?>(), Arg.Any<int?>(), Arg.Any<int?>(), Arg.Any<int?>(), Arg.Any<CancellationToken>());
+        await auditLog.DidNotReceive().InsertAuditLogAsync(Arg.Any<AuditLogEntry>(), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task RemoveTenantOverride_OnEnterpriseTenant_IsRefusedBeforeAnyWrite()
+    {
+        ITenantRepository tenantRepo = Substitute.For<ITenantRepository>();
+        ITenantSubscriptionOverrideRepository overrideRepo = Substitute.For<ITenantSubscriptionOverrideRepository>();
+        ISubscriptionRepository subscriptionRepo = Substitute.For<ISubscriptionRepository>();
+        IDatabaseTransactionProvider txProvider = Substitute.For<IDatabaseTransactionProvider>();
+        IAuditLogRepository auditLog = Substitute.For<IAuditLogRepository>();
+        tenantRepo.GetTenantByExternalIdAsync(TenantExternalId, Arg.Any<CancellationToken>())
+            .Returns(MakeTenant());
+        subscriptionRepo.GetSubscriptionForTenantAsync(TenantInternalId, Arg.Any<CancellationToken>())
+            .Returns(new TenantSubscription
+            {
+                TenantId = TenantInternalId,
+                Tier = SubscriptionTier.Enterprise,
+                Status = SubscriptionStatus.Active,
+                CreatedAt = DateTimeOffset.UnixEpoch,
+                UpdatedAt = DateTimeOffset.UnixEpoch,
+            });
+        IServiceScopeFactory scopeFactory = CreateScopeFactoryWithServices(new Dictionary<Type, object>
+        {
+            { typeof(ITenantRepository), tenantRepo },
+            { typeof(ITenantSubscriptionOverrideRepository), overrideRepo },
+            { typeof(ISubscriptionRepository), subscriptionRepo },
+            { typeof(IDatabaseTransactionProvider), txProvider },
+            { typeof(IAuditLogRepository), auditLog },
+        });
+        FleetAdminService service = CreateFleetAdminService(scopeFactory);
+
+        RpcException? exception = await Assert.ThrowsAsync<RpcException>(
+            async () => await service.RemoveTenantOverride(
+                new RemoveTenantOverrideRequest { TenantExternalId = TenantExternalId }, CreateContext()));
+
+        await Assert.That(exception!.StatusCode).IsEqualTo(StatusCode.FailedPrecondition);
+        await Assert.That(exception.Status.Detail).Contains("agreement");
+        await txProvider.DidNotReceive().BeginTransactionAsync(Arg.Any<CancellationToken>());
+        await overrideRepo.DidNotReceive().RemoveOverrideAsync(Arg.Any<int>(), Arg.Any<CancellationToken>());
+        await auditLog.DidNotReceive().InsertAuditLogAsync(Arg.Any<AuditLogEntry>(), Arg.Any<CancellationToken>());
     }
 
     // ── ConfigureTenantOidc ──

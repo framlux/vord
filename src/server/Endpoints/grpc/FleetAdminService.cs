@@ -177,6 +177,12 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
         List<TierFeatureLimit> allLimits = await tierLimitRepo.GetAllLimitsAsync(context.CancellationToken);
         Dictionary<SubscriptionTier, TierFeatureLimit> tierLimitsMap = allLimits.ToDictionary(l => l.Tier);
 
+        // Batch-load per-tenant overrides: an Enterprise tenant's limits live only there, so the
+        // tier row alone would report the wrong numbers.
+        ITenantSubscriptionOverrideRepository overrideRepo = scope.ServiceProvider.GetRequiredService<ITenantSubscriptionOverrideRepository>();
+        List<TenantSubscriptionOverride> overrideList = await overrideRepo.GetOverridesForTenantsAsync(tenantIds, context.CancellationToken);
+        Dictionary<int, TenantSubscriptionOverride> overrides = overrideList.ToDictionary(o => o.TenantId);
+
         ListTenantsResponse response = new ListTenantsResponse
         {
             TotalCount = totalCount
@@ -194,7 +200,8 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
                 tierLimitsMap.TryGetValue(subscription.Tier, out tierLimits);
             }
 
-            response.Tenants.Add(MapToFleetTenant(tenant, machineCount, userCount, subscription, tierLimits));
+            response.Tenants.Add(MapToFleetTenant(
+                tenant, machineCount, userCount, subscription, tierLimits, overrides.GetValueOrDefault(tenant.Id)));
         }
 
         return response;
@@ -242,12 +249,22 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
             tierLimits = await tierLimitRepo.GetLimitsForTierAsync(subscription.Tier, context.CancellationToken);
         }
 
+        // The override carries an Enterprise tenant's agreed limits, and the counts show how much of
+        // the alert-rule and webhook allowance the tenant is using.
+        ITenantSubscriptionOverrideRepository overrideRepo = scope.ServiceProvider.GetRequiredService<ITenantSubscriptionOverrideRepository>();
+        IAlertRuleRepository alertRuleRepo = scope.ServiceProvider.GetRequiredService<IAlertRuleRepository>();
+        IIntegrationRepository integrationRepo = scope.ServiceProvider.GetRequiredService<IIntegrationRepository>();
+        TenantSubscriptionOverride? tenantOverride = await overrideRepo.GetOverrideForTenantAsync(tenant.Id, context.CancellationToken);
+        int alertRuleCount = await alertRuleRepo.CountCustomAlertRulesForTenantAsync(tenant.Id, context.CancellationToken);
+        int webhookCount = await integrationRepo.CountIntegrationsForTenantAsync(tenant.Id, context.CancellationToken);
+
         int machineCount = machines.Count(m => m.IsDeleted == false);
         int userCount = roles.Count;
 
         GetTenantDetailResponse response = new GetTenantDetailResponse
         {
-            Tenant = MapToFleetTenant(tenant, machineCount, userCount, subscription, tierLimits)
+            Tenant = MapToFleetTenant(
+                tenant, machineCount, userCount, subscription, tierLimits, tenantOverride, alertRuleCount, webhookCount)
         };
 
         foreach (UserAccount user in users)
@@ -506,6 +523,16 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
         TenantSubscription? priorSubscription = await subscriptionRepo.GetSubscriptionForTenantAsync(
             tenant.Id, context.CancellationToken);
 
+        // Enterprise is entered only by applying an agreement, and left only by ending one; a
+        // Stripe-shaped grant may do neither.
+        if ((tier.Value == SubscriptionTier.Enterprise) ||
+            ((priorSubscription is not null) && (priorSubscription.Tier == SubscriptionTier.Enterprise)))
+        {
+            throw new RpcException(new Status(
+                StatusCode.FailedPrecondition,
+                "Enterprise is set by an enterprise agreement, not by UpdateTenantSubscription"));
+        }
+
         int updated = await subscriptionRepo.UpdateSubscriptionStateAsync(
             tenant.Id, tier.Value, status, cancellationToken: context.CancellationToken);
 
@@ -538,6 +565,61 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
         {
             Success = true,
             Message = "OK"
+        };
+    }
+
+    /// <summary>
+    /// Puts a tenant on the Enterprise tier for an agreement revision. The only RPC that can.
+    /// </summary>
+    public override async Task<ApplyEnterpriseAgreementResponse> ApplyEnterpriseAgreement(
+        ApplyEnterpriseAgreementRequest request, ServerCallContext context)
+    {
+        AuthorizeInternalCaller(context);
+
+        if (request.TermEnd is null)
+        {
+            throw new RpcException(new Status(StatusCode.InvalidArgument, "TermEnd is required"));
+        }
+
+        using IServiceScope scope = _scopeFactory.CreateScope();
+        ITenantRepository tenantRepo = scope.ServiceProvider.GetRequiredService<ITenantRepository>();
+        IEnterpriseAgreementHandler handler = scope.ServiceProvider.GetRequiredService<IEnterpriseAgreementHandler>();
+
+        Tenant tenant = await ResolveTenantByExternalIdAsync(
+            tenantRepo, request.TenantExternalId, context.CancellationToken);
+
+        EnterpriseAgreementTerms terms = new(
+            tenant.Id,
+            request.AgreementId,
+            request.Revision,
+            request.MachineLimit,
+            request.RetentionDays,
+            request.MemberLimit,
+            request.AlertRuleLimit,
+            request.WebhookLimit,
+            request.TermEnd.ToDateTimeOffset());
+
+        EnterpriseApplyOutcome outcome;
+        try
+        {
+            outcome = await handler.ApplyAsync(terms, context.CancellationToken);
+        }
+        catch (ArgumentException ex)
+        {
+            throw new RpcException(new Status(StatusCode.InvalidArgument, ex.Message));
+        }
+
+        return new ApplyEnterpriseAgreementResponse
+        {
+            Success = true,
+            Message = "OK",
+            Outcome = outcome switch
+            {
+                EnterpriseApplyOutcome.Applied => "applied",
+                EnterpriseApplyOutcome.AlreadyApplied => "already_applied",
+                EnterpriseApplyOutcome.StaleRevision => "stale_revision",
+                _ => throw new InvalidOperationException($"Unhandled outcome {outcome}"),
+            }
         };
     }
 
@@ -598,6 +680,8 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
 
         Tenant tenant = await ResolveTenantByExternalIdAsync(
             tenantRepo, request.TenantExternalId, context.CancellationToken);
+
+        await RefuseEnterpriseOverrideEditAsync(subscriptionRepo, tenant.Id, context.CancellationToken);
 
         // Convert -1 to null for database storage (-1 means "use tier default", 0 means "deny all")
         int? machineLimit = request.MachineLimit >= 0 ? request.MachineLimit : null;
@@ -661,6 +745,8 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
         Tenant tenant = await ResolveTenantByExternalIdAsync(
             tenantRepo, request.TenantExternalId, context.CancellationToken);
 
+        await RefuseEnterpriseOverrideEditAsync(subscriptionRepo, tenant.Id, context.CancellationToken);
+
         using IDatabaseTransaction transaction = await transactionProvider.BeginTransactionAsync(context.CancellationToken);
 
         await overrideRepo.RemoveOverrideAsync(tenant.Id, context.CancellationToken);
@@ -693,6 +779,27 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
             Success = true,
             Message = "OK"
         };
+    }
+
+    /// <summary>
+    /// Refuses an override edit for a tenant on the Enterprise tier. Its limits are its agreement's;
+    /// editing them here would let the two disagree.
+    /// </summary>
+    /// <param name="subscriptionRepo">Reads the tenant's subscription.</param>
+    /// <param name="tenantId">The tenant whose override is being edited.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    /// <exception cref="RpcException">The tenant is on the Enterprise tier.</exception>
+    private static async Task RefuseEnterpriseOverrideEditAsync(
+        ISubscriptionRepository subscriptionRepo, int tenantId, CancellationToken cancellationToken)
+    {
+        TenantSubscription? subscription = await subscriptionRepo.GetSubscriptionForTenantAsync(
+            tenantId, cancellationToken);
+        if ((subscription is not null) && (subscription.Tier == SubscriptionTier.Enterprise))
+        {
+            throw new RpcException(new Status(
+                StatusCode.FailedPrecondition,
+                "This tenant's limits are set by its enterprise agreement"));
+        }
     }
 
     /// <summary>
@@ -1579,7 +1686,10 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
         int machineCount,
         int userCount,
         TenantSubscription? subscription,
-        TierFeatureLimit? tierLimits = null)
+        TierFeatureLimit? tierLimits = null,
+        TenantSubscriptionOverride? tenantOverride = null,
+        int alertRuleCount = 0,
+        int webhookCount = 0)
     {
         FleetTenant fleetTenant = new FleetTenant
         {
@@ -1590,25 +1700,37 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
             LogoUrl = tenant.LogoUrl,
             CreatedAt = Timestamp.FromDateTimeOffset(tenant.CreatedAt),
             MachineCount = machineCount,
-            UserCount = userCount
+            UserCount = userCount,
+            AlertRuleCount = alertRuleCount,
+            WebhookCount = webhookCount,
         };
 
         if (subscription is not null)
         {
-            fleetTenant.Subscription = MapSubscription(subscription, tierLimits);
+            fleetTenant.Subscription = MapSubscription(subscription, tierLimits, tenantOverride);
         }
 
         return fleetTenant;
     }
 
-    internal static FleetTenantSubscription MapSubscription(TenantSubscription subscription, TierFeatureLimit? tierLimits = null)
+    internal static FleetTenantSubscription MapSubscription(
+        TenantSubscription subscription,
+        TierFeatureLimit? tierLimits = null,
+        TenantSubscriptionOverride? tenantOverride = null)
     {
+        // Effective limits, matching SubscriptionService.GetEffectiveLimitsForTenantAsync's order:
+        // the tenant's override where set, otherwise the tier's row.
         FleetTenantSubscription proto = new FleetTenantSubscription
         {
             Tier = MapSubscriptionTierToBillingTier(subscription.Tier),
             Status = subscription.Status.ToString(),
-            MachineLimit = tierLimits?.MachineLimit ?? 0,
-            RetentionDays = tierLimits?.RetentionDays ?? 0,
+            MachineLimit = tenantOverride?.MachineLimit ?? tierLimits?.MachineLimit ?? 0,
+            RetentionDays = tenantOverride?.RetentionDays ?? tierLimits?.RetentionDays ?? 0,
+            MemberLimit = tenantOverride?.MemberLimit ?? tierLimits?.MemberLimit ?? 0,
+            AlertRuleLimit = tenantOverride?.AlertRuleLimit ?? tierLimits?.AlertRuleLimit ?? 0,
+            WebhookLimit = tenantOverride?.WebhookLimit ?? tierLimits?.WebhookLimit ?? 0,
+            CancelAtPeriodEnd = subscription.CancelAtPeriodEnd,
+            AppliedAgreementRevision = subscription.AppliedAgreementRevision ?? 0,
         };
 
         if (subscription.CurrentPeriodEnd.HasValue)

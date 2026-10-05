@@ -400,6 +400,10 @@ public static class ServiceCollectionExtensions
 
             // Billing webhook handler processes inbound billing events
             services.AddScoped<IBillingWebhookHandler, BillingWebhookHandler>();
+
+            // The only route into the Enterprise tier, called by the FleetAdmin service the billing
+            // API reaches.
+            services.AddScoped<IEnterpriseAgreementHandler, EnterpriseAgreementHandler>();
         }
         else
         {
