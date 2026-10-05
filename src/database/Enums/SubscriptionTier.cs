@@ -16,5 +16,10 @@ public enum SubscriptionTier : int
     /// <summary>Pro tier with unlimited hosts and per-host billing.</summary>
     Pro = 2,
     /// <summary>Team tier with custom OIDC and advanced features.</summary>
-    Team = 3
+    Team = 3,
+    /// <summary>
+    /// Every Team feature, with limits set per enterprise agreement and billing by invoice outside
+    /// Stripe. Entered only through an applied agreement; no Stripe path may move a tenant into or out of it.
+    /// </summary>
+    Enterprise = 4
 }

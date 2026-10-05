@@ -107,4 +107,6 @@ public enum AuditAction : short
     TenantPurged = 145,
     /// <summary>An operator restored a tenant during the deletion grace window.</summary>
     TenantRestored = 146,
+    /// <summary>An enterprise agreement was applied to a tenant, setting its tier and every limit.</summary>
+    EnterpriseAgreementApplied = 147,
 }

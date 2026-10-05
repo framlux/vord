@@ -271,6 +271,9 @@ public sealed class StripeSyncJob
             BillingTier.Pro => SubscriptionTier.Pro,
             BillingTier.Team => SubscriptionTier.Team,
             BillingTier.Free => SubscriptionTier.Free,
+            // Enterprise is never sold through Stripe, so a Stripe-reported Enterprise is a fault,
+            // not a tier to correct towards.
+            BillingTier.Enterprise => null,
             _ => null,
         };
     }

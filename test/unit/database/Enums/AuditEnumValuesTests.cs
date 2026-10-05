@@ -78,6 +78,15 @@ public sealed class AuditEnumValuesTests
         await Assert.That(actual).IsEqualTo(expected);
     }
 
+    [Test]
+    public async Task AuditAction_EnterpriseAgreementApplied_HasValue147()
+    {
+        short actual = (short)AuditAction.EnterpriseAgreementApplied;
+        short expected = 147;
+
+        await Assert.That(actual).IsEqualTo(expected);
+    }
+
     // ========== AuditResourceType — new values added for Task C audit coverage ==========
 
     [Test]

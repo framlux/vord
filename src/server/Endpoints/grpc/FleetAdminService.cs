@@ -1659,6 +1659,7 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
             SubscriptionTier.Free => BillingTier.Free,
             SubscriptionTier.Pro => BillingTier.Pro,
             SubscriptionTier.Team => BillingTier.Team,
+            SubscriptionTier.Enterprise => BillingTier.Enterprise,
             _ => BillingTier.Unspecified,
         };
     }
@@ -1670,6 +1671,7 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
             BillingTier.Free => SubscriptionTier.Free,
             BillingTier.Pro => SubscriptionTier.Pro,
             BillingTier.Team => SubscriptionTier.Team,
+            BillingTier.Enterprise => SubscriptionTier.Enterprise,
             _ => null,
         };
     }

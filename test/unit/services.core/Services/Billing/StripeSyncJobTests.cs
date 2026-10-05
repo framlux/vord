@@ -721,6 +721,16 @@ public sealed class StripeSyncJobTests
     }
 
     [Test]
+    public async Task MapBillingTierToSubscriptionTier_Enterprise_ReturnsNull()
+    {
+        // Intent: Enterprise is invoiced outside Stripe, so a Stripe-reported Enterprise must never
+        // become a tier the sync job corrects a tenant towards.
+        SubscriptionTier? result = StripeSyncJob.MapBillingTierToSubscriptionTier(BillingTier.Enterprise);
+
+        await Assert.That(result).IsNull();
+    }
+
+    [Test]
     public async Task MapBillingTierToSubscriptionTier_Unknown_ReturnsNull()
     {
         // Intent: an unknown gRPC enum value (out-of-range from a forward-incompatible billing

@@ -3055,6 +3055,29 @@ public sealed class FleetAdminServiceTests
     }
 
     /// <summary>
+    /// MapBillingTierToSubscriptionTier maps the Enterprise contract tier to the Enterprise domain tier.
+    /// </summary>
+    [Test]
+    public async Task MapBillingTierToSubscriptionTier_Enterprise_ReturnsEnterprise()
+    {
+        SubscriptionTier? result = FleetAdminService.MapBillingTierToSubscriptionTier(BillingTier.Enterprise);
+
+        await Assert.That(result).IsEqualTo(SubscriptionTier.Enterprise);
+    }
+
+    /// <summary>
+    /// MapSubscriptionTierToBillingTier maps the Enterprise domain tier to the Enterprise contract tier
+    /// rather than the Unspecified catch-all.
+    /// </summary>
+    [Test]
+    public async Task MapSubscriptionTierToBillingTier_Enterprise_ReturnsEnterprise()
+    {
+        BillingTier result = FleetAdminService.MapSubscriptionTierToBillingTier(SubscriptionTier.Enterprise);
+
+        await Assert.That(result).IsEqualTo(BillingTier.Enterprise);
+    }
+
+    /// <summary>
     /// MapSubscriptionTierToBillingTier returns Unspecified for an unknown tier value.
     /// </summary>
     [Test]

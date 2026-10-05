@@ -24,6 +24,8 @@ enum BillingTier {
   BILLING_TIER_FREE = 1;
   BILLING_TIER_PRO = 2;
   BILLING_TIER_TEAM = 3;
+  // Every Team feature, limits set per agreement, invoiced outside Stripe. Never a Stripe target.
+  BILLING_TIER_ENTERPRISE = 4;
 }
 
 enum BillingInterval {
@@ -210,6 +212,9 @@ service FleetAdmin {
   rpc GetBillableMachineCount(GetBillableMachineCountRequest) returns (GetBillableMachineCountResponse);
   rpc ListRecurringJobs(ListRecurringJobsRequest) returns (ListRecurringJobsResponse);
   rpc RunRecurringJobNow(RunRecurringJobNowRequest) returns (RunRecurringJobNowResponse);
+  // Puts a tenant on the Enterprise tier with every limit set by its agreement. Idempotent per
+  // revision; a revision lower than the one already applied is refused.
+  rpc ApplyEnterpriseAgreement(ApplyEnterpriseAgreementRequest) returns (ApplyEnterpriseAgreementResponse);
 }
 
 // --- FleetAdmin shared types ---
@@ -241,15 +246,24 @@ message FleetTenant {
   int32 machine_count = 7;
   int32 user_count = 8;
   FleetTenantSubscription subscription = 9;
+  // Populated by GetTenantDetail only; ListTenants leaves them 0 to stay one query per page.
+  int32 alert_rule_count = 10;
+  int32 webhook_count = 11;
 }
 
 message FleetTenantSubscription {
   BillingTier tier = 1;
   string status = 2;
+  // Effective limits: the tenant's override where one is set, otherwise the tier's value.
   int32 machine_limit = 3;
   int32 retention_days = 4;
   google.protobuf.Timestamp current_period_end = 5;
   bool cancel_at_period_end = 6;
+  int32 member_limit = 7;
+  int32 alert_rule_limit = 8;
+  int32 webhook_limit = 9;
+  // The enterprise agreement revision last applied; 0 when none has been.
+  int32 applied_agreement_revision = 10;
 }
 
 message FleetMachine {
@@ -380,6 +394,25 @@ message UpdateTenantSubscriptionRequest {
 message UpdateTenantSubscriptionResponse {
   bool success = 1;
   string message = 2;
+}
+
+message ApplyEnterpriseAgreementRequest {
+  string tenant_external_id = 1;
+  int64 agreement_id = 2;
+  int32 revision = 3;
+  int32 machine_limit = 4;
+  int32 retention_days = 5;
+  int32 member_limit = 6;
+  int32 alert_rule_limit = 7;
+  int32 webhook_limit = 8;
+  google.protobuf.Timestamp term_end = 9;
+}
+
+message ApplyEnterpriseAgreementResponse {
+  bool success = 1;
+  string message = 2;
+  // "applied", "already_applied" or "stale_revision".
+  string outcome = 3;
 }
 
 message ConfigureTenantOidcRequest {
