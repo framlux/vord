@@ -97,8 +97,9 @@ public sealed class BillingWebhookHandler : IBillingWebhookHandler
         _reclassifyDispatcher.DispatchPending();
 
         // Checkout is the journey customers actually make, so it is the path that has to repair a
-        // Free downgrade and a Pro-to-Team round trip alike. The provisioner opens its own
-        // transaction, which is why this sits after the commit rather than inside it.
+        // Free downgrade and a Pro-to-Team round trip alike. The restore only turns back on what the
+        // new tier entitles the tenant to, so unlike the downgrade cleanups it needs no row lock: a
+        // tenant that became Enterprise in between is entitled to everything it enables.
         await _builtInProvisioner.RestoreForTierAsync(
             tenantId, priorSubscription, tier, SubscriptionStatus.Active, ct);
     }
