@@ -3,7 +3,6 @@
 // See LICENSE for details.
 
 using FastEndpoints;
-using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Server.Auth;
@@ -51,6 +50,12 @@ public sealed class SubscriptionDto
 
     /// <summary>Current webhook count for this tenant.</summary>
     public int WebhookCount { get; set; }
+
+    /// <summary>The member limit in effect: the agreement's for Enterprise, otherwise the tier's.</summary>
+    public int MemberLimit { get; set; }
+
+    /// <summary>Active members plus pending invitations, the count the member limit is enforced against.</summary>
+    public int MemberCount { get; set; }
 }
 
 /// <summary>
@@ -62,8 +67,10 @@ public sealed class SubscriptionEndpoint : EndpointWithoutRequest<ApiResponse<Su
     private readonly IAlertRuleRepository _alertRuleRepo;
     private readonly IIntegrationRepository _integrationRepo;
     private readonly ITenantRepository _tenantRepository;
+    private readonly IInvitationRepository _invitationRepository;
     private readonly ITenantContext _tenantContext;
     private readonly IBillingApiClient _billingApiClient;
+    private readonly TimeProvider _timeProvider;
 
     /// <summary>
     /// Creates a new instance of the <see cref="SubscriptionEndpoint"/> class.
@@ -73,15 +80,19 @@ public sealed class SubscriptionEndpoint : EndpointWithoutRequest<ApiResponse<Su
         IAlertRuleRepository alertRuleRepo,
         IIntegrationRepository integrationRepo,
         ITenantRepository tenantRepository,
+        IInvitationRepository invitationRepository,
         ITenantContext tenantContext,
-        IBillingApiClient billingApiClient)
+        IBillingApiClient billingApiClient,
+        TimeProvider timeProvider)
     {
         _subscriptionService = subscriptionService;
         _alertRuleRepo = alertRuleRepo;
         _integrationRepo = integrationRepo;
         _tenantRepository = tenantRepository;
+        _invitationRepository = invitationRepository;
         _tenantContext = tenantContext;
         _billingApiClient = billingApiClient;
+        _timeProvider = timeProvider;
     }
 
     /// <inheritdoc/>
@@ -113,10 +124,16 @@ public sealed class SubscriptionEndpoint : EndpointWithoutRequest<ApiResponse<Su
         int webhookCount = await _integrationRepo.CountIntegrationsForTenantAsync(tenantId, ct);
         EffectiveLimits limits = await _subscriptionService.GetEffectiveLimitsForTenantAsync(tenantId, ct);
 
+        // Pending invitations hold a seat, so the usage shown is the same count the member limit is enforced against.
+        int activeMembers = await _tenantRepository.CountActiveMembersAsync(tenantId, ct);
+        int pendingInvitations = await _invitationRepository.CountPendingInvitationsAsync(tenantId, _timeProvider.GetUtcNow(), ct);
+
         // Retrieve cancellation state and billing interval from billing-api (source of truth for Stripe state)
         bool cancelAtPeriodEnd = false;
         string? billingInterval = null;
-        if (subscription.Tier != SubscriptionTier.Free)
+        // Only Stripe-billed tiers have a Stripe subscription to ask about. An Enterprise tenant is
+        // invoiced outside Stripe, and asking would log a NotFound on every page load.
+        if (StripeBilledTiers.Contains(subscription.Tier))
         {
             Tenant? tenant = await _tenantRepository.GetTenantByIdAsync(tenantId, ct);
             if (tenant is not null)
@@ -141,6 +158,8 @@ public sealed class SubscriptionEndpoint : EndpointWithoutRequest<ApiResponse<Su
             AlertRuleCount = alertRuleCount,
             WebhookLimit = limits.WebhookLimit,
             WebhookCount = webhookCount,
+            MemberLimit = limits.MemberLimit,
+            MemberCount = activeMembers + pendingInvitations,
         };
 
         await Send.OkAsync(ApiResponse<SubscriptionDto>.Ok(dto), cancellation: ct);

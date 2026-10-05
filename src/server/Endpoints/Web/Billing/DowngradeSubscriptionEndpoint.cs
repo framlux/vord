@@ -97,6 +97,11 @@ public sealed class DowngradeSubscriptionEndpoint : Endpoint<DowngradeSubscripti
             return;
         }
 
+        if (await BillingEndpointGuards.RefuseEnterpriseAsync(HttpContext, subscription, ct))
+        {
+            return;
+        }
+
         if (subscription.Status == SubscriptionStatus.Canceled)
         {
             await HttpContext.SendApiErrorAsync(400, "Cannot downgrade a canceled subscription.", ct);

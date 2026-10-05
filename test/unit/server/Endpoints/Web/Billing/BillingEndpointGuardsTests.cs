@@ -95,4 +95,57 @@ public sealed class BillingEndpointGuardsTests
         await Assert.That(result).IsEqualTo(subscription);
         await Assert.That(responseBody.Length).IsEqualTo(0L);
     }
+
+    [Test]
+    public async Task RefuseEnterpriseAsync_Enterprise_Writes409WithAgreementMessageAndReturnsTrue()
+    {
+        TenantSubscription subscription = BuildSubscription(SubscriptionTier.Enterprise);
+        DefaultHttpContext httpContext = new();
+        httpContext.Response.Body = new MemoryStream();
+
+        bool refused = await BillingEndpointGuards.RefuseEnterpriseAsync(
+            httpContext, subscription, CancellationToken.None);
+
+        await Assert.That(refused).IsTrue();
+        await Assert.That(httpContext.Response.StatusCode).IsEqualTo(409);
+
+        httpContext.Response.Body.Position = 0;
+        ApiResponse<object>? body = await JsonSerializer.DeserializeAsync<ApiResponse<object>>(
+            httpContext.Response.Body,
+            new JsonSerializerOptions(JsonSerializerDefaults.Web));
+        await Assert.That(body?.Success).IsFalse();
+        await Assert.That(body?.Message).IsEqualTo(BillingEndpointGuards.EnterpriseAgreementMessage);
+    }
+
+    [Test]
+    [Arguments(SubscriptionTier.Free)]
+    [Arguments(SubscriptionTier.Pro)]
+    [Arguments(SubscriptionTier.Team)]
+    public async Task RefuseEnterpriseAsync_StripeBackedOrFreeTier_ReturnsFalseAndWritesNothing(SubscriptionTier tier)
+    {
+        TenantSubscription subscription = BuildSubscription(tier);
+        DefaultHttpContext httpContext = new();
+        MemoryStream responseBody = new();
+        httpContext.Response.Body = responseBody;
+
+        bool refused = await BillingEndpointGuards.RefuseEnterpriseAsync(
+            httpContext, subscription, CancellationToken.None);
+
+        await Assert.That(refused).IsFalse();
+        await Assert.That(responseBody.Length).IsEqualTo(0L);
+        await Assert.That(httpContext.Response.StatusCode).IsEqualTo(200);
+    }
+
+    private static TenantSubscription BuildSubscription(SubscriptionTier tier)
+    {
+        return new TenantSubscription
+        {
+            Id = 1,
+            TenantId = TenantId,
+            Tier = tier,
+            Status = SubscriptionStatus.Active,
+            CreatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow,
+        };
+    }
 }

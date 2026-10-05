@@ -76,6 +76,11 @@ public sealed class CancelSubscriptionEndpoint : EndpointWithoutRequest<ApiRespo
             return;
         }
 
+        if (await BillingEndpointGuards.RefuseEnterpriseAsync(HttpContext, subscription, ct))
+        {
+            return;
+        }
+
         if (subscription.Status == SubscriptionStatus.Canceled)
         {
             await Send.OkAsync(new ApiResponse<object>

@@ -69,6 +69,11 @@ public sealed class ResumeSubscriptionEndpoint : EndpointWithoutRequest<ApiRespo
             return;
         }
 
+        if (await BillingEndpointGuards.RefuseEnterpriseAsync(HttpContext, subscription, ct))
+        {
+            return;
+        }
+
         if (subscription.Status == SubscriptionStatus.Canceled)
         {
             await HttpContext.SendApiErrorAsync(400, "Cannot resume a canceled subscription. Please reactivate your account from the billing page.", ct);

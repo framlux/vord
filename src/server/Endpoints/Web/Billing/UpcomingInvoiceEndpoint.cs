@@ -3,6 +3,7 @@
 // See LICENSE for details.
 
 using FastEndpoints;
+using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Server.Auth;
@@ -79,21 +80,29 @@ public sealed class UpcomingInvoiceEndpoint : EndpointWithoutRequest<ApiResponse
     private readonly IBillingApiClient _billingApiClient;
     private readonly ITenantContext _tenantContext;
     private readonly DeploymentMode _deploymentMode;
+    private readonly ISubscriptionService _subscriptionService;
 
     /// <summary>
     /// Creates a new instance of the <see cref="UpcomingInvoiceEndpoint"/> class.
     /// </summary>
-    public UpcomingInvoiceEndpoint(ITenantRepository tenantRepository, IBillingApiClient billingApiClient, ITenantContext tenantContext, DeploymentMode deploymentMode)
+    public UpcomingInvoiceEndpoint(
+        ITenantRepository tenantRepository,
+        IBillingApiClient billingApiClient,
+        ITenantContext tenantContext,
+        DeploymentMode deploymentMode,
+        ISubscriptionService subscriptionService)
     {
         ArgumentNullException.ThrowIfNull(tenantRepository);
         ArgumentNullException.ThrowIfNull(billingApiClient);
         ArgumentNullException.ThrowIfNull(tenantContext);
         ArgumentNullException.ThrowIfNull(deploymentMode);
+        ArgumentNullException.ThrowIfNull(subscriptionService);
 
         _tenantRepository = tenantRepository;
         _billingApiClient = billingApiClient;
         _tenantContext = tenantContext;
         _deploymentMode = deploymentMode;
+        _subscriptionService = subscriptionService;
     }
 
     /// <inheritdoc/>
@@ -121,6 +130,16 @@ public sealed class UpcomingInvoiceEndpoint : EndpointWithoutRequest<ApiResponse
         if (tenant is null)
         {
             await HttpContext.SendApiErrorAsync(404, "Tenant not found", ct);
+
+            return;
+        }
+
+        TenantSubscription? subscription = await _subscriptionService.GetSubscriptionForTenantAsync(tenantId, ct);
+
+        // Enterprise invoices are issued outside Stripe; there is no upcoming Stripe invoice to ask billing-api about.
+        if ((subscription is not null) && (subscription.Tier == SubscriptionTier.Enterprise))
+        {
+            await Send.OkAsync(ApiResponse<UpcomingInvoiceDto>.Ok(new UpcomingInvoiceDto { HasInvoice = false }), cancellation: ct);
 
             return;
         }

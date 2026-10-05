@@ -72,6 +72,11 @@ public sealed class ReactivateSubscriptionEndpoint : EndpointWithoutRequest<ApiR
             return;
         }
 
+        if (await BillingEndpointGuards.RefuseEnterpriseAsync(HttpContext, subscription, ct))
+        {
+            return;
+        }
+
         if (subscription.Status != SubscriptionStatus.Canceled)
         {
             await HttpContext.SendApiErrorAsync(400, "Subscription is not canceled. No reactivation needed.", ct);
