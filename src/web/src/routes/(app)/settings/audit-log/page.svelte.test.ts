@@ -5,7 +5,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, within } from '@testing-library/svelte';
 import '@testing-library/jest-dom/vitest';
-import type { AuditLogEntryDto, PaginatedResponse } from '$lib/api/types';
+import type { AuditLogEntryDto, PaginatedResponse, UserDto } from '$lib/api/types';
 import AuditLogPage from './+page.svelte';
 
 vi.mock('$app/navigation', () => ({ goto: vi.fn() }));
@@ -27,6 +27,21 @@ function makeEntry(overrides: Partial<AuditLogEntryDto> = {}): AuditLogEntryDto 
 	};
 }
 
+function makeUser(): UserDto {
+	return {
+		id: 1,
+		name: 'Jonathan Miller',
+		email: 'jonathan@acme.co',
+		avatar: '',
+		isGlobalAdmin: false,
+		uniqueId: 'uid-1',
+		needsOnboarding: false,
+		tenants: [{ tenantId: 1, tenantName: 'Acme Corp', role: '1' }],
+		activeTenantId: 1,
+		deployment: { selfHosted: false }
+	};
+}
+
 function makeData(items: AuditLogEntryDto[]) {
 	const auditLog: PaginatedResponse<AuditLogEntryDto> = {
 		items,
@@ -38,7 +53,12 @@ function makeData(items: AuditLogEntryDto[]) {
 		hasNextPage: false
 	};
 
-	return { auditLog, filters: { action: undefined, from: undefined, to: undefined } };
+	return {
+		user: makeUser(),
+		subscription: null,
+		auditLog,
+		filters: { action: undefined, from: undefined, to: undefined }
+	};
 }
 
 describe('audit log action labels', () => {
