@@ -5,7 +5,7 @@
 <script lang="ts">
 	import type { SubscriptionDto, UpcomingInvoiceDto, InvoiceDto, UsagePointDto, CatalogItemDto } from '$lib/api/types';
 	import { billingIntervalLabel, deriveBillingPageState, findCatalogPrice, findCatalogPriceWithFallback, monthlyEquivalentCents } from '$lib/utils/billing-state';
-	import { isEnterprise, isStripeBilled, tierBadgeClasses } from '$lib/utils/tier';
+	import { isEnterprise, isLimited, isStripeBilled, tierBadgeClasses, usageLabel } from '$lib/utils/tier';
 	import { CreditCard, CircleArrowUp, CircleArrowDown, ExternalLink, CircleAlert, CircleX, RotateCcw, Calculator, Receipt, TrendingUp, Download, ChevronDown, Tag } from 'lucide-svelte';
 
 	let { data, form } = $props();
@@ -158,31 +158,12 @@
 		});
 	}
 
-	function getMachineLimitText(sub: SubscriptionDto): string {
-		if (sub.machineLimit === null) {
-			return 'Unlimited';
-		}
-
-		return `${sub.machineCount} / ${sub.machineLimit}`;
-	}
-
 	function getMachineLimitPercent(sub: SubscriptionDto): number {
-		if (sub.machineLimit === null || sub.machineLimit === 0) {
+		if (isLimited(sub.machineLimit) === false || sub.machineLimit === 0) {
 			return 0;
 		}
 
 		return Math.min(100, Math.round((sub.machineCount / sub.machineLimit) * 100));
-	}
-
-	// The server reports an unlimited member allowance as the largest 32-bit integer.
-	const unlimitedMemberLimit = 2147483647;
-
-	function getMemberLimitText(sub: SubscriptionDto): string {
-		if (sub.memberLimit === unlimitedMemberLimit) {
-			return 'Unlimited';
-		}
-
-		return `${sub.memberCount} / ${sub.memberLimit}`;
 	}
 
 	function getPendingActionDescription(): string {
@@ -422,10 +403,10 @@
 					<div class="mb-1 flex items-center justify-between">
 						<p class="text-xs text-surface-500 dark:text-surface-400">Machine Usage</p>
 						<p class="text-xs font-medium text-surface-700 dark:text-surface-300">
-							{getMachineLimitText(subscription)}
+							{usageLabel(subscription.machineCount, subscription.machineLimit)}
 						</p>
 					</div>
-					{#if subscription.machineLimit !== null}
+					{#if isLimited(subscription.machineLimit)}
 						<div class="h-2 w-full rounded-full bg-surface-200 dark:bg-surface-700">
 							<div
 								class="h-2 rounded-full transition-all {getMachineLimitPercent(subscription) >= 90 ? 'bg-red-500' : getMachineLimitPercent(subscription) >= 70 ? 'bg-amber-500' : 'bg-primary-500'}"
@@ -443,7 +424,7 @@
 					<div class="flex items-center justify-between">
 						<p class="text-xs text-surface-500 dark:text-surface-400">Member Usage</p>
 						<p class="text-xs font-medium text-surface-700 dark:text-surface-300">
-							{getMemberLimitText(subscription)}
+							{usageLabel(subscription.memberCount, subscription.memberLimit)}
 						</p>
 					</div>
 				{/if}
@@ -802,7 +783,7 @@
 			<p class="mt-2 text-sm text-surface-600 dark:text-surface-300">
 				Your plan and its limits are set by your agreement and invoiced directly, not through this page.
 			</p>
-			<a href="mailto:support@framlux.io?subject=Enterprise%20agreement" class="mt-4 inline-block text-sm font-medium text-primary-600 hover:underline dark:text-primary-400">
+			<a href="mailto:vord@framlux.io?subject=Enterprise%20agreement" class="mt-4 inline-block text-sm font-medium text-primary-600 hover:underline dark:text-primary-400">
 				Contact us about your agreement
 			</a>
 		</section>

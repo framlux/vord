@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent } from '@testing-library/svelte';
 import '@testing-library/jest-dom/vitest';
 import { MachineHealthStatus } from '$lib/api/types';
+import { UNLIMITED_LIMIT } from '$lib/utils/tier';
 import type {
 	AlertRuleDto,
 	FleetMachineDto,
@@ -300,6 +301,60 @@ describe('alerts settings page', () => {
 		expect(screen.getByRole('button', { name: 'Edit' })).toBeInTheDocument();
 		expect(screen.getByRole('button', { name: 'New Rule' })).toBeInTheDocument();
 		expect(screen.queryByText(/only run on Pro and Team plans/i)).not.toBeInTheDocument();
+	});
+
+	it('reports an unlimited rule quota as Unlimited instead of the number the server sends', () => {
+		render(AlertsPage, {
+			props: {
+				data: makeData(
+					makeSubscription({ tier: 'Enterprise', alertRuleLimit: UNLIMITED_LIMIT, alertRuleCount: 4 }),
+					[makeRule()]
+				)
+			}
+		});
+
+		expect(screen.getByText('4 rules used (Unlimited)')).toBeInTheDocument();
+		expect(screen.queryByText(/2147483647/)).not.toBeInTheDocument();
+		expect(screen.queryByText('Limit reached')).not.toBeInTheDocument();
+		expect(screen.queryByText('Approaching limit')).not.toBeInTheDocument();
+		expect(screen.getByRole('button', { name: 'New Rule' })).toBeEnabled();
+	});
+
+	it('reports an unlimited integration quota as Unlimited instead of the number the server sends', async () => {
+		render(AlertsPage, {
+			props: {
+				data: {
+					...makeData(
+						makeSubscription({ tier: 'Enterprise', webhookLimit: UNLIMITED_LIMIT, webhookCount: 2 }),
+						[makeRule()]
+					),
+					integrations: [],
+					providers: []
+				}
+			}
+		});
+
+		await fireEvent.click(screen.getByRole('tab', { name: /^Integrations/ }));
+
+		expect(screen.getByText('Using 2 integrations (Unlimited)')).toBeInTheDocument();
+		expect(screen.queryByText(/2147483647/)).not.toBeInTheDocument();
+		expect(screen.queryByText('Limit reached')).not.toBeInTheDocument();
+	});
+
+	it('still reports a finite integration quota against its limit', async () => {
+		render(AlertsPage, {
+			props: {
+				data: {
+					...makeData(makeSubscription({ tier: 'Team', webhookLimit: 10, webhookCount: 2 }), [makeRule()]),
+					integrations: [],
+					providers: []
+				}
+			}
+		});
+
+		await fireEvent.click(screen.getByRole('tab', { name: /^Integrations/ }));
+
+		expect(screen.getByText('Using 2 of 10 integrations')).toBeInTheDocument();
 	});
 
 	it('tells a lapsed Enterprise tenant its subscription is inactive instead of telling it to upgrade', () => {

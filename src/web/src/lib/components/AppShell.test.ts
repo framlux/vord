@@ -2,7 +2,7 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { afterEach, describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/svelte';
 import '@testing-library/jest-dom/vitest';
 import type { UserDto, SubscriptionDto } from '$lib/api/types';
@@ -423,6 +423,21 @@ describe('AppShell', () => {
     });
 
     describe('user menu popover links', () => {
+        // Clicking a real anchor makes jsdom attempt a document navigation, which it reports as
+        // "not implemented". The tests only care that the menu closes, so the navigation itself is
+        // cancelled.
+        const cancelNavigation = (event: Event): void => {
+            event.preventDefault();
+        };
+
+        beforeEach(() => {
+            document.addEventListener('click', cancelNavigation);
+        });
+
+        afterEach(() => {
+            document.removeEventListener('click', cancelNavigation);
+        });
+
         it('should close user menu when Account Settings is clicked', async () => {
             const user = makeUser();
             render(AppShell, { props: { user } });

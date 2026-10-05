@@ -6,9 +6,8 @@ import { describe, it, expect } from 'vitest';
 import { render, screen } from '@testing-library/svelte';
 import '@testing-library/jest-dom/vitest';
 import type { InvoiceDto, SubscriptionDto, UpcomingInvoiceDto, UserDto } from '$lib/api/types';
+import { UNLIMITED_LIMIT } from '$lib/utils/tier';
 import BillingPage from './+page.svelte';
-
-const unlimitedMemberLimit = 2147483647;
 
 function makeSubscription(overrides: Partial<SubscriptionDto> = {}): SubscriptionDto {
 	return {
@@ -104,7 +103,10 @@ describe('billing page for an Enterprise tenant', () => {
 		});
 
 		expect(screen.getByRole('heading', { name: 'Enterprise agreement' })).toBeInTheDocument();
-		expect(screen.getByRole('link', { name: 'Contact us about your agreement' })).toBeInTheDocument();
+		expect(screen.getByRole('link', { name: 'Contact us about your agreement' })).toHaveAttribute(
+			'href',
+			'mailto:vord@framlux.io?subject=Enterprise%20agreement'
+		);
 
 		// Every Stripe-backed action on this page is a form posting to a named action.
 		expect(container.querySelectorAll('form')).toHaveLength(0);
@@ -125,16 +127,43 @@ describe('billing page for an Enterprise tenant', () => {
 		expect(screen.getByText('12 / 40')).toBeInTheDocument();
 	});
 
-	it('reports the unlimited member limit as Unlimited', () => {
+	it('reports an unlimited member limit as Unlimited', () => {
 		render(BillingPage, {
 			props: {
-				data: makeData(makeEnterprise({ memberLimit: unlimitedMemberLimit, memberCount: 12 })),
+				data: makeData(makeEnterprise({ memberLimit: UNLIMITED_LIMIT, memberCount: 12 })),
+				form: null
+			}
+		});
+
+		expect(screen.getByText('Unlimited')).toBeInTheDocument();
+		expect(screen.getByText('3 / 5000')).toBeInTheDocument();
+		expect(screen.queryByText(/2147483647/)).not.toBeInTheDocument();
+	});
+
+	it('reports an unlimited machine limit as Unlimited, without a percentage bar', () => {
+		const { container } = render(BillingPage, {
+			props: {
+				data: makeData(makeEnterprise({ machineLimit: UNLIMITED_LIMIT, machineCount: 120 })),
 				form: null
 			}
 		});
 
 		expect(screen.getByText('Unlimited')).toBeInTheDocument();
 		expect(screen.queryByText(/2147483647/)).not.toBeInTheDocument();
+		expect(screen.queryByText(/120 \//)).not.toBeInTheDocument();
+		expect(container.querySelector('.bg-red-500, .bg-amber-500')).toBeNull();
+	});
+
+	it('reports finite limits against their usage', () => {
+		const { container } = render(BillingPage, {
+			props: {
+				data: makeData(makeEnterprise({ machineLimit: 100, machineCount: 95 })),
+				form: null
+			}
+		});
+
+		expect(screen.getByText('95 / 100')).toBeInTheDocument();
+		expect(container.querySelector('.bg-red-500')).not.toBeNull();
 	});
 
 	it('drops the Stripe-priced sections', () => {

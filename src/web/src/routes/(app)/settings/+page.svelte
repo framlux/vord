@@ -7,7 +7,7 @@
 	import type { TenantDto, SubscriptionDto } from '$lib/api/types';
 	import { Building2, Download, Check, CircleAlert, LoaderCircle, CreditCard } from 'lucide-svelte';
 	import { formatBytes } from '$lib/utils/format';
-	import { tierBadgeClasses } from '$lib/utils/tier';
+	import { isEnterprise, isLimited, tierBadgeClasses } from '$lib/utils/tier';
 
 	let { data } = $props();
 
@@ -252,10 +252,10 @@
 						<p class="text-xs text-surface-500 dark:text-surface-400">Machines</p>
 						<p class="mt-1 text-sm font-medium text-surface-900 dark:text-surface-100">
 							{subscription.machineCount}
-							{#if subscription.machineLimit === null}
-								/ Unlimited
-							{:else}
+							{#if isLimited(subscription.machineLimit)}
 								/ {subscription.machineLimit}
+							{:else}
+								/ Unlimited
 							{/if}
 						</p>
 					</div>
@@ -267,7 +267,7 @@
 					</div>
 					{#if subscription.currentPeriodEnd !== null}
 						<div>
-							<p class="text-xs text-surface-500 dark:text-surface-400">Current Period Ends</p>
+							<p class="text-xs text-surface-500 dark:text-surface-400">{isEnterprise(subscription.tier) ? 'Term ends' : 'Current Period Ends'}</p>
 							<p class="mt-1 text-sm font-medium text-surface-900 dark:text-surface-100">
 								{formatPeriodEnd(subscription.currentPeriodEnd)}
 							</p>

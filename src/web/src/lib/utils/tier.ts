@@ -42,3 +42,20 @@ export function tierBadgeClasses(tier: string): string {
 
 	return 'bg-surface-100 text-surface-700 dark:bg-surface-700 dark:text-surface-300';
 }
+
+// An agreement states "no limit" as the largest 32-bit integer, and it does so for every limit it
+// can carry (machines, members, alert rules, integrations). Rendering that number, or computing a
+// percentage of it, reads as a bug, so every place that shows a limit asks isLimited first.
+export const UNLIMITED_LIMIT = 2147483647;
+
+export function isLimited(limit: number | null | undefined): limit is number {
+	return limit !== null && limit !== undefined && limit !== UNLIMITED_LIMIT;
+}
+
+export function usageLabel(count: number, limit: number | null | undefined): string {
+	if (isLimited(limit) === false) {
+		return 'Unlimited';
+	}
+
+	return `${count} / ${limit}`;
+}

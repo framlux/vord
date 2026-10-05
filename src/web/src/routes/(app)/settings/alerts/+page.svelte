@@ -13,7 +13,7 @@
 	import ConfirmDialog from '$lib/components/ConfirmDialog.svelte';
 	import MachineAssignmentModal from '$lib/components/machine/MachineAssignmentModal.svelte';
 	import { canAuthorAlertRules, canManageAlertRules } from '$lib/utils/alert-entitlement';
-	import { hasProFeatures } from '$lib/utils/tier';
+	import { hasProFeatures, isLimited } from '$lib/utils/tier';
 	import { formatDateTime } from '$lib/utils/format';
 
 	let { data } = $props();
@@ -407,7 +407,11 @@
 						<h2 class="text-lg font-semibold text-surface-900 dark:text-surface-50">Alert Rules</h2>
 						{#if canAuthorRules && selfHosted === false && data.subscription?.alertRuleLimit !== null && data.subscription?.alertRuleLimit !== undefined}
 							<span class="text-sm text-surface-500 dark:text-surface-400">
-								{data.subscription.alertRuleCount} of {data.subscription.alertRuleLimit} rules used
+								{#if isLimited(data.subscription.alertRuleLimit)}
+									{data.subscription.alertRuleCount} of {data.subscription.alertRuleLimit} rules used
+								{:else}
+									{data.subscription.alertRuleCount} rules used (Unlimited)
+								{/if}
 							</span>
 							{#if data.subscription.alertRuleCount >= data.subscription.alertRuleLimit}
 								<span class="text-sm font-medium text-red-600 dark:text-red-400">Limit reached</span>
@@ -906,7 +910,11 @@
 						<h2 class="text-lg font-semibold text-surface-900 dark:text-surface-50">Integrations</h2>
 						{#if data.subscription?.webhookLimit !== null && data.subscription?.webhookLimit !== undefined}
 							<span class="text-sm text-surface-500 dark:text-surface-400">
-								Using {data.subscription.webhookCount} of {data.subscription.webhookLimit} integrations
+								{#if isLimited(data.subscription.webhookLimit)}
+									Using {data.subscription.webhookCount} of {data.subscription.webhookLimit} integrations
+								{:else}
+									Using {data.subscription.webhookCount} integrations (Unlimited)
+								{/if}
 							</span>
 							{#if data.subscription.webhookCount >= data.subscription.webhookLimit}
 								<span class="text-sm font-medium text-red-600 dark:text-red-400">Limit reached</span>
