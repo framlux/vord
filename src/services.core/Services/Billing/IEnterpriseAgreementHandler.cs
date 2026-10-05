@@ -18,6 +18,6 @@ public interface IEnterpriseAgreementHandler
     /// <param name="terms">The agreement revision.</param>
     /// <param name="ct">Cancellation token.</param>
     /// <returns>Whether the revision was applied, already applied, or older than the one applied.</returns>
-    /// <exception cref="ArgumentException">A limit or the revision is out of range.</exception>
+    /// <exception cref="ArgumentException">A limit, the revision or the term end is out of range.</exception>
     Task<EnterpriseApplyOutcome> ApplyAsync(EnterpriseAgreementTerms terms, CancellationToken ct);
 }

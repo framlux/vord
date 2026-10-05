@@ -1202,6 +1202,40 @@ public sealed class FleetAdminServiceTests
     }
 
     [Test]
+    [Arguments(0L)]
+    [Arguments(946_684_799L)]
+    [Arguments(long.MaxValue)]
+    [Arguments(-62135596801L)]
+    public async Task ApplyEnterpriseAgreement_TermEndThatIsNotAContractDate_IsInvalidArgumentAndWritesNothing(long seconds)
+    {
+        using FunctionalTestFactory factory = new();
+        factory.WithInternalClientSubjects(PermittedClientSubject);
+        using DatabaseContext db = factory.CreateDbContext();
+        string extId = $"ext-{Guid.NewGuid():N}";
+        int tenantId = await SeedTenantWithSubscription(db, extId, SubscriptionTier.Team);
+        using GrpcChannel channel = CreateChannel(factory);
+        FleetAdmin.FleetAdminClient client = new(channel);
+        ApplyEnterpriseAgreementRequest request = ApplyRequest(extId, 1);
+        request.TermEnd = new Timestamp { Seconds = seconds };
+
+        RpcException? exception = null;
+        try
+        {
+            await client.ApplyEnterpriseAgreementAsync(request, Headers());
+        }
+        catch (RpcException ex)
+        {
+            exception = ex;
+        }
+
+        TenantSubscription? sub = await db.TenantSubscriptions.FirstOrDefaultAsync(s => s.TenantId == tenantId);
+        await Assert.That(exception).IsNotNull();
+        await Assert.That(exception!.StatusCode).IsEqualTo(StatusCode.InvalidArgument);
+        await Assert.That(sub!.Tier).IsEqualTo(SubscriptionTier.Team);
+        await Assert.That(await db.TenantSubscriptionOverrides.AnyAsync(o => o.TenantId == tenantId)).IsFalse();
+    }
+
+    [Test]
     public async Task ApplyEnterpriseAgreement_MissingTermEnd_IsInvalidArgument()
     {
         using FunctionalTestFactory factory = new();

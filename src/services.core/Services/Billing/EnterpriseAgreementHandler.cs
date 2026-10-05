@@ -20,6 +20,12 @@ public sealed class EnterpriseAgreementHandler : IEnterpriseAgreementHandler
     /// <summary>The longest retention an agreement may grant, a product cap rather than a storage limit.</summary>
     public const int MaxRetentionDays = 365;
 
+    /// <summary>
+    /// The earliest term end an agreement may have. A date before this is not a contract term: it is the
+    /// protobuf default (the Unix epoch) that an unset timestamp becomes, or a value garbled in transit.
+    /// </summary>
+    public static readonly DateTimeOffset EarliestTermEnd = new(2000, 1, 1, 0, 0, 0, TimeSpan.Zero);
+
     private readonly IDatabaseTransactionProvider _transactionProvider;
     private readonly ISubscriptionRepository _subscriptionRepo;
     private readonly ITenantSubscriptionOverrideRepository _overrideRepo;
@@ -168,6 +174,12 @@ public sealed class EnterpriseAgreementHandler : IEnterpriseAgreementHandler
         if (terms.MemberLimit <= 0)
         {
             throw new ArgumentException("Member limit must be positive.", nameof(terms));
+        }
+
+        if (terms.TermEnd < EarliestTermEnd)
+        {
+            throw new ArgumentException(
+                $"Term end must be on or after {EarliestTermEnd:yyyy-MM-dd}; the protobuf default timestamp is not a term end.", nameof(terms));
         }
 
         // Zero alert rules or webhooks is a legitimate contract term ("none allowed"); only the

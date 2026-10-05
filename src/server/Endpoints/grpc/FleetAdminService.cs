@@ -581,6 +581,8 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
             throw new RpcException(new Status(StatusCode.InvalidArgument, "TermEnd is required"));
         }
 
+        DateTimeOffset termEnd = ConvertTermEnd(request.TermEnd);
+
         using IServiceScope scope = _scopeFactory.CreateScope();
         ITenantRepository tenantRepo = scope.ServiceProvider.GetRequiredService<ITenantRepository>();
         IEnterpriseAgreementHandler handler = scope.ServiceProvider.GetRequiredService<IEnterpriseAgreementHandler>();
@@ -597,7 +599,7 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
             request.MemberLimit,
             request.AlertRuleLimit,
             request.WebhookLimit,
-            request.TermEnd.ToDateTimeOffset());
+            termEnd);
 
         EnterpriseApplyOutcome outcome;
         try
@@ -621,6 +623,24 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
                 _ => throw new InvalidOperationException($"Unhandled outcome {outcome}"),
             }
         };
+    }
+
+    /// <summary>
+    /// Converts the agreement's term-end timestamp. The conversion throws for seconds outside the
+    /// range a date can hold and for malformed nanoseconds; both are the caller's mistake, so they are
+    /// reported as an invalid argument rather than escaping as an unknown error that billing-api would
+    /// retry for ever.
+    /// </summary>
+    private static DateTimeOffset ConvertTermEnd(Timestamp termEnd)
+    {
+        try
+        {
+            return termEnd.ToDateTimeOffset();
+        }
+        catch (InvalidOperationException)
+        {
+            throw new RpcException(new Status(StatusCode.InvalidArgument, "TermEnd is not a valid timestamp"));
+        }
     }
 
     /// <summary>

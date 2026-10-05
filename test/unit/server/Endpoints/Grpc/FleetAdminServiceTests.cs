@@ -2658,6 +2658,44 @@ public sealed class FleetAdminServiceTests
         await handler.DidNotReceive().ApplyAsync(Arg.Any<EnterpriseAgreementTerms>(), Arg.Any<CancellationToken>());
     }
 
+    /// <summary>
+    /// A timestamp outside the range a date can hold is a malformed request, and has to reach the caller
+    /// as one. Left unhandled it would surface as an unknown error that billing-api retries forever.
+    /// </summary>
+    [Test]
+    [Arguments(long.MaxValue)]
+    [Arguments(long.MinValue)]
+    [Arguments(253402300800L)]
+    [Arguments(-62135596801L)]
+    public async Task ApplyEnterpriseAgreement_TermEndOutsideTheRepresentableRange_IsInvalidArgumentAndNeverReachesTheHandler(long seconds)
+    {
+        (FleetAdminService service, IEnterpriseAgreementHandler handler) = CreateApplyService();
+        ApplyEnterpriseAgreementRequest request = BuildApplyRequest();
+        request.TermEnd = new Google.Protobuf.WellKnownTypes.Timestamp { Seconds = seconds };
+
+        RpcException? exception = await Assert.ThrowsAsync<RpcException>(
+            async () => await service.ApplyEnterpriseAgreement(request, CreateContext()));
+
+        await Assert.That(exception!.StatusCode).IsEqualTo(StatusCode.InvalidArgument);
+        await handler.DidNotReceive().ApplyAsync(Arg.Any<EnterpriseAgreementTerms>(), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    [Arguments(-1)]
+    [Arguments(1_000_000_000)]
+    public async Task ApplyEnterpriseAgreement_TermEndWithMalformedNanoseconds_IsInvalidArgumentAndNeverReachesTheHandler(int nanos)
+    {
+        (FleetAdminService service, IEnterpriseAgreementHandler handler) = CreateApplyService();
+        ApplyEnterpriseAgreementRequest request = BuildApplyRequest();
+        request.TermEnd = new Google.Protobuf.WellKnownTypes.Timestamp { Seconds = 1_800_000_000, Nanos = nanos };
+
+        RpcException? exception = await Assert.ThrowsAsync<RpcException>(
+            async () => await service.ApplyEnterpriseAgreement(request, CreateContext()));
+
+        await Assert.That(exception!.StatusCode).IsEqualTo(StatusCode.InvalidArgument);
+        await handler.DidNotReceive().ApplyAsync(Arg.Any<EnterpriseAgreementTerms>(), Arg.Any<CancellationToken>());
+    }
+
     [Test]
     public async Task ApplyEnterpriseAgreement_CallerRejected_PropagatesAndTouchesNothing()
     {

@@ -35,10 +35,11 @@ public sealed class EnterpriseAgreementHandlerTests
         int retentionDays = 180,
         int memberLimit = int.MaxValue,
         int alertRuleLimit = 40,
-        int webhookLimit = 20)
+        int webhookLimit = 20,
+        DateTimeOffset? termEnd = null)
     {
         return new EnterpriseAgreementTerms(
-            TenantId, 42, revision, machineLimit, retentionDays, memberLimit, alertRuleLimit, webhookLimit, TermEnd);
+            TenantId, 42, revision, machineLimit, retentionDays, memberLimit, alertRuleLimit, webhookLimit, termEnd ?? TermEnd);
     }
 
     /// <summary>
@@ -273,6 +274,37 @@ public sealed class EnterpriseAgreementHandlerTests
 
         await Assert.That(await h.Repo.GetSubscriptionForTenantAsync(TenantId, CancellationToken.None)).IsNull();
         await Assert.That(await h.Repo.GetOverrideForTenantAsync(TenantId, CancellationToken.None)).IsNull();
+    }
+
+    /// <summary>
+    /// An unset protobuf timestamp arrives as the Unix epoch, and the agreement would then be recorded
+    /// as having ended in 1970, so every date before the floor is refused before anything is written.
+    /// </summary>
+    [Test]
+    [Arguments("1970-01-01T00:00:00+00:00")]
+    [Arguments("0001-01-01T00:00:00+00:00")]
+    [Arguments("1999-12-31T23:59:59+00:00")]
+    public async Task Apply_TermEndBeforeTheFloor_IsRefusedBeforeAnyWrite(string termEnd)
+    {
+        using Harness h = new();
+
+        await Assert.ThrowsAsync<ArgumentException>(() => h.Handler.ApplyAsync(
+            Terms(revision: 1, termEnd: DateTimeOffset.Parse(termEnd, System.Globalization.CultureInfo.InvariantCulture)),
+            CancellationToken.None));
+
+        await Assert.That(await h.Repo.GetSubscriptionForTenantAsync(TenantId, CancellationToken.None)).IsNull();
+        await Assert.That(await h.Repo.GetOverrideForTenantAsync(TenantId, CancellationToken.None)).IsNull();
+    }
+
+    [Test]
+    public async Task Apply_TermEndExactlyAtTheFloor_IsAccepted()
+    {
+        using Harness h = new();
+
+        EnterpriseApplyOutcome outcome = await h.Handler.ApplyAsync(
+            Terms(revision: 1, termEnd: EnterpriseAgreementHandler.EarliestTermEnd), CancellationToken.None);
+
+        await Assert.That(outcome).IsEqualTo(EnterpriseApplyOutcome.Applied);
     }
 
     [Test]
