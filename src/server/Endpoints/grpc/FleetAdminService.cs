@@ -692,7 +692,12 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
         using IDatabaseTransaction transaction = await transactionProvider.BeginTransactionAsync(context.CancellationToken);
 
         // The up-front check above gives the clear message but reads a possibly cached tier, so the
-        // write carries its own Enterprise test. Leaving the scope without committing rolls back.
+        // write carries its own Enterprise test. That test only sees an agreement that has already
+        // committed, so the subscription row is locked first: an apply in flight then finishes before
+        // the write starts, and the write is refused rather than racing it. Leaving the scope without
+        // committing rolls back.
+        await subscriptionRepo.GetSubscriptionForUpdateAsync(tenant.Id, context.CancellationToken);
+
         bool written = await overrideRepo.UpsertOverrideUnlessEnterpriseAsync(
             tenant.Id, machineLimit, retentionDays, alertRuleLimit, webhookLimit, memberLimit: null, context.CancellationToken);
         if (written == false)
@@ -755,8 +760,10 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
 
         using IDatabaseTransaction transaction = await transactionProvider.BeginTransactionAsync(context.CancellationToken);
 
-        // See SetTenantOverride: the delete carries its own Enterprise test, and leaving the scope
-        // without committing rolls back.
+        // See SetTenantOverride: the subscription row is locked so the delete's own Enterprise test
+        // sees any agreement already in flight, and leaving the scope without committing rolls back.
+        await subscriptionRepo.GetSubscriptionForUpdateAsync(tenant.Id, context.CancellationToken);
+
         bool removed = await overrideRepo.RemoveOverrideUnlessEnterpriseAsync(tenant.Id, context.CancellationToken);
         if (removed == false)
         {

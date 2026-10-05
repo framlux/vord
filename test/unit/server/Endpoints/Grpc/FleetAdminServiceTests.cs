@@ -2926,6 +2926,76 @@ public sealed class FleetAdminServiceTests
     }
 
     /// <summary>
+    /// The guarded override write only sees an agreement that has already committed. Locking the
+    /// subscription row first, inside the same transaction, is what makes an apply in flight finish
+    /// before the write starts instead of racing it.
+    /// </summary>
+    [Test]
+    public async Task SetTenantOverride_LocksTheSubscriptionRowInsideTheTransactionBeforeTheGuardedWrite()
+    {
+        (FleetAdminService service, ITenantSubscriptionOverrideRepository overrideRepo, IDatabaseTransactionProvider txProvider,
+            ISubscriptionRepository subscriptionRepo) = CreateLockOrderingService();
+        overrideRepo.UpsertOverrideUnlessEnterpriseAsync(
+                Arg.Any<int>(), Arg.Any<int?>(), Arg.Any<int?>(), Arg.Any<int?>(), Arg.Any<int?>(), Arg.Any<int?>(), Arg.Any<CancellationToken>())
+            .Returns(true);
+
+        await service.SetTenantOverride(
+            new SetTenantOverrideRequest { TenantExternalId = TenantExternalId, MachineLimit = 10 }, CreateContext());
+
+        Received.InOrder(() =>
+        {
+            txProvider.BeginTransactionAsync(Arg.Any<CancellationToken>());
+            subscriptionRepo.GetSubscriptionForUpdateAsync(TenantInternalId, Arg.Any<CancellationToken>());
+            overrideRepo.UpsertOverrideUnlessEnterpriseAsync(
+                TenantInternalId, Arg.Any<int?>(), Arg.Any<int?>(), Arg.Any<int?>(), Arg.Any<int?>(), Arg.Any<int?>(), Arg.Any<CancellationToken>());
+        });
+    }
+
+    [Test]
+    public async Task RemoveTenantOverride_LocksTheSubscriptionRowInsideTheTransactionBeforeTheGuardedWrite()
+    {
+        (FleetAdminService service, ITenantSubscriptionOverrideRepository overrideRepo, IDatabaseTransactionProvider txProvider,
+            ISubscriptionRepository subscriptionRepo) = CreateLockOrderingService();
+        overrideRepo.RemoveOverrideUnlessEnterpriseAsync(Arg.Any<int>(), Arg.Any<CancellationToken>()).Returns(true);
+
+        await service.RemoveTenantOverride(
+            new RemoveTenantOverrideRequest { TenantExternalId = TenantExternalId }, CreateContext());
+
+        Received.InOrder(() =>
+        {
+            txProvider.BeginTransactionAsync(Arg.Any<CancellationToken>());
+            subscriptionRepo.GetSubscriptionForUpdateAsync(TenantInternalId, Arg.Any<CancellationToken>());
+            overrideRepo.RemoveOverrideUnlessEnterpriseAsync(TenantInternalId, Arg.Any<CancellationToken>());
+        });
+    }
+
+    private static (FleetAdminService Service, ITenantSubscriptionOverrideRepository OverrideRepo,
+        IDatabaseTransactionProvider TransactionProvider, ISubscriptionRepository SubscriptionRepo) CreateLockOrderingService()
+    {
+        ITenantRepository tenantRepo = Substitute.For<ITenantRepository>();
+        ITenantSubscriptionOverrideRepository overrideRepo = Substitute.For<ITenantSubscriptionOverrideRepository>();
+        ISubscriptionRepository subscriptionRepo = Substitute.For<ISubscriptionRepository>();
+        IDatabaseTransaction transaction = Substitute.For<IDatabaseTransaction>();
+        IDatabaseTransactionProvider txProvider = Substitute.For<IDatabaseTransactionProvider>();
+        IAuditLogRepository auditLog = Substitute.For<IAuditLogRepository>();
+        tenantRepo.GetTenantByExternalIdAsync(TenantExternalId, Arg.Any<CancellationToken>()).Returns(MakeTenant());
+        txProvider.BeginTransactionAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult(transaction));
+        RetentionReclassifyDispatcher reclassifyDispatcher = new(
+            Substitute.For<IBackgroundJobClient>(), NullLogger<RetentionReclassifyDispatcher>.Instance);
+        IServiceScopeFactory scopeFactory = CreateScopeFactoryWithServices(new Dictionary<Type, object>
+        {
+            { typeof(ITenantRepository), tenantRepo },
+            { typeof(ITenantSubscriptionOverrideRepository), overrideRepo },
+            { typeof(ISubscriptionRepository), subscriptionRepo },
+            { typeof(IDatabaseTransactionProvider), txProvider },
+            { typeof(IAuditLogRepository), auditLog },
+            { typeof(RetentionReclassifyDispatcher), reclassifyDispatcher },
+        });
+
+        return (CreateFleetAdminService(scopeFactory), overrideRepo, txProvider, subscriptionRepo);
+    }
+
+    /// <summary>
     /// An Enterprise tenant's limits belong to its agreement, so editing them here would let the two
     /// disagree: the refusal has to land before the transaction opens or anything is written.
     /// </summary>
