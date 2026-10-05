@@ -66,10 +66,22 @@ public sealed class BillingWebhookHandler : IBillingWebhookHandler
         int updated = await _subscriptionRepo.UpdateSubscriptionStateAsync(tenantId, tier, SubscriptionStatus.Active, cancellationToken: ct);
         if (updated == 0)
         {
-            // No row changed: the tenant has no subscription, or is on an Enterprise agreement that
-            // Stripe does not own. Either way there is no upgrade to record or provision for.
-            _logger.LogInformation(
-                "Billing: checkout completion for tenant {TenantId} changed no subscription; skipping the upgrade", tenantId);
+            // No row changed, which means one of two very different things. A tenant on an Enterprise
+            // agreement is expected here: Stripe does not own its plan, so there is nothing to record.
+            // A tenant with no subscription row at all is not: a customer has paid and nothing was
+            // upgraded, so the upgrade is lost unless someone acts on this line.
+            if (priorSubscription is null)
+            {
+                _logger.LogError(
+                    "Billing: checkout completion for tenant {TenantId} (tier {Tier}) found no subscription row; the paid upgrade was not recorded",
+                    tenantId, tier);
+            }
+            else
+            {
+                _logger.LogInformation(
+                    "Billing: checkout completion for tenant {TenantId} changed no subscription (tier {PriorTier}); an Enterprise agreement owns its plan, so the upgrade is skipped",
+                    tenantId, priorSubscription.Tier);
+            }
 
             return;
         }

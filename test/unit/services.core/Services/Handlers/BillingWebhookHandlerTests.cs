@@ -18,7 +18,9 @@ using Hangfire.Common;
 using Hangfire.States;
 using LinqToDB;
 using LinqToDB.Async;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Logging.Testing;
 using Microsoft.Extensions.Options;
 using NSubstitute;
 
@@ -126,7 +128,8 @@ public class BillingWebhookHandlerTests
         TestDatabaseFactory dbFactory,
         IDowngradeCleanupService? cleanupService = null,
         IBuiltInAlertRuleProvisioner? provisioner = null,
-        IDatabaseTransactionProvider? transactionProvider = null)
+        IDatabaseTransactionProvider? transactionProvider = null,
+        ILogger<BillingWebhookHandler>? logger = null)
     {
         DatabaseRepository repo = new(dbFactory.Context, new NullLogger<DatabaseRepository>());
 
@@ -138,7 +141,7 @@ public class BillingWebhookHandlerTests
             cleanupService ?? Substitute.For<IDowngradeCleanupService>(),
             new RetentionReclassifyDispatcher(
                 Substitute.For<IBackgroundJobClient>(), NullLogger<RetentionReclassifyDispatcher>.Instance),
-            NullLogger<BillingWebhookHandler>.Instance);
+            logger ?? NullLogger<BillingWebhookHandler>.Instance);
     }
 
     /// <summary>
@@ -1183,6 +1186,48 @@ public class BillingWebhookHandlerTests
         await Assert.That(row.CurrentPeriodEnd.HasValue).IsTrue();
         await cleanup.DidNotReceive().CleanupForProTierAsync(Arg.Any<int>(), Arg.Any<CancellationToken>());
         await Assert.That(await CountAuditRowsAsync(dbFactory, AuditAction.SubscriptionDowngraded)).IsEqualTo(0);
+    }
+
+    /// <summary>
+    /// A completed checkout for a tenant with no subscription row is a customer who paid and received
+    /// nothing, so it must be loud enough to be acted on.
+    /// </summary>
+    [Test]
+    public async Task HandleCheckoutCompletedAsync_NoSubscriptionRow_LogsTheLostUpgradeAsAnErrorAndRecordsNothing()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        FakeLogger<BillingWebhookHandler> logger = new();
+        IBuiltInAlertRuleProvisioner provisioner = Substitute.For<IBuiltInAlertRuleProvisioner>();
+        BillingWebhookHandler handler = CreateHandler(dbFactory, provisioner: provisioner, logger: logger);
+
+        await handler.HandleCheckoutCompletedAsync(1, SubscriptionTier.Team, CancellationToken.None);
+
+        IReadOnlyList<FakeLogRecord> errors = [.. logger.Collector.GetSnapshot().Where(r => r.Level == LogLevel.Error)];
+        await Assert.That(errors.Count).IsEqualTo(1);
+        await Assert.That(errors[0].Message).Contains("tenant 1 (tier Team) found no subscription row");
+        await Assert.That(await dbFactory.Context.TenantSubscriptions.AnyAsync(s => s.TenantId == 1)).IsFalse();
+        await provisioner.DidNotReceive().RestoreForTierAsync(
+            Arg.Any<int>(), Arg.Any<TenantSubscription?>(), Arg.Any<SubscriptionTier>(), Arg.Any<SubscriptionStatus>(), Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>
+    /// An Enterprise tenant skipping a checkout is the expected outcome, not a lost payment, so it
+    /// must not raise an error.
+    /// </summary>
+    [Test]
+    public async Task HandleCheckoutCompletedAsync_EnterpriseTenant_LogsInformationAndNoError()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        await SeedEnterpriseSubscriptionAsync(dbFactory);
+        FakeLogger<BillingWebhookHandler> logger = new();
+        BillingWebhookHandler handler = CreateHandler(dbFactory, logger: logger);
+
+        await handler.HandleCheckoutCompletedAsync(1, SubscriptionTier.Team, CancellationToken.None);
+
+        IReadOnlyList<FakeLogRecord> records = logger.Collector.GetSnapshot();
+        await Assert.That(records.Count(r => r.Level == LogLevel.Error)).IsEqualTo(0);
+        await Assert.That(records.Count(r => r.Level == LogLevel.Information)).IsEqualTo(1);
+        await Assert.That(records.Single(r => r.Level == LogLevel.Information).Message).Contains("Enterprise");
     }
 
     [Test]
