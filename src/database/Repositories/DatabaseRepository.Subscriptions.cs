@@ -43,6 +43,14 @@ public partial class DatabaseRepository : ISubscriptionRepository
         bool clearCurrentPeriodEnd = false,
         CancellationToken cancellationToken = default)
     {
+        // Enterprise is entered only by applying an agreement, which also records the revision and
+        // term end. A plain tier write would leave an Enterprise row with no agreement behind it.
+        if (tier == SubscriptionTier.Enterprise)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(tier), tier, "Enterprise can only be entered by applying an agreement.");
+        }
+
         DateTimeOffset now = DateTimeOffset.UtcNow;
         IUpdatable<TenantSubscription> update = _db.TenantSubscriptions
             // Enterprise is owned by its agreement. Every write here comes from Stripe, a customer

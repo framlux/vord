@@ -24,11 +24,12 @@ public interface ISubscriptionRepository
     /// owned by its agreement, not by Stripe or by a customer action.
     /// </summary>
     /// <param name="tenantId">The tenant whose subscription is updated.</param>
-    /// <param name="tier">The new tier, or null to leave the tier unchanged.</param>
+    /// <param name="tier">The new tier, or null to leave the tier unchanged. Must not be Enterprise: that tier is entered only through <see cref="ApplyEnterpriseSubscriptionAsync"/>.</param>
     /// <param name="status">The new subscription status.</param>
     /// <param name="clearCurrentPeriodEnd">When true, sets <see cref="TenantSubscription.CurrentPeriodEnd"/> to null; otherwise the column is left unchanged.</param>
     /// <param name="cancellationToken">A cancellation token.</param>
     /// <returns>The number of rows updated; 0 when the tenant has no subscription or is on Enterprise.</returns>
+    /// <exception cref="ArgumentOutOfRangeException">Thrown when <paramref name="tier"/> is Enterprise.</exception>
     Task<int> UpdateSubscriptionStateAsync(
         int tenantId,
         SubscriptionTier? tier,

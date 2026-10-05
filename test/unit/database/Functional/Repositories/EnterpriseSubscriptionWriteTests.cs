@@ -48,6 +48,21 @@ public sealed class EnterpriseSubscriptionWriteTests
     }
 
     [Test]
+    public async Task UpdateSubscriptionState_TargetingEnterprise_ThrowsAndLeavesTheRowUnchanged()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        await SeedAsync(dbFactory, SubscriptionTier.Team);
+        Database.Repositories.DatabaseRepository repo = BuildRepository(dbFactory);
+
+        await Assert.That(async () => await repo.UpdateSubscriptionStateAsync(1, SubscriptionTier.Enterprise, SubscriptionStatus.Active))
+            .Throws<ArgumentOutOfRangeException>();
+
+        TenantSubscription? row = await repo.GetSubscriptionForTenantAsync(1, CancellationToken.None);
+        await Assert.That(row!.Tier).IsEqualTo(SubscriptionTier.Team);
+        await Assert.That(row.AppliedAgreementRevision).IsNull();
+    }
+
+    [Test]
     public async Task PeriodEndAndCancelAtPeriodEnd_EnterpriseRow_AreLeftUntouched()
     {
         using TestDatabaseFactory dbFactory = new();
