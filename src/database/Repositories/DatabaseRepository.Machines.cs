@@ -77,13 +77,16 @@ public partial class DatabaseRepository : IMachineRepository
     }
 
     /// <inheritdoc />
-    public async Task<bool> DoesMachineExistAsync(string serialNumber, string systemId, string assetTag, int tenantId, CancellationToken cancellationToken)
+    public async Task<bool> DoesMachineExistAsync(string? serialNumber, string systemId, string? assetTag, int tenantId, CancellationToken cancellationToken)
     {
-        ArgumentException.ThrowIfNullOrWhiteSpace(serialNumber);
         ArgumentException.ThrowIfNullOrWhiteSpace(systemId);
 
         // Data is normalized to lowercase at write time, so callers must
         // pass pre-lowered values for SerialNumber and SystemId.
+        // The serial number and asset tag are optional: a caller passes null when the value is
+        // firmware filler that cannot identify a machine, and that clause is then left out so
+        // unrelated machines sharing the filler are not mistaken for duplicates. The system id
+        // always participates, so a genuine re-registration is still caught.
         // A DB fault must propagate rather than be swallowed into a false negative:
         // returning "machine does not exist" on a transient error would let a duplicate
         // or over-limit registration proceed. Let the exception abort the registration.
@@ -91,7 +94,7 @@ public partial class DatabaseRepository : IMachineRepository
         IQueryable<Machine> query = _db.Machines.Where(m =>
             (m.TenantId == tenantId) &&
             (m.IsDeleted == false) &&
-            ((m.SerialNumber == serialNumber) ||
+            ((string.IsNullOrEmpty(serialNumber) == false && (m.SerialNumber == serialNumber)) ||
             (m.SystemId == systemId) ||
             (string.IsNullOrEmpty(assetTag) == false && (m.AssetTagNumber == assetTag))));
 

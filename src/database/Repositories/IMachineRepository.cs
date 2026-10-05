@@ -44,7 +44,19 @@ public interface IMachineRepository
     /// <summary>
     /// Checks if an active (non-deleted) machine exists based on the serial number, system ID, or asset tag number.
     /// </summary>
-    Task<bool> DoesMachineExistAsync(string serialNumber, string systemId, string assetTag, int tenantId, CancellationToken cancellationToken = default);
+    /// <param name="serialNumber">
+    /// The lowercased serial number, or null when the reported serial cannot identify a machine
+    /// (firmware filler). A null or empty value leaves the serial number out of the comparison.
+    /// </param>
+    /// <param name="systemId">The lowercased system ID. Required.</param>
+    /// <param name="assetTag">
+    /// The asset tag, or null when the reported tag cannot identify a machine (firmware filler). A
+    /// null or empty value leaves the asset tag out of the comparison.
+    /// </param>
+    /// <param name="tenantId">The tenant whose active machines are searched.</param>
+    /// <param name="cancellationToken">A token to cancel the operation.</param>
+    /// <returns>True when an active machine in the tenant matches any of the supplied identifiers.</returns>
+    Task<bool> DoesMachineExistAsync(string? serialNumber, string systemId, string? assetTag, int tenantId, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Creates a new Machine with a hashed API key and returns the plaintext key. Inside the same

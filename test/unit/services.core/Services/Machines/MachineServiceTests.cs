@@ -688,6 +688,127 @@ public class MachineServiceTests
         await Assert.That(result.errorMessage).IsEqualTo("Machine already exists");
     }
 
+    // ========== RegisterSystem — placeholder hardware identifiers ==========
+
+    /// <summary>
+    /// Registers a machine reporting the given identifiers against a repository substitute that
+    /// reports no duplicate, and returns the substitute so callers can inspect what the duplicate
+    /// check and the create call were given.
+    /// </summary>
+    private static async Task<IMachineRepository> RegisterWithIdentifiers(string serialNumber, string systemId, string assetTag)
+    {
+        using TestDatabaseFactory dbFactory = new();
+        RegistrationToken token = await SeedValidRegistrationToken(dbFactory, FixedNow, tenantId: 5);
+
+        IMachineRepository machineRepo = Substitute.For<IMachineRepository>();
+        machineRepo.DoesMachineExistAsync(
+            Arg.Any<string?>(), Arg.Any<string>(), Arg.Any<string?>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns(false);
+
+        Machine createdMachine = TestDataBuilder.BuildMachine(tenantId: 5, registrationTokenId: token.Id);
+        createdMachine.Id = 100;
+        machineRepo.CreateMachineWithKeyAsync(Arg.Any<Machine>(), Arg.Any<long>(), Arg.Any<DateTimeOffset>(), Arg.Any<int?>(), Arg.Any<CancellationToken>())
+            .Returns((createdMachine, "plaintext-api-key-123"));
+
+        TestServiceScopeFactory scopeFactory = CreateScopeFactory(dbFactory, machineRepo);
+        MachineService service = BuildService(scopeFactory);
+
+        RegisterSystemRequest request = new()
+        {
+            SerialNumber = serialNumber,
+            SystemId = systemId,
+            AssetTag = assetTag,
+            Hostname = "test-host",
+            MachineType = Grpc.AgentRegistration.MachineType.BareMetalServerType,
+            Os = OperatingSystemType.UbuntuOs,
+            RegistrationToken = TestTokenValue,
+        };
+
+        (long? machineId, string? apiKey, string errorMessage) result =
+            await service.RegisterSystemAsync(request, CancellationToken.None);
+
+        await Assert.That(result.machineId).IsEqualTo(100L);
+
+        return machineRepo;
+    }
+
+    [Test]
+    [Arguments("System Serial Number")]
+    [Arguments("To Be Filled By O.E.M.")]
+    [Arguments("Default string")]
+    [Arguments("0123456789")]
+    public async Task RegisterSystem_PlaceholderSerial_DuplicateCheckIgnoresSerial(string placeholderSerial)
+    {
+        IMachineRepository machineRepo = await RegisterWithIdentifiers(placeholderSerial, "SID-TEST", "ASSET-00417");
+
+        await machineRepo.Received(1).DoesMachineExistAsync(
+            Arg.Is<string?>(s => s == null),
+            "sid-test",
+            "ASSET-00417",
+            5,
+            Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    [Arguments("Default string")]
+    [Arguments("To Be Filled By O.E.M.")]
+    [Arguments("No Asset Tag")]
+    [Arguments("Asset-1234567890")]
+    public async Task RegisterSystem_PlaceholderAssetTag_DuplicateCheckIgnoresAssetTag(string placeholderAssetTag)
+    {
+        IMachineRepository machineRepo = await RegisterWithIdentifiers("SN-TEST", "SID-TEST", placeholderAssetTag);
+
+        await machineRepo.Received(1).DoesMachineExistAsync(
+            "sn-test",
+            "sid-test",
+            Arg.Is<string?>(a => a == null),
+            5,
+            Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task RegisterSystem_EmptyAssetTag_DuplicateCheckIgnoresAssetTag()
+    {
+        IMachineRepository machineRepo = await RegisterWithIdentifiers("SN-TEST", "SID-TEST", string.Empty);
+
+        await machineRepo.Received(1).DoesMachineExistAsync(
+            "sn-test",
+            "sid-test",
+            Arg.Is<string?>(a => a == null),
+            5,
+            Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task RegisterSystem_RealSerialAndAssetTag_DuplicateCheckUsesBoth()
+    {
+        IMachineRepository machineRepo = await RegisterWithIdentifiers("C02XL0GTJGH5", "SID-TEST", "ASSET-00417");
+
+        await machineRepo.Received(1).DoesMachineExistAsync(
+            "c02xl0gtjgh5",
+            "sid-test",
+            "ASSET-00417",
+            5,
+            Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task RegisterSystem_PlaceholderIdentifiers_StillStoresWhatTheAgentReported()
+    {
+        IMachineRepository machineRepo = await RegisterWithIdentifiers("System Serial Number", "SID-TEST", "Default string");
+
+        // Only the duplicate check treats these as absent; the machine row keeps the reported
+        // values (serial lowercased as always) so nothing the agent sent is lost.
+        await machineRepo.Received(1).CreateMachineWithKeyAsync(
+            Arg.Is<Machine>(m => (m.SerialNumber == "system serial number")
+                && (m.SystemId == "sid-test")
+                && (m.AssetTagNumber == "Default string")),
+            Arg.Any<long>(),
+            Arg.Any<DateTimeOffset>(),
+            Arg.Any<int?>(),
+            Arg.Any<CancellationToken>());
+    }
+
     // ========== RegisterSystem — single-use token validation (FakeTimeProvider) ==========
 
     private const string SingleUseTokenValue = "single-use-token";

@@ -121,13 +121,24 @@ public class DatabaseRepositoryTests
     }
 
     [Test]
-    public async Task DoesMachineExistAsync_NullSerialNumber_ThrowsArgumentException()
+    public async Task DoesMachineExistAsync_NullSerialNumberAndAssetTag_SearchesBySystemIdAndDoesNotThrow()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        DatabaseRepository cache = new(dbFactory.Context, new NullLogger<DatabaseRepository>());
+
+        bool result = await cache.DoesMachineExistAsync(null, "system-id", null, 1, CancellationToken.None);
+
+        await Assert.That(result).IsFalse();
+    }
+
+    [Test]
+    public async Task DoesMachineExistAsync_NullSystemId_ThrowsArgumentException()
     {
         using TestDatabaseFactory dbFactory = new();
         DatabaseRepository cache = new(dbFactory.Context, new NullLogger<DatabaseRepository>());
 
         await Assert.That(async () =>
-            await cache.DoesMachineExistAsync(null!, "system-id", "asset-tag", 1, CancellationToken.None))
+            await cache.DoesMachineExistAsync("serial", null!, "asset-tag", 1, CancellationToken.None))
             .Throws<ArgumentException>();
     }
 
@@ -178,13 +189,35 @@ public class DatabaseRepositoryTests
     }
 
     [Test]
-    public async Task DoesMachineExistAsync_EmptySerialNumber_ThrowsArgumentException()
+    public async Task DoesMachineExistAsync_EmptySerialNumber_SearchesBySystemIdAndDoesNotThrow()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        DatabaseRepository cache = new(dbFactory.Context, new NullLogger<DatabaseRepository>());
+
+        bool result = await cache.DoesMachineExistAsync("", "system-id", "asset-tag", 1, CancellationToken.None);
+
+        await Assert.That(result).IsFalse();
+    }
+
+    [Test]
+    public async Task DoesMachineExistAsync_EmptySystemId_ThrowsArgumentException()
     {
         using TestDatabaseFactory dbFactory = new();
         DatabaseRepository cache = new(dbFactory.Context, new NullLogger<DatabaseRepository>());
 
         await Assert.That(async () =>
-            await cache.DoesMachineExistAsync("", "system-id", "asset-tag", 1, CancellationToken.None))
+            await cache.DoesMachineExistAsync("serial", "", "asset-tag", 1, CancellationToken.None))
+            .Throws<ArgumentException>();
+    }
+
+    [Test]
+    public async Task DoesMachineExistAsync_WhitespaceSystemId_ThrowsArgumentException()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        DatabaseRepository cache = new(dbFactory.Context, new NullLogger<DatabaseRepository>());
+
+        await Assert.That(async () =>
+            await cache.DoesMachineExistAsync("serial", "   ", "asset-tag", 1, CancellationToken.None))
             .Throws<ArgumentException>();
     }
 

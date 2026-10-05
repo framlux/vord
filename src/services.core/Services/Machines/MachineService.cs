@@ -351,8 +351,14 @@ public sealed class MachineService : IMachineService
         string normalizedSerial = request.SerialNumber.ToLowerInvariant();
         string normalizedSystemId = request.SystemId.ToLowerInvariant();
 
+        // Firmware filler such as "System Serial Number" or "Default string" is shared by unrelated
+        // machines, so it must not count as evidence that this machine is already registered. The
+        // machine row below still stores whatever the agent reported.
+        string? serialForDuplicateCheck = HardwareIdentifierPlaceholders.IsPlaceholder(normalizedSerial) ? null : normalizedSerial;
+        string? assetTagForDuplicateCheck = HardwareIdentifierPlaceholders.IsPlaceholder(request.AssetTag) ? null : request.AssetTag;
+
         // Check if we have a machine already with these IDs
-        bool machineExists = await machineRepository.DoesMachineExistAsync(normalizedSerial, normalizedSystemId, request.AssetTag ?? string.Empty, token.TenantId, cancellationToken);
+        bool machineExists = await machineRepository.DoesMachineExistAsync(serialForDuplicateCheck, normalizedSystemId, assetTagForDuplicateCheck, token.TenantId, cancellationToken);
         if (machineExists)
         {
             _registrationMetrics.RecordAttempt(RegistrationOutcome.DuplicateMachine, token.TenantId);

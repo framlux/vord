@@ -786,6 +786,135 @@ public sealed class RegistrationFlowTests
         await Assert.That(statusResponse.Status).IsEqualTo(RegistrationStatus.UnknownRegistration);
     }
 
+    [Test]
+    public async Task RegisterSystem_TwoMachinesReportingFirmwareFiller_BothRegister()
+    {
+        // Consumer boards whose firmware was never filled in all report the same serial and asset
+        // tag. Each still has its own machine-id, so the second one must not be mistaken for a
+        // duplicate of the first. Each registration gets its own single-use token.
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+
+        int tenantId = await SeedTenant(db);
+        await SeedActiveSubscription(db, tenantId);
+        await SeedToken(db, tenantId, "filler-token-1");
+        await SeedToken(db, tenantId, "filler-token-2");
+
+        using GrpcChannel channel = CreateChannel(factory);
+        Registration.RegistrationClient client = new(channel);
+
+        RegisterSystemResponse first = await client.RegisterSystemAsync(BuildRegisterRequest(
+            "filler-host-1", "System Serial Number", "machine-id-filler-0001", "Default string", "filler-token-1"));
+        RegisterSystemResponse second = await client.RegisterSystemAsync(BuildRegisterRequest(
+            "filler-host-2", "System Serial Number", "machine-id-filler-0002", "Default string", "filler-token-2"));
+
+        await Assert.That(first.MachineId).IsGreaterThan(0);
+        await Assert.That(second.MachineId).IsGreaterThan(0);
+        await Assert.That(second.MachineId).IsNotEqualTo(first.MachineId);
+
+        // What the agent reported is stored as it was, even though it did not take part in the
+        // duplicate check.
+        Machine? secondMachine = await db.Machines.FirstOrDefaultAsync(m => m.Id == second.MachineId);
+        await Assert.That(secondMachine).IsNotNull();
+        await Assert.That(secondMachine!.SerialNumber).IsEqualTo("system serial number");
+        await Assert.That(secondMachine.AssetTagNumber).IsEqualTo("Default string");
+    }
+
+    [Test]
+    public async Task RegisterSystem_SameFillerSerialAndSameSystemId_IsStillADuplicate()
+    {
+        // Dropping the filler serial from the duplicate check must not let a genuine
+        // re-registration through: the machine-id still identifies the same machine.
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+
+        int tenantId = await SeedTenant(db);
+        await SeedActiveSubscription(db, tenantId);
+        await SeedToken(db, tenantId, "refiller-token-1");
+        await SeedToken(db, tenantId, "refiller-token-2");
+
+        using GrpcChannel channel = CreateChannel(factory);
+        Registration.RegistrationClient client = new(channel);
+
+        await client.RegisterSystemAsync(BuildRegisterRequest(
+            "refiller-host", "System Serial Number", "machine-id-refiller-0001", "Default string", "refiller-token-1"));
+
+        RpcException? ex = await Assert.ThrowsAsync<RpcException>(
+            async () => await client.RegisterSystemAsync(BuildRegisterRequest(
+                "refiller-host", "System Serial Number", "machine-id-refiller-0001", "Default string", "refiller-token-2")));
+
+        await Assert.That(ex!.StatusCode).IsEqualTo(StatusCode.InvalidArgument);
+        await Assert.That(ex.Status.Detail).IsEqualTo("Machine already exists");
+    }
+
+    [Test]
+    public async Task RegisterSystem_SameRealSerialDifferentSystemId_IsADuplicate()
+    {
+        // The control for the filler case: a real serial still identifies a machine, so the same
+        // serial under a different machine-id is rejected. Every registration has its own token,
+        // so the rejection can only come from the duplicate check.
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+
+        int tenantId = await SeedTenant(db);
+        await SeedActiveSubscription(db, tenantId);
+        await SeedToken(db, tenantId, "real-serial-token-1");
+        await SeedToken(db, tenantId, "real-serial-token-2");
+
+        using GrpcChannel channel = CreateChannel(factory);
+        Registration.RegistrationClient client = new(channel);
+
+        await client.RegisterSystemAsync(BuildRegisterRequest(
+            "real-serial-host-1", "C02XL0GTJGH5", "machine-id-real-serial-0001", string.Empty, "real-serial-token-1"));
+
+        RpcException? ex = await Assert.ThrowsAsync<RpcException>(
+            async () => await client.RegisterSystemAsync(BuildRegisterRequest(
+                "real-serial-host-2", "C02XL0GTJGH5", "machine-id-real-serial-0002", string.Empty, "real-serial-token-2")));
+
+        await Assert.That(ex!.StatusCode).IsEqualTo(StatusCode.InvalidArgument);
+        await Assert.That(ex.Status.Detail).IsEqualTo("Machine already exists");
+    }
+
+    [Test]
+    public async Task RegisterSystem_SameRealAssetTagDifferentSerialAndSystemId_IsADuplicate()
+    {
+        // A real asset tag still identifies a machine even when the serial and machine-id differ.
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+
+        int tenantId = await SeedTenant(db);
+        await SeedActiveSubscription(db, tenantId);
+        await SeedToken(db, tenantId, "real-tag-token-1");
+        await SeedToken(db, tenantId, "real-tag-token-2");
+
+        using GrpcChannel channel = CreateChannel(factory);
+        Registration.RegistrationClient client = new(channel);
+
+        await client.RegisterSystemAsync(BuildRegisterRequest(
+            "real-tag-host-1", "sn-real-tag-0001", "machine-id-real-tag-0001", "ASSET-00417", "real-tag-token-1"));
+
+        RpcException? ex = await Assert.ThrowsAsync<RpcException>(
+            async () => await client.RegisterSystemAsync(BuildRegisterRequest(
+                "real-tag-host-2", "sn-real-tag-0002", "machine-id-real-tag-0002", "ASSET-00417", "real-tag-token-2")));
+
+        await Assert.That(ex!.StatusCode).IsEqualTo(StatusCode.InvalidArgument);
+        await Assert.That(ex.Status.Detail).IsEqualTo("Machine already exists");
+    }
+
+    private static RegisterSystemRequest BuildRegisterRequest(string hostname, string serialNumber, string systemId, string assetTag, string registrationToken)
+    {
+        return new RegisterSystemRequest
+        {
+            Hostname = hostname,
+            SerialNumber = serialNumber,
+            SystemId = systemId,
+            AssetTag = assetTag,
+            RegistrationToken = registrationToken,
+            MachineType = MachineType.BareMetalServerType,
+            Os = OperatingSystemType.UbuntuOs
+        };
+    }
+
     private static GrpcChannel CreateChannel(FunctionalTestFactory factory)
     {
         HttpMessageHandler handler = new ResponseVersionHandler

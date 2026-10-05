@@ -89,6 +89,102 @@ public class MachineCacheTests
         await Assert.That(result).IsFalse();
     }
 
+    [Test]
+    public async Task DoesMachineExistAsync_NullSerialNumber_MatchesBySystemIdAlone()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        IMachineRepository cache = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+
+        Machine machine = TestDataBuilder.BuildMachine();
+        machine.SerialNumber = "system serial number";
+        await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
+
+        bool result = await cache.DoesMachineExistAsync(null, machine.SystemId, null, 1);
+
+        await Assert.That(result).IsTrue();
+    }
+
+    [Test]
+    public async Task DoesMachineExistAsync_NullSerialNumber_DifferentSystemId_IgnoresExistingPlaceholderSerial()
+    {
+        // The regression: a second machine on filler-serial hardware has its own machine-id, and
+        // the filler serial the first machine stored must not make it look like a duplicate.
+        using TestDatabaseFactory dbFactory = new();
+        IMachineRepository cache = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+
+        Machine machine = TestDataBuilder.BuildMachine();
+        machine.SerialNumber = "system serial number";
+        await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
+
+        bool result = await cache.DoesMachineExistAsync(null, "another-system-id", null, 1);
+
+        await Assert.That(result).IsFalse();
+    }
+
+    [Test]
+    public async Task DoesMachineExistAsync_EmptySerialNumber_IsLeftOutOfTheComparison()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        IMachineRepository cache = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+
+        // An empty serial must not be compared as a value, or it would match any machine that
+        // was stored with an empty serial.
+        Machine machine = TestDataBuilder.BuildMachine();
+        machine.SerialNumber = string.Empty;
+        await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
+
+        bool result = await cache.DoesMachineExistAsync(string.Empty, "another-system-id", null, 1);
+
+        await Assert.That(result).IsFalse();
+    }
+
+    [Test]
+    [Arguments(null)]
+    [Arguments("")]
+    public async Task DoesMachineExistAsync_NoAssetTag_IgnoresExistingAssetTag(string? assetTag)
+    {
+        using TestDatabaseFactory dbFactory = new();
+        IMachineRepository cache = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+
+        Machine machine = TestDataBuilder.BuildMachine();
+        machine.AssetTagNumber = "default string";
+        await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
+
+        bool result = await cache.DoesMachineExistAsync("another-serial", "another-system-id", assetTag, 1);
+
+        await Assert.That(result).IsFalse();
+    }
+
+    [Test]
+    public async Task DoesMachineExistAsync_MatchByAssetTag_ReturnsTrue()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        IMachineRepository cache = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+
+        Machine machine = TestDataBuilder.BuildMachine();
+        machine.AssetTagNumber = "ASSET-00417";
+        await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
+
+        bool result = await cache.DoesMachineExistAsync("another-serial", "another-system-id", "ASSET-00417", 1);
+
+        await Assert.That(result).IsTrue();
+    }
+
+    [Test]
+    public async Task DoesMachineExistAsync_MatchInAnotherTenant_ReturnsFalse()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        IMachineRepository cache = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+
+        Machine machine = TestDataBuilder.BuildMachine(tenantId: 2);
+        machine.AssetTagNumber = "ASSET-00417";
+        await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
+
+        bool result = await cache.DoesMachineExistAsync(machine.SerialNumber, machine.SystemId, "ASSET-00417", 1);
+
+        await Assert.That(result).IsFalse();
+    }
+
     // ========== CreateMachineWithKeyAsync tests ==========
 
     // A fixed reference instant so the single-use token ExpiresAt > now check is deterministic.
