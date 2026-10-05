@@ -3,6 +3,7 @@
 // See LICENSE for details.
 
 using FastEndpoints;
+using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Server.Auth;
@@ -29,7 +30,8 @@ public sealed class UsagePointDto
 /// <summary>
 /// Returns historical usage and cost data for the billing trend chart.
 /// Machine counts are reconstructed from RegisteredOn/DeletedOn timestamps.
-/// Costs come from actual Stripe invoice amounts.
+/// Costs come from actual Stripe invoice amounts; an Enterprise tenant is invoiced outside Stripe, so
+/// its history carries machine counts only and every invoice amount is zero.
 /// </summary>
 /// <remarks>
 /// Absent in a self-hosted deployment. The machine-count series would still be genuine there, but
@@ -104,9 +106,15 @@ public sealed class UsageHistoryEndpoint : EndpointWithoutRequest<ApiResponse<Li
             months = m;
         }
 
-        // Get invoice history from Stripe for actual costs
-        List<InvoiceResult> invoices = await _billingApiClient.ListInvoicesAsync(
-            tenant.ExternalId, months, ct);
+        // Get invoice history from Stripe for actual costs. An Enterprise tenant has no Stripe invoices
+        // (a tenant converted from Stripe would otherwise surface its old ones as costs), so it is
+        // treated as having an empty invoice list without asking billing-api.
+        TenantSubscription? subscription = await _subscriptionService.GetSubscriptionForTenantAsync(tenantId, ct);
+        List<InvoiceResult> invoices = [];
+        if ((subscription is null) || (subscription.Tier != SubscriptionTier.Enterprise))
+        {
+            invoices = await _billingApiClient.ListInvoicesAsync(tenant.ExternalId, months, ct);
+        }
 
         // Build a map of month -> invoice amount
         Dictionary<string, long> invoiceByMonth = [];

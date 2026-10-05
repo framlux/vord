@@ -26,6 +26,7 @@ namespace Framlux.FleetManagement.FunctionalTest.Endpoints.Web;
 public sealed class EnterpriseBillingEndpointTests
 {
     private static readonly DateTimeOffset AgreementPeriodEnd = new(2027, 10, 4, 23, 59, 59, TimeSpan.Zero);
+    private const long StripeInvoiceCents = 12345;
 
     [Test]
     public async Task GetSubscription_Enterprise_ReportsAgreementLimitsWithoutAskingBillingApi()
@@ -148,6 +149,61 @@ public sealed class EnterpriseBillingEndpointTests
             await factory.BillingApiClientMock.Received(1)
                 .GetUpcomingInvoiceAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
         }
+    }
+
+    [Test]
+    public async Task UsageHistory_Enterprise_ReportsMachineCountsWithoutInvoiceAmountsOrAskingBillingApi()
+    {
+        // A tenant converted from Stripe may still have Stripe invoices on file; none of them may
+        // surface as a cost, and billing-api must not be asked at all.
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        int tenantId = await SeedTenantAsync(db, SubscriptionTier.Enterprise);
+        await SeedRegisteredMachinesAsync(db, tenantId, count: 2);
+        factory.BillingApiClientMock
+            .ListInvoicesAsync(Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(BuildStripeInvoicesForEveryMonth()));
+        HttpClient client = BuildViewerClient(factory, tenantId);
+
+        HttpResponseMessage response = await client.GetAsync("/api/v1/billing/usage-history?months=3");
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
+        JsonElement data = await ExtractDataElement(response);
+        await Assert.That(data.GetArrayLength()).IsEqualTo(3);
+        foreach (JsonElement point in data.EnumerateArray())
+        {
+            await Assert.That(point.GetProperty("machineCount").GetInt32()).IsEqualTo(2);
+            await Assert.That(point.GetProperty("invoiceAmountCents").GetInt64()).IsEqualTo(0L);
+        }
+
+        await factory.BillingApiClientMock.DidNotReceive()
+            .ListInvoicesAsync(Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task UsageHistory_Team_StillAsksBillingApiForInvoiceAmounts()
+    {
+        // Regression: a Stripe-billed tenant's costs still come from billing-api.
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        int tenantId = await SeedTenantAsync(db, SubscriptionTier.Team, withAgreementOverride: false);
+        factory.BillingApiClientMock
+            .ListInvoicesAsync(Arg.Any<string>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(BuildStripeInvoicesForEveryMonth()));
+        HttpClient client = BuildViewerClient(factory, tenantId);
+
+        HttpResponseMessage response = await client.GetAsync("/api/v1/billing/usage-history?months=3");
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
+        JsonElement data = await ExtractDataElement(response);
+        await Assert.That(data.GetArrayLength()).IsEqualTo(3);
+        foreach (JsonElement point in data.EnumerateArray())
+        {
+            await Assert.That(point.GetProperty("invoiceAmountCents").GetInt64()).IsEqualTo(StripeInvoiceCents);
+        }
+
+        await factory.BillingApiClientMock.Received(1)
+            .ListInvoicesAsync(Arg.Any<string>(), 3, Arg.Any<CancellationToken>());
     }
 
     [Test]
@@ -274,6 +330,38 @@ public sealed class EnterpriseBillingEndpointTests
         }
 
         return tenantId;
+    }
+
+    /// <summary>
+    /// Registers machines long before any month the usage history can cover, so every point in the
+    /// history sees the same count regardless of when the test runs.
+    /// </summary>
+    private static async Task SeedRegisteredMachinesAsync(DatabaseContext db, int tenantId, int count)
+    {
+        for (int i = 0; i < count; i++)
+        {
+            Machine machine = TestDataBuilder.BuildMachine(tenantId: tenantId);
+            machine.RegisteredOn = new DateTimeOffset(2020, 1, 1, 0, 0, 0, TimeSpan.Zero);
+            await db.InsertWithInt64IdentityAsync(machine);
+        }
+    }
+
+    /// <summary>
+    /// Builds one Stripe invoice for every month the usage history can report, plus one on either
+    /// side so a month rollover while the test runs cannot leave a reported month uncovered.
+    /// </summary>
+    private static List<InvoiceResult> BuildStripeInvoicesForEveryMonth()
+    {
+        DateTimeOffset thisMonth = new(DateTimeOffset.UtcNow.Year, DateTimeOffset.UtcNow.Month, 1, 0, 0, 0, TimeSpan.Zero);
+        List<InvoiceResult> invoices = [];
+        for (int i = -1; i <= 12; i++)
+        {
+            DateTimeOffset periodStart = thisMonth.AddMonths(-i);
+            invoices.Add(new InvoiceResult(
+                $"in_{i + 1}", StripeInvoiceCents, "usd", "paid", periodStart, periodStart, periodStart.AddMonths(1), "", ""));
+        }
+
+        return invoices;
     }
 
     private static async Task<int> SeedTenantAdminAsync(DatabaseContext db, int tenantId)
