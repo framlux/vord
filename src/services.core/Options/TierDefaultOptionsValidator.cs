@@ -43,6 +43,7 @@ public sealed class TierDefaultOptionsValidator : IValidateOptions<TierDefaultOp
         ValidateCooldown("Free", options.Free, failures);
         ValidateCooldown("Pro", options.Pro, failures);
         ValidateCooldown("Team", options.Team, failures);
+        ValidateCooldown("Enterprise", options.Enterprise, failures);
 
         return failures.Count > 0
             ? ValidateOptionsResult.Fail(failures)

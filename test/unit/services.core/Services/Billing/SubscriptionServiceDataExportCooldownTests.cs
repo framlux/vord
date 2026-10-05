@@ -59,6 +59,20 @@ public sealed class SubscriptionServiceDataExportCooldownTests
     }
 
     /// <summary>
+    /// The enterprise tier reads its own configured window; it must not fall through to the free
+    /// tier's day-long wait.
+    /// </summary>
+    [Test]
+    public async Task GetDataExportCooldown_EnterpriseTier_Is8Hours()
+    {
+        SubscriptionService service = BuildService(SubscriptionTier.Enterprise);
+
+        TimeSpan cooldown = await service.GetDataExportCooldownAsync(1, CancellationToken.None);
+
+        await Assert.That(cooldown).IsEqualTo(TimeSpan.FromHours(8));
+    }
+
+    /// <summary>
     /// A tenant with no subscription row falls back to the free window rather than to no window,
     /// matching how every other effective limit resolves a missing subscription.
     /// </summary>
@@ -94,6 +108,7 @@ public sealed class SubscriptionServiceDataExportCooldownTests
             Free = new() { MachineLimit = 3, RetentionDays = 1, AlertRuleLimit = 0, WebhookLimit = 0, MemberLimit = 1, DataExportCooldownHours = 24 },
             Pro = new() { MachineLimit = 1000, RetentionDays = 60, AlertRuleLimit = 10, WebhookLimit = 5, MemberLimit = 5, DataExportCooldownHours = 12 },
             Team = new() { MachineLimit = 10000, RetentionDays = 365, AlertRuleLimit = 25, WebhookLimit = 15, MemberLimit = int.MaxValue, DataExportCooldownHours = 8 },
+            Enterprise = new() { MachineLimit = 10000, RetentionDays = 365, AlertRuleLimit = 25, WebhookLimit = 15, MemberLimit = int.MaxValue, DataExportCooldownHours = 8 },
         });
 
         return new SubscriptionService(

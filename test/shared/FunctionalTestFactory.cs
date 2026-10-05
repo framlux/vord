@@ -476,6 +476,10 @@ public class FunctionalTestFactory : WebApplicationFactory<Program>
         // Team tier: MachineLimit=10000, RetentionDays=365, AlertRuleLimit=25, WebhookLimit=15, MemberLimit=int.MaxValue
         ExecuteSql($@"INSERT INTO TierFeatureLimits (Tier, MachineLimit, RetentionDays, AlertRuleLimit, WebhookLimit, MemberLimit, UpdatedAt)
             VALUES ({(int)SubscriptionTier.Team}, 10000, 365, 25, 15, {int.MaxValue}, '{now}')");
+
+        // Enterprise tier: Team's values as a fallback; real Enterprise tenants carry overrides for every limit
+        ExecuteSql($@"INSERT INTO TierFeatureLimits (Tier, MachineLimit, RetentionDays, AlertRuleLimit, WebhookLimit, MemberLimit, UpdatedAt)
+            VALUES ({(int)SubscriptionTier.Enterprise}, 10000, 365, 25, 15, {int.MaxValue}, '{now}')");
     }
 
     /// <summary>

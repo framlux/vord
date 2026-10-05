@@ -26,4 +26,10 @@ public sealed class TierDefaultOptions
     /// Default limits for the Team tier.
     /// </summary>
     public TierLimitDefaults Team { get; set; } = new();
+
+    /// <summary>
+    /// Fallback limits for the Enterprise tier. An Enterprise tenant's limits come from its
+    /// agreement; these apply only to settings agreements do not set, such as the export cooldown.
+    /// </summary>
+    public TierLimitDefaults Enterprise { get; set; } = new();
 }

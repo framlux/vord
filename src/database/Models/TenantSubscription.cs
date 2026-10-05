@@ -59,6 +59,14 @@ public sealed class TenantSubscription
     public bool CancelAtPeriodEnd { get; set; }
 
     /// <summary>
+    /// The enterprise agreement revision last applied to this tenant, or null when none ever has been.
+    /// An apply carrying a lower revision is refused, so a retried or reordered request cannot
+    /// overwrite newer agreement limits.
+    /// </summary>
+    [Column("AppliedAgreementRevision"), Nullable]
+    public int? AppliedAgreementRevision { get; set; }
+
+    /// <summary>
     /// When the subscription was created.
     /// </summary>
     [Column("CreatedAt"), NotNull]

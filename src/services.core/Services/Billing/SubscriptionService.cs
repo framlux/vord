@@ -153,6 +153,8 @@ public sealed class SubscriptionService : ISubscriptionService
         [SubscriptionTier.Free] = 0,
         [SubscriptionTier.Pro] = 1,
         [SubscriptionTier.Team] = 3,
+        // Enterprise is never billed through Stripe; it has no floor.
+        [SubscriptionTier.Enterprise] = 0,
     };
 
     /// <inheritdoc/>
@@ -317,6 +319,7 @@ public sealed class SubscriptionService : ISubscriptionService
             SubscriptionTier.Free => _tierDefaults.Free,
             SubscriptionTier.Pro => _tierDefaults.Pro,
             SubscriptionTier.Team => _tierDefaults.Team,
+            SubscriptionTier.Enterprise => _tierDefaults.Enterprise,
             _ => _tierDefaults.Free,
         };
     }

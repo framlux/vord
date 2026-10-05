@@ -52,6 +52,12 @@ public sealed class TenantSubscriptionOverride
     public int? WebhookLimit { get; set; }
 
     /// <summary>
+    /// Custom member limit for this tenant. Null means use tier default.
+    /// </summary>
+    [Column(Name = "MemberLimit"), Nullable]
+    public int? MemberLimit { get; set; }
+
+    /// <summary>
     /// When this override was created.
     /// </summary>
     [Column(Name = "CreatedAt"), NotNull]

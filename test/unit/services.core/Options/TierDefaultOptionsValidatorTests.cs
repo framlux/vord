@@ -29,6 +29,7 @@ public sealed class TierDefaultOptionsValidatorTests
             Free = new TierLimitDefaults { DataExportCooldownHours = 24 },
             Pro = new TierLimitDefaults { DataExportCooldownHours = 12 },
             Team = new TierLimitDefaults { DataExportCooldownHours = 8 },
+            Enterprise = new TierLimitDefaults { DataExportCooldownHours = 8 },
         };
     }
 
@@ -55,6 +56,7 @@ public sealed class TierDefaultOptionsValidatorTests
         await Assert.That(result.FailureMessage).Contains("Free");
         await Assert.That(result.FailureMessage).Contains("Pro");
         await Assert.That(result.FailureMessage).Contains("Team");
+        await Assert.That(result.FailureMessage).Contains("Enterprise");
     }
 
     /// <summary>
@@ -71,6 +73,22 @@ public sealed class TierDefaultOptionsValidatorTests
 
         await Assert.That(result.Failed).IsTrue();
         await Assert.That(result.FailureMessage).Contains("Pro");
+    }
+
+    /// <summary>
+    /// Enterprise is validated like every other tier: a zero export window there would let an
+    /// Enterprise tenant regenerate a full-database export in an unbounded loop.
+    /// </summary>
+    [Test]
+    public async Task Validate_HostedWithZeroEnterpriseCooldown_Fails()
+    {
+        TierDefaultOptions options = ValidOptions();
+        options.Enterprise.DataExportCooldownHours = 0;
+
+        ValidateOptionsResult result = CreateValidator(selfHosted: false).Validate(null, options);
+
+        await Assert.That(result.Failed).IsTrue();
+        await Assert.That(result.FailureMessage).Contains("Enterprise");
     }
 
     /// <summary>

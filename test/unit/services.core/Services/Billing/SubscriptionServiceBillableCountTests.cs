@@ -39,6 +39,8 @@ public sealed class SubscriptionServiceBillableCountTests
     [Arguments(SubscriptionTier.Team, 3, 2, 3)]
     [Arguments(SubscriptionTier.Team, 3, 3, 3)]
     [Arguments(SubscriptionTier.Team, 3, 9, 9)]
+    [Arguments(SubscriptionTier.Enterprise, 0, 0, 0)]   // no floor: never billed through Stripe
+    [Arguments(SubscriptionTier.Enterprise, 0, 12, 12)]
     public async Task GetBillableMachineCountAsync_AppliesTierFloor(
         SubscriptionTier tier, int floor, int active, int expected)
     {
@@ -59,6 +61,18 @@ public sealed class SubscriptionServiceBillableCountTests
         int result = await service.GetBillableMachineCountAsync(42, SubscriptionTier.Team, CancellationToken.None);
 
         await Assert.That(result).IsEqualTo(3);
+    }
+
+    [Test]
+    public async Task GetBillableMachineCountAsync_EnterpriseMissingTierRow_HasNoFloor()
+    {
+        // Enterprise is invoiced rather than metered through Stripe, so a missing limits row must
+        // resolve to the active machine count and never to a floor borrowed from a paid tier.
+        SubscriptionService service = BuildService(SubscriptionTier.Enterprise, floor: 0, active: 0, tierRowMissing: true);
+
+        int result = await service.GetBillableMachineCountAsync(42, SubscriptionTier.Enterprise, CancellationToken.None);
+
+        await Assert.That(result).IsEqualTo(0);
     }
 
     [Test]

@@ -305,12 +305,14 @@ public sealed class MigrationRunnerLiveTests
         using IServiceScope scope = provider.CreateScope();
         scope.ServiceProvider.GetRequiredService<IMigrationRunner>().MigrateUp();
 
-        await Assert.That(await CountRowsAsync(connStr, "TierFeatureLimits")).IsEqualTo(3L);
+        await Assert.That(await CountRowsAsync(connStr, "TierFeatureLimits")).IsEqualTo(4L);
 
-        // Tier 1 (Free), Tier 2 (Pro), Tier 3 (Team): MachineLimit, RetentionDays, AlertRuleLimit, WebhookLimit, MemberLimit.
+        // Tier 1 (Free), Tier 2 (Pro), Tier 3 (Team), Tier 4 (Enterprise, Team's values as a fallback):
+        // MachineLimit, RetentionDays, AlertRuleLimit, WebhookLimit, MemberLimit.
         await Assert.That(await ReadTierLimitsAsync(connStr, 1)).IsEqualTo("3,1,0,0,1");
         await Assert.That(await ReadTierLimitsAsync(connStr, 2)).IsEqualTo("1000,60,10,5,5");
         await Assert.That(await ReadTierLimitsAsync(connStr, 3)).IsEqualTo($"10000,365,25,15,{int.MaxValue}");
+        await Assert.That(await ReadTierLimitsAsync(connStr, 4)).IsEqualTo($"10000,365,25,15,{int.MaxValue}");
     }
 
     [Test]
