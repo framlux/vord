@@ -440,9 +440,14 @@ app.UseAntiforgeryFE(skipRequestFilter: AntiforgeryStartup.ShouldSkipAntiforgery
 
 app.UseFastEndpoints(options =>
     {
-        // Guard against concurrent modification in parallel test hosts — FastEndpoints uses
-        // a static JsonSerializerOptions that gets locked after first serialization use.
-        if (options.Serializer.Options.IsReadOnly == false)
+        // FastEndpoints keeps one static JsonSerializerOptions that every host in the process shares,
+        // and the first serialization by any host freezes it. Checking IsReadOnly and then assigning
+        // is a race when several hosts start in parallel: another host's first request can freeze the
+        // options between the check and the assignment, and the assignment then throws. Comparing the
+        // value instead means every host after the first finds the encoder already in place and never
+        // writes, so there is nothing left for a freeze to interrupt.
+        if ((ReferenceEquals(options.Serializer.Options.Encoder, System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping) == false) &&
+            (options.Serializer.Options.IsReadOnly == false))
         {
             options.Serializer.Options.Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping;
         }
