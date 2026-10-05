@@ -83,6 +83,31 @@ public class BillingWebhookHandlerTests
         return (prior is not null) && (prior.Tier == tier) && (prior.Status == status);
     }
 
+    /// <summary>
+    /// The end of the agreement term the Enterprise rows in these tests are seeded with.
+    /// </summary>
+    private static readonly DateTimeOffset EnterpriseTermEnd = new(2027, 10, 4, 23, 59, 59, TimeSpan.Zero);
+
+    /// <summary>
+    /// Seeds an Enterprise subscription for the tenant, as applying an agreement leaves it.
+    /// </summary>
+    private static async Task SeedEnterpriseSubscriptionAsync(TestDatabaseFactory dbFactory, int tenantId = 1)
+    {
+        TenantSubscription enterprise = TestDataBuilder.BuildSubscription(tenantId: tenantId, tier: SubscriptionTier.Enterprise);
+        enterprise.AppliedAgreementRevision = 1;
+        enterprise.CurrentPeriodEnd = EnterpriseTermEnd;
+        enterprise.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(enterprise);
+    }
+
+    private static async Task<int> CountAuditRowsAsync(TestDatabaseFactory dbFactory, AuditAction action, int tenantId = 1)
+    {
+        int count = await dbFactory.Context.AuditLog
+            .Where(a => (a.TenantId == tenantId) && (a.Action == action))
+            .CountAsync();
+
+        return count;
+    }
+
     private static BillingWebhookHandler CreateHandler(
         TestDatabaseFactory dbFactory,
         IDowngradeCleanupService? cleanupService = null,
@@ -97,7 +122,8 @@ public class BillingWebhookHandlerTests
             provisioner ?? Substitute.For<IBuiltInAlertRuleProvisioner>(),
             cleanupService ?? Substitute.For<IDowngradeCleanupService>(),
             new RetentionReclassifyDispatcher(
-                Substitute.For<IBackgroundJobClient>(), NullLogger<RetentionReclassifyDispatcher>.Instance));
+                Substitute.For<IBackgroundJobClient>(), NullLogger<RetentionReclassifyDispatcher>.Instance),
+            NullLogger<BillingWebhookHandler>.Instance);
     }
 
     /// <summary>
@@ -137,7 +163,8 @@ public class BillingWebhookHandlerTests
             subscriptions,
             Substitute.For<IBuiltInAlertRuleProvisioner>(),
             Substitute.For<IDowngradeCleanupService>(),
-            dispatcher);
+            dispatcher,
+            NullLogger<BillingWebhookHandler>.Instance);
 
         await handler.HandleCheckoutCompletedAsync(1, SubscriptionTier.Pro, CancellationToken.None);
 
@@ -527,7 +554,8 @@ public class BillingWebhookHandlerTests
             Substitute.For<IBuiltInAlertRuleProvisioner>(),
             cleanupService,
             new RetentionReclassifyDispatcher(
-                Substitute.For<IBackgroundJobClient>(), NullLogger<RetentionReclassifyDispatcher>.Instance));
+                Substitute.For<IBackgroundJobClient>(), NullLogger<RetentionReclassifyDispatcher>.Instance),
+            NullLogger<BillingWebhookHandler>.Instance);
 
         await handler.HandleDowngradeToProAsync(1, CancellationToken.None);
 
@@ -974,5 +1002,143 @@ public class BillingWebhookHandlerTests
             .Where(a => a.TenantId == 3 && a.Action == AuditAction.SubscriptionDowngraded)
             .CountAsync();
         await Assert.That(auditCount).IsGreaterThanOrEqualTo(1);
+    }
+
+    [Test]
+    public async Task HandleSubscriptionDeletedAsync_EnterpriseTenant_ChangesNothingAndRunsNoCleanup()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        await SeedTierFeatureLimitsAsync(dbFactory.Context);
+        await SeedEnterpriseSubscriptionAsync(dbFactory);
+        IDowngradeCleanupService cleanup = Substitute.For<IDowngradeCleanupService>();
+        BillingWebhookHandler handler = CreateHandler(dbFactory, cleanupService: cleanup);
+
+        await handler.HandleSubscriptionDeletedAsync(1, CancellationToken.None);
+
+        TenantSubscription? row = await dbFactory.Context.TenantSubscriptions.FirstOrDefaultAsync(s => s.TenantId == 1);
+        await Assert.That(row!.Tier).IsEqualTo(SubscriptionTier.Enterprise);
+        await Assert.That(row.CurrentPeriodEnd.HasValue).IsTrue();
+        await cleanup.DidNotReceive().CleanupForFreeTierAsync(Arg.Any<int>(), Arg.Any<CancellationToken>());
+        await Assert.That(await CountAuditRowsAsync(dbFactory, AuditAction.SubscriptionDowngraded)).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task HandleAccountCanceledAsync_EnterpriseTenant_ChangesNothingAndRunsNoCleanup()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        await SeedTierFeatureLimitsAsync(dbFactory.Context);
+        await SeedEnterpriseSubscriptionAsync(dbFactory);
+        IDowngradeCleanupService cleanup = Substitute.For<IDowngradeCleanupService>();
+        BillingWebhookHandler handler = CreateHandler(dbFactory, cleanupService: cleanup);
+
+        await handler.HandleAccountCanceledAsync(1, CancellationToken.None);
+
+        TenantSubscription? row = await dbFactory.Context.TenantSubscriptions.FirstOrDefaultAsync(s => s.TenantId == 1);
+        await Assert.That(row!.Tier).IsEqualTo(SubscriptionTier.Enterprise);
+        await Assert.That(row.Status).IsEqualTo(SubscriptionStatus.Active);
+        await cleanup.DidNotReceive().CleanupForFreeTierAsync(Arg.Any<int>(), Arg.Any<CancellationToken>());
+        await Assert.That(await CountAuditRowsAsync(dbFactory, AuditAction.SubscriptionDowngraded)).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task HandleDowngradeToProAsync_EnterpriseTenant_RunsNoProCleanup()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        await SeedTierFeatureLimitsAsync(dbFactory.Context);
+        await SeedEnterpriseSubscriptionAsync(dbFactory);
+        IDowngradeCleanupService cleanup = Substitute.For<IDowngradeCleanupService>();
+        BillingWebhookHandler handler = CreateHandler(dbFactory, cleanupService: cleanup);
+
+        await handler.HandleDowngradeToProAsync(1, CancellationToken.None);
+
+        TenantSubscription? row = await dbFactory.Context.TenantSubscriptions.FirstOrDefaultAsync(s => s.TenantId == 1);
+        await Assert.That(row!.Tier).IsEqualTo(SubscriptionTier.Enterprise);
+        await Assert.That(row.CurrentPeriodEnd.HasValue).IsTrue();
+        await cleanup.DidNotReceive().CleanupForProTierAsync(Arg.Any<int>(), Arg.Any<CancellationToken>());
+        await Assert.That(await CountAuditRowsAsync(dbFactory, AuditAction.SubscriptionDowngraded)).IsEqualTo(0);
+    }
+
+    [Test]
+    [Arguments(SubscriptionTier.Pro)]
+    [Arguments(SubscriptionTier.Team)]
+    public async Task HandleCheckoutCompletedAsync_EnterpriseTenant_DoesNotRestoreOrAudit(SubscriptionTier checkoutTier)
+    {
+        using TestDatabaseFactory dbFactory = new();
+        await SeedTierFeatureLimitsAsync(dbFactory.Context);
+        await SeedEnterpriseSubscriptionAsync(dbFactory);
+        IBuiltInAlertRuleProvisioner provisioner = Substitute.For<IBuiltInAlertRuleProvisioner>();
+        BillingWebhookHandler handler = CreateHandler(dbFactory, provisioner: provisioner);
+
+        await handler.HandleCheckoutCompletedAsync(1, checkoutTier, CancellationToken.None);
+
+        TenantSubscription? row = await dbFactory.Context.TenantSubscriptions.FirstOrDefaultAsync(s => s.TenantId == 1);
+        await Assert.That(row!.Tier).IsEqualTo(SubscriptionTier.Enterprise);
+        await provisioner.DidNotReceive().RestoreForTierAsync(
+            Arg.Any<int>(), Arg.Any<TenantSubscription?>(), Arg.Any<SubscriptionTier>(), Arg.Any<SubscriptionStatus>(), Arg.Any<CancellationToken>());
+        await Assert.That(await CountAuditRowsAsync(dbFactory, AuditAction.SubscriptionUpgraded)).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task HandleTierCorrectionAsync_EnterpriseTenant_DoesNotRestoreFreezeOrAudit()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        await SeedTierFeatureLimitsAsync(dbFactory.Context);
+        await SeedEnterpriseSubscriptionAsync(dbFactory);
+        IBuiltInAlertRuleProvisioner provisioner = Substitute.For<IBuiltInAlertRuleProvisioner>();
+        IDowngradeCleanupService cleanup = Substitute.For<IDowngradeCleanupService>();
+        BillingWebhookHandler handler = CreateHandler(dbFactory, cleanupService: cleanup, provisioner: provisioner);
+
+        await handler.HandleTierCorrectionAsync(1, SubscriptionTier.Pro, CancellationToken.None);
+
+        TenantSubscription? row = await dbFactory.Context.TenantSubscriptions.FirstOrDefaultAsync(s => s.TenantId == 1);
+        await Assert.That(row!.Tier).IsEqualTo(SubscriptionTier.Enterprise);
+        await provisioner.DidNotReceive().RestoreForTierAsync(
+            Arg.Any<int>(), Arg.Any<TenantSubscription?>(), Arg.Any<SubscriptionTier>(), Arg.Any<SubscriptionStatus>(), Arg.Any<CancellationToken>());
+        await cleanup.DidNotReceive().CleanupForProTierAsync(Arg.Any<int>(), Arg.Any<CancellationToken>());
+        await Assert.That(await CountAuditRowsAsync(dbFactory, AuditAction.SubscriptionUpgraded)).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task HandlePaymentFailedAsync_EnterpriseTenant_KeepsTheSubscriptionActive()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        await SeedEnterpriseSubscriptionAsync(dbFactory);
+        BillingWebhookHandler handler = CreateHandler(dbFactory);
+
+        await handler.HandlePaymentFailedAsync(1, CancellationToken.None);
+
+        TenantSubscription? row = await dbFactory.Context.TenantSubscriptions.FirstOrDefaultAsync(s => s.TenantId == 1);
+        await Assert.That(row!.Tier).IsEqualTo(SubscriptionTier.Enterprise);
+        await Assert.That(row.Status).IsEqualTo(SubscriptionStatus.Active);
+    }
+
+    [Test]
+    public async Task HandlePaymentSucceededAsync_EnterpriseTenant_DoesNotRestoreOrAudit()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        await SeedEnterpriseSubscriptionAsync(dbFactory);
+        IBuiltInAlertRuleProvisioner provisioner = Substitute.For<IBuiltInAlertRuleProvisioner>();
+        BillingWebhookHandler handler = CreateHandler(dbFactory, provisioner: provisioner);
+
+        await handler.HandlePaymentSucceededAsync(1, CancellationToken.None);
+
+        await provisioner.DidNotReceive().RestoreForTierAsync(
+            Arg.Any<int>(), Arg.Any<TenantSubscription?>(), Arg.Any<SubscriptionTier>(), Arg.Any<SubscriptionStatus>(), Arg.Any<CancellationToken>());
+        await Assert.That(await CountAuditRowsAsync(dbFactory, AuditAction.SubscriptionUpgraded)).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task HandleSubscriptionUpdatedAsync_EnterpriseTenant_KeepsTheAgreementTermEnd()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        await SeedEnterpriseSubscriptionAsync(dbFactory);
+        BillingWebhookHandler handler = CreateHandler(dbFactory);
+
+        await handler.HandleSubscriptionUpdatedAsync(1, new DateTimeOffset(2026, 11, 1, 0, 0, 0, TimeSpan.Zero), CancellationToken.None);
+
+        TenantSubscription? row = await dbFactory.Context.TenantSubscriptions.FirstOrDefaultAsync(s => s.TenantId == 1);
+        await Assert.That(row!.CurrentPeriodEnd.HasValue).IsTrue();
+        TimeSpan difference = (row.CurrentPeriodEnd!.Value - EnterpriseTermEnd).Duration();
+        await Assert.That(difference.TotalSeconds).IsLessThan(2);
     }
 }

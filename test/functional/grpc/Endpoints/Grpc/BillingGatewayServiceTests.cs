@@ -665,7 +665,83 @@ public sealed class BillingGatewayServiceTests
         await Assert.That(updated.Tier).IsEqualTo(SubscriptionTier.Pro);
     }
 
+    /// <summary>
+    /// An Enterprise tenant is billed by its agreement, not by Stripe, so every Stripe-originated action
+    /// is acknowledged as delivered and changes nothing. A failure here would make billing-api retry an
+    /// event that can never apply.
+    /// </summary>
+    [Test]
+    [Arguments(BillingAction.UpgradeToPro)]
+    [Arguments(BillingAction.UpgradeToTeam)]
+    [Arguments(BillingAction.DowngradeToFree)]
+    [Arguments(BillingAction.DowngradeToPro)]
+    [Arguments(BillingAction.SetPastDue)]
+    [Arguments(BillingAction.SetActive)]
+    [Arguments(BillingAction.CancelAccount)]
+    public async Task ProcessBillingAction_EnterpriseTenant_IsAcknowledgedAndIgnored(BillingAction action)
+    {
+        using FunctionalTestFactory factory = new();
+        factory.WithInternalClientSubjects(PermittedClientSubject);
+        using DatabaseContext db = factory.CreateDbContext();
+        string externalId = $"ext-{Guid.NewGuid():N}";
+        int tenantId = await SeedTenantWithSubscription(db, externalId, SubscriptionTier.Enterprise);
+
+        using GrpcChannel channel = CreateChannel(factory);
+        BillingGateway.BillingGatewayClient client = new(channel);
+
+        BillingActionResponse response = await client.ProcessBillingActionAsync(
+            new BillingActionRequest { TenantExternalId = externalId, Action = action }, Headers());
+
+        TenantSubscription? row = await db.TenantSubscriptions.FirstOrDefaultAsync(s => s.TenantId == tenantId);
+        await Assert.That(response.Success).IsTrue();
+        await Assert.That(response.Message).Contains("Enterprise");
+        await Assert.That(row!.Tier).IsEqualTo(SubscriptionTier.Enterprise);
+        await Assert.That(row.Status).IsEqualTo(SubscriptionStatus.Active);
+    }
+
+    /// <summary>
+    /// The period end of an Enterprise tenant is the end of its agreement term. A Stripe period-end
+    /// update must be acknowledged without moving it.
+    /// </summary>
+    [Test]
+    public async Task ProcessBillingAction_UpdatePeriodEnd_EnterpriseTenant_KeepsTheTermEnd()
+    {
+        using FunctionalTestFactory factory = new();
+        factory.WithInternalClientSubjects(PermittedClientSubject);
+        using DatabaseContext db = factory.CreateDbContext();
+        string externalId = $"ext-{Guid.NewGuid():N}";
+        int tenantId = await SeedTenantWithSubscription(db, externalId, SubscriptionTier.Enterprise);
+        DateTimeOffset termEnd = new(2027, 10, 4, 23, 59, 59, TimeSpan.Zero);
+        await db.TenantSubscriptions
+            .Where(s => s.TenantId == tenantId)
+            .Set(s => s.CurrentPeriodEnd, termEnd)
+            .UpdateAsync();
+
+        using GrpcChannel channel = CreateChannel(factory);
+        BillingGateway.BillingGatewayClient client = new(channel);
+
+        BillingActionResponse response = await client.ProcessBillingActionAsync(
+            new BillingActionRequest
+            {
+                TenantExternalId = externalId,
+                Action = BillingAction.UpdatePeriodEnd,
+                CurrentPeriodEnd = Timestamp.FromDateTimeOffset(new DateTimeOffset(2026, 11, 1, 0, 0, 0, TimeSpan.Zero))
+            }, Headers());
+
+        TenantSubscription? row = await db.TenantSubscriptions.FirstOrDefaultAsync(s => s.TenantId == tenantId);
+        await Assert.That(response.Success).IsTrue();
+        await Assert.That(row!.Tier).IsEqualTo(SubscriptionTier.Enterprise);
+        await Assert.That(row.CurrentPeriodEnd.HasValue).IsTrue();
+        TimeSpan difference = (row.CurrentPeriodEnd!.Value - termEnd).Duration();
+        await Assert.That(difference.TotalSeconds).IsLessThan(2);
+    }
+
     // ========== Helpers ==========
+
+    private static Metadata Headers()
+    {
+        return new Metadata { { TestClientCertificateMiddleware.SubjectHeader, PermittedClientSubject } };
+    }
 
     private static GrpcChannel CreateChannel(FunctionalTestFactory factory)
     {

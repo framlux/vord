@@ -8,6 +8,7 @@ using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Services.Core.Alerts;
 using Framlux.FleetManagement.Services.Core.Billing;
 using Framlux.FleetManagement.Services.Core.Infrastructure;
+using Microsoft.Extensions.Logging;
 
 namespace Framlux.FleetManagement.Services.Core.Handlers;
 
@@ -22,6 +23,7 @@ public sealed class BillingWebhookHandler : IBillingWebhookHandler
     private readonly IBuiltInAlertRuleProvisioner _builtInProvisioner;
     private readonly IDowngradeCleanupService _downgradeCleanupService;
     private readonly RetentionReclassifyDispatcher _reclassifyDispatcher;
+    private readonly ILogger<BillingWebhookHandler> _logger;
 
     /// <summary>
     /// Creates a new instance of the <see cref="BillingWebhookHandler"/> class.
@@ -32,7 +34,8 @@ public sealed class BillingWebhookHandler : IBillingWebhookHandler
         ISubscriptionRepository subscriptionRepo,
         IBuiltInAlertRuleProvisioner builtInProvisioner,
         IDowngradeCleanupService downgradeCleanupService,
-        RetentionReclassifyDispatcher reclassifyDispatcher)
+        RetentionReclassifyDispatcher reclassifyDispatcher,
+        ILogger<BillingWebhookHandler> logger)
     {
         ArgumentNullException.ThrowIfNull(transactionProvider);
         ArgumentNullException.ThrowIfNull(auditLog);
@@ -40,6 +43,7 @@ public sealed class BillingWebhookHandler : IBillingWebhookHandler
         ArgumentNullException.ThrowIfNull(builtInProvisioner);
         ArgumentNullException.ThrowIfNull(downgradeCleanupService);
         ArgumentNullException.ThrowIfNull(reclassifyDispatcher);
+        ArgumentNullException.ThrowIfNull(logger);
 
         _transactionProvider = transactionProvider;
         _auditLog = auditLog;
@@ -47,6 +51,7 @@ public sealed class BillingWebhookHandler : IBillingWebhookHandler
         _builtInProvisioner = builtInProvisioner;
         _downgradeCleanupService = downgradeCleanupService;
         _reclassifyDispatcher = reclassifyDispatcher;
+        _logger = logger;
     }
 
     /// <inheritdoc/>
@@ -58,7 +63,16 @@ public sealed class BillingWebhookHandler : IBillingWebhookHandler
 
         using IDatabaseTransaction transaction = await _transactionProvider.BeginTransactionAsync(ct);
 
-        await _subscriptionRepo.UpdateSubscriptionStateAsync(tenantId, tier, SubscriptionStatus.Active, cancellationToken: ct);
+        int updated = await _subscriptionRepo.UpdateSubscriptionStateAsync(tenantId, tier, SubscriptionStatus.Active, cancellationToken: ct);
+        if (updated == 0)
+        {
+            // No row changed: the tenant has no subscription, or is on an Enterprise agreement that
+            // Stripe does not own. Either way there is no upgrade to record or provision for.
+            _logger.LogInformation(
+                "Billing: checkout completion for tenant {TenantId} changed no subscription; skipping the upgrade", tenantId);
+
+            return;
+        }
 
         await _auditLog.InsertAuditLogAsync(AuditHelper.Create(
             tenantId, null, null,
@@ -80,7 +94,13 @@ public sealed class BillingWebhookHandler : IBillingWebhookHandler
     /// <inheritdoc/>
     public async Task HandleSubscriptionUpdatedAsync(int tenantId, DateTimeOffset currentPeriodEnd, CancellationToken ct)
     {
-        await _subscriptionRepo.UpdateSubscriptionPeriodEndAsync(tenantId, currentPeriodEnd, ct);
+        int updated = await _subscriptionRepo.UpdateSubscriptionPeriodEndAsync(tenantId, currentPeriodEnd, ct);
+        if (updated == 0)
+        {
+            // An Enterprise tenant's period end is its agreement term, which Stripe does not own.
+            _logger.LogDebug(
+                "Billing: period end update for tenant {TenantId} changed no subscription", tenantId);
+        }
     }
 
     /// <inheritdoc/>
@@ -92,7 +112,17 @@ public sealed class BillingWebhookHandler : IBillingWebhookHandler
         // the subscription is deactivated entirely.
         using IDatabaseTransaction transaction = await _transactionProvider.BeginTransactionAsync(ct);
 
-        await _subscriptionRepo.UpdateSubscriptionStateAsync(tenantId, SubscriptionTier.Free, SubscriptionStatus.Active, clearCurrentPeriodEnd: true, cancellationToken: ct);
+        int updated = await _subscriptionRepo.UpdateSubscriptionStateAsync(tenantId, SubscriptionTier.Free, SubscriptionStatus.Active, clearCurrentPeriodEnd: true, cancellationToken: ct);
+        if (updated == 0)
+        {
+            // No row changed: the tenant has no subscription, or is on an Enterprise agreement that
+            // Stripe does not own. Either way there is nothing to clean up.
+            _logger.LogInformation(
+                "Billing: subscription deletion for tenant {TenantId} changed no subscription; skipping the Free downgrade", tenantId);
+
+            return;
+        }
+
         await _auditLog.InsertAuditLogAsync(AuditHelper.Create(
             tenantId, null, null,
             AuditAction.SubscriptionDowngraded, AuditResourceType.Subscription,
@@ -109,7 +139,14 @@ public sealed class BillingWebhookHandler : IBillingWebhookHandler
     /// <inheritdoc/>
     public async Task HandlePaymentFailedAsync(int tenantId, CancellationToken ct)
     {
-        await _subscriptionRepo.UpdateSubscriptionStateAsync(tenantId, tier: null, SubscriptionStatus.PastDue, cancellationToken: ct);
+        int updated = await _subscriptionRepo.UpdateSubscriptionStateAsync(tenantId, tier: null, SubscriptionStatus.PastDue, cancellationToken: ct);
+        if (updated == 0)
+        {
+            // No row changed: the tenant has no subscription, or is on an Enterprise agreement that
+            // is invoiced outside Stripe and so cannot fall into dunning.
+            _logger.LogInformation(
+                "Billing: payment failure for tenant {TenantId} changed no subscription; not marking it past due", tenantId);
+        }
     }
 
     /// <inheritdoc/>
@@ -122,7 +159,16 @@ public sealed class BillingWebhookHandler : IBillingWebhookHandler
 
         using IDatabaseTransaction transaction = await _transactionProvider.BeginTransactionAsync(ct);
 
-        await _subscriptionRepo.UpdateSubscriptionStateAsync(tenantId, tier: null, SubscriptionStatus.Active, cancellationToken: ct);
+        int updated = await _subscriptionRepo.UpdateSubscriptionStateAsync(tenantId, tier: null, SubscriptionStatus.Active, cancellationToken: ct);
+        if (updated == 0)
+        {
+            // No row changed: the tenant has no subscription, or is on an Enterprise agreement whose
+            // status Stripe does not own. There is no recovered payment to record or restore for.
+            _logger.LogInformation(
+                "Billing: payment success for tenant {TenantId} changed no subscription; skipping the reactivation", tenantId);
+
+            return;
+        }
 
         await _auditLog.InsertAuditLogAsync(AuditHelper.Create(
             tenantId, null, null,
@@ -135,8 +181,8 @@ public sealed class BillingWebhookHandler : IBillingWebhookHandler
         _reclassifyDispatcher.DispatchPending();
 
         // An invoice carries no tier of its own, so the tier is whatever the tenant already held; only
-        // the status moved. A tenant with no subscription row was not written to at all above, so
-        // there is nothing to restore it to.
+        // the status moved. A row that only appeared after the read above has no prior state to
+        // restore from.
         if (priorSubscription is null)
         {
             return;
@@ -151,7 +197,16 @@ public sealed class BillingWebhookHandler : IBillingWebhookHandler
     {
         using IDatabaseTransaction transaction = await _transactionProvider.BeginTransactionAsync(ct);
 
-        await _subscriptionRepo.UpdateSubscriptionStateAsync(tenantId, SubscriptionTier.Pro, SubscriptionStatus.Active, clearCurrentPeriodEnd: true, cancellationToken: ct);
+        int updated = await _subscriptionRepo.UpdateSubscriptionStateAsync(tenantId, SubscriptionTier.Pro, SubscriptionStatus.Active, clearCurrentPeriodEnd: true, cancellationToken: ct);
+        if (updated == 0)
+        {
+            // No row changed: the tenant has no subscription, or is on an Enterprise agreement that
+            // Stripe does not own. Either way there are no Team-only resources to freeze.
+            _logger.LogInformation(
+                "Billing: downgrade to Pro for tenant {TenantId} changed no subscription; skipping the freeze", tenantId);
+
+            return;
+        }
 
         await _auditLog.InsertAuditLogAsync(AuditHelper.Create(
             tenantId, null, null,
@@ -178,7 +233,16 @@ public sealed class BillingWebhookHandler : IBillingWebhookHandler
 
         using IDatabaseTransaction transaction = await _transactionProvider.BeginTransactionAsync(ct);
 
-        await _subscriptionRepo.UpdateSubscriptionStateAsync(tenantId, tier, SubscriptionStatus.Active, cancellationToken: ct);
+        int updated = await _subscriptionRepo.UpdateSubscriptionStateAsync(tenantId, tier, SubscriptionStatus.Active, cancellationToken: ct);
+        if (updated == 0)
+        {
+            // No row changed: the tenant has no subscription, or is on an Enterprise agreement that
+            // Stripe does not own. Either way there is no drift to repair.
+            _logger.LogInformation(
+                "Billing: tier correction for tenant {TenantId} changed no subscription; skipping the repair", tenantId);
+
+            return;
+        }
 
         await _auditLog.InsertAuditLogAsync(AuditHelper.Create(
             tenantId, null, null,
@@ -212,7 +276,16 @@ public sealed class BillingWebhookHandler : IBillingWebhookHandler
     {
         using IDatabaseTransaction transaction = await _transactionProvider.BeginTransactionAsync(ct);
 
-        await _subscriptionRepo.UpdateSubscriptionStateAsync(tenantId, tier: null, SubscriptionStatus.Canceled, cancellationToken: ct);
+        int updated = await _subscriptionRepo.UpdateSubscriptionStateAsync(tenantId, tier: null, SubscriptionStatus.Canceled, cancellationToken: ct);
+        if (updated == 0)
+        {
+            // No row changed: the tenant has no subscription, or is on an Enterprise agreement that
+            // Stripe does not own. Either way there is nothing to cancel or clean up.
+            _logger.LogInformation(
+                "Billing: account cancellation for tenant {TenantId} changed no subscription; skipping the cleanup", tenantId);
+
+            return;
+        }
 
         await _auditLog.InsertAuditLogAsync(AuditHelper.Create(
             tenantId, null, null,

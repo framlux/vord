@@ -58,6 +58,28 @@ public sealed class BillingGatewayService : BillingGateway.BillingGatewayBase
                 $"Tenant not found for external ID: {request.TenantExternalId}"));
         }
 
+        ISubscriptionRepository subscriptionRepository = scope.ServiceProvider.GetRequiredService<ISubscriptionRepository>();
+        TenantSubscription? subscription = await subscriptionRepository.GetSubscriptionForTenantAsync(
+            tenant.Id, context.CancellationToken);
+
+        // An Enterprise tenant is billed by its agreement, outside Stripe, so no Stripe-originated
+        // action applies to it — including a late deletion from a subscription it had before
+        // converting. Acknowledge rather than fail, so billing-api records the event as delivered
+        // instead of retrying it. The repository's writes refuse Enterprise rows too; this check is
+        // what keeps the refusal visible in the logs.
+        if ((subscription is not null) && (subscription.Tier == SubscriptionTier.Enterprise))
+        {
+            _logger.LogInformation(
+                "Billing gRPC: ignored {Action} for tenant {TenantId}, which is on an Enterprise agreement",
+                request.Action, tenant.Id);
+
+            return new BillingActionResponse
+            {
+                Success = true,
+                Message = "Ignored: tenant is on an Enterprise agreement"
+            };
+        }
+
         switch (request.Action)
         {
             case BillingAction.UpgradeToPro:

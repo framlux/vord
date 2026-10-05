@@ -29,6 +29,7 @@ public sealed class BillingGatewayServiceTests
     private const int TenantId = 42;
 
     private readonly ITenantRepository _tenantRepository;
+    private readonly ISubscriptionRepository _subscriptionRepository;
     private readonly IBillingWebhookHandler _webhookHandler;
     private readonly ILogger<BillingGatewayService> _logger;
 
@@ -38,6 +39,7 @@ public sealed class BillingGatewayServiceTests
     public BillingGatewayServiceTests()
     {
         _tenantRepository = Substitute.For<ITenantRepository>();
+        _subscriptionRepository = Substitute.For<ISubscriptionRepository>();
         _webhookHandler = Substitute.For<IBillingWebhookHandler>();
         _logger = Substitute.For<ILogger<BillingGatewayService>>();
     }
@@ -72,6 +74,7 @@ public sealed class BillingGatewayServiceTests
     {
         IServiceProvider serviceProvider = Substitute.For<IServiceProvider>();
         serviceProvider.GetService(typeof(ITenantRepository)).Returns(_tenantRepository);
+        serviceProvider.GetService(typeof(ISubscriptionRepository)).Returns(_subscriptionRepository);
         serviceProvider.GetService(typeof(IBillingWebhookHandler)).Returns(_webhookHandler);
 
         IServiceScope scope = Substitute.For<IServiceScope>();
@@ -247,6 +250,66 @@ public sealed class BillingGatewayServiceTests
         BillingActionResponse response = await service.ProcessBillingAction(request, context);
 
         await Assert.That(response.Success).IsTrue();
+        await _webhookHandler.Received(1).HandleCheckoutCompletedAsync(
+            TenantId, SubscriptionTier.Pro, Arg.Any<CancellationToken>());
+    }
+
+    // ────────────────────────────────────────────────────────────────
+    // Enterprise tenants
+    // ────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// A tenant on an Enterprise agreement is acknowledged as delivered and no action reaches the
+    /// webhook handler, for every Stripe-originated action.
+    /// </summary>
+    [Test]
+    [Arguments(BillingAction.UpgradeToPro)]
+    [Arguments(BillingAction.UpgradeToTeam)]
+    [Arguments(BillingAction.DowngradeToFree)]
+    [Arguments(BillingAction.DowngradeToPro)]
+    [Arguments(BillingAction.UpdatePeriodEnd)]
+    [Arguments(BillingAction.SetPastDue)]
+    [Arguments(BillingAction.SetActive)]
+    [Arguments(BillingAction.CancelAccount)]
+    public async Task ProcessBillingAction_EnterpriseTenant_IsAcknowledgedWithoutReachingTheHandler(BillingAction action)
+    {
+        BillingGatewayService service = CreateService();
+        ServerCallContext context = CreateContext();
+        SetupTenantFound();
+        _subscriptionRepository.GetSubscriptionForTenantAsync(TenantId, Arg.Any<CancellationToken>())
+            .Returns(new TenantSubscription
+            {
+                TenantId = TenantId,
+                Tier = SubscriptionTier.Enterprise,
+                Status = SubscriptionStatus.Active,
+                CreatedAt = DateTimeOffset.UtcNow,
+                UpdatedAt = DateTimeOffset.UtcNow
+            });
+        BillingActionRequest request = CreateRequest(action);
+        request.CurrentPeriodEnd = Timestamp.FromDateTimeOffset(new DateTimeOffset(2026, 11, 1, 0, 0, 0, TimeSpan.Zero));
+
+        BillingActionResponse response = await service.ProcessBillingAction(request, context);
+
+        await Assert.That(response.Success).IsTrue();
+        await Assert.That(response.Message).IsEqualTo("Ignored: tenant is on an Enterprise agreement");
+        await Assert.That(_webhookHandler.ReceivedCalls().Count()).IsEqualTo(0);
+    }
+
+    /// <summary>
+    /// A tenant with no subscription row is not Enterprise, so its action still reaches the handler.
+    /// </summary>
+    [Test]
+    public async Task ProcessBillingAction_TenantWithoutSubscription_StillReachesTheHandler()
+    {
+        BillingGatewayService service = CreateService();
+        ServerCallContext context = CreateContext();
+        SetupTenantFound();
+        _subscriptionRepository.GetSubscriptionForTenantAsync(TenantId, Arg.Any<CancellationToken>())
+            .Returns((TenantSubscription?)null);
+
+        BillingActionResponse response = await service.ProcessBillingAction(CreateRequest(BillingAction.UpgradeToPro), context);
+
+        await Assert.That(response.Message).IsEqualTo("OK");
         await _webhookHandler.Received(1).HandleCheckoutCompletedAsync(
             TenantId, SubscriptionTier.Pro, Arg.Any<CancellationToken>());
     }

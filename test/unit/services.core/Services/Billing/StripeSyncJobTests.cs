@@ -8,9 +8,13 @@ using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Services.Core.Billing;
 using Framlux.FleetManagement.Services.Core.Handlers;
+using Framlux.FleetManagement.Test.Infrastructure;
 using Framlux.Vord.BillingGrpc;
 using Hangfire;
+using LinqToDB;
+using LinqToDB.Async;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
 
 namespace Framlux.FleetManagement.Test.Services.Billing;
@@ -47,6 +51,41 @@ public sealed class StripeSyncJobTests
 
         await sut.BillingClient.DidNotReceive().GetSubscriptionStatusAsync(
             Arg.Any<string>(), Arg.Any<CancellationToken>());
+    }
+
+    /// <summary>
+    /// Enterprise is invoiced outside Stripe, so billing-api has nothing to report for it and asking
+    /// would only invite a "none" answer or, worse, a mismatch to correct. This runs against the real
+    /// repository because the guarantee lives in the query that lists the subscriptions to reconcile.
+    /// </summary>
+    [Test]
+    public async Task SyncPaidSubscriptions_NeverAsksBillingApiAboutEnterprise()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        Tenant teamTenant = TestDataBuilder.BuildTenant(externalId: "ext-team");
+        teamTenant.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(teamTenant);
+        Tenant enterpriseTenant = TestDataBuilder.BuildTenant(externalId: "ext-enterprise");
+        enterpriseTenant.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(enterpriseTenant);
+        await dbFactory.Context.InsertWithInt32IdentityAsync(
+            TestDataBuilder.BuildSubscription(tenantId: teamTenant.Id, tier: SubscriptionTier.Team));
+        TenantSubscription enterpriseSubscription =
+            TestDataBuilder.BuildSubscription(tenantId: enterpriseTenant.Id, tier: SubscriptionTier.Enterprise);
+        enterpriseSubscription.AppliedAgreementRevision = 1;
+        enterpriseSubscription.CurrentPeriodEnd = new DateTimeOffset(2027, 10, 4, 23, 59, 59, TimeSpan.Zero);
+        await dbFactory.Context.InsertWithInt32IdentityAsync(enterpriseSubscription);
+
+        DatabaseRepository repo = new(dbFactory.Context, NullLogger<DatabaseRepository>.Instance);
+        IBillingApiClient billingApiClient = Substitute.For<IBillingApiClient>();
+        billingApiClient.GetSubscriptionStatusAsync("ext-team", Arg.Any<CancellationToken>())
+            .Returns(DefaultStripeStatus with { StripeStatus = "none" });
+        StripeSyncJob job = new(
+            repo, repo, Substitute.For<ISubscriptionService>(), billingApiClient,
+            Substitute.For<IBillingWebhookHandler>(), Substitute.For<ILogger<StripeSyncJob>>());
+
+        await job.RunAsync(CancellationToken.None);
+
+        await billingApiClient.Received(1).GetSubscriptionStatusAsync("ext-team", Arg.Any<CancellationToken>());
+        await billingApiClient.DidNotReceive().GetSubscriptionStatusAsync("ext-enterprise", Arg.Any<CancellationToken>());
     }
 
     [Test]
