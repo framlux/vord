@@ -119,6 +119,12 @@ public sealed class GrpcStatusMetricTagTests
 
         await Assert.That(response.IsSuccessStatusCode).IsTrue();
 
+        // The hosting layer records the request duration as the pipeline unwinds, which can happen
+        // after the client has already read the response, so a snapshot taken the instant the call
+        // returns is sometimes still empty. The collector signals when a measurement lands, so this
+        // waits on that signal rather than sleeping; the timeout only keeps a broken run from hanging.
+        await durations.WaitForMeasurementsAsync(minCount: 1).WaitAsync(MeasurementWaitTimeout);
+
         IReadOnlyList<CollectedMeasurement<double>> measurements = durations.GetMeasurementSnapshot();
         await Assert.That(measurements.Count).IsGreaterThan(0);
 
