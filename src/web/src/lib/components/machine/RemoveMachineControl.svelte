@@ -9,6 +9,10 @@
 	let { machineId, machineName, csrfToken }: { machineId: number; machineName: string; csrfToken: string | undefined } = $props();
 
 	const uninstallGuide = 'https://vordfleet.dev/support/fleet-management/agent-troubleshooting';
+	// The API client reports every 403 as a bare "Forbidden" without reading the response body, so the
+	// server's reason (a read-only subscription or an insufficient role) never reaches this component.
+	const forbiddenMessage =
+		"You can't remove hosts right now. Your role or subscription doesn't allow changes; if your subscription is canceled, reactivate it from the billing page.";
 
 	let confirming = $state(false);
 	let removing = $state(false);
@@ -24,6 +28,7 @@
 
 		removing = true;
 		error = '';
+		alreadyGone = false;
 		try {
 			const api = new ApiClient('', fetch, csrfToken);
 			await api.deleteMachine(machineId);
@@ -34,6 +39,8 @@
 			if (err instanceof ApiError && err.status === 404) {
 				alreadyGone = true;
 				error = 'This host has already been removed.';
+			} else if (err instanceof ApiError && err.status === 403) {
+				error = forbiddenMessage;
 			} else {
 				error = err instanceof Error ? err.message : 'Failed to remove the host.';
 			}
@@ -51,7 +58,7 @@
 			<a href={uninstallGuide} target="_blank" rel="external noopener noreferrer" class="font-medium underline">How to uninstall the agent</a>
 		</p>
 		<p class="mt-2 text-sm text-surface-700 dark:text-surface-300">
-			Removing a host deletes it from your fleet. Its history is no longer shown.
+			Removing a host deletes it from your fleet. It no longer appears in your machine list or dashboard.
 		</p>
 		<div class="mt-3 flex items-center gap-2">
 			<button
@@ -62,7 +69,7 @@
 				Yes, remove
 			</button>
 			<button
-				onclick={() => { confirming = false; error = ''; }}
+				onclick={() => { confirming = false; error = ''; alreadyGone = false; }}
 				disabled={removing}
 				class="rounded border border-surface-300 px-3 py-1.5 text-xs font-medium text-surface-700 hover:bg-surface-50 dark:border-surface-600 dark:text-surface-300 dark:hover:bg-surface-700"
 			>

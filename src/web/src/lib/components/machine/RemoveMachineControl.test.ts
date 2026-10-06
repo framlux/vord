@@ -45,6 +45,7 @@ describe('RemoveMachineControl', () => {
 		await fireEvent.click(screen.getByRole('button', { name: 'Remove host' }));
 
 		expect(screen.getByText(/Uninstall the agent from web-01 first/)).toBeInTheDocument();
+		expect(screen.getByText('Removing a host deletes it from your fleet. It no longer appears in your machine list or dashboard.')).toBeInTheDocument();
 		expect(screen.getByRole('link', { name: 'How to uninstall the agent' })).toHaveAttribute(
 			'href',
 			'https://vordfleet.dev/support/fleet-management/agent-troubleshooting'
@@ -88,25 +89,35 @@ describe('RemoveMachineControl', () => {
 		expect(deleteMachine).toHaveBeenCalledTimes(1);
 	});
 
-	it("shows the server's reason when the tenant may not make changes", async () => {
-		deleteMachine.mockRejectedValue(new ApiError(403, 'Your subscription is canceled; changes are read-only.'));
+	it('does not offer the way back to the list once the user backs out of a failed removal and fails differently', async () => {
+		deleteMachine.mockRejectedValueOnce(new ApiError(404, 'Not found'));
+		deleteMachine.mockRejectedValueOnce(new Error('Network down'));
 		renderControl();
 
 		await fireEvent.click(screen.getByRole('button', { name: 'Remove host' }));
 		await fireEvent.click(screen.getByRole('button', { name: 'Yes, remove' }));
+		expect(await screen.findByRole('link', { name: 'Back to machines' })).toBeInTheDocument();
 
-		expect(await screen.findByRole('alert')).toHaveTextContent('Your subscription is canceled; changes are read-only.');
-		expect(goto).not.toHaveBeenCalled();
+		await fireEvent.click(screen.getByRole('button', { name: 'No' }));
+		await fireEvent.click(screen.getByRole('button', { name: 'Remove host' }));
+		await fireEvent.click(screen.getByRole('button', { name: 'Yes, remove' }));
+
+		expect(await screen.findByRole('alert')).toHaveTextContent('Network down');
+		expect(screen.queryByRole('link', { name: 'Back to machines' })).not.toBeInTheDocument();
 	});
 
-	it('says the host is already gone when another tab removed it', async () => {
-		deleteMachine.mockRejectedValue(new ApiError(404, 'Machine not found'));
+	it('does not offer the way back to the list when a retry fails differently without backing out', async () => {
+		deleteMachine.mockRejectedValueOnce(new ApiError(404, 'Not found'));
+		deleteMachine.mockRejectedValueOnce(new Error('Network down'));
 		renderControl();
 
 		await fireEvent.click(screen.getByRole('button', { name: 'Remove host' }));
 		await fireEvent.click(screen.getByRole('button', { name: 'Yes, remove' }));
+		expect(await screen.findByRole('link', { name: 'Back to machines' })).toBeInTheDocument();
 
-		expect(await screen.findByRole('alert')).toHaveTextContent('This host has already been removed.');
-		expect(screen.getByRole('link', { name: 'Back to machines' })).toHaveAttribute('href', '/machines');
+		await fireEvent.click(screen.getByRole('button', { name: 'Yes, remove' }));
+
+		await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Network down'));
+		expect(screen.queryByRole('link', { name: 'Back to machines' })).not.toBeInTheDocument();
 	});
 });
