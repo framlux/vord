@@ -23,6 +23,7 @@
 	import MachineHero from '$lib/components/machine/MachineHero.svelte';
 	import VitalsBar from '$lib/components/machine/VitalsBar.svelte';
 	import AgentVersionRow from '$lib/components/machine/AgentVersionRow.svelte';
+	import RemoveMachineControl from '$lib/components/machine/RemoveMachineControl.svelte';
 	import { CircleAlert, Terminal, Pencil, History, ShieldAlert } from 'lucide-svelte';
 	import { invalidateAll } from '$app/navigation';
 	import { enhance } from '$app/forms';
@@ -893,6 +894,10 @@
 					</table>
 				</div>
 			</div>
+		{/if}
+
+		{#if canAdminMachines(data.user)}
+			<RemoveMachineControl machineId={machine.id} machineName={machine.name} csrfToken={data.user?.csrfToken ?? undefined} />
 		{/if}
 
 	{:else if activeTab === 'hardware'}

@@ -5,7 +5,7 @@
 import { describe, it, expect, vi } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/svelte';
 import '@testing-library/jest-dom/vitest';
-import { MachineType, OperatingSystem } from '$lib/api/types';
+import { MachineType, OperatingSystem, UserAccountRole } from '$lib/api/types';
 import type {
 	AlertRuleDto,
 	MachineDetailDto,
@@ -509,5 +509,21 @@ describe('machine detail memory info', () => {
 		expect(screen.queryByTestId('memory-available')).not.toBeInTheDocument();
 		expect(screen.queryByTestId('memory-swap')).not.toBeInTheDocument();
 		expect(screen.queryByTestId('memory-info-as-of')).not.toBeInTheDocument();
+	});
+});
+
+describe('machine detail removal', () => {
+	it('offers a machine admin the Remove control', () => {
+		render(MachinePage, { props: { data: makeData(makeSubscription(), builtIns) } });
+
+		expect(screen.getByRole('button', { name: 'Remove host' })).toBeInTheDocument();
+	});
+
+	it('offers a viewer no way to remove the host', () => {
+		const data = makeData(makeSubscription(), builtIns);
+		data.user = { ...data.user, tenants: [{ tenantId: 1, tenantName: 'Acme Corp', role: String(UserAccountRole.Viewer) }] };
+		render(MachinePage, { props: { data } });
+
+		expect(screen.queryByRole('button', { name: 'Remove host' })).not.toBeInTheDocument();
 	});
 });
