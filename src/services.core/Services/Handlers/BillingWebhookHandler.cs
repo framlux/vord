@@ -141,20 +141,16 @@ public sealed class BillingWebhookHandler : IBillingWebhookHandler
             AuditAction.SubscriptionDowngraded, AuditResourceType.Subscription,
             tenantId.ToString(), "Downgraded to Free tier", null), ct);
 
-        // The cleanup is irreversible (machines beyond the Free limit are soft-deleted), so it runs
-        // inside this transaction: the tier write above holds the subscription row's lock until the
-        // commit, which makes an agreement being applied to this tenant wait for the cleanup instead of
-        // landing between a committed Free tier and a cleanup that would then hit an Enterprise tenant.
-        IReadOnlyList<string> trimmedApiKeyHashes = await _downgradeCleanupService.CleanupForFreeTierAsync(tenantId, ct);
+        // The cleanup runs inside this transaction: the tier write above holds the subscription row's
+        // lock until the commit, which makes an agreement being applied to this tenant wait for the
+        // cleanup instead of landing between a committed Free tier and a cleanup that would then hit an
+        // Enterprise tenant.
+        await _downgradeCleanupService.CleanupForFreeTierAsync(tenantId, ct);
 
         await transaction.CommitAsync(ct);
 
         // Post-commit: a tier change marked during the transaction is only queued now, never inside it.
         _reclassifyDispatcher.DispatchPending();
-
-        // Evicting before the commit would let a request that still sees the machine as active cache its
-        // key again, so the trimmed machines keep authenticating until the entry expires.
-        await _downgradeCleanupService.EvictApiKeysAsync(trimmedApiKeyHashes, ct);
     }
 
     /// <inheritdoc/>
@@ -312,13 +308,11 @@ public sealed class BillingWebhookHandler : IBillingWebhookHandler
             tenantId.ToString(), "Account canceled", null), ct);
 
         // Inside the transaction for the reason given in HandleSubscriptionDeletedAsync.
-        IReadOnlyList<string> trimmedApiKeyHashes = await _downgradeCleanupService.CleanupForFreeTierAsync(tenantId, ct);
+        await _downgradeCleanupService.CleanupForFreeTierAsync(tenantId, ct);
 
         await transaction.CommitAsync(ct);
 
         // Post-commit: a tier change marked during the transaction is only queued now, never inside it.
         _reclassifyDispatcher.DispatchPending();
-
-        await _downgradeCleanupService.EvictApiKeysAsync(trimmedApiKeyHashes, ct);
     }
 }

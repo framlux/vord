@@ -384,10 +384,7 @@ public sealed class SubscriptionRowLockLiveTests
 
     private static BillingWebhookHandler BuildWebhookHandler(DatabaseRepository repo, IDatabaseTransactionProvider transactionProvider)
     {
-        DowngradeCleanupService cleanup = new(
-            repo, repo, repo, repo, repo, repo,
-            Substitute.For<IApiKeyCacheInvalidator>(),
-            NullLogger<DowngradeCleanupService>.Instance);
+        DowngradeCleanupService cleanup = new(repo, repo, repo, NullLogger<DowngradeCleanupService>.Instance);
 
         return new BillingWebhookHandler(
             transactionProvider,

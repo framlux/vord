@@ -2,6 +2,8 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
+using System.Security.Cryptography;
+using System.Text;
 using Framlux.FleetManagement.Database;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
@@ -281,39 +283,33 @@ public class BillingWebhookHandlerTests
     }
 
     [Test]
-    public async Task HandleSubscriptionDeletedAsync_EndToEnd_TrimsMachinesToFreeLimit()
+    public async Task HandleSubscriptionDeletedAsync_EndToEnd_KeepsEveryMachine()
     {
-        // The full subscription.deleted flow with a real cleanup service must leave the tenant Free with
-        // no more active machines than the Free limit (3), keeping the oldest and trimming the newest.
+        // The full subscription.deleted flow with a real cleanup service must leave the tenant Free
+        // with every machine still registered and still able to authenticate, however far over the
+        // Free limit it is. Over the limit, registration refuses new machines instead.
         using TestDatabaseFactory dbFactory = new();
         await SeedTierFeatureLimitsAsync(dbFactory.Context);
         await dbFactory.Context.InsertWithInt32IdentityAsync(TestDataBuilder.BuildSubscription(tenantId: 1, tier: SubscriptionTier.Pro));
 
-        DateTimeOffset t0 = DateTimeOffset.UtcNow.AddDays(-10);
-        long[] ids = new long[5];
-        for (int i = 0; i < 5; i++)
+        const string newestKey = "key-of-the-newest-machine";
+        for (int i = 0; i < 4; i++)
         {
-            Machine m = TestDataBuilder.BuildMachine(tenantId: 1);
-            m.RegisteredOn = t0.AddDays(i); // ids[0] oldest ... ids[4] newest
-            ids[i] = await dbFactory.Context.InsertWithInt64IdentityAsync(m);
+            await dbFactory.Context.InsertWithInt64IdentityAsync(TestDataBuilder.BuildMachine(tenantId: 1));
         }
+        string newestKeyHash = Convert.ToHexStringLower(SHA256.HashData(Encoding.UTF8.GetBytes(newestKey)));
+        await dbFactory.Context.InsertWithInt64IdentityAsync(TestDataBuilder.BuildMachine(tenantId: 1, apiKeyHash: newestKeyHash));
 
         DatabaseRepository repo = new(dbFactory.Context, new NullLogger<DatabaseRepository>());
-        IApiKeyCacheInvalidator invalidator = Substitute.For<IApiKeyCacheInvalidator>();
-        DowngradeCleanupService cleanup = new(repo, repo, repo, repo, repo, repo, invalidator, new NullLogger<DowngradeCleanupService>());
+        DowngradeCleanupService cleanup = new(repo, repo, repo, new NullLogger<DowngradeCleanupService>());
         BillingWebhookHandler handler = CreateHandler(dbFactory, cleanupService: cleanup);
 
         await handler.HandleSubscriptionDeletedAsync(1, CancellationToken.None);
 
         TenantSubscription reverted = await dbFactory.Context.TenantSubscriptions.FirstAsync(s => s.TenantId == 1);
         await Assert.That(reverted.Tier).IsEqualTo(SubscriptionTier.Free);
-
-        int active = await dbFactory.Context.Machines.CountAsync(m => (m.TenantId == 1) && (m.IsDeleted == false));
-        await Assert.That(active).IsEqualTo(3);
-        // The three oldest survive and can still authenticate; the two newest were trimmed.
-        await Assert.That((await dbFactory.Context.Machines.FirstAsync(m => m.Id == ids[0])).IsDeleted).IsFalse();
-        await Assert.That((await dbFactory.Context.Machines.FirstAsync(m => m.Id == ids[4])).IsDeleted).IsTrue();
-        await invalidator.Received(2).InvalidateByHashAsync(Arg.Any<string>(), Arg.Any<CancellationToken>());
+        await Assert.That(await dbFactory.Context.Machines.CountAsync(m => (m.TenantId == 1) && (m.IsDeleted == false))).IsEqualTo(5);
+        await Assert.That(await repo.GetMachineByApiKeyAsync(newestKey, CancellationToken.None)).IsNotNull();
     }
 
     [Test]
@@ -592,21 +588,19 @@ public class BillingWebhookHandlerTests
     }
 
     /// <summary>
-    /// Trimming machines is irreversible, so it runs before the commit, and the cached API keys of
-    /// the trimmed machines are only evicted after it: evicting earlier lets a request that still sees
-    /// the machine as active cache its key again.
+    /// The Free cleanup runs before the commit, so the tier write's row lock makes a concurrent
+    /// agreement apply wait for it instead of landing between a committed Free tier and a cleanup that
+    /// would then hit an Enterprise tenant.
     /// </summary>
     [Test]
-    public async Task HandleSubscriptionDeletedAsync_CleansUpBeforeTheCommitAndEvictsKeysAfterIt()
+    public async Task HandleSubscriptionDeletedAsync_CleansUpBeforeTheCommit()
     {
         using TestDatabaseFactory dbFactory = new();
         await SeedTierFeatureLimitsAsync(dbFactory.Context);
         TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 1, tier: SubscriptionTier.Team);
         sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
         (IDatabaseTransaction transaction, IDatabaseTransactionProvider transactionProvider) = BuildObservableTransaction();
-        IReadOnlyList<string> trimmed = ["key-hash-1", "key-hash-2"];
         IDowngradeCleanupService cleanupService = Substitute.For<IDowngradeCleanupService>();
-        cleanupService.CleanupForFreeTierAsync(1, Arg.Any<CancellationToken>()).Returns(Task.FromResult(trimmed));
         BillingWebhookHandler handler = CreateHandler(dbFactory, cleanupService: cleanupService, transactionProvider: transactionProvider);
 
         await handler.HandleSubscriptionDeletedAsync(1, CancellationToken.None);
@@ -615,21 +609,18 @@ public class BillingWebhookHandlerTests
         {
             cleanupService.CleanupForFreeTierAsync(1, Arg.Any<CancellationToken>());
             transaction.CommitAsync(Arg.Any<CancellationToken>());
-            cleanupService.EvictApiKeysAsync(trimmed, Arg.Any<CancellationToken>());
         });
     }
 
     [Test]
-    public async Task HandleAccountCanceledAsync_CleansUpBeforeTheCommitAndEvictsKeysAfterIt()
+    public async Task HandleAccountCanceledAsync_CleansUpBeforeTheCommit()
     {
         using TestDatabaseFactory dbFactory = new();
         await SeedTierFeatureLimitsAsync(dbFactory.Context);
         TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 1, tier: SubscriptionTier.Team);
         sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
         (IDatabaseTransaction transaction, IDatabaseTransactionProvider transactionProvider) = BuildObservableTransaction();
-        IReadOnlyList<string> trimmed = ["key-hash-1"];
         IDowngradeCleanupService cleanupService = Substitute.For<IDowngradeCleanupService>();
-        cleanupService.CleanupForFreeTierAsync(1, Arg.Any<CancellationToken>()).Returns(Task.FromResult(trimmed));
         BillingWebhookHandler handler = CreateHandler(dbFactory, cleanupService: cleanupService, transactionProvider: transactionProvider);
 
         await handler.HandleAccountCanceledAsync(1, CancellationToken.None);
@@ -638,14 +629,13 @@ public class BillingWebhookHandlerTests
         {
             cleanupService.CleanupForFreeTierAsync(1, Arg.Any<CancellationToken>());
             transaction.CommitAsync(Arg.Any<CancellationToken>());
-            cleanupService.EvictApiKeysAsync(trimmed, Arg.Any<CancellationToken>());
         });
     }
 
     /// <summary>
     /// The tier change and the cleanup are one unit. If the cleanup fails the tier must not have
     /// changed, so the redelivered webhook runs the whole thing again instead of finding a tier that
-    /// is already Free and a tenant whose machines were never trimmed.
+    /// is already Free and a tenant whose alerting and integrations were never disabled.
     /// </summary>
     [Test]
     [Arguments(true)]
@@ -658,7 +648,7 @@ public class BillingWebhookHandlerTests
         sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
         IDowngradeCleanupService cleanupService = Substitute.For<IDowngradeCleanupService>();
         cleanupService.CleanupForFreeTierAsync(1, Arg.Any<CancellationToken>())
-            .Returns(Task.FromException<IReadOnlyList<string>>(new InvalidOperationException("cleanup failed")));
+            .Returns(Task.FromException(new InvalidOperationException("cleanup failed")));
         BillingWebhookHandler handler = CreateHandler(dbFactory, cleanupService: cleanupService);
 
         await Assert.ThrowsAsync<InvalidOperationException>(() => accountCanceled
@@ -669,7 +659,6 @@ public class BillingWebhookHandlerTests
         await Assert.That(row!.Tier).IsEqualTo(SubscriptionTier.Team);
         await Assert.That(row.Status).IsEqualTo(SubscriptionStatus.Active);
         await Assert.That(await CountAuditRowsAsync(dbFactory, AuditAction.SubscriptionDowngraded)).IsEqualTo(0);
-        await cleanupService.DidNotReceive().EvictApiKeysAsync(Arg.Any<IReadOnlyList<string>>(), Arg.Any<CancellationToken>());
     }
 
     /// <summary>
