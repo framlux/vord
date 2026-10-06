@@ -284,10 +284,10 @@ public sealed class DowngradeSubscriptionEndpointTests
     }
 
     [Test]
-    public async Task MachineCountExceedsFreeTierLimit_Returns400()
+    public async Task MachineCountExceedsFreeTierLimit_IsScheduledLikeAnyOtherDowngrade()
     {
-        // When the tenant has more active machines than the Free tier allows,
-        // the downgrade to Free must be blocked with an informative error
+        // A tenant over the Free limit may downgrade: nothing is deleted any
+        // more, so the block that asked them to remove machines first protected nothing.
         using FunctionalTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
         (int tenantId, int userId) = await SeedBillingEnvironment(db, tier: SubscriptionTier.Pro);
@@ -331,18 +331,15 @@ public sealed class DowngradeSubscriptionEndpointTests
             "/api/v1/billing/downgrade",
             BuildDowngradeContent("free"));
 
-        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.BadRequest);
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
 
         string body = await response.Content.ReadAsStringAsync();
         using JsonDocument doc = JsonDocument.Parse(body);
         JsonElement root = doc.RootElement;
 
-        bool outerSuccess = root.GetProperty("success").GetBoolean();
-        await Assert.That(outerSuccess).IsFalse();
-
-        string errorMessage = root.GetProperty("message").GetString()!;
-        await Assert.That(errorMessage).Contains("Cannot downgrade to Free");
-        await Assert.That(errorMessage).Contains("4");
+        await Assert.That(root.GetProperty("success").GetBoolean()).IsTrue();
+        await Assert.That(root.GetProperty("message").GetString()!).Contains("end of the current billing period");
+        await Assert.That(await db.Machines.CountAsync(m => (m.TenantId == tenantId) && (m.IsDeleted == false))).IsEqualTo(4);
     }
 
     [Test]

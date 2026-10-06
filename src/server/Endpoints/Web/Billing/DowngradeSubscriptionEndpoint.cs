@@ -39,7 +39,6 @@ public sealed class DowngradeSubscriptionEndpoint : Endpoint<DowngradeSubscripti
     private readonly IBillingApiClient _billingApiClient;
     private readonly DowngradeGuardService _downgradeGuardService;
     private readonly IDowngradeCleanupService _downgradeCleanupService;
-    private readonly ITierFeatureLimitRepository _tierLimitRepo;
     private readonly RetentionReclassifyDispatcher _reclassifyDispatcher;
     private readonly ILogger<DowngradeSubscriptionEndpoint> _logger;
 
@@ -57,7 +56,6 @@ public sealed class DowngradeSubscriptionEndpoint : Endpoint<DowngradeSubscripti
         IBillingApiClient billingApiClient,
         DowngradeGuardService downgradeGuardService,
         IDowngradeCleanupService downgradeCleanupService,
-        ITierFeatureLimitRepository tierLimitRepo,
         RetentionReclassifyDispatcher reclassifyDispatcher,
         ILogger<DowngradeSubscriptionEndpoint> logger)
     {
@@ -71,7 +69,6 @@ public sealed class DowngradeSubscriptionEndpoint : Endpoint<DowngradeSubscripti
         _billingApiClient = billingApiClient;
         _downgradeGuardService = downgradeGuardService;
         _downgradeCleanupService = downgradeCleanupService;
-        _tierLimitRepo = tierLimitRepo;
         _reclassifyDispatcher = reclassifyDispatcher;
         _logger = logger;
     }
@@ -224,19 +221,6 @@ public sealed class DowngradeSubscriptionEndpoint : Endpoint<DowngradeSubscripti
 
     private async Task HandleDowngradeToFreeAsync(int tenantId, CancellationToken ct)
     {
-        // Check that current machine count does not exceed Free tier limit
-        int machineCount = await _subscriptionService.GetMachineCountForTenantAsync(tenantId, ct);
-        TierFeatureLimit? freeTierLimits = await _tierLimitRepo.GetLimitsForTierAsync(SubscriptionTier.Free, ct);
-        int freeTierLimit = freeTierLimits?.MachineLimit ?? 3;
-        if (machineCount > freeTierLimit)
-        {
-            await HttpContext.SendApiErrorAsync(400,
-                $"Cannot downgrade to Free: you have {machineCount} active machines but the Free tier allows {freeTierLimit}. Please remove machines before downgrading.",
-                ct);
-
-            return;
-        }
-
         // Delegate cancellation to the billing-api which manages Stripe state and pending actions
         Tenant? tenant = await _tenantRepository.GetTenantByIdAsync(tenantId, ct);
         if (tenant is null)

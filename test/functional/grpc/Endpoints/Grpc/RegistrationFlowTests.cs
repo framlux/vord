@@ -271,6 +271,71 @@ public sealed class RegistrationFlowTests
     }
 
     [Test]
+    public async Task RegisterSystem_TenantLeftOverTheLimitByADowngrade_IsRefusedUntilHostsAreRemoved()
+    {
+        // A downgrade to Free no longer deletes anything, so a tenant can sit at five machines on a
+        // three-machine plan. Registration must refuse it there, and accept again once removals take
+        // it below the limit; removing down to exactly the limit is not enough.
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+
+        int tenantId = await SeedTenant(db);
+        await db.InsertAsync(new TenantSubscription
+        {
+            TenantId = tenantId,
+            Tier = SubscriptionTier.Free,
+            Status = SubscriptionStatus.Active,
+            CreatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow
+        });
+
+        using GrpcChannel channel = CreateChannel(factory);
+        Registration.RegistrationClient client = new(channel);
+
+        List<long> machineIds = [];
+        for (int i = 1; i <= 5; i++)
+        {
+            Machine machine = TestDataBuilder.BuildMachine(tenantId: tenantId);
+            machineIds.Add(await db.InsertWithInt64IdentityAsync(machine));
+        }
+
+        async Task<RegisterSystemResponse> RegisterAsync(string suffix)
+        {
+            string token = $"over-limit-token-{suffix}";
+            await SeedToken(db, tenantId, token);
+
+            return await client.RegisterSystemAsync(new RegisterSystemRequest
+            {
+                Hostname = $"over-limit-host-{suffix}",
+                SerialNumber = $"sn-over-{suffix}",
+                SystemId = $"sys-over-{suffix}",
+                RegistrationToken = token,
+                MachineType = MachineType.BareMetalServerType,
+                Os = OperatingSystemType.UbuntuOs
+            });
+        }
+
+        RpcException? overLimit = await Assert.ThrowsAsync<RpcException>(async () => await RegisterAsync("a"));
+        await Assert.That(overLimit!.Status.Detail).Contains("limit");
+
+        // Down to exactly the limit: still refused.
+        await db.Machines.Where(m => (m.Id == machineIds[3]) || (m.Id == machineIds[4]))
+            .Set(m => m.IsDeleted, true)
+            .Set(m => m.DeletedOn, DateTimeOffset.UtcNow)
+            .UpdateAsync();
+        RpcException? atLimit = await Assert.ThrowsAsync<RpcException>(async () => await RegisterAsync("b"));
+        await Assert.That(atLimit!.Status.Detail).Contains("limit");
+
+        // Below the limit: accepted.
+        await db.Machines.Where(m => m.Id == machineIds[2])
+            .Set(m => m.IsDeleted, true)
+            .Set(m => m.DeletedOn, DateTimeOffset.UtcNow)
+            .UpdateAsync();
+        RegisterSystemResponse accepted = await RegisterAsync("c");
+        await Assert.That(accepted.MachineId).IsGreaterThan(0);
+    }
+
+    [Test]
     public async Task RegisterSystem_SingleUseToken_RegistersOneMachine_ThenRejectsReuse()
     {
         // Arrange — a registration token is single-use: it registers exactly one machine, then is
