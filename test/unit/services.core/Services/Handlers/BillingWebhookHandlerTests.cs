@@ -13,7 +13,6 @@ using Framlux.FleetManagement.Services.Core.Billing;
 using Framlux.FleetManagement.Services.Core.Handlers;
 using Framlux.FleetManagement.Services.Core.Infrastructure;
 using Framlux.FleetManagement.Services.Core.Options;
-using Framlux.FleetManagement.Services.Core.Security;
 using Framlux.FleetManagement.Test.Infrastructure;
 using Hangfire;
 using Hangfire.Common;

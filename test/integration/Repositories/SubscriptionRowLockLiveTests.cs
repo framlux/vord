@@ -253,7 +253,8 @@ public sealed class SubscriptionRowLockLiveTests
     /// <summary>
     /// The case the cleanup-before-commit ordering exists for: an agreement is being applied when the
     /// Stripe deletion for the same tenant arrives. The deletion waits, then finds an Enterprise row,
-    /// changes nothing and trims nothing.
+    /// changes nothing. The Free cleanup would have disabled the OIDC configuration and the alert rules,
+    /// and the seeded machines guard that no cleanup removes machines.
     /// </summary>
     [Test]
     public async Task DeletionArrivingDuringAnApply_WaitsThenLeavesTheEnterpriseTenantUntouched()
@@ -493,8 +494,9 @@ public sealed class SubscriptionRowLockLiveTests
     }
 
     /// <summary>
-    /// Seeds a tenant with the resources the Free cleanup acts on: machines beyond the Free limit,
-    /// an enabled custom OIDC configuration, and enabled built-in and custom alert rules.
+    /// Seeds a tenant with resources the Free cleanup acts on (an enabled custom OIDC configuration and
+    /// enabled built-in and custom alert rules) and with machines. The machines are not cleanup targets:
+    /// they are seeded so the tests can guard that a downgrade to Free removes none of them.
     /// </summary>
     private static async Task<int> SeedTenantWithResourcesAsync(DatabaseContext db, SubscriptionTier tier, int machines)
     {

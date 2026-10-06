@@ -24,7 +24,7 @@
 	>
 		<span>
 			{subscription.machineCount} {subscription.machineCount === 1 ? 'host' : 'hosts'} on a {subscription.machineLimit}-host plan.
-			New hosts can't be added until you remove some or upgrade.
+			New hosts can't be added until you have fewer than {subscription.machineLimit}, or upgrade.
 		</span>
 		<a href="/machines" class="font-medium underline hover:no-underline">Review hosts</a>
 	</div>

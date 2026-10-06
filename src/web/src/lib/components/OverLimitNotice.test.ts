@@ -36,7 +36,7 @@ describe('OverLimitNotice', () => {
 
 		const notice = screen.getByRole('status');
 		expect(notice).toHaveTextContent(
-			"10 hosts on a 3-host plan. New hosts can't be added until you remove some or upgrade."
+			"10 hosts on a 3-host plan. New hosts can't be added until you have fewer than 3, or upgrade."
 		);
 		expect(screen.getByRole('link', { name: 'Review hosts' })).toHaveAttribute('href', '/machines');
 	});
