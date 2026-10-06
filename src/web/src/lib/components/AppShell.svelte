@@ -21,6 +21,7 @@
     } from 'lucide-svelte';
     import ThemeToggle from './ThemeToggle.svelte';
     import OrgSwitcher from './OrgSwitcher.svelte';
+    import OverLimitNotice from '$lib/components/OverLimitNotice.svelte';
     import { page } from '$app/state';
     import { canAdminMachines, canAdminTenant, isGlobalAdmin } from '$lib/utils/roles';
     import type { UserDto, SubscriptionDto } from '$lib/api/types';
@@ -341,6 +342,7 @@
 
         <!-- Page content -->
         <main id="main-content" class="animate-fade-in flex-1 overflow-y-auto p-4 md:p-6">
+            <OverLimitNotice {subscription} />
             {@render children?.()}
         </main>
     </div>

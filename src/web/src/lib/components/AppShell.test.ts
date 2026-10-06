@@ -5,6 +5,7 @@
 import { afterEach, describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/svelte';
 import '@testing-library/jest-dom/vitest';
+import { UserAccountRole } from '$lib/api/types';
 import type { UserDto, SubscriptionDto } from '$lib/api/types';
 
 const { mockPage } = vi.hoisted(() => {
@@ -317,6 +318,21 @@ describe('AppShell', () => {
             render(AppShell, { props: { user, subscription } });
 
             expect(screen.getByText('Pro Plan')).toBeInTheDocument();
+        });
+    });
+
+    describe('over-limit notice', () => {
+        it('shows the over-limit notice to a machine admin, who is the one who can remove hosts', () => {
+            render(AppShell, {
+                props: {
+                    user: makeUser({
+                        tenants: [{ tenantId: 1, tenantName: 'Acme Corp', role: String(UserAccountRole.MachineAdmin) }]
+                    }),
+                    subscription: makeSubscription({ tier: 'Free', machineLimit: 3, machineCount: 7 })
+                }
+            });
+
+            expect(screen.getByRole('status')).toHaveTextContent('7 hosts on a 3-host plan.');
         });
     });
 
