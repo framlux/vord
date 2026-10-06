@@ -3,7 +3,7 @@
 // See LICENSE for details.
 
 import { describe, it, expect } from 'vitest';
-import { render, screen } from '@testing-library/svelte';
+import { render, screen, fireEvent } from '@testing-library/svelte';
 import '@testing-library/jest-dom/vitest';
 import type { InvoiceDto, SubscriptionDto, UpcomingInvoiceDto, UserDto } from '$lib/api/types';
 import { UNLIMITED_LIMIT } from '$lib/utils/tier';
@@ -238,5 +238,41 @@ describe('billing page for a Stripe-billed tenant', () => {
 
 		expect(screen.getByText('Upgrade to Pro')).toBeInTheDocument();
 		expect(screen.getByText('Upgrade to Team')).toBeInTheDocument();
+	});
+});
+
+describe('billing page tells a downgrading or canceling customer what happens to their hosts', () => {
+	it('says a downgrade to Free keeps existing hosts and blocks new ones at the limit', async () => {
+		render(BillingPage, { props: { data: makeData(makeSubscription()), form: null } });
+
+		await fireEvent.click(screen.getByRole('button', { name: /Downgrade to Free/ }));
+
+		expect(
+			screen.getByText(
+				'Machine limit drops to 3. Existing hosts are not removed, but new hosts cannot be added while you have 3 or more.'
+			)
+		).toBeInTheDocument();
+		expect(screen.queryByText('Machine limit will be reduced to 3')).not.toBeInTheDocument();
+	});
+
+	it('says cancellation moves the account to Free instead of ending all service', async () => {
+		render(BillingPage, { props: { data: makeData(makeSubscription()), form: null } });
+
+		await fireEvent.click(screen.getByRole('button', { name: 'Cancel Account' }));
+
+		expect(screen.getByText(/your account moves to the Free plan/)).toBeInTheDocument();
+		expect(screen.getByText(/Hosts are not removed/)).toBeInTheDocument();
+		expect(screen.getByText(/uninstall the agent/)).toBeInTheDocument();
+		expect(screen.queryByText(/lose ALL service/)).not.toBeInTheDocument();
+		expect(screen.queryByText(/stops all service entirely/)).not.toBeInTheDocument();
+	});
+
+	it('describes a pending cancellation as a move to Free', () => {
+		render(BillingPage, {
+			props: { data: makeData(makeSubscription({ pendingAction: 'CancelAccount', cancelAtPeriodEnd: true })), form: null }
+		});
+
+		expect(screen.getByText(/Your paid plan will end and your account will move to the Free plan/)).toBeInTheDocument();
+		expect(screen.queryByText('Your account will be canceled')).not.toBeInTheDocument();
 	});
 });

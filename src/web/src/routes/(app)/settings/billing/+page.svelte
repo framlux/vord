@@ -168,7 +168,9 @@
 
 	function getPendingActionDescription(): string {
 		if (pendingAction === 'CancelAccount') {
-			return 'Your account will be canceled';
+			// Cancellation is delivered to the fleet as a downgrade to Free, so the account keeps its
+			// hosts on Free's limits rather than losing service.
+			return 'Your paid plan will end and your account will move to the Free plan';
 		}
 		if (pendingAction === 'DowngradeToFree') {
 			return 'Your subscription will be downgraded to the Free tier';
@@ -695,7 +697,7 @@
 											The following changes will apply:
 										</p>
 										<ul class="mt-2 list-inside list-disc text-sm text-amber-700 dark:text-amber-300">
-											<li>Machine limit will be reduced to 3</li>
+											<li>Machine limit drops to 3. Existing hosts are not removed, but new hosts cannot be added while you have 3 or more.</li>
 											<li>Data retention will be reduced to 1 day</li>
 											<li>All alerting will be disabled</li>
 											{#if isTeam}
@@ -741,12 +743,11 @@
 												Are you sure you want to cancel your account?
 											</h4>
 											<p class="mt-2 text-sm text-red-700 dark:text-red-300">
-												Your account will lose ALL service at the end of the current billing period
+												Your paid plan ends at the end of the current billing period
 												{#if subscription !== null && subscription.currentPeriodEnd !== null}
 													on {formatPeriodEnd(subscription.currentPeriodEnd)}
-												{/if}.
-												You will need to re-subscribe to regain access. This is different from downgrading
-												— cancellation stops all service entirely.
+												{/if}, and your account moves to the Free plan with its limits. Hosts are not removed.
+												To stop collecting data from a host, uninstall the agent and remove the host from its page.
 											</p>
 											<div class="mt-4 flex gap-3">
 												<form method="POST" action="?/cancel">
