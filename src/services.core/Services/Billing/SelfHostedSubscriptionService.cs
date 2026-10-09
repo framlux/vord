@@ -174,4 +174,10 @@ public sealed class SelfHostedSubscriptionService : ISubscriptionService
     {
         return _inner.GetBillableMachineCountAsync(tenantId, tier, ct);
     }
+
+    /// <inheritdoc/>
+    public Task<int> GetMachineLimitForTierAsync(int tenantId, SubscriptionTier tier, CancellationToken ct)
+    {
+        return Task.FromResult(int.MaxValue);
+    }
 }

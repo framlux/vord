@@ -221,6 +221,22 @@ public sealed class SelfHostedSubscriptionServiceTests
     }
 
     [Test]
+    [Arguments(SubscriptionTier.Free)]
+    [Arguments(SubscriptionTier.Pro)]
+    [Arguments(SubscriptionTier.Team)]
+    public async Task GetMachineLimitForTier_IsUnlimited_WhateverTheTier(SubscriptionTier tier)
+    {
+        // Self-hosted has no tiers: nothing may ever be paused or capped by a limit. The inner substitute
+        // answers 0 when asked, so delegating would pause every host rather than none.
+        SelfHostedSubscriptionService service = CreateService(out ISubscriptionService inner);
+
+        int limit = await service.GetMachineLimitForTierAsync(1, tier, CancellationToken.None);
+
+        await Assert.That(limit).IsEqualTo(int.MaxValue);
+        await inner.DidNotReceiveWithAnyArgs().GetMachineLimitForTierAsync(default, default, default);
+    }
+
+    [Test]
     public async Task GetMachineCountAtDateAsync_DelegatesToInner()
     {
         SelfHostedSubscriptionService service = CreateService(out ISubscriptionService inner);

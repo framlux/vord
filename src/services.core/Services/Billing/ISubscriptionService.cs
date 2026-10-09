@@ -88,10 +88,10 @@ public interface ISubscriptionService
 
     /// <summary>
     /// Returns the machine count Stripe should be billed for: the tenant's active machine
-    /// count raised to the floor for <paramref name="tier"/>.
+    /// count, capped at the tier's machine limit and raised to its floor.
     /// </summary>
     /// <param name="tenantId">The tenant to count machines for.</param>
-    /// <param name="tier">The tier whose floor applies. Callers pass the tier being billed,
+    /// <param name="tier">The tier whose limit and floor apply. Callers pass the tier being billed,
     /// which at checkout is the tier being purchased rather than the tenant's current one.</param>
     /// <param name="ct">Cancellation token.</param>
     /// <exception cref="InvalidOperationException">
@@ -100,4 +100,14 @@ public interface ISubscriptionService
     /// Stripe by mistake. Callers already treat per-tenant billing as best-effort and catch around it.
     /// </exception>
     Task<int> GetBillableMachineCountAsync(int tenantId, SubscriptionTier tier, CancellationToken ct);
+
+    /// <summary>
+    /// Returns the machine limit the tenant would have on <paramref name="tier"/>: its override when
+    /// one is set, otherwise the tier's configured limit. Reads the database directly, so it is safe
+    /// inside a transaction that has just changed the tier or the override.
+    /// </summary>
+    /// <param name="tenantId">The tenant.</param>
+    /// <param name="tier">The tier whose limit applies, which need not be the tenant's current tier.</param>
+    /// <param name="ct">Cancellation token.</param>
+    Task<int> GetMachineLimitForTierAsync(int tenantId, SubscriptionTier tier, CancellationToken ct);
 }
