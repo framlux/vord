@@ -307,6 +307,8 @@ public static class ServiceCollectionExtensions
             services.AddScoped<ISubscriptionService>(sp => sp.GetRequiredService<SubscriptionService>());
         }
 
+        services.AddScoped<IQuotaPauseService, QuotaPauseService>();
+
         services.AddScoped<DowngradeGuardService>();
         services.AddScoped<IDowngradeCleanupService, DowngradeCleanupService>();
         services.AddSingleton<IOidcSecretProtector, OidcSecretProtector>();

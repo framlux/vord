@@ -80,6 +80,15 @@ public static class TestMetricsFactory
     }
 
     /// <summary>
+    /// Creates quota pause instruments on a fresh meter factory.
+    /// </summary>
+    /// <returns>Quota pause metrics ready to record into.</returns>
+    public static QuotaPauseMetrics CreateQuotaPauseMetrics()
+    {
+        return new QuotaPauseMetrics(CreateMeterFactory());
+    }
+
+    /// <summary>
     /// Creates alert-pipeline instruments on a fresh meter factory.
     /// </summary>
     /// <returns>Alert pipeline metrics ready to record into.</returns>

@@ -292,6 +292,23 @@ public partial class DatabaseRepository : IMachineRepository
     }
 
     /// <inheritdoc/>
+    public async Task<(int RegisteredCount, long? CutoffId)> GetRegisteredMachineCutoffAsync(int tenantId, int limit, CancellationToken cancellationToken)
+    {
+        IQueryable<Machine> registered = _db.Machines.Where(m => (m.TenantId == tenantId) && (m.IsDeleted == false));
+        int count = await registered.CountAsync(cancellationToken);
+
+        // Counting first keeps the common case, a tenant within its limit, to one cheap query.
+        if ((limit <= 0) || (count <= limit))
+        {
+            return (count, null);
+        }
+
+        long cutoffId = await registered.OrderBy(m => m.Id).Skip(limit - 1).Select(m => m.Id).FirstAsync(cancellationToken);
+
+        return (count, cutoffId);
+    }
+
+    /// <inheritdoc/>
     public async Task<Machine?> GetActiveMachineByIdAsync(long machineId, int tenantId, CancellationToken cancellationToken)
     {
         Machine? machine = await _db.Machines
