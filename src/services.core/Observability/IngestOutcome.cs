@@ -6,7 +6,7 @@ namespace Framlux.FleetManagement.Services.Core.Observability;
 
 /// <summary>
 /// The terminal state of one telemetry envelope. Every agent envelope the server answers ends in
-/// exactly one of these, so the four together are the whole of ingest volume.
+/// exactly one of these, so the five together are the whole of ingest volume.
 /// </summary>
 public enum IngestOutcome
 {
@@ -33,4 +33,10 @@ public enum IngestOutcome
     /// Refused because the tenant's subscription is not eligible for ingest.
     /// </summary>
     NotEntitled,
+
+    /// <summary>
+    /// Acknowledged and discarded because the machine is beyond its tenant's host limit; the agent
+    /// is told so in the ack.
+    /// </summary>
+    Paused,
 }

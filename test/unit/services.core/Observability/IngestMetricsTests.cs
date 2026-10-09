@@ -59,6 +59,21 @@ public sealed class IngestMetricsTests
     }
 
     [Test]
+    public async Task RecordEnvelope_PausedIsItsOwnOutcome()
+    {
+        // A paused host is acknowledged, so folding it into accepted would make a fleet that is
+        // silently dropping telemetry look healthy on the one counter that shows ingest volume.
+        (IngestMetrics metrics, IMeterFactory factory) = Build();
+        using MetricCollector<long> collector = new(factory, VordMeter.Name, "vord.ingest.envelopes");
+
+        metrics.RecordEnvelope(IngestOutcome.Paused);
+
+        IReadOnlyList<CollectedMeasurement<long>> measurements = collector.GetMeasurementSnapshot();
+        await Assert.That(measurements.Count).IsEqualTo(1);
+        await Assert.That(measurements[0].Tags["outcome"]).IsEqualTo("paused");
+    }
+
+    [Test]
     public async Task RecordAuthRejection_IsASeparateInstrumentFromEnvelopes()
     {
         (IngestMetrics metrics, IMeterFactory factory) = Build();
@@ -117,10 +132,12 @@ public sealed class IngestMetricsTests
         metrics.InitialiseSeries();
 
         IReadOnlyList<CollectedMeasurement<long>> envelopeSeries = envelopes.GetMeasurementSnapshot();
-        await Assert.That(envelopeSeries.Count).IsEqualTo(4);
+        await Assert.That(envelopeSeries.Count).IsEqualTo(5);
         await Assert.That(envelopeSeries.All(measurement => measurement.Value == 0L)).IsTrue();
         await Assert.That(envelopeSeries.Select(measurement => (string?)measurement.Tags["outcome"]).ToList())
             .Contains("unavailable");
+        await Assert.That(envelopeSeries.Select(measurement => (string?)measurement.Tags["outcome"]).ToList())
+            .Contains("paused");
         await Assert.That(auth.GetMeasurementSnapshot().Count).IsEqualTo(2);
         await Assert.That(streams.GetMeasurementSnapshot().Count).IsEqualTo(3);
     }

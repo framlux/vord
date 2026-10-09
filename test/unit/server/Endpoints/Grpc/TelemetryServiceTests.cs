@@ -4,6 +4,7 @@
 
 using Framlux.FleetManagement.Database;
 using Framlux.FleetManagement.Database.Models;
+using Framlux.FleetManagement.Grpc.AgentCommon;
 using Framlux.FleetManagement.Grpc.AgentTelemetry;
 using Framlux.FleetManagement.Server.Endpoints.Grpc;
 using Framlux.FleetManagement.Server.Services.Infrastructure;
@@ -41,6 +42,8 @@ public sealed class TelemetryServiceTests
 {
     private readonly ITelemetryDeduplicationService _dedupService;
     private readonly ISubscriptionService _subscriptionService;
+    // Default: no host is paused. Tests that exercise the pause path pass their own substitute.
+    private readonly IQuotaPauseService _quotaPause = Substitute.For<IQuotaPauseService>();
     private readonly IBackgroundJobClient _backgroundJobs = Substitute.For<IBackgroundJobClient>();
     private readonly ILogger<TelemetryService> _logger = Substitute.For<ILogger<TelemetryService>>();
     // Default: the machine has no evaluation chain running, so the first failed login in an envelope
@@ -78,6 +81,8 @@ public sealed class TelemetryServiceTests
                 UpdatedAt = DateTimeOffset.UtcNow,
             });
         _subscriptionService.IsIngestEligibleAsync(Arg.Any<int>(), Arg.Any<CancellationToken>()).Returns(true);
+
+        _quotaPause.IsPausedAsync(Arg.Any<int>(), Arg.Any<long>(), Arg.Any<CancellationToken>()).Returns(false);
 
         _chainGate.TryOpenChainAsync(Arg.Any<long>()).Returns("chain-token");
     }
@@ -122,19 +127,24 @@ public sealed class TelemetryServiceTests
         IServiceScopeFactory scopeFactory,
         IConnectionMultiplexer? redis = null,
         ResilienceMetrics? resilienceMetrics = null,
-        IFailedSshLoginChainGate? chainGate = null)
+        IFailedSshLoginChainGate? chainGate = null,
+        IQuotaPauseService? quotaPause = null,
+        IngestMetrics? ingestMetrics = null,
+        QuotaPauseMetrics? quotaPauseMetrics = null)
     {
         return new TelemetryService(
             scopeFactory,
             _dedupService,
             _subscriptionService,
+            quotaPause ?? _quotaPause,
             _backgroundJobs,
             NoOpPipeline,
             redis ?? BuildTestRedis(),
             Options.Create(new TelemetryOptions()),
             new ProcessStreamSlotLimiter(5000),
-            TestMetricsFactory.CreateIngestMetrics(),
+            ingestMetrics ?? TestMetricsFactory.CreateIngestMetrics(),
             resilienceMetrics ?? TestMetricsFactory.CreateResilienceMetrics(),
+            quotaPauseMetrics ?? TestMetricsFactory.CreateQuotaPauseMetrics(),
             chainGate ?? _chainGate,
             _timeProvider,
             _logger);
@@ -156,6 +166,23 @@ public sealed class TelemetryServiceTests
         db.StringDecrementAsync(Arg.Any<RedisKey>(), Arg.Any<long>(), Arg.Any<CommandFlags>()).Returns(0L);
 
         return mux;
+    }
+
+    private static TelemetryEnvelope BuildEnvelope(string batchId, string eventId)
+    {
+        TelemetryEnvelope envelope = new()
+        {
+            AgentTimestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            BatchId = batchId,
+        };
+        envelope.Items.Add(new TelemetryItem
+        {
+            EventId = eventId,
+            Type = TelemetryTypes.CpuUtilizationType,
+            CpuUtilization = new CpuUtilizationRecord { CpuUsagePercent = 50 }
+        });
+
+        return envelope;
     }
 
     [Test]
@@ -340,7 +367,7 @@ public sealed class TelemetryServiceTests
                 return ids.ToDictionary(id => id, _ => false);
             });
 
-        TelemetryService service = new(scopeFactory, dupDedupService, _subscriptionService, _backgroundJobs, NoOpPipeline, BuildTestRedis(), Options.Create(new TelemetryOptions()), new ProcessStreamSlotLimiter(5000), TestMetricsFactory.CreateIngestMetrics(), TestMetricsFactory.CreateResilienceMetrics(), _chainGate, _timeProvider, _logger);
+        TelemetryService service = new(scopeFactory, dupDedupService, _subscriptionService, _quotaPause, _backgroundJobs, NoOpPipeline, BuildTestRedis(), Options.Create(new TelemetryOptions()), new ProcessStreamSlotLimiter(5000), TestMetricsFactory.CreateIngestMetrics(), TestMetricsFactory.CreateResilienceMetrics(), TestMetricsFactory.CreateQuotaPauseMetrics(), _chainGate, _timeProvider, _logger);
         ServerCallContext context = CreateAuthenticatedContext(200);
 
         TelemetryEnvelope envelope = new()
@@ -441,7 +468,7 @@ public sealed class TelemetryServiceTests
         // drive it directly so this test pins the gate wiring, not the specific status-to-eligibility map.
         inactiveSubService.IsIngestEligibleAsync(Arg.Any<int>(), Arg.Any<CancellationToken>()).Returns(false);
 
-        TelemetryService service = new(scopeFactory, _dedupService, inactiveSubService, _backgroundJobs, NoOpPipeline, BuildTestRedis(), Options.Create(new TelemetryOptions()), new ProcessStreamSlotLimiter(5000), TestMetricsFactory.CreateIngestMetrics(), TestMetricsFactory.CreateResilienceMetrics(), _chainGate, _timeProvider, _logger);
+        TelemetryService service = new(scopeFactory, _dedupService, inactiveSubService, _quotaPause, _backgroundJobs, NoOpPipeline, BuildTestRedis(), Options.Create(new TelemetryOptions()), new ProcessStreamSlotLimiter(5000), TestMetricsFactory.CreateIngestMetrics(), TestMetricsFactory.CreateResilienceMetrics(), TestMetricsFactory.CreateQuotaPauseMetrics(), _chainGate, _timeProvider, _logger);
         ServerCallContext context = CreateAuthenticatedContext(100);
 
         TelemetryEnvelope envelope = new() { AgentTimestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow), BatchId ="batch-inactive" };
@@ -461,6 +488,202 @@ public sealed class TelemetryServiceTests
         List<MachineTelemetry> telemetry = await dbFactory.Context.MachineTelemetry.ToListAsync();
 
         await Assert.That(telemetry.Count).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task SubmitTelemetry_PausedHost_AcksAndDiscards()
+    {
+        // An old agent marks an acknowledged batch delivered and never retries it, so a paused host
+        // is told "received" and nothing is stored, deduplicated or alerted on.
+        using TestDatabaseFactory dbFactory = new();
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+        IQuotaPauseService pause = Substitute.For<IQuotaPauseService>();
+        pause.IsPausedAsync(Arg.Any<int>(), 100, Arg.Any<CancellationToken>()).Returns(true);
+        TelemetryService service = CreateService(scopeFactory, quotaPause: pause);
+
+        TelemetryAck ack = await service.SubmitTelemetry(BuildEnvelope("paused-batch", "paused-event"), CreateAuthenticatedContext(100));
+
+        await Assert.That(ack.Success).IsTrue();
+        await Assert.That(ack.Reason).IsEqualTo(IngestRejectionReason.HostPaused);
+        await Assert.That(ack.BatchId).IsEqualTo("paused-batch");
+        await Assert.That(await dbFactory.Context.MachineTelemetry.CountAsync()).IsEqualTo(0);
+        await _dedupService.DidNotReceive().TryMarkSeenBatchAsync(Arg.Any<IEnumerable<string>>());
+        _backgroundJobs.DidNotReceiveWithAnyArgs().Create(default!, default!);
+    }
+
+    [Test]
+    public async Task SubmitTelemetry_PausedHostSendingAlertableTelemetry_RaisesNoAlertJobs()
+    {
+        // The pause check precedes alert enqueueing, so a paused host's SSH events never reach
+        // evaluation even though the same envelope from an active host would schedule jobs.
+        using TestDatabaseFactory dbFactory = new();
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+        IQuotaPauseService pause = Substitute.For<IQuotaPauseService>();
+        pause.IsPausedAsync(Arg.Any<int>(), 100, Arg.Any<CancellationToken>()).Returns(true);
+        TelemetryService service = CreateService(scopeFactory, quotaPause: pause);
+
+        TelemetryAck ack = await service.SubmitTelemetry(
+            BuildSshEnvelope("paused-ssh", ("connect", "ssh-1"), ("failed", "ssh-2")),
+            CreateAuthenticatedContext(100));
+
+        await Assert.That(ack.Reason).IsEqualTo(IngestRejectionReason.HostPaused);
+        _backgroundJobs.DidNotReceiveWithAnyArgs().Create(default!, default!);
+        await _chainGate.DidNotReceive().TryOpenChainAsync(Arg.Any<long>());
+    }
+
+    [Test]
+    public async Task SubmitTelemetry_PausedHost_RecordsThePausedOutcomeAndNoAcceptedOne()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+        IMeterFactory meterFactory = TestMetricsFactory.CreateMeterFactory();
+        using MetricCollector<long> envelopes = new(meterFactory, VordMeter.Name, "vord.ingest.envelopes");
+        IQuotaPauseService pause = Substitute.For<IQuotaPauseService>();
+        pause.IsPausedAsync(Arg.Any<int>(), Arg.Any<long>(), Arg.Any<CancellationToken>()).Returns(true);
+        TelemetryService service = CreateService(scopeFactory, quotaPause: pause, ingestMetrics: new IngestMetrics(meterFactory));
+
+        await service.SubmitTelemetry(BuildEnvelope("paused-metric", "paused-metric-event"), CreateAuthenticatedContext(100));
+
+        IReadOnlyList<CollectedMeasurement<long>> measurements = envelopes.GetMeasurementSnapshot();
+        await Assert.That(measurements.Count).IsEqualTo(1);
+        await Assert.That(measurements[0].Tags["outcome"]).IsEqualTo("paused");
+    }
+
+    [Test]
+    public async Task SubmitTelemetry_AsksThePauseServiceAboutTheAuthenticatedTenantAndMachine()
+    {
+        // Both ids come from the authenticated claims; a mix-up would pause one tenant's hosts on
+        // another's cutoff.
+        using TestDatabaseFactory dbFactory = new();
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+        IQuotaPauseService pause = Substitute.For<IQuotaPauseService>();
+        TelemetryService service = CreateService(scopeFactory, quotaPause: pause);
+
+        await service.SubmitTelemetry(BuildEnvelope("ids-batch", "ids-event"), CreateAuthenticatedContext(4242, tenantId: 77));
+
+        await pause.Received(1).IsPausedAsync(77, 4242L, Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task StreamTelemetry_PausedHost_KeepsTheStreamOpenAndAcksEveryEnvelope()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+        IQuotaPauseService pause = Substitute.For<IQuotaPauseService>();
+        pause.IsPausedAsync(Arg.Any<int>(), 100, Arg.Any<CancellationToken>()).Returns(true);
+        TelemetryService service = CreateService(scopeFactory, quotaPause: pause);
+        FakeAsyncStreamReader<TelemetryEnvelope> requestStream = new([BuildEnvelope("s1", "e1"), BuildEnvelope("s2", "e2")]);
+        FakeServerStreamWriter<TelemetryAck> responseStream = new();
+
+        await service.StreamTelemetry(requestStream, responseStream, CreateAuthenticatedContext(100));
+
+        await Assert.That(responseStream.Written.Count).IsEqualTo(2);
+        await Assert.That(responseStream.Written.All(a => a.Success && (a.Reason == IngestRejectionReason.HostPaused))).IsTrue();
+        await Assert.That(await dbFactory.Context.MachineTelemetry.CountAsync()).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task StreamTelemetry_HostResumedMidStream_StoresTheLaterEnvelopes()
+    {
+        // The pause decision is made per envelope, so a host that comes back under its limit while a
+        // long-lived stream is open starts storing again without reconnecting.
+        using TestDatabaseFactory dbFactory = new();
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+        IQuotaPauseService pause = Substitute.For<IQuotaPauseService>();
+        pause.IsPausedAsync(Arg.Any<int>(), 100, Arg.Any<CancellationToken>()).Returns(true, false);
+        TelemetryService service = CreateService(scopeFactory, quotaPause: pause);
+        FakeAsyncStreamReader<TelemetryEnvelope> requestStream = new([BuildEnvelope("r1", "r-e1"), BuildEnvelope("r2", "r-e2")]);
+        FakeServerStreamWriter<TelemetryAck> responseStream = new();
+
+        await service.StreamTelemetry(requestStream, responseStream, CreateAuthenticatedContext(100));
+
+        await Assert.That(responseStream.Written[0].Reason).IsEqualTo(IngestRejectionReason.HostPaused);
+        await Assert.That(responseStream.Written[1].Reason).IsEqualTo(IngestRejectionReason.Unspecified);
+        await Assert.That(responseStream.Written[1].Success).IsTrue();
+        await Assert.That(await dbFactory.Context.MachineTelemetry.CountAsync()).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task SubmitTelemetry_PauseCheckUnavailable_IngestsAsActive()
+    {
+        // A broken quota check must never stop a paying fleet reporting.
+        using TestDatabaseFactory dbFactory = new();
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+        IQuotaPauseService pause = Substitute.For<IQuotaPauseService>();
+        pause.IsPausedAsync(Arg.Any<int>(), Arg.Any<long>(), Arg.Any<CancellationToken>())
+            .Returns<bool>(_ => throw new QuotaCheckUnavailableException(1, new InvalidOperationException("db")));
+        TelemetryService service = CreateService(scopeFactory, quotaPause: pause);
+
+        TelemetryAck ack = await service.SubmitTelemetry(BuildEnvelope("b", "e"), CreateAuthenticatedContext(100));
+
+        await Assert.That(ack.Success).IsTrue();
+        await Assert.That(ack.Reason).IsEqualTo(IngestRejectionReason.Unspecified);
+        await Assert.That(await dbFactory.Context.MachineTelemetry.CountAsync()).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task SubmitTelemetry_PauseCheckUnavailable_CountsTheFailureAgainstTheIngestSurface()
+    {
+        // Treating the host as active hides that limits stopped being enforced, so the counter is the
+        // only evidence, and its surface tag says which path is running unmetered.
+        using TestDatabaseFactory dbFactory = new();
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+        IMeterFactory meterFactory = TestMetricsFactory.CreateMeterFactory();
+        using MetricCollector<long> failures = new(meterFactory, VordMeter.Name, "vord.quota.pause_check_failures");
+        IQuotaPauseService pause = Substitute.For<IQuotaPauseService>();
+        pause.IsPausedAsync(Arg.Any<int>(), Arg.Any<long>(), Arg.Any<CancellationToken>())
+            .Returns<bool>(_ => throw new QuotaCheckUnavailableException(1, new InvalidOperationException("db")));
+        TelemetryService service = CreateService(scopeFactory, quotaPause: pause, quotaPauseMetrics: new QuotaPauseMetrics(meterFactory));
+
+        await service.SubmitTelemetry(BuildEnvelope("fail-metric", "fail-metric-event"), CreateAuthenticatedContext(100));
+
+        IReadOnlyList<CollectedMeasurement<long>> measurements = failures.GetMeasurementSnapshot();
+        await Assert.That(measurements.Count).IsEqualTo(1);
+        await Assert.That(measurements[0].Value).IsEqualTo(1L);
+        await Assert.That(measurements[0].Tags["surface"]).IsEqualTo("ingest");
+    }
+
+    [Test]
+    public async Task SubmitTelemetry_InactiveSubscription_CarriesTheReasonAndWinsOverPause()
+    {
+        // An inactive subscription wins over pause and keeps refusing, so the agent backs off for the
+        // reason that actually applies.
+        using TestDatabaseFactory dbFactory = new();
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+        _subscriptionService.IsIngestEligibleAsync(Arg.Any<int>(), Arg.Any<CancellationToken>()).Returns(false);
+        IQuotaPauseService pause = Substitute.For<IQuotaPauseService>();
+        pause.IsPausedAsync(Arg.Any<int>(), Arg.Any<long>(), Arg.Any<CancellationToken>()).Returns(true);
+        TelemetryService service = CreateService(scopeFactory, quotaPause: pause);
+
+        TelemetryAck ack = await service.SubmitTelemetry(BuildEnvelope("inactive-batch", "inactive-event"), CreateAuthenticatedContext(100));
+
+        await Assert.That(ack.Success).IsFalse();
+        await Assert.That(ack.ErrorMessage).IsEqualTo("Tenant subscription is not active");
+        await Assert.That(ack.Reason).IsEqualTo(IngestRejectionReason.SubscriptionInactive);
+        await pause.DidNotReceiveWithAnyArgs().IsPausedAsync(default, default, default);
+    }
+
+    [Test]
+    public async Task SubmitTelemetry_EventsSentWhilePaused_AreAcceptedAfterResume()
+    {
+        // The pause check runs before the dedup mark, so events a paused host sent are not remembered
+        // as seen, and the same ids are stored once the host resumes.
+        using TestDatabaseFactory dbFactory = new();
+        TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
+        HashSet<string> seen = [];
+        _dedupService.TryMarkSeenBatchAsync(Arg.Any<IEnumerable<string>>())
+            .Returns(callInfo => callInfo.Arg<IEnumerable<string>>().ToDictionary(id => id, id => seen.Add(id)));
+        IQuotaPauseService pause = Substitute.For<IQuotaPauseService>();
+        pause.IsPausedAsync(Arg.Any<int>(), 100, Arg.Any<CancellationToken>()).Returns(true, false);
+        TelemetryService service = CreateService(scopeFactory, quotaPause: pause);
+
+        TelemetryAck whilePaused = await service.SubmitTelemetry(BuildEnvelope("b1", "same-event"), CreateAuthenticatedContext(100));
+        TelemetryAck afterResume = await service.SubmitTelemetry(BuildEnvelope("b2", "same-event"), CreateAuthenticatedContext(100));
+
+        await Assert.That(whilePaused.Reason).IsEqualTo(IngestRejectionReason.HostPaused);
+        await Assert.That(afterResume.Success).IsTrue();
+        await Assert.That(afterResume.Reason).IsEqualTo(IngestRejectionReason.Unspecified);
+        await Assert.That(await dbFactory.Context.MachineTelemetry.CountAsync()).IsEqualTo(1);
     }
 
     [Test]
@@ -948,7 +1171,7 @@ public sealed class TelemetryServiceTests
         // drive it directly so this test pins the gate wiring, not the specific status-to-eligibility map.
         inactiveSubService.IsIngestEligibleAsync(Arg.Any<int>(), Arg.Any<CancellationToken>()).Returns(false);
 
-        TelemetryService service = new(scopeFactory, _dedupService, inactiveSubService, _backgroundJobs, NoOpPipeline, BuildTestRedis(), Options.Create(new TelemetryOptions()), new ProcessStreamSlotLimiter(5000), TestMetricsFactory.CreateIngestMetrics(), TestMetricsFactory.CreateResilienceMetrics(), _chainGate, _timeProvider, _logger);
+        TelemetryService service = new(scopeFactory, _dedupService, inactiveSubService, _quotaPause, _backgroundJobs, NoOpPipeline, BuildTestRedis(), Options.Create(new TelemetryOptions()), new ProcessStreamSlotLimiter(5000), TestMetricsFactory.CreateIngestMetrics(), TestMetricsFactory.CreateResilienceMetrics(), TestMetricsFactory.CreateQuotaPauseMetrics(), _chainGate, _timeProvider, _logger);
         ServerCallContext context = CreateAuthenticatedContext(100);
 
         FakeAsyncStreamReader<TelemetryEnvelope> requestStream = new([]);
@@ -1252,7 +1475,7 @@ public sealed class TelemetryServiceTests
         });
 
         // Use a no-op pipeline so the BrokenCircuitException propagates out unhandled by Polly.
-        TelemetryService service = new(scopeFactory, _dedupService, _subscriptionService, _backgroundJobs, NoOpPipeline, BuildTestRedis(), Options.Create(new TelemetryOptions()), new ProcessStreamSlotLimiter(5000), TestMetricsFactory.CreateIngestMetrics(), TestMetricsFactory.CreateResilienceMetrics(), _chainGate, _timeProvider, _logger);
+        TelemetryService service = new(scopeFactory, _dedupService, _subscriptionService, _quotaPause, _backgroundJobs, NoOpPipeline, BuildTestRedis(), Options.Create(new TelemetryOptions()), new ProcessStreamSlotLimiter(5000), TestMetricsFactory.CreateIngestMetrics(), TestMetricsFactory.CreateResilienceMetrics(), TestMetricsFactory.CreateQuotaPauseMetrics(), _chainGate, _timeProvider, _logger);
         ServerCallContext context = CreateAuthenticatedContext(100);
 
         TelemetryEnvelope envelope = new()
@@ -1293,7 +1516,7 @@ public sealed class TelemetryServiceTests
             { typeof(Database.Repositories.IMachineStateRepository), throwingRepo }
         });
 
-        TelemetryService service = new(scopeFactory, _dedupService, _subscriptionService, _backgroundJobs, NoOpPipeline, BuildTestRedis(), Options.Create(new TelemetryOptions()), new ProcessStreamSlotLimiter(5000), TestMetricsFactory.CreateIngestMetrics(), TestMetricsFactory.CreateResilienceMetrics(), _chainGate, _timeProvider, _logger);
+        TelemetryService service = new(scopeFactory, _dedupService, _subscriptionService, _quotaPause, _backgroundJobs, NoOpPipeline, BuildTestRedis(), Options.Create(new TelemetryOptions()), new ProcessStreamSlotLimiter(5000), TestMetricsFactory.CreateIngestMetrics(), TestMetricsFactory.CreateResilienceMetrics(), TestMetricsFactory.CreateQuotaPauseMetrics(), _chainGate, _timeProvider, _logger);
         ServerCallContext context = CreateAuthenticatedContext(100);
 
         TelemetryEnvelope envelope = new()
@@ -1333,7 +1556,7 @@ public sealed class TelemetryServiceTests
             { typeof(Database.Repositories.IMachineStateRepository), throwingRepo }
         });
 
-        TelemetryService service = new(scopeFactory, _dedupService, _subscriptionService, _backgroundJobs, NoOpPipeline, BuildTestRedis(), Options.Create(new TelemetryOptions()), new ProcessStreamSlotLimiter(5000), TestMetricsFactory.CreateIngestMetrics(), TestMetricsFactory.CreateResilienceMetrics(), _chainGate, _timeProvider, _logger);
+        TelemetryService service = new(scopeFactory, _dedupService, _subscriptionService, _quotaPause, _backgroundJobs, NoOpPipeline, BuildTestRedis(), Options.Create(new TelemetryOptions()), new ProcessStreamSlotLimiter(5000), TestMetricsFactory.CreateIngestMetrics(), TestMetricsFactory.CreateResilienceMetrics(), TestMetricsFactory.CreateQuotaPauseMetrics(), _chainGate, _timeProvider, _logger);
         ServerCallContext context = CreateAuthenticatedContext(100);
 
         TelemetryEnvelope envelope = new()
@@ -1401,7 +1624,7 @@ public sealed class TelemetryServiceTests
         {
             { typeof(Database.Repositories.IMachineStateRepository), throwingRepo },
         });
-        TelemetryService failingService = new(throwingScope, statefulDedup, _subscriptionService, _backgroundJobs, NoOpPipeline, BuildTestRedis(), Options.Create(new TelemetryOptions()), new ProcessStreamSlotLimiter(5000), TestMetricsFactory.CreateIngestMetrics(), TestMetricsFactory.CreateResilienceMetrics(), _chainGate, _timeProvider, _logger);
+        TelemetryService failingService = new(throwingScope, statefulDedup, _subscriptionService, _quotaPause, _backgroundJobs, NoOpPipeline, BuildTestRedis(), Options.Create(new TelemetryOptions()), new ProcessStreamSlotLimiter(5000), TestMetricsFactory.CreateIngestMetrics(), TestMetricsFactory.CreateResilienceMetrics(), TestMetricsFactory.CreateQuotaPauseMetrics(), _chainGate, _timeProvider, _logger);
 
         TelemetryAck firstAck = await failingService.SubmitTelemetry(BuildEnvelope(), CreateAuthenticatedContext(100));
         await Assert.That(firstAck.Success).IsFalse();
@@ -1409,7 +1632,7 @@ public sealed class TelemetryServiceTests
         // Second attempt: the write succeeds. Because the first attempt unmarked the event, the retry is
         // treated as new and the row is inserted.
         TestServiceScopeFactory workingScope = new(dbFactory.Context);
-        TelemetryService workingService = new(workingScope, statefulDedup, _subscriptionService, _backgroundJobs, NoOpPipeline, BuildTestRedis(), Options.Create(new TelemetryOptions()), new ProcessStreamSlotLimiter(5000), TestMetricsFactory.CreateIngestMetrics(), TestMetricsFactory.CreateResilienceMetrics(), _chainGate, _timeProvider, _logger);
+        TelemetryService workingService = new(workingScope, statefulDedup, _subscriptionService, _quotaPause, _backgroundJobs, NoOpPipeline, BuildTestRedis(), Options.Create(new TelemetryOptions()), new ProcessStreamSlotLimiter(5000), TestMetricsFactory.CreateIngestMetrics(), TestMetricsFactory.CreateResilienceMetrics(), TestMetricsFactory.CreateQuotaPauseMetrics(), _chainGate, _timeProvider, _logger);
 
         TelemetryAck secondAck = await workingService.SubmitTelemetry(BuildEnvelope(), CreateAuthenticatedContext(100));
         await Assert.That(secondAck.Success).IsTrue();
@@ -1428,7 +1651,7 @@ public sealed class TelemetryServiceTests
         using TestDatabaseFactory dbFactory = new();
         TestServiceScopeFactory scopeFactory = new(dbFactory.Context);
 
-        TelemetryService service = new(scopeFactory, _dedupService, _subscriptionService, _backgroundJobs, NoOpPipeline, BuildTestRedis(), Options.Create(new TelemetryOptions()), new ProcessStreamSlotLimiter(5000), TestMetricsFactory.CreateIngestMetrics(), TestMetricsFactory.CreateResilienceMetrics(), _chainGate, _timeProvider, _logger);
+        TelemetryService service = new(scopeFactory, _dedupService, _subscriptionService, _quotaPause, _backgroundJobs, NoOpPipeline, BuildTestRedis(), Options.Create(new TelemetryOptions()), new ProcessStreamSlotLimiter(5000), TestMetricsFactory.CreateIngestMetrics(), TestMetricsFactory.CreateResilienceMetrics(), TestMetricsFactory.CreateQuotaPauseMetrics(), _chainGate, _timeProvider, _logger);
 
         // Context with a valid MachineId claim but no TenantId claim — IsSubscriptionActiveAsync returns false.
         DefaultHttpContext httpContext = new();
@@ -1468,7 +1691,7 @@ public sealed class TelemetryServiceTests
         // A clean, whole-second server clock so the SQLite round-trip compares exactly.
         DateTimeOffset serverNow = new(2026, 6, 24, 12, 0, 0, TimeSpan.Zero);
         FakeTimeProvider fixedClock = new(serverNow);
-        TelemetryService service = new(scopeFactory, _dedupService, _subscriptionService, _backgroundJobs, NoOpPipeline, BuildTestRedis(), Options.Create(new TelemetryOptions()), new ProcessStreamSlotLimiter(5000), TestMetricsFactory.CreateIngestMetrics(), TestMetricsFactory.CreateResilienceMetrics(), _chainGate, fixedClock, _logger);
+        TelemetryService service = new(scopeFactory, _dedupService, _subscriptionService, _quotaPause, _backgroundJobs, NoOpPipeline, BuildTestRedis(), Options.Create(new TelemetryOptions()), new ProcessStreamSlotLimiter(5000), TestMetricsFactory.CreateIngestMetrics(), TestMetricsFactory.CreateResilienceMetrics(), TestMetricsFactory.CreateQuotaPauseMetrics(), _chainGate, fixedClock, _logger);
         ServerCallContext context = CreateAuthenticatedContext(100);
 
         // The item's collected-at is three days in the future — within the ±7d dedup clamp, so ReceivedAt
