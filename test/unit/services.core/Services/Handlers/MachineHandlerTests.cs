@@ -152,6 +152,63 @@ public class MachineHandlerTests
     }
 
     [Test]
+    public async Task DeleteAsync_Success_EvictsTheDeletedKeyBeforeClearingTheQuotaCutoff()
+    {
+        // Intent: the deleted machine's key must stop authenticating no matter what clearing the cutoff
+        // does, so the eviction runs first.
+        using TestDatabaseFactory dbFactory = new();
+        const string knownHash = "feedface00000000000000000000000000000000000000000000000000000001";
+        Machine machine = TestDataBuilder.BuildMachine(tenantId: 1, apiKeyHash: knownHash);
+        machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
+        IConnectionMultiplexer redis = FakeRedisConnection.Create();
+        IDatabase db = redis.GetDatabase();
+        await db.StringSetAsync(QuotaPauseService.CacheKeyFor(1), "after:5");
+        bool cutoffStillCachedAtEviction = false;
+        IApiKeyCacheInvalidator apiKeyInvalidator = Substitute.For<IApiKeyCacheInvalidator>();
+        apiKeyInvalidator.InvalidateByHashAsync(knownHash, Arg.Any<CancellationToken>()).Returns(async _ =>
+        {
+            RedisValue atEviction = await db.StringGetAsync(QuotaPauseService.CacheKeyFor(1));
+            cutoffStillCachedAtEviction = atEviction.HasValue;
+        });
+        MachineHandler handler = CreateHandler(
+            dbFactory,
+            apiKeyCacheInvalidator: apiKeyInvalidator,
+            quotaInvalidator: new QuotaCutoffInvalidator(redis, NullLogger<QuotaCutoffInvalidator>.Instance));
+
+        ServiceResult<ApiResponse<object>> result = await handler.DeleteAsync(machine.Id, 1, 5, CancellationToken.None);
+
+        await Assert.That(result.IsSuccess).IsTrue();
+        await Assert.That(cutoffStillCachedAtEviction).IsTrue();
+        await Assert.That((await db.StringGetAsync(QuotaPauseService.CacheKeyFor(1))).HasValue).IsFalse();
+    }
+
+    [Test]
+    public async Task DeleteAsync_WhenTheKeyEvictionFails_StillClearsTheQuotaCutoffAtScopeDisposal()
+    {
+        // Intent: the delete has committed, so a failure after it must not leave the old cutoff cached
+        // for the rest of its lifetime. The mark was made at the commit, so disposal clears it.
+        using TestDatabaseFactory dbFactory = new();
+        const string knownHash = "feedface00000000000000000000000000000000000000000000000000000002";
+        Machine machine = TestDataBuilder.BuildMachine(tenantId: 1, apiKeyHash: knownHash);
+        machine.Id = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
+        IConnectionMultiplexer redis = FakeRedisConnection.Create();
+        await redis.GetDatabase().StringSetAsync(QuotaPauseService.CacheKeyFor(1), "after:5");
+        IApiKeyCacheInvalidator apiKeyInvalidator = Substitute.For<IApiKeyCacheInvalidator>();
+        apiKeyInvalidator.InvalidateByHashAsync(knownHash, Arg.Any<CancellationToken>())
+            .Returns(Task.FromException(new InvalidOperationException("redis down")));
+        QuotaCutoffInvalidator quotaInvalidator = new(redis, NullLogger<QuotaCutoffInvalidator>.Instance);
+        MachineHandler handler = CreateHandler(dbFactory, apiKeyCacheInvalidator: apiKeyInvalidator, quotaInvalidator: quotaInvalidator);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(
+            async () => await handler.DeleteAsync(machine.Id, 1, 5, CancellationToken.None));
+        await Assert.That((await redis.GetDatabase().StringGetAsync(QuotaPauseService.CacheKeyFor(1))).HasValue).IsTrue();
+
+        quotaInvalidator.Dispose();
+
+        await Assert.That((await redis.GetDatabase().StringGetAsync(QuotaPauseService.CacheKeyFor(1))).HasValue).IsFalse();
+    }
+
+    [Test]
     public async Task DeleteAsync_NotFound_LeavesTheQuotaCutoffAlone()
     {
         // Intent: a delete that removed nothing moved no cutoff, so it must not throw a good one away.

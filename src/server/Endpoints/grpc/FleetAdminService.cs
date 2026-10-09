@@ -545,14 +545,9 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
             };
         }
 
-        // The tier write above is not wrapped in a transaction, so it is already durable. Record what
-        // its machine limit leaves paused straight away, then dispatch the reclassification and the
-        // quota cutoff the subscription seam marked rather than waiting for scope teardown.
-        await scope.ServiceProvider.GetRequiredService<HostsPausedAuditWriter>().WriteIfHostsPausedAsync(
-            tenant.Id, tier.Value, null, context.CancellationToken);
-
+        // The tier write above is not wrapped in a transaction, so it is already durable; dispatch the
+        // reclassification the subscription seam marked rather than waiting for scope teardown.
         scope.ServiceProvider.GetRequiredService<RetentionReclassifyDispatcher>().DispatchPending();
-        scope.ServiceProvider.GetRequiredService<QuotaCutoffInvalidator>().DispatchPending();
 
         // An administrative grant is a real route into a paid tier and bypasses Stripe entirely, so
         // nothing else on this path would ever provision or restore the alert rules. The RPC accepts
@@ -561,6 +556,15 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
         IBuiltInAlertRuleProvisioner provisioner = scope.ServiceProvider.GetRequiredService<IBuiltInAlertRuleProvisioner>();
         await provisioner.RestoreForTierAsync(
             tenant.Id, priorSubscription, tier.Value, status, context.CancellationToken);
+
+        // Everything that must happen because the tier changed has now happened, so what follows can
+        // fail without costing a retry the restore: billing-api retries a failed call, and a retry reads
+        // the already-written tier as the prior one and would no longer restore anything. Record what
+        // the new tier's machine limit leaves paused, then clear the quota cutoff the subscription seam
+        // marked rather than waiting for scope teardown.
+        await scope.ServiceProvider.GetRequiredService<HostsPausedAuditWriter>().WriteIfHostsPausedAsync(
+            tenant.Id, tier.Value, null, context.CancellationToken);
+        scope.ServiceProvider.GetRequiredService<QuotaCutoffInvalidator>().DispatchPending();
 
         _logger.LogInformation(
             "FleetAdmin: tenant {TenantId} subscription updated to tier={Tier}, status={Status}",

@@ -107,9 +107,10 @@ public sealed class MachineHandler
         await transaction.CommitAsync(ct);
 
         // Deleting a host moves the tenant's cutoff: the next registered host takes its place among the
-        // active ones. Cleared after the commit so a rolled-back delete never evicts a still-right entry.
+        // active ones. Marked once the delete has committed, so a rolled-back delete never evicts a
+        // still-right entry; the clear itself waits until the key eviction below has run, so nothing the
+        // clear could throw can leave the deleted machine's key authenticating.
         _quotaInvalidator.MarkPending(tenantId.Value);
-        _quotaInvalidator.DispatchPending();
 
         // Clear the deleted machine's cached auth result so its key stops authenticating immediately
         // rather than lingering until the cache TTL expires. Done after commit so a rolled-back
@@ -118,6 +119,8 @@ public sealed class MachineHandler
         {
             await _apiKeyCacheInvalidator.InvalidateByHashAsync(deletedKeyHash, ct);
         }
+
+        _quotaInvalidator.DispatchPending();
 
         // Report the updated billable quantity after deletion (best effort) so Stripe reflects
         // the new machine count without waiting for the next heartbeat cycle

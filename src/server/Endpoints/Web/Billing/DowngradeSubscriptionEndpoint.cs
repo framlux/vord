@@ -40,6 +40,7 @@ public sealed class DowngradeSubscriptionEndpoint : Endpoint<DowngradeSubscripti
     private readonly DowngradeGuardService _downgradeGuardService;
     private readonly IDowngradeCleanupService _downgradeCleanupService;
     private readonly RetentionReclassifyDispatcher _reclassifyDispatcher;
+    private readonly QuotaCutoffInvalidator _quotaInvalidator;
     private readonly HostsPausedAuditWriter _hostsPausedAudit;
     private readonly ILogger<DowngradeSubscriptionEndpoint> _logger;
 
@@ -58,6 +59,7 @@ public sealed class DowngradeSubscriptionEndpoint : Endpoint<DowngradeSubscripti
         DowngradeGuardService downgradeGuardService,
         IDowngradeCleanupService downgradeCleanupService,
         RetentionReclassifyDispatcher reclassifyDispatcher,
+        QuotaCutoffInvalidator quotaInvalidator,
         HostsPausedAuditWriter hostsPausedAudit,
         ILogger<DowngradeSubscriptionEndpoint> logger)
     {
@@ -72,6 +74,7 @@ public sealed class DowngradeSubscriptionEndpoint : Endpoint<DowngradeSubscripti
         _downgradeGuardService = downgradeGuardService;
         _downgradeCleanupService = downgradeCleanupService;
         _reclassifyDispatcher = reclassifyDispatcher;
+        _quotaInvalidator = quotaInvalidator;
         _hostsPausedAudit = hostsPausedAudit;
         _logger = logger;
     }
@@ -200,6 +203,7 @@ public sealed class DowngradeSubscriptionEndpoint : Endpoint<DowngradeSubscripti
         // Post-commit: the immediate Team-to-Pro downgrade narrows effective retention, so the
         // surviving telemetry is reclassified. Queued here rather than inside the transaction above.
         _reclassifyDispatcher.DispatchPending();
+        _quotaInvalidator.DispatchPending();
 
         // Swap the Stripe price (best effort, webhook will also fire)
         Tenant? tenant = await _tenantRepository.GetTenantByIdAsync(tenantId, ct);

@@ -7,9 +7,12 @@ using System.Text.Json;
 using Framlux.FleetManagement.Database;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
+using Framlux.FleetManagement.Services.Core.Billing;
 using Framlux.FleetManagement.Test.Infrastructure;
 using LinqToDB;
 using LinqToDB.Async;
+using Microsoft.Extensions.DependencyInjection;
+using StackExchange.Redis;
 
 namespace Framlux.FleetManagement.FunctionalTest.Endpoints.Web;
 
@@ -92,6 +95,8 @@ public sealed class ReactivateSubscriptionEndpointTests
             await db.InsertWithInt64IdentityAsync(TestDataBuilder.BuildMachine(tenantId: tenantId));
         }
 
+        IDatabase redis = factory.Services.GetRequiredService<IConnectionMultiplexer>().GetDatabase();
+        await redis.StringSetAsync(QuotaPauseService.CacheKeyFor(tenantId), "after:1");
         HttpClient client = BuildClient(factory, tenantId, userId);
 
         HttpResponseMessage response = await client.PostAsync("/api/v1/billing/reactivate", null);
@@ -103,6 +108,7 @@ public sealed class ReactivateSubscriptionEndpointTests
         await Assert.That(paused.Details).Contains("\"paused\":2");
         await Assert.That(paused.Details).Contains("\"limit\":3");
         await Assert.That(paused.Details).Contains("\"registered\":5");
+        await Assert.That((await redis.StringGetAsync(QuotaPauseService.CacheKeyFor(tenantId))).HasValue).IsFalse();
     }
 
     [Test]

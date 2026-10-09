@@ -60,7 +60,7 @@ public class MachineServiceTests
         return token;
     }
 
-    private static TestServiceScopeFactory CreateScopeFactory(TestDatabaseFactory dbFactory, IMachineRepository machineRepo, ITenantRepository? tenantRepo = null, ISubscriptionService? subscriptionService = null, IMachineBillingSync? billingSync = null, QuotaCutoffInvalidator? quotaInvalidator = null)
+    private static TestServiceScopeFactory CreateScopeFactory(TestDatabaseFactory dbFactory, IMachineRepository machineRepo, ITenantRepository? tenantRepo = null, ISubscriptionService? subscriptionService = null, IMachineBillingSync? billingSync = null, QuotaCutoffInvalidator? quotaInvalidator = null, IMachineStateRepository? machineStateRepo = null)
     {
         Dictionary<Type, object> services = new()
         {
@@ -75,6 +75,11 @@ public class MachineServiceTests
         if (tenantRepo is not null)
         {
             services[typeof(ITenantRepository)] = tenantRepo;
+        }
+
+        if (machineStateRepo is not null)
+        {
+            services[typeof(IMachineStateRepository)] = machineStateRepo;
         }
 
         // RegisterSystemAsync resolves ISubscriptionService from the scope; provide a default mock
@@ -1405,13 +1410,13 @@ public class MachineServiceTests
         machineRepo.CreateMachineWithKeyAsync(
                 Arg.Any<Machine>(), Arg.Any<long>(), Arg.Any<DateTimeOffset>(), Arg.Any<int?>(), Arg.Any<CancellationToken>())
             .Returns((BuildCreatedMachine(300), "plaintext-key"));
-        bool clearedBeforeTheSync = true;
+        bool cutoffStillCachedDuringTheSync = false;
         IMachineBillingSync billingSync = Substitute.For<IMachineBillingSync>();
         billingSync.ReportActiveMachineUsageAsync(Arg.Any<int>(), Arg.Any<CancellationToken>())
             .Returns(async _ =>
             {
                 RedisValue atSync = await db.StringGetAsync(QuotaPauseService.CacheKeyFor(1));
-                clearedBeforeTheSync = atSync.HasValue == false;
+                cutoffStillCachedDuringTheSync = atSync.HasValue;
             });
         TestServiceScopeFactory scopeFactory = CreateScopeFactory(
             dbFactory, machineRepo, billingSync: billingSync,
@@ -1430,10 +1435,65 @@ public class MachineServiceTests
             }, CancellationToken.None);
 
         await Assert.That(result.errorMessage).IsEqualTo(string.Empty);
-        await Assert.That(clearedBeforeTheSync).IsFalse();
+        await Assert.That(cutoffStillCachedDuringTheSync).IsTrue();
         await Assert.That((await db.StringGetAsync(QuotaPauseService.CacheKeyFor(1))).HasValue).IsFalse();
         await Assert.That((await db.StringGetAsync(CachingSubscriptionRepository.CacheKeyFor(1))).HasValue).IsFalse();
         await Assert.That((await db.StringGetAsync(QuotaPauseService.CacheKeyFor(2))).HasValue).IsTrue();
+    }
+
+    /// <summary>
+    /// The host is a committed row from the moment it is created, so the cutoff is marked then. A failure
+    /// in a later step (here the summary insert) must still have the cached entries cleared when the
+    /// scope is disposed, which the test stands in for by disposing the invalidator.
+    /// </summary>
+    [Test]
+    public async Task RegisterSystem_WhenALaterStepFails_StillClearsTheQuotaCutoffAtScopeDisposal()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        await SeedValidRegistrationToken(dbFactory, FixedNow);
+        IConnectionMultiplexer redis = FakeRedisConnection.Create();
+        IDatabase db = redis.GetDatabase();
+        await db.StringSetAsync(QuotaPauseService.CacheKeyFor(1), "none");
+        await db.StringSetAsync(CachingSubscriptionRepository.CacheKeyFor(1), "{}");
+
+        IMachineRepository machineRepo = Substitute.For<IMachineRepository>();
+        machineRepo.CreateMachineWithKeyAsync(
+                Arg.Any<Machine>(), Arg.Any<long>(), Arg.Any<DateTimeOffset>(), Arg.Any<int?>(), Arg.Any<CancellationToken>())
+            .Returns((BuildCreatedMachine(301), "plaintext-key"));
+        IMachineBillingSync billingSync = Substitute.For<IMachineBillingSync>();
+        QuotaCutoffInvalidator quotaInvalidator = new(redis, NullLogger<QuotaCutoffInvalidator>.Instance);
+        TestServiceScopeFactory scopeFactory = CreateScopeFactory(
+            dbFactory, machineRepo, billingSync: billingSync, quotaInvalidator: quotaInvalidator, machineStateRepo: FailingMachineStateRepository());
+        MachineService service = BuildService(scopeFactory);
+
+        await Assert.ThrowsAsync<InvalidOperationException>(async () => await service.RegisterSystemAsync(
+            new RegisterSystemRequest
+            {
+                SerialNumber = "SN-LATE",
+                SystemId = "SID-LATE",
+                Hostname = "late-host",
+                MachineType = Grpc.AgentRegistration.MachineType.BareMetalServerType,
+                Os = OperatingSystemType.UbuntuOs,
+                RegistrationToken = TestTokenValue,
+            }, CancellationToken.None));
+
+        // Nothing was dispatched on the way out, and the billing sync never ran.
+        await billingSync.DidNotReceiveWithAnyArgs().ReportActiveMachineUsageAsync(default, default);
+        await Assert.That((await db.StringGetAsync(QuotaPauseService.CacheKeyFor(1))).HasValue).IsTrue();
+
+        quotaInvalidator.Dispose();
+
+        await Assert.That((await db.StringGetAsync(QuotaPauseService.CacheKeyFor(1))).HasValue).IsFalse();
+        await Assert.That((await db.StringGetAsync(CachingSubscriptionRepository.CacheKeyFor(1))).HasValue).IsFalse();
+    }
+
+    private static IMachineStateRepository FailingMachineStateRepository()
+    {
+        IMachineStateRepository repo = Substitute.For<IMachineStateRepository>();
+        repo.InsertSummaryAsync(Arg.Any<MachineStateSummary>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromException(new InvalidOperationException("state store unavailable")));
+
+        return repo;
     }
 
     [Test]

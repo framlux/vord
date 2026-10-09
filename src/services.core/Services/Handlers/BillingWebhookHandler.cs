@@ -23,6 +23,7 @@ public sealed class BillingWebhookHandler : IBillingWebhookHandler
     private readonly IBuiltInAlertRuleProvisioner _builtInProvisioner;
     private readonly IDowngradeCleanupService _downgradeCleanupService;
     private readonly RetentionReclassifyDispatcher _reclassifyDispatcher;
+    private readonly QuotaCutoffInvalidator _quotaInvalidator;
     private readonly HostsPausedAuditWriter _hostsPausedAudit;
     private readonly ILogger<BillingWebhookHandler> _logger;
 
@@ -36,6 +37,7 @@ public sealed class BillingWebhookHandler : IBillingWebhookHandler
         IBuiltInAlertRuleProvisioner builtInProvisioner,
         IDowngradeCleanupService downgradeCleanupService,
         RetentionReclassifyDispatcher reclassifyDispatcher,
+        QuotaCutoffInvalidator quotaInvalidator,
         HostsPausedAuditWriter hostsPausedAudit,
         ILogger<BillingWebhookHandler> logger)
     {
@@ -45,6 +47,7 @@ public sealed class BillingWebhookHandler : IBillingWebhookHandler
         ArgumentNullException.ThrowIfNull(builtInProvisioner);
         ArgumentNullException.ThrowIfNull(downgradeCleanupService);
         ArgumentNullException.ThrowIfNull(reclassifyDispatcher);
+        ArgumentNullException.ThrowIfNull(quotaInvalidator);
         ArgumentNullException.ThrowIfNull(hostsPausedAudit);
         ArgumentNullException.ThrowIfNull(logger);
 
@@ -54,6 +57,7 @@ public sealed class BillingWebhookHandler : IBillingWebhookHandler
         _builtInProvisioner = builtInProvisioner;
         _downgradeCleanupService = downgradeCleanupService;
         _reclassifyDispatcher = reclassifyDispatcher;
+        _quotaInvalidator = quotaInvalidator;
         _hostsPausedAudit = hostsPausedAudit;
         _logger = logger;
     }
@@ -100,7 +104,10 @@ public sealed class BillingWebhookHandler : IBillingWebhookHandler
         await transaction.CommitAsync(ct);
 
         // Post-commit: a tier change marked during the transaction is only queued now, never inside it.
+        // The cached quota cutoff is cleared here too rather than at scope disposal, because the sync
+        // job applies every paid tenant's correction in one scope.
         _reclassifyDispatcher.DispatchPending();
+        _quotaInvalidator.DispatchPending();
 
         // Checkout is the journey customers actually make, so it is the path that has to repair a
         // Free downgrade and a Pro-to-Team round trip alike. The restore only turns back on what the
@@ -158,7 +165,10 @@ public sealed class BillingWebhookHandler : IBillingWebhookHandler
         await transaction.CommitAsync(ct);
 
         // Post-commit: a tier change marked during the transaction is only queued now, never inside it.
+        // The cached quota cutoff is cleared here too rather than at scope disposal, because the sync
+        // job applies every paid tenant's correction in one scope.
         _reclassifyDispatcher.DispatchPending();
+        _quotaInvalidator.DispatchPending();
     }
 
     /// <inheritdoc/>
@@ -250,7 +260,10 @@ public sealed class BillingWebhookHandler : IBillingWebhookHandler
         await transaction.CommitAsync(ct);
 
         // Post-commit: a tier change marked during the transaction is only queued now, never inside it.
+        // The cached quota cutoff is cleared here too rather than at scope disposal, because the sync
+        // job applies every paid tenant's correction in one scope.
         _reclassifyDispatcher.DispatchPending();
+        _quotaInvalidator.DispatchPending();
     }
 
     /// <inheritdoc/>
@@ -290,7 +303,10 @@ public sealed class BillingWebhookHandler : IBillingWebhookHandler
         await transaction.CommitAsync(ct);
 
         // Post-commit: a tier change marked during the transaction is only queued now, never inside it.
+        // The cached quota cutoff is cleared here too rather than at scope disposal, because the sync
+        // job applies every paid tenant's correction in one scope.
         _reclassifyDispatcher.DispatchPending();
+        _quotaInvalidator.DispatchPending();
 
         // Drift repair is the one path that exists because a checkout webhook was lost, so it is the
         // likeliest route by which a paying tenant has never been provisioned at all.

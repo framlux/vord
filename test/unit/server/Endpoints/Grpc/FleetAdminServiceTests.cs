@@ -3057,6 +3057,8 @@ public sealed class FleetAdminServiceTests
 
         public required IDatabaseTransaction Transaction { get; init; }
 
+        public required IBuiltInAlertRuleProvisioner Provisioner { get; init; }
+
         public required IConnectionMultiplexer Redis { get; init; }
 
         public required QuotaCutoffInvalidator Invalidator { get; init; }
@@ -3073,6 +3075,7 @@ public sealed class FleetAdminServiceTests
         IAuditLogRepository auditLog = Substitute.For<IAuditLogRepository>();
         ISubscriptionService subscriptions = Substitute.For<ISubscriptionService>();
         IMachineRepository machines = Substitute.For<IMachineRepository>();
+        IBuiltInAlertRuleProvisioner provisioner = Substitute.For<IBuiltInAlertRuleProvisioner>();
         tenantRepo.GetTenantByExternalIdAsync(TenantExternalId, Arg.Any<CancellationToken>()).Returns(MakeTenant());
         txProvider.BeginTransactionAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult(transaction));
         overrideRepo.UpsertOverrideUnlessEnterpriseAsync(
@@ -3123,7 +3126,7 @@ public sealed class FleetAdminServiceTests
                 typeof(RetentionReclassifyDispatcher),
                 new RetentionReclassifyDispatcher(Substitute.For<IBackgroundJobClient>(), NullLogger<RetentionReclassifyDispatcher>.Instance)
             },
-            { typeof(IBuiltInAlertRuleProvisioner), Substitute.For<IBuiltInAlertRuleProvisioner>() },
+            { typeof(IBuiltInAlertRuleProvisioner), provisioner },
             { typeof(HostsPausedAuditWriter), CreateHostsPausedWriter(auditLog, subscriptions, machines) },
             { typeof(QuotaCutoffInvalidator), invalidator },
         });
@@ -3136,6 +3139,7 @@ public sealed class FleetAdminServiceTests
             Subscriptions = subscriptions,
             AuditLog = auditLog,
             Transaction = transaction,
+            Provisioner = provisioner,
             Redis = redis,
             Invalidator = invalidator,
         };
@@ -3291,8 +3295,10 @@ public sealed class FleetAdminServiceTests
     }
 
     /// <summary>
-    /// The grant has no transaction, so its record follows the write directly. The limit is read for the
-    /// tier written, not the tier the tenant held a moment before.
+    /// The grant has no transaction, so the tier is durable before anything after it runs. The record of
+    /// what the new limit pauses therefore follows the restore of the tenant's alert rules: were it to
+    /// fail first, billing-api's retry would read the already-written tier as the prior one and never
+    /// restore. The limit is read for the tier written, not the tier the tenant held a moment before.
     /// </summary>
     [Test]
     public async Task UpdateTenantSubscription_WhenTheGrantedTierPausesHosts_WritesHostsPausedForTheTierWritten()
@@ -3311,12 +3317,34 @@ public sealed class FleetAdminServiceTests
         {
             h.SubscriptionRepo.UpdateSubscriptionStateAsync(
                 TenantInternalId, SubscriptionTier.Free, SubscriptionStatus.Active, false, Arg.Any<CancellationToken>());
+            h.Provisioner.RestoreForTierAsync(
+                TenantInternalId, Arg.Any<TenantSubscription?>(), SubscriptionTier.Free, SubscriptionStatus.Active, Arg.Any<CancellationToken>());
             h.AuditLog.InsertAuditLogAsync(Arg.Is<AuditLogEntry>(e => e.Action == AuditAction.HostsPaused), Arg.Any<CancellationToken>());
         });
         await h.Subscriptions.Received(1).GetMachineLimitForTierAsync(TenantInternalId, SubscriptionTier.Free, Arg.Any<CancellationToken>());
         await h.AuditLog.Received(1).InsertAuditLogAsync(
             Arg.Is<AuditLogEntry>(e => (e.Action == AuditAction.HostsPaused) && (e.Details != null) && e.Details.Contains("\"paused\":7")),
             Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task UpdateTenantSubscription_WhenThePauseRecordFails_HasAlreadyRestoredTheTenantsRules()
+    {
+        // Intent: the failure of the new audit write must not be able to cost the restore, which a retry
+        // could no longer perform once the tier is written.
+        PauseHarness h = await BuildPauseHarnessAsync(SubscriptionTier.Pro, cachedTier: SubscriptionTier.Pro, limit: 3, registered: 10);
+        h.SubscriptionRepo.UpdateSubscriptionStateAsync(
+                TenantInternalId, SubscriptionTier.Free, SubscriptionStatus.Active, false, Arg.Any<CancellationToken>())
+            .Returns(1);
+        h.AuditLog.InsertAuditLogAsync(Arg.Any<AuditLogEntry>(), Arg.Any<CancellationToken>())
+            .Returns(Task.FromException(new InvalidOperationException("audit store unavailable")));
+
+        await Assert.ThrowsAsync<InvalidOperationException>(async () => await h.Service.UpdateTenantSubscription(
+            new UpdateTenantSubscriptionRequest { TenantExternalId = TenantExternalId, Tier = BillingTier.Free, Status = "Active" },
+            CreateContext()));
+
+        await h.Provisioner.Received(1).RestoreForTierAsync(
+            TenantInternalId, Arg.Any<TenantSubscription?>(), SubscriptionTier.Free, SubscriptionStatus.Active, Arg.Any<CancellationToken>());
     }
 
     [Test]

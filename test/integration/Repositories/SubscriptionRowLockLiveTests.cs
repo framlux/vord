@@ -396,6 +396,7 @@ public sealed class SubscriptionRowLockLiveTests
             Substitute.For<IBuiltInAlertRuleProvisioner>(),
             cleanup,
             new RetentionReclassifyDispatcher(Substitute.For<IBackgroundJobClient>(), NullLogger<RetentionReclassifyDispatcher>.Instance),
+            new QuotaCutoffInvalidator(FakeRedisConnection.Create(), NullLogger<QuotaCutoffInvalidator>.Instance),
             BuildHostsPausedWriter(repo),
             NullLogger<BillingWebhookHandler>.Instance);
     }
