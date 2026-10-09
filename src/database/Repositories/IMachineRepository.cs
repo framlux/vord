@@ -113,8 +113,9 @@ public interface IMachineRepository
     /// <param name="limit">The tenant's machine limit.</param>
     /// <param name="cancellationToken">A cancellation token.</param>
     /// <returns>
-    /// The registered count, and the cutoff id, which is null when the tenant is within its limit or
-    /// the limit is zero or below (every machine is then over it and no single id describes the set).
+    /// The registered count, and the cutoff id, which is null when the tenant is within its limit, when
+    /// machines were removed between the count and the lookup so none remain over it, or when the limit
+    /// is zero or below (every machine is then over it and no single id describes the set).
     /// </returns>
     Task<(int RegisteredCount, long? CutoffId)> GetRegisteredMachineCutoffAsync(int tenantId, int limit, CancellationToken cancellationToken = default);
 

@@ -116,6 +116,25 @@ public sealed class QuotaPauseServiceTests
     }
 
     [Test]
+    public async Task GetCutoffAsync_RedisReadTimesOut_ComputesFromDatabase()
+    {
+        // A Redis timeout derives from TimeoutException rather than RedisException, so it has to be
+        // handled on its own: it must fall back to the database, not escape and fail the caller.
+        (_, List<long> ids, _, TestDatabaseFactory db, ISubscriptionService subs) = await BuildAsync(limit: 3, machines: 5);
+        using (db)
+        {
+            IConnectionMultiplexer slow = Substitute.For<IConnectionMultiplexer>();
+            IDatabase slowDb = Substitute.For<IDatabase>();
+            slow.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(slowDb);
+            slowDb.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>()).Returns<RedisValue>(_ => throw new RedisTimeoutException("down", CommandStatus.Unknown));
+            QuotaPauseService service = new(subs, new DatabaseRepository(db.Context, new NullLogger<DatabaseRepository>()), slow, NullLogger<QuotaPauseService>.Instance);
+
+            await Assert.That(await service.IsPausedAsync(1, ids[4], CancellationToken.None)).IsTrue();
+            await Assert.That(await service.IsPausedAsync(1, ids[2], CancellationToken.None)).IsFalse();
+        }
+    }
+
+    [Test]
     public async Task GetCutoffAsync_RedisWriteThrows_StillReturnsTheComputedCutoff()
     {
         // The write after a miss is best-effort: a failed cache fill must not fail the decision.
@@ -135,6 +154,26 @@ public sealed class QuotaPauseServiceTests
             // Guards against the stub binding to a different overload than production calls, which
             // would leave this test passing without the write ever being attempted.
             await failingWrites.Received(1).StringSetAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<Expiration>(), Arg.Any<ValueCondition>(), Arg.Any<CommandFlags>());
+        }
+    }
+
+    [Test]
+    public async Task GetCutoffAsync_RedisWriteTimesOut_StillReturnsTheComputedCutoff()
+    {
+        (_, List<long> ids, _, TestDatabaseFactory db, ISubscriptionService subs) = await BuildAsync(limit: 3, machines: 5);
+        using (db)
+        {
+            IConnectionMultiplexer redis = FakeRedisConnection.Create();
+            IDatabase timingOutWrites = Substitute.For<IDatabase>();
+            timingOutWrites.StringGetAsync(Arg.Any<RedisKey>(), Arg.Any<CommandFlags>()).Returns(RedisValue.Null);
+            timingOutWrites.StringSetAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<Expiration>(), Arg.Any<ValueCondition>(), Arg.Any<CommandFlags>())
+                .Returns<bool>(_ => throw new RedisTimeoutException("down", CommandStatus.Unknown));
+            redis.GetDatabase(Arg.Any<int>(), Arg.Any<object>()).Returns(timingOutWrites);
+            QuotaPauseService service = new(subs, new DatabaseRepository(db.Context, new NullLogger<DatabaseRepository>()), redis, NullLogger<QuotaPauseService>.Instance);
+
+            await Assert.That(await service.GetCutoffAsync(1, CancellationToken.None)).IsEqualTo(QuotaCutoff.After(ids[2]));
+
+            await timingOutWrites.Received(1).StringSetAsync(Arg.Any<RedisKey>(), Arg.Any<RedisValue>(), Arg.Any<Expiration>(), Arg.Any<ValueCondition>(), Arg.Any<CommandFlags>());
         }
     }
 

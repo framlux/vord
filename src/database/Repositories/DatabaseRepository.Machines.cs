@@ -303,7 +303,10 @@ public partial class DatabaseRepository : IMachineRepository
             return (count, null);
         }
 
-        long cutoffId = await registered.OrderBy(m => m.Id).Skip(limit - 1).Select(m => m.Id).FirstAsync(cancellationToken);
+        // The count and this lookup are separate statements, so machines removed in between can leave
+        // fewer than limit rows. No row at the offset then means nothing is over the limit, which is
+        // "no cutoff"; projecting to a nullable keeps that distinct from an id of zero.
+        long? cutoffId = await registered.OrderBy(m => m.Id).Skip(limit - 1).Select(m => (long?)m.Id).FirstOrDefaultAsync(cancellationToken);
 
         return (count, cutoffId);
     }

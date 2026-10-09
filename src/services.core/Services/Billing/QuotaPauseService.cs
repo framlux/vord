@@ -114,6 +114,8 @@ public sealed class QuotaPauseService : IQuotaPauseService
         }
     }
 
+    // A Redis timeout derives from TimeoutException rather than RedisException, so both helpers name
+    // it explicitly; otherwise a slow Redis would skip the database fallback and fail the caller.
     private async Task<QuotaCutoff?> TryReadAsync(int tenantId)
     {
         RedisValue value;
@@ -121,7 +123,7 @@ public sealed class QuotaPauseService : IQuotaPauseService
         {
             value = await _redis.GetDatabase().StringGetAsync(CacheKeyFor(tenantId));
         }
-        catch (RedisException ex)
+        catch (Exception ex) when (ex is RedisException or RedisTimeoutException)
         {
             _logger.LogWarning(ex, "Quota cutoff cache read failed for tenant {TenantId}; computing from the database", tenantId);
 
@@ -137,7 +139,7 @@ public sealed class QuotaPauseService : IQuotaPauseService
         {
             await _redis.GetDatabase().StringSetAsync(CacheKeyFor(tenantId), Format(cutoff), CacheTtl);
         }
-        catch (RedisException ex)
+        catch (Exception ex) when (ex is RedisException or RedisTimeoutException)
         {
             // Best-effort: the next check recomputes from the database.
             _logger.LogWarning(ex, "Quota cutoff cache write failed for tenant {TenantId}", tenantId);
