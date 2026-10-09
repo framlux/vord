@@ -5,6 +5,7 @@
 syntax = "proto3";
 
 import "google/protobuf/timestamp.proto";
+import "AgentCommon.proto";
 
 option csharp_namespace = "Framlux.FleetManagement.Grpc.AgentTelemetry";
 option go_package = "github.com/framlux/vord/internal/proto/agent";
@@ -50,6 +51,9 @@ message TelemetryAck {
   repeated string acknowledged_event_ids = 2;
   bool success = 3;
   string error_message = 4;
+  // Set when the server acknowledged the batch without storing it, so the agent can tell a
+  // discarded batch from a stored one instead of reading every success as accepted.
+  IngestRejectionReason reason = 5;
 }
 
 enum TelemetryTypes {

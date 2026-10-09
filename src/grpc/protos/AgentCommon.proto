@@ -1,0 +1,20 @@
+// Copyright (c) 2026 Framlux LLC
+// Licensed under the MIT License
+// See LICENSE for details.
+
+syntax = "proto3";
+
+option csharp_namespace = "Framlux.FleetManagement.Grpc.AgentCommon";
+option go_package = "github.com/framlux/vord/internal/proto/agent";
+
+package agent;
+
+// Why the server is not taking a machine's telemetry. Carried in-band on the telemetry ack and on
+// AgentPing, never as a gRPC status, so an agent that does not know this field keeps working.
+enum IngestRejectionReason {
+  INGEST_REJECTION_REASON_UNSPECIFIED = 0;
+  // The machine is beyond its tenant's host limit. Telemetry is acknowledged and discarded.
+  INGEST_REJECTION_REASON_HOST_PAUSED = 1;
+  // The tenant's subscription is not eligible for ingest.
+  INGEST_REJECTION_REASON_SUBSCRIPTION_INACTIVE = 2;
+}

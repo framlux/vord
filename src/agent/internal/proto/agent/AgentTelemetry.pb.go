@@ -456,8 +456,11 @@ type TelemetryAck struct {
 	AcknowledgedEventIds []string               `protobuf:"bytes,2,rep,name=acknowledged_event_ids,json=acknowledgedEventIds,proto3" json:"acknowledged_event_ids,omitempty"`
 	Success              bool                   `protobuf:"varint,3,opt,name=success,proto3" json:"success,omitempty"`
 	ErrorMessage         string                 `protobuf:"bytes,4,opt,name=error_message,json=errorMessage,proto3" json:"error_message,omitempty"`
-	unknownFields        protoimpl.UnknownFields
-	sizeCache            protoimpl.SizeCache
+	// Set when the server acknowledged the batch without storing it, so the agent can tell a
+	// discarded batch from a stored one instead of reading every success as accepted.
+	Reason        IngestRejectionReason `protobuf:"varint,5,opt,name=reason,proto3,enum=agent.IngestRejectionReason" json:"reason,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *TelemetryAck) Reset() {
@@ -516,6 +519,13 @@ func (x *TelemetryAck) GetErrorMessage() string {
 		return x.ErrorMessage
 	}
 	return ""
+}
+
+func (x *TelemetryAck) GetReason() IngestRejectionReason {
+	if x != nil {
+		return x.Reason
+	}
+	return IngestRejectionReason_INGEST_REJECTION_REASON_UNSPECIFIED
 }
 
 type SystemInfoRecord struct {
@@ -2270,7 +2280,7 @@ var File_AgentTelemetry_proto protoreflect.FileDescriptor
 
 const file_AgentTelemetry_proto_rawDesc = "" +
 	"\n" +
-	"\x14AgentTelemetry.proto\x12\x05agent\x1a\x1fgoogle/protobuf/timestamp.proto\"\x9f\x01\n" +
+	"\x14AgentTelemetry.proto\x12\x05agent\x1a\x1fgoogle/protobuf/timestamp.proto\x1a\x11AgentCommon.proto\"\x9f\x01\n" +
 	"\x11TelemetryEnvelope\x12\x19\n" +
 	"\bbatch_id\x18\x01 \x01(\tR\abatchId\x12C\n" +
 	"\x0fagent_timestamp\x18\x02 \x01(\v2\x1a.google.protobuf.TimestampR\x0eagentTimestamp\x12*\n" +
@@ -2297,12 +2307,13 @@ const file_AgentTelemetry_proto_rawDesc = "" +
 	"\x0fpackage_updates\x18\x14 \x01(\v2\x1b.agent.PackageUpdatesRecordH\x00R\x0epackageUpdates\x12C\n" +
 	"\x0eservice_status\x18\x15 \x01(\v2\x1a.agent.ServiceStatusRecordH\x00R\rserviceStatus\x12@\n" +
 	"\ragent_version\x18\x16 \x01(\v2\x19.agent.AgentVersionRecordH\x00R\fagentVersionB\t\n" +
-	"\apayload\"\x9e\x01\n" +
+	"\apayload\"\xd4\x01\n" +
 	"\fTelemetryAck\x12\x19\n" +
 	"\bbatch_id\x18\x01 \x01(\tR\abatchId\x124\n" +
 	"\x16acknowledged_event_ids\x18\x02 \x03(\tR\x14acknowledgedEventIds\x12\x18\n" +
 	"\asuccess\x18\x03 \x01(\bR\asuccess\x12#\n" +
-	"\rerror_message\x18\x04 \x01(\tR\ferrorMessage\"\xd8\x06\n" +
+	"\rerror_message\x18\x04 \x01(\tR\ferrorMessage\x124\n" +
+	"\x06reason\x18\x05 \x01(\x0e2\x1c.agent.IngestRejectionReasonR\x06reason\"\xd8\x06\n" +
 	"\x10SystemInfoRecord\x12\x1a\n" +
 	"\bhostname\x18\x01 \x01(\tR\bhostname\x12\x12\n" +
 	"\x04uuid\x18\x02 \x01(\tR\x04uuid\x12\x19\n" +
@@ -2533,6 +2544,7 @@ var file_AgentTelemetry_proto_goTypes = []any{
 	(*AgentVersionRecord)(nil),      // 23: agent.AgentVersionRecord
 	(*SshSessionRecord)(nil),        // 24: agent.SshSessionRecord
 	(*timestamppb.Timestamp)(nil),   // 25: google.protobuf.Timestamp
+	(IngestRejectionReason)(0),      // 26: agent.IngestRejectionReason
 }
 var file_AgentTelemetry_proto_depIdxs = []int32{
 	25, // 0: agent.TelemetryEnvelope.agent_timestamp:type_name -> google.protobuf.Timestamp
@@ -2552,24 +2564,25 @@ var file_AgentTelemetry_proto_depIdxs = []int32{
 	19, // 14: agent.TelemetryItem.package_updates:type_name -> agent.PackageUpdatesRecord
 	21, // 15: agent.TelemetryItem.service_status:type_name -> agent.ServiceStatusRecord
 	23, // 16: agent.TelemetryItem.agent_version:type_name -> agent.AgentVersionRecord
-	25, // 17: agent.OsVersionRecord.install_date:type_name -> google.protobuf.Timestamp
-	9,  // 18: agent.DiskInfoRecord.disks:type_name -> agent.DiskInfoEntry
-	13, // 19: agent.DiskUtilizationRecord.disks:type_name -> agent.DiskUtilizationEntry
-	15, // 20: agent.HardwareHealthRecord.fans:type_name -> agent.FanReading
-	16, // 21: agent.HardwareHealthRecord.power_supplies:type_name -> agent.PowerSupplyReading
-	17, // 22: agent.HardwareHealthRecord.temperatures:type_name -> agent.TemperatureReading
-	18, // 23: agent.HardwareHealthRecord.disk_smart:type_name -> agent.DiskSmartReading
-	20, // 24: agent.PackageUpdatesRecord.updates:type_name -> agent.PackageUpdate
-	22, // 25: agent.ServiceStatusRecord.services:type_name -> agent.ServiceEntry
-	1,  // 26: agent.Telemetry.StreamTelemetry:input_type -> agent.TelemetryEnvelope
-	1,  // 27: agent.Telemetry.SubmitTelemetry:input_type -> agent.TelemetryEnvelope
-	3,  // 28: agent.Telemetry.StreamTelemetry:output_type -> agent.TelemetryAck
-	3,  // 29: agent.Telemetry.SubmitTelemetry:output_type -> agent.TelemetryAck
-	28, // [28:30] is the sub-list for method output_type
-	26, // [26:28] is the sub-list for method input_type
-	26, // [26:26] is the sub-list for extension type_name
-	26, // [26:26] is the sub-list for extension extendee
-	0,  // [0:26] is the sub-list for field type_name
+	26, // 17: agent.TelemetryAck.reason:type_name -> agent.IngestRejectionReason
+	25, // 18: agent.OsVersionRecord.install_date:type_name -> google.protobuf.Timestamp
+	9,  // 19: agent.DiskInfoRecord.disks:type_name -> agent.DiskInfoEntry
+	13, // 20: agent.DiskUtilizationRecord.disks:type_name -> agent.DiskUtilizationEntry
+	15, // 21: agent.HardwareHealthRecord.fans:type_name -> agent.FanReading
+	16, // 22: agent.HardwareHealthRecord.power_supplies:type_name -> agent.PowerSupplyReading
+	17, // 23: agent.HardwareHealthRecord.temperatures:type_name -> agent.TemperatureReading
+	18, // 24: agent.HardwareHealthRecord.disk_smart:type_name -> agent.DiskSmartReading
+	20, // 25: agent.PackageUpdatesRecord.updates:type_name -> agent.PackageUpdate
+	22, // 26: agent.ServiceStatusRecord.services:type_name -> agent.ServiceEntry
+	1,  // 27: agent.Telemetry.StreamTelemetry:input_type -> agent.TelemetryEnvelope
+	1,  // 28: agent.Telemetry.SubmitTelemetry:input_type -> agent.TelemetryEnvelope
+	3,  // 29: agent.Telemetry.StreamTelemetry:output_type -> agent.TelemetryAck
+	3,  // 30: agent.Telemetry.SubmitTelemetry:output_type -> agent.TelemetryAck
+	29, // [29:31] is the sub-list for method output_type
+	27, // [27:29] is the sub-list for method input_type
+	27, // [27:27] is the sub-list for extension type_name
+	27, // [27:27] is the sub-list for extension extendee
+	0,  // [0:27] is the sub-list for field type_name
 }
 
 func init() { file_AgentTelemetry_proto_init() }
@@ -2577,6 +2590,7 @@ func file_AgentTelemetry_proto_init() {
 	if File_AgentTelemetry_proto != nil {
 		return
 	}
+	file_AgentCommon_proto_init()
 	file_AgentTelemetry_proto_msgTypes[1].OneofWrappers = []any{
 		(*TelemetryItem_SystemInfo)(nil),
 		(*TelemetryItem_OsVersion)(nil),
