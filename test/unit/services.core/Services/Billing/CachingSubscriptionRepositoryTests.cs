@@ -49,7 +49,8 @@ public sealed class CachingSubscriptionRepositoryTests
         ISubscriptionRepository inner,
         IConnectionMultiplexer redis,
         int ttlSeconds = 30,
-        RetentionReclassifyDispatcher? dispatcher = null)
+        RetentionReclassifyDispatcher? dispatcher = null,
+        QuotaCutoffInvalidator? quotaInvalidator = null)
     {
         IOptions<RedisOptions> options = Options.Create(new RedisOptions
         {
@@ -61,7 +62,8 @@ public sealed class CachingSubscriptionRepositoryTests
             inner,
             redis,
             options,
-            dispatcher ?? DispatcherFor(Substitute.For<IBackgroundJobClient>()));
+            dispatcher ?? DispatcherFor(Substitute.For<IBackgroundJobClient>()),
+            quotaInvalidator ?? new QuotaCutoffInvalidator(redis, NullLogger<QuotaCutoffInvalidator>.Instance));
     }
 
     [Test]
@@ -288,7 +290,8 @@ public sealed class CachingSubscriptionRepositoryTests
             null!,
             redis,
             options,
-            DispatcherFor(Substitute.For<IBackgroundJobClient>())))
+            DispatcherFor(Substitute.For<IBackgroundJobClient>()),
+            new QuotaCutoffInvalidator(redis, NullLogger<QuotaCutoffInvalidator>.Instance)))
             .Throws<ArgumentNullException>();
     }
 
@@ -302,6 +305,22 @@ public sealed class CachingSubscriptionRepositoryTests
             Substitute.For<ISubscriptionRepository>(),
             redis,
             options,
+            null!,
+            new QuotaCutoffInvalidator(redis, NullLogger<QuotaCutoffInvalidator>.Instance)))
+            .Throws<ArgumentNullException>();
+    }
+
+    [Test]
+    public async Task Constructor_NullQuotaInvalidator_Throws()
+    {
+        IConnectionMultiplexer redis = FakeRedisConnection.Create();
+        IOptions<RedisOptions> options = Options.Create(new RedisOptions { ConnectionString = "x" });
+
+        await Assert.That(() => new CachingSubscriptionRepository(
+            Substitute.For<ISubscriptionRepository>(),
+            redis,
+            options,
+            DispatcherFor(Substitute.For<IBackgroundJobClient>()),
             null!))
             .Throws<ArgumentNullException>();
     }
@@ -534,5 +553,126 @@ public sealed class CachingSubscriptionRepositoryTests
 
         await Assert.That(locked).IsNull();
         await inner.Received(1).GetSubscriptionForTenantAsync(25, Arg.Any<CancellationToken>());
+    }
+
+    private static async Task<(CachingSubscriptionRepository Repo, QuotaCutoffInvalidator Invalidator, IConnectionMultiplexer Redis)> CreateWithCutoffAsync(
+        ISubscriptionRepository inner, int tenantId)
+    {
+        IConnectionMultiplexer redis = FakeRedisConnection.Create();
+        await redis.GetDatabase().StringSetAsync(QuotaPauseService.CacheKeyFor(tenantId), "after:5");
+        QuotaCutoffInvalidator invalidator = new(redis, NullLogger<QuotaCutoffInvalidator>.Instance);
+
+        return (Create(inner, redis, quotaInvalidator: invalidator), invalidator, redis);
+    }
+
+    private static async Task<bool> CutoffKeyPresentAsync(IConnectionMultiplexer redis, int tenantId)
+    {
+        RedisValue value = await redis.GetDatabase().StringGetAsync(QuotaPauseService.CacheKeyFor(tenantId));
+
+        return value.HasValue;
+    }
+
+    [Test]
+    public async Task UpdateSubscriptionState_TierChanged_ClearsTheQuotaCutoffOnlyWhenDispatched()
+    {
+        // Intent: a tier change moves the tenant's machine limit and so its cutoff. The write runs inside
+        // the caller's transaction, so the cutoff may only be cleared after that commit; clearing it
+        // earlier would let a read on another connection rebuild it from the old tier.
+        ISubscriptionRepository inner = Substitute.For<ISubscriptionRepository>();
+        inner.UpdateSubscriptionStateAsync(31, SubscriptionTier.Free, SubscriptionStatus.Active, false, Arg.Any<CancellationToken>())
+            .Returns(1);
+        (CachingSubscriptionRepository repo, QuotaCutoffInvalidator invalidator, IConnectionMultiplexer redis) = await CreateWithCutoffAsync(inner, 31);
+
+        await repo.UpdateSubscriptionStateAsync(31, SubscriptionTier.Free, SubscriptionStatus.Active, cancellationToken: CancellationToken.None);
+
+        await Assert.That(await CutoffKeyPresentAsync(redis, 31)).IsTrue();
+        invalidator.DispatchPending();
+        await Assert.That(await CutoffKeyPresentAsync(redis, 31)).IsFalse();
+    }
+
+    [Test]
+    public async Task UpdateSubscriptionState_StatusOnlyChange_LeavesTheQuotaCutoff()
+    {
+        // Intent: the effective machine limit ignores status, so past-due, canceled and reactivated
+        // transitions must not throw away a cutoff that is still right.
+        ISubscriptionRepository inner = Substitute.For<ISubscriptionRepository>();
+        inner.UpdateSubscriptionStateAsync(32, null, SubscriptionStatus.PastDue, false, Arg.Any<CancellationToken>())
+            .Returns(1);
+        (CachingSubscriptionRepository repo, QuotaCutoffInvalidator invalidator, IConnectionMultiplexer redis) = await CreateWithCutoffAsync(inner, 32);
+
+        await repo.UpdateSubscriptionStateAsync(32, null, SubscriptionStatus.PastDue, cancellationToken: CancellationToken.None);
+        invalidator.DispatchPending();
+
+        await Assert.That(await CutoffKeyPresentAsync(redis, 32)).IsTrue();
+    }
+
+    [Test]
+    public async Task UpdateSubscriptionState_NoRowChanged_LeavesTheQuotaCutoff()
+    {
+        // Intent: a write refused because an Enterprise agreement owns the row changed no limit.
+        ISubscriptionRepository inner = Substitute.For<ISubscriptionRepository>();
+        inner.UpdateSubscriptionStateAsync(33, SubscriptionTier.Team, SubscriptionStatus.Active, false, Arg.Any<CancellationToken>())
+            .Returns(0);
+        (CachingSubscriptionRepository repo, QuotaCutoffInvalidator invalidator, IConnectionMultiplexer redis) = await CreateWithCutoffAsync(inner, 33);
+
+        await repo.UpdateSubscriptionStateAsync(33, SubscriptionTier.Team, SubscriptionStatus.Active, cancellationToken: CancellationToken.None);
+        invalidator.DispatchPending();
+
+        await Assert.That(await CutoffKeyPresentAsync(redis, 33)).IsTrue();
+    }
+
+    [Test]
+    public async Task ApplyEnterpriseSubscription_Applied_ClearsTheQuotaCutoffOnlyWhenDispatched()
+    {
+        ISubscriptionRepository inner = Substitute.For<ISubscriptionRepository>();
+        DateTimeOffset termEnd = new(2027, 10, 4, 23, 59, 59, TimeSpan.Zero);
+        inner.ApplyEnterpriseSubscriptionAsync(34, 2, termEnd, Arg.Any<CancellationToken>())
+            .Returns(EnterpriseApplyOutcome.Applied);
+        (CachingSubscriptionRepository repo, QuotaCutoffInvalidator invalidator, IConnectionMultiplexer redis) = await CreateWithCutoffAsync(inner, 34);
+
+        await repo.ApplyEnterpriseSubscriptionAsync(34, 2, termEnd, CancellationToken.None);
+
+        await Assert.That(await CutoffKeyPresentAsync(redis, 34)).IsTrue();
+        invalidator.DispatchPending();
+        await Assert.That(await CutoffKeyPresentAsync(redis, 34)).IsFalse();
+    }
+
+    [Test]
+    [Arguments(EnterpriseApplyOutcome.AlreadyApplied)]
+    [Arguments(EnterpriseApplyOutcome.StaleRevision)]
+    public async Task ApplyEnterpriseSubscription_NothingWritten_LeavesTheQuotaCutoff(EnterpriseApplyOutcome innerOutcome)
+    {
+        ISubscriptionRepository inner = Substitute.For<ISubscriptionRepository>();
+        DateTimeOffset termEnd = new(2027, 10, 4, 23, 59, 59, TimeSpan.Zero);
+        inner.ApplyEnterpriseSubscriptionAsync(35, 1, termEnd, Arg.Any<CancellationToken>()).Returns(innerOutcome);
+        (CachingSubscriptionRepository repo, QuotaCutoffInvalidator invalidator, IConnectionMultiplexer redis) = await CreateWithCutoffAsync(inner, 35);
+
+        await repo.ApplyEnterpriseSubscriptionAsync(35, 1, termEnd, CancellationToken.None);
+        invalidator.DispatchPending();
+
+        await Assert.That(await CutoffKeyPresentAsync(redis, 35)).IsTrue();
+    }
+
+    [Test]
+    public async Task CreateTenantSubscription_ClearsTheQuotaCutoffOnlyWhenDispatched()
+    {
+        // Intent: a new subscription row replaces the implicit Free tier, which can change the limit.
+        ISubscriptionRepository inner = Substitute.For<ISubscriptionRepository>();
+        TenantSubscription created = BuildSubscription(36);
+        inner.CreateTenantSubscriptionAsync(created, Arg.Any<CancellationToken>()).Returns(created);
+        (CachingSubscriptionRepository repo, QuotaCutoffInvalidator invalidator, IConnectionMultiplexer redis) = await CreateWithCutoffAsync(inner, 36);
+
+        await repo.CreateTenantSubscriptionAsync(created, CancellationToken.None);
+
+        await Assert.That(await CutoffKeyPresentAsync(redis, 36)).IsTrue();
+        invalidator.DispatchPending();
+        await Assert.That(await CutoffKeyPresentAsync(redis, 36)).IsFalse();
+    }
+
+    [Test]
+    public async Task CacheKeyFor_IsThePublishedSubscriptionKey()
+    {
+        // The quota invalidator clears this key by name, so it must stay the one the decorator reads.
+        await Assert.That(CachingSubscriptionRepository.CacheKeyFor(12)).IsEqualTo("subscription:tenant:v2:12");
     }
 }

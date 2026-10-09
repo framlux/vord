@@ -26,6 +26,7 @@ public sealed class MachineHandler
     private readonly IAuditLogRepository _auditLog;
     private readonly IMachineBillingSync _machineBillingSync;
     private readonly IApiKeyCacheInvalidator _apiKeyCacheInvalidator;
+    private readonly QuotaCutoffInvalidator _quotaInvalidator;
     private readonly ILogger<MachineHandler> _logger;
 
     /// <summary>
@@ -39,6 +40,7 @@ public sealed class MachineHandler
         IAuditLogRepository auditLog,
         IMachineBillingSync machineBillingSync,
         IApiKeyCacheInvalidator apiKeyCacheInvalidator,
+        QuotaCutoffInvalidator quotaInvalidator,
         ILogger<MachineHandler> logger)
     {
         ArgumentNullException.ThrowIfNull(machineRepo);
@@ -48,6 +50,7 @@ public sealed class MachineHandler
         ArgumentNullException.ThrowIfNull(auditLog);
         ArgumentNullException.ThrowIfNull(machineBillingSync);
         ArgumentNullException.ThrowIfNull(apiKeyCacheInvalidator);
+        ArgumentNullException.ThrowIfNull(quotaInvalidator);
         ArgumentNullException.ThrowIfNull(logger);
 
         _machineRepo = machineRepo;
@@ -57,6 +60,7 @@ public sealed class MachineHandler
         _auditLog = auditLog;
         _machineBillingSync = machineBillingSync;
         _apiKeyCacheInvalidator = apiKeyCacheInvalidator;
+        _quotaInvalidator = quotaInvalidator;
         _logger = logger;
     }
 
@@ -101,6 +105,11 @@ public sealed class MachineHandler
             machineId.ToString(), null, null), ct);
 
         await transaction.CommitAsync(ct);
+
+        // Deleting a host moves the tenant's cutoff: the next registered host takes its place among the
+        // active ones. Cleared after the commit so a rolled-back delete never evicts a still-right entry.
+        _quotaInvalidator.MarkPending(tenantId.Value);
+        _quotaInvalidator.DispatchPending();
 
         // Clear the deleted machine's cached auth result so its key stops authenticating immediately
         // rather than lingering until the cache TTL expires. Done after commit so a rolled-back

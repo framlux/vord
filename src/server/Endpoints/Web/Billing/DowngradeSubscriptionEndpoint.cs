@@ -40,6 +40,7 @@ public sealed class DowngradeSubscriptionEndpoint : Endpoint<DowngradeSubscripti
     private readonly DowngradeGuardService _downgradeGuardService;
     private readonly IDowngradeCleanupService _downgradeCleanupService;
     private readonly RetentionReclassifyDispatcher _reclassifyDispatcher;
+    private readonly HostsPausedAuditWriter _hostsPausedAudit;
     private readonly ILogger<DowngradeSubscriptionEndpoint> _logger;
 
     /// <summary>
@@ -57,6 +58,7 @@ public sealed class DowngradeSubscriptionEndpoint : Endpoint<DowngradeSubscripti
         DowngradeGuardService downgradeGuardService,
         IDowngradeCleanupService downgradeCleanupService,
         RetentionReclassifyDispatcher reclassifyDispatcher,
+        HostsPausedAuditWriter hostsPausedAudit,
         ILogger<DowngradeSubscriptionEndpoint> logger)
     {
         _deploymentMode = deploymentMode;
@@ -70,6 +72,7 @@ public sealed class DowngradeSubscriptionEndpoint : Endpoint<DowngradeSubscripti
         _downgradeGuardService = downgradeGuardService;
         _downgradeCleanupService = downgradeCleanupService;
         _reclassifyDispatcher = reclassifyDispatcher;
+        _hostsPausedAudit = hostsPausedAudit;
         _logger = logger;
     }
 
@@ -183,6 +186,8 @@ public sealed class DowngradeSubscriptionEndpoint : Endpoint<DowngradeSubscripti
             tenantId, null, null,
             AuditAction.SubscriptionDowngradeRequested, AuditResourceType.Subscription,
             tenantId.ToString(), "Immediate downgrade from Team to Pro", null), ct);
+
+        await _hostsPausedAudit.WriteIfHostsPausedAsync(tenantId, SubscriptionTier.Pro, null, ct);
 
         // Freeze the Team-only resources in the same transaction as the tier change. The tier write
         // holds the subscription row's lock until the commit, so an agreement being applied waits for

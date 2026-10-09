@@ -163,7 +163,8 @@ public sealed class RetentionReclassifyJobTests
             redis,
             Options.Create(new RedisOptions { ConnectionString = "localhost", SubscriptionCacheTtlSeconds = 30 }),
             new RetentionReclassifyDispatcher(
-                Substitute.For<IBackgroundJobClient>(), NullLogger<RetentionReclassifyDispatcher>.Instance));
+                Substitute.For<IBackgroundJobClient>(), NullLogger<RetentionReclassifyDispatcher>.Instance),
+            new QuotaCutoffInvalidator(redis, NullLogger<QuotaCutoffInvalidator>.Instance));
 
         // A concurrent reader seeds the cache with the pre-change value…
         await cached.GetEffectiveRetentionDaysAsync(7, CancellationToken.None);

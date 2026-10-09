@@ -449,6 +449,12 @@ public sealed class MachineService : IMachineService
         IMachineBillingSync billingSync = scope.ServiceProvider.GetRequiredService<IMachineBillingSync>();
         await billingSync.ReportActiveMachineUsageAsync(token.TenantId, cancellationToken);
 
+        // The new host can move the tenant's cutoff, which another replica may have cached. The machine
+        // row has committed, so the cached entries are cleared now.
+        QuotaCutoffInvalidator quotaInvalidator = scope.ServiceProvider.GetRequiredService<QuotaCutoffInvalidator>();
+        quotaInvalidator.MarkPending(token.TenantId);
+        quotaInvalidator.DispatchPending();
+
         _registrationMetrics.RecordAttempt(RegistrationOutcome.Registered, token.TenantId);
 
         return (createdMachine.Id, plaintextApiKey, string.Empty);

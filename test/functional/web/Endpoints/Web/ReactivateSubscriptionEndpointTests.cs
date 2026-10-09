@@ -80,6 +80,32 @@ public sealed class ReactivateSubscriptionEndpointTests
     }
 
     [Test]
+    public async Task ReactivateCanceledSubscription_WhenTheFreeLimitLeavesHostsPaused_RecordsThemInTheSameRequest()
+    {
+        // Intent: a canceled Pro tenant that comes back on Free keeps its hosts but not its limit, and
+        // pausing is derived, so reactivation is the moment to record how many it leaves paused.
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId) = await SeedBillingEnvironment(db, status: SubscriptionStatus.Canceled);
+        for (int i = 0; i < 5; i++)
+        {
+            await db.InsertWithInt64IdentityAsync(TestDataBuilder.BuildMachine(tenantId: tenantId));
+        }
+
+        HttpClient client = BuildClient(factory, tenantId, userId);
+
+        HttpResponseMessage response = await client.PostAsync("/api/v1/billing/reactivate", null);
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
+        AuditLogEntry paused = await db.AuditLog
+            .Where(a => (a.TenantId == tenantId) && (a.Action == AuditAction.HostsPaused))
+            .SingleAsync();
+        await Assert.That(paused.Details).Contains("\"paused\":2");
+        await Assert.That(paused.Details).Contains("\"limit\":3");
+        await Assert.That(paused.Details).Contains("\"registered\":5");
+    }
+
+    [Test]
     public async Task ReactivateCanceledSubscription_Returns200_RevertsToFreeTier()
     {
         // A fully canceled subscription should be reactivated on the Free tier

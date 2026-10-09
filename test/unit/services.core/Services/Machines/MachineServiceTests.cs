@@ -60,12 +60,16 @@ public class MachineServiceTests
         return token;
     }
 
-    private static TestServiceScopeFactory CreateScopeFactory(TestDatabaseFactory dbFactory, IMachineRepository machineRepo, ITenantRepository? tenantRepo = null, ISubscriptionService? subscriptionService = null, IMachineBillingSync? billingSync = null)
+    private static TestServiceScopeFactory CreateScopeFactory(TestDatabaseFactory dbFactory, IMachineRepository machineRepo, ITenantRepository? tenantRepo = null, ISubscriptionService? subscriptionService = null, IMachineBillingSync? billingSync = null, QuotaCutoffInvalidator? quotaInvalidator = null)
     {
         Dictionary<Type, object> services = new()
         {
             { typeof(IMachineRepository), machineRepo },
             { typeof(IMachineBillingSync), billingSync ?? Substitute.For<IMachineBillingSync>() },
+            {
+                typeof(QuotaCutoffInvalidator),
+                quotaInvalidator ?? new QuotaCutoffInvalidator(FakeRedisConnection.Create(), NullLogger<QuotaCutoffInvalidator>.Instance)
+            },
         };
 
         if (tenantRepo is not null)
@@ -1380,6 +1384,87 @@ public class MachineServiceTests
         await Assert.That(result.machineId).IsNull();
         await Assert.That(result.apiKey).IsNull();
         await Assert.That(result.errorMessage).IsEqualTo("Machine limit exceeded");
+    }
+
+    /// <summary>
+    /// A new host can move the tenant's cutoff, which another replica may have cached. Both the cutoff
+    /// and the subscription entry it is rebuilt from must be gone once registration has finished.
+    /// </summary>
+    [Test]
+    public async Task RegisterSystem_Success_ClearsTheTenantsQuotaCutoffAndSubscriptionEntriesAfterTheBillingSync()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        await SeedValidRegistrationToken(dbFactory, FixedNow);
+        IConnectionMultiplexer redis = FakeRedisConnection.Create();
+        IDatabase db = redis.GetDatabase();
+        await db.StringSetAsync(QuotaPauseService.CacheKeyFor(1), "none");
+        await db.StringSetAsync(CachingSubscriptionRepository.CacheKeyFor(1), "{}");
+        await db.StringSetAsync(QuotaPauseService.CacheKeyFor(2), "none");
+
+        IMachineRepository machineRepo = Substitute.For<IMachineRepository>();
+        machineRepo.CreateMachineWithKeyAsync(
+                Arg.Any<Machine>(), Arg.Any<long>(), Arg.Any<DateTimeOffset>(), Arg.Any<int?>(), Arg.Any<CancellationToken>())
+            .Returns((BuildCreatedMachine(300), "plaintext-key"));
+        bool clearedBeforeTheSync = true;
+        IMachineBillingSync billingSync = Substitute.For<IMachineBillingSync>();
+        billingSync.ReportActiveMachineUsageAsync(Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns(async _ =>
+            {
+                RedisValue atSync = await db.StringGetAsync(QuotaPauseService.CacheKeyFor(1));
+                clearedBeforeTheSync = atSync.HasValue == false;
+            });
+        TestServiceScopeFactory scopeFactory = CreateScopeFactory(
+            dbFactory, machineRepo, billingSync: billingSync,
+            quotaInvalidator: new QuotaCutoffInvalidator(redis, NullLogger<QuotaCutoffInvalidator>.Instance));
+        MachineService service = BuildService(scopeFactory);
+
+        (long? machineId, string? apiKey, string errorMessage) result = await service.RegisterSystemAsync(
+            new RegisterSystemRequest
+            {
+                SerialNumber = "SN-CUT",
+                SystemId = "SID-CUT",
+                Hostname = "cut-host",
+                MachineType = Grpc.AgentRegistration.MachineType.BareMetalServerType,
+                Os = OperatingSystemType.UbuntuOs,
+                RegistrationToken = TestTokenValue,
+            }, CancellationToken.None);
+
+        await Assert.That(result.errorMessage).IsEqualTo(string.Empty);
+        await Assert.That(clearedBeforeTheSync).IsFalse();
+        await Assert.That((await db.StringGetAsync(QuotaPauseService.CacheKeyFor(1))).HasValue).IsFalse();
+        await Assert.That((await db.StringGetAsync(CachingSubscriptionRepository.CacheKeyFor(1))).HasValue).IsFalse();
+        await Assert.That((await db.StringGetAsync(QuotaPauseService.CacheKeyFor(2))).HasValue).IsTrue();
+    }
+
+    [Test]
+    public async Task RegisterSystem_MachineLimitExceeded_LeavesTheQuotaCutoff()
+    {
+        // A registration that created no host moved no cutoff.
+        using TestDatabaseFactory dbFactory = new();
+        await SeedValidRegistrationToken(dbFactory, FixedNow);
+        IConnectionMultiplexer redis = FakeRedisConnection.Create();
+        await redis.GetDatabase().StringSetAsync(QuotaPauseService.CacheKeyFor(1), "none");
+        IMachineRepository machineRepo = Substitute.For<IMachineRepository>();
+        machineRepo.CreateMachineWithKeyAsync(Arg.Any<Machine>(), Arg.Any<long>(), Arg.Any<DateTimeOffset>(), Arg.Any<int?>(), Arg.Any<CancellationToken>())
+            .Returns(((Machine?)null, (string?)null));
+        QuotaCutoffInvalidator quotaInvalidator = new(redis, NullLogger<QuotaCutoffInvalidator>.Instance);
+        TestServiceScopeFactory scopeFactory = CreateScopeFactory(dbFactory, machineRepo, quotaInvalidator: quotaInvalidator);
+        MachineService service = BuildService(scopeFactory);
+
+        (long? machineId, string? apiKey, string errorMessage) result = await service.RegisterSystemAsync(
+            new RegisterSystemRequest
+            {
+                SerialNumber = "SN-FULL",
+                SystemId = "SID-FULL",
+                Hostname = "full-host",
+                MachineType = Grpc.AgentRegistration.MachineType.BareMetalServerType,
+                Os = OperatingSystemType.UbuntuOs,
+                RegistrationToken = TestTokenValue,
+            }, CancellationToken.None);
+        quotaInvalidator.Dispose();
+
+        await Assert.That(result.errorMessage).IsEqualTo("Machine limit exceeded");
+        await Assert.That((await redis.GetDatabase().StringGetAsync(QuotaPauseService.CacheKeyFor(1))).HasValue).IsTrue();
     }
 
     private static async Task SeedTierFeatureLimitsAsync(TestDatabaseFactory dbFactory)

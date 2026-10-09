@@ -23,6 +23,7 @@ public sealed class BillingWebhookHandler : IBillingWebhookHandler
     private readonly IBuiltInAlertRuleProvisioner _builtInProvisioner;
     private readonly IDowngradeCleanupService _downgradeCleanupService;
     private readonly RetentionReclassifyDispatcher _reclassifyDispatcher;
+    private readonly HostsPausedAuditWriter _hostsPausedAudit;
     private readonly ILogger<BillingWebhookHandler> _logger;
 
     /// <summary>
@@ -35,6 +36,7 @@ public sealed class BillingWebhookHandler : IBillingWebhookHandler
         IBuiltInAlertRuleProvisioner builtInProvisioner,
         IDowngradeCleanupService downgradeCleanupService,
         RetentionReclassifyDispatcher reclassifyDispatcher,
+        HostsPausedAuditWriter hostsPausedAudit,
         ILogger<BillingWebhookHandler> logger)
     {
         ArgumentNullException.ThrowIfNull(transactionProvider);
@@ -43,6 +45,7 @@ public sealed class BillingWebhookHandler : IBillingWebhookHandler
         ArgumentNullException.ThrowIfNull(builtInProvisioner);
         ArgumentNullException.ThrowIfNull(downgradeCleanupService);
         ArgumentNullException.ThrowIfNull(reclassifyDispatcher);
+        ArgumentNullException.ThrowIfNull(hostsPausedAudit);
         ArgumentNullException.ThrowIfNull(logger);
 
         _transactionProvider = transactionProvider;
@@ -51,6 +54,7 @@ public sealed class BillingWebhookHandler : IBillingWebhookHandler
         _builtInProvisioner = builtInProvisioner;
         _downgradeCleanupService = downgradeCleanupService;
         _reclassifyDispatcher = reclassifyDispatcher;
+        _hostsPausedAudit = hostsPausedAudit;
         _logger = logger;
     }
 
@@ -90,6 +94,8 @@ public sealed class BillingWebhookHandler : IBillingWebhookHandler
             tenantId, null, null,
             AuditAction.SubscriptionUpgraded, AuditResourceType.Subscription,
             tenantId.ToString(), null, null), ct);
+
+        await _hostsPausedAudit.WriteIfHostsPausedAsync(tenantId, tier, null, ct);
 
         await transaction.CommitAsync(ct);
 
@@ -140,6 +146,8 @@ public sealed class BillingWebhookHandler : IBillingWebhookHandler
             tenantId, null, null,
             AuditAction.SubscriptionDowngraded, AuditResourceType.Subscription,
             tenantId.ToString(), "Downgraded to Free tier", null), ct);
+
+        await _hostsPausedAudit.WriteIfHostsPausedAsync(tenantId, SubscriptionTier.Free, null, ct);
 
         // The cleanup runs inside this transaction: the tier write above holds the subscription row's
         // lock until the commit, which makes an agreement being applied to this tenant wait for the
@@ -230,6 +238,8 @@ public sealed class BillingWebhookHandler : IBillingWebhookHandler
             AuditAction.SubscriptionDowngraded, AuditResourceType.Subscription,
             tenantId.ToString(), "Downgraded from Team to Pro", null), ct);
 
+        await _hostsPausedAudit.WriteIfHostsPausedAsync(tenantId, SubscriptionTier.Pro, null, ct);
+
         // Nothing runs behind a billing-initiated downgrade, so the freeze belongs here as much as it
         // does in the in-product path. Alert evaluation reads only the enabled flag and the tier the
         // rule requires — it never asks who authored a rule — so a Team-authored rule left enabled
@@ -265,6 +275,8 @@ public sealed class BillingWebhookHandler : IBillingWebhookHandler
             tenantId, null, null,
             AuditAction.SubscriptionUpgraded, AuditResourceType.Subscription,
             tenantId.ToString(), "Tier corrected by sync service", null), ct);
+
+        await _hostsPausedAudit.WriteIfHostsPausedAsync(tenantId, tier, null, ct);
 
         // Drift repair reaches Pro by the same route the downgrade does, so it owes the same freeze on
         // the Team-only resources, inside this transaction for the same reason. The sync job refuses to

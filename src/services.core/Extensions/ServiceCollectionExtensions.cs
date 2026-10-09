@@ -145,11 +145,13 @@ public static class ServiceCollectionExtensions
         // call, so wrap the database-backed repository in a Redis short-TTL caching decorator that
         // invalidates on subscription mutations.
         services.AddScoped<RetentionReclassifyDispatcher>();
+        services.AddScoped<QuotaCutoffInvalidator>();
         services.AddScoped<ISubscriptionRepository>(sp => new CachingSubscriptionRepository(
             sp.GetRequiredService<DatabaseRepository>(),
             sp.GetRequiredService<IConnectionMultiplexer>(),
             sp.GetRequiredService<IOptions<RedisOptions>>(),
-            sp.GetRequiredService<RetentionReclassifyDispatcher>()));
+            sp.GetRequiredService<RetentionReclassifyDispatcher>(),
+            sp.GetRequiredService<QuotaCutoffInvalidator>()));
         // The reclassification job must read committed state, never the Redis-cached subscription
         // entry, which a concurrent read can re-seed with the pre-change tier between the decorator's
         // invalidate and the commit. Keying the database-backed repository keeps the job's dependency
@@ -308,6 +310,7 @@ public static class ServiceCollectionExtensions
         }
 
         services.AddScoped<IQuotaPauseService, QuotaPauseService>();
+        services.AddScoped<HostsPausedAuditWriter>();
 
         services.AddScoped<DowngradeGuardService>();
         services.AddScoped<IDowngradeCleanupService, DowngradeCleanupService>();

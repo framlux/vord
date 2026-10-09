@@ -545,9 +545,14 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
             };
         }
 
-        // The tier write above is not wrapped in a transaction, so it is already durable; dispatch the
-        // reclassification the subscription seam marked rather than waiting for scope teardown.
+        // The tier write above is not wrapped in a transaction, so it is already durable. Record what
+        // its machine limit leaves paused straight away, then dispatch the reclassification and the
+        // quota cutoff the subscription seam marked rather than waiting for scope teardown.
+        await scope.ServiceProvider.GetRequiredService<HostsPausedAuditWriter>().WriteIfHostsPausedAsync(
+            tenant.Id, tier.Value, null, context.CancellationToken);
+
         scope.ServiceProvider.GetRequiredService<RetentionReclassifyDispatcher>().DispatchPending();
+        scope.ServiceProvider.GetRequiredService<QuotaCutoffInvalidator>().DispatchPending();
 
         // An administrative grant is a real route into a paid tier and bypasses Stripe entirely, so
         // nothing else on this path would ever provision or restore the alert rules. The RPC accepts
@@ -716,7 +721,7 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
         // committed, so the subscription row is locked first: an apply in flight then finishes before
         // the write starts, and the write is refused rather than racing it. Leaving the scope without
         // committing rolls back.
-        await subscriptionRepo.GetSubscriptionForUpdateAsync(tenant.Id, context.CancellationToken);
+        TenantSubscription? lockedSubscription = await subscriptionRepo.GetSubscriptionForUpdateAsync(tenant.Id, context.CancellationToken);
 
         bool written = await overrideRepo.UpsertOverrideUnlessEnterpriseAsync(
             tenant.Id, machineLimit, retentionDays, alertRuleLimit, webhookLimit, memberLimit: null, context.CancellationToken);
@@ -735,12 +740,17 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
             new { MachineLimit = machineLimit, RetentionDays = retentionDays, AlertRuleLimit = alertRuleLimit, WebhookLimit = webhookLimit },
             ipAddress: null), context.CancellationToken);
 
+        await WriteHostsPausedAuditAsync(scope, tenant.Id, lockedSubscription, context.CancellationToken);
+
         await transaction.CommitAsync(context.CancellationToken);
 
         // The override changes effective retention but does not route through the subscription
         // repository's own mutators, so invalidate the cached entry here to make the change take
         // effect within one request rather than one cache TTL.
         await subscriptionRepo.InvalidateSubscriptionCacheAsync(tenant.Id, context.CancellationToken);
+
+        // The override also moves the machine limit, and with it the cutoff.
+        ClearQuotaCutoff(scope, tenant.Id);
 
         // An override edit changes effective retention without touching the subscription row, so the
         // tier-change seam never sees it. Enqueue the reclassification here, after the commit, so the
@@ -782,7 +792,7 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
 
         // See SetTenantOverride: the subscription row is locked so the delete's own Enterprise test
         // sees any agreement already in flight, and leaving the scope without committing rolls back.
-        await subscriptionRepo.GetSubscriptionForUpdateAsync(tenant.Id, context.CancellationToken);
+        TenantSubscription? lockedSubscription = await subscriptionRepo.GetSubscriptionForUpdateAsync(tenant.Id, context.CancellationToken);
 
         bool removed = await overrideRepo.RemoveOverrideUnlessEnterpriseAsync(tenant.Id, context.CancellationToken);
         if (removed == false)
@@ -800,11 +810,16 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
             new { Cleared = true },
             ipAddress: null), context.CancellationToken);
 
+        await WriteHostsPausedAuditAsync(scope, tenant.Id, lockedSubscription, context.CancellationToken);
+
         await transaction.CommitAsync(context.CancellationToken);
 
         // Clearing the override changes effective retention; invalidate the cached entry so the
         // reverted retention takes effect within one request rather than one cache TTL.
         await subscriptionRepo.InvalidateSubscriptionCacheAsync(tenant.Id, context.CancellationToken);
+
+        // Reverting to the tier's machine limit moves the cutoff too.
+        ClearQuotaCutoff(scope, tenant.Id);
 
         // Reverting to the tier default can move the tenant into a different retention class, so the
         // surviving telemetry is reclassified here as well, after the commit.
@@ -818,6 +833,40 @@ public sealed class FleetAdminService : FleetAdmin.FleetAdminBase
             Success = true,
             Message = "OK"
         };
+    }
+
+    /// <summary>
+    /// Records, inside the override edit's transaction, how many hosts the tenant's machine limit now
+    /// leaves paused. The tier is the one on the row the edit locked, not the cached one. A tenant with
+    /// no subscription row resolves its limits from the Free defaults and ignores overrides, so the edit
+    /// moved nothing and there is nothing to record.
+    /// </summary>
+    /// <param name="scope">The request scope the audit writer is resolved from.</param>
+    /// <param name="tenantId">The tenant whose override was edited.</param>
+    /// <param name="lockedSubscription">The subscription row the edit locked, if there is one.</param>
+    /// <param name="cancellationToken">Cancellation token.</param>
+    private static async Task WriteHostsPausedAuditAsync(
+        IServiceScope scope, int tenantId, TenantSubscription? lockedSubscription, CancellationToken cancellationToken)
+    {
+        if (lockedSubscription is null)
+        {
+            return;
+        }
+
+        await scope.ServiceProvider.GetRequiredService<HostsPausedAuditWriter>().WriteIfHostsPausedAsync(
+            tenantId, lockedSubscription.Tier, null, cancellationToken);
+    }
+
+    /// <summary>
+    /// Clears the tenant's cached subscription and quota cutoff after an override edit has committed.
+    /// </summary>
+    /// <param name="scope">The request scope the invalidator is resolved from.</param>
+    /// <param name="tenantId">The tenant whose machine limit may have moved.</param>
+    private static void ClearQuotaCutoff(IServiceScope scope, int tenantId)
+    {
+        QuotaCutoffInvalidator invalidator = scope.ServiceProvider.GetRequiredService<QuotaCutoffInvalidator>();
+        invalidator.MarkPending(tenantId);
+        invalidator.DispatchPending();
     }
 
     /// <summary>

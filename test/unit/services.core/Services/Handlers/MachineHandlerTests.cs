@@ -6,6 +6,7 @@ using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Server.Endpoints.Web;
+using Framlux.FleetManagement.Services.Core.Billing;
 using Framlux.FleetManagement.Services.Core.Models.Machines;
 using Framlux.FleetManagement.Services.Core.Handlers;
 using Framlux.FleetManagement.Services.Core.Infrastructure;
@@ -49,11 +50,16 @@ public class MachineHandlerTests
         return new DatabaseRepository(dbFactory.Context, new NullLogger<DatabaseRepository>());
     }
 
-    private static MachineHandler CreateHandler(TestDatabaseFactory dbFactory, IMachineBillingSync? machineBillingSync = null, IApiKeyCacheInvalidator? apiKeyCacheInvalidator = null)
+    private static MachineHandler CreateHandler(TestDatabaseFactory dbFactory, IMachineBillingSync? machineBillingSync = null, IApiKeyCacheInvalidator? apiKeyCacheInvalidator = null, QuotaCutoffInvalidator? quotaInvalidator = null)
     {
         DatabaseRepository repo = CreateRepo(dbFactory);
 
-        return new MachineHandler(repo, repo, repo, repo, repo, machineBillingSync ?? Substitute.For<IMachineBillingSync>(), apiKeyCacheInvalidator ?? Substitute.For<IApiKeyCacheInvalidator>(), NullLogger<MachineHandler>.Instance);
+        return new MachineHandler(
+            repo, repo, repo, repo, repo,
+            machineBillingSync ?? Substitute.For<IMachineBillingSync>(),
+            apiKeyCacheInvalidator ?? Substitute.For<IApiKeyCacheInvalidator>(),
+            quotaInvalidator ?? new QuotaCutoffInvalidator(FakeRedisConnection.Create(), NullLogger<QuotaCutoffInvalidator>.Instance),
+            NullLogger<MachineHandler>.Instance);
     }
 
     private static async Task SeedSummary(TestDatabaseFactory dbFactory, long machineId, short healthStatus)
@@ -121,6 +127,45 @@ public class MachineHandlerTests
         await Assert.That(result.IsSuccess).IsTrue();
         // The deleted machine's stored hash must be evicted so its key stops authenticating at once.
         await invalidator.Received(1).InvalidateByHashAsync(knownHash, Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task DeleteAsync_Success_ClearsTheTenantsQuotaCutoffAndSubscriptionEntries()
+    {
+        // Intent: deleting a host promotes the next one among the active hosts, so a cutoff cached
+        // before the delete is wrong the moment the delete commits. The subscription entry goes with it
+        // so the cutoff is not rebuilt from a stale tier.
+        using TestDatabaseFactory dbFactory = new();
+        long machineId = await SeedMachine(dbFactory);
+        IConnectionMultiplexer redis = FakeRedisConnection.Create();
+        await redis.GetDatabase().StringSetAsync(QuotaPauseService.CacheKeyFor(1), "after:5");
+        await redis.GetDatabase().StringSetAsync(CachingSubscriptionRepository.CacheKeyFor(1), "{}");
+        await redis.GetDatabase().StringSetAsync(QuotaPauseService.CacheKeyFor(2), "after:5");
+        MachineHandler handler = CreateHandler(dbFactory, quotaInvalidator: new QuotaCutoffInvalidator(redis, NullLogger<QuotaCutoffInvalidator>.Instance));
+
+        ServiceResult<ApiResponse<object>> result = await handler.DeleteAsync(machineId, 1, 5, CancellationToken.None);
+
+        await Assert.That(result.IsSuccess).IsTrue();
+        await Assert.That((await redis.GetDatabase().StringGetAsync(QuotaPauseService.CacheKeyFor(1))).HasValue).IsFalse();
+        await Assert.That((await redis.GetDatabase().StringGetAsync(CachingSubscriptionRepository.CacheKeyFor(1))).HasValue).IsFalse();
+        await Assert.That((await redis.GetDatabase().StringGetAsync(QuotaPauseService.CacheKeyFor(2))).HasValue).IsTrue();
+    }
+
+    [Test]
+    public async Task DeleteAsync_NotFound_LeavesTheQuotaCutoffAlone()
+    {
+        // Intent: a delete that removed nothing moved no cutoff, so it must not throw a good one away.
+        using TestDatabaseFactory dbFactory = new();
+        IConnectionMultiplexer redis = FakeRedisConnection.Create();
+        await redis.GetDatabase().StringSetAsync(QuotaPauseService.CacheKeyFor(1), "after:5");
+        QuotaCutoffInvalidator quotaInvalidator = new(redis, NullLogger<QuotaCutoffInvalidator>.Instance);
+        MachineHandler handler = CreateHandler(dbFactory, quotaInvalidator: quotaInvalidator);
+
+        ServiceResult<ApiResponse<object>> result = await handler.DeleteAsync(999, 1, 1, CancellationToken.None);
+        quotaInvalidator.Dispose();
+
+        await Assert.That(result.IsNotFound).IsTrue();
+        await Assert.That((await redis.GetDatabase().StringGetAsync(QuotaPauseService.CacheKeyFor(1))).HasValue).IsTrue();
     }
 
     [Test]

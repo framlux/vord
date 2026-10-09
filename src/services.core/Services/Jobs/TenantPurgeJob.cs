@@ -26,6 +26,7 @@ public sealed class TenantPurgeJob
     private readonly IAuditLogRepository _auditLog;
     private readonly IDatabaseTransactionProvider _transactionProvider;
     private readonly IBillingApiClient _billingApiClient;
+    private readonly QuotaCutoffInvalidator _quotaInvalidator;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<TenantPurgeJob> _logger;
 
@@ -34,6 +35,7 @@ public sealed class TenantPurgeJob
     /// <param name="auditLog">The audit log repository.</param>
     /// <param name="transactionProvider">The database transaction provider.</param>
     /// <param name="billingApiClient">The billing API client.</param>
+    /// <param name="quotaInvalidator">Clears a purged tenant's cached quota cutoff once its machines are gone.</param>
     /// <param name="timeProvider">The time provider, for testable "now" resolution.</param>
     /// <param name="logger">The logger.</param>
     public TenantPurgeJob(
@@ -41,6 +43,7 @@ public sealed class TenantPurgeJob
         IAuditLogRepository auditLog,
         IDatabaseTransactionProvider transactionProvider,
         IBillingApiClient billingApiClient,
+        QuotaCutoffInvalidator quotaInvalidator,
         TimeProvider timeProvider,
         ILogger<TenantPurgeJob> logger)
     {
@@ -48,6 +51,7 @@ public sealed class TenantPurgeJob
         ArgumentNullException.ThrowIfNull(auditLog);
         ArgumentNullException.ThrowIfNull(transactionProvider);
         ArgumentNullException.ThrowIfNull(billingApiClient);
+        ArgumentNullException.ThrowIfNull(quotaInvalidator);
         ArgumentNullException.ThrowIfNull(timeProvider);
         ArgumentNullException.ThrowIfNull(logger);
 
@@ -55,6 +59,7 @@ public sealed class TenantPurgeJob
         _auditLog = auditLog;
         _transactionProvider = transactionProvider;
         _billingApiClient = billingApiClient;
+        _quotaInvalidator = quotaInvalidator;
         _timeProvider = timeProvider;
         _logger = logger;
     }
@@ -113,6 +118,11 @@ public sealed class TenantPurgeJob
 
             await transaction.CommitAsync(ct);
         }
+
+        // The tenant's machines are gone, so whatever cutoff is cached for it describes hosts that no
+        // longer exist. Cleared before the billing step, which can fail and leave the deletion to retry.
+        _quotaInvalidator.MarkPending(tenantId);
+        _quotaInvalidator.DispatchPending();
 
         // Billing teardown AFTER the fleet commit. If it fails, leave the deletion Deactivated so the next
         // tick retries — nothing is marked complete until fleet AND billing both succeed.

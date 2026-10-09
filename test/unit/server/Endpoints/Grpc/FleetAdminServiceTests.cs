@@ -13,6 +13,7 @@ using Framlux.FleetManagement.Services.Core.Billing;
 using Framlux.FleetManagement.Services.Core.Handlers;
 using Framlux.FleetManagement.Services.Core.Infrastructure;
 using Framlux.FleetManagement.Services.Core.Security;
+using Framlux.FleetManagement.Test.Infrastructure;
 using Framlux.Vord.BillingGrpc;
 using Grpc.Core;
 using Grpc.Core.Testing;
@@ -1375,6 +1376,28 @@ public sealed class FleetAdminServiceTests
         return authorizer;
     }
 
+    /// <summary>
+    /// The audit writer the RPCs resolve from their scope. Every tier is unlimited unless a test hands in
+    /// its own subscription service, so only the tests about pausing see a <c>HostsPaused</c> row.
+    /// </summary>
+    private static HostsPausedAuditWriter CreateHostsPausedWriter(
+        IAuditLogRepository auditLog, ISubscriptionService? subscriptions = null, IMachineRepository? machines = null)
+    {
+        if (subscriptions is null)
+        {
+            subscriptions = Substitute.For<ISubscriptionService>();
+            subscriptions.GetMachineLimitForTierAsync(Arg.Any<int>(), Arg.Any<SubscriptionTier>(), Arg.Any<CancellationToken>())
+                .Returns(int.MaxValue);
+        }
+
+        return new HostsPausedAuditWriter(subscriptions, machines ?? Substitute.For<IMachineRepository>(), auditLog);
+    }
+
+    private static QuotaCutoffInvalidator CreateQuotaInvalidator(IConnectionMultiplexer? redis = null)
+    {
+        return new QuotaCutoffInvalidator(redis ?? FakeRedisConnection.Create(), NullLogger<QuotaCutoffInvalidator>.Instance);
+    }
+
     private static IServiceScopeFactory CreateScopeFactoryWithServices(Dictionary<Type, object> services)
     {
         IServiceProvider serviceProvider = Substitute.For<IServiceProvider>();
@@ -2472,6 +2495,8 @@ public sealed class FleetAdminServiceTests
                     Substitute.For<IBackgroundJobClient>(),
                     NullLogger<RetentionReclassifyDispatcher>.Instance)
             },
+            { typeof(HostsPausedAuditWriter), CreateHostsPausedWriter(Substitute.For<IAuditLogRepository>()) },
+            { typeof(QuotaCutoffInvalidator), CreateQuotaInvalidator() },
         });
 
         FleetAdminService service = CreateFleetAdminService(scopeFactory);
@@ -2861,6 +2886,8 @@ public sealed class FleetAdminServiceTests
             { typeof(IDatabaseTransactionProvider), txProvider },
             { typeof(IAuditLogRepository), auditLog },
             { typeof(RetentionReclassifyDispatcher), reclassifyDispatcher },
+            { typeof(HostsPausedAuditWriter), CreateHostsPausedWriter(auditLog) },
+            { typeof(QuotaCutoffInvalidator), CreateQuotaInvalidator() },
         });
 
         FleetAdminService service = CreateFleetAdminService(scopeFactory);
@@ -2939,6 +2966,8 @@ public sealed class FleetAdminServiceTests
             { typeof(IDatabaseTransactionProvider), txProvider },
             { typeof(IAuditLogRepository), auditLog },
             { typeof(RetentionReclassifyDispatcher), reclassifyDispatcher },
+            { typeof(HostsPausedAuditWriter), CreateHostsPausedWriter(auditLog) },
+            { typeof(QuotaCutoffInvalidator), CreateQuotaInvalidator() },
         });
 
         FleetAdminService service = CreateFleetAdminService(scopeFactory);
@@ -3007,6 +3036,327 @@ public sealed class FleetAdminServiceTests
         });
     }
 
+    // ── Hosts paused by a limit change ──
+
+    /// <summary>
+    /// A service whose scope carries real pause-audit and cutoff-invalidation helpers over substituted
+    /// repositories, with the subscription row the override edit locks and the machine count the tenant
+    /// has under the limit the edit leaves.
+    /// </summary>
+    private sealed class PauseHarness
+    {
+        public required FleetAdminService Service { get; init; }
+
+        public required ITenantSubscriptionOverrideRepository OverrideRepo { get; init; }
+
+        public required ISubscriptionRepository SubscriptionRepo { get; init; }
+
+        public required ISubscriptionService Subscriptions { get; init; }
+
+        public required IAuditLogRepository AuditLog { get; init; }
+
+        public required IDatabaseTransaction Transaction { get; init; }
+
+        public required IConnectionMultiplexer Redis { get; init; }
+
+        public required QuotaCutoffInvalidator Invalidator { get; init; }
+    }
+
+    private static async Task<PauseHarness> BuildPauseHarnessAsync(
+        SubscriptionTier? lockedTier, SubscriptionTier cachedTier, int limit, int registered)
+    {
+        ITenantRepository tenantRepo = Substitute.For<ITenantRepository>();
+        ITenantSubscriptionOverrideRepository overrideRepo = Substitute.For<ITenantSubscriptionOverrideRepository>();
+        ISubscriptionRepository subscriptionRepo = Substitute.For<ISubscriptionRepository>();
+        IDatabaseTransaction transaction = Substitute.For<IDatabaseTransaction>();
+        IDatabaseTransactionProvider txProvider = Substitute.For<IDatabaseTransactionProvider>();
+        IAuditLogRepository auditLog = Substitute.For<IAuditLogRepository>();
+        ISubscriptionService subscriptions = Substitute.For<ISubscriptionService>();
+        IMachineRepository machines = Substitute.For<IMachineRepository>();
+        tenantRepo.GetTenantByExternalIdAsync(TenantExternalId, Arg.Any<CancellationToken>()).Returns(MakeTenant());
+        txProvider.BeginTransactionAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult(transaction));
+        overrideRepo.UpsertOverrideUnlessEnterpriseAsync(
+                Arg.Any<int>(), Arg.Any<int?>(), Arg.Any<int?>(), Arg.Any<int?>(), Arg.Any<int?>(), Arg.Any<int?>(), Arg.Any<CancellationToken>())
+            .Returns(true);
+        overrideRepo.RemoveOverrideUnlessEnterpriseAsync(Arg.Any<int>(), Arg.Any<CancellationToken>()).Returns(true);
+
+        // The up-front check reads the cached tier; the lock reads the committed one. They differ here
+        // on purpose, so a writer that took the wrong one is caught.
+        subscriptionRepo.GetSubscriptionForTenantAsync(TenantInternalId, Arg.Any<CancellationToken>())
+            .Returns(new TenantSubscription
+            {
+                TenantId = TenantInternalId,
+                Tier = cachedTier,
+                Status = SubscriptionStatus.Active,
+                CreatedAt = DateTimeOffset.UnixEpoch,
+                UpdatedAt = DateTimeOffset.UnixEpoch,
+            });
+        subscriptionRepo.GetSubscriptionForUpdateAsync(TenantInternalId, Arg.Any<CancellationToken>())
+            .Returns(lockedTier is null
+                ? null
+                : new TenantSubscription
+                {
+                    TenantId = TenantInternalId,
+                    Tier = lockedTier.Value,
+                    Status = SubscriptionStatus.Active,
+                    CreatedAt = DateTimeOffset.UnixEpoch,
+                    UpdatedAt = DateTimeOffset.UnixEpoch,
+                });
+        subscriptions.GetMachineLimitForTierAsync(TenantInternalId, Arg.Any<SubscriptionTier>(), Arg.Any<CancellationToken>())
+            .Returns(limit);
+        machines.GetActiveMachineCountAsync(TenantInternalId, Arg.Any<CancellationToken>()).Returns(registered);
+
+        IConnectionMultiplexer redis = FakeRedisConnection.Create();
+        IDatabase db = redis.GetDatabase();
+        await db.StringSetAsync(QuotaPauseService.CacheKeyFor(TenantInternalId), "after:3");
+        await db.StringSetAsync(CachingSubscriptionRepository.CacheKeyFor(TenantInternalId), "{}");
+        QuotaCutoffInvalidator invalidator = CreateQuotaInvalidator(redis);
+
+        IServiceScopeFactory scopeFactory = CreateScopeFactoryWithServices(new Dictionary<Type, object>
+        {
+            { typeof(ITenantRepository), tenantRepo },
+            { typeof(ITenantSubscriptionOverrideRepository), overrideRepo },
+            { typeof(ISubscriptionRepository), subscriptionRepo },
+            { typeof(IDatabaseTransactionProvider), txProvider },
+            { typeof(IAuditLogRepository), auditLog },
+            {
+                typeof(RetentionReclassifyDispatcher),
+                new RetentionReclassifyDispatcher(Substitute.For<IBackgroundJobClient>(), NullLogger<RetentionReclassifyDispatcher>.Instance)
+            },
+            { typeof(IBuiltInAlertRuleProvisioner), Substitute.For<IBuiltInAlertRuleProvisioner>() },
+            { typeof(HostsPausedAuditWriter), CreateHostsPausedWriter(auditLog, subscriptions, machines) },
+            { typeof(QuotaCutoffInvalidator), invalidator },
+        });
+
+        return new PauseHarness
+        {
+            Service = CreateFleetAdminService(scopeFactory),
+            OverrideRepo = overrideRepo,
+            SubscriptionRepo = subscriptionRepo,
+            Subscriptions = subscriptions,
+            AuditLog = auditLog,
+            Transaction = transaction,
+            Redis = redis,
+            Invalidator = invalidator,
+        };
+    }
+
+    private static async Task<bool> HasKeyAsync(IConnectionMultiplexer redis, string key)
+    {
+        RedisValue value = await redis.GetDatabase().StringGetAsync(key);
+
+        return value.HasValue;
+    }
+
+    /// <summary>
+    /// Setting an override can leave hosts paused. The record is written in the edit's transaction,
+    /// after the override audit row and before the commit, from the limit of the tier on the row the
+    /// edit locked: the cached tier may still be the previous one.
+    /// </summary>
+    [Test]
+    public async Task SetTenantOverride_WhenTheNewLimitPausesHosts_WritesHostsPausedForTheLockedTierBeforeTheCommit()
+    {
+        PauseHarness h = await BuildPauseHarnessAsync(SubscriptionTier.Pro, cachedTier: SubscriptionTier.Team, limit: 2, registered: 5);
+
+        await h.Service.SetTenantOverride(
+            new SetTenantOverrideRequest { TenantExternalId = TenantExternalId, MachineLimit = 2 }, CreateContext());
+
+        Received.InOrder(() =>
+        {
+            h.OverrideRepo.UpsertOverrideUnlessEnterpriseAsync(
+                TenantInternalId, Arg.Any<int?>(), Arg.Any<int?>(), Arg.Any<int?>(), Arg.Any<int?>(), Arg.Any<int?>(), Arg.Any<CancellationToken>());
+            h.AuditLog.InsertAuditLogAsync(Arg.Is<AuditLogEntry>(e => e.Action == AuditAction.TenantSubscriptionOverrideChanged), Arg.Any<CancellationToken>());
+            h.AuditLog.InsertAuditLogAsync(Arg.Is<AuditLogEntry>(e => e.Action == AuditAction.HostsPaused), Arg.Any<CancellationToken>());
+            h.Transaction.CommitAsync(Arg.Any<CancellationToken>());
+        });
+        await h.Subscriptions.Received(1).GetMachineLimitForTierAsync(TenantInternalId, SubscriptionTier.Pro, Arg.Any<CancellationToken>());
+        await h.Subscriptions.DidNotReceive().GetMachineLimitForTierAsync(TenantInternalId, SubscriptionTier.Team, Arg.Any<CancellationToken>());
+        await h.AuditLog.Received(1).InsertAuditLogAsync(
+            Arg.Is<AuditLogEntry>(e => (e.Action == AuditAction.HostsPaused)
+                && (e.TenantId == TenantInternalId)
+                && (e.Details != null) && e.Details.Contains("\"paused\":3") && e.Details.Contains("\"limit\":2")),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task RemoveTenantOverride_WhenTheTierLimitPausesHosts_WritesHostsPausedForTheLockedTierBeforeTheCommit()
+    {
+        PauseHarness h = await BuildPauseHarnessAsync(SubscriptionTier.Free, cachedTier: SubscriptionTier.Team, limit: 3, registered: 10);
+
+        await h.Service.RemoveTenantOverride(
+            new RemoveTenantOverrideRequest { TenantExternalId = TenantExternalId }, CreateContext());
+
+        Received.InOrder(() =>
+        {
+            h.OverrideRepo.RemoveOverrideUnlessEnterpriseAsync(TenantInternalId, Arg.Any<CancellationToken>());
+            h.AuditLog.InsertAuditLogAsync(Arg.Is<AuditLogEntry>(e => e.Action == AuditAction.HostsPaused), Arg.Any<CancellationToken>());
+            h.Transaction.CommitAsync(Arg.Any<CancellationToken>());
+        });
+        await h.Subscriptions.Received(1).GetMachineLimitForTierAsync(TenantInternalId, SubscriptionTier.Free, Arg.Any<CancellationToken>());
+        await h.AuditLog.Received(1).InsertAuditLogAsync(
+            Arg.Is<AuditLogEntry>(e => (e.Action == AuditAction.HostsPaused) && (e.Details != null) && e.Details.Contains("\"paused\":7")),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task SetTenantOverride_WhenTheLimitCoversEveryHost_WritesNoHostsPausedRow()
+    {
+        PauseHarness h = await BuildPauseHarnessAsync(SubscriptionTier.Pro, cachedTier: SubscriptionTier.Pro, limit: 10, registered: 5);
+
+        await h.Service.SetTenantOverride(
+            new SetTenantOverrideRequest { TenantExternalId = TenantExternalId, MachineLimit = 10 }, CreateContext());
+
+        await h.AuditLog.DidNotReceive().InsertAuditLogAsync(
+            Arg.Is<AuditLogEntry>(e => e.Action == AuditAction.HostsPaused), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task SetTenantOverride_WhenTheTenantHasNoSubscriptionRow_WritesNoHostsPausedRow()
+    {
+        // Without a row the tenant resolves its limits from the Free defaults and ignores overrides, so
+        // the edit moved nothing and there is no limit to attribute a pause to.
+        PauseHarness h = await BuildPauseHarnessAsync(lockedTier: null, cachedTier: SubscriptionTier.Free, limit: 0, registered: 5);
+
+        SetTenantOverrideResponse response = await h.Service.SetTenantOverride(
+            new SetTenantOverrideRequest { TenantExternalId = TenantExternalId, MachineLimit = 0 }, CreateContext());
+
+        await Assert.That(response.Success).IsTrue();
+        await h.AuditLog.DidNotReceive().InsertAuditLogAsync(
+            Arg.Is<AuditLogEntry>(e => e.Action == AuditAction.HostsPaused), Arg.Any<CancellationToken>());
+        await h.Subscriptions.DidNotReceiveWithAnyArgs().GetMachineLimitForTierAsync(default, default, default);
+    }
+
+    [Test]
+    [Arguments(true)]
+    [Arguments(false)]
+    public async Task OverrideEdit_ClearsTheSubscriptionAndCutoffEntriesOnlyAfterTheCommit(bool set)
+    {
+        // Clearing earlier would let a read on another connection re-seed the old tier before the
+        // commit, and a stale cutoff would then be rebuilt from it.
+        PauseHarness h = await BuildPauseHarnessAsync(SubscriptionTier.Pro, cachedTier: SubscriptionTier.Pro, limit: 10, registered: 5);
+        bool cutoffPresentAtCommit = false;
+        bool subscriptionPresentAtCommit = false;
+        h.Transaction.CommitAsync(Arg.Any<CancellationToken>()).Returns(async _ =>
+        {
+            cutoffPresentAtCommit = await HasKeyAsync(h.Redis, QuotaPauseService.CacheKeyFor(TenantInternalId));
+            subscriptionPresentAtCommit = await HasKeyAsync(h.Redis, CachingSubscriptionRepository.CacheKeyFor(TenantInternalId));
+        });
+
+        if (set)
+        {
+            await h.Service.SetTenantOverride(
+                new SetTenantOverrideRequest { TenantExternalId = TenantExternalId, MachineLimit = 10 }, CreateContext());
+        }
+        else
+        {
+            await h.Service.RemoveTenantOverride(
+                new RemoveTenantOverrideRequest { TenantExternalId = TenantExternalId }, CreateContext());
+        }
+
+        await Assert.That(cutoffPresentAtCommit).IsTrue();
+        await Assert.That(subscriptionPresentAtCommit).IsTrue();
+        await Assert.That(await HasKeyAsync(h.Redis, QuotaPauseService.CacheKeyFor(TenantInternalId))).IsFalse();
+        await Assert.That(await HasKeyAsync(h.Redis, CachingSubscriptionRepository.CacheKeyFor(TenantInternalId))).IsFalse();
+    }
+
+    [Test]
+    [Arguments(true)]
+    [Arguments(false)]
+    public async Task OverrideEdit_RefusedByTheGuardedWrite_LeavesTheCutoffAlone(bool set)
+    {
+        PauseHarness h = await BuildPauseHarnessAsync(SubscriptionTier.Pro, cachedTier: SubscriptionTier.Pro, limit: 1, registered: 5);
+        h.OverrideRepo.UpsertOverrideUnlessEnterpriseAsync(
+                Arg.Any<int>(), Arg.Any<int?>(), Arg.Any<int?>(), Arg.Any<int?>(), Arg.Any<int?>(), Arg.Any<int?>(), Arg.Any<CancellationToken>())
+            .Returns(false);
+        h.OverrideRepo.RemoveOverrideUnlessEnterpriseAsync(Arg.Any<int>(), Arg.Any<CancellationToken>()).Returns(false);
+
+        await Assert.ThrowsAsync<RpcException>(async () =>
+        {
+            if (set)
+            {
+                await h.Service.SetTenantOverride(
+                    new SetTenantOverrideRequest { TenantExternalId = TenantExternalId, MachineLimit = 1 }, CreateContext());
+            }
+            else
+            {
+                await h.Service.RemoveTenantOverride(
+                    new RemoveTenantOverrideRequest { TenantExternalId = TenantExternalId }, CreateContext());
+            }
+        });
+        h.Invalidator.Dispose();
+
+        await h.AuditLog.DidNotReceive().InsertAuditLogAsync(
+            Arg.Is<AuditLogEntry>(e => e.Action == AuditAction.HostsPaused), Arg.Any<CancellationToken>());
+        await Assert.That(await HasKeyAsync(h.Redis, QuotaPauseService.CacheKeyFor(TenantInternalId))).IsTrue();
+    }
+
+    /// <summary>
+    /// The grant has no transaction, so its record follows the write directly. The limit is read for the
+    /// tier written, not the tier the tenant held a moment before.
+    /// </summary>
+    [Test]
+    public async Task UpdateTenantSubscription_WhenTheGrantedTierPausesHosts_WritesHostsPausedForTheTierWritten()
+    {
+        PauseHarness h = await BuildPauseHarnessAsync(SubscriptionTier.Pro, cachedTier: SubscriptionTier.Pro, limit: 3, registered: 10);
+        h.SubscriptionRepo.UpdateSubscriptionStateAsync(
+                TenantInternalId, SubscriptionTier.Free, SubscriptionStatus.Active, false, Arg.Any<CancellationToken>())
+            .Returns(1);
+        FleetAdminService service = h.Service;
+
+        UpdateTenantSubscriptionResponse response = await service.UpdateTenantSubscription(
+            new UpdateTenantSubscriptionRequest { TenantExternalId = TenantExternalId, Tier = BillingTier.Free, Status = "Active" }, CreateContext());
+
+        await Assert.That(response.Success).IsTrue();
+        Received.InOrder(() =>
+        {
+            h.SubscriptionRepo.UpdateSubscriptionStateAsync(
+                TenantInternalId, SubscriptionTier.Free, SubscriptionStatus.Active, false, Arg.Any<CancellationToken>());
+            h.AuditLog.InsertAuditLogAsync(Arg.Is<AuditLogEntry>(e => e.Action == AuditAction.HostsPaused), Arg.Any<CancellationToken>());
+        });
+        await h.Subscriptions.Received(1).GetMachineLimitForTierAsync(TenantInternalId, SubscriptionTier.Free, Arg.Any<CancellationToken>());
+        await h.AuditLog.Received(1).InsertAuditLogAsync(
+            Arg.Is<AuditLogEntry>(e => (e.Action == AuditAction.HostsPaused) && (e.Details != null) && e.Details.Contains("\"paused\":7")),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task UpdateTenantSubscription_ClearsTheCutoffTheSubscriptionSeamMarked_WithoutWaitingForScopeTeardown()
+    {
+        PauseHarness h = await BuildPauseHarnessAsync(SubscriptionTier.Pro, cachedTier: SubscriptionTier.Pro, limit: 100, registered: 10);
+        h.SubscriptionRepo.UpdateSubscriptionStateAsync(
+                TenantInternalId, SubscriptionTier.Free, SubscriptionStatus.Active, false, Arg.Any<CancellationToken>())
+            .Returns(call =>
+            {
+                // The caching decorator marks the tenant from inside the write.
+                h.Invalidator.MarkPending(TenantInternalId);
+
+                return Task.FromResult(1);
+            });
+        FleetAdminService service = h.Service;
+
+        await service.UpdateTenantSubscription(
+            new UpdateTenantSubscriptionRequest { TenantExternalId = TenantExternalId, Tier = BillingTier.Free, Status = "Active" }, CreateContext());
+
+        await Assert.That(await HasKeyAsync(h.Redis, QuotaPauseService.CacheKeyFor(TenantInternalId))).IsFalse();
+        await Assert.That(await HasKeyAsync(h.Redis, CachingSubscriptionRepository.CacheKeyFor(TenantInternalId))).IsFalse();
+    }
+
+    [Test]
+    public async Task UpdateTenantSubscription_NoSubscriptionFound_WritesNoHostsPausedRow()
+    {
+        PauseHarness h = await BuildPauseHarnessAsync(SubscriptionTier.Pro, cachedTier: SubscriptionTier.Pro, limit: 0, registered: 10);
+        h.SubscriptionRepo.UpdateSubscriptionStateAsync(
+                TenantInternalId, SubscriptionTier.Free, SubscriptionStatus.Active, false, Arg.Any<CancellationToken>())
+            .Returns(0);
+        FleetAdminService service = h.Service;
+
+        UpdateTenantSubscriptionResponse response = await service.UpdateTenantSubscription(
+            new UpdateTenantSubscriptionRequest { TenantExternalId = TenantExternalId, Tier = BillingTier.Free, Status = "Active" }, CreateContext());
+
+        await Assert.That(response.Success).IsFalse();
+        await h.AuditLog.DidNotReceive().InsertAuditLogAsync(Arg.Any<AuditLogEntry>(), Arg.Any<CancellationToken>());
+    }
+
     private static (FleetAdminService Service, ITenantSubscriptionOverrideRepository OverrideRepo,
         IDatabaseTransactionProvider TransactionProvider, ISubscriptionRepository SubscriptionRepo) CreateLockOrderingService()
     {
@@ -3028,6 +3378,8 @@ public sealed class FleetAdminServiceTests
             { typeof(IDatabaseTransactionProvider), txProvider },
             { typeof(IAuditLogRepository), auditLog },
             { typeof(RetentionReclassifyDispatcher), reclassifyDispatcher },
+            { typeof(HostsPausedAuditWriter), CreateHostsPausedWriter(auditLog) },
+            { typeof(QuotaCutoffInvalidator), CreateQuotaInvalidator() },
         });
 
         return (CreateFleetAdminService(scopeFactory), overrideRepo, txProvider, subscriptionRepo);

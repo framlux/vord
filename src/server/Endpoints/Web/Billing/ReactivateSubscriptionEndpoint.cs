@@ -26,6 +26,7 @@ public sealed class ReactivateSubscriptionEndpoint : EndpointWithoutRequest<ApiR
     private readonly ISubscriptionService _subscriptionService;
     private readonly ITenantContext _tenantContext;
     private readonly RetentionReclassifyDispatcher _reclassifyDispatcher;
+    private readonly HostsPausedAuditWriter _hostsPausedAudit;
     private readonly ILogger<ReactivateSubscriptionEndpoint> _logger;
 
     /// <summary>
@@ -39,6 +40,7 @@ public sealed class ReactivateSubscriptionEndpoint : EndpointWithoutRequest<ApiR
         ISubscriptionService subscriptionService,
         ITenantContext tenantContext,
         RetentionReclassifyDispatcher reclassifyDispatcher,
+        HostsPausedAuditWriter hostsPausedAudit,
         ILogger<ReactivateSubscriptionEndpoint> logger)
     {
         _deploymentMode = deploymentMode;
@@ -48,6 +50,7 @@ public sealed class ReactivateSubscriptionEndpoint : EndpointWithoutRequest<ApiR
         _subscriptionService = subscriptionService;
         _tenantContext = tenantContext;
         _reclassifyDispatcher = reclassifyDispatcher;
+        _hostsPausedAudit = hostsPausedAudit;
         _logger = logger;
     }
 
@@ -103,6 +106,8 @@ public sealed class ReactivateSubscriptionEndpoint : EndpointWithoutRequest<ApiR
             tenantId, null, null,
             AuditAction.SubscriptionUpgraded, AuditResourceType.Subscription,
             tenantId.ToString(), "Account reactivated to Free tier from canceled state", null), ct);
+
+        await _hostsPausedAudit.WriteIfHostsPausedAsync(tenantId, SubscriptionTier.Free, null, ct);
 
         await transaction.CommitAsync(ct);
 

@@ -118,6 +118,56 @@ public sealed class DowngradeSubscriptionEndpointTests
     }
 
     [Test]
+    public async Task TeamToPro_WhenTheProLimitLeavesHostsPaused_RecordsThemInTheSameRequest()
+    {
+        // Intent: the immediate swap lowers the tenant's machine limit, and pausing is derived rather
+        // than stored, so the downgrade is the one moment there is to record how many hosts it paused.
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId) = await SeedBillingEnvironment(db, tier: SubscriptionTier.Team);
+        await db.TierFeatureLimits.Where(t => t.Tier == SubscriptionTier.Pro).Set(t => t.MachineLimit, 2).UpdateAsync();
+        for (int i = 0; i < 5; i++)
+        {
+            await db.InsertWithInt64IdentityAsync(TestDataBuilder.BuildMachine(tenantId: tenantId));
+        }
+
+        HttpClient client = BuildClient(factory, tenantId, userId);
+
+        HttpResponseMessage response = await client.PostAsync(
+            "/api/v1/billing/downgrade",
+            BuildDowngradeContent("pro"));
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
+        AuditLogEntry paused = await db.AuditLog
+            .Where(a => (a.TenantId == tenantId) && (a.Action == AuditAction.HostsPaused))
+            .SingleAsync();
+        await Assert.That(paused.Details).Contains("\"paused\":3");
+        await Assert.That(paused.Details).Contains("\"limit\":2");
+        await Assert.That(paused.Details).Contains("\"registered\":5");
+    }
+
+    [Test]
+    public async Task TeamToPro_WhenTheProLimitCoversEveryHost_RecordsNothing()
+    {
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId) = await SeedBillingEnvironment(db, tier: SubscriptionTier.Team);
+        for (int i = 0; i < 5; i++)
+        {
+            await db.InsertWithInt64IdentityAsync(TestDataBuilder.BuildMachine(tenantId: tenantId));
+        }
+
+        HttpClient client = BuildClient(factory, tenantId, userId);
+
+        HttpResponseMessage response = await client.PostAsync(
+            "/api/v1/billing/downgrade",
+            BuildDowngradeContent("pro"));
+
+        await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
+        await Assert.That(await db.AuditLog.CountAsync(a => (a.TenantId == tenantId) && (a.Action == AuditAction.HostsPaused))).IsEqualTo(0);
+    }
+
+    [Test]
     public async Task TeamToFree_Returns200_WithScheduledDowngradeMessage()
     {
         // A Team-tier tenant requesting a downgrade to Free should receive a response
