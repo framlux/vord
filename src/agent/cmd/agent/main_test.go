@@ -121,6 +121,46 @@ func TestPauseHooks_OnPauseClosesStreamsEvenWhenClearFails(t *testing.T) {
 	<-fake.streamsClosed
 }
 
+// Intent: a collector tick that passed the pause gate just before the pause began can enqueue after the clear on
+// entry. Nothing legitimate is queued while paused, so resuming clears again and that straggler is never sent.
+func TestPauseHooks_OnResumeClearsAStragglerQueuedAfterThePauseCleared(t *testing.T) {
+	store := newTestStore(t)
+	fake := newFakeResets()
+	hooks := newPauseHooks(context.Background(), store, fake.closeStreams, fake.resetSSH)
+
+	hooks.OnPause(pause.HostPaused)
+	<-fake.streamsClosed
+	enqueueAll(t, store, "straggler")
+	if n := queueRows(t, store); n != 1 {
+		t.Fatalf("expected the straggler to be queued after the pause cleared, got %d row(s)", n)
+	}
+
+	hooks.OnResume()
+
+	if n := queueRows(t, store); n != 0 {
+		t.Errorf("expected an empty queue after the resume, got %d row(s)", n)
+	}
+	if n, err := store.CountPendingTelemetry(); err != nil || n != 0 {
+		t.Errorf("expected 0 pending after the resume, got %d (err %v)", n, err)
+	}
+}
+
+// Intent: a queue that cannot be cleared on resume does not stop the collectors being reset.
+func TestPauseHooks_OnResumeResetsSSHEvenWhenClearFails(t *testing.T) {
+	store := newTestStore(t)
+	fake := newFakeResets()
+	hooks := newPauseHooks(context.Background(), store, fake.closeStreams, fake.resetSSH)
+	if err := store.Close(); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	hooks.OnResume()
+
+	if fake.sshResets != 1 {
+		t.Errorf("expected one SSH reset despite the failed clear, got %d", fake.sshResets)
+	}
+}
+
 // Intent: resuming moves the SSH collection point to now and clears the CPU baseline, so neither the pause's
 // events nor its idle gap are replayed.
 func TestPauseHooks_OnResumeResetsSSHAndCpuBaseline(t *testing.T) {
@@ -157,7 +197,8 @@ func TestPauseHooks_OnResumeResetsCpuBaselineEvenWhenSSHResetFails(t *testing.T)
 	}
 }
 
-// Intent: wired into a real coordinator, a pause empties the queue and a resume resets the collectors, once each.
+// Intent: wired into a real coordinator, a pause empties the queue and a resume empties it again and resets the
+// collectors, once each.
 func TestPauseHooks_DriveACoordinatorThroughPauseAndResume(t *testing.T) {
 	store := newTestStore(t)
 	enqueueAll(t, store, "x", "y")
@@ -177,8 +218,14 @@ func TestPauseHooks_DriveACoordinatorThroughPauseAndResume(t *testing.T) {
 		t.Errorf("expected no SSH reset while paused, got %d", fake.sshResets)
 	}
 
+	// A tick that passed the pause gate before the pause began lands in the queue after the clear.
+	enqueueAll(t, store, "straggler")
+
 	coord.Observe(pause.None)
 
+	if n := queueRows(t, store); n != 0 {
+		t.Errorf("expected the resume to clear a straggler queued during the pause, got %d row(s)", n)
+	}
 	if fake.sshResets != 1 {
 		t.Errorf("expected one SSH reset on resume, got %d", fake.sshResets)
 	}

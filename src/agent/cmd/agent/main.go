@@ -243,6 +243,13 @@ func newPauseHooks(ctx context.Context, store *db.Store, closeStreams func(), re
 			go closeStreams()
 		},
 		OnResume: func() {
+			// A collector tick that passed the pause gate just before the pause began can still enqueue
+			// after the clear in OnPause. Collectors are gated for the whole pause, so nothing legitimate
+			// is queued by now and whatever is there is such a straggler, which must not be sent.
+			if err := store.ClearTelemetryQueue(); err != nil {
+				slog.Error("failed to clear telemetry queue on resume", "error", err)
+			}
+
 			// Skip the SSH events logged during the pause instead of collecting and alerting on them.
 			if err := resetSSH(ctx, store); err != nil {
 				slog.Error("failed to reset ssh collection point on resume", "error", err)
