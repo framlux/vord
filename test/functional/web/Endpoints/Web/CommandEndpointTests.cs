@@ -129,6 +129,49 @@ public sealed class CommandEndpointTests
         return (tenant.Id, user.Id, machine.Id, signingKey.Id, privateKey);
     }
 
+    private static async Task<long> SeedAuthorizedMachineAfter(
+        DatabaseContext db, int tenantId, int userId, int signingKeyId)
+    {
+        RegistrationToken regToken = new()
+        {
+            TenantId = tenantId,
+            TokenHash = Guid.NewGuid().ToString("N"),
+            Name = "Second Test Token",
+            CreatedByUserId = userId,
+            CreatedAt = DateTimeOffset.UtcNow,
+            ExpiresAt = DateTimeOffset.UtcNow.AddDays(7),
+            IsRevoked = false,
+        };
+        regToken.Id = await db.InsertWithInt64IdentityAsync(regToken);
+
+        Machine machine = new()
+        {
+            ApiKeyHash = Guid.NewGuid().ToString("N"),
+            Name = "newer-machine",
+            SerialNumber = $"sn-{Guid.NewGuid():N}",
+            SystemId = $"sid-{Guid.NewGuid():N}",
+            AssetTagNumber = null,
+            MachineType = MachineTypes.BareMetalServer,
+            OperatingSystem = OperatingSystems.Ubuntu,
+            RegistrationTokenId = regToken.Id,
+            RegisteredOn = DateTimeOffset.UtcNow,
+            IsDeleted = false,
+            TenantId = tenantId
+        };
+        machine.Id = await db.InsertWithInt64IdentityAsync(machine);
+
+        await db.InsertWithInt32IdentityAsync(new MachineAuthorizedKey
+        {
+            MachineId = machine.Id,
+            SigningKeyId = signingKeyId,
+            TenantId = tenantId,
+            AuthorizedAt = DateTimeOffset.UtcNow,
+            AuthorizedByUserId = userId,
+        });
+
+        return machine.Id;
+    }
+
     private static async Task EnableCommandsCapability(FunctionalTestFactory factory, long machineId)
     {
         IMachinePingService pingService = factory.Services.GetRequiredService<IMachinePingService>();
@@ -254,6 +297,76 @@ public sealed class CommandEndpointTests
         string secondBody = await second.Content.ReadAsStringAsync();
         await Assert.That(secondBody).Contains("\"success\":false");
         await Assert.That(second.StatusCode).IsEqualTo(HttpStatusCode.Conflict);
+    }
+
+    // ========== Paused host ==========
+
+    [Test]
+    public async Task SubmitCommand_HostBeyondTheMachineLimit_Returns409WithTheReasonAndStoresNothing()
+    {
+        // Intent: with a limit of one machine the oldest host keeps taking commands and the newer one
+        // is refused with the reason in the response body, so the UI can show the user why instead of
+        // a generic failure. A paused host never polls, so an accepted command would sit unseen.
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId, long keptMachineId, int signingKeyId, NSec.Cryptography.Key privateKey) = await SeedFullEnvironment(db);
+        long pausedMachineId = await SeedAuthorizedMachineAfter(db, tenantId, userId, signingKeyId);
+        await db.InsertAsync(new TenantSubscriptionOverride
+        {
+            TenantId = tenantId,
+            MachineLimit = 1,
+            CreatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow,
+        });
+        await EnableCommandsCapability(factory, keptMachineId);
+        await EnableCommandsCapability(factory, pausedMachineId);
+
+        HttpClient client = new AuthenticatedClientBuilder(factory)
+            .WithUserId(userId)
+            .WithRole(tenantId, (int)UserAccountRoles.MachineAdmin)
+            .WithActiveTenant(tenantId)
+            .Build();
+
+        HttpResponseMessage pausedResponse = await client.PostAsJsonAsync(
+            "/api/v1/commands", BuildCommandRequest(pausedMachineId, signingKeyId, privateKey));
+        HttpResponseMessage keptResponse = await client.PostAsJsonAsync(
+            "/api/v1/commands", BuildCommandRequest(keptMachineId, signingKeyId, privateKey));
+
+        await Assert.That(pausedResponse.StatusCode).IsEqualTo(HttpStatusCode.Conflict);
+        using JsonDocument pausedBody = JsonDocument.Parse(await pausedResponse.Content.ReadAsStringAsync());
+        await Assert.That(pausedBody.RootElement.GetProperty("success").GetBoolean()).IsFalse();
+        await Assert.That(pausedBody.RootElement.GetProperty("message").GetString())
+            .IsEqualTo("Host is paused: your plan's host limit is reached.");
+        await Assert.That(keptResponse.StatusCode).IsEqualTo(HttpStatusCode.OK);
+        await Assert.That(await db.RemoteCommands.CountAsync(c => c.MachineId == pausedMachineId)).IsEqualTo(0);
+        await Assert.That(await db.RemoteCommands.CountAsync(c => c.MachineId == keptMachineId)).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task SubmitCommand_DuplicateCommandId_ReportsTheServiceReasonInTheBody()
+    {
+        // Intent: every service refusal reaches the client with its own reason, not one generic
+        // message, so the 409 for a paused host is not special-cased in the endpoint.
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+        (int tenantId, int userId, long machineId, int signingKeyId, NSec.Cryptography.Key privateKey) = await SeedFullEnvironment(db);
+        await EnableCommandsCapability(factory, machineId);
+
+        HttpClient client = new AuthenticatedClientBuilder(factory)
+            .WithUserId(userId)
+            .WithRole(tenantId, (int)UserAccountRoles.MachineAdmin)
+            .WithActiveTenant(tenantId)
+            .Build();
+
+        string commandId = Guid.NewGuid().ToString("D");
+        await client.PostAsJsonAsync("/api/v1/commands", BuildCommandRequest(machineId, signingKeyId, privateKey, commandId));
+
+        HttpResponseMessage second = await client.PostAsJsonAsync(
+            "/api/v1/commands", BuildCommandRequest(machineId, signingKeyId, privateKey, commandId));
+
+        using JsonDocument body = JsonDocument.Parse(await second.Content.ReadAsStringAsync());
+        await Assert.That(second.StatusCode).IsEqualTo(HttpStatusCode.Conflict);
+        await Assert.That(body.RootElement.GetProperty("message").GetString()).IsEqualTo("Duplicate command ID");
     }
 
     // ========== Viewer role can read but not submit ==========

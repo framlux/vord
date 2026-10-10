@@ -6,17 +6,22 @@ using Framlux.FleetManagement.Database;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
+using Framlux.FleetManagement.Grpc.AgentCommon;
 using Framlux.FleetManagement.Grpc.AgentConfiguration;
 using Framlux.FleetManagement.Server.Endpoints.Grpc;
+using Framlux.FleetManagement.Services.Core.Billing;
 using Framlux.FleetManagement.Services.Core.Machines;
+using Framlux.FleetManagement.Services.Core.Observability;
 using Framlux.FleetManagement.Services.Core.ServerConfiguration;
 using Framlux.FleetManagement.Test.Infrastructure;
 using Grpc.Core;
 using Microsoft.AspNetCore.Http;
+using Microsoft.Extensions.Diagnostics.Metrics.Testing;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Time.Testing;
 using NSubstitute;
 using StackExchange.Redis;
+using System.Diagnostics.Metrics;
 using System.Security.Claims;
 
 namespace Framlux.FleetManagement.Test.Endpoints.Grpc;
@@ -143,13 +148,123 @@ public sealed class ConfigurationServiceTests
         await Assert.That(response.Success).IsFalse();
     }
 
+    [Test]
+    public async Task AgentPing_ActiveHost_ReportsNoRejection()
+    {
+        ConfigurationService service = CreateService();
+
+        AgentPingResponse response = await service.AgentPing(new AgentPingRequest { MachineId = 42 }, CreateAuthenticatedContext(42));
+
+        await Assert.That(response.Success).IsTrue();
+        await Assert.That(response.State).IsEqualTo(IngestRejectionReason.Unspecified);
+    }
+
+    [Test]
+    public async Task AgentPing_PausedHost_ReportsPausedAndStillRecordsTheHeartbeat()
+    {
+        // The heartbeat is what tells a customer which paused hosts are still alive when choosing what
+        // to remove, so pausing must never suppress it.
+        IMachineStateRepository machineStateRepo = Substitute.For<IMachineStateRepository>();
+        IQuotaPauseService pause = Substitute.For<IQuotaPauseService>();
+        pause.IsPausedAsync(1, 42, Arg.Any<CancellationToken>()).Returns(true);
+        ConfigurationService service = CreateService(machineStateRepo: machineStateRepo, quotaPause: pause);
+
+        AgentPingResponse response = await service.AgentPing(new AgentPingRequest { MachineId = 42 }, CreateAuthenticatedContext(42));
+
+        await Assert.That(response.Success).IsTrue();
+        await Assert.That(response.State).IsEqualTo(IngestRejectionReason.HostPaused);
+        await machineStateRepo.Received(1).RecordHeartbeatAsync(42, Arg.Any<DateTimeOffset>(), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task AgentPing_InactiveSubscription_WinsOverPaused()
+    {
+        IQuotaPauseService pause = Substitute.For<IQuotaPauseService>();
+        pause.IsPausedAsync(1, 42, Arg.Any<CancellationToken>()).Returns(true);
+        ISubscriptionService subs = Substitute.For<ISubscriptionService>();
+        subs.IsIngestEligibleAsync(1, Arg.Any<CancellationToken>()).Returns(false);
+        ConfigurationService service = CreateService(quotaPause: pause, subscriptionService: subs);
+
+        AgentPingResponse response = await service.AgentPing(new AgentPingRequest { MachineId = 42 }, CreateAuthenticatedContext(42));
+
+        await Assert.That(response.Success).IsTrue();
+        await Assert.That(response.State).IsEqualTo(IngestRejectionReason.SubscriptionInactive);
+    }
+
+    [Test]
+    public async Task AgentPing_PauseCheckUnavailable_ReportsActive()
+    {
+        IQuotaPauseService pause = Substitute.For<IQuotaPauseService>();
+        pause.IsPausedAsync(Arg.Any<int>(), Arg.Any<long>(), Arg.Any<CancellationToken>())
+            .Returns<bool>(_ => throw new QuotaCheckUnavailableException(1, new InvalidOperationException("db")));
+        ConfigurationService service = CreateService(quotaPause: pause);
+
+        AgentPingResponse response = await service.AgentPing(new AgentPingRequest { MachineId = 42 }, CreateAuthenticatedContext(42));
+
+        await Assert.That(response.Success).IsTrue();
+        await Assert.That(response.State).IsEqualTo(IngestRejectionReason.Unspecified);
+    }
+
+    [Test]
+    public async Task AgentPing_PauseCheckUnavailable_CountsTheFailureAgainstThePingSurface()
+    {
+        // Reporting the host as active hides that limits stopped being enforced, so the counter is the
+        // only evidence, and its surface tag says which path is running unmetered.
+        IMeterFactory meterFactory = TestMetricsFactory.CreateMeterFactory();
+        using MetricCollector<long> failures = new(meterFactory, VordMeter.Name, "vord.quota.pause_check_failures");
+        IQuotaPauseService pause = Substitute.For<IQuotaPauseService>();
+        pause.IsPausedAsync(Arg.Any<int>(), Arg.Any<long>(), Arg.Any<CancellationToken>())
+            .Returns<bool>(_ => throw new QuotaCheckUnavailableException(1, new InvalidOperationException("db")));
+        ConfigurationService service = CreateService(quotaPause: pause, quotaPauseMetrics: new QuotaPauseMetrics(meterFactory));
+
+        await service.AgentPing(new AgentPingRequest { MachineId = 42 }, CreateAuthenticatedContext(42));
+
+        IReadOnlyList<CollectedMeasurement<long>> measurements = failures.GetMeasurementSnapshot();
+        await Assert.That(measurements.Count).IsEqualTo(1);
+        await Assert.That(measurements[0].Value).IsEqualTo(1L);
+        await Assert.That(measurements[0].Tags["surface"]).IsEqualTo("ping");
+    }
+
+    [Test]
+    public async Task AgentPing_PauseCheckCanceled_PropagatesTheCancellation()
+    {
+        // Only an unavailable decision is swallowed; a canceled call is the caller going away and must
+        // not be turned into an "active" answer for an agent that will never read it.
+        IQuotaPauseService pause = Substitute.For<IQuotaPauseService>();
+        pause.IsPausedAsync(Arg.Any<int>(), Arg.Any<long>(), Arg.Any<CancellationToken>())
+            .Returns<bool>(_ => throw new OperationCanceledException());
+        ConfigurationService service = CreateService(quotaPause: pause);
+
+        await Assert.ThrowsAsync<OperationCanceledException>(
+            async () => await service.AgentPing(new AgentPingRequest { MachineId = 42 }, CreateAuthenticatedContext(42)));
+    }
+
+    [Test]
+    public async Task AgentPing_HeartbeatWriteFailsOnAPausedHost_StillReportsFailure()
+    {
+        // A pause never turns a failed heartbeat write into a success: the agent must retry the ping.
+        IMachineStateRepository machineStateRepo = Substitute.For<IMachineStateRepository>();
+        machineStateRepo.RecordHeartbeatAsync(Arg.Any<long>(), Arg.Any<DateTimeOffset>(), Arg.Any<CancellationToken>())
+            .Returns<Task>(_ => throw new InvalidOperationException("database unavailable"));
+        IQuotaPauseService pause = Substitute.For<IQuotaPauseService>();
+        pause.IsPausedAsync(Arg.Any<int>(), Arg.Any<long>(), Arg.Any<CancellationToken>()).Returns(true);
+        ConfigurationService service = CreateService(machineStateRepo: machineStateRepo, quotaPause: pause);
+
+        AgentPingResponse response = await service.AgentPing(new AgentPingRequest { MachineId = 42 }, CreateAuthenticatedContext(42));
+
+        await Assert.That(response.Success).IsFalse();
+    }
+
     private ConfigurationService CreateService(
         IServerSettingsReader? settingsCache = null,
         ISigningKeyRepository? signingKeyRepo = null,
         IRemoteCommandRepository? remoteCommandRepo = null,
         IMachineRepository? machineRepo = null,
         IMachineStateRepository? machineStateRepo = null,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        IQuotaPauseService? quotaPause = null,
+        ISubscriptionService? subscriptionService = null,
+        QuotaPauseMetrics? quotaPauseMetrics = null)
     {
         IServerSettingsReader resolvedSettingsCache = settingsCache ?? Substitute.For<IServerSettingsReader>();
         ISigningKeyRepository resolvedSigningKeyRepo = signingKeyRepo ?? Substitute.For<ISigningKeyRepository>();
@@ -160,6 +275,12 @@ public sealed class ConfigurationServiceTests
         IMachineStateRepository resolvedMachineStateRepo = machineStateRepo ?? Substitute.For<IMachineStateRepository>();
         TimeProvider resolvedTimeProvider = timeProvider ?? new FakeTimeProvider(new DateTimeOffset(2026, 9, 13, 10, 0, 0, TimeSpan.Zero));
         ServerConfigurationService configService = new(resolvedSettingsCache, Substitute.For<IConnectionMultiplexer>());
+        IQuotaPauseService resolvedQuotaPause = quotaPause ?? Substitute.For<IQuotaPauseService>();
+        ISubscriptionService resolvedSubscriptionService = subscriptionService ?? Substitute.For<ISubscriptionService>();
+        if (subscriptionService is null)
+        {
+            resolvedSubscriptionService.IsIngestEligibleAsync(Arg.Any<int>(), Arg.Any<CancellationToken>()).Returns(true);
+        }
 
         return new ConfigurationService(
             resolvedSigningKeyRepo,
@@ -167,6 +288,9 @@ public sealed class ConfigurationServiceTests
             _pingService,
             resolvedMachineRepo,
             resolvedMachineStateRepo,
+            resolvedSubscriptionService,
+            resolvedQuotaPause,
+            quotaPauseMetrics ?? TestMetricsFactory.CreateQuotaPauseMetrics(),
             configService,
             resolvedTimeProvider,
             _logger);
@@ -308,6 +432,101 @@ public sealed class ConfigurationServiceTests
             new GetPendingCommandsRequest { MachineId = 1 }, context);
 
         await Assert.That(response.Commands.Count).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task GetPendingCommands_PausedHost_DeliversNothingAndMarksNothing()
+    {
+        IRemoteCommandRepository commands = Substitute.For<IRemoteCommandRepository>();
+        IQuotaPauseService pause = Substitute.For<IQuotaPauseService>();
+        pause.IsPausedAsync(1, 42, Arg.Any<CancellationToken>()).Returns(true);
+        ConfigurationService service = CreateService(remoteCommandRepo: commands, quotaPause: pause);
+
+        GetPendingCommandsResponse response = await service.GetPendingCommands(new GetPendingCommandsRequest { MachineId = 42 }, CreateAuthenticatedContext(42));
+
+        await Assert.That(response.Commands.Count).IsEqualTo(0);
+        await commands.DidNotReceiveWithAnyArgs().GetPendingCommandsForMachineAsync(default, default, default);
+        await commands.DidNotReceiveWithAnyArgs().MarkCommandsDeliveredAsync(default!, default);
+    }
+
+    [Test]
+    public async Task GetPendingCommands_PauseCheckUnavailable_DeliversAsActive()
+    {
+        // A broken quota check must never strand a paying fleet's commands.
+        IRemoteCommandRepository commands = Substitute.For<IRemoteCommandRepository>();
+        commands.GetPendingCommandsForMachineAsync(42, 1, Arg.Any<CancellationToken>())
+            .Returns(new List<Database.Models.RemoteCommand> { BuildPendingCommand(machineId: 42) });
+        IQuotaPauseService pause = Substitute.For<IQuotaPauseService>();
+        pause.IsPausedAsync(Arg.Any<int>(), Arg.Any<long>(), Arg.Any<CancellationToken>())
+            .Returns<bool>(_ => throw new QuotaCheckUnavailableException(1, new InvalidOperationException("db")));
+        ConfigurationService service = CreateService(remoteCommandRepo: commands, quotaPause: pause);
+
+        GetPendingCommandsResponse response = await service.GetPendingCommands(new GetPendingCommandsRequest { MachineId = 42 }, CreateAuthenticatedContext(42));
+
+        await Assert.That(response.Commands.Count).IsEqualTo(1);
+        await commands.Received(1).MarkCommandsDeliveredAsync(Arg.Any<IEnumerable<string>>(), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task GetPendingCommands_PauseCheckUnavailable_CountsTheFailureAgainstTheCommandsSurface()
+    {
+        IMeterFactory meterFactory = TestMetricsFactory.CreateMeterFactory();
+        using MetricCollector<long> failures = new(meterFactory, VordMeter.Name, "vord.quota.pause_check_failures");
+        IRemoteCommandRepository commands = Substitute.For<IRemoteCommandRepository>();
+        commands.GetPendingCommandsForMachineAsync(Arg.Any<long>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns(new List<Database.Models.RemoteCommand>());
+        IQuotaPauseService pause = Substitute.For<IQuotaPauseService>();
+        pause.IsPausedAsync(Arg.Any<int>(), Arg.Any<long>(), Arg.Any<CancellationToken>())
+            .Returns<bool>(_ => throw new QuotaCheckUnavailableException(1, new InvalidOperationException("db")));
+        ConfigurationService service = CreateService(remoteCommandRepo: commands, quotaPause: pause, quotaPauseMetrics: new QuotaPauseMetrics(meterFactory));
+
+        await service.GetPendingCommands(new GetPendingCommandsRequest { MachineId = 42 }, CreateAuthenticatedContext(42));
+
+        IReadOnlyList<CollectedMeasurement<long>> measurements = failures.GetMeasurementSnapshot();
+        await Assert.That(measurements.Count).IsEqualTo(1);
+        await Assert.That(measurements[0].Tags["surface"]).IsEqualTo("commands");
+    }
+
+    [Test]
+    public async Task GetPendingCommands_HostResumes_DeliversTheCommandsHeldWhilePaused()
+    {
+        // Pausing only withholds delivery: nothing is marked delivered, so the command is still
+        // pending and goes out on the first poll after the host is active again.
+        IRemoteCommandRepository commands = Substitute.For<IRemoteCommandRepository>();
+        commands.GetPendingCommandsForMachineAsync(42, 1, Arg.Any<CancellationToken>())
+            .Returns(new List<Database.Models.RemoteCommand> { BuildPendingCommand(machineId: 42) });
+        IQuotaPauseService pause = Substitute.For<IQuotaPauseService>();
+        pause.IsPausedAsync(1, 42, Arg.Any<CancellationToken>()).Returns(true, false);
+        ConfigurationService service = CreateService(remoteCommandRepo: commands, quotaPause: pause);
+        ServerCallContext context = CreateAuthenticatedContext(42);
+
+        GetPendingCommandsResponse whilePaused = await service.GetPendingCommands(new GetPendingCommandsRequest { MachineId = 42 }, context);
+        GetPendingCommandsResponse afterResume = await service.GetPendingCommands(new GetPendingCommandsRequest { MachineId = 42 }, context);
+
+        await Assert.That(whilePaused.Commands.Count).IsEqualTo(0);
+        await Assert.That(afterResume.Commands.Count).IsEqualTo(1);
+    }
+
+    private static Database.Models.RemoteCommand BuildPendingCommand(long machineId)
+    {
+        return new Database.Models.RemoteCommand
+        {
+            Id = 1,
+            CommandId = "cmd-pending",
+            TenantId = 1,
+            MachineId = machineId,
+            UserId = 1,
+            SigningKeyId = 1,
+            CommandType = "reboot",
+            Params = null,
+            Nonce = "nonce-pending",
+            Signature = Convert.ToBase64String(new byte[64]),
+            CanonicalPayload = "{}",
+            Timestamp = DateTimeOffset.UtcNow,
+            ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(10),
+            Status = Database.Enums.RemoteCommandStatus.Pending,
+            CreatedAt = DateTimeOffset.UtcNow,
+        };
     }
 
     [Test]

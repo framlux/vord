@@ -5,12 +5,16 @@
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
+using Framlux.FleetManagement.Services.Core.Billing;
 using Framlux.FleetManagement.Services.Core.Commands;
 using Framlux.FleetManagement.Services.Core.Infrastructure;
 using Framlux.FleetManagement.Services.Core.Machines;
+using Framlux.FleetManagement.Services.Core.Observability;
 using Framlux.FleetManagement.Test.Infrastructure;
+using Microsoft.Extensions.Diagnostics.Metrics.Testing;
 using Microsoft.Extensions.Logging;
 using NSubstitute;
+using System.Diagnostics.Metrics;
 
 namespace Framlux.FleetManagement.Test.Services;
 
@@ -26,6 +30,8 @@ public sealed class RemoteCommandServiceTests
     private readonly ISigningKeyRepository _signingKeyRepository;
     private readonly IRemoteCommandRepository _remoteCommandRepository;
     private readonly InMemoryMachinePingService _pingService = new();
+    private readonly IQuotaPauseService _quotaPause = Substitute.For<IQuotaPauseService>();
+    private readonly QuotaPauseMetrics _quotaPauseMetrics = TestMetricsFactory.CreateQuotaPauseMetrics();
     private readonly ILogger<RemoteCommandService> _logger = Substitute.For<ILogger<RemoteCommandService>>();
 
     public RemoteCommandServiceTests()
@@ -39,7 +45,7 @@ public sealed class RemoteCommandServiceTests
         _transactionProvider.BeginTransactionAsync(Arg.Any<CancellationToken>()).Returns(mockTransaction);
     }
 
-    private RemoteCommandService CreateService() => new(_transactionProvider, _auditLog, _machineRepository, _signingKeyRepository, _remoteCommandRepository, _pingService, _logger);
+    private RemoteCommandService CreateService() => new(_transactionProvider, _auditLog, _machineRepository, _signingKeyRepository, _remoteCommandRepository, _pingService, _quotaPause, _quotaPauseMetrics, _logger);
 
     // ========== Constructor null guard validation ==========
 
@@ -50,7 +56,7 @@ public sealed class RemoteCommandServiceTests
         // misconfigured DI container fails loudly rather than causing a deferred NullReferenceException.
         ArgumentNullException? ex = await Assert.ThrowsAsync<ArgumentNullException>(() =>
         {
-            RemoteCommandService _ = new(null!, _auditLog, _machineRepository, _signingKeyRepository, _remoteCommandRepository, _pingService, _logger);
+            RemoteCommandService _ = new(null!, _auditLog, _machineRepository, _signingKeyRepository, _remoteCommandRepository, _pingService, _quotaPause, _quotaPauseMetrics, _logger);
 
             return Task.CompletedTask;
         });
@@ -66,7 +72,7 @@ public sealed class RemoteCommandServiceTests
         // never silently proceeds without its required audit dependency.
         ArgumentNullException? ex = await Assert.ThrowsAsync<ArgumentNullException>(() =>
         {
-            RemoteCommandService _ = new(_transactionProvider, null!, _machineRepository, _signingKeyRepository, _remoteCommandRepository, _pingService, _logger);
+            RemoteCommandService _ = new(_transactionProvider, null!, _machineRepository, _signingKeyRepository, _remoteCommandRepository, _pingService, _quotaPause, _quotaPauseMetrics, _logger);
 
             return Task.CompletedTask;
         });
@@ -81,7 +87,7 @@ public sealed class RemoteCommandServiceTests
         // Intent: A null machine repository must be caught at construction.
         ArgumentNullException? ex = await Assert.ThrowsAsync<ArgumentNullException>(() =>
         {
-            RemoteCommandService _ = new(_transactionProvider, _auditLog, null!, _signingKeyRepository, _remoteCommandRepository, _pingService, _logger);
+            RemoteCommandService _ = new(_transactionProvider, _auditLog, null!, _signingKeyRepository, _remoteCommandRepository, _pingService, _quotaPause, _quotaPauseMetrics, _logger);
 
             return Task.CompletedTask;
         });
@@ -96,7 +102,7 @@ public sealed class RemoteCommandServiceTests
         // Intent: A null signing key repository must be caught at construction.
         ArgumentNullException? ex = await Assert.ThrowsAsync<ArgumentNullException>(() =>
         {
-            RemoteCommandService _ = new(_transactionProvider, _auditLog, _machineRepository, null!, _remoteCommandRepository, _pingService, _logger);
+            RemoteCommandService _ = new(_transactionProvider, _auditLog, _machineRepository, null!, _remoteCommandRepository, _pingService, _quotaPause, _quotaPauseMetrics, _logger);
 
             return Task.CompletedTask;
         });
@@ -111,7 +117,7 @@ public sealed class RemoteCommandServiceTests
         // Intent: A null remote command repository must be caught at construction.
         ArgumentNullException? ex = await Assert.ThrowsAsync<ArgumentNullException>(() =>
         {
-            RemoteCommandService _ = new(_transactionProvider, _auditLog, _machineRepository, _signingKeyRepository, null!, _pingService, _logger);
+            RemoteCommandService _ = new(_transactionProvider, _auditLog, _machineRepository, _signingKeyRepository, null!, _pingService, _quotaPause, _quotaPauseMetrics, _logger);
 
             return Task.CompletedTask;
         });
@@ -126,7 +132,7 @@ public sealed class RemoteCommandServiceTests
         // Intent: A null machine ping service must be caught at construction.
         ArgumentNullException? ex = await Assert.ThrowsAsync<ArgumentNullException>(() =>
         {
-            RemoteCommandService _ = new(_transactionProvider, _auditLog, _machineRepository, _signingKeyRepository, _remoteCommandRepository, null!, _logger);
+            RemoteCommandService _ = new(_transactionProvider, _auditLog, _machineRepository, _signingKeyRepository, _remoteCommandRepository, null!, _quotaPause, _quotaPauseMetrics, _logger);
 
             return Task.CompletedTask;
         });
@@ -141,13 +147,43 @@ public sealed class RemoteCommandServiceTests
         // Intent: A null logger must be caught at construction.
         ArgumentNullException? ex = await Assert.ThrowsAsync<ArgumentNullException>(() =>
         {
-            RemoteCommandService _ = new(_transactionProvider, _auditLog, _machineRepository, _signingKeyRepository, _remoteCommandRepository, _pingService, null!);
+            RemoteCommandService _ = new(_transactionProvider, _auditLog, _machineRepository, _signingKeyRepository, _remoteCommandRepository, _pingService, _quotaPause, _quotaPauseMetrics, null!);
 
             return Task.CompletedTask;
         });
 
         await Assert.That(ex).IsNotNull();
         await Assert.That(ex!.ParamName).IsEqualTo("logger");
+    }
+
+    [Test]
+    public async Task Constructor_NullQuotaPause_Throws()
+    {
+        // Intent: A null quota pause service must be caught at construction.
+        ArgumentNullException? ex = await Assert.ThrowsAsync<ArgumentNullException>(() =>
+        {
+            RemoteCommandService _ = new(_transactionProvider, _auditLog, _machineRepository, _signingKeyRepository, _remoteCommandRepository, _pingService, null!, _quotaPauseMetrics, _logger);
+
+            return Task.CompletedTask;
+        });
+
+        await Assert.That(ex).IsNotNull();
+        await Assert.That(ex!.ParamName).IsEqualTo("quotaPause");
+    }
+
+    [Test]
+    public async Task Constructor_NullQuotaPauseMetrics_Throws()
+    {
+        // Intent: A null metrics instrument must be caught at construction, not at the first failed check.
+        ArgumentNullException? ex = await Assert.ThrowsAsync<ArgumentNullException>(() =>
+        {
+            RemoteCommandService _ = new(_transactionProvider, _auditLog, _machineRepository, _signingKeyRepository, _remoteCommandRepository, _pingService, _quotaPause, null!, _logger);
+
+            return Task.CompletedTask;
+        });
+
+        await Assert.That(ex).IsNotNull();
+        await Assert.That(ex!.ParamName).IsEqualTo("quotaPauseMetrics");
     }
 
     private static (UserSigningKey key, NSec.Cryptography.Key privateKey) BuildSignedKey(int id = 1, int userId = 1, int tenantId = 1)
@@ -541,6 +577,121 @@ public sealed class RemoteCommandServiceTests
         ServiceResult<RemoteCommand> result = await service.SubmitCommandAsync(command, CancellationToken.None);
 
         await Assert.That(result.IsSuccess).IsTrue();
+    }
+
+    // ========== SubmitCommandAsync — Paused host ==========
+
+    [Test]
+    public async Task SubmitCommand_PausedTarget_Returns409WithTheReasonAndCreatesNothing()
+    {
+        // Intent: a paused host never polls for commands, so accepting one would queue it silently
+        // until it expired. Refusing up front tells the user why, and leaves no row or audit entry.
+        (UserSigningKey key, NSec.Cryptography.Key privateKey) = BuildSignedKey();
+        SetupValidCommandMocks(key);
+        _quotaPause.IsPausedAsync(key.TenantId, 1, Arg.Any<CancellationToken>()).Returns(true);
+
+        RemoteCommand command = BuildSignedCommand(privateKey);
+        RemoteCommandService service = CreateService();
+
+        ServiceResult<RemoteCommand> result = await service.SubmitCommandAsync(command, CancellationToken.None);
+
+        await Assert.That(result.StatusCode).IsEqualTo(409);
+        await Assert.That(result.ErrorMessage).IsEqualTo("Host is paused: your plan's host limit is reached.");
+        await _remoteCommandRepository.DidNotReceiveWithAnyArgs().CreateRemoteCommandAsync(default!, default);
+        await _auditLog.DidNotReceiveWithAnyArgs().InsertAuditLogAsync(default!, default);
+    }
+
+    [Test]
+    public async Task SubmitCommand_PausedTarget_IsCheckedForTheTargetMachineInTheCommandsTenant()
+    {
+        (UserSigningKey key, NSec.Cryptography.Key privateKey) = BuildSignedKey(tenantId: 7);
+        SetupValidCommandMocks(key, machineId: 55);
+
+        RemoteCommand command = BuildSignedCommand(privateKey, tenantId: 7, machineId: 55);
+        RemoteCommandService service = CreateService();
+
+        await service.SubmitCommandAsync(command, CancellationToken.None);
+
+        await _quotaPause.Received(1).IsPausedAsync(7, 55, Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task SubmitCommand_ActiveTarget_IsAccepted()
+    {
+        (UserSigningKey key, NSec.Cryptography.Key privateKey) = BuildSignedKey();
+        SetupValidCommandMocks(key);
+        _quotaPause.IsPausedAsync(Arg.Any<int>(), Arg.Any<long>(), Arg.Any<CancellationToken>()).Returns(false);
+
+        RemoteCommand command = BuildSignedCommand(privateKey);
+        RemoteCommandService service = CreateService();
+
+        ServiceResult<RemoteCommand> result = await service.SubmitCommandAsync(command, CancellationToken.None);
+
+        await Assert.That(result.IsSuccess).IsTrue();
+    }
+
+    [Test]
+    public async Task SubmitCommand_PauseCheckUnavailable_LetsTheCommandThrough()
+    {
+        // Intent: a broken quota check must never stop a paying fleet being managed.
+        (UserSigningKey key, NSec.Cryptography.Key privateKey) = BuildSignedKey();
+        SetupValidCommandMocks(key);
+        _quotaPause.IsPausedAsync(Arg.Any<int>(), Arg.Any<long>(), Arg.Any<CancellationToken>())
+            .Returns<bool>(_ => throw new QuotaCheckUnavailableException(1, new InvalidOperationException("db")));
+
+        RemoteCommand command = BuildSignedCommand(privateKey);
+        RemoteCommandService service = CreateService();
+
+        ServiceResult<RemoteCommand> result = await service.SubmitCommandAsync(command, CancellationToken.None);
+
+        await Assert.That(result.IsSuccess).IsTrue();
+    }
+
+    [Test]
+    public async Task SubmitCommand_PauseCheckUnavailable_CountsTheFailureAgainstTheCommandsSurface()
+    {
+        IMeterFactory meterFactory = TestMetricsFactory.CreateMeterFactory();
+        using MetricCollector<long> failures = new(meterFactory, VordMeter.Name, "vord.quota.pause_check_failures");
+        (UserSigningKey key, NSec.Cryptography.Key privateKey) = BuildSignedKey();
+        SetupValidCommandMocks(key);
+        _quotaPause.IsPausedAsync(Arg.Any<int>(), Arg.Any<long>(), Arg.Any<CancellationToken>())
+            .Returns<bool>(_ => throw new QuotaCheckUnavailableException(1, new InvalidOperationException("db")));
+        RemoteCommandService service = new(_transactionProvider, _auditLog, _machineRepository, _signingKeyRepository, _remoteCommandRepository, _pingService, _quotaPause, new QuotaPauseMetrics(meterFactory), _logger);
+
+        await service.SubmitCommandAsync(BuildSignedCommand(privateKey), CancellationToken.None);
+
+        IReadOnlyList<CollectedMeasurement<long>> measurements = failures.GetMeasurementSnapshot();
+        await Assert.That(measurements.Count).IsEqualTo(1);
+        await Assert.That(measurements[0].Tags["surface"]).IsEqualTo("commands");
+    }
+
+    [Test]
+    public async Task SubmitCommand_PauseCheckCanceled_PropagatesTheCancellation()
+    {
+        (UserSigningKey key, NSec.Cryptography.Key privateKey) = BuildSignedKey();
+        SetupValidCommandMocks(key);
+        _quotaPause.IsPausedAsync(Arg.Any<int>(), Arg.Any<long>(), Arg.Any<CancellationToken>())
+            .Returns<bool>(_ => throw new OperationCanceledException());
+        RemoteCommandService service = CreateService();
+
+        await Assert.ThrowsAsync<OperationCanceledException>(
+            async () => await service.SubmitCommandAsync(BuildSignedCommand(privateKey), CancellationToken.None));
+    }
+
+    [Test]
+    public async Task SubmitCommand_UnknownMachine_IsRejectedBeforeThePauseCheck()
+    {
+        // Intent: whether a host is paused is only revealed for a machine the caller's tenant owns.
+        (UserSigningKey key, NSec.Cryptography.Key privateKey) = BuildSignedKey();
+        _signingKeyRepository.GetSigningKeyByIdAsync(key.Id, Arg.Any<CancellationToken>()).Returns(key);
+        _machineRepository.GetActiveMachineByIdAsync(Arg.Any<long>(), Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns((Machine?)null);
+        RemoteCommandService service = CreateService();
+
+        ServiceResult<RemoteCommand> result = await service.SubmitCommandAsync(BuildSignedCommand(privateKey), CancellationToken.None);
+
+        await Assert.That(result.StatusCode).IsEqualTo(400);
+        await _quotaPause.DidNotReceiveWithAnyArgs().IsPausedAsync(default, default, default);
     }
 
     // ========== SubmitCommandAsync — Signing key not authorized for machine ==========

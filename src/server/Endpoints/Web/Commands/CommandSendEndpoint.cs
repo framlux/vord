@@ -73,7 +73,7 @@ public sealed class CommandSendEndpoint : Endpoint<CommandSendRequest, ApiRespon
 
         if (result.IsSuccess == false)
         {
-            await HttpContext.SendApiErrorAsync(result.StatusCode, "Command submission failed", ct);
+            await HttpContext.SendApiErrorAsync(result.StatusCode, result.ErrorMessage ?? "Command submission failed", ct);
 
             return;
         }
