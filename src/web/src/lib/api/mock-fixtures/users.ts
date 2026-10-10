@@ -35,5 +35,8 @@ export const mockSubscription: SubscriptionDto = {
 	webhookLimit: 10,
 	webhookCount: 2,
 	memberLimit: 5,
-	memberCount: 3
+	memberCount: 3,
+	pausedMachineCount: 0,
+	billableMachineCount: null,
+	machineLimitIsCustom: false
 };

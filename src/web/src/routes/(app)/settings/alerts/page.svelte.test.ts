@@ -72,6 +72,7 @@ function fleetMachine(id: number, name: string): FleetMachineDto {
 		hasDiskHealthIssue: false,
 		hasHardwareIssue: false,
 		isOnline: true,
+		isPaused: false,
 		lastPing: null,
 		pendingUpdates: 0,
 		securityUpdates: 0,
@@ -128,6 +129,9 @@ function makeSubscription(overrides: Partial<SubscriptionDto> = {}): Subscriptio
 		webhookCount: 0,
 		memberLimit: 5,
 		memberCount: 1,
+		pausedMachineCount: 0,
+		billableMachineCount: null,
+		machineLimitIsCustom: false,
 		...overrides
 	};
 }

@@ -11,7 +11,7 @@
 	import { goto } from '$app/navigation';
 	import { ArrowUpDown, ChevronRight } from 'lucide-svelte';
 	import PageHeader from '$lib/components/PageHeader.svelte';
-	import HealthBadge from '$lib/components/HealthBadge.svelte';
+	import MachineStateBadge from '$lib/components/MachineStateBadge.svelte';
 	import ProgressBar from '$lib/components/ProgressBar.svelte';
 	import Pagination from '$lib/components/Pagination.svelte';
 	import EmptyState from '$lib/components/EmptyState.svelte';
@@ -98,7 +98,12 @@
 		goto('/machines/search', { keepFocus: true });
 	}
 
-	function healthBorderClass(status: MachineHealthStatus): string {
+	function healthBorderClass(status: MachineHealthStatus, isPaused: boolean): string {
+		// A paused host's health is frozen, so its border must not claim one.
+		if (isPaused) {
+			return 'border-l-2 border-l-indigo-500';
+		}
+
 		switch (status) {
 			case MachineHealthStatus.Healthy:
 				return 'border-l-2 border-l-green-500';
@@ -119,6 +124,7 @@
 		let chips: { key: string; label: string; value: string }[] = [];
 		if (f.search) chips.push({ key: 'search', label: 'Search', value: f.search });
 		if (f.healthStatus) chips.push({ key: 'healthStatus', label: 'Health', value: f.healthStatus });
+		if (f.paused === 'true') chips.push({ key: 'paused', label: 'Status', value: 'Paused' });
 		if (f.os) chips.push({ key: 'os', label: 'OS', value: f.os });
 		if (f.type) chips.push({ key: 'type', label: 'Type', value: f.type });
 		if (f.cpuMin !== undefined) chips.push({ key: 'cpuMin', label: 'CPU min', value: `${f.cpuMin}%` });
@@ -240,7 +246,7 @@
 					<tbody class="divide-y divide-surface-100 dark:divide-surface-800">
 						{#each results.items as machine, i (machine.id)}
 							<tr
-								class="group transition {healthBorderClass(machine.healthStatus)} {i % 2 === 1 ? 'bg-surface-100/50 dark:bg-surface-800/30' : ''} hover:bg-surface-100 dark:hover:bg-surface-700/50"
+								class="group transition {healthBorderClass(machine.healthStatus, machine.isPaused)} {i % 2 === 1 ? 'bg-surface-100/50 dark:bg-surface-800/30' : ''} hover:bg-surface-100 dark:hover:bg-surface-700/50"
 							>
 								<td class="px-4 py-3">
 									<a href="/machines/{machine.id}" class="block">
@@ -262,7 +268,7 @@
 									</a>
 								</td>
 								<td class="px-4 py-3">
-									<HealthBadge status={machine.healthStatus} />
+									<MachineStateBadge status={machine.healthStatus} isPaused={machine.isPaused} />
 								</td>
 								<td class="w-32 px-4 py-3">
 									{#if machine.cpuUsagePercent !== null}

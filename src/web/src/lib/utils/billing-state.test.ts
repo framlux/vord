@@ -29,6 +29,9 @@ function makeSub(overrides: Partial<SubscriptionDto> = {}): SubscriptionDto {
 		webhookCount: 0,
 		memberLimit: 5,
 		memberCount: 1,
+		pausedMachineCount: 0,
+		billableMachineCount: null,
+		machineLimitIsCustom: false,
 		...overrides
 	};
 }

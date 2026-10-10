@@ -26,6 +26,9 @@ function makeSubscription(overrides: Partial<SubscriptionDto> = {}): Subscriptio
 		webhookCount: 0,
 		memberLimit: 5,
 		memberCount: 1,
+		pausedMachineCount: 0,
+		billableMachineCount: null,
+		machineLimitIsCustom: false,
 		...overrides
 	};
 }
@@ -242,27 +245,49 @@ describe('billing page for a Stripe-billed tenant', () => {
 });
 
 describe('billing page tells a downgrading or canceling customer what happens to their hosts', () => {
-	it('says a downgrade to Free keeps existing hosts and blocks new ones at the limit', async () => {
+	it('says a downgrade to Free pauses the hosts beyond the limit and removes none', async () => {
 		render(BillingPage, { props: { data: makeData(makeSubscription()), form: null } });
 
 		await fireEvent.click(screen.getByRole('button', { name: /Downgrade to Free/ }));
 
 		expect(
-			screen.getByText(
-				'Machine limit drops to 3. Existing hosts are not removed, but new hosts cannot be added while you have 3 or more.'
-			)
+			screen.getByText('Hosts beyond 3 are paused; your 3 oldest stay active. No hosts are removed.')
 		).toBeInTheDocument();
-		expect(screen.queryByText('Machine limit will be reduced to 3')).not.toBeInTheDocument();
+		expect(screen.queryByText(/new hosts cannot be added/)).not.toBeInTheDocument();
 	});
 
-	it('says cancellation moves the account to Free instead of ending all service', async () => {
+	it('says a downgrade from Team to Pro pauses the hosts beyond the Pro limit when the tenant has more', async () => {
+		render(BillingPage, {
+			props: { data: makeData(makeSubscription({ tier: 'Team', machineLimit: 10000, machineCount: 1200 })), form: null }
+		});
+
+		await fireEvent.click(screen.getByRole('button', { name: 'Downgrade to Pro' }));
+
+		expect(
+			screen.getByText('Hosts beyond 1000 will be paused immediately; your oldest stay active.')
+		).toBeInTheDocument();
+	});
+
+	it('says nothing about pausing in a Team to Pro downgrade at exactly the Pro limit', async () => {
+		render(BillingPage, {
+			props: { data: makeData(makeSubscription({ tier: 'Team', machineLimit: 10000, machineCount: 1000 })), form: null }
+		});
+
+		await fireEvent.click(screen.getByRole('button', { name: 'Downgrade to Pro' }));
+
+		expect(screen.queryByText(/will be paused immediately/)).not.toBeInTheDocument();
+	});
+
+	it('says cancellation moves the account to Free and pauses the hosts beyond its limit', async () => {
 		render(BillingPage, { props: { data: makeData(makeSubscription()), form: null } });
 
 		await fireEvent.click(screen.getByRole('button', { name: 'Cancel Account' }));
 
 		expect(screen.getByText(/your account moves to the Free plan/)).toBeInTheDocument();
-		expect(screen.getByText(/Hosts are not removed/)).toBeInTheDocument();
-		expect(screen.getByText(/uninstall the agent/)).toBeInTheDocument();
+		expect(
+			screen.getByText(/Hosts beyond the Free limit are paused; your oldest stay active\./)
+		).toBeInTheDocument();
+		expect(screen.queryByText(/uninstall the agent/)).not.toBeInTheDocument();
 		expect(screen.queryByText(/lose ALL service/)).not.toBeInTheDocument();
 		expect(screen.queryByText(/stops all service entirely/)).not.toBeInTheDocument();
 	});
@@ -274,5 +299,34 @@ describe('billing page tells a downgrading or canceling customer what happens to
 
 		expect(screen.getByText(/Your paid plan will end and your account will move to the Free plan/)).toBeInTheDocument();
 		expect(screen.queryByText('Your account will be canceled')).not.toBeInTheDocument();
+	});
+});
+
+describe('billing page run rate', () => {
+	it('prices the hosts that are billed, not every registered host, when the tenant is over its limit', () => {
+		render(BillingPage, {
+			props: {
+				data: makeData(makeSubscription({ machineCount: 1200, billableMachineCount: 1000 }), {
+					upcomingInvoice: makeUpcomingInvoice()
+				}),
+				form: null
+			}
+		});
+
+		expect(screen.getByText('Current run rate (1000 machines)')).toBeInTheDocument();
+		expect(screen.getByText('$14,000.00')).toBeInTheDocument();
+	});
+
+	it('falls back to the registered count when no billable count is given', () => {
+		render(BillingPage, {
+			props: {
+				data: makeData(makeSubscription({ machineCount: 12, billableMachineCount: null }), {
+					upcomingInvoice: makeUpcomingInvoice()
+				}),
+				form: null
+			}
+		});
+
+		expect(screen.getByText('Current run rate (12 machines)')).toBeInTheDocument();
 	});
 });

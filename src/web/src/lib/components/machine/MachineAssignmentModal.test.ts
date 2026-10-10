@@ -33,6 +33,7 @@ function makeMachine(id: number, name: string): FleetMachineDto {
 		hasDiskHealthIssue: false,
 		hasHardwareIssue: false,
 		isOnline: true,
+		isPaused: false,
 		lastPing: null,
 		pendingUpdates: 0,
 		securityUpdates: 0,

@@ -106,6 +106,7 @@ describe('ApiClient', () => {
             const summaryData: DashboardSummaryDto = {
                 totalMachines: 10,
                 onlineMachines: 7,
+                pausedMachines: 1,
                 pendingApprovals: 2,
             };
             const response: ApiResponse<DashboardSummaryDto> = {

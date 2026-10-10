@@ -48,7 +48,8 @@ function makeMachine(): MachineDto {
 		lastPing: '2026-08-28T10:00:00Z',
 		registeredOn: '2026-01-01T00:00:00Z',
 		isDeleted: false,
-		commandsEnabled: true
+		commandsEnabled: true,
+		isPaused: false
 	};
 }
 
@@ -89,6 +90,9 @@ function makeSubscription(overrides: Partial<SubscriptionDto> = {}): Subscriptio
 		webhookCount: 0,
 		memberLimit: 5,
 		memberCount: 1,
+		pausedMachineCount: 0,
+		billableMachineCount: null,
+		machineLimitIsCustom: false,
 		...overrides
 	};
 }
@@ -340,6 +344,8 @@ function makeDetail(overrides: Partial<MachineDetailDto> = {}): MachineDetailDto
 		isOnline: true,
 		lastPing: '2026-08-28T10:00:00Z',
 		healthStatus: MachineHealthStatus.Healthy,
+		isPaused: false,
+		activeRank: 2,
 		systemInfo: {
 			hostname: 'web-01.acme.co',
 			uuid: 'uuid-7',
@@ -525,5 +531,76 @@ describe('machine detail removal', () => {
 		render(MachinePage, { props: { data } });
 
 		expect(screen.queryByRole('button', { name: 'Remove host' })).not.toBeInTheDocument();
+	});
+});
+
+describe('machine detail for a paused host', () => {
+	function renderPaused(
+		subscription: SubscriptionDto = makeSubscription({ machineLimit: 3, machineCount: 8, pausedMachineCount: 5 }),
+		role: UserAccountRole = UserAccountRole.TenantAdmin
+	) {
+		const base = makeData(subscription, builtIns);
+		const data = {
+			...base,
+			machine: { ...makeMachine(), isPaused: true },
+			machineDetail: makeDetail({
+				isPaused: true,
+				activeRank: 5,
+				healthStatus: MachineHealthStatus.Critical
+			}),
+			user: { ...base.user, tenants: [{ tenantId: 1, tenantName: 'Acme Corp', role: String(role) }] }
+		};
+
+		return render(MachinePage, { props: { data } });
+	}
+
+	it('explains the pause and how to resume, under the hero', () => {
+		renderPaused();
+
+		expect(screen.getByRole('status')).toHaveTextContent(
+			'This host is paused. Your plan keeps your 3 oldest hosts active, and this one is #5. Remove 2 older hosts you no longer use, or upgrade, to resume it.'
+		);
+		expect(screen.getByRole('link', { name: 'Billing' })).toHaveAttribute('href', '/settings/billing');
+	});
+
+	it('shows Paused in the hero rather than a health label or Online, because the heartbeat still arrives', () => {
+		renderPaused();
+
+		expect(screen.getAllByLabelText('Status: Paused').length).toBeGreaterThanOrEqual(1);
+		expect(screen.queryByText('Critical')).not.toBeInTheDocument();
+		expect(screen.queryByText('Online')).not.toBeInTheDocument();
+		expect(screen.getByText(/Agent last checked in/)).toBeInTheDocument();
+	});
+
+	it('labels the vitals as what the host reported before it was paused', () => {
+		renderPaused();
+
+		expect(screen.getByText('Last reported before this host was paused')).toBeInTheDocument();
+	});
+
+	it('hides the billing link from a user who cannot manage billing', () => {
+		renderPaused(undefined, UserAccountRole.Viewer);
+
+		expect(screen.getByRole('status')).toBeInTheDocument();
+		expect(screen.queryByRole('link', { name: 'Billing' })).not.toBeInTheDocument();
+	});
+
+	it('sends a Team tenant to the pause reason instead of the send-command form', async () => {
+		renderPaused(makeSubscription({ tier: 'Team', machineLimit: 3, machineCount: 8, pausedMachineCount: 5 }));
+
+		await fireEvent.click(screen.getByRole('tab', { name: 'Commands' }));
+
+		expect(screen.getByText('This host is paused')).toBeInTheDocument();
+		expect(screen.queryByRole('button', { name: 'Send' })).not.toBeInTheDocument();
+		expect(screen.queryByText(/No signing keys found/)).not.toBeInTheDocument();
+	});
+
+	it('shows an active host no banner and no pre-pause caption', () => {
+		renderWithDetail(makeDetail());
+
+		expect(screen.queryByText(/This host is paused/)).not.toBeInTheDocument();
+		expect(screen.queryByText('Last reported before this host was paused')).not.toBeInTheDocument();
+		expect(screen.getByText('Online')).toBeInTheDocument();
+		expect(screen.queryByLabelText('Status: Paused')).not.toBeInTheDocument();
 	});
 });

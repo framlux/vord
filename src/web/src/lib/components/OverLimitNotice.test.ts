@@ -26,23 +26,51 @@ function makeSubscription(overrides: Partial<SubscriptionDto> = {}): Subscriptio
 		webhookCount: 0,
 		memberLimit: 1,
 		memberCount: 1,
+		pausedMachineCount: 0,
+		billableMachineCount: null,
+		machineLimitIsCustom: false,
 		...overrides
 	};
 }
 
 describe('OverLimitNotice', () => {
-	it('tells a tenant over its limit why it cannot add hosts, and links to the machine list', () => {
-		render(OverLimitNotice, { props: { subscription: makeSubscription({ machineCount: 10 }) } });
+	it('tells a tenant with paused hosts why, and links to the paused hosts', () => {
+		render(OverLimitNotice, {
+			props: { subscription: makeSubscription({ machineCount: 10, pausedMachineCount: 7, machineLimit: 3 }) }
+		});
 
-		const notice = screen.getByRole('status');
-		expect(notice).toHaveTextContent(
-			"10 hosts on a 3-host plan. New hosts can't be added until you have fewer than 3, or upgrade."
+		expect(screen.getByRole('status')).toHaveTextContent(
+			'7 hosts are paused: your plan keeps your 3 oldest hosts active. Remove older hosts you no longer use, or upgrade.'
 		);
-		expect(screen.getByRole('link', { name: 'Review hosts' })).toHaveAttribute('href', '/machines');
+		expect(screen.getByRole('link', { name: 'Review paused hosts' })).toHaveAttribute(
+			'href',
+			'/machines?status=Paused'
+		);
 	});
 
-	it('says nothing at the limit, where the plan is full but not exceeded', () => {
-		render(OverLimitNotice, { props: { subscription: makeSubscription({ machineCount: 3 }) } });
+	it('uses the singular for one paused host', () => {
+		render(OverLimitNotice, {
+			props: { subscription: makeSubscription({ machineCount: 4, pausedMachineCount: 1, machineLimit: 3 }) }
+		});
+
+		expect(screen.getByRole('status')).toHaveTextContent('1 host is paused: your plan keeps your 3 oldest hosts active.');
+	});
+
+	it('sends a tenant whose limit was set by agreement or support to support, without suggesting an upgrade', () => {
+		render(OverLimitNotice, {
+			props: {
+				subscription: makeSubscription({ machineCount: 10, pausedMachineCount: 7, machineLimit: 3, machineLimitIsCustom: true })
+			}
+		});
+
+		const notice = screen.getByRole('status');
+
+		expect(notice).toHaveTextContent('Contact support to change your host limit.');
+		expect(notice).not.toHaveTextContent(/upgrade/);
+	});
+
+	it('says nothing at the limit, where the plan is full but nothing is paused', () => {
+		render(OverLimitNotice, { props: { subscription: makeSubscription({ machineCount: 3, pausedMachineCount: 0 }) } });
 
 		expect(screen.queryByRole('status')).not.toBeInTheDocument();
 	});
@@ -61,15 +89,11 @@ describe('OverLimitNotice', () => {
 		expect(screen.queryByRole('status')).not.toBeInTheDocument();
 	});
 
-	it('treats a limit of zero as none allowed, not as unlimited', () => {
-		render(OverLimitNotice, { props: { subscription: makeSubscription({ machineLimit: 0, machineCount: 2 }) } });
+	it('names the limit of zero as the number of hosts the plan keeps, not as unlimited', () => {
+		render(OverLimitNotice, {
+			props: { subscription: makeSubscription({ machineLimit: 0, machineCount: 2, pausedMachineCount: 2 }) }
+		});
 
-		expect(screen.getByRole('status')).toHaveTextContent('2 hosts on a 0-host plan.');
-	});
-
-	it('uses the singular for one host', () => {
-		render(OverLimitNotice, { props: { subscription: makeSubscription({ machineLimit: 0, machineCount: 1 }) } });
-
-		expect(screen.getByRole('status')).toHaveTextContent('1 host on a 0-host plan.');
+		expect(screen.getByRole('status')).toHaveTextContent('2 hosts are paused: your plan keeps your 0 oldest hosts active.');
 	});
 });

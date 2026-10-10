@@ -22,7 +22,10 @@ function sub(tier: string, status: string): SubscriptionDto {
 		webhookLimit: 3,
 		webhookCount: 0,
 		memberLimit: 5,
-		memberCount: 1
+		memberCount: 1,
+		pausedMachineCount: 0,
+		billableMachineCount: null,
+		machineLimitIsCustom: false
 	};
 }
 

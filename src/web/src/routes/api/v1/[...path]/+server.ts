@@ -64,6 +64,7 @@ const mockGet: RequestHandler = async ({ params, url }) => {
 		return ok({
 			totalMachines: mockFleetOverview.summary.totalMachines,
 			onlineMachines: mockFleetOverview.summary.onlineMachines,
+			pausedMachines: mockFleetOverview.summary.pausedCount,
 			pendingApprovals: 0
 		});
 	}
@@ -137,7 +138,8 @@ const mockGet: RequestHandler = async ({ params, url }) => {
 				isOnline: machine.isOnline,
 				lastPing: machine.lastPing,
 				commandsEnabled: machine.commandsEnabled,
-				healthStatus: detail?.healthStatus ?? 0
+				healthStatus: detail?.healthStatus ?? 0,
+				isPaused: machine.isPaused
 			});
 		}
 	}

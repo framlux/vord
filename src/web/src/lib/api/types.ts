@@ -111,6 +111,8 @@ export interface MachineDto {
 	registeredOn: string;
 	isDeleted: boolean;
 	commandsEnabled: boolean;
+	/** Past the tenant's host limit. isOnline still reflects the heartbeat, so check this first. */
+	isPaused: boolean;
 }
 
 export interface MachineStatusDto {
@@ -118,12 +120,14 @@ export interface MachineStatusDto {
 	lastPing: string | null;
 	commandsEnabled: boolean;
 	healthStatus: MachineHealthStatus;
+	isPaused: boolean;
 }
 
 // Dashboard (legacy)
 export interface DashboardSummaryDto {
 	totalMachines: number;
 	onlineMachines: number;
+	pausedMachines: number;
 	pendingApprovals: number;
 }
 
@@ -155,6 +159,8 @@ export interface FleetSummaryDto {
 	offlineCount: number;
 	warningCount: number;
 	criticalCount: number;
+	/** Hosts past the plan's limit; they are in no health bucket and not counted as online. */
+	pausedCount: number;
 	securityUpdates: number;
 }
 
@@ -171,6 +177,7 @@ export interface FleetMachineDto {
 	hasDiskHealthIssue: boolean;
 	hasHardwareIssue: boolean;
 	isOnline: boolean;
+	isPaused: boolean;
 	lastPing: string | null;
 	pendingUpdates: number;
 	securityUpdates: number;
@@ -186,6 +193,9 @@ export interface MachineDetailDto {
 	isOnline: boolean;
 	lastPing: string | null;
 	healthStatus: MachineHealthStatus;
+	isPaused: boolean;
+	/** The host's 1-based position in Id order among the tenant's registered hosts. */
+	activeRank: number | null;
 	systemInfo: SystemInfoDto | null;
 	osVersion: OsVersionDto | null;
 	cpuUsage: CpuUsageDto | null;
@@ -381,6 +391,12 @@ export interface SubscriptionDto {
 	webhookCount: number;
 	memberLimit: number;
 	memberCount: number;
+	/** Hosts registered beyond machineLimit; they are paused, not removed. */
+	pausedMachineCount: number;
+	/** What the tier bills for, or null on tiers that are not billed per host. */
+	billableMachineCount: number | null;
+	/** True when an override or agreement, not the tier, sets machineLimit. */
+	machineLimitIsCustom: boolean;
 }
 
 export interface UpcomingInvoiceDto {
@@ -708,6 +724,8 @@ export interface MachineSearchParams {
 	pageSize?: number;
 	search?: string;
 	healthStatus?: string;
+	/** 'true' restricts the search to paused hosts. Paused hosts are in no health bucket. */
+	paused?: string;
 	os?: string;
 	type?: string;
 	cpuMin?: number;

@@ -57,6 +57,7 @@ export class MockApiClient {
 		return {
 			totalMachines: mockFleetOverview.summary.totalMachines,
 			onlineMachines: mockFleetOverview.summary.onlineMachines,
+			pausedMachines: mockFleetOverview.summary.pausedCount,
 			pendingApprovals: 0
 		};
 	}

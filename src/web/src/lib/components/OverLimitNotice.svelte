@@ -4,17 +4,15 @@
 
 <script lang="ts">
 	import type { SubscriptionDto } from '$lib/api/types';
-	import { isLimited } from '$lib/utils/tier';
 
 	let { subscription }: { subscription: SubscriptionDto | null } = $props();
 
-	// A downgrade keeps every host, so a tenant can be over its limit without having done anything;
-	// a dunning downgrade needs no customer action at all. Registration refuses new hosts until the
-	// count is under the limit, and this is the only place that tells the people who would try.
-	// A limit of zero means none allowed, which isLimited already distinguishes from unlimited.
-	const overLimit = $derived(
-		subscription !== null && isLimited(subscription.machineLimit) && subscription.machineCount > subscription.machineLimit
-	);
+	// A downgrade pauses the hosts beyond the new limit instead of deleting them, and a dunning
+	// downgrade needs no customer action at all, so a tenant can have paused hosts without having
+	// done anything. This is the only place that tells every user why. The server counts the paused
+	// hosts, which also covers a limit of zero (none allowed) and leaves unlimited plans out.
+	const pausedCount = $derived(subscription?.pausedMachineCount ?? 0);
+	const overLimit = $derived(subscription !== null && pausedCount > 0);
 </script>
 
 {#if overLimit && subscription !== null}
@@ -23,9 +21,13 @@
 		class="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-300"
 	>
 		<span>
-			{subscription.machineCount} {subscription.machineCount === 1 ? 'host' : 'hosts'} on a {subscription.machineLimit}-host plan.
-			New hosts can't be added until you have fewer than {subscription.machineLimit}, or upgrade.
+			{pausedCount} {pausedCount === 1 ? 'host is' : 'hosts are'} paused: your plan keeps your {subscription.machineLimit} oldest hosts active.
+			{#if subscription.machineLimitIsCustom}
+				Contact support to change your host limit.
+			{:else}
+				Remove older hosts you no longer use, or upgrade.
+			{/if}
 		</span>
-		<a href="/machines" class="font-medium underline hover:no-underline">Review hosts</a>
+		<a href="/machines?status=Paused" class="font-medium underline hover:no-underline">Review paused hosts</a>
 	</div>
 {/if}
