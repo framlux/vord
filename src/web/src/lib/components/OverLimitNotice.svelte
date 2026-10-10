@@ -4,6 +4,7 @@
 
 <script lang="ts">
 	import type { SubscriptionDto } from '$lib/api/types';
+	import { keptHostsPhrase } from '$lib/utils/tier';
 
 	let { subscription }: { subscription: SubscriptionDto | null } = $props();
 
@@ -21,9 +22,11 @@
 		class="mb-4 flex flex-wrap items-center justify-between gap-2 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-800 dark:border-amber-700 dark:bg-amber-900/20 dark:text-amber-300"
 	>
 		<span>
-			{pausedCount} {pausedCount === 1 ? 'host is' : 'hosts are'} paused: your plan keeps your {subscription.machineLimit} oldest hosts active.
+			{pausedCount} {pausedCount === 1 ? 'host is' : 'hosts are'} paused: your plan keeps {keptHostsPhrase(subscription.machineLimit)} active.
 			{#if subscription.machineLimitIsCustom}
 				Contact support to change your host limit.
+			{:else if subscription.machineLimit < 1}
+				Upgrade to resume {pausedCount === 1 ? 'it' : 'them'}.
 			{:else}
 				Remove older hosts you no longer use, or upgrade.
 			{/if}

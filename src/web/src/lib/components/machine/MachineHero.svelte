@@ -114,6 +114,7 @@
 				machineType={machine.machineType}
 				{healthStatus}
 				{isOnline}
+				{isPaused}
 				size={160}
 			/>
 		</div>

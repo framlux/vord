@@ -580,9 +580,11 @@
 	/>
 
 	{#if isPaused}
+		<!-- Without a subscription the limit is unknown, so the rank is withheld and the banner quotes
+		     no figures rather than treating a missing limit as a limit of zero. -->
 		<PausedHostBanner
 			limit={data.subscription?.machineLimit ?? 0}
-			activeRank={machineDetail?.activeRank ?? 0}
+			activeRank={data.subscription === null ? 0 : (machineDetail?.activeRank ?? 0)}
 			limitIsCustom={data.subscription?.machineLimitIsCustom ?? false}
 			canManageBilling={canAdminTenant(data.user)}
 		/>

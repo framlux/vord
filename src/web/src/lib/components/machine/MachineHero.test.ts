@@ -256,6 +256,13 @@ describe('MachineHero', () => {
 			expect(screen.queryByText(/no telemetry/i)).toBeNull();
 		});
 
+		it('draws the machine as paused, not as the healthy online host its heartbeat suggests', () => {
+			renderPaused({ healthStatus: MachineHealthStatus.Healthy });
+
+			expect(screen.getByRole('img', { name: 'Paused machine visualization' })).toBeInTheDocument();
+			expect(screen.queryByRole('img', { name: 'Online machine visualization' })).toBeNull();
+		});
+
 		it('shows no last-checked-in line for an agent that has never checked in', () => {
 			renderPaused({ lastPing: null });
 

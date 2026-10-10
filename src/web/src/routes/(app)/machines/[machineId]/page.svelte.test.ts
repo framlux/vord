@@ -578,6 +578,35 @@ describe('machine detail for a paused host', () => {
 		expect(screen.getByText('Last reported before this host was paused')).toBeInTheDocument();
 	});
 
+	it('quotes no figures when the host detail did not load, instead of "#0" and a negative count', () => {
+		const data = {
+			...makeData(makeSubscription({ machineLimit: 3 }), builtIns),
+			machine: { ...makeMachine(), isPaused: true }
+		};
+		render(MachinePage, { props: { data } });
+
+		const banner = screen.getByRole('status');
+
+		expect(banner).toHaveTextContent('This host is paused.');
+		expect(banner).not.toHaveTextContent('#');
+		expect(banner).not.toHaveTextContent('Remove');
+	});
+
+	it('does not claim the plan keeps no hosts when the subscription did not load', () => {
+		const data = {
+			...makeData(null, builtIns),
+			machine: { ...makeMachine(), isPaused: true },
+			machineDetail: makeDetail({ isPaused: true, activeRank: 5 })
+		};
+		render(MachinePage, { props: { data } });
+
+		const banner = screen.getByRole('status');
+
+		expect(banner).toHaveTextContent('This host is paused.');
+		expect(banner).not.toHaveTextContent('keeps no hosts');
+		expect(banner).not.toHaveTextContent('#');
+	});
+
 	it('hides the billing link from a user who cannot manage billing', () => {
 		renderPaused(undefined, UserAccountRole.Viewer);
 

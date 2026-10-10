@@ -89,11 +89,39 @@ describe('OverLimitNotice', () => {
 		expect(screen.queryByRole('status')).not.toBeInTheDocument();
 	});
 
-	it('names the limit of zero as the number of hosts the plan keeps, not as unlimited', () => {
+	it('says the plan keeps no hosts when the limit is zero, rather than "0 oldest hosts"', () => {
 		render(OverLimitNotice, {
 			props: { subscription: makeSubscription({ machineLimit: 0, machineCount: 2, pausedMachineCount: 2 }) }
 		});
 
-		expect(screen.getByRole('status')).toHaveTextContent('2 hosts are paused: your plan keeps your 0 oldest hosts active.');
+		const notice = screen.getByRole('status');
+
+		expect(notice).toHaveTextContent('2 hosts are paused: your plan keeps no hosts active.');
+		expect(notice).not.toHaveTextContent('0 oldest');
+		expect(notice).not.toHaveTextContent('Remove older hosts');
+		expect(notice).toHaveTextContent('Upgrade to resume them.');
+	});
+
+	it('keeps a zero-limit tenant on the contact-support line when an agreement set it', () => {
+		render(OverLimitNotice, {
+			props: {
+				subscription: makeSubscription({ machineLimit: 0, machineCount: 2, pausedMachineCount: 2, machineLimitIsCustom: true })
+			}
+		});
+
+		const notice = screen.getByRole('status');
+
+		expect(notice).toHaveTextContent('2 hosts are paused: your plan keeps no hosts active. Contact support to change your host limit.');
+		expect(notice).not.toHaveTextContent(/upgrade/i);
+	});
+
+	it('says the oldest host, not "1 oldest hosts", when the plan keeps one', () => {
+		render(OverLimitNotice, {
+			props: { subscription: makeSubscription({ machineLimit: 1, machineCount: 3, pausedMachineCount: 2 }) }
+		});
+
+		expect(screen.getByRole('status')).toHaveTextContent(
+			'2 hosts are paused: your plan keeps your oldest host active. Remove older hosts you no longer use, or upgrade.'
+		);
 	});
 });

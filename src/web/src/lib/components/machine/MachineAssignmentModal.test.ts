@@ -3,7 +3,7 @@
 // See LICENSE for details.
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent, waitFor } from '@testing-library/svelte';
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/svelte';
 import '@testing-library/jest-dom/vitest';
 import { MachineHealthStatus, type FleetMachineDto, type PaginatedResponse } from '$lib/api/types';
 
@@ -445,5 +445,24 @@ describe('MachineAssignmentModal', () => {
 
 		expect(onsave).toHaveBeenCalled();
 		expect([...onsave.mock.calls[0][0]].sort()).toEqual([1, 2]);
+	});
+
+	it('shows a paused machine as Paused, not as the health it froze at', async () => {
+		// Paused hosts are in the picker's results, and an alert rule cannot watch one, so a row that
+		// still read Healthy would invite assigning rules to a host nothing is evaluating.
+		searchMachinesMock.mockResolvedValue(
+			makePage([
+				{ ...makeMachine(3, 'frozen-box'), healthStatus: MachineHealthStatus.Critical, isPaused: true },
+				makeMachine(4, 'live-box')
+			])
+		);
+		render(MachineAssignmentModal, { props: baseProps() });
+
+		const frozen = (await screen.findByRole('checkbox', { name: /frozen-box/ })).closest('label') as HTMLElement;
+		const live = screen.getByRole('checkbox', { name: /live-box/ }).closest('label') as HTMLElement;
+
+		expect(within(frozen).getByLabelText('Status: Paused')).toBeInTheDocument();
+		expect(within(frozen).queryByLabelText('Status: Critical')).not.toBeInTheDocument();
+		expect(within(live).getByLabelText('Status: Healthy')).toBeInTheDocument();
 	});
 });

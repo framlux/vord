@@ -49,6 +49,17 @@ const offlineColors: HealthColorSet = {
 	label: 'Offline'
 };
 
+// Not a health status: a paused host is outside every health bucket, so its state has no
+// MachineHealthStatus value and is drawn from this set instead.
+export const pausedColors: HealthColorSet = {
+	hex: '#6366F1',
+	hexMuted: '#6366F133',
+	bg: 'bg-indigo-100 dark:bg-indigo-900/30',
+	text: 'text-indigo-800 dark:text-indigo-300',
+	dot: 'bg-indigo-500',
+	label: 'Paused'
+};
+
 export function getHealthColors(status: MachineHealthStatus): HealthColorSet {
 	switch (status) {
 		case MachineHealthStatus.Healthy:

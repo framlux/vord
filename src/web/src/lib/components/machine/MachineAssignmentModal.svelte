@@ -7,7 +7,7 @@
 	import { ApiClient } from '$lib/api/client';
 	import { moveFocusInto, trapTabKey } from '$lib/utils/focus-trap';
 	import { MachineHealthStatus, OperatingSystem, MachineType, type FleetMachineDto } from '$lib/api/types';
-	import HealthBadge from '$lib/components/HealthBadge.svelte';
+	import MachineStateBadge from '$lib/components/MachineStateBadge.svelte';
 	import Pagination from '$lib/components/Pagination.svelte';
 
 	let {
@@ -374,7 +374,7 @@
 									{#if machine.hostname}
 										<span class="hidden text-xs text-surface-400 sm:inline dark:text-surface-500">{machine.hostname}</span>
 									{/if}
-									<HealthBadge status={machine.healthStatus as MachineHealthStatus} />
+									<MachineStateBadge status={machine.healthStatus as MachineHealthStatus} isPaused={machine.isPaused} />
 								</label>
 							</li>
 						{/each}

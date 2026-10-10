@@ -4,21 +4,30 @@
 
 <script lang="ts">
 	import { MachineType, MachineHealthStatus } from '$lib/api/types';
-	import { getHealthColors } from '$lib/utils/health-colors';
+	import { getHealthColors, pausedColors } from '$lib/utils/health-colors';
 
 	let {
 		machineType,
 		healthStatus,
 		isOnline,
+		isPaused = false,
 		size = 200
 	}: {
 		machineType: MachineType;
 		healthStatus: MachineHealthStatus;
 		isOnline: boolean;
+		isPaused?: boolean;
 		size?: number;
 	} = $props();
 
-	const colors = $derived(getHealthColors(healthStatus));
+	// A paused host's health is frozen and its heartbeat keeps isOnline true, so drawing either would
+	// show a state the host is not reporting. Paused takes the ring and the LED, and the LED stops
+	// pulsing because nothing is live.
+	const colors = $derived(isPaused ? pausedColors : getHealthColors(healthStatus));
+	const ledLive = $derived(isOnline && isPaused === false);
+	const ledColor = $derived(isPaused ? pausedColors.hex : ledLive ? '#10B981' : '#6E6E77');
+	const ledPulseClass = $derived(ledLive ? 'machine-led-pulse' : '');
+	const stateLabel = $derived(isPaused ? 'Paused' : isOnline ? 'Online' : 'Offline');
 
 	const center = $derived(size / 2);
 	const ringRadius = $derived(size / 2 - 8);
@@ -36,7 +45,7 @@
 	fill="none"
 	xmlns="http://www.w3.org/2000/svg"
 	role="img"
-	aria-label="{isOnline ? 'Online' : 'Offline'} machine visualization"
+	aria-label="{stateLabel} machine visualization"
 >
 	<defs>
 		<!-- Glow filter for machine icon -->
@@ -134,7 +143,7 @@
 			<line x1="16" y1="34" x2="56" y2="34" stroke={colors.hex} stroke-width="1" stroke-opacity="0.4" />
 			<line x1="16" y1="40" x2="56" y2="40" stroke={colors.hex} stroke-width="1" stroke-opacity="0.4" />
 			<!-- LED indicators -->
-			<circle cx="64" cy="28" r="2.5" fill={isOnline ? '#10B981' : '#6E6E77'} class={isOnline ? 'machine-led-pulse' : ''} />
+			<circle cx="64" cy="28" r="2.5" fill={ledColor} class={ledPulseClass} />
 			<circle cx="64" cy="36" r="2.5" fill={colors.hex} fill-opacity="0.5" />
 			<!-- Drive bays bottom section -->
 			<line x1="8" y1="46" x2="72" y2="46" stroke={colors.hex} stroke-width="1" stroke-opacity="0.3" />
@@ -149,7 +158,7 @@
 			<circle cx="40" cy="18" r="4" stroke={colors.hex} stroke-width="1.5" fill="none" />
 			<line x1="40" y1="15" x2="40" y2="18" stroke={colors.hex} stroke-width="1.5" />
 			<!-- LED -->
-			<circle cx="32" cy="18" r="2" fill={isOnline ? '#10B981' : '#6E6E77'} class={isOnline ? 'machine-led-pulse' : ''} />
+			<circle cx="32" cy="18" r="2" fill={ledColor} class={ledPulseClass} />
 			<!-- Drive bay -->
 			<rect x="22" y="28" width="36" height="10" rx="2" stroke={colors.hex} stroke-width="1" fill="none" stroke-opacity="0.5" />
 			<!-- Ventilation pattern -->
@@ -175,7 +184,7 @@
 			<rect x="18" y="53" width="44" height="3" rx="0.5" fill={colors.hex} fill-opacity="0.15" />
 			<rect x="26" y="58" width="28" height="3" rx="0.5" fill={colors.hex} fill-opacity="0.15" />
 			<!-- Power LED -->
-			<circle cx="40" cy="62" r="1.5" fill={isOnline ? '#10B981' : '#6E6E77'} class={isOnline ? 'machine-led-pulse' : ''} />
+			<circle cx="40" cy="62" r="1.5" fill={ledColor} class={ledPulseClass} />
 
 		{:else if machineType === MachineType.VirtualMachine}
 			<!-- Cloud outline -->
@@ -192,7 +201,7 @@
 			<!-- Node dots -->
 			<circle cx="28" cy="32" r="2.5" fill={colors.hex} fill-opacity="0.5" />
 			<circle cx="52" cy="32" r="2.5" fill={colors.hex} fill-opacity="0.5" />
-			<circle cx="40" cy="38" r="2.5" fill={isOnline ? '#10B981' : '#6E6E77'} class={isOnline ? 'machine-led-pulse' : ''} />
+			<circle cx="40" cy="38" r="2.5" fill={ledColor} class={ledPulseClass} />
 			<!-- VM indicator bars below cloud -->
 			<rect x="30" y="54" width="20" height="3" rx="1.5" fill={colors.hex} fill-opacity="0.3" />
 			<rect x="34" y="60" width="12" height="3" rx="1.5" fill={colors.hex} fill-opacity="0.2" />
@@ -203,7 +212,7 @@
 			<!-- Question mark -->
 			<text x="40" y="46" text-anchor="middle" fill={colors.hex} fill-opacity="0.4" font-size="24" font-weight="300">?</text>
 			<!-- LED -->
-			<circle cx="60" cy="24" r="2" fill={isOnline ? '#10B981' : '#6E6E77'} class={isOnline ? 'machine-led-pulse' : ''} />
+			<circle cx="60" cy="24" r="2" fill={ledColor} class={ledPulseClass} />
 		{/if}
 	</g>
 
@@ -212,14 +221,14 @@
 		cx={size - 20}
 		cy="20"
 		r="5"
-		fill={isOnline ? '#10B981' : '#6E6E77'}
-		class={isOnline ? 'machine-led-pulse' : ''}
+		fill={ledColor}
+		class={ledPulseClass}
 	/>
 	<circle
 		cx={size - 20}
 		cy="20"
 		r="8"
-		stroke={isOnline ? '#10B981' : '#6E6E77'}
+		stroke={ledColor}
 		stroke-width="1"
 		fill="none"
 		stroke-opacity="0.3"
