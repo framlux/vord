@@ -284,13 +284,30 @@ public sealed class ConfigurationService : Configuration.ConfigurationBase
     /// <summary>
     /// Works out the ingest state an agent is told on a ping. An inactive subscription wins over a
     /// pause, because raising the host limit would not make that tenant's telemetry flow again.
-    /// A failure of the subscription lookup itself propagates, as any repository failure does in this
-    /// service; only the pause decision fails open.
+    /// By now the heartbeat is already recorded, so a subscription lookup that fails reports no state
+    /// rather than failing a ping that did its job. No state is the safe answer: ingest enforces the
+    /// subscription and the pause itself on every envelope, so an agent that is told nothing keeps
+    /// sending and is refused or acknowledged there. A canceled call still propagates, since the
+    /// caller is gone and there is no one to answer.
     /// </summary>
     private async Task<IngestRejectionReason> ResolveIngestStateAsync(long machineId, ServerCallContext context)
     {
         int tenantId = ExtractTenantIdFromClaims(context);
-        if (await _subscriptionService.IsIngestEligibleAsync(tenantId, context.CancellationToken) == false)
+
+        bool ingestEligible;
+        try
+        {
+            ingestEligible = await _subscriptionService.IsIngestEligibleAsync(tenantId, context.CancellationToken);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _quotaPauseMetrics.RecordCheckFailure(QuotaCheckSurface.Ping);
+            _logger.LogWarning(ex, "Subscription lookup failed while answering a ping from machine {MachineId}; reporting no state", machineId);
+
+            return IngestRejectionReason.Unspecified;
+        }
+
+        if (ingestEligible == false)
         {
             return IngestRejectionReason.SubscriptionInactive;
         }

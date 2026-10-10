@@ -240,6 +240,61 @@ public sealed class ConfigurationServiceTests
     }
 
     [Test]
+    public async Task AgentPing_SubscriptionLookupFails_StillSucceedsReportsNoStateAndKeepsTheHeartbeat()
+    {
+        // The heartbeat is written before the state is worked out, so a database or cache fault in the
+        // subscription read must not turn a ping that did its job into a failed one. Reporting no
+        // state leaves the agent sending, and ingest enforces the subscription and the pause itself.
+        IMachineStateRepository machineStateRepo = Substitute.For<IMachineStateRepository>();
+        IQuotaPauseService pause = Substitute.For<IQuotaPauseService>();
+        pause.IsPausedAsync(Arg.Any<int>(), Arg.Any<long>(), Arg.Any<CancellationToken>()).Returns(true);
+        ISubscriptionService subs = Substitute.For<ISubscriptionService>();
+        subs.IsIngestEligibleAsync(Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns<bool>(_ => throw new InvalidOperationException("redis unavailable"));
+        ConfigurationService service = CreateService(machineStateRepo: machineStateRepo, quotaPause: pause, subscriptionService: subs);
+
+        AgentPingResponse response = await service.AgentPing(new AgentPingRequest { MachineId = 42 }, CreateAuthenticatedContext(42));
+
+        await Assert.That(response.Success).IsTrue();
+        await Assert.That(response.State).IsEqualTo(IngestRejectionReason.Unspecified);
+        await machineStateRepo.Received(1).RecordHeartbeatAsync(42, Arg.Any<DateTimeOffset>(), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task AgentPing_SubscriptionLookupFails_CountsTheFailureAgainstThePingSurface()
+    {
+        // A fleet pinging through a broken subscription read looks healthy on the wire, so the counter
+        // is the only evidence that the state is not being reported.
+        IMeterFactory meterFactory = TestMetricsFactory.CreateMeterFactory();
+        using MetricCollector<long> failures = new(meterFactory, VordMeter.Name, "vord.quota.pause_check_failures");
+        ISubscriptionService subs = Substitute.For<ISubscriptionService>();
+        subs.IsIngestEligibleAsync(Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns<bool>(_ => throw new InvalidOperationException("database unavailable"));
+        ConfigurationService service = CreateService(subscriptionService: subs, quotaPauseMetrics: new QuotaPauseMetrics(meterFactory));
+
+        await service.AgentPing(new AgentPingRequest { MachineId = 42 }, CreateAuthenticatedContext(42));
+
+        IReadOnlyList<CollectedMeasurement<long>> measurements = failures.GetMeasurementSnapshot();
+        await Assert.That(measurements.Count).IsEqualTo(1);
+        await Assert.That(measurements[0].Value).IsEqualTo(1L);
+        await Assert.That(measurements[0].Tags["surface"]).IsEqualTo("ping");
+    }
+
+    [Test]
+    public async Task AgentPing_SubscriptionLookupCanceled_PropagatesTheCancellation()
+    {
+        // Only a failed lookup is swallowed; a canceled call is the caller going away and must not be
+        // turned into an answer for an agent that will never read it.
+        ISubscriptionService subs = Substitute.For<ISubscriptionService>();
+        subs.IsIngestEligibleAsync(Arg.Any<int>(), Arg.Any<CancellationToken>())
+            .Returns<bool>(_ => throw new OperationCanceledException());
+        ConfigurationService service = CreateService(subscriptionService: subs);
+
+        await Assert.ThrowsAsync<OperationCanceledException>(
+            async () => await service.AgentPing(new AgentPingRequest { MachineId = 42 }, CreateAuthenticatedContext(42)));
+    }
+
+    [Test]
     public async Task AgentPing_HeartbeatWriteFailsOnAPausedHost_StillReportsFailure()
     {
         // A pause never turns a failed heartbeat write into a success: the agent must retry the ping.
