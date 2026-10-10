@@ -1004,10 +1004,16 @@ public sealed class AlertEvaluationJobTests
         await Assert.That(events[0].TriggeredAt).IsEqualTo(EvaluationEpoch.AddMinutes(5));
         await delivery.Received(1).EnqueueAsync(events[0].Id, rule.Id, tenant.Id, Arg.Any<CancellationToken>());
 
-        // The condition persists, but the open event suppresses a second page on the next pass.
+        // Firing deletes the condition row, so the next pass opens a fresh window at its own instant
+        // rather than carrying the old one forward; nothing more can fire until the duration has
+        // elapsed again.
         clock.Advance(TimeSpan.FromMinutes(1));
         await job.RunAsync(CancellationToken.None);
 
+        AlertConditionState? restarted = await db.AlertConditionStates
+            .Where(s => (s.AlertRuleId == rule.Id) && (s.MachineId == machine.Id))
+            .FirstOrDefaultAsync();
+        await Assert.That(restarted!.FirstTriggeredAt).IsEqualTo(EvaluationEpoch.AddMinutes(6));
         await Assert.That(await db.AlertEvents.CountAsync()).IsEqualTo(1);
         await delivery.Received(1).EnqueueAsync(Arg.Any<long>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>());
     }
