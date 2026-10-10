@@ -880,11 +880,12 @@ public sealed class AlertEvaluationJobTests
     }
 
     [Test]
-    public async Task RunAsync_FreeTenantWithAPausedHost_StillClearsItsEventAndCondition()
+    public async Task RunAsync_FreeTenantWithNoEnabledRules_StillClearsAPausedHostsEventAndCondition()
     {
-        // Intent: the clear runs before the tier check. A tenant that downgraded to Free skips
-        // evaluation entirely, so a clear placed after that check would leave the paused host's open
-        // event and condition rows behind to page the moment the host resumed on a paid plan.
+        // Intent: a Team to Free downgrade disables every rule, so the tenant is no longer visited for
+        // its rules; it is visited because it still holds an open event. The clear must run for it,
+        // before the tier check, or the paused host's stale open event survives to suppress the first
+        // real page after an upgrade. Nothing is evaluated and nothing is delivered.
         using TestDatabaseFactory dbFactory = new();
         ISubscriptionService subscriptionService = Substitute.For<ISubscriptionService>();
         IQuotaPauseService quotaPause = Substitute.For<IQuotaPauseService>();
@@ -900,26 +901,115 @@ public sealed class AlertEvaluationJobTests
         subscriptionService.GetSubscriptionForTenantAsync(tenant.Id, Arg.Any<CancellationToken>()).Returns(freeSub);
         quotaPause.GetCutoffAsync(tenant.Id, Arg.Any<CancellationToken>()).Returns(QuotaCutoff.All);
 
-        AlertRule rule = TestDataBuilder.BuildAlertRule(tenantId: tenant.Id, metric: AlertMetric.CpuUsage, threshold: 80m);
-        rule.Id = await db.InsertWithInt32IdentityAsync(rule);
+        AlertRule disabledRule = TestDataBuilder.BuildAlertRule(tenantId: tenant.Id, metric: AlertMetric.CpuUsage, threshold: 80m, isEnabled: false);
+        disabledRule.Id = await db.InsertWithInt32IdentityAsync(disabledRule);
 
         Machine machine = TestDataBuilder.BuildMachine(tenantId: tenant.Id);
         machine.Id = await db.InsertWithInt64IdentityAsync(machine);
+        await db.InsertAsync(TestDataBuilder.BuildMachineStateSummary(machineId: machine.Id, tenantId: tenant.Id, cpuPercent: 95));
 
-        AlertEvent open = TestDataBuilder.BuildAlertEvent(alertRuleId: rule.Id, tenantId: tenant.Id, machineId: machine.Id, status: AlertEventStatus.Triggered);
+        AlertEvent open = TestDataBuilder.BuildAlertEvent(alertRuleId: disabledRule.Id, tenantId: tenant.Id, machineId: machine.Id, status: AlertEventStatus.Triggered);
         open.Id = await db.InsertWithInt64IdentityAsync(open);
         await db.InsertAsync(new AlertConditionState
         {
-            AlertRuleId = rule.Id, MachineId = machine.Id, FirstTriggeredAt = EvaluationEpoch.AddMinutes(-20), LastObservedAt = EvaluationEpoch.AddMinutes(-1),
+            AlertRuleId = disabledRule.Id, MachineId = machine.Id, FirstTriggeredAt = EvaluationEpoch.AddMinutes(-20), LastObservedAt = EvaluationEpoch.AddMinutes(-1),
         });
 
         await job.RunAsync(CancellationToken.None);
 
-        AlertEvent? after = await db.AlertEvents.FirstOrDefaultAsync(e => e.Id == open.Id);
-        await Assert.That(after!.Status).IsEqualTo(AlertEventStatus.Resolved);
-        await Assert.That(after.ResolvedAt).IsEqualTo(EvaluationEpoch);
+        List<AlertEvent> events = await db.AlertEvents.ToListAsync();
+        await Assert.That(events.Count).IsEqualTo(1);
+        await Assert.That(events[0].Status).IsEqualTo(AlertEventStatus.Resolved);
+        await Assert.That(events[0].ResolvedAt).IsEqualTo(EvaluationEpoch);
         await Assert.That(await db.AlertConditionStates.CountAsync()).IsEqualTo(0);
         await Assert.That(delivery.ReceivedCalls().Count()).IsEqualTo(0);
+        await subscriptionService.DidNotReceive().GetSubscriptionForTenantAsync(Arg.Any<int>(), Arg.Any<CancellationToken>());
+    }
+
+    [Test]
+    public async Task RunAsync_TenantVisitedOnlyForOpenEvents_ClearsOnlyPausedHostsAndEvaluatesNothing()
+    {
+        // Intent: visiting a tenant for its open events must not turn into evaluating it or into
+        // clearing hosts that are still active. The oldest host keeps its open event; only the host past
+        // the cutoff is closed; and a breaching summary on the active host raises nothing, because the
+        // tenant has no enabled rule.
+        using TestDatabaseFactory dbFactory = new();
+        ISubscriptionService subscriptionService = Substitute.For<ISubscriptionService>();
+        IQuotaPauseService quotaPause = Substitute.For<IQuotaPauseService>();
+        FakeTimeProvider clock = new(EvaluationEpoch);
+        (AlertEvaluationJob job, DatabaseContext db, _, IAlertDeliveryService delivery, _, _, _) =
+            CreateJobWithDb(dbFactory, subscriptionService, clock, quotaPause);
+
+        Tenant tenant = TestDataBuilder.BuildTenant();
+        tenant.Id = await db.InsertWithInt32IdentityAsync(tenant);
+
+        TenantSubscription proSub = TestDataBuilder.BuildSubscription(tenantId: tenant.Id, tier: SubscriptionTier.Pro, status: SubscriptionStatus.Active);
+        await db.InsertWithInt32IdentityAsync(proSub);
+        subscriptionService.GetSubscriptionForTenantAsync(tenant.Id, Arg.Any<CancellationToken>()).Returns(proSub);
+
+        Machine active = TestDataBuilder.BuildMachine(tenantId: tenant.Id);
+        active.Id = await db.InsertWithInt64IdentityAsync(active);
+        Machine paused = TestDataBuilder.BuildMachine(tenantId: tenant.Id);
+        paused.Id = await db.InsertWithInt64IdentityAsync(paused);
+        quotaPause.GetCutoffAsync(tenant.Id, Arg.Any<CancellationToken>()).Returns(QuotaCutoff.After(active.Id));
+
+        AlertRule disabledRule = TestDataBuilder.BuildAlertRule(tenantId: tenant.Id, metric: AlertMetric.CpuUsage, threshold: 80m, isEnabled: false);
+        disabledRule.Id = await db.InsertWithInt32IdentityAsync(disabledRule);
+        await db.InsertAsync(TestDataBuilder.BuildMachineStateSummary(machineId: active.Id, tenantId: tenant.Id, cpuPercent: 95));
+
+        AlertEvent activeOpen = TestDataBuilder.BuildAlertEvent(alertRuleId: disabledRule.Id, tenantId: tenant.Id, machineId: active.Id, status: AlertEventStatus.Triggered);
+        activeOpen.Id = await db.InsertWithInt64IdentityAsync(activeOpen);
+        AlertEvent pausedOpen = TestDataBuilder.BuildAlertEvent(alertRuleId: disabledRule.Id, tenantId: tenant.Id, machineId: paused.Id, status: AlertEventStatus.Triggered);
+        pausedOpen.Id = await db.InsertWithInt64IdentityAsync(pausedOpen);
+
+        await job.RunAsync(CancellationToken.None);
+
+        List<AlertEvent> events = await db.AlertEvents.ToListAsync();
+        await Assert.That(events.Count).IsEqualTo(2);
+        await Assert.That(events.Single(e => e.Id == activeOpen.Id).Status).IsEqualTo(AlertEventStatus.Triggered);
+        await Assert.That(events.Single(e => e.Id == pausedOpen.Id).Status).IsEqualTo(AlertEventStatus.Resolved);
+        await Assert.That(delivery.ReceivedCalls().Count()).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task RunAsync_DurationRuleOverSuccessivePasses_FiresOnceTheWindowHasElapsedAndNotBefore()
+    {
+        // Intent: a duration is measured across real passes, one a minute apart. This is the end-to-end
+        // guard for the gap rule: if consecutive passes ever read as a gap, the window restarts every
+        // minute and a five-minute rule can never fire; if the window is not honoured, it fires early.
+        using TestDatabaseFactory dbFactory = new();
+        ISubscriptionService subscriptionService = Substitute.For<ISubscriptionService>();
+        FakeTimeProvider clock = new(EvaluationEpoch);
+        (AlertEvaluationJob job, DatabaseContext db, _, IAlertDeliveryService delivery, _, _, _) =
+            CreateJobWithDb(dbFactory, subscriptionService, clock);
+
+        (Tenant tenant, Machine machine, AlertRule rule) = await SeedBreachingProTenantAsync(db, subscriptionService, durationMinutes: 5);
+
+        for (int minute = 0; minute < 5; minute++)
+        {
+            await job.RunAsync(CancellationToken.None);
+            clock.Advance(TimeSpan.FromMinutes(1));
+
+            await Assert.That(await db.AlertEvents.CountAsync()).IsEqualTo(0);
+        }
+
+        await delivery.DidNotReceive().EnqueueAsync(Arg.Any<long>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>());
+
+        // The sixth pass is five minutes after the first observation.
+        await job.RunAsync(CancellationToken.None);
+
+        List<AlertEvent> events = await db.AlertEvents.ToListAsync();
+        await Assert.That(events.Count).IsEqualTo(1);
+        await Assert.That(events[0].MachineId).IsEqualTo(machine.Id);
+        await Assert.That(events[0].TriggeredAt).IsEqualTo(EvaluationEpoch.AddMinutes(5));
+        await delivery.Received(1).EnqueueAsync(events[0].Id, rule.Id, tenant.Id, Arg.Any<CancellationToken>());
+
+        // The condition persists, but the open event suppresses a second page on the next pass.
+        clock.Advance(TimeSpan.FromMinutes(1));
+        await job.RunAsync(CancellationToken.None);
+
+        await Assert.That(await db.AlertEvents.CountAsync()).IsEqualTo(1);
+        await delivery.Received(1).EnqueueAsync(Arg.Any<long>(), Arg.Any<int>(), Arg.Any<int>(), Arg.Any<CancellationToken>());
     }
 
     [Test]
@@ -1011,11 +1101,12 @@ public sealed class AlertEvaluationJobTests
 
     /// <summary>
     /// Seeds a Pro tenant with one machine whose CPU breaches a single enabled zero-duration rule, so a
-    /// pass that evaluates it fires exactly one event.
+    /// pass that evaluates it fires exactly one event once its duration (zero by default) has elapsed.
     /// </summary>
     private static async Task<(Tenant Tenant, Machine Machine, AlertRule Rule)> SeedBreachingProTenantAsync(
         DatabaseContext db,
-        ISubscriptionService subscriptionService)
+        ISubscriptionService subscriptionService,
+        int durationMinutes = 0)
     {
         Tenant tenant = TestDataBuilder.BuildTenant();
         tenant.Id = await db.InsertWithInt32IdentityAsync(tenant);
@@ -1027,7 +1118,7 @@ public sealed class AlertEvaluationJobTests
         Machine machine = TestDataBuilder.BuildMachine(tenantId: tenant.Id);
         machine.Id = await db.InsertWithInt64IdentityAsync(machine);
 
-        AlertRule rule = TestDataBuilder.BuildAlertRule(tenantId: tenant.Id, metric: AlertMetric.CpuUsage, threshold: 80m, isCustom: false, durationMinutes: 0);
+        AlertRule rule = TestDataBuilder.BuildAlertRule(tenantId: tenant.Id, metric: AlertMetric.CpuUsage, threshold: 80m, isCustom: false, durationMinutes: durationMinutes);
         rule.Id = await db.InsertWithInt32IdentityAsync(rule);
 
         await db.InsertAsync(new AlertRuleMachine { AlertRuleId = rule.Id, MachineId = machine.Id, CreatedAt = EvaluationEpoch });
@@ -1594,6 +1685,7 @@ public sealed class AlertEvaluationJobTests
         };
         ruleRepo.GetEnabledAlertRulesAsync(Arg.Any<CancellationToken>())
             .Returns(new List<AlertRule> { ruleA, ruleB });
+        eventRepo.GetTenantIdsWithOpenAlertEventsAsync(Arg.Any<CancellationToken>()).Returns(new List<int>());
 
         // Tenant 1 subscription lookup throws; tenant 2 returns a Pro subscription.
         subscriptionService.GetSubscriptionForTenantAsync(1, Arg.Any<CancellationToken>())
@@ -1649,6 +1741,7 @@ public sealed class AlertEvaluationJobTests
         };
         ruleRepo.GetEnabledAlertRulesAsync(Arg.Any<CancellationToken>())
             .Returns(new List<AlertRule> { rule });
+        eventRepo.GetTenantIdsWithOpenAlertEventsAsync(Arg.Any<CancellationToken>()).Returns(new List<int>());
 
         subscriptionService.GetSubscriptionForTenantAsync(Arg.Any<int>(), Arg.Any<CancellationToken>())
             .Returns<Task<TenantSubscription?>>(_ =>

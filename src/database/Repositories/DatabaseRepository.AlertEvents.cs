@@ -275,6 +275,16 @@ public partial class DatabaseRepository : IAlertEventRepository
     }
 
     /// <inheritdoc/>
+    public async Task<List<int>> GetTenantIdsWithOpenAlertEventsAsync(CancellationToken cancellationToken = default)
+    {
+        return await _db.AlertEvents
+            .Where(e => e.Status != AlertEventStatus.Resolved)
+            .Select(e => e.TenantId)
+            .Distinct()
+            .ToListAsync(cancellationToken);
+    }
+
+    /// <inheritdoc/>
     public async Task<HashSet<long>> GetMachineIdsWithActiveEventsForRuleAsync(int ruleId, CancellationToken cancellationToken)
     {
         List<long> machineIds = await _db.AlertEvents

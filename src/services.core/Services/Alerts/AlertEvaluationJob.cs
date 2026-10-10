@@ -117,14 +117,21 @@ public sealed class AlertEvaluationJob
     public async Task RunAsync(CancellationToken ct)
     {
         List<AlertRule> enabledRules = await _alertRuleRepository.GetEnabledAlertRulesAsync(ct);
+        List<int> tenantsWithOpenEvents = await _alertEventRepository.GetTenantIdsWithOpenAlertEventsAsync(ct);
 
-        if (enabledRules.Count > 0)
+        // A tenant is visited when it has an enabled rule or an open event. The second set matters for
+        // a tenant whose rules a downgrade disabled: it has nothing to evaluate, but a host that is
+        // newly paused may still hold an open event that has to be closed.
+        Dictionary<int, List<AlertRule>> rulesByTenant = enabledRules
+            .GroupBy(r => r.TenantId)
+            .ToDictionary(g => g.Key, g => g.ToList());
+        List<int> visitedTenantIds = rulesByTenant.Keys.Union(tenantsWithOpenEvents).ToList();
+
+        if (visitedTenantIds.Count > 0)
         {
-            IEnumerable<IGrouping<int, AlertRule>> rulesByTenant = enabledRules.GroupBy(r => r.TenantId);
-
-            foreach (IGrouping<int, AlertRule> tenantRules in rulesByTenant)
+            foreach (int tenantId in visitedTenantIds)
             {
-                int tenantId = tenantRules.Key;
+                List<AlertRule> tenantRules = rulesByTenant.GetValueOrDefault(tenantId, []);
 
                 // Per-tenant fault isolation: one tenant's bad data (e.g., subscription lookup throws,
                 // or a stale machine state row trips a downstream call) must not abort the entire
@@ -132,16 +139,24 @@ public sealed class AlertEvaluationJob
                 // the recurring schedule, so transient failures self-heal.
                 try
                 {
-                    // Pausing is not an incident. A paused host's open events are resolved silently and
-                    // its condition rows dropped every pass, before the tier check, so neither survives
-                    // a stint on a plan that skips evaluation and pages the moment the host resumes. A
-                    // failed check throws into this tenant's catch, skipping it for the pass: evaluating
-                    // paused hosts on their frozen summaries would page.
+                    // Pausing is not an incident. For every visited tenant, a paused host's open events
+                    // are resolved silently and its condition rows dropped on each pass, before the tier
+                    // check, so neither survives a stint on a plan that skips evaluation and pages the
+                    // moment the host resumes. A failed check throws into this tenant's catch, skipping
+                    // it for the pass: evaluating paused hosts on their frozen summaries would page.
+                    // Only tenants with an enabled rule or an open event are visited, so condition rows
+                    // of any other tenant are left to the gap rule and the daily reaper.
                     QuotaCutoff cutoff = await GetCutoffOrSkipAsync(tenantId, ct);
                     if (cutoff.Kind != QuotaCutoffKind.None)
                     {
                         await _alertEventRepository.ResolveOpenEventsForMachinesAfterAsync(tenantId, cutoff.Kind, cutoff.CutoffId, _timeProvider.GetUtcNow(), ct);
                         await _alertConditionStateRepository.DeleteForMachinesAfterAsync(tenantId, cutoff.Kind, cutoff.CutoffId, ct);
+                    }
+
+                    // A tenant visited only for its open events has no rule to evaluate.
+                    if (tenantRules.Count == 0)
+                    {
+                        continue;
                     }
 
                     // Threshold-based alerts are a paid feature. A pre-processor cannot reach a

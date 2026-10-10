@@ -151,4 +151,13 @@ public interface IAlertEventRepository
     /// <param name="ruleId">The alert rule.</param>
     /// <param name="cancellationToken">A cancellation token.</param>
     Task<HashSet<long>> GetMachineIdsWithActiveEventsForRuleAsync(int ruleId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Returns the ids of the tenants that have at least one open (non-resolved) event, in a single
+    /// distinct query. Alert evaluation visits these as well as the tenants with enabled rules, because
+    /// a tenant whose rules were all disabled by a downgrade can still hold events that a pause must
+    /// close.
+    /// </summary>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    Task<List<int>> GetTenantIdsWithOpenAlertEventsAsync(CancellationToken cancellationToken = default);
 }

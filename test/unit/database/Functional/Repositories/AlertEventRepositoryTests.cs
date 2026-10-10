@@ -734,6 +734,41 @@ public class AlertEventRepositoryTests
             () => repo.ResolveOpenEventsForMachinesAfterAsync(tenantId: 1, (QuotaCutoffKind)99, cutoffId: 0, DateTimeOffset.UnixEpoch));
     }
 
+    // ========== GetTenantIdsWithOpenAlertEventsAsync tests ==========
+
+    [Test]
+    public async Task GetTenantIdsWithOpenAlertEventsAsync_ReturnsEachTenantWithAnOpenEventOnce()
+    {
+        // Intent: alert evaluation visits these tenants so a downgraded tenant's paused hosts still
+        // get their events closed. A tenant counts when any event is open (triggered or acknowledged),
+        // is listed once however many it has, and drops out once everything it has is resolved.
+        using TestDatabaseFactory dbFactory = new();
+        IAlertEventRepository repo = CreateRepo(dbFactory);
+        DateTimeOffset at = new(2026, 6, 1, 12, 0, 0, TimeSpan.Zero);
+
+        await SeedAlertEventAsync(dbFactory.Context, at, AlertEventStatus.Triggered, tenantId: 1, machineId: 1);
+        await SeedAlertEventAsync(dbFactory.Context, at, AlertEventStatus.Acknowledged, tenantId: 1, machineId: 2);
+        await SeedAlertEventAsync(dbFactory.Context, at, AlertEventStatus.Resolved, tenantId: 2, machineId: 3);
+        await SeedAlertEventAsync(dbFactory.Context, at, AlertEventStatus.Resolved, tenantId: 3, machineId: 4);
+        await SeedAlertEventAsync(dbFactory.Context, at, AlertEventStatus.Triggered, tenantId: 3, machineId: 5);
+
+        List<int> tenantIds = await repo.GetTenantIdsWithOpenAlertEventsAsync();
+
+        await Assert.That(tenantIds.Order().ToList()).IsEquivalentTo(new List<int> { 1, 3 });
+    }
+
+    [Test]
+    public async Task GetTenantIdsWithOpenAlertEventsAsync_NoOpenEvents_ReturnsEmpty()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        IAlertEventRepository repo = CreateRepo(dbFactory);
+        await SeedAlertEventAsync(dbFactory.Context, new DateTimeOffset(2026, 6, 1, 12, 0, 0, TimeSpan.Zero), AlertEventStatus.Resolved, tenantId: 1, machineId: 1);
+
+        List<int> tenantIds = await repo.GetTenantIdsWithOpenAlertEventsAsync();
+
+        await Assert.That(tenantIds.Count).IsEqualTo(0);
+    }
+
     // ----- GetTriggeredEventsWithoutDeliveryAttemptsAsync -----
 
     [Test]
