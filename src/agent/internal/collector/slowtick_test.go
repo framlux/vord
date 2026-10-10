@@ -15,7 +15,7 @@ import (
 
 func TestSlowTickCollectMemoryInfo(t *testing.T) {
 	store := newTestStore(t)
-	st := NewSlowTick(store, state.New())
+	st := NewSlowTick(store, state.New(), neverPaused())
 
 	st.collectMemoryInfo(fixtureSlowMeminfo, nil)
 
@@ -44,7 +44,7 @@ func TestSlowTickCollectMemoryInfo(t *testing.T) {
 
 func TestSlowTickSubIntervalLogic(t *testing.T) {
 	store := newTestStore(t)
-	st := NewSlowTick(store, state.New())
+	st := NewSlowTick(store, state.New(), neverPaused())
 
 	// Tick 0 is hourly (0 % 4 == 0).
 	if st.tickNum%hourlyTickInterval != 0 {
@@ -68,7 +68,7 @@ func TestSlowTickSubIntervalLogic(t *testing.T) {
 
 func TestSlowTickHourlyCollectorsRunOnStartup(t *testing.T) {
 	store := newTestStore(t)
-	st := NewSlowTick(store, state.New())
+	st := NewSlowTick(store, state.New(), neverPaused())
 
 	// tickNum starts at 0, which is hourly.
 	if st.tickNum != 0 {
@@ -83,7 +83,7 @@ func TestSlowTickHourlyCollectorsRunOnStartup(t *testing.T) {
 
 func TestSlowTickGarbageDataNoPanic(t *testing.T) {
 	store := newTestStore(t)
-	st := NewSlowTick(store, state.New())
+	st := NewSlowTick(store, state.New(), neverPaused())
 
 	defer func() {
 		if r := recover(); r != nil {
@@ -98,7 +98,7 @@ func TestSlowTickGarbageDataNoPanic(t *testing.T) {
 
 func TestSlowTickCollectCpuInfo(t *testing.T) {
 	store := newTestStore(t)
-	st := NewSlowTick(store, state.New())
+	st := NewSlowTick(store, state.New(), neverPaused())
 
 	st.collectCpuInfo(fixtureSlowCpuinfo, nil)
 
@@ -124,7 +124,7 @@ func TestSlowTickCollectCpuInfo(t *testing.T) {
 
 func TestSlowTickCollectMemoryInfoReadError(t *testing.T) {
 	store := newTestStore(t)
-	st := NewSlowTick(store, state.New())
+	st := NewSlowTick(store, state.New(), neverPaused())
 
 	// Should not panic on read error, just log and skip.
 	st.collectMemoryInfo("", errorString("simulated error"))
@@ -176,7 +176,7 @@ func TestSlowTickCollectDiskInfo_PopulatesAllFields(t *testing.T) {
 // Intent: Read error → no telemetry enqueued, no panic.
 func TestSlowTickCollectDiskInfo_ReadError(t *testing.T) {
 	store := newTestStore(t)
-	st := NewSlowTick(store, state.New())
+	st := NewSlowTick(store, state.New(), neverPaused())
 
 	st.collectDiskInfo(nil, "", errorString("simulated read error"))
 
@@ -265,7 +265,7 @@ func TestSlowTickCollectSystemInfo_ParseHelpers(t *testing.T) {
 // Exercises collectSystemInfo which calls os.Hostname, readDMI, etc.
 func TestSlowTickSafeCollectSystemInfo_ValidData(t *testing.T) {
 	store := newTestStore(t)
-	st := NewSlowTick(store, state.New())
+	st := NewSlowTick(store, state.New(), neverPaused())
 
 	defer func() {
 		if r := recover(); r != nil {
@@ -307,7 +307,7 @@ func TestSlowTickSafeCollectSystemInfo_ValidData(t *testing.T) {
 // Intent: safeCollectSystemInfo handles read errors without panic.
 func TestSlowTickSafeCollectSystemInfo_ReadErrors(t *testing.T) {
 	store := newTestStore(t)
-	st := NewSlowTick(store, state.New())
+	st := NewSlowTick(store, state.New(), neverPaused())
 
 	defer func() {
 		if r := recover(); r != nil {
@@ -333,7 +333,7 @@ func TestSlowTickSafeCollectSystemInfo_ReadErrors(t *testing.T) {
 // Intent: safeCollectOsVersion with valid data produces telemetry with parsed os-release fields.
 func TestSlowTickSafeCollectOsVersion_ValidData(t *testing.T) {
 	store := newTestStore(t)
-	st := NewSlowTick(store, state.New())
+	st := NewSlowTick(store, state.New(), neverPaused())
 
 	defer func() {
 		if r := recover(); r != nil {
@@ -389,7 +389,7 @@ BUILD_ID=
 // Intent: safeCollectOsVersion with read error still produces telemetry (empty/default values).
 func TestSlowTickSafeCollectOsVersion_ReadError(t *testing.T) {
 	store := newTestStore(t)
-	st := NewSlowTick(store, state.New())
+	st := NewSlowTick(store, state.New(), neverPaused())
 
 	defer func() {
 		if r := recover(); r != nil {
@@ -412,7 +412,7 @@ func TestSlowTickSafeCollectOsVersion_ReadError(t *testing.T) {
 // Intent: safeCollectSystemInfo and safeCollectOsVersion with garbage data produce no panic.
 func TestSlowTickSafeCollectHourly_GarbageData(t *testing.T) {
 	store := newTestStore(t)
-	st := NewSlowTick(store, state.New())
+	st := NewSlowTick(store, state.New(), neverPaused())
 
 	defer func() {
 		if r := recover(); r != nil {
@@ -440,3 +440,30 @@ core id		: 0
 cpu cores	: 2
 apicid		: 0
 `
+
+// Intent: a paused host runs no slow tick, and the hourly cadence resumes where it left off.
+func TestSlowTickTick_PausedSkipsTick(t *testing.T) {
+	store := newTestStore(t)
+	st := NewSlowTick(store, state.New(), pausedCoordinator())
+
+	st.tick(context.Background())
+
+	if st.tickNum != 0 {
+		t.Errorf("expected a paused tick not to advance the tick count, got %d", st.tickNum)
+	}
+	if items, err := store.DequeueTelemetry(10); err != nil || len(items) != 0 {
+		t.Errorf("expected nothing enqueued while paused, got %d item(s), err %v", len(items), err)
+	}
+}
+
+// Intent: when not paused the tick advances as before.
+func TestSlowTickTick_NotPausedAdvances(t *testing.T) {
+	store := newTestStore(t)
+	st := NewSlowTick(store, state.New(), neverPaused())
+
+	st.tick(context.Background())
+
+	if st.tickNum != 1 {
+		t.Errorf("expected the tick count to advance to 1, got %d", st.tickNum)
+	}
+}

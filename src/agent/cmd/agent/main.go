@@ -21,6 +21,7 @@ import (
 	"github.com/framlux/vord/internal/db"
 	"github.com/framlux/vord/internal/grpcclient"
 	"github.com/framlux/vord/internal/jitter"
+	"github.com/framlux/vord/internal/pause"
 	pb "github.com/framlux/vord/internal/proto/agent"
 	"github.com/framlux/vord/internal/registration"
 	"github.com/framlux/vord/internal/sender"
@@ -130,20 +131,52 @@ func main() {
 		cmdProcessor = commands.NewProcessor(cmdHandler, nonceAdapter, ackAdapter, destructiveCommandDelay)
 	}
 
+	// The pause coordinator is built before the sender and the scheduler that gate on it. Its hooks reach the
+	// SSH collector and the sender, which need the coordinator themselves, so both are declared here and
+	// assigned below. Every goroutine that can trigger a transition is started after that assignment.
+	var sshCollector *collector.SSHSessionsCollector
+	var telemetrySender *sender.Sender
+	pauseCoordinator := pause.New(time.Now, runtimeState.PingInterval, pause.Hooks{
+		OnPause: func(_ pause.Reason) {
+			// Nothing queued before the pause should be sent after it.
+			if err := store.ClearTelemetryQueue(); err != nil {
+				slog.Error("failed to clear telemetry queue on pause", "error", err)
+			}
+
+			// Closing waits for any send still in flight on a stream, and a stuck send must not hold up the
+			// heartbeat or the other send tier, which both run this hook through the coordinator.
+			go telemetrySender.CloseStreams()
+		},
+		OnResume: func() {
+			// Skip the SSH events logged during the pause instead of collecting and alerting on them.
+			if err := sshCollector.ResetToNow(ctx, store); err != nil {
+				slog.Error("failed to reset ssh collection point on resume", "error", err)
+			}
+
+			// The first CPU sample after the pause becomes the baseline rather than an average over it.
+			if err := store.SaveCollectorState("cpu_usage", nil); err != nil {
+				slog.Error("failed to reset cpu baseline on resume", "error", err)
+			}
+		},
+	})
+
 	// Register independent collectors. Grouped collectors (CpuUsage, MemUsage,
 	// DiskUsage, MemoryInfo, DiskInfo, SystemInfo, OsVersion, CpuInfo) are
 	// handled by FastTick and SlowTick inside the scheduler.
 	registry := collector.NewRegistry()
-	registry.Register(collector.NewSSHSessionsCollector(runtimeState))
+	sshCollector = collector.NewSSHSessionsCollector(runtimeState)
+	registry.Register(sshCollector)
 	registry.Register(collector.NewHwHealthCollector())
 	registry.Register(collector.NewPackagesCollector())
 	registry.Register(collector.NewAgentVersionCollector(version))
 	registry.RegisterDynamic(collector.NewServicesCollector(runtimeState), runtimeState.ServiceStatusInterval)
 
+	telemetrySender = sender.New(store, grpcClient.Telemetry, runtimeState, jit, pauseCoordinator)
+
 	var wg sync.WaitGroup
 
 	// Start scheduler in background.
-	scheduler := collector.NewScheduler(registry, store, runtimeState)
+	scheduler := collector.NewScheduler(registry, store, runtimeState, pauseCoordinator)
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -156,7 +189,7 @@ func main() {
 	go func() {
 		defer wg.Done()
 		defer recoverPanic("heartbeat")
-		runHeartbeat(ctx, regManager, runtimeState, jit)
+		runHeartbeat(ctx, regManager, runtimeState, jit, pauseCoordinator)
 	}()
 
 	// Start config refresh loop in background.
@@ -173,14 +206,13 @@ func main() {
 		go func() {
 			defer wg.Done()
 			defer recoverPanic("command-poll")
-			runCommandPoll(ctx, grpcClient.Configuration, cmdProcessor, runtimeState, jit)
+			runCommandPoll(ctx, grpcClient.Configuration, cmdProcessor, runtimeState, jit, pauseCoordinator)
 		}()
 	} else {
 		slog.Info("remote command polling disabled by configuration")
 	}
 
 	// Start telemetry sender in background.
-	telemetrySender := sender.New(store, grpcClient.Telemetry, runtimeState, jit)
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
@@ -303,7 +335,7 @@ func setupLogging(level string) {
 	slog.SetDefault(slog.New(handler))
 }
 
-func runHeartbeat(ctx context.Context, reg *registration.Manager, runtimeState *state.RuntimeState, jit *jitter.Jitter) {
+func runHeartbeat(ctx context.Context, reg *registration.Manager, runtimeState *state.RuntimeState, jit *jitter.Jitter, pauseCoordinator *pause.Coordinator) {
 	interval := runtimeState.PingInterval()
 	// The first fire is offset by a random startup phase; subsequent fires are jittered around the
 	// interval so a fleet of agents does not all ping at the same instant.
@@ -315,10 +347,18 @@ func runHeartbeat(ctx context.Context, reg *registration.Manager, runtimeState *
 		case <-ctx.Done():
 			return
 		case <-timer.C:
-			if err := reg.Ping(ctx); err != nil {
+			pingState, err := reg.Ping(ctx)
+			if err != nil {
 				slog.Warn("heartbeat ping failed", "error", err)
 			} else {
 				slog.Debug("heartbeat ping sent")
+			}
+
+			// A ping that carried a state is authoritative whether or not the heartbeat write succeeded, and
+			// a healthy ping with no state means the host is not paused. A ping that failed with no state says
+			// nothing, so the lease is neither renewed nor ended by it.
+			if (err == nil) || (pingState != pb.IngestRejectionReason_INGEST_REJECTION_REASON_UNSPECIFIED) {
+				pauseCoordinator.Observe(pause.FromProto(pingState))
 			}
 
 			if newInterval := runtimeState.PingInterval(); newInterval != interval {
@@ -355,7 +395,7 @@ func runConfigRefresh(ctx context.Context, reg *registration.Manager, runtimeSta
 	}
 }
 
-func runCommandPoll(ctx context.Context, cfgClient pb.ConfigurationClient, processor *commands.Processor, rs *state.RuntimeState, jit *jitter.Jitter) {
+func runCommandPoll(ctx context.Context, cfgClient pb.ConfigurationClient, processor *commands.Processor, rs *state.RuntimeState, jit *jitter.Jitter, pauseCoordinator *pause.Coordinator) {
 	interval := rs.CommandPollInterval()
 	timer := time.NewTimer(jit.StartupPhase(interval))
 	defer timer.Stop()
@@ -365,34 +405,45 @@ func runCommandPoll(ctx context.Context, cfgClient pb.ConfigurationClient, proce
 		case <-ctx.Done():
 			return
 		case <-timer.C:
-			resp, err := cfgClient.GetPendingCommands(ctx, &pb.GetPendingCommandsRequest{
-				MachineId: rs.MachineID(),
-			})
-			if err != nil {
-				slog.Debug("command poll failed", "error", err)
+			// A paused host's commands are not delivered, and one created before the pause is bounded by its own
+			// expiry, so there is nothing to poll for until the pause ends.
+			if pauseCoordinator.Paused() {
+				slog.Debug("command poll skipped, host is paused")
 			} else {
-				for _, cmd := range resp.Commands {
-					processor.Process(ctx, commands.PendingCommand{
-						ID:               cmd.Id,
-						Type:             cmd.Type,
-						Params:           cmd.Params,
-						CanonicalPayload: cmd.CanonicalPayload,
-						Signature:        cmd.Signature,
-						SigningKeyID:     cmd.SigningKeyId,
-						Timestamp:        cmd.Timestamp,
-						ExpiresAt:        cmd.ExpiresAt,
-						Nonce:            cmd.Nonce,
-						UserID:           cmd.UserId,
-						TenantID:         cmd.TenantId,
-						MachineID:        cmd.MachineId,
-					}, rs.TenantID(), rs.MachineID())
-				}
+				pollCommands(ctx, cfgClient, processor, rs)
 			}
 
 			if newInterval := rs.CommandPollInterval(); newInterval != interval {
 				interval = newInterval
 			}
 			timer.Reset(jit.Apply(interval, 0.15))
+		}
+	}
+}
+
+// pollCommands fetches the commands waiting for this machine and hands each to the processor.
+func pollCommands(ctx context.Context, cfgClient pb.ConfigurationClient, processor *commands.Processor, rs *state.RuntimeState) {
+	resp, err := cfgClient.GetPendingCommands(ctx, &pb.GetPendingCommandsRequest{
+		MachineId: rs.MachineID(),
+	})
+	if err != nil {
+		slog.Debug("command poll failed", "error", err)
+	} else {
+		for _, cmd := range resp.Commands {
+			processor.Process(ctx, commands.PendingCommand{
+				ID:               cmd.Id,
+				Type:             cmd.Type,
+				Params:           cmd.Params,
+				CanonicalPayload: cmd.CanonicalPayload,
+				Signature:        cmd.Signature,
+				SigningKeyID:     cmd.SigningKeyId,
+				Timestamp:        cmd.Timestamp,
+				ExpiresAt:        cmd.ExpiresAt,
+				Nonce:            cmd.Nonce,
+				UserID:           cmd.UserId,
+				TenantID:         cmd.TenantId,
+				MachineID:        cmd.MachineId,
+			}, rs.TenantID(), rs.MachineID())
 		}
 	}
 }

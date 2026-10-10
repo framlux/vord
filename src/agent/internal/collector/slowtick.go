@@ -17,6 +17,7 @@ import (
 
 	"github.com/framlux/vord/internal/db"
 	"github.com/framlux/vord/internal/id"
+	"github.com/framlux/vord/internal/pause"
 	"github.com/framlux/vord/internal/state"
 )
 
@@ -28,12 +29,13 @@ const hourlyTickInterval = 4 // every 4th slow tick = 1 hour
 type SlowTick struct {
 	store   *db.Store
 	rs      *state.RuntimeState
+	pause   *pause.Coordinator
 	tickNum int
 }
 
-// NewSlowTick creates a new SlowTick.
-func NewSlowTick(store *db.Store, rs *state.RuntimeState) *SlowTick {
-	return &SlowTick{store: store, rs: rs}
+// NewSlowTick creates a new SlowTick. It collects nothing while the pause coordinator reports the host paused.
+func NewSlowTick(store *db.Store, rs *state.RuntimeState, pc *pause.Coordinator) *SlowTick {
+	return &SlowTick{store: store, rs: rs, pause: pc}
 }
 
 // Run starts the slow tick loop. It blocks until ctx is cancelled.
@@ -66,6 +68,13 @@ func (st *SlowTick) Run(ctx context.Context) {
 }
 
 func (st *SlowTick) tick(ctx context.Context) {
+	// A skipped tick does not advance tickNum, so the hourly cadence picks up where it left off.
+	if st.pause.Paused() {
+		slog.Debug("slow tick skipped, host is paused")
+
+		return
+	}
+
 	start := time.Now()
 	isHourly := st.tickNum%hourlyTickInterval == 0
 

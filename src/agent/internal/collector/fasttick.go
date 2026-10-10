@@ -16,6 +16,7 @@ import (
 
 	"github.com/framlux/vord/internal/db"
 	"github.com/framlux/vord/internal/id"
+	"github.com/framlux/vord/internal/pause"
 	"github.com/framlux/vord/internal/state"
 )
 
@@ -25,12 +26,13 @@ import (
 type FastTick struct {
 	store     *db.Store
 	rs        *state.RuntimeState
+	pause     *pause.Coordinator
 	prevTicks *cpuTicks
 }
 
-// NewFastTick creates a new FastTick.
-func NewFastTick(store *db.Store, rs *state.RuntimeState) *FastTick {
-	return &FastTick{store: store, rs: rs}
+// NewFastTick creates a new FastTick. It collects nothing while the pause coordinator reports the host paused.
+func NewFastTick(store *db.Store, rs *state.RuntimeState, pc *pause.Coordinator) *FastTick {
+	return &FastTick{store: store, rs: rs, pause: pc}
 }
 
 // Run starts the fast tick loop. It blocks until ctx is cancelled.
@@ -66,6 +68,16 @@ func (ft *FastTick) Run(ctx context.Context) {
 }
 
 func (ft *FastTick) tick(ctx context.Context) {
+	// CPU usage is a delta between two samples. Forgetting the previous sample for as long as the host is
+	// paused makes the first sample after the pause a fresh baseline, rather than an average over the pause.
+	// prevTicks is only ever touched from this goroutine, so no lock is needed.
+	if ft.pause.Paused() {
+		ft.prevTicks = nil
+		slog.Debug("fast tick skipped, host is paused")
+
+		return
+	}
+
 	start := time.Now()
 
 	// Read phase — read all files once.

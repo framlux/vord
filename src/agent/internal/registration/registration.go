@@ -366,25 +366,28 @@ func (m *Manager) FetchConfiguration(ctx context.Context) error {
 	return m.store.SaveServerConfig(string(configJSON))
 }
 
-// Ping sends a heartbeat to the server.
-func (m *Manager) Ping(ctx context.Context) error {
+// Ping sends a heartbeat to the server and returns the pause state it carried. The state is read whatever the
+// heartbeat's success flag says, so a paused host whose heartbeat write failed still learns it is paused; the
+// error is still returned alongside it. An RPC error carries no state: it returns UNSPECIFIED, which the caller
+// must not treat as "resumed".
+func (m *Manager) Ping(ctx context.Context) (pb.IngestRejectionReason, error) {
 	machineID := m.state.MachineID()
 	if machineID == 0 {
-		return fmt.Errorf("not registered")
+		return pb.IngestRejectionReason_INGEST_REJECTION_REASON_UNSPECIFIED, fmt.Errorf("not registered")
 	}
 
 	resp, err := m.configuration.AgentPing(ctx, &pb.AgentPingRequest{
 		MachineId: machineID,
 	})
 	if err != nil {
-		return fmt.Errorf("AgentPing RPC: %w", err)
+		return pb.IngestRejectionReason_INGEST_REJECTION_REASON_UNSPECIFIED, fmt.Errorf("AgentPing RPC: %w", err)
 	}
 	if resp.Success == false {
 
-		return fmt.Errorf("ping unsuccessful")
+		return resp.State, fmt.Errorf("ping unsuccessful")
 	}
 
-	return nil
+	return resp.State, nil
 }
 
 func readDMIField(field string) string {

@@ -5,9 +5,14 @@
 package collector
 
 import (
+	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/framlux/vord/internal/db"
+	"github.com/framlux/vord/internal/state"
 )
 
 // Intent: "Accepted publickey" log line → connect action with user, IP, port, auth method.
@@ -417,5 +422,180 @@ func TestStoreSSHSession_MinimalPayload(t *testing.T) {
 	}
 	if len(items) != 1 {
 		t.Fatalf("expected 1 telemetry item, got %d", len(items))
+	}
+}
+
+// authLogCollector builds a collector in auth.log mode reading a log file the test controls.
+func authLogCollector(t *testing.T, logPath string) *SSHSessionsCollector {
+	t.Helper()
+
+	return &SSHSessionsCollector{hasJournalctl: false, rs: state.New(), authLogPaths: []string{logPath}}
+}
+
+func appendToFile(t *testing.T, path string, text string) {
+	t.Helper()
+	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0o600)
+	if err != nil {
+		t.Fatalf("open %s: %v", path, err)
+	}
+	defer f.Close()
+	if _, err := f.WriteString(text); err != nil {
+		t.Fatalf("append to %s: %v", path, err)
+	}
+}
+
+const (
+	sshAcceptedRoot  = "Jun 15 10:30:00 server sshd[1234]: Accepted publickey for root from 10.0.1.50 port 54321 ssh2\n"
+	sshAcceptedAlice = "Jun 15 10:31:00 server sshd[1235]: Accepted publickey for alice from 10.0.1.51 port 54322 ssh2\n"
+)
+
+func drainTelemetry(t *testing.T, store *db.Store) []db.TelemetryQueueItem {
+	t.Helper()
+	items, err := store.DequeueTelemetry(100)
+	if err != nil {
+		t.Fatalf("DequeueTelemetry: %v", err)
+	}
+
+	return items
+}
+
+// Intent: resuming in auth.log mode moves the offset to the end of the log, so the lines written while the
+// host was paused are not collected, but a line written after the resume is.
+func TestResetToNow_AuthLog_SkipsExistingLinesAndKeepsNewOnes(t *testing.T) {
+	store := newTestStore(t)
+	logPath := filepath.Join(t.TempDir(), "auth.log")
+	appendToFile(t, logPath, sshAcceptedRoot)
+	c := authLogCollector(t, logPath)
+
+	if err := c.ResetToNow(context.Background(), store); err != nil {
+		t.Fatalf("ResetToNow: %v", err)
+	}
+
+	saved, err := store.GetCollectorState(c.Name())
+	if err != nil || saved == nil || saved.StateJSON == nil {
+		t.Fatalf("expected saved state, got %v (err %v)", saved, err)
+	}
+	var als authLogState
+	if err := json.Unmarshal([]byte(*saved.StateJSON), &als); err != nil {
+		t.Fatalf("unmarshal saved state %q: %v", *saved.StateJSON, err)
+	}
+	fi, err := os.Stat(logPath)
+	if err != nil {
+		t.Fatalf("stat: %v", err)
+	}
+	if als.Offset != fi.Size() {
+		t.Errorf("expected offset %d (the file size), got %d", fi.Size(), als.Offset)
+	}
+	if als.Inode != fileInode(fi) {
+		t.Errorf("expected inode %d, got %d", fileInode(fi), als.Inode)
+	}
+
+	if err := c.Collect(context.Background(), store); err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	if items := drainTelemetry(t, store); len(items) != 0 {
+		t.Fatalf("expected nothing from lines that existed at the reset, got %d item(s)", len(items))
+	}
+
+	appendToFile(t, logPath, sshAcceptedAlice)
+	if err := c.Collect(context.Background(), store); err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	items := drainTelemetry(t, store)
+	if len(items) != 1 {
+		t.Fatalf("expected the one line appended after the reset, got %d item(s)", len(items))
+	}
+	var payload sshSessionPayload
+	if err := json.Unmarshal([]byte(items[0].Payload), &payload); err != nil {
+		t.Fatalf("unmarshal payload: %v", err)
+	}
+	if payload.User != "alice" {
+		t.Errorf("expected the appended line (alice), got user %q", payload.User)
+	}
+}
+
+// Intent: a reset leaves the log quiet for as many collections as it likes; it must never read like a rotation
+// and replay the whole log (the lines written during a pause) on a later pass.
+func TestResetToNow_AuthLog_QuietLogIsNeverReplayed(t *testing.T) {
+	store := newTestStore(t)
+	logPath := filepath.Join(t.TempDir(), "auth.log")
+	appendToFile(t, logPath, sshAcceptedRoot+sshAcceptedAlice)
+	c := authLogCollector(t, logPath)
+
+	if err := c.ResetToNow(context.Background(), store); err != nil {
+		t.Fatalf("ResetToNow: %v", err)
+	}
+
+	for pass := 1; pass <= 5; pass++ {
+		if err := c.Collect(context.Background(), store); err != nil {
+			t.Fatalf("Collect pass %d: %v", pass, err)
+		}
+		if items := drainTelemetry(t, store); len(items) != 0 {
+			t.Fatalf("pass %d replayed %d item(s) from a log that did not change", pass, len(items))
+		}
+	}
+}
+
+// Intent: an empty log has nothing to skip; the reset still records it so later lines are read from the start.
+func TestResetToNow_AuthLog_EmptyLog(t *testing.T) {
+	store := newTestStore(t)
+	logPath := filepath.Join(t.TempDir(), "auth.log")
+	appendToFile(t, logPath, "")
+	c := authLogCollector(t, logPath)
+
+	if err := c.ResetToNow(context.Background(), store); err != nil {
+		t.Fatalf("ResetToNow: %v", err)
+	}
+
+	appendToFile(t, logPath, sshAcceptedAlice)
+	if err := c.Collect(context.Background(), store); err != nil {
+		t.Fatalf("Collect: %v", err)
+	}
+	if items := drainTelemetry(t, store); len(items) != 1 {
+		t.Fatalf("expected the appended line, got %d item(s)", len(items))
+	}
+}
+
+// Intent: with no auth log on the host there is nothing to reset, and that is not an error.
+func TestResetToNow_AuthLog_NoLogFile(t *testing.T) {
+	store := newTestStore(t)
+	c := authLogCollector(t, filepath.Join(t.TempDir(), "missing.log"))
+
+	if err := c.ResetToNow(context.Background(), store); err != nil {
+		t.Fatalf("ResetToNow: %v", err)
+	}
+
+	saved, err := store.GetCollectorState(c.Name())
+	if err != nil {
+		t.Fatalf("GetCollectorState: %v", err)
+	}
+	if saved != nil && saved.StateJSON != nil {
+		t.Errorf("expected no state saved when there is no log, got %q", *saved.StateJSON)
+	}
+}
+
+// Intent: in journal mode the cursor is dropped, which makes the next run start from the recent window instead
+// of the pre-pause cursor.
+func TestResetToNow_Journal_ClearsCursor(t *testing.T) {
+	store := newTestStore(t)
+	c := &SSHSessionsCollector{hasJournalctl: true, rs: state.New()}
+	cursor := `{"cursor":"s=abc;i=1"}`
+	if err := store.SaveCollectorState(c.Name(), &cursor); err != nil {
+		t.Fatalf("SaveCollectorState: %v", err)
+	}
+
+	if err := c.ResetToNow(context.Background(), store); err != nil {
+		t.Fatalf("ResetToNow: %v", err)
+	}
+
+	saved, err := store.GetCollectorState(c.Name())
+	if err != nil {
+		t.Fatalf("GetCollectorState: %v", err)
+	}
+	if saved == nil {
+		t.Fatal("expected a collector_state row")
+	}
+	if saved.StateJSON != nil {
+		t.Errorf("expected nil state in journal mode, got %q", *saved.StateJSON)
 	}
 }

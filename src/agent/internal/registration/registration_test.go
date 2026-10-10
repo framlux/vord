@@ -875,7 +875,7 @@ func TestFetchConfiguration_TelemetryBoundaryValues(t *testing.T) {
 
 // --- Ping tests ---
 
-// Intent: Ping before registration (machineID=0) returns error.
+// Intent: Ping before registration (machineID=0) returns error and no pause state.
 func TestPing_NotRegistered(t *testing.T) {
 	store := newTestStore(t)
 	runtimeState := state.New() // machineID=0
@@ -885,9 +885,12 @@ func TestPing_NotRegistered(t *testing.T) {
 
 	mgr := newTestManager(regClient, cfgClient, store, runtimeState, "token")
 
-	err := mgr.Ping(context.Background())
+	got, err := mgr.Ping(context.Background())
 	if err == nil {
 		t.Error("expected error for ping when not registered")
+	}
+	if got != pb.IngestRejectionReason_INGEST_REJECTION_REASON_UNSPECIFIED {
+		t.Errorf("expected UNSPECIFIED state, got %v", got)
 	}
 }
 
@@ -906,13 +909,16 @@ func TestPing_ServerReject(t *testing.T) {
 
 	mgr := newTestManager(regClient, cfgClient, store, runtimeState, "token")
 
-	err := mgr.Ping(context.Background())
+	got, err := mgr.Ping(context.Background())
 	if err == nil {
 		t.Error("expected error for rejected ping")
 	}
+	if got != pb.IngestRejectionReason_INGEST_REJECTION_REASON_UNSPECIFIED {
+		t.Errorf("expected UNSPECIFIED state, got %v", got)
+	}
 }
 
-// Intent: Server accepts heartbeat → no error.
+// Intent: Server accepts heartbeat → no error, and no pause state.
 func TestPing_Success(t *testing.T) {
 	store := newTestStore(t)
 	runtimeState := state.New()
@@ -931,9 +937,74 @@ func TestPing_Success(t *testing.T) {
 
 	mgr := newTestManager(regClient, cfgClient, store, runtimeState, "token")
 
-	err := mgr.Ping(context.Background())
+	got, err := mgr.Ping(context.Background())
 	if err != nil {
 		t.Fatalf("Ping: %v", err)
+	}
+	if got != pb.IngestRejectionReason_INGEST_REJECTION_REASON_UNSPECIFIED {
+		t.Errorf("expected UNSPECIFIED state, got %v", got)
+	}
+}
+
+// Intent: the pause state a ping carries is returned whether or not the heartbeat write succeeded, so a failed
+// write on a paused host cannot hide the pause.
+func TestPing_ReturnsStateWhateverSuccessSays(t *testing.T) {
+	cases := []struct {
+		name    string
+		success bool
+		state   pb.IngestRejectionReason
+	}{
+		{"paused, heartbeat recorded", true, pb.IngestRejectionReason_INGEST_REJECTION_REASON_HOST_PAUSED},
+		{"paused, heartbeat not recorded", false, pb.IngestRejectionReason_INGEST_REJECTION_REASON_HOST_PAUSED},
+		{"subscription inactive, heartbeat recorded", true, pb.IngestRejectionReason_INGEST_REJECTION_REASON_SUBSCRIPTION_INACTIVE},
+		{"subscription inactive, heartbeat not recorded", false, pb.IngestRejectionReason_INGEST_REJECTION_REASON_SUBSCRIPTION_INACTIVE},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			store := newTestStore(t)
+			runtimeState := state.New()
+			runtimeState.SetMachineID(1)
+			cfgClient := &mockConfigurationClient{
+				pingFunc: func(ctx context.Context, in *pb.AgentPingRequest, opts ...grpc.CallOption) (*pb.AgentPingResponse, error) {
+					return &pb.AgentPingResponse{Success: tc.success, State: tc.state}, nil
+				},
+			}
+			mgr := newTestManager(&mockRegistrationClient{}, cfgClient, store, runtimeState, "token")
+
+			got, err := mgr.Ping(context.Background())
+
+			if got != tc.state {
+				t.Errorf("expected state %v, got %v", tc.state, got)
+			}
+			if tc.success && err != nil {
+				t.Errorf("expected no error when the heartbeat was recorded, got %v", err)
+			}
+			if tc.success == false && err == nil {
+				t.Error("expected the existing error when the heartbeat was not recorded")
+			}
+		})
+	}
+}
+
+// Intent: an RPC failure says nothing about the pause, so it reports no state alongside the error.
+func TestPing_RPCError_ReturnsUnspecifiedAndError(t *testing.T) {
+	store := newTestStore(t)
+	runtimeState := state.New()
+	runtimeState.SetMachineID(1)
+	cfgClient := &mockConfigurationClient{
+		pingFunc: func(ctx context.Context, in *pb.AgentPingRequest, opts ...grpc.CallOption) (*pb.AgentPingResponse, error) {
+			return nil, fmt.Errorf("connection refused")
+		},
+	}
+	mgr := newTestManager(&mockRegistrationClient{}, cfgClient, store, runtimeState, "token")
+
+	got, err := mgr.Ping(context.Background())
+
+	if err == nil {
+		t.Error("expected the RPC error")
+	}
+	if got != pb.IngestRejectionReason_INGEST_REJECTION_REASON_UNSPECIFIED {
+		t.Errorf("expected UNSPECIFIED state, got %v", got)
 	}
 }
 

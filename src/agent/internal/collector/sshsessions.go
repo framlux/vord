@@ -23,17 +23,22 @@ import (
 	"github.com/framlux/vord/internal/state"
 )
 
+// defaultAuthLogPaths are the files sshd logs to when there is no journal. Debian and Ubuntu use auth.log;
+// RHEL, CentOS and SUSE use secure.
+var defaultAuthLogPaths = []string{"/var/log/auth.log", "/var/log/secure"}
+
 // SSHSessionsCollector monitors SSH connections via journalctl or auth.log.
 type SSHSessionsCollector struct {
 	hasJournalctl bool
 	rs            *state.RuntimeState
+	authLogPaths  []string
 }
 
 // NewSSHSessionsCollector creates a new SSHSessionsCollector.
 func NewSSHSessionsCollector(rs *state.RuntimeState) *SSHSessionsCollector {
 	_, err := exec.LookPath("journalctl")
 
-	return &SSHSessionsCollector{hasJournalctl: err == nil, rs: rs}
+	return &SSHSessionsCollector{hasJournalctl: err == nil, rs: rs, authLogPaths: defaultAuthLogPaths}
 }
 
 func (c *SSHSessionsCollector) Name() string { return "ssh_sessions" }
@@ -60,6 +65,13 @@ type sshJournalState struct {
 	Cursor string `json:"cursor"`
 }
 
+// authLogState is where collection stopped in the auth log: the byte offset already consumed, and the inode of
+// the file it was consumed from so a rotation is not mistaken for a file that merely grew.
+type authLogState struct {
+	Offset int64  `json:"offset"`
+	Inode  uint64 `json:"inode,omitempty"`
+}
+
 type sshSessionPayload struct {
 	SessionID  string `json:"session_id,omitempty"`
 	User       string `json:"user"`
@@ -76,6 +88,44 @@ func (c *SSHSessionsCollector) Collect(ctx context.Context, store *db.Store) err
 	}
 
 	return c.collectFromAuthLog(ctx, store)
+}
+
+// ResetToNow moves the collection point to the present, so everything sshd logged before this call is skipped.
+// It is what a resume does: without it the agent would send every SSH event from the pause and fire stale
+// "new connection" and failed-login alerts. It picks the source the same way Collect does.
+func (c *SSHSessionsCollector) ResetToNow(_ context.Context, store *db.Store) error {
+	if c.hasJournalctl {
+		// With no cursor the next run starts from the recent window instead of the pre-pause cursor.
+		return store.SaveCollectorState(c.Name(), nil)
+	}
+
+	logPath := c.findAuthLog()
+	if logPath == "" {
+		return nil
+	}
+
+	fi, err := os.Stat(logPath)
+	if err != nil {
+		return fmt.Errorf("stat auth log: %w", err)
+	}
+	stateJSON, err := json.Marshal(authLogState{Offset: fi.Size(), Inode: fileInode(fi)})
+	if err != nil {
+		return fmt.Errorf("marshaling auth log state: %w", err)
+	}
+	stateStr := string(stateJSON)
+
+	return store.SaveCollectorState(c.Name(), &stateStr)
+}
+
+// findAuthLog returns the first auth log file that exists, or "" when the host has none.
+func (c *SSHSessionsCollector) findAuthLog() string {
+	for _, p := range c.authLogPaths {
+		if _, err := os.Stat(p); err == nil {
+			return p
+		}
+	}
+
+	return ""
 }
 
 func (c *SSHSessionsCollector) collectFromJournal(ctx context.Context, store *db.Store) error {
@@ -143,15 +193,7 @@ func (c *SSHSessionsCollector) collectFromJournal(ctx context.Context, store *db
 }
 
 func (c *SSHSessionsCollector) collectFromAuthLog(ctx context.Context, store *db.Store) error {
-	// Find the auth log file — Debian/Ubuntu use auth.log, RHEL/CentOS/SUSE use secure.
-	logPaths := []string{"/var/log/auth.log", "/var/log/secure"}
-	var logPath string
-	for _, p := range logPaths {
-		if _, err := os.Stat(p); err == nil {
-			logPath = p
-			break
-		}
-	}
+	logPath := c.findAuthLog()
 	if logPath == "" {
 		slog.Debug("no auth log file found")
 
@@ -162,11 +204,6 @@ func (c *SSHSessionsCollector) collectFromAuthLog(ctx context.Context, store *db
 	state, err := store.GetCollectorState(c.Name())
 	if err != nil {
 		return fmt.Errorf("getting collector state: %w", err)
-	}
-
-	type authLogState struct {
-		Offset int64  `json:"offset"`
-		Inode  uint64 `json:"inode,omitempty"`
 	}
 
 	var offset int64
@@ -198,8 +235,10 @@ func (c *SSHSessionsCollector) collectFromAuthLog(ctx context.Context, store *db
 		}
 	}
 
-	// Use tail to read new lines from the auth log.
-	output, err := runCmd(ctx, "tail", "-c", fmt.Sprintf("+%d", offset), logPath)
+	// Use tail to read new lines from the auth log. tail counts bytes from 1, so the first unread byte after
+	// consuming offset bytes is offset+1; starting at offset would re-read the last byte, and the offset would
+	// creep past the end of an idle file until it was mistaken for a rotation and the whole log replayed.
+	output, err := runCmd(ctx, "tail", "-c", fmt.Sprintf("+%d", offset+1), logPath)
 	if err != nil {
 		slog.Debug("reading auth log failed", "error", err, "path", logPath)
 		return nil
