@@ -6,6 +6,7 @@ using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Server.Endpoints.Web;
+using Framlux.FleetManagement.Services.Core.Billing;
 using Framlux.FleetManagement.Services.Core.Models.Machines;
 using Framlux.FleetManagement.Services.Core.Machines;
 using Framlux.FleetManagement.Services.Core.Handlers;
@@ -36,7 +37,7 @@ public class MachineHandlerUpdateTests
     {
         DatabaseRepository repo = CreateRepo(dbFactory);
 
-        return new MachineHandler(repo, repo, repo, repo, repo, Substitute.For<IMachineBillingSync>(), Substitute.For<IApiKeyCacheInvalidator>(), NullLogger<MachineHandler>.Instance);
+        return new MachineHandler(repo, repo, repo, repo, repo, Substitute.For<IMachineBillingSync>(), Substitute.For<IApiKeyCacheInvalidator>(), new QuotaCutoffInvalidator(FakeRedisConnection.Create(), NullLogger<QuotaCutoffInvalidator>.Instance), TestQuotaPause.Nothing(), TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineHandler>.Instance);
     }
 
     private static async Task<long> SeedMachine(

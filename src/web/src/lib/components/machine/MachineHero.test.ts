@@ -4,6 +4,7 @@
 
 import { describe, it, expect } from 'vitest';
 import { render, screen } from '@testing-library/svelte';
+import '@testing-library/jest-dom/vitest';
 import MachineHero from './MachineHero.svelte';
 import { MachineHealthStatus, MachineType, OperatingSystem } from '$lib/api/types';
 import type { MachineDto } from '$lib/api/types';
@@ -24,6 +25,7 @@ function buildMachine(overrides?: Partial<MachineDto>): MachineDto {
 		registeredOn: '2026-01-01T00:00:00Z',
 		isDeleted: false,
 		commandsEnabled: false,
+		isPaused: false,
 		...overrides
 	};
 }
@@ -34,6 +36,7 @@ describe('MachineHero', () => {
 			props: {
 				machine: buildMachine(),
 				isOnline: true,
+				isPaused: false,
 				lastPing: '2026-05-12T10:00:00Z',
 				healthStatus: MachineHealthStatus.Healthy
 			}
@@ -47,6 +50,7 @@ describe('MachineHero', () => {
 			props: {
 				machine: buildMachine(),
 				isOnline: false,
+				isPaused: false,
 				lastPing: null,
 				healthStatus: MachineHealthStatus.Offline
 			}
@@ -62,6 +66,7 @@ describe('MachineHero', () => {
 			props: {
 				machine: buildMachine(),
 				isOnline: true,
+				isPaused: false,
 				lastPing: '2026-05-12T10:00:00Z',
 				healthStatus: MachineHealthStatus.Healthy
 			}
@@ -75,6 +80,7 @@ describe('MachineHero', () => {
 			props: {
 				machine: buildMachine(),
 				isOnline: true,
+				isPaused: false,
 				lastPing: '2026-05-12T10:00:00Z',
 				healthStatus: MachineHealthStatus.Critical
 			}
@@ -88,6 +94,7 @@ describe('MachineHero', () => {
 			props: {
 				machine: buildMachine(),
 				isOnline: false,
+				isPaused: false,
 				lastPing: null,
 				healthStatus: MachineHealthStatus.Offline
 			}
@@ -106,6 +113,7 @@ describe('MachineHero', () => {
 			props: {
 				machine: buildMachine(),
 				isOnline: true,
+				isPaused: false,
 				lastPing: '2026-05-12T10:00:00Z',
 				healthStatus: MachineHealthStatus.Warning
 			}
@@ -120,6 +128,7 @@ describe('MachineHero', () => {
 			props: {
 				machine: buildMachine({ name: 'prod-web-01' }),
 				isOnline: true,
+				isPaused: false,
 				lastPing: null,
 				healthStatus: MachineHealthStatus.Healthy
 			}
@@ -133,6 +142,7 @@ describe('MachineHero', () => {
 			props: {
 				machine: buildMachine(),
 				isOnline: true,
+				isPaused: false,
 				lastPing: new Date(Date.now() - 30 * 1000).toISOString(),
 				healthStatus: MachineHealthStatus.Warning,
 				telemetryLastUpdated: new Date(Date.now() - 6 * 60 * 1000).toISOString()
@@ -149,6 +159,7 @@ describe('MachineHero', () => {
 			props: {
 				machine: buildMachine(),
 				isOnline: true,
+				isPaused: false,
 				lastPing: new Date(Date.now() - 30 * 1000).toISOString(),
 				healthStatus: MachineHealthStatus.Critical,
 				telemetryLastUpdated: new Date(Date.now() - 6 * 60 * 1000).toISOString()
@@ -163,6 +174,7 @@ describe('MachineHero', () => {
 			props: {
 				machine: buildMachine(),
 				isOnline: true,
+				isPaused: false,
 				lastPing: new Date(Date.now() - 30 * 1000).toISOString(),
 				healthStatus: MachineHealthStatus.Warning,
 				telemetryLastUpdated: new Date(Date.now() - 30 * 1000).toISOString()
@@ -177,6 +189,7 @@ describe('MachineHero', () => {
 			props: {
 				machine: buildMachine(),
 				isOnline: false,
+				isPaused: false,
 				lastPing: new Date(Date.now() - 60 * 60 * 1000).toISOString(),
 				healthStatus: MachineHealthStatus.Offline,
 				telemetryLastUpdated: new Date(Date.now() - 6 * 60 * 1000).toISOString()
@@ -191,6 +204,7 @@ describe('MachineHero', () => {
 			props: {
 				machine: buildMachine(),
 				isOnline: true,
+				isPaused: false,
 				lastPing: '2026-05-12T10:00:00Z',
 				healthStatus: MachineHealthStatus.Healthy
 			}
@@ -198,5 +212,61 @@ describe('MachineHero', () => {
 
 		const lastSeen = screen.getByText(/Last seen/);
 		expect(lastSeen).toBeDefined();
+	});
+
+	describe('when the host is paused', () => {
+		function renderPaused(overrides: Record<string, unknown> = {}) {
+			return render(MachineHero, {
+				props: {
+					machine: buildMachine({ isPaused: true }),
+					isOnline: true,
+					isPaused: true,
+					lastPing: '2026-05-12T10:00:00Z',
+					healthStatus: MachineHealthStatus.Critical,
+					...overrides
+				}
+			});
+		}
+
+		it('shows Paused instead of the frozen health status', () => {
+			renderPaused();
+
+			expect(screen.getByLabelText('Status: Paused')).toHaveTextContent('Paused');
+			expect(screen.queryByText('Critical')).toBeNull();
+		});
+
+		it('replaces Online, which is only the heartbeat, with Paused', () => {
+			renderPaused();
+
+			expect(screen.queryByText('Online')).toBeNull();
+			expect(screen.queryByText('Offline')).toBeNull();
+			expect(screen.getAllByText('Paused').length).toBeGreaterThanOrEqual(2);
+		});
+
+		it('says when the agent last checked in rather than when the host was last seen', () => {
+			renderPaused();
+
+			expect(screen.getByText(/Agent last checked in/)).toBeDefined();
+			expect(screen.queryByText(/Last seen/)).toBeNull();
+		});
+
+		it('does not call silent telemetry a fault, since the server discards it by design', () => {
+			renderPaused({ telemetryLastUpdated: new Date(Date.now() - 6 * 60 * 1000).toISOString() });
+
+			expect(screen.queryByText(/no telemetry/i)).toBeNull();
+		});
+
+		it('draws the machine as paused, not as the healthy online host its heartbeat suggests', () => {
+			renderPaused({ healthStatus: MachineHealthStatus.Healthy });
+
+			expect(screen.getByRole('img', { name: 'Paused machine visualization' })).toBeInTheDocument();
+			expect(screen.queryByRole('img', { name: 'Online machine visualization' })).toBeNull();
+		});
+
+		it('shows no last-checked-in line for an agent that has never checked in', () => {
+			renderPaused({ lastPing: null });
+
+			expect(screen.queryByText(/Agent last checked in/)).toBeNull();
+		});
 	});
 });

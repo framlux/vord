@@ -7,9 +7,12 @@ using System.Text.Json;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
+using Framlux.FleetManagement.Grpc.AgentCommon;
 using Framlux.FleetManagement.Grpc.AgentConfiguration;
 using Framlux.FleetManagement.Server.Auth;
+using Framlux.FleetManagement.Services.Core.Billing;
 using Framlux.FleetManagement.Services.Core.Machines;
+using Framlux.FleetManagement.Services.Core.Observability;
 using Framlux.FleetManagement.Services.Core.ServerConfiguration;
 using Google.Protobuf;
 using Grpc.Core;
@@ -28,6 +31,9 @@ public sealed class ConfigurationService : Configuration.ConfigurationBase
     private readonly IMachinePingService _pingService;
     private readonly IMachineRepository _machineRepository;
     private readonly IMachineStateRepository _machineStateRepository;
+    private readonly ISubscriptionService _subscriptionService;
+    private readonly IQuotaPauseService _quotaPause;
+    private readonly QuotaPauseMetrics _quotaPauseMetrics;
     private readonly ServerConfigurationService _configService;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<ConfigurationService> _logger;
@@ -40,6 +46,9 @@ public sealed class ConfigurationService : Configuration.ConfigurationBase
     /// <param name="pingService">The machine ping tracking service</param>
     /// <param name="machineRepository">The machine repository, used to correct a stale machine type</param>
     /// <param name="machineStateRepository">The machine state repository, used to record heartbeats</param>
+    /// <param name="subscriptionService">The subscription service, used to tell an agent its subscription is inactive</param>
+    /// <param name="quotaPause">The quota pause decision, used to tell an agent it is paused and to hold its commands</param>
+    /// <param name="quotaPauseMetrics">The instrument counting pause decisions that could not be made</param>
     /// <param name="configService">The server configuration service for runtime settings</param>
     /// <param name="timeProvider">The time source used to stamp heartbeats at server receipt time</param>
     /// <param name="logger">The application-wide logging service instance</param>
@@ -50,6 +59,9 @@ public sealed class ConfigurationService : Configuration.ConfigurationBase
         IMachinePingService pingService,
         IMachineRepository machineRepository,
         IMachineStateRepository machineStateRepository,
+        ISubscriptionService subscriptionService,
+        IQuotaPauseService quotaPause,
+        QuotaPauseMetrics quotaPauseMetrics,
         ServerConfigurationService configService,
         TimeProvider timeProvider,
         ILogger<ConfigurationService> logger)
@@ -59,6 +71,9 @@ public sealed class ConfigurationService : Configuration.ConfigurationBase
         _pingService = pingService ?? throw new ArgumentNullException(nameof(pingService));
         _machineRepository = machineRepository ?? throw new ArgumentNullException(nameof(machineRepository));
         _machineStateRepository = machineStateRepository ?? throw new ArgumentNullException(nameof(machineStateRepository));
+        _subscriptionService = subscriptionService ?? throw new ArgumentNullException(nameof(subscriptionService));
+        _quotaPause = quotaPause ?? throw new ArgumentNullException(nameof(quotaPause));
+        _quotaPauseMetrics = quotaPauseMetrics ?? throw new ArgumentNullException(nameof(quotaPauseMetrics));
         _configService = configService ?? throw new ArgumentNullException(nameof(configService));
         _timeProvider = timeProvider ?? throw new ArgumentNullException(nameof(timeProvider));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
@@ -148,7 +163,12 @@ public sealed class ConfigurationService : Configuration.ConfigurationBase
             return new AgentPingResponse { Success = false };
         }
 
-        return new AgentPingResponse { Success = true };
+        // Reported on every ping so an agent learns it is paused, or has resumed, within one interval.
+        // An inactive subscription wins over pause. A failed check reports active: the safe answer for
+        // an agent is to keep sending, which ingest will acknowledge and discard if it is in fact paused.
+        IngestRejectionReason state = await ResolveIngestStateAsync(machineId, context);
+
+        return new AgentPingResponse { Success = true, State = state };
     }
 
     /// <summary>
@@ -162,6 +182,13 @@ public sealed class ConfigurationService : Configuration.ConfigurationBase
     {
         long machineId = ResolveMachineId(context, request.MachineId, "GetPendingCommands");
         int tenantId = ExtractTenantIdFromClaims(context);
+
+        // A paused host is not served commands. Nothing is marked delivered, so each stays pending
+        // and goes out on the first poll after the host is active again.
+        if (await IsPausedAsync(tenantId, machineId, QuotaCheckSurface.Commands, context.CancellationToken))
+        {
+            return new GetPendingCommandsResponse();
+        }
 
         List<RemoteCommand> pendingCommands = await _remoteCommandRepository.GetPendingCommandsForMachineAsync(machineId, tenantId, context.CancellationToken);
 
@@ -252,6 +279,61 @@ public sealed class ConfigurationService : Configuration.ConfigurationBase
             context.CancellationToken);
 
         return new AcknowledgeCommandResponse { Success = true };
+    }
+
+    /// <summary>
+    /// Works out the ingest state an agent is told on a ping. An inactive subscription wins over a
+    /// pause, because raising the host limit would not make that tenant's telemetry flow again.
+    /// By now the heartbeat is already recorded, so a subscription lookup that fails reports no state
+    /// rather than failing a ping that did its job. No state is the safe answer: ingest enforces the
+    /// subscription and the pause itself on every envelope, so an agent that is told nothing keeps
+    /// sending and is refused or acknowledged there. A canceled call still propagates, since the
+    /// caller is gone and there is no one to answer.
+    /// </summary>
+    private async Task<IngestRejectionReason> ResolveIngestStateAsync(long machineId, ServerCallContext context)
+    {
+        int tenantId = ExtractTenantIdFromClaims(context);
+
+        bool ingestEligible;
+        try
+        {
+            ingestEligible = await _subscriptionService.IsIngestEligibleAsync(tenantId, context.CancellationToken);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            _quotaPauseMetrics.RecordCheckFailure(QuotaCheckSurface.Ping);
+            _logger.LogWarning(ex, "Subscription lookup failed while answering a ping from machine {MachineId}; reporting no state", machineId);
+
+            return IngestRejectionReason.Unspecified;
+        }
+
+        if (ingestEligible == false)
+        {
+            return IngestRejectionReason.SubscriptionInactive;
+        }
+
+        return await IsPausedAsync(tenantId, machineId, QuotaCheckSurface.Ping, context.CancellationToken)
+            ? IngestRejectionReason.HostPaused
+            : IngestRejectionReason.Unspecified;
+    }
+
+    /// <summary>
+    /// Asks whether a host is paused. A decision that cannot be made is counted against the surface
+    /// that asked and treated as active, so a broken quota check never stops a paying fleet's agents.
+    /// </summary>
+    private async Task<bool> IsPausedAsync(int tenantId, long machineId, QuotaCheckSurface surface, CancellationToken ct)
+    {
+        try
+        {
+            return await _quotaPause.IsPausedAsync(tenantId, machineId, ct);
+        }
+        catch (QuotaCheckUnavailableException ex)
+        {
+            _quotaPauseMetrics.RecordCheckFailure(surface);
+            _logger.LogWarning(ex, "Quota pause check failed for machine {MachineId}; treating as active", machineId);
+
+            return false;
+        }
     }
 
     /// <summary>

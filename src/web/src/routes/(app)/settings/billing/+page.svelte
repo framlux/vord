@@ -63,7 +63,15 @@
 		Team: 'Everything in Pro plus custom alert rules, audit log, SSO, and 1-year retention.'
 	};
 
-	// Projected cost: unit amount per machine times current machine count
+	// The Pro tier's host limit, as seeded for the Pro row of TierFeatureLimits by InitialMigration.
+	// The catalog carries prices only, so the Team to Pro confirmation has to know it from here.
+	const PRO_MACHINE_LIMIT = 1000;
+
+	// What the tier bills for: hosts beyond the limit are paused and not charged, so the registered
+	// count overstates the run rate. It is null on tiers that are not billed per host.
+	const billedMachineCount = $derived(subscription?.billableMachineCount ?? subscription?.machineCount ?? 0);
+
+	// Projected cost: unit amount per machine times the machines billed
 	const projectedCostCents: number | null = $derived.by(() => {
 		if (upcomingInvoice === null || subscription === null) {
 			return null;
@@ -72,7 +80,7 @@
 			return null;
 		}
 
-		return upcomingInvoice.unitAmountCents * subscription.machineCount;
+		return upcomingInvoice.unitAmountCents * billedMachineCount;
 	});
 
 	// Discount/credits detection from upcoming invoice
@@ -651,6 +659,9 @@
 												<li>Custom alert rules will be disabled (default rules remain)</li>
 												<li>Audit log access will be removed</li>
 												<li>Data retention will be reduced to 60 days</li>
+												{#if subscription !== null && subscription.machineCount > PRO_MACHINE_LIMIT}
+													<li>Hosts beyond {PRO_MACHINE_LIMIT} will be paused immediately; your oldest stay active.</li>
+												{/if}
 											</ul>
 											<div class="mt-4 flex gap-3">
 												<form method="POST" action="?/downgrade">
@@ -697,7 +708,7 @@
 											The following changes will apply:
 										</p>
 										<ul class="mt-2 list-inside list-disc text-sm text-amber-700 dark:text-amber-300">
-											<li>Machine limit drops to 3. Existing hosts are not removed, but new hosts cannot be added while you have 3 or more.</li>
+											<li>Hosts beyond 3 are paused; your 3 oldest stay active. No hosts are removed.</li>
 											<li>Data retention will be reduced to 1 day</li>
 											<li>All alerting will be disabled</li>
 											{#if isTeam}
@@ -746,8 +757,7 @@
 												Your paid plan ends at the end of the current billing period
 												{#if subscription !== null && subscription.currentPeriodEnd !== null}
 													on {formatPeriodEnd(subscription.currentPeriodEnd)}
-												{/if}, and your account moves to the Free plan with its limits. Hosts are not removed.
-												To stop collecting data from a host, uninstall the agent and remove the host from its page.
+												{/if}, and your account moves to the Free plan with its limits. Hosts beyond the Free limit are paused; your oldest stay active.
 											</p>
 											<div class="mt-4 flex gap-3">
 												<form method="POST" action="?/cancel">
@@ -816,7 +826,7 @@
 				{#if projectedCostCents !== null}
 					<div>
 						<p class="text-xs text-surface-500 dark:text-surface-400">
-							Current run rate ({subscription?.machineCount ?? 0} {subscription?.machineCount === 1 ? 'machine' : 'machines'})
+							Current run rate ({billedMachineCount} {billedMachineCount === 1 ? 'machine' : 'machines'})
 						</p>
 						<p class="mt-1 text-2xl font-bold text-surface-900 dark:text-surface-50">
 							{formatCents(projectedCostCents, upcomingInvoice.currency)}<span class="text-sm font-normal text-surface-500">/mo</span>

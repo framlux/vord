@@ -85,6 +85,7 @@ public static class ObservabilityServiceCollectionExtensions
         AddInitialisable<IntegrationMetrics>(services);
         AddInitialisable<RegistrationMetrics>(services);
         AddInitialisable<BillingMetrics>(services);
+        AddInitialisable<QuotaPauseMetrics>(services);
         AddInitialisable<AlertPipelineMetrics>(services);
         AddInitialisable<AuthMetrics>(services);
         AddInitialisable<ResilienceMetrics>(services);

@@ -55,4 +55,10 @@ describe('dashboard +page.server load', () => {
 
 		expect(apiMock.getFleetOverview).toHaveBeenCalledWith(expect.objectContaining({ page: 1, pageSize: 1 }));
 	});
+
+	it('passes the paused status filter through to the API', async () => {
+		await load(makeLoadEvent('?status=paused'));
+
+		expect(apiMock.getFleetOverview).toHaveBeenCalledWith(expect.objectContaining({ status: 'paused' }));
+	});
 });

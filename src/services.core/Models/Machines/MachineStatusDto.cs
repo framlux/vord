@@ -15,6 +15,12 @@ public sealed class MachineStatusDto
     public bool IsOnline { get; set; }
 
     /// <summary>
+    /// Whether the machine is paused for exceeding the tenant's machine limit. A paused machine is
+    /// shown as paused in place of its health.
+    /// </summary>
+    public bool IsPaused { get; set; }
+
+    /// <summary>
     /// The last time the machine sent a ping.
     /// </summary>
     public DateTimeOffset? LastPing { get; set; }

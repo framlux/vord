@@ -13,6 +13,7 @@ package agent;
 // package, so the generated Go type is already in scope and C# resolves it through the
 // AgentRegistration namespace.
 import "AgentRegistration.proto";
+import "AgentCommon.proto";
 
 service Configuration {
     rpc GetConfiguration (GetConfigurationRequest) returns (GetConfigurationResponse);
@@ -75,6 +76,8 @@ message AgentPingRequest {
 
 message AgentPingResponse {
     bool success = 1;
+    // The pause or inactive-subscription reason when the server is not taking this machine's telemetry, else UNSPECIFIED.
+    IngestRejectionReason state = 2;
 }
 
 message GetPendingCommandsRequest {

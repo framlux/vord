@@ -75,6 +75,9 @@ function makeSubscription(overrides: Partial<SubscriptionDto> = {}): Subscriptio
         webhookCount: 0,
         memberLimit: 5,
         memberCount: 1,
+        pausedMachineCount: 0,
+        billableMachineCount: null,
+        machineLimitIsCustom: false,
         ...overrides
     };
 }
@@ -328,11 +331,11 @@ describe('AppShell', () => {
                     user: makeUser({
                         tenants: [{ tenantId: 1, tenantName: 'Acme Corp', role: String(UserAccountRole.MachineAdmin) }]
                     }),
-                    subscription: makeSubscription({ tier: 'Free', machineLimit: 3, machineCount: 7 })
+                    subscription: makeSubscription({ tier: 'Free', machineLimit: 3, machineCount: 7, pausedMachineCount: 4 })
                 }
             });
 
-            expect(screen.getByRole('status')).toHaveTextContent('7 hosts on a 3-host plan.');
+            expect(screen.getByRole('status')).toHaveTextContent('4 hosts are paused: your plan keeps your 3 oldest hosts active.');
         });
     });
 

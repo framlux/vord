@@ -38,6 +38,7 @@ proto:
 		--go_out=internal/proto/agent --go_opt=paths=source_relative \
 		--go-grpc_out=internal/proto/agent --go-grpc_opt=paths=source_relative \
 		-I ../grpc/protos \
+		../grpc/protos/AgentCommon.proto \
 		../grpc/protos/AgentRegistration.proto \
 		../grpc/protos/AgentConfiguration.proto \
 		../grpc/protos/AgentTelemetry.proto

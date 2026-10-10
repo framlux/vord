@@ -23,6 +23,18 @@ public sealed class MachineDetailDto
     /// <summary>Whether the machine is considered online.</summary>
     public bool IsOnline { get; set; }
 
+    /// <summary>
+    /// Whether the machine is paused for exceeding the tenant's machine limit. The metrics below are
+    /// then what it reported before it was paused.
+    /// </summary>
+    public bool IsPaused { get; set; }
+
+    /// <summary>
+    /// The machine's 1-based position in id order among the tenant's registered machines, which is the
+    /// position the machine limit is counted from: a machine is active while this is within the limit.
+    /// </summary>
+    public int? ActiveRank { get; set; }
+
     /// <summary>Last ping timestamp.</summary>
     public DateTimeOffset? LastPing { get; set; }
 

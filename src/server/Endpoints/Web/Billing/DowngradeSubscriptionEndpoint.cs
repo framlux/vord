@@ -40,6 +40,8 @@ public sealed class DowngradeSubscriptionEndpoint : Endpoint<DowngradeSubscripti
     private readonly DowngradeGuardService _downgradeGuardService;
     private readonly IDowngradeCleanupService _downgradeCleanupService;
     private readonly RetentionReclassifyDispatcher _reclassifyDispatcher;
+    private readonly QuotaCutoffInvalidator _quotaInvalidator;
+    private readonly HostsPausedAuditWriter _hostsPausedAudit;
     private readonly ILogger<DowngradeSubscriptionEndpoint> _logger;
 
     /// <summary>
@@ -57,6 +59,8 @@ public sealed class DowngradeSubscriptionEndpoint : Endpoint<DowngradeSubscripti
         DowngradeGuardService downgradeGuardService,
         IDowngradeCleanupService downgradeCleanupService,
         RetentionReclassifyDispatcher reclassifyDispatcher,
+        QuotaCutoffInvalidator quotaInvalidator,
+        HostsPausedAuditWriter hostsPausedAudit,
         ILogger<DowngradeSubscriptionEndpoint> logger)
     {
         _deploymentMode = deploymentMode;
@@ -70,6 +74,8 @@ public sealed class DowngradeSubscriptionEndpoint : Endpoint<DowngradeSubscripti
         _downgradeGuardService = downgradeGuardService;
         _downgradeCleanupService = downgradeCleanupService;
         _reclassifyDispatcher = reclassifyDispatcher;
+        _quotaInvalidator = quotaInvalidator;
+        _hostsPausedAudit = hostsPausedAudit;
         _logger = logger;
     }
 
@@ -184,6 +190,8 @@ public sealed class DowngradeSubscriptionEndpoint : Endpoint<DowngradeSubscripti
             AuditAction.SubscriptionDowngradeRequested, AuditResourceType.Subscription,
             tenantId.ToString(), "Immediate downgrade from Team to Pro", null), ct);
 
+        await _hostsPausedAudit.WriteIfHostsPausedAsync(tenantId, SubscriptionTier.Pro, null, ct);
+
         // Freeze the Team-only resources in the same transaction as the tier change. The tier write
         // holds the subscription row's lock until the commit, so an agreement being applied waits for
         // the freeze to finish instead of landing between a committed Pro tier and a cleanup that
@@ -195,6 +203,7 @@ public sealed class DowngradeSubscriptionEndpoint : Endpoint<DowngradeSubscripti
         // Post-commit: the immediate Team-to-Pro downgrade narrows effective retention, so the
         // surviving telemetry is reclassified. Queued here rather than inside the transaction above.
         _reclassifyDispatcher.DispatchPending();
+        _quotaInvalidator.DispatchPending();
 
         // Swap the Stripe price (best effort, webhook will also fire)
         Tenant? tenant = await _tenantRepository.GetTenantByIdAsync(tenantId, ct);

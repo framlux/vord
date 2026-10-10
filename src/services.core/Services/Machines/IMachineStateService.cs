@@ -20,7 +20,7 @@ public interface IMachineStateService
     /// <param name="pageSize">The number of machines per page.</param>
     /// <param name="tenantId">The tenant ID of the requesting user.</param>
     /// <param name="search">Optional search filter for name, hostname, or IP.</param>
-    /// <param name="statusFilter">Optional health status filter (healthy, warning, critical, offline).</param>
+    /// <param name="statusFilter">Optional status filter (healthy, warning, critical, offline, paused). The health statuses never match a paused machine.</param>
     /// <param name="sortBy">Sort field (name, status, cpu, memory, disk).</param>
     /// <param name="sortDir">Sort direction (asc, desc).</param>
     /// <param name="ct">Cancellation token.</param>

@@ -2,6 +2,7 @@
 // Licensed under the Functional Source License, Version 1.1, ALv2 Future License
 // See LICENSE for details.
 
+using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Test.Infrastructure;
@@ -923,10 +924,12 @@ public class MachineStateRepositoryTests
         s3.SecurityUpdates = 7;
         await dbFactory.Context.InsertAsync(s3);
 
-        (List<(short HealthStatus, int Count)> healthCounts, int totalSecurityUpdates) = await repo.GetFleetHealthAggregationAsync(tenantId);
+        (List<(short HealthStatus, int Count)> healthCounts, int totalSecurityUpdates, int pausedCount) =
+            await repo.GetFleetHealthAggregationAsync(tenantId, QuotaCutoffKind.None, 0);
 
         await Assert.That(healthCounts.Count).IsEqualTo(3);
         await Assert.That(totalSecurityUpdates).IsEqualTo(15);
+        await Assert.That(pausedCount).IsEqualTo(0);
 
         // Verify each health status has exactly 1 machine
         (short HealthStatus, int Count) healthyGroup = healthCounts.First(h => h.HealthStatus == 0);
@@ -948,10 +951,12 @@ public class MachineStateRepositoryTests
         Tenant tenant = TestDataBuilder.BuildTenant(createdByUserId: userId);
         int tenantId = await dbFactory.Context.InsertWithInt32IdentityAsync(tenant);
 
-        (List<(short HealthStatus, int Count)> healthCounts, int totalSecurityUpdates) = await repo.GetFleetHealthAggregationAsync(tenantId);
+        (List<(short HealthStatus, int Count)> healthCounts, int totalSecurityUpdates, int pausedCount) =
+            await repo.GetFleetHealthAggregationAsync(tenantId, QuotaCutoffKind.None, 0);
 
         await Assert.That(healthCounts.Count).IsEqualTo(0);
         await Assert.That(totalSecurityUpdates).IsEqualTo(0);
+        await Assert.That(pausedCount).IsEqualTo(0);
     }
 
     // ========== SearchFleetMachinesAsync paging/sort tests (ported from the removed fleet-page method) ==========
@@ -1288,13 +1293,263 @@ public class MachineStateRepositoryTests
         await SeedFleetMachineAsync(dbFactory, tenantId, healthStatus: 0, securityUpdates: 3);
         await SeedFleetMachineAsync(dbFactory, tenantId, healthStatus: 2, securityUpdates: 7);
 
-        (List<(short HealthStatus, int Count)> healthCounts, int totalSecurityUpdates) =
-            await repo.GetFleetHealthAggregationAsync(tenantId, CancellationToken.None);
+        (List<(short HealthStatus, int Count)> healthCounts, int totalSecurityUpdates, int pausedCount) =
+            await repo.GetFleetHealthAggregationAsync(tenantId, QuotaCutoffKind.None, 0, CancellationToken.None);
 
         Dictionary<short, int> byStatus = healthCounts.ToDictionary(x => x.HealthStatus, x => x.Count);
         await Assert.That(byStatus[0]).IsEqualTo(2);
         await Assert.That(byStatus[2]).IsEqualTo(1);
         await Assert.That(totalSecurityUpdates).IsEqualTo(12);
+        await Assert.That(pausedCount).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task GetFleetHealthAggregationAsync_AfterCutoff_CountsPausedMachinesOutsideEveryHealthBucket()
+    {
+        // The two machines past the cutoff last reported warning and offline. Neither may land in
+        // those buckets, because the health they froze at is not a statement about the machine now.
+        using TestDatabaseFactory dbFactory = new();
+        IMachineStateRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+        int tenantId = await SeedTenantAsync(dbFactory);
+        List<long> ids = await SeedFleetMachinesAsync(dbFactory, tenantId, healthStatuses: [0, 0, 2, 1, 3]);
+
+        (List<(short HealthStatus, int Count)> healthCounts, _, int pausedCount) =
+            await repo.GetFleetHealthAggregationAsync(tenantId, QuotaCutoffKind.After, ids[2], CancellationToken.None);
+
+        Dictionary<short, int> byStatus = healthCounts.ToDictionary(x => x.HealthStatus, x => x.Count);
+        await Assert.That(pausedCount).IsEqualTo(2);
+        await Assert.That(byStatus.Keys.Order().ToArray()).IsEquivalentTo(new short[] { 0, 2 });
+        await Assert.That(byStatus[0]).IsEqualTo(2);
+        await Assert.That(byStatus[2]).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task GetFleetHealthAggregationAsync_AfterCutoff_LeavesPausedMachinesOutOfTheSecurityUpdateTotal()
+    {
+        // Updates a paused machine last reported are not something the tenant can act on, so the
+        // fleet total counts only the machines that are being watched.
+        using TestDatabaseFactory dbFactory = new();
+        IMachineStateRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+        int tenantId = await SeedTenantAsync(dbFactory);
+        long first = await SeedFleetMachineAsync(dbFactory, tenantId, healthStatus: 0, securityUpdates: 2);
+        await SeedFleetMachineAsync(dbFactory, tenantId, healthStatus: 1, securityUpdates: 3);
+        await SeedFleetMachineAsync(dbFactory, tenantId, healthStatus: 2, securityUpdates: 40);
+
+        (_, int total, _) = await repo.GetFleetHealthAggregationAsync(tenantId, QuotaCutoffKind.After, first, CancellationToken.None);
+        (_, int noneTotal, _) = await repo.GetFleetHealthAggregationAsync(tenantId, QuotaCutoffKind.None, 0, CancellationToken.None);
+        (_, int allTotal, _) = await repo.GetFleetHealthAggregationAsync(tenantId, QuotaCutoffKind.All, 0, CancellationToken.None);
+
+        await Assert.That(total).IsEqualTo(2);
+        await Assert.That(noneTotal).IsEqualTo(45);
+        await Assert.That(allTotal).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task GetFleetHealthAggregationAsync_AllPaused_LeavesNoHealthBucketAtAll()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        IMachineStateRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+        int tenantId = await SeedTenantAsync(dbFactory);
+        await SeedFleetMachinesAsync(dbFactory, tenantId, healthStatuses: [0, 2, 3]);
+
+        (List<(short HealthStatus, int Count)> healthCounts, _, int pausedCount) =
+            await repo.GetFleetHealthAggregationAsync(tenantId, QuotaCutoffKind.All, 0, CancellationToken.None);
+
+        await Assert.That(healthCounts.Count).IsEqualTo(0);
+        await Assert.That(pausedCount).IsEqualTo(3);
+    }
+
+    [Test]
+    public async Task GetFleetHealthAggregationAsync_AfterCutoff_IgnoresAnotherTenantsMachines()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        IMachineStateRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+        int tenantId = await SeedTenantAsync(dbFactory);
+        int otherTenantId = await SeedTenantAsync(dbFactory);
+        List<long> ids = await SeedFleetMachinesAsync(dbFactory, tenantId, healthStatuses: [0, 0]);
+        await SeedFleetMachinesAsync(dbFactory, otherTenantId, healthStatuses: [0, 0, 0]);
+
+        (_, _, int pausedCount) = await repo.GetFleetHealthAggregationAsync(tenantId, QuotaCutoffKind.After, ids[0], CancellationToken.None);
+
+        await Assert.That(pausedCount).IsEqualTo(1);
+    }
+
+    // ========== SearchFleetMachinesAsync paused tests ==========
+
+    [Test]
+    public async Task SearchFleetMachinesAsync_AfterCutoff_FlagsRowsPastTheCutoffAsPausedAndKeepsTheirHealth()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        IMachineStateRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+        int tenantId = await SeedTenantAsync(dbFactory);
+        List<long> ids = await SeedFleetMachinesAsync(dbFactory, tenantId, healthStatuses: [0, 2, 1, 3]);
+
+        (List<FleetMachineRow> rows, int totalCount) = await repo.SearchFleetMachinesAsync(
+            tenantId, new FleetSearchParameters { PausedAfterId = ids[1], SortBy = "name", Skip = 0, Take = 10 });
+
+        Dictionary<long, FleetMachineRow> byId = rows.ToDictionary(r => r.Id);
+        await Assert.That(totalCount).IsEqualTo(4);
+        await Assert.That(byId[ids[0]].IsPaused).IsFalse();
+        await Assert.That(byId[ids[1]].IsPaused).IsFalse();
+        await Assert.That(byId[ids[2]].IsPaused).IsTrue();
+        await Assert.That(byId[ids[3]].IsPaused).IsTrue();
+
+        // The row still carries the stored health; only the caller decides it is overridden.
+        await Assert.That(byId[ids[3]].HealthStatus).IsEqualTo((short)3);
+    }
+
+    [Test]
+    public async Task SearchFleetMachinesAsync_AllPaused_FlagsEveryRowAsPaused()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        IMachineStateRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+        int tenantId = await SeedTenantAsync(dbFactory);
+        await SeedFleetMachinesAsync(dbFactory, tenantId, healthStatuses: [0, 2]);
+
+        (List<FleetMachineRow> rows, _) = await repo.SearchFleetMachinesAsync(
+            tenantId, new FleetSearchParameters { AllPaused = true, Skip = 0, Take = 10 });
+
+        await Assert.That(rows.All(r => r.IsPaused)).IsTrue();
+        await Assert.That(rows.Count).IsEqualTo(2);
+    }
+
+    [Test]
+    public async Task SearchFleetMachinesAsync_NoCutoff_FlagsNothingAsPaused()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        IMachineStateRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+        int tenantId = await SeedTenantAsync(dbFactory);
+        await SeedFleetMachinesAsync(dbFactory, tenantId, healthStatuses: [0, 3]);
+
+        (List<FleetMachineRow> rows, _) = await repo.SearchFleetMachinesAsync(
+            tenantId, new FleetSearchParameters { Skip = 0, Take = 10 });
+
+        await Assert.That(rows.Any(r => r.IsPaused)).IsFalse();
+    }
+
+    [Test]
+    public async Task SearchFleetMachinesAsync_HealthFilter_NeverMatchesAPausedMachine()
+    {
+        // Offline is the stored health of the last machine, but it is paused, so a health filter for
+        // offline must find nothing rather than a machine that is not being watched.
+        using TestDatabaseFactory dbFactory = new();
+        IMachineStateRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+        int tenantId = await SeedTenantAsync(dbFactory);
+        List<long> ids = await SeedFleetMachinesAsync(dbFactory, tenantId, healthStatuses: [0, 1, 3]);
+
+        (List<FleetMachineRow> offline, int offlineTotal) = await repo.SearchFleetMachinesAsync(
+            tenantId, new FleetSearchParameters { PausedAfterId = ids[0], HealthStatusValues = [3], Skip = 0, Take = 10 });
+        (List<FleetMachineRow> active, int activeTotal) = await repo.SearchFleetMachinesAsync(
+            tenantId, new FleetSearchParameters { PausedAfterId = ids[0], HealthStatusValues = [0, 1, 2, 3], Skip = 0, Take = 10 });
+
+        await Assert.That(offline.Count).IsEqualTo(0);
+        await Assert.That(offlineTotal).IsEqualTo(0);
+        await Assert.That(active.Select(r => r.Id).ToList()).IsEquivalentTo(new List<long> { ids[0] });
+        await Assert.That(activeTotal).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task SearchFleetMachinesAsync_PausedTrue_ReturnsOnlyPausedMachinesAndCountsOnlyThem()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        IMachineStateRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+        int tenantId = await SeedTenantAsync(dbFactory);
+        List<long> ids = await SeedFleetMachinesAsync(dbFactory, tenantId, healthStatuses: [0, 2, 1, 3]);
+
+        // Paging happens in SQL, so the paused predicate must be part of the counted and paged query.
+        (List<FleetMachineRow> page, int totalCount) = await repo.SearchFleetMachinesAsync(
+            tenantId, new FleetSearchParameters { PausedAfterId = ids[1], Paused = true, SortBy = "name", Skip = 1, Take = 1 });
+
+        await Assert.That(totalCount).IsEqualTo(2);
+        await Assert.That(page.Count).IsEqualTo(1);
+        await Assert.That(page[0].IsPaused).IsTrue();
+    }
+
+    [Test]
+    public async Task SearchFleetMachinesAsync_PausedFalse_ReturnsOnlyActiveMachines()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        IMachineStateRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+        int tenantId = await SeedTenantAsync(dbFactory);
+        List<long> ids = await SeedFleetMachinesAsync(dbFactory, tenantId, healthStatuses: [0, 2, 1, 3]);
+
+        (List<FleetMachineRow> rows, int totalCount) = await repo.SearchFleetMachinesAsync(
+            tenantId, new FleetSearchParameters { PausedAfterId = ids[1], Paused = false, Skip = 0, Take = 10 });
+
+        await Assert.That(rows.Select(r => r.Id).Order().ToList()).IsEquivalentTo(new List<long> { ids[0], ids[1] });
+        await Assert.That(totalCount).IsEqualTo(2);
+    }
+
+    [Test]
+    public async Task SearchFleetMachinesAsync_SortByStatus_PutsPausedMachinesAfterEveryHealthStatus()
+    {
+        // The paused machines froze at healthy, warning and healthy. Sorted by their stored health they
+        // would be interleaved with, or ahead of, machines that are actually critical and offline.
+        using TestDatabaseFactory dbFactory = new();
+        IMachineStateRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+        int tenantId = await SeedTenantAsync(dbFactory);
+        List<long> ids = await SeedFleetMachinesAsync(dbFactory, tenantId, healthStatuses: [2, 3, 0, 1, 0]);
+
+        (List<FleetMachineRow> ascending, _) = await repo.SearchFleetMachinesAsync(
+            tenantId, new FleetSearchParameters { PausedAfterId = ids[1], SortBy = "status", Skip = 0, Take = 10 });
+        (List<FleetMachineRow> descending, _) = await repo.SearchFleetMachinesAsync(
+            tenantId, new FleetSearchParameters { PausedAfterId = ids[1], SortBy = "status", SortDescending = true, Skip = 0, Take = 10 });
+
+        await Assert.That(ascending.Count).IsEqualTo(5);
+        await Assert.That(string.Join(",", ascending.Take(2).Select(r => r.Id))).IsEqualTo($"{ids[0]},{ids[1]}");
+        await Assert.That(ascending.Skip(2).All(r => r.IsPaused)).IsTrue();
+
+        // Reversed, the health order inside the active machines flips but the paused bucket stays last.
+        await Assert.That(string.Join(",", descending.Take(2).Select(r => r.Id))).IsEqualTo($"{ids[1]},{ids[0]}");
+        await Assert.That(descending.Skip(2).All(r => r.IsPaused)).IsTrue();
+    }
+
+    [Test]
+    public async Task SearchFleetMachinesAsync_SortByStatusWithNothingPaused_StillOrdersByStoredHealth()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        IMachineStateRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+        int tenantId = await SeedTenantAsync(dbFactory);
+        await SeedFleetMachinesAsync(dbFactory, tenantId, healthStatuses: [3, 1, 0, 2]);
+
+        (List<FleetMachineRow> rows, _) = await repo.SearchFleetMachinesAsync(
+            tenantId, new FleetSearchParameters { SortBy = "status", Skip = 0, Take = 10 });
+
+        await Assert.That(string.Join(",", rows.Select(r => r.HealthStatus))).IsEqualTo("0,1,2,3");
+    }
+
+    [Test]
+    public async Task SearchFleetMachinesAsync_PausedWithoutACutoff_MatchesNothing()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        IMachineStateRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+        int tenantId = await SeedTenantAsync(dbFactory);
+        await SeedFleetMachinesAsync(dbFactory, tenantId, healthStatuses: [0, 3]);
+
+        (List<FleetMachineRow> rows, int totalCount) = await repo.SearchFleetMachinesAsync(
+            tenantId, new FleetSearchParameters { Paused = true, Skip = 0, Take = 10 });
+
+        await Assert.That(rows.Count).IsEqualTo(0);
+        await Assert.That(totalCount).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task SearchFleetMachineIdsAsync_PausedTrue_SelectsExactlyThePausedMachines()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        IMachineStateRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
+        int tenantId = await SeedTenantAsync(dbFactory);
+        List<long> ids = await SeedFleetMachinesAsync(dbFactory, tenantId, healthStatuses: [0, 2, 1, 3]);
+
+        (List<long> selected, int totalCount) = await repo.SearchFleetMachineIdsAsync(
+            tenantId, new FleetSearchParameters { PausedAfterId = ids[1], Paused = true }, 1000);
+        (List<long> offline, int offlineTotal) = await repo.SearchFleetMachineIdsAsync(
+            tenantId, new FleetSearchParameters { PausedAfterId = ids[1], HealthStatusValues = [3] }, 1000);
+
+        await Assert.That(selected).IsEquivalentTo(new List<long> { ids[2], ids[3] });
+        await Assert.That(totalCount).IsEqualTo(2);
+        await Assert.That(offline.Count).IsEqualTo(0);
+        await Assert.That(offlineTotal).IsEqualTo(0);
     }
 
     [Test]
@@ -1303,11 +1558,12 @@ public class MachineStateRepositoryTests
         using TestDatabaseFactory dbFactory = new();
         IMachineStateRepository repo = new Database.Repositories.DatabaseRepository(dbFactory.Context, new NullLogger<Database.Repositories.DatabaseRepository>());
 
-        (List<(short HealthStatus, int Count)> healthCounts, int totalSecurityUpdates) =
-            await repo.GetFleetHealthAggregationAsync(99999, CancellationToken.None);
+        (List<(short HealthStatus, int Count)> healthCounts, int totalSecurityUpdates, int pausedCount) =
+            await repo.GetFleetHealthAggregationAsync(99999, QuotaCutoffKind.None, 0, CancellationToken.None);
 
         await Assert.That(healthCounts.Count).IsEqualTo(0);
         await Assert.That(totalSecurityUpdates).IsEqualTo(0);
+        await Assert.That(pausedCount).IsEqualTo(0);
     }
 
     // ========== GetTelemetryPageByMachineIdsAndTypeAsync / CountTelemetryByMachineIdsAndTypeAsync ==========
@@ -1433,7 +1689,31 @@ public class MachineStateRepositoryTests
         });
     }
 
-    private static async Task SeedFleetMachineAsync(TestDatabaseFactory dbFactory, int tenantId, short healthStatus, int securityUpdates)
+    private static async Task<int> SeedTenantAsync(TestDatabaseFactory dbFactory)
+    {
+        UserAccount user = TestDataBuilder.BuildUser();
+        int userId = await dbFactory.Context.InsertWithInt32IdentityAsync(user);
+        Tenant tenant = TestDataBuilder.BuildTenant(createdByUserId: userId);
+
+        return await dbFactory.Context.InsertWithInt32IdentityAsync(tenant);
+    }
+
+    // Machines are inserted in order, so the returned ids ascend in step with the given statuses.
+    private static async Task<List<long>> SeedFleetMachinesAsync(TestDatabaseFactory dbFactory, int tenantId, short[] healthStatuses)
+    {
+        List<long> ids = [];
+        foreach (short healthStatus in healthStatuses)
+        {
+            Machine machine = TestDataBuilder.BuildMachine(tenantId: tenantId);
+            long machineId = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
+            await dbFactory.Context.InsertAsync(TestDataBuilder.BuildMachineStateSummary(machineId: machineId, tenantId: tenantId, healthStatus: healthStatus));
+            ids.Add(machineId);
+        }
+
+        return ids;
+    }
+
+    private static async Task<long> SeedFleetMachineAsync(TestDatabaseFactory dbFactory, int tenantId, short healthStatus, int securityUpdates)
     {
         Machine machine = TestDataBuilder.BuildMachine(tenantId: tenantId);
         long machineId = await dbFactory.Context.InsertWithInt64IdentityAsync(machine);
@@ -1441,6 +1721,8 @@ public class MachineStateRepositoryTests
         MachineStateSummary summary = TestDataBuilder.BuildMachineStateSummary(machineId: machineId, tenantId: tenantId, healthStatus: healthStatus);
         summary.SecurityUpdates = securityUpdates;
         await dbFactory.Context.InsertAsync(summary);
+
+        return machineId;
     }
 
     // ========== Projection cursor tests ==========

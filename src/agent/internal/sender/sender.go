@@ -21,6 +21,7 @@ import (
 	"github.com/framlux/vord/internal/db"
 	"github.com/framlux/vord/internal/id"
 	"github.com/framlux/vord/internal/jitter"
+	"github.com/framlux/vord/internal/pause"
 	pb "github.com/framlux/vord/internal/proto/agent"
 	"github.com/framlux/vord/internal/state"
 )
@@ -52,7 +53,9 @@ const (
 	initialBackoff = 1 * time.Second
 )
 
-// tierStream holds a per-tier gRPC stream and its mutex.
+// tierStream holds a per-tier gRPC stream and its mutex. The mutex is held for the whole of a send, from writing
+// the envelope to reading its ack, so it is only ever held by sendViaStream and the close paths, and none of them
+// calls out to anything that could want another lock while holding it.
 type tierStream struct {
 	mu     sync.Mutex
 	stream pb.Telemetry_StreamTelemetryClient
@@ -65,6 +68,9 @@ type Sender struct {
 	rs     *state.RuntimeState
 	logger *slog.Logger
 	jit    *jitter.Jitter
+	// pause says whether the server has paused this host. A paused sender sends nothing, and an ack that
+	// reports a pause puts it there.
+	pause *pause.Coordinator
 	// clock supplies the current time for stamping the envelope's AgentTimestamp. Defaults to
 	// time.Now in production; tests inject a fixed closure for deterministic timestamp assertions.
 	clock func() time.Time
@@ -73,13 +79,14 @@ type Sender struct {
 }
 
 // New creates a new Sender.
-func New(store *db.Store, client pb.TelemetryClient, rs *state.RuntimeState, jit *jitter.Jitter) *Sender {
+func New(store *db.Store, client pb.TelemetryClient, rs *state.RuntimeState, jit *jitter.Jitter, pc *pause.Coordinator) *Sender {
 	return &Sender{
 		store:  store,
 		client: client,
 		rs:     rs,
 		logger: slog.Default().With("component", "sender"),
 		jit:    jit,
+		pause:  pc,
 		clock:  time.Now,
 		streams: map[string]*tierStream{
 			"fast": {},
@@ -152,6 +159,14 @@ func (s *Sender) runTier(ctx context.Context, tier string, types []db.TelemetryT
 			}
 			ts.mu.Unlock()
 
+			// A paused host has nothing to flush: the queue was cleared when it paused and the server would
+			// discard anything sent.
+			if s.pause.Paused() {
+				s.logger.Info("skipping shutdown flush, host is paused", "tier", tier)
+
+				return
+			}
+
 			// Attempt a final flush with a short-lived context before exiting.
 			s.logger.Info("flushing remaining telemetry on shutdown", "tier", tier)
 			flushCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -179,7 +194,28 @@ func (s *Sender) runTier(ctx context.Context, tier string, types []db.TelemetryT
 	}
 }
 
+// CloseStreams closes every tier's cached stream so the next send opens a fresh one. A pause calls it to stop
+// holding a stream open to a server that is discarding what it receives.
+//
+// Lock order: each tier lock is taken alone, one after another, and nothing else is held or taken while it is.
+// A send in flight holds its tier lock until its ack is read, so this waits for that send to finish; callers
+// that must not wait (the heartbeat) run it on its own goroutine.
+func (s *Sender) CloseStreams() {
+	for _, ts := range s.streams {
+		ts.mu.Lock()
+		if ts.stream != nil {
+			ts.stream.CloseSend()
+			ts.stream = nil
+		}
+		ts.mu.Unlock()
+	}
+}
+
 func (s *Sender) sendBatch(ctx context.Context, tier string, types []db.TelemetryType) {
+	if s.pause.Paused() {
+		return
+	}
+
 	items, err := s.store.DequeueTelemetryByTypes(types, maxBatchSize)
 	if err != nil {
 		s.logger.Warn("failed to dequeue telemetry", "tier", tier, "error", err)
@@ -222,6 +258,15 @@ func (s *Sender) sendBatch(ctx context.Context, tier string, types []db.Telemetr
 		if markErr := s.store.MarkTelemetryPending(ids); markErr != nil {
 			s.logger.Error("failed to mark telemetry back to pending", "error", markErr)
 		}
+	}
+
+	// A paused host's batch is acknowledged as a success and discarded, so it is already marked completed
+	// above; what matters here is that the host must now stop sending. This runs after sendViaStream has
+	// released the tier lock, because entering the pause runs hooks that close the streams and take it again.
+	// An ack only ever starts or renews a pause: a reason this agent does not know is ignored rather than
+	// read as "resumed", and a plain ack proves nothing about a pause that is already in force.
+	if reason := pause.FromProto(ack.Reason); reason != pause.None {
+		s.pause.Observe(reason)
 	}
 }
 

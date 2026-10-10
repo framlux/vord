@@ -6,6 +6,7 @@ using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Services.Core.Models.Machines;
 using Framlux.FleetManagement.Services.Core.Handlers;
+using Framlux.FleetManagement.Services.Core.Billing;
 using Framlux.FleetManagement.Services.Core.Infrastructure;
 using Framlux.FleetManagement.Services.Core.Machines;
 using Framlux.FleetManagement.Test.Infrastructure;
@@ -38,13 +39,14 @@ public class MachineDetailHandlerTests
     private static MachineDetailHandler CreateHandler(
         TestDatabaseFactory dbFactory,
         InMemoryMachinePingService? pingService = null,
-        IMachineStateService? stateService = null)
+        IMachineStateService? stateService = null,
+        IQuotaPauseService? quotaPause = null)
     {
         pingService ??= new InMemoryMachinePingService();
         stateService ??= Substitute.For<IMachineStateService>();
         DatabaseRepository repo = CreateRepo(dbFactory);
 
-        return new MachineDetailHandler(repo, repo, pingService, stateService);
+        return new MachineDetailHandler(repo, repo, pingService, stateService, quotaPause ?? TestQuotaPause.Nothing(), TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineDetailHandler>.Instance);
     }
 
     private static async Task SeedSummary(TestDatabaseFactory dbFactory, long machineId, short healthStatus)
@@ -388,5 +390,116 @@ public class MachineDetailHandlerTests
         await Assert.That(result.IsSuccess).IsTrue();
         await Assert.That(result.Data!.IsOnline).IsFalse();
         await Assert.That(result.Data!.HealthStatus).IsEqualTo(MachineHealthStatus.Offline);
+    }
+
+    // ========== Paused state ==========
+
+    [Test]
+    public async Task GetStatusAsync_MachinePastTheCutoff_IsPausedWhateverHealthItFroze()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        long active = await SeedMachine(dbFactory);
+        long paused = await SeedMachine(dbFactory);
+        await SeedSummary(dbFactory, active, healthStatus: 0);
+        await SeedSummary(dbFactory, paused, healthStatus: 2);
+        MachineDetailHandler handler = CreateHandler(dbFactory, quotaPause: TestQuotaPause.With(QuotaCutoff.After(active), 1));
+
+        ServiceResult<MachineStatusDto> activeResult = await handler.GetStatusAsync(active, 1, CancellationToken.None);
+        ServiceResult<MachineStatusDto> pausedResult = await handler.GetStatusAsync(paused, 1, CancellationToken.None);
+
+        await Assert.That(activeResult.Data!.IsPaused).IsFalse();
+        await Assert.That(pausedResult.Data!.IsPaused).IsTrue();
+
+        // The stored health is still reported; the caller shows Paused in place of it.
+        await Assert.That(pausedResult.Data!.HealthStatus).IsEqualTo(MachineHealthStatus.Critical);
+    }
+
+    [Test]
+    public async Task GetStatusAsync_PauseDecisionUnavailable_ReportsNotPausedAndStillSucceeds()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        long machineId = await SeedMachine(dbFactory);
+        await SeedSummary(dbFactory, machineId, healthStatus: 0);
+        MachineDetailHandler handler = CreateHandler(dbFactory, quotaPause: TestQuotaPause.Unavailable());
+
+        ServiceResult<MachineStatusDto> result = await handler.GetStatusAsync(machineId, 1, CancellationToken.None);
+
+        await Assert.That(result.IsSuccess).IsTrue();
+        await Assert.That(result.Data!.IsPaused).IsFalse();
+    }
+
+    [Test]
+    public async Task GetDetailAsync_MachinePastTheCutoff_IsPaused()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        long active = await SeedMachine(dbFactory);
+        long paused = await SeedMachine(dbFactory);
+        MachineDetailHandler handler = CreateHandler(dbFactory, quotaPause: TestQuotaPause.With(QuotaCutoff.After(active), 1));
+
+        ServiceResult<MachineDto> activeResult = await handler.GetDetailAsync(active, 1, CancellationToken.None);
+        ServiceResult<MachineDto> pausedResult = await handler.GetDetailAsync(paused, 1, CancellationToken.None);
+
+        await Assert.That(activeResult.Data!.IsPaused).IsFalse();
+        await Assert.That(pausedResult.Data!.IsPaused).IsTrue();
+    }
+
+    [Test]
+    public async Task GetDetailAsync_EveryMachinePaused_IsPaused()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        long machineId = await SeedMachine(dbFactory);
+        MachineDetailHandler handler = CreateHandler(dbFactory, quotaPause: TestQuotaPause.With(QuotaCutoff.All, 1));
+
+        ServiceResult<MachineDto> result = await handler.GetDetailAsync(machineId, 1, CancellationToken.None);
+
+        await Assert.That(result.Data!.IsPaused).IsTrue();
+    }
+
+    [Test]
+    public async Task Constructor_NullQuotaPause_Throws()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        DatabaseRepository repo = CreateRepo(dbFactory);
+
+        ArgumentNullException? ex = await Assert.ThrowsAsync<ArgumentNullException>(() =>
+        {
+            _ = new MachineDetailHandler(repo, repo, new InMemoryMachinePingService(), Substitute.For<IMachineStateService>(), null!, TestMetricsFactory.CreateQuotaPauseMetrics(), NullLogger<MachineDetailHandler>.Instance);
+
+            return Task.CompletedTask;
+        });
+
+        await Assert.That(ex!.ParamName).IsEqualTo("quotaPause");
+    }
+
+    [Test]
+    public async Task Constructor_NullQuotaPauseMetrics_Throws()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        DatabaseRepository repo = CreateRepo(dbFactory);
+
+        ArgumentNullException? ex = await Assert.ThrowsAsync<ArgumentNullException>(() =>
+        {
+            _ = new MachineDetailHandler(repo, repo, new InMemoryMachinePingService(), Substitute.For<IMachineStateService>(), TestQuotaPause.Nothing(), null!, NullLogger<MachineDetailHandler>.Instance);
+
+            return Task.CompletedTask;
+        });
+
+        await Assert.That(ex!.ParamName).IsEqualTo("quotaPauseMetrics");
+    }
+
+    [Test]
+    public async Task Constructor_NullLogger_Throws()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        DatabaseRepository repo = CreateRepo(dbFactory);
+
+        ArgumentNullException? ex = await Assert.ThrowsAsync<ArgumentNullException>(() =>
+        {
+            _ = new MachineDetailHandler(repo, repo, new InMemoryMachinePingService(), Substitute.For<IMachineStateService>(), TestQuotaPause.Nothing(), TestMetricsFactory.CreateQuotaPauseMetrics(), null!);
+
+            return Task.CompletedTask;
+        });
+
+        await Assert.That(ex!.ParamName).IsEqualTo("logger");
     }
 }

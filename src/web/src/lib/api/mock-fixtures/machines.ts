@@ -29,7 +29,8 @@ const baseMachines: MachineDto[] = [
 		lastPing: secondsAgo(12),
 		registeredOn: daysAgo(412),
 		isDeleted: false,
-		commandsEnabled: true
+		commandsEnabled: true,
+		isPaused: false
 	},
 	{
 		id: 2,
@@ -45,7 +46,8 @@ const baseMachines: MachineDto[] = [
 		lastPing: secondsAgo(8),
 		registeredOn: daysAgo(412),
 		isDeleted: false,
-		commandsEnabled: true
+		commandsEnabled: true,
+		isPaused: false
 	},
 	{
 		id: 3,
@@ -61,7 +63,8 @@ const baseMachines: MachineDto[] = [
 		lastPing: secondsAgo(4),
 		registeredOn: daysAgo(503),
 		isDeleted: false,
-		commandsEnabled: true
+		commandsEnabled: true,
+		isPaused: false
 	},
 	{
 		id: 4,
@@ -77,7 +80,8 @@ const baseMachines: MachineDto[] = [
 		lastPing: secondsAgo(6),
 		registeredOn: daysAgo(503),
 		isDeleted: false,
-		commandsEnabled: true
+		commandsEnabled: true,
+		isPaused: false
 	},
 	{
 		id: 5,
@@ -93,7 +97,8 @@ const baseMachines: MachineDto[] = [
 		lastPing: secondsAgo(9),
 		registeredOn: daysAgo(287),
 		isDeleted: false,
-		commandsEnabled: true
+		commandsEnabled: true,
+		isPaused: false
 	},
 	{
 		id: 6,
@@ -109,7 +114,8 @@ const baseMachines: MachineDto[] = [
 		lastPing: secondsAgo(11),
 		registeredOn: daysAgo(287),
 		isDeleted: false,
-		commandsEnabled: true
+		commandsEnabled: true,
+		isPaused: false
 	},
 	{
 		id: 7,
@@ -125,7 +131,8 @@ const baseMachines: MachineDto[] = [
 		lastPing: secondsAgo(15),
 		registeredOn: daysAgo(189),
 		isDeleted: false,
-		commandsEnabled: true
+		commandsEnabled: true,
+		isPaused: false
 	},
 	{
 		id: 8,
@@ -141,7 +148,8 @@ const baseMachines: MachineDto[] = [
 		lastPing: secondsAgo(13),
 		registeredOn: daysAgo(189),
 		isDeleted: false,
-		commandsEnabled: true
+		commandsEnabled: true,
+		isPaused: false
 	},
 	{
 		id: 9,
@@ -157,7 +165,8 @@ const baseMachines: MachineDto[] = [
 		lastPing: secondsAgo(21),
 		registeredOn: daysAgo(94),
 		isDeleted: false,
-		commandsEnabled: true
+		commandsEnabled: true,
+		isPaused: false
 	},
 	{
 		id: 10,
@@ -173,7 +182,8 @@ const baseMachines: MachineDto[] = [
 		lastPing: secondsAgo(7),
 		registeredOn: daysAgo(94),
 		isDeleted: false,
-		commandsEnabled: true
+		commandsEnabled: true,
+		isPaused: false
 	},
 	{
 		id: 11,
@@ -189,7 +199,8 @@ const baseMachines: MachineDto[] = [
 		lastPing: secondsAgo(22),
 		registeredOn: daysAgo(62),
 		isDeleted: false,
-		commandsEnabled: true
+		commandsEnabled: true,
+		isPaused: false
 	},
 	{
 		id: 12,
@@ -205,7 +216,8 @@ const baseMachines: MachineDto[] = [
 		lastPing: secondsAgo(3),
 		registeredOn: daysAgo(62),
 		isDeleted: false,
-		commandsEnabled: true
+		commandsEnabled: true,
+		isPaused: false
 	},
 	{
 		id: 13,
@@ -221,7 +233,8 @@ const baseMachines: MachineDto[] = [
 		lastPing: secondsAgo(18),
 		registeredOn: daysAgo(341),
 		isDeleted: false,
-		commandsEnabled: true
+		commandsEnabled: true,
+		isPaused: false
 	},
 	{
 		id: 14,
@@ -237,7 +250,8 @@ const baseMachines: MachineDto[] = [
 		lastPing: secondsAgo(14),
 		registeredOn: daysAgo(341),
 		isDeleted: false,
-		commandsEnabled: true
+		commandsEnabled: true,
+		isPaused: false
 	},
 	{
 		id: 15,
@@ -253,7 +267,8 @@ const baseMachines: MachineDto[] = [
 		lastPing: secondsAgo(20),
 		registeredOn: daysAgo(341),
 		isDeleted: false,
-		commandsEnabled: true
+		commandsEnabled: true,
+		isPaused: false
 	},
 	{
 		id: 16,
@@ -269,7 +284,8 @@ const baseMachines: MachineDto[] = [
 		lastPing: secondsAgo(5),
 		registeredOn: daysAgo(48),
 		isDeleted: false,
-		commandsEnabled: true
+		commandsEnabled: true,
+		isPaused: false
 	},
 	{
 		id: 17,
@@ -285,7 +301,8 @@ const baseMachines: MachineDto[] = [
 		lastPing: daysAgo(2),
 		registeredOn: daysAgo(721),
 		isDeleted: false,
-		commandsEnabled: false
+		commandsEnabled: false,
+		isPaused: false
 	},
 	{
 		id: 18,
@@ -301,7 +318,8 @@ const baseMachines: MachineDto[] = [
 		lastPing: secondsAgo(28),
 		registeredOn: daysAgo(154),
 		isDeleted: false,
-		commandsEnabled: true
+		commandsEnabled: true,
+		isPaused: false
 	}
 ];
 
@@ -330,6 +348,8 @@ function sparseDetail(machine: MachineDto, healthStatus: MachineHealthStatus): M
 		isOnline: machine.isOnline,
 		lastPing: machine.lastPing,
 		healthStatus,
+		isPaused: machine.isPaused,
+		activeRank: machine.id,
 		systemInfo: null,
 		osVersion: null,
 		cpuUsage: null,
@@ -356,6 +376,8 @@ const web01Detail: MachineDetailDto = {
 	isOnline: true,
 	lastPing: secondsAgo(12),
 	healthStatus: MachineHealthStatus.Healthy,
+	isPaused: false,
+	activeRank: 1,
 	systemInfo: {
 		hostname: 'web-01.prod.lan',
 		uuid: '4c4c4544-0054-5210-8044-b4c04f4b4b32',
@@ -497,6 +519,8 @@ const dbPrimaryDetail: MachineDetailDto = {
 	isOnline: true,
 	lastPing: secondsAgo(4),
 	healthStatus: MachineHealthStatus.Warning,
+	isPaused: false,
+	activeRank: 3,
 	systemInfo: {
 		hostname: 'db-primary.prod.lan',
 		uuid: '00000000-0000-1000-8000-7c83fec6f4a4',

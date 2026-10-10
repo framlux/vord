@@ -6,8 +6,10 @@ using System.Text.Json;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
+using Framlux.FleetManagement.Services.Core.Billing;
 using Framlux.FleetManagement.Services.Core.Models;
 using Framlux.FleetManagement.Services.Core.Models.Machines;
+using Framlux.FleetManagement.Services.Core.Observability;
 
 namespace Framlux.FleetManagement.Services.Core.Machines;
 
@@ -21,15 +23,21 @@ namespace Framlux.FleetManagement.Services.Core.Machines;
 public sealed class MachineSearchService
 {
     private readonly IServiceScopeFactory _scopeFactory;
+    private readonly QuotaPauseMetrics _quotaPauseMetrics;
+    private readonly ILogger<MachineSearchService> _logger;
 
     /// <summary>
     /// Creates a new instance of the <see cref="MachineSearchService"/> class.
     /// </summary>
-    public MachineSearchService(IServiceScopeFactory scopeFactory)
+    public MachineSearchService(IServiceScopeFactory scopeFactory, QuotaPauseMetrics quotaPauseMetrics, ILogger<MachineSearchService> logger)
     {
         ArgumentNullException.ThrowIfNull(scopeFactory);
+        ArgumentNullException.ThrowIfNull(quotaPauseMetrics);
+        ArgumentNullException.ThrowIfNull(logger);
 
         _scopeFactory = scopeFactory;
+        _quotaPauseMetrics = quotaPauseMetrics;
+        _logger = logger;
     }
 
     /// <summary>
@@ -65,8 +73,9 @@ public sealed class MachineSearchService
 
         using IServiceScope scope = _scopeFactory.CreateScope();
         IMachineStateRepository machineStateRepo = scope.ServiceProvider.GetRequiredService<IMachineStateRepository>();
+        QuotaCutoff cutoff = await GetCutoffAsync(scope, tenantId.Value, ct);
 
-        return await SearchSqlPaginatedAsync(machineStateRepo, criteria, tenantId.Value, page, pageSize, ct);
+        return await SearchSqlPaginatedAsync(machineStateRepo, criteria, cutoff, tenantId.Value, page, pageSize, ct);
     }
 
     /// <summary>
@@ -90,9 +99,11 @@ public sealed class MachineSearchService
         using IServiceScope scope = _scopeFactory.CreateScope();
         IMachineStateRepository machineStateRepo = scope.ServiceProvider.GetRequiredService<IMachineStateRepository>();
 
+        QuotaCutoff cutoff = await GetCutoffAsync(scope, tenantId.Value, ct);
+
         // Page and page size are irrelevant here, but BuildSearchParameters needs them to compute
         // Skip and Take, which the ids query then ignores. Pass values that cannot underflow.
-        FleetSearchParameters searchParams = BuildSearchParameters(criteria, 1, 1);
+        FleetSearchParameters searchParams = BuildSearchParameters(criteria, cutoff, 1, 1);
 
         (List<long> ids, int totalCount) = await machineStateRepo.SearchFleetMachineIdsAsync(
             tenantId.Value, searchParams, MachineSelectionLimits.MaxSelectableIds, ct);
@@ -112,12 +123,13 @@ public sealed class MachineSearchService
     private static async Task<PaginatedResponse<FleetMachineDto>> SearchSqlPaginatedAsync(
         IMachineStateRepository machineStateRepo,
         MachineSearchCriteria criteria,
+        QuotaCutoff cutoff,
         int tenantId,
         int page,
         int pageSize,
         CancellationToken ct)
     {
-        FleetSearchParameters searchParams = BuildSearchParameters(criteria, page, pageSize);
+        FleetSearchParameters searchParams = BuildSearchParameters(criteria, cutoff, page, pageSize);
         (List<FleetMachineRow> pagedRows, int totalCount) = await machineStateRepo.SearchFleetMachinesAsync(tenantId, searchParams, ct);
 
         // Build DTOs for the paged subset only. Health status comes straight from the swept
@@ -134,7 +146,14 @@ public sealed class MachineSearchService
         };
     }
 
-    private static FleetSearchParameters BuildSearchParameters(MachineSearchCriteria criteria, int page, int pageSize)
+    private async Task<QuotaCutoff> GetCutoffAsync(IServiceScope scope, int tenantId, CancellationToken ct)
+    {
+        IQuotaPauseService quotaPause = scope.ServiceProvider.GetRequiredService<IQuotaPauseService>();
+
+        return await QuotaCutoffDisplay.GetOrNoneAsync(quotaPause, _quotaPauseMetrics, _logger, tenantId, ct);
+    }
+
+    private static FleetSearchParameters BuildSearchParameters(MachineSearchCriteria criteria, QuotaCutoff cutoff, int page, int pageSize)
     {
         List<short>? healthStatusValues = null;
         if (string.IsNullOrWhiteSpace(criteria.HealthStatus) == false)
@@ -177,6 +196,9 @@ public sealed class MachineSearchService
             HasDiskHealthIssue = criteria.HasDiskHealthIssue,
             HasHardwareIssue = criteria.HasHardwareIssue,
             HealthStatusValues = healthStatusValues,
+            PausedAfterId = cutoff.PausedAfterId,
+            AllPaused = cutoff.AllPaused,
+            Paused = criteria.Paused,
             LastSeenAfter = criteria.LastSeenAfter,
             LastSeenBefore = criteria.LastSeenBefore,
             SortBy = criteria.SortBy,
@@ -207,6 +229,7 @@ public sealed class MachineSearchService
                 CpuUsagePercent = row.CpuUsagePercent,
                 MemoryUsagePercent = row.MemoryUsagePercent,
                 IsOnline = isOnline,
+                IsPaused = row.IsPaused,
                 LastPing = lastPing,
                 PendingUpdates = row.PendingUpdates ?? 0,
                 SecurityUpdates = row.SecurityUpdates ?? 0,

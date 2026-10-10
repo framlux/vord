@@ -59,3 +59,16 @@ export function usageLabel(count: number, limit: number | null | undefined): str
 
 	return `${count} / ${limit}`;
 }
+
+// What a plan with this host limit keeps active, worded to follow "keeps" in the notices that
+// explain a pause. A limit below one keeps nothing, and a limit of one has no count to name.
+export function keptHostsPhrase(limit: number): string {
+	if (limit < 1) {
+		return 'no hosts';
+	}
+	if (limit === 1) {
+		return 'your oldest host';
+	}
+
+	return `your ${limit} oldest hosts`;
+}

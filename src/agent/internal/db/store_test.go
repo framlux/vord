@@ -1515,3 +1515,157 @@ func TestEnqueueTelemetry_EvictsOldestWhenAtCapacity(t *testing.T) {
 		}
 	}
 }
+
+// --- ClearTelemetryQueue tests ---
+
+func countRows(t *testing.T, store *Store, query string) int {
+	t.Helper()
+	var n int
+	if err := store.DB().QueryRow(query).Scan(&n); err != nil {
+		t.Fatalf("%s: %v", query, err)
+	}
+
+	return n
+}
+
+// Intent: pausing discards everything not yet delivered, whatever state it is in (pending, in flight, completed),
+// along with SSH sessions that never reached the queue, and leaves already-queued SSH history alone.
+func TestClearTelemetryQueue_RemovesEveryRowAndUnqueuedSSHSessions(t *testing.T) {
+	store := newTestStore(t)
+
+	for _, id := range []string{"q-1", "q-2", "q-3"} {
+		if err := store.EnqueueTelemetry(id, TelemetryCpuUsage, `{}`); err != nil {
+			t.Fatalf("EnqueueTelemetry %s: %v", id, err)
+		}
+	}
+	inFlight, err := store.DequeueTelemetry(2)
+	if err != nil || len(inFlight) != 2 {
+		t.Fatalf("DequeueTelemetry: %d item(s), err %v", len(inFlight), err)
+	}
+	if err := store.MarkTelemetryCompleted([]string{inFlight[0].ID}); err != nil {
+		t.Fatalf("MarkTelemetryCompleted: %v", err)
+	}
+
+	now := time.Now().UTC().Format(time.RFC3339)
+	if err := store.InsertSSHSession(&SSHSession{ID: "ssh-unqueued", User: "a", Action: "connect", Timestamp: now, Queued: 0}); err != nil {
+		t.Fatalf("InsertSSHSession: %v", err)
+	}
+	if err := store.InsertSSHSession(&SSHSession{ID: "ssh-queued", User: "b", Action: "connect", Timestamp: now, Queued: 1}); err != nil {
+		t.Fatalf("InsertSSHSession: %v", err)
+	}
+
+	if err := store.ClearTelemetryQueue(); err != nil {
+		t.Fatalf("ClearTelemetryQueue: %v", err)
+	}
+
+	if n := countRows(t, store, "SELECT COUNT(*) FROM telemetry_queue"); n != 0 {
+		t.Errorf("expected an empty telemetry_queue, got %d row(s)", n)
+	}
+	if n := countRows(t, store, "SELECT COUNT(*) FROM ssh_sessions WHERE queued = 0"); n != 0 {
+		t.Errorf("expected no unqueued ssh_sessions, got %d", n)
+	}
+	if n := countRows(t, store, "SELECT COUNT(*) FROM ssh_sessions WHERE queued = 1"); n != 1 {
+		t.Errorf("expected the queued ssh_session to be kept, got %d", n)
+	}
+}
+
+// Intent: the cached pending count is reset with the table, so the queue-capacity check does not act on a
+// stale figure and the first item enqueued afterwards counts as one.
+func TestClearTelemetryQueue_ResetsPendingCount(t *testing.T) {
+	store := newTestStore(t)
+
+	for _, id := range []string{"c-1", "c-2", "c-3"} {
+		if err := store.EnqueueTelemetry(id, TelemetryCpuUsage, `{}`); err != nil {
+			t.Fatalf("EnqueueTelemetry %s: %v", id, err)
+		}
+	}
+	if n, err := store.CountPendingTelemetry(); err != nil || n != 3 {
+		t.Fatalf("expected 3 pending before the clear, got %d (err %v)", n, err)
+	}
+
+	if err := store.ClearTelemetryQueue(); err != nil {
+		t.Fatalf("ClearTelemetryQueue: %v", err)
+	}
+
+	if n, err := store.CountPendingTelemetry(); err != nil || n != 0 {
+		t.Fatalf("expected 0 pending after the clear, got %d (err %v)", n, err)
+	}
+
+	if err := store.EnqueueTelemetry("c-4", TelemetryCpuUsage, `{}`); err != nil {
+		t.Fatalf("EnqueueTelemetry after clear: %v", err)
+	}
+	if n, err := store.CountPendingTelemetry(); err != nil || n != 1 {
+		t.Errorf("expected 1 pending after enqueueing once, got %d (err %v)", n, err)
+	}
+}
+
+// Intent: clearing an already empty queue is a no-op, not an error.
+func TestClearTelemetryQueue_EmptyQueue(t *testing.T) {
+	store := newTestStore(t)
+
+	if err := store.ClearTelemetryQueue(); err != nil {
+		t.Fatalf("ClearTelemetryQueue on an empty store: %v", err)
+	}
+	if n, err := store.CountPendingTelemetry(); err != nil || n != 0 {
+		t.Errorf("expected 0 pending, got %d (err %v)", n, err)
+	}
+}
+
+// Intent: marking ids back to pending only counts the rows that were actually updated. A send that was in flight
+// when the queue was cleared fails against rows that no longer exist, and must not inflate the pending count.
+func TestMarkTelemetryPending_CountsOnlyRowsThatExist(t *testing.T) {
+	store := newTestStore(t)
+
+	for _, id := range []string{"m-1", "m-2", "m-3"} {
+		if err := store.EnqueueTelemetry(id, TelemetryCpuUsage, `{}`); err != nil {
+			t.Fatalf("EnqueueTelemetry %s: %v", id, err)
+		}
+	}
+	inFlight, err := store.DequeueTelemetry(3)
+	if err != nil || len(inFlight) != 3 {
+		t.Fatalf("DequeueTelemetry: %d item(s), err %v", len(inFlight), err)
+	}
+	ids := []string{inFlight[0].ID, inFlight[1].ID, inFlight[2].ID}
+
+	if err := store.ClearTelemetryQueue(); err != nil {
+		t.Fatalf("ClearTelemetryQueue: %v", err)
+	}
+	// Load the count while the table is empty so the failure below has to go through the cached figure.
+	if n, err := store.CountPendingTelemetry(); err != nil || n != 0 {
+		t.Fatalf("expected 0 pending after the clear, got %d (err %v)", n, err)
+	}
+
+	if err := store.MarkTelemetryPending(ids); err != nil {
+		t.Fatalf("MarkTelemetryPending: %v", err)
+	}
+
+	if n, err := store.CountPendingTelemetry(); err != nil || n != 0 {
+		t.Errorf("expected 0 pending after marking rows that no longer exist, got %d (err %v)", n, err)
+	}
+}
+
+// Intent: when only some of the ids still exist, only those are counted.
+func TestMarkTelemetryPending_PartialOverlapCountsSurvivors(t *testing.T) {
+	store := newTestStore(t)
+
+	for _, id := range []string{"p-1", "p-2"} {
+		if err := store.EnqueueTelemetry(id, TelemetryCpuUsage, `{}`); err != nil {
+			t.Fatalf("EnqueueTelemetry %s: %v", id, err)
+		}
+	}
+	inFlight, err := store.DequeueTelemetry(2)
+	if err != nil || len(inFlight) != 2 {
+		t.Fatalf("DequeueTelemetry: %d item(s), err %v", len(inFlight), err)
+	}
+	if n, err := store.CountPendingTelemetry(); err != nil || n != 0 {
+		t.Fatalf("expected 0 pending with both in flight, got %d (err %v)", n, err)
+	}
+
+	if err := store.MarkTelemetryPending([]string{inFlight[0].ID, "never-existed"}); err != nil {
+		t.Fatalf("MarkTelemetryPending: %v", err)
+	}
+
+	if n, err := store.CountPendingTelemetry(); err != nil || n != 1 {
+		t.Errorf("expected 1 pending (the one row that exists), got %d (err %v)", n, err)
+	}
+}

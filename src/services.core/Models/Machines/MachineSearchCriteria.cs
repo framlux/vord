@@ -18,8 +18,15 @@ public sealed class MachineSearchCriteria
     /// <summary>Free-text search across name, hostname, IP, and hardware model.</summary>
     public string? Search { get; set; }
 
-    /// <summary>Comma-separated health statuses to include (healthy, warning, critical, offline).</summary>
+    /// <summary>Comma-separated health statuses to include (healthy, warning, critical, offline). Paused machines match none of them.</summary>
     public string? HealthStatus { get; set; }
+
+    /// <summary>
+    /// Restricts the result to paused machines when true and to active machines when false. Health
+    /// statuses never match a paused machine, so combining this with a health filter narrows the
+    /// result rather than widening it.
+    /// </summary>
+    public bool? Paused { get; set; }
 
     /// <summary>Operating system filter (enum name).</summary>
     public string? Os { get; set; }

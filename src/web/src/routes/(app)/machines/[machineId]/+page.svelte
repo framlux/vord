@@ -19,15 +19,16 @@
 	import { formatDate, formatDateTime, formatRelativeTime, formatBytes, formatUptime } from '$lib/utils/format';
 	import { getOsName } from '$lib/utils/enums';
 	import EmptyState from '$lib/components/EmptyState.svelte';
-	import HealthBadge from '$lib/components/HealthBadge.svelte';
+	import MachineStateBadge from '$lib/components/MachineStateBadge.svelte';
 	import MachineHero from '$lib/components/machine/MachineHero.svelte';
+	import PausedHostBanner from '$lib/components/machine/PausedHostBanner.svelte';
 	import VitalsBar from '$lib/components/machine/VitalsBar.svelte';
 	import AgentVersionRow from '$lib/components/machine/AgentVersionRow.svelte';
 	import RemoveMachineControl from '$lib/components/machine/RemoveMachineControl.svelte';
 	import { CircleAlert, Terminal, Pencil, History, ShieldAlert } from 'lucide-svelte';
 	import { invalidateAll } from '$app/navigation';
 	import { enhance } from '$app/forms';
-	import { canAdminMachines } from '$lib/utils/roles';
+	import { canAdminMachines, canAdminTenant } from '$lib/utils/roles';
 	import { canAuthorAlertRules, canManageAlertRules } from '$lib/utils/alert-entitlement';
 	import { hasProFeatures, hasTeamFeatures } from '$lib/utils/tier';
 	import { moveFocusInto, trapTabKey } from '$lib/utils/focus-trap';
@@ -43,6 +44,7 @@
 	let liveStatus = $state<MachineStatusDto | null>(null);
 	const machine: MachineDto = $derived(data.machine);
 	const isOnline = $derived(liveStatus?.isOnline ?? machine.isOnline);
+	const isPaused = $derived(liveStatus?.isPaused ?? machine.isPaused);
 	const lastPing = $derived(liveStatus?.lastPing ?? machine.lastPing);
 	const commandsEnabled = $derived(liveStatus?.commandsEnabled ?? machine.commandsEnabled);
 	const healthStatus = $derived(liveStatus?.healthStatus ?? data.machineDetail?.healthStatus ?? MachineHealthStatus.Offline);
@@ -571,28 +573,46 @@
 	<MachineHero
 		{machine}
 		{isOnline}
+		{isPaused}
 		{lastPing}
 		{healthStatus}
 		telemetryLastUpdated={machineDetail?.telemetryLastUpdated ?? null}
 	/>
 
-	<!-- Vitals -->
-	<div class="flex items-center justify-between">
-		<VitalsBar
-			cpuPercent={cpuPercent}
-			cpuDetails={cpuTooltip}
-			memoryPercent={memoryPercent}
-			memoryDetails={memoryTooltip}
-			maxDiskPercent={maxDiskPercent}
-			diskDetails={diskTooltip}
+	{#if isPaused}
+		<!-- Without a subscription the limit is unknown, so the rank is withheld and the banner quotes
+		     no figures rather than treating a missing limit as a limit of zero. -->
+		<PausedHostBanner
+			limit={data.subscription?.machineLimit ?? 0}
+			activeRank={data.subscription === null ? 0 : (machineDetail?.activeRank ?? 0)}
+			limitIsCustom={data.subscription?.machineLimitIsCustom ?? false}
+			canManageBilling={canAdminTenant(data.user)}
 		/>
-		<a
-			href="/machines/{data.machine.id}/history"
-			class="inline-flex items-center gap-1.5 rounded-lg border border-surface-200 bg-surface-50 px-3 py-2 text-sm font-medium text-surface-700 transition hover:bg-surface-100 dark:border-surface-700 dark:bg-surface-800 dark:text-surface-300 dark:hover:bg-surface-700"
-		>
-			<History size={16} />
-			View History
-		</a>
+	{/if}
+
+	<!-- Vitals -->
+	<div class="space-y-2">
+		{#if isPaused}
+			<!-- The vitals are the last telemetry the server accepted; ingest discards everything after. -->
+			<p class="text-xs text-surface-500 dark:text-surface-400">Last reported before this host was paused</p>
+		{/if}
+		<div class="flex items-center justify-between">
+			<VitalsBar
+				cpuPercent={cpuPercent}
+				cpuDetails={cpuTooltip}
+				memoryPercent={memoryPercent}
+				memoryDetails={memoryTooltip}
+				maxDiskPercent={maxDiskPercent}
+				diskDetails={diskTooltip}
+			/>
+			<a
+				href="/machines/{data.machine.id}/history"
+				class="inline-flex items-center gap-1.5 rounded-lg border border-surface-200 bg-surface-50 px-3 py-2 text-sm font-medium text-surface-700 transition hover:bg-surface-100 dark:border-surface-700 dark:bg-surface-800 dark:text-surface-300 dark:hover:bg-surface-700"
+			>
+				<History size={16} />
+				View History
+			</a>
+		</div>
 	</div>
 
 	{#if cpuBreakdown}
@@ -806,7 +826,7 @@
 				<div class="space-y-3">
 					<div class="flex items-center justify-between">
 						<span class="text-sm text-surface-500 dark:text-surface-400">Status</span>
-						<HealthBadge status={healthStatus} />
+						<MachineStateBadge status={healthStatus} {isPaused} />
 					</div>
 					{#if machineDetail}
 						<div class="flex justify-between">
@@ -1356,7 +1376,12 @@
 				Commands are signed with your Ed25519 key and verified by the agent.
 			</p>
 
-			{#if commandsEnabled === false}
+			{#if isPaused}
+				<!-- The server refuses commands for a paused host, so the form would only produce a 409. -->
+				<div class="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 dark:border-amber-700 dark:bg-amber-900/20" role="alert">
+					<p class="text-sm text-amber-700 dark:text-amber-300">This host is paused</p>
+				</div>
+			{:else if commandsEnabled === false}
 				<div class="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 dark:border-amber-700 dark:bg-amber-900/20" role="alert">
 					<p class="text-sm text-amber-700 dark:text-amber-300">
 						Remote commands are disabled on this machine. The agent must be configured with

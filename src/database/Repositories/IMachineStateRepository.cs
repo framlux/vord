@@ -257,12 +257,17 @@ public interface IMachineStateRepository
     Task<List<string>> GetTelemetryPayloadsWithMarkerAsync(long machineId, short telemetryType, string payloadMarker, DateTimeOffset windowStart, DateTimeOffset windowEnd, int limit, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Returns health count aggregation (grouped by HealthStatus) and total security updates
-    /// for all machines in a tenant, using a Machines LEFT JOIN MachineStateSummaries query.
+    /// Returns health count aggregation (grouped by HealthStatus), total security updates and the
+    /// paused machine count for all machines in a tenant, using a Machines LEFT JOIN
+    /// MachineStateSummaries query. A paused machine is counted only in the paused count: its health
+    /// status is whatever it last reported before it was paused, so it never joins a health bucket,
+    /// and the security updates it last reported are left out of the total.
     /// </summary>
     /// <param name="tenantId">The tenant ID.</param>
+    /// <param name="kind">Which of the tenant's machines are paused.</param>
+    /// <param name="cutoffId">The last active machine id; read only when <paramref name="kind"/> is <see cref="Enums.QuotaCutoffKind.After"/>.</param>
     /// <param name="cancellationToken">A cancellation token.</param>
-    Task<(List<(short HealthStatus, int Count)> HealthCounts, int TotalSecurityUpdates)> GetFleetHealthAggregationAsync(int tenantId, CancellationToken cancellationToken = default);
+    Task<(List<(short HealthStatus, int Count)> HealthCounts, int TotalSecurityUpdates, int PausedCount)> GetFleetHealthAggregationAsync(int tenantId, Enums.QuotaCutoffKind kind, long cutoffId, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Searches fleet machines with comprehensive SQL-level filtering, sorting, and pagination.

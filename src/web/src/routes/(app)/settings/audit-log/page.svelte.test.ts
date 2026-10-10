@@ -80,6 +80,22 @@ describe('audit log action labels', () => {
 		).toBeInTheDocument();
 	});
 
+	it('shows a readable label for hosts being paused, not the raw action name', () => {
+		render(AuditLogPage, {
+			props: { data: makeData([makeEntry({ action: 'HostsPaused' })]) }
+		});
+
+		const table = screen.getByRole('table');
+		expect(within(table).getByText('Hosts Paused')).toBeInTheDocument();
+		expect(within(table).queryByText('HostsPaused')).not.toBeInTheDocument();
+	});
+
+	it('offers hosts paused as an action to filter by', () => {
+		render(AuditLogPage, { props: { data: makeData([]) } });
+
+		expect(screen.getByRole('option', { name: 'Hosts Paused' })).toBeInTheDocument();
+	});
+
 	it('still falls back to the raw action name for an action it has no label for', () => {
 		render(AuditLogPage, {
 			props: { data: makeData([makeEntry({ action: 'SomeFutureAction' })]) }

@@ -9,7 +9,7 @@
 	import { MachineHealthStatus } from '$lib/api/types';
 	import { ApiClient, ApiError } from '$lib/api/client';
 	import { formatNumber, formatRelativeTime } from '$lib/utils/format';
-	import HealthBadge from '$lib/components/HealthBadge.svelte';
+	import MachineStateBadge from '$lib/components/MachineStateBadge.svelte';
 	import ProgressBar from '$lib/components/ProgressBar.svelte';
 	import PageHeader from '$lib/components/PageHeader.svelte';
 	import Pagination from '$lib/components/Pagination.svelte';
@@ -91,17 +91,25 @@
 
 	// Fleet health donut chart computations
 	const donutTotal = $derived(fleet.summary.totalMachines || 1);
+	// The server leaves paused hosts out of the online count and every health count, so subtracting
+	// the warning and critical hosts from the online ones still leaves exactly the healthy ones.
 	const healthyCount = $derived(Math.max(0, fleet.summary.onlineMachines - fleet.summary.warningCount - fleet.summary.criticalCount));
 	const healthyPct = $derived((healthyCount / donutTotal) * 100);
 	const warningPct = $derived((fleet.summary.warningCount / donutTotal) * 100);
 	const criticalPct = $derived((fleet.summary.criticalCount / donutTotal) * 100);
 	const offlinePct = $derived((fleet.summary.offlineCount / donutTotal) * 100);
+	// An API that predates the paused count omits it, and the web image can ship first, so a missing
+	// count reads as none paused instead of turning the donut and its tile into NaN.
+	const pausedCount = $derived(fleet.summary.pausedCount ?? 0);
+	const pausedPct = $derived((pausedCount / donutTotal) * 100);
+	// Paused is the last segment and offline fills whatever the others leave, as it did before paused
+	// existed, so a count that does not sum to the total shows as grey and not as paused.
 	const donutGradient = $derived(
-		`conic-gradient(#10b981 0% ${healthyPct}%, #f59e0b ${healthyPct}% ${healthyPct + warningPct}%, #ef4444 ${healthyPct + warningPct}% ${healthyPct + warningPct + criticalPct}%, #9ca3af ${healthyPct + warningPct + criticalPct}% 100%)`
+		`conic-gradient(#10b981 0% ${healthyPct}%, #f59e0b ${healthyPct}% ${healthyPct + warningPct}%, #ef4444 ${healthyPct + warningPct}% ${healthyPct + warningPct + criticalPct}%, #9ca3af ${healthyPct + warningPct + criticalPct}% ${100 - pausedPct}%, #6366f1 ${100 - pausedPct}% 100%)`
 	);
 
 	const donutAriaLabel = $derived(
-		`Fleet health: ${healthyCount} healthy, ${fleet.summary.warningCount} warning, ${fleet.summary.criticalCount} critical, ${fleet.summary.offlineCount} offline`
+		`Fleet health: ${healthyCount} healthy, ${fleet.summary.warningCount} warning, ${fleet.summary.criticalCount} critical, ${fleet.summary.offlineCount} offline, ${pausedCount} paused`
 	);
 
 	function handleRowKeydown(event: KeyboardEvent, machineId: number) {
@@ -111,7 +119,12 @@
 		}
 	}
 
-	function healthBorderClass(status: MachineHealthStatus): string {
+	function healthBorderClass(status: MachineHealthStatus, isPaused: boolean): string {
+		// A paused host's health is frozen, so its border must not claim one.
+		if (isPaused) {
+			return 'border-l-2 border-l-indigo-500';
+		}
+
 		switch (status) {
 			case MachineHealthStatus.Healthy:
 				return 'border-l-2 border-l-green-500';
@@ -187,7 +200,7 @@
 
 			<!-- Legend -->
 			<div class="flex-1">
-				<div class="grid grid-cols-2 gap-x-8 gap-y-2 lg:grid-cols-4">
+				<div class="grid grid-cols-2 gap-x-8 gap-y-2 lg:grid-cols-5">
 					<div class="flex items-center gap-2.5">
 						<span class="h-2.5 w-2.5 flex-shrink-0 rounded-full bg-green-500"></span>
 						<div>
@@ -214,6 +227,13 @@
 						<div>
 							<p class="text-sm font-semibold text-surface-900 dark:text-surface-50">{formatNumber(fleet.summary.offlineCount)}</p>
 							<p class="text-xs text-surface-400">Offline ({Math.round(offlinePct)}%)</p>
+						</div>
+					</div>
+					<div class="flex items-center gap-2.5">
+						<span class="h-2.5 w-2.5 flex-shrink-0 rounded-full bg-indigo-500"></span>
+						<div>
+							<p class="text-sm font-semibold text-surface-900 dark:text-surface-50">{formatNumber(pausedCount)}</p>
+							<p class="text-xs text-surface-400">Paused ({Math.round(pausedPct)}%)</p>
 						</div>
 					</div>
 				</div>
@@ -256,6 +276,7 @@
 				<option value="warning">Warning</option>
 				<option value="critical">Critical</option>
 				<option value="offline">Offline</option>
+				<option value="paused">Paused</option>
 			</select>
 		</div>
 	</div>
@@ -345,7 +366,7 @@
 				<tbody class="divide-y divide-surface-100 dark:divide-surface-800">
 					{#each fleet.machines as machine, i (machine.id)}
 						<tr
-							class="group cursor-pointer transition {healthBorderClass(machine.healthStatus)} {i % 2 === 1 ? 'bg-surface-100/50 dark:bg-surface-800/30' : ''} hover:bg-surface-100 dark:hover:bg-surface-700/50 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary-500"
+							class="group cursor-pointer transition {healthBorderClass(machine.healthStatus, machine.isPaused)} {i % 2 === 1 ? 'bg-surface-100/50 dark:bg-surface-800/30' : ''} hover:bg-surface-100 dark:hover:bg-surface-700/50 focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary-500"
 							tabindex="0"
 							role="link"
 							aria-label="View details for {machine.name}"
@@ -372,7 +393,7 @@
 								</div>
 							</td>
 							<td class="px-4 py-3">
-								<HealthBadge status={machine.healthStatus} />
+								<MachineStateBadge status={machine.healthStatus} isPaused={machine.isPaused} />
 							</td>
 							<td class="w-32 px-4 py-3">
 								{#if machine.cpuUsagePercent !== null}

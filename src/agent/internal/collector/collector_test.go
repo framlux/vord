@@ -8,8 +8,23 @@ import (
 	"testing"
 	"time"
 
+	"github.com/framlux/vord/internal/pause"
 	"github.com/framlux/vord/internal/state"
 )
+
+// neverPaused returns a coordinator that is never in the paused state, for tests that do not exercise pausing.
+func neverPaused() *pause.Coordinator {
+	return pause.New(time.Now, func() time.Duration { return time.Minute }, pause.Hooks{})
+}
+
+// pausedCoordinator returns a coordinator already paused by the server, with a lease long enough that it
+// cannot lapse while a test runs.
+func pausedCoordinator() *pause.Coordinator {
+	c := pause.New(time.Now, func() time.Duration { return time.Hour }, pause.Hooks{})
+	c.Observe(pause.HostPaused)
+
+	return c
+}
 
 func TestNewRegistry(t *testing.T) {
 	r := NewRegistry()

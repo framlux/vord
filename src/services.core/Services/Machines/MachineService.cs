@@ -414,6 +414,13 @@ public sealed class MachineService : IMachineService
             return (null, null, "Machine limit exceeded");
         }
 
+        // The machine row has committed, and the new host can move the tenant's cutoff, which another
+        // replica may have cached. It is marked here, at the earliest point it is known to be needed, so
+        // a failure in any of the steps below still has the cached entries cleared when the scope is
+        // disposed; the explicit dispatch further down just does it sooner on the way through.
+        QuotaCutoffInvalidator quotaInvalidator = scope.ServiceProvider.GetRequiredService<QuotaCutoffInvalidator>();
+        quotaInvalidator.MarkPending(token.TenantId);
+
         // Pre-create summary and detail rows so all subsequent telemetry writes are pure UPDATEs.
         IMachineStateRepository machineStateRepo = scope.ServiceProvider.GetRequiredService<IMachineStateRepository>();
         await machineStateRepo.InsertSummaryAsync(new MachineStateSummary
@@ -448,6 +455,9 @@ public sealed class MachineService : IMachineService
         // deliberately no try/catch here.
         IMachineBillingSync billingSync = scope.ServiceProvider.GetRequiredService<IMachineBillingSync>();
         await billingSync.ReportActiveMachineUsageAsync(token.TenantId, cancellationToken);
+
+        // The host is fully registered, so the cached entries are cleared now rather than at scope disposal.
+        quotaInvalidator.DispatchPending();
 
         _registrationMetrics.RecordAttempt(RegistrationOutcome.Registered, token.TenantId);
 

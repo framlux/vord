@@ -23,6 +23,8 @@ public sealed class BillingWebhookHandler : IBillingWebhookHandler
     private readonly IBuiltInAlertRuleProvisioner _builtInProvisioner;
     private readonly IDowngradeCleanupService _downgradeCleanupService;
     private readonly RetentionReclassifyDispatcher _reclassifyDispatcher;
+    private readonly QuotaCutoffInvalidator _quotaInvalidator;
+    private readonly HostsPausedAuditWriter _hostsPausedAudit;
     private readonly ILogger<BillingWebhookHandler> _logger;
 
     /// <summary>
@@ -35,6 +37,8 @@ public sealed class BillingWebhookHandler : IBillingWebhookHandler
         IBuiltInAlertRuleProvisioner builtInProvisioner,
         IDowngradeCleanupService downgradeCleanupService,
         RetentionReclassifyDispatcher reclassifyDispatcher,
+        QuotaCutoffInvalidator quotaInvalidator,
+        HostsPausedAuditWriter hostsPausedAudit,
         ILogger<BillingWebhookHandler> logger)
     {
         ArgumentNullException.ThrowIfNull(transactionProvider);
@@ -43,6 +47,8 @@ public sealed class BillingWebhookHandler : IBillingWebhookHandler
         ArgumentNullException.ThrowIfNull(builtInProvisioner);
         ArgumentNullException.ThrowIfNull(downgradeCleanupService);
         ArgumentNullException.ThrowIfNull(reclassifyDispatcher);
+        ArgumentNullException.ThrowIfNull(quotaInvalidator);
+        ArgumentNullException.ThrowIfNull(hostsPausedAudit);
         ArgumentNullException.ThrowIfNull(logger);
 
         _transactionProvider = transactionProvider;
@@ -51,6 +57,8 @@ public sealed class BillingWebhookHandler : IBillingWebhookHandler
         _builtInProvisioner = builtInProvisioner;
         _downgradeCleanupService = downgradeCleanupService;
         _reclassifyDispatcher = reclassifyDispatcher;
+        _quotaInvalidator = quotaInvalidator;
+        _hostsPausedAudit = hostsPausedAudit;
         _logger = logger;
     }
 
@@ -91,10 +99,15 @@ public sealed class BillingWebhookHandler : IBillingWebhookHandler
             AuditAction.SubscriptionUpgraded, AuditResourceType.Subscription,
             tenantId.ToString(), null, null), ct);
 
+        await _hostsPausedAudit.WriteIfHostsPausedAsync(tenantId, tier, null, ct);
+
         await transaction.CommitAsync(ct);
 
         // Post-commit: a tier change marked during the transaction is only queued now, never inside it.
+        // The cached quota cutoff is cleared here too rather than at scope disposal, because the sync
+        // job applies every paid tenant's correction in one scope.
         _reclassifyDispatcher.DispatchPending();
+        _quotaInvalidator.DispatchPending();
 
         // Checkout is the journey customers actually make, so it is the path that has to repair a
         // Free downgrade and a Pro-to-Team round trip alike. The restore only turns back on what the
@@ -141,6 +154,8 @@ public sealed class BillingWebhookHandler : IBillingWebhookHandler
             AuditAction.SubscriptionDowngraded, AuditResourceType.Subscription,
             tenantId.ToString(), "Downgraded to Free tier", null), ct);
 
+        await _hostsPausedAudit.WriteIfHostsPausedAsync(tenantId, SubscriptionTier.Free, null, ct);
+
         // The cleanup runs inside this transaction: the tier write above holds the subscription row's
         // lock until the commit, which makes an agreement being applied to this tenant wait for the
         // cleanup instead of landing between a committed Free tier and a cleanup that would then hit an
@@ -150,7 +165,10 @@ public sealed class BillingWebhookHandler : IBillingWebhookHandler
         await transaction.CommitAsync(ct);
 
         // Post-commit: a tier change marked during the transaction is only queued now, never inside it.
+        // The cached quota cutoff is cleared here too rather than at scope disposal, because the sync
+        // job applies every paid tenant's correction in one scope.
         _reclassifyDispatcher.DispatchPending();
+        _quotaInvalidator.DispatchPending();
     }
 
     /// <inheritdoc/>
@@ -230,6 +248,8 @@ public sealed class BillingWebhookHandler : IBillingWebhookHandler
             AuditAction.SubscriptionDowngraded, AuditResourceType.Subscription,
             tenantId.ToString(), "Downgraded from Team to Pro", null), ct);
 
+        await _hostsPausedAudit.WriteIfHostsPausedAsync(tenantId, SubscriptionTier.Pro, null, ct);
+
         // Nothing runs behind a billing-initiated downgrade, so the freeze belongs here as much as it
         // does in the in-product path. Alert evaluation reads only the enabled flag and the tier the
         // rule requires — it never asks who authored a rule — so a Team-authored rule left enabled
@@ -240,7 +260,10 @@ public sealed class BillingWebhookHandler : IBillingWebhookHandler
         await transaction.CommitAsync(ct);
 
         // Post-commit: a tier change marked during the transaction is only queued now, never inside it.
+        // The cached quota cutoff is cleared here too rather than at scope disposal, because the sync
+        // job applies every paid tenant's correction in one scope.
         _reclassifyDispatcher.DispatchPending();
+        _quotaInvalidator.DispatchPending();
     }
 
     /// <inheritdoc/>
@@ -266,6 +289,8 @@ public sealed class BillingWebhookHandler : IBillingWebhookHandler
             AuditAction.SubscriptionUpgraded, AuditResourceType.Subscription,
             tenantId.ToString(), "Tier corrected by sync service", null), ct);
 
+        await _hostsPausedAudit.WriteIfHostsPausedAsync(tenantId, tier, null, ct);
+
         // Drift repair reaches Pro by the same route the downgrade does, so it owes the same freeze on
         // the Team-only resources, inside this transaction for the same reason. The sync job refuses to
         // correct downwards to Free, so Pro is the only correction that can take an entitlement away.
@@ -278,7 +303,10 @@ public sealed class BillingWebhookHandler : IBillingWebhookHandler
         await transaction.CommitAsync(ct);
 
         // Post-commit: a tier change marked during the transaction is only queued now, never inside it.
+        // The cached quota cutoff is cleared here too rather than at scope disposal, because the sync
+        // job applies every paid tenant's correction in one scope.
         _reclassifyDispatcher.DispatchPending();
+        _quotaInvalidator.DispatchPending();
 
         // Drift repair is the one path that exists because a checkout webhook was lost, so it is the
         // likeliest route by which a paying tenant has never been provisioned at all.

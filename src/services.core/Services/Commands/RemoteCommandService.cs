@@ -5,8 +5,10 @@
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
+using Framlux.FleetManagement.Services.Core.Billing;
 using Framlux.FleetManagement.Services.Core.Infrastructure;
 using Framlux.FleetManagement.Services.Core.Machines;
+using Framlux.FleetManagement.Services.Core.Observability;
 
 namespace Framlux.FleetManagement.Services.Core.Commands;
 
@@ -16,6 +18,8 @@ namespace Framlux.FleetManagement.Services.Core.Commands;
 public sealed class RemoteCommandService
 {
     private const ulong CapabilityRemoteCommands = 1UL;
+
+    private const string HostPausedMessage = "Host is paused: your plan's host limit is reached.";
 
     private static readonly HashSet<string> AllowedCommandTypes = new(StringComparer.OrdinalIgnoreCase)
     {
@@ -32,6 +36,8 @@ public sealed class RemoteCommandService
     private readonly ISigningKeyRepository _signingKeyRepository;
     private readonly IRemoteCommandRepository _remoteCommandRepository;
     private readonly IMachinePingService _pingService;
+    private readonly IQuotaPauseService _quotaPause;
+    private readonly QuotaPauseMetrics _quotaPauseMetrics;
     private readonly ILogger<RemoteCommandService> _logger;
 
     /// <summary>
@@ -43,6 +49,8 @@ public sealed class RemoteCommandService
     /// <param name="signingKeyRepository">The signing key repository</param>
     /// <param name="remoteCommandRepository">The remote command repository</param>
     /// <param name="pingService">The machine ping and capabilities service</param>
+    /// <param name="quotaPause">The quota pause decision, used to refuse commands for a paused host</param>
+    /// <param name="quotaPauseMetrics">The instrument counting pause decisions that could not be made</param>
     /// <param name="logger">The logger</param>
     public RemoteCommandService(
         IDatabaseTransactionProvider transactionProvider,
@@ -51,6 +59,8 @@ public sealed class RemoteCommandService
         ISigningKeyRepository signingKeyRepository,
         IRemoteCommandRepository remoteCommandRepository,
         IMachinePingService pingService,
+        IQuotaPauseService quotaPause,
+        QuotaPauseMetrics quotaPauseMetrics,
         ILogger<RemoteCommandService> logger)
     {
         _transactionProvider = transactionProvider ?? throw new ArgumentNullException(nameof(transactionProvider));
@@ -59,6 +69,8 @@ public sealed class RemoteCommandService
         _signingKeyRepository = signingKeyRepository ?? throw new ArgumentNullException(nameof(signingKeyRepository));
         _remoteCommandRepository = remoteCommandRepository ?? throw new ArgumentNullException(nameof(remoteCommandRepository));
         _pingService = pingService ?? throw new ArgumentNullException(nameof(pingService));
+        _quotaPause = quotaPause ?? throw new ArgumentNullException(nameof(quotaPause));
+        _quotaPauseMetrics = quotaPauseMetrics ?? throw new ArgumentNullException(nameof(quotaPauseMetrics));
         _logger = logger ?? throw new ArgumentNullException(nameof(logger));
     }
 
@@ -138,6 +150,15 @@ public sealed class RemoteCommandService
             return ServiceResult<RemoteCommand>.Forbidden("Signing key is not authorized for this machine");
         }
 
+        // A paused host never polls for commands, so accepting one would leave it queued until it
+        // expired. Refusing now tells the user why. The check follows both the ownership lookup and
+        // the key authorization, so a pause is only revealed to a caller who could have sent the
+        // command, and a request that would be refused anyway costs no lookup.
+        if (await IsPausedAsync(command.TenantId, machine.Id, cancellationToken))
+        {
+            return ServiceResult<RemoteCommand>.Conflict(HostPausedMessage);
+        }
+
         // Reject commands when the agent has not reported the remote commands capability.
         ulong capabilities = await _pingService.GetAgentCapabilitiesAsync(command.MachineId);
         if ((capabilities & CapabilityRemoteCommands) == 0)
@@ -183,6 +204,26 @@ public sealed class RemoteCommandService
             command.CommandId, command.CommandType, command.MachineId, command.UserId);
 
         return ServiceResult<RemoteCommand>.Ok(created);
+    }
+
+    /// <summary>
+    /// Asks whether the target host is paused. A decision that cannot be made is counted against the
+    /// commands surface and treated as active, so a broken quota check never stops a paying fleet
+    /// being managed.
+    /// </summary>
+    private async Task<bool> IsPausedAsync(int tenantId, long machineId, CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await _quotaPause.IsPausedAsync(tenantId, machineId, cancellationToken);
+        }
+        catch (QuotaCheckUnavailableException ex)
+        {
+            _quotaPauseMetrics.RecordCheckFailure(QuotaCheckSurface.Commands);
+            _logger.LogWarning(ex, "Quota pause check failed for machine {MachineId}; accepting the command", machineId);
+
+            return false;
+        }
     }
 
     /// <summary>

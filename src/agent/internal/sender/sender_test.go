@@ -7,6 +7,7 @@ package sender
 import (
 	"context"
 	"fmt"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -15,6 +16,7 @@ import (
 
 	"github.com/framlux/vord/internal/db"
 	"github.com/framlux/vord/internal/jitter"
+	"github.com/framlux/vord/internal/pause"
 	pb "github.com/framlux/vord/internal/proto/agent"
 	"github.com/framlux/vord/internal/state"
 )
@@ -53,6 +55,8 @@ type mockBidiStream struct {
 	grpc.ClientStream
 	sendFunc func(*pb.TelemetryEnvelope) error
 	recvFunc func() (*pb.TelemetryAck, error)
+
+	closeCalls int
 }
 
 func (m *mockBidiStream) Send(env *pb.TelemetryEnvelope) error {
@@ -72,6 +76,8 @@ func (m *mockBidiStream) Recv() (*pb.TelemetryAck, error) {
 }
 
 func (m *mockBidiStream) CloseSend() error {
+	m.closeCalls++
+
 	return nil
 }
 
@@ -106,6 +112,34 @@ func newTestStore(t *testing.T) *db.Store {
 	t.Cleanup(func() { database.Close() })
 
 	return db.NewStore(database, 0)
+}
+
+// neverPaused returns a coordinator that is never in the paused state, for tests that do not exercise pausing.
+func neverPaused() *pause.Coordinator {
+	return pause.New(time.Now, func() time.Duration { return time.Minute }, pause.Hooks{})
+}
+
+// pauseRecorder builds a coordinator with a lease long enough that it cannot lapse during a test, and counts
+// the transitions into pause.
+type pauseRecorder struct {
+	coord   *pause.Coordinator
+	pauses  atomic.Int32
+	reasons []pause.Reason
+}
+
+func newPauseRecorder(onPause func(pause.Reason)) *pauseRecorder {
+	r := &pauseRecorder{}
+	r.coord = pause.New(time.Now, func() time.Duration { return time.Hour }, pause.Hooks{
+		OnPause: func(reason pause.Reason) {
+			r.reasons = append(r.reasons, reason)
+			r.pauses.Add(1)
+			if onPause != nil {
+				onPause(reason)
+			}
+		},
+	})
+
+	return r
 }
 
 // --- parseTimestamp tests ---
@@ -224,7 +258,7 @@ func TestPayloadDispatch_NoMissingTypes(t *testing.T) {
 func TestSetPayload_UnknownType(t *testing.T) {
 	store := newTestStore(t)
 	client := &mockTelemetryClient{}
-	s := New(store, client, state.New(), jitter.NewDefault())
+	s := New(store, client, state.New(), jitter.NewDefault(), neverPaused())
 
 	telItem := &pb.TelemetryItem{}
 	item := db.TelemetryQueueItem{
@@ -246,7 +280,7 @@ func TestSetPayload_UnknownType(t *testing.T) {
 func TestSetPayload_MalformedJSON(t *testing.T) {
 	store := newTestStore(t)
 	client := &mockTelemetryClient{}
-	s := New(store, client, state.New(), jitter.NewDefault())
+	s := New(store, client, state.New(), jitter.NewDefault(), neverPaused())
 
 	telItem := &pb.TelemetryItem{}
 	item := db.TelemetryQueueItem{
@@ -268,7 +302,7 @@ func TestSetPayload_MalformedJSON(t *testing.T) {
 func TestSetPayload_CpuUsage(t *testing.T) {
 	store := newTestStore(t)
 	client := &mockTelemetryClient{}
-	s := New(store, client, state.New(), jitter.NewDefault())
+	s := New(store, client, state.New(), jitter.NewDefault(), neverPaused())
 
 	telItem := &pb.TelemetryItem{}
 	item := db.TelemetryQueueItem{
@@ -292,7 +326,7 @@ func TestSetPayload_CpuUsage(t *testing.T) {
 func TestSetPayload_MemoryUsage(t *testing.T) {
 	store := newTestStore(t)
 	client := &mockTelemetryClient{}
-	s := New(store, client, state.New(), jitter.NewDefault())
+	s := New(store, client, state.New(), jitter.NewDefault(), neverPaused())
 
 	telItem := &pb.TelemetryItem{}
 	item := db.TelemetryQueueItem{
@@ -314,7 +348,7 @@ func TestSetPayload_MemoryUsage(t *testing.T) {
 func TestSetPayload_AgentVersion(t *testing.T) {
 	store := newTestStore(t)
 	client := &mockTelemetryClient{}
-	s := New(store, client, state.New(), jitter.NewDefault())
+	s := New(store, client, state.New(), jitter.NewDefault(), neverPaused())
 
 	telItem := &pb.TelemetryItem{}
 	item := db.TelemetryQueueItem{
@@ -338,7 +372,7 @@ func TestSetPayload_AgentVersion(t *testing.T) {
 func TestSetPayload_SystemInfo(t *testing.T) {
 	store := newTestStore(t)
 	client := &mockTelemetryClient{}
-	s := New(store, client, state.New(), jitter.NewDefault())
+	s := New(store, client, state.New(), jitter.NewDefault(), neverPaused())
 
 	telItem := &pb.TelemetryItem{}
 	item := db.TelemetryQueueItem{
@@ -364,7 +398,7 @@ func TestSetPayload_SystemInfo(t *testing.T) {
 func TestBuildEnvelope_AllTelemetryTypes(t *testing.T) {
 	store := newTestStore(t)
 	client := &mockTelemetryClient{}
-	s := New(store, client, state.New(), jitter.NewDefault())
+	s := New(store, client, state.New(), jitter.NewDefault(), neverPaused())
 
 	items := []db.TelemetryQueueItem{
 		{
@@ -405,7 +439,7 @@ func TestBuildEnvelope_AllTelemetryTypes(t *testing.T) {
 func TestBuildEnvelope_AgentTimestampFromInjectedClock(t *testing.T) {
 	store := newTestStore(t)
 	client := &mockTelemetryClient{}
-	s := New(store, client, state.New(), jitter.NewDefault())
+	s := New(store, client, state.New(), jitter.NewDefault(), neverPaused())
 
 	fixed := time.Date(2026, 6, 27, 8, 15, 30, 0, time.UTC)
 	s.clock = func() time.Time { return fixed }
@@ -434,7 +468,7 @@ func TestBuildEnvelope_AgentTimestampFromInjectedClock(t *testing.T) {
 func TestBuildEnvelope_InvalidType(t *testing.T) {
 	store := newTestStore(t)
 	client := &mockTelemetryClient{}
-	s := New(store, client, state.New(), jitter.NewDefault())
+	s := New(store, client, state.New(), jitter.NewDefault(), neverPaused())
 
 	items := []db.TelemetryQueueItem{
 		{
@@ -461,7 +495,7 @@ func TestBuildEnvelope_InvalidType(t *testing.T) {
 func TestNewSender_Defaults(t *testing.T) {
 	store := newTestStore(t)
 	client := &mockTelemetryClient{}
-	s := New(store, client, state.New(), jitter.NewDefault())
+	s := New(store, client, state.New(), jitter.NewDefault(), neverPaused())
 
 	if s.store != store {
 		t.Error("expected store to be set")
@@ -486,7 +520,7 @@ func TestNewSender_Defaults(t *testing.T) {
 func TestSendBatch_EmptyQueue(t *testing.T) {
 	store := newTestStore(t)
 	client := &mockTelemetryClient{}
-	s := New(store, client, state.New(), jitter.NewDefault())
+	s := New(store, client, state.New(), jitter.NewDefault(), neverPaused())
 
 	s.sendBatch(context.Background(), "fast", FastTypes)
 
@@ -516,7 +550,7 @@ func TestSendBatch_ServerAck(t *testing.T) {
 			return &pb.TelemetryAck{Success: true}, nil
 		},
 	}
-	s := New(store, client, state.New(), jitter.NewDefault())
+	s := New(store, client, state.New(), jitter.NewDefault(), neverPaused())
 
 	s.sendBatch(context.Background(), "fast", FastTypes)
 
@@ -546,7 +580,7 @@ func TestSendBatch_ServerReject(t *testing.T) {
 			return &pb.TelemetryAck{Success: false, ErrorMessage: "rejected"}, nil
 		},
 	}
-	s := New(store, client, state.New(), jitter.NewDefault())
+	s := New(store, client, state.New(), jitter.NewDefault(), neverPaused())
 
 	s.sendBatch(context.Background(), "fast", FastTypes)
 
@@ -583,7 +617,7 @@ func TestSendBatch_StreamFallbackToUnary(t *testing.T) {
 			return &pb.TelemetryAck{Success: true}, nil
 		},
 	}
-	s := New(store, client, state.New(), jitter.NewDefault())
+	s := New(store, client, state.New(), jitter.NewDefault(), neverPaused())
 
 	s.sendBatch(context.Background(), "fast", FastTypes)
 
@@ -603,7 +637,7 @@ func TestSendViaUnary_FirstAttemptSuccess(t *testing.T) {
 			return &pb.TelemetryAck{Success: true}, nil
 		},
 	}
-	s := New(store, client, state.New(), jitter.NewDefault())
+	s := New(store, client, state.New(), jitter.NewDefault(), neverPaused())
 
 	envelope := &pb.TelemetryEnvelope{BatchId: "test-batch"}
 	ack, err := s.sendViaUnary(context.Background(), envelope)
@@ -626,7 +660,7 @@ func TestSendViaUnary_ContextCancelled(t *testing.T) {
 			return nil, fmt.Errorf("transient error")
 		},
 	}
-	s := New(store, client, state.New(), jitter.NewDefault())
+	s := New(store, client, state.New(), jitter.NewDefault(), neverPaused())
 
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel() // Cancel immediately.
@@ -658,7 +692,7 @@ func TestSendViaStream_Success(t *testing.T) {
 			return stream, nil
 		},
 	}
-	s := New(store, client, state.New(), jitter.NewDefault())
+	s := New(store, client, state.New(), jitter.NewDefault(), neverPaused())
 
 	envelope := &pb.TelemetryEnvelope{BatchId: "batch-1"}
 	ack, err := s.sendViaStream(context.Background(), "fast", envelope)
@@ -685,7 +719,7 @@ func TestSendViaStream_SendFailure(t *testing.T) {
 			return stream, nil
 		},
 	}
-	s := New(store, client, state.New(), jitter.NewDefault())
+	s := New(store, client, state.New(), jitter.NewDefault(), neverPaused())
 
 	envelope := &pb.TelemetryEnvelope{BatchId: "batch-1"}
 	_, err := s.sendViaStream(context.Background(), "fast", envelope)
@@ -774,7 +808,7 @@ func TestSendBatch_RespectsMaxBatchSize(t *testing.T) {
 			return &pb.TelemetryAck{Success: true}, nil
 		},
 	}
-	s := New(store, client, state.New(), jitter.NewDefault())
+	s := New(store, client, state.New(), jitter.NewDefault(), neverPaused())
 
 	s.sendBatch(context.Background(), "fast", FastTypes)
 
@@ -800,7 +834,7 @@ func TestSendBatch_AllRPCsFail_ItemsReturnToPending(t *testing.T) {
 			return nil, fmt.Errorf("unary failed")
 		},
 	}
-	s := New(store, client, state.New(), jitter.NewDefault())
+	s := New(store, client, state.New(), jitter.NewDefault(), neverPaused())
 
 	// Use a short-lived context to avoid waiting for retry backoffs.
 	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
@@ -815,5 +849,231 @@ func TestSendBatch_AllRPCsFail_ItemsReturnToPending(t *testing.T) {
 	}
 	if len(items) != 1 {
 		t.Errorf("expected 1 item back in pending, got %d", len(items))
+	}
+}
+
+// --- Pause tests ---
+
+func enqueueCpu(t *testing.T, store *db.Store, id string) {
+	t.Helper()
+	if err := store.EnqueueTelemetry(id, db.TelemetryCpuUsage, `{"cpuUsagePercent": 50}`); err != nil {
+		t.Fatalf("enqueue %s: %v", id, err)
+	}
+}
+
+func unaryOnlyClient(submit func(in *pb.TelemetryEnvelope) (*pb.TelemetryAck, error)) *mockTelemetryClient {
+	return &mockTelemetryClient{
+		streamFunc: func(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[pb.TelemetryEnvelope, pb.TelemetryAck], error) {
+			return nil, fmt.Errorf("stream unavailable")
+		},
+		submitFunc: func(ctx context.Context, in *pb.TelemetryEnvelope, opts ...grpc.CallOption) (*pb.TelemetryAck, error) {
+			return submit(in)
+		},
+	}
+}
+
+// Intent: a paused sender takes nothing off the queue and makes no RPC.
+func TestSendBatch_WhilePaused_DequeuesNothingAndMakesNoRPC(t *testing.T) {
+	store := newTestStore(t)
+	enqueueCpu(t, store, "paused-1")
+	client := &mockTelemetryClient{}
+	rec := newPauseRecorder(nil)
+	rec.coord.Observe(pause.HostPaused)
+	s := New(store, client, state.New(), jitter.NewDefault(), rec.coord)
+
+	s.sendBatch(context.Background(), "fast", FastTypes)
+
+	if client.submitCalls != 0 || client.streamCalls != 0 {
+		t.Errorf("expected no RPC while paused, got submit=%d stream=%d", client.submitCalls, client.streamCalls)
+	}
+	if n, err := store.CountPendingTelemetry(); err != nil || n != 1 {
+		t.Errorf("expected the item to stay pending, got %d (err %v)", n, err)
+	}
+}
+
+// Intent: an ack that says the host is paused puts the sender into the pause, while the batch it acknowledges
+// is still treated as delivered.
+func TestSendBatch_HostPausedAck_EntersPause(t *testing.T) {
+	store := newTestStore(t)
+	enqueueCpu(t, store, "ack-paused-1")
+	client := unaryOnlyClient(func(in *pb.TelemetryEnvelope) (*pb.TelemetryAck, error) {
+		return &pb.TelemetryAck{Success: true, Reason: pb.IngestRejectionReason_INGEST_REJECTION_REASON_HOST_PAUSED}, nil
+	})
+	rec := newPauseRecorder(nil)
+	s := New(store, client, state.New(), jitter.NewDefault(), rec.coord)
+
+	s.sendBatch(context.Background(), "fast", FastTypes)
+
+	if rec.coord.Paused() == false {
+		t.Fatal("expected the sender to be paused after a HOST_PAUSED ack")
+	}
+	if rec.pauses.Load() != 1 || rec.reasons[0] != pause.HostPaused {
+		t.Errorf("expected one OnPause with HostPaused, got %d calls %v", rec.pauses.Load(), rec.reasons)
+	}
+	var status int
+	if err := store.DB().QueryRow("SELECT status FROM telemetry_queue WHERE id = ?", "ack-paused-1").Scan(&status); err != nil {
+		t.Fatalf("query: %v", err)
+	}
+	if db.QueueStatus(status) != db.QueueStatusCompleted {
+		t.Errorf("expected the acknowledged item to be marked completed, got status %d", status)
+	}
+}
+
+// Intent: an inactive subscription reported on a rejected batch also pauses the sender, and the rejected batch
+// is not left half-handled.
+func TestSendBatch_SubscriptionInactiveAck_EntersPause(t *testing.T) {
+	store := newTestStore(t)
+	enqueueCpu(t, store, "ack-inactive-1")
+	client := unaryOnlyClient(func(in *pb.TelemetryEnvelope) (*pb.TelemetryAck, error) {
+		return &pb.TelemetryAck{Success: false, ErrorMessage: "inactive", Reason: pb.IngestRejectionReason_INGEST_REJECTION_REASON_SUBSCRIPTION_INACTIVE}, nil
+	})
+	rec := newPauseRecorder(nil)
+	s := New(store, client, state.New(), jitter.NewDefault(), rec.coord)
+
+	s.sendBatch(context.Background(), "fast", FastTypes)
+
+	if rec.coord.Paused() == false {
+		t.Fatal("expected the sender to be paused after a SUBSCRIPTION_INACTIVE ack")
+	}
+	if rec.reasons[0] != pause.SubscriptionInactive {
+		t.Errorf("expected OnPause with SubscriptionInactive, got %v", rec.reasons)
+	}
+}
+
+// Intent: an ordinary ack leaves the sender running.
+func TestSendBatch_PlainAck_DoesNotPause(t *testing.T) {
+	store := newTestStore(t)
+	enqueueCpu(t, store, "plain-1")
+	client := unaryOnlyClient(func(in *pb.TelemetryEnvelope) (*pb.TelemetryAck, error) {
+		return &pb.TelemetryAck{Success: true}, nil
+	})
+	rec := newPauseRecorder(nil)
+	s := New(store, client, state.New(), jitter.NewDefault(), rec.coord)
+
+	s.sendBatch(context.Background(), "fast", FastTypes)
+
+	if rec.coord.Paused() {
+		t.Error("expected a plain ack not to pause the sender")
+	}
+	if rec.pauses.Load() != 0 {
+		t.Errorf("expected no OnPause, got %d", rec.pauses.Load())
+	}
+}
+
+// Intent: a reason from a newer server that this agent does not know is ignored; an ack never reads as a pause
+// or a resume it cannot interpret.
+func TestSendBatch_UnknownAckReason_IsIgnored(t *testing.T) {
+	store := newTestStore(t)
+	enqueueCpu(t, store, "unknown-1")
+	client := unaryOnlyClient(func(in *pb.TelemetryEnvelope) (*pb.TelemetryAck, error) {
+		return &pb.TelemetryAck{Success: true, Reason: pb.IngestRejectionReason(99)}, nil
+	})
+	rec := newPauseRecorder(nil)
+	s := New(store, client, state.New(), jitter.NewDefault(), rec.coord)
+
+	s.sendBatch(context.Background(), "fast", FastTypes)
+
+	if rec.coord.Paused() {
+		t.Error("expected an unknown reason not to pause the sender")
+	}
+	if rec.pauses.Load() != 0 {
+		t.Errorf("expected no OnPause, got %d", rec.pauses.Load())
+	}
+}
+
+// Intent: the pause hook may close the sender's streams from inside the ack handler, which runs on the sender's
+// own goroutine, without deadlocking on the tier lock the send just released.
+func TestSendBatch_PausedAckOnStream_OnPauseCanCloseStreams(t *testing.T) {
+	store := newTestStore(t)
+	enqueueCpu(t, store, "stream-paused-1")
+	stream := &mockBidiStream{
+		recvFunc: func() (*pb.TelemetryAck, error) {
+			return &pb.TelemetryAck{Success: true, Reason: pb.IngestRejectionReason_INGEST_REJECTION_REASON_HOST_PAUSED}, nil
+		},
+	}
+	client := &mockTelemetryClient{
+		streamFunc: func(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[pb.TelemetryEnvelope, pb.TelemetryAck], error) {
+			return stream, nil
+		},
+	}
+	var s *Sender
+	rec := newPauseRecorder(func(pause.Reason) { s.CloseStreams() })
+	s = New(store, client, state.New(), jitter.NewDefault(), rec.coord)
+
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		s.sendBatch(context.Background(), "fast", FastTypes)
+	}()
+
+	select {
+	case <-done:
+	case <-time.After(10 * time.Second):
+		t.Fatal("sendBatch deadlocked: the pause hook could not close the streams")
+	}
+
+	if stream.closeCalls != 1 {
+		t.Errorf("expected the cached stream to be closed once, got %d", stream.closeCalls)
+	}
+	if s.streams["fast"].stream != nil {
+		t.Error("expected the fast stream to be dropped so the next send opens a fresh one")
+	}
+}
+
+// Intent: closing the streams closes every tier's cached stream and forgets it.
+func TestCloseStreams_ClosesEveryTier(t *testing.T) {
+	store := newTestStore(t)
+	s := New(store, &mockTelemetryClient{}, state.New(), jitter.NewDefault(), neverPaused())
+	fast := &mockBidiStream{}
+	slow := &mockBidiStream{}
+	s.streams["fast"].stream = fast
+	s.streams["slow"].stream = slow
+
+	s.CloseStreams()
+
+	if fast.closeCalls != 1 || slow.closeCalls != 1 {
+		t.Errorf("expected each stream closed once, got fast=%d slow=%d", fast.closeCalls, slow.closeCalls)
+	}
+	if s.streams["fast"].stream != nil || s.streams["slow"].stream != nil {
+		t.Error("expected both cached streams to be dropped")
+	}
+}
+
+// Intent: closing when no stream is open is harmless.
+func TestCloseStreams_NoStreams(t *testing.T) {
+	store := newTestStore(t)
+	s := New(store, &mockTelemetryClient{}, state.New(), jitter.NewDefault(), neverPaused())
+
+	s.CloseStreams()
+}
+
+// Intent: on shutdown a running host still flushes what is queued, but a paused host sends nothing.
+func TestRunTier_ShutdownFlush_SkippedWhilePaused(t *testing.T) {
+	flushedItems := func(t *testing.T, paused bool) int {
+		t.Helper()
+		store := newTestStore(t)
+		enqueueCpu(t, store, "flush-1")
+		client := unaryOnlyClient(func(in *pb.TelemetryEnvelope) (*pb.TelemetryAck, error) {
+			return &pb.TelemetryAck{Success: true}, nil
+		})
+		rec := newPauseRecorder(nil)
+		if paused {
+			rec.coord.Observe(pause.HostPaused)
+		}
+		s := New(store, client, state.New(), jitter.NewDefault(), rec.coord)
+
+		// The tier timer is an hour out, so the already-cancelled context is the only branch that can fire.
+		ctx, cancel := context.WithCancel(context.Background())
+		cancel()
+		s.runTier(ctx, "fast", FastTypes, func() time.Duration { return time.Hour }, time.Hour)
+
+		return client.submitCalls
+	}
+
+	if got := flushedItems(t, false); got != 1 {
+		t.Errorf("expected the shutdown flush to send the queued item when running, got %d RPC(s)", got)
+	}
+	if got := flushedItems(t, true); got != 0 {
+		t.Errorf("expected no shutdown flush while paused, got %d RPC(s)", got)
 	}
 }

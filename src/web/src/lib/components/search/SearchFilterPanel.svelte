@@ -28,6 +28,8 @@
 	// svelte-ignore state_referenced_locally
 	let healthStatuses = $state<Set<string>>(parseHealthStatuses(filters.healthStatus));
 	// svelte-ignore state_referenced_locally
+	let paused = $state(filters.paused === 'true');
+	// svelte-ignore state_referenced_locally
 	let cpuMin = $state<number | undefined>(filters.cpuMin);
 	// svelte-ignore state_referenced_locally
 	let cpuMax = $state<number | undefined>(filters.cpuMax);
@@ -62,14 +64,25 @@
 		return new Set(value.split(',').filter(Boolean));
 	}
 
+	// A paused host belongs to no health bucket, so asking for a health status and Paused together can
+	// only match nothing. The two are exclusive: choosing either clears the other instead of letting
+	// that empty combination be built.
 	function toggleHealthStatus(status: string) {
 		let next = new Set(healthStatuses);
 		if (next.has(status)) {
 			next.delete(status);
 		} else {
 			next.add(status);
+			paused = false;
 		}
 		healthStatuses = next;
+	}
+
+	function togglePaused() {
+		paused = paused === false;
+		if (paused) {
+			healthStatuses = new Set();
+		}
 	}
 
 	function handleApply() {
@@ -78,6 +91,7 @@
 		if (os) result.os = os;
 		if (type) result.type = type;
 		if (healthStatuses.size > 0) result.healthStatus = [...healthStatuses].join(',');
+		if (paused) result.paused = 'true';
 		if (cpuMin !== undefined) result.cpuMin = cpuMin;
 		if (cpuMax !== undefined) result.cpuMax = cpuMax;
 		if (memoryMin !== undefined) result.memoryMin = memoryMin;
@@ -99,6 +113,7 @@
 		os = '';
 		type = '';
 		healthStatuses = new Set();
+		paused = false;
 		cpuMin = undefined;
 		cpuMax = undefined;
 		memoryMin = undefined;
@@ -215,6 +230,19 @@
 						<span class="text-xs text-surface-700 dark:text-surface-300">{opt.label}</span>
 					</label>
 				{/each}
+				<label
+					class="flex cursor-pointer items-center gap-1.5"
+					title="Paused hosts report no health, so choosing Paused clears the health selections."
+				>
+					<input
+						type="checkbox"
+						checked={paused}
+						onchange={togglePaused}
+						class="rounded border-surface-300 text-primary-500 focus:ring-primary-500 dark:border-surface-600"
+					/>
+					<span class="h-2 w-2 rounded-full bg-indigo-500" aria-hidden="true"></span>
+					<span class="text-xs text-surface-700 dark:text-surface-300">Paused</span>
+				</label>
 			</div>
 
 			<!-- Row 2: Resource utilization ranges -->

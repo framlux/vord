@@ -3,10 +3,12 @@
 // See LICENSE for details.
 
 using FastEndpoints;
+using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Server.Auth;
 using Framlux.FleetManagement.Services.Core.Billing;
+using Framlux.FleetManagement.Services.Core.Observability;
 
 namespace Framlux.FleetManagement.Server.Endpoints.Web.Billing;
 
@@ -26,6 +28,21 @@ public sealed class SubscriptionDto
 
     /// <summary>Current active machine count.</summary>
     public int MachineCount { get; set; }
+
+    /// <summary>Machines past the limit, which are paused and not monitored.</summary>
+    public int PausedMachineCount { get; set; }
+
+    /// <summary>
+    /// The machine count the subscription is billed for: the active count held to the limit and raised
+    /// to the tier's floor. Null for tiers that are not billed through Stripe.
+    /// </summary>
+    public int? BillableMachineCount { get; set; }
+
+    /// <summary>
+    /// Whether the machine limit is set by an agreement or an override rather than by the tier, which
+    /// the customer cannot raise by changing their plan.
+    /// </summary>
+    public bool MachineLimitIsCustom { get; set; }
 
     /// <summary>Data retention in days.</summary>
     public int RetentionDays { get; set; }
@@ -68,6 +85,10 @@ public sealed class SubscriptionEndpoint : EndpointWithoutRequest<ApiResponse<Su
     private readonly IIntegrationRepository _integrationRepo;
     private readonly ITenantRepository _tenantRepository;
     private readonly IInvitationRepository _invitationRepository;
+    private readonly ITenantSubscriptionOverrideRepository _overrideRepository;
+    private readonly IQuotaPauseService _quotaPause;
+    private readonly QuotaPauseMetrics _quotaPauseMetrics;
+    private readonly ILogger<SubscriptionEndpoint> _logger;
     private readonly ITenantContext _tenantContext;
     private readonly IBillingApiClient _billingApiClient;
     private readonly TimeProvider _timeProvider;
@@ -81,6 +102,10 @@ public sealed class SubscriptionEndpoint : EndpointWithoutRequest<ApiResponse<Su
         IIntegrationRepository integrationRepo,
         ITenantRepository tenantRepository,
         IInvitationRepository invitationRepository,
+        ITenantSubscriptionOverrideRepository overrideRepository,
+        IQuotaPauseService quotaPause,
+        QuotaPauseMetrics quotaPauseMetrics,
+        ILogger<SubscriptionEndpoint> logger,
         ITenantContext tenantContext,
         IBillingApiClient billingApiClient,
         TimeProvider timeProvider)
@@ -90,6 +115,10 @@ public sealed class SubscriptionEndpoint : EndpointWithoutRequest<ApiResponse<Su
         _integrationRepo = integrationRepo;
         _tenantRepository = tenantRepository;
         _invitationRepository = invitationRepository;
+        _overrideRepository = overrideRepository;
+        _quotaPause = quotaPause;
+        _quotaPauseMetrics = quotaPauseMetrics;
+        _logger = logger;
         _tenantContext = tenantContext;
         _billingApiClient = billingApiClient;
         _timeProvider = timeProvider;
@@ -128,6 +157,21 @@ public sealed class SubscriptionEndpoint : EndpointWithoutRequest<ApiResponse<Su
         int activeMembers = await _tenantRepository.CountActiveMembersAsync(tenantId, ct);
         int pendingInvitations = await _invitationRepository.CountPendingInvitationsAsync(tenantId, _timeProvider.GetUtcNow(), ct);
 
+        int pausedMachineCount = await QuotaCutoffDisplay.GetPausedCountOrZeroAsync(_quotaPause, _quotaPauseMetrics, _logger, tenantId, ct);
+
+        // Only the tiers Stripe bills have a billable quantity; the others have no floor to apply and
+        // the count is refused for them rather than guessed.
+        int? billableMachineCount = StripeBilledTiers.Contains(subscription.Tier)
+            ? await _subscriptionService.GetBillableMachineCountAsync(tenantId, subscription.Tier, ct)
+            : null;
+
+        // The customer cannot raise a limit that an agreement or an override sets, so the page must
+        // not suggest upgrading as the way out. An override that leaves the machine limit unset is not
+        // that: the tier's own limit still applies.
+        TenantSubscriptionOverride? machineLimitOverride = await _overrideRepository.GetOverrideForTenantAsync(tenantId, ct);
+        bool machineLimitIsCustom = (subscription.Tier == SubscriptionTier.Enterprise) ||
+                                    (machineLimitOverride?.MachineLimit is not null);
+
         // Retrieve cancellation state and billing interval from billing-api (source of truth for Stripe state)
         bool cancelAtPeriodEnd = false;
         string? billingInterval = null;
@@ -150,6 +194,9 @@ public sealed class SubscriptionEndpoint : EndpointWithoutRequest<ApiResponse<Su
             Status = subscription.Status.ToString(),
             MachineLimit = limits.MachineLimit,
             MachineCount = machineCount,
+            PausedMachineCount = pausedMachineCount,
+            BillableMachineCount = billableMachineCount,
+            MachineLimitIsCustom = machineLimitIsCustom,
             RetentionDays = limits.RetentionDays,
             CurrentPeriodEnd = subscription.CurrentPeriodEnd,
             CancelAtPeriodEnd = cancelAtPeriodEnd,

@@ -34,6 +34,7 @@ public sealed class TelemetryServiceStreamCapTests
             Substitute.For<IServiceScopeFactory>(),
             Substitute.For<ITelemetryDeduplicationService>(),
             Substitute.For<ISubscriptionService>(),
+            Substitute.For<IQuotaPauseService>(),
             Substitute.For<IBackgroundJobClient>(),
             ResiliencePipeline.Empty,
             redis,
@@ -41,6 +42,7 @@ public sealed class TelemetryServiceStreamCapTests
             processLimiter ?? new ProcessStreamSlotLimiter(5000),
             TestMetricsFactory.CreateIngestMetrics(),
             TestMetricsFactory.CreateResilienceMetrics(),
+            TestMetricsFactory.CreateQuotaPauseMetrics(),
             Substitute.For<IFailedSshLoginChainGate>(),
             TimeProvider.System,
             NullLogger<TelemetryService>.Instance);

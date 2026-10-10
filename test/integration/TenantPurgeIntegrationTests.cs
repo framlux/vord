@@ -12,6 +12,7 @@ using Framlux.FleetManagement.Services.Core.Billing;
 using Framlux.FleetManagement.Services.Core.Handlers;
 using Framlux.FleetManagement.Services.Core.Jobs;
 using Framlux.FleetManagement.Services.Core.Security;
+using Framlux.FleetManagement.Test.Infrastructure;
 using LinqToDB;
 using LinqToDB.Async;
 using LinqToDB.Data;
@@ -20,6 +21,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
 using NSubstitute;
+using StackExchange.Redis;
 
 namespace Framlux.FleetManagement.Test.Integration;
 
@@ -198,9 +200,20 @@ public sealed class TenantPurgeIntegrationTests
         // ----- Phase 2: advance past the grace window and run the purge job -----
         timeProvider.Advance(TenantDeletionHandler.GraceWindow + TimeSpan.FromDays(1));
 
+        // The cutoff cached for the purged tenant describes machines that no longer exist; another
+        // tenant's must survive the purge untouched.
+        IConnectionMultiplexer redis = FakeRedisConnection.Create();
+        await redis.GetDatabase().StringSetAsync(QuotaPauseService.CacheKeyFor(tenantA.Id), "after:1");
+        await redis.GetDatabase().StringSetAsync(QuotaPauseService.CacheKeyFor(tenantB.Id), "after:1");
+
         TenantPurgeJob job = new(
-            repo, repo, repo, billingApiClient, timeProvider, NullLogger<TenantPurgeJob>.Instance);
+            repo, repo, repo, billingApiClient,
+            new QuotaCutoffInvalidator(redis, NullLogger<QuotaCutoffInvalidator>.Instance),
+            timeProvider, NullLogger<TenantPurgeJob>.Instance);
         await job.RunAsync(CancellationToken.None);
+
+        await Assert.That((await redis.GetDatabase().StringGetAsync(QuotaPauseService.CacheKeyFor(tenantA.Id))).HasValue).IsFalse();
+        await Assert.That((await redis.GetDatabase().StringGetAsync(QuotaPauseService.CacheKeyFor(tenantB.Id))).HasValue).IsTrue();
 
         // ----- assert: every tenant-A-scoped table is empty -----
         await AssertZeroRowsForTenantAAsync(db, tenantA.Id, machineA.Id, alertRuleA.Id, alertEventA.Id, integrationA.Id);

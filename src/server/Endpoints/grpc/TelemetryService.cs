@@ -7,6 +7,7 @@ using System.Text.Json;
 using Framlux.FleetManagement.Database;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
+using Framlux.FleetManagement.Grpc.AgentCommon;
 using Framlux.FleetManagement.Grpc.AgentTelemetry;
 using Framlux.FleetManagement.Server.Auth;
 using Framlux.FleetManagement.Server.Services.Infrastructure;
@@ -74,6 +75,7 @@ public sealed class TelemetryService : Telemetry.TelemetryBase
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly ITelemetryDeduplicationService _dedupService;
     private readonly ISubscriptionService _subscriptionService;
+    private readonly IQuotaPauseService _quotaPause;
     private readonly IBackgroundJobClient _backgroundJobs;
     private readonly ResiliencePipeline _dbPipeline;
     private readonly IConnectionMultiplexer _redis;
@@ -81,6 +83,7 @@ public sealed class TelemetryService : Telemetry.TelemetryBase
     private readonly ProcessStreamSlotLimiter _processSlotLimiter;
     private readonly IngestMetrics _ingestMetrics;
     private readonly ResilienceMetrics _resilienceMetrics;
+    private readonly QuotaPauseMetrics _quotaPauseMetrics;
     private readonly IFailedSshLoginChainGate _failedSshLoginChainGate;
     private readonly TimeProvider _timeProvider;
     private readonly ILogger<TelemetryService> _logger;
@@ -107,6 +110,7 @@ public sealed class TelemetryService : Telemetry.TelemetryBase
         IServiceScopeFactory scopeFactory,
         ITelemetryDeduplicationService dedupService,
         ISubscriptionService subscriptionService,
+        IQuotaPauseService quotaPause,
         IBackgroundJobClient backgroundJobs,
         ResiliencePipeline dbPipeline,
         IConnectionMultiplexer redis,
@@ -114,6 +118,7 @@ public sealed class TelemetryService : Telemetry.TelemetryBase
         ProcessStreamSlotLimiter processSlotLimiter,
         IngestMetrics ingestMetrics,
         ResilienceMetrics resilienceMetrics,
+        QuotaPauseMetrics quotaPauseMetrics,
         IFailedSshLoginChainGate failedSshLoginChainGate,
         TimeProvider timeProvider,
         ILogger<TelemetryService> logger)
@@ -121,6 +126,7 @@ public sealed class TelemetryService : Telemetry.TelemetryBase
         ArgumentNullException.ThrowIfNull(scopeFactory);
         ArgumentNullException.ThrowIfNull(dedupService);
         ArgumentNullException.ThrowIfNull(subscriptionService);
+        ArgumentNullException.ThrowIfNull(quotaPause);
         ArgumentNullException.ThrowIfNull(backgroundJobs);
         ArgumentNullException.ThrowIfNull(dbPipeline);
         ArgumentNullException.ThrowIfNull(redis);
@@ -128,12 +134,14 @@ public sealed class TelemetryService : Telemetry.TelemetryBase
         ArgumentNullException.ThrowIfNull(processSlotLimiter);
         ArgumentNullException.ThrowIfNull(ingestMetrics);
         ArgumentNullException.ThrowIfNull(resilienceMetrics);
+        ArgumentNullException.ThrowIfNull(quotaPauseMetrics);
         ArgumentNullException.ThrowIfNull(failedSshLoginChainGate);
         ArgumentNullException.ThrowIfNull(timeProvider);
         ArgumentNullException.ThrowIfNull(logger);
         _scopeFactory = scopeFactory;
         _dedupService = dedupService;
         _subscriptionService = subscriptionService;
+        _quotaPause = quotaPause;
         _backgroundJobs = backgroundJobs;
         _dbPipeline = dbPipeline;
         _redis = redis;
@@ -141,6 +149,7 @@ public sealed class TelemetryService : Telemetry.TelemetryBase
         _processSlotLimiter = processSlotLimiter;
         _ingestMetrics = ingestMetrics;
         _resilienceMetrics = resilienceMetrics;
+        _quotaPauseMetrics = quotaPauseMetrics;
         _failedSshLoginChainGate = failedSshLoginChainGate;
         _timeProvider = timeProvider;
         _logger = logger;
@@ -353,7 +362,8 @@ public sealed class TelemetryService : Telemetry.TelemetryBase
             {
                 BatchId = request.BatchId,
                 Success = false,
-                ErrorMessage = "Tenant subscription is not active"
+                ErrorMessage = "Tenant subscription is not active",
+                Reason = IngestRejectionReason.SubscriptionInactive,
             };
         }
 
@@ -411,6 +421,22 @@ public sealed class TelemetryService : Telemetry.TelemetryBase
                 BatchId = envelope.BatchId,
                 Success = false,
                 ErrorMessage = $"Envelope exceeds maximum item count of {MaxItemsPerEnvelope}"
+            };
+        }
+
+        // A paused host's telemetry is acknowledged and dropped before anything is marked, stored or
+        // alerted on. Acknowledging keeps agents that predate the reason code from retrying and later
+        // replaying the backlog; checking before the dedup mark means the same events are new again
+        // once the host resumes. A failed check counts the host as active.
+        if (await IsPausedAsync(tenantId, machineId, ct))
+        {
+            _ingestMetrics.RecordEnvelope(IngestOutcome.Paused);
+
+            return new TelemetryAck
+            {
+                BatchId = envelope.BatchId,
+                Success = true,
+                Reason = IngestRejectionReason.HostPaused,
             };
         }
 
@@ -725,6 +751,21 @@ public sealed class TelemetryService : Telemetry.TelemetryBase
         return payload is not null
             ? JsonSerializer.Serialize(payload, JsonDefaults.SnakeCase)
             : "{}";
+    }
+
+    private async Task<bool> IsPausedAsync(int tenantId, long machineId, CancellationToken ct)
+    {
+        try
+        {
+            return await _quotaPause.IsPausedAsync(tenantId, machineId, ct);
+        }
+        catch (QuotaCheckUnavailableException ex)
+        {
+            _quotaPauseMetrics.RecordCheckFailure(QuotaCheckSurface.Ingest);
+            _logger.LogWarning(ex, "Quota pause check failed for machine {MachineId}; ingesting as active", machineId);
+
+            return false;
+        }
     }
 
     private async Task<bool> IsSubscriptionActiveAsync(ServerCallContext context, CancellationToken ct)

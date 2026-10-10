@@ -7,6 +7,7 @@ using System.Text;
 using Framlux.FleetManagement.Database;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
+using Framlux.FleetManagement.Grpc.AgentCommon;
 using Framlux.FleetManagement.Grpc.AgentConfiguration;
 using Framlux.FleetManagement.Grpc.AgentRegistration;
 using Framlux.FleetManagement.Test.Infrastructure;
@@ -252,6 +253,127 @@ public sealed class ConfigurationServiceTests
     }
 
     [Test]
+    public async Task AgentPing_HostBeyondTheMachineLimit_ReportsPausedAndStillRecordsTheHeartbeat()
+    {
+        // With a limit of one machine the oldest host is told it is active and the newer one is told it
+        // is paused, through the real authentication, subscription and cutoff wiring. The paused host's
+        // heartbeat must still land, because it is how a customer tells which paused hosts are alive.
+        using FunctionalTestFactory factory = new();
+        (int tenantId, List<(long machineId, string apiKey)> machines) = await RegisterMachinesAsync(factory, 2);
+        await LimitTenantToOneMachineAsync(factory, tenantId);
+
+        using GrpcChannel channel = CreateChannel(factory);
+        Configuration.ConfigurationClient client = new(channel);
+
+        AgentPingResponse keptResponse = await client.AgentPingAsync(
+            new AgentPingRequest { MachineId = machines[0].machineId },
+            headers: new Metadata { { "x-api-key", machines[0].apiKey } });
+        AgentPingResponse pausedResponse = await client.AgentPingAsync(
+            new AgentPingRequest { MachineId = machines[1].machineId },
+            headers: new Metadata { { "x-api-key", machines[1].apiKey } });
+
+        await Assert.That(keptResponse.Success).IsTrue();
+        await Assert.That(keptResponse.State).IsEqualTo(IngestRejectionReason.Unspecified);
+        await Assert.That(pausedResponse.Success).IsTrue();
+        await Assert.That(pausedResponse.State).IsEqualTo(IngestRejectionReason.HostPaused);
+
+        using DatabaseContext db = factory.CreateDbContext();
+        MachineStateSummary? summary = await db.MachineStateSummaries
+            .FirstOrDefaultAsync(s => s.MachineId == machines[1].machineId);
+        await Assert.That(summary).IsNotNull();
+        await Assert.That(summary!.LastHeartbeatAt).IsNotNull();
+    }
+
+    [Test]
+    public async Task AgentPing_CanceledSubscriptionOnAPausedHost_ReportsTheSubscriptionNotThePause()
+    {
+        // When both apply the agent must be told the subscription is the problem, because raising the
+        // host limit would not make this tenant's telemetry flow again.
+        using FunctionalTestFactory factory = new();
+        (int tenantId, List<(long machineId, string apiKey)> machines) = await RegisterMachinesAsync(factory, 2);
+        await LimitTenantToOneMachineAsync(factory, tenantId);
+        using (DatabaseContext db = factory.CreateDbContext())
+        {
+            await db.TenantSubscriptions
+                .Where(s => s.TenantId == tenantId)
+                .Set(s => s.Status, SubscriptionStatus.Canceled)
+                .UpdateAsync();
+        }
+
+        using GrpcChannel channel = CreateChannel(factory);
+        Configuration.ConfigurationClient client = new(channel);
+
+        AgentPingResponse response = await client.AgentPingAsync(
+            new AgentPingRequest { MachineId = machines[1].machineId },
+            headers: new Metadata { { "x-api-key", machines[1].apiKey } });
+
+        await Assert.That(response.Success).IsTrue();
+        await Assert.That(response.State).IsEqualTo(IngestRejectionReason.SubscriptionInactive);
+    }
+
+    [Test]
+    public async Task GetPendingCommands_HostBeyondTheMachineLimit_DeliversNothingAndLeavesTheCommandPending()
+    {
+        // A paused host is not served commands, and nothing is marked delivered, so the command is
+        // still pending for when the host resumes.
+        using FunctionalTestFactory factory = new();
+        (int tenantId, List<(long machineId, string apiKey)> machines) = await RegisterMachinesAsync(factory, 2);
+        await LimitTenantToOneMachineAsync(factory, tenantId);
+        string commandId = Guid.NewGuid().ToString("D");
+        using (DatabaseContext db = factory.CreateDbContext())
+        {
+            int userId = await db.InsertWithInt32IdentityAsync(new UserAccount
+            {
+                ExternalId = $"ext-{Guid.NewGuid():N}",
+                Username = $"user-{Guid.NewGuid():N}@example.com",
+                CreatedAt = DateTimeOffset.UtcNow,
+                CreatedByUserId = 1,
+                IsActive = true,
+                IsSystem = false,
+                IsGlobalAdmin = false,
+            });
+            int signingKeyId = await db.InsertWithInt32IdentityAsync(new UserSigningKey
+            {
+                UserId = userId,
+                TenantId = tenantId,
+                Label = "Test Signing Key",
+                PublicKey = Convert.ToBase64String(new byte[32]),
+                PublicKeyFingerprint = Guid.NewGuid().ToString("N"),
+                CreatedAt = DateTimeOffset.UtcNow,
+            });
+            await db.InsertAsync(new RemoteCommand
+            {
+                CommandId = commandId,
+                TenantId = tenantId,
+                MachineId = machines[1].machineId,
+                UserId = userId,
+                SigningKeyId = signingKeyId,
+                CommandType = "reboot",
+                Params = null,
+                Nonce = Guid.NewGuid().ToString("N"),
+                Signature = Convert.ToBase64String(new byte[64]),
+                CanonicalPayload = "{}",
+                Timestamp = DateTimeOffset.UtcNow,
+                ExpiresAt = DateTimeOffset.UtcNow.AddMinutes(10),
+                Status = RemoteCommandStatus.Pending,
+                CreatedAt = DateTimeOffset.UtcNow,
+            });
+        }
+
+        using GrpcChannel channel = CreateChannel(factory);
+        Configuration.ConfigurationClient client = new(channel);
+
+        GetPendingCommandsResponse response = await client.GetPendingCommandsAsync(
+            new GetPendingCommandsRequest { MachineId = machines[1].machineId },
+            headers: new Metadata { { "x-api-key", machines[1].apiKey } });
+
+        await Assert.That(response.Commands.Count).IsEqualTo(0);
+        using DatabaseContext verifyDb = factory.CreateDbContext();
+        RemoteCommand? stored = await verifyDb.RemoteCommands.FirstOrDefaultAsync(c => c.CommandId == commandId);
+        await Assert.That(stored!.Status).IsEqualTo(RemoteCommandStatus.Pending);
+    }
+
+    [Test]
     public async Task GetPendingCommands_MismatchedMachineId_ReturnsPermissionDenied()
     {
         using FunctionalTestFactory factory = new();
@@ -274,37 +396,63 @@ public sealed class ConfigurationServiceTests
 
     private static async Task<(long machineId, string apiKey)> RegisterMachineAsync(FunctionalTestFactory factory)
     {
+        (int _, List<(long machineId, string apiKey)> machines) = await RegisterMachinesAsync(factory, 1);
+
+        return machines[0];
+    }
+
+    private static async Task<(int tenantId, List<(long machineId, string apiKey)> machines)> RegisterMachinesAsync(
+        FunctionalTestFactory factory, int count)
+    {
         using DatabaseContext db = factory.CreateDbContext();
         int tenantId = await SeedTenant(db);
         await SeedActiveSubscription(db, tenantId);
 
-        const string tokenValue = "test-config-token";
-        RegistrationToken token = new()
-        {
-            TenantId = tenantId,
-            TokenHash = ComputeHash(tokenValue),
-            Name = "Config test token",
-            CreatedByUserId = 1,
-            CreatedAt = DateTimeOffset.UtcNow,
-            ExpiresAt = DateTimeOffset.UtcNow.AddDays(7),
-            IsRevoked = false,
-        };
-        await db.InsertWithIdentityAsync(token);
-
         using GrpcChannel channel = CreateChannel(factory);
         Registration.RegistrationClient regClient = new(channel);
 
-        RegisterSystemResponse response = await regClient.RegisterSystemAsync(new RegisterSystemRequest
+        List<(long machineId, string apiKey)> machines = [];
+        for (int i = 0; i < count; i++)
         {
-            Hostname = $"config-host-{Guid.NewGuid():N}".Substring(0, 20),
-            SerialNumber = $"sn-cfg-{Guid.NewGuid():N}".Substring(0, 20),
-            SystemId = $"sys-cfg-{Guid.NewGuid():N}".Substring(0, 20),
-            RegistrationToken = tokenValue,
-            MachineType = MachineType.BareMetalServerType,
-            Os = OperatingSystemType.UbuntuOs,
-        });
+            // A registration token is single use, so each machine needs its own.
+            string tokenValue = $"test-config-token-{i}";
+            RegistrationToken token = new()
+            {
+                TenantId = tenantId,
+                TokenHash = ComputeHash(tokenValue),
+                Name = $"Config test token {i}",
+                CreatedByUserId = 1,
+                CreatedAt = DateTimeOffset.UtcNow,
+                ExpiresAt = DateTimeOffset.UtcNow.AddDays(7),
+                IsRevoked = false,
+            };
+            await db.InsertWithIdentityAsync(token);
 
-        return (response.MachineId, response.ApiKey);
+            RegisterSystemResponse response = await regClient.RegisterSystemAsync(new RegisterSystemRequest
+            {
+                Hostname = $"config-host-{Guid.NewGuid():N}".Substring(0, 20),
+                SerialNumber = $"sn-cfg-{Guid.NewGuid():N}".Substring(0, 20),
+                SystemId = $"sys-cfg-{Guid.NewGuid():N}".Substring(0, 20),
+                RegistrationToken = tokenValue,
+                MachineType = MachineType.BareMetalServerType,
+                Os = OperatingSystemType.UbuntuOs,
+            });
+            machines.Add((response.MachineId, response.ApiKey));
+        }
+
+        return (tenantId, machines);
+    }
+
+    private static async Task LimitTenantToOneMachineAsync(FunctionalTestFactory factory, int tenantId)
+    {
+        using DatabaseContext db = factory.CreateDbContext();
+        await db.InsertAsync(new TenantSubscriptionOverride
+        {
+            TenantId = tenantId,
+            MachineLimit = 1,
+            CreatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow,
+        });
     }
 
     private static GrpcChannel CreateChannel(FunctionalTestFactory factory)

@@ -442,8 +442,10 @@ func (x *AgentPingRequest) GetMachineId() int64 {
 }
 
 type AgentPingResponse struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
+	state   protoimpl.MessageState `protogen:"open.v1"`
+	Success bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
+	// The pause or inactive-subscription reason when the server is not taking this machine's telemetry, else UNSPECIFIED.
+	State         IngestRejectionReason `protobuf:"varint,2,opt,name=state,proto3,enum=agent.IngestRejectionReason" json:"state,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -483,6 +485,13 @@ func (x *AgentPingResponse) GetSuccess() bool {
 		return x.Success
 	}
 	return false
+}
+
+func (x *AgentPingResponse) GetState() IngestRejectionReason {
+	if x != nil {
+		return x.State
+	}
+	return IngestRejectionReason_INGEST_REJECTION_REASON_UNSPECIFIED
 }
 
 type GetPendingCommandsRequest struct {
@@ -907,7 +916,7 @@ var File_AgentConfiguration_proto protoreflect.FileDescriptor
 
 const file_AgentConfiguration_proto_rawDesc = "" +
 	"\n" +
-	"\x18AgentConfiguration.proto\x12\x05agent\x1a\x17AgentRegistration.proto\"\x9e\x01\n" +
+	"\x18AgentConfiguration.proto\x12\x05agent\x1a\x17AgentRegistration.proto\x1a\x11AgentCommon.proto\"\x9e\x01\n" +
 	"\x17GetConfigurationRequest\x12\x1d\n" +
 	"\n" +
 	"machine_id\x18\x01 \x01(\x03R\tmachineId\x12-\n" +
@@ -937,9 +946,10 @@ const file_AgentConfiguration_proto_rawDesc = "" +
 	"\x16service_status_seconds\x18\b \x01(\x05R\x14serviceStatusSeconds\"1\n" +
 	"\x10AgentPingRequest\x12\x1d\n" +
 	"\n" +
-	"machine_id\x18\x01 \x01(\x03R\tmachineId\"-\n" +
+	"machine_id\x18\x01 \x01(\x03R\tmachineId\"a\n" +
 	"\x11AgentPingResponse\x12\x18\n" +
-	"\asuccess\x18\x01 \x01(\bR\asuccess\":\n" +
+	"\asuccess\x18\x01 \x01(\bR\asuccess\x122\n" +
+	"\x05state\x18\x02 \x01(\x0e2\x1c.agent.IngestRejectionReasonR\x05state\":\n" +
 	"\x19GetPendingCommandsRequest\x12\x1d\n" +
 	"\n" +
 	"machine_id\x18\x01 \x01(\x03R\tmachineId\"M\n" +
@@ -1023,28 +1033,30 @@ var file_AgentConfiguration_proto_goTypes = []any{
 	(*AcknowledgeCommandResponse)(nil), // 12: agent.AcknowledgeCommandResponse
 	nil,                                // 13: agent.AgentCommand.ParamsEntry
 	(MachineType)(0),                   // 14: agent.MachineType
+	(IngestRejectionReason)(0),         // 15: agent.IngestRejectionReason
 }
 var file_AgentConfiguration_proto_depIdxs = []int32{
 	14, // 0: agent.GetConfigurationRequest.machine_type:type_name -> agent.MachineType
 	4,  // 1: agent.GetConfigurationResponse.time_config:type_name -> agent.TimingConfiguration
 	3,  // 2: agent.GetConfigurationResponse.signing_keys:type_name -> agent.TrustedSigningKey
-	9,  // 3: agent.GetPendingCommandsResponse.commands:type_name -> agent.AgentCommand
-	13, // 4: agent.AgentCommand.params:type_name -> agent.AgentCommand.ParamsEntry
-	11, // 5: agent.AcknowledgeCommandRequest.result:type_name -> agent.CommandResult
-	0,  // 6: agent.CommandResult.result_type:type_name -> agent.ResultType
-	1,  // 7: agent.Configuration.GetConfiguration:input_type -> agent.GetConfigurationRequest
-	5,  // 8: agent.Configuration.AgentPing:input_type -> agent.AgentPingRequest
-	7,  // 9: agent.Configuration.GetPendingCommands:input_type -> agent.GetPendingCommandsRequest
-	10, // 10: agent.Configuration.AcknowledgeCommand:input_type -> agent.AcknowledgeCommandRequest
-	2,  // 11: agent.Configuration.GetConfiguration:output_type -> agent.GetConfigurationResponse
-	6,  // 12: agent.Configuration.AgentPing:output_type -> agent.AgentPingResponse
-	8,  // 13: agent.Configuration.GetPendingCommands:output_type -> agent.GetPendingCommandsResponse
-	12, // 14: agent.Configuration.AcknowledgeCommand:output_type -> agent.AcknowledgeCommandResponse
-	11, // [11:15] is the sub-list for method output_type
-	7,  // [7:11] is the sub-list for method input_type
-	7,  // [7:7] is the sub-list for extension type_name
-	7,  // [7:7] is the sub-list for extension extendee
-	0,  // [0:7] is the sub-list for field type_name
+	15, // 3: agent.AgentPingResponse.state:type_name -> agent.IngestRejectionReason
+	9,  // 4: agent.GetPendingCommandsResponse.commands:type_name -> agent.AgentCommand
+	13, // 5: agent.AgentCommand.params:type_name -> agent.AgentCommand.ParamsEntry
+	11, // 6: agent.AcknowledgeCommandRequest.result:type_name -> agent.CommandResult
+	0,  // 7: agent.CommandResult.result_type:type_name -> agent.ResultType
+	1,  // 8: agent.Configuration.GetConfiguration:input_type -> agent.GetConfigurationRequest
+	5,  // 9: agent.Configuration.AgentPing:input_type -> agent.AgentPingRequest
+	7,  // 10: agent.Configuration.GetPendingCommands:input_type -> agent.GetPendingCommandsRequest
+	10, // 11: agent.Configuration.AcknowledgeCommand:input_type -> agent.AcknowledgeCommandRequest
+	2,  // 12: agent.Configuration.GetConfiguration:output_type -> agent.GetConfigurationResponse
+	6,  // 13: agent.Configuration.AgentPing:output_type -> agent.AgentPingResponse
+	8,  // 14: agent.Configuration.GetPendingCommands:output_type -> agent.GetPendingCommandsResponse
+	12, // 15: agent.Configuration.AcknowledgeCommand:output_type -> agent.AcknowledgeCommandResponse
+	12, // [12:16] is the sub-list for method output_type
+	8,  // [8:12] is the sub-list for method input_type
+	8,  // [8:8] is the sub-list for extension type_name
+	8,  // [8:8] is the sub-list for extension extendee
+	0,  // [0:8] is the sub-list for field type_name
 }
 
 func init() { file_AgentConfiguration_proto_init() }
@@ -1053,6 +1065,7 @@ func file_AgentConfiguration_proto_init() {
 		return
 	}
 	file_AgentRegistration_proto_init()
+	file_AgentCommon_proto_init()
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{

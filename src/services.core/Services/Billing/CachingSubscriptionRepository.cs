@@ -34,6 +34,7 @@ public sealed class CachingSubscriptionRepository : ISubscriptionRepository
     private readonly ISubscriptionRepository _inner;
     private readonly IConnectionMultiplexer _redis;
     private readonly RetentionReclassifyDispatcher _reclassifyDispatcher;
+    private readonly QuotaCutoffInvalidator _quotaInvalidator;
     private readonly TimeSpan _ttl;
 
     /// <summary>
@@ -50,20 +51,24 @@ public sealed class CachingSubscriptionRepository : ISubscriptionRepository
     /// <param name="redis">The Redis connection multiplexer used as the cache backing store.</param>
     /// <param name="redisOptions">Redis options supplying the cache TTL.</param>
     /// <param name="reclassifyDispatcher">Collects tier changes for post-commit retention reclassification.</param>
+    /// <param name="quotaInvalidator">Collects tier changes for the post-commit clearing of the quota cutoff.</param>
     public CachingSubscriptionRepository(
         ISubscriptionRepository inner,
         IConnectionMultiplexer redis,
         IOptions<RedisOptions> redisOptions,
-        RetentionReclassifyDispatcher reclassifyDispatcher)
+        RetentionReclassifyDispatcher reclassifyDispatcher,
+        QuotaCutoffInvalidator quotaInvalidator)
     {
         ArgumentNullException.ThrowIfNull(inner);
         ArgumentNullException.ThrowIfNull(redis);
         ArgumentNullException.ThrowIfNull(redisOptions);
         ArgumentNullException.ThrowIfNull(reclassifyDispatcher);
+        ArgumentNullException.ThrowIfNull(quotaInvalidator);
 
         _inner = inner;
         _redis = redis;
         _reclassifyDispatcher = reclassifyDispatcher;
+        _quotaInvalidator = quotaInvalidator;
 
         int ttlSeconds = redisOptions.Value.SubscriptionCacheTtlSeconds;
         _ttl = TimeSpan.FromSeconds(ttlSeconds > 0 ? ttlSeconds : 30);
@@ -108,7 +113,7 @@ public sealed class CachingSubscriptionRepository : ISubscriptionRepository
     private async Task<CachedSubscriptionEntry> GetOrLoadEntryAsync(int tenantId, CancellationToken cancellationToken)
     {
         IDatabase db = _redis.GetDatabase();
-        string key = KeyFor(tenantId);
+        string key = CacheKeyFor(tenantId);
 
         RedisValue cached = await db.StringGetAsync(key);
         if (cached.HasValue)
@@ -141,6 +146,9 @@ public sealed class CachingSubscriptionRepository : ISubscriptionRepository
         TenantSubscription result = await _inner.CreateTenantSubscriptionAsync(subscription, cancellationToken);
         await InvalidateAsync(subscription.TenantId);
 
+        // The new row replaces the implicit Free tier, which can move the tenant's machine limit.
+        _quotaInvalidator.MarkPending(subscription.TenantId);
+
         return result;
     }
 
@@ -160,13 +168,15 @@ public sealed class CachingSubscriptionRepository : ISubscriptionRepository
         // — routes its write through this decorator, so this is the one place a tier change can be
         // observed. A tier change moves the tenant's effective retention, so the surviving telemetry
         // must follow it. Status-only transitions are skipped: effective retention is a function of
-        // tier and per-tenant override alone.
+        // tier and per-tenant override alone. A tier change also moves the tenant's machine limit, so
+        // the quota cutoff is marked the same way.
         //
         // This runs inside the caller's transaction, so the change is only marked here. The caller
-        // dispatches it after its commit; see RetentionReclassifyDispatcher.
+        // dispatches it after its commit; see RetentionReclassifyDispatcher and QuotaCutoffInvalidator.
         if ((tier is not null) && (updated > 0))
         {
             _reclassifyDispatcher.MarkPending(tenantId);
+            _quotaInvalidator.MarkPending(tenantId);
         }
 
         return updated;
@@ -209,16 +219,19 @@ public sealed class CachingSubscriptionRepository : ISubscriptionRepository
         EnterpriseApplyOutcome outcome = await _inner.ApplyEnterpriseSubscriptionAsync(tenantId, revision, termEnd, cancellationToken);
         await InvalidateAsync(tenantId);
 
-        // A tier change moves the tenant's retention class; the caller dispatches after commit.
+        // A tier change moves the tenant's retention class and machine limit; the caller dispatches
+        // after commit.
         if (outcome == EnterpriseApplyOutcome.Applied)
         {
             _reclassifyDispatcher.MarkPending(tenantId);
+            _quotaInvalidator.MarkPending(tenantId);
         }
 
         return outcome;
     }
 
-    private static string KeyFor(int tenantId)
+    /// <summary>The Redis key holding a tenant's cached subscription.</summary>
+    public static string CacheKeyFor(int tenantId)
     {
         return KeyPrefix + tenantId.ToString(System.Globalization.CultureInfo.InvariantCulture);
     }
@@ -246,6 +259,6 @@ public sealed class CachingSubscriptionRepository : ISubscriptionRepository
     private async Task InvalidateAsync(int tenantId)
     {
         IDatabase db = _redis.GetDatabase();
-        await db.KeyDeleteAsync(KeyFor(tenantId));
+        await db.KeyDeleteAsync(CacheKeyFor(tenantId));
     }
 }

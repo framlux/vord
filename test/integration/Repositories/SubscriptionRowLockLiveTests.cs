@@ -16,6 +16,7 @@ using Framlux.FleetManagement.Services.Core.Handlers;
 using Framlux.FleetManagement.Services.Core.Hangfire;
 using Framlux.FleetManagement.Services.Core.Infrastructure;
 using Framlux.FleetManagement.Services.Core.Security;
+using Framlux.FleetManagement.Test.Infrastructure;
 using Framlux.FleetManagement.Test.Integration;
 using Framlux.Vord.BillingGrpc;
 using Grpc.Core;
@@ -380,6 +381,7 @@ public sealed class SubscriptionRowLockLiveTests
             repo,
             provisioner,
             new RetentionReclassifyDispatcher(Substitute.For<IBackgroundJobClient>(), NullLogger<RetentionReclassifyDispatcher>.Instance),
+            BuildHostsPausedWriter(repo),
             NullLogger<EnterpriseAgreementHandler>.Instance);
     }
 
@@ -394,7 +396,22 @@ public sealed class SubscriptionRowLockLiveTests
             Substitute.For<IBuiltInAlertRuleProvisioner>(),
             cleanup,
             new RetentionReclassifyDispatcher(Substitute.For<IBackgroundJobClient>(), NullLogger<RetentionReclassifyDispatcher>.Instance),
+            new QuotaCutoffInvalidator(FakeRedisConnection.Create(), NullLogger<QuotaCutoffInvalidator>.Instance),
+            BuildHostsPausedWriter(repo),
             NullLogger<BillingWebhookHandler>.Instance);
+    }
+
+    /// <summary>
+    /// The pause-audit writer with every tier unlimited, so the lock-ordering tests above see only the
+    /// writes they are about.
+    /// </summary>
+    private static HostsPausedAuditWriter BuildHostsPausedWriter(DatabaseRepository repo)
+    {
+        ISubscriptionService subscriptions = Substitute.For<ISubscriptionService>();
+        subscriptions.GetMachineLimitForTierAsync(Arg.Any<int>(), Arg.Any<SubscriptionTier>(), Arg.Any<CancellationToken>())
+            .Returns(int.MaxValue);
+
+        return new HostsPausedAuditWriter(subscriptions, repo, repo);
     }
 
     /// <summary>
@@ -413,6 +430,8 @@ public sealed class SubscriptionRowLockLiveTests
         services.AddScoped<IAuditLogRepository>(sp => sp.GetRequiredService<DatabaseRepository>());
         services.AddScoped(_ => new RetentionReclassifyDispatcher(
             Substitute.For<IBackgroundJobClient>(), NullLogger<RetentionReclassifyDispatcher>.Instance));
+        services.AddScoped(sp => BuildHostsPausedWriter(sp.GetRequiredService<DatabaseRepository>()));
+        services.AddScoped(_ => new QuotaCutoffInvalidator(FakeRedisConnection.Create(), NullLogger<QuotaCutoffInvalidator>.Instance));
         ServiceProvider provider = services.BuildServiceProvider();
 
         return new FleetAdminService(

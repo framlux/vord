@@ -54,6 +54,13 @@ public sealed class FleetMachineRow
     /// <summary>Pre-computed health status (0=healthy, 1=warning, 2=critical, 3=offline).</summary>
     public short HealthStatus { get; init; }
 
+    /// <summary>
+    /// Whether the machine is paused for exceeding its tenant's machine limit. Derived from the cutoff
+    /// the query was built with, never stored, and independent of <see cref="HealthStatus"/>, which
+    /// keeps whatever the machine last reported before it was paused.
+    /// </summary>
+    public bool IsPaused { get; init; }
+
     /// <summary>Last seen timestamp from MachineStateSummary.</summary>
     public DateTimeOffset? LastSeenAt { get; init; }
 

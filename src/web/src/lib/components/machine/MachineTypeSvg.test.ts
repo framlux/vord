@@ -163,4 +163,59 @@ describe('MachineTypeSvg', () => {
 			expect(svg).not.toBeNull();
 		}
 	});
+
+	describe('when the host is paused', () => {
+		const allTypes = [
+			MachineType.BareMetalServer,
+			MachineType.Desktop,
+			MachineType.Laptop,
+			MachineType.VirtualMachine,
+			MachineType.Unknown
+		];
+
+		function renderPaused(machineType: MachineType, healthStatus = MachineHealthStatus.Critical) {
+			// The heartbeat keeps isOnline true on a paused host and its health is frozen at the last
+			// report, which is exactly the state the drawing must not show.
+			return render(MachineTypeSvg, {
+				props: { machineType, healthStatus, isOnline: true, isPaused: true, size: 160 }
+			});
+		}
+
+		it('draws the ring in indigo instead of the frozen health colour', () => {
+			const { container } = renderPaused(MachineType.BareMetalServer);
+
+			expect(container.querySelectorAll('stop[stop-color="#6366F1"]').length).toBeGreaterThan(0);
+			expect(container.querySelectorAll('stop[stop-color="#FF6467"]').length).toBe(0);
+		});
+
+		it.each(allTypes)('shows no green or pulsing LED for machine type %s', (machineType) => {
+			const { container } = renderPaused(machineType, MachineHealthStatus.Healthy);
+
+			expect(container.querySelectorAll('[fill="#10B981"]').length).toBe(0);
+			expect(container.querySelectorAll('stop[stop-color="#10B981"]').length).toBe(0);
+			expect(container.querySelectorAll('.machine-led-pulse').length).toBe(0);
+		});
+
+		it('shows an indigo status indicator dot', () => {
+			const { container } = renderPaused(MachineType.VirtualMachine);
+
+			expect(container.querySelectorAll('circle[fill="#6366F1"]').length).toBeGreaterThan(0);
+		});
+
+		it('draws the status indicator halo in indigo, not in the live green or the offline grey', () => {
+			// The halo is a separate stroked circle from the dot, so the dot being indigo says nothing
+			// about it. A paused host's heartbeat keeps isOnline true, which is what would turn it green.
+			const { container } = renderPaused(MachineType.VirtualMachine, MachineHealthStatus.Healthy);
+
+			expect(container.querySelectorAll('circle[stroke="#6366F1"]').length).toBeGreaterThan(0);
+			expect(container.querySelectorAll('[stroke="#10B981"]').length).toBe(0);
+			expect(container.querySelectorAll('[stroke="#6E6E77"]').length).toBe(0);
+		});
+
+		it('describes itself as paused to a screen reader', () => {
+			const { container } = renderPaused(MachineType.Desktop);
+
+			expect(container.querySelector('svg')?.getAttribute('aria-label')).toBe('Paused machine visualization');
+		});
+	});
 });

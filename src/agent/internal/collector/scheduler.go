@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/framlux/vord/internal/db"
+	"github.com/framlux/vord/internal/pause"
 	"github.com/framlux/vord/internal/state"
 )
 
@@ -20,17 +21,20 @@ import (
 type Scheduler struct {
 	registry *Registry
 	store    *db.Store
+	pause    *pause.Coordinator
 	fastTick *FastTick
 	slowTick *SlowTick
 }
 
-// NewScheduler creates a new Scheduler.
-func NewScheduler(registry *Registry, store *db.Store, rs *state.RuntimeState) *Scheduler {
+// NewScheduler creates a new Scheduler. While the pause coordinator reports the host paused, no collector,
+// including the grouped fast and slow ticks, collects anything.
+func NewScheduler(registry *Registry, store *db.Store, rs *state.RuntimeState, pc *pause.Coordinator) *Scheduler {
 	return &Scheduler{
 		registry: registry,
 		store:    store,
-		fastTick: NewFastTick(store, rs),
-		slowTick: NewSlowTick(store, rs),
+		pause:    pc,
+		fastTick: NewFastTick(store, rs, pc),
+		slowTick: NewSlowTick(store, rs, pc),
 	}
 }
 
@@ -138,6 +142,15 @@ func (s *Scheduler) safeExecuteCollector(ctx context.Context, c Collector) {
 
 func (s *Scheduler) executeCollector(ctx context.Context, c Collector) {
 	name := c.Name()
+
+	// A paused host collects nothing: the server would discard it, and collecting would advance cursors past
+	// events that should be skipped on resume anyway.
+	if s.pause.Paused() {
+		slog.Debug("collector skipped, host is paused", "name", name)
+
+		return
+	}
+
 	start := time.Now()
 
 	if err := c.Collect(ctx, s.store); err != nil {

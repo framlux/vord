@@ -56,6 +56,22 @@ public sealed class FleetSearchParameters
     /// <summary>Filter by pre-computed health status values.</summary>
     public List<short>? HealthStatusValues { get; init; }
 
+    /// <summary>
+    /// The id of the tenant's last active machine. A machine with a greater id is paused for exceeding
+    /// the machine limit. Ignored when <see cref="AllPaused"/> is set.
+    /// </summary>
+    public long? PausedAfterId { get; init; }
+
+    /// <summary>Every machine of the tenant is paused, because its machine limit is zero or below.</summary>
+    public bool AllPaused { get; init; }
+
+    /// <summary>
+    /// Restricts the result to paused machines when true and to active machines when false. A health
+    /// status filter never matches a paused machine whatever this is set to, so combining the two
+    /// narrows the result to nothing rather than to the paused machines of that health.
+    /// </summary>
+    public bool? Paused { get; init; }
+
     /// <summary>Filter by last seen after this time.</summary>
     public DateTimeOffset? LastSeenAfter { get; init; }
 

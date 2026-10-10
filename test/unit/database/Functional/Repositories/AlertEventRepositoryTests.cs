@@ -649,6 +649,126 @@ public class AlertEventRepositoryTests
         await Assert.That(resolved2.ResolvedAt).IsNotNull();
     }
 
+    // ========== ResolveOpenEventsForMachinesAfterAsync tests ==========
+
+    [Test]
+    public async Task ResolveOpenEventsForMachinesAfterAsync_After_ResolvesOpenEventsOfPausedMachinesInThatTenantOnly()
+    {
+        // Intent: the cutoff is exclusive and tenant-scoped. The machine whose id is the cutoff is the
+        // last active one and keeps its event; an acknowledged event is still open and is resolved;
+        // an event already resolved keeps its original timestamp; and another tenant's event on a
+        // higher-numbered machine is never touched.
+        using TestDatabaseFactory dbFactory = new();
+        IAlertEventRepository repo = CreateRepo(dbFactory);
+        DateTimeOffset triggeredAt = new(2026, 6, 1, 12, 0, 0, TimeSpan.Zero);
+        DateTimeOffset resolvedAt = new(2026, 6, 1, 13, 0, 0, TimeSpan.Zero);
+        DateTimeOffset priorResolvedAt = new(2026, 6, 1, 12, 30, 0, TimeSpan.Zero);
+
+        AlertEvent atCutoff = await SeedAlertEventAsync(dbFactory.Context, triggeredAt, tenantId: 1, machineId: 10);
+        AlertEvent triggered = await SeedAlertEventAsync(dbFactory.Context, triggeredAt, tenantId: 1, machineId: 11);
+        AlertEvent acknowledged = await SeedAlertEventAsync(dbFactory.Context, triggeredAt, AlertEventStatus.Acknowledged, tenantId: 1, machineId: 12);
+        AlertEvent alreadyResolved = await SeedAlertEventAsync(dbFactory.Context, triggeredAt, AlertEventStatus.Resolved, tenantId: 1, machineId: 13);
+        await dbFactory.Context.AlertEvents.Where(e => e.Id == alreadyResolved.Id).Set(e => e.ResolvedAt, priorResolvedAt).UpdateAsync();
+        AlertEvent otherTenant = await SeedAlertEventAsync(dbFactory.Context, triggeredAt, tenantId: 2, machineId: 14);
+
+        int resolved = await repo.ResolveOpenEventsForMachinesAfterAsync(tenantId: 1, QuotaCutoffKind.After, cutoffId: 10, resolvedAt);
+
+        await Assert.That(resolved).IsEqualTo(2);
+        AlertEvent? afterCutoff = await repo.GetAlertEventByIdAsync(atCutoff.Id);
+        await Assert.That(afterCutoff!.Status).IsEqualTo(AlertEventStatus.Triggered);
+        await Assert.That(afterCutoff.ResolvedAt).IsNull();
+        foreach (AlertEvent pausedEvent in new[] { triggered, acknowledged })
+        {
+            AlertEvent? row = await repo.GetAlertEventByIdAsync(pausedEvent.Id);
+            await Assert.That(row!.Status).IsEqualTo(AlertEventStatus.Resolved);
+            await Assert.That(row.ResolvedAt).IsEqualTo(resolvedAt);
+        }
+        AlertEvent? untouchedResolved = await repo.GetAlertEventByIdAsync(alreadyResolved.Id);
+        await Assert.That(untouchedResolved!.ResolvedAt).IsEqualTo(priorResolvedAt);
+        AlertEvent? otherTenantRow = await repo.GetAlertEventByIdAsync(otherTenant.Id);
+        await Assert.That(otherTenantRow!.Status).IsEqualTo(AlertEventStatus.Triggered);
+    }
+
+    [Test]
+    public async Task ResolveOpenEventsForMachinesAfterAsync_All_ResolvesEveryOpenEventOfThatTenantOnly()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        IAlertEventRepository repo = CreateRepo(dbFactory);
+        DateTimeOffset triggeredAt = new(2026, 6, 1, 12, 0, 0, TimeSpan.Zero);
+        DateTimeOffset resolvedAt = new(2026, 6, 1, 13, 0, 0, TimeSpan.Zero);
+
+        AlertEvent low = await SeedAlertEventAsync(dbFactory.Context, triggeredAt, tenantId: 1, machineId: 1);
+        AlertEvent high = await SeedAlertEventAsync(dbFactory.Context, triggeredAt, tenantId: 1, machineId: 99);
+        AlertEvent otherTenant = await SeedAlertEventAsync(dbFactory.Context, triggeredAt, tenantId: 2, machineId: 1);
+
+        int resolved = await repo.ResolveOpenEventsForMachinesAfterAsync(tenantId: 1, QuotaCutoffKind.All, cutoffId: 0, resolvedAt);
+
+        await Assert.That(resolved).IsEqualTo(2);
+        await Assert.That((await repo.GetAlertEventByIdAsync(low.Id))!.Status).IsEqualTo(AlertEventStatus.Resolved);
+        await Assert.That((await repo.GetAlertEventByIdAsync(high.Id))!.Status).IsEqualTo(AlertEventStatus.Resolved);
+        await Assert.That((await repo.GetAlertEventByIdAsync(otherTenant.Id))!.Status).IsEqualTo(AlertEventStatus.Triggered);
+    }
+
+    [Test]
+    public async Task ResolveOpenEventsForMachinesAfterAsync_None_ResolvesNothing()
+    {
+        // Intent: a tenant within its limit has no paused machines. None must not be read as a cutoff of
+        // zero, which would resolve every open event the tenant has.
+        using TestDatabaseFactory dbFactory = new();
+        IAlertEventRepository repo = CreateRepo(dbFactory);
+        AlertEvent open = await SeedAlertEventAsync(dbFactory.Context, new DateTimeOffset(2026, 6, 1, 12, 0, 0, TimeSpan.Zero), tenantId: 1, machineId: 5);
+
+        int resolved = await repo.ResolveOpenEventsForMachinesAfterAsync(tenantId: 1, QuotaCutoffKind.None, cutoffId: 0, DateTimeOffset.UnixEpoch);
+
+        await Assert.That(resolved).IsEqualTo(0);
+        await Assert.That((await repo.GetAlertEventByIdAsync(open.Id))!.Status).IsEqualTo(AlertEventStatus.Triggered);
+    }
+
+    [Test]
+    public async Task ResolveOpenEventsForMachinesAfterAsync_UnknownKind_Throws()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        IAlertEventRepository repo = CreateRepo(dbFactory);
+
+        await Assert.ThrowsAsync<ArgumentOutOfRangeException>(
+            () => repo.ResolveOpenEventsForMachinesAfterAsync(tenantId: 1, (QuotaCutoffKind)99, cutoffId: 0, DateTimeOffset.UnixEpoch));
+    }
+
+    // ========== GetTenantIdsWithOpenAlertEventsAsync tests ==========
+
+    [Test]
+    public async Task GetTenantIdsWithOpenAlertEventsAsync_ReturnsEachTenantWithAnOpenEventOnce()
+    {
+        // Intent: alert evaluation visits these tenants so a downgraded tenant's paused hosts still
+        // get their events closed. A tenant counts when any event is open (triggered or acknowledged),
+        // is listed once however many it has, and drops out once everything it has is resolved.
+        using TestDatabaseFactory dbFactory = new();
+        IAlertEventRepository repo = CreateRepo(dbFactory);
+        DateTimeOffset at = new(2026, 6, 1, 12, 0, 0, TimeSpan.Zero);
+
+        await SeedAlertEventAsync(dbFactory.Context, at, AlertEventStatus.Triggered, tenantId: 1, machineId: 1);
+        await SeedAlertEventAsync(dbFactory.Context, at, AlertEventStatus.Acknowledged, tenantId: 1, machineId: 2);
+        await SeedAlertEventAsync(dbFactory.Context, at, AlertEventStatus.Resolved, tenantId: 2, machineId: 3);
+        await SeedAlertEventAsync(dbFactory.Context, at, AlertEventStatus.Resolved, tenantId: 3, machineId: 4);
+        await SeedAlertEventAsync(dbFactory.Context, at, AlertEventStatus.Triggered, tenantId: 3, machineId: 5);
+
+        List<int> tenantIds = await repo.GetTenantIdsWithOpenAlertEventsAsync();
+
+        await Assert.That(tenantIds.Order().ToList()).IsEquivalentTo(new List<int> { 1, 3 });
+    }
+
+    [Test]
+    public async Task GetTenantIdsWithOpenAlertEventsAsync_NoOpenEvents_ReturnsEmpty()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        IAlertEventRepository repo = CreateRepo(dbFactory);
+        await SeedAlertEventAsync(dbFactory.Context, new DateTimeOffset(2026, 6, 1, 12, 0, 0, TimeSpan.Zero), AlertEventStatus.Resolved, tenantId: 1, machineId: 1);
+
+        List<int> tenantIds = await repo.GetTenantIdsWithOpenAlertEventsAsync();
+
+        await Assert.That(tenantIds.Count).IsEqualTo(0);
+    }
+
     // ----- GetTriggeredEventsWithoutDeliveryAttemptsAsync -----
 
     [Test]

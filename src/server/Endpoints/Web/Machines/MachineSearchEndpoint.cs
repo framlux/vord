@@ -51,6 +51,7 @@ public sealed class MachineSearchEndpoint : EndpointWithoutRequest<ApiResponse<P
             PageSize = pageSize,
             Search = Query<string?>("search", isRequired: false),
             HealthStatus = Query<string?>("healthStatus", isRequired: false),
+            Paused = Query<bool?>("paused", isRequired: false),
             Os = Query<string?>("os", isRequired: false),
             Type = Query<string?>("type", isRequired: false),
             CpuMin = Query<int?>("cpuMin", isRequired: false),

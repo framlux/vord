@@ -55,6 +55,9 @@ public sealed class EnterpriseAgreementHandlerTests
             Repo = new DatabaseRepository(_dbFactory.Context, new NullLogger<DatabaseRepository>());
             Provisioner = Substitute.For<IBuiltInAlertRuleProvisioner>();
             BackgroundJobs = Substitute.For<IBackgroundJobClient>();
+            Subscriptions = Substitute.For<ISubscriptionService>();
+            Subscriptions.GetMachineLimitForTierAsync(Arg.Any<int>(), Arg.Any<SubscriptionTier>(), Arg.Any<CancellationToken>())
+                .Returns(int.MaxValue);
             Handler = BuildHandler();
         }
 
@@ -64,7 +67,18 @@ public sealed class EnterpriseAgreementHandlerTests
 
         public IBackgroundJobClient BackgroundJobs { get; }
 
+        /// <summary>The machine-limit source the audit writer reads; every tier is unlimited until a test says otherwise.</summary>
+        public ISubscriptionService Subscriptions { get; }
+
         public EnterpriseAgreementHandler Handler { get; }
+
+        public async Task SeedMachinesAsync(int count)
+        {
+            for (int i = 0; i < count; i++)
+            {
+                await _dbFactory.Context.InsertWithInt64IdentityAsync(TestDataBuilder.BuildMachine(tenantId: TenantId));
+            }
+        }
 
         /// <summary>
         /// Builds a handler over the same database whose transaction provider, subscription
@@ -83,6 +97,7 @@ public sealed class EnterpriseAgreementHandlerTests
                 auditLog ?? Repo,
                 Provisioner,
                 new RetentionReclassifyDispatcher(BackgroundJobs, NullLogger<RetentionReclassifyDispatcher>.Instance),
+                new HostsPausedAuditWriter(Subscriptions, Repo, auditLog ?? Repo),
                 NullLogger<EnterpriseAgreementHandler>.Instance);
         }
 
@@ -120,6 +135,15 @@ public sealed class EnterpriseAgreementHandlerTests
                 CreatedAt = DateTimeOffset.UtcNow,
                 UpdatedAt = DateTimeOffset.UtcNow,
             });
+        }
+
+        public async Task<AuditLogEntry> SingleAuditAsync(AuditAction action)
+        {
+            AuditLogEntry entry = await _dbFactory.Context.AuditLog
+                .Where(a => (a.TenantId == TenantId) && (a.Action == action))
+                .SingleAsync();
+
+            return entry;
         }
 
         public async Task<int> CountAuditAsync(AuditAction action)
@@ -451,6 +475,77 @@ public sealed class EnterpriseAgreementHandlerTests
             audit.InsertAuditLogAsync(Arg.Any<AuditLogEntry>(), Arg.Any<CancellationToken>());
             transaction.CommitAsync(Arg.Any<CancellationToken>());
         });
+    }
+
+    [Test]
+    public async Task Apply_WhenTheAgreementLeavesHostsPaused_WritesHostsPausedAfterTheRestoreAndBeforeTheFinalAuditRow()
+    {
+        // The agreement audit row stays last on purpose: it is the statement that turns a swallowed
+        // aborted-transaction error into a thrown one. The pause record therefore goes before it.
+        using Harness h = new();
+        await h.SeedMachinesAsync(5);
+        h.Subscriptions.GetMachineLimitForTierAsync(TenantId, SubscriptionTier.Enterprise, Arg.Any<CancellationToken>()).Returns(2);
+        IDatabaseTransaction transaction = Substitute.For<IDatabaseTransaction>();
+        IDatabaseTransactionProvider transactionProvider = Substitute.For<IDatabaseTransactionProvider>();
+        transactionProvider.BeginTransactionAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult(transaction));
+        IAuditLogRepository audit = Substitute.For<IAuditLogRepository>();
+        EnterpriseAgreementHandler handler = h.BuildHandler(transactionProvider, auditLog: audit);
+
+        await handler.ApplyAsync(Terms(revision: 1, machineLimit: 2), CancellationToken.None);
+
+        Received.InOrder(() =>
+        {
+            h.Provisioner.RestoreForTierAsync(
+                TenantId, Arg.Any<TenantSubscription?>(), SubscriptionTier.Enterprise, SubscriptionStatus.Active, Arg.Any<CancellationToken>());
+            audit.InsertAuditLogAsync(Arg.Is<AuditLogEntry>(e => e.Action == AuditAction.HostsPaused), Arg.Any<CancellationToken>());
+            audit.InsertAuditLogAsync(Arg.Is<AuditLogEntry>(e => e.Action == AuditAction.EnterpriseAgreementApplied), Arg.Any<CancellationToken>());
+            transaction.CommitAsync(Arg.Any<CancellationToken>());
+        });
+    }
+
+    [Test]
+    public async Task Apply_WhenTheAgreementLeavesHostsPaused_RecordsTheCountForTheAgreementsLimit()
+    {
+        using Harness h = new();
+        await h.SeedMachinesAsync(5);
+        h.Subscriptions.GetMachineLimitForTierAsync(TenantId, SubscriptionTier.Enterprise, Arg.Any<CancellationToken>()).Returns(2);
+
+        await h.Handler.ApplyAsync(Terms(revision: 1, machineLimit: 2), CancellationToken.None);
+
+        AuditLogEntry row = await h.SingleAuditAsync(AuditAction.HostsPaused);
+        await Assert.That(row.Details).Contains("\"paused\":3");
+        await Assert.That(row.Details).Contains("\"limit\":2");
+    }
+
+    [Test]
+    public async Task Apply_WhenTheAgreementCoversEveryHost_WritesNoHostsPausedRow()
+    {
+        using Harness h = new();
+        await h.SeedMachinesAsync(5);
+
+        await h.Handler.ApplyAsync(Terms(revision: 1), CancellationToken.None);
+
+        await Assert.That(await h.CountAuditAsync(AuditAction.HostsPaused)).IsEqualTo(0);
+    }
+
+    [Test]
+    [Arguments(EnterpriseApplyOutcome.AlreadyApplied)]
+    [Arguments(EnterpriseApplyOutcome.StaleRevision)]
+    public async Task Apply_NotApplied_WritesNoHostsPausedRow(EnterpriseApplyOutcome expected)
+    {
+        // A repeated or out-of-order revision changes no limit, so it has nothing to record.
+        using Harness h = new();
+        await h.SeedMachinesAsync(5);
+        h.Subscriptions.GetMachineLimitForTierAsync(TenantId, SubscriptionTier.Enterprise, Arg.Any<CancellationToken>()).Returns(2);
+        await h.Handler.ApplyAsync(Terms(revision: 5, machineLimit: 2), CancellationToken.None);
+        AuditLogEntry applied = await h.SingleAuditAsync(AuditAction.HostsPaused);
+
+        EnterpriseApplyOutcome outcome = await h.Handler.ApplyAsync(
+            Terms(revision: expected == EnterpriseApplyOutcome.AlreadyApplied ? 5 : 4, machineLimit: 2), CancellationToken.None);
+
+        await Assert.That(outcome).IsEqualTo(expected);
+        await Assert.That(applied.Details).Contains("\"paused\":3");
+        await Assert.That(await h.CountAuditAsync(AuditAction.HostsPaused)).IsEqualTo(1);
     }
 
     /// <summary>

@@ -56,7 +56,7 @@ func TestRunOnce_ExecutesAllCollectors(t *testing.T) {
 	registry.Register(c2)
 	registry.Register(c3)
 
-	scheduler := NewScheduler(registry, store, state.New())
+	scheduler := NewScheduler(registry, store, state.New(), neverPaused())
 	scheduler.RunOnce(context.Background())
 
 	if c1.collectCount.Load() != 1 {
@@ -84,7 +84,7 @@ func TestSafeExecuteCollector_PanicRecovery(t *testing.T) {
 	}
 
 	registry.Register(panicker)
-	scheduler := NewScheduler(registry, store, state.New())
+	scheduler := NewScheduler(registry, store, state.New(), neverPaused())
 
 	// safeExecuteCollector should recover from the panic without crashing.
 	defer func() {
@@ -116,7 +116,7 @@ func TestSafeExecuteCollector_ErrorIsolation(t *testing.T) {
 	registry.Register(failing)
 	registry.Register(succeeding)
 
-	scheduler := NewScheduler(registry, store, state.New())
+	scheduler := NewScheduler(registry, store, state.New(), neverPaused())
 	scheduler.RunOnce(context.Background())
 
 	// Both should be called regardless of the error in 'failing'.
@@ -149,7 +149,7 @@ func TestRunOnce_EmptyRegistry(t *testing.T) {
 	store := newTestStore(t)
 	registry := NewRegistry()
 
-	scheduler := NewScheduler(registry, store, state.New())
+	scheduler := NewScheduler(registry, store, state.New(), neverPaused())
 
 	// Should not panic with empty registry.
 	scheduler.RunOnce(context.Background())
@@ -221,7 +221,7 @@ func TestRegisterDynamic_RunCollector_RespectsIntervalChange(t *testing.T) {
 
 	registry.RegisterDynamic(c, getInterval)
 
-	scheduler := NewScheduler(registry, store, state.New())
+	scheduler := NewScheduler(registry, store, state.New(), neverPaused())
 
 	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
@@ -232,5 +232,25 @@ func TestRegisterDynamic_RunCollector_RespectsIntervalChange(t *testing.T) {
 	count := c.collectCount.Load()
 	if count < 2 {
 		t.Errorf("expected dynamic collector to run at least 2 times, got %d", count)
+	}
+}
+
+// Intent: a paused host runs no collector, and the same registry collects again once it is not paused.
+func TestExecuteCollector_PausedSkipsCollect(t *testing.T) {
+	store := newTestStore(t)
+	registry := NewRegistry()
+	c1 := &fakeCollector{name: "c1", interval: time.Second}
+	registry.Register(c1)
+
+	paused := NewScheduler(registry, store, state.New(), pausedCoordinator())
+	paused.RunOnce(context.Background())
+	if c1.collectCount.Load() != 0 {
+		t.Fatalf("expected no collection while paused, got %d", c1.collectCount.Load())
+	}
+
+	active := NewScheduler(registry, store, state.New(), neverPaused())
+	active.RunOnce(context.Background())
+	if c1.collectCount.Load() != 1 {
+		t.Errorf("expected one collection when not paused, got %d", c1.collectCount.Load())
 	}
 }

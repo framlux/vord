@@ -32,6 +32,7 @@ public sealed class EnterpriseAgreementHandler : IEnterpriseAgreementHandler
     private readonly IAuditLogRepository _auditLog;
     private readonly IBuiltInAlertRuleProvisioner _provisioner;
     private readonly RetentionReclassifyDispatcher _reclassifyDispatcher;
+    private readonly HostsPausedAuditWriter _hostsPausedAudit;
     private readonly ILogger<EnterpriseAgreementHandler> _logger;
 
     /// <summary>
@@ -44,6 +45,7 @@ public sealed class EnterpriseAgreementHandler : IEnterpriseAgreementHandler
         IAuditLogRepository auditLog,
         IBuiltInAlertRuleProvisioner provisioner,
         RetentionReclassifyDispatcher reclassifyDispatcher,
+        HostsPausedAuditWriter hostsPausedAudit,
         ILogger<EnterpriseAgreementHandler> logger)
     {
         ArgumentNullException.ThrowIfNull(transactionProvider);
@@ -52,6 +54,7 @@ public sealed class EnterpriseAgreementHandler : IEnterpriseAgreementHandler
         ArgumentNullException.ThrowIfNull(auditLog);
         ArgumentNullException.ThrowIfNull(provisioner);
         ArgumentNullException.ThrowIfNull(reclassifyDispatcher);
+        ArgumentNullException.ThrowIfNull(hostsPausedAudit);
         ArgumentNullException.ThrowIfNull(logger);
 
         _transactionProvider = transactionProvider;
@@ -60,6 +63,7 @@ public sealed class EnterpriseAgreementHandler : IEnterpriseAgreementHandler
         _auditLog = auditLog;
         _provisioner = provisioner;
         _reclassifyDispatcher = reclassifyDispatcher;
+        _hostsPausedAudit = hostsPausedAudit;
         _logger = logger;
     }
 
@@ -106,6 +110,11 @@ public sealed class EnterpriseAgreementHandler : IEnterpriseAgreementHandler
                 // it already applied and never restoring.
                 await _provisioner.RestoreForTierAsync(
                     terms.TenantId, prior, SubscriptionTier.Enterprise, SubscriptionStatus.Active, ct);
+
+                // The agreement's machine limit has just been written, so this is the moment to record
+                // how many hosts it leaves paused.
+                await _hostsPausedAudit.WriteIfHostsPausedAsync(
+                    terms.TenantId, SubscriptionTier.Enterprise, null, ct);
 
                 // Written last on purpose. A statement inside a PostgreSQL transaction that fails and is
                 // swallowed (the provisioner tolerates a concurrent seed's unique violation) leaves the

@@ -109,4 +109,6 @@ public enum AuditAction : short
     TenantRestored = 146,
     /// <summary>An enterprise agreement was applied to a tenant, setting its tier and every limit.</summary>
     EnterpriseAgreementApplied = 147,
+    /// <summary>A change to a tenant's machine limit left some of its hosts paused.</summary>
+    HostsPaused = 148,
 }

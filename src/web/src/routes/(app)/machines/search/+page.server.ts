@@ -48,6 +48,10 @@ export const load: PageServerLoad = async ({ fetch, cookies, url }) => {
 	if (url.searchParams.get('hasDiskHealthIssue') === 'true') params.hasDiskHealthIssue = true;
 	if (url.searchParams.get('hasHardwareIssue') === 'true') params.hasHardwareIssue = true;
 
+	// Only the affirmative is forwarded: the API reads paused=false as "active hosts only", which
+	// the search page has no control for, so any other value is dropped rather than relayed.
+	if (url.searchParams.get('paused') === 'true') params.paused = 'true';
+
 	// Date filters
 	params.lastSeenAfter = url.searchParams.get('lastSeenAfter') || undefined;
 	params.lastSeenBefore = url.searchParams.get('lastSeenBefore') || undefined;

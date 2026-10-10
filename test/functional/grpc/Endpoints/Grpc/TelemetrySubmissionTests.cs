@@ -6,6 +6,7 @@ using Framlux.FleetManagement.Database;
 using Framlux.FleetManagement.Database.Enums;
 using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Test.Infrastructure;
+using Framlux.FleetManagement.Grpc.AgentCommon;
 using Framlux.FleetManagement.Grpc.AgentTelemetry;
 using Framlux.FleetManagement.Services.Core.Alerts;
 using Grpc.Core;
@@ -124,6 +125,77 @@ public sealed class TelemetrySubmissionTests
             .FirstOrDefaultAsync(t => t.SourceEventId == eventId);
         await Assert.That(stored).IsNotNull();
         await Assert.That(stored!.RetentionClass).IsEqualTo(RetentionClass.Long);
+    }
+
+    [Test]
+    public async Task SubmitTelemetry_HostBeyondTheMachineLimit_IsAcknowledgedAndDiscarded()
+    {
+        // Intent: with a limit of one machine, the oldest host keeps reporting and the newer one is
+        // told its batch was received but nothing is stored, all through the real authentication,
+        // subscription and cutoff wiring rather than a substituted pause service.
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+
+        string keptApiKey = "telemetry-within-limit-api-key";
+        string pausedApiKey = "telemetry-beyond-limit-api-key";
+        (long keptMachineId, int tenantId) = await SeedMachineWithSubscription(db, keptApiKey);
+        (long pausedMachineId, int _) = await SeedMachineForTenant(db, tenantId, pausedApiKey);
+        await db.InsertAsync(new TenantSubscriptionOverride
+        {
+            TenantId = tenantId,
+            MachineLimit = 1,
+            CreatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow,
+        });
+
+        using GrpcChannel channel = CreateChannel(factory);
+        Telemetry.TelemetryClient client = new(channel);
+        string keptEventId = Guid.NewGuid().ToString("N");
+        string pausedEventId = Guid.NewGuid().ToString("N");
+
+        TelemetryAck pausedAck = await client.SubmitTelemetryAsync(
+            BuildCpuEnvelope(pausedEventId), headers: new Metadata { { "x-api-key", pausedApiKey } });
+        TelemetryAck keptAck = await client.SubmitTelemetryAsync(
+            BuildCpuEnvelope(keptEventId), headers: new Metadata { { "x-api-key", keptApiKey } });
+
+        await Assert.That(pausedAck.Success).IsTrue();
+        await Assert.That(pausedAck.Reason).IsEqualTo(IngestRejectionReason.HostPaused);
+        await Assert.That(pausedAck.AcknowledgedEventIds.Count).IsEqualTo(0);
+        await Assert.That(keptAck.Success).IsTrue();
+        await Assert.That(keptAck.Reason).IsEqualTo(IngestRejectionReason.Unspecified);
+        await Assert.That(await db.MachineTelemetry.CountAsync(t => t.MachineId == pausedMachineId)).IsEqualTo(0);
+        await Assert.That(await db.MachineTelemetry.CountAsync(t => t.MachineId == keptMachineId)).IsEqualTo(1);
+    }
+
+    [Test]
+    public async Task SubmitTelemetry_CanceledSubscriptionOnAPausedHost_ReportsTheSubscriptionNotThePause()
+    {
+        // Intent: when both apply, the agent must be told the subscription is the problem, because
+        // raising the host limit would not make this tenant's telemetry flow again.
+        using FunctionalTestFactory factory = new();
+        using DatabaseContext db = factory.CreateDbContext();
+
+        string keptApiKey = "telemetry-canceled-first-api-key";
+        string pausedApiKey = "telemetry-canceled-second-api-key";
+        (long _, int tenantId) = await SeedMachineWithSubscription(
+            db, keptApiKey, subscriptionStatus: SubscriptionStatus.Canceled);
+        await SeedMachineForTenant(db, tenantId, pausedApiKey);
+        await db.InsertAsync(new TenantSubscriptionOverride
+        {
+            TenantId = tenantId,
+            MachineLimit = 1,
+            CreatedAt = DateTimeOffset.UtcNow,
+            UpdatedAt = DateTimeOffset.UtcNow,
+        });
+
+        using GrpcChannel channel = CreateChannel(factory);
+        Telemetry.TelemetryClient client = new(channel);
+
+        TelemetryAck ack = await client.SubmitTelemetryAsync(
+            BuildCpuEnvelope(Guid.NewGuid().ToString("N")), headers: new Metadata { { "x-api-key", pausedApiKey } });
+
+        await Assert.That(ack.Success).IsFalse();
+        await Assert.That(ack.Reason).IsEqualTo(IngestRejectionReason.SubscriptionInactive);
     }
 
     [Test]
@@ -835,6 +907,24 @@ public sealed class TelemetrySubmissionTests
         }
 
         throw new InvalidOperationException("Ingest scheduled no failed-SSH-login window job.");
+    }
+
+    private static TelemetryEnvelope BuildCpuEnvelope(string eventId)
+    {
+        return new TelemetryEnvelope
+        {
+            BatchId = Guid.NewGuid().ToString("N"),
+            AgentTimestamp = Google.Protobuf.WellKnownTypes.Timestamp.FromDateTimeOffset(DateTimeOffset.UtcNow),
+            Items =
+            {
+                new TelemetryItem
+                {
+                    EventId = eventId,
+                    Type = TelemetryTypes.CpuUtilizationType,
+                    CpuUtilization = new CpuUtilizationRecord { CpuUsagePercent = 42 }
+                }
+            }
+        };
     }
 
     private static GrpcChannel CreateChannel(FunctionalTestFactory factory)

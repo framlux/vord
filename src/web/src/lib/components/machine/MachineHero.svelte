@@ -7,19 +7,21 @@
 	import { MachineHealthStatus } from '$lib/api/types';
 	import { getOsName, getTypeName } from '$lib/utils/enums';
 	import { formatRelativeTime } from '$lib/utils/format';
-	import HealthBadge from '$lib/components/HealthBadge.svelte';
+	import MachineStateBadge from '$lib/components/MachineStateBadge.svelte';
 	import MachineTypeSvg from './MachineTypeSvg.svelte';
 	import { ArrowLeft } from 'lucide-svelte';
 
 	let {
 		machine,
 		isOnline,
+		isPaused,
 		lastPing,
 		healthStatus,
 		telemetryLastUpdated = null
 	}: {
 		machine: MachineDto;
 		isOnline: boolean;
+		isPaused: boolean;
 		lastPing: string | null;
 		healthStatus: MachineHealthStatus;
 		telemetryLastUpdated?: string | null;
@@ -53,7 +55,7 @@
 				<h1 class="text-2xl font-bold text-surface-900 dark:text-surface-50">
 					{machine.name}
 				</h1>
-				<HealthBadge status={healthStatus} />
+				<MachineStateBadge status={healthStatus} {isPaused} />
 			</div>
 
 			{#if machine.hostname}
@@ -75,7 +77,14 @@
 			</div>
 
 			<div class="flex items-center gap-2">
-				{#if isOnline}
+				<!-- A paused host's heartbeat still arrives, so isOnline stays true for it; saying Online
+				     would contradict the badge, and its silent telemetry is the pause, not a fault. -->
+				{#if isPaused}
+					<span class="inline-flex items-center gap-1.5 text-sm text-indigo-600 dark:text-indigo-400">
+						<span class="h-2 w-2 rounded-full bg-indigo-500"></span>
+						Paused
+					</span>
+				{:else if isOnline}
 					<span class="inline-flex items-center gap-1.5 text-sm text-green-600 dark:text-green-400">
 						<span class="h-2 w-2 rounded-full bg-green-500 machine-led-pulse"></span>
 						Online
@@ -88,10 +97,10 @@
 				{/if}
 				{#if lastPing}
 					<span class="text-xs text-surface-400 dark:text-surface-500">
-						Last seen {formatRelativeTime(lastPing)}
+						{isPaused ? 'Agent last checked in' : 'Last seen'} {formatRelativeTime(lastPing)}
 					</span>
 				{/if}
-				{#if isOnline && telemetryIsStale}
+				{#if isPaused === false && isOnline && telemetryIsStale}
 					<span class="text-xs text-amber-600 dark:text-amber-400">
 						Agent responding, no telemetry
 					</span>
@@ -105,6 +114,7 @@
 				machineType={machine.machineType}
 				{healthStatus}
 				{isOnline}
+				{isPaused}
 				size={160}
 			/>
 		</div>

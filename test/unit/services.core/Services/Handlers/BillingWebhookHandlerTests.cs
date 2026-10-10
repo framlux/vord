@@ -24,6 +24,7 @@ using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Logging.Testing;
 using Microsoft.Extensions.Options;
 using NSubstitute;
+using StackExchange.Redis;
 
 namespace Framlux.FleetManagement.Test.Services.Handlers;
 
@@ -125,12 +126,38 @@ public class BillingWebhookHandlerTests
         return (transaction, provider);
     }
 
+    /// <summary>
+    /// Builds the audit writer over the test database. Unless a test says otherwise every tier is
+    /// unlimited, so only the tests about pausing see a <c>HostsPaused</c> row.
+    /// </summary>
+    private static HostsPausedAuditWriter CreateHostsPausedWriter(
+        DatabaseRepository repo, Dictionary<SubscriptionTier, int>? limits = null)
+    {
+        ISubscriptionService subscriptions = Substitute.For<ISubscriptionService>();
+        subscriptions.GetMachineLimitForTierAsync(Arg.Any<int>(), Arg.Any<SubscriptionTier>(), Arg.Any<CancellationToken>())
+            .Returns(callInfo => (limits is not null) && limits.TryGetValue(callInfo.ArgAt<SubscriptionTier>(1), out int limit)
+                ? limit
+                : int.MaxValue);
+
+        return new HostsPausedAuditWriter(subscriptions, repo, repo);
+    }
+
+    private static async Task SeedMachinesAsync(TestDatabaseFactory dbFactory, int count, int tenantId = 1)
+    {
+        for (int i = 0; i < count; i++)
+        {
+            await dbFactory.Context.InsertWithInt64IdentityAsync(TestDataBuilder.BuildMachine(tenantId: tenantId));
+        }
+    }
+
     private static BillingWebhookHandler CreateHandler(
         TestDatabaseFactory dbFactory,
         IDowngradeCleanupService? cleanupService = null,
         IBuiltInAlertRuleProvisioner? provisioner = null,
         IDatabaseTransactionProvider? transactionProvider = null,
-        ILogger<BillingWebhookHandler>? logger = null)
+        ILogger<BillingWebhookHandler>? logger = null,
+        Dictionary<SubscriptionTier, int>? machineLimits = null,
+        QuotaCutoffInvalidator? quotaInvalidator = null)
     {
         DatabaseRepository repo = new(dbFactory.Context, new NullLogger<DatabaseRepository>());
 
@@ -142,6 +169,8 @@ public class BillingWebhookHandlerTests
             cleanupService ?? Substitute.For<IDowngradeCleanupService>(),
             new RetentionReclassifyDispatcher(
                 Substitute.For<IBackgroundJobClient>(), NullLogger<RetentionReclassifyDispatcher>.Instance),
+            quotaInvalidator ?? new QuotaCutoffInvalidator(FakeRedisConnection.Create(), NullLogger<QuotaCutoffInvalidator>.Instance),
+            CreateHostsPausedWriter(repo, machineLimits),
             logger ?? NullLogger<BillingWebhookHandler>.Instance);
     }
 
@@ -170,11 +199,14 @@ public class BillingWebhookHandlerTests
 
         // The production graph: the handler writes through the caching subscription decorator, which is
         // where a tier change is detected.
+        IConnectionMultiplexer redis = FakeRedisConnection.Create();
+        QuotaCutoffInvalidator quotaInvalidator = new(redis, NullLogger<QuotaCutoffInvalidator>.Instance);
         CachingSubscriptionRepository subscriptions = new(
             repo,
-            FakeRedisConnection.Create(),
+            redis,
             Options.Create(new RedisOptions { ConnectionString = "localhost", SubscriptionCacheTtlSeconds = 30 }),
-            dispatcher);
+            dispatcher,
+            quotaInvalidator);
 
         BillingWebhookHandler handler = new(
             transactionProvider,
@@ -183,6 +215,8 @@ public class BillingWebhookHandlerTests
             Substitute.For<IBuiltInAlertRuleProvisioner>(),
             Substitute.For<IDowngradeCleanupService>(),
             dispatcher,
+            quotaInvalidator,
+            CreateHostsPausedWriter(repo),
             NullLogger<BillingWebhookHandler>.Instance);
 
         await handler.HandleCheckoutCompletedAsync(1, SubscriptionTier.Pro, CancellationToken.None);
@@ -645,10 +679,12 @@ public class BillingWebhookHandlerTests
         await SeedTierFeatureLimitsAsync(dbFactory.Context);
         TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 1, tier: SubscriptionTier.Team);
         sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
+        await SeedMachinesAsync(dbFactory, 10);
         IDowngradeCleanupService cleanupService = Substitute.For<IDowngradeCleanupService>();
         cleanupService.CleanupForFreeTierAsync(1, Arg.Any<CancellationToken>())
             .Returns(Task.FromException(new InvalidOperationException("cleanup failed")));
-        BillingWebhookHandler handler = CreateHandler(dbFactory, cleanupService: cleanupService);
+        BillingWebhookHandler handler = CreateHandler(
+            dbFactory, cleanupService: cleanupService, machineLimits: new() { [SubscriptionTier.Free] = 3 });
 
         await Assert.ThrowsAsync<InvalidOperationException>(() => accountCanceled
             ? handler.HandleAccountCanceledAsync(1, CancellationToken.None)
@@ -658,6 +694,7 @@ public class BillingWebhookHandlerTests
         await Assert.That(row!.Tier).IsEqualTo(SubscriptionTier.Team);
         await Assert.That(row.Status).IsEqualTo(SubscriptionStatus.Active);
         await Assert.That(await CountAuditRowsAsync(dbFactory, AuditAction.SubscriptionDowngraded)).IsEqualTo(0);
+        await Assert.That(await CountAuditRowsAsync(dbFactory, AuditAction.HostsPaused)).IsEqualTo(0);
     }
 
     /// <summary>
@@ -1300,5 +1337,246 @@ public class BillingWebhookHandlerTests
         await Assert.That(row!.CurrentPeriodEnd.HasValue).IsTrue();
         TimeSpan difference = (row.CurrentPeriodEnd!.Value - EnterpriseTermEnd).Duration();
         await Assert.That(difference.TotalSeconds).IsLessThan(2);
+    }
+
+    // ========== Quota cutoff cleared at the commit ==========
+
+    /// <summary>
+    /// The production graph for the tests below: the handler writes through the caching decorator, which
+    /// marks the shared invalidator, over a fake Redis holding a cutoff for tenant 1. The transaction is
+    /// a substitute so the test can see what is cached at the moment of the commit.
+    /// </summary>
+    private sealed class CutoffHarness
+    {
+        public required BillingWebhookHandler Handler { get; init; }
+
+        public required IConnectionMultiplexer Redis { get; init; }
+
+        public required Func<bool> CutoffCachedAtCommit { get; init; }
+    }
+
+    private static async Task<CutoffHarness> BuildCutoffHarnessAsync(TestDatabaseFactory dbFactory, SubscriptionTier seededTier)
+    {
+        await SeedTierFeatureLimitsAsync(dbFactory.Context);
+        TenantSubscription seeded = TestDataBuilder.BuildSubscription(tenantId: 1, tier: seededTier);
+        seeded.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(seeded);
+
+        DatabaseRepository repo = new(dbFactory.Context, new NullLogger<DatabaseRepository>());
+        IConnectionMultiplexer redis = FakeRedisConnection.Create();
+        IDatabase db = redis.GetDatabase();
+        await db.StringSetAsync(QuotaPauseService.CacheKeyFor(1), "after:5");
+
+        bool cutoffCachedAtCommit = false;
+        IDatabaseTransaction transaction = Substitute.For<IDatabaseTransaction>();
+        transaction.CommitAsync(Arg.Any<CancellationToken>()).Returns(async _ =>
+        {
+            RedisValue atCommit = await db.StringGetAsync(QuotaPauseService.CacheKeyFor(1));
+            cutoffCachedAtCommit = atCommit.HasValue;
+        });
+        IDatabaseTransactionProvider transactionProvider = Substitute.For<IDatabaseTransactionProvider>();
+        transactionProvider.BeginTransactionAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult(transaction));
+
+        RetentionReclassifyDispatcher reclassifyDispatcher = new(
+            Substitute.For<IBackgroundJobClient>(), NullLogger<RetentionReclassifyDispatcher>.Instance);
+        QuotaCutoffInvalidator quotaInvalidator = new(redis, NullLogger<QuotaCutoffInvalidator>.Instance);
+        CachingSubscriptionRepository subscriptions = new(
+            repo,
+            redis,
+            Options.Create(new RedisOptions { ConnectionString = "localhost", SubscriptionCacheTtlSeconds = 30 }),
+            reclassifyDispatcher,
+            quotaInvalidator);
+
+        return new CutoffHarness
+        {
+            Handler = new BillingWebhookHandler(
+                transactionProvider,
+                repo,
+                subscriptions,
+                Substitute.For<IBuiltInAlertRuleProvisioner>(),
+                Substitute.For<IDowngradeCleanupService>(),
+                reclassifyDispatcher,
+                quotaInvalidator,
+                CreateHostsPausedWriter(repo),
+                NullLogger<BillingWebhookHandler>.Instance),
+            Redis = redis,
+            CutoffCachedAtCommit = () => cutoffCachedAtCommit,
+        };
+    }
+
+    /// <summary>
+    /// A tier change clears the cached cutoff when the handler's own commit has happened, not when the
+    /// scope is eventually disposed: the Stripe sync job runs many tenants' corrections in one scope, so
+    /// waiting for disposal would leave each tenant's stale entry cached until the whole pass ends. Nothing
+    /// here disposes the invalidator.
+    /// </summary>
+    [Test]
+    [Arguments("checkout")]
+    [Arguments("subscription-deleted")]
+    [Arguments("downgrade-to-pro")]
+    [Arguments("tier-correction")]
+    public async Task ATierChange_ClearsTheCachedCutoffRightAfterItsCommit_NotBefore(string handlerCall)
+    {
+        using TestDatabaseFactory dbFactory = new();
+        CutoffHarness h = await BuildCutoffHarnessAsync(
+            dbFactory, handlerCall == "downgrade-to-pro" ? SubscriptionTier.Team : SubscriptionTier.Pro);
+
+        Task call = handlerCall switch
+        {
+            "checkout" => h.Handler.HandleCheckoutCompletedAsync(1, SubscriptionTier.Team, CancellationToken.None),
+            "subscription-deleted" => h.Handler.HandleSubscriptionDeletedAsync(1, CancellationToken.None),
+            "downgrade-to-pro" => h.Handler.HandleDowngradeToProAsync(1, CancellationToken.None),
+            _ => h.Handler.HandleTierCorrectionAsync(1, SubscriptionTier.Team, CancellationToken.None),
+        };
+        await call;
+
+        await Assert.That(h.CutoffCachedAtCommit()).IsTrue();
+        await Assert.That((await h.Redis.GetDatabase().StringGetAsync(QuotaPauseService.CacheKeyFor(1))).HasValue).IsFalse();
+    }
+
+    [Test]
+    public async Task AStatusOnlyChange_LeavesTheCachedCutoff()
+    {
+        // The effective machine limit ignores status, so a payment failure must not discard a right cutoff.
+        using TestDatabaseFactory dbFactory = new();
+        CutoffHarness h = await BuildCutoffHarnessAsync(dbFactory, SubscriptionTier.Pro);
+
+        await h.Handler.HandlePaymentFailedAsync(1, CancellationToken.None);
+
+        await Assert.That((await h.Redis.GetDatabase().StringGetAsync(QuotaPauseService.CacheKeyFor(1))).HasValue).IsTrue();
+    }
+
+    // ========== HostsPaused audit ==========
+
+    /// <summary>
+    /// The record of which hosts a downgrade pauses is written in the transaction that changes the
+    /// tier, so it can never describe a limit that did not commit.
+    /// </summary>
+    [Test]
+    public async Task HandleSubscriptionDeletedAsync_WhenTheFreeLimitPausesHosts_WritesOneHostsPausedRow()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        await SeedTierFeatureLimitsAsync(dbFactory.Context);
+        TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 1, tier: SubscriptionTier.Pro);
+        sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
+        await SeedMachinesAsync(dbFactory, 10);
+        BillingWebhookHandler handler = CreateHandler(dbFactory, machineLimits: new() { [SubscriptionTier.Free] = 3 });
+
+        await handler.HandleSubscriptionDeletedAsync(1, CancellationToken.None);
+
+        List<AuditLogEntry> rows = await dbFactory.Context.AuditLog
+            .Where(a => (a.TenantId == 1) && (a.Action == AuditAction.HostsPaused))
+            .ToListAsync();
+        await Assert.That(rows.Count).IsEqualTo(1);
+        await Assert.That(rows[0].Details).Contains("\"paused\":7");
+        await Assert.That(rows[0].Details).Contains("\"limit\":3");
+        await Assert.That(rows[0].Details).Contains("\"registered\":10");
+    }
+
+    [Test]
+    public async Task HandleSubscriptionDeletedAsync_WhenTheFreeLimitCoversEveryHost_WritesNoHostsPausedRow()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        await SeedTierFeatureLimitsAsync(dbFactory.Context);
+        TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 1, tier: SubscriptionTier.Pro);
+        sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
+        await SeedMachinesAsync(dbFactory, 3);
+        BillingWebhookHandler handler = CreateHandler(dbFactory, machineLimits: new() { [SubscriptionTier.Free] = 3 });
+
+        await handler.HandleSubscriptionDeletedAsync(1, CancellationToken.None);
+
+        await Assert.That(await CountAuditRowsAsync(dbFactory, AuditAction.HostsPaused)).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task HandleSubscriptionDeletedAsync_EnterpriseTenant_WritesNoHostsPausedRow()
+    {
+        // The Enterprise row is not Stripe's to change, so nothing was lowered and nothing is recorded.
+        using TestDatabaseFactory dbFactory = new();
+        await SeedEnterpriseSubscriptionAsync(dbFactory);
+        await SeedMachinesAsync(dbFactory, 10);
+        BillingWebhookHandler handler = CreateHandler(dbFactory, machineLimits: new() { [SubscriptionTier.Free] = 3 });
+
+        await handler.HandleSubscriptionDeletedAsync(1, CancellationToken.None);
+
+        await Assert.That(await CountAuditRowsAsync(dbFactory, AuditAction.HostsPaused)).IsEqualTo(0);
+    }
+
+    [Test]
+    public async Task HandleDowngradeToProAsync_WhenTheProLimitPausesHosts_WritesAHostsPausedRowForTheProLimit()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        await SeedTierFeatureLimitsAsync(dbFactory.Context);
+        TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 1, tier: SubscriptionTier.Team);
+        sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
+        await SeedMachinesAsync(dbFactory, 10);
+        BillingWebhookHandler handler = CreateHandler(dbFactory, machineLimits: new()
+        {
+            [SubscriptionTier.Pro] = 4,
+            [SubscriptionTier.Team] = 1000,
+        });
+
+        await handler.HandleDowngradeToProAsync(1, CancellationToken.None);
+
+        AuditLogEntry row = await dbFactory.Context.AuditLog
+            .Where(a => (a.TenantId == 1) && (a.Action == AuditAction.HostsPaused))
+            .SingleAsync();
+        await Assert.That(row.Details).Contains("\"paused\":6");
+        await Assert.That(row.Details).Contains("\"limit\":4");
+    }
+
+    [Test]
+    [Arguments(SubscriptionTier.Pro, 4, 6)]
+    [Arguments(SubscriptionTier.Team, 7, 3)]
+    public async Task HandleCheckoutCompletedAsync_WritesAHostsPausedRowForThePurchasedTiersLimit(SubscriptionTier purchased, int limit, int expectedPaused)
+    {
+        // Checkout can move a tenant between paid tiers whose limits differ, so the count must come
+        // from the limit of the tier written, not the one the tenant held before.
+        using TestDatabaseFactory dbFactory = new();
+        await SeedTierFeatureLimitsAsync(dbFactory.Context);
+        TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 1, tier: SubscriptionTier.Free);
+        sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
+        await SeedMachinesAsync(dbFactory, 10);
+        BillingWebhookHandler handler = CreateHandler(dbFactory, machineLimits: new() { [purchased] = limit });
+
+        await handler.HandleCheckoutCompletedAsync(1, purchased, CancellationToken.None);
+
+        AuditLogEntry row = await dbFactory.Context.AuditLog
+            .Where(a => (a.TenantId == 1) && (a.Action == AuditAction.HostsPaused))
+            .SingleAsync();
+        await Assert.That(row.Details).Contains($"\"paused\":{expectedPaused}");
+    }
+
+    [Test]
+    public async Task HandleTierCorrectionAsync_WritesAHostsPausedRowForTheCorrectedTiersLimit()
+    {
+        using TestDatabaseFactory dbFactory = new();
+        await SeedTierFeatureLimitsAsync(dbFactory.Context);
+        TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 1, tier: SubscriptionTier.Team);
+        sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
+        await SeedMachinesAsync(dbFactory, 10);
+        BillingWebhookHandler handler = CreateHandler(dbFactory, machineLimits: new() { [SubscriptionTier.Pro] = 8 });
+
+        await handler.HandleTierCorrectionAsync(1, SubscriptionTier.Pro, CancellationToken.None);
+
+        AuditLogEntry row = await dbFactory.Context.AuditLog
+            .Where(a => (a.TenantId == 1) && (a.Action == AuditAction.HostsPaused))
+            .SingleAsync();
+        await Assert.That(row.Details).Contains("\"paused\":2");
+    }
+
+    [Test]
+    public async Task HandleAccountCanceledAsync_WritesNoHostsPausedRow()
+    {
+        // Cancelling changes the status and leaves the tier, and so the limit, where it was.
+        using TestDatabaseFactory dbFactory = new();
+        await SeedTierFeatureLimitsAsync(dbFactory.Context);
+        TenantSubscription sub = TestDataBuilder.BuildSubscription(tenantId: 1, tier: SubscriptionTier.Pro);
+        sub.Id = await dbFactory.Context.InsertWithInt32IdentityAsync(sub);
+        await SeedMachinesAsync(dbFactory, 10);
+        BillingWebhookHandler handler = CreateHandler(dbFactory, machineLimits: new() { [SubscriptionTier.Pro] = 3 });
+
+        await handler.HandleAccountCanceledAsync(1, CancellationToken.None);
+
+        await Assert.That(await CountAuditRowsAsync(dbFactory, AuditAction.HostsPaused)).IsEqualTo(0);
     }
 }

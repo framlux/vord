@@ -37,6 +37,7 @@
 		SubscriptionDowngraded: 'Subscription Downgraded',
 		SubscriptionCanceled: 'Subscription Canceled',
 		EnterpriseAgreementApplied: 'Enterprise Agreement Applied',
+		HostsPaused: 'Hosts Paused',
 		RegistrationTokenCreated: 'Token Created',
 		RegistrationTokenRevoked: 'Token Revoked',
 		DataExportRequested: 'Data Export',

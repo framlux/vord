@@ -26,6 +26,8 @@ public sealed class ReactivateSubscriptionEndpoint : EndpointWithoutRequest<ApiR
     private readonly ISubscriptionService _subscriptionService;
     private readonly ITenantContext _tenantContext;
     private readonly RetentionReclassifyDispatcher _reclassifyDispatcher;
+    private readonly QuotaCutoffInvalidator _quotaInvalidator;
+    private readonly HostsPausedAuditWriter _hostsPausedAudit;
     private readonly ILogger<ReactivateSubscriptionEndpoint> _logger;
 
     /// <summary>
@@ -39,6 +41,8 @@ public sealed class ReactivateSubscriptionEndpoint : EndpointWithoutRequest<ApiR
         ISubscriptionService subscriptionService,
         ITenantContext tenantContext,
         RetentionReclassifyDispatcher reclassifyDispatcher,
+        QuotaCutoffInvalidator quotaInvalidator,
+        HostsPausedAuditWriter hostsPausedAudit,
         ILogger<ReactivateSubscriptionEndpoint> logger)
     {
         _deploymentMode = deploymentMode;
@@ -48,6 +52,8 @@ public sealed class ReactivateSubscriptionEndpoint : EndpointWithoutRequest<ApiR
         _subscriptionService = subscriptionService;
         _tenantContext = tenantContext;
         _reclassifyDispatcher = reclassifyDispatcher;
+        _quotaInvalidator = quotaInvalidator;
+        _hostsPausedAudit = hostsPausedAudit;
         _logger = logger;
     }
 
@@ -104,11 +110,14 @@ public sealed class ReactivateSubscriptionEndpoint : EndpointWithoutRequest<ApiR
             AuditAction.SubscriptionUpgraded, AuditResourceType.Subscription,
             tenantId.ToString(), "Account reactivated to Free tier from canceled state", null), ct);
 
+        await _hostsPausedAudit.WriteIfHostsPausedAsync(tenantId, SubscriptionTier.Free, null, ct);
+
         await transaction.CommitAsync(ct);
 
         // Post-commit: reverting to Free changes effective retention, so the surviving telemetry is
         // reclassified. Queued here rather than inside the transaction above.
         _reclassifyDispatcher.DispatchPending();
+        _quotaInvalidator.DispatchPending();
 
         _logger.LogInformation(
             "Subscription reactivated to Free tier for tenant {TenantId}",

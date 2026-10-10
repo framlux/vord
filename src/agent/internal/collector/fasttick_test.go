@@ -5,6 +5,7 @@
 package collector
 
 import (
+	"context"
 	"encoding/json"
 	"math"
 	"testing"
@@ -26,7 +27,7 @@ func newTestStore(t *testing.T) *db.Store {
 
 func TestFastTickCollectMemUsage(t *testing.T) {
 	store := newTestStore(t)
-	ft := NewFastTick(store, state.New())
+	ft := NewFastTick(store, state.New(), neverPaused())
 
 	ft.collectMemUsage(fixtureFastMeminfo, nil)
 
@@ -55,7 +56,7 @@ func TestFastTickCollectMemUsage(t *testing.T) {
 
 func TestFastTickCollectCpuUsageDelta(t *testing.T) {
 	store := newTestStore(t)
-	ft := NewFastTick(store, state.New())
+	ft := NewFastTick(store, state.New(), neverPaused())
 
 	// First call: no previous state, should not produce telemetry.
 	ft.collectCpuUsage(fixtureProcStat1, nil)
@@ -102,7 +103,7 @@ func TestFastTickCollectCpuUsageWithPersistedState(t *testing.T) {
 		t.Fatalf("failed to save collector state: %v", err)
 	}
 
-	ft := NewFastTick(store, state.New())
+	ft := NewFastTick(store, state.New(), neverPaused())
 	ft.loadPersistedCpuTicks()
 
 	if ft.prevTicks == nil {
@@ -126,7 +127,7 @@ func TestFastTickCollectCpuUsageWithPersistedState(t *testing.T) {
 
 func TestFastTickErrorIsolation(t *testing.T) {
 	store := newTestStore(t)
-	ft := NewFastTick(store, state.New())
+	ft := NewFastTick(store, state.New(), neverPaused())
 
 	// Simulate /proc/stat failure but valid /proc/meminfo and /proc/mounts.
 	ft.collectCpuUsage("", errForTest)
@@ -147,7 +148,7 @@ func TestFastTickErrorIsolation(t *testing.T) {
 
 func TestFastTickGarbageDataNoPanic(t *testing.T) {
 	store := newTestStore(t)
-	ft := NewFastTick(store, state.New())
+	ft := NewFastTick(store, state.New(), neverPaused())
 
 	// Verify tick does not panic when all files are garbage.
 	defer func() {
@@ -170,7 +171,7 @@ func TestFastTickCorruptedPersistedState(t *testing.T) {
 		t.Fatalf("failed to save collector state: %v", err)
 	}
 
-	ft := NewFastTick(store, state.New())
+	ft := NewFastTick(store, state.New(), neverPaused())
 	ft.loadPersistedCpuTicks()
 
 	// Should not panic and should treat as cold start.
@@ -183,7 +184,7 @@ func TestFastTickCorruptedPersistedState(t *testing.T) {
 // telemetry from the non-panicking collectors.
 func TestFastTickSafeCollectRecovery(t *testing.T) {
 	store := newTestStore(t)
-	ft := NewFastTick(store, state.New())
+	ft := NewFastTick(store, state.New(), neverPaused())
 
 	// CPU usage on first call stores prevTicks but does not enqueue telemetry.
 	ft.safeCollectCpuUsage(fixtureProcStat1, nil)
@@ -232,7 +233,7 @@ procs_blocked 0
 // Intent: Zero-delta between ticks → 0% usage (not division by zero).
 func TestFastTickCollectCpuUsage_ZeroDelta(t *testing.T) {
 	store := newTestStore(t)
-	ft := NewFastTick(store, state.New())
+	ft := NewFastTick(store, state.New(), neverPaused())
 
 	// Set previous ticks identical to current — zero delta.
 	identical := cpuTicks{User: 100, Nice: 0, System: 50, Idle: 850, Iowait: 0, Irq: 0, Softirq: 0, Steal: 0}
@@ -255,7 +256,7 @@ func TestFastTickCollectCpuUsage_ZeroDelta(t *testing.T) {
 // Intent: After collectCpuUsage, prevTicks is saved to DB for crash recovery.
 func TestFastTickPersistsCpuTicks(t *testing.T) {
 	store := newTestStore(t)
-	ft := NewFastTick(store, state.New())
+	ft := NewFastTick(store, state.New(), neverPaused())
 
 	// First call sets prevTicks but doesn't enqueue telemetry.
 	ft.collectCpuUsage(fixtureProcStat1, nil)
@@ -276,7 +277,7 @@ func TestFastTickPersistsCpuTicks(t *testing.T) {
 // Intent: Disk usage collection filters out pseudo-FS mount points (proc, sysfs, tmpfs).
 func TestFastTickCollectDiskUsage_NoPseudoFS(t *testing.T) {
 	store := newTestStore(t)
-	ft := NewFastTick(store, state.New())
+	ft := NewFastTick(store, state.New(), neverPaused())
 
 	// Data with only pseudo-FS entries — should produce no disk usage.
 	pseudoOnly := "proc /proc proc rw 0 0\nsysfs /sys sysfs rw 0 0\ntmpfs /tmp tmpfs rw 0 0\n"
@@ -354,3 +355,34 @@ Inactive:        2048000 kB
 SwapTotal:       4096000 kB
 SwapFree:        4096000 kB
 `
+
+// Intent: while paused the fast tick collects nothing and forgets its CPU baseline, so the first sample after
+// the pause becomes the new baseline instead of being averaged over the whole pause.
+func TestFastTickTick_PausedDropsCpuBaseline(t *testing.T) {
+	store := newTestStore(t)
+	ft := NewFastTick(store, state.New(), pausedCoordinator())
+	ft.prevTicks = &cpuTicks{User: 100, Idle: 900}
+
+	ft.tick(context.Background())
+
+	if ft.prevTicks != nil {
+		t.Error("expected the CPU baseline to be dropped while paused")
+	}
+	if items, err := store.DequeueTelemetry(10); err != nil || len(items) != 0 {
+		t.Errorf("expected nothing enqueued while paused, got %d item(s), err %v", len(items), err)
+	}
+}
+
+// Intent: when not paused the tick runs as before and leaves the CPU baseline alone.
+func TestFastTickTick_NotPausedKeepsCpuBaseline(t *testing.T) {
+	store := newTestStore(t)
+	ft := NewFastTick(store, state.New(), neverPaused())
+	baseline := &cpuTicks{User: 100, Idle: 900}
+	ft.prevTicks = baseline
+
+	ft.tick(context.Background())
+
+	if ft.prevTicks == nil {
+		t.Error("expected the CPU baseline to survive a tick that is not paused")
+	}
+}

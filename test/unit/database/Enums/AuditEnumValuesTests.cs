@@ -87,6 +87,15 @@ public sealed class AuditEnumValuesTests
         await Assert.That(actual).IsEqualTo(expected);
     }
 
+    [Test]
+    public async Task AuditAction_HostsPaused_HasValue148()
+    {
+        short actual = (short)AuditAction.HostsPaused;
+        short expected = 148;
+
+        await Assert.That(actual).IsEqualTo(expected);
+    }
+
     // ========== AuditResourceType — new values added for Task C audit coverage ==========
 
     [Test]

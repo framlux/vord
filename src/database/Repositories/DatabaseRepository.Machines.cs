@@ -292,6 +292,36 @@ public partial class DatabaseRepository : IMachineRepository
     }
 
     /// <inheritdoc/>
+    public async Task<(int RegisteredCount, long? CutoffId)> GetRegisteredMachineCutoffAsync(int tenantId, int limit, CancellationToken cancellationToken)
+    {
+        IQueryable<Machine> registered = _db.Machines.Where(m => (m.TenantId == tenantId) && (m.IsDeleted == false));
+        int count = await registered.CountAsync(cancellationToken);
+
+        // Counting first keeps the common case, a tenant within its limit, to one cheap query.
+        if ((limit <= 0) || (count <= limit))
+        {
+            return (count, null);
+        }
+
+        // The count and this lookup are separate statements, so machines removed in between can leave
+        // fewer than limit rows. No row at the offset then means nothing is over the limit, which is
+        // "no cutoff"; projecting to a nullable keeps that distinct from an id of zero.
+        long? cutoffId = await registered.OrderBy(m => m.Id).Skip(limit - 1).Select(m => (long?)m.Id).FirstOrDefaultAsync(cancellationToken);
+
+        return (count, cutoffId);
+    }
+
+    /// <inheritdoc/>
+    public async Task<int> GetRegisteredRankAsync(int tenantId, long machineId, CancellationToken cancellationToken)
+    {
+        int rank = await _db.Machines
+            .Where(m => (m.TenantId == tenantId) && (m.IsDeleted == false) && (m.Id <= machineId))
+            .CountAsync(cancellationToken);
+
+        return rank;
+    }
+
+    /// <inheritdoc/>
     public async Task<Machine?> GetActiveMachineByIdAsync(long machineId, int tenantId, CancellationToken cancellationToken)
     {
         Machine? machine = await _db.Machines

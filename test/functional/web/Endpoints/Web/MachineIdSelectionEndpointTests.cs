@@ -128,7 +128,7 @@ public sealed class MachineIdSelectionEndpointTests
     }
 
     // A bulk selection is only safe if it resolves exactly the filter the caller meant. This endpoint
-    // implements four of the filters /machines/search accepts, and used to ignore the rest in
+    // implements five of the filters /machines/search accepts, and used to ignore the rest in
     // silence — so a picker that grew a CPU or disk filter and wired it to the list alone would have
     // select-all resolve the unfiltered fleet and assign machines the user never saw. Anything it does
     // not implement is now refused, paging and sorting included, since a caller sending those has
@@ -161,11 +161,11 @@ public sealed class MachineIdSelectionEndpointTests
 
         await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.BadRequest);
         string body = await response.Content.ReadAsStringAsync();
-        await Assert.That(body).Contains("search, healthStatus, os and type");
+        await Assert.That(body).Contains("search, healthStatus, paused, os and type");
     }
 
     [Test]
-    public async Task Ids_AllFourSupportedFilters_AreAcceptedTogether()
+    public async Task Ids_AllSupportedFilters_AreAcceptedTogether()
     {
         using FunctionalTestFactory factory = new();
         using DatabaseContext db = factory.CreateDbContext();
@@ -175,7 +175,7 @@ public sealed class MachineIdSelectionEndpointTests
         HttpClient client = BuildAuthenticatedClient(factory, tenantId);
 
         HttpResponseMessage response = await client.GetAsync(
-            "/api/v1/machines/ids?search=prod&healthStatus=healthy&os=Ubuntu&type=BareMetalServer");
+            "/api/v1/machines/ids?search=prod&healthStatus=healthy&paused=false&os=Ubuntu&type=BareMetalServer");
 
         await Assert.That(response.StatusCode).IsEqualTo(HttpStatusCode.OK);
     }

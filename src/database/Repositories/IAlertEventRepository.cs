@@ -69,6 +69,19 @@ public interface IAlertEventRepository
     Task ResolveEventsForRuleMachineAsync(int ruleId, long machineId, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Resolves every open (non-resolved) event of the tenant on a machine that the cutoff pauses, in
+    /// one statement. Nothing is delivered for them: a host being paused is not an incident that
+    /// cleared, so the events are closed without announcing it.
+    /// </summary>
+    /// <param name="tenantId">The tenant that owns the events.</param>
+    /// <param name="kind">Which machines are paused: none, all, or those with an id above the cutoff.</param>
+    /// <param name="cutoffId">The last active machine id; read only when <paramref name="kind"/> is <see cref="QuotaCutoffKind.After"/>.</param>
+    /// <param name="resolvedAt">The time to record as the resolution.</param>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    /// <returns>The number of events resolved.</returns>
+    Task<int> ResolveOpenEventsForMachinesAfterAsync(int tenantId, QuotaCutoffKind kind, long cutoffId, DateTimeOffset resolvedAt, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Returns whether an active (non-resolved) event already exists for a rule and machine pair.
     /// </summary>
     /// <remarks>
@@ -138,4 +151,13 @@ public interface IAlertEventRepository
     /// <param name="ruleId">The alert rule.</param>
     /// <param name="cancellationToken">A cancellation token.</param>
     Task<HashSet<long>> GetMachineIdsWithActiveEventsForRuleAsync(int ruleId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Returns the ids of the tenants that have at least one open (non-resolved) event, in a single
+    /// distinct query. Alert evaluation visits these as well as the tenants with enabled rules, because
+    /// a tenant whose rules were all disabled by a downgrade can still hold events that a pause must
+    /// close.
+    /// </summary>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    Task<List<int>> GetTenantIdsWithOpenAlertEventsAsync(CancellationToken cancellationToken = default);
 }

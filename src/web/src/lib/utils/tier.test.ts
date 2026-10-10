@@ -9,6 +9,7 @@ import {
 	isEnterprise,
 	isLimited,
 	isStripeBilled,
+	keptHostsPhrase,
 	tierBadgeClasses,
 	TIER_NAMES,
 	UNLIMITED_LIMIT,
@@ -72,5 +73,20 @@ describe('unlimited limits', () => {
 		expect(usageLabel(12, UNLIMITED_LIMIT)).toBe('Unlimited');
 		expect(usageLabel(12, null)).toBe('Unlimited');
 		expect(usageLabel(12, undefined)).toBe('Unlimited');
+	});
+});
+
+describe('keptHostsPhrase', () => {
+	it('names the count for a limit above one', () => {
+		expect(keptHostsPhrase(3)).toBe('your 3 oldest hosts');
+		expect(keptHostsPhrase(1000)).toBe('your 1000 oldest hosts');
+	});
+
+	it('uses the singular for a limit of one rather than "1 oldest hosts"', () => {
+		expect(keptHostsPhrase(1)).toBe('your oldest host');
+	});
+
+	it.each([0, -1])('says no hosts for a limit of %i, which keeps none active', (limit) => {
+		expect(keptHostsPhrase(limit)).toBe('no hosts');
 	});
 });

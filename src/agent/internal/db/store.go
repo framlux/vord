@@ -510,6 +510,36 @@ func (s *Store) ResetProcessingTelemetry() error {
 	return nil
 }
 
+// ClearTelemetryQueue discards everything the agent has queued but not delivered, whatever state it is in, along
+// with the SSH sessions that never reached the queue. It is what a pause does: nothing collected before the pause
+// should be sent after it. Already-queued SSH sessions are kept as history.
+func (s *Store) ClearTelemetryQueue() error {
+	tx, err := s.db.Begin()
+	if err != nil {
+		return fmt.Errorf("begin clear queue transaction: %w", err)
+	}
+	defer tx.Rollback()
+
+	if _, err := tx.Exec("DELETE FROM telemetry_queue"); err != nil {
+		return fmt.Errorf("clearing telemetry queue: %w", err)
+	}
+	if _, err := tx.Exec("DELETE FROM ssh_sessions WHERE queued = 0"); err != nil {
+		return fmt.Errorf("clearing unqueued ssh sessions: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("committing clear queue transaction: %w", err)
+	}
+
+	// Invalidate the cached count so the next access reloads it from the now empty table. Setting it to zero
+	// here would race with an enqueue that lands between the commit and the store.
+	s.countMu.Lock()
+	s.countLoaded = false
+	s.countInitErr = nil
+	s.countMu.Unlock()
+
+	return nil
+}
+
 // MarkTelemetryCompleted marks multiple items as completed.
 func (s *Store) MarkTelemetryCompleted(ids []string) error {
 	if len(ids) == 0 {
@@ -549,14 +579,20 @@ func (s *Store) MarkTelemetryPending(ids []string) error {
 		"UPDATE telemetry_queue SET status = ?, updated_at = ? WHERE id IN (%s)",
 		strings.Join(placeholders, ","),
 	)
-	_, err := s.db.Exec(query, args...)
+	result, err := s.db.Exec(query, args...)
 	if err != nil {
 		return err
 	}
 
-	s.pendingCount.Add(int64(len(ids)))
+	// Count the rows that were actually updated. Some of the ids may be gone, e.g. when the queue was cleared
+	// while their send was in flight, and crediting those would inflate the cached pending count.
+	updated, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	s.pendingCount.Add(updated)
 
-	return err
+	return nil
 }
 
 // CountPendingTelemetry returns the number of pending telemetry items.

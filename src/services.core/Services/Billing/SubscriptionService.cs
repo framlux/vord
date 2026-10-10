@@ -194,7 +194,30 @@ public sealed class SubscriptionService : ISubscriptionService
             floor = tierLimits.MinimumBillableMachines;
         }
 
-        return Math.Max(active, floor);
+        // A host beyond the tier's limit is paused and not monitored, so it is not billed either. The
+        // limit is the one for the tier being billed, which at checkout is the tier being bought.
+        int limit = await GetMachineLimitForTierAsync(tenantId, tier, ct);
+        int billed = Math.Min(active, Math.Max(0, limit));
+
+        return Math.Max(billed, floor);
+    }
+
+    /// <summary>
+    /// The one fold every machine limit goes through, so billing, pausing and the limits shown to the
+    /// customer cannot disagree about which value wins.
+    /// </summary>
+    internal static int ResolveLimit(int? overrideValue, int? tierRowValue, int configDefault)
+    {
+        return overrideValue ?? tierRowValue ?? configDefault;
+    }
+
+    /// <inheritdoc/>
+    public async Task<int> GetMachineLimitForTierAsync(int tenantId, SubscriptionTier tier, CancellationToken ct)
+    {
+        TenantSubscriptionOverride? tenantOverride = await _overrideRepo.GetOverrideForTenantAsync(tenantId, ct);
+        TierFeatureLimit? tierLimits = await _tierLimitRepo.GetLimitsForTierAsync(tier, ct);
+
+        return ResolveLimit(tenantOverride?.MachineLimit, tierLimits?.MachineLimit, GetConfigDefaultsForTier(tier).MachineLimit);
     }
 
     /// <inheritdoc/>
@@ -289,7 +312,7 @@ public sealed class SubscriptionService : ISubscriptionService
 
         return new EffectiveLimits
         {
-            MachineLimit = tenantOverride?.MachineLimit ?? tierLimits?.MachineLimit ?? configDefaults.MachineLimit,
+            MachineLimit = ResolveLimit(tenantOverride?.MachineLimit, tierLimits?.MachineLimit, configDefaults.MachineLimit),
             RetentionDays = tenantOverride?.RetentionDays ?? tierLimits?.RetentionDays ?? configDefaults.RetentionDays,
             AlertRuleLimit = tenantOverride?.AlertRuleLimit ?? tierLimits?.AlertRuleLimit ?? configDefaults.AlertRuleLimit,
             WebhookLimit = tenantOverride?.WebhookLimit ?? tierLimits?.WebhookLimit ?? configDefaults.WebhookLimit,

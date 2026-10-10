@@ -7,9 +7,12 @@ using Framlux.FleetManagement.Database.Models;
 using Framlux.FleetManagement.Database.Repositories;
 using Framlux.FleetManagement.Services.Core.Billing;
 using Framlux.FleetManagement.Services.Core.Jobs;
+using Framlux.FleetManagement.Test.Infrastructure;
 using Microsoft.Extensions.Logging;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Time.Testing;
 using NSubstitute;
+using StackExchange.Redis;
 
 namespace Framlux.FleetManagement.Test.Services.Jobs;
 
@@ -297,6 +300,74 @@ public sealed class TenantPurgeJobTests
             Arg.Any<CancellationToken>());
     }
 
+    [Test]
+    public async Task RunAsync_AfterTheFleetCommit_ClearsThePurgedTenantsQuotaCutoffEvenWhenBillingFails()
+    {
+        // Intent: the machines are gone as soon as the fleet teardown commits, so the cutoff cached for
+        // them is stale from that moment. The billing step can fail and leave the deletion to retry; that
+        // must not leave the cutoff behind.
+        TenantDeletion deletion = BuildDeletion(id: 8, tenantId: 14, externalId: "ext-14", name: "Theta LLC");
+        ITenantDeletionRepository deletionRepo = Substitute.For<ITenantDeletionRepository>();
+        deletionRepo.GetDueDeletionsAsync(FixedNow, Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new List<TenantDeletion> { deletion }));
+        deletionRepo.GetUserIdsWithAnyRoleInTenantAsync(14, Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new List<int>()));
+        IConnectionMultiplexer redis = FakeRedisConnection.Create();
+        IDatabase db = redis.GetDatabase();
+        await db.StringSetAsync(QuotaPauseService.CacheKeyFor(14), "after:3");
+        await db.StringSetAsync(QuotaPauseService.CacheKeyFor(15), "after:3");
+
+        bool presentAtCommit = false;
+        IDatabaseTransaction transaction = Substitute.For<IDatabaseTransaction>();
+        transaction.CommitAsync(Arg.Any<CancellationToken>()).Returns(async _ =>
+        {
+            RedisValue atCommit = await db.StringGetAsync(QuotaPauseService.CacheKeyFor(14));
+            presentAtCommit = atCommit.HasValue;
+        });
+        IDatabaseTransactionProvider transactionProvider = Substitute.For<IDatabaseTransactionProvider>();
+        transactionProvider.BeginTransactionAsync(Arg.Any<CancellationToken>()).Returns(Task.FromResult(transaction));
+        IBillingApiClient billingApiClient = Substitute.For<IBillingApiClient>();
+        billingApiClient.DeleteCustomerAsync("ext-14", Arg.Any<CancellationToken>()).Returns(Task.FromResult(false));
+
+        TenantPurgeJob job = BuildJob(
+            deletionRepo: deletionRepo,
+            transactionProvider: transactionProvider,
+            billingApiClient: billingApiClient,
+            quotaInvalidator: new QuotaCutoffInvalidator(redis, NullLogger<QuotaCutoffInvalidator>.Instance));
+
+        await job.RunAsync(CancellationToken.None);
+
+        await Assert.That(presentAtCommit).IsTrue();
+        await Assert.That((await db.StringGetAsync(QuotaPauseService.CacheKeyFor(14))).HasValue).IsFalse();
+        await Assert.That((await db.StringGetAsync(QuotaPauseService.CacheKeyFor(15))).HasValue).IsTrue();
+    }
+
+    [Test]
+    public async Task RunAsync_WhenTheFleetTeardownFails_LeavesTheQuotaCutoffAlone()
+    {
+        // Intent: a teardown that rolled back removed no machines, so the cached cutoff is still right.
+        TenantDeletion deletion = BuildDeletion(id: 9, tenantId: 16, externalId: "ext-16", name: "Iota LLC");
+        ITenantDeletionRepository deletionRepo = Substitute.For<ITenantDeletionRepository>();
+        deletionRepo.GetDueDeletionsAsync(FixedNow, Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new List<TenantDeletion> { deletion }));
+        deletionRepo.GetUserIdsWithAnyRoleInTenantAsync(16, Arg.Any<CancellationToken>())
+            .Returns(Task.FromResult(new List<int>()));
+        deletionRepo.PurgeTenantOperationalDataAsync(16, Arg.Any<CancellationToken>())
+            .Returns<Task>(_ => throw new InvalidOperationException("simulated purge failure"));
+        IConnectionMultiplexer redis = FakeRedisConnection.Create();
+        await redis.GetDatabase().StringSetAsync(QuotaPauseService.CacheKeyFor(16), "after:3");
+        (IDatabaseTransactionProvider transactionProvider, _) = CreateMockTransaction();
+        QuotaCutoffInvalidator quotaInvalidator = new(redis, NullLogger<QuotaCutoffInvalidator>.Instance);
+
+        TenantPurgeJob job = BuildJob(
+            deletionRepo: deletionRepo, transactionProvider: transactionProvider, quotaInvalidator: quotaInvalidator);
+
+        await job.RunAsync(CancellationToken.None);
+        quotaInvalidator.Dispose();
+
+        await Assert.That((await redis.GetDatabase().StringGetAsync(QuotaPauseService.CacheKeyFor(16))).HasValue).IsTrue();
+    }
+
     // ========== Helper methods ==========
 
     private static TenantDeletion BuildDeletion(int id, int tenantId, string externalId, string name)
@@ -331,13 +402,15 @@ public sealed class TenantPurgeJobTests
         IDatabaseTransactionProvider? transactionProvider = null,
         IBillingApiClient? billingApiClient = null,
         TimeProvider? timeProvider = null,
-        ILogger<TenantPurgeJob>? logger = null)
+        ILogger<TenantPurgeJob>? logger = null,
+        QuotaCutoffInvalidator? quotaInvalidator = null)
     {
         return new TenantPurgeJob(
             deletionRepo ?? Substitute.For<ITenantDeletionRepository>(),
             auditLog ?? Substitute.For<IAuditLogRepository>(),
             transactionProvider ?? Substitute.For<IDatabaseTransactionProvider>(),
             billingApiClient ?? Substitute.For<IBillingApiClient>(),
+            quotaInvalidator ?? new QuotaCutoffInvalidator(FakeRedisConnection.Create(), NullLogger<QuotaCutoffInvalidator>.Instance),
             timeProvider ?? new FakeTimeProvider(FixedNow),
             logger ?? Substitute.For<ILogger<TenantPurgeJob>>());
     }

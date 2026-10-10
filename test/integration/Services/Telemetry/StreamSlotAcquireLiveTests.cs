@@ -51,6 +51,7 @@ public sealed class StreamSlotAcquireLiveTests
             Substitute.For<IServiceScopeFactory>(),
             Substitute.For<ITelemetryDeduplicationService>(),
             Substitute.For<ISubscriptionService>(),
+            Substitute.For<IQuotaPauseService>(),
             Substitute.For<IBackgroundJobClient>(),
             ResiliencePipeline.Empty,
             _fixture.Connection,
@@ -58,6 +59,7 @@ public sealed class StreamSlotAcquireLiveTests
             new ProcessStreamSlotLimiter(5000),
             TestMetricsFactory.CreateIngestMetrics(),
             TestMetricsFactory.CreateResilienceMetrics(),
+            TestMetricsFactory.CreateQuotaPauseMetrics(),
             Substitute.For<IFailedSshLoginChainGate>(),
             TimeProvider.System,
             NullLogger<TelemetryService>.Instance);
