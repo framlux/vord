@@ -196,10 +196,20 @@ describe('MachineTypeSvg', () => {
 			expect(container.querySelectorAll('.machine-led-pulse').length).toBe(0);
 		});
 
-		it('shows an indigo status indicator', () => {
+		it('shows an indigo status indicator dot', () => {
 			const { container } = renderPaused(MachineType.VirtualMachine);
 
 			expect(container.querySelectorAll('circle[fill="#6366F1"]').length).toBeGreaterThan(0);
+		});
+
+		it('draws the status indicator halo in indigo, not in the live green or the offline grey', () => {
+			// The halo is a separate stroked circle from the dot, so the dot being indigo says nothing
+			// about it. A paused host's heartbeat keeps isOnline true, which is what would turn it green.
+			const { container } = renderPaused(MachineType.VirtualMachine, MachineHealthStatus.Healthy);
+
+			expect(container.querySelectorAll('circle[stroke="#6366F1"]').length).toBeGreaterThan(0);
+			expect(container.querySelectorAll('[stroke="#10B981"]').length).toBe(0);
+			expect(container.querySelectorAll('[stroke="#6E6E77"]').length).toBe(0);
 		});
 
 		it('describes itself as paused to a screen reader', () => {

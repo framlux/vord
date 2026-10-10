@@ -102,6 +102,19 @@ describe('OverLimitNotice', () => {
 		expect(notice).toHaveTextContent('Upgrade to resume them.');
 	});
 
+	it('uses the singular when the one paused host is under a zero limit, telling the tenant to upgrade to resume it', () => {
+		render(OverLimitNotice, {
+			props: { subscription: makeSubscription({ machineLimit: 0, machineCount: 1, pausedMachineCount: 1 }) }
+		});
+
+		const notice = screen.getByRole('status');
+
+		expect(notice).toHaveTextContent('1 host is paused: your plan keeps no hosts active. Upgrade to resume it.');
+		expect(notice).not.toHaveTextContent('Upgrade to resume them');
+		expect(notice).not.toHaveTextContent('Remove older hosts');
+		expect(notice).not.toHaveTextContent('Contact support');
+	});
+
 	it('keeps a zero-limit tenant on the contact-support line when an agreement set it', () => {
 		render(OverLimitNotice, {
 			props: {

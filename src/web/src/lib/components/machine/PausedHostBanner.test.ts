@@ -73,7 +73,7 @@ describe('PausedHostBanner', () => {
 			expect(screen.queryByRole('link', { name: 'Billing' })).not.toBeInTheDocument();
 		});
 
-		it('keeps a custom-limit tenant on the contact-support line and without a billing link', () => {
+		it('says only that the host is paused and offers no billing link to a custom-limit tenant whose rank is unknown', () => {
 			render(PausedHostBanner, { props: { limit: 3, activeRank: 0, limitIsCustom: true, canManageBilling: true } });
 
 			expect(screen.getByRole('status')).toHaveTextContent('This host is paused.');
