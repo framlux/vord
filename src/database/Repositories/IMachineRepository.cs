@@ -222,6 +222,13 @@ public interface IMachineRepository
     Task<Dictionary<int, int>> GetMachineCountsByTenantsAsync(List<int> tenantIds, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Returns the count of active (non-deleted) machines per tenant across every tenant. A tenant
+    /// with no active machines has no entry.
+    /// </summary>
+    /// <param name="cancellationToken">A cancellation token.</param>
+    Task<Dictionary<int, int>> GetRegisteredMachineCountsForAllTenantsAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Returns the subset of provided machine IDs that are active (non-deleted) and belong to the specified tenant.
     /// </summary>
     /// <param name="tenantId">The tenant ID.</param>

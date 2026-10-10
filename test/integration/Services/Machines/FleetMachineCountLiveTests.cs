@@ -193,4 +193,43 @@ public sealed class FleetMachineCountLiveTests
 
         await Assert.That(counts.Count).IsEqualTo(0);
     }
+
+    [Test]
+    public async Task RegisteredMachineCountsForAllTenants_GroupPerTenantAndExcludeDeletedMachines()
+    {
+        // The paused-machine gauge folds each tenant's limit over this count. It must be the
+        // non-deleted machines per tenant, and a tenant left with only deleted machines has no entry.
+        await using DatabaseContext db = CreateContext();
+        DatabaseRepository repo = CreateRepo(db);
+        await ClearMachinesAsync(db);
+
+        int firstTenant = await SeedTenantAsync(db);
+        int secondTenant = await SeedTenantAsync(db);
+        int deletedOnlyTenant = await SeedTenantAsync(db);
+
+        await SeedMachineAsync(db, firstTenant, (short)0);
+        await SeedMachineAsync(db, firstTenant, healthStatus: null);
+        await SeedMachineAsync(db, secondTenant, (short)1);
+        await SeedMachineAsync(db, firstTenant, (short)0, isDeleted: true);
+        await SeedMachineAsync(db, deletedOnlyTenant, (short)0, isDeleted: true);
+
+        Dictionary<int, int> counts = await repo.GetRegisteredMachineCountsForAllTenantsAsync(CancellationToken.None);
+
+        await Assert.That(counts.Count).IsEqualTo(2);
+        await Assert.That(counts[firstTenant]).IsEqualTo(2);
+        await Assert.That(counts[secondTenant]).IsEqualTo(1);
+        await Assert.That(counts.ContainsKey(deletedOnlyTenant)).IsFalse();
+    }
+
+    [Test]
+    public async Task RegisteredMachineCountsForAllTenants_EmptyFleet_ReturnsNoRows()
+    {
+        await using DatabaseContext db = CreateContext();
+        DatabaseRepository repo = CreateRepo(db);
+        await ClearMachinesAsync(db);
+
+        Dictionary<int, int> counts = await repo.GetRegisteredMachineCountsForAllTenantsAsync(CancellationToken.None);
+
+        await Assert.That(counts.Count).IsEqualTo(0);
+    }
 }
