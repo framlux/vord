@@ -1019,6 +1019,49 @@ public sealed class AlertEvaluationJobTests
     }
 
     [Test]
+    public async Task RunAsync_DurationRuleWithOneSkippedPassAndDrift_KeepsTheWindowAndFiresAtTheDuration()
+    {
+        // Intent: the job runs every minute, but one pass can be missed or delayed and the next one
+        // lands a few seconds late. That is still the same stretch of breach, so the window must
+        // survive it. If the gap rule were tight enough to reset here, the rule would fire a whole
+        // duration late, or never on a host whose passes keep slipping.
+        using TestDatabaseFactory dbFactory = new();
+        ISubscriptionService subscriptionService = Substitute.For<ISubscriptionService>();
+        FakeTimeProvider clock = new(EvaluationEpoch);
+        (AlertEvaluationJob job, DatabaseContext db, _, IAlertDeliveryService delivery, _, _, _) =
+            CreateJobWithDb(dbFactory, subscriptionService, clock);
+
+        (Tenant tenant, Machine machine, AlertRule rule) = await SeedBreachingProTenantAsync(db, subscriptionService, durationMinutes: 5);
+
+        // Passes at 0:00 and 1:00, the 2:00 pass skipped, then 3:05 with five seconds of drift.
+        await job.RunAsync(CancellationToken.None);
+        clock.Advance(TimeSpan.FromMinutes(1));
+        await job.RunAsync(CancellationToken.None);
+        clock.Advance(TimeSpan.FromMinutes(2) + TimeSpan.FromSeconds(5));
+        await job.RunAsync(CancellationToken.None);
+
+        AlertConditionState? carried = await db.AlertConditionStates
+            .Where(s => (s.AlertRuleId == rule.Id) && (s.MachineId == machine.Id))
+            .FirstOrDefaultAsync();
+        await Assert.That(carried!.FirstTriggeredAt).IsEqualTo(EvaluationEpoch);
+        await Assert.That(await db.AlertEvents.CountAsync()).IsEqualTo(0);
+
+        // 4:05 is still short of five minutes.
+        clock.Advance(TimeSpan.FromMinutes(1));
+        await job.RunAsync(CancellationToken.None);
+        await Assert.That(await db.AlertEvents.CountAsync()).IsEqualTo(0);
+
+        // 5:05 is the first pass at or past the duration, measured from the original first observation.
+        clock.Advance(TimeSpan.FromMinutes(1));
+        await job.RunAsync(CancellationToken.None);
+
+        List<AlertEvent> events = await db.AlertEvents.ToListAsync();
+        await Assert.That(events.Count).IsEqualTo(1);
+        await Assert.That(events[0].TriggeredAt).IsEqualTo(EvaluationEpoch.AddMinutes(5).AddSeconds(5));
+        await delivery.Received(1).EnqueueAsync(events[0].Id, rule.Id, tenant.Id, Arg.Any<CancellationToken>());
+    }
+
+    [Test]
     public async Task RunAsync_PauseCheckUnavailable_SkipsThatTenantCountsTheFailureAndEvaluatesTheRest()
     {
         // Intent: when the cutoff cannot be read the job cannot tell which hosts are paused, and

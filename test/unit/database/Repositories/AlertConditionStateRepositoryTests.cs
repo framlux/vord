@@ -17,10 +17,10 @@ namespace Framlux.FleetManagement.Test.Repositories;
 public sealed class AlertConditionStateRepositoryTests
 {
     /// <summary>
-    /// The gap the evaluation job passes: two one-minute passes. The repository takes it as an argument,
+    /// The gap the evaluation job passes: three one-minute passes. The repository takes it as an argument,
     /// so the tests state it rather than reading the job's constant.
     /// </summary>
-    private static readonly TimeSpan ObservationGap = TimeSpan.FromMinutes(2);
+    private static readonly TimeSpan ObservationGap = TimeSpan.FromMinutes(3);
 
     private static IAlertConditionStateRepository CreateRepo(TestDatabaseFactory dbFactory)
     {
@@ -170,11 +170,12 @@ public sealed class AlertConditionStateRepositoryTests
     [Arguments(0)]
     [Arguments(60)]
     [Arguments(120)]
+    [Arguments(180)]
     public async Task UpsertObservationAsync_StoredObservationWithinTheGap_KeepsTheOriginalFirstTriggered(int secondsSinceLastObservation)
     {
         // Intent: a pass or two lost to scheduling jitter is not a gap. The boundary is exclusive: an
         // observation exactly one gap old still counts as continuous, so only a missed stretch longer
-        // than two passes restarts the window.
+        // than three minutes restarts the window.
         using TestDatabaseFactory dbFactory = new();
         DateTimeOffset firstAt = new(2026, 3, 1, 8, 0, 0, TimeSpan.Zero);
         DateTimeOffset lastAt = new(2026, 3, 1, 8, 5, 0, TimeSpan.Zero);

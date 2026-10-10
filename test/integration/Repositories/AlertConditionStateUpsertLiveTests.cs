@@ -25,7 +25,7 @@ namespace Framlux.FleetManagement.Test.Integration.Repositories;
 /// </summary>
 public sealed class AlertConditionStateUpsertLiveTests
 {
-    private static readonly TimeSpan ObservationGap = TimeSpan.FromMinutes(2);
+    private static readonly TimeSpan ObservationGap = TimeSpan.FromMinutes(3);
 
     private static PostgresFixture _fixture = default!;
     private static string _migratedConnectionString = default!;
@@ -84,7 +84,7 @@ public sealed class AlertConditionStateUpsertLiveTests
         Machine machine = await SeedMachineAsync(db, tenant.Id);
 
         DateTimeOffset first = DateTimeOffset.UnixEpoch.AddHours(1);
-        DateTimeOffset withinGap = first.AddMinutes(2);
+        DateTimeOffset withinGap = first.AddMinutes(3);
         DateTimeOffset afterGap = withinGap + ObservationGap + TimeSpan.FromSeconds(1);
 
         await repo.UpsertObservationAsync(rule.Id, machine.Id, first, ObservationGap, CancellationToken.None);
